@@ -1,0 +1,1450 @@
+{
+  "metadata": {
+    "version": "1.1",
+    "game_source": "Terra Invicta",
+    "target_delta_v_kps": 500,
+    "armor_type": "Adamantane",
+    "drive_system": "Protium Converter Torch x6 + ICF VII (Exotic)",
+    "armor_upgrade_note": "Upgraded from Titanium to Adamantane - 2.68x thicker at same mass"
+  },
+  "constants": {
+    "g": 9.81,
+    "exhaust_velocity_kps": 10256,
+    "thrust_mn": 58.56,
+    "mass_ratio_for_delta_v": 1.05
+  },
+  "armor_types": {
+    "Titanium": {
+      "density": 4820,
+      "baryonic_half_cm": 10.5,
+      "chip_resist": 0.75,
+      "kinetics_resist": 0.3,
+      "heat_of_vaporization_mj_kg": 8.77
+    },
+    "Steel": {
+      "density": 7850,
+      "baryonic_half_cm": 7.5,
+      "chip_resist": 0.75,
+      "kinetics_resist": 0.35,
+      "heat_of_vaporization_mj_kg": 6.8
+    },
+    "BoronCarbide": {
+      "density": 2520,
+      "baryonic_half_cm": 13.8,
+      "chip_resist": 0.0,
+      "kinetics_resist": 0.2,
+      "heat_of_vaporization_mj_kg": 7.14
+    },
+    "SiliconCarbide": {
+      "density": 3210,
+      "baryonic_half_cm": 58.0,
+      "chip_resist": 0.0,
+      "kinetics_resist": 0.25,
+      "heat_of_vaporization_mj_kg": 9.9
+    },
+    "Adamantane": {
+      "density": 1800,
+      "baryonic_half_cm": 115.8,
+      "chip_resist": 0.75,
+      "kinetics_resist": 0.5,
+      "heat_of_vaporization_mj_kg": 59.534
+    }
+  },
+  "weapon_types": {
+    "spinal_coiler_mk3": {
+      "name": "Spinal Coiler Mk3",
+      "mass_tons": 200,
+      "ammo_mass_kg": 88,
+      "magazine": 450,
+      "muzzle_velocity_kps": 9.9,
+      "warhead_mass_kg": 88,
+      "kinetic_energy_gj": 4.29,
+      "flat_chipping": 0.35,
+      "cooldown_s": 15,
+      "range_km": 900,
+      "mount": "nose_spinal",
+      "pivot_range_deg": 30,
+      "is_turreted": false
+    },
+    "heavy_coilgun_mk3": {
+      "name": "Heavy Coilgun Battery Mk3",
+      "mass_tons": 160,
+      "ammo_mass_kg": 50,
+      "magazine": 1800,
+      "muzzle_velocity_kps": 7.0,
+      "warhead_mass_kg": 50,
+      "kinetic_energy_gj": 1.22,
+      "flat_chipping": 0.35,
+      "cooldown_s": 20,
+      "range_km": 600,
+      "mount": "hull_turret",
+      "pivot_range_deg": 180,
+      "is_turreted": true
+    },
+    "coilgun_mk3": {
+      "name": "Coilgun Battery Mk3",
+      "mass_tons": 80,
+      "ammo_mass_kg": 40,
+      "magazine": 1800,
+      "muzzle_velocity_kps": 6.0,
+      "warhead_mass_kg": 40,
+      "kinetic_energy_gj": 0.72,
+      "flat_chipping": 0.35,
+      "cooldown_s": 20,
+      "range_km": 500,
+      "mount": "hull_turret",
+      "pivot_range_deg": 180,
+      "is_turreted": true
+    },
+    "light_coilgun_mk3": {
+      "name": "Light Coilgun Battery Mk3",
+      "mass_tons": 40,
+      "ammo_mass_kg": 10,
+      "magazine": 1500,
+      "muzzle_velocity_kps": 5.0,
+      "warhead_mass_kg": 10,
+      "kinetic_energy_gj": 0.125,
+      "flat_chipping": 0.35,
+      "cooldown_s": 20,
+      "range_km": 400,
+      "mount": "hull_turret",
+      "pivot_range_deg": 180,
+      "is_turreted": true
+    },
+    "torpedo_launcher": {
+      "name": "Trident Torpedo",
+      "mass_tons": 40,
+      "ammo_mass_kg": 3600,
+      "magazine": 8,
+      "warhead_yield_gj": 0,
+      "penetrator_mass_kg": 250,
+      "cooldown_s": 12,
+      "range_km": 2500,
+      "mount": "hull_turret",
+      "pivot_range_deg": 180,
+      "is_turreted": true,
+      "type": "kinetic_penetrator",
+      "delta_v_kps": 14.0,
+      "acceleration_g": 12.0,
+      "exhaust_velocity_kps": 8.0,
+      "notes": "Compact fusion torch: 250kg penetrator, 12g accel, 14 km/s dv (matches alien Iridescent)"
+    },
+    "pd_laser": {
+      "name": "PD Laser Turret",
+      "mass_tons": 20,
+      "ammo_mass_kg": 0,
+      "power_draw_mw": 5,
+      "cooldown_s": 5.0,
+      "range_km": 250,
+      "mount": "hull_turret",
+      "pivot_range_deg": 180,
+      "is_turreted": true,
+      "type": "point_defense"
+    }
+  },
+  "ships": {
+    "corvette": {
+      "hull": {
+        "type": "corvette",
+        "mass_tons": 400,
+        "crew": 8,
+        "length_m": 65,
+        "structural_integrity": 8,
+        "hardpoints": {
+          "nose": 1,
+          "hull": 1,
+          "total": 2
+        }
+      },
+      "role": "Torpedo Boat",
+      "performance": {
+        "combat_acceleration_g": 3.0,
+        "combat_acceleration_ms2": 29.43,
+        "delta_v_kps": 500.0,
+        "max_wet_mass_tons": 1990.0,
+        "max_dry_mass_tons": 1895.0
+      },
+      "mass_breakdown": {
+        "hull": 400,
+        "weapons": 45,
+        "ammunition": 26.0,
+        "thermal_systems": 158,
+        "crew_and_misc": 36,
+        "reactor": 613,
+        "armor": 618.0,
+        "propellant": 95.0,
+        "total_dry": 1895.0,
+        "total_wet": 1990.0,
+        "attitude_control": 25
+      },
+      "propulsion": {
+        "drive": {
+          "name": "Protium Converter Torch x6",
+          "thrust_mn": 58.56,
+          "exhaust_velocity_kps": 10256,
+          "efficiency": 0.98,
+          "required_reactor": "Inertial_Confinement_Fusion",
+          "propellant": "Hydrogen"
+        },
+        "reactor": {
+          "name": "Inertial Confinement Fusion Reactor VII",
+          "output_gw": 306430,
+          "mass_tons": 613,
+          "efficiency": 0.999,
+          "requires_exotics": true
+        }
+      },
+      "weapons": [
+        {
+          "type": "torpedo_launcher",
+          "name": "Torpedo Launcher"
+        },
+        {
+          "type": "pd_laser",
+          "name": "PD Laser Turret"
+        }
+      ],
+      "weapons_summary": {
+        "spinal_coilers": 0,
+        "heavy_coilguns": 0,
+        "coilguns": 0,
+        "torpedoes": 1,
+        "point_defense": 1
+      },
+      "thermal": {
+        "heatsink": {
+          "name": "Lithium Heat Sink",
+          "mass_tons": 128,
+          "capacity_gj": 525
+        },
+        "radiator": {
+          "name": "Lithium Spray Radiator",
+          "mass_tons": 10,
+          "dissipation_kw_per_kg": 13
+        },
+        "battery": {
+          "name": "Superconducting Coil Battery",
+          "mass_tons": 20,
+          "capacity_gj": 160,
+          "recharge_rate_gj_s": 0.075
+        }
+      },
+      "armor": {
+        "type": "Adamantane",
+        "properties": {
+          "density": 1800,
+          "baryonic_half_cm": 115.8,
+          "chip_resist": 0.75,
+          "kinetics_resist": 0.5,
+          "heat_of_vaporization_mj_kg": 59.534
+        },
+        "total_mass_tons": 618.0,
+        "total_surface_m2": 540.0,
+        "distribution": {
+          "mass_percent": {
+            "nose": 50.0,
+            "lateral": 40.0,
+            "tail": 10.0
+          },
+          "area_percent": {
+            "nose": 15.0,
+            "lateral": 70.0,
+            "tail": 15.0
+          }
+        },
+        "sections": {
+          "nose": {
+            "thickness_cm": 212.0,
+            "protection_percent": 73.6,
+            "hits_to_deplete": 96.0,
+            "area_m2": 81.0
+          },
+          "lateral": {
+            "thickness_cm": 36.4,
+            "protection_percent": 19.4,
+            "hits_to_deplete": 18.0,
+            "area_m2": 378.0
+          },
+          "tail": {
+            "thickness_cm": 42.3,
+            "protection_percent": 22.0,
+            "hits_to_deplete": 18.0,
+            "area_m2": 81.0
+          }
+        }
+      },
+      "attitude_control": {
+        "moment_of_inertia": {
+          "pitch_yaw_kg_m2": 700645833,
+          "notes": "Elongated cylinder model, wet mass"
+        },
+        "thrust_vectoring": {
+          "description": "Main engine nozzle deflection (requires engines firing)",
+          "combat_deflection_deg": 1.0,
+          "max_deflection_deg": 3.0,
+          "lever_arm_m": 29.2,
+          "lateral_force_mn": 1.022,
+          "torque_mn_m": 29.89,
+          "angular_accel_deg_s2": 2.445,
+          "time_to_rotate_45_deg_s": 8.6,
+          "time_to_rotate_90_deg_s": 12.1,
+          "time_to_rotate_180_deg_s": 17.2,
+          "max_angular_velocity_deg_s": 14.83,
+          "forward_thrust_efficiency": 0.99985,
+          "delta_v_cost": {
+            "rotate_90_deg_kps": 0.357,
+            "rotate_180_deg_kps": 0.505,
+            "propellant_90_deg_kg": 69.3,
+            "propellant_180_deg_kg": 98.0
+          }
+        },
+        "rcs": {
+          "description": "Reaction Control System (works with engines off)",
+          "module_name": "VectorThrusters (as RCS)",
+          "mass_tons": 20,
+          "torque_nm": 1500000,
+          "angular_accel_deg_s2": 0.1227,
+          "time_to_rotate_45_deg_s": 38.3,
+          "time_to_rotate_90_deg_s": 54.2,
+          "time_to_rotate_180_deg_s": 76.6,
+          "max_angular_velocity_deg_s": 3.32
+        }
+      }
+    },
+    "frigate": {
+      "hull": {
+        "type": "frigate",
+        "mass_tons": 600,
+        "crew": 20,
+        "length_m": 100,
+        "structural_integrity": 12,
+        "hardpoints": {
+          "nose": 1,
+          "hull": 2,
+          "total": 3
+        }
+      },
+      "role": "Escort",
+      "performance": {
+        "combat_acceleration_g": 3.0,
+        "combat_acceleration_ms2": 29.43,
+        "delta_v_kps": 500.0,
+        "max_wet_mass_tons": 1990.0,
+        "max_dry_mass_tons": 1895.0
+      },
+      "mass_breakdown": {
+        "hull": 600,
+        "weapons": 120,
+        "ammunition": 72.0,
+        "thermal_systems": 158,
+        "crew_and_misc": 60,
+        "reactor": 613,
+        "armor": 272.0,
+        "propellant": 95.0,
+        "total_dry": 1895.0,
+        "total_wet": 1990.0,
+        "attitude_control": 25
+      },
+      "propulsion": {
+        "drive": {
+          "name": "Protium Converter Torch x6",
+          "thrust_mn": 58.56,
+          "exhaust_velocity_kps": 10256,
+          "efficiency": 0.98,
+          "required_reactor": "Inertial_Confinement_Fusion",
+          "propellant": "Hydrogen"
+        },
+        "reactor": {
+          "name": "Inertial Confinement Fusion Reactor VII",
+          "output_gw": 306430,
+          "mass_tons": 613,
+          "efficiency": 0.999,
+          "requires_exotics": true
+        }
+      },
+      "weapons": [
+        {
+          "type": "coilgun_mk3",
+          "name": "Coilgun Battery Mk3"
+        },
+        {
+          "type": "pd_laser",
+          "name": "PD Laser Turret"
+        },
+        {
+          "type": "pd_laser",
+          "name": "PD Laser Turret"
+        }
+      ],
+      "weapons_summary": {
+        "spinal_coilers": 0,
+        "heavy_coilguns": 0,
+        "coilguns": 1,
+        "torpedoes": 0,
+        "point_defense": 2
+      },
+      "thermal": {
+        "heatsink": {
+          "name": "Lithium Heat Sink",
+          "mass_tons": 128,
+          "capacity_gj": 525
+        },
+        "radiator": {
+          "name": "Lithium Spray Radiator",
+          "mass_tons": 10,
+          "dissipation_kw_per_kg": 13
+        },
+        "battery": {
+          "name": "Superconducting Coil Battery",
+          "mass_tons": 20,
+          "capacity_gj": 160,
+          "recharge_rate_gj_s": 0.075
+        }
+      },
+      "armor": {
+        "type": "Adamantane",
+        "properties": {
+          "density": 1800,
+          "baryonic_half_cm": 115.8,
+          "chip_resist": 0.75,
+          "kinetics_resist": 0.5,
+          "heat_of_vaporization_mj_kg": 59.534
+        },
+        "total_mass_tons": 272.0,
+        "total_surface_m2": 709.0,
+        "distribution": {
+          "mass_percent": {
+            "nose": 50.0,
+            "lateral": 40.0,
+            "tail": 10.0
+          },
+          "area_percent": {
+            "nose": 15.0,
+            "lateral": 70.0,
+            "tail": 15.0
+          }
+        },
+        "sections": {
+          "nose": {
+            "thickness_cm": 71.3,
+            "protection_percent": 39.8,
+            "hits_to_deplete": 33.0,
+            "area_m2": 106.0
+          },
+          "lateral": {
+            "thickness_cm": 12.3,
+            "protection_percent": 8.6,
+            "hits_to_deplete": 6.0,
+            "area_m2": 496.0
+          },
+          "tail": {
+            "thickness_cm": 14.2,
+            "protection_percent": 9.8,
+            "hits_to_deplete": 6.0,
+            "area_m2": 106.0
+          }
+        }
+      },
+      "attitude_control": {
+        "moment_of_inertia": {
+          "pitch_yaw_kg_m2": 1658333333,
+          "notes": "Elongated cylinder model, wet mass"
+        },
+        "thrust_vectoring": {
+          "description": "Main engine nozzle deflection (requires engines firing)",
+          "combat_deflection_deg": 1.0,
+          "max_deflection_deg": 3.0,
+          "lever_arm_m": 45.0,
+          "lateral_force_mn": 1.022,
+          "torque_mn_m": 45.99,
+          "angular_accel_deg_s2": 1.589,
+          "time_to_rotate_45_deg_s": 10.6,
+          "time_to_rotate_90_deg_s": 15.1,
+          "time_to_rotate_180_deg_s": 21.3,
+          "max_angular_velocity_deg_s": 11.96,
+          "forward_thrust_efficiency": 0.99985,
+          "delta_v_cost": {
+            "rotate_90_deg_kps": 0.443,
+            "rotate_180_deg_kps": 0.626,
+            "propellant_90_deg_kg": 85.9,
+            "propellant_180_deg_kg": 121.5
+          }
+        },
+        "rcs": {
+          "description": "Reaction Control System (works with engines off)",
+          "module_name": "VectorThrusters (as RCS)",
+          "mass_tons": 20,
+          "torque_nm": 1500000,
+          "angular_accel_deg_s2": 0.0518,
+          "time_to_rotate_45_deg_s": 58.9,
+          "time_to_rotate_90_deg_s": 83.3,
+          "time_to_rotate_180_deg_s": 117.9,
+          "max_angular_velocity_deg_s": 2.16
+        }
+      }
+    },
+    "destroyer": {
+      "hull": {
+        "type": "destroyer",
+        "mass_tons": 825,
+        "crew": 40,
+        "length_m": 125,
+        "structural_integrity": 18,
+        "hardpoints": {
+          "nose": 2,
+          "hull": 2,
+          "total": 4
+        }
+      },
+      "role": "Main Combat",
+      "performance": {
+        "combat_acceleration_g": 2.0,
+        "combat_acceleration_ms2": 19.62,
+        "delta_v_kps": 500.0,
+        "max_wet_mass_tons": 2985.0,
+        "max_dry_mass_tons": 2843.0
+      },
+      "mass_breakdown": {
+        "hull": 825,
+        "weapons": 320,
+        "ammunition": 112.0,
+        "thermal_systems": 158,
+        "crew_and_misc": 100,
+        "reactor": 613,
+        "armor": 715.0,
+        "propellant": 142.0,
+        "total_dry": 2843.0,
+        "total_wet": 2985.0,
+        "attitude_control": 25
+      },
+      "propulsion": {
+        "drive": {
+          "name": "Protium Converter Torch x6",
+          "thrust_mn": 58.56,
+          "exhaust_velocity_kps": 10256,
+          "efficiency": 0.98,
+          "required_reactor": "Inertial_Confinement_Fusion",
+          "propellant": "Hydrogen"
+        },
+        "reactor": {
+          "name": "Inertial Confinement Fusion Reactor VII",
+          "output_gw": 306430,
+          "mass_tons": 613,
+          "efficiency": 0.999,
+          "requires_exotics": true
+        }
+      },
+      "weapons": [
+        {
+          "type": "spinal_coiler_mk3",
+          "name": "Spinal Coiler Mk3",
+          "slot": "weapon_0",
+          "mount_position": {"x": 0.05, "side": "centerline"},
+          "facing": "forward",
+          "notes": "Nose-mounted spinal, 30° gimbal"
+        },
+        {
+          "type": "coilgun_mk3",
+          "name": "Coilgun Battery Mk3",
+          "slot": "weapon_1",
+          "mount_position": {"x": 0.35, "side": "dorsal"},
+          "facing": "forward",
+          "notes": "Mid-ship dorsal turret, 180° arc"
+        },
+        {
+          "type": "pd_laser",
+          "name": "PD Laser Turret",
+          "slot": "pd_0",
+          "mount_position": {"x": 0.7, "side": "dorsal"},
+          "facing": "rear",
+          "notes": "Aft dorsal PD, covers upper rear hemisphere"
+        },
+        {
+          "type": "pd_laser",
+          "name": "PD Laser Turret",
+          "slot": "pd_1",
+          "mount_position": {"x": 0.7, "side": "ventral"},
+          "facing": "rear",
+          "notes": "Aft ventral PD, covers lower rear hemisphere"
+        }
+      ],
+      "weapons_summary": {
+        "spinal_coilers": 1,
+        "heavy_coilguns": 0,
+        "coilguns": 1,
+        "torpedoes": 0,
+        "point_defense": 2
+      },
+      "thermal": {
+        "heatsink": {
+          "name": "Lithium Heat Sink",
+          "mass_tons": 128,
+          "capacity_gj": 525
+        },
+        "radiator": {
+          "name": "Lithium Spray Radiator",
+          "mass_tons": 10,
+          "dissipation_kw_per_kg": 13
+        },
+        "battery": {
+          "name": "Superconducting Coil Battery",
+          "mass_tons": 20,
+          "capacity_gj": 160,
+          "recharge_rate_gj_s": 0.075
+        }
+      },
+      "armor": {
+        "type": "Adamantane",
+        "properties": {
+          "density": 1800,
+          "baryonic_half_cm": 115.8,
+          "chip_resist": 0.75,
+          "kinetics_resist": 0.5,
+          "heat_of_vaporization_mj_kg": 59.534
+        },
+        "total_mass_tons": 715.0,
+        "total_surface_m2": 877.0,
+        "distribution": {
+          "mass_percent": {
+            "nose": 50.0,
+            "lateral": 40.0,
+            "tail": 10.0
+          },
+          "area_percent": {
+            "nose": 15.0,
+            "lateral": 70.0,
+            "tail": 15.0
+          }
+        },
+        "sections": {
+          "nose": {
+            "thickness_cm": 151.2,
+            "protection_percent": 58.3,
+            "hits_to_deplete": 69.0,
+            "area_m2": 132.0
+          },
+          "lateral": {
+            "thickness_cm": 26.0,
+            "protection_percent": 15.8,
+            "hits_to_deplete": 12.0,
+            "area_m2": 614.0
+          },
+          "tail": {
+            "thickness_cm": 30.3,
+            "protection_percent": 17.8,
+            "hits_to_deplete": 15.0,
+            "area_m2": 132.0
+          }
+        }
+      },
+      "attitude_control": {
+        "moment_of_inertia": {
+          "pitch_yaw_kg_m2": 3886718750,
+          "notes": "Elongated cylinder model, wet mass"
+        },
+        "thrust_vectoring": {
+          "description": "Main engine nozzle deflection (requires engines firing)",
+          "combat_deflection_deg": 1.0,
+          "max_deflection_deg": 3.0,
+          "lever_arm_m": 56.2,
+          "lateral_force_mn": 1.022,
+          "torque_mn_m": 57.49,
+          "angular_accel_deg_s2": 0.847,
+          "time_to_rotate_45_deg_s": 14.6,
+          "time_to_rotate_90_deg_s": 20.6,
+          "time_to_rotate_180_deg_s": 29.1,
+          "max_angular_velocity_deg_s": 8.73,
+          "forward_thrust_efficiency": 0.99985,
+          "delta_v_cost": {
+            "rotate_90_deg_kps": 0.404,
+            "rotate_180_deg_kps": 0.572,
+            "propellant_90_deg_kg": 117.7,
+            "propellant_180_deg_kg": 166.4
+          }
+        },
+        "rcs": {
+          "description": "Reaction Control System (works with engines off)",
+          "module_name": "VectorThrusters (as RCS)",
+          "mass_tons": 20,
+          "torque_nm": 1500000,
+          "angular_accel_deg_s2": 0.0221,
+          "time_to_rotate_45_deg_s": 90.2,
+          "time_to_rotate_90_deg_s": 127.6,
+          "time_to_rotate_180_deg_s": 180.4,
+          "max_angular_velocity_deg_s": 1.41
+        }
+      }
+    },
+    "cruiser": {
+      "hull": {
+        "type": "cruiser",
+        "mass_tons": 1000,
+        "crew": 60,
+        "length_m": 175,
+        "structural_integrity": 20,
+        "hardpoints": {
+          "nose": 2,
+          "hull": 3,
+          "total": 5
+        }
+      },
+      "role": "Heavy Combatant",
+      "performance": {
+        "combat_acceleration_g": 1.5,
+        "combat_acceleration_ms2": 14.71,
+        "delta_v_kps": 500.0,
+        "max_wet_mass_tons": 3980.0,
+        "max_dry_mass_tons": 3790.0
+      },
+      "mass_breakdown": {
+        "hull": 1000,
+        "weapons": 400,
+        "ammunition": 184.0,
+        "thermal_systems": 158,
+        "crew_and_misc": 140,
+        "reactor": 613,
+        "armor": 1296.0,
+        "propellant": 189.0,
+        "total_dry": 3790.0,
+        "total_wet": 3980.0,
+        "attitude_control": 25
+      },
+      "propulsion": {
+        "drive": {
+          "name": "Protium Converter Torch x6",
+          "thrust_mn": 58.56,
+          "exhaust_velocity_kps": 10256,
+          "efficiency": 0.98,
+          "required_reactor": "Inertial_Confinement_Fusion",
+          "propellant": "Hydrogen"
+        },
+        "reactor": {
+          "name": "Inertial Confinement Fusion Reactor VII",
+          "output_gw": 306430,
+          "mass_tons": 613,
+          "efficiency": 0.999,
+          "requires_exotics": true
+        }
+      },
+      "weapons": [
+        {
+          "type": "spinal_coiler_mk3",
+          "name": "Spinal Coiler Mk3"
+        },
+        {
+          "type": "coilgun_mk3",
+          "name": "Coilgun Battery Mk3"
+        },
+        {
+          "type": "coilgun_mk3",
+          "name": "Coilgun Battery Mk3"
+        },
+        {
+          "type": "pd_laser",
+          "name": "PD Laser Turret"
+        },
+        {
+          "type": "pd_laser",
+          "name": "PD Laser Turret"
+        }
+      ],
+      "weapons_summary": {
+        "spinal_coilers": 1,
+        "heavy_coilguns": 0,
+        "coilguns": 2,
+        "torpedoes": 0,
+        "point_defense": 2
+      },
+      "thermal": {
+        "heatsink": {
+          "name": "Lithium Heat Sink",
+          "mass_tons": 128,
+          "capacity_gj": 525
+        },
+        "radiator": {
+          "name": "Lithium Spray Radiator",
+          "mass_tons": 10,
+          "dissipation_kw_per_kg": 13
+        },
+        "battery": {
+          "name": "Superconducting Coil Battery",
+          "mass_tons": 20,
+          "capacity_gj": 160,
+          "recharge_rate_gj_s": 0.075
+        }
+      },
+      "armor": {
+        "type": "Adamantane",
+        "properties": {
+          "density": 1800,
+          "baryonic_half_cm": 115.8,
+          "chip_resist": 0.75,
+          "kinetics_resist": 0.5,
+          "heat_of_vaporization_mj_kg": 59.534
+        },
+        "total_mass_tons": 1296.0,
+        "total_surface_m2": 998.0,
+        "distribution": {
+          "mass_percent": {
+            "nose": 50.0,
+            "lateral": 40.0,
+            "tail": 10.0
+          },
+          "area_percent": {
+            "nose": 15.0,
+            "lateral": 70.0,
+            "tail": 15.0
+          }
+        },
+        "sections": {
+          "nose": {
+            "thickness_cm": 240.7,
+            "protection_percent": 80.1,
+            "hits_to_deplete": 111.0,
+            "area_m2": 150.0
+          },
+          "lateral": {
+            "thickness_cm": 41.3,
+            "protection_percent": 23.4,
+            "hits_to_deplete": 18.0,
+            "area_m2": 698.0
+          },
+          "tail": {
+            "thickness_cm": 48.2,
+            "protection_percent": 26.4,
+            "hits_to_deplete": 21.0,
+            "area_m2": 150.0
+          }
+        }
+      },
+      "attitude_control": {
+        "moment_of_inertia": {
+          "pitch_yaw_kg_m2": 10157291667,
+          "notes": "Elongated cylinder model, wet mass"
+        },
+        "thrust_vectoring": {
+          "description": "Main engine nozzle deflection (requires engines firing)",
+          "combat_deflection_deg": 1.0,
+          "max_deflection_deg": 3.0,
+          "lever_arm_m": 78.8,
+          "lateral_force_mn": 1.022,
+          "torque_mn_m": 80.48,
+          "angular_accel_deg_s2": 0.454,
+          "time_to_rotate_45_deg_s": 19.9,
+          "time_to_rotate_90_deg_s": 28.2,
+          "time_to_rotate_180_deg_s": 39.8,
+          "max_angular_velocity_deg_s": 6.39,
+          "forward_thrust_efficiency": 0.99985,
+          "delta_v_cost": {
+            "rotate_90_deg_kps": 0.414,
+            "rotate_180_deg_kps": 0.586,
+            "propellant_90_deg_kg": 160.8,
+            "propellant_180_deg_kg": 227.4
+          }
+        },
+        "rcs": {
+          "description": "Reaction Control System (works with engines off)",
+          "module_name": "VectorThrusters (as RCS)",
+          "mass_tons": 20,
+          "torque_nm": 1500000,
+          "angular_accel_deg_s2": 0.0085,
+          "time_to_rotate_45_deg_s": 145.9,
+          "time_to_rotate_90_deg_s": 206.3,
+          "time_to_rotate_180_deg_s": 291.7,
+          "max_angular_velocity_deg_s": 0.87
+        }
+      }
+    },
+    "battlecruiser": {
+      "hull": {
+        "type": "battlecruiser",
+        "mass_tons": 1200,
+        "crew": 70,
+        "length_m": 175,
+        "structural_integrity": 24,
+        "hardpoints": {
+          "nose": 3,
+          "hull": 2,
+          "total": 5
+        }
+      },
+      "role": "Fast Capital",
+      "performance": {
+        "combat_acceleration_g": 1.5,
+        "combat_acceleration_ms2": 14.71,
+        "delta_v_kps": 500.0,
+        "max_wet_mass_tons": 3980.0,
+        "max_dry_mass_tons": 3790.0
+      },
+      "mass_breakdown": {
+        "hull": 1200,
+        "weapons": 400,
+        "ammunition": 184.0,
+        "thermal_systems": 158,
+        "crew_and_misc": 160,
+        "reactor": 613,
+        "armor": 1076.0,
+        "propellant": 189.0,
+        "total_dry": 3790.0,
+        "total_wet": 3980.0,
+        "attitude_control": 25
+      },
+      "propulsion": {
+        "drive": {
+          "name": "Protium Converter Torch x6",
+          "thrust_mn": 58.56,
+          "exhaust_velocity_kps": 10256,
+          "efficiency": 0.98,
+          "required_reactor": "Inertial_Confinement_Fusion",
+          "propellant": "Hydrogen"
+        },
+        "reactor": {
+          "name": "Inertial Confinement Fusion Reactor VII",
+          "output_gw": 306430,
+          "mass_tons": 613,
+          "efficiency": 0.999,
+          "requires_exotics": true
+        }
+      },
+      "weapons": [
+        {
+          "type": "spinal_coiler_mk3",
+          "name": "Spinal Coiler Mk3"
+        },
+        {
+          "type": "coilgun_mk3",
+          "name": "Coilgun Battery Mk3"
+        },
+        {
+          "type": "coilgun_mk3",
+          "name": "Coilgun Battery Mk3"
+        },
+        {
+          "type": "pd_laser",
+          "name": "PD Laser Turret"
+        },
+        {
+          "type": "pd_laser",
+          "name": "PD Laser Turret"
+        }
+      ],
+      "weapons_summary": {
+        "spinal_coilers": 1,
+        "heavy_coilguns": 0,
+        "coilguns": 2,
+        "torpedoes": 0,
+        "point_defense": 2
+      },
+      "thermal": {
+        "heatsink": {
+          "name": "Lithium Heat Sink",
+          "mass_tons": 128,
+          "capacity_gj": 525
+        },
+        "radiator": {
+          "name": "Lithium Spray Radiator",
+          "mass_tons": 10,
+          "dissipation_kw_per_kg": 13
+        },
+        "battery": {
+          "name": "Superconducting Coil Battery",
+          "mass_tons": 20,
+          "capacity_gj": 160,
+          "recharge_rate_gj_s": 0.075
+        }
+      },
+      "armor": {
+        "type": "Adamantane",
+        "properties": {
+          "density": 1800,
+          "baryonic_half_cm": 115.8,
+          "chip_resist": 0.75,
+          "kinetics_resist": 0.5,
+          "heat_of_vaporization_mj_kg": 59.534
+        },
+        "total_mass_tons": 1076.0,
+        "total_surface_m2": 1127.0,
+        "distribution": {
+          "mass_percent": {
+            "nose": 50.0,
+            "lateral": 40.0,
+            "tail": 10.0
+          },
+          "area_percent": {
+            "nose": 15.0,
+            "lateral": 70.0,
+            "tail": 15.0
+          }
+        },
+        "sections": {
+          "nose": {
+            "thickness_cm": 176.9,
+            "protection_percent": 65.9,
+            "hits_to_deplete": 81.0,
+            "area_m2": 169.0
+          },
+          "lateral": {
+            "thickness_cm": 30.3,
+            "protection_percent": 17.8,
+            "hits_to_deplete": 15.0,
+            "area_m2": 789.0
+          },
+          "tail": {
+            "thickness_cm": 35.4,
+            "protection_percent": 20.1,
+            "hits_to_deplete": 15.0,
+            "area_m2": 169.0
+          }
+        }
+      },
+      "attitude_control": {
+        "moment_of_inertia": {
+          "pitch_yaw_kg_m2": 10157291667,
+          "notes": "Elongated cylinder model, wet mass"
+        },
+        "thrust_vectoring": {
+          "description": "Main engine nozzle deflection (requires engines firing)",
+          "combat_deflection_deg": 1.0,
+          "max_deflection_deg": 3.0,
+          "lever_arm_m": 78.8,
+          "lateral_force_mn": 1.022,
+          "torque_mn_m": 80.48,
+          "angular_accel_deg_s2": 0.454,
+          "time_to_rotate_45_deg_s": 19.9,
+          "time_to_rotate_90_deg_s": 28.2,
+          "time_to_rotate_180_deg_s": 39.8,
+          "max_angular_velocity_deg_s": 6.39,
+          "forward_thrust_efficiency": 0.99985,
+          "delta_v_cost": {
+            "rotate_90_deg_kps": 0.414,
+            "rotate_180_deg_kps": 0.586,
+            "propellant_90_deg_kg": 160.8,
+            "propellant_180_deg_kg": 227.4
+          }
+        },
+        "rcs": {
+          "description": "Reaction Control System (works with engines off)",
+          "module_name": "VectorThrusters (as RCS)",
+          "mass_tons": 20,
+          "torque_nm": 1500000,
+          "angular_accel_deg_s2": 0.0085,
+          "time_to_rotate_45_deg_s": 145.9,
+          "time_to_rotate_90_deg_s": 206.3,
+          "time_to_rotate_180_deg_s": 291.7,
+          "max_angular_velocity_deg_s": 0.87
+        }
+      }
+    },
+    "battleship": {
+      "hull": {
+        "type": "battleship",
+        "mass_tons": 1600,
+        "crew": 80,
+        "length_m": 200,
+        "structural_integrity": 40,
+        "hardpoints": {
+          "nose": 2,
+          "hull": 6,
+          "total": 8
+        }
+      },
+      "role": "Line of Battle",
+      "performance": {
+        "combat_acceleration_g": 1.0,
+        "combat_acceleration_ms2": 9.81,
+        "delta_v_kps": 500.0,
+        "max_wet_mass_tons": 5969.0,
+        "max_dry_mass_tons": 5685.0
+      },
+      "mass_breakdown": {
+        "hull": 1600,
+        "weapons": 820,
+        "ammunition": 382.0,
+        "thermal_systems": 158,
+        "crew_and_misc": 180,
+        "reactor": 613,
+        "armor": 1933.0,
+        "propellant": 284.0,
+        "total_dry": 5685.0,
+        "total_wet": 5969.0,
+        "attitude_control": 25
+      },
+      "propulsion": {
+        "drive": {
+          "name": "Protium Converter Torch x6",
+          "thrust_mn": 58.56,
+          "exhaust_velocity_kps": 10256,
+          "efficiency": 0.98,
+          "required_reactor": "Inertial_Confinement_Fusion",
+          "propellant": "Hydrogen"
+        },
+        "reactor": {
+          "name": "Inertial Confinement Fusion Reactor VII",
+          "output_gw": 306430,
+          "mass_tons": 613,
+          "efficiency": 0.999,
+          "requires_exotics": true
+        }
+      },
+      "weapons": [
+        {
+          "type": "spinal_coiler_mk3",
+          "name": "Spinal Coiler Mk3"
+        },
+        {
+          "type": "heavy_coilgun_mk3",
+          "name": "Heavy Coilgun Battery Mk3"
+        },
+        {
+          "type": "heavy_coilgun_mk3",
+          "name": "Heavy Coilgun Battery Mk3"
+        },
+        {
+          "type": "heavy_coilgun_mk3",
+          "name": "Heavy Coilgun Battery Mk3"
+        },
+        {
+          "type": "coilgun_mk3",
+          "name": "Coilgun Battery Mk3"
+        },
+        {
+          "type": "pd_laser",
+          "name": "PD Laser Turret"
+        },
+        {
+          "type": "pd_laser",
+          "name": "PD Laser Turret"
+        },
+        {
+          "type": "pd_laser",
+          "name": "PD Laser Turret"
+        }
+      ],
+      "weapons_summary": {
+        "spinal_coilers": 1,
+        "heavy_coilguns": 3,
+        "coilguns": 1,
+        "torpedoes": 0,
+        "point_defense": 3
+      },
+      "thermal": {
+        "heatsink": {
+          "name": "Lithium Heat Sink",
+          "mass_tons": 128,
+          "capacity_gj": 525
+        },
+        "radiator": {
+          "name": "Lithium Spray Radiator",
+          "mass_tons": 10,
+          "dissipation_kw_per_kg": 13
+        },
+        "battery": {
+          "name": "Superconducting Coil Battery",
+          "mass_tons": 20,
+          "capacity_gj": 160,
+          "recharge_rate_gj_s": 0.075
+        }
+      },
+      "armor": {
+        "type": "Adamantane",
+        "properties": {
+          "density": 1800,
+          "baryonic_half_cm": 115.8,
+          "chip_resist": 0.75,
+          "kinetics_resist": 0.5,
+          "heat_of_vaporization_mj_kg": 59.534
+        },
+        "total_mass_tons": 1933.0,
+        "total_surface_m2": 1367.0,
+        "distribution": {
+          "mass_percent": {
+            "nose": 50.0,
+            "lateral": 40.0,
+            "tail": 10.0
+          },
+          "area_percent": {
+            "nose": 15.0,
+            "lateral": 70.0,
+            "tail": 15.0
+          }
+        },
+        "sections": {
+          "nose": {
+            "thickness_cm": 262.1,
+            "protection_percent": 84.3,
+            "hits_to_deplete": 120.0,
+            "area_m2": 205.0
+          },
+          "lateral": {
+            "thickness_cm": 45.0,
+            "protection_percent": 25.1,
+            "hits_to_deplete": 21.0,
+            "area_m2": 957.0
+          },
+          "tail": {
+            "thickness_cm": 52.5,
+            "protection_percent": 28.4,
+            "hits_to_deplete": 24.0,
+            "area_m2": 205.0
+          }
+        }
+      },
+      "attitude_control": {
+        "moment_of_inertia": {
+          "pitch_yaw_kg_m2": 19896666667,
+          "notes": "Elongated cylinder model, wet mass"
+        },
+        "thrust_vectoring": {
+          "description": "Main engine nozzle deflection (requires engines firing)",
+          "combat_deflection_deg": 1.0,
+          "max_deflection_deg": 3.0,
+          "lever_arm_m": 90.0,
+          "lateral_force_mn": 1.022,
+          "torque_mn_m": 91.98,
+          "angular_accel_deg_s2": 0.265,
+          "time_to_rotate_45_deg_s": 26.1,
+          "time_to_rotate_90_deg_s": 36.9,
+          "time_to_rotate_180_deg_s": 52.1,
+          "max_angular_velocity_deg_s": 4.88,
+          "forward_thrust_efficiency": 0.99985,
+          "delta_v_cost": {
+            "rotate_90_deg_kps": 0.362,
+            "rotate_180_deg_kps": 0.512,
+            "propellant_90_deg_kg": 210.5,
+            "propellant_180_deg_kg": 297.7
+          }
+        },
+        "rcs": {
+          "description": "Reaction Control System (works with engines off)",
+          "module_name": "VectorThrusters (as RCS)",
+          "mass_tons": 20,
+          "torque_nm": 1500000,
+          "angular_accel_deg_s2": 0.0043,
+          "time_to_rotate_45_deg_s": 204.1,
+          "time_to_rotate_90_deg_s": 288.7,
+          "time_to_rotate_180_deg_s": 408.3,
+          "max_angular_velocity_deg_s": 0.62
+        }
+      }
+    },
+    "dreadnought": {
+      "hull": {
+        "type": "dreadnought",
+        "mass_tons": 2400,
+        "crew": 120,
+        "length_m": 275,
+        "structural_integrity": 48,
+        "hardpoints": {
+          "nose": 3,
+          "hull": 8,
+          "total": 11
+        }
+      },
+      "role": "Mobile Fortress",
+      "performance": {
+        "combat_acceleration_g": 0.75,
+        "combat_acceleration_ms2": 7.36,
+        "delta_v_kps": 500.0,
+        "max_wet_mass_tons": 7959.0,
+        "max_dry_mass_tons": 7581.0
+      },
+      "mass_breakdown": {
+        "hull": 2400,
+        "weapons": 1160,
+        "ammunition": 562.0,
+        "thermal_systems": 158,
+        "crew_and_misc": 260,
+        "reactor": 613,
+        "armor": 2428.0,
+        "propellant": 379.0,
+        "total_dry": 7581.0,
+        "total_wet": 7959.0,
+        "attitude_control": 25
+      },
+      "propulsion": {
+        "drive": {
+          "name": "Protium Converter Torch x6",
+          "thrust_mn": 58.56,
+          "exhaust_velocity_kps": 10256,
+          "efficiency": 0.98,
+          "required_reactor": "Inertial_Confinement_Fusion",
+          "propellant": "Hydrogen"
+        },
+        "reactor": {
+          "name": "Inertial Confinement Fusion Reactor VII",
+          "output_gw": 306430,
+          "mass_tons": 613,
+          "efficiency": 0.999,
+          "requires_exotics": true
+        }
+      },
+      "weapons": [
+        {
+          "type": "spinal_coiler_mk3",
+          "name": "Spinal Coiler Mk3"
+        },
+        {
+          "type": "heavy_coilgun_mk3",
+          "name": "Heavy Coilgun Battery Mk3"
+        },
+        {
+          "type": "heavy_coilgun_mk3",
+          "name": "Heavy Coilgun Battery Mk3"
+        },
+        {
+          "type": "heavy_coilgun_mk3",
+          "name": "Heavy Coilgun Battery Mk3"
+        },
+        {
+          "type": "heavy_coilgun_mk3",
+          "name": "Heavy Coilgun Battery Mk3"
+        },
+        {
+          "type": "heavy_coilgun_mk3",
+          "name": "Heavy Coilgun Battery Mk3"
+        },
+        {
+          "type": "coilgun_mk3",
+          "name": "Coilgun Battery Mk3"
+        },
+        {
+          "type": "pd_laser",
+          "name": "PD Laser Turret"
+        },
+        {
+          "type": "pd_laser",
+          "name": "PD Laser Turret"
+        },
+        {
+          "type": "pd_laser",
+          "name": "PD Laser Turret"
+        },
+        {
+          "type": "pd_laser",
+          "name": "PD Laser Turret"
+        }
+      ],
+      "weapons_summary": {
+        "spinal_coilers": 1,
+        "heavy_coilguns": 5,
+        "coilguns": 1,
+        "torpedoes": 0,
+        "point_defense": 4
+      },
+      "thermal": {
+        "heatsink": {
+          "name": "Lithium Heat Sink",
+          "mass_tons": 128,
+          "capacity_gj": 525
+        },
+        "radiator": {
+          "name": "Lithium Spray Radiator",
+          "mass_tons": 10,
+          "dissipation_kw_per_kg": 13
+        },
+        "battery": {
+          "name": "Superconducting Coil Battery",
+          "mass_tons": 20,
+          "capacity_gj": 160,
+          "recharge_rate_gj_s": 0.075
+        }
+      },
+      "armor": {
+        "type": "Adamantane",
+        "properties": {
+          "density": 1800,
+          "baryonic_half_cm": 115.8,
+          "chip_resist": 0.75,
+          "kinetics_resist": 0.5,
+          "heat_of_vaporization_mj_kg": 59.534
+        },
+        "total_mass_tons": 2428.0,
+        "total_surface_m2": 1794.0,
+        "distribution": {
+          "mass_percent": {
+            "nose": 50.0,
+            "lateral": 40.0,
+            "tail": 10.0
+          },
+          "area_percent": {
+            "nose": 15.0,
+            "lateral": 70.0,
+            "tail": 15.0
+          }
+        },
+        "sections": {
+          "nose": {
+            "thickness_cm": 250.8,
+            "protection_percent": 81.7,
+            "hits_to_deplete": 114.0,
+            "area_m2": 269.0
+          },
+          "lateral": {
+            "thickness_cm": 42.9,
+            "protection_percent": 24.1,
+            "hits_to_deplete": 21.0,
+            "area_m2": 1256.0
+          },
+          "tail": {
+            "thickness_cm": 50.1,
+            "protection_percent": 27.3,
+            "hits_to_deplete": 24.0,
+            "area_m2": 269.0
+          }
+        }
+      },
+      "attitude_control": {
+        "moment_of_inertia": {
+          "pitch_yaw_kg_m2": 50158281250,
+          "notes": "Elongated cylinder model, wet mass"
+        },
+        "thrust_vectoring": {
+          "description": "Main engine nozzle deflection (requires engines firing)",
+          "combat_deflection_deg": 1.0,
+          "max_deflection_deg": 3.0,
+          "lever_arm_m": 123.8,
+          "lateral_force_mn": 1.022,
+          "torque_mn_m": 126.47,
+          "angular_accel_deg_s2": 0.144,
+          "time_to_rotate_45_deg_s": 35.3,
+          "time_to_rotate_90_deg_s": 49.9,
+          "time_to_rotate_180_deg_s": 70.6,
+          "max_angular_velocity_deg_s": 3.61,
+          "forward_thrust_efficiency": 0.99985,
+          "delta_v_cost": {
+            "rotate_90_deg_kps": 0.367,
+            "rotate_180_deg_kps": 0.519,
+            "propellant_90_deg_kg": 285.0,
+            "propellant_180_deg_kg": 403.1
+          }
+        },
+        "rcs": {
+          "description": "Reaction Control System (works with engines off)",
+          "module_name": "VectorThrusters (as RCS)",
+          "mass_tons": 20,
+          "torque_nm": 1500000,
+          "angular_accel_deg_s2": 0.0017,
+          "time_to_rotate_45_deg_s": 324.1,
+          "time_to_rotate_90_deg_s": 458.4,
+          "time_to_rotate_180_deg_s": 648.2,
+          "max_angular_velocity_deg_s": 0.39
+        }
+      }
+    }
+  },
+  "attitude_control_systems": {
+    "thrust_vectoring": {
+      "description": "Main engine nozzle deflection for high-authority rotation",
+      "main_thrust_mn": 58.56,
+      "combat_deflection_deg": 1.0,
+      "max_deflection_deg": 3.0,
+      "requirement": "Main engines must be firing"
+    },
+    "rcs": {
+      "description": "Reaction Control System for maneuvering without main thrust",
+      "module_name": "VectorThrusters",
+      "mass_tons": 20,
+      "torque_nm": 1500000
+    }
+  }
+}

@@ -1,0 +1,1420 @@
+{
+  "hulls": [
+    {
+      "name": "Gunship",
+      "dataName": "Gunship",
+      "mass_tons": 178,
+      "structuralIntegrity": 4,
+      "crew": 3,
+      "noseHardpoints": 1,
+      "hullHardpoints": 0,
+      "internalModules": 2,
+      "consTier": 1,
+      "alien": false,
+      "length_m": 50
+    },
+    {
+      "name": "Escort",
+      "dataName": "Escort",
+      "mass_tons": 350,
+      "structuralIntegrity": 7,
+      "crew": 4,
+      "noseHardpoints": 0,
+      "hullHardpoints": 2,
+      "internalModules": 2,
+      "consTier": 1,
+      "alien": false,
+      "length_m": 50
+    },
+    {
+      "name": "Corvette",
+      "dataName": "Corvette",
+      "mass_tons": 400,
+      "structuralIntegrity": 8,
+      "crew": 8,
+      "noseHardpoints": 1,
+      "hullHardpoints": 1,
+      "internalModules": 3,
+      "consTier": 1,
+      "alien": false,
+      "length_m": 65
+    },
+    {
+      "name": "Frigate",
+      "dataName": "Frigate",
+      "mass_tons": 600,
+      "structuralIntegrity": 12,
+      "crew": 20,
+      "noseHardpoints": 1,
+      "hullHardpoints": 2,
+      "internalModules": 5,
+      "consTier": 1,
+      "alien": false,
+      "length_m": 100
+    },
+    {
+      "name": "Monitor",
+      "dataName": "Monitor",
+      "mass_tons": 800,
+      "structuralIntegrity": 16,
+      "crew": 35,
+      "noseHardpoints": 0,
+      "hullHardpoints": 4,
+      "internalModules": 3,
+      "consTier": 2,
+      "alien": false,
+      "length_m": 125
+    },
+    {
+      "name": "Destroyer",
+      "dataName": "Destroyer",
+      "mass_tons": 825,
+      "structuralIntegrity": 18,
+      "crew": 40,
+      "noseHardpoints": 2,
+      "hullHardpoints": 2,
+      "internalModules": 5,
+      "consTier": 2,
+      "alien": false,
+      "length_m": 125
+    },
+    {
+      "name": "Cruiser",
+      "dataName": "Cruiser",
+      "mass_tons": 1000,
+      "structuralIntegrity": 20,
+      "crew": 60,
+      "noseHardpoints": 2,
+      "hullHardpoints": 3,
+      "internalModules": 7,
+      "consTier": 2,
+      "alien": false,
+      "length_m": 175
+    },
+    {
+      "name": "Battlecruiser",
+      "dataName": "Battlecruiser",
+      "mass_tons": 1200,
+      "structuralIntegrity": 24,
+      "crew": 70,
+      "noseHardpoints": 3,
+      "hullHardpoints": 2,
+      "internalModules": 5,
+      "consTier": 2,
+      "alien": false,
+      "length_m": 175
+    },
+    {
+      "name": "Battleship",
+      "dataName": "Battleship",
+      "mass_tons": 1600,
+      "structuralIntegrity": 40,
+      "crew": 80,
+      "noseHardpoints": 2,
+      "hullHardpoints": 6,
+      "internalModules": 6,
+      "consTier": 3,
+      "alien": false,
+      "length_m": 200
+    },
+    {
+      "name": "Lancer",
+      "dataName": "Lancer",
+      "mass_tons": 2000,
+      "structuralIntegrity": 36,
+      "crew": 100,
+      "noseHardpoints": 4,
+      "hullHardpoints": 3,
+      "internalModules": 7,
+      "consTier": 3,
+      "alien": false,
+      "length_m": 250
+    },
+    {
+      "name": "Dreadnought",
+      "dataName": "Dreadnought",
+      "mass_tons": 2400,
+      "structuralIntegrity": 48,
+      "crew": 120,
+      "noseHardpoints": 3,
+      "hullHardpoints": 8,
+      "internalModules": 7,
+      "consTier": 3,
+      "alien": false,
+      "length_m": 275
+    },
+    {
+      "name": "Titan",
+      "dataName": "Titan",
+      "mass_tons": 3200,
+      "structuralIntegrity": 64,
+      "crew": 120,
+      "noseHardpoints": 4,
+      "hullHardpoints": 6,
+      "internalModules": 9,
+      "consTier": 3,
+      "alien": false,
+      "length_m": 300
+    },
+    {
+      "name": "STO Fighter",
+      "dataName": "STOFighter",
+      "mass_tons": 30,
+      "structuralIntegrity": 3,
+      "crew": 2,
+      "noseHardpoints": 1,
+      "hullHardpoints": 1,
+      "internalModules": 1,
+      "consTier": 1,
+      "alien": false,
+      "length_m": 25
+    },
+    {
+      "name": "Alien Gunship",
+      "dataName": "AlienGunship",
+      "mass_tons": 192,
+      "structuralIntegrity": 6,
+      "crew": 1,
+      "noseHardpoints": 1,
+      "hullHardpoints": 0,
+      "internalModules": 3,
+      "consTier": 1,
+      "alien": true,
+      "length_m": 50
+    },
+    {
+      "name": "Alien Escort",
+      "dataName": "AlienEscort",
+      "mass_tons": 288,
+      "structuralIntegrity": 10,
+      "crew": 2,
+      "noseHardpoints": 0,
+      "hullHardpoints": 2,
+      "internalModules": 4,
+      "consTier": 1,
+      "alien": true,
+      "length_m": 75
+    },
+    {
+      "name": "Alien Corvette",
+      "dataName": "AlienCorvette",
+      "mass_tons": 288,
+      "structuralIntegrity": 10,
+      "crew": 3,
+      "noseHardpoints": 1,
+      "hullHardpoints": 1,
+      "internalModules": 4,
+      "consTier": 1,
+      "alien": true,
+      "length_m": 75
+    },
+    {
+      "name": "Alien Frigate",
+      "dataName": "AlienFrigate",
+      "mass_tons": 576,
+      "structuralIntegrity": 20,
+      "crew": 10,
+      "noseHardpoints": 1,
+      "hullHardpoints": 3,
+      "internalModules": 5,
+      "consTier": 1,
+      "alien": true,
+      "length_m": 125
+    },
+    {
+      "name": "Alien Monitor",
+      "dataName": "AlienMonitor",
+      "mass_tons": 672,
+      "structuralIntegrity": 22,
+      "crew": 16,
+      "noseHardpoints": 1,
+      "hullHardpoints": 4,
+      "internalModules": 5,
+      "consTier": 2,
+      "alien": true,
+      "length_m": 150
+    },
+    {
+      "name": "Alien Destroyer",
+      "dataName": "AlienDestroyer",
+      "mass_tons": 672,
+      "structuralIntegrity": 24,
+      "crew": 20,
+      "noseHardpoints": 2,
+      "hullHardpoints": 2,
+      "internalModules": 5,
+      "consTier": 2,
+      "alien": true,
+      "length_m": 150
+    },
+    {
+      "name": "Alien Cruiser",
+      "dataName": "AlienCruiser",
+      "mass_tons": 1056,
+      "structuralIntegrity": 36,
+      "crew": 25,
+      "noseHardpoints": 2,
+      "hullHardpoints": 4,
+      "internalModules": 7,
+      "consTier": 2,
+      "alien": true,
+      "length_m": 200
+    },
+    {
+      "name": "Alien Battlecruiser",
+      "dataName": "AlienBattlecruiser",
+      "mass_tons": 1440,
+      "structuralIntegrity": 48,
+      "crew": 35,
+      "noseHardpoints": 3,
+      "hullHardpoints": 3,
+      "internalModules": 6,
+      "consTier": 2,
+      "alien": true,
+      "length_m": 245
+    },
+    {
+      "name": "Alien Battleship",
+      "dataName": "AlienBattleship",
+      "mass_tons": 1536,
+      "structuralIntegrity": 60,
+      "crew": 40,
+      "noseHardpoints": 2,
+      "hullHardpoints": 6,
+      "internalModules": 7,
+      "consTier": 2,
+      "alien": true,
+      "length_m": 250
+    },
+    {
+      "name": "Alien Lancer",
+      "dataName": "AlienLancer",
+      "mass_tons": 1536,
+      "structuralIntegrity": 52,
+      "crew": 40,
+      "noseHardpoints": 6,
+      "hullHardpoints": 4,
+      "internalModules": 7,
+      "consTier": 2,
+      "alien": true,
+      "length_m": 275
+    },
+    {
+      "name": "Alien Dreadnought",
+      "dataName": "AlienDreadnought",
+      "mass_tons": 2016,
+      "structuralIntegrity": 72,
+      "crew": 50,
+      "noseHardpoints": 4,
+      "hullHardpoints": 8,
+      "internalModules": 9,
+      "consTier": 2,
+      "alien": true,
+      "length_m": 300
+    },
+    {
+      "name": "Alien Titan",
+      "dataName": "AlienTitan",
+      "mass_tons": 2304,
+      "structuralIntegrity": 90,
+      "crew": 60,
+      "noseHardpoints": 6,
+      "hullHardpoints": 8,
+      "internalModules": 7,
+      "consTier": 3,
+      "alien": true,
+      "length_m": 400
+    },
+    {
+      "name": "Alien Assault Carrier",
+      "dataName": "AlienAssaultCarrier",
+      "mass_tons": 2688,
+      "structuralIntegrity": 90,
+      "crew": 80,
+      "noseHardpoints": 0,
+      "hullHardpoints": 6,
+      "internalModules": 6,
+      "consTier": 3,
+      "alien": true,
+      "length_m": 300
+    },
+    {
+      "name": "Alien Mothership",
+      "dataName": "AlienMothership",
+      "mass_tons": 7680,
+      "structuralIntegrity": 512,
+      "crew": 100,
+      "noseHardpoints": 4,
+      "hullHardpoints": 16,
+      "internalModules": 7,
+      "consTier": 3,
+      "alien": true,
+      "length_m": 600
+    },
+    {
+      "name": "Salamander Gunship",
+      "dataName": "SalamanderGunship",
+      "mass_tons": 20,
+      "structuralIntegrity": 3,
+      "crew": 1,
+      "noseHardpoints": 1,
+      "hullHardpoints": 1,
+      "internalModules": 1,
+      "consTier": 1,
+      "alien": true,
+      "length_m": 35
+    }
+  ],
+  "utility_modules": [
+    {
+      "name": "ISRU Module",
+      "dataName": "ISRUModule",
+      "mass_tons": 100,
+      "crew": 5,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "RefuelFromUnimprovedSites",
+        "RequiresNonISRUDrive",
+        "RadHardened"
+      ],
+      "specialModuleValue": null,
+      "grouping": 0
+    },
+    {
+      "name": "Remass Scoop",
+      "dataName": "RemassScoop",
+      "mass_tons": 40,
+      "crew": 1,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "ImmunetoAerobrakingDamage",
+        "RefuelFromAtmospheres",
+        "RadHardened"
+      ],
+      "specialModuleValue": null,
+      "grouping": 1
+    },
+    {
+      "name": "Muon Spiker",
+      "dataName": "MuonSpiker",
+      "mass_tons": 30,
+      "crew": 3,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "ThrustMultiplier",
+        "RequiresFusionDrive",
+        "RadHardened"
+      ],
+      "specialModuleValue": 1.1,
+      "grouping": 3
+    },
+    {
+      "name": "Neutronium Spiker",
+      "dataName": "NeutroniumSpiker",
+      "mass_tons": 30,
+      "crew": 3,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "ThrustMultiplier",
+        "RequiresFissionDrive",
+        "RadHardened"
+      ],
+      "specialModuleValue": 1.2,
+      "grouping": 3
+    },
+    {
+      "name": "Antimatter Spiker",
+      "dataName": "AntimatterSpiker",
+      "mass_tons": 30,
+      "crew": 3,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "ThrustMultiplier",
+        "RequiresNuclearDrive",
+        "RadHardened"
+      ],
+      "specialModuleValue": 1.3,
+      "grouping": 3
+    },
+    {
+      "name": "Mobile Space Science Lab",
+      "dataName": "MobileSpaceScienceLab",
+      "mass_tons": 200,
+      "crew": 12,
+      "powerRequirement_MW": 1,
+      "specialModuleRules": [
+        "GenerateSpaceScienceBonus",
+        "Prospector"
+      ],
+      "specialModuleValue": 0.05,
+      "grouping": -1
+    },
+    {
+      "name": "Repair Bay",
+      "dataName": "RepairBay",
+      "mass_tons": 700,
+      "crew": 10,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "Repair"
+      ],
+      "specialModuleValue": null,
+      "grouping": -1
+    },
+    {
+      "name": "Salvage Bay",
+      "dataName": "SalvageBay",
+      "mass_tons": 1000,
+      "crew": 20,
+      "powerRequirement_MW": 5,
+      "specialModuleRules": [
+        "SalvageBonus"
+      ],
+      "specialModuleValue": 0.1,
+      "grouping": 11
+    },
+    {
+      "name": "Marine Assault Unit",
+      "dataName": "MarineAssaultUnit",
+      "mass_tons": 200,
+      "crew": 30,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "Assault",
+        "FullRepairCost"
+      ],
+      "specialModuleValue": 4,
+      "grouping": -1
+    },
+    {
+      "name": "Advanced Marine Assault Unit",
+      "dataName": "AdvancedMarineAssaultUnit",
+      "mass_tons": 200,
+      "crew": 30,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "Assault",
+        "FullRepairCost"
+      ],
+      "specialModuleValue": 6,
+      "grouping": -1
+    },
+    {
+      "name": "Elite Marine Assault Unit",
+      "dataName": "EliteMarineAssaultUnit",
+      "mass_tons": 200,
+      "crew": 30,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "Assault",
+        "FullRepairCost"
+      ],
+      "specialModuleValue": 8,
+      "grouping": -1
+    },
+    {
+      "name": "Spartans",
+      "dataName": "Spartans",
+      "mass_tons": 200,
+      "crew": 30,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "Assault",
+        "FullRepairCost"
+      ],
+      "specialModuleValue": 10,
+      "grouping": -1
+    },
+    {
+      "name": "Rangers",
+      "dataName": "Rangers",
+      "mass_tons": 200,
+      "crew": 30,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "Assault",
+        "FullRepairCost"
+      ],
+      "specialModuleValue": 10,
+      "grouping": -1
+    },
+    {
+      "name": "Immortals",
+      "dataName": "Immortals",
+      "mass_tons": 200,
+      "crew": 30,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "Assault",
+        "FullRepairCost"
+      ],
+      "specialModuleValue": 10,
+      "grouping": -1
+    },
+    {
+      "name": "Laser Engine",
+      "dataName": "LaserEngine",
+      "mass_tons": 25,
+      "crew": 3,
+      "powerRequirement_MW": 5,
+      "specialModuleRules": [
+        "LaserPowerBonus"
+      ],
+      "specialModuleValue": 10,
+      "grouping": -1
+    },
+    {
+      "name": "Advanced Laser Engine",
+      "dataName": "AdvancedLaserEngine",
+      "mass_tons": 50,
+      "crew": 3,
+      "powerRequirement_MW": 10,
+      "specialModuleRules": [
+        "LaserPowerBonus"
+      ],
+      "specialModuleValue": 20,
+      "grouping": -1
+    },
+    {
+      "name": "Liquid Hydrogen Containment",
+      "dataName": "LiquidHydrogenContainment",
+      "mass_tons": 5,
+      "crew": 3,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "EVMultiplier",
+        "RequiresHydrogenPropellant",
+        "RadHardened"
+      ],
+      "specialModuleValue": 1.2,
+      "grouping": 4
+    },
+    {
+      "name": "Slush Hydrogen Tankage",
+      "dataName": "SlushHydrogenTankage",
+      "mass_tons": 10,
+      "crew": 3,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "EVMultiplier",
+        "RequiresHydrogenPropellant",
+        "RadHardened"
+      ],
+      "specialModuleValue": 1.35,
+      "grouping": 4
+    },
+    {
+      "name": "Hydron Trap",
+      "dataName": "HydronTrap",
+      "mass_tons": 20,
+      "crew": 3,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "EVMultiplier",
+        "RequiresHydrogenPropellant",
+        "RadHardened"
+      ],
+      "specialModuleValue": 1.5,
+      "grouping": 4
+    },
+    {
+      "name": "Magazine",
+      "dataName": "Magazine",
+      "mass_tons": 100,
+      "crew": 3,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "Magazine",
+        "RadHardened"
+      ],
+      "specialModuleValue": 0.5,
+      "grouping": -1
+    },
+    {
+      "name": "Component Armor",
+      "dataName": "ComponentArmor",
+      "mass_tons": 500,
+      "crew": 0,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "ComponentArmor",
+        "RadHardened",
+        "ImmuneToDamage"
+      ],
+      "specialModuleValue": 0.75,
+      "grouping": 2
+    },
+    {
+      "name": "Solar Platform Kit",
+      "dataName": "SolarPlatformKit",
+      "mass_tons": 260,
+      "crew": 3,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "FoundSolarPlatform"
+      ],
+      "specialModuleValue": null,
+      "grouping": -1
+    },
+    {
+      "name": "Solar Outpost Kit",
+      "dataName": "SolarOutpostKit",
+      "mass_tons": 300,
+      "crew": 3,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "FoundSolarOutpost"
+      ],
+      "specialModuleValue": null,
+      "grouping": -1
+    },
+    {
+      "name": "Fission Platform Kit",
+      "dataName": "FissionPlatformKit",
+      "mass_tons": 325,
+      "crew": 3,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "FoundFissionPlatform"
+      ],
+      "specialModuleValue": null,
+      "grouping": -1
+    },
+    {
+      "name": "Fission Outpost Kit",
+      "dataName": "FissionOutpostKit",
+      "mass_tons": 350,
+      "crew": 3,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "FoundFissionOutpost"
+      ],
+      "specialModuleValue": null,
+      "grouping": -1
+    },
+    {
+      "name": "Fusion Platform Kit",
+      "dataName": "FusionPlatformKit",
+      "mass_tons": 375,
+      "crew": 3,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "FoundFusionPlatform"
+      ],
+      "specialModuleValue": null,
+      "grouping": -1
+    },
+    {
+      "name": "Fusion Outpost Kit",
+      "dataName": "FusionOutpostKit",
+      "mass_tons": 400,
+      "crew": 3,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "FoundFusionOutpost"
+      ],
+      "specialModuleValue": null,
+      "grouping": -1
+    },
+    {
+      "name": "Automated Solar Platform Kit",
+      "dataName": "AutomatedSolarPlatformKit",
+      "mass_tons": 325,
+      "crew": 12,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "FoundAutomatedSolarPlatform"
+      ],
+      "specialModuleValue": null,
+      "grouping": -1
+    },
+    {
+      "name": "Automated Solar Outpost Kit",
+      "dataName": "AutomatedSolarOutpostKit",
+      "mass_tons": 1500,
+      "crew": 12,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "FoundAutomatedSolarOutpost"
+      ],
+      "specialModuleValue": null,
+      "grouping": -1
+    },
+    {
+      "name": "Automated Fission Platform Kit",
+      "dataName": "AutomatedFissionPlatformKit",
+      "mass_tons": 325,
+      "crew": 12,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "FoundAutomatedFissionPlatform"
+      ],
+      "specialModuleValue": null,
+      "grouping": -1
+    },
+    {
+      "name": "Automated Fission Outpost Kit",
+      "dataName": "AutomatedFissionOutpostKit",
+      "mass_tons": 1650,
+      "crew": 12,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "FoundAutomatedFissionOutpost"
+      ],
+      "specialModuleValue": null,
+      "grouping": -1
+    },
+    {
+      "name": "Electronic Countermeasures 1",
+      "dataName": "ElectronicCountermeasures1",
+      "mass_tons": 10,
+      "crew": 2,
+      "powerRequirement_MW": 2,
+      "specialModuleRules": [
+        "ECM"
+      ],
+      "specialModuleValue": 0.2,
+      "grouping": 9
+    },
+    {
+      "name": "Electronic Countermeasures 2",
+      "dataName": "ElectronicCountermeasures2",
+      "mass_tons": 10,
+      "crew": 2,
+      "powerRequirement_MW": 3,
+      "specialModuleRules": [
+        "ECM"
+      ],
+      "specialModuleValue": 0.4,
+      "grouping": 9
+    },
+    {
+      "name": "Electronic Countermeasures 3",
+      "dataName": "ElectronicCountermeasures3",
+      "mass_tons": 10,
+      "crew": 2,
+      "powerRequirement_MW": 4,
+      "specialModuleRules": [
+        "ECM"
+      ],
+      "specialModuleValue": 0.6,
+      "grouping": 9
+    },
+    {
+      "name": "Flag Bridge",
+      "dataName": "FlagBridge",
+      "mass_tons": 90,
+      "crew": 18,
+      "powerRequirement_MW": 1,
+      "specialModuleRules": [
+        "ReduceFleetMCConsumption"
+      ],
+      "specialModuleValue": 0.8,
+      "grouping": 14
+    },
+    {
+      "name": "Targeting Computer 1",
+      "dataName": "TargetingComputer1",
+      "mass_tons": 10,
+      "crew": 1,
+      "powerRequirement_MW": 1,
+      "specialModuleRules": [
+        "TargetingComputer"
+      ],
+      "specialModuleValue": 0.1,
+      "grouping": 10
+    },
+    {
+      "name": "Targeting Computer 2",
+      "dataName": "TargetingComputer2",
+      "mass_tons": 10,
+      "crew": 1,
+      "powerRequirement_MW": 1,
+      "specialModuleRules": [
+        "TargetingComputer"
+      ],
+      "specialModuleValue": 0.3,
+      "grouping": 10
+    },
+    {
+      "name": "Targeting Computer 3",
+      "dataName": "TargetingComputer3",
+      "mass_tons": 10,
+      "crew": 1,
+      "powerRequirement_MW": 1,
+      "specialModuleRules": [
+        "TargetingComputer"
+      ],
+      "specialModuleValue": 0.5,
+      "grouping": 10
+    },
+    {
+      "name": "Armor Struts",
+      "dataName": "ArmorStruts",
+      "mass_tons": 100,
+      "crew": 0,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "ArmorStruts"
+      ],
+      "specialModuleValue": 1,
+      "grouping": 12
+    },
+    {
+      "name": "Cyclotron",
+      "dataName": "Cyclotron",
+      "mass_tons": 50,
+      "crew": 3,
+      "powerRequirement_MW": 5,
+      "specialModuleRules": [
+        "ParticleBeamPowerBonus",
+        "RadHardened"
+      ],
+      "specialModuleValue": 20,
+      "grouping": -1
+    },
+    {
+      "name": "VectorThrusters",
+      "dataName": "VectorThrusters",
+      "mass_tons": 20,
+      "crew": 0,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "RotationalThrust",
+        "ImmuneToDamage"
+      ],
+      "specialModuleValue": 1500000,
+      "grouping": 13
+    },
+    {
+      "name": "Hydra Infiltration Pod",
+      "dataName": "HydraInfiltrationPod",
+      "mass_tons": 10,
+      "crew": 1,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "Crashdown",
+        "LandHydra",
+        "ImmunetoAerobrakingDamage",
+        "RadHardened"
+      ],
+      "specialModuleValue": null,
+      "grouping": 5
+    },
+    {
+      "name": "Salamander Terror Unit Pod",
+      "dataName": "SalamanderTerrorUnitPod",
+      "mass_tons": 10,
+      "crew": 30,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "Crashdown",
+        "Assault",
+        "ImmunetoAerobrakingDamage",
+        "RadHardened"
+      ],
+      "specialModuleValue": 9,
+      "grouping": 6
+    },
+    {
+      "name": "Alien Army Pod",
+      "dataName": "AlienArmyPod",
+      "mass_tons": 10000,
+      "crew": 3000,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "MarineOpsDefenseOnly",
+        "ImmunetoAerobrakingDamage",
+        "LandArmy"
+      ],
+      "specialModuleValue": 50,
+      "grouping": 7
+    },
+    {
+      "name": "Alien Fusion Outpost Kit",
+      "dataName": "AlienFusionOutpostKit",
+      "mass_tons": 500,
+      "crew": 0,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "FoundFusionOutpost",
+        "FullRepairCost"
+      ],
+      "specialModuleValue": null,
+      "grouping": -1
+    },
+    {
+      "name": "Alien Fusion Platform Kit",
+      "dataName": "AlienFusionPlatformKit",
+      "mass_tons": 500,
+      "crew": 0,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "FoundFusionPlatform",
+        "FullRepairCost"
+      ],
+      "specialModuleValue": null,
+      "grouping": -1
+    },
+    {
+      "name": "Alien Muon Spiker",
+      "dataName": "AlienMuonSpiker",
+      "mass_tons": 10,
+      "crew": 0,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "ThrustMultiplier",
+        "RequiresFusionDrive",
+        "RadHardened"
+      ],
+      "specialModuleValue": 1.35,
+      "grouping": 3
+    },
+    {
+      "name": "Alien Slush Hydrogen Tankage",
+      "dataName": "AlienSlushHydrogenTankage",
+      "mass_tons": 10,
+      "crew": 0,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "EVMultiplier",
+        "RequiresHydrogenPropellant",
+        "RadHardened"
+      ],
+      "specialModuleValue": 1.5,
+      "grouping": 4
+    },
+    {
+      "name": "Alien Hydron Trap",
+      "dataName": "AlienHydronTrap",
+      "mass_tons": 10,
+      "crew": 0,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "EVMultiplier",
+        "RequiresHydrogenPropellant",
+        "RadHardened"
+      ],
+      "specialModuleValue": 2,
+      "grouping": 4
+    },
+    {
+      "name": "Alien Surveillance Module",
+      "dataName": "AlienSurveillanceModule",
+      "mass_tons": 20,
+      "crew": 3,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "Surveillance"
+      ],
+      "specialModuleValue": null,
+      "grouping": 8
+    },
+    {
+      "name": "Alien ECM",
+      "dataName": "AlienECM",
+      "mass_tons": 10,
+      "crew": 1,
+      "powerRequirement_MW": 2,
+      "specialModuleRules": [
+        "ECM"
+      ],
+      "specialModuleValue": 0.6,
+      "grouping": 9
+    },
+    {
+      "name": "Alien Targeting Computer",
+      "dataName": "AlienTargetingComputer",
+      "mass_tons": 10,
+      "crew": 1,
+      "powerRequirement_MW": 1,
+      "specialModuleRules": [
+        "TargetingComputer"
+      ],
+      "specialModuleValue": 0.5,
+      "grouping": 10
+    },
+    {
+      "name": "Alien Repair Bay",
+      "dataName": "AlienRepairBay",
+      "mass_tons": 500,
+      "crew": 4,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "Repair"
+      ],
+      "specialModuleValue": null,
+      "grouping": -1
+    },
+    {
+      "name": "Alien Magazine",
+      "dataName": "AlienMagazine",
+      "mass_tons": 100,
+      "crew": 1,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "Magazine",
+        "RadHardened"
+      ],
+      "specialModuleValue": 0.5,
+      "grouping": -1
+    },
+    {
+      "name": "Alien Surveillance Platform",
+      "dataName": "AlienSurveillancePlatform",
+      "mass_tons": 0,
+      "crew": 8,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "FoundSurveillancePlatform"
+      ],
+      "specialModuleValue": null,
+      "grouping": 15
+    },
+    {
+      "name": "Alien Surveillance Orbital",
+      "dataName": "AlienSurveillanceOrbital",
+      "mass_tons": 0,
+      "crew": 32,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "FoundSurveillanceOrbital"
+      ],
+      "specialModuleValue": null,
+      "grouping": 15
+    },
+    {
+      "name": "Alien Surveillance Ring",
+      "dataName": "AlienSurveillanceRing",
+      "mass_tons": 0,
+      "crew": 128,
+      "powerRequirement_MW": 0,
+      "specialModuleRules": [
+        "FoundSurveillanceRing"
+      ],
+      "specialModuleValue": null,
+      "grouping": 15
+    }
+  ],
+  "heatsinks": [
+    {
+      "name": "Water Heat Sink",
+      "dataName": "WaterHeatSink",
+      "capacity_GJ": 100,
+      "mass_tons": 250,
+      "specific_capacity_GJ_ton": 0.4,
+      "crew": 1
+    },
+    {
+      "name": "Potassium Heat Sink",
+      "dataName": "PotassiumHeatSink",
+      "capacity_GJ": 110,
+      "mass_tons": 205,
+      "specific_capacity_GJ_ton": 0.54,
+      "crew": 1
+    },
+    {
+      "name": "Sodium Heat Sink",
+      "dataName": "SodiumHeatSink",
+      "capacity_GJ": 370,
+      "mass_tons": 230,
+      "specific_capacity_GJ_ton": 1.61,
+      "crew": 1
+    },
+    {
+      "name": "Lithium Heat Sink",
+      "dataName": "LithiumHeatSink",
+      "capacity_GJ": 525,
+      "mass_tons": 128,
+      "specific_capacity_GJ_ton": 4.1,
+      "crew": 1
+    },
+    {
+      "name": "Molten Salt Heat Sink",
+      "dataName": "MoltenSaltHeatSink",
+      "capacity_GJ": 900,
+      "mass_tons": 485,
+      "specific_capacity_GJ_ton": 1.86,
+      "crew": 1
+    },
+    {
+      "name": "Exotic Heat Sink",
+      "dataName": "ExoticHeatSink",
+      "capacity_GJ": 1800,
+      "mass_tons": 250,
+      "specific_capacity_GJ_ton": 7.2,
+      "crew": 1
+    },
+    {
+      "name": "Heavy Water Heat Sink",
+      "dataName": "HeavyWaterHeatSink",
+      "capacity_GJ": 200,
+      "mass_tons": 500,
+      "specific_capacity_GJ_ton": 0.4,
+      "crew": 1
+    },
+    {
+      "name": "Heavy Potassium Heat Sink",
+      "dataName": "HeavyPotassiumHeatSink",
+      "capacity_GJ": 220,
+      "mass_tons": 410,
+      "specific_capacity_GJ_ton": 0.54,
+      "crew": 1
+    },
+    {
+      "name": "Heavy Sodium Heat Sink",
+      "dataName": "HeavySodiumHeatSink",
+      "capacity_GJ": 740,
+      "mass_tons": 460,
+      "specific_capacity_GJ_ton": 1.61,
+      "crew": 1
+    },
+    {
+      "name": "Heavy Lithium Heat Sink",
+      "dataName": "HeavyLithiumHeatSink",
+      "capacity_GJ": 1050,
+      "mass_tons": 256,
+      "specific_capacity_GJ_ton": 4.1,
+      "crew": 1
+    },
+    {
+      "name": "Heavy Molten Salt Heat Sink",
+      "dataName": "HeavyMoltenSaltHeatSink",
+      "capacity_GJ": 1800,
+      "mass_tons": 970,
+      "specific_capacity_GJ_ton": 1.86,
+      "crew": 1
+    },
+    {
+      "name": "Heavy Exotic Heat Sink",
+      "dataName": "HeavyExoticHeatSink",
+      "capacity_GJ": 3600,
+      "mass_tons": 500,
+      "specific_capacity_GJ_ton": 7.2,
+      "crew": 1
+    },
+    {
+      "name": "Alien Lithium Heat Sink",
+      "dataName": "AlienLithiumHeatSink",
+      "capacity_GJ": 1050,
+      "mass_tons": 256,
+      "specific_capacity_GJ_ton": 4.1,
+      "crew": 0
+    },
+    {
+      "name": "Alien Exotic Heat Sink",
+      "dataName": "AlienExoticHeatSink",
+      "capacity_GJ": 3600,
+      "mass_tons": 500,
+      "specific_capacity_GJ_ton": 7.2,
+      "crew": 0
+    }
+  ],
+  "radiators": [
+    {
+      "name": "Aluminum Fin",
+      "dataName": "AluminumFin",
+      "specificPower_kW_kg": 2.5,
+      "operatingTemp_K": 800,
+      "vulnerability": 30,
+      "emissivity": 0.85,
+      "collector": false,
+      "radiatorType": "Fin",
+      "crew": 0
+    },
+    {
+      "name": "Titanium Array",
+      "dataName": "TitaniumArray",
+      "specificPower_kW_kg": 5.5,
+      "operatingTemp_K": 1200,
+      "vulnerability": 20,
+      "emissivity": 0.83,
+      "collector": false,
+      "radiatorType": "Fin",
+      "crew": 0
+    },
+    {
+      "name": "Molybdenum Pipe",
+      "dataName": "MolybdenumPipe",
+      "specificPower_kW_kg": 4.5,
+      "operatingTemp_K": 1650,
+      "vulnerability": 10,
+      "emissivity": 0.8,
+      "collector": false,
+      "radiatorType": "Fin",
+      "crew": 0
+    },
+    {
+      "name": "Nanotube Filament",
+      "dataName": "NanotubeFilament",
+      "specificPower_kW_kg": 6.5,
+      "operatingTemp_K": 1300,
+      "vulnerability": 5,
+      "emissivity": 0.9,
+      "collector": false,
+      "radiatorType": "Spike",
+      "crew": 0
+    },
+    {
+      "name": "Ionic Dust",
+      "dataName": "IonicDust",
+      "specificPower_kW_kg": 3,
+      "operatingTemp_K": 1200,
+      "vulnerability": 1,
+      "emissivity": 0.85,
+      "collector": true,
+      "radiatorType": "Droplet",
+      "crew": 3
+    },
+    {
+      "name": "Cobalt Dust",
+      "dataName": "CobaltDust",
+      "specificPower_kW_kg": 5,
+      "operatingTemp_K": 1200,
+      "vulnerability": 1,
+      "emissivity": 0.9,
+      "collector": true,
+      "radiatorType": "Droplet",
+      "crew": 3
+    },
+    {
+      "name": "Tin Droplet",
+      "dataName": "TinDroplet",
+      "specificPower_kW_kg": 8,
+      "operatingTemp_K": 1030,
+      "vulnerability": 1,
+      "emissivity": 0.96,
+      "collector": true,
+      "radiatorType": "Droplet",
+      "crew": 3
+    },
+    {
+      "name": "Gallium Mist",
+      "dataName": "GalliumMist",
+      "specificPower_kW_kg": 10,
+      "operatingTemp_K": 1200,
+      "vulnerability": 1,
+      "emissivity": 0.96,
+      "collector": true,
+      "radiatorType": "Droplet",
+      "crew": 3
+    },
+    {
+      "name": "Lithium Spray",
+      "dataName": "LithiumSpray",
+      "specificPower_kW_kg": 13,
+      "operatingTemp_K": 1500,
+      "vulnerability": 1,
+      "emissivity": 0.96,
+      "collector": true,
+      "radiatorType": "Droplet",
+      "crew": 3
+    },
+    {
+      "name": "Dusty Plasma",
+      "dataName": "DustyPlasma",
+      "specificPower_kW_kg": 18,
+      "operatingTemp_K": 2000,
+      "vulnerability": 2,
+      "emissivity": 0.96,
+      "collector": true,
+      "radiatorType": "Spike",
+      "crew": 2
+    },
+    {
+      "name": "Exotic Spike",
+      "dataName": "ExoticSpike",
+      "specificPower_kW_kg": 24,
+      "operatingTemp_K": 1900,
+      "vulnerability": 2,
+      "emissivity": 0.9,
+      "collector": false,
+      "radiatorType": "Spike",
+      "crew": 0
+    },
+    {
+      "name": "Diamondoid Spike",
+      "dataName": "DiamondoidSpike",
+      "specificPower_kW_kg": 15,
+      "operatingTemp_K": 1650,
+      "vulnerability": 3,
+      "emissivity": 0.93,
+      "collector": false,
+      "radiatorType": "AlienSpike",
+      "crew": 0
+    },
+    {
+      "name": "Exotic Tendril",
+      "dataName": "ExoticTendril",
+      "specificPower_kW_kg": 25,
+      "operatingTemp_K": 2500,
+      "vulnerability": 1,
+      "emissivity": 0.98,
+      "collector": false,
+      "radiatorType": "AlienSpike",
+      "crew": 0
+    }
+  ],
+  "batteries": [
+    {
+      "name": "Lithium-Ion Battery",
+      "dataName": "Lithium-IonBattery",
+      "capacity_GJ": 12,
+      "mass_tons": 11,
+      "specific_capacity_GJ_ton": 1.09,
+      "rechargeRate_GJ_s": 0.005,
+      "crew": 0,
+      "hp": 3
+    },
+    {
+      "name": "Graphene Battery",
+      "dataName": "GrapheneBattery",
+      "capacity_GJ": 48,
+      "mass_tons": 22,
+      "specific_capacity_GJ_ton": 2.18,
+      "rechargeRate_GJ_s": 0.025,
+      "crew": 1,
+      "hp": 3
+    },
+    {
+      "name": "Quantum Battery",
+      "dataName": "QuantumBattery",
+      "capacity_GJ": 80,
+      "mass_tons": 26,
+      "specific_capacity_GJ_ton": 3.08,
+      "rechargeRate_GJ_s": 0.05,
+      "crew": 1,
+      "hp": 3
+    },
+    {
+      "name": "Superconducting Coil Battery",
+      "dataName": "SuperconductingCoilBattery",
+      "capacity_GJ": 160,
+      "mass_tons": 20,
+      "specific_capacity_GJ_ton": 8.0,
+      "rechargeRate_GJ_s": 0.075,
+      "crew": 1,
+      "hp": 4
+    },
+    {
+      "name": "Alien Superconducting Coil Battery",
+      "dataName": "AlienSuperconductingCoilBattery",
+      "capacity_GJ": 128,
+      "mass_tons": 18,
+      "specific_capacity_GJ_ton": 7.11,
+      "rechargeRate_GJ_s": 0.075,
+      "crew": 1,
+      "hp": 6
+    },
+    {
+      "name": "Alien Exotic Nanowire Battery",
+      "dataName": "AlienExoticNanowireBattery",
+      "capacity_GJ": 256,
+      "mass_tons": 17,
+      "specific_capacity_GJ_ton": 15.06,
+      "rechargeRate_GJ_s": 0.1,
+      "crew": 1,
+      "hp": 8
+    }
+  ]
+}
