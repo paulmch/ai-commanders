@@ -1,0 +1,2235 @@
+{
+  "recording_version": "2.0",
+  "recorded_at": "2026-01-10T20:26:13.111712",
+  "alpha_model": "openrouter/anthropic/claude-haiku-4.5",
+  "beta_model": "openrouter/x-ai/grok-4.1-fast",
+  "alpha_name": "Captain Claude-Haiku",
+  "beta_name": "Captain GROK-4.1-FAST",
+  "alpha_ship": "TIS Claude-Haiku",
+  "beta_ship": "HFS GROK-4.1-FAST",
+  "alpha_personality": "balanced",
+  "beta_personality": "balanced",
+  "initial_distance_km": 500.0,
+  "time_limit_s": 1200.0,
+  "max_checkpoints": 10,
+  "unlimited_mode": false,
+  "alpha_specs": {
+    "ship_id": "alpha",
+    "hull_integrity": 100.0,
+    "armor": {},
+    "weapons": {
+      "weapon_0": {
+        "type": "WeaponState",
+        "damage_gj": 0
+      },
+      "weapon_1": {
+        "type": "WeaponState",
+        "damage_gj": 0
+      },
+      "pd_0": {
+        "type": "WeaponState",
+        "damage_gj": 0
+      },
+      "pd_1": {
+        "type": "WeaponState",
+        "damage_gj": 0
+      }
+    },
+    "max_acceleration_g": 2.0,
+    "delta_v_budget_kps": 500
+  },
+  "beta_specs": {
+    "ship_id": "beta",
+    "hull_integrity": 100.0,
+    "armor": {},
+    "weapons": {
+      "weapon_0": {
+        "type": "WeaponState",
+        "damage_gj": 0
+      },
+      "weapon_1": {
+        "type": "WeaponState",
+        "damage_gj": 0
+      },
+      "pd_0": {
+        "type": "WeaponState",
+        "damage_gj": 0
+      },
+      "pd_1": {
+        "type": "WeaponState",
+        "damage_gj": 0
+      }
+    },
+    "max_acceleration_g": 2.0,
+    "delta_v_budget_kps": 500
+  },
+  "events": [
+    {
+      "timestamp": 0.0,
+      "event_type": "battle_start",
+      "ship_id": null,
+      "data": {
+        "distance_km": 500.0,
+        "alpha": "Captain Claude-Haiku",
+        "beta": "Captain GROK-4.1-FAST"
+      }
+    },
+    {
+      "timestamp": 30.0,
+      "event_type": "checkpoint",
+      "ship_id": null,
+      "data": {
+        "checkpoint": 1,
+        "distance_km": 500.000999999,
+        "alpha": {
+          "ship_id": "alpha",
+          "position": [
+            -250000.0,
+            0.0,
+            0.0
+          ],
+          "velocity": [
+            0,
+            0,
+            0
+          ],
+          "forward": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "hull_integrity": 100.0,
+          "is_destroyed": false,
+          "shots_fired": 0,
+          "hits_scored": 0,
+          "damage_dealt_gj": 0.0,
+          "damage_taken_gj": 0.0,
+          "delta_v_remaining_kps": 526.0640272387178,
+          "heat_percent": 0.005714285714285719,
+          "heatsink_energy_gj": 0.03000000000000002,
+          "heatsink_capacity_gj": 525,
+          "radiators_extended": false,
+          "armor": {
+            "nose": {
+              "thickness_cm": 151.2,
+              "original_cm": 151.2
+            },
+            "lateral": {
+              "thickness_cm": 26.0,
+              "original_cm": 26.0
+            },
+            "tail": {
+              "thickness_cm": 30.3,
+              "original_cm": 30.3
+            }
+          },
+          "weapons": {
+            "weapon_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 450,
+              "cooldown_s": 0.0
+            },
+            "weapon_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 1800,
+              "cooldown_s": 0.0
+            },
+            "pd_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            },
+            "pd_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            }
+          }
+        },
+        "beta": {
+          "ship_id": "beta",
+          "position": [
+            250000.0,
+            1000.0,
+            0.0
+          ],
+          "velocity": [
+            0,
+            0,
+            0
+          ],
+          "forward": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "hull_integrity": 100.0,
+          "is_destroyed": false,
+          "shots_fired": 0,
+          "hits_scored": 0,
+          "damage_dealt_gj": 0.0,
+          "damage_taken_gj": 0.0,
+          "delta_v_remaining_kps": 526.0640272387178,
+          "heat_percent": 0.005714285714285719,
+          "heatsink_energy_gj": 0.03000000000000002,
+          "heatsink_capacity_gj": 525,
+          "radiators_extended": false,
+          "armor": {
+            "nose": {
+              "thickness_cm": 151.2,
+              "original_cm": 151.2
+            },
+            "lateral": {
+              "thickness_cm": 26.0,
+              "original_cm": 26.0
+            },
+            "tail": {
+              "thickness_cm": 30.3,
+              "original_cm": 30.3
+            }
+          },
+          "weapons": {
+            "weapon_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 450,
+              "cooldown_s": 0.0
+            },
+            "weapon_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 1800,
+              "cooldown_s": 0.0
+            },
+            "pd_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            },
+            "pd_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            }
+          }
+        }
+      }
+    },
+    {
+      "timestamp": 30.0,
+      "event_type": "maneuver",
+      "ship_id": "alpha",
+      "data": {
+        "maneuver_type": "INTERCEPT",
+        "throttle": 1.0,
+        "target_id": null
+      }
+    },
+    {
+      "timestamp": 30.0,
+      "event_type": "radiator_change",
+      "ship_id": "alpha",
+      "data": {
+        "extended": true
+      }
+    },
+    {
+      "timestamp": 30.0,
+      "event_type": "maneuver",
+      "ship_id": "beta",
+      "data": {
+        "maneuver_type": "INTERCEPT",
+        "throttle": 1.0,
+        "target_id": null
+      }
+    },
+    {
+      "timestamp": 30.0,
+      "event_type": "radiator_change",
+      "ship_id": "beta",
+      "data": {
+        "extended": true
+      }
+    },
+    {
+      "timestamp": 60.0,
+      "event_type": "checkpoint",
+      "ship_id": null,
+      "data": {
+        "checkpoint": 2,
+        "distance_km": 472.7698672025149,
+        "alpha": {
+          "ship_id": "alpha",
+          "position": [
+            -236384.40480215882,
+            0.0,
+            0.0
+          ],
+          "velocity": [
+            878.4376184968243,
+            0.0,
+            0.0
+          ],
+          "forward": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "hull_integrity": 100.0,
+          "is_destroyed": false,
+          "shots_fired": 0,
+          "hits_scored": 0,
+          "damage_dealt_gj": 0.0,
+          "damage_taken_gj": 0.0,
+          "delta_v_remaining_kps": 525.1855896202215,
+          "heat_percent": 0.0,
+          "heatsink_energy_gj": 0.0,
+          "heatsink_capacity_gj": 525,
+          "radiators_extended": true,
+          "armor": {
+            "nose": {
+              "thickness_cm": 151.2,
+              "original_cm": 151.2
+            },
+            "lateral": {
+              "thickness_cm": 26.0,
+              "original_cm": 26.0
+            },
+            "tail": {
+              "thickness_cm": 30.3,
+              "original_cm": 30.3
+            }
+          },
+          "weapons": {
+            "weapon_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 450,
+              "cooldown_s": 0.0
+            },
+            "weapon_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 1800,
+              "cooldown_s": 0.0
+            },
+            "pd_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            },
+            "pd_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            }
+          }
+        },
+        "beta": {
+          "ship_id": "beta",
+          "position": [
+            236384.40480215882,
+            1000.0,
+            0.0
+          ],
+          "velocity": [
+            -878.4376184968243,
+            0.0,
+            0.0
+          ],
+          "forward": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "hull_integrity": 100.0,
+          "is_destroyed": false,
+          "shots_fired": 0,
+          "hits_scored": 0,
+          "damage_dealt_gj": 0.0,
+          "damage_taken_gj": 0.0,
+          "delta_v_remaining_kps": 525.1855896202215,
+          "heat_percent": 0.0,
+          "heatsink_energy_gj": 0.0,
+          "heatsink_capacity_gj": 525,
+          "radiators_extended": true,
+          "armor": {
+            "nose": {
+              "thickness_cm": 151.2,
+              "original_cm": 151.2
+            },
+            "lateral": {
+              "thickness_cm": 26.0,
+              "original_cm": 26.0
+            },
+            "tail": {
+              "thickness_cm": 30.3,
+              "original_cm": 30.3
+            }
+          },
+          "weapons": {
+            "weapon_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 450,
+              "cooldown_s": 0.0
+            },
+            "weapon_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 1800,
+              "cooldown_s": 0.0
+            },
+            "pd_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            },
+            "pd_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            }
+          }
+        }
+      }
+    },
+    {
+      "timestamp": 60.0,
+      "event_type": "maneuver",
+      "ship_id": "alpha",
+      "data": {
+        "maneuver_type": "INTERCEPT",
+        "throttle": 1.0,
+        "target_id": null
+      }
+    },
+    {
+      "timestamp": 60.0,
+      "event_type": "maneuver",
+      "ship_id": "beta",
+      "data": {
+        "maneuver_type": "INTERCEPT",
+        "throttle": 1.0,
+        "target_id": null
+      }
+    },
+    {
+      "timestamp": 60.0,
+      "event_type": "radiator_change",
+      "ship_id": "beta",
+      "data": {
+        "extended": true
+      }
+    },
+    {
+      "timestamp": 90.0,
+      "event_type": "checkpoint",
+      "ship_id": null,
+      "data": {
+        "checkpoint": 3,
+        "distance_km": 392.8303023662785,
+        "alpha": {
+          "ship_id": "alpha",
+          "position": [
+            -196414.51477499172,
+            0.0,
+            0.0
+          ],
+          "velocity": [
+            1756.9504825814618,
+            0.0,
+            0.0
+          ],
+          "forward": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "hull_integrity": 100.0,
+          "is_destroyed": false,
+          "shots_fired": 0,
+          "hits_scored": 0,
+          "damage_dealt_gj": 0.0,
+          "damage_taken_gj": 0.0,
+          "delta_v_remaining_kps": 524.3070767561331,
+          "heat_percent": 0.0,
+          "heatsink_energy_gj": 0.0,
+          "heatsink_capacity_gj": 525,
+          "radiators_extended": true,
+          "armor": {
+            "nose": {
+              "thickness_cm": 151.2,
+              "original_cm": 151.2
+            },
+            "lateral": {
+              "thickness_cm": 26.0,
+              "original_cm": 26.0
+            },
+            "tail": {
+              "thickness_cm": 30.3,
+              "original_cm": 30.3
+            }
+          },
+          "weapons": {
+            "weapon_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 450,
+              "cooldown_s": 0.0
+            },
+            "weapon_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 1800,
+              "cooldown_s": 0.0
+            },
+            "pd_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            },
+            "pd_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            }
+          }
+        },
+        "beta": {
+          "ship_id": "beta",
+          "position": [
+            196414.51477499172,
+            1000.0,
+            0.0
+          ],
+          "velocity": [
+            -1756.9504825814618,
+            0.0,
+            0.0
+          ],
+          "forward": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "hull_integrity": 100.0,
+          "is_destroyed": false,
+          "shots_fired": 0,
+          "hits_scored": 0,
+          "damage_dealt_gj": 0.0,
+          "damage_taken_gj": 0.0,
+          "delta_v_remaining_kps": 524.3070767561331,
+          "heat_percent": 0.0,
+          "heatsink_energy_gj": 0.0,
+          "heatsink_capacity_gj": 525,
+          "radiators_extended": true,
+          "armor": {
+            "nose": {
+              "thickness_cm": 151.2,
+              "original_cm": 151.2
+            },
+            "lateral": {
+              "thickness_cm": 26.0,
+              "original_cm": 26.0
+            },
+            "tail": {
+              "thickness_cm": 30.3,
+              "original_cm": 30.3
+            }
+          },
+          "weapons": {
+            "weapon_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 450,
+              "cooldown_s": 0.0
+            },
+            "weapon_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 1800,
+              "cooldown_s": 0.0
+            },
+            "pd_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            },
+            "pd_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            }
+          }
+        }
+      }
+    },
+    {
+      "timestamp": 90.0,
+      "event_type": "maneuver",
+      "ship_id": "alpha",
+      "data": {
+        "maneuver_type": "INTERCEPT",
+        "throttle": 1.0,
+        "target_id": null
+      }
+    },
+    {
+      "timestamp": 90.0,
+      "event_type": "radiator_change",
+      "ship_id": "alpha",
+      "data": {
+        "extended": true
+      }
+    },
+    {
+      "timestamp": 90.0,
+      "event_type": "maneuver",
+      "ship_id": "beta",
+      "data": {
+        "maneuver_type": "INTERCEPT",
+        "throttle": 1.0,
+        "target_id": null
+      }
+    },
+    {
+      "timestamp": 90.0,
+      "event_type": "radiator_change",
+      "ship_id": "beta",
+      "data": {
+        "extended": true
+      }
+    },
+    {
+      "timestamp": 97.0,
+      "event_type": "shot_fired",
+      "ship_id": "beta",
+      "data": {
+        "target_id": "alpha",
+        "weapon_slot": "unknown",
+        "hit_probability": 0,
+        "distance_km": 0.0,
+        "projectile_energy_gj": 0,
+        "muzzle_velocity_kps": 9.9
+      }
+    },
+    {
+      "timestamp": 99.0,
+      "event_type": "shot_fired",
+      "ship_id": "beta",
+      "data": {
+        "target_id": "alpha",
+        "weapon_slot": "unknown",
+        "hit_probability": 0,
+        "distance_km": 0.0,
+        "projectile_energy_gj": 0,
+        "muzzle_velocity_kps": 6.0
+      }
+    },
+    {
+      "timestamp": 112.0,
+      "event_type": "shot_fired",
+      "ship_id": "beta",
+      "data": {
+        "target_id": "alpha",
+        "weapon_slot": "unknown",
+        "hit_probability": 0,
+        "distance_km": 0.0,
+        "projectile_energy_gj": 0,
+        "muzzle_velocity_kps": 9.9
+      }
+    },
+    {
+      "timestamp": 113.0,
+      "event_type": "shot_fired",
+      "ship_id": "alpha",
+      "data": {
+        "target_id": "beta",
+        "weapon_slot": "unknown",
+        "hit_probability": 0,
+        "distance_km": 0.0,
+        "projectile_energy_gj": 0,
+        "muzzle_velocity_kps": 6.0
+      }
+    },
+    {
+      "timestamp": 114.0,
+      "event_type": "shot_fired",
+      "ship_id": "alpha",
+      "data": {
+        "target_id": "beta",
+        "weapon_slot": "unknown",
+        "hit_probability": 0,
+        "distance_km": 0.0,
+        "projectile_energy_gj": 0,
+        "muzzle_velocity_kps": 9.9
+      }
+    },
+    {
+      "timestamp": 119.0,
+      "event_type": "shot_fired",
+      "ship_id": "beta",
+      "data": {
+        "target_id": "alpha",
+        "weapon_slot": "unknown",
+        "hit_probability": 0,
+        "distance_km": 0.0,
+        "projectile_energy_gj": 0,
+        "muzzle_velocity_kps": 6.0
+      }
+    },
+    {
+      "timestamp": 120.0,
+      "event_type": "checkpoint",
+      "ship_id": null,
+      "data": {
+        "checkpoint": 4,
+        "distance_km": 260.17806646995706,
+        "alpha": {
+          "ship_id": "alpha",
+          "position": [
+            -130088.0723510474,
+            0.0,
+            0.0
+          ],
+          "velocity": [
+            2635.538605145856,
+            0.0,
+            0.0
+          ],
+          "forward": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "hull_integrity": 100.0,
+          "is_destroyed": false,
+          "shots_fired": 2,
+          "hits_scored": 0,
+          "damage_dealt_gj": 0.0,
+          "damage_taken_gj": 0.0,
+          "delta_v_remaining_kps": 523.4284886335694,
+          "heat_percent": 0.6825447619047619,
+          "heatsink_energy_gj": 3.58336,
+          "heatsink_capacity_gj": 525,
+          "radiators_extended": true,
+          "armor": {
+            "nose": {
+              "thickness_cm": 151.2,
+              "original_cm": 151.2
+            },
+            "lateral": {
+              "thickness_cm": 26.0,
+              "original_cm": 26.0
+            },
+            "tail": {
+              "thickness_cm": 30.3,
+              "original_cm": 30.3
+            }
+          },
+          "weapons": {
+            "weapon_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 449,
+              "cooldown_s": 10.0
+            },
+            "weapon_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 1799,
+              "cooldown_s": 14.0
+            },
+            "pd_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            },
+            "pd_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            }
+          }
+        },
+        "beta": {
+          "ship_id": "beta",
+          "position": [
+            130088.0723510474,
+            1000.0,
+            0.0
+          ],
+          "velocity": [
+            -2635.538605145856,
+            0.0,
+            0.0
+          ],
+          "forward": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "hull_integrity": 100.0,
+          "is_destroyed": false,
+          "shots_fired": 4,
+          "hits_scored": 0,
+          "damage_dealt_gj": 0.0,
+          "damage_taken_gj": 0.0,
+          "delta_v_remaining_kps": 523.4284886335694,
+          "heat_percent": 1.2309180952380958,
+          "heatsink_energy_gj": 6.462320000000003,
+          "heatsink_capacity_gj": 525,
+          "radiators_extended": true,
+          "armor": {
+            "nose": {
+              "thickness_cm": 151.2,
+              "original_cm": 151.2
+            },
+            "lateral": {
+              "thickness_cm": 26.0,
+              "original_cm": 26.0
+            },
+            "tail": {
+              "thickness_cm": 30.3,
+              "original_cm": 30.3
+            }
+          },
+          "weapons": {
+            "weapon_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 448,
+              "cooldown_s": 8.0
+            },
+            "weapon_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 1798,
+              "cooldown_s": 20
+            },
+            "pd_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            },
+            "pd_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            }
+          }
+        }
+      }
+    },
+    {
+      "timestamp": 120.0,
+      "event_type": "radiator_change",
+      "ship_id": "alpha",
+      "data": {
+        "extended": false
+      }
+    },
+    {
+      "timestamp": 120.0,
+      "event_type": "maneuver",
+      "ship_id": "alpha",
+      "data": {
+        "maneuver_type": "EVASIVE",
+        "throttle": 1.0,
+        "target_id": null
+      }
+    },
+    {
+      "timestamp": 120.0,
+      "event_type": "radiator_change",
+      "ship_id": "beta",
+      "data": {
+        "extended": false
+      }
+    },
+    {
+      "timestamp": 120.0,
+      "event_type": "maneuver",
+      "ship_id": "beta",
+      "data": {
+        "maneuver_type": "EVASIVE",
+        "throttle": 1.0,
+        "target_id": null
+      }
+    },
+    {
+      "timestamp": 122.0,
+      "event_type": "miss",
+      "ship_id": "beta",
+      "data": {
+        "target_id": "alpha",
+        "weapon_slot": "unknown",
+        "hit_probability": 0,
+        "distance_km": 6.031595769297001
+      }
+    },
+    {
+      "timestamp": 127.0,
+      "event_type": "shot_fired",
+      "ship_id": "beta",
+      "data": {
+        "target_id": "alpha",
+        "weapon_slot": "unknown",
+        "hit_probability": 0,
+        "distance_km": 0.0,
+        "projectile_energy_gj": 0,
+        "muzzle_velocity_kps": 9.9
+      }
+    },
+    {
+      "timestamp": 129.0,
+      "event_type": "shot_fired",
+      "ship_id": "alpha",
+      "data": {
+        "target_id": "beta",
+        "weapon_slot": "unknown",
+        "hit_probability": 0,
+        "distance_km": 0.0,
+        "projectile_energy_gj": 0,
+        "muzzle_velocity_kps": 9.9
+      }
+    },
+    {
+      "timestamp": 131.0,
+      "event_type": "miss",
+      "ship_id": "beta",
+      "data": {
+        "target_id": "alpha",
+        "weapon_slot": "unknown",
+        "hit_probability": 0,
+        "distance_km": 9.822045037751378
+      }
+    },
+    {
+      "timestamp": 132.0,
+      "event_type": "miss",
+      "ship_id": "beta",
+      "data": {
+        "target_id": "alpha",
+        "weapon_slot": "unknown",
+        "hit_probability": 0,
+        "distance_km": 4.755061328922215
+      }
+    },
+    {
+      "timestamp": 133.0,
+      "event_type": "shot_fired",
+      "ship_id": "alpha",
+      "data": {
+        "target_id": "beta",
+        "weapon_slot": "unknown",
+        "hit_probability": 0,
+        "distance_km": 0.0,
+        "projectile_energy_gj": 0,
+        "muzzle_velocity_kps": 6.0
+      }
+    },
+    {
+      "timestamp": 133.0,
+      "event_type": "miss",
+      "ship_id": "alpha",
+      "data": {
+        "target_id": "beta",
+        "weapon_slot": "unknown",
+        "hit_probability": 0,
+        "distance_km": 2.301773121932754
+      }
+    },
+    {
+      "timestamp": 138.0,
+      "event_type": "miss",
+      "ship_id": "alpha",
+      "data": {
+        "target_id": "beta",
+        "weapon_slot": "unknown",
+        "hit_probability": 0,
+        "distance_km": 8.418796687885697
+      }
+    },
+    {
+      "timestamp": 139.0,
+      "event_type": "shot_fired",
+      "ship_id": "beta",
+      "data": {
+        "target_id": "alpha",
+        "weapon_slot": "unknown",
+        "hit_probability": 0,
+        "distance_km": 0.0,
+        "projectile_energy_gj": 0,
+        "muzzle_velocity_kps": 6.0
+      }
+    },
+    {
+      "timestamp": 140.0,
+      "event_type": "hit",
+      "ship_id": "beta",
+      "data": {
+        "shooter_id": "unknown",
+        "weapon_slot": "unknown",
+        "hit_location": "nose",
+        "impact_angle_deg": 0,
+        "kinetic_energy_gj": 7.039045468559545,
+        "armor_ablation_cm": 0,
+        "armor_remaining_cm": 0,
+        "damage_to_hull_gj": 0,
+        "penetrated": false,
+        "critical_hit": false
+      }
+    },
+    {
+      "timestamp": 141.0,
+      "event_type": "miss",
+      "ship_id": "beta",
+      "data": {
+        "target_id": "alpha",
+        "weapon_slot": "unknown",
+        "hit_probability": 0,
+        "distance_km": 4.808347569675746
+      }
+    },
+    {
+      "timestamp": 142.0,
+      "event_type": "shot_fired",
+      "ship_id": "beta",
+      "data": {
+        "target_id": "alpha",
+        "weapon_slot": "unknown",
+        "hit_probability": 0,
+        "distance_km": 0.0,
+        "projectile_energy_gj": 0,
+        "muzzle_velocity_kps": 9.9
+      }
+    },
+    {
+      "timestamp": 142.0,
+      "event_type": "miss",
+      "ship_id": "alpha",
+      "data": {
+        "target_id": "beta",
+        "weapon_slot": "unknown",
+        "hit_probability": 0,
+        "distance_km": 3.2543841962905278
+      }
+    },
+    {
+      "timestamp": 144.0,
+      "event_type": "shot_fired",
+      "ship_id": "alpha",
+      "data": {
+        "target_id": "beta",
+        "weapon_slot": "unknown",
+        "hit_probability": 0,
+        "distance_km": 0.0,
+        "projectile_energy_gj": 0,
+        "muzzle_velocity_kps": 9.9
+      }
+    },
+    {
+      "timestamp": 147.0,
+      "event_type": "miss",
+      "ship_id": "alpha",
+      "data": {
+        "target_id": "beta",
+        "weapon_slot": "unknown",
+        "hit_probability": 0,
+        "distance_km": 7.889342673300391
+      }
+    },
+    {
+      "timestamp": 149.0,
+      "event_type": "miss",
+      "ship_id": "beta",
+      "data": {
+        "target_id": "alpha",
+        "weapon_slot": "unknown",
+        "hit_probability": 0,
+        "distance_km": 6.338549672200259
+      }
+    },
+    {
+      "timestamp": 150.0,
+      "event_type": "checkpoint",
+      "ship_id": null,
+      "data": {
+        "checkpoint": 5,
+        "distance_km": 74.81938171645633,
+        "alpha": {
+          "ship_id": "alpha",
+          "position": [
+            -37406.9860514926,
+            0.7741258818761079,
+            59.019915361422356
+          ],
+          "velocity": [
+            3513.5425988075644,
+            9.588594163301549,
+            -4.464689679805086
+          ],
+          "forward": [
+            0.9967286444625005,
+            0.07563378870427998,
+            -0.028487529099284814
+          ],
+          "hull_integrity": 100.0,
+          "is_destroyed": false,
+          "shots_fired": 5,
+          "hits_scored": 0,
+          "damage_dealt_gj": 0.0,
+          "damage_taken_gj": 7.039045468559545,
+          "delta_v_remaining_kps": 522.5498252396262,
+          "heat_percent": 2.371459047619046,
+          "heatsink_energy_gj": 12.450159999999991,
+          "heatsink_capacity_gj": 525,
+          "radiators_extended": false,
+          "armor": {
+            "nose": {
+              "thickness_cm": 141.08760411216403,
+              "original_cm": 141.08760411216403
+            },
+            "lateral": {
+              "thickness_cm": 26.0,
+              "original_cm": 26.0
+            },
+            "tail": {
+              "thickness_cm": 30.3,
+              "original_cm": 30.3
+            }
+          },
+          "weapons": {
+            "weapon_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 447,
+              "cooldown_s": 10.0
+            },
+            "weapon_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 1798,
+              "cooldown_s": 4.0
+            },
+            "pd_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            },
+            "pd_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            }
+          }
+        },
+        "beta": {
+          "ship_id": "beta",
+          "position": [
+            37407.47995650181,
+            840.6182505785775,
+            -114.81396414468423
+          ],
+          "velocity": [
+            -3513.529265831808,
+            -20.672903322751562,
+            -5.053340974278003
+          ],
+          "forward": [
+            -0.9974387584736741,
+            -0.07089098232304569,
+            0.009507456009321257
+          ],
+          "hull_integrity": 100.0,
+          "is_destroyed": false,
+          "shots_fired": 7,
+          "hits_scored": 1,
+          "damage_dealt_gj": 7.039045468559545,
+          "damage_taken_gj": 0.0,
+          "delta_v_remaining_kps": 522.5498252396262,
+          "heat_percent": 2.91983238095238,
+          "heatsink_energy_gj": 15.329119999999993,
+          "heatsink_capacity_gj": 525,
+          "radiators_extended": false,
+          "armor": {
+            "nose": {
+              "thickness_cm": 151.2,
+              "original_cm": 151.2
+            },
+            "lateral": {
+              "thickness_cm": 26.0,
+              "original_cm": 26.0
+            },
+            "tail": {
+              "thickness_cm": 30.3,
+              "original_cm": 30.3
+            }
+          },
+          "weapons": {
+            "weapon_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 446,
+              "cooldown_s": 8.0
+            },
+            "weapon_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 1797,
+              "cooldown_s": 10.0
+            },
+            "pd_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            },
+            "pd_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            }
+          }
+        }
+      }
+    },
+    {
+      "timestamp": 150.0,
+      "event_type": "maneuver",
+      "ship_id": "alpha",
+      "data": {
+        "maneuver_type": "EVASIVE",
+        "throttle": 1.0,
+        "target_id": null
+      }
+    },
+    {
+      "timestamp": 150.0,
+      "event_type": "radiator_change",
+      "ship_id": "alpha",
+      "data": {
+        "extended": true
+      }
+    },
+    {
+      "timestamp": 150.0,
+      "event_type": "maneuver",
+      "ship_id": "beta",
+      "data": {
+        "maneuver_type": "INTERCEPT",
+        "throttle": 1.0,
+        "target_id": null
+      }
+    },
+    {
+      "timestamp": 150.0,
+      "event_type": "radiator_change",
+      "ship_id": "beta",
+      "data": {
+        "extended": true
+      }
+    },
+    {
+      "timestamp": 150.0,
+      "event_type": "miss",
+      "ship_id": "beta",
+      "data": {
+        "target_id": "alpha",
+        "weapon_slot": "unknown",
+        "hit_probability": 0,
+        "distance_km": 3.665776490380214
+      }
+    },
+    {
+      "timestamp": 150.0,
+      "event_type": "miss",
+      "ship_id": "alpha",
+      "data": {
+        "target_id": "beta",
+        "weapon_slot": "unknown",
+        "hit_probability": 0,
+        "distance_km": 8.947789266060278
+      }
+    },
+    {
+      "timestamp": 153.0,
+      "event_type": "shot_fired",
+      "ship_id": "alpha",
+      "data": {
+        "target_id": "beta",
+        "weapon_slot": "unknown",
+        "hit_probability": 0,
+        "distance_km": 0.0,
+        "projectile_energy_gj": 0,
+        "muzzle_velocity_kps": 6.0
+      }
+    },
+    {
+      "timestamp": 156.0,
+      "event_type": "hit",
+      "ship_id": "alpha",
+      "data": {
+        "shooter_id": "unknown",
+        "weapon_slot": "unknown",
+        "hit_location": "nose",
+        "impact_angle_deg": 0,
+        "kinetic_energy_gj": 1.8547227728265738,
+        "armor_ablation_cm": 0,
+        "armor_remaining_cm": 0,
+        "damage_to_hull_gj": 0,
+        "penetrated": false,
+        "critical_hit": false
+      }
+    },
+    {
+      "timestamp": 157.0,
+      "event_type": "shot_fired",
+      "ship_id": "beta",
+      "data": {
+        "target_id": "alpha",
+        "weapon_slot": "unknown",
+        "hit_probability": 0,
+        "distance_km": 0.0,
+        "projectile_energy_gj": 0,
+        "muzzle_velocity_kps": 9.9
+      }
+    },
+    {
+      "timestamp": 158.0,
+      "event_type": "miss",
+      "ship_id": "beta",
+      "data": {
+        "target_id": "alpha",
+        "weapon_slot": "unknown",
+        "hit_probability": 0,
+        "distance_km": 0.917674286644524
+      }
+    },
+    {
+      "timestamp": 159.0,
+      "event_type": "shot_fired",
+      "ship_id": "alpha",
+      "data": {
+        "target_id": "beta",
+        "weapon_slot": "unknown",
+        "hit_probability": 0,
+        "distance_km": 0.0,
+        "projectile_energy_gj": 0,
+        "muzzle_velocity_kps": 9.9
+      }
+    },
+    {
+      "timestamp": 159.0,
+      "event_type": "shot_fired",
+      "ship_id": "beta",
+      "data": {
+        "target_id": "alpha",
+        "weapon_slot": "unknown",
+        "hit_probability": 0,
+        "distance_km": 0.0,
+        "projectile_energy_gj": 0,
+        "muzzle_velocity_kps": 6.0
+      }
+    },
+    {
+      "timestamp": 159.0,
+      "event_type": "miss",
+      "ship_id": "alpha",
+      "data": {
+        "target_id": "beta",
+        "weapon_slot": "unknown",
+        "hit_probability": 0,
+        "distance_km": 1.3632659351279803
+      }
+    },
+    {
+      "timestamp": 159.0,
+      "event_type": "miss",
+      "ship_id": "beta",
+      "data": {
+        "target_id": "alpha",
+        "weapon_slot": "unknown",
+        "hit_probability": 0,
+        "distance_km": 1.3632659351279803
+      }
+    },
+    {
+      "timestamp": 180.0,
+      "event_type": "checkpoint",
+      "ship_id": null,
+      "data": {
+        "checkpoint": 6,
+        "distance_km": 156.57926974902188,
+        "alpha": {
+          "ship_id": "alpha",
+          "position": [
+            78324.81621690601,
+            5195.089086447524,
+            -936.326659593268
+          ],
+          "velocity": [
+            3885.7684094807923,
+            472.43124082020347,
+            -65.47003954824034
+          ],
+          "forward": [
+            -0.8389572083025786,
+            0.5434202368284375,
+            0.02907316361300836
+          ],
+          "hull_integrity": 100.0,
+          "is_destroyed": false,
+          "shots_fired": 7,
+          "hits_scored": 1,
+          "damage_dealt_gj": 1.8547227728265738,
+          "damage_taken_gj": 7.039045468559545,
+          "delta_v_remaining_kps": 521.6710865614139,
+          "heat_percent": 2.7319923809523714,
+          "heatsink_energy_gj": 14.34295999999995,
+          "heatsink_capacity_gj": 525,
+          "radiators_extended": true,
+          "armor": {
+            "nose": {
+              "thickness_cm": 141.08760411216403,
+              "original_cm": 141.08760411216403
+            },
+            "lateral": {
+              "thickness_cm": 26.0,
+              "original_cm": 26.0
+            },
+            "tail": {
+              "thickness_cm": 30.3,
+              "original_cm": 30.3
+            }
+          },
+          "weapons": {
+            "weapon_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 446,
+              "cooldown_s": 0.0
+            },
+            "weapon_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 1797,
+              "cooldown_s": 0.0
+            },
+            "pd_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            },
+            "pd_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            }
+          }
+        },
+        "beta": {
+          "ship_id": "beta",
+          "position": [
+            -77936.59789922702,
+            -4442.30489504123,
+            1624.690874299592
+          ],
+          "velocity": [
+            -3827.205243351921,
+            -426.0476517665035,
+            162.04141184770026
+          ],
+          "forward": [
+            0.9601223242619182,
+            -0.2555151156041273,
+            0.11347752267167927
+          ],
+          "hull_integrity": 100.0,
+          "is_destroyed": false,
+          "shots_fired": 9,
+          "hits_scored": 1,
+          "damage_dealt_gj": 7.039045468559545,
+          "damage_taken_gj": 1.8547227728265738,
+          "delta_v_remaining_kps": 521.6710865614139,
+          "heat_percent": 3.2803657142857197,
+          "heatsink_energy_gj": 17.22192000000003,
+          "heatsink_capacity_gj": 525,
+          "radiators_extended": true,
+          "armor": {
+            "nose": {
+              "thickness_cm": 146.80750239508833,
+              "original_cm": 146.80750239508833
+            },
+            "lateral": {
+              "thickness_cm": 26.0,
+              "original_cm": 26.0
+            },
+            "tail": {
+              "thickness_cm": 30.3,
+              "original_cm": 30.3
+            }
+          },
+          "weapons": {
+            "weapon_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 445,
+              "cooldown_s": 0.0
+            },
+            "weapon_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 1796,
+              "cooldown_s": 0.0
+            },
+            "pd_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            },
+            "pd_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            }
+          }
+        }
+      }
+    },
+    {
+      "timestamp": 180.0,
+      "event_type": "radiator_change",
+      "ship_id": "alpha",
+      "data": {
+        "extended": false
+      }
+    },
+    {
+      "timestamp": 180.0,
+      "event_type": "maneuver",
+      "ship_id": "alpha",
+      "data": {
+        "maneuver_type": "MAINTAIN",
+        "throttle": 1.0,
+        "target_id": null
+      }
+    },
+    {
+      "timestamp": 180.0,
+      "event_type": "maneuver",
+      "ship_id": "beta",
+      "data": {
+        "maneuver_type": "INTERCEPT",
+        "throttle": 1.0,
+        "target_id": null
+      }
+    },
+    {
+      "timestamp": 180.0,
+      "event_type": "radiator_change",
+      "ship_id": "beta",
+      "data": {
+        "extended": false
+      }
+    },
+    {
+      "timestamp": 210.0,
+      "event_type": "checkpoint",
+      "ship_id": null,
+      "data": {
+        "checkpoint": 7,
+        "distance_km": 375.9366673512184,
+        "alpha": {
+          "ship_id": "alpha",
+          "position": [
+            194897.86850133,
+            19368.02631105363,
+            -2900.4278460404794
+          ],
+          "velocity": [
+            3885.7684094807923,
+            472.43124082020347,
+            -65.47003954824034
+          ],
+          "forward": [
+            -0.8389771493747077,
+            0.5433903967918366,
+            0.02905545562368233
+          ],
+          "hull_integrity": 100.0,
+          "is_destroyed": false,
+          "shots_fired": 7,
+          "hits_scored": 1,
+          "damage_dealt_gj": 1.8547227728265738,
+          "damage_taken_gj": 7.039045468559545,
+          "delta_v_remaining_kps": 521.6710865614139,
+          "heat_percent": 2.737706666666654,
+          "heatsink_energy_gj": 14.372959999999933,
+          "heatsink_capacity_gj": 525,
+          "radiators_extended": false,
+          "armor": {
+            "nose": {
+              "thickness_cm": 141.08760411216403,
+              "original_cm": 141.08760411216403
+            },
+            "lateral": {
+              "thickness_cm": 26.0,
+              "original_cm": 26.0
+            },
+            "tail": {
+              "thickness_cm": 30.3,
+              "original_cm": 30.3
+            }
+          },
+          "weapons": {
+            "weapon_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 446,
+              "cooldown_s": 0.0
+            },
+            "weapon_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 1797,
+              "cooldown_s": 0.0
+            },
+            "pd_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            },
+            "pd_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            }
+          }
+        },
+        "beta": {
+          "ship_id": "beta",
+          "position": [
+            -179188.12798183478,
+            -16701.82914731361,
+            6427.52056455409
+          ],
+          "velocity": [
+            -2951.9001955145286,
+            -373.44560946566014,
+            151.12281310817247
+          ],
+          "forward": [
+            0.9958620921042605,
+            0.08800973207341135,
+            -0.022649074376049863
+          ],
+          "hull_integrity": 100.0,
+          "is_destroyed": false,
+          "shots_fired": 9,
+          "hits_scored": 1,
+          "damage_dealt_gj": 7.039045468559545,
+          "damage_taken_gj": 1.8547227728265738,
+          "delta_v_remaining_kps": 520.792272586024,
+          "heat_percent": 3.620708571428584,
+          "heatsink_energy_gj": 19.008720000000064,
+          "heatsink_capacity_gj": 525,
+          "radiators_extended": false,
+          "armor": {
+            "nose": {
+              "thickness_cm": 146.80750239508833,
+              "original_cm": 146.80750239508833
+            },
+            "lateral": {
+              "thickness_cm": 26.0,
+              "original_cm": 26.0
+            },
+            "tail": {
+              "thickness_cm": 30.3,
+              "original_cm": 30.3
+            }
+          },
+          "weapons": {
+            "weapon_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 445,
+              "cooldown_s": 0.0
+            },
+            "weapon_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 1796,
+              "cooldown_s": 0.0
+            },
+            "pd_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            },
+            "pd_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            }
+          }
+        }
+      }
+    },
+    {
+      "timestamp": 210.0,
+      "event_type": "maneuver",
+      "ship_id": "alpha",
+      "data": {
+        "maneuver_type": "BRAKE",
+        "throttle": 1.0,
+        "target_id": null
+      }
+    },
+    {
+      "timestamp": 210.0,
+      "event_type": "radiator_change",
+      "ship_id": "alpha",
+      "data": {
+        "extended": true
+      }
+    },
+    {
+      "timestamp": 210.0,
+      "event_type": "maneuver",
+      "ship_id": "beta",
+      "data": {
+        "maneuver_type": "INTERCEPT",
+        "throttle": 1.0,
+        "target_id": null
+      }
+    },
+    {
+      "timestamp": 210.0,
+      "event_type": "radiator_change",
+      "ship_id": "beta",
+      "data": {
+        "extended": false
+      }
+    },
+    {
+      "timestamp": 240.0,
+      "event_type": "checkpoint",
+      "ship_id": null,
+      "data": {
+        "checkpoint": 8,
+        "distance_km": 555.6678751892101,
+        "alpha": {
+          "ship_id": "alpha",
+          "position": [
+            298057.49660094344,
+            33048.28463445256,
+            -4612.244977773587
+          ],
+          "velocity": [
+            3017.6396311481526,
+            401.9339365634245,
+            -50.03626616148804
+          ],
+          "forward": [
+            -0.9911088149499081,
+            -0.13203666954671125,
+            0.016420561001421495
+          ],
+          "hull_integrity": 100.0,
+          "is_destroyed": false,
+          "shots_fired": 7,
+          "hits_scored": 1,
+          "damage_dealt_gj": 1.8547227728265738,
+          "damage_taken_gj": 7.039045468559545,
+          "delta_v_remaining_kps": 520.792272586024,
+          "heat_percent": 2.3351923809523605,
+          "heatsink_energy_gj": 12.259759999999892,
+          "heatsink_capacity_gj": 525,
+          "radiators_extended": true,
+          "armor": {
+            "nose": {
+              "thickness_cm": 141.08760411216403,
+              "original_cm": 141.08760411216403
+            },
+            "lateral": {
+              "thickness_cm": 26.0,
+              "original_cm": 26.0
+            },
+            "tail": {
+              "thickness_cm": 30.3,
+              "original_cm": 30.3
+            }
+          },
+          "weapons": {
+            "weapon_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 446,
+              "cooldown_s": 0.0
+            },
+            "weapon_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 1797,
+              "cooldown_s": 0.0
+            },
+            "pd_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            },
+            "pd_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            }
+          }
+        },
+        "beta": {
+          "ship_id": "beta",
+          "position": [
+            -254189.7292566017,
+            -26597.238436471576,
+            10625.88573216138
+          ],
+          "velocity": [
+            -2077.4207907782384,
+            -288.30462777816376,
+            129.30662725516638
+          ],
+          "forward": [
+            0.994884315004504,
+            0.09786504965958857,
+            -0.025052580967740903
+          ],
+          "hull_integrity": 100.0,
+          "is_destroyed": false,
+          "shots_fired": 9,
+          "hits_scored": 1,
+          "damage_dealt_gj": 7.039045468559545,
+          "damage_taken_gj": 1.8547227728265738,
+          "delta_v_remaining_kps": 519.9133833005532,
+          "heat_percent": 3.961051428571447,
+          "heatsink_energy_gj": 20.7955200000001,
+          "heatsink_capacity_gj": 525,
+          "radiators_extended": false,
+          "armor": {
+            "nose": {
+              "thickness_cm": 146.80750239508833,
+              "original_cm": 146.80750239508833
+            },
+            "lateral": {
+              "thickness_cm": 26.0,
+              "original_cm": 26.0
+            },
+            "tail": {
+              "thickness_cm": 30.3,
+              "original_cm": 30.3
+            }
+          },
+          "weapons": {
+            "weapon_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 445,
+              "cooldown_s": 0.0
+            },
+            "weapon_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 1796,
+              "cooldown_s": 0.0
+            },
+            "pd_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            },
+            "pd_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            }
+          }
+        }
+      }
+    },
+    {
+      "timestamp": 240.0,
+      "event_type": "maneuver",
+      "ship_id": "alpha",
+      "data": {
+        "maneuver_type": "INTERCEPT",
+        "throttle": 1.0,
+        "target_id": null
+      }
+    },
+    {
+      "timestamp": 240.0,
+      "event_type": "radiator_change",
+      "ship_id": "alpha",
+      "data": {
+        "extended": false
+      }
+    },
+    {
+      "timestamp": 240.0,
+      "event_type": "radiator_change",
+      "ship_id": "beta",
+      "data": {
+        "extended": true
+      }
+    },
+    {
+      "timestamp": 240.0,
+      "event_type": "maneuver",
+      "ship_id": "beta",
+      "data": {
+        "maneuver_type": "INTERCEPT",
+        "throttle": 1.0,
+        "target_id": null
+      }
+    },
+    {
+      "timestamp": 270.0,
+      "event_type": "checkpoint",
+      "ship_id": null,
+      "data": {
+        "checkpoint": 9,
+        "distance_km": 682.71642209747,
+        "alpha": {
+          "ship_id": "alpha",
+          "position": [
+            375050.56697372795,
+            43619.241787425104,
+            -5746.600885465602
+          ],
+          "velocity": [
+            2144.273885028247,
+            306.54051135692845,
+            -26.11395599265787
+          ],
+          "forward": [
+            -0.9937843739391046,
+            -0.10786116669036974,
+            0.02754245513120187
+          ],
+          "hull_integrity": 100.0,
+          "is_destroyed": false,
+          "shots_fired": 7,
+          "hits_scored": 1,
+          "damage_dealt_gj": 1.8547227728265738,
+          "damage_taken_gj": 7.039045468559545,
+          "delta_v_remaining_kps": 519.9133833005532,
+          "heat_percent": 2.675535238095214,
+          "heatsink_energy_gj": 14.046559999999873,
+          "heatsink_capacity_gj": 525,
+          "radiators_extended": false,
+          "armor": {
+            "nose": {
+              "thickness_cm": 141.08760411216403,
+              "original_cm": 141.08760411216403
+            },
+            "lateral": {
+              "thickness_cm": 26.0,
+              "original_cm": 26.0
+            },
+            "tail": {
+              "thickness_cm": 30.3,
+              "original_cm": 30.3
+            }
+          },
+          "weapons": {
+            "weapon_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 446,
+              "cooldown_s": 0.0
+            },
+            "weapon_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 1797,
+              "cooldown_s": 0.0
+            },
+            "pd_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            },
+            "pd_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            }
+          }
+        },
+        "beta": {
+          "ship_id": "beta",
+          "position": [
+            -302972.0697070671,
+            -33787.45839157234,
+            14133.537881454995
+          ],
+          "velocity": [
+            -1203.8718340626301,
+            -193.90740501104273,
+            105.27375877247346
+          ],
+          "forward": [
+            0.9938020794408869,
+            0.10773196673719788,
+            -0.02740894456020226
+          ],
+          "hull_integrity": 100.0,
+          "is_destroyed": false,
+          "shots_fired": 9,
+          "hits_scored": 1,
+          "damage_dealt_gj": 7.039045468559545,
+          "damage_taken_gj": 1.8547227728265738,
+          "delta_v_remaining_kps": 519.0344186920934,
+          "heat_percent": 3.558537142857174,
+          "heatsink_energy_gj": 18.682320000000164,
+          "heatsink_capacity_gj": 525,
+          "radiators_extended": true,
+          "armor": {
+            "nose": {
+              "thickness_cm": 146.80750239508833,
+              "original_cm": 146.80750239508833
+            },
+            "lateral": {
+              "thickness_cm": 26.0,
+              "original_cm": 26.0
+            },
+            "tail": {
+              "thickness_cm": 30.3,
+              "original_cm": 30.3
+            }
+          },
+          "weapons": {
+            "weapon_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 445,
+              "cooldown_s": 0.0
+            },
+            "weapon_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 1796,
+              "cooldown_s": 0.0
+            },
+            "pd_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            },
+            "pd_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            }
+          }
+        }
+      }
+    },
+    {
+      "timestamp": 270.0,
+      "event_type": "message",
+      "ship_id": "beta",
+      "data": {
+        "sender_name": "Captain GROK-4.1-FAST",
+        "ship_name": "HFS GROK-4.1-FAST",
+        "message": "You can run, but not far enough. HFS GROK-4.1-FAST is coming for you. Prepare for another pass."
+      }
+    },
+    {
+      "timestamp": 270.0,
+      "event_type": "maneuver",
+      "ship_id": "alpha",
+      "data": {
+        "maneuver_type": "INTERCEPT",
+        "throttle": 1.0,
+        "target_id": null
+      }
+    },
+    {
+      "timestamp": 270.0,
+      "event_type": "radiator_change",
+      "ship_id": "alpha",
+      "data": {
+        "extended": true
+      }
+    },
+    {
+      "timestamp": 270.0,
+      "event_type": "maneuver",
+      "ship_id": "beta",
+      "data": {
+        "maneuver_type": "INTERCEPT",
+        "throttle": 1.0,
+        "target_id": null
+      }
+    },
+    {
+      "timestamp": 300.0,
+      "event_type": "checkpoint",
+      "ship_id": null,
+      "data": {
+        "checkpoint": 10,
+        "distance_km": 757.0485748215253,
+        "alpha": {
+          "ship_id": "alpha",
+          "position": [
+            425840.0606613245,
+            51342.990450896425,
+            -6154.055207255864
+          ],
+          "velocity": [
+            1270.9122407818777,
+            210.5848685464532,
+            -1.5877790036845763
+          ],
+          "forward": [
+            -0.9926015695923825,
+            -0.11757614281877529,
+            0.030298097012807064
+          ],
+          "hull_integrity": 100.0,
+          "is_destroyed": false,
+          "shots_fired": 7,
+          "hits_scored": 1,
+          "damage_dealt_gj": 1.8547227728265738,
+          "damage_taken_gj": 7.039045468559545,
+          "delta_v_remaining_kps": 519.0344186920934,
+          "heat_percent": 2.27302095238092,
+          "heatsink_energy_gj": 11.933359999999832,
+          "heatsink_capacity_gj": 525,
+          "radiators_extended": true,
+          "armor": {
+            "nose": {
+              "thickness_cm": 141.08760411216403,
+              "original_cm": 141.08760411216403
+            },
+            "lateral": {
+              "thickness_cm": 26.0,
+              "original_cm": 26.0
+            },
+            "tail": {
+              "thickness_cm": 30.3,
+              "original_cm": 30.3
+            }
+          },
+          "weapons": {
+            "weapon_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 446,
+              "cooldown_s": 0.0
+            },
+            "weapon_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 1797,
+              "cooldown_s": 0.0
+            },
+            "pd_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            },
+            "pd_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            }
+          }
+        },
+        "beta": {
+          "ship_id": "beta",
+          "position": [
+            -325548.4625105773,
+            -38130.87066871121,
+            16916.70683478546
+          ],
+          "velocity": [
+            -330.48577821874966,
+            -97.5134699115831,
+            80.70306125361456
+          ],
+          "forward": [
+            0.9926335769861866,
+            0.1173418237049515,
+            -0.03015755708283868
+          ],
+          "hull_integrity": 100.0,
+          "is_destroyed": false,
+          "shots_fired": 9,
+          "hits_scored": 1,
+          "damage_dealt_gj": 7.039045468559545,
+          "damage_taken_gj": 1.8547227728265738,
+          "delta_v_remaining_kps": 518.1553787477325,
+          "heat_percent": 3.156022857142901,
+          "heatsink_energy_gj": 16.56912000000023,
+          "heatsink_capacity_gj": 525,
+          "radiators_extended": true,
+          "armor": {
+            "nose": {
+              "thickness_cm": 146.80750239508833,
+              "original_cm": 146.80750239508833
+            },
+            "lateral": {
+              "thickness_cm": 26.0,
+              "original_cm": 26.0
+            },
+            "tail": {
+              "thickness_cm": 30.3,
+              "original_cm": 30.3
+            }
+          },
+          "weapons": {
+            "weapon_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 445,
+              "cooldown_s": 0.0
+            },
+            "weapon_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 1796,
+              "cooldown_s": 0.0
+            },
+            "pd_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            },
+            "pd_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            }
+          }
+        }
+      }
+    },
+    {
+      "timestamp": 300.0,
+      "event_type": "message",
+      "ship_id": "alpha",
+      "data": {
+        "sender_name": "Captain Claude-Haiku",
+        "ship_name": "TIS Claude-Haiku",
+        "message": "Captain GROK-4.1-FAST: Your confidence is noted. TIS Claude-Haiku welcomes the next pass. We'll see whose systems prove superior in close quarters."
+      }
+    },
+    {
+      "timestamp": 300.0,
+      "event_type": "maneuver",
+      "ship_id": "alpha",
+      "data": {
+        "maneuver_type": "INTERCEPT",
+        "throttle": 1.0,
+        "target_id": null
+      }
+    },
+    {
+      "timestamp": 300.0,
+      "event_type": "maneuver",
+      "ship_id": "beta",
+      "data": {
+        "maneuver_type": "INTERCEPT",
+        "throttle": 1.0,
+        "target_id": null
+      }
+    },
+    {
+      "timestamp": 300.0,
+      "event_type": "radiator_change",
+      "ship_id": "beta",
+      "data": {
+        "extended": true
+      }
+    },
+    {
+      "timestamp": 300.0,
+      "event_type": "battle_end",
+      "ship_id": null,
+      "data": {
+        "winner": "beta",
+        "reason": "Beta tactical advantage (211.8 vs 70.5)",
+        "outcome": "beta_victory"
+      }
+    }
+  ],
+  "sim_trace": [],
+  "winner": "beta",
+  "result_reason": "Beta tactical advantage (211.8 vs 70.5)",
+  "duration_s": 300.0,
+  "total_checkpoints": 10
+}
