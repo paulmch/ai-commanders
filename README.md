@@ -8,6 +8,12 @@ Two AI captains. Two destroyers. 500km of cold vacuum between them. Each captain
 
 **LLM Tournament coming soon!**
 
+## Attribution
+
+This project is inspired by and based on **Terra Invicta**. The raw ship data, weapon mechanics, armor systems, and physics parameters are translated from Terra Invicta's game files. The code implementation, LLM integration, and battle simulation architecture are our own interpretation of those mechanics.
+
+Terra Invicta is developed by Pavonis Interactive and published by Hooded Horse.
+
 ## Quick Start
 
 ```bash
