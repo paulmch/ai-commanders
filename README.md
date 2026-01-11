@@ -18,14 +18,13 @@ Terra Invicta is developed by Pavonis Interactive and published by Hooded Horse.
 
 ```bash
 # Install dependencies
-uv venv && source .venv/bin/activate
-uv pip install numpy pytest litellm
+uv sync
 
-# Set your OpenRouter API key
-export OPENROUTER_API_KEY=sk-or-v1-your-key-here
+# Add your OpenRouter API key to .env file
+echo "OPENROUTER_API_KEY=sk-or-v1-your-key-here" > .env
 
 # Run a battle!
-python scripts/run_llm_battle.py \
+uv run python scripts/run_llm_battle.py \
     --alpha-model openai/gpt-5.2 \
     --beta-model x-ai/grok-4.1-fast \
     --max-checkpoints 10 \
@@ -143,7 +142,7 @@ ai-commanders/
 ## Command Line Options
 
 ```bash
-python scripts/run_llm_battle.py \
+uv run python scripts/run_llm_battle.py \
     --alpha-model MODEL_ID \      # OpenRouter model for Alpha
     --beta-model MODEL_ID \       # OpenRouter model for Beta
     --max-checkpoints N \         # Max decision points (default: 20)
