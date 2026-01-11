@@ -70,7 +70,7 @@ class BattleEvent:
 class BattleRecording:
     """Complete recording of a battle."""
     # Metadata
-    recording_version: str = "1.0"
+    recording_version: str = "2.0"  # Bumped for sim_trace support
     recorded_at: str = ""
 
     # Battle config
@@ -85,13 +85,18 @@ class BattleRecording:
     initial_distance_km: float = 0.0
     time_limit_s: float = 0.0
     max_checkpoints: int = 0
+    unlimited_mode: bool = False
 
     # Ship specs (for replay)
     alpha_specs: Dict[str, Any] = field(default_factory=dict)
     beta_specs: Dict[str, Any] = field(default_factory=dict)
 
-    # Events
+    # Events (checkpoints, commands, hits, etc.)
     events: List[Dict[str, Any]] = field(default_factory=list)
+
+    # Simulation trace - per-step tracking of all objects
+    # Each frame: {"t": float, "ships": {...}, "projectiles": [...], "torpedoes": [...]}
+    sim_trace: List[Dict[str, Any]] = field(default_factory=list)
 
     # Result
     winner: Optional[str] = None
@@ -154,6 +159,7 @@ class BattleRecorder:
             initial_distance_km=battle_config.initial_distance_km,
             time_limit_s=battle_config.time_limit_s,
             max_checkpoints=battle_config.max_checkpoints,
+            unlimited_mode=getattr(battle_config, 'unlimited_mode', False),
         )
 
         # Record ship specs if available
@@ -493,6 +499,73 @@ class BattleRecorder:
                 "is_critical": is_critical,
             }
         ))
+
+    def record_sim_frame(
+        self,
+        timestamp: float,
+        ships: Dict[str, Any],
+        projectiles: List[Any],
+        torpedoes: List[Any],
+    ) -> None:
+        """
+        Record a single simulation frame with all object states.
+
+        This is called every simulation step to capture detailed trajectory data
+        for analysis of hit mechanics, evasion patterns, etc.
+
+        Args:
+            timestamp: Simulation time in seconds
+            ships: Dict of ship_id -> ship state dict
+            projectiles: List of projectile state dicts
+            torpedoes: List of torpedo state dicts
+        """
+        if not self._is_recording:
+            return
+
+        frame = {
+            "t": round(timestamp, 2),
+            "ships": {},
+            "projectiles": [],
+            "torpedoes": [],
+        }
+
+        # Record ship states
+        for ship_id, ship in ships.items():
+            frame["ships"][ship_id] = {
+                "pos": [round(ship["position"][0], 1), round(ship["position"][1], 1), round(ship["position"][2], 1)],
+                "vel": [round(ship["velocity"][0], 1), round(ship["velocity"][1], 1), round(ship["velocity"][2], 1)],
+                "fwd": [round(ship["forward"][0], 4), round(ship["forward"][1], 4), round(ship["forward"][2], 4)],
+                "thrust": round(ship.get("thrust", 0.0), 2),
+                "maneuver": ship.get("maneuver", "MAINTAIN"),
+            }
+
+        # Record projectile states (coilgun slugs)
+        for proj in projectiles:
+            frame["projectiles"].append({
+                "id": proj["id"],
+                "pos": [round(proj["position"][0], 1), round(proj["position"][1], 1), round(proj["position"][2], 1)],
+                "vel": [round(proj["velocity"][0], 1), round(proj["velocity"][1], 1), round(proj["velocity"][2], 1)],
+                "mass_kg": round(proj["mass_kg"], 2),
+                "source": proj["source_ship_id"],
+                "target": proj["target_ship_id"],
+                "pd_engaged": proj.get("pd_engaged", False),
+                "pd_damage_kg": round(proj.get("pd_ablation_kg", 0.0), 3),
+            })
+
+        # Record torpedo states
+        for torp in torpedoes:
+            frame["torpedoes"].append({
+                "id": torp["id"],
+                "pos": [round(torp["position"][0], 1), round(torp["position"][1], 1), round(torp["position"][2], 1)],
+                "vel": [round(torp["velocity"][0], 1), round(torp["velocity"][1], 1), round(torp["velocity"][2], 1)],
+                "source": torp["source_ship_id"],
+                "target": torp.get("target_ship_id"),
+                "dv_remaining": round(torp.get("dv_remaining_kps", 0.0), 2),
+                "pd_heat_j": round(torp.get("heat_absorbed_j", 0.0), 0),
+                "disabled": torp.get("is_disabled", False),
+            })
+
+        self.recording.sim_trace.append(frame)
 
     def end_recording(
         self,

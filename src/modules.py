@@ -30,6 +30,7 @@ class ModuleType(Enum):
     CARGO = "cargo"
     CREW = "crew"
     FUEL_TANK = "fuel_tank"
+    MAGAZINE = "magazine"
 
 
 # Critical module types that can cause catastrophic damage if destroyed
@@ -124,25 +125,22 @@ class Module:
         if energy_gj <= 0 or self.is_destroyed:
             return energy_gj
 
-        # Internal armor absorbs some damage
-        absorbed_energy = energy_gj * self.armor_rating
-        penetrating_energy = energy_gj - absorbed_energy
+        # Calculate health damage
+        # 1 GJ can vaporize ~90cm of armor - it should wreck a module
+        # 2 GJ destroys a module completely
+        damage_per_gj = 50.0  # 50% per GJ - 2 GJ kills a module
+        health_damage = energy_gj * damage_per_gj
 
-        # Calculate health damage (1 GJ = approximately 10% health damage for standard modules)
-        # This scales with module size - larger modules can absorb more damage
-        base_damage_per_gj = 10.0 / (self.size_m2 / 10.0)  # Normalized to 10 m2 standard
-        health_damage = penetrating_energy * base_damage_per_gj
-
-        # Apply damage
+        # Apply damage - module absorbs energy until destroyed
         old_health = self.health_percent
         self.health_percent = max(0.0, self.health_percent - health_damage)
 
-        # Calculate energy absorbed by health loss
+        # Calculate energy absorbed (proportional to health lost)
         actual_health_lost = old_health - self.health_percent
-        energy_absorbed_by_module = actual_health_lost / base_damage_per_gj
+        energy_absorbed = actual_health_lost / damage_per_gj
 
-        # Remaining energy passes through (diminished by absorption)
-        remaining_energy = max(0.0, penetrating_energy - energy_absorbed_by_module)
+        # Remaining energy passes through to next module
+        remaining_energy = max(0.0, energy_gj - energy_absorbed)
 
         return remaining_energy
 
@@ -561,106 +559,107 @@ def _create_destroyer_layout(
     Create a 6-layer destroyer layout.
 
     Destroyer layout (nose to tail):
-    - Layer 0: Sensors
-    - Layer 1: Forward Weapons
-    - Layer 2: Bridge (critical, center protected)
-    - Layer 3: Reactor (critical, center protected)
+    - Layer 0: Spinal Weapon (nose-mounted, heaviest armor protection)
+    - Layer 1: Magazine + Turrets (ammunition and secondary weapons)
+    - Layer 2: Bridge + Sensors (command protected behind weapons)
+    - Layer 3: Reactor + Crew (power generation, protected center)
     - Layer 4: Fuel Storage
     - Layer 5: Engine
     """
     layout = ModuleLayout(ship_type, ship_length)
     layer_depth = ship_length / 6
 
-    # Layer 0: Sensors
+    # Layer 0: Spinal Weapon (nose-mounted main gun)
     layer0 = ModuleLayer(0, depth_m=layer_depth)
     layer0.add_module(Module(
-        name="Primary Sensor Array",
-        module_type=ModuleType.SENSOR,
-        armor_rating=0.1,
+        name="Spinal Coiler Mount",
+        module_type=ModuleType.WEAPON,
         position=ModulePosition(0, 0.0),
-        size_m2=20.0
-    ))
-    layer0.add_module(Module(
-        name="Targeting Computer",
-        module_type=ModuleType.SENSOR,
-        armor_rating=0.15,
-        position=ModulePosition(0, 3.0),
-        size_m2=10.0
+        size_m2=35.0
     ))
     layout.add_layer(layer0)
 
-    # Layer 1: Forward Weapons
+    # Layer 1: Magazine + Turret
     layer1 = ModuleLayer(1, depth_m=layer_depth)
     layer1.add_module(Module(
-        name="Spinal Coiler Mount",
-        module_type=ModuleType.WEAPON,
-        armor_rating=0.25,
+        name="Main Magazine",
+        module_type=ModuleType.MAGAZINE,
         position=ModulePosition(1, 0.0),
-        size_m2=35.0
+        size_m2=30.0
+    ))
+    layer1.add_module(Module(
+        name="Dorsal Turret Mount",
+        module_type=ModuleType.WEAPON,
+        position=ModulePosition(1, 5.0),
+        size_m2=15.0
     ))
     layout.add_layer(layer1)
 
-    # Layer 2: Bridge (protected by weapons and sensors)
+    # Layer 2: Bridge + Sensors (protected behind weapons)
     layer2 = ModuleLayer(2, depth_m=layer_depth)
     layer2.add_module(Module(
         name="Command Bridge",
         module_type=ModuleType.BRIDGE,
-        armor_rating=0.35,
         position=ModulePosition(2, 0.0),
         size_m2=25.0,
         is_critical=True
     ))
     layer2.add_module(Module(
-        name="Crew Quarters",
-        module_type=ModuleType.CREW,
-        armor_rating=0.1,
-        position=ModulePosition(2, 5.0),
-        size_m2=25.0
+        name="Primary Sensor Array",
+        module_type=ModuleType.SENSOR,
+        position=ModulePosition(2, 4.0),
+        size_m2=20.0
     ))
     layer2.add_module(Module(
-        name="Crew Quarters Port",
-        module_type=ModuleType.CREW,
-        armor_rating=0.1,
-        position=ModulePosition(2, -5.0),
-        size_m2=25.0
+        name="Targeting Computer",
+        module_type=ModuleType.SENSOR,
+        position=ModulePosition(2, -4.0),
+        size_m2=10.0
     ))
     layout.add_layer(layer2)
 
-    # Layer 3: Reactor (center protected)
+    # Layer 3: Reactor + Crew (center protected)
     layer3 = ModuleLayer(3, depth_m=layer_depth)
     layer3.add_module(Module(
         name="Main Reactor",
         module_type=ModuleType.REACTOR,
-        armor_rating=0.45,
         position=ModulePosition(3, 0.0),
         size_m2=50.0,
         is_critical=True
     ))
     layer3.add_module(Module(
-        name="Auxiliary Power",
-        module_type=ModuleType.REACTOR,
-        armor_rating=0.3,
+        name="Crew Quarters",
+        module_type=ModuleType.CREW,
         position=ModulePosition(3, 6.0),
-        size_m2=15.0,
-        is_critical=False  # Auxiliary is not critical
+        size_m2=25.0
     ))
     layout.add_layer(layer3)
 
-    # Layer 4: Fuel Storage
+    # Layer 4: Fuel Storage + PD Lasers
     layer4 = ModuleLayer(4, depth_m=layer_depth)
     layer4.add_module(Module(
         name="Main Fuel Tank",
         module_type=ModuleType.FUEL_TANK,
-        armor_rating=0.2,
         position=ModulePosition(4, 0.0),
         size_m2=40.0
     ))
     layer4.add_module(Module(
         name="Reserve Fuel Tank",
         module_type=ModuleType.FUEL_TANK,
-        armor_rating=0.15,
-        position=ModulePosition(4, 5.0),
+        position=ModulePosition(4, -5.0),
         size_m2=20.0
+    ))
+    layer4.add_module(Module(
+        name="PD Laser Dorsal",
+        module_type=ModuleType.WEAPON,
+        position=ModulePosition(4, 6.0),
+        size_m2=8.0
+    ))
+    layer4.add_module(Module(
+        name="PD Laser Ventral",
+        module_type=ModuleType.WEAPON,
+        position=ModulePosition(4, -6.0),
+        size_m2=8.0
     ))
     layout.add_layer(layer4)
 

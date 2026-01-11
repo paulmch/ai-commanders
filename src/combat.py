@@ -262,6 +262,23 @@ class Armor:
     location: HitLocation = HitLocation.LATERAL
     heat_of_vaporization_mj_kg: float = 8.77  # Default titanium (from Terra Invicta)
     chipping_fraction: float = 0.0  # Accumulated chipping damage
+    original_thickness_cm: float = field(default=0.0, init=False)  # Set in __post_init__
+
+    def __post_init__(self):
+        """Store the original thickness for damage percentage calculations."""
+        self.original_thickness_cm = self.thickness_cm
+
+    @property
+    def current_thickness_cm(self) -> float:
+        """Alias for thickness_cm for clarity."""
+        return self.thickness_cm
+
+    @property
+    def damage_percent(self) -> float:
+        """Percentage of armor that has been ablated."""
+        if self.original_thickness_cm <= 0:
+            return 0.0
+        return 100.0 * (1.0 - self.thickness_cm / self.original_thickness_cm)
 
     @classmethod
     def from_json(
@@ -884,7 +901,12 @@ class CombatResolver:
 
         # Check for penetration
         penetrated = armor.is_penetrated()
-        remaining_damage = weapon.kinetic_energy_gj * (1.0 - protection) if not penetrated else weapon.kinetic_energy_gj * 0.5
+        if penetrated:
+            # Armor breached - 90% of energy reaches hull
+            remaining_damage = weapon.kinetic_energy_gj * 0.9
+        else:
+            # Armor intact - only bleed-through based on protection factor
+            remaining_damage = weapon.kinetic_energy_gj * (1.0 - protection)
 
         # Critical hit check (10% base chance, higher if penetrated)
         crit_chance = 0.1 if not penetrated else 0.5

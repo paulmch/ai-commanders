@@ -252,7 +252,7 @@ class TestPrompts:
         assert "500" in prompt  # distance
         assert "85" in prompt  # hull
         assert "AGGRESSIVE" in prompt or "aggressive" in prompt.lower()
-        assert "Torpedo" in prompt
+        assert "Spinal" in prompt or "spinal" in prompt.lower()  # Coilgun weapon
 
 
 class TestLLMCaptain:
@@ -278,6 +278,10 @@ class TestLLMCaptain:
         # Create mock simulation
         mock_sim = Mock()
         mock_sim.current_time = 30.0
+        # Mock enemy for INTERCEPT target_id
+        mock_enemy = Mock()
+        mock_enemy.ship_id = "beta"
+        mock_sim.get_enemy_ships.return_value = [mock_enemy]
 
         cmd = captain._execute_tool(tool_call, mock_sim, "alpha")
 
@@ -366,16 +370,27 @@ class TestIntegration:
         mock_ship.armor = None
         mock_ship.position = Vector3D(-250000, 0, 0)  # Real Vector3D
         mock_ship.velocity = Vector3D(0, 0, 0)
+        mock_ship.forward = Vector3D(1, 0, 0)  # Pointing at enemy
         mock_ship.shots_fired = 0
         mock_ship.hits_scored = 0
         mock_ship.damage_dealt_gj = 0.0
         mock_ship.damage_taken_gj = 0.0
         mock_ship.ship_id = "alpha"
+        mock_ship.module_layout = None  # No module layout for simplicity
+
+        # Mock weapons dict
+        mock_weapon = Mock()
+        mock_weapon.is_operational = True
+        mock_weapon.is_ready = True
+        mock_weapon.cooldown_remaining = 0
+        mock_ship.weapons = {"spinal": mock_weapon, "turret": mock_weapon}
 
         mock_enemy = Mock()
         mock_enemy.ship_id = "beta"
         mock_enemy.position = Vector3D(250000, 1000, 0)  # Real Vector3D
         mock_enemy.velocity = Vector3D(0, 0, 0)
+        mock_enemy.armor = None  # No armor for simplicity
+        mock_enemy.hull_integrity = 100  # Hull damage info
         mock_enemy.shots_fired = 0
         mock_enemy.hits_scored = 0
         mock_enemy.damage_dealt_gj = 0.0

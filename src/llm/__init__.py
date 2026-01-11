@@ -12,6 +12,7 @@ from .victory import VictoryEvaluator, BattleOutcome
 from .battle_runner import LLMBattleRunner, BattleConfig, BattleResult
 from .tools import CAPTAIN_TOOLS
 from .prompts import build_captain_prompt
+from .battle_recorder import BattleRecorder, BattleRecording, BattleEvent, EventType, create_battle_filename
 
 __all__ = [
     # Client
@@ -36,4 +37,10 @@ __all__ = [
     "CAPTAIN_TOOLS",
     # Prompts
     "build_captain_prompt",
+    # Recording
+    "BattleRecorder",
+    "BattleRecording",
+    "BattleEvent",
+    "EventType",
+    "create_battle_filename",
 ]

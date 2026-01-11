@@ -259,14 +259,13 @@ class TestModuleDamage:
         remaining = basic_module.damage(5.0)  # 5 GJ damage
         assert basic_module.health_percent < initial_health
 
-    def test_damage_with_armor_rating_absorbs_some_damage(self, basic_module):
-        """Armor rating should absorb some incoming damage."""
-        # Module has 0.2 armor rating (20% absorption)
-        basic_module.armor_rating = 0.5  # 50% absorption
+    def test_module_damage_scales_with_energy(self, basic_module):
+        """Module damage should scale with incoming energy."""
+        # New damage model: 1 GJ = 50% damage, 2 GJ destroys module
+        # Test that partial damage works correctly
         initial_health = basic_module.health_percent
-        basic_module.damage(2.0)  # 2 GJ -> 1 GJ penetrates
-        # Less health lost due to armor
-        assert basic_module.health_percent > 50.0  # Should not lose all health
+        basic_module.damage(1.0)  # 1 GJ = 50% damage
+        assert basic_module.health_percent == 50.0  # Lost 50% health
 
     def test_damage_returns_remaining_energy(self, basic_module):
         """Damage should return energy that passes through."""

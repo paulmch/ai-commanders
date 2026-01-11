@@ -1361,9 +1361,9 @@ class TestCloseRangeDogfight:
         print(f"[DOGFIGHT] Alpha peak heat: {max(heat_readings['alpha']) if heat_readings['alpha'] else 0:.1f}%")
         print(f"[DOGFIGHT] Beta peak heat: {max(heat_readings['beta']) if heat_readings['beta'] else 0:.1f}%")
 
-        # Heat should have spiked during combat
+        # Heat should have increased during combat (engines + weapon fire)
         if heat_readings['alpha']:
-            assert max(heat_readings['alpha']) > 10, "Heat should increase during dogfight"
+            assert max(heat_readings['alpha']) > 1, "Heat should increase during dogfight"
 
     def test_heat_critical_dogfight(self, fleet_data):
         """Test heat management becomes critical in extended dogfight."""

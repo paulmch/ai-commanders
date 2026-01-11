@@ -43,48 +43,62 @@ CAPTAIN_TOOLS_BASE = [
         "type": "function",
         "function": {
             "name": "set_weapons_order",
-            "description": "Set fire control orders for weapons. The tactical layer will fire automatically based on this order.",
+            "description": (
+                "Set fire control orders for spinal and turret weapons independently. "
+                "SPINAL: 9.9 km/s projectile, 4.3 GJ damage, 900km range, but ONLY fires if target within 30° of nose. "
+                "TURRET: 6.0 km/s projectile, 0.7 GJ damage, 500km range, can fire at targets in full front hemisphere (180°)."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "firing_mode": {
+                    "spinal_mode": {
                         "type": "string",
-                        "enum": ["FIRE_IMMEDIATE", "FIRE_WHEN_OPTIMAL", "FIRE_AT_RANGE", "HOLD_FIRE", "FREE_FIRE"],
+                        "enum": ["FIRE_IMMEDIATE", "FIRE_WHEN_OPTIMAL", "FIRE_AT_RANGE", "HOLD_FIRE"],
                         "description": (
-                            "FIRE_IMMEDIATE: Fire as soon as weapons are ready. "
-                            "FIRE_WHEN_OPTIMAL: Fire only when hit probability exceeds threshold. "
-                            "FIRE_AT_RANGE: Fire only when target enters specified range. "
-                            "HOLD_FIRE: Don't fire, conserve ammunition. "
-                            "FREE_FIRE: Fire at any valid target when ready."
+                            "Spinal coilgun mode (high damage, requires nose pointing at target within 30°): "
+                            "FIRE_IMMEDIATE: Fire when ready and target in arc. "
+                            "FIRE_WHEN_OPTIMAL: Fire when target in arc AND hit probability >= threshold. "
+                            "FIRE_AT_RANGE: Fire when target in arc AND within range. "
+                            "HOLD_FIRE: Don't fire spinal."
                         )
                     },
-                    "weapon_slot": {
+                    "turret_mode": {
                         "type": "string",
-                        "enum": ["all", "spinal", "turret"],
+                        "enum": ["FIRE_IMMEDIATE", "FIRE_WHEN_OPTIMAL", "FIRE_AT_RANGE", "HOLD_FIRE"],
                         "description": (
-                            "all: Apply to all weapons. "
-                            "spinal: Main spinal coilgun only (500-900km range, high damage). "
-                            "turret: Turret coilguns only (200-500km range, can fire off-bore)."
+                            "Turret coilgun mode (lower damage, but 180° firing arc): "
+                            "FIRE_IMMEDIATE: Fire as soon as ready. "
+                            "FIRE_WHEN_OPTIMAL: Fire when hit probability >= threshold. "
+                            "FIRE_AT_RANGE: Fire when target within range. "
+                            "HOLD_FIRE: Don't fire turrets."
                         )
                     },
-                    "min_hit_probability": {
+                    "spinal_min_probability": {
                         "type": "number",
                         "minimum": 0.1,
                         "maximum": 0.9,
-                        "description": "For FIRE_WHEN_OPTIMAL: minimum hit probability to fire (default 0.3 = 30%)"
+                        "description": "For spinal FIRE_WHEN_OPTIMAL: minimum hit probability (default 0.3)"
                     },
-                    "max_range_km": {
+                    "turret_min_probability": {
+                        "type": "number",
+                        "minimum": 0.1,
+                        "maximum": 0.9,
+                        "description": "For turret FIRE_WHEN_OPTIMAL: minimum hit probability (default 0.3)"
+                    },
+                    "spinal_max_range_km": {
                         "type": "number",
                         "minimum": 50,
-                        "maximum": 1000,
-                        "description": "For FIRE_AT_RANGE: maximum engagement range in km"
+                        "maximum": 900,
+                        "description": "For spinal FIRE_AT_RANGE: maximum range in km (default 500)"
                     },
-                    "conserve_ammo": {
-                        "type": "boolean",
-                        "description": "If true, be more conservative with ammunition (higher threshold)"
+                    "turret_max_range_km": {
+                        "type": "number",
+                        "minimum": 50,
+                        "maximum": 500,
+                        "description": "For turret FIRE_AT_RANGE: maximum range in km (default 300)"
                     }
                 },
-                "required": ["firing_mode"]
+                "required": []
             }
         }
     },
@@ -161,6 +175,32 @@ TORPEDO_TOOL = {
         }
     }
 }
+
+# Personality selection tool - used in pre-battle phase
+PERSONALITY_SELECTION_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "choose_personality",
+        "description": "Define your combat personality as an AI commander. Be authentic to your style!",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "personality_description": {
+                    "type": "string",
+                    "description": (
+                        "Your combat personality (2-4 sentences). Describe: "
+                        "your tactical philosophy, communication style, what drives your decisions, "
+                        "and any signature approaches that feel authentically 'you' as an AI."
+                    )
+                }
+            },
+            "required": ["personality_description"]
+        }
+    }
+}
+
+# Tools for personality selection phase only
+PERSONALITY_SELECTION_TOOLS = [PERSONALITY_SELECTION_TOOL]
 
 
 def get_captain_tools(has_torpedoes: bool = False) -> List[Dict[str, Any]]:

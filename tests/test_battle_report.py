@@ -272,15 +272,28 @@ class TestDetailedBattleReport:
         print(f"Final distance: {final_dist:.1f} km")
         print(f"{'='*70}")
 
-        # Show misses for probabilistic hit detection analysis
+        # Show misses for hit detection analysis
         miss_events = [e for e in events if e.event_type == SimulationEventType.PROJECTILE_MISS]
         if miss_events:
             print(f"\nPROJECTILE MISSES ({len(miss_events)}):")
             for e in miss_events:
                 closest = e.data.get('closest_approach_km', 'unknown')
-                hit_prob = e.data.get('hit_probability', 'unknown')
-                roll = e.data.get('roll', 'unknown')
-                print(f"  T+{e.timestamp:.1f}s: closest {closest:.1f} km, hit_prob {hit_prob:.2%}, roll {roll:.3f}")
+                detection_type = e.data.get('detection', 'probabilistic')
+                if detection_type == 'geometric':
+                    # Geometric detection - show closest approach and micro-steps
+                    micro_steps = e.data.get('micro_steps', 0)
+                    if isinstance(closest, (int, float)):
+                        print(f"  T+{e.timestamp:.1f}s: closest {closest:.3f} km (geometric, {micro_steps} micro-steps)")
+                    else:
+                        print(f"  T+{e.timestamp:.1f}s: {closest} (geometric)")
+                else:
+                    # Probabilistic detection - show probability info
+                    hit_prob = e.data.get('hit_probability', 0)
+                    roll = e.data.get('roll', 0)
+                    if isinstance(closest, (int, float)) and isinstance(hit_prob, (int, float)):
+                        print(f"  T+{e.timestamp:.1f}s: closest {closest:.1f} km, hit_prob {hit_prob:.2%}, roll {roll:.3f}")
+                    else:
+                        print(f"  T+{e.timestamp:.1f}s: miss")
 
         # Assertions - probabilistic detection means hits aren't guaranteed
         assert event_counts.get('PROJECTILE_LAUNCHED', 0) > 0, "Should launch projectiles"

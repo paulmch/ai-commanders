@@ -71,13 +71,13 @@ Examples:
     # Personalities
     parser.add_argument(
         "--alpha-personality",
-        choices=["aggressive", "cautious", "balanced", "berserker", "survivor"],
+        choices=["aggressive", "cautious", "balanced", "berserker", "survivor", "cosmic_wit"],
         default="balanced",
         help="Personality for alpha captain",
     )
     parser.add_argument(
         "--beta-personality",
-        choices=["aggressive", "cautious", "balanced", "berserker", "survivor"],
+        choices=["aggressive", "cautious", "balanced", "berserker", "survivor", "cosmic_wit"],
         default="balanced",
         help="Personality for beta captain",
     )
@@ -102,6 +102,23 @@ Examples:
         help="Time limit in seconds (default: 1200)",
     )
 
+    # Battle modes
+    parser.add_argument(
+        "--unlimited",
+        action="store_true",
+        help="Unlimited mode: fight until destruction, surrender, or mutual draw",
+    )
+    parser.add_argument(
+        "--trace",
+        action="store_true",
+        help="Record detailed sim trace (position/velocity of all objects every step). WARNING: Large files!",
+    )
+    parser.add_argument(
+        "--no-personality-selection",
+        action="store_true",
+        help="Skip personality selection phase (use preset personalities from --alpha/beta-personality)",
+    )
+
     # Output
     parser.add_argument(
         "--verbose", "-v",
@@ -123,6 +140,7 @@ Examples:
         "balanced": CaptainPersonality.BALANCED,
         "berserker": CaptainPersonality.BERSERKER,
         "survivor": CaptainPersonality.SURVIVOR,
+        "cosmic_wit": CaptainPersonality.COSMIC_WIT,
     }
 
     try:
@@ -175,8 +193,14 @@ Examples:
             initial_distance_km=args.distance,
             max_checkpoints=args.max_checkpoints,
             time_limit_s=args.time_limit,
+            unlimited_mode=args.unlimited,
             verbose=not args.quiet,
+            record_sim_trace=args.trace,
+            personality_selection=not args.no_personality_selection,
         )
+
+        if args.unlimited and not args.quiet:
+            print("UNLIMITED MODE: Battle will continue until destruction, surrender, or mutual draw")
 
         # Load fleet data
         fleet_data = load_fleet_data()

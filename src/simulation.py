@@ -89,9 +89,6 @@ HIT_DETECTION_RADIUS = 50.0
 # Thermal heat generation per coilgun shot (GJ)
 COILGUN_HEAT_PER_SHOT_GJ = 0.5
 
-# Thermal heat generation per second of engine burn (GJ/s at full throttle)
-ENGINE_HEAT_PER_SECOND_GJ = 0.05
-
 
 # =============================================================================
 # EVENT TYPES
@@ -184,6 +181,7 @@ class ManeuverType(Enum):
     EVASIVE = auto()        # Random evasive pattern
     INTERCEPT = auto()      # Intercept course toward target
     BRAKE = auto()          # Deceleration burn
+    MAINTAIN = auto()       # Hold current course (coast, no thrust)
 
 
 @dataclass
@@ -394,14 +392,28 @@ class WeaponState:
                 target_position, target_velocity
             )
         else:
-            # Fixed weapon (spinal): fire along ship forward
-            # Could add gimbal deflection here for targets slightly off-axis
-            angle_deg = math.degrees(ship_forward.angle_to(target_dir))
-            if angle_deg <= self.weapon.pivot_range_deg:
-                # Target within gimbal range - fire along adjusted direction
-                # For simplicity, just fire forward (ship should be aimed)
-                return ship_forward
-            return None
+            # Fixed weapon (spinal): calculate lead, but limit to gimbal range
+            lead_dir = self._calculate_lead_direction(
+                shooter_position, ship_velocity,
+                target_position, target_velocity
+            )
+
+            # Check if lead direction is within gimbal range of ship forward
+            lead_angle_deg = math.degrees(ship_forward.angle_to(lead_dir))
+
+            if lead_angle_deg <= self.weapon.pivot_range_deg:
+                # Lead is within gimbal range - use full lead
+                return lead_dir
+            elif lead_angle_deg <= self.weapon.pivot_range_deg * 2:
+                # Lead is slightly outside gimbal - aim at gimbal limit toward lead
+                # Blend ship_forward toward lead_dir, limited by gimbal
+                # Calculate the direction from forward toward lead, limited by gimbal
+                gimbal_fraction = self.weapon.pivot_range_deg / lead_angle_deg
+                adjusted_dir = (ship_forward * (1 - gimbal_fraction) + lead_dir * gimbal_fraction).normalized()
+                return adjusted_dir
+            else:
+                # Target too far off-axis even with lead - can't fire
+                return None
 
     def _calculate_lead_direction(
         self,
@@ -410,31 +422,73 @@ class WeaponState:
         target_position: Vector3D,
         target_velocity: Vector3D
     ) -> Vector3D:
-        """Calculate intercept direction with lead for turreted weapons."""
-        # Relative position and velocity
+        """
+        Calculate intercept direction with proper lead for turreted weapons.
+
+        Uses quadratic solution for exact intercept time accounting for
+        relative velocity between shooter and target.
+
+        In shooter's reference frame:
+        - Projectile travels at muzzle_speed in aim direction
+        - Target moves at relative velocity
+        - Solve: aim * muzzle_speed * T = rel_pos + rel_vel * T
+        """
+        # Relative position and velocity (in shooter's reference frame)
         rel_pos = target_position - shooter_position
         rel_vel = target_velocity - shooter_velocity
-        distance = rel_pos.magnitude
+        distance_sq = rel_pos.dot(rel_pos)
+        distance = math.sqrt(distance_sq)
 
-        # Projectile speed
-        muzzle_kps = self.weapon.muzzle_velocity_kps
-        if muzzle_kps <= 0:
+        # Projectile speed (m/s)
+        muzzle_mps = self.weapon.muzzle_velocity_kps * 1000
+        if muzzle_mps <= 0:
             return rel_pos.normalized()
 
-        # Time of flight estimate (iterative would be better, but this is reasonable)
-        # First estimate: direct distance / muzzle velocity
-        tof_estimate = distance / (muzzle_kps * 1000)  # Convert to meters
+        # Solve quadratic for time-of-flight:
+        # |aim * M * T|² = |D + V*T|²
+        # M² * T² = D² + 2*D·V*T + V²*T²
+        # (M² - V²) * T² - 2*D·V*T - D² = 0
+        muzzle_sq = muzzle_mps * muzzle_mps
+        rel_vel_sq = rel_vel.dot(rel_vel)
+        d_dot_v = rel_pos.dot(rel_vel)
 
-        # Predict target position at intercept
-        predicted_pos = target_position + rel_vel * tof_estimate
+        a = muzzle_sq - rel_vel_sq
+        b = -2.0 * d_dot_v
+        c = -distance_sq
 
-        # Direction to predicted position
-        lead_dir = (predicted_pos - shooter_position).normalized()
+        # Handle edge cases
+        if abs(a) < 1e-10:
+            # Degenerate case: muzzle speed equals relative speed
+            if abs(b) < 1e-10:
+                return rel_pos.normalized()
+            tof = -c / b
+        else:
+            discriminant = b * b - 4.0 * a * c
+            if discriminant < 0:
+                # No intercept possible (target faster than projectile)
+                # Fall back to direct aim
+                return rel_pos.normalized()
+
+            sqrt_disc = math.sqrt(discriminant)
+            # Take positive root (future intercept)
+            tof = (-b + sqrt_disc) / (2.0 * a)
+
+            if tof < 0:
+                # Try other root
+                tof = (-b - sqrt_disc) / (2.0 * a)
+
+            if tof < 0:
+                # No future intercept
+                return rel_pos.normalized()
+
+        # Calculate aim direction: aim = (D + V*T) / (M*T)
+        intercept_rel_pos = rel_pos + rel_vel * tof
+        aim_dir = intercept_rel_pos.normalized()
 
         # Update aim direction
-        self.current_aim_direction = lead_dir
+        self.current_aim_direction = aim_dir
 
-        return lead_dir
+        return aim_dir
 
 
 # =============================================================================
@@ -979,12 +1033,16 @@ class CombatSimulation:
         self.metrics = EngagementMetrics()
 
         # Combat resolver for damage calculations
+        self._initial_seed = seed if seed is not None else 42
         self.rng = random.Random(seed)
         self.combat_resolver = CombatResolver(rng=self.rng)
         self.damage_propagator = DamagePropagator()
 
         # Decision callback
         self._decision_callback: Optional[Callable[[str, 'CombatSimulation'], list[Any]]] = None
+
+        # Event callbacks (for external recording/logging)
+        self._event_callbacks: list[Callable[['SimulationEvent'], None]] = []
 
         # Simulation state
         self._running = False
@@ -1108,6 +1166,12 @@ class CombatSimulation:
                 return True
             elif command.get('type') == 'weapons_order':
                 return self._handle_weapons_order(ship, command)
+            elif command.get('type') == 'weapons_orders':
+                # Handle multiple weapon orders (new format with separate spinal/turret modes)
+                orders = command.get('orders', [])
+                for order in orders:
+                    self._handle_weapons_order(ship, {'order': order})
+                return True
 
         return False
 
@@ -1267,6 +1331,20 @@ class CombatSimulation:
             if not weapon_state.is_target_in_arc(ship.forward, to_target):
                 continue
 
+            # For non-turreted weapons (spinal), also check if lead direction is achievable
+            # This is important because target might be in arc but lead required for hit is outside gimbal
+            if not weapon_state.weapon.is_turreted:
+                fire_direction = weapon_state.calculate_fire_direction(
+                    ship_forward=ship.forward,
+                    ship_velocity=ship.velocity,
+                    target_position=target.position,
+                    target_velocity=target.velocity,
+                    shooter_position=ship.position
+                )
+                if fire_direction is None:
+                    # Lead direction is outside gimbal range - can't effectively fire
+                    continue
+
             # Calculate firing solution
             is_evading = (target.current_maneuver is not None and
                          hasattr(target.current_maneuver, 'maneuver_type') and
@@ -1322,7 +1400,16 @@ class CombatSimulation:
 
                     # Launch projectile
                     self._launch_projectile(ship, target, weapon_state)
-                    print(f"  [{ship.ship_id}] FIRED {weapon_slot} at {target_id} (prob: {solution.hit_probability:.1%})")
+
+                    # Calculate distance and time to target for display
+                    distance_km = (target.position - ship.position).magnitude / 1000
+                    muzzle_v = weapon_state.weapon.muzzle_velocity_kps
+                    time_to_target = distance_km / muzzle_v if muzzle_v > 0 else 0
+                    weapon_name = weapon_state.weapon.name
+
+                    print(f"  [{ship.ship_id}] FIRED {weapon_name} at {target_id}")
+                    print(f"       Distance: {distance_km:.0f}km, ETA: {time_to_target:.1f}s, "
+                          f"v: {muzzle_v:.1f}km/s, P(hit): {solution.hit_probability:.1%}")
 
     # -------------------------------------------------------------------------
     # Projectile Launch
@@ -1505,8 +1592,23 @@ class CombatSimulation:
                     self._rotate_ship_toward(ship, maneuver.direction, dt, engines_on=(throttle > 0))
 
                 elif maneuver.maneuver_type == ManeuverType.EVASIVE:
-                    # Random evasive pattern
-                    self._apply_evasive_pattern(ship, dt, engines_on=(throttle > 0))
+                    # Corkscrew evasive pattern: keep nose at target, use gimbal for spiral
+                    # First, find target and point at it (like INTERCEPT but with gimbal jinking)
+                    target = None
+                    if maneuver.target_id:
+                        target = self.get_ship(maneuver.target_id)
+                    else:
+                        # Find nearest enemy
+                        enemies = self.get_enemy_ships(ship.ship_id)
+                        if enemies:
+                            target = min(enemies, key=lambda e: ship.distance_to(e))
+
+                    if target:
+                        intercept_dir = self._calculate_intercept_direction(ship, target)
+                        self._rotate_ship_toward(ship, intercept_dir, dt, engines_on=(throttle > 0))
+
+                    # Apply corkscrew gimbal pattern for evasion
+                    gimbal_pitch, gimbal_yaw = self._apply_evasive_pattern(ship, dt, engines_on=(throttle > 0))
 
                 elif maneuver.maneuver_type == ManeuverType.INTERCEPT and maneuver.target_id:
                     target = self.get_ship(maneuver.target_id)
@@ -1521,6 +1623,11 @@ class CombatSimulation:
                         retrograde_dir = velocity.normalized() * -1  # Opposite to velocity
                         self._rotate_ship_toward(ship, retrograde_dir, dt, engines_on=(throttle > 0))
 
+                elif maneuver.maneuver_type == ManeuverType.MAINTAIN:
+                    # Coast - maintain current course, no thrust
+                    # Just keep nose pointed at target for tactical awareness
+                    pass  # No maneuver needed, ship coasts
+
         # Apply engine damage to effective thrust
         engine_eff = ship.get_effective_thrust_fraction()
         effective_throttle = throttle * engine_eff
@@ -1532,15 +1639,14 @@ class CombatSimulation:
 
         # Update thermal system
         if ship.thermal_system:
-            # Add engine heat if thrusting (based on commanded throttle, not effective)
+            # Activate/deactivate engine heat source based on throttle
+            # (ThermalSystem.update() handles heat generation from active sources)
             if throttle > 0:
-                engine_heat = ENGINE_HEAT_PER_SECOND_GJ * throttle * dt
-                ship.thermal_system.add_heat("engines", engine_heat)
                 ship.thermal_system.set_source_active("engines", True)
             else:
                 ship.thermal_system.set_source_active("engines", False)
 
-            # Update thermal system
+            # Update thermal system (generates heat from active sources, dissipates via radiators)
             thermal_result = ship.thermal_system.update(dt)
 
             # Check for thermal warnings
@@ -1710,159 +1816,259 @@ class CombatSimulation:
             ship.kinematic_state.forward = new_forward.normalized()
             ship.kinematic_state.up = new_up.normalized()
 
-    def _apply_evasive_pattern(self, ship: ShipCombatState, dt: float, engines_on: bool = True) -> None:
-        """Apply random evasive maneuver."""
-        # Generate random perpendicular thrust direction
-        forward = ship.forward
-        right = ship.kinematic_state.right
-        up = ship.up
+    def _apply_evasive_pattern(
+        self,
+        ship: ShipCombatState,
+        dt: float,
+        engines_on: bool = True
+    ) -> tuple[float, float]:
+        """
+        Apply jinking evasive maneuver pattern.
 
-        # Random combination of right and up
-        rand_angle = self.rng.random() * 2 * math.pi
-        evade_dir = right * math.cos(rand_angle) + up * math.sin(rand_angle)
+        Jinking works by:
+        1. Deflecting thrust in a random perpendicular direction for a few seconds
+        2. Then deflecting in the OPPOSITE direction to cancel lateral velocity
+        3. Repeat with new random direction
 
-        # Periodically change direction
-        period = 5.0  # Change every 5 seconds
-        phase = (self.current_time % period) / period
-        if phase < 0.5:
-            evade_dir = evade_dir
-        else:
-            evade_dir = -evade_dir
+        This makes the ship's position unpredictable while keeping net lateral
+        velocity near zero (no drift). The main thrust vector toward/away from
+        target stays intact.
 
-        # Update angular velocity to rotate toward evade direction
-        self._rotate_ship_toward(ship, evade_dir, dt, engines_on=engines_on)
+        Returns:
+            Tuple of (gimbal_pitch_deg, gimbal_yaw_deg) for the jink pattern.
+        """
+        # Jink parameters
+        jink_period = 3.0  # Seconds per jink direction (3s one way, 3s back)
+        max_deflection = 0.9  # Max gimbal deflection in degrees (limit is ~1°)
+
+        # Determine which jink cycle we're in and the phase within it
+        cycle_time = self.current_time % (jink_period * 2)  # 0 to 6 seconds
+        first_half = cycle_time < jink_period  # First 3s or second 3s
+
+        # Use ship-specific seed for this jink cycle to pick direction
+        cycle_number = int(self.current_time / (jink_period * 2))
+        self.rng.seed(hash(ship.ship_id) + cycle_number)
+
+        # Random jink direction (angle in the pitch/yaw plane)
+        jink_angle = self.rng.random() * 2 * math.pi
+
+        # Deflection magnitude (full deflection for clear jinking)
+        deflection = max_deflection
+
+        # Calculate gimbal based on jink angle
+        gimbal_pitch = deflection * math.sin(jink_angle)
+        gimbal_yaw = deflection * math.cos(jink_angle)
+
+        # In second half, reverse direction to cancel lateral velocity
+        if not first_half:
+            gimbal_pitch = -gimbal_pitch
+            gimbal_yaw = -gimbal_yaw
+
+        # Reset RNG seed to not affect other random operations
+        self.rng.seed(self._initial_seed + int(self.current_time * 1000))
+
+        return (gimbal_pitch, gimbal_yaw)
 
     def _calculate_intercept_direction(
         self,
         ship: ShipCombatState,
         target: ShipCombatState
     ) -> Vector3D:
-        """Calculate direction to intercept target."""
-        rel_pos = target.position - ship.position
-        rel_vel = target.velocity - ship.velocity
+        """
+        Calculate optimal burn direction to intercept target.
 
-        # Estimate time to intercept
-        distance = rel_pos.magnitude
-        closing_rate = ship.closing_rate_to(target)
+        Uses collision course guidance (same as torpedo logic):
+        1. Decompose relative velocity into closing speed + lateral drift
+        2. If not closing: burn toward target
+        3. If closing but have lateral drift: blend toward-target with cancel-lateral
+        4. If on good course: burn toward target to increase closing speed
+        """
+        # Line of sight to target
+        to_target = target.position - ship.position
+        distance_m = to_target.magnitude
 
-        if closing_rate > 0:
-            time_to_intercept = distance / closing_rate
-        else:
-            time_to_intercept = 100.0  # Fallback
+        if distance_m < 100.0:  # Essentially at target
+            return ship.forward  # Maintain current heading
 
-        # Predict target position
-        predicted_pos = target.position + target.velocity * time_to_intercept
+        los = to_target.normalized()  # Unit vector toward target
 
-        return (predicted_pos - ship.position).normalized()
+        # Relative velocity: how we move relative to target
+        # Positive closing speed = we're approaching
+        rel_vel = ship.velocity - target.velocity
+
+        # Decompose relative velocity into:
+        # - Closing speed (along LOS, toward target is positive)
+        # - Lateral velocity (perpendicular to LOS, causes miss)
+        closing_speed_mps = rel_vel.dot(los)
+        lateral_vel = rel_vel - los * closing_speed_mps
+        lateral_speed_mps = lateral_vel.magnitude
+
+        # Minimum closing speed we want (km/s)
+        MIN_CLOSING_SPEED_KPS = 2.0  # Want at least 2 km/s closing
+        MIN_CLOSING_SPEED_MPS = MIN_CLOSING_SPEED_KPS * 1000.0
+
+        # PHASE 1: Not closing - burn directly toward target
+        if closing_speed_mps <= 0:
+            return los
+
+        # PHASE 2: Closing but too slow - prioritize building closing speed
+        if closing_speed_mps < MIN_CLOSING_SPEED_MPS:
+            if lateral_speed_mps > 100.0:  # Have significant lateral drift
+                # Blend: mostly toward target, some lateral correction
+                lateral_correction = (lateral_vel * -1.0).normalized()
+                # Weight toward target more heavily when we need speed
+                weight_toward = 0.8
+                weight_lateral = 0.2
+                burn_dir = los * weight_toward + lateral_correction * weight_lateral
+                return burn_dir.normalized()
+            else:
+                # On course, just need speed - burn toward target
+                return los
+
+        # PHASE 3: Good closing speed - focus on lateral correction
+        if lateral_speed_mps > 50.0:  # Have lateral drift to correct
+            lateral_correction = (lateral_vel * -1.0).normalized()
+            # More weight to lateral correction when we have enough closing speed
+            # Scale based on how much lateral drift we have
+            lateral_ratio = min(1.0, lateral_speed_mps / 500.0)  # Max at 500 m/s drift
+            weight_toward = 1.0 - lateral_ratio * 0.6  # At most 60% to lateral
+            weight_lateral = lateral_ratio * 0.6
+            burn_dir = los * weight_toward + lateral_correction * weight_lateral
+            return burn_dir.normalized()
+
+        # PHASE 4: On good intercept course - burn toward target
+        return los
 
     # -------------------------------------------------------------------------
     # Projectile Update
     # -------------------------------------------------------------------------
 
     def _update_projectiles(self, dt: float) -> None:
-        """Update all projectiles and check for hits using probabilistic detection."""
+        """
+        Update all projectiles using adaptive timestep with geometric hit detection.
+
+        When a projectile is far from target (TCA > 4s), uses normal timestep.
+        When close to target, switches to micro-timesteps (1ms) for precise
+        geometric intersection detection against ship cylinder.
+        """
         projectiles_to_remove: list[ProjectileInFlight] = []
 
+        # Adaptive timestep constants
+        TCA_THRESHOLD_S = 4.0  # Switch to micro-steps when TCA < 4 seconds
+        MICRO_DT = 0.001  # 1ms micro-timestep for precise detection
+        MAX_MICRO_STEPS = 5000  # Safety limit (5 seconds at 1ms)
+
+        # Hit tolerance: extra radius added to ship for hit detection
+        # Simulates weapon spread, tracking error, and fire control inaccuracy
+        # A destroyer is ~15m radius, so 500m tolerance is ~33x the ship size
+        # This makes hits possible even with evasion-induced miss distances
+        HIT_TOLERANCE_M = 500.0
+
         for proj_flight in self.projectiles:
+            if proj_flight in projectiles_to_remove:
+                continue
+
             proj = proj_flight.projectile
-
-            # Store previous position
-            prev_position = Vector3D(proj.position.x, proj.position.y, proj.position.z)
-
-            # Update position
-            proj.update(dt)
-
-            # Get target ship
             target_ship = self.get_ship(proj_flight.target_ship_id) if proj_flight.target_ship_id else None
 
-            if target_ship and not target_ship.is_destroyed and proj_flight not in projectiles_to_remove:
-                current_dist = proj.distance_to(target_ship.position)
-                prev_dist = proj_flight.prev_distance_to_target
+            if not target_ship or target_ship.is_destroyed:
+                # No valid target - just update position normally
+                proj.update(dt)
+                continue
 
-                # Update minimum distance
-                if current_dist < proj_flight.min_distance_to_target:
-                    proj_flight.min_distance_to_target = current_dist
+            # Calculate time to closest approach
+            tca, closest_dist = self._calculate_time_to_closest_approach(
+                proj.position, proj.velocity,
+                target_ship.position, target_ship.velocity
+            )
 
-                # Check if we're at closest approach (distance starting to increase)
-                at_closest_approach = (
-                    prev_dist < float('inf') and
-                    current_dist > prev_dist and
-                    proj_flight.min_distance_to_target < 200_000  # Within 200km at some point
+            # Update minimum distance tracking
+            current_dist = proj.distance_to(target_ship.position)
+            if current_dist < proj_flight.min_distance_to_target:
+                proj_flight.min_distance_to_target = current_dist
+
+            # Decide on timestep strategy
+            if tca > TCA_THRESHOLD_S:
+                # Far from target - use normal timestep
+                prev_position = Vector3D(proj.position.x, proj.position.y, proj.position.z)
+                proj.update(dt)
+
+                # Quick check: did we pass through target during this step?
+                # (Catches cases where projectile is very fast and might skip past)
+                hit, impact_point, t_param = self._check_line_cylinder_intersection(
+                    prev_position, proj.position, target_ship, HIT_TOLERANCE_M
                 )
-
-                if at_closest_approach:
-                    # Calculate hit probability at closest approach
-                    closest_dist_m = proj_flight.min_distance_to_target
-
-                    # Get geometry for probability calculation
-                    geometry = target_ship.geometry
-                    if geometry is None:
-                        geometry = ShipGeometry(length_m=100, beam_m=20, height_m=15)
-
-                    # Calculate hit probability based on distance and target size
-                    # Probability = target_cross_section / (4 * pi * distance^2) * accuracy_factor
-                    # Simplified: use angular size model
-
-                    # Get cross-section based on approach angle
-                    approach_dir = (target_ship.position - proj.position).normalized()
-                    angle_to_forward = math.degrees(target_ship.forward.angle_to(approach_dir))
-
-                    if angle_to_forward < 30:
-                        cross_section = geometry.nose_cross_section_m2
-                    elif angle_to_forward > 150:
-                        cross_section = geometry.tail_cross_section_m2
-                    else:
-                        cross_section = geometry.lateral_cross_section_m2
-
-                    # Effective target radius from cross-section
-                    target_radius_m = math.sqrt(cross_section / math.pi)
-
-                    # Hit probability scales with angular size
-                    # At closest_dist, what's the angular size of the target?
-                    if closest_dist_m > 0:
-                        angular_size = target_radius_m / closest_dist_m
-                    else:
-                        angular_size = 1.0
-
-                    # Scale probability: ~50% at 10km for 60m target
-                    # angular_size at 10km with 60m radius = 0.006
-                    # We want prob = 0.5 when angular_size = 0.006
-                    # Using: prob = 1 - exp(-k * angular_size), with k = 115
-                    accuracy_constant = 115
-
-                    # Apply sensor damage from the SHOOTER (affects targeting accuracy)
-                    source_ship = self.get_ship(proj_flight.source_ship_id)
-                    if source_ship:
-                        targeting_multiplier = source_ship.get_targeting_accuracy_multiplier()
-                        accuracy_constant *= targeting_multiplier
-
-                    hit_probability = 1.0 - math.exp(-accuracy_constant * angular_size)
-
-                    # Clamp probability
-                    hit_probability = max(0.01, min(0.95, hit_probability))
-
-                    # Roll for hit
-                    roll = random.random()
-                    hit = roll < hit_probability
-
-                    if hit:
-                        # Hit! Resolve damage
-                        self._resolve_projectile_hit(proj_flight, target_ship)
-                        projectiles_to_remove.append(proj_flight)
-                    else:
-                        # Miss - log with probability info
-                        self._log_event(SimulationEventType.PROJECTILE_MISS,
-                                       proj_flight.source_ship_id, proj_flight.target_ship_id, {
-                            'projectile_id': proj_flight.projectile_id,
-                            'closest_approach_km': closest_dist_m / 1000,
-                            'hit_probability': hit_probability,
-                            'roll': roll
-                        })
-                        projectiles_to_remove.append(proj_flight)
+                if hit:
+                    # Hit detected even in coarse step
+                    self._resolve_projectile_hit_geometric(
+                        proj_flight, target_ship, impact_point
+                    )
+                    projectiles_to_remove.append(proj_flight)
+                    continue
 
                 proj_flight.prev_distance_to_target = current_dist
 
-            # Also remove if projectile is way too far from any target (cleanup)
+            else:
+                # Close to target - use micro-timesteps for precision
+                time_remaining = dt
+                micro_steps = 0
+                hit_detected = False
+
+                while time_remaining > 0 and micro_steps < MAX_MICRO_STEPS:
+                    micro_dt = min(MICRO_DT, time_remaining)
+
+                    # Store previous position for intersection check
+                    prev_position = Vector3D(proj.position.x, proj.position.y, proj.position.z)
+
+                    # Update projectile position
+                    proj.update(micro_dt)
+
+                    # Update target position (ships move too!)
+                    # Note: We can't easily move the ship here since step() handles it
+                    # So we use predicted target position based on velocity
+                    target_predicted_pos = target_ship.position + target_ship.velocity * (micro_steps * MICRO_DT)
+
+                    # Check for geometric intersection with ship cylinder
+                    hit, impact_point, t_param = self._check_line_cylinder_intersection(
+                        prev_position, proj.position, target_ship, HIT_TOLERANCE_M
+                    )
+
+                    if hit:
+                        # Geometric hit! Resolve damage
+                        self._resolve_projectile_hit_geometric(
+                            proj_flight, target_ship, impact_point
+                        )
+                        projectiles_to_remove.append(proj_flight)
+                        hit_detected = True
+                        break
+
+                    # Check if we've passed closest approach (distance increasing)
+                    new_dist = proj.distance_to(target_ship.position)
+                    if new_dist > current_dist and current_dist < proj_flight.min_distance_to_target + 100:
+                        # Past closest approach - it's a miss
+                        closest_km = proj_flight.min_distance_to_target / 1000.0
+                        flight_time = self.current_time - proj_flight.launch_time
+                        self._log_event(SimulationEventType.PROJECTILE_MISS,
+                                       proj_flight.source_ship_id, proj_flight.target_ship_id, {
+                            'projectile_id': proj_flight.projectile_id,
+                            'closest_approach_km': closest_km,
+                            'detection': 'geometric',
+                            'micro_steps': micro_steps
+                        })
+                        print(f"  --- [{proj_flight.source_ship_id}] MISS {proj_flight.target_ship_id} "
+                              f"(closest: {closest_km:.2f}km, flight: {flight_time:.1f}s)")
+                        projectiles_to_remove.append(proj_flight)
+                        hit_detected = True  # Well, miss detected
+                        break
+
+                    current_dist = new_dist
+                    time_remaining -= micro_dt
+                    micro_steps += 1
+
+                if not hit_detected:
+                    proj_flight.prev_distance_to_target = current_dist
+
+            # Cleanup: remove if projectile is way too far from any target
             max_distance = 5_000_000  # 5000 km
             if proj_flight not in projectiles_to_remove:
                 min_dist = min(
@@ -1883,6 +2089,201 @@ class CombatSimulation:
         for proj in projectiles_to_remove:
             if proj in self.projectiles:
                 self.projectiles.remove(proj)
+
+    def _resolve_projectile_hit_geometric(
+        self,
+        proj_flight: ProjectileInFlight,
+        target: ShipCombatState,
+        impact_point: Optional[Vector3D]
+    ) -> None:
+        """
+        Resolve a projectile hit detected via geometric intersection.
+
+        Delegates to the existing _resolve_projectile_hit method which handles
+        all armor, modules, and combat mechanics correctly.
+
+        Args:
+            proj_flight: The projectile that hit
+            target: The ship that was hit
+            impact_point: The point of impact (if known, for logging)
+        """
+        # Use the existing projectile hit resolution which handles all combat mechanics
+        self._resolve_projectile_hit(proj_flight, target)
+
+    def _calculate_time_to_closest_approach(
+        self,
+        proj_pos: Vector3D,
+        proj_vel: Vector3D,
+        target_pos: Vector3D,
+        target_vel: Vector3D
+    ) -> tuple[float, float]:
+        """
+        Calculate time to closest approach (TCA) for a projectile vs target.
+
+        Uses relative kinematics: models target as stationary with relative velocity.
+        TCA = -dot(r, v) / dot(v, v) where r = relative position, v = relative velocity
+
+        Args:
+            proj_pos: Projectile position
+            proj_vel: Projectile velocity
+            target_pos: Target position
+            target_vel: Target velocity
+
+        Returns:
+            Tuple of (time_to_closest_approach_seconds, closest_approach_distance_m)
+            TCA is clamped to [0, inf) - negative means already past closest approach.
+        """
+        # Relative position and velocity
+        rel_pos = proj_pos - target_pos
+        rel_vel = proj_vel - target_vel
+
+        vel_mag_sq = rel_vel.dot(rel_vel)
+
+        if vel_mag_sq < 1e-10:
+            # No relative motion - current distance is closest
+            return 0.0, rel_pos.magnitude
+
+        # TCA = -dot(r, v) / |v|^2
+        tca = -rel_pos.dot(rel_vel) / vel_mag_sq
+
+        if tca < 0:
+            # Already past closest approach
+            return 0.0, rel_pos.magnitude
+
+        # Calculate closest approach distance
+        closest_pos = rel_pos + rel_vel * tca
+        closest_dist = closest_pos.magnitude
+
+        return tca, closest_dist
+
+    def _check_line_cylinder_intersection(
+        self,
+        line_start: Vector3D,
+        line_end: Vector3D,
+        ship: ShipCombatState,
+        hit_tolerance_m: float = 0.0
+    ) -> tuple[bool, Optional[Vector3D], Optional[float]]:
+        """
+        Check if a line segment intersects a ship's bounding cylinder.
+
+        The ship is modeled as a cylinder aligned with ship.forward.
+        Center of cylinder is at ship.position, extending half-length in each direction.
+
+        Args:
+            line_start: Start of line segment (previous position)
+            line_end: End of line segment (current position)
+            ship: The target ship
+            hit_tolerance_m: Extra radius added to ship for hit detection (meters).
+                           Simulates weapon spread, tracking error, etc.
+
+        Returns:
+            Tuple of (hit, impact_point, t_parameter)
+            - hit: True if intersection occurred
+            - impact_point: Point of intersection (if hit)
+            - t_parameter: Parametric position along segment [0,1] where hit occurred
+        """
+        if ship.geometry is None:
+            # Fallback to sphere check with default size
+            radius = 50.0 + hit_tolerance_m  # 50m default + tolerance
+            hit = self._check_line_sphere_intersection(
+                line_start, line_end, ship.position, radius
+            )
+            if hit:
+                return True, ship.position, 0.5
+            return False, None, None
+
+        geom = ship.geometry
+        length = geom.length_m
+        # Add hit tolerance to effective radius (simulates weapon spread, tracking error)
+        radius = geom.radius_m + hit_tolerance_m
+
+        # Ship coordinate system
+        forward = ship.forward.normalized()
+        # Create orthonormal basis (forward is X-axis in ship frame)
+        if abs(forward.z) < 0.9:
+            up = Vector3D(0, 0, 1)
+        else:
+            up = Vector3D(1, 0, 0)
+        right = forward.cross(up).normalized()
+        up = right.cross(forward).normalized()
+
+        # Ship center is at ship.position
+        # Cylinder extends from -length/2 to +length/2 along forward axis
+        half_length = length / 2.0
+
+        # Transform line segment to ship-local coordinates
+        # In ship frame: forward = X, right = Y, up = Z
+        def to_local(p: Vector3D) -> tuple[float, float, float]:
+            rel = p - ship.position
+            x = rel.dot(forward)  # Along ship axis
+            y = rel.dot(right)
+            z = rel.dot(up)
+            return x, y, z
+
+        start_local = to_local(line_start)
+        end_local = to_local(line_end)
+
+        # Line direction in local coords
+        dx = end_local[0] - start_local[0]
+        dy = end_local[1] - start_local[1]
+        dz = end_local[2] - start_local[2]
+
+        # Check for infinite cylinder intersection (ignoring end caps)
+        # Ray: p = start + t * d
+        # Cylinder surface: y^2 + z^2 = r^2
+        # Substitute: (sy + t*dy)^2 + (sz + t*dz)^2 = r^2
+        # Expand: (dy^2 + dz^2)*t^2 + 2*(sy*dy + sz*dz)*t + (sy^2 + sz^2 - r^2) = 0
+
+        A = dy * dy + dz * dz
+        B = 2.0 * (start_local[1] * dy + start_local[2] * dz)
+        C = start_local[1] ** 2 + start_local[2] ** 2 - radius ** 2
+
+        # Also check end caps (circles at x = -half_length and x = +half_length)
+        intersection_t = None
+        intersection_type = None  # 'cylinder' or 'cap'
+
+        if A > 1e-10:
+            # Quadratic in t
+            discriminant = B * B - 4.0 * A * C
+
+            if discriminant >= 0:
+                sqrt_disc = math.sqrt(discriminant)
+                t1 = (-B - sqrt_disc) / (2.0 * A)
+                t2 = (-B + sqrt_disc) / (2.0 * A)
+
+                # Check each solution
+                for t in [t1, t2]:
+                    if 0.0 <= t <= 1.0:
+                        # Check if within cylinder length bounds
+                        hit_x = start_local[0] + t * dx
+                        if -half_length <= hit_x <= half_length:
+                            if intersection_t is None or t < intersection_t:
+                                intersection_t = t
+                                intersection_type = 'cylinder'
+
+        # Check end caps (front at x = half_length, back at x = -half_length)
+        if abs(dx) > 1e-10:
+            for cap_x in [half_length, -half_length]:
+                t_cap = (cap_x - start_local[0]) / dx
+                if 0.0 <= t_cap <= 1.0:
+                    # Check if within radius
+                    hit_y = start_local[1] + t_cap * dy
+                    hit_z = start_local[2] + t_cap * dz
+                    if hit_y ** 2 + hit_z ** 2 <= radius ** 2:
+                        if intersection_t is None or t_cap < intersection_t:
+                            intersection_t = t_cap
+                            intersection_type = 'cap'
+
+        if intersection_t is not None:
+            # Calculate world-space impact point
+            impact_point = Vector3D(
+                line_start.x + intersection_t * (line_end.x - line_start.x),
+                line_start.y + intersection_t * (line_end.y - line_start.y),
+                line_start.z + intersection_t * (line_end.z - line_start.z)
+            )
+            return True, impact_point, intersection_t
+
+        return False, None, None
 
     def _check_line_sphere_intersection(
         self,
@@ -2003,6 +2404,11 @@ class CombatSimulation:
             'impact_angle_from_normal': impact_angle_from_normal
         })
 
+        # Calculate flight time for display
+        flight_time = self.current_time - proj_flight.launch_time
+        print(f"  >>> [{proj_flight.source_ship_id}] HIT {target.ship_id} "
+              f"({hit_location.value}): {effective_ke_gj:.1f} GJ, flight: {flight_time:.1f}s")
+
         # Apply armor damage using Terra Invicta physics-based ablation
         penetrated = False
         remaining_energy_gj = 0.0
@@ -2071,11 +2477,14 @@ class CombatSimulation:
                 # Spinal coilers are narrow, coilguns slightly wider
                 cone_angle = 15.0 if effective_ke_gj > 5.0 else 25.0
 
-                modules = target.module_layout.get_modules_in_cone(
+                all_modules = target.module_layout.get_modules_in_cone(
                     entry_point=hit_location,
                     angle_deg=cone_angle,
                     direction_vector=impact_vector.to_tuple()
                 )
+
+                # Filter out already-destroyed modules - projectile passes through wreckage
+                modules = [m for m in all_modules if not m.is_destroyed]
 
                 # Number of modules affected scales with energy
                 # 1 GJ = 1-2 modules, 10 GJ = 3-4 modules, 17+ GJ = 5+ modules
@@ -2098,6 +2507,8 @@ class CombatSimulation:
                         self._log_event(SimulationEventType.MODULE_DESTROYED, target.ship_id, data={
                             'module_name': module.name
                         })
+                        # Disable corresponding weapon if weapon module destroyed
+                        self._disable_weapon_for_module(target, module.name)
                     # Energy loss as penetrator travels through ship
                     # Denser modules (reactors, engines) absorb more
                     absorption = 0.4 if module.is_critical else 0.3
@@ -2428,11 +2839,14 @@ class CombatSimulation:
         # Torpedoes cause massive internal damage - kinetic penetrator + explosive
         if target.module_layout and penetrated and remaining_energy_gj > 0.1:
             # Wide cone for torpedo - explosive blast spreads damage
-            modules = target.module_layout.get_modules_in_cone(
+            all_modules = target.module_layout.get_modules_in_cone(
                 entry_point=hit_location,
                 angle_deg=45.0,  # Wide cone for torpedo explosive
                 direction_vector=impact_vector.to_tuple()
             )
+
+            # Filter out already-destroyed modules
+            modules = [m for m in all_modules if not m.is_destroyed]
 
             # Torpedoes affect many modules due to massive energy
             # 10 GJ = 4 modules, 20 GJ = 7 modules, 35 GJ = 12 modules
@@ -2455,6 +2869,8 @@ class CombatSimulation:
                     self._log_event(SimulationEventType.MODULE_DESTROYED, target.ship_id, data={
                         'module_name': module.name
                     })
+                    # Disable corresponding weapon if weapon module destroyed
+                    self._disable_weapon_for_module(target, module.name)
                 # Energy dissipates as blast travels through ship
                 # Critical modules (armored) absorb more blast
                 absorption = 0.35 if module.is_critical else 0.25
@@ -3088,6 +3504,31 @@ class CombatSimulation:
                 self._log_event(SimulationEventType.MODULE_DESTROYED, ship.ship_id, data={
                     'module_name': result.module_name
                 })
+                self._disable_weapon_for_module(ship, result.module_name)
+
+    def _disable_weapon_for_module(self, ship: ShipCombatState, module_name: str) -> None:
+        """
+        Disable the weapon corresponding to a destroyed weapon module.
+
+        Maps module names to weapon slots and disables them.
+        """
+        # Map module names to weapon slots
+        module_to_weapon = {
+            "Spinal Coiler Mount": "weapon_0",
+            "Dorsal Turret Mount": "weapon_1",
+            "PD Laser Dorsal": "pd_0",
+            "PD Laser Ventral": "pd_1",
+        }
+
+        weapon_slot = module_to_weapon.get(module_name)
+        if weapon_slot and weapon_slot in ship.weapons:
+            ship.weapons[weapon_slot].is_operational = False
+            print(f"  !!! [{ship.ship_id}] {module_name} DESTROYED - {weapon_slot} disabled")
+
+        # Also check PD lasers
+        if weapon_slot and hasattr(ship, 'pd_lasers') and ship.pd_lasers:
+            if weapon_slot in ship.pd_lasers:
+                ship.pd_lasers[weapon_slot].is_operational = False
 
     def _check_ship_destroyed(self, ship: ShipCombatState, attacker_id: Optional[str]) -> None:
         """Check if a ship has been destroyed."""
@@ -3164,6 +3605,20 @@ class CombatSimulation:
     # Event Logging
     # -------------------------------------------------------------------------
 
+    def add_event_callback(self, callback: Callable[['SimulationEvent'], None]) -> None:
+        """
+        Register a callback to be called for each simulation event.
+
+        Args:
+            callback: Function that takes a SimulationEvent.
+        """
+        self._event_callbacks.append(callback)
+
+    def remove_event_callback(self, callback: Callable[['SimulationEvent'], None]) -> None:
+        """Remove an event callback."""
+        if callback in self._event_callbacks:
+            self._event_callbacks.remove(callback)
+
     def _log_event(
         self,
         event_type: SimulationEventType,
@@ -3171,7 +3626,7 @@ class CombatSimulation:
         target_id: Optional[str] = None,
         data: Optional[dict] = None
     ) -> SimulationEvent:
-        """Log a simulation event."""
+        """Log a simulation event and notify callbacks."""
         event = SimulationEvent(
             event_type=event_type,
             timestamp=self.current_time,
@@ -3180,6 +3635,14 @@ class CombatSimulation:
             data=data or {}
         )
         self.events.append(event)
+
+        # Notify event callbacks
+        for callback in self._event_callbacks:
+            try:
+                callback(event)
+            except Exception as e:
+                print(f"[SIM] Event callback error: {e}")
+
         return event
 
     # -------------------------------------------------------------------------

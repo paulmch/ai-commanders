@@ -468,10 +468,13 @@ class HeatSource:
 
 
 # Standard heat generation rates (kW)
+# Note: A destroyer with 58.56 MN thrust at full burn generates ~59 MW of engine heat.
+# With 4 radiators extended (260 MW total dissipation), ships can cool while burning.
+# Combat heat from weapons adds significant thermal pressure.
 HEAT_GENERATION_RATES = {
-    "reactor_idle": 1000.0,          # Reactor at idle
-    "reactor_full_power": 50000.0,   # Reactor at full power
-    "engine_per_mn": 10000.0,        # Per MN of thrust
+    "reactor_idle": 1000.0,          # Reactor at idle (1 MW)
+    "reactor_full_power": 50000.0,   # Reactor at full power (50 MW)
+    "engine_per_mn": 1000.0,         # Per MN of thrust (~59 MW for destroyer at full burn)
     "coilgun_per_shot": 500.0,       # Per coilgun shot
     "laser_pd_continuous": 100.0,    # Laser PD continuous operation
 }
