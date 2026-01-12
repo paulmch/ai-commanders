@@ -125,14 +125,78 @@ CAPTAIN_TOOLS_BASE = [
     {
         "type": "function",
         "function": {
+            "name": "set_primary_target",
+            "description": "Designate a specific enemy ship as your primary target. Weapons and intercept maneuvers will focus on this target.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target_name": {
+                        "type": "string",
+                        "description": "Name of enemy ship to target (e.g., 'ENS Aggressor')"
+                    }
+                },
+                "required": ["target_name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_heading",
+            "description": "Set a course in a specific 3D direction. Use for custom positioning, flanking, or disengaging.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "direction": {
+                        "type": "object",
+                        "description": "Direction vector in ship-relative coordinates (will be normalized)",
+                        "properties": {
+                            "x": {
+                                "type": "number",
+                                "description": "Forward/backward (+forward, -backward)"
+                            },
+                            "y": {
+                                "type": "number",
+                                "description": "Left/right (+starboard, -port)"
+                            },
+                            "z": {
+                                "type": "number",
+                                "description": "Up/down (+up, -down)"
+                            }
+                        },
+                        "required": ["x", "y", "z"]
+                    },
+                    "throttle": {
+                        "type": "number",
+                        "minimum": 0.0,
+                        "maximum": 1.0,
+                        "description": "Throttle level (0.0-1.0)"
+                    }
+                },
+                "required": ["direction", "throttle"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "send_message",
-            "description": "Send a message to the enemy captain (shittalk, negotiate, intimidate)",
+            "description": "Send a message to other ships. Can target all ships, enemies only, friendlies only, or a specific ship.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "message": {
                         "type": "string",
                         "description": "Message content to send"
+                    },
+                    "recipient": {
+                        "type": "string",
+                        "enum": ["ALL", "ALL_ENEMIES", "ALL_FRIENDLIES", "SPECIFIC"],
+                        "description": "Who receives the message (default: ALL_ENEMIES)"
+                    },
+                    "target_ship": {
+                        "type": "string",
+                        "description": "Ship name if recipient is SPECIFIC"
                     }
                 },
                 "required": ["message"]

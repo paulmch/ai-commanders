@@ -79,6 +79,20 @@ class LLMCaptain:
         # Each entry: {distance_km, rel_velocity_kps, weapon, result: "HIT"/"MISS", damage_gj}
         self.shot_history: List[Dict[str, Any]] = []
 
+        # Multi-ship targeting support
+        self.primary_target_id: Optional[str] = None  # Current target ship ID
+        self.targeting_me: List[str] = []  # Ship IDs that have us as primary target
+
+        # Recent hits tracking (cleared each checkpoint)
+        # Each entry: {time, weapon, location, damage_cm, remaining_cm, source}
+        self.recent_hits: List[Dict[str, Any]] = []
+
+        # Current weapon configuration for display
+        self.current_weapon_orders: Dict[str, str] = {
+            "spinal": "HOLD_FIRE",
+            "turret": "HOLD_FIRE",
+        }
+
     def select_personality(self, distance_km: float, verbose: bool = False) -> Dict[str, Any]:
         """
         Let the LLM choose its personality before battle starts.
@@ -90,7 +104,14 @@ class LLMCaptain:
         Returns:
             Dict with chosen personality info
         """
-        prompt = build_personality_selection_prompt(distance_km)
+        # Extract a clean model name for personalization
+        # e.g., "anthropic/claude-3.5-sonnet" -> "Claude-3.5-Sonnet"
+        model_path = self.config.model.replace("openrouter/", "")
+        model_name = model_path.split("/")[-1]  # Get last part after provider
+        # Capitalize nicely: claude-3.5-sonnet -> Claude-3.5-Sonnet
+        model_name = "-".join(part.capitalize() for part in model_name.split("-"))
+
+        prompt = build_personality_selection_prompt(distance_km, model_name=model_name)
 
         messages = [{"role": "user", "content": prompt}]
 
@@ -183,6 +204,7 @@ class LLMCaptain:
         shot_history = self._format_shot_history(last_n=10)
 
         # Build prompt
+        recent_hits_text = self._format_recent_hits()
         system_prompt = build_captain_prompt(
             captain_name=self.config.name,
             ship_name=self.config.ship_name,
@@ -195,6 +217,7 @@ class LLMCaptain:
             message_history=message_history,
             battle_summary=battle_summary,
             shot_history=shot_history,
+            recent_hits=recent_hits_text if recent_hits_text else None,
         )
 
         # Build messages for LLM
@@ -207,15 +230,27 @@ class LLMCaptain:
         tool_calls = self.client.decide_with_tools(messages, self.tools)
 
         # Execute tool calls
+        # Track maneuver commands - only one maneuver per decision allowed
+        maneuver_tools = {"set_maneuver", "set_heading"}
+        maneuver_issued = False
+
         commands = []
+        executed_tool_calls = []  # Track actually executed tool calls
         for tc in tool_calls:
+            # Skip duplicate maneuver commands (only first one takes effect)
+            if tc.name in maneuver_tools:
+                if maneuver_issued:
+                    continue  # Skip this maneuver, one already issued
+                maneuver_issued = True
+
             cmd = self._execute_tool(tc, simulation, ship_id)
+            executed_tool_calls.append(tc)
             if cmd is not None:
                 commands.append(cmd)
 
         # Track decision
         self.decision_count += 1
-        self.last_tool_calls = tool_calls  # Store for verbose output
+        self.last_tool_calls = executed_tool_calls  # Store only executed calls for verbose output
         self.decision_history.append({
             "checkpoint": self.decision_count,
             "time": simulation.current_time,
@@ -236,6 +271,13 @@ class LLMCaptain:
                 maneuver = tc.arguments.get("maneuver_type", "?")
                 throttle = tc.arguments.get("throttle", 1.0)
                 actions.append(f"{maneuver} @ {throttle*100:.0f}%")
+            elif tc.name == "set_primary_target":
+                target = tc.arguments.get("target_name", "?")
+                actions.append(f"TARGET: {target}")
+            elif tc.name == "set_heading":
+                direction = tc.arguments.get("direction", {})
+                throttle = tc.arguments.get("throttle", 1.0)
+                actions.append(f"HEADING ({direction.get('x', 0):.1f},{direction.get('y', 0):.1f},{direction.get('z', 0):.1f}) @ {throttle*100:.0f}%")
             elif tc.name == "set_weapons_order":
                 spinal = tc.arguments.get("spinal_mode")
                 turret = tc.arguments.get("turret_mode")
@@ -254,7 +296,11 @@ class LLMCaptain:
                 actions.append("EXTEND radiators" if extend else "RETRACT radiators")
             elif tc.name == "send_message":
                 msg = tc.arguments.get("message", "")[:30]
-                actions.append(f"MSG: \"{msg}...\"" if len(msg) >= 30 else f"MSG: \"{msg}\"")
+                recipient = tc.arguments.get("recipient", "ALL_ENEMIES")
+                if recipient != "ALL_ENEMIES":
+                    actions.append(f"MSG ({recipient}): \"{msg}...\"" if len(msg) >= 30 else f"MSG ({recipient}): \"{msg}\"")
+                else:
+                    actions.append(f"MSG: \"{msg}...\"" if len(msg) >= 30 else f"MSG: \"{msg}\"")
             elif tc.name == "surrender":
                 actions.append("SURRENDER")
             elif tc.name == "propose_draw":
@@ -373,6 +419,41 @@ class LLMCaptain:
             "damage_gj": damage_gj,
         })
 
+    def record_hit_received(
+        self,
+        time: float,
+        weapon: str,
+        location: str,
+        damage_cm: float,
+        remaining_cm: float,
+        source_ship: str,
+    ) -> None:
+        """Record a hit received by this ship."""
+        self.recent_hits.append({
+            "time": time,
+            "weapon": weapon,
+            "location": location,
+            "damage_cm": damage_cm,
+            "remaining_cm": remaining_cm,
+            "source": source_ship,
+        })
+
+    def clear_recent_hits(self) -> None:
+        """Clear recent hits at start of each checkpoint."""
+        self.recent_hits = []
+
+    def set_primary_target(self, target_id: Optional[str]) -> None:
+        """Set the primary target for this captain."""
+        self.primary_target_id = target_id
+
+    def update_targeting_me(self, ship_ids: List[str]) -> None:
+        """Update list of ships that have us as their primary target."""
+        self.targeting_me = ship_ids
+
+    def get_primary_target_id(self) -> Optional[str]:
+        """Get current primary target ID."""
+        return self.primary_target_id
+
     def _format_shot_history(self, last_n: int = 10) -> str:
         """Format recent shot history for prompt."""
         if not self.shot_history:
@@ -394,7 +475,7 @@ class LLMCaptain:
             if shot["result"] == "HIT":
                 hits_by_range[bracket][0] += 1  # hits
 
-        lines = ["YOUR SHOT HISTORY:"]
+        lines = ["YOUR SHOTS FIRED (at enemy):"]
 
         # Stats by range
         for bracket, (hits, total) in hits_by_range.items():
@@ -403,13 +484,33 @@ class LLMCaptain:
                 lines.append(f"  {bracket}: {hits}/{total} hits ({pct:.0f}%)")
 
         # Recent shots detail
-        lines.append("  Recent shots:")
+        lines.append("  Recent:")
         for shot in recent[-5:]:  # Last 5 only for detail
-            result_str = f"HIT {shot['damage_gj']:.1f}GJ" if shot["result"] == "HIT" else "MISS"
+            result_str = f"HIT enemy {shot['damage_gj']:.1f}GJ" if shot["result"] == "HIT" else "MISS"
             closing = "closing" if shot["rel_velocity_kps"] < 0 else "separating"
             lines.append(
-                f"    {shot['weapon']}: {shot['distance_km']:.0f}km, "
+                f"    You fired {shot['weapon']}: {shot['distance_km']:.0f}km, "
                 f"{abs(shot['rel_velocity_kps']):.1f}km/s {closing} -> {result_str}"
+            )
+
+        return "\n".join(lines)
+
+    def _format_recent_hits(self) -> str:
+        """Format recent hits received for the prompt."""
+        if not self.recent_hits:
+            return ""
+
+        lines = ["DAMAGE TAKEN (last 30s):"]
+        for hit in self.recent_hits[-5:]:  # Last 5 hits
+            time = hit["time"]
+            weapon = hit["weapon"].capitalize()
+            location = hit["location"].upper()
+            damage = hit["damage_cm"]
+            remaining = hit["remaining_cm"]
+            source = hit.get("source", "Unknown")
+            lines.append(
+                f"  T+{time:.0f}s: {weapon} from {source} → {location} armor "
+                f"(-{damage:.1f} cm, {remaining:.1f} cm remaining)"
             )
 
         return "\n".join(lines)
@@ -499,99 +600,251 @@ class LLMCaptain:
 
         return status
 
+    def _calculate_impact_bearing(self, ship: Any, proj_pos: Any, proj_vel: Any) -> str:
+        """
+        Calculate which armor section a projectile is likely to hit.
+
+        Returns bearing like 'NOSE', 'TAIL', 'PORT', 'STARBOARD', 'PORT-AFT', etc.
+        """
+        import math
+
+        # Direction from projectile to ship (approach vector)
+        to_ship = (ship.position - proj_pos).normalized()
+
+        # Get ship orientation vectors
+        forward = ship.forward
+        up = ship.up if hasattr(ship, 'up') else type(forward)(0, 0, 1)
+        right = forward.cross(up).normalized() if hasattr(forward, 'cross') else type(forward)(0, 1, 0)
+
+        # Calculate angles
+        forward_dot = forward.dot(to_ship)  # positive = coming from ahead
+        right_dot = right.dot(to_ship)  # positive = coming from starboard
+        up_dot = up.dot(to_ship)  # positive = coming from above
+
+        # Determine primary bearing
+        bearings = []
+
+        # Forward/Aft component
+        if forward_dot > 0.5:
+            bearings.append("NOSE")
+        elif forward_dot < -0.5:
+            bearings.append("TAIL")
+
+        # Port/Starboard component
+        if right_dot > 0.3:
+            bearings.append("STARBOARD")
+        elif right_dot < -0.3:
+            bearings.append("PORT")
+
+        # If no strong direction, it's a flank shot
+        if not bearings:
+            if abs(right_dot) > abs(forward_dot):
+                bearings.append("PORT" if right_dot < 0 else "STARBOARD")
+            else:
+                bearings.append("NOSE" if forward_dot > 0 else "TAIL")
+
+        bearing = "-".join(bearings)
+
+        # Add armor zone hint
+        if "NOSE" in bearing:
+            bearing += " (frontal)"
+        elif "TAIL" in bearing:
+            bearing += " (rear)"
+        else:
+            bearing += " (flank)"
+
+        return bearing
+
+    def _build_enemy_info(self, ship: Any, enemy: Any, simulation: Any) -> Dict[str, Any]:
+        """Build tactical info for a single enemy ship."""
+        import math
+
+        info = {
+            "ship_id": enemy.ship_id,
+            "name": getattr(enemy, 'name', enemy.ship_id),
+            "ship_class": getattr(enemy, 'ship_class', 'unknown'),
+        }
+
+        # Calculate relative position
+        rel_pos = enemy.position - ship.position
+        distance_m = rel_pos.magnitude
+        distance_km = distance_m / 1000
+        info["distance_km"] = distance_km
+
+        info["relative_position"] = {
+            "x": rel_pos.x / 1000,
+            "y": rel_pos.y / 1000,
+            "z": rel_pos.z / 1000,
+        }
+
+        # Calculate relative velocity
+        rel_vel = enemy.velocity - ship.velocity
+        info["relative_velocity"] = {
+            "x": rel_vel.x / 1000,
+            "y": rel_vel.y / 1000,
+            "z": rel_vel.z / 1000,
+        }
+
+        # Closing rate
+        if distance_m > 0:
+            info["closing_rate"] = -rel_pos.normalized().dot(rel_vel) / 1000
+        else:
+            info["closing_rate"] = 0
+
+        # Angle to enemy
+        if distance_m > 0:
+            direction_to_enemy = rel_pos.normalized()
+            dot = ship.forward.dot(direction_to_enemy)
+            dot = max(-1.0, min(1.0, dot))
+            info["angle_deg"] = math.degrees(math.acos(dot))
+        else:
+            info["angle_deg"] = 0
+
+        # Hit probability
+        if distance_km <= 500:
+            base_hit = max(0.05, 0.9 - (distance_km / 500) * 0.85)
+        else:
+            base_hit = 0.05
+        info["hit_chance"] = base_hit * 100
+
+        # Enemy condition
+        info["hull_percent"] = enemy.hull_integrity
+
+        # Armor status
+        if enemy.armor:
+            enemy_nose = enemy.armor.get_section("nose")
+            enemy_lateral = enemy.armor.get_section("lateral")
+            enemy_tail = enemy.armor.get_section("tail")
+            info["armor"] = {
+                "nose_damage_pct": enemy_nose.damage_percent if enemy_nose else 0,
+                "lateral_damage_pct": enemy_lateral.damage_percent if enemy_lateral else 0,
+                "tail_damage_pct": enemy_tail.damage_percent if enemy_tail else 0,
+            }
+        else:
+            info["armor"] = {}
+
+        # Combat stats
+        info["shots_fired"] = enemy.shots_fired
+        info["hits_scored"] = enemy.hits_scored
+        info["damage_dealt_gj"] = enemy.damage_dealt_gj
+        info["damage_taken_gj"] = enemy.damage_taken_gj
+
+        return info
+
     def _build_tactical_status(
         self,
         ship: Any,
         enemy: Optional[Any],
         simulation: Any,
     ) -> Dict[str, Any]:
-        """Build tactical status dict with raw data for LLM decision making."""
+        """Build tactical status dict with multi-ship support."""
         from ..physics import Vector3D
+        import math
 
         status = {
             "sim_time": simulation.current_time,
-            "distance_km": 1000,
-            "closing_rate": 0,
-            "relative_position": {"x": 0, "y": 0, "z": 0},
-            "relative_velocity": {"x": 0, "y": 0, "z": 0},
-            "ship_forward": {"x": 1, "y": 0, "z": 0},
-            "angle_to_enemy_deg": 0,
-            "our_hit_chance": 0,
-            "our_shots": 0,
-            "our_hits": 0,
-            "enemy_shots": 0,
-            "enemy_hits": 0,
-            "our_damage_dealt": 0,
-            "our_damage_taken": 0,
+            "ship_forward": {
+                "x": ship.forward.x,
+                "y": ship.forward.y,
+                "z": ship.forward.z,
+            },
+            # Own ship combat stats
+            "our_shots": ship.shots_fired,
+            "our_hits": ship.hits_scored,
+            "our_damage_dealt": ship.damage_dealt_gj,
+            "our_damage_taken": ship.damage_taken_gj,
+            # Multi-ship data
+            "enemies": [],
+            "friendlies": [],
+            "primary_target_id": self.primary_target_id,
+            "targeting_me": self.targeting_me,
             "incoming_projectiles": [],
         }
 
-        # Ship forward direction
-        status["ship_forward"] = {
-            "x": ship.forward.x,
-            "y": ship.forward.y,
-            "z": ship.forward.z,
-        }
+        # Get all ships
+        all_enemies = simulation.get_enemy_ships(ship.ship_id)
+        all_friendlies = simulation.get_friendly_ships(ship.ship_id) if hasattr(simulation, 'get_friendly_ships') else []
 
-        if enemy:
-            # Calculate relative position (enemy relative to us)
-            rel_pos = enemy.position - ship.position
+        # Build enemy info list with primary target first
+        enemies_info = []
+        for e in all_enemies:
+            info = self._build_enemy_info(ship, e, simulation)
+            info["is_primary_target"] = (e.ship_id == self.primary_target_id)
+            info["has_us_targeted"] = (e.ship_id in self.targeting_me)
+            enemies_info.append(info)
+
+        # Sort: primary target first, then by distance
+        enemies_info.sort(key=lambda x: (not x["is_primary_target"], x["distance_km"]))
+        status["enemies"] = enemies_info
+
+        # Build friendly info list (simpler, less detail needed)
+        for f in all_friendlies:
+            if f.ship_id == ship.ship_id:
+                continue  # Skip self
+            rel_pos = f.position - ship.position
+            distance_km = rel_pos.magnitude / 1000
+            status["friendlies"].append({
+                "ship_id": f.ship_id,
+                "name": getattr(f, 'name', f.ship_id),
+                "distance_km": distance_km,
+                "hull_percent": f.hull_integrity,
+                "relative_position": {
+                    "x": rel_pos.x / 1000,
+                    "y": rel_pos.y / 1000,
+                    "z": rel_pos.z / 1000,
+                },
+            })
+
+        # Legacy fields for backward compatibility (from primary target or first enemy)
+        primary_enemy = None
+        if self.primary_target_id:
+            for e in all_enemies:
+                if e.ship_id == self.primary_target_id:
+                    primary_enemy = e
+                    break
+        if not primary_enemy and all_enemies:
+            primary_enemy = all_enemies[0]
+
+        if primary_enemy:
+            rel_pos = primary_enemy.position - ship.position
             distance_m = rel_pos.magnitude
             distance_km = distance_m / 1000
             status["distance_km"] = distance_km
-
-            # Relative position in km (X=forward, Y=right, Z=up in ship frame)
-            # For simplicity, we use world coordinates but label them
             status["relative_position"] = {
-                "x": rel_pos.x / 1000,  # km
+                "x": rel_pos.x / 1000,
                 "y": rel_pos.y / 1000,
                 "z": rel_pos.z / 1000,
             }
-
-            # Calculate relative velocity (how enemy moves relative to us)
-            rel_vel = enemy.velocity - ship.velocity
+            rel_vel = primary_enemy.velocity - ship.velocity
             status["relative_velocity"] = {
-                "x": rel_vel.x / 1000,  # km/s
+                "x": rel_vel.x / 1000,
                 "y": rel_vel.y / 1000,
                 "z": rel_vel.z / 1000,
             }
-
-            # Closing rate (positive = getting closer)
             if distance_m > 0:
-                closing_rate = -rel_pos.normalized().dot(rel_vel) / 1000
-            else:
-                closing_rate = 0
-            status["closing_rate"] = closing_rate
-
-            # Calculate angle from ship nose to enemy (0° = pointing directly at enemy)
-            import math
-            if distance_m > 0:
+                status["closing_rate"] = -rel_pos.normalized().dot(rel_vel) / 1000
                 direction_to_enemy = rel_pos.normalized()
                 dot = ship.forward.dot(direction_to_enemy)
-                dot = max(-1.0, min(1.0, dot))  # Clamp for acos
-                angle_deg = math.degrees(math.acos(dot))
-                status["angle_to_enemy_deg"] = angle_deg
+                dot = max(-1.0, min(1.0, dot))
+                status["angle_to_enemy_deg"] = math.degrees(math.acos(dot))
+            else:
+                status["closing_rate"] = 0
+                status["angle_to_enemy_deg"] = 0
 
-            # Calculate hit probability using simple model
             if distance_km <= 500:
                 base_hit = max(0.05, 0.9 - (distance_km / 500) * 0.85)
             else:
                 base_hit = 0.05
-            status["our_hit_chance"] = base_hit * 100  # percentage
+            status["our_hit_chance"] = base_hit * 100
 
-            # Combat stats
-            status["our_shots"] = ship.shots_fired
-            status["our_hits"] = ship.hits_scored
-            status["enemy_shots"] = enemy.shots_fired
-            status["enemy_hits"] = enemy.hits_scored
-            status["our_damage_dealt"] = ship.damage_dealt_gj
-            status["our_damage_taken"] = ship.damage_taken_gj
+            status["enemy_shots"] = primary_enemy.shots_fired
+            status["enemy_hits"] = primary_enemy.hits_scored
+            status["enemy_hull_percent"] = primary_enemy.hull_integrity
 
-            # Enemy armor status (for visual damage assessment)
-            if enemy.armor:
-                enemy_nose = enemy.armor.get_section("nose")
-                enemy_lateral = enemy.armor.get_section("lateral")
-                enemy_tail = enemy.armor.get_section("tail")
+            if primary_enemy.armor:
+                enemy_nose = primary_enemy.armor.get_section("nose")
+                enemy_lateral = primary_enemy.armor.get_section("lateral")
+                enemy_tail = primary_enemy.armor.get_section("tail")
                 status["enemy_armor"] = {
                     "nose_damage_pct": enemy_nose.damage_percent if enemy_nose else 0,
                     "lateral_damage_pct": enemy_lateral.damage_percent if enemy_lateral else 0,
@@ -599,57 +852,100 @@ class LLMCaptain:
                 }
             else:
                 status["enemy_armor"] = {}
+        else:
+            # No enemies - set defaults
+            status["distance_km"] = 1000
+            status["closing_rate"] = 0
+            status["relative_position"] = {"x": 0, "y": 0, "z": 0}
+            status["relative_velocity"] = {"x": 0, "y": 0, "z": 0}
+            status["angle_to_enemy_deg"] = 0
+            status["our_hit_chance"] = 0
+            status["enemy_shots"] = 0
+            status["enemy_hits"] = 0
+            status["enemy_hull_percent"] = 100
+            status["enemy_armor"] = {}
 
-            # Enemy hull damage (estimated from visible damage)
-            # In real combat you'd estimate from secondary explosions, debris, power fluctuations
-            status["enemy_hull_percent"] = enemy.hull_integrity
-
-        # Build incoming projectiles list with ETAs
+        # Build incoming projectiles with source and bearing
         incoming_projectiles = []
         if hasattr(simulation, 'projectiles') and simulation.projectiles:
             for proj in simulation.projectiles:
                 if hasattr(proj, 'target_id') and proj.target_id == ship.ship_id:
-                    # Calculate distance and ETA
                     proj_pos = proj.position if hasattr(proj, 'position') else Vector3D(0, 0, 0)
                     proj_vel = proj.velocity if hasattr(proj, 'velocity') else Vector3D(0, 0, 0)
 
                     dist_to_ship = (ship.position - proj_pos).magnitude
                     dist_km = dist_to_ship / 1000
 
-                    # Calculate relative velocity toward ship
                     to_ship = (ship.position - proj_pos).normalized()
-                    approach_speed = proj_vel.dot(to_ship)  # m/s toward ship
+                    approach_speed = proj_vel.dot(to_ship)
 
-                    # Estimate ETA
                     if approach_speed > 0:
                         eta_s = dist_to_ship / approach_speed
                     else:
-                        eta_s = 999  # Not approaching
+                        eta_s = 999
 
-                    # Determine weapon type by velocity
                     proj_speed_kps = proj_vel.magnitude / 1000
-                    if proj_speed_kps > 8:
-                        weapon_type = "spinal"
-                    else:
-                        weapon_type = "turret"
+                    weapon_type = "Spinal" if proj_speed_kps > 8 else "Turret"
+
+                    # Get source ship name
+                    source_name = "Unknown"
+                    if hasattr(proj, 'source_ship_id'):
+                        source_ship = simulation.get_ship(proj.source_ship_id)
+                        if source_ship:
+                            source_name = getattr(source_ship, 'name', proj.source_ship_id)
+
+                    # Calculate bearing
+                    bearing = self._calculate_impact_bearing(ship, proj_pos, proj_vel)
 
                     incoming_projectiles.append({
                         "weapon_type": weapon_type,
+                        "source": source_name,
                         "distance_km": dist_km,
                         "eta_seconds": eta_s,
+                        "bearing": bearing,
                     })
 
         # Sort by ETA
         incoming_projectiles.sort(key=lambda p: p["eta_seconds"])
         status["incoming_projectiles"] = incoming_projectiles[:5]  # Limit to 5
 
-        # Check for incoming torpedoes (add to projectiles list)
+        # Check for incoming torpedoes
+        torpedo_threats = []
         if hasattr(simulation, 'torpedoes') and simulation.torpedoes:
             for torp_flight in simulation.torpedoes:
                 torp = torp_flight.torpedo
                 if torp.target_id == ship.ship_id and not torp_flight.is_disabled:
                     dist = (torp.position - ship.position).magnitude / 1000
-                    status["threats"].append(f"Torpedo {dist:.0f}km away")
+                    torpedo_threats.append({
+                        "distance_km": dist,
+                        "source": getattr(torp, 'source_ship_id', 'Unknown'),
+                    })
+        status["torpedo_threats"] = torpedo_threats
+
+        # Add current configuration to status
+        current_maneuver_info = None
+        if ship.current_maneuver:
+            maneuver = ship.current_maneuver
+            maneuver_type = maneuver.maneuver_type.name if hasattr(maneuver, 'maneuver_type') else "UNKNOWN"
+            throttle = maneuver.throttle if hasattr(maneuver, 'throttle') else 1.0
+            current_maneuver_info = {
+                "type": maneuver_type,
+                "throttle": throttle,
+            }
+            # Add heading direction if it's a heading maneuver
+            if hasattr(maneuver, 'heading_direction') and maneuver.heading_direction:
+                current_maneuver_info["heading"] = maneuver.heading_direction
+
+        status["current_config"] = {
+            "primary_target": self.primary_target_id,
+            "weapon_orders": self.current_weapon_orders.copy(),
+            "current_maneuver": current_maneuver_info,
+        }
+
+        # Always include threat assessment so LLM can decide whether to evade
+        if hasattr(simulation, '_get_evasion_status'):
+            evasion_status = simulation._get_evasion_status(ship)
+            status["evasion_status"] = evasion_status
 
         return status
 
@@ -683,11 +979,14 @@ class LLMCaptain:
                 maneuver_type = ManeuverType[maneuver_name]
                 throttle = args.get("throttle", 1.0)
 
-                # For INTERCEPT, we need target_id
+                # For INTERCEPT, use primary target or first enemy
                 target_id = None
                 if maneuver_type == ManeuverType.INTERCEPT:
-                    enemies = simulation.get_enemy_ships(ship_id)
-                    target_id = enemies[0].ship_id if enemies else None
+                    if self.primary_target_id:
+                        target_id = self.primary_target_id
+                    else:
+                        enemies = simulation.get_enemy_ships(ship_id)
+                        target_id = enemies[0].ship_id if enemies else None
 
                 return Maneuver(
                     maneuver_type=maneuver_type,
@@ -700,10 +999,49 @@ class LLMCaptain:
                 print(f"[CAPTAIN] Invalid maneuver: {e}")
                 return None
 
+        elif name == "set_primary_target":
+            # Set the primary target for this captain
+            target_name = args.get("target_name", "")
+            # Find enemy ship by name
+            enemies = simulation.get_enemy_ships(ship_id)
+            for enemy in enemies:
+                enemy_name = getattr(enemy, 'name', enemy.ship_id)
+                if enemy_name.lower() == target_name.lower() or enemy.ship_id == target_name:
+                    self.primary_target_id = enemy.ship_id
+                    return None
+            # If not found, try partial match
+            for enemy in enemies:
+                enemy_name = getattr(enemy, 'name', enemy.ship_id)
+                if target_name.lower() in enemy_name.lower():
+                    self.primary_target_id = enemy.ship_id
+                    return None
+            print(f"[CAPTAIN] Target not found: {target_name}")
+            return None
+
+        elif name == "set_heading":
+            # Set a course in a specific 3D direction
+            from ..simulation import Maneuver, ManeuverType
+            direction = args.get("direction", {"x": 1, "y": 0, "z": 0})
+            throttle = args.get("throttle", 1.0)
+
+            return Maneuver(
+                maneuver_type=ManeuverType.HEADING,
+                target_id=None,
+                start_time=simulation.current_time,
+                duration=30.0,
+                throttle=throttle,
+                heading_direction=direction,
+            )
+
         elif name == "set_weapons_order":
             from ..firecontrol import WeaponsCommand, WeaponsOrder
-            enemies = simulation.get_enemy_ships(ship_id)
-            target_id = enemies[0].ship_id if enemies else None
+
+            # Use primary target or first enemy
+            if self.primary_target_id:
+                target_id = self.primary_target_id
+            else:
+                enemies = simulation.get_enemy_ships(ship_id)
+                target_id = enemies[0].ship_id if enemies else None
 
             # Handle new independent spinal/turret modes
             orders = []
@@ -723,6 +1061,8 @@ class LLMCaptain:
                     min_hit_probability=args.get("spinal_min_probability", 0.3),
                     max_range_km=args.get("spinal_max_range_km", 500.0),
                 ))
+                # Track current weapon orders
+                self.current_weapon_orders["spinal"] = spinal_mode
 
             # Turret weapon order
             turret_mode = args.get("turret_mode")
@@ -739,6 +1079,8 @@ class LLMCaptain:
                     min_hit_probability=args.get("turret_min_probability", 0.3),
                     max_range_km=args.get("turret_max_range_km", 300.0),
                 ))
+                # Track current weapon orders
+                self.current_weapon_orders["turret"] = turret_mode
 
             # If no specific modes set, default both to FIRE_WHEN_OPTIMAL
             if not orders:
@@ -748,6 +1090,8 @@ class LLMCaptain:
                     target_id=target_id,
                     min_hit_probability=0.3,
                 ))
+                self.current_weapon_orders["spinal"] = "FIRE_WHEN_OPTIMAL"
+                self.current_weapon_orders["turret"] = "FIRE_WHEN_OPTIMAL"
 
             return {
                 "type": "weapons_orders",
@@ -774,7 +1118,15 @@ class LLMCaptain:
         elif name == "send_message":
             # Queue message for delivery and record in history
             message = args.get("message", "")
-            self.pending_message = message
+            recipient = args.get("recipient", "ALL_ENEMIES")
+            target_ship = args.get("target_ship", None)
+
+            # Store message with recipient info
+            self.pending_message = {
+                "content": message,
+                "recipient": recipient,
+                "target_ship": target_ship,
+            }
             self._record_sent_message(message, simulation.current_time)
             return None
 
@@ -790,8 +1142,21 @@ class LLMCaptain:
             print(f"[CAPTAIN] Unknown tool: {name}")
             return None
 
-    def get_pending_message(self) -> Optional[str]:
-        """Get and clear pending outgoing message."""
+    def get_pending_message(self) -> Optional[Dict[str, Any]]:
+        """
+        Get and clear pending outgoing message.
+
+        Returns:
+            Dict with 'content', 'recipient', 'target_ship' keys, or None
+        """
         msg = self.pending_message
         self.pending_message = None
+
+        # Handle legacy string format
+        if isinstance(msg, str):
+            return {
+                "content": msg,
+                "recipient": "ALL_ENEMIES",
+                "target_ship": None,
+            }
         return msg

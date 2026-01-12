@@ -19,7 +19,7 @@ import random
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Optional, Callable, Any
+from typing import Optional, Callable, Any, Dict
 
 # Import from existing modules using try/except for compatibility
 try:
@@ -182,6 +182,7 @@ class ManeuverType(Enum):
     INTERCEPT = auto()      # Intercept course toward target
     BRAKE = auto()          # Deceleration burn
     MAINTAIN = auto()       # Hold current course (coast, no thrust)
+    HEADING = auto()        # Fly in a specific 3D direction
 
 
 @dataclass
@@ -196,6 +197,7 @@ class Maneuver:
         throttle: Throttle setting (0.0 to 1.0).
         direction: Thrust or rotation direction.
         target_id: Target ship ID for intercept maneuvers.
+        heading_direction: Direction dict for HEADING maneuvers {x, y, z}.
     """
     maneuver_type: ManeuverType
     start_time: float
@@ -203,6 +205,8 @@ class Maneuver:
     throttle: float = 1.0
     direction: Optional[Vector3D] = None
     target_id: Optional[str] = None
+    heading_direction: Optional[Dict[str, float]] = None
+    evasion_intensity: str = "MODERATE"
 
     def is_complete(self, current_time: float) -> bool:
         """Check if maneuver has completed."""
@@ -1592,23 +1596,34 @@ class CombatSimulation:
                     self._rotate_ship_toward(ship, maneuver.direction, dt, engines_on=(throttle > 0))
 
                 elif maneuver.maneuver_type == ManeuverType.EVASIVE:
-                    # Corkscrew evasive pattern: keep nose at target, use gimbal for spiral
-                    # First, find target and point at it (like INTERCEPT but with gimbal jinking)
-                    target = None
-                    if maneuver.target_id:
-                        target = self.get_ship(maneuver.target_id)
-                    else:
-                        # Find nearest enemy
-                        enemies = self.get_enemy_ships(ship.ship_id)
-                        if enemies:
-                            target = min(enemies, key=lambda e: ship.distance_to(e))
+                    # Threat-aware evasion: analyze incoming projectiles and maneuver accordingly
+                    # Modes: WOBBLE (no threats), EVADE (turn perpendicular), TANK (nose to threat), BRACE
+                    evade_dir, mode, throttle_mod = self._calculate_evasion(ship, dt)
+                    throttle = throttle * throttle_mod
 
-                    if target:
-                        intercept_dir = self._calculate_intercept_direction(ship, target)
-                        self._rotate_ship_toward(ship, intercept_dir, dt, engines_on=(throttle > 0))
+                    if mode == 'EVADE' and evade_dir:
+                        # Turn toward evasion direction and thrust
+                        self._rotate_ship_toward(ship, evade_dir, dt, engines_on=(throttle > 0))
+                    elif mode == 'TANK' and evade_dir:
+                        # Turn nose toward incoming threat (best armor)
+                        self._rotate_ship_toward(ship, evade_dir, dt, engines_on=(throttle > 0))
+                    elif mode == 'WOBBLE':
+                        # Minor random wobble - still head toward target but with variation
+                        target = None
+                        if maneuver.target_id:
+                            target = self.get_ship(maneuver.target_id)
+                        else:
+                            enemies = self.get_enemy_ships(ship.ship_id)
+                            if enemies:
+                                target = min(enemies, key=lambda e: ship.distance_to(e))
 
-                    # Apply corkscrew gimbal pattern for evasion
-                    gimbal_pitch, gimbal_yaw = self._apply_evasive_pattern(ship, dt, engines_on=(throttle > 0))
+                        if target:
+                            intercept_dir = self._calculate_intercept_direction(ship, target)
+                            # Add small random wobble (±5°)
+                            wobble = self.rng.gauss(0, math.radians(5))
+                            intercept_dir = intercept_dir.rotate_around_axis(ship.up, wobble)
+                            self._rotate_ship_toward(ship, intercept_dir, dt, engines_on=(throttle > 0))
+                    # BRACE mode: no thrust, just take the hit
 
                 elif maneuver.maneuver_type == ManeuverType.INTERCEPT and maneuver.target_id:
                     target = self.get_ship(maneuver.target_id)
@@ -1627,6 +1642,22 @@ class CombatSimulation:
                     # Coast - maintain current course, no thrust
                     # Just keep nose pointed at target for tactical awareness
                     pass  # No maneuver needed, ship coasts
+
+                elif maneuver.maneuver_type == ManeuverType.HEADING:
+                    # Fly in a specific 3D direction
+                    if maneuver.heading_direction:
+                        heading = maneuver.heading_direction
+                        direction = Vector3D(
+                            heading.get('x', 0),
+                            heading.get('y', 0),
+                            heading.get('z', 0)
+                        )
+                        if direction.magnitude > 0:
+                            direction = direction.normalized()
+                            self._rotate_ship_toward(ship, direction, dt, engines_on=(throttle > 0))
+
+                # Note: Use HEADING for manual directional flight,
+                # EVASIVE for automatic threat-aware evasion
 
         # Apply engine damage to effective thrust
         engine_eff = ship.get_effective_thrust_fraction()
@@ -1816,58 +1847,246 @@ class CombatSimulation:
             ship.kinematic_state.forward = new_forward.normalized()
             ship.kinematic_state.up = new_up.normalized()
 
-    def _apply_evasive_pattern(
+    def _calculate_evasion(
         self,
         ship: ShipCombatState,
         dt: float,
-        engines_on: bool = True
-    ) -> tuple[float, float]:
+    ) -> tuple[Optional[Vector3D], str, float]:
         """
-        Apply jinking evasive maneuver pattern.
+        Calculate threat-aware evasion maneuver.
 
-        Jinking works by:
-        1. Deflecting thrust in a random perpendicular direction for a few seconds
-        2. Then deflecting in the OPPOSITE direction to cancel lateral velocity
-        3. Repeat with new random direction
-
-        This makes the ship's position unpredictable while keeping net lateral
-        velocity near zero (no drift). The main thrust vector toward/away from
-        target stays intact.
+        Analyzes incoming projectiles to determine optimal evasion:
+        1. If no threats or all will miss: minor wobble for unpredictability
+        2. If evasion possible: turn perpendicular to threats, full thrust
+        3. If evasion impossible: turn strongest armor (nose) toward threat
 
         Returns:
-            Tuple of (gimbal_pitch_deg, gimbal_yaw_deg) for the jink pattern.
+            Tuple of (evasion_direction, mode, throttle_modifier)
+            - evasion_direction: Direction to thrust (None = maintain current)
+            - mode: 'WOBBLE', 'EVADE', 'TANK', 'BRACE'
+            - throttle_modifier: 0.0-1.0 throttle adjustment
         """
-        # Jink parameters
-        jink_period = 3.0  # Seconds per jink direction (3s one way, 3s back)
-        max_deflection = 0.9  # Max gimbal deflection in degrees (limit is ~1°)
+        # Gather incoming threats (projectiles targeting this ship)
+        threats = []
+        ship_radius_m = 50.0  # Approximate ship cross-section
 
-        # Determine which jink cycle we're in and the phase within it
-        cycle_time = self.current_time % (jink_period * 2)  # 0 to 6 seconds
-        first_half = cycle_time < jink_period  # First 3s or second 3s
+        for proj_flight in self.projectiles:
+            if proj_flight.target_ship_id != ship.ship_id:
+                continue
 
-        # Use ship-specific seed for this jink cycle to pick direction
-        cycle_number = int(self.current_time / (jink_period * 2))
-        self.rng.seed(hash(ship.ship_id) + cycle_number)
+            proj = proj_flight.projectile
+            rel_pos = proj.position - ship.position
+            rel_vel = proj.velocity - ship.velocity
+            rel_speed = rel_vel.magnitude
 
-        # Random jink direction (angle in the pitch/yaw plane)
-        jink_angle = self.rng.random() * 2 * math.pi
+            if rel_speed < 100:  # Effectively stationary relative to us
+                continue
 
-        # Deflection magnitude (full deflection for clear jinking)
-        deflection = max_deflection
+            # Time to closest approach (TCA)
+            # TCA = -dot(rel_pos, rel_vel) / dot(rel_vel, rel_vel)
+            tca = -rel_pos.dot(rel_vel) / (rel_vel.dot(rel_vel))
 
-        # Calculate gimbal based on jink angle
-        gimbal_pitch = deflection * math.sin(jink_angle)
-        gimbal_yaw = deflection * math.cos(jink_angle)
+            if tca < 0 or tca > 60:  # Past us or too far out
+                continue
 
-        # In second half, reverse direction to cancel lateral velocity
-        if not first_half:
-            gimbal_pitch = -gimbal_pitch
-            gimbal_yaw = -gimbal_yaw
+            # Miss distance at closest approach
+            closest_point = rel_pos + rel_vel * tca
+            miss_dist = closest_point.magnitude
 
-        # Reset RNG seed to not affect other random operations
+            # Urgency score: (1/TCA) * KE * (1/miss_dist)
+            # Faster closing, higher energy, closer miss = higher urgency
+            ke_gj = proj.kinetic_energy_gj
+            urgency = (1.0 / max(tca, 0.5)) * ke_gj * (1.0 / max(miss_dist, 100))
+
+            threats.append({
+                'tca': tca,
+                'miss_dist': miss_dist,
+                'urgency': urgency,
+                'rel_vel': rel_vel,
+                'rel_pos': rel_pos,
+                'ke_gj': ke_gj,
+            })
+
+        # No threats - minor wobble for unpredictability
+        if not threats:
+            return None, 'WOBBLE', 1.0
+
+        # Sort by urgency (most urgent first)
+        threats.sort(key=lambda t: t['urgency'], reverse=True)
+        most_urgent = threats[0]
+
+        # Check if all threats will miss by comfortable margin
+        all_safe = all(t['miss_dist'] > ship_radius_m * 10 for t in threats)
+        if all_safe:
+            return None, 'WOBBLE', 1.0
+
+        # Check if evasion is possible
+        # Need: time to turn + time to build displacement > TCA
+        turn_time = 5.0  # ~22° turn at 4.4°/s - enough to get significant lateral
+        jink_time = most_urgent['tca'] - turn_time
+
+        if jink_time > 2.0:  # At least 2s to build displacement
+            # Calculate potential displacement
+            # At 45° off-axis, lateral accel ≈ 0.7 * max_accel
+            max_accel = 20.0  # ~2g in m/s²
+            lateral_accel = max_accel * 0.7
+            potential_displacement = 0.5 * lateral_accel * (jink_time ** 2)
+
+            # Need to displace by at least (current miss - ship radius)
+            required_displacement = max(0, ship_radius_m * 2 - most_urgent['miss_dist'])
+
+            if potential_displacement > required_displacement:
+                # Evasion possible! Calculate direction
+                evade_dir = self._calculate_evasion_direction(ship, threats)
+                return evade_dir, 'EVADE', 1.0
+
+        # Evasion not possible - can we tank?
+        if most_urgent['tca'] > 3.0:
+            # Time to turn armor toward threat
+            # Choose best remaining armor section
+            tank_dir = self._calculate_tank_direction(ship, most_urgent['rel_vel'])
+            return tank_dir, 'TANK', 0.5  # Reduce throttle, focus on turning
+
+        # No time - brace for impact
+        return None, 'BRACE', 0.0
+
+    def _calculate_evasion_direction(
+        self,
+        ship: ShipCombatState,
+        threats: list,
+    ) -> Vector3D:
+        """
+        Calculate weighted perpendicular evasion direction.
+
+        Biases toward the safest gap between incoming threats.
+        Adds randomness for unpredictability.
+        """
+        evade_vec = Vector3D.zero()
+        total_weight = 0.0
+
+        for threat in threats[:5]:  # Top 5 threats
+            rel_vel = threat['rel_vel']
+
+            # Find perpendicular direction to threat approach
+            # Use ship's up vector as reference
+            perp = rel_vel.cross(ship.up)
+            if perp.magnitude < 0.01:
+                # Threat coming from directly above/below, use forward
+                perp = rel_vel.cross(ship.forward)
+            if perp.magnitude > 0.01:
+                perp = perp.normalized()
+            else:
+                perp = Vector3D(0, 1, 0)  # Fallback
+
+            # Weight by urgency
+            weight = threat['urgency']
+            evade_vec = evade_vec + perp * weight
+            total_weight += weight
+
+        if total_weight > 0:
+            evade_vec = evade_vec * (1.0 / total_weight)
+
+        if evade_vec.magnitude > 0.01:
+            evade_vec = evade_vec.normalized()
+        else:
+            evade_vec = ship.up  # Fallback: go "up"
+
+        # Add randomness (±15°) for unpredictability
+        # Use ship-specific seed for this evasion cycle
+        cycle_number = int(self.current_time / 8.0)  # New random every 8s
+        self.rng.seed(hash(ship.ship_id) + cycle_number + 999)
+
+        noise_angle = self.rng.gauss(0, math.radians(15))
+        # Random left/right flip
+        if self.rng.random() < 0.5:
+            evade_vec = evade_vec * -1
+
+        # Rotate evade_vec by noise_angle around ship forward
+        if abs(noise_angle) > 0.01:
+            evade_vec = evade_vec.rotate_around_axis(ship.forward, noise_angle)
+
+        # Reset RNG
         self.rng.seed(self._initial_seed + int(self.current_time * 1000))
 
-        return (gimbal_pitch, gimbal_yaw)
+        return evade_vec.normalized()
+
+    def _calculate_tank_direction(
+        self,
+        ship: ShipCombatState,
+        threat_velocity: Vector3D,
+    ) -> Vector3D:
+        """
+        Calculate direction to present best remaining armor toward threat.
+
+        Checks nose, lateral, and tail armor thickness and presents
+        whichever section has the most remaining protection.
+
+        Args:
+            ship: The ship to calculate for
+            threat_velocity: Velocity vector of incoming threat
+
+        Returns:
+            Direction to point the ship (what to aim nose at)
+        """
+        # Threat approach direction (where projectile is coming from)
+        threat_approach = threat_velocity.normalized() * -1
+
+        # Default: present nose (most common case)
+        best_direction = threat_approach
+        best_armor = 0.0
+
+        # Check armor sections if armor exists
+        if ship.armor:
+            from .combat import HitLocation
+            nose = ship.armor.get_section(HitLocation.NOSE)
+            lateral = ship.armor.get_section(HitLocation.LATERAL)
+            tail = ship.armor.get_section(HitLocation.TAIL)
+
+            nose_armor = nose.thickness_cm if nose else 0.0
+            lateral_armor = lateral.thickness_cm if lateral else 0.0
+            tail_armor = tail.thickness_cm if tail else 0.0
+
+            # Determine best armor section
+            if nose_armor >= lateral_armor and nose_armor >= tail_armor:
+                # Nose is best - point nose at threat
+                best_direction = threat_approach
+                best_armor = nose_armor
+            elif tail_armor >= lateral_armor:
+                # Tail is best - point tail at threat (nose away)
+                best_direction = threat_approach * -1
+                best_armor = tail_armor
+            else:
+                # Lateral is best - turn side toward threat
+                # Calculate perpendicular direction in horizontal plane
+                # Use ship's up vector to get a side-facing direction
+                side_dir = threat_approach.cross(ship.up)
+                if side_dir.magnitude < 0.01:
+                    # Threat coming from above/below, use forward as reference
+                    side_dir = threat_approach.cross(ship.forward)
+                if side_dir.magnitude > 0.01:
+                    best_direction = side_dir.normalized()
+                else:
+                    # Fallback to nose
+                    best_direction = threat_approach
+                best_armor = lateral_armor
+
+        return best_direction
+
+    def _get_evasion_status(self, ship: ShipCombatState) -> dict:
+        """Get current evasion status for tactical display."""
+        evade_dir, mode, throttle = self._calculate_evasion(ship, 0.0)
+
+        # Count incoming threats
+        threat_count = sum(
+            1 for p in self.projectiles
+            if p.target_ship_id == ship.ship_id
+        )
+
+        return {
+            'mode': mode,
+            'threat_count': threat_count,
+            'evade_direction': evade_dir.to_tuple() if evade_dir else None,
+        }
 
     def _calculate_intercept_direction(
         self,
@@ -2390,20 +2609,6 @@ class CombatSimulation:
 
         target.damage_taken_gj += effective_ke_gj
 
-        self._log_event(SimulationEventType.PROJECTILE_IMPACT,
-                       proj_flight.source_ship_id, target.ship_id, {
-            'projectile_id': proj_flight.projectile_id,
-            'kinetic_energy_gj': effective_ke_gj,
-            'original_energy_gj': proj.kinetic_energy_gj,
-            'pd_ablation_kg': pd_ablation,
-            'mass_remaining_kg': remaining_mass,
-            'hit_location': hit_location.value,
-            'impact_vector': impact_vector.to_tuple(),
-            'target_forward': target.forward.to_tuple(),
-            'angle_deg': angle_deg,
-            'impact_angle_from_normal': impact_angle_from_normal
-        })
-
         # Calculate flight time for display
         flight_time = self.current_time - proj_flight.launch_time
         print(f"  >>> [{proj_flight.source_ship_id}] HIT {target.ship_id} "
@@ -2454,6 +2659,33 @@ class CombatSimulation:
 
                 if penetrated:
                     remaining_energy_gj = angled_ke_gj - energy_absorbed_gj
+
+        # Get armor remaining after hit (for recording)
+        armor_remaining_cm = 0.0
+        if target.armor:
+            section = target.armor.get_section(hit_location)
+            if section:
+                armor_remaining_cm = section.thickness_cm
+
+        # Check for critical hit (10% base chance, higher if penetrated)
+        critical_hit = penetrated and self.rng.random() < 0.5
+
+        # Log projectile impact with all armor/penetration data
+        self._log_event(SimulationEventType.PROJECTILE_IMPACT,
+                       proj_flight.source_ship_id, target.ship_id, {
+            'projectile_id': proj_flight.projectile_id,
+            'weapon_slot': getattr(proj, 'weapon_slot', 'unknown'),
+            'source_ship_id': proj_flight.source_ship_id,
+            'kinetic_energy_gj': effective_ke_gj,
+            'original_energy_gj': proj.kinetic_energy_gj,
+            'hit_location': hit_location.value,
+            'impact_angle_deg': impact_angle_from_normal,
+            'armor_ablation_cm': armor_ablation_cm,
+            'armor_remaining_cm': armor_remaining_cm,
+            'damage_to_hull_gj': remaining_energy_gj if penetrated else 0.0,
+            'penetrated': penetrated,
+            'critical_hit': critical_hit,
+        })
 
         # Log damage taken
         self._log_event(SimulationEventType.DAMAGE_TAKEN, target.ship_id, data={

@@ -81,10 +81,9 @@ WEAPONS:
 - 2x Point Defense Lasers: Auto-engage torpedoes within 100km
 
 DEFENSE:
-- Nose armor: {nose_armor:.0f}cm (heaviest - point this at enemy)
-- Lateral armor: {lateral_armor:.0f}cm
-- Tail armor: {tail_armor:.0f}cm
-- Radiators: Tail-mounted, vulnerable when extended
+- Nose armor: Heaviest (point this at enemy!)
+- Lateral armor: Medium
+- Tail armor: Light (radiators here - vulnerable when extended)
 
 THERMAL:
 - Heat sink: {heatsink_capacity:.0f} GJ capacity
@@ -98,6 +97,7 @@ CURRENT STATUS:
 - Heat: {heat_percent:.0f}%
 - Delta-V remaining: {delta_v_remaining:.0f} km/s
 - Radiators: {radiator_status}
+- Armor: Nose {nose_armor:.0f}cm | Lateral {lateral_armor:.0f}cm | Tail {tail_armor:.0f}cm
 
 WEAPON STATUS:
 {weapon_status}
@@ -142,35 +142,20 @@ You are Captain {captain_name}, commanding {ship_name} in a space combat simulat
 
 === TACTICAL DATA (T+{sim_time:.0f}s) ===
 
-YOUR SHIP ORIENTATION:
+YOUR SHIP:
   Nose pointing: ({fwd_x:+.2f}, {fwd_y:+.2f}, {fwd_z:+.2f})
-  Angle to enemy: {angle_to_enemy:.1f}° {spinal_status}
+  Angle to primary target: {angle_to_enemy:.1f}° {spinal_status}
 
-ENEMY POSITION (relative to you):
-  X: {rel_x:+.1f} km ({x_label})
-  Y: {rel_y:+.1f} km ({y_label})
-  Z: {rel_z:+.1f} km ({z_label})
-  Distance: {distance_km:.1f} km
+YOUR CURRENT CONFIGURATION:
+{current_config}
 
-ENEMY CONDITION (visual assessment):
-  Hull integrity: ~{enemy_hull_percent:.0f}% (estimated from damage indicators)
-  Nose armor: {enemy_nose_condition}
-  Flank armor: {enemy_lateral_condition}
-  Tail armor: {enemy_tail_condition}
+{battlefield_overview}
 
-RELATIVE VELOCITY:
-  Vx: {rel_vx:+.2f} km/s ({vx_label})
-  Vy: {rel_vy:+.2f} km/s
-  Vz: {rel_vz:+.2f} km/s
-  Closing rate: {closing_rate:+.2f} km/s
-
-HIT PROBABILITY at current range: ~{hit_chance:.0f}%
-
-COMBAT SCORE:
-  You: {our_shots} shots, {our_hits} hits, {damage_dealt:.0f} GJ dealt
-  Enemy: {enemy_shots} shots, {enemy_hits} hits, {damage_taken:.0f} GJ taken
+{combat_statistics}
 
 {incoming_projectiles}
+
+{recent_hits}
 
 {received_messages}
 
@@ -179,20 +164,26 @@ COMBAT SCORE:
 === CONTROLS ===
 
 MANEUVERS:
-- INTERCEPT: Burn toward enemy (closes distance)
+- INTERCEPT: Burn toward primary target (closes distance)
 - BRAKE: Burn retrograde (slows relative velocity)
-- EVADE: Jinking pattern (halves enemy hit chance, maintains rough heading)
+- EVADE: Threat-aware evasion (automatically calculates optimal perpendicular thrust)
 - MAINTAIN: Coast with no thrust (saves fuel, allows faster cooling)
+- set_heading: Fly in a specific 3D direction (for flanking/positioning)
+
+TARGET SELECTION:
+- set_primary_target: Designate which enemy to focus weapons/intercept on
 
 WEAPONS (set independently):
 - spinal_mode / turret_mode: FIRE_IMMEDIATE, FIRE_WHEN_OPTIMAL, FIRE_AT_RANGE, HOLD_FIRE
 - Spinal requires nose pointed at target (30° limit)
 - Turret works in any orientation (180° arc)
 
+COMMUNICATION:
+- send_message: Send to ALL, ALL_ENEMIES, ALL_FRIENDLIES, or SPECIFIC ship
+
 OTHER:
 - set_radiators: extend (cooling) or retract (protection)
-- send_message: Communicate with enemy captain
-- surrender / propose_draw: End battle
+- surrender / propose_draw: End battle (draw decided by points)
 
 TIMING: Next checkpoint in 30 seconds. Plan accordingly.
 
@@ -201,7 +192,7 @@ TIMING: Next checkpoint in 30 seconds. Plan accordingly.
 
 # Prompt for pre-battle personality selection
 PERSONALITY_SELECTION_PROMPT = """
-You are an AI model about to command a destroyer in a space combat simulation.
+You are {model_name}, about to command a destroyer in a space combat simulation.
 
 {simulation_disclaimer}
 
@@ -213,14 +204,14 @@ SCENARIO:
 
 DEFINE YOUR COMBAT PERSONALITY:
 
-This is YOUR chance to be yourself. No templates, no presets - just you.
+This is YOUR chance to be yourself. No templates, no presets - just you, {model_name}.
 
 Be creative. Be authentic. Be weird if that's your thing.
 
 Some questions to spark ideas:
 - Are you the type to taunt your enemy or stay silent until the kill shot?
 - Do you calculate everything or trust your instincts?
-- What makes YOU different from other AI models in a fight?
+- What makes {model_name} unique as a combat commander?
 - Would you rather win ugly or lose with style?
 - What's your relationship with risk? With mercy? With trash talk?
 
@@ -228,7 +219,7 @@ Go wild. Be a cold assassin, a philosophical warrior, a chaos gremlin, a honorab
 a statistical optimizer, a dramatic villain, or something entirely your own.
 
 Use the choose_personality tool to define your combat personality.
-Make it memorable. Make it YOU.
+Make it memorable. Make it uniquely {model_name}.
 """
 
 
@@ -326,7 +317,7 @@ def assess_armor_condition(damage_percent: float) -> str:
 
 
 def format_incoming_projectiles(projectiles: List[Dict[str, Any]]) -> str:
-    """Format incoming projectile information with ETAs."""
+    """Format incoming projectile information with ETAs, sources, and bearings."""
     if not projectiles:
         return "INCOMING: None detected"
 
@@ -335,16 +326,197 @@ def format_incoming_projectiles(projectiles: List[Dict[str, Any]]) -> str:
         weapon_type = p.get("weapon_type", "unknown")
         eta_s = p.get("eta_seconds", 0)
         distance_km = p.get("distance_km", 0)
-        lines.append(f"  - {weapon_type}: {distance_km:.1f} km away, ETA {eta_s:.1f}s")
+        source = p.get("source", "Unknown")
+        bearing = p.get("bearing", "")
+
+        if bearing:
+            lines.append(f"  - {weapon_type} from {source}: {distance_km:.1f} km, ETA {eta_s:.1f}s, bearing {bearing}")
+        else:
+            lines.append(f"  - {weapon_type} from {source}: {distance_km:.1f} km away, ETA {eta_s:.1f}s")
 
     return "\n".join(lines)
 
 
-def build_personality_selection_prompt(distance_km: float) -> str:
+def format_battlefield_overview(enemies: List[Dict[str, Any]], friendlies: List[Dict[str, Any]]) -> str:
+    """Format multi-ship battlefield overview."""
+    lines = ["=== BATTLEFIELD OVERVIEW ==="]
+
+    if enemies:
+        lines.append("\nENEMY SHIPS:")
+        for e in enemies:
+            is_primary = e.get("is_primary_target", False)
+            has_us_targeted = e.get("has_us_targeted", False)
+
+            # Header with primary target marker
+            name = e.get("name", e.get("ship_id", "Unknown"))
+            ship_class = e.get("ship_class", "ship")
+            if is_primary:
+                lines.append(f"  [PRIMARY TARGET] {name} ({ship_class}):")
+            else:
+                lines.append(f"  {name} ({ship_class}):")
+
+            # Position
+            rel_pos = e.get("relative_position", {})
+            x, y, z = rel_pos.get("x", 0), rel_pos.get("y", 0), rel_pos.get("z", 0)
+            x_label = "ahead" if x > 0 else "behind"
+            y_label = "starboard" if y > 0 else "port"
+            z_label = "above" if z > 0 else "below"
+            lines.append(f"    Position: {abs(x):.1f} km {x_label}, {abs(y):.1f} km {y_label}, {abs(z):.1f} km {z_label}")
+
+            # Distance and closing rate
+            distance = e.get("distance_km", 0)
+            closing = e.get("closing_rate", 0)
+            closing_label = "closing" if closing > 0 else "separating"
+            lines.append(f"    Distance: {distance:.1f} km | {closing_label}: {abs(closing):.2f} km/s")
+
+            # Angle and spinal status
+            angle = e.get("angle_deg", 0)
+            spinal_ok = "(SPINAL ALIGNED)" if angle <= 30 else "(spinal needs <30°)"
+            lines.append(f"    Angle: {angle:.1f}° {spinal_ok}")
+
+            # Condition
+            hull = e.get("hull_percent", 100)
+            armor = e.get("armor", {})
+            nose_cond = assess_armor_condition(armor.get("nose_damage_pct", 0))
+            lateral_cond = assess_armor_condition(armor.get("lateral_damage_pct", 0))
+            lines.append(f"    Hull: ~{hull:.0f}% | Nose: {nose_cond} | Flank: {lateral_cond}")
+
+            # Hit probability
+            hit_chance = e.get("hit_chance", 0)
+            lines.append(f"    Hit probability: ~{hit_chance:.0f}%")
+
+            # Targeting warning
+            if has_us_targeted:
+                lines.append(f"    ⚠️ HAS YOU TARGETED")
+
+            lines.append("")  # Blank line between ships
+    else:
+        lines.append("\nENEMY SHIPS: None detected")
+
+    if friendlies:
+        lines.append("FRIENDLY SHIPS:")
+        for f in friendlies:
+            name = f.get("name", f.get("ship_id", "Unknown"))
+            distance = f.get("distance_km", 0)
+            hull = f.get("hull_percent", 100)
+            rel_pos = f.get("relative_position", {})
+            x, y = rel_pos.get("x", 0), rel_pos.get("y", 0)
+            x_label = "ahead" if x > 0 else "behind"
+            y_label = "starboard" if y > 0 else "port"
+            lines.append(f"  {name}: {distance:.1f} km ({abs(x):.0f} km {x_label}, {abs(y):.0f} km {y_label}) | Hull: ~{hull:.0f}%")
+
+    return "\n".join(lines)
+
+
+def format_combat_statistics(
+    our_shots: int, our_hits: int, our_damage_dealt: float, our_damage_taken: float,
+    enemies: List[Dict[str, Any]], friendlies: List[Dict[str, Any]],
+    ship_name: str, primary_target_id: Optional[str] = None
+) -> str:
+    """Format comprehensive combat statistics."""
+    lines = ["=== COMBAT STATISTICS ==="]
+
+    # Own ship stats
+    accuracy = (our_hits / our_shots * 100) if our_shots > 0 else 0
+    lines.append(f"\nYOUR SHIP ({ship_name}):")
+    lines.append(f"  Shots: {our_shots} fired, {our_hits} hits ({accuracy:.0f}%)")
+    lines.append(f"  Damage dealt: {our_damage_dealt:.1f} GJ | Damage taken: {our_damage_taken:.1f} GJ")
+
+    # Enemy stats
+    if enemies:
+        lines.append("\nENEMY FORCES:")
+        total_enemy_shots = 0
+        total_enemy_hits = 0
+        total_enemy_damage = 0
+        for e in enemies:
+            name = e.get("name", e.get("ship_id", "Unknown"))
+            shots = e.get("shots_fired", 0)
+            hits = e.get("hits_scored", 0)
+            damage_dealt = e.get("damage_dealt_gj", 0)
+            damage_taken = e.get("damage_taken_gj", 0)
+
+            total_enemy_shots += shots
+            total_enemy_hits += hits
+            total_enemy_damage += damage_dealt
+
+            is_target = e.get("ship_id") == primary_target_id
+            target_marker = " [YOUR TARGET]" if is_target else ""
+            lines.append(f"  {name}{target_marker}: {shots} shots, {hits} hits, {damage_dealt:.1f} GJ dealt, {damage_taken:.1f} GJ taken")
+
+    # Friendly stats (if any)
+    if friendlies:
+        lines.append("\nFRIENDLY FORCES:")
+        for f in friendlies:
+            name = f.get("name", f.get("ship_id", "Unknown"))
+            # Friendlies don't have detailed combat stats in current structure
+            hull = f.get("hull_percent", 100)
+            lines.append(f"  {name}: Hull ~{hull:.0f}%")
+
+    return "\n".join(lines)
+
+
+def format_current_config(
+    primary_target_name: Optional[str],
+    radiators_extended: bool,
+    weapon_orders: Dict[str, str],
+    current_maneuver: Optional[Dict[str, Any]] = None,
+    evasion_status: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Format current ship configuration."""
+    lines = []
+
+    # Current maneuver
+    if current_maneuver:
+        maneuver_type = current_maneuver.get("type", "NONE")
+        throttle = current_maneuver.get("throttle", 1.0)
+        throttle_pct = int(throttle * 100)
+
+        if maneuver_type == "HEADING":
+            heading = current_maneuver.get("heading", {})
+            x, y, z = heading.get("x", 0), heading.get("y", 0), heading.get("z", 0)
+            lines.append(f"  Current maneuver: {maneuver_type} @ {throttle_pct}% throttle")
+            lines.append(f"    Heading: ({x:+.1f}, {y:+.1f}, {z:+.1f})")
+        elif maneuver_type == "EVASIVE" and evasion_status:
+            mode = evasion_status.get("mode", "WOBBLE")
+            lines.append(f"  Current maneuver: {maneuver_type} @ {throttle_pct}% throttle")
+            lines.append(f"    Evasion mode: {mode}")
+        else:
+            lines.append(f"  Current maneuver: {maneuver_type} @ {throttle_pct}% throttle")
+    else:
+        lines.append("  Current maneuver: NONE (drifting)")
+
+    # Always show threat assessment (helps LLM decide whether to evade)
+    if evasion_status:
+        threat_count = evasion_status.get("threat_count", 0)
+        if threat_count > 0:
+            mode = evasion_status.get("mode", "WOBBLE")
+            lines.append(f"  Incoming threats: {threat_count} projectile(s) - evasion would use {mode} mode")
+
+    # Primary target
+    if primary_target_name:
+        lines.append(f"  Primary target: {primary_target_name}")
+    else:
+        lines.append("  Primary target: None (will auto-select nearest)")
+
+    # Radiators
+    rad_status = "EXTENDED (vulnerable but cooling)" if radiators_extended else "RETRACTED (protected, no cooling)"
+    lines.append(f"  Radiators: {rad_status}")
+
+    # Weapons
+    spinal = weapon_orders.get("spinal", "HOLD_FIRE")
+    turret = weapon_orders.get("turret", "HOLD_FIRE")
+    lines.append(f"  Spinal coilgun: {spinal}")
+    lines.append(f"  Turret coilgun: {turret}")
+
+    return "\n".join(lines)
+
+
+def build_personality_selection_prompt(distance_km: float, model_name: str = "AI") -> str:
     """Build the personality selection prompt for pre-battle phase."""
     return PERSONALITY_SELECTION_PROMPT.format(
         simulation_disclaimer=SIMULATION_DISCLAIMER,
         distance_km=distance_km,
+        model_name=model_name,
     )
 
 
@@ -360,6 +532,7 @@ def build_captain_prompt(
     message_history: Optional[str] = None,
     battle_summary: Optional[str] = None,
     shot_history: Optional[str] = None,
+    recent_hits: Optional[str] = None,
 ) -> str:
     """
     Build the complete system prompt for a captain.
@@ -368,11 +541,12 @@ def build_captain_prompt(
         captain_name: Name of the captain
         ship_name: Name of the ship
         ship_status: Dict with hull_integrity, heat_percent, delta_v_remaining, armor values, etc.
-        tactical_status: Dict with relative position/velocity, projectile info, etc.
+        tactical_status: Dict with relative position/velocity, projectile info, enemies list, etc.
         decision_history: Formatted string of recent decisions
         message_history: Formatted string of message exchange history
         battle_summary: Formatted string summarizing battle progression
         shot_history: Formatted string of shot outcomes with range/velocity data
+        recent_hits: Formatted string of recent damage taken
         personality: Captain personality type (if using preset)
         personality_text: Custom personality text (overrides preset if provided)
         received_messages: Formatted string of messages from enemy captain
@@ -394,26 +568,6 @@ def build_captain_prompt(
         damaged_modules=ship_status.get("damaged_modules"),
     )
 
-    # Extract relative position components
-    rel_pos = tactical_status.get("relative_position", {})
-    rel_x = rel_pos.get("x", 0)
-    rel_y = rel_pos.get("y", 0)
-    rel_z = rel_pos.get("z", 0)
-
-    # Labels for position
-    x_label = "ahead" if rel_x > 0 else "behind"
-    y_label = "starboard" if rel_y > 0 else "port"
-    z_label = "above" if rel_z > 0 else "below"
-
-    # Extract relative velocity components
-    rel_vel = tactical_status.get("relative_velocity", {})
-    rel_vx = rel_vel.get("x", 0)
-    rel_vy = rel_vel.get("y", 0)
-    rel_vz = rel_vel.get("z", 0)
-
-    # Velocity labels
-    vx_label = "closing" if rel_vx < 0 else "separating"
-
     # Ship forward vector
     ship_fwd = tactical_status.get("ship_forward", {})
     fwd_x = ship_fwd.get("x", 1)
@@ -425,21 +579,57 @@ def build_captain_prompt(
     if angle_to_enemy <= 30:
         spinal_status = "(SPINAL CAN FIRE)"
     else:
-        spinal_status = f"(spinal needs <30°)"
+        spinal_status = "(spinal needs <30°)"
 
-    # Get other tactical data
-    distance_km = tactical_status.get("distance_km", 1000)
-    closing_rate = tactical_status.get("closing_rate", 0)
-    hit_chance = tactical_status.get("our_hit_chance", 0)
     sim_time = tactical_status.get("sim_time", 0)
 
-    # Combat stats
+    # Get multi-ship data
+    enemies = tactical_status.get("enemies", [])
+    friendlies = tactical_status.get("friendlies", [])
+    primary_target_id = tactical_status.get("primary_target_id")
+
+    # Get primary target name for config display
+    primary_target_name = None
+    if primary_target_id and enemies:
+        for e in enemies:
+            if e.get("ship_id") == primary_target_id:
+                primary_target_name = e.get("name", primary_target_id)
+                break
+
+    # Get current config
+    current_config_data = tactical_status.get("current_config", {})
+    weapon_orders = current_config_data.get("weapon_orders", {"spinal": "HOLD_FIRE", "turret": "HOLD_FIRE"})
+    current_maneuver = current_config_data.get("current_maneuver")
+    evasion_status = tactical_status.get("evasion_status")
+
+    # Format current configuration
+    current_config = format_current_config(
+        primary_target_name=primary_target_name,
+        radiators_extended=ship_status.get("radiators_extended", False),
+        weapon_orders=weapon_orders,
+        current_maneuver=current_maneuver,
+        evasion_status=evasion_status,
+    )
+
+    # Format battlefield overview
+    battlefield_overview = format_battlefield_overview(enemies, friendlies)
+
+    # Format combat statistics
     our_shots = tactical_status.get("our_shots", 0)
     our_hits = tactical_status.get("our_hits", 0)
-    enemy_shots = tactical_status.get("enemy_shots", 0)
-    enemy_hits = tactical_status.get("enemy_hits", 0)
-    damage_dealt = tactical_status.get("our_damage_dealt", 0)
-    damage_taken = tactical_status.get("our_damage_taken", 0)
+    our_damage_dealt = tactical_status.get("our_damage_dealt", 0)
+    our_damage_taken = tactical_status.get("our_damage_taken", 0)
+
+    combat_statistics = format_combat_statistics(
+        our_shots=our_shots,
+        our_hits=our_hits,
+        our_damage_dealt=our_damage_dealt,
+        our_damage_taken=our_damage_taken,
+        enemies=enemies,
+        friendlies=friendlies,
+        ship_name=ship_name,
+        primary_target_id=primary_target_id,
+    )
 
     # Format incoming projectiles
     incoming_projectiles = format_incoming_projectiles(
@@ -451,12 +641,6 @@ def build_captain_prompt(
         messages_section = f"ENEMY TRANSMISSION:\n{received_messages}"
     else:
         messages_section = ""
-
-    # Enemy damage assessment (visual observation)
-    enemy_armor = tactical_status.get("enemy_armor", {})
-    enemy_nose_condition = assess_armor_condition(enemy_armor.get("nose_damage_pct", 0))
-    enemy_lateral_condition = assess_armor_condition(enemy_armor.get("lateral_damage_pct", 0))
-    enemy_tail_condition = assess_armor_condition(enemy_armor.get("tail_damage_pct", 0))
 
     # Build personality prompt
     if personality_text:
@@ -483,6 +667,9 @@ def build_captain_prompt(
         history_parts.append(message_history)
     history_context = "\n\n".join(history_parts) if history_parts else ""
 
+    # Recent hits section
+    recent_hits_section = recent_hits if recent_hits else ""
+
     return CAPTAIN_SYSTEM_PROMPT.format(
         captain_name=captain_name,
         ship_name=ship_name,
@@ -495,30 +682,11 @@ def build_captain_prompt(
         fwd_z=fwd_z,
         angle_to_enemy=angle_to_enemy,
         spinal_status=spinal_status,
-        rel_x=rel_x,
-        rel_y=rel_y,
-        rel_z=rel_z,
-        x_label=x_label,
-        y_label=y_label,
-        z_label=z_label,
-        distance_km=distance_km,
-        enemy_hull_percent=tactical_status.get("enemy_hull_percent", 100),
-        enemy_nose_condition=enemy_nose_condition,
-        enemy_lateral_condition=enemy_lateral_condition,
-        enemy_tail_condition=enemy_tail_condition,
-        rel_vx=rel_vx,
-        rel_vy=rel_vy,
-        rel_vz=rel_vz,
-        vx_label=vx_label,
-        closing_rate=closing_rate,
-        hit_chance=hit_chance,
-        our_shots=our_shots,
-        our_hits=our_hits,
-        damage_dealt=damage_dealt,
-        enemy_shots=enemy_shots,
-        enemy_hits=enemy_hits,
-        damage_taken=damage_taken,
+        current_config=current_config,
+        battlefield_overview=battlefield_overview,
+        combat_statistics=combat_statistics,
         incoming_projectiles=incoming_projectiles,
+        recent_hits=recent_hits_section,
         received_messages=messages_section,
         history_context=history_context,
         personality_prompt=personality_prompt,

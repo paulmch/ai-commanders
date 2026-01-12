@@ -322,38 +322,52 @@ class LLMBattleRunner:
                 print(f"  -> {self.beta_captain.get_last_decision_summary()}")
 
             # Phase 3: Queue outgoing messages
-            alpha_msg = self.alpha_captain.get_pending_message()
-            beta_msg = self.beta_captain.get_pending_message()
+            alpha_msg_data = self.alpha_captain.get_pending_message()
+            beta_msg_data = self.beta_captain.get_pending_message()
 
-            if alpha_msg:
-                self.communication.queue_message(
-                    "alpha", alpha_msg, self.simulation.current_time
-                )
+            if alpha_msg_data:
+                # Extract content and recipient from dict
+                msg_content = alpha_msg_data.get("content", "") if isinstance(alpha_msg_data, dict) else str(alpha_msg_data)
+                msg_recipient = alpha_msg_data.get("recipient", "ALL_ENEMIES") if isinstance(alpha_msg_data, dict) else "ALL_ENEMIES"
+
+                # Only queue if recipient includes enemies (in 1v1, this is the other captain)
+                if msg_recipient in ("ALL", "ALL_ENEMIES", "SPECIFIC"):
+                    self.communication.queue_message(
+                        "alpha", msg_content, self.simulation.current_time
+                    )
                 if self.recorder:
                     self.recorder.record_message(
                         timestamp=self.simulation.current_time,
                         sender_id="alpha",
                         sender_name=self.alpha_config.name,
                         ship_name=self.alpha_config.ship_name,
-                        message=alpha_msg,
+                        message=msg_content,
                     )
                 if self.config.verbose:
-                    print(f"  [{self.alpha_config.ship_name}] {self.alpha_config.name}: \"{alpha_msg}\"")
+                    recipient_tag = f" [{msg_recipient}]" if msg_recipient != "ALL_ENEMIES" else ""
+                    print(f"  [{self.alpha_config.ship_name}] {self.alpha_config.name}{recipient_tag}: \"{msg_content}\"")
 
-            if beta_msg:
-                self.communication.queue_message(
-                    "beta", beta_msg, self.simulation.current_time
-                )
+            if beta_msg_data:
+                # Extract content and recipient from dict
+                msg_content = beta_msg_data.get("content", "") if isinstance(beta_msg_data, dict) else str(beta_msg_data)
+                msg_recipient = beta_msg_data.get("recipient", "ALL_ENEMIES") if isinstance(beta_msg_data, dict) else "ALL_ENEMIES"
+
+                # Only queue if recipient includes enemies (in 1v1, this is the other captain)
+                if msg_recipient in ("ALL", "ALL_ENEMIES", "SPECIFIC"):
+                    self.communication.queue_message(
+                        "beta", msg_content, self.simulation.current_time
+                    )
                 if self.recorder:
                     self.recorder.record_message(
                         timestamp=self.simulation.current_time,
                         sender_id="beta",
                         sender_name=self.beta_config.name,
                         ship_name=self.beta_config.ship_name,
-                        message=beta_msg,
+                        message=msg_content,
                     )
                 if self.config.verbose:
-                    print(f"  [{self.beta_config.ship_name}] {self.beta_config.name}: \"{beta_msg}\"")
+                    recipient_tag = f" [{msg_recipient}]" if msg_recipient != "ALL_ENEMIES" else ""
+                    print(f"  [{self.beta_config.ship_name}] {self.beta_config.name}{recipient_tag}: \"{msg_content}\"")
 
             # Phase 4: Check surrender/draw
             if self.alpha_captain.has_surrendered:
@@ -561,28 +575,114 @@ class LLMBattleRunner:
             "beta_hull": beta.hull_integrity if beta else 0,
         })
 
+    def _calculate_battle_points(self, ship: Any) -> float:
+        """
+        Calculate battle points for a ship.
+
+        Used for determining winner when both captains agree to draw.
+        Points are awarded for:
+        - Damage dealt (1 point per GJ)
+        - Hull integrity bonus (up to 50 points)
+        - Accuracy bonus (up to 20 points)
+        - Delta-v remaining bonus (up to 30 points)
+
+        Args:
+            ship: Ship to calculate points for
+
+        Returns:
+            Total battle points
+        """
+        if ship is None:
+            return 0.0
+
+        points = 0.0
+
+        # Damage dealt (1 point per GJ)
+        points += ship.damage_dealt_gj
+
+        # Hull integrity bonus (up to 50 points)
+        points += ship.hull_integrity * 0.5  # 100% hull = 50 points
+
+        # Accuracy bonus (up to 20 points)
+        if ship.shots_fired > 0:
+            accuracy = ship.hits_scored / ship.shots_fired
+            points += accuracy * 20
+
+        # Delta-v remaining bonus (up to 30 points, assuming 500 km/s budget)
+        remaining_dv_pct = min(1.0, ship.remaining_delta_v_kps / 500.0)
+        points += remaining_dv_pct * 30
+
+        return points
+
+    def _resolve_draw(self, alpha: Any, beta: Any) -> tuple:
+        """
+        Resolve a mutual draw by calculating battle points.
+
+        The game ends (both captains agreed to draw), but a winner is
+        still determined based on battle performance.
+
+        Args:
+            alpha: Alpha ship
+            beta: Beta ship
+
+        Returns:
+            Tuple of (outcome, winner, reason)
+        """
+        alpha_points = self._calculate_battle_points(alpha)
+        beta_points = self._calculate_battle_points(beta)
+
+        # Print points breakdown if verbose
+        if self.config.verbose:
+            print(f"\n[DRAW RESOLUTION]")
+            print(f"  Alpha points: {alpha_points:.1f}")
+            print(f"  Beta points: {beta_points:.1f}")
+
+        if alpha_points > beta_points:
+            return (
+                BattleOutcome.ALPHA_VICTORY,
+                "alpha",
+                f"Draw accepted - Alpha wins on points ({alpha_points:.1f} vs {beta_points:.1f})"
+            )
+        elif beta_points > alpha_points:
+            return (
+                BattleOutcome.BETA_VICTORY,
+                "beta",
+                f"Draw accepted - Beta wins on points ({beta_points:.1f} vs {alpha_points:.1f})"
+            )
+        else:
+            return (
+                BattleOutcome.DRAW,
+                None,
+                f"Draw accepted - Perfect tie ({alpha_points:.1f} points each)"
+            )
+
     def _evaluate_result(self) -> BattleResult:
         """Evaluate final battle result."""
         alpha = self.simulation.get_ship("alpha")
         beta = self.simulation.get_ship("beta")
 
-        # Determine if at time/checkpoint limit (never true in unlimited mode)
-        if self.config.unlimited_mode:
-            at_limit = False
+        # Check for mutual draw first - resolve by points
+        mutual_draw = self.communication.has_mutual_draw() if self.communication else False
+        if mutual_draw:
+            outcome, winner, reason = self._resolve_draw(alpha, beta)
         else:
-            at_limit = (
-                self.simulation.current_time >= self.config.time_limit_s or
-                self.checkpoint_count >= self.config.max_checkpoints
-            )
+            # Determine if at time/checkpoint limit (never true in unlimited mode)
+            if self.config.unlimited_mode:
+                at_limit = False
+            else:
+                at_limit = (
+                    self.simulation.current_time >= self.config.time_limit_s or
+                    self.checkpoint_count >= self.config.max_checkpoints
+                )
 
-        outcome, winner, reason = self.evaluator.evaluate(
-            alpha=alpha,
-            beta=beta,
-            alpha_surrendered=self.communication.alpha_surrendered if self.communication else False,
-            beta_surrendered=self.communication.beta_surrendered if self.communication else False,
-            mutual_draw=self.communication.has_mutual_draw() if self.communication else False,
-            at_time_limit=at_limit,
-        )
+            outcome, winner, reason = self.evaluator.evaluate(
+                alpha=alpha,
+                beta=beta,
+                alpha_surrendered=self.communication.alpha_surrendered if self.communication else False,
+                beta_surrendered=self.communication.beta_surrendered if self.communication else False,
+                mutual_draw=False,  # Already handled above
+                at_time_limit=at_limit,
+            )
 
         # End recording and save
         if self.recorder:
@@ -716,6 +816,25 @@ class LLMBattleRunner:
                 weapons_state[slot] = weapon_info
             state["weapons"] = weapons_state
 
+        # Module health
+        if hasattr(ship, 'module_layout') and ship.module_layout:
+            modules_state = {}
+            # Use get_all_modules() method if available, else try .modules attribute
+            if hasattr(ship.module_layout, 'get_all_modules'):
+                modules = ship.module_layout.get_all_modules()
+            elif hasattr(ship.module_layout, 'modules'):
+                modules = ship.module_layout.modules
+            else:
+                modules = []
+            for module in modules:
+                modules_state[module.name] = {
+                    "health_percent": module.health_percent,
+                    "is_destroyed": module.is_destroyed,
+                    "is_functional": module.is_functional,
+                    "is_critical": module.is_critical,
+                }
+            state["modules"] = modules_state
+
         return state
 
     def _handle_simulation_event(self, event: Any) -> None:
@@ -843,6 +962,23 @@ class LLMBattleRunner:
                 maneuver_type=data.get("maneuver_type", "unknown"),
                 throttle=data.get("throttle", 1.0),
                 target_id=data.get("target_id"),
+            )
+
+        # Record module damage and destruction
+        elif event_type == SimulationEventType.MODULE_DAMAGED:
+            self.recorder.record_module_damaged(
+                timestamp=timestamp,
+                ship_id=ship_id or "unknown",
+                module_name=data.get("module_name", "unknown"),
+                damage_gj=data.get("damage_gj", 0),
+                destroyed=data.get("destroyed", False),
+            )
+
+        elif event_type == SimulationEventType.MODULE_DESTROYED:
+            self.recorder.record_module_destroyed(
+                timestamp=timestamp,
+                ship_id=ship_id or "unknown",
+                module_name=data.get("module_name", "unknown"),
             )
 
 

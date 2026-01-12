@@ -37,6 +37,8 @@ class EventType(str, Enum):
     ARMOR_DAMAGE = "armor_damage"
     HULL_DAMAGE = "hull_damage"
     PENETRATION = "penetration"
+    MODULE_DAMAGED = "module_damaged"
+    MODULE_DESTROYED = "module_destroyed"
 
     # Communication
     MESSAGE = "message"
@@ -417,6 +419,42 @@ class BattleRecorder:
                 "ablation_cm": ablation_cm,
                 "remaining_cm": remaining_cm,
                 "chipping_fraction": chipping_fraction,
+            }
+        ))
+
+    def record_module_damaged(
+        self,
+        timestamp: float,
+        ship_id: str,
+        module_name: str,
+        damage_gj: float,
+        destroyed: bool,
+    ) -> None:
+        """Record damage to a ship module."""
+        self._record_event(BattleEvent(
+            timestamp=timestamp,
+            event_type=EventType.MODULE_DAMAGED,
+            ship_id=ship_id,
+            data={
+                "module_name": module_name,
+                "damage_gj": damage_gj,
+                "destroyed": destroyed,
+            }
+        ))
+
+    def record_module_destroyed(
+        self,
+        timestamp: float,
+        ship_id: str,
+        module_name: str,
+    ) -> None:
+        """Record destruction of a ship module."""
+        self._record_event(BattleEvent(
+            timestamp=timestamp,
+            event_type=EventType.MODULE_DESTROYED,
+            ship_id=ship_id,
+            data={
+                "module_name": module_name,
             }
         ))
 

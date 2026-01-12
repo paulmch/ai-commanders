@@ -309,7 +309,11 @@ class TestLLMCaptain:
         cmd = captain._execute_tool(tool_call, mock_sim, "alpha")
 
         assert cmd is None  # No command returned
-        assert captain.pending_message == "Prepare to be destroyed!"
+        assert captain.pending_message == {
+            "content": "Prepare to be destroyed!",
+            "recipient": "ALL_ENEMIES",
+            "target_ship": None,
+        }
 
     def test_tool_execution_surrender(self):
         """surrender tool should set flag."""
@@ -377,6 +381,7 @@ class TestIntegration:
         mock_ship.damage_taken_gj = 0.0
         mock_ship.ship_id = "alpha"
         mock_ship.module_layout = None  # No module layout for simplicity
+        mock_ship.current_maneuver = None  # No active maneuver
 
         # Mock weapons dict
         mock_weapon = Mock()
@@ -400,6 +405,8 @@ class TestIntegration:
         mock_sim.current_time = 30.0
         mock_sim.get_ship = Mock(return_value=mock_ship)
         mock_sim.get_enemy_ships = Mock(return_value=[mock_enemy])
+        mock_sim.get_all_ships = Mock(return_value=[mock_ship, mock_enemy])  # For multi-ship support
+        mock_sim.get_friendly_ships = Mock(return_value=[])  # No friendly ships besides self
         mock_sim.torpedoes = []  # Empty torpedoes list
         mock_sim.projectiles = []  # Empty projectiles list
 

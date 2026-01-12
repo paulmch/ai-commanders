@@ -1140,3 +1140,370 @@ class TestSystemIntegration:
         # Different seed should produce different results
         results_c = run_battle(54321)
         assert results_a != results_c, "Different seed should produce different results"
+
+
+# =============================================================================
+# Scenario 7: Threat-Aware Evasion
+# =============================================================================
+
+class TestThreatAwareEvasion:
+    """
+    Test scenario: Ship evading incoming projectiles.
+
+    Tests the threat-aware evasion algorithm with different threat conditions:
+    - WOBBLE: No threats or all will miss by comfortable margin
+    - EVADE: Threats present with enough time to evade perpendicularly
+    - TANK: Evasion impossible but time to present armor
+    - BRACE: Impact imminent, no time to react
+    """
+
+    @pytest.fixture
+    def simulation(self, fleet_data):
+        """Create a combat simulation for evasion testing."""
+        from src.simulation import CombatSimulation
+        return CombatSimulation(seed=42)
+
+    @pytest.fixture
+    def destroyer_ship(self, simulation, fleet_data):
+        """Create a destroyer ship for evasion testing."""
+        from src.simulation import ShipCombatState
+        from src.physics import create_ship_state_from_specs
+
+        ship_data = fleet_data["ships"]["destroyer"]
+        perf = ship_data["performance"]
+
+        kinematic = create_ship_state_from_specs(
+            wet_mass_tons=perf["max_wet_mass_tons"],
+            dry_mass_tons=perf["max_dry_mass_tons"],
+            length_m=ship_data["hull"]["length_m"],
+            thrust_mn=ship_data["propulsion"]["drive"]["thrust_mn"],
+            exhaust_velocity_kps=ship_data["propulsion"]["drive"]["exhaust_velocity_kps"],
+            position=Vector3D(0, 0, 0),
+            velocity=Vector3D(0, 0, 0),
+            forward=Vector3D(1, 0, 0),
+        )
+
+        ship = ShipCombatState(
+            ship_id="destroyer_test",
+            ship_type="destroyer",
+            faction="test",
+            kinematic_state=kinematic,
+        )
+        simulation.ships["destroyer_test"] = ship
+        return ship
+
+    def _create_projectile(
+        self,
+        simulation,
+        source_id: str,
+        target_id: str,
+        position: Vector3D,
+        velocity: Vector3D,
+        mass_kg: float = 25.0,
+    ):
+        """Create a projectile targeting a ship."""
+        from src.projectile import KineticProjectile
+        from src.simulation import ProjectileInFlight
+
+        projectile = KineticProjectile(
+            position=position,
+            velocity=velocity,
+            mass_kg=mass_kg,
+        )
+
+        proj_flight = ProjectileInFlight(
+            projectile_id=f"proj_{len(simulation.projectiles)}",
+            projectile=projectile,
+            source_ship_id=source_id,
+            target_ship_id=target_id,
+            launch_time=simulation.current_time,
+        )
+        simulation.projectiles.append(proj_flight)
+        return proj_flight
+
+    def test_wobble_mode_no_threats(self, simulation, destroyer_ship):
+        """Test that WOBBLE mode is used when there are no incoming threats."""
+        # No projectiles targeting the ship
+        evade_dir, mode, throttle = simulation._calculate_evasion(destroyer_ship, 1.0)
+
+        assert mode == 'WOBBLE', f"Expected WOBBLE mode with no threats, got {mode}"
+        assert evade_dir is None, "No evasion direction needed for WOBBLE"
+        assert throttle == 1.0, "Full throttle allowed in WOBBLE"
+
+    def test_wobble_mode_safe_miss(self, simulation, destroyer_ship):
+        """Test WOBBLE when projectile will miss by safe margin."""
+        # Create projectile that will miss by 1 km (safe miss distance)
+        # Ship is at origin, projectile passing 1000m away perpendicular
+        self._create_projectile(
+            simulation,
+            source_id="enemy",
+            target_id="destroyer_test",
+            position=Vector3D(-50_000, 1000, 0),  # 50km away, 1km off-axis
+            velocity=Vector3D(10_000, 0, 0),  # 10 km/s toward ship
+        )
+
+        evade_dir, mode, throttle = simulation._calculate_evasion(destroyer_ship, 1.0)
+
+        assert mode == 'WOBBLE', f"Expected WOBBLE for safe miss, got {mode}"
+
+    def test_evade_mode_with_time(self, simulation, destroyer_ship):
+        """Test EVADE mode when there's time to maneuver perpendicular."""
+        # Create projectile 100km away, closing at 10km/s = 10s TCA
+        # On collision course (will hit if no evasion)
+        self._create_projectile(
+            simulation,
+            source_id="enemy",
+            target_id="destroyer_test",
+            position=Vector3D(-100_000, 0, 0),  # 100km away, on collision course
+            velocity=Vector3D(10_000, 0, 0),  # 10 km/s toward ship
+        )
+
+        evade_dir, mode, throttle = simulation._calculate_evasion(destroyer_ship, 1.0)
+
+        assert mode == 'EVADE', f"Expected EVADE with 10s TCA, got {mode}"
+        assert evade_dir is not None, "Should have evasion direction"
+        assert throttle == 1.0, "Full throttle for evasion"
+
+        # Evasion should be roughly perpendicular to threat approach
+        # Threat coming from -X direction, evade should be in Y or Z plane
+        approach_dir = Vector3D(1, 0, 0)  # normalized threat approach
+        dot_product = abs(evade_dir.dot(approach_dir))
+        assert dot_product < 0.5, f"Evasion should be perpendicular, got dot={dot_product}"
+
+    def test_tank_mode_short_time(self, simulation, destroyer_ship):
+        """Test TANK mode when no time to evade but time to turn armor."""
+        # Create projectile 25km away, closing at 10km/s = 2.5s TCA
+        # Not enough time to evade but enough to start turning
+        self._create_projectile(
+            simulation,
+            source_id="enemy",
+            target_id="destroyer_test",
+            position=Vector3D(-25_000, 10, 0),  # Very close to collision course
+            velocity=Vector3D(10_000, 0, 0),  # 10 km/s
+        )
+
+        evade_dir, mode, throttle = simulation._calculate_evasion(destroyer_ship, 1.0)
+
+        # With 2.5s TCA and insufficient displacement potential, should TANK
+        # (turn_time = 5s, jink_time = 2.5s - 5s = negative, so no EVADE)
+        # But TCA > 3s check fails (2.5 < 3), so should be BRACE
+        # Actually with TCA=2.5s and miss_dist=10m (very close to hit), it's BRACE
+        assert mode in ['TANK', 'BRACE'], f"Expected TANK or BRACE, got {mode}"
+
+    def test_tank_mode_turning_armor(self, simulation, destroyer_ship):
+        """Test that TANK mode turns strongest armor toward threat."""
+        # Create projectile 40km away, closing at 10km/s = 4s TCA
+        # Threat coming from side (starboard)
+        self._create_projectile(
+            simulation,
+            source_id="enemy",
+            target_id="destroyer_test",
+            position=Vector3D(0, -40_000, 0),  # 40km to starboard
+            velocity=Vector3D(0, 10_000, 0),  # closing from starboard
+        )
+
+        evade_dir, mode, throttle = simulation._calculate_evasion(destroyer_ship, 1.0)
+
+        assert mode == 'TANK', f"Expected TANK with 4s TCA, got {mode}"
+        assert evade_dir is not None, "Should have direction to turn armor"
+        assert throttle == 0.5, "Reduced throttle for TANK mode"
+
+        # Direction should be toward threat approach (nose toward incoming)
+        # Threat coming from -Y, so evade_dir should be ~(0, -1, 0)
+        assert evade_dir.y < 0, f"Should turn nose toward threat, got evade_dir.y={evade_dir.y}"
+
+    def test_tank_mode_depleted_nose_uses_lateral(self, simulation, destroyer_ship, fleet_data):
+        """Test that TANK mode uses lateral armor when nose and tail are depleted."""
+        from src.combat import create_ship_armor_from_fleet_data, HitLocation
+
+        # Give ship armor with depleted nose AND tail (so lateral is best)
+        destroyer_ship.armor = create_ship_armor_from_fleet_data(fleet_data, "destroyer")
+
+        # Deplete nose and tail armor completely
+        nose = destroyer_ship.armor.get_section(HitLocation.NOSE)
+        tail = destroyer_ship.armor.get_section(HitLocation.TAIL)
+        nose.thickness_cm = 0.0  # Nose destroyed
+        tail.thickness_cm = 0.0  # Tail destroyed
+
+        # Verify lateral still has armor (destroyer lateral is ~26cm)
+        lateral = destroyer_ship.armor.get_section(HitLocation.LATERAL)
+        assert lateral.thickness_cm > 0, "Lateral should have armor for this test"
+
+        # Create projectile 40km away, closing at 10km/s = 4s TCA
+        self._create_projectile(
+            simulation,
+            source_id="enemy",
+            target_id="destroyer_test",
+            position=Vector3D(0, -40_000, 0),  # 40km to starboard
+            velocity=Vector3D(0, 10_000, 0),  # closing from starboard
+        )
+
+        evade_dir, mode, throttle = simulation._calculate_evasion(destroyer_ship, 1.0)
+
+        assert mode == 'TANK', f"Expected TANK, got {mode}"
+        assert evade_dir is not None, "Should have direction to turn armor"
+
+        # With only lateral armor remaining, should turn side toward threat
+        # This means presenting the side (perpendicular to threat approach from Y)
+        # The direction should be mostly in X plane (perpendicular to Y-axis threat)
+        assert abs(evade_dir.x) > 0.7, f"Should turn side toward threat, got evade_dir={evade_dir}"
+
+    def test_tank_mode_uses_tail_when_best(self, simulation, destroyer_ship, fleet_data):
+        """Test that TANK mode uses tail armor when it's the best remaining."""
+        from src.combat import create_ship_armor_from_fleet_data, HitLocation
+
+        # Give ship armor with depleted nose and lateral
+        destroyer_ship.armor = create_ship_armor_from_fleet_data(fleet_data, "destroyer")
+
+        nose = destroyer_ship.armor.get_section(HitLocation.NOSE)
+        lateral = destroyer_ship.armor.get_section(HitLocation.LATERAL)
+        tail = destroyer_ship.armor.get_section(HitLocation.TAIL)
+
+        # Deplete nose and lateral, keep tail
+        nose.thickness_cm = 0.0
+        lateral.thickness_cm = 0.0
+        # Tail should still have armor (default destroyer tail is ~43cm)
+        assert tail.thickness_cm > 0, "Tail should have armor for this test"
+
+        # Create projectile from front
+        self._create_projectile(
+            simulation,
+            source_id="enemy",
+            target_id="destroyer_test",
+            position=Vector3D(-40_000, 0, 0),  # 40km ahead
+            velocity=Vector3D(10_000, 0, 0),  # closing from front
+        )
+
+        evade_dir, mode, throttle = simulation._calculate_evasion(destroyer_ship, 1.0)
+
+        assert mode == 'TANK', f"Expected TANK, got {mode}"
+        assert evade_dir is not None
+
+        # With only tail armor, should turn AWAY from threat (present tail)
+        # Threat coming from -X, nose should point in +X direction (turning tail toward threat)
+        # evade_dir is the direction to point the nose, so it should be positive X
+        assert evade_dir.x > 0.5, f"Should point nose away from threat (tail toward), got evade_dir.x={evade_dir.x}"
+
+    def test_brace_mode_imminent_impact(self, simulation, destroyer_ship):
+        """Test BRACE mode when impact is imminent."""
+        # Create projectile 10km away, closing at 10km/s = 1s TCA
+        # No time for anything
+        self._create_projectile(
+            simulation,
+            source_id="enemy",
+            target_id="destroyer_test",
+            position=Vector3D(-10_000, 5, 0),  # 10km away, near collision
+            velocity=Vector3D(10_000, 0, 0),  # 10 km/s = 1s to impact
+        )
+
+        evade_dir, mode, throttle = simulation._calculate_evasion(destroyer_ship, 1.0)
+
+        assert mode == 'BRACE', f"Expected BRACE with 1s TCA, got {mode}"
+        assert evade_dir is None, "No maneuver possible in BRACE"
+        assert throttle == 0.0, "Cut throttle in BRACE"
+
+    def test_multiple_threats_urgency_ordering(self, simulation, destroyer_ship):
+        """Test that multiple threats are prioritized by urgency."""
+        # Create a far, slow threat (low urgency)
+        self._create_projectile(
+            simulation,
+            source_id="enemy1",
+            target_id="destroyer_test",
+            position=Vector3D(-200_000, 100, 0),  # 200km, will miss by 100m
+            velocity=Vector3D(5_000, 0, 0),  # 5 km/s, TCA = 40s
+            mass_kg=10.0,  # Small mass = low KE
+        )
+
+        # Create a moderate threat (higher urgency but evadable)
+        # 100km away at 10km/s = 10s TCA, near miss (40m offset)
+        # jink_time = 10 - 5 = 5s, potential = 0.5 * 14 * 25 = 175m
+        # required = 100 - 40 = 60m, so 175 > 60, can evade
+        self._create_projectile(
+            simulation,
+            source_id="enemy2",
+            target_id="destroyer_test",
+            position=Vector3D(-100_000, 40, 0),  # 100km, 40m off-axis
+            velocity=Vector3D(10_000, 0, 0),  # 10 km/s, TCA = 10s
+            mass_kg=25.0,  # Normal mass
+        )
+
+        evade_dir, mode, throttle = simulation._calculate_evasion(destroyer_ship, 1.0)
+
+        # Should try to evade - the second threat has higher urgency and is evadable
+        assert mode == 'EVADE', f"Expected EVADE, got {mode}"
+        assert evade_dir is not None, "Should have evasion direction"
+
+    def test_evasion_direction_calculation(self, simulation, destroyer_ship):
+        """Test that evasion direction is calculated perpendicular to threats."""
+        # Create threat coming straight at ship from front
+        self._create_projectile(
+            simulation,
+            source_id="enemy",
+            target_id="destroyer_test",
+            position=Vector3D(100_000, 0, 0),  # 100km ahead
+            velocity=Vector3D(-10_000, 0, 0),  # 10 km/s toward ship (closing)
+        )
+
+        evade_dir, mode, throttle = simulation._calculate_evasion(destroyer_ship, 1.0)
+
+        assert mode == 'EVADE', f"Expected EVADE, got {mode}"
+        assert evade_dir is not None
+
+        # Evasion should be perpendicular to X-axis (in Y-Z plane)
+        x_component = abs(evade_dir.x)
+        assert x_component < 0.3, f"Evasion X component should be small, got {x_component}"
+
+        # Should have significant Y or Z component
+        yz_magnitude = math.sqrt(evade_dir.y ** 2 + evade_dir.z ** 2)
+        assert yz_magnitude > 0.7, f"Evasion should be mostly in Y-Z plane, got {yz_magnitude}"
+
+    def test_evasion_status_display(self, simulation, destroyer_ship):
+        """Test the evasion status method for tactical display."""
+        # Add a threat
+        self._create_projectile(
+            simulation,
+            source_id="enemy",
+            target_id="destroyer_test",
+            position=Vector3D(-100_000, 0, 0),
+            velocity=Vector3D(10_000, 0, 0),
+        )
+
+        status = simulation._get_evasion_status(destroyer_ship)
+
+        assert 'mode' in status
+        assert 'threat_count' in status
+        assert 'evade_direction' in status
+        assert status['threat_count'] == 1
+        assert status['mode'] in ['WOBBLE', 'EVADE', 'TANK', 'BRACE']
+
+    def test_projectile_already_past(self, simulation, destroyer_ship):
+        """Test that projectiles that have passed are ignored."""
+        # Create projectile that has already passed the ship
+        self._create_projectile(
+            simulation,
+            source_id="enemy",
+            target_id="destroyer_test",
+            position=Vector3D(10_000, 0, 0),  # 10km past ship
+            velocity=Vector3D(10_000, 0, 0),  # Moving away
+        )
+
+        evade_dir, mode, throttle = simulation._calculate_evasion(destroyer_ship, 1.0)
+
+        # TCA would be negative (projectile moving away), should be ignored
+        assert mode == 'WOBBLE', f"Past projectile should be ignored, got {mode}"
+
+    def test_projectile_far_future(self, simulation, destroyer_ship):
+        """Test that very distant threats (>60s TCA) are ignored."""
+        # Create projectile 700km away at 10km/s = 70s TCA
+        self._create_projectile(
+            simulation,
+            source_id="enemy",
+            target_id="destroyer_test",
+            position=Vector3D(-700_000, 0, 0),
+            velocity=Vector3D(10_000, 0, 0),
+        )
+
+        evade_dir, mode, throttle = simulation._calculate_evasion(destroyer_ship, 1.0)
+
+        # Too far out to worry about
+        assert mode == 'WOBBLE', f"Far future threat should be ignored, got {mode}"
