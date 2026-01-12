@@ -15,6 +15,7 @@ class MessageType(Enum):
     NORMAL = auto()
     SURRENDER = auto()
     PROPOSE_DRAW = auto()
+    RETRACT_DRAW = auto()
     ACCEPT_DRAW = auto()
 
 
@@ -34,6 +35,8 @@ class CaptainMessage:
             return f"[SURRENDER] Captain {self.sender_name} of {self.ship_name} surrenders!"
         elif self.message_type == MessageType.PROPOSE_DRAW:
             return f"[DRAW PROPOSAL] Captain {self.sender_name} proposes a mutual draw."
+        elif self.message_type == MessageType.RETRACT_DRAW:
+            return f"[DRAW RETRACTED] Captain {self.sender_name} retracts their draw proposal."
         elif self.message_type == MessageType.ACCEPT_DRAW:
             return f"[DRAW ACCEPTED] Captain {self.sender_name} accepts the draw."
         else:
@@ -45,6 +48,8 @@ class CaptainMessage:
             return f"ENEMY SURRENDERED: Captain {self.sender_name} has surrendered."
         elif self.message_type == MessageType.PROPOSE_DRAW:
             return f"DRAW PROPOSED: Captain {self.sender_name} proposes a mutual draw. Use propose_draw tool to accept."
+        elif self.message_type == MessageType.RETRACT_DRAW:
+            return f"DRAW RETRACTED: Captain {self.sender_name} has retracted their draw proposal. Battle continues."
         else:
             return f"Captain {self.sender_name}: \"{self.content}\""
 
@@ -119,6 +124,11 @@ class CommunicationChannel:
                 self.alpha_proposed_draw = True
             else:
                 self.beta_proposed_draw = True
+        elif message_type == MessageType.RETRACT_DRAW:
+            if sender_id == "alpha":
+                self.alpha_proposed_draw = False
+            else:
+                self.beta_proposed_draw = False
 
     def deliver_messages(self, recipient_id: str) -> List[CaptainMessage]:
         """

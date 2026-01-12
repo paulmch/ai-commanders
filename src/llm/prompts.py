@@ -9,6 +9,101 @@ from typing import Dict, Any, Optional, List
 from enum import Enum
 
 
+def get_ship_turn_time_90deg(ship_type: str) -> float:
+    """Calculate approximate 90-degree turn time using thrust vectoring."""
+    # Use the TV times from CLAUDE.md reference
+    turn_times = {
+        "corvette": 12.1,
+        "frigate": 15.1,
+        "destroyer": 20.6,
+        "cruiser": 28.2,
+        "battlecruiser": 28.2,
+        "battleship": 36.9,
+        "dreadnought": 49.9,
+    }
+    return turn_times.get(ship_type.lower(), 20.0)
+
+
+def format_weapon_groups_for_prompt(weapons: List[Dict], weapon_types: Dict[str, Any]) -> str:
+    """Format weapon information grouped by type."""
+    lines = []
+
+    # Group weapons by type
+    spinals = []
+    heavy_coilguns = []
+    coilguns = []
+    pd_lasers = []
+
+    for w in weapons:
+        wtype = w.get("type", "")
+        slot = w.get("slot", "")
+        if wtype == "spinal_coiler_mk3":
+            spinals.append(w)
+        elif wtype == "heavy_coilgun_mk3":
+            heavy_coilguns.append(w)
+        elif wtype == "coilgun_mk3":
+            coilguns.append(w)
+        elif wtype == "pd_laser":
+            pd_lasers.append(w)
+
+    # Format each group
+    if spinals:
+        spec = weapon_types.get("spinal_coiler_mk3", {})
+        vel = spec.get("muzzle_velocity_kps", 9.9)
+        dmg = spec.get("kinetic_energy_gj", 4.32)
+        rng = spec.get("range_km", 900)
+        cd = spec.get("cooldown_s", 15)
+        lines.append(f"- Spinal Coilgun: {vel} km/s muzzle velocity, {dmg:.2f} GJ damage, {rng}km max range")
+        lines.append(f"  * Fixed mount: REQUIRES nose within 30° of target to fire")
+        lines.append(f"  * {cd}s cooldown between shots")
+
+    if heavy_coilguns:
+        spec = weapon_types.get("heavy_coilgun_mk3", {})
+        vel = spec.get("muzzle_velocity_kps", 7.0)
+        dmg = spec.get("kinetic_energy_gj", 1.22)
+        rng = spec.get("range_km", 600)
+        cd = spec.get("cooldown_s", 18)
+        count = len(heavy_coilguns)
+        lines.append(f"- Heavy Coilguns x{count}: {vel} km/s muzzle velocity, {dmg:.2f} GJ damage each, {rng}km max range")
+        lines.append(f"  * Turreted: 180° firing arc, works during any maneuver")
+        lines.append(f"  * {cd}s cooldown between shots")
+
+    if coilguns:
+        spec = weapon_types.get("coilgun_mk3", {})
+        vel = spec.get("muzzle_velocity_kps", 6.0)
+        dmg = spec.get("kinetic_energy_gj", 0.72)
+        rng = spec.get("range_km", 500)
+        cd = spec.get("cooldown_s", 20)
+        count = len(coilguns)
+        lines.append(f"- Coilguns x{count}: {vel} km/s muzzle velocity, {dmg:.2f} GJ damage each, {rng}km max range")
+        lines.append(f"  * Turreted: 180° firing arc, works during any maneuver")
+        lines.append(f"  * {cd}s cooldown between shots")
+
+    if pd_lasers:
+        count = len(pd_lasers)
+        lines.append(f"- {count}x Point Defense Lasers: Auto-engage torpedoes within 100km")
+
+    return "\n".join(lines)
+
+
+def format_enemy_weapons_summary(weapons: List[Dict]) -> str:
+    """Format a short summary of enemy weapons."""
+    counts = {}
+    for w in weapons:
+        wtype = w.get("type", "")
+        if wtype == "spinal_coiler_mk3":
+            counts["Spinal"] = counts.get("Spinal", 0) + 1
+        elif wtype == "heavy_coilgun_mk3":
+            counts["Heavy Coilgun"] = counts.get("Heavy Coilgun", 0) + 1
+        elif wtype == "coilgun_mk3":
+            counts["Coilgun"] = counts.get("Coilgun", 0) + 1
+        elif wtype == "pd_laser":
+            counts["PD"] = counts.get("PD", 0) + 1
+
+    parts = [f"{count}x {name}" for name, count in counts.items()]
+    return ", ".join(parts) if parts else "Unknown armament"
+
+
 class CaptainPersonality(Enum):
     """Personality archetypes for captain behavior."""
     AGGRESSIVE = "aggressive"
@@ -105,6 +200,104 @@ WEAPON STATUS:
 {damage_report}
 """
 
+SHIP_CAPABILITIES_TEMPLATE = """
+YOUR SHIP: {ship_name} ({ship_class} class)
+
+PROPULSION:
+- Acceleration: {accel_g}g (~{accel_mps:.0f} m/s²)
+- Delta-V budget: {delta_v_total} km/s total
+- 90° turn: ~{turn_time:.0f} seconds (thrust vectoring while burning)
+
+WEAPONS:
+{weapons_section}
+
+DEFENSE:
+- Nose armor: Heaviest (point this at enemy!)
+- Lateral armor: Medium
+- Tail armor: Light (radiators here - vulnerable when extended)
+
+THERMAL:
+- Heat sink: {heatsink_capacity:.0f} GJ capacity
+- Radiators extended: +130 MW cooling (vulnerable to damage)
+- Radiators retracted: 0 MW cooling (protected)
+- Engine heat: ~60 MW at full burn
+- Weapons overheat at 95%+ heat
+
+CURRENT STATUS:
+- Hull: {hull_integrity:.0f}%
+- Heat: {heat_percent:.0f}%
+- Delta-V remaining: {delta_v_remaining:.0f}/{delta_v_total} km/s
+- Radiators: {radiator_status}
+- Armor: Nose {nose_armor:.0f}cm | Lateral {lateral_armor:.0f}cm | Tail {tail_armor:.0f}cm
+
+WEAPON STATUS:
+{weapon_status}
+
+{damage_report}
+"""
+
+
+def build_ship_capabilities_from_fleet(
+    ship_name: str,
+    ship_type: str,
+    fleet_data: Dict[str, Any],
+    hull_integrity: float,
+    heat_percent: float,
+    delta_v_remaining: float,
+    nose_armor: float,
+    lateral_armor: float,
+    tail_armor: float,
+    heatsink_capacity: float,
+    radiators_extended: bool,
+    weapons: Optional[Dict[str, Any]] = None,
+    damaged_modules: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Build ship capabilities section dynamically from fleet data."""
+    ship_spec = fleet_data["ships"].get(ship_type, {})
+    weapon_types = fleet_data.get("weapon_types", {})
+
+    # Get performance data (acceleration, delta-v)
+    performance = ship_spec.get("performance", {})
+    accel_g = performance.get("combat_acceleration_g", 2.0)
+    accel_mps = performance.get("combat_acceleration_ms2", accel_g * 9.81)
+    delta_v_total = performance.get("delta_v_kps", 500)
+
+    # Get turn time
+    turn_time = get_ship_turn_time_90deg(ship_type)
+
+    # Format weapons
+    ship_weapons = ship_spec.get("weapons", [])
+    weapons_section = format_weapon_groups_for_prompt(ship_weapons, weapon_types)
+
+    # Format status
+    radiator_status = "EXTENDED (cooling, vulnerable)" if radiators_extended else "RETRACTED (protected, no cooling)"
+    weapon_status = format_weapon_status(weapons or {})
+    damage_report = format_damage_report(damaged_modules or {})
+
+    # Get ship class name (title case of ship_type)
+    ship_class = ship_type.title()
+
+    return SHIP_CAPABILITIES_TEMPLATE.format(
+        ship_name=ship_name,
+        ship_class=ship_class,
+        accel_g=accel_g,
+        accel_mps=accel_mps,
+        delta_v_total=delta_v_total,
+        turn_time=turn_time,
+        weapons_section=weapons_section,
+        heatsink_capacity=heatsink_capacity,
+        hull_integrity=hull_integrity,
+        heat_percent=heat_percent,
+        delta_v_remaining=delta_v_remaining,
+        radiator_status=radiator_status,
+        nose_armor=nose_armor,
+        lateral_armor=lateral_armor,
+        tail_armor=tail_armor,
+        weapon_status=weapon_status,
+        damage_report=damage_report,
+    )
+
+
 # Reference data for projectile physics - given once so LLM can calculate
 PROJECTILE_PHYSICS_REFERENCE = """
 PROJECTILE PHYSICS (for your calculations):
@@ -178,8 +371,9 @@ WEAPONS (set independently):
 - Spinal requires nose pointed at target (30° limit)
 - Turret works in any orientation (180° arc)
 
-COMMUNICATION:
-- send_message: Send to ALL, ALL_ENEMIES, ALL_FRIENDLIES, or SPECIFIC ship
+COMMUNICATION (optional - use sparingly):
+- send_message: Taunt enemies, demand surrender, or coordinate with allies
+- Not required every checkpoint - only when you have something impactful to say
 
 OTHER:
 - set_radiators: extend (cooling) or retract (protection)
@@ -192,14 +386,14 @@ TIMING: Next checkpoint in 30 seconds. Plan accordingly.
 
 # Prompt for pre-battle personality selection
 PERSONALITY_SELECTION_PROMPT = """
-You are {model_name}, about to command a destroyer in a space combat simulation.
+You are {model_name}, about to command a {ship_class} in a space combat simulation.
 
 {simulation_disclaimer}
 
 SCENARIO:
-- Ship-to-ship duel against another AI-controlled destroyer
+- {battle_description}
 - Starting distance: {distance_km:.0f} km
-- Both ships are identical Destroyer class
+- Your ship: {ship_class} class
 - Battle ends when: ship destroyed, surrender, mutual draw, or time limit
 
 DEFINE YOUR COMBAT PERSONALITY:
@@ -269,10 +463,29 @@ def build_ship_capabilities(
     radiators_extended: bool,
     weapons: Optional[Dict[str, Any]] = None,
     damaged_modules: Optional[Dict[str, Any]] = None,
+    ship_type: str = "destroyer",
+    fleet_data: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Build ship capabilities section for prompt."""
-    radiator_status = "EXTENDED (cooling, vulnerable)" if radiators_extended else "RETRACTED (protected, no cooling)"
+    if fleet_data:
+        return build_ship_capabilities_from_fleet(
+            ship_name=ship_name,
+            ship_type=ship_type,
+            fleet_data=fleet_data,
+            hull_integrity=hull_integrity,
+            heat_percent=heat_percent,
+            delta_v_remaining=delta_v_remaining,
+            nose_armor=nose_armor,
+            lateral_armor=lateral_armor,
+            tail_armor=tail_armor,
+            heatsink_capacity=heatsink_capacity,
+            radiators_extended=radiators_extended,
+            weapons=weapons,
+            damaged_modules=damaged_modules,
+        )
 
+    # Legacy fallback using destroyer template
+    radiator_status = "EXTENDED (cooling, vulnerable)" if radiators_extended else "RETRACTED (protected, no cooling)"
     weapon_status = format_weapon_status(weapons or {})
     damage_report = format_damage_report(damaged_modules or {})
 
@@ -337,7 +550,7 @@ def format_incoming_projectiles(projectiles: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def format_battlefield_overview(enemies: List[Dict[str, Any]], friendlies: List[Dict[str, Any]]) -> str:
+def format_battlefield_overview(enemies: List[Dict[str, Any]], friendlies: List[Dict[str, Any]], fleet_data: Optional[Dict[str, Any]] = None) -> str:
     """Format multi-ship battlefield overview."""
     lines = ["=== BATTLEFIELD OVERVIEW ==="]
 
@@ -381,13 +594,27 @@ def format_battlefield_overview(enemies: List[Dict[str, Any]], friendlies: List[
             lateral_cond = assess_armor_condition(armor.get("lateral_damage_pct", 0))
             lines.append(f"    Hull: ~{hull:.0f}% | Nose: {nose_cond} | Flank: {lateral_cond}")
 
+            # Add enemy ship capabilities if fleet_data available
+            enemy_ship_type = e.get("ship_type", "")
+            if fleet_data and enemy_ship_type and enemy_ship_type in fleet_data.get("ships", {}):
+                spec = fleet_data["ships"][enemy_ship_type]
+                performance = spec.get("performance", {})
+                accel = performance.get("combat_acceleration_g", "?")
+                delta_v = performance.get("delta_v_kps", "?")
+                turn_time = get_ship_turn_time_90deg(enemy_ship_type)
+                enemy_weapons = spec.get("weapons", [])
+                weapons_summary = format_enemy_weapons_summary(enemy_weapons)
+
+                lines.append(f"    Capabilities: {accel}g accel, {delta_v} km/s delta-v, ~{turn_time:.0f}s turn")
+                lines.append(f"    Armament: {weapons_summary}")
+
             # Hit probability
             hit_chance = e.get("hit_chance", 0)
             lines.append(f"    Hit probability: ~{hit_chance:.0f}%")
 
             # Targeting warning
             if has_us_targeted:
-                lines.append(f"    ⚠️ HAS YOU TARGETED")
+                lines.append(f"    !! HAS YOU TARGETED")
 
             lines.append("")  # Blank line between ships
     else:
@@ -502,21 +729,46 @@ def format_current_config(
     rad_status = "EXTENDED (vulnerable but cooling)" if radiators_extended else "RETRACTED (protected, no cooling)"
     lines.append(f"  Radiators: {rad_status}")
 
-    # Weapons
-    spinal = weapon_orders.get("spinal", "HOLD_FIRE")
-    turret = weapon_orders.get("turret", "HOLD_FIRE")
-    lines.append(f"  Spinal coilgun: {spinal}")
-    lines.append(f"  Turret coilgun: {turret}")
+    # Weapons - dynamic based on what's in weapon_orders
+    for group_name, mode in weapon_orders.items():
+        # Format group name nicely
+        display_name = group_name.replace("_", " ").title()
+        if group_name == "spinal":
+            display_name = "Spinal coilgun"
+        elif group_name == "heavy_coilguns":
+            display_name = "Heavy coilguns"
+        elif group_name == "coilguns":
+            display_name = "Coilguns"
+        elif group_name == "turret":
+            display_name = "Turret coilgun"
+        lines.append(f"  {display_name}: {mode}")
+
+    # Fallback if no weapon orders
+    if not weapon_orders:
+        lines.append("  Weapons: HOLD_FIRE")
 
     return "\n".join(lines)
 
 
-def build_personality_selection_prompt(distance_km: float, model_name: str = "AI") -> str:
+def build_personality_selection_prompt(
+    distance_km: float,
+    model_name: str = "AI",
+    ship_class: str = "Destroyer",
+    enemy_ship_class: str = "Destroyer",
+) -> str:
     """Build the personality selection prompt for pre-battle phase."""
+    # Build battle description
+    if ship_class.lower() == enemy_ship_class.lower():
+        battle_description = f"Duel against another {enemy_ship_class}"
+    else:
+        battle_description = f"Duel against a {enemy_ship_class}"
+
     return PERSONALITY_SELECTION_PROMPT.format(
         simulation_disclaimer=SIMULATION_DISCLAIMER,
         distance_km=distance_km,
         model_name=model_name,
+        ship_class=ship_class,
+        battle_description=battle_description,
     )
 
 

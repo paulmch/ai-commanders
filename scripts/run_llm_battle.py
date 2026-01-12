@@ -82,6 +82,20 @@ Examples:
         help="Personality for beta captain",
     )
 
+    # Ship types
+    parser.add_argument(
+        "--alpha-ship-type",
+        choices=["frigate", "destroyer", "cruiser", "battlecruiser", "battleship", "dreadnought"],
+        default="destroyer",
+        help="Ship class for alpha (default: destroyer)",
+    )
+    parser.add_argument(
+        "--beta-ship-type",
+        choices=["frigate", "destroyer", "cruiser", "battlecruiser", "battleship", "dreadnought"],
+        default="destroyer",
+        help="Ship class for beta (default: destroyer)",
+    )
+
     # Battle settings
     parser.add_argument(
         "--distance",
@@ -197,6 +211,8 @@ Examples:
             verbose=not args.quiet,
             record_sim_trace=args.trace,
             personality_selection=not args.no_personality_selection,
+            alpha_ship_type=args.alpha_ship_type,
+            beta_ship_type=args.beta_ship_type,
         )
 
         if args.unlimited and not args.quiet:

@@ -1634,9 +1634,19 @@ class CombatSimulation:
                 elif maneuver.maneuver_type == ManeuverType.BRAKE:
                     # Thrust retrograde (opposite to velocity) to slow down
                     velocity = ship.velocity
-                    if velocity.magnitude > 0.1:  # Only brake if moving
+                    speed = velocity.magnitude
+
+                    if speed > 1.0:  # Only brake if moving (>1 m/s)
                         retrograde_dir = velocity.normalized() * -1  # Opposite to velocity
                         self._rotate_ship_toward(ship, retrograde_dir, dt, engines_on=(throttle > 0))
+
+                        # Taper thrust as velocity approaches zero to avoid oscillation
+                        # Full thrust above 100 m/s, linear taper below
+                        if speed < 100.0:
+                            throttle = throttle * (speed / 100.0)
+                    else:
+                        # Velocity near zero - stop
+                        throttle = 0.0
 
                 elif maneuver.maneuver_type == ManeuverType.MAINTAIN:
                     # Coast - maintain current course, no thrust

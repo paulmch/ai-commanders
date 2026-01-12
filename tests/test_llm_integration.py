@@ -401,7 +401,7 @@ class TestIntegration:
         mock_enemy.damage_dealt_gj = 0.0
         mock_enemy.damage_taken_gj = 0.0
 
-        mock_sim = Mock()
+        mock_sim = Mock(spec=['current_time', 'get_ship', 'get_enemy_ships', 'get_all_ships', 'get_friendly_ships', 'torpedoes', 'projectiles'])
         mock_sim.current_time = 30.0
         mock_sim.get_ship = Mock(return_value=mock_ship)
         mock_sim.get_enemy_ships = Mock(return_value=[mock_enemy])

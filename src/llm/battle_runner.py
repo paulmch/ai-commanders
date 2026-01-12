@@ -107,6 +107,10 @@ class LLMBattleRunner:
         self.decision_log: List[Dict[str, Any]] = []
         self.recording_file: Optional[str] = None
 
+        # Track whether draw notifications have been sent (to avoid duplicates)
+        self._alpha_draw_notified = False
+        self._beta_draw_notified = False
+
     def setup_battle(self, fleet_data: Dict[str, Any]) -> None:
         """
         Initialize simulation and captains.
@@ -150,6 +154,15 @@ class LLMBattleRunner:
             forward=Vector3D(-1, 0, 0),
         )
         self.simulation.add_ship(beta_ship)
+
+        # Store fleet_data on the runner
+        self.fleet_data = fleet_data
+
+        # Store ship types and fleet_data on captain configs before creating captains
+        self.alpha_config.ship_type = self.config.alpha_ship_type
+        self.beta_config.ship_type = self.config.beta_ship_type
+        self.alpha_config.fleet_data = fleet_data
+        self.beta_config.fleet_data = fleet_data
 
         # Create captains
         self.alpha_captain = LLMCaptain(self.alpha_config, self.client)
@@ -386,8 +399,13 @@ class LLMBattleRunner:
                         ship_id="beta",
                         captain_name=self.beta_config.name,
                     )
-            if self.alpha_captain.has_proposed_draw:
-                self.communication.alpha_proposed_draw = True
+            # Handle alpha draw proposals/retractions
+            if self.alpha_captain.has_proposed_draw and not self._alpha_draw_notified:
+                # Queue message to notify beta captain
+                self.communication.queue_message(
+                    "alpha", "", self.simulation.current_time, MessageType.PROPOSE_DRAW
+                )
+                self._alpha_draw_notified = True
                 if self.recorder:
                     self.recorder.record_draw_proposal(
                         timestamp=self.simulation.current_time,
@@ -396,8 +414,23 @@ class LLMBattleRunner:
                     )
                 if self.config.verbose:
                     print(f"  [DRAW PROPOSED] {self.alpha_config.name} proposes draw")
-            if self.beta_captain.has_proposed_draw:
-                self.communication.beta_proposed_draw = True
+            elif self.alpha_captain.has_retracted_draw and self._alpha_draw_notified:
+                # Queue message to notify beta captain of retraction
+                self.communication.queue_message(
+                    "alpha", "", self.simulation.current_time, MessageType.RETRACT_DRAW
+                )
+                self._alpha_draw_notified = False
+                self.alpha_captain.has_retracted_draw = False  # Clear the flag
+                if self.config.verbose:
+                    print(f"  [DRAW RETRACTED] {self.alpha_config.name} retracts draw")
+
+            # Handle beta draw proposals/retractions
+            if self.beta_captain.has_proposed_draw and not self._beta_draw_notified:
+                # Queue message to notify alpha captain
+                self.communication.queue_message(
+                    "beta", "", self.simulation.current_time, MessageType.PROPOSE_DRAW
+                )
+                self._beta_draw_notified = True
                 if self.recorder:
                     self.recorder.record_draw_proposal(
                         timestamp=self.simulation.current_time,
@@ -406,6 +439,15 @@ class LLMBattleRunner:
                     )
                 if self.config.verbose:
                     print(f"  [DRAW PROPOSED] {self.beta_config.name} proposes draw")
+            elif self.beta_captain.has_retracted_draw and self._beta_draw_notified:
+                # Queue message to notify alpha captain of retraction
+                self.communication.queue_message(
+                    "beta", "", self.simulation.current_time, MessageType.RETRACT_DRAW
+                )
+                self._beta_draw_notified = False
+                self.beta_captain.has_retracted_draw = False  # Clear the flag
+                if self.config.verbose:
+                    print(f"  [DRAW RETRACTED] {self.beta_config.name} retracts draw")
 
             if self.communication.is_battle_ended():
                 break

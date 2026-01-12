@@ -181,13 +181,13 @@ CAPTAIN_TOOLS_BASE = [
         "type": "function",
         "function": {
             "name": "send_message",
-            "description": "Send a message to other ships. Can target all ships, enemies only, friendlies only, or a specific ship.",
+            "description": "OPTIONAL: Send a message to other ships. Use sparingly - only when you have something meaningful to communicate (tactical threats, surrender demands, or psychological warfare). You do NOT need to send a message every checkpoint.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "message": {
                         "type": "string",
-                        "description": "Message content to send"
+                        "description": "Brief message content (keep it short and impactful)"
                     },
                     "recipient": {
                         "type": "string",
@@ -218,7 +218,18 @@ CAPTAIN_TOOLS_BASE = [
         "type": "function",
         "function": {
             "name": "propose_draw",
-            "description": "Propose a mutual draw. Requires enemy captain to also propose draw.",
+            "description": "Propose a mutual draw. The enemy captain will be notified and must also propose draw for it to take effect. Can be retracted with retract_draw.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "retract_draw",
+            "description": "Retract your draw proposal. Use if you previously proposed a draw but now want to continue fighting.",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -278,6 +289,140 @@ def get_captain_tools(has_torpedoes: bool = False) -> List[Dict[str, Any]]:
         List of tool definitions for the LLM
     """
     tools = CAPTAIN_TOOLS_BASE.copy()
+
+    if has_torpedoes:
+        tools.append(TORPEDO_TOOL)
+
+    return tools
+
+
+def get_weapon_groups_for_ship(ship_type: str, fleet_data: Dict[str, Any]) -> Dict[str, List[str]]:
+    """
+    Determine weapon groups and their slots for a ship type.
+
+    Returns dict like: {"spinal": ["weapon_0"], "heavy_coilguns": ["weapon_1", "weapon_2"], "coilguns": ["weapon_3"]}
+    """
+    if ship_type not in fleet_data.get("ships", {}):
+        return {"coilguns": ["weapon_0", "weapon_1"]}  # Fallback
+
+    ship_spec = fleet_data["ships"][ship_type]
+    weapons = ship_spec.get("weapons", [])
+
+    groups: Dict[str, List[str]] = {}
+    for weapon in weapons:
+        wtype = weapon.get("type", "")
+        slot = weapon.get("slot", "")
+        if not slot or slot.startswith("pd_"):
+            continue  # Skip PD weapons
+
+        if wtype == "spinal_coiler_mk3":
+            groups.setdefault("spinal", []).append(slot)
+        elif wtype == "heavy_coilgun_mk3":
+            groups.setdefault("heavy_coilguns", []).append(slot)
+        elif wtype == "coilgun_mk3":
+            groups.setdefault("coilguns", []).append(slot)
+
+    return groups
+
+
+def build_weapon_tool_for_ship(ship_type: str, fleet_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the set_weapons_order tool definition based on ship's weapons."""
+    groups = get_weapon_groups_for_ship(ship_type, fleet_data)
+    weapon_types = fleet_data.get("weapon_types", {})
+
+    properties: Dict[str, Any] = {}
+    description_parts = ["Set fire control orders for weapons."]
+
+    # Spinal mode (if ship has spinal)
+    if "spinal" in groups:
+        spinal_spec = weapon_types.get("spinal_coiler_mk3", {})
+        vel = spinal_spec.get("muzzle_velocity_kps", 9.9)
+        dmg = spinal_spec.get("kinetic_energy_gj", 4.32)
+        rng = spinal_spec.get("range_km", 900)
+
+        properties["spinal_mode"] = {
+            "type": "string",
+            "enum": ["FIRE_IMMEDIATE", "FIRE_WHEN_OPTIMAL", "FIRE_AT_RANGE", "HOLD_FIRE"],
+            "description": f"Spinal coiler ({vel} km/s, {dmg:.1f} GJ, {rng}km range, requires nose within 30° of target)"
+        }
+        properties["spinal_min_probability"] = {
+            "type": "number", "minimum": 0.1, "maximum": 0.9,
+            "description": "For spinal FIRE_WHEN_OPTIMAL: minimum hit probability (default 0.3)"
+        }
+        properties["spinal_max_range_km"] = {
+            "type": "number", "minimum": 50, "maximum": rng,
+            "description": f"For spinal FIRE_AT_RANGE: maximum range (default {min(500, rng)})"
+        }
+        description_parts.append(f"SPINAL: {vel} km/s, {dmg:.1f} GJ, fixed mount (30° arc).")
+
+    # Heavy coilgun mode
+    if "heavy_coilguns" in groups:
+        heavy_spec = weapon_types.get("heavy_coilgun_mk3", {})
+        vel = heavy_spec.get("muzzle_velocity_kps", 7.0)
+        dmg = heavy_spec.get("kinetic_energy_gj", 1.22)
+        rng = heavy_spec.get("range_km", 600)
+        count = len(groups["heavy_coilguns"])
+
+        properties["heavy_coilgun_mode"] = {
+            "type": "string",
+            "enum": ["FIRE_IMMEDIATE", "FIRE_WHEN_OPTIMAL", "FIRE_AT_RANGE", "HOLD_FIRE"],
+            "description": f"Heavy coilguns x{count} ({vel} km/s, {dmg:.1f} GJ each, {rng}km range, turreted 180° arc)"
+        }
+        properties["heavy_coilgun_min_probability"] = {
+            "type": "number", "minimum": 0.1, "maximum": 0.9,
+            "description": "For heavy coilgun FIRE_WHEN_OPTIMAL: minimum hit probability (default 0.3)"
+        }
+        properties["heavy_coilgun_max_range_km"] = {
+            "type": "number", "minimum": 50, "maximum": rng,
+            "description": f"For heavy coilgun FIRE_AT_RANGE: maximum range (default {min(400, rng)})"
+        }
+        description_parts.append(f"HEAVY COILGUNS x{count}: {vel} km/s, {dmg:.1f} GJ each, turreted.")
+
+    # Standard coilgun mode
+    if "coilguns" in groups:
+        coil_spec = weapon_types.get("coilgun_mk3", {})
+        vel = coil_spec.get("muzzle_velocity_kps", 6.0)
+        dmg = coil_spec.get("kinetic_energy_gj", 0.72)
+        rng = coil_spec.get("range_km", 500)
+        count = len(groups["coilguns"])
+
+        properties["coilgun_mode"] = {
+            "type": "string",
+            "enum": ["FIRE_IMMEDIATE", "FIRE_WHEN_OPTIMAL", "FIRE_AT_RANGE", "HOLD_FIRE"],
+            "description": f"Coilguns x{count} ({vel} km/s, {dmg:.2f} GJ each, {rng}km range, turreted 180° arc)"
+        }
+        properties["coilgun_min_probability"] = {
+            "type": "number", "minimum": 0.1, "maximum": 0.9,
+            "description": "For coilgun FIRE_WHEN_OPTIMAL: minimum hit probability (default 0.3)"
+        }
+        properties["coilgun_max_range_km"] = {
+            "type": "number", "minimum": 50, "maximum": rng,
+            "description": f"For coilgun FIRE_AT_RANGE: maximum range (default {min(300, rng)})"
+        }
+        description_parts.append(f"COILGUNS x{count}: {vel} km/s, {dmg:.2f} GJ each, turreted.")
+
+    return {
+        "type": "function",
+        "function": {
+            "name": "set_weapons_order",
+            "description": " ".join(description_parts),
+            "parameters": {
+                "type": "object",
+                "properties": properties,
+                "required": []
+            }
+        }
+    }
+
+
+def get_captain_tools_for_ship(ship_type: str, fleet_data: Dict[str, Any], has_torpedoes: bool = False) -> List[Dict[str, Any]]:
+    """Get tools appropriate for a specific ship type."""
+    # Start with base tools but EXCLUDE the hardcoded set_weapons_order
+    tools = [t for t in CAPTAIN_TOOLS_BASE if t["function"]["name"] != "set_weapons_order"]
+
+    # Add dynamic weapon tool
+    weapon_tool = build_weapon_tool_for_ship(ship_type, fleet_data)
+    tools.insert(1, weapon_tool)  # Insert after set_maneuver
 
     if has_torpedoes:
         tools.append(TORPEDO_TOOL)

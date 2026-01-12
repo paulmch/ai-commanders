@@ -1560,5 +1560,237 @@ class TestDeterministicResults:
             assert r1.damage_taken_gj == pytest.approx(r2.damage_taken_gj)
 
 
+class TestDreadnoughtSpinalNoseHit:
+    """Test scenario: Spinal coilgun round hits dreadnought nose at 10 km/s with no armor."""
+
+    def test_spinal_round_10kps_dreadnought_nose(self):
+        """
+        Test a spinal round hitting dreadnought's unarmored front nose at 10 km/s.
+
+        Scenario:
+        - Dreadnought (275m length)
+        - Spinal coiler round: 88kg at 10 km/s = ~4.4 GJ kinetic energy
+        - Entry point: nose (x=137.5m for ship centered at origin)
+        - Direction: straight into ship (-x)
+        - No armor protection (worst case)
+
+        Expected: Should damage sensors/bridge at nose and potentially continue deeper.
+        """
+        # Dreadnought layout - 275m long
+        # Based on fleet_ships.json modules:
+        # - Sensor at x=0.22 (bridge/sensor co-located)
+        # - Living quarters at x=0.45
+        # - Magazines at various positions
+        # - Heatsinks at x=0.68-0.78
+
+        layout = DamageModuleLayout(ship_length_m=275.0)
+        half_length = 275.0 / 2  # 137.5m
+
+        # Modules from fleet_ships.json dreadnought (converted to layout coordinates)
+        # x=0 is ship center, positive toward nose
+        # Position x in fleet_ships.json is 0=nose, 1=tail
+        # So we convert: module_x = half_length - (x_fleet * length)
+
+        # Sensor/Bridge at x=0.22 from nose = 60.5m from nose = half_length - 60.5 = 77m from center
+        layout.add_module(DamageModule(
+            name="Dreadnought Sensor Complex",
+            position=Vector3D(77, 0, 3),  # Dorsal position
+            health=50.0,  # Sensors are fragile
+            max_health=50.0,
+            radius_m=3.0,
+            is_critical=False,
+        ))
+
+        layout.add_module(DamageModule(
+            name="Fleet Command Center",
+            position=Vector3D(77, 0, 0),  # Bridge below/with sensor
+            health=100.0,
+            max_health=100.0,
+            radius_m=4.0,
+            is_critical=True,  # Bridge is critical
+        ))
+
+        # Forward magazine (Spinal Magazine) at x=0.06 = 16.5m from nose = 121m from center
+        layout.add_module(DamageModule(
+            name="Spinal Magazine",
+            position=Vector3D(121, 0, 0),  # Near the nose
+            health=75.0,
+            max_health=75.0,
+            radius_m=3.0,
+            is_critical=False,  # Magazine is dangerous if hit
+        ))
+
+        # Living quarters at x=0.45 = 123.75m from nose = 13.75m from center
+        layout.add_module(DamageModule(
+            name="Crew Habitation Section",
+            position=Vector3D(13.75, 0, 0),
+            health=100.0,
+            max_health=100.0,
+            radius_m=5.0,
+            is_critical=False,
+        ))
+
+        # Heavy Battery Magazine A at x=0.25 = 68.75m from nose = 68.75m from center
+        layout.add_module(DamageModule(
+            name="Heavy Battery Magazine A",
+            position=Vector3D(68.75, 0, 3),
+            health=75.0,
+            max_health=75.0,
+            radius_m=3.0,
+            is_critical=False,
+        ))
+
+        # Reactor deep in ship (around x=0.85 = 233.75m from nose = -96.25 from center)
+        layout.add_module(DamageModule(
+            name="Reactor",
+            position=Vector3D(-96.25, 0, 0),
+            health=200.0,
+            max_health=200.0,
+            radius_m=5.0,
+            is_critical=True,
+        ))
+
+        # Calculate kinetic energy: 88kg at 10 km/s
+        # KE = 0.5 * m * v^2 = 0.5 * 88 * (10000)^2 = 4.4 GJ
+        kinetic_energy_gj = 0.5 * 88 * (10000 ** 2) / 1e9  # Convert J to GJ
+
+        # Entry point at nose (no armor, full energy transfer)
+        cone = DamageCone.from_weapon_type(
+            entry_point=Vector3D(137.5, 0, 0),  # Nose of 275m ship
+            direction=Vector3D(-1, 0, 0),       # Into ship
+            energy_gj=kinetic_energy_gj,
+            is_missile=False,  # Kinetic projectile
+        )
+
+        propagator = DamagePropagator(enable_spalling=True)
+        results = propagator.propagate(cone, layout)
+
+        # Extract damage by module
+        damage_by_module = {r.module_name: r for r in results}
+
+        print(f"\n=== Spinal Round Impact (10 km/s, {kinetic_energy_gj:.2f} GJ) ===")
+        print(f"Entry: Nose of Dreadnought (275m)")
+        print(f"Direction: Straight into ship")
+        print(f"\nDamage Results:")
+        for result in results:
+            status = "DESTROYED" if result.destroyed else f"{result.health_after:.1f}% HP"
+            print(f"  {result.module_name}: {result.damage_taken_gj:.2f} GJ absorbed, {status}")
+
+        # The forward magazine should be hit first (closest to nose)
+        assert "Spinal Magazine" in damage_by_module, "Spinal Magazine should be in damage path"
+
+        # Check damage ordering - magazine should be hit before bridge (closer to nose)
+        module_names_hit = [r.module_name for r in results]
+
+        # If both magazine and bridge are hit, magazine should be first
+        if "Spinal Magazine" in module_names_hit and "Fleet Command Center" in module_names_hit:
+            mag_idx = module_names_hit.index("Spinal Magazine")
+            bridge_idx = module_names_hit.index("Fleet Command Center")
+            assert mag_idx < bridge_idx, "Magazine should be hit before bridge"
+
+        # Energy should be significant enough to damage multiple modules
+        total_damage = sum(r.damage_taken_gj for r in results)
+        print(f"\nTotal energy absorbed: {total_damage:.2f} GJ")
+        print(f"Initial energy: {kinetic_energy_gj:.2f} GJ")
+
+    def test_spinal_round_high_energy_penetration(self):
+        """Test what happens with very high energy round penetrating deep."""
+        layout = DamageModuleLayout(ship_length_m=275.0)
+        half_length = 137.5
+
+        # Simplified layout with key modules in a line
+        layout.add_module(DamageModule(
+            name="Forward Magazine",
+            position=Vector3D(121, 0, 0),
+            health=75.0,
+            max_health=75.0,
+            radius_m=3.0,
+        ))
+
+        layout.add_module(DamageModule(
+            name="Sensor Array",
+            position=Vector3D(77, 0, 3),
+            health=50.0,
+            max_health=50.0,
+            radius_m=3.0,
+        ))
+
+        layout.add_module(DamageModule(
+            name="Bridge",
+            position=Vector3D(77, 0, 0),
+            health=100.0,
+            max_health=100.0,
+            radius_m=4.0,
+            is_critical=True,
+        ))
+
+        layout.add_module(DamageModule(
+            name="Heavy Magazine",
+            position=Vector3D(68.75, 0, 0),
+            health=75.0,
+            max_health=75.0,
+            radius_m=3.0,
+        ))
+
+        layout.add_module(DamageModule(
+            name="Crew Quarters",
+            position=Vector3D(13.75, 0, 0),
+            health=100.0,
+            max_health=100.0,
+            radius_m=5.0,
+        ))
+
+        layout.add_module(DamageModule(
+            name="Heatsink Array",
+            position=Vector3D(-49.5, 0, 0),  # x=0.68 -> -49.5
+            health=80.0,
+            max_health=80.0,
+            radius_m=4.0,
+        ))
+
+        layout.add_module(DamageModule(
+            name="Reactor",
+            position=Vector3D(-96.25, 0, 0),
+            health=200.0,
+            max_health=200.0,
+            radius_m=5.0,
+            is_critical=True,
+        ))
+
+        # Very high energy - 50 GJ (like multiple rounds or very close range)
+        cone = DamageCone.from_weapon_type(
+            entry_point=Vector3D(137.5, 0, 0),
+            direction=Vector3D(-1, 0, 0),
+            energy_gj=50.0,  # High energy for deep penetration
+            is_missile=False,
+        )
+
+        propagator = DamagePropagator(enable_spalling=True)
+        results = propagator.propagate(cone, layout)
+
+        print(f"\n=== High Energy Penetration Test (50 GJ) ===")
+        destroyed_modules = []
+        damaged_modules = []
+
+        for result in results:
+            if result.destroyed:
+                destroyed_modules.append(result.module_name)
+            else:
+                damaged_modules.append(result.module_name)
+            print(f"  {result.module_name}: {result.damage_taken_gj:.2f} GJ, "
+                  f"{'DESTROYED' if result.destroyed else f'{result.health_after:.1f}% HP'}")
+
+        print(f"\nDestroyed: {destroyed_modules}")
+        print(f"Damaged: {damaged_modules}")
+
+        # With 50 GJ, forward modules should take significant damage
+        assert len(results) > 0, "Should damage at least one module"
+
+        # Bridge is critical - check if it was hit
+        bridge_result = next((r for r in results if r.module_name == "Bridge"), None)
+        if bridge_result:
+            print(f"\nBridge damage: {bridge_result.damage_taken_gj:.2f} GJ, destroyed: {bridge_result.destroyed}")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

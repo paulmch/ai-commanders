@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 
 from .client import CaptainClient, ToolCall
-from .tools import get_captain_tools, PERSONALITY_SELECTION_TOOLS
+from .tools import get_captain_tools, get_weapon_groups_for_ship, PERSONALITY_SELECTION_TOOLS
 from .prompts import (
     build_captain_prompt,
     build_personality_selection_prompt,
@@ -29,6 +29,8 @@ class LLMCaptainConfig:
     personality_text: Optional[str] = None  # Custom personality description
     temperature: float = 0.7
     has_torpedoes: bool = False
+    ship_type: str = "destroyer"
+    fleet_data: Optional[Dict[str, Any]] = None
 
 
 class LLMCaptain:
@@ -63,6 +65,7 @@ class LLMCaptain:
         self.message_history: List[Dict[str, Any]] = []  # Full conversation log
         self.has_surrendered = False
         self.has_proposed_draw = False
+        self.has_retracted_draw = False
 
         # Personality (can be updated by select_personality)
         self.personality_text: Optional[str] = config.personality_text
@@ -87,11 +90,18 @@ class LLMCaptain:
         # Each entry: {time, weapon, location, damage_cm, remaining_cm, source}
         self.recent_hits: List[Dict[str, Any]] = []
 
+        # Weapon groups - will be populated when we know the ship type
+        self.weapon_groups: Dict[str, List[str]] = {}
+
         # Current weapon configuration for display
         self.current_weapon_orders: Dict[str, str] = {
             "spinal": "HOLD_FIRE",
             "turret": "HOLD_FIRE",
         }
+
+    def setup_weapon_groups(self, ship_type: str, fleet_data: Dict[str, Any]) -> None:
+        """Set up weapon groups based on ship type."""
+        self.weapon_groups = get_weapon_groups_for_ship(ship_type, fleet_data)
 
     def select_personality(self, distance_km: float, verbose: bool = False) -> Dict[str, Any]:
         """
@@ -174,6 +184,10 @@ class LLMCaptain:
         ship = simulation.get_ship(ship_id)
         if not ship or ship.is_destroyed:
             return []
+
+        # Set up weapon groups if not done yet
+        if not self.weapon_groups and self.config.fleet_data and self.config.ship_type:
+            self.setup_weapon_groups(self.config.ship_type, self.config.fleet_data)
 
         # Get enemy for tactical info
         enemies = simulation.get_enemy_ships(ship_id)
@@ -305,6 +319,8 @@ class LLMCaptain:
                 actions.append("SURRENDER")
             elif tc.name == "propose_draw":
                 actions.append("PROPOSE DRAW")
+            elif tc.name == "retract_draw":
+                actions.append("RETRACT DRAW")
 
         return ", ".join(actions) if actions else "No actions"
 
@@ -346,6 +362,8 @@ class LLMCaptain:
                     actions.append("SURRENDER")
                 elif name == "propose_draw":
                     actions.append("PROPOSE_DRAW")
+                elif name == "retract_draw":
+                    actions.append("RETRACT_DRAW")
 
             action_str = ", ".join(actions) if actions else "none"
             lines.append(f"  T+{time:.0f}s: {action_str}")
@@ -1043,55 +1061,48 @@ class LLMCaptain:
                 enemies = simulation.get_enemy_ships(ship_id)
                 target_id = enemies[0].ship_id if enemies else None
 
-            # Handle new independent spinal/turret modes
             orders = []
 
-            # Spinal weapon order
-            spinal_mode = args.get("spinal_mode")
-            if spinal_mode:
-                try:
-                    spinal_command = WeaponsCommand[spinal_mode]
-                except KeyError:
-                    spinal_command = WeaponsCommand.FIRE_WHEN_OPTIMAL
+            # Process each weapon group dynamically
+            for group_name, slots in self.weapon_groups.items():
+                mode_key = f"{group_name}_mode"
+                prob_key = f"{group_name}_min_probability"
+                range_key = f"{group_name}_max_range_km"
 
-                orders.append(WeaponsOrder(
-                    command=spinal_command,
-                    weapon_slot="weapon_0",
-                    target_id=target_id,
-                    min_hit_probability=args.get("spinal_min_probability", 0.3),
-                    max_range_km=args.get("spinal_max_range_km", 500.0),
-                ))
-                # Track current weapon orders
-                self.current_weapon_orders["spinal"] = spinal_mode
+                mode = args.get(mode_key)
+                if mode:
+                    try:
+                        command = WeaponsCommand[mode]
+                    except KeyError:
+                        command = WeaponsCommand.FIRE_WHEN_OPTIMAL
 
-            # Turret weapon order
-            turret_mode = args.get("turret_mode")
-            if turret_mode:
-                try:
-                    turret_command = WeaponsCommand[turret_mode]
-                except KeyError:
-                    turret_command = WeaponsCommand.FIRE_WHEN_OPTIMAL
+                    min_prob = args.get(prob_key, 0.3)
+                    max_range = args.get(range_key, 500.0)
 
-                orders.append(WeaponsOrder(
-                    command=turret_command,
-                    weapon_slot="weapon_1",
-                    target_id=target_id,
-                    min_hit_probability=args.get("turret_min_probability", 0.3),
-                    max_range_km=args.get("turret_max_range_km", 300.0),
-                ))
-                # Track current weapon orders
-                self.current_weapon_orders["turret"] = turret_mode
+                    # Create order for each weapon in this group
+                    for slot in slots:
+                        orders.append(WeaponsOrder(
+                            command=command,
+                            weapon_slot=slot,
+                            target_id=target_id,
+                            min_hit_probability=min_prob,
+                            max_range_km=max_range,
+                        ))
 
-            # If no specific modes set, default both to FIRE_WHEN_OPTIMAL
-            if not orders:
-                orders.append(WeaponsOrder(
-                    command=WeaponsCommand.FIRE_WHEN_OPTIMAL,
-                    weapon_slot="all",
-                    target_id=target_id,
-                    min_hit_probability=0.3,
-                ))
-                self.current_weapon_orders["spinal"] = "FIRE_WHEN_OPTIMAL"
-                self.current_weapon_orders["turret"] = "FIRE_WHEN_OPTIMAL"
+                    # Track current weapon orders (use group name for display)
+                    self.current_weapon_orders[group_name] = mode
+
+            # If no specific modes set, default all groups to FIRE_WHEN_OPTIMAL
+            if not orders and self.weapon_groups:
+                for group_name, slots in self.weapon_groups.items():
+                    for slot in slots:
+                        orders.append(WeaponsOrder(
+                            command=WeaponsCommand.FIRE_WHEN_OPTIMAL,
+                            weapon_slot=slot,
+                            target_id=target_id,
+                            min_hit_probability=0.3,
+                        ))
+                    self.current_weapon_orders[group_name] = "FIRE_WHEN_OPTIMAL"
 
             return {
                 "type": "weapons_orders",
@@ -1136,6 +1147,13 @@ class LLMCaptain:
 
         elif name == "propose_draw":
             self.has_proposed_draw = True
+            self.has_retracted_draw = False  # Clear retraction if re-proposing
+            return None
+
+        elif name == "retract_draw":
+            if self.has_proposed_draw:
+                self.has_retracted_draw = True
+                self.has_proposed_draw = False
             return None
 
         else:
