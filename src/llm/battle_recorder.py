@@ -45,6 +45,12 @@ class EventType(str, Enum):
     SURRENDER = "surrender"
     DRAW_PROPOSAL = "draw_proposal"
 
+    # Admiral/Captain interactions
+    ADMIRAL_DIRECTIVE = "admiral_directive"
+    ADMIRAL_ORDER = "admiral_order"
+    CAPTAIN_DECISION = "captain_decision"
+    CAPTAIN_ADMIRAL_DISCUSSION = "captain_admiral_discussion"
+
     # Ship status
     SHIP_STATE = "ship_state"
     THERMAL_WARNING = "thermal_warning"
@@ -72,10 +78,12 @@ class BattleEvent:
 class BattleRecording:
     """Complete recording of a battle."""
     # Metadata
-    recording_version: str = "2.0"  # Bumped for sim_trace support
+    recording_version: str = "2.1"  # Bumped for fleet battle support
     recorded_at: str = ""
+    is_fleet_battle: bool = False
+    battle_name: str = ""
 
-    # Battle config
+    # Battle config (1v1 mode)
     alpha_model: str = ""
     beta_model: str = ""
     alpha_name: str = ""
@@ -89,9 +97,13 @@ class BattleRecording:
     max_checkpoints: int = 0
     unlimited_mode: bool = False
 
-    # Ship specs (for replay)
+    # Ship specs (for replay - 1v1 mode)
     alpha_specs: Dict[str, Any] = field(default_factory=dict)
     beta_specs: Dict[str, Any] = field(default_factory=dict)
+
+    # Fleet battle config
+    alpha_fleet: Dict[str, Any] = field(default_factory=dict)  # Admiral + ships
+    beta_fleet: Dict[str, Any] = field(default_factory=dict)
 
     # Events (checkpoints, commands, hits, etc.)
     events: List[Dict[str, Any]] = field(default_factory=list)
@@ -105,6 +117,8 @@ class BattleRecording:
     result_reason: str = ""
     duration_s: float = 0.0
     total_checkpoints: int = 0
+    alpha_ships_remaining: int = 0
+    beta_ships_remaining: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -177,6 +191,93 @@ class BattleRecorder:
                 "distance_km": battle_config.initial_distance_km,
                 "alpha": alpha_config.name,
                 "beta": beta_config.name,
+            }
+        ))
+
+    def start_fleet_recording(
+        self,
+        fleet_config: Any,
+        battle_config: Any,
+        alpha_ships: Dict[str, Any],
+        beta_ships: Dict[str, Any],
+        alpha_admiral: Any = None,
+        beta_admiral: Any = None,
+    ) -> None:
+        """Start recording a fleet battle."""
+        self._is_recording = True
+        self.events = []
+
+        self.recording = BattleRecording(
+            recorded_at=datetime.now().isoformat(),
+            is_fleet_battle=True,
+            battle_name=fleet_config.battle_name,
+            initial_distance_km=fleet_config.initial_distance_km,
+            time_limit_s=fleet_config.time_limit_s,
+            max_checkpoints=getattr(fleet_config, 'max_checkpoints', battle_config.max_checkpoints),
+        )
+
+        # Record alpha fleet
+        alpha_fleet_data = {
+            "admiral": None,
+            "ships": [],
+        }
+        if alpha_admiral:
+            alpha_fleet_data["admiral"] = {
+                "name": alpha_admiral.name,
+                "model": alpha_admiral.config.model,
+            }
+        for ship_id, ship in alpha_ships.items():
+            ship_data = self._extract_ship_specs(ship)
+            ship_data["ship_name"] = getattr(ship, 'name', ship_id)
+            alpha_fleet_data["ships"].append(ship_data)
+        self.recording.alpha_fleet = alpha_fleet_data
+
+        # Record beta fleet
+        beta_fleet_data = {
+            "admiral": None,
+            "ships": [],
+        }
+        if beta_admiral:
+            beta_fleet_data["admiral"] = {
+                "name": beta_admiral.name,
+                "model": beta_admiral.config.model,
+            }
+        for ship_id, ship in beta_ships.items():
+            ship_data = self._extract_ship_specs(ship)
+            ship_data["ship_name"] = getattr(ship, 'name', ship_id)
+            beta_fleet_data["ships"].append(ship_data)
+        self.recording.beta_fleet = beta_fleet_data
+
+        # For backward compatibility, use first ships for alpha_model/beta_model
+        if alpha_ships:
+            first_alpha = list(alpha_ships.values())[0]
+            self.recording.alpha_ship = getattr(first_alpha, 'name', 'Alpha Fleet')
+        if beta_ships:
+            first_beta = list(beta_ships.values())[0]
+            self.recording.beta_ship = getattr(first_beta, 'name', 'Beta Fleet')
+
+        # Get model names for filename generation
+        if alpha_admiral:
+            self.recording.alpha_model = alpha_admiral.config.model
+        elif alpha_fleet_data["ships"]:
+            # Use first captain's model
+            self.recording.alpha_model = fleet_config.alpha_fleet.ships[0].model
+        if beta_admiral:
+            self.recording.beta_model = beta_admiral.config.model
+        elif beta_fleet_data["ships"]:
+            self.recording.beta_model = fleet_config.beta_fleet.ships[0].model
+
+        self._record_event(BattleEvent(
+            timestamp=0.0,
+            event_type=EventType.BATTLE_START,
+            data={
+                "is_fleet_battle": True,
+                "battle_name": fleet_config.battle_name,
+                "distance_km": fleet_config.initial_distance_km,
+                "alpha_ships": len(alpha_ships),
+                "beta_ships": len(beta_ships),
+                "alpha_admiral": alpha_admiral.name if alpha_admiral else None,
+                "beta_admiral": beta_admiral.name if beta_admiral else None,
             }
         ))
 
@@ -328,6 +429,8 @@ class BattleRecorder:
         distance_km: float,
         projectile_energy_gj: float,
         muzzle_velocity_kps: float,
+        weapon_name: str = "unknown",
+        eta_s: float = 0.0,
     ) -> None:
         """Record a shot being fired."""
         self._record_event(BattleEvent(
@@ -337,8 +440,10 @@ class BattleRecorder:
             data={
                 "target_id": target_id,
                 "weapon_slot": weapon_slot,
+                "weapon_name": weapon_name,
                 "hit_probability": hit_probability,
                 "distance_km": distance_km,
+                "eta_s": eta_s,
                 "projectile_energy_gj": projectile_energy_gj,
                 "muzzle_velocity_kps": muzzle_velocity_kps,
             }
@@ -358,6 +463,7 @@ class BattleRecorder:
         damage_to_hull_gj: float,
         penetrated: bool,
         critical_hit: bool = False,
+        flight_time_s: float = 0.0,
     ) -> None:
         """Record a hit with full damage details."""
         self._record_event(BattleEvent(
@@ -375,6 +481,7 @@ class BattleRecorder:
                 "damage_to_hull_gj": damage_to_hull_gj,
                 "penetrated": penetrated,
                 "critical_hit": critical_hit,
+                "flight_time_s": flight_time_s,
             }
         ))
 
@@ -386,6 +493,7 @@ class BattleRecorder:
         weapon_slot: str,
         hit_probability: float,
         distance_km: float,
+        flight_time_s: float = 0.0,
     ) -> None:
         """Record a miss."""
         self._record_event(BattleEvent(
@@ -397,6 +505,7 @@ class BattleRecorder:
                 "weapon_slot": weapon_slot,
                 "hit_probability": hit_probability,
                 "distance_km": distance_km,
+                "flight_time_s": flight_time_s,
             }
         ))
 
@@ -538,6 +647,102 @@ class BattleRecorder:
             }
         ))
 
+    def record_admiral_directive(
+        self,
+        timestamp: float,
+        admiral_name: str,
+        faction: str,
+        directive: str,
+    ) -> None:
+        """Record fleet-wide directive from admiral."""
+        self._record_event(BattleEvent(
+            timestamp=timestamp,
+            event_type=EventType.ADMIRAL_DIRECTIVE,
+            data={
+                "admiral_name": admiral_name,
+                "faction": faction,
+                "directive": directive,
+            }
+        ))
+
+    def record_admiral_order(
+        self,
+        timestamp: float,
+        admiral_name: str,
+        ship_id: str,
+        ship_name: str,
+        order_text: str,
+        priority: str = "NORMAL",
+        suggested_target: Optional[str] = None,
+    ) -> None:
+        """Record order from admiral to specific captain."""
+        self._record_event(BattleEvent(
+            timestamp=timestamp,
+            event_type=EventType.ADMIRAL_ORDER,
+            ship_id=ship_id,
+            data={
+                "admiral_name": admiral_name,
+                "ship_name": ship_name,
+                "order_text": order_text,
+                "priority": priority,
+                "suggested_target": suggested_target,
+            }
+        ))
+
+    def record_captain_decision(
+        self,
+        timestamp: float,
+        ship_id: str,
+        captain_name: str,
+        ship_name: str,
+        maneuver_type: str,
+        throttle: float,
+        target_id: Optional[str] = None,
+        target_name: Optional[str] = None,
+        radiators_extended: bool = False,
+        acknowledgment: Optional[str] = None,
+    ) -> None:
+        """Record captain's decision with full context."""
+        self._record_event(BattleEvent(
+            timestamp=timestamp,
+            event_type=EventType.CAPTAIN_DECISION,
+            ship_id=ship_id,
+            data={
+                "captain_name": captain_name,
+                "ship_name": ship_name,
+                "maneuver_type": maneuver_type,
+                "throttle": throttle,
+                "target_id": target_id,
+                "target_name": target_name,
+                "radiators_extended": radiators_extended,
+                "acknowledgment": acknowledgment,
+            }
+        ))
+
+    def record_captain_admiral_discussion(
+        self,
+        timestamp: float,
+        ship_id: str,
+        captain_name: str,
+        admiral_name: str,
+        captain_question: str,
+        admiral_response: str,
+        exchange_number: int,
+    ) -> None:
+        """Record discussion exchange between captain and admiral."""
+        self._record_event(BattleEvent(
+            timestamp=timestamp,
+            event_type=EventType.CAPTAIN_ADMIRAL_DISCUSSION,
+            ship_id=ship_id,
+            data={
+                "captain_name": captain_name,
+                "admiral_name": admiral_name,
+                "captain_question": captain_question,
+                "admiral_response": admiral_response,
+                "exchange_number": exchange_number,
+            }
+        ))
+
     def record_sim_frame(
         self,
         timestamp: float,
@@ -575,6 +780,8 @@ class BattleRecorder:
                 "fwd": [round(ship["forward"][0], 4), round(ship["forward"][1], 4), round(ship["forward"][2], 4)],
                 "thrust": round(ship.get("thrust", 0.0), 2),
                 "maneuver": ship.get("maneuver", "MAINTAIN"),
+                "destroyed": ship.get("is_destroyed", False),
+                "hull": ship.get("hull_pct", 100.0),
             }
 
         # Record projectile states (coilgun slugs)

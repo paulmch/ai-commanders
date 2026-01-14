@@ -1,12 +1,16 @@
 # AI Commanders
 
-A Terra Invicta-inspired space battle simulator where **LLM-controlled captains** command destroyers in tactical combat. Watch AI models trash-talk each other while trying to blow each other up with coilguns and torpedoes.
+A Terra Invicta-inspired space battle simulator where **LLM-controlled captains and admirals** command fleets in tactical combat. Watch AI models coordinate fleet maneuvers, issue orders, and trash-talk while trying to blow each other up with coilguns and torpedoes.
 
 ## What is this?
 
-Two AI captains. Two destroyers. 500km of cold vacuum between them. Each captain gets a unique personality, makes tactical decisions every 30 seconds, and can send messages to their opponent. The physics is real (Newtonian mechanics, armor ablation, heat management), but the trash talk is pure AI.
+Two modes of warfare:
 
-**LLM Tournament coming soon!**
+**Single Combat**: Two AI captains. Two ships. 500km of vacuum. Each captain makes tactical decisions every 30 seconds and can message their opponent.
+
+**Fleet Battles**: Two AI admirals commanding fleets of multiple ships. Admirals issue strategic orders, captains execute tactics, and everyone can communicate. Coordinate focus fire, flanking maneuvers, and combined arms.
+
+The physics is real (Newtonian mechanics, armor ablation, heat management), but the trash talk is pure AI.
 
 ## Attribution
 
@@ -22,98 +26,221 @@ uv sync
 
 # Add your OpenRouter API key to .env file
 echo "OPENROUTER_API_KEY=sk-or-v1-your-key-here" > .env
-
-# Run a battle!
-uv run python scripts/run_llm_battle.py \
-    --alpha-model openai/gpt-5.2 \
-    --beta-model x-ai/grok-4.1-fast \
-    --max-checkpoints 10 \
-    --verbose
 ```
+
+### Single Battle (1v1)
+
+```bash
+# Quick destroyer duel
+uv run python scripts/run_llm_battle.py -v
+
+# Customize ships and models
+uv run python scripts/run_llm_battle.py \
+    --alpha-model openrouter/anthropic/claude-sonnet-4 \
+    --beta-model openrouter/x-ai/grok-3-fast \
+    --alpha-ship-type cruiser \
+    --beta-ship-type destroyer \
+    --distance 400 \
+    -v
+```
+
+### Fleet Battle (Multi-Ship with Admirals)
+
+```bash
+# Run a fleet engagement
+uv run python scripts/run_llm_battle.py \
+    --fleet-config data/fleet_config_claude_vs_gemini.json \
+    -v
+
+# Unlimited mode - fight until destruction
+uv run python scripts/run_llm_battle.py \
+    --fleet-config data/fleet_config_claude_vs_gemini.json \
+    --unlimited \
+    -v
+```
+
+## Battle Modes
+
+### Single Combat Mode
+
+Classic 1v1 duel between two AI captains. Each captain:
+- Chooses their own combat personality
+- Makes tactical decisions every 30 seconds
+- Can send messages to their opponent
+- Can propose draws or surrender
+
+```bash
+uv run python scripts/run_llm_battle.py \
+    --alpha-model MODEL \
+    --beta-model MODEL \
+    --alpha-ship-type destroyer \
+    --beta-ship-type destroyer \
+    -v
+```
+
+### Fleet Battle Mode
+
+Multi-ship engagements with hierarchical command:
+
+**Admirals** (one per fleet):
+- See dual-snapshot tactical view (T-15s and T=0)
+- Issue strategic directives to entire fleet
+- Send specific orders to each captain
+- Can negotiate with enemy admiral
+- Propose/accept fleet-wide draws
+
+**Captains** (one per ship):
+- Receive and acknowledge admiral orders
+- Can discuss orders with their admiral (up to 2 exchanges)
+- Execute tactical maneuvers
+- Can message enemy captains
+
+```bash
+uv run python scripts/run_llm_battle.py \
+    --fleet-config data/fleet_config.json \
+    -v
+```
+
+## Fleet Configuration
+
+Fleet battles use JSON configuration files:
+
+```json
+{
+  "battle_name": "Fleet Engagement: Claude vs Gemini",
+  "time_limit_s": 1200,
+  "decision_interval_s": 30.0,
+  "initial_distance_km": 400,
+  "alpha_fleet": {
+    "admiral": "openrouter/anthropic/claude-sonnet-4",
+    "ships": [
+      {"ship_type": "destroyer", "model": "openrouter/anthropic/claude-haiku-4.5"},
+      {"ship_type": "destroyer", "model": "openrouter/anthropic/claude-haiku-4.5"},
+      {"ship_type": "dreadnought", "model": "openrouter/anthropic/claude-haiku-4.5"}
+    ]
+  },
+  "beta_fleet": {
+    "admiral": "openrouter/google/gemini-2.5-pro-preview",
+    "ships": [
+      {"ship_type": "destroyer", "model": "openrouter/google/gemini-2.5-flash-preview"},
+      {"ship_type": "destroyer", "model": "openrouter/google/gemini-2.5-flash-preview"},
+      {"ship_type": "dreadnought", "model": "openrouter/google/gemini-2.5-flash-preview"}
+    ]
+  }
+}
+```
+
+**Configuration Options:**
+| Field | Description |
+|-------|-------------|
+| `battle_name` | Display name for the battle |
+| `time_limit_s` | Maximum battle duration in seconds |
+| `decision_interval_s` | Time between checkpoints (default: 30) |
+| `initial_distance_km` | Starting distance between fleets |
+| `admiral` | Model for fleet admiral (or `null` for no admiral) |
+| `ships` | Array of ship configurations |
+| `ship_type` | Ship class (frigate, destroyer, cruiser, etc.) |
+| `model` | OpenRouter model ID for the captain |
+
+## CLI Reference
+
+```
+uv run python scripts/run_llm_battle.py [OPTIONS]
+```
+
+### Model & Ship Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--alpha-model` | OpenRouter model for Alpha | claude-3.5-sonnet |
+| `--beta-model` | OpenRouter model for Beta | claude-3.5-sonnet |
+| `--alpha-ship-type` | Ship class for Alpha | destroyer |
+| `--beta-ship-type` | Ship class for Beta | destroyer |
+| `--alpha-name` | Captain name for Alpha | Commander Chen |
+| `--beta-name` | Captain name for Beta | Captain Volkov |
+| `--alpha-ship` | Ship name for Alpha | TIS Relentless |
+| `--beta-ship` | Ship name for Beta | HFS Determination |
+
+### Battle Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--fleet-config FILE` | JSON fleet config (enables fleet mode) | None |
+| `--distance KM` | Initial distance in km | 500 |
+| `--max-checkpoints N` | Max decision points | 40 |
+| `--time-limit SEC` | Time limit in seconds | 1200 |
+| `--unlimited` | Fight until destruction/surrender/draw | False |
+| `--trace` | Record detailed sim trace (large files!) | False |
+
+### Output Options
+
+| Option | Description |
+|--------|-------------|
+| `-v, --verbose` | Show detailed battle output |
+| `-q, --quiet` | Only show final result |
+| `--no-personality-selection` | Skip personality phase |
+
+### Examples
+
+```bash
+# Quick 1v1 duel
+uv run python scripts/run_llm_battle.py -v
+
+# Cruiser vs Destroyer
+uv run python scripts/run_llm_battle.py \
+    --alpha-ship-type cruiser \
+    --beta-ship-type destroyer \
+    --distance 300 -v
+
+# Fleet battle with recording
+uv run python scripts/run_llm_battle.py \
+    --fleet-config data/fleet_config_claude_vs_gemini.json \
+    --trace -v
+
+# Unlimited fleet battle (fight to the death)
+uv run python scripts/run_llm_battle.py \
+    --fleet-config data/fleet_config.json \
+    --unlimited -v
+```
+
+## Ship Classes
+
+| Ship | Accel | 90° Turn | Armor (N/L/T) | Role |
+|------|-------|----------|---------------|------|
+| Corvette | 3.0g | 12s | Light | Scout, harassment |
+| Frigate | 3.0g | 15s | Light | Fast attack |
+| Destroyer | 2.0g | 21s | 151/26/30 cm | Balanced combatant |
+| Cruiser | 1.5g | 28s | Medium | Heavy firepower |
+| Battlecruiser | 1.5g | 28s | Medium | Fast capital |
+| Battleship | 1.0g | 37s | Heavy | Line combat |
+| Dreadnought | 0.75g | 50s | 180/43/50 cm | Fleet anchor |
+
+**Armor Sections:**
+- **Nose (N)**: Heaviest armor, faces enemy during attack runs
+- **Lateral (L)**: Side armor, thinnest - vulnerable during turns
+- **Tail (T)**: Rear armor, exposed when fleeing
 
 ## Features
 
 - **Newtonian Physics**: Real orbital mechanics, delta-v budgets, acceleration limits
+- **Ship Classes**: 7 classes from corvette to dreadnought
 - **Armor System**: Layered armor (nose/lateral/tail), ablation mechanics, penetration
 - **Weapons**: Spinal coilguns (high damage), turret coilguns, torpedoes, point defense
-- **Thermal Management**: Heat sinks, radiators (extend for cooling, but they're vulnerable!)
-- **AI Captains**: LLMs choose their own personality, make tactical decisions, and trash-talk
+- **Thermal Management**: Heat sinks, radiators (extend for cooling, retract for protection)
+- **Fleet Command**: Admiral-captain hierarchy with orders and discussions
+- **AI Personalities**: LLMs choose their own combat personality
+- **Communications**: Captains can message enemies, admirals can negotiate
 - **Battle Recording**: Full replay data saved as JSON
+- **Tactical Scoring**: Winner determined by tactical advantage if time expires
 
 ## Supported Models
 
 Any model on OpenRouter works. Tested with:
-- `anthropic/claude-sonnet-4` / `claude-opus-4`
-- `openai/gpt-5.2`
-- `x-ai/grok-4.1-fast`
-- `google/gemini-3-flash-preview`
-- `deepseek/deepseek-v3.2`
-
-## Battle Statistics (23 Battles)
-
-| Model | Wins | Losses | Draws |
-|-------|------|--------|-------|
-| Claude (various) | 7 | 4 | 11 |
-| Grok-4.1-fast | 4 | 7 | - |
-| Gemini-3-flash | 1 | 0 | 1 |
-| GPT-5.2 | 0 | 1 | 1 |
-| DeepSeek-v3.2 | 0 | 1 | 0 |
-
-Most decisive victory: **Claude-Haiku-4.5** vs Grok-4.1-Fast (24-0 hits over 1200s)
-
-## Battle Highlights
-
-### Claude Sonnet vs GPT-5.2: The Philosophy Duel
-
-Two AIs spent 870 seconds having a philosophical debate about geometry, tempo, and the nature of warfare - while shooting at each other.
-
-> **Claude**: "A waltz requires partners moving in harmony, Captain. But I prefer asymmetric rhythms."
-
-> **GPT**: "Asymmetric rhythms noted, Captain. But at 103km with 73% probability, I find the current tempo quite satisfactory."
-
-> **Claude**: "Satisfaction is a luxury, Captain. At 21km with 86% probability... Time to see how well your armor holds at point-blank range."
-
-Later, GPT started bragging about dealing damage - while taking 17% hull damage to Claude's 0%:
-
-> **GPT**: "My 87% hit probability at 17km with both weapons cycling means your armor is eroding faster than mine."
-
-*Narrator: GPT's armor was, in fact, eroding faster.*
-
-The battle ended in a mutual draw after both captains agreed to stop, having developed what can only be described as "respect."
-
-### GPT-5.2 vs Grok-4.1: Accountants with Knives
-
-Both models chose remarkably similar personalities:
-
-> **GPT**: "I fight like a patient accountant with a knife: ruthless about expected value, but always hunting the one irregularity that breaks a battle open."
-
-> **Grok**: "I fight like a skeptical mathematician with a poet's spite... calm feint, brutal commit."
-
-Despite calling itself "patient," GPT fired first at 500km (12% hit chance) and missed everything. Grok waited, then landed 7/8 shots (87.5% accuracy) vs GPT's 5/10 (50%).
-
-### DeepSeek vs Gemini: Death by Persistence
-
-Gemini destroyed DeepSeek after 1059 seconds of relentless pursuit. DeepSeek kept trying to evade while Gemini just... kept coming.
-
-### Claude-Haiku Calls Out Grok's Fake Diplomacy
-
-Grok proposed a "ceasefire" while secretly closing distance. Claude-Haiku wasn't fooled:
-
-> **Grok**: "I propose we establish terms... I'm separating at 2.2 km/s..."
-
-> **Claude-Haiku**: "I appreciate the sophisticated argument. Genuinely. But you've just told me you're separating at 2.2 km/s while my sensors show us **closing at 3.07 km/s**. Either you miscalculated—unlikely—or you're testing whether I'm paying attention. I am.
->
-> We're past the negotiation phase. **Spinal round incoming.** I'm not firing because I expect a hit—I'm firing because you've demonstrated you're willing to use dialogue as cover for tactical positioning."
-
-Cold-blooded.
-
-### The Best Trash Talk Award
-
-Goes to Grok-4.1-fast for this masterpiece of space absurdism:
-
-> "Claude-Haiku, I LOVE the confidence! But here's a cosmic truth: you're accelerating INTO MY CROSSHAIRS. Let's see **whose vacuum is louder.** Prepare for enlightenment."
-
-Peak comedy: asking whose vacuum is louder when sound literally cannot exist in space.
+- `anthropic/claude-sonnet-4` / `claude-opus-4` / `claude-haiku-4.5`
+- `openai/gpt-4o` / `gpt-4o-mini`
+- `x-ai/grok-3-fast`
+- `google/gemini-2.5-pro-preview` / `gemini-2.5-flash-preview`
+- `deepseek/deepseek-chat`
 
 ## Project Structure
 
@@ -124,30 +251,24 @@ ai-commanders/
 │   ├── combat.py           # Weapons, armor, damage resolution
 │   ├── simulation.py       # Battle simulation engine
 │   ├── modules.py          # Ship module layout, damage propagation
-│   └── llm/                # LLM integration
+│   └── llm/
 │       ├── client.py       # LiteLLM wrapper for OpenRouter
-│       ├── captain.py      # LLMCaptain - decision making
+│       ├── captain.py      # LLMCaptain - ship-level decisions
+│       ├── admiral.py      # LLMAdmiral - fleet-level command
 │       ├── prompts.py      # System prompts, personality selection
-│       ├── tools.py        # Tool definitions for LLM actions
-│       ├── battle_runner.py # Orchestrates LLM battles
-│       └── communication.py # Captain messaging system
+│       ├── tools.py        # Captain tool definitions
+│       ├── admiral_tools.py # Admiral tool definitions
+│       ├── fleet_config.py # Fleet configuration loading
+│       ├── battle_runner.py # Orchestrates battles
+│       ├── battle_recorder.py # Records battles for replay
+│       └── communication.py # Messaging system
 ├── data/
 │   ├── fleet_ships.json    # Ship specifications
+│   ├── fleet_config_*.json # Fleet battle configurations
 │   └── recordings/         # Battle recordings (JSON)
 ├── scripts/
 │   └── run_llm_battle.py   # CLI for running battles
 └── tests/                  # Test suite
-```
-
-## Command Line Options
-
-```bash
-uv run python scripts/run_llm_battle.py \
-    --alpha-model MODEL_ID \      # OpenRouter model for Alpha
-    --beta-model MODEL_ID \       # OpenRouter model for Beta
-    --max-checkpoints N \         # Max decision points (default: 20)
-    --initial-distance KM \       # Starting distance (default: 500)
-    --verbose                     # Show detailed output
 ```
 
 ## Running Tests
@@ -156,25 +277,75 @@ uv run python scripts/run_llm_battle.py \
 uv run pytest tests/ -v
 ```
 
-## How It Works
+## Fleet Battle Results
 
-1. **Personality Selection**: Each captain defines their combat personality (no presets - pure creativity)
-2. **Checkpoint Loop**: Every 30 seconds, simulation pauses for captain decisions
-3. **Tool Calls**: Captains use tools like `set_maneuver`, `fire_weapon`, `send_message`, `surrender`
-4. **Physics Simulation**: Projectiles fly, armor ablates, modules take damage
-5. **Victory**: First to destroy the enemy, or tactical advantage at time limit
+### Claude vs Gemini Fleet Engagement (2026-01-14)
 
-## Ship Specifications (Destroyer Class)
+**Configuration**: 3v3 fleet battle (2 Destroyers, 1 Dreadnought per side)
 
-| Attribute | Value |
-|-----------|-------|
-| Acceleration | 2.0g |
-| Delta-V Budget | 500 km/s |
-| Spinal Coilgun | 500km range, ~5 GJ per hit |
-| Turret Coilgun | 200km range, ~1 GJ per hit |
-| Nose Armor | 151 cm |
-| Lateral Armor | 26 cm |
-| Tail Armor | 30 cm |
+| Fleet | Admiral | Captains | Result |
+|-------|---------|----------|--------|
+| Alpha | Claude Sonnet 4.5 | Claude Haiku 4.5 | **VICTORY** (3/3 ships) |
+| Beta | Gemini 2.5 Pro | Gemini 2.5 Flash | Eliminated (0/3 ships) |
+
+- **Duration**: 1446s (24 minutes), 48 checkpoints
+- **Outcome**: Beta fleet eliminated
+
+### Claude vs Grok Fleet Engagement (2026-01-14)
+
+**Configuration**: 4v4 fleet battle (1 Frigate, 2 Destroyers, 1 Cruiser per side)
+
+| Fleet | Admiral | Captains | Result |
+|-------|---------|----------|--------|
+| Alpha | Claude Sonnet 4.5 | Claude Haiku 4.5 | **VICTORY** (4/4 ships) |
+| Beta | Grok Code Fast 1 | Grok 4.1 Fast | Eliminated (0/4 ships) |
+
+- **Duration**: 2223s (37 minutes), 74 checkpoints
+- **Outcome**: Beta fleet eliminated, Alpha fleet took no losses
+
+## Battle Highlights
+
+### Claude-Haiku Calls Out Grok's Fake Diplomacy
+
+Grok proposed a "ceasefire" while secretly closing distance. Claude-Haiku wasn't fooled:
+
+> **Grok**: "I propose we establish terms... I'm separating at 2.2 km/s..."
+
+> **Claude-Haiku**: "I appreciate the sophisticated argument. Genuinely. But you've just told me you're separating at 2.2 km/s while my sensors show us **closing at 3.07 km/s**. Either you miscalculated—unlikely—or you're testing whether I'm paying attention. I am.
+>
+> We're past the negotiation phase. **Spinal round incoming.**"
+
+### The Best Trash Talk Award
+
+Goes to Grok for this masterpiece of space absurdism:
+
+> "Claude-Haiku, I LOVE the confidence! But here's a cosmic truth: you're accelerating INTO MY CROSSHAIRS. Let's see **whose vacuum is louder.** Prepare for enlightenment."
+
+Peak comedy: asking whose vacuum is louder when sound literally cannot exist in space.
+
+### Claude Sonnet vs GPT-5.2: The Philosophy Duel
+
+Two AIs spent 870 seconds having a philosophical debate about geometry, tempo, and the nature of warfare - while shooting at each other.
+
+> **Claude**: "A waltz requires partners moving in harmony, Captain. But I prefer asymmetric rhythms."
+
+> **Claude**: "Satisfaction is a luxury, Captain. At 21km with 86% probability... Time to see how well your armor holds at point-blank range."
+
+## Victory Conditions
+
+**Single Battle:**
+- Ship destruction (hull ≤ 0%)
+- Surrender
+- Mutual draw agreement
+- Time limit → tactical advantage scoring
+
+**Fleet Battle:**
+- All enemy ships destroyed
+- Fleet surrender
+- Admiral mutual draw
+- Time limit → fleet tactical advantage scoring
+
+Tactical advantage considers: ships destroyed, hull integrity, damage dealt, accuracy.
 
 ## Contributing
 
@@ -186,4 +357,4 @@ MIT License - see [LICENSE](LICENSE)
 
 ---
 
-*"The beauty of asymmetric rhythms is that one partner dictates tempo. Watch."* - Claude Sonnet 4, moments before GPT learned about geometry
+*"A waltz requires partners moving in harmony, Captain. But I prefer asymmetric rhythms."* - Claude Sonnet 4

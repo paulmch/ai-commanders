@@ -1,0 +1,83 @@
+{
+  "battle_name": "Claude vs Grok Fleet Engagement",
+  "time_limit_s": 1800,
+  "decision_interval_s": 30.0,
+  "initial_distance_km": 300,
+  "max_checkpoints": 60,
+  "alpha_fleet": {
+    "faction_name": "Terran Imperial Navy",
+    "admiral": {
+      "name": "Admiral Sonnet",
+      "model": "openrouter/anthropic/claude-sonnet-4.5",
+      "personality": "Methodical fleet commander who values coordinated maneuvers and focus fire. Prefers controlled passes over reckless charges. Prioritizes protecting lighter ships while using them to screen for heavier units."
+    },
+    "ships": [
+      {
+        "ship_type": "frigate",
+        "model": "openrouter/anthropic/claude-haiku-4.5",
+        "captain_name": "Captain Haiku",
+        "ship_name": "TIS Haiku-1",
+        "role": "Escort/Screen/PD"
+      },
+      {
+        "ship_type": "destroyer",
+        "model": "openrouter/anthropic/claude-haiku-4.5",
+        "captain_name": "Captain Haiku",
+        "ship_name": "TIS Haiku-2",
+        "role": "Main Combat/Flanker"
+      },
+      {
+        "ship_type": "destroyer",
+        "model": "openrouter/anthropic/claude-haiku-4.5",
+        "captain_name": "Captain Haiku",
+        "ship_name": "TIS Haiku-3",
+        "role": "Main Combat/Flanker"
+      },
+      {
+        "ship_type": "cruiser",
+        "model": "openrouter/anthropic/claude-haiku-4.5",
+        "captain_name": "Captain Haiku",
+        "ship_name": "TIS Haiku-4",
+        "role": "Heavy Anchor/Focus"
+      }
+    ]
+  },
+  "beta_fleet": {
+    "faction_name": "Outer Colonies Syndicate",
+    "admiral": {
+      "name": "Admiral Grok",
+      "model": "openrouter/x-ai/grok-code-fast-1",
+      "personality": "Aggressive tactician who favors overwhelming firepower and rapid engagement. Willing to take calculated risks to achieve decisive victory. Values speed and initiative over caution."
+    },
+    "ships": [
+      {
+        "ship_type": "frigate",
+        "model": "openrouter/x-ai/grok-4.1-fast",
+        "captain_name": "Captain Grok",
+        "ship_name": "OCS Grok-1",
+        "role": "Escort/Screen/PD"
+      },
+      {
+        "ship_type": "destroyer",
+        "model": "openrouter/x-ai/grok-4.1-fast",
+        "captain_name": "Captain Grok",
+        "ship_name": "OCS Grok-2",
+        "role": "Main Combat/Flanker"
+      },
+      {
+        "ship_type": "destroyer",
+        "model": "openrouter/x-ai/grok-4.1-fast",
+        "captain_name": "Captain Grok",
+        "ship_name": "OCS Grok-3",
+        "role": "Main Combat/Flanker"
+      },
+      {
+        "ship_type": "cruiser",
+        "model": "openrouter/x-ai/grok-4.1-fast",
+        "captain_name": "Captain Grok",
+        "ship_name": "OCS Grok-4",
+        "role": "Heavy Anchor/Focus"
+      }
+    ]
+  }
+}

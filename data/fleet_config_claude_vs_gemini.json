@@ -1,0 +1,22 @@
+{
+  "battle_name": "Fleet Engagement: Claude vs Gemini",
+  "time_limit_s": 1200,
+  "decision_interval_s": 30.0,
+  "initial_distance_km": 400,
+  "alpha_fleet": {
+    "admiral": "openrouter/anthropic/claude-sonnet-4.5",
+    "ships": [
+      {"ship_type": "destroyer", "model": "openrouter/anthropic/claude-haiku-4.5"},
+      {"ship_type": "destroyer", "model": "openrouter/anthropic/claude-haiku-4.5"},
+      {"ship_type": "dreadnought", "model": "openrouter/anthropic/claude-haiku-4.5"}
+    ]
+  },
+  "beta_fleet": {
+    "admiral": "openrouter/google/gemini-2.5-pro-preview",
+    "ships": [
+      {"ship_type": "destroyer", "model": "openrouter/google/gemini-2.5-flash-preview"},
+      {"ship_type": "destroyer", "model": "openrouter/google/gemini-2.5-flash-preview"},
+      {"ship_type": "dreadnought", "model": "openrouter/google/gemini-2.5-flash-preview"}
+    ]
+  }
+}

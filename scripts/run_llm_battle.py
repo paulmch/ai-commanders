@@ -5,6 +5,7 @@ Run an LLM-controlled space battle.
 Usage:
     python scripts/run_llm_battle.py --verbose
     python scripts/run_llm_battle.py --alpha-model openai/gpt-4 --beta-model anthropic/claude-3.5-sonnet
+    python scripts/run_llm_battle.py --fleet-config data/fleet_config.json
 """
 
 import argparse
@@ -18,6 +19,7 @@ from src.llm.client import CaptainClient
 from src.llm.captain import LLMCaptainConfig
 from src.llm.prompts import CaptainPersonality
 from src.llm.battle_runner import LLMBattleRunner, BattleConfig, load_fleet_data
+from src.llm.fleet_config import BattleFleetConfig
 
 
 def main():
@@ -116,6 +118,13 @@ Examples:
         help="Time limit in seconds (default: 1200)",
     )
 
+    # Fleet configuration (for multi-ship battles with Admirals)
+    parser.add_argument(
+        "--fleet-config",
+        type=str,
+        help="Path to JSON fleet configuration file (enables fleet mode with Admirals)",
+    )
+
     # Battle modes
     parser.add_argument(
         "--unlimited",
@@ -158,8 +167,26 @@ Examples:
     }
 
     try:
-        # Create client
-        client = CaptainClient(model=args.alpha_model)
+        # Check for fleet config mode
+        fleet_config = None
+        if args.fleet_config:
+            # Load fleet configuration
+            fleet_config = BattleFleetConfig.from_json(args.fleet_config)
+            if not args.quiet:
+                print(f"FLEET MODE: Loading configuration from {args.fleet_config}")
+                print(f"Battle: {fleet_config.battle_name}")
+
+        # Create client with appropriate model
+        if fleet_config:
+            # Use first alpha captain's model for client
+            if fleet_config.alpha_fleet.ships:
+                client_model = fleet_config.alpha_fleet.ships[0].model
+            else:
+                client_model = "openrouter/anthropic/claude-3.5-sonnet"
+        else:
+            client_model = args.alpha_model
+
+        client = CaptainClient(model=client_model)
 
         # Extract short model names for display
         def get_short_model_name(model: str) -> str:
@@ -187,7 +214,7 @@ Examples:
         alpha_short = get_short_model_name(args.alpha_model)
         beta_short = get_short_model_name(args.beta_model)
 
-        # Create captain configs with model names
+        # Create captain configs with model names (used for legacy mode)
         alpha_config = LLMCaptainConfig(
             name=f"Captain {alpha_short}",
             ship_name=f"TIS {alpha_short}",
@@ -213,6 +240,7 @@ Examples:
             personality_selection=not args.no_personality_selection,
             alpha_ship_type=args.alpha_ship_type,
             beta_ship_type=args.beta_ship_type,
+            fleet_config_path=args.fleet_config,
         )
 
         if args.unlimited and not args.quiet:
@@ -227,6 +255,7 @@ Examples:
             alpha_config=alpha_config,
             beta_config=beta_config,
             client=client,
+            fleet_config=fleet_config,
         )
 
         result = runner.run_battle(fleet_data)

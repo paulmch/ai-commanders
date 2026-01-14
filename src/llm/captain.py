@@ -9,14 +9,16 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 
 from .client import CaptainClient, ToolCall
-from .tools import get_captain_tools, get_weapon_groups_for_ship, PERSONALITY_SELECTION_TOOLS
+from .tools import get_captain_tools, get_weapon_groups_for_ship, PERSONALITY_SELECTION_TOOLS, RESPOND_TO_ORDERS_TOOL
 from .prompts import (
     build_captain_prompt,
     build_personality_selection_prompt,
+    format_admiral_orders_for_captain,
     CaptainPersonality,
     PERSONALITY_PRESETS,
 )
 from .communication import CaptainMessage, MessageType
+from .admiral_tools import DISCUSS_WITH_ADMIRAL_TOOL
 
 
 @dataclass
@@ -99,9 +101,27 @@ class LLMCaptain:
             "turret": "HOLD_FIRE",
         }
 
+        # Admiral interaction
+        self.has_admiral: bool = False  # Set by battle runner if Admiral exists
+        self.admiral_orders: List[Any] = []  # Orders from Admiral
+        self.fleet_directive: str = ""  # Overall fleet strategy
+        self.discussion_exchanges: int = 0  # Track discussion rounds
+        self.max_discussion_exchanges: int = 2
+        self.order_response: Optional[Dict[str, Any]] = None  # Response to orders
+
     def setup_weapon_groups(self, ship_type: str, fleet_data: Dict[str, Any]) -> None:
         """Set up weapon groups based on ship type."""
         self.weapon_groups = get_weapon_groups_for_ship(ship_type, fleet_data)
+
+    @property
+    def name(self) -> str:
+        """Get captain's name (from config or chosen during personality selection)."""
+        return self.chosen_name or self.config.name
+
+    @property
+    def ship_name(self) -> str:
+        """Get ship's name from config."""
+        return self.config.ship_name
 
     def select_personality(self, distance_km: float, verbose: bool = False) -> Dict[str, Any]:
         """
@@ -161,6 +181,56 @@ class LLMCaptain:
             messages: List of messages to receive
         """
         self.received_messages.extend(messages)
+
+    def receive_admiral_orders(
+        self,
+        orders: List[Any],
+        fleet_directive: str = "",
+    ) -> None:
+        """
+        Receive orders from Admiral before making decisions.
+
+        Args:
+            orders: List of AdmiralOrder objects for this ship
+            fleet_directive: Overall fleet strategy
+        """
+        self.admiral_orders = orders
+        self.fleet_directive = fleet_directive
+        # Reset discussion counter for new checkpoint
+        self.discussion_exchanges = 0
+
+    def get_tools_for_context(self) -> List[Dict[str, Any]]:
+        """
+        Get tools appropriate for current context.
+
+        If Admiral exists:
+        - Remove propose_draw and retract_draw (only Admiral can)
+        - Add discuss_with_admiral tool
+        - Add respond_to_orders tool if orders were received
+        """
+        # Get base tools
+        tools = get_captain_tools(has_torpedoes=self.config.has_torpedoes)
+
+        if self.has_admiral:
+            # Remove draw tools - only Admiral can propose draws
+            tools = [
+                t for t in tools
+                if t["function"]["name"] not in ("propose_draw", "retract_draw")
+            ]
+            # Add discuss_with_admiral tool
+            tools.append(DISCUSS_WITH_ADMIRAL_TOOL)
+            # Add respond_to_orders tool if we have orders
+            if self.admiral_orders or self.fleet_directive:
+                tools.append(RESPOND_TO_ORDERS_TOOL)
+
+        return tools
+
+    def clear_admiral_context(self) -> None:
+        """Clear Admiral context at end of checkpoint."""
+        self.admiral_orders = []
+        self.fleet_directive = ""
+        self.discussion_exchanges = 0
+        self.order_response = None
 
     def decide(
         self,
@@ -232,7 +302,17 @@ class LLMCaptain:
             battle_summary=battle_summary,
             shot_history=shot_history,
             recent_hits=recent_hits_text if recent_hits_text else None,
+            ship_type=self.config.ship_type,
+            fleet_data=self.config.fleet_data,
         )
+
+        # Add Admiral orders to prompt if present
+        if self.has_admiral and (self.admiral_orders or self.fleet_directive):
+            admiral_orders_text = format_admiral_orders_for_captain(
+                self.admiral_orders,
+                self.fleet_directive,
+            )
+            system_prompt = system_prompt + "\n\n" + admiral_orders_text
 
         # Build messages for LLM
         messages = [
@@ -240,8 +320,11 @@ class LLMCaptain:
             {"role": "user", "content": f"DECISION POINT {self.decision_count + 1}. What are your orders, Captain?"},
         ]
 
+        # Get context-appropriate tools (may exclude draw tools if Admiral exists)
+        tools = self.get_tools_for_context()
+
         # Call LLM with tools
-        tool_calls = self.client.decide_with_tools(messages, self.tools)
+        tool_calls = self.client.decide_with_tools(messages, tools)
 
         # Execute tool calls
         # Track maneuver commands - only one maneuver per decision allowed
@@ -280,6 +363,8 @@ class LLMCaptain:
             return "No actions"
 
         actions = []
+        had_discussion_or_response = False
+
         for tc in self.last_tool_calls:
             if tc.name == "set_maneuver":
                 maneuver = tc.arguments.get("maneuver_type", "?")
@@ -321,8 +406,15 @@ class LLMCaptain:
                 actions.append("PROPOSE DRAW")
             elif tc.name == "retract_draw":
                 actions.append("RETRACT DRAW")
+            elif tc.name in ("respond_to_orders", "discuss_with_admiral"):
+                had_discussion_or_response = True
 
-        return ", ".join(actions) if actions else "No actions"
+        if actions:
+            return ", ".join(actions)
+        elif had_discussion_or_response:
+            return "(maintaining current orders)"
+        else:
+            return "No actions"
 
     def _format_decision_history(self, last_n: int = 5) -> str:
         """Format recent decision history for the prompt."""
@@ -997,9 +1089,9 @@ class LLMCaptain:
                 maneuver_type = ManeuverType[maneuver_name]
                 throttle = args.get("throttle", 1.0)
 
-                # For INTERCEPT, use primary target or first enemy
+                # For INTERCEPT and PADLOCK, use primary target or first enemy
                 target_id = None
-                if maneuver_type == ManeuverType.INTERCEPT:
+                if maneuver_type in (ManeuverType.INTERCEPT, ManeuverType.PADLOCK):
                     if self.primary_target_id:
                         target_id = self.primary_target_id
                     else:
@@ -1155,6 +1247,58 @@ class LLMCaptain:
                 self.has_retracted_draw = True
                 self.has_proposed_draw = False
             return None
+
+        elif name == "discuss_with_admiral":
+            # Captain wants to discuss with Admiral
+            if not self.has_admiral:
+                print(f"[CAPTAIN] {self.name} tried to discuss with Admiral but has no Admiral")
+                return None
+
+            if self.discussion_exchanges >= self.max_discussion_exchanges:
+                print(f"[CAPTAIN] {self.name} has used all {self.max_discussion_exchanges} discussion exchanges")
+                return {
+                    "type": "discussion_limit_reached",
+                    "message": f"You have already used your {self.max_discussion_exchanges} discussion exchanges with the Admiral this checkpoint."
+                }
+
+            question = args.get("question", "")
+            if not question:
+                return None
+
+            self.discussion_exchanges += 1
+            # Return a marker for battle_runner to handle
+            # The battle_runner will call Admiral.respond_to_captain() and inject the response
+            return {
+                "type": "discuss_with_admiral",
+                "question": question,
+                "exchange_number": self.discussion_exchanges,
+            }
+
+        elif name == "respond_to_orders":
+            # Captain responding to Admiral orders
+            response_type = args.get("response_type", "ACKNOWLEDGE")
+            deviation_reason = args.get("deviation_reason", "")
+            acknowledgment_note = args.get("acknowledgment_note", "")
+
+            # Store the response for logging/display
+            self.order_response = {
+                "type": response_type,
+                "deviation_reason": deviation_reason,
+                "acknowledgment_note": acknowledgment_note,
+            }
+
+            if response_type == "DEVIATE":
+                print(f"  [DEVIATION] {self.name}:")
+                for line in deviation_reason.split('\n'):
+                    print(f"    {line}")
+            elif acknowledgment_note:
+                print(f"  [ACKNOWLEDGE] {self.name}:")
+                for line in acknowledgment_note.split('\n'):
+                    print(f"    {line}")
+            else:
+                print(f"  [ACKNOWLEDGE] {self.name}: Orders received, executing.")
+
+            return None  # No command, just tracking
 
         else:
             print(f"[CAPTAIN] Unknown tool: {name}")

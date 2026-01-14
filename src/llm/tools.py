@@ -20,12 +20,13 @@ CAPTAIN_TOOLS_BASE = [
                 "properties": {
                     "maneuver_type": {
                         "type": "string",
-                        "enum": ["INTERCEPT", "EVADE", "BRAKE", "MAINTAIN"],
+                        "enum": ["INTERCEPT", "EVADE", "BRAKE", "MAINTAIN", "PADLOCK"],
                         "description": (
-                            "INTERCEPT: Close with enemy aggressively. "
-                            "EVADE: Evasive maneuvers to dodge fire. "
-                            "BRAKE: Flip and burn to slow down. "
-                            "MAINTAIN: Hold current course and speed."
+                            "INTERCEPT: Burn toward target - for approach only, not combat! "
+                            "EVADE: Evasive thrust while fighting - BEST for active combat! "
+                            "BRAKE: Flip and burn to slow down - use when closing too fast. "
+                            "MAINTAIN: Coast at current velocity - no thrust, no tracking. "
+                            "PADLOCK: Coast while tracking target with nose - fire spinal during passes."
                         )
                     },
                     "throttle": {
@@ -207,7 +208,13 @@ CAPTAIN_TOOLS_BASE = [
         "type": "function",
         "function": {
             "name": "surrender",
-            "description": "Surrender the battle. You lose, but battle ends immediately.",
+            "description": (
+                "Surrender your ship. Your ship will stop maneuvering, drift on its "
+                "current trajectory, and become untargetable by all weapons. Enemy ships "
+                "can no longer shoot at you. In fleet battles, only your ship surrenders - "
+                "other friendly ships continue fighting. Use this to preserve your crew "
+                "when defeat is inevitable."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -276,6 +283,47 @@ PERSONALITY_SELECTION_TOOL = {
 
 # Tools for personality selection phase only
 PERSONALITY_SELECTION_TOOLS = [PERSONALITY_SELECTION_TOOL]
+
+# Tool for responding to Admiral orders
+RESPOND_TO_ORDERS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "respond_to_orders",
+        "description": (
+            "Respond to your Admiral's orders. You MUST call this tool when you have "
+            "received orders from your Admiral. Either acknowledge you will follow them, "
+            "or explain why you are deviating."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "response_type": {
+                    "type": "string",
+                    "enum": ["ACKNOWLEDGE", "DEVIATE"],
+                    "description": (
+                        "ACKNOWLEDGE: You will follow the Admiral's orders as given. "
+                        "DEVIATE: You have tactical reasons to do something different."
+                    )
+                },
+                "deviation_reason": {
+                    "type": "string",
+                    "description": (
+                        "If DEVIATE: Explain WHY you are deviating and WHAT you will do instead. "
+                        "Required if response_type is DEVIATE. Be specific about your reasoning."
+                    )
+                },
+                "acknowledgment_note": {
+                    "type": "string",
+                    "description": (
+                        "Optional: Brief note on how you will execute the orders. "
+                        "E.g., 'Targeting OCS Grok-1 as ordered, intercepting at full throttle.'"
+                    )
+                }
+            },
+            "required": ["response_type"]
+        }
+    }
+}
 
 
 def get_captain_tools(has_torpedoes: bool = False) -> List[Dict[str, Any]]:

@@ -66,6 +66,25 @@
       "pivot_range_deg": 30,
       "is_turreted": false
     },
+    "heavy_siege_coiler_mk3": {
+      "name": "Heavy Siege Coiler Mk3",
+      "mass_tons": 1000,
+      "ammo_mass_kg": 750,
+      "magazine": 100,
+      "muzzle_velocity_kps": 4.7,
+      "warhead_mass_kg": 656.25,
+      "kinetic_energy_gj": 7.25,
+      "flat_chipping": 0.25,
+      "cooldown_s": 24,
+      "salvo_size": 3,
+      "intra_salvo_cooldown_s": 18,
+      "range_km": 900,
+      "mount": "triple_nose",
+      "hardpoints_required": 3,
+      "pivot_range_deg": 20,
+      "is_turreted": false,
+      "notes": "Capital ship siege weapon. Fires 3-shot salvos of 656kg slugs. 21.75 GJ per salvo. Slower projectiles (4.7 km/s) give targets more evasion time but hits are devastating. Only fits Battleship/Dreadnought class (3 nose hardpoints)."
+    },
     "heavy_coilgun_mk3": {
       "name": "Heavy Coilgun Battery Mk3",
       "mass_tons": 160,
