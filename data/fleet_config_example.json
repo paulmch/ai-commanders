@@ -1,0 +1,22 @@
+{
+  "battle_name": "Fleet Engagement: Haiku vs Grok",
+  "time_limit_s": 180,
+  "decision_interval_s": 30.0,
+  "initial_distance_km": 300,
+  "alpha_fleet": {
+    "admiral": "openrouter/anthropic/claude-3.5-haiku",
+    "ships": [
+      {"ship_type": "destroyer", "model": "openrouter/anthropic/claude-3.5-haiku"},
+      {"ship_type": "destroyer", "model": "openrouter/anthropic/claude-3.5-haiku"},
+      {"ship_type": "frigate", "model": "openrouter/anthropic/claude-3.5-haiku"}
+    ]
+  },
+  "beta_fleet": {
+    "admiral": "openrouter/x-ai/grok-3-fast",
+    "ships": [
+      {"ship_type": "destroyer", "model": "openrouter/x-ai/grok-3-fast"},
+      {"ship_type": "destroyer", "model": "openrouter/x-ai/grok-3-fast"},
+      {"ship_type": "frigate", "model": "openrouter/x-ai/grok-3-fast"}
+    ]
+  }
+}

@@ -363,7 +363,8 @@ def get_weapon_groups_for_ship(ship_type: str, fleet_data: Dict[str, Any]) -> Di
         if not slot or slot.startswith("pd_"):
             continue  # Skip PD weapons
 
-        if wtype == "spinal_coiler_mk3":
+        if wtype in ("spinal_coiler_mk3", "heavy_siege_coiler_mk3"):
+            # Both standard spinal and siege coiler go to "spinal" group
             groups.setdefault("spinal", []).append(slot)
         elif wtype == "heavy_coilgun_mk3":
             groups.setdefault("heavy_coilguns", []).append(slot)
@@ -381,9 +382,27 @@ def build_weapon_tool_for_ship(ship_type: str, fleet_data: Dict[str, Any]) -> Di
     properties: Dict[str, Any] = {}
     description_parts = ["Set fire control orders for weapons."]
 
-    # Spinal mode (if ship has spinal)
+    # Spinal mode (if ship has spinal - could be standard or siege coiler)
     if "spinal" in groups:
-        spinal_spec = weapon_types.get("spinal_coiler_mk3", {})
+        # Determine which spinal weapon the ship has
+        spinal_slot = groups["spinal"][0] if groups["spinal"] else None
+        spinal_weapon_type = None
+        if spinal_slot and ship_type in fleet_data.get("ships", {}):
+            for w in fleet_data["ships"][ship_type].get("weapons", []):
+                if w.get("slot") == spinal_slot:
+                    spinal_weapon_type = w.get("type")
+                    break
+
+        # Get specs for the actual spinal weapon (siege or standard)
+        if spinal_weapon_type == "heavy_siege_coiler_mk3":
+            spinal_spec = weapon_types.get("heavy_siege_coiler_mk3", {})
+            weapon_name = "Siege Coiler"
+            gimbal = 20
+        else:
+            spinal_spec = weapon_types.get("spinal_coiler_mk3", {})
+            weapon_name = "Spinal Coiler"
+            gimbal = 30
+
         vel = spinal_spec.get("muzzle_velocity_kps", 9.9)
         dmg = spinal_spec.get("kinetic_energy_gj", 4.32)
         rng = spinal_spec.get("range_km", 900)
@@ -391,7 +410,7 @@ def build_weapon_tool_for_ship(ship_type: str, fleet_data: Dict[str, Any]) -> Di
         properties["spinal_mode"] = {
             "type": "string",
             "enum": ["FIRE_IMMEDIATE", "FIRE_WHEN_OPTIMAL", "FIRE_AT_RANGE", "HOLD_FIRE"],
-            "description": f"Spinal coiler ({vel} km/s, {dmg:.1f} GJ, {rng}km range, requires nose within 30° of target)"
+            "description": f"{weapon_name} ({vel} km/s, {dmg:.1f} GJ, {rng}km range, requires nose within {gimbal}° of target)"
         }
         properties["spinal_min_probability"] = {
             "type": "number", "minimum": 0.1, "maximum": 0.9,
@@ -401,7 +420,7 @@ def build_weapon_tool_for_ship(ship_type: str, fleet_data: Dict[str, Any]) -> Di
             "type": "number", "minimum": 50, "maximum": rng,
             "description": f"For spinal FIRE_AT_RANGE: maximum range (default {min(500, rng)})"
         }
-        description_parts.append(f"SPINAL: {vel} km/s, {dmg:.1f} GJ, fixed mount (30° arc).")
+        description_parts.append(f"SPINAL: {weapon_name} - {vel} km/s, {dmg:.1f} GJ, fixed mount ({gimbal}° arc).")
 
     # Heavy coilgun mode
     if "heavy_coilguns" in groups:

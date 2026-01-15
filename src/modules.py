@@ -31,6 +31,8 @@ class ModuleType(Enum):
     CREW = "crew"
     FUEL_TANK = "fuel_tank"
     MAGAZINE = "magazine"
+    ARMOR = "armor"  # Armored bulkheads that protect critical modules
+    HULL = "hull"  # Hull compartments - structural sections that absorb damage
 
 
 # Critical module types that can cause catastrophic damage if destroyed
@@ -80,12 +82,13 @@ class Module:
     armor_rating: float = 0.0
     position: ModulePosition = field(default_factory=lambda: ModulePosition(0))
     size_m2: float = 10.0
-    is_critical: bool = False
+    is_critical: bool | None = None  # None = auto-detect from module type
 
     def __post_init__(self) -> None:
         """Set is_critical based on module type if not explicitly set."""
-        if self.module_type in CRITICAL_MODULE_TYPES:
-            self.is_critical = True
+        if self.is_critical is None:
+            # Auto-detect based on module type
+            self.is_critical = self.module_type in CRITICAL_MODULE_TYPES
 
     @property
     def is_destroyed(self) -> bool:
@@ -303,7 +306,10 @@ class ModuleLayout:
         Get modules that would be hit by a damage cone from an entry point.
 
         This simulates projectile fragmentation or explosion damage spreading
-        through the ship structure.
+        through the ship structure. Damage is physically constrained:
+        - Nose hits: Can reach from nose toward tail
+        - Tail hits: Can reach from tail toward nose (engine first)
+        - Lateral hits: Only affect middle sections (cannot reach nose/tail extremes)
 
         Args:
             entry_point: Where the damage enters (nose, lateral, tail).
@@ -315,25 +321,47 @@ class ModuleLayout:
             List of modules in the damage cone, ordered by distance from entry.
         """
         affected_modules: list[tuple[float, Module]] = []
+        num_layers = len(self.layers)
 
         # Convert angle to radians for calculations
         angle_rad = math.radians(angle_deg)
         cone_spread_factor = math.tan(angle_rad)
 
-        # Determine starting layer and direction based on entry point
+        # Determine starting layer, direction, and reachable layers based on entry point
         if entry_point == HitLocation.NOSE:
-            layer_range = range(len(self.layers))
+            # Nose hits travel from front to back
+            layer_range = range(num_layers)
             base_lateral = 0.0
+            # Can potentially reach all layers (damage travels through ship)
+            max_penetration_layers = num_layers
         elif entry_point == HitLocation.TAIL:
-            layer_range = range(len(self.layers) - 1, -1, -1)
+            # Tail hits travel from back to front - engine first, then forward
+            layer_range = range(num_layers - 1, -1, -1)
             base_lateral = 0.0
+            # Can potentially reach all layers
+            max_penetration_layers = num_layers
         else:  # LATERAL
-            layer_range = range(len(self.layers))
+            # Lateral hits can only affect the middle ~50% of the ship
+            # A projectile entering from the side cannot physically reach
+            # the extreme nose (spinal weapon) or extreme tail (engine nozzles)
+            # Skip ~25% of layers on each end
+            skip_nose_layers = max(1, num_layers // 4)  # Skip first ~25% (nose)
+            skip_tail_layers = max(1, num_layers // 4)  # Skip last ~25% (tail)
+            start_layer = skip_nose_layers
+            end_layer = num_layers - skip_tail_layers
+            layer_range = range(start_layer, end_layer)
             # Lateral hits affect modules based on their lateral position
             base_lateral = direction_vector[0] * 10.0  # Scale by direction
+            max_penetration_layers = end_layer - start_layer
 
         # Calculate which modules are in the cone
+        layers_processed = 0
         for i, layer_idx in enumerate(layer_range):
+            # Limit how far damage can penetrate (prevents unrealistic through-ship damage)
+            if layers_processed >= max_penetration_layers:
+                break
+            layers_processed += 1
+
             layer = self.layers[layer_idx]
             distance_from_entry = (i + 1) * layer.depth_m
 
@@ -346,7 +374,13 @@ class ModuleLayout:
                     # For lateral hits, check if module's lateral position is near the hit
                     lateral_distance = abs(module.position.lateral_offset - base_lateral)
                     if lateral_distance <= cone_radius + (module.size_m2 ** 0.5):
-                        affected_modules.append((distance_from_entry, module))
+                        # For lateral hits, sort by lateral distance from hull
+                        # Modules closer to the hull (larger lateral offset) get hit first
+                        # This protects centerline modules (bridge) behind outer modules
+                        distance_from_hull = abs(module.position.lateral_offset)
+                        # Invert so larger offset = smaller sort key = hit first
+                        sort_key = -distance_from_hull
+                        affected_modules.append((sort_key, module))
                 else:
                     # For nose/tail hits, all centerline and nearby modules can be hit
                     lateral_distance = module.position.distance_from_center()
@@ -354,6 +388,8 @@ class ModuleLayout:
                         affected_modules.append((distance_from_entry, module))
 
         # Sort by distance and return just the modules
+        # For lateral: sorts by -lateral_offset (outer modules first)
+        # For nose/tail: sorts by layer depth (closer layers first)
         affected_modules.sort(key=lambda x: x[0])
         return [m for _, m in affected_modules]
 
@@ -475,16 +511,18 @@ def _create_corvette_layout(
     crew_count: int
 ) -> ModuleLayout:
     """
-    Create a 4-layer corvette layout.
+    Create a 6-layer corvette layout with hull compartments.
 
     Corvette layout (nose to tail):
-    - Layer 0: Sensors
-    - Layer 1: Bridge (critical, protected)
-    - Layer 2: Reactor (critical, protected)
-    - Layer 3: Engine
+    - Layer 0: Sensors (nose)
+    - Layer 1: Forward Hull (protects bridge from nose)
+    - Layer 2: Bridge + Crew
+    - Layer 3: Reactor
+    - Layer 4: Aft Hull (protects reactor from tail)
+    - Layer 5: Engine + Fuel
     """
     layout = ModuleLayout(ship_type, ship_length)
-    layer_depth = ship_length / 4
+    layer_depth = ship_length / 6
 
     # Layer 0: Sensors (nose)
     layer0 = ModuleLayer(0, depth_m=layer_depth)
@@ -497,54 +535,76 @@ def _create_corvette_layout(
     ))
     layout.add_layer(layer0)
 
-    # Layer 1: Bridge (protected by sensors in front)
+    # Layer 1: Forward Hull (protects bridge from nose hits)
     layer1 = ModuleLayer(1, depth_m=layer_depth)
     layer1.add_module(Module(
-        name="Command Bridge",
-        module_type=ModuleType.BRIDGE,
-        armor_rating=0.3,
+        name="Forward Hull Section",
+        module_type=ModuleType.HULL,
+        armor_rating=0.25,
         position=ModulePosition(1, 0.0),
-        size_m2=20.0,
-        is_critical=True
-    ))
-    layer1.add_module(Module(
-        name="Crew Quarters",
-        module_type=ModuleType.CREW,
-        armor_rating=0.1,
-        position=ModulePosition(1, 3.0),
-        size_m2=15.0
+        size_m2=25.0
     ))
     layout.add_layer(layer1)
 
-    # Layer 2: Reactor (center protected)
+    # Layer 2: Bridge + Crew
     layer2 = ModuleLayer(2, depth_m=layer_depth)
     layer2.add_module(Module(
-        name="Main Reactor",
-        module_type=ModuleType.REACTOR,
-        armor_rating=0.4,
+        name="Command Bridge",
+        module_type=ModuleType.BRIDGE,
+        armor_rating=0.3,
         position=ModulePosition(2, 0.0),
-        size_m2=30.0,
+        size_m2=20.0,
         is_critical=True
+    ))
+    layer2.add_module(Module(
+        name="Crew Quarters",
+        module_type=ModuleType.CREW,
+        armor_rating=0.1,
+        position=ModulePosition(2, 3.0),
+        size_m2=15.0
     ))
     layout.add_layer(layer2)
 
-    # Layer 3: Engine (tail)
+    # Layer 3: Reactor
     layer3 = ModuleLayer(3, depth_m=layer_depth)
     layer3.add_module(Module(
+        name="Main Reactor",
+        module_type=ModuleType.REACTOR,
+        armor_rating=0.4,
+        position=ModulePosition(3, 0.0),
+        size_m2=30.0,
+        is_critical=True
+    ))
+    layout.add_layer(layer3)
+
+    # Layer 4: Aft Hull (protects reactor from tail hits)
+    layer4 = ModuleLayer(4, depth_m=layer_depth)
+    layer4.add_module(Module(
+        name="Aft Hull Section",
+        module_type=ModuleType.HULL,
+        armor_rating=0.25,
+        position=ModulePosition(4, 0.0),
+        size_m2=25.0
+    ))
+    layout.add_layer(layer4)
+
+    # Layer 5: Engine + Fuel (tail)
+    layer5 = ModuleLayer(5, depth_m=layer_depth)
+    layer5.add_module(Module(
         name="Main Engine Assembly",
         module_type=ModuleType.ENGINE,
         armor_rating=0.2,
-        position=ModulePosition(3, 0.0),
+        position=ModulePosition(5, 0.0),
         size_m2=40.0
     ))
-    layer3.add_module(Module(
+    layer5.add_module(Module(
         name="Fuel Tank",
         module_type=ModuleType.FUEL_TANK,
         armor_rating=0.15,
-        position=ModulePosition(3, 4.0),
+        position=ModulePosition(5, 4.0),
         size_m2=20.0
     ))
-    layout.add_layer(layer3)
+    layout.add_layer(layer5)
 
     return layout
 
@@ -556,18 +616,20 @@ def _create_destroyer_layout(
     crew_count: int
 ) -> ModuleLayout:
     """
-    Create a 6-layer destroyer layout.
+    Create an 8-layer destroyer layout with hull compartments protecting critical modules.
 
     Destroyer layout (nose to tail):
-    - Layer 0: Spinal Weapon (nose-mounted, heaviest armor protection)
-    - Layer 1: Magazine + Turrets (ammunition and secondary weapons)
-    - Layer 2: Bridge + Sensors (command protected behind weapons)
-    - Layer 3: Reactor + Crew (power generation, protected center)
-    - Layer 4: Fuel Storage
-    - Layer 5: Engine
+    - Layer 0: Spinal Weapon (nose-mounted main gun)
+    - Layer 1: Forward Hull + Magazine (protects bridge from nose)
+    - Layer 2: Bridge + Sensors + Lateral Armor
+    - Layer 3: Central Hull (between bridge and reactor)
+    - Layer 4: Reactor + Crew + Lateral Armor
+    - Layer 5: Aft Hull (protects reactor from tail)
+    - Layer 6: Fuel Storage + PD
+    - Layer 7: Engine
     """
     layout = ModuleLayout(ship_type, ship_length)
-    layer_depth = ship_length / 6
+    layer_depth = ship_length / 8
 
     # Layer 0: Spinal Weapon (nose-mounted main gun)
     layer0 = ModuleLayer(0, depth_m=layer_depth)
@@ -579,27 +641,35 @@ def _create_destroyer_layout(
     ))
     layout.add_layer(layer0)
 
-    # Layer 1: Magazine + Turret
+    # Layer 1: Forward Hull Section + Magazine (protects bridge from nose hits)
     layer1 = ModuleLayer(1, depth_m=layer_depth)
+    layer1.add_module(Module(
+        name="Forward Hull Section",
+        module_type=ModuleType.HULL,
+        armor_rating=0.3,
+        position=ModulePosition(1, 0.0),
+        size_m2=40.0
+    ))
     layer1.add_module(Module(
         name="Main Magazine",
         module_type=ModuleType.MAGAZINE,
-        position=ModulePosition(1, 0.0),
+        position=ModulePosition(1, 5.0),
         size_m2=30.0
     ))
     layer1.add_module(Module(
         name="Dorsal Turret Mount",
         module_type=ModuleType.WEAPON,
-        position=ModulePosition(1, 5.0),
+        position=ModulePosition(1, -5.0),
         size_m2=15.0
     ))
     layout.add_layer(layer1)
 
-    # Layer 2: Bridge + Sensors (protected behind weapons)
+    # Layer 2: Bridge + Sensors (armored bulkheads on sides)
     layer2 = ModuleLayer(2, depth_m=layer_depth)
     layer2.add_module(Module(
         name="Command Bridge",
         module_type=ModuleType.BRIDGE,
+        armor_rating=0.35,
         position=ModulePosition(2, 0.0),
         size_m2=25.0,
         is_critical=True
@@ -616,63 +686,124 @@ def _create_destroyer_layout(
         position=ModulePosition(2, -4.0),
         size_m2=10.0
     ))
+    # Armored bulkheads protect bridge from lateral hits
+    layer2.add_module(Module(
+        name="Bridge Armored Bulkhead Port",
+        module_type=ModuleType.ARMOR,
+        armor_rating=0.5,
+        position=ModulePosition(2, 8.0),
+        size_m2=15.0
+    ))
+    layer2.add_module(Module(
+        name="Bridge Armored Bulkhead Starboard",
+        module_type=ModuleType.ARMOR,
+        armor_rating=0.5,
+        position=ModulePosition(2, -8.0),
+        size_m2=15.0
+    ))
     layout.add_layer(layer2)
 
-    # Layer 3: Reactor + Crew (center protected)
+    # Layer 3: Central Hull Section (between bridge and reactor)
     layer3 = ModuleLayer(3, depth_m=layer_depth)
     layer3.add_module(Module(
-        name="Main Reactor",
-        module_type=ModuleType.REACTOR,
+        name="Central Hull Section",
+        module_type=ModuleType.HULL,
+        armor_rating=0.3,
         position=ModulePosition(3, 0.0),
-        size_m2=50.0,
-        is_critical=True
+        size_m2=45.0
     ))
     layer3.add_module(Module(
         name="Crew Quarters",
         module_type=ModuleType.CREW,
-        position=ModulePosition(3, 6.0),
+        position=ModulePosition(3, 5.0),
         size_m2=25.0
     ))
     layout.add_layer(layer3)
 
-    # Layer 4: Fuel Storage + PD Lasers
+    # Layer 4: Reactor (armored bulkheads on sides)
     layer4 = ModuleLayer(4, depth_m=layer_depth)
     layer4.add_module(Module(
-        name="Main Fuel Tank",
-        module_type=ModuleType.FUEL_TANK,
+        name="Main Reactor",
+        module_type=ModuleType.REACTOR,
+        armor_rating=0.45,
         position=ModulePosition(4, 0.0),
-        size_m2=40.0
+        size_m2=50.0,
+        is_critical=True
+    ))
+    # Armored bulkheads protect reactor from lateral hits
+    layer4.add_module(Module(
+        name="Reactor Armored Bulkhead Port",
+        module_type=ModuleType.ARMOR,
+        armor_rating=0.5,
+        position=ModulePosition(4, 8.0),
+        size_m2=18.0
     ))
     layer4.add_module(Module(
-        name="Reserve Fuel Tank",
-        module_type=ModuleType.FUEL_TANK,
-        position=ModulePosition(4, -5.0),
-        size_m2=20.0
-    ))
-    layer4.add_module(Module(
-        name="PD Laser Dorsal",
-        module_type=ModuleType.WEAPON,
-        position=ModulePosition(4, 6.0),
-        size_m2=8.0
-    ))
-    layer4.add_module(Module(
-        name="PD Laser Ventral",
-        module_type=ModuleType.WEAPON,
-        position=ModulePosition(4, -6.0),
-        size_m2=8.0
+        name="Reactor Armored Bulkhead Starboard",
+        module_type=ModuleType.ARMOR,
+        armor_rating=0.5,
+        position=ModulePosition(4, -8.0),
+        size_m2=18.0
     ))
     layout.add_layer(layer4)
 
-    # Layer 5: Engine
+    # Layer 5: Aft Hull Section (protects reactor from tail hits)
     layer5 = ModuleLayer(5, depth_m=layer_depth)
     layer5.add_module(Module(
+        name="Aft Hull Section",
+        module_type=ModuleType.HULL,
+        armor_rating=0.3,
+        position=ModulePosition(5, 0.0),
+        size_m2=40.0
+    ))
+    layer5.add_module(Module(
+        name="Secondary Reactor",
+        module_type=ModuleType.REACTOR,
+        armor_rating=0.3,
+        position=ModulePosition(5, 5.0),
+        size_m2=20.0,
+        is_critical=False
+    ))
+    layout.add_layer(layer5)
+
+    # Layer 6: Fuel Storage + PD Lasers
+    layer6 = ModuleLayer(6, depth_m=layer_depth)
+    layer6.add_module(Module(
+        name="Main Fuel Tank",
+        module_type=ModuleType.FUEL_TANK,
+        position=ModulePosition(6, 0.0),
+        size_m2=40.0
+    ))
+    layer6.add_module(Module(
+        name="Reserve Fuel Tank",
+        module_type=ModuleType.FUEL_TANK,
+        position=ModulePosition(6, -5.0),
+        size_m2=20.0
+    ))
+    layer6.add_module(Module(
+        name="PD Laser Dorsal",
+        module_type=ModuleType.WEAPON,
+        position=ModulePosition(6, 6.0),
+        size_m2=8.0
+    ))
+    layer6.add_module(Module(
+        name="PD Laser Ventral",
+        module_type=ModuleType.WEAPON,
+        position=ModulePosition(6, -6.0),
+        size_m2=8.0
+    ))
+    layout.add_layer(layer6)
+
+    # Layer 7: Engine
+    layer7 = ModuleLayer(7, depth_m=layer_depth)
+    layer7.add_module(Module(
         name="Main Engine Assembly",
         module_type=ModuleType.ENGINE,
         armor_rating=0.25,
-        position=ModulePosition(5, 0.0),
+        position=ModulePosition(7, 0.0),
         size_m2=60.0
     ))
-    layout.add_layer(layer5)
+    layout.add_layer(layer7)
 
     return layout
 
@@ -684,85 +815,73 @@ def _create_dreadnought_layout(
     crew_count: int
 ) -> ModuleLayout:
     """
-    Create a 10-layer dreadnought layout.
+    Create a 12-layer dreadnought layout with hull compartments.
 
     Dreadnought layout (nose to tail):
-    - Layer 0: Forward Sensors
-    - Layer 1: Spinal Weapon
-    - Layer 2: Forward Weapons Bay
-    - Layer 3: Crew/Bridge (critical, heavily protected)
-    - Layer 4: Main Reactor (critical, heavily protected)
-    - Layer 5: Ammunition Storage
-    - Layer 6: Cargo Bay
-    - Layer 7: Secondary Weapons
-    - Layer 8: Fuel Storage
-    - Layer 9: Engine Room
+    - Layer 0: Spinal Weapon (nose-mounted)
+    - Layer 1: Forward Hull (protects bridge from nose)
+    - Layer 2: Magazine + Forward Weapons Bay
+    - Layer 3: Bridge + Sensors + Lateral Armor
+    - Layer 4: Central Hull (between bridge and reactor)
+    - Layer 5: Main Reactor + Lateral Armor
+    - Layer 6: Aft Hull (protects reactor from tail)
+    - Layer 7: Ammunition Storage + Cargo
+    - Layer 8: Crew Quarters
+    - Layer 9: Secondary Weapons
+    - Layer 10: Fuel Storage
+    - Layer 11: Engine Room
     """
     layout = ModuleLayout(ship_type, ship_length)
-    layer_depth = ship_length / 10
+    layer_depth = ship_length / 12
 
-    # Layer 0: Forward Sensors
+    # Layer 0: Spinal Weapon (nose-mounted main gun)
     layer0 = ModuleLayer(0, depth_m=layer_depth)
     layer0.add_module(Module(
-        name="Long Range Sensor Array",
-        module_type=ModuleType.SENSOR,
-        armor_rating=0.15,
-        position=ModulePosition(0, 0.0),
-        size_m2=30.0
-    ))
-    layer0.add_module(Module(
-        name="Fire Control Radar",
-        module_type=ModuleType.SENSOR,
-        armor_rating=0.2,
-        position=ModulePosition(0, 8.0),
-        size_m2=15.0
-    ))
-    layer0.add_module(Module(
-        name="Fire Control Radar Port",
-        module_type=ModuleType.SENSOR,
-        armor_rating=0.2,
-        position=ModulePosition(0, -8.0),
-        size_m2=15.0
-    ))
-    layout.add_layer(layer0)
-
-    # Layer 1: Spinal Weapon
-    layer1 = ModuleLayer(1, depth_m=layer_depth)
-    layer1.add_module(Module(
         name="Spinal Coiler Mount",
         module_type=ModuleType.WEAPON,
         armor_rating=0.3,
-        position=ModulePosition(1, 0.0),
+        position=ModulePosition(0, 0.0),
         size_m2=60.0
+    ))
+    layout.add_layer(layer0)
+
+    # Layer 1: Forward Hull (protects bridge from nose)
+    layer1 = ModuleLayer(1, depth_m=layer_depth)
+    layer1.add_module(Module(
+        name="Forward Hull Section",
+        module_type=ModuleType.HULL,
+        armor_rating=0.45,
+        position=ModulePosition(1, 0.0),
+        size_m2=80.0
     ))
     layout.add_layer(layer1)
 
-    # Layer 2: Forward Weapons Bay
+    # Layer 2: Magazine + Forward Weapons Bay
     layer2 = ModuleLayer(2, depth_m=layer_depth)
+    layer2.add_module(Module(
+        name="Magazine Forward",
+        module_type=ModuleType.MAGAZINE,
+        armor_rating=0.25,
+        position=ModulePosition(2, 0.0),
+        size_m2=35.0
+    ))
     layer2.add_module(Module(
         name="Heavy Coilgun Battery A",
         module_type=ModuleType.WEAPON,
         armor_rating=0.25,
-        position=ModulePosition(2, 6.0),
+        position=ModulePosition(2, 8.0),
         size_m2=35.0
     ))
     layer2.add_module(Module(
         name="Heavy Coilgun Battery B",
         module_type=ModuleType.WEAPON,
         armor_rating=0.25,
-        position=ModulePosition(2, -6.0),
+        position=ModulePosition(2, -8.0),
         size_m2=35.0
-    ))
-    layer2.add_module(Module(
-        name="Magazine Forward",
-        module_type=ModuleType.CARGO,
-        armor_rating=0.2,
-        position=ModulePosition(2, 0.0),
-        size_m2=25.0
     ))
     layout.add_layer(layer2)
 
-    # Layer 3: Bridge (heavily protected by forward layers)
+    # Layer 3: Bridge + Sensors (armored bulkheads on sides)
     layer3 = ModuleLayer(3, depth_m=layer_depth)
     layer3.add_module(Module(
         name="Command Bridge",
@@ -773,144 +892,208 @@ def _create_dreadnought_layout(
         is_critical=True
     ))
     layer3.add_module(Module(
+        name="Long Range Sensor Array",
+        module_type=ModuleType.SENSOR,
+        armor_rating=0.15,
+        position=ModulePosition(3, 6.0),
+        size_m2=30.0
+    ))
+    layer3.add_module(Module(
+        name="Fire Control Radar",
+        module_type=ModuleType.SENSOR,
+        armor_rating=0.2,
+        position=ModulePosition(3, -6.0),
+        size_m2=15.0
+    ))
+    layer3.add_module(Module(
         name="Combat Information Center",
         module_type=ModuleType.SENSOR,
         armor_rating=0.4,
         position=ModulePosition(3, 4.0),
         size_m2=20.0
     ))
+    layer3.add_module(Module(
+        name="Bridge Armored Bulkhead Port",
+        module_type=ModuleType.ARMOR,
+        armor_rating=0.65,
+        position=ModulePosition(3, 15.0),
+        size_m2=30.0
+    ))
+    layer3.add_module(Module(
+        name="Bridge Armored Bulkhead Starboard",
+        module_type=ModuleType.ARMOR,
+        armor_rating=0.65,
+        position=ModulePosition(3, -15.0),
+        size_m2=30.0
+    ))
     layout.add_layer(layer3)
 
-    # Layer 4: Main Reactor (center protected)
+    # Layer 4: Central Hull (between bridge and reactor)
     layer4 = ModuleLayer(4, depth_m=layer_depth)
     layer4.add_module(Module(
-        name="Main Fusion Reactor",
-        module_type=ModuleType.REACTOR,
-        armor_rating=0.55,
+        name="Central Hull Section",
+        module_type=ModuleType.HULL,
+        armor_rating=0.45,
         position=ModulePosition(4, 0.0),
-        size_m2=80.0,
-        is_critical=True
-    ))
-    layer4.add_module(Module(
-        name="Secondary Reactor",
-        module_type=ModuleType.REACTOR,
-        armor_rating=0.4,
-        position=ModulePosition(4, 10.0),
-        size_m2=30.0,
-        is_critical=False
+        size_m2=85.0
     ))
     layout.add_layer(layer4)
 
-    # Layer 5: Ammunition Storage
+    # Layer 5: Main Reactor (armored bulkheads on sides)
     layer5 = ModuleLayer(5, depth_m=layer_depth)
     layer5.add_module(Module(
-        name="Main Magazine",
-        module_type=ModuleType.CARGO,
-        armor_rating=0.3,
+        name="Main Fusion Reactor",
+        module_type=ModuleType.REACTOR,
+        armor_rating=0.55,
         position=ModulePosition(5, 0.0),
-        size_m2=50.0
+        size_m2=80.0,
+        is_critical=True
     ))
     layer5.add_module(Module(
-        name="Missile Magazine",
-        module_type=ModuleType.CARGO,
-        armor_rating=0.25,
+        name="Secondary Reactor",
+        module_type=ModuleType.REACTOR,
+        armor_rating=0.4,
         position=ModulePosition(5, 8.0),
-        size_m2=30.0
+        size_m2=30.0,
+        is_critical=False
+    ))
+    layer5.add_module(Module(
+        name="Reactor Armored Bulkhead Port",
+        module_type=ModuleType.ARMOR,
+        armor_rating=0.65,
+        position=ModulePosition(5, 15.0),
+        size_m2=35.0
+    ))
+    layer5.add_module(Module(
+        name="Reactor Armored Bulkhead Starboard",
+        module_type=ModuleType.ARMOR,
+        armor_rating=0.65,
+        position=ModulePosition(5, -15.0),
+        size_m2=35.0
     ))
     layout.add_layer(layer5)
 
-    # Layer 6: Cargo and Crew
+    # Layer 6: Aft Hull (protects reactor from tail)
     layer6 = ModuleLayer(6, depth_m=layer_depth)
     layer6.add_module(Module(
-        name="Main Cargo Bay",
-        module_type=ModuleType.CARGO,
-        armor_rating=0.15,
+        name="Aft Hull Section",
+        module_type=ModuleType.HULL,
+        armor_rating=0.45,
         position=ModulePosition(6, 0.0),
-        size_m2=60.0
-    ))
-    layer6.add_module(Module(
-        name="Crew Quarters A",
-        module_type=ModuleType.CREW,
-        armor_rating=0.15,
-        position=ModulePosition(6, 8.0),
-        size_m2=40.0
-    ))
-    layer6.add_module(Module(
-        name="Crew Quarters B",
-        module_type=ModuleType.CREW,
-        armor_rating=0.15,
-        position=ModulePosition(6, -8.0),
-        size_m2=40.0
+        size_m2=80.0
     ))
     layout.add_layer(layer6)
 
-    # Layer 7: Secondary Weapons
+    # Layer 7: Ammunition Storage + Cargo
     layer7 = ModuleLayer(7, depth_m=layer_depth)
     layer7.add_module(Module(
-        name="Heavy Coilgun Battery C",
-        module_type=ModuleType.WEAPON,
-        armor_rating=0.25,
-        position=ModulePosition(7, 6.0),
-        size_m2=35.0
-    ))
-    layer7.add_module(Module(
-        name="Heavy Coilgun Battery D",
-        module_type=ModuleType.WEAPON,
-        armor_rating=0.25,
-        position=ModulePosition(7, -6.0),
-        size_m2=35.0
-    ))
-    layer7.add_module(Module(
-        name="Point Defense Array",
-        module_type=ModuleType.WEAPON,
-        armor_rating=0.2,
+        name="Main Magazine",
+        module_type=ModuleType.CARGO,
+        armor_rating=0.3,
         position=ModulePosition(7, 0.0),
-        size_m2=20.0
+        size_m2=50.0
+    ))
+    layer7.add_module(Module(
+        name="Missile Magazine",
+        module_type=ModuleType.CARGO,
+        armor_rating=0.25,
+        position=ModulePosition(7, 8.0),
+        size_m2=30.0
+    ))
+    layer7.add_module(Module(
+        name="Main Cargo Bay",
+        module_type=ModuleType.CARGO,
+        armor_rating=0.15,
+        position=ModulePosition(7, -8.0),
+        size_m2=60.0
     ))
     layout.add_layer(layer7)
 
-    # Layer 8: Fuel Storage
+    # Layer 8: Crew Quarters
     layer8 = ModuleLayer(8, depth_m=layer_depth)
     layer8.add_module(Module(
-        name="Main Fuel Tank",
-        module_type=ModuleType.FUEL_TANK,
-        armor_rating=0.2,
-        position=ModulePosition(8, 0.0),
-        size_m2=70.0
+        name="Crew Quarters A",
+        module_type=ModuleType.CREW,
+        armor_rating=0.15,
+        position=ModulePosition(8, 5.0),
+        size_m2=40.0
     ))
     layer8.add_module(Module(
-        name="Reserve Fuel Tank A",
-        module_type=ModuleType.FUEL_TANK,
+        name="Crew Quarters B",
+        module_type=ModuleType.CREW,
         armor_rating=0.15,
-        position=ModulePosition(8, 10.0),
-        size_m2=30.0
-    ))
-    layer8.add_module(Module(
-        name="Reserve Fuel Tank B",
-        module_type=ModuleType.FUEL_TANK,
-        armor_rating=0.15,
-        position=ModulePosition(8, -10.0),
-        size_m2=30.0
+        position=ModulePosition(8, -5.0),
+        size_m2=40.0
     ))
     layout.add_layer(layer8)
 
-    # Layer 9: Engine Room
+    # Layer 9: Secondary Weapons
     layer9 = ModuleLayer(9, depth_m=layer_depth)
     layer9.add_module(Module(
+        name="Heavy Coilgun Battery C",
+        module_type=ModuleType.WEAPON,
+        armor_rating=0.25,
+        position=ModulePosition(9, 6.0),
+        size_m2=35.0
+    ))
+    layer9.add_module(Module(
+        name="Heavy Coilgun Battery D",
+        module_type=ModuleType.WEAPON,
+        armor_rating=0.25,
+        position=ModulePosition(9, -6.0),
+        size_m2=35.0
+    ))
+    layer9.add_module(Module(
+        name="Point Defense Array",
+        module_type=ModuleType.WEAPON,
+        armor_rating=0.2,
+        position=ModulePosition(9, 0.0),
+        size_m2=20.0
+    ))
+    layout.add_layer(layer9)
+
+    # Layer 10: Fuel Storage
+    layer10 = ModuleLayer(10, depth_m=layer_depth)
+    layer10.add_module(Module(
+        name="Main Fuel Tank",
+        module_type=ModuleType.FUEL_TANK,
+        armor_rating=0.2,
+        position=ModulePosition(10, 0.0),
+        size_m2=70.0
+    ))
+    layer10.add_module(Module(
+        name="Reserve Fuel Tank A",
+        module_type=ModuleType.FUEL_TANK,
+        armor_rating=0.15,
+        position=ModulePosition(10, 10.0),
+        size_m2=30.0
+    ))
+    layer10.add_module(Module(
+        name="Reserve Fuel Tank B",
+        module_type=ModuleType.FUEL_TANK,
+        armor_rating=0.15,
+        position=ModulePosition(10, -10.0),
+        size_m2=30.0
+    ))
+    layout.add_layer(layer10)
+
+    # Layer 11: Engine Room
+    layer11 = ModuleLayer(11, depth_m=layer_depth)
+    layer11.add_module(Module(
         name="Main Engine Assembly",
         module_type=ModuleType.ENGINE,
         armor_rating=0.3,
-        position=ModulePosition(9, 0.0),
+        position=ModulePosition(11, 0.0),
         size_m2=100.0
     ))
-    layer9.add_module(Module(
+    layer11.add_module(Module(
         name="Maneuvering Thrusters",
         module_type=ModuleType.ENGINE,
         armor_rating=0.2,
-        position=ModulePosition(9, 12.0),
+        position=ModulePosition(11, 12.0),
         size_m2=25.0
     ))
-    layout.add_layer(layer9)
+    layout.add_layer(layer11)
 
     return layout
 
@@ -936,19 +1119,21 @@ def _create_frigate_layout(
     crew_count: int
 ) -> ModuleLayout:
     """
-    Create a 5-layer frigate layout.
+    Create a 7-layer frigate layout with hull compartments.
 
     Frigate layout (nose to tail):
-    - Layer 0: Sensors
-    - Layer 1: Bridge (critical)
-    - Layer 2: Reactor (critical) + Weapons
-    - Layer 3: Fuel Storage
-    - Layer 4: Engine
+    - Layer 0: Sensors (nose)
+    - Layer 1: Forward Hull (protects bridge from nose)
+    - Layer 2: Bridge + Crew
+    - Layer 3: Central Hull (between bridge and reactor)
+    - Layer 4: Reactor + Weapons
+    - Layer 5: Aft Hull (protects reactor from tail)
+    - Layer 6: Engine + Fuel
     """
     layout = ModuleLayout(ship_type, ship_length)
-    layer_depth = ship_length / 5
+    layer_depth = ship_length / 7
 
-    # Layer 0: Sensors
+    # Layer 0: Sensors (nose)
     layer0 = ModuleLayer(0, depth_m=layer_depth)
     layer0.add_module(Module(
         name="Primary Sensor Array",
@@ -959,65 +1144,94 @@ def _create_frigate_layout(
     ))
     layout.add_layer(layer0)
 
-    # Layer 1: Bridge
+    # Layer 1: Forward Hull (protects bridge from nose)
     layer1 = ModuleLayer(1, depth_m=layer_depth)
     layer1.add_module(Module(
-        name="Command Bridge",
-        module_type=ModuleType.BRIDGE,
-        armor_rating=0.3,
+        name="Forward Hull Section",
+        module_type=ModuleType.HULL,
+        armor_rating=0.25,
         position=ModulePosition(1, 0.0),
-        size_m2=22.0,
-        is_critical=True
-    ))
-    layer1.add_module(Module(
-        name="Crew Quarters",
-        module_type=ModuleType.CREW,
-        armor_rating=0.1,
-        position=ModulePosition(1, 4.0),
-        size_m2=20.0
+        size_m2=30.0
     ))
     layout.add_layer(layer1)
 
-    # Layer 2: Reactor + Weapons
+    # Layer 2: Bridge + Crew
     layer2 = ModuleLayer(2, depth_m=layer_depth)
     layer2.add_module(Module(
-        name="Main Reactor",
-        module_type=ModuleType.REACTOR,
-        armor_rating=0.4,
+        name="Command Bridge",
+        module_type=ModuleType.BRIDGE,
+        armor_rating=0.3,
         position=ModulePosition(2, 0.0),
-        size_m2=35.0,
+        size_m2=22.0,
         is_critical=True
     ))
     layer2.add_module(Module(
-        name="Coilgun Battery",
-        module_type=ModuleType.WEAPON,
-        armor_rating=0.2,
-        position=ModulePosition(2, 5.0),
+        name="Crew Quarters",
+        module_type=ModuleType.CREW,
+        armor_rating=0.1,
+        position=ModulePosition(2, 4.0),
         size_m2=20.0
     ))
     layout.add_layer(layer2)
 
-    # Layer 3: Fuel Storage
+    # Layer 3: Central Hull (between bridge and reactor)
     layer3 = ModuleLayer(3, depth_m=layer_depth)
     layer3.add_module(Module(
-        name="Fuel Tank",
-        module_type=ModuleType.FUEL_TANK,
-        armor_rating=0.15,
+        name="Central Hull Section",
+        module_type=ModuleType.HULL,
+        armor_rating=0.25,
         position=ModulePosition(3, 0.0),
         size_m2=30.0
     ))
     layout.add_layer(layer3)
 
-    # Layer 4: Engine
+    # Layer 4: Reactor + Weapons
     layer4 = ModuleLayer(4, depth_m=layer_depth)
     layer4.add_module(Module(
+        name="Main Reactor",
+        module_type=ModuleType.REACTOR,
+        armor_rating=0.4,
+        position=ModulePosition(4, 0.0),
+        size_m2=35.0,
+        is_critical=True
+    ))
+    layer4.add_module(Module(
+        name="Coilgun Battery",
+        module_type=ModuleType.WEAPON,
+        armor_rating=0.2,
+        position=ModulePosition(4, 5.0),
+        size_m2=20.0
+    ))
+    layout.add_layer(layer4)
+
+    # Layer 5: Aft Hull (protects reactor from tail)
+    layer5 = ModuleLayer(5, depth_m=layer_depth)
+    layer5.add_module(Module(
+        name="Aft Hull Section",
+        module_type=ModuleType.HULL,
+        armor_rating=0.25,
+        position=ModulePosition(5, 0.0),
+        size_m2=30.0
+    ))
+    layer5.add_module(Module(
+        name="Fuel Tank",
+        module_type=ModuleType.FUEL_TANK,
+        armor_rating=0.15,
+        position=ModulePosition(5, 4.0),
+        size_m2=30.0
+    ))
+    layout.add_layer(layer5)
+
+    # Layer 6: Engine
+    layer6 = ModuleLayer(6, depth_m=layer_depth)
+    layer6.add_module(Module(
         name="Main Engine Assembly",
         module_type=ModuleType.ENGINE,
         armor_rating=0.2,
-        position=ModulePosition(4, 0.0),
+        position=ModulePosition(6, 0.0),
         size_m2=45.0
     ))
-    layout.add_layer(layer4)
+    layout.add_layer(layer6)
 
     return layout
 
@@ -1029,138 +1243,197 @@ def _create_cruiser_layout(
     crew_count: int
 ) -> ModuleLayout:
     """
-    Create an 8-layer cruiser layout.
+    Create a 10-layer cruiser layout with hull compartments.
 
     Cruiser layout (nose to tail):
-    - Layer 0: Forward Sensors
-    - Layer 1: Spinal Weapon
-    - Layer 2: Bridge (critical)
-    - Layer 3: Reactor (critical)
-    - Layer 4: Weapons Bay
-    - Layer 5: Cargo/Crew
-    - Layer 6: Fuel Storage
-    - Layer 7: Engine
+    - Layer 0: Spinal Weapon (nose-mounted)
+    - Layer 1: Forward Hull (protects bridge from nose)
+    - Layer 2: Magazine
+    - Layer 3: Bridge + Sensors + Lateral Armor
+    - Layer 4: Central Hull (between bridge and reactor)
+    - Layer 5: Reactor + Lateral Armor
+    - Layer 6: Aft Hull (protects reactor from tail)
+    - Layer 7: Weapons Bay + Cargo
+    - Layer 8: Crew + Fuel
+    - Layer 9: Engine
     """
     layout = ModuleLayout(ship_type, ship_length)
-    layer_depth = ship_length / 8
+    layer_depth = ship_length / 10
 
-    # Layer 0: Sensors
+    # Layer 0: Spinal Weapon (nose-mounted main gun)
     layer0 = ModuleLayer(0, depth_m=layer_depth)
     layer0.add_module(Module(
-        name="Primary Sensor Array",
-        module_type=ModuleType.SENSOR,
-        armor_rating=0.15,
-        position=ModulePosition(0, 0.0),
-        size_m2=25.0
-    ))
-    layer0.add_module(Module(
-        name="Targeting Sensors",
-        module_type=ModuleType.SENSOR,
-        armor_rating=0.15,
-        position=ModulePosition(0, 5.0),
-        size_m2=12.0
-    ))
-    layout.add_layer(layer0)
-
-    # Layer 1: Spinal Weapon
-    layer1 = ModuleLayer(1, depth_m=layer_depth)
-    layer1.add_module(Module(
         name="Spinal Coiler Mount",
         module_type=ModuleType.WEAPON,
         armor_rating=0.28,
-        position=ModulePosition(1, 0.0),
+        position=ModulePosition(0, 0.0),
         size_m2=45.0
+    ))
+    layout.add_layer(layer0)
+
+    # Layer 1: Forward Hull (protects bridge from nose)
+    layer1 = ModuleLayer(1, depth_m=layer_depth)
+    layer1.add_module(Module(
+        name="Forward Hull Section",
+        module_type=ModuleType.HULL,
+        armor_rating=0.35,
+        position=ModulePosition(1, 0.0),
+        size_m2=50.0
     ))
     layout.add_layer(layer1)
 
-    # Layer 2: Bridge
+    # Layer 2: Magazine
     layer2 = ModuleLayer(2, depth_m=layer_depth)
     layer2.add_module(Module(
-        name="Command Bridge",
-        module_type=ModuleType.BRIDGE,
-        armor_rating=0.4,
+        name="Main Magazine",
+        module_type=ModuleType.MAGAZINE,
+        armor_rating=0.25,
         position=ModulePosition(2, 0.0),
-        size_m2=30.0,
-        is_critical=True
-    ))
-    layer2.add_module(Module(
-        name="Officer Quarters",
-        module_type=ModuleType.CREW,
-        armor_rating=0.15,
-        position=ModulePosition(2, 6.0),
-        size_m2=25.0
+        size_m2=30.0
     ))
     layout.add_layer(layer2)
 
-    # Layer 3: Reactor
+    # Layer 3: Bridge + Sensors (armored bulkheads on sides)
     layer3 = ModuleLayer(3, depth_m=layer_depth)
     layer3.add_module(Module(
-        name="Main Reactor",
-        module_type=ModuleType.REACTOR,
-        armor_rating=0.5,
+        name="Command Bridge",
+        module_type=ModuleType.BRIDGE,
+        armor_rating=0.4,
         position=ModulePosition(3, 0.0),
-        size_m2=60.0,
+        size_m2=30.0,
         is_critical=True
+    ))
+    layer3.add_module(Module(
+        name="Primary Sensor Array",
+        module_type=ModuleType.SENSOR,
+        armor_rating=0.15,
+        position=ModulePosition(3, 4.0),
+        size_m2=25.0
+    ))
+    layer3.add_module(Module(
+        name="Targeting Sensors",
+        module_type=ModuleType.SENSOR,
+        armor_rating=0.15,
+        position=ModulePosition(3, -4.0),
+        size_m2=12.0
+    ))
+    layer3.add_module(Module(
+        name="Bridge Armored Bulkhead Port",
+        module_type=ModuleType.ARMOR,
+        armor_rating=0.55,
+        position=ModulePosition(3, 10.0),
+        size_m2=20.0
+    ))
+    layer3.add_module(Module(
+        name="Bridge Armored Bulkhead Starboard",
+        module_type=ModuleType.ARMOR,
+        armor_rating=0.55,
+        position=ModulePosition(3, -10.0),
+        size_m2=20.0
     ))
     layout.add_layer(layer3)
 
-    # Layer 4: Weapons Bay
+    # Layer 4: Central Hull (between bridge and reactor)
     layer4 = ModuleLayer(4, depth_m=layer_depth)
     layer4.add_module(Module(
-        name="Coilgun Battery A",
-        module_type=ModuleType.WEAPON,
-        armor_rating=0.22,
-        position=ModulePosition(4, 5.0),
-        size_m2=25.0
-    ))
-    layer4.add_module(Module(
-        name="Coilgun Battery B",
-        module_type=ModuleType.WEAPON,
-        armor_rating=0.22,
-        position=ModulePosition(4, -5.0),
-        size_m2=25.0
+        name="Central Hull Section",
+        module_type=ModuleType.HULL,
+        armor_rating=0.35,
+        position=ModulePosition(4, 0.0),
+        size_m2=55.0
     ))
     layout.add_layer(layer4)
 
-    # Layer 5: Cargo/Crew
+    # Layer 5: Reactor (armored bulkheads on sides)
     layer5 = ModuleLayer(5, depth_m=layer_depth)
     layer5.add_module(Module(
-        name="Cargo Bay",
-        module_type=ModuleType.CARGO,
-        armor_rating=0.1,
+        name="Main Reactor",
+        module_type=ModuleType.REACTOR,
+        armor_rating=0.5,
         position=ModulePosition(5, 0.0),
-        size_m2=35.0
+        size_m2=60.0,
+        is_critical=True
     ))
     layer5.add_module(Module(
-        name="Crew Quarters",
-        module_type=ModuleType.CREW,
-        armor_rating=0.12,
-        position=ModulePosition(5, 7.0),
-        size_m2=35.0
+        name="Reactor Armored Bulkhead Port",
+        module_type=ModuleType.ARMOR,
+        armor_rating=0.55,
+        position=ModulePosition(5, 10.0),
+        size_m2=22.0
+    ))
+    layer5.add_module(Module(
+        name="Reactor Armored Bulkhead Starboard",
+        module_type=ModuleType.ARMOR,
+        armor_rating=0.55,
+        position=ModulePosition(5, -10.0),
+        size_m2=22.0
     ))
     layout.add_layer(layer5)
 
-    # Layer 6: Fuel Storage
+    # Layer 6: Aft Hull (protects reactor from tail)
     layer6 = ModuleLayer(6, depth_m=layer_depth)
     layer6.add_module(Module(
-        name="Main Fuel Tank",
-        module_type=ModuleType.FUEL_TANK,
-        armor_rating=0.18,
+        name="Aft Hull Section",
+        module_type=ModuleType.HULL,
+        armor_rating=0.35,
         position=ModulePosition(6, 0.0),
         size_m2=50.0
     ))
     layout.add_layer(layer6)
 
-    # Layer 7: Engine
+    # Layer 7: Weapons Bay + Cargo
     layer7 = ModuleLayer(7, depth_m=layer_depth)
     layer7.add_module(Module(
+        name="Coilgun Battery A",
+        module_type=ModuleType.WEAPON,
+        armor_rating=0.22,
+        position=ModulePosition(7, 5.0),
+        size_m2=25.0
+    ))
+    layer7.add_module(Module(
+        name="Coilgun Battery B",
+        module_type=ModuleType.WEAPON,
+        armor_rating=0.22,
+        position=ModulePosition(7, -5.0),
+        size_m2=25.0
+    ))
+    layer7.add_module(Module(
+        name="Cargo Bay",
+        module_type=ModuleType.CARGO,
+        armor_rating=0.1,
+        position=ModulePosition(7, 0.0),
+        size_m2=35.0
+    ))
+    layout.add_layer(layer7)
+
+    # Layer 8: Crew + Fuel
+    layer8 = ModuleLayer(8, depth_m=layer_depth)
+    layer8.add_module(Module(
+        name="Crew Quarters",
+        module_type=ModuleType.CREW,
+        armor_rating=0.12,
+        position=ModulePosition(8, 5.0),
+        size_m2=35.0
+    ))
+    layer8.add_module(Module(
+        name="Main Fuel Tank",
+        module_type=ModuleType.FUEL_TANK,
+        armor_rating=0.18,
+        position=ModulePosition(8, -5.0),
+        size_m2=50.0
+    ))
+    layout.add_layer(layer8)
+
+    # Layer 9: Engine
+    layer9 = ModuleLayer(9, depth_m=layer_depth)
+    layer9.add_module(Module(
         name="Main Engine Assembly",
         module_type=ModuleType.ENGINE,
         armor_rating=0.25,
-        position=ModulePosition(7, 0.0),
+        position=ModulePosition(9, 0.0),
         size_m2=70.0
     ))
-    layout.add_layer(layer7)
+    layout.add_layer(layer9)
 
     return layout
 
@@ -1184,61 +1457,72 @@ def _create_battleship_layout(
     crew_count: int
 ) -> ModuleLayout:
     """
-    Create a 9-layer battleship layout.
+    Create an 11-layer battleship layout with hull compartments.
 
-    Similar to dreadnought but slightly smaller.
+    Battleship layout (nose to tail):
+    - Layer 0: Spinal Weapon (nose-mounted)
+    - Layer 1: Forward Hull (protects bridge from nose)
+    - Layer 2: Magazine + Forward Weapons
+    - Layer 3: Bridge + Sensors + Lateral Armor
+    - Layer 4: Central Hull (between bridge and reactor)
+    - Layer 5: Reactor + Lateral Armor
+    - Layer 6: Aft Hull (protects reactor from tail)
+    - Layer 7: Secondary Weapons + Cargo
+    - Layer 8: Crew Quarters
+    - Layer 9: Fuel Storage
+    - Layer 10: Engine
     """
     layout = ModuleLayout(ship_type, ship_length)
-    layer_depth = ship_length / 9
+    layer_depth = ship_length / 11
 
-    # Layer 0: Sensors
+    # Layer 0: Spinal Weapon (nose-mounted main gun)
     layer0 = ModuleLayer(0, depth_m=layer_depth)
     layer0.add_module(Module(
-        name="Long Range Sensor Array",
-        module_type=ModuleType.SENSOR,
-        armor_rating=0.15,
-        position=ModulePosition(0, 0.0),
-        size_m2=28.0
-    ))
-    layer0.add_module(Module(
-        name="Fire Control Radar",
-        module_type=ModuleType.SENSOR,
-        armor_rating=0.18,
-        position=ModulePosition(0, 6.0),
-        size_m2=14.0
-    ))
-    layout.add_layer(layer0)
-
-    # Layer 1: Spinal Weapon
-    layer1 = ModuleLayer(1, depth_m=layer_depth)
-    layer1.add_module(Module(
         name="Spinal Coiler Mount",
         module_type=ModuleType.WEAPON,
         armor_rating=0.3,
-        position=ModulePosition(1, 0.0),
+        position=ModulePosition(0, 0.0),
         size_m2=55.0
+    ))
+    layout.add_layer(layer0)
+
+    # Layer 1: Forward Hull (protects bridge from nose)
+    layer1 = ModuleLayer(1, depth_m=layer_depth)
+    layer1.add_module(Module(
+        name="Forward Hull Section",
+        module_type=ModuleType.HULL,
+        armor_rating=0.4,
+        position=ModulePosition(1, 0.0),
+        size_m2=65.0
     ))
     layout.add_layer(layer1)
 
-    # Layer 2: Forward Weapons
+    # Layer 2: Magazine + Forward Weapons
     layer2 = ModuleLayer(2, depth_m=layer_depth)
+    layer2.add_module(Module(
+        name="Forward Magazine",
+        module_type=ModuleType.MAGAZINE,
+        armor_rating=0.28,
+        position=ModulePosition(2, 0.0),
+        size_m2=35.0
+    ))
     layer2.add_module(Module(
         name="Heavy Coilgun Battery A",
         module_type=ModuleType.WEAPON,
         armor_rating=0.25,
-        position=ModulePosition(2, 5.0),
+        position=ModulePosition(2, 6.0),
         size_m2=32.0
     ))
     layer2.add_module(Module(
         name="Heavy Coilgun Battery B",
         module_type=ModuleType.WEAPON,
         armor_rating=0.25,
-        position=ModulePosition(2, -5.0),
+        position=ModulePosition(2, -6.0),
         size_m2=32.0
     ))
     layout.add_layer(layer2)
 
-    # Layer 3: Bridge
+    # Layer 3: Bridge + Sensors (armored bulkheads on sides)
     layer3 = ModuleLayer(3, depth_m=layer_depth)
     layer3.add_module(Module(
         name="Command Bridge",
@@ -1249,90 +1533,147 @@ def _create_battleship_layout(
         is_critical=True
     ))
     layer3.add_module(Module(
-        name="Combat Information Center",
+        name="Long Range Sensor Array",
         module_type=ModuleType.SENSOR,
-        armor_rating=0.35,
+        armor_rating=0.15,
         position=ModulePosition(3, 5.0),
-        size_m2=18.0
+        size_m2=28.0
+    ))
+    layer3.add_module(Module(
+        name="Fire Control Radar",
+        module_type=ModuleType.SENSOR,
+        armor_rating=0.18,
+        position=ModulePosition(3, -5.0),
+        size_m2=14.0
+    ))
+    layer3.add_module(Module(
+        name="Bridge Armored Bulkhead Port",
+        module_type=ModuleType.ARMOR,
+        armor_rating=0.6,
+        position=ModulePosition(3, 12.0),
+        size_m2=25.0
+    ))
+    layer3.add_module(Module(
+        name="Bridge Armored Bulkhead Starboard",
+        module_type=ModuleType.ARMOR,
+        armor_rating=0.6,
+        position=ModulePosition(3, -12.0),
+        size_m2=25.0
     ))
     layout.add_layer(layer3)
 
-    # Layer 4: Reactor
+    # Layer 4: Central Hull (between bridge and reactor)
     layer4 = ModuleLayer(4, depth_m=layer_depth)
     layer4.add_module(Module(
-        name="Main Fusion Reactor",
-        module_type=ModuleType.REACTOR,
-        armor_rating=0.52,
+        name="Central Hull Section",
+        module_type=ModuleType.HULL,
+        armor_rating=0.4,
         position=ModulePosition(4, 0.0),
-        size_m2=70.0,
-        is_critical=True
+        size_m2=70.0
     ))
     layout.add_layer(layer4)
 
-    # Layer 5: Ammunition/Cargo
+    # Layer 5: Reactor (armored bulkheads on sides)
     layer5 = ModuleLayer(5, depth_m=layer_depth)
     layer5.add_module(Module(
-        name="Main Magazine",
-        module_type=ModuleType.CARGO,
-        armor_rating=0.28,
+        name="Main Fusion Reactor",
+        module_type=ModuleType.REACTOR,
+        armor_rating=0.52,
         position=ModulePosition(5, 0.0),
-        size_m2=45.0
+        size_m2=70.0,
+        is_critical=True
     ))
     layer5.add_module(Module(
-        name="Crew Quarters",
-        module_type=ModuleType.CREW,
-        armor_rating=0.15,
-        position=ModulePosition(5, 8.0),
-        size_m2=35.0
+        name="Reactor Armored Bulkhead Port",
+        module_type=ModuleType.ARMOR,
+        armor_rating=0.6,
+        position=ModulePosition(5, 12.0),
+        size_m2=28.0
+    ))
+    layer5.add_module(Module(
+        name="Reactor Armored Bulkhead Starboard",
+        module_type=ModuleType.ARMOR,
+        armor_rating=0.6,
+        position=ModulePosition(5, -12.0),
+        size_m2=28.0
     ))
     layout.add_layer(layer5)
 
-    # Layer 6: Secondary Weapons
+    # Layer 6: Aft Hull (protects reactor from tail)
     layer6 = ModuleLayer(6, depth_m=layer_depth)
     layer6.add_module(Module(
-        name="Heavy Coilgun Battery C",
-        module_type=ModuleType.WEAPON,
-        armor_rating=0.25,
-        position=ModulePosition(6, 5.0),
-        size_m2=32.0
-    ))
-    layer6.add_module(Module(
-        name="Point Defense Array",
-        module_type=ModuleType.WEAPON,
-        armor_rating=0.2,
+        name="Aft Hull Section",
+        module_type=ModuleType.HULL,
+        armor_rating=0.4,
         position=ModulePosition(6, 0.0),
-        size_m2=18.0
+        size_m2=65.0
     ))
     layout.add_layer(layer6)
 
-    # Layer 7: Fuel Storage
+    # Layer 7: Secondary Weapons + Cargo
     layer7 = ModuleLayer(7, depth_m=layer_depth)
     layer7.add_module(Module(
-        name="Main Fuel Tank",
-        module_type=ModuleType.FUEL_TANK,
-        armor_rating=0.2,
-        position=ModulePosition(7, 0.0),
-        size_m2=60.0
+        name="Heavy Coilgun Battery C",
+        module_type=ModuleType.WEAPON,
+        armor_rating=0.25,
+        position=ModulePosition(7, 5.0),
+        size_m2=32.0
     ))
     layer7.add_module(Module(
-        name="Reserve Fuel Tank",
-        module_type=ModuleType.FUEL_TANK,
-        armor_rating=0.15,
-        position=ModulePosition(7, 8.0),
-        size_m2=25.0
+        name="Point Defense Array",
+        module_type=ModuleType.WEAPON,
+        armor_rating=0.2,
+        position=ModulePosition(7, -5.0),
+        size_m2=18.0
+    ))
+    layer7.add_module(Module(
+        name="Main Magazine",
+        module_type=ModuleType.CARGO,
+        armor_rating=0.28,
+        position=ModulePosition(7, 0.0),
+        size_m2=45.0
     ))
     layout.add_layer(layer7)
 
-    # Layer 8: Engine
+    # Layer 8: Crew Quarters
     layer8 = ModuleLayer(8, depth_m=layer_depth)
     layer8.add_module(Module(
+        name="Crew Quarters",
+        module_type=ModuleType.CREW,
+        armor_rating=0.15,
+        position=ModulePosition(8, 0.0),
+        size_m2=45.0
+    ))
+    layout.add_layer(layer8)
+
+    # Layer 9: Fuel Storage
+    layer9 = ModuleLayer(9, depth_m=layer_depth)
+    layer9.add_module(Module(
+        name="Main Fuel Tank",
+        module_type=ModuleType.FUEL_TANK,
+        armor_rating=0.2,
+        position=ModulePosition(9, 0.0),
+        size_m2=60.0
+    ))
+    layer9.add_module(Module(
+        name="Reserve Fuel Tank",
+        module_type=ModuleType.FUEL_TANK,
+        armor_rating=0.15,
+        position=ModulePosition(9, 8.0),
+        size_m2=25.0
+    ))
+    layout.add_layer(layer9)
+
+    # Layer 10: Engine
+    layer10 = ModuleLayer(10, depth_m=layer_depth)
+    layer10.add_module(Module(
         name="Main Engine Assembly",
         module_type=ModuleType.ENGINE,
         armor_rating=0.28,
-        position=ModulePosition(8, 0.0),
+        position=ModulePosition(10, 0.0),
         size_m2=85.0
     ))
-    layout.add_layer(layer8)
+    layout.add_layer(layer10)
 
     return layout
 

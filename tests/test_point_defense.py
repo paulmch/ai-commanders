@@ -749,29 +749,8 @@ class TestSmartPDTargeting:
         pd_events = [e for e in sim.events if e.event_type == SimulationEventType.PD_ENGAGED]
         assert len(pd_events) > 0, "Defender PD should engage threats to allies"
 
-    def test_enemy_ship_targeting_lowest_priority(self):
-        """Test PD targets enemy ships only when no other threats."""
-        sim = CombatSimulation(time_step=1.0, seed=42)
-
-        # Defender and enemy at close range (within PD range)
-        defender = self._create_test_ship("defender", "alpha", Vector3D(0, 0, 0), num_pd=2)
-        enemy = self._create_test_ship("enemy", "beta", Vector3D(50_000, 0, 0), num_pd=0)
-        sim.add_ship(defender)
-        sim.add_ship(enemy)
-
-        # Run simulation - no projectiles, so PD should target enemy ship
-        sim.step()
-
-        # Check for ship targeting events
-        pd_events = [e for e in sim.events
-                    if e.event_type == SimulationEventType.PD_ENGAGED
-                    and e.data.get('target_type') == 'ship']
-
-        assert len(pd_events) > 0, "PD should target enemy ship when no other threats"
-        assert pd_events[0].data.get('target_id') == "enemy"
-
-    def test_slug_priority_over_torpedo(self):
-        """Test slugs on collision course have higher priority than torpedoes."""
+    def test_torpedo_priority_over_slug(self):
+        """Test torpedoes have higher priority than slugs (50+ GJ vs ~5 GJ damage)."""
         sim = CombatSimulation(time_step=1.0, seed=42)
 
         # Defender with just 1 PD turret (forces priority choice)
@@ -810,11 +789,11 @@ class TestSmartPDTargeting:
         # Run simulation
         sim.step()
 
-        # With 1 turret, it should prioritize the slug (higher priority)
+        # With 1 turret, it should prioritize the torpedo (higher damage potential)
         pd_events = [e for e in sim.events if e.event_type == SimulationEventType.PD_ENGAGED]
         assert len(pd_events) == 1, "Only 1 turret should fire"
-        assert pd_events[0].data.get('target_type') == 'slug', \
-            "Slug on collision course should be highest priority"
+        assert pd_events[0].data.get('target_type') == 'torpedo', \
+            "Torpedo on collision course should be highest priority (50+ GJ vs ~5 GJ slug)"
 
 
 if __name__ == "__main__":

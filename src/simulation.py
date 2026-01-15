@@ -1852,18 +1852,34 @@ class CombatSimulation:
                         )
                         if direction.magnitude > 0:
                             direction = direction.normalized()
-                            self._rotate_ship_toward(ship, direction, dt, engines_on=(throttle > 0))
+                            # Check if significant rotation is needed
+                            angle_to_heading = math.acos(max(-1.0, min(1.0,
+                                ship.kinematic_state.forward.dot(direction))))
+                            needs_rotation = angle_to_heading > math.radians(2.0)
+                            # Use thrust vectoring for rotation if needed, or if already thrusting
+                            self._rotate_ship_toward(ship, direction, dt,
+                                engines_on=(throttle > 0 or needs_rotation))
+                            # If throttle was 0 but we need rotation, use small throttle for TV
+                            if throttle == 0 and needs_rotation:
+                                throttle = 0.05
 
                 elif maneuver.maneuver_type == ManeuverType.PADLOCK and maneuver.target_id:
-                    # Padlock - track target with nose, no thrust
-                    # Ship coasts on current trajectory while keeping nose pointed at target
+                    # Padlock - track target with nose, minimal thrust for rotation
+                    # Ship uses thrust vectoring to rotate quickly while minimizing linear acceleration
                     # Perfect for firing spinal weapons during a planned pass
                     target = self.get_ship(maneuver.target_id)
                     if target and not target.is_destroyed:
                         target_dir = (target.position - ship.position).normalized()
-                        self._rotate_ship_toward(ship, target_dir, dt, engines_on=False)
-                    # No thrust - ship continues on ballistic trajectory
-                    throttle = 0.0
+                        # Check if we need to rotate
+                        angle_to_target = math.acos(max(-1.0, min(1.0,
+                            ship.kinematic_state.forward.dot(target_dir))))
+                        # Use thrust vectoring if significant rotation needed, else RCS
+                        needs_rotation = angle_to_target > math.radians(2.0)
+                        self._rotate_ship_toward(ship, target_dir, dt, engines_on=needs_rotation)
+                        # Use small throttle for rotation (thrust vectoring), zero when aligned
+                        throttle = 0.05 if needs_rotation else 0.0
+                    else:
+                        throttle = 0.0
 
                 # Note: Use HEADING for manual directional flight,
                 # PADLOCK for tracking target while coasting,
@@ -2443,7 +2459,30 @@ class CombatSimulation:
                     continue
 
                 # Update distance tracking using end-of-step positions
-                proj_flight.prev_distance_to_target = proj.distance_to(target_ship.position)
+                new_dist = proj.distance_to(target_ship.position)
+
+                # MISS DETECTION for coarse timestep path:
+                # Check if TCA is negative (already past closest approach) or
+                # if distance is increasing after we've reached minimum approach
+                if tca < 0 or (new_dist > proj_flight.prev_distance_to_target and
+                               proj_flight.prev_distance_to_target <= proj_flight.min_distance_to_target * 1.1):
+                    # Past closest approach - it's a miss
+                    closest_km = proj_flight.min_distance_to_target / 1000.0
+                    flight_time = self.current_time - proj_flight.launch_time
+                    self._log_event(SimulationEventType.PROJECTILE_MISS,
+                                   proj_flight.source_ship_id, proj_flight.target_ship_id, {
+                        'projectile_id': proj_flight.projectile_id,
+                        'closest_approach_km': closest_km,
+                        'flight_time_s': flight_time,
+                        'detection': 'coarse_tca',
+                        'tca': tca
+                    })
+                    print(f"  --- [{proj_flight.source_ship_id}] MISS {proj_flight.target_ship_id} "
+                          f"(closest: {closest_km:.2f}km, flight: {flight_time:.1f}s, tca: {tca:.1f}s)")
+                    projectiles_to_remove.append(proj_flight)
+                    continue
+
+                proj_flight.prev_distance_to_target = new_dist
 
             else:
                 # Close to target - use micro-timesteps for precision
@@ -2581,7 +2620,8 @@ class CombatSimulation:
             impact_point: The point of impact (if known, for logging)
         """
         # Use the existing projectile hit resolution which handles all combat mechanics
-        self._resolve_projectile_hit(proj_flight, target)
+        # Pass the impact point for visualization
+        self._resolve_projectile_hit(proj_flight, target, impact_point)
 
     def _calculate_time_to_closest_approach(
         self,
@@ -2911,10 +2951,14 @@ class CombatSimulation:
     def _resolve_projectile_hit(
         self,
         proj_flight: ProjectileInFlight,
-        target: ShipCombatState
+        target: ShipCombatState,
+        impact_point: Optional[Vector3D] = None
     ) -> None:
         """Resolve a projectile hit on a ship."""
         proj = proj_flight.projectile
+
+        # Use impact point if provided, otherwise use target position
+        final_position = impact_point if impact_point else target.position
         source_ship = self.get_ship(proj_flight.source_ship_id)
 
         # Calculate impact angle for hit location
@@ -3032,6 +3076,7 @@ class CombatSimulation:
         critical_hit = penetrated and self.rng.random() < 0.5
 
         # Log projectile impact with all armor/penetration data
+        # Include impact position for visualizer extrapolation
         self._log_event(SimulationEventType.PROJECTILE_IMPACT,
                        proj_flight.source_ship_id, target.ship_id, {
             'projectile_id': proj_flight.projectile_id,
@@ -3047,6 +3092,7 @@ class CombatSimulation:
             'penetrated': penetrated,
             'critical_hit': critical_hit,
             'flight_time_s': flight_time,
+            'impact_position': [final_position.x, final_position.y, final_position.z],
         })
 
         # Log damage taken
@@ -3081,20 +3127,22 @@ class CombatSimulation:
                 modules = [m for m in all_modules if not m.is_destroyed]
 
                 # Number of modules affected scales with energy
-                # 1 GJ = 1-2 modules, 10 GJ = 3-4 modules, 17+ GJ = 5+ modules
-                max_modules = min(len(modules), max(2, int(effective_ke_gj / 3) + 1))
+                # High-energy penetrators can reach deeper into the ship
+                # 1 GJ = 2 modules, 5 GJ = 4 modules, 10+ GJ = 6+ modules
+                max_modules = min(len(modules), max(2, int(effective_ke_gj / 2) + 1))
 
                 for module in modules[:max_modules]:
                     if remaining_energy_gj < 0.1:
                         break
-                    # Each module absorbs some energy based on its size/armor
-                    damage_fraction = 0.2 + (module.size_m2 / 50.0) * 0.1  # 20-30% per module
-                    damage_to_module = remaining_energy_gj * damage_fraction
-                    actual_damage = module.damage(damage_to_module)
+                    # Apply full energy to module - module.damage() handles absorption
+                    # and returns remaining energy that passes through
+                    energy_before = remaining_energy_gj
+                    remaining_energy_gj = module.damage(remaining_energy_gj)
+                    energy_applied = energy_before - remaining_energy_gj
                     was_destroyed = module.is_destroyed
                     self._log_event(SimulationEventType.MODULE_DAMAGED, target.ship_id, data={
                         'module_name': module.name,
-                        'damage_gj': actual_damage,
+                        'damage_gj': energy_applied,
                         'destroyed': was_destroyed
                     })
                     if was_destroyed:
@@ -3104,11 +3152,6 @@ class CombatSimulation:
                         print(f"  !!! [{target.ship_id}] MODULE DESTROYED: {module.name}")
                         # Disable corresponding weapon if weapon module destroyed
                         self._disable_weapon_for_module(target, module.name)
-                    # Energy loss as penetrator travels through ship
-                    # Reduced absorption - high-velocity penetrators maintain energy
-                    # Denser modules (reactors, engines) absorb slightly more
-                    absorption = 0.20 if module.is_critical else 0.15
-                    remaining_energy_gj *= (1.0 - absorption)
 
         # Check for ship destruction
         self._check_ship_destroyed(target, proj_flight.source_ship_id)
@@ -3444,21 +3487,22 @@ class CombatSimulation:
             # Filter out already-destroyed modules
             modules = [m for m in all_modules if not m.is_destroyed]
 
-            # Torpedoes affect many modules due to massive energy
-            # 10 GJ = 4 modules, 20 GJ = 7 modules, 35 GJ = 12 modules
-            max_modules = min(len(modules), max(3, int(total_damage_gj / 3) + 1))
+            # Torpedoes affect many modules due to massive explosive energy
+            # Wide blast radius - more modules affected than kinetic
+            # 10 GJ = 6 modules, 20 GJ = 11 modules, 35 GJ = 18 modules
+            max_modules = min(len(modules), max(4, int(total_damage_gj / 2) + 1))
 
             for module in modules[:max_modules]:
                 if remaining_energy_gj < 0.1:
                     break
-                # Torpedoes deal heavy damage - explosive + kinetic
-                damage_fraction = 0.25 + (module.size_m2 / 40.0) * 0.15  # 25-40% per module
-                damage_to_module = remaining_energy_gj * damage_fraction
-                actual_damage = module.damage(damage_to_module)
+                # Apply full energy to module - module.damage() handles absorption
+                energy_before = remaining_energy_gj
+                remaining_energy_gj = module.damage(remaining_energy_gj)
+                energy_applied = energy_before - remaining_energy_gj
                 was_destroyed = module.is_destroyed
                 self._log_event(SimulationEventType.MODULE_DAMAGED, target.ship_id, data={
                     'module_name': module.name,
-                    'damage_gj': actual_damage,
+                    'damage_gj': energy_applied,
                     'destroyed': was_destroyed
                 })
                 if was_destroyed:
@@ -3468,10 +3512,6 @@ class CombatSimulation:
                     print(f"  !!! [{target.ship_id}] MODULE DESTROYED: {module.name}")
                     # Disable corresponding weapon if weapon module destroyed
                     self._disable_weapon_for_module(target, module.name)
-                # Energy dissipates as blast travels through ship
-                # Critical modules (armored) absorb more blast
-                absorption = 0.35 if module.is_critical else 0.25
-                remaining_energy_gj *= (1.0 - absorption)
 
         self._check_ship_destroyed(target, torp_flight.source_ship_id)
 
@@ -3480,11 +3520,10 @@ class CombatSimulation:
     # -------------------------------------------------------------------------
 
     # Target type priorities (lower = higher priority)
-    PD_PRIORITY_SLUG_INTERCEPT = 1       # Slugs on collision course - fastest, hardest
-    PD_PRIORITY_TORPEDO_COLLISION = 2    # Torpedoes on collision course
-    PD_PRIORITY_TORPEDO_MANEUVERING = 3  # Torpedoes with remaining delta-v
+    PD_PRIORITY_TORPEDO_COLLISION = 1    # Torpedoes on collision course - highest damage (50+ GJ)
+    PD_PRIORITY_TORPEDO_MANEUVERING = 2  # Torpedoes with remaining delta-v
+    PD_PRIORITY_SLUG_INTERCEPT = 3       # Slugs on collision course (~5 GJ)
     PD_PRIORITY_ALLIED_DEFENSE = 4       # Projectiles headed to allied ships
-    PD_PRIORITY_ENEMY_SHIP = 10          # Enemy ships (lowest priority)
 
     def _update_point_defense(self, dt: float) -> None:
         """
@@ -3657,23 +3696,6 @@ class CombatSimulation:
                 'allied_target': allied_target
             })
 
-        # Add enemy ships as lowest priority targets
-        for enemy in self.get_enemy_ships(ship.ship_id):
-            if enemy.is_destroyed:
-                continue
-
-            distance_km = ship.position.distance_to(enemy.position) / 1000
-
-            targets.append({
-                'target_type': 'ship',
-                'target': enemy,
-                'target_id': enemy.ship_id,
-                'priority': self.PD_PRIORITY_ENEMY_SHIP,
-                'distance_km': distance_km,
-                'time_to_impact': float('inf'),
-                'turrets_assigned': 0
-            })
-
         # Sort by priority, then by time to impact (most urgent first)
         targets.sort(key=lambda t: (t['priority'], t['time_to_impact'], t['distance_km']))
 
@@ -3734,10 +3756,6 @@ class CombatSimulation:
                 turrets_needed - already_assigned,
                 len(reachable_indices)
             )
-
-            # For low-priority targets (enemy ships), only use 1 turret
-            if target_info['priority'] >= self.PD_PRIORITY_ENEMY_SHIP:
-                turrets_to_assign = min(1, turrets_to_assign)
 
             # Assign turrets
             for i in range(turrets_to_assign):
@@ -3822,8 +3840,6 @@ class CombatSimulation:
             self._pd_engage_torpedo(ship, pd, target_info['target'], dt)
         elif target_type == 'projectile':
             self._pd_engage_projectile(ship, pd, target_info['target'], dt)
-        elif target_type == 'ship':
-            self._pd_engage_enemy_ship(ship, pd, target_info['target'], dt)
 
     def _threatens_ship(
         self,
@@ -4018,50 +4034,6 @@ class CombatSimulation:
                 'projectile_id': proj_flight.projectile_id,
                 'remaining_mass_kg': slug_mass_kg - proj._pd_ablation
             })
-
-    def _pd_engage_enemy_ship(
-        self,
-        ship: ShipCombatState,
-        pd: PDLaserState,
-        target: ShipCombatState,
-        dt: float
-    ) -> None:
-        """
-        Engage an enemy ship with point defense laser.
-
-        This is lowest priority - only happens when no projectiles or torpedoes
-        to engage. PD lasers are ineffective against ship armor but can cause
-        minor surface heating and sensor interference.
-        """
-        distance_km = ship.position.distance_to(target.position) / 1000
-
-        if not pd.laser.is_in_range(distance_km):
-            return
-
-        # Fire PD laser
-        if not pd.engage():
-            return
-
-        # Calculate energy delivered (minimal effect against armor)
-        exposure_time = pd.laser.cooldown_s
-        energy_delivered_j = pd.laser.power_w * exposure_time
-
-        # Log engagement
-        self._log_event(SimulationEventType.PD_ENGAGED, ship.ship_id, target.ship_id, {
-            'turret': pd.turret_name,
-            'target_type': 'ship',
-            'target_id': target.ship_id,
-            'distance_km': distance_km,
-            'energy_delivered_j': energy_delivered_j
-        })
-
-        # PD lasers do minimal damage to ships - mostly harassment
-        # At 5 MW and 100 km, intensity is too low to ablate armor
-        # But at very close range (<10 km), could cause some heating
-        if distance_km < 10.0 and target.armor:
-            # Very minor armor heating effect
-            minor_damage_gj = energy_delivered_j / 1e12  # Negligible
-            # Not enough to actually damage - just logged for awareness
 
     # -------------------------------------------------------------------------
     # Damage Propagation

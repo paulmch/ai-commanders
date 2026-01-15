@@ -40,6 +40,13 @@ class EventType(str, Enum):
     MODULE_DAMAGED = "module_damaged"
     MODULE_DESTROYED = "module_destroyed"
 
+    # Point defense events
+    PD_FIRED = "pd_fired"
+    PD_SLUG_DAMAGED = "pd_slug_damaged"
+    PD_SLUG_DESTROYED = "pd_slug_destroyed"
+    PD_TORPEDO_DISABLED = "pd_torpedo_disabled"
+    PD_TORPEDO_DESTROYED = "pd_torpedo_destroyed"
+
     # Communication
     MESSAGE = "message"
     SURRENDER = "surrender"
@@ -285,6 +292,7 @@ class BattleRecorder:
         """Extract ship specifications for replay."""
         specs = {
             "ship_id": ship.ship_id,
+            "ship_type": getattr(ship, 'ship_type', 'destroyer'),
             "hull_integrity": 100.0,
         }
 
@@ -464,25 +472,33 @@ class BattleRecorder:
         penetrated: bool,
         critical_hit: bool = False,
         flight_time_s: float = 0.0,
+        projectile_id: str | None = None,
+        impact_position: list[float] | None = None,
     ) -> None:
         """Record a hit with full damage details."""
+        data = {
+            "shooter_id": shooter_id,
+            "weapon_slot": weapon_slot,
+            "hit_location": hit_location,
+            "impact_angle_deg": impact_angle_deg,
+            "kinetic_energy_gj": kinetic_energy_gj,
+            "armor_ablation_cm": armor_ablation_cm,
+            "armor_remaining_cm": armor_remaining_cm,
+            "damage_to_hull_gj": damage_to_hull_gj,
+            "penetrated": penetrated,
+            "critical_hit": critical_hit,
+            "flight_time_s": flight_time_s,
+        }
+        if projectile_id:
+            data["projectile_id"] = projectile_id
+        if impact_position:
+            data["impact_position"] = impact_position
+
         self._record_event(BattleEvent(
             timestamp=timestamp,
             event_type=EventType.HIT,
             ship_id=target_id,
-            data={
-                "shooter_id": shooter_id,
-                "weapon_slot": weapon_slot,
-                "hit_location": hit_location,
-                "impact_angle_deg": impact_angle_deg,
-                "kinetic_energy_gj": kinetic_energy_gj,
-                "armor_ablation_cm": armor_ablation_cm,
-                "armor_remaining_cm": armor_remaining_cm,
-                "damage_to_hull_gj": damage_to_hull_gj,
-                "penetrated": penetrated,
-                "critical_hit": critical_hit,
-                "flight_time_s": flight_time_s,
-            }
+            data=data
         ))
 
     def record_miss(
@@ -564,6 +580,108 @@ class BattleRecorder:
             ship_id=ship_id,
             data={
                 "module_name": module_name,
+            }
+        ))
+
+    def record_pd_fired(
+        self,
+        timestamp: float,
+        ship_id: str,
+        turret_name: str,
+        target_type: str,
+        target_id: str,
+        distance_km: float,
+        mass_ablated_kg: float = 0.0,
+        total_ablated_kg: float = 0.0,
+        energy_delivered_j: float = 0.0,
+    ) -> None:
+        """Record a point defense laser shot."""
+        self._record_event(BattleEvent(
+            timestamp=timestamp,
+            event_type=EventType.PD_FIRED,
+            ship_id=ship_id,
+            data={
+                "turret_name": turret_name,
+                "target_type": target_type,
+                "target_id": target_id,
+                "distance_km": distance_km,
+                "mass_ablated_kg": mass_ablated_kg,
+                "total_ablated_kg": total_ablated_kg,
+                "energy_delivered_j": energy_delivered_j,
+            }
+        ))
+
+    def record_pd_slug_damaged(
+        self,
+        timestamp: float,
+        ship_id: str,
+        projectile_id: str,
+        remaining_mass_kg: float,
+    ) -> None:
+        """Record PD damage to a kinetic slug."""
+        self._record_event(BattleEvent(
+            timestamp=timestamp,
+            event_type=EventType.PD_SLUG_DAMAGED,
+            ship_id=ship_id,
+            data={
+                "projectile_id": projectile_id,
+                "remaining_mass_kg": remaining_mass_kg,
+            }
+        ))
+
+    def record_pd_slug_destroyed(
+        self,
+        timestamp: float,
+        ship_id: str,
+        projectile_id: str,
+        source_ship_id: str,
+    ) -> None:
+        """Record PD destruction of a kinetic slug."""
+        self._record_event(BattleEvent(
+            timestamp=timestamp,
+            event_type=EventType.PD_SLUG_DESTROYED,
+            ship_id=ship_id,
+            data={
+                "projectile_id": projectile_id,
+                "source_ship_id": source_ship_id,
+            }
+        ))
+
+    def record_pd_torpedo_disabled(
+        self,
+        timestamp: float,
+        ship_id: str,
+        torpedo_id: str,
+        source_ship_id: str,
+    ) -> None:
+        """Record PD disabling a torpedo."""
+        self._record_event(BattleEvent(
+            timestamp=timestamp,
+            event_type=EventType.PD_TORPEDO_DISABLED,
+            ship_id=ship_id,
+            data={
+                "torpedo_id": torpedo_id,
+                "source_ship_id": source_ship_id,
+            }
+        ))
+
+    def record_pd_torpedo_destroyed(
+        self,
+        timestamp: float,
+        ship_id: str,
+        torpedo_id: str,
+        source_ship_id: str,
+        total_heat_absorbed_j: float = 0.0,
+    ) -> None:
+        """Record PD destruction of a torpedo."""
+        self._record_event(BattleEvent(
+            timestamp=timestamp,
+            event_type=EventType.PD_TORPEDO_DESTROYED,
+            ship_id=ship_id,
+            data={
+                "torpedo_id": torpedo_id,
+                "source_ship_id": source_ship_id,
+                "total_heat_absorbed_j": total_heat_absorbed_j,
             }
         ))
 
@@ -782,6 +900,7 @@ class BattleRecorder:
                 "maneuver": ship.get("maneuver", "MAINTAIN"),
                 "destroyed": ship.get("is_destroyed", False),
                 "hull": ship.get("hull_pct", 100.0),
+                "armor": ship.get("armor", {}),
             }
 
         # Record projectile states (coilgun slugs)

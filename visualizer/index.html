@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Commanders - Tactical Command</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700;900&family=Share+Tech+Mono&family=Rajdhani:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Scan line overlay -->
+    <div class="scanlines"></div>
+
+    <!-- Corner accents -->
+    <div class="corner-accent top-left"></div>
+    <div class="corner-accent top-right"></div>
+    <div class="corner-accent bottom-left"></div>
+    <div class="corner-accent bottom-right"></div>
+
+    <canvas id="canvas"></canvas>
+
+    <!-- Battle Header -->
+    <header id="battleHeader">
+      <div class="header-left">
+        <div class="system-status">
+          <span class="status-dot"></span>
+          <span class="status-text">TACTICAL DISPLAY ONLINE</span>
+        </div>
+      </div>
+      <div class="header-center">
+        <div class="battle-title">
+          <span class="title-prefix">ENGAGEMENT //</span>
+          <h1 id="battleName">FLEET BATTLE</h1>
+        </div>
+        <div class="fleet-summary">
+          <div class="fleet-indicator alpha">
+            <span class="fleet-label">ALPHA</span>
+            <span class="fleet-count" id="alphaCount">0/0</span>
+            <div class="fleet-bar"><div class="fleet-bar-fill" id="alphaBar"></div></div>
+          </div>
+          <div class="vs-separator">VS</div>
+          <div class="fleet-indicator beta">
+            <span class="fleet-label">BETA</span>
+            <span class="fleet-count" id="betaCount">0/0</span>
+            <div class="fleet-bar"><div class="fleet-bar-fill" id="betaBar"></div></div>
+          </div>
+        </div>
+      </div>
+      <div class="header-right">
+        <div class="time-block">
+          <span class="time-label">MISSION TIME</span>
+          <span class="time-value" id="missionTime">00:00:00</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Ship Registry Panel -->
+    <aside id="shipRegistry" class="panel">
+      <div class="panel-header">
+        <div class="panel-title">
+          <span class="panel-icon">◈</span>
+          SHIP REGISTRY
+        </div>
+        <div class="panel-decoration"></div>
+      </div>
+      <div class="panel-content">
+        <div class="fleet-section alpha">
+          <div class="fleet-header">
+            <span class="fleet-marker"></span>
+            <span class="fleet-name">ALPHA FLEET</span>
+          </div>
+          <ul id="alphaShips" class="ship-list"></ul>
+        </div>
+        <div class="fleet-section beta">
+          <div class="fleet-header">
+            <span class="fleet-marker"></span>
+            <span class="fleet-name">BETA FLEET</span>
+          </div>
+          <ul id="betaShips" class="ship-list"></ul>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Ship Telemetry Panel -->
+    <aside id="shipTelemetry" class="panel hidden">
+      <div class="panel-header">
+        <div class="panel-title">
+          <span class="panel-icon">◇</span>
+          SHIP TELEMETRY
+        </div>
+        <button class="panel-close" id="closeTelemetry">×</button>
+      </div>
+      <div class="panel-content">
+        <div class="ship-identity">
+          <div class="ship-class" id="shipClass">DESTROYER</div>
+          <h2 id="shipName">ISS RELENTLESS</h2>
+          <div class="ship-designation" id="shipDesignation">ALPHA-01</div>
+        </div>
+
+        <div class="telemetry-grid">
+          <div class="telemetry-item">
+            <span class="telemetry-label">HULL INTEGRITY</span>
+            <div class="telemetry-bar">
+              <div class="telemetry-bar-fill hull" id="hullBar"></div>
+            </div>
+            <span class="telemetry-value" id="hullValue">100%</span>
+          </div>
+
+          <div class="telemetry-item">
+            <span class="telemetry-label">THRUST OUTPUT</span>
+            <div class="telemetry-bar">
+              <div class="telemetry-bar-fill thrust" id="thrustBar"></div>
+            </div>
+            <span class="telemetry-value" id="thrustValue">0%</span>
+          </div>
+        </div>
+
+        <div class="telemetry-data">
+          <div class="data-row">
+            <span class="data-label">TARGET</span>
+            <span class="data-value" id="targetValue">-</span>
+          </div>
+          <div class="data-row">
+            <span class="data-label">MANEUVER</span>
+            <span class="data-value" id="maneuverValue">MAINTAIN</span>
+          </div>
+          <div class="data-row">
+            <span class="data-label">POSITION</span>
+            <span class="data-value mono" id="positionValue">(0, 0, 0) km</span>
+          </div>
+          <div class="data-row">
+            <span class="data-label">VELOCITY</span>
+            <span class="data-value mono" id="velocityValue">0.0 km/s</span>
+          </div>
+        </div>
+
+        <!-- Armor Schematic -->
+        <div class="armor-section">
+          <span class="section-label">ARMOR STATUS</span>
+          <div class="armor-schematic">
+            <div class="ship-silhouette">
+              <!-- Ship outline SVG -->
+              <svg viewBox="0 0 120 80" class="ship-outline">
+                <defs>
+                  <linearGradient id="armorGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" style="stop-color:var(--armor-color);stop-opacity:0.8" />
+                    <stop offset="100%" style="stop-color:var(--armor-color);stop-opacity:0.3" />
+                  </linearGradient>
+                </defs>
+                <!-- Ship body shape -->
+                <polygon class="ship-body" points="100,40 85,20 35,15 15,40 35,65 85,60" />
+                <!-- Nose section highlight -->
+                <polygon id="armorNose" class="armor-face nose" points="100,40 85,20 85,60" />
+                <!-- Lateral section highlight -->
+                <polygon id="armorLateral" class="armor-face lateral" points="85,20 35,15 35,65 85,60" />
+                <!-- Tail section highlight -->
+                <polygon id="armorTail" class="armor-face tail" points="35,15 15,40 35,65" />
+                <!-- Direction indicator -->
+                <polygon class="direction-arrow" points="108,40 100,36 100,44" />
+              </svg>
+            </div>
+            <div class="armor-readings">
+              <div class="armor-reading nose">
+                <span class="armor-label">NOSE</span>
+                <div class="armor-bar-container">
+                  <div class="armor-bar">
+                    <div class="armor-bar-fill" id="armorNoseBar"></div>
+                  </div>
+                </div>
+                <span class="armor-value" id="armorNoseValue">151cm</span>
+              </div>
+              <div class="armor-reading lateral">
+                <span class="armor-label">LAT</span>
+                <div class="armor-bar-container">
+                  <div class="armor-bar">
+                    <div class="armor-bar-fill" id="armorLateralBar"></div>
+                  </div>
+                </div>
+                <span class="armor-value" id="armorLateralValue">151cm</span>
+              </div>
+              <div class="armor-reading tail">
+                <span class="armor-label">TAIL</span>
+                <div class="armor-bar-container">
+                  <div class="armor-bar">
+                    <div class="armor-bar-fill" id="armorTailBar"></div>
+                  </div>
+                </div>
+                <span class="armor-value" id="armorTailValue">151cm</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Module Status -->
+        <div class="modules-section">
+          <span class="section-label">SYSTEMS STATUS</span>
+          <div class="module-grid" id="moduleGrid">
+            <!-- Populated dynamically -->
+          </div>
+        </div>
+
+        <div class="camera-modes">
+          <span class="modes-label">CAMERA MODE</span>
+          <div class="mode-buttons">
+            <button class="mode-btn" id="followBtn" data-mode="follow">
+              <span class="mode-icon">◎</span>
+              FOLLOW
+            </button>
+            <button class="mode-btn" id="orbitBtn" data-mode="orbit">
+              <span class="mode-icon">◉</span>
+              ORBIT
+            </button>
+            <button class="mode-btn active" id="freeBtn" data-mode="free">
+              <span class="mode-icon">◌</span>
+              FREE
+            </button>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Playback Controls -->
+    <footer id="playbackControls">
+      <div class="controls-container">
+        <div class="control-group transport">
+          <button class="transport-btn" id="playPauseBtn">
+            <span class="btn-icon play">▶</span>
+            <span class="btn-icon pause hidden">❚❚</span>
+          </button>
+        </div>
+
+        <div class="control-group timeline">
+          <div class="timeline-wrapper">
+            <div class="timeline-track">
+              <div class="timeline-progress" id="timelineProgress"></div>
+              <div class="timeline-handle" id="timelineHandle"></div>
+              <input type="range" id="timeline" min="0" max="1000" value="0">
+            </div>
+            <div class="timeline-markers" id="timelineMarkers"></div>
+          </div>
+        </div>
+
+        <div class="control-group time">
+          <div class="time-display">
+            <input type="text" class="time-input" id="timeInput" value="00:00" title="Enter time (MM:SS or seconds)">
+            <span class="time-separator">/</span>
+            <span class="total-time" id="totalTime">00:00</span>
+          </div>
+        </div>
+
+        <div class="control-group speed">
+          <span class="speed-label">SPEED</span>
+          <div class="speed-selector">
+            <button class="speed-btn" data-speed="0.25">¼×</button>
+            <button class="speed-btn" data-speed="0.5">½×</button>
+            <button class="speed-btn active" data-speed="1">1×</button>
+            <button class="speed-btn" data-speed="2">2×</button>
+            <button class="speed-btn" data-speed="4">4×</button>
+            <button class="speed-btn" data-speed="8">8×</button>
+          </div>
+        </div>
+
+        <div class="control-group load">
+          <button class="transport-btn secondary" id="loadNewBtn" title="Load New Recording">
+            <span class="btn-icon">📁</span>
+          </button>
+        </div>
+      </div>
+    </footer>
+
+    <!-- Event Log (Left side, collapsible) -->
+    <div id="eventLog" class="panel mini">
+      <div class="panel-header mini">
+        <span class="panel-icon">▣</span>
+        COMBAT LOG
+        <button class="collapse-btn" id="collapseEventLog">−</button>
+      </div>
+      <div class="event-list" id="eventList"></div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="loading" class="overlay">
+      <div class="loading-content">
+        <div class="loading-spinner">
+          <div class="spinner-ring"></div>
+          <div class="spinner-ring"></div>
+          <div class="spinner-ring"></div>
+        </div>
+        <div class="loading-text">
+          <span class="loading-title">INITIALIZING TACTICAL DISPLAY</span>
+          <span class="loading-status" id="loadingStatus">Loading battle data...</span>
+        </div>
+        <div class="loading-bar">
+          <div class="loading-bar-fill" id="loadingProgress"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- File selector (initially visible) -->
+    <div id="fileSelector" class="overlay">
+      <div class="selector-content">
+        <div class="selector-header">
+          <span class="selector-icon">⬡</span>
+          <h2>BATTLE ARCHIVE</h2>
+          <p>Select a recording to replay</p>
+        </div>
+        <div class="selector-options">
+          <input type="file" id="fileInput" accept=".json" hidden>
+          <button class="selector-btn primary" id="selectFileBtn">
+            <span class="btn-icon">📁</span>
+            SELECT RECORDING FILE
+          </button>
+          <div class="selector-divider">
+            <span>OR</span>
+          </div>
+          <div class="url-input-group">
+            <input type="text" id="urlInput" placeholder="Enter recording URL..." class="url-input">
+            <button class="selector-btn" id="loadUrlBtn">LOAD</button>
+          </div>
+        </div>
+        <div class="recent-battles" id="recentBattles">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>

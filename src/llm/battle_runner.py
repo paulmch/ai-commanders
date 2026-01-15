@@ -1689,6 +1689,12 @@ class LLMBattleRunner:
                 if hasattr(ship, 'hull_integrity'):
                     hull_pct = ship.hull_integrity
 
+                # Extract armor thickness per section
+                armor_data = {}
+                if hasattr(ship, 'armor') and ship.armor:
+                    for loc, armor in ship.armor.sections.items():
+                        armor_data[loc.value] = round(armor.thickness_cm, 1)
+
                 ships[ship_id] = {
                     "position": (ship.position.x, ship.position.y, ship.position.z),
                     "velocity": (ship.velocity.x, ship.velocity.y, ship.velocity.z),
@@ -1697,6 +1703,7 @@ class LLMBattleRunner:
                     "maneuver": maneuver_str,
                     "is_destroyed": ship.is_destroyed,
                     "hull_pct": round(hull_pct, 1),
+                    "armor": armor_data,
                 }
 
         # Build projectile states
@@ -2185,6 +2192,8 @@ class LLMBattleRunner:
                 penetrated=data.get("penetrated", False),
                 critical_hit=data.get("critical_hit", False),
                 flight_time_s=data.get("flight_time_s", 0),
+                projectile_id=data.get("projectile_id"),
+                impact_position=data.get("impact_position"),
             )
 
             # Record shot for captain learning
@@ -2283,6 +2292,53 @@ class LLMBattleRunner:
                 timestamp=timestamp,
                 ship_id=ship_id or "unknown",
                 module_name=data.get("module_name", "unknown"),
+            )
+
+        # Record point defense events
+        elif event_type == SimulationEventType.PD_ENGAGED:
+            self.recorder.record_pd_fired(
+                timestamp=timestamp,
+                ship_id=ship_id or "unknown",
+                turret_name=data.get("turret", "unknown"),
+                target_type=data.get("target_type", "unknown"),
+                target_id=data.get("target_id", "unknown"),
+                distance_km=data.get("distance_km", 0),
+                mass_ablated_kg=data.get("mass_ablated_kg", 0),
+                total_ablated_kg=data.get("total_ablated_kg", 0),
+                energy_delivered_j=data.get("energy_delivered_j", 0),
+            )
+
+        elif event_type == SimulationEventType.PD_SLUG_DAMAGED:
+            self.recorder.record_pd_slug_damaged(
+                timestamp=timestamp,
+                ship_id=ship_id or "unknown",
+                projectile_id=data.get("projectile_id", "unknown"),
+                remaining_mass_kg=data.get("remaining_mass_kg", 0),
+            )
+
+        elif event_type == SimulationEventType.PD_SLUG_DESTROYED:
+            self.recorder.record_pd_slug_destroyed(
+                timestamp=timestamp,
+                ship_id=ship_id or "unknown",
+                projectile_id=data.get("projectile_id", "unknown"),
+                source_ship_id=data.get("source_ship", "unknown"),
+            )
+
+        elif event_type == SimulationEventType.PD_TORPEDO_DISABLED:
+            self.recorder.record_pd_torpedo_disabled(
+                timestamp=timestamp,
+                ship_id=ship_id or "unknown",
+                torpedo_id=data.get("torpedo_id", "unknown"),
+                source_ship_id=data.get("source_ship", "unknown"),
+            )
+
+        elif event_type == SimulationEventType.PD_TORPEDO_DESTROYED:
+            self.recorder.record_pd_torpedo_destroyed(
+                timestamp=timestamp,
+                ship_id=ship_id or "unknown",
+                torpedo_id=data.get("torpedo_id", "unknown"),
+                source_ship_id=data.get("source_ship", "unknown"),
+                total_heat_absorbed_j=data.get("total_heat_absorbed_j", 0),
             )
 
 

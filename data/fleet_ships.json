@@ -2019,6 +2019,357 @@
           "max_angular_velocity_deg_s": 0.39
         }
       }
+    },
+    "dreadnought_siege": {
+      "hull": {
+        "type": "dreadnought",
+        "mass_tons": 2400,
+        "crew": 120,
+        "length_m": 275,
+        "structural_integrity": 48,
+        "hardpoints": {
+          "nose": 3,
+          "hull": 8,
+          "total": 11
+        }
+      },
+      "role": "Siege Platform",
+      "performance": {
+        "combat_acceleration_g": 0.676,
+        "combat_acceleration_ms2": 6.63,
+        "delta_v_kps": 500.0,
+        "max_wet_mass_tons": 8837.0,
+        "max_dry_mass_tons": 8416.0
+      },
+      "mass_breakdown": {
+        "hull": 2400,
+        "weapons": 1960,
+        "ammunition": 597.0,
+        "thermal_systems": 158,
+        "crew_and_misc": 260,
+        "reactor": 613,
+        "armor": 2428.0,
+        "propellant": 421.0,
+        "total_dry": 8416.0,
+        "total_wet": 8837.0,
+        "attitude_control": 25
+      },
+      "propulsion": {
+        "drive": {
+          "name": "Protium Converter Torch x6",
+          "thrust_mn": 58.56,
+          "exhaust_velocity_kps": 10256,
+          "efficiency": 0.98,
+          "required_reactor": "Inertial_Confinement_Fusion",
+          "propellant": "Hydrogen"
+        },
+        "reactor": {
+          "name": "Inertial Confinement Fusion Reactor VII",
+          "output_gw": 306430,
+          "mass_tons": 613,
+          "efficiency": 0.999,
+          "requires_exotics": true
+        }
+      },
+      "modules": {
+        "bridge": {
+          "name": "Fleet Command Center",
+          "position": {"x": 0.22, "side": "dorsal"},
+          "crew_stations": 24,
+          "notes": "Full fleet coordination capability"
+        },
+        "sensor_array": {
+          "name": "Dreadnought Sensor Complex",
+          "position": {"x": 0.22, "side": "dorsal"},
+          "type": "active_passive",
+          "range_km": 10000,
+          "notes": "Multi-array with redundant systems"
+        },
+        "living_quarters": {
+          "name": "Crew Habitation Section",
+          "position": {"x": 0.45, "side": "centerline"},
+          "capacity": 120,
+          "notes": "Four-deck crew section with medical bay"
+        },
+        "magazines": [
+          {
+            "name": "Siege Coiler Magazine",
+            "position": {"x": 0.06, "side": "centerline"},
+            "associated_weapon": "weapon_0",
+            "capacity_rounds": 100,
+            "notes": "Feeds heavy siege coiler - 656kg slugs"
+          },
+          {
+            "name": "Heavy Battery Magazine A",
+            "position": {"x": 0.25, "side": "dorsal"},
+            "associated_weapon": "weapon_1",
+            "capacity_rounds": 1800,
+            "notes": "Feeds forward dorsal heavy turret"
+          },
+          {
+            "name": "Heavy Battery Magazine B",
+            "position": {"x": 0.25, "side": "ventral"},
+            "associated_weapon": "weapon_2",
+            "capacity_rounds": 1800,
+            "notes": "Feeds forward ventral heavy turret"
+          },
+          {
+            "name": "Heavy Battery Magazine C",
+            "position": {"x": 0.40, "side": "port"},
+            "associated_weapon": "weapon_3",
+            "capacity_rounds": 1800,
+            "notes": "Feeds port heavy turret"
+          },
+          {
+            "name": "Heavy Battery Magazine D",
+            "position": {"x": 0.40, "side": "starboard"},
+            "associated_weapon": "weapon_4",
+            "capacity_rounds": 1800,
+            "notes": "Feeds starboard heavy turret"
+          },
+          {
+            "name": "Heavy Battery Magazine E",
+            "position": {"x": 0.55, "side": "dorsal"},
+            "associated_weapon": "weapon_5",
+            "capacity_rounds": 1800,
+            "notes": "Feeds aft dorsal heavy turret"
+          },
+          {
+            "name": "Secondary Magazine",
+            "position": {"x": 0.55, "side": "ventral"},
+            "associated_weapon": "weapon_6",
+            "capacity_rounds": 1800,
+            "notes": "Feeds standard coilgun turret"
+          }
+        ],
+        "heatsinks": [
+          {
+            "name": "Primary Heatsink Array",
+            "position": {"x": 0.68, "side": "port"},
+            "mass_tons": 32,
+            "capacity_gj": 131,
+            "notes": "Port aft bank"
+          },
+          {
+            "name": "Secondary Heatsink Array",
+            "position": {"x": 0.68, "side": "starboard"},
+            "mass_tons": 32,
+            "capacity_gj": 131,
+            "notes": "Starboard aft bank"
+          },
+          {
+            "name": "Tertiary Heatsink Array",
+            "position": {"x": 0.78, "side": "dorsal"},
+            "mass_tons": 32,
+            "capacity_gj": 131,
+            "notes": "Dorsal auxiliary bank"
+          },
+          {
+            "name": "Quaternary Heatsink Array",
+            "position": {"x": 0.78, "side": "ventral"},
+            "mass_tons": 32,
+            "capacity_gj": 132,
+            "notes": "Ventral auxiliary bank"
+          }
+        ]
+      },
+      "weapons": [
+        {
+          "type": "heavy_siege_coiler_mk3",
+          "name": "Heavy Siege Coiler Mk3",
+          "slot": "weapon_0",
+          "mount_position": {"x": 0.02, "side": "centerline"},
+          "facing": "forward",
+          "notes": "Triple nose mount, 20 degree gimbal. 3-shot salvos of 656kg slugs at 4.7 km/s. 21.75 GJ per salvo."
+        },
+        {
+          "type": "heavy_coilgun_mk3",
+          "name": "Heavy Coilgun Battery Mk3",
+          "slot": "weapon_1",
+          "mount_position": {"x": 0.20, "side": "dorsal"},
+          "facing": "forward",
+          "notes": "Forward dorsal heavy turret, 180 degree arc"
+        },
+        {
+          "type": "heavy_coilgun_mk3",
+          "name": "Heavy Coilgun Battery Mk3",
+          "slot": "weapon_2",
+          "mount_position": {"x": 0.20, "side": "ventral"},
+          "facing": "forward",
+          "notes": "Forward ventral heavy turret, 180 degree arc"
+        },
+        {
+          "type": "heavy_coilgun_mk3",
+          "name": "Heavy Coilgun Battery Mk3",
+          "slot": "weapon_3",
+          "mount_position": {"x": 0.35, "side": "port"},
+          "facing": "broadside",
+          "notes": "Port heavy turret, 180 degree arc"
+        },
+        {
+          "type": "heavy_coilgun_mk3",
+          "name": "Heavy Coilgun Battery Mk3",
+          "slot": "weapon_4",
+          "mount_position": {"x": 0.35, "side": "starboard"},
+          "facing": "broadside",
+          "notes": "Starboard heavy turret, 180 degree arc"
+        },
+        {
+          "type": "heavy_coilgun_mk3",
+          "name": "Heavy Coilgun Battery Mk3",
+          "slot": "weapon_5",
+          "mount_position": {"x": 0.50, "side": "dorsal"},
+          "facing": "broadside",
+          "notes": "Mid dorsal heavy turret, 180 degree arc"
+        },
+        {
+          "type": "coilgun_mk3",
+          "name": "Coilgun Battery Mk3",
+          "slot": "weapon_6",
+          "mount_position": {"x": 0.50, "side": "ventral"},
+          "facing": "broadside",
+          "notes": "Mid ventral turret, 180 degree arc"
+        },
+        {
+          "type": "pd_laser",
+          "name": "PD Laser Turret",
+          "slot": "pd_0",
+          "mount_position": {"x": 0.62, "side": "dorsal"},
+          "facing": "rear",
+          "notes": "Aft dorsal PD"
+        },
+        {
+          "type": "pd_laser",
+          "name": "PD Laser Turret",
+          "slot": "pd_1",
+          "mount_position": {"x": 0.62, "side": "ventral"},
+          "facing": "rear",
+          "notes": "Aft ventral PD"
+        },
+        {
+          "type": "pd_laser",
+          "name": "PD Laser Turret",
+          "slot": "pd_2",
+          "mount_position": {"x": 0.38, "side": "port"},
+          "facing": "broadside",
+          "notes": "Midship port PD"
+        },
+        {
+          "type": "pd_laser",
+          "name": "PD Laser Turret",
+          "slot": "pd_3",
+          "mount_position": {"x": 0.38, "side": "starboard"},
+          "facing": "broadside",
+          "notes": "Midship starboard PD"
+        }
+      ],
+      "weapons_summary": {
+        "siege_coilers": 1,
+        "heavy_coilguns": 5,
+        "coilguns": 1,
+        "torpedoes": 0,
+        "point_defense": 4
+      },
+      "thermal": {
+        "heatsink": {
+          "name": "Lithium Heat Sink",
+          "mass_tons": 128,
+          "capacity_gj": 525
+        },
+        "radiator": {
+          "name": "Lithium Spray Radiator",
+          "mass_tons": 10,
+          "dissipation_kw_per_kg": 13
+        },
+        "battery": {
+          "name": "Superconducting Coil Battery",
+          "mass_tons": 20,
+          "capacity_gj": 160,
+          "recharge_rate_gj_s": 0.075
+        }
+      },
+      "armor": {
+        "type": "Adamantane",
+        "properties": {
+          "density": 1800,
+          "baryonic_half_cm": 115.8,
+          "chip_resist": 0.75,
+          "kinetics_resist": 0.5,
+          "heat_of_vaporization_mj_kg": 59.534
+        },
+        "total_mass_tons": 2428.0,
+        "total_surface_m2": 1794.0,
+        "distribution": {
+          "mass_percent": {
+            "nose": 50.0,
+            "lateral": 40.0,
+            "tail": 10.0
+          },
+          "area_percent": {
+            "nose": 15.0,
+            "lateral": 70.0,
+            "tail": 15.0
+          }
+        },
+        "sections": {
+          "nose": {
+            "thickness_cm": 250.8,
+            "protection_percent": 81.7,
+            "hits_to_deplete": 114.0,
+            "area_m2": 269.0
+          },
+          "lateral": {
+            "thickness_cm": 42.9,
+            "protection_percent": 24.1,
+            "hits_to_deplete": 21.0,
+            "area_m2": 1256.0
+          },
+          "tail": {
+            "thickness_cm": 50.1,
+            "protection_percent": 27.3,
+            "hits_to_deplete": 24.0,
+            "area_m2": 269.0
+          }
+        }
+      },
+      "attitude_control": {
+        "moment_of_inertia": {
+          "pitch_yaw_kg_m2": 55694583333,
+          "notes": "Elongated cylinder model, wet mass (heavier due to siege weapon)"
+        },
+        "thrust_vectoring": {
+          "description": "Main engine nozzle deflection (requires engines firing)",
+          "combat_deflection_deg": 1.0,
+          "max_deflection_deg": 3.0,
+          "lever_arm_m": 123.8,
+          "lateral_force_mn": 1.022,
+          "torque_mn_m": 126.47,
+          "angular_accel_deg_s2": 0.130,
+          "time_to_rotate_45_deg_s": 37.2,
+          "time_to_rotate_90_deg_s": 52.6,
+          "time_to_rotate_180_deg_s": 74.4,
+          "max_angular_velocity_deg_s": 3.42,
+          "forward_thrust_efficiency": 0.99985,
+          "delta_v_cost": {
+            "rotate_90_deg_kps": 0.387,
+            "rotate_180_deg_kps": 0.547,
+            "propellant_90_deg_kg": 333.0,
+            "propellant_180_deg_kg": 471.0
+          }
+        },
+        "rcs": {
+          "description": "Reaction Control System (works with engines off)",
+          "module_name": "VectorThrusters (as RCS)",
+          "mass_tons": 20,
+          "torque_nm": 1500000,
+          "angular_accel_deg_s2": 0.00154,
+          "time_to_rotate_45_deg_s": 342.0,
+          "time_to_rotate_90_deg_s": 484.0,
+          "time_to_rotate_180_deg_s": 684.0,
+          "max_angular_velocity_deg_s": 0.37
+        }
+      },
+      "design_notes": "Siege variant replaces standard spinal coiler with heavy siege coiler. Trades 10% acceleration for +407% alpha strike damage (21.75 GJ salvo vs 4.29 GJ single shot). Slower projectiles (4.7 km/s vs 9.9 km/s) give targets more evasion time but impacts are devastating. Best used for breaking defensive positions and punishing slow capital ships."
     }
   },
   "attitude_control_systems": {

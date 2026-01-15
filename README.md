@@ -59,6 +59,49 @@ uv run python scripts/run_llm_battle.py \
     -v
 ```
 
+## 3D Battle Visualizer
+
+A Three.js-based tactical replay viewer for watching recorded battles in full 3D.
+
+### Running the Visualizer
+
+```bash
+cd visualizer
+npm install
+npm run dev
+```
+
+Open http://localhost:5173 and load a battle recording JSON file.
+
+### Features
+
+- **Expanse-style ship designs**: Donnager-class capitals, Tachi-style corvettes
+- **Multi-engine plumes**: Particle-based thrust visualization with bloom
+- **Projectile trails**: Coilgun rounds with motion trails
+- **PD laser beams**: Point defense engagements rendered as fading beams
+- **Impact effects**: Dual-ring shockwaves with particle bursts
+- **Ship destruction**: Multi-phase fusion reactor explosions
+  - Hull breach explosions with point lights
+  - Secondary detonations (munitions/fuel)
+  - Blinding reactor breach flash
+  - Expanding plasma sphere with shockwave
+  - 100,000 particle debris cloud
+  - Lingering plasma aftermath
+- **Camera modes**: Free orbit, follow ship, orbit selected ship
+- **Ship telemetry**: Hull, armor, modules, target, maneuver status
+- **Timeline scrubbing**: Jump to any point, adjustable playback speed (0.25x-8x)
+- **Time input**: Enter exact timestamps (MM:SS or seconds) to jump directly
+
+### Controls
+
+| Control | Action |
+|---------|--------|
+| Space | Play/Pause |
+| ← / → | Seek ±5 seconds |
+| Mouse drag | Orbit camera |
+| Scroll | Zoom |
+| Click ship list | Select & focus ship |
+
 ## Battle Modes
 
 ### Single Combat Mode
@@ -262,6 +305,16 @@ ai-commanders/
 │       ├── battle_runner.py # Orchestrates battles
 │       ├── battle_recorder.py # Records battles for replay
 │       └── communication.py # Messaging system
+├── visualizer/             # 3D battle replay viewer (Three.js + Vite)
+│   ├── src/
+│   │   ├── main.js         # Entry point, UI orchestration
+│   │   ├── SceneManager.js # Three.js scene, ships, effects
+│   │   ├── BattleLoader.js # JSON recording parser
+│   │   ├── Interpolator.js # 1Hz → 60FPS interpolation
+│   │   ├── TimeController.js # Playback controls
+│   │   └── CameraController.js # Camera modes
+│   ├── index.html
+│   └── styles.css
 ├── data/
 │   ├── fleet_ships.json    # Ship specifications
 │   ├── fleet_config_*.json # Fleet battle configurations

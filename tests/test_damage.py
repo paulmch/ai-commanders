@@ -361,13 +361,13 @@ class TestModuleLayoutCreation:
     """Tests for ModuleLayout creation."""
 
     @pytest.mark.parametrize("ship_type,expected_layers", [
-        ("corvette", 4),
-        ("frigate", 5),
-        ("destroyer", 6),
-        ("cruiser", 8),
-        ("battlecruiser", 8),
-        ("battleship", 9),
-        ("dreadnought", 10),
+        ("corvette", 6),
+        ("frigate", 7),
+        ("destroyer", 8),
+        ("cruiser", 10),
+        ("battlecruiser", 10),
+        ("battleship", 11),
+        ("dreadnought", 12),
     ])
     def test_layout_layers_per_ship_type(self, sample_fleet_data, ship_type, expected_layers):
         """Each ship type should have the correct number of layers."""
@@ -375,21 +375,21 @@ class TestModuleLayoutCreation:
         assert layout.total_layers == expected_layers
 
     def test_corvette_layout_structure(self, sample_fleet_data):
-        """Corvette should have proper 4-layer structure."""
+        """Corvette should have proper 6-layer structure with hull compartments."""
         layout = ModuleLayout.from_ship_type("corvette", sample_fleet_data)
-        assert layout.total_layers == 4
+        assert layout.total_layers == 6
         assert layout.ship_type == "corvette"
 
     def test_destroyer_layout_structure(self, sample_fleet_data):
-        """Destroyer should have proper 6-layer structure."""
+        """Destroyer should have proper 8-layer structure with hull compartments."""
         layout = ModuleLayout.from_ship_type("destroyer", sample_fleet_data)
-        assert layout.total_layers == 6
+        assert layout.total_layers == 8
         assert layout.ship_type == "destroyer"
 
     def test_dreadnought_layout_structure(self, sample_fleet_data):
-        """Dreadnought should have proper 10-layer structure."""
+        """Dreadnought should have proper 12-layer structure with hull compartments."""
         layout = ModuleLayout.from_ship_type("dreadnought", sample_fleet_data)
-        assert layout.total_layers == 10
+        assert layout.total_layers == 12
         assert layout.ship_type == "dreadnought"
 
     def test_layout_has_modules(self, sample_fleet_data):

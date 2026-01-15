@@ -1,0 +1,19 @@
+{
+  "battle_name": "Quick Test 2CP",
+  "time_limit_s": 120,
+  "decision_interval_s": 30.0,
+  "initial_distance_km": 100,
+  "max_checkpoints": 2,
+  "alpha_fleet": {
+    "admiral": null,
+    "ships": [
+      {"ship_type": "destroyer", "model": "openrouter/anthropic/claude-haiku-4.5"}
+    ]
+  },
+  "beta_fleet": {
+    "admiral": null,
+    "ships": [
+      {"ship_type": "destroyer", "model": "openrouter/google/gemini-2.5-flash-preview"}
+    ]
+  }
+}

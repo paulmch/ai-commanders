@@ -1,0 +1,21 @@
+{
+  "battle_name": "Debug 2v2 Battle",
+  "time_limit_s": 600,
+  "decision_interval_s": 30.0,
+  "initial_distance_km": 300,
+  "max_checkpoints": 3,
+  "alpha_fleet": {
+    "admiral": "openrouter/anthropic/claude-haiku-4.5",
+    "ships": [
+      {"ship_type": "destroyer", "model": "openrouter/anthropic/claude-haiku-4.5"},
+      {"ship_type": "dreadnought_siege", "model": "openrouter/anthropic/claude-haiku-4.5"}
+    ]
+  },
+  "beta_fleet": {
+    "admiral": "openrouter/google/gemini-2.5-flash-preview",
+    "ships": [
+      {"ship_type": "destroyer", "model": "openrouter/google/gemini-2.5-flash-preview"},
+      {"ship_type": "destroyer", "model": "openrouter/google/gemini-2.5-flash-preview"}
+    ]
+  }
+}
