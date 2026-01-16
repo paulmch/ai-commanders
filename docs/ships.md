@@ -367,141 +367,111 @@ Layer 11 (Tail): Main Engine Assembly, Maneuvering Thrusters
 
 ## Combat Tables
 
-### Shots to First Penetration
+### Shots to Kill (Simulated)
 
-Number of hits required to deplete armor at each facing. Lower is worse for the defender.
+Number of hits required to destroy each ship class, starting from full armor.
+Values determined by simulation using energy-based damage model.
 
-#### vs Corvette (212/36/42 cm)
-
-| Weapon | Ablation/Shot | Nose | Lateral | Tail |
-|--------|--------------|------|---------|------|
-| Spinal Coiler Mk3 | 100 cm | 3 | 1 | 1 |
-| Heavy Siege Coiler | 169 cm | 2 | 1 | 1 |
-| Heavy Coilgun Mk3 | 28 cm | 8 | 2 | 2 |
-| Coilgun Mk3 | 17 cm | 13 | 3 | 3 |
-| Light Coilgun Mk3 | 3 cm | 71 | 13 | 15 |
-| Torpedo @ 5 km/s | 73 cm | 3 | 1 | 1 |
-
-#### vs Frigate (71/12/14 cm)
-
-| Weapon | Ablation/Shot | Nose | Lateral | Tail |
-|--------|--------------|------|---------|------|
-| Spinal Coiler Mk3 | 100 cm | 1 | 1 | 1 |
-| Heavy Siege Coiler | 169 cm | 1 | 1 | 1 |
-| Heavy Coilgun Mk3 | 28 cm | 3 | 1 | 1 |
-| Coilgun Mk3 | 17 cm | 5 | 1 | 1 |
-| Light Coilgun Mk3 | 3 cm | 24 | 5 | 5 |
-| Torpedo @ 5 km/s | 73 cm | 1 | 1 | 1 |
-
-#### vs Destroyer (151/26/30 cm)
-
-| Weapon | Ablation/Shot | Nose | Lateral | Tail |
-|--------|--------------|------|---------|------|
-| Spinal Coiler Mk3 | 100 cm | 2 | 1 | 1 |
-| Heavy Siege Coiler | 169 cm | 1 | 1 | 1 |
-| Heavy Coilgun Mk3 | 28 cm | 6 | 1 | 2 |
-| Coilgun Mk3 | 17 cm | 9 | 2 | 2 |
-| Light Coilgun Mk3 | 3 cm | 51 | 9 | 11 |
-| Torpedo @ 5 km/s | 73 cm | 3 | 1 | 1 |
-
-#### vs Cruiser (241/41/48 cm)
-
-| Weapon | Ablation/Shot | Nose | Lateral | Tail |
-|--------|--------------|------|---------|------|
-| Spinal Coiler Mk3 | 100 cm | 3 | 1 | 1 |
-| Heavy Siege Coiler | 169 cm | 2 | 1 | 1 |
-| Heavy Coilgun Mk3 | 28 cm | 9 | 2 | 2 |
-| Coilgun Mk3 | 17 cm | 15 | 3 | 3 |
-| Light Coilgun Mk3 | 3 cm | 81 | 14 | 17 |
-| Torpedo @ 5 km/s | 73 cm | 4 | 1 | 1 |
-
-#### vs Battlecruiser (177/30/35 cm)
-
-| Weapon | Ablation/Shot | Nose | Lateral | Tail |
-|--------|--------------|------|---------|------|
-| Spinal Coiler Mk3 | 100 cm | 2 | 1 | 1 |
-| Heavy Siege Coiler | 169 cm | 2 | 1 | 1 |
-| Heavy Coilgun Mk3 | 28 cm | 7 | 2 | 2 |
-| Coilgun Mk3 | 17 cm | 11 | 2 | 3 |
-| Light Coilgun Mk3 | 3 cm | 60 | 11 | 12 |
-| Torpedo @ 5 km/s | 73 cm | 3 | 1 | 1 |
-
-#### vs Battleship (262/45/53 cm)
-
-| Weapon | Ablation/Shot | Nose | Lateral | Tail |
-|--------|--------------|------|---------|------|
-| Spinal Coiler Mk3 | 100 cm | 3 | 1 | 1 |
-| Heavy Siege Coiler | 169 cm | 2 | 1 | 1 |
-| Heavy Coilgun Mk3 | 28 cm | 10 | 2 | 2 |
-| Coilgun Mk3 | 17 cm | 16 | 3 | 4 |
-| Light Coilgun Mk3 | 3 cm | 88 | 15 | 18 |
-| Torpedo @ 5 km/s | 73 cm | 4 | 1 | 1 |
-
-#### vs Dreadnought (251/43/50 cm)
-
-| Weapon | Ablation/Shot | Nose | Lateral | Tail |
-|--------|--------------|------|---------|------|
-| Spinal Coiler Mk3 | 100 cm | 3 | 1 | 1 |
-| Heavy Siege Coiler | 169 cm | 2 | 1 | 1 |
-| Heavy Coilgun Mk3 | 28 cm | 9 | 2 | 2 |
-| Coilgun Mk3 | 17 cm | 15 | 3 | 3 |
-| Light Coilgun Mk3 | 3 cm | 84 | 15 | 17 |
-| Torpedo @ 5 km/s | 73 cm | 4 | 1 | 1 |
-
-### Summary: Shots to Penetrate by Facing
-
-| Ship | Nose (Spinal) | Nose (Heavy) | Lateral (Coilgun) | Tail (Torpedo) |
-|------|---------------|--------------|-------------------|----------------|
-| Corvette | 3 | 8 | 3 | 1 |
-| Frigate | 1 | 3 | 1 | 1 |
-| Destroyer | 2 | 6 | 2 | 1 |
-| Cruiser | 3 | 9 | 3 | 1 |
-| Battlecruiser | 2 | 7 | 2 | 1 |
-| Battleship | 3 | 10 | 3 | 1 |
-| Dreadnought | 3 | 9 | 3 | 1 |
-
----
-
-### Shots to Destruction
-
-After penetration, damage must destroy internal modules. Ships are destroyed when:
+Ships are destroyed when:
 1. Main Reactor is destroyed (critical), OR
 2. Command Bridge is destroyed (critical), OR
-3. Hull integrity falls below threshold
+3. Hull integrity falls below 25%
 
-**Module destruction:** ~2 GJ destroys a module completely (50% health per GJ)
+#### vs Corvette (Armor: 212/36/42 cm)
 
-#### Estimated Shots to Kill (penetrating shots after armor breach)
+| Weapon | Nose | Lateral | Tail |
+|--------|------|---------|------|
+| Spinal Coiler Mk3 | 4 | 2 | 3 |
+| Heavy Siege Coiler Mk3 | 2 | 1 | 2 |
+| Heavy Coilgun Battery Mk3 | 13 | 7 | 9 |
+| Coilgun Battery Mk3 | 21 | 12 | 15 |
+| Light Coilgun Battery Mk3 | 110 | 65 | 85 |
+| Torpedo @ 5 km/s | 5 | 3 | 3 |
 
-Based on structural integrity and critical module protection:
+#### vs Frigate (Armor: 71/12/14 cm)
 
-| Ship | Structural Integrity | Extra Shots (Nose) | Extra Shots (Lateral) | Extra Shots (Tail) |
-|------|---------------------|-------------------|----------------------|-------------------|
-| Corvette | 8 | 2-3 | 3-4 | 2-3 |
-| Frigate | 12 | 2-3 | 3-4 | 2-3 |
-| Destroyer | 18 | 3-4 | 4-5 | 3-4 |
-| Cruiser | 20 | 3-4 | 5-6 | 3-4 |
-| Battlecruiser | 24 | 3-4 | 5-6 | 3-4 |
-| Battleship | 40 | 4-5 | 6-8 | 4-5 |
-| Dreadnought | 48 | 5-6 | 7-9 | 5-6 |
+| Weapon | Nose | Lateral | Tail |
+|--------|------|---------|------|
+| Spinal Coiler Mk3 | 2 | 3 | 3 |
+| Heavy Siege Coiler Mk3 | 1 | 2 | 2 |
+| Heavy Coilgun Battery Mk3 | 8 | 10 | 8 |
+| Coilgun Battery Mk3 | 14 | 16 | 13 |
+| Light Coilgun Battery Mk3 | 76 | 93 | 76 |
+| Torpedo @ 5 km/s | 3 | 4 | 3 |
 
-**Notes:**
-- Nose hits travel through spinal weapon → hull → bridge → reactor
-- Lateral hits only affect middle ~50% of ship (cannot reach nose/tail extremes)
-- Tail hits travel through engine → fuel → hull → reactor
-- Armored bulkheads protect critical modules from lateral penetration
+#### vs Destroyer (Armor: 151/26/30 cm)
 
-#### Total Shots to Kill (including armor penetration)
+| Weapon | Nose | Lateral | Tail |
+|--------|------|---------|------|
+| Spinal Coiler Mk3 | 4 | 5 | 5 |
+| Heavy Siege Coiler Mk3 | 2 | 3 | 3 |
+| Heavy Coilgun Battery Mk3 | 15 | 17 | 16 |
+| Coilgun Battery Mk3 | 24 | 29 | 26 |
+| Light Coilgun Battery Mk3 | 131 | 168 | 152 |
+| Torpedo @ 5 km/s | 6 | 7 | 6 |
 
-| Ship | Spinal (Nose) | Spinal (Lat) | Spinal (Tail) | Coilgun (Lat) |
-|------|---------------|--------------|---------------|---------------|
-| Corvette | 5-6 | 4-5 | 3-4 | 6-7 |
-| Frigate | 3-4 | 4-5 | 3-4 | 4-5 |
-| Destroyer | 5-6 | 5-6 | 4-5 | 6-7 |
-| Cruiser | 6-7 | 6-7 | 4-5 | 8-9 |
-| Battlecruiser | 5-6 | 6-7 | 4-5 | 7-8 |
-| Battleship | 7-8 | 7-8 | 5-6 | 9-11 |
-| Dreadnought | 8-9 | 8-9 | 6-7 | 10-12 |
+#### vs Cruiser (Armor: 241/41/48 cm)
+
+| Weapon | Nose | Lateral | Tail |
+|--------|------|---------|------|
+| Spinal Coiler Mk3 | 5 | 6 | 5 |
+| Heavy Siege Coiler Mk3 | 3 | 4 | 3 |
+| Heavy Coilgun Battery Mk3 | 16 | 20 | 16 |
+| Coilgun Battery Mk3 | 26 | 33 | 27 |
+| Light Coilgun Battery Mk3 | 133 | 191 | 158 |
+| Torpedo @ 5 km/s | 6 | 8 | 6 |
+
+#### vs Battlecruiser (Armor: 177/30/35 cm)
+
+| Weapon | Nose | Lateral | Tail |
+|--------|------|---------|------|
+| Spinal Coiler Mk3 | 4 | 6 | 5 |
+| Heavy Siege Coiler Mk3 | 3 | 4 | 3 |
+| Heavy Coilgun Battery Mk3 | 14 | 20 | 16 |
+| Coilgun Battery Mk3 | 23 | 32 | 27 |
+| Light Coilgun Battery Mk3 | 120 | 187 | 154 |
+| Torpedo @ 5 km/s | 5 | 8 | 6 |
+
+#### vs Battleship (Armor: 262/45/52 cm)
+
+| Weapon | Nose | Lateral | Tail |
+|--------|------|---------|------|
+| Spinal Coiler Mk3 | 6 | 7 | 5 |
+| Heavy Siege Coiler Mk3 | 3 | 4 | 3 |
+| Heavy Coilgun Battery Mk3 | 19 | 23 | 18 |
+| Coilgun Battery Mk3 | 33 | 40 | 31 |
+| Light Coilgun Battery Mk3 | 173 | 228 | 176 |
+| Torpedo @ 5 km/s | 8 | 9 | 7 |
+
+#### vs Dreadnought (Armor: 251/43/50 cm)
+
+| Weapon | Nose | Lateral | Tail |
+|--------|------|---------|------|
+| Spinal Coiler Mk3 | 6 | 6 | 8 |
+| Heavy Siege Coiler Mk3 | 3 | 4 | 5 |
+| Heavy Coilgun Battery Mk3 | 19 | 22 | 27 |
+| Coilgun Battery Mk3 | 32 | 36 | 46 |
+| Light Coilgun Battery Mk3 | 170 | 209 | 264 |
+| Torpedo @ 5 km/s | 8 | 8 | 10 |
+
+### Summary: Shots to Kill by Ship Class
+
+Using Spinal Coiler Mk3 (4.29 GJ per shot):
+
+| Ship | Armor (N/L/T cm) | Nose | Lateral | Tail |
+|------|------------------|------|---------|------|
+| Corvette | 212/36/42 | 4 | 2 | 3 |
+| Frigate | 71/12/14 | 2 | 3 | 3 |
+| Destroyer | 151/26/30 | 4 | 5 | 5 |
+| Cruiser | 241/41/48 | 5 | 6 | 5 |
+| Battlecruiser | 177/30/35 | 4 | 6 | 5 |
+| Battleship | 262/45/52 | 6 | 7 | 5 |
+| Dreadnought | 251/43/50 | 6 | 6 | 8 |
+
+**Damage Path Notes:**
+- **Nose hits**: Spinal weapon → Forward hull → Bridge [CRITICAL] → Reactor [CRITICAL]
+- **Lateral hits**: Only affect middle ~50% of ship (cannot reach nose/tail extremes), armored bulkheads protect criticals
+- **Tail hits**: Engine → Fuel → Aft hull → Reactor [CRITICAL]
 
 ---
 
