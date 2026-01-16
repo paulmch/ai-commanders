@@ -408,6 +408,17 @@ PRs welcome! The physics is based on Terra Invicta mechanics. The LLM integratio
 
 MIT License - see [LICENSE](LICENSE)
 
+## Ideas for future Devlopment
+
+- The visualizer could be used for viewing the battle in real time, just add a websocket to the battle simulator and adapt the visualizer. Medium size feature
+-  Building on that one could also give one fleet to human controll, the ui is already looking good enough with small tweaks it could be used to fight against the LLM Fleet Would be fun trash talking Grok using the captain to captain functionality and see whether the LLMS can be confused by that
+
+However both features are too close to the original game Terra Invicta so these features will not be implemented by me.
+
+## Retrospect
+
+Devolpoment was fun and it told me that the foundation models seem to be very happy to shoot at each other and follow command orders if one just convinces them that this is just a gane. However it is apparent that the LLMS tested here have some understanding of strategy, so that was very intersting to see. Makes me wonder, what will come in the future. 
+
 ---
 
 *"A waltz requires partners moving in harmony, Captain. But I prefer asymmetric rhythms."* - Claude Sonnet 4
