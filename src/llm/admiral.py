@@ -228,10 +228,11 @@ Be authentic to how you would command a fleet as {model_name}."""
 
         messages = [{"role": "user", "content": prompt}]
 
-        # Call LLM with personality selection tool
+        # Call LLM with personality selection tool (use admiral's configured model)
         tool_calls = self.client.decide_with_tools(
             messages=messages,
             tools=PERSONALITY_SELECTION_TOOLS,
+            model=self.config.model,
         )
 
         result = {"personality_description": None}
@@ -331,8 +332,8 @@ Be authentic to how you would command a fleet as {model_name}."""
             {"role": "user", "content": f"ADMIRAL CHECKPOINT {self.decision_count + 1}. Set your fleet directive (overall strategy). You will issue individual ship orders next."},
         ]
 
-        # Call LLM for directive
-        tool_calls = self.client.decide_with_tools(messages, self.tools)
+        # Call LLM for directive (use admiral's configured model)
+        tool_calls = self.client.decide_with_tools(messages, self.tools, model=self.config.model)
 
         # Extract directive and any draw/message actions
         for call in tool_calls:
@@ -413,8 +414,8 @@ Be authentic to how you would command a fleet as {model_name}."""
         # Use only the issue_order tool for this call
         order_tool = [t for t in self.tools if t.get("function", {}).get("name") == "issue_order"]
 
-        # Call LLM
-        tool_calls = self.client.decide_with_tools(messages, order_tool)
+        # Call LLM (use admiral's configured model)
+        tool_calls = self.client.decide_with_tools(messages, order_tool, model=self.config.model)
 
         # Extract order
         for call in tool_calls:

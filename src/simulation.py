@@ -4563,11 +4563,11 @@ def create_ship_from_fleet_data(
     # Create kinematic state (using already imported function)
     propulsion = ship_data.get("propulsion", {})
     drive = propulsion.get("drive", {})
-    mass_data = ship_data.get("mass", {})
+    performance = ship_data.get("performance", {})
 
     kinematic_state = create_ship_state_from_specs(
-        wet_mass_tons=mass_data.get("wet_mass_tons", 2000),
-        dry_mass_tons=mass_data.get("dry_mass_tons", 1900),
+        wet_mass_tons=performance.get("max_wet_mass_tons", 2000),
+        dry_mass_tons=performance.get("max_dry_mass_tons", 1900),
         length_m=hull_data.get("length_m", 100),
         thrust_mn=drive.get("thrust_mn", 58.56),
         exhaust_velocity_kps=drive.get("exhaust_velocity_kps", 10256),

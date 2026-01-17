@@ -1,0 +1,52 @@
+{
+  "battle_name": "MCP vs MCP Fleet Battle",
+  "time_limit_s": 600,
+  "decision_interval_s": 30,
+  "initial_distance_km": 300,
+  "unlimited_mode": false,
+  "record_battle": true,
+  "record_sim_trace": true,
+  "personality_selection": false,
+
+  "alpha_fleet": {
+    "mcp": {
+      "enabled": true,
+      "transport": "http",
+      "http_port": 8765,
+      "name": "Claude Alpha Commander"
+    },
+    "ships": [
+      {
+        "ship_id": "alpha_1",
+        "ship_type": "destroyer",
+        "model": "dummy"
+      },
+      {
+        "ship_id": "alpha_2",
+        "ship_type": "destroyer",
+        "model": "dummy"
+      }
+    ]
+  },
+
+  "beta_fleet": {
+    "mcp": {
+      "enabled": true,
+      "transport": "http",
+      "http_port": 8765,
+      "name": "Claude Beta Commander"
+    },
+    "ships": [
+      {
+        "ship_id": "beta_1",
+        "ship_type": "destroyer",
+        "model": "dummy"
+      },
+      {
+        "ship_id": "beta_2",
+        "ship_type": "destroyer",
+        "model": "dummy"
+      }
+    ]
+  }
+}

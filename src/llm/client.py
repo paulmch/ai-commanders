@@ -79,6 +79,7 @@ class CaptainClient:
         self,
         messages: List[Dict[str, str]],
         tools: List[Dict[str, Any]],
+        model: Optional[str] = None,
     ) -> List[ToolCall]:
         """
         Make a decision using tool/function calling.
@@ -86,10 +87,17 @@ class CaptainClient:
         Args:
             messages: Conversation messages (system, user, assistant)
             tools: Available tools in OpenAI function calling format
+            model: Optional model to use (defaults to client's model)
 
         Returns:
             List of ToolCall objects representing the LLM's decisions
         """
+        # Use provided model or fall back to client's default
+        request_model = model or self.model
+        # Strip openrouter/ prefix if present
+        if request_model.startswith("openrouter/"):
+            request_model = request_model[len("openrouter/"):]
+
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -98,7 +106,7 @@ class CaptainClient:
         }
 
         payload = {
-            "model": self.model,
+            "model": request_model,
             "messages": messages,
             "tools": tools,
             "tool_choice": "auto",

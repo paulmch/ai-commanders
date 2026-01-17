@@ -121,6 +121,29 @@ uv run python scripts/run_llm_battle.py \
     -v
 ```
 
+### MCP Battle Mode (Human vs LLM)
+
+**NEW**: Control your fleet using any MCP-compatible client (Claude Code, Cursor, Copilot, OpenCode, etc.). Two MCP servers (`alpha` and `beta`) can control either or both fleets - no OpenRouter API key needed for MCP-controlled sides.
+
+**Battle configurations:**
+- **Human vs LLM**: You control alpha via MCP, beta runs on OpenRouter AI
+- **LLM vs LLM**: Both sides use OpenRouter (classic mode)
+- **Human vs Human**: Both sides connect via MCP (no API costs!)
+- **LLM vs LLM (MCP)**: Two AI agents connect via MCP servers
+
+```bash
+# Start a battle - you control alpha, Gemini controls beta
+uv run python scripts/mcp_battle.py --config data/fleet_config_mcp_example.json
+```
+
+Connect any MCP client to the server and command your fleet:
+- **Full tactical awareness**: Ship positions, velocities, armor status, weapons cooldowns
+- **Direct ship control**: Set maneuvers (INTERCEPT, EVASIVE, PADLOCK), weapons modes, targets
+- **Real-time combat**: Issue orders, signal ready, watch the battle unfold
+- **Trash talk**: Send messages to the enemy admiral (max 3 per turn)
+
+See [MCP Battle Guide](#mcp-battle-guide) below for full details.
+
 ### Fleet Battle Mode
 
 Multi-ship engagements with hierarchical command:
@@ -246,6 +269,155 @@ uv run python scripts/run_llm_battle.py \
     --unlimited -v
 ```
 
+## MCP Battle Guide
+
+Control fleets directly using the Model Context Protocol. Any MCP-compatible client works: Claude Code, Cursor, GitHub Copilot, OpenCode, or custom agents.
+
+### Architecture Overview
+
+Two independent MCP servers allow **any combination** of human/AI control:
+
+```
+┌─────────────────┐                         ┌─────────────────┐
+│  MCP Client     │                         │  MCP Client     │
+│  (Alpha Fleet)  │                         │  (Beta Fleet)   │
+└────────┬────────┘                         └────────┬────────┘
+         │ MCP                                       │ MCP
+         ▼                                           ▼
+┌─────────────────┐                         ┌─────────────────┐
+│  Alpha Server   │                         │  Beta Server    │
+│  (port 8765)    │                         │  (port 8766)    │
+└────────┬────────┘                         └────────┬────────┘
+         │              ┌─────────────────┐          │
+         └─────────────►│  Battle Runner  │◄─────────┘
+                        │  + Simulation   │
+                        └─────────────────┘
+```
+
+**No OpenRouter API key needed** for MCP-controlled fleets - only for AI-controlled opponents.
+
+### Quick Start
+
+**1. Configure your MCP client** (example for Claude Code `.mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "ai-commanders-alpha": {
+      "command": "uv",
+      "args": ["run", "python", "-m", "src.llm.mcp_server", "--faction", "alpha", "--http", "http://localhost:8765"]
+    },
+    "ai-commanders-beta": {
+      "command": "uv",
+      "args": ["run", "python", "-m", "src.llm.mcp_server", "--faction", "beta", "--http", "http://localhost:8766"]
+    }
+  }
+}
+```
+
+**2. Start a battle**:
+
+```bash
+# Human (alpha) vs AI (beta)
+uv run python scripts/mcp_battle.py --config data/fleet_config_mcp_example.json
+
+# Human vs Human (both MCP)
+uv run python scripts/mcp_battle.py --config data/fleet_config_mcp_vs_mcp.json
+```
+
+**3. Connect your MCP client** and issue commands:
+
+```
+get_battle_state()     # See full tactical picture
+set_maneuver(ship_id="alpha_1", maneuver_type="INTERCEPT", target_id="beta_1", throttle=1.0)
+set_weapons_order(ship_id="alpha_1", spinal_mode="FIRE_IMMEDIATE", turret_mode="FIRE_IMMEDIATE")
+ready()                # Signal turn complete
+```
+
+### Available MCP Tools
+
+| Tool | Purpose |
+|------|---------|
+| `get_battle_state` | Full tactical snapshot (ships, projectiles, chat) |
+| `get_ship_status` | Detailed status for one friendly ship |
+| `set_maneuver` | Movement: INTERCEPT, EVASIVE, BRAKE, MAINTAIN, PADLOCK, HEADING |
+| `set_weapons_order` | Firing mode: FIRE_IMMEDIATE, FIRE_WHEN_OPTIMAL, HOLD_FIRE, FREE_FIRE |
+| `set_primary_target` | Set which enemy a ship engages |
+| `launch_torpedo` | Fire torpedoes at target |
+| `set_radiators` | Extend/retract radiators for heat management |
+| `send_message` | Trash talk the enemy (max 3/turn) |
+| `propose_fleet_draw` | Propose ending the battle |
+| `accept_fleet_draw` | Accept enemy's draw proposal |
+| `surrender_fleet` | Give up |
+| `ready` | Signal all commands issued, advance simulation |
+| `battle_plot` | ASCII tactical map (xy/xz/yz projections) |
+
+### Maneuver Types
+
+| Maneuver | Behavior |
+|----------|----------|
+| `INTERCEPT` | Burn toward target at specified throttle |
+| `EVASIVE` | Random dodging pattern (needs throttle!) |
+| `BRAKE` | Flip and decelerate |
+| `MAINTAIN` | Coast at current velocity |
+| `PADLOCK` | Coast while keeping nose pointed at target (good for shooting) |
+| `HEADING` | Fly in specific 3D direction |
+
+### Key Concepts
+
+**Orders reset every turn!** You must re-issue maneuver and weapons orders each checkpoint. Ships default to MAINTAIN (coasting) if you don't command them.
+
+**Fog of war**: You see full status of friendly ships but only observable data for enemies (position, velocity, estimated hull %, hit chance).
+
+**Turn flow**:
+1. Simulation runs 30 seconds
+2. You receive battle state via `get_battle_state()`
+3. Issue commands for each ship
+4. Call `ready()` to advance
+5. Repeat until victory
+
+### Example Fleet Config (MCP vs AI)
+
+```json
+{
+  "battle_name": "MCP vs Grok Fleet Battle",
+  "time_limit_s": 600,
+  "decision_interval_s": 30,
+  "initial_distance_km": 300,
+  "alpha_fleet": {
+    "mcp": {
+      "enabled": true,
+      "transport": "http",
+      "http_port": 8765,
+      "name": "Claude Commander"
+    },
+    "ships": [
+      {"ship_id": "alpha_1", "ship_type": "destroyer", "model": "mcp"},
+      {"ship_id": "alpha_2", "ship_type": "destroyer", "model": "mcp"}
+    ]
+  },
+  "beta_fleet": {
+    "admiral": {"model": "openrouter/x-ai/grok-3-fast", "name": "Admiral Grok"},
+    "ships": [
+      {"ship_id": "beta_1", "ship_type": "destroyer", "model": "openrouter/x-ai/grok-4.1-fast"},
+      {"ship_id": "beta_2", "ship_type": "destroyer", "model": "openrouter/x-ai/grok-4.1-fast"}
+    ]
+  }
+}
+```
+
+### Battle Results: Human (MCP) vs Gemini (2026-01-17)
+
+| Fleet | Controller | Ships | Result |
+|-------|------------|-------|--------|
+| Alpha | Human via MCP (with Claude Opus 4.5 as copilot) | 2 Destroyers, 1 Dreadnought | **VICTORY** (3/3 ships) |
+| Beta | Gemini 3 Pro (OpenRouter) | 2 Destroyers, 1 Dreadnought | Eliminated (0/3 ships) |
+
+- **Duration**: 990s (16.5 minutes)
+- **Outcome**: Beta fleet eliminated
+- **Notable**: Gemini used smart evasive tactics while focusing fire on alpha_1, but was overwhelmed by coordinated intercept + fire orders
+- **Key lesson**: Remember to set throttle on EVASIVE maneuvers and re-issue orders every turn!
+
 ## Ship Classes
 
 | Ship | Accel | 90° Turn | Armor (N/L/T) | Role |
@@ -304,7 +476,11 @@ ai-commanders/
 │       ├── fleet_config.py # Fleet configuration loading
 │       ├── battle_runner.py # Orchestrates battles
 │       ├── battle_recorder.py # Records battles for replay
-│       └── communication.py # Messaging system
+│       ├── communication.py # Messaging system
+│       ├── mcp_server.py    # MCP protocol server (tools + resources)
+│       ├── mcp_controller.py # MCP fleet controller (replaces admiral)
+│       ├── mcp_state.py     # Thread-safe state management
+│       └── mcp_http_server.py # HTTP API for distributed MCP
 ├── visualizer/             # 3D battle replay viewer (Three.js + Vite)
 │   ├── src/
 │   │   ├── main.js         # Entry point, UI orchestration
@@ -318,9 +494,12 @@ ai-commanders/
 ├── data/
 │   ├── fleet_ships.json    # Ship specifications
 │   ├── fleet_config_*.json # Fleet battle configurations
+│   ├── fleet_config_mcp_*.json # MCP battle configurations
 │   └── recordings/         # Battle recordings (JSON)
+├── .mcp.json               # Claude Code MCP server configuration
 ├── scripts/
-│   └── run_llm_battle.py   # CLI for running battles
+│   ├── run_llm_battle.py   # CLI for running AI vs AI battles
+│   └── mcp_battle.py       # CLI for MCP-controlled battles
 └── tests/                  # Test suite
 ```
 
@@ -408,12 +587,13 @@ PRs welcome! The physics is based on Terra Invicta mechanics. The LLM integratio
 
 MIT License - see [LICENSE](LICENSE)
 
-## Ideas for future Devlopment
+## Ideas for Future Development
 
-- The visualizer could be used for viewing the battle in real time, just add a websocket to the battle simulator and adapt the visualizer. Medium size feature
--  Building on that one could also give one fleet to human controll, the ui is already looking good enough with small tweaks it could be used to fight against the LLM Fleet Would be fun trash talking Grok using the captain to captain functionality and see whether the LLMS can be confused by that
+- **Real-time visualizer**: Add websocket to battle simulator for live 3D replay during combat
+- ~~Human vs LLM battles~~ **DONE** via MCP integration! Any MCP client can now control fleets
+- **Dedicated battle UI**: Build a proper tactical interface instead of relying on MCP client chat
 
-However both features are too close to the original game Terra Invicta so these features will not be implemented by me.
+Note: Some features intentionally not implemented to avoid being too close to Terra Invicta.
 
 ## Retrospect
 

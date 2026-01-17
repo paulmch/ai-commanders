@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "ai-commanders-alpha": {
+      "command": "uv",
+      "args": ["run", "python", "-m", "src.llm.mcp_server", "--faction", "alpha", "--http", "http://localhost:8765"],
+      "cwd": "/home/plmch/ai-commanders"
+    },
+    "ai-commanders-beta": {
+      "command": "uv",
+      "args": ["run", "python", "-m", "src.llm.mcp_server", "--faction", "beta", "--http", "http://localhost:8765"],
+      "cwd": "/home/plmch/ai-commanders"
+    }
+  }
+}

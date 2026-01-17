@@ -1,0 +1,58 @@
+{
+	"battle_name": "MCP vs Gemini Fleet Battle",
+	"time_limit_s": 0,
+	"decision_interval_s": 30,
+	"initial_distance_km": 1000,
+	"unlimited_mode": true,
+	"record_battle": true,
+	"record_sim_trace": true,
+	"personality_selection": true,
+	"alpha_fleet": {
+		"mcp": {
+			"enabled": true,
+			"transport": "http",
+			"http_port": 8765,
+			"name": "Claude Commander"
+		},
+		"ships": [
+			{
+				"ship_id": "alpha_1",
+				"ship_type": "destroyer",
+				"model": "mcp"
+			},
+			{
+				"ship_id": "alpha_2",
+				"ship_type": "destroyer",
+				"model": "mcp"
+			},
+			{
+				"ship_id": "alpha_3",
+				"ship_type": "dreadnought_siege",
+				"model": "mcp"
+			}
+		]
+	},
+	"beta_fleet": {
+		"admiral": {
+			"model": "openrouter/google/gemini-3-pro-preview",
+			"name": "Admiral Gemini"
+		},
+		"ships": [
+			{
+				"ship_id": "beta_1",
+				"ship_type": "destroyer",
+				"model": "openrouter/google/gemini-3-flash-preview"
+			},
+			{
+				"ship_id": "beta_2",
+				"ship_type": "destroyer",
+				"model": "openrouter/google/gemini-3-flash-preview"
+			},
+			{
+				"ship_id": "beta_3",
+				"ship_type": "dreadnought_siege",
+				"model": "openrouter/google/gemini-3-flash-preview"
+			}
+		]
+	}
+}

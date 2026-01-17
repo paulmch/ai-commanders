@@ -3,8 +3,10 @@ LLM Battle Runner - Orchestrates battles between LLM-controlled captains.
 
 Handles simulation setup, checkpoint timing, and victory evaluation.
 Supports both legacy 1v1 battles and multi-ship fleet battles with Admirals.
+Also supports MCP-controlled fleets for external control (e.g., Claude Code).
 """
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -17,8 +19,10 @@ from .communication import CommunicationChannel, FleetCommunicationChannel, Mess
 from .victory import VictoryEvaluator, BattleOutcome
 from .prompts import CaptainPersonality
 from .battle_recorder import BattleRecorder, create_battle_filename
-from .fleet_config import BattleFleetConfig, FleetDefinition, ShipConfig, AdmiralConfig
+from .fleet_config import BattleFleetConfig, FleetDefinition, ShipConfig, AdmiralConfig, MCPConfig
 from .admiral import LLMAdmiral, AdmiralOrder
+from .mcp_controller import MCPController, MCPControllerConfig, apply_mcp_commands_to_simulation
+from .mcp_chat import AdmiralChat
 
 
 @dataclass
@@ -137,6 +141,13 @@ class LLMBattleRunner:
         self.beta_captains: Dict[str, LLMCaptain] = {}
         self.alpha_admiral: Optional[LLMAdmiral] = None
         self.beta_admiral: Optional[LLMAdmiral] = None
+
+        # MCP controllers (replaces admirals when MCP-controlled)
+        self.alpha_mcp: Optional[MCPController] = None
+        self.beta_mcp: Optional[MCPController] = None
+
+        # Shared chat for MCP inter-admiral communication
+        self.mcp_chat: Optional[AdmiralChat] = None
 
         # Pre-checkpoint snapshot time offset for Admirals (seconds before checkpoint)
         self.admiral_pre_snapshot_offset = 15.0
@@ -393,8 +404,24 @@ class LLMBattleRunner:
 
             self.beta_captains[ship_config.ship_id] = captain
 
-        # Create Admirals if configured
-        if self.fleet_config.alpha_fleet.admiral:
+        # Create shared chat for MCP communication (if any MCP fleet)
+        if self.fleet_config.has_any_mcp():
+            self.mcp_chat = AdmiralChat()
+
+        # Create MCP controllers or Admirals based on configuration
+        # MCP takes precedence over Admiral if both are configured
+        if self.fleet_config.alpha_fleet.mcp and self.fleet_config.alpha_fleet.mcp.enabled:
+            mcp_config = MCPControllerConfig(
+                faction="alpha",
+                name=self.fleet_config.alpha_fleet.mcp.name,
+                command_timeout=self.fleet_config.alpha_fleet.mcp.command_timeout,
+            )
+            self.alpha_mcp = MCPController(
+                config=mcp_config,
+                fleet_data=fleet_data,
+                chat=self.mcp_chat,
+            )
+        elif self.fleet_config.alpha_fleet.admiral:
             from .admiral import LLMAdmiral
             self.alpha_admiral = LLMAdmiral(
                 config=self.fleet_config.alpha_fleet.admiral,
@@ -403,7 +430,18 @@ class LLMBattleRunner:
                 fleet_data=fleet_data,
             )
 
-        if self.fleet_config.beta_fleet.admiral:
+        if self.fleet_config.beta_fleet.mcp and self.fleet_config.beta_fleet.mcp.enabled:
+            mcp_config = MCPControllerConfig(
+                faction="beta",
+                name=self.fleet_config.beta_fleet.mcp.name,
+                command_timeout=self.fleet_config.beta_fleet.mcp.command_timeout,
+            )
+            self.beta_mcp = MCPController(
+                config=mcp_config,
+                fleet_data=fleet_data,
+                chat=self.mcp_chat,
+            )
+        elif self.fleet_config.beta_fleet.admiral:
             from .admiral import LLMAdmiral
             self.beta_admiral = LLMAdmiral(
                 config=self.fleet_config.beta_fleet.admiral,
@@ -437,17 +475,22 @@ class LLMBattleRunner:
                 faction="beta",
             )
 
-        # Register admirals and set ship mappings
-        if self.alpha_admiral:
+        # Register admirals/MCP controllers and set ship mappings
+        alpha_name_to_id = {ship.name: ship_id for ship_id, ship in self.alpha_ships.items()}
+        beta_name_to_id = {ship.name: ship_id for ship_id, ship in self.beta_ships.items()}
+
+        if self.alpha_mcp:
+            self.fleet_communication.register_admiral("alpha", self.alpha_mcp.name)
+            self.alpha_mcp.set_ship_mapping(alpha_name_to_id)
+        elif self.alpha_admiral:
             self.fleet_communication.register_admiral("alpha", self.alpha_admiral.name)
-            # Set ship name -> ID mapping for Admiral
-            alpha_name_to_id = {ship.name: ship_id for ship_id, ship in self.alpha_ships.items()}
             self.alpha_admiral.set_ship_mapping(alpha_name_to_id)
 
-        if self.beta_admiral:
+        if self.beta_mcp:
+            self.fleet_communication.register_admiral("beta", self.beta_mcp.name)
+            self.beta_mcp.set_ship_mapping(beta_name_to_id)
+        elif self.beta_admiral:
             self.fleet_communication.register_admiral("beta", self.beta_admiral.name)
-            # Set ship name -> ID mapping for Admiral
-            beta_name_to_id = {ship.name: ship_id for ship_id, ship in self.beta_ships.items()}
             self.beta_admiral.set_ship_mapping(beta_name_to_id)
 
         # Disable auto decision callback - we'll call manually
@@ -476,14 +519,18 @@ class LLMBattleRunner:
             for ship_id, ship in self.alpha_ships.items():
                 captain = self.alpha_captains[ship_id]
                 print(f"  - {ship.name} ({ship_id}): {captain.name}")
-            if self.alpha_admiral:
+            if self.alpha_mcp:
+                print(f"  MCP Controller: {self.alpha_mcp.name}")
+            elif self.alpha_admiral:
                 print(f"  Admiral: {self.alpha_admiral.name}")
 
             print(f"\nBeta Fleet ({len(self.beta_ships)} ships):")
             for ship_id, ship in self.beta_ships.items():
                 captain = self.beta_captains[ship_id]
                 print(f"  - {ship.name} ({ship_id}): {captain.name}")
-            if self.beta_admiral:
+            if self.beta_mcp:
+                print(f"  MCP Controller: {self.beta_mcp.name}")
+            elif self.beta_admiral:
                 print(f"  Admiral: {self.beta_admiral.name}")
             print(f"{'='*60}\n")
 
@@ -1036,6 +1083,376 @@ class LLMBattleRunner:
             self._log_fleet_decision(all_commands)
 
             # Phase 7: Check limits
+            if not self.config.unlimited_mode:
+                max_checkpoints = self.fleet_config.max_checkpoints if self.fleet_config and hasattr(self.fleet_config, 'max_checkpoints') else self.config.max_checkpoints
+                if self.checkpoint_count >= max_checkpoints:
+                    if self.config.verbose:
+                        print(f"\n=== CHECKPOINT LIMIT REACHED ===")
+                    break
+
+        return self._evaluate_fleet_result()
+
+    async def run_fleet_battle_async(self, fleet_data: Dict[str, Any]) -> BattleResult:
+        """
+        Run a fleet battle with async support for MCP controllers.
+
+        This method should be used when any fleet is MCP-controlled.
+        Non-MCP fleets still use synchronous LLM calls.
+
+        Args:
+            fleet_data: Ship specifications
+
+        Returns:
+            BattleResult with outcome and statistics
+        """
+        self.setup_fleet_battle(fleet_data)
+
+        # Get decision interval from fleet config
+        decision_interval = self.fleet_config.decision_interval_s if self.fleet_config else 30.0
+
+        # Skip personality selection for MCP-controlled fleets
+        if self.config.personality_selection:
+            if self.config.verbose:
+                print("\n=== PERSONALITY SELECTION PHASE ===")
+
+            # Let non-MCP Admirals choose personality
+            if self.alpha_admiral and not self.alpha_mcp:
+                if self.config.verbose:
+                    print(f"\n[Admiral {self.alpha_admiral.name}] Defining command personality...")
+                try:
+                    personality = self.alpha_admiral.select_personality(
+                        num_ships=len(self.alpha_ships),
+                        verbose=False,
+                    )
+                    if self.config.verbose:
+                        desc = personality.get("personality_description", "")
+                        if desc:
+                            print(f"  {desc}")
+                except Exception as e:
+                    if self.config.verbose:
+                        print(f"  [ERROR] Admiral personality selection failed: {e}")
+
+            if self.beta_admiral and not self.beta_mcp:
+                if self.config.verbose:
+                    print(f"\n[Admiral {self.beta_admiral.name}] Defining command personality...")
+                try:
+                    personality = self.beta_admiral.select_personality(
+                        num_ships=len(self.beta_ships),
+                        verbose=False,
+                    )
+                    if self.config.verbose:
+                        desc = personality.get("personality_description", "")
+                        if desc:
+                            print(f"  {desc}")
+                except Exception as e:
+                    if self.config.verbose:
+                        print(f"  [ERROR] Admiral personality selection failed: {e}")
+
+            # Skip captain personality selection for MCP-controlled fleets
+            # (MCP controls ships directly, bypassing captains)
+            for ship_id, captain in {**self.alpha_captains, **self.beta_captains}.items():
+                # Skip if this fleet is MCP-controlled
+                faction = captain.faction if hasattr(captain, 'faction') else None
+                if (faction == "alpha" and self.alpha_mcp) or (faction == "beta" and self.beta_mcp):
+                    continue
+
+                if self.config.verbose:
+                    print(f"\n[{captain.name}] Defining combat personality...")
+                try:
+                    personality = captain.select_personality(
+                        distance_km=self.fleet_config.initial_distance_km if self.fleet_config else 500.0,
+                        verbose=False,
+                    )
+                    if self.config.verbose:
+                        desc = personality.get("personality_description", "")
+                        if desc:
+                            print(f"  {desc}")
+                except Exception as e:
+                    if self.config.verbose:
+                        print(f"  [ERROR] Personality selection failed: {e}")
+
+        # Track time for Admiral pre-snapshots
+        next_checkpoint_time = decision_interval
+
+        # Advance chat turn at start
+        if self.mcp_chat:
+            self.mcp_chat.new_turn()
+
+        while not self._is_fleet_battle_over():
+            # === SIMULATION PHASE ===
+            steps = int(decision_interval)
+            for step_i in range(steps):
+                current_time = self.simulation.current_time
+
+                # Capture Admiral pre-snapshots at T-15s before checkpoint
+                if current_time == next_checkpoint_time - self.admiral_pre_snapshot_offset:
+                    self._capture_admiral_pre_snapshots()
+
+                self.simulation.step()
+
+                # Record sim frame if enabled
+                if self.recorder and self.config.record_sim_trace:
+                    self._record_sim_frame()
+
+                if self._is_fleet_battle_over():
+                    break
+
+            if self._is_fleet_battle_over():
+                break
+
+            # === CHECKPOINT ===
+            self.checkpoint_count += 1
+            next_checkpoint_time = self.simulation.current_time + decision_interval
+
+            if self.config.verbose:
+                print(f"\n=== CHECKPOINT {self.checkpoint_count} at T+{self.simulation.current_time:.0f}s ===")
+                self._print_fleet_status()
+
+            # Advance chat turn
+            if self.mcp_chat:
+                self.mcp_chat.new_turn()
+
+            # === MCP/ADMIRAL DECISION PHASE ===
+            admiral_orders = {}  # ship_id -> list of AdmiralOrder
+            all_commands = {}    # ship_id -> list of commands
+
+            # Handle alpha fleet
+            if self.alpha_mcp:
+                # MCP-controlled: get commands from MCP client
+                if self.config.verbose:
+                    print(f"\n--- MCP COMMAND PHASE (Alpha: {self.alpha_mcp.name}) ---")
+                    print(f"  Waiting for MCP client commands...")
+
+                mcp_commands = await self.alpha_mcp.get_commands(
+                    self.simulation,
+                    list(self.alpha_captains.values()),
+                )
+
+                if self.config.verbose:
+                    print(f"  Received {len(mcp_commands)} commands")
+
+                # Apply MCP commands directly to simulation
+                results = apply_mcp_commands_to_simulation(
+                    mcp_commands, self.simulation, "alpha"
+                )
+
+                if self.config.verbose and results.get("applied"):
+                    for cmd_result in results["applied"]:
+                        print(f"    Applied: {cmd_result}")
+
+            elif self.alpha_admiral:
+                # LLM Admiral: use existing logic
+                if self.config.verbose:
+                    print("\n--- ADMIRAL DECISIONS ---")
+
+                active_alpha_captains = [
+                    c for c in self.alpha_captains.values()
+                    if not getattr(self.alpha_ships.get(c.ship_id), 'is_surrendered', False)
+                ]
+                alpha_decision = self._get_admiral_decision(
+                    self.alpha_admiral,
+                    active_alpha_captains,
+                    self.beta_admiral,
+                )
+                for order in alpha_decision.fleet_orders:
+                    ship_id = self._find_ship_id_by_name(order.target_ship_id, "alpha")
+                    if ship_id and ship_id in self.alpha_captains:
+                        if ship_id not in admiral_orders:
+                            admiral_orders[ship_id] = []
+                        admiral_orders[ship_id].append(order)
+
+                if self.config.verbose:
+                    print(f"  [Alpha Admiral] {self.alpha_admiral.name}:")
+                    if alpha_decision.fleet_directive:
+                        print(f"    Directive: {alpha_decision.fleet_directive}")
+                    for order in alpha_decision.fleet_orders:
+                        order_lines = order.order_text.strip().split('\n')
+                        print(f"    -> {order.target_ship_id}:")
+                        for line in order_lines:
+                            print(f"         {line}")
+
+            # Handle beta fleet
+            if self.beta_mcp:
+                # MCP-controlled: get commands from MCP client
+                if self.config.verbose:
+                    print(f"\n--- MCP COMMAND PHASE (Beta: {self.beta_mcp.name}) ---")
+                    print(f"  Waiting for MCP client commands...")
+
+                mcp_commands = await self.beta_mcp.get_commands(
+                    self.simulation,
+                    list(self.beta_captains.values()),
+                )
+
+                if self.config.verbose:
+                    print(f"  Received {len(mcp_commands)} commands")
+
+                # Apply MCP commands directly to simulation
+                results = apply_mcp_commands_to_simulation(
+                    mcp_commands, self.simulation, "beta"
+                )
+
+                if self.config.verbose and results.get("applied"):
+                    for cmd_result in results["applied"]:
+                        print(f"    Applied: {cmd_result}")
+
+            elif self.beta_admiral:
+                # LLM Admiral: use existing logic
+                active_beta_captains = [
+                    c for c in self.beta_captains.values()
+                    if not getattr(self.beta_ships.get(c.ship_id), 'is_surrendered', False)
+                ]
+                beta_decision = self._get_admiral_decision(
+                    self.beta_admiral,
+                    active_beta_captains,
+                    self.alpha_admiral,
+                )
+                for order in beta_decision.fleet_orders:
+                    ship_id = self._find_ship_id_by_name(order.target_ship_id, "beta")
+                    if ship_id and ship_id in self.beta_captains:
+                        if ship_id not in admiral_orders:
+                            admiral_orders[ship_id] = []
+                        admiral_orders[ship_id].append(order)
+
+                if self.config.verbose:
+                    print(f"  [Beta Admiral] {self.beta_admiral.name}:")
+                    if beta_decision.fleet_directive:
+                        print(f"    Directive: {beta_decision.fleet_directive}")
+                    for order in beta_decision.fleet_orders:
+                        order_lines = order.order_text.strip().split('\n')
+                        print(f"    -> {order.target_ship_id}:")
+                        for line in order_lines:
+                            print(f"         {line}")
+
+            # === MESSAGE BRIDGE: MCP <-> LLM Admiral ===
+            # Deliver messages between MCP chat system and LLM Admiral messaging
+            if self.mcp_chat:
+                # MCP -> LLM Admiral: Deliver pending messages from MCP to LLM admirals
+                if self.alpha_mcp and self.beta_admiral:
+                    pending_for_beta = self.mcp_chat.get_pending_messages("beta")
+                    for msg in pending_for_beta:
+                        self.beta_admiral.receive_enemy_admiral_message(msg.content)
+                        if self.config.verbose:
+                            print(f"  [MSG] Alpha MCP -> Beta Admiral: \"{msg.content}\"")
+
+                if self.beta_mcp and self.alpha_admiral:
+                    pending_for_alpha = self.mcp_chat.get_pending_messages("alpha")
+                    for msg in pending_for_alpha:
+                        self.alpha_admiral.receive_enemy_admiral_message(msg.content)
+                        if self.config.verbose:
+                            print(f"  [MSG] Beta MCP -> Alpha Admiral: \"{msg.content}\"")
+
+                # LLM Admiral -> MCP: Add LLM admiral messages to MCP chat
+                if self.alpha_admiral and self.beta_mcp:
+                    alpha_msg = self.alpha_admiral.get_pending_enemy_message()
+                    if alpha_msg:
+                        self.mcp_chat.send_message("alpha", alpha_msg, self.simulation.current_time)
+                        if self.config.verbose:
+                            print(f"  [MSG] Alpha Admiral -> Beta MCP: \"{alpha_msg}\"")
+
+                if self.beta_admiral and self.alpha_mcp:
+                    beta_msg = self.beta_admiral.get_pending_enemy_message()
+                    if beta_msg:
+                        self.mcp_chat.send_message("beta", beta_msg, self.simulation.current_time)
+                        if self.config.verbose:
+                            print(f"  [MSG] Beta Admiral -> Alpha MCP: \"{beta_msg}\"")
+
+            # === CAPTAIN DECISIONS (only for non-MCP fleets) ===
+            if self.config.verbose and (not self.alpha_mcp or not self.beta_mcp):
+                print("\n--- CAPTAIN DECISIONS ---")
+
+            all_captains = [
+                (ship_id, captain, "alpha")
+                for ship_id, captain in self.alpha_captains.items()
+            ] + [
+                (ship_id, captain, "beta")
+                for ship_id, captain in self.beta_captains.items()
+            ]
+
+            for ship_id, captain, faction in all_captains:
+                # Skip if this fleet is MCP-controlled
+                if (faction == "alpha" and self.alpha_mcp) or (faction == "beta" and self.beta_mcp):
+                    continue
+
+                # Skip destroyed or surrendered ships
+                ship = self.simulation.get_ship(ship_id)
+                if not ship or ship.is_destroyed or getattr(ship, 'is_surrendered', False):
+                    continue
+
+                # Clear previous Admiral context and deliver new orders
+                captain.clear_admiral_context()
+                if ship_id in admiral_orders:
+                    orders = admiral_orders[ship_id]
+                    admiral = self.alpha_admiral if faction == "alpha" else self.beta_admiral
+                    if admiral and hasattr(admiral, 'last_directive'):
+                        directive = admiral.last_directive
+                    else:
+                        directive = None
+                    captain.receive_admiral_orders(orders, directive)
+
+                if self.config.verbose:
+                    print(f"  [{captain.ship_name}] {captain.name} deciding...")
+
+                commands = self._get_captain_decision_with_discussion(
+                    ship_id, captain, faction
+                )
+                all_commands[ship_id] = commands
+
+                if self.config.verbose:
+                    print(f"    -> {self._get_ship_status_line(ship_id, commands)}")
+
+            # Handle immediate messaging
+            self._handle_immediate_messaging()
+
+            # Check surrender/draw (including MCP)
+            if self.alpha_mcp:
+                if self.alpha_mcp.has_surrendered:
+                    # Mark all alpha ships as surrendered
+                    for ship_id in self.alpha_ships:
+                        ship = self.simulation.get_ship(ship_id)
+                        if ship:
+                            ship.is_surrendered = True
+                    if self.config.verbose:
+                        print(f"  [SURRENDER] {self.alpha_mcp.name} surrenders")
+
+            if self.beta_mcp:
+                if self.beta_mcp.has_surrendered:
+                    # Mark all beta ships as surrendered
+                    for ship_id in self.beta_ships:
+                        ship = self.simulation.get_ship(ship_id)
+                        if ship:
+                            ship.is_surrendered = True
+                    if self.config.verbose:
+                        print(f"  [SURRENDER] {self.beta_mcp.name} surrenders")
+
+            # Check for mutual draw (MCP)
+            if self.alpha_mcp and self.beta_mcp:
+                if self.alpha_mcp.has_proposed_draw and self.beta_mcp.has_accepted_draw:
+                    if self.config.verbose:
+                        print("  [DRAW ACCEPTED] Mutual draw agreed")
+                    break
+                if self.beta_mcp.has_proposed_draw and self.alpha_mcp.has_accepted_draw:
+                    if self.config.verbose:
+                        print("  [DRAW ACCEPTED] Mutual draw agreed")
+                    break
+
+            self._check_fleet_surrender_draw()
+
+            if self._is_fleet_battle_over():
+                break
+
+            # Apply captain commands (non-MCP only)
+            for ship_id, commands in all_commands.items():
+                for cmd in commands:
+                    if isinstance(cmd, dict) and cmd.get('type') == 'discuss_with_admiral':
+                        continue
+                    success = self.simulation.inject_command(ship_id, cmd)
+                    if self.config.verbose and isinstance(cmd, dict) and cmd.get('type') == 'fire_at':
+                        print(f"    [FIRE] {ship_id} {cmd.get('weapon_slot')} -> {'HIT' if success else 'FAILED'}")
+
+            # Log decision
+            self._log_fleet_decision(all_commands)
+
+            # Check limits
             if not self.config.unlimited_mode:
                 max_checkpoints = self.fleet_config.max_checkpoints if self.fleet_config and hasattr(self.fleet_config, 'max_checkpoints') else self.config.max_checkpoints
                 if self.checkpoint_count >= max_checkpoints:

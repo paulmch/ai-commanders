@@ -145,10 +145,11 @@ class LLMCaptain:
 
         messages = [{"role": "user", "content": prompt}]
 
-        # Call LLM with personality selection tool
+        # Call LLM with personality selection tool (use captain's configured model)
         tool_calls = self.client.decide_with_tools(
             messages=messages,
             tools=PERSONALITY_SELECTION_TOOLS,
+            model=self.config.model,
         )
 
         result = {
@@ -323,8 +324,8 @@ class LLMCaptain:
         # Get context-appropriate tools (may exclude draw tools if Admiral exists)
         tools = self.get_tools_for_context()
 
-        # Call LLM with tools
-        tool_calls = self.client.decide_with_tools(messages, tools)
+        # Call LLM with tools (use captain's configured model)
+        tool_calls = self.client.decide_with_tools(messages, tools, model=self.config.model)
 
         # Execute tool calls
         # Track maneuver commands - only one maneuver per decision allowed

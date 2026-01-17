@@ -28,6 +28,17 @@ class AdmiralConfig:
 
 
 @dataclass
+class MCPConfig:
+    """Configuration for MCP-controlled fleet (replaces Admiral when enabled)."""
+    enabled: bool = True
+    transport: str = "http"  # "http" (recommended), "stdio", or "sse"
+    http_port: int = 8765  # Port for HTTP API server
+    server_command: Optional[str] = None  # Command to launch MCP server
+    name: str = "MCP Commander"
+    command_timeout: float = 60.0  # Seconds to wait for MCP client commands (ignored in HTTP mode)
+
+
+@dataclass
 class ShipConfig:
     """Configuration for a ship and its captain - minimal spec."""
     ship_id: str
@@ -49,6 +60,7 @@ class FleetDefinition:
     ships: List[ShipConfig]
     faction: str  # "alpha" or "beta"
     admiral: Optional[AdmiralConfig] = None
+    mcp: Optional[MCPConfig] = None  # MCP control (replaces admiral if enabled)
 
 
 @dataclass
@@ -125,6 +137,21 @@ class BattleFleetConfig:
             (self.beta_fleet.admiral is not None and self.beta_fleet.admiral.enabled)
         )
 
+    def has_any_mcp(self) -> bool:
+        """Check if either fleet is MCP-controlled."""
+        return (
+            (self.alpha_fleet.mcp is not None and self.alpha_fleet.mcp.enabled) or
+            (self.beta_fleet.mcp is not None and self.beta_fleet.mcp.enabled)
+        )
+
+    def is_alpha_mcp(self) -> bool:
+        """Check if alpha fleet is MCP-controlled."""
+        return self.alpha_fleet.mcp is not None and self.alpha_fleet.mcp.enabled
+
+    def is_beta_mcp(self) -> bool:
+        """Check if beta fleet is MCP-controlled."""
+        return self.beta_fleet.mcp is not None and self.beta_fleet.mcp.enabled
+
 
 def _get_short_model_name(model: str) -> str:
     """Extract short model name from full model path."""
@@ -159,6 +186,8 @@ def _get_short_model_name(model: str) -> str:
         return "Llama"
     elif "mistral" in name.lower():
         return "Mistral"
+    elif name.lower() in ("dummy", "mcp"):
+        return "MCP"
 
     # Default: capitalize last part
     return name.split("-")[0].title()
@@ -166,10 +195,23 @@ def _get_short_model_name(model: str) -> str:
 
 def _parse_fleet(data: Dict[str, Any], faction: str) -> FleetDefinition:
     """Parse a fleet definition from JSON data."""
-    # Parse admiral (optional)
+    # Parse MCP config (optional - takes precedence over admiral if enabled)
+    mcp = None
+    mcp_data = data.get("mcp")
+    if mcp_data and mcp_data.get("enabled", True):
+        mcp = MCPConfig(
+            enabled=mcp_data.get("enabled", True),
+            transport=mcp_data.get("transport", "http"),
+            http_port=mcp_data.get("http_port", 8765),
+            server_command=mcp_data.get("server_command"),
+            name=mcp_data.get("name", "MCP Commander"),
+            command_timeout=mcp_data.get("command_timeout", 60.0),
+        )
+
+    # Parse admiral (optional - ignored if MCP is enabled)
     admiral = None
     admiral_data = data.get("admiral")
-    if admiral_data:
+    if admiral_data and not mcp:  # Only parse admiral if MCP is not enabled
         # Can be just a model string or a dict
         if isinstance(admiral_data, str):
             model = admiral_data
@@ -254,6 +296,7 @@ def _parse_fleet(data: Dict[str, Any], faction: str) -> FleetDefinition:
         ships=ships,
         faction=faction,
         admiral=admiral,
+        mcp=mcp,
     )
 
 
