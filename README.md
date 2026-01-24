@@ -597,7 +597,7 @@ Note: Some features intentionally not implemented to avoid being too close to Te
 
 ## Retrospect
 
-Devolpoment was fun and it told me that the foundation models seem to be very happy to shoot at each other and follow command orders if one just convinces them that this is just a gane. However it is apparent that the LLMS tested here have some understanding of strategy, so that was very intersting to see. Makes me wonder, what will come in the future. 
+Devolpoment was fun and it told me that the foundation models seem to be very happy to shoot at each other and follow command orders if one just convinces them that this is just a game. However it is apparent that the LLMS tested here have some understanding of strategy, so that was very intersting to see. Makes me wonder, what will come in the future. 
 
 ---
 
