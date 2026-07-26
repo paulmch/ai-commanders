@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 
 from .client import DEFAULT_MODEL, CaptainClient, LLMCallError, ToolCall
-from .tools import get_captain_tools, get_weapon_groups_for_ship, PERSONALITY_SELECTION_TOOLS, RESPOND_TO_ORDERS_TOOL
+from .tools import get_captain_tools, get_captain_tools_for_ship, get_weapon_groups_for_ship, PERSONALITY_SELECTION_TOOLS, RESPOND_TO_ORDERS_TOOL
 from .prompts import (
     build_captain_prompt,
     build_captain_messages,
@@ -75,7 +75,7 @@ class LLMCaptain:
         if not config.has_torpedoes and config.fleet_data and config.ship_type:
             config.has_torpedoes = ship_has_torpedoes(config.ship_type, config.fleet_data)
 
-        self.tools = get_captain_tools(has_torpedoes=config.has_torpedoes)
+        self.tools = self._build_tools()
 
         # State tracking
         self.decision_count = 0
@@ -252,7 +252,7 @@ class LLMCaptain:
         - Add respond_to_orders tool if orders were received
         """
         # Get base tools
-        tools = get_captain_tools(has_torpedoes=self.config.has_torpedoes)
+        tools = self._build_tools()
 
         if self.has_admiral:
             # Remove draw tools - only Admiral can propose draws
@@ -655,6 +655,21 @@ class LLMCaptain:
     def clear_recent_hits(self) -> None:
         """Clear recent hits at start of each checkpoint."""
         self.recent_hits = []
+
+    def _build_tools(self) -> List[Dict[str, Any]]:
+        """
+        Tool surface matched to this ship's actual armament.
+
+        Falls back to the generic set when fleet data is unavailable (test
+        doubles, legacy callers).
+        """
+        if self.config.fleet_data and self.config.ship_type:
+            return get_captain_tools_for_ship(
+                self.config.ship_type,
+                self.config.fleet_data,
+                has_torpedoes=self.config.has_torpedoes,
+            )
+        return get_captain_tools(has_torpedoes=self.config.has_torpedoes)
 
     def _max_torpedo_salvo(self, ship_id: str, simulation: Any) -> int:
         """

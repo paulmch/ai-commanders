@@ -672,6 +672,10 @@ class ShipCombatState:
     geometry: Optional[ShipGeometry] = None
     weapons: dict[str, WeaponState] = field(default_factory=dict)
     torpedo_launcher: Optional[TorpedoLauncher] = None
+    # Full set of launchers. `torpedo_launcher` above remains the first of these
+    # so existing call sites keep working; a hull mounting several gets its full
+    # salvo rate from this list.
+    torpedo_launchers: List[TorpedoLauncher] = field(default_factory=list)
     point_defense: list[PDLaserState] = field(default_factory=list)
     current_maneuver: Optional[Maneuver] = None
     is_destroyed: bool = False
@@ -728,6 +732,25 @@ class ShipCombatState:
         if self.thermal_system:
             return self.thermal_system.heat_percent
         return 0.0
+
+    @property
+    def torpedo_launcher_count(self) -> int:
+        """How many torpedo launchers this hull mounts."""
+        if self.torpedo_launchers:
+            return len(self.torpedo_launchers)
+        return 1 if self.torpedo_launcher else 0
+
+    @property
+    def ready_torpedo_launchers(self) -> List[TorpedoLauncher]:
+        """Every launcher on the hull, normalised to a list."""
+        if self.torpedo_launchers:
+            return self.torpedo_launchers
+        return [self.torpedo_launcher] if self.torpedo_launcher else []
+
+    @property
+    def torpedoes_remaining(self) -> int:
+        """Total rounds left across all launchers."""
+        return sum(getattr(l, "current_magazine", 0) for l in self.ready_torpedo_launchers)
 
     @property
     def hull_integrity(self) -> float:
@@ -1339,10 +1362,17 @@ class CombatSimulation:
         if not target or target.is_destroyed:
             return False
 
-        if not ship.torpedo_launcher:
+        # Pick the first launcher with a round chambered and off cooldown. With a
+        # single-launcher hull this is the old behaviour; a multi-launcher hull
+        # now actually fires at its full rate instead of one launcher's.
+        launcher = next(
+            (l for l in ship.ready_torpedo_launchers if l.can_launch(self.current_time)),
+            None,
+        )
+        if launcher is None:
             return False
 
-        torpedo = ship.torpedo_launcher.launch(
+        torpedo = launcher.launch(
             shooter_position=ship.position,
             shooter_velocity=ship.velocity,
             target_id=target_id,
@@ -5000,6 +5030,7 @@ def create_ship_from_fleet_data(
 
     # Create torpedo launcher
     torpedo_launcher = None
+    torpedo_launchers: list = []
     torpedo_data = ship_data.get("torpedo", {})
     if torpedo_data:
         specs = _build_torpedo_specs(torpedo_data)
@@ -5009,6 +5040,7 @@ def create_ship_from_fleet_data(
             current_magazine=torpedo_data.get("magazine", 16),
             cooldown_seconds=torpedo_data.get("cooldown_s", 30)
         )
+        torpedo_launchers = [torpedo_launcher]
     else:
         # Check weapons array for torpedo launcher
         for weapon_data in weapon_list:
@@ -5017,13 +5049,15 @@ def create_ship_from_fleet_data(
                 # Get torpedo specs from weapon_types
                 torp_specs = weapon_types.get("torpedo_launcher", {})
                 specs = _build_torpedo_specs(torp_specs)
-                torpedo_launcher = TorpedoLauncher(
+                # One launcher per torpedo weapon entry. This used to `break`
+                # after the first, so a hull mounting several launchers fired at
+                # the rate of one.
+                torpedo_launchers.append(TorpedoLauncher(
                     specs=specs,
-                    magazine_capacity=torp_specs.get("magazine", 16),
-                    current_magazine=torp_specs.get("magazine", 16),
+                    magazine_capacity=weapon_data.get("magazine", torp_specs.get("magazine", 16)),
+                    current_magazine=weapon_data.get("magazine", torp_specs.get("magazine", 16)),
                     cooldown_seconds=torp_specs.get("cooldown_s", 30)
-                )
-                break
+                ))
 
     # Create point defense lasers
     point_defense: list[PDLaserState] = []
@@ -5143,7 +5177,8 @@ def create_ship_from_fleet_data(
         module_layout=module_layout,
         geometry=geometry,
         weapons=weapons,
-        torpedo_launcher=torpedo_launcher,
+        torpedo_launcher=(torpedo_launcher or (torpedo_launchers[0] if torpedo_launchers else None)),
+        torpedo_launchers=torpedo_launchers,
         point_defense=point_defense,
         attitude_control=attitude_control,
         power_system=power_system

@@ -246,3 +246,57 @@ class TestConstantsHaveOneSourceOfTruth:
             f"{TORPEDO_ELECTRONICS_THRESHOLD_J/1e6:.0f} MJ seeker threshold - point "
             f"defense is back to one-shot-killing torpedoes"
         )
+
+
+class TestMultiLauncherHulls:
+    """A hull mounting several launchers must fire at its full rate."""
+
+    def test_torpedo_cruiser_builds_all_launchers(self, fleet_data):
+        """
+        Regression: ship construction `break`-ed after the first torpedo weapon
+        entry, so a multi-launcher hull fired at the rate of a single launcher.
+        """
+        from src.simulation import create_ship_from_fleet_data
+
+        ship = create_ship_from_fleet_data("tc", "cruiser_torpedo", "alpha", fleet_data)
+        assert ship.torpedo_launcher_count == 4
+        assert ship.torpedoes_remaining == 48
+        # Legacy singular accessor must keep working for existing call sites.
+        assert ship.torpedo_launcher is ship.torpedo_launchers[0]
+
+    def test_single_launcher_hull_unchanged(self, fleet_data):
+        from src.simulation import create_ship_from_fleet_data
+
+        corvette = create_ship_from_fleet_data("c", "corvette", "beta", fleet_data)
+        assert corvette.torpedo_launcher_count == 1
+        assert corvette.torpedo_launcher is not None
+
+    def test_gun_hull_has_no_launchers(self, fleet_data):
+        from src.simulation import create_ship_from_fleet_data
+
+        destroyer = create_ship_from_fleet_data("d", "destroyer", "beta", fleet_data)
+        assert destroyer.torpedo_launcher_count == 0
+        assert destroyer.torpedoes_remaining == 0
+
+    def test_salvo_ceiling_scales_with_launcher_count(self, fleet_data):
+        """4 launchers over a 30s decision at 12s reload = 8 rounds."""
+        from unittest.mock import Mock
+
+        from src.llm.captain import LLMCaptain, LLMCaptainConfig
+        from src.simulation import create_ship_from_fleet_data
+
+        for ship_type, expected in (("cruiser_torpedo", 8), ("corvette", 2)):
+            ship = create_ship_from_fleet_data("s", ship_type, "alpha", fleet_data)
+            captain = LLMCaptain(
+                LLMCaptainConfig(name="C", ship_name="S", ship_type=ship_type,
+                                 fleet_data=fleet_data),
+                client=Mock(),
+            )
+
+            class Sim:
+                decision_interval = 30.0
+
+                def get_ship(self, _):
+                    return ship
+
+            assert captain._max_torpedo_salvo("s", Sim()) == expected, ship_type

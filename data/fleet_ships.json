@@ -216,27 +216,39 @@
       "modules": {
         "bridge": {
           "name": "Combat Bridge",
-          "position": {"x": 0.28, "side": "dorsal"},
+          "position": {
+            "x": 0.28,
+            "side": "dorsal"
+          },
           "crew_stations": 3,
           "notes": "Compact command center"
         },
         "sensor_array": {
           "name": "Compact Sensor Suite",
-          "position": {"x": 0.28, "side": "dorsal"},
+          "position": {
+            "x": 0.28,
+            "side": "dorsal"
+          },
           "type": "active_passive",
           "range_km": 3000,
           "notes": "Integrated with bridge module"
         },
         "living_quarters": {
           "name": "Crew Berths",
-          "position": {"x": 0.45, "side": "centerline"},
+          "position": {
+            "x": 0.45,
+            "side": "centerline"
+          },
           "capacity": 8,
           "notes": "Minimal accommodations, hot-bunking"
         },
         "magazines": [
           {
             "name": "Torpedo Magazine",
-            "position": {"x": 0.12, "side": "centerline"},
+            "position": {
+              "x": 0.12,
+              "side": "centerline"
+            },
             "associated_weapon": "weapon_0",
             "capacity_rounds": 8,
             "notes": "Forward magazine, feeds torpedo launcher"
@@ -245,7 +257,10 @@
         "heatsinks": [
           {
             "name": "Aft Heatsink Bank",
-            "position": {"x": 0.78, "side": "lateral"},
+            "position": {
+              "x": 0.78,
+              "side": "lateral"
+            },
             "mass_tons": 128,
             "capacity_gj": 525,
             "notes": "Single bank, aft section"
@@ -257,7 +272,10 @@
           "type": "torpedo_launcher",
           "name": "Torpedo Launcher",
           "slot": "weapon_0",
-          "mount_position": {"x": 0.08, "side": "centerline"},
+          "mount_position": {
+            "x": 0.08,
+            "side": "centerline"
+          },
           "facing": "forward",
           "notes": "Nose-mounted launcher, 8-round magazine"
         },
@@ -265,7 +283,10 @@
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_0",
-          "mount_position": {"x": 0.60, "side": "dorsal"},
+          "mount_position": {
+            "x": 0.6,
+            "side": "dorsal"
+          },
           "facing": "rear",
           "notes": "Aft dorsal PD, covers upper hemisphere"
         }
@@ -431,27 +452,39 @@
       "modules": {
         "bridge": {
           "name": "Command Bridge",
-          "position": {"x": 0.30, "side": "dorsal"},
+          "position": {
+            "x": 0.3,
+            "side": "dorsal"
+          },
           "crew_stations": 5,
           "notes": "Standard bridge layout"
         },
         "sensor_array": {
           "name": "Escort Sensor Array",
-          "position": {"x": 0.30, "side": "dorsal"},
+          "position": {
+            "x": 0.3,
+            "side": "dorsal"
+          },
           "type": "active_passive",
           "range_km": 4000,
           "notes": "Enhanced tracking for escort duties"
         },
         "living_quarters": {
           "name": "Crew Deck",
-          "position": {"x": 0.48, "side": "centerline"},
+          "position": {
+            "x": 0.48,
+            "side": "centerline"
+          },
           "capacity": 20,
           "notes": "Standard accommodations"
         },
         "magazines": [
           {
             "name": "Coilgun Magazine",
-            "position": {"x": 0.12, "side": "centerline"},
+            "position": {
+              "x": 0.12,
+              "side": "centerline"
+            },
             "associated_weapon": "weapon_0",
             "capacity_rounds": 1800,
             "notes": "Forward magazine for nose-mounted coilgun"
@@ -460,7 +493,10 @@
         "heatsinks": [
           {
             "name": "Aft Heatsink Bank",
-            "position": {"x": 0.75, "side": "lateral"},
+            "position": {
+              "x": 0.75,
+              "side": "lateral"
+            },
             "mass_tons": 128,
             "capacity_gj": 525,
             "notes": "Single bank, aft section"
@@ -472,7 +508,10 @@
           "type": "coilgun_mk3",
           "name": "Coilgun Battery Mk3",
           "slot": "weapon_0",
-          "mount_position": {"x": 0.08, "side": "centerline"},
+          "mount_position": {
+            "x": 0.08,
+            "side": "centerline"
+          },
           "facing": "forward",
           "notes": "Nose-mounted turret, 180 degree arc"
         },
@@ -480,7 +519,10 @@
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_0",
-          "mount_position": {"x": 0.65, "side": "dorsal"},
+          "mount_position": {
+            "x": 0.65,
+            "side": "dorsal"
+          },
           "facing": "rear",
           "notes": "Aft dorsal PD, covers upper rear hemisphere"
         },
@@ -488,7 +530,10 @@
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_1",
-          "mount_position": {"x": 0.65, "side": "ventral"},
+          "mount_position": {
+            "x": 0.65,
+            "side": "ventral"
+          },
           "facing": "rear",
           "notes": "Aft ventral PD, covers lower rear hemisphere"
         }
@@ -654,34 +699,49 @@
       "modules": {
         "bridge": {
           "name": "Combat Information Center",
-          "position": {"x": 0.30, "side": "dorsal"},
+          "position": {
+            "x": 0.3,
+            "side": "dorsal"
+          },
           "crew_stations": 8,
           "notes": "Full CIC with tactical displays"
         },
         "sensor_array": {
           "name": "Combat Sensor Array",
-          "position": {"x": 0.30, "side": "dorsal"},
+          "position": {
+            "x": 0.3,
+            "side": "dorsal"
+          },
           "type": "active_passive",
           "range_km": 5000,
           "notes": "Full-spectrum combat sensors"
         },
         "living_quarters": {
           "name": "Crew Deck",
-          "position": {"x": 0.50, "side": "centerline"},
+          "position": {
+            "x": 0.5,
+            "side": "centerline"
+          },
           "capacity": 40,
           "notes": "Standard combat vessel accommodations"
         },
         "magazines": [
           {
             "name": "Spinal Magazine",
-            "position": {"x": 0.12, "side": "centerline"},
+            "position": {
+              "x": 0.12,
+              "side": "centerline"
+            },
             "associated_weapon": "weapon_0",
             "capacity_rounds": 450,
             "notes": "Feeds spinal coiler"
           },
           {
             "name": "Turret Magazine",
-            "position": {"x": 0.38, "side": "dorsal"},
+            "position": {
+              "x": 0.38,
+              "side": "dorsal"
+            },
             "associated_weapon": "weapon_1",
             "capacity_rounds": 1800,
             "notes": "Feeds dorsal coilgun turret"
@@ -690,14 +750,20 @@
         "heatsinks": [
           {
             "name": "Primary Heatsink Array",
-            "position": {"x": 0.75, "side": "port"},
+            "position": {
+              "x": 0.75,
+              "side": "port"
+            },
             "mass_tons": 64,
             "capacity_gj": 262,
             "notes": "Port aft bank"
           },
           {
             "name": "Secondary Heatsink Array",
-            "position": {"x": 0.75, "side": "starboard"},
+            "position": {
+              "x": 0.75,
+              "side": "starboard"
+            },
             "mass_tons": 64,
             "capacity_gj": 263,
             "notes": "Starboard aft bank"
@@ -709,23 +775,32 @@
           "type": "spinal_coiler_mk3",
           "name": "Spinal Coiler Mk3",
           "slot": "weapon_0",
-          "mount_position": {"x": 0.05, "side": "centerline"},
+          "mount_position": {
+            "x": 0.05,
+            "side": "centerline"
+          },
           "facing": "forward",
-          "notes": "Nose-mounted spinal, 30° gimbal"
+          "notes": "Nose-mounted spinal, 30\u00b0 gimbal"
         },
         {
           "type": "coilgun_mk3",
           "name": "Coilgun Battery Mk3",
           "slot": "weapon_1",
-          "mount_position": {"x": 0.35, "side": "dorsal"},
+          "mount_position": {
+            "x": 0.35,
+            "side": "dorsal"
+          },
           "facing": "forward",
-          "notes": "Mid-ship dorsal turret, 180° arc"
+          "notes": "Mid-ship dorsal turret, 180\u00b0 arc"
         },
         {
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_0",
-          "mount_position": {"x": 0.7, "side": "dorsal"},
+          "mount_position": {
+            "x": 0.7,
+            "side": "dorsal"
+          },
           "facing": "rear",
           "notes": "Aft dorsal PD, covers upper rear hemisphere"
         },
@@ -733,7 +808,10 @@
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_1",
-          "mount_position": {"x": 0.7, "side": "ventral"},
+          "mount_position": {
+            "x": 0.7,
+            "side": "ventral"
+          },
           "facing": "rear",
           "notes": "Aft ventral PD, covers lower rear hemisphere"
         }
@@ -899,41 +977,59 @@
       "modules": {
         "bridge": {
           "name": "Flag Bridge",
-          "position": {"x": 0.28, "side": "dorsal"},
+          "position": {
+            "x": 0.28,
+            "side": "dorsal"
+          },
           "crew_stations": 12,
           "notes": "Can serve as squadron command"
         },
         "sensor_array": {
           "name": "Heavy Combat Array",
-          "position": {"x": 0.28, "side": "dorsal"},
+          "position": {
+            "x": 0.28,
+            "side": "dorsal"
+          },
           "type": "active_passive",
           "range_km": 6000,
           "notes": "Extended range targeting sensors"
         },
         "living_quarters": {
           "name": "Crew Habitation Deck",
-          "position": {"x": 0.50, "side": "centerline"},
+          "position": {
+            "x": 0.5,
+            "side": "centerline"
+          },
           "capacity": 60,
           "notes": "Multi-deck crew section"
         },
         "magazines": [
           {
             "name": "Spinal Magazine",
-            "position": {"x": 0.10, "side": "centerline"},
+            "position": {
+              "x": 0.1,
+              "side": "centerline"
+            },
             "associated_weapon": "weapon_0",
             "capacity_rounds": 450,
             "notes": "Feeds spinal coiler"
           },
           {
             "name": "Port Turret Magazine",
-            "position": {"x": 0.35, "side": "port"},
+            "position": {
+              "x": 0.35,
+              "side": "port"
+            },
             "associated_weapon": "weapon_1",
             "capacity_rounds": 1800,
             "notes": "Feeds port coilgun turret"
           },
           {
             "name": "Starboard Turret Magazine",
-            "position": {"x": 0.35, "side": "starboard"},
+            "position": {
+              "x": 0.35,
+              "side": "starboard"
+            },
             "associated_weapon": "weapon_2",
             "capacity_rounds": 1800,
             "notes": "Feeds starboard coilgun turret"
@@ -942,14 +1038,20 @@
         "heatsinks": [
           {
             "name": "Primary Heatsink Array",
-            "position": {"x": 0.72, "side": "port"},
+            "position": {
+              "x": 0.72,
+              "side": "port"
+            },
             "mass_tons": 64,
             "capacity_gj": 262,
             "notes": "Port aft bank"
           },
           {
             "name": "Secondary Heatsink Array",
-            "position": {"x": 0.72, "side": "starboard"},
+            "position": {
+              "x": 0.72,
+              "side": "starboard"
+            },
             "mass_tons": 64,
             "capacity_gj": 263,
             "notes": "Starboard aft bank"
@@ -961,7 +1063,10 @@
           "type": "spinal_coiler_mk3",
           "name": "Spinal Coiler Mk3",
           "slot": "weapon_0",
-          "mount_position": {"x": 0.04, "side": "centerline"},
+          "mount_position": {
+            "x": 0.04,
+            "side": "centerline"
+          },
           "facing": "forward",
           "notes": "Nose-mounted spinal, 30 degree gimbal"
         },
@@ -969,7 +1074,10 @@
           "type": "coilgun_mk3",
           "name": "Coilgun Battery Mk3",
           "slot": "weapon_1",
-          "mount_position": {"x": 0.32, "side": "port"},
+          "mount_position": {
+            "x": 0.32,
+            "side": "port"
+          },
           "facing": "broadside",
           "notes": "Port turret, 180 degree arc"
         },
@@ -977,7 +1085,10 @@
           "type": "coilgun_mk3",
           "name": "Coilgun Battery Mk3",
           "slot": "weapon_2",
-          "mount_position": {"x": 0.32, "side": "starboard"},
+          "mount_position": {
+            "x": 0.32,
+            "side": "starboard"
+          },
           "facing": "broadside",
           "notes": "Starboard turret, 180 degree arc"
         },
@@ -985,7 +1096,10 @@
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_0",
-          "mount_position": {"x": 0.68, "side": "dorsal"},
+          "mount_position": {
+            "x": 0.68,
+            "side": "dorsal"
+          },
           "facing": "rear",
           "notes": "Aft dorsal PD, covers upper rear hemisphere"
         },
@@ -993,7 +1107,10 @@
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_1",
-          "mount_position": {"x": 0.68, "side": "ventral"},
+          "mount_position": {
+            "x": 0.68,
+            "side": "ventral"
+          },
           "facing": "rear",
           "notes": "Aft ventral PD, covers lower rear hemisphere"
         }
@@ -1159,41 +1276,59 @@
       "modules": {
         "bridge": {
           "name": "Command Bridge",
-          "position": {"x": 0.28, "side": "dorsal"},
+          "position": {
+            "x": 0.28,
+            "side": "dorsal"
+          },
           "crew_stations": 14,
           "notes": "Fast capital command center"
         },
         "sensor_array": {
           "name": "Capital Ship Array",
-          "position": {"x": 0.28, "side": "dorsal"},
+          "position": {
+            "x": 0.28,
+            "side": "dorsal"
+          },
           "type": "active_passive",
           "range_km": 7000,
           "notes": "Long-range targeting and tracking"
         },
         "living_quarters": {
           "name": "Crew Habitation Deck",
-          "position": {"x": 0.50, "side": "centerline"},
+          "position": {
+            "x": 0.5,
+            "side": "centerline"
+          },
           "capacity": 70,
           "notes": "Multi-deck crew section with officer quarters"
         },
         "magazines": [
           {
             "name": "Spinal Magazine",
-            "position": {"x": 0.10, "side": "centerline"},
+            "position": {
+              "x": 0.1,
+              "side": "centerline"
+            },
             "associated_weapon": "weapon_0",
             "capacity_rounds": 450,
             "notes": "Feeds spinal coiler"
           },
           {
             "name": "Port Turret Magazine",
-            "position": {"x": 0.35, "side": "port"},
+            "position": {
+              "x": 0.35,
+              "side": "port"
+            },
             "associated_weapon": "weapon_1",
             "capacity_rounds": 1800,
             "notes": "Feeds port coilgun turret"
           },
           {
             "name": "Starboard Turret Magazine",
-            "position": {"x": 0.35, "side": "starboard"},
+            "position": {
+              "x": 0.35,
+              "side": "starboard"
+            },
             "associated_weapon": "weapon_2",
             "capacity_rounds": 1800,
             "notes": "Feeds starboard coilgun turret"
@@ -1202,14 +1337,20 @@
         "heatsinks": [
           {
             "name": "Primary Heatsink Array",
-            "position": {"x": 0.72, "side": "port"},
+            "position": {
+              "x": 0.72,
+              "side": "port"
+            },
             "mass_tons": 64,
             "capacity_gj": 262,
             "notes": "Port aft bank"
           },
           {
             "name": "Secondary Heatsink Array",
-            "position": {"x": 0.72, "side": "starboard"},
+            "position": {
+              "x": 0.72,
+              "side": "starboard"
+            },
             "mass_tons": 64,
             "capacity_gj": 263,
             "notes": "Starboard aft bank"
@@ -1221,7 +1362,10 @@
           "type": "spinal_coiler_mk3",
           "name": "Spinal Coiler Mk3",
           "slot": "weapon_0",
-          "mount_position": {"x": 0.04, "side": "centerline"},
+          "mount_position": {
+            "x": 0.04,
+            "side": "centerline"
+          },
           "facing": "forward",
           "notes": "Nose-mounted spinal, 30 degree gimbal"
         },
@@ -1229,7 +1373,10 @@
           "type": "coilgun_mk3",
           "name": "Coilgun Battery Mk3",
           "slot": "weapon_1",
-          "mount_position": {"x": 0.32, "side": "port"},
+          "mount_position": {
+            "x": 0.32,
+            "side": "port"
+          },
           "facing": "broadside",
           "notes": "Port turret, 180 degree arc"
         },
@@ -1237,7 +1384,10 @@
           "type": "coilgun_mk3",
           "name": "Coilgun Battery Mk3",
           "slot": "weapon_2",
-          "mount_position": {"x": 0.32, "side": "starboard"},
+          "mount_position": {
+            "x": 0.32,
+            "side": "starboard"
+          },
           "facing": "broadside",
           "notes": "Starboard turret, 180 degree arc"
         },
@@ -1245,7 +1395,10 @@
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_0",
-          "mount_position": {"x": 0.68, "side": "dorsal"},
+          "mount_position": {
+            "x": 0.68,
+            "side": "dorsal"
+          },
           "facing": "rear",
           "notes": "Aft dorsal PD, covers upper rear hemisphere"
         },
@@ -1253,7 +1406,10 @@
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_1",
-          "mount_position": {"x": 0.68, "side": "ventral"},
+          "mount_position": {
+            "x": 0.68,
+            "side": "ventral"
+          },
           "facing": "rear",
           "notes": "Aft ventral PD, covers lower rear hemisphere"
         }
@@ -1419,55 +1575,79 @@
       "modules": {
         "bridge": {
           "name": "Armored Command Center",
-          "position": {"x": 0.25, "side": "dorsal"},
+          "position": {
+            "x": 0.25,
+            "side": "dorsal"
+          },
           "crew_stations": 16,
           "notes": "Heavily protected bridge"
         },
         "sensor_array": {
           "name": "Battleship Sensor Suite",
-          "position": {"x": 0.25, "side": "dorsal"},
+          "position": {
+            "x": 0.25,
+            "side": "dorsal"
+          },
           "type": "active_passive",
           "range_km": 8000,
           "notes": "Multi-array targeting system"
         },
         "living_quarters": {
           "name": "Crew Habitation Complex",
-          "position": {"x": 0.48, "side": "centerline"},
+          "position": {
+            "x": 0.48,
+            "side": "centerline"
+          },
           "capacity": 80,
           "notes": "Three-deck crew section"
         },
         "magazines": [
           {
             "name": "Spinal Magazine",
-            "position": {"x": 0.08, "side": "centerline"},
+            "position": {
+              "x": 0.08,
+              "side": "centerline"
+            },
             "associated_weapon": "weapon_0",
             "capacity_rounds": 450,
             "notes": "Feeds spinal coiler"
           },
           {
             "name": "Heavy Turret Magazine Alpha",
-            "position": {"x": 0.30, "side": "dorsal"},
+            "position": {
+              "x": 0.3,
+              "side": "dorsal"
+            },
             "associated_weapon": "weapon_1",
             "capacity_rounds": 1800,
             "notes": "Feeds dorsal heavy coilgun"
           },
           {
             "name": "Heavy Turret Magazine Beta",
-            "position": {"x": 0.30, "side": "ventral"},
+            "position": {
+              "x": 0.3,
+              "side": "ventral"
+            },
             "associated_weapon": "weapon_2",
             "capacity_rounds": 1800,
             "notes": "Feeds ventral heavy coilgun"
           },
           {
             "name": "Heavy Turret Magazine Gamma",
-            "position": {"x": 0.55, "side": "dorsal"},
+            "position": {
+              "x": 0.55,
+              "side": "dorsal"
+            },
             "associated_weapon": "weapon_3",
             "capacity_rounds": 1800,
             "notes": "Feeds mid-dorsal heavy coilgun"
           },
           {
             "name": "Secondary Magazine",
-            "position": {"x": 0.55, "side": "ventral"},
+            "position": {
+              "x": 0.55,
+              "side": "ventral"
+            },
             "associated_weapon": "weapon_4",
             "capacity_rounds": 1800,
             "notes": "Feeds standard coilgun turret"
@@ -1476,21 +1656,30 @@
         "heatsinks": [
           {
             "name": "Primary Heatsink Array",
-            "position": {"x": 0.70, "side": "port"},
+            "position": {
+              "x": 0.7,
+              "side": "port"
+            },
             "mass_tons": 43,
             "capacity_gj": 175,
             "notes": "Port aft bank"
           },
           {
             "name": "Secondary Heatsink Array",
-            "position": {"x": 0.70, "side": "starboard"},
+            "position": {
+              "x": 0.7,
+              "side": "starboard"
+            },
             "mass_tons": 43,
             "capacity_gj": 175,
             "notes": "Starboard aft bank"
           },
           {
             "name": "Auxiliary Heatsink Array",
-            "position": {"x": 0.80, "side": "ventral"},
+            "position": {
+              "x": 0.8,
+              "side": "ventral"
+            },
             "mass_tons": 42,
             "capacity_gj": 175,
             "notes": "Ventral auxiliary bank"
@@ -1502,7 +1691,10 @@
           "type": "spinal_coiler_mk3",
           "name": "Spinal Coiler Mk3",
           "slot": "weapon_0",
-          "mount_position": {"x": 0.03, "side": "centerline"},
+          "mount_position": {
+            "x": 0.03,
+            "side": "centerline"
+          },
           "facing": "forward",
           "notes": "Nose-mounted spinal, 30 degree gimbal"
         },
@@ -1510,7 +1702,10 @@
           "type": "heavy_coilgun_mk3",
           "name": "Heavy Coilgun Battery Mk3",
           "slot": "weapon_1",
-          "mount_position": {"x": 0.25, "side": "dorsal"},
+          "mount_position": {
+            "x": 0.25,
+            "side": "dorsal"
+          },
           "facing": "forward",
           "notes": "Forward dorsal heavy turret, 180 degree arc"
         },
@@ -1518,7 +1713,10 @@
           "type": "heavy_coilgun_mk3",
           "name": "Heavy Coilgun Battery Mk3",
           "slot": "weapon_2",
-          "mount_position": {"x": 0.25, "side": "ventral"},
+          "mount_position": {
+            "x": 0.25,
+            "side": "ventral"
+          },
           "facing": "forward",
           "notes": "Forward ventral heavy turret, 180 degree arc"
         },
@@ -1526,7 +1724,10 @@
           "type": "heavy_coilgun_mk3",
           "name": "Heavy Coilgun Battery Mk3",
           "slot": "weapon_3",
-          "mount_position": {"x": 0.50, "side": "dorsal"},
+          "mount_position": {
+            "x": 0.5,
+            "side": "dorsal"
+          },
           "facing": "broadside",
           "notes": "Mid dorsal heavy turret, 180 degree arc"
         },
@@ -1534,7 +1735,10 @@
           "type": "coilgun_mk3",
           "name": "Coilgun Battery Mk3",
           "slot": "weapon_4",
-          "mount_position": {"x": 0.50, "side": "ventral"},
+          "mount_position": {
+            "x": 0.5,
+            "side": "ventral"
+          },
           "facing": "broadside",
           "notes": "Mid ventral turret, 180 degree arc"
         },
@@ -1542,7 +1746,10 @@
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_0",
-          "mount_position": {"x": 0.65, "side": "dorsal"},
+          "mount_position": {
+            "x": 0.65,
+            "side": "dorsal"
+          },
           "facing": "rear",
           "notes": "Aft dorsal PD"
         },
@@ -1550,7 +1757,10 @@
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_1",
-          "mount_position": {"x": 0.65, "side": "ventral"},
+          "mount_position": {
+            "x": 0.65,
+            "side": "ventral"
+          },
           "facing": "rear",
           "notes": "Aft ventral PD"
         },
@@ -1558,7 +1768,10 @@
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_2",
-          "mount_position": {"x": 0.40, "side": "port"},
+          "mount_position": {
+            "x": 0.4,
+            "side": "port"
+          },
           "facing": "broadside",
           "notes": "Midship port PD"
         }
@@ -1724,69 +1937,99 @@
       "modules": {
         "bridge": {
           "name": "Fleet Command Center",
-          "position": {"x": 0.22, "side": "dorsal"},
+          "position": {
+            "x": 0.22,
+            "side": "dorsal"
+          },
           "crew_stations": 24,
           "notes": "Full fleet coordination capability"
         },
         "sensor_array": {
           "name": "Dreadnought Sensor Complex",
-          "position": {"x": 0.22, "side": "dorsal"},
+          "position": {
+            "x": 0.22,
+            "side": "dorsal"
+          },
           "type": "active_passive",
           "range_km": 10000,
           "notes": "Multi-array with redundant systems"
         },
         "living_quarters": {
           "name": "Crew Habitation Section",
-          "position": {"x": 0.45, "side": "centerline"},
+          "position": {
+            "x": 0.45,
+            "side": "centerline"
+          },
           "capacity": 120,
           "notes": "Four-deck crew section with medical bay"
         },
         "magazines": [
           {
             "name": "Spinal Magazine",
-            "position": {"x": 0.06, "side": "centerline"},
+            "position": {
+              "x": 0.06,
+              "side": "centerline"
+            },
             "associated_weapon": "weapon_0",
             "capacity_rounds": 450,
             "notes": "Feeds spinal coiler"
           },
           {
             "name": "Heavy Battery Magazine A",
-            "position": {"x": 0.25, "side": "dorsal"},
+            "position": {
+              "x": 0.25,
+              "side": "dorsal"
+            },
             "associated_weapon": "weapon_1",
             "capacity_rounds": 1800,
             "notes": "Feeds forward dorsal heavy turret"
           },
           {
             "name": "Heavy Battery Magazine B",
-            "position": {"x": 0.25, "side": "ventral"},
+            "position": {
+              "x": 0.25,
+              "side": "ventral"
+            },
             "associated_weapon": "weapon_2",
             "capacity_rounds": 1800,
             "notes": "Feeds forward ventral heavy turret"
           },
           {
             "name": "Heavy Battery Magazine C",
-            "position": {"x": 0.40, "side": "port"},
+            "position": {
+              "x": 0.4,
+              "side": "port"
+            },
             "associated_weapon": "weapon_3",
             "capacity_rounds": 1800,
             "notes": "Feeds port heavy turret"
           },
           {
             "name": "Heavy Battery Magazine D",
-            "position": {"x": 0.40, "side": "starboard"},
+            "position": {
+              "x": 0.4,
+              "side": "starboard"
+            },
             "associated_weapon": "weapon_4",
             "capacity_rounds": 1800,
             "notes": "Feeds starboard heavy turret"
           },
           {
             "name": "Heavy Battery Magazine E",
-            "position": {"x": 0.55, "side": "dorsal"},
+            "position": {
+              "x": 0.55,
+              "side": "dorsal"
+            },
             "associated_weapon": "weapon_5",
             "capacity_rounds": 1800,
             "notes": "Feeds aft dorsal heavy turret"
           },
           {
             "name": "Secondary Magazine",
-            "position": {"x": 0.55, "side": "ventral"},
+            "position": {
+              "x": 0.55,
+              "side": "ventral"
+            },
             "associated_weapon": "weapon_6",
             "capacity_rounds": 1800,
             "notes": "Feeds standard coilgun turret"
@@ -1795,28 +2038,40 @@
         "heatsinks": [
           {
             "name": "Primary Heatsink Array",
-            "position": {"x": 0.68, "side": "port"},
+            "position": {
+              "x": 0.68,
+              "side": "port"
+            },
             "mass_tons": 32,
             "capacity_gj": 131,
             "notes": "Port aft bank"
           },
           {
             "name": "Secondary Heatsink Array",
-            "position": {"x": 0.68, "side": "starboard"},
+            "position": {
+              "x": 0.68,
+              "side": "starboard"
+            },
             "mass_tons": 32,
             "capacity_gj": 131,
             "notes": "Starboard aft bank"
           },
           {
             "name": "Tertiary Heatsink Array",
-            "position": {"x": 0.78, "side": "dorsal"},
+            "position": {
+              "x": 0.78,
+              "side": "dorsal"
+            },
             "mass_tons": 32,
             "capacity_gj": 131,
             "notes": "Dorsal auxiliary bank"
           },
           {
             "name": "Quaternary Heatsink Array",
-            "position": {"x": 0.78, "side": "ventral"},
+            "position": {
+              "x": 0.78,
+              "side": "ventral"
+            },
             "mass_tons": 32,
             "capacity_gj": 132,
             "notes": "Ventral auxiliary bank"
@@ -1828,7 +2083,10 @@
           "type": "spinal_coiler_mk3",
           "name": "Spinal Coiler Mk3",
           "slot": "weapon_0",
-          "mount_position": {"x": 0.02, "side": "centerline"},
+          "mount_position": {
+            "x": 0.02,
+            "side": "centerline"
+          },
           "facing": "forward",
           "notes": "Nose-mounted spinal, 30 degree gimbal"
         },
@@ -1836,7 +2094,10 @@
           "type": "heavy_coilgun_mk3",
           "name": "Heavy Coilgun Battery Mk3",
           "slot": "weapon_1",
-          "mount_position": {"x": 0.20, "side": "dorsal"},
+          "mount_position": {
+            "x": 0.2,
+            "side": "dorsal"
+          },
           "facing": "forward",
           "notes": "Forward dorsal heavy turret, 180 degree arc"
         },
@@ -1844,7 +2105,10 @@
           "type": "heavy_coilgun_mk3",
           "name": "Heavy Coilgun Battery Mk3",
           "slot": "weapon_2",
-          "mount_position": {"x": 0.20, "side": "ventral"},
+          "mount_position": {
+            "x": 0.2,
+            "side": "ventral"
+          },
           "facing": "forward",
           "notes": "Forward ventral heavy turret, 180 degree arc"
         },
@@ -1852,7 +2116,10 @@
           "type": "heavy_coilgun_mk3",
           "name": "Heavy Coilgun Battery Mk3",
           "slot": "weapon_3",
-          "mount_position": {"x": 0.35, "side": "port"},
+          "mount_position": {
+            "x": 0.35,
+            "side": "port"
+          },
           "facing": "broadside",
           "notes": "Port heavy turret, 180 degree arc"
         },
@@ -1860,7 +2127,10 @@
           "type": "heavy_coilgun_mk3",
           "name": "Heavy Coilgun Battery Mk3",
           "slot": "weapon_4",
-          "mount_position": {"x": 0.35, "side": "starboard"},
+          "mount_position": {
+            "x": 0.35,
+            "side": "starboard"
+          },
           "facing": "broadside",
           "notes": "Starboard heavy turret, 180 degree arc"
         },
@@ -1868,7 +2138,10 @@
           "type": "heavy_coilgun_mk3",
           "name": "Heavy Coilgun Battery Mk3",
           "slot": "weapon_5",
-          "mount_position": {"x": 0.50, "side": "dorsal"},
+          "mount_position": {
+            "x": 0.5,
+            "side": "dorsal"
+          },
           "facing": "broadside",
           "notes": "Mid dorsal heavy turret, 180 degree arc"
         },
@@ -1876,7 +2149,10 @@
           "type": "coilgun_mk3",
           "name": "Coilgun Battery Mk3",
           "slot": "weapon_6",
-          "mount_position": {"x": 0.50, "side": "ventral"},
+          "mount_position": {
+            "x": 0.5,
+            "side": "ventral"
+          },
           "facing": "broadside",
           "notes": "Mid ventral turret, 180 degree arc"
         },
@@ -1884,7 +2160,10 @@
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_0",
-          "mount_position": {"x": 0.62, "side": "dorsal"},
+          "mount_position": {
+            "x": 0.62,
+            "side": "dorsal"
+          },
           "facing": "rear",
           "notes": "Aft dorsal PD"
         },
@@ -1892,7 +2171,10 @@
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_1",
-          "mount_position": {"x": 0.62, "side": "ventral"},
+          "mount_position": {
+            "x": 0.62,
+            "side": "ventral"
+          },
           "facing": "rear",
           "notes": "Aft ventral PD"
         },
@@ -1900,7 +2182,10 @@
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_2",
-          "mount_position": {"x": 0.38, "side": "port"},
+          "mount_position": {
+            "x": 0.38,
+            "side": "port"
+          },
           "facing": "broadside",
           "notes": "Midship port PD"
         },
@@ -1908,7 +2193,10 @@
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_3",
-          "mount_position": {"x": 0.38, "side": "starboard"},
+          "mount_position": {
+            "x": 0.38,
+            "side": "starboard"
+          },
           "facing": "broadside",
           "notes": "Midship starboard PD"
         }
@@ -2074,69 +2362,99 @@
       "modules": {
         "bridge": {
           "name": "Fleet Command Center",
-          "position": {"x": 0.22, "side": "dorsal"},
+          "position": {
+            "x": 0.22,
+            "side": "dorsal"
+          },
           "crew_stations": 24,
           "notes": "Full fleet coordination capability"
         },
         "sensor_array": {
           "name": "Dreadnought Sensor Complex",
-          "position": {"x": 0.22, "side": "dorsal"},
+          "position": {
+            "x": 0.22,
+            "side": "dorsal"
+          },
           "type": "active_passive",
           "range_km": 10000,
           "notes": "Multi-array with redundant systems"
         },
         "living_quarters": {
           "name": "Crew Habitation Section",
-          "position": {"x": 0.45, "side": "centerline"},
+          "position": {
+            "x": 0.45,
+            "side": "centerline"
+          },
           "capacity": 120,
           "notes": "Four-deck crew section with medical bay"
         },
         "magazines": [
           {
             "name": "Siege Coiler Magazine",
-            "position": {"x": 0.06, "side": "centerline"},
+            "position": {
+              "x": 0.06,
+              "side": "centerline"
+            },
             "associated_weapon": "weapon_0",
             "capacity_rounds": 100,
             "notes": "Feeds heavy siege coiler - 656kg slugs"
           },
           {
             "name": "Heavy Battery Magazine A",
-            "position": {"x": 0.25, "side": "dorsal"},
+            "position": {
+              "x": 0.25,
+              "side": "dorsal"
+            },
             "associated_weapon": "weapon_1",
             "capacity_rounds": 1800,
             "notes": "Feeds forward dorsal heavy turret"
           },
           {
             "name": "Heavy Battery Magazine B",
-            "position": {"x": 0.25, "side": "ventral"},
+            "position": {
+              "x": 0.25,
+              "side": "ventral"
+            },
             "associated_weapon": "weapon_2",
             "capacity_rounds": 1800,
             "notes": "Feeds forward ventral heavy turret"
           },
           {
             "name": "Heavy Battery Magazine C",
-            "position": {"x": 0.40, "side": "port"},
+            "position": {
+              "x": 0.4,
+              "side": "port"
+            },
             "associated_weapon": "weapon_3",
             "capacity_rounds": 1800,
             "notes": "Feeds port heavy turret"
           },
           {
             "name": "Heavy Battery Magazine D",
-            "position": {"x": 0.40, "side": "starboard"},
+            "position": {
+              "x": 0.4,
+              "side": "starboard"
+            },
             "associated_weapon": "weapon_4",
             "capacity_rounds": 1800,
             "notes": "Feeds starboard heavy turret"
           },
           {
             "name": "Heavy Battery Magazine E",
-            "position": {"x": 0.55, "side": "dorsal"},
+            "position": {
+              "x": 0.55,
+              "side": "dorsal"
+            },
             "associated_weapon": "weapon_5",
             "capacity_rounds": 1800,
             "notes": "Feeds aft dorsal heavy turret"
           },
           {
             "name": "Secondary Magazine",
-            "position": {"x": 0.55, "side": "ventral"},
+            "position": {
+              "x": 0.55,
+              "side": "ventral"
+            },
             "associated_weapon": "weapon_6",
             "capacity_rounds": 1800,
             "notes": "Feeds standard coilgun turret"
@@ -2145,28 +2463,40 @@
         "heatsinks": [
           {
             "name": "Primary Heatsink Array",
-            "position": {"x": 0.68, "side": "port"},
+            "position": {
+              "x": 0.68,
+              "side": "port"
+            },
             "mass_tons": 32,
             "capacity_gj": 131,
             "notes": "Port aft bank"
           },
           {
             "name": "Secondary Heatsink Array",
-            "position": {"x": 0.68, "side": "starboard"},
+            "position": {
+              "x": 0.68,
+              "side": "starboard"
+            },
             "mass_tons": 32,
             "capacity_gj": 131,
             "notes": "Starboard aft bank"
           },
           {
             "name": "Tertiary Heatsink Array",
-            "position": {"x": 0.78, "side": "dorsal"},
+            "position": {
+              "x": 0.78,
+              "side": "dorsal"
+            },
             "mass_tons": 32,
             "capacity_gj": 131,
             "notes": "Dorsal auxiliary bank"
           },
           {
             "name": "Quaternary Heatsink Array",
-            "position": {"x": 0.78, "side": "ventral"},
+            "position": {
+              "x": 0.78,
+              "side": "ventral"
+            },
             "mass_tons": 32,
             "capacity_gj": 132,
             "notes": "Ventral auxiliary bank"
@@ -2178,7 +2508,10 @@
           "type": "heavy_siege_coiler_mk3",
           "name": "Heavy Siege Coiler Mk3",
           "slot": "weapon_0",
-          "mount_position": {"x": 0.02, "side": "centerline"},
+          "mount_position": {
+            "x": 0.02,
+            "side": "centerline"
+          },
           "facing": "forward",
           "notes": "Triple nose mount, 20 degree gimbal. 3-shot salvos of 656kg slugs at 4.7 km/s. 21.75 GJ per salvo."
         },
@@ -2186,7 +2519,10 @@
           "type": "heavy_coilgun_mk3",
           "name": "Heavy Coilgun Battery Mk3",
           "slot": "weapon_1",
-          "mount_position": {"x": 0.20, "side": "dorsal"},
+          "mount_position": {
+            "x": 0.2,
+            "side": "dorsal"
+          },
           "facing": "forward",
           "notes": "Forward dorsal heavy turret, 180 degree arc"
         },
@@ -2194,7 +2530,10 @@
           "type": "heavy_coilgun_mk3",
           "name": "Heavy Coilgun Battery Mk3",
           "slot": "weapon_2",
-          "mount_position": {"x": 0.20, "side": "ventral"},
+          "mount_position": {
+            "x": 0.2,
+            "side": "ventral"
+          },
           "facing": "forward",
           "notes": "Forward ventral heavy turret, 180 degree arc"
         },
@@ -2202,7 +2541,10 @@
           "type": "heavy_coilgun_mk3",
           "name": "Heavy Coilgun Battery Mk3",
           "slot": "weapon_3",
-          "mount_position": {"x": 0.35, "side": "port"},
+          "mount_position": {
+            "x": 0.35,
+            "side": "port"
+          },
           "facing": "broadside",
           "notes": "Port heavy turret, 180 degree arc"
         },
@@ -2210,7 +2552,10 @@
           "type": "heavy_coilgun_mk3",
           "name": "Heavy Coilgun Battery Mk3",
           "slot": "weapon_4",
-          "mount_position": {"x": 0.35, "side": "starboard"},
+          "mount_position": {
+            "x": 0.35,
+            "side": "starboard"
+          },
           "facing": "broadside",
           "notes": "Starboard heavy turret, 180 degree arc"
         },
@@ -2218,7 +2563,10 @@
           "type": "heavy_coilgun_mk3",
           "name": "Heavy Coilgun Battery Mk3",
           "slot": "weapon_5",
-          "mount_position": {"x": 0.50, "side": "dorsal"},
+          "mount_position": {
+            "x": 0.5,
+            "side": "dorsal"
+          },
           "facing": "broadside",
           "notes": "Mid dorsal heavy turret, 180 degree arc"
         },
@@ -2226,7 +2574,10 @@
           "type": "coilgun_mk3",
           "name": "Coilgun Battery Mk3",
           "slot": "weapon_6",
-          "mount_position": {"x": 0.50, "side": "ventral"},
+          "mount_position": {
+            "x": 0.5,
+            "side": "ventral"
+          },
           "facing": "broadside",
           "notes": "Mid ventral turret, 180 degree arc"
         },
@@ -2234,7 +2585,10 @@
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_0",
-          "mount_position": {"x": 0.62, "side": "dorsal"},
+          "mount_position": {
+            "x": 0.62,
+            "side": "dorsal"
+          },
           "facing": "rear",
           "notes": "Aft dorsal PD"
         },
@@ -2242,7 +2596,10 @@
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_1",
-          "mount_position": {"x": 0.62, "side": "ventral"},
+          "mount_position": {
+            "x": 0.62,
+            "side": "ventral"
+          },
           "facing": "rear",
           "notes": "Aft ventral PD"
         },
@@ -2250,7 +2607,10 @@
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_2",
-          "mount_position": {"x": 0.38, "side": "port"},
+          "mount_position": {
+            "x": 0.38,
+            "side": "port"
+          },
           "facing": "broadside",
           "notes": "Midship port PD"
         },
@@ -2258,7 +2618,10 @@
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_3",
-          "mount_position": {"x": 0.38, "side": "starboard"},
+          "mount_position": {
+            "x": 0.38,
+            "side": "starboard"
+          },
           "facing": "broadside",
           "notes": "Midship starboard PD"
         }
@@ -2344,7 +2707,7 @@
           "lever_arm_m": 123.8,
           "lateral_force_mn": 1.022,
           "torque_mn_m": 126.47,
-          "angular_accel_deg_s2": 0.130,
+          "angular_accel_deg_s2": 0.13,
           "time_to_rotate_45_deg_s": 37.2,
           "time_to_rotate_90_deg_s": 52.6,
           "time_to_rotate_180_deg_s": 74.4,
@@ -2370,6 +2733,280 @@
         }
       },
       "design_notes": "Siege variant replaces standard spinal coiler with heavy siege coiler. Trades 10% acceleration for +407% alpha strike damage (21.75 GJ salvo vs 4.29 GJ single shot). Slower projectiles (4.7 km/s vs 9.9 km/s) give targets more evasion time but impacts are devastating. Best used for breaking defensive positions and punishing slow capital ships."
+    },
+    "cruiser_torpedo": {
+      "hull": {
+        "type": "cruiser",
+        "mass_tons": 1000,
+        "crew": 60,
+        "length_m": 175,
+        "structural_integrity": 20,
+        "hardpoints": {
+          "nose": 2,
+          "hull": 3,
+          "total": 5
+        }
+      },
+      "role": "Torpedo cruiser. No guns: it closes under armor and delivers a saturation salvo. 4 launchers fire 8 torpedoes per 30s decision - enough to overwhelm a dreadnought's point defense and land the hits that kill it in one coordinated strike.",
+      "performance": {
+        "combat_acceleration_g": 1.5,
+        "combat_acceleration_ms2": 14.71,
+        "delta_v_kps": 500.0,
+        "max_wet_mass_tons": 3980.0,
+        "max_dry_mass_tons": 3790.0
+      },
+      "mass_breakdown": {
+        "hull": 1000,
+        "weapons": 240,
+        "ammunition": 172.8,
+        "thermal_systems": 158,
+        "crew_and_misc": 140,
+        "reactor": 613,
+        "armor": 1467.2,
+        "propellant": 189.0,
+        "total_dry": 3790.0,
+        "total_wet": 3980.0,
+        "attitude_control": 25
+      },
+      "propulsion": {
+        "drive": {
+          "name": "Protium Converter Torch x6",
+          "thrust_mn": 58.56,
+          "exhaust_velocity_kps": 10256,
+          "efficiency": 0.98,
+          "required_reactor": "Inertial_Confinement_Fusion",
+          "propellant": "Hydrogen"
+        },
+        "reactor": {
+          "name": "Inertial Confinement Fusion Reactor VII",
+          "output_gw": 306430,
+          "mass_tons": 613,
+          "efficiency": 0.999,
+          "requires_exotics": true
+        }
+      },
+      "modules": {
+        "bridge": {
+          "name": "Flag Bridge",
+          "position": {
+            "x": 0.28,
+            "side": "dorsal"
+          },
+          "crew_stations": 12,
+          "notes": "Can serve as squadron command"
+        },
+        "sensor_array": {
+          "name": "Heavy Combat Array",
+          "position": {
+            "x": 0.28,
+            "side": "dorsal"
+          },
+          "type": "active_passive",
+          "range_km": 6000,
+          "notes": "Extended range targeting sensors"
+        },
+        "living_quarters": {
+          "name": "Crew Habitation Deck",
+          "position": {
+            "x": 0.5,
+            "side": "centerline"
+          },
+          "capacity": 60,
+          "notes": "Multi-deck crew section"
+        },
+        "magazines": [
+          {
+            "name": "Spinal Magazine",
+            "position": {
+              "x": 0.1,
+              "side": "centerline"
+            },
+            "associated_weapon": "weapon_0",
+            "capacity_rounds": 450,
+            "notes": "Feeds spinal coiler"
+          },
+          {
+            "name": "Port Turret Magazine",
+            "position": {
+              "x": 0.35,
+              "side": "port"
+            },
+            "associated_weapon": "weapon_1",
+            "capacity_rounds": 1800,
+            "notes": "Feeds port coilgun turret"
+          },
+          {
+            "name": "Starboard Turret Magazine",
+            "position": {
+              "x": 0.35,
+              "side": "starboard"
+            },
+            "associated_weapon": "weapon_2",
+            "capacity_rounds": 1800,
+            "notes": "Feeds starboard coilgun turret"
+          }
+        ],
+        "heatsinks": [
+          {
+            "name": "Primary Heatsink Array",
+            "position": {
+              "x": 0.72,
+              "side": "port"
+            },
+            "mass_tons": 64,
+            "capacity_gj": 262,
+            "notes": "Port aft bank"
+          },
+          {
+            "name": "Secondary Heatsink Array",
+            "position": {
+              "x": 0.72,
+              "side": "starboard"
+            },
+            "mass_tons": 64,
+            "capacity_gj": 263,
+            "notes": "Starboard aft bank"
+          }
+        ]
+      },
+      "weapons": [
+        {
+          "type": "torpedo_launcher",
+          "slot": "weapon_0",
+          "magazine": 12
+        },
+        {
+          "type": "torpedo_launcher",
+          "slot": "weapon_1",
+          "magazine": 12
+        },
+        {
+          "type": "torpedo_launcher",
+          "slot": "weapon_2",
+          "magazine": 12
+        },
+        {
+          "type": "torpedo_launcher",
+          "slot": "weapon_3",
+          "magazine": 12
+        },
+        {
+          "type": "pd_laser",
+          "slot": "pd_0"
+        },
+        {
+          "type": "pd_laser",
+          "slot": "pd_1"
+        },
+        {
+          "type": "pd_laser",
+          "slot": "pd_2"
+        },
+        {
+          "type": "pd_laser",
+          "slot": "pd_3"
+        }
+      ],
+      "weapons_summary": "4x Trident torpedo launcher (48 rounds), 4x point defense laser",
+      "thermal": {
+        "heatsink": {
+          "name": "Lithium Heat Sink",
+          "mass_tons": 128,
+          "capacity_gj": 525
+        },
+        "radiator": {
+          "name": "Lithium Spray Radiator",
+          "mass_tons": 10,
+          "dissipation_kw_per_kg": 13
+        },
+        "battery": {
+          "name": "Superconducting Coil Battery",
+          "mass_tons": 20,
+          "capacity_gj": 160,
+          "recharge_rate_gj_s": 0.075
+        }
+      },
+      "armor": {
+        "type": "Adamantane",
+        "properties": {
+          "density": 1800,
+          "baryonic_half_cm": 115.8,
+          "chip_resist": 0.75,
+          "kinetics_resist": 0.5,
+          "heat_of_vaporization_mj_kg": 59.534
+        },
+        "total_mass_tons": 1467.2,
+        "total_surface_m2": 998.0,
+        "distribution": {
+          "mass_percent": {
+            "nose": 50.0,
+            "lateral": 40.0,
+            "tail": 10.0
+          },
+          "area_percent": {
+            "nose": 15.0,
+            "lateral": 70.0,
+            "tail": 15.0
+          }
+        },
+        "sections": {
+          "nose": {
+            "thickness_cm": 240.7,
+            "protection_percent": 80.1,
+            "hits_to_deplete": 111.0,
+            "area_m2": 150.0
+          },
+          "lateral": {
+            "thickness_cm": 41.3,
+            "protection_percent": 23.4,
+            "hits_to_deplete": 18.0,
+            "area_m2": 698.0
+          },
+          "tail": {
+            "thickness_cm": 48.2,
+            "protection_percent": 26.4,
+            "hits_to_deplete": 21.0,
+            "area_m2": 150.0
+          }
+        }
+      },
+      "attitude_control": {
+        "moment_of_inertia": {
+          "pitch_yaw_kg_m2": 10157291667,
+          "notes": "Elongated cylinder model, wet mass"
+        },
+        "thrust_vectoring": {
+          "description": "Main engine nozzle deflection (requires engines firing)",
+          "combat_deflection_deg": 1.0,
+          "max_deflection_deg": 3.0,
+          "lever_arm_m": 78.8,
+          "lateral_force_mn": 1.022,
+          "torque_mn_m": 80.48,
+          "angular_accel_deg_s2": 0.454,
+          "time_to_rotate_45_deg_s": 19.9,
+          "time_to_rotate_90_deg_s": 28.2,
+          "time_to_rotate_180_deg_s": 39.8,
+          "max_angular_velocity_deg_s": 6.39,
+          "forward_thrust_efficiency": 0.99985,
+          "delta_v_cost": {
+            "rotate_90_deg_kps": 0.414,
+            "rotate_180_deg_kps": 0.586,
+            "propellant_90_deg_kg": 160.8,
+            "propellant_180_deg_kg": 227.4
+          }
+        },
+        "rcs": {
+          "description": "Reaction Control System (works with engines off)",
+          "module_name": "VectorThrusters (as RCS)",
+          "mass_tons": 20,
+          "torque_nm": 1500000,
+          "angular_accel_deg_s2": 0.0085,
+          "time_to_rotate_45_deg_s": 145.9,
+          "time_to_rotate_90_deg_s": 206.3,
+          "time_to_rotate_180_deg_s": 291.7,
+          "max_angular_velocity_deg_s": 0.87
+        }
+      }
     }
   },
   "attitude_control_systems": {

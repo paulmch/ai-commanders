@@ -382,3 +382,62 @@ class TestTorpedoCommandAndControl:
         assert "COORDINATED SALVO" in rendered
         assert "2 torpedo(es)" in rendered
         assert "OCS Leviathan" in rendered
+
+
+class TestToolSurfaceMatchesArmament:
+    """Captains must only be offered controls for weapons they actually mount."""
+
+    def _fleet(self):
+        with open("data/fleet_ships.json") as f:
+            return json.load(f)
+
+    def _tools_for(self, ship_type):
+        from unittest.mock import Mock
+
+        from src.llm.captain import LLMCaptain, LLMCaptainConfig
+
+        captain = LLMCaptain(
+            LLMCaptainConfig(name="C", ship_name="S", ship_type=ship_type,
+                             fleet_data=self._fleet()),
+            client=Mock(),
+        )
+        return {t["function"]["name"]: t for t in captain.tools}
+
+    def test_gunless_hulls_get_no_fire_control(self):
+        """
+        Regression: every captain was handed set_weapons_order with
+        spinal_mode/turret_mode regardless of armament. A corvette carries
+        neither, so its captain spent its weapon order on guns it did not have
+        and never reached for launch_torpedo.
+        """
+        for ship_type in ("corvette", "cruiser_torpedo"):
+            tools = self._tools_for(ship_type)
+            assert "set_weapons_order" not in tools, ship_type
+            assert "launch_torpedo" in tools, ship_type
+
+    def test_gun_hulls_get_fire_control_but_no_torpedoes(self):
+        tools = self._tools_for("destroyer")
+        assert "set_weapons_order" in tools
+        assert "launch_torpedo" not in tools
+
+    def test_every_advertised_mode_matches_a_weapon_group(self):
+        """
+        The executor resolves orders by weapon-group key, so a property named
+        'coilgun_mode' against a 'coilguns' group silently drops every turret
+        order - the exact defect that made turret fire a no-op.
+        """
+        from src.llm.tools import build_weapon_tool_for_ship, get_weapon_groups_for_ship
+
+        fleet = self._fleet()
+        for ship_type in ("destroyer", "cruiser", "battleship", "dreadnought"):
+            groups = set(get_weapon_groups_for_ship(ship_type, fleet))
+            if not groups:
+                continue
+            props = build_weapon_tool_for_ship(
+                ship_type, fleet
+            )["function"]["parameters"]["properties"]
+            modes = {k[: -len("_mode")] for k in props if k.endswith("_mode")}
+            assert modes == groups, (
+                f"{ship_type}: advertised {sorted(modes)} but weapon groups are "
+                f"{sorted(groups)} - orders for the mismatched groups are dropped"
+            )

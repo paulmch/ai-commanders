@@ -411,6 +411,9 @@ def build_weapon_tool_for_ship(ship_type: str, fleet_data: Dict[str, Any]) -> Di
     groups = get_weapon_groups_for_ship(ship_type, fleet_data)
     weapon_types = fleet_data.get("weapon_types", {})
 
+    # Property names MUST be exactly f"{group_key}_mode" etc. The executor looks
+    # orders up by weapon-group key, so a singular "coilgun_mode" against a
+    # "coilguns" group silently drops every turret order.
     properties: Dict[str, Any] = {}
     description_parts = ["Set fire control orders for weapons."]
 
@@ -462,16 +465,16 @@ def build_weapon_tool_for_ship(ship_type: str, fleet_data: Dict[str, Any]) -> Di
         rng = heavy_spec.get("range_km", 600)
         count = len(groups["heavy_coilguns"])
 
-        properties["heavy_coilgun_mode"] = {
+        properties["heavy_coilguns_mode"] = {
             "type": "string",
             "enum": ["FIRE_IMMEDIATE", "FIRE_WHEN_OPTIMAL", "FIRE_AT_RANGE", "HOLD_FIRE"],
             "description": f"Heavy coilguns x{count} ({vel} km/s, {dmg:.1f} GJ each, {rng}km range, turreted 180° arc)"
         }
-        properties["heavy_coilgun_min_probability"] = {
+        properties["heavy_coilguns_min_probability"] = {
             "type": "number", "minimum": 0.1, "maximum": 0.9,
             "description": "For heavy coilgun FIRE_WHEN_OPTIMAL: minimum hit probability (default 0.3)"
         }
-        properties["heavy_coilgun_max_range_km"] = {
+        properties["heavy_coilguns_max_range_km"] = {
             "type": "number", "minimum": 50, "maximum": rng,
             "description": f"For heavy coilgun FIRE_AT_RANGE: maximum range (default {min(400, rng)})"
         }
@@ -485,16 +488,16 @@ def build_weapon_tool_for_ship(ship_type: str, fleet_data: Dict[str, Any]) -> Di
         rng = coil_spec.get("range_km", 500)
         count = len(groups["coilguns"])
 
-        properties["coilgun_mode"] = {
+        properties["coilguns_mode"] = {
             "type": "string",
             "enum": ["FIRE_IMMEDIATE", "FIRE_WHEN_OPTIMAL", "FIRE_AT_RANGE", "HOLD_FIRE"],
             "description": f"Coilguns x{count} ({vel} km/s, {dmg:.2f} GJ each, {rng}km range, turreted 180° arc)"
         }
-        properties["coilgun_min_probability"] = {
+        properties["coilguns_min_probability"] = {
             "type": "number", "minimum": 0.1, "maximum": 0.9,
             "description": "For coilgun FIRE_WHEN_OPTIMAL: minimum hit probability (default 0.3)"
         }
-        properties["coilgun_max_range_km"] = {
+        properties["coilguns_max_range_km"] = {
             "type": "number", "minimum": 50, "maximum": rng,
             "description": f"For coilgun FIRE_AT_RANGE: maximum range (default {min(300, rng)})"
         }
@@ -515,13 +518,22 @@ def build_weapon_tool_for_ship(ship_type: str, fleet_data: Dict[str, Any]) -> Di
 
 
 def get_captain_tools_for_ship(ship_type: str, fleet_data: Dict[str, Any], has_torpedoes: bool = False) -> List[Dict[str, Any]]:
-    """Get tools appropriate for a specific ship type."""
+    """
+    Tools for the weapons this hull actually mounts.
+
+    The generic get_captain_tools() advertises set_weapons_order with
+    spinal_mode/turret_mode to every captain regardless of armament. A corvette
+    carries neither - only torpedoes and point defense - so its captain spent its
+    weapon order on guns it did not have and never reached for launch_torpedo.
+    """
     # Start with base tools but EXCLUDE the hardcoded set_weapons_order
     tools = [t for t in CAPTAIN_TOOLS_BASE if t["function"]["name"] != "set_weapons_order"]
 
-    # Add dynamic weapon tool
-    weapon_tool = build_weapon_tool_for_ship(ship_type, fleet_data)
-    tools.insert(1, weapon_tool)  # Insert after set_maneuver
+    # Only offer fire control if the ship has gun groups to control. A hull with
+    # no guns must not be handed an empty weapons tool to fill in.
+    groups = get_weapon_groups_for_ship(ship_type, fleet_data)
+    if groups:
+        tools.insert(1, build_weapon_tool_for_ship(ship_type, fleet_data))
 
     if has_torpedoes:
         tools.append(TORPEDO_TOOL)
