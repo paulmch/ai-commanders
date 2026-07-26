@@ -217,6 +217,7 @@ PROPULSION:
 
 WEAPONS:
 {weapons_section}
+{torpedo_block}
 
 DEFENSE - ARMOR IS ASPECT-DEPENDENT (this is the single biggest survivability lever):
 {armor_aspect_block}
@@ -293,6 +294,76 @@ def armor_from_fleet_data(ship_type: str, fleet_data: Dict[str, Any]) -> Dict[st
         mass = total_mass_kg * mass_pct.get(facing, 0) / 100.0
         out[facing] = (mass / (density * area) * 100.0) if area and density else 0.0
     return out
+
+
+def _torpedo_capability_block(ship_type: str, fleet_data: Dict[str, Any],
+                             decision_interval_s: float = 30.0) -> str:
+    """
+    Static torpedo capability summary for a ship that mounts launchers.
+
+    Returns "" for hulls without torpedoes so gun ships are not told about a
+    weapon they do not have.
+    """
+    spec = (fleet_data or {}).get("ships", {}).get(ship_type, {})
+    launchers = [w for w in spec.get("weapons", [])
+                 if (w.get("type") or "").startswith("torpedo")]
+    if not launchers:
+        return ""
+
+    wt = (fleet_data or {}).get("weapon_types", {}).get("torpedo_launcher", {})
+    cooldown = wt.get("cooldown_s", 12)
+    magazine = wt.get("magazine", 8)
+    dv = wt.get("delta_v_kps", 14.0)
+    accel = wt.get("acceleration_g", 12.0)
+    pen = wt.get("penetrator_mass_kg", 250)
+    rng = wt.get("range_km", 2500)
+    per_decision = max(1, int(decision_interval_s // cooldown)) * len(launchers)
+
+    def ke(v_kps):
+        return 0.5 * pen * (v_kps * 1000) ** 2 / 1e9
+
+    return f"""
+TORPEDOES ({len(launchers)}x {wt.get('name', 'launcher')}) - your decisive weapon:
+- {pen:.0f} kg kinetic penetrator, {dv} km/s own delta-v, {accel}g, {rng} km range
+- Magazine: {magazine} rounds. Reload {cooldown}s -> you can launch {per_decision} per decision.
+- DAMAGE SCALES WITH THE SQUARE OF CLOSING SPEED. The torpedo's {dv} km/s is added to
+  whatever closure you have already built, so the same round delivers:
+      ~{ke(dv):.0f} GJ against a stationary target
+      ~{ke(dv + 6):.0f} GJ closing at 6 km/s combined
+      ~{ke(dv + 12):.0f} GJ in a hard head-on pass
+  For comparison a spinal coilgun round is ~4.3 GJ. A fast head-on launch is worth
+  roughly 20 gun hits; a torpedo lobbed at a receding target is worth less than one.
+- Enemy point defense engages torpedoes inside ~250 km and needs several seconds of
+  dwell per kill. Closing fast gives their PD fewer shots: roughly half your torpedoes
+  survive at 26 km/s closure versus under a third at 8 km/s.
+- Salvos are harder to stop than single launches - PD must split dwell between rounds.
+"""
+
+
+def format_torpedo_threats(threats: List[Dict[str, Any]]) -> str:
+    """
+    Render inbound torpedoes with enough detail to act on.
+
+    The simulation tracked torpedo_threats all along but nothing ever rendered
+    them, so captains were never told ordnance was inbound at all.
+    """
+    if not threats:
+        return "INBOUND ORDNANCE: none detected"
+
+    lines = [f"*** INBOUND ORDNANCE: {len(threats)} TORPEDO(S) TRACKED ***"]
+    for t in threats:
+        eta = t.get("eta_seconds", 999)
+        eta_str = f"{eta:.0f}s" if eta < 900 else "no closure"
+        lines.append(
+            f"  - from {t.get('source', 'unknown')}: {t.get('distance_km', 0):.0f} km, "
+            f"closing {t.get('closing_kps', 0):.1f} km/s, IMPACT IN {eta_str}"
+        )
+    lines.append(
+        "  Kinetic penetrators - a hit is far more damaging than any gun round. "
+        "Your point defense engages them automatically inside its envelope; "
+        "EVADE and opening the range buy your PD more engagement time."
+    )
+    return "\n".join(lines)
 
 
 def build_ship_status_block(
@@ -383,7 +454,9 @@ def build_ship_capabilities_from_fleet(
     ) / 1000.0
 
     _armor = armor_from_fleet_data(ship_type, fleet_data)
+    _torpedoes = _torpedo_capability_block(ship_type, fleet_data)
     return SHIP_CAPABILITIES_TEMPLATE.format(
+        torpedo_block=_torpedoes,
         armor_aspect_block=_armor_aspect_block(
             _armor.get("nose", 0.0), _armor.get("lateral", 0.0), _armor.get("tail", 0.0)
         ),
@@ -564,6 +637,8 @@ YOUR CURRENT CONFIGURATION:
 
 {incoming_projectiles}
 
+{torpedo_threats}
+
 {recent_hits}
 
 {received_messages}
@@ -681,6 +756,7 @@ def build_ship_capabilities(
     damage_report = format_damage_report(damaged_modules or {})
 
     return SHIP_CAPABILITIES_DESTROYER.format(
+        torpedo_block="",
         armor_aspect_block=_armor_aspect_block(151.2, 26.0, 30.3),
         nose_cone_deg=NOSE_HIT_CONE_DEG,
         tail_cone_deg=TAIL_HIT_CONE_DEG,
@@ -1173,6 +1249,7 @@ def build_captain_prompt(
     )
 
     return CAPTAIN_SYSTEM_PROMPT.format(
+        torpedo_threats=format_torpedo_threats(tactical_status.get("torpedo_threats", [])),
         ship_status_block=ship_status_block,
         captain_name=captain_name,
         ship_name=ship_name,
@@ -1998,6 +2075,18 @@ def format_admiral_orders_for_captain(
             lines.append(f"\n  {priority_marker}[{order.priority}] {order.order_text}")
             if order.suggested_target:
                 lines.append(f"      >>> TARGET: {order.suggested_target}")
+            # Coordinated salvo: several ships launching together is how a fleet
+            # overwhelms point defense, so state it explicitly rather than
+            # leaving it buried in the order prose.
+            salvo = getattr(order, "torpedo_salvo", None)
+            if salvo:
+                tgt = (getattr(order, "torpedo_target", None)
+                       or order.suggested_target)
+                at = f" at {tgt}" if tgt else ""
+                lines.append(
+                    f"      >>> COORDINATED SALVO: launch {salvo} torpedo(es){at} "
+                    f"THIS CHECKPOINT, timed with the rest of the fleet. Do not hold."
+                )
     else:
         lines.append("\n!!! WARNING: NO ORDERS RECEIVED FOR YOUR SHIP !!!")
         lines.append("Your Admiral may have forgotten to issue you orders.")

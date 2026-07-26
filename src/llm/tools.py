@@ -255,10 +255,37 @@ TORPEDO_TOOL = {
     "type": "function",
     "function": {
         "name": "launch_torpedo",
-        "description": "Launch a torpedo at the enemy ship. Limited ammunition!",
+        "description": (
+            "Launch torpedoes at an enemy. Torpedoes are kinetic penetrators: they carry "
+            "14 km/s of their own delta-v at 12g, and impact energy scales with the SQUARE "
+            "of closing speed, so a head-on launch while you are closing fast hits vastly "
+            "harder than one lobbed at a receding target. "
+            "The launcher reloads every 12s, so you can fire at most 2 per 30s decision. "
+            "Magazine is limited - check YOUR SHIP status for rounds remaining. "
+            "Enemy point defense engages torpedoes inside 250km and needs several seconds "
+            "of dwell per kill, so faster closure means fewer PD shots get through."
+        ),
         "parameters": {
             "type": "object",
-            "properties": {},
+            "properties": {
+                "count": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 2,
+                    "description": (
+                        "How many torpedoes to launch this decision (1-2; the launcher "
+                        "reloads every 12s and a decision covers 30s). Salvos are harder "
+                        "for point defense to stop than single launches. Defaults to 1."
+                    ),
+                },
+                "target_id": {
+                    "type": "string",
+                    "description": (
+                        "Ship ID to target (e.g. 'beta_1'). Defaults to your primary target. "
+                        "Use this to split a salvo onto a different ship than your guns."
+                    ),
+                },
+            },
         }
     }
 }

@@ -217,3 +217,168 @@ class TestToolSchemaMatchesExecutor:
         heading = next(t for t in tools if t["function"]["name"] == "set_heading")
         schema_text = json.dumps(heading).lower()
         assert "world" in schema_text
+
+
+class TestPersonalityPromptShipClass:
+    """A captain must form its doctrine around the ship it actually commands."""
+
+    def test_personality_prompt_uses_the_real_ship_class(self):
+        """
+        Regression: build_personality_selection_prompt defaults ship_class to
+        "Destroyer" and captain.py never passed the real one, so every captain in
+        every battle believed it commanded a destroyer. In a corvette duel that
+        is badly wrong - a corvette carries torpedoes and point defense, no guns
+        - and captains reasoned about gunnery they did not have.
+        """
+        from unittest.mock import Mock
+
+        from src.llm.captain import LLMCaptain, LLMCaptainConfig
+        from src.llm.prompts import build_personality_selection_prompt
+
+        text = build_personality_selection_prompt(
+            400.0, model_name="X", ship_class="Corvette", enemy_ship_class="Corvette"
+        )
+        assert "Corvette" in text
+        assert "Destroyer" not in text
+
+        # And the captain must actually supply it rather than taking the default.
+        captain = LLMCaptain(
+            LLMCaptainConfig(name="C", ship_name="S", ship_type="corvette"),
+            client=Mock(),
+        )
+        assert captain.config.ship_type == "corvette"
+        assert hasattr(captain, "enemy_ship_class")
+
+
+class TestWeaponToolsMatchTheShip:
+    """A captain must be offered the weapons its hull actually mounts."""
+
+    def test_corvette_captain_is_offered_launch_torpedo(self):
+        """
+        Regression: LLMCaptainConfig.has_torpedoes defaulted to False and nothing
+        ever derived it from fleet data, so launch_torpedo was never offered to
+        any captain. A corvette's only weapon is the torpedo launcher, so a
+        corvette captain had no usable weapon at all - a corvette-vs-corvette
+        battle could not be won by either side.
+        """
+        import json
+        from unittest.mock import Mock
+
+        from src.llm.captain import LLMCaptain, LLMCaptainConfig, ship_has_torpedoes
+
+        with open("data/fleet_ships.json") as f:
+            fleet = json.load(f)
+
+        assert ship_has_torpedoes("corvette", fleet) is True
+        assert ship_has_torpedoes("destroyer", fleet) is False
+
+        captain = LLMCaptain(
+            LLMCaptainConfig(name="C", ship_name="S", ship_type="corvette", fleet_data=fleet),
+            client=Mock(),
+        )
+        names = [t["function"]["name"] for t in captain.tools]
+        assert "launch_torpedo" in names, (
+            "corvette captain cannot launch torpedoes - it has no other weapon"
+        )
+
+    def test_gun_ships_are_not_offered_torpedoes(self):
+        """The converse: a destroyer must not be handed a launcher it lacks."""
+        import json
+        from unittest.mock import Mock
+
+        from src.llm.captain import LLMCaptain, LLMCaptainConfig
+
+        with open("data/fleet_ships.json") as f:
+            fleet = json.load(f)
+
+        captain = LLMCaptain(
+            LLMCaptainConfig(name="C", ship_name="S", ship_type="destroyer", fleet_data=fleet),
+            client=Mock(),
+        )
+        names = [t["function"]["name"] for t in captain.tools]
+        assert "launch_torpedo" not in names
+
+
+class TestTorpedoCommandAndControl:
+    """Captains must be able to launch salvos, and must see inbound ordnance."""
+
+    def _fleet(self):
+        with open("data/fleet_ships.json") as f:
+            return json.load(f)
+
+    def test_corvette_doctrine_states_torpedo_statistics(self):
+        from src.llm.prompts import build_ship_capabilities_from_fleet
+
+        text = build_ship_capabilities_from_fleet(
+            ship_name="TIS Wasp", ship_type="corvette", fleet_data=self._fleet(),
+            hull_integrity=100, heat_percent=0, delta_v_remaining=500,
+            nose_armor=212, lateral_armor=36, tail_armor=42,
+            heatsink_capacity=525, radiators_extended=False,
+        )
+        assert "TORPEDOES" in text
+        for fact in ("Magazine", "delta-v", "SQUARE OF CLOSING SPEED", "point defense"):
+            assert fact in text, f"doctrine omits {fact!r}"
+
+    def test_gun_ships_are_not_told_about_torpedoes(self):
+        from src.llm.prompts import build_ship_capabilities_from_fleet
+
+        text = build_ship_capabilities_from_fleet(
+            ship_name="TIS Line", ship_type="destroyer", fleet_data=self._fleet(),
+            hull_integrity=100, heat_percent=0, delta_v_remaining=500,
+            nose_armor=151, lateral_armor=26, tail_armor=30,
+            heatsink_capacity=525, radiators_extended=False,
+        )
+        assert "TORPEDOES (" not in text
+
+    def test_inbound_ordnance_is_reported(self):
+        """
+        Regression: torpedo_threats was computed by the captain every checkpoint
+        and never rendered anywhere, so captains were never told ordnance was
+        inbound at all.
+        """
+        from src.llm.prompts import format_torpedo_threats
+
+        assert "none detected" in format_torpedo_threats([])
+
+        text = format_torpedo_threats([
+            {"distance_km": 180.0, "closing_kps": 22.4, "eta_seconds": 8.0,
+             "source": "HFS Sonnet5"},
+        ])
+        assert "INBOUND ORDNANCE" in text
+        assert "HFS Sonnet5" in text
+        assert "180 km" in text
+        assert "8s" in text
+
+    def test_launch_tool_exposes_salvo_and_target(self):
+        from src.llm.tools import get_captain_tools
+
+        tool = next(
+            t for t in get_captain_tools(has_torpedoes=True)
+            if t["function"]["name"] == "launch_torpedo"
+        )
+        props = tool["function"]["parameters"]["properties"]
+        assert "count" in props and "target_id" in props
+        assert props["count"]["maximum"] >= 2
+
+    def test_admiral_can_order_a_coordinated_salvo(self):
+        from src.llm.admiral import AdmiralOrder
+        from src.llm.admiral_tools import ADMIRAL_TOOLS
+        from src.llm.prompts import format_admiral_orders_for_captain
+
+        order_tool = next(
+            t for t in ADMIRAL_TOOLS if t["function"]["name"] == "issue_order"
+        )
+        props = order_tool["function"]["parameters"]["properties"]
+        assert "torpedo_salvo" in props and "torpedo_target" in props
+
+        rendered = format_admiral_orders_for_captain(
+            [AdmiralOrder(
+                target_ship_id="a1", target_ship_name="TIS Wasp",
+                order_text="Close and strike.", priority="CRITICAL",
+                torpedo_salvo=2, torpedo_target="OCS Leviathan",
+            )],
+            fleet_directive="Concentrate on the dreadnought.",
+        )
+        assert "COORDINATED SALVO" in rendered
+        assert "2 torpedo(es)" in rendered
+        assert "OCS Leviathan" in rendered

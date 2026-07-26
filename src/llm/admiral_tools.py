@@ -47,6 +47,29 @@ ADMIRAL_TOOLS = [
                     "suggested_target": {
                         "type": "string",
                         "description": "Optional: enemy ship name to focus on"
+                    },
+                    "torpedo_salvo": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 4,
+                        "description": (
+                            "Optional: order this ship to launch N torpedoes this "
+                            "checkpoint (0 = hold). Only torpedo-armed hulls can comply - "
+                            "a launcher reloads every 12s so 2 per decision is the usual "
+                            "ceiling. Use this to COORDINATE a simultaneous salvo across "
+                            "several ships: torpedo damage scales with the square of "
+                            "closing speed, and point defense must split its dwell time "
+                            "between rounds, so many torpedoes arriving together are far "
+                            "more likely to get through than the same number trickled in."
+                        )
+                    },
+                    "torpedo_target": {
+                        "type": "string",
+                        "description": (
+                            "Optional: enemy ship name or id the torpedo salvo should be "
+                            "aimed at, if different from suggested_target. Concentrating a "
+                            "fleet-wide salvo on one hull is how you overwhelm point defense."
+                        )
                     }
                 },
                 "required": ["ship_name", "order_text"]

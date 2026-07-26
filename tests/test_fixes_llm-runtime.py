@@ -237,7 +237,10 @@ class TestTorpedoDisclosure:
         cmd = captain._execute_tool(
             ToolCall(id="1", name="launch_torpedo", arguments={}), FakeSim(), "alpha"
         )
-        assert cmd["target_id"] == "prize"
+        # launch_torpedo now emits a salvo (a list of launch commands).
+        rounds = cmd if isinstance(cmd, list) else [cmd]
+        assert rounds, "no torpedo command emitted"
+        assert all(r["target_id"] == "prize" for r in rounds)
 
     def test_launch_torpedo_falls_back_when_primary_target_is_gone(self):
         captain = make_captain()
@@ -250,7 +253,8 @@ class TestTorpedoDisclosure:
         cmd = captain._execute_tool(
             ToolCall(id="1", name="launch_torpedo", arguments={}), FakeSim(), "alpha"
         )
-        assert cmd["target_id"] == "only"
+        rounds = cmd if isinstance(cmd, list) else [cmd]
+        assert rounds and all(r["target_id"] == "only" for r in rounds)
 
 
 # ---------------------------------------------------------------------------

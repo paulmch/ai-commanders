@@ -29,6 +29,8 @@ class AdmiralOrder:
     order_text: str  # Free-form text instruction
     priority: str = "NORMAL"  # CRITICAL, HIGH, NORMAL, LOW
     suggested_target: Optional[str] = None  # Enemy ship name to focus on
+    torpedo_salvo: Optional[int] = None  # Coordinated launch: rounds this checkpoint
+    torpedo_target: Optional[str] = None  # Enemy to concentrate the salvo on
 
 
 @dataclass
@@ -449,6 +451,8 @@ Be authentic to how you would command a fleet as {model_name}."""
                     order_text=args.get("order_text", "Continue as directed."),
                     priority=args.get("priority", "NORMAL"),
                     suggested_target=args.get("suggested_target"),
+                    torpedo_salvo=args.get("torpedo_salvo"),
+                    torpedo_target=args.get("torpedo_target"),
                 )
 
         # If no order was issued, create a default order
@@ -768,6 +772,8 @@ Be authentic to how you would command a fleet as {model_name}."""
                     order_text=args.get("order_text", ""),
                     priority=args.get("priority", "NORMAL"),
                     suggested_target=args.get("suggested_target"),
+                    torpedo_salvo=args.get("torpedo_salvo"),
+                    torpedo_target=args.get("torpedo_target"),
                 )
                 decision.fleet_orders.append(order)
 

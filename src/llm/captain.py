@@ -36,6 +36,15 @@ class LLMCaptainConfig:
     fleet_data: Optional[Dict[str, Any]] = None
 
 
+def ship_has_torpedoes(ship_type: str, fleet_data: Dict[str, Any]) -> bool:
+    """True if this ship class mounts a torpedo launcher, per the fleet data."""
+    spec = (fleet_data or {}).get("ships", {}).get(ship_type, {})
+    return any(
+        (w.get("type") or "").startswith("torpedo")
+        for w in spec.get("weapons", [])
+    )
+
+
 class LLMCaptain:
     """
     LLM-powered captain that makes strategic decisions via tools.
@@ -58,11 +67,20 @@ class LLMCaptain:
         """
         self.config = config
         self.client = client
+
+        # Derive torpedo availability from the fleet data. has_torpedoes defaults
+        # to False and nothing ever set it, so launch_torpedo was never offered to
+        # any captain. For a corvette - whose only weapon IS the torpedo launcher
+        # - that left the captain with no usable weapon at all.
+        if not config.has_torpedoes and config.fleet_data and config.ship_type:
+            config.has_torpedoes = ship_has_torpedoes(config.ship_type, config.fleet_data)
+
         self.tools = get_captain_tools(has_torpedoes=config.has_torpedoes)
 
         # State tracking
         self.decision_count = 0
         self.last_call_failed = False
+        self.enemy_ship_class: Optional[str] = None
         self.decision_history: List[Dict[str, Any]] = []
         self.pending_message: Optional[str] = None
         self.received_messages: List[CaptainMessage] = []
@@ -149,7 +167,18 @@ class LLMCaptain:
         # Capitalize nicely: claude-3.5-sonnet -> Claude-3.5-Sonnet
         model_name = "-".join(part.capitalize() for part in model_name.split("-"))
 
-        prompt = build_personality_selection_prompt(distance_km, model_name=model_name)
+        # Pass the ACTUAL ship class. build_personality_selection_prompt defaults
+        # to "Destroyer", and this call never overrode it - so every captain in
+        # every battle formed its doctrine believing it commanded a destroyer.
+        # In a corvette duel that is badly wrong: a corvette is a torpedo boat
+        # with no guns at all, and the captains reasoned about gunnery.
+        ship_class = (self.config.ship_type or "destroyer").replace("_", " ").title()
+        prompt = build_personality_selection_prompt(
+            distance_km,
+            model_name=model_name,
+            ship_class=ship_class,
+            enemy_ship_class=(self.enemy_ship_class or ship_class),
+        )
 
         messages = [{"role": "user", "content": prompt}]
 
@@ -397,7 +426,11 @@ class LLMCaptain:
             cmd = self._execute_tool(tc, simulation, ship_id)
             executed_tool_calls.append(tc)
             if cmd is not None:
-                commands.append(cmd)
+                # A tool may emit a salvo (e.g. launch_torpedo count=2).
+                if isinstance(cmd, list):
+                    commands.extend(c for c in cmd if c is not None)
+                else:
+                    commands.append(cmd)
 
         # Track decision
         self.decision_count += 1
@@ -622,6 +655,39 @@ class LLMCaptain:
     def clear_recent_hits(self) -> None:
         """Clear recent hits at start of each checkpoint."""
         self.recent_hits = []
+
+    def _max_torpedo_salvo(self, ship_id: str, simulation: Any) -> int:
+        """
+        How many torpedoes can physically be launched before the next decision.
+
+        Bounded by the reload interval over the decision window and by rounds
+        remaining in the magazine.
+        """
+        # Tolerate simulation doubles that do not implement get_ship: fall back to
+        # the reload-derived ceiling rather than refusing to launch.
+        ship = None
+        if simulation is not None and hasattr(simulation, "get_ship"):
+            try:
+                ship = simulation.get_ship(ship_id)
+            except Exception:
+                ship = None
+        launcher = getattr(ship, "torpedo_launcher", None) if ship else None
+        if launcher is None:
+            interval = getattr(simulation, "decision_interval", 30.0) or 30.0
+            return max(1, int(interval // 12.0))
+
+        interval = getattr(simulation, "decision_interval", 30.0) or 30.0
+        cooldown = getattr(launcher, "cooldown_seconds", 12.0) or 12.0
+        # Scale with the number of launchers the hull mounts. ShipCombatState
+        # currently exposes a single `torpedo_launcher`, so this is 1 today - but
+        # the ceiling is derived rather than hardcoded so multi-launcher hulls
+        # get their full salvo automatically once the model supports them.
+        launcher_count = getattr(ship, "torpedo_launcher_count", None) or 1
+        by_cooldown = max(1, int(interval // cooldown)) * int(launcher_count)
+        by_magazine = getattr(launcher, "current_magazine", None)
+        if by_magazine is None:
+            return by_cooldown
+        return max(0, min(by_cooldown, int(by_magazine)))
 
     def _record_tool_error(self, message: str) -> None:
         """
@@ -1493,12 +1559,47 @@ class LLMCaptain:
             if target_id is None and self.primary_target_id:
                 if any(e.ship_id == self.primary_target_id for e in enemies):
                     target_id = self.primary_target_id
+            # Explicit target_id from the schema wins over the legacy target_name.
+            requested_id = args.get("target_id")
+            if requested_id:
+                if any(e.ship_id == requested_id for e in enemies):
+                    target_id = requested_id
+                else:
+                    valid = ", ".join(e.ship_id for e in enemies)
+                    self._record_tool_error(
+                        f"launch_torpedo: unknown target_id '{requested_id}'. Valid: {valid}"
+                    )
+            if target_id is None and self.primary_target_id:
+                if any(e.ship_id == self.primary_target_id for e in enemies):
+                    target_id = self.primary_target_id
             if target_id is None:
                 target_id = enemies[0].ship_id
-            return {
-                "type": "launch_torpedo",
-                "target_id": target_id,
-            }
+
+            # Salvo size. The launcher reloads every 12s and a decision covers
+            # 30s, so 2 is the physical ceiling; the simulation still enforces
+            # cooldown and magazine, this just stops the captain asking for more
+            # than can possibly be fired.
+            try:
+                count = int(args.get("count", 1))
+            except (TypeError, ValueError):
+                count = 1
+            max_salvo = self._max_torpedo_salvo(ship_id, simulation)
+            if count > max_salvo:
+                self._record_tool_error(
+                    f"launch_torpedo: requested {count}, launcher can fire {max_salvo} "
+                    f"this decision (12s reload, magazine limits)"
+                )
+            count = max(1, min(count, max_salvo)) if max_salvo > 0 else 0
+            if count == 0:
+                self._record_tool_error(
+                    "launch_torpedo: magazine empty or launcher still reloading"
+                )
+                return None
+
+            return [
+                {"type": "launch_torpedo", "target_id": target_id}
+                for _ in range(count)
+            ]
 
         elif name == "set_radiators":
             extend = args.get("extend", False)
