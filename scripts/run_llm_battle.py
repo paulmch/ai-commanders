@@ -23,6 +23,18 @@ from src.llm.battle_runner import LLMBattleRunner, BattleConfig, load_fleet_data
 from src.llm.fleet_config import BattleFleetConfig, _get_short_model_name
 
 
+def _available_ship_types() -> list:
+    """Ship classes the simulation can actually build, straight from fleet data."""
+    try:
+        import json
+        from pathlib import Path as _Path
+        data = json.loads((_Path(__file__).parent.parent / "data" / "fleet_ships.json").read_text())
+        return sorted(data.get("ships", {}).keys())
+    except Exception:
+        return ["corvette", "frigate", "destroyer", "cruiser",
+                "battlecruiser", "battleship", "dreadnought"]
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Run an LLM-controlled space battle",
@@ -85,16 +97,19 @@ Examples:
         help="Personality for beta captain",
     )
 
-    # Ship types
+    # Ship types. Derived from the fleet data rather than hardcoded: the literal
+    # list had drifted and omitted "corvette", so the only torpedo boat in the
+    # game could not be selected from the CLI at all.
+    ship_types = _available_ship_types()
     parser.add_argument(
         "--alpha-ship-type",
-        choices=["frigate", "destroyer", "cruiser", "battlecruiser", "battleship", "dreadnought"],
+        choices=ship_types,
         default="destroyer",
         help="Ship class for alpha (default: destroyer)",
     )
     parser.add_argument(
         "--beta-ship-type",
-        choices=["frigate", "destroyer", "cruiser", "battlecruiser", "battleship", "dreadnought"],
+        choices=ship_types,
         default="destroyer",
         help="Ship class for beta (default: destroyer)",
     )

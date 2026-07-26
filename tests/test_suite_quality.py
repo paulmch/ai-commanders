@@ -122,3 +122,21 @@ def test_recording_filenames_are_filesystem_safe():
         illegal = set(name) & set(':*?"<>|/\\')
         assert not illegal, f"{name!r} contains filesystem-hostile characters {illegal}"
         assert name.endswith(".json")
+
+
+def test_captain_title_is_not_doubled():
+    """
+    Regression: format_for_display() prepended "Captain " to a sender_name that
+    is already generated as "Captain <Model>", producing "Captain Captain Kimi"
+    in battle logs, recordings and anything quoted into the README.
+    """
+    from src.llm.communication import CaptainMessage, MessageType
+
+    for name in ("Captain Kimi", "Kimi"):
+        msg = CaptainMessage(
+            sender_id="a", sender_name=name, ship_name="TIS Kimi",
+            content="Hold still.", message_type=MessageType.NORMAL, timestamp=0.0,
+        )
+        rendered = msg.format_for_display()
+        assert "Captain Captain" not in rendered, rendered
+        assert rendered.count("Captain") == 1, rendered

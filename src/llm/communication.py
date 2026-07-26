@@ -36,37 +36,49 @@ class CaptainMessage:
     message_type: MessageType = MessageType.NORMAL
     recipient_id: Optional[str] = None  # For directed messages
 
+    @property
+    def _titled_sender(self) -> str:
+        """
+        Sender name with exactly one "Captain " prefix.
+
+        Captain names are auto-generated as "Captain <Model>", so blindly
+        prepending the title rendered "Captain Captain Kimi" in battle logs and
+        recordings.
+        """
+        name = self.sender_name or ""
+        return name if name.startswith("Captain ") else f"Captain {name}"
+
     def format_for_display(self) -> str:
         """Format message for console output."""
         if self.message_type == MessageType.SURRENDER:
-            return f"[SURRENDER] Captain {self.sender_name} of {self.ship_name} surrenders!"
+            return f"[SURRENDER] {self._titled_sender} of {self.ship_name} surrenders!"
         elif self.message_type == MessageType.PROPOSE_DRAW:
-            return f"[DRAW PROPOSAL] Captain {self.sender_name} proposes a mutual draw."
+            return f"[DRAW PROPOSAL] {self._titled_sender} proposes a mutual draw."
         elif self.message_type == MessageType.RETRACT_DRAW:
-            return f"[DRAW RETRACTED] Captain {self.sender_name} retracts their draw proposal."
+            return f"[DRAW RETRACTED] {self._titled_sender} retracts their draw proposal."
         elif self.message_type == MessageType.ACCEPT_DRAW:
-            return f"[DRAW ACCEPTED] Captain {self.sender_name} accepts the draw."
+            return f"[DRAW ACCEPTED] {self._titled_sender} accepts the draw."
         elif self.message_type == MessageType.ADMIRAL_TO_ADMIRAL:
             return f"[ADMIRAL] {self.sender_name}: \"{self.content}\""
         elif self.message_type == MessageType.BROADCAST:
             return f"[BROADCAST] {self.sender_name} ({self.ship_name}): \"{self.content}\""
         else:
-            return f"[{self.ship_name}] Captain {self.sender_name}: \"{self.content}\""
+            return f"[{self.ship_name}] {self._titled_sender}: \"{self.content}\""
 
     def format_for_llm(self) -> str:
         """Format message for inclusion in LLM prompt."""
         if self.message_type == MessageType.SURRENDER:
-            return f"ENEMY SURRENDERED: Captain {self.sender_name} has surrendered."
+            return f"ENEMY SURRENDERED: {self._titled_sender} has surrendered."
         elif self.message_type == MessageType.PROPOSE_DRAW:
-            return f"DRAW PROPOSED: Captain {self.sender_name} proposes a mutual draw. Use propose_draw tool to accept."
+            return f"DRAW PROPOSED: {self._titled_sender} proposes a mutual draw. Use propose_draw tool to accept."
         elif self.message_type == MessageType.RETRACT_DRAW:
-            return f"DRAW RETRACTED: Captain {self.sender_name} has retracted their draw proposal. Battle continues."
+            return f"DRAW RETRACTED: {self._titled_sender} has retracted their draw proposal. Battle continues."
         elif self.message_type == MessageType.ADMIRAL_TO_ADMIRAL:
             return f"[ENEMY ADMIRAL] {self.sender_name}: \"{self.content}\""
         elif self.message_type == MessageType.BROADCAST:
             return f"[ALL SHIPS] {self.sender_name}: \"{self.content}\""
         else:
-            return f"Captain {self.sender_name}: \"{self.content}\""
+            return f"{self._titled_sender}: \"{self.content}\""
 
 
 @dataclass

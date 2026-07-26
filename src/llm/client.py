@@ -189,7 +189,7 @@ class CaptainClient:
         model: str = DEFAULT_MODEL,
         api_key: Optional[str] = None,
         temperature: Optional[float] = 0.7,
-        max_tokens: int = 4096,
+        max_tokens: int = 32768,
         timeout: float = 120.0,
         session_id: Optional[str] = None,
     ):
@@ -202,7 +202,9 @@ class CaptainClient:
             temperature: Sampling temperature, or None to omit the parameter
                 entirely (reasoning models reject an explicit temperature)
             max_tokens: Maximum response tokens. Needs to cover reasoning plus a
-                full set of tool calls - 1024 truncated multi-tool turns.
+                full set of tool calls. 1024 truncated multi-tool turns; 4096 still
+                truncated verbose reasoning models (Kimi K3 lost a whole turn to it
+                mid-tool-call in testing), so the default is 32768 - generous headroom for verbose reasoning models.
             timeout: Per-request timeout in seconds. Reasoning models routinely
                 take longer than the old 60s ceiling on a hard tactical turn.
             session_id: Sticky-routing key. OpenRouter otherwise derives one by

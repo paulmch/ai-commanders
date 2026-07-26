@@ -595,6 +595,30 @@ Grok proposed a "ceasefire" while secretly closing distance. Claude-Haiku wasn't
 >
 > We're past the negotiation phase. **Spinal round incoming.**"
 
+### Kimi K3's Running Ledger (2026-07-26)
+
+Kimi K3 vs Claude Sonnet 5, destroyer duel. Kimi won on tactical score (91.3 vs 68.7)
+with a 50% hit rate against Sonnet's 14% - it held fire for good geometry while Sonnet
+opened up at 382 km into 20% shots. It also kept a running actuarial commentary, quoting
+real numbers off its own scoreboard:
+
+> **Kimi K3:** "Well met, beta. The math as I read it: your survival odds are roughly one
+> in three and decaying with every kilometer I close. I offer surrender exactly once, and
+> I offer it warmly - now. Otherwise, let us write something beautiful together."
+
+> **Sonnet 5:** "Kind offer, but I think I'll see how the geometry plays out first. Closing."
+
+> **Kimi K3:** "Beta, your separation vector is 4.06 km/s of pure arithmetic - and it
+> solves for me. I'm turning back into you now. Your survival estimate: still one in
+> three, and the denominator is patient."
+
+> **Kimi K3:** "Ledger update, beta: 37.3 to 10.4, and you're spending 3.17 km/s of
+> delta-v just to leave. Your survival odds now read one in four - and that spinal round
+> you mailed to my tail? I've already priced it in. The offer of surrender remains open,
+> once."
+
+Sonnet sent one message the entire battle.
+
 ### The Best Trash Talk Award
 
 Goes to Grok for this masterpiece of space absurdism:
