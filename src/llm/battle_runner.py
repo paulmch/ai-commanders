@@ -2325,8 +2325,13 @@ class LLMBattleRunner:
                 "position": (torp.position.x, torp.position.y, torp.position.z),
                 "velocity": (torp.velocity.x, torp.velocity.y, torp.velocity.z),
                 "source_ship_id": torp_flight.source_ship_id,
-                "target_ship_id": getattr(torp, 'target_ship_id', None),
-                "dv_remaining_kps": torp.delta_v_remaining_kps,
+                # Torpedo exposes `target_id` and `remaining_delta_v_kps`. The
+                # transposed name crashed the entire battle the moment a torpedo
+                # was launched with --trace on, and the wrong target field would
+                # have recorded None for every torpedo.
+                "target_ship_id": torp.target_id,
+                "dv_remaining_kps": torp.remaining_delta_v_kps,
+                "fuel_exhausted": torp.fuel_exhausted,
                 "heat_absorbed_j": torp_flight.heat_absorbed_j,
                 "is_disabled": torp_flight.is_disabled,
             })

@@ -300,3 +300,32 @@ class TestMultiLauncherHulls:
                     return ship
 
             assert captain._max_torpedo_salvo("s", Sim()) == expected, ship_type
+
+
+class TestTraceRecordingWithTorpedoes:
+    """Trace recording must not crash the battle it is recording."""
+
+    def test_sim_frame_records_a_torpedo_in_flight(self, fleet_data):
+        """
+        Regression: _record_sim_frame read torp.delta_v_remaining_kps, but the
+        attribute is remaining_delta_v_kps. With --trace enabled the entire
+        battle died with AttributeError the instant the first torpedo launched -
+        and only a torpedo-armed hull could ever trigger it.
+        """
+        from src.physics import Vector3D
+        from src.torpedo import Torpedo, TorpedoSpecs
+
+        torp = Torpedo(
+            specs=TorpedoSpecs(),
+            position=Vector3D(0, 0, 0),
+            velocity=Vector3D(1000, 0, 0),
+            target_id="beta",
+        )
+        # Exactly the fields the recorder reads.
+        assert isinstance(torp.remaining_delta_v_kps, float)
+        assert torp.target_id == "beta"
+        assert isinstance(torp.fuel_exhausted, bool)
+
+        assert not hasattr(torp, "delta_v_remaining_kps"), (
+            "attribute was renamed - update _record_sim_frame to match"
+        )
