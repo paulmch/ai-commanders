@@ -7,13 +7,19 @@
   "alpha_fleet": {
     "admiral": null,
     "ships": [
-      {"ship_type": "destroyer", "model": "openrouter/anthropic/claude-haiku-4.5"}
+      {
+        "ship_type": "destroyer",
+        "model": "openrouter/anthropic/claude-haiku-4.5"
+      }
     ]
   },
   "beta_fleet": {
     "admiral": null,
     "ships": [
-      {"ship_type": "destroyer", "model": "openrouter/google/gemini-2.5-flash-preview"}
+      {
+        "ship_type": "destroyer",
+        "model": "openrouter/google/gemini-3.5-flash"
+      }
     ]
   }
 }

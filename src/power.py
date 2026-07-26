@@ -34,7 +34,14 @@ if TYPE_CHECKING:
 # =============================================================================
 
 # Efficiency factors for heat generation
-KINETIC_WEAPON_EFFICIENCY = 0.70  # 70% efficient, 30% waste heat
+# Coilgun coils are ~50% efficient: the capacitor must store 2x the muzzle
+# kinetic energy, and the other half becomes waste heat. This value used to be
+# 0.70 while the capacitor was independently sized at 2x kinetic energy "for
+# 50% coil efficiency" - two contradictory efficiencies for the same shot, so
+# 40% of the stored energy was neither delivered to the slug nor accounted for
+# as heat. Sizing is now derived from this constant (see
+# WeaponCapacitor.from_weapon_data), keeping the energy budget closed.
+KINETIC_WEAPON_EFFICIENCY = 0.50  # 50% efficient, 50% waste heat
 LASER_WEAPON_EFFICIENCY = 0.25    # Terra Invicta PD laser efficiency
 TORPEDO_LAUNCHER_EFFICIENCY = 0.90  # Mostly mechanical, low heat
 
@@ -109,9 +116,14 @@ class WeaponCapacitor:
             # Kinetic weapons - use kinetic energy as proxy
             kinetic_energy_gj = weapon_data.get("kinetic_energy_gj", 0.0)
             if kinetic_energy_gj > 0:
-                # Capacitor needs to store energy to accelerate projectile
-                # Assume capacitor stores 2x kinetic energy (50% efficiency in coils)
-                capacity_mj = kinetic_energy_gj * 1000 * 2  # GJ to MJ, 2x for efficiency
+                # Capacitor must store the muzzle energy divided by coil
+                # efficiency, so that capacity*(1 - efficiency) is exactly the
+                # energy that did NOT reach the slug (see
+                # calculate_heat_generated). Derived rather than hardcoded at
+                # 2x so sizing and waste heat can never disagree again.
+                capacity_mj = (
+                    kinetic_energy_gj * 1000 / KINETIC_WEAPON_EFFICIENCY
+                )
             else:
                 capacity_mj = DEFAULT_KINETIC_ENERGY_MJ
             efficiency = KINETIC_WEAPON_EFFICIENCY
@@ -190,7 +202,8 @@ class Battery:
 
     Attributes:
         capacity_gj: Maximum energy storage (gigajoules).
-        current_charge_gj: Current stored energy (gigajoules).
+        current_charge_gj: Current stored energy (gigajoules). Defaults to
+            None, meaning "start at full capacity".
         max_discharge_rate_gw: Maximum power output (gigawatts).
         max_recharge_rate_gw: Maximum recharge rate (gigawatts).
         name: Battery type name.
@@ -199,11 +212,18 @@ class Battery:
     max_discharge_rate_gw: float
     max_recharge_rate_gw: float
     name: str = "Ship Battery"
-    current_charge_gj: float = field(default=0.0)
+    current_charge_gj: Optional[float] = field(default=None)
 
     def __post_init__(self):
-        """Initialize battery to full charge if not specified."""
-        if self.current_charge_gj == 0.0:
+        """
+        Initialize battery to full charge if not specified.
+
+        The sentinel is None, not 0.0: with 0.0 as the sentinel a legitimately
+        depleted battery was indistinguishable from "unspecified" and got
+        silently refilled, so an empty battery could not be constructed and
+        dataclasses.replace() on a drained battery recharged it.
+        """
+        if self.current_charge_gj is None:
             self.current_charge_gj = self.capacity_gj
 
     @classmethod
@@ -333,6 +353,24 @@ class Reactor:
             efficiency=reactor_data.get("efficiency", 0.999),
             name=reactor_data.get("name", "Reactor")
         )
+
+    def set_output_fraction(self, fraction: float) -> float:
+        """
+        Set reactor output as a fraction of maximum, clamped to a valid range.
+
+        Note: nothing in the simulation currently throttles the reactor, so it
+        runs pinned at 1.0 and unconsumed output is simply discarded (it is not
+        turned into waste heat, fuel burn, or a throttle-down). Wiring this to
+        actual demand belongs in the simulation loop, not here.
+
+        Args:
+            fraction: Requested output fraction.
+
+        Returns:
+            The clamped fraction actually applied.
+        """
+        self.current_output_fraction = max(0.0, min(1.0, fraction))
+        return self.current_output_fraction
 
     @property
     def current_output_gw(self) -> float:
@@ -525,6 +563,12 @@ class PowerSystem:
         # Convert to MW for capacitor charging
         available_power_mw = available_power_gw * 1000.0
 
+        # Battery energy budget for this whole timestep. Battery.discharge()
+        # only caps power per invocation, so calling it once per uncharged
+        # capacitor previously let N weapons each draw the full rated power -
+        # i.e. N x max_discharge_rate_gw out of one battery in one tick.
+        battery_budget_gj = max(0.0, self.battery.max_discharge_rate_gw * dt)
+
         # Charge weapon capacitors
         for slot_name, capacitor in self.weapon_capacitors.items():
             if capacitor.is_charged:
@@ -542,9 +586,17 @@ class PowerSystem:
                 reactor_contribution_mw = available_power_mw
                 shortfall_mw = needed_power_mw - reactor_contribution_mw
 
-                # Try to get power from battery
+                # Try to get power from battery, within this tick's budget
                 shortfall_gw = shortfall_mw / 1000.0
-                battery_power_gw = self.battery.discharge(shortfall_gw, dt)
+                budget_gw = (battery_budget_gj / dt) if dt > 0 else 0.0
+                request_gw = min(shortfall_gw, budget_gw)
+                if request_gw > 0.0:
+                    battery_power_gw = self.battery.discharge(request_gw, dt)
+                    battery_budget_gj = max(
+                        0.0, battery_budget_gj - battery_power_gw * dt
+                    )
+                else:
+                    battery_power_gw = 0.0
                 battery_power_mw = battery_power_gw * 1000.0
 
                 total_power_mw = reactor_contribution_mw + battery_power_mw
@@ -558,10 +610,12 @@ class PowerSystem:
             surplus_gw = available_power_mw / 1000.0
             self.battery.recharge(surplus_gw, dt)
 
-        # Note: Reactor waste heat is already tracked by the ThermalSystem
-        # which has dedicated heat sources for reactor and drives.
-        # The power system only generates heat when weapons fire.
-
+        # Note: Reactor waste heat is already tracked by the ThermalSystem,
+        # which has dedicated heat sources for reactor and drives; adding
+        # reactor.calculate_waste_heat_gw() here would double-count it.
+        # Weapon heat is emitted at fire time by fire_weapon(), so this value
+        # is legitimately zero - charging a capacitor is modelled as lossless
+        # and the conversion loss is charged on discharge.
         return heat_generated_gj
 
     def get_status(self) -> dict:
@@ -621,8 +675,8 @@ def calculate_weapon_energy_mj(weapon_data: dict) -> float:
         # Kinetic weapon - based on projectile kinetic energy
         kinetic_energy_gj = weapon_data.get("kinetic_energy_gj", 0.0)
         if kinetic_energy_gj > 0:
-            # Assume 50% coil efficiency
-            return kinetic_energy_gj * 1000 * 2
+            # Same derivation as WeaponCapacitor.from_weapon_data
+            return kinetic_energy_gj * 1000 / KINETIC_WEAPON_EFFICIENCY
         return DEFAULT_KINETIC_ENERGY_MJ
 
 

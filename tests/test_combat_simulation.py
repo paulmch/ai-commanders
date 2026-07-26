@@ -481,6 +481,21 @@ class TestManeuverExecution:
 
         print(f"[DEBUG] Delta-v expended: {maneuver.delta_v_expended:.1f} m/s")
 
+        # ManeuverExecutor is a planner: it reports the thrust command and the
+        # delta-v that command implies, and the simulation applies it. So assert
+        # the accounting, not the ship state.
+        assert result.status == ManeuverStatus.COMPLETED, (
+            f"burn did not complete, ended {result.status.name}"
+        )
+        assert maneuver.delta_v_expended > 0, "burn expended no delta-v"
+
+        # a = throttle * thrust / mass, over the 30 s max_duration.
+        expected_dv = 0.5 * ship_state.thrust_n / ship_state.wet_mass_kg * 30.0
+        assert maneuver.delta_v_expended == pytest.approx(expected_dv, rel=0.10), (
+            f"delta-v accounting {maneuver.delta_v_expended:.1f} m/s does not match "
+            f"throttle x thrust / mass x duration ({expected_dv:.1f} m/s)"
+        )
+
     def test_flip_and_burn(self, fleet_data):
         """Test flip-and-burn deceleration maneuver."""
         ship_state = create_ship_state_from_specs(

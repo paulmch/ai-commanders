@@ -21,6 +21,7 @@ import argparse
 import asyncio
 import json
 import sys
+import uuid
 from pathlib import Path
 
 # Add project root to path
@@ -36,19 +37,27 @@ def start_mcp_server(faction: str, http_url: str = None):
     """Start the MCP server for a faction."""
     from src.llm.mcp_server import run_mcp_server
 
+    # NOTE: everything here goes to stderr. run_mcp_server() hands stdout to the
+    # MCP stdio transport, and any non-JSON-RPC byte written to that stream
+    # corrupts the handshake for the connecting client.
     if http_url:
-        print(f"Starting MCP server for {faction} faction (HTTP mode)...")
-        print(f"Connecting to battle API at: {http_url}")
+        print(f"Starting MCP server for {faction} faction (HTTP mode)...", file=sys.stderr)
+        print(f"Connecting to battle API at: {http_url}", file=sys.stderr)
     else:
-        print(f"Starting MCP server for {faction} faction (shared memory mode)...")
+        print(
+            f"Starting MCP server for {faction} faction (shared memory mode) - "
+            f"this only works inside the battle process; pass --http "
+            f"http://localhost:8765 to attach to a running battle.",
+            file=sys.stderr,
+        )
 
-    print("Connect your MCP client (e.g., Claude Code) to this server.")
-    print("Press Ctrl+C to stop.")
+    print("Connect your MCP client (e.g., Claude Code) to this server.", file=sys.stderr)
+    print("Press Ctrl+C to stop.", file=sys.stderr)
 
     try:
         asyncio.run(run_mcp_server(faction, http_url=http_url))
     except KeyboardInterrupt:
-        print("\nServer stopped.")
+        print("\nServer stopped.", file=sys.stderr)
 
 
 def load_fleet_data() -> dict:
@@ -88,7 +97,10 @@ async def run_mcp_battle(
     )
 
     # Create client for non-MCP fleets (if any)
-    client = CaptainClient()
+    client = CaptainClient(
+        model="anthropic/claude-sonnet-5",
+        session_id=f"ai-commanders-mcp-{uuid.uuid4().hex[:16]}",
+    )
 
     # Create dummy captain configs (required by runner but not used for MCP fleets)
     alpha_config = LLMCaptainConfig(

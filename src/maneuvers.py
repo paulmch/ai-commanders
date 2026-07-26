@@ -604,6 +604,23 @@ class AccelerationBurn(Maneuver):
 # ROTATION MANEUVERS
 # =============================================================================
 
+# Throttle assumed for main-engine thrust-vectored rotation. Must match the
+# throttle used by RotateToFace.estimate_completion_time's torque model.
+ROTATION_TVC_THROTTLE = 0.3
+
+
+def _rotation_delta_v_cost(ship: ShipState, rotation_time_s: float) -> float:
+    """
+    Delta-v spent rotating via main-engine thrust vectoring.
+
+    The rotation time models the main engine burning at
+    ROTATION_TVC_THROTTLE for the whole turn, so the propellant cost is
+    throttle * max_accel * time. (The old flat `time * 0.1 m/s` estimate
+    was ~2 orders of magnitude below the model's own thrust assumption.)
+    """
+    return ROTATION_TVC_THROTTLE * ship.max_acceleration_ms2() * rotation_time_s
+
+
 @dataclass
 class RotateToFace(Maneuver):
     """
@@ -629,16 +646,18 @@ class RotateToFace(Maneuver):
     def estimate_completion_time(self, ship: ShipState) -> float:
         angle = self._calculate_angle_to_target(ship)
         # Estimate angular acceleration from thrust vectoring
-        torque = calculate_torque_from_thrust(ship, gimbal_pitch_deg=1.0, throttle=0.3)
+        torque = calculate_torque_from_thrust(
+            ship, gimbal_pitch_deg=1.0, throttle=ROTATION_TVC_THROTTLE
+        )
         if torque.magnitude > 0:
             alpha = torque.magnitude / ship.moment_of_inertia_kg_m2
             return time_to_rotate(alpha, angle)
         return angle / 5.0  # Fallback: assume 5 deg/s rotation rate
 
     def estimate_delta_v_cost(self, ship: ShipState) -> float:
-        # Rotation uses RCS, minimal delta-v cost
-        # Estimate based on thrust vectoring fuel usage
-        return self.estimate_completion_time(ship) * 0.1  # Rough estimate
+        # Consistent with estimate_completion_time's assumption of the main
+        # engine burning at ROTATION_TVC_THROTTLE during the turn.
+        return _rotation_delta_v_cost(ship, self.estimate_completion_time(ship))
 
     def execute_step(self, ship: ShipState, dt: float) -> ManeuverResult:
         if self._status == ManeuverStatus.PENDING:
@@ -726,7 +745,7 @@ class RotateToBroadside(Maneuver):
         return angle / 5.0  # Assume 5 deg/s rotation rate
 
     def estimate_delta_v_cost(self, ship: ShipState) -> float:
-        return self.estimate_completion_time(ship) * 0.1
+        return _rotation_delta_v_cost(ship, self.estimate_completion_time(ship))
 
     def execute_step(self, ship: ShipState, dt: float) -> ManeuverResult:
         if self._status == ManeuverStatus.PENDING:
@@ -791,7 +810,7 @@ class RotateToRetreat(Maneuver):
         return angle / 5.0
 
     def estimate_delta_v_cost(self, ship: ShipState) -> float:
-        return self.estimate_completion_time(ship) * 0.1
+        return _rotation_delta_v_cost(ship, self.estimate_completion_time(ship))
 
     def execute_step(self, ship: ShipState, dt: float) -> ManeuverResult:
         if self._status == ManeuverStatus.PENDING:
@@ -861,7 +880,7 @@ class RotateToAngle(Maneuver):
         return angle / 5.0
 
     def estimate_delta_v_cost(self, ship: ShipState) -> float:
-        return self.estimate_completion_time(ship) * 0.1
+        return _rotation_delta_v_cost(ship, self.estimate_completion_time(ship))
 
     def execute_step(self, ship: ShipState, dt: float) -> ManeuverResult:
         if self._status == ManeuverStatus.PENDING:
@@ -1237,6 +1256,12 @@ class BreakTurn(Maneuver):
 
     _phase: str = field(default="turn", init=False)
     _target_direction: Optional[Vector3D] = field(default=None, init=False)
+    # Timestamp (in maneuver-elapsed time) when the burn phase actually began.
+    # The burn duration must be measured from here, NOT from an assumed turn
+    # time of turn_angle/10 s: real turn rates (1.8-7.4 deg/s depending on
+    # ship class) are all slower than 10 deg/s, so the old formula truncated
+    # or entirely skipped the burn for every ship class.
+    _burn_start_time: Optional[float] = field(default=None, init=False)
 
     def __post_init__(self):
         self.name = "BreakTurn"
@@ -1278,6 +1303,7 @@ class BreakTurn(Maneuver):
             self._status = ManeuverStatus.IN_PROGRESS
             self._phase = "turn"
             self._target_direction = None
+            self._burn_start_time = None
 
         if self._status != ManeuverStatus.IN_PROGRESS:
             return ManeuverResult(status=self._status, progress=self._progress)
@@ -1289,6 +1315,7 @@ class BreakTurn(Maneuver):
 
             if angle <= 5.0:
                 self._phase = "burn"
+                self._burn_start_time = self._elapsed_time
                 self._progress = 50.0
             else:
                 self._elapsed_time += dt
@@ -1303,10 +1330,11 @@ class BreakTurn(Maneuver):
                     message=f"Break turn: {angle:.1f} degrees remaining"
                 )
 
-        # Burn phase
-        burn_elapsed = self._elapsed_time - (self.turn_angle_deg / 10.0)
-        if burn_elapsed < 0:
-            burn_elapsed = 0
+        # Burn phase - measure burn time from the moment the turn actually
+        # completed, not from a hard-coded assumed turn rate.
+        if self._burn_start_time is None:
+            self._burn_start_time = self._elapsed_time
+        burn_elapsed = self._elapsed_time - self._burn_start_time
 
         if burn_elapsed >= self.burn_duration:
             self._status = ManeuverStatus.COMPLETED
@@ -1503,7 +1531,11 @@ class ManeuverPlanner:
             if discriminant < 0:
                 return float('inf')
 
-            t = (-v + math.sqrt(discriminant)) / a
+            # Separation obeys d + v*t - 0.5*a*t^2 = 0 (v = opening rate >= 0),
+            # whose positive root is t = (v + sqrt(v^2 + 2ad)) / a.
+            # The previous (-v + sqrt) root underestimated intercept time:
+            # at the returned t the ships had not yet met.
+            t = (v + math.sqrt(discriminant)) / a
             return t
         else:
             # Already closing
@@ -1595,16 +1627,24 @@ class ManeuverPlanner:
             return BreakTurn(turn_angle_deg=90.0, burn_duration=10.0, throttle=1.0)
         else:
             # Time for calculated evasion
-            # Turn perpendicular to threat approach
+            # Turn perpendicular to threat approach: burning straight away
+            # along the threat axis generates zero lateral miss distance and
+            # is the easiest geometry for a pursuing weapon to intercept.
             threat_dir = threat_velocity.normalized() if threat_velocity.magnitude > 0 else rel_pos.normalized()
             perp = threat_dir.cross(Vector3D.unit_z())
             if perp.magnitude < 0.01:
                 perp = threat_dir.cross(Vector3D.unit_x())
+            perp = perp.normalized()
 
-            return BurnAway(
-                target_position=threat_position,
+            # Pick the perpendicular sign that also opens the range
+            # (component pointing away from the threat).
+            if perp.dot(rel_pos) > 0:
+                perp = perp * -1.0
+
+            return AccelerationBurn(
+                direction=perp,
                 throttle=0.8,
-                max_duration=20.0
+                duration=20.0
             )
 
     @staticmethod

@@ -979,11 +979,14 @@ def create_battle_filename(
     if timestamp is None:
         timestamp = datetime.now()
 
-    # Clean model names
+    # Clean model names.
+    # Whitelist rather than blacklist: free-tier ids carry a ":free" suffix and a
+    # colon is illegal in filenames on Windows and awkward everywhere else, so
+    # replacing only "-" and "." let it through into the recording path.
     def clean_name(name: str) -> str:
         name = name.split("/")[-1]
-        name = name.replace("-", "_").replace(".", "_")
-        return name[:20]
+        cleaned = "".join(c if c.isalnum() else "_" for c in name)
+        return cleaned.strip("_")[:20]
 
     alpha_clean = clean_name(alpha_model)
     beta_clean = clean_name(beta_model)

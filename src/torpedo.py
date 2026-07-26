@@ -505,15 +505,31 @@ class Torpedo:
             if self.distance_from_launch() >= SAFE_ARMING_DISTANCE_M:
                 self.armed = True
 
-        # Get thrust direction from guidance system
+        # Get the FULL guidance command (direction + throttle + RCS channel).
+        # Using only the direction here silently executed RCS-only precision trims
+        # as full-throttle main-engine burns (~20x the intended delta-v), which
+        # both wasted propellant and massively over-corrected.
         guidance = TorpedoGuidance()
-        thrust_direction = guidance.update_guidance(
+        command = guidance.update_guidance_command(
             self, target_position, target_velocity, dt_seconds
         )
 
-        # Apply thrust if fuel remains and guidance provides direction
-        if not self.fuel_exhausted and thrust_direction.magnitude > 0.01:
-            self.apply_thrust(thrust_direction, dt_seconds)
+        # Apply primary thrust on the channel the guidance actually asked for
+        if (not self.fuel_exhausted
+                and command.throttle > 0.0
+                and command.direction.magnitude > 0.01):
+            if command.use_rcs:
+                self.apply_lateral_thrust(command.direction, dt_seconds, command.throttle)
+            else:
+                self.apply_thrust(command.direction, dt_seconds, command.throttle)
+
+        # Apply simultaneous RCS trim if the command carries one (combined mode)
+        if (not self.fuel_exhausted
+                and command.rcs_direction is not None
+                and command.rcs_throttle > 0.0):
+            self.apply_lateral_thrust(
+                command.rcs_direction, dt_seconds, command.rcs_throttle
+            )
 
         # Update position (Euler integration)
         # position += velocity * dt
@@ -978,6 +994,38 @@ class TorpedoGuidance:
         """
         Calculate thrust direction based on current guidance mode.
 
+        NOTE: this is a lossy view of the guidance solution - it discards the
+        throttle setting and the RCS channel. Callers that actually apply thrust
+        should use :meth:`update_guidance_command` instead.
+
+        Args:
+            torpedo: Torpedo to guide
+            target_pos: Target position (meters)
+            target_vel: Target velocity (m/s)
+            dt: Time step (seconds)
+
+        Returns:
+            Thrust direction vector (normalized)
+        """
+        command = self.update_guidance_command(torpedo, target_pos, target_vel, dt)
+        if command.throttle < 0.01:
+            return Vector3D.zero()
+        return command.direction
+
+    def update_guidance_command(
+        self,
+        torpedo: Torpedo,
+        target_pos: Vector3D,
+        target_vel: Vector3D,
+        dt: float
+    ) -> GuidanceCommand:
+        """
+        Calculate the full guidance command for the current guidance mode.
+
+        Unlike :meth:`update_guidance` this preserves the throttle setting and
+        the RCS channel, so an RCS-only precision trim is not executed as a
+        full-throttle main-engine burn.
+
         Guidance phases:
         1. INTERCEPT (cruise): Closure-priority, burn toward predicted intercept
         2. PROPORTIONAL_NAV (terminal approach): Precise LOS tracking at <50km
@@ -990,7 +1038,7 @@ class TorpedoGuidance:
             dt: Time step (seconds)
 
         Returns:
-            Thrust direction vector (normalized)
+            GuidanceCommand with direction, throttle and (optional) RCS channel
         """
         # Check for mode transitions
         distance = torpedo.position.distance_to(target_pos)
@@ -1009,30 +1057,31 @@ class TorpedoGuidance:
                     torpedo.guidance_mode = GuidanceMode.PROPORTIONAL_NAV
 
         # Execute guidance based on mode
+        if torpedo.guidance_mode == GuidanceMode.SMART:
+            return self._smart_guidance(torpedo, target_pos, target_vel, 1.0, dt)
+        if torpedo.guidance_mode == GuidanceMode.COLLISION:
+            # Collision course guidance: align relative velocity with LOS
+            return self._collision_course_guidance(torpedo, target_pos, target_vel, dt)
+
+        # Direction-only modes: full main-engine burn along the returned vector
         if torpedo.guidance_mode == GuidanceMode.PURSUIT:
-            return self._pursuit_guidance(torpedo, target_pos, target_vel)
+            direction = self._pursuit_guidance(torpedo, target_pos, target_vel)
         elif torpedo.guidance_mode == GuidanceMode.INTERCEPT:
-            return self._intercept_guidance(torpedo, target_pos, target_vel, dt)
+            direction = self._intercept_guidance(torpedo, target_pos, target_vel, dt)
         elif torpedo.guidance_mode == GuidanceMode.PROPORTIONAL_NAV:
-            return self._proportional_nav_guidance(
+            direction = self._proportional_nav_guidance(
                 torpedo, target_pos, target_vel, dt
             )
         elif torpedo.guidance_mode == GuidanceMode.TERMINAL:
-            return self._terminal_guidance(torpedo, target_pos, target_vel)
-        elif torpedo.guidance_mode == GuidanceMode.SMART:
-            # SMART guidance returns GuidanceCommand, extract direction
-            cmd = self._smart_guidance(torpedo, target_pos, target_vel, 1.0, dt)
-            if cmd.throttle < 0.01:
-                return Vector3D.zero()
-            return cmd.direction
-        elif torpedo.guidance_mode == GuidanceMode.COLLISION:
-            # Collision course guidance: align relative velocity with LOS
-            cmd = self._collision_course_guidance(torpedo, target_pos, target_vel, dt)
-            if cmd.throttle < 0.01:
-                return Vector3D.zero()
-            return cmd.direction
+            direction = self._terminal_guidance(torpedo, target_pos, target_vel)
         else:  # COAST
-            return Vector3D.zero()
+            return GuidanceCommand.coast("coast mode")
+
+        if direction.magnitude < 0.01:
+            return GuidanceCommand.coast(f"{torpedo.guidance_mode.name}: no command")
+        return GuidanceCommand.burn(
+            direction, throttle=1.0, reason=torpedo.guidance_mode.name
+        )
 
     def _pursuit_guidance(
         self,
@@ -1134,17 +1183,22 @@ class TorpedoGuidance:
             # If we're going much faster than ideal, apply braking
             excess_velocity_kps = closing_velocity_kps - IDEAL_TERMINAL_VELOCITY_KPS
 
+            # Braking must be computed against the velocity RELATIVE TO THE TARGET,
+            # not the absolute inertial velocity. Using torpedo.velocity makes the
+            # command depend on the observer's frame: the same engagement geometry
+            # viewed from a boosted frame produces a different thrust direction.
+            relative_velocity = torpedo.velocity - target_vel
+
             if excess_velocity_kps > 2.0 and distance_km < 100:
-                # BRAKE: burn retrograde (against our velocity toward target)
-                # Retrograde is opposite of our current velocity direction
-                torpedo_velocity_dir = torpedo.velocity.normalized()
+                # BRAKE: burn retrograde (against our closing velocity)
+                torpedo_velocity_dir = relative_velocity.normalized()
                 if torpedo_velocity_dir.magnitude > 0.01:
-                    # Burn against our velocity to slow down
+                    # Burn against our relative velocity to slow down
                     return (torpedo_velocity_dir * -1.0).normalized()
 
             # Moderate closure - blend braking with intercept
             if excess_velocity_kps > 0.5:
-                torpedo_velocity_dir = torpedo.velocity.normalized()
+                torpedo_velocity_dir = relative_velocity.normalized()
                 if torpedo_velocity_dir.magnitude > 0.01:
                     # Partial braking: blend retrograde with intercept direction
                     retrograde = torpedo_velocity_dir * -1.0
@@ -1187,7 +1241,9 @@ class TorpedoGuidance:
         if omega_los_magnitude > 0.0001:  # Threshold for significant rotation
             omega_los = los_cross_vel / (distance_to_target * distance_to_target)
             # Reduced nav constant (0.5 vs 3.0) - we're not trying to track precisely yet
-            correction = los_unit.cross(omega_los) * 0.5 * closing_velocity
+            # PN law is a = N * Vc * (omega x u_los). The operands must be in THIS
+            # order: u_los x omega is the negation, which steers away from the lead point.
+            correction = omega_los.cross(los_unit) * 0.5 * closing_velocity
 
             # Blend: 90% intercept direction, 10% correction (capped)
             correction_magnitude = min(correction.magnitude, 0.2)  # Cap correction influence
@@ -1251,7 +1307,9 @@ class TorpedoGuidance:
 
         # Commanded acceleration direction
         # For 3D, acceleration perpendicular to LOS
-        accel_perpendicular = los_unit.cross(omega_los) * self.nav_constant * closing_velocity
+        # a = N * Vc * (omega_los x u_los). Reversing the cross-product operands
+        # flips the sign of the command and steers away from the lead point.
+        accel_perpendicular = omega_los.cross(los_unit) * self.nav_constant * closing_velocity
 
         # Add component toward intercept point
         if closing_velocity > 0:
@@ -1416,8 +1474,12 @@ class TorpedoGuidance:
             # Closing - use classic pro-nav
             accel_cmd_perpendicular = omega_los.cross(los_unit) * effective_nav_constant * abs(closing_rate)
         else:
-            # Separating - need to close first
-            accel_cmd_perpendicular = omega_los.cross(los_unit) * effective_nav_constant * torp_speed
+            # Separating - need to close first.
+            # Scale by the RELATIVE speed, not the absolute inertial speed, so the
+            # command is Galilean-invariant (identical geometry -> identical command).
+            accel_cmd_perpendicular = (
+                omega_los.cross(los_unit) * effective_nav_constant * rel_vel.magnitude
+            )
 
         # Add bias toward target (pursuit component)
         # This ensures we're always trying to close distance
@@ -1538,8 +1600,21 @@ class TorpedoGuidance:
         # Minimum closing speed to achieve (km/s) before coasting
         MIN_CLOSING_SPEED_KPS = 12.0
 
+        # Proportional-navigation ratio used when steering out lateral drift.
+        # Standard PN uses N in [3, 5]; anything <= 2 cannot beat the rate at
+        # which a rotating line of sight regenerates lateral velocity.
+        NAV_RATIO = 4.0
+
         # Lateral velocity tolerance (km/s) - below this, we're on course
         LATERAL_TOLERANCE_KPS = 1.0  # 1 km/s lateral = ~1km miss per second
+
+        # Predicted miss below which it is safe to stop guiding and coast.
+        # For a ballistic coast the predicted miss (lateral_speed * time_to_impact)
+        # is an invariant of the geometry - it does NOT shrink as the torpedo
+        # closes. Coasting therefore locks in whatever miss is predicted here, so
+        # the tolerance has to be on the scale of the target hull (65-300 m in this
+        # sim), not kilometres.
+        ON_COURSE_MISS_TOLERANCE_KM = 0.1
 
         # =================================================================
         # CALCULATE GEOMETRY
@@ -1582,7 +1657,7 @@ class TorpedoGuidance:
         # If we're closing fast enough, on course (low miss), and close - COAST!
         # This prevents overshoot oscillation.
         if (closing_speed_kps >= MIN_CLOSING_SPEED_KPS and
-            miss_distance_km < 5.0 and  # Will miss by less than 5km at current course
+            miss_distance_km < ON_COURSE_MISS_TOLERANCE_KM and
             time_to_impact < 60.0):     # Will arrive within 60 seconds
             return GuidanceCommand.coast(
                 f"INTERCEPT: {distance_km:.0f}km, {time_to_impact:.0f}s to impact, miss~{miss_distance_km:.1f}km"
@@ -1605,15 +1680,44 @@ class TorpedoGuidance:
         # Use COMBINED thrust: main engine toward target + RCS for lateral correction
         if closing_speed_kps < MIN_CLOSING_SPEED_KPS:
             if lateral_speed_mps > 50.0:  # Have lateral drift to correct
-                # COMBINED: Main engine builds speed, RCS corrects lateral
+                # COMBINED: main engine steers on the relative-velocity ERROR,
+                # RCS adds a fine lateral trim on top.
+                #
+                # The velocity we want is `los * V_desired` (pure closure). The
+                # error is therefore
+                #     v_err = los * (V_desired - closing) - lateral_vel
+                # and burning along v_err builds closing speed AND cancels lateral
+                # drift with the same (full-authority) engine.
+                #
+                # Previously main_direction was `los` - pure pursuit - which pumps
+                # lateral velocity in faster than the 5%-authority RCS can remove
+                # it, so the torpedo settled into a pursuit limit cycle and missed
+                # non-maneuvering crossing targets outright.
+                #
+                # The lateral term carries the standard proportional-navigation
+                # ratio. Unity gain is NOT enough: as long as any lateral rate
+                # survives, the rotating line of sight regenerates lateral
+                # relative velocity at a rate Vc*omega = Vc*lat/d, which exactly
+                # cancels a unity-gain correction and leaves the miss frozen.
+                # PN theory requires N > 2 for the miss to collapse; N = 4 sits
+                # in the usual 3-5 band.
+                desired_closing_mps = MIN_CLOSING_SPEED_KPS * 1000.0
+                velocity_error = (
+                    los * (desired_closing_mps - closing_speed_mps)
+                    - lateral_vel * NAV_RATIO
+                )
+                if velocity_error.magnitude > 1.0:
+                    main_direction = velocity_error.normalized()
+                else:
+                    main_direction = los
                 lateral_correction = (lateral_vel * -1.0).normalized()
                 rcs_throttle = min(1.0, lateral_speed_mps / 500.0)  # Scale RCS with drift
                 return GuidanceCommand.combined(
-                    main_direction=los,
+                    main_direction=main_direction,
                     main_throttle=1.0,
                     rcs_direction=lateral_correction,
                     rcs_throttle=rcs_throttle,
-                    reason=f"COMBINED: accel+RCS lat={lateral_speed_kps:.1f}km/s"
+                    reason=f"COMBINED: v_err+RCS lat={lateral_speed_kps:.1f}km/s"
                 )
             else:
                 # On course but too slow - burn prograde only
@@ -1629,16 +1733,28 @@ class TorpedoGuidance:
         # We have lateral velocity that will cause a miss
         # Use RCS for precision corrections when we have enough closing speed
 
-        # RCS correction threshold
-        RCS_CORRECTION_THRESHOLD_MPS = 1000.0  # Use RCS for corrections under 1 km/s
-
         if lateral_speed_mps < 10.0:  # Less than 10 m/s lateral - on course
             return GuidanceCommand.coast("on course")
 
         # Cancel lateral velocity
         lateral_correction = (lateral_vel * -1.0).normalized()
 
-        if lateral_speed_mps < RCS_CORRECTION_THRESHOLD_MPS:
+        # Pick the channel by whether the RCS can actually finish the job before
+        # impact, not by a fixed 1 km/s cutoff. The RCS has ~5% of main thrust,
+        # so handing it a correction it cannot complete in the remaining
+        # time-to-impact guarantees a miss - which is exactly what the old
+        # threshold did whenever time-to-impact was short.
+        rcs_accel_mps2 = (
+            torpedo.specs.rcs_thrust_n / torpedo.current_mass_kg
+            if torpedo.current_mass_kg > 0 else 0.0
+        )
+        rcs_time_needed_s = (
+            lateral_speed_mps / rcs_accel_mps2 if rcs_accel_mps2 > 0 else float('inf')
+        )
+        # Keep half the remaining time as margin for the endgame.
+        rcs_can_finish = rcs_time_needed_s <= 0.5 * time_to_impact
+
+        if rcs_can_finish:
             # Small correction - use RCS for precision
             rcs_throttle = min(1.0, lateral_speed_mps / 200.0)  # Scale throttle
             return GuidanceCommand.rcs_correction(

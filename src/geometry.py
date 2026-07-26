@@ -38,6 +38,7 @@ TAIL_HIT_ANGLE_THRESHOLD = 150.0  # |angle| > 150 deg from forward = TAIL
 
 # Firing arc half-angles (degrees)
 SPINAL_FIRING_ARC_HALF_ANGLE = 2.5  # 5 deg cone total
+HEAVY_COILER_FIRING_ARC_HALF_ANGLE = 20.0  # Fixed spinal mount, limited gimbal
 TURRET_FIRING_ARC_HALF_ANGLE = 90.0  # 180 deg hemisphere
 PD_FIRING_ARC_HALF_ANGLE = 180.0  # 360 deg full sphere
 
@@ -386,17 +387,20 @@ class ShipGeometry:
         )
 
         if axial_position_m < self.nose_cone_length_m:
-            # Nose cone - normal tilts forward
+            # Nose cone - normal tilts forward. For a cone with its apex at
+            # the nose tip, the outward normal is radial*cos(a) + fwd*sin(a)
+            # (the surface slopes toward the tip, pushing the normal forward).
             cone_angle = math.atan2(self.radius_m, self.nose_cone_length_m)
             normal = (
-                radial_dir * math.cos(cone_angle) -
+                radial_dir * math.cos(cone_angle) +
                 ship_fwd * math.sin(cone_angle)
             )
         elif axial_position_m > self.engine_section_start_m:
-            # Engine section - normal tilts backward
+            # Engine section - normal tilts backward (apex at the tail),
+            # so the forward component is negative.
             cone_angle = math.atan2(self.radius_m, self.engine_section_length_m)
             normal = (
-                radial_dir * math.cos(cone_angle) +
+                radial_dir * math.cos(cone_angle) -
                 ship_fwd * math.sin(cone_angle)
             )
         else:
@@ -486,8 +490,12 @@ class ShipGeometry:
         """
         wtype = weapon_type.lower()
 
-        # Determine weapon category
-        if "spinal" in wtype or "coiler" in wtype and "heavy" not in wtype:
+        # Determine weapon category.
+        # Parentheses matter: without them, `A or B and C` parses as
+        # `A or (B and C)`, which sent heavy siege coilers (fixed spinal
+        # mounts with ~20 deg gimbal per fleet data) to the default
+        # 90-degree turret branch.
+        if ("spinal" in wtype) or ("coiler" in wtype and "heavy" not in wtype):
             # Spinal weapons have narrow forward arc
             return FiringArc(
                 weapon_position=weapon_position,
@@ -497,7 +505,18 @@ class ShipGeometry:
                 can_fire_full_sphere=False
             )
 
-        elif "pd" in wtype or "point_defense" in wtype or "laser" in wtype:
+        elif "coiler" in wtype and "heavy" in wtype:
+            # Heavy siege coilers: fixed spinal mounts with a limited gimbal
+            # (pivot_range_deg = 20 in fleet data), not full turrets.
+            return FiringArc(
+                weapon_position=weapon_position,
+                forward_direction=Vector3D.unit_x(),
+                half_angle_deg=HEAVY_COILER_FIRING_ARC_HALF_ANGLE,
+                weapon_type=WeaponType.SPINAL,
+                can_fire_full_sphere=False
+            )
+
+        elif "pd" in wtype or "point_defense" in wtype:
             # Point defense has full sphere coverage
             return FiringArc(
                 weapon_position=weapon_position,

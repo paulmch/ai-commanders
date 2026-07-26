@@ -40,9 +40,60 @@ MATERIAL_VAPORIZATION_ENERGY: dict[TargetMaterial, float] = {
     TargetMaterial.TITANIUM: 25.0,   # ~25 MJ/kg for titanium
 }
 
-# Torpedo damage thresholds in joules
-TORPEDO_ELECTRONICS_THRESHOLD_J = 10_000.0   # 10 kJ - electronics fail
-TORPEDO_WARHEAD_THRESHOLD_J = 100_000.0      # 100 kJ - warhead detonates
+# Bulk densities in kg/m^3 - used to estimate a projectile's cross-section from
+# its mass, which is what determines how much of the beam it actually intercepts.
+MATERIAL_DENSITY_KG_M3: dict[TargetMaterial, float] = {
+    TargetMaterial.STEEL: 7850.0,
+    TargetMaterial.TUNGSTEN: 19300.0,
+    TargetMaterial.ALUMINUM: 2700.0,
+    TargetMaterial.TITANIUM: 4500.0,
+}
+
+# Torpedo damage thresholds in joules.
+#
+# These were 10 kJ / 100 kJ, which a 5 MW PD laser exceeds by ~250x in a single
+# 5 s burst - so point defense one-shot-killed every torpedo anywhere inside its
+# envelope and torpedoes were effectively decorative. 100 kJ vaporises about 3 g
+# of steel; the target is a ~3600 kg torpedo carrying a 250 kg tungsten
+# penetrator. Scale the thresholds to the mass that must actually be ablated
+# (~30 MJ/kg): ~1.5 kg to wreck the seeker, ~30 kg to break up the body.
+TORPEDO_ELECTRONICS_THRESHOLD_J = 50_000_000.0    # 50 MJ - guidance/seeker kill
+TORPEDO_WARHEAD_THRESHOLD_J = 1_000_000_000.0     # 1 GJ - structural kill
+
+# Fraction of incident beam energy actually absorbed rather than reflected or
+# re-radiated. Bare metal at IR wavelengths reflects most of it.
+PD_ABSORPTIVITY = 0.3
+
+# Pointing/tracking jitter. Beyond a few tens of km this, not diffraction,
+# dominates the delivered spot size against a small manoeuvring target - which is
+# what makes point defense range-dependent at all.
+PD_POINTING_JITTER_RAD = 5.0e-6
+
+
+def estimate_cross_section_m2(
+    mass_kg: float,
+    material: TargetMaterial = TargetMaterial.STEEL
+) -> float:
+    """
+    Estimate the area a solid projectile of a given mass presents to a beam.
+
+    Treated as a compact block of the material: side = (m / rho)^(1/3), and the
+    presented area is one face. This is only an order-of-magnitude figure, but
+    it is what determines how much of a diverging beam actually lands on the
+    target, so it must not be assumed to be infinite.
+
+    Args:
+        mass_kg: Projectile mass in kilograms.
+        material: Projectile material.
+
+    Returns:
+        Cross-sectional area in square meters (0.0 for a massless target).
+    """
+    if mass_kg <= 0:
+        return 0.0
+    density = MATERIAL_DENSITY_KG_M3.get(material, 7850.0)
+    side_m = (mass_kg / density) ** (1.0 / 3.0)
+    return side_m * side_m
 
 
 @dataclass
@@ -177,33 +228,70 @@ class PDLaser:
         """
         return 0 < distance_km <= self.range_km
 
+    def beam_coupling_fraction(
+        self,
+        distance_km: float,
+        target_cross_section_m2: float
+    ) -> float:
+        """
+        Fraction of the beam that actually lands on the target.
+
+        The beam diverges, so beyond the range where the spot grows past the
+        target only ``target_area / spot_area`` of the emitted power couples in;
+        the rest streams past. This is the *only* thing that makes laser point
+        defense range-dependent in this model.
+
+        Args:
+            distance_km: Distance to target in kilometers.
+            target_cross_section_m2: Target cross-section presented to the beam.
+
+        Returns:
+            Coupling fraction in [0, 1].
+        """
+        if target_cross_section_m2 <= 0:
+            return 0.0
+        spot_area = self.calculate_spot_area(distance_km)
+        if spot_area <= target_cross_section_m2:
+            return 1.0
+        return target_cross_section_m2 / spot_area
+
     def calculate_ablation_rate(
         self,
         distance_km: float,
-        material: TargetMaterial = TargetMaterial.STEEL
+        material: TargetMaterial = TargetMaterial.STEEL,
+        target_cross_section_m2: Optional[float] = None
     ) -> float:
         """
         Calculate the mass ablation rate for a target material.
 
-        ablation_rate (kg/s) = power (W) / vaporization_energy (J/kg)
+        ablation_rate (kg/s) = coupled power (W) / vaporization_energy (J/kg)
 
-        This is adjusted by the spot area to account for energy spreading.
+        The coupled power is the emitted power reduced by the fraction of the
+        beam that lands on the target (see :meth:`beam_coupling_fraction`).
+        This method used to compute the intensity and the spot area and then
+        discard both, returning a constant - so slug interception was exactly as
+        effective at 250 km as at 1 km.
 
         Args:
             distance_km: Distance to target in kilometers.
             material: Target material type.
+            target_cross_section_m2: Area the target presents to the beam. If
+                omitted the target geometry is unknown and the result is the
+                ideal fully-coupled upper bound (whole beam on target).
 
         Returns:
             Ablation rate in kg/s.
         """
         vaporization_energy_j_per_kg = MATERIAL_VAPORIZATION_ENERGY[material] * 1e6
-        # Power delivered to spot
-        intensity = self.calculate_intensity(distance_km)
-        spot_area = self.calculate_spot_area(distance_km)
+        if vaporization_energy_j_per_kg <= 0:
+            return 0.0
 
-        # For ablation, we consider power absorbed by the target
-        # Assume target absorbs all incident energy on the spot
-        power_delivered = self.power_w
+        if target_cross_section_m2 is None:
+            coupling = 1.0
+        else:
+            coupling = self.beam_coupling_fraction(distance_km, target_cross_section_m2)
+
+        power_delivered = self.power_w * coupling
 
         # Ablation rate = power / energy per kg
         return power_delivered / vaporization_energy_j_per_kg
@@ -212,7 +300,8 @@ class PDLaser:
         self,
         mass_kg: float,
         distance_km: float,
-        material: TargetMaterial = TargetMaterial.STEEL
+        material: TargetMaterial = TargetMaterial.STEEL,
+        target_cross_section_m2: Optional[float] = None
     ) -> float:
         """
         Calculate time required to completely ablate a given mass.
@@ -221,11 +310,15 @@ class PDLaser:
             mass_kg: Target mass in kilograms.
             distance_km: Distance to target in kilometers.
             material: Target material type.
+            target_cross_section_m2: Area the target presents to the beam
+                (see :meth:`calculate_ablation_rate`).
 
         Returns:
             Time in seconds to ablate the mass.
         """
-        ablation_rate = self.calculate_ablation_rate(distance_km, material)
+        ablation_rate = self.calculate_ablation_rate(
+            distance_km, material, target_cross_section_m2
+        )
         if ablation_rate <= 0:
             return float('inf')
         return mass_kg / ablation_rate
@@ -241,6 +334,10 @@ class PDLaser:
 
         Each "shot" is one cooldown period of continuous firing.
 
+        A slug of a known mass and material has a known size, so its
+        cross-section is estimated here rather than assuming the whole beam
+        couples in regardless of range.
+
         Args:
             slug_mass_kg: Mass of the kinetic projectile in kg.
             distance_km: Distance to target in kilometers.
@@ -249,7 +346,12 @@ class PDLaser:
         Returns:
             Number of shots (cooldown periods) needed.
         """
-        time_to_destroy = self.time_to_ablate_mass(slug_mass_kg, distance_km, material)
+        cross_section = estimate_cross_section_m2(slug_mass_kg, material)
+        time_to_destroy = self.time_to_ablate_mass(
+            slug_mass_kg, distance_km, material, cross_section
+        )
+        if math.isinf(time_to_destroy):
+            return 1
         # Each shot is one cooldown period of firing
         shots = math.ceil(time_to_destroy / self.cooldown_s)
         return max(1, shots)
@@ -465,8 +567,15 @@ class PDEngagement:
                 distance_km=distance_km,
             )
 
-        # Calculate ablation per shot (one cooldown period of firing)
-        ablation_rate = self.laser.calculate_ablation_rate(distance_km, slug.material)
+        # Calculate ablation per shot (one cooldown period of firing).
+        # The slug's own cross-section decides how much of the beam couples in,
+        # which is what makes a long-range intercept slower than a close one.
+        cross_section_m2 = estimate_cross_section_m2(
+            slug.remaining_mass_kg, slug.material
+        )
+        ablation_rate = self.laser.calculate_ablation_rate(
+            distance_km, slug.material, cross_section_m2
+        )
         mass_per_shot = ablation_rate * self.laser.cooldown_s
 
         shots_needed = self.laser.shots_to_destroy_slug(
@@ -642,20 +751,29 @@ class PDEngagement:
 
         # For missiles/torpedoes, assume target absorbs all energy in spot
         # since they're smaller than typical spot sizes
-        intensity = self.laser.calculate_intensity(distance_km)
-        spot_area = self.laser.calculate_spot_area(distance_km)
+        import math
+
+        # Diffraction-limited spot, widened by pointing jitter (added in
+        # quadrature). Without the jitter term the delivered spot never exceeds
+        # 1 m^2 anywhere in the envelope, which made PD effectiveness completely
+        # independent of range.
+        diffraction_area = self.laser.calculate_spot_area(distance_km)
+        diffraction_radius_m = math.sqrt(max(diffraction_area, 0.0) / math.pi)
+        jitter_radius_m = PD_POINTING_JITTER_RAD * distance_km * 1000.0
+        spot_radius_m = math.hypot(diffraction_radius_m, jitter_radius_m)
+        spot_area = math.pi * spot_radius_m ** 2
 
         # Assume torpedo cross-section ~1 m^2
         torpedo_cross_section = 1.0  # m^2
 
         if spot_area <= torpedo_cross_section:
-            # Spot smaller than target - all energy hits
+            # Spot smaller than target - all energy lands on it
             effective_power = power_w
         else:
-            # Spot larger than target - only fraction hits
+            # Spot larger than target - only the illuminated fraction couples
             effective_power = power_w * (torpedo_cross_section / spot_area)
 
-        return effective_power * exposure_time_s
+        return effective_power * exposure_time_s * PD_ABSORPTIVITY
 
     def can_damage_ship_armor(
         self,

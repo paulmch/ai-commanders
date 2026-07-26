@@ -804,7 +804,7 @@ class LLMStrategicController(StrategicController):
         self,
         ship_id: ShipId,
         decision_interval: float = 30.0,
-        llm_model: str = "claude-3-opus",
+        llm_model: str = "anthropic/claude-opus-5",
         temperature: float = 0.3,
     ) -> None:
         """

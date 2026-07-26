@@ -4,12 +4,13 @@ Run an LLM-controlled space battle.
 
 Usage:
     python scripts/run_llm_battle.py --verbose
-    python scripts/run_llm_battle.py --alpha-model openai/gpt-4 --beta-model anthropic/claude-3.5-sonnet
+    python scripts/run_llm_battle.py --alpha-model openai/gpt-5.6-terra --beta-model anthropic/claude-sonnet-5
     python scripts/run_llm_battle.py --fleet-config data/fleet_config.json
 """
 
 import argparse
 import sys
+import uuid
 from pathlib import Path
 
 # Add src to path
@@ -19,7 +20,7 @@ from src.llm.client import CaptainClient
 from src.llm.captain import LLMCaptainConfig
 from src.llm.prompts import CaptainPersonality
 from src.llm.battle_runner import LLMBattleRunner, BattleConfig, load_fleet_data
-from src.llm.fleet_config import BattleFleetConfig
+from src.llm.fleet_config import BattleFleetConfig, _get_short_model_name
 
 
 def main():
@@ -29,7 +30,7 @@ def main():
         epilog="""
 Examples:
     python scripts/run_llm_battle.py --verbose
-    python scripts/run_llm_battle.py --alpha-model openai/gpt-4 --max-checkpoints 10
+    python scripts/run_llm_battle.py --alpha-model openai/gpt-5.6-terra --max-checkpoints 10
     python scripts/run_llm_battle.py --alpha-personality aggressive --beta-personality cautious
         """,
     )
@@ -37,13 +38,13 @@ Examples:
     # Model settings
     parser.add_argument(
         "--alpha-model",
-        default="openrouter/anthropic/claude-3.5-sonnet",
-        help="Model for alpha captain (default: claude-3.5-sonnet)",
+        default="openrouter/anthropic/claude-sonnet-5",
+        help="Model for alpha captain (default: claude-sonnet-5)",
     )
     parser.add_argument(
         "--beta-model",
-        default="openrouter/anthropic/claude-3.5-sonnet",
-        help="Model for beta captain (default: claude-3.5-sonnet)",
+        default="openrouter/anthropic/claude-sonnet-5",
+        help="Model for beta captain (default: claude-sonnet-5)",
     )
 
     # Captain names
@@ -182,37 +183,20 @@ Examples:
             if fleet_config.alpha_fleet.ships:
                 client_model = fleet_config.alpha_fleet.ships[0].model
             else:
-                client_model = "openrouter/anthropic/claude-3.5-sonnet"
+                client_model = "openrouter/anthropic/claude-sonnet-5"
         else:
             client_model = args.alpha_model
 
-        client = CaptainClient(model=client_model)
+        # Stable per-run sticky-routing key. OpenRouter otherwise derives one by
+        # hashing the first system + first non-system message; our per-checkpoint
+        # turn changes every time, so an explicit id keeps the whole battle pinned
+        # to one provider endpoint and its warm cache.
+        session_id = f"ai-commanders-{uuid.uuid4().hex[:16]}"
+        client = CaptainClient(model=client_model, session_id=session_id)
 
-        # Extract short model names for display
-        def get_short_model_name(model: str) -> str:
-            """Extract short model name from full model path."""
-            # e.g., "openai/gpt-4o-mini" -> "GPT-4o-mini"
-            # e.g., "anthropic/claude-3-5-haiku-20241022" -> "Claude-Haiku"
-            parts = model.split("/")
-            name = parts[-1] if parts else model
-            # Clean up common patterns
-            name = name.replace("-20241022", "").replace("-20240620", "")
-            if "claude" in name.lower():
-                if "haiku" in name.lower():
-                    return "Claude-Haiku"
-                elif "sonnet" in name.lower():
-                    return "Claude-Sonnet"
-                elif "opus" in name.lower():
-                    return "Claude-Opus"
-                return "Claude"
-            elif "gpt-4o" in name.lower():
-                return "GPT-4o" if "mini" not in name.lower() else "GPT-4o-mini"
-            elif "gpt-4" in name.lower():
-                return "GPT-4"
-            return name.upper()
-
-        alpha_short = get_short_model_name(args.alpha_model)
-        beta_short = get_short_model_name(args.beta_model)
+        # Short display names (shared implementation - version-aware)
+        alpha_short = _get_short_model_name(args.alpha_model)
+        beta_short = _get_short_model_name(args.beta_model)
 
         # Create captain configs with model names (used for legacy mode)
         alpha_config = LLMCaptainConfig(

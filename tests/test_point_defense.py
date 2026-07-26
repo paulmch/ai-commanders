@@ -102,10 +102,16 @@ class TestTorpedoHeatDamage:
             source_ship_id="attacker"
         )
 
-        # Electronics threshold is 10 kJ
-        destroyed = torp_flight.absorb_pd_heat(15_000)
-        assert not destroyed  # Not destroyed yet
-        assert torp_flight.is_disabled  # But disabled
+        # Reference the constant rather than a literal: pinning 10 kJ here is how
+        # the old one-shot-kill balance stayed invisible.
+        destroyed = torp_flight.absorb_pd_heat(
+            TorpedoInFlight.ELECTRONICS_THRESHOLD_J * 1.5
+        )
+        assert not destroyed  # Seeker gone, but the body is intact
+        assert torp_flight.is_disabled
+        # A seeker kill must cost far less than breaking the torpedo up.
+        assert (TorpedoInFlight.WARHEAD_THRESHOLD_J
+                > TorpedoInFlight.ELECTRONICS_THRESHOLD_J * 10)
 
     def test_torpedo_destroyed_by_heat(self):
         """Test torpedo is destroyed when exceeding warhead threshold."""
@@ -123,8 +129,10 @@ class TestTorpedoHeatDamage:
             source_ship_id="attacker"
         )
 
-        # Warhead threshold is 100 kJ
-        destroyed = torp_flight.absorb_pd_heat(150_000)
+        # Reference the constant rather than a literal (see above).
+        destroyed = torp_flight.absorb_pd_heat(
+            TorpedoInFlight.WARHEAD_THRESHOLD_J * 1.5
+        )
         assert destroyed
         assert torp_flight.is_disabled
 

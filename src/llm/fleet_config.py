@@ -10,9 +10,12 @@ Simplified design:
 """
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional
 from pathlib import Path
+
+from .client import DEFAULT_ADMIRAL_MODEL, DEFAULT_MODEL
 
 
 @dataclass
@@ -154,43 +157,43 @@ class BattleFleetConfig:
 
 
 def _get_short_model_name(model: str) -> str:
-    """Extract short model name from full model path."""
-    # e.g., "openrouter/anthropic/claude-3-5-haiku" -> "Haiku"
-    # e.g., "anthropic/claude-3.5-haiku" -> "Haiku"
-    # e.g., "x-ai/grok-4-1-fast" -> "Grok"
-    parts = model.split("/")
-    name = parts[-1] if parts else model
+    """
+    Extract a short, version-distinguishing display name from a model id.
 
-    # Clean up common patterns
-    name = name.replace("-20241022", "").replace("-20240620", "")
+    Version matters: a battle between claude-opus-5 and claude-opus-4.8 must not
+    label both fleets "Opus", or logs, recordings and the visualizer become
+    ambiguous. Examples:
+        "openrouter/anthropic/claude-opus-5"   -> "Opus5"
+        "anthropic/claude-opus-4.8"            -> "Opus4.8"
+        "openai/gpt-5.6-terra"                 -> "GPT5.6"
+        "x-ai/grok-4.20"                       -> "Grok4.20"
+        "google/gemini-3.5-flash"              -> "Gemini3.5"
+    """
+    name = model.split("/")[-1] if model else model
+    lowered = name.lower()
 
-    if "haiku" in name.lower():
-        return "Haiku"
-    elif "sonnet" in name.lower():
-        return "Sonnet"
-    elif "opus" in name.lower():
-        return "Opus"
-    elif "claude" in name.lower():
-        return "Claude"
-    elif "grok" in name.lower():
-        return "Grok"
-    elif "gpt-4o" in name.lower():
-        if "mini" in name.lower():
-            return "GPT4o-mini"
-        return "GPT4o"
-    elif "gpt-4" in name.lower():
-        return "GPT4"
-    elif "gemini" in name.lower():
-        return "Gemini"
-    elif "llama" in name.lower():
-        return "Llama"
-    elif "mistral" in name.lower():
-        return "Mistral"
-    elif name.lower() in ("dummy", "mcp"):
+    if lowered in ("dummy", "mcp"):
         return "MCP"
 
-    # Default: capitalize last part
-    return name.split("-")[0].title()
+    # Families in priority order; the first match wins.
+    families = [
+        ("haiku", "Haiku"), ("sonnet", "Sonnet"), ("opus", "Opus"),
+        ("fable", "Fable"), ("mythos", "Mythos"), ("claude", "Claude"),
+        ("grok", "Grok"), ("gpt", "GPT"), ("gemini", "Gemini"),
+        ("llama", "Llama"), ("mistral", "Mistral"), ("deepseek", "DeepSeek"),
+        ("qwen", "Qwen"),
+    ]
+    label = next((disp for key, disp in families if key in lowered), None)
+    if label is None:
+        return name.split("-")[0].title()
+
+    # First version-looking token (4, 4.5, 4.20, 5.6). Ignore date stamps.
+    version = ""
+    for token in re.findall(r"\d+(?:\.\d+)?", re.sub(r"-20\d{6}", "", lowered)):
+        version = token
+        break
+
+    return f"{label}{version}" if version else label
 
 
 def _parse_fleet(data: Dict[str, Any], faction: str) -> FleetDefinition:
@@ -220,7 +223,7 @@ def _parse_fleet(data: Dict[str, Any], faction: str) -> FleetDefinition:
                 name=f"Admiral {_get_short_model_name(model)}",
             )
         elif admiral_data.get("enabled", True):
-            model = admiral_data.get("model", "anthropic/claude-3-5-sonnet-20241022")
+            model = admiral_data.get("model", DEFAULT_ADMIRAL_MODEL)
             admiral = AdmiralConfig(
                 model=model,
                 enabled=admiral_data.get("enabled", True),
@@ -235,7 +238,7 @@ def _parse_fleet(data: Dict[str, Any], faction: str) -> FleetDefinition:
     for i, ship_data in enumerate(data.get("ships", [])):
         # Can be just a dict with ship_type and model, or more detailed
         if isinstance(ship_data, dict):
-            model = ship_data.get("model", ship_data.get("captain_model", "anthropic/claude-3-5-sonnet-20241022"))
+            model = ship_data.get("model", ship_data.get("captain_model", DEFAULT_MODEL))
             ship_type = ship_data.get("ship_type", "destroyer")
             ship_id = ship_data.get("ship_id", f"{faction}_{i + 1}")
             temperature = ship_data.get("temperature", 0.7)
@@ -261,7 +264,7 @@ def _parse_fleet(data: Dict[str, Any], faction: str) -> FleetDefinition:
                 }
         else:
             # Shouldn't happen but handle gracefully
-            model = "anthropic/claude-3-5-sonnet-20241022"
+            model = DEFAULT_MODEL
             ship_type = "destroyer"
             ship_id = f"{faction}_{i + 1}"
             temperature = 0.7

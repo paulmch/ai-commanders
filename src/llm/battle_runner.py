@@ -61,6 +61,12 @@ class BattleConfig:
     # If provided, overrides alpha/beta ship types and enables fleet mode
     fleet_config_path: Optional[str] = None
 
+    # RNG seed for the stochastic parts of combat resolution (src/simulation.py
+    # uses the `random` module). Without this a battle cannot be re-run: even
+    # with identical LLM decisions, hit rolls differ every time. None keeps the
+    # previous behaviour (unseeded / non-reproducible).
+    seed: Optional[int] = None
+
 
 @dataclass
 class BattleResult:
@@ -89,6 +95,10 @@ class BattleResult:
 
     # Fleet mode flag
     is_fleet_battle: bool = False
+
+    # RNG seed the battle actually ran with (None = unseeded, not reproducible).
+    # Recorded so a run can be replayed.
+    seed: Optional[int] = None
 
 
 class LLMBattleRunner:
@@ -152,6 +162,23 @@ class LLMBattleRunner:
         # Pre-checkpoint snapshot time offset for Admirals (seconds before checkpoint)
         self.admiral_pre_snapshot_offset = 15.0
 
+    def _seed_rng(self) -> None:
+        """
+        Seed the RNG used by combat resolution, if a seed was configured.
+
+        Combat resolution in src/simulation.py draws from the module-level
+        `random` generator, so an unseeded battle is not reproducible even with
+        an identical decision script. Seeding here (before any ship is created)
+        makes the whole run replayable.
+        """
+        if self.config.seed is None:
+            return
+        import random
+
+        random.seed(self.config.seed)
+        if self.config.verbose:
+            print(f"[SEED] RNG seeded with {self.config.seed}")
+
     def setup_battle(self, fleet_data: Dict[str, Any]) -> None:
         """
         Initialize simulation and captains.
@@ -161,6 +188,8 @@ class LLMBattleRunner:
         """
         from ..simulation import CombatSimulation
         from ..physics import Vector3D
+
+        self._seed_rng()
 
         # Create simulation
         self.simulation = CombatSimulation(
@@ -230,8 +259,11 @@ class LLMBattleRunner:
                 alpha_ship=alpha_ship,
                 beta_ship=beta_ship,
             )
-            # Register event callback to capture combat events
-            self.simulation.add_event_callback(self._handle_simulation_event)
+
+        # Register the event callback unconditionally: it also feeds captain
+        # combat feedback (shots fired, damage taken), which must not depend on
+        # whether the battle happens to be recorded.
+        self.simulation.add_event_callback(self._handle_simulation_event)
 
         if self.config.verbose:
             print(f"\n{'='*60}")
@@ -277,6 +309,8 @@ class LLMBattleRunner:
 
         if not self.fleet_config:
             raise ValueError("Fleet config required for fleet battles")
+
+        self._seed_rng()
 
         # Create simulation
         self.simulation = CombatSimulation(
@@ -507,8 +541,9 @@ class LLMBattleRunner:
                 alpha_admiral=self.alpha_admiral,
                 beta_admiral=self.beta_admiral,
             )
-            # Register event callback to capture combat events
-            self.simulation.add_event_callback(self._handle_simulation_event)
+
+        # Register the event callback unconditionally - see setup_battle().
+        self.simulation.add_event_callback(self._handle_simulation_event)
 
         if self.config.verbose:
             print(f"\n{'='*60}")
@@ -623,6 +658,9 @@ class LLMBattleRunner:
                         beta_state=self._build_ship_state_dict(beta),
                         distance_km=dist,
                     )
+
+            # Refresh who-is-hunting-whom before anyone decides.
+            self._refresh_targeting_awareness()
 
             # Phase 1: Deliver pending messages
             alpha_msgs = self.communication.deliver_messages("alpha")
@@ -779,6 +817,9 @@ class LLMBattleRunner:
             # Log decision
             self._log_decision(alpha_commands, beta_commands)
 
+            # Damage taken from here on belongs to the NEXT checkpoint's report
+            self._clear_captain_hit_logs()
+
             # Phase 6: Check checkpoint limit (skip in unlimited mode)
             if not self.config.unlimited_mode:
                 if self.checkpoint_count >= self.config.max_checkpoints:
@@ -891,6 +932,9 @@ class LLMBattleRunner:
                 print(f"\n=== CHECKPOINT {self.checkpoint_count} at T+{self.simulation.current_time:.0f}s ===")
                 self._print_fleet_status()
 
+            # Refresh who-is-hunting-whom before anyone decides.
+            self._refresh_targeting_awareness()
+
             # Phase 1: Admiral decisions (both sides)
             admiral_orders = {}  # ship_id -> list of AdmiralOrder
             if self.config.verbose and (self.alpha_admiral or self.beta_admiral):
@@ -1000,6 +1044,9 @@ class LLMBattleRunner:
                             suggested_target=order.suggested_target,
                         )
 
+            # Phase 1b: Admiral <-> Admiral diplomacy (provider-agnostic)
+            self._exchange_admiral_messages()
+
             # Phase 2: Deliver pending messages to captains
             if self.fleet_communication:
                 for ship_id in list(self.alpha_captains.keys()) + list(self.beta_captains.keys()):
@@ -1037,10 +1084,9 @@ class LLMBattleRunner:
                     orders = admiral_orders[ship_id]
                     # Also include fleet directive if Admiral exists
                     admiral = self.alpha_admiral if faction == "alpha" else self.beta_admiral
-                    if admiral and hasattr(admiral, 'last_directive'):
-                        directive = admiral.last_directive
-                    else:
-                        directive = None
+                    # No hasattr guard: a missing attribute is a bug that must
+                    # surface, not silently degrade to "no directive".
+                    directive = getattr(admiral, "last_directive", None) if admiral else None
                     captain.receive_admiral_orders(orders, directive)
 
                 if self.config.verbose:
@@ -1081,6 +1127,9 @@ class LLMBattleRunner:
 
             # Log decision
             self._log_fleet_decision(all_commands)
+
+            # Damage taken from here on belongs to the NEXT checkpoint's report
+            self._clear_captain_hit_logs()
 
             # Phase 7: Check limits
             if not self.config.unlimited_mode:
@@ -1208,6 +1257,9 @@ class LLMBattleRunner:
                 print(f"\n=== CHECKPOINT {self.checkpoint_count} at T+{self.simulation.current_time:.0f}s ===")
                 self._print_fleet_status()
 
+            # Refresh who-is-hunting-whom before anyone decides.
+            self._refresh_targeting_awareness()
+
             # Advance chat turn
             if self.mcp_chat:
                 self.mcp_chat.new_turn()
@@ -1323,6 +1375,11 @@ class LLMBattleRunner:
                         for line in order_lines:
                             print(f"         {line}")
 
+            # === MESSAGE BRIDGE: LLM Admiral <-> LLM Admiral ===
+            # No-op unless both sides are LLM admirals (the MCP bridge below owns
+            # the mixed cases), so the two paths cannot double-drain a mailbox.
+            self._exchange_admiral_messages()
+
             # === MESSAGE BRIDGE: MCP <-> LLM Admiral ===
             # Deliver messages between MCP chat system and LLM Admiral messaging
             if self.mcp_chat:
@@ -1383,10 +1440,9 @@ class LLMBattleRunner:
                 if ship_id in admiral_orders:
                     orders = admiral_orders[ship_id]
                     admiral = self.alpha_admiral if faction == "alpha" else self.beta_admiral
-                    if admiral and hasattr(admiral, 'last_directive'):
-                        directive = admiral.last_directive
-                    else:
-                        directive = None
+                    # No hasattr guard: a missing attribute is a bug that must
+                    # surface, not silently degrade to "no directive".
+                    directive = getattr(admiral, "last_directive", None) if admiral else None
                     captain.receive_admiral_orders(orders, directive)
 
                 if self.config.verbose:
@@ -1582,7 +1638,12 @@ class LLMBattleRunner:
                 )
                 captain.admiral_orders.append(clarification_order)
 
-                # Get a new decision from the captain with the clarification
+                # Get a new decision from the captain with the clarification.
+                # Drop the superseded turn's bookkeeping first: this is still ONE
+                # checkpoint, and without this a single checkpoint appended up to
+                # three history entries (all stamped with the same sim time) and
+                # advanced "DECISION POINT n" three times.
+                captain.revert_last_decision()
                 new_commands = captain.decide(ship_id, self.simulation)
 
                 # Filter out discussion requests from new commands
@@ -1611,7 +1672,8 @@ class LLMBattleRunner:
                     )
                     captain.admiral_orders.append(force_order)
 
-                    # Try one more time
+                    # Try one more time (same checkpoint - see above)
+                    captain.revert_last_decision()
                     retry_commands = captain.decide(ship_id, self.simulation)
                     retry_tactical = [c for c in retry_commands if is_tactical_command(c)]
 
@@ -1628,7 +1690,61 @@ class LLMBattleRunner:
         # Filter out any remaining discussion dicts
         commands = [c for c in commands if not (isinstance(c, dict) and c.get('type') in ('discuss_with_admiral', 'discussion_limit_reached'))]
 
+        # Drain any message the captain composed this checkpoint. Fleet battles
+        # previously only ever *delivered* messages - nothing collected them - so
+        # send_message was a no-op while the model was told it had sent something.
+        self._collect_captain_message(captain, ship_id)
+
         return commands
+
+    def _all_captains(self) -> List[LLMCaptain]:
+        """Every captain in the battle, in 1v1 or fleet mode."""
+        captains = list(self.alpha_captains.values()) + list(self.beta_captains.values())
+        if captains:
+            return captains
+        return [c for c in (self.alpha_captain, self.beta_captain) if c]
+
+    def _clear_captain_hit_logs(self) -> None:
+        """
+        Reset the per-interval DAMAGE TAKEN log.
+
+        Called at the END of a checkpoint so that what a captain sees at the next
+        checkpoint is exactly the damage taken during the interval just fought.
+        `clear_recent_hits` previously had no callers at all.
+        """
+        for captain in self._all_captains():
+            captain.clear_recent_hits()
+
+    def _exchange_admiral_messages(self) -> None:
+        """
+        Deliver messages between two LLM Admirals.
+
+        ``message_enemy_admiral`` parks the text on the sender, but the only drain
+        (``get_pending_enemy_message``) and the only delivery
+        (``receive_enemy_admiral_message``) lived inside the MCP bridge, so in a
+        pure LLM-vs-LLM fleet battle an Admiral could talk and nobody ever heard
+        it. This runs in both the sync and async fleet loops.
+
+        Both mailboxes are drained before either is delivered so that a message
+        sent this checkpoint cannot be handed back to its own author, and so both
+        sides see the same one-checkpoint delivery latency.
+        """
+        if not (self.alpha_admiral and self.beta_admiral):
+            return
+
+        alpha_msg = self.alpha_admiral.get_pending_enemy_message()
+        beta_msg = self.beta_admiral.get_pending_enemy_message()
+
+        if alpha_msg:
+            self.beta_admiral.receive_enemy_admiral_message(alpha_msg)
+            if self.config.verbose:
+                print(f"  [MSG] Admiral {self.alpha_admiral.name} -> "
+                      f"Admiral {self.beta_admiral.name}: \"{alpha_msg}\"")
+        if beta_msg:
+            self.alpha_admiral.receive_enemy_admiral_message(beta_msg)
+            if self.config.verbose:
+                print(f"  [MSG] Admiral {self.beta_admiral.name} -> "
+                      f"Admiral {self.alpha_admiral.name}: \"{beta_msg}\"")
 
     def _handle_immediate_messaging(self) -> None:
         """Handle immediate captain-to-captain messaging within checkpoint."""
@@ -1646,6 +1762,45 @@ class LLMBattleRunner:
                     for msg in immediate_msgs:
                         print(f"  [IMMEDIATE] {msg.format_for_display()}")
 
+    def _collect_captain_message(self, captain: Any, ship_id: str) -> None:
+        """Route a captain's outgoing message into the fleet comms channel."""
+        if not self.fleet_communication:
+            return
+
+        msg_data = captain.get_pending_message()
+        if not msg_data:
+            return
+
+        if isinstance(msg_data, dict):
+            content = msg_data.get("content", "")
+            recipient = msg_data.get("recipient", "ALL_ENEMIES")
+            target_ship = msg_data.get("target_ship")
+        else:
+            content, recipient, target_ship = str(msg_data), "ALL_ENEMIES", None
+
+        if not content:
+            return
+
+        self.fleet_communication.queue_message(
+            sender_id=ship_id,
+            content=content,
+            timestamp=self.simulation.current_time,
+            recipient_id=target_ship if recipient == "SPECIFIC" else None,
+        )
+
+        if self.recorder:
+            self.recorder.record_message(
+                timestamp=self.simulation.current_time,
+                sender_id=ship_id,
+                sender_name=captain.name,
+                ship_name=captain.ship_name,
+                message=content,
+            )
+
+        if self.config.verbose:
+            dest = target_ship if recipient == "SPECIFIC" and target_ship else recipient
+            print(f"  [MSG] {captain.ship_name} -> {dest}: \"{content[:60]}\"")
+
     def _check_fleet_surrender_draw(self) -> None:
         """Check and handle surrenders and draws in fleet mode."""
         # Check each captain for surrender
@@ -1658,14 +1813,16 @@ class LLMBattleRunner:
                     if self.config.verbose:
                         print(f"  [SURRENDER] {captain.ship_name} ({captain.name}) surrenders")
 
-        # Handle Admiral-level draw proposals
-        if self.alpha_admiral and hasattr(self.alpha_admiral, 'proposed_draw') and self.alpha_admiral.proposed_draw:
+        # Handle Admiral-level draw proposals.
+        # LLMAdmiral exposes `has_proposed_draw`; the old `hasattr(..., 'proposed_draw')`
+        # guard was never satisfied, so a proposal was never even announced.
+        if self.alpha_admiral and self.alpha_admiral.has_proposed_draw:
             if not self._alpha_draw_notified:
                 self._alpha_draw_notified = True
                 if self.config.verbose:
                     print(f"  [DRAW PROPOSED] Admiral {self.alpha_admiral.name} proposes fleet draw")
 
-        if self.beta_admiral and hasattr(self.beta_admiral, 'proposed_draw') and self.beta_admiral.proposed_draw:
+        if self.beta_admiral and self.beta_admiral.has_proposed_draw:
             if not self._beta_draw_notified:
                 self._beta_draw_notified = True
                 if self.config.verbose:
@@ -1893,6 +2050,25 @@ class LLMBattleRunner:
 
         self.decision_log.append(log_entry)
 
+    def _fleet_draw_agreed(self) -> bool:
+        """
+        True when one Admiral proposed a fleet draw and the other accepted it.
+
+        Two bugs lived here. First, every consumer read ``admiral.proposed_draw``
+        via ``getattr(..., False)`` while LLMAdmiral actually sets
+        ``has_proposed_draw`` / ``has_accepted_draw`` - the default silenced the
+        mismatch and admiral-level draws could never end a battle. Second, the old
+        condition required BOTH sides to propose, which is not what the tools
+        model: a draw is propose + accept, exactly as the MCP path already checks.
+        Attributes are now read directly so a future rename fails loudly.
+        """
+        if not (self.alpha_admiral and self.beta_admiral):
+            return False
+        return (
+            (self.alpha_admiral.has_proposed_draw and self.beta_admiral.has_accepted_draw)
+            or (self.beta_admiral.has_proposed_draw and self.alpha_admiral.has_accepted_draw)
+        )
+
     def _is_fleet_battle_over(self) -> bool:
         """Check if fleet battle should end."""
         if self.simulation is None:
@@ -1913,9 +2089,7 @@ class LLMBattleRunner:
 
         # Check for mutual Admiral draw
         if self.alpha_admiral and self.beta_admiral:
-            alpha_draw = getattr(self.alpha_admiral, 'proposed_draw', False)
-            beta_draw = getattr(self.beta_admiral, 'proposed_draw', False)
-            if alpha_draw and beta_draw:
+            if self._fleet_draw_agreed():
                 return True
 
         # In unlimited mode, only destruction/surrender/draw can end battle
@@ -1956,7 +2130,7 @@ class LLMBattleRunner:
             reason = "Beta fleet eliminated"
         elif self.alpha_admiral and self.beta_admiral:
             # Check for mutual draw
-            if getattr(self.alpha_admiral, 'proposed_draw', False) and getattr(self.beta_admiral, 'proposed_draw', False):
+            if self._fleet_draw_agreed():
                 # Resolve by fleet points
                 alpha_points = sum(self._calculate_battle_points(ship) for ship in self.alpha_ships.values())
                 beta_points = sum(self._calculate_battle_points(ship) for ship in self.beta_ships.values())
@@ -2048,6 +2222,7 @@ class LLMBattleRunner:
             messages=self.fleet_communication.get_all_messages_formatted() if self.fleet_communication else [],
             is_fleet_battle=True,
             recording_file=self.recording_file,
+            seed=self.config.seed,
         )
 
     def _is_battle_over(self) -> bool:
@@ -2453,6 +2628,7 @@ class LLMBattleRunner:
             decision_log=self.decision_log,
             messages=self.communication.get_all_messages_formatted() if self.communication else [],
             recording_file=self.recording_file,
+            seed=self.config.seed,
         )
 
     def _collect_stats(self, ship: Any) -> Dict[str, Any]:
@@ -2566,6 +2742,10 @@ class LLMBattleRunner:
 
         This is called by the simulation for every event (shots, hits, damage, etc.)
         """
+        # Captain-visible feedback first: it is part of the game, not part of the
+        # recording, and must run even when record_battle is disabled.
+        self._feed_captain_event(event)
+
         if not self.recorder:
             return
 
@@ -2613,15 +2793,6 @@ class LLMBattleRunner:
                 impact_position=data.get("impact_position"),
             )
 
-            # Record shot for captain learning
-            source_id = data.get("source_ship_id", "unknown")
-            self._record_captain_shot(
-                source_id=source_id,
-                weapon_slot=data.get("weapon_slot", "unknown"),
-                result="HIT",
-                damage_gj=data.get("kinetic_energy_gj", 0),
-            )
-
         # Record misses
         elif event_type == SimulationEventType.PROJECTILE_MISS:
             self.recorder.record_miss(
@@ -2632,15 +2803,6 @@ class LLMBattleRunner:
                 hit_probability=data.get("hit_probability", 0),
                 distance_km=data.get("closest_approach_km", 0),
                 flight_time_s=data.get("flight_time_s", 0),
-            )
-
-            # Record shot for captain learning
-            source_id = data.get("source_ship_id", ship_id or "unknown")
-            self._record_captain_shot(
-                source_id=source_id,
-                weapon_slot=data.get("weapon_slot", "unknown"),
-                result="MISS",
-                damage_gj=0.0,
             )
 
         # Record armor penetration
@@ -2759,9 +2921,108 @@ class LLMBattleRunner:
             )
 
 
+    def get_captain_for_ship(self, ship_id: Optional[str]) -> Optional[LLMCaptain]:
+        """Look up the captain commanding a ship, in either 1v1 or fleet mode."""
+        if not ship_id:
+            return None
+        captain = self.alpha_captains.get(ship_id) or self.beta_captains.get(ship_id)
+        if captain:
+            return captain
+        if ship_id == "alpha":
+            return self.alpha_captain
+        if ship_id == "beta":
+            return self.beta_captain
+        return None
+
+    def _feed_captain_event(self, event: Any) -> None:
+        """
+        Route combat events into the captains' own feedback channels.
+
+        Previously the only consumer of these events was the recorder, so
+        `record_hit_received` had no callers at all (the DAMAGE TAKEN block never
+        rendered) and shot feedback was hard-coded to the 1v1 ship ids.
+        """
+        if not self.simulation:
+            return
+
+        from ..simulation import SimulationEventType
+
+        data = event.data or {}
+
+        if event.event_type == SimulationEventType.PROJECTILE_IMPACT:
+            self._record_captain_shot(
+                source_id=data.get("source_ship_id") or event.ship_id,
+                target_id=event.target_id,
+                weapon_slot=data.get("weapon_slot", "unknown"),
+                result="HIT",
+                damage_gj=data.get("kinetic_energy_gj", 0),
+            )
+
+            # Tell the ship that was hit where it was hit and by whom.
+            victim = self.get_captain_for_ship(event.target_id)
+            if victim:
+                source_id = data.get("source_ship_id") or event.ship_id
+                source_ship = self.simulation.get_ship(source_id) if source_id else None
+                source_name = getattr(source_ship, 'name', source_id) if source_ship else "Unknown"
+                victim.record_hit_received(
+                    time=event.timestamp,
+                    weapon=self._weapon_name(source_id, data.get("weapon_slot", "unknown")),
+                    location=data.get("hit_location", "unknown"),
+                    damage_cm=data.get("armor_ablation_cm", 0.0),
+                    remaining_cm=data.get("armor_remaining_cm", 0.0),
+                    source_ship=source_name,
+                )
+
+        elif event.event_type == SimulationEventType.PROJECTILE_MISS:
+            self._record_captain_shot(
+                source_id=data.get("source_ship_id") or event.ship_id,
+                target_id=event.target_id,
+                weapon_slot=data.get("weapon_slot", "unknown"),
+                result="MISS",
+                damage_gj=0.0,
+            )
+
+    def _weapon_name(self, ship_id: Optional[str], weapon_slot: str) -> str:
+        """Resolve a weapon slot to its display name on the given ship."""
+        if not ship_id or not self.simulation:
+            return weapon_slot
+        ship = self.simulation.get_ship(ship_id)
+        weapons = getattr(ship, 'weapons', None) or {}
+        ws = weapons.get(weapon_slot)
+        weapon = getattr(ws, 'weapon', None)
+        return getattr(weapon, 'name', weapon_slot)
+
+    def _refresh_targeting_awareness(self) -> None:
+        """
+        Tell each captain which enemy captains currently have them targeted.
+
+        `update_targeting_me` had no callers, so `targeting_me` was permanently
+        empty and every enemy was reported to the captain as `has_us_targeted:
+        False` - the prompt advertised a threat channel that never fired.
+        """
+        alpha_items = list(self.alpha_captains.items())
+        beta_items = list(self.beta_captains.items())
+        if not alpha_items and not beta_items:
+            # 1v1 mode
+            if self.alpha_captain and self.beta_captain:
+                alpha_items = [("alpha", self.alpha_captain)]
+                beta_items = [("beta", self.beta_captain)]
+            else:
+                return
+
+        for own_items, enemy_items in ((alpha_items, beta_items), (beta_items, alpha_items)):
+            for ship_id, captain in own_items:
+                hunters = [
+                    enemy_ship_id
+                    for enemy_ship_id, enemy_captain in enemy_items
+                    if enemy_captain.primary_target_id == ship_id
+                ]
+                captain.update_targeting_me(hunters)
+
     def _record_captain_shot(
         self,
-        source_id: str,
+        source_id: Optional[str],
+        target_id: Optional[str],
         weapon_slot: str,
         result: str,
         damage_gj: float,
@@ -2769,48 +3030,42 @@ class LLMBattleRunner:
         """Record a shot for captain learning feedback.
 
         Args:
-            source_id: Ship that fired ("alpha" or "beta")
+            source_id: ID of the ship that fired
+            target_id: ID of the ship that was fired at
             weapon_slot: Which weapon fired
             result: "HIT" or "MISS"
             damage_gj: Damage dealt (for hits)
+
+        Distances and closing rates are computed between the actual shooter and
+        the actual target; the old version assumed the literal ship ids "alpha"
+        and "beta", which do not exist in fleet mode, so it returned early and no
+        fleet captain ever saw its own hit rate.
         """
         if not self.simulation:
             return
 
-        # Get the captain who fired
-        captain = self.alpha_captain if source_id == "alpha" else self.beta_captain
+        captain = self.get_captain_for_ship(source_id)
         if not captain:
             return
 
-        # Get ships for distance/velocity calculation
-        alpha = self.simulation.get_ship("alpha")
-        beta = self.simulation.get_ship("beta")
-        if not alpha or not beta:
+        shooter = self.simulation.get_ship(source_id)
+        target = self.simulation.get_ship(target_id) if target_id else None
+        if not shooter or not target:
             return
 
-        # Calculate distance
-        distance_m = (alpha.position - beta.position).magnitude
+        rel_pos = target.position - shooter.position
+        distance_m = rel_pos.magnitude
         distance_km = distance_m / 1000
 
-        # Calculate relative velocity (closing rate)
-        rel_vel = beta.velocity - alpha.velocity if source_id == "alpha" else alpha.velocity - beta.velocity
-        rel_pos = beta.position - alpha.position if source_id == "alpha" else alpha.position - beta.position
+        rel_vel = target.velocity - shooter.velocity
         if distance_m > 0:
             # Positive = closing, negative = separating (from shooter's perspective)
             closing_kps = -rel_pos.normalized().dot(rel_vel) / 1000
         else:
             closing_kps = 0.0
 
-        # Get weapon name instead of slot
-        weapon_name = weapon_slot
-        shooter = alpha if source_id == "alpha" else beta
-        if hasattr(shooter, 'weapons') and weapon_slot in shooter.weapons:
-            ws = shooter.weapons[weapon_slot]
-            if hasattr(ws, 'weapon') and hasattr(ws.weapon, 'name'):
-                weapon_name = ws.weapon.name
-
         captain.record_shot(
-            weapon=weapon_name,
+            weapon=self._weapon_name(source_id, weapon_slot),
             distance_km=distance_km,
             rel_velocity_kps=closing_kps,
             result=result,

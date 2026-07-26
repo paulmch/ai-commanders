@@ -14,7 +14,7 @@ import random
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Protocol, runtime_checkable
+from typing import Optional, Protocol, Union, runtime_checkable
 
 
 # Radiator vulnerability constants
@@ -30,12 +30,15 @@ class HitLocation(Enum):
     TAIL = "tail"
 
 
-class RadiatorPosition(Enum):
-    """Radiator mounting positions on the ship hull."""
-    PORT = "PORT"
-    STARBOARD = "STARBOARD"
-    DORSAL = "DORSAL"
-    VENTRAL = "VENTRAL"
+# Radiator positions live in thermal.py. combat.py used to define its own
+# four-member enum (PORT/STARBOARD/DORSAL/VENTRAL) while thermal keyed its
+# radiator dict by TAIL_PORT/TAIL_STARBOARD/... - so every radiator lookup made
+# through the combat enum missed, and radiator damage silently did nothing.
+# One concept, one enum.
+try:
+    from .thermal import RadiatorPosition
+except ImportError:  # pragma: no cover - script-style import path
+    from thermal import RadiatorPosition
 
 
 # Hit location probabilities based on ship geometry
@@ -488,13 +491,32 @@ class Armor:
         total_ablation = base_ablation + chipping_ablation
 
         # Apply ablation to armor
+        thickness_before_cm = self.thickness_cm
         actual_ablation = min(total_ablation, self.thickness_cm)
         self.thickness_cm = max(0.0, self.thickness_cm - total_ablation)
 
-        # Energy absorbed by hull (damage that gets through armor absorption)
-        # Armor protection reduces what reaches the hull
+        # Energy that carries through to the hull.
+        #
+        # This used to be `effective_damage_gj * (1 - protection)`, which applied
+        # the armor material's kinetics_resist even when the section had been
+        # ablated to nothing - a round passing through a hole was still being
+        # resisted by armor that no longer existed there. A breached facing let
+        # only ~25% of the round's KE inside, so penetrating hits could not carve
+        # through a hull the way a hypervelocity penetrator should.
+        #
+        # Model it as an energy budget instead: the armor consumes the energy it
+        # took to vaporise the material actually removed, and whatever survives
+        # that carries through, attenuated by the thickness still standing.
+        # Intact armor therefore still stops rounds, but a breach is lethal.
+        energy_spent_ablating_gj = 0.0
+        if base_ablation > 0.0:
+            # calculate_energy_ablation is linear in energy, so the energy cost of
+            # the ablation we actually achieved scales with the fraction realised.
+            realised = min(base_ablation, max(0.0, thickness_before_cm))
+            energy_spent_ablating_gj = effective_damage_gj * (realised / base_ablation)
+
         protection = self.protection
-        energy_to_hull_gj = effective_damage_gj * (1.0 - protection)
+        energy_to_hull_gj = max(0.0, damage_gj - energy_spent_ablating_gj) * (1.0 - protection)
 
         # Update chipping fraction (creates weak spots for future critical hits)
         if self.thickness_cm > 0:
@@ -616,16 +638,23 @@ class ShipArmor:
 
         return cls(sections=sections)
 
-    def get_section(self, location: HitLocation) -> Optional[Armor]:
+    def get_section(self, location: Union[HitLocation, str]) -> Optional[Armor]:
         """
         Get the armor section for a specific location.
 
         Args:
-            location: The hit location to retrieve.
+            location: The hit location to retrieve. Accepts either a HitLocation
+                or its string value ("nose"/"lateral"/"tail"); strings are
+                normalized so callers cannot silently miss every lookup.
 
         Returns:
             The Armor instance for that location, or None if not found.
         """
+        if isinstance(location, str):
+            try:
+                location = HitLocation(location)
+            except ValueError:
+                return None
         return self.sections.get(location)
 
     def total_mass_tons(self) -> float:
@@ -680,10 +709,10 @@ class RadiatorHitResolver:
         """
         if hit_location == HitLocation.LATERAL:
             # Lateral hits can hit port or starboard radiators
-            return self.rng.choice([RadiatorPosition.PORT, RadiatorPosition.STARBOARD])
+            return self.rng.choice([RadiatorPosition.TAIL_PORT, RadiatorPosition.TAIL_STARBOARD])
         else:
             # Nose or tail hits can hit dorsal or ventral radiators
-            return self.rng.choice([RadiatorPosition.DORSAL, RadiatorPosition.VENTRAL])
+            return self.rng.choice([RadiatorPosition.TAIL_DORSAL, RadiatorPosition.TAIL_VENTRAL])
 
     def resolve_radiator_hit(
         self,
@@ -886,7 +915,6 @@ class CombatResolver:
 
         # Calculate damage absorption using angle-adjusted protection
         protection = armor.protection_at_angle(impact_angle_deg)
-        damage_absorbed = weapon.kinetic_energy_gj * protection
 
         # Calculate armor ablation (reduced at oblique angles)
         # Oblique hits spread damage over larger area, reducing ablation
@@ -899,14 +927,26 @@ class CombatResolver:
         actual_ablation = min(ablation, armor.thickness_cm)
         armor.thickness_cm = max(0.0, armor.thickness_cm - ablation)
 
-        # Check for penetration
+        # Check for penetration.
+        #
+        # Energy must balance: what the armor absorbs plus what continues into
+        # the hull cannot exceed the projectile's kinetic energy. Previously
+        # `damage_absorbed` was KE * protection *and* `remaining_damage` was
+        # KE * 0.9 on a penetrating hit, so a 7.25 GJ round could report over
+        # 7.5 GJ of effect. The non-penetrating bleed-through was also computed
+        # and then thrown away (`remaining_damage_gj=... if penetrated else 0.0`),
+        # making that whole branch dead code.
         penetrated = armor.is_penetrated()
         if penetrated:
-            # Armor breached - 90% of energy reaches hull
+            # Armor breached - 90% of energy reaches the hull, the rest is
+            # spent breaking through.
             remaining_damage = weapon.kinetic_energy_gj * 0.9
+            damage_absorbed = weapon.kinetic_energy_gj - remaining_damage
         else:
-            # Armor intact - only bleed-through based on protection factor
-            remaining_damage = weapon.kinetic_energy_gj * (1.0 - protection)
+            # Armor intact - it absorbs its protection fraction and the
+            # remainder bleeds through.
+            damage_absorbed = weapon.kinetic_energy_gj * protection
+            remaining_damage = weapon.kinetic_energy_gj - damage_absorbed
 
         # Critical hit check (10% base chance, higher if penetrated)
         crit_chance = 0.1 if not penetrated else 0.5
@@ -929,7 +969,7 @@ class CombatResolver:
             damage_absorbed=damage_absorbed,
             armor_ablation_cm=actual_ablation,
             penetrated=penetrated,
-            remaining_damage_gj=remaining_damage if penetrated else 0.0,
+            remaining_damage_gj=remaining_damage,
             critical_hit=critical_hit,
             radiator_hit=radiator_hit,
             radiator_position=radiator_position,

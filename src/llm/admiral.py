@@ -42,6 +42,7 @@ class AdmiralDecision:
     rejected_draw: bool = False
     message_to_enemy_admiral: Optional[str] = None
     reasoning: str = ""  # Admiral's tactical reasoning (for logs)
+    call_failed: bool = False  # True if the LLM call errored (not a real decision)
 
 
 @dataclass
@@ -160,6 +161,7 @@ class LLMAdmiral:
 
         # State
         self.decision_count = 0
+        self.last_directive: Optional[str] = None
         self.order_history: List[AdmiralDecision] = []
         self.has_proposed_draw = False
         self.has_accepted_draw = False
@@ -229,11 +231,15 @@ Be authentic to how you would command a fleet as {model_name}."""
         messages = [{"role": "user", "content": prompt}]
 
         # Call LLM with personality selection tool (use admiral's configured model)
-        tool_calls = self.client.decide_with_tools(
-            messages=messages,
-            tools=PERSONALITY_SELECTION_TOOLS,
-            model=self.config.model,
-        )
+        try:
+            tool_calls = self.client.decide_with_tools(
+                messages=messages,
+                tools=PERSONALITY_SELECTION_TOOLS,
+                model=self.config.model,
+            )
+        except LLMCallError as e:
+            print(f"[ADMIRAL {self.config.name}] personality selection failed: {e}")
+            tool_calls = []
 
         result = {"personality_description": None}
 
@@ -333,7 +339,14 @@ Be authentic to how you would command a fleet as {model_name}."""
         ]
 
         # Call LLM for directive (use admiral's configured model)
-        tool_calls = self.client.decide_with_tools(messages, self.tools, model=self.config.model)
+        try:
+            tool_calls = self.client.decide_with_tools(messages, self.tools, model=self.config.model)
+        except LLMCallError as e:
+            # A failed call is NOT a decision to stand down - flag it so the
+            # battle record shows a degraded turn rather than a deliberate one.
+            print(f"[ADMIRAL {self.config.name}] directive call failed: {e}")
+            decision.call_failed = True
+            return decision
 
         # Extract directive and any draw/message actions
         for call in tool_calls:
@@ -342,6 +355,11 @@ Be authentic to how you would command a fleet as {model_name}."""
 
             if name == "set_fleet_directive":
                 decision.fleet_directive = args.get("directive", "")
+                # Publish it on the admiral itself. battle_runner and the MCP
+                # servers all read `admiral.last_directive`; the attribute never
+                # existed, so the entire output of the Phase-1 strategy call was
+                # discarded and captains never received a fleet directive.
+                self.last_directive = decision.fleet_directive
             elif name == "message_enemy_admiral":
                 self._pending_enemy_message = args.get("message", "")
                 decision.message_to_enemy_admiral = self._pending_enemy_message
@@ -415,7 +433,11 @@ Be authentic to how you would command a fleet as {model_name}."""
         order_tool = [t for t in self.tools if t.get("function", {}).get("name") == "issue_order"]
 
         # Call LLM (use admiral's configured model)
-        tool_calls = self.client.decide_with_tools(messages, order_tool, model=self.config.model)
+        try:
+            tool_calls = self.client.decide_with_tools(messages, order_tool, model=self.config.model)
+        except LLMCallError as e:
+            print(f"[ADMIRAL {self.config.name}] ship-order call failed: {e}")
+            return None
 
         # Extract order
         for call in tool_calls:
@@ -474,8 +496,13 @@ Be authentic to how you would command a fleet as {model_name}."""
             {"role": "user", "content": f"Captain of {captain_ship_name} asks: {question}"},
         ]
 
-        # Get response (no tools, just text)
-        response = self.client.complete(messages)
+        # Get response (no tools, just text). Pass the admiral's own model -
+        # otherwise a shared client answers as whichever model built it.
+        try:
+            response = self.client.complete(messages, model=self.config.model)
+        except LLMCallError as e:
+            print(f"[ADMIRAL {self.config.name}] reply to captain failed: {e}")
+            return ""
         return response.content
 
     def receive_enemy_admiral_message(self, message: str) -> None:
@@ -556,7 +583,7 @@ Be authentic to how you would command a fleet as {model_name}."""
         """Build full snapshot for a friendly ship."""
         # Get ship capabilities from fleet data
         ship_spec = self.fleet_data.get("ships", {}).get(captain.config.ship_type, {})
-        propulsion = ship_spec.get("propulsion", {})
+        performance = ship_spec.get("performance", {})
 
         # Build weapons summary
         weapons_summary = self._build_weapons_summary(ship_spec)
@@ -581,7 +608,7 @@ Be authentic to how you would command a fleet as {model_name}."""
         targeted_by = []
         for enemy in simulation.get_enemy_ships(ship.ship_id):
             if hasattr(enemy, 'primary_target_id') and enemy.primary_target_id == ship.ship_id:
-                targeted_by.append(enemy.ship_name if hasattr(enemy, 'ship_name') else enemy.ship_id)
+                targeted_by.append(getattr(enemy, 'name', None) or enemy.ship_id)
 
         # Current maneuver
         maneuver_str = "MAINTAIN"
@@ -599,17 +626,17 @@ Be authentic to how you would command a fleet as {model_name}."""
 
         return FriendlyShipSnapshot(
             ship_id=ship.ship_id,
-            ship_name=ship.ship_name if hasattr(ship, 'ship_name') else ship.ship_id,
+            ship_name=getattr(ship, 'name', None) or ship.ship_id,
             ship_type=captain.config.ship_type,
             captain_name=captain.config.name,
             position_km=pos_km,
             velocity_kps=vel_kps,
             velocity_vector=vel_vector,
-            hull_integrity=ship.hull_integrity * 100,
+            hull_integrity=ship.hull_integrity,
             delta_v_remaining=ship.remaining_delta_v_kps,
             heat_percent=ship.heat_percent if hasattr(ship, 'heat_percent') else 0,
-            max_acceleration_g=propulsion.get("combat_acceleration_g", 2.0),
-            max_delta_v=propulsion.get("delta_v_kps", 500),
+            max_acceleration_g=performance.get("combat_acceleration_g", 2.0),
+            max_delta_v=performance.get("delta_v_kps", 500),
             weapons_summary=weapons_summary,
             weapons_ready=weapons_ready,
             weapons_cooling=weapons_cooling,
@@ -656,7 +683,7 @@ Be authentic to how you would command a fleet as {model_name}."""
 
         return EnemyShipSnapshot(
             ship_id=ship.ship_id,
-            ship_name=ship.ship_name if hasattr(ship, 'ship_name') else ship.ship_id,
+            ship_name=getattr(ship, 'name', None) or ship.ship_id,
             ship_type=ship.ship_type if hasattr(ship, 'ship_type') else "unknown",
             position_km=pos_km,
             velocity_kps=vel_kps,
@@ -746,6 +773,7 @@ Be authentic to how you would command a fleet as {model_name}."""
 
             elif name == "set_fleet_directive":
                 decision.fleet_directive = args.get("directive", "")
+                self.last_directive = decision.fleet_directive
 
             elif name == "message_enemy_admiral":
                 self._pending_enemy_message = args.get("message", "")

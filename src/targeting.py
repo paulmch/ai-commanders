@@ -352,13 +352,18 @@ class LeadCalculator:
 
         Returns:
             Lead position (aim point) in kilometers. The shooter should
-            aim at this point to intercept the target.
+            aim (point the muzzle) at this point to intercept the target
+            with a projectile that inherits the shooter's velocity.
         """
         if projectile_speed_kps <= 0:
             # Cannot calculate lead with zero projectile speed
             return target_pos
 
-        # Calculate relative position and velocity
+        # Calculate relative position and velocity.
+        # The intercept must be solved in the SHOOTER's frame because the
+        # projectile inherits the shooter's velocity (see projectile.py):
+        # in that frame the projectile travels at projectile_speed along the
+        # muzzle direction while the target moves at relative_vel.
         relative_pos = target_pos - shooter_pos
         relative_vel = target_vel - shooter_vel
 
@@ -372,12 +377,11 @@ class LeadCalculator:
         intercept_time = initial_distance / projectile_speed_kps
 
         for _ in range(max_iterations):
-            # Predict target position at intercept time
-            predicted_target_pos = target_pos + target_vel * intercept_time
+            # Predict target position at intercept time (shooter frame)
+            predicted_rel_pos = relative_pos + relative_vel * intercept_time
 
             # Calculate new distance and intercept time
-            predicted_relative_pos = predicted_target_pos - shooter_pos
-            new_distance = predicted_relative_pos.magnitude
+            new_distance = predicted_rel_pos.magnitude
             new_intercept_time = new_distance / projectile_speed_kps
 
             # Check convergence
@@ -387,8 +391,12 @@ class LeadCalculator:
 
             intercept_time = new_intercept_time
 
-        # Return the lead position (where to aim)
-        lead_position = target_pos + target_vel * intercept_time
+        # Return the lead position (where to point the muzzle): offset from
+        # the shooter along the shooter-frame intercept direction, at the
+        # projectile's flight distance. Using the world-frame intercept point
+        # here (target_pos + target_vel*t) would ignore the shooter's own
+        # motion and miss for any non-collinear shooter velocity.
+        lead_position = shooter_pos + relative_pos + relative_vel * intercept_time
 
         return lead_position
 
@@ -507,8 +515,10 @@ class LeadCalculator:
             # Cannot calculate lead with zero projectile speed
             return target_pos
 
-        # Calculate initial relative position
+        # Solve in the SHOOTER's frame (projectile inherits shooter velocity,
+        # so it travels at projectile_speed relative to the shooter).
         relative_pos = target_pos - shooter_pos
+        relative_vel = target_vel - shooter_vel
         initial_distance = relative_pos.magnitude
 
         if initial_distance < tolerance_km:
@@ -520,16 +530,15 @@ class LeadCalculator:
 
         for _ in range(max_iterations):
             # Predict target position at intercept time using quadratic motion
-            # future_pos = pos + vel*t + 0.5*accel*t^2
-            predicted_target_pos = (
-                target_pos +
-                target_vel * intercept_time +
+            # in the shooter frame: rel_pos + rel_vel*t + 0.5*accel*t^2
+            predicted_rel_pos = (
+                relative_pos +
+                relative_vel * intercept_time +
                 target_accel * (0.5 * intercept_time * intercept_time)
             )
 
             # Calculate projectile travel distance to predicted position
-            predicted_relative_pos = predicted_target_pos - shooter_pos
-            new_distance = predicted_relative_pos.magnitude
+            new_distance = predicted_rel_pos.magnitude
 
             # New intercept time estimate
             new_intercept_time = new_distance / projectile_speed_kps
@@ -543,10 +552,11 @@ class LeadCalculator:
             # (pure Newton-Raphson can oscillate with high acceleration)
             intercept_time = 0.7 * new_intercept_time + 0.3 * intercept_time
 
-        # Calculate final lead position with quadratic prediction
-        lead_position = (
-            target_pos +
-            target_vel * intercept_time +
+        # Final lead position (muzzle aim point) with quadratic prediction:
+        # shooter position plus the shooter-frame intercept vector.
+        lead_position = shooter_pos + (
+            relative_pos +
+            relative_vel * intercept_time +
             target_accel * (0.5 * intercept_time * intercept_time)
         )
 

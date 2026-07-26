@@ -36,8 +36,8 @@ uv run python scripts/run_llm_battle.py -v
 
 # Customize ships and models
 uv run python scripts/run_llm_battle.py \
-    --alpha-model openrouter/anthropic/claude-sonnet-4 \
-    --beta-model openrouter/x-ai/grok-3-fast \
+    --alpha-model openrouter/anthropic/claude-opus-5 \
+    --beta-model openrouter/x-ai/grok-4.20 \
     --alpha-ship-type cruiser \
     --beta-ship-type destroyer \
     --distance 400 \
@@ -178,19 +178,19 @@ Fleet battles use JSON configuration files:
   "decision_interval_s": 30.0,
   "initial_distance_km": 400,
   "alpha_fleet": {
-    "admiral": "openrouter/anthropic/claude-sonnet-4",
+    "admiral": "openrouter/anthropic/claude-opus-5",
     "ships": [
-      {"ship_type": "destroyer", "model": "openrouter/anthropic/claude-haiku-4.5"},
-      {"ship_type": "destroyer", "model": "openrouter/anthropic/claude-haiku-4.5"},
-      {"ship_type": "dreadnought", "model": "openrouter/anthropic/claude-haiku-4.5"}
+      {"ship_type": "destroyer", "model": "openrouter/anthropic/claude-sonnet-5"},
+      {"ship_type": "destroyer", "model": "openrouter/anthropic/claude-sonnet-5"},
+      {"ship_type": "dreadnought", "model": "openrouter/anthropic/claude-sonnet-5"}
     ]
   },
   "beta_fleet": {
-    "admiral": "openrouter/google/gemini-2.5-pro-preview",
+    "admiral": "openrouter/google/gemini-3.5-flash",
     "ships": [
-      {"ship_type": "destroyer", "model": "openrouter/google/gemini-2.5-flash-preview"},
-      {"ship_type": "destroyer", "model": "openrouter/google/gemini-2.5-flash-preview"},
-      {"ship_type": "dreadnought", "model": "openrouter/google/gemini-2.5-flash-preview"}
+      {"ship_type": "destroyer", "model": "openrouter/google/gemini-3.5-flash"},
+      {"ship_type": "destroyer", "model": "openrouter/google/gemini-3.5-flash"},
+      {"ship_type": "dreadnought", "model": "openrouter/google/gemini-3.5-flash"}
     ]
   }
 }
@@ -218,8 +218,8 @@ uv run python scripts/run_llm_battle.py [OPTIONS]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--alpha-model` | OpenRouter model for Alpha | claude-3.5-sonnet |
-| `--beta-model` | OpenRouter model for Beta | claude-3.5-sonnet |
+| `--alpha-model` | OpenRouter model for Alpha | openrouter/anthropic/claude-sonnet-5 |
+| `--beta-model` | OpenRouter model for Beta | openrouter/anthropic/claude-sonnet-5 |
 | `--alpha-ship-type` | Ship class for Alpha | destroyer |
 | `--beta-ship-type` | Ship class for Beta | destroyer |
 | `--alpha-name` | Captain name for Alpha | Commander Chen |
@@ -275,21 +275,25 @@ Control fleets directly using the Model Context Protocol. Any MCP-compatible cli
 
 ### Architecture Overview
 
-Two independent MCP servers allow **any combination** of human/AI control:
+Each side runs its own MCP server process, but **both connect to the same battle
+HTTP API on a single port** (8765 by default) - the faction is chosen with
+`--faction`, not with a different port. This allows **any combination** of
+human/AI control:
 
 ```
 ┌─────────────────┐                         ┌─────────────────┐
 │  MCP Client     │                         │  MCP Client     │
 │  (Alpha Fleet)  │                         │  (Beta Fleet)   │
 └────────┬────────┘                         └────────┬────────┘
-         │ MCP                                       │ MCP
+         │ MCP (stdio)                               │ MCP (stdio)
          ▼                                           ▼
 ┌─────────────────┐                         ┌─────────────────┐
-│  Alpha Server   │                         │  Beta Server    │
-│  (port 8765)    │                         │  (port 8766)    │
+│  mcp_server     │                         │  mcp_server     │
+│ --faction alpha │                         │ --faction beta  │
 └────────┬────────┘                         └────────┬────────┘
-         │              ┌─────────────────┐          │
-         └─────────────►│  Battle Runner  │◄─────────┘
+         │  HTTP :8765                  HTTP :8765   │
+         └─────────────►┌─────────────────┐◄─────────┘
+                        │  Battle Runner  │
                         │  + Simulation   │
                         └─────────────────┘
 ```
@@ -309,7 +313,7 @@ Two independent MCP servers allow **any combination** of human/AI control:
     },
     "ai-commanders-beta": {
       "command": "uv",
-      "args": ["run", "python", "-m", "src.llm.mcp_server", "--faction", "beta", "--http", "http://localhost:8766"]
+      "args": ["run", "python", "-m", "src.llm.mcp_server", "--faction", "beta", "--http", "http://localhost:8765"]
     }
   }
 }
@@ -367,7 +371,7 @@ ready()                # Signal turn complete
 
 **Orders reset every turn!** You must re-issue maneuver and weapons orders each checkpoint. Ships default to MAINTAIN (coasting) if you don't command them.
 
-**Fog of war**: You see full status of friendly ships but only observable data for enemies (position, velocity, estimated hull %, hit chance).
+**Visibility**: Currently full information for both sides. You see complete friendly status, and for enemies `get_battle_state` returns exact hull %, per-facing armor damage, shot/hit counters and which of your ships they are targeting - not a sensor-limited estimate. The tactical map drawn by `battle_plot` omits enemy hull, but the underlying state does not, so treat the map as a display choice rather than a fog-of-war model. (Implementing real fog of war is an open design decision - see CONTRIBUTING.)
 
 **Turn flow**:
 1. Simulation runs 30 seconds
@@ -397,10 +401,10 @@ ready()                # Signal turn complete
     ]
   },
   "beta_fleet": {
-    "admiral": {"model": "openrouter/x-ai/grok-3-fast", "name": "Admiral Grok"},
+    "admiral": {"model": "openrouter/x-ai/grok-4.20", "name": "Admiral Grok"},
     "ships": [
-      {"ship_id": "beta_1", "ship_type": "destroyer", "model": "openrouter/x-ai/grok-4.1-fast"},
-      {"ship_id": "beta_2", "ship_type": "destroyer", "model": "openrouter/x-ai/grok-4.1-fast"}
+      {"ship_id": "beta_1", "ship_type": "destroyer", "model": "openrouter/x-ai/grok-4.20"},
+      {"ship_id": "beta_2", "ship_type": "destroyer", "model": "openrouter/x-ai/grok-4.20"}
     ]
   }
 }
@@ -420,20 +424,52 @@ ready()                # Signal turn complete
 
 ## Ship Classes
 
-| Ship | Accel | 90° Turn | Armor (N/L/T) | Role |
-|------|-------|----------|---------------|------|
-| Corvette | 3.0g | 12s | Light | Scout, harassment |
-| Frigate | 3.0g | 15s | Light | Fast attack |
-| Destroyer | 2.0g | 21s | 151/26/30 cm | Balanced combatant |
-| Cruiser | 1.5g | 28s | Medium | Heavy firepower |
-| Battlecruiser | 1.5g | 28s | Medium | Fast capital |
-| Battleship | 1.0g | 37s | Heavy | Line combat |
-| Dreadnought | 0.75g | 50s | 180/43/50 cm | Fleet anchor |
+| Ship | Accel | 90° Turn | Armor (N/L/T) | Weapons | Role |
+|------|-------|----------|---------------|---------|------|
+| Corvette | 3.0g | 12s | 212/36/42 cm | Torpedoes + PD | Torpedo boat |
+| Frigate | 3.0g | 15s | 71/12/14 cm | Coilgun + PD | Fast attack |
+| Destroyer | 2.0g | 21s | 151/26/30 cm | Spinal + coilgun | Balanced combatant |
+| Cruiser | 1.5g | 28s | 240/41/48 cm | Spinal + coilguns | Heavy firepower |
+| Battlecruiser | 1.5g | 28s | 177/30/35 cm | Spinal + coilguns | Fast capital |
+| Battleship | 1.0g | 37s | 262/45/52 cm | Siege coiler | Line combat |
+| Dreadnought | 0.75g | 50s | 251/43/50 cm | Siege coiler | Fleet anchor |
+
+Armor thickness is derived from armor mass over facing area, so a small hull carrying
+heavy armor ends up *thicker* than a larger one: the corvette is a torpedo boat that must
+survive its attack run, so it carries a 5.8x
+thicker nose than flank. The frigate has the same hull and acceleration but fights at
+range, and carries less than half the armor.
 
 **Armor Sections:**
 - **Nose (N)**: Heaviest armor, faces enemy during attack runs
 - **Lateral (L)**: Side armor, thinnest - vulnerable during turns
 - **Tail (T)**: Rear armor, exposed when fleeing
+
+### Combat Mechanics
+
+**Armor is aspect-dependent.** A round strikes whichever facing it arrives at: within
+**30°** of the nose it hits NOSE armor, beyond that LATERAL, and past 150° TAIL. Holding
+the threat inside 30° is the single largest survivability lever in the game - larger than
+evasion. The break-away turn after an attack run is the moment of maximum danger.
+
+**Torpedo damage scales with the square of closing speed.** A Trident carries 14 km/s of
+its own delta-v before either ship's velocity is added, so a head-on pass at 26 km/s
+closure delivers ~85 GJ - roughly 20 spinal rounds in a single hit. Measured against the
+live engine, torpedoes needed to kill:
+
+| Target | 26 km/s head-on | 14 km/s | 8 km/s |
+|--------|-----------------|---------|--------|
+| Destroyer | 1 | 3 | 6 |
+| Cruiser | 2 | 5 | 7 |
+| Dreadnought | 2 | 6 | 7 |
+
+**Speed defeats point defense.** PD engages out to 250 km, so a faster torpedo gives the
+defender fewer shots: ~50% of torpedoes get through at 26 km/s versus ~30% at 8 km/s. Speed
+is therefore rewarded twice - more energy on impact and less time under fire. A torpedo
+lobbed at low closing speed is both weak and easily intercepted.
+
+See [docs/ships.md](docs/ships.md) for full shots-to-kill tables (regenerate with
+`uv run python scripts/calculate_shots_to_kill.py`).
 
 ## Features
 
@@ -447,15 +483,27 @@ ready()                # Signal turn complete
 - **Communications**: Captains can message enemies, admirals can negotiate
 - **Battle Recording**: Full replay data saved as JSON
 - **Tactical Scoring**: Winner determined by tactical advantage if time expires
+- **Prompt Caching**: Captain doctrine is a stable cacheable prefix (~90% of the prompt),
+  so long battles reuse it across checkpoints instead of re-paying full input price
 
 ## Supported Models
 
-Any model on OpenRouter works. Tested with:
-- `anthropic/claude-sonnet-4` / `claude-opus-4` / `claude-haiku-4.5`
-- `openai/gpt-4o` / `gpt-4o-mini`
-- `x-ai/grok-3-fast`
-- `google/gemini-2.5-pro-preview` / `gemini-2.5-flash-preview`
-- `deepseek/deepseek-chat`
+Any model on OpenRouter works. Tested with (prices are USD per million
+input/output tokens and are the OpenRouter list prices at time of writing -
+check OpenRouter for current rates):
+
+| Model | Input $/M | Output $/M | Notes |
+|-------|-----------|------------|-------|
+| `anthropic/claude-opus-5` | 5.00 | 25.00 | Flagship; strongest tactical reasoning |
+| `anthropic/claude-sonnet-5` | 2.00 | 10.00 | Default for both fleets |
+| `openai/gpt-5.6-terra` | 2.50 | 15.00 | |
+| `openai/gpt-5.4-mini` | 0.75 | 4.50 | |
+| `google/gemini-3.5-flash` | 1.50 | 9.00 | |
+| `x-ai/grok-4.20` | 1.25 | 2.50 | |
+| `deepseek/deepseek-v4-pro` | 0.43 | 0.87 | Cheapest; good for long fleet battles |
+
+A flagship-vs-cheap pairing (e.g. `anthropic/claude-opus-5` vs
+`deepseek/deepseek-v4-pro`) makes for a good asymmetric-skill battle.
 
 ## Project Structure
 
@@ -467,7 +515,7 @@ ai-commanders/
 │   ├── simulation.py       # Battle simulation engine
 │   ├── modules.py          # Ship module layout, damage propagation
 │   └── llm/
-│       ├── client.py       # LiteLLM wrapper for OpenRouter
+│       ├── client.py       # OpenRouter HTTP client (httpx, no vendor SDK)
 │       ├── captain.py      # LLMCaptain - ship-level decisions
 │       ├── admiral.py      # LLMAdmiral - fleet-level command
 │       ├── prompts.py      # System prompts, personality selection

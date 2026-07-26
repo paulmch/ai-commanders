@@ -34,9 +34,40 @@ class SimulationResult:
     kill_reason: str  # "reactor", "bridge", or "hull"
 
 
-def create_torpedo_weapon(impact_velocity_kps: float = 5.0) -> Weapon:
-    """Create a torpedo weapon with calculated kinetic energy at given impact velocity."""
-    penetrator_mass_kg = 250  # From fleet_ships.json
+# Impact area used by the simulation engine when a torpedo's kinetic penetrator
+# strikes armor (see SimulationEngine._resolve_torpedo_hit in src/simulation.py).
+TORPEDO_KINETIC_IMPACT_AREA_M2 = 0.1
+# flat_chipping the engine uses for that same penetrator (penetrators are focused).
+TORPEDO_KINETIC_FLAT_CHIPPING = 0.3
+
+
+def impact_area_for_projectile_mass(mass_kg: float) -> float:
+    """
+    Impact/crater area in m^2 for a kinetic projectile of the given mass.
+
+    This MUST mirror SimulationEngine._resolve_projectile_hit in src/simulation.py.
+    Ablation is inversely proportional to impact area, so using the old hard-coded
+    0.01 m^2 ("10cm x 10cm slug") here while the engine spreads the same energy over
+    0.1-0.3 m^2 made this script report armor as ~10-30x less durable than it
+    actually is in battle - which is how the published shots-to-kill tables ended up
+    far too optimistic.
+    """
+    area = 0.1 + (mass_kg / 100) * 0.1  # 0.1-0.2 m^2 over the usual mass range
+    return min(0.3, max(0.1, area))  # Clamp to 0.1-0.3 m^2
+
+
+def create_torpedo_weapon(
+    fleet_data: dict,
+    impact_velocity_kps: float = 5.0,
+    weapon_key: str = "torpedo_launcher",
+) -> Weapon:
+    """Create a torpedo weapon with calculated kinetic energy at given impact velocity.
+
+    Penetrator mass / cooldown / range / magazine are read from fleet_ships.json
+    rather than hard-coded, so the table tracks the data the simulation uses.
+    """
+    torp_data = fleet_data["weapon_types"][weapon_key]
+    penetrator_mass_kg = torp_data["penetrator_mass_kg"]
     # KE = 0.5 * m * v^2
     velocity_ms = impact_velocity_kps * 1000
     kinetic_energy_j = 0.5 * penetrator_mass_kg * velocity_ms ** 2
@@ -46,14 +77,15 @@ def create_torpedo_weapon(impact_velocity_kps: float = 5.0) -> Weapon:
         name=f"Torpedo @ {impact_velocity_kps} km/s",
         weapon_type="torpedo",
         kinetic_energy_gj=kinetic_energy_gj,
-        cooldown_s=12.0,
-        range_km=2500,
-        flat_chipping=0.35,  # Assume similar to coilguns
-        mass_tons=40,
-        magazine=8,
+        cooldown_s=torp_data["cooldown_s"],
+        range_km=torp_data["range_km"],
+        # Match the engine's torpedo penetrator chipping, not the coilgun value.
+        flat_chipping=TORPEDO_KINETIC_FLAT_CHIPPING,
+        mass_tons=torp_data["mass_tons"],
+        magazine=torp_data["magazine"],
         muzzle_velocity_kps=impact_velocity_kps,
         warhead_mass_kg=penetrator_mass_kg,
-        mount="hull_turret",
+        mount=torp_data.get("mount", "hull_turret"),
         is_missile=True,
     )
 
@@ -87,6 +119,12 @@ def simulate_shots_to_kill(
     first_penetration = False
     kill_reason = ""
 
+    # Use the same impact area the simulation engine uses for this projectile.
+    if weapon.is_missile:
+        impact_area_m2 = TORPEDO_KINETIC_IMPACT_AREA_M2
+    else:
+        impact_area_m2 = impact_area_for_projectile_mass(weapon.warhead_mass_kg)
+
     armor_section = ship_armor.get_section(location)
     if armor_section is None:
         # No armor - immediate penetration
@@ -106,7 +144,7 @@ def simulate_shots_to_kill(
         ablation_cm, energy_to_hull_gj, chipping = armor_section.apply_energy_damage(
             energy_gj=weapon.kinetic_energy_gj,
             flat_chipping=weapon.flat_chipping,
-            impact_area_m2=0.01  # Standard 10cm x 10cm impact
+            impact_area_m2=impact_area_m2
         )
 
         # Check if armor is penetrated
@@ -119,8 +157,11 @@ def simulate_shots_to_kill(
 
         # If penetrated, apply damage to internal modules
         if penetrated:
-            # Calculate remaining damage (90% of weapon energy after armor breach)
-            remaining_damage_gj = weapon.kinetic_energy_gj * 0.9
+            # Energy that actually reaches the hull is what apply_energy_damage
+            # returns, exactly as the engine does it (src/simulation.py:
+            # `remaining_energy_gj = energy_to_hull_gj`). The old `0.9 * KE`
+            # ignored the armor's protection factor and over-damaged internals.
+            remaining_damage_gj = energy_to_hull_gj
 
             # Create a hit result for module damage
             hit_result = HitResult(
@@ -163,6 +204,17 @@ def simulate_shots_to_kill(
     )
 
 
+def format_shots(result: SimulationResult) -> str:
+    """Render a shots-to-kill cell.
+
+    A result that hit the shot cap was never actually a kill, so print it as
+    ">N" instead of an exact-looking count.
+    """
+    if result.kill_reason == "survived":
+        return f">{result.shots_to_kill}"
+    return str(result.shots_to_kill)
+
+
 def main():
     # Load fleet data
     data_path = Path(__file__).parent.parent / "data" / "fleet_ships.json"
@@ -185,8 +237,14 @@ def main():
     for wtype in weapon_types:
         weapons[wtype] = create_weapon_from_fleet_data(fleet_data, wtype)
 
-    # Add torpedo
-    weapons["torpedo_5kps"] = create_torpedo_weapon(5.0)
+    # Add torpedoes at representative closing speeds.
+    #
+    # A single "@ 5 km/s" row badly understated them: the Trident carries 14 km/s
+    # of its own delta-v, so 5 km/s is slower than it arrives against a STATIONARY
+    # target, and impact energy goes as v^2. In a head-on pass the closing speeds
+    # of both ships add on top, which is where torpedoes earn their place.
+    weapons["torpedo_14kps"] = create_torpedo_weapon(fleet_data, 14.0)   # vs stationary
+    weapons["torpedo_26kps"] = create_torpedo_weapon(fleet_data, 26.0)   # head-on pass
 
     # Hit locations
     locations = [HitLocation.NOSE, HitLocation.LATERAL, HitLocation.TAIL]
@@ -221,7 +279,7 @@ def main():
             tail = results[(ship_type, weapon_key, "tail")]
 
             weapon_display = weapons[weapon_key].name[:24]
-            print(f"{weapon_display:<25} {nose.shots_to_kill:>8} {lat.shots_to_kill:>8} {tail.shots_to_kill:>8}")
+            print(f"{weapon_display:<25} {format_shots(nose):>8} {format_shots(lat):>8} {format_shots(tail):>8}")
 
     # Generate markdown tables
     print("\n\n" + "=" * 80)
@@ -250,7 +308,7 @@ def main():
             tail = results[(ship_type, weapon_key, "tail")]
 
             weapon_display = weapons[weapon_key].name[:25]
-            print(f"| {weapon_display} | {nose.shots_to_kill} | {lat.shots_to_kill} | {tail.shots_to_kill} |")
+            print(f"| {weapon_display} | {format_shots(nose)} | {format_shots(lat)} | {format_shots(tail)} |")
 
     # Summary table - all ships, spinal coiler only
     print("\n### Summary: Shots to Kill by Ship Class\n")
@@ -269,7 +327,7 @@ def main():
         lat = results[(ship_type, "spinal_coiler_mk3", "lateral")]
         tail = results[(ship_type, "spinal_coiler_mk3", "tail")]
 
-        print(f"| {ship_type.capitalize()} | {nose_cm:.0f}/{lat_cm:.0f}/{tail_cm:.0f} | {nose.shots_to_kill} | {lat.shots_to_kill} | {tail.shots_to_kill} |")
+        print(f"| {ship_type.capitalize()} | {nose_cm:.0f}/{lat_cm:.0f}/{tail_cm:.0f} | {format_shots(nose)} | {format_shots(lat)} | {format_shots(tail)} |")
 
 
 if __name__ == "__main__":

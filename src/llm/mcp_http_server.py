@@ -293,6 +293,45 @@ async def run_battle_with_http_server(
         await http_server.stop()
 
 
+def apply_mcp_fleet_control(runner: Any) -> bool:
+    """
+    Apply MCP fleet-level surrender / mutual-draw decisions to the battle.
+
+    Mirrors the block in LLMBattleRunner.run_fleet_battle_async: the shared
+    ``_check_fleet_surrender_draw()`` only looks at captains and LLM admirals,
+    so MCP controllers' ``has_surrendered`` / ``has_proposed_draw`` /
+    ``has_accepted_draw`` flags must be consumed explicitly.
+
+    Returns:
+        True if the battle should stop now (a mutual draw was agreed).
+    """
+    verbose = getattr(runner.config, "verbose", False)
+
+    for faction, controller, ships in (
+        ("alpha", runner.alpha_mcp, runner.alpha_ships),
+        ("beta", runner.beta_mcp, runner.beta_ships),
+    ):
+        if controller and controller.has_surrendered:
+            for ship_id in ships:
+                ship = runner.simulation.get_ship(ship_id)
+                if ship:
+                    ship.is_surrendered = True
+            if verbose:
+                print(f"  [SURRENDER] {controller.name} surrenders")
+
+    if runner.alpha_mcp and runner.beta_mcp:
+        mutual = (
+            (runner.alpha_mcp.has_proposed_draw and runner.beta_mcp.has_accepted_draw)
+            or (runner.beta_mcp.has_proposed_draw and runner.alpha_mcp.has_accepted_draw)
+        )
+        if mutual:
+            if verbose:
+                print("  [DRAW ACCEPTED] Mutual draw agreed")
+            return True
+
+    return False
+
+
 async def run_fleet_battle_with_http(
     runner: Any,
     fleet_data: Dict[str, Any],
@@ -308,6 +347,11 @@ async def run_fleet_battle_with_http(
     from .mcp_controller import apply_mcp_commands_to_simulation
 
     runner.setup_fleet_battle(fleet_data)
+
+    def dbg(msg: str) -> None:
+        """Debug trace, gated on verbose so --quiet is actually quiet."""
+        if runner.config.verbose:
+            print(msg)
 
     # Get decision interval from fleet config
     decision_interval = runner.fleet_config.decision_interval_s if runner.fleet_config else 30.0
@@ -418,9 +462,22 @@ async def run_fleet_battle_with_http(
         # Update state and wait for MCP factions
         for faction in mcp_factions:
             controller = runner.alpha_mcp if faction == "alpha" else runner.beta_mcp
+            enemy_controller = runner.beta_mcp if faction == "alpha" else runner.alpha_mcp
+            enemy_admiral = runner.beta_admiral if faction == "alpha" else runner.alpha_admiral
             captains = list(runner.alpha_captains.values()) if faction == "alpha" else list(runner.beta_captains.values())
 
             if controller:
+                # Publish turn number / battle liveness / enemy draw proposal so
+                # the MCP client can actually see them (they used to be hardcoded).
+                enemy_side = enemy_controller or enemy_admiral
+                controller.set_battle_progress(
+                    checkpoint_number=runner.checkpoint_count,
+                    is_battle_active=not runner._is_fleet_battle_over(),
+                    enemy_proposed_draw=bool(
+                        getattr(enemy_side, "has_proposed_draw", False)
+                    ),
+                )
+
                 # Update state for MCP client to read
                 controller.update_battle_state(runner.simulation, captains)
 
@@ -432,7 +489,10 @@ async def run_fleet_battle_with_http(
         for faction in mcp_factions:
             shared_state.clear_ready(faction)
 
-        # Wait for all MCP factions (no timeout)
+        # Wait for all MCP factions (no timeout, but with periodic diagnostics so
+        # a side that forgets ready() does not hang the battle silently)
+        waited_s = 0.0
+        heartbeat_s = 30.0
         while mcp_factions:
             for faction in list(mcp_factions):
                 if shared_state.is_ready(faction):
@@ -451,6 +511,18 @@ async def run_fleet_battle_with_http(
                     if runner.config.verbose:
                         print(f"  Received {len(commands)} commands")
 
+                    # Fleet-level control commands (message / draw / surrender)
+                    # are controller state, not simulation state - they must be
+                    # applied here or the tools are silent no-ops on this path.
+                    controller = runner.alpha_mcp if faction == "alpha" else runner.beta_mcp
+                    if controller:
+                        control_applied = controller.process_control_commands(
+                            commands, runner.simulation.current_time
+                        )
+                        if runner.config.verbose:
+                            for entry in control_applied:
+                                print(f"    Applied: {entry}")
+
                     # Apply commands to simulation
                     results = apply_mcp_commands_to_simulation(
                         commands, runner.simulation, faction
@@ -460,8 +532,47 @@ async def run_fleet_battle_with_http(
                         for cmd_result in results["applied"]:
                             print(f"    Applied: {cmd_result}")
 
+                    # Errors used to be dropped on the floor: a bad ship id or
+                    # maneuver name vanished with no signal to anyone.
+                    for cmd_error in results.get("errors", []):
+                        print(f"    [MCP ERROR] {cmd_error}")
+
             if mcp_factions:
                 await asyncio.sleep(0.1)
+                waited_s += 0.1
+                if waited_s >= heartbeat_s:
+                    waited_s = 0.0
+                    print(
+                        f"  [MCP] Still waiting for ready() from: {', '.join(mcp_factions)} "
+                        f"(checkpoint {runner.checkpoint_count})"
+                    )
+
+        # === MESSAGE BRIDGE: MCP <-> LLM Admiral ===
+        # Present in run_fleet_battle_async but lost in this fork: without it an
+        # MCP commander's send_message never reaches an LLM admiral opponent and
+        # vice versa, so mixed MCP-vs-LLM battles were mute in both directions.
+        if runner.mcp_chat:
+            if runner.alpha_mcp and runner.beta_admiral:
+                for msg in runner.mcp_chat.get_pending_messages("beta"):
+                    runner.beta_admiral.receive_enemy_admiral_message(msg.content)
+                    dbg(f"  [MSG] Alpha MCP -> Beta Admiral: \"{msg.content}\"")
+
+            if runner.beta_mcp and runner.alpha_admiral:
+                for msg in runner.mcp_chat.get_pending_messages("alpha"):
+                    runner.alpha_admiral.receive_enemy_admiral_message(msg.content)
+                    dbg(f"  [MSG] Beta MCP -> Alpha Admiral: \"{msg.content}\"")
+
+            if runner.alpha_admiral and runner.beta_mcp:
+                alpha_msg = runner.alpha_admiral.get_pending_enemy_message()
+                if alpha_msg:
+                    runner.mcp_chat.send_message("alpha", alpha_msg, runner.simulation.current_time)
+                    dbg(f"  [MSG] Alpha Admiral -> Beta MCP: \"{alpha_msg}\"")
+
+            if runner.beta_admiral and runner.alpha_mcp:
+                beta_msg = runner.beta_admiral.get_pending_enemy_message()
+                if beta_msg:
+                    runner.mcp_chat.send_message("beta", beta_msg, runner.simulation.current_time)
+                    dbg(f"  [MSG] Beta Admiral -> Alpha MCP: \"{beta_msg}\"")
 
         # Reset mcp_factions for next checkpoint
         mcp_factions = []
@@ -493,17 +604,17 @@ async def run_fleet_battle_with_http(
                 c for c in runner.beta_captains.values()
                 if not getattr(runner.beta_ships.get(c.ship_id), 'is_surrendered', False)
             ]
-            print(f"[DEBUG] Beta admiral decision: {len(active_beta_captains)} active captains")
+            dbg(f"[DEBUG] Beta admiral decision: {len(active_beta_captains)} active captains")
             try:
                 beta_decision = runner._get_admiral_decision(
                     runner.beta_admiral,
                     active_beta_captains,
                     runner.alpha_admiral,
                 )
-                print(f"[DEBUG] Beta admiral returned {len(beta_decision.fleet_orders)} fleet orders")
+                dbg(f"[DEBUG] Beta admiral returned {len(beta_decision.fleet_orders)} fleet orders")
                 for order in beta_decision.fleet_orders:
                     ship_id = runner._find_ship_id_by_name(order.target_ship_id, "beta")
-                    print(f"[DEBUG] Beta order for {order.target_ship_id} -> ship_id={ship_id}: {order.order_text[:50]}...")
+                    dbg(f"[DEBUG] Beta order for {order.target_ship_id} -> ship_id={ship_id}: {order.order_text[:50]}...")
                     if ship_id and ship_id in runner.beta_captains:
                         if ship_id not in admiral_orders:
                             admiral_orders[ship_id] = []
@@ -523,7 +634,10 @@ async def run_fleet_battle_with_http(
                 print(f"\n--- CAPTAIN DECISIONS (Alpha) ---")
             for ship_id, captain in runner.alpha_captains.items():
                 ship = runner.alpha_ships.get(ship_id)
-                if ship and ship.is_destroyed:
+                # Surrendered ships must be skipped too: asking a surrendered
+                # captain for orders (and paying for the LLM call) is exactly
+                # what run_fleet_battle_async avoids.
+                if ship and (ship.is_destroyed or getattr(ship, 'is_surrendered', False)):
                     continue
 
                 # Clear previous context and give new orders
@@ -547,19 +661,19 @@ async def run_fleet_battle_with_http(
 
         # Process non-MCP beta captains
         if not runner.beta_mcp:
-            print(f"[DEBUG] Processing beta captains: {len(runner.beta_captains)} captains")
+            dbg(f"[DEBUG] Processing beta captains: {len(runner.beta_captains)} captains")
             if runner.config.verbose and runner.beta_captains:
                 print(f"\n--- CAPTAIN DECISIONS (Beta) ---")
             for ship_id, captain in runner.beta_captains.items():
                 ship = runner.beta_ships.get(ship_id)
-                if ship and ship.is_destroyed:
-                    print(f"[DEBUG] {ship_id} is destroyed, skipping")
+                if ship and (ship.is_destroyed or getattr(ship, 'is_surrendered', False)):
+                    dbg(f"[DEBUG] {ship_id} is destroyed/surrendered, skipping")
                     continue
 
                 # Clear previous context and give new orders
                 captain.clear_admiral_context()
                 orders_for_captain = admiral_orders.get(ship_id, [])
-                print(f"[DEBUG] {ship_id} has {len(orders_for_captain)} admiral orders")
+                dbg(f"[DEBUG] {ship_id} has {len(orders_for_captain)} admiral orders")
                 if ship_id in admiral_orders:
                     orders = admiral_orders[ship_id]
                     directive = runner.beta_admiral.last_directive if runner.beta_admiral and hasattr(runner.beta_admiral, 'last_directive') else None
@@ -570,16 +684,19 @@ async def run_fleet_battle_with_http(
 
                 # Get captain decision with discussion support
                 try:
-                    print(f"[DEBUG] {ship_id} calling captain.decide...")
+                    dbg(f"[DEBUG] {ship_id} calling captain.decide...")
                     commands = runner._get_captain_decision_with_discussion(
                         ship_id, captain, "beta"
                     )
-                    print(f"[DEBUG] {ship_id} captain returned {len(commands)} commands: {[type(c).__name__ for c in commands]}")
+                    dbg(f"[DEBUG] {ship_id} captain returned {len(commands)} commands: {[type(c).__name__ for c in commands]}")
                     all_commands[ship_id] = commands
                 except Exception as e:
                     print(f"[ERROR] {ship_id} captain decision failed: {e}")
                     import traceback
                     traceback.print_exc()
+                    # Reset `commands` too - the status line below would
+                    # otherwise report the *previous* ship's command list.
+                    commands = []
                     all_commands[ship_id] = []
 
                 if runner.config.verbose:
@@ -588,22 +705,36 @@ async def run_fleet_battle_with_http(
         # Handle immediate messaging
         runner._handle_immediate_messaging()
 
+        # === MCP SURRENDER / MUTUAL DRAW ===
+        # _check_fleet_surrender_draw() only inspects captains and LLM admirals,
+        # so without this block surrender_fleet / propose_ + accept_fleet_draw
+        # had no effect at all on the HTTP path.
+        if apply_mcp_fleet_control(runner):
+            break
+
         # Check surrender/draw
         runner._check_fleet_surrender_draw()
 
+        if runner._is_fleet_battle_over():
+            break
+
         # Apply non-MCP captain commands to simulation via inject_command
-        print(f"[DEBUG] Applying commands for {len(all_commands)} ships")
+        dbg(f"[DEBUG] Applying commands for {len(all_commands)} ships")
         for ship_id, commands in all_commands.items():
-            print(f"[DEBUG] {ship_id}: {len(commands)} commands to apply")
+            dbg(f"[DEBUG] {ship_id}: {len(commands)} commands to apply")
             for cmd in commands:
                 # Filter out discussion markers
                 if isinstance(cmd, dict) and cmd.get('type') == 'discuss_with_admiral':
                     continue
-                print(f"[DEBUG] {ship_id} injecting command: {type(cmd).__name__}")
+                dbg(f"[DEBUG] {ship_id} injecting command: {type(cmd).__name__}")
                 success = runner.simulation.inject_command(ship_id, cmd)
-                print(f"[DEBUG] {ship_id} inject result: {success}")
+                dbg(f"[DEBUG] {ship_id} inject result: {success}")
                 if runner.config.verbose and isinstance(cmd, dict) and cmd.get('type') == 'fire_at':
                     print(f"    [FIRE] {ship_id} {cmd.get('weapon_slot')} -> {'HIT' if success else 'FAILED'}")
+
+        # Log decision (the async loop does this; the fork had dropped it, so
+        # runner.decision_log stayed empty for every HTTP battle)
+        runner._log_fleet_decision(all_commands)
 
         # Check limits
         if not runner.config.unlimited_mode:

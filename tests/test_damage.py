@@ -260,12 +260,38 @@ class TestModuleDamage:
         assert basic_module.health_percent < initial_health
 
     def test_module_damage_scales_with_energy(self, basic_module):
-        """Module damage should scale with incoming energy."""
-        # New damage model: 1 GJ = 50% damage, 2 GJ destroys module
-        # Test that partial damage works correctly
+        """
+        Module damage scales with incoming energy, reduced by the module's own
+        armor_rating.
+
+        This used to assert a flat 50% loss for 1 GJ, which silently encoded a
+        bug: armor_rating was stored on every module and never read, so armoured
+        internal bulkheads gave zero protection. With the rating applied, this
+        module's 0.2 rating absorbs 20% of the incoming energy.
+        """
+        assert basic_module.armor_rating == 0.2
         initial_health = basic_module.health_percent
-        basic_module.damage(1.0)  # 1 GJ = 50% damage
-        assert basic_module.health_percent == 50.0  # Lost 50% health
+
+        basic_module.damage(1.0)  # 1 GJ, 50% of module health before armor
+
+        expected_loss = 50.0 * (1.0 - basic_module.armor_rating)  # 40%
+        assert basic_module.health_percent == pytest.approx(
+            initial_health - expected_loss
+        ), "module armor_rating is not reducing damage"
+
+    def test_module_armor_rating_reduces_damage(self, basic_module):
+        """A better-armoured module must survive the same hit with more health."""
+        import dataclasses
+
+        unarmoured = dataclasses.replace(basic_module, armor_rating=0.0)
+        armoured = dataclasses.replace(basic_module, armor_rating=0.5)
+
+        unarmoured.damage(1.0)
+        armoured.damage(1.0)
+
+        assert armoured.health_percent > unarmoured.health_percent, (
+            "armor_rating has no effect on module damage"
+        )
 
     def test_damage_returns_remaining_energy(self, basic_module):
         """Damage should return energy that passes through."""

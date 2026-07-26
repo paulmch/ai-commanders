@@ -165,13 +165,14 @@ def calculate_hit_probability(
 
     # Base hit probability from angular size
     # At 1 km with 60m effective radius, angular size = 0.06 rad = 3.4°
-    # We scale so that reasonable combat ranges give reasonable probabilities
     # Reference: at 100km, a 60m radius target has angular size 0.0006 rad
-    # We want ~50% hit chance at "optimal" range
 
-    # Probability scales with angular size, normalized to give good gameplay
-    # Using sigmoid-like scaling: prob = 1 - exp(-k * angular_size)
-    # k chosen so that at 10km range with 60m target, prob ≈ 0.5
+    # Probability scales with angular size: prob = 1 - exp(-k * angular_size).
+    # With k = 10000 and a 60 m effective radius, base_prob crosses 0.5 only
+    # at ~866 km (angular size = ln(2)/k ~= 6.9e-5 rad) and saturates near
+    # 1.0 for all ranges under ~300 km. At typical combat ranges the visible
+    # range falloff therefore comes almost entirely from the flight-time and
+    # crossing-angle penalties applied below, not from this angular term.
     angular_factor = 10000  # Tuning constant
     base_prob = 1.0 - math.exp(-angular_factor * angular_size_rad)
 
@@ -561,8 +562,14 @@ class WeaponsOfficer:
                     shooter_velocity=ship_velocity,
                     target_position=target.position,
                     target_velocity=target.velocity,
+                    # ShipGeometry takes radius/nose/engine lengths - there are no
+                    # beam_m/height_m fields, so this fallback raised TypeError on
+                    # any geometry-less target instead of degrading gracefully.
                     target_geometry=target.geometry if target.geometry else ShipGeometry(
-                        length_m=100, beam_m=20, height_m=15
+                        length_m=100.0,
+                        radius_m=12.5,
+                        nose_cone_length_m=20.0,
+                        engine_section_length_m=20.0,
                     ),
                     target_forward=target.forward,
                     muzzle_velocity_kps=weapon_state.weapon.muzzle_velocity_kps,

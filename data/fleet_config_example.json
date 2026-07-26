@@ -4,19 +4,37 @@
   "decision_interval_s": 30.0,
   "initial_distance_km": 300,
   "alpha_fleet": {
-    "admiral": "openrouter/anthropic/claude-3.5-haiku",
+    "admiral": "openrouter/anthropic/claude-haiku-4.5",
     "ships": [
-      {"ship_type": "destroyer", "model": "openrouter/anthropic/claude-3.5-haiku"},
-      {"ship_type": "destroyer", "model": "openrouter/anthropic/claude-3.5-haiku"},
-      {"ship_type": "frigate", "model": "openrouter/anthropic/claude-3.5-haiku"}
+      {
+        "ship_type": "destroyer",
+        "model": "openrouter/anthropic/claude-haiku-4.5"
+      },
+      {
+        "ship_type": "destroyer",
+        "model": "openrouter/anthropic/claude-haiku-4.5"
+      },
+      {
+        "ship_type": "frigate",
+        "model": "openrouter/anthropic/claude-haiku-4.5"
+      }
     ]
   },
   "beta_fleet": {
-    "admiral": "openrouter/x-ai/grok-3-fast",
+    "admiral": "openrouter/x-ai/grok-4.20",
     "ships": [
-      {"ship_type": "destroyer", "model": "openrouter/x-ai/grok-3-fast"},
-      {"ship_type": "destroyer", "model": "openrouter/x-ai/grok-3-fast"},
-      {"ship_type": "frigate", "model": "openrouter/x-ai/grok-3-fast"}
+      {
+        "ship_type": "destroyer",
+        "model": "openrouter/x-ai/grok-4.20"
+      },
+      {
+        "ship_type": "destroyer",
+        "model": "openrouter/x-ai/grok-4.20"
+      },
+      {
+        "ship_type": "frigate",
+        "model": "openrouter/x-ai/grok-4.20"
+      }
     ]
   }
 }

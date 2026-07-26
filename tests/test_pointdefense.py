@@ -407,14 +407,22 @@ class TestTorpedo:
         assert standard_torpedo.is_destroyed() is False
 
     def test_cumulative_heat_absorption(self, standard_torpedo):
-        """Heat accumulates from multiple exposures."""
-        standard_torpedo.absorb_heat(3000.0)
-        standard_torpedo.absorb_heat(3000.0)
-        standard_torpedo.absorb_heat(3000.0)
-        standard_torpedo.absorb_heat(3000.0)
+        """Heat accumulates across exposures and crosses the threshold in steps."""
+        quarter = TORPEDO_ELECTRONICS_THRESHOLD_J / 4.0
 
-        assert standard_torpedo.heat_absorbed_j == 12000.0
+        for i in range(3):
+            standard_torpedo.absorb_heat(quarter)
+            assert standard_torpedo.heat_absorbed_j == pytest.approx(quarter * (i + 1))
+            assert standard_torpedo.is_disabled() is False, (
+                "torpedo disabled before reaching the electronics threshold"
+            )
+
+        standard_torpedo.absorb_heat(quarter)
+        assert standard_torpedo.heat_absorbed_j == pytest.approx(
+            TORPEDO_ELECTRONICS_THRESHOLD_J
+        )
         assert standard_torpedo.is_disabled() is True
+        assert standard_torpedo.is_destroyed() is False
 
 
 # Torpedo Heat Damage Model Tests
@@ -423,21 +431,32 @@ class TestTorpedoHeatDamageModel:
     """Tests for torpedo heat damage helper functions."""
 
     def test_is_torpedo_disabled_function(self):
-        """Test standalone disabled check function."""
-        assert is_torpedo_disabled(5000.0) is False
-        assert is_torpedo_disabled(10000.0) is True
-        assert is_torpedo_disabled(15000.0) is True
+        """Disabled exactly at and above the electronics threshold."""
+        assert is_torpedo_disabled(TORPEDO_ELECTRONICS_THRESHOLD_J * 0.5) is False
+        assert is_torpedo_disabled(TORPEDO_ELECTRONICS_THRESHOLD_J) is True
+        assert is_torpedo_disabled(TORPEDO_ELECTRONICS_THRESHOLD_J * 1.5) is True
 
     def test_is_torpedo_destroyed_function(self):
-        """Test standalone destroyed check function."""
-        assert is_torpedo_destroyed(50000.0) is False
-        assert is_torpedo_destroyed(100000.0) is True
-        assert is_torpedo_destroyed(150000.0) is True
+        """Destroyed exactly at and above the structural threshold."""
+        assert is_torpedo_destroyed(TORPEDO_WARHEAD_THRESHOLD_J * 0.5) is False
+        assert is_torpedo_destroyed(TORPEDO_WARHEAD_THRESHOLD_J) is True
+        assert is_torpedo_destroyed(TORPEDO_WARHEAD_THRESHOLD_J * 1.5) is True
 
     def test_threshold_values(self):
-        """Verify threshold constants."""
-        assert TORPEDO_ELECTRONICS_THRESHOLD_J == 10000.0  # 10 kJ
-        assert TORPEDO_WARHEAD_THRESHOLD_J == 100000.0     # 100 kJ
+        """
+        Thresholds must stay physically plausible for a multi-tonne torpedo.
+
+        Asserted as relationships and orders of magnitude rather than exact
+        values: the old test pinned 10 kJ / 100 kJ, which let a single 5 MW PD
+        burst (25 MJ) one-shot-kill any torpedo at any range, and the exact-value
+        assertion is what made that look intentional.
+        """
+        # A structural kill must cost far more than a seeker kill.
+        assert TORPEDO_WARHEAD_THRESHOLD_J > TORPEDO_ELECTRONICS_THRESHOLD_J * 10
+
+        # ~30 MJ/kg to ablate: a seeker kill should mean kilograms, not grams.
+        assert TORPEDO_ELECTRONICS_THRESHOLD_J >= 10e6, "seeker kill is implausibly cheap"
+        assert TORPEDO_WARHEAD_THRESHOLD_J >= 500e6, "structural kill is implausibly cheap"
 
 
 # ShipArmorTarget Tests
@@ -742,8 +761,12 @@ class TestIntegrationScenarios:
         for _ in range(4):
             engagement.engage_torpedo(torpedo, distance_km=50.0, dwell_time_s=1.0)
 
-        # Should have accumulated significant heat
-        assert torpedo.heat_absorbed_j > TORPEDO_ELECTRONICS_THRESHOLD_J / 2
+        # Heat must accumulate across engagements, but four one-second bursts
+        # must NOT be enough to kill a multi-tonne torpedo outright.
+        assert torpedo.heat_absorbed_j > 0
+        assert not torpedo.is_destroyed(), (
+            "4 seconds of PD dwell should not structurally kill a torpedo"
+        )
 
     def test_knife_fight_scenario(self, default_pd_laser):
         """Test close-range ship-to-ship PD usage."""

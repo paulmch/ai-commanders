@@ -53,6 +53,48 @@ class RadiatorPosition(Enum):
 RADIATOR_EXTENSION_ANGLE_DEG = 45.0
 
 
+def coerce_radiator_position(position) -> RadiatorPosition:
+    """
+    Normalise a radiator position into a thermal.RadiatorPosition member.
+
+    The combat module declares its own RadiatorPosition enum with bare
+    PORT/STARBOARD/DORSAL/VENTRAL members, and passes those values into the
+    ThermalSystemProtocol methods below. Because ``ThermalSystemProtocol`` is a
+    ``runtime_checkable`` Protocol it only checks method *names*, so the enum
+    mismatch is invisible to isinstance() and every ``dict.get(position)``
+    lookup silently returned None - radiators could never be reported extended
+    and could never be damaged. Accepting either spelling (plus plain strings)
+    fixes the lookup without requiring both modules to change at once.
+
+    Args:
+        position: A thermal.RadiatorPosition, a compatible enum from another
+            module, or a string such as "PORT" / "tail_port".
+
+    Returns:
+        The matching thermal.RadiatorPosition member.
+
+    Raises:
+        KeyError: If the position cannot be mapped. Failing loudly is
+            deliberate - the previous silent-None behaviour hid a real bug.
+    """
+    if isinstance(position, RadiatorPosition):
+        return position
+
+    # Enums from other modules: prefer the member name, fall back to the value.
+    raw = getattr(position, "name", None) or getattr(position, "value", None) or position
+    if not isinstance(raw, str):
+        raise KeyError(f"Unknown radiator position: {position!r}")
+
+    key = raw.strip().upper().replace("-", "_").replace(" ", "_")
+    if not key.startswith("TAIL_"):
+        key = f"TAIL_{key}"
+
+    try:
+        return RadiatorPosition[key]
+    except KeyError:
+        raise KeyError(f"Unknown radiator position: {position!r}") from None
+
+
 @dataclass
 class DropletRadiator:
     """
@@ -401,6 +443,33 @@ class HeatSink:
         """
         return max(0.0, self.capacity_gj - self.current_heat_gj)
 
+    def absorb_with_overflow(self, heat_gj: float) -> tuple[float, float]:
+        """
+        Absorb heat into the sink, reporting how much did not fit.
+
+        Callers of the boolean :meth:`absorb` have no way to learn how much
+        heat was clipped, so the excess used to vanish silently. This variant
+        returns it explicitly.
+
+        Args:
+            heat_gj: Amount of heat to absorb in gigajoules.
+
+        Returns:
+            Tuple of (absorbed_gj, overflow_gj).
+        """
+        if heat_gj <= 0:
+            return (0.0, 0.0)
+
+        available = self.available_capacity_gj
+
+        if heat_gj <= available:
+            self.current_heat_gj += heat_gj
+            return (heat_gj, 0.0)
+
+        # Absorb what we can; the remainder is overflow the caller must handle.
+        self.current_heat_gj = self.capacity_gj
+        return (available, heat_gj - available)
+
     def absorb(self, heat_gj: float) -> bool:
         """
         Absorb heat into the sink.
@@ -411,18 +480,8 @@ class HeatSink:
         Returns:
             True if all heat was absorbed, False if sink is full.
         """
-        if heat_gj <= 0:
-            return True
-
-        available = self.available_capacity_gj
-
-        if heat_gj <= available:
-            self.current_heat_gj += heat_gj
-            return True
-        else:
-            # Absorb what we can, but report failure
-            self.current_heat_gj = self.capacity_gj
-            return False
+        _absorbed, overflow = self.absorb_with_overflow(heat_gj)
+        return overflow <= 0.0
 
     def dump_to_radiators(
         self, radiator_array: RadiatorArray, dt_seconds: float
@@ -468,8 +527,22 @@ class HeatSource:
 
 
 # Standard heat generation rates (kW)
-# Note: A destroyer with 58.56 MN thrust at full burn generates ~59 MW of engine heat.
-# With 4 radiators extended (260 MW total dissipation), ships can cool while burning.
+#
+# GAME-BALANCE VALUES, NOT PHYSICAL ONES. These are deliberately scaled far
+# below what the ship data implies, so that battles last minutes rather than
+# milliseconds. For reference, the physical numbers from data/fleet_ships.json
+# are roughly:
+#   reactor : 306,430 GW at 0.999 efficiency  -> ~306 GW of waste heat
+#   drive   : 58.56 MN at ve = 10,256 km/s    -> ~300 TW jet power
+# i.e. five to six orders of magnitude above the rates below. A 525 GJ heat
+# sink would saturate in under 2 ms at the physical reactor figure, so the
+# rates here are a stated fiction. See the audit note in the module docs before
+# "fixing" them: rebalancing requires the radiator array and heat sink to be
+# rescaled by the same factor.
+#
+# At the balance values: a destroyer with 58.56 MN thrust at full burn generates
+# ~59 MW of engine heat, and 4 extended radiators dissipate 130 MW total
+# (10 t * 13 kW/kg), so ships can cool while burning.
 # Combat heat from weapons adds significant thermal pressure.
 HEAT_GENERATION_RATES = {
     "reactor_idle": 1000.0,          # Reactor at idle (1 MW)
@@ -659,9 +732,11 @@ class ThermalSystem:
 
         Returns:
             Dictionary with update statistics:
-            - heat_generated_gj: Heat added this step
+            - heat_generated_gj: Heat produced by active sources this step
             - heat_dissipated_gj: Heat radiated this step
-            - net_heat_gj: Net heat change (positive = heating up)
+            - heat_overflow_gj: Heat that exceeded heat sink capacity and was
+              shed with no consequence (a full sink cannot store it)
+            - net_heat_gj: Actual change in stored heat (positive = heating up)
             - heat_percent: Current heat level
             - is_overheating: Whether in warning state
             - is_critical: Whether in critical state
@@ -670,18 +745,38 @@ class ThermalSystem:
         heat_gen_kw = self.get_total_heat_generation_kw()
         heat_gen_gj = (heat_gen_kw / 1_000_000.0) * dt_seconds
 
-        # Add generated heat to sink
-        self.heatsink.absorb(heat_gen_gj)
+        # Radiator throughput available this step (kW -> GJ/s -> GJ).
+        dissipation_capacity_gj = (
+            self.radiators.total_dissipation_kw / 1_000_000.0
+        ) * dt_seconds
 
-        # Dissipate heat through radiators
-        heat_dissipated = self.heatsink.dump_to_radiators(
-            self.radiators, dt_seconds
-        )
+        # Net-flux accounting. Heat produced this step is rejected directly by
+        # the radiators up to their throughput; only the excess has to be
+        # buffered in the sink. The previous absorb-then-dump ordering let a
+        # full sink clip generated heat even when the radiators had spare
+        # capacity to reject it that very step.
+        net_into_sink_gj = heat_gen_gj - dissipation_capacity_gj
+
+        if net_into_sink_gj >= 0.0:
+            heat_dissipated = dissipation_capacity_gj
+            _absorbed, overflow_gj = self.heatsink.absorb_with_overflow(
+                net_into_sink_gj
+            )
+        else:
+            # Radiators have spare capacity: drain the sink with the remainder.
+            overflow_gj = 0.0
+            spare_gj = -net_into_sink_gj
+            drained_gj = min(spare_gj, self.heatsink.current_heat_gj)
+            self.heatsink.current_heat_gj -= drained_gj
+            heat_dissipated = heat_gen_gj + drained_gj
 
         return {
             "heat_generated_gj": heat_gen_gj,
             "heat_dissipated_gj": heat_dissipated,
-            "net_heat_gj": heat_gen_gj - heat_dissipated,
+            "heat_overflow_gj": overflow_gj,
+            # Change in *stored* heat: generation that neither radiated away
+            # nor overflowed the sink.
+            "net_heat_gj": heat_gen_gj - heat_dissipated - overflow_gj,
             "heat_percent": self.heat_percent,
             "is_overheating": self.is_overheating,
             "is_critical": self.is_critical,
@@ -734,8 +829,11 @@ class ThermalSystem:
         Returns:
             True if the radiator is extended (or damaged but still active),
             False if retracted or destroyed.
+
+        Raises:
+            KeyError: If the position is not a recognised radiator position.
         """
-        radiator = self.radiators.radiators.get(position)
+        radiator = self.radiators.radiators.get(coerce_radiator_position(position))
         if radiator is None:
             return False
 
@@ -750,8 +848,11 @@ class ThermalSystem:
 
         Returns:
             Current dissipation capacity in kW (0.0 if destroyed or not found).
+
+        Raises:
+            KeyError: If the position is not a recognised radiator position.
         """
-        radiator = self.radiators.radiators.get(position)
+        radiator = self.radiators.radiators.get(coerce_radiator_position(position))
         if radiator is None:
             return 0.0
 
@@ -767,8 +868,11 @@ class ThermalSystem:
 
         Returns:
             Remaining health of the radiator (0-100), or -1 if position invalid.
+
+        Raises:
+            KeyError: If the position is not a recognised radiator position.
         """
-        radiator = self.radiators.radiators.get(position)
+        radiator = self.radiators.radiators.get(coerce_radiator_position(position))
         if radiator is None:
             return -1.0
 
@@ -791,8 +895,11 @@ class ThermalSystem:
 
         Returns:
             Tuple of (damage_taken_gj, destroyed, dissipation_lost_kw).
+
+        Raises:
+            KeyError: If the position is not a recognised radiator position.
         """
-        radiator = self.radiators.radiators.get(position)
+        radiator = self.radiators.radiators.get(coerce_radiator_position(position))
         if radiator is None:
             return (0.0, False, 0.0)
 
@@ -908,7 +1015,7 @@ if __name__ == "__main__":
     print("\n" + "=" * 50)
     print("Simulating radiator damage...")
 
-    port_radiator = thermal.radiators.radiators[RadiatorPosition.PORT]
+    port_radiator = thermal.radiators.radiators[RadiatorPosition.TAIL_PORT]
     print(f"\n  Port radiator before damage: {port_radiator.health_percent:.0f}% health")
     port_radiator.damage(2.5)  # 2.5 GJ hit
     print(f"  Port radiator after 2.5 GJ hit: {port_radiator.health_percent:.0f}% health, "
@@ -920,7 +1027,9 @@ if __name__ == "__main__":
     print("\n" + "=" * 50)
     print("Radiator hit probabilities:")
 
-    from combat import HitLocation
+    # HitLocation is already imported at module level with a relative-with-
+    # fallback import; re-importing it absolutely here only worked when src/
+    # happened to be on sys.path.
     for loc in HitLocation:
         prob = thermal.radiators.get_hit_probability(loc)
         print(f"  {loc.value}: {prob*100:.0f}%")

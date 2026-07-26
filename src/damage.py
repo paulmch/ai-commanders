@@ -644,7 +644,17 @@ class DamagePropagator:
         if not modules_in_path:
             return results
 
-        # Track current energy and position along the cone
+        # Track current energy and position along the cone.
+        #
+        # The energy has to be carried in a LOCAL variable and decayed
+        # incrementally. Calling damage_cone.get_energy_at_distance() inside the
+        # loop recomputed the energy from the cone's own remaining_energy_gj -
+        # a field the loop never updates - so every module after the first was
+        # struck by a freshly-reset, near-full cone and the total damage dealt
+        # could exceed the projectile's entire energy. It also applied the
+        # exponential decay only to the incremental gap, so the attenuation
+        # never accumulated over the full path.
+        dissipation_rate = DISSIPATION_RATES[damage_cone.damage_profile]
         current_energy = damage_cone.remaining_energy_gj
         last_distance = 0.0
 
@@ -659,7 +669,7 @@ class DamagePropagator:
             # Account for energy loss traveling to this module
             distance_traveled = module_distance - last_distance
             if distance_traveled > 0:
-                current_energy = damage_cone.get_energy_at_distance(distance_traveled)
+                current_energy *= math.exp(-dissipation_rate * distance_traveled)
 
             if current_energy < self.min_energy_threshold_gj:
                 break

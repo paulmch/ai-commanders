@@ -370,7 +370,10 @@ Layer 11 (Tail): Main Engine Assembly, Maneuvering Thrusters
 ### Shots to Kill (Simulated)
 
 Number of hits required to destroy each ship class, starting from full armor.
-Values determined by simulation using energy-based damage model.
+Regenerate with `uv run python scripts/calculate_shots_to_kill.py` after any change
+to the armor or damage model - these tables are derived from the live engine and
+were previously an order of magnitude too optimistic (a corvette was listed as
+dying to 4 nose hits; it takes ~41).
 
 Ships are destroyed when:
 1. Main Reactor is destroyed (critical), OR
@@ -381,92 +384,106 @@ Ships are destroyed when:
 
 | Weapon | Nose | Lateral | Tail |
 |--------|------|---------|------|
-| Spinal Coiler Mk3 | 4 | 2 | 3 |
-| Heavy Siege Coiler Mk3 | 2 | 1 | 2 |
-| Heavy Coilgun Battery Mk3 | 13 | 7 | 9 |
-| Coilgun Battery Mk3 | 21 | 12 | 15 |
-| Light Coilgun Battery Mk3 | 110 | 65 | 85 |
-| Torpedo @ 5 km/s | 5 | 3 | 3 |
+| Spinal Coiler Mk3 | 38 | 10 | 12 |
+| Heavy Siege Coiler Mk3 | 36 | 9 | 10 |
+| Heavy Coilgun Battery Mk3 | 89 | 29 | 36 |
+| Coilgun Battery Mk3 | 126 | 46 | 57 |
+| Light Coilgun Battery Mk3 | 347 | 200 | 249 |
+| Torpedo @ 14.0 km/s | 4 | 1 | 2 |
+| Torpedo @ 26.0 km/s | 2 | 1 | 1 |
 
 #### vs Frigate (Armor: 71/12/14 cm)
 
 | Weapon | Nose | Lateral | Tail |
 |--------|------|---------|------|
-| Spinal Coiler Mk3 | 2 | 3 | 3 |
-| Heavy Siege Coiler Mk3 | 1 | 2 | 2 |
-| Heavy Coilgun Battery Mk3 | 8 | 10 | 8 |
-| Coilgun Battery Mk3 | 14 | 16 | 13 |
-| Light Coilgun Battery Mk3 | 76 | 93 | 76 |
-| Torpedo @ 5 km/s | 3 | 4 | 3 |
+| Spinal Coiler Mk3 | 16 | 8 | 7 |
+| Heavy Siege Coiler Mk3 | 14 | 6 | 5 |
+| Heavy Coilgun Battery Mk3 | 44 | 24 | 23 |
+| Coilgun Battery Mk3 | 67 | 40 | 38 |
+| Light Coilgun Battery Mk3 | 248 | 213 | 193 |
+| Torpedo @ 14.0 km/s | 2 | 1 | 1 |
+| Torpedo @ 26.0 km/s | 1 | 1 | 1 |
 
 #### vs Destroyer (Armor: 151/26/30 cm)
 
 | Weapon | Nose | Lateral | Tail |
 |--------|------|---------|------|
-| Spinal Coiler Mk3 | 4 | 5 | 5 |
-| Heavy Siege Coiler Mk3 | 2 | 3 | 3 |
-| Heavy Coilgun Battery Mk3 | 15 | 17 | 16 |
-| Coilgun Battery Mk3 | 24 | 29 | 26 |
-| Light Coilgun Battery Mk3 | 131 | 168 | 152 |
-| Torpedo @ 5 km/s | 6 | 7 | 6 |
+| Spinal Coiler Mk3 | 31 | 14 | 14 |
+| Heavy Siege Coiler Mk3 | 28 | 10 | 11 |
+| Heavy Coilgun Battery Mk3 | 79 | 44 | 44 |
+| Coilgun Battery Mk3 | 116 | 73 | 72 |
+| Light Coilgun Battery Mk3 | 381 | 376 | 361 |
+| Torpedo @ 14.0 km/s | 4 | 2 | 2 |
+| Torpedo @ 26.0 km/s | 1 | 1 | 1 |
 
 #### vs Cruiser (Armor: 241/41/48 cm)
 
 | Weapon | Nose | Lateral | Tail |
 |--------|------|---------|------|
-| Spinal Coiler Mk3 | 5 | 6 | 5 |
-| Heavy Siege Coiler Mk3 | 3 | 4 | 3 |
-| Heavy Coilgun Battery Mk3 | 16 | 20 | 16 |
-| Coilgun Battery Mk3 | 26 | 33 | 27 |
-| Light Coilgun Battery Mk3 | 133 | 191 | 158 |
-| Torpedo @ 5 km/s | 6 | 8 | 6 |
+| Spinal Coiler Mk3 | 42 | 18 | 17 |
+| Heavy Siege Coiler Mk3 | 40 | 13 | 14 |
+| Heavy Coilgun Battery Mk3 | 100 | 55 | 52 |
+| Coilgun Battery Mk3 | 142 | 89 | 85 |
+| Light Coilgun Battery Mk3 | 399 | 439 | 397 |
+| Torpedo @ 14.0 km/s | 5 | 3 | 2 |
+| Torpedo @ 26.0 km/s | 2 | 1 | 1 |
 
 #### vs Battlecruiser (Armor: 177/30/35 cm)
 
 | Weapon | Nose | Lateral | Tail |
 |--------|------|---------|------|
-| Spinal Coiler Mk3 | 4 | 6 | 5 |
-| Heavy Siege Coiler Mk3 | 3 | 4 | 3 |
-| Heavy Coilgun Battery Mk3 | 14 | 20 | 16 |
-| Coilgun Battery Mk3 | 23 | 32 | 27 |
-| Light Coilgun Battery Mk3 | 120 | 187 | 154 |
-| Torpedo @ 5 km/s | 5 | 8 | 6 |
+| Spinal Coiler Mk3 | 34 | 16 | 15 |
+| Heavy Siege Coiler Mk3 | 31 | 12 | 12 |
+| Heavy Coilgun Battery Mk3 | 83 | 50 | 47 |
+| Coilgun Battery Mk3 | 121 | 82 | 77 |
+| Light Coilgun Battery Mk3 | 368 | 420 | 377 |
+| Torpedo @ 14.0 km/s | 4 | 3 | 2 |
+| Torpedo @ 26.0 km/s | 1 | 1 | 1 |
 
 #### vs Battleship (Armor: 262/45/52 cm)
 
 | Weapon | Nose | Lateral | Tail |
 |--------|------|---------|------|
-| Spinal Coiler Mk3 | 6 | 7 | 5 |
-| Heavy Siege Coiler Mk3 | 3 | 4 | 3 |
-| Heavy Coilgun Battery Mk3 | 19 | 23 | 18 |
-| Coilgun Battery Mk3 | 33 | 40 | 31 |
-| Light Coilgun Battery Mk3 | 173 | 228 | 176 |
-| Torpedo @ 5 km/s | 8 | 9 | 7 |
+| Spinal Coiler Mk3 | 47 | 21 | 19 |
+| Heavy Siege Coiler Mk3 | 45 | 15 | 15 |
+| Heavy Coilgun Battery Mk3 | 113 | 64 | 58 |
+| Coilgun Battery Mk3 | 160 | 104 | 93 |
+| Light Coilgun Battery Mk3 | 480 | >500 | 437 |
+| Torpedo @ 14.0 km/s | 6 | 3 | 3 |
+| Torpedo @ 26.0 km/s | 2 | 1 | 1 |
 
 #### vs Dreadnought (Armor: 251/43/50 cm)
 
 | Weapon | Nose | Lateral | Tail |
 |--------|------|---------|------|
-| Spinal Coiler Mk3 | 6 | 6 | 8 |
-| Heavy Siege Coiler Mk3 | 3 | 4 | 5 |
-| Heavy Coilgun Battery Mk3 | 19 | 22 | 27 |
-| Coilgun Battery Mk3 | 32 | 36 | 46 |
-| Light Coilgun Battery Mk3 | 170 | 209 | 264 |
-| Torpedo @ 5 km/s | 8 | 8 | 10 |
+| Spinal Coiler Mk3 | 46 | 21 | 24 |
+| Heavy Siege Coiler Mk3 | 43 | 15 | 17 |
+| Heavy Coilgun Battery Mk3 | 111 | 67 | 74 |
+| Coilgun Battery Mk3 | 158 | 109 | 120 |
+| Light Coilgun Battery Mk3 | 478 | >500 | >500 |
+| Torpedo @ 14.0 km/s | 6 | 3 | 3 |
+| Torpedo @ 26.0 km/s | 2 | 1 | 1 |
 
 ### Summary: Shots to Kill by Ship Class
 
 Using Spinal Coiler Mk3 (4.29 GJ per shot):
 
 | Ship | Armor (N/L/T cm) | Nose | Lateral | Tail |
-|------|------------------|------|---------|------|
-| Corvette | 212/36/42 | 4 | 2 | 3 |
-| Frigate | 71/12/14 | 2 | 3 | 3 |
-| Destroyer | 151/26/30 | 4 | 5 | 5 |
-| Cruiser | 241/41/48 | 5 | 6 | 5 |
-| Battlecruiser | 177/30/35 | 4 | 6 | 5 |
-| Battleship | 262/45/52 | 6 | 7 | 5 |
-| Dreadnought | 251/43/50 | 6 | 6 | 8 |
+|------|-----------------|------|---------|------|
+| Corvette | 212/36/42 | 38 | 10 | 12 |
+| Frigate | 71/12/14 | 16 | 8 | 7 |
+| Destroyer | 151/26/30 | 31 | 14 | 14 |
+| Cruiser | 241/41/48 | 42 | 18 | 17 |
+| Battlecruiser | 177/30/35 | 34 | 16 | 15 |
+| Battleship | 262/45/52 | 47 | 21 | 19 |
+| Dreadnought | 251/43/50 | 46 | 21 | 24 |
+
+**Torpedoes vs guns:** impact energy scales with the SQUARE of closing speed, and a
+Trident carries 14 km/s of its own delta-v before either ship's velocity is added. A
+head-on pass at 26 km/s closure delivers ~85 GJ - roughly 20 spinal rounds in one hit -
+which is why a torpedo can kill a capital ship in 1-2 hits while a coilgun needs dozens.
+Conversely a torpedo lobbed at low closing speed is nearly worthless. Torpedo boats live
+or die by the geometry of the run.
 
 **Damage Path Notes:**
 - **Nose hits**: Spinal weapon → Forward hull → Bridge [CRITICAL] → Reactor [CRITICAL]

@@ -128,11 +128,20 @@ class Module:
         if energy_gj <= 0 or self.is_destroyed:
             return energy_gj
 
+        # Internal armor/shielding attenuates the energy that actually couples
+        # into the module. Without this, armor_rating was dead data: the armored
+        # bulkheads the layouts place around the bridge and reactor were exactly
+        # as fragile as an unarmored cargo bay. The blocked fraction is not
+        # destroyed - it keeps travelling to the next module, which mirrors
+        # src.damage.Module.take_damage / damage_resistance.
+        armor_rating = min(max(self.armor_rating, 0.0), 1.0)
+        effective_energy = energy_gj * (1.0 - armor_rating)
+
         # Calculate health damage
         # 1 GJ can vaporize ~90cm of armor - it should wreck a module
         # 2 GJ destroys a module completely
         damage_per_gj = 50.0  # 50% per GJ - 2 GJ kills a module
-        health_damage = energy_gj * damage_per_gj
+        health_damage = effective_energy * damage_per_gj
 
         # Apply damage - module absorbs energy until destroyed
         old_health = self.health_percent
@@ -300,7 +309,9 @@ class ModuleLayout:
         self,
         entry_point: HitLocation,
         angle_deg: float,
-        direction_vector: tuple[float, float, float] = (0.0, 0.0, 1.0)
+        direction_vector: tuple[float, float, float] = (0.0, 0.0, 1.0),
+        ship_right: Optional[tuple[float, float, float]] = None,
+        entry_layer_index: Optional[int] = None
     ) -> list[Module]:
         """
         Get modules that would be hit by a damage cone from an entry point.
@@ -314,54 +325,42 @@ class ModuleLayout:
         Args:
             entry_point: Where the damage enters (nose, lateral, tail).
             angle_deg: Cone half-angle in degrees (spread of damage).
-            direction_vector: Normalized direction of damage propagation (x, y, z).
-                Default is (0, 0, 1) = nose-to-tail direction.
+            direction_vector: Direction of damage propagation (x, y, z), in the
+                same (world) frame as ``ship_right``.
+            ship_right: The ship's local starboard axis expressed in the same
+                frame as ``direction_vector``. Supplying it lets a lateral hit
+                resolve which SIDE the projectile came in on, so near-side
+                modules are damaged before far-side ones. Without it the lateral
+                cone is treated as side-agnostic (outer modules first, then
+                inward) - which is symmetric and frame-independent rather than
+                keyed off an arbitrary world axis.
+            entry_layer_index: Axial layer the lateral hit entered at. Defaults
+                to the middle of the laterally-reachable layers.
 
         Returns:
             List of modules in the damage cone, ordered by distance from entry.
         """
-        affected_modules: list[tuple[float, Module]] = []
         num_layers = len(self.layers)
 
         # Convert angle to radians for calculations
         angle_rad = math.radians(angle_deg)
         cone_spread_factor = math.tan(angle_rad)
 
-        # Determine starting layer, direction, and reachable layers based on entry point
+        if entry_point == HitLocation.LATERAL:
+            return self._lateral_modules_in_cone(
+                cone_spread_factor, direction_vector, ship_right, entry_layer_index
+            )
+
+        affected_modules: list[tuple[float, Module]] = []
+
         if entry_point == HitLocation.NOSE:
             # Nose hits travel from front to back
             layer_range = range(num_layers)
-            base_lateral = 0.0
-            # Can potentially reach all layers (damage travels through ship)
-            max_penetration_layers = num_layers
-        elif entry_point == HitLocation.TAIL:
+        else:  # TAIL
             # Tail hits travel from back to front - engine first, then forward
             layer_range = range(num_layers - 1, -1, -1)
-            base_lateral = 0.0
-            # Can potentially reach all layers
-            max_penetration_layers = num_layers
-        else:  # LATERAL
-            # Lateral hits can only affect the middle ~50% of the ship
-            # A projectile entering from the side cannot physically reach
-            # the extreme nose (spinal weapon) or extreme tail (engine nozzles)
-            # Skip ~25% of layers on each end
-            skip_nose_layers = max(1, num_layers // 4)  # Skip first ~25% (nose)
-            skip_tail_layers = max(1, num_layers // 4)  # Skip last ~25% (tail)
-            start_layer = skip_nose_layers
-            end_layer = num_layers - skip_tail_layers
-            layer_range = range(start_layer, end_layer)
-            # Lateral hits affect modules based on their lateral position
-            base_lateral = direction_vector[0] * 10.0  # Scale by direction
-            max_penetration_layers = end_layer - start_layer
 
-        # Calculate which modules are in the cone
-        layers_processed = 0
         for i, layer_idx in enumerate(layer_range):
-            # Limit how far damage can penetrate (prevents unrealistic through-ship damage)
-            if layers_processed >= max_penetration_layers:
-                break
-            layers_processed += 1
-
             layer = self.layers[layer_idx]
             distance_from_entry = (i + 1) * layer.depth_m
 
@@ -369,27 +368,106 @@ class ModuleLayout:
             cone_radius = distance_from_entry * cone_spread_factor
 
             for module in layer.modules:
-                # Check if module is within the cone
-                if entry_point == HitLocation.LATERAL:
-                    # For lateral hits, check if module's lateral position is near the hit
-                    lateral_distance = abs(module.position.lateral_offset - base_lateral)
-                    if lateral_distance <= cone_radius + (module.size_m2 ** 0.5):
-                        # For lateral hits, sort by lateral distance from hull
-                        # Modules closer to the hull (larger lateral offset) get hit first
-                        # This protects centerline modules (bridge) behind outer modules
-                        distance_from_hull = abs(module.position.lateral_offset)
-                        # Invert so larger offset = smaller sort key = hit first
-                        sort_key = -distance_from_hull
-                        affected_modules.append((sort_key, module))
-                else:
-                    # For nose/tail hits, all centerline and nearby modules can be hit
-                    lateral_distance = module.position.distance_from_center()
-                    if lateral_distance <= cone_radius + (module.size_m2 ** 0.5):
-                        affected_modules.append((distance_from_entry, module))
+                # For nose/tail hits, all centerline and nearby modules can be hit
+                lateral_distance = module.position.distance_from_center()
+                if lateral_distance <= cone_radius + (module.size_m2 ** 0.5):
+                    affected_modules.append((distance_from_entry, module))
 
-        # Sort by distance and return just the modules
-        # For lateral: sorts by -lateral_offset (outer modules first)
-        # For nose/tail: sorts by layer depth (closer layers first)
+        # Sort by depth into the ship (closer layers first)
+        affected_modules.sort(key=lambda x: x[0])
+        return [m for _, m in affected_modules]
+
+    def _lateral_modules_in_cone(
+        self,
+        cone_spread_factor: float,
+        direction_vector: tuple[float, float, float],
+        ship_right: Optional[tuple[float, float, float]],
+        entry_layer_index: Optional[int]
+    ) -> list[Module]:
+        """
+        Resolve the module path for a hit entering through the ship's flank.
+
+        The projectile crosses the hull at one axial station and then travels
+        *laterally* through the ship, so the natural ordering is a 2-D path
+        distance in the ship's own frame: how far it has burrowed sideways from
+        the entry side, combined with how far the widening cone has spread fore
+        and aft of the entry station.
+
+        The previous implementation centred the cone on
+        ``direction_vector[0] * 10.0`` - the WORLD-frame X component of the
+        projectile velocity - and compared it against ship-local lateral offsets
+        in metres. Two identical hits on an identical ship returned different
+        module sets purely because the engagement happened along a different
+        world axis (e.g. a +X shot hit only port modules and missed the bridge
+        entirely, a +Z shot hit both sides). It also sorted by lateral offset
+        alone, so the axial layer played no role whatsoever.
+        """
+        num_layers = len(self.layers)
+        if num_layers == 0:
+            return []
+
+        # Lateral hits can only affect the middle ~50% of the ship: a projectile
+        # entering from the side cannot physically reach the extreme nose
+        # (spinal weapon) or the extreme tail (engine nozzles).
+        skip_nose_layers = max(1, num_layers // 4)
+        skip_tail_layers = max(1, num_layers // 4)
+        start_layer = skip_nose_layers
+        end_layer = num_layers - skip_tail_layers
+        if end_layer <= start_layer:
+            start_layer, end_layer = 0, num_layers
+
+        # If the caller does not know WHERE along the flank the hit landed, we
+        # must not invent a station: pinning it to the middle layer would mean
+        # lateral fire could never reach the bridge or reactor of any ship. With
+        # the station unknown every laterally-reachable layer stays a candidate
+        # and ordering is purely by how deep the projectile has to burrow.
+        entry_layer: Optional[int] = None
+        if entry_layer_index is not None:
+            entry_layer = min(max(entry_layer_index, start_layer), end_layer - 1)
+
+        # Hull half-width, inferred from how far out the outermost module sits.
+        half_width = 0.0
+        for layer_idx in range(start_layer, end_layer):
+            for module in self.layers[layer_idx].modules:
+                half_width = max(half_width, abs(module.position.lateral_offset))
+
+        # Which flank did it come in on? Project the impact direction onto the
+        # ship's starboard axis: travelling toward starboard means it entered
+        # through the port (negative-offset) side.
+        entry_offset: Optional[float] = None
+        if ship_right is not None and half_width > 0.0:
+            projection = sum(d * r for d, r in zip(direction_vector, ship_right))
+            if abs(projection) > 1e-6:
+                entry_offset = -math.copysign(half_width, projection)
+
+        affected_modules: list[tuple[float, Module]] = []
+        for layer_idx in range(start_layer, end_layer):
+            layer = self.layers[layer_idx]
+            if entry_layer is None:
+                axial_distance = 0.0
+            else:
+                axial_distance = abs(layer_idx - entry_layer) * layer.depth_m
+
+            for module in layer.modules:
+                if entry_offset is not None:
+                    # Distance the projectile must burrow to reach this module
+                    lateral_path = abs(module.position.lateral_offset - entry_offset)
+                else:
+                    # Side unknown: treat both flanks as equally near, so outer
+                    # modules shield the centreline (which is what the armored
+                    # bulkheads in the layouts are there to do).
+                    lateral_path = half_width - abs(module.position.lateral_offset)
+                lateral_path = max(lateral_path, 0.0)
+
+                # The cone widens as it penetrates, so it reaches further
+                # fore/aft the deeper into the ship it gets.
+                cone_radius = lateral_path * cone_spread_factor
+                if axial_distance <= cone_radius + (module.size_m2 ** 0.5):
+                    path_distance = math.hypot(lateral_path, axial_distance)
+                    affected_modules.append((path_distance, module))
+
+        # Near-side modules at the entry station first; far-side and off-station
+        # modules later.
         affected_modules.sort(key=lambda x: x[0])
         return [m for _, m in affected_modules]
 

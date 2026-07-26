@@ -380,9 +380,13 @@ class ProjectileLauncher:
             else:
                 return None
 
-        # Calculate intercept point and direction
-        intercept_point = target_position + target_velocity * t
-        direction = (intercept_point - shooter_state.position).normalized()
+        # Aim direction must come from the SHOOTER-frame solution: the
+        # projectile inherits the shooter's velocity, so the muzzle points
+        # along rel_pos + rel_vel*t (the quadratic above was solved in that
+        # frame). Aiming at the world-frame intercept point would drop the
+        # shooter's own displacement (-shooter_velocity*t) and miss for any
+        # non-collinear shooter velocity.
+        direction = (rel_pos + rel_vel * t).normalized()
 
         return direction
 

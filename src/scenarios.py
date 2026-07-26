@@ -91,14 +91,16 @@ _SIMULATION_AVAILABLE = False
 try:
     from simulation import (
         CombatSimulation, ShipCombatState, Maneuver, ManeuverType,
-        WeaponState, SimulationEvent, SimulationEventType
+        WeaponState, SimulationEvent, SimulationEventType,
+        create_ship_from_fleet_data
     )
     _SIMULATION_AVAILABLE = True
 except ImportError:
     try:
         from .simulation import (
             CombatSimulation, ShipCombatState, Maneuver, ManeuverType,
-            WeaponState, SimulationEvent, SimulationEventType
+            WeaponState, SimulationEvent, SimulationEventType,
+            create_ship_from_fleet_data
         )
         _SIMULATION_AVAILABLE = True
     except ImportError as e:
@@ -106,6 +108,7 @@ except ImportError:
         # Provide stubs for scenarios to be defined even without simulation
         CombatSimulation = None
         ShipCombatState = None
+        create_ship_from_fleet_data = None
         class ManeuverType(Enum):
             BURN = auto()
             ROTATE = auto()
@@ -1011,10 +1014,13 @@ def create_missile_exchange() -> ScenarioConfig:
             "Initial exchange of torpedoes, then evasion. "
             "Tests torpedo tracking and point defense systems."
         ),
+        # Corvettes are the only hull in data/fleet_ships.json that mounts a
+        # torpedo launcher. This scenario used destroyers, which carry no
+        # launcher at all, so the "torpedo exchange" fired nothing but coilguns.
         ships=[
             ShipConfiguration(
                 ship_id="alpha_1",
-                ship_type="destroyer",
+                ship_type="corvette",
                 faction="alpha",
                 position_km=(-350, 0, 0),
                 velocity_kps=(2, 0, 0),
@@ -1022,7 +1028,7 @@ def create_missile_exchange() -> ScenarioConfig:
             ),
             ShipConfiguration(
                 ship_id="beta_1",
-                ship_type="destroyer",
+                ship_type="corvette",
                 faction="beta",
                 position_km=(350, 0, 0),
                 velocity_kps=(-2, 0, 0),
@@ -1291,23 +1297,33 @@ class ScenarioRunner:
         return result
 
     def _setup_ships(self, sim: CombatSimulation, config: ScenarioConfig) -> None:
-        """Set up ships in the simulation from scenario config."""
+        """Set up ships in the simulation from scenario config.
+
+        Ships are built with the canonical ``create_ship_from_fleet_data``
+        factory rather than a hand-rolled setup path. The old local path was
+        divergent and wrong in several ways: it read masses from a ``mass`` key
+        that does not exist in data/fleet_ships.json (so every hull got the same
+        2500 t default), it gave every ship one of *every* weapon type in the
+        file (a destroyer carrying the dreadnought's siege coiler, a torpedo
+        launcher as a 0 m/s direct-fire gun and a PD laser as a 0-ammo
+        projectile weapon), it looked for torpedo launchers under a nonexistent
+        ``torpedo`` key so scenario ships never had any torpedoes at all, and it
+        never wired geometry, power or point defense.
+        """
+        if create_ship_from_fleet_data is None:
+            raise RuntimeError(
+                "simulation.create_ship_from_fleet_data unavailable; "
+                "cannot construct scenario ships"
+            )
+
         for ship_config in config.ships:
             position, velocity, forward = ship_config.to_vectors()
 
-            # Create kinematic state
-            ship_data = self.fleet_data.get('ships', {}).get(ship_config.ship_type, {})
-            mass_data = ship_data.get('mass', {})
-            propulsion = ship_data.get('propulsion', {})
-            drive = propulsion.get('drive', {})
-            hull = ship_data.get('hull', {})
-
-            kinematic_state = create_ship_state_from_specs(
-                wet_mass_tons=mass_data.get('wet_mass_tons', 2500),
-                dry_mass_tons=mass_data.get('dry_mass_tons', 2375),
-                length_m=hull.get('length_m', 100),
-                thrust_mn=drive.get('thrust_mn', 58.56),
-                exhaust_velocity_kps=drive.get('exhaust_velocity_kps', 10256),
+            ship = create_ship_from_fleet_data(
+                ship_id=ship_config.ship_id,
+                ship_type=ship_config.ship_type,
+                faction=ship_config.faction,
+                fleet_data=self.fleet_data,
                 position=position,
                 velocity=velocity,
                 forward=forward
@@ -1315,63 +1331,25 @@ class ScenarioRunner:
 
             # Adjust propellant for fuel_fraction
             if ship_config.fuel_fraction < 1.0:
+                kinematic_state = ship.kinematic_state
                 full_propellant = kinematic_state.propellant_kg
                 kinematic_state.propellant_kg = full_propellant * ship_config.fuel_fraction
                 kinematic_state.mass_kg = kinematic_state.dry_mass_kg + kinematic_state.propellant_kg
 
-            # Create combat state
-            ship = ShipCombatState(
-                ship_id=ship_config.ship_id,
-                ship_type=ship_config.ship_type,
-                faction=ship_config.faction,
-                kinematic_state=kinematic_state
-            )
-
-            # Add thermal system
-            try:
-                ship.thermal_system = ThermalSystem.from_ship_data(ship_data)
-            except Exception:
-                pass
-
-            # Add armor
-            try:
-                ship.armor = create_ship_armor_from_fleet_data(self.fleet_data, ship_config.ship_type)
-            except Exception:
-                pass
-
-            # Add modules
-            try:
-                ship.module_layout = ModuleLayout.from_ship_type(ship_config.ship_type, self.fleet_data)
-            except Exception:
-                pass
-
-            # Add weapons
-            weapon_types = self.fleet_data.get('weapon_types', {})
-            for wtype, wdata in weapon_types.items():
-                try:
-                    weapon = create_weapon_from_fleet_data(self.fleet_data, wtype)
-                    ammo = int(weapon.magazine * ship_config.ammo_multiplier)
-                    ship.weapons[wtype] = WeaponState(weapon=weapon, ammo_remaining=ammo)
-                except Exception:
-                    pass
-
-            # Add torpedo launcher
-            torpedo_data = ship_data.get('torpedo', {})
-            if torpedo_data:
-                try:
-                    specs = TorpedoSpecs.from_fleet_data(
-                        warhead_yield_gj=torpedo_data.get('warhead_yield_gj', 0),  # Pure kinetic penetrator
-                        penetrator_mass_kg=torpedo_data.get('penetrator_mass_kg', 100),  # 100 kg penetrator
-                        ammo_mass_kg=torpedo_data.get('ammo_mass_kg', 1600)
+            # Apply the scenario's ammo multiplier to whatever the ship actually carries
+            if ship_config.ammo_multiplier != 1.0:
+                for weapon_state in ship.weapons.values():
+                    weapon_state.ammo_remaining = int(
+                        weapon_state.ammo_remaining * ship_config.ammo_multiplier
                     )
-                    ship.torpedo_launcher = TorpedoLauncher(
-                        specs=specs,
-                        magazine_capacity=torpedo_data.get('magazine', 16),
-                        current_magazine=torpedo_data.get('magazine', 16),
-                        cooldown_seconds=torpedo_data.get('cooldown_s', 30)
+                if ship.torpedo_launcher is not None:
+                    launcher = ship.torpedo_launcher
+                    launcher.current_magazine = int(
+                        launcher.current_magazine * ship_config.ammo_multiplier
                     )
-                except Exception:
-                    pass
+                    launcher.magazine_capacity = max(
+                        launcher.magazine_capacity, launcher.current_magazine
+                    )
 
             # Apply damage preset if specified
             if ship_config.damage_preset:

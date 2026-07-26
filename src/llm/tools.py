@@ -150,19 +150,24 @@ CAPTAIN_TOOLS_BASE = [
                 "properties": {
                     "direction": {
                         "type": "object",
-                        "description": "Direction vector in ship-relative coordinates (will be normalized)",
+                        "description": (
+                            "Direction vector in WORLD-frame coordinates (will be normalized). "
+                            "NOT ship-relative: these are the same world axes used for ship "
+                            "positions. Enemy bearings shown as ahead/starboard/above are "
+                            "relative to your nose - use your 'Nose pointing' vector to convert."
+                        ),
                         "properties": {
                             "x": {
                                 "type": "number",
-                                "description": "Forward/backward (+forward, -backward)"
+                                "description": "World X component (+x, -x)"
                             },
                             "y": {
                                 "type": "number",
-                                "description": "Left/right (+starboard, -port)"
+                                "description": "World Y component (+y, -y)"
                             },
                             "z": {
                                 "type": "number",
-                                "description": "Up/down (+up, -down)"
+                                "description": "World Z component (+z, -z)"
                             }
                         },
                         "required": ["x", "y", "z"]

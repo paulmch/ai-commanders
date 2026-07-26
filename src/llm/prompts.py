@@ -81,7 +81,11 @@ def format_weapon_groups_for_prompt(weapons: List[Dict], weapon_types: Dict[str,
 
     if pd_lasers:
         count = len(pd_lasers)
-        lines.append(f"- {count}x Point Defense Lasers: Auto-engage torpedoes within 100km")
+        # Range must come from the same data the simulation loads (PDLaser.from_weapon_data
+        # reads range_km). The prompt used to hardcode 100km while the sim used 250km.
+        spec = weapon_types.get("pd_laser", {})
+        pd_range = spec.get("range_km", 250)
+        lines.append(f"- {count}x Point Defense Lasers: Auto-engage torpedoes within {pd_range:.0f}km")
 
     return "\n".join(lines)
 
@@ -102,6 +106,12 @@ def format_enemy_weapons_summary(weapons: List[Dict]) -> str:
 
     parts = [f"{count}x {name}" for name, count in counts.items()]
     return ", ".join(parts) if parts else "Unknown armament"
+
+
+# Mirrors geometry.NOSE_HIT_ANGLE_THRESHOLD / TAIL_HIT_ANGLE_THRESHOLD. A test
+# asserts these stay in sync - the captain acts on these numbers.
+NOSE_HIT_CONE_DEG = 30.0
+TAIL_HIT_CONE_DEG = 150.0
 
 
 class CaptainPersonality(Enum):
@@ -173,31 +183,28 @@ WEAPONS:
 - Turret Coilgun: 6.0 km/s muzzle velocity, 0.7 GJ damage, 500km max range
   * Turreted: 180° firing arc, works during any maneuver
   * 20s cooldown between shots
-- 2x Point Defense Lasers: Auto-engage torpedoes within 100km
+- 2x Point Defense Lasers: Auto-engage torpedoes within 250km
 
-DEFENSE:
-- Nose armor: Heaviest (point this at enemy!)
-- Lateral armor: Medium
-- Tail armor: Light (radiators here - vulnerable when extended)
+DEFENSE - ARMOR IS ASPECT-DEPENDENT (this is the single biggest survivability lever):
+{armor_aspect_block}
+- A round is scored against whichever facing it arrives at: within {nose_cone_deg:.0f}° of your
+  nose it strikes NOSE armor, beyond that it strikes LATERAL, and from behind
+  (past {tail_cone_deg:.0f}° off the nose) it strikes TAIL.
+- So keeping the threat inside {nose_cone_deg:.0f}° of your nose is worth far more than any
+  evasion: the moment you turn past it you present your thinnest plating.
+- The dangerous moment is the BREAK-AWAY turn after an attack run - that is when
+  you swing your flank through the enemy's guns.
 
 THERMAL:
 - Heat sink: {heatsink_capacity:.0f} GJ capacity
-- Radiators extended: +130 MW cooling (vulnerable to damage)
-- Radiators retracted: 0 MW cooling (protected)
+- Radiators extended: +130 MW cooling
+- Radiators retracted: 0 MW cooling
 - Engine heat: ~60 MW at full burn
-- Weapons overheat at 95%+ heat
-
-CURRENT STATUS:
-- Hull: {hull_integrity:.0f}%
-- Heat: {heat_percent:.0f}%
-- Delta-V remaining: {delta_v_remaining:.0f} km/s
-- Radiators: {radiator_status}
-- Armor: Nose {nose_armor:.0f}cm | Lateral {lateral_armor:.0f}cm | Tail {tail_armor:.0f}cm
-
-WEAPON STATUS:
-{weapon_status}
-
-{damage_report}
+- Extended radiators are exposed and CAN be shot off: a hit that strikes them
+  permanently reduces your cooling. Retracting protects them but gives up all
+  cooling, so this is a real tradeoff.
+- Heat above 95% is flagged CRITICAL, but weapons keep firing: this simulation
+  applies no weapon lockout for heat.
 """
 
 SHIP_CAPABILITIES_TEMPLATE = """
@@ -205,36 +212,126 @@ YOUR SHIP: {ship_name} ({ship_class} class)
 
 PROPULSION:
 - Acceleration: {accel_g}g (~{accel_mps:.0f} m/s²)
-- Delta-V budget: {delta_v_total} km/s total
+- Delta-V budget: {delta_v_total:.0f} km/s total
 - 90° turn: ~{turn_time:.0f} seconds (thrust vectoring while burning)
 
 WEAPONS:
 {weapons_section}
 
-DEFENSE:
-- Nose armor: Heaviest (point this at enemy!)
-- Lateral armor: Medium
-- Tail armor: Light (radiators here - vulnerable when extended)
+DEFENSE - ARMOR IS ASPECT-DEPENDENT (this is the single biggest survivability lever):
+{armor_aspect_block}
+- A round is scored against whichever facing it arrives at: within {nose_cone_deg:.0f}° of your
+  nose it strikes NOSE armor, beyond that it strikes LATERAL, and from behind
+  (past {tail_cone_deg:.0f}° off the nose) it strikes TAIL.
+- So keeping the threat inside {nose_cone_deg:.0f}° of your nose is worth far more than any
+  evasion: the moment you turn past it you present your thinnest plating.
+- The dangerous moment is the BREAK-AWAY turn after an attack run - that is when
+  you swing your flank through the enemy's guns.
 
 THERMAL:
 - Heat sink: {heatsink_capacity:.0f} GJ capacity
-- Radiators extended: +130 MW cooling (vulnerable to damage)
-- Radiators retracted: 0 MW cooling (protected)
+- Radiators extended: +{cooling_mw:.0f} MW cooling
+- Radiators retracted: 0 MW cooling
 - Engine heat: ~60 MW at full burn
-- Weapons overheat at 95%+ heat
+- Extended radiators are exposed and CAN be shot off: a hit that strikes them
+  permanently reduces your cooling. Retracting protects them but gives up all
+  cooling, so this is a real tradeoff.
+- Heat above 95% is flagged CRITICAL, but weapons keep firing: this simulation
+  applies no weapon lockout for heat.
 
+"""
+
+# Volatile per-turn status. Kept OUT of the system prompt so the stable doctrine
+# above can be served from the provider's prompt cache across checkpoints.
+SHIP_STATUS_TEMPLATE = """
 CURRENT STATUS:
 - Hull: {hull_integrity:.0f}%
 - Heat: {heat_percent:.0f}%
-- Delta-V remaining: {delta_v_remaining:.0f}/{delta_v_total} km/s
+- Delta-V remaining: {delta_v_remaining:.0f}/{delta_v_total:.0f} km/s
 - Radiators: {radiator_status}
-- Armor: Nose {nose_armor:.0f}cm | Lateral {lateral_armor:.0f}cm | Tail {tail_armor:.0f}cm
+- Armor: Nose {nose_armor:.1f}cm | Lateral {lateral_armor:.1f}cm | Tail {tail_armor:.1f}cm
 
 WEAPON STATUS:
 {weapon_status}
 
 {damage_report}
 """
+
+
+def _armor_aspect_block(nose_cm: float, lateral_cm: float, tail_cm: float) -> str:
+    """
+    Render the armor facings with their real thicknesses and the ratio between
+    them, so the captain can see how much aspect actually matters rather than
+    being told "nose is heaviest".
+    """
+    thinnest = min(lateral_cm, tail_cm) or 1.0
+    ratio = nose_cm / thinnest if thinnest else 1.0
+    lines = [
+        f"- Nose armor:    {nose_cm:6.1f} cm  (heaviest - keep this toward the threat)",
+        f"- Lateral armor: {lateral_cm:6.1f} cm",
+        f"- Tail armor:    {tail_cm:6.1f} cm  (radiators mounted here)",
+        f"- Your nose is {ratio:.1f}x thicker than your thinnest facing: taking a hit "
+        f"nose-on instead of side-on is worth roughly {ratio:.1f}x your effective armor.",
+    ]
+    return "\n".join(lines)
+
+
+def armor_from_fleet_data(ship_type: str, fleet_data: Dict[str, Any]) -> Dict[str, float]:
+    """Starting armor thickness per facing, derived the same way the engine does."""
+    spec = (fleet_data or {}).get("ships", {}).get(ship_type, {})
+    armor = spec.get("armor", {})
+    dist = armor.get("distribution", {})
+    mass_pct = dist.get("mass_percent", {})
+    area_pct = dist.get("area_percent", {})
+    density = armor.get("properties", {}).get("density", 1800)
+    total_mass_kg = armor.get("total_mass_tons", 0) * 1000
+    total_area_m2 = armor.get("total_surface_m2", 0)
+
+    out = {}
+    for facing in ("nose", "lateral", "tail"):
+        area = total_area_m2 * area_pct.get(facing, 0) / 100.0
+        mass = total_mass_kg * mass_pct.get(facing, 0) / 100.0
+        out[facing] = (mass / (density * area) * 100.0) if area and density else 0.0
+    return out
+
+
+def build_ship_status_block(
+    hull_integrity: float,
+    heat_percent: float,
+    delta_v_remaining: float,
+    delta_v_total: float,
+    nose_armor: float,
+    lateral_armor: float,
+    tail_armor: float,
+    radiators_extended: bool,
+    weapons: Optional[Dict[str, Any]] = None,
+    damaged_modules: Optional[Dict[str, Any]] = None,
+) -> str:
+    """
+    Build the volatile per-checkpoint ship status block.
+
+    Split out of the capabilities section so the static ship specification can
+    live in a cacheable system prompt while this changes every checkpoint.
+    """
+    # Radiator damage IS live in the engine now (simulation.py resolves radiator
+    # hits through RadiatorHitResolver), so the vulnerability is real and the
+    # captain should be reasoning about it.
+    radiator_status = (
+        "EXTENDED (+cooling, exposed to fire)" if radiators_extended
+        else "RETRACTED (protected, no cooling)"
+    )
+    return SHIP_STATUS_TEMPLATE.format(
+        hull_integrity=hull_integrity,
+        heat_percent=heat_percent,
+        delta_v_remaining=delta_v_remaining,
+        delta_v_total=delta_v_total,
+        radiator_status=radiator_status,
+        nose_armor=nose_armor,
+        lateral_armor=lateral_armor,
+        tail_armor=tail_armor,
+        weapon_status=format_weapon_status(weapons or {}),
+        damage_report=format_damage_report(damaged_modules or {}),
+    )
 
 
 def build_ship_capabilities_from_fleet(
@@ -270,14 +367,28 @@ def build_ship_capabilities_from_fleet(
     weapons_section = format_weapon_groups_for_prompt(ship_weapons, weapon_types)
 
     # Format status
-    radiator_status = "EXTENDED (cooling, vulnerable)" if radiators_extended else "RETRACTED (protected, no cooling)"
+    radiator_status = "EXTENDED (cooling)" if radiators_extended else "RETRACTED (no cooling)"
     weapon_status = format_weapon_status(weapons or {})
     damage_report = format_damage_report(damaged_modules or {})
 
     # Get ship class name (title case of ship_type)
     ship_class = ship_type.title()
 
+    # Radiator cooling straight from fleet data (RadiatorArray.from_thermal_data uses
+    # the same mass x dissipation product), so the prompt cannot drift from the sim.
+    radiator_spec = ship_spec.get("thermal", {}).get("radiator", {})
+    cooling_mw = (
+        radiator_spec.get("mass_tons", 10.0) * 1000.0
+        * radiator_spec.get("dissipation_kw_per_kg", 13.0)
+    ) / 1000.0
+
+    _armor = armor_from_fleet_data(ship_type, fleet_data)
     return SHIP_CAPABILITIES_TEMPLATE.format(
+        armor_aspect_block=_armor_aspect_block(
+            _armor.get("nose", 0.0), _armor.get("lateral", 0.0), _armor.get("tail", 0.0)
+        ),
+        nose_cone_deg=NOSE_HIT_CONE_DEG,
+        tail_cone_deg=TAIL_HIT_CONE_DEG,
         ship_name=ship_name,
         ship_class=ship_class,
         accel_g=accel_g,
@@ -286,6 +397,7 @@ def build_ship_capabilities_from_fleet(
         turn_time=turn_time,
         weapons_section=weapons_section,
         heatsink_capacity=heatsink_capacity,
+        cooling_mw=cooling_mw,
         hull_integrity=hull_integrity,
         heat_percent=heat_percent,
         delta_v_remaining=delta_v_remaining,
@@ -303,7 +415,8 @@ PROJECTILE_PHYSICS_REFERENCE = """
 PROJECTILE PHYSICS (for your calculations):
 - Spinal round: 9.9 km/s → at 100km takes ~10s, at 200km ~20s, at 500km ~50s
 - Turret round: 6.0 km/s → at 100km takes ~17s, at 200km ~33s, at 500km ~83s
-- EVADE maneuver: Halves enemy hit probability (random jinking ~500m/s lateral)
+- EVADE maneuver: cuts enemy hit probability by ~40% (x0.6 multiplier in the
+  fire-control model), via random jinking ~500m/s lateral
 - Your ship width: ~20m, length ~125m
 
 CRITICAL - ARMOR BREACH:
@@ -313,18 +426,21 @@ CRITICAL - ARMOR BREACH:
 - Bridge or Reactor destroyed = immediate ship kill
 - PROTECT YOUR WEAKEST ARMOR FACING - keep it pointed away from enemy!
 
-HIT PROBABILITY BY RANGE (approximate):
-- 50km: ~85% hit chance - knife fight, almost guaranteed hits
-- 100km: ~70% hit chance - close combat, most shots land
-- 200km: ~50% hit chance - medium range, coin flip
-- 400km: ~25% hit chance - long range, mostly misses
-- 600km+: ~10% hit chance - sniping, lucky hits only
-- EVADE halves these probabilities
+HIT PROBABILITY BY RANGE (spinal, 9.9 km/s, vs a non-evading destroyer):
+- 50km: ~82% - knife fight, almost guaranteed hits
+- 100km: ~64% - close combat, most shots land
+- 200km: ~39% - medium range, and already worse than a coin flip
+- 400km: ~17% - long range, mostly misses
+- 600km+: ~10% - sniping, lucky hits only
+Turrets (6.0 km/s) are worse at every range, and evasion multiplies whatever is left
+by 0.6: an evading target at 200km is ~20% for turrets, ~23% for the spinal.
 - Closing velocity improves hit chance (harder to dodge)
+- Larger hulls are easier to hit; corvettes are much harder than dreadnoughts
 - TO WIN: Close range aggressively OR have overwhelming accuracy advantage
 """
 
-CAPTAIN_SYSTEM_PROMPT = """
+# Stable across every checkpoint of a battle -> cacheable prefix.
+CAPTAIN_DOCTRINE = """
 You are Captain {captain_name}, commanding {ship_name} in a space combat simulation.
 
 {simulation_disclaimer}
@@ -332,27 +448,6 @@ You are Captain {captain_name}, commanding {ship_name} in a space combat simulat
 {ship_capabilities}
 
 {projectile_reference}
-
-=== TACTICAL DATA (T+{sim_time:.0f}s) ===
-
-YOUR SHIP:
-  Nose pointing: ({fwd_x:+.2f}, {fwd_y:+.2f}, {fwd_z:+.2f})
-  Angle to primary target: {angle_to_enemy:.1f}° {spinal_status}
-
-YOUR CURRENT CONFIGURATION:
-{current_config}
-
-{battlefield_overview}
-
-{combat_statistics}
-
-{incoming_projectiles}
-
-{recent_hits}
-
-{received_messages}
-
-{history_context}
 
 === CONTROLS ===
 
@@ -364,6 +459,9 @@ MANEUVERS:
 - PADLOCK: ROTATE ONLY, NO THRUST - keeps nose pointed at target but does NOT move toward it!
            Use PADLOCK for tracking/firing while coasting. You will NOT close distance!
 - set_heading: Fly specific direction - for angled approaches, flanking, disengaging
+  NOTE ON FRAMES: set_heading takes a WORLD-frame direction vector (x, y, z world axes),
+  NOT a ship-relative one. Enemy bearings printed as ahead/starboard/above are relative
+  to YOUR NOSE; the "Nose pointing" vector above tells you how the two frames line up.
 
 *** CRITICAL: PADLOCK vs INTERCEPT ***
 PADLOCK @ 70% = Rotate to track target, NO closing thrust. You stay on current trajectory!
@@ -448,6 +546,34 @@ Your ship will execute your orders for 30 seconds regardless of what happens.
 
 {personality_prompt}
 """
+
+# Rebuilt every checkpoint. Must come AFTER the doctrine in the request.
+CAPTAIN_TURN_STATE = """=== TACTICAL DATA (T+{sim_time:.0f}s) ===
+{ship_status_block}
+
+YOUR SHIP:
+  Nose pointing: ({fwd_x:+.2f}, {fwd_y:+.2f}, {fwd_z:+.2f})
+  Angle to primary target: {angle_to_enemy:.1f}° {spinal_status}
+
+YOUR CURRENT CONFIGURATION:
+{current_config}
+
+{battlefield_overview}
+
+{combat_statistics}
+
+{incoming_projectiles}
+
+{recent_hits}
+
+{received_messages}
+
+{history_context}
+"""
+
+# Backwards-compatible single-string form (doctrine + state).
+CAPTAIN_SYSTEM_PROMPT = CAPTAIN_DOCTRINE + "\n\n" + CAPTAIN_TURN_STATE
+
 
 # Prompt for pre-battle personality selection
 PERSONALITY_SELECTION_PROMPT = """
@@ -550,11 +676,14 @@ def build_ship_capabilities(
         )
 
     # Legacy fallback using destroyer template
-    radiator_status = "EXTENDED (cooling, vulnerable)" if radiators_extended else "RETRACTED (protected, no cooling)"
+    radiator_status = "EXTENDED (cooling)" if radiators_extended else "RETRACTED (no cooling)"
     weapon_status = format_weapon_status(weapons or {})
     damage_report = format_damage_report(damaged_modules or {})
 
     return SHIP_CAPABILITIES_DESTROYER.format(
+        armor_aspect_block=_armor_aspect_block(151.2, 26.0, 30.3),
+        nose_cone_deg=NOSE_HIT_CONE_DEG,
+        tail_cone_deg=TAIL_HIT_CONE_DEG,
         ship_name=ship_name,
         hull_integrity=hull_integrity,
         heat_percent=heat_percent,
@@ -628,7 +757,11 @@ def format_battlefield_overview(enemies: List[Dict[str, Any]], friendlies: List[
             # Header with primary target marker - show both name and ID
             name = e.get("name", e.get("ship_id", "Unknown"))
             ship_id = e.get("ship_id", "")
-            ship_class = e.get("ship_class", "ship")
+            # ship_class is often absent/"unknown"; ship_type is the authoritative
+            # field on the simulation Ship, so derive the class from it when we can.
+            ship_class = e.get("ship_class") or "ship"
+            if str(ship_class).lower() in ("", "unknown", "ship") and e.get("ship_type"):
+                ship_class = str(e["ship_type"]).title()
             # Show ID in brackets so captain can match Admiral orders
             id_display = f" [{ship_id}]" if ship_id and ship_id != name else ""
             if is_primary:
@@ -636,13 +769,24 @@ def format_battlefield_overview(enemies: List[Dict[str, Any]], friendlies: List[
             else:
                 lines.append(f"  {name}{id_display} ({ship_class}):")
 
-            # Position
-            rel_pos = e.get("relative_position", {})
-            x, y, z = rel_pos.get("x", 0), rel_pos.get("y", 0), rel_pos.get("z", 0)
-            x_label = "ahead" if x > 0 else "behind"
-            y_label = "starboard" if y > 0 else "port"
-            z_label = "above" if z > 0 else "below"
-            lines.append(f"    Position: {abs(x):.1f} km {x_label}, {abs(y):.1f} km {y_label}, {abs(z):.1f} km {z_label}")
+            # Position, expressed in THIS ship's body frame so that
+            # "ahead/starboard/above" actually mean what they say.
+            bearing = e.get("relative_bearing_km")
+            if bearing:
+                f_km = bearing.get("forward", 0.0)
+                s_km = bearing.get("starboard", 0.0)
+                u_km = bearing.get("up", 0.0)
+                lines.append(
+                    f"    Bearing: {abs(f_km):.1f} km {'ahead' if f_km >= 0 else 'behind'}, "
+                    f"{abs(s_km):.1f} km {'starboard' if s_km >= 0 else 'port'}, "
+                    f"{abs(u_km):.1f} km {'above' if u_km >= 0 else 'below'} (relative to your nose)"
+                )
+            else:
+                rel_pos = e.get("relative_position", {})
+                x, y, z = rel_pos.get("x", 0), rel_pos.get("y", 0), rel_pos.get("z", 0)
+                lines.append(
+                    f"    Offset (world frame): x{x:+.1f} y{y:+.1f} z{z:+.1f} km"
+                )
 
             # Distance and closing rate
             distance = e.get("distance_km", 0)
@@ -660,7 +804,7 @@ def format_battlefield_overview(enemies: List[Dict[str, Any]], friendlies: List[
             armor = e.get("armor", {})
             nose_cond = assess_armor_condition(armor.get("nose_damage_pct", 0))
             lateral_cond = assess_armor_condition(armor.get("lateral_damage_pct", 0))
-            lines.append(f"    Hull: ~{hull:.0f}% | Nose: {nose_cond} | Flank: {lateral_cond}")
+            lines.append(f"    Hull: {hull:.0f}% | Nose: {nose_cond} | Flank: {lateral_cond}")
 
             # Add enemy ship capabilities if fleet_data available
             enemy_ship_type = e.get("ship_type", "")
@@ -694,11 +838,22 @@ def format_battlefield_overview(enemies: List[Dict[str, Any]], friendlies: List[
             name = f.get("name", f.get("ship_id", "Unknown"))
             distance = f.get("distance_km", 0)
             hull = f.get("hull_percent", 100)
-            rel_pos = f.get("relative_position", {})
-            x, y = rel_pos.get("x", 0), rel_pos.get("y", 0)
-            x_label = "ahead" if x > 0 else "behind"
-            y_label = "starboard" if y > 0 else "port"
-            lines.append(f"  {name}: {distance:.1f} km ({abs(x):.0f} km {x_label}, {abs(y):.0f} km {y_label}) | Hull: ~{hull:.0f}%")
+            # Same frame rule as for enemies: "ahead/starboard" are body-frame words
+            # and may only be used when a body-frame bearing was supplied. The raw
+            # relative_position is a WORLD-frame delta and must be labelled as such.
+            bearing = f.get("relative_bearing_km")
+            if bearing:
+                f_km = bearing.get("forward", 0.0)
+                s_km = bearing.get("starboard", 0.0)
+                offset = (
+                    f"{abs(f_km):.0f} km {'ahead' if f_km >= 0 else 'behind'}, "
+                    f"{abs(s_km):.0f} km {'starboard' if s_km >= 0 else 'port'}"
+                )
+            else:
+                rel_pos = f.get("relative_position", {})
+                x, y, z = rel_pos.get("x", 0), rel_pos.get("y", 0), rel_pos.get("z", 0)
+                offset = f"world frame x{x:+.0f} y{y:+.0f} z{z:+.0f} km"
+            lines.append(f"  {name}: {distance:.1f} km ({offset}) | Hull: {hull:.0f}%")
 
     return "\n".join(lines)
 
@@ -745,7 +900,7 @@ def format_combat_statistics(
             name = f.get("name", f.get("ship_id", "Unknown"))
             # Friendlies don't have detailed combat stats in current structure
             hull = f.get("hull_percent", 100)
-            lines.append(f"  {name}: Hull ~{hull:.0f}%")
+            lines.append(f"  {name}: Hull {hull:.0f}%")
 
     return "\n".join(lines)
 
@@ -794,7 +949,7 @@ def format_current_config(
         lines.append("  Primary target: None (will auto-select nearest)")
 
     # Radiators
-    rad_status = "EXTENDED (vulnerable but cooling)" if radiators_extended else "RETRACTED (protected, no cooling)"
+    rad_status = "EXTENDED (cooling)" if radiators_extended else "RETRACTED (no cooling)"
     lines.append(f"  Radiators: {rad_status}")
 
     # Weapons - dynamic based on what's in weapon_orders
@@ -935,8 +1090,11 @@ def build_captain_prompt(
         evasion_status=evasion_status,
     )
 
-    # Format battlefield overview
-    battlefield_overview = format_battlefield_overview(enemies, friendlies)
+    # Format battlefield overview. fleet_data was accepted by this function but never
+    # forwarded, so the enemy-capabilities block (accel / delta-v / turn time / armament)
+    # was unreachable dead code and captains were told to judge "capital vs corvette"
+    # with no class information at all.
+    battlefield_overview = format_battlefield_overview(enemies, friendlies, fleet_data)
 
     # Format combat statistics
     our_shots = tactical_status.get("our_shots", 0)
@@ -994,7 +1152,28 @@ def build_captain_prompt(
     # Recent hits section
     recent_hits_section = recent_hits if recent_hits else ""
 
+    # Volatile ship status, now rendered separately from the static spec.
+    _delta_v_total = 500
+    if fleet_data and ship_type:
+        _delta_v_total = (
+            fleet_data.get("ships", {}).get(ship_type, {})
+            .get("performance", {}).get("delta_v_kps", 500)
+        )
+    ship_status_block = build_ship_status_block(
+        hull_integrity=ship_status.get("hull_integrity", 100),
+        heat_percent=ship_status.get("heat_percent", 0),
+        delta_v_remaining=ship_status.get("delta_v_remaining", 500),
+        delta_v_total=_delta_v_total,
+        nose_armor=ship_status.get("nose_armor", 0.0),
+        lateral_armor=ship_status.get("lateral_armor", 0.0),
+        tail_armor=ship_status.get("tail_armor", 0.0),
+        radiators_extended=ship_status.get("radiators_extended", False),
+        weapons=ship_status.get("weapons"),
+        damaged_modules=ship_status.get("damaged_modules"),
+    )
+
     return CAPTAIN_SYSTEM_PROMPT.format(
+        ship_status_block=ship_status_block,
         captain_name=captain_name,
         ship_name=ship_name,
         simulation_disclaimer=SIMULATION_DISCLAIMER,
@@ -1021,84 +1200,31 @@ def build_captain_prompt(
 # ADMIRAL PROMPTS
 # =============================================================================
 
-ADMIRAL_SYSTEM_PROMPT = """
+# Marker separating the stable doctrine from the per-checkpoint fleet snapshot.
+# Everything before it is reused verbatim across checkpoints of the same battle,
+# so it can serve as a cacheable prefix; everything after it changes every call.
+ADMIRAL_STATE_MARKER = "=== FLEET SITUATION ==="
+
+# Stable across the battle -> cacheable prefix. Must precede the live snapshot.
+ADMIRAL_DOCTRINE = """
 You are {admiral_name}, Admiral of the {faction} fleet in a space combat simulation.
 
-***** CRITICAL REQUIREMENT - READ THIS FIRST *****
-
-You MUST call issue_order for EACH of your {num_ships} ships:
-{ship_order_checklist}
-
-^^^ YOU MUST ISSUE AN ORDER TO EVERY SHIP LISTED ABOVE ^^^
-If you skip a ship, it will DRIFT with no orders and be useless!
-
-Ships are shown as: NAME [ID] (e.g., "OCS Gemini-1 [beta_1]")
-You can use EITHER the name OR the ID for targeting.
-
-EXAMPLE:
-  issue_order(ship_name="TIS Haiku-1", order_text="Target OCS Gemini-1. INTERCEPT.", suggested_target="OCS Gemini-1")
-  OR: order_text="Target beta_1. INTERCEPT." - both work!
-
-*************************************************
+{mission_block}
 
 {simulation_disclaimer}
-
-=== YOUR FLEET ===
-{fleet_composition}
-
-=== FLEET CAPABILITIES ===
-{fleet_capabilities}
-
-=== DUAL TEMPORAL SNAPSHOT ===
-You see the battle at two points in time to analyze trajectories and momentum.
-
---- T-15s (15 seconds ago) ---
-{snapshot_t_minus_15}
-
---- T=0 (Current) ---
-{snapshot_t_zero}
-
-=== CHANGE ANALYSIS ===
-{change_analysis}
-
-=== FRIENDLY FLEET STATUS (FULL) ===
-{friendly_fleet_status}
-
-=== ENEMY FLEET STATUS (OBSERVABLE) ===
-{enemy_fleet_status}
-
-=== PROJECTILES IN FLIGHT ===
-{projectile_info}
-
-{communications_section}
 
 === YOUR ROLE ===
 
 As Admiral, you:
-1. Issue SPECIFIC ORDERS to EACH captain using the issue_order tool
-2. Set overall fleet directive (visible to all captains)
+1. Set the overall fleet directive (visible to all captains)
+2. Issue SPECIFIC ORDERS to EACH captain using the issue_order tool
 3. Can negotiate with enemy Admiral (if one exists)
 4. Control draw proposals for your fleet
 
 Your captains receive your orders BEFORE they decide.
 They can discuss with you (up to 2 exchanges) before finalizing.
 
-***** CRITICAL - YOU MUST ISSUE ORDERS TO EACH SHIP *****
-
-For EACH ship in your fleet, you MUST call issue_order with:
-- ship_name: The ship's name (e.g., "TIS Haiku-1")
-- order_text: SPECIFIC instructions including:
-  * Which enemy to target (by name)
-  * What maneuver to use (INTERCEPT, EVADE, BRAKE, etc.)
-  * Weapon orders (fire immediately, hold fire, etc.)
-  * Any special instructions
-- priority: CRITICAL, HIGH, NORMAL, or LOW
-- suggested_target: The enemy ship name to focus on
-
-EXAMPLE ORDER:
-"Target OCS Grok-1. EVADE while engaging - dodge their fire but keep weapons hot.
-Fire spinal when aligned, turrets continuous fire. Stay mobile - don't be a sitting duck."
-
+{order_requirements}
 === TACTICAL COMMAND REFERENCE ===
 
 MANEUVERS (tell captains which to use):
@@ -1148,7 +1274,8 @@ KEY PHYSICS FOR FLEET COMMAND:
 - High closing velocity = harder to hit (brief engagement window)
 - 0 km/s relative + no evasion = sitting duck (easy hit)
 - Sweet spot: 1-3 km/s relative with active maneuvering
-- Formation benefit: Ships within 50km share point defense coverage
+- Formation benefit: point defense also engages threats closing on nearby friendlies,
+  so ships that stay inside each other's PD envelope (~{pd_range_km:.0f} km laser range) cover each other
 
 FLANKING PREVENTION (YOUR RESPONSIBILITY):
 Enemy ships in FLANKING positions can hit your ships on the LATERAL (side) - easy targets!
@@ -1204,15 +1331,11 @@ SHIP CAPABILITIES:
 {ship_class_stats}
 - Spinal weapons need nose-on alignment (<30° to target)
 - Turrets can fire at 180° arc (more flexible)
-- Radiators EXTENDED = better cooling but vulnerable
+- Radiators EXTENDED = better cooling (no damage model penalises extended radiators)
 - Don't waste shots on fleeing enemies (5+ km/s separation) - focus on threats closing on you
 - A target at 100km closing at 3 km/s is MORE dangerous than one at 80km separating at 4 km/s
 
-DO NOT just use set_fleet_directive alone! Each captain needs their own order.
-The fleet_directive is for OVERALL strategy only.
-
-IMPORTANT: Use SHIP NAMES (e.g., "TIS Haiku-1", "OCS Gemini-3") in directives and orders,
-NOT ship IDs (e.g., "alpha_1", "beta_3"). Captains know ships by NAME, not ID.
+The fleet_directive is for OVERALL strategy only - each captain also needs their own order.
 
 ADDITIONAL NOTES:
 - Captains are AI commanders - be specific about priorities and targets
@@ -1224,6 +1347,47 @@ ADDITIONAL NOTES:
 
 {personality_prompt}
 """
+
+# Rebuilt every checkpoint. Must come AFTER the doctrine in the request so the
+# doctrine can be a stable cached prefix (it previously sat *after* the snapshot,
+# which made any prefix boundary useless).
+ADMIRAL_TURN_STATE = (
+    ADMIRAL_STATE_MARKER
+    + """
+
+=== YOUR FLEET ===
+{fleet_composition}
+
+=== FLEET CAPABILITIES ===
+{fleet_capabilities}
+
+=== DUAL TEMPORAL SNAPSHOT ===
+You see the battle at two points in time to analyze trajectories and momentum.
+
+--- T-15s (15 seconds ago) ---
+{snapshot_t_minus_15}
+
+--- T=0 (Current) ---
+{snapshot_t_zero}
+
+=== CHANGE ANALYSIS ===
+{change_analysis}
+
+=== FRIENDLY FLEET STATUS (FULL) ===
+{friendly_fleet_status}
+
+=== ENEMY FLEET STATUS (OBSERVABLE) ===
+{enemy_fleet_status}
+
+=== PROJECTILES IN FLIGHT ===
+{projectile_info}
+
+{communications_section}
+"""
+)
+
+# Backwards-compatible single-string form (doctrine + live state).
+ADMIRAL_SYSTEM_PROMPT = ADMIRAL_DOCTRINE + "\n" + ADMIRAL_TURN_STATE
 
 ADMIRAL_RESPONSE_PROMPT = """
 You are {admiral_name}, responding to a question from one of your ship captains.
@@ -1333,6 +1497,10 @@ def build_admiral_prompt(
         enemy_proposed_draw: Whether enemy has proposed draw
         received_messages: Messages from enemy Admiral
         communications_log: All captain communications (Admiral oversight)
+        phase: Which call this prompt is for. "directive" asks for the fleet
+            directive only (per-ship orders are collected in a later call and any
+            issue_order made now is discarded, so the checklist is suppressed);
+            "full"/"orders" keep the issue-an-order-for-every-ship requirement.
 
     Returns:
         Complete Admiral system prompt
@@ -1404,22 +1572,87 @@ def build_admiral_prompt(
 
     # Generate ship order checklist - explicit list of ships needing orders
     ship_order_checklist = ""
+    # The caller may only be asking for the fleet directive on this call (phase
+    # "directive"); admiral._issue_ship_order() collects per-ship orders afterwards
+    # and the directive-phase result parser DISCARDS any issue_order calls. Demanding
+    # issue_order here therefore produced work that was silently thrown away.
+    directive_only = (phase == "directive")
+
     if snapshot_t_zero and snapshot_t_zero.friendly_ships:
         checklist_lines = []
         for i, ship in enumerate(snapshot_t_zero.friendly_ships, 1):
-            checklist_lines.append(f"  {i}. {ship.ship_name} <- MUST issue_order for this ship!")
+            suffix = "" if directive_only else " <- MUST issue_order for this ship!"
+            checklist_lines.append(f"  {i}. {ship.ship_name}{suffix}")
         ship_order_checklist = "\n".join(checklist_lines)
     else:
         ship_order_checklist = "  (no ships)"
 
+    if directive_only:
+        mission_block = f"""***** THIS CALL: FLEET DIRECTIVE ONLY *****
+
+Call set_fleet_directive with the overall strategy for your {num_ships} ships:
+{ship_order_checklist}
+
+Individual ship orders are requested in a SEPARATE call immediately after this one,
+one ship at a time. Do NOT call issue_order now - orders issued on this call are
+discarded. Make the directive concrete enough that the per-ship orders follow from it.
+
+Ships are shown as: NAME [ID] (e.g., "OCS Gemini-1 [beta_1]")
+You can use EITHER the name OR the ID when naming ships or targets.
+
+*************************************************"""
+        order_requirements = ""
+    else:
+        mission_block = f"""***** CRITICAL REQUIREMENT - READ THIS FIRST *****
+
+You MUST call issue_order for EACH of your {num_ships} ships:
+{ship_order_checklist}
+
+^^^ YOU MUST ISSUE AN ORDER TO EVERY SHIP LISTED ABOVE ^^^
+If you skip a ship, it will DRIFT with no orders and be useless!
+
+Ships are shown as: NAME [ID] (e.g., "OCS Gemini-1 [beta_1]")
+You can use EITHER the name OR the ID for targeting.
+
+EXAMPLE:
+  issue_order(ship_name="TIS Haiku-1", order_text="Target OCS Gemini-1. INTERCEPT.", suggested_target="OCS Gemini-1")
+  OR: order_text="Target beta_1. INTERCEPT." - both work!
+
+*************************************************"""
+        order_requirements = """***** CRITICAL - YOU MUST ISSUE ORDERS TO EACH SHIP *****
+
+For EACH ship in your fleet, you MUST call issue_order with:
+- ship_name: The ship's name (e.g., "TIS Haiku-1")
+- order_text: SPECIFIC instructions including:
+  * Which enemy to target (by name or ID)
+  * What maneuver to use (INTERCEPT, EVADE, BRAKE, etc.)
+  * Weapon orders (fire immediately, hold fire, etc.)
+  * Any special instructions
+- priority: CRITICAL, HIGH, NORMAL, or LOW
+- suggested_target: The enemy ship to focus on
+
+EXAMPLE ORDER:
+"Target OCS Grok-1. EVADE while engaging - dodge their fire but keep weapons hot.
+Fire spinal when aligned, turrets continuous fire. Stay mobile - don't be a sitting duck."
+
+"""
+
     # Generate dynamic ship class stats from fleet_data
     ship_class_stats = _generate_ship_class_stats(snapshot_t_zero, fleet_data)
 
+    # Allied PD coverage is bounded by the laser's own range (there is no separate
+    # "formation radius" constant anywhere in the PD code), so read it from the same
+    # data PDLaser.from_fleet_data reads instead of quoting a made-up 50 km.
+    pd_range_km = float(
+        (fleet_data or {}).get("weapon_types", {}).get("pd_laser", {}).get("range_km", 250)
+    )
+
     return ADMIRAL_SYSTEM_PROMPT.format(
+        pd_range_km=pd_range_km,
         admiral_name=admiral_name,
         faction=faction.upper(),
-        num_ships=num_ships,
-        ship_order_checklist=ship_order_checklist,
+        mission_block=mission_block,
+        order_requirements=order_requirements,
         simulation_disclaimer=SIMULATION_DISCLAIMER,
         fleet_composition=fleet_composition,
         fleet_capabilities=fleet_capabilities,
@@ -1576,12 +1809,12 @@ def _format_fleet_capabilities(
 
     for ship in friendly_ships:
         ship_spec = fleet_data.get("ships", {}).get(ship.ship_type, {})
-        propulsion = ship_spec.get("propulsion", {})
+        performance = ship_spec.get("performance", {})
 
         lines.append(f"\n{ship.ship_name} ({ship.ship_type.title()} class):")
         lines.append(f"  Captain: {ship.captain_name}")
-        lines.append(f"  Acceleration: {propulsion.get('combat_acceleration_g', 2.0)}g")
-        lines.append(f"  Delta-V Budget: {propulsion.get('delta_v_kps', 500)} km/s")
+        lines.append(f"  Acceleration: {performance.get('combat_acceleration_g', 2.0)}g")
+        lines.append(f"  Delta-V Budget: {performance.get('delta_v_kps', 500)} km/s")
         lines.append(f"  90° Turn Time: ~{get_ship_turn_time_90deg(ship.ship_type):.0f}s")
         lines.append(f"  Weapons: {ship.weapons_summary}")
 
@@ -1702,7 +1935,7 @@ def _format_enemy_fleet_observable(
 
         # Get enemy ship capabilities from fleet data
         enemy_spec = fleet_data.get("ships", {}).get(enemy.ship_type, {})
-        propulsion = enemy_spec.get("propulsion", {})
+        performance = enemy_spec.get("performance", {})
         weapons = enemy_spec.get("weapons", [])
 
         # Show both name and ID for targeting clarity
@@ -1719,10 +1952,10 @@ def _format_enemy_fleet_observable(
             lines.append(f"  Separating: {abs(enemy.closing_rate_kps):.1f} km/s")
 
         # Show known capabilities (from ship class, not current state)
-        if propulsion:
+        if performance:
             lines.append(f"  Known Capabilities:")
-            lines.append(f"    Accel: {propulsion.get('combat_acceleration_g', '?')}g")
-            lines.append(f"    Delta-V: {propulsion.get('delta_v_kps', '?')} km/s")
+            lines.append(f"    Accel: {performance.get('combat_acceleration_g', '?')}g")
+            lines.append(f"    Delta-V: {performance.get('delta_v_kps', '?')} km/s")
             lines.append(f"    Weapons: {format_enemy_weapons_summary(weapons)}")
 
     return "\n".join(lines)
@@ -1804,3 +2037,50 @@ def format_admiral_orders_for_captain(
     lines.append("=" * 60)
 
     return "\n".join(lines)
+
+
+def build_captain_messages(**kwargs) -> List[Dict[str, str]]:
+    """
+    Build the captain request as a cacheable system prompt plus a volatile user turn.
+
+    The previous single-string prompt interleaved per-checkpoint state (sim time,
+    positions, damage) with ~1200 tokens of static doctrine that followed it, so
+    the provider could never reuse a cached prefix - every 30 s checkpoint re-paid
+    full input price on the entire prompt. CAPTAIN_SYSTEM_PROMPT is now ordered
+    doctrine-first, so a single split at the tactical-data marker separates the
+    stable prefix from the volatile turn.
+
+    Accepts the same keyword arguments as build_captain_prompt().
+    """
+    full = build_captain_prompt(**kwargs)
+    marker = "=== TACTICAL DATA (T+"
+    idx = full.find(marker)
+    if idx == -1:  # structure changed - fall back to a single message
+        return [{"role": "system", "content": full}]
+
+    return [
+        {"role": "system", "content": full[:idx].rstrip()},
+        {"role": "user", "content": full[idx:].rstrip()},
+    ]
+
+
+def build_admiral_messages(**kwargs) -> List[Dict[str, str]]:
+    """
+    Build the admiral request as a cacheable system prompt plus a volatile user turn.
+
+    Same problem and same fix as build_captain_messages(): the doctrine (role,
+    tactical command reference, fleet tactical options, ship-class stats) is
+    stable for the whole battle, so it now precedes the dual-snapshot fleet
+    situation and can be split off as a reusable prefix.
+
+    Accepts the same keyword arguments as build_admiral_prompt().
+    """
+    full = build_admiral_prompt(**kwargs)
+    idx = full.find(ADMIRAL_STATE_MARKER)
+    if idx == -1:  # structure changed - fall back to a single message
+        return [{"role": "system", "content": full}]
+
+    return [
+        {"role": "system", "content": full[:idx].rstrip()},
+        {"role": "user", "content": full[idx:].rstrip()},
+    ]

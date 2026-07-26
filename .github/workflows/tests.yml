@@ -14,18 +14,23 @@ jobs:
         python-version: ["3.10", "3.11", "3.12"]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v9
         with:
           version: "latest"
+          enable-cache: true
 
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
 
+      # --all-extras installs the `mcp` extra (mcp, aiohttp) so the MCP
+      # integration is actually exercised in CI instead of silently taking the
+      # `except ImportError: MCP_AVAILABLE = False` path.
+      # --locked fails the build on a drifted uv.lock instead of re-resolving.
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --locked --all-extras
 
       - name: Run tests
         run: uv run pytest tests/ -v --tb=short

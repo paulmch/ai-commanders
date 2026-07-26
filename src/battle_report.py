@@ -860,7 +860,11 @@ def _determine_outcome(simulation: CombatSimulation) -> tuple[BattleOutcome, Opt
         # Use common faction naming convention
         if winning_faction.lower() in ["alpha", "faction_a", "a"]:
             return BattleOutcome.ALPHA_VICTORY, winning_faction
-        elif winning_faction.lower() in ["bravo", "faction_b", "b"]:
+        # "beta" is the faction id the simulation actually uses (see
+        # create_ship_from_fleet_data in src/simulation.py). It was missing
+        # here, so every beta win fell through to the generic branch below and
+        # was reported as "ALPHA VICTORY" with winning_faction="beta".
+        elif winning_faction.lower() in ["beta", "bravo", "faction_b", "b"]:
             return BattleOutcome.BRAVO_VICTORY, winning_faction
         else:
             # Generic victory for named faction
@@ -925,14 +929,20 @@ def _build_ship_stats(
                 if module_name not in modules_destroyed:
                     modules_destroyed.append(module_name)
 
-    # Get initial delta-v (if available)
+    # Delta-v accounting.
+    #
+    # ShipState (src/physics.py) has no `delta_v_expended_kps` attribute - it only
+    # exposes remaining delta-v via the Tsiolkovsky equation - so reading it
+    # directly raised AttributeError and made _build_ship_stats (and therefore
+    # create_report_from_simulation) unusable for every real simulation. Read it
+    # defensively, exactly as the ShipBattleStats construction below already did,
+    # and treat "nothing recorded" as "nothing burned".
+    delta_v_expended = 0.0
     initial_delta_v = 0.0
     if ship.kinematic_state:
-        # Calculate from propellant fraction if available
-        initial_delta_v = ship.remaining_delta_v_kps + ship.kinematic_state.delta_v_expended_kps
-        if initial_delta_v == 0:
-            # Fallback estimate
-            initial_delta_v = ship.remaining_delta_v_kps
+        delta_v_expended = getattr(ship.kinematic_state, 'delta_v_expended_kps', 0.0) or 0.0
+        # initial = what is left + what was spent (falls back to remaining).
+        initial_delta_v = ship.remaining_delta_v_kps + delta_v_expended
 
     # Build armor state
     armor_state: list[ArmorSectionState] = []
@@ -963,9 +973,7 @@ def _build_ship_stats(
         torpedo_hits=torpedo_hits,
         damage_dealt_gj=ship.damage_dealt_gj,
         damage_received_gj=ship.damage_taken_gj,
-        delta_v_expended_kps=getattr(
-            ship.kinematic_state, 'delta_v_expended_kps', 0.0
-        ) if ship.kinematic_state else 0.0,
+        delta_v_expended_kps=delta_v_expended,
         initial_delta_v_kps=initial_delta_v,
         peak_heat_percent=peak_heat,
         modules_destroyed=modules_destroyed,

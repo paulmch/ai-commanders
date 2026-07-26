@@ -74,22 +74,36 @@ class VictoryEvaluator:
         Returns:
             Tuple of (outcome, winner_id, reason)
         """
-        # Calculate damage efficiency ratio
-        alpha_dealt = alpha.damage_dealt_gj
-        alpha_taken = max(1.0, alpha.damage_taken_gj)
-        beta_dealt = beta.damage_dealt_gj
-        beta_taken = max(1.0, beta.damage_taken_gj)
+        # Damage exchange, as a bounded 0-40 share of the total damage traded.
+        #
+        # This used to be `dealt / max(1, taken) * 40`, which is unbounded: a ship
+        # that dealt 10 GJ while taking 0.5 GJ scored 400 points from this term
+        # alone, so the advertised 40/60 weighting was really "ratio decides,
+        # hull is noise". Using dealt / (dealt + taken) keeps the term in 0-40,
+        # symmetric between the two sides, and monotonic in the same direction as
+        # the old ratio.
+        alpha_dealt = max(0.0, alpha.damage_dealt_gj)
+        alpha_taken = max(0.0, alpha.damage_taken_gj)
+        beta_dealt = max(0.0, beta.damage_dealt_gj)
+        beta_taken = max(0.0, beta.damage_taken_gj)
 
-        alpha_ratio = alpha_dealt / alpha_taken
-        beta_ratio = beta_dealt / beta_taken
+        def _exchange_score(dealt: float, taken: float) -> float:
+            total = dealt + taken
+            if total <= 0.0:
+                return 20.0  # no damage traded at all -> neutral half of the 40
+            return 40.0 * (dealt / total)
+
+        alpha_exchange = _exchange_score(alpha_dealt, alpha_taken)
+        beta_exchange = _exchange_score(beta_dealt, beta_taken)
 
         # Also consider hull integrity
         alpha_hull = alpha.hull_integrity
         beta_hull = beta.hull_integrity
 
-        # Combined score: 40% damage ratio, 60% hull remaining
-        alpha_score = (alpha_ratio * 40) + (alpha_hull * 0.6)
-        beta_score = (beta_ratio * 40) + (beta_hull * 0.6)
+        # Combined score, out of 100: up to 40 for the damage exchange,
+        # up to 60 for hull remaining (hull_integrity is a 0-100 percentage).
+        alpha_score = alpha_exchange + (alpha_hull * 0.6)
+        beta_score = beta_exchange + (beta_hull * 0.6)
 
         # Margin for draw
         margin = 5.0

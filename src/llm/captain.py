@@ -8,10 +8,11 @@ import json
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 
-from .client import CaptainClient, ToolCall
+from .client import DEFAULT_MODEL, CaptainClient, LLMCallError, ToolCall
 from .tools import get_captain_tools, get_weapon_groups_for_ship, PERSONALITY_SELECTION_TOOLS, RESPOND_TO_ORDERS_TOOL
 from .prompts import (
     build_captain_prompt,
+    build_captain_messages,
     build_personality_selection_prompt,
     format_admiral_orders_for_captain,
     CaptainPersonality,
@@ -26,7 +27,7 @@ class LLMCaptainConfig:
     """Configuration for an LLM captain."""
     name: str
     ship_name: str
-    model: str = "openrouter/anthropic/claude-3.5-sonnet"
+    model: str = DEFAULT_MODEL
     personality: CaptainPersonality = CaptainPersonality.BALANCED
     personality_text: Optional[str] = None  # Custom personality description
     temperature: float = 0.7
@@ -61,6 +62,7 @@ class LLMCaptain:
 
         # State tracking
         self.decision_count = 0
+        self.last_call_failed = False
         self.decision_history: List[Dict[str, Any]] = []
         self.pending_message: Optional[str] = None
         self.received_messages: List[CaptainMessage] = []
@@ -91,6 +93,12 @@ class LLMCaptain:
         # Recent hits tracking (cleared each checkpoint)
         # Each entry: {time, weapon, location, damage_cm, remaining_cm, source}
         self.recent_hits: List[Dict[str, Any]] = []
+
+        # Tool errors from the previous decision. There is no assistant/tool-result
+        # round trip in this design, so without replaying them into the next turn
+        # the model never learns that a call was rejected and repeats it forever.
+        self.pending_tool_errors: List[str] = []
+        self.last_tool_errors: List[str] = []
 
         # Weapon groups - will be populated when we know the ship type
         self.weapon_groups: Dict[str, List[str]] = {}
@@ -146,11 +154,16 @@ class LLMCaptain:
         messages = [{"role": "user", "content": prompt}]
 
         # Call LLM with personality selection tool (use captain's configured model)
-        tool_calls = self.client.decide_with_tools(
-            messages=messages,
-            tools=PERSONALITY_SELECTION_TOOLS,
-            model=self.config.model,
-        )
+        try:
+            tool_calls = self.client.decide_with_tools(
+                messages=messages,
+                tools=PERSONALITY_SELECTION_TOOLS,
+                model=self.config.model,
+                temperature=self.config.temperature,
+            )
+        except LLMCallError as e:
+            print(f"[CAPTAIN {self.config.name}] personality selection failed: {e}")
+            tool_calls = []
 
         result = {
             "personality_description": None,
@@ -282,6 +295,11 @@ class LLMCaptain:
             )
             self.received_messages.clear()
 
+        # Roll last turn's rejected tool calls into this turn's feedback, then
+        # start a fresh error bucket for the calls we are about to execute.
+        self.last_tool_errors = self.pending_tool_errors
+        self.pending_tool_errors = []
+
         # Build history context
         decision_history = self._format_decision_history(last_n=5)
         message_history = self._format_message_history(last_n=6)
@@ -290,7 +308,7 @@ class LLMCaptain:
 
         # Build prompt
         recent_hits_text = self._format_recent_hits()
-        system_prompt = build_captain_prompt(
+        prompt_kwargs = dict(
             captain_name=self.config.name,
             ship_name=self.config.ship_name,
             ship_status=ship_status,
@@ -307,25 +325,60 @@ class LLMCaptain:
             fleet_data=self.config.fleet_data,
         )
 
-        # Add Admiral orders to prompt if present
+        # Split into a stable system prompt and a volatile user turn so the
+        # provider can serve the doctrine from cache across checkpoints.
+        prompt_messages = build_captain_messages(**prompt_kwargs)
+
+        turn_parts = []
+        if len(prompt_messages) > 1:
+            turn_parts.append(prompt_messages[1]["content"])
+
+        # Torpedo threats / magazine. _build_tactical_status has always computed
+        # `torpedo_threats`, but nothing ever rendered it, so a captain was never
+        # told a torpedo was inbound, and the remaining torpedo count (the ship's
+        # scarcest munition) was never disclosed either.
+        torpedo_text = self._format_torpedo_section(ship_status, tactical_status)
+        if torpedo_text:
+            turn_parts.append(torpedo_text)
+
+        # Admiral orders change per checkpoint - they belong in the volatile turn.
         if self.has_admiral and (self.admiral_orders or self.fleet_directive):
-            admiral_orders_text = format_admiral_orders_for_captain(
+            turn_parts.append(format_admiral_orders_for_captain(
                 self.admiral_orders,
                 self.fleet_directive,
-            )
-            system_prompt = system_prompt + "\n\n" + admiral_orders_text
+            ))
 
-        # Build messages for LLM
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"DECISION POINT {self.decision_count + 1}. What are your orders, Captain?"},
-        ]
+        errors_text = self._format_tool_errors()
+        if errors_text:
+            turn_parts.append(errors_text)
+
+        turn_parts.append(
+            f"DECISION POINT {self.decision_count + 1}. What are your orders, Captain?"
+        )
+
+        messages = [prompt_messages[0], {"role": "user", "content": "\n\n".join(turn_parts)}]
 
         # Get context-appropriate tools (may exclude draw tools if Admiral exists)
         tools = self.get_tools_for_context()
 
         # Call LLM with tools (use captain's configured model)
-        tool_calls = self.client.decide_with_tools(messages, tools, model=self.config.model)
+        try:
+            # Per-captain temperature was parsed from fleet config and stored, but
+            # never sent - every captain silently sampled at the shared client's
+            # default regardless of its configured value.
+            tool_calls = self.client.decide_with_tools(
+                messages,
+                tools,
+                model=self.config.model,
+                temperature=self.config.temperature,
+            )
+        except LLMCallError as e:
+            # Distinguish "call failed" from "captain chose to do nothing": do not
+            # advance decision history, and mark the turn as degraded.
+            print(f"[CAPTAIN {self.config.name}] decision call failed: {e}")
+            self.last_call_failed = True
+            return []
+        self.last_call_failed = False
 
         # Execute tool calls
         # Track maneuver commands - only one maneuver per decision allowed
@@ -357,6 +410,23 @@ class LLMCaptain:
         })
 
         return commands
+
+    def revert_last_decision(self) -> None:
+        """
+        Undo the bookkeeping of the most recent ``decide()`` call.
+
+        The runner may call ``decide()`` several times for a single checkpoint
+        (Admiral discussion, then a forced retry) and keep only one of the
+        resulting command lists. Without this, one wall-clock checkpoint produced
+        up to three history entries all stamped with the same simulation time -
+        flooding the 5-entry window the captain is shown - and pushed
+        ``decision_count`` (rendered as "DECISION POINT n") out of step with the
+        actual checkpoint number.
+        """
+        if self.decision_history:
+            self.decision_history.pop()
+        if self.decision_count > 0:
+            self.decision_count -= 1
 
     def get_last_decision_summary(self) -> str:
         """Get a human-readable summary of the last decision."""
@@ -553,6 +623,62 @@ class LLMCaptain:
         """Clear recent hits at start of each checkpoint."""
         self.recent_hits = []
 
+    def _record_tool_error(self, message: str) -> None:
+        """
+        Record a rejected/ignored tool call so the model can be told about it.
+
+        Errors used to go to stdout only, which the model never sees; the same
+        invalid call would then be reissued at every checkpoint for the rest of
+        the battle.
+        """
+        print(f"[CAPTAIN {self.name}] {message}")
+        self.pending_tool_errors.append(message)
+
+    def _format_tool_errors(self) -> str:
+        """Format last turn's rejected tool calls for the next prompt."""
+        if not self.last_tool_errors:
+            return ""
+        lines = ["ERRORS FROM YOUR LAST ORDERS (these calls were REJECTED, reissue correctly):"]
+        for err in self.last_tool_errors[-5:]:
+            lines.append(f"  - {err}")
+        return "\n".join(lines)
+
+    def _format_torpedo_section(
+        self,
+        ship_status: Dict[str, Any],
+        tactical_status: Dict[str, Any],
+    ) -> str:
+        """
+        Render inbound torpedoes and this ship's own torpedo magazine.
+
+        Returns "" when there is nothing to say (no launcher and no threats), so
+        ships without torpedo capability do not carry a dead section.
+        """
+        lines: List[str] = []
+
+        threats = tactical_status.get("torpedo_threats") or []
+        if threats:
+            lines.append("INCOMING TORPEDOES:")
+            for t in threats:
+                eta = t.get("eta_seconds", 999)
+                eta_txt = f"{eta:.0f}s" if eta < 999 else "not closing"
+                lines.append(
+                    f"  - From {t.get('source', 'Unknown')}: "
+                    f"{t.get('distance_km', 0):.0f}km, "
+                    f"closing {t.get('closing_kps', 0):.1f} km/s, impact in {eta_txt}"
+                )
+            lines.append(
+                "  Point defense engages automatically in range; consider evasive maneuver."
+            )
+
+        remaining = ship_status.get("torpedoes_remaining")
+        if remaining is not None:
+            capacity = ship_status.get("torpedo_capacity")
+            cap_txt = f"/{capacity}" if capacity else ""
+            lines.append(f"YOUR TORPEDOES REMAINING: {remaining}{cap_txt}")
+
+        return "\n".join(lines)
+
     def set_primary_target(self, target_id: Optional[str]) -> None:
         """Set the primary target for this captain."""
         self.primary_target_id = target_id
@@ -598,7 +724,11 @@ class LLMCaptain:
         lines.append("  Recent:")
         for shot in recent[-5:]:  # Last 5 only for detail
             result_str = f"HIT enemy {shot['damage_gj']:.1f}GJ" if shot["result"] == "HIT" else "MISS"
-            closing = "closing" if shot["rel_velocity_kps"] < 0 else "separating"
+            # rel_velocity_kps follows the repo-wide convention -r_hat . v_rel,
+            # i.e. POSITIVE means closing (see battle_runner._record_captain_shot).
+            # This comparison used to be inverted, so every shot the captain was
+            # shown had its geometry described backwards.
+            closing = "closing" if shot["rel_velocity_kps"] > 0 else "separating"
             lines.append(
                 f"    You fired {shot['weapon']}: {shot['distance_km']:.0f}km, "
                 f"{abs(shot['rel_velocity_kps']):.1f}km/s {closing} -> {result_str}"
@@ -670,16 +800,20 @@ class LLMCaptain:
 
         # Armor
         if ship.armor:
-            nose = ship.armor.get_section("nose")
-            lateral = ship.armor.get_section("lateral")
-            tail = ship.armor.get_section("tail")
-            status["nose_armor"] = nose.current_thickness_cm if nose else 10
-            status["lateral_armor"] = lateral.current_thickness_cm if lateral else 5
-            status["tail_armor"] = tail.current_thickness_cm if tail else 3
+            from ..combat import HitLocation
+
+            nose = ship.armor.get_section(HitLocation.NOSE)
+            lateral = ship.armor.get_section(HitLocation.LATERAL)
+            tail = ship.armor.get_section(HitLocation.TAIL)
+            # 0.0 means "no armor left on this facing" - never invent a
+            # plausible-looking thickness, the captain acts on these numbers.
+            status["nose_armor"] = nose.current_thickness_cm if nose else 0.0
+            status["lateral_armor"] = lateral.current_thickness_cm if lateral else 0.0
+            status["tail_armor"] = tail.current_thickness_cm if tail else 0.0
         else:
-            status["nose_armor"] = 10
-            status["lateral_armor"] = 5
-            status["tail_armor"] = 3
+            status["nose_armor"] = 0.0
+            status["lateral_armor"] = 0.0
+            status["tail_armor"] = 0.0
 
         # Weapon status - use weapon name instead of slot
         weapon_status = {}
@@ -695,6 +829,20 @@ class LLMCaptain:
                     "cooldown": weapon_state.cooldown_remaining if hasattr(weapon_state, 'cooldown_remaining') else 0,
                 }
         status["weapons"] = weapon_status
+
+        # Torpedo magazine. The launch_torpedo tool warns "Limited ammunition!"
+        # but the remaining count was never disclosed anywhere, so the captain had
+        # no way to know when the magazine was empty.
+        # NOTE: the field on TorpedoLauncher is `current_magazine`; there is no
+        # `torpedoes_remaining` attribute, so reading that name alone yields None
+        # and the count silently disappears again.
+        launcher = getattr(ship, 'torpedo_launcher', None)
+        if launcher is not None:
+            remaining = getattr(launcher, 'current_magazine', None)
+            if remaining is None:
+                remaining = getattr(launcher, 'torpedoes_remaining', None)
+            status["torpedoes_remaining"] = remaining
+            status["torpedo_capacity"] = getattr(launcher, 'magazine_capacity', None)
 
         # Module damage status
         module_status = {}
@@ -766,6 +914,46 @@ class LLMCaptain:
 
         return bearing
 
+    def _identify_projectile(self, proj: Any) -> tuple:
+        """
+        Identify an inbound round from its launch parameters.
+
+        Returns:
+            (label, kinetic_energy_gj) - label is the weapon name when it can be
+            matched against fleet data, otherwise a class based on muzzle velocity.
+
+        The previous implementation classified by the projectile's WORLD-frame
+        speed (>8 km/s = "Spinal"). Projectiles inherit shooter velocity, so that
+        threshold mislabels every round fired from a moving ship and permanently
+        mislabelled the 4.7 km/s siege coiler round (the heaviest in the game) as
+        a light turret round. Muzzle velocity and mass are frame-independent and
+        are recorded on the projectile at launch.
+        """
+        muzzle_kps = getattr(proj, 'muzzle_velocity_kps', None)
+        mass_kg = getattr(proj, 'mass_kg', None)
+
+        weapon_types = (self.config.fleet_data or {}).get("weapon_types", {})
+        if muzzle_kps is not None and mass_kg is not None:
+            for wname, spec in weapon_types.items():
+                spec_muzzle = spec.get("muzzle_velocity_kps")
+                spec_mass = spec.get("warhead_mass_kg")
+                if spec_muzzle is None or spec_mass is None:
+                    continue
+                if abs(spec_muzzle - muzzle_kps) < 1e-6 and abs(spec_mass - mass_kg) < 1e-6:
+                    # Report the weapon's NOMINAL (muzzle-frame) energy, which is
+                    # what the weapon tables in the prompt list. The projectile's
+                    # own kinetic_energy_gj is world-frame and therefore depends
+                    # on the shooter's velocity, so quoting it here would
+                    # contradict those tables for the same round.
+                    return wname, spec.get("kinetic_energy_gj", getattr(proj, 'kinetic_energy_gj', 0.0))
+
+        energy_gj = getattr(proj, 'kinetic_energy_gj', 0.0)
+        if muzzle_kps is None:
+            return "Unknown round", energy_gj
+        # Frame-independent fallback: spinal mounts are the high-muzzle-velocity
+        # weapons, turrets the low ones.
+        return ("Spinal" if muzzle_kps > 8 else "Turret"), energy_gj
+
     def _build_enemy_info(self, ship: Any, enemy: Any, simulation: Any) -> Dict[str, Any]:
         """Build tactical info for a single enemy ship."""
         import math
@@ -774,6 +962,11 @@ class LLMCaptain:
             "ship_id": enemy.ship_id,
             "name": getattr(enemy, 'name', enemy.ship_id),
             "ship_class": getattr(enemy, 'ship_class', 'unknown'),
+            # ShipCombatState carries ship_type, not ship_class. Without this the
+            # prompt formatter's fallback never fires and every enemy renders as a
+            # generic "(ship)" - captains could not tell a corvette from a
+            # dreadnought, which drives target priority.
+            "ship_type": getattr(enemy, 'ship_type', None),
         }
 
         # Calculate relative position
@@ -787,6 +980,26 @@ class LLMCaptain:
             "y": rel_pos.y / 1000,
             "z": rel_pos.z / 1000,
         }
+
+        # Body-frame bearing. The world-frame vector above must never be labelled
+        # "ahead/starboard/above" - those words are only meaningful relative to
+        # where this ship is actually pointing. Beta-fleet ships start facing
+        # (-1,0,0), so world +x is BEHIND them and the raw labels were inverted
+        # from the first checkpoint of every battle.
+        try:
+            fwd = ship.forward.normalized()
+            up = ship.up.normalized()
+            starboard = up.cross(fwd).normalized()
+            info["relative_bearing_km"] = {
+                "forward": rel_pos.dot(fwd) / 1000,
+                "starboard": rel_pos.dot(starboard) / 1000,
+                "up": rel_pos.dot(up) / 1000,
+            }
+        except (AttributeError, TypeError):
+            # Ship without a usable orientation (e.g. a test double). The prompt
+            # formatter falls back to explicitly world-labelled coordinates rather
+            # than printing misleading body-frame words.
+            pass
 
         # Calculate relative velocity
         rel_vel = enemy.velocity - ship.velocity
@@ -979,42 +1192,61 @@ class LLMCaptain:
         # Build incoming projectiles with source and bearing
         incoming_projectiles = []
         if hasattr(simulation, 'projectiles') and simulation.projectiles:
-            for proj in simulation.projectiles:
-                if hasattr(proj, 'target_id') and proj.target_id == ship.ship_id:
-                    proj_pos = proj.position if hasattr(proj, 'position') else Vector3D(0, 0, 0)
-                    proj_vel = proj.velocity if hasattr(proj, 'velocity') else Vector3D(0, 0, 0)
+            for proj_flight in simulation.projectiles:
+                # simulation.projectiles holds ProjectileInFlight wrappers, whose
+                # target field is `target_ship_id` and whose kinematics live on
+                # `.projectile`. Reading `.target_id` / `.position` off the wrapper
+                # silently matched nothing, so INCOMING FIRE was empty in every
+                # battle. Accept either shape so test doubles keep working.
+                target_id = getattr(proj_flight, 'target_ship_id', None)
+                if target_id is None:
+                    target_id = getattr(proj_flight, 'target_id', None)
+                if target_id != ship.ship_id:
+                    continue
 
-                    dist_to_ship = (ship.position - proj_pos).magnitude
-                    dist_km = dist_to_ship / 1000
+                proj = getattr(proj_flight, 'projectile', proj_flight)
+                proj_pos = getattr(proj, 'position', None) or Vector3D(0, 0, 0)
+                proj_vel = getattr(proj, 'velocity', None) or Vector3D(0, 0, 0)
 
-                    to_ship = (ship.position - proj_pos).normalized()
-                    approach_speed = proj_vel.dot(to_ship)
+                offset = ship.position - proj_pos
+                dist_to_ship = offset.magnitude
+                dist_km = dist_to_ship / 1000
 
-                    if approach_speed > 0:
-                        eta_s = dist_to_ship / approach_speed
-                    else:
-                        eta_s = 999
+                if dist_to_ship > 0:
+                    to_ship = offset.normalized()
+                    # The target is moving too - what matters is the CLOSING rate
+                    # of the projectile relative to this ship, not the projectile's
+                    # speed in the world frame. Ignoring own velocity made the ETA
+                    # wrong by up to a factor of two in either direction.
+                    approach_speed = (proj_vel - ship.velocity).dot(to_ship)
+                else:
+                    to_ship = Vector3D(1, 0, 0)
+                    approach_speed = 0.0
 
-                    proj_speed_kps = proj_vel.magnitude / 1000
-                    weapon_type = "Spinal" if proj_speed_kps > 8 else "Turret"
+                eta_s = dist_to_ship / approach_speed if approach_speed > 0 else 999
 
-                    # Get source ship name
-                    source_name = "Unknown"
-                    if hasattr(proj, 'source_ship_id'):
-                        source_ship = simulation.get_ship(proj.source_ship_id)
-                        if source_ship:
-                            source_name = getattr(source_ship, 'name', proj.source_ship_id)
+                weapon_type, energy_gj = self._identify_projectile(proj)
 
-                    # Calculate bearing
-                    bearing = self._calculate_impact_bearing(ship, proj_pos, proj_vel)
+                # Get source ship name
+                source_name = "Unknown"
+                source_id = getattr(proj_flight, 'source_ship_id', None)
+                if source_id:
+                    source_ship = simulation.get_ship(source_id)
+                    if source_ship:
+                        source_name = getattr(source_ship, 'name', source_id)
 
-                    incoming_projectiles.append({
-                        "weapon_type": weapon_type,
-                        "source": source_name,
-                        "distance_km": dist_km,
-                        "eta_seconds": eta_s,
-                        "bearing": bearing,
-                    })
+                # Calculate bearing
+                bearing = self._calculate_impact_bearing(ship, proj_pos, proj_vel)
+
+                incoming_projectiles.append({
+                    "weapon_type": weapon_type,
+                    "energy_gj": energy_gj,
+                    "source": source_name,
+                    "distance_km": dist_km,
+                    "eta_seconds": eta_s,
+                    "closing_kps": approach_speed / 1000,
+                    "bearing": bearing,
+                })
 
         # Sort by ETA
         incoming_projectiles.sort(key=lambda p: p["eta_seconds"])
@@ -1026,11 +1258,26 @@ class LLMCaptain:
             for torp_flight in simulation.torpedoes:
                 torp = torp_flight.torpedo
                 if torp.target_id == ship.ship_id and not torp_flight.is_disabled:
-                    dist = (torp.position - ship.position).magnitude / 1000
+                    offset = ship.position - torp.position
+                    dist_m = offset.magnitude
+                    if dist_m > 0:
+                        closing_ms = (torp.velocity - ship.velocity).dot(offset.normalized())
+                    else:
+                        closing_ms = 0.0
+                    eta_s = dist_m / closing_ms if closing_ms > 0 else 999
+
+                    source_id = getattr(torp_flight, 'source_ship_id', None) or getattr(
+                        torp, 'source_ship_id', 'Unknown')
+                    source_ship = simulation.get_ship(source_id) if source_id else None
+                    source_name = getattr(source_ship, 'name', source_id) if source_ship else source_id
+
                     torpedo_threats.append({
-                        "distance_km": dist,
-                        "source": getattr(torp, 'source_ship_id', 'Unknown'),
+                        "distance_km": dist_m / 1000,
+                        "closing_kps": closing_ms / 1000,
+                        "eta_seconds": eta_s,
+                        "source": source_name,
                     })
+        torpedo_threats.sort(key=lambda t: t["eta_seconds"])
         status["torpedo_threats"] = torpedo_threats
 
         # Add current configuration to status
@@ -1107,7 +1354,10 @@ class LLMCaptain:
                     throttle=throttle,
                 )
             except (KeyError, ValueError) as e:
-                print(f"[CAPTAIN] Invalid maneuver: {e}")
+                self._record_tool_error(
+                    f"set_maneuver: invalid maneuver_type {args.get('maneuver_type')!r} ({e}). "
+                    f"Valid values: {', '.join(m.name for m in ManeuverType)}"
+                )
                 return None
 
         elif name == "set_primary_target":
@@ -1115,18 +1365,25 @@ class LLMCaptain:
             target_name = args.get("target_name", "")
             # Find enemy ship by name
             enemies = simulation.get_enemy_ships(ship_id)
+            # The captain-side field alone is not enough: the Admiral's per-ship
+            # snapshot (current_target / targeted_by) reads ship.primary_target_id,
+            # which is only written by a 'set_target' command. Returning the command
+            # as well as setting the local field keeps the two in sync.
             for enemy in enemies:
                 enemy_name = getattr(enemy, 'name', enemy.ship_id)
                 if enemy_name.lower() == target_name.lower() or enemy.ship_id == target_name:
                     self.primary_target_id = enemy.ship_id
-                    return None
+                    return {"type": "set_target", "target_id": enemy.ship_id}
             # If not found, try partial match
             for enemy in enemies:
                 enemy_name = getattr(enemy, 'name', enemy.ship_id)
                 if target_name.lower() in enemy_name.lower():
                     self.primary_target_id = enemy.ship_id
-                    return None
-            print(f"[CAPTAIN] Target not found: {target_name}")
+                    return {"type": "set_target", "target_id": enemy.ship_id}
+            valid = ", ".join(getattr(e, 'name', e.ship_id) for e in enemies) or "(none)"
+            self._record_tool_error(
+                f"set_primary_target: no enemy named '{target_name}'. Valid targets: {valid}"
+            )
             return None
 
         elif name == "set_heading":
@@ -1156,21 +1413,30 @@ class LLMCaptain:
 
             orders = []
 
+            # The tool schema advertises "spinal_mode" / "turret_mode" (tools.py),
+            # but weapon groups are named spinal / coilguns / heavy_coilguns. Without
+            # this aliasing every turret order the model issues matches no group and
+            # is silently dropped.
+            def _arg_for(group: str, suffix: str):
+                direct = args.get(f"{group}_{suffix}")
+                if direct is not None:
+                    return direct
+                alias = "spinal" if group == "spinal" else "turret"
+                return args.get(f"{alias}_{suffix}")
+
             # Process each weapon group dynamically
             for group_name, slots in self.weapon_groups.items():
-                mode_key = f"{group_name}_mode"
-                prob_key = f"{group_name}_min_probability"
-                range_key = f"{group_name}_max_range_km"
-
-                mode = args.get(mode_key)
+                mode = _arg_for(group_name, "mode")
                 if mode:
                     try:
                         command = WeaponsCommand[mode]
                     except KeyError:
                         command = WeaponsCommand.FIRE_WHEN_OPTIMAL
 
-                    min_prob = args.get(prob_key, 0.3)
-                    max_range = args.get(range_key, 500.0)
+                    min_prob = _arg_for(group_name, "min_probability")
+                    min_prob = 0.3 if min_prob is None else min_prob
+                    max_range = _arg_for(group_name, "max_range_km")
+                    max_range = 500.0 if max_range is None else max_range
 
                     # Create order for each weapon in this group
                     for slot in slots:
@@ -1205,11 +1471,33 @@ class LLMCaptain:
         elif name == "launch_torpedo":
             enemies = simulation.get_enemy_ships(ship_id)
             if not enemies:
+                self._record_tool_error("launch_torpedo: no enemy ships to target")
                 return None
-            target = enemies[0]
+            # Honour the designated primary target. Firing at enemies[0] meant a
+            # torpedo - the scarcest munition on the ship - could be spent on a
+            # ship the captain had explicitly declined to engage.
+            target_id = None
+            explicit = args.get("target_name")
+            if explicit:
+                for enemy in enemies:
+                    enemy_name = getattr(enemy, 'name', enemy.ship_id)
+                    if (enemy_name.lower() == explicit.lower()
+                            or enemy.ship_id == explicit
+                            or explicit.lower() in enemy_name.lower()):
+                        target_id = enemy.ship_id
+                        break
+                if target_id is None:
+                    self._record_tool_error(
+                        f"launch_torpedo: no enemy named '{explicit}'; using primary target"
+                    )
+            if target_id is None and self.primary_target_id:
+                if any(e.ship_id == self.primary_target_id for e in enemies):
+                    target_id = self.primary_target_id
+            if target_id is None:
+                target_id = enemies[0].ship_id
             return {
                 "type": "launch_torpedo",
-                "target_id": target.ship_id,
+                "target_id": target_id,
             }
 
         elif name == "set_radiators":
@@ -1252,11 +1540,17 @@ class LLMCaptain:
         elif name == "discuss_with_admiral":
             # Captain wants to discuss with Admiral
             if not self.has_admiral:
-                print(f"[CAPTAIN] {self.name} tried to discuss with Admiral but has no Admiral")
+                self._record_tool_error(
+                    "discuss_with_admiral: you have no Admiral - you are an independent command."
+                )
                 return None
 
             if self.discussion_exchanges >= self.max_discussion_exchanges:
-                print(f"[CAPTAIN] {self.name} has used all {self.max_discussion_exchanges} discussion exchanges")
+                self._record_tool_error(
+                    f"discuss_with_admiral: you have used all "
+                    f"{self.max_discussion_exchanges} discussion exchanges this checkpoint. "
+                    "Issue tactical orders instead."
+                )
                 return {
                     "type": "discussion_limit_reached",
                     "message": f"You have already used your {self.max_discussion_exchanges} discussion exchanges with the Admiral this checkpoint."
@@ -1302,7 +1596,7 @@ class LLMCaptain:
             return None  # No command, just tracking
 
         else:
-            print(f"[CAPTAIN] Unknown tool: {name}")
+            self._record_tool_error(f"unknown tool {name!r} - it was ignored.")
             return None
 
     def get_pending_message(self) -> Optional[Dict[str, Any]]:

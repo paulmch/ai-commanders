@@ -50,8 +50,13 @@ class Vector3D:
 
     Uses a right-handed coordinate system where:
     - X: forward (ship nose direction)
-    - Y: right (starboard)
+    - Y: left (port)
     - Z: up (dorsal)
+
+    Note: X-forward/Y-LEFT/Z-up is the right-handed triple (X cross Y = Z).
+    A ship at the default orientation (forward=+X, up=+Z) therefore has its
+    starboard side toward -Y, which is exactly what ShipState.right
+    (= forward cross up) returns.
 
     All units in SI (meters, m/s, etc.) unless otherwise specified.
     """
@@ -169,7 +174,7 @@ class Vector3D:
 
     @classmethod
     def unit_y(cls) -> Vector3D:
-        """Unit vector in Y direction (right)."""
+        """Unit vector in Y direction (port/left in the world frame)."""
         return cls(0.0, 1.0, 0.0)
 
     @classmethod
@@ -199,7 +204,8 @@ class ShipState:
         velocity: Ship velocity in world coordinates (m/s)
         forward: Unit vector pointing in ship's forward direction
         up: Unit vector pointing in ship's up direction
-        angular_velocity: Angular velocity vector (rad/s)
+        angular_velocity: Angular velocity (rad/s) about the body axes:
+            x = roll about forward, y = pitch about (up x forward), z = yaw about up
         mass_kg: Current total mass including propellant (kg)
         dry_mass_kg: Mass without propellant (kg)
         propellant_kg: Current propellant mass (kg)
@@ -420,7 +426,7 @@ def apply_thrust(
     if gimbal_yaw_deg != 0:
         yaw_rad = math.radians(gimbal_yaw_deg)
         thrust_direction = thrust_direction.rotate_around_axis(
-            state.up, -yaw_rad  # Negative for right-handed
+            state.up, -yaw_rad  # Negative: positive yaw deflects thrust to starboard (body right)
         )
 
     # Calculate thrust force
@@ -428,18 +434,27 @@ def apply_thrust(
 
     # Mass flow rate: dm/dt = F / v_e
     mass_flow_rate = thrust_force_n / state.exhaust_velocity_ms
-    propellant_consumed = mass_flow_rate * dt
+    full_consumption = mass_flow_rate * dt
 
     # Don't consume more propellant than available
-    propellant_consumed = min(propellant_consumed, state.propellant_kg)
+    propellant_consumed = min(full_consumption, state.propellant_kg)
+
+    # If propellant runs out mid-step, the engine only burns for a fraction
+    # of dt. Scale the (time-averaged) acceleration accordingly; otherwise
+    # the final step would deliver delta-v the propellant cannot provide,
+    # making results dt-dependent and exceeding the Tsiolkovsky bound.
+    if full_consumption > 0:
+        burn_fraction = propellant_consumed / full_consumption
+    else:
+        burn_fraction = 0.0
 
     # Average mass during burn (for more accurate acceleration)
     avg_mass = state.mass_kg - propellant_consumed / 2
     if avg_mass <= 0:
         avg_mass = state.mass_kg
 
-    # Acceleration: a = F / m
-    acceleration_magnitude = thrust_force_n / avg_mass
+    # Acceleration: a = F / m, averaged over the timestep
+    acceleration_magnitude = (thrust_force_n / avg_mass) * burn_fraction
     acceleration = thrust_direction * acceleration_magnitude
 
     return acceleration, propellant_consumed
@@ -488,15 +503,21 @@ def calculate_torque_from_thrust(
     pitch_rad = math.radians(gimbal_pitch_deg)
     yaw_rad = math.radians(gimbal_yaw_deg)
 
-    lateral_pitch = thrust_n * math.sin(pitch_rad)  # Force in up direction
-    lateral_yaw = thrust_n * math.sin(yaw_rad)  # Force in right direction
+    lateral_pitch = thrust_n * math.sin(pitch_rad)  # Force in body up direction
+    lateral_yaw = thrust_n * math.sin(yaw_rad)  # Force in body right (starboard) direction
 
-    # Torque = r x F
-    # Pitch gimbal creates yaw torque (rotation around up axis)
-    # Yaw gimbal creates pitch torque (rotation around right axis)
+    # Torque = r x F with the engine at the tail (r = -lever_arm * forward).
+    # Components are expressed about the BODY axes used by propagate_state:
+    #   y: pitch axis = up x forward,  z: yaw axis = up.
+    # Positive pitch gimbal (thrust deflected toward +up) yields a positive
+    # pitch torque: r x F = (-L*fwd) x (F_lat*up) = +L*F_lat*(up x fwd).
+    # Positive yaw gimbal (thrust deflected toward starboard) yields a
+    # positive yaw torque: r x F = (-L*fwd) x (F_lat*right) = +L*F_lat*up.
+    # In both cases the resulting rotation swings the NOSE away from the
+    # deflected-thrust side (tail follows the thrust), as real TVC does.
     torque_x = 0.0  # Roll (not from thrust vectoring)
-    torque_y = lateral_pitch * lever_arm_m  # Pitch torque
-    torque_z = -lateral_yaw * lever_arm_m  # Yaw torque
+    torque_y = lateral_pitch * lever_arm_m  # Pitch torque (about up x forward)
+    torque_z = lateral_yaw * lever_arm_m  # Yaw torque (about up)
 
     return Vector3D(torque_x, torque_y, torque_z)
 
@@ -670,31 +691,40 @@ def propagate_state(
     if new_state.angular_velocity.magnitude > 0:
         omega = new_state.angular_velocity
 
-        # Rotate forward vector
-        # Pitch rotation (around right axis)
-        if abs(omega.y) > 1e-10:
+        # Angular velocity components are rates about the BODY axes:
+        #   x: roll about forward
+        #   y: pitch about (up x forward)   -- matches calculate_torque_from_thrust
+        #   z: yaw about up
+        # Build a single world-frame rotation vector and apply it as one
+        # incremental rotation to both basis vectors. (The previous code
+        # applied three sequential single-axis rotations in mixed frames,
+        # which inverted the TVC rotation direction - the nose followed the
+        # thrust deflection instead of swinging away from it - and let the
+        # forward/up basis lose orthogonality over long propagations.)
+        pitch_axis = new_state.up.cross(new_state.forward).normalized()
+        omega_world = (
+            new_state.forward * omega.x +
+            pitch_axis * omega.y +
+            new_state.up * omega.z
+        )
+
+        rotation_angle = omega_world.magnitude * dt
+        if rotation_angle > 1e-15:
+            rotation_axis = omega_world.normalized()
             new_state.forward = new_state.forward.rotate_around_axis(
-                new_state.right, omega.y * dt
+                rotation_axis, rotation_angle
             )
             new_state.up = new_state.up.rotate_around_axis(
-                new_state.right, omega.y * dt
+                rotation_axis, rotation_angle
             )
 
-        # Yaw rotation (around up axis)
-        if abs(omega.z) > 1e-10:
-            new_state.forward = new_state.forward.rotate_around_axis(
-                state.up, omega.z * dt  # Use original up for consistency
-            )
-
-        # Roll rotation (around forward axis)
-        if abs(omega.x) > 1e-10:
-            new_state.up = new_state.up.rotate_around_axis(
-                new_state.forward, omega.x * dt
-            )
-
-        # Re-normalize to prevent drift
+        # Re-orthonormalize (Gram-Schmidt) to prevent numerical drift:
+        # remove any forward component that crept into up, then normalize.
         new_state.forward = new_state.forward.normalized()
-        new_state.up = new_state.up.normalized()
+        new_state.up = (
+            new_state.up -
+            new_state.forward * new_state.up.dot(new_state.forward)
+        ).normalized()
 
     return new_state
 

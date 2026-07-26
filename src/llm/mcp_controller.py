@@ -28,6 +28,119 @@ if TYPE_CHECKING:
     from .captain import LLMCaptain
 
 
+def _radiators_extended(ship: Any) -> bool:
+    """
+    Report whether any radiator is actually extended.
+
+    Derived from the thermal system (same as captain.py) rather than from a
+    shadow flag written by set_radiators: radiators can be destroyed, and
+    extend_all() only extends the survivors, so a written flag can disagree
+    with the simulation.
+    """
+    from ..thermal import RadiatorState
+
+    thermal = getattr(ship, 'thermal_system', None)
+    if not thermal or not getattr(thermal, 'radiators', None):
+        return False
+    return any(
+        rad.state == RadiatorState.EXTENDED
+        for rad in thermal.radiators.radiators.values()
+    )
+
+
+def _select_display_weapon(ship: Any):
+    """
+    Pick the weapon whose firing solution is shown to the commander.
+
+    Prefers an operational spinal mount (the ship's main gun), then any
+    operational non-PD weapon. Returns (slot, weapon_state) or (None, None).
+    """
+    spinal = None
+    turret = None
+    for slot, weapon_state in getattr(ship, 'weapons', {}).items():
+        if slot.startswith("pd_"):
+            continue
+        if not getattr(weapon_state, 'is_operational', True):
+            continue
+        weapon = getattr(weapon_state, 'weapon', None)
+        if weapon is None:
+            continue
+        if weapon.is_turreted:
+            if turret is None:
+                turret = (slot, weapon_state)
+        elif spinal is None:
+            spinal = (slot, weapon_state)
+    chosen = spinal or turret
+    return chosen if chosen else (None, None)
+
+
+def compute_hit_probability(shooter: Any, target: Any) -> Dict[str, Any]:
+    """
+    Compute the hit probability the simulation would use to resolve a shot.
+
+    Mirrors CombatSimulation._process_weapons_orders so the number shown to an
+    MCP commander is the number that actually gates the shot, instead of an
+    ad-hoc distance curve.
+
+    Returns:
+        Dict with "hit_chance" (percent, 0-100), "weapon_slot" and
+        "muzzle_velocity_kps"; hit_chance is 0.0 when no weapon can fire.
+    """
+    from ..firecontrol import calculate_hit_probability
+    from ..geometry import ShipGeometry
+
+    result = {"hit_chance": 0.0, "weapon_slot": None, "muzzle_velocity_kps": None}
+    if shooter is None or target is None:
+        return result
+
+    slot, weapon_state = _select_display_weapon(shooter)
+    if weapon_state is None:
+        return result
+
+    muzzle_velocity_kps = weapon_state.weapon.muzzle_velocity_kps
+    result["weapon_slot"] = slot
+    result["muzzle_velocity_kps"] = muzzle_velocity_kps
+
+    target_geometry = getattr(target, 'geometry', None)
+    if not target_geometry:
+        # Same fallback the simulation uses when a ship has no geometry.
+        # ShipGeometry's fields are length/radius/nose_cone/engine_section - the
+        # beam_m/nose_section_length/tail_section_length spelling raised TypeError,
+        # so this "fallback" crashed instead of degrading.
+        target_geometry = ShipGeometry(
+            length_m=100.0,
+            radius_m=12.5,
+            nose_cone_length_m=20.0,
+            engine_section_length_m=20.0,
+        )
+
+    # Evasion test mirrors simulation._process_weapons_orders. NOTE: that call
+    # site compares against the name 'EVADE', which is not a ManeuverType member
+    # (the evasive maneuver is ManeuverType.EVASIVE), so the simulation itself
+    # currently never applies the evasion penalty. Accept both spellings here so
+    # the displayed number stays right once that comparison is corrected.
+    maneuver = getattr(target, 'current_maneuver', None)
+    is_evading = (
+        maneuver is not None
+        and hasattr(maneuver, 'maneuver_type')
+        and maneuver.maneuver_type.name in ('EVADE', 'EVASIVE')
+    )
+
+    solution = calculate_hit_probability(
+        shooter_position=shooter.position,
+        shooter_velocity=shooter.velocity,
+        target_position=target.position,
+        target_velocity=target.velocity,
+        target_geometry=target_geometry,
+        target_forward=target.forward,
+        muzzle_velocity_kps=muzzle_velocity_kps,
+        target_is_evading=is_evading,
+    )
+
+    result["hit_chance"] = 100.0 * solution.hit_probability if solution.can_fire else 0.0
+    return result
+
+
 @dataclass
 class MCPControllerConfig:
     """Configuration for an MCP-controlled fleet."""
@@ -73,6 +186,13 @@ class MCPController:
         self.has_accepted_draw = False
         self.has_surrendered = False
 
+        # Battle progress, published to the MCP client in every state snapshot.
+        # The battle runner owns these: the HTTP loop never calls get_commands(),
+        # so they cannot be derived from decision_count alone.
+        self.checkpoint_number = 0
+        self.is_battle_active = True
+        self.enemy_proposed_draw = False
+
         # Pending message to enemy (via chat system)
         self._pending_enemy_message: Optional[str] = None
 
@@ -89,6 +209,23 @@ class MCPController:
         """Set the mapping from ship names to IDs."""
         self._ship_name_to_id = name_to_id
         self._ship_id_to_name = {v: k for k, v in name_to_id.items()}
+
+    def set_battle_progress(
+        self,
+        checkpoint_number: int,
+        is_battle_active: bool,
+        enemy_proposed_draw: bool = False,
+    ) -> None:
+        """
+        Publish battle progress to the MCP client.
+
+        Called by the battle runner before each state update so the client can
+        see the turn number, whether the battle is still running, and whether
+        the enemy has a draw proposal outstanding.
+        """
+        self.checkpoint_number = checkpoint_number
+        self.is_battle_active = is_battle_active
+        self.enemy_proposed_draw = enemy_proposed_draw
 
     def build_state_for_mcp(
         self,
@@ -154,9 +291,9 @@ class MCPController:
             torpedoes=torpedoes,
             chat_history=chat_history,
             fleet_summary=fleet_summary,
-            is_battle_active=True,
-            checkpoint_number=self.decision_count,
-            enemy_proposed_draw=False,  # TODO: Get from enemy controller
+            is_battle_active=self.is_battle_active,
+            checkpoint_number=self.checkpoint_number,
+            enemy_proposed_draw=self.enemy_proposed_draw,
         )
 
     def _build_friendly_ship_data(
@@ -168,7 +305,7 @@ class MCPController:
         """Build detailed data for a friendly ship (same info captains see)."""
         # Get ship capabilities from fleet data
         ship_spec = self.fleet_data.get("ships", {}).get(captain.config.ship_type, {})
-        propulsion = ship_spec.get("propulsion", {})
+        performance = ship_spec.get("performance", {})
 
         # Position in km
         pos = ship.position
@@ -250,7 +387,7 @@ class MCPController:
         targeted_by = []
         for enemy in simulation.get_enemy_ships(ship.ship_id):
             if hasattr(enemy, 'primary_target_id') and enemy.primary_target_id == ship.ship_id:
-                targeted_by.append(enemy.ship_name if hasattr(enemy, 'ship_name') else enemy.ship_id)
+                targeted_by.append(getattr(enemy, 'name', None) or enemy.ship_id)
 
         # Current maneuver
         maneuver_str = "MAINTAIN"
@@ -266,7 +403,7 @@ class MCPController:
 
         return {
             "ship_id": ship.ship_id,
-            "ship_name": ship.ship_name if hasattr(ship, 'ship_name') else ship.ship_id,
+            "ship_name": getattr(ship, 'name', None) or ship.ship_id,
             "ship_type": captain.config.ship_type,
             "captain_name": captain.config.name,
             "position_km": pos_km,
@@ -277,8 +414,8 @@ class MCPController:
             "delta_v_remaining": ship.remaining_delta_v_kps,
             "heat_percent": ship.heat_percent if hasattr(ship, 'heat_percent') else 0,
             "heatsink_capacity_gj": heatsink_capacity,
-            "max_acceleration_g": propulsion.get("combat_acceleration_g", 2.0),
-            "max_delta_v": propulsion.get("delta_v_kps", 500),
+            "max_acceleration_g": performance.get("combat_acceleration_g", 2.0),
+            "max_delta_v": performance.get("delta_v_kps", 500),
             # Armor (per section)
             "armor": armor_status,
             # Weapons (detailed)
@@ -293,7 +430,7 @@ class MCPController:
             # Current state
             "current_maneuver": maneuver_str,
             "current_target": ship.primary_target_id if hasattr(ship, 'primary_target_id') else None,
-            "radiators_extended": ship.radiators_extended if hasattr(ship, 'radiators_extended') else False,
+            "radiators_extended": _radiators_extended(ship),
             "targeted_by": targeted_by,
         }
 
@@ -380,13 +517,18 @@ class MCPController:
                 dot = max(-1.0, min(1.0, dot))
                 angle_deg = math.degrees(math.acos(dot))
 
-        # Estimate hit chance based on range (simplified - captains use more complex calculation)
-        # This is a rough approximation based on typical weapon accuracy curves
+        # Hit chance from the real fire-control model (angular size, flight time,
+        # aspect, closing rate, evasion) - the same call the simulation makes when
+        # it decides whether a shot connects. The previous linear "1 - d/1500"
+        # curve reported 2-6x the true value and had no relation to what the
+        # weapons actually do.
         hit_chance = 0.0
-        if min_dist > 0:
-            # Base hit chance decreases with distance
-            # ~80% at 100km, ~40% at 500km, ~10% at 1000km
-            hit_chance = max(0, min(100, 100 * (1.0 - (min_dist / 1500))))
+        hit_chance_weapon = None
+        shooter = simulation.get_ship(closest_friendly_id) if closest_friendly_id else None
+        if shooter is not None:
+            solution = compute_hit_probability(shooter, ship)
+            hit_chance = solution["hit_chance"]
+            hit_chance_weapon = solution["weapon_slot"]
 
         # Combat statistics (like captains see)
         combat_stats = {
@@ -409,11 +551,11 @@ class MCPController:
         # Get enemy ship capabilities from fleet data (if available)
         ship_type = ship.ship_type if hasattr(ship, 'ship_type') else "unknown"
         ship_spec = self.fleet_data.get("ships", {}).get(ship_type, {})
-        propulsion = ship_spec.get("propulsion", {})
+        performance = ship_spec.get("performance", {})
 
         return {
             "ship_id": ship.ship_id,
-            "ship_name": ship.ship_name if hasattr(ship, 'ship_name') else ship.ship_id,
+            "ship_name": getattr(ship, 'name', None) or ship.ship_id,
             "ship_type": ship_type,
             "ship_class": ship_type.title() if ship_type != "unknown" else "Unknown",
             "position_km": pos_km,
@@ -428,6 +570,8 @@ class MCPController:
             # Firing solution
             "angle_deg": angle_deg,
             "hit_chance": hit_chance,
+            "hit_chance_shooter_id": closest_friendly_id,
+            "hit_chance_weapon_slot": hit_chance_weapon,
             # Condition (actual values - like captains see)
             "hull_percent": hull_percent,
             "armor": armor_damage,
@@ -437,8 +581,8 @@ class MCPController:
             "has_friendly_targeted": has_friendly_targeted,
             "targeting_friendly_id": targeting_friendly_id,
             # Capabilities (from ship class data)
-            "max_acceleration_g": propulsion.get("combat_acceleration_g"),
-            "max_delta_v": propulsion.get("delta_v_kps"),
+            "max_acceleration_g": performance.get("combat_acceleration_g"),
+            "max_delta_v": performance.get("delta_v_kps"),
         }
 
     def _build_projectile_data(self, simulation: Any) -> List[Dict[str, Any]]:
@@ -642,26 +786,50 @@ class MCPController:
         # Get pending commands
         commands = self._state.get_pending_commands(self.faction)
 
-        # Process special commands
+        # Process fleet-level control commands (message / draw / surrender)
+        self.process_control_commands(commands, simulation.current_time)
+
+        self.decision_count += 1
+        self.checkpoint_number = self.decision_count
+        return commands
+
+    def process_control_commands(
+        self,
+        commands: List[MCPCommand],
+        current_time: float,
+    ) -> List[Dict[str, Any]]:
+        """
+        Apply fleet-level control commands (SEND_MESSAGE / PROPOSE_DRAW / SURRENDER).
+
+        These are *not* handled by apply_mcp_commands_to_simulation (they are
+        controller state, not simulation state), so every battle loop that
+        consumes MCP commands must call this or the tools become silent no-ops.
+
+        Args:
+            commands: Commands pulled from the shared state this turn.
+            current_time: Simulation time, used to timestamp chat messages.
+
+        Returns:
+            List of dicts describing what was applied.
+        """
+        applied: List[Dict[str, Any]] = []
         for cmd in commands:
             if cmd.command_type == MCPCommandType.SEND_MESSAGE:
                 content = cmd.parameters.get("content", "")
                 if content:
-                    self.chat.send_message(
-                        self.faction,
-                        content,
-                        simulation.current_time,
-                    )
+                    self.chat.send_message(self.faction, content, current_time)
+                    applied.append({"command": "send_message", "content": content})
             elif cmd.command_type == MCPCommandType.PROPOSE_DRAW:
                 if cmd.parameters.get("accept"):
                     self.has_accepted_draw = True
+                    applied.append({"command": "accept_fleet_draw"})
                 else:
                     self.has_proposed_draw = True
+                    applied.append({"command": "propose_fleet_draw"})
             elif cmd.command_type == MCPCommandType.SURRENDER:
                 self.has_surrendered = True
-
-        self.decision_count += 1
-        return commands
+                applied.append({"command": "surrender_fleet"})
+        return applied
 
     def receive_enemy_message(self, message: str) -> None:
         """
@@ -753,13 +921,42 @@ def apply_mcp_commands_to_simulation(
 
                     spinal_mode_str = cmd.parameters.get("spinal_mode")
                     turret_mode_str = cmd.parameters.get("turret_mode")
-                    target_id = ship.primary_target_id  # Use ship's current primary target
+                    # Deliberately NOT snapshotting ship.primary_target_id here.
+                    # ship.weapons_orders is never cleared, and the fire loop
+                    # prefers order.target_id over the ship's live primary
+                    # target - so a baked-in id would make later
+                    # set_primary_target calls silently ineffective.
+                    target_id = None
+
+                    max_range_km = cmd.parameters.get("max_range_km")
+                    min_hit_probability = cmd.parameters.get("min_hit_probability")
+                    order_kwargs = {}
+                    if max_range_km is not None:
+                        order_kwargs["max_range_km"] = float(max_range_km)
+                    if min_hit_probability is not None:
+                        order_kwargs["min_hit_probability"] = float(min_hit_probability)
 
                     applied_modes = []
                     orders = []
 
+                    def _reject_missing_range(mode_str: str, which: str) -> bool:
+                        """FIRE_AT_RANGE with no range can never fire (range <= 0)."""
+                        if mode_str != "FIRE_AT_RANGE":
+                            return False
+                        if order_kwargs.get("max_range_km", 0.0) > 0:
+                            return False
+                        results["errors"].append({
+                            "command": "set_weapons_order",
+                            "ship_id": cmd.ship_id,
+                            "error": (
+                                f"{which}_mode=FIRE_AT_RANGE requires max_range_km > 0 "
+                                f"(weapons would never fire otherwise)"
+                            ),
+                        })
+                        return True
+
                     # Build spinal weapons orders (non-turreted weapons)
-                    if spinal_mode_str and hasattr(ship, 'weapons'):
+                    if spinal_mode_str and hasattr(ship, 'weapons') and not _reject_missing_range(spinal_mode_str, "spinal"):
                         try:
                             weapons_cmd = WeaponsCommand[spinal_mode_str]
                             # Find spinal (non-turreted) weapon slots
@@ -772,6 +969,7 @@ def apply_mcp_commands_to_simulation(
                                         command=weapons_cmd,
                                         weapon_slot=slot,
                                         target_id=target_id,
+                                        **order_kwargs,
                                     ))
                             applied_modes.append(f"spinal={spinal_mode_str}")
                         except KeyError:
@@ -782,7 +980,7 @@ def apply_mcp_commands_to_simulation(
                             })
 
                     # Build turret weapons orders (turreted weapons)
-                    if turret_mode_str and hasattr(ship, 'weapons'):
+                    if turret_mode_str and hasattr(ship, 'weapons') and not _reject_missing_range(turret_mode_str, "turret"):
                         try:
                             weapons_cmd = WeaponsCommand[turret_mode_str]
                             # Find turreted weapon slots
@@ -795,6 +993,7 @@ def apply_mcp_commands_to_simulation(
                                         command=weapons_cmd,
                                         weapon_slot=slot,
                                         target_id=target_id,
+                                        **order_kwargs,
                                     ))
                             applied_modes.append(f"turret={turret_mode_str}")
                         except KeyError:
@@ -827,15 +1026,36 @@ def apply_mcp_commands_to_simulation(
                 ship = simulation.get_ship(cmd.ship_id)
                 if ship:
                     target_id = cmd.parameters.get("target_id")
-                    if target_id == "NONE":
+                    if target_id == "NONE" or target_id is None:
                         ship.primary_target_id = None
+                        results["applied"].append({
+                            "command": "set_primary_target",
+                            "ship_id": cmd.ship_id,
+                            "target_id": "NONE",
+                        })
                     else:
-                        ship.primary_target_id = target_id
-                    results["applied"].append({
-                        "command": "set_primary_target",
-                        "ship_id": cmd.ship_id,
-                        "target_id": target_id,
-                    })
+                        # Validate: an unknown/dead/friendly id silently disables
+                        # every gun on the ship (the fire loop just skips it).
+                        valid_targets = [
+                            e.ship_id for e in simulation.get_enemy_ships(cmd.ship_id)
+                            if not e.is_destroyed
+                        ]
+                        if target_id not in valid_targets:
+                            results["errors"].append({
+                                "command": "set_primary_target",
+                                "ship_id": cmd.ship_id,
+                                "error": (
+                                    f"Unknown or invalid target '{target_id}'. "
+                                    f"Valid enemy targets: {valid_targets}"
+                                ),
+                            })
+                        else:
+                            ship.primary_target_id = target_id
+                            results["applied"].append({
+                                "command": "set_primary_target",
+                                "ship_id": cmd.ship_id,
+                                "target_id": target_id,
+                            })
                 else:
                     results["errors"].append({
                         "command": "set_primary_target",
@@ -847,19 +1067,27 @@ def apply_mcp_commands_to_simulation(
                 ship = simulation.get_ship(cmd.ship_id)
                 if ship:
                     extend = cmd.parameters.get("extend", True)
-                    # Actually extend/retract radiators in thermal system
+                    # Actually extend/retract radiators in thermal system.
+                    # No shadow flag: state reports the thermal system's real
+                    # state, since destroyed radiators cannot be extended.
                     if ship.thermal_system and ship.thermal_system.radiators:
                         if extend:
-                            ship.thermal_system.radiators.extend_all()
+                            count = ship.thermal_system.radiators.extend_all()
                         else:
-                            ship.thermal_system.radiators.retract_all()
-                    # Also set the flag for status reporting
-                    ship.radiators_extended = extend
-                    results["applied"].append({
-                        "command": "set_radiators",
-                        "ship_id": cmd.ship_id,
-                        "extend": extend,
-                    })
+                            count = ship.thermal_system.radiators.retract_all()
+                        results["applied"].append({
+                            "command": "set_radiators",
+                            "ship_id": cmd.ship_id,
+                            "extend": extend,
+                            "radiators_affected": count,
+                            "radiators_extended": _radiators_extended(ship),
+                        })
+                    else:
+                        results["errors"].append({
+                            "command": "set_radiators",
+                            "ship_id": cmd.ship_id,
+                            "error": "Ship has no thermal system / radiators",
+                        })
                 else:
                     results["errors"].append({
                         "command": "set_radiators",
@@ -871,13 +1099,28 @@ def apply_mcp_commands_to_simulation(
                 ship = simulation.get_ship(cmd.ship_id)
                 if ship:
                     target_id = cmd.parameters.get("target_id")
-                    # TODO: Implement torpedo launch
-                    results["applied"].append({
-                        "command": "launch_torpedo",
-                        "ship_id": cmd.ship_id,
+                    # The simulation already supports torpedo launches; this
+                    # used to be a TODO that reported success without firing.
+                    launched = simulation.inject_command(cmd.ship_id, {
+                        "type": "launch_torpedo",
                         "target_id": target_id,
-                        "note": "Torpedo launch not yet implemented",
                     })
+                    if launched:
+                        results["applied"].append({
+                            "command": "launch_torpedo",
+                            "ship_id": cmd.ship_id,
+                            "target_id": target_id,
+                        })
+                    else:
+                        results["errors"].append({
+                            "command": "launch_torpedo",
+                            "ship_id": cmd.ship_id,
+                            "target_id": target_id,
+                            "error": (
+                                "Torpedo launch failed (no launcher, launcher "
+                                "reloading/empty, or invalid target)"
+                            ),
+                        })
                 else:
                     results["errors"].append({
                         "command": "launch_torpedo",
@@ -885,7 +1128,10 @@ def apply_mcp_commands_to_simulation(
                         "error": "Ship not found",
                     })
 
-            # SEND_MESSAGE, PROPOSE_DRAW, SURRENDER, READY are handled in get_commands
+            # SEND_MESSAGE, PROPOSE_DRAW and SURRENDER are controller state, not
+            # simulation state: they are applied by
+            # MCPController.process_control_commands(). READY is consumed by the
+            # battle loop's ready-flag handling.
 
         except Exception as e:
             results["errors"].append({
