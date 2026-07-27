@@ -55,12 +55,14 @@ ADMIRAL_TOOLS = [
                         "description": (
                             "Optional: order this ship to launch N torpedoes this "
                             "checkpoint (0 = hold). Only torpedo-armed hulls can comply - "
-                            "a launcher reloads every 12s so 2 per decision is the usual "
-                            "ceiling. Use this to COORDINATE a simultaneous salvo across "
-                            "several ships: torpedo damage scales with the square of "
-                            "closing speed, and point defense must split its dwell time "
-                            "between rounds, so many torpedoes arriving together are far "
-                            "more likely to get through than the same number trickled in."
+                            "a launcher reloads every 12s so 2 per launcher per decision "
+                            "is the ceiling. Use this to COORDINATE a simultaneous "
+                            "time-on-target across several ships: rounds arriving "
+                            "together split enemy PD dwell, while trickled rounds are "
+                            "blinded one at a time (measured vs 4 PD turrets: 4 "
+                            "simultaneous = 24/24 through, same 4 spaced 30s = 12/24). "
+                            "Sizing: ~4 rounds kill a destroyer, ~6 kill anything; only "
+                            "commit against CLOSING targets - receding evaders escape."
                         )
                     },
                     "torpedo_target": {

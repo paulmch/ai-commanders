@@ -329,3 +329,68 @@ class TestTraceRecordingWithTorpedoes:
         assert not hasattr(torp, "delta_v_remaining_kps"), (
             "attribute was renamed - update _record_sim_frame to match"
         )
+
+
+class TestTorpedoTerminalBurn:
+    """
+    A torpedo that reaches its target on course used to coast in hoarding
+    delta-v it would never spend. Terminal burn converts that fuel into impact
+    energy (which scales as v^2) and shortens the run, giving point defense
+    fewer engagement windows.
+    """
+
+    def _engagement(self, fleet_data, shooter_v, target_v):
+        from src.physics import Vector3D
+        from src.simulation import CombatSimulation, create_ship_from_fleet_data
+
+        sim = CombatSimulation(time_step=0.5, decision_interval=1e9, seed=3)
+        shooter = create_ship_from_fleet_data(
+            "alpha", "corvette", "alpha", fleet_data,
+            position=Vector3D(0, 0, 0), velocity=Vector3D(shooter_v, 0, 0),
+            forward=Vector3D(1, 0, 0),
+        )
+        target = create_ship_from_fleet_data(
+            "beta", "corvette", "beta", fleet_data,
+            position=Vector3D(300_000, 0, 0), velocity=Vector3D(target_v, 0, 0),
+            forward=Vector3D(-1, 0, 0),
+        )
+        sim.add_ship(shooter)
+        sim.add_ship(target)
+        assert sim.inject_command("alpha", {"type": "launch_torpedo", "target_id": "beta"})
+
+        peak_closure, steps, dv_left = 0.0, 0, 14.0
+        while sim.torpedoes and steps < 1200:
+            sim.step()
+            steps += 1
+            if sim.torpedoes:
+                torp = sim.torpedoes[0].torpedo
+                peak_closure = max(peak_closure, (torp.velocity - target.velocity).magnitude / 1000)
+                dv_left = torp.remaining_delta_v_kps
+        return peak_closure, 14.0 - dv_left, steps * 0.5
+
+    def test_torpedo_spends_fuel_instead_of_hoarding_it(self, fleet_data):
+        """On-course torpedoes must burn, not coast in with a full tank."""
+        for shooter_v, target_v in ((0, 0), (6000, -6000)):
+            _, dv_used, _ = self._engagement(fleet_data, shooter_v, target_v)
+            assert dv_used > 0.5, (
+                f"torpedo arrived having spent only {dv_used:.2f} km/s - it is "
+                f"coasting in with fuel it will never use"
+            )
+
+    def test_terminal_burn_exceeds_the_cruise_floor(self, fleet_data):
+        """
+        Guidance cruises to a 12 km/s closing floor. Terminal burn must push
+        impact speed past it rather than stopping there.
+        """
+        closure, _, _ = self._engagement(fleet_data, 6000, -6000)
+        assert closure > 12.5, (
+            f"impact closure {closure:.1f} km/s - terminal burn is not firing"
+        )
+
+    def test_a_reserve_is_held_back_for_late_evasion(self, fleet_data):
+        """
+        Committing the entire budget would leave nothing to null a late jink.
+        Some delta-v must survive to impact.
+        """
+        _, dv_used, _ = self._engagement(fleet_data, 0, 0)
+        assert dv_used < 14.0, "torpedo burned its entire budget with no reserve"

@@ -23,7 +23,10 @@ CAPTAIN_TOOLS_BASE = [
                         "enum": ["INTERCEPT", "EVADE", "BRAKE", "MAINTAIN", "PADLOCK"],
                         "description": (
                             "INTERCEPT: Burn toward target - for approach only, not combat! "
-                            "EVADE: Evasive thrust while fighting - BEST for active combat! "
+                            "EVADE: Threat-aware defense - jinks vs gun fire; vs guided "
+                            "torpedoes auto-RUNS (cuts closure, buys PD dwell) and in the "
+                            "final seconds auto-PRESENTS your thickest armor. The ONLY "
+                            "maneuver that dodges blinded torpedoes - use it under torpedo fire. "
                             "BRAKE: Flip and burn to slow down - use when closing too fast. "
                             "MAINTAIN: Coast at current velocity - no thrust, no tracking. "
                             "PADLOCK: Coast while tracking target with nose - fire spinal during passes."
@@ -256,14 +259,16 @@ TORPEDO_TOOL = {
     "function": {
         "name": "launch_torpedo",
         "description": (
-            "Launch torpedoes at an enemy. Torpedoes are kinetic penetrators: they carry "
-            "14 km/s of their own delta-v at 12g, and impact energy scales with the SQUARE "
-            "of closing speed, so a head-on launch while you are closing fast hits vastly "
-            "harder than one lobbed at a receding target. "
-            "The launcher reloads every 12s, so you can fire at most 2 per 30s decision. "
-            "Magazine is limited - check YOUR SHIP status for rounds remaining. "
-            "Enemy point defense engages torpedoes inside 250km and needs several seconds "
-            "of dwell per kill, so faster closure means fewer PD shots get through."
+            "Launch torpedoes at an enemy. Kinetic penetrators, 14 km/s own delta-v at "
+            "12g; impact energy scales with the SQUARE of closing speed. Measured: a "
+            "launch with zero closure lands ~23 GJ, a hard head-on (26 km/s) ~95 GJ, a "
+            "lob at a receding ship ~8 GJ - and a receding EVADING ship usually escapes "
+            "outright, wasting the round. Fire when CLOSING. A closing launch vs a lone "
+            "ship connects almost always (12g guidance cannot be out-turned; lone-ship "
+            "PD only blinds slow rounds). Rounds arriving TOGETHER split enemy PD dwell "
+            "- launch your salvo in one decision rather than trickling. Each launcher "
+            "reloads in 12s (2 per launcher per 30s decision). Magazine is limited - "
+            "check YOUR TORPEDOES REMAINING."
         ),
         "parameters": {
             "type": "object",

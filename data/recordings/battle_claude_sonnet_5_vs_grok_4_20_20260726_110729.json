@@ -1,0 +1,2834 @@
+{
+  "recording_version": "2.1",
+  "recorded_at": "2026-07-26T11:06:15.810263",
+  "is_fleet_battle": false,
+  "battle_name": "",
+  "alpha_model": "openrouter/anthropic/claude-sonnet-5",
+  "beta_model": "openrouter/x-ai/grok-4.20",
+  "alpha_name": "Captain Sonnet5",
+  "beta_name": "Captain Grok4.20",
+  "alpha_ship": "TIS Sonnet5",
+  "beta_ship": "HFS Grok4.20",
+  "alpha_personality": "balanced",
+  "beta_personality": "balanced",
+  "initial_distance_km": 300.0,
+  "time_limit_s": 1200.0,
+  "max_checkpoints": 3,
+  "unlimited_mode": false,
+  "alpha_specs": {
+    "ship_id": "alpha",
+    "ship_type": "destroyer",
+    "hull_integrity": 100.0,
+    "armor": {
+      "nose": {
+        "thickness_cm": 151.2,
+        "material": "titanium"
+      },
+      "lateral": {
+        "thickness_cm": 26.0,
+        "material": "titanium"
+      },
+      "tail": {
+        "thickness_cm": 30.3,
+        "material": "titanium"
+      }
+    },
+    "weapons": {
+      "weapon_0": {
+        "type": "WeaponState",
+        "damage_gj": 0
+      },
+      "weapon_1": {
+        "type": "WeaponState",
+        "damage_gj": 0
+      },
+      "pd_0": {
+        "type": "WeaponState",
+        "damage_gj": 0
+      },
+      "pd_1": {
+        "type": "WeaponState",
+        "damage_gj": 0
+      }
+    },
+    "max_acceleration_g": 2.0,
+    "delta_v_budget_kps": 500
+  },
+  "beta_specs": {
+    "ship_id": "beta",
+    "ship_type": "destroyer",
+    "hull_integrity": 100.0,
+    "armor": {
+      "nose": {
+        "thickness_cm": 151.2,
+        "material": "titanium"
+      },
+      "lateral": {
+        "thickness_cm": 26.0,
+        "material": "titanium"
+      },
+      "tail": {
+        "thickness_cm": 30.3,
+        "material": "titanium"
+      }
+    },
+    "weapons": {
+      "weapon_0": {
+        "type": "WeaponState",
+        "damage_gj": 0
+      },
+      "weapon_1": {
+        "type": "WeaponState",
+        "damage_gj": 0
+      },
+      "pd_0": {
+        "type": "WeaponState",
+        "damage_gj": 0
+      },
+      "pd_1": {
+        "type": "WeaponState",
+        "damage_gj": 0
+      }
+    },
+    "max_acceleration_g": 2.0,
+    "delta_v_budget_kps": 500
+  },
+  "alpha_fleet": {},
+  "beta_fleet": {},
+  "events": [
+    {
+      "timestamp": 0.0,
+      "event_type": "battle_start",
+      "ship_id": null,
+      "data": {
+        "distance_km": 300.0,
+        "alpha": "Captain Sonnet5",
+        "beta": "Captain Grok4.20"
+      }
+    },
+    {
+      "timestamp": 30.0,
+      "event_type": "checkpoint",
+      "ship_id": null,
+      "data": {
+        "checkpoint": 1,
+        "distance_km": 300.0016666620371,
+        "alpha": {
+          "ship_id": "alpha",
+          "position": [
+            -150000.0,
+            0.0,
+            0.0
+          ],
+          "velocity": [
+            0,
+            0,
+            0
+          ],
+          "forward": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "hull_integrity": 100.0,
+          "is_destroyed": false,
+          "shots_fired": 0,
+          "hits_scored": 0,
+          "damage_dealt_gj": 0.0,
+          "damage_taken_gj": 0.0,
+          "delta_v_remaining_kps": 499.87655978600696,
+          "heat_percent": 0.005714285714285719,
+          "heatsink_energy_gj": 0.03000000000000002,
+          "heatsink_capacity_gj": 525,
+          "radiators_extended": false,
+          "armor": {
+            "nose": {
+              "thickness_cm": 151.2,
+              "original_cm": 151.2
+            },
+            "lateral": {
+              "thickness_cm": 26.0,
+              "original_cm": 26.0
+            },
+            "tail": {
+              "thickness_cm": 30.3,
+              "original_cm": 30.3
+            }
+          },
+          "weapons": {
+            "weapon_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 450,
+              "cooldown_s": 0.0
+            },
+            "weapon_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 1800,
+              "cooldown_s": 0.0
+            },
+            "pd_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            },
+            "pd_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            }
+          },
+          "modules": {
+            "Spinal Coiler Mount": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Forward Hull Section": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Main Magazine": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Dorsal Turret Mount": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Command Bridge": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": true
+            },
+            "Primary Sensor Array": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Targeting Computer": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Bridge Armored Bulkhead Port": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Bridge Armored Bulkhead Starboard": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Central Hull Section": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Crew Quarters": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Main Reactor": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": true
+            },
+            "Reactor Armored Bulkhead Port": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Reactor Armored Bulkhead Starboard": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Aft Hull Section": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Secondary Reactor": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Main Fuel Tank": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Reserve Fuel Tank": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "PD Laser Dorsal": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "PD Laser Ventral": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Main Engine Assembly": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            }
+          }
+        },
+        "beta": {
+          "ship_id": "beta",
+          "position": [
+            150000.0,
+            1000.0,
+            0.0
+          ],
+          "velocity": [
+            0,
+            0,
+            0
+          ],
+          "forward": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "hull_integrity": 100.0,
+          "is_destroyed": false,
+          "shots_fired": 0,
+          "hits_scored": 0,
+          "damage_dealt_gj": 0.0,
+          "damage_taken_gj": 0.0,
+          "delta_v_remaining_kps": 499.87655978600696,
+          "heat_percent": 0.005714285714285719,
+          "heatsink_energy_gj": 0.03000000000000002,
+          "heatsink_capacity_gj": 525,
+          "radiators_extended": false,
+          "armor": {
+            "nose": {
+              "thickness_cm": 151.2,
+              "original_cm": 151.2
+            },
+            "lateral": {
+              "thickness_cm": 26.0,
+              "original_cm": 26.0
+            },
+            "tail": {
+              "thickness_cm": 30.3,
+              "original_cm": 30.3
+            }
+          },
+          "weapons": {
+            "weapon_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 450,
+              "cooldown_s": 0.0
+            },
+            "weapon_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 1800,
+              "cooldown_s": 0.0
+            },
+            "pd_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            },
+            "pd_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            }
+          },
+          "modules": {
+            "Spinal Coiler Mount": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Forward Hull Section": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Main Magazine": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Dorsal Turret Mount": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Command Bridge": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": true
+            },
+            "Primary Sensor Array": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Targeting Computer": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Bridge Armored Bulkhead Port": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Bridge Armored Bulkhead Starboard": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Central Hull Section": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Crew Quarters": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Main Reactor": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": true
+            },
+            "Reactor Armored Bulkhead Port": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Reactor Armored Bulkhead Starboard": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Aft Hull Section": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Secondary Reactor": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Main Fuel Tank": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Reserve Fuel Tank": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "PD Laser Dorsal": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "PD Laser Ventral": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Main Engine Assembly": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "timestamp": 30.0,
+      "event_type": "maneuver",
+      "ship_id": "alpha",
+      "data": {
+        "maneuver_type": "INTERCEPT",
+        "throttle": 1.0,
+        "target_id": null
+      }
+    },
+    {
+      "timestamp": 30.0,
+      "event_type": "radiator_change",
+      "ship_id": "alpha",
+      "data": {
+        "extended": false
+      }
+    },
+    {
+      "timestamp": 30.0,
+      "event_type": "maneuver",
+      "ship_id": "beta",
+      "data": {
+        "maneuver_type": "PADLOCK",
+        "throttle": 1.0,
+        "target_id": null
+      }
+    },
+    {
+      "timestamp": 30.0,
+      "event_type": "radiator_change",
+      "ship_id": "beta",
+      "data": {
+        "extended": false
+      }
+    },
+    {
+      "timestamp": 30.0,
+      "event_type": "shot_fired",
+      "ship_id": "alpha",
+      "data": {
+        "target_id": "beta",
+        "weapon_slot": "weapon_0",
+        "weapon_name": "Spinal Coiler Mk3",
+        "hit_probability": 0.2546551511076222,
+        "distance_km": 300.0016666620371,
+        "eta_s": 30.30319865273102,
+        "projectile_energy_gj": 4.312440000000001,
+        "muzzle_velocity_kps": 9.9
+      }
+    },
+    {
+      "timestamp": 30.0,
+      "event_type": "shot_fired",
+      "ship_id": "beta",
+      "data": {
+        "target_id": "alpha",
+        "weapon_slot": "weapon_0",
+        "weapon_name": "Spinal Coiler Mk3",
+        "hit_probability": 0.2546551511076222,
+        "distance_km": 300.0016666620371,
+        "eta_s": 30.30319865273102,
+        "projectile_energy_gj": 4.312440000000001,
+        "muzzle_velocity_kps": 9.9
+      }
+    },
+    {
+      "timestamp": 30.0,
+      "event_type": "shot_fired",
+      "ship_id": "beta",
+      "data": {
+        "target_id": "alpha",
+        "weapon_slot": "weapon_1",
+        "weapon_name": "Coilgun Battery Mk3",
+        "hit_probability": 0.18268783228572127,
+        "distance_km": 300.0016666620371,
+        "eta_s": 50.00027777700618,
+        "projectile_energy_gj": 0.72,
+        "muzzle_velocity_kps": 6.0
+      }
+    },
+    {
+      "timestamp": 31.0,
+      "event_type": "shot_fired",
+      "ship_id": "alpha",
+      "data": {
+        "target_id": "beta",
+        "weapon_slot": "weapon_1",
+        "weapon_name": "Coilgun Battery Mk3",
+        "hit_probability": 0.18375832318317434,
+        "distance_km": 299.9820486618174,
+        "eta_s": 49.99700811030289,
+        "projectile_energy_gj": 0.7247160172838479,
+        "muzzle_velocity_kps": 6.0
+      }
+    },
+    {
+      "timestamp": 35.0,
+      "event_type": "pd_fired",
+      "ship_id": "alpha",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_beta_cb86ad8b",
+        "distance_km": 240.18968766507064,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 0.8333333333333333,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 35.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "alpha",
+      "data": {
+        "projectile_id": "proj_beta_cb86ad8b",
+        "remaining_mass_kg": 87.16666666666667
+      }
+    },
+    {
+      "timestamp": 35.0,
+      "event_type": "pd_fired",
+      "ship_id": "alpha",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_beta_cb86ad8b",
+        "distance_km": 240.18968766507064,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 1.6666666666666665,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 35.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "alpha",
+      "data": {
+        "projectile_id": "proj_beta_cb86ad8b",
+        "remaining_mass_kg": 86.33333333333333
+      }
+    },
+    {
+      "timestamp": 35.0,
+      "event_type": "pd_fired",
+      "ship_id": "beta",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_alpha_f3503bf0",
+        "distance_km": 240.60166666203705,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 0.8333333333333333,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 35.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "beta",
+      "data": {
+        "projectile_id": "proj_alpha_f3503bf0",
+        "remaining_mass_kg": 87.16666666666667
+      }
+    },
+    {
+      "timestamp": 35.0,
+      "event_type": "pd_fired",
+      "ship_id": "beta",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_alpha_f3503bf0",
+        "distance_km": 240.60166666203705,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 1.6666666666666665,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 35.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "beta",
+      "data": {
+        "projectile_id": "proj_alpha_f3503bf0",
+        "remaining_mass_kg": 86.33333333333333
+      }
+    },
+    {
+      "timestamp": 40.0,
+      "event_type": "pd_fired",
+      "ship_id": "alpha",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_beta_cb86ad8b",
+        "distance_km": 189.80687100983377,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 2.5,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 40.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "alpha",
+      "data": {
+        "projectile_id": "proj_beta_cb86ad8b",
+        "remaining_mass_kg": 85.5
+      }
+    },
+    {
+      "timestamp": 40.0,
+      "event_type": "pd_fired",
+      "ship_id": "alpha",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_beta_cb86ad8b",
+        "distance_km": 189.80687100983377,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 3.333333333333333,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 40.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "alpha",
+      "data": {
+        "projectile_id": "proj_beta_cb86ad8b",
+        "remaining_mass_kg": 84.66666666666667
+      }
+    },
+    {
+      "timestamp": 40.0,
+      "event_type": "pd_fired",
+      "ship_id": "beta",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_alpha_f3503bf0",
+        "distance_km": 191.101666662037,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 2.5,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 40.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "beta",
+      "data": {
+        "projectile_id": "proj_alpha_f3503bf0",
+        "remaining_mass_kg": 85.5
+      }
+    },
+    {
+      "timestamp": 40.0,
+      "event_type": "pd_fired",
+      "ship_id": "beta",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_alpha_f3503bf0",
+        "distance_km": 191.101666662037,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 3.333333333333333,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 40.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "beta",
+      "data": {
+        "projectile_id": "proj_alpha_f3503bf0",
+        "remaining_mass_kg": 84.66666666666667
+      }
+    },
+    {
+      "timestamp": 45.0,
+      "event_type": "shot_fired",
+      "ship_id": "alpha",
+      "data": {
+        "target_id": "beta",
+        "weapon_slot": "weapon_0",
+        "weapon_name": "Spinal Coiler Mk3",
+        "hit_probability": 0.26607080542538303,
+        "distance_km": 297.64748572332275,
+        "eta_s": 30.065402598315426,
+        "projectile_energy_gj": 4.57262166696379,
+        "muzzle_velocity_kps": 9.9
+      }
+    },
+    {
+      "timestamp": 45.0,
+      "event_type": "shot_fired",
+      "ship_id": "beta",
+      "data": {
+        "target_id": "alpha",
+        "weapon_slot": "weapon_0",
+        "weapon_name": "Spinal Coiler Mk3",
+        "hit_probability": 0.26607080542538303,
+        "distance_km": 297.64748572332275,
+        "eta_s": 30.065402598315426,
+        "projectile_energy_gj": 4.312440000000001,
+        "muzzle_velocity_kps": 9.9
+      }
+    },
+    {
+      "timestamp": 45.0,
+      "event_type": "pd_fired",
+      "ship_id": "alpha",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_beta_cb86ad8b",
+        "distance_km": 138.9335940145083,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 4.166666666666666,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 45.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "alpha",
+      "data": {
+        "projectile_id": "proj_beta_cb86ad8b",
+        "remaining_mass_kg": 83.83333333333333
+      }
+    },
+    {
+      "timestamp": 45.0,
+      "event_type": "pd_fired",
+      "ship_id": "alpha",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_beta_cb86ad8b",
+        "distance_km": 138.9335940145083,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 4.999999999999999,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 45.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "alpha",
+      "data": {
+        "projectile_id": "proj_beta_cb86ad8b",
+        "remaining_mass_kg": 83.0
+      }
+    },
+    {
+      "timestamp": 45.0,
+      "event_type": "pd_fired",
+      "ship_id": "beta",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_alpha_f3503bf0",
+        "distance_km": 141.60166666203702,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 4.166666666666666,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 45.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "beta",
+      "data": {
+        "projectile_id": "proj_alpha_f3503bf0",
+        "remaining_mass_kg": 83.83333333333333
+      }
+    },
+    {
+      "timestamp": 45.0,
+      "event_type": "pd_fired",
+      "ship_id": "beta",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_alpha_f3503bf0",
+        "distance_km": 141.60166666203702,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 4.999999999999999,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 45.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "beta",
+      "data": {
+        "projectile_id": "proj_alpha_f3503bf0",
+        "remaining_mass_kg": 83.0
+      }
+    },
+    {
+      "timestamp": 50.0,
+      "event_type": "shot_fired",
+      "ship_id": "beta",
+      "data": {
+        "target_id": "alpha",
+        "weapon_slot": "weapon_1",
+        "weapon_name": "Coilgun Battery Mk3",
+        "hit_probability": 0.20797801315780187,
+        "distance_km": 295.88183702237427,
+        "eta_s": 49.31363950372904,
+        "projectile_energy_gj": 0.7200000000000001,
+        "muzzle_velocity_kps": 6.0
+      }
+    },
+    {
+      "timestamp": 50.0,
+      "event_type": "pd_fired",
+      "ship_id": "alpha",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_beta_cb86ad8b",
+        "distance_km": 87.56985195040335,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 5.833333333333332,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 50.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "alpha",
+      "data": {
+        "projectile_id": "proj_beta_cb86ad8b",
+        "remaining_mass_kg": 82.16666666666667
+      }
+    },
+    {
+      "timestamp": 50.0,
+      "event_type": "pd_fired",
+      "ship_id": "alpha",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_beta_cb86ad8b",
+        "distance_km": 87.56985195040335,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 6.666666666666665,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 50.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "alpha",
+      "data": {
+        "projectile_id": "proj_beta_cb86ad8b",
+        "remaining_mass_kg": 81.33333333333333
+      }
+    },
+    {
+      "timestamp": 50.0,
+      "event_type": "pd_fired",
+      "ship_id": "beta",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_alpha_f3503bf0",
+        "distance_km": 92.10166666203699,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 5.833333333333332,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 50.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "beta",
+      "data": {
+        "projectile_id": "proj_alpha_f3503bf0",
+        "remaining_mass_kg": 82.16666666666667
+      }
+    },
+    {
+      "timestamp": 50.0,
+      "event_type": "pd_fired",
+      "ship_id": "beta",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_alpha_f3503bf0",
+        "distance_km": 92.10166666203699,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 6.666666666666665,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 50.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "beta",
+      "data": {
+        "projectile_id": "proj_alpha_f3503bf0",
+        "remaining_mass_kg": 81.33333333333333
+      }
+    },
+    {
+      "timestamp": 51.0,
+      "event_type": "shot_fired",
+      "ship_id": "alpha",
+      "data": {
+        "target_id": "beta",
+        "weapon_slot": "weapon_1",
+        "weapon_name": "Coilgun Battery Mk3",
+        "hit_probability": 0.20946760854158544,
+        "distance_km": 295.46985120437876,
+        "eta_s": 49.24497520072979,
+        "projectile_energy_gj": 0.8222712002066875,
+        "muzzle_velocity_kps": 6.0
+      }
+    },
+    {
+      "timestamp": 55.0,
+      "event_type": "pd_fired",
+      "ship_id": "alpha",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_beta_cb86ad8b",
+        "distance_km": 35.71564009322119,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 7.499999999999998,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 55.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "alpha",
+      "data": {
+        "projectile_id": "proj_beta_cb86ad8b",
+        "remaining_mass_kg": 80.5
+      }
+    },
+    {
+      "timestamp": 55.0,
+      "event_type": "pd_fired",
+      "ship_id": "alpha",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_beta_cb86ad8b",
+        "distance_km": 35.71564009322119,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 8.333333333333332,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 55.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "alpha",
+      "data": {
+        "projectile_id": "proj_beta_cb86ad8b",
+        "remaining_mass_kg": 79.66666666666667
+      }
+    },
+    {
+      "timestamp": 55.0,
+      "event_type": "pd_fired",
+      "ship_id": "beta",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_alpha_f3503bf0",
+        "distance_km": 42.60166666203696,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 7.499999999999998,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 55.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "beta",
+      "data": {
+        "projectile_id": "proj_alpha_f3503bf0",
+        "remaining_mass_kg": 80.5
+      }
+    },
+    {
+      "timestamp": 55.0,
+      "event_type": "pd_fired",
+      "ship_id": "beta",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_alpha_f3503bf0",
+        "distance_km": 42.60166666203696,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 8.333333333333332,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 55.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "beta",
+      "data": {
+        "projectile_id": "proj_alpha_f3503bf0",
+        "remaining_mass_kg": 79.66666666666667
+      }
+    },
+    {
+      "timestamp": 56.0,
+      "event_type": "hit",
+      "ship_id": "alpha",
+      "data": {
+        "shooter_id": "beta",
+        "weapon_slot": "unknown",
+        "hit_location": "nose",
+        "impact_angle_deg": 0.19655695682979513,
+        "kinetic_energy_gj": 3.9040650000000015,
+        "armor_ablation_cm": 6.392316583617262,
+        "armor_remaining_cm": 144.80768341638273,
+        "damage_to_hull_gj": 0.0,
+        "penetrated": false,
+        "critical_hit": false,
+        "flight_time_s": 26.0,
+        "projectile_id": "proj_beta_cb86ad8b",
+        "impact_position": [
+          -142584.23177708682,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "timestamp": 57.0,
+      "event_type": "hit",
+      "ship_id": "beta",
+      "data": {
+        "shooter_id": "alpha",
+        "weapon_slot": "unknown",
+        "hit_location": "nose",
+        "impact_angle_deg": 0.19098522435859877,
+        "kinetic_energy_gj": 3.9040650000000015,
+        "armor_ablation_cm": 6.392318250807337,
+        "armor_remaining_cm": 144.80768174919265,
+        "damage_to_hull_gj": 0.0,
+        "penetrated": false,
+        "critical_hit": false,
+        "flight_time_s": 27.0,
+        "projectile_id": "proj_alpha_f3503bf0",
+        "impact_position": [
+          150000.0,
+          1000.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "timestamp": 60.0,
+      "event_type": "checkpoint",
+      "ship_id": null,
+      "data": {
+        "checkpoint": 2,
+        "distance_km": 290.87912946117945,
+        "alpha": {
+          "ship_id": "alpha",
+          "position": [
+            -140877.41052906393,
+            0.0,
+            0.0
+          ],
+          "velocity": [
+            588.559601037324,
+            0.0,
+            0.0
+          ],
+          "forward": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "hull_integrity": 100.0,
+          "is_destroyed": false,
+          "shots_fired": 4,
+          "hits_scored": 1,
+          "damage_dealt_gj": 3.9040650000000015,
+          "damage_taken_gj": 3.9040650000000015,
+          "delta_v_remaining_kps": 499.28800018496923,
+          "heat_percent": 1.8721523809523803,
+          "heatsink_energy_gj": 9.828799999999996,
+          "heatsink_capacity_gj": 525,
+          "radiators_extended": false,
+          "armor": {
+            "nose": {
+              "thickness_cm": 144.80768341638273,
+              "original_cm": 151.2
+            },
+            "lateral": {
+              "thickness_cm": 26.0,
+              "original_cm": 26.0
+            },
+            "tail": {
+              "thickness_cm": 30.3,
+              "original_cm": 30.3
+            }
+          },
+          "weapons": {
+            "weapon_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 448,
+              "cooldown_s": 0.0
+            },
+            "weapon_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 1798,
+              "cooldown_s": 11.0
+            },
+            "pd_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            },
+            "pd_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            }
+          },
+          "modules": {
+            "Spinal Coiler Mount": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Forward Hull Section": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Main Magazine": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Dorsal Turret Mount": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Command Bridge": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": true
+            },
+            "Primary Sensor Array": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Targeting Computer": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Bridge Armored Bulkhead Port": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Bridge Armored Bulkhead Starboard": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Central Hull Section": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Crew Quarters": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Main Reactor": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": true
+            },
+            "Reactor Armored Bulkhead Port": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Reactor Armored Bulkhead Starboard": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Aft Hull Section": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Secondary Reactor": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Main Fuel Tank": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Reserve Fuel Tank": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "PD Laser Dorsal": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "PD Laser Ventral": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Main Engine Assembly": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            }
+          }
+        },
+        "beta": {
+          "ship_id": "beta",
+          "position": [
+            150000.0,
+            1000.0,
+            0.0
+          ],
+          "velocity": [
+            0,
+            0,
+            0
+          ],
+          "forward": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "hull_integrity": 100.0,
+          "is_destroyed": false,
+          "shots_fired": 4,
+          "hits_scored": 1,
+          "damage_dealt_gj": 3.9040650000000015,
+          "damage_taken_gj": 3.9040650000000015,
+          "delta_v_remaining_kps": 499.87655978600696,
+          "heat_percent": 1.53752380952381,
+          "heatsink_energy_gj": 8.072000000000003,
+          "heatsink_capacity_gj": 525,
+          "radiators_extended": false,
+          "armor": {
+            "nose": {
+              "thickness_cm": 144.80768174919265,
+              "original_cm": 151.2
+            },
+            "lateral": {
+              "thickness_cm": 26.0,
+              "original_cm": 26.0
+            },
+            "tail": {
+              "thickness_cm": 30.3,
+              "original_cm": 30.3
+            }
+          },
+          "weapons": {
+            "weapon_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 448,
+              "cooldown_s": 0.0
+            },
+            "weapon_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 1798,
+              "cooldown_s": 10.0
+            },
+            "pd_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            },
+            "pd_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            }
+          },
+          "modules": {
+            "Spinal Coiler Mount": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Forward Hull Section": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Main Magazine": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Dorsal Turret Mount": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Command Bridge": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": true
+            },
+            "Primary Sensor Array": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Targeting Computer": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Bridge Armored Bulkhead Port": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Bridge Armored Bulkhead Starboard": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Central Hull Section": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Crew Quarters": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Main Reactor": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": true
+            },
+            "Reactor Armored Bulkhead Port": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Reactor Armored Bulkhead Starboard": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Aft Hull Section": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Secondary Reactor": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Main Fuel Tank": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Reserve Fuel Tank": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "PD Laser Dorsal": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "PD Laser Ventral": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Main Engine Assembly": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "timestamp": 60.0,
+      "event_type": "maneuver",
+      "ship_id": "alpha",
+      "data": {
+        "maneuver_type": "EVASIVE",
+        "throttle": 1.0,
+        "target_id": null
+      }
+    },
+    {
+      "timestamp": 60.0,
+      "event_type": "radiator_change",
+      "ship_id": "alpha",
+      "data": {
+        "extended": false
+      }
+    },
+    {
+      "timestamp": 60.0,
+      "event_type": "maneuver",
+      "ship_id": "beta",
+      "data": {
+        "maneuver_type": "PADLOCK",
+        "throttle": 1.0,
+        "target_id": null
+      }
+    },
+    {
+      "timestamp": 60.0,
+      "event_type": "radiator_change",
+      "ship_id": "beta",
+      "data": {
+        "extended": false
+      }
+    },
+    {
+      "timestamp": 60.0,
+      "event_type": "shot_fired",
+      "ship_id": "alpha",
+      "data": {
+        "target_id": "beta",
+        "weapon_slot": "weapon_0",
+        "weapon_name": "Spinal Coiler Mk3",
+        "hit_probability": 0.28221534735746423,
+        "distance_km": 290.87912946117945,
+        "eta_s": 29.381730248603983,
+        "projectile_energy_gj": 4.840431429127972,
+        "muzzle_velocity_kps": 9.9
+      }
+    },
+    {
+      "timestamp": 60.0,
+      "event_type": "shot_fired",
+      "ship_id": "beta",
+      "data": {
+        "target_id": "alpha",
+        "weapon_slot": "weapon_0",
+        "weapon_name": "Spinal Coiler Mk3",
+        "hit_probability": 0.28221534735746423,
+        "distance_km": 290.87912946117945,
+        "eta_s": 29.381730248603983,
+        "projectile_energy_gj": 4.312440000000001,
+        "muzzle_velocity_kps": 9.9
+      }
+    },
+    {
+      "timestamp": 60.0,
+      "event_type": "pd_fired",
+      "ship_id": "alpha",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_beta_58627461",
+        "distance_km": 131.87095954066618,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 0.8333333333333333,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 60.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "alpha",
+      "data": {
+        "projectile_id": "proj_beta_58627461",
+        "remaining_mass_kg": 87.16666666666667
+      }
+    },
+    {
+      "timestamp": 60.0,
+      "event_type": "pd_fired",
+      "ship_id": "alpha",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_beta_58627461",
+        "distance_km": 131.87095954066618,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 1.6666666666666665,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 60.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "alpha",
+      "data": {
+        "projectile_id": "proj_beta_58627461",
+        "remaining_mass_kg": 86.33333333333333
+      }
+    },
+    {
+      "timestamp": 60.0,
+      "event_type": "pd_fired",
+      "ship_id": "beta",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_alpha_8acc96b3",
+        "distance_km": 134.5391038290959,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 0.8333333333333333,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 60.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "beta",
+      "data": {
+        "projectile_id": "proj_alpha_8acc96b3",
+        "remaining_mass_kg": 87.16666666666667
+      }
+    },
+    {
+      "timestamp": 60.0,
+      "event_type": "pd_fired",
+      "ship_id": "beta",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_alpha_8acc96b3",
+        "distance_km": 134.5391038290959,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 1.6666666666666665,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 60.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "beta",
+      "data": {
+        "projectile_id": "proj_alpha_8acc96b3",
+        "remaining_mass_kg": 86.33333333333333
+      }
+    },
+    {
+      "timestamp": 65.0,
+      "event_type": "pd_fired",
+      "ship_id": "alpha",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_beta_58627461",
+        "distance_km": 79.0390368958151,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 2.5,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 65.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "alpha",
+      "data": {
+        "projectile_id": "proj_beta_58627461",
+        "remaining_mass_kg": 85.5
+      }
+    },
+    {
+      "timestamp": 65.0,
+      "event_type": "pd_fired",
+      "ship_id": "alpha",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_beta_58627461",
+        "distance_km": 79.0390368958151,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 3.333333333333333,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 65.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "alpha",
+      "data": {
+        "projectile_id": "proj_beta_58627461",
+        "remaining_mass_kg": 84.66666666666667
+      }
+    },
+    {
+      "timestamp": 65.0,
+      "event_type": "pd_fired",
+      "ship_id": "beta",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_alpha_8acc96b3",
+        "distance_km": 83.56773448715,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 2.5,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 65.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "beta",
+      "data": {
+        "projectile_id": "proj_alpha_8acc96b3",
+        "remaining_mass_kg": 85.5
+      }
+    },
+    {
+      "timestamp": 65.0,
+      "event_type": "pd_fired",
+      "ship_id": "beta",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_alpha_8acc96b3",
+        "distance_km": 83.56773448715,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 3.333333333333333,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 65.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "beta",
+      "data": {
+        "projectile_id": "proj_alpha_8acc96b3",
+        "remaining_mass_kg": 84.66666666666667
+      }
+    },
+    {
+      "timestamp": 70.0,
+      "event_type": "shot_fired",
+      "ship_id": "beta",
+      "data": {
+        "target_id": "alpha",
+        "weapon_slot": "weapon_1",
+        "weapon_name": "Coilgun Battery Mk3",
+        "hit_probability": 0.2397884019027289,
+        "distance_km": 283.99308061902286,
+        "eta_s": 47.33218010317048,
+        "projectile_energy_gj": 0.7200000000000001,
+        "muzzle_velocity_kps": 6.0
+      }
+    },
+    {
+      "timestamp": 70.0,
+      "event_type": "hit",
+      "ship_id": "alpha",
+      "data": {
+        "shooter_id": "beta",
+        "weapon_slot": "unknown",
+        "hit_location": "nose",
+        "impact_angle_deg": 1.9379986893811463,
+        "kinetic_energy_gj": 4.149090000000001,
+        "armor_ablation_cm": 6.505704177256015,
+        "armor_remaining_cm": 138.30197923912672,
+        "damage_to_hull_gj": 0.0,
+        "penetrated": false,
+        "critical_hit": false,
+        "flight_time_s": 25.0,
+        "projectile_id": "proj_beta_58627461",
+        "impact_position": [
+          -133229.88416919747,
+          -179.47586802193956,
+          -14.605227280392233
+        ]
+      }
+    },
+    {
+      "timestamp": 70.0,
+      "event_type": "pd_fired",
+      "ship_id": "alpha",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_beta_3325cc6b",
+        "distance_km": 37.23265528832753,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 0.8333333333333333,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 70.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "alpha",
+      "data": {
+        "projectile_id": "proj_beta_3325cc6b",
+        "remaining_mass_kg": 39.166666666666664
+      }
+    },
+    {
+      "timestamp": 70.0,
+      "event_type": "pd_fired",
+      "ship_id": "alpha",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_beta_3325cc6b",
+        "distance_km": 37.23265528832753,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 1.6666666666666665,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 70.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "alpha",
+      "data": {
+        "projectile_id": "proj_beta_3325cc6b",
+        "remaining_mass_kg": 38.333333333333336
+      }
+    },
+    {
+      "timestamp": 70.0,
+      "event_type": "pd_fired",
+      "ship_id": "beta",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_alpha_8acc96b3",
+        "distance_km": 32.596365145204125,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 4.166666666666666,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 70.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "beta",
+      "data": {
+        "projectile_id": "proj_alpha_8acc96b3",
+        "remaining_mass_kg": 83.83333333333333
+      }
+    },
+    {
+      "timestamp": 70.0,
+      "event_type": "pd_fired",
+      "ship_id": "beta",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_alpha_8acc96b3",
+        "distance_km": 32.596365145204125,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 4.999999999999999,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 70.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "beta",
+      "data": {
+        "projectile_id": "proj_alpha_8acc96b3",
+        "remaining_mass_kg": 83.0
+      }
+    },
+    {
+      "timestamp": 71.0,
+      "event_type": "shot_fired",
+      "ship_id": "alpha",
+      "data": {
+        "target_id": "beta",
+        "weapon_slot": "weapon_1",
+        "weapon_name": "Coilgun Battery Mk3",
+        "hit_probability": 0.241213925433655,
+        "distance_km": 283.2323404259,
+        "eta_s": 47.205390070983334,
+        "projectile_energy_gj": 0.9141256536280222,
+        "muzzle_velocity_kps": 6.0
+      }
+    },
+    {
+      "timestamp": 71.0,
+      "event_type": "hit",
+      "ship_id": "beta",
+      "data": {
+        "shooter_id": "alpha",
+        "weapon_slot": "unknown",
+        "hit_location": "nose",
+        "impact_angle_deg": 0.19249578796669198,
+        "kinetic_energy_gj": 4.312813617704483,
+        "armor_ablation_cm": 6.7651286687184395,
+        "armor_remaining_cm": 138.04255308047422,
+        "damage_to_hull_gj": 0.0,
+        "penetrated": false,
+        "critical_hit": false,
+        "flight_time_s": 26.0,
+        "projectile_id": "proj_alpha_8acc96b3",
+        "impact_position": [
+          150000.0,
+          1000.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "timestamp": 73.0,
+      "event_type": "hit",
+      "ship_id": "alpha",
+      "data": {
+        "shooter_id": "beta",
+        "weapon_slot": "unknown",
+        "hit_location": "nose",
+        "impact_angle_deg": 0.30732807702668197,
+        "kinetic_energy_gj": 0.69,
+        "armor_ablation_cm": 2.3737817821868226,
+        "armor_remaining_cm": 135.9281974569399,
+        "damage_to_hull_gj": 0.0,
+        "penetrated": false,
+        "critical_hit": false,
+        "flight_time_s": 43.0,
+        "projectile_id": "proj_beta_3325cc6b",
+        "impact_position": [
+          -130859.43074767663,
+          -279.5308066102567,
+          -22.402395602251
+        ]
+      }
+    },
+    {
+      "timestamp": 75.0,
+      "event_type": "shot_fired",
+      "ship_id": "alpha",
+      "data": {
+        "target_id": "beta",
+        "weapon_slot": "weapon_0",
+        "weapon_name": "Spinal Coiler Mk3",
+        "hit_probability": 0.30074226450344305,
+        "distance_km": 280.0429591755915,
+        "eta_s": 28.287167593494086,
+        "projectile_energy_gj": 5.055758765899685,
+        "muzzle_velocity_kps": 9.9
+      }
+    },
+    {
+      "timestamp": 75.0,
+      "event_type": "shot_fired",
+      "ship_id": "beta",
+      "data": {
+        "target_id": "alpha",
+        "weapon_slot": "weapon_0",
+        "weapon_name": "Spinal Coiler Mk3",
+        "hit_probability": 0.30074226450344305,
+        "distance_km": 280.0429591755915,
+        "eta_s": 28.287167593494086,
+        "projectile_energy_gj": 4.31244,
+        "muzzle_velocity_kps": 9.9
+      }
+    },
+    {
+      "timestamp": 75.0,
+      "event_type": "pd_fired",
+      "ship_id": "alpha",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_beta_c999060d",
+        "distance_km": 120.8041994896852,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 0.8333333333333333,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 75.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "alpha",
+      "data": {
+        "projectile_id": "proj_beta_c999060d",
+        "remaining_mass_kg": 87.16666666666667
+      }
+    },
+    {
+      "timestamp": 75.0,
+      "event_type": "pd_fired",
+      "ship_id": "alpha",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_beta_c999060d",
+        "distance_km": 120.8041994896852,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 1.6666666666666665,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 75.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "alpha",
+      "data": {
+        "projectile_id": "proj_beta_c999060d",
+        "remaining_mass_kg": 86.33333333333333
+      }
+    },
+    {
+      "timestamp": 75.0,
+      "event_type": "pd_fired",
+      "ship_id": "beta",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_alpha_0f43d491",
+        "distance_km": 29.099238668289672,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 0.8333333333333333,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 75.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "beta",
+      "data": {
+        "projectile_id": "proj_alpha_0f43d491",
+        "remaining_mass_kg": 39.166666666666664
+      }
+    },
+    {
+      "timestamp": 75.0,
+      "event_type": "pd_fired",
+      "ship_id": "beta",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_alpha_0f43d491",
+        "distance_km": 29.099238668289672,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 1.6666666666666665,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 75.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "beta",
+      "data": {
+        "projectile_id": "proj_alpha_0f43d491",
+        "remaining_mass_kg": 38.333333333333336
+      }
+    },
+    {
+      "timestamp": 77.0,
+      "event_type": "hit",
+      "ship_id": "beta",
+      "data": {
+        "shooter_id": "alpha",
+        "weapon_slot": "unknown",
+        "hit_location": "nose",
+        "impact_angle_deg": 0.1909977143135393,
+        "kinetic_energy_gj": 0.6945195165636876,
+        "armor_ablation_cm": 2.379144011369421,
+        "armor_remaining_cm": 135.6634090691048,
+        "damage_to_hull_gj": 0.0,
+        "penetrated": false,
+        "critical_hit": false,
+        "flight_time_s": 46.0,
+        "projectile_id": "proj_alpha_0f43d491",
+        "impact_position": [
+          150000.0,
+          1000.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "timestamp": 80.0,
+      "event_type": "pd_fired",
+      "ship_id": "alpha",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_beta_c999060d",
+        "distance_km": 66.82382837533406,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 2.5,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 80.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "alpha",
+      "data": {
+        "projectile_id": "proj_beta_c999060d",
+        "remaining_mass_kg": 85.5
+      }
+    },
+    {
+      "timestamp": 80.0,
+      "event_type": "pd_fired",
+      "ship_id": "alpha",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_beta_c999060d",
+        "distance_km": 66.82382837533406,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 3.333333333333333,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 80.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "alpha",
+      "data": {
+        "projectile_id": "proj_beta_c999060d",
+        "remaining_mass_kg": 84.66666666666667
+      }
+    },
+    {
+      "timestamp": 80.0,
+      "event_type": "pd_fired",
+      "ship_id": "beta",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_alpha_917d9911",
+        "distance_km": 70.61945522077933,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 0.8333333333333333,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 80.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "beta",
+      "data": {
+        "projectile_id": "proj_alpha_917d9911",
+        "remaining_mass_kg": 87.16666666666667
+      }
+    },
+    {
+      "timestamp": 80.0,
+      "event_type": "pd_fired",
+      "ship_id": "beta",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_alpha_917d9911",
+        "distance_km": 70.61945522077933,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 1.6666666666666665,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 80.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "beta",
+      "data": {
+        "projectile_id": "proj_alpha_917d9911",
+        "remaining_mass_kg": 86.33333333333333
+      }
+    },
+    {
+      "timestamp": 84.0,
+      "event_type": "hit",
+      "ship_id": "beta",
+      "data": {
+        "shooter_id": "alpha",
+        "weapon_slot": "unknown",
+        "hit_location": "nose",
+        "impact_angle_deg": 0.19697491697402825,
+        "kinetic_energy_gj": 4.748756591455093,
+        "armor_ablation_cm": 7.132566421600943,
+        "armor_remaining_cm": 128.53084264750385,
+        "damage_to_hull_gj": 0.0,
+        "penetrated": false,
+        "critical_hit": false,
+        "flight_time_s": 24.0,
+        "projectile_id": "proj_alpha_917d9911",
+        "impact_position": [
+          150000.0,
+          1000.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "timestamp": 84.0,
+      "event_type": "hit",
+      "ship_id": "alpha",
+      "data": {
+        "shooter_id": "beta",
+        "weapon_slot": "unknown",
+        "hit_location": "nose",
+        "impact_angle_deg": 1.5259919528792238,
+        "kinetic_energy_gj": 4.149090000000001,
+        "armor_ablation_cm": 6.429147889527353,
+        "armor_remaining_cm": 129.49904956741256,
+        "damage_to_hull_gj": 0.0,
+        "penetrated": false,
+        "critical_hit": false,
+        "flight_time_s": 24.0,
+        "projectile_id": "proj_beta_c999060d",
+        "impact_position": [
+          -120790.8152928853,
+          -474.9358837943418,
+          -101.99710858372934
+        ]
+      }
+    },
+    {
+      "timestamp": 85.0,
+      "event_type": "pd_fired",
+      "ship_id": "alpha",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_beta_02653c6f",
+        "distance_km": 53.765468785770054,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 0.8333333333333333,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 85.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "alpha",
+      "data": {
+        "projectile_id": "proj_beta_02653c6f",
+        "remaining_mass_kg": 39.166666666666664
+      }
+    },
+    {
+      "timestamp": 85.0,
+      "event_type": "pd_fired",
+      "ship_id": "alpha",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_beta_02653c6f",
+        "distance_km": 53.765468785770054,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 1.6666666666666665,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 85.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "alpha",
+      "data": {
+        "projectile_id": "proj_beta_02653c6f",
+        "remaining_mass_kg": 38.333333333333336
+      }
+    },
+    {
+      "timestamp": 85.0,
+      "event_type": "pd_fired",
+      "ship_id": "beta",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_alpha_67ef496f",
+        "distance_km": 71.05035336014157,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 0.8333333333333333,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 85.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "beta",
+      "data": {
+        "projectile_id": "proj_alpha_67ef496f",
+        "remaining_mass_kg": 39.166666666666664
+      }
+    },
+    {
+      "timestamp": 85.0,
+      "event_type": "pd_fired",
+      "ship_id": "beta",
+      "data": {
+        "turret_name": "PD Laser Turret",
+        "target_type": "slug",
+        "target_id": "proj_alpha_67ef496f",
+        "distance_km": 71.05035336014157,
+        "mass_ablated_kg": 0.8333333333333333,
+        "total_ablated_kg": 1.6666666666666665,
+        "energy_delivered_j": 0
+      }
+    },
+    {
+      "timestamp": 85.0,
+      "event_type": "pd_slug_damaged",
+      "ship_id": "beta",
+      "data": {
+        "projectile_id": "proj_alpha_67ef496f",
+        "remaining_mass_kg": 38.333333333333336
+      }
+    },
+    {
+      "timestamp": 90.0,
+      "event_type": "checkpoint",
+      "ship_id": null,
+      "data": {
+        "checkpoint": 3,
+        "distance_km": 265.44413570723,
+        "alpha": {
+          "ship_id": "alpha",
+          "position": [
+            -115439.9958655988,
+            -473.90647793656524,
+            -159.29822193806143
+          ],
+          "velocity": [
+            1109.3733665559666,
+            1.7377717487379183,
+            -11.442395529658777
+          ],
+          "forward": [
+            0.9990495583871295,
+            0.043586223602748324,
+            0.0004701048105370864
+          ],
+          "hull_integrity": 100.0,
+          "is_destroyed": false,
+          "shots_fired": 7,
+          "hits_scored": 4,
+          "damage_dealt_gj": 13.660154725723265,
+          "damage_taken_gj": 12.892245000000003,
+          "delta_v_remaining_kps": 498.75826766436586,
+          "heat_percent": 3.561066666666668,
+          "heatsink_energy_gj": 18.695600000000006,
+          "heatsink_capacity_gj": 525,
+          "radiators_extended": false,
+          "armor": {
+            "nose": {
+              "thickness_cm": 129.49904956741256,
+              "original_cm": 151.2
+            },
+            "lateral": {
+              "thickness_cm": 26.0,
+              "original_cm": 26.0
+            },
+            "tail": {
+              "thickness_cm": 30.3,
+              "original_cm": 30.3
+            }
+          },
+          "weapons": {
+            "weapon_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 446,
+              "cooldown_s": 0.0
+            },
+            "weapon_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 1797,
+              "cooldown_s": 1.0
+            },
+            "pd_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            },
+            "pd_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            }
+          },
+          "modules": {
+            "Spinal Coiler Mount": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Forward Hull Section": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Main Magazine": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Dorsal Turret Mount": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Command Bridge": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": true
+            },
+            "Primary Sensor Array": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Targeting Computer": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Bridge Armored Bulkhead Port": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Bridge Armored Bulkhead Starboard": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Central Hull Section": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Crew Quarters": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Main Reactor": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": true
+            },
+            "Reactor Armored Bulkhead Port": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Reactor Armored Bulkhead Starboard": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Aft Hull Section": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Secondary Reactor": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Main Fuel Tank": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Reserve Fuel Tank": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "PD Laser Dorsal": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "PD Laser Ventral": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Main Engine Assembly": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            }
+          }
+        },
+        "beta": {
+          "ship_id": "beta",
+          "position": [
+            150000.0,
+            1000.0,
+            0.0
+          ],
+          "velocity": [
+            0,
+            0,
+            0
+          ],
+          "forward": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "hull_integrity": 100.0,
+          "is_destroyed": false,
+          "shots_fired": 7,
+          "hits_scored": 4,
+          "damage_dealt_gj": 12.892245000000003,
+          "damage_taken_gj": 13.660154725723265,
+          "delta_v_remaining_kps": 499.87655978600696,
+          "heat_percent": 2.891809523809521,
+          "heatsink_energy_gj": 15.181999999999986,
+          "heatsink_capacity_gj": 525,
+          "radiators_extended": false,
+          "armor": {
+            "nose": {
+              "thickness_cm": 128.53084264750385,
+              "original_cm": 151.2
+            },
+            "lateral": {
+              "thickness_cm": 26.0,
+              "original_cm": 26.0
+            },
+            "tail": {
+              "thickness_cm": 30.3,
+              "original_cm": 30.3
+            }
+          },
+          "weapons": {
+            "weapon_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 446,
+              "cooldown_s": 0.0
+            },
+            "weapon_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 1797,
+              "cooldown_s": 0.0
+            },
+            "pd_0": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            },
+            "pd_1": {
+              "type": "WeaponState",
+              "ammo_remaining": 0,
+              "cooldown_s": 0.0
+            }
+          },
+          "modules": {
+            "Spinal Coiler Mount": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Forward Hull Section": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Main Magazine": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Dorsal Turret Mount": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Command Bridge": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": true
+            },
+            "Primary Sensor Array": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Targeting Computer": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Bridge Armored Bulkhead Port": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Bridge Armored Bulkhead Starboard": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Central Hull Section": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Crew Quarters": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Main Reactor": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": true
+            },
+            "Reactor Armored Bulkhead Port": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Reactor Armored Bulkhead Starboard": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Aft Hull Section": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Secondary Reactor": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Main Fuel Tank": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Reserve Fuel Tank": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "PD Laser Dorsal": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "PD Laser Ventral": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            },
+            "Main Engine Assembly": {
+              "health_percent": 100.0,
+              "is_destroyed": false,
+              "is_functional": true,
+              "is_critical": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "timestamp": 90.0,
+      "event_type": "maneuver",
+      "ship_id": "alpha",
+      "data": {
+        "maneuver_type": "EVASIVE",
+        "throttle": 1.0,
+        "target_id": null
+      }
+    },
+    {
+      "timestamp": 90.0,
+      "event_type": "radiator_change",
+      "ship_id": "alpha",
+      "data": {
+        "extended": false
+      }
+    },
+    {
+      "timestamp": 90.0,
+      "event_type": "maneuver",
+      "ship_id": "beta",
+      "data": {
+        "maneuver_type": "PADLOCK",
+        "throttle": 1.0,
+        "target_id": null
+      }
+    },
+    {
+      "timestamp": 90.0,
+      "event_type": "radiator_change",
+      "ship_id": "beta",
+      "data": {
+        "extended": false
+      }
+    },
+    {
+      "timestamp": 90.0,
+      "event_type": "battle_end",
+      "ship_id": null,
+      "data": {
+        "winner": null,
+        "reason": "Too close to call (Alpha: 102.4 vs Beta: 97.8)",
+        "outcome": "draw"
+      }
+    }
+  ],
+  "sim_trace": [],
+  "winner": null,
+  "result_reason": "Too close to call (Alpha: 102.4 vs Beta: 97.8)",
+  "duration_s": 90.0,
+  "total_checkpoints": 3,
+  "alpha_ships_remaining": 0,
+  "beta_ships_remaining": 0
+}

@@ -14,6 +14,7 @@ The simulation produces a comprehensive event log for analysis and replay.
 
 from __future__ import annotations
 
+import copy
 import math
 import random
 import time
@@ -39,7 +40,10 @@ try:
         CombatResolver, Weapon, ShipArmor, HitResult, HitLocation,
         create_weapon_from_fleet_data, create_ship_armor_from_fleet_data
     )
-    from .geometry import ShipGeometry, calculate_hit_probability_modifier, create_geometry_from_fleet_data
+    from .geometry import (
+        ShipGeometry, calculate_hit_probability_modifier, create_geometry_from_fleet_data,
+        NOSE_HIT_ANGLE_THRESHOLD, TAIL_HIT_ANGLE_THRESHOLD
+    )
     from .modules import ModuleLayout, Module, ModuleType
     from .damage import DamagePropagator, DamageCone
     from .pointdefense import (
@@ -47,6 +51,12 @@ try:
         TORPEDO_WARHEAD_THRESHOLD_J as _PD_WARHEAD_THRESHOLD_J,
     )
     from .pointdefense import PDLaser, PDEngagement, EngagementOutcome
+    from .pointdefense import (
+        PD_ABSORPTIVITY, PD_WALLPLUG_EFFICIENCY, TORPEDO_CROSS_SECTION_M2,
+        PD_ABLATION_EXHAUST_VELOCITY_MS,
+        MATERIAL_VAPORIZATION_ENERGY, TargetMaterial, estimate_cross_section_m2,
+        dwell_coupling_fraction,
+    )
     from .firecontrol import (
         calculate_hit_probability, FiringSolution,
         HelmCommand, WeaponsCommand, TacticalPosture,
@@ -68,7 +78,10 @@ except ImportError:
         CombatResolver, Weapon, ShipArmor, HitResult, HitLocation,
         create_weapon_from_fleet_data, create_ship_armor_from_fleet_data
     )
-    from geometry import ShipGeometry, calculate_hit_probability_modifier, create_geometry_from_fleet_data
+    from geometry import (
+        ShipGeometry, calculate_hit_probability_modifier, create_geometry_from_fleet_data,
+        NOSE_HIT_ANGLE_THRESHOLD, TAIL_HIT_ANGLE_THRESHOLD
+    )
     from modules import ModuleLayout, Module, ModuleType
     from damage import DamagePropagator, DamageCone
     from pointdefense import (
@@ -76,6 +89,12 @@ except ImportError:
         TORPEDO_WARHEAD_THRESHOLD_J as _PD_WARHEAD_THRESHOLD_J,
     )
     from pointdefense import PDLaser, PDEngagement, EngagementOutcome
+    from pointdefense import (
+        PD_ABSORPTIVITY, PD_WALLPLUG_EFFICIENCY, TORPEDO_CROSS_SECTION_M2,
+        PD_ABLATION_EXHAUST_VELOCITY_MS,
+        MATERIAL_VAPORIZATION_ENERGY, TargetMaterial, estimate_cross_section_m2,
+        dwell_coupling_fraction,
+    )
     from firecontrol import (
         calculate_hit_probability, FiringSolution,
         HelmCommand, WeaponsCommand, TacticalPosture,
@@ -95,6 +114,102 @@ MAX_DECISION_INTERVAL = 60.0
 
 # Hit detection radius in meters
 HIT_DETECTION_RADIUS = 50.0
+
+# -----------------------------------------------------------------------------
+# Terminal ballistics of kinetic rounds
+# -----------------------------------------------------------------------------
+
+# Extra radius added to the target hull for the swept-geometry hit test.
+# A destroyer is ~15 m radius, so 500 m is ~33x the hull: this is not a
+# physical hull size, it is the envelope inside which fire control COULD still
+# convert the shot given weapon spread and tracking error. Passing the gate is
+# therefore "close enough to try", not "hit" - see
+# CombatSimulation._resolve_projectile_hit_geometric.
+#
+# Do not shrink this to make deflection matter: it is the same envelope for
+# every gun in the game, so changing it rebalances all gun combat at once.
+# The geometry is made to matter inside the envelope instead, via
+# TERMINAL_DISPERSION_SIGMA_M below.
+HIT_TOLERANCE_M = 500.0
+
+# 1-sigma of the unmodelled terminal dispersion (barrel jitter, sensor noise,
+# last-instant target motion the fire-control solution never saw), expressed as
+# a lateral offset at the target.
+#
+# The simulation propagates the round's real trajectory, so it already knows
+# how far from the hull the round actually passed. That realized margin is a
+# deterministic offset; this sigma is the random part that decides whether the
+# round still clips the hull from that offset. For a 2-D Gaussian dispersion
+# and a hull much smaller than sigma, P(hit) falls off as exp(-margin^2/2sigma^2).
+#
+# Anchored to the tolerance envelope rather than tuned: the envelope is 2 sigma,
+# i.e. a round passing at the very edge of what fire control could convert is a
+# 2-sigma event. A round that passes THROUGH the hull (margin 0) is unaffected,
+# so a clean firing solution behaves exactly as it did before this factor
+# existed and the launch-time P(hit) keeps its full meaning.
+TERMINAL_DISPERSION_SIGMA_M = HIT_TOLERANCE_M / 2.0
+
+# -----------------------------------------------------------------------------
+# Evasion tuning constants (see CombatSimulation._calculate_evasion)
+# -----------------------------------------------------------------------------
+
+# A GUIDED torpedo drives the evasion response only once it is inside this
+# time-to-go. Beyond ~5 minutes the engagement geometry will change completely
+# before it arrives (torpedo burns last tens of seconds, ships jink at 2-3 g),
+# and reacting that early would let a single distant torpedo pin the ship
+# forever. 300 s is several decision cycles of headroom over the ~60-90 s
+# terminal engagements measured in the harness.
+GUIDED_TORPEDO_REACT_TIME_S = 300.0
+
+# A guided torpedo that is NOT yet closing (e.g. launched from behind, still
+# accelerating) has no finite time-to-go, so gate on raw distance instead.
+# 1,000 km at Poseidon-class delta-v (~18 km/s) is still ~a minute of flight.
+GUIDED_TORPEDO_REACT_RANGE_M = 1_000_000.0
+
+# Terminal armor presentation begins when time-to-impact falls below
+# pad x (estimated rotation time to the thickest facing) + hold window.
+# Getting caught mid-turn is the worst case - it exposes the thin lateral
+# belt at an oblique angle - so the rotation budget is always padded. The
+# pad depends on the NEZ:
+#
+# * INSIDE the torpedo's no-escape zone a miss is provably impossible, so
+#   running only buys PD dwell time. Facing certainty is worth more than a
+#   few extra PD shots (a seeker kill needs ~7 hits), so commit early:
+#   a 2x pad on the bang-bang turn-time estimate (which ignores current
+#   angular velocity and mid-fight torque damage).
+# * OUTSIDE the NEZ the torpedo's accel/delta-v margins are still beatable -
+#   measured runs drive pursuing torpedoes to "insufficient delta-v" - so
+#   keep running until the last feasible moment: a slim 1.2x pad.
+#
+# NOTE deliberately NOT `terminal = nez.inside` alone: against low-g hulls a
+# high-accel torpedo is inside its NEZ from ~300 s out, which would swallow
+# the entire RUN phase and give up all the PD dwell time running buys.
+TERMINAL_TURN_MARGIN_NEZ = 2.0
+TERMINAL_TURN_MARGIN_CONTESTED = 1.2
+
+# Inside the final seconds the ship holds its presentation regardless of
+# margins: 10 s of running at 2 g changes closing speed by ~200 m/s against
+# km/s-scale closures (<2% more dwell), while a late mode flip can swing the
+# threat bearing out of the armor cone right at impact (observed in testing).
+PRESENT_HOLD_WINDOW_S = 10.0
+
+# Aim this far INSIDE the chosen armor section's arc rather than at its
+# edge. Terminal jitter (bearing drift, residual angular rate) of a few
+# degrees must not flip the struck section from nose to lateral.
+PRESENT_ARC_MARGIN_DEG = 10.0
+
+# Throttle modifier while presenting armor. A token 5% burn keeps the main
+# engines lit so thrust vectoring stays available: TV+RCS turns ~20x faster
+# than RCS alone (2.445 + 0.123 vs 0.123 deg/s^2 for a corvette). The linear
+# velocity this adds during a ~20 s terminal window is at most a few tens of
+# m/s against km/s-scale closing speeds - negligible closure cost for a
+# several-fold faster turn. (Same trick PADLOCK uses.)
+PRESENT_THROTTLE_MOD = 0.05
+
+# Ballistic threats (slugs, seeker-killed torpedoes) are only actionable
+# inside this time-to-closest-approach window; beyond it a lateral jink is
+# wasted delta-v because the shooter/geometry will have changed.
+BALLISTIC_THREAT_HORIZON_S = 60.0
 
 # Thermal heat generation per coilgun shot (GJ)
 COILGUN_HEAT_PER_SHOT_GJ = 0.5
@@ -594,11 +709,16 @@ class PDLaserState:
 
     Attributes:
         laser: The PDLaser specification.
-        cooldown_remaining: Time until laser can fire again (seconds).
+        cooldown_remaining: Time until a new burst can start (seconds).
         is_operational: Whether the PD laser is functional.
         current_target_id: ID of torpedo/slug being engaged.
         heat_delivered_j: Total heat delivered to current target.
         turret_name: Identifier for this PD turret.
+        burst_energy_j: Beam energy remaining in the current burst (joules).
+            The continuous-dwell path discharges the turret capacitor into
+            this reservoir when a burst starts, then emits from it at
+            laser.power_w each tick - so the beam is a burst of continuous
+            energy rather than an instantaneous fixed-value shot.
     """
     laser: PDLaser
     cooldown_remaining: float = 0.0
@@ -606,10 +726,21 @@ class PDLaserState:
     current_target_id: Optional[str] = None
     heat_delivered_j: float = 0.0
     turret_name: str = "PD-1"
+    burst_energy_j: float = 0.0
 
     def can_fire(self) -> bool:
         """Check if PD laser can engage."""
         return self.is_operational and self.cooldown_remaining <= 0
+
+    def can_dwell(self) -> bool:
+        """
+        Check if the turret can put beam energy on a target this tick:
+        either mid-burst (reservoir not yet emitted) or ready to start a
+        new burst.
+        """
+        return self.is_operational and (
+            self.burst_energy_j > 0.0 or self.cooldown_remaining <= 0
+        )
 
     def engage(self) -> bool:
         """Attempt to fire the PD laser. Returns True if successful."""
@@ -699,7 +830,15 @@ class ShipCombatState:
     hits_scored: int = 0
     damage_dealt_gj: float = 0.0
     damage_taken_gj: float = 0.0
-    pd_intercepts: int = 0  # Torpedoes/slugs destroyed by PD
+    pd_intercepts: int = 0  # Torpedoes/slugs this ship's PD physically DESTROYED
+    # Distinct torpedoes this ship's PD blinded (50 MJ seeker kill). Tracked
+    # apart from pd_intercepts because a blinded torpedo is still inbound on a
+    # ballistic course and still kills a target that does not maneuver.
+    pd_seeker_kills: int = 0
+    # Electrical power the PD turrets drew from the bus last tick (GW).
+    # Written by _update_point_defense, read by _update_ship the next tick to
+    # subtract PD draw from the power available to the drive.
+    pd_power_draw_gw: float = 0.0
 
     @property
     def position(self) -> Vector3D:
@@ -987,6 +1126,14 @@ class ProjectileInFlight:
         min_distance_to_target: Closest distance achieved to target (meters).
         prev_distance_to_target: Previous tick's distance to target (for miss detection).
         hit_probability: Fire-control P(hit) captured at launch (None = unknown).
+        launch_miss_margin_m: How far from the target hull this round was
+            predicted to pass at the instant it was fired, assuming both ships
+            hold their velocities. This is the firing solution's own aim error,
+            and it is ALREADY priced into hit_probability (flight-time and
+            crossing-angle penalties). Recorded so that the terminal geometry
+            check can charge only for deflection acquired AFTER launch - PD
+            ablation recoil, and maneuvering the solution did not anticipate -
+            instead of billing the shot twice for the same lead error.
         weapon: The weapon that fired this projectile (for chipping/radiator stats).
     """
     projectile_id: str
@@ -997,6 +1144,7 @@ class ProjectileInFlight:
     min_distance_to_target: float = float('inf')
     prev_distance_to_target: float = float('inf')
     hit_probability: Optional[float] = None
+    launch_miss_margin_m: float = 0.0
     weapon: Optional[Weapon] = None
 
 
@@ -1030,6 +1178,21 @@ class TorpedoInFlight:
     # Once-only latch: without it TORPEDO_FUEL_EXHAUSTED was re-logged (and
     # re-broadcast to every event callback) every tick for coasting torpedoes.
     fuel_exhausted_logged: bool = False
+    # Once-only latch for the seeker kill. Several turrets are deliberately
+    # assigned to the same torpedo in one tick, so the tick that crosses the
+    # 50 MJ electronics threshold used to emit PD_TORPEDO_DISABLED once per
+    # remaining turret. Measured: 6 torpedoes produced 8 disable events behind
+    # an 8-escort screen. The latch makes the event - and the seeker-kill
+    # metric built on it - count torpedoes, not turret-ticks.
+    seeker_kill_logged: bool = False
+    # Terminal-presentation latch for the TARGET ship's evasion logic. Once
+    # the target commits to presenting armor against this torpedo it must not
+    # flip back to running: at the commit boundary the NEZ margins flap
+    # (inside <-> "insufficient delta-v"), which was observed to produce a
+    # PRESENT -> RUN -> PRESENT stutter in the final ~10 s that swung the
+    # threat bearing out of the armor cone right before impact. t_go only
+    # shrinks once the target stops running, so the latch is monotone-safe.
+    terminal_latched: bool = False
 
     # PD damage thresholds (from pointdefense module)
     # Single source of truth is pointdefense.py. simulation.py used to carry its
@@ -1066,6 +1229,16 @@ class EngagementMetrics:
         total_hits: Total hits scored.
         total_torpedoes_launched: Total torpedoes launched.
         total_torpedo_hits: Total torpedo impacts.
+        total_torpedo_intercepted: Torpedoes PD physically DESTROYED (the 1 GJ
+            structural threshold). A destroyed torpedo leaves the simulation.
+        total_torpedo_seeker_killed: Distinct torpedoes PD blinded (the 50 MJ
+            electronics threshold). A blinded torpedo is NOT intercepted: it
+            keeps its velocity and still hits a target that does not maneuver.
+            These are counted separately precisely so PD's contribution is not
+            overstated by lumping mission kills in with hard kills.
+        total_torpedo_hits_after_seeker_kill: Of total_torpedo_hits, how many
+            were landed by a torpedo PD had already blinded. This is the
+            "leaker" figure - blinds that bought nothing.
         total_damage_dealt: Total damage dealt (GJ).
         ships_destroyed: List of destroyed ship IDs.
         battle_duration: Total simulation time.
@@ -1077,6 +1250,8 @@ class EngagementMetrics:
     total_torpedoes_launched: int = 0
     total_torpedo_hits: int = 0
     total_torpedo_intercepted: int = 0
+    total_torpedo_seeker_killed: int = 0
+    total_torpedo_hits_after_seeker_kill: int = 0
     total_damage_dealt: float = 0.0
     ships_destroyed: list[str] = field(default_factory=list)
     battle_duration: float = 0.0
@@ -1089,6 +1264,29 @@ class EngagementMetrics:
         if self.total_shots_fired == 0:
             return 0.0
         return self.total_hits / self.total_shots_fired
+
+    @property
+    def total_torpedo_neutralized(self) -> int:
+        """
+        Torpedoes point defense actually took off the board: hard kills, plus
+        blinds that did NOT go on to hit anything.
+
+        Kept as a derived property rather than a counter so it can never drift
+        out of step with the three raw numbers it is built from.
+        """
+        blinds_that_still_hit = self.total_torpedo_hits_after_seeker_kill
+        return (self.total_torpedo_intercepted
+                + max(0, self.total_torpedo_seeker_killed - blinds_that_still_hit))
+
+    def torpedo_outcome_summary(self) -> str:
+        """One-line, non-overstating account of what happened to torpedoes."""
+        return (
+            f"{self.total_torpedoes_launched} launched, "
+            f"{self.total_torpedo_intercepted} destroyed by PD, "
+            f"{self.total_torpedo_seeker_killed} blinded by PD "
+            f"({self.total_torpedo_hits_after_seeker_kill} of those still hit), "
+            f"{self.total_torpedo_hits} total impacts"
+        )
 
 
 # =============================================================================
@@ -1401,6 +1599,9 @@ class CombatSimulation:
                 launch_time=self.current_time
             ))
             self.metrics.total_torpedoes_launched += 1
+            # Count the launch as a shot so hit rate is well-defined for
+            # torpedo-armed hulls.
+            ship.shots_fired += 1
             self._log_event(SimulationEventType.TORPEDO_LAUNCHED, ship.ship_id, target_id, {
                 'torpedo_id': torpedo_id,
                 'initial_velocity_kps': torpedo.velocity.magnitude / 1000.0,
@@ -1704,7 +1905,10 @@ class CombatSimulation:
             mass_kg=weapon.warhead_mass_kg
         )
 
-        # Track projectile
+        # Track projectile. The aim error the firing solution is leaving on the
+        # table is measured HERE, against the target's velocity at the trigger,
+        # so terminal resolution can tell "fire control never had it" apart
+        # from "something knocked it off course in flight".
         proj_id = f"proj_{shooter.ship_id}_{uuid.uuid4().hex[:8]}"
         self.projectiles.append(ProjectileInFlight(
             projectile_id=proj_id,
@@ -1713,6 +1917,9 @@ class CombatSimulation:
             target_ship_id=target.ship_id,
             launch_time=self.current_time,
             hit_probability=hit_probability,
+            launch_miss_margin_m=self._projectile_miss_margin_m(
+                projectile.position, projectile.velocity, target
+            ),
             weapon=weapon
         ))
 
@@ -1887,16 +2094,21 @@ class CombatSimulation:
                     throttle = 0.0
 
                 elif maneuver.maneuver_type == ManeuverType.EVASIVE:
-                    # Threat-aware evasion: analyze incoming projectiles and maneuver accordingly
-                    # Modes: WOBBLE (no threats), EVADE (turn perpendicular), TANK (nose to threat), BRACE
+                    # Threat-aware evasion: analyze incoming threats and maneuver accordingly
+                    # Modes: WOBBLE (no threats), EVADE (lateral jink vs ballistic),
+                    # RUN (open range vs guided torpedo to buy PD time),
+                    # PRESENT (terminal: thickest armor onto torpedo bearing),
+                    # TANK (best armor vs ballistic), BRACE (no time)
                     evade_dir, mode, throttle_mod = self._calculate_evasion(ship, dt)
                     throttle = throttle * throttle_mod
 
-                    if mode == 'EVADE' and evade_dir:
-                        # Turn toward evasion direction and thrust
-                        self._rotate_ship_toward(ship, evade_dir, dt, engines_on=(throttle > 0))
-                    elif mode == 'TANK' and evade_dir:
-                        # Turn nose toward incoming threat (best armor)
+                    if mode in ('EVADE', 'TANK', 'RUN', 'PRESENT') and evade_dir:
+                        # EVADE: turn toward jink direction and thrust.
+                        # RUN: turn away from the torpedo and burn to cut closure.
+                        # PRESENT: rotate chosen armor facing onto the threat
+                        #   (token throttle keeps thrust vectoring available;
+                        #   see PRESENT_THROTTLE_MOD).
+                        # TANK: turn best armor toward the ballistic threat.
                         self._rotate_ship_toward(ship, evade_dir, dt, engines_on=(throttle > 0))
                     elif mode == 'WOBBLE':
                         # Minor random wobble - still head toward target but with variation
@@ -1994,6 +2206,23 @@ class CombatSimulation:
         engine_eff = ship.get_effective_thrust_fraction()
         effective_throttle = throttle * engine_eff
 
+        # PD electrical draw comes out of the same reactor budget as the
+        # drive: while the beams are on, the drive gets (reactor - PD draw).
+        # This coupling is exact, not tuned - and therefore honest about its
+        # magnitude: a 5 MW-beam turret draws 20 MW electrical against a
+        # ~306 TW torch reactor, a thrust loss of ~7e-8 per turret. The
+        # OPERATIVE costs of sustained PD fire at this reactor scale are the
+        # waste heat (see _pd_emit_beam) and, at full throttle, the battery
+        # drain that covers capacitor recharge when the drive has claimed the
+        # whole reactor output.
+        if ship.power_system and ship.pd_power_draw_gw > 0.0:
+            reactor_gw = ship.power_system.reactor.current_output_gw
+            if reactor_gw > 0.0:
+                drive_fraction = max(
+                    0.0, 1.0 - ship.pd_power_draw_gw / reactor_gw
+                )
+                effective_throttle *= drive_fraction
+
         # Update kinematic state with reduced thrust if engines damaged
         ship.kinematic_state = propagate_state(
             ship.kinematic_state, dt, effective_throttle, gimbal_pitch, gimbal_yaw
@@ -2083,34 +2312,7 @@ class CombatSimulation:
 
         # Get attitude control specs (use defaults if not set)
         # Engine damage reduces thrust vectoring but RCS still works
-        engine_eff = ship.get_effective_turn_rate_multiplier()
-
-        if ship.attitude_control:
-            # Get base values
-            tv_accel = ship.attitude_control.tv_angular_accel_deg_s2
-            tv_max_vel = ship.attitude_control.tv_max_angular_vel_deg_s
-            rcs_accel = ship.attitude_control.rcs_angular_accel_deg_s2
-            rcs_max_vel = ship.attitude_control.rcs_max_angular_vel_deg_s
-
-            # Apply engine damage to thrust vectoring only
-            effective_tv_accel = tv_accel * engine_eff
-            effective_tv_max_vel = tv_max_vel * engine_eff
-
-            if engines_on:
-                angular_accel = math.radians(effective_tv_accel + rcs_accel)
-                max_angular_vel = math.radians(max(effective_tv_max_vel, rcs_max_vel))
-            else:
-                angular_accel = math.radians(rcs_accel)
-                max_angular_vel = math.radians(rcs_max_vel)
-        else:
-            # Default: cruiser-like specs with engine damage applied
-            if engines_on:
-                tv_accel = 0.454 * engine_eff  # TV reduced by damage
-                angular_accel = math.radians(tv_accel + 0.0085)  # TV + RCS
-                max_angular_vel = math.radians(6.39 * engine_eff)
-            else:
-                angular_accel = math.radians(0.0085)  # RCS only (unaffected)
-                max_angular_vel = math.radians(0.87)
+        angular_accel, max_angular_vel = self._get_rotation_params(ship, engines_on)
 
         # Calculate rotation axis
         rotation_axis = current_forward.cross(target_normalized)
@@ -2187,47 +2389,117 @@ class CombatSimulation:
             ship.kinematic_state.forward = new_forward.normalized()
             ship.kinematic_state.up = new_up.normalized()
 
-    def _calculate_evasion(
+    def _get_rotation_params(
         self,
         ship: ShipCombatState,
-        dt: float,
-    ) -> tuple[Optional[Vector3D], str, float]:
+        engines_on: bool
+    ) -> tuple[float, float]:
         """
-        Calculate threat-aware evasion maneuver.
+        Available angular acceleration and max angular velocity (rad/s^2, rad/s).
 
-        Analyzes incoming projectiles to determine optimal evasion:
-        1. If no threats or all will miss: minor wobble for unpredictability
-        2. If evasion possible: turn perpendicular to threats, full thrust
-        3. If evasion impossible: turn strongest armor (nose) toward threat
-
-        Returns:
-            Tuple of (evasion_direction, mode, throttle_modifier)
-            - evasion_direction: Direction to thrust (None = maintain current)
-            - mode: 'WOBBLE', 'EVADE', 'TANK', 'BRACE'
-            - throttle_modifier: 0.0-1.0 throttle adjustment
+        Single source of truth for rotation authority - used by the actual
+        rotation integrator (_rotate_ship_toward) and by the turn-time
+        estimators, so evasion planning can never assume agility the ship
+        does not have. Engine damage degrades thrust vectoring only.
         """
-        # Gather incoming threats (projectiles targeting this ship)
+        engine_eff = ship.get_effective_turn_rate_multiplier()
+
+        if ship.attitude_control:
+            tv_accel = ship.attitude_control.tv_angular_accel_deg_s2
+            tv_max_vel = ship.attitude_control.tv_max_angular_vel_deg_s
+            rcs_accel = ship.attitude_control.rcs_angular_accel_deg_s2
+            rcs_max_vel = ship.attitude_control.rcs_max_angular_vel_deg_s
+
+            # Apply engine damage to thrust vectoring only
+            effective_tv_accel = tv_accel * engine_eff
+            effective_tv_max_vel = tv_max_vel * engine_eff
+
+            if engines_on:
+                angular_accel = math.radians(effective_tv_accel + rcs_accel)
+                max_angular_vel = math.radians(max(effective_tv_max_vel, rcs_max_vel))
+            else:
+                angular_accel = math.radians(rcs_accel)
+                max_angular_vel = math.radians(rcs_max_vel)
+        else:
+            # Default: cruiser-like specs with engine damage applied
+            if engines_on:
+                tv_accel = 0.454 * engine_eff  # TV reduced by damage
+                angular_accel = math.radians(tv_accel + 0.0085)  # TV + RCS
+                max_angular_vel = math.radians(6.39 * engine_eff)
+            else:
+                angular_accel = math.radians(0.0085)  # RCS only (unaffected)
+                max_angular_vel = math.radians(0.87)
+
+        return angular_accel, max_angular_vel
+
+    def _estimate_turn_time(
+        self,
+        ship: ShipCombatState,
+        angle_rad: float,
+        engines_on: bool = True
+    ) -> float:
+        """
+        Time to rotate through angle_rad with bang-bang control (from rest).
+
+        Triangular profile below the velocity limit: t = 2*sqrt(theta/alpha).
+        Trapezoidal above it: t = theta/omega_max + omega_max/alpha.
+        """
+        if angle_rad <= 1e-6:
+            return 0.0
+        accel, max_vel = self._get_rotation_params(ship, engines_on)
+        if accel <= 0.0:
+            return float('inf')
+        theta_crit = max_vel * max_vel / accel  # angle covered by ramp up + down
+        if angle_rad <= theta_crit:
+            return 2.0 * math.sqrt(angle_rad / accel)
+        return angle_rad / max_vel + max_vel / accel
+
+    def _max_turn_angle(
+        self,
+        ship: ShipCombatState,
+        time_s: float,
+        engines_on: bool = True
+    ) -> float:
+        """Max angle (rad) the ship can rotate through in time_s (bang-bang, from rest)."""
+        if time_s <= 0.0:
+            return 0.0
+        accel, max_vel = self._get_rotation_params(ship, engines_on)
+        if accel <= 0.0:
+            return 0.0
+        t_ramp = max_vel / accel
+        if time_s <= 2.0 * t_ramp:
+            # Triangular: accelerate half the time, brake the other half
+            return accel * time_s * time_s / 4.0
+        # Trapezoidal: cruise at max_vel between symmetric ramps
+        return max_vel * (time_s - t_ramp)
+
+    # -------------------------------------------------------------------------
+    # Threat gathering
+    # -------------------------------------------------------------------------
+
+    def _gather_ballistic_threats(self, ship: ShipCombatState) -> list[dict]:
+        """
+        Collect BALLISTIC threats: kinetic rounds targeting this ship, plus
+        seeker-killed (is_disabled) torpedoes coasting on fixed trajectories.
+
+        A disabled torpedo cannot steer, so it behaves exactly like a slug:
+        closest-approach extrapolation is valid and lateral evasion works.
+        """
         threats = []
-        ship_radius_m = 50.0  # Approximate ship cross-section
 
-        for proj_flight in self.projectiles:
-            if proj_flight.target_ship_id != ship.ship_id:
-                continue
-
-            proj = proj_flight.projectile
-            rel_pos = proj.position - ship.position
-            rel_vel = proj.velocity - ship.velocity
+        def _add_threat(pos: Vector3D, vel: Vector3D, ke_gj: float) -> None:
+            rel_pos = pos - ship.position
+            rel_vel = vel - ship.velocity
             rel_speed = rel_vel.magnitude
 
             if rel_speed < 100:  # Effectively stationary relative to us
-                continue
+                return
 
             # Time to closest approach (TCA)
             # TCA = -dot(rel_pos, rel_vel) / dot(rel_vel, rel_vel)
             tca = -rel_pos.dot(rel_vel) / (rel_vel.dot(rel_vel))
-
-            if tca < 0 or tca > 60:  # Past us or too far out
-                continue
+            if tca < 0 or tca > BALLISTIC_THREAT_HORIZON_S:
+                return
 
             # Miss distance at closest approach
             closest_point = rel_pos + rel_vel * tca
@@ -2235,7 +2507,6 @@ class CombatSimulation:
 
             # Urgency score: (1/TCA) * KE * (1/miss_dist)
             # Faster closing, higher energy, closer miss = higher urgency
-            ke_gj = proj.kinetic_energy_gj
             urgency = (1.0 / max(tca, 0.5)) * ke_gj * (1.0 / max(miss_dist, 100))
 
             threats.append({
@@ -2247,19 +2518,232 @@ class CombatSimulation:
                 'ke_gj': ke_gj,
             })
 
-        # No threats - minor wobble for unpredictability
-        if not threats:
-            return None, 'WOBBLE', 1.0
+        for proj_flight in self.projectiles:
+            if proj_flight.target_ship_id != ship.ship_id:
+                continue
+            proj = proj_flight.projectile
+            _add_threat(proj.position, proj.velocity, proj.kinetic_energy_gj)
 
-        # Sort by urgency (most urgent first)
+        # Seeker-killed torpedoes: ballistic multi-tonne masses. Evade them
+        # regardless of who launched them or whom they were homing on - a
+        # dead seeker does not discriminate.
+        for torp_flight in self.torpedoes:
+            if not torp_flight.is_disabled:
+                continue
+            torp = torp_flight.torpedo
+            rel_speed = (torp.velocity - ship.velocity).magnitude
+            ke_gj = 0.5 * torp.specs.penetrator_mass_kg * rel_speed ** 2 / 1e9
+            _add_threat(torp.position, torp.velocity, ke_gj)
+
+        return threats
+
+    def _gather_guided_torpedo_threats(
+        self,
+        ship: ShipCombatState,
+        latch_commit: bool = True,
+    ) -> list[dict]:
+        """
+        Collect GUIDED torpedo threats: live-seeker torpedoes homing on this
+        ship. These actively steer, so closest-approach extrapolation (and
+        therefore lateral jinking) is meaningless against them.
+
+        Each threat dict carries the NEZ evaluation (can this ship provably
+        still escape?) and a 'terminal' flag: True when evasion can no longer
+        help and the ship should spend its remaining time presenting armor.
+
+        latch_commit: when False (read-only status queries), the terminal
+        commit latch on TorpedoInFlight is consulted but never written.
+        """
+        threats = []
+        guidance = TorpedoGuidance()
+        # Evaluate the NEZ against OUR real lateral acceleration, not the
+        # fleet-wide 3 g assumption the torpedo itself uses: the ship knows
+        # its own performance (and its current engine damage).
+        own_accel_ms2 = (ship.kinematic_state.max_acceleration_ms2()
+                         * ship.get_effective_thrust_fraction())
+
+        for torp_flight in self.torpedoes:
+            if torp_flight.is_disabled:
+                continue
+            torp = torp_flight.torpedo
+            if torp.target_id != ship.ship_id:
+                continue
+
+            rel_pos = torp.position - ship.position
+            distance_m = rel_pos.magnitude
+            if distance_m < 1e-6:
+                continue
+            bearing = rel_pos.normalized()  # unit vector ship -> torpedo
+            rel_vel = torp.velocity - ship.velocity
+            closing_speed = -rel_pos.dot(rel_vel) / distance_m  # >0 = closing
+            t_go = distance_m / closing_speed if closing_speed > 1e-6 else float('inf')
+
+            # React gate: time-to-go horizon, or raw range for a torpedo that
+            # is not yet closing (still turning/accelerating toward us).
+            if (t_go > GUIDED_TORPEDO_REACT_TIME_S
+                    and distance_m > GUIDED_TORPEDO_REACT_RANGE_M):
+                continue
+
+            # Expected impact energy: penetrator KE at the PROJECTED impact
+            # speed plus warhead yield. A pursuing torpedo burns its
+            # remaining delta-v closing, so the current relative speed is a
+            # gross underestimate early in the flight (0.2 GJ vs a measured
+            # 23 GJ impact); add the delta-v it can still convert to closure
+            # before impact. Slightly conservative (assumes all remaining
+            # burn goes into closure) - which is the right bias for choosing
+            # which armor face to bet on. Used for prioritisation and
+            # presentation scoring, never for damage resolution.
+            rel_speed = rel_vel.magnitude
+            if t_go != float('inf'):
+                burn_gain_mps = min(
+                    torp.remaining_delta_v_kps * 1000.0,
+                    torp.specs.acceleration_at_mass(torp.current_mass_kg) * t_go,
+                )
+            else:
+                burn_gain_mps = torp.remaining_delta_v_kps * 1000.0
+            impact_speed_est = rel_speed + burn_gain_mps
+            ke_gj = (0.5 * torp.specs.penetrator_mass_kg * impact_speed_est ** 2 / 1e9
+                     + torp.specs.warhead_yield_gj)
+
+            nez = guidance.nez_status(
+                torp, ship.position, ship.velocity,
+                target_max_lateral_accel_ms2=own_accel_ms2
+            )
+
+            # Terminal = time-to-impact is down to the (padded) time needed
+            # to rotate the thickest armor onto the threat bearing, plus a
+            # hold window so the facing cannot be flapped away in the final
+            # seconds. The NEZ picks the pad: inside (escape provably
+            # impossible) commit early; outside keep running longer. See the
+            # constant block for the full rationale.
+            turn_needed_rad = self._presentation_angle_needed(ship, bearing)
+            turn_time_s = self._estimate_turn_time(ship, turn_needed_rad, engines_on=True)
+            pad = TERMINAL_TURN_MARGIN_NEZ if nez.inside else TERMINAL_TURN_MARGIN_CONTESTED
+            terminal = t_go <= pad * turn_time_s + PRESENT_HOLD_WINDOW_S
+            # Latch the commit (see TorpedoInFlight.terminal_latched). Only
+            # the live maneuver loop latches; read-only status queries
+            # (latch_commit=False) must not mutate simulation state.
+            if torp_flight.terminal_latched:
+                terminal = True
+            elif terminal and latch_commit:
+                torp_flight.terminal_latched = True
+
+            urgency = (ke_gj / max(t_go, 0.5) if t_go != float('inf')
+                       else ke_gj / GUIDED_TORPEDO_REACT_TIME_S)
+
+            threats.append({
+                'torp_flight': torp_flight,
+                'bearing': bearing,
+                'rel_pos': rel_pos,
+                'rel_vel': rel_vel,
+                'distance_m': distance_m,
+                't_go': t_go,
+                'ke_gj': ke_gj,
+                'nez': nez,
+                'terminal': terminal,
+                'urgency': urgency,
+            })
+
         threats.sort(key=lambda t: t['urgency'], reverse=True)
-        most_urgent = threats[0]
+        return threats
 
-        # Check if all threats will miss by comfortable margin
-        all_safe = all(t['miss_dist'] > ship_radius_m * 10 for t in threats)
-        if all_safe:
+    def _calculate_evasion(
+        self,
+        ship: ShipCombatState,
+        dt: float,
+    ) -> tuple[Optional[Vector3D], str, float]:
+        """
+        Calculate threat-aware evasion maneuver.
+
+        Threats come in two kinds with opposite counters:
+
+        * GUIDED torpedoes (live seeker) actively steer, so lateral jinking
+          is near-useless - inside the torpedo's no-escape zone, provably so.
+          The correct response is to RUN: thrust away along the threat axis
+          to reduce closing speed. Point-defense kills are gated by shots
+          landed, shots landed by dwell time, and dwell time by closure -
+          every m/s of closure removed buys more PD engagement windows. In
+          the terminal phase (NEZ, or too little time left to finish a turn)
+          the ship instead PRESENTs its thickest remaining armor toward the
+          threat bearing.
+
+        * BALLISTIC threats (kinetic rounds and seeker-killed torpedoes) fly
+          fixed trajectories, so a lateral jink that moves the ship off the
+          predicted intercept point genuinely works (EVADE), with TANK/BRACE
+          fallbacks when there is no time to build displacement.
+
+        Priority: PRESENT (imminent unavoidable torpedo) > EVADE (a slug
+        arriving sooner than the torpedo) > RUN (guided torpedo inbound) >
+        EVADE/TANK/BRACE (ballistic only) > WOBBLE (no threats).
+
+        Returns:
+            Tuple of (evasion_direction, mode, throttle_modifier)
+            - evasion_direction: Direction to point the nose (None = maintain)
+            - mode: 'WOBBLE', 'EVADE', 'TANK', 'BRACE', 'RUN', 'PRESENT'
+            - throttle_modifier: 0.0-1.0 throttle adjustment
+        """
+        ship_radius_m = 50.0  # Approximate ship cross-section
+
+        ballistic = self._gather_ballistic_threats(ship)
+        # dt == 0 marks a read-only status query - do not latch commits
+        guided = self._gather_guided_torpedo_threats(ship, latch_commit=(dt > 0))
+
+        # ---- 1. Terminal guided torpedoes: present the thickest armor ----
+        terminal = [t for t in guided if t['terminal']]
+        if terminal:
+            present_dir = self._calculate_presentation_direction(ship, terminal)
+            return present_dir, 'PRESENT', PRESENT_THROTTLE_MOD
+
+        # ---- Ballistic pre-sort (shared by branches below) ----
+        ballistic.sort(key=lambda t: t['urgency'], reverse=True)
+        dangerous_ballistic = [
+            t for t in ballistic if t['miss_dist'] <= ship_radius_m * 10
+        ]
+
+        min_guided_t_go = min((t['t_go'] for t in guided), default=float('inf'))
+
+        # ---- 2. A round arriving before the torpedo: dodge it first ----
+        # The threat list is stateless and recomputed every tick, so after
+        # the round passes the ship falls straight back into RUN.
+        if guided and dangerous_ballistic:
+            most_urgent = dangerous_ballistic[0]
+            if most_urgent['tca'] < min_guided_t_go:
+                decision = self._ballistic_evasion_decision(
+                    ship, ballistic, most_urgent, ship_radius_m)
+                if decision is not None and decision[1] == 'EVADE':
+                    return decision
+
+        # ---- 3. Guided torpedoes inbound: run to buy PD time ----
+        if guided:
+            run_dir = self._calculate_run_direction(ship, guided)
+            return run_dir, 'RUN', 1.0
+
+        # ---- 4. Ballistic-only handling (original behaviour) ----
+        if not dangerous_ballistic:
+            # No threats, or all will miss by a comfortable margin
             return None, 'WOBBLE', 1.0
 
+        decision = self._ballistic_evasion_decision(
+            ship, ballistic, dangerous_ballistic[0], ship_radius_m)
+        if decision is not None:
+            return decision
+
+        # No time - brace for impact
+        return None, 'BRACE', 0.0
+
+    def _ballistic_evasion_decision(
+        self,
+        ship: ShipCombatState,
+        threats: list,
+        most_urgent: dict,
+        ship_radius_m: float,
+    ) -> Optional[tuple[Optional[Vector3D], str, float]]:
+        """
+        EVADE/TANK decision for ballistic threats (original logic).
+
+        Returns (direction, mode, throttle) or None when neither evading nor
+        tanking is possible (caller falls through to BRACE).
+        """
         # Check if evasion is possible
         # Need: time to turn + time to build displacement > TCA
         turn_time = 5.0  # ~22° turn at 4.4°/s - enough to get significant lateral
@@ -2287,8 +2771,256 @@ class CombatSimulation:
             tank_dir = self._calculate_tank_direction(ship, most_urgent['rel_vel'])
             return tank_dir, 'TANK', 0.5  # Reduce throttle, focus on turning
 
-        # No time - brace for impact
-        return None, 'BRACE', 0.0
+        return None
+
+    def _calculate_run_direction(
+        self,
+        ship: ShipCombatState,
+        guided_threats: list,
+    ) -> Vector3D:
+        """
+        Direction to thrust to maximise time-to-impact against guided torpedoes.
+
+        Thrusting directly away along the line of sight is the maximum-rate
+        reduction of closing speed (thrust anti-parallel to the LOS puts the
+        full acceleration into the closure term). More time-to-impact = more
+        PD engagement windows = more chances at a seeker kill, which converts
+        the threat into a ballistic one that CAN be dodged. With several
+        inbound torpedoes, weight each away-vector by threat urgency.
+        """
+        run_vec = Vector3D.zero()
+        for t in guided_threats:
+            run_vec = run_vec + (t['bearing'] * -1) * t['urgency']
+        if run_vec.magnitude < 1e-9:
+            # Degenerate (opposing bearings cancel): flee the most urgent one
+            return guided_threats[0]['bearing'] * -1
+        return run_vec.normalized()
+
+    def _armor_thicknesses(self, ship: ShipCombatState) -> Optional[dict]:
+        """Current (damage-adjusted) armor thickness per section, or None."""
+        if not ship.armor:
+            return None
+        sections = {}
+        for loc in (HitLocation.NOSE, HitLocation.LATERAL, HitLocation.TAIL):
+            section = ship.armor.get_section(loc)
+            sections[loc] = section.thickness_cm if section else 0.0
+        return sections
+
+    def _presentation_angle_needed(
+        self,
+        ship: ShipCombatState,
+        bearing: Vector3D,
+    ) -> float:
+        """
+        Rotation (rad) required to bring `bearing` inside the arc of the
+        ship's thickest remaining armor section, from the current attitude.
+
+        Arc geometry mirrors geometry.calculate_hit_location: NOSE covers
+        angles < 30 deg off the nose (NOSE_HIT_ANGLE_THRESHOLD), TAIL > 150
+        deg (TAIL_HIT_ANGLE_THRESHOLD), LATERAL the band between. The budget
+        targets PRESENT_ARC_MARGIN_DEG inside the arc edge, not the edge
+        itself, so terminal jitter cannot flip the struck section. Returns 0
+        when the bearing is already inside the (margined) thickest arc.
+        """
+        thickness = self._armor_thicknesses(ship)
+        angle = ship.forward.angle_to(bearing)  # 0 = threat dead ahead
+        margin = math.radians(PRESENT_ARC_MARGIN_DEG)
+        nose_arc = math.radians(NOSE_HIT_ANGLE_THRESHOLD) - margin
+        tail_arc = math.radians(TAIL_HIT_ANGLE_THRESHOLD) + margin
+
+        if thickness is None:
+            # No armor data: nose-on minimises presented cross-section
+            return max(0.0, angle - nose_arc)
+
+        nose = thickness[HitLocation.NOSE]
+        lateral = thickness[HitLocation.LATERAL]
+        tail = thickness[HitLocation.TAIL]
+
+        if nose >= lateral and nose >= tail:
+            return max(0.0, angle - nose_arc)
+        if tail >= lateral:
+            return max(0.0, tail_arc - angle)
+        # Lateral thickest: bearing must sit in the margined (40, 140) band
+        lat_lo = math.radians(NOSE_HIT_ANGLE_THRESHOLD) + margin
+        lat_hi = math.radians(TAIL_HIT_ANGLE_THRESHOLD) - margin
+        if angle < lat_lo:
+            return lat_lo - angle
+        if angle > lat_hi:
+            return angle - lat_hi
+        return 0.0
+
+    def _presentation_score(
+        self,
+        ship: ShipCombatState,
+        forward: Vector3D,
+        terminal_threats: list,
+    ) -> tuple[float, float, float]:
+        """
+        Score an attitude against the terminal torpedoes. Lower is better,
+        compared lexicographically:
+
+        1. Hull-delivered energy (GJ): for each threat, determine which armor
+           section its impact vector would strike at this attitude (same
+           30/150 degree cones as live hit resolution) and ask the ship's
+           OWN armor model - deep-copied, no state mutates - how much energy
+           reaches the hull. Real armor response means already-ablated
+           sections are naturally avoided.
+        2. Negated energy-weighted thickness of the struck sections: early
+           in the terminal phase the projected impact energy is often
+           stopped by EVERY facing (primary ties at zero); prefer the
+           thicker section anyway - the energy figure is an estimate,
+           thickness is margin.
+        3. Energy-weighted angular distance from the struck section's arc
+           center: prefer attitudes deep inside the section's cone over
+           ones scraping a cone edge, so a few degrees of terminal drift
+           cannot flip the struck section.
+        """
+        geometry = ship.geometry or ShipGeometry(
+            length_m=100.0, radius_m=12.5,
+            nose_cone_length_m=20.0, engine_section_length_m=20.0,
+        )
+
+        total_gj = 0.0
+        weighted_thickness = 0.0
+        center_distance = 0.0
+        for t in terminal_threats:
+            # Impact vector = direction the torpedo travels at impact. A
+            # closing torpedo arrives roughly along the reversed bearing; use
+            # its actual relative velocity whenever it is closing.
+            rel_vel = t['rel_vel']
+            if rel_vel.magnitude > 1e-6 and rel_vel.dot(t['bearing']) < 0:
+                impact_vector = rel_vel.normalized()
+            else:
+                impact_vector = t['bearing'] * -1
+
+            location = geometry.calculate_hit_location(impact_vector, forward)
+
+            # Angular distance from the struck section's arc center.
+            # calculate_hit_location convention: angle(impact_dir, forward)
+            # ~180 deg = nose hit, ~0 deg = tail hit, ~90 deg = lateral.
+            impact_angle = impact_vector.angle_to(forward)
+            if location == HitLocation.NOSE:
+                center_off = abs(math.pi - impact_angle)
+            elif location == HitLocation.TAIL:
+                center_off = impact_angle
+            else:
+                center_off = abs(math.pi / 2.0 - impact_angle)
+            center_distance += t['ke_gj'] * center_off
+
+            if not ship.armor:
+                total_gj += t['ke_gj']
+                continue
+            section = ship.armor.get_section(location)
+            if section is None:
+                total_gj += t['ke_gj']
+                continue
+
+            weighted_thickness += t['ke_gj'] * section.thickness_cm
+
+            # Simulate the impact on a copy of the section (same parameters
+            # as the kinetic phase of _resolve_torpedo_hit).
+            trial = copy.deepcopy(section)
+            _, to_hull_gj, _ = trial.apply_energy_damage(
+                energy_gj=t['ke_gj'],
+                flat_chipping=0.3,
+                impact_area_m2=0.1,
+            )
+            total_gj += to_hull_gj
+
+        # Round the leading components so float noise cannot defeat the
+        # tie-breaks (1e-3 GJ / 0.1 energy-weighted-cm resolution).
+        return (round(total_gj, 3), round(-weighted_thickness, 1), center_distance)
+
+    def _expected_presentation_damage_gj(
+        self,
+        ship: ShipCombatState,
+        forward: Vector3D,
+        terminal_threats: list,
+    ) -> float:
+        """Expected hull-delivered energy (GJ) at attitude `forward` (see _presentation_score)."""
+        return self._presentation_score(ship, forward, terminal_threats)[0]
+
+    def _calculate_presentation_direction(
+        self,
+        ship: ShipCombatState,
+        terminal_threats: list,
+    ) -> Vector3D:
+        """
+        Choose the nose direction that minimises expected damage from the
+        terminal torpedoes, honouring finite turn rates.
+
+        Candidate facings per threat bearing b: nose-on (+b), tail-on (-b),
+        and beam-on (perpendicular). With several threats from different
+        bearings, additional candidates: the energy-weighted mean bearing
+        (and its negation), and pairwise plane normals (which put BOTH
+        threats on the lateral belt). Each candidate is scored not at its
+        ideal attitude but at the attitude actually REACHABLE before the
+        earliest impact (bang-bang turn limit from _max_turn_angle), so an
+        unreachable perfect facing loses to a reachable good one. The
+        current attitude is always a candidate, so presentation can never
+        select a facing with higher expected damage than doing nothing.
+        """
+        # Rotation budget: the earliest impact bounds how far we can turn
+        t_go_min = min(
+            (t['t_go'] for t in terminal_threats if t['t_go'] != float('inf')),
+            default=GUIDED_TORPEDO_REACT_TIME_S,
+        )
+        theta_max = self._max_turn_angle(ship, t_go_min, engines_on=True)
+
+        # ---- Build candidate nose directions ----
+        candidates: list[Vector3D] = [ship.forward]  # do-nothing baseline
+        for t in terminal_threats:
+            b = t['bearing']
+            candidates.append(b)          # nose-on
+            candidates.append(b * -1)     # tail-on
+            side = b.cross(ship.up)
+            if side.magnitude < 1e-6:
+                side = b.cross(ship.forward)
+            if side.magnitude > 1e-6:
+                candidates.append(side.normalized())  # beam-on
+
+        if len(terminal_threats) >= 2:
+            mean = Vector3D.zero()
+            for t in terminal_threats:
+                mean = mean + t['bearing'] * t['ke_gj']
+            if mean.magnitude > 1e-6:
+                mean = mean.normalized()
+                candidates.append(mean)
+                candidates.append(mean * -1)
+            for i in range(len(terminal_threats)):
+                for j in range(i + 1, len(terminal_threats)):
+                    normal = terminal_threats[i]['bearing'].cross(
+                        terminal_threats[j]['bearing'])
+                    if normal.magnitude > 1e-6:
+                        candidates.append(normal.normalized())
+
+        # ---- Score candidates at their REACHABLE attitude ----
+        # The commanded facing is the ACHIEVED attitude, not the raw
+        # candidate: when a candidate lies beyond the rotation budget, what
+        # scored well was the partial rotation toward it. Commanding the full
+        # candidate would make the ship rotate PAST the good attitude on
+        # later ticks (observed: a lateral-thickest hull overshooting the
+        # broadside band toward a thin tail-on facing). Each tick recomputes
+        # with a fresh budget, so the command converges as time permits.
+        best_dir = ship.forward
+        best_score: Optional[tuple] = None
+        for cand in candidates:
+            angle = ship.forward.angle_to(cand)
+            if angle <= theta_max or angle <= 1e-6:
+                achieved = cand
+            else:
+                axis = ship.forward.cross(cand)
+                if axis.magnitude < 1e-6:
+                    # 180 deg flip: any axis perpendicular to forward works
+                    axis = ship.up
+                achieved = ship.forward.rotate_around_axis(
+                    axis.normalized(), theta_max).normalized()
+            score = self._presentation_score(ship, achieved, terminal_threats)
+            if best_score is None or score < best_score:
+                best_score = score
+                best_dir = achieved
+
+        return best_dir
 
     def _calculate_evasion_direction(
         self,
@@ -2422,10 +3154,15 @@ class CombatSimulation:
         """Get current evasion status for tactical display."""
         evade_dir, mode, throttle = self._calculate_evasion(ship, 0.0)
 
-        # Count incoming threats
+        # Count incoming threats: projectiles aimed at us, guided torpedoes
+        # homing on us, and any seeker-killed torpedo coasting nearby.
         threat_count = sum(
             1 for p in self.projectiles
             if p.target_ship_id == ship.ship_id
+        )
+        threat_count += sum(
+            1 for t in self.torpedoes
+            if t.is_disabled or t.torpedo.target_id == ship.ship_id
         )
 
         return {
@@ -2523,11 +3260,10 @@ class CombatSimulation:
         MICRO_DT = 0.001  # 1ms micro-timestep for precise detection
         MAX_MICRO_STEPS = 5000  # Safety limit (5 seconds at 1ms)
 
-        # Hit tolerance: extra radius added to ship for hit detection
-        # Simulates weapon spread, tracking error, and fire control inaccuracy
-        # A destroyer is ~15m radius, so 500m tolerance is ~33x the ship size
-        # This makes hits possible even with evasion-induced miss distances
-        HIT_TOLERANCE_M = 500.0
+        # Hit tolerance: extra radius added to ship for hit detection.
+        # Module-level constant (see its definition) - it used to be redeclared
+        # here, which hid it from the terminal-dispersion model that has to
+        # share its scale.
 
         for proj_flight in self.projectiles:
             if proj_flight in projectiles_to_remove:
@@ -2592,9 +3328,12 @@ class CombatSimulation:
                     prev_position, proj.position, target_ship, HIT_TOLERANCE_M
                 )
                 if hit:
-                    # Hit detected even in coarse step
+                    # Hit detected even in coarse step. Projectile and target
+                    # are both at end-of-step here, so the ship's current
+                    # position is the contemporaneous one.
                     self._resolve_projectile_hit_geometric(
-                        proj_flight, target_ship, impact_point
+                        proj_flight, target_ship, impact_point,
+                        target_ship.position
                     )
                     projectiles_to_remove.append(proj_flight)
                     continue
@@ -2659,9 +3398,13 @@ class CombatSimulation:
                     )
 
                     if hit:
-                        # Geometric hit! Resolve damage
+                        # Geometric hit! Resolve damage against the same
+                        # interpolated target position the gate just used - the
+                        # ship's end-of-step position is up to dt in the future
+                        # of this micro-step.
                         self._resolve_projectile_hit_geometric(
-                            proj_flight, target_ship, impact_point
+                            proj_flight, target_ship, impact_point,
+                            target_interpolated_pos
                         )
                         projectiles_to_remove.append(proj_flight)
                         hit_detected = True
@@ -2688,9 +3431,11 @@ class CombatSimulation:
                     # evasion and cut short the PD engagement window.
                     ship_radius = target_ship.geometry.radius_m if target_ship.geometry else 50.0
                     if micro_tca <= micro_dt and micro_closest <= ship_radius + HIT_TOLERANCE_M:
-                        # Hit by proximity! Resolve damage
+                        # Hit by proximity! Resolve damage. The projectile is at
+                        # the end of this micro-step, so the target must be too.
                         self._resolve_projectile_hit_geometric(
-                            proj_flight, target_ship, None  # No specific impact point
+                            proj_flight, target_ship, None,  # No specific impact point
+                            target_pos_at_micro_end
                         )
                         projectiles_to_remove.append(proj_flight)
                         hit_detected = True
@@ -2753,7 +3498,8 @@ class CombatSimulation:
         self,
         proj_flight: ProjectileInFlight,
         target: ShipCombatState,
-        impact_point: Optional[Vector3D]
+        impact_point: Optional[Vector3D],
+        target_position: Optional[Vector3D] = None,
     ) -> None:
         """
         Resolve a projectile hit detected via geometric intersection.
@@ -2765,6 +3511,10 @@ class CombatSimulation:
             proj_flight: The projectile that hit
             target: The ship that was hit
             impact_point: The point of impact (if known, for logging)
+            target_position: Target position at the projectile's own instant.
+                Defaults to the ship's current (end-of-step) position, which is
+                only correct when the projectile has also been advanced to the
+                end of the step.
         """
         # DISPERSION ROLL: the swept-geometry test uses a generous tolerance
         # (HIT_TOLERANCE_M, ~33x the hull radius) that represents the weapon's
@@ -2773,9 +3523,42 @@ class CombatSimulation:
         # lands is decided here by rolling against the fire-control P(hit)
         # captured at launch. Without this roll the reported probability was
         # decorative and realized hit rate was ~100% at any in-range distance.
+        #
+        # The roll used to consult ONLY that launch-time estimate, which meant
+        # the round's real trajectory was computed and then thrown away: a
+        # round that passed through the hull and a round that passed 450 m wide
+        # were resolved identically. Anything that bends a round in flight -
+        # PD ablation recoil, an evasive turn the fire-control solution never
+        # anticipated - was therefore physically simulated but causally inert.
+        #
+        # Now the launch-time probability is scaled by how far the round was
+        # pushed off its firing solution AFTER launch, under the
+        # terminal-dispersion model documented at TERMINAL_DISPERSION_SIGMA_M.
+        #
+        # The charge is on the CHANGE in miss margin, not the absolute margin.
+        # That distinction is what keeps this a bug fix rather than a
+        # rebalance: the fire-control solution's own lead error is already
+        # priced into hit_probability via the flight-time and crossing-angle
+        # penalties, so billing the shot again for the resulting geometric
+        # miss would double-charge it (measured: charging the absolute margin
+        # drove crossing-target hit rate from 22% to 0%). What is NOT priced in
+        # is anything that moved the round or the target after the trigger -
+        # PD ablation recoil, a jink the solution never saw - and that is
+        # exactly what this term now rewards.
         if proj_flight.hit_probability is not None:
+            margin_m = self._projectile_miss_margin_m(
+                proj_flight.projectile.position,
+                proj_flight.projectile.velocity,
+                target,
+                target_position,
+            )
+            deflection_m = max(0.0, margin_m - proj_flight.launch_miss_margin_m)
+            geometry_factor = math.exp(
+                -(deflection_m ** 2) / (2.0 * TERMINAL_DISPERSION_SIGMA_M ** 2)
+            )
+            effective_probability = proj_flight.hit_probability * geometry_factor
             roll = self.rng.random()
-            if roll >= proj_flight.hit_probability:
+            if roll >= effective_probability:
                 closest_km = proj_flight.min_distance_to_target / 1000.0
                 flight_time = self.current_time - proj_flight.launch_time
                 self._log_event(SimulationEventType.PROJECTILE_MISS,
@@ -2785,15 +3568,96 @@ class CombatSimulation:
                     'flight_time_s': flight_time,
                     'detection': 'dispersion_roll',
                     'hit_probability': proj_flight.hit_probability,
+                    'miss_margin_m': margin_m,
+                    'launch_miss_margin_m': proj_flight.launch_miss_margin_m,
+                    'deflection_m': deflection_m,
+                    'geometry_factor': geometry_factor,
+                    'effective_hit_probability': effective_probability,
                     'roll': roll
                 })
                 print(f"  --- [{proj_flight.source_ship_id}] MISS {proj_flight.target_ship_id} "
-                      f"(dispersion, P={proj_flight.hit_probability:.0%}, roll={roll:.2f})")
+                      f"(dispersion, P={proj_flight.hit_probability:.0%}"
+                      f"x{geometry_factor:.2f} @ {deflection_m:.0f}m deflection, "
+                      f"roll={roll:.2f})")
                 return
 
         # Use the existing projectile hit resolution which handles all combat mechanics
         # Pass the impact point for visualization
         self._resolve_projectile_hit(proj_flight, target, impact_point)
+
+    def _projectile_miss_margin_m(
+        self,
+        proj_position: Vector3D,
+        proj_velocity: Vector3D,
+        target: ShipCombatState,
+        target_position: Optional[Vector3D] = None,
+    ) -> float:
+        """
+        How far a round on this trajectory passes from the target's hull.
+
+        `target_position` must be the target's position at the SAME instant as
+        `proj_position`; it defaults to the ship's current position. Getting
+        this wrong is not a rounding error: ships move up to |v| * dt between
+        the start and end of a step (2 km for a 2 km/s crossing target at
+        dt = 1 s), and the resulting offset is not parallel to the relative
+        velocity, so it shows up directly as fictitious miss distance. Feeding
+        the end-of-step position to a projectile resolved mid-step invented
+        ~1 km of miss on crossing shots that were in fact dead on.
+
+        Returns metres of clearance between the flight line and the hull
+        surface, floored at 0. Zero means the round passes through the hull; a
+        positive value is a geometric miss that only the dispersion envelope
+        (HIT_TOLERANCE_M) let through the gate.
+
+        Worked in the target's rest frame, so the "trajectory" is the relative
+        one - which is what evasive thrust and PD ablation recoil actually
+        change. The hull is the same capsule the gate uses: the ship's axis
+        segment (length_m along `forward`, centred on the ship) inflated by
+        radius_m.
+        """
+        tgt_pos = target_position if target_position is not None else target.position
+
+        rel_vel = proj_velocity - target.velocity
+        speed = rel_vel.magnitude
+        if speed < 1e-9:
+            # No relative motion: the "trajectory" is a point.
+            return max(0.0, proj_position.distance_to(tgt_pos)
+                       - (target.geometry.radius_m if target.geometry else HIT_DETECTION_RADIUS))
+
+        direction = rel_vel * (1.0 / speed)
+
+        if target.geometry is None:
+            radius = HIT_DETECTION_RADIUS
+            half_length = 0.0
+            axis = direction  # degenerate: treated as a sphere
+        else:
+            radius = target.geometry.radius_m
+            half_length = target.geometry.length_m / 2.0
+            axis = target.forward.normalized()
+
+        # Distance from the infinite flight line to the ship's axis SEGMENT.
+        # Parametrise the axis by s in [-half_length, +half_length] and the
+        # flight line by t in R; minimise |(p0 + t*d) - (c + s*a)|.
+        rel_pos = proj_position - tgt_pos
+        d_dot_a = direction.dot(axis)
+        denom = 1.0 - d_dot_a * d_dot_a
+
+        if half_length <= 0.0 or denom < 1e-12:
+            # Parallel (or a sphere): clamp the axis parameter to the segment
+            # using the flight line's own closest point.
+            s = max(-half_length, min(half_length, rel_pos.dot(axis)))
+        else:
+            r_dot_d = rel_pos.dot(direction)
+            r_dot_a = rel_pos.dot(axis)
+            s = (r_dot_a - r_dot_d * d_dot_a) / denom
+            s = max(-half_length, min(half_length, s))
+
+        # Closest point on the flight line to that point of the axis.
+        to_proj = rel_pos - axis * s   # projectile, measured from the axis point
+        t = -to_proj.dot(direction)
+        separation = (to_proj + direction * t).magnitude
+
+        return max(0.0, separation - radius)
 
     def _calculate_time_to_closest_approach(
         self,
@@ -3402,10 +4266,83 @@ class CombatSimulation:
             # the old bare `continue` skipped it, so PD-disabled torpedoes
             # accumulated in self.torpedoes forever.
             if torp_flight.is_disabled:
-                # Just update position without guidance
+                # Update position without guidance
+                disabled_prev_pos = Vector3D(
+                    torp.position.x, torp.position.y, torp.position.z)
                 torp.position = torp.position + torp.velocity * dt
-                flight_time = self.current_time - torp_flight.launch_time
+                torp.time_since_launch += dt
+
+                # A seeker-killed torpedo is still a multi-tonne mass at km/s.
+                # It cannot steer, so it only strikes when the geometry
+                # happens to work out: the swept-segment closest approach
+                # must pass inside a ship's physical cross-section. This is a
+                # deterministic collision test - no guidance-error Gaussian,
+                # because there is no guidance left to err. Checked against
+                # EVERY ship (not just the original target): a ballistic mass
+                # does not discriminate. Arming is not required for the
+                # collision itself - a dead-electronics penetrator needs no
+                # fuse - but in practice PD disables happen far beyond the
+                # 500 m arming distance, so armed is essentially always True.
+                struck_ship = None
+                struck_cpa_m = float('inf')
+                for candidate in self.ships.values():
+                    if candidate.is_destroyed:
+                        continue
+                    # The ship-update loop already moved candidates to their
+                    # end-of-step positions; roll back for the swept CPA.
+                    cand_pos_t0 = candidate.position - candidate.velocity * dt
+                    tca_s, cpa_dist = self._calculate_time_to_closest_approach(
+                        disabled_prev_pos, torp.velocity,
+                        cand_pos_t0, candidate.velocity
+                    )
+                    if tca_s < 0 or tca_s > dt:
+                        continue  # CPA not inside this step's swept segment
+
+                    # Effective radius from the aspect-dependent cross-section
+                    # (same construction as the guided terminal encounter).
+                    cand_geometry = candidate.geometry
+                    if cand_geometry is None:
+                        cand_geometry = ShipGeometry(
+                            length_m=100.0, radius_m=12.5,
+                            nose_cone_length_m=20.0,
+                            engine_section_length_m=20.0,
+                        )
+                    approach_dir = (candidate.position - torp.position)
+                    if approach_dir.magnitude > 1e-6:
+                        angle_to_forward = math.degrees(
+                            candidate.forward.angle_to(approach_dir.normalized()))
+                    else:
+                        angle_to_forward = 90.0
+                    if angle_to_forward < NOSE_HIT_ANGLE_THRESHOLD:
+                        cross_section = cand_geometry.nose_cross_section_m2
+                    elif angle_to_forward > TAIL_HIT_ANGLE_THRESHOLD:
+                        cross_section = cand_geometry.tail_cross_section_m2
+                    else:
+                        cross_section = cand_geometry.lateral_cross_section_m2
+                    radius_m = math.sqrt(cross_section / math.pi)
+
+                    if cpa_dist <= radius_m and cpa_dist < struck_cpa_m:
+                        struck_ship = candidate
+                        struck_cpa_m = cpa_dist
+
+                # Track closest approach to the original target for metrics
+                tgt_pos_t0 = target.position - target.velocity * dt
+                tgt_tca_s, tgt_cpa = self._calculate_time_to_closest_approach(
+                    disabled_prev_pos, torp.velocity, tgt_pos_t0, target.velocity
+                )
+                if 0 <= tgt_tca_s <= dt and tgt_cpa < torp_flight.min_distance_to_target:
+                    torp_flight.min_distance_to_target = tgt_cpa
                 current_dist = torp.position.distance_to(target.position)
+                if current_dist < torp_flight.min_distance_to_target:
+                    torp_flight.min_distance_to_target = current_dist
+
+                if struck_ship is not None:
+                    # Chance collision: same impact-energy path as a guided hit
+                    self._resolve_torpedo_hit(torp_flight, struck_ship)
+                    torpedoes_to_remove.append(torp_flight)
+                    continue
+
+                flight_time = self.current_time - torp_flight.launch_time
                 if flight_time > 3600 or current_dist > 10_000_000:
                     torpedoes_to_remove.append(torp_flight)
                 continue
@@ -3653,8 +4590,19 @@ class CombatSimulation:
 
         self.metrics.total_torpedo_hits += 1
         self.metrics.total_damage_dealt += total_damage_gj
+        if torp_flight.is_disabled:
+            # A blinded torpedo that still connected. Recorded so that PD's
+            # seeker kills can never be read as interceptions: a blind only
+            # counts for something if the target then moves out of the way.
+            self.metrics.total_torpedo_hits_after_seeker_kill += 1
 
         if source_ship:
+            # A torpedo hit is a hit. Only the projectile path incremented
+            # hits_scored, so a torpedo boat reported 0 hits from 0 shots no
+            # matter how many rounds it landed - which also locked the only
+            # torpedo-armed hull out of the tactical scorer's accuracy bonus
+            # (`if ship.shots_fired > 0`).
+            source_ship.hits_scored += 1
             source_ship.damage_dealt_gj += total_damage_gj
 
         target.damage_taken_gj += total_damage_gj
@@ -3793,22 +4741,35 @@ class CombatSimulation:
     # -------------------------------------------------------------------------
 
     # Target type priorities (lower = higher priority)
-    PD_PRIORITY_TORPEDO_COLLISION = 1    # Torpedoes on collision course - highest damage (50+ GJ)
-    PD_PRIORITY_TORPEDO_MANEUVERING = 2  # Torpedoes with remaining delta-v
-    PD_PRIORITY_SLUG_INTERCEPT = 3       # Slugs on collision course (~5 GJ)
-    PD_PRIORITY_ALLIED_DEFENSE = 4       # Projectiles headed to allied ships
+    # PD target priorities (lower = engaged first). Torpedoes strictly outrank
+    # kinetic slugs: a torpedo dies at the 50 MJ seeker threshold, while a slug
+    # must be PHYSICALLY vaporised (60 MJ/kg tungsten: 600 MJ for even the
+    # 10 kg light-coilgun round, 3 GJ for a 50 kg heavy slug) - 12x to ~800x
+    # more energy than a seeker kill. Burning dwell on a slug while any
+    # torpedo is in the envelope is therefore near-useless by construction.
+    # Among torpedoes, ones that can still be killed before impact (given the
+    # friendly turrets in range - see _build_pd_target_list) outrank ones that
+    # are already unkillable in the remaining time.
+    PD_PRIORITY_TORPEDO_SAVABLE_SELF = 1   # Savable torpedo threatening us
+    PD_PRIORITY_TORPEDO_SAVABLE_ALLY = 2   # Savable torpedo threatening an ally
+    PD_PRIORITY_TORPEDO_UNSAVABLE = 3      # Torpedo that cannot be stopped in time
+    PD_PRIORITY_SLUG_INTERCEPT = 4         # Slug on collision course with us
+    PD_PRIORITY_SLUG_ALLY = 5              # Slug headed for an allied ship
 
     def _update_point_defense(self, dt: float) -> None:
         """
         Update all point defense systems with coordinated targeting.
 
-        PD turrets automatically engage threats with smart prioritization:
-        1. Slugs on intercept/collision course (fastest, hardest to track)
-        2. Torpedoes on collision course or with remaining delta-v
-        3. Projectiles headed toward allied ships
-        4. Closest enemy ship in range (if no other targets)
+        Each ship's turrets dwell continuously on assigned targets (see
+        _pd_emit_beam): a burst discharges the turret capacitor into a beam
+        reservoir which is emitted at laser power over the following ticks,
+        so delivered energy integrates intensity over the (closing) range
+        profile instead of arriving in fixed-value lumps.
 
-        Turrets coordinate to avoid overkill - spreading fire across targets.
+        Prioritisation: savable torpedoes first (self, then allies - which is
+        what lets a wall of ships concentrate overlapping envelopes on the
+        same inbound torpedo), then unsavable torpedoes, then slugs - and
+        slugs only when no torpedo is inside this ship's envelope at all.
         """
         for ship in self.ships.values():
             if ship.is_destroyed or not ship.point_defense:
@@ -3817,6 +4778,10 @@ class CombatSimulation:
             # Update PD cooldowns
             for pd in ship.point_defense:
                 pd.update(dt)
+
+            # Reset the PD electrical-draw ledger for this tick; the dwell
+            # methods accumulate into it and _update_ship reads it next tick.
+            ship.pd_power_draw_gw = 0.0
 
             # Build prioritized target list for this ship
             targets = self._build_pd_target_list(ship)
@@ -3834,19 +4799,43 @@ class CombatSimulation:
         """
         Build prioritized list of all potential PD targets.
 
+        Torpedo triage: for each torpedo the closed-form dwell integral
+        (PDLaser.energy_before_impact_j) gives the energy ONE turret can still
+        put on it before impact; dividing the remaining seeker-kill threshold
+        by that gives the number of turrets a kill requires. A torpedo is
+        "savable" if that many operational friendly turrets (fleet-wide) have
+        it inside their envelope - which is exactly what makes massed mutual
+        PD support work: a torpedo unkillable by a lone 2-turret hull is
+        savable when three escorts overlap it.
+
+        Slugs are only listed at all when NO torpedo is inside this ship's
+        envelope: vaporising a slug takes 12x-800x the energy of a seeker
+        kill, so dwell spent on a slug while a killable torpedo closes is
+        wasted (see PD_PRIORITY_* comment).
+
         Returns list of dicts with:
-            - target_type: 'torpedo', 'projectile', 'ship'
+            - target_type: 'torpedo', 'projectile'
             - target: The actual target object
             - priority: Priority level (lower = more urgent)
             - distance_km: Distance to target
-            - time_to_impact: Estimated time to impact (if applicable)
-            - heat_to_kill: Estimated heat/damage needed to destroy
+            - time_to_impact: Estimated time to impact on its victim
+            - heat_to_kill: Remaining energy to a seeker kill (torpedoes)
+            - turrets_needed_kill: Turrets required to kill before impact
+            - savable: Whether friendly turrets in range can still kill it
+            - mass_to_kill: Remaining mass to vaporise (slugs)
             - turrets_assigned: Number of turrets already assigned this tick
         """
         targets: list[dict] = []
 
         # Get allied ships for defense calculations
         allied_ships = self.get_friendly_ships(ship.ship_id)
+
+        # Representative laser for this ship's deliverable-energy estimates
+        rep_laser = ship.point_defense[0].laser if ship.point_defense else None
+        own_envelope_km = max(
+            (pd.laser.range_km for pd in ship.point_defense if pd.is_operational),
+            default=0.0,
+        )
 
         # Assess all torpedoes
         for torp_flight in self.torpedoes:
@@ -3878,27 +4867,70 @@ class CombatSimulation:
             if not (threatens_self or target_is_self or threatens_ally):
                 continue
 
-            # Determine priority based on threat level
-            has_delta_v = not torp.fuel_exhausted
-            on_collision = self._on_collision_course(
-                torp.position, torp.velocity, ship.position, ship.velocity
+            # Time to impact on the torpedo's actual victim (us, or the
+            # threatened ally when it is not coming at us).
+            victim = ship if (threatens_self or target_is_self) else allied_target
+            victim_dist_m = torp.position.distance_to(victim.position)
+            victim_closing = self._calculate_closing_speed(
+                torp.position, torp.velocity, victim.position, victim.velocity
             )
-
-            if on_collision:
-                priority = self.PD_PRIORITY_TORPEDO_COLLISION
-            elif has_delta_v:
-                priority = self.PD_PRIORITY_TORPEDO_MANEUVERING
+            if victim_closing > 0:
+                time_to_impact = victim_dist_m / max(victim_closing, 1.0)
             else:
-                priority = self.PD_PRIORITY_ALLIED_DEFENSE
+                time_to_impact = float('inf')
 
-            # Estimate time to impact
-            closing_speed = self._calculate_closing_speed(
-                torp.position, torp.velocity, ship.position, ship.velocity
+            # Energy still needed for a seeker (mission) kill. The structural
+            # 1 GJ threshold is unreachable in practice (~134 full-coupling
+            # bursts) and is NOT what triage should budget for.
+            heat_to_kill = max(
+                0.0,
+                torp_flight.ELECTRONICS_THRESHOLD_J - torp_flight.heat_absorbed_j,
             )
-            time_to_impact = distance_m / max(closing_speed, 1.0) if closing_speed > 0 else float('inf')
 
-            # Estimate heat needed to destroy (100 kJ threshold minus already absorbed)
-            heat_to_kill = max(0, torp_flight.WARHEAD_THRESHOLD_J - torp_flight.heat_absorbed_j)
+            # Savability triage: energy one of our turrets can deliver before
+            # the torpedo impacts. The closure used is the one implied by MY
+            # range and the victim's time-to-impact (exact when I am the
+            # victim; for an escort it approximates the converging geometry).
+            turrets_needed = 1
+            if rep_laser is not None and math.isfinite(time_to_impact):
+                if time_to_impact > 0:
+                    implied_closing_ms = distance_m / time_to_impact
+                    e_per_turret = rep_laser.energy_before_impact_j(
+                        distance_km, implied_closing_ms
+                    )
+                else:
+                    e_per_turret = 0.0
+                if e_per_turret > 0:
+                    turrets_needed = max(
+                        1, math.ceil(heat_to_kill / e_per_turret)
+                    )
+                else:
+                    turrets_needed = 10 ** 6  # no deliverable energy: unkillable
+
+            # Fleet-wide turrets that can still reach this torpedo. This is
+            # what makes "savable" a formation property, not a lone-hull one.
+            friendly_turrets_in_range = 0
+            for friendly in [ship] + allied_ships:
+                if friendly.is_destroyed:
+                    continue
+                f_dist_km = torp.position.distance_to(friendly.position) / 1000
+                friendly_turrets_in_range += sum(
+                    1 for pd in friendly.point_defense
+                    if pd.is_operational and f_dist_km <= pd.laser.range_km
+                )
+
+            savable = turrets_needed <= friendly_turrets_in_range
+
+            if savable and (threatens_self or target_is_self):
+                priority = self.PD_PRIORITY_TORPEDO_SAVABLE_SELF
+            elif savable:
+                priority = self.PD_PRIORITY_TORPEDO_SAVABLE_ALLY
+            else:
+                # Unkillable in the remaining time: engaged only after every
+                # savable torpedo has its turrets - closure estimates are
+                # conservative, so residual dwell still goes here rather
+                # than into slugs.
+                priority = self.PD_PRIORITY_TORPEDO_UNSAVABLE
 
             targets.append({
                 'target_type': 'torpedo',
@@ -3908,9 +4940,22 @@ class CombatSimulation:
                 'distance_km': distance_km,
                 'time_to_impact': time_to_impact,
                 'heat_to_kill': heat_to_kill,
+                'turrets_needed_kill': turrets_needed,
+                'savable': savable,
                 'turrets_assigned': 0,
                 'allied_target': allied_target
             })
+
+        # Slugs are considered ONLY when no torpedo is inside this ship's
+        # engagement envelope. Ablating a slug is near-useless (it must be
+        # fully vaporised to die) while a torpedo seeker kill is cheap, so
+        # any reachable torpedo claims every turret first.
+        torpedo_in_envelope = any(
+            t['distance_km'] <= own_envelope_km for t in targets
+        )
+        if torpedo_in_envelope:
+            targets.sort(key=lambda t: (t['priority'], t['time_to_impact'], t['distance_km']))
+            return targets
 
         # Assess all projectiles (slugs)
         for proj_flight in self.projectiles:
@@ -3940,11 +4985,10 @@ class CombatSimulation:
             if not (on_collision_self or threatens_ally):
                 continue
 
-            # Slugs on intercept are highest priority (fast, hard to track)
             if on_collision_self:
                 priority = self.PD_PRIORITY_SLUG_INTERCEPT
             else:
-                priority = self.PD_PRIORITY_ALLIED_DEFENSE
+                priority = self.PD_PRIORITY_SLUG_ALLY
 
             # Time to impact
             closing_speed = self._calculate_closing_speed(
@@ -3992,7 +5036,9 @@ class CombatSimulation:
             List of (turret, target_info) tuples
         """
         assignments: list[tuple[PDLaserState, Optional[dict]]] = []
-        available_turrets = [pd for pd in ship.point_defense if pd.can_fire()]
+        # A turret can put energy on a target this tick if it is mid-burst
+        # (reservoir energy remaining) or ready to start a new burst.
+        available_turrets = [pd for pd in ship.point_defense if pd.can_dwell()]
         assigned_turrets: set[int] = set()  # Track by index
 
         if not available_turrets or not targets:
@@ -4038,14 +5084,45 @@ class CombatSimulation:
                 target_info['turrets_assigned'] += 1
                 assigned_turrets.add(idx)
 
+        # Second pass: pile leftover turrets onto torpedo targets (in priority
+        # order, round-robin) rather than idling them. The turrets_needed
+        # estimate assumes an unbroken dwell to impact; extra beams buy margin
+        # against the torpedo accelerating or a turret losing its burst.
+        # Leftovers never go to slugs while a torpedo is engaged - a slug must
+        # be fully vaporised to die, so that dwell would be wasted.
+        torpedo_targets = [
+            t for t in targets
+            if t['target_type'] == 'torpedo'
+            and any(pd.laser.is_in_range(t['distance_km']) for pd in available_turrets)
+        ]
+        pile_on = torpedo_targets or [
+            t for t in targets
+            if t['target_type'] == 'projectile'
+            and any(pd.laser.is_in_range(t['distance_km']) for pd in available_turrets)
+        ]
+        if pile_on:
+            cycle = 0
+            for i, pd in enumerate(available_turrets):
+                if i in assigned_turrets:
+                    continue
+                # Find the next pile-on target this turret can actually reach
+                for offset in range(len(pile_on)):
+                    target_info = pile_on[(cycle + offset) % len(pile_on)]
+                    if pd.laser.is_in_range(target_info['distance_km']):
+                        assignments.append((pd, target_info))
+                        target_info['turrets_assigned'] += 1
+                        assigned_turrets.add(i)
+                        cycle += offset + 1
+                        break
+
         # Assign remaining available turrets to None (no target)
         for i, pd in enumerate(available_turrets):
             if i not in assigned_turrets:
                 assignments.append((pd, None))
 
-        # Also include turrets that couldn't fire (on cooldown)
+        # Also include turrets that couldn't fire (mid-cooldown, no reservoir)
         for pd in ship.point_defense:
-            if not pd.can_fire():
+            if not pd.can_dwell():
                 assignments.append((pd, None))
 
         return assignments
@@ -4068,28 +5145,26 @@ class CombatSimulation:
         pd = ship.point_defense[0]
 
         if target_type == 'torpedo':
-            heat_to_kill = target_info.get('heat_to_kill', 100_000)
-            # Heat per turret per second at this range
-            engagement = PDEngagement(pd.laser)
-            heat_per_shot = engagement.calculate_heat_transfer(
-                pd.laser.power_w, distance_km, pd.laser.cooldown_s
-            )
-            shots_to_kill = heat_to_kill / max(heat_per_shot, 1)
-            time_to_kill_one_turret = shots_to_kill * pd.laser.cooldown_s
-
-            # How many turrets to kill before impact?
-            if time_to_impact <= 0:
-                return len(ship.point_defense)
-            turrets_needed = max(1, int(time_to_kill_one_turret / time_to_impact) + 1)
-            return min(turrets_needed, len(ship.point_defense))
+            # Computed by _build_pd_target_list from the closed-form closing
+            # dwell integral against the remaining SEEKER-kill threshold.
+            needed = target_info.get('turrets_needed_kill', 1)
+            return min(max(1, needed), len(ship.point_defense))
 
         elif target_type == 'projectile':
+            # Kill = full vaporisation. Delivered power uses the same optics
+            # model as torpedoes, but coupled through the slug's own tiny
+            # cross-section (a 50 kg steel slug presents ~0.034 m^2, so the
+            # full-coupling range is ~20 km instead of ~110 km).
             mass_to_kill = target_info.get('mass_to_kill', 50.0)
-            # Ablation rate per turret
-            ablation_rate = pd.laser.calculate_ablation_rate(distance_km)
-            ablation_per_shot = ablation_rate * pd.laser.cooldown_s
-            shots_to_kill = mass_to_kill / max(ablation_per_shot, 0.001)
-            time_to_kill_one_turret = shots_to_kill * pd.laser.cooldown_s
+            cross_section_m2 = estimate_cross_section_m2(
+                mass_to_kill, TargetMaterial.STEEL
+            )
+            absorbed_w = pd.laser.delivered_power_on_target_w(
+                distance_km, cross_section_m2
+            )
+            vape_j_per_kg = MATERIAL_VAPORIZATION_ENERGY[TargetMaterial.STEEL] * 1e6
+            ablation_rate = absorbed_w / vape_j_per_kg  # kg/s per turret
+            time_to_kill_one_turret = mass_to_kill / max(ablation_rate, 1e-9)
 
             if time_to_impact <= 0:
                 return len(ship.point_defense)
@@ -4106,13 +5181,291 @@ class CombatSimulation:
         target_info: dict,
         dt: float
     ) -> None:
-        """Execute a PD engagement based on target info."""
+        """Execute a PD engagement based on target info (continuous dwell)."""
         target_type = target_info['target_type']
 
         if target_type == 'torpedo':
-            self._pd_engage_torpedo(ship, pd, target_info['target'], dt)
+            self._pd_dwell_torpedo(ship, pd, target_info['target'], dt)
         elif target_type == 'projectile':
-            self._pd_engage_projectile(ship, pd, target_info['target'], dt)
+            self._pd_dwell_projectile(ship, pd, target_info['target'], dt)
+
+    def _pd_emit_beam(
+        self,
+        ship: ShipCombatState,
+        pd: PDLaserState,
+        dt: float
+    ) -> float:
+        """
+        Advance one turret's beam by one tick and return the beam energy (J)
+        emitted toward its target this tick.
+
+        Burst cycle: starting a burst is gated on the turret capacitor
+        (PowerSystem.can_weapon_fire) and discharges it via fire_weapon(),
+        which routes the conversion waste heat into the ThermalSystem. The
+        discharged energy becomes a beam reservoir of
+        power_w * cooldown_s joules, emitted at power_w over the following
+        ticks - continuous dwell, not an instantaneous lump. The capacitor
+        recharges at capacity/cooldown during the burst, so an amply powered
+        ship sustains a 100% duty cycle; a power-starved one (full-throttle
+        drive plus a drained battery) simply cannot start the next burst.
+
+        Also accumulates the turret's electrical draw into
+        ship.pd_power_draw_gw for the drive-power coupling in _update_ship.
+        """
+        if pd.burst_energy_j <= 0.0:
+            if not pd.can_fire():
+                return 0.0
+            # Power gate: the turret capacitor must be charged (registered
+            # under the turret name at ship creation; True if untracked).
+            if ship.power_system and not ship.power_system.can_weapon_fire(pd.turret_name):
+                return 0.0
+            if not pd.engage():
+                return 0.0
+
+            # Burst reservoir: one cooldown period of beam power. For ticks
+            # longer than the cooldown the reservoir covers the whole tick so
+            # average emitted power stays dt-invariant (the energy books
+            # undercount the extra capacitor discharges in that nonphysical
+            # regime; production ticks are <= 1 s against a 5 s cooldown).
+            self._pd_start_burst(ship, pd, dt)
+
+        emitted_j = min(pd.laser.power_w * dt, pd.burst_energy_j)
+        pd.burst_energy_j -= emitted_j
+
+        # Ledger the electrical draw behind this tick's beam output.
+        if dt > 0:
+            ship.pd_power_draw_gw += (
+                (emitted_j / dt) / PD_WALLPLUG_EFFICIENCY / 1e9
+            )
+        return emitted_j
+
+    def _pd_start_burst(
+        self,
+        ship: ShipCombatState,
+        pd: PDLaserState,
+        dt: float
+    ) -> None:
+        """Discharge the turret capacitor into a new beam reservoir."""
+        burst_beam_j = pd.laser.power_w * max(pd.laser.cooldown_s, dt)
+
+        if ship.power_system:
+            # Capacitors are sized at the ELECTRICAL energy of a burst
+            # (beam / PD_WALLPLUG_EFFICIENCY, see create_ship_from_fleet_data),
+            # so fire_weapon()'s heat - capacity * (1 - efficiency) - is
+            # exactly the burst's true waste heat.
+            heat_gj = ship.power_system.fire_weapon(pd.turret_name)
+            if ship.thermal_system and heat_gj > 0:
+                ship.thermal_system.add_heat("weapons", heat_gj)
+        elif ship.thermal_system:
+            # No power model: keep the thermal budget honest anyway. Waste
+            # heat = electrical - beam = beam * (1 - eta) / eta.
+            waste_heat_gj = (
+                burst_beam_j
+                * (1.0 - PD_WALLPLUG_EFFICIENCY) / PD_WALLPLUG_EFFICIENCY
+                / 1e9
+            )
+            ship.thermal_system.add_heat("weapons", waste_heat_gj)
+
+        pd.burst_energy_j += burst_beam_j
+
+    def _pd_dwell_torpedo(
+        self,
+        ship: ShipCombatState,
+        pd: PDLaserState,
+        torp_flight: TorpedoInFlight,
+        dt: float
+    ) -> None:
+        """
+        Hold one turret's beam on a torpedo for one tick.
+
+        Delivered energy = emitted beam energy x coupling(range) x
+        absorptivity, evaluated at the CURRENT range - so a closing torpedo
+        eats rapidly increasing power as the delivered spot shrinks onto it,
+        and dwell at the edge of the envelope is worth little.
+        """
+        # Idempotency guard: multiple turrets are deliberately assigned to one
+        # torpedo. Once an earlier turret has destroyed it this tick it is
+        # removed from self.torpedoes; without this guard each additional
+        # turret would re-trigger absorb_pd_heat and double-count the kill.
+        if torp_flight not in self.torpedoes:
+            return
+
+        torp = torp_flight.torpedo
+        distance_km = torp.position.distance_to(ship.position) / 1000
+
+        if not pd.laser.is_in_range(distance_km):
+            return
+
+        emitted_j = self._pd_emit_beam(ship, pd, dt)
+        if emitted_j <= 0:
+            return
+
+        heat_delivered = emitted_j * dwell_coupling_fraction(
+            distance_km, TORPEDO_CROSS_SECTION_M2,
+            pd.laser.aperture_m, pd.laser.wavelength_m,
+        ) * PD_ABSORPTIVITY
+
+        # Apply damage to torpedo
+        pd.current_target_id = torp_flight.torpedo_id
+        pd.heat_delivered_j += heat_delivered
+        destroyed = torp_flight.absorb_pd_heat(heat_delivered)
+
+        # Log engagement
+        self._log_event(SimulationEventType.PD_ENGAGED, ship.ship_id, data={
+            'turret': pd.turret_name,
+            'target_type': 'torpedo',
+            'target_id': torp_flight.torpedo_id,
+            'distance_km': distance_km,
+            'heat_delivered_j': heat_delivered,
+            'total_heat_j': torp_flight.heat_absorbed_j
+        })
+
+        self._apply_pd_torpedo_result(ship, pd, torp_flight, destroyed)
+
+    def _apply_pd_torpedo_result(
+        self,
+        ship: ShipCombatState,
+        pd: PDLaserState,
+        torp_flight: TorpedoInFlight,
+        destroyed: bool,
+    ) -> None:
+        """
+        Book the outcome of one turret-tick of PD fire against a torpedo.
+
+        Shared by the continuous-dwell path (_pd_dwell_torpedo) and the legacy
+        one-call burst path (_pd_engage_torpedo). Those two differ ONLY in how
+        much beam energy they deliver; what a delivered joule does to a torpedo
+        must not depend on which caller delivered it, so the bookkeeping lives
+        here once instead of being copy-pasted into both.
+
+        Two distinct outcomes, deliberately NOT merged into one counter:
+
+          destroyed (1 GJ structural)  - the torpedo is gone. Counted in
+            metrics.total_torpedo_intercepted / ship.pd_intercepts.
+          blinded (50 MJ electronics)  - the seeker is dead but the torpedo is
+            not. It keeps its velocity and still hits a target that does not
+            maneuver. Counted in metrics.total_torpedo_seeker_killed /
+            ship.pd_seeker_kills, once per torpedo.
+        """
+        if destroyed:
+            self._log_event(SimulationEventType.PD_TORPEDO_DESTROYED, ship.ship_id, data={
+                'torpedo_id': torp_flight.torpedo_id,
+                'source_ship': torp_flight.source_ship_id,
+                'total_heat_absorbed_j': torp_flight.heat_absorbed_j
+            })
+            self.metrics.total_torpedo_intercepted += 1
+            ship.pd_intercepts += 1
+            pd.reset_target()
+
+            # Remove torpedo from simulation
+            if torp_flight in self.torpedoes:
+                self.torpedoes.remove(torp_flight)
+
+        elif torp_flight.is_disabled and not torp_flight.seeker_kill_logged:
+            torp_flight.seeker_kill_logged = True
+            self._log_event(SimulationEventType.PD_TORPEDO_DISABLED, ship.ship_id, data={
+                'torpedo_id': torp_flight.torpedo_id,
+                'source_ship': torp_flight.source_ship_id
+            })
+            self.metrics.total_torpedo_seeker_killed += 1
+            ship.pd_seeker_kills += 1
+
+    def _pd_dwell_projectile(
+        self,
+        ship: ShipCombatState,
+        pd: PDLaserState,
+        proj_flight: ProjectileInFlight,
+        dt: float
+    ) -> None:
+        """
+        Hold one turret's beam on a kinetic slug for one tick.
+
+        Ablation couples through the slug's own cross-section (far smaller
+        than a torpedo's), so slugs are only meaningfully damaged at short
+        range - and even then, a kill requires vaporising the entire mass.
+        Only reached when no torpedo is in the envelope.
+        """
+        # Idempotency guard (see _pd_dwell_torpedo)
+        if proj_flight not in self.projectiles:
+            return
+
+        proj = proj_flight.projectile
+        distance_km = proj.position.distance_to(ship.position) / 1000
+
+        if not pd.laser.is_in_range(distance_km):
+            return
+
+        emitted_j = self._pd_emit_beam(ship, pd, dt)
+        if emitted_j <= 0:
+            return
+
+        slug_mass_kg = getattr(proj, 'mass_kg', 50.0)
+        already_ablated = getattr(proj, '_pd_ablation', 0.0)
+        cross_section_m2 = estimate_cross_section_m2(
+            max(slug_mass_kg - already_ablated, 0.0), TargetMaterial.STEEL
+        )
+        absorbed_j = emitted_j * dwell_coupling_fraction(
+            distance_km, cross_section_m2,
+            pd.laser.aperture_m, pd.laser.wavelength_m,
+        ) * PD_ABSORPTIVITY
+        vape_j_per_kg = MATERIAL_VAPORIZATION_ENERGY[TargetMaterial.STEEL] * 1e6
+        mass_ablated = absorbed_j / vape_j_per_kg
+
+        # Track cumulative damage to this projectile
+        if not hasattr(proj, '_pd_ablation'):
+            proj._pd_ablation = 0.0
+        proj._pd_ablation += mass_ablated
+        pd.current_target_id = proj_flight.projectile_id
+
+        # Ablation recoil (laser-ablation propulsion): the vapor plume leaves
+        # the illuminated face back toward the turret, so the reaction pushes
+        # the slug AWAY from the shooter along the beam axis:
+        #     dv = m_ablated * v_exhaust / m_remaining.
+        # Emergent geometry: defending your OWN hull the beam is nearly
+        # anti-parallel to the slug's velocity, so this is almost pure
+        # deceleration (damage mitigation - impact KE drops with both the
+        # ablated mass and v^2). Defending a CONSORT the beam is oblique, so
+        # a large component is LATERAL - the round is deflected and can be
+        # made to miss the neighbour outright without being destroyed.
+        remaining_mass_kg = max(slug_mass_kg - proj._pd_ablation, 0.1)
+        recoil_dv_ms = 0.0
+        if mass_ablated > 0.0:
+            beam_axis = proj.position - ship.position
+            if beam_axis.magnitude > 1e-9:
+                recoil_dv_ms = (
+                    PD_ABLATION_EXHAUST_VELOCITY_MS * mass_ablated
+                    / remaining_mass_kg
+                )
+                proj.velocity = (
+                    proj.velocity + beam_axis.normalized() * recoil_dv_ms
+                )
+
+        # Log engagement
+        self._log_event(SimulationEventType.PD_ENGAGED, ship.ship_id, data={
+            'turret': pd.turret_name,
+            'target_type': 'slug',
+            'target_id': proj_flight.projectile_id,
+            'distance_km': distance_km,
+            'mass_ablated_kg': mass_ablated,
+            'total_ablated_kg': proj._pd_ablation,
+            'recoil_dv_ms': recoil_dv_ms
+        })
+
+        if proj._pd_ablation >= slug_mass_kg:
+            self._log_event(SimulationEventType.PD_SLUG_DESTROYED, ship.ship_id, data={
+                'projectile_id': proj_flight.projectile_id,
+                'source_ship': proj_flight.source_ship_id
+            })
+            ship.pd_intercepts += 1
+
+            # Remove projectile from simulation
+            if proj_flight in self.projectiles:
+                self.projectiles.remove(proj_flight)
+        else:
+            self._log_event(SimulationEventType.PD_SLUG_DAMAGED, ship.ship_id, data={
+                'projectile_id': proj_flight.projectile_id,
+                'remaining_mass_kg': slug_mass_kg - proj._pd_ablation
+            })
 
     def _threatens_ship(
         self,
@@ -4193,7 +5546,14 @@ class CombatSimulation:
         torp_flight: TorpedoInFlight,
         dt: float
     ) -> None:
-        """Engage a torpedo with point defense laser."""
+        """
+        Engage a torpedo with a single discrete PD burst (legacy path).
+
+        The battle loop now dwells continuously via _pd_dwell_torpedo; this
+        method is kept as the one-call burst API (delivers max(cooldown, dt)
+        seconds of beam in a lump at the current range) for callers that
+        drive a single engagement directly.
+        """
         # Idempotency guard: _coordinate_pd_turrets deliberately assigns
         # multiple turrets to one torpedo. Once an earlier turret has destroyed
         # it this tick it is removed from self.torpedoes; without this guard
@@ -4249,26 +5609,7 @@ class CombatSimulation:
             'total_heat_j': torp_flight.heat_absorbed_j
         })
 
-        # Check results
-        if destroyed:
-            self._log_event(SimulationEventType.PD_TORPEDO_DESTROYED, ship.ship_id, data={
-                'torpedo_id': torp_flight.torpedo_id,
-                'source_ship': torp_flight.source_ship_id,
-                'total_heat_absorbed_j': torp_flight.heat_absorbed_j
-            })
-            self.metrics.total_torpedo_intercepted += 1
-            ship.pd_intercepts += 1
-            pd.reset_target()
-
-            # Remove torpedo from simulation
-            if torp_flight in self.torpedoes:
-                self.torpedoes.remove(torp_flight)
-
-        elif torp_flight.is_disabled:
-            self._log_event(SimulationEventType.PD_TORPEDO_DISABLED, ship.ship_id, data={
-                'torpedo_id': torp_flight.torpedo_id,
-                'source_ship': torp_flight.source_ship_id
-            })
+        self._apply_pd_torpedo_result(ship, pd, torp_flight, destroyed)
 
     def _pd_engage_projectile(
         self,
@@ -4278,7 +5619,8 @@ class CombatSimulation:
         dt: float
     ) -> None:
         """
-        Engage a kinetic projectile with point defense laser.
+        Engage a kinetic projectile with a single discrete PD burst (legacy
+        path - the battle loop now uses _pd_dwell_projectile).
 
         Note: Projectiles are harder to destroy than torpedoes - need sustained
         ablation to vaporize the slug.
@@ -5073,8 +6415,18 @@ def create_ship_from_fleet_data(
     # Also check weapon_types for PD specs
     pd_specs = weapon_types.get("pd_laser", {})
 
+    _seen_turret_names: set = set()
     for i, pd_info in enumerate(pd_data):
-        turret_name = pd_info.get("name", f"PD-{i+1}")
+        # Turret names must be UNIQUE per hull: the power system keys weapon
+        # capacitors by this name, so two turrets sharing a display name
+        # ("PD Laser Turret" x2 on every multi-turret hull) silently shared
+        # one capacitor - the second turret found it discharged and never
+        # fired, halving (or worse) every ship's actual PD output. Prefer the
+        # fleet-data slot id (pd_0, pd_1, ...), then dedupe display names.
+        turret_name = pd_info.get("slot") or pd_info.get("name", f"PD-{i+1}")
+        if turret_name in _seen_turret_names:
+            turret_name = f"{turret_name}-{i+1}"
+        _seen_turret_names.add(turret_name)
         pd_laser = PDLaser(
             # The fleet JSON key is 'power_draw_mw'; accept it (and the legacy
             # 'power_mw') so editing the data actually changes PD laser power
@@ -5149,11 +6501,19 @@ def create_ship_from_fleet_data(
                 "power_draw_mw": getattr(weapon_state.weapon, 'power_draw_mw', 5.0)
             }
             power_system.add_weapon_capacitor(slot_name, weapon_data)
-        # Add capacitors for PD lasers
+        # Add capacitors for PD lasers, sized at the ELECTRICAL energy of one
+        # burst: beam power / wall-plug efficiency (25% -> a 5 MW beam draws
+        # 20 MW from the bus). Two consequences, both deliberate:
+        #   - fire_weapon()'s heat, capacity * (1 - efficiency), equals the
+        #     burst's true waste heat (electrical minus beam), closing the
+        #     energy budget instead of undercounting it 4x;
+        #   - the charge rate (capacity / cooldown) is the turret's real
+        #     sustained draw, which at full drive throttle must come from the
+        #     battery - so firing hard while burning hard drains it.
         for pd_state in point_defense:
             pd_data = {
                 "type": "point_defense",
-                "power_draw_mw": pd_state.laser.power_mw,
+                "power_draw_mw": pd_state.laser.power_mw / PD_WALLPLUG_EFFICIENCY,
                 "cooldown_s": pd_state.laser.cooldown_s
             }
             power_system.add_weapon_capacitor(pd_state.turret_name, pd_data)

@@ -69,6 +69,35 @@ PD_ABSORPTIVITY = 0.3
 # what makes point defense range-dependent at all.
 PD_POINTING_JITTER_RAD = 5.0e-6
 
+# Wall-plug efficiency of the PD laser: electrical power in -> beam power out.
+# This is the same figure as power.LASER_WEAPON_EFFICIENCY (Terra Invicta PD
+# laser efficiency); it lives here too so the beam model can state the full
+# energy budget without importing the power module. Sustaining a beam of power
+# P_beam draws P_beam / PD_WALLPLUG_EFFICIENCY from the ship's bus and rejects
+# the difference, P_beam * (1 - eta) / eta = 3 x P_beam, as waste heat inside
+# the hull. This is what couples sustained point defense fire to the ship's
+# power and thermal budgets.
+PD_WALLPLUG_EFFICIENCY = 0.25
+
+# Bulk velocity of the ablation plume leaving a laser-heated metal surface.
+# Laser-ablation propulsion measurements on metals put plume velocities at
+# ~1-10 km/s depending on irradiance (thermal vapor at steel's ~3100 K boiling
+# point has a ~1.2 km/s mean thermal speed; gasdynamic expansion of the plume
+# accelerates the bulk flow to a few km/s at the MW/m^2-class intensities a PD
+# laser delivers in-envelope). 3 km/s is the mid-range figure - chosen from
+# the physics, not from a damage target. The plume leaves the ILLUMINATED
+# face, i.e. back toward the turret, so momentum conservation pushes the slug
+# away from the shooter along the beam axis:
+#     dv = m_ablated * v_exhaust / m_remaining
+PD_ABLATION_EXHAUST_VELOCITY_MS = 3000.0
+
+# Cross-section a torpedo presents to the beam. A Trident-class torpedo is
+# ~3.6 t: a ~0.6-0.8 m diameter body several metres long. Nose-on it presents
+# ~0.3-0.5 m^2, broadside several m^2; the beam sees a mix of aspects as the
+# torpedo manoeuvres, so 1 m^2 is the order-of-magnitude presented area. This
+# was previously a bare literal inside calculate_heat_transfer.
+TORPEDO_CROSS_SECTION_M2 = 1.0
+
 
 def estimate_cross_section_m2(
     mass_kg: float,
@@ -94,6 +123,197 @@ def estimate_cross_section_m2(
     density = MATERIAL_DENSITY_KG_M3.get(material, 7850.0)
     side_m = (mass_kg / density) ** (1.0 / 3.0)
     return side_m * side_m
+
+
+# =============================================================================
+# CONTINUOUS-DWELL BEAM MODEL
+# =============================================================================
+# The redesigned point defense treats the laser as a continuous beam held on
+# the target, not as discrete fixed-value shots. Energy on target is
+#
+#     E = P_beam * coupling(range) * absorptivity * dwell_time
+#
+# where coupling(range) is the fraction of the beam that actually lands on the
+# target. The delivered spot has two physically distinct contributions, added
+# in quadrature (they are independent Gaussian-ish angular errors):
+#
+#   - diffraction: the beam diverges at a half-angle of ~lambda/(2*D)
+#     (first-order approximation, same form as PDLaser.calculate_spot_size);
+#     for a 1 um beam from a 0.5 m aperture this is 1 urad.
+#   - pointing jitter: the turret cannot hold the line of sight steadier than
+#     PD_POINTING_JITTER_RAD (5 urad) against a manoeuvring km/s target.
+#
+# Both grow linearly with range, so the spot AREA grows as range^2 and the
+# delivered intensity falls as 1/range^2 once the spot outgrows the target -
+# "optics are optics". Inside the full-coupling range the whole beam lands on
+# the target and closing further gains nothing; outside it, closing range
+# improves lethality quadratically. Dwell time is the currency: nothing about
+# a "shot" is special, only integrated beam-seconds on target.
+
+def _effective_beam_angle_rad(
+    aperture_m: float,
+    wavelength_m: float,
+    jitter_rad: float = PD_POINTING_JITTER_RAD,
+) -> float:
+    """
+    Effective angular radius of the delivered spot per metre of range.
+
+    Quadrature sum of the diffraction half-angle lambda/(2*D) and the pointing
+    jitter. Multiplying by range gives the delivered spot radius.
+    """
+    diffraction_half_angle = wavelength_m / (2.0 * aperture_m)
+    return math.hypot(diffraction_half_angle, jitter_rad)
+
+
+def delivered_spot_area_m2(
+    distance_km: float,
+    aperture_m: float = 0.5,
+    wavelength_m: float = 1.0e-6,
+    jitter_rad: float = PD_POINTING_JITTER_RAD,
+) -> float:
+    """Area of the delivered (diffraction + jitter) spot at a given range."""
+    radius_m = (
+        _effective_beam_angle_rad(aperture_m, wavelength_m, jitter_rad)
+        * distance_km * 1000.0
+    )
+    return PI * radius_m * radius_m
+
+
+def dwell_coupling_fraction(
+    distance_km: float,
+    target_cross_section_m2: float = TORPEDO_CROSS_SECTION_M2,
+    aperture_m: float = 0.5,
+    wavelength_m: float = 1.0e-6,
+    jitter_rad: float = PD_POINTING_JITTER_RAD,
+) -> float:
+    """
+    Fraction of emitted beam power that lands on the target.
+
+    1.0 while the delivered spot is smaller than the target; beyond that only
+    the illuminated fraction target_area / spot_area couples in and the rest
+    streams past. This, together with absorptivity, is the entire
+    range-dependence of the dwell model - no tuned falloff curve.
+    """
+    if target_cross_section_m2 <= 0.0 or distance_km < 0.0:
+        return 0.0
+    spot_area = delivered_spot_area_m2(
+        distance_km, aperture_m, wavelength_m, jitter_rad
+    )
+    if spot_area <= target_cross_section_m2:
+        return 1.0
+    return target_cross_section_m2 / spot_area
+
+
+def delivered_power_w(
+    power_w: float,
+    distance_km: float,
+    target_cross_section_m2: float = TORPEDO_CROSS_SECTION_M2,
+    aperture_m: float = 0.5,
+    wavelength_m: float = 1.0e-6,
+    jitter_rad: float = PD_POINTING_JITTER_RAD,
+    absorptivity: float = PD_ABSORPTIVITY,
+) -> float:
+    """Absorbed power on target: P * coupling(range) * absorptivity."""
+    return (
+        power_w
+        * dwell_coupling_fraction(
+            distance_km, target_cross_section_m2,
+            aperture_m, wavelength_m, jitter_rad,
+        )
+        * absorptivity
+    )
+
+
+def dwell_energy_j(
+    power_w: float,
+    distance_km: float,
+    dwell_s: float,
+    target_cross_section_m2: float = TORPEDO_CROSS_SECTION_M2,
+    aperture_m: float = 0.5,
+    wavelength_m: float = 1.0e-6,
+    jitter_rad: float = PD_POINTING_JITTER_RAD,
+    absorptivity: float = PD_ABSORPTIVITY,
+) -> float:
+    """Energy absorbed by the target over a dwell at (fixed) range."""
+    if dwell_s <= 0.0:
+        return 0.0
+    return delivered_power_w(
+        power_w, distance_km, target_cross_section_m2,
+        aperture_m, wavelength_m, jitter_rad, absorptivity,
+    ) * dwell_s
+
+
+def full_coupling_range_m(
+    target_cross_section_m2: float = TORPEDO_CROSS_SECTION_M2,
+    aperture_m: float = 0.5,
+    wavelength_m: float = 1.0e-6,
+    jitter_rad: float = PD_POINTING_JITTER_RAD,
+) -> float:
+    """
+    Range inside which the whole beam lands on the target (coupling = 1).
+
+    Solves pi * (theta_eff * r)^2 = A_target  ->  r = sqrt(A/pi) / theta_eff.
+    For a 1 m^2 torpedo and the default optics this is ~110 km.
+    """
+    theta = _effective_beam_angle_rad(aperture_m, wavelength_m, jitter_rad)
+    if theta <= 0.0:
+        return float('inf')
+    return math.sqrt(max(target_cross_section_m2, 0.0) / PI) / theta
+
+
+def energy_before_impact_j(
+    power_w: float,
+    range_km: float,
+    closing_speed_ms: float,
+    max_range_km: Optional[float] = None,
+    target_cross_section_m2: float = TORPEDO_CROSS_SECTION_M2,
+    aperture_m: float = 0.5,
+    wavelength_m: float = 1.0e-6,
+    jitter_rad: float = PD_POINTING_JITTER_RAD,
+    absorptivity: float = PD_ABSORPTIVITY,
+) -> float:
+    """
+    Closed-form energy one beam can put on a target closing from range r0 to
+    impact (range 0) at constant closing speed v, with continuous dwell.
+
+    Derivation (exact, no fit): with r(t) = r0 - v*t and coupling
+    c(r) = min(1, (r_f / r)^2) where r_f is the full-coupling range,
+
+        E = integral P*a*c(r(t)) dt = (P*a/v) * integral_0^r0 c(r) dr
+
+        integral_0^r0 c(r) dr = r0                          if r0 <= r_f
+                              = 2*r_f - r_f^2 / r0          if r0 >  r_f
+        (r_f from the inner region plus r_f^2*(1/r_f - 1/r0) from the tail).
+
+    This is the "savability" criterion for triage: if N turrets cannot reach
+    the kill threshold with E * N, the torpedo cannot be stopped from here no
+    matter how the dwell is scheduled.
+
+    Args:
+        power_w: Emitted beam power (W).
+        range_km: Current range to the target (km).
+        closing_speed_ms: Closing speed (m/s). Non-positive means the target
+            is not closing; the beam can dwell indefinitely -> inf.
+        max_range_km: Engagement envelope; dwell only accumulates inside it.
+
+    Returns:
+        Absorbed energy in joules (inf if the target never impacts).
+    """
+    if closing_speed_ms <= 0.0:
+        return float('inf')
+    r0_m = range_km * 1000.0
+    if max_range_km is not None:
+        r0_m = min(r0_m, max_range_km * 1000.0)
+    if r0_m <= 0.0:
+        return 0.0
+    r_full_m = full_coupling_range_m(
+        target_cross_section_m2, aperture_m, wavelength_m, jitter_rad
+    )
+    if r0_m <= r_full_m:
+        coupling_integral_m = r0_m
+    else:
+        coupling_integral_m = 2.0 * r_full_m - (r_full_m * r_full_m) / r0_m
+    return power_w * absorptivity * coupling_integral_m / closing_speed_ms
 
 
 @dataclass
@@ -355,6 +575,61 @@ class PDLaser:
         # Each shot is one cooldown period of firing
         shots = math.ceil(time_to_destroy / self.cooldown_s)
         return max(1, shots)
+
+    # -------------------------------------------------------------------------
+    # Continuous-dwell model (module-level functions bound to this laser's
+    # optics; see the CONTINUOUS-DWELL BEAM MODEL section above).
+    # -------------------------------------------------------------------------
+
+    def delivered_power_on_target_w(
+        self,
+        distance_km: float,
+        target_cross_section_m2: float = TORPEDO_CROSS_SECTION_M2,
+    ) -> float:
+        """Absorbed power on target at range, from this laser's optics."""
+        return delivered_power_w(
+            self.power_w, distance_km, target_cross_section_m2,
+            self.aperture_m, self.wavelength_m,
+        )
+
+    def dwell_energy_on_target_j(
+        self,
+        distance_km: float,
+        dwell_s: float,
+        target_cross_section_m2: float = TORPEDO_CROSS_SECTION_M2,
+    ) -> float:
+        """Absorbed energy for a dwell at fixed range, from this laser."""
+        return dwell_energy_j(
+            self.power_w, distance_km, dwell_s, target_cross_section_m2,
+            self.aperture_m, self.wavelength_m,
+        )
+
+    def energy_before_impact_j(
+        self,
+        range_km: float,
+        closing_speed_ms: float,
+        target_cross_section_m2: float = TORPEDO_CROSS_SECTION_M2,
+    ) -> float:
+        """
+        Max energy this laser can absorb into a target closing from range_km
+        at constant closing speed, dwelling continuously until impact.
+        Clipped to this laser's engagement envelope.
+        """
+        return energy_before_impact_j(
+            self.power_w, range_km, closing_speed_ms,
+            max_range_km=self.range_km,
+            target_cross_section_m2=target_cross_section_m2,
+            aperture_m=self.aperture_m,
+            wavelength_m=self.wavelength_m,
+        )
+
+    def electrical_draw_w(self) -> float:
+        """Bus power drawn while the beam is on (beam power / wall-plug eff)."""
+        return self.power_w / PD_WALLPLUG_EFFICIENCY
+
+    def waste_heat_w(self) -> float:
+        """Heat rejected into the hull while the beam is on."""
+        return self.electrical_draw_w() - self.power_w
 
 
 @dataclass
@@ -744,36 +1019,18 @@ class PDEngagement:
         Returns:
             Heat energy in joules.
         """
-        # At the target, all power is absorbed for the exposure duration
-        # Energy = Power * Time
-        # But intensity drops with distance (spot spreads)
-        # We use a coupling efficiency based on spot vs target size
-
-        # For missiles/torpedoes, assume target absorbs all energy in spot
-        # since they're smaller than typical spot sizes
-        import math
-
-        # Diffraction-limited spot, widened by pointing jitter (added in
-        # quadrature). Without the jitter term the delivered spot never exceeds
-        # 1 m^2 anywhere in the envelope, which made PD effectiveness completely
-        # independent of range.
-        diffraction_area = self.laser.calculate_spot_area(distance_km)
-        diffraction_radius_m = math.sqrt(max(diffraction_area, 0.0) / math.pi)
-        jitter_radius_m = PD_POINTING_JITTER_RAD * distance_km * 1000.0
-        spot_radius_m = math.hypot(diffraction_radius_m, jitter_radius_m)
-        spot_area = math.pi * spot_radius_m ** 2
-
-        # Assume torpedo cross-section ~1 m^2
-        torpedo_cross_section = 1.0  # m^2
-
-        if spot_area <= torpedo_cross_section:
-            # Spot smaller than target - all energy lands on it
-            effective_power = power_w
-        else:
-            # Spot larger than target - only the illuminated fraction couples
-            effective_power = power_w * (torpedo_cross_section / spot_area)
-
-        return effective_power * exposure_time_s * PD_ABSORPTIVITY
+        # Delegates to the continuous-dwell model: delivered spot is the
+        # diffraction-limited spot widened by pointing jitter (in quadrature),
+        # coupling is target_area / spot_area once the spot outgrows the
+        # torpedo, and only PD_ABSORPTIVITY of what lands is absorbed. This
+        # method predates the dwell model but computes the identical quantity
+        # (a dwell of exposure_time_s at fixed range), so it shares the code.
+        return dwell_energy_j(
+            power_w, distance_km, exposure_time_s,
+            target_cross_section_m2=TORPEDO_CROSS_SECTION_M2,
+            aperture_m=self.laser.aperture_m,
+            wavelength_m=self.laser.wavelength_m,
+        )
 
     def can_damage_ship_armor(
         self,

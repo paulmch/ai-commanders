@@ -5,6 +5,7 @@ Makes strategic decisions via tool/function calling.
 """
 
 import json
+import math
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 
@@ -730,35 +731,18 @@ class LLMCaptain:
         tactical_status: Dict[str, Any],
     ) -> str:
         """
-        Render inbound torpedoes and this ship's own torpedo magazine.
+        Render this ship's own torpedo magazine.
 
-        Returns "" when there is nothing to say (no launcher and no threats), so
-        ships without torpedo capability do not carry a dead section.
+        Inbound threats are rendered once, in the turn state, by
+        prompts.format_torpedo_threats - this section used to duplicate them.
+        Returns "" for hulls without launchers so gun ships carry no dead text.
         """
-        lines: List[str] = []
-
-        threats = tactical_status.get("torpedo_threats") or []
-        if threats:
-            lines.append("INCOMING TORPEDOES:")
-            for t in threats:
-                eta = t.get("eta_seconds", 999)
-                eta_txt = f"{eta:.0f}s" if eta < 999 else "not closing"
-                lines.append(
-                    f"  - From {t.get('source', 'Unknown')}: "
-                    f"{t.get('distance_km', 0):.0f}km, "
-                    f"closing {t.get('closing_kps', 0):.1f} km/s, impact in {eta_txt}"
-                )
-            lines.append(
-                "  Point defense engages automatically in range; consider evasive maneuver."
-            )
-
         remaining = ship_status.get("torpedoes_remaining")
-        if remaining is not None:
-            capacity = ship_status.get("torpedo_capacity")
-            cap_txt = f"/{capacity}" if capacity else ""
-            lines.append(f"YOUR TORPEDOES REMAINING: {remaining}{cap_txt}")
-
-        return "\n".join(lines)
+        if remaining is None:
+            return ""
+        capacity = ship_status.get("torpedo_capacity")
+        cap_txt = f"/{capacity}" if capacity else ""
+        return f"YOUR TORPEDOES REMAINING: {remaining}{cap_txt}"
 
     def set_primary_target(self, target_id: Optional[str]) -> None:
         """Set the primary target for this captain."""
@@ -914,16 +898,39 @@ class LLMCaptain:
         # Torpedo magazine. The launch_torpedo tool warns "Limited ammunition!"
         # but the remaining count was never disclosed anywhere, so the captain had
         # no way to know when the magazine was empty.
-        # NOTE: the field on TorpedoLauncher is `current_magazine`; there is no
-        # `torpedoes_remaining` attribute, so reading that name alone yields None
-        # and the count silently disappears again.
-        launcher = getattr(ship, 'torpedo_launcher', None)
-        if launcher is not None:
-            remaining = getattr(launcher, 'current_magazine', None)
-            if remaining is None:
-                remaining = getattr(launcher, 'torpedoes_remaining', None)
-            status["torpedoes_remaining"] = remaining
-            status["torpedo_capacity"] = getattr(launcher, 'magazine_capacity', None)
+        # NOTE: sum across ALL launchers - reading only ship.torpedo_launcher
+        # under-reported a 4-launcher torpedo cruiser's magazine by 4x.
+        launchers = getattr(ship, 'ready_torpedo_launchers', None)
+        if not isinstance(launchers, (list, tuple)) or not launchers:
+            single = getattr(ship, 'torpedo_launcher', None)
+            launchers = [single] if single is not None else []
+        def _launcher_count(launcher, *attrs) -> Optional[int]:
+            for attr in attrs:
+                value = getattr(launcher, attr, None)
+                if isinstance(value, (int, float)):
+                    return int(value)
+            return None
+
+        if launchers:
+            per_launcher = [
+                _launcher_count(l, 'current_magazine', 'torpedoes_remaining')
+                for l in launchers
+            ]
+            capacities = [_launcher_count(l, 'magazine_capacity')
+                          for l in launchers]
+            if any(v is not None for v in per_launcher):
+                status["torpedoes_remaining"] = sum(v or 0 for v in per_launcher)
+                capacity = sum(v or 0 for v in capacities)
+                status["torpedo_capacity"] = capacity or None
+
+        # Point defense turret state for the status display. PD is automatic,
+        # but the captain must know how much blinding capacity is left.
+        pd_list = getattr(ship, 'point_defense', None)
+        if isinstance(pd_list, (list, tuple)):
+            status["pd_turrets_total"] = len(pd_list)
+            status["pd_turrets_operational"] = sum(
+                1 for pd in pd_list if getattr(pd, 'is_operational', True)
+            )
 
         # Module damage status
         module_status = {}
@@ -1333,31 +1340,104 @@ class LLMCaptain:
         incoming_projectiles.sort(key=lambda p: p["eta_seconds"])
         status["incoming_projectiles"] = incoming_projectiles[:5]  # Limit to 5
 
-        # Check for incoming torpedoes
+        # Check for incoming torpedoes. GUIDED threats get the engine's own
+        # threat evaluation (NEZ, projected impact energy, terminal flag) via
+        # _gather_guided_torpedo_threats (read-only: latch_commit=False), plus
+        # a PD triage: how many turrets a seeker kill needs before impact vs
+        # how many this ship has. BLINDED torpedoes coasting at us are listed
+        # too - they are ballistic and still hit a non-maneuvering ship.
         torpedo_threats = []
+        _pd_list = getattr(ship, 'point_defense', None)
+        if not isinstance(_pd_list, (list, tuple)):
+            _pd_list = []
+        own_pd = [pd for pd in _pd_list if getattr(pd, 'is_operational', True)]
+        rep_laser = own_pd[0].laser if own_pd else None
+
+        def _pd_triage(torp_flight, dist_km, closing_ms):
+            """Turrets needed to seeker-kill this torpedo before impact."""
+            if rep_laser is None or closing_ms <= 0:
+                return None
+            try:
+                e = rep_laser.energy_before_impact_j(dist_km, closing_ms)
+                heat_to_kill = max(
+                    0.0,
+                    torp_flight.ELECTRONICS_THRESHOLD_J
+                    - torp_flight.heat_absorbed_j,
+                )
+                if e <= 0:
+                    return 99
+                return max(1, math.ceil(heat_to_kill / e))
+            except (AttributeError, TypeError):
+                return None
+
+        gathered = None
+        if hasattr(simulation, '_gather_guided_torpedo_threats'):
+            try:
+                gathered = simulation._gather_guided_torpedo_threats(
+                    ship, latch_commit=False)
+            except (TypeError, AttributeError):
+                gathered = None
+
+        if gathered is not None:
+            for t in gathered:
+                tf = t['torp_flight']
+                closing_ms = (t['distance_m'] / t['t_go']
+                              if t['t_go'] not in (0, float('inf')) else 0.0)
+                source_id = getattr(tf, 'source_ship_id', 'Unknown')
+                source_ship = simulation.get_ship(source_id) if source_id else None
+                source_name = (getattr(source_ship, 'name', source_id)
+                               if source_ship else source_id)
+                torpedo_threats.append({
+                    "distance_km": t['distance_m'] / 1000,
+                    "closing_kps": closing_ms / 1000,
+                    "eta_seconds": t['t_go'] if t['t_go'] != float('inf') else 999,
+                    "source": source_name,
+                    "est_impact_gj": t['ke_gj'],
+                    "nez_inside": t['nez'].inside,
+                    "terminal": t['terminal'],
+                    "blinded": False,
+                    "pd_turrets_needed": _pd_triage(
+                        tf, t['distance_m'] / 1000, closing_ms),
+                    "own_pd_turrets": len(own_pd),
+                })
+
         if hasattr(simulation, 'torpedoes') and simulation.torpedoes:
             for torp_flight in simulation.torpedoes:
                 torp = torp_flight.torpedo
-                if torp.target_id == ship.ship_id and not torp_flight.is_disabled:
-                    offset = ship.position - torp.position
-                    dist_m = offset.magnitude
-                    if dist_m > 0:
-                        closing_ms = (torp.velocity - ship.velocity).dot(offset.normalized())
-                    else:
-                        closing_ms = 0.0
-                    eta_s = dist_m / closing_ms if closing_ms > 0 else 999
+                is_blinded = getattr(torp_flight, 'is_disabled', False)
+                if gathered is not None and not is_blinded:
+                    continue  # live threats already covered above
+                if not is_blinded and torp.target_id != ship.ship_id:
+                    continue
+                offset = ship.position - torp.position
+                dist_m = offset.magnitude
+                if dist_m > 0:
+                    closing_ms = (torp.velocity - ship.velocity).dot(offset.normalized())
+                else:
+                    closing_ms = 0.0
+                if is_blinded and (closing_ms <= 0 or dist_m > 500_000):
+                    continue  # a receding or distant wreck is not a threat
+                eta_s = dist_m / closing_ms if closing_ms > 0 else 999
 
-                    source_id = getattr(torp_flight, 'source_ship_id', None) or getattr(
-                        torp, 'source_ship_id', 'Unknown')
-                    source_ship = simulation.get_ship(source_id) if source_id else None
-                    source_name = getattr(source_ship, 'name', source_id) if source_ship else source_id
+                source_id = getattr(torp_flight, 'source_ship_id', None) or getattr(
+                    torp, 'source_ship_id', 'Unknown')
+                source_ship = simulation.get_ship(source_id) if source_id else None
+                source_name = getattr(source_ship, 'name', source_id) if source_ship else source_id
 
-                    torpedo_threats.append({
-                        "distance_km": dist_m / 1000,
-                        "closing_kps": closing_ms / 1000,
-                        "eta_seconds": eta_s,
-                        "source": source_name,
-                    })
+                threat = {
+                    "distance_km": dist_m / 1000,
+                    "closing_kps": closing_ms / 1000,
+                    "eta_seconds": eta_s,
+                    "source": source_name,
+                    "blinded": is_blinded,
+                }
+                if is_blinded:
+                    specs = getattr(torp, 'specs', None)
+                    if specs is not None and closing_ms > 0:
+                        threat["est_impact_gj"] = (
+                            0.5 * specs.penetrator_mass_kg * closing_ms ** 2 / 1e9
+                        )
+                torpedo_threats.append(threat)
         torpedo_threats.sort(key=lambda t: t["eta_seconds"])
         status["torpedo_threats"] = torpedo_threats
 

@@ -210,15 +210,27 @@ class TestTorpedoDisclosure:
         assert str(ship.torpedo_launcher.current_magazine) in text
 
     def test_inbound_torpedo_is_rendered_with_eta(self):
-        captain = make_captain()
-        tactical = {"torpedo_threats": [
+        # Threats are rendered ONCE, in the turn state, by
+        # prompts.format_torpedo_threats; _format_torpedo_section used to
+        # duplicate the list and now carries only the magazine line.
+        from src.llm.prompts import format_torpedo_threats
+
+        text = format_torpedo_threats([
             {"source": "Determination", "distance_km": 120.0,
              "closing_kps": 3.0, "eta_seconds": 40.0},
-        ]}
-        text = captain._format_torpedo_section({}, tactical)
-        assert "INCOMING TORPEDOES" in text
+        ])
+        assert "INBOUND ORDNANCE" in text
         assert "Determination" in text
         assert "40s" in text
+
+        captain = make_captain()
+        section = captain._format_torpedo_section({}, {"torpedo_threats": [
+            {"source": "Determination", "distance_km": 120.0,
+             "closing_kps": 3.0, "eta_seconds": 40.0},
+        ]})
+        assert "Determination" not in section, (
+            "threat list is duplicated outside the turn-state renderer again"
+        )
 
     def test_no_torpedo_section_when_nothing_to_report(self):
         captain = make_captain()

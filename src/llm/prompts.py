@@ -8,6 +8,58 @@ ship capabilities, and personality modifiers.
 from typing import Dict, Any, Optional, List
 from enum import Enum
 
+try:
+    from ..pointdefense import (
+        PDLaser,
+        PD_ABSORPTIVITY,
+        TORPEDO_ELECTRONICS_THRESHOLD_J,
+        full_coupling_range_m,
+    )
+except ImportError:  # pragma: no cover - script-style imports
+    from pointdefense import (
+        PDLaser,
+        PD_ABSORPTIVITY,
+        TORPEDO_ELECTRONICS_THRESHOLD_J,
+        full_coupling_range_m,
+    )
+
+
+def pd_doctrine_numbers(fleet_data: Optional[Dict[str, Any]]) -> Dict[str, float]:
+    """
+    Point-defense figures for prompts, derived from the SAME model the engine
+    runs (PDLaser + the continuous-dwell closed form), never hand-quoted.
+
+    Returns:
+        range_km: engagement envelope
+        power_mw: beam power per turret
+        full_coupling_km: range inside which the whole beam lands on a torpedo
+        blind_closure_kps_per_turret: max closure ONE turret can seeker-kill
+            (50 MJ) dwelling continuously from envelope entry to impact
+        seeker_kill_mj: absorbed energy for a guidance kill
+        waste_heat_mw: heat rejected into own hull per firing turret
+    """
+    spec = (fleet_data or {}).get("weapon_types", {}).get("pd_laser", {})
+    laser = PDLaser.from_fleet_data(spec) if spec else PDLaser()
+    r_full_m = full_coupling_range_m(
+        aperture_m=laser.aperture_m, wavelength_m=laser.wavelength_m
+    )
+    r0_m = laser.range_km * 1000.0
+    coupling_integral_m = (
+        r0_m if r0_m <= r_full_m else 2.0 * r_full_m - r_full_m * r_full_m / r0_m
+    )
+    blind_closure_mps = (
+        laser.power_w * PD_ABSORPTIVITY * coupling_integral_m
+        / TORPEDO_ELECTRONICS_THRESHOLD_J
+    )
+    return {
+        "range_km": laser.range_km,
+        "power_mw": laser.power_mw,
+        "full_coupling_km": r_full_m / 1000.0,
+        "blind_closure_kps_per_turret": blind_closure_mps / 1000.0,
+        "seeker_kill_mj": TORPEDO_ELECTRONICS_THRESHOLD_J / 1e6,
+        "waste_heat_mw": laser.waste_heat_w() / 1e6,
+    }
+
 
 def get_ship_turn_time_90deg(ship_type: str) -> float:
     """Calculate approximate 90-degree turn time using thrust vectoring."""
@@ -81,11 +133,38 @@ def format_weapon_groups_for_prompt(weapons: List[Dict], weapon_types: Dict[str,
 
     if pd_lasers:
         count = len(pd_lasers)
-        # Range must come from the same data the simulation loads (PDLaser.from_weapon_data
-        # reads range_km). The prompt used to hardcode 100km while the sim used 250km.
-        spec = weapon_types.get("pd_laser", {})
-        pd_range = spec.get("range_km", 250)
-        lines.append(f"- {count}x Point Defense Lasers: Auto-engage torpedoes within {pd_range:.0f}km")
+        # Every figure below is derived from the same PDLaser model the engine
+        # runs (see pd_doctrine_numbers) - the prompt used to hardcode a 100km
+        # envelope while the sim used 250km.
+        pd = pd_doctrine_numbers({"weapon_types": weapon_types})
+        per = pd["blind_closure_kps_per_turret"]
+        lines.append(
+            f"- {count}x Point Defense Lasers ({pd['power_mw']:.0f} MW beam): "
+            f"FULLY AUTOMATIC - engage inbound torpedoes within {pd['range_km']:.0f}km, "
+            f"no orders needed."
+        )
+        lines.append(
+            f"  * Optics: the whole beam lands only inside ~{pd['full_coupling_km']:.0f} km; "
+            f"at the envelope edge most of it misses, so lethality rises steeply as a "
+            f"threat closes."
+        )
+        lines.append(
+            f"  * A torpedo is killed by cooking its seeker ({pd['seeker_kill_mj']:.0f} MJ "
+            f"absorbed). Dwelling from envelope entry to impact, ONE turret stops at most "
+            f"~{per:.0f} km/s of closure; each turret adds ~{per:.0f} km/s (your {count}: "
+            f"~{count * per:.0f} km/s). Guided torpedoes arrive at 13-28 km/s - alone you "
+            f"stop only the slow ones. Allied turrets in range of the threat stack with yours."
+        )
+        lines.append(
+            "  * A PD 'kill' BLINDS the torpedo - the wreck coasts on ballistically and "
+            "STILL HITS a ship flying straight. PD blinds; your EVADE makes blinded "
+            "rounds miss. Never hold course under torpedo fire."
+        )
+        lines.append(
+            f"  * Firing cost: ~{pd['waste_heat_mw']:.0f} MW waste heat per firing turret, "
+            f"no thrust penalty - trivial next to your heat sink. PD cost is never a "
+            f"reason to change your plan."
+        )
 
     return "\n".join(lines)
 
@@ -250,6 +329,7 @@ CURRENT STATUS:
 - Heat: {heat_percent:.0f}%
 - Delta-V remaining: {delta_v_remaining:.0f}/{delta_v_total:.0f} km/s
 - Radiators: {radiator_status}
+- Point defense: {pd_status}
 - Armor: Nose {nose_armor:.1f}cm | Lateral {lateral_armor:.1f}cm | Tail {tail_armor:.1f}cm
 
 WEAPON STATUS:
@@ -312,31 +392,51 @@ def _torpedo_capability_block(ship_type: str, fleet_data: Dict[str, Any],
 
     wt = (fleet_data or {}).get("weapon_types", {}).get("torpedo_launcher", {})
     cooldown = wt.get("cooldown_s", 12)
-    magazine = wt.get("magazine", 8)
+    # Per-slot magazine overrides the weapon-type default (the torpedo cruiser
+    # carries 12/launcher against the type's 8) - quote what the hull loads.
+    magazine = launchers[0].get("magazine", wt.get("magazine", 8))
+    total_rounds = sum(
+        l.get("magazine", wt.get("magazine", 8)) for l in launchers
+    )
     dv = wt.get("delta_v_kps", 14.0)
     accel = wt.get("acceleration_g", 12.0)
     pen = wt.get("penetrator_mass_kg", 250)
     rng = wt.get("range_km", 2500)
-    per_decision = max(1, int(decision_interval_s // cooldown)) * len(launchers)
+    n = len(launchers)
+    per_decision = max(1, int(decision_interval_s // cooldown)) * n
+    pd = pd_doctrine_numbers(fleet_data)
 
     def ke(v_kps):
         return 0.5 * pen * (v_kps * 1000) ** 2 / 1e9
 
+    # The impact-speed anchors below are MEASURED engine behaviour (guidance
+    # holds a >=12 km/s closure floor and burns its delta-v surplus in the
+    # terminal phase), not launch closure + dv. tests/test_doctrine_accuracy.py
+    # re-measures them.
     return f"""
-TORPEDOES ({len(launchers)}x {wt.get('name', 'launcher')}) - your decisive weapon:
-- {pen:.0f} kg kinetic penetrator, {dv} km/s own delta-v, {accel}g, {rng} km range
-- Magazine: {magazine} rounds. Reload {cooldown}s -> you can launch {per_decision} per decision.
-- DAMAGE SCALES WITH THE SQUARE OF CLOSING SPEED. The torpedo's {dv} km/s is added to
-  whatever closure you have already built, so the same round delivers:
-      ~{ke(dv):.0f} GJ against a stationary target
-      ~{ke(dv + 6):.0f} GJ closing at 6 km/s combined
-      ~{ke(dv + 12):.0f} GJ in a hard head-on pass
-  For comparison a spinal coilgun round is ~4.3 GJ. A fast head-on launch is worth
-  roughly 20 gun hits; a torpedo lobbed at a receding target is worth less than one.
-- Enemy point defense engages torpedoes inside ~250 km and needs several seconds of
-  dwell per kill. Closing fast gives their PD fewer shots: roughly half your torpedoes
-  survive at 26 km/s closure versus under a third at 8 km/s.
-- Salvos are harder to stop than single launches - PD must split dwell between rounds.
+TORPEDOES ({n}x {wt.get('name', 'launcher')}) - your decisive weapon:
+- {pen:.0f} kg kinetic penetrator, {dv} km/s own delta-v, {accel}g, {rng} km reach
+- Magazine: {magazine} rounds per launcher ({total_rounds} total). Reload {cooldown}s
+  -> up to {per_decision} launches per decision.
+- DAMAGE SCALES WITH THE SQUARE OF CLOSING SPEED. Guidance never lets closure drop
+  below ~12 km/s and dumps its remaining delta-v just before impact. Measured against
+  a 2g hull (400 km launch):
+      launched with zero closure     -> impacts ~13.5 km/s = ~{ke(13.5):.0f} GJ
+      launched closing 12 km/s       -> impacts ~14-17 km/s = ~{ke(14):.0f}-{ke(17):.0f} GJ
+      launched closing 26 km/s       -> impacts ~28 km/s   = ~{ke(28):.0f} GJ
+      lobbed at a RECEDING ship      -> ~{ke(8):.0f} GJ if it lands at all; a receding
+      ship that keeps running usually outlasts the round's delta-v. No tail chases.
+  (A spinal gun round is ~4.3 GJ: a plain closing launch = ~5 gun hits, head-on ~20.)
+- A CLOSING launch vs a lone ship almost always connects: no hull (<=3g) out-turns
+  {accel}g guidance, and lone-ship point defense only stops slow closures (each PD
+  turret kills ~{pd['blind_closure_kps_per_turret']:.0f} km/s of closure; you arrive at 13+).
+  Expect near-100% on stragglers, heavy attrition against an escorted evading wall.
+- SALVO TIMING IS DECISIVE: rounds arriving TOGETHER split enemy PD dwell; the same
+  rounds trickled out are blinded one by one, early enough to be dodged. Measured vs
+  4 PD turrets: 4 simultaneous -> 24/24 through; the same 4 spaced 30s -> 12/24.
+- Launch range barely matters vs a closing target (measured 200-2400 km: all connect).
+  Longer flights arrive HARDER (more speed built) but cost time: ~400 km lands in
+  30-60s (one decision cycle), 1500 km in ~2 minutes.
 """
 
 
@@ -344,8 +444,12 @@ def format_torpedo_threats(threats: List[Dict[str, Any]]) -> str:
     """
     Render inbound torpedoes with enough detail to act on.
 
-    The simulation tracked torpedo_threats all along but nothing ever rendered
-    them, so captains were never told ordnance was inbound at all.
+    Beyond range/closure/ETA, each threat can carry (all optional, filled in by
+    captain._build_tactical_status from the live engine):
+      est_impact_gj  - projected impact energy (penetrator KE at projected speed)
+      nez_inside     - True: provably cannot be outrun; False: still escapable
+      pd_turrets_needed / own_pd_turrets - seeker-kill triage for THIS threat
+      blinded        - seeker already killed; ballistic, evadable
     """
     if not threats:
         return "INBOUND ORDNANCE: none detected"
@@ -353,15 +457,34 @@ def format_torpedo_threats(threats: List[Dict[str, Any]]) -> str:
     lines = [f"*** INBOUND ORDNANCE: {len(threats)} TORPEDO(S) TRACKED ***"]
     for t in threats:
         eta = t.get("eta_seconds", 999)
-        eta_str = f"{eta:.0f}s" if eta < 900 else "no closure"
-        lines.append(
-            f"  - from {t.get('source', 'unknown')}: {t.get('distance_km', 0):.0f} km, "
-            f"closing {t.get('closing_kps', 0):.1f} km/s, IMPACT IN {eta_str}"
+        eta_str = f"IMPACT IN {eta:.0f}s" if eta < 900 else "not closing"
+        head = "BLINDED torpedo" if t.get("blinded") else "torpedo"
+        line = (
+            f"  - {head} from {t.get('source', 'unknown')}: "
+            f"{t.get('distance_km', 0):.0f} km, "
+            f"closing {t.get('closing_kps', 0):.1f} km/s, {eta_str}"
         )
+        if t.get("est_impact_gj") is not None:
+            line += f", est ~{t['est_impact_gj']:.0f} GJ"
+        if t.get("blinded"):
+            line += " | ballistic wreck: KEEP MANEUVERING and it misses"
+        else:
+            nez = t.get("nez_inside")
+            if nez is True:
+                line += " | NEZ: CANNOT be outrun"
+            elif nez is False:
+                line += " | NEZ: still escapable - RUN"
+            needed = t.get("pd_turrets_needed")
+            own = t.get("own_pd_turrets")
+            if needed is not None and own is not None:
+                verdict = "your PD can blind it" if needed <= own else \
+                    "your PD alone CANNOT stop it"
+                line += f" | PD kill needs ~{min(needed, 99)} turret(s), you have {own}: {verdict}"
+        lines.append(line)
     lines.append(
-        "  Kinetic penetrators - a hit is far more damaging than any gun round. "
-        "Your point defense engages them automatically inside its envelope; "
-        "EVADE and opening the range buy your PD more engagement time."
+        "  PD is automatic. It BLINDS torpedoes; a blinded round still hits a ship "
+        "flying straight - EVADE (auto-RUN, then auto-PRESENT of your nose armor) "
+        "is what turns PD kills into misses."
     )
     return "\n".join(lines)
 
@@ -377,6 +500,8 @@ def build_ship_status_block(
     radiators_extended: bool,
     weapons: Optional[Dict[str, Any]] = None,
     damaged_modules: Optional[Dict[str, Any]] = None,
+    pd_turrets_operational: Optional[int] = None,
+    pd_turrets_total: Optional[int] = None,
 ) -> str:
     """
     Build the volatile per-checkpoint ship status block.
@@ -391,7 +516,16 @@ def build_ship_status_block(
         "EXTENDED (+cooling, exposed to fire)" if radiators_extended
         else "RETRACTED (protected, no cooling)"
     )
+    if pd_turrets_total:
+        op = pd_turrets_total if pd_turrets_operational is None \
+            else pd_turrets_operational
+        pd_status = f"{op}/{pd_turrets_total} turrets operational (automatic)"
+        if op < pd_turrets_total:
+            pd_status += " - DEGRADED"
+    else:
+        pd_status = "none fitted" if pd_turrets_total == 0 else "operational (automatic)"
     return SHIP_STATUS_TEMPLATE.format(
+        pd_status=pd_status,
         hull_integrity=hull_integrity,
         heat_percent=heat_percent,
         delta_v_remaining=delta_v_remaining,
@@ -526,7 +660,11 @@ You are Captain {captain_name}, commanding {ship_name} in a space combat simulat
 
 MANEUVERS:
 - INTERCEPT: THRUST toward target - actively closes distance, builds velocity toward enemy
-- EVADE: Evasive thrust while fighting - BEST during active combat! Hard to hit
+- EVADE: Threat-aware defense, BEST during active combat. Versus gun rounds it jinks
+  (hard to hit). Versus guided torpedoes it automatically RUNS (burns away from the
+  round to cut closure and buy your PD dwell time) and in the final seconds
+  automatically PRESENTS your thickest armor to the impact. Only EVADE does this -
+  any other maneuver takes torpedoes, including blinded ones, without reacting.
 - BRAKE: Slow down - use when closing too fast (>3 km/s relative)
 - MAINTAIN: Coast - no thrust, no rotation, pure drift
 - PADLOCK: ROTATE ONLY, NO THRUST - keeps nose pointed at target but does NOT move toward it!
@@ -575,6 +713,22 @@ KEY PHYSICS TO REMEMBER:
 - Sweet spot: 1-3 km/s relative with active maneuvering
 - Spinal weapons ONLY fire if nose within 30° of target - PADLOCK helps with this
 - Turrets fire at 180° arc - don't need nose-on alignment
+
+=== TORPEDO DEFENSE (act on this the moment ordnance is inbound) ===
+- Your PD is automatic; it BLINDS torpedoes (seeker kill at 50 MJ absorbed beam), it
+  does not vaporise them. A blinded round coasts ballistically on its last course and
+  STILL HITS a ship flying straight. PD + EVADE stops torpedoes; PD alone stops nothing.
+- Each PD turret can blind ~5 km/s of closure (continuous dwell across the whole
+  envelope); guided rounds arrive at 13-28 km/s. A lone ship therefore does NOT stop
+  a committed closing torpedo - EVADE, take it on the nose armor, kill the shooter.
+- A CLOSING torpedo is inside its No-Escape Zone almost from launch: no hull (max 3g)
+  out-turns 12g guidance. But if you are already OPENING range when it launches,
+  keep running - it burns out its delta-v and misses (measured: reliable escape).
+- Timing: launch-to-impact is typically 15-60s, so you get AT MOST ONE decision after
+  detection. If an enemy torpedo hull has you targeted, set EVADE preemptively.
+- Formation defense is real: allied PD turrets in range of the threat's path stack
+  with yours (that is what escorts are for). Massed turrets blind rounds EARLY,
+  which is what gives your evasion time to make the wreck miss.
 
 DELTA-V NOTE: You have ~500 km/s delta-V. Full throttle for 20 minutes uses <50 km/s.
 Fuel is ABUNDANT - "conserving delta-V" is almost never correct.
@@ -1244,6 +1398,8 @@ def build_captain_prompt(
         lateral_armor=ship_status.get("lateral_armor", 0.0),
         tail_armor=ship_status.get("tail_armor", 0.0),
         radiators_extended=ship_status.get("radiators_extended", False),
+        pd_turrets_operational=ship_status.get("pd_turrets_operational"),
+        pd_turrets_total=ship_status.get("pd_turrets_total"),
         weapons=ship_status.get("weapons"),
         damaged_modules=ship_status.get("damaged_modules"),
     )
@@ -1351,8 +1507,46 @@ KEY PHYSICS FOR FLEET COMMAND:
 - High closing velocity = harder to hit (brief engagement window)
 - 0 km/s relative + no evasion = sitting duck (easy hit)
 - Sweet spot: 1-3 km/s relative with active maneuvering
-- Formation benefit: point defense also engages threats closing on nearby friendlies,
-  so ships that stay inside each other's PD envelope (~{pd_range_km:.0f} km laser range) cover each other
+
+=== TORPEDO WARFARE & POINT DEFENSE (measured on this engine - trust these) ===
+
+HOW POINT DEFENSE ACTUALLY WORKS:
+- All PD is automatic. Turrets triage savable torpedoes first (own ship, then allies),
+  so overlapping coverage genuinely stacks: every friendly turret within its envelope
+  (~{pd_range_km:.0f} km laser range) of a torpedo's path adds dwell against it.
+- PD BLINDS torpedoes (seeker kill); the wreck coasts ballistically and STILL HITS a
+  ship flying straight. Measured: 18/18 blinded rounds hit a non-evading battleship;
+  the same attack on an evading one behind 8 escorts landed 6/18. Therefore: any ship
+  under torpedo attack must be ordered to EVADE, or every PD kill is wasted.
+- One turret blinds ~5 km/s of closure; N turrets ~5N km/s. Guided rounds arrive at
+  13-28 km/s: single hulls (1-4 turrets) cannot stop a committed closing torpedo.
+- PD cost is negligible (~15 MW hull heat per firing turret, no thrust loss). Never
+  restructure the fleet to "save" PD capacity.
+
+FORMATIONS FOR PD (what actually moves the numbers):
+- TURRET COUNT on the threat corridor is everything; ring radius is not - escort
+  rings at 15, 30 and 120 km measured identically. Place escorts anywhere inside
+  laser range of the axis the torpedoes come down; don't micro-manage spacing.
+- Returns need mass: vs a 6-round simultaneous salvo, an evading battleship leaked
+  17/18 alone, 15/18 with 4 destroyer escorts, 6/18 with 8. Fewer than ~4 escorts is
+  symbolic against a real salvo - concentrate the fleet or accept the hits.
+- The wall only protects ships that EVADE inside it (see blinding, above).
+
+WHEN TO COMMIT TRIDENTS:
+- Fire when CLOSING. A closing launch vs a lone ship connects ~100% (12g guidance,
+  <=3g targets): ~23 GJ per round at low closure, ~95 GJ launched head-on at 26 km/s
+  (a spinal gun round is 4.3 GJ). NEVER launch at a receding evading ship - it
+  outruns the round's delta-v and the magazine is wasted.
+- SIMULTANEOUS time-on-target, always. Rounds arriving together split PD dwell;
+  trickled rounds are blinded one at a time, early enough to dodge. Measured vs 4
+  turrets: 4 simultaneous -> 24/24 through (99 GJ); same 4 spaced 30s -> 12/24 (42 GJ).
+  Use torpedo_salvo on issue_order to synchronize launches ACROSS ships.
+- SIZING at moderate closure (~22 GJ/round, evading targets): 4 rounds kill a
+  destroyer; 6 rounds kill anything up to a dreadnought; 1-2 rounds wound only.
+  Against an escort wall, add roughly 1 round per 3 escort turrets to feed the PD.
+- RANGE: any closing launch 200-2400 km connects; longer = harder impact but minutes
+  in flight (~400 km lands in 30-60s - about one decision cycle).
+- Magazines: 8 rounds per launcher, 12s reload -> 2 per launcher per checkpoint.
 
 FLANKING PREVENTION (YOUR RESPONSIBILITY):
 Enemy ships in FLANKING positions can hit your ships on the LATERAL (side) - easy targets!
@@ -1516,18 +1710,33 @@ def _generate_ship_class_stats(snapshot: Any, fleet_data: Dict[str, Any]) -> str
         delta_v = performance.get("delta_v_kps", "?")
         accel = performance.get("combat_acceleration_g", "?")
 
-        # Get weapon summary
+        # Get weapon summary. PD turret and torpedo-launcher counts are the
+        # numbers salvo sizing and formation math run on, so they must be here.
         weapons = spec.get("weapons", [])
         spinal_count = 0
         turret_count = 0
+        pd_count = 0
+        torpedo_count = 0
         for w in weapons:
             w_type = w.get("type", "")
-            if "spinal" in w_type.lower():
+            if w_type == "pd_laser":
+                pd_count += 1
+            elif w_type.startswith("torpedo"):
+                torpedo_count += 1
+            elif "spinal" in w_type.lower():
                 spinal_count += 1
             elif "turret" in w.get("mount", "").lower() or w.get("is_turreted", False):
                 turret_count += 1
 
-        weapons_str = f"{spinal_count}x spinal, {turret_count}x turret" if spinal_count or turret_count else "standard"
+        parts = []
+        if spinal_count:
+            parts.append(f"{spinal_count}x spinal")
+        if turret_count:
+            parts.append(f"{turret_count}x turret")
+        if torpedo_count:
+            parts.append(f"{torpedo_count}x torpedo launcher")
+        parts.append(f"{pd_count}x PD")
+        weapons_str = ", ".join(parts)
 
         # Estimate maneuverability from acceleration (rough guide)
         if accel != "?":
@@ -1992,6 +2201,17 @@ def _format_friendly_fleet_full(friendly_ships: List[Any]) -> str:
         if hasattr(ship, 'weapons_destroyed') and ship.weapons_destroyed:
             lines.append(f"  *** WEAPONS DESTROYED: {', '.join(ship.weapons_destroyed)} ***")
 
+        # Torpedo magazine and PD state: the two numbers the admiral's salvo
+        # sizing and formation decisions actually run on.
+        torps = getattr(ship, 'torpedoes_remaining', None)
+        if torps:
+            lines.append(f"  Torpedoes: {torps} remaining")
+        pd_total = getattr(ship, 'pd_turrets_total', None)
+        if pd_total:
+            pd_op = getattr(ship, 'pd_turrets_operational', pd_total)
+            degraded = " - DEGRADED" if pd_op < pd_total else ""
+            lines.append(f"  Point defense: {pd_op}/{pd_total} turrets{degraded}")
+
         if ship.targeted_by:
             lines.append(f"  *** TARGETED BY: {', '.join(ship.targeted_by)} ***")
 
@@ -2039,17 +2259,25 @@ def _format_enemy_fleet_observable(
 
 
 def _format_projectiles_for_admiral(projectiles: List[Any]) -> str:
-    """Format projectile info for Admiral."""
+    """Format ordnance in flight for Admiral. Torpedoes are listed first."""
     if not projectiles:
-        return "No projectiles in flight"
+        return "No ordnance in flight"
 
+    def is_torp(p):
+        return "torpedo" in str(getattr(p, "weapon_type", "")).lower()
+
+    ordered = sorted(projectiles, key=lambda p: (not is_torp(p), p.eta_seconds))
     lines = []
-    for proj in projectiles[:10]:  # Limit to 10 most relevant
+    for proj in ordered[:10]:  # Limit to 10 most relevant
         lines.append(
             f"  {proj.weapon_type} from {proj.source_ship} -> {proj.target_ship}: "
             f"{proj.distance_km:.0f} km, ETA {proj.eta_seconds:.1f}s, {proj.damage_gj:.1f} GJ"
         )
-
+    if any(is_torp(p) for p in ordered):
+        lines.append(
+            "  Torpedoes inbound on your ships: order those ships to EVADE - "
+            "PD blinds torpedoes but only a maneuvering ship dodges the wreck."
+        )
     return "\n".join(lines)
 
 

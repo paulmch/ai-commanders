@@ -1568,11 +1568,15 @@ class TestCorvetteSwarmVsFrigate:
         print(f"\n[SWARM] === RESULTS ===")
         print(f"[SWARM] Total torpedoes launched: {sim.metrics.total_torpedoes_launched}")
         print(f"[SWARM] Total torpedo HITS: {sim.metrics.total_torpedo_hits}")
-        print(f"[SWARM] Total torpedoes INTERCEPTED by PD: {sim.metrics.total_torpedo_intercepted}")
+        print(f"[SWARM] Torpedoes DESTROYED by PD: {sim.metrics.total_torpedo_intercepted}")
+        print(f"[SWARM] Torpedoes BLINDED by PD: {sim.metrics.total_torpedo_seeker_killed} "
+              f"({sim.metrics.total_torpedo_hits_after_seeker_kill} of them still hit)")
+        print(f"[SWARM] Torpedoes actually stopped: {sim.metrics.total_torpedo_neutralized}")
         print(f"[SWARM] Torpedoes still in flight: {len(sim.torpedoes)}")
         print(f"[SWARM] Frigate hull integrity: {frigate.hull_integrity:.1f}%")
         print(f"[SWARM] Frigate destroyed: {frigate.is_destroyed}")
-        print(f"[SWARM] Frigate PD intercept count: {frigate.pd_intercepts}")
+        print(f"[SWARM] Frigate PD hard kills: {frigate.pd_intercepts}, "
+              f"seeker kills: {frigate.pd_seeker_kills}")
 
         # Check torpedo events
         pd_destroyed = sim.get_events_by_type(SimulationEventType.PD_TORPEDO_DESTROYED)
@@ -1881,7 +1885,10 @@ class TestCorvetteSwarmVsFrigate:
         print(f"\n[WOLFPACK] === FINAL RESULTS ===")
         print(f"[WOLFPACK] Torpedoes launched: {sim.metrics.total_torpedoes_launched}")
         print(f"[WOLFPACK] Torpedo HITS: {torpedo_hits}")
-        print(f"[WOLFPACK] Torpedoes INTERCEPTED by PD: {torpedo_intercepted}")
+        print(f"[WOLFPACK] Torpedoes DESTROYED by PD: {torpedo_intercepted}")
+        print(f"[WOLFPACK] Torpedoes BLINDED by PD: "
+              f"{sim.metrics.total_torpedo_seeker_killed} "
+              f"({sim.metrics.total_torpedo_hits_after_seeker_kill} of them still hit)")
         print(f"[WOLFPACK] Torpedoes MISSED: {torpedo_missed}")
         print(f"[WOLFPACK] Torpedoes still flying: {torpedo_flying}")
         print(f"[WOLFPACK] Frigate hull: {frigate.hull_integrity:.1f}%")

@@ -550,14 +550,36 @@ class TestMultiplePDTurrets:
             if torp_flight not in sim.torpedoes:
                 break
 
-        # Check metrics
+        # Check metrics.
+        #
+        # This assertion used to sit behind `if destroyed_events:` and was
+        # measured to be VACUOUS: six turrets at 5 km against a 50 m/s torpedo
+        # deliver ~54 MJ, which crosses the 50 MJ seeker threshold and stops
+        # there, because PD drops a blinded torpedo from its target list. The
+        # 1 GJ structural threshold is never reached, so the guarded block
+        # never ran and the intercept counters were never actually checked.
+        # Assert what this scenario really produces - a seeker kill - and keep
+        # a live (unguarded) check on both counters.
         destroyed_events = [e for e in sim.events
                           if e.event_type == SimulationEventType.PD_TORPEDO_DESTROYED]
+        disabled_events = [e for e in sim.events
+                           if e.event_type == SimulationEventType.PD_TORPEDO_DISABLED]
+
+        assert disabled_events or destroyed_events, \
+            "Six turrets at 5 km must at least blind the torpedo"
+
         if destroyed_events:
             assert defender.pd_intercepts > initial_intercepts, \
                 "Ship intercept counter should increase"
             assert sim.metrics.total_torpedo_intercepted > 0, \
                 "Global intercept counter should increase"
+        else:
+            assert defender.pd_intercepts == initial_intercepts, \
+                "Blinding a torpedo is not destroying it"
+            assert defender.pd_seeker_kills > 0, \
+                "Ship seeker-kill counter should increase"
+            assert sim.metrics.total_torpedo_seeker_killed > 0, \
+                "Global seeker-kill counter should increase"
 
 
 class TestShipWithDefaultPD:

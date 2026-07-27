@@ -51,6 +51,64 @@ SAFE_ARMING_DISTANCE_M = 500.0  # Minimum distance before torpedo arms
 TERMINAL_APPROACH_DISTANCE_M = 10_000.0  # Switch to terminal guidance
 PROPORTIONAL_NAV_CONSTANT = 3.0  # N' for proportional navigation
 
+# =============================================================================
+# AUGMENTED PROPORTIONAL NAVIGATION / NO-ESCAPE-ZONE CONSTANTS
+# =============================================================================
+
+G0_MS2 = 9.81  # standard gravity (m/s^2)
+
+# Cruise closing-speed floor (km/s). Below this the torpedo prioritises
+# building closure over conserving delta-v: a slow torpedo lingers inside
+# point-defense envelopes and may never complete the intercept at all.
+# 12 km/s crosses a 100 km PD envelope in ~8 s.
+MIN_CLOSING_SPEED_KPS = 12.0
+
+# Navigation ratio N for (augmented) proportional navigation. PN theory
+# requires N > 2 for the predicted miss to collapse against a maneuvering
+# target (below that, LOS rotation regenerates lateral velocity as fast as
+# the correction removes it); practical missiles use N in [3, 5]. N = 4 sits
+# mid-band: firm authority without amplifying estimate noise.
+APN_NAV_RATIO = 4.0
+
+# Design assumption for the worst-case target: the most agile hull in the
+# fleet (corvette) pulls 3.0 g of lateral acceleration (fleet_ships.json,
+# performance.combat_acceleration_g). The no-escape zone must assume the
+# target can use ALL of this capability at any moment, regardless of what it
+# is currently observed doing - a commit decision based on the *observed*
+# acceleration would be defeated by a target that waits to jink.
+ASSUMED_TARGET_MAX_LATERAL_ACCEL_G = 3.0
+ASSUMED_TARGET_MAX_LATERAL_ACCEL_MS2 = ASSUMED_TARGET_MAX_LATERAL_ACCEL_G * G0_MS2
+
+# Guidance-overhead margin applied to both NEZ conditions (acceleration and
+# delta-v). Two standard PN results motivate the value:
+#   - against a constant-g target, APN's peak commanded lateral acceleration
+#     is (N/2) * a_target (the feed-forward term) - N/2 times the kinematic
+#     minimum needed to match the target's displacement;
+#   - nulling an initial heading error under PN costs up to N/(N-2) times
+#     the initial lateral rate in delta-v.
+# At N = 4 both factors equal 2.0, so a single margin covers both shares.
+NEZ_GUIDANCE_MARGIN = APN_NAV_RATIO / 2.0
+
+# Delta-v the torpedo must still hold at impact so late corrections remain
+# possible (replaces the old TERMINAL_MIN_RESERVE_KPS). Nulling one full
+# last-second 3 g jink over the final ~8 s costs ~0.24 km/s; 0.5 km/s covers
+# it with the NEZ_GUIDANCE_MARGIN applied.
+NEZ_DV_RESERVE_KPS = 0.5
+
+# Do not light the main engine for closure gains smaller than this (km/s).
+TERMINAL_MIN_BURN_KPS = 0.2
+
+# Predicted-miss deadband (m): once the zero-effort miss is below hull
+# scale, stop steering. Hulls in this sim are 65-300 m long, so 50 m is
+# inside every target's physical envelope.
+APN_MISS_DEADBAND_M = 50.0
+
+# Time constant (s) for the exponential filter over the finite-differenced
+# target-acceleration estimate. Observations in this sim are exact, so the
+# filter only suppresses single-tick spikes (impulsive maneuver switches);
+# 0.5 s converges ~95% within three guidance ticks at dt = 0.5 s.
+TARGET_ACCEL_FILTER_TAU_S = 0.5
+
 
 # =============================================================================
 # TORPEDO SPECIFICATIONS
@@ -420,6 +478,50 @@ class GuidanceCommand:
 
 
 # =============================================================================
+# NO-ESCAPE-ZONE STATUS
+# =============================================================================
+
+@dataclass
+class NEZStatus:
+    """
+    Result of a no-escape-zone evaluation (see TorpedoGuidance.nez_status).
+
+    The torpedo is "inside the NEZ" when, even if the target immediately
+    commits its full assumed lateral acceleration in the worst direction for
+    the rest of the flight, the torpedo still has both the acceleration
+    authority and the delta-v to null the resulting miss (with guidance
+    margin and a terminal reserve).
+
+    Attributes:
+        inside: True if the target can no longer escape.
+        reason: Which condition failed (or "inside" when none did).
+        time_to_go_s: Estimated time to impact at current closing rate.
+        target_escape_displacement_m: Max lateral displacement the target can
+            still add before impact (0.5 * a_t * t_go^2).
+        required_lateral_accel_ms2: Peak lateral acceleration the APN law
+            would command in the worst case (must not saturate the engine).
+        available_lateral_accel_ms2: Torpedo's current full-vector thrust
+            acceleration (the engine is fully gimbaled, so all of it is
+            available laterally).
+        accel_margin: available / required (inf when nothing is required).
+        required_delta_v_kps: Worst-case correction budget including the
+            terminal reserve.
+        available_delta_v_kps: Torpedo's remaining delta-v.
+        dv_margin_kps: available - required (negative means outside).
+    """
+    inside: bool
+    reason: str
+    time_to_go_s: float
+    target_escape_displacement_m: float
+    required_lateral_accel_ms2: float
+    available_lateral_accel_ms2: float
+    accel_margin: float
+    required_delta_v_kps: float
+    available_delta_v_kps: float
+    dv_margin_kps: float
+
+
+# =============================================================================
 # TORPEDO CLASS
 # =============================================================================
 
@@ -463,6 +565,21 @@ class Torpedo:
     time_since_launch: float = 0.0
     launch_position: Vector3D = field(default_factory=Vector3D.zero)
     launched_from_velocity: Vector3D = field(default_factory=Vector3D.zero)
+
+    # --- Guidance filter state (owned by the torpedo, NOT TorpedoGuidance) ---
+    # The simulation constructs a fresh TorpedoGuidance every tick, so any
+    # state that must survive between guidance calls has to live on the
+    # torpedo itself. These two fields carry the target-acceleration
+    # estimator used by augmented proportional navigation: the previously
+    # observed target velocity, and the filtered finite-difference estimate
+    # of the target's acceleration. See
+    # TorpedoGuidance._update_target_accel_estimate.
+    last_observed_target_velocity: Optional[Vector3D] = field(
+        default=None, init=False, repr=False
+    )
+    estimated_target_accel: Vector3D = field(
+        default_factory=Vector3D.zero, init=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         """Initialize calculated fields."""
@@ -1566,6 +1683,196 @@ class TorpedoGuidance:
             reason=f"proNav: {distance_km:.1f}km, ω={omega_magnitude:.4f}"
         )
 
+    def _update_target_accel_estimate(
+        self,
+        torpedo: Torpedo,
+        target_vel: Vector3D,
+        dt: float
+    ) -> Vector3D:
+        """
+        Update the torpedo's target-acceleration estimate from observed velocity.
+
+        Finite-differences the target velocity across successive guidance calls
+        and low-pass filters the result (time constant
+        TARGET_ACCEL_FILTER_TAU_S) to suppress single-tick spikes such as
+        impulsive maneuver switches. State lives on the torpedo because the
+        simulation constructs a fresh TorpedoGuidance every tick.
+
+        Assumes successive calls are ``dt`` seconds apart, which is how both
+        the simulation loop and Torpedo.update invoke guidance.
+
+        Args:
+            torpedo: Torpedo whose estimator state to update.
+            target_vel: Currently observed target velocity (m/s).
+            dt: Time since the previous observation (seconds).
+
+        Returns:
+            Filtered target acceleration estimate (m/s^2).
+        """
+        prev = torpedo.last_observed_target_velocity
+        torpedo.last_observed_target_velocity = Vector3D(
+            target_vel.x, target_vel.y, target_vel.z
+        )
+        if prev is None or dt <= 0.0:
+            return torpedo.estimated_target_accel
+
+        raw_accel = (target_vel - prev) / dt
+        alpha = dt / (TARGET_ACCEL_FILTER_TAU_S + dt)
+        torpedo.estimated_target_accel = (
+            torpedo.estimated_target_accel * (1.0 - alpha) + raw_accel * alpha
+        )
+        return torpedo.estimated_target_accel
+
+    def nez_status(
+        self,
+        torpedo: Torpedo,
+        target_pos: Vector3D,
+        target_vel: Vector3D,
+        target_max_lateral_accel_ms2: float = ASSUMED_TARGET_MAX_LATERAL_ACCEL_MS2
+    ) -> NEZStatus:
+        """
+        Evaluate the no-escape zone: can the target still get away?
+
+        Derivation (worst case for the torpedo, best case for the target):
+
+        Let t_go = d / Vc be the time to impact at the current closing rate,
+        a_t the target's maximum lateral acceleration, v_lat the current
+        lateral (perpendicular-to-LOS) relative velocity, and a_m the
+        torpedo's full-vector thrust acceleration.
+
+        1. Displacement the target can still force. Holding max lateral
+           acceleration in the direction that reinforces the existing drift,
+           the target grows the ballistic miss to at most
+               M_worst = |v_lat| * t_go + 0.5 * a_t * t_go^2.
+
+        2. Acceleration condition. The kinematically minimal constant lateral
+           acceleration that removes displacement M in time t_go is
+           2*M/t_go^2 (from s = 0.5*a*t^2). Substituting M_worst:
+               a_min = 2*|v_lat|/t_go + a_t.
+           APN does not fly the minimal profile: its peak commanded lateral
+           acceleration against this worst case is N*|v_lat|/t_go (the
+           velocity term, = N*Vc*omega) plus (N/2)*a_t (the feed-forward
+           term) - i.e. NEZ_GUIDANCE_MARGIN (= N/2) times a_min. If the
+           engine cannot supply that, the law saturates and the guaranteed
+           miss collapse no longer holds:
+               required: a_m >= NEZ_GUIDANCE_MARGIN * a_min.
+
+        3. Delta-v condition. Worst case the correction is held for the rest
+           of the flight: the feed-forward share integrates to
+           (N/2)*a_t*t_go, and nulling the existing lateral rate costs up to
+           N/(N-2) * |v_lat| (standard PN heading-error result; equal to N/2
+           at N = 4). With the shared margin:
+               dv_req = NEZ_GUIDANCE_MARGIN * (|v_lat| + a_t * t_go)
+               required: dv_remaining >= dv_req + NEZ_DV_RESERVE_KPS.
+
+        4. A torpedo that is not closing, or whose fuel is exhausted, is
+           never inside the NEZ.
+
+        The target's capability defaults to the assumed fleet-wide worst case
+        (3 g), NOT the currently observed acceleration - a commit decision
+        must not be defeated by a target that simply waits before jinking.
+
+        Args:
+            torpedo: Torpedo to evaluate.
+            target_pos: Target position (meters).
+            target_vel: Target velocity (m/s).
+            target_max_lateral_accel_ms2: Target's assumed max lateral
+                acceleration (m/s^2). Defaults to 3 g.
+
+        Returns:
+            NEZStatus with the commit decision and both margins.
+        """
+        a_t = max(0.0, target_max_lateral_accel_ms2)
+
+        to_target = target_pos - torpedo.position
+        distance_m = to_target.magnitude
+        if distance_m <= 0.0:
+            return NEZStatus(
+                inside=True, reason="at target", time_to_go_s=0.0,
+                target_escape_displacement_m=0.0,
+                required_lateral_accel_ms2=0.0,
+                available_lateral_accel_ms2=0.0,
+                accel_margin=float('inf'),
+                required_delta_v_kps=NEZ_DV_RESERVE_KPS,
+                available_delta_v_kps=torpedo.remaining_delta_v_kps,
+                dv_margin_kps=torpedo.remaining_delta_v_kps - NEZ_DV_RESERVE_KPS,
+            )
+
+        los = to_target.normalized()
+        rel_vel = torpedo.velocity - target_vel
+        closing_speed_mps = rel_vel.dot(los)
+        lateral_vel = rel_vel - los * closing_speed_mps
+        lateral_speed_mps = lateral_vel.magnitude
+
+        available_accel = torpedo.specs.acceleration_at_mass(torpedo.current_mass_kg)
+        available_dv_kps = torpedo.remaining_delta_v_kps
+
+        def _outside(reason: str, t_go: float, escape_m: float,
+                     req_accel: float, req_dv: float) -> NEZStatus:
+            accel_margin = (
+                available_accel / req_accel if req_accel > 0 else float('inf')
+            )
+            return NEZStatus(
+                inside=False, reason=reason, time_to_go_s=t_go,
+                target_escape_displacement_m=escape_m,
+                required_lateral_accel_ms2=req_accel,
+                available_lateral_accel_ms2=available_accel,
+                accel_margin=accel_margin,
+                required_delta_v_kps=req_dv,
+                available_delta_v_kps=available_dv_kps,
+                dv_margin_kps=available_dv_kps - req_dv,
+            )
+
+        # Condition 4: a dead engine can never guarantee anything.
+        if torpedo.fuel_exhausted or available_dv_kps <= 0.0:
+            t_go = (
+                distance_m / closing_speed_mps
+                if closing_speed_mps > 0 else float('inf')
+            )
+            escape = (
+                0.5 * a_t * t_go * t_go if t_go < float('inf') else float('inf')
+            )
+            return _outside("fuel exhausted", t_go, escape,
+                            float('inf'), float('inf'))
+
+        if closing_speed_mps <= 0.0:
+            return _outside("not closing", float('inf'), float('inf'),
+                            float('inf'), float('inf'))
+
+        t_go = distance_m / closing_speed_mps
+        escape_m = 0.5 * a_t * t_go * t_go
+
+        # Condition 2: peak APN command must not saturate the engine.
+        a_min = 2.0 * lateral_speed_mps / t_go + a_t
+        required_accel = NEZ_GUIDANCE_MARGIN * a_min
+
+        # Condition 3: worst-case correction budget plus terminal reserve.
+        dv_req_kps = (
+            NEZ_GUIDANCE_MARGIN * (lateral_speed_mps + a_t * t_go) / 1000.0
+            + NEZ_DV_RESERVE_KPS
+        )
+
+        if available_accel < required_accel:
+            return _outside("insufficient acceleration", t_go, escape_m,
+                            required_accel, dv_req_kps)
+        if available_dv_kps < dv_req_kps:
+            return _outside("insufficient delta-v", t_go, escape_m,
+                            required_accel, dv_req_kps)
+
+        return NEZStatus(
+            inside=True, reason="inside", time_to_go_s=t_go,
+            target_escape_displacement_m=escape_m,
+            required_lateral_accel_ms2=required_accel,
+            available_lateral_accel_ms2=available_accel,
+            accel_margin=(
+                available_accel / required_accel
+                if required_accel > 0 else float('inf')
+            ),
+            required_delta_v_kps=dv_req_kps,
+            available_delta_v_kps=available_dv_kps,
+            dv_margin_kps=available_dv_kps - dv_req_kps,
+        )
+
     def _collision_course_guidance(
         self,
         torpedo: Torpedo,
@@ -1574,19 +1881,48 @@ class TorpedoGuidance:
         dt: float
     ) -> GuidanceCommand:
         """
-        Collision course guidance: align relative velocity with line-of-sight.
+        Augmented proportional navigation with a no-escape-zone commit logic.
 
-        Philosophy:
-        - For a collision to occur, the RELATIVE velocity vector (V_torp - V_target)
-          must point directly at the target
-        - Any lateral component of relative velocity = miss
-        - Burn to cancel lateral velocity while building closing speed
-        - COAST when on a good intercept course - don't overshoot!
+        The previous law estimated the coast miss as lateral_speed *
+        time_to_impact - a linear extrapolation that (a) ignores target
+        acceleration entirely and (b) is self-suppressing: as the torpedo
+        closes, time_to_impact collapses, so the estimate shrinks even while
+        an accelerating target pumps lateral velocity in. Its correction
+        phase then nulled lateral VELOCITY only, which always lags a target
+        that keeps accelerating. Net effect: guidance declared itself on
+        course ("miss~0.0km") right up to a kilometre-scale miss.
 
-        Three phases:
-        1. INTERCEPT: Coast when time-to-impact is short and on course
-        2. CRUISE: Align relative velocity with LOS, build closing speed
-        3. CORRECTION: Cancel lateral velocity if drifting
+        This law works on the zero-effort miss (ZEM) instead:
+
+            ZEM_perp = -v_lat * t_go + 0.5 * a_T_perp * t_go^2
+
+        the predicted miss vector if the torpedo stops thrusting now and the
+        target holds its (estimated) acceleration. The commanded lateral
+        acceleration is the standard augmented-PN form
+
+            a_cmd = N * ZEM_perp / t_go^2
+                  = N * Vc * omega  +  (N/2) * a_T_perp
+
+        (the two forms are algebraically identical: the velocity part of
+        ZEM_perp/t_go^2 is v_lat/t_go = Vc*omega). Target acceleration is
+        estimated by finite-differencing observed target velocity across
+        guidance calls (see _update_target_accel_estimate).
+
+        Throttle policy keys off the no-escape zone (see nez_status):
+        - Inside the NEZ with delta-v to spare AND on course (predicted miss
+          inside the deadband): burn the surplus into closing speed (impact
+          energy scales as v^2 and a shorter run gives point defense fewer
+          windows), steering with the APN command at the same time - the
+          engine direction is a_cmd plus whatever axial component the
+          remaining authority allows. Correct first, then spend.
+        - Outside the NEZ: spend only what the APN law commands (throttle
+          proportional to |a_cmd|), preserving delta-v so the torpedo stays
+          able to reach the NEZ; closure is only forced while below the
+          cruise floor MIN_CLOSING_SPEED_KPS.
+        - The NEZ delta-v requirement always includes NEZ_DV_RESERVE_KPS, so
+          a reserve for late corrections survives to impact and the torpedo
+          is NOT unconditionally lethal: engaged outside its NEZ against an
+          early, hard jink it runs out of budget and misses.
 
         Args:
             torpedo: Torpedo being guided
@@ -1597,185 +1933,156 @@ class TorpedoGuidance:
         Returns:
             GuidanceCommand with direction and throttle
         """
-        # Minimum closing speed to achieve (km/s) before coasting
-        MIN_CLOSING_SPEED_KPS = 12.0
+        # ---- Observe: update the target-acceleration estimate every call,
+        # even when about to coast, so the filter never starves. -----------
+        target_accel_est = self._update_target_accel_estimate(
+            torpedo, target_vel, dt
+        )
 
-        # Proportional-navigation ratio used when steering out lateral drift.
-        # Standard PN uses N in [3, 5]; anything <= 2 cannot beat the rate at
-        # which a rotating line of sight regenerates lateral velocity.
-        NAV_RATIO = 4.0
+        # ---- Synchronize the observation. CombatSimulation updates ships
+        # BEFORE torpedoes, so `target_pos` arrives already advanced to the
+        # end of this tick while the torpedo has not been integrated yet.
+        # Roll the target back one tick (exactly as the sim's own CPA check
+        # does: target_pos_t0 = target.position - target.velocity * dt) so
+        # both bodies are measured at the same instant. Without this the
+        # guidance flies a perfect collision course to a phantom point
+        # displaced by (torpedo lateral velocity * dt) - ~800 m against a
+        # hard-evading target - while reporting a near-zero predicted miss.
+        target_pos = target_pos - target_vel * dt
 
-        # Lateral velocity tolerance (km/s) - below this, we're on course
-        LATERAL_TOLERANCE_KPS = 1.0  # 1 km/s lateral = ~1km miss per second
-
-        # Predicted miss below which it is safe to stop guiding and coast.
-        # For a ballistic coast the predicted miss (lateral_speed * time_to_impact)
-        # is an invariant of the geometry - it does NOT shrink as the torpedo
-        # closes. Coasting therefore locks in whatever miss is predicted here, so
-        # the tolerance has to be on the scale of the target hull (65-300 m in this
-        # sim), not kilometres.
-        ON_COURSE_MISS_TOLERANCE_KM = 0.1
-
-        # =================================================================
-        # CALCULATE GEOMETRY
-        # =================================================================
         to_target = target_pos - torpedo.position
         distance_m = to_target.magnitude
-
-        if distance_m < 100.0:  # Within 100m - essentially at target
+        if distance_m < 100.0:  # Within 100 m - essentially at target
             return GuidanceCommand.coast("at target")
 
-        distance_km = distance_m / 1000.0
-        los = to_target.normalized()  # Line of sight (unit vector toward target)
-
-        # Relative velocity: how torpedo moves relative to target
-        # If this points at target, we WILL hit
+        los = to_target.normalized()
         rel_vel = torpedo.velocity - target_vel
-
-        # Decompose relative velocity into:
-        # - Closing speed (along LOS, toward target is positive)
-        # - Lateral velocity (perpendicular to LOS, causes miss)
         closing_speed_mps = rel_vel.dot(los)
         closing_speed_kps = closing_speed_mps / 1000.0
-
         lateral_vel = rel_vel - los * closing_speed_mps
-        lateral_speed_mps = lateral_vel.magnitude
-        lateral_speed_kps = lateral_speed_mps / 1000.0
 
-        # Calculate time to impact (if closing)
-        if closing_speed_mps > 100:  # At least 100 m/s closing
-            time_to_impact = distance_m / closing_speed_mps
-        else:
-            time_to_impact = float('inf')
+        if torpedo.fuel_exhausted:
+            return GuidanceCommand.coast("fuel exhausted")
 
-        # Estimate miss distance if we coast from here
-        miss_distance_km = lateral_speed_kps * time_to_impact if time_to_impact < float('inf') else float('inf')
+        accel_max = torpedo.specs.acceleration_at_mass(torpedo.current_mass_kg)
+        if accel_max <= 0.0:
+            return GuidanceCommand.coast("no thrust available")
 
-        # =================================================================
-        # PHASE 1: INTERCEPT - On good course, coast to impact
-        # =================================================================
-        # If we're closing fast enough, on course (low miss), and close - COAST!
-        # This prevents overshoot oscillation.
-        if (closing_speed_kps >= MIN_CLOSING_SPEED_KPS and
-            miss_distance_km < ON_COURSE_MISS_TOLERANCE_KM and
-            time_to_impact < 60.0):     # Will arrive within 60 seconds
-            return GuidanceCommand.coast(
-                f"INTERCEPT: {distance_km:.0f}km, {time_to_impact:.0f}s to impact, miss~{miss_distance_km:.1f}km"
+        # ---- Not closing: build closure while killing drift with the same
+        # velocity-error law as before (APN needs a finite t_go to operate).
+        if closing_speed_mps <= 0.0:
+            velocity_error = (
+                los * (MIN_CLOSING_SPEED_KPS * 1000.0 - closing_speed_mps)
+                - lateral_vel * APN_NAV_RATIO
             )
-
-        # =================================================================
-        # PHASE 2: NOT CLOSING - Burn toward target
-        # =================================================================
-        if closing_speed_kps <= 0:
-            # Not closing - burn directly toward target
+            direction = (
+                velocity_error.normalized()
+                if velocity_error.magnitude > 1.0 else los
+            )
             return GuidanceCommand.burn(
-                los,
-                throttle=1.0,
+                direction, throttle=1.0,
                 reason=f"PURSUIT: closing={closing_speed_kps:.1f}km/s"
             )
 
-        # =================================================================
-        # PHASE 3: CLOSING BUT NEED SPEED - Build closing velocity
-        # =================================================================
-        # Use COMBINED thrust: main engine toward target + RCS for lateral correction
-        if closing_speed_kps < MIN_CLOSING_SPEED_KPS:
-            if lateral_speed_mps > 50.0:  # Have lateral drift to correct
-                # COMBINED: main engine steers on the relative-velocity ERROR,
-                # RCS adds a fine lateral trim on top.
-                #
-                # The velocity we want is `los * V_desired` (pure closure). The
-                # error is therefore
-                #     v_err = los * (V_desired - closing) - lateral_vel
-                # and burning along v_err builds closing speed AND cancels lateral
-                # drift with the same (full-authority) engine.
-                #
-                # Previously main_direction was `los` - pure pursuit - which pumps
-                # lateral velocity in faster than the 5%-authority RCS can remove
-                # it, so the torpedo settled into a pursuit limit cycle and missed
-                # non-maneuvering crossing targets outright.
-                #
-                # The lateral term carries the standard proportional-navigation
-                # ratio. Unity gain is NOT enough: as long as any lateral rate
-                # survives, the rotating line of sight regenerates lateral
-                # relative velocity at a rate Vc*omega = Vc*lat/d, which exactly
-                # cancels a unity-gain correction and leaves the miss frozen.
-                # PN theory requires N > 2 for the miss to collapse; N = 4 sits
-                # in the usual 3-5 band.
-                desired_closing_mps = MIN_CLOSING_SPEED_KPS * 1000.0
-                velocity_error = (
-                    los * (desired_closing_mps - closing_speed_mps)
-                    - lateral_vel * NAV_RATIO
+        # Time-to-go, floored at one guidance tick: inside the final tick the
+        # 1/t_go^2 gain would otherwise blow up on a miss the torpedo can no
+        # longer influence anyway.
+        t_go = max(distance_m / closing_speed_mps, max(dt, 1e-3))
+
+        # ---- Augmented PN command (ZEM form). The perpendicular part of the
+        # target's relative velocity is -lateral_vel (lateral_vel is the
+        # torpedo's drift across the LOS).
+        accel_perp = target_accel_est - los * target_accel_est.dot(los)
+        zem_perp = lateral_vel * (-t_go) + accel_perp * (0.5 * t_go * t_go)
+        predicted_miss_m = zem_perp.magnitude
+        a_cmd = zem_perp * (APN_NAV_RATIO / (t_go * t_go))
+        a_cmd_mag = a_cmd.magnitude
+
+        # ---- Commit logic: the NEZ is evaluated against the ASSUMED
+        # worst-case target (3 g), never the observed estimate. The terminal
+        # closure burn additionally requires being on course (predicted miss
+        # inside the deadband): correct first, then spend - investing in
+        # closing speed while a real miss is outstanding shortens the very
+        # window the correction needs.
+        nez = self.nez_status(torpedo, target_pos, target_vel)
+        surplus_kps = nez.dv_margin_kps  # already net of reserve
+        terminal_burn = (
+            nez.inside
+            and surplus_kps > TERMINAL_MIN_BURN_KPS
+            and predicted_miss_m < APN_MISS_DEADBAND_M
+        )
+        below_cruise_floor = closing_speed_kps < MIN_CLOSING_SPEED_KPS
+        want_closure = terminal_burn or below_cruise_floor
+
+        # ---- Saturated: every m/s^2 goes to the lateral correction.
+        if a_cmd_mag >= accel_max:
+            return GuidanceCommand.burn(
+                a_cmd.normalized(), throttle=1.0,
+                reason=(
+                    f"APN_SAT: miss~{predicted_miss_m / 1000.0:.2f}km, "
+                    f"cmd={a_cmd_mag:.0f}m/s2 > {accel_max:.0f}m/s2"
                 )
-                if velocity_error.magnitude > 1.0:
-                    main_direction = velocity_error.normalized()
-                else:
-                    main_direction = los
-                lateral_correction = (lateral_vel * -1.0).normalized()
-                rcs_throttle = min(1.0, lateral_speed_mps / 500.0)  # Scale RCS with drift
-                return GuidanceCommand.combined(
-                    main_direction=main_direction,
-                    main_throttle=1.0,
-                    rcs_direction=lateral_correction,
-                    rcs_throttle=rcs_throttle,
-                    reason=f"COMBINED: v_err+RCS lat={lateral_speed_kps:.1f}km/s"
+            )
+
+        # ---- Closure wanted (terminal burn inside NEZ, or cruise floor):
+        # fill the authority left over by the lateral command with axial
+        # thrust. |a_cmd|^2 + fill^2 = accel_max^2 keeps the lateral
+        # component exactly what APN commanded.
+        if want_closure:
+            axial_fill = math.sqrt(accel_max * accel_max - a_cmd_mag * a_cmd_mag)
+            desired_accel = a_cmd + los * axial_fill
+            if terminal_burn:
+                reason = (
+                    f"TERMINAL(NEZ): {nez.time_to_go_s:.0f}s to impact, "
+                    f"spending {surplus_kps:.1f} km/s surplus "
+                    f"(reserve {nez.required_delta_v_kps:.2f}), "
+                    f"miss~{predicted_miss_m:.0f}m"
                 )
             else:
-                # On course but too slow - burn prograde only
-                return GuidanceCommand.burn(
-                    los,
-                    throttle=1.0,
-                    reason=f"ACCEL: {closing_speed_kps:.1f}km/s -> {MIN_CLOSING_SPEED_KPS}km/s"
+                reason = (
+                    f"ACCEL: {closing_speed_kps:.1f} -> "
+                    f"{MIN_CLOSING_SPEED_KPS:.0f}km/s, "
+                    f"miss~{predicted_miss_m / 1000.0:.2f}km"
                 )
+            return GuidanceCommand.burn(desired_accel.normalized(),
+                                        throttle=1.0, reason=reason)
 
-        # =================================================================
-        # PHASE 4: CORRECTION - Have enough speed, fix lateral drift
-        # =================================================================
-        # We have lateral velocity that will cause a miss
-        # Use RCS for precision corrections when we have enough closing speed
+        # ---- On course, no closure mandate: coast (delta-v preservation).
+        if predicted_miss_m < APN_MISS_DEADBAND_M:
+            return GuidanceCommand.coast(
+                f"ON_COURSE: miss~{predicted_miss_m:.0f}m, "
+                f"{t_go:.0f}s to impact ({nez.reason})"
+            )
 
-        if lateral_speed_mps < 10.0:  # Less than 10 m/s lateral - on course
-            return GuidanceCommand.coast("on course")
-
-        # Cancel lateral velocity
-        lateral_correction = (lateral_vel * -1.0).normalized()
-
-        # Pick the channel by whether the RCS can actually finish the job before
-        # impact, not by a fixed 1 km/s cutoff. The RCS has ~5% of main thrust,
-        # so handing it a correction it cannot complete in the remaining
-        # time-to-impact guarantees a miss - which is exactly what the old
-        # threshold did whenever time-to-impact was short.
-        rcs_accel_mps2 = (
+        # ---- Correction: spend exactly what the APN law commands and
+        # nothing more (delta-v preservation - this is also the only burn
+        # mode outside the NEZ). Route small commands through the lateral
+        # RCS (5% of main thrust): same propellant, same commanded
+        # acceleration, but the main engine stays cold for precision trims.
+        rcs_accel = (
             torpedo.specs.rcs_thrust_n / torpedo.current_mass_kg
             if torpedo.current_mass_kg > 0 else 0.0
         )
-        rcs_time_needed_s = (
-            lateral_speed_mps / rcs_accel_mps2 if rcs_accel_mps2 > 0 else float('inf')
-        )
-        # Keep half the remaining time as margin for the endgame.
-        rcs_can_finish = rcs_time_needed_s <= 0.5 * time_to_impact
-
-        if rcs_can_finish:
-            # Small correction - use RCS for precision
-            rcs_throttle = min(1.0, lateral_speed_mps / 200.0)  # Scale throttle
+        if 0.0 < a_cmd_mag <= rcs_accel:
             return GuidanceCommand.rcs_correction(
-                lateral_correction,
-                throttle=rcs_throttle,
-                reason=f"RCS_TRIM: lateral={lateral_speed_kps:.2f}km/s"
+                a_cmd.normalized(), throttle=a_cmd_mag / rcs_accel,
+                reason=(
+                    f"RCS_TRIM: miss~{predicted_miss_m / 1000.0:.2f}km, "
+                    f"cmd={a_cmd_mag:.1f}m/s2"
+                )
             )
-
-        # Large lateral drift - use main engine to correct
-        # Burn opposite to lateral velocity
-        if miss_distance_km > 20.0:
-            throttle = 1.0
-            reason = f"CORRECT: miss~{miss_distance_km:.0f}km"
-        elif miss_distance_km > 5.0:
-            throttle = 0.7
-            reason = f"ADJUST: miss~{miss_distance_km:.1f}km"
-        else:
-            throttle = 0.4
-            reason = f"TRIM: miss~{miss_distance_km:.1f}km"
-
-        return GuidanceCommand.burn(lateral_correction, throttle=throttle, reason=reason)
+        throttle = a_cmd_mag / accel_max
+        if throttle < 0.01:
+            return GuidanceCommand.coast(
+                f"ON_COURSE: miss~{predicted_miss_m:.0f}m (cmd negligible)"
+            )
+        return GuidanceCommand.burn(
+            a_cmd.normalized(), throttle=throttle,
+            reason=(
+                f"APN: miss~{predicted_miss_m / 1000.0:.2f}km, "
+                f"cmd={a_cmd_mag:.1f}m/s2, {nez.reason}"
+            )
+        )
 
     def update_collision_guidance(
         self,

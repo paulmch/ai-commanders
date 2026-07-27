@@ -818,6 +818,13 @@ def create_report_from_simulation(
         "total_hits": simulation.metrics.total_hits,
         "total_torpedoes_launched": simulation.metrics.total_torpedoes_launched,
         "total_torpedo_hits": simulation.metrics.total_torpedo_hits,
+        # Hard kills and seeker kills stay separate: a blinded torpedo is
+        # still inbound, so summing them would overstate point defense.
+        "total_torpedo_intercepted": simulation.metrics.total_torpedo_intercepted,
+        "total_torpedo_seeker_killed": simulation.metrics.total_torpedo_seeker_killed,
+        "total_torpedo_hits_after_seeker_kill":
+            simulation.metrics.total_torpedo_hits_after_seeker_kill,
+        "total_torpedo_neutralized": simulation.metrics.total_torpedo_neutralized,
         "total_damage_dealt": simulation.metrics.total_damage_dealt,
         "ships_destroyed": simulation.metrics.ships_destroyed,
         "hit_rate": simulation.metrics.hit_rate

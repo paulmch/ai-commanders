@@ -83,6 +83,13 @@ class FriendlyShipSnapshot:
     # Targeting info
     targeted_by: List[str]  # Enemy ship names targeting this ship
 
+    # Torpedo magazine and point-defense state (defaults keep older
+    # constructor call sites working). These are the inputs to the admiral's
+    # salvo sizing and formation decisions.
+    torpedoes_remaining: int = 0
+    pd_turrets_total: int = 0
+    pd_turrets_operational: int = 0
+
 
 @dataclass
 class EnemyShipSnapshot:
@@ -110,6 +117,35 @@ class ProjectileSnapshot:
     distance_km: float
     eta_seconds: float
     damage_gj: float
+
+
+def _projectile_weapon_label(proj_flight: Any) -> str:
+    """
+    Name the weapon that actually fired an inbound slug.
+
+    Every round in flight carries the Weapon that launched it
+    (ProjectileInFlight.weapon, set by CombatSimulation._launch_projectile), so
+    the admiral can be told "Heavy Siege Coiler Mk3" rather than the hardcoded
+    "Coilgun" this used to report for every projectile regardless of origin.
+    This is prompt surface - an LLM reads it to decide whether an inbound is
+    worth maneuvering away from - so a 7.25 GJ spinal round must not be
+    reported as a 0.72 GJ turret round.
+
+    Falls back to the projectile's own weapon_type string, then to a generic
+    label, for rounds injected directly by tests/tools without a Weapon.
+    """
+    weapon = getattr(proj_flight, "weapon", None)
+    if weapon is not None:
+        name = getattr(weapon, "name", None)
+        if name:
+            return str(name)
+        wtype = getattr(weapon, "weapon_type", None)
+        if wtype:
+            return str(wtype)
+    wtype = getattr(getattr(proj_flight, "projectile", None), "weapon_type", None)
+    if wtype:
+        return str(wtype)
+    return "Kinetic round"
 
 
 @dataclass
@@ -628,7 +664,18 @@ Be authentic to how you would command a fleet as {model_name}."""
         vel_vector = {"x": vel.x / 1000, "y": vel.y / 1000, "z": vel.z / 1000}
         vel_kps = vel.magnitude / 1000
 
+        # Torpedo magazine (sums every launcher) and PD turret state
+        torpedoes_remaining = getattr(ship, 'torpedoes_remaining', 0) or 0
+        pd_list = getattr(ship, 'point_defense', None) or []
+        pd_total = len(pd_list)
+        pd_operational = sum(
+            1 for pd in pd_list if getattr(pd, 'is_operational', True)
+        )
+
         return FriendlyShipSnapshot(
+            torpedoes_remaining=torpedoes_remaining,
+            pd_turrets_total=pd_total,
+            pd_turrets_operational=pd_operational,
             ship_id=ship.ship_id,
             ship_name=getattr(ship, 'name', None) or ship.ship_id,
             ship_type=captain.config.ship_type,
@@ -697,8 +744,48 @@ Be authentic to how you would command a fleet as {model_name}."""
         )
 
     def _build_projectile_snapshots(self, simulation: Any) -> List[ProjectileSnapshot]:
-        """Build snapshots of projectiles in flight."""
+        """
+        Build snapshots of ordnance in flight.
+
+        Torpedoes were previously invisible to the admiral entirely - the one
+        weapon whose defense (ordering EVADE, massing PD) is the admiral's job.
+        """
         snapshots = []
+
+        # Torpedoes first: they are the ordnance the admiral must react to.
+        for torp_flight in getattr(simulation, 'torpedoes', []) or []:
+            torp = torp_flight.torpedo
+            target = simulation.get_ship(torp.target_id)
+            if not target:
+                continue
+            dist_m = torp.position.distance_to(target.position)
+            rel_vel = torp.velocity - target.velocity
+            closing_ms = (
+                -rel_vel.dot((torp.position - target.position).normalized())
+                if dist_m > 0 else 0.0
+            )
+            eta = dist_m / closing_ms if closing_ms > 0 else 999
+            # Projected impact energy: current relative speed plus whatever
+            # closure the remaining burn can still add (same estimate the
+            # ship-side threat gatherer uses; prioritisation only).
+            burn_gain = min(
+                torp.remaining_delta_v_kps * 1000.0,
+                torp.specs.acceleration_at_mass(torp.current_mass_kg) * eta
+                if eta < 999 else torp.remaining_delta_v_kps * 1000.0,
+            )
+            impact_speed = rel_vel.magnitude + max(0.0, burn_gain)
+            ke_gj = (0.5 * torp.specs.penetrator_mass_kg * impact_speed ** 2 / 1e9
+                     + torp.specs.warhead_yield_gj)
+            label = ("Torpedo (BLINDED, ballistic)"
+                     if torp_flight.is_disabled else "Torpedo (guided)")
+            snapshots.append(ProjectileSnapshot(
+                source_ship=torp_flight.source_ship_id,
+                target_ship=torp.target_id,
+                weapon_type=label,
+                distance_km=dist_m / 1000,
+                eta_seconds=eta,
+                damage_gj=ke_gj,
+            ))
 
         for proj in simulation.projectiles:
             # Calculate ETA based on distance and velocity
@@ -712,7 +799,7 @@ Be authentic to how you would command a fleet as {model_name}."""
                     snapshots.append(ProjectileSnapshot(
                         source_ship=proj.source_ship_id,
                         target_ship=proj.target_ship_id,
-                        weapon_type="Coilgun",  # Could be more specific
+                        weapon_type=_projectile_weapon_label(proj),
                         distance_km=dist,
                         eta_seconds=eta,
                         damage_gj=proj.projectile.kinetic_energy_gj,
@@ -735,13 +822,15 @@ Be authentic to how you would command a fleet as {model_name}."""
             wspec = weapon_types.get(wtype, {})
             damage = wspec.get("kinetic_energy_gj", 0)
 
-            # Clean up name
-            if "spinal" in wtype:
-                name = f"Spinal ({damage:.1f} GJ)"
-            elif "heavy" in wtype:
-                name = f"Heavy Coilgun ({damage:.1f} GJ)"
-            elif "coilgun" in wtype:
-                name = f"Coilgun ({damage:.1f} GJ)"
+            # Use the weapon's real display name from fleet data. The previous
+            # substring guessing collapsed distinct weapons onto wrong labels:
+            # "heavy_siege_coiler_mk3" (a 7.25 GJ triple-nose spinal mount) has
+            # no "spinal" in its key, so it fell through to "Heavy Coilgun",
+            # and "light_coilgun_mk3" (0.125 GJ) was reported as plain
+            # "Coilgun" alongside the 0.72 GJ turret of the same name.
+            display = wspec.get("name")
+            if display:
+                name = f"{display} ({damage:.1f} GJ)" if damage else str(display)
             else:
                 name = wtype
 
