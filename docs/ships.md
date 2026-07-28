@@ -12,6 +12,7 @@ This document details all ship classes in AI Commanders, including their module 
    - [Frigate](#frigate)
    - [Destroyer](#destroyer)
    - [Cruiser](#cruiser)
+   - [Torpedo Cruiser](#torpedo-cruiser)
    - [Battlecruiser](#battlecruiser)
    - [Battleship](#battleship)
    - [Dreadnought](#dreadnought)
@@ -29,6 +30,7 @@ This document details all ship classes in AI Commanders, including their module 
 | Frigate | 600 | 100 | 3.0 | 20 | 3 | Escort |
 | Destroyer | 825 | 125 | 2.0 | 40 | 4 | Main Combat |
 | Cruiser | 1,000 | 175 | 1.5 | 60 | 5 | Heavy Combatant |
+| Torpedo Cruiser | 1,000 | 175 | 1.5 | 60 | 5 | Saturation Salvos |
 | Battlecruiser | 1,200 | 175 | 1.5 | 70 | 5 | Fast Capital |
 | Battleship | 1,600 | 200 | 1.0 | 80 | 8 | Line of Battle |
 | Dreadnought | 2,400 | 275 | 0.75 | 120 | 11 | Mobile Fortress |
@@ -65,10 +67,16 @@ All ships use Adamantane armor. Weapons deal damage through kinetic energy ablat
 
 | Weapon | Penetrator Mass (kg) | Delta-V (km/s) | Accel (g) | Magazine |
 |--------|---------------------|----------------|-----------|----------|
-| Trident Torpedo | 250 | 14.0 | 12.0 | 8 |
+| Trident Torpedo | 250 | 14.0 | 12.0 | 8 (12 per launcher on the torpedo cruiser) |
 
-**Torpedo at 5 km/s impact velocity:**
-- Kinetic Energy = ½ × 250 kg × (5,000 m/s)² = **3.125 GJ**
+Torpedo guidance (augmented proportional navigation) holds closure at a floor of
+~12 km/s and dumps its remaining delta-v in a terminal burn, so the *minimum* realistic
+impact is ~13.5 km/s:
+
+**Torpedo at 13.5 km/s impact velocity (zero-closure launch):**
+- Kinetic Energy = ½ × 250 kg × (13,500 m/s)² ≈ **22.8 GJ**
+
+Launched head-on at 26 km/s closure it arrives at ~28 km/s for ~95 GJ.
 
 ---
 
@@ -107,7 +115,10 @@ Ablation per hit is calculated as:
 | Heavy Coilgun Battery Mk3 | 1.22 GJ | ~28 cm |
 | Coilgun Battery Mk3 | 0.72 GJ | ~17 cm |
 | Light Coilgun Battery Mk3 | 0.125 GJ | ~3 cm |
-| Torpedo @ 5 km/s | 3.125 GJ | ~73 cm |
+
+Torpedoes are excluded from this simplified table: the engine gives their kinetic
+penetrator a focused 0.1 m² impact area and different chipping behavior, so use the
+simulated shots-to-kill tables below instead.
 
 ---
 
@@ -253,6 +264,37 @@ Layer 7: Coilgun Battery A, Coilgun Battery B, Cargo Bay
 Layer 8: Crew Quarters, Main Fuel Tank
 Layer 9 (Tail): Main Engine Assembly
 ```
+
+---
+
+### Torpedo Cruiser
+
+**Specifications:**
+- Hull Mass: 1,000 tons | Total Wet Mass: 3,980 tons
+- Length: 175m | Crew: 60
+- Combat Acceleration: 1.5g
+- Structural Integrity: 20
+
+Same hull and drive as the Cruiser, but it carries no guns at all: the gun batteries
+and part of their ammunition were traded for 4 torpedo launchers and extra armor mass
+(1,467 vs 1,296 tons). It closes under its nose armor and delivers saturation salvos -
+4 launchers with 12 rounds each fire 8 torpedoes per 30s decision cycle, enough to
+overwhelm a dreadnought's point defense in one coordinated strike.
+
+**Armor Sections:**
+
+| Section | Thickness | Protection | Area |
+|---------|-----------|------------|------|
+| Nose | 240.7 cm | 80.1% | 150 m² |
+| Lateral | 41.3 cm | 23.4% | 698 m² |
+| Tail | 48.2 cm | 26.4% | 150 m² |
+
+**Weapons:**
+- 4× Torpedo Launchers (12 rounds each, 48 total)
+- 4× PD Laser Turrets
+
+The armor profile matches the Cruiser, so the Cruiser rows in the combat tables below
+apply to it as well.
 
 ---
 
@@ -478,12 +520,15 @@ Using Spinal Coiler Mk3 (4.29 GJ per shot):
 | Battleship | 262/45/52 | 47 | 21 | 19 |
 | Dreadnought | 251/43/50 | 46 | 21 | 24 |
 
-**Torpedoes vs guns:** impact energy scales with the SQUARE of closing speed, and a
-Trident carries 14 km/s of its own delta-v before either ship's velocity is added. A
-head-on pass at 26 km/s closure delivers ~85 GJ - roughly 20 spinal rounds in one hit -
-which is why a torpedo can kill a capital ship in 1-2 hits while a coilgun needs dozens.
-Conversely a torpedo lobbed at low closing speed is nearly worthless. Torpedo boats live
-or die by the geometry of the run.
+**Torpedoes vs guns:** impact energy scales with the SQUARE of impact speed. Trident
+guidance holds closure at a floor of ~12 km/s and burns its remaining delta-v in the
+terminal phase, so even a zero-closure launch impacts at ~13.5 km/s (~23 GJ) and a
+head-on launch at 26 km/s closure arrives at ~28 km/s for ~95 GJ - roughly 20 spinal
+rounds in one hit. That is why a torpedo can kill a capital ship in 1-2 hits while a
+coilgun needs dozens. Once the torpedo's No-Escape-Zone test says a 3g-limited target
+can no longer escape, it commits and can only be shot down or tanked. The one launch
+that IS wasted is at a receding, evading ship - it outruns the round's delta-v.
+Torpedo boats live or die by the geometry of the run.
 
 **Damage Path Notes:**
 - **Nose hits**: Spinal weapon → Forward hull → Bridge [CRITICAL] → Reactor [CRITICAL]
@@ -518,4 +563,4 @@ or die by the geometry of the run.
 
 ---
 
-*Data extracted from Terra Invicta game mechanics. Calculations assume perpendicular impacts and standard 0.01 m² impact area.*
+*Data extracted from Terra Invicta game mechanics. Calculations assume perpendicular impacts; impact areas mirror the simulation engine (0.1-0.3 m² for gun rounds by mass, 0.1 m² for torpedo penetrators).*

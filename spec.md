@@ -1,3 +1,7 @@
+> **Note:** This is the original project brief, kept for historical reference.
+> The implemented design has evolved well beyond it - see [README.md](README.md)
+> and [docs/](docs/) for the current state.
+
 Inspired by Terra Invicta Space Battles.
 
 Goald generate  a space battle enviroment where two realistic near future ships are enganging other a station we will not render here. The defender is trying to destroy the ship or disable it. The attacker is either trying to destroy the ship or disengage of the defender which would then allow it to reach the station before the defender. 

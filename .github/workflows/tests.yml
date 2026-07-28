@@ -16,8 +16,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # Pinned to the exact release tag: setup-uv published v9.0.0 without a
+      # floating `v9` major tag, so `@v9` fails workflow resolution entirely
+      # ("Unable to resolve action") before any job step runs.
       - name: Install uv
-        uses: astral-sh/setup-uv@v9
+        uses: astral-sh/setup-uv@v9.0.0
         with:
           version: "latest"
           enable-cache: true
