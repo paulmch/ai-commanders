@@ -205,7 +205,7 @@ Fleet battles use JSON configuration files:
 | `initial_distance_km` | Starting distance between fleets |
 | `admiral` | Model for fleet admiral (or `null` for no admiral) |
 | `ships` | Array of ship configurations |
-| `ship_type` | Ship class (frigate, destroyer, cruiser, etc.) |
+| `ship_type` | Ship class from `data/fleet_ships.json` (corvette, frigate, destroyer, cruiser, cruiser_torpedo, battlecruiser, battleship, dreadnought, dreadnought_siege) |
 | `model` | OpenRouter model ID for the captain |
 
 ## CLI Reference
@@ -226,6 +226,10 @@ uv run python scripts/run_llm_battle.py [OPTIONS]
 | `--beta-name` | Captain name for Beta | Captain Volkov |
 | `--alpha-ship` | Ship name for Alpha | TIS Relentless |
 | `--beta-ship` | Ship name for Beta | HFS Determination |
+
+Ship type choices are derived from `data/fleet_ships.json`: `corvette`, `frigate`,
+`destroyer`, `cruiser`, `cruiser_torpedo`, `battlecruiser`, `battleship`,
+`dreadnought`, and the scenario-specific `dreadnought_siege`.
 
 ### Battle Options
 
@@ -361,7 +365,7 @@ ready()                # Signal turn complete
 | Maneuver | Behavior |
 |----------|----------|
 | `INTERCEPT` | Burn toward target at specified throttle |
-| `EVASIVE` | Random dodging pattern (needs throttle!) |
+| `EVASIVE` | Threat-aware dodging: wobbles vs guns, auto-RUNs from guided torpedoes, auto-PRESENTs thickest armor in the final seconds (needs throttle!) |
 | `BRAKE` | Flip and decelerate |
 | `MAINTAIN` | Coast at current velocity |
 | `PADLOCK` | Coast while keeping nose pointed at target (good for shooting) |
@@ -430,6 +434,7 @@ ready()                # Signal turn complete
 | Frigate | 3.0g | 15s | 71/12/14 cm | Coilgun + PD | Fast attack |
 | Destroyer | 2.0g | 21s | 151/26/30 cm | Spinal + coilgun | Balanced combatant |
 | Cruiser | 1.5g | 28s | 240/41/48 cm | Spinal + coilguns | Heavy firepower |
+| Torpedo Cruiser | 1.5g | 28s | 241/41/48 cm | 4x torpedo launchers + 4 PD | Saturation salvos |
 | Battlecruiser | 1.5g | 28s | 177/30/35 cm | Spinal + coilguns | Fast capital |
 | Battleship | 1.0g | 37s | 262/45/52 cm | Siege coiler | Line combat |
 | Dreadnought | 0.75g | 50s | 251/43/50 cm | Siege coiler | Fleet anchor |
@@ -439,6 +444,11 @@ heavy armor ends up *thicker* than a larger one: the corvette is a torpedo boat 
 survive its attack run, so it carries a 5.8x
 thicker nose than flank. The frigate has the same hull and acceleration but fights at
 range, and carries less than half the armor.
+
+The torpedo cruiser (`cruiser_torpedo`) carries no guns at all: 4 launchers with 12
+rounds each let it fire an 8-torpedo salvo every 30s decision - sized to saturate a
+dreadnought's point defense and land the hits that kill it in one coordinated strike.
+The tonnage freed by dropping the gun batteries went into armor.
 
 **Armor Sections:**
 - **Nose (N)**: Heaviest armor, faces enemy during attack runs
@@ -452,21 +462,33 @@ range, and carries less than half the armor.
 the threat inside 30° is the single largest survivability lever in the game - larger than
 evasion. The break-away turn after an attack run is the moment of maximum danger.
 
-**Torpedo damage scales with the square of closing speed.** A Trident carries 14 km/s of
-its own delta-v before either ship's velocity is added, so a head-on pass at 26 km/s
-closure delivers ~85 GJ - roughly 20 spinal rounds in a single hit. Measured against the
-live engine, torpedoes needed to kill:
+**Torpedoes guide themselves and damage scales with the square of impact speed.** A
+Trident (250 kg penetrator, 14 km/s of onboard delta-v, 12g) steers with augmented
+proportional navigation: guidance holds closure at a floor of ~12 km/s and dumps its
+remaining delta-v in a terminal burn, so even a zero-closure launch impacts at
+~13.5 km/s (~23 GJ). Launched head-on at 26 km/s closure it arrives at ~28 km/s for
+~95 GJ - a spinal gun round is 4.3 GJ. Once a torpedo's No-Escape-Zone test says a
+3g-limited target can no longer get away, it commits and cannot be dodged - only shot
+down or tanked. Measured hits to kill (nose impacts): 4 at 14 km/s or 1 at 26 km/s
+for a destroyer, 6 or 2 for a dreadnought. A launch at a receding, evading ship is
+wasted - it outruns the round's delta-v.
 
-| Target | 26 km/s head-on | 14 km/s | 8 km/s |
-|--------|-----------------|---------|--------|
-| Destroyer | 1 | 3 | 6 |
-| Cruiser | 2 | 5 | 7 |
-| Dreadnought | 2 | 6 | 7 |
+**Point defense is a continuous-dwell beam, and salvo timing decides what gets through.**
+Each PD laser dwells on incoming torpedoes across its whole ~250 km envelope, with
+coupling improving as range closes; one turret kills the seeker on ~5 km/s of closure,
+and every friendly turret in range of the threat corridor stacks. Two consequences:
 
-**Speed defeats point defense.** PD engages out to 250 km, so a faster torpedo gives the
-defender fewer shots: ~50% of torpedoes get through at 26 km/s versus ~30% at 8 km/s. Speed
-is therefore rewarded twice - more energy on impact and less time under fire. A torpedo
-lobbed at low closing speed is both weak and easily intercepted.
+- **Blinded is not stopped.** A seeker-killed torpedo coasts on ballistically and still
+  hits a ship flying straight (measured: 18/18 blinded rounds hit a non-evading
+  battleship). Ships under torpedo attack must EVADE or every PD kill is wasted.
+- **Simultaneous time-on-target beats trickled fire.** Rounds arriving together split
+  the defender's dwell: against 4 turrets, 4 simultaneous salvos put 24/24 rounds
+  through, while the same launchers spaced 30s apart put through only 12/24. Admirals
+  can order coordinated fleet-wide salvos for exactly this reason.
+
+Under EVASIVE, threatened ships handle torpedoes automatically: RUN (burn away from a
+guided round to cut closure and buy PD dwell time) and, in the final seconds of an
+unavoidable hit, PRESENT (rotate the thickest remaining armor onto the impact bearing).
 
 See [docs/ships.md](docs/ships.md) for full shots-to-kill tables (regenerate with
 `uv run python scripts/calculate_shots_to_kill.py`).
@@ -474,11 +496,18 @@ See [docs/ships.md](docs/ships.md) for full shots-to-kill tables (regenerate wit
 ## Features
 
 - **Newtonian Physics**: Real orbital mechanics, delta-v budgets, acceleration limits
-- **Ship Classes**: 7 classes from corvette to dreadnought
+- **Ship Classes**: 8 hulls from corvette to dreadnought, including a dedicated torpedo cruiser
 - **Armor System**: Layered armor (nose/lateral/tail), ablation mechanics, penetration
 - **Weapons**: Spinal coilguns (high damage), turret coilguns, torpedoes, point defense
+- **Torpedo Warfare**: Augmented proportional navigation with No-Escape-Zone commit,
+  terminal burns, coordinated fleet salvos, and threat-aware evasion (RUN/PRESENT)
+- **Point Defense**: Continuous-dwell lasers with per-turret capacitors, real heat and
+  power costs, and stacking escort coverage
+- **Per-Ship Tool Surface**: Captains only get the tools their hull actually mounts -
+  gun fire control on gun ships, torpedo launch on torpedo ships
 - **Thermal Management**: Heat sinks, radiators (extend for cooling, retract for protection)
-- **Fleet Command**: Admiral-captain hierarchy with orders and discussions
+- **Fleet Command**: Admiral-captain hierarchy with orders, discussions, and coordinated
+  torpedo salvo timing
 - **AI Personalities**: LLMs choose their own combat personality
 - **Communications**: Captains can message enemies, admirals can negotiate
 - **Battle Recording**: Full replay data saved as JSON
@@ -511,16 +540,29 @@ A flagship-vs-cheap pairing (e.g. `anthropic/claude-opus-5` vs
 ai-commanders/
 ├── src/
 │   ├── physics.py          # Newtonian mechanics, vectors, trajectories
+│   ├── simulation.py       # Battle simulation engine, evasion (RUN/PRESENT)
 │   ├── combat.py           # Weapons, armor, damage resolution
-│   ├── simulation.py       # Battle simulation engine
+│   ├── torpedo.py          # Torpedo flight: APN guidance, NEZ, terminal burn
+│   ├── pointdefense.py     # Continuous-dwell PD lasers, per-turret capacitors
+│   ├── projectile.py       # Coilgun round flight and hit resolution
+│   ├── firecontrol.py      # Hit probability, fire solutions
+│   ├── targeting.py        # Target selection and tracking
+│   ├── maneuvers.py        # Maneuver execution (INTERCEPT, EVASIVE, ...)
+│   ├── damage.py           # Damage application and armor ablation
 │   ├── modules.py          # Ship module layout, damage propagation
+│   ├── geometry.py         # Ship geometry, facing/aspect determination
+│   ├── thermal.py          # Heat sinks and radiators
+│   ├── power.py            # Reactor output and bus draw
+│   ├── battle_report.py    # Post-battle statistics
+│   ├── scenarios.py        # Scripted battle scenarios
 │   └── llm/
 │       ├── client.py       # OpenRouter HTTP client (httpx, no vendor SDK)
 │       ├── captain.py      # LLMCaptain - ship-level decisions
 │       ├── admiral.py      # LLMAdmiral - fleet-level command
-│       ├── prompts.py      # System prompts, personality selection
-│       ├── tools.py        # Captain tool definitions
-│       ├── admiral_tools.py # Admiral tool definitions
+│       ├── prompts.py      # System prompts, doctrine, personality selection
+│       ├── tools.py        # Captain tools (matched to each hull's armament)
+│       ├── admiral_tools.py # Admiral tools (orders, coordinated salvos)
+│       ├── victory.py      # Victory conditions, tactical scoring
 │       ├── fleet_config.py # Fleet configuration loading
 │       ├── battle_runner.py # Orchestrates battles
 │       ├── battle_recorder.py # Records battles for replay

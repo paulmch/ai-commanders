@@ -16,8 +16,8 @@ Thank you for your interest in contributing to AI Commanders! This document prov
 git clone https://github.com/YOUR_USERNAME/ai-commanders.git
 cd ai-commanders
 
-# Install dependencies
-uv sync
+# Install dependencies (--all-extras includes the MCP integration)
+uv sync --locked --all-extras
 
 # Run tests to verify setup
 uv run pytest tests/ -v
@@ -45,6 +45,18 @@ The physics and combat systems are based on Terra Invicta mechanics. When modify
 - Ensure Newtonian physics remain consistent
 - Reference the ship specifications in `data/fleet_ships.json`
 - Consider delta-v budgets and acceleration limits
+- Numbers quoted in the LLM doctrine prompts are pinned to engine behaviour by
+  `tests/test_doctrine_accuracy.py` - if you change combat constants, those tests
+  will point you at the prompt claims that need updating
+- After armor or damage-model changes, regenerate the tables in `docs/ships.md`
+  with `uv run python scripts/calculate_shots_to_kill.py`
+
+## Open Design Decisions
+
+Areas where a design direction hasn't been settled - discussion and PRs welcome:
+
+- **Fog of war**: both sides currently see full enemy state (exact hull, per-facing
+  armor, targeting). Whether and how to model sensor-limited information is open.
 
 ## Submitting Changes
 
