@@ -52,7 +52,8 @@ _VISION_SUBSTRINGS = (
     "gemini",        # Google: all Gemini models are multimodal
     "grok-2-vision", "grok-4", "grok-3",           # xAI vision-capable
     "pixtral",       # Mistral vision line
-    "qwen-vl", "qwen2-vl", "qwen2.5-vl", "qwen3-vl",
+    "qwen-vl", "qwen2-vl", "qwen2.5-vl", "qwen3-vl", "qwen3.8-max",
+    "kimi-k3",       # Moonshot's K3 is natively multimodal
     "llama-3.2-11b-vision", "llama-3.2-90b-vision", "llama-4",
     "-vl-",          # generic vision-language marker used by several vendors
 )

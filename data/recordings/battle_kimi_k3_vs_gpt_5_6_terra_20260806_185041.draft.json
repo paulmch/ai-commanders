@@ -1,0 +1,236 @@
+{
+  "budget": 200,
+  "alpha_captain_model": "moonshotai/kimi-k3",
+  "beta_captain_model": "openai/gpt-5.6-terra",
+  "alpha": {
+    "faction": "alpha",
+    "budget": 200,
+    "points_spent": 200,
+    "auto_draft": false,
+    "formation_name": "Screened Torpedo Line",
+    "selection_rationale": "Committed torpedo-saturation doctrine on uniformly fast (>=1.5g) hulls: five armored torpedo cruisers close under 241cm noses and 4 PD each to deliver 40+ rounds per decision \u2014 overwhelming any point-defense wall and killing capital ships in one coordinated strike at the 500km head-on start. Five 3g corvettes screen, add saturation, chase down anything slower, and evade return torpedoes; no slow hulls means the plan survives simple AI execution.",
+    "formation_rationale": "Two-echelon screen. Five corvettes form a plus-pattern PD wall 90 km ahead of the main body, absorbing the first gun exchange and intercepting inbound torpedoes across a 140 km cross-section. The five torpedo cruisers hold a tight cross at the anchor: each is within ~92-95 km of its nearest corvette and 50-100 km of its sister cruisers, so PD coverage overlaps across the whole fleet. Keeping the fragile torpedo hulls 90 km behind the vanguard delays their exposure to gun range while their long-range torpedoes engage. Lateral and vertical spread in both echelons (\u00b150-70 km) complicates enemy spinal firing geometry without breaking the ~100 km PD mutual-support threshold.",
+    "ships": [
+      {
+        "ship_id": "alpha_1",
+        "ship_name": "TIS Harpoon-1",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_2",
+        "ship_name": "TIS Harpoon-2",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          0.0,
+          50.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_3",
+        "ship_name": "TIS Harpoon-3",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          0.0,
+          -50.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_4",
+        "ship_name": "TIS Harpoon-4",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          0.0,
+          0.0,
+          50.0
+        ]
+      },
+      {
+        "ship_id": "alpha_5",
+        "ship_name": "TIS Harpoon-5",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          0.0,
+          0.0,
+          -50.0
+        ]
+      },
+      {
+        "ship_id": "alpha_6",
+        "ship_name": "TIS Dart-1",
+        "ship_type": "corvette",
+        "cost": 10,
+        "offset_km": [
+          90.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_7",
+        "ship_name": "TIS Dart-2",
+        "ship_type": "corvette",
+        "cost": 10,
+        "offset_km": [
+          90.0,
+          70.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_8",
+        "ship_name": "TIS Dart-3",
+        "ship_type": "corvette",
+        "cost": 10,
+        "offset_km": [
+          90.0,
+          -70.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_9",
+        "ship_name": "TIS Dart-4",
+        "ship_type": "corvette",
+        "cost": 10,
+        "offset_km": [
+          90.0,
+          0.0,
+          70.0
+        ]
+      },
+      {
+        "ship_id": "alpha_10",
+        "ship_name": "TIS Dart-5",
+        "ship_type": "corvette",
+        "cost": 10,
+        "offset_km": [
+          90.0,
+          0.0,
+          -70.0
+        ]
+      }
+    ]
+  },
+  "beta": {
+    "faction": "beta",
+    "budget": 200,
+    "points_spent": 200,
+    "auto_draft": false,
+    "formation_name": "Falchion PD Spearhead",
+    "selection_rationale": "A 200-point, nine-ship armored strike group: four torpedo cruisers provide repeated coordinated saturation salvos while five destroyers add spinal/gun pressure, extra point defense, and enough speed to hold a coherent formation. The force avoids slow capital/fast-screen abandonment problems and remains dangerous after its torpedoes are expended.",
+    "formation_rationale": "A compact forward destroyer screen takes the first exchange and maintains overlapping point-defense coverage, while the torpedo cruisers remain 50 km astern in a four-axis spread to complicate enemy firing geometry without dispersing beyond mutual support.",
+    "ships": [
+      {
+        "ship_id": "beta_1",
+        "ship_name": "OCS Harpoon-1",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          -45.0,
+          60.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_2",
+        "ship_name": "OCS Harpoon-2",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          -45.0,
+          -60.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_3",
+        "ship_name": "OCS Harpoon-3",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          -55.0,
+          0.0,
+          60.0
+        ]
+      },
+      {
+        "ship_id": "beta_4",
+        "ship_name": "OCS Harpoon-4",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          -55.0,
+          0.0,
+          -60.0
+        ]
+      },
+      {
+        "ship_id": "beta_5",
+        "ship_name": "OCS Falchion-1",
+        "ship_type": "destroyer",
+        "cost": 16,
+        "offset_km": [
+          25.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_6",
+        "ship_name": "OCS Falchion-2",
+        "ship_type": "destroyer",
+        "cost": 16,
+        "offset_km": [
+          15.0,
+          55.0,
+          20.0
+        ]
+      },
+      {
+        "ship_id": "beta_7",
+        "ship_name": "OCS Falchion-3",
+        "ship_type": "destroyer",
+        "cost": 16,
+        "offset_km": [
+          15.0,
+          -55.0,
+          -20.0
+        ]
+      },
+      {
+        "ship_id": "beta_8",
+        "ship_name": "OCS Falchion-4",
+        "ship_type": "destroyer",
+        "cost": 16,
+        "offset_km": [
+          5.0,
+          25.0,
+          -55.0
+        ]
+      },
+      {
+        "ship_id": "beta_9",
+        "ship_name": "OCS Falchion-5",
+        "ship_type": "destroyer",
+        "cost": 16,
+        "offset_km": [
+          5.0,
+          -25.0,
+          55.0
+        ]
+      }
+    ]
+  }
+}
