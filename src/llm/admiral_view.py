@@ -326,15 +326,17 @@ def render_frame_png(
         ax.scatter([proj["pos"][0] * km], [proj["pos"][1] * km],
                    marker=".", s=14, c="#ffee66", zorder=4)
 
-    # Ships. Labels flip to the left of ships on the right half of the
-    # battlespace so stat cards stay inside the frame.
-    ship_xs = [p[0] for p in ship_pos.values()]
-    mid_x = (min(ship_xs) + max(ship_xs)) / 2 if ship_xs else 0.0
+    # Ships: markers + velocity arrows in the plot; stat cards stacked down
+    # the MARGINS (alpha left, beta right) with leader lines to each hull.
+    # Inline cards piled into an unreadable wall at fleet scale - the 19-ship
+    # Kimi-vs-Terra frames buried the entire battle center under labels.
+    entries = {"alpha": [], "beta": []}
     for ship_id, s in frame.get("ships", {}).items():
         if s.get("destroyed"):
             continue
         x, y = s["pos"][0] * km, s["pos"][1] * km
-        color = FACTION_COLORS[_faction_of(ship_id, ships_meta)]
+        ship_faction = _faction_of(ship_id, ships_meta)
+        color = FACTION_COLORS[ship_faction]
         heading = math.atan2(s["fwd"][1], s["fwd"][0])
         ax.scatter([x], [y], marker=(3, 0, math.degrees(heading) - 90),
                    s=260, c=color, edgecolors="white", linewidths=0.8, zorder=6)
@@ -349,19 +351,34 @@ def render_frame_png(
 
         meta = ships_meta.get(ship_id, {})
         name = meta.get("name", ship_id)
-        cls = meta.get("type", "").replace("_", " ").upper()
-        label = (f"{name}\n{cls}\n"
-                 f"hull {s.get('hull', 100):.0f}%  "
-                 f"{'thrust' if s.get('thrust', 0) > 0.05 else 'coast'}  "
-                 f"{speed:.1f} km/s\n{s.get('maneuver', '')}")
-        on_right = x > mid_x
-        ax.annotate(label, (x, y),
-                    xytext=(-14 if on_right else 14, 14),
-                    textcoords="offset points", fontsize=8.5,
-                    ha="right" if on_right else "left",
-                    color=TEXT, family="monospace",
-                    bbox=dict(boxstyle="round,pad=0.35", fc="#101826",
-                              ec=color, alpha=0.85), zorder=7)
+        cls = meta.get("type", "").replace("_", " ")
+        label = (f"{name} · {cls}\n"
+                 f"{s.get('hull', 100):.0f}%  "
+                 f"{'thr' if s.get('thrust', 0) > 0.05 else 'cst'} "
+                 f"{speed:.1f}km/s  {s.get('maneuver', '')}")
+        entries[ship_faction].append((y, x, label, color))
+
+    # NB: loop variables must not shadow the `faction` PARAMETER - doing so
+    # relabeled every frame's "YOU COMMAND" banner as the last side iterated.
+    for side_faction, side_x, ha in (("alpha", 0.015, "left"), ("beta", 0.985, "right")):
+        cards = sorted(entries[side_faction], key=lambda e: -e[0])  # top-down by y
+        n = len(cards)
+        if not n:
+            continue
+        step = min(0.085, 0.92 / n)
+        top = 0.5 + (n - 1) * step / 2
+        for i, (y, x, label, color) in enumerate(cards):
+            fy = min(0.97, max(0.03, top - i * step))
+            ax.annotate(label, xy=(x, y), xycoords="data",
+                        xytext=(side_x, fy), textcoords="axes fraction",
+                        fontsize=7.2, ha=ha, va="center",
+                        color=TEXT, family="monospace",
+                        bbox=dict(boxstyle="round,pad=0.3", fc="#101826",
+                                  ec=color, alpha=0.9),
+                        arrowprops=dict(arrowstyle="-", color=color,
+                                        lw=0.6, alpha=0.45,
+                                        shrinkA=2, shrinkB=4),
+                        zorder=7)
 
     # Range line between closest opposing pair
     alive = [(sid, ship_pos[sid]) for sid, s in frame.get("ships", {}).items()
@@ -382,11 +399,12 @@ def render_frame_png(
                     fontsize=9, color="#8899aa", family="monospace",
                     ha="center", xytext=(0, 6), textcoords="offset points")
 
-    # Recent-events ticker
+    # Recent-events ticker (bottom-center: the margins belong to stat cards)
     if recent_events:
         lines = [f"T+{ts:.0f} {label}" for ts, label in recent_events]
-        ax.text(0.01, 0.01, "\n".join(lines), transform=ax.transAxes,
-                fontsize=8, color="#7f8fa0", family="monospace", va="bottom")
+        ax.text(0.5, 0.01, "\n".join(lines), transform=ax.transAxes,
+                fontsize=7.5, color="#7f8fa0", family="monospace",
+                va="bottom", ha="center")
 
     torps_a = sum(1 for tp in frame.get("torpedoes", [])
                   if _faction_of(tp["source"], ships_meta) == "alpha")
