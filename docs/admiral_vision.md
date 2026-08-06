@@ -75,6 +75,10 @@ Resolved questions:
   limits ever land.
 - **Token cost**: paid only on the one directive call per checkpoint.
 
+Vision-capable allowlist additions (2026-08-06): `kimi-k3` and
+`qwen3.8-max`. First competitive match with vision on BOTH sides:
+Kimi K3 vs GPT-5.6 Terra (frames in `data/recordings/vision/20260806_155054/`).
+
 Still open:
 
 - **A/B value test**: run the same battle with/without the image and

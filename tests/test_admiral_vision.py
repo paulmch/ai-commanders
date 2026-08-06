@@ -109,7 +109,8 @@ def make_runner(alpha_vision: bool, beta_admiral: bool = True,
     ("openai/gpt-5.2", True),
     ("qwen/qwen3-vl-235b", True),
     ("deepseek/deepseek-v4", False),
-    ("moonshotai/kimi-k3", False),
+    ("moonshotai/kimi-k3", True),   # natively multimodal, allowlisted 2026-08-06
+    ("moonshotai/kimi-k2", False),  # older text-only K2 stays excluded
     ("", False),
 ])
 def test_is_vision_model(model, expected):

@@ -269,9 +269,11 @@ TORPEDO_TOOL = {
             "- launch your salvo in one decision rather than trickling. Each launcher "
             "reloads in 12s (2 per launcher per 30s decision). Magazine is limited - "
             "check YOUR TORPEDOES REMAINING. If a round's target dies mid-flight, a "
-            "live-seeker round RETARGETS the cheapest reachable enemy on its own "
-            "(delta-v permitting) - overkill against one hull partially recycles onto "
-            "the next, though blinded or burned-out rounds are still wasted."
+            "live-seeker round RETARGETS a reachable enemy on its own (delta-v "
+            "permitting): a fresh seeker picks the intercept leaving the most fuel "
+            "(hardest impact), a PD-singed seeker races the FASTEST intercept before "
+            "it goes blind. Overkill partially recycles; blinded or burned-out "
+            "rounds are still wasted."
         ),
         "parameters": {
             "type": "object",

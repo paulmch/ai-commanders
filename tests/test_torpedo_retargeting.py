@@ -164,6 +164,59 @@ class TestRetargeting:
         _run_until(sim2, 10.0)
         assert _retarget_events(events2)
 
+    def test_seeker_health_picks_the_imperative(self, fleet_data):
+        """
+        Same two candidates, two seeker states. A fresh seeker maximizes
+        fuel-at-intercept (impact energy), picking the nearly-free downrange
+        chase; a PD-singed seeker races its own blindness and takes the
+        faster lateral intercept instead.
+        """
+        def run(heat_fraction):
+            random.seed(9)
+            sim = CombatSimulation(time_step=0.5, decision_interval=1e9, seed=9)
+            shooter = create_ship_from_fleet_data(
+                "alpha", "corvette", "alpha", fleet_data,
+                position=Vector3D(0, 0, 0), velocity=Vector3D(0, 0, 0),
+                forward=Vector3D(1, 0, 0))
+            primary = create_ship_from_fleet_data(
+                "beta_1", "corvette", "beta", fleet_data,
+                position=Vector3D(300_000, 0, 0), velocity=Vector3D(0, 0, 0),
+                forward=Vector3D(-1, 0, 0))
+            near_lateral = create_ship_from_fleet_data(
+                "beta_2", "corvette", "beta", fleet_data,
+                position=Vector3D(150_000, 40_000, 0), velocity=Vector3D(0, 0, 0),
+                forward=Vector3D(-1, 0, 0))
+            far_downrange = create_ship_from_fleet_data(
+                "beta_3", "corvette", "beta", fleet_data,
+                position=Vector3D(500_000, 0, 0), velocity=Vector3D(0, 0, 0),
+                forward=Vector3D(-1, 0, 0))
+            for ship in (shooter, primary, near_lateral, far_downrange):
+                ship.point_defense = []
+                sim.add_ship(ship)
+            events = []
+            sim.add_event_callback(lambda e: events.append(e))
+            assert sim.inject_command("alpha", {"type": "launch_torpedo",
+                                                "target_id": "beta_1"})
+            _run_until(sim, 8.0)
+            assert sim.torpedoes
+            tf = sim.torpedoes[0]
+            tf.heat_absorbed_j = heat_fraction * tf.ELECTRONICS_THRESHOLD_J
+            sim.get_ship("beta_1").is_destroyed = True
+            _run_until(sim, 10.0)
+            retargets = _retarget_events(events)
+            assert len(retargets) == 1
+            return retargets[0].data
+
+        fresh = run(heat_fraction=0.0)
+        assert fresh["selection_mode"] == "max_energy"
+        assert fresh["new_target_id"] == "beta_3", \
+            "fresh seeker should take the fuel-cheap downrange chase"
+
+        singed = run(heat_fraction=0.6)
+        assert singed["selection_mode"] == "fastest"
+        assert singed["new_target_id"] == "beta_2", \
+            "singed seeker should race to the nearest intercept"
+
     def test_surrendered_ships_are_not_acquired(self, fleet_data):
         sim, events = _setup(fleet_data)
         _run_until(sim, 8.0)

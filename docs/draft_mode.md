@@ -33,6 +33,39 @@ uv run python scripts/run_draft_battle.py --captain-model anthropic/claude-haiku
    orders (with tactical-plot vision by default, `--no-vision` to disable);
    captains execute.
 
+## The briefing admirals draft with
+
+`build_catalog_text` + `_selection_prompt` give both admirals the same
+tactical manual before they spend a point:
+
+- **Catalog**: per-hull cost, acceleration, armor by facing, PD turret
+  count, sim-truth torpedo magazines (read from the weapon entries the
+  simulation actually loads), muzzle-rated gun energies, and the full
+  designer role text.
+- **Weapon effects** (calibrated from recorded battles): ~1.5 cm armor
+  ablation per GJ; ALL kinetic impacts scale with closing speed (gun GJ
+  ratings are muzzle energy - mutual closure multiplies, mutual recession
+  bleeds off); torpedoes accelerate and steer all the way in, so their
+  closure scaling is one-sided in the attacker's favor.
+- **Torpedo flight profile**: 14 km/s at 12g, augmented proportional
+  navigation, never brakes; hoards delta-v outside its no-escape zone,
+  then commits everything above a ~0.5 km/s reserve into closing speed.
+- **Counterplay**: kiting drains magazines and PD-farms seekers before the
+  NEZ; a fleet only kites as fast as its slowest hull - commit to one
+  doctrine, not half of each.
+
+## Torpedo retargeting
+
+Rounds whose target dies mid-flight acquire a replacement on their own
+(live seeker + delta-v above the terminal reserve). The round measures its
+seeker health to pick an imperative: fresh seekers maximize fuel at
+intercept (impact energy), PD-singed seekers race the fastest intercept
+before going blind. Overkill concentration therefore chains down enemy
+formations - Kimi K3's "survivors retarget onto the next destroyer
+automatically" wave doctrine (2026-08-06 recording) killed three
+destroyers with one 16-round salvo. Formation counterplay: spacing units
+beyond an orphan's steering envelope turns enemy overkill back into waste.
+
 ## Point costs (src/llm/fleet_draft.py)
 
 | Hull | Cost | Notes |
@@ -71,7 +104,10 @@ Bastion, Harpoon, Sovereign, Colossus, Breaker) - "TIS Falchion-2" beats
 "TIS Heuristic-2" in every log and replay.
 
 `--captain-model <id>` swaps the heuristic for a real (cheap) LLM captain
-per ship instead.
+per ship instead. `--alpha-captain-model` / `--beta-captain-model`
+override per side - set each side's captains to its own admiral's model
+and the admirals fly their fleets directly (the Kimi-vs-GPT and
+DeepSeek-vs-Sonnet recordings use this).
 
 ## Outputs
 

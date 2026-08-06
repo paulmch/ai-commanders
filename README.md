@@ -79,7 +79,17 @@ uv run python scripts/run_draft_battle.py \
 
 # Fully offline demo - deterministic auto-drafts, zero LLM calls
 uv run python scripts/run_draft_battle.py --auto-draft --no-admirals --trace
+
+# Each admiral flies its own ships directly
+uv run python scripts/run_draft_battle.py \
+    --alpha-admiral moonshotai/kimi-k3 --alpha-captain-model moonshotai/kimi-k3 \
+    --beta-admiral openai/gpt-5.6-terra --beta-captain-model openai/gpt-5.6-terra
 ```
+
+Admirals draft with a full tactical briefing (calibrated weapon effects,
+torpedo flight profile, counterplay doctrine), and torpedoes whose target
+dies mid-flight retarget on their own - overkill chains through enemy
+formations. See `docs/draft_mode.md`.
 
 ## 3D Battle Visualizer
 

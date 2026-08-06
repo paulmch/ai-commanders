@@ -4304,14 +4304,24 @@ class CombatSimulation:
     # Do not chase a new target for longer than this - a minutes-long stern
     # chase across the whole battlespace is a culled round in denial.
     RETARGET_MAX_INTERCEPT_S = 600.0
+    # Above this fraction of the seeker's heat limit, a retargeting round
+    # stops optimizing impact energy and races its own blindness instead.
+    RETARGET_HURRY_HEAT_FRACTION = 0.35
 
     def _retarget_torpedo(self, torp_flight: 'TorpedoInFlight') -> Optional['ShipCombatState']:
         """
         Try to acquire a replacement target for a round whose target died.
 
-        Picks the reachable enemy whose intercept leaves the most delta-v in
-        the tank (the cheapest steer). Returns the new target ship, or None
-        if nothing is reachable within the delta-v and time budgets.
+        The round measures its own seeker health to pick an imperative:
+        - Fresh seeker: choose the reachable enemy whose intercept leaves the
+          most delta-v in the tank - surplus becomes terminal closing speed,
+          and impact energy scales with its square.
+        - PD-singed seeker (past RETARGET_HURRY_HEAT_FRACTION of the blind
+          threshold): choose the FASTEST reachable intercept - every extra
+          second of flight is more laser dwell on already-cooked electronics.
+
+        Returns the new target ship, or None if nothing is reachable within
+        the delta-v and time budgets.
         """
         torp = torp_flight.torpedo
         candidates = self.get_enemy_ships(torp_flight.source_ship_id)
@@ -4322,9 +4332,13 @@ class CombatSimulation:
             self.RETARGET_MIN_RESERVE_KPS,
             torp.specs.total_delta_v_kps * self.RETARGET_RESERVE_FRACTION,
         )
+        heat_fraction = (torp_flight.heat_absorbed_j
+                         / torp_flight.ELECTRONICS_THRESHOLD_J)
+        hurried = heat_fraction >= self.RETARGET_HURRY_HEAT_FRACTION
 
         best = None
-        best_fuel = -1.0
+        best_score = -float('inf')
+        best_fuel = 0.0
         best_time = 0.0
         for candidate in candidates:
             ok, t_intercept, fuel_left = torp.can_intercept(
@@ -4334,8 +4348,10 @@ class CombatSimulation:
                 continue
             if fuel_left < reserve_kps:
                 continue
-            if fuel_left > best_fuel:
+            score = -t_intercept if hurried else fuel_left
+            if score > best_score:
                 best = candidate
+                best_score = score
                 best_fuel = fuel_left
                 best_time = t_intercept
 
@@ -4361,6 +4377,8 @@ class CombatSimulation:
                 'distance_km': torp.position.distance_to(best.position) / 1000,
                 'time_to_intercept_s': best_time,
                 'dv_remaining_kps': torp.remaining_delta_v_kps,
+                'selection_mode': 'fastest' if hurried else 'max_energy',
+                'seeker_heat_fraction': round(heat_fraction, 3),
             },
         )
         return best

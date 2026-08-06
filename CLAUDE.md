@@ -47,11 +47,14 @@ ai-commanders/
 │   ├── pointdefense.py     # Continuous-dwell PD lasers, per-turret capacitors
 │   ├── projectile.py / firecontrol.py / targeting.py / maneuvers.py
 │   ├── damage.py / modules.py / geometry.py / thermal.py / power.py
-│   └── llm/                # OpenRouter client, captain/admiral agents, prompts,
-│                           # tools, battle runner/recorder, MCP servers
+│   └── llm/                # OpenRouter client, captain/admiral agents (+vision),
+│                           # draft mode + heuristic captains, prompts, tools,
+│                           # battle runner/recorder, MCP servers
 ├── tests/                  # pytest suite; test_fixes_*.py pin past bug fixes
 ├── scripts/
-│   ├── run_llm_battle.py   # CLI for AI vs AI battles
+│   ├── run_llm_battle.py   # CLI for AI vs AI battles (--fleet-config, --admiral-vision)
+│   ├── run_draft_battle.py # draft mode: point-budget fleets + formations
+│   ├── generate_test_battle.py  # scripted no-LLM recordings for the viewer
 │   ├── mcp_battle.py       # CLI for MCP-controlled battles
 │   └── calculate_shots_to_kill.py  # Regenerates docs/ships.md combat tables
 ├── docs/ships.md           # Ship specs + simulated shots-to-kill tables
