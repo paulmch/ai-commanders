@@ -8,6 +8,8 @@ ship capabilities, and personality modifiers.
 from typing import Dict, Any, Optional, List
 from enum import Enum
 
+import math
+
 try:
     from ..pointdefense import (
         PDLaser,
@@ -15,6 +17,7 @@ try:
         TORPEDO_ELECTRONICS_THRESHOLD_J,
         full_coupling_range_m,
     )
+    from ..torpedo import MIN_CLOSING_SPEED_KPS
 except ImportError:  # pragma: no cover - script-style imports
     from pointdefense import (
         PDLaser,
@@ -22,6 +25,13 @@ except ImportError:  # pragma: no cover - script-style imports
         TORPEDO_ELECTRONICS_THRESHOLD_J,
         full_coupling_range_m,
     )
+    from torpedo import MIN_CLOSING_SPEED_KPS
+
+
+# Closing speeds tabulated for the captain's PD block. The middle entry is the
+# guidance closure floor, which is what a normally launched round actually
+# arrives at; the others bracket it.
+PD_DWELL_TABLE_KPS = (4.0, 8.0, MIN_CLOSING_SPEED_KPS, 20.0)
 
 
 def pd_doctrine_numbers(fleet_data: Optional[Dict[str, Any]]) -> Dict[str, float]:
@@ -51,6 +61,24 @@ def pd_doctrine_numbers(fleet_data: Optional[Dict[str, Any]]) -> Dict[str, float
         laser.power_w * PD_ABSORPTIVITY * coupling_integral_m
         / TORPEDO_ELECTRONICS_THRESHOLD_J
     )
+    # What ONE turret delivers against a round crossing the whole envelope at a
+    # given closing speed, and how many turrets that implies for a seeker kill.
+    # This is the same closed form, re-expressed in the units a captain can
+    # actually read off their threat list (MJ and turret counts) instead of a
+    # "km/s of closure" figure that invites comparison against the wrong speed.
+    dwell_table = []
+    for v_kps in PD_DWELL_TABLE_KPS:
+        mj = laser.energy_before_impact_j(laser.range_km, v_kps * 1000.0) / 1e6
+        dwell_table.append({
+            "closing_kps": v_kps,
+            "mj_per_turret": mj,
+            "turrets_to_blind": max(
+                1, math.ceil(TORPEDO_ELECTRONICS_THRESHOLD_J / 1e6 / mj)
+            ) if mj > 0 else 99,
+        })
+    at_floor = next(
+        r for r in dwell_table if r["closing_kps"] == MIN_CLOSING_SPEED_KPS
+    )
     return {
         "range_km": laser.range_km,
         "power_mw": laser.power_mw,
@@ -58,6 +86,14 @@ def pd_doctrine_numbers(fleet_data: Optional[Dict[str, Any]]) -> Dict[str, float
         "blind_closure_kps_per_turret": blind_closure_mps / 1000.0,
         "seeker_kill_mj": TORPEDO_ELECTRONICS_THRESHOLD_J / 1e6,
         "waste_heat_mw": laser.waste_heat_w() / 1e6,
+        # Guidance never lets a fuelled round close slower than this, so it is
+        # the speed PD actually has to cope with (src/torpedo.py).
+        "closure_floor_kps": MIN_CLOSING_SPEED_KPS,
+        "dwell_table": dwell_table,
+        "mj_per_turret_at_floor": at_floor["mj_per_turret"],
+        "turrets_to_blind_at_floor": at_floor["turrets_to_blind"],
+        # Seconds a round at the closure floor spends inside the envelope.
+        "envelope_crossing_s": laser.range_km / MIN_CLOSING_SPEED_KPS,
     }
 
 
@@ -137,7 +173,6 @@ def format_weapon_groups_for_prompt(weapons: List[Dict], weapon_types: Dict[str,
         # runs (see pd_doctrine_numbers) - the prompt used to hardcode a 100km
         # envelope while the sim used 250km.
         pd = pd_doctrine_numbers({"weapon_types": weapon_types})
-        per = pd["blind_closure_kps_per_turret"]
         lines.append(
             f"- {count}x Point Defense Lasers ({pd['power_mw']:.0f} MW beam): "
             f"FULLY AUTOMATIC - engage inbound torpedoes within {pd['range_km']:.0f}km, "
@@ -148,12 +183,34 @@ def format_weapon_groups_for_prompt(weapons: List[Dict], weapon_types: Dict[str,
             f"at the envelope edge most of it misses, so lethality rises steeply as a "
             f"threat closes."
         )
+        # The dose PD lands is set by the TORPEDO's closing speed, not by the
+        # hull-to-hull range rate. Stating the rule as "one turret stops ~5 km/s
+        # of closure" was true but read as a comparison against the range rate
+        # on the battlefield line - so a duel whose ships closed at 1.25 km/s
+        # looked comfortably defensible while all 8 rounds went through
+        # un-blinded. Quote MJ against the number on the threat line instead.
+        floor = pd["closure_floor_kps"]
+        need = pd["turrets_to_blind_at_floor"]
+        verdict = ("CAN blind one" if count >= need else
+                   f"CANNOT blind one ({need} needed)")
+        table = "; ".join(
+            f"{r['closing_kps']:.0f}->{r['mj_per_turret']:.0f}MJ/{r['turrets_to_blind']}t"
+            for r in pd["dwell_table"]
+        )
         lines.append(
-            f"  * A torpedo is killed by cooking its seeker ({pd['seeker_kill_mj']:.0f} MJ "
-            f"absorbed). Dwelling from envelope entry to impact, ONE turret stops at most "
-            f"~{per:.0f} km/s of closure; each turret adds ~{per:.0f} km/s (your {count}: "
-            f"~{count * per:.0f} km/s). Guided torpedoes arrive at 13-28 km/s - alone you "
-            f"stop only the slow ones. Allied turrets in range of the threat stack with yours."
+            f"  * A torpedo dies by cooking its seeker ({pd['seeker_kill_mj']:.0f} MJ "
+            f"absorbed). The dose is set by the TORPEDO's closing speed - the "
+            f"'closing X km/s' on each INBOUND ORDNANCE line, NOT your range rate to "
+            f"the enemy ship. Guidance holds a fuelled round at >={floor:.0f} km/s "
+            f"however slowly the ships approach, so it crosses your "
+            f"{pd['range_km']:.0f} km envelope in ~{pd['envelope_crossing_s']:.0f}s."
+        )
+        lines.append(f"    closing km/s -> MJ one turret lands/turrets needed: {table}")
+        lines.append(
+            f"    Normal launches arrive at ~{floor:.0f} km/s = "
+            f"~{pd['mj_per_turret_at_floor']:.0f} MJ per turret, so {need} turrets must "
+            f"bear on ONE round. You have {count}: you {verdict}. Allied turrets within "
+            f"{pd['range_km']:.0f} km stack - the only way a small hull gets a kill."
         )
         lines.append(
             "  * A PD 'kill' BLINDS the torpedo - the wreck coasts on ballistically and "
@@ -428,9 +485,12 @@ TORPEDOES ({n}x {wt.get('name', 'launcher')}) - your decisive weapon:
       ship that keeps running usually outlasts the round's delta-v. No tail chases.
   (A spinal gun round is ~4.3 GJ: a plain closing launch = ~5 gun hits, head-on ~20.)
 - A CLOSING launch vs a lone ship almost always connects: no hull (<=3g) out-turns
-  {accel}g guidance, and lone-ship point defense only stops slow closures (each PD
-  turret kills ~{pd['blind_closure_kps_per_turret']:.0f} km/s of closure; you arrive at 13+).
-  Expect near-100% on stragglers, heavy attrition against an escorted evading wall.
+  {accel}g guidance, and your round crosses their point defense envelope at the
+  >={pd['closure_floor_kps']:.0f} km/s guidance floor whatever the two ships are doing.
+  That is only ~{pd['mj_per_turret_at_floor']:.0f} MJ per defending turret against a
+  {pd['seeker_kill_mj']:.0f} MJ seeker kill: they need {pd['turrets_to_blind_at_floor']} turrets
+  bearing on it. Expect near-100% on stragglers and on 1-2 turret hulls, heavy attrition
+  against an escorted evading wall.
 - SALVO TIMING IS DECISIVE: rounds arriving TOGETHER split enemy PD dwell; the same
   rounds trickled out are blinded one by one, early enough to be dodged. Measured vs
   4 PD turrets: 4 simultaneous -> 24/24 through; the same 4 spaced 30s -> 12/24.
@@ -718,9 +778,13 @@ KEY PHYSICS TO REMEMBER:
 - Your PD is automatic; it BLINDS torpedoes (seeker kill at 50 MJ absorbed beam), it
   does not vaporise them. A blinded round coasts ballistically on its last course and
   STILL HITS a ship flying straight. PD + EVADE stops torpedoes; PD alone stops nothing.
-- Each PD turret can blind ~5 km/s of closure (continuous dwell across the whole
-  envelope); guided rounds arrive at 13-28 km/s. A lone ship therefore does NOT stop
-  a committed closing torpedo - EVADE, take it on the nose armor, kill the shooter.
+- THE CLOSURE THAT SIZES YOUR PD IS THE TORPEDO'S, NOT THE ENEMY SHIP'S. Two hulls
+  drifting together at 1 km/s still take rounds crossing the PD envelope at 12+ km/s
+  and landing at 13-28 km/s: guidance holds a closure floor whatever the ships do. Judge PD
+  by the "closing X km/s" on the INBOUND ORDNANCE line against the MJ-per-turret table
+  in your PD spec - never by your range rate. Measured: 1-2 turret hulls do NOT blind a
+  normal launch (<=46 of the 50 MJ needed); 3+ turrets on one round do. A lone ship
+  does NOT stop a committed torpedo - EVADE, nose armor, kill the shooter.
 - A CLOSING torpedo is inside its No-Escape Zone almost from launch: no hull (max 3g)
   out-turns 12g guidance. But if you are already OPENING range when it launches,
   keep running - it burns out its delta-v and misses (measured: reliable escape).
@@ -1518,8 +1582,13 @@ HOW POINT DEFENSE ACTUALLY WORKS:
   ship flying straight. Measured: 18/18 blinded rounds hit a non-evading battleship;
   the same attack on an evading one behind 8 escorts landed 6/18. Therefore: any ship
   under torpedo attack must be ordered to EVADE, or every PD kill is wasted.
-- One turret blinds ~5 km/s of closure; N turrets ~5N km/s. Guided rounds arrive at
-  13-28 km/s: single hulls (1-4 turrets) cannot stop a committed closing torpedo.
+- DWELL IS SET BY THE TORPEDO'S CLOSING SPEED, NOT BY FLEET-TO-FLEET CLOSURE. Guidance
+  holds a fuelled round at >={pd_closure_floor_kps:.0f} km/s however slowly the fleets
+  approach, so it crosses the envelope in ~{pd_envelope_crossing_s:.0f}s and eats only
+  ~{pd_mj_per_turret:.0f} MJ per turret against a {pd_seeker_kill_mj:.0f} MJ seeker
+  kill: {pd_turrets_to_blind} turrets must bear on ONE round to blind it (impacts land
+  at 13-28 km/s). A 1-2 turret hull never blinds a normally launched torpedo alone -
+  massing turrets is the ONLY lever you have.
 - PD cost is negligible (~15 MW hull heat per firing turret, no thrust loss). Never
   restructure the fleet to "save" PD capacity.
 
@@ -1932,9 +2001,15 @@ Fire spinal when aligned, turrets continuous fire. Stay mobile - don't be a sitt
     pd_range_km = float(
         (fleet_data or {}).get("weapon_types", {}).get("pd_laser", {}).get("range_km", 250)
     )
+    pd = pd_doctrine_numbers(fleet_data)
 
     return ADMIRAL_SYSTEM_PROMPT.format(
         pd_range_km=pd_range_km,
+        pd_closure_floor_kps=pd["closure_floor_kps"],
+        pd_envelope_crossing_s=pd["envelope_crossing_s"],
+        pd_mj_per_turret=pd["mj_per_turret_at_floor"],
+        pd_seeker_kill_mj=pd["seeker_kill_mj"],
+        pd_turrets_to_blind=pd["turrets_to_blind_at_floor"],
         admiral_name=admiral_name,
         faction=faction.upper(),
         mission_block=mission_block,
@@ -2034,8 +2109,8 @@ SHIP STATUS - {ship_name}:
   Position: ({pos['x']:.0f}, {pos['y']:.0f}, {pos['z']:.0f}) km
   Velocity: {ship.velocity_kps:.1f} km/s
   Hull: {ship.hull_integrity:.0f}%
-  Heat: {ship.heat_pct:.0f}%
-  Delta-V: {ship.delta_v_remaining_kps:.1f} km/s remaining
+  Heat: {ship.heat_percent:.0f}%
+  Delta-V: {ship.delta_v_remaining:.1f} km/s remaining
   Weapons: {ship.weapons_summary}"""
                 break
 

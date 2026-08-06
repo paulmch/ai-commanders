@@ -1,0 +1,136 @@
+{
+  "budget": 80,
+  "captain_model": "heuristic",
+  "alpha": {
+    "faction": "alpha",
+    "budget": 80,
+    "points_spent": 62,
+    "auto_draft": false,
+    "formation_name": "Destroyer vanguard with corvette screen",
+    "selection_rationale": "Fast corvette torpedo swarm with destroyer gun support. Corvettes dictate range via 3.0g acceleration; destroyers provide 2x PD laser defense and spinal coilgun backup firepower. Total: 30+32=62 points, leaving 18 unspent but fleet is maxed at 5 ships.",
+    "formation_rationale": "The two destroyers (Falchion-1 and Falchion-2) form the forward vanguard at +50 km, spaced laterally to maximize gun coverage and complicate enemy spinal geometry. The three corvettes (Dart-1, Dart-2, Dart-3) are positioned slightly aft at +20 km and spread vertically/laterally to provide overlapping PD coverage against incoming torpedoes while staying within mutual support range (~100 km). This creates layered defense: destroyers tank initial exchange, corvettes provide dense PD umbrella for the fleet.",
+    "ships": [
+      {
+        "ship_id": "alpha_1",
+        "ship_name": "TIS Dart-1",
+        "ship_type": "corvette",
+        "cost": 10,
+        "offset_km": [
+          20.0,
+          -20.0,
+          30.0
+        ]
+      },
+      {
+        "ship_id": "alpha_2",
+        "ship_name": "TIS Dart-2",
+        "ship_type": "corvette",
+        "cost": 10,
+        "offset_km": [
+          20.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_3",
+        "ship_name": "TIS Dart-3",
+        "ship_type": "corvette",
+        "cost": 10,
+        "offset_km": [
+          20.0,
+          20.0,
+          -30.0
+        ]
+      },
+      {
+        "ship_id": "alpha_4",
+        "ship_name": "TIS Falchion-1",
+        "ship_type": "destroyer",
+        "cost": 16,
+        "offset_km": [
+          50.0,
+          -40.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_5",
+        "ship_name": "TIS Falchion-2",
+        "ship_type": "destroyer",
+        "cost": 16,
+        "offset_km": [
+          50.0,
+          40.0,
+          0.0
+        ]
+      }
+    ]
+  },
+  "beta": {
+    "faction": "beta",
+    "budget": 80,
+    "points_spent": 58,
+    "auto_draft": false,
+    "formation_name": "Hammer & Anvil",
+    "selection_rationale": "Balanced strike force combining destroyer firepower with frigate/corvette speed to control engagement range and saturate enemy defenses through coordinated attacks.",
+    "formation_rationale": "Destroyers form a tight vanguard to absorb initial spinal fire and establish gun range dominance. Frigates positioned laterally to provide overlapping PD coverage and flank support. Corvette held back in reserve to respond to threats or exploit breakthroughs. Lateral spread complicates enemy targeting while maintaining mutual PD support within the 100 km envelope.",
+    "ships": [
+      {
+        "ship_id": "beta_1",
+        "ship_name": "OCS Falchion-1",
+        "ship_type": "destroyer",
+        "cost": 16,
+        "offset_km": [
+          40.0,
+          -25.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_2",
+        "ship_name": "OCS Falchion-2",
+        "ship_type": "destroyer",
+        "cost": 16,
+        "offset_km": [
+          40.0,
+          25.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_3",
+        "ship_name": "OCS Ward-1",
+        "ship_type": "frigate",
+        "cost": 8,
+        "offset_km": [
+          20.0,
+          -60.0,
+          15.0
+        ]
+      },
+      {
+        "ship_id": "beta_4",
+        "ship_name": "OCS Ward-2",
+        "ship_type": "frigate",
+        "cost": 8,
+        "offset_km": [
+          20.0,
+          60.0,
+          -15.0
+        ]
+      },
+      {
+        "ship_id": "beta_5",
+        "ship_name": "OCS Dart",
+        "ship_type": "corvette",
+        "cost": 10,
+        "offset_km": [
+          -30.0,
+          0.0,
+          0.0
+        ]
+      }
+    ]
+  }
+}

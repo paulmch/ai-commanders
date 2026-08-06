@@ -40,6 +40,19 @@ class EventType(str, Enum):
     MODULE_DAMAGED = "module_damaged"
     MODULE_DESTROYED = "module_destroyed"
 
+    # Torpedo lifecycle. Without these a recording of a torpedo duel showed
+    # only the PD chatter: eight rounds flew and three modules died to them
+    # while the event log contained no torpedo at all. Every transition a
+    # torpedo can make now has an event, so a reader can reconstruct the whole
+    # engagement from the recording alone (no --trace needed).
+    TORPEDO_LAUNCHED = "torpedo_launched"
+    TORPEDO_IMPACT = "torpedo_impact"
+    TORPEDO_MISS = "torpedo_miss"
+    TORPEDO_INTERCEPTED = "torpedo_intercepted"
+    TORPEDO_FUEL_EXHAUSTED = "torpedo_fuel_exhausted"
+    TORPEDO_RETARGETED = "torpedo_retargeted"
+    TORPEDO_IN_FLIGHT_AT_END = "torpedo_in_flight_at_end"
+
     # Point defense events
     PD_FIRED = "pd_fired"
     PD_SLUG_DAMAGED = "pd_slug_damaged"
@@ -533,8 +546,18 @@ class BattleRecorder:
         ablation_cm: float,
         remaining_cm: float,
         chipping_fraction: float,
+        damage_gj: float = 0.0,
+        penetrated: bool = False,
+        source: str = "",
     ) -> None:
-        """Record armor ablation."""
+        """
+        Record armor ablation - EVERY ablating hit, not only breaching ones.
+
+        This used to be fed exclusively from the simulation's ARMOR_PENETRATED
+        event, so a recording contained one 'armor_damage' entry per BREACH and
+        nothing at all for the ablation that got the armor there. Penetration is
+        now its own event (record_penetration); this one is the ablation ledger.
+        """
         self._record_event(BattleEvent(
             timestamp=timestamp,
             event_type=EventType.ARMOR_DAMAGE,
@@ -544,6 +567,212 @@ class BattleRecorder:
                 "ablation_cm": ablation_cm,
                 "remaining_cm": remaining_cm,
                 "chipping_fraction": chipping_fraction,
+                "damage_gj": damage_gj,
+                "penetrated": penetrated,
+                "source": source,
+            }
+        ))
+
+    def record_penetration(
+        self,
+        timestamp: float,
+        ship_id: str,
+        location: str,
+        remaining_energy_gj: float,
+        chipping_fraction: float = 0.0,
+        critical_through_chip: bool = False,
+    ) -> None:
+        """Record armor being breached (energy passing through to the hull)."""
+        self._record_event(BattleEvent(
+            timestamp=timestamp,
+            event_type=EventType.PENETRATION,
+            ship_id=ship_id,
+            data={
+                "location": location,
+                "remaining_energy_gj": remaining_energy_gj,
+                "chipping_fraction": chipping_fraction,
+                "critical_through_chip": critical_through_chip,
+            }
+        ))
+
+    # -------------------------------------------------------------------------
+    # Torpedo lifecycle
+    # -------------------------------------------------------------------------
+
+    def record_torpedo_launched(
+        self,
+        timestamp: float,
+        shooter_id: str,
+        target_id: str,
+        torpedo_id: str,
+        initial_velocity_kps: float = 0.0,
+        delta_v_kps: float = 0.0,
+        warhead_gj: float = 0.0,
+        guidance_mode: str = "",
+        launch_distance_km: float = 0.0,
+    ) -> None:
+        """Record a torpedo leaving the tube: who fired, at whom, with what."""
+        self._record_event(BattleEvent(
+            timestamp=timestamp,
+            event_type=EventType.TORPEDO_LAUNCHED,
+            ship_id=shooter_id,
+            data={
+                "torpedo_id": torpedo_id,
+                "target_id": target_id,
+                "initial_velocity_kps": initial_velocity_kps,
+                "delta_v_kps": delta_v_kps,
+                "warhead_gj": warhead_gj,
+                "guidance_mode": guidance_mode,
+                "launch_distance_km": launch_distance_km,
+            }
+        ))
+
+    def record_torpedo_impact(
+        self,
+        timestamp: float,
+        shooter_id: str,
+        target_id: str,
+        torpedo_id: str,
+        total_damage_gj: float = 0.0,
+        kinetic_damage_gj: float = 0.0,
+        explosive_damage_gj: float = 0.0,
+        impact_speed_kps: float = 0.0,
+        hit_location: str = "unknown",
+        penetrator_mass_kg: float = 0.0,
+    ) -> None:
+        """Record a torpedo hitting a ship, with damage and impact geometry."""
+        self._record_event(BattleEvent(
+            timestamp=timestamp,
+            event_type=EventType.TORPEDO_IMPACT,
+            ship_id=shooter_id,
+            data={
+                "torpedo_id": torpedo_id,
+                "target_id": target_id,
+                "total_damage_gj": total_damage_gj,
+                "kinetic_damage_gj": kinetic_damage_gj,
+                "explosive_damage_gj": explosive_damage_gj,
+                "impact_speed_kps": impact_speed_kps,
+                "hit_location": hit_location,
+                "penetrator_mass_kg": penetrator_mass_kg,
+            }
+        ))
+
+    def record_torpedo_miss(
+        self,
+        timestamp: float,
+        shooter_id: str,
+        target_id: str,
+        torpedo_id: str,
+        closest_approach_km: float = 0.0,
+        hit_probability: float = 0.0,
+    ) -> None:
+        """Record a torpedo running past its target without connecting."""
+        self._record_event(BattleEvent(
+            timestamp=timestamp,
+            event_type=EventType.TORPEDO_MISS,
+            ship_id=shooter_id,
+            data={
+                "torpedo_id": torpedo_id,
+                "target_id": target_id,
+                "closest_approach_km": closest_approach_km,
+                "hit_probability": hit_probability,
+            }
+        ))
+
+    def record_torpedo_intercepted(
+        self,
+        timestamp: float,
+        shooter_id: str,
+        target_id: str,
+        torpedo_id: str,
+        total_heat_absorbed_j: float = 0.0,
+    ) -> None:
+        """Record a torpedo destroyed short of its target."""
+        self._record_event(BattleEvent(
+            timestamp=timestamp,
+            event_type=EventType.TORPEDO_INTERCEPTED,
+            ship_id=shooter_id,
+            data={
+                "torpedo_id": torpedo_id,
+                "target_id": target_id,
+                "total_heat_absorbed_j": total_heat_absorbed_j,
+            }
+        ))
+
+    def record_torpedo_fuel_exhausted(
+        self,
+        timestamp: float,
+        shooter_id: str,
+        target_id: str,
+        torpedo_id: str,
+        distance_to_target_km: float = 0.0,
+        speed_kps: float = 0.0,
+    ) -> None:
+        """Record a torpedo burning out and going ballistic."""
+        self._record_event(BattleEvent(
+            timestamp=timestamp,
+            event_type=EventType.TORPEDO_FUEL_EXHAUSTED,
+            ship_id=shooter_id,
+            data={
+                "torpedo_id": torpedo_id,
+                "target_id": target_id,
+                "distance_to_target_km": distance_to_target_km,
+                "speed_kps": speed_kps,
+            }
+        ))
+
+    def record_torpedo_retargeted(
+        self,
+        timestamp: float,
+        shooter_id: str,
+        torpedo_id: str,
+        old_target_id: str,
+        new_target_id: str,
+        distance_km: float = 0.0,
+        time_to_intercept_s: float = 0.0,
+        dv_remaining_kps: float = 0.0,
+    ) -> None:
+        """Record a live-seeker round swinging onto a replacement target."""
+        self._record_event(BattleEvent(
+            timestamp=timestamp,
+            event_type=EventType.TORPEDO_RETARGETED,
+            ship_id=shooter_id,
+            data={
+                "torpedo_id": torpedo_id,
+                "old_target_id": old_target_id,
+                "new_target_id": new_target_id,
+                "distance_km": distance_km,
+                "time_to_intercept_s": time_to_intercept_s,
+                "dv_remaining_kps": dv_remaining_kps,
+            }
+        ))
+
+    def record_torpedo_in_flight_at_end(
+        self,
+        timestamp: float,
+        shooter_id: str,
+        target_id: str,
+        torpedo_id: str,
+        distance_to_target_km: float = 0.0,
+        heat_absorbed_j: float = 0.0,
+        blinded: bool = False,
+    ) -> None:
+        """
+        Record a torpedo that was still flying when the battle ended.
+
+        Without this a round that neither hit, missed nor was intercepted simply
+        vanished from the ledger, and launches never balanced against outcomes.
+        """
+        self._record_event(BattleEvent(
+            timestamp=timestamp,
+            event_type=EventType.TORPEDO_IN_FLIGHT_AT_END,
+            ship_id=shooter_id,
+            data={
+                "torpedo_id": torpedo_id,
+                "target_id": target_id,
+                "distance_to_target_km": distance_to_target_km,
+                "heat_absorbed_j": heat_absorbed_j,
+                "blinded": blinded,
             }
         ))
 
@@ -594,8 +823,18 @@ class BattleRecorder:
         mass_ablated_kg: float = 0.0,
         total_ablated_kg: float = 0.0,
         energy_delivered_j: float = 0.0,
+        heat_delivered_j: float = 0.0,
+        total_heat_j: float = 0.0,
     ) -> None:
-        """Record a point defense laser shot."""
+        """
+        Record a point defense laser shot.
+
+        Slug engagements report ablated MASS; torpedo engagements report
+        absorbed HEAT (a torpedo is killed by cooking its seeker, not by
+        ablating it away), which is what decides whether the round is blinded.
+        The heat fields used to be dropped on the floor, so every torpedo
+        pd_fired entry in a recording read 0 J delivered.
+        """
         self._record_event(BattleEvent(
             timestamp=timestamp,
             event_type=EventType.PD_FIRED,
@@ -608,6 +847,8 @@ class BattleRecorder:
                 "mass_ablated_kg": mass_ablated_kg,
                 "total_ablated_kg": total_ablated_kg,
                 "energy_delivered_j": energy_delivered_j,
+                "heat_delivered_j": heat_delivered_j,
+                "total_heat_j": total_heat_j,
             }
         ))
 
@@ -653,8 +894,9 @@ class BattleRecorder:
         ship_id: str,
         torpedo_id: str,
         source_ship_id: str,
+        total_heat_absorbed_j: float = 0.0,
     ) -> None:
-        """Record PD disabling a torpedo."""
+        """Record PD disabling a torpedo (seeker kill - the round still coasts)."""
         self._record_event(BattleEvent(
             timestamp=timestamp,
             event_type=EventType.PD_TORPEDO_DISABLED,
@@ -662,6 +904,7 @@ class BattleRecorder:
             data={
                 "torpedo_id": torpedo_id,
                 "source_ship_id": source_ship_id,
+                "total_heat_absorbed_j": total_heat_absorbed_j,
             }
         ))
 

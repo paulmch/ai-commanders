@@ -144,13 +144,49 @@ export class Interpolator {
   }
 
   /**
+   * Interpolate torpedo states between frames
+   * Torpedoes carry guidance state the viewer renders: remaining delta-v
+   * (thrust plume), accumulated PD heat (seeker stress), disabled flag.
+   * @param {Array} torp0 - Torpedoes in earlier frame
+   * @param {Array} torp1 - Torpedoes in later frame
+   * @param {number} alpha - Interpolation factor
+   * @returns {Array} Interpolated torpedoes
+   */
+  static interpolateTorpedoes(torp0, torp1, alpha) {
+    const result = [];
+    const t0Map = new Map((torp0 || []).map(t => [t.id, t]));
+
+    for (const t1 of (torp1 || [])) {
+      const t0 = t0Map.get(t1.id);
+      const dv0 = t0 ? (t0.dv_remaining ?? 0) : (t1.dv_remaining ?? 0);
+      const dv1 = t1.dv_remaining ?? 0;
+
+      result.push({
+        id: t1.id,
+        position: t0 ? this.lerpVec3(t0.pos, t1.pos, alpha) : t1.pos,
+        velocity: t1.vel,
+        source: t1.source,
+        target: t1.target,
+        dvRemaining: this.lerp(dv0, dv1, alpha),
+        pdHeat: this.lerp(t0 ? (t0.pd_heat_j || 0) : (t1.pd_heat_j || 0), t1.pd_heat_j || 0, alpha),
+        disabled: !!t1.disabled,
+        // Burning fuel between these frames -> render the exhaust plume
+        thrusting: !t1.disabled && (dv0 - dv1) > 0.005,
+        isNew: !t0
+      });
+    }
+
+    return result;
+  }
+
+  /**
    * Get fully interpolated state at a given time
    * @param {Object} frameData - Result from BattleLoader.getFrameAt()
    * @param {Object} loader - BattleLoader instance for extrapolation (optional)
    * @returns {Object} Interpolated state
    */
   static getInterpolatedState(frameData, loader = null) {
-    if (!frameData) return { ships: {}, projectiles: [] };
+    if (!frameData) return { ships: {}, projectiles: [], torpedoes: [] };
 
     const { frame0, frame1, alpha } = frameData;
     const time = this.lerp(frame0.t, frame1.t, alpha);
@@ -180,9 +216,22 @@ export class Interpolator {
       }
     }
 
+    // Torpedoes from sim_trace, plus extrapolated ones flying their last
+    // second toward an impact/miss that happens between trace frames
+    let torpedoes = this.interpolateTorpedoes(frame0.torpedoes, frame1.torpedoes, alpha);
+    if (loader) {
+      const extrapolated = loader.getExtrapolatedTorpedoes(time);
+      for (const et of extrapolated) {
+        if (!torpedoes.find(t => t.id === et.id)) {
+          torpedoes.push(et);
+        }
+      }
+    }
+
     return {
       ships: this.interpolateShips(frame0, frame1, alpha),
       projectiles: projectiles,
+      torpedoes: torpedoes,
       time: time
     };
   }

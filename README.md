@@ -57,6 +57,28 @@ uv run python scripts/run_llm_battle.py \
     --fleet-config data/fleet_config_claude_vs_gemini.json \
     --unlimited \
     -v
+
+# Give admirals a rendered tactical-plot image every checkpoint
+# (vision-capable admiral models + matplotlib; see docs/admiral_vision.md)
+uv run python scripts/run_llm_battle.py \
+    --fleet-config data/fleet_config_claude_vs_gemini.json \
+    --admiral-vision -v
+```
+
+### Draft Mode (Admirals Build Their Own Fleets)
+
+Each admiral gets a point budget, buys ships from a costed catalog, places
+them in formation, then commands them in battle while cheap AI captains fly
+the ships. See `docs/draft_mode.md`.
+
+```bash
+# Two LLM admirals draft and fight (rule-based captains, vision on)
+uv run python scripts/run_draft_battle.py \
+    --alpha-admiral anthropic/claude-opus-5 \
+    --beta-admiral google/gemini-3.5-pro --trace
+
+# Fully offline demo - deterministic auto-drafts, zero LLM calls
+uv run python scripts/run_draft_battle.py --auto-draft --no-admirals --trace
 ```
 
 ## 3D Battle Visualizer

@@ -24,6 +24,10 @@ class AdmiralConfig:
     model: str
     enabled: bool = True
     temperature: float = 0.7
+    # Attach a rendered tactical-plot image to the admiral's checkpoint
+    # prompt (docs/admiral_vision.md). Only takes effect for vision-capable
+    # models with matplotlib installed; silently text-only otherwise.
+    vision: bool = False
     # These are set at runtime by the Admiral
     name: Optional[str] = None
     personality: Optional[str] = None
@@ -228,6 +232,7 @@ def _parse_fleet(data: Dict[str, Any], faction: str) -> FleetDefinition:
                 model=model,
                 enabled=admiral_data.get("enabled", True),
                 temperature=admiral_data.get("temperature", 0.7),
+                vision=admiral_data.get("vision", False),
                 name=admiral_data.get("name", f"Admiral {_get_short_model_name(model)}"),
             )
 

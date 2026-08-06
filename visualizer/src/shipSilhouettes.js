@@ -210,6 +210,7 @@ function getDirectionArrow(ship) {
 function getBaseShipType(shipType) {
   const variantMap = {
     dreadnought_siege: 'dreadnought',
+    cruiser_torpedo: 'cruiser',
     // Add more variants here as needed
   };
   return variantMap[shipType] || shipType;
@@ -227,7 +228,8 @@ export function getShipClassName(shipType) {
     battlecruiser: 'BATTLECRUISER',
     battleship: 'BATTLESHIP',
     dreadnought: 'DREADNOUGHT',
-    dreadnought_siege: 'DREADNOUGHT (SIEGE)'
+    dreadnought_siege: 'DREADNOUGHT (SIEGE)',
+    cruiser_torpedo: 'TORPEDO CRUISER'
   };
   return names[shipType] || 'UNKNOWN';
 }

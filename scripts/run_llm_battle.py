@@ -157,6 +157,15 @@ Examples:
         action="store_true",
         help="Skip personality selection phase (use preset personalities from --alpha/beta-personality)",
     )
+    parser.add_argument(
+        "--admiral-vision",
+        action="store_true",
+        help=(
+            "Attach a rendered tactical-plot image to every admiral checkpoint "
+            "prompt (fleet mode only; needs matplotlib and a vision-capable "
+            "admiral model - silently text-only otherwise)"
+        ),
+    )
 
     # Output
     parser.add_argument(
@@ -188,6 +197,10 @@ Examples:
         if args.fleet_config:
             # Load fleet configuration
             fleet_config = BattleFleetConfig.from_json(args.fleet_config)
+            if args.admiral_vision:
+                for fleet in (fleet_config.alpha_fleet, fleet_config.beta_fleet):
+                    if fleet.admiral:
+                        fleet.admiral.vision = True
             if not args.quiet:
                 print(f"FLEET MODE: Loading configuration from {args.fleet_config}")
                 print(f"Battle: {fleet_config.battle_name}")

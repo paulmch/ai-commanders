@@ -49,3 +49,6 @@ Thumbs.db
 
 # Node.js
 node_modules/
+
+# Dev-server staging copies of recordings (duplicates of data/recordings)
+visualizer/public/recordings/

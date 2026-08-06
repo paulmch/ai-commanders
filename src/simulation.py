@@ -229,6 +229,7 @@ class SimulationEventType(Enum):
     TORPEDO_IMPACT = auto()
     TORPEDO_INTERCEPTED = auto()
     TORPEDO_FUEL_EXHAUSTED = auto()
+    TORPEDO_RETARGETED = auto()
 
     # Maneuver events
     MANEUVER_STARTED = auto()
@@ -1360,6 +1361,12 @@ class CombatSimulation:
         # Combat resolver for damage calculations
         self._initial_seed = seed if seed is not None else 42
         self.rng = random.Random(seed)
+        # Ordnance ids must be DETERMINISTIC sequence numbers, not uuids:
+        # each torpedo's private hit-roll RNG is seeded from
+        # f"{seed}:{torpedo_id}", so a random id silently made seeded
+        # battles non-reproducible (marginal rolls flipped run to run).
+        self._torpedo_seq = 0
+        self._projectile_seq = 0
         self.combat_resolver = CombatResolver(rng=self.rng)
         self.damage_propagator = DamagePropagator()
 
@@ -1591,7 +1598,8 @@ class CombatSimulation:
             if guidance_mode is not None and isinstance(guidance_mode, GuidanceMode):
                 torpedo.guidance_mode = guidance_mode
 
-            torpedo_id = f"torp_{ship.ship_id}_{uuid.uuid4().hex[:8]}"
+            self._torpedo_seq += 1
+            torpedo_id = f"torp_{ship.ship_id}_{self._torpedo_seq:04d}"
             self.torpedoes.append(TorpedoInFlight(
                 torpedo_id=torpedo_id,
                 torpedo=torpedo,
@@ -1602,12 +1610,18 @@ class CombatSimulation:
             # Count the launch as a shot so hit rate is well-defined for
             # torpedo-armed hulls.
             ship.shots_fired += 1
+            target_ship = self.get_ship(target_id) if target_id else None
+            launch_distance_km = (
+                ship.position.distance_to(target_ship.position) / 1000.0
+                if target_ship else 0.0
+            )
             self._log_event(SimulationEventType.TORPEDO_LAUNCHED, ship.ship_id, target_id, {
                 'torpedo_id': torpedo_id,
                 'initial_velocity_kps': torpedo.velocity.magnitude / 1000.0,
                 'warhead_gj': torpedo.specs.warhead_yield_gj,
                 'delta_v_kps': torpedo.specs.total_delta_v_kps,
-                'guidance_mode': torpedo.guidance_mode.name
+                'guidance_mode': torpedo.guidance_mode.name,
+                'launch_distance_km': launch_distance_km
             })
             return True
 
@@ -1909,7 +1923,8 @@ class CombatSimulation:
         # table is measured HERE, against the target's velocity at the trigger,
         # so terminal resolution can tell "fire control never had it" apart
         # from "something knocked it off course in flight".
-        proj_id = f"proj_{shooter.ship_id}_{uuid.uuid4().hex[:8]}"
+        self._projectile_seq += 1
+        proj_id = f"proj_{shooter.ship_id}_{self._projectile_seq:04d}"
         self.projectiles.append(ProjectileInFlight(
             projectile_id=proj_id,
             projectile=projectile,
@@ -4079,6 +4094,7 @@ class CombatSimulation:
         armor_ablation_cm = 0.0
         energy_to_hull_gj = 0.0
         energy_absorbed_by_armor_gj = 0.0
+        critical_through_chip = False
 
         if target.armor:
             armor_section = target.armor.get_section(hit_location)
@@ -4135,10 +4151,12 @@ class CombatSimulation:
 
         # Get armor remaining after hit (for recording)
         armor_remaining_cm = 0.0
+        chipping_fraction_after = 0.0
         if target.armor:
             section = target.armor.get_section(hit_location)
             if section:
                 armor_remaining_cm = section.thickness_cm
+                chipping_fraction_after = getattr(section, 'chipping_fraction', 0.0)
 
         # Check for critical hit (10% base chance, higher if penetrated)
         critical_hit = penetrated and self.rng.random() < 0.5
@@ -4163,12 +4181,18 @@ class CombatSimulation:
             'impact_position': [final_position.x, final_position.y, final_position.z],
         })
 
-        # Log damage taken
+        # Log damage taken. armor_remaining_cm/source travel with it so the
+        # battle recorder can write a complete armour-ablation ledger from this
+        # event alone - it used to have to guess them and wrote zeros.
         self._log_event(SimulationEventType.DAMAGE_TAKEN, target.ship_id, data={
             'damage_gj': effective_ke_gj,
             'location': hit_location.value,
             'absorbed_gj': energy_absorbed_by_armor_gj,
             'armor_ablation_cm': armor_ablation_cm,
+            'armor_remaining_cm': armor_remaining_cm,
+            'chipping_fraction': chipping_fraction_after,
+            'source': 'projectile',
+            'source_ship_id': proj_flight.source_ship_id,
             'penetrated': penetrated
         })
 
@@ -4194,9 +4218,15 @@ class CombatSimulation:
                       f"({'DESTROYED' if rad_result.radiator_destroyed else 'damaged'})")
 
         if penetrated:
+            # 'remaining_energy_gj' mirrors the torpedo path's key name so both
+            # penetration events have one shape for downstream consumers;
+            # 'remaining_damage_gj' is kept for anything already reading it.
             self._log_event(SimulationEventType.ARMOR_PENETRATED, target.ship_id, data={
                 'location': hit_location.value,
-                'remaining_damage_gj': remaining_energy_gj
+                'remaining_damage_gj': remaining_energy_gj,
+                'remaining_energy_gj': remaining_energy_gj,
+                'chipping_fraction': chipping_fraction_after,
+                'critical_through_chip': critical_through_chip,
             })
 
             # Propagate damage through modules
@@ -4249,6 +4279,92 @@ class CombatSimulation:
     # Torpedo Update
     # -------------------------------------------------------------------------
 
+    def _torpedo_rng(self, torp_flight: 'TorpedoInFlight') -> random.Random:
+        """
+        Deterministic RNG stream private to one torpedo.
+
+        Derived from the simulation seed and the torpedo's id, so a given
+        round rolls the same way regardless of how many other rounds are in
+        flight or what order they are evaluated in.
+        """
+        cached = getattr(torp_flight, '_rng', None)
+        if cached is None:
+            cached = random.Random(
+                f"{self._initial_seed}:{torp_flight.torpedo_id}"
+            )
+            torp_flight._rng = cached
+        return cached
+
+    # How much delta-v a retargeting round must still hold AFTER the steer
+    # to the new intercept: enough for the terminal maneuver, mirroring the
+    # launcher's ~10% terminal reserve. Below that the chase would arrive
+    # with nothing left to correct with.
+    RETARGET_MIN_RESERVE_KPS = 1.0
+    RETARGET_RESERVE_FRACTION = 0.08
+    # Do not chase a new target for longer than this - a minutes-long stern
+    # chase across the whole battlespace is a culled round in denial.
+    RETARGET_MAX_INTERCEPT_S = 600.0
+
+    def _retarget_torpedo(self, torp_flight: 'TorpedoInFlight') -> Optional['ShipCombatState']:
+        """
+        Try to acquire a replacement target for a round whose target died.
+
+        Picks the reachable enemy whose intercept leaves the most delta-v in
+        the tank (the cheapest steer). Returns the new target ship, or None
+        if nothing is reachable within the delta-v and time budgets.
+        """
+        torp = torp_flight.torpedo
+        candidates = self.get_enemy_ships(torp_flight.source_ship_id)
+        if not candidates:
+            return None
+
+        reserve_kps = max(
+            self.RETARGET_MIN_RESERVE_KPS,
+            torp.specs.total_delta_v_kps * self.RETARGET_RESERVE_FRACTION,
+        )
+
+        best = None
+        best_fuel = -1.0
+        best_time = 0.0
+        for candidate in candidates:
+            ok, t_intercept, fuel_left = torp.can_intercept(
+                candidate.position, candidate.velocity
+            )
+            if not ok or t_intercept > self.RETARGET_MAX_INTERCEPT_S:
+                continue
+            if fuel_left < reserve_kps:
+                continue
+            if fuel_left > best_fuel:
+                best = candidate
+                best_fuel = fuel_left
+                best_time = t_intercept
+
+        if best is None:
+            return None
+
+        old_target_id = torp.target_id
+        torp.target_id = best.ship_id
+        # The APN acceleration estimator is target-specific state; feeding
+        # it the velocity delta between the OLD and NEW target would inject
+        # a huge phantom acceleration into the first guidance solution.
+        torp.last_observed_target_velocity = None
+        torp.estimated_target_accel = Vector3D.zero()
+
+        self._log_event(
+            SimulationEventType.TORPEDO_RETARGETED,
+            torp_flight.source_ship_id,
+            target_id=best.ship_id,
+            data={
+                'torpedo_id': torp_flight.torpedo_id,
+                'old_target_id': old_target_id,
+                'new_target_id': best.ship_id,
+                'distance_km': torp.position.distance_to(best.position) / 1000,
+                'time_to_intercept_s': best_time,
+                'dv_remaining_kps': torp.remaining_delta_v_kps,
+            },
+        )
+        return best
+
     def _update_torpedoes(self, dt: float) -> None:
         """Update all torpedoes and check for hits."""
         torpedoes_to_remove: list[TorpedoInFlight] = []
@@ -4257,15 +4373,37 @@ class CombatSimulation:
             torp = torp_flight.torpedo
             target = self.get_ship(torp.target_id)
 
-            if not target or target.is_destroyed:
-                torpedoes_to_remove.append(torp_flight)
-                continue
+            # A round whose target has died is orphaned, not cancelled. It
+            # used to be deleted outright on the tick the target was
+            # destroyed, which silently voided ordnance already seconds from
+            # impact - in one recorded duel a torpedo 241 km out vanished
+            # with no event of any kind, and a mirrored pair of rounds that
+            # should both have landed produced a single winner.
+            #
+            # An orphan keeps its mass and velocity but has nothing left to
+            # steer toward, so it behaves exactly like a seeker-killed round:
+            # coast ballistically, strike whatever its trajectory actually
+            # intersects, and get culled by the same timeout/range rules.
+            orphaned = target is None or target.is_destroyed
+
+            # RETARGETING: a round with a live seeker and delta-v above its
+            # terminal reserve hunts for a replacement target it can still
+            # reach before giving up and going ballistic. This is what makes
+            # overkill concentration recoverable: the back half of a salvo
+            # that killed its target early swings onto the next hull instead
+            # of coasting into the void. Blinded seekers cannot reacquire
+            # and dry tanks cannot steer - those orphan exactly as before.
+            if orphaned and not torp_flight.is_disabled and not torp.fuel_exhausted:
+                new_target = self._retarget_torpedo(torp_flight)
+                if new_target is not None:
+                    target = new_target
+                    orphaned = False
 
             # Disabled torpedoes coast ballistically without guidance.
             # They must still be subject to the timeout/range cull below -
             # the old bare `continue` skipped it, so PD-disabled torpedoes
             # accumulated in self.torpedoes forever.
-            if torp_flight.is_disabled:
+            if torp_flight.is_disabled or orphaned:
                 # Update position without guidance
                 disabled_prev_pos = Vector3D(
                     torp.position.x, torp.position.y, torp.position.z)
@@ -4325,16 +4463,28 @@ class CombatSimulation:
                         struck_ship = candidate
                         struck_cpa_m = cpa_dist
 
-                # Track closest approach to the original target for metrics
-                tgt_pos_t0 = target.position - target.velocity * dt
-                tgt_tca_s, tgt_cpa = self._calculate_time_to_closest_approach(
-                    disabled_prev_pos, torp.velocity, tgt_pos_t0, target.velocity
-                )
-                if 0 <= tgt_tca_s <= dt and tgt_cpa < torp_flight.min_distance_to_target:
-                    torp_flight.min_distance_to_target = tgt_cpa
-                current_dist = torp.position.distance_to(target.position)
-                if current_dist < torp_flight.min_distance_to_target:
-                    torp_flight.min_distance_to_target = current_dist
+                # Track closest approach to the original target for metrics.
+                # An orphaned round may have no target object at all (the ship
+                # can be gone, not merely flagged destroyed), so range-keeping
+                # falls back to the nearest live hull - which is also the
+                # right quantity for deciding when it has left the battle.
+                if target is not None:
+                    tgt_pos_t0 = target.position - target.velocity * dt
+                    tgt_tca_s, tgt_cpa = self._calculate_time_to_closest_approach(
+                        disabled_prev_pos, torp.velocity, tgt_pos_t0, target.velocity
+                    )
+                    if (0 <= tgt_tca_s <= dt
+                            and tgt_cpa < torp_flight.min_distance_to_target):
+                        torp_flight.min_distance_to_target = tgt_cpa
+                    current_dist = torp.position.distance_to(target.position)
+                    if current_dist < torp_flight.min_distance_to_target:
+                        torp_flight.min_distance_to_target = current_dist
+                else:
+                    current_dist = min(
+                        (torp.position.distance_to(s.position)
+                         for s in self.ships.values() if not s.is_destroyed),
+                        default=float('inf'),
+                    )
 
                 if struck_ship is not None:
                     # Chance collision: same impact-energy path as a guided hit
@@ -4420,7 +4570,10 @@ class CombatSimulation:
                 torp_flight.fuel_exhausted_logged = True
                 self._log_event(SimulationEventType.TORPEDO_FUEL_EXHAUSTED,
                                torp_flight.source_ship_id, target.ship_id, {
-                    'torpedo_id': torp_flight.torpedo_id
+                    'torpedo_id': torp_flight.torpedo_id,
+                    'distance_to_target_km':
+                        torp.position.distance_to(target.position) / 1000.0,
+                    'speed_kps': torp.velocity.magnitude / 1000.0
                 })
 
             # ================================================================
@@ -4516,9 +4669,23 @@ class CombatSimulation:
                     )
                 hit_probability = min(0.98, hit_probability)
 
-                # Roll for hit using the SEEDED simulation RNG. The global
-                # random.random() broke reproducibility of seeded battles.
-                roll = self.rng.random()
+                # Roll for hit from a PER-TORPEDO stream, not the shared
+                # simulation RNG.
+                #
+                # Drawing from self.rng made the outcome depend on where this
+                # round happened to sit in self.torpedoes: two torpedoes
+                # reaching closest approach on the same tick with identical
+                # geometry - and therefore identical hit_probability - drew
+                # consecutive values from one sequence and could resolve
+                # differently. Because the runner asks alpha to decide before
+                # beta, alpha's rounds are always earlier in the list and
+                # always drew first, so a perfectly mirrored duel was decided
+                # by iteration order rather than by either captain.
+                #
+                # Seeding per torpedo keeps battles reproducible while making
+                # each round's roll independent of evaluation order, so
+                # mirrored engagements resolve the same way on both sides.
+                roll = self._torpedo_rng(torp_flight).random()
                 hit = roll < hit_probability
 
                 if hit:
@@ -4653,7 +4820,13 @@ class CombatSimulation:
                     'absorbed_gj': kinetic_to_hull,
                     'location': hit_location.value,
                     'armor_ablation_cm': kinetic_ablation,
-                    'chipping_added': kinetic_chip
+                    'armor_remaining_cm': armor_section.thickness_cm,
+                    'chipping_fraction': armor_section.chipping_fraction,
+                    'chipping_added': kinetic_chip,
+                    'source': 'torpedo',
+                    'source_ship_id': torp_flight.source_ship_id,
+                    'torpedo_id': torp_flight.torpedo_id,
+                    'penetrated': armor_section.is_penetrated()
                 })
 
                 # PHASE 2: Explosive warhead (if any)
@@ -4674,7 +4847,13 @@ class CombatSimulation:
                         'absorbed_gj': explosive_to_hull,
                         'location': hit_location.value,
                         'armor_ablation_cm': explosive_ablation,
-                        'chipping_added': explosive_chip
+                        'armor_remaining_cm': armor_section.thickness_cm,
+                        'chipping_fraction': armor_section.chipping_fraction,
+                        'chipping_added': explosive_chip,
+                        'source': 'torpedo',
+                        'source_ship_id': torp_flight.source_ship_id,
+                        'torpedo_id': torp_flight.torpedo_id,
+                        'penetrated': armor_section.is_penetrated()
                     })
 
                 # Check if armor was penetrated (either through ablation or chipping)
@@ -5365,7 +5544,8 @@ class CombatSimulation:
             torp_flight.seeker_kill_logged = True
             self._log_event(SimulationEventType.PD_TORPEDO_DISABLED, ship.ship_id, data={
                 'torpedo_id': torp_flight.torpedo_id,
-                'source_ship': torp_flight.source_ship_id
+                'source_ship': torp_flight.source_ship_id,
+                'total_heat_absorbed_j': torp_flight.heat_absorbed_j
             })
             self.metrics.total_torpedo_seeker_killed += 1
             ship.pd_seeker_kills += 1

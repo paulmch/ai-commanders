@@ -12,6 +12,7 @@ The Admiral:
 from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
 
+from .client import LLMCallError
 from .fleet_config import AdmiralConfig
 from .admiral_tools import get_admiral_tools
 from .communication import CaptainMessage
@@ -228,6 +229,12 @@ class LLMAdmiral:
         from .fleet_config import _get_short_model_name
         return f"Admiral {_get_short_model_name(self.config.model)}"
 
+    @property
+    def wants_vision(self) -> bool:
+        """True if this admiral should receive tactical-plot images."""
+        from .admiral_view import is_vision_model
+        return bool(getattr(self.config, "vision", False)) and is_vision_model(self.config.model)
+
     def set_ship_mapping(self, name_to_id: Dict[str, str]) -> None:
         """Set the mapping from ship names to IDs."""
         self._ship_name_to_id = name_to_id
@@ -317,6 +324,7 @@ Be authentic to how you would command a fleet as {model_name}."""
         simulation: Any,
         captains: List['LLMCaptain'],
         enemy_admiral: Optional['LLMAdmiral'] = None,
+        battle_image_png: Optional[bytes] = None,
     ) -> AdmiralDecision:
         """
         Make fleet-level decisions using two-phase approach.
@@ -371,9 +379,34 @@ Be authentic to how you would command a fleet as {model_name}."""
             phase="directive",  # Signal that we only want the directive
         )
 
+        user_text = (f"ADMIRAL CHECKPOINT {self.decision_count + 1}. "
+                     "Set your fleet directive (overall strategy). "
+                     "You will issue individual ship orders next.")
+
+        # Attach the tactical plot as an image content part when available.
+        # OpenRouter forwards multi-part user content to multimodal models;
+        # gating on wants_vision keeps text-only models on plain strings.
+        if battle_image_png and self.wants_vision:
+            from .admiral_view import png_to_data_url
+            user_content: Any = [
+                {"type": "text", "text": user_text + (
+                    "\n\nA tactical plot of the battlefield is attached: "
+                    "left panel top-down (X/Y in km), right panel 3D "
+                    "perspective. Cyan = alpha fleet, orange = beta fleet. "
+                    "Diamonds are torpedoes (grey = seeker blinded), yellow "
+                    "dots are coilgun slugs, red lines are active PD beams, "
+                    "faint trails show torpedo paths over the last 25s, and "
+                    "arrows show velocity. Use it to judge geometry: "
+                    "bearings, formation shape, converging torpedo streams, "
+                    "who is closing and who is kiting.")},
+                {"type": "image_url", "image_url": {"url": png_to_data_url(battle_image_png)}},
+            ]
+        else:
+            user_content = user_text
+
         messages = [
             {"role": "system", "content": prompt},
-            {"role": "user", "content": f"ADMIRAL CHECKPOINT {self.decision_count + 1}. Set your fleet directive (overall strategy). You will issue individual ship orders next."},
+            {"role": "user", "content": user_content},
         ]
 
         # Call LLM for directive (use admiral's configured model)

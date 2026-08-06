@@ -20,6 +20,12 @@ export class BattleLoader {
     this.initialArmor = new Map();
     // Ship targeting: shipId -> [{timestamp, target_id, target_name}]
     this.shipTargets = new Map();
+    // Torpedo lifecycle: torpedoId -> {launch, outcome, lastState}
+    this.torpedoes = new Map();
+    // Continuous PD dwell segments built from per-tick pd_fired events
+    this.pdBeamSegments = [];
+    // Radiator state changes: shipId -> [{timestamp, extended}]
+    this.radiatorTimeline = new Map();
   }
 
   /**
@@ -76,6 +82,15 @@ export class BattleLoader {
     // Build ship target timeline from captain decisions
     this.buildShipTargetTimeline();
 
+    // Build torpedo lifecycle map (launch -> flight -> outcome)
+    this.buildTorpedoTimeline();
+
+    // Collapse per-tick pd_fired events into continuous dwell segments
+    this.buildPDBeamSegments();
+
+    // Radiator extended/retracted changes per ship
+    this.buildRadiatorTimeline();
+
     return this;
   }
 
@@ -105,6 +120,26 @@ export class BattleLoader {
           faction: 'beta',
           type: ship.ship_type || 'destroyer'
         };
+      }
+    }
+
+    // 1v1 recordings carry ship identity in the top-level metadata, not in
+    // fleet blocks - without this the registry showed raw ids and every hull
+    // rendered as the fallback class
+    if (Object.keys(this.ships).length === 0) {
+      const sides = [
+        ['alpha', data.alpha_specs, data.alpha_ship],
+        ['beta', data.beta_specs, data.beta_ship]
+      ];
+      for (const [id, specs, name] of sides) {
+        if (specs || name) {
+          this.ships[id] = {
+            id: id,
+            name: name || id,
+            faction: id,
+            type: specs?.ship_type || 'destroyer'
+          };
+        }
       }
     }
 
@@ -163,6 +198,43 @@ export class BattleLoader {
       frame1: this.simTrace[high],
       alpha: high > low ? (time - this.simTrace[low].t) / (this.simTrace[high].t - this.simTrace[low].t) : 0
     };
+  }
+
+  /**
+   * Per-ship death analysis for the two-stage destruction sequence.
+   *
+   * Returns { shipId: { time, velocity (m/s), reactorCause } }. A death is
+   * a "reactor cause" when a module_destroyed for a reactor lands within
+   * the death tick - that ship detonates immediately. Everything else
+   * drifts dark for a few seconds before the reactor cooks off. Velocity
+   * comes from the last live trace frame so the hulk coasts on its final
+   * vector.
+   */
+  buildDeathInfo() {
+    const info = {};
+    const trace = this.simTrace || [];
+    for (let i = 0; i < trace.length; i++) {
+      for (const [shipId, s] of Object.entries(trace[i].ships || {})) {
+        if (s.destroyed && !(shipId in info)) {
+          const prev = i > 0 ? trace[i - 1].ships?.[shipId] : null;
+          info[shipId] = {
+            time: trace[i].t,
+            velocity: (prev && !prev.destroyed && prev.vel) ? prev.vel : [0, 0, 0],
+            reactorCause: false
+          };
+        }
+      }
+    }
+    for (const e of this.events) {
+      if (e.event_type !== 'module_destroyed') continue;
+      const name = (e.data?.module_name || '').toLowerCase();
+      if (!name.includes('reactor')) continue;
+      const death = info[e.ship_id];
+      if (death && e.timestamp >= death.time - 2.0 && e.timestamp <= death.time + 0.5) {
+        death.reactorCause = true;
+      }
+    }
+    return info;
   }
 
   /**
@@ -350,33 +422,35 @@ export class BattleLoader {
     // Extract initial armor from first sim_trace frame (has actual armor values)
     const firstFrame = this.simTrace.length > 0 ? this.simTrace[0] : null;
 
-    // Extract weapons from fleet data
-    const fleets = [
-      { fleet: data.alpha_fleet, faction: 'alpha' },
-      { fleet: data.beta_fleet, faction: 'beta' }
-    ];
-
-    for (const { fleet } of fleets) {
-      if (!fleet?.ships) continue;
-      for (const ship of fleet.ships) {
-        const shipId = ship.ship_id;
-
-        // Get initial armor from first frame if available
-        let initialArmor = { ...DEFAULT_ARMOR };
-        if (firstFrame?.ships?.[shipId]?.armor) {
-          const frameArmor = firstFrame.ships[shipId].armor;
-          if (frameArmor.nose !== undefined) initialArmor.nose = frameArmor.nose;
-          if (frameArmor.lateral !== undefined) initialArmor.lateral = frameArmor.lateral;
-          if (frameArmor.tail !== undefined) initialArmor.tail = frameArmor.tail;
-        }
-
-        // Initialize damage state with per-section armor
-        this.shipDamageState.set(shipId, {
-          moduleEvents: [], // [{timestamp, module_name, event_type}]
-          initialArmor: initialArmor,
-          weapons: ship.weapons || {}
-        });
+    // Weapons per ship come from fleet blocks (fleet battles) or the
+    // alpha/beta specs (1v1)
+    const weaponsById = {};
+    for (const fleet of [data.alpha_fleet, data.beta_fleet]) {
+      for (const ship of fleet?.ships || []) {
+        weaponsById[ship.ship_id] = ship.weapons || {};
       }
+    }
+    if (data.alpha_specs) weaponsById.alpha = data.alpha_specs.weapons || {};
+    if (data.beta_specs) weaponsById.beta = data.beta_specs.weapons || {};
+
+    // Build damage state for EVERY known ship. This used to iterate only the
+    // fleet blocks, which 1v1 recordings don't have - so getShipDamageAt()
+    // returned null and the telemetry panel silently kept its static
+    // placeholder armor values no matter how ablated the hull actually was.
+    for (const shipId of Object.keys(this.ships)) {
+      let initialArmor = { ...DEFAULT_ARMOR };
+      if (firstFrame?.ships?.[shipId]?.armor) {
+        const frameArmor = firstFrame.ships[shipId].armor;
+        if (frameArmor.nose !== undefined) initialArmor.nose = frameArmor.nose;
+        if (frameArmor.lateral !== undefined) initialArmor.lateral = frameArmor.lateral;
+        if (frameArmor.tail !== undefined) initialArmor.tail = frameArmor.tail;
+      }
+
+      this.shipDamageState.set(shipId, {
+        moduleEvents: [], // [{timestamp, module_name, event_type}]
+        initialArmor: initialArmor,
+        weapons: weaponsById[shipId] || {}
+      });
     }
 
     // Process module damage and destruction events
@@ -588,6 +662,350 @@ export class BattleLoader {
       initialArmor: initialArmor,
       modules: modules
     };
+  }
+
+  /**
+   * Build torpedo lifecycle map from events and sim_trace.
+   * Each torpedo gets: launch event, terminal outcome event, and its last
+   * known kinematic state from the trace (for extrapolating the final
+   * sub-second of flight, which happens between 1Hz trace frames).
+   */
+  buildTorpedoTimeline() {
+    this.torpedoes.clear();
+
+    const ensure = (id) => {
+      if (!this.torpedoes.has(id)) {
+        this.torpedoes.set(id, { launch: null, outcome: null, disabledAt: null, lastState: null });
+      }
+      return this.torpedoes.get(id);
+    };
+
+    for (const event of this.events) {
+      const d = event.data || {};
+      switch (event.event_type) {
+        case 'torpedo_launched':
+          ensure(d.torpedo_id).launch = {
+            timestamp: event.timestamp,
+            shooterId: event.ship_id,
+            targetId: d.target_id,
+            warheadGj: d.warhead_gj || 0,
+            deltaVKps: d.delta_v_kps || 0,
+            launchDistanceKm: d.launch_distance_km || 0
+          };
+          break;
+        case 'torpedo_impact':
+          ensure(d.torpedo_id).outcome = {
+            type: 'impact',
+            timestamp: event.timestamp,
+            targetId: d.target_id,
+            damageGj: d.total_damage_gj || 0,
+            impactSpeedKps: d.impact_speed_kps || 0,
+            hitLocation: d.hit_location || 'unknown'
+          };
+          break;
+        case 'torpedo_miss':
+          ensure(d.torpedo_id).outcome = {
+            type: 'miss',
+            timestamp: event.timestamp,
+            targetId: d.target_id || event.ship_id,
+            closestApproachKm: d.closest_approach_km || 0
+          };
+          break;
+        // Never emitted by the current sim (PD blinds rather than destroys),
+        // but handled so older/future recordings render sensibly.
+        case 'torpedo_intercepted':
+          ensure(d.torpedo_id).outcome = {
+            type: 'intercepted',
+            timestamp: event.timestamp,
+            targetId: d.target_id
+          };
+          break;
+        case 'torpedo_fuel_exhausted':
+          // Not terminal: the round coasts on. Record as annotation.
+          ensure(d.torpedo_id).fuelExhaustedAt = event.timestamp;
+          break;
+        case 'pd_torpedo_disabled':
+          // Seeker killed; guidance frozen. Also not terminal.
+          ensure(d.torpedo_id).disabledAt = event.timestamp;
+          break;
+        case 'pd_torpedo_destroyed':
+          ensure(d.torpedo_id).outcome = {
+            type: 'destroyed',
+            timestamp: event.timestamp,
+            targetId: d.source_ship_id
+          };
+          break;
+      }
+    }
+
+    // Last known state of each torpedo from the trace
+    for (const frame of this.simTrace) {
+      if (!frame.torpedoes) continue;
+      for (const torp of frame.torpedoes) {
+        const rec = ensure(torp.id);
+        rec.lastState = {
+          time: frame.t,
+          pos: torp.pos,
+          vel: torp.vel,
+          source: torp.source,
+          target: torp.target,
+          dvRemaining: torp.dv_remaining || 0,
+          disabled: !!torp.disabled
+        };
+      }
+    }
+  }
+
+  /**
+   * Torpedoes flying their final sub-second: present in events as an
+   * impact/miss after their last trace frame. Extrapolate so the round
+   * visually reaches its target instead of vanishing a frame early.
+   * @param {number} time - Current playback time
+   * @returns {Array} Torpedo states shaped like Interpolator output
+   */
+  getExtrapolatedTorpedoes(time) {
+    const result = [];
+
+    for (const [id, rec] of this.torpedoes) {
+      const { lastState, outcome } = rec;
+      if (!lastState || !outcome) continue;
+      if (time <= lastState.time || time > outcome.timestamp) continue;
+
+      const span = outcome.timestamp - lastState.time;
+      if (span <= 0 || span > 3) continue; // sanity: only bridge short gaps
+
+      let pos;
+      if (outcome.type === 'impact') {
+        // Steer visually into the target's position at impact time
+        const targetPos = this.getShipPositionAt(outcome.targetId, outcome.timestamp);
+        const t = (time - lastState.time) / span;
+        if (targetPos) {
+          pos = [
+            lastState.pos[0] + (targetPos[0] - lastState.pos[0]) * t,
+            lastState.pos[1] + (targetPos[1] - lastState.pos[1]) * t,
+            lastState.pos[2] + (targetPos[2] - lastState.pos[2]) * t
+          ];
+        }
+      }
+      if (!pos) {
+        const dt = time - lastState.time;
+        pos = [
+          lastState.pos[0] + lastState.vel[0] * dt,
+          lastState.pos[1] + lastState.vel[1] * dt,
+          lastState.pos[2] + lastState.vel[2] * dt
+        ];
+      }
+
+      result.push({
+        id: id,
+        position: pos,
+        velocity: lastState.vel,
+        source: lastState.source,
+        target: lastState.target,
+        dvRemaining: lastState.dvRemaining,
+        pdHeat: 0,
+        disabled: lastState.disabled,
+        thrusting: false,
+        extrapolated: true
+      });
+    }
+
+    return result;
+  }
+
+  /**
+   * Get a ship's interpolated position at a given time
+   * @returns {Array|null} [x, y, z] in meters
+   */
+  getShipPositionAt(shipId, time) {
+    const frameData = this.getFrameAt(time);
+    if (!frameData) return null;
+    const { frame0, frame1, alpha } = frameData;
+    const s0 = frame0.ships?.[shipId];
+    const s1 = frame1.ships?.[shipId];
+    if (s0?.pos && s1?.pos) {
+      return [
+        s0.pos[0] + (s1.pos[0] - s0.pos[0]) * alpha,
+        s0.pos[1] + (s1.pos[1] - s0.pos[1]) * alpha,
+        s0.pos[2] + (s1.pos[2] - s0.pos[2]) * alpha
+      ];
+    }
+    return (s1?.pos || s0?.pos) ?? null;
+  }
+
+  /**
+   * Torpedo lifecycle moments crossing a time window, with world positions,
+   * for spawning visual effects (detonations, fizzles, seeker kills).
+   * @returns {Array} [{kind, torpedoId, position, timestamp, data}]
+   */
+  getTorpedoMomentsInRange(startTime, endTime) {
+    const moments = [];
+
+    const posAt = (rec, t) => {
+      const ls = rec.lastState;
+      if (!ls) return null;
+      const dt = t - ls.time;
+      if (dt < 0) {
+        // Moment happens while torpedo is still in the trace - find its
+        // position from the frames around t
+        const frameData = this.getFrameAt(t);
+        if (frameData) {
+          const { frame0, frame1, alpha } = frameData;
+          const t0 = (frame0.torpedoes || []).find(x => x.id === rec.id);
+          const t1 = (frame1.torpedoes || []).find(x => x.id === rec.id);
+          if (t0 && t1) {
+            return [
+              t0.pos[0] + (t1.pos[0] - t0.pos[0]) * alpha,
+              t0.pos[1] + (t1.pos[1] - t0.pos[1]) * alpha,
+              t0.pos[2] + (t1.pos[2] - t0.pos[2]) * alpha
+            ];
+          }
+          if (t1 || t0) return (t1 || t0).pos;
+        }
+        return ls.pos;
+      }
+      return [
+        ls.pos[0] + ls.vel[0] * dt,
+        ls.pos[1] + ls.vel[1] * dt,
+        ls.pos[2] + ls.vel[2] * dt
+      ];
+    };
+
+    for (const [id, rec] of this.torpedoes) {
+      rec.id = id; // convenience for posAt
+
+      const outcome = rec.outcome;
+      if (outcome && outcome.timestamp > startTime && outcome.timestamp <= endTime) {
+        let position = null;
+        if (outcome.type === 'impact') {
+          position = this.getShipPositionAt(outcome.targetId, outcome.timestamp) || posAt(rec, outcome.timestamp);
+        } else {
+          position = posAt(rec, outcome.timestamp);
+        }
+        if (position) {
+          moments.push({
+            kind: outcome.type,
+            torpedoId: id,
+            position: position,
+            timestamp: outcome.timestamp,
+            data: outcome
+          });
+        }
+      }
+
+      if (rec.disabledAt !== null && rec.disabledAt > startTime && rec.disabledAt <= endTime) {
+        const position = posAt(rec, rec.disabledAt);
+        if (position) {
+          moments.push({
+            kind: 'seeker_kill',
+            torpedoId: id,
+            position: position,
+            timestamp: rec.disabledAt,
+            data: {}
+          });
+        }
+      }
+
+      if (rec.fuelExhaustedAt && rec.fuelExhaustedAt > startTime && rec.fuelExhaustedAt <= endTime) {
+        const position = posAt(rec, rec.fuelExhaustedAt);
+        if (position) {
+          moments.push({
+            kind: 'burnout',
+            torpedoId: id,
+            position: position,
+            timestamp: rec.fuelExhaustedAt,
+            data: {}
+          });
+        }
+      }
+    }
+
+    return moments;
+  }
+
+  /**
+   * Collapse per-tick pd_fired events into continuous dwell segments.
+   * The sim emits one pd_fired per turret per tick while the beam dwells on
+   * a target; rendering each as a 0.3s flash misrepresented a continuous
+   * beam weapon. Events <= 2s apart on the same (ship, turret, target) are
+   * one dwell.
+   */
+  buildPDBeamSegments() {
+    this.pdBeamSegments = [];
+    const open = new Map();
+
+    const pdEvents = this.events
+      .filter(e => e.event_type === 'pd_fired')
+      .sort((a, b) => a.timestamp - b.timestamp);
+
+    for (const e of pdEvents) {
+      const d = e.data || {};
+      const key = `${e.ship_id}|${d.turret_name}|${d.target_id}`;
+      const cur = open.get(key);
+
+      if (cur && e.timestamp - cur.end <= 2.0) {
+        cur.end = e.timestamp;
+        cur.ticks++;
+        cur.energyJ += d.energy_delivered_j || d.heat_delivered_j || 0;
+      } else {
+        if (cur) this.pdBeamSegments.push(cur);
+        open.set(key, {
+          key: `${key}|${e.timestamp}`,
+          shipId: e.ship_id,
+          turret: d.turret_name || 'pd',
+          targetId: d.target_id,
+          targetType: d.target_type || 'unknown',
+          start: e.timestamp,
+          end: e.timestamp,
+          ticks: 1,
+          energyJ: d.energy_delivered_j || d.heat_delivered_j || 0
+        });
+      }
+    }
+    for (const seg of open.values()) {
+      this.pdBeamSegments.push(seg);
+    }
+  }
+
+  /**
+   * PD beams that should be visible at a given time.
+   * Each pd_fired tick covers ~1s of dwell, so a segment stays lit until
+   * end + 1.0 (plus a short fade handled by the renderer).
+   */
+  getActivePDBeams(time) {
+    return this.pdBeamSegments.filter(s => time >= s.start && time <= s.end + 1.0);
+  }
+
+  /**
+   * Build radiator state timeline from radiator_change events
+   */
+  buildRadiatorTimeline() {
+    this.radiatorTimeline.clear();
+    for (const event of this.events) {
+      if (event.event_type !== 'radiator_change') continue;
+      if (!this.radiatorTimeline.has(event.ship_id)) {
+        this.radiatorTimeline.set(event.ship_id, []);
+      }
+      this.radiatorTimeline.get(event.ship_id).push({
+        timestamp: event.timestamp,
+        extended: !!event.data?.extended
+      });
+    }
+  }
+
+  /**
+   * Whether a ship's radiators are extended at a given time.
+   * Ships start with radiators retracted (combat stations).
+   */
+  getRadiatorStateAt(shipId, time) {
+    const changes = this.radiatorTimeline.get(shipId);
+    if (!changes) return false;
+    let extended = false;
+    for (const c of changes) {
+      if (c.timestamp <= time) extended = c.extended;
+      else break;
+    }
+    return extended;
   }
 
   /**

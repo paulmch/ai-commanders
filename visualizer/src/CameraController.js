@@ -11,8 +11,16 @@ export class CameraController {
 
     this.mode = 'free'; // 'free', 'follow', 'orbit'
     this.targetShipId = null;
-    this.followOffset = new THREE.Vector3(0, 50, -150);
     this.smoothing = 0.1;
+  }
+
+  /**
+   * Camera distances scale with the ship so a corvette close-up and a
+   * dreadnought close-up frame the hull the same way
+   */
+  getShipLength(shipId) {
+    const ship = this.sceneManager.ships.get(shipId);
+    return ship?.userData?.size?.length || 8;
   }
 
   /**
@@ -59,7 +67,8 @@ export class CameraController {
    */
   updateFollowMode(shipPos, state) {
     // Calculate offset based on ship's forward direction
-    let offset = this.followOffset.clone();
+    const L = this.getShipLength(this.targetShipId);
+    let offset = new THREE.Vector3(0, L * 1.6, -L * 4.5);
 
     if (state.forward) {
       const forward = new THREE.Vector3(state.forward[0], state.forward[1], state.forward[2]).normalize();
@@ -97,8 +106,9 @@ export class CameraController {
     const shipPos = this.sceneManager.getShipPosition(shipId);
     if (!shipPos) return;
 
-    // Move camera to good viewing position
-    const offset = new THREE.Vector3(100, 50, 100);
+    // Move camera to a close viewing position scaled to the hull
+    const L = this.getShipLength(shipId);
+    const offset = new THREE.Vector3(L * 2.8, L * 1.4, L * 2.8);
     this.camera.position.copy(shipPos).add(offset);
     this.orbitControls.target.copy(shipPos);
     this.orbitControls.update();

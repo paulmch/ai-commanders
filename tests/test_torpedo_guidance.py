@@ -283,6 +283,12 @@ def _engagement(fleet_data, seed, onset_s, launch_range_m,
 
     Returns (hit, closest_approach_m, torpedo, nez_probe).
     """
+    # Parts of combat resolution still draw from the module-level `random`
+    # generator (see LLMBattleRunner._seed_rng), so seeding only the
+    # simulation instance leaves these engagements dependent on whatever
+    # tests ran before them. Seed both for genuine determinism.
+    import random
+    random.seed(seed)
     sim = CombatSimulation(time_step=0.5, decision_interval=1e9, seed=seed)
     shooter = create_ship_from_fleet_data(
         "alpha", "corvette", "alpha", fleet_data,

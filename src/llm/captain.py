@@ -1346,6 +1346,8 @@ class LLMCaptain:
         # a PD triage: how many turrets a seeker kill needs before impact vs
         # how many this ship has. BLINDED torpedoes coasting at us are listed
         # too - they are ballistic and still hit a non-maneuvering ship.
+        from ..torpedo import MIN_CLOSING_SPEED_KPS
+
         torpedo_threats = []
         _pd_list = getattr(ship, 'point_defense', None)
         if not isinstance(_pd_list, (list, tuple)):
@@ -1354,11 +1356,28 @@ class LLMCaptain:
         rep_laser = own_pd[0].laser if own_pd else None
 
         def _pd_triage(torp_flight, dist_km, closing_ms):
-            """Turrets needed to seeker-kill this torpedo before impact."""
+            """
+            Turrets needed to seeker-kill this torpedo before impact.
+
+            The closed form assumes a CONSTANT closing speed, but a torpedo that
+            still has delta-v is accelerating: 30 s after launch it is only doing
+            ~4 km/s and will cross the PD envelope at the guidance closure floor
+            of MIN_CLOSING_SPEED_KPS. Feeding it the instantaneous speed made the
+            verdict optimistic exactly at the checkpoint where the captain
+            decides - measured over 31 checkpoints of live engagements, the
+            instantaneous form was right 24/31 times and EVERY error was a false
+            "your PD can blind it" at the first checkpoint after launch. Flooring
+            a fuelled round at the guidance floor scores 30/31, and its one error
+            is conservative.
+            """
             if rep_laser is None or closing_ms <= 0:
                 return None
             try:
-                e = rep_laser.energy_before_impact_j(dist_km, closing_ms)
+                torp = getattr(torp_flight, 'torpedo', None)
+                fuelled = not getattr(torp, 'fuel_exhausted', True)
+                effective_ms = (max(closing_ms, MIN_CLOSING_SPEED_KPS * 1000.0)
+                                if fuelled else closing_ms)
+                e = rep_laser.energy_before_impact_j(dist_km, effective_ms)
                 heat_to_kill = max(
                     0.0,
                     torp_flight.ELECTRONICS_THRESHOLD_J

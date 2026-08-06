@@ -118,6 +118,102 @@ def _run_torpedo_engagement(fleet, target_type, range_km, closure_kps,
     return impacts, target
 
 
+def _pd_envelope_km(fleet):
+    return PDLaser.from_fleet_data(fleet["weapon_types"]["pd_laser"]).range_km
+
+
+def _torpedo_run(fleet, target_type, sep_km, ship_closure_kps=0.0, seed=11,
+                 dt=0.5, max_t=600.0, sample=None):
+    """
+    One real launch, guided flight and PD engagement on the shipped engine.
+
+    `sample(sim, target, torp_flight)` is called after every step while the
+    round is in flight. Returns (blinded, n_operational_turrets).
+    """
+    sim = CombatSimulation(time_step=dt, decision_interval=1e9, seed=seed)
+    _build(sim, 'sh', 'cruiser_torpedo', 'beta', fleet,
+           sep_km, -ship_closure_kps / 2, -1)
+    target = _build(sim, 'tg', target_type, 'alpha', fleet,
+                    0.0, ship_closure_kps / 2, 1)
+    _evade(target)
+    n_turrets = len([p for p in (getattr(target, 'point_defense', []) or [])
+                     if getattr(p, 'is_operational', True)])
+    assert sim.inject_command('sh', {'type': 'launch_torpedo',
+                                     'target_id': 'tg'}), "launch rejected"
+    blinded = False
+    while sim.current_time < max_t:
+        for ev in sim.step():
+            if ev.event_type == SimulationEventType.PD_TORPEDO_DISABLED:
+                blinded = True
+        if not sim.torpedoes:
+            break
+        if sample is not None:
+            sample(sim, target, sim.torpedoes[0])
+        if target.is_destroyed:
+            break
+    return blinded, n_turrets
+
+
+def _closing_kps(torp, target):
+    offset = target.position - torp.position
+    if offset.magnitude <= 0:
+        return 0.0
+    return (torp.velocity - target.velocity).dot(offset.normalized()) / 1000.0
+
+
+def _envelope_entry_speed_kps(fleet, sep_km, ship_closure_kps, seed=11):
+    """Torpedo's own closing speed the first time it is inside the PD envelope."""
+    envelope_km = _pd_envelope_km(fleet)
+    found = []
+
+    def sample(sim, target, tf):
+        if found:
+            return
+        torp = tf.torpedo
+        dist_km = torp.position.distance_to(target.position) / 1000.0
+        if dist_km <= envelope_km:
+            found.append(_closing_kps(torp, target))
+
+    _torpedo_run(fleet, 'corvette', sep_km, ship_closure_kps, seed=seed,
+                 sample=sample)
+    assert found, "round never entered the PD envelope"
+    return found[0]
+
+
+def _blind_outcome(fleet, target_type, sep_km, seed=11):
+    return _torpedo_run(fleet, target_type, sep_km, seed=seed)
+
+
+def _triage_verdicts_over_flight(fleet, target_type, sep_km, seed=11,
+                                 interval_s=30.0):
+    """
+    The (turrets_needed, turrets_owned) pairs the captain is actually shown, at
+    every decision checkpoint of a live engagement. Read straight out of
+    LLMCaptain._build_tactical_status so the test exercises the shipped display.
+    """
+    from src.llm.captain import LLMCaptain, LLMCaptainConfig
+
+    cfg = LLMCaptainConfig(name="V", ship_name="TIS V", model="scripted",
+                           ship_type=target_type, fleet_data=fleet)
+    captain = LLMCaptain(cfg, client=None)
+    verdicts = []
+
+    def sample(sim, target, tf):
+        if tf.is_disabled:
+            return
+        if abs(sim.current_time % interval_s) > 0.3 or sim.current_time <= 0:
+            return
+        status = captain._build_tactical_status(target, sim.get_ship('sh'), sim)
+        for threat in status.get("torpedo_threats") or []:
+            needed = threat.get("pd_turrets_needed")
+            own = threat.get("own_pd_turrets")
+            if needed is not None and own is not None:
+                verdicts.append((needed, own))
+
+    _torpedo_run(fleet, target_type, sep_km, seed=seed, sample=sample)
+    return verdicts
+
+
 # =============================================================================
 # Point defense: closed-form numbers quoted to both roles
 # =============================================================================
@@ -141,19 +237,151 @@ class TestPDDoctrineNumbers:
         )
 
     def test_one_turret_blinds_about_5_kps_of_closure(self, fleet):
-        """Doctrine (captain + admiral): 'each PD turret ~5 km/s of closure'.
+        """
+        The closed form itself is unchanged: one turret seeker-kills ~5 km/s of
+        closure. What changed is how the doctrine SAYS it.
 
-        Derived from the same closed form the engine's savability triage uses
-        (PDLaser.energy_before_impact_j vs the 50 MJ seeker threshold).
+        REWRITTEN (was: asserted the literal '~5 km/s' phrasing appeared in both
+        doctrines). The figure was correct but 'closure' was unqualified, and
+        captains read it against the ship-to-ship range rate on the battlefield
+        line. Measured in a corvette duel whose hulls closed at 1.25 km/s - which
+        that phrasing makes look trivially defensible - all 8 rounds crossed the
+        envelope at ~12 km/s and 0/8 were blinded. The number stays; the prompt
+        now expresses it as MJ-per-turret against the TORPEDO's closing speed
+        (see test_doctrine_quotes_mj_per_turret_not_bare_closure).
         """
         pd = pd_doctrine_numbers(fleet)
         per = pd["blind_closure_kps_per_turret"]
         assert 4.5 <= per <= 6.0, (
-            f"one turret now blinds {per:.2f} km/s of closure - the '~5 km/s "
-            "per turret' rule in CAPTAIN_DOCTRINE and ADMIRAL_DOCTRINE is stale"
+            f"one turret now blinds {per:.2f} km/s of closure - the MJ-per-turret "
+            "table in the PD block is derived from this and is now stale"
         )
-        assert "~5 km/s" in CAPTAIN_DOCTRINE
-        assert "~5 km/s of closure; N turrets ~5N km/s" in ADMIRAL_DOCTRINE
+        # The bare, unqualified form must NOT come back.
+        assert "~5 km/s of closure" not in CAPTAIN_DOCTRINE
+        assert "~5 km/s of closure; N turrets ~5N km/s" not in ADMIRAL_DOCTRINE
+
+    def test_doctrine_names_the_torpedos_closure_not_the_ships(self, fleet):
+        """
+        Both doctrines must say WHICH closure sizes point defense.
+
+        Guards the reframing: torpedo guidance holds a fuelled round at
+        MIN_CLOSING_SPEED_KPS however slowly the two hulls approach, so the
+        hull-to-hull range rate is the wrong number to judge PD with.
+        """
+        assert "THE CLOSURE THAT SIZES YOUR PD IS THE TORPEDO'S" in CAPTAIN_DOCTRINE
+        assert "INBOUND ORDNANCE" in CAPTAIN_DOCTRINE, (
+            "captain is told to use a threat-line figure that is never named"
+        )
+        assert "NOT BY FLEET-TO-FLEET CLOSURE" in ADMIRAL_DOCTRINE
+        # The admiral's copies must be interpolated from pd_doctrine_numbers,
+        # not re-typed as literals that can drift away from the model.
+        for placeholder in ("{pd_closure_floor_kps", "{pd_mj_per_turret",
+                            "{pd_turrets_to_blind", "{pd_seeker_kill_mj"):
+            assert placeholder in ADMIRAL_DOCTRINE, (
+                f"{placeholder} was replaced by a hardcoded number"
+            )
+
+    def test_closure_floor_is_what_pd_actually_faces(self, fleet):
+        """
+        Doctrine: 'guidance holds a fuelled round at >=12 km/s however slowly the
+        two ships approach'. Measured on the engine, not asserted from the
+        constant: launch at 500 km with the two hulls at rest relative to each
+        other and check the speed the round crosses the PD envelope at.
+        """
+        pd = pd_doctrine_numbers(fleet)
+        assert pd["closure_floor_kps"] == MIN_CLOSING_SPEED_KPS
+
+        entry = _envelope_entry_speed_kps(fleet, sep_km=500.0,
+                                          ship_closure_kps=0.0, seed=11)
+        assert entry >= MIN_CLOSING_SPEED_KPS - 1.0, (
+            f"a round launched at 500 km now enters the PD envelope at "
+            f"{entry:.1f} km/s, below the {MIN_CLOSING_SPEED_KPS} km/s floor the "
+            "doctrine quotes"
+        )
+
+        # ...and the hull-to-hull rate genuinely does not govern it: a large
+        # change in ship closure must not move envelope-entry speed much.
+        entry_fast = _envelope_entry_speed_kps(fleet, sep_km=500.0,
+                                               ship_closure_kps=6.0, seed=11)
+        assert abs(entry_fast - entry) < 4.0, (
+            "envelope-entry speed now tracks ship-to-ship closure - the doctrine "
+            "tells captains it does not"
+        )
+
+    def test_doctrine_quotes_mj_per_turret_not_bare_closure(self, fleet):
+        """
+        The PD capability block quotes MJ per turret and a turret count, both
+        derived from the same closed form. Guards those numbers against drift.
+        """
+        pd = pd_doctrine_numbers(fleet)
+        mj = pd["mj_per_turret_at_floor"]
+        need = pd["turrets_to_blind_at_floor"]
+        assert 18.0 <= mj <= 26.0, (
+            f"one turret now lands {mj:.1f} MJ against a round at the closure "
+            "floor - the MJ/turret table in the PD block is stale"
+        )
+        assert need == 3, (
+            f"a normally launched round now needs {need} turrets, not 3 - both "
+            "doctrines and the '1-2 turret hull' claim need re-measuring"
+        )
+        text = build_ship_capabilities_from_fleet(
+            ship_name="TIS Wasp", ship_type="corvette", fleet_data=fleet,
+            hull_integrity=100, heat_percent=0, delta_v_remaining=500,
+            nose_armor=212, lateral_armor=36, tail_armor=42,
+            heatsink_capacity=525, radiators_extended=False,
+        )
+        assert f"{mj:.0f} MJ per turret" in text
+        assert "closing X km/s" in text, (
+            "the table has no stated input - the captain cannot look up a row"
+        )
+        # A corvette has one turret: it must be told plainly that it cannot.
+        assert "CANNOT blind one" in text
+
+    def test_one_and_two_turret_hulls_do_not_blind_a_normal_launch(self, fleet):
+        """
+        Doctrine: 'a 1- or 2-turret hull does NOT blind a normally launched
+        round (<=46 MJ of the 50 MJ needed); 3+ turrets do.'
+
+        Measured end-to-end on the engine at a 500 km launch.
+        """
+        blinded_by_turrets = {}
+        for target_type in ('corvette', 'destroyer', 'battleship'):
+            blinded, n_turrets = _blind_outcome(fleet, target_type,
+                                                sep_km=500.0, seed=11)
+            blinded_by_turrets[n_turrets] = blinded
+        assert blinded_by_turrets.get(1) is False, (
+            "a single turret now blinds a 500 km launch - the doctrine tells "
+            "captains it never does"
+        )
+        assert blinded_by_turrets.get(2) is False, (
+            "two turrets now blind a 500 km launch - the '1-2 turret hull' claim "
+            "in CAPTAIN_DOCTRINE and ADMIRAL_DOCTRINE is stale"
+        )
+        assert blinded_by_turrets.get(3) is True, (
+            "three turrets no longer blind a 500 km launch - the 'turrets needed' "
+            "figure quoted to both roles is wrong"
+        )
+
+    def test_pd_triage_verdict_is_not_optimistic_at_the_first_checkpoint(self, fleet):
+        """
+        The per-turn threat line must not tell a 1-turret hull it can blind a
+        round it provably cannot.
+
+        Regression: the triage fed PDLaser.energy_before_impact_j the torpedo's
+        INSTANTANEOUS closing speed. 30 s after launch a still-burning round is
+        only doing ~4 km/s, so the closed form (which assumes a constant speed)
+        promised a seeker kill. Measured over 31 checkpoints of live
+        engagements the instantaneous form was right 24 times and every single
+        error was a false 'your PD can blind it' at the FIRST checkpoint - the
+        one decision the captain actually gets.
+        """
+        verdicts = _triage_verdicts_over_flight(fleet, 'corvette', sep_km=500.0,
+                                                seed=11)
+        assert verdicts, "engagement produced no checkpoints to judge"
+        assert all(needed > own for needed, own in verdicts), (
+            "a 1-turret corvette is being told its PD can blind a 500 km launch "
+            f"at some checkpoint: {verdicts}"
+        )
 
     def test_closed_form_matches_engine_kill_ranges(self, fleet):
         """The ~5 km/s rule must hold in the real engine, not just on paper:

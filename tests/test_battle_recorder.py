@@ -1571,5 +1571,232 @@ class TestEdgeCases:
         assert events[0].data["message"] == "Feuer frei!"
 
 
+# =============================================================================
+# Torpedo lifecycle reaches the recording (end-to-end, real engine)
+# =============================================================================
+
+def _scripted_torpedo_duel(max_t=200.0, seed=7,
+                           launch_times=(0.0, 20.0, 40.0, 60.0)):
+    """
+    A corvette duel decided by torpedoes, driven through the REAL
+    LLMBattleRunner event path with no LLM in the loop.
+
+    Regression context: a battle exactly like this recorded 149 events, of which
+    ZERO were torpedo events - eight rounds flew and three modules died to them
+    while the log contained only PD chatter. The runner emitted the torpedo
+    events; the recorder had no EventType members for them and the runner wired
+    none of them.
+    """
+    import json as _json
+
+    from src.llm.battle_runner import LLMBattleRunner, BattleConfig
+    from src.llm.captain import LLMCaptainConfig
+    from src.simulation import Maneuver, ManeuverType
+
+    with open("data/fleet_ships.json") as f:
+        fleet = _json.load(f)
+
+    cfg = BattleConfig(
+        initial_distance_km=500.0, verbose=False, personality_selection=False,
+        record_battle=True, alpha_ship_type="corvette",
+        beta_ship_type="corvette", seed=seed,
+    )
+    runner = LLMBattleRunner(
+        cfg,
+        LLMCaptainConfig(name="A", ship_name="TIS A", model="scripted"),
+        LLMCaptainConfig(name="B", ship_name="HFS B", model="scripted"),
+        client=None,
+    )
+    runner.setup_battle(fleet)
+    sim = runner.simulation
+
+    sim_events = []
+    sim.add_event_callback(sim_events.append)
+
+    alpha, beta = sim.get_ship("alpha"), sim.get_ship("beta")
+    for ship in (alpha, beta):
+        ship.current_maneuver = Maneuver(
+            maneuver_type=ManeuverType.EVASIVE, start_time=0.0,
+            duration=1e9, throttle=1.0)
+    alpha.primary_target_id, beta.primary_target_id = "beta", "alpha"
+
+    pending = list(launch_times)
+    while sim.current_time < max_t:
+        while pending and sim.current_time >= pending[0]:
+            pending.pop(0)
+            sim.inject_command("alpha", {"type": "launch_torpedo",
+                                         "target_id": "beta"})
+            sim.inject_command("beta", {"type": "launch_torpedo",
+                                        "target_id": "alpha"})
+        sim.step()
+        if alpha.is_destroyed or beta.is_destroyed:
+            break
+    return runner, sim, sim_events
+
+
+def _sim_count(sim_events, name):
+    from src.simulation import SimulationEventType
+    wanted = getattr(SimulationEventType, name)
+    return sum(1 for e in sim_events if e.event_type == wanted)
+
+
+def _rec_count(recorder, event_type):
+    return sum(1 for e in recorder.events if e.event_type == event_type)
+
+
+class TestTorpedoLifecycleIsRecorded:
+    """Every torpedo transition the simulation emits must reach the recording."""
+
+    @pytest.fixture(scope="class")
+    def duel(self):
+        return _scripted_torpedo_duel()
+
+    def test_torpedoes_actually_flew(self, duel):
+        """Guard the guard: a silent no-launch would make every test below vacuous."""
+        _, _, sim_events = duel
+        assert _sim_count(sim_events, "TORPEDO_LAUNCHED") >= 4
+        assert _sim_count(sim_events, "TORPEDO_IMPACT") >= 1
+
+    def test_launches_are_recorded_with_shooter_and_target(self, duel):
+        runner, _, sim_events = duel
+        assert _rec_count(runner.recorder, EventType.TORPEDO_LAUNCHED) == \
+            _sim_count(sim_events, "TORPEDO_LAUNCHED")
+        launches = [e for e in runner.recorder.events
+                    if e.event_type == EventType.TORPEDO_LAUNCHED]
+        for ev in launches:
+            assert ev.ship_id in ("alpha", "beta"), "launcher not identified"
+            assert ev.data["target_id"] in ("alpha", "beta"), "aim point missing"
+            assert ev.data["torpedo_id"], "round not identifiable"
+            assert ev.data["launch_distance_km"] > 0
+
+    def test_impacts_are_recorded_with_damage_and_geometry(self, duel):
+        runner, _, sim_events = duel
+        assert _rec_count(runner.recorder, EventType.TORPEDO_IMPACT) == \
+            _sim_count(sim_events, "TORPEDO_IMPACT")
+        impacts = [e for e in runner.recorder.events
+                   if e.event_type == EventType.TORPEDO_IMPACT]
+        for ev in impacts:
+            assert ev.data["total_damage_gj"] > 0, "impact carries no damage"
+            assert ev.data["impact_speed_kps"] > 0, "impact carries no speed"
+            assert ev.data["hit_location"] != "unknown", "impact has no location"
+
+    def test_fuel_exhaustion_is_recorded(self, duel):
+        runner, _, sim_events = duel
+        emitted = _sim_count(sim_events, "TORPEDO_FUEL_EXHAUSTED")
+        assert emitted > 0, "no round burned out - test case no longer covers this"
+        assert _rec_count(runner.recorder, EventType.TORPEDO_FUEL_EXHAUSTED) == emitted
+
+    def test_every_round_can_be_accounted_for(self, duel):
+        """
+        The point of the whole fix: launches must balance against outcomes using
+        the recording alone, with no --trace.
+        """
+        runner, _, _ = duel
+        launched = {e.data["torpedo_id"] for e in runner.recorder.events
+                    if e.event_type == EventType.TORPEDO_LAUNCHED}
+        assert launched, "nothing launched"
+        terminal = (EventType.TORPEDO_IMPACT, EventType.TORPEDO_MISS,
+                    EventType.TORPEDO_INTERCEPTED,
+                    EventType.PD_TORPEDO_DESTROYED,
+                    EventType.TORPEDO_IN_FLIGHT_AT_END)
+        resolved = {e.data["torpedo_id"] for e in runner.recorder.events
+                    if e.event_type in terminal}
+        assert launched <= resolved, (
+            f"rounds vanish from the recording: {sorted(launched - resolved)}"
+        )
+
+    def test_pd_fire_records_the_heat_it_delivered(self, duel):
+        """
+        Whether PD mattered is a question about JOULES, not turret-ticks.
+
+        Regression: the runner read mass_ablated_kg/energy_delivered_j, which
+        only the SLUG engagement path emits, so all 122 torpedo pd_fired entries
+        of the reference recording read 0 J delivered - it was impossible to
+        tell from a recording whether PD had landed 1 MJ or 49 MJ of the 50 MJ a
+        seeker kill needs.
+        """
+        runner, _, _ = duel
+        shots = [e for e in runner.recorder.events
+                 if e.event_type == EventType.PD_FIRED
+                 and e.data.get("target_type") == "torpedo"]
+        assert shots, "PD never engaged a torpedo in this duel"
+        assert any(e.data["heat_delivered_j"] > 0 for e in shots), (
+            "every torpedo PD shot recorded 0 J delivered"
+        )
+        assert max(e.data["total_heat_j"] for e in shots) > 0
+
+    def test_recording_survives_json_round_trip(self, duel):
+        """Torpedo events must serialize, not just exist in memory."""
+        runner, sim, _ = duel
+        runner.recorder.recording.events = [
+            e.to_dict() for e in runner.recorder.events]
+        payload = json.loads(runner.recorder.recording.to_json())
+        kinds = {e["event_type"] for e in payload["events"]}
+        assert EventType.TORPEDO_LAUNCHED in kinds
+        assert EventType.TORPEDO_IMPACT in kinds
+
+
+    def test_rounds_still_flying_at_the_end_are_booked(self):
+        """
+        A round that never resolves must still appear, or launches cannot be
+        balanced against outcomes. The duel above lands every round, so this
+        drives _record_torpedoes_in_flight directly with a live round in flight.
+        """
+        runner, sim, _ = _scripted_torpedo_duel(max_t=20.0, launch_times=(0.0,))
+        assert sim.torpedoes, "no round in flight - test case is vacuous"
+        in_flight = {tf.torpedo_id for tf in sim.torpedoes}
+
+        runner._record_torpedoes_in_flight()
+
+        events = [e for e in runner.recorder.events
+                  if e.event_type == EventType.TORPEDO_IN_FLIGHT_AT_END]
+        assert {e.data["torpedo_id"] for e in events} == in_flight
+        for ev in events:
+            assert ev.ship_id in ("alpha", "beta")
+            assert ev.data["target_id"] in ("alpha", "beta")
+            assert ev.data["distance_to_target_km"] > 0
+            assert ev.data["blinded"] is False
+
+
+class TestArmorDamageIsRecorded:
+    """
+    Armour ablation must be recorded per ABLATING hit, not per breach.
+
+    Measured before the fix: 8 ablation events reached the recorder as a single
+    all-zero 'armor_damage' entry, because the recorder was fed from
+    ARMOR_PENETRATED (which fires only on a breach) and read key names that
+    event never carried (hit_location/armor_ablation_cm/armor_remaining_cm).
+    """
+
+    @pytest.fixture(scope="class")
+    def duel(self):
+        return _scripted_torpedo_duel()
+
+    def test_every_ablating_hit_is_recorded(self, duel):
+        from src.simulation import SimulationEventType
+        runner, _, sim_events = duel
+        ablations = [e for e in sim_events
+                     if e.event_type == SimulationEventType.DAMAGE_TAKEN
+                     and (e.data or {}).get("armor_ablation_cm", 0) > 0]
+        assert ablations, "no armour was ablated - test case is vacuous"
+        assert _rec_count(runner.recorder, EventType.ARMOR_DAMAGE) == len(ablations)
+
+    def test_armor_events_carry_real_values(self, duel):
+        runner, _, _ = duel
+        events = [e for e in runner.recorder.events
+                  if e.event_type == EventType.ARMOR_DAMAGE]
+        assert events
+        for ev in events:
+            assert ev.data["location"] != "unknown", "location never resolved"
+            assert ev.data["ablation_cm"] > 0, "ablation recorded as zero"
+            assert ev.data["remaining_cm"] >= 0
+
+    def test_breach_is_its_own_event(self, duel):
+        from src.simulation import SimulationEventType
+        runner, _, sim_events = duel
+        breaches = _sim_count(sim_events, "ARMOR_PENETRATED")
+        assert _rec_count(runner.recorder, EventType.PENETRATION) == breaches
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

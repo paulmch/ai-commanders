@@ -268,7 +268,10 @@ TORPEDO_TOOL = {
             "PD only blinds slow rounds). Rounds arriving TOGETHER split enemy PD dwell "
             "- launch your salvo in one decision rather than trickling. Each launcher "
             "reloads in 12s (2 per launcher per 30s decision). Magazine is limited - "
-            "check YOUR TORPEDOES REMAINING."
+            "check YOUR TORPEDOES REMAINING. If a round's target dies mid-flight, a "
+            "live-seeker round RETARGETS the cheapest reachable enemy on its own "
+            "(delta-v permitting) - overkill against one hull partially recycles onto "
+            "the next, though blinded or burned-out rounds are still wasted."
         ),
         "parameters": {
             "type": "object",

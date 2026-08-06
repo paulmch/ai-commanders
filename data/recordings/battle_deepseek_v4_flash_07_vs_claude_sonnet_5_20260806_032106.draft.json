@@ -1,0 +1,192 @@
+{
+  "budget": 150,
+  "alpha_captain_model": "deepseek/deepseek-v4-flash-0731",
+  "beta_captain_model": "anthropic/claude-sonnet-5",
+  "alpha": {
+    "faction": "alpha",
+    "budget": 150,
+    "points_spent": 150,
+    "auto_draft": false,
+    "formation_name": "PD Wall + Torpedo Backline",
+    "selection_rationale": "Torpedo saturation core: two torpedo cruisers (4 launchers each) plus a fast corvette deliver 16+ torpedo rounds in coordinated volleys to overwhelm point defense. A battleship and two destroyers form the gun line to hammer targets in the mid-range bracket, while the frigate and the cruisers' 4-PD turrets anchor a defensive wall that shaves incoming coilgun slugs and blinds enemy seekers.",
+    "formation_rationale": "Battleship takes point as a durable vanguard tank, with destroyers, corvette, and frigate clustered within ~100 km to form an overlapping point-defense screen against incoming torpedoes. The two fragile torpedo cruisers are held back at -x, protected behind the PD wall and kept out of the enemy's immediate gun exchange so they can launch torpedoes from relative safety.",
+    "ships": [
+      {
+        "ship_id": "alpha_1",
+        "ship_name": "TIS Harpoon-1",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          -40.0,
+          -15.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_2",
+        "ship_name": "TIS Harpoon-2",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          -40.0,
+          15.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_3",
+        "ship_name": "TIS Sovereign",
+        "ship_type": "battleship",
+        "cost": 40,
+        "offset_km": [
+          50.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_4",
+        "ship_name": "TIS Falchion-1",
+        "ship_type": "destroyer",
+        "cost": 16,
+        "offset_km": [
+          40.0,
+          -40.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_5",
+        "ship_name": "TIS Falchion-2",
+        "ship_type": "destroyer",
+        "cost": 16,
+        "offset_km": [
+          40.0,
+          40.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_6",
+        "ship_name": "TIS Dart",
+        "ship_type": "corvette",
+        "cost": 10,
+        "offset_km": [
+          30.0,
+          -20.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_7",
+        "ship_name": "TIS Ward",
+        "ship_type": "frigate",
+        "cost": 8,
+        "offset_km": [
+          30.0,
+          20.0,
+          0.0
+        ]
+      }
+    ]
+  },
+  "beta": {
+    "faction": "beta",
+    "budget": 150,
+    "points_spent": 146,
+    "auto_draft": false,
+    "formation_name": "Layered Spearhead",
+    "selection_rationale": "Fast corvette torpedo swarm (24 torps) saturates enemy PD early while destroyers and battlecruisers close to sub-300km for accurate coilgun fire, with a battleship anchoring the line as a heavy-armor gun platform. This mixes speed, saturation, and firepower to overwhelm a simple AI captain's point-defense allocation.",
+    "formation_rationale": "Corvettes form a fast forward picket to absorb the first exchange and screen for torpedoes/spot enemy fire. Destroyers sit just behind them, close enough (~30-40km) to overlap PD coverage with the corvette line. Battlecruisers flank wide and slightly elevated to open alternate firing angles against enemy spinal weapons while staying within PD-support range of the destroyers. Sovereign, the fleet's main strength, is held in reserve at the rear-center, shielded by the layered screen ahead while still close enough (~50-70km) to the battlecruisers for mutual PD support.",
+    "ships": [
+      {
+        "ship_id": "beta_1",
+        "ship_name": "OCS Dart-1",
+        "ship_type": "corvette",
+        "cost": 10,
+        "offset_km": [
+          60.0,
+          -100.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_2",
+        "ship_name": "OCS Dart-2",
+        "ship_type": "corvette",
+        "cost": 10,
+        "offset_km": [
+          60.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_3",
+        "ship_name": "OCS Dart-3",
+        "ship_type": "corvette",
+        "cost": 10,
+        "offset_km": [
+          60.0,
+          100.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_4",
+        "ship_name": "OCS Falchion-1",
+        "ship_type": "destroyer",
+        "cost": 16,
+        "offset_km": [
+          30.0,
+          -50.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_5",
+        "ship_name": "OCS Falchion-2",
+        "ship_type": "destroyer",
+        "cost": 16,
+        "offset_km": [
+          30.0,
+          50.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_6",
+        "ship_name": "OCS Lancer-1",
+        "ship_type": "battlecruiser",
+        "cost": 22,
+        "offset_km": [
+          -10.0,
+          -90.0,
+          15.0
+        ]
+      },
+      {
+        "ship_id": "beta_7",
+        "ship_name": "OCS Lancer-2",
+        "ship_type": "battlecruiser",
+        "cost": 22,
+        "offset_km": [
+          -10.0,
+          90.0,
+          15.0
+        ]
+      },
+      {
+        "ship_id": "beta_8",
+        "ship_name": "OCS Sovereign",
+        "ship_type": "battleship",
+        "cost": 40,
+        "offset_km": [
+          -60.0,
+          0.0,
+          0.0
+        ]
+      }
+    ]
+  }
+}

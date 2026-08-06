@@ -162,6 +162,12 @@ class LLMBattleRunner:
         # Pre-checkpoint snapshot time offset for Admirals (seconds before checkpoint)
         self.admiral_pre_snapshot_offset = 15.0
 
+        # Admiral vision (docs/admiral_vision.md): rolling trail/event history
+        # plus rendered-checkpoint output dir. Only allocated when at least
+        # one admiral has vision enabled on a vision-capable model.
+        self._admiral_view = None
+        self._admiral_view_dir: Optional[Path] = None
+
     def _seed_rng(self) -> None:
         """
         Seed the RNG used by combat resolution, if a seed was configured.
@@ -192,9 +198,15 @@ class LLMBattleRunner:
         self._seed_rng()
 
         # Create simulation
+        # config.seed must reach the SIMULATION's rng. _seed_rng() seeds the
+        # module-level `random`, but combat resolution was migrated to
+        # self.rng = random.Random(seed) and the runner was never updated - so a
+        # "seeded" battle still rolled hits from an unseeded generator and was
+        # not reproducible.
         self.simulation = CombatSimulation(
             time_step=1.0,
             decision_interval=self.config.decision_interval_s,
+            seed=self.config.seed,
         )
 
         # Calculate positions
@@ -297,6 +309,18 @@ class LLMBattleRunner:
             forward=forward,
         )
 
+    def _make_captain(self, captain_config: LLMCaptainConfig) -> LLMCaptain:
+        """
+        Build the right captain for a ship config.
+
+        The sentinel model "heuristic" (draft mode's cheap AI) gets the
+        rule-based captain; anything else is a normal LLM-backed captain.
+        """
+        from .heuristic_captain import HEURISTIC_MODEL, HeuristicCaptain
+        if captain_config.model == HEURISTIC_MODEL:
+            return HeuristicCaptain(captain_config)
+        return LLMCaptain(captain_config, self.client)
+
     def setup_fleet_battle(self, fleet_data: Dict[str, Any]) -> None:
         """
         Initialize simulation with fleet configuration (multi-ship, Admirals).
@@ -316,6 +340,7 @@ class LLMBattleRunner:
         self.simulation = CombatSimulation(
             time_step=1.0,
             decision_interval=self.fleet_config.decision_interval_s,
+            seed=self.config.seed,
         )
 
         # Calculate base positions
@@ -371,7 +396,7 @@ class LLMBattleRunner:
                 fleet_data=fleet_data,
                 temperature=ship_config.temperature,
             )
-            captain = LLMCaptain(captain_config, self.client)
+            captain = self._make_captain(captain_config)
             captain.ship_id = ship_config.ship_id
             captain.faction = "alpha"
 
@@ -428,7 +453,7 @@ class LLMBattleRunner:
                 fleet_data=fleet_data,
                 temperature=ship_config.temperature,
             )
-            captain = LLMCaptain(captain_config, self.client)
+            captain = self._make_captain(captain_config)
             captain.ship_id = ship_config.ship_id
             captain.faction = "beta"
 
@@ -483,6 +508,19 @@ class LLMBattleRunner:
                 client=self.client,
                 fleet_data=fleet_data,
             )
+
+        # Admiral vision: allocate the trail/event history only if some
+        # admiral will actually consume rendered frames.
+        if any(a and a.wants_vision for a in (self.alpha_admiral, self.beta_admiral)):
+            from .admiral_view import AdmiralViewState
+            self._admiral_view = AdmiralViewState()
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self._admiral_view_dir = Path("data/recordings/vision") / stamp
+            if self.config.verbose:
+                enabled = [a.name for a in (self.alpha_admiral, self.beta_admiral)
+                           if a and a.wants_vision]
+                print(f"[ADMIRAL VISION] Enabled for: {', '.join(enabled)} "
+                      f"(frames -> {self._admiral_view_dir})")
 
         # Create fleet communication channel and register ships
         self.fleet_communication = FleetCommunicationChannel()
@@ -914,6 +952,9 @@ class LLMBattleRunner:
 
                 self.simulation.step()
 
+                if self._admiral_view:
+                    self._admiral_view.sample(self.simulation)
+
                 # Record sim frame if enabled
                 if self.recorder and self.config.record_sim_trace:
                     self._record_sim_frame()
@@ -1239,6 +1280,9 @@ class LLMBattleRunner:
 
                 self.simulation.step()
 
+                if self._admiral_view:
+                    self._admiral_view.sample(self.simulation)
+
                 # Record sim frame if enabled
                 if self.recorder and self.config.record_sim_trace:
                     self._record_sim_frame()
@@ -1538,11 +1582,48 @@ class LLMBattleRunner:
         enemy_admiral: Optional[LLMAdmiral],
     ) -> Any:
         """Get Admiral's decision for the checkpoint."""
+        battle_image_png = None
+        if self._admiral_view and admiral.wants_vision:
+            try:
+                battle_image_png = self._admiral_view.render(
+                    self.simulation,
+                    self._ships_meta(),
+                    faction=admiral.faction,
+                )
+            except Exception as e:  # noqa: BLE001 - vision must never kill a battle
+                print(f"[ADMIRAL VISION] render failed at "
+                      f"T+{self.simulation.current_time:.0f}s: {e}")
+            if battle_image_png and self._admiral_view_dir:
+                try:
+                    self._admiral_view_dir.mkdir(parents=True, exist_ok=True)
+                    out = (self._admiral_view_dir /
+                           f"cp{self.checkpoint_count:03d}_{admiral.faction}.png")
+                    out.write_bytes(battle_image_png)
+                except OSError as e:
+                    print(f"[ADMIRAL VISION] could not save frame: {e}")
+
         return admiral.decide(
             simulation=self.simulation,
             captains=friendly_captains,
             enemy_admiral=enemy_admiral,
+            battle_image_png=battle_image_png,
         )
+
+    def _ships_meta(self) -> Dict[str, Dict[str, str]]:
+        """ship_id -> {name, type, faction} for the tactical renderer."""
+        meta: Dict[str, Dict[str, str]] = {}
+        for faction, ships, captains in (
+            ("alpha", self.alpha_ships, self.alpha_captains),
+            ("beta", self.beta_ships, self.beta_captains),
+        ):
+            for ship_id, ship in ships.items():
+                captain = captains.get(ship_id)
+                meta[ship_id] = {
+                    "name": getattr(ship, "name", None) or ship_id,
+                    "type": captain.config.ship_type if captain else "",
+                    "faction": faction,
+                }
+        return meta
 
     def _find_ship_id_by_name(self, name: str, faction: str) -> Optional[str]:
         """Find ship_id by ship name within a faction."""
@@ -2181,6 +2262,7 @@ class LLMBattleRunner:
             self.recorder.recording.alpha_ships_remaining = alpha_active
             self.recorder.recording.beta_ships_remaining = beta_active
 
+            self._record_torpedoes_in_flight()
             self.recorder.end_recording(rec_result, self.simulation.current_time)
 
             # Save to file
@@ -2599,6 +2681,7 @@ class LLMBattleRunner:
             rec_result.duration_s = self.simulation.current_time
             rec_result.checkpoints_used = self.checkpoint_count
 
+            self._record_torpedoes_in_flight()
             self.recorder.end_recording(rec_result, self.simulation.current_time)
 
             # Save to file
@@ -2751,6 +2834,11 @@ class LLMBattleRunner:
         # recording, and must run even when record_battle is disabled.
         self._feed_captain_event(event)
 
+        # Admiral vision needs PD engagements (beam lines) and notable events
+        # (ticker) regardless of whether a recorder exists.
+        if self._admiral_view:
+            self._admiral_view.note_event(event)
+
         if not self.recorder:
             return
 
@@ -2798,27 +2886,122 @@ class LLMBattleRunner:
                 impact_position=data.get("impact_position"),
             )
 
-        # Record misses
+        # Record misses. A torpedo that runs past its target is emitted as a
+        # PROJECTILE_MISS tagged type='torpedo'; recording it as a gun miss made
+        # the torpedo ledger impossible to balance, so it gets its own event.
         elif event_type == SimulationEventType.PROJECTILE_MISS:
-            self.recorder.record_miss(
-                timestamp=timestamp,
-                shooter_id=data.get("source_ship_id", ship_id or "unknown"),
-                target_id=target_id or "unknown",
-                weapon_slot=data.get("weapon_slot", "unknown"),
-                hit_probability=data.get("hit_probability", 0),
-                distance_km=data.get("closest_approach_km", 0),
-                flight_time_s=data.get("flight_time_s", 0),
-            )
+            if data.get("type") == "torpedo":
+                self.recorder.record_torpedo_miss(
+                    timestamp=timestamp,
+                    shooter_id=ship_id or "unknown",
+                    target_id=target_id or "unknown",
+                    torpedo_id=data.get("projectile_id", "unknown"),
+                    closest_approach_km=data.get("closest_approach_km", 0),
+                    hit_probability=data.get("hit_probability", 0),
+                )
+            else:
+                self.recorder.record_miss(
+                    timestamp=timestamp,
+                    shooter_id=data.get("source_ship_id", ship_id or "unknown"),
+                    target_id=target_id or "unknown",
+                    weapon_slot=data.get("weapon_slot", "unknown"),
+                    hit_probability=data.get("hit_probability", 0),
+                    distance_km=data.get("closest_approach_km", 0),
+                    flight_time_s=data.get("flight_time_s", 0),
+                )
 
-        # Record armor penetration
+        # Record EVERY ablating hit on armor, not just breaching ones. This used
+        # to be driven off ARMOR_PENETRATED - which fires only on a breach and
+        # carries neither the ablation nor the remaining thickness - so a
+        # recording showed one all-zero 'armor_damage' entry per penetration and
+        # nothing for the ablation that led up to it.
+        elif event_type == SimulationEventType.DAMAGE_TAKEN:
+            if data.get("armor_ablation_cm", 0) > 0:
+                self.recorder.record_armor_damage(
+                    timestamp=timestamp,
+                    ship_id=ship_id or "unknown",
+                    location=data.get("location", "unknown"),
+                    ablation_cm=data.get("armor_ablation_cm", 0),
+                    remaining_cm=data.get("armor_remaining_cm", 0),
+                    chipping_fraction=data.get("chipping_fraction", 0),
+                    damage_gj=data.get("damage_gj", 0),
+                    penetrated=data.get("penetrated", False),
+                    source=data.get("damage_type") or data.get("source", ""),
+                )
+
+        # Record armor breach as its own event
         elif event_type == SimulationEventType.ARMOR_PENETRATED:
-            self.recorder.record_armor_damage(
+            self.recorder.record_penetration(
                 timestamp=timestamp,
                 ship_id=ship_id or "unknown",
-                location=data.get("hit_location", "unknown"),
-                ablation_cm=data.get("armor_ablation_cm", 0),
-                remaining_cm=data.get("armor_remaining_cm", 0),
+                location=data.get("location", data.get("hit_location", "unknown")),
+                remaining_energy_gj=data.get(
+                    "remaining_energy_gj", data.get("remaining_damage_gj", 0)),
                 chipping_fraction=data.get("chipping_fraction", 0),
+                critical_through_chip=data.get("critical_through_chip", False),
+            )
+
+        # ------------------------------------------------------------------
+        # Torpedo lifecycle. None of this reached the recorder before: a
+        # corvette duel decided entirely by torpedoes recorded zero torpedo
+        # events.
+        # ------------------------------------------------------------------
+        elif event_type == SimulationEventType.TORPEDO_LAUNCHED:
+            self.recorder.record_torpedo_launched(
+                timestamp=timestamp,
+                shooter_id=ship_id or "unknown",
+                target_id=target_id or "unknown",
+                torpedo_id=data.get("torpedo_id", "unknown"),
+                initial_velocity_kps=data.get("initial_velocity_kps", 0),
+                delta_v_kps=data.get("delta_v_kps", 0),
+                warhead_gj=data.get("warhead_gj", 0),
+                guidance_mode=data.get("guidance_mode", ""),
+                launch_distance_km=data.get("launch_distance_km", 0),
+            )
+
+        elif event_type == SimulationEventType.TORPEDO_IMPACT:
+            self.recorder.record_torpedo_impact(
+                timestamp=timestamp,
+                shooter_id=ship_id or "unknown",
+                target_id=target_id or "unknown",
+                torpedo_id=data.get("torpedo_id", "unknown"),
+                total_damage_gj=data.get("total_damage_gj", 0),
+                kinetic_damage_gj=data.get("kinetic_damage_gj", 0),
+                explosive_damage_gj=data.get("explosive_damage_gj", 0),
+                impact_speed_kps=data.get("impact_speed_kps", 0),
+                hit_location=data.get("hit_location", "unknown"),
+                penetrator_mass_kg=data.get("penetrator_mass_kg", 0),
+            )
+
+        elif event_type == SimulationEventType.TORPEDO_INTERCEPTED:
+            self.recorder.record_torpedo_intercepted(
+                timestamp=timestamp,
+                shooter_id=ship_id or "unknown",
+                target_id=target_id or "unknown",
+                torpedo_id=data.get("torpedo_id", "unknown"),
+                total_heat_absorbed_j=data.get("total_heat_absorbed_j", 0),
+            )
+
+        elif event_type == SimulationEventType.TORPEDO_FUEL_EXHAUSTED:
+            self.recorder.record_torpedo_fuel_exhausted(
+                timestamp=timestamp,
+                shooter_id=ship_id or "unknown",
+                target_id=target_id or "unknown",
+                torpedo_id=data.get("torpedo_id", "unknown"),
+                distance_to_target_km=data.get("distance_to_target_km", 0),
+                speed_kps=data.get("speed_kps", 0),
+            )
+
+        elif event_type == SimulationEventType.TORPEDO_RETARGETED:
+            self.recorder.record_torpedo_retargeted(
+                timestamp=timestamp,
+                shooter_id=ship_id or "unknown",
+                torpedo_id=data.get("torpedo_id", "unknown"),
+                old_target_id=data.get("old_target_id", "unknown"),
+                new_target_id=data.get("new_target_id", "unknown"),
+                distance_km=data.get("distance_km", 0),
+                time_to_intercept_s=data.get("time_to_intercept_s", 0),
+                dv_remaining_kps=data.get("dv_remaining_kps", 0),
             )
 
         # Record radiator changes
@@ -2890,6 +3073,13 @@ class LLMBattleRunner:
                 mass_ablated_kg=data.get("mass_ablated_kg", 0),
                 total_ablated_kg=data.get("total_ablated_kg", 0),
                 energy_delivered_j=data.get("energy_delivered_j", 0),
+                # Torpedo engagements report absorbed HEAT, not ablated mass.
+                # These two keys were never read, so every torpedo pd_fired
+                # entry in a recording read 0 - you could not tell from a
+                # recording whether PD had delivered 1 MJ or 49 MJ of the 50 MJ
+                # a seeker kill needs.
+                heat_delivered_j=data.get("heat_delivered_j", 0),
+                total_heat_j=data.get("total_heat_j", 0),
             )
 
         elif event_type == SimulationEventType.PD_SLUG_DAMAGED:
@@ -2914,6 +3104,7 @@ class LLMBattleRunner:
                 ship_id=ship_id or "unknown",
                 torpedo_id=data.get("torpedo_id", "unknown"),
                 source_ship_id=data.get("source_ship", "unknown"),
+                total_heat_absorbed_j=data.get("total_heat_absorbed_j", 0),
             )
 
         elif event_type == SimulationEventType.PD_TORPEDO_DESTROYED:
@@ -2925,6 +3116,33 @@ class LLMBattleRunner:
                 total_heat_absorbed_j=data.get("total_heat_absorbed_j", 0),
             )
 
+
+    def _record_torpedoes_in_flight(self) -> None:
+        """
+        Close the torpedo ledger at battle end.
+
+        A round that neither hit, missed, nor was intercepted just disappeared
+        from the recording, so launches never balanced against outcomes. Called
+        immediately before end_recording on both the 1v1 and fleet paths.
+        """
+        if not self.recorder or not self.simulation:
+            return
+        for tf in list(getattr(self.simulation, "torpedoes", []) or []):
+            torp = tf.torpedo
+            target = self.simulation.get_ship(torp.target_id) if torp.target_id else None
+            distance_km = (
+                torp.position.distance_to(target.position) / 1000.0
+                if target else 0.0
+            )
+            self.recorder.record_torpedo_in_flight_at_end(
+                timestamp=self.simulation.current_time,
+                shooter_id=tf.source_ship_id,
+                target_id=torp.target_id or "unknown",
+                torpedo_id=tf.torpedo_id,
+                distance_to_target_km=distance_km,
+                heat_absorbed_j=tf.heat_absorbed_j,
+                blinded=tf.is_disabled,
+            )
 
     def get_captain_for_ship(self, ship_id: Optional[str]) -> Optional[LLMCaptain]:
         """Look up the captain commanding a ship, in either 1v1 or fleet mode."""

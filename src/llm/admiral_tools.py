@@ -62,7 +62,10 @@ ADMIRAL_TOOLS = [
                             "blinded one at a time (measured vs 4 PD turrets: 4 "
                             "simultaneous = 24/24 through, same 4 spaced 30s = 12/24). "
                             "Sizing: ~4 rounds kill a destroyer, ~6 kill anything; only "
-                            "commit against CLOSING targets - receding evaders escape."
+                            "commit against CLOSING targets - receding evaders escape. "
+                            "Rounds whose target dies mid-flight retarget the nearest "
+                            "reachable enemy on their own if their seeker is alive and "
+                            "fuel allows, so overkill partially carries onto the next hull."
                         )
                     },
                     "torpedo_target": {

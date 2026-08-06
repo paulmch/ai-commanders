@@ -1168,6 +1168,43 @@ body {
   margin-top: 4px;
 }
 
+.timeline-marker {
+  position: absolute;
+  top: 0;
+  width: 2px;
+  height: 8px;
+  transform: translateX(-1px);
+  pointer-events: auto;
+}
+
+.timeline-marker.marker-impact {
+  background: #ffaa33;
+  height: 10px;
+}
+
+.timeline-marker.marker-destroyed {
+  background: var(--accent-critical);
+  height: 12px;
+}
+
+.timeline-marker.marker-launch {
+  background: rgba(255, 170, 51, 0.35);
+  height: 6px;
+}
+
+.timeline-marker.marker-comms {
+  background: rgba(153, 119, 255, 0.5);
+  height: 6px;
+}
+
+.torp-count {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: #ffaa33;
+  letter-spacing: 1px;
+  min-height: 11px;
+}
+
 /* Time Display */
 .time-display {
   font-family: var(--font-mono);
@@ -1337,6 +1374,27 @@ body {
 
 .event-item.shot {
   border-color: var(--alpha-dim);
+  color: var(--text-secondary);
+}
+
+.event-item.torpedo {
+  border-color: #ffaa33;
+  color: #ffbb55;
+}
+
+.event-item.pd {
+  border-color: #ff5533;
+  color: #ff7755;
+}
+
+.event-item.comms {
+  border-color: #9977ff;
+  color: #bb99ff;
+  font-style: italic;
+}
+
+.event-item.info {
+  border-color: var(--text-dim);
   color: var(--text-secondary);
 }
 

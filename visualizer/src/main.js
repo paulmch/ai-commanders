@@ -22,9 +22,9 @@ class BattleVisualizer {
     this.isInitialized = false;
     this.selectedShipId = null;
     this.lastTime = 0;
-    this.lastPDEventTime = 0; // Track PD events separately
     this.lastHitEventTime = 0; // Track hit events for visual effects
     this.lastDestructionTime = 0; // Track destruction events for scrubbing
+    this.lastMomentTime = 0; // Track torpedo/muzzle visual moments
     this.currentState = null;
 
     // DOM elements
@@ -41,7 +41,15 @@ class BattleVisualizer {
     this.cacheElements();
     this.setupEventListeners();
     this.hideLoading();
-    this.showFileSelector();
+
+    // ?recording=<url> auto-loads a recording, skipping the file selector
+    // (used by the launch scripts and the Playwright harness)
+    const autoUrl = new URLSearchParams(window.location.search).get('recording');
+    if (autoUrl) {
+      this.loadFromUrl(autoUrl);
+    } else {
+      this.showFileSelector();
+    }
   }
 
   /**
@@ -303,8 +311,10 @@ class BattleVisualizer {
     this.scene = new SceneManager(this.elements.canvas);
     this.setLoadingProgress(60);
 
-    // Initialize time controller
-    this.timeController = new TimeController(this.loader.duration);
+    // Initialize time controller. The extra seconds are an epilogue: a ship
+    // destroyed on the final tick still gets its full destruction sequence
+    // instead of freezing mid-fireball when the recording ends.
+    this.timeController = new TimeController(this.loader.duration + 20);
     this.timeController.onTimeChange((time, duration) => {
       this.updateTimeDisplay(time, duration);
     });
@@ -322,11 +332,14 @@ class BattleVisualizer {
     for (const [shipId, shipInfo] of Object.entries(this.loader.ships)) {
       this.scene.createShip(shipId, shipInfo.faction, shipInfo.type);
     }
+    // Death causes + final vectors drive the two-stage destruction sequence
+    this.scene.deathInfo = this.loader.buildDeathInfo();
     this.setLoadingProgress(100);
 
     // Update UI
     this.updateBattleInfo();
     this.populateShipLists();
+    this.populateTimelineMarkers();
     this.updateFleetStatus();
 
     // Hide loading and start
@@ -360,8 +373,11 @@ class BattleVisualizer {
         const frameData = this.loader.getFrameAt(this.timeController.currentTime);
         this.currentState = Interpolator.getInterpolatedState(frameData, this.loader);
 
-        // Update ships
+        const currentPlaybackTime = this.timeController.currentTime;
+
+        // Update ships (with radiator state from the event timeline)
         for (const [shipId, state] of Object.entries(this.currentState.ships)) {
+          state.radiatorsExtended = this.loader.getRadiatorStateAt(shipId, currentPlaybackTime);
           this.scene.updateShip(shipId, state);
         }
 
@@ -373,14 +389,15 @@ class BattleVisualizer {
         }
         this.scene.cleanupProjectiles(activeProjectileIds);
 
-        // Handle PD beam visualization
-        const currentPlaybackTime = this.timeController.currentTime;
-
-        // If scrubbing backwards, clear existing beams and hit effects
-        if (currentPlaybackTime < this.lastPDEventTime) {
-          this.scene.clearPDBeams();
-          this.lastPDEventTime = currentPlaybackTime;
+        // Update torpedoes
+        const activeTorpedoIds = new Set();
+        for (const torp of this.currentState.torpedoes) {
+          this.scene.updateTorpedo(torp);
+          activeTorpedoIds.add(torp.id);
         }
+        this.scene.cleanupTorpedoes(activeTorpedoIds);
+
+        // If scrubbing backwards, clear time-anchored visuals
         if (currentPlaybackTime < this.lastHitEventTime) {
           this.scene.clearHitEffects();
           this.lastHitEventTime = currentPlaybackTime;
@@ -389,16 +406,38 @@ class BattleVisualizer {
           this.scene.clearDestructionEffects();
           this.lastDestructionTime = currentPlaybackTime;
         }
-
-        // Spawn new PD beams for events since last frame
-        const pdEvents = this.loader.getPDEventsInRange(this.lastPDEventTime, currentPlaybackTime);
-        for (const event of pdEvents) {
-          this.scene.spawnPDBeam(event, this.currentState);
+        if (currentPlaybackTime < this.lastMomentTime) {
+          this.scene.clearSmallEffects();
+          this.lastMomentTime = currentPlaybackTime;
         }
-        this.lastPDEventTime = currentPlaybackTime;
 
-        // Update PD beam fading
-        this.scene.updatePDBeams(currentPlaybackTime);
+        // Continuous PD beams - recomputed from dwell segments each frame,
+        // so they track shooter and target and survive scrubbing
+        this.scene.updateContinuousBeams(
+          this.loader.getActivePDBeams(currentPlaybackTime),
+          currentPlaybackTime
+        );
+
+        // Torpedo lifecycle moments crossing this frame: detonations,
+        // misses, seeker kills, burnouts - plus gun muzzle flashes
+        const moments = this.loader.getTorpedoMomentsInRange(this.lastMomentTime, currentPlaybackTime);
+        for (const m of moments) {
+          if (m.kind === 'impact') {
+            this.scene.spawnTorpedoDetonation(m.position, m.data.damageGj || 8, currentPlaybackTime);
+          } else {
+            this.scene.spawnSmallEffect(m.position, currentPlaybackTime, m.kind);
+          }
+        }
+        const shotEvents = this.loader.getEventsInRange(this.lastMomentTime, currentPlaybackTime)
+          .filter(e => e.event_type === 'shot_fired' || e.event_type === 'torpedo_launched');
+        for (const e of shotEvents) {
+          const pos = this.loader.getShipPositionAt(e.ship_id, e.timestamp);
+          if (pos) this.scene.spawnSmallEffect(pos, currentPlaybackTime, 'muzzle');
+        }
+        this.lastMomentTime = currentPlaybackTime;
+
+        // Animate small effects
+        this.scene.updateSmallEffects(currentPlaybackTime);
 
         // Spawn hit effects when projectiles visually reach their targets
         // (based on extrapolated travel time, not recording event timestamps)
@@ -475,6 +514,32 @@ class BattleVisualizer {
   }
 
   /**
+   * Drop colored markers on the timeline for key battle moments
+   */
+  populateTimelineMarkers() {
+    const container = document.getElementById('timelineMarkers');
+    if (!container || !this.loader.duration) return;
+    container.innerHTML = '';
+
+    const markerTypes = {
+      'torpedo_impact': 'marker-impact',
+      'module_destroyed': 'marker-destroyed',
+      'torpedo_launched': 'marker-launch',
+      'message': 'marker-comms'
+    };
+
+    for (const event of this.loader.events) {
+      const cls = markerTypes[event.event_type];
+      if (!cls) continue;
+      const marker = document.createElement('div');
+      marker.className = `timeline-marker ${cls}`;
+      marker.style.left = `${(event.timestamp / this.loader.duration) * 100}%`;
+      marker.title = `${this.formatTime(event.timestamp)} ${event.event_type.replace(/_/g, ' ')}`;
+      container.appendChild(marker);
+    }
+  }
+
+  /**
    * Update fleet status (alive counts)
    */
   updateFleetStatus() {
@@ -498,6 +563,21 @@ class BattleVisualizer {
     this.elements.betaCount.textContent = `${betaAlive}/${betaTotal}`;
     this.elements.alphaBar.style.width = `${(alphaAlive / alphaTotal) * 100}%`;
     this.elements.betaBar.style.width = `${(betaAlive / betaTotal) * 100}%`;
+
+    // In-flight ordnance per faction
+    let alphaTorps = 0, betaTorps = 0;
+    for (const torp of this.currentState.torpedoes || []) {
+      if ((torp.source || '').startsWith('alpha')) alphaTorps++;
+      else betaTorps++;
+    }
+    const alphaTorpsEl = document.getElementById('alphaTorps');
+    const betaTorpsEl = document.getElementById('betaTorps');
+    if (alphaTorpsEl) {
+      alphaTorpsEl.textContent = alphaTorps > 0 ? `▸ ${alphaTorps} ORDNANCE` : '';
+    }
+    if (betaTorpsEl) {
+      betaTorpsEl.textContent = betaTorps > 0 ? `▸ ${betaTorps} ORDNANCE` : '';
+    }
 
     // Update ship list destroyed states
     document.querySelectorAll('.ship-list li').forEach(li => {
@@ -859,10 +939,24 @@ class BattleVisualizer {
    * Add event to combat log
    */
   addEventToLog(event) {
+    const shipName = (id) => this.loader.ships[id]?.name || id || '?';
     const eventTypes = {
-      'hit': { class: 'hit', format: (e) => `HIT: ${e.ship_id} hit by ${e.data?.shooter_id}` },
-      'module_destroyed': { class: 'destroyed', format: (e) => `DESTROYED: ${e.ship_id} lost ${e.data?.module_name}` },
-      'shot_fired': { class: 'shot', format: (e) => `FIRE: ${e.ship_id} targeting ${e.data?.target_id}` },
+      'hit': { class: 'hit', format: (e) => `HIT: ${shipName(e.data?.shooter_id)} strikes ${shipName(e.ship_id)} ${e.data?.hit_location || ''} (${(e.data?.kinetic_energy_gj || 0).toFixed(1)} GJ)` },
+      'miss': { class: 'shot', format: (e) => `MISS: ${shipName(e.ship_id)} shot goes wide` },
+      'module_destroyed': { class: 'destroyed', format: (e) => `DESTROYED: ${shipName(e.ship_id)} lost ${e.data?.module_name}` },
+      'module_damaged': { class: 'hit', format: (e) => `DAMAGE: ${shipName(e.ship_id)} ${e.data?.module_name} (${(e.data?.damage_gj || 0).toFixed(1)} GJ)` },
+      'shot_fired': { class: 'shot', format: (e) => `FIRE: ${shipName(e.ship_id)} → ${shipName(e.data?.target_id)}` },
+      'torpedo_launched': { class: 'torpedo', format: (e) => `TORPEDO AWAY: ${shipName(e.ship_id)} → ${shipName(e.data?.target_id)}` },
+      'torpedo_impact': { class: 'destroyed', format: (e) => `TORPEDO IMPACT: ${shipName(e.data?.target_id)} takes ${(e.data?.total_damage_gj || 0).toFixed(0)} GJ (${e.data?.hit_location})` },
+      'torpedo_miss': { class: 'torpedo', format: (e) => `TORPEDO MISS: closest ${(e.data?.closest_approach_km || 0).toFixed(1)} km` },
+      'torpedo_fuel_exhausted': { class: 'torpedo', format: (e) => `BURNOUT: torpedo from ${shipName(e.ship_id)} ballistic` },
+      'torpedo_retargeted': { class: 'torpedo', format: (e) => `RETARGET: torpedo from ${shipName(e.ship_id)} swings onto ${shipName(e.data?.new_target_id)}` },
+      'pd_torpedo_disabled': { class: 'pd', format: (e) => `SEEKER KILL: ${shipName(e.ship_id)} PD blinds inbound torpedo` },
+      'pd_slug_destroyed': { class: 'pd', format: (e) => `PD KILL: ${shipName(e.ship_id)} vaporizes incoming slug` },
+      'penetration': { class: 'destroyed', format: (e) => `ARMOR BREACH: ${shipName(e.ship_id)} ${e.data?.location}` },
+      'radiator_change': { class: 'info', format: (e) => `${shipName(e.ship_id)} ${e.data?.extended ? 'extends' : 'retracts'} radiators` },
+      'maneuver': { class: 'info', format: (e) => `${shipName(e.ship_id)}: ${e.data?.maneuver_type}${e.data?.throttle != null ? ` @ ${Math.round(e.data.throttle * 100)}%` : ''}` },
+      'message': { class: 'comms', format: (e) => `COMMS ${e.data?.sender_name || shipName(e.ship_id)}: "${e.data?.message}"` },
     };
 
     const config = eventTypes[event.event_type];
@@ -1011,9 +1105,13 @@ class BattleVisualizer {
       }
       this.scene.projectiles.clear();
 
+      // Remove all torpedoes
+      this.scene.cleanupTorpedoes(new Set());
+
       // Clear PD beams, hit effects, and destruction effects
       this.scene.clearPDBeams();
       this.scene.clearHitEffects();
+      this.scene.clearSmallEffects();
       this.scene.clearDestructionEffects();
     }
 
@@ -1021,9 +1119,9 @@ class BattleVisualizer {
     this.isInitialized = false;
     this.selectedShipId = null;
     this.lastTime = 0;
-    this.lastPDEventTime = 0;
     this.lastHitEventTime = 0;
     this.lastDestructionTime = 0;
+    this.lastMomentTime = 0;
     this.currentState = null;
 
     // Clear UI
@@ -1044,3 +1142,6 @@ class BattleVisualizer {
 // Initialize on load
 const visualizer = new BattleVisualizer();
 visualizer.init();
+
+// Exposed for automation (Playwright verification, headless snapshot capture)
+window.visualizer = visualizer;

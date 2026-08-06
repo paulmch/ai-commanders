@@ -1,0 +1,158 @@
+{
+  "budget": 100,
+  "captain_model": "heuristic",
+  "alpha": {
+    "faction": "alpha",
+    "budget": 100,
+    "points_spent": 98,
+    "auto_draft": true,
+    "formation_name": "staggered wall",
+    "selection_rationale": "auto-draft",
+    "formation_rationale": "",
+    "ships": [
+      {
+        "ship_id": "alpha_1",
+        "ship_name": "TIS Falchion-1",
+        "ship_type": "destroyer",
+        "cost": 16,
+        "offset_km": [
+          0.0,
+          -30.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_2",
+        "ship_name": "TIS Falchion-2",
+        "ship_type": "destroyer",
+        "cost": 16,
+        "offset_km": [
+          -10.0,
+          -18.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_3",
+        "ship_name": "TIS Bastion",
+        "ship_type": "cruiser",
+        "cost": 26,
+        "offset_km": [
+          0.0,
+          -6.0,
+          6.0
+        ]
+      },
+      {
+        "ship_id": "alpha_4",
+        "ship_name": "TIS Ward",
+        "ship_type": "frigate",
+        "cost": 8,
+        "offset_km": [
+          -10.0,
+          6.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_5",
+        "ship_name": "TIS Falchion-3",
+        "ship_type": "destroyer",
+        "cost": 16,
+        "offset_km": [
+          0.0,
+          18.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_6",
+        "ship_name": "TIS Falchion-4",
+        "ship_type": "destroyer",
+        "cost": 16,
+        "offset_km": [
+          -10.0,
+          30.0,
+          6.0
+        ]
+      }
+    ]
+  },
+  "beta": {
+    "faction": "beta",
+    "budget": 100,
+    "points_spent": 98,
+    "auto_draft": true,
+    "formation_name": "staggered wall",
+    "selection_rationale": "auto-draft",
+    "formation_rationale": "",
+    "ships": [
+      {
+        "ship_id": "beta_1",
+        "ship_name": "OCS Falchion-1",
+        "ship_type": "destroyer",
+        "cost": 16,
+        "offset_km": [
+          0.0,
+          -30.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_2",
+        "ship_name": "OCS Falchion-2",
+        "ship_type": "destroyer",
+        "cost": 16,
+        "offset_km": [
+          -10.0,
+          -18.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_3",
+        "ship_name": "OCS Bastion",
+        "ship_type": "cruiser",
+        "cost": 26,
+        "offset_km": [
+          0.0,
+          -6.0,
+          6.0
+        ]
+      },
+      {
+        "ship_id": "beta_4",
+        "ship_name": "OCS Ward",
+        "ship_type": "frigate",
+        "cost": 8,
+        "offset_km": [
+          -10.0,
+          6.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_5",
+        "ship_name": "OCS Falchion-3",
+        "ship_type": "destroyer",
+        "cost": 16,
+        "offset_km": [
+          0.0,
+          18.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_6",
+        "ship_name": "OCS Falchion-4",
+        "ship_type": "destroyer",
+        "cost": 16,
+        "offset_km": [
+          -10.0,
+          30.0,
+          6.0
+        ]
+      }
+    ]
+  }
+}
