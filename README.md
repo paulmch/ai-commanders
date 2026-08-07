@@ -116,10 +116,11 @@ Open http://localhost:5173 and load a battle recording JSON file.
 - **Continuous PD beams**: dwell lasers anchored ship-to-target every frame
 - **Impact effects**: shockwave rings and particle bursts on hits, distinct
   markers for misses, burnouts, and seeker kills
-- **Two-stage ship destruction**: non-reactor kills drift dark with hull
-  fires popping before the reactor breach (immediate detonation when the
-  reactor itself was the killing blow) - blinding flash, plasma sphere,
-  shockwave, 50k-particle GPU debris cloud, lingering aftermath
+- **Two-stage ship destruction**: non-reactor kills play the simulation's
+  death spiral - the hulk tumbles with its torch sputtering and hull fires
+  popping until the reactor breach (immediate detonation when the reactor
+  itself was the killing blow) - blinding flash, plasma sphere, shockwave,
+  50k-particle GPU debris cloud, lingering aftermath
 - **Camera modes**: Free orbit, follow ship, orbit selected ship
 - **Ship telemetry**: Hull, per-facing armor, modules, target, maneuver status
 - **Timeline scrubbing**: Jump to any point, adjustable playback speed (0.25x-8x),
@@ -561,6 +562,9 @@ See [docs/ships.md](docs/ships.md) for full shots-to-kill tables (regenerate wit
   admirals' checkpoint prompts
 - **Point Defense**: Continuous-dwell lasers with per-turret capacitors, real heat and
   power costs, and stacking escort coverage
+- **Two-Stage Kills**: a killing blow that misses the reactor leaves a dying hulk -
+  untargetable, torch sputtering, tumbling adrift - that detonates 0-30s later;
+  ordnance already in flight can still strike it and hasten (or trigger) the blast
 - **Per-Ship Tool Surface**: Captains only get the tools their hull actually mounts -
   gun fire control on gun ships, torpedo launch on torpedo ships
 - **Thermal Management**: Heat sinks, radiators (extend for cooling, retract for protection)

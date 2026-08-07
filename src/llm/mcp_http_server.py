@@ -586,6 +586,7 @@ async def run_fleet_battle_with_http(
             active_alpha_captains = [
                 c for c in runner.alpha_captains.values()
                 if not getattr(runner.alpha_ships.get(c.ship_id), 'is_surrendered', False)
+                and not getattr(runner.alpha_ships.get(c.ship_id), 'is_dying', False)
             ]
             alpha_decision = runner._get_admiral_decision(
                 runner.alpha_admiral,
@@ -603,6 +604,7 @@ async def run_fleet_battle_with_http(
             active_beta_captains = [
                 c for c in runner.beta_captains.values()
                 if not getattr(runner.beta_ships.get(c.ship_id), 'is_surrendered', False)
+                and not getattr(runner.beta_ships.get(c.ship_id), 'is_dying', False)
             ]
             dbg(f"[DEBUG] Beta admiral decision: {len(active_beta_captains)} active captains")
             try:
@@ -637,7 +639,8 @@ async def run_fleet_battle_with_http(
                 # Surrendered ships must be skipped too: asking a surrendered
                 # captain for orders (and paying for the LLM call) is exactly
                 # what run_fleet_battle_async avoids.
-                if ship and (ship.is_destroyed or getattr(ship, 'is_surrendered', False)):
+                if ship and (ship.is_destroyed or getattr(ship, 'is_dying', False)
+                             or getattr(ship, 'is_surrendered', False)):
                     continue
 
                 # Clear previous context and give new orders
@@ -666,8 +669,9 @@ async def run_fleet_battle_with_http(
                 print(f"\n--- CAPTAIN DECISIONS (Beta) ---")
             for ship_id, captain in runner.beta_captains.items():
                 ship = runner.beta_ships.get(ship_id)
-                if ship and (ship.is_destroyed or getattr(ship, 'is_surrendered', False)):
-                    dbg(f"[DEBUG] {ship_id} is destroyed/surrendered, skipping")
+                if ship and (ship.is_destroyed or getattr(ship, 'is_dying', False)
+                             or getattr(ship, 'is_surrendered', False)):
+                    dbg(f"[DEBUG] {ship_id} is destroyed/dying/surrendered, skipping")
                     continue
 
                 # Clear previous context and give new orders

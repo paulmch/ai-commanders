@@ -1142,6 +1142,7 @@ class BattleRecorder:
                 "thrust": round(ship.get("thrust", 0.0), 2),
                 "maneuver": ship.get("maneuver", "MAINTAIN"),
                 "destroyed": ship.get("is_destroyed", False),
+                "dying": ship.get("is_dying", False),
                 "hull": ship.get("hull_pct", 100.0),
                 "armor": ship.get("armor", {}),
             }

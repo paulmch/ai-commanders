@@ -70,6 +70,9 @@ ai-commanders/
 - Trident torpedo: 250 kg penetrator, 14 km/s delta-v, 12g; guidance holds a
   ~12 km/s closure floor and dumps remaining delta-v in the terminal burn
 - PD laser: 250 km envelope, continuous dwell; one turret blinds ~5 km/s of closure
+- Two-stage kills: a non-reactor killing blow leaves an untargetable dying hulk
+  (tumbling, torch sputtering) that detonates 0-30 s later; hits on the hulk
+  shorten the fuse, a reactor hit detonates it at once (`test_dying_ships.py`)
 
 ## Control Architecture
 

@@ -214,6 +214,27 @@ BALLISTIC_THREAT_HORIZON_S = 60.0
 # Thermal heat generation per coilgun shot (GJ)
 COILGUN_HEAT_PER_SHOT_GJ = 0.5
 
+# Two-stage ship death. A killing blow that does not destroy the reactor
+# leaves a combat-dead hulk whose containment is failing: it tumbles adrift,
+# torches sputtering, for a random 0..DYING_MAX_DURATION_S before the reactor
+# detonates. Ordnance that strikes the hulk vents more of the containment -
+# every GJ of damage brings the detonation forward by
+# DYING_HIT_TIME_BURN_S_PER_GJ seconds - and a hit that destroys the reactor
+# outright detonates it immediately.
+DYING_MAX_DURATION_S = 30.0
+DYING_HIT_TIME_BURN_S_PER_GJ = 0.25
+# Uncontrolled residual attitude drift of the dying hulk (deg/s) - slow
+# tumble, not a spin: attitude thrusters are dead and only the impulse that
+# killed the ship is left in the airframe.
+DYING_TUMBLE_RATE_MIN_DEG_S = 1.0
+DYING_TUMBLE_RATE_MAX_DEG_S = 5.0
+# Torch flicker: the drive relights and dies at random as plasma feed
+# stutters. Mean seconds between on/off flips, and the throttle band a
+# sputtering torch can still produce.
+DYING_TORCH_TOGGLE_MEAN_S = 2.0
+DYING_TORCH_THROTTLE_MIN = 0.05
+DYING_TORCH_THROTTLE_MAX = 0.35
+
 
 # =============================================================================
 # EVENT TYPES
@@ -239,6 +260,7 @@ class SimulationEventType(Enum):
     DAMAGE_TAKEN = auto()
     MODULE_DAMAGED = auto()
     MODULE_DESTROYED = auto()
+    SHIP_DYING = auto()
     SHIP_DESTROYED = auto()
     ARMOR_PENETRATED = auto()
 
@@ -813,6 +835,20 @@ class ShipCombatState:
     is_destroyed: bool = False
     is_surrendered: bool = False  # Ship has surrendered, drifts and is untargetable
     kill_credit: Optional[str] = None
+
+    # Death spiral: a mortally wounded ship whose reactor is still intact does
+    # not vanish on the killing blow. It goes combat-dead (untargetable, guns
+    # and PD offline, no captain), tumbles adrift with its torches sputtering,
+    # and detonates when the runaway reactor finally lets go - anywhere from
+    # instantly to DYING_MAX_DURATION_S later. Ordnance already in flight can
+    # still strike the hulk and hasten (or directly trigger) the detonation.
+    is_dying: bool = False
+    dying_time_remaining: float = 0.0
+    dying_torch_on: bool = False
+    dying_torch_throttle: float = 0.0  # flicker amplitude, rolled once at death
+    dying_thrust: float = 0.0  # throttle actually applied this tick (recorded)
+    dying_tumble_axis: Optional[Vector3D] = None
+    dying_tumble_rate_rad_s: float = 0.0
 
     # Attitude control (rotation)
     attitude_control: Optional[AttitudeControlSpecs] = None
@@ -1416,27 +1452,31 @@ class CombatSimulation:
     def get_enemy_ships(self, ship_id: str) -> list[ShipCombatState]:
         """Get all enemy ships relative to a given ship.
 
-        Excludes destroyed and surrendered ships (surrendered ships are untargetable).
+        Excludes destroyed, dying, and surrendered ships - a dying ship is a
+        confirmed kill counting down to its reactor detonation, so nobody
+        wastes fire on it (only ordnance already in flight can still connect).
         """
         ship = self.get_ship(ship_id)
         if not ship:
             return []
         return [
             s for s in self.ships.values()
-            if s.faction != ship.faction and not s.is_destroyed and not s.is_surrendered
+            if s.faction != ship.faction and not s.is_destroyed
+            and not s.is_dying and not s.is_surrendered
         ]
 
     def get_friendly_ships(self, ship_id: str) -> list[ShipCombatState]:
         """Get all friendly ships relative to a given ship.
 
-        Excludes destroyed and surrendered ships.
+        Excludes destroyed, dying, and surrendered ships.
         """
         ship = self.get_ship(ship_id)
         if not ship:
             return []
         return [
             s for s in self.ships.values()
-            if s.faction == ship.faction and s.ship_id != ship_id and not s.is_destroyed and not s.is_surrendered
+            if s.faction == ship.faction and s.ship_id != ship_id
+            and not s.is_destroyed and not s.is_dying and not s.is_surrendered
         ]
 
     # -------------------------------------------------------------------------
@@ -1480,7 +1520,7 @@ class CombatSimulation:
             True if command was accepted.
         """
         ship = self.get_ship(ship_id)
-        if not ship or ship.is_destroyed:
+        if not ship or ship.is_destroyed or ship.is_dying:
             return False
 
         # Handle different command types
@@ -1530,7 +1570,7 @@ class CombatSimulation:
             return False
 
         target = self.get_ship(target_id)
-        if not target or target.is_destroyed:
+        if not target or target.is_destroyed or target.is_dying:
             return False
 
         # Check if target is in weapon arc before consuming ammo
@@ -1564,7 +1604,7 @@ class CombatSimulation:
         target_id = command.get('target_id')
         target = self.get_ship(target_id)
 
-        if not target or target.is_destroyed:
+        if not target or target.is_destroyed or target.is_dying:
             return False
 
         # Pick the first launcher with a round chambered and off cooldown. With a
@@ -1688,7 +1728,7 @@ class CombatSimulation:
                 continue
 
             target = self.get_ship(target_id)
-            if not target or target.is_destroyed:
+            if not target or target.is_destroyed or target.is_dying:
                 continue
 
             # Check if target is in weapon arc
@@ -2035,7 +2075,7 @@ class CombatSimulation:
         # solution consistent with how projectiles are propagated, and makes the
         # engagement symmetric between factions.
         for ship in self.ships.values():
-            if not ship.is_destroyed:
+            if not ship.is_destroyed and not ship.is_dying:
                 self._process_weapons_orders(ship)
 
         # Update all ships
@@ -2080,6 +2120,13 @@ class CombatSimulation:
 
     def _update_ship(self, ship: ShipCombatState, dt: float) -> None:
         """Update a single ship for one time step."""
+        # A dying ship is a physics object on a fuse, not a combatant: no
+        # maneuvers, no weapons, no thermal/power management - just the
+        # tumble, the sputtering torch, and the countdown.
+        if ship.is_dying:
+            self._update_dying_ship(ship, dt)
+            return
+
         # Process current maneuver
         throttle = 0.0
         gimbal_pitch = 0.0
@@ -2200,7 +2247,7 @@ class CombatSimulation:
                     # Ship uses thrust vectoring to rotate quickly while minimizing linear acceleration
                     # Perfect for firing spinal weapons during a planned pass
                     target = self.get_ship(maneuver.target_id)
-                    if target and not target.is_destroyed:
+                    if target and not target.is_destroyed and not target.is_dying:
                         target_dir = (target.position - ship.position).normalized()
                         # Check if we need to rotate
                         angle_to_target = math.acos(max(-1.0, min(1.0,
@@ -2288,6 +2335,47 @@ class CombatSimulation:
         effective_cooldown_dt = dt / cooldown_multiplier  # Slower cooldown recovery
         for weapon_state in ship.weapons.values():
             weapon_state.update(effective_cooldown_dt)
+
+    def _update_dying_ship(self, ship: ShipCombatState, dt: float) -> None:
+        """
+        Advance a mortally wounded ship one tick: burn down the detonation
+        fuse, flicker the torch, and tumble the hulk.
+
+        The torch flips on/off at random (mean DYING_TORCH_TOGGLE_MEAN_S
+        between flips) at a low throttle rolled once at death - so the hulk
+        veers unpredictably on whatever heading the tumble has swung it to,
+        still spending real propellant. The tumble itself is a slow fixed-axis
+        rotation: attitude control is dead, only residual angular momentum
+        remains.
+        """
+        ship.dying_time_remaining -= dt
+        if ship.dying_time_remaining <= 0.0:
+            self._detonate_reactor(ship)
+            return
+
+        # Torch flicker
+        if self.rng.random() < dt / DYING_TORCH_TOGGLE_MEAN_S:
+            ship.dying_torch_on = not ship.dying_torch_on
+        throttle = ship.dying_torch_throttle if ship.dying_torch_on else 0.0
+        throttle *= ship.get_effective_thrust_fraction()
+        ship.dying_thrust = throttle
+
+        ship.kinematic_state = propagate_state(
+            ship.kinematic_state, dt, throttle, 0.0, 0.0
+        )
+
+        # Slow tumble: rotate the orientation basis around the fixed axis,
+        # then re-orthonormalize the same way propagate_state does.
+        if ship.dying_tumble_axis is not None and ship.dying_tumble_rate_rad_s > 0.0:
+            angle = ship.dying_tumble_rate_rad_s * dt
+            ks = ship.kinematic_state
+            ks.forward = ks.forward.rotate_around_axis(
+                ship.dying_tumble_axis, angle
+            ).normalized()
+            up = ks.up.rotate_around_axis(ship.dying_tumble_axis, angle)
+            ks.up = (
+                up - ks.forward * up.dot(ks.forward)
+            ).normalized()
 
 
     def _rotate_ship_toward(
@@ -4272,6 +4360,17 @@ class CombatSimulation:
                         # Disable corresponding weapon if weapon module destroyed
                         self._disable_weapon_for_module(target, module.name)
 
+        # A hit on an already-dying hulk vents more of the failing reactor
+        # containment: the detonation comes forward in proportion to the
+        # energy delivered. If this hit destroyed the reactor outright,
+        # _check_ship_destroyed below detonates the ship immediately.
+        if target.is_dying:
+            target.dying_time_remaining = max(
+                0.0,
+                target.dying_time_remaining
+                - effective_ke_gj * DYING_HIT_TIME_BURN_S_PER_GJ,
+            )
+
         # Check for ship destruction
         self._check_ship_destroyed(target, proj_flight.source_ship_id)
 
@@ -4931,6 +5030,17 @@ class CombatSimulation:
                     # Disable corresponding weapon if weapon module destroyed
                     self._disable_weapon_for_module(target, module.name)
 
+        # A torpedo landing on an already-dying hulk vents more of the
+        # failing reactor containment: bring the detonation forward in
+        # proportion to the delivered energy. A reactor kill from this hit
+        # is handled by _check_ship_destroyed below - immediate detonation.
+        if target.is_dying:
+            target.dying_time_remaining = max(
+                0.0,
+                target.dying_time_remaining
+                - total_damage_gj * DYING_HIT_TIME_BURN_S_PER_GJ,
+            )
+
         self._check_ship_destroyed(target, torp_flight.source_ship_id)
 
     # -------------------------------------------------------------------------
@@ -4969,7 +5079,7 @@ class CombatSimulation:
         slugs only when no torpedo is inside this ship's envelope at all.
         """
         for ship in self.ships.values():
-            if ship.is_destroyed or not ship.point_defense:
+            if ship.is_destroyed or ship.is_dying or not ship.point_defense:
                 continue
 
             # Update PD cooldowns
@@ -5108,7 +5218,7 @@ class CombatSimulation:
             # what makes "savable" a formation property, not a lone-hull one.
             friendly_turrets_in_range = 0
             for friendly in [ship] + allied_ships:
-                if friendly.is_destroyed:
+                if friendly.is_destroyed or friendly.is_dying:
                     continue
                 f_dist_km = torp.position.distance_to(friendly.position) / 1000
                 friendly_turrets_in_range += sum(
@@ -6010,30 +6120,117 @@ class CombatSimulation:
             if weapon_slot in ship.pd_lasers:
                 ship.pd_lasers[weapon_slot].is_operational = False
 
+    def _reactor_destroyed(self, ship: ShipCombatState) -> bool:
+        """Whether any critical reactor module on this hull is destroyed."""
+        return any(
+            r.is_destroyed and r.is_critical
+            for r in ship._get_modules_by_type("reactor")
+        )
+
     def _check_ship_destroyed(self, ship: ShipCombatState, attacker_id: Optional[str]) -> None:
-        """Check if a ship has been destroyed."""
+        """
+        Check if a ship has taken a killing blow, and route it into the right
+        death: a destroyed reactor detonates immediately, anything else
+        (bridge kill, hull integrity zero) starts the death spiral - the ship
+        goes combat-dead and tumbles until its reactor lets go.
+        """
         if ship.is_destroyed:
             return
 
-        destroyed = False
+        # A ship already in its death spiral only escalates if a follow-up
+        # hit reaches the reactor; the timer reduction for ordinary hits is
+        # applied at the hit-resolution site where the damage figure lives.
+        if ship.is_dying:
+            if self._reactor_destroyed(ship):
+                self._destroy_ship(ship, attacker_id, cause='reactor_destroyed')
+            return
 
-        # Check for critical module destruction
-        if ship.module_layout and ship.module_layout.has_critical_damage:
-            destroyed = True
+        lethal = (
+            (ship.module_layout is not None
+             and ship.module_layout.has_critical_damage)
+            or ship.hull_integrity <= 0
+        )
+        if not lethal:
+            return
 
-        # Check for overall hull integrity
-        if ship.hull_integrity <= 0:
-            destroyed = True
+        if self._reactor_destroyed(ship):
+            self._destroy_ship(ship, attacker_id, cause='reactor_destroyed')
+        else:
+            self._start_death_spiral(ship, attacker_id)
 
-        if destroyed:
-            ship.is_destroyed = True
+    def _start_death_spiral(self, ship: ShipCombatState, attacker_id: Optional[str]) -> None:
+        """
+        Put a mortally wounded ship into its death spiral: combat systems
+        dead, torch sputtering, slow uncontrolled tumble, reactor containment
+        failing on a random 0..DYING_MAX_DURATION_S fuse.
+        """
+        ship.is_dying = True
+        ship.kill_credit = attacker_id
+        ship.dying_time_remaining = self.rng.uniform(0.0, DYING_MAX_DURATION_S)
+        ship.dying_torch_on = self.rng.random() < 0.5
+        ship.dying_torch_throttle = self.rng.uniform(
+            DYING_TORCH_THROTTLE_MIN, DYING_TORCH_THROTTLE_MAX
+        )
+        # Random tumble axis: three gaussians normalize to a uniform direction
+        axis = Vector3D(
+            self.rng.gauss(0.0, 1.0), self.rng.gauss(0.0, 1.0), self.rng.gauss(0.0, 1.0)
+        )
+        if axis.magnitude < 1e-9:
+            axis = Vector3D(0.0, 0.0, 1.0)
+        ship.dying_tumble_axis = axis.normalized()
+        ship.dying_tumble_rate_rad_s = math.radians(self.rng.uniform(
+            DYING_TUMBLE_RATE_MIN_DEG_S, DYING_TUMBLE_RATE_MAX_DEG_S
+        ))
+
+        # Combat-dead: drop orders, targets, and fire-control state. Weapons,
+        # PD, and captain decisions are gated off elsewhere by is_dying.
+        ship.current_maneuver = None
+        ship.weapons_orders = {}
+        ship.primary_target_id = None
+
+        self._log_event(SimulationEventType.SHIP_DYING, ship.ship_id, data={
+            'killer_id': attacker_id,
+            'hull_integrity': ship.hull_integrity,
+            'detonation_in_s': ship.dying_time_remaining,
+        })
+        print(f"  !!! [{ship.ship_id}] MORTALLY WOUNDED - reactor containment "
+              f"failing, detonation in {ship.dying_time_remaining:.1f}s")
+
+    def _detonate_reactor(self, ship: ShipCombatState) -> None:
+        """
+        The dying ship's reactor finally lets go. Destroying the reactor
+        modules here matters beyond bookkeeping: the recorded
+        MODULE_DESTROYED event is what tells the replay viewer this death
+        detonates immediately instead of getting a second client-side drift.
+        """
+        for module in ship._get_modules_by_type("reactor"):
+            if not module.is_destroyed:
+                module.health_percent = 0.0
+                self._log_event(SimulationEventType.MODULE_DESTROYED, ship.ship_id, data={
+                    'module_name': module.name
+                })
+        self._destroy_ship(ship, ship.kill_credit, cause='reactor_detonation')
+
+    def _destroy_ship(
+        self,
+        ship: ShipCombatState,
+        attacker_id: Optional[str],
+        cause: str,
+    ) -> None:
+        """Final destruction: the reactor has gone up, the ship is removed from play."""
+        ship.is_destroyed = True
+        ship.is_dying = False
+        ship.dying_thrust = 0.0
+        ship.dying_torch_on = False
+        if ship.kill_credit is None:
             ship.kill_credit = attacker_id
-            self.metrics.ships_destroyed.append(ship.ship_id)
+        self.metrics.ships_destroyed.append(ship.ship_id)
 
-            self._log_event(SimulationEventType.SHIP_DESTROYED, ship.ship_id, data={
-                'killer_id': attacker_id,
-                'hull_integrity': ship.hull_integrity
-            })
+        self._log_event(SimulationEventType.SHIP_DESTROYED, ship.ship_id, data={
+            'killer_id': ship.kill_credit,
+            'hull_integrity': ship.hull_integrity,
+            'cause': cause,
+        })
 
     # -------------------------------------------------------------------------
     # Decision Points
@@ -6049,7 +6246,7 @@ class CombatSimulation:
             return
 
         for ship in self.ships.values():
-            if ship.is_destroyed:
+            if ship.is_destroyed or ship.is_dying:
                 continue
 
             try:
@@ -6073,12 +6270,21 @@ class CombatSimulation:
     def _check_battle_end(self) -> None:
         """Check if the battle should end."""
         active_factions: set[str] = set()
+        detonation_pending = False
 
         for ship in self.ships.values():
-            if not ship.is_destroyed:
-                active_factions.add(ship.faction)
+            if ship.is_destroyed:
+                continue
+            if ship.is_dying:
+                # Combat-dead, but its reactor hasn't gone up yet: don't cut
+                # the simulation short of the detonation, or the recording
+                # ends on an intact-looking hulk and the kill never lands in
+                # the metrics.
+                detonation_pending = True
+                continue
+            active_factions.add(ship.faction)
 
-        if len(active_factions) <= 1:
+        if len(active_factions) <= 1 and not detonation_pending:
             self._running = False
 
     # -------------------------------------------------------------------------

@@ -18,6 +18,7 @@ export class SceneManager {
     this.smallEffects = []; // Fizzles, seeker kills, muzzle flashes
     this.destructionEffects = []; // Active destruction effects
     this.destroyedShips = new Set(); // Ships that have already had destruction animation triggered
+    this.dyingPopTimes = new Map(); // shipId -> next hull-fire time during sim-side death spiral
 
     // Scale: 1 unit = 1 km, positions in recording are meters
     this.SCALE = 1 / 1000;
@@ -1129,6 +1130,36 @@ export class SceneManager {
         const target = ship.position.clone().add(forward);
         ship.lookAt(target);
       }
+    }
+
+    // Sim-side death spiral: the trace itself already carries the tumble
+    // and the sputtering torch (forward + thrust per frame) - layer
+    // occasional hull fires on top so the dying hulk reads as burning,
+    // not merely adrift. The reactor detonation arrives later as the
+    // destroyed flag, with reactorCause set, so no client-side drift is
+    // added on top of the sim's.
+    if (state.dying) {
+      let next = this.dyingPopTimes.get(shipId);
+      // (Re)arm after load or a timeline seek in either direction
+      if (next === undefined || Math.abs(next - this.currentTime) > 3.0) {
+        next = this.currentTime + 0.3 + Math.random() * 1.0;
+      }
+      if (this.currentTime >= next) {
+        const L = ship.userData.size?.length || 1.0;
+        const W = ship.userData.size?.width || 0.25;
+        const world = new THREE.Vector3(
+          (Math.random() - 0.5) * W * 0.9,
+          (Math.random() - 0.5) * W * 0.9,
+          (Math.random() - 0.5) * L * 0.85
+        ).applyQuaternion(ship.quaternion).add(ship.position);
+        this.spawnSmallEffect(
+          [world.x / this.SCALE, world.y / this.SCALE, world.z / this.SCALE],
+          this.currentTime, 'hullpop');
+        next = this.currentTime + 0.4 + Math.random() * 1.4;
+      }
+      this.dyingPopTimes.set(shipId, next);
+    } else if (this.dyingPopTimes.has(shipId)) {
+      this.dyingPopTimes.delete(shipId);
     }
 
     // Radiators: extended panels unfold outward and glow heat-orange;

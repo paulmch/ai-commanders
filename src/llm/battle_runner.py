@@ -986,6 +986,7 @@ class LLMBattleRunner:
                 active_alpha_captains = [
                     c for c in self.alpha_captains.values()
                     if not getattr(self.alpha_ships.get(c.ship_id), 'is_surrendered', False)
+                    and not getattr(self.alpha_ships.get(c.ship_id), 'is_dying', False)
                 ]
                 alpha_decision = self._get_admiral_decision(
                     self.alpha_admiral,
@@ -1038,6 +1039,7 @@ class LLMBattleRunner:
                 active_beta_captains = [
                     c for c in self.beta_captains.values()
                     if not getattr(self.beta_ships.get(c.ship_id), 'is_surrendered', False)
+                    and not getattr(self.beta_ships.get(c.ship_id), 'is_dying', False)
                 ]
                 beta_decision = self._get_admiral_decision(
                     self.beta_admiral,
@@ -1116,7 +1118,8 @@ class LLMBattleRunner:
             for ship_id, captain, faction in all_captains:
                 # Skip destroyed or surrendered ships
                 ship = self.simulation.get_ship(ship_id)
-                if not ship or ship.is_destroyed or getattr(ship, 'is_surrendered', False):
+                if (not ship or ship.is_destroyed or getattr(ship, 'is_dying', False)
+                        or getattr(ship, 'is_surrendered', False)):
                     continue
 
                 # Clear previous Admiral context and deliver new orders
@@ -1344,6 +1347,7 @@ class LLMBattleRunner:
                 active_alpha_captains = [
                     c for c in self.alpha_captains.values()
                     if not getattr(self.alpha_ships.get(c.ship_id), 'is_surrendered', False)
+                    and not getattr(self.alpha_ships.get(c.ship_id), 'is_dying', False)
                 ]
                 alpha_decision = self._get_admiral_decision(
                     self.alpha_admiral,
@@ -1396,6 +1400,7 @@ class LLMBattleRunner:
                 active_beta_captains = [
                     c for c in self.beta_captains.values()
                     if not getattr(self.beta_ships.get(c.ship_id), 'is_surrendered', False)
+                    and not getattr(self.beta_ships.get(c.ship_id), 'is_dying', False)
                 ]
                 beta_decision = self._get_admiral_decision(
                     self.beta_admiral,
@@ -1476,7 +1481,8 @@ class LLMBattleRunner:
 
                 # Skip destroyed or surrendered ships
                 ship = self.simulation.get_ship(ship_id)
-                if not ship or ship.is_destroyed or getattr(ship, 'is_surrendered', False):
+                if (not ship or ship.is_destroyed or getattr(ship, 'is_dying', False)
+                        or getattr(ship, 'is_surrendered', False)):
                     continue
 
                 # Clear previous Admiral context and deliver new orders
@@ -1936,6 +1942,10 @@ class LLMBattleRunner:
             )
             if ship.is_destroyed:
                 return f"{ship.name}: DESTROYED"
+            if getattr(ship, 'is_dying', False):
+                # Combat-dead hulk counting down to reactor detonation:
+                # untargetable, and not worth another round from anyone.
+                return f"{ship.name}: DYING (reactor going critical - do not engage)"
 
             # Get armor values
             nose = get_armor(ship, HitLocation.NOSE)
@@ -2358,6 +2368,13 @@ class LLMBattleRunner:
                 if ship.current_maneuver and not ship.is_destroyed:
                     thrust = ship.current_maneuver.throttle
 
+                # A dying ship has no maneuver, but its torch still sputters:
+                # record the throttle the death spiral actually applied so
+                # the replay shows the flicker.
+                if getattr(ship, 'is_dying', False):
+                    maneuver_str = "ADRIFT"
+                    thrust = getattr(ship, 'dying_thrust', 0.0)
+
                 # Hull integrity percentage
                 hull_pct = 0.0
                 if hasattr(ship, 'hull_integrity'):
@@ -2376,6 +2393,7 @@ class LLMBattleRunner:
                     "thrust": thrust,
                     "maneuver": maneuver_str,
                     "is_destroyed": ship.is_destroyed,
+                    "is_dying": getattr(ship, 'is_dying', False),
                     "hull_pct": round(hull_pct, 1),
                     "armor": armor_data,
                 }
@@ -2582,8 +2600,9 @@ class LLMBattleRunner:
             ship_type = getattr(ship, 'ship_type', 'destroyer').lower()
             base_value = ship_values.get(ship_type, 20)
 
-            if ship.is_destroyed:
-                # Destroyed ships count against you
+            if ship.is_destroyed or getattr(ship, 'is_dying', False):
+                # Destroyed ships count against you. A dying ship is a
+                # confirmed kill whose reactor just hasn't gone up yet.
                 beta_score += base_value * 1.5  # Enemy gets points for kills
             elif getattr(ship, 'is_surrendered', False):
                 beta_score += base_value * 0.75  # Partial credit for surrenders
@@ -2601,7 +2620,7 @@ class LLMBattleRunner:
             ship_type = getattr(ship, 'ship_type', 'destroyer').lower()
             base_value = ship_values.get(ship_type, 20)
 
-            if ship.is_destroyed:
+            if ship.is_destroyed or getattr(ship, 'is_dying', False):
                 alpha_score += base_value * 1.5
             elif getattr(ship, 'is_surrendered', False):
                 alpha_score += base_value * 0.75
