@@ -550,12 +550,14 @@ class BattleVisualizer {
 
     for (const [shipId, state] of Object.entries(this.currentState.ships)) {
       const faction = shipId.startsWith('alpha') ? 'alpha' : 'beta';
+      // A dying ship is a confirmed kill counting down to its reactor
+      // detonation - it no longer counts toward the fleet's fighting strength.
       if (faction === 'alpha') {
         alphaTotal++;
-        if (!state.destroyed) alphaAlive++;
+        if (!state.destroyed && !state.dying) alphaAlive++;
       } else {
         betaTotal++;
-        if (!state.destroyed) betaAlive++;
+        if (!state.destroyed && !state.dying) betaAlive++;
       }
     }
 
@@ -679,7 +681,8 @@ class BattleVisualizer {
     const thrust = (state.thrust || 0) * 100;
 
     this.elements.hullBar.style.width = `${hull}%`;
-    this.elements.hullValue.textContent = state.destroyed ? 'DESTROYED' : `${hull.toFixed(0)}%`;
+    this.elements.hullValue.textContent = state.destroyed ? 'DESTROYED'
+      : state.dying ? 'REACTOR CRITICAL' : `${hull.toFixed(0)}%`;
 
     this.elements.thrustBar.style.width = `${thrust}%`;
     this.elements.thrustValue.textContent = `${thrust.toFixed(0)}%`;

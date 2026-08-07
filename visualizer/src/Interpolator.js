@@ -86,6 +86,7 @@ export class Interpolator {
         hull: this.lerp(state0.hull || 100, state1.hull || 100, alpha),
         maneuver: state0.maneuver || 'MAINTAIN',
         destroyed: state1.destroyed,
+        dying: state1.dying || false,
         name: state1.name || shipId,
         interpolated: true
       };

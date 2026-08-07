@@ -61,7 +61,8 @@ class HeuristicCaptain(LLMCaptain):
             self.setup_weapon_groups(self.config.ship_type, self.config.fleet_data)
 
         enemies = [e for e in simulation.get_enemy_ships(ship_id)
-                   if not e.is_destroyed and not getattr(e, "is_surrendered", False)]
+                   if not e.is_destroyed and not getattr(e, "is_dying", False)
+                   and not getattr(e, "is_surrendered", False)]
         checkpoint = self.decision_count + 1
 
         calls: List[Tuple[str, Dict[str, Any]]] = []
