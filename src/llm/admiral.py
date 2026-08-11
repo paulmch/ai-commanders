@@ -9,6 +9,7 @@ The Admiral:
 - Controls draw proposals for the fleet
 """
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
 
@@ -46,6 +47,7 @@ class AdmiralDecision:
     message_to_enemy_admiral: Optional[str] = None
     reasoning: str = ""  # Admiral's tactical reasoning (for logs)
     call_failed: bool = False  # True if the LLM call errored (not a real decision)
+    battle_plan_update: Optional[str] = None  # New standing plan set this checkpoint
 
 
 @dataclass
@@ -204,6 +206,20 @@ class LLMAdmiral:
         self.order_history: List[AdmiralDecision] = []
         self.has_proposed_draw = False
         self.has_accepted_draw = False
+
+        # Standing battle plan: the admiral's self-authored memory. Everything
+        # else the admiral sees is rebuilt from the simulation each checkpoint;
+        # this is the one piece of text that carries the admiral's own INTENT
+        # forward, echoed back verbatim every checkpoint until amended.
+        self.standing_plan: Optional[str] = None
+        self.standing_plan_time: float = 0.0
+
+        # Issue the per-ship orders of Phase 2 concurrently. Each order is an
+        # independent LLM call built from the same frozen snapshot, so a fleet
+        # of N ships costs one order's wall-clock instead of N. The runner may
+        # disable this (BattleConfig.parallel_llm=False) for strictly ordered
+        # output.
+        self.parallel_ship_orders: bool = True
 
         # Store T-15s snapshot for comparison
         self._snapshot_t_minus_15: Optional[AdmiralSnapshot] = None
@@ -377,6 +393,9 @@ Be authentic to how you would command a fleet as {model_name}."""
             received_messages=self._received_enemy_messages,
             communications_log=self._communications_log,
             phase="directive",  # Signal that we only want the directive
+            standing_plan=self.standing_plan,
+            standing_plan_time=self.standing_plan_time,
+            notebook_text=getattr(self.config, "notebook_text", None),
         )
 
         user_text = (f"ADMIRAL CHECKPOINT {self.decision_count + 1}. "
@@ -431,6 +450,12 @@ Be authentic to how you would command a fleet as {model_name}."""
                 # existed, so the entire output of the Phase-1 strategy call was
                 # discarded and captains never received a fleet directive.
                 self.last_directive = decision.fleet_directive
+            elif name == "set_battle_plan":
+                plan = args.get("plan", "").strip()
+                if plan:
+                    self.standing_plan = plan
+                    self.standing_plan_time = simulation.current_time
+                    decision.battle_plan_update = plan
             elif name == "message_enemy_admiral":
                 self._pending_enemy_message = args.get("message", "")
                 decision.message_to_enemy_admiral = self._pending_enemy_message
@@ -443,16 +468,27 @@ Be authentic to how you would command a fleet as {model_name}."""
             elif name == "reject_fleet_draw":
                 decision.rejected_draw = True
 
-        # PHASE 2: Issue order to each ship individually
-        for ship_info in active_ships:
-            ship_order = self._issue_ship_order(
+        # PHASE 2: Issue order to each ship individually. All orders derive
+        # from the same frozen snapshot and directive, so they are independent
+        # calls - fan them out and collect in fleet order.
+        def issue(ship_info: dict) -> Optional[AdmiralOrder]:
+            return self._issue_ship_order(
                 ship_info=ship_info,
                 snapshot_t0=snapshot_t0,
                 fleet_directive=decision.fleet_directive,
                 simulation=simulation,
             )
-            if ship_order:
-                decision.fleet_orders.append(ship_order)
+
+        if self.parallel_ship_orders and len(active_ships) > 1:
+            with ThreadPoolExecutor(
+                max_workers=min(8, len(active_ships)),
+                thread_name_prefix=f"admiral-{self.faction}-orders",
+            ) as pool:
+                ship_orders = list(pool.map(issue, active_ships))
+        else:
+            ship_orders = [issue(ship_info) for ship_info in active_ships]
+
+        decision.fleet_orders.extend(o for o in ship_orders if o)
 
         # Update state
         self.decision_count += 1
@@ -493,6 +529,7 @@ Be authentic to how you would command a fleet as {model_name}."""
             fleet_directive=fleet_directive,
             snapshot=snapshot_t0,
             personality=self.config.personality,
+            standing_plan=self.standing_plan,
         )
 
         messages = [
@@ -562,6 +599,7 @@ Be authentic to how you would command a fleet as {model_name}."""
             question=question,
             personality=self.config.personality,
             recent_decisions=recent_decisions,
+            standing_plan=self.standing_plan,
         )
 
         messages = [
@@ -902,6 +940,13 @@ Be authentic to how you would command a fleet as {model_name}."""
             elif name == "set_fleet_directive":
                 decision.fleet_directive = args.get("directive", "")
                 self.last_directive = decision.fleet_directive
+
+            elif name == "set_battle_plan":
+                plan = args.get("plan", "").strip()
+                if plan:
+                    self.standing_plan = plan
+                    self.standing_plan_time = timestamp
+                    decision.battle_plan_update = plan
 
             elif name == "message_enemy_admiral":
                 self._pending_enemy_message = args.get("message", "")

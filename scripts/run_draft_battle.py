@@ -76,6 +76,9 @@ def main() -> int:
                         help="No admirals during the battle (captains fly autonomously)")
     parser.add_argument("--no-vision", action="store_true",
                         help="Disable tactical-plot images on admiral checkpoints")
+    parser.add_argument("--notebooks", action="store_true",
+                        help="Inject accepted commander-notebook lessons "
+                             "(data/notebooks) into each model's prompts")
     parser.add_argument("--quiet", "-q", action="store_true", help="Quiet mode")
     args = parser.parse_args()
 
@@ -151,6 +154,7 @@ def main() -> int:
         record_battle=True,
         record_sim_trace=args.trace,
         personality_selection=False,
+        use_notebooks=args.notebooks,
     )
 
     battle_config = BattleConfig(

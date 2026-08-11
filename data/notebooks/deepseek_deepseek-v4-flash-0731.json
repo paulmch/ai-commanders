@@ -1,0 +1,65 @@
+{
+  "model": "deepseek/deepseek-v4-flash-0731",
+  "entries": [
+    {
+      "id": "07d39268",
+      "role": "admiral",
+      "text": "Prioritize killing enemy torpedo-carriers (corvettes/frigates) over equal-threat spinal destroyers: saturating torpedo salvos, not guns, destroyed my ships despite overlapping PD, because I never suppressed the launchers.",
+      "status": "accepted",
+      "source_battle": "data/recordings/battle_claude_sonnet_5_vs_deepseek_v4_flash_07_20260811_023316.json",
+      "source_outcome": "lost vs anthropic/claude-sonnet-5",
+      "created_at": "2026-08-11T02:34:44",
+      "validation": {
+        "with_wins": 0,
+        "with_losses": 0,
+        "without_wins": 0,
+        "without_losses": 0
+      }
+    },
+    {
+      "id": "c769ad45",
+      "role": "captain",
+      "text": "When PD is blinded by inbound torpedo wrecks, designate a few evaders to dodge while the rest hold nose-on fire; mass evading to dodge wrecks silently removes your whole fleet's firepower.",
+      "status": "accepted",
+      "source_battle": "data/recordings/battle_claude_sonnet_5_vs_deepseek_v4_flash_07_20260811_023316.json",
+      "source_outcome": "lost vs anthropic/claude-sonnet-5",
+      "created_at": "2026-08-11T02:34:44",
+      "validation": {
+        "with_wins": 0,
+        "with_losses": 0,
+        "without_wins": 0,
+        "without_losses": 0
+      }
+    },
+    {
+      "id": "1818e890",
+      "role": "admiral",
+      "text": "When outnumbered in torpedo tubes, a tight mutual-PD cluster just presents the enemy one concentrated target: their time-on-target salvoes focus-fell a single capital per volley. Only hold the cluster if your PD count demonstrably stops the full inbound volley; otherwise split to force the torpedo load to spread across hulls.",
+      "status": "pending",
+      "source_battle": "data/recordings/battle_claude_sonnet_5_vs_deepseek_v4_flash_07_20260811_095218.json",
+      "source_outcome": "lost vs anthropic/claude-sonnet-5",
+      "created_at": "2026-08-11T12:21:14",
+      "validation": {
+        "with_wins": 0,
+        "with_losses": 0,
+        "without_wins": 0,
+        "without_losses": 0
+      }
+    },
+    {
+      "id": "b3ace746",
+      "role": "admiral",
+      "text": "Do not enter a long-range torpedo attrition duel you cannot out-volume: with 2 launcher hulls vs 6, small countersalvos never win. Commit decisively to your actual weapon (battleship direct fire) and close to knife range early, before sustained enemy salvos strip your PD and hull and make arrival academic.",
+      "status": "pending",
+      "source_battle": "data/recordings/battle_claude_sonnet_5_vs_deepseek_v4_flash_07_20260811_095218.json",
+      "source_outcome": "lost vs anthropic/claude-sonnet-5",
+      "created_at": "2026-08-11T12:21:14",
+      "validation": {
+        "with_wins": 0,
+        "with_losses": 0,
+        "without_wins": 0,
+        "without_losses": 0
+      }
+    }
+  ]
+}

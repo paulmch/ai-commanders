@@ -112,6 +112,38 @@ ADMIRAL_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "set_battle_plan",
+            "description": (
+                "Set or amend your STANDING BATTLE PLAN - your private memory. Unlike "
+                "the fleet directive (re-issued every checkpoint, shown to captains), "
+                "the standing plan is shown back to YOU, and only you, at every "
+                "checkpoint until you change it - it is your only memory of your own "
+                "intent between checkpoints. Use it for the shape of the whole battle: "
+                "numbered phases, the conditions that trigger the next phase, torpedo "
+                "reserve policy, when you would disengage. Replaces the previous plan "
+                "entirely, so restate what still applies. 2-6 sentences."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "plan": {
+                        "type": "string",
+                        "description": (
+                            "The standing plan, e.g. 'Phase 1: close to 300km in tight "
+                            "formation, all PD overlapping. Phase 2: when their torpedo "
+                            "cruiser has fired twice, full salvo at it. Phase 3: focus "
+                            "fire remaining hulls nearest-first. Abort to draw if we "
+                            "lose 2 ships before phase 2.'"
+                        )
+                    }
+                },
+                "required": ["plan"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "message_enemy_admiral",
             "description": (
                 "Send a message to the enemy Admiral (if one exists). "

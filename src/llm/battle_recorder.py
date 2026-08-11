@@ -65,6 +65,10 @@ class EventType(str, Enum):
     SURRENDER = "surrender"
     DRAW_PROPOSAL = "draw_proposal"
 
+    # Self-authored durable state (admiral standing plan, captain's log)
+    ADMIRAL_PLAN = "admiral_plan"
+    CAPTAIN_LOG = "captain_log"
+
     # Admiral/Captain interactions
     ADMIRAL_DIRECTIVE = "admiral_directive"
     ADMIRAL_ORDER = "admiral_order"
@@ -1023,6 +1027,42 @@ class BattleRecorder:
                 "admiral_name": admiral_name,
                 "faction": faction,
                 "directive": directive,
+            }
+        ))
+
+    def record_admiral_plan(
+        self,
+        timestamp: float,
+        admiral_name: str,
+        faction: str,
+        plan: str,
+    ) -> None:
+        """Record a new/amended standing battle plan from an admiral."""
+        self._record_event(BattleEvent(
+            timestamp=timestamp,
+            event_type=EventType.ADMIRAL_PLAN,
+            data={
+                "admiral_name": admiral_name,
+                "faction": faction,
+                "plan": plan,
+            }
+        ))
+
+    def record_captain_log(
+        self,
+        timestamp: float,
+        ship_id: str,
+        captain_name: str,
+        note: str,
+    ) -> None:
+        """Record a captain's log note (self-authored durable state)."""
+        self._record_event(BattleEvent(
+            timestamp=timestamp,
+            event_type=EventType.CAPTAIN_LOG,
+            ship_id=ship_id,
+            data={
+                "captain_name": captain_name,
+                "note": note,
             }
         ))
 

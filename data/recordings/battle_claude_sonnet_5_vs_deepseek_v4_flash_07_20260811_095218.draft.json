@@ -1,0 +1,181 @@
+{
+  "budget": 200,
+  "alpha_captain_model": "heuristic",
+  "beta_captain_model": "heuristic",
+  "alpha": {
+    "faction": "alpha",
+    "budget": 200,
+    "points_spent": 200,
+    "auto_draft": false,
+    "formation_name": "Corvette Screen / Dispersed Torpedo Wedge",
+    "selection_rationale": "Committing fully to torpedo-saturation doctrine: six cruiser_torpedo hulls provide 288 guided rounds delivered in massed 8-round salvos per launcher-group, far exceeding the 3-turret PD dwell threshold needed to blind seekers - this is the doctrinally-favored way to crack even a dreadnought's thick nose armor in one coordinated strike. Two corvettes (3g) screen ahead as fast, cheap torpedo skirmishers, adding another 16 rounds and forcing the enemy to spend PD attention early while the slower cruiser_torpedo wave closes to point-blank saturation range; since our slowest torpedo carrier (1.5g) still outpaces any <=1g capital ship the enemy might field, they cannot simply kite us dry.",
+    "formation_rationale": "The two corvettes push far forward as an expendable picket screen, absorbing the first exchange and intercepting incoming torpedoes with PD while giving early warning of enemy maneuvers. The six torpedo cruisers stay behind gun-range-favorable distance in a dispersed diamond/wedge: no two cruisers share the same y/z line, which complicates enemy spinal weapon geometry (a single spinal shot can't rake multiple hulls), while every ship remains within ~90 km of its neighbors so PD coverage against incoming torpedoes still overlaps. Layering in x (20/-20/-55) also lets rear cruisers unmask their own torpedo salvos over the front rank without much self-blocking.",
+    "ships": [
+      {
+        "ship_id": "alpha_1",
+        "ship_name": "TIS Harpoon-1",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          20.0,
+          60.0,
+          25.0
+        ]
+      },
+      {
+        "ship_id": "alpha_2",
+        "ship_name": "TIS Harpoon-2",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          20.0,
+          -60.0,
+          -25.0
+        ]
+      },
+      {
+        "ship_id": "alpha_3",
+        "ship_name": "TIS Harpoon-3",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          -20.0,
+          35.0,
+          -35.0
+        ]
+      },
+      {
+        "ship_id": "alpha_4",
+        "ship_name": "TIS Harpoon-4",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          -20.0,
+          -35.0,
+          35.0
+        ]
+      },
+      {
+        "ship_id": "alpha_5",
+        "ship_name": "TIS Harpoon-5",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          -55.0,
+          0.0,
+          50.0
+        ]
+      },
+      {
+        "ship_id": "alpha_6",
+        "ship_name": "TIS Harpoon-6",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          -55.0,
+          0.0,
+          -50.0
+        ]
+      },
+      {
+        "ship_id": "alpha_7",
+        "ship_name": "TIS Dart-1",
+        "ship_type": "corvette",
+        "cost": 10,
+        "offset_km": [
+          140.0,
+          45.0,
+          10.0
+        ]
+      },
+      {
+        "ship_id": "alpha_8",
+        "ship_name": "TIS Dart-2",
+        "ship_type": "corvette",
+        "cost": 10,
+        "offset_km": [
+          140.0,
+          -45.0,
+          -10.0
+        ]
+      }
+    ]
+  },
+  "beta": {
+    "faction": "beta",
+    "budget": 200,
+    "points_spent": 196,
+    "auto_draft": false,
+    "formation_name": "Shield Wall + Torpedo Core",
+    "selection_rationale": "Balanced combined-arms capital fleet: a tough battleship gun line provides the PD-anchored backbone and direct firepower, while two torpedo cruisers deliver the saturation salvoes the game rewards for killing armored capitals. One destroyer adds a spinal punch. All hulls are capital-speed (no 3g screens to be abandoned), so the whole fleet executes one simple plan: advance together, close to effective gun range, and finish with coordinated torpedo saturation.",
+    "formation_rationale": "Three battleships form a wide forward vanguard to absorb and deliver the first exchange, spread laterally to complicate enemy spinal geometry. The two fragile torpedo cruisers sit protected behind the wall but still inside the ~100 km PD bubble. The destroyer anchors the middle of the screen to overlap PD coverage over both torpedo hulls against inbound torpedoes.",
+    "ships": [
+      {
+        "ship_id": "beta_1",
+        "ship_name": "OCS Sovereign-1",
+        "ship_type": "battleship",
+        "cost": 40,
+        "offset_km": [
+          60.0,
+          30.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_2",
+        "ship_name": "OCS Sovereign-2",
+        "ship_type": "battleship",
+        "cost": 40,
+        "offset_km": [
+          60.0,
+          -30.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_3",
+        "ship_name": "OCS Sovereign-3",
+        "ship_type": "battleship",
+        "cost": 40,
+        "offset_km": [
+          60.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_4",
+        "ship_name": "OCS Harpoon-1",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          15.0,
+          15.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_5",
+        "ship_name": "OCS Harpoon-2",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          15.0,
+          -15.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_6",
+        "ship_name": "OCS Falchion",
+        "ship_type": "destroyer",
+        "cost": 16,
+        "offset_km": [
+          35.0,
+          0.0,
+          0.0
+        ]
+      }
+    ]
+  }
+}

@@ -49,13 +49,15 @@ ai-commanders/
 │   ├── damage.py / modules.py / geometry.py / thermal.py / power.py
 │   └── llm/                # OpenRouter client, captain/admiral agents (+vision),
 │                           # draft mode + heuristic captains, prompts, tools,
-│                           # battle runner/recorder, MCP servers
+│                           # battle runner/recorder, MCP servers, commander
+│                           # notebooks (notebook.py, cross-battle memory)
 ├── tests/                  # pytest suite; test_fixes_*.py pin past bug fixes
 ├── scripts/
 │   ├── run_llm_battle.py   # CLI for AI vs AI battles (--fleet-config, --admiral-vision)
 │   ├── run_draft_battle.py # draft mode: point-budget fleets + formations
 │   ├── generate_test_battle.py  # scripted no-LLM recordings for the viewer
 │   ├── mcp_battle.py       # CLI for MCP-controlled battles
+│   ├── refine_commander.py # Post-battle lesson distillation + rematch gating
 │   └── calculate_shots_to_kill.py  # Regenerates docs/ships.md combat tables
 ├── docs/ships.md           # Ship specs + simulated shots-to-kill tables
 └── visualizer/             # Three.js 3D battle replay viewer
@@ -78,10 +80,18 @@ ai-commanders/
 
 Hierarchical control:
 1. **Admiral LLM** (fleet battles): two-phase orders every checkpoint - fleet
-   directive plus per-captain orders, including coordinated torpedo salvos
+   directive plus per-captain orders, including coordinated torpedo salvos.
+   Keeps a private standing battle plan (set_battle_plan) echoed back each
+   checkpoint - its only cross-checkpoint memory of its own intent
 2. **Captain LLM**: tool calls every 30s decision cycle (maneuver, weapons order,
-   torpedo launch, radiators, messages). Tool surface is derived from the hull's
-   actual armament - gun tools only on gun ships, torpedo tools only on torpedo ships
+   torpedo launch, radiators, messages, captain's-log notes via log_note). Tool
+   surface is derived from the hull's actual armament - gun tools only on gun
+   ships, torpedo tools only on torpedo ships
+
+Within a checkpoint, independent LLM calls (both admirals, per-ship orders, all
+captains) run concurrently (BattleConfig.parallel_llm, on by default).
+Cross-battle: scripts/refine_commander.py distills notebook lessons from
+recordings, rematch-gates them, and battles opt in via use_notebooks/--notebooks.
 3. **Rule-based layer**: executes between checkpoints - fire control modes,
    automatic point defense, threat-aware evasion (wobble vs guns, RUN from guided
    torpedoes, PRESENT thickest armor when a hit is unavoidable)

@@ -822,6 +822,11 @@ COMMUNICATION (optional - use sparingly):
 OTHER:
 - set_radiators: extend (cooling) or retract (protection)
 - surrender / propose_draw: End battle (draw decided by points)
+- log_note: CAPTAIN'S LOG - a short note to your future self, shown back to you
+  every checkpoint. It is your only memory of your own intent between decisions:
+  each checkpoint you see fresh data but not what you were trying to do. Log your
+  plan and what would change it (e.g. "Pass 2: brake at 150km, torpedoes when his
+  PD is under 3 turrets"), then next checkpoint execute it or log the new plan.
 
 *** CRITICAL: YOU MUST CALL THE TOOLS EVERY CHECKPOINT ***
 Describing what you will do is NOT the same as doing it. You MUST call:
@@ -1304,6 +1309,7 @@ def build_captain_prompt(
     recent_hits: Optional[str] = None,
     ship_type: Optional[str] = None,
     fleet_data: Optional[Dict[str, Any]] = None,
+    notebook_text: Optional[str] = None,
 ) -> str:
     """
     Build the complete system prompt for a captain.
@@ -1431,6 +1437,14 @@ def build_captain_prompt(
     else:
         personality_prompt = ""
 
+    # Commander's notebook (cross-battle lessons) rides with the personality in
+    # the stable doctrine prefix: fixed for the whole battle, so it caches.
+    if notebook_text:
+        personality_prompt = (
+            f"{personality_prompt}\n\n{notebook_text}" if personality_prompt
+            else notebook_text
+        )
+
     # Build history context section
     history_parts = []
     if battle_summary:
@@ -1517,6 +1531,12 @@ As Admiral, you:
 2. Issue SPECIFIC ORDERS to EACH captain using the issue_order tool
 3. Can negotiate with enemy Admiral (if one exists)
 4. Control draw proposals for your fleet
+5. Keep a STANDING BATTLE PLAN (set_battle_plan): your private cross-checkpoint
+   memory. Everything else you see is rebuilt from scratch each checkpoint - the
+   plan is the ONLY record of your own intent that survives. Set it early
+   (phases + trigger conditions), then each checkpoint either execute the next
+   phase or amend it. Directive = this checkpoint's order to captains; standing
+   plan = the whole battle's shape, for you alone.
 
 Your captains receive your orders BEFORE they decide.
 They can discuss with you (up to 2 exchanges) before finalizing.
@@ -1695,6 +1715,8 @@ ADMIRAL_TURN_STATE = (
     ADMIRAL_STATE_MARKER
     + """
 
+{standing_plan_section}
+
 === YOUR FLEET ===
 {fleet_composition}
 
@@ -1743,6 +1765,7 @@ TIMING CONSTRAINT: The captain makes ONE decision that is LOCKED for 30 seconds.
 They CANNOT react mid-checkpoint or execute conditional orders like "if X then Y".
 Give them ONE clear order to execute NOW, not contingency plans.
 
+{standing_plan_section}
 === YOUR RECENT ORDERS (REMEMBER THESE!) ===
 {recent_orders_context}
 
@@ -1837,6 +1860,9 @@ def build_admiral_prompt(
     received_messages: Optional[List[str]] = None,
     communications_log: Optional[List[Any]] = None,
     phase: str = "full",  # "full", "directive", or "orders"
+    standing_plan: Optional[str] = None,
+    standing_plan_time: float = 0.0,
+    notebook_text: Optional[str] = None,
 ) -> str:
     """
     Build Admiral system prompt with dual-snapshot comparison.
@@ -1922,6 +1948,14 @@ def build_admiral_prompt(
     # Personality
     personality_prompt = f"YOUR PERSONALITY:\n{personality}" if personality else ""
 
+    # Commander's notebook (cross-battle lessons): stable per battle, so it
+    # belongs in the cacheable doctrine prefix next to the personality.
+    if notebook_text:
+        personality_prompt = (
+            f"{personality_prompt}\n\n{notebook_text}" if personality_prompt
+            else notebook_text
+        )
+
     # Count ships for the critical instruction
     num_ships = len(snapshot_t_zero.friendly_ships) if snapshot_t_zero else 0
 
@@ -1992,6 +2026,24 @@ Fire spinal when aligned, turrets continuous fire. Stay mobile - don't be a sitt
 
 """
 
+    # Standing battle plan: the admiral's only self-authored memory. Rendered in
+    # the volatile turn state (it changes when amended) so the cached doctrine
+    # prefix is untouched.
+    if standing_plan:
+        standing_plan_section = (
+            f"=== YOUR STANDING BATTLE PLAN (set by you at T+{standing_plan_time:.0f}s) ===\n"
+            f"{standing_plan}\n"
+            "This is your own plan, echoed back to you. Execute its next phase, or amend it\n"
+            "with set_battle_plan if the situation has changed."
+        )
+    else:
+        standing_plan_section = (
+            "=== YOUR STANDING BATTLE PLAN ===\n"
+            "(none yet) You have no memory of your own intent between checkpoints except\n"
+            "this plan. Call set_battle_plan now - phases plus the conditions that trigger\n"
+            "them - so your future self fights the same battle you are planning."
+        )
+
     # Generate dynamic ship class stats from fleet_data
     ship_class_stats = _generate_ship_class_stats(snapshot_t_zero, fleet_data)
 
@@ -2015,6 +2067,7 @@ Fire spinal when aligned, turrets continuous fire. Stay mobile - don't be a sitt
         mission_block=mission_block,
         order_requirements=order_requirements,
         simulation_disclaimer=SIMULATION_DISCLAIMER,
+        standing_plan_section=standing_plan_section,
         fleet_composition=fleet_composition,
         fleet_capabilities=fleet_capabilities,
         snapshot_t_minus_15=snapshot_15_text,
@@ -2036,6 +2089,7 @@ def build_admiral_response_prompt(
     question: str,
     personality: Optional[str],
     recent_decisions: Optional[List[Any]] = None,
+    standing_plan: Optional[str] = None,
 ) -> str:
     """Build prompt for Admiral responding to captain discussion."""
     # Format recent decisions (up to last 3 checkpoints)
@@ -2064,9 +2118,15 @@ def build_admiral_response_prompt(
 
     personality_prompt = f"YOUR PERSONALITY:\n{personality}" if personality else ""
 
+    standing_plan_section = (
+        f"=== YOUR STANDING BATTLE PLAN ===\n{standing_plan}\n\n"
+        if standing_plan else ""
+    )
+
     return ADMIRAL_RESPONSE_PROMPT.format(
         admiral_name=admiral_name,
         captain_ship_name=captain_ship_name,
+        standing_plan_section=standing_plan_section,
         recent_orders_context=recent_orders_context,
         personality_prompt=personality_prompt,
     )
@@ -2080,6 +2140,7 @@ def build_admiral_ship_order_prompt(
     fleet_directive: str,
     snapshot: Any,
     personality: Optional[str] = None,
+    standing_plan: Optional[str] = None,
 ) -> str:
     """
     Build prompt for Admiral to issue order to a specific ship.
@@ -2128,9 +2189,13 @@ SHIP STATUS - {ship_name}:
         enemy_summary = "\n".join(enemy_lines)
 
     personality_line = f"\nYOUR PERSONALITY: {personality}" if personality else ""
+    plan_line = (
+        f"\nYOUR STANDING BATTLE PLAN (keep this order consistent with it):\n\"{standing_plan}\"\n"
+        if standing_plan else ""
+    )
 
     return f"""You are {admiral_name}, commanding a fleet in space combat.
-
+{plan_line}
 You have already set the fleet directive:
 "{fleet_directive}"
 

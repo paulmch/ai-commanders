@@ -35,6 +35,10 @@ class LLMCaptainConfig:
     has_torpedoes: bool = False
     ship_type: str = "destroyer"
     fleet_data: Optional[Dict[str, Any]] = None
+    # Accepted commander-notebook lessons for this model (cross-battle memory,
+    # src/llm/notebook.py). Stable for the whole battle -> lives in the cached
+    # doctrine prefix. None when notebooks are disabled.
+    notebook_text: Optional[str] = None
 
 
 def ship_has_torpedoes(ship_type: str, fleet_data: Dict[str, Any]) -> bool:
@@ -118,6 +122,12 @@ class LLMCaptain:
         # the model never learns that a call was rejected and repeats it forever.
         self.pending_tool_errors: List[str] = []
         self.last_tool_errors: List[str] = []
+
+        # Captain's log: self-authored notes (log_note tool) echoed back into
+        # every subsequent turn. The rest of the prompt is telemetry the harness
+        # compressed for the captain; this is the only channel where the captain
+        # decides what its future self needs to remember.
+        self.captain_log: List[Dict[str, Any]] = []
 
         # Weapon groups - will be populated when we know the ship type
         self.weapon_groups: Dict[str, List[str]] = {}
@@ -353,6 +363,7 @@ class LLMCaptain:
             recent_hits=recent_hits_text if recent_hits_text else None,
             ship_type=self.config.ship_type,
             fleet_data=self.config.fleet_data,
+            notebook_text=self.config.notebook_text,
         )
 
         # Split into a stable system prompt and a volatile user turn so the
@@ -370,6 +381,10 @@ class LLMCaptain:
         torpedo_text = self._format_torpedo_section(ship_status, tactical_status)
         if torpedo_text:
             turn_parts.append(torpedo_text)
+
+        log_text = self._format_captain_log()
+        if log_text:
+            turn_parts.append(log_text)
 
         # Admiral orders change per checkpoint - they belong in the volatile turn.
         if self.has_admiral and (self.admiral_orders or self.fleet_directive):
@@ -505,6 +520,9 @@ class LLMCaptain:
                     actions.append(f"MSG ({recipient}): \"{msg}...\"" if len(msg) >= 30 else f"MSG ({recipient}): \"{msg}\"")
                 else:
                     actions.append(f"MSG: \"{msg}...\"" if len(msg) >= 30 else f"MSG: \"{msg}\"")
+            elif tc.name == "log_note":
+                note = tc.arguments.get("note", "")[:40]
+                actions.append(f"LOG: \"{note}\"")
             elif tc.name == "surrender":
                 actions.append("SURRENDER")
             elif tc.name == "propose_draw":
@@ -555,6 +573,8 @@ class LLMCaptain:
                     actions.append("radiators:" + ("extend" if args.get("extend") else "retract"))
                 elif name == "send_message":
                     actions.append("sent_msg")
+                elif name == "log_note":
+                    actions.append("logged_note")
                 elif name == "surrender":
                     actions.append("SURRENDER")
                 elif name == "propose_draw":
@@ -723,6 +743,20 @@ class LLMCaptain:
         lines = ["ERRORS FROM YOUR LAST ORDERS (these calls were REJECTED, reissue correctly):"]
         for err in self.last_tool_errors[-5:]:
             lines.append(f"  - {err}")
+        return "\n".join(lines)
+
+    # Keep the echoed log small: it rides in the volatile user turn every
+    # checkpoint, so a runaway log would tax every remaining call of the battle.
+    MAX_LOG_ENTRIES = 3
+    MAX_LOG_NOTE_CHARS = 300
+
+    def _format_captain_log(self) -> str:
+        """Render the captain's own notes back into the next turn."""
+        if not self.captain_log:
+            return ""
+        lines = ["YOUR CAPTAIN'S LOG (notes you wrote to your future self - execute or supersede them):"]
+        for entry in self.captain_log[-self.MAX_LOG_ENTRIES:]:
+            lines.append(f"  T+{entry['time']:.0f}s: {entry['note']}")
         return "\n".join(lines)
 
     def _format_torpedo_section(
@@ -1735,6 +1769,22 @@ class LLMCaptain:
                 "target_ship": target_ship,
             }
             self._record_sent_message(message, simulation.current_time)
+            return None
+
+        elif name == "log_note":
+            note = str(args.get("note", "")).strip()
+            if not note:
+                return None
+            # Bound both dimensions: entry length and entry count. The tool
+            # advertises ~250 chars; hard-cut a little above that so a verbose
+            # model degrades gracefully instead of flooding its own prompt.
+            if len(note) > self.MAX_LOG_NOTE_CHARS:
+                note = note[:self.MAX_LOG_NOTE_CHARS] + "..."
+            self.captain_log.append({
+                "time": simulation.current_time,
+                "note": note,
+            })
+            del self.captain_log[:-self.MAX_LOG_ENTRIES]
             return None
 
         elif name == "surrender":

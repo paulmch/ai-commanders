@@ -8,9 +8,10 @@ Also supports MCP-controlled fleets for external control (e.g., Claude Code).
 
 import asyncio
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from pathlib import Path
 
 from .client import CaptainClient
@@ -45,6 +46,12 @@ class BattleConfig:
 
     # Verbose output
     verbose: bool = True
+
+    # Run independent LLM calls of a checkpoint concurrently: the two admirals'
+    # decisions, each admiral's per-ship orders, and all captains' decisions.
+    # Commands are only applied after every agent has decided, so concurrency
+    # changes wall-clock, not semantics. Disable for strictly ordered output.
+    parallel_llm: bool = True
 
     # Personality selection - let LLMs choose their own personality before battle
     personality_selection: bool = True
@@ -309,6 +316,22 @@ class LLMBattleRunner:
             forward=forward,
         )
 
+    def _notebook_text_for(self, model: str, role: str) -> Optional[str]:
+        """
+        This model's accepted commander-notebook lessons, if the battle opted in.
+
+        Returns None (no prompt change at all) unless the fleet config sets
+        use_notebooks - evaluation battles must measure the raw model.
+        """
+        if not (self.fleet_config and getattr(self.fleet_config, "use_notebooks", False)):
+            return None
+        from .notebook import notebook_prompt_text
+        try:
+            return notebook_prompt_text(model, role)
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"[NOTEBOOK] could not load notebook for {model}: {e}")
+            return None
+
     def _make_captain(self, captain_config: LLMCaptainConfig) -> LLMCaptain:
         """
         Build the right captain for a ship config.
@@ -319,6 +342,8 @@ class LLMBattleRunner:
         from .heuristic_captain import HEURISTIC_MODEL, HeuristicCaptain
         if captain_config.model == HEURISTIC_MODEL:
             return HeuristicCaptain(captain_config)
+        captain_config.notebook_text = self._notebook_text_for(
+            captain_config.model, "captain")
         return LLMCaptain(captain_config, self.client)
 
     def setup_fleet_battle(self, fleet_data: Dict[str, Any]) -> None:
@@ -488,6 +513,9 @@ class LLMBattleRunner:
                 client=self.client,
                 fleet_data=fleet_data,
             )
+            self.alpha_admiral.parallel_ship_orders = self.config.parallel_llm
+            self.alpha_admiral.config.notebook_text = self._notebook_text_for(
+                self.alpha_admiral.config.model, "admiral")
 
         if self.fleet_config.beta_fleet.mcp and self.fleet_config.beta_fleet.mcp.enabled:
             mcp_config = MCPControllerConfig(
@@ -508,6 +536,9 @@ class LLMBattleRunner:
                 client=self.client,
                 fleet_data=fleet_data,
             )
+            self.beta_admiral.parallel_ship_orders = self.config.parallel_llm
+            self.beta_admiral.config.notebook_text = self._notebook_text_for(
+                self.beta_admiral.config.model, "admiral")
 
         # Admiral vision: allocate the trail/event history only if some
         # admiral will actually consume rendered frames.
@@ -981,6 +1012,7 @@ class LLMBattleRunner:
             if self.config.verbose and (self.alpha_admiral or self.beta_admiral):
                 print("\n--- ADMIRAL DECISIONS ---")
 
+            admiral_jobs: List[Tuple[str, LLMAdmiral, List[LLMCaptain], Optional[LLMAdmiral]]] = []
             if self.alpha_admiral:
                 # Filter out surrendered ships - Admiral shouldn't command them
                 active_alpha_captains = [
@@ -988,77 +1020,32 @@ class LLMBattleRunner:
                     if not getattr(self.alpha_ships.get(c.ship_id), 'is_surrendered', False)
                     and not getattr(self.alpha_ships.get(c.ship_id), 'is_dying', False)
                 ]
-                alpha_decision = self._get_admiral_decision(
-                    self.alpha_admiral,
-                    active_alpha_captains,
-                    self.beta_admiral,
-                )
-                # Distribute orders to captains
-                for order in alpha_decision.fleet_orders:
-                    ship_id = self._find_ship_id_by_name(order.target_ship_id, "alpha")
-                    if ship_id and ship_id in self.alpha_captains:
-                        if ship_id not in admiral_orders:
-                            admiral_orders[ship_id] = []
-                        admiral_orders[ship_id].append(order)
-
-                if self.config.verbose:
-                    print(f"  [Alpha Admiral] {self.alpha_admiral.name}:")
-                    if alpha_decision.fleet_directive:
-                        print(f"    Directive: {alpha_decision.fleet_directive}")
-                    for order in alpha_decision.fleet_orders:
-                        # Show full order text with proper indentation
-                        order_lines = order.order_text.strip().split('\n')
-                        print(f"    -> {order.target_ship_id}:")
-                        for line in order_lines:
-                            print(f"         {line}")
-
-                # Record admiral directive and orders
-                if self.recorder:
-                    if alpha_decision.fleet_directive:
-                        self.recorder.record_admiral_directive(
-                            timestamp=self.simulation.current_time,
-                            admiral_name=self.alpha_admiral.name,
-                            faction="alpha",
-                            directive=alpha_decision.fleet_directive,
-                        )
-                    for order in alpha_decision.fleet_orders:
-                        ship_id = self._find_ship_id_by_name(order.target_ship_id, "alpha")
-                        ship_name = order.target_ship_id
-                        self.recorder.record_admiral_order(
-                            timestamp=self.simulation.current_time,
-                            admiral_name=self.alpha_admiral.name,
-                            ship_id=ship_id or order.target_ship_id,
-                            ship_name=ship_name,
-                            order_text=order.order_text,
-                            priority=order.priority,
-                            suggested_target=order.suggested_target,
-                        )
-
+                admiral_jobs.append(
+                    ("alpha", self.alpha_admiral, active_alpha_captains, self.beta_admiral))
             if self.beta_admiral:
-                # Filter out surrendered ships - Admiral shouldn't command them
                 active_beta_captains = [
                     c for c in self.beta_captains.values()
                     if not getattr(self.beta_ships.get(c.ship_id), 'is_surrendered', False)
                     and not getattr(self.beta_ships.get(c.ship_id), 'is_dying', False)
                 ]
-                beta_decision = self._get_admiral_decision(
-                    self.beta_admiral,
-                    active_beta_captains,
-                    self.alpha_admiral,
-                )
+                admiral_jobs.append(
+                    ("beta", self.beta_admiral, active_beta_captains, self.alpha_admiral))
+
+            for (faction, admiral, _, _), decision in zip(
+                    admiral_jobs, self._run_admiral_decisions(admiral_jobs)):
+                captains = self.alpha_captains if faction == "alpha" else self.beta_captains
+
                 # Distribute orders to captains
-                for order in beta_decision.fleet_orders:
-                    ship_id = self._find_ship_id_by_name(order.target_ship_id, "beta")
-                    if ship_id and ship_id in self.beta_captains:
-                        if ship_id not in admiral_orders:
-                            admiral_orders[ship_id] = []
-                        admiral_orders[ship_id].append(order)
+                for order in decision.fleet_orders:
+                    ship_id = self._find_ship_id_by_name(order.target_ship_id, faction)
+                    if ship_id and ship_id in captains:
+                        admiral_orders.setdefault(ship_id, []).append(order)
 
                 if self.config.verbose:
-                    print(f"  [Beta Admiral] {self.beta_admiral.name}:")
-                    if beta_decision.fleet_directive:
-                        print(f"    Directive: {beta_decision.fleet_directive}")
-                    for order in beta_decision.fleet_orders:
+                    print(f"  [{faction.title()} Admiral] {admiral.name}:")
+                    if decision.fleet_directive:
+                        print(f"    Directive: {decision.fleet_directive}")
+                    for order in decision.fleet_orders:
                         # Show full order text with proper indentation
                         order_lines = order.order_text.strip().split('\n')
                         print(f"    -> {order.target_ship_id}:")
@@ -1067,25 +1054,26 @@ class LLMBattleRunner:
 
                 # Record admiral directive and orders
                 if self.recorder:
-                    if beta_decision.fleet_directive:
+                    if decision.fleet_directive:
                         self.recorder.record_admiral_directive(
                             timestamp=self.simulation.current_time,
-                            admiral_name=self.beta_admiral.name,
-                            faction="beta",
-                            directive=beta_decision.fleet_directive,
+                            admiral_name=admiral.name,
+                            faction=faction,
+                            directive=decision.fleet_directive,
                         )
-                    for order in beta_decision.fleet_orders:
-                        ship_id = self._find_ship_id_by_name(order.target_ship_id, "beta")
-                        ship_name = order.target_ship_id
+                    for order in decision.fleet_orders:
+                        ship_id = self._find_ship_id_by_name(order.target_ship_id, faction)
                         self.recorder.record_admiral_order(
                             timestamp=self.simulation.current_time,
-                            admiral_name=self.beta_admiral.name,
+                            admiral_name=admiral.name,
                             ship_id=ship_id or order.target_ship_id,
-                            ship_name=ship_name,
+                            ship_name=order.target_ship_id,
                             order_text=order.order_text,
                             priority=order.priority,
                             suggested_target=order.suggested_target,
                         )
+
+                self._report_admiral_plan_update(admiral, decision, faction)
 
             # Phase 1b: Admiral <-> Admiral diplomacy (provider-agnostic)
             self._exchange_admiral_messages()
@@ -1115,39 +1103,17 @@ class LLMBattleRunner:
                 for ship_id, captain in self.beta_captains.items()
             ]
 
-            for ship_id, captain, faction in all_captains:
-                # Skip destroyed or surrendered ships
-                ship = self.simulation.get_ship(ship_id)
-                if (not ship or ship.is_destroyed or getattr(ship, 'is_dying', False)
-                        or getattr(ship, 'is_surrendered', False)):
-                    continue
+            # Skip destroyed, dying, or surrendered ships
+            decidable = [
+                (ship_id, captain, faction)
+                for ship_id, captain, faction in all_captains
+                if (ship := self.simulation.get_ship(ship_id))
+                and not ship.is_destroyed
+                and not getattr(ship, 'is_dying', False)
+                and not getattr(ship, 'is_surrendered', False)
+            ]
 
-                # Clear previous Admiral context and deliver new orders
-                captain.clear_admiral_context()
-                if ship_id in admiral_orders:
-                    orders = admiral_orders[ship_id]
-                    # Also include fleet directive if Admiral exists
-                    admiral = self.alpha_admiral if faction == "alpha" else self.beta_admiral
-                    # No hasattr guard: a missing attribute is a bug that must
-                    # surface, not silently degrade to "no directive".
-                    directive = getattr(admiral, "last_directive", None) if admiral else None
-                    captain.receive_admiral_orders(orders, directive)
-
-                if self.config.verbose:
-                    print(f"  [{captain.ship_name}] {captain.name} deciding...")
-
-                # Get decision (may include discuss_with_admiral request)
-                commands = self._get_captain_decision_with_discussion(
-                    ship_id, captain, faction
-                )
-                all_commands[ship_id] = commands
-
-                if self.config.verbose:
-                    print(f"    -> {self._get_ship_status_line(ship_id, commands)}")
-
-                # Record captain decision
-                if self.recorder:
-                    self._record_captain_decision(ship_id, captain, commands)
+            all_commands = self._run_captain_decisions(decidable, admiral_orders)
 
             # Phase 4: Handle immediate messaging (captain to captain)
             # Process any pending broadcast or enemy messages
@@ -1371,6 +1337,8 @@ class LLMBattleRunner:
                         for line in order_lines:
                             print(f"         {line}")
 
+                self._report_admiral_plan_update(self.alpha_admiral, alpha_decision, "alpha")
+
             # Handle beta fleet
             if self.beta_mcp:
                 # MCP-controlled: get commands from MCP client
@@ -1424,6 +1392,8 @@ class LLMBattleRunner:
                         for line in order_lines:
                             print(f"         {line}")
 
+                self._report_admiral_plan_update(self.beta_admiral, beta_decision, "beta")
+
             # === MESSAGE BRIDGE: LLM Admiral <-> LLM Admiral ===
             # No-op unless both sides are LLM admirals (the MCP bridge below owns
             # the mixed cases), so the two paths cannot double-drain a mailbox.
@@ -1474,37 +1444,23 @@ class LLMBattleRunner:
                 for ship_id, captain in self.beta_captains.items()
             ]
 
-            for ship_id, captain, faction in all_captains:
-                # Skip if this fleet is MCP-controlled
-                if (faction == "alpha" and self.alpha_mcp) or (faction == "beta" and self.beta_mcp):
-                    continue
+            # Skip MCP-controlled fleets and destroyed/surrendered ships
+            decidable = [
+                (ship_id, captain, faction)
+                for ship_id, captain, faction in all_captains
+                if not (faction == "alpha" and self.alpha_mcp)
+                and not (faction == "beta" and self.beta_mcp)
+                and (ship := self.simulation.get_ship(ship_id))
+                and not ship.is_destroyed
+                and not getattr(ship, 'is_dying', False)
+                and not getattr(ship, 'is_surrendered', False)
+            ]
 
-                # Skip destroyed or surrendered ships
-                ship = self.simulation.get_ship(ship_id)
-                if (not ship or ship.is_destroyed or getattr(ship, 'is_dying', False)
-                        or getattr(ship, 'is_surrendered', False)):
-                    continue
-
-                # Clear previous Admiral context and deliver new orders
-                captain.clear_admiral_context()
-                if ship_id in admiral_orders:
-                    orders = admiral_orders[ship_id]
-                    admiral = self.alpha_admiral if faction == "alpha" else self.beta_admiral
-                    # No hasattr guard: a missing attribute is a bug that must
-                    # surface, not silently degrade to "no directive".
-                    directive = getattr(admiral, "last_directive", None) if admiral else None
-                    captain.receive_admiral_orders(orders, directive)
-
-                if self.config.verbose:
-                    print(f"  [{captain.ship_name}] {captain.name} deciding...")
-
-                commands = self._get_captain_decision_with_discussion(
-                    ship_id, captain, faction
-                )
-                all_commands[ship_id] = commands
-
-                if self.config.verbose:
-                    print(f"    -> {self._get_ship_status_line(ship_id, commands)}")
+            # record=False preserves this loop's behaviour: the async/MCP path
+            # never recorded captain-decision events.
+            all_commands.update(
+                self._run_captain_decisions(decidable, admiral_orders, record=False)
+            )
 
             # Handle immediate messaging
             self._handle_immediate_messaging()
@@ -1581,6 +1537,36 @@ class LLMBattleRunner:
                 list(self.beta_captains.values())
             )
 
+    def _render_admiral_frame(self, admiral: LLMAdmiral) -> Optional[bytes]:
+        """
+        Render (and optionally save) the tactical plot for a vision admiral.
+
+        Kept out of the decision call so both admirals' frames can be rendered
+        sequentially on the main thread - matplotlib is not thread-safe - before
+        the decisions themselves run concurrently.
+        """
+        if not (self._admiral_view and admiral.wants_vision):
+            return None
+        battle_image_png = None
+        try:
+            battle_image_png = self._admiral_view.render(
+                self.simulation,
+                self._ships_meta(),
+                faction=admiral.faction,
+            )
+        except Exception as e:  # noqa: BLE001 - vision must never kill a battle
+            print(f"[ADMIRAL VISION] render failed at "
+                  f"T+{self.simulation.current_time:.0f}s: {e}")
+        if battle_image_png and self._admiral_view_dir:
+            try:
+                self._admiral_view_dir.mkdir(parents=True, exist_ok=True)
+                out = (self._admiral_view_dir /
+                       f"cp{self.checkpoint_count:03d}_{admiral.faction}.png")
+                out.write_bytes(battle_image_png)
+            except OSError as e:
+                print(f"[ADMIRAL VISION] could not save frame: {e}")
+        return battle_image_png
+
     def _get_admiral_decision(
         self,
         admiral: LLMAdmiral,
@@ -1588,32 +1574,100 @@ class LLMBattleRunner:
         enemy_admiral: Optional[LLMAdmiral],
     ) -> Any:
         """Get Admiral's decision for the checkpoint."""
-        battle_image_png = None
-        if self._admiral_view and admiral.wants_vision:
-            try:
-                battle_image_png = self._admiral_view.render(
-                    self.simulation,
-                    self._ships_meta(),
-                    faction=admiral.faction,
-                )
-            except Exception as e:  # noqa: BLE001 - vision must never kill a battle
-                print(f"[ADMIRAL VISION] render failed at "
-                      f"T+{self.simulation.current_time:.0f}s: {e}")
-            if battle_image_png and self._admiral_view_dir:
-                try:
-                    self._admiral_view_dir.mkdir(parents=True, exist_ok=True)
-                    out = (self._admiral_view_dir /
-                           f"cp{self.checkpoint_count:03d}_{admiral.faction}.png")
-                    out.write_bytes(battle_image_png)
-                except OSError as e:
-                    print(f"[ADMIRAL VISION] could not save frame: {e}")
-
         return admiral.decide(
             simulation=self.simulation,
             captains=friendly_captains,
             enemy_admiral=enemy_admiral,
-            battle_image_png=battle_image_png,
+            battle_image_png=self._render_admiral_frame(admiral),
         )
+
+    def _run_admiral_decisions(
+        self,
+        jobs: List[Tuple[str, LLMAdmiral, List[LLMCaptain], Optional[LLMAdmiral]]],
+    ) -> List[Any]:
+        """
+        Run each (faction, admiral, captains, enemy_admiral) job's decision.
+
+        With two LLM admirals and parallel_llm on, both sides decide
+        concurrently. This is also fairer than the old fixed order: neither
+        admiral gets to observe state the other set earlier in the SAME
+        checkpoint (e.g. a just-proposed draw).
+        """
+        if self.config.parallel_llm and len(jobs) > 1:
+            frames = [self._render_admiral_frame(admiral) for _, admiral, _, _ in jobs]
+            with ThreadPoolExecutor(
+                max_workers=len(jobs),
+                thread_name_prefix="admiral-decide",
+            ) as pool:
+                futures = [
+                    pool.submit(
+                        admiral.decide,
+                        simulation=self.simulation,
+                        captains=captains,
+                        enemy_admiral=enemy,
+                        battle_image_png=frame,
+                    )
+                    for (_, admiral, captains, enemy), frame in zip(jobs, frames)
+                ]
+                return [f.result() for f in futures]
+        return [
+            self._get_admiral_decision(admiral, captains, enemy)
+            for _, admiral, captains, enemy in jobs
+        ]
+
+    def _run_captain_decisions(
+        self,
+        captain_entries: List[Tuple[str, LLMCaptain, str]],
+        admiral_orders: Dict[str, List[Any]],
+        record: bool = True,
+    ) -> Dict[str, List[Any]]:
+        """
+        Deliver orders and collect every listed captain's decision.
+
+        Each captain's decide/discuss/retry chain is independent of the other
+        captains' (commands are applied only after everyone has decided), so
+        with parallel_llm the chains run concurrently and a checkpoint costs
+        one captain's wall-clock instead of the fleet's sum. Order delivery
+        and reporting stay sequential in fleet order.
+        """
+        for ship_id, captain, faction in captain_entries:
+            captain.clear_admiral_context()
+            if ship_id in admiral_orders:
+                orders = admiral_orders[ship_id]
+                admiral = self.alpha_admiral if faction == "alpha" else self.beta_admiral
+                # No hasattr guard: a missing attribute is a bug that must
+                # surface, not silently degrade to "no directive".
+                directive = getattr(admiral, "last_directive", None) if admiral else None
+                captain.receive_admiral_orders(orders, directive)
+
+        if self.config.verbose:
+            for _, captain, _ in captain_entries:
+                print(f"  [{captain.ship_name}] {captain.name} deciding...")
+
+        if self.config.parallel_llm and len(captain_entries) > 1:
+            with ThreadPoolExecutor(
+                max_workers=min(8, len(captain_entries)),
+                thread_name_prefix="captain-decide",
+            ) as pool:
+                results = list(pool.map(
+                    lambda entry: self._get_captain_decision_with_discussion(*entry),
+                    captain_entries,
+                ))
+        else:
+            results = [
+                self._get_captain_decision_with_discussion(ship_id, captain, faction)
+                for ship_id, captain, faction in captain_entries
+            ]
+
+        all_commands: Dict[str, List[Any]] = {}
+        for (ship_id, captain, faction), commands in zip(captain_entries, results):
+            all_commands[ship_id] = commands
+            if self.config.verbose:
+                print(f"  [{captain.ship_name}] -> "
+                      f"{self._get_ship_status_line(ship_id, commands)}")
+            if record and self.recorder:
+                self._record_captain_decision(ship_id, captain, commands)
+        return all_commands
 
     def _ships_meta(self) -> Dict[str, Dict[str, str]]:
         """ship_id -> {name, type, faction} for the tactical renderer."""
@@ -1638,6 +1692,28 @@ class LLMBattleRunner:
             if getattr(ship, 'name', ship_id) == name or ship_id == name:
                 return ship_id
         return None
+
+    def _report_admiral_plan_update(
+        self,
+        admiral: LLMAdmiral,
+        decision: Any,
+        faction: str,
+    ) -> None:
+        """Print and record a standing-plan change from an admiral's decision."""
+        plan = getattr(decision, "battle_plan_update", None)
+        if not plan:
+            return
+        if self.config.verbose:
+            print(f"    Standing plan updated:")
+            for line in plan.strip().split('\n'):
+                print(f"      {line}")
+        if self.recorder:
+            self.recorder.record_admiral_plan(
+                timestamp=self.simulation.current_time,
+                admiral_name=admiral.name,
+                faction=faction,
+                plan=plan,
+            )
 
     def _get_captain_decision_with_discussion(
         self,
@@ -2121,6 +2197,16 @@ class LLMBattleRunner:
             radiators_extended=radiators_extended,
             acknowledgment=acknowledgment,
         )
+
+        # Captain's log notes ride along with the decision's tool calls.
+        for tc in getattr(captain, 'last_tool_calls', None) or []:
+            if tc.name == "log_note" and tc.arguments.get("note"):
+                self.recorder.record_captain_log(
+                    timestamp=self.simulation.current_time,
+                    ship_id=ship_id,
+                    captain_name=captain.name,
+                    note=str(tc.arguments["note"]),
+                )
 
     def _log_fleet_decision(self, all_commands: Dict[str, List[Any]]) -> None:
         """Log fleet decision point."""

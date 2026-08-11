@@ -251,6 +251,31 @@ CAPTAIN_TOOLS_BASE = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "log_note",
+            "description": (
+                "Captain's log: write a short note to your future self. Your last few "
+                "notes are shown back to you at every checkpoint - they are your ONLY "
+                "memory of your own intent between decisions. Use it to keep a "
+                "multi-checkpoint plan coherent: what you are trying to do, what would "
+                "change your mind, what to check next checkpoint. "
+                "E.g. 'Pass 1 done, missed. BRAKE now, re-attack from his tail; if his "
+                "PD drops below 3 turrets, commit torpedoes.' Keep it under ~250 chars."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "note": {
+                        "type": "string",
+                        "description": "The note to your future self (kept until pushed out by newer notes)."
+                    }
+                },
+                "required": ["note"]
+            }
+        }
+    },
 ]
 
 # Torpedo tool - only available if ship has torpedoes

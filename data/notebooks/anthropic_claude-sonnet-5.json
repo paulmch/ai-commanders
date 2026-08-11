@@ -1,0 +1,65 @@
+{
+  "model": "anthropic/claude-sonnet-5",
+  "entries": [
+    {
+      "id": "48442391",
+      "role": "admiral",
+      "text": "When issuing focus-fire orders across multiple turns, keep the designated priority target the same until it is destroyed or disengages; repeatedly re-picking a new 'closest/priority' target each order cycle fragments damage and delays kills even if you still win on aggregate.",
+      "status": "accepted",
+      "source_battle": "data/recordings/battle_claude_sonnet_5_vs_deepseek_v4_flash_07_20260811_023316.json",
+      "source_outcome": "won vs deepseek/deepseek-v4-flash-0731",
+      "created_at": "2026-08-11T02:34:07",
+      "validation": {
+        "with_wins": 0,
+        "with_losses": 0,
+        "without_wins": 0,
+        "without_losses": 0
+      }
+    },
+    {
+      "id": "e03e29f6",
+      "role": "admiral",
+      "text": "If the enemy fleet splits into separate clusters, split your own force to mirror each cluster (matching or exceeding local ship count) rather than keeping one mass formation chasing a scattered enemy - this preserves numerical superiority in every sub-engagement.",
+      "status": "accepted",
+      "source_battle": "data/recordings/battle_claude_sonnet_5_vs_deepseek_v4_flash_07_20260811_023316.json",
+      "source_outcome": "won vs deepseek/deepseek-v4-flash-0731",
+      "created_at": "2026-08-11T02:34:07",
+      "validation": {
+        "with_wins": 0,
+        "with_losses": 0,
+        "without_wins": 0,
+        "without_losses": 0
+      }
+    },
+    {
+      "id": "b3abc5e9",
+      "role": "admiral",
+      "text": "Against a slow/stationary clustered enemy, opening with a synchronized massed torpedo alpha-strike on a single high-value target (focus fire) rapidly attrits their PD and lands multiple penetrations/kills - default to this when enemy is stationary and grouped at long range.",
+      "status": "pending",
+      "source_battle": "data/recordings/battle_claude_sonnet_5_vs_deepseek_v4_flash_07_20260811_095218.json",
+      "source_outcome": "won vs deepseek/deepseek-v4-flash-0731",
+      "created_at": "2026-08-11T12:16:31",
+      "validation": {
+        "with_wins": 0,
+        "with_losses": 0,
+        "without_wins": 0,
+        "without_losses": 0
+      }
+    },
+    {
+      "id": "022464a3",
+      "role": "admiral",
+      "text": "When enemy is decisively outnumbered and proposes a draw after losing most capitals, reject and press the attack - finishing off crippled remnants costs little and secures a clean kill rather than leaving a threat alive.",
+      "status": "pending",
+      "source_battle": "data/recordings/battle_claude_sonnet_5_vs_deepseek_v4_flash_07_20260811_095218.json",
+      "source_outcome": "won vs deepseek/deepseek-v4-flash-0731",
+      "created_at": "2026-08-11T12:16:31",
+      "validation": {
+        "with_wins": 0,
+        "with_losses": 0,
+        "without_wins": 0,
+        "without_losses": 0
+      }
+    }
+  ]
+}

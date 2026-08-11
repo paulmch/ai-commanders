@@ -9,6 +9,7 @@ different providers against each other in the same battle.
 import json
 import os
 import random
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -74,7 +75,14 @@ class ToolCall:
 
 @dataclass
 class CallStats:
-    """Per-client counters so degraded runs are visible instead of silent."""
+    """
+    Per-client counters so degraded runs are visible instead of silent.
+
+    One client is shared by every agent of a battle and calls now run
+    concurrently (parallel per-ship orders / captain decisions), so every
+    read-modify-write goes through a lock: unsynchronized `+=` from worker
+    threads silently loses increments.
+    """
     calls: int = 0
     failures: int = 0
     retries: int = 0
@@ -84,28 +92,49 @@ class CallStats:
     prompt_tokens: int = 0
     cache_discount: float = 0.0
     errors: List[str] = field(default_factory=list)
+    _lock: threading.Lock = field(
+        default_factory=threading.Lock, repr=False, compare=False
+    )
 
     @property
     def cache_hit_rate(self) -> float:
         """Fraction of prompt tokens served from cache across this client."""
         return (self.cached_tokens / self.prompt_tokens) if self.prompt_tokens else 0.0
 
+    def record_call(self) -> None:
+        with self._lock:
+            self.calls += 1
+
+    def record_retry(self) -> None:
+        with self._lock:
+            self.retries += 1
+
+    def record_truncated(self) -> None:
+        with self._lock:
+            self.truncated += 1
+
+    def record_malformed(self) -> None:
+        with self._lock:
+            self.malformed_arguments += 1
+
     def record_usage(self, usage: Dict[str, Any]) -> None:
         """Record cache effectiveness from an OpenRouter usage block."""
         if not usage:
             return
-        self.prompt_tokens += usage.get("prompt_tokens", 0) or 0
-        details = usage.get("prompt_tokens_details") or {}
-        self.cached_tokens += details.get("cached_tokens", 0) or 0
-        discount = usage.get("cache_discount")
-        if discount:
-            self.cache_discount += discount
+        with self._lock:
+            self.prompt_tokens += usage.get("prompt_tokens", 0) or 0
+            details = usage.get("prompt_tokens_details") or {}
+            self.cached_tokens += details.get("cached_tokens", 0) or 0
+            discount = usage.get("cache_discount")
+            if discount:
+                self.cache_discount += discount
 
     def record_error(self, msg: str) -> None:
-        self.failures += 1
-        # Keep the log bounded; a wedged battle should not accumulate forever.
-        if len(self.errors) < 50:
-            self.errors.append(msg)
+        with self._lock:
+            self.failures += 1
+            # Keep the log bounded; a wedged battle should not accumulate forever.
+            if len(self.errors) < 50:
+                self.errors.append(msg)
 
 
 def _strip_prefix(model: str) -> str:
@@ -251,7 +280,7 @@ class CaptainClient:
 
         for attempt in range(1, MAX_ATTEMPTS + 1):
             try:
-                self.stats.calls += 1
+                self.stats.record_call()
                 response = self._client.post(self.BASE_URL, headers=self._headers(), json=payload)
                 response.raise_for_status()
                 return response.json()
@@ -277,7 +306,7 @@ class CaptainClient:
                 raise LLMCallError(msg, retryable=False) from e
 
             if attempt < MAX_ATTEMPTS:
-                self.stats.retries += 1
+                self.stats.record_retry()
                 delay = min(BACKOFF_BASE_S * (2 ** (attempt - 1)), BACKOFF_MAX_S)
                 delay += random.uniform(0, delay * 0.25)  # jitter
                 print(f"[LLM RETRY] {what}: {last_error} - retrying in {delay:.1f}s "
@@ -298,7 +327,7 @@ class CaptainClient:
                 # Truncated or malformed JSON. Do NOT silently substitute {} - an
                 # empty argument dict is a valid-looking command that means
                 # something entirely different from what the model intended.
-                self.stats.malformed_arguments += 1
+                self.stats.record_malformed()
                 print(f"[LLM WARN] Discarding tool call '{tc.get('function', {}).get('name')}' "
                       f"with unparseable arguments (finish_reason={finish_reason})")
                 continue
@@ -366,7 +395,7 @@ class CaptainClient:
         finish_reason = choice.get("finish_reason")
 
         if finish_reason == "length":
-            self.stats.truncated += 1
+            self.stats.record_truncated()
             print(f"[LLM WARN] Response truncated at max_tokens={self.max_tokens} "
                   f"for {request_model}; some orders may be missing.")
 

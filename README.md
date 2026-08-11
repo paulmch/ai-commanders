@@ -88,6 +88,28 @@ Admirals draft with a full tactical briefing - catalog stats, calibrated
 weapon effects, torpedo flight profile, counterplay doctrine. Details in
 `docs/draft_mode.md`.
 
+### Commander Notebooks (Cross-Battle Learning)
+
+Agents are stateless between battles by default. The refinement loop gives a
+model a small notebook of battle-earned lessons - distilled from a finished
+recording, then **rematch-gated** before any prompt ever sees them:
+
+```bash
+# 1. Distill pending lessons from a recording (admiral- and captain-level)
+uv run python scripts/refine_commander.py analyze data/recordings/battle_x.json
+
+# 2. Gate a lesson on evidence: N battles WITH it vs N WITHOUT (costs API usage)
+uv run python scripts/refine_commander.py validate anthropic/claude-sonnet-5 \
+    <entry-id> --config data/fleet_config_x.json --battles 3 --auto
+
+# 3. Fight with notebooks injected (off by default - keeps evals clean)
+uv run python scripts/run_llm_battle.py --fleet-config ... --notebooks
+```
+
+In battle, both command levels also keep *self-authored* state: the admiral's
+standing battle plan (`set_battle_plan`, private memory echoed back every
+checkpoint) and the captain's log (`log_note`, notes to their future self).
+
 ## 3D Battle Visualizer
 
 A Three.js-based tactical replay viewer for watching recorded battles in full 3D.
@@ -468,6 +490,34 @@ ready()                # Signal turn complete
 - **Outcome**: Beta fleet eliminated
 - **Notable**: Gemini used smart evasive tactics while focusing fire on alpha_1, but was overwhelmed by coordinated intercept + fire orders
 - **Key lesson**: Remember to set throttle on EVASIVE maneuvers and re-issue orders every turn!
+
+### Battle Results: The Notebook Wars - Sonnet 5 vs DeepSeek v4 Flash (2026-08-11)
+
+First battles with standing battle plans, parallel checkpoints, and (game 2)
+commander notebooks injected.
+
+**Game 1 - 100-pt draft, clean slate.** Sonnet's mixed 8-hull wall (4 destroyers,
+2 frigates, 2 torpedo corvettes) def. DeepSeek's 6-destroyer "PD Wall"
+195.1 : 115.8 on points - a classic Newtonian double joust: formations held
+through the first blow-through pass, dissolved into a 300 km melee by the second,
+one kill (torpedo-assisted focus fire). Both admirals then wrote notebook lessons
+via `refine_commander.py analyze` - Sonnet critiqued its own target churn,
+DeepSeek concluded "kill the torpedo carriers first."
+
+**Game 2 - 200-pt rematch, lessons injected.** Sonnet drafted six torpedo
+cruisers (288 rounds); DeepSeek's lesson steered it to buy carriers of its own,
+but anchored to a 3-battleship shield wall that advanced into the storm.
+**Beta fleet eliminated 6-0 in 215 seconds.** Mutual lead-ship decapitation at
+T+110, every Sovereign gutted by 8-11 modules per salvo wave, draw proposed by
+DeepSeek's own standing-plan abort clause ("2v6, abort condition met") and
+answered with torpedoes.
+
+- **Notable**: DeepSeek's counter-battery killed exactly the two cruisers it
+  targeted, on the cadence its plan scheduled - a faithfully-applied lesson that
+  still lost to a 1.0g fleet's inability to refuse the merge. True lessons can be
+  traps; that's why the rematch gate exists.
+- **Key lesson**: at 200 points the torpedo-saturation meta is even more
+  dominant than at 100 (`cruiser_torpedo` cost rebalance pending).
 
 ## Ship Classes
 

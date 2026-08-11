@@ -166,6 +166,15 @@ Examples:
             "admiral model - silently text-only otherwise)"
         ),
     )
+    parser.add_argument(
+        "--notebooks",
+        action="store_true",
+        help=(
+            "Inject each model's accepted commander-notebook lessons "
+            "(data/notebooks, built by scripts/refine_commander.py) into its "
+            "prompts. Off by default so battles measure the raw model."
+        ),
+    )
 
     # Output
     parser.add_argument(
@@ -201,6 +210,8 @@ Examples:
                 for fleet in (fleet_config.alpha_fleet, fleet_config.beta_fleet):
                     if fleet.admiral:
                         fleet.admiral.vision = True
+            if args.notebooks:
+                fleet_config.use_notebooks = True
             if not args.quiet:
                 print(f"FLEET MODE: Loading configuration from {args.fleet_config}")
                 print(f"Battle: {fleet_config.battle_name}")

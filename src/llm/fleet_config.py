@@ -32,6 +32,9 @@ class AdmiralConfig:
     name: Optional[str] = None
     personality: Optional[str] = None
     faction_name: Optional[str] = None
+    # Accepted commander-notebook lessons (src/llm/notebook.py), injected by
+    # the runner when the battle opts in via use_notebooks.
+    notebook_text: Optional[str] = None
 
 
 @dataclass
@@ -83,6 +86,10 @@ class BattleFleetConfig:
     record_battle: bool = True
     record_sim_trace: bool = False
     personality_selection: bool = True  # Let models choose personalities
+    # Inject each model's accepted commander-notebook lessons into its prompts.
+    # OFF by default so evaluation battles measure the raw model; turn on when
+    # the point is cross-battle learning (model + accumulated experience).
+    use_notebooks: bool = False
 
     @classmethod
     def from_json(cls, path: str) -> 'BattleFleetConfig':
@@ -124,6 +131,7 @@ class BattleFleetConfig:
             record_battle=data.get("record_battle", True),
             record_sim_trace=data.get("record_sim_trace", False),
             personality_selection=data.get("personality_selection", True),
+            use_notebooks=data.get("use_notebooks", False),
         )
 
     def get_all_ships(self) -> List[ShipConfig]:
