@@ -1,0 +1,137 @@
+{
+  "budget": 150,
+  "alpha_captain_model": "heuristic",
+  "beta_captain_model": "heuristic",
+  "alpha": {
+    "faction": "alpha",
+    "budget": 150,
+    "points_spent": 150,
+    "auto_draft": false,
+    "formation_name": "Held PD cluster",
+    "selection_rationale": "All-1.5g armored saturation: 20 launchers put 40 torpedoes in the same window, which no legal PD wall can dwell down, and the hulls can close under 241 cm noses. Same-speed gun capitals cannot refuse the fight; leftover points would only add a slower or unarmed ship and break the doctrine.",
+    "formation_rationale": "All five hulls are fragile torpedo cruisers, so the entire force is held at -50 to -90 km to stay out of the first gun/spinal exchange. Compact 3D offsets keep every ship within ~100 km of at least two neighbors for overlapping PD against incoming torpedoes, while modest y/z spread spoils a single enemy spinal alignment without diluting the nest.",
+    "ships": [
+      {
+        "ship_id": "alpha_1",
+        "ship_name": "TIS Harpoon-1",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          -70.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_2",
+        "ship_name": "TIS Harpoon-2",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          -50.0,
+          55.0,
+          35.0
+        ]
+      },
+      {
+        "ship_id": "alpha_3",
+        "ship_name": "TIS Harpoon-3",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          -50.0,
+          -55.0,
+          35.0
+        ]
+      },
+      {
+        "ship_id": "alpha_4",
+        "ship_name": "TIS Harpoon-4",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          -90.0,
+          40.0,
+          -45.0
+        ]
+      },
+      {
+        "ship_id": "alpha_5",
+        "ship_name": "TIS Harpoon-5",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          -90.0,
+          -40.0,
+          -45.0
+        ]
+      }
+    ]
+  },
+  "beta": {
+    "faction": "beta",
+    "budget": 150,
+    "points_spent": 150,
+    "auto_draft": false,
+    "formation_name": "Staggered Torpedo Wedge",
+    "selection_rationale": "Commit fully to torpedo-saturation doctrine: five cruiser_torpedo hulls (240 torpedoes total, 40-round volleys) overwhelm point defense with coordinated saturation strikes while their heavy cruiser-grade armor (241/41/48cm) lets them survive the approach. Uniform 1.5g speed keeps the fleet coherent (no mixed-speed doctrine confusion), their 4x PD lasers each give solid mutual point-defense against any enemy torpedo reply, and since coilgun accuracy craters against evading targets at long range while our torpedoes accelerate and steer the whole way in, we should land devastating hits well before enemy capital-ship guns become effective.",
+    "formation_rationale": "All five hulls are fragile torpedo cruisers with no dedicated escorts, so the whole fleet is held slightly back (-x) as a reserve posture to delay entry into effective gun range while staying within torpedo strike distance. Lateral and vertical staggering (y up to \u00b1120km, z up to \u00b130km) spreads the fleet so no single enemy spinal weapon shot can rake through multiple hulls on one line, while keeping adjacent ships within ~50-70km of each other so their point-defense envelopes still overlap to intercept incoming torpedoes/missiles. The wedge shape also presents a harder firing solution for enemy direct-fire weapons while letting all five ships bring torpedoes to bear simultaneously.",
+    "ships": [
+      {
+        "ship_id": "beta_1",
+        "ship_name": "OCS Harpoon-1",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          -30.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_2",
+        "ship_name": "OCS Harpoon-2",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          -20.0,
+          70.0,
+          15.0
+        ]
+      },
+      {
+        "ship_id": "beta_3",
+        "ship_name": "OCS Harpoon-3",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          -20.0,
+          -70.0,
+          -15.0
+        ]
+      },
+      {
+        "ship_id": "beta_4",
+        "ship_name": "OCS Harpoon-4",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          -40.0,
+          120.0,
+          30.0
+        ]
+      },
+      {
+        "ship_id": "beta_5",
+        "ship_name": "OCS Harpoon-5",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          -40.0,
+          -120.0,
+          -30.0
+        ]
+      }
+    ]
+  }
+}

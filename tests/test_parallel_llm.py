@@ -52,7 +52,8 @@ class TimingStubClient:
             return "phase1"
         return "captain"
 
-    def decide_with_tools(self, messages, tools, model=None, temperature=None):
+    def decide_with_tools(self, messages, tools, model=None, temperature=None,
+                          tool_choice="auto"):
         kind = self._classify(tools)
         start = time.monotonic()
         time.sleep(CALL_SLEEP_S)

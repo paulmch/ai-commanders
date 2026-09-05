@@ -18,6 +18,9 @@ from src.llm.fleet_config import AdmiralConfig, BattleFleetConfig
 from src.llm.fleet_draft import (
     FORMATION_MAX_OFFSET_KM,
     SHIP_POINT_COSTS,
+    _mount_throughput_gj_per_s,
+    ship_point_cost,
+    torpedo_round_energy_gj,
     apply_formation,
     auto_draft,
     build_catalog_text,
@@ -48,6 +51,71 @@ def test_every_costed_hull_exists_in_fleet_data(fleet_data):
 def test_every_fleet_data_hull_is_costed(fleet_data):
     for ship_type in fleet_data["ships"]:
         assert ship_type in SHIP_POINT_COSTS, ship_type
+
+
+def test_torpedo_cost_scales_with_magazine_depth(fleet_data):
+    """Amount of torpedoes is a price driver: same hull, more rounds, more points."""
+    import copy
+    lean = copy.deepcopy(fleet_data)
+    for weapon in lean["ships"]["cruiser_torpedo"]["weapons"]:
+        if weapon.get("type") == "torpedo_launcher":
+            weapon["magazine"] = 6  # half the stock 12-round tubes
+    assert (ship_point_cost("cruiser_torpedo", lean)
+            < ship_point_cost("cruiser_torpedo", fleet_data))
+
+
+def test_torpedo_cost_scales_with_warhead_yield(fleet_data):
+    """Explosive factor is a price driver: a heavier penetrator costs more."""
+    import copy
+    heavy = copy.deepcopy(fleet_data)
+    heavy["weapon_types"]["torpedo_launcher"]["penetrator_mass_kg"] = 500.0
+    assert (ship_point_cost("cruiser_torpedo", heavy)
+            > ship_point_cost("cruiser_torpedo", fleet_data))
+    # A pure-gun hull is untouched by torpedo yield.
+    assert ship_point_cost("dreadnought", heavy) == ship_point_cost(
+        "dreadnought", fleet_data)
+
+
+def test_torpedo_round_energy_matches_engine_closure_floor(fleet_data):
+    """18 GJ = 250kg at the 12 km/s floor the guidance law holds."""
+    from src.torpedo import MIN_CLOSING_SPEED_KPS
+    assert MIN_CLOSING_SPEED_KPS == 12.0
+    assert torpedo_round_energy_gj(fleet_data) == pytest.approx(18.0, rel=1e-3)
+
+
+def test_torpedo_armament_is_not_nearly_free(fleet_data):
+    """
+    The 2026-08-13 rebalance. cruiser_torpedo and cruiser are the SAME hull
+    (identical mass, armour, acceleration) - the torpedo variant swaps guns
+    for 4 launchers and 2 extra PD. It used to cost 4 points more for 48
+    guided rounds; now the magazine is priced on what it delivers.
+    """
+    gap = SHIP_POINT_COSTS["cruiser_torpedo"] - SHIP_POINT_COSTS["cruiser"]
+    assert gap >= 20, f"48 torpedoes should not cost {gap} points"
+    # A fleet-killer should not undercut the hull it kills.
+    assert SHIP_POINT_COSTS["cruiser_torpedo"] > SHIP_POINT_COSTS["dreadnought"]
+
+
+def test_points_per_delivered_energy_is_within_one_order(fleet_data):
+    """
+    Old table: 5.0 pts per GJ/s for cruiser_torpedo vs 87.7 for the
+    dreadnought - a 17.5x gap that made saturation the only rational draft.
+    """
+    def throughput(stype):
+        spec = fleet_data["ships"][stype]
+        total = 0.0
+        for weapon in spec.get("weapons", []):
+            wtype = weapon.get("type")
+            if wtype == "torpedo_launcher":
+                total += torpedo_round_energy_gj(fleet_data) / fleet_data[
+                    "weapon_types"]["torpedo_launcher"]["cooldown_s"]
+            elif wtype and wtype != "pd_laser":
+                total += _mount_throughput_gj_per_s(wtype, fleet_data)
+        return total
+
+    torp = SHIP_POINT_COSTS["cruiser_torpedo"] / throughput("cruiser_torpedo")
+    gun = SHIP_POINT_COSTS["dreadnought"] / throughput("dreadnought")
+    assert gun / torp < 10.0, f"efficiency gap still {gun / torp:.1f}x"
 
 
 def test_catalog_text_mentions_all_hulls(fleet_data):
@@ -184,13 +252,14 @@ class DraftStubClient:
     def __init__(self):
         self.select_calls = 0
 
-    def decide_with_tools(self, messages, tools, model=None, temperature=None):
+    def decide_with_tools(self, messages, tools, model=None, temperature=None,
+                          tool_choice="auto"):
         names = {t["function"]["name"] for t in tools}
         if "select_fleet" in names:
             self.select_calls += 1
             if self.select_calls == 1:
                 return [ToolCall(id="s1", name="select_fleet", arguments={
-                    "ships": [{"ship_type": "dreadnought", "count": 3}],
+                    "ships": [{"ship_type": "dreadnought", "count": 5}],
                     "rationale": "MORE DAKKA"})]
             return [ToolCall(id="s2", name="select_fleet", arguments={
                 "ships": [{"ship_type": "cruiser_torpedo", "count": 2},
@@ -213,11 +282,12 @@ def test_run_admiral_draft_with_retry(fleet_data):
     stub = DraftStubClient()
     draft = run_admiral_draft(
         client=stub, model="stub-model", admiral_name="Admiral Stub",
-        faction="alpha", fleet_data=fleet_data, budget=100, max_ships=8,
+        faction="alpha", fleet_data=fleet_data, budget=200, max_ships=8,
         verbose=False)
     assert stub.select_calls == 2  # retry loop engaged
     assert not draft.auto
-    assert draft.points_spent == 2 * 30 + 2 * 16
+    assert draft.points_spent == (2 * SHIP_POINT_COSTS["cruiser_torpedo"]
+                                  + 2 * SHIP_POINT_COSTS["destroyer"])
     assert [s.ship_type for s in draft.ships] == [
         "cruiser_torpedo", "cruiser_torpedo", "destroyer", "destroyer"]
     assert draft.formation_name == "gun screen"
@@ -227,7 +297,8 @@ def test_run_admiral_draft_with_retry(fleet_data):
 
 
 class UselessClient:
-    def decide_with_tools(self, messages, tools, model=None, temperature=None):
+    def decide_with_tools(self, messages, tools, model=None, temperature=None,
+                          tool_choice="auto"):
         return []
 
 

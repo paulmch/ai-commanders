@@ -1,0 +1,203 @@
+{
+  "budget": 150,
+  "alpha_captain_model": "heuristic",
+  "beta_captain_model": "heuristic",
+  "alpha": {
+    "faction": "alpha",
+    "budget": 150,
+    "points_spent": 142,
+    "auto_draft": true,
+    "formation_name": "staggered wall",
+    "selection_rationale": "auto-draft",
+    "formation_rationale": "",
+    "ships": [
+      {
+        "ship_id": "alpha_1",
+        "ship_name": "TIS Falchion-1",
+        "ship_type": "destroyer",
+        "cost": 18,
+        "offset_km": [
+          0.0,
+          -42.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_2",
+        "ship_name": "TIS Falchion-2",
+        "ship_type": "destroyer",
+        "cost": 18,
+        "offset_km": [
+          -10.0,
+          -30.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_3",
+        "ship_name": "TIS Bastion-1",
+        "ship_type": "cruiser",
+        "cost": 28,
+        "offset_km": [
+          0.0,
+          -18.0,
+          6.0
+        ]
+      },
+      {
+        "ship_id": "alpha_4",
+        "ship_name": "TIS Ward-1",
+        "ship_type": "frigate",
+        "cost": 7,
+        "offset_km": [
+          -10.0,
+          -6.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_5",
+        "ship_name": "TIS Falchion-3",
+        "ship_type": "destroyer",
+        "cost": 18,
+        "offset_km": [
+          0.0,
+          6.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_6",
+        "ship_name": "TIS Falchion-4",
+        "ship_type": "destroyer",
+        "cost": 18,
+        "offset_km": [
+          -10.0,
+          18.0,
+          6.0
+        ]
+      },
+      {
+        "ship_id": "alpha_7",
+        "ship_name": "TIS Bastion-2",
+        "ship_type": "cruiser",
+        "cost": 28,
+        "offset_km": [
+          0.0,
+          30.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_8",
+        "ship_name": "TIS Ward-2",
+        "ship_type": "frigate",
+        "cost": 7,
+        "offset_km": [
+          -10.0,
+          42.0,
+          0.0
+        ]
+      }
+    ]
+  },
+  "beta": {
+    "faction": "beta",
+    "budget": 150,
+    "points_spent": 142,
+    "auto_draft": true,
+    "formation_name": "staggered wall",
+    "selection_rationale": "auto-draft",
+    "formation_rationale": "",
+    "ships": [
+      {
+        "ship_id": "beta_1",
+        "ship_name": "OCS Falchion-1",
+        "ship_type": "destroyer",
+        "cost": 18,
+        "offset_km": [
+          0.0,
+          -42.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_2",
+        "ship_name": "OCS Falchion-2",
+        "ship_type": "destroyer",
+        "cost": 18,
+        "offset_km": [
+          -10.0,
+          -30.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_3",
+        "ship_name": "OCS Bastion-1",
+        "ship_type": "cruiser",
+        "cost": 28,
+        "offset_km": [
+          0.0,
+          -18.0,
+          6.0
+        ]
+      },
+      {
+        "ship_id": "beta_4",
+        "ship_name": "OCS Ward-1",
+        "ship_type": "frigate",
+        "cost": 7,
+        "offset_km": [
+          -10.0,
+          -6.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_5",
+        "ship_name": "OCS Falchion-3",
+        "ship_type": "destroyer",
+        "cost": 18,
+        "offset_km": [
+          0.0,
+          6.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_6",
+        "ship_name": "OCS Falchion-4",
+        "ship_type": "destroyer",
+        "cost": 18,
+        "offset_km": [
+          -10.0,
+          18.0,
+          6.0
+        ]
+      },
+      {
+        "ship_id": "beta_7",
+        "ship_name": "OCS Bastion-2",
+        "ship_type": "cruiser",
+        "cost": 28,
+        "offset_km": [
+          0.0,
+          30.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_8",
+        "ship_name": "OCS Ward-2",
+        "ship_type": "frigate",
+        "cost": 7,
+        "offset_km": [
+          -10.0,
+          42.0,
+          0.0
+        ]
+      }
+    ]
+  }
+}

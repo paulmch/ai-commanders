@@ -34,7 +34,8 @@ class StubClient:
     def __init__(self):
         self.captured = []
 
-    def decide_with_tools(self, messages, tools, model=None, temperature=None):
+    def decide_with_tools(self, messages, tools, model=None, temperature=None,
+                          tool_choice="auto"):
         self.captured.append({"messages": messages, "tools": tools, "model": model})
         names = {t["function"]["name"] for t in tools}
         if "set_fleet_directive" in names:

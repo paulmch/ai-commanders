@@ -349,6 +349,7 @@ class CaptainClient:
         tools: List[Dict[str, Any]],
         model: Optional[str] = None,
         temperature: Optional[float] = None,
+        tool_choice: str = "auto",
     ) -> List[ToolCall]:
         """
         Make a decision using tool/function calling.
@@ -358,6 +359,11 @@ class CaptainClient:
             tools: Available tools in OpenAI function calling format
             model: Optional model to use (defaults to client's model)
             temperature: Optional per-call sampling temperature
+            tool_choice: "auto" lets the model reply in prose instead of
+                calling anything - right for captains, who may have nothing
+                to say. Pass "required" where a tool call IS the answer (the
+                draft phase): reasoning models otherwise burn their turn
+                thinking out loud and the caller sees no call at all.
 
         Returns:
             List of ToolCall objects representing the LLM's decisions. An empty
@@ -372,7 +378,7 @@ class CaptainClient:
             "model": request_model,
             "messages": apply_cache_breakpoint(messages, request_model),
             "tools": tools,
-            "tool_choice": "auto",
+            "tool_choice": tool_choice,
             "max_tokens": self.max_tokens,
             # Ask OpenRouter to report cache effectiveness so a silently cold
             # cache shows up as a number instead of an unnoticed cost.

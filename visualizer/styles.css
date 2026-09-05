@@ -1674,3 +1674,114 @@ body {
     width: 200px;
   }
 }
+
+/* ============ Live Mode ============ */
+
+.live-hud {
+  position: absolute;
+  top: 84px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 16px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 1px;
+  color: var(--text-primary);
+  z-index: 60;
+  white-space: nowrap;
+}
+
+.live-hud.hidden {
+  display: none;
+}
+
+.live-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.live-dot.active {
+  background: var(--accent-critical);
+  box-shadow: 0 0 8px var(--accent-critical);
+  animation: livePulse 1.6s ease-in-out infinite;
+}
+
+@keyframes livePulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+.live-toggles {
+  display: flex;
+  gap: 6px;
+}
+
+.live-toggle {
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 1px;
+  padding: 3px 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.live-toggle:hover {
+  border-color: var(--border-accent);
+  color: var(--text-secondary);
+}
+
+.live-toggle.active {
+  color: var(--alpha-primary);
+  border-color: var(--border-accent);
+  background: rgba(0, 212, 255, 0.08);
+}
+
+/* Next-checkpoint tick on the timeline */
+.checkpoint-marker {
+  position: absolute;
+  top: -4px;
+  width: 2px;
+  height: 16px;
+  background: var(--accent-gold);
+  box-shadow: 0 0 6px rgba(255, 215, 0, 0.6);
+  transform: translateX(-1px);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.checkpoint-marker.hidden {
+  display: none;
+}
+
+.checkpoint-label {
+  position: absolute;
+  top: -13px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--accent-gold);
+  letter-spacing: 1px;
+  white-space: nowrap;
+}
+
+.selector-btn.live {
+  color: var(--accent-critical);
+  border-color: rgba(255, 0, 85, 0.4);
+}
+
+.selector-btn.live:hover {
+  background: rgba(255, 0, 85, 0.12);
+  box-shadow: 0 0 15px rgba(255, 0, 85, 0.25);
+}

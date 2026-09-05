@@ -20,6 +20,7 @@ class BattleVisualizer {
 
     // State
     this.isInitialized = false;
+    this.live = null; // Live-mode state; null when replaying a saved recording
     this.selectedShipId = null;
     this.lastTime = 0;
     this.lastHitEventTime = 0; // Track hit events for visual effects
@@ -42,10 +43,14 @@ class BattleVisualizer {
     this.setupEventListeners();
     this.hideLoading();
 
-    // ?recording=<url> auto-loads a recording, skipping the file selector
-    // (used by the launch scripts and the Playwright harness)
-    const autoUrl = new URLSearchParams(window.location.search).get('recording');
-    if (autoUrl) {
+    // ?live=1 connects to a running battle server; ?recording=<url>
+    // auto-loads a recording, skipping the file selector (used by the
+    // launch scripts and the Playwright harness)
+    const params = new URLSearchParams(window.location.search);
+    const autoUrl = params.get('recording');
+    if (params.get('live')) {
+      this.startLiveMode(params.get('live_base') || '/live');
+    } else if (autoUrl) {
       this.loadFromUrl(autoUrl);
     } else {
       this.showFileSelector();
@@ -131,6 +136,16 @@ class BattleVisualizer {
       urlInput: document.getElementById('urlInput'),
       loadUrlBtn: document.getElementById('loadUrlBtn'),
       loadNewBtn: document.getElementById('loadNewBtn'),
+      liveBtn: document.getElementById('liveBtn'),
+
+      // Live mode
+      liveHud: document.getElementById('liveHud'),
+      liveDot: document.getElementById('liveDot'),
+      liveStatusText: document.getElementById('liveStatusText'),
+      liveFollowBtn: document.getElementById('liveFollowBtn'),
+      livePathsBtn: document.getElementById('livePathsBtn'),
+      checkpointMarker: document.getElementById('checkpointMarker'),
+      checkpointLabel: document.getElementById('checkpointLabel'),
     };
   }
 
@@ -167,6 +182,17 @@ class BattleVisualizer {
       this.resetAndShowFileSelector();
     });
 
+    // Live mode entry + HUD toggles
+    this.elements.liveBtn?.addEventListener('click', () => {
+      window.location.href = '?live=1';
+    });
+    this.elements.liveFollowBtn?.addEventListener('click', () => {
+      if (this.live) this.setLiveFollow(!this.live.follow);
+    });
+    this.elements.livePathsBtn?.addEventListener('click', () => {
+      if (this.live) this.setLivePaths(!this.live.showPaths);
+    });
+
     // Playback controls
     this.elements.playPauseBtn.addEventListener('click', () => {
       this.togglePlayback();
@@ -174,6 +200,7 @@ class BattleVisualizer {
 
     this.elements.timeline.addEventListener('input', (e) => {
       if (this.timeController) {
+        this.setLiveFollow(false); // manual scrub releases the live head
         const percent = e.target.value / 1000;
         this.timeController.seekPercent(percent);
       }
@@ -233,8 +260,10 @@ class BattleVisualizer {
         e.preventDefault();
         this.togglePlayback();
       } else if (e.code === 'ArrowLeft') {
+        this.setLiveFollow(false);
         this.timeController?.seek(this.timeController.currentTime - 5);
       } else if (e.code === 'ArrowRight') {
+        this.setLiveFollow(false);
         this.timeController?.seek(this.timeController.currentTime + 5);
       }
     });
@@ -313,8 +342,11 @@ class BattleVisualizer {
 
     // Initialize time controller. The extra seconds are an epilogue: a ship
     // destroyed on the final tick still gets its full destruction sequence
-    // instead of freezing mid-fireball when the recording ends.
-    this.timeController = new TimeController(this.loader.duration + 20);
+    // instead of freezing mid-fireball when the recording ends. A live
+    // battle has no epilogue until it actually ends - the timeline head IS
+    // the latest frame.
+    const epilogue = this.live && !this.live.ended ? 0 : 20;
+    this.timeController = new TimeController(this.loader.duration + epilogue);
     this.timeController.onTimeChange((time, duration) => {
       this.updateTimeDisplay(time, duration);
     });
@@ -365,15 +397,23 @@ class BattleVisualizer {
       const deltaTime = (timestamp - lastTimestamp) / 1000;
       lastTimestamp = timestamp;
 
-      if (this.isInitialized && deltaTime < 1) {
-        // Update time
-        this.timeController.update(deltaTime);
+      // Headless harnesses (scripts/viewer_snapshot.py) render frames far
+      // slower than realtime and opt out of the stalled-tab guard.
+      if (this.isInitialized && (deltaTime < 1 || this.slowFrameOk)) {
+        // Update time. Live follow-head tracks the newest frame instead of
+        // free-running (which would auto-pause at the still-growing end).
+        if (this.live?.started && this.live.follow && !this.live.ended && this.timeController.isPlaying) {
+          this.updateFollowHead(deltaTime);
+        } else {
+          this.timeController.update(deltaTime);
+        }
 
         // Get interpolated state (pass loader for projectile extrapolation to impact)
         const frameData = this.loader.getFrameAt(this.timeController.currentTime);
         this.currentState = Interpolator.getInterpolatedState(frameData, this.loader);
 
         const currentPlaybackTime = this.timeController.currentTime;
+        this.scene.currentTime = currentPlaybackTime;
 
         // Update ships (with radiator state from the event timeline)
         for (const [shipId, state] of Object.entries(this.currentState.ships)) {
@@ -482,6 +522,260 @@ class BattleVisualizer {
     };
 
     this.animationId = requestAnimationFrame(animate);
+  }
+
+  // ==================== Live mode ====================
+
+  /**
+   * Enter live mode: poll the battle server, stream frames into the
+   * loader, and keep playback tracking the live head.
+   * @param {string} base - Base URL of the live API (default '/live')
+   */
+  startLiveMode(base) {
+    this.live = {
+      base: base,
+      phase: null,
+      status: null,
+      checkpoint: 0,
+      simTimeS: 0,
+      nextCheckpointT: 0,
+      waitingFor: [],
+      draft: null,
+      follow: true,
+      showPaths: true,
+      lastFrameT: 0,
+      started: false, // battle data received and scene initialized
+      ended: false,
+      connected: false,
+      timer: null,
+      polling: false,
+    };
+    this.hideFileSelector();
+    this.elements.liveHud.classList.remove('hidden');
+    this.updateLiveHud();
+    this.pollLive();
+  }
+
+  /**
+   * One poll cycle. Reschedules itself (~2s); fetch failures show
+   * "reconnecting" in the HUD and never kill the loop.
+   */
+  async pollLive() {
+    const live = this.live;
+    if (!live || live.ended || live.polling) return;
+    live.polling = true;
+
+    try {
+      const sinceQ = live.started ? `?since_t=${live.lastFrameT}` : '';
+      const response = await fetch(`${live.base}/recording${sinceQ}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const payload = await response.json();
+      live.connected = true;
+      await this.handleLivePayload(payload);
+      if (live.started && live.showPaths && !live.ended) {
+        await this.refreshPredictions();
+      }
+    } catch (error) {
+      console.warn('Live poll failed:', error);
+      live.connected = false;
+      this.updateLiveHud();
+    }
+
+    live.polling = false;
+    if (!live.ended) {
+      live.timer = setTimeout(() => this.pollLive(), 2000);
+    }
+  }
+
+  async handleLivePayload(payload) {
+    const live = this.live;
+    const info = payload.live || {};
+    live.phase = info.phase;
+    live.status = info.status;
+    live.checkpoint = info.checkpoint ?? 0;
+    live.simTimeS = info.sim_time_s ?? 0;
+    live.nextCheckpointT = info.next_checkpoint_t ?? 0;
+    live.waitingFor = info.waiting_for || [];
+    live.draft = info.draft || null;
+
+    const recording = payload.recording;
+    if (!live.started) {
+      // recording stays null through the draft phase; wait for frames so
+      // the interpolator always has something to bracket
+      if (recording && (recording.sim_trace || []).length > 0) {
+        await this.initializeBattle(recording, 'LIVE');
+        live.started = true;
+        live.lastFrameT = this.loader.duration;
+      }
+    } else if (recording && this.loader.appendLiveData(recording)) {
+      live.lastFrameT = this.loader.duration;
+      this.scene.deathInfo = this.loader.buildDeathInfo();
+      this.timeController.setDuration(this.loader.duration);
+      this.updateBattleInfo();
+      this.populateTimelineMarkers();
+    }
+
+    if (info.phase === 'ended' && !live.ended) {
+      await this.finishLiveBattle();
+    }
+
+    this.updateLiveHud();
+  }
+
+  /**
+   * Battle over: one final full fetch (no since_t) to guarantee
+   * completeness, then stop polling and hand back to normal replay.
+   */
+  async finishLiveBattle() {
+    const live = this.live;
+    live.ended = true;
+    if (live.timer) {
+      clearTimeout(live.timer);
+      live.timer = null;
+    }
+
+    try {
+      const response = await fetch(`${live.base}/recording`);
+      if (response.ok) {
+        const payload = await response.json();
+        const recording = payload.recording;
+        if (recording) {
+          if (!live.started && (recording.sim_trace || []).length > 0) {
+            await this.initializeBattle(recording, 'LIVE');
+            live.started = true;
+          } else if (live.started) {
+            this.loader.appendLiveData(recording);
+            this.scene.deathInfo = this.loader.buildDeathInfo();
+          }
+        }
+      }
+    } catch (error) {
+      console.warn('Final live fetch failed:', error);
+    }
+
+    if (live.started) {
+      live.lastFrameT = this.loader.duration;
+      // Restore the +20s destruction epilogue for the completed replay
+      this.timeController.setDuration(this.loader.duration + 20);
+      this.updateBattleInfo();
+      this.populateTimelineMarkers();
+      this.scene.updatePredictedPaths(null);
+    }
+    this.updateLiveHud();
+  }
+
+  async refreshPredictions() {
+    try {
+      const response = await fetch(`${this.live.base}/predictions`);
+      if (!response.ok) return;
+      const predictions = await response.json();
+      if (this.scene && this.live.showPaths && !this.live.ended) {
+        this.scene.updatePredictedPaths(predictions);
+      }
+    } catch {
+      // Transient; the recording poll drives the reconnecting display
+    }
+  }
+
+  /**
+   * Track a few seconds behind the newest frame (interpolation cushion),
+   * catching up smoothly after each poll extends the recording.
+   */
+  updateFollowHead(deltaTime) {
+    const tc = this.timeController;
+    const target = Math.max(0, tc.duration - 3);
+    const err = target - tc.currentTime;
+    const rate = err > 0 ? Math.min(1 + err * 0.75, 16) : 0;
+    tc.currentTime = Math.min(target, tc.currentTime + deltaTime * rate);
+    tc.notifyCallbacks();
+  }
+
+  setLiveFollow(on) {
+    if (!this.live || this.live.follow === on) return;
+    this.live.follow = on;
+    if (on && this.timeController) {
+      this.timeController.seek(Math.max(0, this.timeController.duration - 3));
+      this.timeController.play();
+      this.updatePlayPauseButton();
+    }
+    this.updateLiveHud();
+  }
+
+  setLivePaths(on) {
+    if (!this.live) return;
+    this.live.showPaths = on;
+    if (!on && this.scene) {
+      this.scene.updatePredictedPaths(null);
+    }
+    this.updateLiveHud();
+  }
+
+  updateLiveHud() {
+    const live = this.live;
+    if (!live) return;
+
+    this.elements.liveDot.classList.toggle(
+      'active',
+      live.connected && !live.ended && live.status !== 'paused'
+    );
+
+    let text;
+    if (!live.connected) {
+      text = live.phase ? 'RECONNECTING…' : 'CONNECTING…';
+    } else if (live.phase === 'draft') {
+      text = this.formatDraftStatus(live.draft);
+    } else if (live.ended || live.phase === 'ended') {
+      const winner = this.loader?.metadata?.winner;
+      const reason = this.loader?.metadata?.resultReason;
+      text = winner
+        ? `BATTLE COMPLETE — ${String(winner).toUpperCase()} VICTORIOUS`
+        : 'BATTLE COMPLETE — DRAW';
+      if (reason) text += ` · ${reason}`;
+    } else {
+      text = `LIVE · CHECKPOINT ${live.checkpoint} · T+${Math.round(live.simTimeS)}s`;
+      if (live.waitingFor.length > 0) {
+        text += ` · WAITING FOR: ${live.waitingFor.join(', ')}`;
+      }
+    }
+    this.elements.liveStatusText.textContent = text;
+
+    this.elements.liveFollowBtn.classList.toggle('active', live.follow);
+    this.elements.livePathsBtn.classList.toggle('active', live.showPaths);
+    const togglesHidden = live.ended || !live.started;
+    this.elements.liveFollowBtn.style.display = togglesHidden ? 'none' : '';
+    this.elements.livePathsBtn.style.display = togglesHidden ? 'none' : '';
+
+    this.updateCheckpointMarker();
+  }
+
+  formatDraftStatus(draft) {
+    if (!draft) return 'DRAFT PHASE';
+    const parts = [];
+    for (const [faction, d] of Object.entries(draft)) {
+      if (!d) continue;
+      const verb = d.ready ? 'ready' : 'picking';
+      parts.push(`${faction} ${verb} (${d.ships} ships, ${d.points_spent} pts)`);
+    }
+    return `DRAFT PHASE — ${parts.join(' · ')}`;
+  }
+
+  /**
+   * Gold tick on the timeline at the next admiral checkpoint
+   */
+  updateCheckpointMarker() {
+    const el = this.elements.checkpointMarker;
+    if (!el) return;
+    const live = this.live;
+    const duration = this.timeController?.duration || 0;
+    if (!live?.started || live.ended || !duration || !live.nextCheckpointT) {
+      el.classList.add('hidden');
+      return;
+    }
+    const percent = Math.min(100, (live.nextCheckpointT / duration) * 100);
+    el.style.left = `${percent}%`;
+    el.title = `Next checkpoint T+${Math.round(live.nextCheckpointT)}s`;
+    this.elements.checkpointLabel.textContent = `CP${live.checkpoint + 1}`;
+    el.classList.remove('hidden');
   }
 
   /**
@@ -879,6 +1173,9 @@ class BattleVisualizer {
   togglePlayback() {
     if (this.timeController) {
       this.timeController.toggle();
+      if (!this.timeController.isPlaying) {
+        this.setLiveFollow(false); // pausing releases the live head
+      }
       this.updatePlayPauseButton();
     }
   }
@@ -1044,6 +1341,10 @@ class BattleVisualizer {
     if (targetTime !== null) {
       // Clamp to valid range
       const clampedTime = Math.max(0, Math.min(targetTime, this.timeController.duration));
+      // A real jump (not the display refresh on blur) releases the live head
+      if (Math.abs(clampedTime - this.timeController.currentTime) > 0.5) {
+        this.setLiveFollow(false);
+      }
       this.timeController.seek(clampedTime);
     }
 
@@ -1080,6 +1381,14 @@ class BattleVisualizer {
    * Reset state and show file selector to load a new recording
    */
   resetAndShowFileSelector() {
+    // Leaving live mode: stop polling, hide the HUD and checkpoint marker
+    if (this.live) {
+      if (this.live.timer) clearTimeout(this.live.timer);
+      this.live = null;
+      this.elements.liveHud.classList.add('hidden');
+      this.elements.checkpointMarker?.classList.add('hidden');
+    }
+
     // Stop animation loop
     if (this.animationId) {
       cancelAnimationFrame(this.animationId);
@@ -1100,13 +1409,7 @@ class BattleVisualizer {
       this.scene.ships.clear();
 
       // Remove all projectiles
-      for (const [id, proj] of this.scene.projectiles) {
-        this.scene.scene.remove(proj);
-        if (proj.userData.trail) {
-          this.scene.scene.remove(proj.userData.trail);
-        }
-      }
-      this.scene.projectiles.clear();
+      this.scene.cleanupProjectiles(new Set());
 
       // Remove all torpedoes
       this.scene.cleanupTorpedoes(new Set());
@@ -1116,6 +1419,7 @@ class BattleVisualizer {
       this.scene.clearHitEffects();
       this.scene.clearSmallEffects();
       this.scene.clearDestructionEffects();
+      this.scene.updatePredictedPaths(null);
     }
 
     // Reset state

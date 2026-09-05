@@ -379,10 +379,13 @@ class LLMBattleRunner:
         for i, ship_config in enumerate(self.fleet_config.alpha_fleet.ships):
             # Use config position or calculate based on index
             if ship_config.position:
+                # Config positions are km; the fallbacks must be km too (they
+                # used to be metres and got the *1000 again, flying any ship
+                # with a partial position dict 1000x too far out).
                 pos = Vector3D(
-                    ship_config.position.get('x', -half_dist) * 1000,
-                    ship_config.position.get('y', i * 2000) * 1000,
-                    ship_config.position.get('z', 0) * 1000,
+                    ship_config.position.get('x', -half_dist / 1000.0) * 1000,
+                    ship_config.position.get('y', i * 5.0) * 1000,
+                    ship_config.position.get('z', 0.0) * 1000,
                 )
             else:
                 # Spread ships vertically
@@ -436,10 +439,11 @@ class LLMBattleRunner:
         for i, ship_config in enumerate(self.fleet_config.beta_fleet.ships):
             # Use config position or calculate based on index
             if ship_config.position:
+                # km fallbacks - see the alpha loop above.
                 pos = Vector3D(
-                    ship_config.position.get('x', half_dist) * 1000,
-                    ship_config.position.get('y', i * 2000) * 1000,
-                    ship_config.position.get('z', 0) * 1000,
+                    ship_config.position.get('x', half_dist / 1000.0) * 1000,
+                    ship_config.position.get('y', i * 5.0) * 1000,
+                    ship_config.position.get('z', 0.0) * 1000,
                 )
             else:
                 # Spread ships vertically

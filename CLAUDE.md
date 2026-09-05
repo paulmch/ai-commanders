@@ -56,11 +56,13 @@ ai-commanders/
 │   ├── run_llm_battle.py   # CLI for AI vs AI battles (--fleet-config, --admiral-vision)
 │   ├── run_draft_battle.py # draft mode: point-budget fleets + formations
 │   ├── generate_test_battle.py  # scripted no-LLM recordings for the viewer
+│   ├── viewer_snapshot.py  # headless Playwright screenshots of the 3D viewer
 │   ├── mcp_battle.py       # CLI for MCP-controlled battles
 │   ├── refine_commander.py # Post-battle lesson distillation + rematch gating
 │   └── calculate_shots_to_kill.py  # Regenerates docs/ships.md combat tables
 ├── docs/ships.md           # Ship specs + simulated shots-to-kill tables
-└── visualizer/             # Three.js 3D battle replay viewer
+└── visualizer/             # Three.js 3D battle replay viewer; src/render/ holds
+                            # the PBR hull kit, torch/blast shaders, post chain
 ```
 
 ## Key Constants
@@ -98,6 +100,16 @@ recordings, rematch-gates them, and battles opt in via use_notebooks/--notebooks
 
 MCP mode replaces the admiral+captains of a fleet with any MCP client
 (`src/llm/mcp_server.py`, one battle HTTP API on port 8765, `--faction alpha|beta`).
+A `draft` block in the fleet config (or `--draft` on `scripts/mcp_battle.py`)
+inserts a pre-battle draft phase: MCP clients buy fleets and place formations
+via `get_draft_state`/`select_fleet`/`set_formation`/`ready`
+(`src/llm/mcp_draft.py`), non-MCP sides draft via their admiral LLM or
+auto-draft. The same HTTP server serves live spectator endpoints
+(`GET /live/recording` incremental via `?since_t=`, `GET /live/predictions`
+with per-ship constant-acceleration paths to the next checkpoint); the
+visualizer's `?live=1` mode polls them through a Vite proxy, and
+`scripts/fake_live_server.py` replays a saved recording through the same
+endpoints for viewer development.
 
 ## Ship Classes
 
@@ -115,6 +127,21 @@ MCP mode replaces the admiral+captains of a fleet with any MCP client
 The corvette (1 launcher) and torpedo cruiser (4 launchers, 12 rounds each) are the
 torpedo-armed hulls; all others fight with coilguns.
 
+## Viewer Rendering Notes
+
+- All custom `ShaderMaterial`s must include `<common>` + the `logdepthbuf_*`
+  chunks (the renderer uses a logarithmic depth buffer; without them the
+  shader fails to compile or depth-tests wrongly).
+- `IcosahedronGeometry(r, detail)` subdivides linearly (20*(d+1)^2 faces) -
+  use detail 12-28 for smooth blast spheres, not 3-5.
+- `RoundedBoxGeometry` is non-indexed; the hull kit converts every part with
+  `toNonIndexed()` before merging.
+- Effects animate on battle time (spawnTime vs currentTime) so timeline
+  scrubbing is deterministic; wall-clock only drives texture turbulence.
+- Verify visually with `uv run python scripts/viewer_snapshot.py` (see
+  README); llvmpipe frames take >1 s, so the harness sets
+  `visualizer.slowFrameOk` to bypass the stalled-tab update guard.
+
 ## Doc/Prompt Invariants
 
 - Numbers quoted in captain/admiral doctrine (`src/llm/prompts.py`) are bound to
@@ -122,3 +149,9 @@ torpedo-armed hulls; all others fight with coilguns.
   engine and the tests will tell you which prompt claims drifted.
 - After any armor or damage-model change, regenerate the combat tables in
   `docs/ships.md` with `uv run python scripts/calculate_shots_to_kill.py`.
+- Draft point costs are DERIVED from `data/fleet_ships.json`, not hand-typed
+  (`ship_point_cost` in `src/llm/fleet_draft.py`): armour tonnage + PD turrets +
+  gun energy throughput + torpedo magazine depth x per-round yield. Change a
+  hull's armour or magazine and its price moves on its own; the cost table in
+  `docs/draft_mode.md` then needs regenerating. Never re-add a hard-coded
+  `SHIP_POINT_COSTS` literal - torpedo armament was nearly free that way.

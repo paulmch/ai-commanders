@@ -75,6 +75,9 @@ async def run_mcp_battle(
     verbose: bool = True,
     http_host: str = "localhost",
     http_port: int = 8765,
+    draft: bool = False,
+    draft_budget: int = None,
+    draft_max_ships: int = None,
 ):
     """Run a battle with MCP configuration using HTTP API."""
     print(f"Loading config from {config_path}...")
@@ -83,6 +86,18 @@ async def run_mcp_battle(
     fleet_config = BattleFleetConfig.from_json(config_path)
     print(f"Loaded config: {fleet_config.battle_name}")
     fleet_data = load_fleet_data()
+
+    # CLI draft overrides (enable a draft phase or tune the config's one)
+    if draft and fleet_config.draft is None:
+        from src.llm.fleet_config import DraftConfig
+        fleet_config.draft = DraftConfig()
+    if fleet_config.draft is not None:
+        if draft_budget is not None:
+            fleet_config.draft.budget = draft_budget
+        if draft_max_ships is not None:
+            fleet_config.draft.max_ships = draft_max_ships
+        print(f"Draft phase enabled: {fleet_config.draft.budget} points, "
+              f"max {fleet_config.draft.max_ships} ships")
 
     # Create battle config
     battle_config = BattleConfig(
@@ -208,6 +223,23 @@ def main():
         action="store_true",
         help="Reduce output verbosity",
     )
+    parser.add_argument(
+        "--draft",
+        action="store_true",
+        help="Enable a pre-battle draft phase even if the config has none",
+    )
+    parser.add_argument(
+        "--draft-budget",
+        type=int,
+        default=None,
+        help="Draft point budget override (default: config value or 100)",
+    )
+    parser.add_argument(
+        "--draft-max-ships",
+        type=int,
+        default=None,
+        help="Draft max hulls override (default: config value or 8)",
+    )
 
     args = parser.parse_args()
 
@@ -221,6 +253,9 @@ def main():
             verbose=not args.quiet,
             http_host=args.host,
             http_port=args.port,
+            draft=args.draft,
+            draft_budget=args.draft_budget,
+            draft_max_ships=args.draft_max_ships,
         ))
     else:
         parser.print_help()

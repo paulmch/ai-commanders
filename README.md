@@ -126,23 +126,42 @@ Open http://localhost:5173 and load a battle recording JSON file.
 
 ### Features
 
-- **Expanse-style hulls, one design per class**: nine distinct ships built from
-  drums, trusses, stepped towers, slab armor, turrets, VLS hatch banks and a
-  siege spinal barrel - readable silhouettes from corvette to dreadnought,
-  with folding radiator wings that glow when extended
-- **Fusion torch plumes**: continuous plasma cones (white core, blue sheath)
-  scaled to each class's engine bell count and throttle - no strobing
-- **Torpedo rendering**: guided rounds with faction-colored trails and thrust
-  plumes; blinded rounds tumble dark and coast; retargeting rounds ping cyan
-  and draw a fading lock line to their new victim
-- **Continuous PD beams**: dwell lasers anchored ship-to-target every frame
-- **Impact effects**: shockwave rings and particle bursts on hits, distinct
-  markers for misses, burnouts, and seeker kills
-- **Two-stage ship destruction**: non-reactor kills play the simulation's
-  death spiral - the hulk tumbles with its torch sputtering and hull fires
-  popping until the reactor breach (immediate detonation when the reactor
-  itself was the killing blow) - blinding flash, plasma sphere, shockwave,
-  50k-particle GPU debris cloud, lingering aftermath
+- **Physically based rendering**: HDR half-float pipeline with MSAA, ACES
+  tone mapping, bloom reserved for true emitters, a final grade pass
+  (detonation flash, chromatic aberration, vignette, grain) and a PMREM
+  environment map so metal plating reflects the sun and the planet
+- **Environment**: procedural nebula and Milky Way skydome, 7,000-star HDR
+  field, hard sunlight with a screen-space lens flare, and a ringed gas giant
+  (with ring shadow and atmosphere rim) that gives the battle scale and a
+  warm planet-shine fill
+- **Kit-built hulls, one design per class**: nine hulls assembled from
+  bevelled plating, armour belts, ribbed drums, trusses, pipe runs, greeble
+  fields, PD blisters, sensor farms and engine bells, merged into a handful
+  of draw calls per ship. Expanse rules apply: decks stack along the thrust
+  axis, so windows ring the hull and there is no bridge superstructure, only
+  a lit ops-deck band near the nose. Coilgun turrets are articulated rigs
+  that yaw and elevate to track the nearest enemy; procedural PBR plating
+  (albedo, normal, roughness/metalness) with faction paint, hazard stripes,
+  vents and rivets; lit windows that dim and flicker as the hull fails,
+  blinking nav strobes, folding radiator wings with a heat-gradient glow
+- **Fusion torches**: shader plumes with scrolling turbulence, shock
+  diamonds, view-dependent thickness and a white/blue/violet temperature
+  ramp; torpedo motors use the same shader in chemical orange
+- **Torpedoes and slugs**: modelled rounds with fins and faction bands,
+  camera-facing ribbon trails (no 1-px lines), coilgun tracers; blinded
+  rounds tumble dark; retargeting rounds ping and draw a lock line
+- **Continuous PD beams**: soft-core ribbon lasers with shimmer, muzzle and
+  impact glows, ablation sparks while the beam dwells
+- **Impacts**: coilgun hits throw a directional spall cone of GPU sparks and
+  velocity-stretched streaks with a cooling crater glow; torpedo warheads add
+  a fireball and a fast plasma front
+- **Two-stage ship destruction**: non-reactor kills coast dark and tumbling
+  with venting plasma jets, hull fires and failing lights until the reactor
+  breaches; the breach flashes the frame, shakes the camera, and tears the
+  hull into tumbling, red-hot chunks along its real part boundaries while a
+  noise-displaced fireball, shock shell, thousands of sparks and streaks, and
+  a cooling gas cloud play out, with cook-offs on the wreckage. Everything is
+  driven by battle time, so scrubbing replays a kill exactly
 - **Camera modes**: Free orbit, follow ship, orbit selected ship
 - **Ship telemetry**: Hull, per-facing armor, modules, target, maneuver status
 - **Timeline scrubbing**: Jump to any point, adjustable playback speed (0.25x-8x),
@@ -150,6 +169,26 @@ Open http://localhost:5173 and load a battle recording JSON file.
   destructions play out
 - **Time input**: Enter exact timestamps (MM:SS or seconds) to jump directly
 - **URL loading**: `?recording=/recordings/name.json` autoloads a staged recording
+
+### Headless screenshots
+
+`scripts/viewer_snapshot.py` drives the viewer with Playwright (installed as a
+uv dev dependency; run `uv run playwright install chromium` once) to verify
+rendering changes without a GPU:
+
+```bash
+# frame a ship
+uv run python scripts/viewer_snapshot.py --recording fleet_heur.json \
+    --time 60 --focus alpha_1 --dist 2.2 --out /tmp/cruiser.png
+# step through a kill, one frame per 1.5 s of battle time
+uv run python scripts/viewer_snapshot.py --recording fleet_heur.json \
+    --time 142.3 --focus alpha_4 --dist 5 --sequence 12 --every 1.5 --follow \
+    --hide-ui --out /tmp/kill_%02d.png
+```
+
+Recordings are read from `visualizer/public/recordings/`. Offline test
+recordings with kills come from `scripts/run_draft_battle.py --auto-draft
+--no-admirals --trace` (heuristic captains, no LLM calls).
 
 ### Controls
 
@@ -422,8 +461,11 @@ ready()                # Signal turn complete
 | `propose_fleet_draw` | Propose ending the battle |
 | `accept_fleet_draw` | Accept enemy's draw proposal |
 | `surrender_fleet` | Give up |
-| `ready` | Signal all commands issued, advance simulation |
+| `ready` | Signal all commands issued, advance simulation (commits your draft during the draft phase) |
 | `battle_plot` | ASCII tactical map (xy/xz/yz projections) |
+| `get_draft_state` | Draft phase: your budget, the costed catalog, current picks |
+| `select_fleet` | Draft phase: buy hulls against your point budget |
+| `set_formation` | Draft phase: place ships (km offsets, +x toward the enemy) |
 
 ### Maneuver Types
 
@@ -448,6 +490,66 @@ ready()                # Signal turn complete
 3. Issue commands for each ship
 4. Call `ready()` to advance
 5. Repeat until victory
+
+### Draft Mode over MCP
+
+MCP commanders can play draft mode: buy a fleet against a point budget and
+place its starting formation before the first shot. Add a `draft` block to the
+config (ship lists become optional) or pass `--draft` on the CLI:
+
+```bash
+# MCP alpha drafts vs a deterministic auto-drafted opponent (no API key)
+uv run python scripts/mcp_battle.py --config data/fleet_config_mcp_draft.json
+
+# MCP alpha drafts vs an LLM admiral who also drafts
+uv run python scripts/mcp_battle.py --config data/fleet_config_mcp_draft_vs_llm.json
+
+# Budget overrides work from the CLI too
+uv run python scripts/mcp_battle.py --config data/fleet_config_mcp_draft.json \
+    --draft-budget 200 --draft-max-ships 10
+```
+
+The battle waits in a draft phase before any ship exists. From your MCP client:
+
+```
+get_draft_state()   # budget, costed hull catalog, formation limits
+select_fleet(ships=[{"ship_type": "destroyer", "count": 3}], rationale="wall")
+set_formation(placements=[{"ship_name": "Falchion-1", "x_km": 20, "y_km": 0}],
+              formation_name="vanguard")   # optional, repeatable
+ready()             # commit - battle starts when both sides have committed
+```
+
+Selections are validated server-side (budget, hull names, ship cap) with the
+error returned to the tool call; formations are clamped to the ±150 km cube
+with 2 km minimum separation, exactly like the LLM admiral draft in
+`scripts/run_draft_battle.py`. Non-MCP opponents draft through their admiral
+model, or fall back to the deterministic auto-draft when no admiral is
+configured.
+
+### Watching an MCP Battle Live
+
+MCP battles can be watched in the 3D viewer while they run. The battle's HTTP
+server (port 8765) exposes the recording-so-far plus per-ship predicted paths,
+and the Vite viewer polls it:
+
+```bash
+# Terminal 1: the battle (record_sim_trace must be on - it is in the examples)
+uv run python scripts/mcp_battle.py --config data/fleet_config_mcp_draft.json
+
+# Terminal 2: the viewer
+cd visualizer && npx vite
+# then open http://localhost:5173/?live=1
+```
+
+The live view follows the battle head as checkpoints resolve and overlays each
+ship's **predicted trajectory to the next checkpoint** (constant-acceleration
+extrapolation of its current burn) with a marker where the ship will be when
+the next decision fires - so you can see the consequences of your orders
+unfold before you commit the next turn. The draft phase shows a picking status
+splash until the fleets exist. Everything runs through `GET /live/recording`
+(incremental via `?since_t=`) and `GET /live/predictions`; a dev harness,
+`scripts/fake_live_server.py`, replays any saved recording through the same
+endpoints for viewer work without a running battle.
 
 ### Example Fleet Config (MCP vs AI)
 
@@ -517,7 +619,9 @@ answered with torpedoes.
   still lost to a 1.0g fleet's inability to refuse the merge. True lessons can be
   traps; that's why the rematch gate exists.
 - **Key lesson**: at 200 points the torpedo-saturation meta is even more
-  dominant than at 100 (`cruiser_torpedo` cost rebalance pending).
+  dominant than at 100. Addressed by the 2026-08-13 pricing rebalance, which
+  charges torpedo hulls for magazine depth x per-round yield: `cruiser_torpedo`
+  went 30 -> 58 pts (see `docs/draft_mode.md`).
 
 ## Ship Classes
 
@@ -690,7 +794,9 @@ ai-commanders/
 ├── visualizer/             # 3D battle replay viewer (Three.js + Vite)
 │   ├── src/
 │   │   ├── main.js         # Entry point, UI orchestration
-│   │   ├── SceneManager.js # Three.js scene, ships, effects
+│   │   ├── SceneManager.js # Three.js scene orchestration (ships, effects)
+│   │   ├── render/         # Environment, PostFX, Hulls, Torch, Trails,
+│   │   │                   # Particles, Explosion, procedural Textures
 │   │   ├── BattleLoader.js # JSON recording parser
 │   │   ├── Interpolator.js # 1Hz → 60FPS interpolation
 │   │   ├── TimeController.js # Playback controls
@@ -873,12 +979,13 @@ MIT License - see [LICENSE](LICENSE)
 
 ## Ideas for Future Development
 
-- **MCP draft support**: Let MCP clients play draft mode - point-budget fleet
-  selection and formation placement through MCP tools
+- ~~MCP draft support~~ **DONE**: MCP clients draft fleets and formations via
+  `get_draft_state` / `select_fleet` / `set_formation` / `ready`
 - **Rebalance torpedo hulls**: Saturation doctrine has won every competitive
   draft war so far - the torpedo cruiser's 30-point cost, the PD blind
   threshold, and round count are the levers
-- **Real-time visualizer**: Add websocket to battle simulator for live 3D replay during combat
+- ~~Real-time visualizer~~ **DONE**: the viewer's live mode polls the battle
+  HTTP API and overlays predicted paths to the next checkpoint
 - ~~Human vs LLM battles~~ **DONE** via MCP integration! Any MCP client can now control fleets
 - **Dedicated battle UI**: Build a proper tactical interface instead of relying on MCP client chat
 

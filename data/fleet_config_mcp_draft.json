@@ -1,0 +1,25 @@
+{
+  "battle_name": "MCP Draft Battle",
+  "time_limit_s": 900.0,
+  "decision_interval_s": 30.0,
+  "initial_distance_km": 500.0,
+  "unlimited_mode": false,
+  "record_battle": true,
+  "record_sim_trace": true,
+  "personality_selection": false,
+  "draft": {
+    "enabled": true,
+    "budget": 100,
+    "max_ships": 8,
+    "captain_model": "heuristic"
+  },
+  "alpha_fleet": {
+    "mcp": {
+      "enabled": true,
+      "transport": "http",
+      "http_port": 8765,
+      "name": "MCP Commander"
+    }
+  },
+  "beta_fleet": {}
+}

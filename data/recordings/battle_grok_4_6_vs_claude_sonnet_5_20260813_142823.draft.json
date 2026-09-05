@@ -1,0 +1,170 @@
+{
+  "budget": 150,
+  "alpha_captain_model": "heuristic",
+  "beta_captain_model": "heuristic",
+  "alpha": {
+    "faction": "alpha",
+    "budget": 150,
+    "points_spent": 142,
+    "auto_draft": true,
+    "formation_name": "staggered wall",
+    "selection_rationale": "auto-draft",
+    "formation_rationale": "",
+    "ships": [
+      {
+        "ship_id": "alpha_1",
+        "ship_name": "TIS Falchion-1",
+        "ship_type": "destroyer",
+        "cost": 18,
+        "offset_km": [
+          0.0,
+          -42.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_2",
+        "ship_name": "TIS Falchion-2",
+        "ship_type": "destroyer",
+        "cost": 18,
+        "offset_km": [
+          -10.0,
+          -30.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_3",
+        "ship_name": "TIS Bastion-1",
+        "ship_type": "cruiser",
+        "cost": 28,
+        "offset_km": [
+          0.0,
+          -18.0,
+          6.0
+        ]
+      },
+      {
+        "ship_id": "alpha_4",
+        "ship_name": "TIS Ward-1",
+        "ship_type": "frigate",
+        "cost": 7,
+        "offset_km": [
+          -10.0,
+          -6.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_5",
+        "ship_name": "TIS Falchion-3",
+        "ship_type": "destroyer",
+        "cost": 18,
+        "offset_km": [
+          0.0,
+          6.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_6",
+        "ship_name": "TIS Falchion-4",
+        "ship_type": "destroyer",
+        "cost": 18,
+        "offset_km": [
+          -10.0,
+          18.0,
+          6.0
+        ]
+      },
+      {
+        "ship_id": "alpha_7",
+        "ship_name": "TIS Bastion-2",
+        "ship_type": "cruiser",
+        "cost": 28,
+        "offset_km": [
+          0.0,
+          30.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_8",
+        "ship_name": "TIS Ward-2",
+        "ship_type": "frigate",
+        "cost": 7,
+        "offset_km": [
+          -10.0,
+          42.0,
+          0.0
+        ]
+      }
+    ]
+  },
+  "beta": {
+    "faction": "beta",
+    "budget": 150,
+    "points_spent": 149,
+    "auto_draft": false,
+    "formation_name": "Cruiser Wall, Torpedo Reserve",
+    "selection_rationale": "Uniform 1.5g strike group: one cruiser_torpedo provides a 48-round saturation salvo (enough volume to overwhelm PD and crack a capital's armor), escorted by three gun cruisers (spinal coilers + coilgun batteries + heavy armor + PD) that screen the torpedo boat during approach and finish crippled targets. A cheap frigate adds extra PD dwell and coilgun fire for minimal cost. All hulls share speed so the formation stays coherent instead of fragmenting into a fast/slow split.",
+    "formation_rationale": "The three Bastion cruisers form a forward line with modest lateral spread (~45 km apart) so they overlap point-defense coverage while presenting a wider target picture to complicate the enemy's spinal weapon geometry. They absorb the initial exchange and screen the vulnerable torpedo cruiser. Harpoon (our torpedo boat) is held far back at -70 km to stay out of early gun range and preserve it for a decisive torpedo salvo once ranges close or enemy PD is suppressed. Ward, the small frigate, sits just behind the cruiser line and ahead of Harpoon, adding close-in PD support for the torpedo cruiser without exposing its low HP to the front line.",
+    "ships": [
+      {
+        "ship_id": "beta_1",
+        "ship_name": "OCS Harpoon",
+        "ship_type": "cruiser_torpedo",
+        "cost": 58,
+        "offset_km": [
+          -70.0,
+          0.0,
+          -15.0
+        ]
+      },
+      {
+        "ship_id": "beta_2",
+        "ship_name": "OCS Bastion-1",
+        "ship_type": "cruiser",
+        "cost": 28,
+        "offset_km": [
+          40.0,
+          -45.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_3",
+        "ship_name": "OCS Bastion-2",
+        "ship_type": "cruiser",
+        "cost": 28,
+        "offset_km": [
+          45.0,
+          0.0,
+          5.0
+        ]
+      },
+      {
+        "ship_id": "beta_4",
+        "ship_name": "OCS Bastion-3",
+        "ship_type": "cruiser",
+        "cost": 28,
+        "offset_km": [
+          40.0,
+          45.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_5",
+        "ship_name": "OCS Ward",
+        "ship_type": "frigate",
+        "cost": 7,
+        "offset_km": [
+          -20.0,
+          0.0,
+          15.0
+        ]
+      }
+    ]
+  }
+}

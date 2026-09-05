@@ -14,7 +14,10 @@ with the battle runner even though they run in separate processes.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
+import math
+from bisect import bisect_right
 from typing import Dict, Any, List, Optional, Callable, Awaitable, TYPE_CHECKING
 
 try:
@@ -35,6 +38,26 @@ from .mcp_state import (
 if TYPE_CHECKING:
     from aiohttp import web as web_typing
     from .mcp_controller import MCPController
+    from .mcp_draft import DraftManager
+
+
+if AIOHTTP_AVAILABLE:
+    @web.middleware
+    async def _cors_middleware(request, handler):
+        """
+        Allow cross-origin reads so the Vite dev viewer (port 5173) can poll
+        the live endpoints directly. The API is localhost-bound and read/
+        command traffic is same-machine, so a wildcard is fine here.
+        """
+        try:
+            response = await handler(request)
+        except web.HTTPException as exc:
+            exc.headers["Access-Control-Allow-Origin"] = "*"
+            raise
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        return response
+else:  # pragma: no cover - aiohttp is a hard dep of this module anyway
+    _cors_middleware = None
 
 
 class MCPHttpServer:
@@ -77,6 +100,14 @@ class MCPHttpServer:
         # Controllers for building state
         self._controllers: Dict[str, 'MCPController'] = {}
 
+        # Pre-battle draft phase (None outside draft-enabled battles)
+        self._draft_manager: Optional['DraftManager'] = None
+
+        # Battle runner backing the /live endpoints (set before the battle
+        # starts so spectators can watch the draft phase too). NOT self._runner,
+        # which is the aiohttp AppRunner.
+        self._battle_runner: Any = None
+
         # Callbacks
         self._on_ready_callback: Optional[Callable[[str], Awaitable[None]]] = None
 
@@ -88,6 +119,14 @@ class MCPHttpServer:
     def register_controller(self, faction: str, controller: 'MCPController') -> None:
         """Register an MCP controller for a faction."""
         self._controllers[faction] = controller
+
+    def set_draft_manager(self, manager: 'DraftManager') -> None:
+        """Attach the draft phase manager (routes /draft and draft-time ready)."""
+        self._draft_manager = manager
+
+    def set_live_source(self, runner: Any) -> None:
+        """Attach the battle runner backing the /live spectator endpoints."""
+        self._battle_runner = runner
 
     def set_on_ready_callback(self, callback: Callable[[str], Awaitable[None]]) -> None:
         """Set callback to be called when a faction signals ready."""
@@ -104,10 +143,15 @@ class MCPHttpServer:
         self._current_checkpoint = checkpoint
         self._waiting_for = waiting_for or []
 
+    def build_app(self) -> 'web.Application':
+        """Build the aiohttp application (separate from start() for tests)."""
+        self._app = web.Application(middlewares=[_cors_middleware])
+        self._setup_routes()
+        return self._app
+
     async def start(self) -> None:
         """Start the HTTP server."""
-        self._app = web.Application()
-        self._setup_routes()
+        self.build_app()
 
         self._runner = web.AppRunner(self._app)
         await self._runner.setup()
@@ -132,6 +176,13 @@ class MCPHttpServer:
         self._app.router.add_get("/state/{faction}", self._handle_get_state)
         self._app.router.add_post("/commands/{faction}", self._handle_commands)
         self._app.router.add_post("/ready/{faction}", self._handle_ready)
+        # Draft phase (only meaningful while a DraftManager is attached)
+        self._app.router.add_get("/draft/{faction}", self._handle_get_draft)
+        self._app.router.add_post("/draft/{faction}/select", self._handle_draft_select)
+        self._app.router.add_post("/draft/{faction}/formation", self._handle_draft_formation)
+        # Live spectator endpoints (the web viewer polls these)
+        self._app.router.add_get("/live/recording", self._handle_live_recording)
+        self._app.router.add_get("/live/predictions", self._handle_live_predictions)
 
     async def _handle_health(self, request: web.Request) -> web.Response:
         """Health check endpoint."""
@@ -139,10 +190,14 @@ class MCPHttpServer:
 
     async def _handle_status(self, request: web.Request) -> web.Response:
         """Get battle status."""
+        drafting = self._draft_manager is not None and self._draft_manager.active
         return web.json_response({
             "status": self._battle_status,
+            "phase": "draft" if drafting else (
+                "ended" if self._battle_status == "ended" else "battle"),
             "checkpoint": self._current_checkpoint,
-            "waiting_for": self._waiting_for,
+            "waiting_for": (self._draft_manager.waiting_for() if drafting
+                            else self._waiting_for),
             "connected_factions": list(self._connected_factions),
         })
 
@@ -231,6 +286,21 @@ class MCPHttpServer:
                 status=400,
             )
 
+        # During the draft phase, ready commits the faction's draft instead
+        # of advancing a (not yet existing) checkpoint.
+        if self._draft_manager is not None and self._draft_manager.active:
+            ok, error = self._draft_manager.commit(faction)
+            if not ok:
+                return web.json_response(
+                    {"status": "error", "error": error},
+                    status=409,
+                )
+            return web.json_response({
+                "status": "draft_committed",
+                "faction": faction,
+                "waiting_for": self._draft_manager.waiting_for(),
+            })
+
         # Signal ready
         self._state.signal_ready(faction)
 
@@ -245,6 +315,186 @@ class MCPHttpServer:
             "status": "ready",
             "faction": faction,
             "checkpoint": self._current_checkpoint,
+        })
+
+    # === Draft phase endpoints ===
+
+    def _draft_request_faction(self, request: web.Request):
+        """Common validation for /draft routes: (faction, error_response)."""
+        faction = request.match_info["faction"]
+        if faction not in ("alpha", "beta"):
+            return None, web.json_response(
+                {"error": f"Invalid faction: {faction}"}, status=400)
+        if self._draft_manager is None:
+            return None, web.json_response(
+                {"error": "This battle has no draft phase "
+                          "(no 'draft' block in the fleet config)."},
+                status=404)
+        return faction, None
+
+    async def _handle_get_draft(self, request: web.Request) -> web.Response:
+        """Draft state for a faction: budget, catalog, current picks."""
+        faction, err = self._draft_request_faction(request)
+        if err:
+            return err
+        return web.json_response(self._draft_manager.state_dict(faction))
+
+    async def _handle_draft_select(self, request: web.Request) -> web.Response:
+        """Apply a fleet selection; validation errors come back as 409."""
+        faction, err = self._draft_request_faction(request)
+        if err:
+            return err
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+        result, error = self._draft_manager.select(
+            faction, data.get("ships"), data.get("rationale", ""))
+        if error:
+            return web.json_response(
+                {"status": "error", "error": error}, status=409)
+        return web.json_response({"status": "ok", **result})
+
+    async def _handle_draft_formation(self, request: web.Request) -> web.Response:
+        """Apply formation placements; coercions are reported as notes."""
+        faction, err = self._draft_request_faction(request)
+        if err:
+            return err
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+        result, error = self._draft_manager.formation(
+            faction,
+            data.get("placements"),
+            data.get("formation_name", ""),
+            data.get("rationale", ""),
+        )
+        if error:
+            return web.json_response(
+                {"status": "error", "error": error}, status=409)
+        return web.json_response({"status": "ok", **result})
+
+    # === Live spectator endpoints ===
+
+    def _live_block(self) -> Dict[str, Any]:
+        """Battle-flow metadata block served with every /live response."""
+        runner = self._battle_runner
+        drafting = self._draft_manager is not None and self._draft_manager.active
+        phase = "draft" if drafting else (
+            "ended" if self._battle_status == "ended" else "battle")
+        sim = getattr(runner, "simulation", None) if runner else None
+        sim_time = float(sim.current_time) if sim else 0.0
+        fleet_config = getattr(runner, "fleet_config", None) if runner else None
+        interval = float(getattr(fleet_config, "decision_interval_s", 30.0) or 30.0)
+        next_cp = (math.floor(sim_time / interval + 1e-9) + 1) * interval
+        return {
+            "phase": phase,
+            "status": self._battle_status,
+            "checkpoint": self._current_checkpoint,
+            "decision_interval_s": interval,
+            "sim_time_s": sim_time,
+            "next_checkpoint_t": next_cp,
+            "waiting_for": (self._draft_manager.waiting_for() if drafting
+                            else list(self._waiting_for)),
+            "draft": (self._draft_manager.live_summary()
+                      if self._draft_manager else None),
+        }
+
+    async def _handle_live_recording(self, request: web.Request) -> web.Response:
+        """
+        The recording-so-far, shaped exactly like a saved BattleRecording so
+        the web viewer's normal loader can parse it. `?since_t=` narrows
+        sim_trace/events to entries after that sim time (metadata always
+        included). `recording` is null until the battle is set up (draft
+        phase, or recording/sim-trace disabled in the config).
+        """
+        since_arg = request.query.get("since_t")
+        try:
+            since = float(since_arg) if since_arg is not None else None
+        except ValueError:
+            return web.json_response(
+                {"error": f"Bad since_t: {since_arg!r}"}, status=400)
+
+        recording = None
+        runner = self._battle_runner
+        recorder = getattr(runner, "recorder", None) if runner else None
+        rec = getattr(recorder, "recording", None) if recorder else None
+        if rec is not None and rec.is_fleet_battle:
+            frames = rec.sim_trace
+            events = [e.to_dict() for e in recorder.events]
+            if since is not None:
+                start = bisect_right(frames, since, key=lambda f: f["t"])
+                frames = frames[start:]
+                events = [e for e in events if e["timestamp"] > since]
+            # Shallow field copy: asdict() would deep-copy the whole trace
+            # on every poll.
+            recording = {
+                f.name: getattr(rec, f.name)
+                for f in dataclasses.fields(rec)
+                if f.name not in ("sim_trace", "events")
+            }
+            recording["sim_trace"] = frames
+            recording["events"] = events
+        return web.json_response({
+            "live": self._live_block(),
+            "recording": recording,
+        })
+
+    async def _handle_live_predictions(self, request: web.Request) -> web.Response:
+        """
+        Predicted path of every live ship to the next checkpoint, from the
+        last recorded frame: constant-acceleration extrapolation (a derived
+        from the last two frames), sampled every 2 s of sim time. Positions
+        in metres, matching frame `pos`.
+        """
+        empty = {"t": 0.0, "t_checkpoint": 0.0, "ships": {}}
+        runner = self._battle_runner
+        recorder = getattr(runner, "recorder", None) if runner else None
+        rec = getattr(recorder, "recording", None) if recorder else None
+        drafting = self._draft_manager is not None and self._draft_manager.active
+        if rec is None or not rec.sim_trace or drafting:
+            return web.json_response(empty)
+
+        frames = rec.sim_trace
+        last = frames[-1]
+        prev = frames[-2] if len(frames) >= 2 else None
+        t1 = float(last["t"])
+        fleet_config = getattr(runner, "fleet_config", None)
+        interval = float(getattr(fleet_config, "decision_interval_s", 30.0) or 30.0)
+        t_cp = (math.floor(t1 / interval + 1e-9) + 1) * interval
+        horizon = t_cp - t1
+
+        ships: Dict[str, Any] = {}
+        for ship_id, state in last.get("ships", {}).items():
+            if state.get("destroyed") or state.get("dying"):
+                continue
+            p1 = state["pos"]
+            v1 = state["vel"]
+            accel = [0.0, 0.0, 0.0]
+            if prev is not None:
+                s0 = prev.get("ships", {}).get(ship_id)
+                if s0 and not s0.get("destroyed"):
+                    dt0 = t1 - float(prev["t"])
+                    if dt0 > 0:
+                        accel = [(v1[i] - s0["vel"][i]) / dt0 for i in range(3)]
+
+            def _at(dt: float) -> List[float]:
+                return [p1[i] + v1[i] * dt + 0.5 * accel[i] * dt * dt
+                        for i in range(3)]
+
+            path = []
+            dt = 0.0
+            while dt < horizon - 1e-9:
+                path.append(_at(dt))
+                dt += 2.0
+            path.append(_at(horizon))
+            ships[ship_id] = {"path": path, "checkpoint_pos": path[-1]}
+
+        return web.json_response({
+            "t": t1,
+            "t_checkpoint": t_cp,
+            "ships": ships,
         })
 
 
@@ -266,19 +516,20 @@ async def run_battle_with_http_server(
     Returns:
         BattleResult
     """
-    from .mcp_controller import MCPController
-
-    # Create and start HTTP server
+    # Create and start HTTP server. Controllers are registered inside
+    # run_fleet_battle_with_http once setup_fleet_battle has created them -
+    # registering battle_runner.alpha_mcp here always stored None.
     http_server = MCPHttpServer(host=host, port=port)
-
-    # Register controllers if present
-    if battle_runner.alpha_mcp:
-        http_server.register_controller("alpha", battle_runner.alpha_mcp)
-    if battle_runner.beta_mcp:
-        http_server.register_controller("beta", battle_runner.beta_mcp)
+    http_server.set_live_source(battle_runner)
 
     try:
         await http_server.start()
+
+        # Optional pre-battle draft phase: fleets are bought and placed
+        # before the simulation exists.
+        draft_cfg = getattr(battle_runner.fleet_config, "draft", None)
+        if draft_cfg is not None and draft_cfg.enabled:
+            await run_mcp_draft_phase(battle_runner, fleet_data, http_server)
 
         # Run the battle with HTTP-based MCP communication
         result = await run_fleet_battle_with_http(
@@ -291,6 +542,112 @@ async def run_battle_with_http_server(
 
     finally:
         await http_server.stop()
+
+
+async def run_mcp_draft_phase(
+    runner: Any,
+    fleet_data: Dict[str, Any],
+    http_server: MCPHttpServer,
+) -> None:
+    """
+    Run the pre-battle draft: MCP factions draft over the HTTP API
+    (get_draft_state / select_fleet / set_formation / ready), non-MCP
+    factions draft via their admiral LLM or the deterministic auto-draft.
+    Blocks until every faction has committed, then replaces the fleet
+    definitions on runner.fleet_config with the drafted fleets.
+    """
+    from .fleet_draft import auto_draft, draft_to_fleet_definition, run_admiral_draft
+    from .mcp_draft import DraftManager
+
+    cfg = runner.fleet_config
+    draft_cfg = cfg.draft
+    fleets = {"alpha": cfg.alpha_fleet, "beta": cfg.beta_fleet}
+    mcp_factions = {f for f, fleet in fleets.items()
+                    if fleet.mcp and fleet.mcp.enabled}
+
+    manager = DraftManager(
+        fleet_data=fleet_data,
+        budget=draft_cfg.budget,
+        max_ships=draft_cfg.max_ships,
+        initial_distance_km=cfg.initial_distance_km,
+        mcp_factions=mcp_factions,
+    )
+    http_server.set_draft_manager(manager)
+    http_server.set_battle_status("drafting", checkpoint=0,
+                                  waiting_for=sorted(mcp_factions))
+
+    print(f"\n=== DRAFT PHASE === "
+          f"{draft_cfg.budget} points, max {draft_cfg.max_ships} hulls")
+    for faction in sorted(mcp_factions):
+        print(f"  [{faction}] waiting for MCP draft "
+              f"(get_draft_state -> select_fleet -> set_formation -> ready)")
+
+    loop = asyncio.get_event_loop()
+
+    async def draft_non_mcp(faction: str) -> None:
+        fleet = fleets[faction]
+        if fleet.admiral is not None and fleet.admiral.enabled:
+            admiral = fleet.admiral
+            # run_admiral_draft is synchronous LLM I/O - keep the event loop
+            # (and the MCP faction's draft endpoints) responsive meanwhile.
+            draft = await loop.run_in_executor(None, lambda: run_admiral_draft(
+                runner.client,
+                admiral.model,
+                admiral.name or f"Admiral {faction.title()}",
+                faction,
+                fleet_data,
+                budget=draft_cfg.budget,
+                max_ships=draft_cfg.max_ships,
+                initial_distance_km=cfg.initial_distance_km,
+                verbose=runner.config.verbose,
+                seed=runner.config.seed,
+            ))
+        else:
+            draft = auto_draft(faction, draft_cfg.budget, draft_cfg.max_ships,
+                               seed=runner.config.seed)
+            roster = ", ".join(s.ship_name for s in draft.ships)
+            print(f"[DRAFT {faction}] auto-draft "
+                  f"({draft.points_spent}/{draft_cfg.budget} pts): {roster}")
+        manager.set_full_draft(faction, draft)
+
+    non_mcp_tasks = [asyncio.ensure_future(draft_non_mcp(f))
+                     for f in fleets if f not in mcp_factions]
+
+    waited_s = 0.0
+    while not manager.all_committed():
+        await asyncio.sleep(0.1)
+        waited_s += 0.1
+        if waited_s >= 30.0:
+            waited_s = 0.0
+            print(f"  [DRAFT] Still waiting for: "
+                  f"{', '.join(manager.waiting_for())}")
+        http_server.set_battle_status("drafting", checkpoint=0,
+                                      waiting_for=manager.waiting_for())
+    if non_mcp_tasks:
+        await asyncio.gather(*non_mcp_tasks)
+    manager.finalize()
+
+    # Materialize the drafts into fleet definitions (positions in km)
+    for faction, fleet in fleets.items():
+        draft = manager.slot(faction).draft
+        is_mcp = faction in mcp_factions
+        definition = draft_to_fleet_definition(
+            draft,
+            cfg.initial_distance_km,
+            captain_model="mcp" if is_mcp else draft_cfg.captain_model,
+            admiral_config=None if is_mcp else fleet.admiral,
+            mcp_config=fleet.mcp if is_mcp else None,
+        )
+        if faction == "alpha":
+            cfg.alpha_fleet = definition
+        else:
+            cfg.beta_fleet = definition
+        roster = ", ".join(s.ship_name for s in definition.ships)
+        commander = ("MCP" if is_mcp
+                     else (fleet.admiral.name if fleet.admiral else "auto"))
+        print(f"[DRAFT {faction}] committed ({commander}, "
+              f"{draft.points_spent}/{draft_cfg.budget} pts, "
+              f"formation '{draft.formation_name}'): {roster}")
 
 
 def apply_mcp_fleet_control(runner: Any) -> bool:
@@ -347,6 +704,12 @@ async def run_fleet_battle_with_http(
     from .mcp_controller import apply_mcp_commands_to_simulation
 
     runner.setup_fleet_battle(fleet_data)
+
+    # Controllers exist only after setup - register them for /status introspection.
+    if runner.alpha_mcp:
+        http_server.register_controller("alpha", runner.alpha_mcp)
+    if runner.beta_mcp:
+        http_server.register_controller("beta", runner.beta_mcp)
 
     def dbg(msg: str) -> None:
         """Debug trace, gated on verbose so --quiet is actually quiet."""
@@ -416,6 +779,8 @@ async def run_fleet_battle_with_http(
 
     while not runner._is_fleet_battle_over():
         # === SIMULATION PHASE ===
+        http_server.set_battle_status(
+            "running", checkpoint=runner.checkpoint_count, waiting_for=[])
         steps = int(decision_interval)
         for step_i in range(steps):
             current_time = runner.simulation.current_time
@@ -429,6 +794,9 @@ async def run_fleet_battle_with_http(
             # Record sim frame if enabled
             if runner.recorder and runner.config.record_sim_trace:
                 runner._record_sim_frame()
+
+            # Yield so live-viewer polls get served between sim steps
+            await asyncio.sleep(0)
 
             if runner._is_fleet_battle_over():
                 break

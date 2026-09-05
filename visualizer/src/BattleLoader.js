@@ -6,6 +6,7 @@ import { getModulesForShipType } from './shipModules.js';
 export class BattleLoader {
   constructor() {
     this.metadata = null;
+    this.sourceData = null;
     this.simTrace = [];
     this.events = [];
     this.ships = {};
@@ -46,6 +47,10 @@ export class BattleLoader {
    * @param {Object} data - Raw JSON data
    */
   parse(data) {
+    // Kept for the derived-timeline rebuilds live mode triggers on append
+    // (fleet blocks / specs carry per-ship weapon fits)
+    this.sourceData = data;
+
     // Extract metadata
     this.metadata = {
       recordingVersion: data.recording_version,
@@ -70,19 +75,31 @@ export class BattleLoader {
     // Extract ship information
     this.initializeShips(data);
 
-    // Build projectile hit map for extrapolation
+    // Build all timelines derived from sim_trace + events
+    this.rebuildDerivedState();
+
+    return this;
+  }
+
+  /**
+   * Rebuild every timeline derived from sim_trace and events. Called by
+   * parse() and again after each live-mode append (rebuild-from-scratch is
+   * cheap at recording sizes).
+   */
+  rebuildDerivedState() {
+    // Projectile hit map for extrapolation
     this.buildProjectileHitMap();
 
-    // Track last known projectile states from sim_trace
+    // Last known projectile states from sim_trace
     this.buildLastProjectileStates();
 
-    // Build ship damage timeline from events
-    this.buildShipDamageTimeline(data);
+    // Ship damage timeline from events
+    this.buildShipDamageTimeline(this.sourceData);
 
-    // Build ship target timeline from captain decisions
+    // Ship target timeline from captain decisions
     this.buildShipTargetTimeline();
 
-    // Build torpedo lifecycle map (launch -> flight -> outcome)
+    // Torpedo lifecycle map (launch -> flight -> outcome)
     this.buildTorpedoTimeline();
 
     // Collapse per-tick pd_fired events into continuous dwell segments
@@ -90,8 +107,49 @@ export class BattleLoader {
 
     // Radiator extended/retracted changes per ship
     this.buildRadiatorTimeline();
+  }
 
-    return this;
+  /**
+   * Merge a live-mode chunk (same shape as a saved recording, with
+   * sim_trace/events possibly trimmed to t > since_t) into the parsed
+   * state: append new frames, merge new events keeping sort order, pick up
+   * the verdict once it lands, and rebuild the derived timelines.
+   * Frames/events at or before what we already hold are skipped, so a
+   * final full fetch is a safe way to guarantee completeness.
+   * @param {Object} chunk - Recording-shaped object from the live server
+   * @returns {boolean} true if anything new was merged
+   */
+  appendLiveData(chunk) {
+    if (!chunk) return false;
+
+    const lastT = this.simTrace.length > 0
+      ? this.simTrace[this.simTrace.length - 1].t
+      : -Infinity;
+    const newFrames = (chunk.sim_trace || [])
+      .filter(f => f.t > lastT)
+      .sort((a, b) => a.t - b.t);
+
+    const lastEventT = this.events.length > 0
+      ? this.events[this.events.length - 1].timestamp
+      : -Infinity;
+    const newEvents = (chunk.events || [])
+      .filter(e => e.timestamp > lastEventT)
+      .sort((a, b) => a.timestamp - b.timestamp);
+
+    // The verdict arrives on the final poll, often with no frames attached
+    this.metadata.winner = chunk.winner ?? this.metadata.winner;
+    this.metadata.resultReason = chunk.result_reason ?? this.metadata.resultReason;
+
+    if (newFrames.length === 0 && newEvents.length === 0) return false;
+
+    this.simTrace.push(...newFrames);
+    this.events.push(...newEvents);
+    if (this.simTrace.length > 0) {
+      this.duration = this.simTrace[this.simTrace.length - 1].t;
+    }
+
+    this.rebuildDerivedState();
+    return true;
   }
 
   /**

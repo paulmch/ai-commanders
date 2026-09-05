@@ -49,6 +49,25 @@ class MCPConfig:
 
 
 @dataclass
+class DraftConfig:
+    """
+    Pre-battle draft phase: both sides buy their fleets from a point budget
+    (src/llm/fleet_draft.py) instead of using the configured ship lists.
+
+    With a draft enabled the per-fleet "ships" lists become optional: MCP
+    fleets draft over the battle HTTP API, LLM-admiral fleets draft via
+    run_admiral_draft, and fleets with neither get the deterministic
+    auto-draft.
+    """
+    enabled: bool = True
+    budget: int = 100
+    max_ships: int = 8
+    # Captain model flying drafted non-MCP fleets. MCP fleets always get
+    # "mcp" placeholder captains (commands are injected directly).
+    captain_model: str = "heuristic"
+
+
+@dataclass
 class ShipConfig:
     """Configuration for a ship and its captain - minimal spec."""
     ship_id: str
@@ -90,6 +109,8 @@ class BattleFleetConfig:
     # OFF by default so evaluation battles measure the raw model; turn on when
     # the point is cross-battle learning (model + accumulated experience).
     use_notebooks: bool = False
+    # Optional pre-battle draft phase (fleets are bought, not configured).
+    draft: Optional[DraftConfig] = None
 
     @classmethod
     def from_json(cls, path: str) -> 'BattleFleetConfig':
@@ -114,11 +135,23 @@ class BattleFleetConfig:
         beta_data = data.get("beta_fleet", data.get("fleets", {}).get("beta", {}))
         beta_fleet = _parse_fleet(beta_data, "beta")
 
-        # Validate
-        if not alpha_fleet.ships:
-            raise ValueError("Alpha fleet must have at least one ship")
-        if not beta_fleet.ships:
-            raise ValueError("Beta fleet must have at least one ship")
+        # Parse optional draft phase
+        draft = None
+        draft_data = data.get("draft")
+        if draft_data and draft_data.get("enabled", True):
+            draft = DraftConfig(
+                enabled=True,
+                budget=int(draft_data.get("budget", 100)),
+                max_ships=int(draft_data.get("max_ships", 8)),
+                captain_model=draft_data.get("captain_model", "heuristic"),
+            )
+
+        # Validate - with a draft the ship lists are drafted, not configured
+        if draft is None:
+            if not alpha_fleet.ships:
+                raise ValueError("Alpha fleet must have at least one ship")
+            if not beta_fleet.ships:
+                raise ValueError("Beta fleet must have at least one ship")
 
         return cls(
             battle_name=data.get("battle_name", "Fleet Battle"),
@@ -132,6 +165,7 @@ class BattleFleetConfig:
             record_sim_trace=data.get("record_sim_trace", False),
             personality_selection=data.get("personality_selection", True),
             use_notebooks=data.get("use_notebooks", False),
+            draft=draft,
         )
 
     def get_all_ships(self) -> List[ShipConfig]:

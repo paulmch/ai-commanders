@@ -395,14 +395,63 @@ class MCPHttpClient:
 
     async def signal_ready(self) -> Dict[str, Any]:
         """
-        Signal that all commands for this turn have been issued.
+        Signal that all commands for this turn have been issued. During a
+        draft phase this commits the faction's draft instead.
 
         Returns:
-            Server response
+            Server response (4xx bodies carry actionable validation errors,
+            e.g. "select a fleet before ready", so they are returned, not
+            raised)
         """
         client = await self._get_client()
         response = await client.post(f"{self.base_url}/ready/{self.faction}")
-        response.raise_for_status()
+        if response.status_code >= 500:
+            response.raise_for_status()
+        return response.json()
+
+    # === Draft phase ===
+
+    async def get_draft_state(self) -> Dict[str, Any]:
+        """Fetch this faction's draft state (budget, catalog, picks)."""
+        client = await self._get_client()
+        response = await client.get(f"{self.base_url}/draft/{self.faction}")
+        if response.status_code >= 500:
+            response.raise_for_status()
+        return response.json()
+
+    async def draft_select(
+        self,
+        ships: List[Dict[str, Any]],
+        rationale: str = "",
+    ) -> Dict[str, Any]:
+        """Submit a fleet selection; validation errors come back in the body."""
+        client = await self._get_client()
+        response = await client.post(
+            f"{self.base_url}/draft/{self.faction}/select",
+            json={"ships": ships, "rationale": rationale},
+        )
+        if response.status_code >= 500:
+            response.raise_for_status()
+        return response.json()
+
+    async def draft_formation(
+        self,
+        placements: List[Dict[str, Any]],
+        formation_name: str = "",
+        rationale: str = "",
+    ) -> Dict[str, Any]:
+        """Submit formation placements; adjustment notes come back in the body."""
+        client = await self._get_client()
+        response = await client.post(
+            f"{self.base_url}/draft/{self.faction}/formation",
+            json={
+                "placements": placements,
+                "formation_name": formation_name,
+                "rationale": rationale,
+            },
+        )
+        if response.status_code >= 500:
+            response.raise_for_status()
         return response.json()
 
     async def get_status(self) -> Dict[str, Any]:

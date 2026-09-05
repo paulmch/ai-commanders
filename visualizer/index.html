@@ -59,6 +59,16 @@
       </div>
     </header>
 
+    <!-- Live battle HUD (only visible with ?live=1) -->
+    <div id="liveHud" class="live-hud hidden">
+      <span class="live-dot" id="liveDot"></span>
+      <span class="live-status-text" id="liveStatusText">CONNECTING&hellip;</span>
+      <div class="live-toggles">
+        <button class="live-toggle active" id="liveFollowBtn" title="Keep playback locked to the live head">&#10687; FOLLOW</button>
+        <button class="live-toggle active" id="livePathsBtn" title="Show predicted paths to the next checkpoint">&#9671; PATHS</button>
+      </div>
+    </div>
+
     <!-- Ship Registry Panel -->
     <aside id="shipRegistry" class="panel">
       <div class="panel-header">
@@ -242,6 +252,9 @@
               <input type="range" id="timeline" min="0" max="1000" value="0">
             </div>
             <div class="timeline-markers" id="timelineMarkers"></div>
+            <div class="checkpoint-marker hidden" id="checkpointMarker">
+              <span class="checkpoint-label" id="checkpointLabel">CP</span>
+            </div>
           </div>
         </div>
 
@@ -321,6 +334,7 @@
           <div class="url-input-group">
             <input type="text" id="urlInput" placeholder="Enter recording URL..." class="url-input">
             <button class="selector-btn" id="loadUrlBtn">LOAD</button>
+            <button class="selector-btn live" id="liveBtn" title="Connect to a live battle">&#9679; LIVE</button>
           </div>
         </div>
         <div class="recent-battles" id="recentBattles">

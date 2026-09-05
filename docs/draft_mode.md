@@ -68,20 +68,82 @@ beyond an orphan's steering envelope turns enemy overkill back into waste.
 
 ## Point costs (src/llm/fleet_draft.py)
 
-| Hull | Cost | Notes |
-|------|-----:|-------|
-| frigate | 8 | thin-skinned escort gunboat |
-| corvette | 10 | 3g torpedo boat, 8 rounds |
-| destroyer | 16 | workhorse gun platform |
-| battlecruiser | 22 | cruiser guns, lighter armor |
-| cruiser | 26 | heavy combatant |
-| cruiser_torpedo | 30 | 4-launcher saturation striker |
-| battleship | 40 | line of battle |
-| dreadnought | 55 | mobile fortress |
-| dreadnought_siege | 58 | 7.25 GJ siege spinal |
+Costs are **computed from `data/fleet_ships.json`**, not hand-typed - change a
+hull's armour or magazine and its price follows. A hull pays for:
 
-Hand-tuned, anchored on wet mass, adjusted for capability. 100 points buys a
-dreadnought plus escorts, six destroyers, or a torpedo wolfpack.
+| Term | Rate | What it buys |
+|------|------|--------------|
+| armour | 1 pt / 55 t | how hard it is to kill |
+| PD turret | 1 pt each | active defence |
+| gun mounts | 8 pts per GJ/s | sustained energy throughput |
+| torpedo rounds | 0.032 pts per stowed GJ | **magazine depth x per-round yield** |
+
+| Hull | Cost | Was | Notes |
+|------|-----:|----:|-------|
+| frigate | 7 | 8 | thin-skinned escort gunboat |
+| corvette | 17 | 10 | 3g torpedo boat, 8 rounds (144 GJ) |
+| destroyer | 18 | 16 | workhorse gun platform |
+| battlecruiser | 24 | 22 | cruiser guns, lighter armor |
+| cruiser | 28 | 26 | heavy combatant |
+| battleship | 42 | 40 | line of battle |
+| dreadnought | 53 | 55 | mobile fortress |
+| dreadnought_siege | 54 | 58 | 7.25 GJ siege spinal |
+| cruiser_torpedo | 58 | 30 | 4 launchers, 48 rounds (864 GJ) |
+
+### Why torpedoes got expensive (2026-08-13 rebalance)
+
+`cruiser_torpedo` and `cruiser` are the **same hull** - identical mass, 241 cm
+nose, 1.5g. The torpedo variant swaps guns for 4 launchers and doubles the PD,
+and used to cost 4 points more. So 48 guided rounds were nearly free.
+
+They should not have been. A Trident is a guided fusion-torch penetrator that
+steers all the way in, and at the engine's enforced 12 km/s closure floor
+(`MIN_CLOSING_SPEED_KPS`, `src/torpedo.py`) a 250 kg penetrator lands **18 GJ** -
+4.2x a spinal coiler slug, 25x a coilgun round - rising past 40 GJ head-on.
+Priced per GJ/s of sustained output, the old table read:
+
+| Hull | pts per GJ/s (old) |
+|------|-----:|
+| cruiser_torpedo | 5.0 |
+| corvette | 6.7 |
+| dreadnought | 87.7 |
+
+A 17.5x efficiency gap, which made saturation doctrine the only rational draft
+at every budget. Two frontier admirals independently drafted 5x
+`cruiser_torpedo` at 150 points in the same match; the one that later deviated
+to a dreadnought line was swept 0-for-7 without killing a single ship.
+
+Pricing the magazine on delivered energy closes the gap to under 10x. 100
+points now buys a dreadnought plus a frigate, five destroyers, or **one**
+torpedo cruiser - saturation is still buyable, but you pay for every round.
+
+### Measured effect (offline A/B, heuristic captains, no LLM)
+
+Five seeds per matchup, no admirals, fixed fleets - `scripts/` has no runner
+for this, it was a throwaway harness driving `LLMBattleRunner` with
+`client=None`. Record is from the torpedo side's point of view:
+
+| torpedo side | vs gun side | points | record |
+|--------------|-------------|-------:|--------|
+| OLD 5x cruiser_torpedo | 5x cruiser | 290 v 140 | 5W-0L-0D |
+| OLD 5x cruiser_torpedo | dreadnought + 3x cruiser + frigate | 290 v 144 | 5W-0L-0D |
+| NEW 2x cruiser_torpedo + 4x frigate | 5x cruiser | 144 v 140 | 3W-1L-1D |
+| NEW 2x cruiser_torpedo + 4x frigate | dreadnought + 3x cruiser + frigate | 144 v 144 | 0W-5L-0D |
+
+The top two rows are the old distortion measured: the fleet 150 old points
+bought costs **290** under the new model and beats both gun archetypes 10-0.
+
+The bottom two are the new meta - rock-paper-scissors instead of dominance.
+Torpedo doctrine still beats a massed medium-cruiser line (3-1-1), and a
+dreadnought-anchored mix now hard-counters it (0-5): enough PD dwell and nose
+armour to eat a 2-hull salvo and close. That counter did not exist before -
+the 2026-08-11 note that "kiting is not available to battleship fleets" was
+true because nothing survived the approach at any composition.
+
+Caveat: 5 seeds per cell is a small sample, and both sides fly heuristic
+captains. If torpedoes should sit closer to even, `TORPEDO_POINTS_PER_GJ` is
+the one-line dial - lowering it to 0.028 puts `cruiser_torpedo` at 55, level
+with the dreadnought.
 
 ## Cheap AI captains (src/llm/heuristic_captain.py)
 

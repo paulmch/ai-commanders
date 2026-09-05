@@ -1,0 +1,159 @@
+{
+  "budget": 150,
+  "alpha_captain_model": "heuristic",
+  "beta_captain_model": "heuristic",
+  "alpha": {
+    "faction": "alpha",
+    "budget": 150,
+    "points_spent": 150,
+    "auto_draft": false,
+    "formation_name": "Deep PD Tetra",
+    "selection_rationale": "Five stacked torpedo cruisers spend 150 exactly, share 1.5g so nothing is abandoned, and dump coordinated 40-round waves that the catalog itself says will overwhelm even dreadnought PD. Simple order: stay nose-on as a brick, close, and salvo together \u2014 empty gunships and slow capitals die; a pure kite is the only real threat and cannot spend this budget at 3g under the 8-ship cap.",
+    "formation_rationale": "Identical torpedo cruisers held well aft so fragile hulls stay out of early gun range and can fire a coordinated volley. Center-plus-tetrahedron keeps every pair ~43\u201371 km apart for full mutual PD overlap while modest 3-axis offsets deny a single spinal line through multiple ships.",
+    "ships": [
+      {
+        "ship_id": "alpha_1",
+        "ship_name": "TIS Harpoon-1",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          -90.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_2",
+        "ship_name": "TIS Harpoon-2",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          -65.0,
+          25.0,
+          25.0
+        ]
+      },
+      {
+        "ship_id": "alpha_3",
+        "ship_name": "TIS Harpoon-3",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          -65.0,
+          -25.0,
+          -25.0
+        ]
+      },
+      {
+        "ship_id": "alpha_4",
+        "ship_name": "TIS Harpoon-4",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          -115.0,
+          25.0,
+          -25.0
+        ]
+      },
+      {
+        "ship_id": "alpha_5",
+        "ship_name": "TIS Harpoon-5",
+        "ship_type": "cruiser_torpedo",
+        "cost": 30,
+        "offset_km": [
+          -115.0,
+          -25.0,
+          25.0
+        ]
+      }
+    ]
+  },
+  "beta": {
+    "faction": "beta",
+    "budget": 150,
+    "points_spent": 150,
+    "auto_draft": false,
+    "formation_name": "Dreadnought Core with Frigate Screen",
+    "selection_rationale": "Anchor the line with two dreadnoughts (0.75g) whose 251cm nose armor and 5 heavy coilguns plus spinal mount can slug it out and tank punishment, screened by five cheap frigates that add 10 extra PD lasers (crucial for shredding incoming torpedo saturation) and 5 more coilgun barrels for volume fire. All hulls stay close together in a single defensive formation rather than splitting speed doctrines, spending the full 150-point budget across 7 ships for redundancy against focused fire.",
+    "formation_rationale": "The two dreadnoughts form the main gunline slightly forward, close enough together (60km apart) to mass firepower while supporting each other's PD. A pair of frigates (Ward-1/2) screen ahead and to the sides of the dreadnoughts at offset altitudes to intercept torpedoes approaching the capital ships, while overlapping PD coverage. Ward-4/5 sit further out laterally to complicate the enemy's spinal weapon geometry, forcing them to choose between engaging the flanks or the core, while still within PD-support range (~100km) of the dreadnoughts. Ward-3 is held in reserve at the rear, away from the initial exchange, ready to reinforce PD or respond to flanking maneuvers without being an easy target in the opening exchange.",
+    "ships": [
+      {
+        "ship_id": "beta_1",
+        "ship_name": "OCS Colossus-1",
+        "ship_type": "dreadnought",
+        "cost": 55,
+        "offset_km": [
+          20.0,
+          -30.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_2",
+        "ship_name": "OCS Colossus-2",
+        "ship_type": "dreadnought",
+        "cost": 55,
+        "offset_km": [
+          20.0,
+          30.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_3",
+        "ship_name": "OCS Ward-1",
+        "ship_type": "frigate",
+        "cost": 8,
+        "offset_km": [
+          60.0,
+          -60.0,
+          20.0
+        ]
+      },
+      {
+        "ship_id": "beta_4",
+        "ship_name": "OCS Ward-2",
+        "ship_type": "frigate",
+        "cost": 8,
+        "offset_km": [
+          60.0,
+          60.0,
+          -20.0
+        ]
+      },
+      {
+        "ship_id": "beta_5",
+        "ship_name": "OCS Ward-3",
+        "ship_type": "frigate",
+        "cost": 8,
+        "offset_km": [
+          -40.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_6",
+        "ship_name": "OCS Ward-4",
+        "ship_type": "frigate",
+        "cost": 8,
+        "offset_km": [
+          40.0,
+          -90.0,
+          -30.0
+        ]
+      },
+      {
+        "ship_id": "beta_7",
+        "ship_name": "OCS Ward-5",
+        "ship_type": "frigate",
+        "cost": 8,
+        "offset_km": [
+          40.0,
+          90.0,
+          30.0
+        ]
+      }
+    ]
+  }
+}

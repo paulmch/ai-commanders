@@ -19,8 +19,10 @@ back to a deterministic auto-draft so a battle always starts.
 
 from __future__ import annotations
 
+import json
 import random
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .client import LLMCallError
@@ -29,23 +31,109 @@ from .client import LLMCallError
 # Point costs
 # ---------------------------------------------------------------------------
 
-# Hand-tuned, anchored on wet mass and adjusted for capability: the frigate
-# is priced below the corvette despite equal mass (thin skin, light guns),
-# the battlecruiser below the cruiser (same guns, 177cm vs 241cm nose), and
-# the torpedo cruiser above both (a saturation salvo that can kill a
-# dreadnought). Default budget 100 buys e.g. one dreadnought + escorts, or
-# six destroyers, or a torpedo-cruiser wolfpack - real tradeoffs.
-SHIP_POINT_COSTS: Dict[str, int] = {
-    "corvette": 10,
-    "frigate": 8,
-    "destroyer": 16,
-    "battlecruiser": 22,
-    "cruiser": 26,
-    "cruiser_torpedo": 30,
-    "battleship": 40,
-    "dreadnought": 55,
-    "dreadnought_siege": 58,
-}
+# Costs are COMPUTED from data/fleet_ships.json, not hand-typed, so a hull
+# that gets more armour or a fatter magazine gets more expensive on its own.
+#
+# A hull pays for three things:
+#   platform  - armour tonnage (what it takes to kill it) plus PD turrets
+#   guns      - sustained energy throughput of its gun mounts (GJ/s)
+#   torpedoes - the magazine's DELIVERED ENERGY: rounds x per-round yield
+#
+# That last term is the 2026-08-13 rebalance. Torpedo armament used to be
+# almost free: cruiser_torpedo cost 30 pts against the gun cruiser's 26 for
+# the same hull, same 241cm nose and DOUBLE the PD - so 48 guided rounds
+# came to 4 points. But a Trident is not a dumb slug. It is a guided
+# fusion-torch penetrator that steers all the way in, and at the engine's
+# enforced 12 km/s closure floor (MIN_CLOSING_SPEED_KPS in src/torpedo.py)
+# a 250 kg penetrator lands 18 GJ - 4.2x a spinal coiler slug, 25x a
+# coilgun round - rising past 40 GJ head-on. Priced per GJ/s of sustained
+# output the old table read 5.0 pts per GJ/s for the torpedo cruiser
+# against 87.7 for the dreadnought: a 17.5x efficiency gap that made
+# saturation doctrine the only rational draft at every budget (two frontier
+# admirals independently drafted 5x cruiser_torpedo at 150 pts, and the one
+# that deviated was swept 0-for-7).
+#
+# So the magazine is now priced on what it actually delivers.
+ARMOR_TONS_PER_POINT = 55.0
+PD_POINTS_PER_TURRET = 1.0
+GUN_POINTS_PER_GJ_PER_S = 8.0
+# Points per GJ of stowed torpedo warhead energy. Set so a full 48-round
+# torpedo cruiser magazine (864 GJ) costs ~28 pts - the hull lands just
+# above a dreadnought, which is where a fleet-killer belongs.
+TORPEDO_POINTS_PER_GJ = 0.032
+
+
+def _load_ship_specs() -> Dict[str, Any]:
+    """Fleet data for pricing only - a local read, so importing this module
+    never pulls in the battle runner."""
+    path = Path(__file__).parent.parent.parent / "data" / "fleet_ships.json"
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def torpedo_round_energy_gj(fleet_data: Dict[str, Any]) -> float:
+    """
+    Energy one torpedo delivers on the guaranteed-worst-case intercept.
+
+    The Trident is a kinetic penetrator (warhead_yield_gj is 0), so its
+    "explosive factor" is KE = 1/2 m v^2 at the guidance law's enforced
+    closure floor. Any explosive yield, if a future round has one, adds on
+    top.
+    """
+    spec = fleet_data.get("weapon_types", {}).get("torpedo_launcher", {})
+    mass_kg = spec.get("penetrator_mass_kg", 250.0)
+    # Mirrors MIN_CLOSING_SPEED_KPS in src/torpedo.py - the floor the
+    # guidance law holds, so it is the least a round can be worth.
+    closure_ms = 12.0 * 1000.0
+    kinetic_gj = 0.5 * mass_kg * closure_ms ** 2 / 1e9
+    return kinetic_gj + spec.get("warhead_yield_gj", 0.0)
+
+
+def _mount_throughput_gj_per_s(weapon_type: str, fleet_data: Dict[str, Any]) -> float:
+    """Sustained energy output of one gun mount, in GJ/s."""
+    spec = fleet_data.get("weapon_types", {}).get(weapon_type, {})
+    salvo = spec.get("salvo_size", 1)
+    cooldown = spec.get("cooldown_s", 0) + (salvo - 1) * spec.get(
+        "intra_salvo_cooldown_s", 0)
+    if cooldown <= 0:
+        return 0.0
+    return spec.get("kinetic_energy_gj", 0.0) * salvo / cooldown
+
+
+def ship_point_cost(ship_type: str, fleet_data: Dict[str, Any]) -> int:
+    """Draft cost of one hull, derived from its own stats."""
+    spec = fleet_data.get("ships", {}).get(ship_type)
+    if not spec:
+        return 0
+    armor_tons = spec.get("mass_breakdown", {}).get("armor", 0.0)
+    points = armor_tons / ARMOR_TONS_PER_POINT
+
+    round_gj = torpedo_round_energy_gj(fleet_data)
+    for weapon in spec.get("weapons", []):
+        wtype = weapon.get("type")
+        if wtype == "pd_laser":
+            points += PD_POINTS_PER_TURRET
+        elif wtype == "torpedo_launcher":
+            rounds = weapon.get("magazine", fleet_data.get("weapon_types", {})
+                                .get("torpedo_launcher", {}).get("magazine", 16))
+            points += rounds * round_gj * TORPEDO_POINTS_PER_GJ
+        elif wtype:
+            points += (_mount_throughput_gj_per_s(wtype, fleet_data)
+                       * GUN_POINTS_PER_GJ_PER_S)
+    return max(1, round(points))
+
+
+def build_ship_point_costs(fleet_data: Optional[Dict[str, Any]] = None
+                           ) -> Dict[str, int]:
+    """The costed catalog: every hull in fleet data, priced by the model."""
+    data = fleet_data if fleet_data is not None else _load_ship_specs()
+    return {stype: ship_point_cost(stype, data) for stype in data.get("ships", {})}
+
+
+SHIP_POINT_COSTS: Dict[str, int] = build_ship_point_costs()
 
 DEFAULT_POINT_BUDGET = 100
 DEFAULT_MAX_SHIPS = 8
@@ -135,8 +223,15 @@ def _torpedo_magazine(ship_spec: Dict[str, Any], fleet_data: Dict[str, Any]) -> 
 
 def build_catalog_text(fleet_data: Dict[str, Any]) -> str:
     """Human/LLM-readable costed catalog of every draftable hull."""
+    round_gj = torpedo_round_energy_gj(fleet_data)
     lines = [
         "SHIP CATALOG (cost in points | one line per hull class):",
+        "",
+        "PRICING: a hull costs armour tonnage + PD turrets + weapon energy. "
+        f"Torpedoes are priced per round on delivered yield ({round_gj:.0f} GJ "
+        "each at the 12 km/s closure floor, vs 4.3 GJ for a spinal coiler "
+        "slug), so magazine depth is the single biggest line item on a "
+        "torpedo hull. Saturation is buyable, but you pay for every round.",
         "",
     ]
     for ship_type, cost in SHIP_POINT_COSTS.items():
@@ -582,7 +677,9 @@ def run_admiral_draft(
     flat: Optional[List[str]] = None
     for attempt in range(3):
         try:
-            calls = client.decide_with_tools(messages, [SELECT_FLEET_TOOL], model=model)
+            calls = client.decide_with_tools(
+                messages, [SELECT_FLEET_TOOL], model=model,
+                tool_choice="required")
         except LLMCallError as e:
             print(f"[DRAFT {faction}] selection call failed: {e}")
             break
@@ -625,7 +722,9 @@ def run_admiral_draft(
     placements: Optional[List[Dict[str, Any]]] = None
     for attempt in range(2):
         try:
-            calls = client.decide_with_tools(form_messages, [SET_FORMATION_TOOL], model=model)
+            calls = client.decide_with_tools(
+                form_messages, [SET_FORMATION_TOOL], model=model,
+                tool_choice="required")
         except LLMCallError as e:
             print(f"[DRAFT {faction}] formation call failed: {e}")
             break
@@ -662,8 +761,9 @@ def draft_to_fleet_definition(
     captain_model: str = "heuristic",
     admiral_config: Optional[Any] = None,
     temperature: float = 0.7,
+    mcp_config: Optional[Any] = None,
 ) -> Any:
-    """Build a FleetDefinition (ships + positions + admiral) from a draft."""
+    """Build a FleetDefinition (ships + positions + admiral/MCP) from a draft."""
     from .fleet_config import FleetDefinition, ShipConfig
 
     positions = world_positions_km(draft, initial_distance_km)
@@ -682,6 +782,7 @@ def draft_to_fleet_definition(
         ships=ships,
         faction=draft.faction,
         admiral=admiral_config,
+        mcp=mcp_config,
     )
 
 

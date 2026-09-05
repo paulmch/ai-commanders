@@ -380,6 +380,26 @@ class HttpStateProvider:
         """Fetch battle status (checkpoint, who the runner is waiting for)."""
         return await self._client.get_status()
 
+    async def get_draft_state_async(self) -> Dict[str, Any]:
+        """Fetch the draft-phase state for this faction."""
+        return await self._client.get_draft_state()
+
+    async def draft_select_async(
+        self, ships: List[Dict[str, Any]], rationale: str = ""
+    ) -> Dict[str, Any]:
+        """Submit a draft fleet selection."""
+        return await self._client.draft_select(ships, rationale)
+
+    async def draft_formation_async(
+        self,
+        placements: List[Dict[str, Any]],
+        formation_name: str = "",
+        rationale: str = "",
+    ) -> Dict[str, Any]:
+        """Submit draft formation placements."""
+        return await self._client.draft_formation(
+            placements, formation_name, rationale)
+
     async def close(self) -> None:
         """Close the HTTP client."""
         await self._client.close()
@@ -714,6 +734,87 @@ def create_mcp_server(
                     "required": [],
                 },
             ),
+            Tool(
+                name="get_draft_state",
+                description=(
+                    "Draft phase only: get your point budget, the costed ship "
+                    "catalog, and your current picks. Draft flow: "
+                    "get_draft_state -> select_fleet -> set_formation "
+                    "(optional) -> ready() to commit."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                },
+            ),
+            Tool(
+                name="select_fleet",
+                description=(
+                    "Draft phase only: buy your fleet from the catalog (see "
+                    "get_draft_state for hulls, costs and your budget). "
+                    "Replaces any previous selection. Commit with ready()."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "ships": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "ship_type": {"type": "string"},
+                                    "count": {"type": "integer", "minimum": 1},
+                                },
+                                "required": ["ship_type", "count"],
+                            },
+                            "description": "Hull classes and how many of each to buy",
+                        },
+                        "rationale": {
+                            "type": "string",
+                            "description": "One or two sentences on the fleet concept",
+                        },
+                    },
+                    "required": ["ships"],
+                },
+            ),
+            Tool(
+                name="set_formation",
+                description=(
+                    "Draft phase only: place your drafted ships. Offsets are "
+                    "km from your fleet anchor in YOUR frame: +x points at "
+                    "the enemy, y lateral, z vertical (limits in "
+                    "get_draft_state). Unplaced ships keep default "
+                    "line-abreast slots. May be called again to adjust."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "placements": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "ship_name": {"type": "string"},
+                                    "x_km": {"type": "number"},
+                                    "y_km": {"type": "number"},
+                                    "z_km": {"type": "number"},
+                                },
+                                "required": ["ship_name", "x_km", "y_km"],
+                            },
+                        },
+                        "formation_name": {
+                            "type": "string",
+                            "description": "Short name for the formation (e.g. 'PD wall')",
+                        },
+                        "rationale": {
+                            "type": "string",
+                            "description": "Why this shape",
+                        },
+                    },
+                    "required": ["placements"],
+                },
+            ),
         ]
 
     @server.call_tool()
@@ -1026,6 +1127,70 @@ def create_mcp_server(
                 type="text",
                 text=plot,
             )]
+
+        elif name == "get_draft_state":
+            if not is_http_mode:
+                return [TextContent(
+                    type="text",
+                    text="Drafting requires HTTP mode (start the server with --http).",
+                )]
+            draft_state = await state_provider.get_draft_state_async()
+            if "error" in draft_state:
+                return [TextContent(type="text", text=f"ERROR: {draft_state['error']}")]
+            return [TextContent(type="text", text=json.dumps(draft_state, indent=2))]
+
+        elif name == "select_fleet":
+            if not is_http_mode:
+                return [TextContent(
+                    type="text",
+                    text="Drafting requires HTTP mode (start the server with --http).",
+                )]
+            result = await state_provider.draft_select_async(
+                arguments.get("ships"), arguments.get("rationale", ""))
+            if result.get("status") != "ok":
+                return [TextContent(
+                    type="text",
+                    text=f"ERROR: {result.get('error', json.dumps(result))}",
+                )]
+            roster = "\n".join(
+                f"  - {s['ship_name']} ({s['ship_type']}, {s['cost']} pts)"
+                for s in result.get("your_ships", []))
+            return [TextContent(
+                type="text",
+                text=(
+                    f"Fleet purchased: {result['points_spent']} pts spent, "
+                    f"{result['points_remaining']} remaining.\n{roster}\n"
+                    "Place it with set_formation (optional), then commit "
+                    "with ready()."
+                ),
+            )]
+
+        elif name == "set_formation":
+            if not is_http_mode:
+                return [TextContent(
+                    type="text",
+                    text="Drafting requires HTTP mode (start the server with --http).",
+                )]
+            result = await state_provider.draft_formation_async(
+                arguments.get("placements"),
+                arguments.get("formation_name", ""),
+                arguments.get("rationale", ""),
+            )
+            if result.get("status") != "ok":
+                return [TextContent(
+                    type="text",
+                    text=f"ERROR: {result.get('error', json.dumps(result))}",
+                )]
+            lines = [f"Formation '{result.get('formation_name', 'custom')}' set:"]
+            for s in result.get("your_ships", []):
+                off = s.get("offset_km", {})
+                lines.append(
+                    f"  - {s['ship_name']}: x={off.get('x', 0):+.0f} "
+                    f"y={off.get('y', 0):+.0f} z={off.get('z', 0):+.0f} km")
+            for note in result.get("notes", []):
+                lines.append(f"  note: {note}")
+            lines.append("Commit your draft with ready().")
+            return [TextContent(type="text", text="\n".join(lines))]
 
         else:
             return [TextContent(

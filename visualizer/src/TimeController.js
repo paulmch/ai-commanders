@@ -40,6 +40,19 @@ export class TimeController {
   }
 
   /**
+   * Grow (or correct) the total duration - live mode extends it as frames
+   * stream in from the battle server
+   * @param {number} duration - New duration in seconds
+   */
+  setDuration(duration) {
+    this.duration = duration;
+    if (this.currentTime > duration) {
+      this.currentTime = duration;
+    }
+    this.notifyCallbacks();
+  }
+
+  /**
    * Seek to specific time
    * @param {number} time - Time in seconds
    */

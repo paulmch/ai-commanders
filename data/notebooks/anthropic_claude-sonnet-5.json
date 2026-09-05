@@ -60,6 +60,66 @@
         "without_wins": 0,
         "without_losses": 0
       }
+    },
+    {
+      "id": "83c01fec",
+      "role": "admiral",
+      "text": "In symmetric cruiser_torpedo mirror matches, concentrating all fire on the enemy's designated 'center' ship invites the same focus-fire back with no asymmetric advantage; consider splitting target priority or feinting to force enemy PD to divide, rather than mirroring their exact TOT-on-flagship tactic.",
+      "status": "accepted",
+      "source_battle": "data/recordings/battle_grok_4_6_vs_claude_sonnet_5_20260813_124304.json",
+      "source_outcome": "lost vs x-ai/grok-4.6",
+      "created_at": "2026-08-13T12:44:25",
+      "validation": {
+        "with_wins": 0,
+        "with_losses": 0,
+        "without_wins": 0,
+        "without_losses": 0
+      }
+    },
+    {
+      "id": "be28e0e5",
+      "role": "admiral",
+      "text": "When both fleets converge to identical <80km/150km compact PD-wall doctrine and matched throttle, the engagement becomes a pure attrition coin-flip with no positional edge; look for ways to gain range, angle, or timing asymmetry (e.g. earlier launch, wider spread, delayed close) instead of mirroring the enemy's stated formation exactly.",
+      "status": "accepted",
+      "source_battle": "data/recordings/battle_grok_4_6_vs_claude_sonnet_5_20260813_124304.json",
+      "source_outcome": "lost vs x-ai/grok-4.6",
+      "created_at": "2026-08-13T12:44:25",
+      "validation": {
+        "with_wins": 0,
+        "with_losses": 0,
+        "without_wins": 0,
+        "without_losses": 0
+      }
+    },
+    {
+      "id": "ec7d5c67",
+      "role": "admiral",
+      "text": "When facing pure-torpedo fleets with overwhelming TOT (20+ rounds every ~30s) and your own PD proves unable to stop penetrations, closing range on a straight vector is a losing bet if you die before arriving \u2014 every ship was killed in one salvo (multiple module kills per hit) well before reaching coilgun range across ~4 volleys. Before committing to 'close and brawl', estimate time-to-coilgun-rang...",
+      "status": "accepted",
+      "source_battle": "data/recordings/battle_grok_4_6_vs_claude_sonnet_5_20260813_125403.json",
+      "source_outcome": "lost vs x-ai/grok-4.6",
+      "created_at": "2026-08-13T12:55:54",
+      "validation": {
+        "with_wins": 0,
+        "with_losses": 0,
+        "without_wins": 0,
+        "without_losses": 0
+      }
+    },
+    {
+      "id": "812d757a",
+      "role": "admiral",
+      "text": "Directives that only say 'evade aggressively' without specifying maneuver type (jink amplitude, vector diversity, out-of-plane thrust) did not prevent a single torpedo salvo from penetrating in this battle \u2014 every wave scored multiple hits. When PD/evasion is clearly failing salvo after salvo, escalate to concrete evasive tactics (random high-g lateral jinks, splitting ships onto divergent vectors...",
+      "status": "accepted",
+      "source_battle": "data/recordings/battle_grok_4_6_vs_claude_sonnet_5_20260813_125403.json",
+      "source_outcome": "lost vs x-ai/grok-4.6",
+      "created_at": "2026-08-13T12:55:54",
+      "validation": {
+        "with_wins": 0,
+        "with_losses": 0,
+        "without_wins": 0,
+        "without_losses": 0
+      }
     }
   ]
 }
