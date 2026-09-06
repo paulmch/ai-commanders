@@ -7,6 +7,7 @@ different providers against each other in the same battle.
 """
 
 import json
+from contextlib import contextmanager
 import os
 import random
 import threading
@@ -91,6 +92,8 @@ class CallStats:
     cached_tokens: int = 0
     prompt_tokens: int = 0
     cache_discount: float = 0.0
+    cost_usd: float = 0.0
+    unpriced_calls: int = 0
     errors: List[str] = field(default_factory=list)
     _lock: threading.Lock = field(
         default_factory=threading.Lock, repr=False, compare=False
@@ -122,6 +125,10 @@ class CallStats:
         if not usage:
             return
         with self._lock:
+            if usage.get('cost') is None:
+                self.unpriced_calls += 1
+            else:
+                self.cost_usd += float(usage['cost'])
             self.prompt_tokens += usage.get("prompt_tokens", 0) or 0
             details = usage.get("prompt_tokens_details") or {}
             self.cached_tokens += details.get("cached_tokens", 0) or 0
@@ -221,6 +228,7 @@ class CaptainClient:
         max_tokens: int = 32768,
         timeout: float = 120.0,
         session_id: Optional[str] = None,
+        reasoning_effort: Optional[str] = None,
     ):
         """
         Initialize the captain client.
@@ -247,7 +255,10 @@ class CaptainClient:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.session_id = session_id
+        self.reasoning_effort = reasoning_effort
         self.stats = CallStats()
+        self._audit_local = threading.local()
+        self.budget = None
 
         if not self.api_key:
             raise ValueError(
@@ -259,6 +270,20 @@ class CaptainClient:
     # -------------------------------------------------------------------------
     # Internals
     # -------------------------------------------------------------------------
+
+    @contextmanager
+    def audit_scope(self, observer):
+        previous = getattr(self._audit_local, 'observer', None)
+        self._audit_local.observer = observer
+        try:
+            yield
+        finally:
+            self._audit_local.observer = previous
+
+    def _audit_response(self, payload, data):
+        observer = getattr(self._audit_local, 'observer', None)
+        if observer:
+            observer(payload, data)
 
     def _headers(self) -> Dict[str, str]:
         return {
@@ -275,15 +300,22 @@ class CaptainClient:
         Raises:
             LLMCallError: on a non-retryable error, or after exhausting retries.
         """
+        if self.reasoning_effort is not None:
+            payload['reasoning'] = {'effort': self.reasoning_effort}
         last_error: Optional[str] = None
         last_status: Optional[int] = None
 
         for attempt in range(1, MAX_ATTEMPTS + 1):
             try:
+                reservation = self.budget.reserve(payload) if self.budget else None
                 self.stats.record_call()
                 response = self._client.post(self.BASE_URL, headers=self._headers(), json=payload)
                 response.raise_for_status()
-                return response.json()
+                data = response.json()
+                if self.budget:
+                    self.budget.settle(reservation, data.get('usage', {}).get('cost'))
+                self._audit_response(payload, data)
+                return data
 
             except httpx.HTTPStatusError as e:
                 last_status = e.response.status_code

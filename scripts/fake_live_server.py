@@ -29,6 +29,11 @@ class FakeLiveServer:
         self.interval = decision_interval
         self.frames = sorted(recording.get("sim_trace") or [], key=lambda f: f["t"])
         self.events = sorted(recording.get("events") or [], key=lambda e: e["timestamp"])
+        for i, event in enumerate(self.events, 1):
+            if not event.get('event_id'):
+                event['event_id'] = f'legacy-live-{i}'
+            if not event.get('sequence'):
+                event['sequence'] = i
         self.frame_ts = [f["t"] for f in self.frames]
         self.t_end = self.frame_ts[-1] if self.frame_ts else 0.0
         self.start = time.monotonic()
@@ -94,7 +99,10 @@ class FakeLiveServer:
 
         rec = dict(self.recording)
         rec["sim_trace"] = [f for f in self.frames if since_t < f["t"] <= cur]
-        rec["events"] = [e for e in self.events if since_t < e["timestamp"] <= cur]
+        since_seq = int(request.query.get('since_seq', -1))
+        rec["events"] = [e for e in self.events if e['timestamp'] <= cur and
+                         (e.get('sequence', 0) > since_seq if 'since_seq' in request.query
+                          else since_t < e['timestamp'])]
         if not ended:
             # A battle in progress has no verdict yet
             rec["winner"] = None

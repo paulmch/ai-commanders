@@ -114,7 +114,8 @@ export class SceneManager {
   /** Faint concentric range rings every 100 km - a tactical scale cue. */
   createRangeRings() {
     this.tacticalOverlay = new THREE.Group();
-    const mat = new THREE.LineBasicMaterial({ color: 0x3a6a8a, transparent: true, opacity: 0.16 });
+    const mat = new THREE.LineBasicMaterial({ color: 0x3a6a8a, transparent: true, opacity: 0.12, depthWrite: false });
+    this.rangeRingMaterial = mat;
     for (let r = 100; r <= 600; r += 100) {
       const pts = [];
       for (let i = 0; i <= 160; i++) {
@@ -325,13 +326,18 @@ export class SceneManager {
       if (this.dyingPopTimes.has(shipId)) this.dyingPopTimes.delete(shipId);
     }
 
-    // Radiators unfold and glow; retracted they fold flat and go dark
+    // Rigid exchangers rotate about their root hinges instead of shrinking.
     const radMats = ud.radiatorMaterials || [];
-    const ext = state.radiatorsExtended ? 1 : 0.16;
-    const k = Math.min(1, dt * 2.5);
-    const glowTarget = state.radiatorsExtended ? 1.9 : 0.0;
+    const timeStep = this.currentTime - (ud.radiatorTime ?? this.currentTime);
+    const snap = ud.radiatorTime === undefined || timeStep < 0 || timeStep > 0.5;
+    const k = snap ? 1 : Math.min(1, dt * 2.5);
+    ud.radiatorTime = this.currentTime;
+    const glowTarget = state.radiatorsExtended ? 1.15 : 0.0;
     for (const m of radMats) m.emissiveIntensity += (glowTarget - m.emissiveIntensity) * k;
-    for (const panel of ud.radiators || []) panel.scale.y += (ext - panel.scale.y) * k;
+    for (const panel of ud.radiators || []) {
+      const angle = panel.userData.deployedAngle + (state.radiatorsExtended ? 0 : panel.userData.foldDirection * 1.42);
+      panel.rotation.z += (angle - panel.rotation.z) * k;
+    }
 
     // Windows and accents: dim and flicker as the hull fails
     const mats = ud.materials;
@@ -409,11 +415,11 @@ export class SceneManager {
       group.add(core);
       const tracer = new Ribbon({
         maxPoints: 2, width: 0.055, taper: 0.5, head: [3.2, 2.8, 1.6], tail: [1.6, 1.0, 0.3],
-        intensity: 1.0, fadePow: 0.7, core: 8, halo: 0.2
+        intensity: 1.0, fadePow: 0.7, core: 8, halo: 0.2, maxWidthPx: 2
       });
       const trail = new Ribbon({
         maxPoints: 24, width: 0.04, taper: 0.1, head: [1.4, 1.0, 0.4], tail: [0.5, 0.15, 0.02],
-        intensity: 0.6, fadePow: 1.8, minStep: 0.05, maxAge: 0.5
+        intensity: 0.6, fadePow: 1.8, minStep: 0.05, maxAge: 0.5, maxWidthPx: 1.5
       });
       this.scene.add(tracer.mesh);
       this.scene.add(trail.mesh);
@@ -501,14 +507,15 @@ export class SceneManager {
       map: this.getDiamondTexture(), color: accent, transparent: true, opacity: 0.32,
       sizeAttenuation: false, depthTest: false, depthWrite: false, blending: THREE.AdditiveBlending
     }));
-    marker.scale.set(0.022, 0.022, 1);
+    marker.scale.set(0.013, 0.013, 1);
     marker.renderOrder = 50;
     group.add(marker);
 
     const c = new THREE.Color(accent);
     const trail = new Ribbon({
-      maxPoints: 64, width: 0.32, taper: 0.15, head: [c.r * 1.8, c.g * 1.8, c.b * 1.8],
-      tail: [c.r * 0.5, c.g * 0.4, c.b * 0.4], intensity: 0.9, fadePow: 1.3, minStep: 0.08, maxAge: 2.5
+      maxPoints: 64, width: 0.16, taper: 0.08, head: [c.r * 1.8, c.g * 1.8, c.b * 1.8],
+      tail: [c.r * 0.5, c.g * 0.4, c.b * 0.4], intensity: 0.75, fadePow: 1.6,
+      core: 5, halo: 0.18, maxWidthPx: 2.5, minStep: 0.08, maxAge: 2.5
     });
     group.userData = {
       torch, light, trail, stripe, body, accent, marker, phase: Math.random() * Math.PI * 2, tumble: new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize()
@@ -554,12 +561,11 @@ export class SceneManager {
       ud.stripe.emissiveIntensity = 1.4;
       ud.torch.update(torp.thrusting ? 0.9 : 0, this.elapsed);
     }
-    if (!torp.disabled) {
-      // spacing follows speed so the 2.5 s trail always fits the point budget
-      const speed = torp.velocity ? Math.hypot(torp.velocity[0], torp.velocity[1], torp.velocity[2]) * this.SCALE : 10;
-      ud.trail.minStep = Math.max(0.05, speed * ud.trail.maxAge / (ud.trail.max - 4));
-      ud.trail.push(pos, this.currentTime);
-    }
+    // Exhaust dissipates after burnout or a seeker kill. Existing samples
+    // continue to age while the unpowered body coasts away.
+    const speed = torp.velocity ? Math.hypot(torp.velocity[0], torp.velocity[1], torp.velocity[2]) * this.SCALE : 10;
+    ud.trail.minStep = Math.max(0.05, speed * ud.trail.maxAge / (ud.trail.max - 4));
+    ud.trail.push(pos, this.currentTime, !torp.disabled && torp.thrusting);
   }
 
   _updateRetargetLine(torpedo, torp, pos) {
@@ -761,7 +767,7 @@ export class SceneManager {
   createBeamMesh(seg, sourceShip) {
     const ribbon = new Ribbon({
       maxPoints: 2, width: 0.075, taper: 1.0, head: [1.0, 0.72, 0.5], tail: [1.0, 0.55, 0.35],
-      intensity: 0.85, fadePow: 0.15, core: 10, halo: 0.25, shimmer: 0.3
+      intensity: 0.85, fadePow: 0, core: 10, halo: 0.25, shimmer: 0.22, maxWidthPx: 2
     });
     ribbon.mesh.renderOrder = 23;
     this.scene.add(ribbon.mesh);
@@ -974,13 +980,18 @@ export class SceneManager {
     // The sim's own death spiral (dying flag) already drifted the hulk; an
     // immediate reactor kill also goes up at once. Otherwise coast dark
     // for a few seconds before the reactor lets go.
-    const simDrifted = shipGroup?.userData.wasDying;
-    const driftDuration = (death.reactorCause || simDrifted) ? 0 : 4.5 + Math.random() * 1.5;
+    const simDrifted = death.wasDying || shipGroup?.userData.wasDying;
+    const spawnTime = death.time ?? currentTime;
+    const driftDuration = (death.reactorCause || simDrifted) ? 0 : 5.0;
     const vel = death.velocity || [0, 0, 0];
     const driftVel = new THREE.Vector3(vel[0], vel[1], vel[2]).multiplyScalar(this.SCALE);
+    if (death.position) position = new THREE.Vector3(...death.position).multiplyScalar(this.SCALE);
+    if (shipGroup && death.forward) {
+      shipGroup.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(...death.forward).normalize());
+    }
 
     const eff = new ShipDestruction(this.fxCtx, {
-      shipGroup, shipId, position, driftVel, driftDuration, scale, spawnTime: currentTime
+      shipGroup, shipId, position, driftVel, driftDuration, scale, spawnTime
     });
     this.destructionEffects.push(eff);
     return eff;
@@ -1020,6 +1031,9 @@ export class SceneManager {
     this.delta = Math.min(0.1, this.clock.getDelta());
     this.elapsed = this.clock.elapsedTime;
     this.controls.update();
+    const viewingDistance = this.camera.position.distanceTo(this.controls.target);
+    this.rangeRingMaterial.opacity = 0.12 * THREE.MathUtils.smoothstep(viewingDistance, 45, 250);
+    this.tacticalOverlay.visible = this.rangeRingMaterial.opacity > 0.002;
     this.environment.update(this.camera, this.delta);
     this.postfx.update(this.delta);
 

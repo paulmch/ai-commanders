@@ -6,6 +6,8 @@ Tools are dynamically filtered based on ship capabilities.
 """
 
 from typing import List, Dict, Any
+from copy import deepcopy
+import math
 
 
 # Base captain tools - always available
@@ -14,7 +16,7 @@ CAPTAIN_TOOLS_BASE = [
         "type": "function",
         "function": {
             "name": "set_maneuver",
-            "description": "Set ship maneuver for the next 30 seconds of simulation time",
+            "description": "Set ship maneuver until the next decision checkpoint",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -99,7 +101,7 @@ CAPTAIN_TOOLS_BASE = [
                         "type": "number",
                         "minimum": 50,
                         "maximum": 500,
-                        "description": "For turret FIRE_AT_RANGE: maximum range in km (default 300)"
+                        "description": "For turret FIRE_AT_RANGE: maximum range in km (default 500)"
                     }
                 },
                 "required": []
@@ -292,7 +294,8 @@ TORPEDO_TOOL = {
             "ship connects almost always (12g guidance cannot be out-turned; lone-ship "
             "PD only blinds slow rounds). Rounds arriving TOGETHER split enemy PD dwell "
             "- launch your salvo in one decision rather than trickling. Each launcher "
-            "reloads in 12s (2 per launcher per 30s decision). Magazine is limited - "
+            "reloads in 12s. Ready tubes fire together; remaining requested rounds "
+            "queue until reload, expiring at the next checkpoint. Magazine is limited - "
             "check YOUR TORPEDOES REMAINING. If a round's target dies mid-flight, a "
             "live-seeker round RETARGETS a reachable enemy on its own (delta-v "
             "permitting): a fresh seeker picks the intercept leaving the most fuel "
@@ -306,10 +309,10 @@ TORPEDO_TOOL = {
                 "count": {
                     "type": "integer",
                     "minimum": 1,
-                    "maximum": 2,
+                    "maximum": 3,
                     "description": (
-                        "How many torpedoes to launch this decision (1-2; the launcher "
-                        "reloads every 12s and a decision covers 30s). Salvos are harder "
+                        "How many torpedoes to launch before the next checkpoint. "
+                        "Ready tubes launch now; additional rounds wait for reload. Salvos are harder "
                         "for point defense to stop than single launches. Defaults to 1."
                     ),
                 },
@@ -511,7 +514,7 @@ def build_weapon_tool_for_ship(ship_type: str, fleet_data: Dict[str, Any]) -> Di
         }
         properties["heavy_coilguns_max_range_km"] = {
             "type": "number", "minimum": 50, "maximum": rng,
-            "description": f"For heavy coilgun FIRE_AT_RANGE: maximum range (default {min(400, rng)})"
+            "description": "For heavy coilgun FIRE_AT_RANGE: maximum range (default 500)"
         }
         description_parts.append(f"HEAVY COILGUNS x{count}: {vel} km/s, {dmg:.1f} GJ each, turreted.")
 
@@ -534,7 +537,7 @@ def build_weapon_tool_for_ship(ship_type: str, fleet_data: Dict[str, Any]) -> Di
         }
         properties["coilguns_max_range_km"] = {
             "type": "number", "minimum": 50, "maximum": rng,
-            "description": f"For coilgun FIRE_AT_RANGE: maximum range (default {min(300, rng)})"
+            "description": "For coilgun FIRE_AT_RANGE: maximum range (default 500)"
         }
         description_parts.append(f"COILGUNS x{count}: {vel} km/s, {dmg:.2f} GJ each, turreted.")
 
@@ -552,7 +555,8 @@ def build_weapon_tool_for_ship(ship_type: str, fleet_data: Dict[str, Any]) -> Di
     }
 
 
-def get_captain_tools_for_ship(ship_type: str, fleet_data: Dict[str, Any], has_torpedoes: bool = False) -> List[Dict[str, Any]]:
+def get_captain_tools_for_ship(ship_type: str, fleet_data: Dict[str, Any], has_torpedoes: bool = False,
+                               decision_interval_s: float = 30.0) -> List[Dict[str, Any]]:
     """
     Tools for the weapons this hull actually mounts.
 
@@ -571,7 +575,15 @@ def get_captain_tools_for_ship(ship_type: str, fleet_data: Dict[str, Any], has_t
         tools.insert(1, build_weapon_tool_for_ship(ship_type, fleet_data))
 
     if has_torpedoes:
-        tools.append(TORPEDO_TOOL)
+        tool = deepcopy(TORPEDO_TOOL)
+        wt = fleet_data.get("weapon_types", {}).get("torpedo_launcher", {})
+        cooldown = wt.get("cooldown_s", 12)
+        launchers = [w for w in fleet_data.get("ships", {}).get(ship_type, {}).get("weapons", [])
+                     if w.get("type", "").startswith("torpedo")]
+        capacity = sum(min(w.get("magazine", wt.get("magazine", 8)),
+                           math.ceil(decision_interval_s / cooldown)) for w in launchers)
+        tool["function"]["parameters"]["properties"]["count"]["maximum"] = max(1, capacity)
+        tools.append(tool)
 
     return tools
 

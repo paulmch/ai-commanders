@@ -72,9 +72,14 @@ export class Interpolator {
       const state1 = frame1.ships[shipId];
       if (!state1) continue;
 
-      // If destroyed in frame1, show destroyed state
-      if (state1.destroyed) {
-        result[shipId] = { ...state1, interpolated: true };
+      // Discrete state changes take effect at their frame timestamp, not
+      // during the preceding interpolation interval.
+      const current = alpha < 1 ? state0 : state1;
+      if (current.destroyed) {
+        result[shipId] = {
+          ...current, position: current.pos, velocity: current.vel,
+          forward: current.fwd, interpolated: true
+        };
         continue;
       }
 
@@ -83,10 +88,10 @@ export class Interpolator {
         velocity: this.lerpVec3(state0.vel, state1.vel, alpha),
         forward: this.slerpVec3(state0.fwd, state1.fwd, alpha),
         thrust: this.lerp(state0.thrust || 0, state1.thrust || 0, alpha),
-        hull: this.lerp(state0.hull || 100, state1.hull || 100, alpha),
+        hull: this.lerp(state0.hull ?? 100, state1.hull ?? 100, alpha),
         maneuver: state0.maneuver || 'MAINTAIN',
-        destroyed: state1.destroyed,
-        dying: state1.dying || false,
+        destroyed: current.destroyed,
+        dying: current.dying || false,
         name: state1.name || shipId,
         interpolated: true
       };

@@ -549,15 +549,20 @@ def auto_draft(
 
 def _selection_prompt(admiral_name: str, faction: str, budget: int,
                       max_ships: int, catalog: str,
-                      initial_distance_km: float) -> str:
+                      initial_distance_km: float,
+                      captain_model: Optional[str] = None) -> str:
+    crew = (f"Your ships will be flown by independent {captain_model} AI captains "
+            "with tactical tools and execution feedback. They receive your fleet "
+            "directive and individual checkpoint orders."
+            if captain_model else
+            "Your ships will be flown by competent-but-simple AI captains that "
+            "follow your checkpoint orders - draft a fleet whose plan survives simple execution.")
     return f"""You are {admiral_name}, fleet admiral of the {faction.upper()} force.
 
 Before battle you must BUY YOUR FLEET. You have {budget} POINTS and may field
 at most {max_ships} ships. The enemy admiral has the same budget and the same
 catalog; you cannot see their picks. Battle starts at {initial_distance_km:.0f} km
-head-on separation. Your ships will be flown by competent-but-simple AI
-captains that follow your checkpoint orders - draft a fleet whose plan
-survives simple execution.
+head-on separation. {crew}
 
 {catalog}
 
@@ -657,6 +662,8 @@ def run_admiral_draft(
     initial_distance_km: float = 500.0,
     verbose: bool = True,
     seed: Optional[int] = None,
+    captain_model: Optional[str] = None,
+    allow_auto_fallback: bool = True,
 ) -> FleetDraft:
     """
     Run the two-phase LLM draft for one side.
@@ -671,7 +678,7 @@ def run_admiral_draft(
     messages: List[Dict[str, Any]] = [
         {"role": "system", "content": _selection_prompt(
             admiral_name, faction, budget, max_ships, catalog,
-            initial_distance_km)},
+            initial_distance_km, captain_model)},
         {"role": "user", "content": "Buy your fleet now with select_fleet."},
     ]
     flat: Optional[List[str]] = None
@@ -701,6 +708,8 @@ def run_admiral_draft(
                          f"INVALID: {error} Try again with select_fleet."})
 
     if flat is None:
+        if not allow_auto_fallback:
+            raise RuntimeError(f'{faction} admiral did not submit a valid fleet; battle not started')
         print(f"[DRAFT {faction}] falling back to auto-draft")
         auto = auto_draft(faction, budget, max_ships, seed=seed)
         return auto

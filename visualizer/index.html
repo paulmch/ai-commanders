@@ -69,7 +69,23 @@
       </div>
     </div>
 
+    <div id="viewControls" class="view-controls hidden" aria-label="Battle view">
+      <button id="fleetViewBtn" title="Frame active fleets (F)">FLEET VIEW <kbd>F</kbd></button>
+      <button id="decisionsBtn" aria-expanded="false" aria-controls="decisionPanel" title="Explore decisions and consequences (D)">DECISIONS <kbd>D</kbd></button>
+      <button id="contactsBtn" class="active" aria-pressed="true" title="Toggle contact labels (C)">CONTACTS <kbd>C</kbd></button>
+    </div>
+    <aside id="decisionPanel" class="panel hidden" aria-label="Intent and consequence">
+      <div class="panel-header"><span class="panel-title">INTENT → CONSEQUENCE</span><button data-close aria-label="Close decisions">×</button></div>
+      <div class="decision-controls">
+        <label>SHIP <select data-ship aria-label="Decision history ship"></select></label>
+        <div class="decision-navigation"><button data-prev aria-label="Previous decision">←</button><select data-decision aria-label="Decision checkpoint"></select><button data-next aria-label="Next decision">→</button></div>
+      </div>
+      <div class="decision-body" data-body></div>
+    </aside>
+    <div id="shipContacts" aria-label="Ships in view"></div>
+
     <!-- Ship Registry Panel -->
+    <div id="leftSidebar">
     <aside id="shipRegistry" class="panel">
       <div class="panel-header">
         <div class="panel-title">
@@ -95,6 +111,16 @@
         </div>
       </div>
     </aside>
+
+    <div id="eventLog" class="panel mini collapsed">
+      <div class="panel-header mini">
+        <span class="panel-icon">▣</span>
+        COMBAT LOG
+        <button id="collapseEventLog" class="collapse-btn" title="Collapse / expand log">+</button>
+      </div>
+      <div class="event-list" id="eventList"></div>
+    </div>
+    </div>
 
     <!-- Ship Telemetry Panel -->
     <aside id="shipTelemetry" class="panel hidden">
@@ -214,6 +240,7 @@
           </div>
         </div>
 
+      </div>
         <div class="camera-modes">
           <span class="modes-label">CAMERA MODE</span>
           <div class="mode-buttons">
@@ -231,7 +258,6 @@
             </button>
           </div>
         </div>
-      </div>
     </aside>
 
     <!-- Playback Controls -->
@@ -285,16 +311,6 @@
         </div>
       </div>
     </footer>
-
-    <!-- Event Log (Left side, collapsible) -->
-    <div id="eventLog" class="panel mini">
-      <div class="panel-header mini">
-        <span class="panel-icon">▣</span>
-        COMBAT LOG
-        <button class="collapse-btn" id="collapseEventLog">−</button>
-      </div>
-      <div class="event-list" id="eventList"></div>
-    </div>
 
     <!-- Loading Overlay -->
     <div id="loading" class="overlay">

@@ -187,6 +187,49 @@ class Vector3D:
 
 
 # =============================================================================
+# BALLISTIC INTERCEPT
+# =============================================================================
+
+def intercept_time(relative_position: Vector3D, relative_velocity: Vector3D,
+                   projectile_speed: float, target_acceleration: Optional[Vector3D] = None) -> Optional[float]:
+    """Earliest future intercept in any consistent distance/time units.
+
+    The projectile inherits its launcher's velocity. Solve in that frame;
+    fixed-point lead iteration diverges when closure exceeds muzzle speed.
+    None means no future intercept exists under the supplied motion model.
+    """
+    if projectile_speed <= 0:
+        return None
+    r, v = relative_position, relative_velocity
+    c = r.dot(r)
+    if c == 0:
+        return 0.0
+    accel = target_acceleration or Vector3D.zero()
+    if accel.magnitude_squared > 1e-24:
+        import numpy as np
+        coefficients = [0.25 * accel.dot(accel), v.dot(accel),
+                        v.dot(v) + r.dot(accel) - projectile_speed ** 2, 2 * r.dot(v), c]
+        if not all(math.isfinite(coefficient) for coefficient in coefficients):
+            return None
+        roots = np.roots(coefficients)
+        times = [float(root.real) for root in roots
+                 if root.real > 0 and abs(root.imag) <= 1e-7 * max(1.0, abs(root.real))]
+        return min(times) if times else None
+
+    a = v.dot(v) - projectile_speed ** 2
+    b = 2 * r.dot(v)
+    if abs(a) <= 1e-12 * max(v.dot(v), projectile_speed ** 2):
+        return -c / b if b < 0 else None
+    discriminant = b * b - 4 * a * c
+    if discriminant < 0:
+        return None
+    # Stable quadratic formula avoids cancellation for very distant/fast shots.
+    q = -0.5 * (b + math.copysign(math.sqrt(discriminant), b))
+    times = [t for t in (q / a, c / q if q else -1) if t > 0]
+    return min(times) if times else None
+
+
+# =============================================================================
 # SHIP STATE CLASS
 # =============================================================================
 
@@ -500,6 +543,8 @@ def calculate_torque_from_thrust(
     thrust_n = state.thrust_n * throttle
 
     # Calculate lateral force components
+    gimbal_pitch_deg = max(-MAX_GIMBAL_ANGLE_DEG, min(MAX_GIMBAL_ANGLE_DEG, gimbal_pitch_deg))
+    gimbal_yaw_deg = max(-MAX_GIMBAL_ANGLE_DEG, min(MAX_GIMBAL_ANGLE_DEG, gimbal_yaw_deg))
     pitch_rad = math.radians(gimbal_pitch_deg)
     yaw_rad = math.radians(gimbal_yaw_deg)
 
@@ -671,6 +716,9 @@ def propagate_state(
         torque = calculate_torque_from_thrust(
             new_state, gimbal_pitch_deg, gimbal_yaw_deg, throttle=throttle
         )
+        # A depleted engine cannot keep imparting torque for the rest of dt.
+        thrust_n = state.thrust_n * min(1.0, throttle)
+        burn_dt = min(dt, propellant_used * state.exhaust_velocity_ms / thrust_n) if thrust_n > 0 else 0.0
 
         # Angular acceleration (assuming torque is in body frame)
         if new_state.moment_of_inertia_kg_m2 > 0:
@@ -680,8 +728,8 @@ def propagate_state(
             # Update angular velocity
             new_state.angular_velocity = Vector3D(
                 new_state.angular_velocity.x,
-                new_state.angular_velocity.y + alpha_pitch * dt,
-                new_state.angular_velocity.z + alpha_yaw * dt
+                new_state.angular_velocity.y + alpha_pitch * burn_dt,
+                new_state.angular_velocity.z + alpha_yaw * burn_dt
             )
 
     # Update position (Euler: x_new = x + v * dt)

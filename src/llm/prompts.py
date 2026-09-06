@@ -460,7 +460,8 @@ def _torpedo_capability_block(ship_type: str, fleet_data: Dict[str, Any],
     pen = wt.get("penetrator_mass_kg", 250)
     rng = wt.get("range_km", 2500)
     n = len(launchers)
-    per_decision = max(1, int(decision_interval_s // cooldown)) * n
+    per_decision = sum(min(l.get("magazine", wt.get("magazine", 8)),
+                           math.ceil(decision_interval_s / cooldown)) for l in launchers)
     pd = pd_doctrine_numbers(fleet_data)
 
     def ke(v_kps):
@@ -474,7 +475,8 @@ def _torpedo_capability_block(ship_type: str, fleet_data: Dict[str, Any],
 TORPEDOES ({n}x {wt.get('name', 'launcher')}) - your decisive weapon:
 - {pen:.0f} kg kinetic penetrator, {dv} km/s own delta-v, {accel}g, {rng} km reach
 - Magazine: {magazine} rounds per launcher ({total_rounds} total). Reload {cooldown}s
-  -> up to {per_decision} launches per decision.
+  -> up to {per_decision} launches per {decision_interval_s:g}s decision if all tubes start ready.
+  Ready tubes fire together; additional rounds launch as each tube reloads.
 - DAMAGE SCALES WITH THE SQUARE OF CLOSING SPEED. Guidance never lets closure drop
   below ~12 km/s and dumps its remaining delta-v just before impact. Measured against
   a 2g hull (400 km launch):
@@ -613,6 +615,7 @@ def build_ship_capabilities_from_fleet(
     radiators_extended: bool,
     weapons: Optional[Dict[str, Any]] = None,
     damaged_modules: Optional[Dict[str, Any]] = None,
+    decision_interval_s: float = 30.0,
 ) -> str:
     """Build ship capabilities section dynamically from fleet data."""
     ship_spec = fleet_data["ships"].get(ship_type, {})
@@ -648,7 +651,7 @@ def build_ship_capabilities_from_fleet(
     ) / 1000.0
 
     _armor = armor_from_fleet_data(ship_type, fleet_data)
-    _torpedoes = _torpedo_capability_block(ship_type, fleet_data)
+    _torpedoes = _torpedo_capability_block(ship_type, fleet_data, decision_interval_s)
     return SHIP_CAPABILITIES_TEMPLATE.format(
         torpedo_block=_torpedoes,
         armor_aspect_block=_armor_aspect_block(
@@ -828,17 +831,17 @@ OTHER:
   plan and what would change it (e.g. "Pass 2: brake at 150km, torpedoes when his
   PD is under 3 turrets"), then next checkpoint execute it or log the new plan.
 
-*** CRITICAL: YOU MUST CALL THE TOOLS EVERY CHECKPOINT ***
-Describing what you will do is NOT the same as doing it. You MUST call:
-- set_maneuver to actually move (or you will DRIFT and lose all momentum)
-- set_primary_target to actually target (or target will be NONE)
-- set_weapons_order to actually fire
-Even if you want to "maintain course" - you MUST call set_maneuver again!
-There is NO auto-continue. Every checkpoint resets to DRIFT unless you call tools.
+*** EXECUTE YOUR ORDERS WITH THE AVAILABLE TOOLS ***
+- Renew set_maneuver or set_heading each checkpoint to keep maneuvering.
+  When a maneuver expires, thrust stops; you coast with your existing momentum.
+- set_primary_target changes the target followed by persistent gun orders.
+- On gun ships, set_weapons_order sets firing policy; it persists until changed.
+- On torpedo ships, launch_torpedo orders a salvo for this decision window.
+Describing an action does not execute it. Use the corresponding tool.
 
-TIMING: You make ONE decision now. It is LOCKED for 30 seconds until next checkpoint.
+TIMING: You make ONE decision now. It is LOCKED for {decision_interval_s:g} seconds until next checkpoint.
 You CANNOT react mid-checkpoint or change orders. No "if X then Y" - decide NOW.
-Your ship will execute your orders for 30 seconds regardless of what happens.
+The automatic fire-control, point-defense and evasion systems react between checkpoints.
 
 {personality_prompt}
 """
@@ -954,6 +957,7 @@ def build_ship_capabilities(
     damaged_modules: Optional[Dict[str, Any]] = None,
     ship_type: str = "destroyer",
     fleet_data: Optional[Dict[str, Any]] = None,
+    decision_interval_s: float = 30.0,
 ) -> str:
     """Build ship capabilities section for prompt."""
     if fleet_data:
@@ -971,6 +975,7 @@ def build_ship_capabilities(
             radiators_extended=radiators_extended,
             weapons=weapons,
             damaged_modules=damaged_modules,
+            decision_interval_s=decision_interval_s,
         )
 
     # Legacy fallback using destroyer template
@@ -1310,6 +1315,7 @@ def build_captain_prompt(
     ship_type: Optional[str] = None,
     fleet_data: Optional[Dict[str, Any]] = None,
     notebook_text: Optional[str] = None,
+    decision_interval_s: float = 30.0,
 ) -> str:
     """
     Build the complete system prompt for a captain.
@@ -1345,6 +1351,7 @@ def build_captain_prompt(
         damaged_modules=ship_status.get("damaged_modules"),
         ship_type=ship_type or "destroyer",
         fleet_data=fleet_data,
+        decision_interval_s=decision_interval_s,
     )
 
     # Ship forward vector
@@ -1483,6 +1490,7 @@ def build_captain_prompt(
     )
 
     return CAPTAIN_SYSTEM_PROMPT.format(
+        decision_interval_s=decision_interval_s,
         torpedo_threats=format_torpedo_threats(tactical_status.get("torpedo_threats", [])),
         ship_status_block=ship_status_block,
         captain_name=captain_name,
@@ -1691,7 +1699,7 @@ SHIP CAPABILITIES:
 {ship_class_stats}
 - Spinal weapons need nose-on alignment (<30° to target)
 - Turrets can fire at 180° arc (more flexible)
-- Radiators EXTENDED = better cooling (no damage model penalises extended radiators)
+- Radiators EXTENDED = better cooling, but exposed panels can be shot off permanently.
 - Don't waste shots on fleeing enemies (5+ km/s separation) - focus on threats closing on you
 - A target at 100km closing at 3 km/s is MORE dangerous than one at 80km separating at 4 km/s
 
@@ -1701,7 +1709,7 @@ ADDITIONAL NOTES:
 - Captains are AI commanders - be specific about priorities and targets
 - Use the dual snapshot to understand battle momentum
 - Coordinate your ships for focus fire or tactical positioning
-- TIMING: Each order is LOCKED for 30 seconds. No "if X then Y" contingencies.
+- TIMING: Each order is LOCKED for {decision_interval_s:g} seconds. No "if X then Y" contingencies.
   Give ONE clear order per ship. Captains cannot react mid-checkpoint.
 {enemy_admiral_note}
 
@@ -1761,7 +1769,7 @@ IMPORTANT: This is a ONE-WAY response. The captain will act immediately after re
 your answer. DO NOT ask follow-up questions - they cannot respond. Give clear, actionable
 orders or clarifications. End with a command, not a question.
 
-TIMING CONSTRAINT: The captain makes ONE decision that is LOCKED for 30 seconds.
+TIMING CONSTRAINT: The captain makes ONE decision that is LOCKED for {decision_interval_s:g} seconds.
 They CANNOT react mid-checkpoint or execute conditional orders like "if X then Y".
 Give them ONE clear order to execute NOW, not contingency plans.
 
@@ -1863,6 +1871,7 @@ def build_admiral_prompt(
     standing_plan: Optional[str] = None,
     standing_plan_time: float = 0.0,
     notebook_text: Optional[str] = None,
+    decision_interval_s: float = 30.0,
 ) -> str:
     """
     Build Admiral system prompt with dual-snapshot comparison.
@@ -2056,6 +2065,7 @@ Fire spinal when aligned, turrets continuous fire. Stay mobile - don't be a sitt
     pd = pd_doctrine_numbers(fleet_data)
 
     return ADMIRAL_SYSTEM_PROMPT.format(
+        decision_interval_s=decision_interval_s,
         pd_range_km=pd_range_km,
         pd_closure_floor_kps=pd["closure_floor_kps"],
         pd_envelope_crossing_s=pd["envelope_crossing_s"],
@@ -2090,6 +2100,7 @@ def build_admiral_response_prompt(
     personality: Optional[str],
     recent_decisions: Optional[List[Any]] = None,
     standing_plan: Optional[str] = None,
+    decision_interval_s: float = 30.0,
 ) -> str:
     """Build prompt for Admiral responding to captain discussion."""
     # Format recent decisions (up to last 3 checkpoints)
@@ -2124,6 +2135,7 @@ def build_admiral_response_prompt(
     )
 
     return ADMIRAL_RESPONSE_PROMPT.format(
+        decision_interval_s=decision_interval_s,
         admiral_name=admiral_name,
         captain_ship_name=captain_ship_name,
         standing_plan_section=standing_plan_section,

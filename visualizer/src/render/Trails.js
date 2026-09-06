@@ -15,6 +15,7 @@ const vertexShader = /* glsl */`
   uniform float uWidth;
   uniform float uTaper;
   uniform float uPixelWorld;
+  uniform float uMaxWidthPx;
   varying float vT;
   varying float vSide;
   varying float vCover;
@@ -30,9 +31,10 @@ const vertexShader = /* glsl */`
     float w0 = uWidth * mix(1.0, uTaper, aT);
     // Never thinner than ~1.6 px: a sub-pixel strip rasterises as dots.
     // Dim by the widening so the energy on screen stays the same.
-    float minW = uPixelWorld * length(cameraPosition - wp) * 0.8;
-    float w = max(w0, minW);
-    vCover = w0 / w;
+    float pixel = uPixelWorld * max(0.01, -(viewMatrix * vec4(wp, 1.0)).z);
+    float limited = uMaxWidthPx > 0.0 ? min(w0, pixel * uMaxWidthPx) : w0;
+    float w = max(limited, pixel * 0.8);
+    vCover = min(1.0, w0 / w);
     wp += side * aSide * w;
     vT = aT;
     vSide = aSide;
@@ -61,7 +63,7 @@ const fragmentShader = /* glsl */`
     float prof = uCore > 0.0
       ? exp(-x * x * uCore) + uHalo * exp(-x * x * 2.2) * (1.0 - x)
       : (1.0 - x * x);
-    float along = pow(clamp(1.0 - vT, 0.0, 1.0), uFadePow);
+    float along = uFadePow > 0.0 ? pow(clamp(1.0 - vT, 0.0, 1.0), uFadePow) : 1.0;
     float shimmer = 1.0;
     if (uShimmer > 0.0) {
       float n = texture2D(uNoise, vec2(vT * 6.0 - uTime * 0.4, 0.3)).r;
@@ -71,6 +73,32 @@ const fragmentShader = /* glsl */`
     gl_FragColor = vec4(col * prof * along * shimmer * uIntensity * vCover, 1.0);
   }
 `;
+
+/** Keep a moving head and fixed samples; tiny frames must not erase the trail. */
+export function updateTrailHistory(history, p, t, { maxAge, minStep, max }, emit = true) {
+  if (history.length && (t < history[0].t || t - history[0].t > maxAge)) history.length = 0;
+  if (emit) {
+    const head = history[0];
+    const anchor = history[1];
+    if (head && (t === head.t || (anchor && anchor.distanceToSquared(p) < minStep * minStep))) {
+      head.copy(p);
+      head.t = t;
+    } else {
+      // Commit a fixed sample at the threshold, not at the previous frame's
+      // head. Otherwise low frame rates consume the budget too quickly.
+      if (head && anchor && minStep > 0) {
+        head.copy(p);
+        head.t = t;
+      }
+      const q = p.clone();
+      q.t = t;
+      history.unshift(q);
+    }
+  }
+  const cutoff = t - maxAge;
+  while (history.length && history[history.length - 1].t < cutoff) history.pop();
+  if (history.length > max) history.length = max;
+}
 
 export class Ribbon {
   /** Shared: world units per pixel at unit distance (set by the scene on resize). */
@@ -121,6 +149,7 @@ export class Ribbon {
         uHalo: { value: o.halo ?? 0 },
         uTime: { value: 0 },
         uPixelWorld: Ribbon.pixelWorld,
+        uMaxWidthPx: { value: o.maxWidthPx ?? 0 },
         uShimmer: { value: o.shimmer ?? 0 },
         uNoise: { value: getNoiseTexture() }
       },
@@ -149,29 +178,17 @@ export class Ribbon {
    * time-based ribbon pass the battle time `t`: points older than maxAge
    * are dropped and a backward seek clears the history.
    */
-  push(p, t = null) {
+  push(p, t = null, emit = true) {
     const h = this.history;
     if (this.maxAge != null && t != null) {
-      if (h.length && t < h[0].t - 1e-6) h.length = 0;
-      const head = h[0];
-      if (head && this.minStep > 0 && head.distanceToSquared(p) < this.minStep * this.minStep) {
-        head.copy(p);
-        head.t = t;
-      } else {
-        const q = p.clone();
-        q.t = t;
-        h.unshift(q);
-      }
-      const cutoff = t - this.maxAge;
-      while (h.length > 1 && h[h.length - 1].t < cutoff) h.pop();
-      if (h.length > this.max) h.length = this.max;
+      updateTrailHistory(h, p, t, this, emit);
     } else if (h.length && this.minStep > 0 && h[0].distanceToSquared(p) < this.minStep * this.minStep) {
       h[0].copy(p);
     } else {
       h.unshift(p.clone());
       if (h.length > this.max) h.pop();
     }
-    this.rebuild();
+    this.rebuild(t);
   }
 
   /** Replace the whole history (e.g. an explicit two-point beam). */
@@ -185,7 +202,7 @@ export class Ribbon {
     this.geom.setDrawRange(0, 0);
   }
 
-  rebuild() {
+  rebuild(time = null) {
     const h = this.history;
     const n = h.length;
     if (n < 2) {
@@ -204,7 +221,9 @@ export class Ribbon {
         const v = (i * 2 + k) * 3;
         this.pos[v] = p.x; this.pos[v + 1] = p.y; this.pos[v + 2] = p.z;
         this.tan[v] = tmp.x; this.tan[v + 1] = tmp.y; this.tan[v + 2] = tmp.z;
-        this.t[i * 2 + k] = i / (n - 1);
+        this.t[i * 2 + k] = time != null && this.maxAge != null && p.t != null
+          ? THREE.MathUtils.clamp((time - p.t) / this.maxAge, 0, 1)
+          : i / (n - 1);
       }
     }
     this.geom.attributes.position.needsUpdate = true;

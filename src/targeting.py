@@ -18,7 +18,7 @@ import random
 from dataclasses import dataclass, field
 from typing import Dict, Optional
 
-from physics import Vector3D, ShipState
+from physics import Vector3D, ShipState, intercept_time
 from combat import Weapon
 
 
@@ -334,7 +334,7 @@ class LeadCalculator:
         """
         Calculate the lead (aim) point for intercepting a moving target.
 
-        Uses iterative refinement to solve the intercept problem:
+        Solves the intercept equation for the earliest future meeting:
         Find the point where the projectile and target will meet,
         accounting for projectile travel time and target motion.
 
@@ -347,58 +347,20 @@ class LeadCalculator:
             target_pos: Target current position in kilometers.
             target_vel: Target velocity in km/s.
             projectile_speed_kps: Projectile speed in km/s.
-            max_iterations: Maximum refinement iterations.
-            tolerance_km: Convergence tolerance in km.
+            max_iterations: Retained for API compatibility; the solver is analytic.
+            tolerance_km: Retained for API compatibility.
 
         Returns:
             Lead position (aim point) in kilometers. The shooter should
             aim (point the muzzle) at this point to intercept the target
             with a projectile that inherits the shooter's velocity.
         """
-        if projectile_speed_kps <= 0:
-            # Cannot calculate lead with zero projectile speed
-            return target_pos
-
-        # Calculate relative position and velocity.
-        # The intercept must be solved in the SHOOTER's frame because the
-        # projectile inherits the shooter's velocity (see projectile.py):
-        # in that frame the projectile travels at projectile_speed along the
-        # muzzle direction while the target moves at relative_vel.
         relative_pos = target_pos - shooter_pos
         relative_vel = target_vel - shooter_vel
-
-        initial_distance = relative_pos.magnitude
-
-        if initial_distance < tolerance_km:
-            # Target is essentially at shooter position
+        tof = intercept_time(relative_pos, relative_vel, projectile_speed_kps)
+        if tof is None:
             return target_pos
-
-        # Iterative solution: refine intercept time
-        intercept_time = initial_distance / projectile_speed_kps
-
-        for _ in range(max_iterations):
-            # Predict target position at intercept time (shooter frame)
-            predicted_rel_pos = relative_pos + relative_vel * intercept_time
-
-            # Calculate new distance and intercept time
-            new_distance = predicted_rel_pos.magnitude
-            new_intercept_time = new_distance / projectile_speed_kps
-
-            # Check convergence
-            if abs(new_intercept_time - intercept_time) < tolerance_km / projectile_speed_kps:
-                intercept_time = new_intercept_time
-                break
-
-            intercept_time = new_intercept_time
-
-        # Return the lead position (where to point the muzzle): offset from
-        # the shooter along the shooter-frame intercept direction, at the
-        # projectile's flight distance. Using the world-frame intercept point
-        # here (target_pos + target_vel*t) would ignore the shooter's own
-        # motion and miss for any non-collinear shooter velocity.
-        lead_position = shooter_pos + relative_pos + relative_vel * intercept_time
-
-        return lead_position
+        return target_pos + relative_vel * tof
 
     @staticmethod
     def calculate_lead_from_states(
@@ -484,8 +446,8 @@ class LeadCalculator:
         Uses quadratic prediction to account for target acceleration:
         future_pos = pos + vel*t + 0.5*accel*t^2
 
-        This method iteratively refines the intercept time to find where the
-        projectile and accelerating target will meet. More accurate than
+        This method solves the quartic intercept equation to find where the
+        projectile and accelerating target will first meet. More accurate than
         constant-velocity lead calculation when targets are maneuvering.
 
         Args:
@@ -497,7 +459,7 @@ class LeadCalculator:
             projectile_speed_kps: Projectile speed in km/s.
             max_iterations: Maximum refinement iterations (default 15 for
                            acceleration convergence).
-            tolerance_km: Convergence tolerance in km.
+            tolerance_km: Retained for API compatibility.
 
         Returns:
             Lead position (aim point) in kilometers. The shooter should
@@ -508,59 +470,15 @@ class LeadCalculator:
               the standard constant-velocity lead calculation.
             - Accuracy degrades for very high accelerations or long intercept
               times, as the quadratic approximation assumes constant acceleration.
-            - The algorithm uses Newton-Raphson style iteration for faster
-              convergence compared to the basic lead calculator.
+            - No future intercept falls back to direct aim. Fire control should
+              reject such shots using intercept_time().
         """
-        if projectile_speed_kps <= 0:
-            # Cannot calculate lead with zero projectile speed
-            return target_pos
-
-        # Solve in the SHOOTER's frame (projectile inherits shooter velocity,
-        # so it travels at projectile_speed relative to the shooter).
         relative_pos = target_pos - shooter_pos
         relative_vel = target_vel - shooter_vel
-        initial_distance = relative_pos.magnitude
-
-        if initial_distance < tolerance_km:
-            # Target is essentially at shooter position
+        tof = intercept_time(relative_pos, relative_vel, projectile_speed_kps, target_accel)
+        if tof is None:
             return target_pos
-
-        # Initial estimate: time based on current distance
-        intercept_time = initial_distance / projectile_speed_kps
-
-        for _ in range(max_iterations):
-            # Predict target position at intercept time using quadratic motion
-            # in the shooter frame: rel_pos + rel_vel*t + 0.5*accel*t^2
-            predicted_rel_pos = (
-                relative_pos +
-                relative_vel * intercept_time +
-                target_accel * (0.5 * intercept_time * intercept_time)
-            )
-
-            # Calculate projectile travel distance to predicted position
-            new_distance = predicted_rel_pos.magnitude
-
-            # New intercept time estimate
-            new_intercept_time = new_distance / projectile_speed_kps
-
-            # Check convergence
-            if abs(new_intercept_time - intercept_time) < tolerance_km / projectile_speed_kps:
-                intercept_time = new_intercept_time
-                break
-
-            # Use weighted average for stability with acceleration
-            # (pure Newton-Raphson can oscillate with high acceleration)
-            intercept_time = 0.7 * new_intercept_time + 0.3 * intercept_time
-
-        # Final lead position (muzzle aim point) with quadratic prediction:
-        # shooter position plus the shooter-frame intercept vector.
-        lead_position = shooter_pos + (
-            relative_pos +
-            relative_vel * intercept_time +
-            target_accel * (0.5 * intercept_time * intercept_time)
-        )
-
-        return lead_position
+        return target_pos + relative_vel * tof + target_accel * (0.5 * tof * tof)
 
     @staticmethod
     def calculate_lead_with_acceleration_from_states(

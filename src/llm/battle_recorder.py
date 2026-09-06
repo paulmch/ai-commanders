@@ -11,6 +11,9 @@ Captures:
 """
 
 import json
+import hashlib
+import threading
+from src.replay_evidence import json_value
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
@@ -89,8 +92,13 @@ class BattleEvent:
     ship_id: Optional[str] = None
     data: Dict[str, Any] = field(default_factory=dict)
 
+    event_id: str = ""
+    sequence: int = 0
+
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "event_id": self.event_id,
+            "sequence": self.sequence,
             "timestamp": self.timestamp,
             "event_type": self.event_type,
             "ship_id": self.ship_id,
@@ -102,7 +110,10 @@ class BattleEvent:
 class BattleRecording:
     """Complete recording of a battle."""
     # Metadata
-    recording_version: str = "2.1"  # Bumped for fleet battle support
+    recording_version: str = "3.0"  # Stable IDs, command provenance and model input assets
+    provenance: Dict[str, Any] = field(default_factory=dict)
+    assets: Dict[str, Any] = field(default_factory=dict)
+    commentary: List[Dict[str, Any]] = field(default_factory=list)
     recorded_at: str = ""
     is_fleet_battle: bool = False
     battle_name: str = ""
@@ -173,6 +184,8 @@ class BattleRecorder:
         self.recording = BattleRecording()
         self.events: List[BattleEvent] = []
         self._is_recording = False
+        self._lock = threading.RLock()
+        self.simulation_event = None
 
     def start_recording(
         self,
@@ -235,9 +248,9 @@ class BattleRecorder:
             recorded_at=datetime.now().isoformat(),
             is_fleet_battle=True,
             battle_name=fleet_config.battle_name,
-            initial_distance_km=fleet_config.initial_distance_km,
-            time_limit_s=fleet_config.time_limit_s,
-            max_checkpoints=getattr(fleet_config, 'max_checkpoints', battle_config.max_checkpoints),
+            initial_distance_km=battle_config.initial_distance_km,
+            time_limit_s=battle_config.time_limit_s,
+            max_checkpoints=battle_config.max_checkpoints,
         )
 
         # Record alpha fleet
@@ -341,8 +354,37 @@ class BattleRecorder:
 
     def _record_event(self, event: BattleEvent) -> None:
         """Record a single event."""
-        if self._is_recording:
-            self.events.append(event)
+        with self._lock:
+            if self._is_recording:
+                if event.event_type in ('admiral_plan', 'admiral_order', 'admiral_directive'):
+                    faction = event.data.get('faction')
+                    if not faction:
+                        for side in ('alpha', 'beta'):
+                            if any(s.get('ship_id') == event.ship_id for s in getattr(self.recording, side + '_fleet').get('ships', [])):
+                                faction = side
+                                break
+                    event.data['parent_event_ids'] = [e.event_id for e in self.events
+                        if e.timestamp == event.timestamp and e.event_type == 'model_call'
+                        and e.data.get('actor') == 'admiral' and e.data.get('faction') == faction]
+                event.sequence = len(self.events) + 1
+                event.event_id = f'e{event.sequence}'
+                if self.simulation_event is not None:
+                    raw = self.simulation_event
+                    event.data = {**raw.data, **event.data}
+                    event.data.setdefault('target_id', raw.target_id)
+                self.events.append(event)
+        return event
+
+    def record(self, timestamp, event_type, ship_id=None, **data):
+        return self._record_event(BattleEvent(timestamp, event_type, ship_id, json_value(data)))
+
+    def asset(self, value):
+        # API inputs are JSON already: preserve every key, including underscores.
+        value = json.loads(json.dumps(value))
+        key = hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+        with self._lock:
+            self.recording.assets.setdefault(key, value)
+        return key
 
     def record_checkpoint(
         self,
@@ -1075,6 +1117,7 @@ class BattleRecorder:
         order_text: str,
         priority: str = "NORMAL",
         suggested_target: Optional[str] = None,
+        **context,
     ) -> None:
         """Record order from admiral to specific captain."""
         self._record_event(BattleEvent(
@@ -1087,6 +1130,7 @@ class BattleRecorder:
                 "order_text": order_text,
                 "priority": priority,
                 "suggested_target": suggested_target,
+                **json_value(context),
             }
         ))
 
@@ -1102,9 +1146,10 @@ class BattleRecorder:
         target_name: Optional[str] = None,
         radiators_extended: bool = False,
         acknowledgment: Optional[str] = None,
-    ) -> None:
-        """Record captain's decision with full context."""
-        self._record_event(BattleEvent(
+        **context,
+    ) -> BattleEvent:
+        """Record requested orders; execution is captured separately by the engine."""
+        return self._record_event(BattleEvent(
             timestamp=timestamp,
             event_type=EventType.CAPTAIN_DECISION,
             ship_id=ship_id,
@@ -1117,6 +1162,7 @@ class BattleRecorder:
                 "target_name": target_name,
                 "radiators_extended": radiators_extended,
                 "acknowledgment": acknowledgment,
+                **json_value(context),
             }
         ))
 
@@ -1180,6 +1226,8 @@ class BattleRecorder:
                 "vel": [round(ship["velocity"][0], 1), round(ship["velocity"][1], 1), round(ship["velocity"][2], 1)],
                 "fwd": [round(ship["forward"][0], 4), round(ship["forward"][1], 4), round(ship["forward"][2], 4)],
                 "thrust": round(ship.get("thrust", 0.0), 2),
+                "requested_thrust": round(ship.get("requested_thrust", 0.0), 2),
+                "execution_mode": ship.get("execution_mode", "UNKNOWN"),
                 "maneuver": ship.get("maneuver", "MAINTAIN"),
                 "destroyed": ship.get("is_destroyed", False),
                 "dying": ship.get("is_dying", False),

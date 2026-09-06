@@ -180,12 +180,12 @@ export class HullKit {
     return this.drum(mat, r, thick, z, { sides, x, y });
   }
 
-  /** Four-sided wedge prow, apex at +Z. */
+  /** Four-sided wedge prow, half-width w / half-height h, apex at +Z. */
   prow(mat, w, h, len, z, { parent = null } = {}) {
     const g = new THREE.ConeGeometry(0.5, len, 4);
     g.rotateY(Math.PI / 4);
     g.rotateX(Math.PI / 2);
-    g.scale(w * 1.4, h * 1.4, 1);
+    g.scale(w * 2 * Math.SQRT2, h * 2 * Math.SQRT2, 1);
     fitCylinderUVs(g, (w + h) * 0.5, len, this.rnd);
     return this.add(mat, g, this.xf(0, 0, z, 0, 0, 0, parent));
   }
@@ -397,38 +397,61 @@ export class HullKit {
     this.navLights.push({ pos: new THREE.Vector3(x, y, z), color: 0x2aff55, period: 0, phase: 0 });
   }
 
-  /**
-   * Radiator wing anchored at its root; scale.y folds it against the hull
-   * when retracted. Built as a separate mesh (animated), with coolant
-   * manifold pipes at the root baked into the hull.
-   */
+  /** Hinged heat exchanger: graphite fin banks, headers and raised heat pipes. */
   radiator(span, len, x, y, z, angle, thickness = null) {
-    const t = thickness ?? Math.max(this.W * 0.018, 0.02);
+    const t = thickness ?? Math.max(this.W * 0.012, 0.012);
+    // Local +Y is the deployed span. A mirrored mount must point outboard.
+    if (-Math.sin(angle) * x + Math.cos(angle) * y < 0) angle += Math.PI;
     const tex = getRadiatorTextures();
-    const mat = new THREE.MeshStandardMaterial({
+    const mat = this.radiatorMaterial ||= new THREE.MeshStandardMaterial({
       map: tex.map, emissiveMap: tex.emissiveMap, emissive: 0xffffff, emissiveIntensity: 0,
-      roughness: 0.6, metalness: 0.5, side: THREE.DoubleSide
+      normalMap: tex.normalMap, normalScale: new THREE.Vector2(0.65, 0.65),
+      roughness: 0.82, metalness: 0.25
     });
-    const g = new THREE.BoxGeometry(t, span, len, 1, 1, 1);
-    // Panel faces (px/nx) carry the emissive gradient: v runs root->tip
-    const uv = g.attributes.uv;
-    const perFace = uv.count / 6;
-    for (let f = 0; f < 6; f++) {
-      for (let i = f * perFace; i < (f + 1) * perFace; i++) {
-        if (f < 2) uv.setXY(i, uv.getX(i) * (len / span) * 1.0, 1 - uv.getY(i)); // px, nx
-        else uv.setXY(i, 0.5, 0.98);   // edges: dark tip colour
+    const wing = new HullKit({ length: this.L, width: this.W }, this.rnd() * 1e6);
+    const bays = Math.max(3, Math.min(7, Math.round(len / span * 3)));
+    const bayLen = len / bays;
+    const rail = t * 1.8;
+    // Separate thin fin cassettes leave real shadow gaps between banks.
+    for (let b = 0; b < bays; b++) {
+      const bz = -len / 2 + (b + 0.5) * bayLen;
+      const g = new THREE.BoxGeometry(t, span * 0.9, bayLen * 0.92);
+      const uv = g.attributes.uv;
+      for (let i = 0; i < uv.count; i++) {
+        if (i < 8) uv.setXY(i, uv.getX(i), 1 - uv.getY(i));
+        else uv.setXY(i, 0, 0);
+      }
+      wing.add('radiator', g, wing.xf(0, span * 0.51, bz));
+      // Raised coolant tubes on both faces, running from hot root to cool tip.
+      for (const side of [-1, 1]) {
+        for (const dz of [-0.3, 0, 0.3]) {
+          wing.box('barrel', t * 0.65, span * 0.91, t * 0.65,
+            side * t * 0.65, span * 0.51, bz + dz * bayLen, { bevel: 0 });
+        }
+      }
+      for (let j = 1; j < 12; j++) {
+        wing.box('dark', t * 1.5, span * 0.008, bayLen * 0.9,
+          0, span * (0.06 + j * 0.075), bz, { bevel: 0 });
       }
     }
-    g.translate(0, span / 2, 0);
-    const m = new THREE.Mesh(g, mat);
-    m.position.set(x, y, z);
-    m.rotation.z = angle;
-    // Root manifold + hinge baked into the hull
+    for (let b = 0; b <= bays; b++) {
+      wing.box('trim', rail, span, rail, 0, span / 2, -len / 2 + b * bayLen, { bevel: 0 });
+    }
+    for (const sy of [0.035, 0.98]) {
+      wing.drum('barrel', rail, len * 1.02, 0, { y: span * sy, sides: 8 });
+    }
+    const root = new THREE.Group();
+    root.name = 'radiator_wing';
+    root.position.set(x, y, z);
+    root.rotation.z = angle;
+    root.userData.deployedAngle = angle;
+    root.userData.foldDirection = -Math.sign(Math.sin(angle) || 1) * (y < 0 ? -1 : 1);
+    // Fixed hinge blocks and supply manifold join the exchanger to the hull.
     const P = this.xf(x, y, z, 0, 0, angle);
-    this.box('trim', t * 4, span * 0.06, len * 1.05, 0, span * 0.02, 0, { bevel: 0.3, parent: P });
-    this.drum('dark', t * 2.2, len * 0.9, 0, { sides: 8, parent: this.xf(0, span * 0.05, 0, 0, 0, 0, P) });
-    this.radiators.push({ mesh: m, material: mat });
-    return m;
+    this.box('trim', t * 5, span * 0.1, len * 1.04, 0, 0, 0, { bevel: 0.3, parent: P });
+    this.drum('barrel', t * 2.2, len * 0.96, 0, { sides: 10, parent: P });
+    this.radiators.push({ mesh: root, material: mat, kit: wing });
+    return root;
   }
 
   /** Drive skirt, thrust frame and engine bells matching the plume layout. */
@@ -436,6 +459,14 @@ export class HullKit {
     const L = this.L, W = this.W;
     const n = engineConfig.count;
     const bellR = W * (n <= 2 ? 0.16 : n <= 4 ? 0.125 : 0.09);
+    // Continuous pressure trunk overlaps both the aft hull and drive skirt.
+    // The shorter gunboats and battleship used to leave the entire drive floating.
+    this.drum('trim', W * 0.25, L * 0.16, -L * 0.355, { sides: 8 });
+    for (const az of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
+      const P = this.xf(0, 0, 0, 0, 0, az);
+      this.box('hull', W * 0.12, W * 0.1, L * 0.13,
+        0, W * 0.245, -L * 0.355, { bevel: 0.25, parent: P });
+    }
     // skirt: flared drum with ribs
     this.drum('hull', W * 0.5, L * 0.1, -L * 0.44, { rTop: W * 0.4, sides: 8 });
     this.rib('trim', W * 0.52, L * 0.015, -L * 0.4);
@@ -510,7 +541,11 @@ export class HullKit {
 
   build(group, mats) {
     this._mergeInto(group, mats);
-    for (const r of this.radiators) group.add(r.mesh);
+    for (const r of this.radiators) {
+      r.kit._mergeInto(r.mesh, { ...mats, radiator: r.material });
+      for (const p of r.kit.parts) p.geom.dispose();
+      group.add(r.mesh);
+    }
     for (const liner of this.bellHeat) {
       liner.material = mats.bellHeat;
       group.add(liner);
@@ -537,7 +572,7 @@ export class HullKit {
     }
     group.userData.parts = this.parts;
     group.userData.radiators = this.radiators.map(r => r.mesh);
-    group.userData.radiatorMaterials = this.radiators.map(r => r.material);
+    group.userData.radiatorMaterials = [...new Set(this.radiators.map(r => r.material))];
     group.userData.bellHeat = this.bellHeat;
     group.userData.navLights = lights;
     group.userData.turrets = turrets;
@@ -609,12 +644,12 @@ function hullFrigate(k) {
   k.box('accent', W * 0.02, W * 0.5, W * 0.04, 0, W * 0.5, L * 0.055, { bevel: 0 });
   k.greebles('+x', W * 0.025, [W * 0.3, W * 0.7], [-L * 0.16, L * 0.04], 5, W * 0.025, W * 0.05);
   k.greebles('-x', -W * 0.025, [W * 0.3, W * 0.7], [-L * 0.16, L * 0.04], 5, W * 0.025, W * 0.05);
-  k.turret(W * 0.2, 0, W * 0.4, L * 0.32);
+  k.turret(W * 0.2, 0, W * 0.22, L * 0.32);
   k.pd(W * 0.24, 0, -W * 0.36, 0, Math.PI);
   k.pd(W * 0.2, W * 0.3, -W * 0.16, -L * 0.2, -Math.PI * 0.7);
   k.greebles('-y', -W * 0.32, [-W * 0.2, W * 0.2], [-L * 0.3, L * 0.1], 8, W * 0.04, W * 0.09);
   k.sensorCluster(W * 0.2, -W * 0.16, W * 0.3, L * 0.02);
-  k.mast(W * 0.36, W * 0.12, W * 0.42, L * 0.42, -0.2);
+  k.mast(W * 0.36, W * 0.12, W * 0.22, L * 0.42, -0.2);
   k.runningLights(W * 0.35, 0, L * 0.05);
   k.radiator(W * 0.5, L * 0.22, -W * 0.3, W * 0.12, -L * 0.26, -Math.PI / 2 + 0.35);
   k.radiator(W * 0.5, L * 0.22, W * 0.3, W * 0.12, -L * 0.26, Math.PI / 2 - 0.35);
@@ -830,6 +865,9 @@ function hullDreadnought(k, opts = {}) {
   for (const sx of [-1, 1]) {
     for (const sy of [-1, 1]) {
       const px = sx * W * 0.36, py = sy * W * 0.36;
+      // Armoured load paths tie the four sponsons into the pressure hull.
+      k.box('trim', W * 0.24, W * 0.24, L * 0.57,
+        sx * W * 0.23, sy * W * 0.23, -L * 0.07, { bevel: 0.15 });
       k.box('hull', W * 0.32, W * 0.32, L * 0.52, px, py, -L * 0.08, { bevel: 0.2 });
       k.box('trim', W * 0.34, W * 0.34, L * 0.03, px, py, -L * 0.2, { bevel: 0.2 });
       k.box('trim', W * 0.34, W * 0.34, L * 0.03, px, py, L * 0.05, { bevel: 0.2 });
@@ -866,6 +904,11 @@ function hullDreadnought(k, opts = {}) {
   k.turret(W * 0.26, -W * 0.36, -W * 0.56, L * 0.12, Math.PI);
   k.turret(W * 0.22, W * 0.56, W * 0.36, -L * 0.2, -Math.PI / 2);
   k.turret(W * 0.22, -W * 0.56, W * 0.36, -L * 0.2, Math.PI / 2);
+  // PD galleries bridge the valleys between the armoured sponsons.
+  for (const a of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
+    k.box('hull', W * 0.52, W * 0.12, L * 0.18, 0, W * 0.54, -L * 0.1,
+      { bevel: 0.25, parent: k.xf(0, 0, 0, 0, 0, a) });
+  }
   k.pd(W * 0.2, W * 0.6, 0, -L * 0.05, -Math.PI / 2);
   k.pd(W * 0.2, -W * 0.6, 0, -L * 0.05, Math.PI / 2);
   k.pd(W * 0.2, 0, W * 0.6, -L * 0.15);

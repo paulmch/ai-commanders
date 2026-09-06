@@ -1,3 +1,4 @@
+import { DecisionIndex } from './DecisionIndex.js';
 import { getModulesForShipType } from './shipModules.js';
 
 /**
@@ -107,6 +108,8 @@ export class BattleLoader {
 
     // Radiator extended/retracted changes per ship
     this.buildRadiatorTimeline();
+    this.decisions = new DecisionIndex(this.events, this.ships);
+    this.lastEventSequence = this.events.reduce((max, e) => Math.max(max, e.sequence || 0), 0);
   }
 
   /**
@@ -129,12 +132,19 @@ export class BattleLoader {
       .filter(f => f.t > lastT)
       .sort((a, b) => a.t - b.t);
 
-    const lastEventT = this.events.length > 0
-      ? this.events[this.events.length - 1].timestamp
-      : -Infinity;
-    const newEvents = (chunk.events || [])
-      .filter(e => e.timestamp > lastEventT)
-      .sort((a, b) => a.timestamp - b.timestamp);
+    // IDs survive late arrivals at the same paused simulation time. Legacy
+    // recordings use occurrence counts, preserving repeated identical events.
+    const key = e => e.event_id || JSON.stringify(e);
+    const counts = new Map();
+    for (const e of this.events) counts.set(key(e), (counts.get(key(e)) || 0) + 1);
+    const seen = new Map();
+    const newEvents = (chunk.events || []).filter(e => {
+      const k = key(e), n = (seen.get(k) || 0) + 1;
+      seen.set(k, n);
+      return n > (counts.get(k) || 0);
+    });
+    this.sourceData.assets = {...this.sourceData.assets, ...chunk.assets};
+    if (chunk.commentary) this.sourceData.commentary = chunk.commentary;
 
     // The verdict arrives on the final poll, often with no frames attached
     this.metadata.winner = chunk.winner ?? this.metadata.winner;
@@ -144,6 +154,7 @@ export class BattleLoader {
 
     this.simTrace.push(...newFrames);
     this.events.push(...newEvents);
+    this.events.sort((a, b) => a.timestamp - b.timestamp || (a.sequence || 0) - (b.sequence || 0));
     if (this.simTrace.length > 0) {
       this.duration = this.simTrace[this.simTrace.length - 1].t;
     }
@@ -261,7 +272,7 @@ export class BattleLoader {
   /**
    * Per-ship death analysis for the two-stage destruction sequence.
    *
-   * Returns { shipId: { time, velocity (m/s), reactorCause } }. A death is
+   * Returns { shipId: { time, position, forward, velocity, wasDying, reactorCause } }. A death is
    * a "reactor cause" when a module_destroyed for a reactor lands within
    * the death tick - that ship detonates immediately. Everything else
    * drifts dark for a few seconds before the reactor cooks off. Velocity
@@ -277,6 +288,9 @@ export class BattleLoader {
           const prev = i > 0 ? trace[i - 1].ships?.[shipId] : null;
           info[shipId] = {
             time: trace[i].t,
+            position: s.pos || prev?.pos,
+            forward: s.fwd || prev?.fwd,
+            wasDying: !!prev?.dying,
             velocity: (prev && !prev.destroyed && prev.vel) ? prev.vel : [0, 0, 0],
             reactorCause: false
           };
@@ -546,12 +560,14 @@ export class BattleLoader {
 
     // Process captain_decision events to track targets
     for (const event of this.events) {
-      if (event.event_type === 'captain_decision' && event.data) {
+      const resolved = event.event_type === 'command_status' && event.data?.status === 'accepted' &&
+        Object.hasOwn(event.data, 'resolved_target_id');
+      if (resolved || (event.event_type === 'captain_decision' && event.data)) {
         const shipId = event.ship_id;
-        const targetId = event.data.target_id;
-        const targetName = event.data.target_name;
+        const targetId = resolved ? event.data.resolved_target_id : event.data.target_id;
+        const targetName = resolved ? this.ships[targetId]?.name : event.data.target_name;
 
-        if (shipId && targetId) {
+        if (shipId && (resolved || targetId)) {
           if (!this.shipTargets.has(shipId)) {
             this.shipTargets.set(shipId, []);
           }
@@ -1108,6 +1124,7 @@ export class BattleLoader {
 
         impacts.push({
           projectile_id: projId,
+          timestamp: effectiveHitTime,
           impact_position: hitInfo.impact_position,
           kinetic_energy_gj: hitEvent?.data?.kinetic_energy_gj || 1,
           target_id: hitInfo.target_id

@@ -396,11 +396,17 @@ Be authentic to how you would command a fleet as {model_name}."""
             standing_plan=self.standing_plan,
             standing_plan_time=self.standing_plan_time,
             notebook_text=getattr(self.config, "notebook_text", None),
+            decision_interval_s=getattr(simulation, "decision_interval", 30.0),
         )
 
         user_text = (f"ADMIRAL CHECKPOINT {self.decision_count + 1}. "
                      "Set your fleet directive (overall strategy). "
                      "You will issue individual ship orders next.")
+
+        from .execution_feedback import execution_feedback
+        feedback = execution_feedback(simulation, [s['ship_id'] for s in active_ships])
+        if feedback:
+            user_text += '\n\n' + feedback
 
         # Attach the tactical plot as an image content part when available.
         # OpenRouter forwards multi-part user content to multimodal models;
@@ -600,6 +606,7 @@ Be authentic to how you would command a fleet as {model_name}."""
             personality=self.config.personality,
             recent_decisions=recent_decisions,
             standing_plan=self.standing_plan,
+            decision_interval_s=getattr(simulation, "decision_interval", 30.0),
         )
 
         messages = [

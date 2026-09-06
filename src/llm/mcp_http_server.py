@@ -416,6 +416,15 @@ class MCPHttpServer:
             return web.json_response(
                 {"error": f"Bad since_t: {since_arg!r}"}, status=400)
 
+        try:
+            since_seq = int(request.query['since_seq']) if 'since_seq' in request.query else None
+            if since_seq is not None and since_seq < 0:
+                raise ValueError
+            if since is not None and not math.isfinite(since):
+                raise ValueError
+        except ValueError:
+            return web.json_response({'error': 'Invalid recording cursor'}, status=400)
+
         recording = None
         runner = self._battle_runner
         recorder = getattr(runner, "recorder", None) if runner else None
@@ -426,7 +435,10 @@ class MCPHttpServer:
             if since is not None:
                 start = bisect_right(frames, since, key=lambda f: f["t"])
                 frames = frames[start:]
-                events = [e for e in events if e["timestamp"] > since]
+                if since_seq is None:
+                    events = [e for e in events if e['timestamp'] > since]
+            if since_seq is not None:
+                events = [e for e in events if e.get('sequence', 0) > since_seq]
             # Shallow field copy: asdict() would deep-copy the whole trace
             # on every poll.
             recording = {
@@ -436,6 +448,14 @@ class MCPHttpServer:
             }
             recording["sim_trace"] = frames
             recording["events"] = events
+            recording['assets'] = dict(rec.assets)
+            if since_seq is not None:
+                refs = set()
+                for event in events:
+                    refs.update(event['data'].get('message_refs', []))
+                    if event['data'].get('tools_ref'):
+                        refs.add(event['data']['tools_ref'])
+                recording['assets'] = {key: rec.assets[key] for key in refs if key in rec.assets}
         return web.json_response({
             "live": self._live_block(),
             "recording": recording,
@@ -961,6 +981,7 @@ async def run_fleet_battle_with_http(
                 active_alpha_captains,
                 runner.beta_admiral,
             )
+            runner._record_admiral_intent(runner.alpha_admiral, alpha_decision, 'alpha')
             for order in alpha_decision.fleet_orders:
                 ship_id = runner._find_ship_id_by_name(order.target_ship_id, "alpha")
                 if ship_id and ship_id in runner.alpha_captains:
@@ -982,6 +1003,7 @@ async def run_fleet_battle_with_http(
                     runner.alpha_admiral,
                 )
                 dbg(f"[DEBUG] Beta admiral returned {len(beta_decision.fleet_orders)} fleet orders")
+                runner._record_admiral_intent(runner.beta_admiral, beta_decision, 'beta')
                 for order in beta_decision.fleet_orders:
                     ship_id = runner._find_ship_id_by_name(order.target_ship_id, "beta")
                     dbg(f"[DEBUG] Beta order for {order.target_ship_id} -> ship_id={ship_id}: {order.order_text[:50]}...")
@@ -1026,6 +1048,7 @@ async def run_fleet_battle_with_http(
                     ship_id, captain, "alpha"
                 )
                 all_commands[ship_id] = commands
+                runner._record_captain_decision(ship_id, captain, commands)
 
                 if runner.config.verbose:
                     print(f"    -> {runner._get_ship_status_line(ship_id, commands)}")
@@ -1062,6 +1085,7 @@ async def run_fleet_battle_with_http(
                     )
                     dbg(f"[DEBUG] {ship_id} captain returned {len(commands)} commands: {[type(c).__name__ for c in commands]}")
                     all_commands[ship_id] = commands
+                    runner._record_captain_decision(ship_id, captain, commands)
                 except Exception as e:
                     print(f"[ERROR] {ship_id} captain decision failed: {e}")
                     import traceback

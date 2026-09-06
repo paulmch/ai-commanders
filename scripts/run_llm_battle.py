@@ -62,24 +62,24 @@ Examples:
     # Captain names
     parser.add_argument(
         "--alpha-name",
-        default="Commander Chen",
+        default=None,
         help="Name for alpha captain",
     )
     parser.add_argument(
         "--beta-name",
-        default="Captain Volkov",
+        default=None,
         help="Name for beta captain",
     )
 
     # Ship names
     parser.add_argument(
         "--alpha-ship",
-        default="TIS Relentless",
+        default=None,
         help="Name for alpha ship",
     )
     parser.add_argument(
         "--beta-ship",
-        default="HFS Determination",
+        default=None,
         help="Name for beta ship",
     )
 
@@ -118,21 +118,25 @@ Examples:
     parser.add_argument(
         "--distance",
         type=float,
-        default=500.0,
+        default=None,
         help="Initial distance in km (default: 500)",
     )
     parser.add_argument(
         "--max-checkpoints",
         type=int,
-        default=40,
+        default=None,
         help="Maximum LLM checkpoints (default: 40)",
     )
     parser.add_argument(
         "--time-limit",
         type=float,
-        default=1200.0,
+        default=None,
         help="Time limit in seconds (default: 1200)",
     )
+    parser.add_argument("--decision-interval", type=float, default=None,
+                        help="Seconds between decisions, 20-60 (default: 30)")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Seed combat randomness for reproducible scripted battles")
 
     # Fleet configuration (for multi-ship battles with Admirals)
     parser.add_argument(
@@ -212,9 +216,65 @@ Examples:
                         fleet.admiral.vision = True
             if args.notebooks:
                 fleet_config.use_notebooks = True
+            # An explicit CLI value overrides JSON; omitted flags preserve it.
+            for option, field in ((args.distance, "initial_distance_km"),
+                                  (args.time_limit, "time_limit_s"),
+                                  (args.decision_interval, "decision_interval_s")):
+                if option is not None:
+                    setattr(fleet_config, field, option)
             if not args.quiet:
                 print(f"FLEET MODE: Loading configuration from {args.fleet_config}")
                 print(f"Battle: {fleet_config.battle_name}")
+
+        # Short display names (shared implementation - version-aware)
+        alpha_short = _get_short_model_name(args.alpha_model)
+        beta_short = _get_short_model_name(args.beta_model)
+
+        # Create captain configs with model names (used for legacy mode)
+        alpha_config = LLMCaptainConfig(
+            name=args.alpha_name or f"Captain {alpha_short}",
+            ship_name=args.alpha_ship or f"TIS {alpha_short}",
+            model=args.alpha_model,
+            personality=personality_map[args.alpha_personality],
+        )
+
+        beta_config = LLMCaptainConfig(
+            name=args.beta_name or f"Captain {beta_short}",
+            ship_name=args.beta_ship or f"HFS {beta_short}",
+            model=args.beta_model,
+            personality=personality_map[args.beta_personality],
+        )
+
+        # Create battle config
+        config_overrides = dict(
+            verbose=not args.quiet,
+            alpha_ship_type=args.alpha_ship_type,
+            beta_ship_type=args.beta_ship_type,
+            fleet_config_path=args.fleet_config,
+        )
+        if args.max_checkpoints is not None:
+            config_overrides["max_checkpoints"] = args.max_checkpoints
+            if fleet_config:
+                fleet_config.max_checkpoints = args.max_checkpoints
+        if args.seed is not None:
+            config_overrides["seed"] = args.seed
+        if args.unlimited:
+            config_overrides["unlimited_mode"] = True
+        if args.trace:
+            config_overrides["record_sim_trace"] = True
+        if args.no_personality_selection:
+            config_overrides["personality_selection"] = False
+        if args.notebooks:
+            config_overrides["use_notebooks"] = True
+        if fleet_config:
+            battle_config = BattleConfig.from_fleet_config(fleet_config, **config_overrides)
+        else:
+            for value, field in ((args.distance, "initial_distance_km"),
+                                 (args.time_limit, "time_limit_s"),
+                                 (args.decision_interval, "decision_interval_s")):
+                if value is not None:
+                    config_overrides[field] = value
+            battle_config = BattleConfig(**config_overrides)
 
         # Create client with appropriate model
         if fleet_config:
@@ -231,40 +291,11 @@ Examples:
         # turn changes every time, so an explicit id keeps the whole battle pinned
         # to one provider endpoint and its warm cache.
         session_id = f"ai-commanders-{uuid.uuid4().hex[:16]}"
-        client = CaptainClient(model=client_model, session_id=session_id)
-
-        # Short display names (shared implementation - version-aware)
-        alpha_short = _get_short_model_name(args.alpha_model)
-        beta_short = _get_short_model_name(args.beta_model)
-
-        # Create captain configs with model names (used for legacy mode)
-        alpha_config = LLMCaptainConfig(
-            name=f"Captain {alpha_short}",
-            ship_name=f"TIS {alpha_short}",
-            model=args.alpha_model,
-            personality=personality_map[args.alpha_personality],
-        )
-
-        beta_config = LLMCaptainConfig(
-            name=f"Captain {beta_short}",
-            ship_name=f"HFS {beta_short}",
-            model=args.beta_model,
-            personality=personality_map[args.beta_personality],
-        )
-
-        # Create battle config
-        battle_config = BattleConfig(
-            initial_distance_km=args.distance,
-            max_checkpoints=args.max_checkpoints,
-            time_limit_s=args.time_limit,
-            unlimited_mode=args.unlimited,
-            verbose=not args.quiet,
-            record_sim_trace=args.trace,
-            personality_selection=not args.no_personality_selection,
-            alpha_ship_type=args.alpha_ship_type,
-            beta_ship_type=args.beta_ship_type,
-            fleet_config_path=args.fleet_config,
-        )
+        models = ([s.model for s in fleet_config.get_all_ships()] +
+                  [f.admiral.model for f in (fleet_config.alpha_fleet, fleet_config.beta_fleet)
+                   if f.admiral and f.admiral.enabled]) if fleet_config else [args.alpha_model, args.beta_model]
+        client = (CaptainClient(model=client_model, session_id=session_id)
+                  if any(model != "heuristic" for model in models) else None)
 
         if args.unlimited and not args.quiet:
             print("UNLIMITED MODE: Battle will continue until destruction, surrender, or mutual draw")
@@ -300,7 +331,6 @@ Examples:
 
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
-        print("Make sure OPENROUTER_API_KEY is set in .env file", file=sys.stderr)
         return 1
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)

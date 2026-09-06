@@ -8,8 +8,7 @@ import { createTorch } from './Torch.js';
  * Blasts and ship destruction.
  *
  * Everything is driven by battle time (age = now - spawnTime) so scrubbing
- * the timeline replays a detonation exactly; only surface turbulence uses
- * the wall clock so a paused frame still looks alive.
+ * the timeline replays the same detonation, including its surface turbulence.
  */
 
 const ADDITIVE = {
@@ -57,14 +56,14 @@ function fireballMaterial() {
   #include <logdepthbuf_pars_vertex>
       void main() {
         vec3 n = normalize(position);
-        vec4 d1 = tri(uNoise, n * 0.9 + uSeed + uTime * 0.05, n);
-        vec4 d2 = tri(uNoise, n * 2.3 - uSeed * 1.7 - uTime * 0.09, n);
-        float disp = (d1.r - 0.5) * 0.6 + (d2.g - 0.5) * 0.2;
+        vec4 d1 = tri(uNoise, n * 0.45 + uSeed + uTime * 0.05, n);
+        vec4 d2 = tri(uNoise, n * 1.2 - uSeed * 1.7 - uTime * 0.09, n);
+        float disp = (d1.r - 0.5) * 0.6 + (d2.g - 0.5) * 0.08;
         vec3 p = position * (1.0 + disp * uTurb);
         vLocal = n;
         vNormal = normalize(normalMatrix * normal);
         vec4 wp = modelMatrix * vec4(p, 1.0);
-        vView = normalize(cameraPosition - wp.xyz);
+        vView = -(viewMatrix * wp).xyz;
         gl_Position = projectionMatrix * viewMatrix * wp;
         #include <logdepthbuf_vertex>
       }`,
@@ -98,16 +97,16 @@ function fireballMaterial() {
         float ndv = abs(dot(wn, normalize(vView)));
         vec4 s1 = tri(uNoise, n * 1.6 + uSeed + uTime * 0.08, n);
         vec4 s2 = tri(uNoise, n * 4.2 + uSeed * 2.0 - uTime * 0.13, n);
-        float noise = s1.r * 0.6 + s2.b * 0.4;
+        float noise = smoothstep(0.22, 0.8, s1.r * 0.6 + s2.b * 0.4);
         // hotter in the middle of the disc, mottled by the noise
         float heat = uHeat * (0.15 + 1.0 * noise) * (0.4 + 0.6 * ndv);
         heat = clamp(heat, 0.0, 1.0);
         float edge = 1.0 - pow(1.0 - ndv, 3.5);
-        float a = smoothstep(0.03, 0.35, heat) * edge * uAlpha;
+        float a = smoothstep(0.03, 0.35, heat) * edge * uAlpha * (0.3 + 0.7 * noise);
         vec3 col = ramp(heat) * (0.35 + 0.9 * heat);
         gl_FragColor = vec4(col * a * uIntensity, 1.0);
       }`,
-    side: THREE.DoubleSide,
+    side: THREE.FrontSide,
     ...ADDITIVE
   });
 }
@@ -131,7 +130,7 @@ function shellMaterial() {
         vLocal = normalize(position);
         vNormal = normalize(normalMatrix * normal);
         vec4 wp = modelMatrix * vec4(position, 1.0);
-        vView = normalize(cameraPosition - wp.xyz);
+        vView = -(viewMatrix * wp).xyz;
         gl_Position = projectionMatrix * viewMatrix * wp;
         #include <logdepthbuf_vertex>
       }`,
@@ -158,7 +157,44 @@ function shellMaterial() {
   });
 }
 
-let _fireGeom = null, _shellGeom = null, _smallFireGeom = null;
+// A thin equatorial sheet of reactor ejecta, with broken, turbulent arcs.
+function ejectaMaterial() {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uNoise: { value: getNoiseTexture() },
+      uAge: { value: 0 }, uIntensity: { value: 1 }, uSeed: { value: 0 }
+    },
+    vertexShader: /* glsl */`
+      varying vec2 vUv;
+      #include <common>
+      #include <logdepthbuf_pars_vertex>
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        #include <logdepthbuf_vertex>
+      }`,
+    fragmentShader: /* glsl */`
+      uniform sampler2D uNoise;
+      uniform float uAge, uIntensity, uSeed;
+      varying vec2 vUv;
+      #include <logdepthbuf_pars_fragment>
+      void main() {
+        #include <logdepthbuf_fragment>
+        vec2 p = vUv * 2.0 - 1.0;
+        float r = length(p);
+        float n = texture2D(uNoise, p * 1.8 + uSeed).g;
+        float front = 0.77 + (n - 0.5) * 0.04;
+        float rim = exp(-pow((r - front) / 0.018, 2.0));
+        float wake = exp(-pow((r - front + 0.08) / 0.085, 2.0)) * 0.22;
+        float arcs = smoothstep(0.18, 0.68, n);
+        vec3 color = mix(vec3(0.65, 1.25, 2.4), vec3(1.4, 0.35, 0.08), uAge);
+        gl_FragColor = vec4(color * (rim + wake) * arcs * uIntensity, 1.0);
+      }`,
+    side: THREE.DoubleSide, ...ADDITIVE
+  });
+}
+
+let _fireGeom = null, _shellGeom = null, _smallFireGeom = null, _ejectaGeom = null;
 // PolyhedronGeometry subdivides linearly: detail d gives 20*(d+1)^2 faces
 function fireGeom() { return _fireGeom || (_fireGeom = new THREE.IcosahedronGeometry(1, 28)); }
 function smallFireGeom() { return _smallFireGeom || (_smallFireGeom = new THREE.IcosahedronGeometry(1, 14)); }
@@ -173,8 +209,9 @@ const KINDS = {
   // Fusion reactor breach - the ship-killer
   reactor: {
     duration: 14, flash: 3.2, flashFade: 0.22, screenFlash: 0.65,
-    fireR: 1.15, fireGrow: 1.4, fireLife: 5.5, fireTurb: 0.3,
+    fireR: 1.35, fireGrow: 1.2, fireLife: 6.5, fireTurb: 1.0,
     shellR: 18, shellLife: 2.4, shellW: 0.32,
+    lobes: 6, ringR: 12, ringLife: 3.2,
     sparks: 2600, sparkSpeed: [2.5, 16], sparkLife: [2, 7], sparkSize: 0.075,
     streaks: 700, streakSpeed: [3, 13], streakLife: [1.2, 5], streakLen: 0.9, streakW: 0.05,
     puffs: 10, puffSize: [0.6, 1.5], puffSpeed: [0.3, 1.4], puffLife: 12,
@@ -183,8 +220,9 @@ const KINDS = {
   // Torpedo warhead: penetrator flash, fast plasma front, brief fireball
   warhead: {
     duration: 5.5, flash: 2.6, flashFade: 0.18, screenFlash: 0.25,
-    fireR: 1.1, fireGrow: 1.2, fireLife: 2.8, fireTurb: 0.5,
+    fireR: 1.2, fireGrow: 1.2, fireLife: 3.2, fireTurb: 1.1,
     shellR: 10, shellLife: 1.3, shellW: 0.3,
+    lobes: 3, ringR: 7, ringLife: 1.7,
     sparks: 900, sparkSpeed: [3, 18], sparkLife: [0.8, 3.5], sparkSize: 0.06,
     streaks: 260, streakSpeed: [4, 14], streakLife: [0.6, 2.5], streakLen: 0.8, streakW: 0.04,
     puffs: 9, puffSize: [0.9, 1.8], puffSpeed: [0.4, 1.6], puffLife: 4.5,
@@ -286,18 +324,39 @@ export class Blast {
       this.group.add(this.shell);
     }
 
+    this.lobes = [];
+    for (let i = 0; i < (K.lobes || 0); i++) {
+      const mesh = new THREE.Mesh(smallFireGeom(), fireballMaterial());
+      mesh.material.uniforms.uSeed.value = this.seed + i * 2.71;
+      mesh.renderOrder = 35;
+      mesh.frustumCulled = false;
+      const direction = new THREE.Vector3(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).normalize();
+      this.lobes.push({ mesh, direction, delay: 0.08 + rnd() * 0.38, size: 0.45 + rnd() * 0.35 });
+      this.group.add(mesh);
+    }
+    if (K.ringR) {
+      _ejectaGeom ||= new THREE.PlaneGeometry(2, 2);
+      this.ejecta = new THREE.Mesh(_ejectaGeom, ejectaMaterial());
+      this.ejecta.material.uniforms.uSeed.value = this.seed;
+      const axis = o.axis?.clone().normalize() || new THREE.Vector3(rnd() - 0.5, rnd() - 0.5, 1).normalize();
+      this.ejecta.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), axis);
+      this.ejecta.renderOrder = 36;
+      this.ejecta.frustumCulled = false;
+      this.group.add(this.ejecta);
+    }
+
     // Particles
     const dir = o.dir ? o.dir.clone().normalize() : null;
     this.sparks = new SparkBurst({
       count: K.sparks, speed: K.sparkSpeed.map(v => v * s), life: K.sparkLife,
       size: K.sparkSize * s, drag: 0.35, spread: s * 0.25, rnd,
-      dir, cone: K.cone ?? 0, baseVel: this.baseVel, intensity: 1.3
+      dir, cone: K.cone ?? 0, intensity: 1.3
     });
     this.group.add(this.sparks.object);
     this.streaks = new StreakBurst({
       count: K.streaks, speed: K.streakSpeed.map(v => v * s), life: K.streakLife,
       length: K.streakLen * s, width: K.streakW * s, drag: 0.3, spread: s * 0.2, rnd,
-      dir, cone: K.cone ?? 0, baseVel: this.baseVel, intensity: 1.4
+      dir, cone: K.cone ?? 0, intensity: 1.4
     });
     this.group.add(this.streaks.object);
     this.puffs = new PuffCloud({
@@ -335,7 +394,7 @@ export class Blast {
       const amt = K.screenFlash * Math.min(1, (near / Math.max(d, 1)) ** 1.2);
       ctx.postfx.triggerFlash(amt);
     }
-    this.update(o.spawnTime, 0);
+    this.update(ctx.now ? ctx.now() : o.spawnTime, 0);
   }
 
   /** @returns {boolean} still alive */
@@ -358,12 +417,33 @@ export class Blast {
       const r = s * K.fireR * (0.25 + easeOut(age * K.fireGrow, 1.6) * 1.0) * (1 + p * 0.6);
       this.fire.scale.setScalar(r);
       const u = this.fire.material.uniforms;
-      u.uTime.value = wallTime;
-      u.uHeat.value = 0.95 * Math.pow(1 - p, 1.3);
+      u.uTime.value = age;
+      u.uHeat.value = 1.25 * Math.pow(1 - p, 0.85);
       u.uAlpha.value = Math.min(1, age / 0.12) * Math.pow(1 - p, 0.6);
-      u.uIntensity.value = 0.85 * (0.5 + 0.5 * Math.exp(-age / (life * 0.35)));
+      u.uIntensity.value = 1.4 * (0.5 + 0.5 * Math.exp(-age / (life * 0.35)));
       u.uTurb.value = K.fireTurb * (0.7 + p * 0.9);
       this.fire.visible = age < life;
+    }
+    for (const lobe of this.lobes) {
+      const t = age - lobe.delay;
+      const p = THREE.MathUtils.clamp(t / (K.fireLife * 0.8), 0, 1);
+      lobe.mesh.visible = t >= 0 && p < 1;
+      const reach = s * K.fireR * easeOut(Math.max(0, t), 1.2);
+      lobe.mesh.position.copy(lobe.direction).multiplyScalar(reach * (0.65 + p * 0.8));
+      lobe.mesh.scale.setScalar(Math.max(0.001, reach * lobe.size * (1 + p * 0.4)));
+      const u = lobe.mesh.material.uniforms;
+      u.uTime.value = Math.max(0, t) * 1.3;
+      u.uHeat.value = 1.05 * Math.pow(1 - p, 0.9);
+      u.uAlpha.value = Math.min(1, Math.max(0, t) * 5) * Math.pow(1 - p, 0.8);
+      u.uIntensity.value = 0.85;
+      u.uTurb.value = 0.85 + p * 0.5;
+    }
+    if (this.ejecta) {
+      const p = Math.min(1, age / K.ringLife);
+      this.ejecta.visible = p < 1;
+      this.ejecta.scale.setScalar(s * K.ringR * (0.025 + easeOut(p, 2.1)));
+      this.ejecta.material.uniforms.uAge.value = p;
+      this.ejecta.material.uniforms.uIntensity.value = 2.5 * Math.pow(1 - p, 2);
     }
     if (this.shell) {
       const p = Math.min(1, age / K.shellLife);
@@ -392,6 +472,8 @@ export class Blast {
     this.flash.material.dispose();
     if (this.fire) this.fire.material.dispose();
     if (this.shell) this.shell.material.dispose();
+    for (const lobe of this.lobes) lobe.mesh.material.dispose();
+    if (this.ejecta) this.ejecta.material.dispose();
     this.sparks.dispose();
     this.streaks.dispose();
     this.puffs.dispose();
@@ -425,6 +507,8 @@ export class ShipDestruction {
 
     this.tumbleAxis = new THREE.Vector3(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).normalize();
     this.tumbleRate = 0.08 + rnd() * 0.14;
+    this.initialOrientation = this.shipGroup?.quaternion.clone() || new THREE.Quaternion();
+    this.tumble = new THREE.Quaternion();
     this.ignited = false;
     this.chunks = [];
     this.chunkGroup = null;
@@ -472,15 +556,19 @@ export class ShipDestruction {
     const origin = this.basePos.clone().addScaledVector(this.driftVel, this.driftDuration);
     let reactorWorld = origin.clone();
     if (g) {
+      this.tumble.setFromAxisAngle(this.tumbleAxis, this.tumbleRate * this.driftDuration);
+      g.quaternion.copy(this.initialOrientation).multiply(this.tumble);
       const reactor = g.userData.reactorPos || new THREE.Vector3();
       reactorWorld = reactor.clone().applyQuaternion(g.quaternion).add(origin);
     }
     this.blastPos = reactorWorld;
+    this.blastOrigin = reactorWorld.clone();
     for (const v of this.vents) { v.torch.group.visible = false; }
 
     this.ctx.spawnBlast({
       position: reactorWorld, scale: this.scale, spawnTime: now, kind: 'reactor',
-      baseVel: this.driftVel
+      baseVel: this.driftVel,
+      axis: new THREE.Vector3(0, 0, 1).applyQuaternion(g?.quaternion || new THREE.Quaternion())
     });
 
     // Hull breakup: chunks inherit the drift velocity plus a radial kick
@@ -516,6 +604,7 @@ export class ShipDestruction {
         this.secondaries.push({
           t: 0.5 + rnd() * 5.0,
           chunk: this.chunks[Math.floor(rnd() * this.chunks.length)],
+          scale: this.scale * (0.3 + rnd() * 0.3),
           fired: false
         });
       }
@@ -542,7 +631,8 @@ export class ShipDestruction {
       if (g) {
         g.visible = true;
         g.position.copy(this.hulkPos);
-        g.rotateOnAxis(this.tumbleAxis, this.tumbleRate * delta);
+        this.tumble.setFromAxisAngle(this.tumbleAxis, this.tumbleRate * age);
+        g.quaternion.copy(this.initialOrientation).multiply(this.tumble);
         for (const v of this.vents) {
           const a = age - v.start;
           const on = a > 0 ? Math.min(1, a / 0.6) * (0.55 + 0.45 * Math.sin(wallTime * 1.7 + v.phase)) : 0;
@@ -552,9 +642,11 @@ export class ShipDestruction {
       for (const pop of this.pops) {
         if (pop.fired || pop.t > age) continue;
         pop.fired = true;
-        if (age - pop.t < 0.5 && g) {
-          const world = pop.local.clone().applyQuaternion(g.quaternion).add(this.hulkPos);
-          const dir = pop.local.clone().setZ(0).normalize().applyQuaternion(g.quaternion);
+        if (age - pop.t < KINDS.pop.duration && g) {
+          const orientation = this.initialOrientation.clone().multiply(
+            this.tumble.setFromAxisAngle(this.tumbleAxis, this.tumbleRate * pop.t));
+          const world = pop.local.clone().applyQuaternion(orientation).add(this.basePos).addScaledVector(this.driftVel, pop.t);
+          const dir = pop.local.clone().setZ(0).normalize().applyQuaternion(orientation);
           this.ctx.spawnBlast({ position: world, scale: this.scale * 0.35, spawnTime: this.spawnTime + pop.t, kind: 'pop', dir, baseVel: this.driftVel });
         }
       }
@@ -562,6 +654,7 @@ export class ShipDestruction {
     }
 
     if (!this.ignited) this._ignite();
+    this.blastPos.copy(this.blastOrigin).addScaledVector(this.driftVel, blastAge);
 
     // Chunks: ballistic, tumbling, cooling from orange-hot to dark
     const fadeStart = 17;
@@ -582,9 +675,9 @@ export class ShipDestruction {
     for (const s of this.secondaries) {
       if (s.fired || s.t > blastAge) continue;
       s.fired = true;
-      if (blastAge - s.t < 0.5) {
-        const pos = s.chunk.p0.clone().addScaledVector(s.chunk.vel, blastAge);
-        this.ctx.spawnBlast({ position: pos, scale: this.scale * (0.3 + this.rnd() * 0.3), spawnTime: this.spawnTime + this.driftDuration + s.t, kind: 'secondary', baseVel: s.chunk.vel });
+      if (blastAge - s.t < KINDS.secondary.duration) {
+        const pos = s.chunk.p0.clone().addScaledVector(s.chunk.vel, s.t);
+        this.ctx.spawnBlast({ position: pos, scale: s.scale, spawnTime: this.spawnTime + this.driftDuration + s.t, kind: 'secondary', baseVel: s.chunk.vel });
       }
     }
     return true;

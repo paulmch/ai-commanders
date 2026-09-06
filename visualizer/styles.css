@@ -15,11 +15,11 @@
   --alpha-dim: #006688;
   --alpha-glow: rgba(0, 212, 255, 0.3);
 
-  /* Hostile reds (enemy) */
-  --beta-primary: #ff4444;
-  --beta-secondary: #cc2222;
-  --beta-dim: #881111;
-  --beta-glow: rgba(255, 68, 68, 0.3);
+  /* Opposing fleet: match the amber hull paint and ordnance markers. */
+  --beta-primary: #ff8a3c;
+  --beta-secondary: #d97738;
+  --beta-dim: #8f482a;
+  --beta-glow: rgba(255, 138, 60, 0.3);
 
   /* Accent colors */
   --accent-gold: #ffd700;
@@ -500,7 +500,7 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
+  padding: 6px 4px;
   margin: 2px 0;
   cursor: pointer;
   border: 1px solid transparent;
@@ -511,6 +511,7 @@ body {
 }
 
 .ship-list li::before {
+  display: none;
   content: '▸';
   font-size: 8px;
   opacity: 0;
@@ -538,8 +539,7 @@ body {
 
 .ship-list li.destroyed {
   opacity: 0.4;
-  text-decoration: line-through;
-  cursor: default;
+  text-decoration: none;
 }
 
 .fleet-section.alpha .ship-list li {
@@ -558,7 +558,15 @@ body {
   top: 90px;
   right: 16px;
   width: 280px;
+  max-height: calc(100vh - 186px);
+  display: flex;
+  flex-direction: column;
 }
+
+#shipTelemetry.hidden { display: none; }
+#shipTelemetry > .panel-header { flex-shrink: 0; }
+#shipTelemetry > .panel-content { overflow-y: auto; min-height: 0; }
+#shipTelemetry > .camera-modes { flex-shrink: 0; margin: 0; padding: 12px 16px; background: var(--bg-panel-solid); }
 
 .ship-identity {
   text-align: center;
@@ -1057,6 +1065,7 @@ body {
 }
 
 .controls-container {
+  width: min(1120px, calc(100vw - 32px));
   display: flex;
   align-items: center;
   gap: 20px;
@@ -1115,7 +1124,8 @@ body {
 
 /* Timeline */
 .control-group.timeline {
-  flex: 1;
+  flex: 1 1 280px;
+  min-width: 100px;
   max-width: 500px;
 }
 
@@ -1785,3 +1795,168 @@ body {
   background: rgba(255, 0, 85, 0.12);
   box-shadow: 0 0 15px rgba(255, 0, 85, 0.25);
 }
+
+/* Fleet and combat log share available height instead of covering each other. */
+#leftSidebar {
+  position: fixed;
+  top: 90px;
+  bottom: 96px;
+  left: 16px;
+  width: 232px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  z-index: 20;
+  pointer-events: none;
+}
+
+#leftSidebar #shipRegistry,
+#leftSidebar #eventLog {
+  position: relative;
+  inset: auto;
+  width: 100%;
+  pointer-events: auto;
+}
+
+#leftSidebar #shipRegistry { flex: 1 1 auto; min-height: 0; max-height: none; }
+#leftSidebar #eventLog { flex: 0 0 auto; max-height: 132px; }
+#leftSidebar #eventLog.collapsed { max-height: 36px; }
+#leftSidebar .event-list { max-height: 92px; }
+#leftSidebar .panel-content { padding: 10px; }
+#leftSidebar .fleet-section { margin-bottom: 10px; }
+#leftSidebar .fleet-section:last-child { margin-bottom: 0; }
+#leftSidebar .fleet-header { margin-bottom: 6px; }
+
+.registry-silhouette { width: 28px; height: 24px; flex: 0 0 28px; fill: currentColor; opacity: 0.65; }
+.registry-identity { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.registry-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--text-primary); font-size: 13px; line-height: 15px; }
+.registry-class { font: 9px/10px var(--font-mono); color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.04em; }
+.registry-health { height: 1px; margin-top: 1px; background: rgba(255,255,255,0.07); }
+.registry-health i { display: block; height: 100%; background: currentColor; opacity: 0.65; }
+.registry-status { align-self: flex-start; padding-top: 3px; font: 10px var(--font-mono); }
+.ship-list li.dying .registry-status { color: var(--accent-critical); }
+.ship-list li.destroyed .registry-name { text-decoration: line-through; }
+.ship-list li:focus-visible { outline: 1px solid currentColor; outline-offset: 2px; }
+.fleet-section.beta .ship-list li.selected { border-color: var(--beta-dim); background: rgba(255,138,60,0.08); }
+
+.view-controls {
+  position: fixed; top: 57px; right: 16px; z-index: 25;
+  display: flex; gap: 6px;
+}
+.view-controls.hidden { display: none; }
+.view-controls button {
+  padding: 6px 9px; border: 1px solid var(--border-subtle);
+  background: rgba(5,13,21,0.9); color: var(--text-secondary);
+  font: 10px var(--font-mono); letter-spacing: 0.05em; cursor: pointer;
+}
+.view-controls button.active { color: var(--alpha-primary); border-color: var(--alpha-dim); }
+.view-controls button:hover, .view-controls button:focus-visible { color: var(--text-primary); border-color: var(--alpha-primary); }
+.view-controls kbd { margin-left: 6px; opacity: 0.55; font: inherit; }
+
+#shipContacts { position: fixed; inset: 0; z-index: 12; pointer-events: none; }
+.ship-contact {
+  position: absolute; left: 0; top: 0; width: 20px; height: 20px; padding: 0;
+  border: 0; background: none; color: var(--alpha-primary); pointer-events: auto;
+  cursor: pointer; text-align: left;
+}
+.ship-contact.beta { color: var(--beta-primary); }
+.ship-contact.dying { color: var(--accent-critical); }
+.contact-bracket {
+  position: absolute; inset: 2px; border: 1px solid currentColor;
+  background: rgba(0,12,20,0.25); box-shadow: 0 0 5px rgba(0,0,0,0.7);
+}
+.ship-contact.alpha .contact-bracket { border-radius: 3px; }
+.ship-contact.beta .contact-bracket { transform: rotate(45deg) scale(0.85); }
+.ship-contact:hover .contact-bracket, .ship-contact.selected .contact-bracket { border-width: 2px; background: currentColor; }
+.contact-label {
+  position: absolute; width: 126px; height: 34px; padding: 3px 6px;
+  background: rgba(3,9,16,0.85); border-left: 1px solid currentColor;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.2);
+}
+.contact-name { display: block; font: 12px var(--font-ui); font-weight: 600; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
+.contact-detail { display: block; font: 8px var(--font-mono); color: #9eb2c0; letter-spacing: 0.03em; white-space: nowrap; }
+.contact-health { position: absolute; bottom: 0; left: 0; right: 0; height: 1px; background: rgba(255,255,255,0.1); }
+.contact-health i { display: block; height: 100%; background: currentColor; opacity: 0.65; }
+.contact-leader { position: absolute; top: 10px; left: 10px; height: 1px; background: currentColor; opacity: 0.25; transform-origin: left center; pointer-events: none; }
+.ship-contact:focus-visible { outline: 2px solid white; outline-offset: 4px; }
+#shipContacts[hidden], .ship-contact[hidden], .contact-label[hidden], .contact-leader[hidden] { display: none !important; }
+
+@media (max-width: 1200px) {
+  #leftSidebar { width: 212px; }
+  #leftSidebar .registry-silhouette { display: none; }
+}
+@media (max-width: 900px) {
+  #leftSidebar { width: 200px; justify-content: flex-end; }
+  .view-controls kbd { display: none; }
+  .controls-container { gap: 10px; padding: 12px; }
+  .speed-label { display: none; }
+}
+
+@media (max-width: 680px) {
+  #battleHeader { padding: 8px 16px; height: 88px; align-items: flex-start; }
+  .header-left { display: none; }
+  .header-center { min-width: 0; align-items: flex-start; }
+  .header-right { flex: 0 0 auto; padding-left: 12px; }
+  .battle-title { text-align: left; max-width: 100%; }
+  .battle-title h1 { font-size: 12px; letter-spacing: 0.06em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .title-prefix { font-size: 8px; }
+  .fleet-summary { gap: 8px; font-size: 10px; }
+  .fleet-indicator { gap: 5px; }
+  .fleet-indicator .torp-count, .fleet-bar { display: none; }
+  .time-value { font-size: 15px; }
+  .time-label { font-size: 8px; }
+  .view-controls { top: 62px; }
+  .live-hud { top: 94px; max-width: calc(100vw - 24px); padding: 6px 8px; gap: 6px; font-size: 10px; }
+  .live-status-text { overflow: hidden; text-overflow: ellipsis; }
+  #shipTelemetry { top: 94px; max-height: calc(100vh - 230px); }
+  #playbackControls { height: 120px; }
+  .controls-container { display: grid; grid-template-columns: 44px 1fr 38px; gap: 10px; }
+  .control-group.timeline { grid-column: 2; grid-row: 1; max-width: none; min-width: 0; }
+  .control-group.load { grid-column: 3; grid-row: 1; }
+  .control-group.time { grid-column: 1 / 3; grid-row: 2; }
+  .control-group.speed { grid-column: 2 / 4; grid-row: 2; justify-self: end; }
+  .speed-btn { min-width: 25px; padding: 5px; }
+  #leftSidebar { bottom: 136px; }
+}
+
+/* Decision history shares the tactical display's right-hand reading space. */
+#decisionPanel { position: absolute; top: 146px; bottom: 116px; right: 24px; width: min(460px, calc(100vw - 48px)); z-index: 35; display: flex; flex-direction: column; background: rgba(7, 17, 25, .97); }
+#decisionPanel.hidden { display: none; }
+#decisionPanel .panel-header { flex-shrink: 0; }
+#decisionPanel button, #decisionPanel select { font: inherit; color: #d2e5ee; background: #102330; border: 1px solid #2b4759; border-radius: 3px; }
+#decisionPanel button { cursor: pointer; padding: 6px 10px; }
+#decisionPanel button:hover { border-color: #75d4e5; background: #193440; }
+#decisionPanel button:focus-visible, #decisionPanel select:focus-visible, #decisionPanel summary:focus-visible { outline: 2px solid #75d4e5; outline-offset: 2px; }
+#decisionPanel button:disabled { opacity: .35; cursor: default; }
+.decision-controls { padding: 12px 16px; border-bottom: 1px solid #29404f; }
+.decision-controls label { display: flex; align-items: center; gap: 12px; font-size: 12px; color: #a9c1ce; }
+.decision-controls select { min-width: 0; padding: 7px; flex: 1; width: 100%; }
+.decision-navigation { display: flex; gap: 8px; margin-top: 10px; }
+.decision-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 14px 16px 24px; font-family: 'Rajdhani', sans-serif; font-size: 16px; line-height: 1.45; color: #d9e6ed; }
+.decision-badge { color: #75d4e5; letter-spacing: 1px; font-size: 11px; font-family: 'Share Tech Mono', monospace; }
+.decision-section { margin-top: 22px; border-top: 1px solid #29404f; padding-top: 15px; }
+.decision-section h3 { font-size: 15px; color: #81dae7; margin: 0 0 12px; letter-spacing: 1px; }
+.decision-section p { margin: 8px 0; }
+.decision-muted, .decision-caveat, .decision-empty { color: #a6becb; font-size: 14px; }
+.decision-caveat { border-left: 2px solid #e5b373; padding-left: 10px; }
+.decision-label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #a8c2cf; margin-top: 10px; }
+#decisionPanel .decision-event { display: block; width: 100%; text-align: left; white-space: pre-wrap; overflow-wrap: anywhere; margin: 5px 0; font-size: 14px; line-height: 1.45; }
+.decision-tool { margin: 9px 0; padding: 8px 10px; background: #0e202b; border-left: 2px solid #497f94; }
+.decision-tool strong { font-size: 14px; }
+.decision-body pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; line-height: 1.5; color: #b6ccd7; }
+.decision-body blockquote { margin: 10px 0; padding: 2px 12px; border-left: 2px solid #72c8d5; white-space: pre-wrap; }
+.decision-body summary { cursor: pointer; color: #89becf; font-size: 13px; padding: 7px 0; }
+.decision-fact { padding: 9px 0; border-bottom: 1px solid #1d3441; }
+.decision-rejected { color: #ffb4a6; }
+.decisions-open #shipTelemetry { visibility: hidden; pointer-events: none; }
+@media (max-width: 900px) {
+  #decisionPanel { top: 150px; right: 12px; bottom: 116px; width: min(440px, calc(100vw - 24px)); }
+  .decisions-open #leftSidebar { visibility: hidden; pointer-events: none; }
+  .view-controls { flex-wrap: wrap; }
+}
+@media (max-width: 600px) { #decisionPanel { top: 152px; bottom: 122px; } .decision-body { font-size: 15px; } }
+
+.timeline-marker.marker-decision { background: #74d3e3; height: 6px; width: 3px; top: -9px; }
+.decision-tool p { font-size: 14px; color: #b6ccd7; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.decision-selected-event { margin-top: 12px; padding: 8px 12px; border: 1px solid #497f94; background: #112a36; overflow-wrap: anywhere; }

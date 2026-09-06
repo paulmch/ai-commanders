@@ -530,40 +530,48 @@ let _radiatorTex = null;
 /**
  * Radiator panel: coolant channels running along the panel with the
  * emissive gradient hottest at the root (v=0) fading toward the tip.
- * Returns { map, emissiveMap }.
+ * Returns { map, normalMap, emissiveMap }. Clamped UVs keep the thermal
+ * gradient on a cassette from wrapping back to a hot edge at its tip.
  */
 export function getRadiatorTextures() {
   if (_radiatorTex) return _radiatorTex;
-  const w = 256, h = 512;
+  const w = 256, h = 256;
+  const height = new Float32Array(w * h);
   const map = canvasOf(w, h);
   const ctx = map.getContext('2d');
-  ctx.fillStyle = 'rgb(36,30,30)';
+  ctx.fillStyle = 'rgb(25,27,29)';
   ctx.fillRect(0, 0, w, h);
-  for (let x = 0; x < w; x += 16) {
-    ctx.fillStyle = 'rgb(58,50,48)';
-    ctx.fillRect(x + 3, 0, 10, h);
-    ctx.fillStyle = 'rgba(0,0,0,0.5)';
-    ctx.fillRect(x, 0, 2, h);
+  for (let x = 0; x < w; x += 8) {
+    ctx.fillStyle = 'rgb(49,50,52)';
+    ctx.fillRect(x + 2, 0, 4, h);
+    ctx.fillStyle = 'rgb(13,15,17)';
+    ctx.fillRect(x, 0, 1, h);
+    for (let y = 0; y < h; y++) {
+      for (let dx = 0; dx < 8; dx++) {
+        height[y * w + x + dx] = 0.35 + 0.3 * Math.sin(dx / 8 * Math.PI);
+      }
+    }
   }
   ctx.fillStyle = 'rgba(0,0,0,0.45)';
-  for (let y = 0; y < h; y += 64) ctx.fillRect(0, y, w, 3);
+  for (let y = 0; y < h; y += 16) ctx.fillRect(0, y, w, 1);
 
   const emis = canvasOf(w, h);
   const ectx = emis.getContext('2d');
   const grad = ectx.createLinearGradient(0, 0, 0, h);
-  grad.addColorStop(0, 'rgb(255,120,60)');
-  grad.addColorStop(0.35, 'rgb(255,70,30)');
-  grad.addColorStop(0.75, 'rgb(150,20,10)');
-  grad.addColorStop(1, 'rgb(40,4,2)');
+  grad.addColorStop(0, 'rgb(255,145,62)');
+  grad.addColorStop(0.22, 'rgb(215,72,25)');
+  grad.addColorStop(0.65, 'rgb(106,19,7)');
+  grad.addColorStop(1, 'rgb(24,3,1)');
   ectx.fillStyle = grad;
   ectx.fillRect(0, 0, w, h);
   ectx.fillStyle = 'rgba(0,0,0,0.75)';
-  for (let x = 0; x < w; x += 16) ectx.fillRect(x, 0, 3, h);
-  for (let y = 0; y < h; y += 64) ectx.fillRect(0, y, w, 3);
+  for (let x = 0; x < w; x += 8) ectx.fillRect(x, 0, 2, h);
+  for (let y = 0; y < h; y += 16) ectx.fillRect(0, y, w, 1);
 
   _radiatorTex = {
-    map: texOf(map, { srgb: true }),
-    emissiveMap: texOf(emis, { srgb: true })
+    map: texOf(map, { srgb: true, repeat: false }),
+    normalMap: texOf(heightToNormalCanvas(height, w, 2), { repeat: false }),
+    emissiveMap: texOf(emis, { srgb: true, repeat: false })
   };
   return _radiatorTex;
 }

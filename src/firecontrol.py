@@ -16,11 +16,11 @@ from enum import Enum, auto
 from typing import Optional, List, Tuple
 
 try:
-    from .physics import Vector3D
+    from .physics import Vector3D, intercept_time
     from .geometry import ShipGeometry
     from .combat import HitLocation
 except ImportError:
-    from physics import Vector3D
+    from physics import Vector3D, intercept_time
     from geometry import ShipGeometry
     from combat import HitLocation
 
@@ -113,18 +113,13 @@ def calculate_hit_probability(
     direction_to_target = rel_pos.normalized()
     rel_vel = target_velocity - shooter_velocity
 
-    # Calculate closing rate (positive = closing)
-    closing_rate_mps = -rel_vel.dot(direction_to_target)
-    closing_rate_kps = closing_rate_mps / 1000
-
     # Projectile velocity (relative to shooter, in direction of target)
     muzzle_velocity_mps = muzzle_velocity_kps * 1000
 
-    # Time of flight estimation
-    # Projectile speed toward target = muzzle_velocity + closing_rate
-    effective_projectile_speed = muzzle_velocity_mps + closing_rate_mps
-
-    if effective_projectile_speed <= 0:
+    # A radial closing-speed estimate ignores crossing motion and can promise
+    # hits on a target moving sideways faster than the round can travel.
+    time_of_flight_s = intercept_time(rel_pos, rel_vel, muzzle_velocity_mps)
+    if time_of_flight_s is None:
         # Projectile can't catch target
         return FiringSolution(
             can_fire=False,
@@ -134,8 +129,6 @@ def calculate_hit_probability(
             target_aspect=HitLocation.TAIL,
             recommendation="TARGET OUTRUNNING PROJECTILE - DO NOT FIRE"
         )
-
-    time_of_flight_s = distance_m / effective_projectile_speed
 
     # Predict target position at impact
     predicted_target_pos = target_position + target_velocity * time_of_flight_s

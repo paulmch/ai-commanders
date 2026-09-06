@@ -5,6 +5,7 @@ Makes strategic decisions via tool/function calling.
 """
 
 import json
+from src.replay_evidence import tool_evidence
 import math
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
@@ -301,6 +302,8 @@ class LLMCaptain:
         Returns:
             List of commands to execute (Maneuvers, fire orders, etc.)
         """
+        self.last_tool_calls = []
+        self.last_requested_tool_calls = []
         if self.has_surrendered:
             return []
 
@@ -364,6 +367,7 @@ class LLMCaptain:
             ship_type=self.config.ship_type,
             fleet_data=self.config.fleet_data,
             notebook_text=self.config.notebook_text,
+            decision_interval_s=getattr(simulation, "decision_interval", 30.0),
         )
 
         # Split into a stable system prompt and a volatile user turn so the
@@ -393,6 +397,10 @@ class LLMCaptain:
                 self.fleet_directive,
             ))
 
+        from .execution_feedback import execution_feedback
+        feedback = execution_feedback(simulation, [ship_id])
+        if feedback:
+            turn_parts.append(feedback)
         errors_text = self._format_tool_errors()
         if errors_text:
             turn_parts.append(errors_text)
@@ -404,6 +412,7 @@ class LLMCaptain:
         messages = [prompt_messages[0], {"role": "user", "content": "\n\n".join(turn_parts)}]
 
         # Get context-appropriate tools (may exclude draw tools if Admiral exists)
+        self._decision_interval_s = getattr(simulation, "decision_interval", 30.0)
         tools = self.get_tools_for_context()
 
         # Call LLM with tools (use captain's configured model)
@@ -424,6 +433,7 @@ class LLMCaptain:
             self.last_call_failed = True
             return []
         self.last_call_failed = False
+        self.last_requested_tool_calls = tool_calls
 
         # Execute tool calls
         # Track maneuver commands - only one maneuver per decision allowed
@@ -436,6 +446,7 @@ class LLMCaptain:
             # Skip duplicate maneuver commands (only first one takes effect)
             if tc.name in maneuver_tools:
                 if maneuver_issued:
+                    self.pending_tool_errors.append(f'{tc.name}: ignored because only the first maneuver is applied in a decision')
                     continue  # Skip this maneuver, one already issued
                 maneuver_issued = True
 
@@ -689,6 +700,7 @@ class LLMCaptain:
                 self.config.ship_type,
                 self.config.fleet_data,
                 has_torpedoes=self.config.has_torpedoes,
+                decision_interval_s=getattr(self, "_decision_interval_s", 30.0),
             )
         return get_captain_tools(has_torpedoes=self.config.has_torpedoes)
 
@@ -699,6 +711,10 @@ class LLMCaptain:
         Bounded by the reload interval over the decision window and by rounds
         remaining in the magazine.
         """
+        if hasattr(simulation, "torpedo_launch_capacity"):
+            capacity = simulation.torpedo_launch_capacity(ship_id)
+            if isinstance(capacity, int):
+                return capacity
         # Tolerate simulation doubles that do not implement get_ship: fall back to
         # the reload-derived ceiling rather than refusing to launch.
         ship = None
@@ -1521,6 +1537,7 @@ class LLMCaptain:
 
         return status
 
+    @tool_evidence
     def _execute_tool(
         self,
         tool_call: ToolCall,
@@ -1564,7 +1581,7 @@ class LLMCaptain:
                     maneuver_type=maneuver_type,
                     target_id=target_id,
                     start_time=simulation.current_time,
-                    duration=30.0,
+                    duration=getattr(simulation, "decision_interval", 30.0),
                     throttle=throttle,
                 )
             except (KeyError, ValueError) as e:
@@ -1610,7 +1627,7 @@ class LLMCaptain:
                 maneuver_type=ManeuverType.HEADING,
                 target_id=None,
                 start_time=simulation.current_time,
-                duration=30.0,
+                duration=getattr(simulation, "decision_interval", 30.0),
                 throttle=throttle,
                 heading_direction=direction,
             )
@@ -1618,12 +1635,9 @@ class LLMCaptain:
         elif name == "set_weapons_order":
             from ..firecontrol import WeaponsCommand, WeaponsOrder
 
-            # Use primary target or first enemy
-            if self.primary_target_id:
-                target_id = self.primary_target_id
-            else:
-                enemies = simulation.get_enemy_ships(ship_id)
-                target_id = enemies[0].ship_id if enemies else None
+            # Persistent gun orders follow the ship's live primary target.
+            # Capturing an id here made later target changes ineffective.
+            target_id = None
 
             orders = []
 
@@ -1680,6 +1694,8 @@ class LLMCaptain:
             return {
                 "type": "weapons_orders",
                 "orders": orders,
+                "default_target_id": self.primary_target_id or next(
+                    (e.ship_id for e in simulation.get_enemy_ships(ship_id)), None),
             }
 
         elif name == "launch_torpedo":
@@ -1723,10 +1739,7 @@ class LLMCaptain:
             if target_id is None:
                 target_id = enemies[0].ship_id
 
-            # Salvo size. The launcher reloads every 12s and a decision covers
-            # 30s, so 2 is the physical ceiling; the simulation still enforces
-            # cooldown and magazine, this just stops the captain asking for more
-            # than can possibly be fired.
+            # Reserve only rounds that can leave a tube before the next decision.
             try:
                 count = int(args.get("count", 1))
             except (TypeError, ValueError):
@@ -1745,7 +1758,7 @@ class LLMCaptain:
                 return None
 
             return [
-                {"type": "launch_torpedo", "target_id": target_id}
+                {"type": "launch_torpedo", "target_id": target_id, "queue_if_reloading": True}
                 for _ in range(count)
             ]
 

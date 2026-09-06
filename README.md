@@ -126,6 +126,11 @@ Open http://localhost:5173 and load a battle recording JSON file.
 
 ### Features
 
+- **Intent and consequence**: press **D** to open a ship's decision history, read
+  admiral orders and captain tools, inspect actual execution, and jump to linked
+  outcomes. Summaries cite recorded events; optional model observations are
+  labelled as interpretations. Legacy recordings show their available orders
+  with chronological context. [Replay recording and trial guide](docs/intent-replays.md).
 - **Physically based rendering**: HDR half-float pipeline with MSAA, ACES
   tone mapping, bloom reserved for true emitters, a final grade pass
   (detonation flash, chromatic aberration, vignette, grain) and a PMREM
@@ -143,13 +148,17 @@ Open http://localhost:5173 and load a battle recording JSON file.
   that yaw and elevate to track the nearest enemy; procedural PBR plating
   (albedo, normal, roughness/metalness) with faction paint, hazard stripes,
   vents and rivets; lit windows that dim and flicker as the hull fails,
-  blinking nav strobes, folding radiator wings with a heat-gradient glow
+  blinking nav strobes, continuous drive trunks and supported sponsons;
+  hinged radiator wings with separate fin banks, raised coolant pipes,
+  manifolds and a glow that cools toward the tips
 - **Fusion torches**: shader plumes with scrolling turbulence, shock
   diamonds, view-dependent thickness and a white/blue/violet temperature
   ramp; torpedo motors use the same shader in chemical orange
 - **Torpedoes and slugs**: modelled rounds with fins and faction bands,
-  camera-facing ribbon trails (no 1-px lines), coilgun tracers; blinded
-  rounds tumble dark; retargeting rounds ping and draw a lock line
+  camera-facing ribbon trails with a capped screen width, coilgun tracers;
+  exhaust samples retain their battle-time lifetime across frame rates and
+  fade after burnout. Blinded rounds tumble dark; retargeting rounds ping
+  and draw a lock line
 - **Continuous PD beams**: soft-core ribbon lasers with shimmer, muzzle and
   impact glows, ablation sparks while the beam dwells
 - **Impacts**: coilgun hits throw a directional spall cone of GPU sparks and
@@ -158,11 +167,19 @@ Open http://localhost:5173 and load a battle recording JSON file.
 - **Two-stage ship destruction**: non-reactor kills coast dark and tumbling
   with venting plasma jets, hull fires and failing lights until the reactor
   breaches; the breach flashes the frame, shakes the camera, and tears the
-  hull into tumbling, red-hot chunks along its real part boundaries while a
-  noise-displaced fireball, shock shell, thousands of sparks and streaks, and
+  hull into tumbling, red-hot chunks along its real part boundaries while
+  billowing fireball lobes, a broken ejecta ring, shock shell, sparks and streaks, and
   a cooling gas cloud play out, with cook-offs on the wreckage. Everything is
-  driven by battle time, so scrubbing replays a kill exactly
-- **Camera modes**: Free orbit, follow ship, orbit selected ship
+  driven by recorded battle time, so scrubbing reconstructs the breach,
+  tumbling debris and cook-offs at their correct ages without replaying old
+  impacts as fresh flashes
+- **Tactical contacts**: clickable faction brackets with ship names, classes
+  and hull condition; labels avoid each other and the HUD, then disappear
+  on close-up. The registry includes silhouettes and hull bars, with a
+  separate collapsible combat log
+- **Camera modes**: Free orbit, follow ship, orbit selected ship, and fleet
+  framing. Tracking preserves distance as ships move and continues through
+  wreck drift; range rings fade out in close-up
 - **Ship telemetry**: Hull, per-facing armor, modules, target, maneuver status
 - **Timeline scrubbing**: Jump to any point, adjustable playback speed (0.25x-8x),
   event markers on the timeline, and a 20s epilogue so end-of-battle
@@ -171,6 +188,9 @@ Open http://localhost:5173 and load a battle recording JSON file.
 - **URL loading**: `?recording=/recordings/name.json` autoloads a staged recording
 
 ### Headless screenshots
+
+`cd visualizer && npm test` checks hull dimensions, replay timing, trail
+sampling, camera tracking and contact label placement.
 
 `scripts/viewer_snapshot.py` drives the viewer with Playwright (installed as a
 uv dev dependency; run `uv run playwright install chromium` once) to verify
@@ -198,7 +218,9 @@ recordings with kills come from `scripts/run_draft_battle.py --auto-draft
 | ← / → | Seek ±5 seconds |
 | Mouse drag | Orbit camera |
 | Scroll | Zoom |
-| Click ship list | Select & focus ship |
+| Click ship list or contact marker | Select & focus ship |
+| F | Frame active fleets |
+| C | Toggle contact labels |
 
 ## Battle Modes
 
@@ -301,7 +323,12 @@ Fleet battles use JSON configuration files:
 |-------|-------------|
 | `battle_name` | Display name for the battle |
 | `time_limit_s` | Maximum battle duration in seconds |
-| `decision_interval_s` | Time between checkpoints (default: 30) |
+| `decision_interval_s` | Time between checkpoints, 20–60 seconds; fractional values supported (default: 30) |
+| `max_checkpoints` | Maximum decision points (default: 40) |
+| `seed` | Optional integer seed for combat randomness |
+| `unlimited_mode` | Ignore time and checkpoint limits (default: false) |
+| `record_battle` / `record_sim_trace` | Save the battle / detailed per-step frames (defaults: true / false) |
+| `personality_selection` | Let commanders select a personality before battle (default: true) |
 | `initial_distance_km` | Starting distance between fleets |
 | `admiral` | Model for fleet admiral (or `null` for no admiral) |
 | `ships` | Array of ship configurations |
@@ -322,10 +349,10 @@ uv run python scripts/run_llm_battle.py [OPTIONS]
 | `--beta-model` | OpenRouter model for Beta | openrouter/anthropic/claude-sonnet-5 |
 | `--alpha-ship-type` | Ship class for Alpha | destroyer |
 | `--beta-ship-type` | Ship class for Beta | destroyer |
-| `--alpha-name` | Captain name for Alpha | Commander Chen |
-| `--beta-name` | Captain name for Beta | Captain Volkov |
-| `--alpha-ship` | Ship name for Alpha | TIS Relentless |
-| `--beta-ship` | Ship name for Beta | HFS Determination |
+| `--alpha-name` | Captain name for Alpha | Derived from model |
+| `--beta-name` | Captain name for Beta | Derived from model |
+| `--alpha-ship` | Ship name for Alpha | TIS + model name |
+| `--beta-ship` | Ship name for Beta | HFS + model name |
 
 Ship type choices are derived from `data/fleet_ships.json`: `corvette`, `frigate`,
 `destroyer`, `cruiser`, `cruiser_torpedo`, `battlecruiser`, `battleship`,
@@ -339,9 +366,21 @@ Ship type choices are derived from `data/fleet_ships.json`: `corvette`, `frigate
 | `--distance KM` | Initial distance in km | 500 |
 | `--max-checkpoints N` | Max decision points | 40 |
 | `--time-limit SEC` | Time limit in seconds | 1200 |
+| `--decision-interval SEC` | Seconds between decisions, 20–60 | 30 |
+| `--seed N` | Seed combat randomness | None |
 | `--unlimited` | Fight until destruction/surrender/draw | False |
 | `--trace` | Record detailed sim trace (large files!) | False |
 | `--admiral-vision` | Attach rendered tactical-plot images to admiral checkpoints (fleet mode, vision-capable models) | False |
+
+With `--fleet-config`, omitted flags preserve the JSON battle settings. Explicit
+distance, time, interval, checkpoint and seed options override them. Maneuvers
+last until the next checkpoint; gun policies persist until changed and follow
+the current primary target. Partial ship positions inherit formation defaults
+for omitted axes.
+
+Use `--alpha-model heuristic --beta-model heuristic` for an offline duel without
+an API key. A seed reproduces combat randomness for identical commands; it does
+not make live model responses deterministic.
 
 Draft mode has its own CLI - `uv run python scripts/run_draft_battle.py --help`
 (budget, max ships, per-side admiral and captain models, auto-draft, vision).
@@ -645,7 +684,9 @@ thicker nose than flank. The frigate has the same hull and acceleration but figh
 range, and carries less than half the armor.
 
 The torpedo cruiser (`cruiser_torpedo`) carries no guns at all: 4 launchers with 12
-rounds each let it fire an 8-torpedo salvo every 30s decision - sized to saturate a
+rounds each permit up to 12 launches in a 30s decision: four immediately, four
+after 12s, and four after 24s, subject to remaining ammunition. Queued rounds
+expire at the next checkpoint or if their target dies. Four simultaneous rounds can saturate a
 dreadnought's point defense and land the hits that kill it in one coordinated strike.
 The tonnage freed by dropping the gun batteries went into armor.
 

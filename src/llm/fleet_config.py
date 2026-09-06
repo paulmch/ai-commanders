@@ -10,12 +10,32 @@ Simplified design:
 """
 
 import json
+import math
 import re
 from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 
 from .client import DEFAULT_ADMIRAL_MODEL, DEFAULT_MODEL
+
+
+def validate_battle_options(config: Any) -> None:
+    """Reject values that could stall the simulation or poison its coordinates."""
+    for name in ("time_limit_s", "decision_interval_s", "initial_distance_km"):
+        value = getattr(config, name)
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) or value <= 0):
+            raise ValueError(f"{name} must be a positive, finite number")
+    try:
+        from ..battle_timing import MIN_DECISION_INTERVAL, MAX_DECISION_INTERVAL
+    except ImportError:  # Legacy imports with src on PYTHONPATH.
+        from battle_timing import MIN_DECISION_INTERVAL, MAX_DECISION_INTERVAL
+    if not MIN_DECISION_INTERVAL <= config.decision_interval_s <= MAX_DECISION_INTERVAL:
+        raise ValueError(f"decision_interval_s must be between {MIN_DECISION_INTERVAL:g} and {MAX_DECISION_INTERVAL:g}")
+    if hasattr(config, "max_checkpoints"):
+        value = config.max_checkpoints
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError("max_checkpoints must be a positive integer")
 
 
 @dataclass
@@ -111,6 +131,11 @@ class BattleFleetConfig:
     use_notebooks: bool = False
     # Optional pre-battle draft phase (fleets are bought, not configured).
     draft: Optional[DraftConfig] = None
+    max_checkpoints: int = 40
+    seed: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        validate_battle_options(self)
 
     @classmethod
     def from_json(cls, path: str) -> 'BattleFleetConfig':
@@ -166,6 +191,8 @@ class BattleFleetConfig:
             personality_selection=data.get("personality_selection", True),
             use_notebooks=data.get("use_notebooks", False),
             draft=draft,
+            max_checkpoints=data.get("max_checkpoints", 40),
+            seed=data.get("seed"),
         )
 
     def get_all_ships(self) -> List[ShipConfig]:
@@ -294,11 +321,8 @@ def _parse_fleet(data: Dict[str, Any], faction: str) -> FleetDefinition:
             position = None
             if "position" in ship_data:
                 pos = ship_data["position"]
-                position = {
-                    "x": float(pos.get("x", 0)),
-                    "y": float(pos.get("y", 0)),
-                    "z": float(pos.get("z", 0)),
-                }
+                # Omitted axes inherit formation defaults in setup_fleet_battle.
+                position = {axis: float(pos[axis]) for axis in ("x", "y", "z") if axis in pos}
 
             # Parse optional velocity override
             velocity = None
@@ -370,6 +394,9 @@ def validate_fleet_config(config: BattleFleetConfig, fleet_data: Dict[str, Any])
                 f"Unknown ship type '{ship.ship_type}' for ship '{ship.ship_name}'. "
                 f"Available: {list(available_ships.keys())}"
             )
+        for label, vector in (("position", ship.position), ("velocity", ship.velocity)):
+            if vector and any(not math.isfinite(v) for v in vector.values()):
+                errors.append(f"{label} for ship '{ship.ship_id}' must contain finite coordinates")
 
     # Check for duplicate ship IDs
     ship_ids = [s.ship_id for s in config.get_all_ships()]

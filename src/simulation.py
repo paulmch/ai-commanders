@@ -26,7 +26,9 @@ from typing import Optional, Callable, Any, Dict
 
 # Import from existing modules using try/except for compatibility
 try:
-    from .physics import Vector3D, ShipState as KinematicState, propagate_state, create_ship_state_from_specs
+    from .replay_evidence import ExecutionEvidence, impact_evidence
+    from .battle_timing import MIN_DECISION_INTERVAL, MAX_DECISION_INTERVAL
+    from .physics import Vector3D, ShipState as KinematicState, propagate_state, create_ship_state_from_specs, intercept_time
     from .thermal import (
         ThermalSystem, RadiatorArray, HeatSink, RadiatorState,
         RadiatorPosition, HEAT_GENERATION_RATES
@@ -64,7 +66,9 @@ try:
     )
     from .power import PowerSystem, WeaponCapacitor, Battery, Reactor
 except ImportError:
-    from physics import Vector3D, ShipState as KinematicState, propagate_state, create_ship_state_from_specs
+    from replay_evidence import ExecutionEvidence, impact_evidence
+    from battle_timing import MIN_DECISION_INTERVAL, MAX_DECISION_INTERVAL
+    from physics import Vector3D, ShipState as KinematicState, propagate_state, create_ship_state_from_specs, intercept_time
     from thermal import (
         ThermalSystem, RadiatorArray, HeatSink, RadiatorState,
         RadiatorPosition, HEAT_GENERATION_RATES
@@ -109,8 +113,6 @@ except ImportError:
 
 DEFAULT_TIME_STEP = 1.0  # seconds
 DEFAULT_DECISION_INTERVAL = 30.0  # seconds between LLM decision points
-MIN_DECISION_INTERVAL = 20.0
-MAX_DECISION_INTERVAL = 60.0
 
 # Hit detection radius in meters
 HIT_DETECTION_RADIUS = 50.0
@@ -253,6 +255,9 @@ class SimulationEventType(Enum):
     TORPEDO_RETARGETED = auto()
 
     # Maneuver events
+    COMMAND_STATUS = auto()
+    WEAPON_STATUS = auto()
+    EXECUTION_STATE = auto()
     MANEUVER_STARTED = auto()
     MANEUVER_COMPLETED = auto()
 
@@ -544,21 +549,18 @@ class WeaponState:
         if not self.is_target_in_arc(ship_forward, target_dir):
             return None
 
-        if self.weapon.is_turreted:
-            # Turreted weapon: calculate intercept/lead direction
-            return self._calculate_lead_direction(
-                shooter_position, ship_velocity,
-                target_position, target_velocity,
-                target_acceleration
-            )
-        else:
-            # Fixed weapon (spinal): calculate lead, but limit to gimbal range
-            lead_dir = self._calculate_lead_direction(
-                shooter_position, ship_velocity,
-                target_position, target_velocity,
-                target_acceleration
-            )
+        tof = intercept_time(to_target, target_velocity - ship_velocity,
+                             self.weapon.muzzle_velocity_kps * 1000, target_acceleration)
+        if tof is None:
+            return None
+        accel = target_acceleration or Vector3D.zero()
+        lead_dir = (to_target + (target_velocity - ship_velocity) * tof
+                    + accel * (0.5 * tof * tof)).normalized()
+        self.current_aim_direction = lead_dir
 
+        if self.weapon.is_turreted:
+            return lead_dir if self.is_target_in_arc(ship_forward, lead_dir) else None
+        else:
             # Check if lead direction is within gimbal range of ship forward
             lead_angle_deg = math.degrees(ship_forward.angle_to(lead_dir))
 
@@ -587,72 +589,28 @@ class WeaponState:
         """
         Calculate intercept direction with proper lead.
 
-        Uses iterative solution to find intercept point, accounting for:
+        Solves for the earliest intercept point, accounting for:
         - Relative velocity between shooter and target
         - Target acceleration (if provided) using quadratic prediction
 
         In shooter's reference frame:
         - Projectile travels at muzzle_speed in aim direction
         - Target moves at relative velocity + acceleration
-        - Solve iteratively for intercept point
+        - Solve the quadratic or quartic intercept equation
 
         Args:
             target_acceleration: Optional acceleration in m/s^2. If provided,
                 uses quadratic extrapolation: pos(t) = pos + vel*t + 0.5*accel*t²
         """
-        # Relative position and velocity (in shooter's reference frame)
         rel_pos = target_position - shooter_position
         rel_vel = target_velocity - shooter_velocity
-        distance = rel_pos.magnitude
-
-        # Projectile speed (m/s)
-        muzzle_mps = self.weapon.muzzle_velocity_kps * 1000
-        if muzzle_mps <= 0 or distance < 1.0:
+        tof = intercept_time(rel_pos, rel_vel, self.weapon.muzzle_velocity_kps * 1000,
+                             target_acceleration)
+        if tof is None:
             return rel_pos.normalized()
-
-        # If no acceleration, use original quadratic formula (faster)
-        if target_acceleration is None or target_acceleration.magnitude < 0.01:
-            return self._calculate_lead_direction_linear(
-                rel_pos, rel_vel, muzzle_mps
-            )
-
-        # With acceleration: use iterative refinement
-        # Initial estimate based on distance
-        tof = distance / muzzle_mps
-
-        # Iterate to refine intercept time (max 10 iterations)
-        for _ in range(10):
-            # Predict target position at tof using quadratic motion
-            # future_pos = pos + vel*t + 0.5*accel*t²
-            predicted_rel_pos = (
-                rel_pos +
-                rel_vel * tof +
-                target_acceleration * (0.5 * tof * tof)
-            )
-
-            # New distance to predicted position
-            new_distance = predicted_rel_pos.magnitude
-            new_tof = new_distance / muzzle_mps
-
-            # Check convergence (within 0.1ms)
-            if abs(new_tof - tof) < 0.0001:
-                tof = new_tof
-                break
-
-            # Weighted average for stability with high acceleration
-            tof = 0.7 * new_tof + 0.3 * tof
-
-        # Calculate final aim direction using quadratic prediction
-        intercept_rel_pos = (
-            rel_pos +
-            rel_vel * tof +
-            target_acceleration * (0.5 * tof * tof)
-        )
-        aim_dir = intercept_rel_pos.normalized()
-
-        # Update aim direction
+        accel = target_acceleration or Vector3D.zero()
+        aim_dir = (rel_pos + rel_vel * tof + accel * (0.5 * tof * tof)).normalized()
         self.current_aim_direction = aim_dir
-
         return aim_dir
 
     def _calculate_lead_direction_linear(
@@ -667,57 +625,11 @@ class WeaponState:
         Uses closed-form quadratic solution for faster computation when
         target is not accelerating.
         """
-        distance_sq = rel_pos.dot(rel_pos)
-
-        # Solve quadratic for time-of-flight:
-        # |aim * M * T|² = |D + V*T|²
-        # M² * T² = D² + 2*D·V*T + V²*T²
-        # (M² - V²) * T² - 2*D·V*T - D² = 0
-        muzzle_sq = muzzle_mps * muzzle_mps
-        rel_vel_sq = rel_vel.dot(rel_vel)
-        d_dot_v = rel_pos.dot(rel_vel)
-
-        a = muzzle_sq - rel_vel_sq
-        b = -2.0 * d_dot_v
-        c = -distance_sq
-
-        # Handle edge cases
-        if abs(a) < 1e-10:
-            # Degenerate case: muzzle speed equals relative speed
-            if abs(b) < 1e-10:
-                return rel_pos.normalized()
-            tof = -c / b
-            if tof < 0:
-                # Target receding at exactly muzzle-relative speed: the linear
-                # solution is in the past, which would aim BEHIND the target
-                # (anti-lead). Fall back to direct aim like the quadratic branch.
-                return rel_pos.normalized()
-        else:
-            discriminant = b * b - 4.0 * a * c
-            if discriminant < 0:
-                # No intercept possible (target faster than projectile)
-                # Fall back to direct aim
-                return rel_pos.normalized()
-
-            sqrt_disc = math.sqrt(discriminant)
-            # Take positive root (future intercept)
-            tof = (-b + sqrt_disc) / (2.0 * a)
-
-            if tof < 0:
-                # Try other root
-                tof = (-b - sqrt_disc) / (2.0 * a)
-
-            if tof < 0:
-                # No future intercept
-                return rel_pos.normalized()
-
-        # Calculate aim direction: aim = (D + V*T) / (M*T)
-        intercept_rel_pos = rel_pos + rel_vel * tof
-        aim_dir = intercept_rel_pos.normalized()
-
-        # Update aim direction
+        tof = intercept_time(rel_pos, rel_vel, muzzle_mps)
+        if tof is None:
+            return rel_pos.normalized()
+        aim_dir = (rel_pos + rel_vel * tof).normalized()
         self.current_aim_direction = aim_dir
-
         return aim_dir
 
 
@@ -1387,9 +1299,13 @@ class CombatSimulation:
         # Projectile tracking
         self.projectiles: list[ProjectileInFlight] = []
         self.torpedoes: list[TorpedoInFlight] = []
+        # Captain salvos reserve launches until their next decision. Ready
+        # tubes fire immediately; reloading tubes consume these orders later.
+        self.pending_torpedo_launches: list[tuple[str, dict, float]] = []
 
         # Event log
         self.events: list[SimulationEvent] = []
+        self.evidence = ExecutionEvidence()
 
         # Metrics
         self.metrics = EngagementMetrics()
@@ -1504,6 +1420,52 @@ class CombatSimulation:
     # -------------------------------------------------------------------------
 
     def inject_command(self, ship_id: str, command: Any) -> bool:
+        cid = self.evidence.begin(ship_id, command)
+        before = len(self.pending_torpedo_launches)
+        with self.evidence.using([cid]):
+            self._command_status(ship_id, cid, 'issued')
+            success = self._execute_command(ship_id, command)
+            status = ('queued' if len(self.pending_torpedo_launches) > before else 'accepted') if success else 'rejected'
+            self._command_status(ship_id, cid, status,
+                                 None if success else 'Command could not execute; inspect ship, target and weapon readiness')
+        if success:
+            keys = []
+            if isinstance(command, Maneuver):
+                keys = ['maneuver']
+            elif isinstance(command, dict):
+                kind = command.get('type')
+                if kind == 'set_target':
+                    keys = ['target']
+                elif kind in ('weapons_order', 'weapons_orders'):
+                    ship = self.get_ship(ship_id)
+                    orders = command.get('orders', [command.get('order')])
+                    keys = ['weapon:' + slot for slot, order in ship.weapons_orders.items()
+                            if order in orders]
+            for key in keys:
+                previous = self.evidence.bind(ship_id, key, cid)
+                if previous and previous != cid:
+                    self._command_status(ship_id, previous, 'superseded')
+        return success
+
+    def _command_status(self, ship_id, cid, status, reason=None):
+        data = {**self.evidence.commands[cid], 'status': status, 'reason': reason,
+                'command_ids': [cid]}
+        ship = self.get_ship(ship_id)
+        if status == 'accepted' and ship:
+            data['resolved_target_id'] = ship.primary_target_id
+        with self.evidence.using([cid]):
+            self._log_event(SimulationEventType.COMMAND_STATUS, ship_id, data=data)
+
+    def _weapon_status(self, ship, slot, reason, target_id=None, **details):
+        key = (ship.ship_id, slot)
+        state = (reason, target_id, self.evidence.active.get(ship.ship_id, {}).get('weapon:' + slot))
+        if self.evidence.transitions.get(key) == state:
+            return
+        self.evidence.transitions[key] = state
+        self._log_event(SimulationEventType.WEAPON_STATUS, ship.ship_id, target_id,
+                        {'weapon_slot': slot, 'reason': reason, **details})
+
+    def _execute_command(self, ship_id: str, command: Any) -> bool:
         """
         Inject a command for a ship to execute.
 
@@ -1528,7 +1490,8 @@ class CombatSimulation:
             ship.current_maneuver = command
             self._log_event(SimulationEventType.MANEUVER_STARTED, ship_id, data={
                 'maneuver_type': command.maneuver_type.name,
-                'duration': command.duration
+                'duration': command.duration, 'throttle': command.throttle,
+                'target_id': command.target_id, 'heading_direction': command.heading_direction
             })
             return True
 
@@ -1536,6 +1499,8 @@ class CombatSimulation:
             if command.get('type') == 'fire_at':
                 return self._handle_fire_command(ship, command)
             elif command.get('type') == 'launch_torpedo':
+                if command.get('queue_if_reloading'):
+                    return self._order_torpedo_launch(ship, command)
                 return self._handle_torpedo_command(ship, command)
             elif command.get('type') == 'set_radiators':
                 return self._handle_radiator_command(ship, command)
@@ -1546,6 +1511,8 @@ class CombatSimulation:
                 return self._handle_weapons_order(ship, command)
             elif command.get('type') == 'weapons_orders':
                 # Handle multiple weapon orders (new format with separate spinal/turret modes)
+                if not ship.primary_target_id and command.get('default_target_id'):
+                    ship.primary_target_id = command['default_target_id']
                 orders = command.get('orders', [])
                 for order in orders:
                     self._handle_weapons_order(ship, {'order': order})
@@ -1579,19 +1546,67 @@ class CombatSimulation:
             # Target not in arc - don't fire
             return False
 
-        # Fire the weapon (consumes ammo, starts cooldown)
-        if weapon_state.fire():
+        # Commit ammo, capacitor and cooldown only after an achievable launch.
+        # The accelerated lead can leave the gimbal even with the target in arc.
+        if self._launch_projectile(ship, target, weapon_state):
+            weapon_state.fire()
             # Discharge weapon capacitor and generate heat
             if ship.power_system:
                 heat_gj = ship.power_system.fire_weapon(weapon_slot)
                 if ship.thermal_system and heat_gj > 0:
                     ship.thermal_system.add_heat("weapons", heat_gj)
 
-            # Launch projectile with proper aiming
-            self._launch_projectile(ship, target, weapon_state)
             return True
 
         return False
+
+    def torpedo_launch_capacity(self, ship_id: str) -> int:
+        """Unreserved launches possible strictly before the next checkpoint."""
+        ship = self.get_ship(ship_id)
+        if not ship or ship.is_destroyed or ship.is_dying:
+            return 0
+        capacity = 0
+        for tube in ship.ready_torpedo_launchers:
+            wait = max(0.0, tube.last_launch_time + tube.cooldown_seconds - self.current_time)
+            window = self.decision_interval - wait
+            if window > 0 and tube.cooldown_seconds > 0:
+                capacity += min(tube.current_magazine, math.ceil(window / tube.cooldown_seconds))
+        reserved = sum(1 for sid, _, expiry in self.pending_torpedo_launches
+                       if sid == ship_id and expiry > self.current_time)
+        return max(0, capacity - reserved)
+
+    def _order_torpedo_launch(self, ship: ShipCombatState, command: dict) -> bool:
+        target = self.get_ship(command.get('target_id'))
+        if not target or target.is_destroyed or target.is_dying or target.faction == ship.faction:
+            return False
+        if self.torpedo_launch_capacity(ship.ship_id) <= 0:
+            return False
+        if not self._handle_torpedo_command(ship, command):
+            self.pending_torpedo_launches.append((
+                ship.ship_id, {**command, '_command_ids': list(self.evidence.context)}, self.current_time + self.decision_interval))
+        return True
+
+    def _process_pending_torpedo_launches(self) -> None:
+        pending = []
+        for ship_id, command, expiry in self.pending_torpedo_launches:
+            ship = self.get_ship(ship_id)
+            target = self.get_ship(command.get('target_id'))
+            if (self.current_time >= expiry or not ship or ship.is_destroyed or ship.is_dying
+                    or getattr(ship, 'is_surrendered', False) or not ship.torpedoes_remaining
+                    or not target or target.is_destroyed or target.is_dying
+                    or getattr(target, 'is_surrendered', False)):
+                for cid in command.get('_command_ids', []):
+                    self._command_status(ship_id, cid, 'expired' if self.current_time >= expiry else 'cancelled',
+                                         'Decision window ended' if self.current_time >= expiry else 'Ship, target or magazine unavailable')
+                continue
+            with self.evidence.using(command.get('_command_ids', [])):
+                launched = self._handle_torpedo_command(ship, command)
+            if not launched:
+                pending.append((ship_id, command, expiry))
+            else:
+                for cid in command.get('_command_ids', []):
+                    self._command_status(ship_id, cid, 'executed')
+        self.pending_torpedo_launches = pending
 
     def _handle_torpedo_command(self, ship: ShipCombatState, command: dict) -> bool:
         """
@@ -1713,27 +1728,36 @@ class CombatSimulation:
                 continue
 
             weapon_state = ship.weapons[weapon_slot]
+            if order.command == WeaponsCommand.HOLD_FIRE:
+                self._weapon_status(ship, weapon_slot, 'hold_fire')
+                continue
             if not weapon_state.can_fire():
+                reason = 'damaged' if not weapon_state.is_operational else ('empty' if weapon_state.ammo_remaining <= 0 else 'cooldown')
+                self._weapon_status(ship, weapon_slot, reason)
                 continue
 
             # Power gate: the weapon capacitor must be charged. Without this
             # check the power system was decorative - reactor damage or power
             # starvation never slowed the guns.
             if ship.power_system and not ship.power_system.can_weapon_fire(weapon_slot):
+                self._weapon_status(ship, weapon_slot, 'capacitor_charging')
                 continue
 
             # Get target
             target_id = order.target_id or ship.primary_target_id
             if not target_id:
+                self._weapon_status(ship, weapon_slot, 'no_target')
                 continue
 
             target = self.get_ship(target_id)
             if not target or target.is_destroyed or target.is_dying:
+                self._weapon_status(ship, weapon_slot, 'target_unavailable', target_id)
                 continue
 
             # Check if target is in weapon arc
             to_target = (target.position - ship.position).normalized()
             if not weapon_state.is_target_in_arc(ship.forward, to_target):
+                self._weapon_status(ship, weapon_slot, 'outside_arc', target_id)
                 continue
 
             # For non-turreted weapons (spinal), also check if lead direction is achievable
@@ -1747,7 +1771,7 @@ class CombatSimulation:
                     shooter_position=ship.position
                 )
                 if fire_direction is None:
-                    # Lead direction is outside gimbal range - can't effectively fire
+                    self._weapon_status(ship, weapon_slot, 'no_intercept', target_id)
                     continue
 
             # Calculate firing solution
@@ -1782,6 +1806,7 @@ class CombatSimulation:
             )
 
             if not solution.can_fire:
+                self._weapon_status(ship, weapon_slot, 'no_firing_solution', target_id)
                 continue
 
             # Evaluate based on order command
@@ -1798,34 +1823,35 @@ class CombatSimulation:
             elif order.command == WeaponsCommand.FREE_FIRE:
                 should_fire = solution.hit_probability >= 0.1
 
+            if not should_fire:
+                self._weapon_status(ship, weapon_slot, 'range_gate' if order.command == WeaponsCommand.FIRE_AT_RANGE else 'probability_gate',
+                                    target_id, hit_probability=solution.hit_probability,
+                                    min_hit_probability=order.min_hit_probability, max_range_km=order.max_range_km)
             if should_fire:
-                # Fire the weapon
-                fired = weapon_state.fire()
-                if fired:
-                    # Handle heat
-                    if ship.power_system:
-                        heat_gj = ship.power_system.fire_weapon(weapon_slot)
-                        if ship.thermal_system and heat_gj > 0:
-                            ship.thermal_system.add_heat("weapons", heat_gj)
+                distance_km = (target.position - ship.position).magnitude / 1000
+                muzzle_v = weapon_state.weapon.muzzle_velocity_kps
+                time_to_target = solution.time_of_flight_s
+                weapon_name = weapon_state.weapon.name
+                if not self._launch_projectile(
+                    ship, target, weapon_state,
+                    distance_m=distance_km * 1000,
+                    eta_s=time_to_target,
+                    hit_probability=solution.hit_probability,
+                    weapon_slot=weapon_slot,
+                ):
+                    self._weapon_status(ship, weapon_slot, 'lead_unavailable', target_id)
+                    continue
 
-                    # Calculate distance and time to target for display/recording
-                    distance_km = (target.position - ship.position).magnitude / 1000
-                    muzzle_v = weapon_state.weapon.muzzle_velocity_kps
-                    time_to_target = distance_km / muzzle_v if muzzle_v > 0 else 0
-                    weapon_name = weapon_state.weapon.name
+                self._weapon_status(ship, weapon_slot, 'fired', target_id)
+                weapon_state.fire()
+                if ship.power_system:
+                    heat_gj = ship.power_system.fire_weapon(weapon_slot)
+                    if ship.thermal_system and heat_gj > 0:
+                        ship.thermal_system.add_heat("weapons", heat_gj)
 
-                    # Launch projectile with firing data for recording
-                    self._launch_projectile(
-                        ship, target, weapon_state,
-                        distance_m=distance_km * 1000,
-                        eta_s=time_to_target,
-                        hit_probability=solution.hit_probability,
-                        weapon_slot=weapon_slot,
-                    )
-
-                    print(f"  [{ship.ship_id}] FIRED {weapon_name} at {target_id}")
-                    print(f"       Distance: {distance_km:.0f}km, ETA: {time_to_target:.1f}s, "
-                          f"v: {muzzle_v:.1f}km/s, P(hit): {solution.hit_probability:.1%}")
+                print(f"  [{ship.ship_id}] FIRED {weapon_name} at {target_id}")
+                print(f"       Distance: {distance_km:.0f}km, ETA: {time_to_target:.1f}s, "
+                      f"v: {muzzle_v:.1f}km/s, P(hit): {solution.hit_probability:.1%}")
 
     # -------------------------------------------------------------------------
     # Projectile Launch
@@ -2074,6 +2100,7 @@ class CombatSimulation:
         # by dict insertion order. Firing from T0 for everyone makes the aim
         # solution consistent with how projectiles are propagated, and makes the
         # engagement symmetric between factions.
+        self._process_pending_torpedo_launches()
         for ship in self.ships.values():
             if not ship.is_destroyed and not ship.is_dying:
                 self._process_weapons_orders(ship)
@@ -2128,6 +2155,7 @@ class CombatSimulation:
             return
 
         # Process current maneuver
+        ship.execution_mode = 'COAST'
         throttle = 0.0
         gimbal_pitch = 0.0
         gimbal_yaw = 0.0
@@ -2162,6 +2190,7 @@ class CombatSimulation:
                     # PRESENT (terminal: thickest armor onto torpedo bearing),
                     # TANK (best armor vs ballistic), BRACE (no time)
                     evade_dir, mode, throttle_mod = self._calculate_evasion(ship, dt)
+                    ship.execution_mode = mode
                     throttle = throttle * throttle_mod
 
                     if mode in ('EVADE', 'TANK', 'RUN', 'PRESENT') and evade_dir:
@@ -2284,6 +2313,23 @@ class CombatSimulation:
                     0.0, 1.0 - ship.pd_power_draw_gw / reactor_gw
                 )
                 effective_throttle *= drive_fraction
+
+        # Record the average applied throttle, including fuel-limited burns.
+        requested = ship.current_maneuver.throttle if ship.current_maneuver else 0.0
+        ks = ship.kinematic_state
+        fuel_needed = ks.thrust_n * max(0.0, min(1.0, effective_throttle)) / ks.exhaust_velocity_ms * dt
+        fuel_fraction = min(1.0, ks.propellant_kg / fuel_needed) if fuel_needed > 0 else 1.0
+        ship.applied_throttle = max(0.0, min(1.0, effective_throttle)) * fuel_fraction
+        if ship.execution_mode == 'COAST' and ship.current_maneuver:
+            ship.execution_mode = ship.current_maneuver.maneuver_type.name
+        execution = (ship.execution_mode, round(ship.applied_throttle, 2), round(requested, 2))
+        key = (ship.ship_id, 'execution')
+        if self.evidence.transitions.get(key) != execution:
+            self.evidence.transitions[key] = execution
+            self._log_event(SimulationEventType.EXECUTION_STATE, ship.ship_id, data={
+                'mode': ship.execution_mode, 'requested_throttle': requested,
+                'applied_throttle': ship.applied_throttle, 'engine_fraction': engine_eff,
+                'fuel_fraction': fuel_fraction})
 
         # Update kinematic state with reduced thrust if engines damaged
         ship.kinematic_state = propagate_state(
@@ -3423,20 +3469,16 @@ class CombatSimulation:
                 prev_position = Vector3D(proj.position.x, proj.position.y, proj.position.z)
                 proj.update(dt)
 
-                # For coarse check, target has moved to end-of-step position (target_ship.position)
-                # which is correct since projectile has also moved to end-of-step
-                # Quick check: did we pass through target during this step?
-                # (Catches cases where projectile is very fast and might skip past)
-                hit, impact_point, t_param = self._check_line_cylinder_intersection(
-                    prev_position, proj.position, target_ship, HIT_TOLERANCE_M
+                # Sweep both objects over the same interval in the target frame.
+                hit, impact_point, target_at_impact = self._check_moving_cylinder_intersection(
+                    prev_position, proj.position, target_ship,
+                    target_pos_at_step_start, target_ship.position, HIT_TOLERANCE_M
                 )
                 if hit:
-                    # Hit detected even in coarse step. Projectile and target
-                    # are both at end-of-step here, so the ship's current
-                    # position is the contemporaneous one.
+                    proj.position = impact_point
                     self._resolve_projectile_hit_geometric(
                         proj_flight, target_ship, impact_point,
-                        target_ship.position
+                        target_at_impact
                     )
                     projectiles_to_remove.append(proj_flight)
                     continue
@@ -3491,23 +3533,16 @@ class CombatSimulation:
                     # Calculate target position at END of this micro-step
                     target_pos_at_micro_end = target_pos_at_step_start + target_ship.velocity * time_elapsed
 
-                    # For hit detection, use target position at MIDPOINT of micro-step
-                    # This better approximates the average position during the interval
-                    target_interpolated_pos = (target_pos_at_micro_start + target_pos_at_micro_end) * 0.5
-
-                    # Check for geometric intersection with ship cylinder at interpolated position
-                    hit, impact_point, t_param = self._check_line_cylinder_intersection_at_pos(
-                        prev_position, proj.position, target_ship, target_interpolated_pos, HIT_TOLERANCE_M
+                    hit, impact_point, target_at_impact = self._check_moving_cylinder_intersection(
+                        prev_position, proj.position, target_ship,
+                        target_pos_at_micro_start, target_pos_at_micro_end, HIT_TOLERANCE_M
                     )
 
                     if hit:
-                        # Geometric hit! Resolve damage against the same
-                        # interpolated target position the gate just used - the
-                        # ship's end-of-step position is up to dt in the future
-                        # of this micro-step.
+                        proj.position = impact_point
                         self._resolve_projectile_hit_geometric(
                             proj_flight, target_ship, impact_point,
-                            target_interpolated_pos
+                            target_at_impact
                         )
                         projectiles_to_remove.append(proj_flight)
                         hit_detected = True
@@ -3533,7 +3568,7 @@ class CombatSimulation:
                     # pass came within tolerance - which nullified terminal
                     # evasion and cut short the PD engagement window.
                     ship_radius = target_ship.geometry.radius_m if target_ship.geometry else 50.0
-                    if micro_tca <= micro_dt and micro_closest <= ship_radius + HIT_TOLERANCE_M:
+                    if 0 <= micro_tca <= micro_dt and micro_closest <= ship_radius + HIT_TOLERANCE_M:
                         # Hit by proximity! Resolve damage. The projectile is at
                         # the end of this micro-step, so the target must be too.
                         self._resolve_projectile_hit_geometric(
@@ -3811,6 +3846,19 @@ class CombatSimulation:
         closest_dist = closest_pos.magnitude
 
         return tca, closest_dist
+
+    def _check_moving_cylinder_intersection(
+        self, start: Vector3D, end: Vector3D, ship: ShipCombatState,
+        target_start: Vector3D, target_end: Vector3D, tolerance: float,
+    ) -> tuple[bool, Optional[Vector3D], Optional[Vector3D]]:
+        """Sweep in the translating target frame, then restore world coordinates."""
+        displacement = target_end - target_start
+        hit, _, fraction = self._check_line_cylinder_intersection_at_pos(
+            start, end - displacement, ship, target_start, tolerance)
+        if not hit:
+            return False, None, None
+        return (True, start + (end - start) * fraction,
+                target_start + displacement * fraction)
 
     def _check_line_cylinder_intersection(
         self,
@@ -4091,6 +4139,7 @@ class CombatSimulation:
         distance = closest_point.distance_to(sphere_center)
         return distance <= sphere_radius
 
+    @impact_evidence
     def _resolve_projectile_hit(
         self,
         proj_flight: ProjectileInFlight,
@@ -4837,6 +4886,7 @@ class CombatSimulation:
                 self.metrics.torpedo_rcs_dv_kps += torp.rcs_dv_used_kps
                 self.torpedoes.remove(torp)
 
+    @impact_evidence
     def _resolve_torpedo_hit(
         self,
         torp_flight: TorpedoInFlight,
@@ -6318,7 +6368,7 @@ class CombatSimulation:
             timestamp=self.current_time,
             ship_id=ship_id,
             target_id=target_id,
-            data=data or {}
+            data=self.evidence.enrich(event_type.name, ship_id, data)
         )
         self.events.append(event)
 

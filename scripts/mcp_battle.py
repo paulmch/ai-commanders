@@ -100,15 +100,9 @@ async def run_mcp_battle(
               f"max {fleet_config.draft.max_ships} ships")
 
     # Create battle config
-    battle_config = BattleConfig(
-        initial_distance_km=fleet_config.initial_distance_km,
-        time_limit_s=fleet_config.time_limit_s,
-        decision_interval_s=fleet_config.decision_interval_s,
-        unlimited_mode=fleet_config.unlimited_mode,
+    battle_config = BattleConfig.from_fleet_config(
+        fleet_config,
         verbose=verbose,
-        record_battle=fleet_config.record_battle,
-        record_sim_trace=fleet_config.record_sim_trace,
-        personality_selection=fleet_config.personality_selection,
     )
 
     # Create client for non-MCP fleets (if any)

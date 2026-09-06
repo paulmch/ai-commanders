@@ -1,3 +1,4 @@
+import { DecisionPanel } from './DecisionPanel.js';
 /**
  * AI Commanders - Tactical Battle Visualizer
  * Main entry point - orchestrates all components
@@ -8,7 +9,8 @@ import { Interpolator } from './Interpolator.js';
 import { SceneManager } from './SceneManager.js';
 import { TimeController } from './TimeController.js';
 import { CameraController } from './CameraController.js';
-import { generateShipSVG, getShipClassName } from './shipSilhouettes.js';
+import { ContactOverlay } from './ContactOverlay.js';
+import { generateShipSVG, getShipClassName, SHIP_SILHOUETTES } from './shipSilhouettes.js';
 
 class BattleVisualizer {
   constructor() {
@@ -40,6 +42,8 @@ class BattleVisualizer {
    */
   async init() {
     this.cacheElements();
+    this.decisions = new DecisionPanel(this);
+    this.contacts = new ContactOverlay(document.getElementById('shipContacts'), id => this.selectShip(id));
     this.setupEventListeners();
     this.hideLoading();
 
@@ -153,6 +157,8 @@ class BattleVisualizer {
    * Setup all event listeners
    */
   setupEventListeners() {
+    document.getElementById('fleetViewBtn').addEventListener('click', () => this.showFleetView());
+    document.getElementById('contactsBtn').addEventListener('click', () => this.toggleContacts());
     // File selection
     this.elements.selectFileBtn.addEventListener('click', () => {
       this.elements.fileInput.click();
@@ -254,7 +260,8 @@ class BattleVisualizer {
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
       // Don't handle shortcuts when typing in an input
-      if (e.target.tagName === 'INPUT') return;
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName) || e.target.isContentEditable) return;
+      if (e.altKey || e.ctrlKey || e.metaKey || (e.code === 'Space' && e.target.tagName === 'BUTTON')) return;
 
       if (e.code === 'Space') {
         e.preventDefault();
@@ -265,6 +272,14 @@ class BattleVisualizer {
       } else if (e.code === 'ArrowRight') {
         this.setLiveFollow(false);
         this.timeController?.seek(this.timeController.currentTime + 5);
+      } else if (e.code === 'KeyF') {
+        this.showFleetView();
+      } else if (e.code === 'KeyD' && this.isInitialized) {
+        this.decisions.setOpen(!this.decisions.open);
+      } else if (e.code === 'Escape' && this.decisions.open) {
+        this.decisions.setOpen(false);
+      } else if (e.code === 'KeyC') {
+        this.toggleContacts();
       }
     });
 
@@ -272,6 +287,7 @@ class BattleVisualizer {
     window.addEventListener('resize', () => {
       if (this.scene) {
         this.scene.onResize();
+        if (this.cameraController?.fleetFramed) this.cameraController.focusFleet(this.currentState?.ships);
       }
     });
   }
@@ -358,6 +374,7 @@ class BattleVisualizer {
       this.scene.controls,
       this.scene
     );
+    this.needsFleetFraming = window.innerWidth < 900;
 
     // Create ships
     this.setLoadingStatus('Spawning fleet assets...');
@@ -371,6 +388,9 @@ class BattleVisualizer {
     // Update UI
     this.updateBattleInfo();
     this.populateShipLists();
+    this.decisions.reset();
+    this.contacts.populate(this.loader.ships);
+    document.getElementById('viewControls').classList.remove('hidden');
     this.populateTimelineMarkers();
     this.updateFleetStatus();
 
@@ -382,8 +402,20 @@ class BattleVisualizer {
     // Start animation loop
     this.startAnimationLoop();
 
-    // Auto-play
-    this.timeController.play();
+    // Deep links can open a specific decision at an observed outcome.
+    const replayParams = new URLSearchParams(window.location.search);
+    const startTime = Number(replayParams.get('t'));
+    if (replayParams.has('t') && Number.isFinite(startTime)) this.timeController.seek(startTime);
+    const initialShip = replayParams.get('ship');
+    if (initialShip && this.loader.ships[initialShip]) this.selectShip(initialShip);
+    if (replayParams.get('decisions') === '1') {
+      this.decisions.setOpen(true);
+      const decisionId = replayParams.get('decision');
+      if (decisionId && this.loader.decisions.byId.has(decisionId)) this.decisions.decisionId = decisionId;
+      this.decisions.update(this.timeController.currentTime);
+      if (this.live) this.timeController.play();
+      else this.timeController.pause();
+    } else this.timeController.play();
     this.updatePlayPauseButton();
   }
 
@@ -413,7 +445,23 @@ class BattleVisualizer {
         this.currentState = Interpolator.getInterpolatedState(frameData, this.loader);
 
         const currentPlaybackTime = this.timeController.currentTime;
+        this.decisions.update(currentPlaybackTime);
         this.scene.currentTime = currentPlaybackTime;
+
+        // Clear before updating ships so a backwards seek can recreate a
+        // wreck at its recorded age in this same frame.
+        if (currentPlaybackTime < this.lastHitEventTime) {
+          this.scene.clearHitEffects();
+          this.lastHitEventTime = currentPlaybackTime - 6;
+        }
+        if (currentPlaybackTime < this.lastDestructionTime) {
+          this.scene.clearDestructionEffects();
+          this.lastDestructionTime = currentPlaybackTime;
+        }
+        if (currentPlaybackTime < this.lastMomentTime) {
+          this.scene.clearSmallEffects();
+          this.lastMomentTime = currentPlaybackTime - 6;
+        }
 
         // Update ships (with radiator state from the event timeline)
         for (const [shipId, state] of Object.entries(this.currentState.ships)) {
@@ -437,20 +485,6 @@ class BattleVisualizer {
         }
         this.scene.cleanupTorpedoes(activeTorpedoIds);
 
-        // If scrubbing backwards, clear time-anchored visuals
-        if (currentPlaybackTime < this.lastHitEventTime) {
-          this.scene.clearHitEffects();
-          this.lastHitEventTime = currentPlaybackTime;
-        }
-        if (currentPlaybackTime < this.lastDestructionTime) {
-          this.scene.clearDestructionEffects();
-          this.lastDestructionTime = currentPlaybackTime;
-        }
-        if (currentPlaybackTime < this.lastMomentTime) {
-          this.scene.clearSmallEffects();
-          this.lastMomentTime = currentPlaybackTime;
-        }
-
         // Continuous PD beams - recomputed from dwell segments each frame,
         // so they track shooter and target and survive scrubbing
         this.scene.updateContinuousBeams(
@@ -460,19 +494,20 @@ class BattleVisualizer {
 
         // Torpedo lifecycle moments crossing this frame: detonations,
         // misses, seeker kills, burnouts - plus gun muzzle flashes
-        const moments = this.loader.getTorpedoMomentsInRange(this.lastMomentTime, currentPlaybackTime);
+        const momentStart = Math.max(this.lastMomentTime, currentPlaybackTime - 6);
+        const moments = this.loader.getTorpedoMomentsInRange(momentStart, currentPlaybackTime);
         for (const m of moments) {
           if (m.kind === 'impact') {
-            this.scene.spawnTorpedoDetonation(m.position, m.data.damageGj || 8, currentPlaybackTime);
+            this.scene.spawnTorpedoDetonation(m.position, m.data.damageGj || 8, m.timestamp);
           } else {
-            this.scene.spawnSmallEffect(m.position, currentPlaybackTime, m.kind);
+            this.scene.spawnSmallEffect(m.position, m.timestamp, m.kind);
           }
         }
-        const shotEvents = this.loader.getEventsInRange(this.lastMomentTime, currentPlaybackTime)
-          .filter(e => e.event_type === 'shot_fired' || e.event_type === 'torpedo_launched');
+        const shotEvents = this.loader.getEventsInRange(momentStart, currentPlaybackTime)
+          .filter(e => e.timestamp > momentStart && (e.event_type === 'shot_fired' || e.event_type === 'torpedo_launched'));
         for (const e of shotEvents) {
           const pos = this.loader.getShipPositionAt(e.ship_id, e.timestamp);
-          if (pos) this.scene.spawnSmallEffect(pos, currentPlaybackTime, 'muzzle');
+          if (pos) this.scene.spawnSmallEffect(pos, e.timestamp, 'muzzle');
         }
         this.lastMomentTime = currentPlaybackTime;
 
@@ -481,12 +516,12 @@ class BattleVisualizer {
 
         // Spawn hit effects when projectiles visually reach their targets
         // (based on extrapolated travel time, not recording event timestamps)
-        const visualImpacts = this.loader.getVisualImpacts(this.lastHitEventTime, currentPlaybackTime);
+        const visualImpacts = this.loader.getVisualImpacts(Math.max(this.lastHitEventTime, currentPlaybackTime - 6), currentPlaybackTime);
         for (const impact of visualImpacts) {
           this.scene.spawnHitEffect(
             impact.impact_position,
             impact.kinetic_energy_gj,
-            currentPlaybackTime
+            impact.timestamp
           );
         }
         this.lastHitEventTime = currentPlaybackTime;
@@ -501,6 +536,15 @@ class BattleVisualizer {
         }
 
         // Update camera
+        if (this.needsFleetFraming) {
+          this.cameraController.focusFleet(this.currentState.ships);
+          this.needsFleetFraming = false;
+        }
+        if (this.pendingEvidenceFocus) {
+          this.cameraController.focusOnShip(this.pendingEvidenceFocus, this.currentState.ships);
+          this.cameraController.setMode('orbit', this.pendingEvidenceFocus);
+          this.pendingEvidenceFocus = null;
+        }
         this.cameraController.update(this.currentState.ships);
 
         // Update selected ship telemetry
@@ -517,6 +561,7 @@ class BattleVisualizer {
 
       // Render
       this.scene.render();
+      if (this.isInitialized) this.contacts.update(this.scene, this.currentState?.ships, this.selectedShipId);
 
       this.animationId = requestAnimationFrame(animate);
     };
@@ -566,7 +611,7 @@ class BattleVisualizer {
     live.polling = true;
 
     try {
-      const sinceQ = live.started ? `?since_t=${live.lastFrameT}` : '';
+      const sinceQ = live.started ? `?since_t=${live.lastFrameT}&since_seq=${this.loader?.lastEventSequence || 0}` : '';
       const response = await fetch(`${live.base}/recording${sinceQ}`);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const payload = await response.json();
@@ -683,7 +728,10 @@ class BattleVisualizer {
    */
   updateFollowHead(deltaTime) {
     const tc = this.timeController;
-    const target = Math.max(0, tc.duration - 3);
+    // At a paused checkpoint, show newly arriving orders at the checkpoint's
+    // exact time. A permanent interpolation cushion would hide them throughout
+    // the entire model-thinking phase.
+    const target = Math.max(0, tc.duration - (this.live.status === 'paused' ? 0 : 3));
     const err = target - tc.currentTime;
     const rate = err > 0 ? Math.min(1 + err * 0.75, 16) : 0;
     tc.currentTime = Math.min(target, tc.currentTime + deltaTime * rate);
@@ -795,9 +843,18 @@ class BattleVisualizer {
 
     for (const [shipId, shipInfo] of Object.entries(this.loader.ships)) {
       const li = document.createElement('li');
-      li.textContent = shipInfo.name || shipId;
+      li.innerHTML = '<svg class="registry-silhouette" viewBox="0 0 120 80" aria-hidden="true"><path/></svg><span class="registry-identity"><span class="registry-name"></span><span class="registry-class"></span><span class="registry-health"><i></i></span></span><span class="registry-status"></span>';
+      li.querySelector('path').setAttribute('d', (SHIP_SILHOUETTES[shipInfo.type] || SHIP_SILHOUETTES.destroyer).body);
+      li.querySelector('.registry-name').textContent = shipInfo.name || shipId;
+      li.querySelector('.registry-class').textContent = getShipClassName(shipInfo.type);
+      li.tabIndex = 0;
+      li.setAttribute('role', 'button');
+      li.setAttribute('aria-label', `Inspect ${shipInfo.name || shipId}`);
       li.dataset.shipId = shipId;
       li.addEventListener('click', () => this.selectShip(shipId));
+      li.addEventListener('keydown', e => {
+        if (e.code === 'Enter' || e.code === 'Space') { e.preventDefault(); e.stopPropagation(); this.selectShip(shipId); }
+      });
 
       if (shipInfo.faction === 'alpha') {
         this.elements.alphaShips.appendChild(li);
@@ -819,15 +876,21 @@ class BattleVisualizer {
       'torpedo_impact': 'marker-impact',
       'module_destroyed': 'marker-destroyed',
       'torpedo_launched': 'marker-launch',
-      'message': 'marker-comms'
+      'message': 'marker-comms',
+      'captain_decision': 'marker-decision'
     };
 
+    const checkpointTimes = new Set();
     for (const event of this.loader.events) {
+      if (event.event_type === 'captain_decision') {
+        if (checkpointTimes.has(event.timestamp)) continue;
+        checkpointTimes.add(event.timestamp);
+      }
       const cls = markerTypes[event.event_type];
       if (!cls) continue;
       const marker = document.createElement('div');
       marker.className = `timeline-marker ${cls}`;
-      marker.style.left = `${(event.timestamp / this.loader.duration) * 100}%`;
+      marker.style.left = `${(event.timestamp / this.timeController.duration) * 100}%`;
       marker.title = `${this.formatTime(event.timestamp)} ${event.event_type.replace(/_/g, ' ')}`;
       container.appendChild(marker);
     }
@@ -879,6 +942,10 @@ class BattleVisualizer {
     document.querySelectorAll('.ship-list li').forEach(li => {
       const shipId = li.dataset.shipId;
       const state = this.currentState.ships[shipId];
+      const hull = Math.round(Math.max(0, Math.min(100, state?.hull ?? 100)));
+      li.classList.toggle('dying', !!state?.dying);
+      li.querySelector('.registry-health i').style.width = `${state?.destroyed ? 0 : hull}%`;
+      li.querySelector('.registry-status').textContent = state?.destroyed ? 'LOST' : state?.dying ? 'CRIT' : `${hull}%`;
       if (state?.destroyed) {
         li.classList.add('destroyed');
       } else {
@@ -893,6 +960,7 @@ class BattleVisualizer {
   selectShip(shipId) {
     // Update selection state
     this.selectedShipId = shipId;
+    this.decisions.selectShip(shipId);
 
     // Update ship list UI
     document.querySelectorAll('.ship-list li').forEach(li => {
@@ -935,6 +1003,19 @@ class BattleVisualizer {
     });
 
     this.setCameraMode('free');
+  }
+
+  showFleetView() {
+    if (!this.isInitialized) return;
+    this.deselectShip();
+    this.cameraController.focusFleet(this.currentState?.ships);
+  }
+
+  toggleContacts() {
+    this.contacts.enabled = !this.contacts.enabled;
+    const button = document.getElementById('contactsBtn');
+    button.classList.toggle('active', this.contacts.enabled);
+    button.setAttribute('aria-pressed', String(this.contacts.enabled));
   }
 
   /**
@@ -1381,6 +1462,8 @@ class BattleVisualizer {
    * Reset state and show file selector to load a new recording
    */
   resetAndShowFileSelector() {
+    this.decisions.setOpen(false);
+    this.pendingEvidenceFocus = null;
     // Leaving live mode: stop polling, hide the HUD and checkpoint marker
     if (this.live) {
       if (this.live.timer) clearTimeout(this.live.timer);
@@ -1424,6 +1507,8 @@ class BattleVisualizer {
 
     // Reset state
     this.isInitialized = false;
+    this.contacts.clear();
+    document.getElementById('viewControls').classList.add('hidden');
     this.selectedShipId = null;
     this.lastTime = 0;
     this.lastHitEventTime = 0;

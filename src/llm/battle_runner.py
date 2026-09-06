@@ -20,7 +20,8 @@ from .communication import CommunicationChannel, FleetCommunicationChannel, Mess
 from .victory import VictoryEvaluator, BattleOutcome
 from .prompts import CaptainPersonality
 from .battle_recorder import BattleRecorder, create_battle_filename
-from .fleet_config import BattleFleetConfig, FleetDefinition, ShipConfig, AdmiralConfig, MCPConfig
+from .fleet_config import (BattleFleetConfig, FleetDefinition, ShipConfig, AdmiralConfig, MCPConfig,
+                           validate_battle_options, validate_fleet_config)
 from .admiral import LLMAdmiral, AdmiralOrder
 from .mcp_controller import MCPController, MCPControllerConfig, apply_mcp_commands_to_simulation
 from .mcp_chat import AdmiralChat
@@ -73,6 +74,21 @@ class BattleConfig:
     # with identical LLM decisions, hit rolls differ every time. None keeps the
     # previous behaviour (unseeded / non-reproducible).
     seed: Optional[int] = None
+    use_notebooks: bool = False
+
+    def __post_init__(self) -> None:
+        validate_battle_options(self)
+
+    @classmethod
+    def from_fleet_config(cls, fleet: BattleFleetConfig, **overrides) -> 'BattleConfig':
+        """Carry JSON battle settings into the runtime, then apply explicit overrides."""
+        values = {name: getattr(fleet, name) for name in (
+            "initial_distance_km", "time_limit_s", "decision_interval_s", "unlimited_mode",
+            "record_battle", "record_sim_trace", "personality_selection", "use_notebooks",
+            "max_checkpoints", "seed",
+        )}
+        values.update(overrides)
+        return cls(**values)
 
 
 @dataclass
@@ -254,8 +270,8 @@ class LLMBattleRunner:
         self.beta_config.fleet_data = fleet_data
 
         # Create captains
-        self.alpha_captain = LLMCaptain(self.alpha_config, self.client)
-        self.beta_captain = LLMCaptain(self.beta_config, self.client)
+        self.alpha_captain = self._make_captain(self.alpha_config)
+        self.beta_captain = self._make_captain(self.beta_config)
 
         # Create communication channel
         self.communication = CommunicationChannel(
@@ -282,6 +298,8 @@ class LLMBattleRunner:
         # Register the event callback unconditionally: it also feeds captain
         # combat feedback (shots fired, damage taken), which must not depend on
         # whether the battle happens to be recorded.
+        from .replay_audit import attach_audit
+        attach_audit(self)
         self.simulation.add_event_callback(self._handle_simulation_event)
 
         if self.config.verbose:
@@ -323,7 +341,8 @@ class LLMBattleRunner:
         Returns None (no prompt change at all) unless the fleet config sets
         use_notebooks - evaluation battles must measure the raw model.
         """
-        if not (self.fleet_config and getattr(self.fleet_config, "use_notebooks", False)):
+        if not (self.config.use_notebooks or
+                (self.fleet_config and self.fleet_config.use_notebooks)):
             return None
         from .notebook import notebook_prompt_text
         try:
@@ -358,6 +377,10 @@ class LLMBattleRunner:
 
         if not self.fleet_config:
             raise ValueError("Fleet config required for fleet battles")
+
+        errors = validate_fleet_config(self.fleet_config, fleet_data)
+        if errors:
+            raise ValueError("; ".join(errors))
 
         self._seed_rng()
 
@@ -616,6 +639,8 @@ class LLMBattleRunner:
             )
 
         # Register the event callback unconditionally - see setup_battle().
+        from .replay_audit import attach_audit
+        attach_audit(self)
         self.simulation.add_event_callback(self._handle_simulation_event)
 
         if self.config.verbose:
@@ -641,6 +666,27 @@ class LLMBattleRunner:
             elif self.beta_admiral:
                 print(f"  Admiral: {self.beta_admiral.name}")
             print(f"{'='*60}\n")
+
+    def _advance_to_checkpoint(self, deadline: float, fleet_mode: bool = False):
+        """Step to a checkpoint exactly, including fractional intervals and limits."""
+        if not self.config.unlimited_mode:
+            time_limit = self.fleet_config.time_limit_s if fleet_mode else self.config.time_limit_s
+            deadline = min(deadline, time_limit)
+        pre_snapshot_time = deadline - self.admiral_pre_snapshot_offset
+        while self.simulation.current_time < deadline - 1e-9:
+            now = self.simulation.current_time
+            if fleet_mode and abs(now - pre_snapshot_time) < 1e-9:
+                self._capture_admiral_pre_snapshots()
+            step_end = deadline
+            if fleet_mode and now < pre_snapshot_time - 1e-9:
+                step_end = min(step_end, pre_snapshot_time)
+            nominal_dt = self.simulation.time_step
+            self.simulation.time_step = min(nominal_dt, step_end - now)
+            try:
+                self.simulation.step()
+            finally:
+                self.simulation.time_step = nominal_dt
+            yield
 
     def run_battle(self, fleet_data: Dict[str, Any]) -> BattleResult:
         """
@@ -697,9 +743,8 @@ class LLMBattleRunner:
         while not self._is_battle_over():
             # === SIMULATION PHASE ===
             # Run for decision_interval seconds
-            steps = int(self.config.decision_interval_s)
-            for _ in range(steps):
-                self.simulation.step()
+            deadline = self.simulation.current_time + self.config.decision_interval_s
+            for _ in self._advance_to_checkpoint(deadline):
 
                 # Record sim frame if enabled
                 if self.recorder and self.config.record_sim_trace:
@@ -877,6 +922,9 @@ class LLMBattleRunner:
             if self.communication.is_battle_ended():
                 break
 
+            # Preserve the final decision before command execution, also in duels.
+            self._record_captain_decision('alpha', self.alpha_captain, alpha_commands)
+            self._record_captain_decision('beta', self.beta_captain, beta_commands)
             # Phase 5: Apply commands
             for cmd in alpha_commands:
                 success = self.simulation.inject_command("alpha", cmd)
@@ -977,15 +1025,7 @@ class LLMBattleRunner:
 
         while not self._is_fleet_battle_over():
             # === SIMULATION PHASE ===
-            steps = int(decision_interval)
-            for step_i in range(steps):
-                current_time = self.simulation.current_time
-
-                # Capture Admiral pre-snapshots at T-15s before checkpoint
-                if current_time == next_checkpoint_time - self.admiral_pre_snapshot_offset:
-                    self._capture_admiral_pre_snapshots()
-
-                self.simulation.step()
+            for _ in self._advance_to_checkpoint(next_checkpoint_time, fleet_mode=True):
 
                 if self._admiral_view:
                     self._admiral_view.sample(self.simulation)
@@ -1056,28 +1096,7 @@ class LLMBattleRunner:
                         for line in order_lines:
                             print(f"         {line}")
 
-                # Record admiral directive and orders
-                if self.recorder:
-                    if decision.fleet_directive:
-                        self.recorder.record_admiral_directive(
-                            timestamp=self.simulation.current_time,
-                            admiral_name=admiral.name,
-                            faction=faction,
-                            directive=decision.fleet_directive,
-                        )
-                    for order in decision.fleet_orders:
-                        ship_id = self._find_ship_id_by_name(order.target_ship_id, faction)
-                        self.recorder.record_admiral_order(
-                            timestamp=self.simulation.current_time,
-                            admiral_name=admiral.name,
-                            ship_id=ship_id or order.target_ship_id,
-                            ship_name=order.target_ship_id,
-                            order_text=order.order_text,
-                            priority=order.priority,
-                            suggested_target=order.suggested_target,
-                        )
-
-                self._report_admiral_plan_update(admiral, decision, faction)
+                self._record_admiral_intent(admiral, decision, faction)
 
             # Phase 1b: Admiral <-> Admiral diplomacy (provider-agnostic)
             self._exchange_admiral_messages()
@@ -1147,7 +1166,7 @@ class LLMBattleRunner:
 
             # Phase 7: Check limits
             if not self.config.unlimited_mode:
-                max_checkpoints = self.fleet_config.max_checkpoints if self.fleet_config and hasattr(self.fleet_config, 'max_checkpoints') else self.config.max_checkpoints
+                max_checkpoints = self.config.max_checkpoints
                 if self.checkpoint_count >= max_checkpoints:
                     if self.config.verbose:
                         print(f"\n=== CHECKPOINT LIMIT REACHED ===")
@@ -1243,15 +1262,7 @@ class LLMBattleRunner:
 
         while not self._is_fleet_battle_over():
             # === SIMULATION PHASE ===
-            steps = int(decision_interval)
-            for step_i in range(steps):
-                current_time = self.simulation.current_time
-
-                # Capture Admiral pre-snapshots at T-15s before checkpoint
-                if current_time == next_checkpoint_time - self.admiral_pre_snapshot_offset:
-                    self._capture_admiral_pre_snapshots()
-
-                self.simulation.step()
+            for _ in self._advance_to_checkpoint(next_checkpoint_time, fleet_mode=True):
 
                 if self._admiral_view:
                     self._admiral_view.sample(self.simulation)
@@ -1341,7 +1352,7 @@ class LLMBattleRunner:
                         for line in order_lines:
                             print(f"         {line}")
 
-                self._report_admiral_plan_update(self.alpha_admiral, alpha_decision, "alpha")
+                self._record_admiral_intent(self.alpha_admiral, alpha_decision, "alpha")
 
             # Handle beta fleet
             if self.beta_mcp:
@@ -1396,7 +1407,7 @@ class LLMBattleRunner:
                         for line in order_lines:
                             print(f"         {line}")
 
-                self._report_admiral_plan_update(self.beta_admiral, beta_decision, "beta")
+                self._record_admiral_intent(self.beta_admiral, beta_decision, "beta")
 
             # === MESSAGE BRIDGE: LLM Admiral <-> LLM Admiral ===
             # No-op unless both sides are LLM admirals (the MCP bridge below owns
@@ -1460,10 +1471,9 @@ class LLMBattleRunner:
                 and not getattr(ship, 'is_surrendered', False)
             ]
 
-            # record=False preserves this loop's behaviour: the async/MCP path
-            # never recorded captain-decision events.
+            # Use the same decision provenance in sync, async and MCP battles.
             all_commands.update(
-                self._run_captain_decisions(decidable, admiral_orders, record=False)
+                self._run_captain_decisions(decidable, admiral_orders)
             )
 
             # Handle immediate messaging
@@ -1520,7 +1530,7 @@ class LLMBattleRunner:
 
             # Check limits
             if not self.config.unlimited_mode:
-                max_checkpoints = self.fleet_config.max_checkpoints if self.fleet_config and hasattr(self.fleet_config, 'max_checkpoints') else self.config.max_checkpoints
+                max_checkpoints = self.config.max_checkpoints
                 if self.checkpoint_count >= max_checkpoints:
                     if self.config.verbose:
                         print(f"\n=== CHECKPOINT LIMIT REACHED ===")
@@ -1696,6 +1706,19 @@ class LLMBattleRunner:
             if getattr(ship, 'name', ship_id) == name or ship_id == name:
                 return ship_id
         return None
+
+    def _record_admiral_intent(self, admiral, decision, faction):
+        if not self.recorder or not admiral:
+            return
+        directive = getattr(decision, 'fleet_directive', None)
+        if directive:
+            self.recorder.record_admiral_directive(self.simulation.current_time, admiral.name, faction, directive)
+        self._report_admiral_plan_update(admiral, decision, faction)
+        for order in decision.fleet_orders:
+            sid = self._find_ship_id_by_name(order.target_ship_id, faction) or order.target_ship_id
+            self.recorder.record_admiral_order(self.simulation.current_time, admiral.name, sid,
+                order.target_ship_id, order.order_text, order.priority, order.suggested_target,
+                torpedo_target=getattr(order, "torpedo_target", None), torpedo_salvo=getattr(order, "torpedo_salvo", None))
 
     def _report_admiral_plan_update(
         self,
@@ -2155,14 +2178,18 @@ class LLMBattleRunner:
         # Extract maneuver info
         maneuver_type = "DRIFT"
         throttle = 0.0
-        target_id = None
+        target_id = ship.primary_target_id
         target_name = None
+        for cmd in commands:
+            if isinstance(cmd, dict) and cmd.get('type') == 'set_target':
+                target_id = cmd.get('target_id')
 
         for cmd in commands:
             if isinstance(cmd, Maneuver):
                 maneuver_type = cmd.maneuver_type.name
                 throttle = cmd.throttle
-                target_id = cmd.target_id
+                if not target_id:
+                    target_id = cmd.target_id
                 break
 
         # Get target name
@@ -2187,9 +2214,15 @@ class LLMBattleRunner:
                 )
 
         # Get acknowledgment text from captain if available
-        acknowledgment = getattr(captain, 'last_acknowledgment', None)
+        acknowledgment = None if getattr(captain, 'last_call_failed', False) else getattr(captain, 'last_acknowledgment', None)
 
-        self.recorder.record_captain_decision(
+        from ..replay_evidence import json_value
+        at_time = [e for e in self.recorder.events if e.timestamp == self.simulation.current_time]
+        faction = ship.faction
+        parents = [e.event_id for e in at_time if
+                   (e.ship_id == ship_id and e.event_type in ('model_call', 'admiral_order', 'captain_admiral_discussion'))
+                   or (e.event_type in ('admiral_directive', 'admiral_plan') and e.data.get('faction') == faction)]
+        event = self.recorder.record_captain_decision(
             timestamp=self.simulation.current_time,
             ship_id=ship_id,
             captain_name=captain.name,
@@ -2200,7 +2233,15 @@ class LLMBattleRunner:
             target_name=target_name,
             radiators_extended=radiators_extended,
             acknowledgment=acknowledgment,
+            commands=json_value(commands),
+            tool_calls=json_value(getattr(captain, 'last_requested_tool_calls', getattr(captain, 'last_tool_calls', [])) or []),
+            tool_errors=list(getattr(captain, 'pending_tool_errors', []) or []),
+            parent_event_ids=parents, faction=faction,
+            model=getattr(captain.config, 'model', 'heuristic'),
+            call_failed=bool(getattr(captain, 'last_call_failed', False)),
         )
+        if event.event_id:
+            self.simulation.evidence.decisions[ship_id] = event.event_id
 
         # Captain's log notes ride along with the decision's tool calls.
         for tc in getattr(captain, 'last_tool_calls', None) or []:
@@ -2456,7 +2497,7 @@ class LLMBattleRunner:
                 # Get current thrust fraction
                 thrust = 0.0
                 if ship.current_maneuver and not ship.is_destroyed:
-                    thrust = ship.current_maneuver.throttle
+                    thrust = getattr(ship, 'applied_throttle', 0.0)
 
                 # A dying ship has no maneuver, but its torch still sputters:
                 # record the throttle the death spiral actually applied so
@@ -2481,6 +2522,8 @@ class LLMBattleRunner:
                     "velocity": (ship.velocity.x, ship.velocity.y, ship.velocity.z),
                     "forward": (ship.forward.x, ship.forward.y, ship.forward.z),
                     "thrust": thrust,
+                    "requested_thrust": ship.current_maneuver.throttle if ship.current_maneuver else 0.0,
+                    "execution_mode": getattr(ship, 'execution_mode', 'COAST'),
                     "maneuver": maneuver_str,
                     "is_destroyed": ship.is_destroyed,
                     "is_dying": getattr(ship, 'is_dying', False),
@@ -2934,6 +2977,20 @@ class LLMBattleRunner:
         return state
 
     def _handle_simulation_event(self, event: Any) -> None:
+        recorder = self.recorder
+        if not recorder:
+            return self._record_simulation_event(event)
+        before = len(recorder.events)
+        recorder.simulation_event = event
+        try:
+            self._record_simulation_event(event)
+            if len(recorder.events) == before:
+                recorder.record(event.timestamp, event.event_type.name.lower(), event.ship_id,
+                                **{**event.data, 'target_id': event.target_id})
+        finally:
+            recorder.simulation_event = None
+
+    def _record_simulation_event(self, event: Any) -> None:
         """
         Handle simulation events and record them.
 
@@ -3236,6 +3293,9 @@ class LLMBattleRunner:
         """
         if not self.recorder or not self.simulation:
             return
+        for ship_id, command, _ in getattr(self.simulation, 'pending_torpedo_launches', []):
+            for cid in command.get('_command_ids', []):
+                self.simulation._command_status(ship_id, cid, 'cancelled', 'Battle ended before queued launch')
         for tf in list(getattr(self.simulation, "torpedoes", []) or []):
             torp = tf.torpedo
             target = self.simulation.get_ship(torp.target_id) if torp.target_id else None

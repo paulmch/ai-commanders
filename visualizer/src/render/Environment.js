@@ -31,9 +31,9 @@ export class Environment {
     this.scene = scene;
     this.renderer = renderer;
     this.sunDir = new THREE.Vector3(0.62, 0.42, 0.28).normalize();
-    this.planetDir = new THREE.Vector3(0.18, -0.16, -1).normalize();
+    this.planetDir = new THREE.Vector3(0.55, -0.3, -1).normalize();
     this.planetDistance = 46000;
-    this.planetRadius = 10500;
+    this.planetRadius = 8800;
     this.time = 0;
 
     this.group = new THREE.Group();

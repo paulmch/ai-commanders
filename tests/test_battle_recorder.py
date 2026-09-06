@@ -265,7 +265,7 @@ class TestBattleRecording:
         """Test creating a recording with defaults."""
         recording = BattleRecording()
 
-        assert recording.recording_version == "2.1"
+        assert recording.recording_version == "3.0"
         assert recording.is_fleet_battle is False
         assert recording.events == []
         assert recording.sim_trace == []
@@ -517,7 +517,7 @@ class TestBattleRecorderFleet:
         assert recorder._is_recording is True
         assert recording.is_fleet_battle is True
         assert recording.battle_name == "Test Fleet Battle"
-        assert recording.initial_distance_km == 1000.0
+        assert recording.initial_distance_km == mock_battle_config.initial_distance_km
 
         # Verify fleet data
         assert recording.alpha_fleet["admiral"]["name"] == "Admiral Alpha"
@@ -1293,7 +1293,7 @@ class TestJSONSerialization:
             with open(saved_path) as f:
                 data = json.load(f)
 
-            assert data["recording_version"] == "2.1"
+            assert data["recording_version"] == "3.0"
             assert data["winner"] == "alpha"
 
     def test_save_recording_creates_directories(self, mock_battle_config, mock_captain_config, mock_battle_result):

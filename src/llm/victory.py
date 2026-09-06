@@ -52,7 +52,16 @@ class VictoryEvaluator:
             weapons_operational = any(
                 w.is_operational for w in ship.weapons.values()
             )
-            if not weapons_operational:
+            if weapons_operational:
+                return False
+            # Torpedo boats have no entries in the gun dictionary. Their
+            # launchers must count, or an intact corvette loses as "disabled".
+            launchers = getattr(ship, "ready_torpedo_launchers", None)
+            if launchers is None:
+                launcher = getattr(ship, "torpedo_launcher", None)
+                launchers = [launcher] if launcher else []
+            torpedoes_available = any(t.current_magazine > 0 for t in launchers)
+            if not torpedoes_available:
                 return True
 
         return False
@@ -151,6 +160,8 @@ class VictoryEvaluator:
             Tuple of (outcome, winner_id, reason)
         """
         # Check surrender first
+        if alpha_surrendered and beta_surrendered:
+            return (BattleOutcome.DRAW, None, "Both captains surrendered")
         if alpha_surrendered:
             return (BattleOutcome.BETA_VICTORY, "beta", "Alpha surrendered")
         if beta_surrendered:

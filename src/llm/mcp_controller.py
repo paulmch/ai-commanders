@@ -856,7 +856,41 @@ class MCPController:
         return msg
 
 
-def apply_mcp_commands_to_simulation(
+def apply_mcp_commands_to_simulation(commands, simulation, faction):
+    """Record human/MCP intent and route execution through the shared ledger."""
+    from ..replay_evidence import json_value
+    from ..simulation import SimulationEventType
+    recorder = getattr(simulation, 'recorder', None)
+    if recorder:
+        for sid in dict.fromkeys(c.ship_id for c in commands if c.ship_id):
+            own = [c for c in commands if c.ship_id == sid]
+            event = recorder.record(simulation.current_time, 'captain_decision', sid,
+                captain_name='MCP Commander', model='mcp', faction=faction,
+                commands=json_value(own), tool_calls=[],
+                execution_snapshot_ref=recorder.asset(simulation.get_battle_snapshot(sid)),
+                input_availability='External MCP model input is not available to this server')
+            simulation.evidence.decisions[sid] = event.event_id
+    results = {'applied': [], 'errors': []}
+    for cmd in commands:
+        # Some MCP commands act directly (retarget, radiator, primary target).
+        direct = cmd.command_type.value in ('set_primary_target', 'set_radiators', 'retarget_torpedo')
+        if direct and hasattr(simulation, 'evidence'):
+            cid = simulation.evidence.begin(cmd.ship_id, cmd)
+            with simulation.evidence.using([cid]):
+                simulation._command_status(cmd.ship_id, cid, 'issued')
+                one = _apply_mcp_commands([cmd], simulation, faction)
+                simulation._command_status(cmd.ship_id, cid, 'accepted' if one['applied'] else 'rejected',
+                                           '; '.join(e['error'] for e in one['errors']) or None)
+            if one['applied'] and cmd.command_type.value == 'set_primary_target':
+                simulation.evidence.bind(cmd.ship_id, 'target', cid)
+        else:
+            one = _apply_mcp_commands([cmd], simulation, faction)
+        for key in results:
+            results[key].extend(one[key])
+    return results
+
+
+def _apply_mcp_commands(
     commands: List[MCPCommand],
     simulation: Any,
     faction: str,
@@ -894,7 +928,7 @@ def apply_mcp_commands_to_simulation(
                     maneuver = Maneuver(
                         maneuver_type=maneuver_type,
                         start_time=simulation.current_time,
-                        duration=30.0,  # Match LLM captain duration
+                        duration=simulation.decision_interval,
                         throttle=cmd.parameters.get("throttle", 1.0),
                         target_id=cmd.parameters.get("target_id"),
                         heading_direction=heading_direction,
