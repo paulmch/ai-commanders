@@ -1,1041 +1,286 @@
 # AI Commanders
 
-A Terra Invicta-inspired space battle simulator where **LLM-controlled captains and admirals** command fleets in tactical combat. Watch AI models coordinate fleet maneuvers, issue orders, and trash-talk while trying to blow each other up with coilguns and torpedoes.
+**Give two AI admirals a fleet budget. Let them pick their ships, make a plan, and live with the consequences.**
 
-## What is this?
+AI Commanders is a Terra Invicta-inspired space combat simulator where language models command ships through tactical tools. Admirals coordinate fleets, captains handle their own ships, and a Python simulation resolves the maneuvers, coilgun fire, torpedo salvos, heat, armor damage, and eventual wreckage.
 
-Three modes of warfare:
+Watch the battle in a 3D live viewer, then rewind it to follow an order from the commander's intent to the impact it caused. The commanders can also negotiate, argue with their admiral, keep notes, and talk far too much trash for people surrounded by vacuum.
 
-**Single Combat**: Two AI captains. Two ships. 500km of vacuum. Each captain makes tactical decisions every 30 seconds and can message their opponent.
+![A torpedo cruiser under thrust, with blue engine plumes and a ringed planet in the background](docs/images/readme/torpedo-cruiser.png)
 
-**Fleet Battles**: Two AI admirals commanding fleets of multiple ships. Admirals issue strategic orders (optionally with a rendered tactical-plot image every checkpoint - "admiral vision"), captains execute tactics, and everyone can communicate. Coordinate focus fire, flanking maneuvers, and combined arms.
+*An actual frame from GLM 5.3 Flash vs GPT-5.6 Luna. All screenshots below come from the replay viewer.*
 
-**Draft Battles**: Admirals get a point budget, buy their own fleets from a costed catalog, place them in 3D formations, and command them - with rule-based AI captains, cheap LLM captains, or by flying their own ships directly.
+[Watch a replay](#watch-a-replay) · [Run a live battle](#run-a-live-battle) · [Recorded battles](#recorded-battles) · [How it works](#how-it-works) · [Development](#development)
 
-The physics is real (Newtonian mechanics, armor ablation, heat management), but the trash talk is pure AI.
+## What you can do
 
-## Attribution
+- **Let the models build their own fleets.** Give both admirals a point budget and ship limit. Each independently chooses a composition and places its starting formation in 3D.
+- **Watch different command styles collide.** Use one model throughout a fleet, separate admiral and captain models, free heuristic captains, or an MCP client controlling a side directly.
+- **Follow intent into consequences.** Inspect model inputs, public responses, tool calls, accepted and rejected commands, queued launches, actual execution, and linked impacts.
+- **Watch live or explore a recording.** Fleet framing, ship cameras, tactical contacts, predicted live paths, a combat log, and a scrubbable timeline share the same viewer.
+- **Fight with finite resources.** Acceleration, turning, propellant, magazines, capacitor charge, heat, and exposed armor facings all affect the outcome.
+- **Run without paid models.** Browse the included recordings or generate battles with deterministic heuristic captains.
 
-This project is inspired by and based on **Terra Invicta**. The raw ship data, weapon mechanics, armor systems, and physics parameters are translated from Terra Invicta's game files. The code implementation, LLM integration, and battle simulation architecture are our own interpretation of those mechanics.
+## Watch a replay
 
-Terra Invicta is developed by Pavonis Interactive and published by Hooded Horse.
-
-## Quick Start
-
-```bash
-# Install dependencies
-uv sync
-
-# Add your OpenRouter API key to .env file
-echo "OPENROUTER_API_KEY=sk-or-v1-your-key-here" > .env
-```
-
-### Single Battle (1v1)
+The fastest way to try the project needs **Node.js and npm**, a WebGL-capable browser, and **no API key**.
 
 ```bash
-# Quick destroyer duel
-uv run python scripts/run_llm_battle.py -v
+git clone https://github.com/paulmch/ai-commanders.git
+cd ai-commanders
 
-# Customize ships and models
-uv run python scripts/run_llm_battle.py \
-    --alpha-model openrouter/anthropic/claude-opus-5 \
-    --beta-model openrouter/x-ai/grok-4.20 \
-    --alpha-ship-type cruiser \
-    --beta-ship-type destroyer \
-    --distance 400 \
-    -v
-```
+mkdir -p visualizer/public/recordings
+cp data/recordings/intent_*.json visualizer/public/recordings/
+cp data/recordings/glm_luna_200pt_live_20260906/battle_glm_5_3_flash_vs_gpt_5_6_luna_20260906_140449.json \
+  visualizer/public/recordings/glm_luna_200pt_live_20260906.json
 
-### Fleet Battle (Multi-Ship with Admirals)
-
-```bash
-# Run a fleet engagement
-uv run python scripts/run_llm_battle.py \
-    --fleet-config data/fleet_config_claude_vs_gemini.json \
-    -v
-
-# Unlimited mode - fight until destruction
-uv run python scripts/run_llm_battle.py \
-    --fleet-config data/fleet_config_claude_vs_gemini.json \
-    --unlimited \
-    -v
-
-# Give admirals a rendered tactical-plot image every checkpoint
-# (vision-capable admiral models + matplotlib; see docs/admiral_vision.md)
-uv run python scripts/run_llm_battle.py \
-    --fleet-config data/fleet_config_claude_vs_gemini.json \
-    --admiral-vision -v
-```
-
-### Draft Mode (Admirals Build Their Own Fleets)
-
-```bash
-# Two LLM admirals draft and fight (rule-based captains, vision on)
-uv run python scripts/run_draft_battle.py \
-    --alpha-admiral anthropic/claude-opus-5 \
-    --beta-admiral google/gemini-3.5-pro --trace
-
-# Fully offline demo - deterministic auto-drafts, zero LLM calls
-uv run python scripts/run_draft_battle.py --auto-draft --no-admirals --trace
-
-# Each admiral flies its own ships directly
-uv run python scripts/run_draft_battle.py \
-    --alpha-admiral moonshotai/kimi-k3 --alpha-captain-model moonshotai/kimi-k3 \
-    --beta-admiral openai/gpt-5.6-terra --beta-captain-model openai/gpt-5.6-terra
-```
-
-Admirals draft with a full tactical briefing - catalog stats, calibrated
-weapon effects, torpedo flight profile, counterplay doctrine. Details in
-`docs/draft_mode.md`.
-
-### Commander Notebooks (Cross-Battle Learning)
-
-Agents are stateless between battles by default. The refinement loop gives a
-model a small notebook of battle-earned lessons - distilled from a finished
-recording, then **rematch-gated** before any prompt ever sees them:
-
-```bash
-# 1. Distill pending lessons from a recording (admiral- and captain-level)
-uv run python scripts/refine_commander.py analyze data/recordings/battle_x.json
-
-# 2. Gate a lesson on evidence: N battles WITH it vs N WITHOUT (costs API usage)
-uv run python scripts/refine_commander.py validate anthropic/claude-sonnet-5 \
-    <entry-id> --config data/fleet_config_x.json --battles 3 --auto
-
-# 3. Fight with notebooks injected (off by default - keeps evals clean)
-uv run python scripts/run_llm_battle.py --fleet-config ... --notebooks
-```
-
-In battle, both command levels also keep *self-authored* state: the admiral's
-standing battle plan (`set_battle_plan`, private memory echoed back every
-checkpoint) and the captain's log (`log_note`, notes to their future self).
-
-## 3D Battle Visualizer
-
-A Three.js-based tactical replay viewer for watching recorded battles in full 3D.
-
-### Running the Visualizer
-
-```bash
 cd visualizer
-npm install
+npm ci
 npm run dev
 ```
 
-Open http://localhost:5173 and load a battle recording JSON file.
+Open **[the GLM–Luna replay](http://localhost:5173/?recording=/recordings/glm_luna_200pt_live_20260906.json)**. Or open [localhost:5173](http://localhost:5173) and choose any recording JSON from `data/recordings/` with the file selector.
 
-### Features
+![The tactical replay interface showing both fleets, contact labels, weapons fire, and the battle timeline](docs/images/readme/fleet-battle.png)
 
-- **Intent and consequence**: press **D** to open a ship's decision history, read
-  admiral orders and captain tools, inspect actual execution, and jump to linked
-  outcomes. Summaries cite recorded events; optional model observations are
-  labelled as interpretations. Legacy recordings show their available orders
-  with chronological context. [Replay recording and trial guide](docs/intent-replays.md).
-- **Physically based rendering**: HDR half-float pipeline with MSAA, ACES
-  tone mapping, bloom reserved for true emitters, a final grade pass
-  (detonation flash, chromatic aberration, vignette, grain) and a PMREM
-  environment map so metal plating reflects the sun and the planet
-- **Environment**: procedural nebula and Milky Way skydome, 7,000-star HDR
-  field, hard sunlight with a screen-space lens flare, and a ringed gas giant
-  (with ring shadow and atmosphere rim) that gives the battle scale and a
-  warm planet-shine fill
-- **Kit-built hulls, one design per class**: nine hulls assembled from
-  bevelled plating, armour belts, ribbed drums, trusses, pipe runs, greeble
-  fields, PD blisters, sensor farms and engine bells, merged into a handful
-  of draw calls per ship. Expanse rules apply: decks stack along the thrust
-  axis, so windows ring the hull and there is no bridge superstructure, only
-  a lit ops-deck band near the nose. Coilgun turrets are articulated rigs
-  that yaw and elevate to track the nearest enemy; procedural PBR plating
-  (albedo, normal, roughness/metalness) with faction paint, hazard stripes,
-  vents and rivets; lit windows that dim and flicker as the hull fails,
-  blinking nav strobes, continuous drive trunks and supported sponsons;
-  hinged radiator wings with separate fin banks, raised coolant pipes,
-  manifolds and a glow that cools toward the tips
-- **Fusion torches**: shader plumes with scrolling turbulence, shock
-  diamonds, view-dependent thickness and a white/blue/violet temperature
-  ramp; torpedo motors use the same shader in chemical orange
-- **Torpedoes and slugs**: modelled rounds with fins and faction bands,
-  camera-facing ribbon trails with a capped screen width, coilgun tracers;
-  exhaust samples retain their battle-time lifetime across frame rates and
-  fade after burnout. Blinded rounds tumble dark; retargeting rounds ping
-  and draw a lock line
-- **Continuous PD beams**: soft-core ribbon lasers with shimmer, muzzle and
-  impact glows, ablation sparks while the beam dwells
-- **Impacts**: coilgun hits throw a directional spall cone of GPU sparks and
-  velocity-stretched streaks with a cooling crater glow; torpedo warheads add
-  a fireball and a fast plasma front
-- **Two-stage ship destruction**: non-reactor kills coast dark and tumbling
-  with venting plasma jets, hull fires and failing lights until the reactor
-  breaches; the breach flashes the frame, shakes the camera, and tears the
-  hull into tumbling, red-hot chunks along its real part boundaries while
-  billowing fireball lobes, a broken ejecta ring, shock shell, sparks and streaks, and
-  a cooling gas cloud play out, with cook-offs on the wreckage. Everything is
-  driven by recorded battle time, so scrubbing reconstructs the breach,
-  tumbling debris and cook-offs at their correct ages without replaying old
-  impacts as fresh flashes
-- **Tactical contacts**: clickable faction brackets with ship names, classes
-  and hull condition; labels avoid each other and the HUD, then disappear
-  on close-up. The registry includes silhouettes and hull bars, with a
-  separate collapsible combat log
-- **Camera modes**: Free orbit, follow ship, orbit selected ship, and fleet
-  framing. Tracking preserves distance as ships move and continues through
-  wreck drift; range rings fade out in close-up
-- **Ship telemetry**: Hull, per-facing armor, modules, target, maneuver status
-- **Timeline scrubbing**: Jump to any point, adjustable playback speed (0.25x-8x),
-  event markers on the timeline, and a 20s epilogue so end-of-battle
-  destructions play out
-- **Time input**: Enter exact timestamps (MM:SS or seconds) to jump directly
-- **URL loading**: `?recording=/recordings/name.json` autoloads a staged recording
+*Fleet view keeps the formations, incoming ordnance, and ship condition in view. Select a ship to get closer.*
 
-### Headless screenshots
-
-`cd visualizer && npm test` checks hull dimensions, replay timing, trail
-sampling, camera tracking and contact label placement.
-
-`scripts/viewer_snapshot.py` drives the viewer with Playwright (installed as a
-uv dev dependency; run `uv run playwright install chromium` once) to verify
-rendering changes without a GPU:
-
-```bash
-# frame a ship
-uv run python scripts/viewer_snapshot.py --recording fleet_heur.json \
-    --time 60 --focus alpha_1 --dist 2.2 --out /tmp/cruiser.png
-# step through a kill, one frame per 1.5 s of battle time
-uv run python scripts/viewer_snapshot.py --recording fleet_heur.json \
-    --time 142.3 --focus alpha_4 --dist 5 --sequence 12 --every 1.5 --follow \
-    --hide-ui --out /tmp/kill_%02d.png
-```
-
-Recordings are read from `visualizer/public/recordings/`. Offline test
-recordings with kills come from `scripts/run_draft_battle.py --auto-draft
---no-admirals --trace` (heuristic captains, no LLM calls).
-
-### Controls
+### Viewer controls
 
 | Control | Action |
-|---------|--------|
-| Space | Play/Pause |
-| ← / → | Seek ±5 seconds |
-| Mouse drag | Orbit camera |
-| Scroll | Zoom |
-| Click ship list or contact marker | Select & focus ship |
-| F | Frame active fleets |
-| C | Toggle contact labels |
+| --- | --- |
+| **Space** | Play or pause |
+| **← / →** | Seek backward or forward five seconds |
+| **F** | Frame the active fleets |
+| **D** | Open or close intent and consequence |
+| **C** | Toggle tactical contact labels |
+| Click a ship or its registry entry | Select and focus it |
+| Drag / scroll | Orbit / zoom |
+| Timeline or time input | Seek to an exact moment |
+| **FOLLOW** button | Return to following the live battle |
 
-## Battle Modes
+The viewer includes nine procedural hull designs, articulated turrets, finned radiators and coolant pipes, fusion exhaust, point-defense beams, torpedo trails, and destruction that reconstructs correctly when you scrub backward. Ships can become drifting, burning hulks before their reactors detonate.
 
-### Single Combat Mode
+![A battlecruiser's reactor breach throwing glowing debris and plasma into space](docs/images/readme/reactor-breach.png)
 
-Classic 1v1 duel between two AI captains. Each captain:
-- Chooses their own combat personality
-- Makes tactical decisions every 30 seconds
-- Can send messages to their opponent
-- Can propose draws or surrender
+*The destruction is part of the recording: the camera can move, but the event stays tied to battle time.*
+
+## Run a live battle
+
+For simulation and model calls, install **Python 3.10+** and **uv**. From the repository root:
+
+```bash
+uv sync --locked --all-extras
+```
+
+Add your key to a local `.env` file, which is ignored by Git:
+
+```dotenv
+OPENROUTER_API_KEY=your-key-here
+```
+
+Start the viewer in one terminal with `cd visualizer && npm run dev`. In another terminal, from the repository root:
+
+```bash
+uv run python scripts/run_live_draft_battle.py \
+  --alpha-model z-ai/glm-5.3-flash \
+  --beta-model openai/gpt-5.6-luna \
+  --points 200 \
+  --max-ships 8 \
+  --turns 40 \
+  --spend-limit 8
+```
+
+Open **[the live viewer](http://localhost:5173/?live=1&decisions=1)** before the draft finishes. It shows draft progress, then switches to the battle automatically.
+
+| Setting | Behavior |
+| --- | --- |
+| Fleet selection | Both admirals independently buy ships and place formations |
+| Commanders | Each captain uses its faction's model; the admiral issues fleet and individual orders |
+| Model settings | High reasoning, up to 8,192 output tokens per request, text observations |
+| Decision timing | 30 simulated seconds per turn; the final turn gets its execution window too |
+| Starting range | Fleet anchors begin 500 km apart; formations offset individual ships |
+| End conditions | Up to 40 turns; elimination, surrender, or an agreed draw can end it earlier |
+| Spending | One $8 ceiling shared by drafting, battle calls, and retries |
+| Recording | Progress saved after each turn; full simulation frames and decision evidence |
+
+The first decision follows a 30-second opening coast, so this setup allows up to **1,230 simulated seconds**. Model calls take wall-clock time: **“Waiting for AI commanders” is a decision phase**, while the spectator server stays responsive.
+
+The launcher checks OpenRouter's model catalog, reserves costs before requests, and applies provider price ceilings. The dollar limit is a ceiling, not a price estimate. If it is reached, the runner stops and preserves the partial replay. Model availability, supported reasoning settings, and rates depend on the provider.
+
+Completed replays are staged under `visualizer/public/recordings/`. Drafts, configuration, the battle archive, and a continuously updated spending report live under `data/recordings/<run name>/`. The server stays available after the battle, and the same live link becomes a replay. Use `--no-linger` to close it on completion.
+
+[Full live and replay guide →](docs/intent-replays.md)
+
+### Try a free live battle
+
+This uses automatic fleet selection and heuristic captains, with no model calls:
+
+```bash
+uv run python scripts/run_live_draft_battle.py \
+  --offline --points 200 --max-ships 8 --turns 10
+```
+
+Use the same live viewer link. Run one battle server at a time on the default port, 8765.
+
+## From intent to consequence
+
+An order is only the beginning. A captain can ask for a salvo while launchers are reloading, turn away from a target while its guns wait for an angle, or launch a torpedo that hits several decisions later.
+
+The **Decisions** panel connects those steps:
+
+1. **Intent:** the admiral's directive and orders, the captain's public response and tool calls, and the exact recorded model inputs.
+2. **Execution:** what the engine accepted, queued, rejected, or actually executed, with feedback on helm and weapon behavior.
+3. **Consequence:** launches, misses, interceptions, impacts, module losses, and unresolved ordnance linked back to their originating decisions.
+
+![The intent and consequence panel connecting a corvette's earlier orders to later torpedo impacts](docs/images/readme/intent-consequence.png)
+
+*In the Qwen–GPT-OSS replay, a corvette's orders at 02:00 lead to impacts at 02:55 and 03:04. Click the evidence to follow the chain.*
+
+Summaries use recorded events and only reveal evidence available at the current playhead. Optional model commentary is labeled **Model interpretation**; cited event IDs are validated. Legacy recordings still show the orders and context they contain. Captains and admirals receive execution feedback in their next prompts, so the same evidence also helps them adjust during a battle.
+
+After staging the sample recordings, [open that corvette decision](http://localhost:5173/?recording=/recordings/intent_qwen_gptoss.json&decisions=1&ship=alpha_2&decision=e152&t=184).
+
+## Recorded battles
+
+These are individual matches with specific fleets and settings, not a model leaderboard. Costs below are the reported usage for those runs on September 6, 2026.
+
+| Match | What happened | Reported cost | Recording |
+| --- | --- | ---: | --- |
+| **GLM 5.3 Flash vs GPT-5.6 Luna** | Independent 200-point drafts; GLM eliminated Luna's fleet at 233 seconds, after seven turns | **$0.1946** | [Replay](data/recordings/glm_luna_200pt_live_20260906/battle_glm_5_3_flash_vs_gpt_5_6_luna_20260906_140449.json) · [Drafts](data/recordings/glm_luna_200pt_live_20260906/battle_glm_5_3_flash_vs_gpt_5_6_luna_20260906_140449.draft.json) |
+| **Qwen 3.8 Flash vs GPT-OSS 120B** | Two ships per side; Qwen won on tactical score at 300 seconds | $0.0691 | [Replay](data/recordings/intent_qwen_gptoss.json) |
+| **DeepSeek V3.2 vs GPT-4.1 mini** | Three ships per side; GPT-4.1 mini won on tactical score at 360 seconds | $0.1406 | [Replay](data/recordings/intent_deepseek_mini.json) |
+| **Heuristic vs heuristic** | Free mixed-fleet example of the execution evidence | $0 | [Replay](data/recordings/intent_heuristic.json) |
+
+GLM bought **two torpedo cruisers, two battlecruisers, and two corvettes** for 198 points. Luna spent all 200 points on **two cruisers and six battlecruisers**. Their formations and chosen doctrines are preserved alongside the replay.
+
+The two smaller model trials include optional commentary calls in their costs. [Usage details](docs/replay-trial-results.json) · [GLM–Luna run report](data/recordings/glm_luna_200pt_live_20260906/status.json) · [Older battles and commander dialogue](docs/battle-stories.md)
+
+## How it works
+
+```mermaid
+flowchart LR
+    A[Admiral: fleet plan and orders] --> C[Captains: tactical tool calls]
+    C --> S[Simulation: motion, weapons, damage]
+    S --> F[Execution feedback]
+    F --> A
+    F --> C
+    A --> R[Recording with linked event IDs]
+    C --> R
+    S --> R
+    R --> V[Live viewer and replay]
+```
+
+**Admirals** see fleet state and motion snapshots, maintain a standing battle plan, issue a fleet directive and orders to individual ships, and can communicate with the opposing admiral. Optional tactical images are available in fleet modes that enable admiral vision.
+
+**Captains** receive their own state, contacts, admiral orders, and execution feedback. Their tools match their hull's equipment. They choose targets, maneuvers, firing policies, torpedo launches, radiator state, and communications. They can discuss orders with their admiral and keep a private log for later turns.
+
+**The simulation** advances between decisions. Coasting preserves momentum; turning and acceleration take time. Ballistic rounds inherit their launcher's velocity. Guided torpedoes have finite fuel, can lose their seekers to point defense, and can retarget reachable enemies when their original target dies. Armor is divided into nose, lateral, and tail facings, with penetration damaging internal modules.
+
+It is a tactical game simulation: ordinary steps are one second, and gun hit resolution includes a probabilistic dispersion model. A fixed seed reproduces combat randomness for identical commands; it does not make live model responses deterministic. [Physics and targeting audit](docs/project-audit-2026-09-06.md)
+
+### Nine ship classes
+
+| Class | Draft points | Role |
+| --- | ---: | --- |
+| Frigate | 7 | Fast, lightly armored gunboat |
+| Corvette | 17 | Fast torpedo boat |
+| Destroyer | 18 | General-purpose gun platform |
+| Battlecruiser | 24 | Fast capital gunship |
+| Cruiser | 28 | Heavier armored gunship |
+| Battleship | 42 | Line-of-battle capital |
+| Dreadnought | 53 | Heavy fleet anchor |
+| Siege dreadnought | 54 | Dreadnought with a siege spinal weapon |
+| Torpedo cruiser | 58 | Four launchers, deep magazines, and escort point defense |
+
+Costs are derived from the current ship data and scoring formula. [Ship reference](docs/ships.md) · [Draft rules and cost model](docs/draft_mode.md)
+
+## Other ways to play
+
+### Duels and configured fleets
+
+Generate an offline duel:
 
 ```bash
 uv run python scripts/run_llm_battle.py \
-    --alpha-model MODEL \
-    --beta-model MODEL \
-    --alpha-ship-type destroyer \
-    --beta-ship-type destroyer \
-    -v
+  --alpha-model heuristic --beta-model heuristic \
+  --alpha-ship-type destroyer --beta-ship-type corvette \
+  --seed 42 --max-checkpoints 10 --trace --no-personality-selection
 ```
 
-### MCP Battle Mode (Human vs LLM)
-
-**NEW**: Control your fleet using any MCP-compatible client (Claude Code, Cursor, Copilot, OpenCode, etc.). Two MCP servers (`alpha` and `beta`) can control either or both fleets - no OpenRouter API key needed for MCP-controlled sides.
-
-**Battle configurations:**
-- **Human vs LLM**: You control alpha via MCP, beta runs on OpenRouter AI
-- **LLM vs LLM**: Both sides use OpenRouter (classic mode)
-- **Human vs Human**: Both sides connect via MCP (no API costs!)
-- **LLM vs LLM (MCP)**: Two AI agents connect via MCP servers
-
-```bash
-# Start a battle - you control alpha, Gemini controls beta
-uv run python scripts/mcp_battle.py --config data/fleet_config_mcp_example.json
-```
-
-Connect any MCP client to the server and command your fleet:
-- **Full tactical awareness**: Ship positions, velocities, armor status, weapons cooldowns
-- **Direct ship control**: Set maneuvers (INTERCEPT, EVASIVE, PADLOCK), weapons modes, targets
-- **Real-time combat**: Issue orders, signal ready, watch the battle unfold
-- **Trash talk**: Send messages to the enemy admiral (max 3 per turn)
-
-See [MCP Battle Guide](#mcp-battle-guide) below for full details.
-
-### Fleet Battle Mode
-
-Multi-ship engagements with hierarchical command:
-
-**Admirals** (one per fleet):
-- See dual-snapshot tactical view (T-15s and T=0), plus an optional rendered
-  battle image per checkpoint (top-down plot + 3D panel; `--admiral-vision`
-  or `"vision": true`, frames saved under `data/recordings/vision/`)
-- Issue strategic directives to entire fleet
-- Send specific orders to each captain
-- Can negotiate with enemy admiral
-- Propose/accept fleet-wide draws
-
-**Captains** (one per ship):
-- Receive and acknowledge admiral orders
-- Can discuss orders with their admiral (up to 2 exchanges)
-- Execute tactical maneuvers
-- Can message enemy captains
+For a configured model fleet battle, edit an [example fleet configuration](data/fleet_config_example.json), including its model IDs, then run:
 
 ```bash
 uv run python scripts/run_llm_battle.py \
-    --fleet-config data/fleet_config.json \
-    -v
+  --fleet-config data/fleet_config_example.json --trace
 ```
 
-## Fleet Configuration
+Fleet JSON supports per-ship models, optional admirals, positions and velocities, a decision interval of 20–60 seconds, a time limit, checkpoint limit, seed, and recording options. Explicit CLI settings override the corresponding JSON settings. These general launchers do not provide the live draft runner's dollar ceiling.
 
-Fleet battles use JSON configuration files:
+The [standard draft launcher](scripts/run_draft_battle.py) also supports separate admiral and captain models, heuristic crews, optional vision, and automatic drafts. Check each command's `--help` for its options.
 
-```json
-{
-  "battle_name": "Fleet Engagement: Claude vs Gemini",
-  "time_limit_s": 1200,
-  "decision_interval_s": 30.0,
-  "initial_distance_km": 400,
-  "alpha_fleet": {
-    "admiral": "openrouter/anthropic/claude-opus-5",
-    "ships": [
-      {"ship_type": "destroyer", "model": "openrouter/anthropic/claude-sonnet-5"},
-      {"ship_type": "destroyer", "model": "openrouter/anthropic/claude-sonnet-5"},
-      {"ship_type": "dreadnought", "model": "openrouter/anthropic/claude-sonnet-5"}
-    ]
-  },
-  "beta_fleet": {
-    "admiral": "openrouter/google/gemini-3.5-flash",
-    "ships": [
-      {"ship_type": "destroyer", "model": "openrouter/google/gemini-3.5-flash"},
-      {"ship_type": "destroyer", "model": "openrouter/google/gemini-3.5-flash"},
-      {"ship_type": "dreadnought", "model": "openrouter/google/gemini-3.5-flash"}
-    ]
-  }
-}
-```
+### Control a fleet through MCP
 
-**Configuration Options:**
-| Field | Description |
-|-------|-------------|
-| `battle_name` | Display name for the battle |
-| `time_limit_s` | Maximum battle duration in seconds |
-| `decision_interval_s` | Time between checkpoints, 20–60 seconds; fractional values supported (default: 30) |
-| `max_checkpoints` | Maximum decision points (default: 40) |
-| `seed` | Optional integer seed for combat randomness |
-| `unlimited_mode` | Ignore time and checkpoint limits (default: false) |
-| `record_battle` / `record_sim_trace` | Save the battle / detailed per-step frames (defaults: true / false) |
-| `personality_selection` | Let commanders select a personality before battle (default: true) |
-| `initial_distance_km` | Starting distance between fleets |
-| `admiral` | Model for fleet admiral (or `null` for no admiral) |
-| `ships` | Array of ship configurations |
-| `ship_type` | Ship class from `data/fleet_ships.json` (corvette, frigate, destroyer, cruiser, cruiser_torpedo, battlecruiser, battleship, dreadnought, dreadnought_siege) |
-| `model` | OpenRouter model ID for the captain |
-
-## CLI Reference
-
-```
-uv run python scripts/run_llm_battle.py [OPTIONS]
-```
-
-### Model & Ship Options
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `--alpha-model` | OpenRouter model for Alpha | openrouter/anthropic/claude-sonnet-5 |
-| `--beta-model` | OpenRouter model for Beta | openrouter/anthropic/claude-sonnet-5 |
-| `--alpha-ship-type` | Ship class for Alpha | destroyer |
-| `--beta-ship-type` | Ship class for Beta | destroyer |
-| `--alpha-name` | Captain name for Alpha | Derived from model |
-| `--beta-name` | Captain name for Beta | Derived from model |
-| `--alpha-ship` | Ship name for Alpha | TIS + model name |
-| `--beta-ship` | Ship name for Beta | HFS + model name |
-
-Ship type choices are derived from `data/fleet_ships.json`: `corvette`, `frigate`,
-`destroyer`, `cruiser`, `cruiser_torpedo`, `battlecruiser`, `battleship`,
-`dreadnought`, and the scenario-specific `dreadnought_siege`.
-
-### Battle Options
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `--fleet-config FILE` | JSON fleet config (enables fleet mode) | None |
-| `--distance KM` | Initial distance in km | 500 |
-| `--max-checkpoints N` | Max decision points | 40 |
-| `--time-limit SEC` | Time limit in seconds | 1200 |
-| `--decision-interval SEC` | Seconds between decisions, 20–60 | 30 |
-| `--seed N` | Seed combat randomness | None |
-| `--unlimited` | Fight until destruction/surrender/draw | False |
-| `--trace` | Record detailed sim trace (large files!) | False |
-| `--admiral-vision` | Attach rendered tactical-plot images to admiral checkpoints (fleet mode, vision-capable models) | False |
-
-With `--fleet-config`, omitted flags preserve the JSON battle settings. Explicit
-distance, time, interval, checkpoint and seed options override them. Maneuvers
-last until the next checkpoint; gun policies persist until changed and follow
-the current primary target. Partial ship positions inherit formation defaults
-for omitted axes.
-
-Use `--alpha-model heuristic --beta-model heuristic` for an offline duel without
-an API key. A seed reproduces combat randomness for identical commands; it does
-not make live model responses deterministic.
-
-Draft mode has its own CLI - `uv run python scripts/run_draft_battle.py --help`
-(budget, max ships, per-side admiral and captain models, auto-draft, vision).
-
-### Output Options
-
-| Option | Description |
-|--------|-------------|
-| `-v, --verbose` | Show detailed battle output |
-| `-q, --quiet` | Only show final result |
-| `--no-personality-selection` | Skip personality phase |
-
-### Examples
+An MCP client can command one or both sides, including fleet selection and formation placement. MCP-controlled sides make no OpenRouter calls through this project; any model usage in the external client is separate.
 
 ```bash
-# Quick 1v1 duel
-uv run python scripts/run_llm_battle.py -v
-
-# Cruiser vs Destroyer
-uv run python scripts/run_llm_battle.py \
-    --alpha-ship-type cruiser \
-    --beta-ship-type destroyer \
-    --distance 300 -v
-
-# Fleet battle with recording
-uv run python scripts/run_llm_battle.py \
-    --fleet-config data/fleet_config_claude_vs_gemini.json \
-    --trace -v
-
-# Unlimited fleet battle (fight to the death)
-uv run python scripts/run_llm_battle.py \
-    --fleet-config data/fleet_config.json \
-    --unlimited -v
+uv run python scripts/mcp_battle.py \
+  --config data/fleet_config_mcp_draft.json \
+  --draft-budget 200 --draft-max-ships 8
 ```
 
-## MCP Battle Guide
+This example gives the MCP-controlled Alpha side an automatic, heuristic opponent. Connect the client, draft a fleet, and signal `ready()` to advance. The same live viewer can spectate.
 
-Control fleets directly using the Model Context Protocol. Any MCP-compatible client works: Claude Code, Cursor, GitHub Copilot, OpenCode, or custom agents.
+[Client configuration, tools, and battle flow →](docs/mcp-battles.md)
 
-### Architecture Overview
+### Commander memory and learning
 
-Each side runs its own MCP server process, but **both connect to the same battle
-HTTP API on a single port** (8765 by default) - the faction is chosen with
-`--faction`, not with a different port. This allows **any combination** of
-human/AI control:
+Admirals maintain a standing plan and captains keep log notes within a battle. Cross-battle learning is opt-in: `scripts/refine_commander.py` distills proposed notebook lessons from recordings, then tests them in rematches with and without the lesson. Accepted entries can be injected with `--notebooks` in the general battle launchers.
 
-```
-┌─────────────────┐                         ┌─────────────────┐
-│  MCP Client     │                         │  MCP Client     │
-│  (Alpha Fleet)  │                         │  (Beta Fleet)   │
-└────────┬────────┘                         └────────┬────────┘
-         │ MCP (stdio)                               │ MCP (stdio)
-         ▼                                           ▼
-┌─────────────────┐                         ┌─────────────────┐
-│  mcp_server     │                         │  mcp_server     │
-│ --faction alpha │                         │ --faction beta  │
-└────────┬────────┘                         └────────┬────────┘
-         │  HTTP :8765                  HTTP :8765   │
-         └─────────────►┌─────────────────┐◄─────────┘
-                        │  Battle Runner  │
-                        │  + Simulation   │
-                        └─────────────────┘
-```
+Notebook injection is off by default, including in the budgeted live draft runner. [The Notebook Wars](docs/battle-stories.md#battle-results-the-notebook-wars---sonnet-5-vs-deepseek-v4-flash-2026-08-11) show why a lesson that sounds sensible still needs to survive another battle.
 
-**No OpenRouter API key needed** for MCP-controlled fleets - only for AI-controlled opponents.
-
-### Quick Start
-
-**1. Configure your MCP client** (example for Claude Code `.mcp.json`):
-
-```json
-{
-  "mcpServers": {
-    "ai-commanders-alpha": {
-      "command": "uv",
-      "args": ["run", "python", "-m", "src.llm.mcp_server", "--faction", "alpha", "--http", "http://localhost:8765"]
-    },
-    "ai-commanders-beta": {
-      "command": "uv",
-      "args": ["run", "python", "-m", "src.llm.mcp_server", "--faction", "beta", "--http", "http://localhost:8765"]
-    }
-  }
-}
-```
-
-**2. Start a battle**:
+## Development
 
 ```bash
-# Human (alpha) vs AI (beta)
-uv run python scripts/mcp_battle.py --config data/fleet_config_mcp_example.json
+uv sync --locked --all-extras
+uv run pytest tests/ -q
 
-# Human vs Human (both MCP)
-uv run python scripts/mcp_battle.py --config data/fleet_config_mcp_vs_mcp.json
+cd visualizer
+npm ci
+npm test
+npm run build
 ```
 
-**3. Connect your MCP client** and issue commands:
+The September 6 pass verified **1,695 Python tests and 15 viewer tests**, plus the production viewer build, seeded simulation comparisons, and live/replay browser checks.
 
-```
-get_battle_state()     # See full tactical picture
-set_maneuver(ship_id="alpha_1", maneuver_type="INTERCEPT", target_id="beta_1", throttle=1.0)
-set_weapons_order(ship_id="alpha_1", spinal_mode="FIRE_IMMEDIATE", turret_mode="FIRE_IMMEDIATE")
-ready()                # Signal turn complete
-```
-
-### Available MCP Tools
-
-| Tool | Purpose |
-|------|---------|
-| `get_battle_state` | Full tactical snapshot (ships, projectiles, chat) |
-| `get_ship_status` | Detailed status for one friendly ship |
-| `set_maneuver` | Movement: INTERCEPT, EVASIVE, BRAKE, MAINTAIN, PADLOCK, HEADING |
-| `set_weapons_order` | Firing mode: FIRE_IMMEDIATE, FIRE_WHEN_OPTIMAL, HOLD_FIRE, FREE_FIRE |
-| `set_primary_target` | Set which enemy a ship engages |
-| `launch_torpedo` | Fire torpedoes at target |
-| `set_radiators` | Extend/retract radiators for heat management |
-| `send_message` | Trash talk the enemy (max 3/turn) |
-| `propose_fleet_draw` | Propose ending the battle |
-| `accept_fleet_draw` | Accept enemy's draw proposal |
-| `surrender_fleet` | Give up |
-| `ready` | Signal all commands issued, advance simulation (commits your draft during the draft phase) |
-| `battle_plot` | ASCII tactical map (xy/xz/yz projections) |
-| `get_draft_state` | Draft phase: your budget, the costed catalog, current picks |
-| `select_fleet` | Draft phase: buy hulls against your point budget |
-| `set_formation` | Draft phase: place ships (km offsets, +x toward the enemy) |
-
-### Maneuver Types
-
-| Maneuver | Behavior |
-|----------|----------|
-| `INTERCEPT` | Burn toward target at specified throttle |
-| `EVASIVE` | Threat-aware dodging: wobbles vs guns, auto-RUNs from guided torpedoes, auto-PRESENTs thickest armor in the final seconds (needs throttle!) |
-| `BRAKE` | Flip and decelerate |
-| `MAINTAIN` | Coast at current velocity |
-| `PADLOCK` | Coast while keeping nose pointed at target (good for shooting) |
-| `HEADING` | Fly in specific 3D direction |
-
-### Key Concepts
-
-**Orders reset every turn!** You must re-issue maneuver and weapons orders each checkpoint. Ships default to MAINTAIN (coasting) if you don't command them.
-
-**Visibility**: Currently full information for both sides. You see complete friendly status, and for enemies `get_battle_state` returns exact hull %, per-facing armor damage, shot/hit counters and which of your ships they are targeting - not a sensor-limited estimate. The tactical map drawn by `battle_plot` omits enemy hull, but the underlying state does not, so treat the map as a display choice rather than a fog-of-war model. (Implementing real fog of war is an open design decision - see CONTRIBUTING.)
-
-**Turn flow**:
-1. Simulation runs 30 seconds
-2. You receive battle state via `get_battle_state()`
-3. Issue commands for each ship
-4. Call `ready()` to advance
-5. Repeat until victory
-
-### Draft Mode over MCP
-
-MCP commanders can play draft mode: buy a fleet against a point budget and
-place its starting formation before the first shot. Add a `draft` block to the
-config (ship lists become optional) or pass `--draft` on the CLI:
+For screenshots, install Playwright's browser once, stage a recording as above, then capture a frame:
 
 ```bash
-# MCP alpha drafts vs a deterministic auto-drafted opponent (no API key)
-uv run python scripts/mcp_battle.py --config data/fleet_config_mcp_draft.json
-
-# MCP alpha drafts vs an LLM admiral who also drafts
-uv run python scripts/mcp_battle.py --config data/fleet_config_mcp_draft_vs_llm.json
-
-# Budget overrides work from the CLI too
-uv run python scripts/mcp_battle.py --config data/fleet_config_mcp_draft.json \
-    --draft-budget 200 --draft-max-ships 10
+uv run playwright install chromium
+uv run python scripts/viewer_snapshot.py \
+  --recording glm_luna_200pt_live_20260906.json \
+  --time 100 --focus alpha_1 --dist 2.2 --out /tmp/cruiser.png
 ```
 
-The battle waits in a draft phase before any ship exists. From your MCP client:
+The screenshot helper starts a local viewer if needed, or reuses the running one. It also supports explicit camera placement, hidden UI, and destruction sequences. [README screenshot sources](docs/images/readme/README.md)
 
-```
-get_draft_state()   # budget, costed hull catalog, formation limits
-select_fleet(ships=[{"ship_type": "destroyer", "count": 3}], rationale="wall")
-set_formation(placements=[{"ship_name": "Falchion-1", "x_km": 20, "y_km": 0}],
-              formation_name="vanguard")   # optional, repeatable
-ready()             # commit - battle starts when both sides have committed
-```
+| Location | Contents |
+| --- | --- |
+| `src/simulation.py`, `src/physics.py` | Combat loop and ship motion |
+| `src/llm/` | Captains, admirals, tools, drafts, recording, budgets, MCP |
+| `src/replay_evidence.py` | Command and ordnance execution provenance |
+| `visualizer/src/` | Three.js scene, replay loader, controls, decision and contact panels |
+| `scripts/` | Battle launchers, analysis tools, screenshot capture |
+| `data/fleet_ships.json` | Ship and equipment specifications |
+| `data/recordings/` | Archived battles and draft evidence |
+| `tests/`, `visualizer/tests/` | Simulation and viewer regressions |
 
-Selections are validated server-side (budget, hull names, ship cap) with the
-error returned to the tool call; formations are clamped to the ±150 km cube
-with 2 km minimum separation, exactly like the LLM admiral draft in
-`scripts/run_draft_battle.py`. Non-MCP opponents draft through their admiral
-model, or fall back to the deterministic auto-draft when no admiral is
-configured.
+Useful reading: [intent replays](docs/intent-replays.md), [draft mode](docs/draft_mode.md), [admiral vision](docs/admiral_vision.md), and the [project audit](docs/project-audit-2026-09-06.md). The [original architecture notes](docs/architecture/) are historical design documents; the implementation has since evolved.
 
-### Watching an MCP Battle Live
+Contributions are welcome. Include a reproducible scenario for simulation changes, and before/after screenshots for visual changes.
 
-MCP battles can be watched in the 3D viewer while they run. The battle's HTTP
-server (port 8765) exposes the recording-so-far plus per-ship predicted paths,
-and the Vite viewer polls it:
+## Attribution and license
 
-```bash
-# Terminal 1: the battle (record_sim_trace must be on - it is in the examples)
-uv run python scripts/mcp_battle.py --config data/fleet_config_mcp_draft.json
+Inspired by **Terra Invicta**, developed by Pavonis Interactive and published by Hooded Horse. Ship data and combat parameters were translated from the game's data; this project implements its own simulation, model integration, and viewer.
 
-# Terminal 2: the viewer
-cd visualizer && npx vite
-# then open http://localhost:5173/?live=1
-```
-
-The live view follows the battle head as checkpoints resolve and overlays each
-ship's **predicted trajectory to the next checkpoint** (constant-acceleration
-extrapolation of its current burn) with a marker where the ship will be when
-the next decision fires - so you can see the consequences of your orders
-unfold before you commit the next turn. The draft phase shows a picking status
-splash until the fleets exist. Everything runs through `GET /live/recording`
-(incremental via `?since_t=`) and `GET /live/predictions`; a dev harness,
-`scripts/fake_live_server.py`, replays any saved recording through the same
-endpoints for viewer work without a running battle.
-
-### Example Fleet Config (MCP vs AI)
-
-```json
-{
-  "battle_name": "MCP vs Grok Fleet Battle",
-  "time_limit_s": 600,
-  "decision_interval_s": 30,
-  "initial_distance_km": 300,
-  "alpha_fleet": {
-    "mcp": {
-      "enabled": true,
-      "transport": "http",
-      "http_port": 8765,
-      "name": "Claude Commander"
-    },
-    "ships": [
-      {"ship_id": "alpha_1", "ship_type": "destroyer", "model": "mcp"},
-      {"ship_id": "alpha_2", "ship_type": "destroyer", "model": "mcp"}
-    ]
-  },
-  "beta_fleet": {
-    "admiral": {"model": "openrouter/x-ai/grok-4.20", "name": "Admiral Grok"},
-    "ships": [
-      {"ship_id": "beta_1", "ship_type": "destroyer", "model": "openrouter/x-ai/grok-4.20"},
-      {"ship_id": "beta_2", "ship_type": "destroyer", "model": "openrouter/x-ai/grok-4.20"}
-    ]
-  }
-}
-```
-
-### Battle Results: Human (MCP) vs Gemini (2026-01-17)
-
-| Fleet | Controller | Ships | Result |
-|-------|------------|-------|--------|
-| Alpha | Human via MCP (with Claude Opus 4.5 as copilot) | 2 Destroyers, 1 Dreadnought | **VICTORY** (3/3 ships) |
-| Beta | Gemini 3 Pro (OpenRouter) | 2 Destroyers, 1 Dreadnought | Eliminated (0/3 ships) |
-
-- **Duration**: 990s (16.5 minutes)
-- **Outcome**: Beta fleet eliminated
-- **Notable**: Gemini used smart evasive tactics while focusing fire on alpha_1, but was overwhelmed by coordinated intercept + fire orders
-- **Key lesson**: Remember to set throttle on EVASIVE maneuvers and re-issue orders every turn!
-
-### Battle Results: The Notebook Wars - Sonnet 5 vs DeepSeek v4 Flash (2026-08-11)
-
-First battles with standing battle plans, parallel checkpoints, and (game 2)
-commander notebooks injected.
-
-**Game 1 - 100-pt draft, clean slate.** Sonnet's mixed 8-hull wall (4 destroyers,
-2 frigates, 2 torpedo corvettes) def. DeepSeek's 6-destroyer "PD Wall"
-195.1 : 115.8 on points - a classic Newtonian double joust: formations held
-through the first blow-through pass, dissolved into a 300 km melee by the second,
-one kill (torpedo-assisted focus fire). Both admirals then wrote notebook lessons
-via `refine_commander.py analyze` - Sonnet critiqued its own target churn,
-DeepSeek concluded "kill the torpedo carriers first."
-
-**Game 2 - 200-pt rematch, lessons injected.** Sonnet drafted six torpedo
-cruisers (288 rounds); DeepSeek's lesson steered it to buy carriers of its own,
-but anchored to a 3-battleship shield wall that advanced into the storm.
-**Beta fleet eliminated 6-0 in 215 seconds.** Mutual lead-ship decapitation at
-T+110, every Sovereign gutted by 8-11 modules per salvo wave, draw proposed by
-DeepSeek's own standing-plan abort clause ("2v6, abort condition met") and
-answered with torpedoes.
-
-- **Notable**: DeepSeek's counter-battery killed exactly the two cruisers it
-  targeted, on the cadence its plan scheduled - a faithfully-applied lesson that
-  still lost to a 1.0g fleet's inability to refuse the merge. True lessons can be
-  traps; that's why the rematch gate exists.
-- **Key lesson**: at 200 points the torpedo-saturation meta is even more
-  dominant than at 100. Addressed by the 2026-08-13 pricing rebalance, which
-  charges torpedo hulls for magazine depth x per-round yield: `cruiser_torpedo`
-  went 30 -> 58 pts (see `docs/draft_mode.md`).
-
-## Ship Classes
-
-| Ship | Accel | 90° Turn | Armor (N/L/T) | Weapons | Role |
-|------|-------|----------|---------------|---------|------|
-| Corvette | 3.0g | 12s | 212/36/42 cm | Torpedoes + PD | Torpedo boat |
-| Frigate | 3.0g | 15s | 71/12/14 cm | Coilgun + PD | Fast attack |
-| Destroyer | 2.0g | 21s | 151/26/30 cm | Spinal + coilgun | Balanced combatant |
-| Cruiser | 1.5g | 28s | 240/41/48 cm | Spinal + coilguns | Heavy firepower |
-| Torpedo Cruiser | 1.5g | 28s | 241/41/48 cm | 4x torpedo launchers + 4 PD | Saturation salvos |
-| Battlecruiser | 1.5g | 28s | 177/30/35 cm | Spinal + coilguns | Fast capital |
-| Battleship | 1.0g | 37s | 262/45/52 cm | Spinal + 3 heavy coilguns | Line combat |
-| Dreadnought | 0.75g | 50s | 251/43/50 cm | Spinal + 5 heavy coilguns | Fleet anchor |
-
-The `dreadnought_siege` variant swaps the spinal for a 7.2 GJ Heavy Siege Coiler.
-
-Armor thickness is derived from armor mass over facing area, so a small hull carrying
-heavy armor ends up *thicker* than a larger one: the corvette is a torpedo boat that must
-survive its attack run, so it carries a 5.8x
-thicker nose than flank. The frigate has the same hull and acceleration but fights at
-range, and carries less than half the armor.
-
-The torpedo cruiser (`cruiser_torpedo`) carries no guns at all: 4 launchers with 12
-rounds each permit up to 12 launches in a 30s decision: four immediately, four
-after 12s, and four after 24s, subject to remaining ammunition. Queued rounds
-expire at the next checkpoint or if their target dies. Four simultaneous rounds can saturate a
-dreadnought's point defense and land the hits that kill it in one coordinated strike.
-The tonnage freed by dropping the gun batteries went into armor.
-
-**Armor Sections:**
-- **Nose (N)**: Heaviest armor, faces enemy during attack runs
-- **Lateral (L)**: Side armor, thinnest - vulnerable during turns
-- **Tail (T)**: Rear armor, exposed when fleeing
-
-### Combat Mechanics
-
-**Armor is aspect-dependent.** A round strikes whichever facing it arrives at: within
-**30°** of the nose it hits NOSE armor, beyond that LATERAL, and past 150° TAIL. Holding
-the threat inside 30° is the single largest survivability lever in the game - larger than
-evasion. The break-away turn after an attack run is the moment of maximum danger.
-
-**Torpedoes guide themselves and damage scales with the square of impact speed.** A
-Trident (250 kg penetrator, 14 km/s of onboard delta-v, 12g) steers with augmented
-proportional navigation: guidance holds closure at a floor of ~12 km/s and dumps its
-remaining delta-v in a terminal burn, so even a zero-closure launch impacts at
-~13.5 km/s (~23 GJ). Launched head-on at 26 km/s closure it arrives at ~28 km/s for
-~95 GJ - a spinal gun round is 4.3 GJ. Once a torpedo's No-Escape-Zone test says a
-3g-limited target can no longer get away, it commits and cannot be dodged - only shot
-down or tanked. Measured hits to kill (nose impacts): 4 at 14 km/s or 1 at 26 km/s
-for a destroyer, 6 or 2 for a dreadnought. A launch at a receding, evading ship is
-wasted - it outruns the round's delta-v.
-
-**Point defense is a continuous-dwell beam, and salvo timing decides what gets through.**
-Each PD laser dwells on incoming torpedoes across its whole ~250 km envelope, with
-coupling improving as range closes; one turret kills the seeker on ~5 km/s of closure,
-and every friendly turret in range of the threat corridor stacks. Two consequences:
-
-- **Blinded is not stopped.** A seeker-killed torpedo coasts on ballistically and still
-  hits a ship flying straight (measured: 18/18 blinded rounds hit a non-evading
-  battleship). Ships under torpedo attack must EVADE or every PD kill is wasted.
-- **Simultaneous time-on-target beats trickled fire.** Rounds arriving together split
-  the defender's dwell: against 4 turrets, 4 simultaneous salvos put 24/24 rounds
-  through, while the same launchers spaced 30s apart put through only 12/24. Admirals
-  can order coordinated fleet-wide salvos for exactly this reason.
-
-**Torpedoes retarget when their victim dies first.** A round whose target is destroyed
-mid-flight measures its own seeker health and acquires a new reachable enemy: a fresh
-seeker picks the intercept that leaves the most delta-v in the tank (surplus becomes
-terminal closing speed), while a PD-singed seeker races the fastest intercept before it
-goes blind. Blinded and burned-out rounds still orphan. Overkill concentration therefore
-chains through formations; the counter is spacing your units beyond an orphan's steering
-envelope, which turns enemy overkill back into waste.
-
-Under EVASIVE, threatened ships handle torpedoes automatically: RUN (burn away from a
-guided round to cut closure and buy PD dwell time) and, in the final seconds of an
-unavoidable hit, PRESENT (rotate the thickest remaining armor onto the impact bearing).
-
-See [docs/ships.md](docs/ships.md) for full shots-to-kill tables (regenerate with
-`uv run python scripts/calculate_shots_to_kill.py`).
-
-## Features
-
-- **Newtonian Physics**: Real orbital mechanics, delta-v budgets, acceleration limits
-- **Ship Classes**: 9 hulls from corvette to siege dreadnought, including a dedicated torpedo cruiser
-- **Armor System**: Layered armor (nose/lateral/tail), ablation mechanics, penetration
-- **Weapons**: Spinal coilguns (high damage), turret coilguns, torpedoes, point defense -
-  all kinetic impacts scale with closing speed
-- **Torpedo Warfare**: Augmented proportional navigation with No-Escape-Zone commit,
-  terminal burns, coordinated fleet salvos, seeker-health-aware retargeting when a
-  target dies mid-flight, and threat-aware evasion (RUN/PRESENT)
-- **Draft Mode**: Point-budget fleet building, 3D formation placement, and
-  rule-based HeuristicCaptains as zero-cost crews
-- **Admiral Vision**: Rendered battle images attached to vision-capable
-  admirals' checkpoint prompts
-- **Point Defense**: Continuous-dwell lasers with per-turret capacitors, real heat and
-  power costs, and stacking escort coverage
-- **Two-Stage Kills**: a killing blow that misses the reactor leaves a dying hulk -
-  untargetable, torch sputtering, tumbling adrift - that detonates 0-30s later;
-  ordnance already in flight can still strike it and hasten (or trigger) the blast
-- **Per-Ship Tool Surface**: Captains only get the tools their hull actually mounts -
-  gun fire control on gun ships, torpedo launch on torpedo ships
-- **Thermal Management**: Heat sinks, radiators (extend for cooling, retract for protection)
-- **Fleet Command**: Admiral-captain hierarchy with orders, discussions, and coordinated
-  torpedo salvo timing
-- **AI Personalities**: LLMs choose their own combat personality
-- **Communications**: Captains can message enemies, admirals can negotiate
-- **Battle Recording**: Full replay data saved as JSON
-- **Tactical Scoring**: Winner determined by tactical advantage if time expires
-- **Prompt Caching**: Captain doctrine is a stable cacheable prefix (~90% of the prompt),
-  so long battles reuse it across checkpoints instead of re-paying full input price
-
-## Supported Models
-
-Any model on OpenRouter works. Tested with (prices are USD per million
-input/output tokens and are the OpenRouter list prices at time of writing -
-check OpenRouter for current rates):
-
-| Model | Input $/M | Output $/M | Notes |
-|-------|-----------|------------|-------|
-| `anthropic/claude-opus-5` | 5.00 | 25.00 | Flagship; strongest tactical reasoning |
-| `anthropic/claude-sonnet-5` | 2.00 | 10.00 | Default for both fleets |
-| `openai/gpt-5.6-terra` | 1.00 | 6.00 | Lost the 200-pt draft war to Kimi K3 |
-| `moonshotai/kimi-k3` | 3.00 | 15.00 | Won the 200-pt draft war; slow reasoning bursts |
-| `deepseek/deepseek-v4-flash-0731` | ~0.3 | ~1.2 | Beat Sonnet 5 in the 150-pt draft war; cheap |
-| `google/gemini-3.5-flash` | 1.50 | 9.00 | |
-| `x-ai/grok-4.20` | 1.25 | 2.50 | |
-
-A flagship-vs-cheap pairing (e.g. `anthropic/claude-opus-5` vs a DeepSeek
-flash build) makes for a good asymmetric-skill battle - though the recorded
-draft wars suggest cheap doctrine-optimizers punch far above their price.
-
-## Project Structure
-
-```
-ai-commanders/
-├── src/
-│   ├── physics.py          # Newtonian mechanics, vectors, trajectories
-│   ├── simulation.py       # Battle simulation engine, evasion (RUN/PRESENT)
-│   ├── combat.py           # Weapons, armor, damage resolution
-│   ├── torpedo.py          # Torpedo flight: APN guidance, NEZ, terminal burn
-│   ├── pointdefense.py     # Continuous-dwell PD lasers, per-turret capacitors
-│   ├── projectile.py       # Coilgun round flight and hit resolution
-│   ├── firecontrol.py      # Hit probability, fire solutions
-│   ├── targeting.py        # Target selection and tracking
-│   ├── maneuvers.py        # Maneuver execution (INTERCEPT, EVASIVE, ...)
-│   ├── damage.py           # Damage application and armor ablation
-│   ├── modules.py          # Ship module layout, damage propagation
-│   ├── geometry.py         # Ship geometry, facing/aspect determination
-│   ├── thermal.py          # Heat sinks and radiators
-│   ├── power.py            # Reactor output and bus draw
-│   ├── battle_report.py    # Post-battle statistics
-│   ├── scenarios.py        # Scripted battle scenarios
-│   └── llm/
-│       ├── client.py       # OpenRouter HTTP client (httpx, no vendor SDK)
-│       ├── captain.py      # LLMCaptain - ship-level decisions
-│       ├── heuristic_captain.py # Rule-based zero-cost captain (draft mode)
-│       ├── admiral.py      # LLMAdmiral - fleet-level command
-│       ├── admiral_view.py # Admiral vision: tactical-plot rendering
-│       ├── fleet_draft.py  # Draft mode: costed catalog, selection, formations
-│       ├── prompts.py      # System prompts, doctrine, personality selection
-│       ├── tools.py        # Captain tools (matched to each hull's armament)
-│       ├── admiral_tools.py # Admiral tools (orders, coordinated salvos)
-│       ├── victory.py      # Victory conditions, tactical scoring
-│       ├── fleet_config.py # Fleet configuration loading
-│       ├── battle_runner.py # Orchestrates battles
-│       ├── battle_recorder.py # Records battles for replay
-│       ├── communication.py # Messaging system
-│       ├── mcp_server.py    # MCP protocol server (tools + resources)
-│       ├── mcp_controller.py # MCP fleet controller (replaces admiral)
-│       ├── mcp_state.py     # Thread-safe state management
-│       └── mcp_http_server.py # HTTP API for distributed MCP
-├── visualizer/             # 3D battle replay viewer (Three.js + Vite)
-│   ├── src/
-│   │   ├── main.js         # Entry point, UI orchestration
-│   │   ├── SceneManager.js # Three.js scene orchestration (ships, effects)
-│   │   ├── render/         # Environment, PostFX, Hulls, Torch, Trails,
-│   │   │                   # Particles, Explosion, procedural Textures
-│   │   ├── BattleLoader.js # JSON recording parser
-│   │   ├── Interpolator.js # 1Hz → 60FPS interpolation
-│   │   ├── TimeController.js # Playback controls
-│   │   ├── CameraController.js # Camera modes
-│   │   └── shipSilhouettes.js # 2D telemetry silhouettes
-│   ├── index.html
-│   └── styles.css
-├── data/
-│   ├── fleet_ships.json    # Ship specifications
-│   ├── fleet_config_*.json # Fleet battle configurations
-│   ├── fleet_config_mcp_*.json # MCP battle configurations
-│   └── recordings/         # Battle recordings (JSON) + draft sidecars
-│       └── vision/         # Admiral-vision frames per battle
-├── .mcp.json               # Claude Code MCP server configuration
-├── scripts/
-│   ├── run_llm_battle.py   # CLI for running AI vs AI battles
-│   ├── run_draft_battle.py # CLI for draft-mode battles
-│   ├── generate_test_battle.py # Scripted no-LLM recordings for the viewer
-│   ├── render_admiral_view.py  # Render a tactical plot from a recording
-│   └── mcp_battle.py       # CLI for MCP-controlled battles
-└── tests/                  # Test suite (~1560 tests)
-```
-
-## Running Tests
-
-```bash
-uv run pytest tests/ -v
-```
-
-## Fleet Battle Results
-
-### Kimi K3 vs GPT-5.6 Terra: The First Retargeting War (2026-08-06)
-
-**Configuration**: 200-point draft battle, 12-ship cap, both admirals flying
-their own ships, admiral vision on both sides.
-
-| Fleet | Draft | Result |
-|-------|-------|--------|
-| Kimi K3 | 5 torpedo cruisers + 5 corvettes ("Screened Torpedo Line") | **VICTORY** (6/10 ships) |
-| GPT-5.6 Terra | 4 torpedo cruisers + 5 destroyers ("Falchion PD Spearhead") | Eliminated (0/9 ships) |
-
-- 171 torpedoes launched, 68 impacts, 81 retargets, **one** gun hit all battle
-- One deliberately oversized 16-round wave chained through three destroyers
-  via retargeting
-- Terra's spinal gun line died charging into the salvo corridor without ever
-  reaching effective range
-
-### DeepSeek v4 Flash vs Claude Sonnet 5 Draft War (2026-08-06)
-
-**Configuration**: 150-point draft battle, both admirals flying their own ships.
-
-| Fleet | Draft | Result |
-|-------|-------|--------|
-| DeepSeek v4 Flash | 2 torpedo cruisers, battleship, 2 destroyers, corvette, frigate | **VICTORY** (7/7 ships, 404.7 vs 78.8) |
-| Claude Sonnet 5 | 3 corvettes, 2 destroyers, 2 battlecruisers, battleship | 5/8 ships, capital line destroyed |
-
-- DeepSeek ran textbook saturation doctrine: synchronized time-on-target
-  waves, overkill management ("do NOT waste rounds - it already has 10
-  inbound"), and an 18-turret PD wall that blinded all 14 of Sonnet's
-  counter-torpedoes
-- Sonnet's best moment: a captain respectfully refusing a literal order -
-  "I'm executing EVADE rather than a literal INTERCEPT burn" - with 17
-  rounds inbound
-
-### Claude vs Gemini Fleet Engagement (2026-01-14)
-
-**Configuration**: 3v3 fleet battle (2 Destroyers, 1 Dreadnought per side)
-
-| Fleet | Admiral | Captains | Result |
-|-------|---------|----------|--------|
-| Alpha | Claude Sonnet 4.5 | Claude Haiku 4.5 | **VICTORY** (3/3 ships) |
-| Beta | Gemini 2.5 Pro | Gemini 2.5 Flash | Eliminated (0/3 ships) |
-
-- **Duration**: 1446s (24 minutes), 48 checkpoints
-- **Outcome**: Beta fleet eliminated
-
-### Claude vs Grok Fleet Engagement (2026-01-14)
-
-**Configuration**: 4v4 fleet battle (1 Frigate, 2 Destroyers, 1 Cruiser per side)
-
-| Fleet | Admiral | Captains | Result |
-|-------|---------|----------|--------|
-| Alpha | Claude Sonnet 4.5 | Claude Haiku 4.5 | **VICTORY** (4/4 ships) |
-| Beta | Grok Code Fast 1 | Grok 4.1 Fast | Eliminated (0/4 ships) |
-
-- **Duration**: 2223s (37 minutes), 74 checkpoints
-- **Outcome**: Beta fleet eliminated, Alpha fleet took no losses
-
-## Battle Highlights
-
-### Claude-Haiku Calls Out Grok's Fake Diplomacy
-
-Grok proposed a "ceasefire" while secretly closing distance. Claude-Haiku wasn't fooled:
-
-> **Grok**: "I propose we establish terms... I'm separating at 2.2 km/s..."
-
-> **Claude-Haiku**: "I appreciate the sophisticated argument. Genuinely. But you've just told me you're separating at 2.2 km/s while my sensors show us **closing at 3.07 km/s**. Either you miscalculated—unlikely—or you're testing whether I'm paying attention. I am.
->
-> We're past the negotiation phase. **Spinal round incoming.**"
-
-### Kimi K3's Running Ledger (2026-07-26)
-
-Kimi K3 vs Claude Sonnet 5, destroyer duel. Kimi won on tactical score (91.3 vs 68.7)
-with a 50% hit rate against Sonnet's 14% - it held fire for good geometry while Sonnet
-opened up at 382 km into 20% shots. It also kept a running actuarial commentary, quoting
-real numbers off its own scoreboard:
-
-> **Kimi K3:** "Well met, beta. The math as I read it: your survival odds are roughly one
-> in three and decaying with every kilometer I close. I offer surrender exactly once, and
-> I offer it warmly - now. Otherwise, let us write something beautiful together."
-
-> **Sonnet 5:** "Kind offer, but I think I'll see how the geometry plays out first. Closing."
-
-> **Kimi K3:** "Beta, your separation vector is 4.06 km/s of pure arithmetic - and it
-> solves for me. I'm turning back into you now. Your survival estimate: still one in
-> three, and the denominator is patient."
-
-> **Kimi K3:** "Ledger update, beta: 37.3 to 10.4, and you're spending 3.17 km/s of
-> delta-v just to leave. Your survival odds now read one in four - and that spinal round
-> you mailed to my tail? I've already priced it in. The offer of surrender remains open,
-> once."
-
-Sonnet sent one message the entire battle.
-
-### Kimi K3 Reads the Patch Notes (2026-08-06)
-
-Torpedo retargeting shipped in the morning; by evening Kimi K3's admiral had
-built its entire mid-game doctrine on it:
-
-> "WAVE 2, FIRE NOW to stack time-on-target with the 10 rounds already in
-> flight... their PD can blind ~11 per transit, the rest leak; both cruisers
-> die. **Surplus live rounds retarget on their own, overkill is acceptable.**"
-
-And the coldest line of the war, to its own battleship captain:
-
-> "do NOT waste a single shot on OCS Sovereign (enemy battleship); it already
-> has 9 torpedoes inbound and **is dead**."
-
-The two admirals exchanged zero messages the entire battle. All war, no words.
-
-### The Best Trash Talk Award
-
-Goes to Grok for this masterpiece of space absurdism:
-
-> "Claude-Haiku, I LOVE the confidence! But here's a cosmic truth: you're accelerating INTO MY CROSSHAIRS. Let's see **whose vacuum is louder.** Prepare for enlightenment."
-
-Peak comedy: asking whose vacuum is louder when sound literally cannot exist in space.
-
-### Claude Sonnet vs GPT-5.2: The Philosophy Duel
-
-Two AIs spent 870 seconds having a philosophical debate about geometry, tempo, and the nature of warfare - while shooting at each other.
-
-> **Claude**: "A waltz requires partners moving in harmony, Captain. But I prefer asymmetric rhythms."
-
-> **Claude**: "Satisfaction is a luxury, Captain. At 21km with 86% probability... Time to see how well your armor holds at point-blank range."
-
-## Victory Conditions
-
-**Single Battle:**
-- Ship destruction (hull ≤ 0%)
-- Surrender
-- Mutual draw agreement
-- Time limit → tactical advantage scoring
-
-**Fleet Battle:**
-- All enemy ships destroyed
-- Fleet surrender
-- Admiral mutual draw
-- Time limit → fleet tactical advantage scoring
-
-Tactical advantage considers: ships destroyed, hull integrity, damage dealt, accuracy.
-
-## Contributing
-
-PRs welcome! The physics is based on Terra Invicta mechanics. The LLM integration uses tool calling for clean action parsing.
-
-## License
-
-MIT License - see [LICENSE](LICENSE)
-
-## Ideas for Future Development
-
-- ~~MCP draft support~~ **DONE**: MCP clients draft fleets and formations via
-  `get_draft_state` / `select_fleet` / `set_formation` / `ready`
-- **Rebalance torpedo hulls**: Saturation doctrine has won every competitive
-  draft war so far - the torpedo cruiser's 30-point cost, the PD blind
-  threshold, and round count are the levers
-- ~~Real-time visualizer~~ **DONE**: the viewer's live mode polls the battle
-  HTTP API and overlays predicted paths to the next checkpoint
-- ~~Human vs LLM battles~~ **DONE** via MCP integration! Any MCP client can now control fleets
-- **Dedicated battle UI**: Build a proper tactical interface instead of relying on MCP client chat
-
-Note: Some features intentionally not implemented to avoid being too close to Terra Invicta.
-
-## Retrospect
-
-Development was fun and it told me that the foundation models seem to be very happy to shoot at each other and follow command orders if one just convinces them that this is just a game. However it is apparent that the LLMs tested here have some understanding of strategy, so that was very interesting to see. Makes me wonder, what will come in the future.
-
----
-
-*"A waltz requires partners moving in harmony, Captain. But I prefer asymmetric rhythms."* - Claude Sonnet 4
+Project code is licensed under the [MIT License](LICENSE).
