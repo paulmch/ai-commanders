@@ -29,6 +29,8 @@ destruction effect instead.
 """
 
 import argparse
+import os
+import signal
 import socket
 import subprocess
 import sys
@@ -100,13 +102,26 @@ def start_vite(port: int) -> subprocess.Popen | None:
     proc = subprocess.Popen(
         ["npx", "vite", "--port", str(port), "--strictPort", "--host", "127.0.0.1"],
         cwd=VIS_DIR, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True,  # own process group: stop npx AND its vite child
     )
     for _ in range(100):
         if port_open(port):
             return proc
         time.sleep(0.1)
-    proc.kill()
+    stop_vite(proc)
     raise RuntimeError("vite did not start")
+
+
+def stop_vite(proc: subprocess.Popen) -> None:
+    """Terminate npx and the node/vite child it spawned (killing only npx
+    orphaned vite, which kept serving on the port)."""
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
 
 
 def parse_vec(s: str | None):
@@ -193,7 +208,7 @@ def main() -> int:
                 wait_frames(2)
                 page.evaluate(FRAME_JS, frame_opts)
                 wait_frames(2)
-                page.screenshot(path=path)
+                page.screenshot(path=path, timeout=180_000)  # llvmpipe under load
                 print("wrote", path)
 
             # A clean seek: jump a little before the target so the first
@@ -221,7 +236,7 @@ def main() -> int:
                     wait_frames(2)
                     path = args.out % i if "%" in args.out else args.out
                     bt = page.evaluate("window.visualizer.timeController.currentTime")
-                    page.screenshot(path=path)
+                    page.screenshot(path=path, timeout=180_000)  # llvmpipe under load
                     print(f"wrote {path}  battle t={bt:.1f}")
             if errors:
                 print("--- console errors/warnings ---")
@@ -230,11 +245,7 @@ def main() -> int:
             browser.close()
     finally:
         if vite:
-            vite.terminate()
-            try:
-                vite.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                vite.kill()
+            stop_vite(vite)
     return 0
 
 
