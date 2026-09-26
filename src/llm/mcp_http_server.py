@@ -468,12 +468,17 @@ class MCPHttpServer:
 
         Serves the frame's recorded `plan` (movement-only look-ahead that
         follows the ship's own guidance and evasion, with `sigma` = 1-sigma
-        wobble dispersion of the checkpoint position, see
+        dispersion of the checkpoint position, see
         src/trajectory_prediction.py). Frames without a plan fall back to
         constant-acceleration extrapolation (a derived from the last two
         frames, sigma 0), sampled every 2 s of sim time.
+
+        `stale` (per ship, and top level when any ship's is) is true while
+        the battle sits at a checkpoint whose orders are not applied yet
+        (commanders deliberating): the path flies out the expiring orders.
+        It clears once the orders land and the frame is re-predicted.
         """
-        empty = {"t": 0.0, "t_checkpoint": 0.0, "ships": {}}
+        empty = {"t": 0.0, "t_checkpoint": 0.0, "ships": {}, "stale": False}
         runner = self._battle_runner
         recorder = getattr(runner, "recorder", None) if runner else None
         rec = getattr(recorder, "recording", None) if recorder else None
@@ -502,6 +507,7 @@ class MCPHttpServer:
                     "checkpoint_pos": plan["path"][-1],
                     "sigma": plan.get("sigma", 0.0),
                     "dt": plan.get("dt"),
+                    "stale": bool(plan.get("stale", False)),
                 }
                 continue
             p1 = state["pos"]
@@ -524,12 +530,14 @@ class MCPHttpServer:
                 path.append(_at(dt))
                 dt += 2.0
             path.append(_at(horizon))
-            ships[ship_id] = {"path": path, "checkpoint_pos": path[-1], "sigma": 0.0}
+            ships[ship_id] = {"path": path, "checkpoint_pos": path[-1], "sigma": 0.0,
+                              "stale": False}
 
         return web.json_response({
             "t": t1,
             "t_checkpoint": t_cp,
             "ships": ships,
+            "stale": any(s["stale"] for s in ships.values()),
         })
 
 

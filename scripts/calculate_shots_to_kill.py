@@ -215,13 +215,31 @@ def format_shots(result: SimulationResult) -> str:
     return str(result.shots_to_kill)
 
 
+# Every hull in data/fleet_ships.json, variants next to their base class.
+SHIP_TYPES = [
+    "corvette", "frigate", "destroyer", "cruiser", "cruiser_torpedo",
+    "battlecruiser", "battleship", "dreadnought", "dreadnought_siege",
+]
+
+# Table names for hull keys that are not a plain class name (docs/ships.md
+# section titles).
+DISPLAY_NAMES = {
+    "cruiser_torpedo": "Torpedo Cruiser",
+    "dreadnought_siege": "Siege Dreadnought",
+}
+
+
+def display_name(ship_type: str) -> str:
+    return DISPLAY_NAMES.get(ship_type, ship_type.capitalize())
+
+
 def main():
     # Load fleet data
     data_path = Path(__file__).parent.parent / "data" / "fleet_ships.json"
     fleet_data = load_fleet_data(data_path)
 
     # Ship types to test
-    ship_types = ["corvette", "frigate", "destroyer", "cruiser", "battlecruiser", "battleship", "dreadnought"]
+    ship_types = SHIP_TYPES
 
     # Weapons to test
     weapon_types = [
@@ -256,7 +274,7 @@ def main():
     print("=" * 80)
 
     for ship_type in ship_types:
-        print(f"\n{ship_type.upper()}")
+        print(f"\n{display_name(ship_type).upper()}")
         print("-" * 40)
 
         for weapon_key, weapon in weapons.items():
@@ -298,7 +316,7 @@ def main():
         lat_cm = armor_data["lateral"]["thickness_cm"]
         tail_cm = armor_data["tail"]["thickness_cm"]
 
-        print(f"\n#### vs {ship_type.capitalize()} (Armor: {nose_cm:.0f}/{lat_cm:.0f}/{tail_cm:.0f} cm)\n")
+        print(f"\n#### vs {display_name(ship_type)} (Armor: {nose_cm:.0f}/{lat_cm:.0f}/{tail_cm:.0f} cm)\n")
         print("| Weapon | Nose | Lateral | Tail |")
         print("|--------|------|---------|------|")
 
@@ -327,7 +345,7 @@ def main():
         lat = results[(ship_type, "spinal_coiler_mk3", "lateral")]
         tail = results[(ship_type, "spinal_coiler_mk3", "tail")]
 
-        print(f"| {ship_type.capitalize()} | {nose_cm:.0f}/{lat_cm:.0f}/{tail_cm:.0f} | {format_shots(nose)} | {format_shots(lat)} | {format_shots(tail)} |")
+        print(f"| {display_name(ship_type)} | {nose_cm:.0f}/{lat_cm:.0f}/{tail_cm:.0f} | {format_shots(nose)} | {format_shots(lat)} | {format_shots(tail)} |")
 
 
 if __name__ == "__main__":

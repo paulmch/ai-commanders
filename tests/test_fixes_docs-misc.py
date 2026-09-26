@@ -99,6 +99,16 @@ class TestShotsToKillImpactArea:
         result = stk.simulate_shots_to_kill(weapon, "corvette", HitLocation.NOSE, fleet_data)
         assert result.shots_to_kill > 10
 
+    def test_tables_cover_every_hull_including_variants(self, stk, fleet_data):
+        """cruiser_torpedo / dreadnought_siege were missing from the tables
+        (and until the modules.py layout fix they had destroyer internals)."""
+        assert set(stk.SHIP_TYPES) == set(fleet_data["ships"])
+        docs = (REPO_ROOT / "docs" / "ships.md").read_text()
+        for ship_type in stk.SHIP_TYPES:
+            name = stk.display_name(ship_type)
+            assert f"#### vs {name} (Armor:" in docs, name
+            assert f"| {name} | " in docs, name
+
     def test_torpedo_weapon_is_built_from_fleet_data(self, stk, fleet_data):
         torp_data = fleet_data["weapon_types"]["torpedo_launcher"]
         weapon = stk.create_torpedo_weapon(fleet_data, impact_velocity_kps=5.0)

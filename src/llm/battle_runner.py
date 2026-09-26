@@ -673,6 +673,8 @@ class LLMBattleRunner:
 
     def _advance_to_checkpoint(self, deadline: float, fleet_mode: bool = False):
         """Step to a checkpoint exactly, including fractional intervals and limits."""
+        # Every order for the checkpoint just passed is applied by now.
+        self._refresh_checkpoint_plans()
         if not self.config.unlimited_mode:
             time_limit = self.fleet_config.time_limit_s if fleet_mode else self.config.time_limit_s
             deadline = min(deadline, time_limit)
@@ -2412,6 +2414,7 @@ class LLMBattleRunner:
             self.recorder.recording.alpha_ships_remaining = alpha_active
             self.recorder.recording.beta_ships_remaining = beta_active
 
+            self._refresh_checkpoint_plans()
             self._record_torpedoes_in_flight()
             self.recorder.end_recording(rec_result, self.simulation.current_time)
 
@@ -2603,6 +2606,37 @@ class LLMBattleRunner:
         except Exception:
             # A look-ahead bug must never cost a (paid) battle: warn once and
             # keep recording without predictions.
+            import traceback
+            print("[TRACE] trajectory prediction failed; disabled for this battle")
+            traceback.print_exc()
+            enricher.predict = False
+
+    def _refresh_checkpoint_plans(self) -> None:
+        """
+        Re-predict the plans of the frame recorded AT this checkpoint.
+
+        That frame is recorded before the checkpoint's orders exist, so its
+        plans fly out the expiring maneuvers and carry "stale": true. Once
+        the orders are applied (called when the sim resumes, and before the
+        recording ends) the frame is overwritten in place with plans for the
+        new orders, so replays carry the right post-order prediction and the
+        live /predictions endpoint drops the stale flag.
+        """
+        enricher = getattr(self, "_trace_enricher", None)
+        if enricher is None or not enricher.predict or not self.recorder or not self.simulation:
+            return
+        trace = getattr(getattr(self.recorder, "recording", None), "sim_trace", None)
+        if not trace:
+            return
+        frame = trace[-1]
+        if abs(frame.get("t", -1.0) - round(self.simulation.current_time, 2)) > 1e-6:
+            return
+        ships = frame.get("ships", {})
+        if not any((entry.get("plan") or {}).get("stale") for entry in ships.values()):
+            return
+        try:
+            enricher.refresh_plans(self.simulation, ships)
+        except Exception:
             import traceback
             print("[TRACE] trajectory prediction failed; disabled for this battle")
             traceback.print_exc()
@@ -2865,6 +2899,7 @@ class LLMBattleRunner:
             rec_result.duration_s = self.simulation.current_time
             rec_result.checkpoints_used = self.checkpoint_count
 
+            self._refresh_checkpoint_plans()
             self._record_torpedoes_in_flight()
             self.recorder.end_recording(rec_result, self.simulation.current_time)
 

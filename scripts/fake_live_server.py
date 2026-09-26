@@ -6,7 +6,7 @@ and advances an internal sim-time cursor at --speed x wall-clock, serving
 the same /live/... contract the real MCP HTTP server implements:
 
     GET /live/recording[?since_t=<float>]  -> {"live": {...}, "recording": {...}|null}
-    GET /live/predictions                  -> {"t", "t_checkpoint", "ships": {...}}
+    GET /live/predictions                  -> {"t", "t_checkpoint", "ships": {...}, "stale"}
 
 Usage:
     uv run python scripts/fake_live_server.py visualizer/public/recordings/torpedo.json --speed 4
@@ -114,10 +114,11 @@ class FakeLiveServer:
     async def handle_predictions(self, request):
         cur = self.cursor()
         if cur is None:
-            return json_response({"t": 0, "t_checkpoint": 0, "ships": {}})
+            return json_response({"t": 0, "t_checkpoint": 0, "ships": {}, "stale": False})
         if cur >= self.t_end or len(self.frames) < 1:
             cur = min(cur, self.t_end)
-            return json_response({"t": round(cur, 1), "t_checkpoint": round(cur, 1), "ships": {}})
+            return json_response({"t": round(cur, 1), "t_checkpoint": round(cur, 1), "ships": {},
+                                  "stale": False})
 
         i1 = max(0, bisect_right(self.frame_ts, cur) - 1)
         i0 = max(0, i1 - 1)
@@ -146,7 +147,8 @@ class FakeLiveServer:
             if plan and plan.get("path"):
                 t_cp = plan.get("t_cp", t_cp)
                 ships[ship_id] = {"path": plan["path"], "checkpoint_pos": plan["path"][-1],
-                                  "sigma": plan.get("sigma", 0.0), "dt": plan.get("dt")}
+                                  "sigma": plan.get("sigma", 0.0), "dt": plan.get("dt"),
+                                  "stale": bool(plan.get("stale", False))}
                 continue
             p1, v1 = s1["pos"], s1["vel"]
             s0 = (f0.get("ships") or {}).get(ship_id)
@@ -158,9 +160,11 @@ class FakeLiveServer:
             for t in ts:
                 d = t - f1["t"]
                 path.append([p1[k] + v1[k] * d + 0.5 * a[k] * d * d for k in range(3)])
-            ships[ship_id] = {"path": path, "checkpoint_pos": path[-1], "sigma": 0.0}
+            ships[ship_id] = {"path": path, "checkpoint_pos": path[-1], "sigma": 0.0,
+                              "stale": False}
 
-        return json_response({"t": round(cur, 1), "t_checkpoint": t_cp, "ships": ships})
+        return json_response({"t": round(cur, 1), "t_checkpoint": t_cp, "ships": ships,
+                              "stale": any(s["stale"] for s in ships.values())})
 
 
 def json_response(data):
