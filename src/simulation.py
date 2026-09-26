@@ -1340,7 +1340,13 @@ class CombatSimulation:
         self.metrics = EngagementMetrics()
 
         # Combat resolver for damage calculations
-        self._initial_seed = seed if seed is not None else 42
+        # An unseeded battle draws its own seed: the per-ordnance roll RNGs
+        # below are keyed on it, and a fixed fallback (42) gave every
+        # unseeded battle identical torpedo/slug dice. Kept on the instance
+        # so any battle can be replayed exactly.
+        if seed is None:
+            seed = random.SystemRandom().randrange(2**31)
+        self._initial_seed = seed
         self.rng = random.Random(seed)
         # Ordnance ids must be DETERMINISTIC sequence numbers, not uuids:
         # each torpedo's private hit-roll RNG is seeded from

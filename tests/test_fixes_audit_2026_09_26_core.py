@@ -649,3 +649,20 @@ class TestInterceptTimeIsAPositiveRoot:
         ok, t_int, fuel_left = torp.can_intercept(Vector3D(1e3, 2e3, 0), Vector3D(0, 0, 0))
         assert ok and t_int == 0.0
         assert fuel_left == pytest.approx(torp.remaining_delta_v_kps)
+
+
+class TestUnseededBattlesDrawTheirOwnSeed:
+    """Per-ordnance roll RNGs are keyed on the battle seed. An unseeded
+    battle used a fixed fallback (42), so every unseeded battle rolled the
+    same dice for torpedo #1, slug #1, ... It now draws its own seed."""
+
+    def test_unseeded_simulations_get_distinct_seeds(self):
+        from src.simulation import CombatSimulation
+        seeds = {CombatSimulation()._initial_seed for _ in range(8)}
+        assert len(seeds) > 1
+
+    def test_explicit_seed_is_kept(self):
+        from src.simulation import CombatSimulation
+        sim = CombatSimulation(seed=1234)
+        assert sim._initial_seed == 1234
+        assert sim.rng.random() == __import__("random").Random(1234).random()
