@@ -483,28 +483,9 @@ class BattleVisualizer {
         // RCS attitude jets, fired from the recorded rotation around this time
         this.scene.rcs.update(this.scene.ships, this.loader.simTrace, currentPlaybackTime);
 
-        // Update projectiles
-        const activeProjectileIds = new Set();
-        for (const proj of this.currentState.projectiles) {
-          this.scene.updateProjectile(proj);
-          activeProjectileIds.add(proj.id);
-        }
-        this.scene.cleanupProjectiles(activeProjectileIds);
-
-        // Update torpedoes
-        const activeTorpedoIds = new Set();
-        for (const torp of this.currentState.torpedoes) {
-          this.scene.updateTorpedo(torp);
-          activeTorpedoIds.add(torp.id);
-        }
-        this.scene.cleanupTorpedoes(activeTorpedoIds);
-
-        // Continuous PD beams - recomputed from dwell segments each frame,
-        // so they track shooter and target and survive scrubbing
-        this.scene.updateContinuousBeams(
-          this.loader.getActivePDBeams(currentPlaybackTime),
-          currentPlaybackTime
-        );
+        // Slugs, torpedoes, PD beams, muzzle discharge and the instant
+        // impact flash: stateless, evaluated from the recording each frame
+        this.scene.weapons.update(this.loader, currentPlaybackTime);
 
         // Torpedo lifecycle moments crossing this frame: detonations,
         // misses, seeker kills, burnouts - plus gun muzzle flashes
@@ -513,15 +494,9 @@ class BattleVisualizer {
         for (const m of moments) {
           if (m.kind === 'impact') {
             this.scene.spawnTorpedoDetonation(m.position, m.data.damageGj || 8, m.timestamp);
-          } else {
+          } else if (!this.scene.weapons.ownsMoment(m.kind)) {
             this.scene.spawnSmallEffect(m.position, m.timestamp, m.kind);
           }
-        }
-        const shotEvents = this.loader.getEventsInRange(momentStart, currentPlaybackTime)
-          .filter(e => e.timestamp > momentStart && (e.event_type === 'shot_fired' || e.event_type === 'torpedo_launched'));
-        for (const e of shotEvents) {
-          const pos = this.loader.getShipPositionAt(e.ship_id, e.timestamp);
-          if (pos) this.scene.spawnSmallEffect(pos, e.timestamp, 'muzzle');
         }
         this.lastMomentTime = currentPlaybackTime;
 
@@ -1485,6 +1460,7 @@ class BattleVisualizer {
 
     // Clear scene objects
     if (this.scene) {
+      this.scene.weapons.clear();
       // Remove all ships
       for (const [id, ship] of this.scene.ships) {
         this.scene.scene.remove(ship);

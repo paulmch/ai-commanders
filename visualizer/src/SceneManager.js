@@ -10,6 +10,7 @@ import { Blast, ShipDestruction } from './render/Explosion.js';
 import { DamageFX } from './render/DamageFX.js';
 import { getGlowTexture } from './render/Textures.js';
 import { RcsSystem } from './render/Rcs.js';
+import { Projectiles } from './render/Projectiles.js';
 
 /**
  * SceneManager - owns the Three.js scene, camera, renderer and every
@@ -111,6 +112,7 @@ export class SceneManager {
     };
     this.rcs = new RcsSystem(this.fxCtx);   // RCS attitude jets (render/Rcs.js)
 
+    this.weapons = new Projectiles(this);
     this._updatePixelWorld();
     this.warmUp();
     window.addEventListener('resize', () => this.onResize());
@@ -635,6 +637,8 @@ export class SceneManager {
   // Entity lookup
   // ===========================================================================
   getEntityPosition(targetType, targetId) {
+    const weaponPosition = this.weapons.position(targetType, targetId);
+    if (weaponPosition) return weaponPosition;
     if (targetType === 'torpedo') {
       const t = this.torpedoes.get(targetId);
       return t ? t.position : null;
