@@ -92,6 +92,10 @@ function readParam() {
   }
 }
 
+// The page-wide GFX button / G key drive whichever settings installed them last.
+let _active = null;
+let _keyInstalled = false;
+
 export class GraphicsSettings {
   constructor(renderer) {
     this.renderer = renderer;
@@ -133,26 +137,44 @@ export class GraphicsSettings {
     if (Math.abs(this.renderer.getPixelRatio() - want) > 1e-3) this.renderer.setPixelRatio(want);
   }
 
-  /** GFX button in the view controls + the G hotkey. Idempotent. */
+  /**
+   * GFX button in the view controls + the G hotkey. Idempotent across
+   * reloads: every renderer gets its own GraphicsSettings, but the page
+   * keeps ONE button and ONE key handler, which drive the newest settings.
+   */
   installControls() {
-    if (this._controls || typeof document === 'undefined') return;
-    this._controls = true;
-    const host = document.getElementById('viewControls');
-    if (host) {
-      const b = document.createElement('button');
-      b.id = 'gfxBtn';
-      b.type = 'button';
-      b.addEventListener('click', () => this.toggle());
-      host.appendChild(b);
-      this.button = b;
-      this._syncButton();
+    if (typeof document === 'undefined') return;
+    _active = this;
+    let b = document.getElementById('gfxBtn');
+    if (!b) {
+      const host = document.getElementById('viewControls');
+      if (host) {
+        b = document.createElement('button');
+        b.id = 'gfxBtn';
+        b.type = 'button';
+        b.addEventListener('click', () => _active?.toggle());
+        host.appendChild(b);
+      }
     }
-    document.addEventListener('keydown', (e) => {
-      if (e.code !== 'KeyG' || e.altKey || e.ctrlKey || e.metaKey) return;
-      const t = e.target;
-      if (t && (['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName) || t.isContentEditable)) return;
-      this.toggle();
-    });
+    this.button = b || null;
+    this._syncButton();
+    if (!_keyInstalled) {
+      _keyInstalled = true;
+      document.addEventListener('keydown', (e) => {
+        if (e.code !== 'KeyG' || e.altKey || e.ctrlKey || e.metaKey) return;
+        const t = e.target;
+        if (t && (['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName) || t.isContentEditable)) return;
+        _active?.toggle();
+      });
+    }
+  }
+
+  /** Drop subscribers and hand the shared controls back (renderer disposal). */
+  dispose() {
+    this.listeners.clear();
+    if (_active === this) _active = null;
+    this.button = null;
+    _settings.delete(this.renderer);
   }
 
   _syncButton() {

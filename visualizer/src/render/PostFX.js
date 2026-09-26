@@ -286,7 +286,20 @@ export class PostFX {
     this.flash = 0;
     this.time = 0;
     this.sun = { uv: new THREE.Vector2(-1, -1), onScreen: 0, radiusUv: new THREE.Vector2(), visible: false };
-    this.gfx.onChange(() => this.applyQuality());
+    this._offGfx = this.gfx.onChange(() => this.applyQuality());
+  }
+
+  /** Release every render target, material and the bloom chain (reload). */
+  dispose() {
+    this._offGfx?.();
+    this.sceneRT.dispose();
+    this.visRT.dispose();
+    this.godRT.dispose();
+    this.bloom.dispose();
+    this.visMat.dispose();
+    this.godMat.dispose();
+    this.compositeMat.dispose();
+    this.quad.dispose();
   }
 
   _makeSceneTarget() {

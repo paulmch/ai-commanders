@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
-import { getHullTextures, getRadiatorTextures, mulberry32 } from './Textures.js';
+import { getHullTextures, getRadiatorTextures, getAccentTexture, mulberry32 } from './Textures.js';
 import { buildHullLights } from './HullLights.js';
 import { buildMarkings, hullCode } from './HullMarkings.js';
 export { updateHullDetails } from './HullRigs.js';
@@ -31,6 +31,9 @@ const TEXEL = 1.35;   // plating tiles per scene unit
 // Materials
 // ---------------------------------------------------------------------------
 const _sharedMats = new Map();
+
+/** Accent emissive intensity at full hull (SceneManager dims it with damage). */
+export const ACCENT_GLOW = 2.35;
 
 function factionAccent(faction) {
   return faction === 'alpha' ? 0x2ad2ff : 0xff8a3c;
@@ -72,8 +75,11 @@ export function buildShipMaterials(faction) {
   // Per-ship emissive materials (damage flicker, dying dimming)
   const mats = {
     ...shared,
+    // Accent light strips: lamp cells (getAccentTexture, mean ~0.68 of the
+    // peak), glow raised to keep the old read at range
     accent: new THREE.MeshStandardMaterial({
-      color: accent, emissive: accent, emissiveIntensity: 1.6, roughness: 0.35, metalness: 0.1
+      color: accent, emissive: accent, emissiveIntensity: ACCENT_GLOW, roughness: 0.35, metalness: 0.1,
+      map: getAccentTexture().map, emissiveMap: getAccentTexture().emissiveMap
     }),
     window: new THREE.MeshStandardMaterial({
       color: 0x0a0a0c, emissive: 0xffe4bd, emissiveIntensity: 2.6, roughness: 0.2, metalness: 0.2

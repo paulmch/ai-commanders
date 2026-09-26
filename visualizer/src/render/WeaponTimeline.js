@@ -46,6 +46,10 @@ export function torpedoPower(a, b, dt, range, closure, disabled = false) {
   return terminal ? 1 : 0.42;
 }
 
+/** Numeric weapon slot ("weapon_2" -> 2) and spinal flag of a shot_fired payload. */
+export function shotSlot(d) { return Number(d.weapon_slot?.split('_').at(-1)) || 0; }
+export function shotSpinal(d) { return !!d.weapon_name?.toLowerCase().includes('spinal'); }
+
 export function sampleIndex(samples, time) {
   let lo = 0, hi = samples.length - 1;
   while (lo < hi) {
@@ -105,14 +109,16 @@ export class WeaponTimeline {
       for (const p of f.torpedoes || []) add(this.torpedoes, p.id, f.t, p);
     }
     const shots = new Map();
+    const shotById = new Map();
     for (const e of events) {
       const d = e.data || {};
       if (e.event_type === 'shot_fired') {
         if (!shots.has(e.ship_id)) shots.set(e.ship_id, []);
         shots.get(e.ship_id).push(e);
+        if (d.projectile_id) shotById.set(d.projectile_id, e);
         this.moments.push({ time: e.timestamp, kind: 'muzzle', ship: e.ship_id, data: d,
-          slot: Number(d.weapon_slot?.split('_').at(-1)) || 0,
-          spinal: d.weapon_name?.toLowerCase().includes('spinal'),
+          slot: shotSlot(d), spinal: shotSpinal(d),
+          track: this.slugs.get(d.projectile_id) || null,
           seed: seedFor(`${e.ship_id}|${e.timestamp}|${d.weapon_slot}`) });
       }
       const tr = this.torpedoes.get(d.torpedo_id) || this.slugs.get(d.projectile_id);
@@ -156,14 +162,18 @@ export class WeaponTimeline {
     }
     for (const tr of this.slugs.values()) {
       const first = tr.samples[0], last = tr.samples.at(-1);
-      const candidates = shots.get(first.state.source);
-      let launch = first.t - 1;
-      if (candidates) {
-        for (const e of candidates) {
+      // The firing event (exact by projectile id, else the source's latest
+      // shot within 2 s) dates the launch and names the gun it left from.
+      let shot = shotById.get(tr.id) || null;
+      if (!shot) {
+        for (const e of shots.get(first.state.source) || []) {
           if (e.timestamp > first.t) break;
-          if (first.t - e.timestamp <= 2) launch = e.timestamp;
+          if (first.t - e.timestamp <= 2) shot = e;
         }
       }
+      const launch = shot ? shot.timestamp : first.t - 1;
+      tr.source = first.state.source || shot?.ship_id || '';
+      tr.shot = shot ? { slot: shot.data?.weapon_slot, index: shotSlot(shot.data || {}), spinal: shotSpinal(shot.data || {}) } : null;
       tr.start = Math.max(0, launch);
       // A disappearing round without a hit/intercept continues ballistically.
       // Rounds still present at the live edge must not be labelled as misses.

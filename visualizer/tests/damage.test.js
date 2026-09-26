@@ -163,3 +163,20 @@ test('coilgun marks use the travel-adjusted impact time when known', () => {
   assert.equal(tl.ships.get('beta').marks[0].t, 4.5);
   assert.equal(visualImpactTime(loader, recording().events[1]), 11);
 });
+
+test('a backward seek replays vent slots even when craters never wrap', async () => {
+  const { rewindStart } = await import('../src/render/DamageFX.js');
+  // 60 marks, every other one vents: 30 vents > a 20-slot vent buffer,
+  // while 60 marks fit the crater buffer (no crater wrap)
+  const marks = Array.from({ length: 60 }, (_, i) => ({ t: i, index: i, vent: i % 2 ? 'atmo' : null }));
+  const vents = marks.filter(m => m.vent);
+  // resolved through t=59; seek back to t=30.5: vents 1,3,...,29 (15) all
+  // must be rewritten, the oldest being mark 1
+  assert.equal(rewindStart(marks, vents, 30.5, 60, 192, 20), 1);
+  // seek back to t=50.5: 25 vents so far, slots hold the last 20 -> from vent #5 (mark 11)
+  assert.equal(rewindStart(marks, vents, 50.5, 60, 192, 20), 11);
+  // nothing wraps: keep going from where we are
+  assert.equal(rewindStart(marks, vents, 50.5, 60, 192, 40), 60);
+  // crater wrap alone: last 16 marks up to t=40.5 -> from mark 25
+  assert.equal(rewindStart(marks, [], 40.5, 60, 16, 40), 25);
+});

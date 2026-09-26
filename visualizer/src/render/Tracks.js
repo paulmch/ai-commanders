@@ -3,14 +3,17 @@ import { Ribbon } from './Trails.js';
 
 /**
  * Trajectory tracks: every live ship's predicted path to the next decision
- * checkpoint (TrajectoryPredictor), drawn as a faction-coloured glowing
- * line that fades with time-to-go, with a tick every 5 s of battle time
+ * checkpoint (TrajectoryPredictor), drawn as a thin faction-coloured dashed
+ * line (HUD, deliberately unlike a beam or tracer) that fades with
+ * time-to-go and near the camera, with a tick every 5 s of battle time
  * (ticks sit at absolute times, so they slide toward the hull as the clock
  * runs), and a checkpoint ghost: diamond + 1/2-sigma dispersion rings, a
  * T+Ns label and a faint hull ghost oriented along the predicted velocity.
  *
  * In replay the "actual" mode adds the recorded future path (thin dotted)
  * and a dotted error line from the predicted to the actual checkpoint.
+ * In a close-up the focused ship's track is emphasised and the others dim
+ * (trackEmphasis).
  *
  * Widths are in screen pixels (tracks are HUD, not matter). All buffers are
  * allocated once per ship and updated in place.
@@ -18,6 +21,29 @@ import { Ribbon } from './Trails.js';
 
 const TICK_PERIOD_S = 5;
 const MARKER_DIAMOND_PX = 7;
+const PRED_INTENSITY = 0.75;
+const PRED_LINE_PX = 1.15;
+const ACTUAL_INTENSITY = 0.6;
+const NEAR_FADE_MAX = 60;   // scene units
+
+/**
+ * Per-ship track weight. `viewDist` is the camera's orbit distance (scene
+ * units): at fleet range every track reads equally, in a close-up the
+ * focused ship's track thickens and the others dim to faint guides.
+ * Writes {intensity, width} multipliers into `out` (no allocation).
+ */
+export function trackEmphasis(isFocus, viewDist, out = {}) {
+  const t = Math.min(1, Math.max(0, ((viewDist ?? 1e9) - 40) / 180));
+  const closeK = 1 - t * t * (3 - 2 * t);
+  if (isFocus) {
+    out.intensity = 1.1;
+    out.width = 1.2 + 0.3 * closeK;
+  } else {
+    out.intensity = 1 - 0.75 * closeK;
+    out.width = 1 - 0.15 * closeK;
+  }
+  return out;
+}
 
 const FACTION_COLOR = {
   alpha: [0.16, 0.8, 1.0],
@@ -37,6 +63,7 @@ const ribbonVertex = /* glsl */`
   varying float vSide;
   varying float vAlong;
   varying float vU;
+  varying float vDepth;
   #include <common>
   #include <logdepthbuf_pars_vertex>
   void main() {
@@ -50,54 +77,82 @@ const ribbonVertex = /* glsl */`
     vSide = aSide;
     vAlong = aAlong;
     vU = aU;
+    vDepth = depth;
     gl_Position = projectionMatrix * viewMatrix * vec4(wp, 1.0);
     #include <logdepthbuf_vertex>
   }
 `;
 
+// Tracks are HUD, not matter: a thin dashed (predicted) or dotted (actual)
+// line, never a solid glowing rod, so they cannot be mistaken for a beam or
+// a tracer. The dash period is snapped to power-of-two multiples of
+// uDashBase so the on-screen spacing stays ~uDashPx at every zoom (the two
+// nearest levels cross-fade, like mip levels), and dashes stay pinned to
+// absolute battle time, sliding toward the hull as the clock runs.
 const ribbonFragment = /* glsl */`
   uniform vec3 uColor;
   uniform float uIntensity;
   uniform float uFadeEnd;
-  uniform float uCore;
   uniform float uHalo;
   uniform float uHalfPx;
+  uniform float uLinePx;
   uniform float uTickPeriod;
   uniform float uTick;
-  uniform float uDotPeriod;
+  uniform float uDashBase;
+  uniform float uDashPx;
+  uniform float uDuty;
+  uniform float uRound;
+  uniform float uNear;
   varying float vSide;
   varying float vAlong;
   varying float vU;
+  varying float vDepth;
   #include <logdepthbuf_pars_fragment>
+  float pattern(float period, float fw, float xpx) {
+    float spacing = period / fw;                   // px between dash starts
+    float d = fract(vAlong / period) * spacing;    // px since the last start
+    if (uRound > 0.5) {
+      float r = uLinePx * 1.35;
+      return 1.0 - smoothstep(r - 0.5, r + 0.7, length(vec2(abs(d - 0.5 * spacing), xpx)));
+    }
+    float on = spacing * uDuty;
+    float gap = d < on ? 0.0 : min(d - on, spacing - d);
+    return 1.0 - smoothstep(0.0, 1.0, gap);
+  }
   void main() {
     #include <logdepthbuf_fragment>
-    float x = abs(vSide);
+    float xpx = abs(vSide) * uHalfPx;              // px from the centre line
     float fw = max(fwidth(vAlong), 1e-6);          // along-units per pixel
-    float body = exp(-x * x * uCore) + uHalo * exp(-x * x * 2.5) * (1.0 - x);
-    if (uDotPeriod > 0.0) {
-      float perPx = uDotPeriod / fw;                // pixels between dots
-      float ph = (fract(vAlong / uDotPeriod) - 0.5) * perPx;
-      float dotMask = 1.0 - smoothstep(1.0, 2.0, length(vec2(ph, x * uHalfPx)));
-      // too dense to resolve: a faint continuous line instead of moire
-      body = mix(body * 0.4, dotMask * 1.25, smoothstep(5.0, 9.0, perPx));
+    float q = xpx / uLinePx;
+    float body = exp(-q * q * 1.1) + uHalo * exp(-q * q * 0.12);
+    if (uDashBase > 0.0) {
+      float lod = max(0.0, log2(uDashPx * fw / uDashBase));
+      float l0 = floor(lod);
+      float p0 = uDashBase * exp2(l0);
+      float m = mix(pattern(p0, fw, xpx), pattern(p0 * 2.0, fw, xpx), lod - l0);
+      body = uRound > 0.5 ? m * 1.2 : body * m;
     }
     float tick = 0.0;
     if (uTickPeriod > 0.0) {
       float spacingPx = uTickPeriod / fw;
       float d = abs(fract(vAlong / uTickPeriod + 0.5) - 0.5) * spacingPx;
-      tick = uTick * (1.0 - smoothstep(0.6, 1.6, d)) * (1.0 - smoothstep(0.5, 1.0, x))
+      tick = uTick * (1.0 - smoothstep(0.5, 1.3, d)) * (1.0 - smoothstep(uHalfPx - 1.2, uHalfPx, xpx))
            * smoothstep(5.0, 12.0, spacingPx);
     }
     float along = mix(1.0, uFadeEnd, vU);
-    gl_FragColor = vec4(uColor * (body + tick) * along * uIntensity, 1.0);
+    // Fade stretches that pass close to the camera: in a close-up they
+    // would otherwise cut across the whole frame.
+    float near = uNear > 0.0 ? smoothstep(uNear * 0.1, uNear * 0.55, vDepth) : 1.0;
+    gl_FragColor = vec4(uColor * (body + tick) * along * near * uIntensity, 1.0);
   }
 `;
 
 class TrackRibbon {
   /**
    * @param {number} capacity - max points
-   * @param {Object} o - halfPx, color [r,g,b], intensity, fadeEnd, core,
-   *   halo, tickPeriod, tick, dotPeriod
+   * @param {Object} o - halfPx (geometry), linePx (line core), color [r,g,b],
+   *   intensity, fadeEnd, halo, tickPeriod, tick, dashBase, dashPx, duty,
+   *   round (1 = dots instead of dashes)
    */
   constructor(capacity, o) {
     const n = capacity;
@@ -127,12 +182,16 @@ class TrackRibbon {
         uColor: { value: new THREE.Color(...o.color) },
         uIntensity: { value: o.intensity ?? 1 },
         uFadeEnd: { value: o.fadeEnd ?? 1 },
-        uCore: { value: o.core ?? 12 },
         uHalo: { value: o.halo ?? 0 },
         uHalfPx: { value: o.halfPx ?? 4 },
+        uLinePx: { value: o.linePx ?? 1.2 },
         uTickPeriod: { value: o.tickPeriod ?? 0 },
         uTick: { value: o.tick ?? 0 },
-        uDotPeriod: { value: o.dotPeriod ?? 0 },
+        uDashBase: { value: o.dashBase ?? 0 },
+        uDashPx: { value: o.dashPx ?? 16 },
+        uDuty: { value: o.duty ?? 0.55 },
+        uRound: { value: o.round ?? 0 },
+        uNear: { value: 0 },
         uPixelWorld: Ribbon.pixelWorld
       },
       vertexShader: ribbonVertex,
@@ -392,14 +451,15 @@ class ShipTrack {
     this.faction = faction;
     this.color = col;
     this.pred = new TrackRibbon(samples, {
-      color: col, halfPx: 6, core: 16, halo: 0.2, intensity: 1.05, fadeEnd: 0.28,
-      tickPeriod: TICK_PERIOD_S, tick: 1.1
+      color: col, halfPx: 4.5, linePx: PRED_LINE_PX, halo: 0.1, intensity: PRED_INTENSITY, fadeEnd: 0.22,
+      tickPeriod: TICK_PERIOD_S, tick: 0.9, dashBase: TICK_PERIOD_S / 16, dashPx: 15, duty: 0.55
     });
     this.actual = new TrackRibbon(samples, {
-      color: pale, halfPx: 3, core: 5, intensity: 0.75, fadeEnd: 0.7, dotPeriod: 1.0, renderOrder: 20
+      color: pale, halfPx: 3, linePx: 1.0, intensity: ACTUAL_INTENSITY, fadeEnd: 0.7,
+      dashBase: TICK_PERIOD_S / 16, dashPx: 8, round: 1, renderOrder: 20
     });
     this.error = new TrackRibbon(2, {
-      color: [0.95, 0.9, 0.85], halfPx: 2.5, core: 4, intensity: 0.55, dotPeriod: 1, renderOrder: 20
+      color: [0.95, 0.9, 0.85], halfPx: 3, linePx: 0.9, intensity: 0.5, dashPx: 7, round: 1, renderOrder: 20
     });
     this.marker = makeMarker(col, { diamondPx: MARKER_DIAMOND_PX, intensity: 1.0 });
     this.actualMarker = makeMarker(pale, { circlePx: 4.5, intensity: 0.8 });
@@ -504,21 +564,44 @@ export class Tracks {
    * @param {number} time - playback time
    * @param {Object} ships - interpolated ship states (anchor positions)
    * @param {'off'|'predicted'|'actual'} mode
+   * @param {string|null} [focusId] - selected / camera-followed ship; when
+   *   absent, the ship the camera is orbiting (nearest the look-at point)
    */
-  frame(time, ships, mode) {
+  frame(time, ships, mode, focusId = null) {
     if (mode === 'off' || !this.predictor || !ships) {
       this.root.visible = false;
       return;
     }
     this.root.visible = true;
     const withActual = mode === 'actual';
+    this.focusId = focusId || this._implicitFocus();
     this.update(this.predictor.predict(time, ships, withActual), time, withActual);
+  }
+
+  /** The ship under the orbit target, if the camera is looking at one. */
+  _implicitFocus() {
+    const target = this.sm.controls?.target;
+    if (!target || !this.sm.ships) return null;
+    const viewDist = this.sm.camera.position.distanceTo(target);
+    let best = null, bd = Infinity;
+    for (const [id, ship] of this.sm.ships) {
+      if (!ship.visible) continue;
+      const d = ship.position.distanceTo(target);
+      const L = ship.userData.size?.length || 8;
+      if (d < bd && d < L + 0.35 * viewDist) { bd = d; best = id; }
+    }
+    return best;
   }
 
   update(tracks, time, withActual) {
     const S = this.scale;
     const cam = this.sm.camera;
     const pw = Ribbon.pixelWorld.value;
+    const viewDist = this.sm.controls ? cam.position.distanceTo(this.sm.controls.target) : 1e9;
+    const emph = this._emph || (this._emph = {});
+    // Near-camera fade scale: the orbit distance in a close-up, capped so
+    // fleet-range views (where nothing passes the lens) keep every track
+    const nearFade = Math.min(viewDist, NEAR_FADE_MAX);
     for (const tr of tracks.values()) {
       const id = tr.shipId;
       let v = this.visuals.get(id);
@@ -530,6 +613,14 @@ export class Tracks {
         v = new ShipTrack(this.root, tr.faction, this.predictor.samples);
         this.visuals.set(id, v);
       }
+      trackEmphasis(id === this.focusId, viewDist, emph);
+      const pu = v.pred.material.uniforms;
+      pu.uIntensity.value = PRED_INTENSITY * emph.intensity;
+      pu.uLinePx.value = PRED_LINE_PX * emph.width;
+      pu.uNear.value = nearFade;
+      v.actual.material.uniforms.uIntensity.value = ACTUAL_INTENSITY * emph.intensity;
+      v.actual.material.uniforms.uNear.value = nearFade;
+      v.error.material.uniforms.uIntensity.value = 0.5 * emph.intensity;
 
       v.pred.set(tr.path, tr.times, tr.n, S);
 
@@ -538,15 +629,17 @@ export class Tracks {
       const u = v.marker.material.uniforms;
       u.uRingWorld.value = tr.sigma * S;
       // Dim the marker as it folds into the hull at checkpoint arrival
-      u.uIntensity.value = Math.min(1, Math.max(0.25, togo / 3));
+      u.uIntensity.value = Math.min(1, Math.max(0.25, togo / 3)) * Math.min(1, emph.intensity);
       v.marker.position.copy(cp);
       v.marker.visible = true;
+      v.actualMarker.material.uniforms.uIntensity.value = 0.8 * Math.min(1, emph.intensity);
 
       if (this.showLabels) {
         drawLabel(v.label, Math.max(0, Math.ceil(togo - 1e-6)));
         const sp = v.label.sprite;
         sp.position.copy(cp);
         sp.scale.set(LABEL_PX * (LABEL_W / LABEL_H) * pw, LABEL_PX * pw, 1);
+        sp.material.opacity = Math.min(1, emph.intensity);
         // right of the diamond, clear of the 1-sigma ring
         const ringPx = tr.sigma > 0 ? Math.max(MARKER_DIAMOND_PX * 1.8, (tr.sigma * S) / (pw * Math.max(1e-6, cam.position.distanceTo(cp)))) : 0;
         sp.center.set(-Math.min(400, Math.max(MARKER_DIAMOND_PX + 5, ringPx + 5)) / (LABEL_PX * LABEL_W / LABEL_H), 0.5);
@@ -558,7 +651,7 @@ export class Tracks {
         v.label.sprite.visible = false;
       }
 
-      this._updateGhost(v, id, tr, cp, cam, pw);
+      this._updateGhost(v, id, tr, cp, cam, pw, Math.min(1, emph.intensity));
 
       if (withActual && tr.actual.n >= 2) {
         v.actual.set(tr.actual.path, tr.actual.times, tr.actual.n, S);
@@ -587,12 +680,12 @@ export class Tracks {
     pts[3] = a[0]; pts[4] = a[1]; pts[5] = a[2];
     const len = Math.hypot(a[0] - p[0], a[1] - p[1], a[2] - p[2]) * this.scale;
     if (len < 1e-4) { v.error.hide(); return; }
-    // ~14 dots along the miss whatever its length
-    v.error.material.uniforms.uDotPeriod.value = len / 14;
+    // ~14 dots along the miss (fewer when that would crowd the screen)
+    v.error.material.uniforms.uDashBase.value = len / 14;
     v.error.set(pts, null, 2, this.scale);
   }
 
-  _updateGhost(v, id, tr, cp, cam, pw) {
+  _updateGhost(v, id, tr, cp, cam, pw, weight = 1) {
     const ship = this.sm.ships?.get(id);
     if (!this.showGhosts || !ship) {
       if (v.ghost) v.ghost.visible = false;
@@ -605,7 +698,7 @@ export class Tracks {
     // Only when the hull is big enough on screen to read, and not while the
     // ghost still overlaps the real hull
     const sep = ship.position.distanceTo(cp);
-    const opacity = 0.75 * THREE.MathUtils.smoothstep(px, 14, 40) * THREE.MathUtils.smoothstep(sep, L * 0.8, L * 2.0);
+    const opacity = 0.75 * weight * THREE.MathUtils.smoothstep(px, 14, 40) * THREE.MathUtils.smoothstep(sep, L * 0.8, L * 2.0);
     if (opacity < 0.01) {
       v.ghost.visible = false;
       return;

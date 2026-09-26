@@ -6,10 +6,15 @@ import { updateHullLights } from './HullLights.js';
  * paused frames and timeline seeks are deterministic:
  *
  *   - coilgun turrets train on the ship's actual target (last shot fired,
- *     else the captain's ordered target, else the nearest enemy) and
+ *     else the captain's ordered target, else the nearest enemy), re-lay
+ *     onto the next shot's target in the second before it fires, and
  *     recoil when their weapon slot fires
- *   - PD ball turrets slew onto the torpedo / slug their dwell segment is
+ *   - PD ball turrets swing onto the torpedo / slug their dwell segment is
  *     burning (pd_fired turret_name -> pd rig), else sweep a search pattern
+ *
+ * Poses are pure functions of battle time (no per-frame slew state), so a
+ * paused frame, a replayed frame and a direct seek give the same pose; a
+ * dying ship's mounts fall into a fixed, seeded slump.
  *   - torpedo launch doors open around each torpedo_launched event
  *   - navigation lamps blink (HullLights)
  *
@@ -130,13 +135,38 @@ function activePD(scene, t) {
   return scene._hullPd;
 }
 
+const RELAY_S = 1.2;
+const _aim = new THREE.Vector2();
+const _p = new THREE.Vector3();
+
+/** Stable 0..1 hash of (ship id, mount index) for the dead-mount slump. */
+function hashRig(id, i) {
+  let h = 2166136261 ^ i;
+  for (let k = 0; k < id.length; k++) h = Math.imul(h ^ id.charCodeAt(k), 16777619);
+  return (h >>> 0) / 4294967296;
+}
+
+/** Yaw/pitch (x/y of out) that lay a gun rig on `target` (rest pose if none). */
+function aimGun(rig, target, out) {
+  if (!target) return out.set(0, 0.12);
+  const v = toMount(_m, rig.mount, target.position, _v);
+  return out.set(Math.atan2(v.x, v.z),
+    THREE.MathUtils.clamp(Math.atan2(v.y, Math.hypot(v.x, v.z)), -0.04, 1.45));
+}
+
+/** Where the dwell's round is at battle time t (recording-derived when possible). */
+function pdTargetPosition(scene, seg, t) {
+  const at = scene.weapons?.positionAt?.(seg.targetType, seg.targetId, t, _p);
+  if (at !== undefined) return at;
+  return scene.getEntityPosition ? scene.getEntityPosition(seg.targetType, seg.targetId) : null;
+}
+
 /**
  * Hook called at the end of SceneManager.updateShip for every live ship.
  */
 export function updateHullDetails(ship, state, scene) {
   const ud = ship.userData;
   const t = scene.currentTime || 0;
-  const dt = Math.min(0.1, scene.delta || 0.016);
   const hull = Math.max(0, Math.min(100, state.hull ?? 100)) / 100;
   const dying = !!state.dying;
 
@@ -144,34 +174,45 @@ export function updateHullDetails(ship, state, scene) {
     ud._isDead ||= () => !!scene.destroyedShips?.has(ud.shipId);
     updateHullLights(ud.hullLights, t, { dying, hull }, ud._isDead);
   }
-  if (dying) return;   // a dying hull's mounts freeze where they were
-
   const idx = indexFor(scene.loader);
   _m.compose(ship.position, ship.quaternion, ship.scale).invert();
 
   // --- coilgun turrets ------------------------------------------------------
   const guns = ud.gunTurrets;
   if (guns && guns.length) {
-    const target = gunTarget(ship, scene, idx, t);
-    const slew = 1 - Math.exp(-dt * 2.0);
     const shots = idx?.shots.get(ud.shipId);
     const last = lastIndexBefore(shots, t);
-    for (const rig of guns) {
-      let ty = 0, tp = 0.12;
-      if (target) {
-        const v = toMount(_m, rig.mount, target.position, _v);
-        ty = Math.atan2(v.x, v.z);
-        tp = THREE.MathUtils.clamp(Math.atan2(v.y, Math.hypot(v.x, v.z)), -0.04, 1.45);
+    const target = dying ? null : gunTarget(ship, scene, idx, t);
+    // Re-lay onto the next shot's target during the second before it fires
+    let next = null, w = 0;
+    const nx = shots?.[last + 1];
+    if (!dying && nx && nx.t - t < RELAY_S) {
+      next = enemyOk(scene, ud, nx.target);
+      if (next === target) next = null;
+      else w = THREE.MathUtils.smoothstep(1 - (nx.t - t) / RELAY_S, 0, 1);
+    }
+    for (let r = 0; r < guns.length; r++) {
+      const rig = guns[r];
+      if (dying) {
+        // fixed, seeded slump: power gone, barrels sag to the stops
+        rig.yawAngle = (hashRig(ud.shipId, r) - 0.5) * 1.6;
+        rig.pitchAngle = -0.04;
+      } else {
+        aimGun(rig, target, _aim);
+        if (next) {
+          const y0 = _aim.x, p0 = _aim.y;
+          aimGun(rig, next, _aim);
+          _aim.x = y0 + Math.atan2(Math.sin(_aim.x - y0), Math.cos(_aim.x - y0)) * w;
+          _aim.y = p0 + (_aim.y - p0) * w;
+        }
+        rig.yawAngle = _aim.x;
+        rig.pitchAngle = _aim.y;
       }
-      let dy = ty - rig.yawAngle;
-      dy = Math.atan2(Math.sin(dy), Math.cos(dy));
-      rig.yawAngle += dy * slew;
-      rig.pitchAngle += (tp - rig.pitchAngle) * slew;
       rig.yaw.rotation.y = rig.yawAngle;
       rig.pitch.rotation.x = -rig.pitchAngle;
       // Recoil from this mount's own weapon slot
       let k = 0;
-      for (let i = last; i >= 0 && t - shots[i].t <= 1.4; i--) {
+      for (let i = last; !dying && i >= 0 && t - shots[i].t <= 1.4; i--) {
         if (shots[i].slot === rig.slot) { k = recoil(t - shots[i].t); break; }
       }
       rig.pitch.position.z = rig.pitchZ - k * rig.s * 0.3;
@@ -181,36 +222,37 @@ export function updateHullDetails(ship, state, scene) {
   // --- PD ball turrets -------------------------------------------------------
   const pds = ud.pdTurrets;
   if (pds && pds.length) {
-    const segs = activePD(scene, t);
-    const fast = 1 - Math.exp(-dt * 7.0);
-    const lazy = 1 - Math.exp(-dt * 1.5);
-    for (const rig of pds) {
-      let seg = null;
-      for (const s of segs) {
-        if (s.shipId === ud.shipId && s.turret === rig.name && t >= s.start && t <= s.end + 0.6) { seg = s; break; }
-      }
-      const pos = seg ? scene.getEntityPosition(seg.targetType, seg.targetId) : null;
-      let ty, tp, k;
-      if (pos) {
-        const v = toMount(_m, rig.mount, pos, _v);
-        ty = Math.atan2(v.x, v.z);
-        tp = Math.atan2(v.y, Math.hypot(v.x, v.z));
-        k = fast;
+    const segs = dying ? [] : activePD(scene, t);
+    for (let r = 0; r < pds.length; r++) {
+      const rig = pds[r];
+      let ty, tp;
+      if (dying) {
+        ty = rig.phase * 2;
+        tp = -0.12;
       } else {
         // Search sweep, on battle time
         ty = rig.phase * 2 + 1.1 * Math.sin(t * 0.31 + rig.phase * 5);
         tp = 0.45 + 0.3 * Math.sin(t * 0.23 + rig.phase * 3);
-        k = lazy;
+        let seg = null;
+        for (const s of segs) {
+          if (s.shipId === ud.shipId && s.turret === rig.name && t >= s.start && t <= s.end + 0.6) { seg = s; break; }
+        }
+        const pos = seg ? pdTargetPosition(scene, seg, t) : null;
+        if (pos) {
+          // swing from the sweep onto the round over the first 0.3 s of
+          // dwell, and back to the sweep in the 0.6 s after it ends
+          const v = toMount(_m, rig.mount, pos, _v);
+          const k = THREE.MathUtils.smoothstep(t - seg.start, 0, 0.3) * (1 - THREE.MathUtils.smoothstep(t - seg.end, 0.1, 0.6));
+          const dy = Math.atan2(v.x, v.z) - ty;
+          ty += Math.atan2(Math.sin(dy), Math.cos(dy)) * k;
+          tp += (Math.atan2(v.y, Math.hypot(v.x, v.z)) - tp) * k;
+        }
       }
-      tp = THREE.MathUtils.clamp(tp, -0.12, 1.5);
-      let dy = ty - rig.yawAngle;
-      dy = Math.atan2(Math.sin(dy), Math.cos(dy));
-      rig.yawAngle += dy * k;
-      rig.pitchAngle += (tp - rig.pitchAngle) * k;
+      rig.yawAngle = ty;
+      rig.pitchAngle = THREE.MathUtils.clamp(tp, -0.12, 1.5);
       rig.ball.rotation.set(-rig.pitchAngle, rig.yawAngle, 0, 'YXZ');
     }
   }
-
   // --- torpedo launch doors ---------------------------------------------------
   const doors = ud.launchDoors;
   if (doors && doors.length) {
