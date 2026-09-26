@@ -194,7 +194,8 @@ def _ghost_ship(ship: ShipCombatState) -> _GhostShip:
 class _GhostRound:
     """A kinetic round as a pure ballistic threat (duck-types ProjectileInFlight)."""
 
-    __slots__ = ("target_ship_id", "position", "velocity", "kinetic_energy_gj")
+    __slots__ = ("target_ship_id", "position", "velocity", "kinetic_energy_gj",
+                 "mass_kg", "_pd_ablation")
 
     def __init__(self, flight: Any) -> None:
         proj = flight.projectile
@@ -202,6 +203,9 @@ class _GhostRound:
         self.position = proj.position
         self.velocity = proj.velocity
         self.kinetic_energy_gj = proj.kinetic_energy_gj
+        # Evasion threat energy uses relative speed and post-ablation mass.
+        self.mass_kg = getattr(proj, "mass_kg", 50.0)
+        self._pd_ablation = getattr(proj, "_pd_ablation", 0.0)
 
     @property
     def projectile(self) -> "_GhostRound":
