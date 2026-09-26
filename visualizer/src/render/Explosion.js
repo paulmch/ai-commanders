@@ -3,6 +3,7 @@ import { getNoiseTexture, getGlowTexture, mulberry32 } from './Textures.js';
 import { SparkBurst, StreakBurst, PuffCloud } from './Particles.js';
 import { buildDebrisChunks } from './Hulls.js';
 import { createTorch } from './Torch.js';
+import { breakHull } from './DamageFX.js';
 
 /**
  * Blasts and ship destruction.
@@ -201,6 +202,11 @@ function smallFireGeom() { return _smallFireGeom || (_smallFireGeom = new THREE.
 function shellGeom() { return _shellGeom || (_shellGeom = new THREE.IcosahedronGeometry(1, 12)); }
 
 function easeOut(t, k = 3) { return 1 - Math.exp(-t * k); }
+
+const _dq = new THREE.Quaternion();
+const _dv = new THREE.Vector3();
+const WRECK_LIFE = 40;       // big hull sections and the debris cloud linger
+const SHARD_FADE = [17, 22]; // small chunks fade out
 
 // ---------------------------------------------------------------------------
 // Blast
@@ -501,7 +507,7 @@ export class ShipDestruction {
     this.driftDuration = o.driftDuration;
     this.scale = o.scale;
     this.spawnTime = o.spawnTime;
-    this.totalDuration = this.driftDuration + 22;
+    this.totalDuration = this.driftDuration + WRECK_LIFE;
     this.rnd = mulberry32(Math.floor(o.spawnTime * 131 + 7));
     const rnd = this.rnd;
 
@@ -512,7 +518,10 @@ export class ShipDestruction {
     this.ignited = false;
     this.chunks = [];
     this.chunkGroup = null;
-    this.secondaries = [];   // {t, chunk, fired}
+    this.secondaries = [];   // {t, chunk, fired, offset}
+    this.sections = [];      // big torn hull sections (glowing edges)
+    this.cloud = null;       // instanced debris cloud
+    this.embers = null;      // long-lived ember sparks
     this.vents = [];
     this.pops = [];
 
@@ -530,6 +539,14 @@ export class ShipDestruction {
         });
       }
       this.pops.sort((a, b) => a.t - b.t);
+      // secondaries walk from the wound toward the reactor, a few of them
+      // cooking off as proper blasts
+      const rz = g.userData.reactorPos ? g.userData.reactorPos.z : -L * 0.3;
+      this.pops.forEach((pop, i) => {
+        const u = popCount > 1 ? i / (popCount - 1) : 0;
+        pop.local.z = L * 0.38 + (rz - L * 0.38) * u + (rnd() - 0.5) * L * 0.08;
+        pop.kind = rnd() < 0.3 ? 'secondary' : 'pop';
+      });
       // Venting plasma jets from breached tanks
       const ventCount = 2 + Math.floor(rnd() * 2);
       for (let i = 0; i < ventCount; i++) {
@@ -571,13 +588,45 @@ export class ShipDestruction {
       axis: new THREE.Vector3(0, 0, 1).applyQuaternion(g?.quaternion || new THREE.Quaternion())
     });
 
-    // Hull breakup: chunks inherit the drift velocity plus a radial kick
+    // Hull breakup: the reactor end shreds into chunks, the rest tears into
+    // one or two big sections with glowing edges that tumble apart slowly
     if (g) {
       this.chunkGroup = new THREE.Group();
       this.ctx.scene.add(this.chunkGroup);
       const reactorLocal = g.userData.reactorPos || new THREE.Vector3();
-      const chunks = buildDebrisChunks(g, 9 + Math.floor(rnd() * 4), rnd);
       const L = g.userData.size?.length || this.scale;
+      const fx = this.ctx.damage || this.ctx.scene.userData.damageFX || null;
+      const broken = fx ? breakHull(g, rnd, fx) : null;
+      const chunks = broken ? broken.shards : buildDebrisChunks(g, 9 + Math.floor(rnd() * 4), rnd);
+      if (broken) {
+        const axis = new THREE.Vector3(0, 0, 1).applyQuaternion(g.quaternion);
+        for (const sec of broken.sections) {
+          const worldCenter = sec.center.clone().applyQuaternion(g.quaternion).add(origin);
+          const away = sec.center.z >= reactorLocal.z ? 1 : -1;
+          const kick = this.scale * (0.04 + 0.05 * rnd());
+          const lateral = new THREE.Vector3(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).normalize().multiplyScalar(kick * 0.7);
+          const vel = this.driftVel.clone().addScaledVector(axis, away * kick * (sec.cutHi > 1e5 ? 1.4 : 0.6)).add(lateral);
+          const spinAxis = new THREE.Vector3(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).normalize();
+          sec.mesh.position.copy(worldCenter);
+          sec.mesh.quaternion.copy(g.quaternion);
+          this.chunkGroup.add(sec.mesh);
+          const entry = {
+            mesh: sec.mesh, overlay: sec.overlay, p0: worldCenter, vel, q0: g.quaternion.clone(),
+            spinAxis, spinRate: 0.05 + 0.2 * rnd(), heat: 0.9 + 0.4 * rnd()
+          };
+          this.sections.push(entry);
+          // fires along the torn edge
+          const tear = new THREE.Vector3(0, 0, sec.cutLo - sec.center.z);
+          for (let k = 0; k < 2; k++) {
+            this.secondaries.push({
+              t: 0.8 + rnd() * 6.0, chunk: entry,
+              offset: tear.clone().add(new THREE.Vector3((rnd() - 0.5) * L * 0.08, (rnd() - 0.5) * L * 0.08, 0)),
+              scale: this.scale * (0.18 + rnd() * 0.15), kind: rnd() < 0.5 ? 'secondary' : 'pop', fired: false
+            });
+          }
+        }
+        this._buildCloud(fx, g, origin, reactorLocal, now, rnd);
+      }
       for (const c of chunks) {
         const worldCenter = c.center.clone().applyQuaternion(g.quaternion).add(origin);
         const radial = c.center.clone().sub(reactorLocal);
@@ -613,6 +662,48 @@ export class ShipDestruction {
   }
 
   /**
+   * Instanced debris cloud (hundreds of glowing fragments thrown from the
+   * reactor end) plus long-lived embers drifting with the wreck.
+   */
+  _buildCloud(fx, g, origin, reactorLocal, t0, rnd) {
+    const L = g.userData.size?.length || this.scale;
+    const W = g.userData.size?.width || L * 0.22;
+    const n = Math.round(160 + 40 * (this.scale / 6));
+    const cloud = fx.createDebrisSet(n);
+    const p = new THREE.Vector3(), v = new THREE.Vector3(), axis = new THREE.Vector3(), dir = new THREE.Vector3();
+    for (let i = 0; i < n; i++) {
+      // born inside the hull, clustered around the reactor
+      const local = new THREE.Vector3((rnd() - 0.5) * W * 0.8, (rnd() - 0.5) * W * 0.8,
+        reactorLocal.z + (rnd() - 0.35) * L * (0.25 + 0.6 * rnd()));
+      p.copy(local).applyQuaternion(g.quaternion).add(origin);
+      dir.copy(local).sub(reactorLocal);
+      if (dir.lengthSq() < 1e-6) dir.set(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5);
+      dir.normalize().add(new THREE.Vector3(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).multiplyScalar(0.8)).normalize()
+        .applyQuaternion(g.quaternion);
+      const speed = this.scale * (0.05 + 0.6 * Math.pow(rnd(), 2.2));
+      v.copy(this.driftVel).addScaledVector(dir, speed);
+      axis.set(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).normalize();
+      const size = L * (0.005 + 0.022 * Math.pow(rnd(), 2.5));
+      const flat = rnd() < 0.45;
+      cloud.set(i, p, t0, v, 18 + 20 * rnd(), axis, 0.5 + 4 * rnd(),
+        size * (flat ? 1.6 : 1), size * (flat ? 0.25 : 0.85), size * (flat ? 1.2 : 1), 0.9 + 1.1 * rnd());
+    }
+    cloud.flush();
+    this.cloud = cloud;
+
+    this.embers = new SparkBurst({
+      count: 700, speed: [0.05 * this.scale, 0.55 * this.scale], life: [3, 16],
+      size: 0.05 * this.scale, drag: 0.12, spread: L * 0.12, rnd,
+      hot: [2.4, 1.6, 0.8], warm: [1.8, 0.6, 0.12], cool: [0.35, 0.05, 0.0], intensity: 1.0
+    });
+    this.emberGroup = new THREE.Group();
+    this.emberGroup.add(this.embers.object);
+    this.emberOrigin = origin.clone().add(reactorLocal.clone().applyQuaternion(g.quaternion));
+    this.emberGroup.position.copy(this.emberOrigin);
+    this.ctx.scene.add(this.emberGroup);
+  }
+
+  /**
    * @param {number} now       battle time
    * @param {number} delta     wall delta (for the hulk tumble)
    * @param {number} wallTime  wall clock (torch turbulence)
@@ -623,7 +714,7 @@ export class ShipDestruction {
     const blastAge = age - this.driftDuration;
     const g = this.shipGroup;
     if (age < 0) return true;
-    if (blastAge > 22) return false;
+    if (blastAge > WRECK_LIFE) return false;
 
     if (blastAge < 0) {
       // DRIFT: coasting dark, tumbling, venting, popping
@@ -642,12 +733,13 @@ export class ShipDestruction {
       for (const pop of this.pops) {
         if (pop.fired || pop.t > age) continue;
         pop.fired = true;
-        if (age - pop.t < KINDS.pop.duration && g) {
+        if (age - pop.t < KINDS[pop.kind || 'pop'].duration && g) {
           const orientation = this.initialOrientation.clone().multiply(
             this.tumble.setFromAxisAngle(this.tumbleAxis, this.tumbleRate * pop.t));
           const world = pop.local.clone().applyQuaternion(orientation).add(this.basePos).addScaledVector(this.driftVel, pop.t);
           const dir = pop.local.clone().setZ(0).normalize().applyQuaternion(orientation);
-          this.ctx.spawnBlast({ position: world, scale: this.scale * 0.35, spawnTime: this.spawnTime + pop.t, kind: 'pop', dir, baseVel: this.driftVel });
+          const kind = pop.kind || 'pop';
+          this.ctx.spawnBlast({ position: world, scale: this.scale * (kind === 'secondary' ? 0.22 : 0.35), spawnTime: this.spawnTime + pop.t, kind, dir, baseVel: this.driftVel });
         }
       }
       return true;
@@ -657,10 +749,10 @@ export class ShipDestruction {
     this.blastPos.copy(this.blastOrigin).addScaledVector(this.driftVel, blastAge);
 
     // Chunks: ballistic, tumbling, cooling from orange-hot to dark
-    const fadeStart = 17;
-    const fade = blastAge > fadeStart ? 1 - (blastAge - fadeStart) / 5 : 1;
-    const q = new THREE.Quaternion();
+    const fade = blastAge > SHARD_FADE[0] ? Math.max(0, 1 - (blastAge - SHARD_FADE[0]) / (SHARD_FADE[1] - SHARD_FADE[0])) : 1;
+    const q = _dq;
     for (const c of this.chunks) {
+      c.mesh.visible = fade > 0;
       c.mesh.position.copy(c.p0).addScaledVector(c.vel, blastAge);
       q.setFromAxisAngle(c.spinAxis, c.spinRate * blastAge);
       c.mesh.quaternion.copy(c.q0).multiply(q);
@@ -672,12 +764,39 @@ export class ShipDestruction {
         m.opacity = Math.max(0, fade);
       }
     }
+    // Big sections: slow tumble, torn edges glow and cool, long linger
+    const secFade = blastAge > WRECK_LIFE - 6 ? Math.max(0, (WRECK_LIFE - blastAge) / 6) : 1;
+    for (const sec of this.sections) {
+      sec.mesh.position.copy(sec.p0).addScaledVector(sec.vel, blastAge);
+      q.setFromAxisAngle(sec.spinAxis, sec.spinRate * blastAge);
+      sec.mesh.quaternion.copy(sec.q0).multiply(q);
+      const heat = sec.heat * (1.5 * Math.exp(-blastAge / 2.2) + 0.75 * Math.exp(-blastAge / 11));
+      const mats = Array.isArray(sec.mesh.material) ? sec.mesh.material : [sec.mesh.material];
+      for (const m of mats) {
+        m.emissiveIntensity = heat * 0.03;
+        m.opacity = secFade;
+      }
+      if (sec.overlay) {
+        sec.overlay.material.uniforms.uHeat.value = heat;
+        sec.overlay.material.uniforms.uFade.value = secFade;
+      }
+    }
+    if (this.embers) {
+      this.emberGroup.position.copy(this.emberOrigin).addScaledVector(this.driftVel, blastAge);
+      this.embers.setAge(blastAge);
+    }
     for (const s of this.secondaries) {
       if (s.fired || s.t > blastAge) continue;
       s.fired = true;
-      if (blastAge - s.t < KINDS.secondary.duration) {
+      const kind = s.kind || 'secondary';
+      if (blastAge - s.t < KINDS[kind].duration) {
         const pos = s.chunk.p0.clone().addScaledVector(s.chunk.vel, s.t);
-        this.ctx.spawnBlast({ position: pos, scale: s.scale, spawnTime: this.spawnTime + this.driftDuration + s.t, kind: 'secondary', baseVel: s.chunk.vel });
+        if (s.offset) {
+          q.setFromAxisAngle(s.chunk.spinAxis, s.chunk.spinRate * s.t);
+          _dv.copy(s.offset).applyQuaternion(q).applyQuaternion(s.chunk.q0);
+          pos.add(_dv);
+        }
+        this.ctx.spawnBlast({ position: pos, scale: s.scale, spawnTime: this.spawnTime + this.driftDuration + s.t, kind, baseVel: s.chunk.vel });
       }
     }
     return true;
@@ -695,11 +814,17 @@ export class ShipDestruction {
     }
     if (this.chunkGroup) {
       this.ctx.scene.remove(this.chunkGroup);
-      for (const c of this.chunks) {
+      for (const c of [...this.chunks, ...this.sections]) {
         c.mesh.geometry.dispose();
         const mats = Array.isArray(c.mesh.material) ? c.mesh.material : [c.mesh.material];
         for (const m of mats) m.dispose();
+        if (c.overlay) { c.overlay.geometry.dispose(); c.overlay.material.dispose(); }
       }
+    }
+    if (this.cloud) this.cloud.dispose();
+    if (this.embers) {
+      this.ctx.scene.remove(this.emberGroup);
+      this.embers.dispose();
     }
     if (this.shipGroup) this.shipGroup.visible = false;
   }

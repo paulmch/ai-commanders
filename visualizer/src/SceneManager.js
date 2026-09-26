@@ -7,6 +7,7 @@ import { updateHullDetails } from './render/Hulls.js';
 import { createTorch } from './render/Torch.js';
 import { Ribbon } from './render/Trails.js';
 import { Blast, ShipDestruction } from './render/Explosion.js';
+import { DamageFX } from './render/DamageFX.js';
 import { getGlowTexture } from './render/Textures.js';
 import { RcsSystem } from './render/Rcs.js';
 
@@ -96,6 +97,7 @@ export class SceneManager {
     this.postfx = new PostFX(this.renderer, this.scene, this.camera);
 
     this.createRangeRings();
+    this.damageFX = new DamageFX(this);   // persistent hull damage (render/DamageFX.js)
 
     // Shared context for effect objects
     this.fxCtx = {
@@ -309,21 +311,7 @@ export class SceneManager {
     // sputtering torch; layer venting, fires and failing lights on top.
     if (state.dying) {
       ud.wasDying = true;
-      this._setDyingVents(ship, true);
-      for (const v of ud.dyingVents) {
-        v.torch.update(0.5 + 0.5 * Math.sin(this.elapsed * 1.9 + v.phase), this.elapsed, 0.85);
-      }
-      let next = this.dyingPopTimes.get(shipId);
-      if (next === undefined || Math.abs(next - this.currentTime) > 3.0) next = this.currentTime + 0.3 + Math.random();
-      if (this.currentTime >= next) {
-        const L = ud.size.length, W = ud.size.width;
-        const local = new THREE.Vector3((Math.random() - 0.5) * W * 0.9, (Math.random() - 0.5) * W * 0.9, (Math.random() - 0.5) * L * 0.85);
-        const world = local.clone().applyQuaternion(ship.quaternion).add(ship.position);
-        const dir = local.clone().setZ(0).normalize().applyQuaternion(ship.quaternion);
-        this._spawnBlast({ position: world, scale: L * 0.35, spawnTime: this.currentTime, kind: 'pop', dir, category: 'small' });
-        next = this.currentTime + 0.4 + Math.random() * 1.4;
-      }
-      this.dyingPopTimes.set(shipId, next);
+      // breaches, venting and walking secondaries: DamageFX, on battle time
     } else {
       this._setDyingVents(ship, false);
       if (this.dyingPopTimes.has(shipId)) this.dyingPopTimes.delete(shipId);
@@ -958,6 +946,7 @@ export class SceneManager {
   }
 
   updateDestructionEffects(currentTime) {
+    this.damageFX.update(currentTime);
     for (let i = this.destructionEffects.length - 1; i >= 0; i--) {
       const eff = this.destructionEffects[i];
       if (!eff.update(currentTime, this.delta || 0.016, this.elapsed)) {

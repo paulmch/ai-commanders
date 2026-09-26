@@ -394,6 +394,7 @@ class BattleVisualizer {
     }
     // Death causes + final vectors drive the two-stage destruction sequence
     this.scene.deathInfo = this.loader.buildDeathInfo();
+    this.scene.damageFX?.setRecording(this.loader);
     this.setLoadingProgress(100);
 
     // Update UI
@@ -668,6 +669,7 @@ class BattleVisualizer {
     } else if (recording && this.loader.appendLiveData(recording)) {
       live.lastFrameT = this.loader.duration;
       this.scene.deathInfo = this.loader.buildDeathInfo();
+      this.scene.damageFX?.setRecording(this.loader);
       this.timeController.setDuration(this.loader.duration);
       this.updateBattleInfo();
       this.populateTimelineMarkers();
@@ -704,6 +706,7 @@ class BattleVisualizer {
           } else if (live.started) {
             this.loader.appendLiveData(recording);
             this.scene.deathInfo = this.loader.buildDeathInfo();
+            this.scene.damageFX?.setRecording(this.loader);
           }
         }
       }
