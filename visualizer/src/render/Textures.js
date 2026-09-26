@@ -308,9 +308,16 @@ function heightToNormalCanvas(height, size, strength) {
 
 const _hullSets = new Map();
 
+/** Faction livery colours (sRGB 0-255), shared with the hull markings. */
+export const FACTION_PAINT = {
+  alpha: [52, 118, 168],
+  beta: [192, 90, 44]
+};
+
 /**
- * Faction hull plating set. `variant` is 'hull' (painted armour plating)
- * or 'trim' (dark mechanical structure: dense small panels, grilles, pipes).
+ * Faction hull plating set. `variant` is 'hull' (painted armour plating),
+ * 'trim' (dark mechanical structure: dense small panels, grilles, pipes)
+ * or 'paint' (faction livery plates: big panels, chipped at the edges).
  * Returns { map, normalMap, ormMap } textures, all tileable.
  */
 export function getHullTextures(faction, variant = 'hull') {
@@ -320,14 +327,20 @@ export function getHullTextures(faction, variant = 'hull') {
   const size = variant === 'hull' ? 1024 : 512;
   const rnd = mulberry32(faction === 'alpha' ? 4242 : 7777 + (variant === 'trim' ? 99 : 0));
   const isTrim = variant === 'trim';
+  const isPaint = variant === 'paint';
 
-  // Base palette
-  const base = faction === 'alpha'
-    ? (isTrim ? [40, 45, 52] : [88, 98, 112])
-    : (isTrim ? [46, 42, 40] : [104, 94, 88]);
+  // Base palette. Plating is a touch lighter than bare steel so the lit
+  // side reads as painted armour, not a black silhouette.
+  const paint = FACTION_PAINT[faction] || FACTION_PAINT.alpha;
+  const base = isPaint ? paint.map(c => c * 0.82)
+    : faction === 'alpha'
+      ? (isTrim ? [40, 45, 52] : [98, 107, 120])
+      : (isTrim ? [46, 42, 40] : [114, 104, 97]);
   const accent = faction === 'alpha' ? [40, 200, 255] : [255, 130, 50];
 
-  const panels = subdividePanels(size, rnd, isTrim ? 20 : 56, isTrim ? 72 : 260);
+  const panels = isPaint
+    ? subdividePanels(size, rnd, 64, 300)
+    : subdividePanels(size, rnd, isTrim ? 20 : 56, isTrim ? 72 : 260);
   const grime = makeFbm(size, 4, 5, rnd, 0.6);
   const micro = makeFbm(size, 32, 3, rnd, 0.5);
 
@@ -350,18 +363,20 @@ export function getHullTextures(faction, variant = 'hull') {
   };
 
   for (const p of panels) {
-    const tone = 1 + (rnd() - 0.5) * (isTrim ? 0.26 : 0.26);
-    const kind = rnd();
+    // Gentle per-plate tone steps: strong ones read as a checkerboard at
+    // mid range. Plates differ more in roughness (sheen) than in colour.
+    const tone = 1 + (rnd() - 0.5) * (isTrim ? 0.26 : isPaint ? 0.1 : 0.1);
+    const kind = isPaint ? 1 : rnd();
     let col = base.map(c => c * tone);
-    let pRough = (isTrim ? 0.68 : 0.5) + (rnd() - 0.5) * 0.2;
-    let pMetal = isTrim ? 0.85 : 0.3;
+    let pRough = (isTrim ? 0.68 : isPaint ? 0.5 : 0.52) + (rnd() - 0.5) * (isTrim ? 0.2 : 0.14);
+    let pMetal = isTrim ? 0.85 : isPaint ? 0.12 : 0.3;
     let pHeight = 0.45 + rnd() * 0.25;
 
-    if (!isTrim && kind < 0.06) {
+    if (!isTrim && kind < 0.035) {
       // bare metal plate
-      col = [150 * tone, 152 * tone, 158 * tone];
-      pRough = 0.32 + rnd() * 0.1;
-      pMetal = 0.95;
+      col = [140 * tone, 142 * tone, 148 * tone];
+      pRough = 0.38 + rnd() * 0.1;
+      pMetal = 0.8;
     } else if (!isTrim && kind < 0.09) {
       // faction-painted panel
       col = accent.map((c, i) => c * 0.55 + base[i] * 0.45);
@@ -369,7 +384,7 @@ export function getHullTextures(faction, variant = 'hull') {
       pMetal = 0.15;
     } else if (kind < (isTrim ? 0.4 : 0.16)) {
       // darker structural / composite panel
-      col = col.map(c => c * (isTrim ? 0.8 : 0.72));
+      col = col.map(c => c * (isTrim ? 0.8 : 0.84));
       pRough = 0.62 + rnd() * 0.15;
       pHeight = 0.36;
     }
@@ -417,7 +432,7 @@ export function getHullTextures(faction, variant = 'hull') {
             else if (d < r) fillRect(height, xx, yy, 1, 1, 0.25);
           }
         }
-      } else if (!isTrim && feat < 0.27) {
+      } else if (!isTrim && !isPaint && feat < 0.27) {
         // hazard chevrons
         actx.save();
         actx.beginPath();
@@ -437,17 +452,45 @@ export function getHullTextures(faction, variant = 'hull') {
         }
         actx.restore();
         fillRect(metal, p.x + 6, Math.round(cy - 6), p.w - 12, 12, 0.1);
-      } else if (!isTrim && feat < 0.33) {
-        // faction stripe along one edge
+      } else if (!isTrim && !isPaint && feat < 0.295) {
+        // faction stripe along one edge (rare and muted: a scatter of
+        // saturated bars reads as confetti on the big hulls)
         const horiz = p.w > p.h;
-        actx.fillStyle = `rgba(${accent[0]},${accent[1]},${accent[2]},0.7)`;
+        actx.fillStyle = `rgba(${accent[0] * 0.6 | 0},${accent[1] * 0.6 | 0},${accent[2] * 0.6 | 0},0.55)`;
         if (horiz) actx.fillRect(p.x + 4, p.y + 5, p.w - 8, 5);
         else actx.fillRect(p.x + 5, p.y + 4, 5, p.h - 8);
       }
     }
 
+    // Plate bevel: a lit upper/left lip and a shadowed lower/right lip
+    // give each plate a raised read before the normal map does
+    if (!isTrim && p.w > 16 && p.h > 16) {
+      actx.fillStyle = 'rgba(255,255,255,0.07)';
+      actx.fillRect(p.x + inset, p.y + inset, p.w - inset * 2, 2);
+      actx.fillRect(p.x + inset, p.y + inset, 2, p.h - inset * 2);
+      actx.fillStyle = 'rgba(0,0,0,0.12)';
+      actx.fillRect(p.x + inset, p.y + p.h - inset - 2, p.w - inset * 2, 2);
+      actx.fillRect(p.x + p.w - inset - 2, p.y + inset, 2, p.h - inset * 2);
+    }
+    // Chipped livery: bare metal flecks crowd the plate edges
+    if (isPaint) {
+      const chips = Math.floor((p.w + p.h) / 9);
+      for (let i = 0; i < chips; i++) {
+        const edge = rnd() < 0.5;
+        const cx0 = edge ? p.x + (rnd() < 0.5 ? 3 + rnd() * 8 : p.w - 3 - rnd() * 8) : p.x + rnd() * p.w;
+        const cy0 = edge ? p.y + rnd() * p.h : p.y + (rnd() < 0.5 ? 3 + rnd() * 8 : p.h - 3 - rnd() * 8);
+        const w = 1 + rnd() * 4, h = 1 + rnd() * 3;
+        const g = 120 + rnd() * 40;
+        actx.fillStyle = `rgb(${g | 0},${(g + 2) | 0},${(g + 6) | 0})`;
+        actx.fillRect(cx0, cy0, w, h);
+        fillRect(metal, Math.round(cx0), Math.round(cy0), Math.ceil(w), Math.ceil(h), 0.9);
+        fillRect(rough, Math.round(cx0), Math.round(cy0), Math.ceil(w), Math.ceil(h), 0.35);
+        fillRect(height, Math.round(cx0), Math.round(cy0), Math.ceil(w), Math.ceil(h), pHeight - 0.05);
+      }
+    }
+
     // rivets along the seams
-    if (p.w > 24 && p.h > 24 && rnd() < (isTrim ? 0.9 : 0.7)) {
+    if (p.w > 24 && p.h > 24 && rnd() < (isTrim ? 0.9 : isPaint ? 0.4 : 0.7)) {
       const step = isTrim ? 10 : 18;
       actx.fillStyle = 'rgba(0,0,0,0.35)';
       const rr = isTrim ? 1 : 1.5;
@@ -496,7 +539,7 @@ export function getHullTextures(faction, variant = 'hull') {
     const g = grime[i];
     const m = micro[i];
     // grime darkens, streaked; micro noise adds surface grain
-    const mod = (0.86 + 0.28 * g) * (0.94 + 0.12 * m);
+    const mod = isPaint ? (0.8 + 0.34 * g) * (0.94 + 0.12 * m) : (0.86 + 0.28 * g) * (0.94 + 0.12 * m);
     img.data[i * 4] = Math.min(255, img.data[i * 4] * mod);
     img.data[i * 4 + 1] = Math.min(255, img.data[i * 4 + 1] * mod);
     img.data[i * 4 + 2] = Math.min(255, img.data[i * 4 + 2] * mod);

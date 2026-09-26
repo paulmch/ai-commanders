@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { Environment } from './render/Environment.js';
 import { PostFX } from './render/PostFX.js';
 import { buildHull, buildShipMaterials } from './render/Hulls.js';
+import { updateHullDetails } from './render/Hulls.js';
 import { createTorch } from './render/Torch.js';
 import { Ribbon } from './render/Trails.js';
 import { Blast, ShipDestruction } from './render/Explosion.js';
@@ -397,6 +398,7 @@ export class SceneManager {
     const thrust = ud.smoothThrust;
     for (const t of ud.torches) t.update(thrust, this.elapsed, state.dying ? 0.7 : 0);
     if (mats) mats.bellHeat.emissiveIntensity = 0.3 + 2.8 * thrust;
+    updateHullDetails(ship, state, this);   // hull rigs, doors, nav lamps (render/HullRigs.js)
   }
 
   // ===========================================================================
