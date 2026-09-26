@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { Ribbon } from './Trails.js';
+import { RCS_LAYOUT, ENGINE } from './TorpedoRcs.js';
 
 const additive = {
   transparent: true, depthWrite: false, side: THREE.DoubleSide,
@@ -8,7 +9,9 @@ const additive = {
   blendDst: THREE.OneFactor, blendEquation: THREE.AddEquation
 };
 
-// One draw for all streaks, curved trail segments, motor plumes and PD ribbons.
+// One draw for all streaks, curved trail segments, motor plumes, PD ribbons
+// and torpedo RCS jets. Kinds: 0 slug tracer, 1 slug wake, 2 PD beam,
+// 3 motor plume, 4 spark, 5 retarget dash, 6 torpedo wake, 7 RCS jet.
 const ribbonVertex = /* glsl */`
   attribute vec3 aFrom;
   attribute vec3 aTo;
@@ -31,18 +34,21 @@ const ribbonVertex = /* glsl */`
     float pixel = uPixelWorld * max(0.01, -p.z);
     float kind = aStyle.z;
     bool plume = kind > 2.5 && kind < 3.5;
+    bool jet = kind > 6.5;
     // Half-width floor >= 1 px: a narrower strip rasterises as beads.
-    float floorPx = kind < 0.5 ? 1.1 : kind < 1.5 ? 1.0 : kind < 2.5 ? 0.6 : plume ? 1.2 : 1.0;
-    float capPx = plume ? 64.0 : kind > 5.5 ? 24.0 : kind > 1.5 && kind < 2.5 ? 2.2 : 3.0;
+    float floorPx = kind < 0.5 ? 1.1 : kind < 1.5 ? 1.0 : kind < 2.5 ? 0.6 : plume ? 1.2 : jet ? 0.7 : 1.0;
+    float capPx = plume ? 64.0 : jet ? 16.0 : kind > 5.5 ? 24.0 : kind > 1.5 && kind < 2.5 ? 2.2 : 3.0;
     float width = max(pixel * floorPx, min(aStyle.x, pixel * capPx));
     // Thin effects retain a controlled subpixel contribution at fleet scale.
-    float minCover = kind < 0.5 ? 0.5 : kind < 1.5 ? 0.07 : kind < 2.5 ? 0.35 : kind > 5.5 ? 0.12 : 0.3;
+    float minCover = kind < 0.5 ? 0.5 : kind < 1.5 ? 0.07 : kind < 2.5 ? 0.35 : jet ? 0.1 : kind > 5.5 ? 0.12 : 0.3;
     vCover = max(minCover, min(1.0, aStyle.x / width));
     // Half-width in pixels: the fragment keeps the bright core >= ~1.5 px
     // wide so a thin line never alternates hit/miss (beading) along its run.
     vPx = width / pixel;
     // Plumes flare out of the nozzle, then neck down slightly toward the tip.
-    float taper = plume ? mix(0.3, 1.0, smoothstep(0.0, 0.3, uv.x)) * (1.0 - 0.35 * uv.x) : 1.0;
+    // RCS jets are tight at the nozzle and fan out as the gas expands.
+    float taper = plume ? mix(0.3, 1.0, smoothstep(0.0, 0.3, uv.x)) * (1.0 - 0.35 * uv.x)
+      : jet ? mix(0.3, 1.0, sqrt(uv.x)) : 1.0;
     p.xy += vec2(-d.y, d.x) * position.y * 2.0 * width * taper;
     gl_Position = projectionMatrix * vec4(p, 1.0);
     vUv = uv;
@@ -100,12 +106,16 @@ const ribbonFragment = /* glsl */`
     } else if (kind < 5.5) {
       float dash = smoothstep(0.25,0.4,fract(x*32.0));
       color = vec3(0.08,0.55,0.5)*halo*dash;
-    } else {
+    } else if (kind < 6.5) {
       // Torpedo exhaust wake: hot orange near the motor, dull red-brown aft
       float cooling = pow(max(0.0,1.0-vAge),1.4);
       float wisps = 0.7+0.3*sin(x*9.0 + vStyle.w*37.0 - uTime*1.3);
       color = mix(vec3(0.22,0.07,0.03),vec3(1.5,0.72,0.3),cooling*cooling)
         * (core*0.7 + halo*0.45) * cooling * wisps;
+    } else {
+      // RCS jet: white-hot at the nozzle, cooling to pale blue as it thins
+      float fall = exp(-x*2.2) * smoothstep(0.0,0.04,x) * (1.0-smoothstep(0.5,1.0,x));
+      color = (vec3(2.6,2.8,3.2)*core*exp(-x*1.8) + vec3(0.45,0.75,1.6)*halo) * fall;
     }
     gl_FragColor = vec4(color * vStyle.y * vCover, 1.0);
   }
@@ -118,14 +128,19 @@ const flashVertex = /* glsl */`
   uniform float uPixelWorld;
   varying vec2 vUv;
   varying vec4 vStyle;
+  varying float vCover;
   #include <common>
   #include <logdepthbuf_pars_vertex>
   void main() {
     vec3 p = (viewMatrix * vec4(aCenter,1.0)).xyz;
     float pixel = uPixelWorld * max(0.01,-p.z);
-    float r = max(aStyle.x,pixel*2.0);
+    bool puff = aStyle.z > 4.5;
+    float r = max(aStyle.x,pixel*(puff ? 1.0 : 2.0));
+    // RCS puffs (kind 5) keep their energy when held at the pixel floor, so
+    // they fade out with range instead of growing into dots.
+    vCover = puff ? min(1.0, aStyle.x*aStyle.x/(r*r)) : 1.0;
     // Faction markers (kinds 3/4) hold a constant ~12 px screen size.
-    if (aStyle.z > 2.5) r = pixel*6.0;
+    if (aStyle.z > 2.5 && !puff) r = pixel*6.0;
     if (aStyle.z < 0.5) {
       vec3 n = normalize(aAxis);
       vec3 right = normalize(cross(n, abs(n.y) < 0.9 ? vec3(0.0,1.0,0.0) : vec3(1.0,0.0,0.0)));
@@ -144,6 +159,7 @@ const flashVertex = /* glsl */`
 const flashFragment = /* glsl */`
   varying vec2 vUv;
   varying vec4 vStyle;
+  varying float vCover;
   #include <common>
   #include <logdepthbuf_pars_fragment>
   void main() {
@@ -160,6 +176,10 @@ const flashFragment = /* glsl */`
       float arc = pow(0.5+0.5*sin(angle*7.0+vStyle.w*73.0),3.0);
       float ring = exp(-pow((r-0.67)*24.0,2.0))*(0.3+0.7*arc);
       col = vec3(2.6,3.2,3.6)*exp(-r*r*45.0) + vec3(0.16,1.15,1.9)*ring + vec3(0.06,0.3,0.6)*halo*0.5;
+    } else if (vStyle.z > 4.5) {
+      // RCS nozzle glow / exhaust puff: white kernel in a cold blue skirt
+      col = vec3(1.9,2.1,2.5)*exp(-r*r*10.0)
+        + vec3(0.3,0.55,1.1)*exp(-r*r*3.2)*(1.0-smoothstep(0.55,1.0,r))*0.75;
     } else if (vStyle.z > 2.5) {
       // Faction diamond so a torpedo stays identifiable when sub-pixel
       float d = abs(p.x) + abs(p.y);
@@ -169,7 +189,7 @@ const flashFragment = /* glsl */`
       float rays = pow(max(0.0,1.0-abs(p.x*p.y)*60.0),3.0)*exp(-r*5.0);
       col += vec3(1.6,0.95,0.4)*rays;
     }
-    gl_FragColor = vec4(col*vStyle.y,1.0);
+    gl_FragColor = vec4(col*vStyle.y*vCover,1.0);
   }
 `;
 
@@ -255,7 +275,8 @@ export class WeaponFlashes extends QuadBatch {
   }
 }
 
-function torpedoGeometry() {
+/** Vertex-coloured, non-indexed part list merged into one geometry. */
+function partList() {
   const parts = [];
   const part = (geometry, color, x = 0, y = 0, z = 0) => {
     const g = geometry.index ? geometry.toNonIndexed() : geometry;
@@ -266,55 +287,146 @@ function torpedoGeometry() {
     g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     parts.push(g);
   };
-  part(new THREE.CylinderGeometry(0.12, 0.15, 1.15, 12).rotateX(Math.PI / 2), 0xa4acb6);
-  part(new THREE.ConeGeometry(0.12, 0.42, 12).rotateX(Math.PI / 2), 0x626f80, 0, 0, 0.78);
-  part(new THREE.CylinderGeometry(0.15, 0.1, 0.2, 12, 1, true).rotateX(Math.PI / 2), 0x303845, 0, 0, -0.67);
-  for (const z of [-0.4, 0.34]) part(new THREE.TorusGeometry(0.145, 0.016, 4, 16), 0xced8df, 0, 0, z);
-  for (let i = 0; i < 4; i++) {
-    const a = i * Math.PI / 2;
-    part(new THREE.BoxGeometry(0.025, 0.27, 0.3).rotateZ(a), 0x455362, -Math.sin(a)*0.19, Math.cos(a)*0.19, -0.45);
-  }
-  // Seeker window and longitudinal cable conduits.
-  part(new THREE.SphereGeometry(0.06, 8, 6).scale(1, 1, 0.5), 0x19364a, 0, 0, 0.99);
-  part(new THREE.BoxGeometry(0.028, 0.028, 0.85), 0xd0b787, 0.13, 0, 0);
-  const merged = mergeGeometries(parts);
-  for (const p of parts) p.dispose();
-  return merged;
+  const merge = () => {
+    const merged = mergeGeometries(parts);
+    for (const p of parts) p.dispose();
+    return merged;
+  };
+  return { part, merge };
 }
+
+const TORPEDO_R = 0.13;
+
+/**
+ * Space torpedo, body frame +Z nose (display units, ~1.95 long with the
+ * bell): no fins - there is no air to bite. Ogive penetrator nose with a
+ * seeker window, a clean propellant tank, an aft thrust frame carrying the
+ * gimbal mount, and two rings of four RCS quads (tiny nubs with nozzle
+ * stubs at RCS_LAYOUT) that trim the course and slew the body. The engine
+ * bell is a separate instanced mesh so it can gimbal.
+ */
+function torpedoGeometry() {
+  const { part, merge } = partList();
+  const R = TORPEDO_R;
+  const cyl = (rTop, rBottom, len, seg = 24) =>
+    new THREE.CylinderGeometry(rTop, rBottom, len, seg, 1, true).rotateX(Math.PI / 2);
+  // Propellant tank (z -0.48..0.32) and the denser penetrator section ahead of it
+  part(cyl(R, R, 0.8), 0xa7afb8, 0, 0, -0.08);
+  part(cyl(R, R, 0.28), 0x6a737d, 0, 0, 0.46);
+  // Ogive nose (z 0.60..1.0) closing onto the seeker window
+  const ogive = [];
+  for (let i = 0; i <= 12; i++) {
+    const u = i / 12;
+    ogive.push(new THREE.Vector2(Math.max(0.03, R * Math.pow(1 - u * u, 0.62)), 0.6 + 0.4 * u));
+  }
+  part(new THREE.LatheGeometry(ogive, 24).rotateX(Math.PI / 2), 0x5e6772);
+  part(new THREE.SphereGeometry(0.036, 12, 8).scale(1, 1, 0.75), 0x12303f, 0, 0, 0.995);
+  // Aft thrust frame, bulkhead and gimbal mount (bell hangs off ENGINE.pivot)
+  part(cyl(R, 0.116, 0.16), 0x49515b, 0, 0, -0.56);
+  part(new THREE.CircleGeometry(0.116, 24).rotateX(Math.PI), 0x262b31, 0, 0, -0.64);
+  part(new THREE.CylinderGeometry(0.048, 0.058, 0.035, 16).rotateX(Math.PI / 2), 0x3a3f46, 0, 0, ENGINE.pivot + 0.0175);
+  // Panel seams and one cable raceway along +X (the quads sit clear of it)
+  for (const z of [-0.48, 0.32, 0.6]) part(new THREE.TorusGeometry(R + 0.001, 0.005, 4, 32), 0x7d858d, 0, 0, z);
+  part(new THREE.BoxGeometry(0.022, 0.018, 0.74), 0xc2a978, R + 0.008, 0, -0.08);
+  // RCS quads: a block on the skin plus an outward nozzle stub
+  const out = RCS_LAYOUT.radius;
+  for (const z of RCS_LAYOUT.rings) {
+    for (let k = 0; k < 4; k++) {
+      const phi = RCS_LAYOUT.phase + k * Math.PI / 2, c = Math.cos(phi), s = Math.sin(phi);
+      part(new THREE.BoxGeometry(0.04, 0.05, 0.075).rotateZ(phi), 0x646c75, c * (R + 0.008), s * (R + 0.008), z);
+      part(new THREE.CylinderGeometry(0.014, 0.009, out - R - 0.026, 8).rotateZ(phi - Math.PI / 2), 0x1d2126,
+        c * (out + R + 0.026) / 2, s * (out + R + 0.026) / 2, z);
+    }
+  }
+  return merge();
+}
+
+/** Engine bell hanging from its gimbal pivot at the origin, exit toward -Z. */
+function bellGeometry() {
+  const { part, merge } = partList();
+  const L = ENGINE.bell, throat = 0.034, exit = 0.104;
+  const pts = [];
+  for (let i = 0; i <= 12; i++) {
+    const u = i / 12;  // exit (u=0) -> throat (u=1): parabolic bell contour
+    pts.push(new THREE.Vector2(Math.sqrt(exit * exit + (throat * throat - exit * exit) * u), -L * (1 - u)));
+  }
+  part(new THREE.LatheGeometry(pts, 24).rotateX(Math.PI / 2), 0x5e4d3f);
+  part(new THREE.TorusGeometry(exit, 0.005, 4, 32), 0x8a7663, 0, 0, -L);
+  part(new THREE.SphereGeometry(0.046, 12, 8), 0x3b3f45, 0, 0, -0.02);
+  return merge();
+}
+
+const NEG_Z = new THREE.Vector3(0, 0, -1);
+const UNIT = new THREE.Vector3(1, 1, 1);
 
 export class TorpedoBodies {
   constructor(scene, capacity = 64) {
     this.scene = scene;
     this.geometry = torpedoGeometry();
+    this.bellGeometry = bellGeometry();
     this.material = new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.72, roughness: 0.36 });
+    this.bellMaterial = new THREE.MeshStandardMaterial({
+      vertexColors: true, metalness: 0.6, roughness: 0.45, side: THREE.DoubleSide
+    });
     this.capacity = capacity;
-    this.mesh = new THREE.InstancedMesh(this.geometry, this.material, capacity);
-    this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    this.mesh.frustumCulled = false;
-    this.mesh.count = 0;
-    this.pose = new THREE.Object3D();
-    this.axis = new THREE.Vector3(0, 0, 1);
-    scene.add(this.mesh);
+    this.mesh = this.instanced(this.geometry, this.material, capacity);
+    this.bell = this.instanced(this.bellGeometry, this.bellMaterial, capacity);
+    this.pose = new THREE.Matrix4();
+    this.local = new THREE.Matrix4();
+    this.pivot = new THREE.Vector3(0, 0, ENGINE.pivot);
+    this.tilt = new THREE.Quaternion();
+    this.v = new THREE.Vector3();
   }
-  begin() { this.mesh.count = 0; }
-  add(position, direction, roll) {
-    if (this.mesh.count === this.capacity) {
-      const prev = this.mesh;
-      this.capacity *= 2;
-      this.mesh = new THREE.InstancedMesh(this.geometry, this.material, this.capacity);
-      this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-      this.mesh.instanceMatrix.array.set(prev.instanceMatrix.array);
-      this.mesh.count = prev.count;
-      this.mesh.frustumCulled = false;
+
+  instanced(geometry, material, capacity, prev = null) {
+    const mesh = new THREE.InstancedMesh(geometry, material, capacity);
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    mesh.frustumCulled = false;
+    mesh.count = 0;
+    if (prev) {
+      mesh.instanceMatrix.array.set(prev.instanceMatrix.array);
+      mesh.count = prev.count;
       prev.removeFromParent(); prev.dispose();
-      this.scene.add(this.mesh);
     }
-    this.pose.position.copy(position);
-    this.pose.quaternion.setFromUnitVectors(this.axis, direction);
-    this.pose.rotateZ(roll);
-    this.pose.updateMatrix();
-    this.mesh.setMatrixAt(this.mesh.count++, this.pose.matrix);
+    this.scene.add(mesh);
+    return mesh;
   }
-  end() { this.mesh.visible = this.mesh.count > 0; this.mesh.instanceMatrix.needsUpdate = true; }
-  dispose() { this.mesh.removeFromParent(); this.mesh.dispose(); this.geometry.dispose(); this.material.dispose(); }
+
+  begin() { this.mesh.count = 0; this.bell.count = 0; }
+
+  /**
+   * One torpedo: body pose (position + orientation quaternion, +Z nose) and
+   * the gimbal deflection as body-local x/y components of the bell tilt
+   * (radians; the bell exit swings toward that side).
+   */
+  add(position, quaternion, tiltX = 0, tiltY = 0) {
+    if (this.mesh.count === this.capacity) {
+      this.capacity *= 2;
+      this.mesh = this.instanced(this.geometry, this.material, this.capacity, this.mesh);
+      this.bell = this.instanced(this.bellGeometry, this.bellMaterial, this.capacity, this.bell);
+    }
+    this.pose.compose(position, quaternion, UNIT);
+    const i = this.mesh.count++;
+    this.mesh.setMatrixAt(i, this.pose);
+    const angle = Math.hypot(tiltX, tiltY);
+    if (angle > 1e-6) {
+      const k = Math.sin(angle) / angle;
+      this.tilt.setFromUnitVectors(NEG_Z, this.v.set(tiltX * k, tiltY * k, -Math.cos(angle)));
+    } else {
+      this.tilt.identity();
+    }
+    this.local.compose(this.pivot, this.tilt, UNIT).premultiply(this.pose);
+    this.bell.setMatrixAt(i, this.local);
+    this.bell.count = this.mesh.count;
+  }
+
+  end() {
+    for (const m of [this.mesh, this.bell]) { m.visible = m.count > 0; m.instanceMatrix.needsUpdate = true; }
+  }
+
+  dispose() {
+    for (const m of [this.mesh, this.bell]) { m.removeFromParent(); m.dispose(); }
+    this.geometry.dispose(); this.bellGeometry.dispose();
+    this.material.dispose(); this.bellMaterial.dispose();
+  }
 }

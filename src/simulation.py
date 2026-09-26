@@ -4585,6 +4585,7 @@ class CombatSimulation:
 
         for torp_flight in self.torpedoes:
             torp = torp_flight.torpedo
+            torp.begin_thruster_tick()  # recording telemetry only
             target = self.get_ship(torp.target_id)
 
             # A round whose target has died is orphaned, not cancelled. It

@@ -1,5 +1,7 @@
 // Recording-only weapon math. Units here are metres / seconds; the renderer
 // converts to kilometres. No clock, random generator, or frame history.
+import { buildTorpedoThrusters } from './TorpedoRcs.js';
+
 export const ION_LIFE = 1;
 export const MISS_LIFE = 6;
 export const IMPACT_LIFE = 0.46;
@@ -33,10 +35,15 @@ export function beamPulse(time, start, end, seed) {
 
 export function torpedoPower(a, b, dt, range, closure, disabled = false) {
   if (disabled || a.disabled || (a.dv_remaining ?? 0) <= 0) return 0;
+  // Thruster telemetry: `b` (the frame that closes this interval) records
+  // the main throttle of exactly this tick. An RCS trim also burns fuel, so
+  // fuel use alone would light the plume for it.
+  if (b && b.thr !== undefined && !(b.thr > 0)) return 0;
+  const lit = b && b.thr > 0;
   const burn = dt > 0 ? ((a.dv_remaining ?? 0) - (b.dv_remaining ?? 0)) / dt : 0;
   const phase = String(a.phase || a.guidance_phase || a.guidance_mode || '').toLowerCase();
   if (phase.includes('coast') || a.thrusting === false) return 0;
-  if (burn <= 0.002 && a.thrusting !== true) return 0;
+  if (!lit && burn <= 0.002 && a.thrusting !== true) return 0;
   if (phase.includes('cruise') || phase.includes('intercept')) return 0.42;
   // Old recordings have only fuel consumption. Infer the terminal phase
   // from current geometry, never from a future hit or from render history.
@@ -106,7 +113,15 @@ export class WeaponTimeline {
     for (const f of trace) {
       for (const id in f.ships) add(this.ships, id, f.t, f.ships[id]);
       for (const p of f.projectiles || []) add(this.slugs, p.id, f.t, p);
-      for (const p of f.torpedoes || []) add(this.torpedoes, p.id, f.t, p);
+      for (const p of f.torpedoes || []) {
+        add(this.torpedoes, p.id, f.t, p);
+        // Seeker line of sight to a live target in the same frame (the
+        // thruster model points a coasting round's nose along it).
+        const tg = f.ships?.[p.target];
+        if (tg?.pos && p.pos && !tg.destroyed) {
+          this.torpedoes.get(p.id).samples.at(-1).los = [tg.pos[0] - p.pos[0], tg.pos[1] - p.pos[1], tg.pos[2] - p.pos[2]];
+        }
+      }
     }
     const shots = new Map();
     const shotById = new Map();
@@ -184,6 +199,7 @@ export class WeaponTimeline {
     }
     for (const tr of this.torpedoes.values()) {
       if (tr.end === Infinity && tr.samples.at(-1).t < this.end) tr.end = tr.samples.at(-1).t + 1;
+      tr.thrusters = buildTorpedoThrusters(tr.samples);
     }
     this.moments.sort((a, b) => a.time - b.time);
   }

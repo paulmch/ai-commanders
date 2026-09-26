@@ -6,10 +6,14 @@ import {
   WeaponTimeline, makeSample, sampleTrack, seedFor, tracerLength,
   missOpacity, beamPulse, torpedoPower, ION_LIFE, IMPACT_LIFE, OWNED_MOMENTS
 } from './WeaponTimeline.js';
+import {
+  RCS_LAYOUT, ENGINE, PULSE, JET_COUNT, attitudeAt, jetLevels, makePulses, pulsesAt, throttleAt
+} from './TorpedoRcs.js';
 
 const Z = new THREE.Vector3(0, 0, 1);
 const Y = new THREE.Vector3(0, 1, 0);
 const ORIGIN = new THREE.Vector3();
+const X = new THREE.Vector3(1, 0, 0);
 const SCALE = 0.001;
 // Spinal muzzle (fraction of hull width below the axis, of length forward)
 const SPINAL = { cruiser: [-0.42, 0.5], battlecruiser: [-0.245, 0.56], battleship: [-0.335, 0.5], dreadnought_siege: [-0.2, 0.8] };
@@ -41,6 +45,12 @@ export class Projectiles {
     this.s1 = new THREE.Vector3(); this.s2 = new THREE.Vector3(); this.s3 = new THREE.Vector3();
     this.sample = makeSample(); this.history = makeSample(); this.shipSample = makeSample(); this.probe = makeSample();
     this.t1 = new THREE.Vector3(); this.t2 = new THREE.Vector3(); this.focus = new THREE.Vector3(); this.viewDist = Infinity;
+    // Torpedo thrusters: body frame, bell axis, per-jet scratch
+    this.bodyQ = new THREE.Quaternion(); this.rollQ = new THREE.Quaternion();
+    this.ex = new THREE.Vector3(); this.ey = new THREE.Vector3(); this.bellAxis = new THREE.Vector3();
+    this.jetP = new THREE.Vector3(); this.jetD = new THREE.Vector3(); this.jetQ = new THREE.Vector3();
+    this.pulses = makePulses(); this.gimbal = { x: 0, y: 0, z: 0, angle: 0 };
+    this.jetLv = new Float32Array(JET_COUNT);
     this.timeline = null;
     this.time = 0;
   }
@@ -95,6 +105,17 @@ export class Projectiles {
   direction(sample) {
     this.dir.fromArray(sample.vel);
     if (this.dir.lengthSq() < 1e-10) this.dir.set(0, 0, 1); else this.dir.normalize();
+  }
+
+  /**
+   * A torpedo's nose at time t into `out`: the recorded thrust axis with
+   * its slews (thruster telemetry), else the velocity of `sample` (older
+   * recordings, as before).
+   */
+  noseAt(tr, t, sample, out) {
+    if (tr.thrusters?.tele) return attitudeAt(tr.thrusters, t, out);
+    out.fromArray(sample.vel);
+    return out.lengthSq() < 1e-10 ? out.set(0, 0, 1) : out.normalize();
   }
 
   slug(tr, time) {
@@ -244,8 +265,9 @@ export class Projectiles {
       this.timeline.sample(tr, t, this.history);
       this.point(this.d, this.history);
       if (tr.lift) this.lift(tr, t, this.d); else this.muzzleLift(tr, t, this.d);
+      const nx = this.history.next;
       const powered = !poweredOnly || (t < tr.disabledAt && !this.history.state.disabled
-        && (this.history.state.dv_remaining - this.history.next.dv_remaining) > 0.002);
+        && (nx.thr !== undefined ? nx.thr > 0 : (this.history.state.dv_remaining - nx.dv_remaining) > 0.002));
       if (powered) this.ribbons.add(this.c, this.d, poweredOnly ? 0.12 : 0.03,
         intensity * (poweredOnly ? 0.7 : 0.45), poweredOnly ? 6 : 1, tr.seed, (time - prev) / life, (time - t) / life);
       this.c.copy(this.d);
@@ -256,11 +278,12 @@ export class Projectiles {
   torpedo(tr, time) {
     tr.visible = time >= tr.start && time < tr.end;
     if (time < tr.start || time > tr.end + 1.3) return;
-    this.timeline.sample(tr, Math.min(time, tr.end), this.sample);
+    const st = Math.min(time, tr.end);
+    this.timeline.sample(tr, st, this.sample);
     this.point(this.a, this.sample);
-    this.lift(tr, Math.min(time, tr.end), this.a);
+    this.lift(tr, st, this.a);
     tr.position.copy(this.a);
-    this.direction(this.sample);
+    this.noseAt(tr, st, this.sample, this.dir);
     const s = this.sample.state;
     const disabled = time >= tr.disabledAt || s.disabled;
     if (tr.visible) {
@@ -273,27 +296,88 @@ export class Projectiles {
         this.vel.fromArray(this.sample.vel).sub(this.c.fromArray(this.shipSample.vel));
         closure = range > 0 ? this.vel.dot(this.b) / range : 0;
       }
+      const th = tr.thrusters;
       const power = torpedoPower(s, this.sample.next, this.sample.dt, range, closure, disabled);
       // Absolute orientation, including seeker-disabled roll; never integrate dt.
-      this.bodies.add(this.a, this.dir, disabled ? (time - Math.min(time, tr.disabledAt)) * 1.1 + tr.seed * 6.28 : tr.seed * 6.28);
+      const roll = disabled ? (time - Math.min(time, tr.disabledAt)) * 1.1 + tr.seed * 6.28 : tr.seed * 6.28;
+      this.bodyQ.setFromUnitVectors(Z, this.dir).multiply(this.rollQ.setFromAxisAngle(Z, roll));
+      this.ex.copy(X).applyQuaternion(this.bodyQ);
+      this.ey.copy(Y).applyQuaternion(this.bodyQ);
+      // Thrusters are hardware-sized: they read up close and are gone by
+      // the time the whole body is a few pixels (the faction diamond's range).
+      const bodyPx = 1.8 / this.pixelAt(this.a);
+      const vis = disabled ? 0 : THREE.MathUtils.smoothstep(bodyPx, 5, 16);
+      pulsesAt(th, st, tr.seed * PULSE.period, this.pulses, this.gimbal);
+      // Gimbal: the bell exit swings toward the side the nose is pushed.
+      const g = power > 0 ? this.gimbal.angle : 0;
+      const gx = g * (this.gimbal.x * this.ex.x + this.gimbal.y * this.ex.y + this.gimbal.z * this.ex.z);
+      const gy = g * (this.gimbal.x * this.ey.x + this.gimbal.y * this.ey.y + this.gimbal.z * this.ey.z);
+      this.bodies.add(this.a, this.bodyQ, gx, gy);
       if (power > 0) {
         const terminal = power > 0.9;
+        const thr = th.tele ? (throttleAt(th, st) ?? 1) : 1;
+        // A 5% trim burn is a flicker, not a 9 km lance.
+        const size = 0.25 + 0.75 * Math.pow(Math.min(1, thr), 0.7);
         const breathe = 0.96 + 0.04 * Math.sin(time * 11 + tr.seed * 41);
-        this.b.copy(this.a).addScaledVector(this.dir, -0.8);
-        this.c.copy(this.b).addScaledVector(this.dir, -(terminal ? 9 : 3.6) * breathe);
-        this.ribbons.add(this.b, this.c, terminal ? 0.5 : 0.24, terminal ? 1.15 : 0.8, 3, tr.seed);
+        // Plume out of the (gimballed) bell exit, along the bell axis.
+        const ga = Math.hypot(gx, gy);
+        this.bellAxis.copy(this.dir).multiplyScalar(-Math.cos(ga));
+        if (ga > 1e-6) this.bellAxis.addScaledVector(this.ex, Math.sin(ga) * gx / ga).addScaledVector(this.ey, Math.sin(ga) * gy / ga);
+        this.b.copy(this.a).addScaledVector(this.dir, ENGINE.pivot).addScaledVector(this.bellAxis, ENGINE.bell);
+        this.c.copy(this.b).addScaledVector(this.bellAxis, (terminal ? 9 : 3.6) * breathe * size);
+        this.ribbons.add(this.b, this.c, (terminal ? 0.5 : 0.24) * size, (terminal ? 1.15 : 0.8) * (0.6 + 0.4 * size), 3, tr.seed);
         // Nozzle glow: reads end-on and at ranges where the plume is a line.
-        this.flashes.add(this.b, this.dir, terminal ? 0.6 : 0.28, terminal ? 1.2 : 0.6, 1);
+        this.flashes.add(this.b, this.bellAxis, (terminal ? 0.6 : 0.28) * size, (terminal ? 1.2 : 0.6) * size, 1);
       }
+      if (vis > 0.01) this.rcsJets(tr, time, vis);
       // Small seeker glint keeps an unpowered body readable at mid range.
-      this.b.copy(this.a).addScaledVector(this.dir, 0.97);
+      this.b.copy(this.a).addScaledVector(this.dir, 1.02);
       this.flashes.add(this.b, this.dir, 0.045, disabled ? 0.06 : 0.18, 1);
       // Faction diamond at fleet range, gone once the body itself resolves.
-      const bodyPx = 1.8 / this.pixelAt(this.a);
       const mark = 0.5 * (1 - THREE.MathUtils.smoothstep(bodyPx, 8, 24)) * (disabled ? 0.35 : 1);
       if (mark > 0) this.flashes.add(this.a, this.dir, 0, mark, tr.marker);
     }
     this.trail(tr, time, Math.min(time, tr.end), 1.3, 14, 1, true, TRAIL_CAP_PX.torpedo);
+  }
+
+  /**
+   * RCS quads of the torpedo posed by this.a/dir/ex/ey: every pulse from
+   * pulsesAt (translation trims and attitude couples) picks its quads with
+   * jetLevels; a firing quad draws a short white-blue jet plus a nozzle
+   * glow, and each pulse leaves an expanding puff that drifts off along
+   * the nozzle axis for PULSE.puffLife after it closes.
+   */
+  rcsJets(tr, time, vis) {
+    const list = this.pulses, lv = this.jetLv;
+    for (let p = 0; p < list.count; p++) {
+      const pulse = list[p];
+      if (pulse.start > time) continue;
+      jetLevels(this.ex, this.ey, pulse.thrust, pulse.push, lv);
+      const age = time - pulse.start;
+      const firing = time < pulse.end;
+      const fade = firing ? 1 : Math.pow(Math.max(0, 1 - (time - pulse.end) / PULSE.puffLife), 1.5);
+      if (fade <= 0) continue;
+      const open = Math.min(1, age / 0.015);
+      for (let k = 0; k < JET_COUNT; k++) {
+        const level = lv[k] * pulse.level;
+        if (level < 0.05) continue;
+        const phi = RCS_LAYOUT.phase + (k & 3) * Math.PI / 2;
+        this.jetD.copy(this.ex).multiplyScalar(Math.cos(phi)).addScaledVector(this.ey, Math.sin(phi));
+        this.jetP.copy(this.a).addScaledVector(this.dir, RCS_LAYOUT.rings[k >> 2]).addScaledVector(this.jetD, RCS_LAYOUT.radius);
+        const seed = tr.seed + k * 0.013;
+        if (firing) {
+          const flicker = 0.88 + 0.12 * Math.sin(time * 97 + k * 1.7 + tr.seed * 13);
+          this.jetQ.copy(this.jetP).addScaledVector(this.jetD, 0.13 + 0.15 * level);
+          this.ribbons.add(this.jetP, this.jetQ, 0.034, 1.6 * level * vis * open * flicker, 7, seed);
+          this.flashes.add(this.jetP, this.jetD, 0.035 + 0.02 * level, 1.0 * level * vis * open, 5, seed);
+        }
+        // Exhaust puff: gas coasting off the nozzle, spreading thin.
+        const travel = 0.06 + 0.75 * (1 - Math.exp(-4 * age)) / 4;
+        this.jetQ.copy(this.jetP).addScaledVector(this.jetD, travel);
+        const radius = 0.03 + 0.075 * (1 - Math.exp(-6 * age));
+        this.flashes.add(this.jetQ, this.jetD, radius, 0.3 * level * vis * fade * Math.min(1, age / 0.03), 5, seed);
+      }
+    }
   }
 
   /** Loader torpedo moments rendered here instead of SceneManager flares. */
@@ -412,8 +496,7 @@ export class Projectiles {
   surfaceOffset(tr, torpedo, time, out) {
     if (!torpedo) return out.copy(this.dir).multiplyScalar(-0.04);
     this.timeline.sample(tr, time, this.history);
-    this.axis.fromArray(this.history.vel);
-    if (this.axis.lengthSq() < 1e-10) this.axis.copy(Z); else this.axis.normalize();
+    this.noseAt(tr, time, this.history, this.axis);
     const c = this.axis.dot(this.dir);
     const r = 1 / Math.sqrt((c / 0.92) ** 2 + (1 - c * c) / 0.17 ** 2);
     return out.copy(this.axis).multiplyScalar(0.11).addScaledVector(this.dir, -r);
@@ -494,7 +577,7 @@ export class Projectiles {
     this.timeline.sample(m.track, m.time, this.sample);
     this.point(this.a, this.sample);
     if (m.track.lift) this.lift(m.track, m.time, this.a); else this.muzzleLift(m.track, m.time, this.a);
-    this.direction(this.sample);
+    if (m.track.thrusters) this.noseAt(m.track, m.time, this.sample, this.dir); else this.direction(this.sample);
     this.vel.fromArray(this.sample.vel).multiplyScalar(SCALE);
     if (m.kind === 'hit') {
       if (m.position) this.a.fromArray(m.position).multiplyScalar(SCALE);
@@ -530,7 +613,7 @@ export class Projectiles {
         this.flashes.add(this.a, this.dir, 0.3 + age * 3, 0.9 * life * life, 0, m.seed);
         return;
       }
-      this.a.addScaledVector(this.dir, -0.8);
+      this.a.addScaledVector(this.dir, ENGINE.pivot - ENGINE.bell);
       const stutter = 0.55 + 0.45 * Math.sin(age * 70 + m.seed * 9);
       this.flashes.add(this.a, this.dir, 0.3 + age * 1.6, 1.3 * Math.exp(-age * 7) * life * stutter, 1, m.seed);
       return;

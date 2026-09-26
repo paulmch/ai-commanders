@@ -2579,6 +2579,13 @@ class LLMBattleRunner:
                 "fuel_exhausted": torp.fuel_exhausted,
                 "heat_absorbed_j": torp_flight.heat_absorbed_j,
                 "is_disabled": torp_flight.is_disabled,
+                # Thruster telemetry of the tick just stepped (one sim step
+                # per trace frame): main throttle, nose/thrust direction and
+                # the lateral RCS thrust vector (direction x throttle).
+                "main_throttle": torp.last_main_throttle,
+                "main_direction": (torp.last_main_direction.to_tuple()
+                                   if torp.last_main_direction is not None else None),
+                "rcs_thrust": torp.last_rcs_thrust.to_tuple(),
             })
 
         self._enrich_trace_ships(ships)

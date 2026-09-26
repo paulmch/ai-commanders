@@ -2,13 +2,14 @@
 
 `render/Projectiles.js` owns in-flight weapons and instantaneous effects
 (<= 0.46 battle seconds): coilgun slugs (velocity-aligned tracer, 1 s cooling
-wake, 6 s fading coast for misses), torpedoes (instanced body, phase-sized
-motor plume + exhaust wake, faction diamond at fleet range), continuous PD
+wake, 6 s fading coast for misses), torpedoes (instanced finless body with a
+gimbaled bell, throttle/phase-sized motor plume + exhaust wake, RCS jets and
+puffs, faction diamond at fleet range), continuous PD
 beams (burn spot on the facing surface of the round, ablation sparks), coil
 muzzle discharge, torpedo ignition/burn-out/seeker-kill/intercept flashes and
 the instant hull-impact flash + spark burst. `WeaponTimeline.js` indexes the
-recording; `WeaponBatches.js` holds the three shared draws (ribbons, flashes,
-torpedo bodies). Everything is evaluated from battle time (seek/scrub/pause
+recording; `WeaponBatches.js` holds the shared draws (ribbons, flashes,
+torpedo bodies + bells); `TorpedoRcs.js` is the torpedo thruster math. Everything is evaluated from battle time (seek/scrub/pause
 give identical buffers; see tests), no per-frame allocation, no PointLights.
 
 ## Merge hooks
@@ -50,8 +51,55 @@ this module only.
 - Old recordings lack terminal-burn flags; the plume phase is inferred from
   fuel use, range and closure (explicit phase fields win when present).
 
+## Torpedo thrusters
+
+No fins: a space torpedo steers with its engine and its RCS. The sim
+(`src/torpedo.py`) gimbals the main engine to thrust in any direction
+(cruise closure burns, APN corrections up to 90 deg off the flight path, the
+terminal NEZ burn) and routes only small precision trims through lateral RCS
+at 5% of main thrust with the engine cold (`GuidanceCommand.use_rcs`, the APN
+"correction" branch: above the 12 km/s closure floor, outside the terminal
+burn, predicted miss > 50 m and a command inside RCS authority). That is
+~0.6% of guided ticks in the auto-draft fleet showcase and ~11% of torpedo
+frames against a jinking corvette (`generate_test_battle torpedo_strike`),
+5-20 s before impact. The combined main+RCS command is never issued.
+
+Recordings carry per torpedo per frame, for the tick that ENDED at that
+frame: `thr` (main throttle 0..1), `fwd` (thrust = nose axis, unit, only
+while the engine burns) and `rcs` (lateral RCS thrust, unit direction x
+throttle, only while it fires). `TorpedoRcs.js` turns that into:
+
+- Attitude: the nose is on each tick's thrust axis by the time that burn
+  starts; with the engine cold the seeker holds the target (nose down the
+  line of sight, which also makes the sim's LOS-perpendicular trims purely
+  lateral), or the last attitude once the seeker is dead, the tanks are dry
+  or the target is gone. Slews follow a trapezoidal rate profile: a spin-up
+  couple, coast, a brake couple (`slewProfile`, `pulsesAt`). Engine lit,
+  the gimbal takes the torque (the bell deflects up to 6 deg and the plume
+  follows it) and only slews > 4 deg add RCS puffs; engine cold, the quads
+  do it all.
+- Quads: two rings of four radial nozzles (`RCS_LAYOUT`). `jetLevels` fires
+  the quads facing away from a translation thrust on both rings (pure force)
+  and opposite sides fore/aft for a couple (pure torque). Trims are pulse-
+  width modulated at the recorded throttle (0.2 s period).
+- Rendering: a firing quad draws a short white-blue ribbon (kind 7) plus a
+  cool nozzle glow; every pulse leaves a small puff (flash kind 5) drifting
+  off the nozzle axis for 0.35 s. Sized to the hardware and faded out
+  between ~16 and ~5 px of body length, so fleet range shows only the
+  faction diamond.
+- Plume: on/off from `thr` (an RCS trim burns fuel but no longer lights the
+  main plume), length and width scale with throttle.
+- Old recordings (no `thr`): the body follows velocity as before and a
+  trim is inferred only where the velocity turned while the main engine was
+  cold (fuel use < 0.03 km/s per s): finite-differenced acceleration minus
+  its along-axis part, above 0.5 m/s^2 of rounding noise (`legacyTrim`). On
+  the showcase this finds all 11 recorded trims with the right direction,
+  plus five 5-7%-throttle lateral main burns.
+
 ## Verification
 
 `cd visualizer && npm test`, `npm run build`. Before/after screenshots live in
 `/home/plmch/aic-wt/_shots/projectiles/` (`before_*` = untouched viewer,
-`a4_*`/`final_*` = this module; side-by-sides in `cmp/`).
+`a4_*`/`final_*` = this module; side-by-sides in `cmp/`). Torpedo thruster
+close-ups: `/home/plmch/aic-wt/_shots/torp-rcs/` (`before_*` / `after_*`,
+iterations in `iter/`), from `showcase_torpedo_fleet.json`.

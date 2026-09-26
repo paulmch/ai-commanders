@@ -1282,7 +1282,7 @@ class BattleRecorder:
 
         # Record torpedo states
         for torp in torpedoes:
-            frame["torpedoes"].append({
+            entry = {
                 "id": torp["id"],
                 "pos": [round(torp["position"][0], 1), round(torp["position"][1], 1), round(torp["position"][2], 1)],
                 "vel": [round(torp["velocity"][0], 1), round(torp["velocity"][1], 1), round(torp["velocity"][2], 1)],
@@ -1291,7 +1291,21 @@ class BattleRecorder:
                 "dv_remaining": round(torp.get("dv_remaining_kps", 0.0), 2),
                 "pd_heat_j": round(torp.get("heat_absorbed_j", 0.0), 0),
                 "disabled": torp.get("is_disabled", False),
-            })
+            }
+            # Thruster telemetry (viewer: plume, attitude, RCS puffs):
+            # thr = main throttle 0..1; fwd = unit thrust/nose direction,
+            # only while the engine burns; rcs = lateral RCS thrust vector
+            # (unit direction x throttle), only while the RCS fires.
+            if "main_throttle" in torp:
+                thr = round(torp["main_throttle"], 3)
+                entry["thr"] = thr
+                fwd = torp.get("main_direction")
+                if thr > 0 and fwd is not None:
+                    entry["fwd"] = [round(fwd[0], 3), round(fwd[1], 3), round(fwd[2], 3)]
+                rcs = [round(c, 3) for c in torp.get("rcs_thrust") or (0.0, 0.0, 0.0)]
+                if any(rcs):
+                    entry["rcs"] = rcs
+            frame["torpedoes"].append(entry)
 
         self.recording.sim_trace.append(frame)
 

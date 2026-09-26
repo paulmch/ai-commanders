@@ -531,7 +531,9 @@ class Torpedo:
     Individual torpedo state and trajectory tracking.
 
     Maintains position, velocity, fuel state, and targeting information.
-    Steering is accomplished via thrust vectoring only (no RCS).
+    Steering is by the gimbaled main engine (thrust in any direction);
+    small precision trims can use the lateral RCS instead (5% of main
+    thrust, see GuidanceCommand.use_rcs).
 
     Velocity Inheritance:
         Torpedoes inherit the shooter's velocity at launch. The initial
@@ -581,6 +583,27 @@ class Torpedo:
         default_factory=Vector3D.zero, init=False, repr=False
     )
 
+    # --- Thruster telemetry (recording only) ---
+    # What the motors did on the most recent tick, for the replay viewer's
+    # engine plume, body attitude and RCS puffs. Written by apply_thrust /
+    # apply_lateral_thrust, cleared by begin_thruster_tick; never read by
+    # guidance or physics, so it cannot change a battle.
+    # last_main_throttle: effective main-engine throttle 0..1 (a burn cut
+    #   short by propellant exhaustion counts pro rata).
+    # last_main_direction: unit main thrust (= nose) direction, or None when
+    #   the engine was cold.
+    # last_rcs_thrust: lateral RCS thrust as unit direction x throttle
+    #   (|v| <= 1 per channel), zero when the RCS was idle.
+    last_main_throttle: float = field(
+        default=0.0, init=False, repr=False, compare=False
+    )
+    last_main_direction: Optional[Vector3D] = field(
+        default=None, init=False, repr=False, compare=False
+    )
+    last_rcs_thrust: Vector3D = field(
+        default_factory=Vector3D.zero, init=False, repr=False, compare=False
+    )
+
     def __post_init__(self) -> None:
         """Initialize calculated fields."""
         self.remaining_delta_v_kps = self.specs.total_delta_v_kps
@@ -597,6 +620,21 @@ class Torpedo:
             Distance in meters
         """
         return self.position.distance_to(self.launch_position)
+
+    def begin_thruster_tick(self) -> None:
+        """Clear the thruster telemetry at the start of a tick (recording only)."""
+        self.last_main_throttle = 0.0
+        self.last_main_direction = None
+        self.last_rcs_thrust = Vector3D.zero()
+
+    def _log_main_burn(self, direction: Vector3D, throttle: float) -> None:
+        """Telemetry: the main engine burned along `direction` at `throttle`."""
+        self.last_main_throttle = min(1.0, self.last_main_throttle + throttle)
+        self.last_main_direction = direction
+
+    def _log_rcs_burn(self, direction: Vector3D, throttle: float) -> None:
+        """Telemetry: the lateral RCS thrust along `direction` at `throttle`."""
+        self.last_rcs_thrust = self.last_rcs_thrust + direction * throttle
 
     def update(
         self,
@@ -616,6 +654,7 @@ class Torpedo:
             target_velocity: Current target velocity (m/s)
         """
         self.time_since_launch += dt_seconds
+        self.begin_thruster_tick()
 
         # Check arming status
         if not self.armed:
@@ -809,6 +848,8 @@ class Torpedo:
 
         # Apply velocity change
         self.velocity = self.velocity + direction * delta_v_ms
+        if dt_seconds > 0:
+            self._log_main_burn(direction, throttle * actual_burn_time / dt_seconds)
 
     def apply_lateral_thrust(
         self,
@@ -867,6 +908,12 @@ class Torpedo:
 
             # Apply velocity change in the lateral direction
             self.velocity = self.velocity + lateral_direction * delta_v_ms
+            full_burn_kg = mass_flow_rate * dt_seconds
+            if full_burn_kg > 0:
+                self._log_rcs_burn(
+                    lateral_direction,
+                    throttle * min(1.0, propellant_consumed / full_burn_kg),
+                )
 
     def can_intercept(
         self,
