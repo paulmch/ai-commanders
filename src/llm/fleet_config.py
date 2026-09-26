@@ -88,10 +88,35 @@ class DraftConfig:
 
     def __post_init__(self) -> None:
         from .fleet_draft import SHIP_POINT_COSTS
-        if isinstance(self.budget, bool) or not isinstance(self.budget, int) or self.budget < min(SHIP_POINT_COSTS.values()):
+        budget = _integral(self.budget)
+        if budget is None or budget < min(SHIP_POINT_COSTS.values()):
             raise ValueError("Draft budget must be an integer sufficient to buy at least one ship")
-        if isinstance(self.max_ships, bool) or not isinstance(self.max_ships, int) or self.max_ships < 1:
+        max_ships = _integral(self.max_ships)
+        if max_ships is None or max_ships < 1:
             raise ValueError("max_ships must be a positive integer")
+        self.budget, self.max_ships = budget, max_ships
+
+
+def _integral(value: Any) -> Optional[int]:
+    """
+    ``value`` as an int when it denotes a whole number, else None.
+
+    JSON configs spell the same budget as 150, 150.0 or "150": all are
+    accepted (the old parser coerced with int()). Fractions, non-numeric
+    strings, NaN/inf and booleans are rejected rather than truncated.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            value = float(value.strip())
+        except ValueError:
+            return None
+    if isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        return int(value)
+    return None
 
 
 @dataclass

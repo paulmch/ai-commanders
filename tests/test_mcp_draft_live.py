@@ -348,7 +348,7 @@ class TestLiveEndpoints:
             try:
                 resp = await client.get("/live/predictions")
                 body = await resp.json()
-                assert body == {"t": 0.0, "t_checkpoint": 0.0, "ships": {}}
+                assert body == {"t": 0.0, "t_checkpoint": 0.0, "ships": {}, "stale": False}
             finally:
                 await client.close()
         asyncio.run(scenario())
@@ -428,6 +428,25 @@ class TestDraftConfigParsing:
         assert cfg.draft.budget == 120
         assert cfg.draft.max_ships == 6
         assert cfg.alpha_fleet.ships == []
+
+    @pytest.mark.parametrize("budget", [150, 150.0, "150", " 150 ", "150.0"])
+    def test_integral_budget_spellings_are_coerced(self, budget):
+        """JSON configs write 150.0 or "150"; the old parser int()-coerced them."""
+        cfg = BattleFleetConfig.from_dict({
+            "battle_name": "X",
+            "draft": {"budget": budget, "max_ships": 6.0},
+            "alpha_fleet": {},
+            "beta_fleet": {},
+        })
+        assert cfg.draft.budget == 150 and type(cfg.draft.budget) is int
+        assert cfg.draft.max_ships == 6 and type(cfg.draft.max_ships) is int
+        assert DraftConfig(budget=budget, max_ships="4").max_ships == 4
+
+    @pytest.mark.parametrize("budget", [150.5, "150.5", "lots", "", None, True,
+                                        float("nan"), float("inf"), [150]])
+    def test_non_integral_budgets_are_rejected(self, budget):
+        with pytest.raises(ValueError):
+            DraftConfig(budget=budget)
 
     def test_no_draft_still_requires_ships(self):
         with pytest.raises(ValueError):

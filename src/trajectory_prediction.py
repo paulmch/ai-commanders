@@ -25,9 +25,22 @@ Evasion is continued where it is deterministic:
   torpedoes in flight with the real guidance law (no PD, no hit roll).
 * WOBBLE (no dangerous threat) jitters the aim with ``sim.rng.gauss`` every
   tick - genuinely random. The shadow flies the NOMINAL command (zero
-  wobble) and reports the expected 1-sigma dispersion of the checkpoint
-  position as ``sigma``, from a small Monte Carlo of the one-axis rotation
-  controller chasing the jittered aim (:func:`wobble_sigma_m`).
+  wobble) and estimates the 1-sigma dispersion of the checkpoint position
+  from a small Monte Carlo of the one-axis rotation controller chasing the
+  jittered aim (:func:`wobble_sigma_m`).
+* What the shadow cannot foresee (rounds fired later, torpedo launches, PD
+  kills, hits, target deaths) moves reactive evaders by kilometres. An
+  empirical per-mode term scaled by time to go (:func:`reactive_sigma_m`,
+  calibrated on the showcase battles) covers it. The plan's ``sigma`` is
+  both terms in quadrature; its ``mode`` names the evasion mode so the
+  viewer can style a low-confidence plan.
+
+Checkpoint frames
+-----------------
+The frame recorded AT a checkpoint precedes that checkpoint's orders, so its
+plan first flies the expiring maneuvers and carries ``"stale": true``. The
+battle runner re-predicts it in place once the orders are applied
+(:meth:`TraceEnricher.refresh_plans`): replays carry the post-order plan.
 
 Isolation guarantee
 -------------------
@@ -98,8 +111,9 @@ def next_checkpoint_time(t: float, interval: float) -> float:
     The next decision checkpoint strictly after ``t``.
 
     Checkpoints fall on multiples of the decision interval. A frame taken
-    exactly AT a checkpoint (before the new orders are issued) predicts to
-    the following one. Same formula as the live /predictions endpoint.
+    exactly AT a checkpoint predicts to the following one (first with the
+    expiring orders, marked stale, then again once the new orders are
+    applied). Same formula as the live /predictions endpoint.
     """
     return (math.floor(t / interval + 1e-9) + 1) * interval
 
@@ -437,6 +451,76 @@ def wobble_sigma_m(
 
 
 # ---------------------------------------------------------------------------
+# Reactive-evasion dispersion
+# ---------------------------------------------------------------------------
+
+# Evasion execution modes (CombatSimulation._calculate_evasion).
+_EVASION_MODES: Tuple[str, ...] = ("WOBBLE", "EVADE", "TANK", "BRACE", "RUN", "PRESENT")
+
+# Reactive-evasion dispersion coefficient k per mode (dimensionless): a ship
+# whose evasion can react to threats the shadow cannot see (rounds fired
+# after the frame, torpedoes launched, PD kills, hits, retargeting) has an
+# unknown acceleration of ~k * a_max sustained to the checkpoint, so its
+# checkpoint position disperses by k * a_max * tau^2 / 2 (tau = time to go).
+#
+# Calibrated on the two showcase battles (run_draft_battle.py --auto-draft
+# --no-admirals --seed 3 --budget 100 and --seed 11 --budget 200; 13.2k
+# plans) so that the total sigma (this in quadrature with the WOBBLE Monte
+# Carlo term) puts 90% of actual checkpoint positions within 2 sigma for
+# ships in each current mode; held-out seeds 5 and 7 (--budget 150) land
+# at 82-99%. The ship's k is the largest over its current mode and every
+# mode its shadow flies through before the checkpoint (a wobbling ship
+# with a known torpedo inbound already carries RUN's uncertainty). WOBBLE's
+# small k covers threats that appear later; TANK is floored to it (TANK
+# ships nearly always pass through a higher-k mode).
+REACTIVE_SIGMA_K: Dict[str, float] = {
+    "PRESENT": 0.215,
+    "BRACE": 0.171,
+    "EVADE": 0.109,
+    "RUN": 0.067,
+    "TANK": 0.0092,
+    "WOBBLE": 0.0092,
+}
+
+
+def _evasion_mode(ship: Any) -> Optional[str]:
+    """The ship's evasion execution mode, or None when not EVASIVE."""
+    maneuver = ship.current_maneuver
+    if maneuver is None or maneuver.maneuver_type != ManeuverType.EVASIVE:
+        return None
+    mode = getattr(ship, "execution_mode", None)
+    return mode if mode in _EVASION_MODES else None
+
+
+def reactive_sigma_m(
+    dts: Sequence[float],
+    modes: Sequence[Optional[str]],
+    mode_now: Optional[str],
+    a_max: float,
+) -> Tuple[float, Optional[str]]:
+    """
+    Threat-reactive part of the checkpoint dispersion, and the plan's mode.
+
+    Args:
+        dts: shadow tick lengths (s) up to the checkpoint.
+        modes: the shadow's evasion mode on each tick (None = not evading).
+        mode_now: the real ship's evasion mode at the frame (None = not
+            evading, or not yet evading under freshly issued orders).
+        a_max: the ship's full-thrust acceleration (m/s^2).
+
+    Returns (sigma_m, mode): sigma = k * a_max * tau^2 / 2 with k the
+    largest REACTIVE_SIGMA_K over mode_now and ``modes``; ``mode`` is
+    mode_now, else the first mode the shadow enters, else None (sigma 0).
+    """
+    mode = mode_now or next((m for m in modes if m), None)
+    if mode is None:
+        return 0.0, None
+    k = max(REACTIVE_SIGMA_K.get(m, 0.0) for m in {mode, *(m for m in modes if m)})
+    tau = float(sum(dts))
+    return k * a_max * tau * tau / 2.0, mode
+
+
+# ---------------------------------------------------------------------------
 # Plan construction
 # ---------------------------------------------------------------------------
 
@@ -470,16 +554,23 @@ def predict_plans(
     t_cp: float,
     sample_dt: float = PLAN_SAMPLE_DT_S,
     ship_ids: Optional[Iterable[str]] = None,
+    diagnostics: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """
     Predicted path to ``t_cp`` for every live (not destroyed, not dying) ship.
 
-    Returns {ship_id: {"t_cp", "dt", "path", "sigma"}} where ``path`` holds
-    int-metre positions at now, now+dt, ... and exactly t_cp (last element),
-    and ``sigma`` is the 1-sigma WOBBLE dispersion of the checkpoint
-    position in metres (0.0 when the ship is not wobbling).
+    Returns {ship_id: {"t_cp", "dt", "path", "sigma", "fwd", "mode"}}:
+      path   int-metre positions at now, now+dt, ... and exactly t_cp (last).
+      sigma  1-sigma dispersion (m) of the checkpoint position: WOBBLE
+             jitter and reactive-evasion uncertainty combined in quadrature
+             (see reactive_sigma_m); 0.0 for a ship that is not evading.
+      fwd    the shadow's nose unit vector at t_cp (4 decimals).
+      mode   the ship's evasion mode now (lowercase; under fresh EVASIVE
+             orders, the first one the shadow enters), None when not evading.
 
-    Never mutates ``sim`` and never draws from its RNG.
+    ``diagnostics``, when given, receives per-ship inputs of the sigma
+    model (for calibration scripts). Never mutates ``sim`` and never draws
+    from its RNG.
     """
     t0 = sim.current_time
     wanted = set(ship_ids) if ship_ids is not None else None
@@ -496,7 +587,9 @@ def predict_plans(
     positions = {sid: [shadow.ships[sid].position] for sid in tracked}
     dts: List[float] = []
     accels: Dict[str, List[float]] = {sid: [] for sid in tracked}
-    wobble: Dict[str, List[bool]] = {sid: [] for sid in tracked}
+    modes: Dict[str, List[Optional[str]]] = {sid: [] for sid in tracked}
+    # Mode the real ship is in right now (set by its last update tick).
+    mode_now = {sid: _evasion_mode(sim.ships[sid]) for sid in tracked}
 
     step = sim.time_step if sim.time_step > 0 else 1.0
     while shadow.current_time < t_cp - 1e-9:
@@ -510,22 +603,30 @@ def predict_plans(
             ks = ghost.kinematic_state
             throttle = getattr(ghost, "applied_throttle", 0.0) if not ghost.is_dying else 0.0
             accels[sid].append(ks.thrust_n * throttle / ks.mass_kg if ks.mass_kg > 0 else 0.0)
-            wobble[sid].append(
-                ghost.current_maneuver is not None
-                and ghost.current_maneuver.maneuver_type == ManeuverType.EVASIVE
-                and ghost.execution_mode == "WOBBLE")
+            modes[sid].append(_evasion_mode(ghost))
 
     plans: Dict[str, Dict[str, Any]] = {}
     for sid in tracked:
-        sigma = 0.0
-        if any(wobble[sid]):
+        wobble = [m == "WOBBLE" for m in modes[sid]]
+        sigma_w = 0.0
+        if any(wobble):
             alpha, omega_max = sim._get_rotation_params(sim.ships[sid], engines_on=True)
-            sigma = wobble_sigma_m(dts, accels[sid], wobble[sid], alpha, omega_max)
+            sigma_w = wobble_sigma_m(dts, accels[sid], wobble, alpha, omega_max)
+        a_max = sim.ships[sid].kinematic_state.max_acceleration_ms2()
+        sigma_r, mode = reactive_sigma_m(dts, modes[sid], mode_now[sid], a_max)
+        if diagnostics is not None:
+            diagnostics[sid] = {
+                "dts": list(dts), "modes": list(modes[sid]), "mode_now": mode_now[sid],
+                "a_max": a_max, "sigma_wobble": sigma_w, "sigma_reactive": sigma_r,
+            }
+        fwd = shadow.ships[sid].kinematic_state.forward
         plans[sid] = {
             "t_cp": round(t_cp, 3),
             "dt": sample_dt,
             "path": _resample(times, positions[sid], t0, sample_dt, t_cp),
-            "sigma": round(sigma, 1),
+            "sigma": round(math.hypot(sigma_w, sigma_r), 1),
+            "fwd": [round(fwd.x, 4), round(fwd.y, 4), round(fwd.z, 4)],
+            "mode": mode.lower() if mode else None,
         }
     return plans
 
@@ -575,7 +676,10 @@ class TraceEnricher:
              target; for a wobbling EVASIVE without one, the nearest enemy
              it homes on), else None.
       plan   see predict_plans(); omitted for dying ships and when
-             prediction is disabled.
+             prediction is disabled. A frame taken AT a checkpoint is
+             recorded before that checkpoint's orders exist: its plan
+             carries "stale": true (it flies out the expiring orders)
+             until refresh_plans() re-predicts it with the new ones.
     Destroyed ships get none of these fields.
     """
 
@@ -587,12 +691,21 @@ class TraceEnricher:
         # ship_id -> (t, forward, omega) of the last enriched frame
         self._prev: Dict[str, Tuple[float, Vector3D, Vector3D]] = {}
 
+    def at_checkpoint(self, t: float) -> bool:
+        """Whether ``t`` is a decision checkpoint (orders are issued there)."""
+        if t <= 1e-9 or self.interval <= 0:
+            return False
+        return abs(t / self.interval - round(t / self.interval)) < 1e-6
+
     def enrich(self, sim: CombatSimulation, ships: Dict[str, Dict[str, Any]]) -> None:
         t = sim.current_time
         plans: Dict[str, Dict[str, Any]] = {}
         if self.predict:
             plans = predict_plans(sim, next_checkpoint_time(t, self.interval),
                                   sample_dt=self.sample_dt)
+            if self.at_checkpoint(t):
+                for plan in plans.values():
+                    plan["stale"] = True
 
         for sid, entry in ships.items():
             ship = sim.ships.get(sid)
@@ -649,3 +762,25 @@ class TraceEnricher:
             plan = plans.get(sid)
             if plan is not None:
                 entry["plan"] = plan
+
+    def refresh_plans(self, sim: CombatSimulation,
+                      ships: Dict[str, Dict[str, Any]]) -> int:
+        """
+        Re-predict the plans of a frame already recorded at ``sim``'s
+        current time, now that the checkpoint's orders are applied.
+
+        ``ships`` is the recorded frame's ship dict; every entry that carries
+        a plan gets a fresh one (without "stale"). Kinematic fields and the
+        finite-difference history are left alone - nothing moved. Returns
+        the number of plans replaced.
+        """
+        if not self.predict:
+            return 0
+        wanted = [sid for sid, entry in ships.items() if "plan" in entry]
+        if not wanted:
+            return 0
+        plans = predict_plans(sim, next_checkpoint_time(sim.current_time, self.interval),
+                              sample_dt=self.sample_dt, ship_ids=wanted)
+        for sid, plan in plans.items():
+            ships[sid]["plan"] = plan
+        return len(plans)

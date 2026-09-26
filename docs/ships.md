@@ -428,7 +428,11 @@ Number of hits required to destroy each ship class, starting from full armor.
 Regenerate with `uv run python scripts/calculate_shots_to_kill.py` after any change
 to the armor or damage model - these tables are derived from the live engine and
 were previously an order of magnitude too optimistic (a corvette was listed as
-dying to 4 nose hits; it takes ~41).
+dying to 4 nose hits; it takes 38).
+
+The Torpedo Cruiser and Siege Dreadnought share their base hull's armor and
+internal layout (`hull.type` selects the module layout), so their rows match the
+Cruiser and Dreadnought.
 
 Ships are destroyed when:
 1. Main Reactor is destroyed (critical), OR
@@ -483,6 +487,18 @@ Ships are destroyed when:
 | Torpedo @ 14.0 km/s | 5 | 3 | 2 |
 | Torpedo @ 26.0 km/s | 2 | 1 | 1 |
 
+#### vs Torpedo Cruiser (Armor: 241/41/48 cm)
+
+| Weapon | Nose | Lateral | Tail |
+|--------|------|---------|------|
+| Spinal Coiler Mk3 | 42 | 18 | 17 |
+| Heavy Siege Coiler Mk3 | 40 | 13 | 14 |
+| Heavy Coilgun Battery Mk3 | 100 | 55 | 52 |
+| Coilgun Battery Mk3 | 142 | 89 | 85 |
+| Light Coilgun Battery Mk3 | 399 | 439 | 397 |
+| Torpedo @ 14.0 km/s | 5 | 3 | 2 |
+| Torpedo @ 26.0 km/s | 2 | 1 | 1 |
+
 #### vs Battlecruiser (Armor: 177/30/35 cm)
 
 | Weapon | Nose | Lateral | Tail |
@@ -519,6 +535,18 @@ Ships are destroyed when:
 | Torpedo @ 14.0 km/s | 6 | 3 | 3 |
 | Torpedo @ 26.0 km/s | 2 | 1 | 1 |
 
+#### vs Siege Dreadnought (Armor: 251/43/50 cm)
+
+| Weapon | Nose | Lateral | Tail |
+|--------|------|---------|------|
+| Spinal Coiler Mk3 | 46 | 21 | 24 |
+| Heavy Siege Coiler Mk3 | 43 | 15 | 17 |
+| Heavy Coilgun Battery Mk3 | 111 | 67 | 74 |
+| Coilgun Battery Mk3 | 158 | 109 | 120 |
+| Light Coilgun Battery Mk3 | 478 | >500 | >500 |
+| Torpedo @ 14.0 km/s | 6 | 3 | 3 |
+| Torpedo @ 26.0 km/s | 2 | 1 | 1 |
+
 ### Summary: Shots to Kill by Ship Class
 
 Using Spinal Coiler Mk3 (4.29 GJ per shot):
@@ -529,9 +557,11 @@ Using Spinal Coiler Mk3 (4.29 GJ per shot):
 | Frigate | 71/12/14 | 16 | 8 | 7 |
 | Destroyer | 151/26/30 | 31 | 14 | 14 |
 | Cruiser | 241/41/48 | 42 | 18 | 17 |
+| Torpedo Cruiser | 241/41/48 | 42 | 18 | 17 |
 | Battlecruiser | 177/30/35 | 34 | 16 | 15 |
 | Battleship | 262/45/52 | 47 | 21 | 19 |
 | Dreadnought | 251/43/50 | 46 | 21 | 24 |
+| Siege Dreadnought | 251/43/50 | 46 | 21 | 24 |
 
 **Torpedoes vs guns:** impact energy scales with the SQUARE of impact speed. Trident
 guidance holds closure at a floor of ~12 km/s and burns its remaining delta-v in the
