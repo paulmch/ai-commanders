@@ -1,5 +1,10 @@
 import * as THREE from 'three';
 import { Ribbon } from './Trails.js';
+import { LOCUS_CAP } from '../TrajectoryPredictor.js';
+import {
+  hullExaggeration, magnifyRadius, magnifyOffset, formatCheckpointLabel, isReactiveMode,
+  inTrackScope, GLYPH_RMAX_HULLS
+} from '../TrackDisplay.js';
 
 /**
  * Trajectory tracks: every live ship's predicted path to the next decision
@@ -7,8 +12,17 @@ import { Ribbon } from './Trails.js';
  * line (HUD, deliberately unlike a beam or tracer) that fades with
  * time-to-go and near the camera, with a tick every 5 s of battle time
  * (ticks sit at absolute times, so they slide toward the hull as the clock
- * runs), and a checkpoint ghost: diamond + 1/2-sigma dispersion rings, a
- * T+Ns label and a faint hull ghost oriented along the predicted velocity.
+ * runs), and a checkpoint ghost: diamond + 1/2-sigma dispersion rings and a
+ * faint hull ghost along the predicted nose (plan.fwd, else the current one).
+ *
+ * The rings and a faint dotted "drift locus" (where this interval's earlier
+ * frames predicted the same checkpoint) are drawn at the hull's own visual
+ * exaggeration (TrackDisplay.js), so the evasion wiggle is as visible as the
+ * ships are big; the focused ship's caption states the true numbers
+ * ("T+25s ±180 m"). A plan traced before the checkpoint's new orders
+ * applied (plan.stale) gets a hollow, desaturated diamond; a reactive
+ * evasion mode (low confidence) a dashed ring and dashed locus. The
+ * time-to-go lives in one HUD readout (TrackHud.js), not on every marker.
  *
  * In replay the "actual" mode adds the recorded future path (thin dotted)
  * and a dotted error line from the predicted to the actual checkpoint.
@@ -24,7 +38,12 @@ const MARKER_DIAMOND_PX = 7;
 const PRED_INTENSITY = 0.75;
 const PRED_LINE_PX = 1.15;
 const ACTUAL_INTENSITY = 0.6;
+const LOCUS_INTENSITY = 1.0;
 const NEAR_FADE_MAX = 60;   // scene units
+const IMPLICIT_FOCUS_MAX = 220;   // orbit distance beyond which nothing is implicitly focused
+// Marker and caption fade out within ~1.5 displayed hull lengths of the
+// ship: for a slow hull the checkpoint sits on the hull itself
+const HULL_CLEAR_LO = 1.2, HULL_CLEAR_HI = 1.8;
 
 /**
  * Per-ship track weight. `viewDist` is the camera's orbit distance (scene
@@ -39,8 +58,8 @@ export function trackEmphasis(isFocus, viewDist, out = {}) {
     out.intensity = 1.1;
     out.width = 1.2 + 0.3 * closeK;
   } else {
-    out.intensity = 1 - 0.75 * closeK;
-    out.width = 1 - 0.15 * closeK;
+    out.intensity = 1 - 0.92 * closeK;
+    out.width = 1 - 0.3 * closeK;
   }
   return out;
 }
@@ -130,7 +149,8 @@ const ribbonFragment = /* glsl */`
       float l0 = floor(lod);
       float p0 = uDashBase * exp2(l0);
       float m = mix(pattern(p0, fw, xpx), pattern(p0 * 2.0, fw, xpx), lod - l0);
-      body = uRound > 0.5 ? m * 1.2 : body * m;
+      // dots (optionally threaded on a faint line: uHalo) or dashes
+      body = uRound > 0.5 ? m * 1.2 + uHalo * exp(-q * q * 1.1) : body * m;
     }
     float tick = 0.0;
     if (uTickPeriod > 0.0) {
@@ -270,6 +290,7 @@ class TrackRibbon {
 const markerVertex = /* glsl */`
   attribute vec2 aCorner;
   uniform float uRingWorld;
+  uniform float uRing2World;
   uniform float uDiamondPx;
   uniform float uCirclePx;
   uniform float uPixelWorld;
@@ -289,7 +310,7 @@ const markerVertex = /* glsl */`
     float minPx = uDiamondPx * 1.8;
     float ringPx = uRingWorld > 0.0 ? clamp(truePx, minPx, 1500.0) : 0.0;
     vRingFade = uRingWorld > 0.0 ? clamp(truePx / minPx, 0.3, 1.0) : 0.0;
-    vRing2Px = min(2.0 * truePx, 3000.0);
+    vRing2Px = min(uRing2World / pw, 3000.0);
     float ext = max(max(uDiamondPx, uCirclePx) * 2.6 + 4.0, max(ringPx, vRing2Px) + 4.0);
     vPx = aCorner * ext;
     vRingPx = ringPx;
@@ -305,6 +326,8 @@ const markerFragment = /* glsl */`
   uniform float uDiamondPx;
   uniform float uCirclePx;
   uniform float uRingOpacity;
+  uniform float uHollow;
+  uniform float uLowConf;
   varying vec2 vPx;
   varying float vRingPx;
   varying float vRing2Px;
@@ -313,24 +336,30 @@ const markerFragment = /* glsl */`
   void main() {
     #include <logdepthbuf_fragment>
     float r = length(vPx);
+    float a = atan(vPx.y, vPx.x);
     float c = 0.0;
     if (uDiamondPx > 0.0) {
       float edge = abs(abs(vPx.x) + abs(vPx.y) - uDiamondPx) * 0.7071;
-      c += 1.6 * (1.0 - smoothstep(0.6, 1.6, edge));
-      c += 1.2 * (1.0 - smoothstep(1.0, 2.2, r));
-      c += 0.25 * exp(-r * r / (uDiamondPx * uDiamondPx * 1.6));
+      // provisional (orders pending): hollow, broken outline, no centre dot
+      float broken = mix(1.0, 0.35 + 0.65 * step(0.42, fract(a * 1.2732 + 0.25)), uHollow);
+      c += 1.6 * (1.0 - smoothstep(0.6, 1.6, edge)) * broken * (1.0 - 0.3 * uHollow);
+      c += 1.2 * (1.0 - smoothstep(1.0, 2.2, r)) * (1.0 - uHollow);
+      c += 0.25 * exp(-r * r / (uDiamondPx * uDiamondPx * 1.6)) * (1.0 - uHollow);
     }
     if (uCirclePx > 0.0) {
       c += 1.0 * (1.0 - smoothstep(0.5, 1.4, abs(r - uCirclePx)));
       c += 0.9 * (1.0 - smoothstep(0.6, 1.6, r));
     }
     if (vRingPx > 0.0) {
-      float a = atan(vPx.y, vPx.x);
       float dash = step(0.45, fract(a * 3.8197));   // 24 dashes around
+      // low confidence (reactive evasion): the 1-sigma ring breaks into 8 long dashes
+      float dash1 = mix(1.0, step(0.38, fract(a * 1.2732)), uLowConf);
       float two = smoothstep(vRingPx + 3.0, vRingPx + 10.0, vRing2Px);
-      c += uRingOpacity * vRingFade * 0.9 * (1.0 - smoothstep(0.5, 1.5, abs(r - vRingPx)));
+      // a screen-filling ring (big spread, close-up) stays a light outline
+      float big = smoothstep(120.0, 360.0, vRingPx);
+      c += uRingOpacity * vRingFade * 0.9 * (1.0 - 0.4 * big) * dash1 * (1.0 - smoothstep(0.5, 1.5, abs(r - vRingPx)));
       c += uRingOpacity * two * 0.4 * dash * (1.0 - smoothstep(0.5, 1.5, abs(r - vRing2Px)));
-      c += uRingOpacity * vRingFade * 0.08 * (1.0 - smoothstep(0.0, vRingPx * 1.05, r));
+      c += uRingOpacity * vRingFade * (0.08 + 0.05 * uLowConf) * (1.0 - big) * (1.0 - smoothstep(0.0, vRingPx * 1.05, r));
     }
     if (c < 0.003) discard;
     gl_FragColor = vec4(uColor * c * uIntensity, 1.0);
@@ -355,7 +384,10 @@ function makeMarker(color, o) {
       uDiamondPx: { value: o.diamondPx ?? 0 },
       uCirclePx: { value: o.circlePx ?? 0 },
       uRingWorld: { value: 0 },
+      uRing2World: { value: 0 },
       uRingOpacity: { value: 1 },
+      uHollow: { value: 0 },
+      uLowConf: { value: 0 },
       uPixelWorld: Ribbon.pixelWorld
     },
     vertexShader: markerVertex,
@@ -405,9 +437,11 @@ const ghostFragment = /* glsl */`
 `;
 
 // ---------------------------------------------------------------------------
-// Label: "T+12s" on a small canvas, redrawn only when the second changes
+// Label: "T+12s ±180 m" on a small canvas, redrawn only when the text changes
+// (only the focused ship carries one; the countdown lives in the HUD)
 // ---------------------------------------------------------------------------
-const LABEL_W = 128, LABEL_H = 32, LABEL_PX = 17;
+const LABEL_W = 384, LABEL_H = 32, LABEL_PX = 17;
+const LABEL_NEAR_MAX_PX = 110;   // rings wider than this keep the caption by the diamond
 
 function makeLabel(color) {
   const canvas = document.createElement('canvas');
@@ -427,13 +461,12 @@ function makeLabel(color) {
   }));
   sprite.renderOrder = 60;
   sprite.visible = false;
-  return { sprite, canvas, ctx: canvas.getContext('2d'), texture, seconds: -1 };
+  return { sprite, canvas, ctx: canvas.getContext('2d'), texture, text: null };
 }
 
-function drawLabel(label, seconds) {
-  if (label.seconds === seconds) return;
-  label.seconds = seconds;
-  const text = `T+${seconds}s`;
+function drawLabel(label, text) {
+  if (label.text === text) return;
+  label.text = text;
   const { ctx } = label;
   ctx.clearRect(0, 0, LABEL_W, LABEL_H);
   ctx.font = "700 24px 'Share Tech Mono', 'DejaVu Sans Mono', monospace";
@@ -443,9 +476,9 @@ function drawLabel(label, seconds) {
   ctx.lineJoin = 'round';
   ctx.lineWidth = 4;
   ctx.strokeStyle = 'rgba(0,0,0,0.85)';
-  ctx.strokeText(text, 4, LABEL_H / 2 + 1);
+  ctx.strokeText(text, 4, LABEL_H / 2 + 1, LABEL_W - 8);
   ctx.fillStyle = '#ffffff';
-  ctx.fillText(text, 4, LABEL_H / 2 + 1);
+  ctx.fillText(text, 4, LABEL_H / 2 + 1, LABEL_W - 8);
   label.texture.needsUpdate = true;
 }
 
@@ -469,18 +502,28 @@ class ShipTrack {
     this.error = new TrackRibbon(2, {
       color: [0.95, 0.9, 0.85], halfPx: 3, linePx: 0.9, intensity: 0.5, dashPx: 7, round: 1, renderOrder: 20
     });
+    // Drift locus: one dot per earlier prediction, newest bright, oldest faint
+    this.locus = new TrackRibbon(LOCUS_CAP, {
+      color: pale, halfPx: 3.5, linePx: 1.15, halo: 0.22, intensity: LOCUS_INTENSITY, fadeEnd: 0.3,
+      dashBase: 1, dashPx: 6, duty: 0.5, round: 1, renderOrder: 20
+    });
     this.marker = makeMarker(col, { diamondPx: MARKER_DIAMOND_PX, intensity: 1.0 });
+    // provisional (stale plan) markers are desaturated toward grey
+    const lum = 0.3 * col[0] + 0.55 * col[1] + 0.15 * col[2];
+    this.staleColor = new THREE.Color(...col.map(c => c * 0.3 + lum * 0.55 + 0.1));
+    this.liveColor = new THREE.Color(...col);
     this.actualMarker = makeMarker(pale, { circlePx: 4.5, intensity: 0.8 });
     this.label = makeLabel(col);
     this.ghost = null;
     this.ghostMaterial = null;
-    root.add(this.pred.mesh, this.actual.mesh, this.error.mesh, this.marker, this.actualMarker, this.label.sprite);
+    root.add(this.pred.mesh, this.actual.mesh, this.error.mesh, this.locus.mesh, this.marker, this.actualMarker, this.label.sprite);
   }
 
   hide() {
     this.pred.hide();
     this.actual.hide();
     this.error.hide();
+    this.locus.hide();
     this.marker.visible = false;
     this.actualMarker.visible = false;
     this.label.sprite.visible = false;
@@ -534,6 +577,7 @@ class ShipTrack {
     this.pred.dispose();
     this.actual.dispose();
     this.error.dispose();
+    this.locus.dispose();
     this.marker.material.dispose();
     this.actualMarker.material.dispose();
     this.label.sprite.material.dispose();
@@ -563,8 +607,12 @@ export class Tracks {
     this.visuals = new Map();
     this.showGhosts = true;
     this.showLabels = true;
+    this.hud = null;   // TrackHud (main.js): countdown, scope, legend
     this._p = new THREE.Vector3();
     this._q = new THREE.Vector3();
+    this._d = new Float64Array(3);
+    this._locusPts = new Float64Array(LOCUS_CAP * 3);
+    this._hud = { visible: true, togo: 0, stale: false, scope: 'all', focusId: null, exaggeration: [0, 0] };
   }
 
   /**
@@ -578,6 +626,7 @@ export class Tracks {
   frame(time, ships, mode, focusId = null) {
     if (mode === 'off' || !this.predictor || !ships) {
       this.root.visible = false;
+      this.hud?.hide();
       return;
     }
     this.root.visible = true;
@@ -586,11 +635,16 @@ export class Tracks {
     this.update(this.predictor.predict(time, ships, withActual), time, withActual);
   }
 
-  /** The ship under the orbit target, if the camera is looking at one. */
+  /**
+   * The ship under the orbit target, if the camera is looking at one. Not
+   * at fleet range: there the target is the fleet centroid, and a caption
+   * (or the SEL scope) on whichever hull happens to sit near it would be noise.
+   */
   _implicitFocus() {
     const target = this.sm.controls?.target;
     if (!target || !this.sm.ships) return null;
     const viewDist = this.sm.camera.position.distanceTo(target);
+    if (viewDist > IMPLICIT_FOCUS_MAX) return null;
     let best = null, bd = Infinity;
     for (const [id, ship] of this.sm.ships) {
       if (!ship.visible) continue;
@@ -607,13 +661,15 @@ export class Tracks {
     const pw = Ribbon.pixelWorld.value;
     const viewDist = this.sm.controls ? cam.position.distanceTo(this.sm.controls.target) : 1e9;
     const emph = this._emph || (this._emph = {});
+    const scope = this.hud?.scope || 'all';
     // Near-camera fade scale: the orbit distance in a close-up, capped so
     // fleet-range views (where nothing passes the lens) keep every track
     const nearFade = Math.min(viewDist, NEAR_FADE_MAX);
+    let anyStale = false, focusCp = null, kMin = Infinity, kMax = 0;
     for (const tr of tracks.values()) {
       const id = tr.shipId;
       let v = this.visuals.get(id);
-      if (!tr.active) {
+      if (!tr.active || !inTrackScope(scope, id, this.focusId)) {
         if (v) v.hide();
         continue;
       }
@@ -621,7 +677,14 @@ export class Tracks {
         v = new ShipTrack(this.root, tr.faction, this.predictor.samples);
         this.visuals.set(id, v);
       }
-      trackEmphasis(id === this.focusId, viewDist, emph);
+      const isFocus = id === this.focusId;
+      const ship = this.sm.ships?.get(id);
+      const L = ship?.userData.size?.length || 8;
+      // rings and drift are drawn at the hull's own exaggeration, soft-capped
+      const k = hullExaggeration(ship?.userData.shipType, L);
+      const rMax = (GLYPH_RMAX_HULLS * L) / S;
+      kMin = Math.min(kMin, k); kMax = Math.max(kMax, k);
+      trackEmphasis(isFocus, viewDist, emph);
       const pu = v.pred.material.uniforms;
       pu.uIntensity.value = PRED_INTENSITY * emph.intensity;
       pu.uLinePx.value = PRED_LINE_PX * emph.width;
@@ -634,25 +697,44 @@ export class Tracks {
 
       const cp = this._p.set(tr.cp[0] * S, tr.cp[1] * S, tr.cp[2] * S);
       const togo = tr.tCp - time;
+      if (isFocus) focusCp = tr.tCp;
+      if (tr.stale) anyStale = true;
+      const clear = ship ? THREE.MathUtils.smoothstep(ship.position.distanceTo(cp), HULL_CLEAR_LO * L, HULL_CLEAR_HI * L) : 1;
+      const lowConf = isReactiveMode(tr.mode);
       const u = v.marker.material.uniforms;
-      u.uRingWorld.value = tr.sigma * S;
+      const ringWorld = magnifyRadius(tr.sigma, k, rMax) * S;
+      u.uRingWorld.value = ringWorld;
+      // Only the focused ship gets the 2-sigma ring and full-strength rings:
+      // at fleet range sixteen overlapping ring sets fused into bright blobs
+      u.uRing2World.value = isFocus ? magnifyRadius(2 * tr.sigma, k, rMax) * S : 0;
+      u.uRingOpacity.value = isFocus ? 1 : 0.5;
+      u.uHollow.value = tr.stale ? 1 : 0;
+      u.uLowConf.value = lowConf ? 1 : 0;
+      u.uColor.value.copy(tr.stale ? v.staleColor : v.liveColor);
       // Dim the marker as it folds into the hull at checkpoint arrival
-      u.uIntensity.value = Math.min(1, Math.max(0.25, togo / 3)) * Math.min(1, emph.intensity);
+      const markerW = Math.min(1, Math.max(0.25, togo / 3)) * Math.min(1, emph.intensity) * clear;
+      u.uIntensity.value = markerW;
       v.marker.position.copy(cp);
-      v.marker.visible = true;
+      v.marker.visible = markerW > 0.005;
       v.actualMarker.material.uniforms.uIntensity.value = 0.8 * Math.min(1, emph.intensity);
 
-      if (this.showLabels) {
-        drawLabel(v.label, Math.max(0, Math.ceil(togo - 1e-6)));
+      this._setLocus(v, tr, k, rMax, markerW * (isFocus ? 1 : 0.75), lowConf);
+
+      if (this.showLabels && isFocus && clear > 0.01) {
+        drawLabel(v.label, formatCheckpointLabel({ togo, sigma: tr.sigma, stale: tr.stale, mode: tr.mode }));
         const sp = v.label.sprite;
         sp.position.copy(cp);
         sp.scale.set(LABEL_PX * (LABEL_W / LABEL_H) * pw, LABEL_PX * pw, 1);
-        sp.material.opacity = Math.min(1, emph.intensity);
-        // right of the diamond, clear of the 1-sigma ring
-        const ringPx = tr.sigma > 0 ? Math.max(MARKER_DIAMOND_PX * 1.8, (tr.sigma * S) / (pw * Math.max(1e-6, cam.position.distanceTo(cp)))) : 0;
-        sp.center.set(-Math.min(400, Math.max(MARKER_DIAMOND_PX + 5, ringPx + 5)) / (LABEL_PX * LABEL_W / LABEL_H), 0.5);
-        // only when the track is long enough on screen to need a caption
+        sp.material.opacity = clear;
+        // right of the diamond, clear of the rings (the 2-sigma one once drawn)
         const distCp = Math.max(1e-6, cam.position.distanceTo(cp));
+        const ringPx = ringWorld > 0 ? Math.max(MARKER_DIAMOND_PX * 1.8, ringWorld / (pw * distCp)) : 0;
+        const ring2Px = u.uRing2World.value / (pw * distCp);
+        const outerPx = ring2Px > ringPx + 6 ? ring2Px : ringPx;
+        // a ring wider than the caption itself: the caption stays by the diamond
+        const offPx = outerPx > LABEL_NEAR_MAX_PX ? MARKER_DIAMOND_PX + 6 : Math.max(MARKER_DIAMOND_PX + 5, outerPx + 5);
+        sp.center.set(-offPx / (LABEL_PX * LABEL_W / LABEL_H), 0.5);
+        // only when the track is long enough on screen to need a caption
         const sepPx = Math.hypot(tr.path[0] * S - cp.x, tr.path[1] * S - cp.y, tr.path[2] * S - cp.z) / (pw * distCp);
         sp.visible = togo > 0.5 && sepPx > 48;
       } else {
@@ -679,6 +761,41 @@ export class Tracks {
     for (const [id, v] of this.visuals) {
       if (!tracks.has(id)) v.hide();
     }
+    if (this.hud) {
+      const h = this._hud;
+      h.visible = true;
+      h.togo = (focusCp ?? this.predictor.checkpointAfter(time)) - time;
+      h.stale = anyStale;
+      h.scope = scope;
+      h.focusId = this.focusId;
+      h.exaggeration[0] = Number.isFinite(kMin) ? kMin : 0;
+      h.exaggeration[1] = kMax;
+      this.hud.update(h);
+    }
+  }
+
+  /**
+   * Drift locus around the marker: earlier predictions of this checkpoint,
+   * their offsets from the current one magnified like the rings.
+   */
+  _setLocus(v, tr, k, rMax, weight, lowConf) {
+    const L = tr.locus;
+    if (!L || L.n < 2 || weight < 0.01) { v.locus.hide(); return; }
+    const pts = this._locusPts, d = this._d, c = tr.cp;
+    let extent = 0;
+    for (let i = 0; i < L.n; i++) {
+      const o = i * 3;
+      d[0] = L.pts[o] - c[0]; d[1] = L.pts[o + 1] - c[1]; d[2] = L.pts[o + 2] - c[2];
+      magnifyOffset(d, k, rMax, pts, 0, o);
+      extent = Math.max(extent, Math.abs(pts[o]) + Math.abs(pts[o + 1]) + Math.abs(pts[o + 2]));
+      pts[o] += c[0]; pts[o + 1] += c[1]; pts[o + 2] += c[2];
+    }
+    if (extent < 1) { v.locus.hide(); return; }   // the prediction has not moved
+    const lu = v.locus.material.uniforms;
+    lu.uIntensity.value = LOCUS_INTENSITY * weight;
+    lu.uRound.value = lowConf ? 0 : 1;
+    lu.uDuty.value = lowConf ? 0.6 : 0.5;
+    v.locus.set(pts, L.times, L.n, this.scale);
   }
 
   _setErrorLine(v, tr) {
@@ -713,10 +830,12 @@ export class Tracks {
     }
     v.ghostMaterial.uniforms.uOpacity.value = opacity;
     v.ghost.position.copy(cp);
-    const d = tr.cpVel;
-    const dl = Math.hypot(d[0], d[1], d[2]);
-    if (dl > 1e-3) {
-      v.ghost.lookAt(this._q.set(cp.x + d[0] / dl, cp.y + d[1] / dl, cp.z + d[2] / dl));
+    // The predicted nose at the checkpoint when the plan carries it; else
+    // the current attitude (a ship flies nose-first only while burning, so
+    // the velocity was the wrong guess for a coasting or braking hull)
+    const f = tr.cpFwd;
+    if (tr.hasFwd) {
+      v.ghost.lookAt(this._q.set(cp.x + f[0], cp.y + f[1], cp.z + f[2]));
     } else {
       v.ghost.quaternion.copy(ship.quaternion);
     }
@@ -727,11 +846,13 @@ export class Tracks {
   clear() {
     for (const v of this.visuals.values()) v.hide();
     this.root.visible = false;
+    this.hud?.hide();
   }
 
   dispose() {
     for (const v of this.visuals.values()) v.dispose();
     this.visuals.clear();
     this.sm.scene.remove(this.root);
+    this.hud?.hide();
   }
 }

@@ -25,6 +25,8 @@
 
 export const TRACK_SAMPLES = 64;
 export const DEFAULT_INTERVAL_S = 30;
+/** Max earlier predictions kept per track (the drift locus). */
+export const LOCUS_CAP = 96;
 const G = 9.80665;
 const EPS = 1e-6;
 const JITTER_WINDOW_S = 8;   // recent history used for the fallback spread
@@ -105,6 +107,31 @@ export function nextCheckpointTime(schedule, t) {
   return last + (Math.floor((t + EPS - last) / sp) + 1) * sp;
 }
 
+/**
+ * Does a frame at time t sit exactly on a decision checkpoint? Such a frame
+ * was traced before that checkpoint's new orders took effect, so its plan
+ * describes the orders just replaced.
+ */
+export function isCheckpointTime(schedule, t) {
+  if (!(t > EPS)) return false;
+  const tol = 1e-3;
+  if (schedule.interval) {
+    const k = Math.round(t / schedule.interval);
+    return k >= 1 && Math.abs(t - k * schedule.interval) < tol;
+  }
+  const times = schedule.times;
+  let lo = 0, hi = times.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (times[mid] < t - tol) lo = mid + 1; else hi = mid;
+  }
+  if (lo < times.length && Math.abs(times[lo] - t) < tol) return true;
+  const last = times[times.length - 1];
+  if (last === undefined || t <= last + tol) return false;
+  const k = Math.round((t - last) / schedule.spacing);
+  return Math.abs(t - (last + k * schedule.spacing)) < tol;
+}
+
 function validPlan(plan) {
   return !!plan && Array.isArray(plan.path) && plan.path.length >= 2 && Number.isFinite(plan.t_cp);
 }
@@ -125,8 +152,16 @@ function makeTrack(shipId, n) {
   return {
     shipId, faction: shipId.startsWith('beta') ? 'beta' : 'alpha', active: false, source: 'plan',
     t: 0, tCp: 0, n: 0, sigma: 0,
+    // stale: the plan predates the checkpoint's new orders (live only);
+    // mode: evasion mode behind the plan (reactive = low confidence)
+    stale: false, mode: null,
     times: new Float64Array(n), path: new Float64Array(n * 3),
     cp: new Float64Array(3), cpVel: new Float64Array(3),
+    // predicted nose direction at the checkpoint (plan.fwd), when recorded
+    hasFwd: false, cpFwd: new Float64Array(3),
+    // where this interval's earlier frames predicted the checkpoint:
+    // index 0 = the current prediction, then back in time
+    locus: { n: 0, times: new Float64Array(LOCUS_CAP), pts: new Float64Array(LOCUS_CAP * 3) },
     actual: {
       n: 0, hasCp: false, endT: 0,
       times: new Float64Array(n), path: new Float64Array(n * 3), cp: new Float64Array(3)
@@ -273,6 +308,7 @@ export class TrajectoryPredictor {
         || this._kinematic(tr, id, t, st, f0, s0, f1, s1);
       if (!ok) continue;
       tr.active = true;
+      this._locus(tr, id);
       if (withActual) this._actual(tr, id);
       else tr.actual.n = 0;
     }
@@ -331,8 +367,12 @@ export class TrajectoryPredictor {
   }
 
   _fromPlans(tr, t, st, f0, s0, f1, s1) {
-    const p0 = validPlan(s0?.plan) ? s0.plan : null;
+    let p0 = validPlan(s0?.plan) ? s0.plan : null;
     const p1 = f1 !== f0 && validPlan(s1?.plan) ? s1.plan : null;
+    // The frame ON a checkpoint was traced before that checkpoint's new
+    // orders applied; the next frame already flies them. Blending the two
+    // slid the marker across the whole re-plan for a second: use f1's plan.
+    if (p0 && p1 && p1.t_cp > t + EPS && isCheckpointTime(this.schedule(), f0.t)) p0 = null;
     if (!p0 && !p1) return false;
     // Target: the earliest planned checkpoint still ahead. A plan whose
     // checkpoint comes before that cannot describe the whole horizon.
@@ -376,6 +416,19 @@ export class TrajectoryPredictor {
       out[i * 3 + 2] += dz * w;
     }
     tr.sigma = (w0 > 0 ? w0 * planSigma(p0, f0.t, H) : 0) + (w1 > 0 ? w1 * planSigma(p1, f1.t, H) : 0);
+    tr.stale = !!((w0 > 0 && p0.stale) || (w1 > 0 && p1.stale));
+    // Evasion mode of the dominant plan (older recordings: the frame's own)
+    const dom1 = w1 >= w0;
+    const pd = dom1 ? p1 : p0, sd = dom1 ? s1 : s0;
+    tr.mode = pd && 'mode' in pd ? pd.mode ?? null : sd?.evade ?? null;
+    // Predicted nose at the checkpoint, blended like the path
+    const fw = tr.cpFwd;
+    fw[0] = fw[1] = fw[2] = 0;
+    const g0 = w0 > 0 && Array.isArray(p0.fwd) ? w0 : 0, g1 = w1 > 0 && Array.isArray(p1.fwd) ? w1 : 0;
+    for (let k = 0; k < 3; k++) fw[k] = (g0 ? g0 * p0.fwd[k] : 0) + (g1 ? g1 * p1.fwd[k] : 0);
+    const fl = Math.hypot(fw[0], fw[1], fw[2]);
+    tr.hasFwd = fl > 1e-6;
+    if (tr.hasFwd) { fw[0] /= fl; fw[1] /= fl; fw[2] /= fl; }
     tr.source = 'plan';
     this._finish(tr, t, tCp, st);
     return true;
@@ -416,6 +469,9 @@ export class TrajectoryPredictor {
     // recordings: the actual checkpoint lands inside ~1.3 sigma half the time.
     const q = 0.5 * H * H;
     tr.sigma = Math.hypot(this._jitter(id, t) * q, BURN_SPREAD * Math.hypot(acc[0], acc[1], acc[2]) * q);
+    tr.stale = false;
+    tr.mode = (alpha >= 0.5 ? s1?.evade ?? s0?.evade : s0?.evade ?? s1?.evade) ?? null;
+    tr.hasFwd = false;
     tr.source = 'kinematic';
     this._finish(tr, t, tCp, st);
     for (let k = 0; k < 3; k++) tr.cpVel[k] = vel[k] + acc[k] * H;
@@ -450,6 +506,51 @@ export class TrajectoryPredictor {
     for (let k = 0; k < 3; k++) {
       tr.cpVel[k] = h > 1e-6 ? (P[(n - 1) * 3 + k] - P[(n - 2) * 3 + k]) / h : (st.velocity?.[k] || 0);
     }
+  }
+
+  /**
+   * Drift locus: where each earlier frame of this interval predicted the
+   * same checkpoint (its recorded plan, or for plan-less recordings the
+   * frame state propagated at constant acceleration), newest first after
+   * the current prediction. The checkpoint frame itself is left out (its
+   * plan predates the new orders), so the locus restarts every interval.
+   */
+  _locus(tr, id) {
+    const L = tr.locus;
+    const P = L.pts;
+    const trace = this.trace;
+    const sched = this.schedule();
+    L.times[0] = tr.t;
+    P[0] = tr.cp[0]; P[1] = tr.cp[1]; P[2] = tr.cp[2];
+    let k = 1;
+    const span = 2 * (sched.interval || sched.spacing || DEFAULT_INTERVAL_S);
+    for (let j = this._i0; j >= 0 && k < LOCUS_CAP; j--) {
+      const f = trace[j];
+      if (f.t > tr.t + EPS) continue;
+      if (f.t < tr.t - span || isCheckpointTime(sched, f.t)) break;
+      const s = f.ships?.[id];
+      if (!s || s.destroyed || s.dying) break;
+      const o = k * 3;
+      if (tr.source === 'plan') {
+        const p = s.plan;
+        if (!validPlan(p) || Math.abs(p.t_cp - tr.tCp) > 1e-3) break;
+        const cp = p.path[p.path.length - 1];
+        P[o] = cp[0]; P[o + 1] = cp[1]; P[o + 2] = cp[2];
+      } else {
+        if (!s.pos || !s.vel) break;
+        const H = tr.tCp - f.t;
+        const prev = j > 0 ? trace[j - 1] : null;
+        const sp = prev?.ships?.[id];
+        const h = prev ? f.t - prev.t : 0;
+        for (let c = 0; c < 3; c++) {
+          const a = s.acc ? s.acc[c] : (sp?.vel && h > 0 ? (s.vel[c] - sp.vel[c]) / h : 0);
+          P[o + c] = s.pos[c] + s.vel[c] * H + 0.5 * a * H * H;
+        }
+      }
+      L.times[k] = f.t;
+      k++;
+    }
+    L.n = k;
   }
 
   /** Recorded future path over the same times as the prediction. */

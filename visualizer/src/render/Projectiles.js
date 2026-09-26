@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { Ribbon } from './Trails.js';
+import { trailLifeCap, focusFade, closeUpK } from './CloseRange.js';
 import { WeaponRibbons, WeaponFlashes, TorpedoBodies } from './WeaponBatches.js';
 import {
   WeaponTimeline, makeSample, sampleTrack, seedFor, tracerLength,
@@ -13,6 +14,10 @@ const SCALE = 0.001;
 // Spinal muzzle (fraction of hull width below the axis, of length forward)
 const SPINAL = { cruiser: [-0.42, 0.5], battlecruiser: [-0.245, 0.56], battleship: [-0.335, 0.5], dreadnought_siege: [-0.2, 0.8] };
 const MUZZLE_LIFE = 0.3;
+// Longest on-screen wake (px); only bites in close-ups (see trail())
+const TRAIL_CAP_PX = { slug: 140, torpedo: 200 };
+// Close-ups: a PD beam longer than this on screen keeps only its two ends
+const BEAM_END_PX = 260;
 const random = (seed, n) => { const x = Math.sin(seed * 127.1 + n * 311.7) * 43758.5453; return x - Math.floor(x); };
 
 /**
@@ -35,6 +40,7 @@ export class Projectiles {
     this.m4 = new THREE.Matrix4(); this.q2 = new THREE.Quaternion(); this.aim = new THREE.Vector3();
     this.s1 = new THREE.Vector3(); this.s2 = new THREE.Vector3(); this.s3 = new THREE.Vector3();
     this.sample = makeSample(); this.history = makeSample(); this.shipSample = makeSample(); this.probe = makeSample();
+    this.t1 = new THREE.Vector3(); this.t2 = new THREE.Vector3(); this.focus = new THREE.Vector3(); this.viewDist = Infinity;
     this.timeline = null;
     this.time = 0;
   }
@@ -64,6 +70,10 @@ export class Projectiles {
   update(loader, time) {
     this.prepare(loader);
     this.time = time;
+    // Close-up context for the wakes: orbit target and distance
+    const ctl = this.manager.controls;
+    this.viewDist = ctl ? this.manager.camera.position.distanceTo(ctl.target) : Infinity;
+    if (ctl) this.focus.copy(ctl.target);
     this.ribbons.begin(time); this.flashes.begin(time); this.bodies.begin();
     for (let i = 0; i < this.slugs.length; i++) this.slug(this.slugs[i], time);
     for (let i = 0; i < this.torpedoes.length; i++) this.torpedo(this.torpedoes[i], time);
@@ -105,7 +115,7 @@ export class Projectiles {
       this.ribbons.add(this.a, this.b, 0.045, fade, 0, tr.seed);
       this.flashes.add(this.a, this.dir, Math.max(0.085, this.pixelAt(this.a) * 1.5), 0.7 * fade);
     }
-    this.trail(tr, time, sampleTime, ION_LIFE, 12, fade, false);
+    this.trail(tr, time, sampleTime, ION_LIFE, 12, fade, false, TRAIL_CAP_PX.slug);
   }
 
   /**
@@ -207,12 +217,27 @@ export class Projectiles {
     return out;
   }
 
-  trail(tr, time, newest, life, segments, intensity, poweredOnly) {
-    const oldest = Math.max(tr.start, time - life);
-    if (newest <= oldest) return;
+  trail(tr, time, newest, life, segments, intensity, poweredOnly, capPx = Infinity) {
+    if (newest <= Math.max(tr.start, time - life)) return;
     this.timeline.sample(tr, newest, this.history);
     this.point(this.c, this.history);
     if (tr.lift) this.lift(tr, newest, this.c); else this.muzzleLift(tr, newest, this.c);
+    // Up close, `life` seconds of wake is tens of km: a laser-like line
+    // across the frame. Fade wakes far from the focus and cap the rest to
+    // capPx on screen, measured at the trail's point nearest the camera.
+    intensity *= focusFade(this.c.distanceTo(this.focus), this.viewDist);
+    if (intensity < 0.01) return;
+    const speed = Math.hypot(this.history.vel[0], this.history.vel[1], this.history.vel[2]) * SCALE;
+    if (capPx < Infinity && speed > 0) {
+      const cam = this.manager.camera.position;
+      this.t1.fromArray(this.history.vel).multiplyScalar(-SCALE * life);   // head -> nominal tail
+      const len2 = this.t1.lengthSq();
+      const s = len2 > 0 ? THREE.MathUtils.clamp(this.t2.subVectors(cam, this.c).dot(this.t1) / len2, 0, 1) : 0;
+      this.t2.copy(this.c).addScaledVector(this.t1, s);
+      life = trailLifeCap(life, speed, cam.distanceTo(this.t2) * Ribbon.pixelWorld.value, capPx);
+    }
+    const oldest = Math.max(tr.start, time - life);
+    if (newest <= oldest) return;
     let prev = newest;
     for (let i = 1; i <= segments; i++) {
       const t = newest + (oldest - newest) * i / segments;
@@ -268,7 +293,7 @@ export class Projectiles {
       const mark = 0.5 * (1 - THREE.MathUtils.smoothstep(bodyPx, 8, 24)) * (disabled ? 0.35 : 1);
       if (mark > 0) this.flashes.add(this.a, this.dir, 0, mark, tr.marker);
     }
-    this.trail(tr, time, Math.min(time, tr.end), 1.3, 14, 1, true);
+    this.trail(tr, time, Math.min(time, tr.end), 1.3, 14, 1, true, TRAIL_CAP_PX.torpedo);
   }
 
   /** Loader torpedo moments rendered here instead of SceneManager flares. */
@@ -318,7 +343,7 @@ export class Projectiles {
     // Burn spot on the facing surface of the round, not hidden at its centre.
     this.surfaceOffset(tr, torpedo, time, this.d);
     this.b.copy(target).add(this.d);
-    this.ribbons.add(this.a, this.b, 0.075, 0.85 * intensity, 2, seed);
+    this.beamRibbon(this.a, this.b, 0.85 * intensity, seed);
     this.flashes.add(this.a, this.dir, 0.16, 0.38 * intensity);
     this.flashes.add(this.b, this.dir, 0.2, 0.75 * intensity, 2, seed);
     // Fixed birth cadence, sampled analytically; direct seeks retain spray.
@@ -332,6 +357,28 @@ export class Projectiles {
       this.vel.fromArray(this.history.vel).multiplyScalar(SCALE);
       this.sparks(this.c, this.dir, this.vel, age, 0.28, 0.4, seed + (tick - j) * 0.013, 4, intensity);
     }
+  }
+
+  /**
+   * A PD beam a -> b. In a close-up a beam to a round 100 km out is a
+   * laser line straight across the frame: beams far from the focus fade,
+   * and one longer than 2 x BEAM_END_PX on screen keeps only its ends
+   * (turret and burn spot), each fading out toward the cut. Fleet range
+   * draws every beam whole, as before.
+   */
+  beamRibbon(a, b, intensity, seed) {
+    const k = closeUpK(this.viewDist);
+    if (k <= 0) { this.ribbons.add(a, b, 0.075, intensity, 2, seed); return; }
+    intensity *= focusFade(a.distanceTo(this.focus), this.viewDist);
+    if (intensity < 0.01) return;
+    const len = a.distanceTo(b);
+    const endA = BEAM_END_PX * this.pixelAt(a), endB = BEAM_END_PX * this.pixelAt(b);
+    if (len <= (endA + endB) * 1.15) { this.ribbons.add(a, b, 0.075, intensity, 2, seed); return; }
+    this.t1.subVectors(b, a).divideScalar(len);
+    this.t2.copy(a).addScaledVector(this.t1, endA);
+    this.ribbons.add(a, this.t2, 0.075, intensity, 2, seed, 0, 1);
+    this.t2.copy(b).addScaledVector(this.t1, -endB);
+    this.ribbons.add(this.t2, b, 0.075, intensity, 2, seed, 1, 0);
   }
 
   /**

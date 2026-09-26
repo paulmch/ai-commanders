@@ -58,8 +58,18 @@ export const RCS_TIMING = {
   kick: 0.4,          // full-strength pulse that opens a vectored turn / its braking
   tvGain: 0.3,        // steady RCS level while the torch does the turning
   puffSlot: 1 / 30,   // puff emission grid
-  puffLife: 0.95
+  puffLife: 0.6
 };
+
+/**
+ * Exhaust-puff scale for a jet of length jetLen: sub-linear in hull size,
+ * so a dreadnought's jets still vent small directional puffs instead of
+ * the cotton-wool clouds a linear scale gave (~0.6 = a corvette jet).
+ */
+export const PUFF_BASE = 0.6;
+export function puffScale(jetLen) {
+  return jetLen > 0 ? PUFF_BASE * Math.sqrt(jetLen / PUFF_BASE) : PUFF_BASE;
+}
 
 // Recorded headings are rounded to 4 decimals: sigma of one component
 const FWD_SIGMA = 1e-4 / Math.sqrt(12);
@@ -867,6 +877,7 @@ export class RcsSystem {
     const ud = ship.userData;
     const L = ud.size?.length || 8, W = ud.size?.width || 1.6;
     p.jetLen = 0.36 * W + 0.06 * L;
+    p.puffLen = puffScale(p.jetLen);
     // Per-jet frames: local transform (+Z to nozzle axis) and a lateral basis
     p.jetFrames = mounts.map(m => {
       const pos = new THREE.Vector3(...m.pos);
@@ -935,6 +946,7 @@ export class RcsSystem {
     const n = planner.jetCount;
     const frames = planner.jetFrames;
     const jl = planner.jetLen;
+    const pj = planner.puffLen || jl;
     this._shipM.compose(ship.position, ship.quaternion, this._one);
     this._shipM.setPosition(
       ship.position.x - this._origin.x,
@@ -968,7 +980,7 @@ export class RcsSystem {
         // nozzle flash (negative size = glow texture)
         this._p.copy(fr.dir).multiplyScalar(jl * 0.06).add(fr.pos).applyMatrix4(this._shipM);
         pp[np * 4] = this._p.x; pp[np * 4 + 1] = this._p.y; pp[np * 4 + 2] = this._p.z;
-        pp[np * 4 + 3] = -jl * (0.5 + 0.5 * Ie);
+        pp[np * 4 + 3] = -pj * (0.5 + 0.5 * Ie);
         const g = 1.4 * Ie;
         pc[np * 4] = 0.75 * g; pc[np * 4 + 1] = 0.85 * g; pc[np * 4 + 2] = 1.0 * g;
         pc[np * 4 + 3] = 0;
@@ -1005,12 +1017,12 @@ export class RcsSystem {
         const h3 = hash01(planner.seed, j, k * 5 + 3);
         const h4 = hash01(planner.seed, j, k * 5 + 4);
         const fr = frames[k];
-        // drag-slowed exhaust with a little lateral scatter
+        // drag-slowed exhaust streaming down the nozzle axis, little scatter
         const kd = 3.0;
-        const v0 = jl * (3.2 + 1.6 * h2);
+        const v0 = pj * (4.2 + 1.8 * h2);
         const s = v0 * (1 - Math.exp(-kd * age)) / kd;
         const ang = h3 * Math.PI * 2;
-        const spread = 0.35 * h4;
+        const spread = 0.12 * h4;
         this._w.copy(fr.dir)
           .addScaledVector(fr.u, Math.cos(ang) * spread)
           .addScaledVector(fr.v, Math.sin(ang) * spread);
@@ -1019,9 +1031,9 @@ export class RcsSystem {
         const y = this._p.y + ship.position.y - this._origin.y;
         const z = this._p.z + ship.position.z - this._origin.z;
         const f = age / lifeK;
-        const size = jl * (0.22 + 1.0 * (1 - Math.exp(-3.2 * age))) * (0.8 + 0.4 * h2);
-        const env = Math.min(1, age / 0.04) * Math.pow(1 - f, 1.5);
-        const a = I * env * 0.26;
+        const size = pj * (0.16 + 0.6 * (1 - Math.exp(-3.2 * age))) * (0.8 + 0.4 * h2);
+        const env = Math.min(1, age / 0.04) * Math.pow(1 - f, 1.8);
+        const a = I * env * 0.22;
         pp[np * 4] = x; pp[np * 4 + 1] = y; pp[np * 4 + 2] = z; pp[np * 4 + 3] = size;
         pc[np * 4] = a * (0.95 - 0.4 * f);
         pc[np * 4 + 1] = a * (0.97 - 0.33 * f);

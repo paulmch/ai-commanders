@@ -84,7 +84,8 @@ const ribbonFragment = /* glsl */`
       float packets = 0.82+0.18*sin(x*55.0-uTime*58.0+vStyle.w*17.0);
       // Several turrets share a line of fire: keep pixel-floor beams slim.
       float slim = mix(0.6, 1.0, smoothstep(0.7, 2.0, vPx));
-      color = (vec3(1.1,0.77,0.5)*core + vec3(0.5,0.13,0.035)*halo*0.3)*packets*slim;
+      // aAge fades a close-up's split beam ends out toward the cut (0 = full)
+      color = (vec3(1.1,0.77,0.5)*core + vec3(0.5,0.13,0.035)*halo*0.3)*packets*slim*(1.0-vAge);
     } else if (kind < 3.5) {
       // Motor plume: broad white-hot core out of the nozzle with shock
       // cells, wrapped in a longer orange sheath that fades to the tip.

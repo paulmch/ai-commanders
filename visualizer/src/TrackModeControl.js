@@ -66,7 +66,7 @@ export class TrackModeControl {
     button?.addEventListener('click', () => this.cycle());
     const target = keyTarget || (typeof document !== 'undefined' ? document : null);
     target?.addEventListener('keydown', (e) => {
-      if (e.code !== 'KeyT' || e.repeat || e.altKey || e.ctrlKey || e.metaKey) return;
+      if (e.code !== 'KeyT' || e.repeat || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;   // Shift+T: TrackHud scope
       const el = e.target;
       if (el && (['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) || el.isContentEditable)) return;
       this.cycle();

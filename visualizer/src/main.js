@@ -14,6 +14,7 @@ import { generateShipSVG, getShipClassName, SHIP_SILHOUETTES } from './shipSilho
 import { TrajectoryPredictor } from './TrajectoryPredictor.js';
 import { TrackModeControl } from './TrackModeControl.js';
 import { Tracks } from './render/Tracks.js';
+import { TrackHud } from './TrackHud.js';
 import { latestWreckEnd } from './render/Explosion.js';
 
 class BattleVisualizer {
@@ -55,6 +56,7 @@ class BattleVisualizer {
       isLive: () => !!this.live && !this.live.ended,
       onChange: mode => { if (this.live) { this.live.showPaths = mode !== 'off'; this.updateLiveHud(); } }
     });
+    this.trackHud = new TrackHud({ root: document.getElementById('trackHud') });   // countdown, legend, Shift+T scope
     this.hideLoading();
 
     // ?live=1 connects to a running battle server; ?recording=<url>
@@ -366,6 +368,7 @@ class BattleVisualizer {
     this.scene?.dispose();   // no-op after a reset; guards any other reload path
     this.scene = new SceneManager(this.elements.canvas);
     this.tracks = new Tracks(this.scene, new TrajectoryPredictor(this.loader));
+    this.tracks.hud = this.trackHud;
     this.scene.loader = this.loader;   // hull rigs read targets, shots, launches, PD dwell
     this.setLoadingProgress(60);
 

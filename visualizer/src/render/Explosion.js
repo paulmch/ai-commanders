@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { getNoiseTexture, getGlowTexture, mulberry32 } from './Textures.js';
 import { SparkBurst, StreakBurst, PuffCloud } from './Particles.js';
+import { blastCloseDim } from './CloseRange.js';
 import { buildDebrisChunks } from './Hulls.js';
 import { createTorch } from './Torch.js';
 import { breakHull } from './DamageFX.js';
@@ -481,6 +482,11 @@ export class Blast {
     this.sparks.setAge(age);
     this.streaks.setAge(age);
     this.puffs.setAge(age);
+    // The additive spark/streak burst piles into a white blowout when the
+    // camera sits a few blast radii away; fleet range is unchanged
+    const dim = camPos ? blastCloseDim(camPos.distanceTo(this.group.position), s) : 1;
+    this.sparks.material.uniforms.uIntensity.value = 1.3 * dim;
+    this.streaks.material.uniforms.uIntensity.value = 1.4 * dim;
     if (this.crater) {
       const p = Math.min(1, age / this.duration);
       this.crater.material.opacity = Math.pow(1 - p, 1.8);

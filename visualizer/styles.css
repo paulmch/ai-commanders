@@ -1998,3 +1998,56 @@ body {
   .tracks-btn { width: 38px; height: 38px; padding: 0; justify-content: center; }
   .tracks-btn .tracks-state { display: none; }
 }
+
+/* ============ Trajectory-track HUD: countdown, legend, scope (Shift+T) ============ */
+.track-hud {
+  position: absolute;
+  right: 16px;
+  bottom: 96px;
+  z-index: 30;
+  max-width: 290px;
+  padding: 6px 10px 7px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  pointer-events: auto;
+}
+.track-hud.hidden { display: none; }
+#shipTelemetry:not(.hidden) ~ .track-hud { right: 308px; }
+.track-hud-head { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+.track-hud-title { color: var(--text-secondary); }
+.track-hud-togo { min-width: 30px; color: var(--alpha-primary); font-size: 13px; text-align: right; }
+.track-hud-btn {
+  height: 20px;
+  padding: 0 6px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+.track-hud-btn:hover, .track-hud-btn:focus-visible { border-color: var(--border-accent); color: var(--text-primary); }
+.track-hud-btn.active { border-color: var(--alpha-dim); color: var(--alpha-primary); background: rgba(0, 212, 255, 0.08); }
+.track-hud-head .track-hud-btn:first-of-type { margin-left: auto; }
+.track-hud-hint { margin-top: 4px; color: var(--accent-warning); font-size: 10px; }
+.track-legend { list-style: none; margin: 6px 0 0; padding: 5px 0 0; border-top: 1px solid var(--border-subtle); display: grid; gap: 2px; }
+.track-legend[hidden] { display: none; }
+.track-legend li { display: flex; align-items: center; gap: 7px; font-size: 10px; line-height: 13px; letter-spacing: 0.02em; }
+.track-legend b { font-weight: normal; color: var(--text-primary); }
+.track-glyph { width: 22px; height: 14px; flex-shrink: 0; overflow: visible; color: var(--alpha-primary); }
+.track-glyph * { fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
+.track-glyph .fill { fill: currentColor; stroke: none; }
+.track-glyph .dots { stroke-dasharray: 0.1 2.6; stroke-width: 1.9; }
+.track-glyph.pale { color: #9fe3f5; }
+.track-glyph.stale { color: #7f9aa6; }
+.track-glyph.head { width: 12px; height: 12px; }
+@media (max-width: 1200px) { #shipTelemetry:not(.hidden) ~ .track-hud { right: 268px; } }
+@media (max-width: 680px) {
+  .track-hud { right: 8px; bottom: 140px; max-width: calc(100vw - 16px); }
+  #shipTelemetry:not(.hidden) ~ .track-hud { display: none; }
+  .track-legend { display: none; }
+}

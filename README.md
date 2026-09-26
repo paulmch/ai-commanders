@@ -55,6 +55,7 @@ Open **[the GLM–Luna replay](http://localhost:5173/?recording=/recordings/glm_
 | **D** | Open or close intent and consequence |
 | **C** | Toggle tactical contact labels |
 | **T** | Cycle trajectory tracks: off, predicted, predicted + actual (replay) |
+| **Shift+T** | Draw tracks for every ship or only the selected ship (also the ALL/SEL button in the track HUD) |
 | **G** | Switch graphics quality between low and high (`?gfx=low\|high\|auto` in the URL) |
 | Click a ship or its registry entry | Select and focus it |
 | Drag / scroll | Orbit / zoom |

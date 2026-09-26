@@ -25,7 +25,7 @@ export class ContactOverlay {
     this.enabled = true;
     this.point = new THREE.Vector3();
     this.view = new THREE.Vector3();
-    this.panels = ['battleHeader', 'shipRegistry', 'shipTelemetry', 'decisionPanel', 'eventLog', 'liveHud', 'viewControls', 'playbackControls']
+    this.panels = ['battleHeader', 'shipRegistry', 'shipTelemetry', 'decisionPanel', 'eventLog', 'liveHud', 'viewControls', 'playbackControls', 'trackHud']
       .map(id => document.getElementById(id)).filter(Boolean);
   }
 
