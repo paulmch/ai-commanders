@@ -565,3 +565,87 @@ class TestManeuversIgnoreDeadTargets:
         _steps(sim, 30)
         # heading for the live enemy at -y, not the wreck at +y
         assert ship.velocity.y < 0.0
+
+
+# ---------------------------------------------------------------------------
+# Intercept time must be a real, positive time of flight
+# ---------------------------------------------------------------------------
+
+class TestInterceptTimeIsAPositiveRoot:
+    """
+    With the range closing, calculate_intercept refined the flight time by
+    plain fixed-point iteration, t <- (d + a_los*t^2/2) / closure, clamped at
+    zero. When the target accelerates toward the torpedo that map has slope
+    > 1, so it bounced: a stationary round with a target 300 km out, closing
+    at 1 km/s and accelerating at it at 30 m/s^2, went 300 -> 0 -> 300 -> 0 s
+    and can_intercept reported a hit at ZERO seconds with 300 km still to
+    go. A target still closing but burning away (no coasting root) diverged
+    to the 1-hour cap and was scored as needing 35 km/s. An unsolvable
+    geometry was clamped to the cap and scored as if it were an intercept.
+    """
+
+    @pytest.mark.parametrize("frame_vx", [0.0, 5000.0, -5000.0])
+    def test_target_accelerating_at_a_still_round(self, frame_vx):
+        frame = Vector3D(frame_vx, 0, 0)
+        torp = _torpedo(Vector3D(0, 0, 0), frame, "x")
+        tgt_pos, tgt_vel, tgt_acc = (Vector3D(300e3, 0, 0),
+                                     Vector3D(-1000, 0, 0) + frame, Vector3D(-30, 0, 0))
+        intercept_pos, t_int = torp.calculate_intercept(tgt_pos, tgt_vel, tgt_acc)
+        assert t_int > 1.0
+        # the target arrives where the coasting round will be at t_int
+        coasting_round = torp.position + torp.velocity * t_int
+        assert (intercept_pos - coasting_round).magnitude < 1.0
+        # 15 t^2 + 1000 t - 300000 = 0
+        assert t_int == pytest.approx((-1000 + math.sqrt(1000 ** 2 + 60 * 300e3)) / 30, rel=1e-9)
+        ok, t_ok, fuel_left = torp.can_intercept(tgt_pos, tgt_vel, tgt_acc)
+        assert ok
+        assert t_ok == pytest.approx(t_int)
+        assert fuel_left == pytest.approx(torp.remaining_delta_v_kps, abs=1e-6)
+
+    @pytest.mark.parametrize("accel_los", [-120.0, -60.0, -30.0, -5.0, 0.0, 2.0])
+    @pytest.mark.parametrize("closure", [500.0, 3000.0, 12000.0])
+    def test_closing_time_solves_the_range_equation(self, accel_los, closure):
+        torp = _torpedo(Vector3D(0, 0, 0), Vector3D(0, 0, 0), "x")
+        tgt_pos, tgt_vel = Vector3D(400e3, 25e3, 0), Vector3D(-closure, 0, 0)
+        d, los = tgt_pos.magnitude, tgt_pos.normalized()
+        tgt_acc = los * accel_los
+        closing = -tgt_vel.dot(los)
+        _, t_int = torp.calculate_intercept(tgt_pos, tgt_vel, tgt_acc)
+        assert 0.0 < t_int < 3600.0
+        if closing ** 2 >= 2.0 * accel_los * d:
+            # coasting root: the along-LOS range is used up at t_int
+            residual = d - closing * t_int + 0.5 * accel_los * t_int ** 2
+            assert abs(residual) < 1e-6 * d
+
+    def test_closing_target_burning_away_is_a_powered_intercept(self):
+        torp = _torpedo(Vector3D(0, 0, 0), Vector3D(0, 0, 0), "x")
+        tgt_pos, tgt_vel, tgt_acc = (Vector3D(300e3, 0, 0),
+                                     Vector3D(-1000, 0, 0), Vector3D(20, 0, 0))
+        accel = torp.specs.acceleration_at_mass(torp.current_mass_kg)
+        intercept_pos, t_int = torp.calculate_intercept(tgt_pos, tgt_vel, tgt_acc)
+        # 0.5*(A - 20)*t^2 + 1000*t - 300000 = 0
+        a_eff = accel - 20.0
+        expected = (-1000 + math.sqrt(1000 ** 2 + 2 * a_eff * 300e3)) / a_eff
+        assert t_int == pytest.approx(expected, rel=1e-3)
+        ok, _, fuel_left = torp.can_intercept(tgt_pos, tgt_vel, tgt_acc)
+        assert ok and 0.0 < fuel_left < torp.remaining_delta_v_kps
+
+    def test_unreachable_target_is_reported_unreachable(self):
+        torp = _torpedo(Vector3D(0, 0, 0), Vector3D(0, 0, 0), "x")
+        accel = torp.specs.acceleration_at_mass(torp.current_mass_kg)
+        # still closing, but pulling away harder than the round can accelerate
+        tgt_pos, tgt_vel = Vector3D(300e3, 0, 0), Vector3D(-1000, 0, 0)
+        tgt_acc = Vector3D(2.0 * accel, 0, 0)
+        ok, t_int, fuel_left = torp.can_intercept(tgt_pos, tgt_vel, tgt_acc)
+        assert not ok
+        assert math.isinf(t_int)
+        assert fuel_left == 0.0
+        # guidance still gets a finite aim point
+        intercept_pos, t_aim = torp.calculate_intercept(tgt_pos, tgt_vel, tgt_acc)
+        assert math.isfinite(intercept_pos.magnitude) and math.isfinite(t_aim)
+
+    def test_zero_range_needs_no_delta_v_in_any_frame(self):
+        torp = _torpedo(Vector3D(1e3, 2e3, 0), Vector3D(8000, -3000, 0), "x")
+        ok, t_int, fuel_left = torp.can_intercept(Vector3D(1e3, 2e3, 0), Vector3D(0, 0, 0))
+        assert ok and t_int == 0.0
+        assert fuel_left == pytest.approx(torp.remaining_delta_v_kps)

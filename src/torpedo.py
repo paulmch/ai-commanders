@@ -670,11 +670,35 @@ class Torpedo:
             target_accel: Target acceleration (m/s^2), assumes constant
 
         Returns:
-            Tuple of (intercept_position, time_to_intercept)
+            Tuple of (intercept_position, time_to_intercept). With no
+            solution the time is the 1-hour cap, so guidance still gets a
+            finite aim point; can_intercept reports such targets unreachable.
         """
         if target_accel is None:
             target_accel = Vector3D.zero()
 
+        # Cap at reasonable maximum
+        t_intercept = min(
+            self._time_to_intercept(target_pos, target_vel, target_accel),
+            3600.0,  # 1 hour max
+        )
+
+        # Final intercept position
+        intercept_pos = (
+            target_pos +
+            target_vel * t_intercept +
+            target_accel * (0.5 * t_intercept * t_intercept)
+        )
+
+        return intercept_pos, t_intercept
+
+    def _time_to_intercept(
+        self,
+        target_pos: Vector3D,
+        target_vel: Vector3D,
+        target_accel: Vector3D
+    ) -> float:
+        """Uncapped time to intercept (seconds); inf when there is none."""
         # Everything is solved in the torpedo's rest frame, so the answer does
         # not depend on the frame positions/velocities are expressed in. The
         # old refinement divided the target's WORLD-frame travel by the
@@ -697,21 +721,24 @@ class Torpedo:
             # Target position relative to a torpedo that coasts from now.
             return rel_pos + rel_vel * t + target_accel * (0.5 * t * t)
 
+        # Coasting intercept: the time at which the current closure (plus the
+        # target's along-LOS acceleration) eats the range, i.e. the smallest
+        # positive root of 0.5*a_los*t^2 - closure*t + d = 0. Delta-v then
+        # only has to remove the remaining lateral offset. It is solved in
+        # closed form (cancellation-free): fixed-point iteration on this
+        # equation oscillated 300 -> 0 -> 300 -> 0 s when the target
+        # accelerated at the torpedo, returning t = 0 at 300 km. No real
+        # root means the target, while closing, is burning away faster
+        # than a coasting round catches it - that needs a powered intercept.
+        coast_disc = closing_rate * closing_rate - 2.0 * accel_los * distance
+
         if distance <= 0:
-            t_intercept = 0.0
-        elif closing_rate > 0:
-            # Coasting intercept: the time at which the current closure
-            # (plus the target's along-LOS acceleration) eats the range.
-            # Delta-v then only has to remove the remaining lateral offset.
-            t_intercept = distance / closing_rate
-            for _ in range(3):
-                t_intercept = min(
-                    max(0.0, (distance + 0.5 * accel_los * t_intercept ** 2)
-                        / closing_rate),
-                    3600.0,
-                )
-        elif current_accel > 0 and current_accel > accel_los:
-            # Opening: accelerate at the target from rest (in this frame):
+            return 0.0
+        if closing_rate > 0 and coast_disc >= 0:
+            return 2.0 * distance / (closing_rate + math.sqrt(coast_disc))
+        if current_accel > 0 and current_accel > accel_los:
+            # Powered (opening, or closing too slowly): accelerate at the
+            # target from rest in this frame:
             # 0.5*(A - a_los)*t^2 = d + v_open*t, then refine so the burn
             # covers the full (incl. lateral) offset: 0.5*A*t^2 = |offset(t)|.
             v_open = -closing_rate
@@ -721,20 +748,9 @@ class Torpedo:
             for _ in range(3):
                 t_intercept = min(max(1.0, math.sqrt(
                     2.0 * rel_offset(t_intercept).magnitude / current_accel)), 3600.0)
-        else:
-            t_intercept = float('inf')
-
-        # Cap at reasonable maximum
-        t_intercept = min(t_intercept, 3600.0)  # 1 hour max
-
-        # Final intercept position
-        intercept_pos = (
-            target_pos +
-            target_vel * t_intercept +
-            target_accel * (0.5 * t_intercept * t_intercept)
-        )
-
-        return intercept_pos, t_intercept
+            return t_intercept
+        # The target out-accelerates the torpedo along the line of sight.
+        return float('inf')
 
     def apply_thrust(
         self,
@@ -869,18 +885,23 @@ class Torpedo:
         Returns:
             Tuple of (can_intercept, time_to_intercept, fuel_remaining_at_intercept_kps)
         """
+        if target_accel is None:
+            target_accel = Vector3D.zero()
+        if math.isinf(self._time_to_intercept(target_pos, target_vel, target_accel)):
+            # No intercept exists; don't score the 1-hour aim-point cap as one.
+            return False, float('inf'), 0.0
+
         intercept_pos, t_intercept = self.calculate_intercept(
             target_pos, target_vel, target_accel
         )
+        if t_intercept <= 0:
+            # Already on the target (zero range): nothing to spend.
+            return True, 0.0, self.remaining_delta_v_kps
 
-        # Calculate required delta-v
+        # Velocity needed to reach the intercept point at t_intercept
         rel_pos = intercept_pos - self.position
-        distance = rel_pos.magnitude
-
-        # Velocity needed to reach intercept
-        rel_vel = target_vel - self.velocity
-        required_velocity_change = rel_pos / t_intercept if t_intercept > 0 else Vector3D.zero()
-        delta_v_needed_ms = (required_velocity_change - self.velocity).magnitude
+        required_velocity = rel_pos / t_intercept
+        delta_v_needed_ms = (required_velocity - self.velocity).magnitude
 
         # Account for target's velocity at intercept
         # We need to match the target's position at intercept time
