@@ -1960,3 +1960,41 @@ body {
 .decision-tool p { font-size: 14px; color: #b6ccd7; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .decision-selected-event { margin-top: 12px; padding: 8px 12px; border: 1px solid #497f94; background: #112a36; overflow-wrap: anywhere; }
+
+/* ============ Trajectory tracks toggle (T) ============ */
+.tracks-btn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 10px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.tracks-btn:hover, .tracks-btn:focus-visible { border-color: var(--border-accent); color: var(--text-primary); }
+.tracks-btn.active { background: rgba(0, 212, 255, 0.08); border-color: var(--alpha-dim); color: var(--alpha-primary); }
+.tracks-icon { width: 24px; height: 16px; flex-shrink: 0; overflow: visible; }
+.tracks-icon path { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.tracks-icon .tracks-actual { stroke-dasharray: 0.1 3; stroke-width: 1.9; opacity: 0; color: var(--text-primary); }
+.tracks-btn[data-mode="off"] .tracks-icon { opacity: 0.4; }
+.tracks-btn[data-mode="actual"] .tracks-actual { opacity: 0.9; }
+.tracks-state { min-width: 58px; text-align: left; color: var(--text-primary); }
+.tracks-btn[data-mode="off"] .tracks-state { color: var(--text-dim); }
+.tracks-btn kbd { font: inherit; opacity: 0.5; }
+@media (max-width: 1200px) { .tracks-label { display: none; } }
+@media (max-width: 900px) { .tracks-btn kbd { display: none; } }
+@media (max-width: 680px) {
+  .controls-container { grid-template-columns: 44px 1fr 38px 38px; }
+  .control-group.tracks { grid-column: 3; grid-row: 1; }
+  .control-group.load { grid-column: 4; }
+  .control-group.speed { grid-column: 2 / 5; }
+  .tracks-btn { width: 38px; height: 38px; padding: 0; justify-content: center; }
+  .tracks-btn .tracks-state { display: none; }
+}

@@ -631,56 +631,12 @@ export class SceneManager {
     return this._diamondTexture;
   }
 
+  /**
+   * Predicted paths now render through render/Tracks.js (TrajectoryPredictor
+   * drives live and replay alike, see main.js); null clears them.
+   */
   updatePredictedPaths(predictions) {
-    const active = new Set();
-    for (const [shipId, pred] of Object.entries(predictions?.ships || {})) {
-      const path = pred.path || [];
-      if (path.length < 2 || !pred.checkpoint_pos) continue;
-      active.add(shipId);
-      this._removePredictedPath(shipId);
-      const baseColor = new THREE.Color((shipId || '').startsWith('alpha') ? 0x2ad2ff : 0xff8a3c);
-      const n = path.length;
-      const positions = new Float32Array(n * 3);
-      const colors = new Float32Array(n * 3);
-      for (let i = 0; i < n; i++) {
-        positions[i * 3] = path[i][0] * this.SCALE;
-        positions[i * 3 + 1] = path[i][1] * this.SCALE;
-        positions[i * 3 + 2] = path[i][2] * this.SCALE;
-        const fade = 1 - 0.85 * (i / (n - 1));
-        colors[i * 3] = baseColor.r * fade;
-        colors[i * 3 + 1] = baseColor.g * fade;
-        colors[i * 3 + 2] = baseColor.b * fade;
-      }
-      const geom = new THREE.BufferGeometry();
-      geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-      geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-      const line = new THREE.Line(geom, new THREE.LineBasicMaterial({
-        vertexColors: true, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false
-      }));
-      this.scene.add(line);
-      const marker = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: this.getDiamondTexture(), color: baseColor.clone().multiplyScalar(1.4),
-        transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false
-      }));
-      marker.position.set(pred.checkpoint_pos[0] * this.SCALE, pred.checkpoint_pos[1] * this.SCALE, pred.checkpoint_pos[2] * this.SCALE);
-      marker.scale.set(4, 4, 1);
-      this.scene.add(marker);
-      this.predictedPaths.set(shipId, { line, marker });
-    }
-    for (const shipId of [...this.predictedPaths.keys()]) {
-      if (!active.has(shipId)) this._removePredictedPath(shipId);
-    }
-  }
-
-  _removePredictedPath(shipId) {
-    const entry = this.predictedPaths.get(shipId);
-    if (!entry) return;
-    this.scene.remove(entry.line);
-    entry.line.geometry.dispose();
-    entry.line.material.dispose();
-    this.scene.remove(entry.marker);
-    entry.marker.material.dispose();
-    this.predictedPaths.delete(shipId);
+    if (!predictions) this.tracks?.clear();
   }
 
   // ===========================================================================
