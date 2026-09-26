@@ -30,7 +30,7 @@ git clone https://github.com/paulmch/ai-commanders.git
 cd ai-commanders
 
 mkdir -p visualizer/public/recordings
-cp data/recordings/intent_*.json visualizer/public/recordings/
+cp data/recordings/intent_*.json data/recordings/showcase_torpedo_fleet.json visualizer/public/recordings/
 cp data/recordings/glm_luna_200pt_live_20260906/battle_glm_5_3_flash_vs_gpt_5_6_luna_20260906_140449.json \
   visualizer/public/recordings/glm_luna_200pt_live_20260906.json
 
@@ -39,7 +39,7 @@ npm ci
 npm run dev
 ```
 
-Open **[the GLM–Luna replay](http://localhost:5173/?recording=/recordings/glm_luna_200pt_live_20260906.json)**. Or open [localhost:5173](http://localhost:5173) and choose any recording JSON from `data/recordings/` with the file selector.
+Open **[the GLM–Luna replay](http://localhost:5173/?recording=/recordings/glm_luna_200pt_live_20260906.json)**, or **[the torpedo-fleet showcase](http://localhost:5173/?recording=/recordings/showcase_torpedo_fleet.json)** (a seeded heuristic battle recorded with per-frame trajectory predictions). Or open [localhost:5173](http://localhost:5173) and choose any recording JSON from `data/recordings/` with the file selector.
 
 ![The tactical replay interface showing both fleets, contact labels, weapons fire, and the battle timeline](docs/images/readme/fleet-battle.png)
 
@@ -54,12 +54,16 @@ Open **[the GLM–Luna replay](http://localhost:5173/?recording=/recordings/glm_
 | **F** | Frame the active fleets |
 | **D** | Open or close intent and consequence |
 | **C** | Toggle tactical contact labels |
+| **T** | Cycle trajectory tracks: off, predicted, predicted + actual (replay) |
+| **G** | Switch graphics quality between low and high (`?gfx=low\|high\|auto` in the URL) |
 | Click a ship or its registry entry | Select and focus it |
 | Drag / scroll | Orbit / zoom |
 | Timeline or time input | Seek to an exact moment |
 | **FOLLOW** button | Return to following the live battle |
 
-The viewer includes nine procedural hull designs, articulated turrets, finned radiators and coolant pipes, fusion exhaust, point-defense beams, torpedo trails, and destruction that reconstructs correctly when you scrub backward. Ships can become drifting, burning hulks before their reactors detonate.
+The viewer includes nine procedural hull designs in faction paint with hull codes and blinking navigation lights, turrets that track and recoil, point-defense ball mounts, opening torpedo doors, RCS jets that fire as the ships turn, fusion exhaust, white-hot coilgun tracers, detailed torpedoes, pulsed point-defense beams, and hits that leave cooling craters, venting breaches and smoke. Ships can become drifting, burning hulks before they tear apart. Everything, including destruction, reconstructs correctly when you scrub backward.
+
+**Trajectory tracks** (**T**) show where each ship will be at the next checkpoint. Recordings made with `--trace` store a prediction for every frame: a movement-only shadow of the simulation flies each ship's own guidance forward to the checkpoint without touching the battle's dice. During evasion the ship keeps jinking, so the predicted checkpoint marker drifts from frame to frame, and its rings show the expected spread. In replays, "predicted + actual" also draws the path the ship really flew. Older recordings fall back to a constant-acceleration projection.
 
 ![A battlecruiser's reactor breach throwing glowing debris and plasma into space](docs/images/readme/reactor-breach.png)
 
@@ -267,14 +271,15 @@ For screenshots, install Playwright's browser once, stage a recording as above, 
 uv run playwright install chromium
 uv run python scripts/viewer_snapshot.py \
   --recording glm_luna_200pt_live_20260906.json \
-  --time 100 --focus alpha_1 --dist 2.2 --out /tmp/cruiser.png
+  --time 100 --focus alpha_1 --dist 2.2 --gfx high --out /tmp/cruiser.png
 ```
 
-The screenshot helper starts a local viewer if needed, or reuses the running one. It also supports explicit camera placement, hidden UI, and destruction sequences. [README screenshot sources](docs/images/readme/README.md)
+The screenshot helper starts a local viewer if needed, or reuses the running one. Software renderers default to low graphics quality; pass `--gfx high` for full effects. It also supports explicit camera placement, hidden UI, and destruction sequences. [README screenshot sources](docs/images/readme/README.md)
 
 | Location | Contents |
 | --- | --- |
 | `src/simulation.py`, `src/physics.py` | Combat loop and ship motion |
+| `src/trajectory_prediction.py` | Movement-only shadow sim behind the recorded trajectory predictions |
 | `src/llm/` | Captains, admirals, tools, drafts, recording, budgets, MCP |
 | `src/replay_evidence.py` | Command and ordnance execution provenance |
 | `visualizer/src/` | Three.js scene, replay loader, controls, decision and contact panels |

@@ -47,6 +47,7 @@ ai-commanders/
 │   ├── pointdefense.py     # Continuous-dwell PD lasers, per-turret capacitors
 │   ├── projectile.py / firecontrol.py / targeting.py / maneuvers.py
 │   ├── damage.py / modules.py / geometry.py / thermal.py / power.py
+│   ├── trajectory_prediction.py  # movement-only shadow sim -> per-frame sim_trace 'plan'
 │   └── llm/                # OpenRouter client, captain/admiral agents (+vision),
 │                           # draft mode + heuristic captains, prompts, tools,
 │                           # battle runner/recorder, MCP servers, commander
@@ -62,7 +63,9 @@ ai-commanders/
 │   └── calculate_shots_to_kill.py  # Regenerates docs/ships.md combat tables
 ├── docs/ships.md           # Ship specs + simulated shots-to-kill tables
 └── visualizer/             # Three.js 3D battle replay viewer; src/render/ holds
-                            # the PBR hull kit, torch/blast shaders, post chain
+                            # the PBR hull kit (Hulls + HullLights/Markings/Rigs),
+                            # Projectiles (in-flight weapons), DamageFX, Rcs,
+                            # Tracks, Environment/SkyTextures, PostFX/Bloom/Quality
 ```
 
 ## Key Constants
@@ -141,6 +144,19 @@ torpedo-armed hulls; all others fight with coilguns.
 - Verify visually with `uv run python scripts/viewer_snapshot.py` (see
   README); llvmpipe frames take >1 s, so the harness sets
   `visualizer.slowFrameOk` to bypass the stalled-tab update guard.
+  Graphics quality (render/Quality.js; G key, `?gfx=low|high|auto`) auto-picks
+  low on software GL (no MSAA/god rays/dust) - pass `--gfx high` for beauty shots.
+- `--trace` recordings carry optional per-ship frame fields: `acc`, `omega`,
+  `alpha`, `turn` ("tv"|"rcs"), `evade`, `tgt`, and `plan` {t_cp, dt, path,
+  sigma} (predicted path to the next checkpoint); header `decision_interval_s`.
+  Every consumer (TrajectoryPredictor, Rcs) must fall back gracefully on old
+  recordings without them. Prediction must never draw from the battle RNG or
+  change results - `tests/test_trajectory_prediction.py` pins seeded on/off
+  equality.
+- Ownership: in-flight weapons live in render/Projectiles.js (WeaponTimeline
+  decides what exists at time t); persistent hit aftermath and deaths in
+  DamageTimeline.js + render/DamageFX.js; hulls expose `userData.rcsMounts` /
+  `pdMounts` for Rcs.js and the PD beams.
 
 ## Doc/Prompt Invariants
 

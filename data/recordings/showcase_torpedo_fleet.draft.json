@@ -1,0 +1,115 @@
+{
+  "budget": 100,
+  "alpha_captain_model": "heuristic",
+  "beta_captain_model": "heuristic",
+  "alpha": {
+    "faction": "alpha",
+    "budget": 100,
+    "points_spent": 99,
+    "auto_draft": true,
+    "formation_name": "staggered wall",
+    "selection_rationale": "auto-draft",
+    "formation_rationale": "",
+    "ships": [
+      {
+        "ship_id": "alpha_1",
+        "ship_name": "TIS Harpoon",
+        "ship_type": "cruiser_torpedo",
+        "cost": 58,
+        "offset_km": [
+          0.0,
+          -18.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_2",
+        "ship_name": "TIS Dart-1",
+        "ship_type": "corvette",
+        "cost": 17,
+        "offset_km": [
+          -10.0,
+          -6.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "alpha_3",
+        "ship_name": "TIS Dart-2",
+        "ship_type": "corvette",
+        "cost": 17,
+        "offset_km": [
+          0.0,
+          6.0,
+          6.0
+        ]
+      },
+      {
+        "ship_id": "alpha_4",
+        "ship_name": "TIS Ward",
+        "ship_type": "frigate",
+        "cost": 7,
+        "offset_km": [
+          -10.0,
+          18.0,
+          0.0
+        ]
+      }
+    ]
+  },
+  "beta": {
+    "faction": "beta",
+    "budget": 100,
+    "points_spent": 99,
+    "auto_draft": true,
+    "formation_name": "staggered wall",
+    "selection_rationale": "auto-draft",
+    "formation_rationale": "",
+    "ships": [
+      {
+        "ship_id": "beta_1",
+        "ship_name": "OCS Harpoon",
+        "ship_type": "cruiser_torpedo",
+        "cost": 58,
+        "offset_km": [
+          0.0,
+          -18.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_2",
+        "ship_name": "OCS Dart-1",
+        "ship_type": "corvette",
+        "cost": 17,
+        "offset_km": [
+          -10.0,
+          -6.0,
+          0.0
+        ]
+      },
+      {
+        "ship_id": "beta_3",
+        "ship_name": "OCS Dart-2",
+        "ship_type": "corvette",
+        "cost": 17,
+        "offset_km": [
+          0.0,
+          6.0,
+          6.0
+        ]
+      },
+      {
+        "ship_id": "beta_4",
+        "ship_name": "OCS Ward",
+        "ship_type": "frigate",
+        "cost": 7,
+        "offset_km": [
+          -10.0,
+          18.0,
+          0.0
+        ]
+      }
+    ]
+  }
+}
