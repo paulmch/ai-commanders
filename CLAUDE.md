@@ -151,6 +151,9 @@ torpedo-armed hulls; all others fight with coilguns.
   sigma, fwd, mode, stale?} (predicted path to the next checkpoint; sigma is
   calibrated per evasion mode; checkpoint frames are re-predicted after the
   new orders apply, `stale` marks them until then); header `decision_interval_s`.
+  Torpedo frames add thruster telemetry `thr`, `fwd` (engine burning) and
+  `rcs` (lateral RCS thrust vector, rare: only small precision trims) -
+  recording only, never read by guidance/physics. Torpedoes have no fins.
   Every consumer (TrajectoryPredictor, Rcs) must fall back gracefully on old
   recordings without them. Prediction must never draw from the battle RNG or
   change results - `tests/test_trajectory_prediction.py` pins seeded on/off
