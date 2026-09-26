@@ -354,6 +354,7 @@ class BattleVisualizer {
     // Initialize scene
     this.setLoadingStatus('Creating tactical display...');
     this.scene = new SceneManager(this.elements.canvas);
+    this.scene.loader = this.loader;   // hull rigs read targets, shots, launches, PD dwell
     this.setLoadingProgress(60);
 
     // Initialize time controller. The extra seconds are an epilogue: a ship
