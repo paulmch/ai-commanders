@@ -1032,6 +1032,7 @@ export class SceneManager {
     this.elapsed = this.clock.elapsedTime;
     this.controls.update();
     const viewingDistance = this.camera.position.distanceTo(this.controls.target);
+    this.camera.userData.viewDist = viewingDistance; // Environment dust-mote scale
     this.rangeRingMaterial.opacity = 0.12 * THREE.MathUtils.smoothstep(viewingDistance, 45, 250);
     this.tacticalOverlay.visible = this.rangeRingMaterial.opacity > 0.002;
     this.environment.update(this.camera, this.delta);
