@@ -153,6 +153,8 @@ def main() -> int:
     p.add_argument("--width", type=int, default=1280)
     p.add_argument("--height", type=int, default=720)
     p.add_argument("--port", type=int, default=5173)
+    p.add_argument("--gfx", choices=["low", "high", "auto"],
+                   help="graphics quality (default: viewer auto-detect; software GL -> low)")
     p.add_argument("--hide-ui", action="store_true", help="hide the HUD panels")
     p.add_argument("--out", required=True,
                    help="output PNG; use %%02d for --sequence frames")
@@ -162,6 +164,8 @@ def main() -> int:
     vite = start_vite(args.port)
     url = args.recording if "://" in args.recording else f"/recordings/{args.recording}"
     page_url = f"http://127.0.0.1:{args.port}/?recording={url}"
+    if args.gfx:
+        page_url += f"&gfx={args.gfx}"
 
     try:
         with sync_playwright() as pw:
