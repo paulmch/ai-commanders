@@ -1,15 +1,28 @@
 import * as THREE from 'three';
-import { getNoiseTexture, getStarTexture, getGlowTexture, getPlanetTexture, mulberry32 } from './Textures.js';
+import { GLSL_NOISE, makeStarCatalogue, getGasGiantTexture, makeRingTexture, makeNoiseVolumeTexture } from './SkyTextures.js';
+import { getGraphicsSettings } from './Quality.js';
+import { DustMotes } from './DustMotes.js';
 
 /**
- * Space environment: nebula skydome, HDR star field, the sun (directional
- * key light + disc + screen-space lens flare), a ringed gas giant for scale
- * and planet-shine fill, and a PMREM environment map so the PBR hulls have
- * something to reflect.
+ * Space environment:
+ *  - Milky Way, dust lanes, emission nebulae and ~100k unresolved stars,
+ *    rendered ONCE by a heavy procedural shader into a cube map (the old
+ *    per-pixel skydome cost ~120 ms/frame in SwiftShader; the baked cube is
+ *    a single lookup),
+ *  - a black-body-coloured HDR star catalogue with diffraction spikes on
+ *    the brightest stars,
+ *  - the sun: limb-darkened disc + corona billboard on the key light's
+ *    direction (lens flare / god rays live in PostFX, fed via
+ *    scene.userData.sun),
+ *  - a ringed gas giant with ring shadows and a scattering limb, placed to
+ *    frame the tactical fleet view without sitting behind the battle,
+ *  - lights: sun key, planet-shine, cool hemisphere, camera-relative rim,
+ *  - a PMREM environment from the same sky (boosted, with a cool fill
+ *    lobe opposite the sun) so the metallic hulls reflect something,
+ *  - near-field dust motes (high quality) that streak with camera motion.
  *
- * Distances are in km (scene units). The battle lives within a few hundred
- * km of the origin; everything here sits tens of thousands of km out so
- * camera moves never produce parallax against it.
+ * Everything far is re-centred on the camera every frame: no parallax at
+ * any zoom. Distances are km (scene units).
  */
 
 const LOG_DEPTH_V = /* glsl */`
@@ -26,27 +39,77 @@ const LOG_DEPTH_F_MAIN = /* glsl */`
   #include <logdepthbuf_fragment>
 `;
 
+// CameraController.focusFleet looks along -(0, 0.6, 1): the backdrop is
+// composed around that view.
+const FLEET_FWD = new THREE.Vector3(0, -0.6, -1).normalize();
+
+/** World direction that appears at (ndcX, ndcY) in the default fleet view. */
+export function fleetViewDir(ndcX, ndcY, fov = 55, aspect = 16 / 9) {
+  const right = new THREE.Vector3().crossVectors(FLEET_FWD, new THREE.Vector3(0, 1, 0)).normalize();
+  const up = new THREE.Vector3().crossVectors(right, FLEET_FWD).normalize();
+  const tv = Math.tan(THREE.MathUtils.degToRad(fov) / 2);
+  return FLEET_FWD.clone()
+    .addScaledVector(right, ndcX * tv * aspect)
+    .addScaledVector(up, ndcY * tv)
+    .normalize();
+}
+
+const SUN_DIST = 240000;
+const SUN_ANGULAR_RADIUS = 0.0085;          // rad (~0.5 deg; dramatic, not huge)
+const PLANET_DIST = 90000;
+const PLANET_ANGULAR_RADIUS = 0.068;        // rad (~3.9 deg)
+const STAR_MAX = 9000;
+
 export class Environment {
   constructor(scene, renderer) {
     this.scene = scene;
     this.renderer = renderer;
+    this.gfx = getGraphicsSettings(renderer);
     this.sunDir = new THREE.Vector3(0.62, 0.42, 0.28).normalize();
-    this.planetDir = new THREE.Vector3(0.55, -0.3, -1).normalize();
-    this.planetDistance = 46000;
-    this.planetRadius = 8800;
+    this.sunColor = new THREE.Color(1.0, 0.93, 0.82);
     this.time = 0;
+
+    // Galactic frame: band tilted ~16 deg off the fleet-view centre so the
+    // Milky Way crosses the frame diagonally instead of sitting behind the
+    // battle; the bulge lies ~40 deg along the band from there.
+    const bandN = new THREE.Vector3(0.35, 0.82, -0.45).normalize().addScaledVector(FLEET_FWD, 0.33).normalize();
+    const inPlane = FLEET_FWD.clone().addScaledVector(bandN, -FLEET_FWD.dot(bandN)).normalize();
+    const e = new THREE.Vector3().crossVectors(bandN, inPlane);
+    this.galN = bandN;
+    this.galC = inPlane.clone().multiplyScalar(Math.cos(0.7)).addScaledVector(e, Math.sin(0.7)).normalize();
+    this.nebulaDir = fleetViewDir(0.62, -0.5);
+    this.planetDir = fleetViewDir(0.74, 0.54);   // upper right: clear of the HUD panels
+    this.planetRadius = PLANET_DIST * Math.sin(PLANET_ANGULAR_RADIUS);
 
     this.group = new THREE.Group();
     this.group.name = 'environment';
     scene.add(this.group);
 
     this._buildLights();
-    this._buildSkydome();
+    this._bakeSky(this.gfx.preset.skySize);
+    this._buildSkyMesh();
     this._buildStars();
     this._buildSun();
     this._buildPlanet();
-    this._buildFlare();
     this._buildEnvMap();
+    this.dust = new DustMotes(this.group);
+    this.dust.setEnabled(this.gfx.preset.dust);
+
+    // PostFX reads this for the lens flare / god rays
+    scene.userData.sun = { dir: this.sunDir, angularRadius: SUN_ANGULAR_RADIUS, color: this.sunColor };
+
+    this.gfx.onChange(() => this.applyQuality());
+    this.gfx.installControls();
+  }
+
+  applyQuality() {
+    const p = this.gfx.preset;
+    if (p.skySize !== this.skySize) {
+      this._bakeSky(p.skySize);
+      this.skyMesh.material.uniforms.uSky.value = this.skyRT.texture;
+    }
+    this.stars.geometry.setDrawRange(0, Math.min(p.starCount, STAR_MAX));
+    this.dust.setEnabled(p.dust);
   }
 
   // -------------------------------------------------------------------------
@@ -58,147 +121,253 @@ export class Environment {
     this.group.add(this.sunLight);
 
     // Planet-shine: warm bounce from the gas giant's lit face
-    this.planetLight = new THREE.DirectionalLight(0xd9b48c, 0.55);
+    this.planetLight = new THREE.DirectionalLight(0xd9b48c, 0.4);
     this.planetLight.position.copy(this.planetDir).multiplyScalar(100000);
     this.group.add(this.planetLight);
 
     // Faint cool ambient so unlit faces aren't pure black on screen
     this.ambient = new THREE.HemisphereLight(0x2a3450, 0x0d0a10, 0.35);
     this.group.add(this.ambient);
+
+    // Rim: a cool light from beyond the subject, re-aimed every frame so
+    // silhouettes separate from black space from any camera angle
+    this.rimLight = new THREE.DirectionalLight(0x9fbcff, 1.1);
+    this.group.add(this.rimLight);
+    this.group.add(this.rimLight.target);
   }
 
   // -------------------------------------------------------------------------
-  _buildSkydome() {
-    const geom = new THREE.SphereGeometry(300000, 48, 32);
+  /** Render the procedural sky into a cube map (one-off; ~1 s on CPU GL). */
+  _bakeSky(size) {
+    const old = this.skyRT;
+    const rt = new THREE.WebGLCubeRenderTarget(size, {
+      type: THREE.UnsignedByteType,
+      generateMipmaps: true,
+      minFilter: THREE.LinearMipmapLinearFilter,
+      magFilter: THREE.LinearFilter
+    });
     const mat = new THREE.ShaderMaterial({
       uniforms: {
-        uNoise: { value: getNoiseTexture() },
-        uPlanetDir: { value: this.planetDir },
-        uSunDir: { value: this.sunDir }
+        uGalN: { value: this.galN },
+        uGalC: { value: this.galC },
+        uNebA: { value: this.nebulaDir },
+        uTexel: { value: (Math.PI / 2) / size },
+        uDustGain: { value: Math.min(1, size / 1024) },
+        uNoiseVol: { value: this.noiseVol || (this.noiseVol = makeNoiseVolumeTexture(64, 8)) }
       },
       vertexShader: /* glsl */`
         varying vec3 vDir;
         ${LOG_DEPTH_V}
         void main() {
-          vDir = normalize(position);
+          vDir = position;
           gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
           ${LOG_DEPTH_V_MAIN}
         }`,
       fragmentShader: /* glsl */`
-        uniform sampler2D uNoise;
-        uniform vec3 uPlanetDir;
-        uniform vec3 uSunDir;
+        uniform vec3 uGalN;
+        uniform vec3 uGalC;
+        uniform vec3 uNebA;
+        uniform float uTexel;
+        uniform float uDustGain;
         varying vec3 vDir;
         ${LOG_DEPTH_F}
+        ${GLSL_NOISE}
 
-        // Triplanar-blended tileable noise so there is no polar pinch
-        float noise3(vec3 p, float ch) {
-          vec3 w = abs(normalize(p));
-          w = w * w; w /= (w.x + w.y + w.z);
-          vec4 a = texture2D(uNoise, p.yz);
-          vec4 b = texture2D(uNoise, p.xz);
-          vec4 c = texture2D(uNoise, p.xy);
-          vec4 n = a * w.x + b * w.y + c * w.z;
-          return ch < 0.5 ? n.r : (ch < 1.5 ? n.g : (ch < 2.5 ? n.b : n.a));
+        // Unresolved background stars: one candidate per 3D cell (2x2x2
+        // neighbourhood), gaussian PSF ~a texel wide so the bake never aliases
+        vec3 starDust(vec3 d, float density, float prob, float gain) {
+          vec3 p = d * density;
+          vec3 base = floor(p - 0.5);
+          float sigma = max(uTexel * density * 0.55, 0.04);
+          vec3 acc = vec3(0.0);
+          for (int i = 0; i < 8; i++) {
+            float fi = float(i);
+            vec3 c = base + vec3(mod(fi, 2.0), mod(floor(fi * 0.5), 2.0), floor(fi * 0.25));
+            vec3 h = hash33(c);
+            if (h.x > prob) continue;
+            vec3 off = p - (c + hash33(c + 7.31));
+            off -= d * dot(off, d);
+            float b = exp(-dot(off, off) / (sigma * sigma)) * pow(h.y, gain);
+            acc += mix(vec3(1.0, 0.76, 0.55), vec3(0.7, 0.8, 1.0), h.z) * b;
+          }
+          return acc;
         }
 
         void main() {
           ${LOG_DEPTH_F_MAIN}
           vec3 d = normalize(vDir);
+          vec3 N = uGalN, C = uGalC, E = cross(N, C);
 
-          // Galactic band: a tilted great circle with dust lanes
-          vec3 bandN = normalize(vec3(0.35, 0.82, -0.45));
-          float lat = dot(d, bandN);
-          float band = exp(-lat * lat * 26.0);
-          float n1 = noise3(d * 2.2, 0.0);
-          float n2 = noise3(d * 5.1 + 3.1, 1.0);
-          float n3 = noise3(d * 11.0 + 7.7, 2.0);
-          float wisps = pow(n1 * 0.45 + n2 * 0.35 + n3 * 0.2, 2.6);
-          float dust = smoothstep(0.35, 0.75, noise3(d * 3.7 + 11.0, 3.0));
-          vec3 milky = vec3(0.62, 0.66, 0.78) * band * wisps * 1.7 * (1.0 - dust * 0.85);
+          // Domain warp gives the clouds a filamentary, sheared structure
+          vec3 w = nz4(d * 2.1 + 1.7).xyz;
+          vec3 dw = normalize(d + w * 0.07);
+          float lat = asin(clamp(dot(dw, N), -1.0, 1.0));
+          float lon = atan(dot(d, E), dot(d, C));
 
-          // Two faint coloured nebulae far from the band
-          vec3 nebA = normalize(vec3(-0.7, 0.2, 0.6));
-          vec3 nebB = normalize(vec3(0.5, -0.6, 0.4));
-          float fa = pow(max(0.0, dot(d, nebA)), 6.0) * pow(noise3(d * 3.0 + 21.0, 1.0), 1.8);
-          float fb = pow(max(0.0, dot(d, nebB)), 5.0) * pow(noise3(d * 4.0 + 33.0, 2.0), 2.0);
-          vec3 nebula = vec3(0.35, 0.18, 0.55) * fa * 1.4 + vec3(0.12, 0.35, 0.5) * fb * 1.2;
+          // --- Milky Way ---------------------------------------------------
+          float bulge = exp(-lon * lon / (2.0 * 0.5 * 0.5));
+          float thick = 0.07 + 0.12 * bulge;
+          float disk = exp(-lat * lat / (2.0 * thick * thick));
+          float along = 0.25 + 0.75 * exp(-lon * lon / (2.0 * 1.3 * 1.3));
+          float core = exp(-(lat * lat * 2.5 + lon * lon) / (2.0 * 0.17 * 0.17));
+          float clouds = fbm(dw * 3.3, 6);
+          float fine = fbm(dw * 12.0 + 5.0, 4);
+          float light = disk * along * (0.25 + 1.3 * pow(clouds, 2.4)) * (0.7 + 0.6 * fine) + core * 1.6;
 
-          // Background: near-black with the faintest blue toward the band
-          vec3 col = vec3(0.004, 0.005, 0.010) + milky * 0.09 + nebula * 0.10;
-          gl_FragColor = vec4(col, 1.0);
+          // Dust lanes: ridged filaments hugging the mid-plane (a Great
+          // Rift) plus patchy dark clouds, reddening what they don't block
+          float laneBand = exp(-lat * lat / (2.0 * pow(thick * 0.5, 2.0)));
+          float lanes = smoothstep(0.42, 0.8, ridged(dw * 4.0 + 2.0, 6)) * laneBand;
+          float patches = smoothstep(0.55, 0.78, fbm(dw * 6.5 + 9.0, 5)) * exp(-lat * lat / (2.0 * thick * thick));
+          float absorb = clamp(max(lanes, patches * 0.85), 0.0, 0.94);
+
+          vec3 mwCol = mix(vec3(0.7, 0.78, 1.0), vec3(1.0, 0.86, 0.68), clamp(bulge * 0.8 + core, 0.0, 1.0));
+          vec3 mw = mwCol * light * (1.0 - absorb);
+          mw *= mix(vec3(1.0), vec3(1.0, 0.8, 0.62), clamp(absorb * 0.9, 0.0, 1.0));
+
+          // HII regions (pink knots) and blue reflection wisps along the band
+          float hii = smoothstep(0.64, 0.86, fbm(d * 7.5 + 21.0, 5)) * disk * along * (1.0 - absorb * 0.6);
+          float refl = smoothstep(0.62, 0.86, fbm(dw * 5.0 + 31.0, 4)) * disk * (1.0 - absorb);
+          vec3 emis = vec3(1.0, 0.26, 0.36) * hii * 1.4 + vec3(0.35, 0.55, 1.0) * refl * 0.5;
+
+          // --- Off-band nebula complex: teal/magenta, with dark globules --
+          float fa = max(0.0, dot(d, uNebA));
+          float neb = pow(fa, 7.0);
+          float shape = fbm(dw * 4.2 + 40.0, 6);
+          float mask = neb * smoothstep(0.4, 0.82, shape);
+          vec3 nebCol = mix(vec3(0.12, 0.55, 0.65), vec3(0.9, 0.24, 0.62),
+                            smoothstep(0.42, 0.72, fbm(d * 3.0 + 55.0, 4)));
+          vec3 nebula = nebCol * mask * 1.6;
+          nebula *= 1.0 - 0.85 * smoothstep(0.62, 0.84, ridged(d * 8.0 + 60.0, 4)) * smoothstep(0.1, 0.5, neb);
+          // a faint wide glow so the complex does not end in a hard cut
+          nebula += nebCol * pow(fa, 4.0) * 0.06 * shape;
+
+          // --- Stars too faint to resolve -----------------------------------
+          float sd = 0.2 + 1.4 * disk * along * (1.0 - absorb * 0.9);
+          vec3 stars = starDust(d, 120.0, 0.55, 3.0) * sd
+                     + starDust(d + 0.37, 190.0, 0.7, 4.0) * sd * 0.8;
+
+          vec3 col = vec3(0.0010, 0.0012, 0.0021)
+                   + mw * 0.05 + emis * 0.022 + nebula * 0.03 + stars * 0.09 * uDustGain;
+          // gamma-2 encoding: 8-bit cube without banding in the blacks
+          gl_FragColor = vec4(sqrt(max(col, vec3(0.0))), 1.0);
+        }`,
+      side: THREE.BackSide,
+      depthTest: false,
+      depthWrite: false
+    });
+    const bakeScene = new THREE.Scene();
+    const box = new THREE.Mesh(new THREE.BoxGeometry(10, 10, 10), mat);
+    bakeScene.add(box);
+    const cam = new THREE.CubeCamera(0.5, 50, rt);
+    cam.update(this.renderer, bakeScene);
+    box.geometry.dispose();
+    mat.dispose();
+    this.skyRT = rt;
+    this.skySize = size;
+    old?.dispose();
+  }
+
+  _skyMaterial(intensity) {
+    return new THREE.ShaderMaterial({
+      uniforms: {
+        uSky: { value: this.skyRT.texture },
+        uIntensity: { value: intensity },
+        uFillDir: { value: this.sunDir.clone().negate().add(new THREE.Vector3(0, -0.25, 0)).normalize() },
+        uFill: { value: new THREE.Color(0, 0, 0) }
+      },
+      vertexShader: /* glsl */`
+        varying vec3 vDir;
+        ${LOG_DEPTH_V}
+        void main() {
+          vDir = position;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          ${LOG_DEPTH_V_MAIN}
+        }`,
+      fragmentShader: /* glsl */`
+        uniform samplerCube uSky;
+        uniform float uIntensity;
+        uniform vec3 uFillDir;
+        uniform vec3 uFill;
+        varying vec3 vDir;
+        ${LOG_DEPTH_F}
+        void main() {
+          ${LOG_DEPTH_F_MAIN}
+          vec3 d = normalize(vDir);
+          vec3 c = textureCube(uSky, d).rgb;
+          c = c * c * uIntensity;
+          c += uFill * pow(max(0.0, dot(d, uFillDir)), 1.5);
+          gl_FragColor = vec4(c, 1.0);
         }`,
       side: THREE.BackSide,
       depthWrite: false,
-      fog: false
+      depthTest: false
     });
-    this.skydome = new THREE.Mesh(geom, mat);
-    this.skydome.renderOrder = -100;
-    this.skydome.frustumCulled = false;
-    this.group.add(this.skydome);
+  }
+
+  _buildSkyMesh() {
+    this.skyMesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), this._skyMaterial(1.0));
+    this.skyMesh.scale.setScalar(300000);
+    this.skyMesh.renderOrder = -100;
+    this.skyMesh.frustumCulled = false;
+    this.group.add(this.skyMesh);
+    this.skydome = this.skyMesh; // old name
   }
 
   // -------------------------------------------------------------------------
   _buildStars() {
-    const rnd = mulberry32(2024);
-    const count = 7000;
+    const cat = makeStarCatalogue(STAR_MAX, { seed: 2024, bandNormal: this.galN.toArray() });
     const R = 260000;
-    const pos = new Float32Array(count * 3);
-    const col = new Float32Array(count * 3);
-    const size = new Float32Array(count);
-    const bandN = new THREE.Vector3(0.35, 0.82, -0.45).normalize();
-    const c = new THREE.Color();
-    let i = 0;
-    while (i < count) {
-      // Isotropic direction, with a bias toward the galactic band
-      const theta = rnd() * Math.PI * 2;
-      const phi = Math.acos(2 * rnd() - 1);
-      const d = new THREE.Vector3(
-        Math.sin(phi) * Math.cos(theta), Math.sin(phi) * Math.sin(theta), Math.cos(phi));
-      const lat = d.dot(bandN);
-      if (rnd() > 0.45 + 0.55 * Math.exp(-lat * lat * 12)) continue;
-
-      pos[i * 3] = d.x * R; pos[i * 3 + 1] = d.y * R; pos[i * 3 + 2] = d.z * R;
-
-      // Magnitude distribution: many faint, few bright
-      const m = Math.pow(rnd(), 3.2);
-      const bright = 0.25 + m * 1.3;
-      size[i] = 1.3 + m * 2.6;
-      const t = rnd();
-      if (t < 0.10) c.setHSL(0.07, 0.55, 0.78);       // orange K/M
-      else if (t < 0.22) c.setHSL(0.58, 0.55, 0.85);  // blue B/A
-      else if (t < 0.4) c.setHSL(0.12, 0.25, 0.9);    // yellow G
-      else c.setHSL(0.6, 0.08, 0.95);                 // white
-      col[i * 3] = c.r * bright; col[i * 3 + 1] = c.g * bright; col[i * 3 + 2] = c.b * bright;
-      i++;
-    }
+    const pos = new Float32Array(STAR_MAX * 3);
+    for (let i = 0; i < STAR_MAX * 3; i++) pos[i] = cat.dir[i] * R;
     const geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    geom.setAttribute('aColor', new THREE.BufferAttribute(col, 3));
-    geom.setAttribute('aSize', new THREE.BufferAttribute(size, 1));
+    geom.setAttribute('aColor', new THREE.BufferAttribute(cat.color, 3));
+    geom.setAttribute('aSize', new THREE.BufferAttribute(cat.size, 1));
+    geom.setAttribute('aSpike', new THREE.BufferAttribute(cat.spike, 1));
+    geom.setDrawRange(0, Math.min(this.gfx.preset.starCount, STAR_MAX));
     const mat = new THREE.ShaderMaterial({
-      uniforms: { uMap: { value: getStarTexture() }, uPixelRatio: { value: 1 } },
+      uniforms: { uPixelRatio: { value: 1 } },
       vertexShader: /* glsl */`
         attribute vec3 aColor;
         attribute float aSize;
+        attribute float aSpike;
         uniform float uPixelRatio;
         varying vec3 vColor;
+        varying float vSpike;
+        varying float vPx;
         ${LOG_DEPTH_V}
         void main() {
           vColor = aColor;
+          vSpike = aSpike;
           vec4 mv = modelViewMatrix * vec4(position, 1.0);
           gl_Position = projectionMatrix * mv;
-          gl_PointSize = aSize * uPixelRatio;
+          float s = aSize * (1.0 + 2.2 * aSpike);
+          gl_PointSize = s * uPixelRatio;
+          vPx = 0.5 * s;                  // sprite radius in CSS px
           ${LOG_DEPTH_V_MAIN}
         }`,
       fragmentShader: /* glsl */`
-        uniform sampler2D uMap;
         varying vec3 vColor;
+        varying float vSpike;
+        varying float vPx;
         ${LOG_DEPTH_F}
         void main() {
           ${LOG_DEPTH_F_MAIN}
-          float a = texture2D(uMap, gl_PointCoord).a;
-          gl_FragColor = vec4(vColor * a, a);
+          vec2 p = gl_PointCoord * 2.0 - 1.0;
+          float r = length(p);
+          float rp = r * vPx;                         // distance in CSS px
+          // crisp PSF: ~0.7 px gaussian core + faint exponential halo
+          float a = exp(-rp * rp) + 0.05 * exp(-rp / 1.6);
+          if (vSpike > 0.0) {
+            vec2 q = abs(p) * vPx;
+            float len = vPx * 0.3;
+            float sx = exp(-q.y * q.y / 0.3) * exp(-q.x / len);
+            float sy = exp(-q.x * q.x / 0.3) * exp(-q.y / len);
+            a += (sx + sy) * 0.3 * vSpike;
+          }
+          a *= 1.0 - smoothstep(0.85, 1.0, r);
+          gl_FragColor = vec4(vColor * a, 1.0);
         }`,
       transparent: true,
       depthWrite: false,
@@ -212,356 +381,280 @@ export class Environment {
 
   // -------------------------------------------------------------------------
   _buildSun() {
-    const dist = 240000;
-    const pos = this.sunDir.clone().multiplyScalar(dist);
-    // Disc: HDR white so bloom gives it a corona
-    const disc = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: getGlowTexture(), color: new THREE.Color(6, 5.6, 5.0),
-      transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false
-    }));
-    disc.position.copy(pos);
-    disc.scale.setScalar(9000);
-    disc.renderOrder = -98;
-    this.group.add(disc);
-    const halo = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: getGlowTexture(), color: new THREE.Color(0.9, 0.7, 0.5),
-      transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false
-    }));
-    halo.position.copy(pos);
-    halo.scale.setScalar(60000);
-    halo.renderOrder = -98;
-    this.group.add(halo);
-    this.sunPos = pos;
+    const discR = SUN_DIST * Math.tan(SUN_ANGULAR_RADIUS);
+    const QUAD = '16.0'; // quad half-size in disc radii (corona + glare)
+    const mat = new THREE.ShaderMaterial({
+      uniforms: {
+        uSize: { value: discR * 16 },
+        uColor: { value: this.sunColor }
+      },
+      vertexShader: /* glsl */`
+        uniform float uSize;
+        varying vec2 vP;
+        ${LOG_DEPTH_V}
+        void main() {
+          vP = position.xy;
+          vec4 mv = modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+          mv.xy += position.xy * uSize;
+          gl_Position = projectionMatrix * mv;
+          ${LOG_DEPTH_V_MAIN}
+        }`,
+      fragmentShader: /* glsl */`
+        uniform vec3 uColor;
+        varying vec2 vP;
+        ${LOG_DEPTH_F}
+        void main() {
+          ${LOG_DEPTH_F_MAIN}
+          float r = length(vP) * ${QUAD};             // in disc radii
+          float ang = atan(vP.y, vP.x);
+          // limb-darkened photosphere
+          float mu = sqrt(max(0.0, 1.0 - r * r));
+          float disc = smoothstep(1.02, 0.96, r) * (0.42 + 0.58 * pow(mu, 0.55));
+          // corona: soft streamers that thin with radius
+          float st = 0.55 + 0.25 * sin(ang * 5.0 + 1.3) + 0.15 * sin(ang * 11.0 + 0.4) + 0.05 * sin(ang * 23.0 + 2.2);
+          float rr = max(r - 1.0, 0.0);
+          float corona = exp(-rr * 4.2) * (0.45 + 0.55 * st) * 1.8 + exp(-rr * 1.3) * 0.07 * st;
+          float glare = exp(-rr * 0.4) * 0.012;
+          float fade = 1.0 - smoothstep(0.7, 1.0, r / ${QUAD});
+          vec3 col = uColor * disc * 48.0;
+          col += vec3(1.0, 0.84, 0.66) * (corona * 2.0 + glare) * smoothstep(0.96, 1.0, r) * fade;
+          gl_FragColor = vec4(col, 1.0);
+        }`,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false
+    });
+    this.sun = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat);
+    this.sun.frustumCulled = false;
+    this.sun.renderOrder = -98;
+    this.group.add(this.sun);
   }
 
   // -------------------------------------------------------------------------
   _buildPlanet() {
     const R = this.planetRadius;
-    const pos = this.planetDir.clone().multiplyScalar(this.planetDistance);
-    const geom = new THREE.SphereGeometry(R, 96, 64);
-    const mat = new THREE.ShaderMaterial({
+    const ringIn = R * 1.32, ringOut = R * 2.25;
+    // Ring plane seen ~22 deg open from the battle; poles along its normal
+    const toPlanet = this.planetDir;
+    const hint = new THREE.Vector3(0.15, 1, 0.1);
+    const upPerp = hint.clone().addScaledVector(toPlanet, -hint.dot(toPlanet)).normalize();
+    const ringN = upPerp.clone().multiplyScalar(Math.cos(0.38)).addScaledVector(toPlanet, -Math.sin(0.38)).normalize();
+    this.ringN = ringN;
+    this.planetGroup = new THREE.Group();
+    this.planetGroup.name = 'planet';
+    this.group.add(this.planetGroup);
+    const center = new THREE.Vector3();
+    this.planetCenter = center;
+    this.ringTex = makeRingTexture();
+
+    const common = () => ({
+      uSunDir: { value: this.sunDir },
+      uSunColor: { value: this.sunColor },
+      uCenter: { value: center },
+      uRingN: { value: ringN },
+      uRingIn: { value: ringIn },
+      uRingOut: { value: ringOut },
+      uRingTex: { value: this.ringTex },
+      uR: { value: R }
+    });
+    const worldVert = /* glsl */`
+      varying vec3 vNormal;
+      varying vec3 vWorld;
+      varying vec2 vUv;
+      ${LOG_DEPTH_V}
+      void main() {
+        vUv = uv;
+        vNormal = normalize(mat3(modelMatrix) * normal);
+        vec4 wp = modelMatrix * vec4(position, 1.0);
+        vWorld = wp.xyz;
+        gl_Position = projectionMatrix * viewMatrix * wp;
+        ${LOG_DEPTH_V_MAIN}
+      }`;
+    const planetMat = new THREE.ShaderMaterial({
       uniforms: {
-        uMap: { value: getPlanetTexture() },
-        uSunDir: { value: this.sunDir },
-        uAtmo: { value: new THREE.Color(0.55, 0.7, 1.0) }
+        ...common(),
+        uMap: { value: getGasGiantTexture() },
+        uAtmo: { value: new THREE.Color(0.45, 0.62, 1.0) }
       },
-      vertexShader: /* glsl */`
-        varying vec3 vNormal;
-        varying vec3 vView;
-        varying vec2 vUv;
-        ${LOG_DEPTH_V}
-        void main() {
-          vUv = uv;
-          vNormal = normalize(mat3(modelMatrix) * normal);
-          vec4 wp = modelMatrix * vec4(position, 1.0);
-          vView = normalize(cameraPosition - wp.xyz);
-          gl_Position = projectionMatrix * viewMatrix * wp;
-          ${LOG_DEPTH_V_MAIN}
-        }`,
+      vertexShader: worldVert,
       fragmentShader: /* glsl */`
         uniform sampler2D uMap;
+        uniform sampler2D uRingTex;
         uniform vec3 uSunDir;
+        uniform vec3 uSunColor;
+        uniform vec3 uCenter;
+        uniform vec3 uRingN;
+        uniform float uRingIn;
+        uniform float uRingOut;
         uniform vec3 uAtmo;
         varying vec3 vNormal;
-        varying vec3 vView;
+        varying vec3 vWorld;
         varying vec2 vUv;
         ${LOG_DEPTH_F}
         void main() {
           ${LOG_DEPTH_F_MAIN}
           vec3 n = normalize(vNormal);
+          vec3 v = normalize(cameraPosition - vWorld);
           vec3 albedo = texture2D(uMap, vUv).rgb;
           float ndl = dot(n, uSunDir);
-          float day = smoothstep(-0.08, 0.25, ndl);
-          float fres = pow(1.0 - max(0.0, dot(n, normalize(vView))), 3.0);
-          // Atmosphere: rim scattering on the lit side, faint on the night side
-          vec3 atmo = uAtmo * fres * (0.25 + 0.9 * smoothstep(-0.3, 0.4, ndl));
-          vec3 lit = albedo * (0.02 + day * 1.25 * max(0.0, ndl) + 0.03);
-          // limb darkening
-          lit *= 0.75 + 0.25 * max(0.0, dot(n, normalize(vView)));
-          gl_FragColor = vec4(lit + atmo * 0.6, 1.0);
+          float mu = max(dot(n, v), 0.0);
+          // Minnaert limb darkening + a soft, slightly reddened terminator
+          float lit = pow(max(ndl, 0.0), 0.85) * pow(mu + 0.04, -0.15);
+          float term = smoothstep(-0.05, 0.14, ndl);
+          vec3 tint = mix(vec3(1.0, 0.62, 0.42), vec3(1.0), smoothstep(0.0, 0.3, ndl));
+          // Ring shadow: where the ray toward the sun crosses the ring plane
+          vec3 rel = vWorld - uCenter;
+          float denom = dot(uSunDir, uRingN);
+          float shadow = 1.0;
+          if (abs(denom) > 1e-4) {
+            float t = -dot(rel, uRingN) / denom;
+            if (t > 0.0) {
+              float u = (length(rel + uSunDir * t) - uRingIn) / (uRingOut - uRingIn);
+              if (u > 0.0 && u < 1.0) shadow = 1.0 - 0.85 * texture2D(uRingTex, vec2(u, 0.5)).a;
+            }
+          }
+          vec3 col = albedo * uSunColor * lit * term * tint * shadow * 0.62;
+          col += albedo * 0.0025;                         // night side: starlight
+          // scattering in the upper atmosphere on the lit limb
+          col += uAtmo * pow(1.0 - mu, 3.5) * smoothstep(-0.25, 0.45, ndl) * 0.45;
+          gl_FragColor = vec4(col, 1.0);
         }`
     });
-    this.planet = new THREE.Mesh(geom, mat);
-    this.planet.position.copy(pos);
-    this.planet.rotation.z = 0.28;
-    this.group.add(this.planet);
+    this.planet = new THREE.Mesh(new THREE.SphereGeometry(R, 128, 64), planetMat);
+    // Poles along the ring normal (SphereGeometry poles are +Y)
+    this.planet.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), ringN);
+    this.planetGroup.add(this.planet);
 
-    // Atmosphere shell: additive fresnel halo just outside the limb
-    const atmoGeom = new THREE.SphereGeometry(R * 1.035, 96, 64);
-    const atmoMat = new THREE.ShaderMaterial({
-      uniforms: { uSunDir: { value: this.sunDir }, uAtmo: { value: new THREE.Color(0.5, 0.68, 1.0) } },
-      vertexShader: /* glsl */`
-        varying vec3 vNormal;
-        varying vec3 vView;
-        ${LOG_DEPTH_V}
-        void main() {
-          vNormal = normalize(mat3(modelMatrix) * normal);
-          vec4 wp = modelMatrix * vec4(position, 1.0);
-          vView = normalize(cameraPosition - wp.xyz);
-          gl_Position = projectionMatrix * viewMatrix * wp;
-          ${LOG_DEPTH_V_MAIN}
-        }`,
+    // Limb halo: thin bright scattering layer just outside the disc, lit side only
+    const haloMat = new THREE.ShaderMaterial({
+      uniforms: { ...common(), uAtmo: { value: new THREE.Color(0.5, 0.68, 1.0) } },
+      vertexShader: worldVert,
       fragmentShader: /* glsl */`
         uniform vec3 uSunDir;
+        uniform vec3 uCenter;
+        uniform float uR;
         uniform vec3 uAtmo;
-        varying vec3 vNormal;
-        varying vec3 vView;
+        varying vec3 vWorld;
         ${LOG_DEPTH_F}
         void main() {
           ${LOG_DEPTH_F_MAIN}
-          vec3 n = normalize(vNormal);
-          float vdn = max(0.0, dot(n, normalize(vView)));
-          float rim = pow(1.0 - vdn, 5.5) * smoothstep(0.0, 0.35, vdn + 0.35);
-          float lit = 0.15 + 0.85 * smoothstep(-0.35, 0.3, dot(n, uSunDir));
-          gl_FragColor = vec4(uAtmo * rim * lit * 1.6, 1.0);
+          vec3 rd = normalize(vWorld - cameraPosition);
+          float tca = dot(uCenter - cameraPosition, rd);
+          vec3 closest = cameraPosition + rd * tca;
+          float b = length(closest - uCenter) / uR;      // impact parameter
+          if (b < 1.0) discard;
+          float h = b - 1.0;
+          float halo = exp(-h / 0.006) * 0.9 + exp(-h / 0.03) * 0.18;
+          float lit = smoothstep(-0.3, 0.4, dot(normalize(closest - uCenter), uSunDir));
+          gl_FragColor = vec4(uAtmo * halo * lit, 1.0);
         }`,
       transparent: true,
       blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      side: THREE.FrontSide
+      depthWrite: false
     });
-    const atmo = new THREE.Mesh(atmoGeom, atmoMat);
-    atmo.position.copy(pos);
-    this.group.add(atmo);
+    this.planetHalo = new THREE.Mesh(new THREE.SphereGeometry(R * 1.09, 96, 48), haloMat);
+    this.planetGroup.add(this.planetHalo);
 
-    // Rings: procedural radial bands, lit by the sun, shadowed by the planet
-    const ringTex = this._makeRingTexture();
-    const ringGeom = new THREE.RingGeometry(R * 1.35, R * 2.3, 180, 1);
-    // Remap UV so u runs radially
+    // Rings: radial density texture, lit face vs back-lit face, planet shadow
+    const ringGeom = new THREE.RingGeometry(ringIn, ringOut, 256, 1);
     const uv = ringGeom.attributes.uv;
     const p = ringGeom.attributes.position;
     for (let i = 0; i < uv.count; i++) {
       const r = Math.hypot(p.getX(i), p.getY(i));
-      uv.setXY(i, (r - R * 1.35) / (R * 0.95), 0.5);
+      uv.setXY(i, (r - ringIn) / (ringOut - ringIn), 0.5);
     }
     const ringMat = new THREE.ShaderMaterial({
-      uniforms: {
-        uMap: { value: ringTex },
-        uSunDir: { value: this.sunDir },
-        uPlanetPos: { value: pos },
-        uPlanetR: { value: R }
-      },
-      vertexShader: /* glsl */`
-        varying vec2 vUv;
-        varying vec3 vWorld;
-        ${LOG_DEPTH_V}
-        void main() {
-          vUv = uv;
-          vec4 wp = modelMatrix * vec4(position, 1.0);
-          vWorld = wp.xyz;
-          gl_Position = projectionMatrix * viewMatrix * wp;
-          ${LOG_DEPTH_V_MAIN}
-        }`,
+      uniforms: common(),
+      vertexShader: worldVert,
       fragmentShader: /* glsl */`
-        uniform sampler2D uMap;
+        uniform sampler2D uRingTex;
         uniform vec3 uSunDir;
-        uniform vec3 uPlanetPos;
-        uniform float uPlanetR;
+        uniform vec3 uSunColor;
+        uniform vec3 uCenter;
+        uniform vec3 uRingN;
+        uniform float uR;
         varying vec2 vUv;
         varying vec3 vWorld;
         ${LOG_DEPTH_F}
         void main() {
           ${LOG_DEPTH_F_MAIN}
-          vec4 t = texture2D(uMap, vUv);
-          // Planet shadow: does the ray toward the sun pass through the planet?
-          vec3 rel = vWorld - uPlanetPos;
+          vec4 t = texture2D(uRingTex, vUv);
+          vec3 rel = vWorld - uCenter;
           float along = dot(rel, uSunDir);
           vec3 perp = rel - uSunDir * along;
-          float shadow = along < 0.0 ? smoothstep(uPlanetR * 0.97, uPlanetR * 1.03, length(perp)) : 1.0;
-          vec3 col = t.rgb * (0.05 + 1.1 * shadow);
-          gl_FragColor = vec4(col, t.a * 0.9);
+          float shadow = along < 0.0 ? smoothstep(uR * 0.97, uR * 1.03, length(perp)) : 1.0;
+          // Same side of the ring plane as the sun: lit face. Otherwise we
+          // see light scattered through the ring (dim; thin parts glow).
+          float sunSide = sign(dot(uSunDir, uRingN));
+          float camSide = sign(dot(cameraPosition - uCenter, uRingN));
+          float face = sunSide == camSide ? 1.0 : 0.3 * (1.0 - t.a * 0.6);
+          float ndl = abs(dot(uSunDir, uRingN));
+          vec3 col = t.rgb * uSunColor * (0.02 + 0.7 * shadow * face * (0.35 + 0.65 * ndl));
+          gl_FragColor = vec4(col, t.a * 0.88);
         }`,
       transparent: true,
       side: THREE.DoubleSide,
       depthWrite: false
     });
-    const rings = new THREE.Mesh(ringGeom, ringMat);
-    rings.position.copy(pos);
-    rings.rotation.set(-Math.PI / 2 + 0.42, 0.1, 0.28);
-    this.group.add(rings);
-    this.rings = rings;
-  }
-
-  _makeRingTexture() {
-    const w = 1024;
-    const canvas = document.createElement('canvas');
-    canvas.width = w; canvas.height = 4;
-    const ctx = canvas.getContext('2d');
-    const img = ctx.createImageData(w, 4);
-    const rnd = mulberry32(77);
-    // Random band structure: overlapping gaussian gaps and bright ringlets
-    const bands = [];
-    for (let i = 0; i < 40; i++) bands.push({ c: rnd(), w: 0.004 + rnd() * 0.03, a: (rnd() - 0.4) * 0.9 });
-    for (let x = 0; x < w; x++) {
-      const u = x / w;
-      let a = 0.55 * Math.sin(u * Math.PI);
-      for (const b of bands) a += b.a * Math.exp(-Math.pow((u - b.c) / b.w, 2));
-      a *= smoothstep01(0, 0.03, u) * smoothstep01(1, 0.9, u);
-      a = Math.max(0, Math.min(1, a));
-      const tone = 0.75 + 0.25 * Math.sin(u * 40 + 1.0) * 0.5;
-      for (let y = 0; y < 4; y++) {
-        const i = (y * w + x) * 4;
-        img.data[i] = 215 * tone; img.data[i + 1] = 200 * tone; img.data[i + 2] = 176 * tone;
-        img.data[i + 3] = a * 255;
-      }
-    }
-    ctx.putImageData(img, 0, 0);
-    const t = new THREE.CanvasTexture(canvas);
-    t.colorSpace = THREE.SRGBColorSpace;
-    t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
-    return t;
+    this.rings = new THREE.Mesh(ringGeom, ringMat);
+    this.rings.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), ringN);
+    this.planetGroup.add(this.rings);
+    for (const m of [this.planet, this.planetHalo, this.rings]) m.frustumCulled = false;
   }
 
   // -------------------------------------------------------------------------
   /**
-   * Screen-space lens flare without framebuffer readback: ghost sprites are
-   * placed in the world along the ray through their screen position, sized
-   * for constant apparent size, and faded as the sun leaves the frame.
-   */
-  _buildFlare() {
-    const glow = getGlowTexture();
-    const ringTex = this._makeHexGhost();
-    this.flareGhosts = [];
-    const spec = [
-      { t: 0.0, s: 0.12, c: [1.0, 0.9, 0.7], a: 0.35, tex: glow },
-      { t: 0.25, s: 0.035, c: [0.6, 0.8, 1.0], a: 0.3, tex: ringTex },
-      { t: 0.45, s: 0.06, c: [1.0, 0.6, 0.4], a: 0.2, tex: ringTex },
-      { t: 0.7, s: 0.025, c: [0.5, 1.0, 0.7], a: 0.35, tex: ringTex },
-      { t: 1.0, s: 0.08, c: [0.9, 0.7, 1.0], a: 0.16, tex: ringTex },
-      { t: 1.35, s: 0.05, c: [1.0, 0.85, 0.6], a: 0.25, tex: glow },
-      { t: 1.7, s: 0.11, c: [0.6, 0.7, 1.0], a: 0.1, tex: ringTex }
-    ];
-    for (const g of spec) {
-      const s = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: g.tex, color: new THREE.Color(...g.c), transparent: true, opacity: 0,
-        blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false
-      }));
-      s.renderOrder = 1000;
-      s.frustumCulled = false;
-      this.group.add(s);
-      this.flareGhosts.push({ sprite: s, ...g });
-    }
-    // Anamorphic streak through the sun
-    const streak = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: this._makeStreakGhost(), color: new THREE.Color(0.55, 0.7, 1.0), transparent: true,
-      opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false
-    }));
-    streak.renderOrder = 1000;
-    streak.frustumCulled = false;
-    this.group.add(streak);
-    this.flareStreak = streak;
-  }
-
-  _makeHexGhost() {
-    const size = 128;
-    const canvas = document.createElement('canvas');
-    canvas.width = canvas.height = size;
-    const ctx = canvas.getContext('2d');
-    ctx.translate(size / 2, size / 2);
-    ctx.beginPath();
-    for (let i = 0; i < 6; i++) {
-      const a = (i / 6) * Math.PI * 2;
-      ctx.lineTo(Math.cos(a) * 58, Math.sin(a) * 58);
-    }
-    ctx.closePath();
-    const g = ctx.createRadialGradient(0, 0, 20, 0, 0, 58);
-    g.addColorStop(0, 'rgba(255,255,255,0.08)');
-    g.addColorStop(0.8, 'rgba(255,255,255,0.18)');
-    g.addColorStop(1, 'rgba(255,255,255,0.5)');
-    ctx.fillStyle = g;
-    ctx.fill();
-    const t = new THREE.CanvasTexture(canvas);
-    return t;
-  }
-
-  _makeStreakGhost() {
-    const w = 512, h = 32;
-    const canvas = document.createElement('canvas');
-    canvas.width = w; canvas.height = h;
-    const ctx = canvas.getContext('2d');
-    const g = ctx.createLinearGradient(0, 0, w, 0);
-    g.addColorStop(0, 'rgba(255,255,255,0)');
-    g.addColorStop(0.5, 'rgba(255,255,255,1)');
-    g.addColorStop(1, 'rgba(255,255,255,0)');
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, w, h);
-    const v = ctx.createLinearGradient(0, 0, 0, h);
-    v.addColorStop(0, 'rgba(0,0,0,1)');
-    v.addColorStop(0.5, 'rgba(0,0,0,0)');
-    v.addColorStop(1, 'rgba(0,0,0,1)');
-    ctx.globalCompositeOperation = 'destination-out';
-    ctx.fillStyle = v;
-    ctx.fillRect(0, 0, w, h);
-    return new THREE.CanvasTexture(canvas);
-  }
-
-  // -------------------------------------------------------------------------
-  /**
-   * PMREM environment from a reduced copy of the sky: sun disc, planet,
-   * dome. Gives the metallic hull plating real reflections.
+   * PMREM environment from the baked sky (boosted, plus a cool fill lobe
+   * opposite the sun), the sun and the planet - gives the metallic hull
+   * plating reflections with some colour instead of pure black.
    */
   _buildEnvMap() {
     const envScene = new THREE.Scene();
-    envScene.add(this.skydome.clone());
-    const sun = new THREE.Mesh(new THREE.SphereGeometry(9000, 16, 12),
-      new THREE.MeshBasicMaterial({ color: new THREE.Color(40, 36, 30) }));
-    sun.position.copy(this.sunPos);
+    const sky = new THREE.Mesh(new THREE.BoxGeometry(2000, 2000, 2000), this._skyMaterial(4.0));
+    sky.material.uniforms.uFill.value.setRGB(0.08, 0.1, 0.16);
+    envScene.add(sky);
+    const sun = new THREE.Mesh(new THREE.SphereGeometry(900 * Math.tan(0.03), 16, 12),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(30, 27, 23) }));
+    sun.position.copy(this.sunDir).multiplyScalar(900);
     envScene.add(sun);
-    const sunHalo = new THREE.Mesh(new THREE.SphereGeometry(30000, 16, 12),
-      new THREE.MeshBasicMaterial({ color: new THREE.Color(0.6, 0.45, 0.3), transparent: true, opacity: 0.5 }));
-    sunHalo.position.copy(this.sunPos);
-    envScene.add(sunHalo);
-    const planet = new THREE.Mesh(new THREE.SphereGeometry(this.planetRadius, 32, 24),
-      new THREE.MeshLambertMaterial({ map: getPlanetTexture() }));
-    planet.position.copy(this.planet.position);
+    const planet = new THREE.Mesh(new THREE.SphereGeometry(900 * Math.sin(PLANET_ANGULAR_RADIUS), 32, 24),
+      new THREE.MeshLambertMaterial({ map: getGasGiantTexture() }));
+    planet.position.copy(this.planetDir).multiplyScalar(900);
     envScene.add(planet);
-    const l = new THREE.DirectionalLight(0xffffff, 2.5);
+    const l = new THREE.DirectionalLight(0xffffff, 2.2);
     l.position.copy(this.sunDir).multiplyScalar(1000);
     envScene.add(l);
 
     const pmrem = new THREE.PMREMGenerator(this.renderer);
-    pmrem.compileEquirectangularShader();
-    const rt = pmrem.fromScene(envScene, 0.02, 10, 900000);
+    const rt = pmrem.fromScene(envScene, 0.02, 0.1, 5000);
     this.scene.environment = rt.texture;
+    this.envRT = rt;
     pmrem.dispose();
+    sky.geometry.dispose(); sky.material.dispose();
+    sun.geometry.dispose(); sun.material.dispose();
+    planet.geometry.dispose(); planet.material.dispose();
   }
 
   // -------------------------------------------------------------------------
   update(camera, delta) {
     this.time += delta;
+    const cp = camera.position;
     // Keep the far backdrop centred on the camera so it never gets parallax
-    this.skydome.position.copy(camera.position);
-    this.stars.position.copy(camera.position);
+    this.skyMesh.position.copy(cp);
+    this.stars.position.copy(cp);
+    this.stars.material.uniforms.uPixelRatio.value = this.renderer.getPixelRatio();
+    this.sun.position.copy(cp).addScaledVector(this.sunDir, SUN_DIST);
+    this.planetGroup.position.copy(cp).addScaledVector(this.planetDir, PLANET_DIST);
+    this.planetCenter.copy(this.planetGroup.position);
 
-    // Lens flare placement
-    const sunNdc = this.sunPos.clone().project(camera);
-    const viewZ = this.sunPos.clone().applyMatrix4(camera.matrixWorldInverse).z;
-    const inFront = viewZ < 0;
-    const sx = sunNdc.x, sy = sunNdc.y;
-    const edge = Math.max(Math.abs(sx), Math.abs(sy));
-    const vis = inFront ? THREE.MathUtils.smoothstep(1.25 - edge, 0, 0.45) : 0;
-    // Aspect-corrected constant screen size: sprite world size at depth d
-    const fovScale = 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
-    const depth = 50; // world units in front of the camera
-    for (const g of this.flareGhosts) {
-      const nx = sx * (1 - g.t) + 0 * g.t;   // toward screen centre and beyond
-      const ny = sy * (1 - g.t);
-      const wp = new THREE.Vector3(nx, ny, 0.5).unproject(camera);
-      const dir = wp.sub(camera.position).normalize();
-      g.sprite.position.copy(camera.position).addScaledVector(dir, depth);
-      const worldSize = g.s * fovScale * depth;
-      g.sprite.scale.set(worldSize, worldSize, 1);
-      g.sprite.material.opacity = g.a * vis;
-    }
-    const swp = new THREE.Vector3(sx, sy, 0.5).unproject(camera);
-    const sdir = swp.sub(camera.position).normalize();
-    this.flareStreak.position.copy(camera.position).addScaledVector(sdir, depth);
-    this.flareStreak.scale.set(1.9 * fovScale * depth, 0.06 * fovScale * depth, 1);
-    this.flareStreak.material.opacity = 0.3 * vis;
+    // Rim light from beyond the subject, a little above the view axis
+    camera.getWorldDirection(_fwd);
+    _up.copy(camera.up).applyQuaternion(camera.quaternion);
+    this.rimLight.position.copy(_fwd).addScaledVector(_up, 0.35).normalize().multiplyScalar(1000);
+
+    this.dust.update(camera, delta);
   }
 }
 
-function smoothstep01(a, b, x) {
-  const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
-  return t * t * (3 - 2 * t);
-}
+const _fwd = new THREE.Vector3();
+const _up = new THREE.Vector3();
