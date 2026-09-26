@@ -675,60 +675,57 @@ class Torpedo:
         if target_accel is None:
             target_accel = Vector3D.zero()
 
-        # Initial estimate: relative position and velocity
+        # Everything is solved in the torpedo's rest frame, so the answer does
+        # not depend on the frame positions/velocities are expressed in. The
+        # old refinement divided the target's WORLD-frame travel by the
+        # RELATIVE closing rate (target motion counted twice) and used
+        # +|v_rel| as the closure when opening: a round already on a perfect
+        # collision course 20 s out came back as 12.5 s and 6 km/s short,
+        # and the numbers changed with the frame (this gates retargeting).
         rel_pos = target_pos - self.position
         rel_vel = target_vel - self.velocity
 
         # Current acceleration capability
         current_accel = self.specs.acceleration_at_mass(self.current_mass_kg)
 
-        # Simple intercept estimate: time to close distance at closing rate
         distance = rel_pos.magnitude
-        closing_rate = -rel_vel.dot(rel_pos.normalized()) if distance > 0 else 0
+        los = rel_pos.normalized() if distance > 0 else Vector3D.zero()
+        closing_rate = -rel_vel.dot(los) if distance > 0 else 0
+        accel_los = target_accel.dot(los)
 
-        # Initial time estimate
-        if closing_rate > 0:
-            # Already closing
+        def rel_offset(t: float) -> Vector3D:
+            # Target position relative to a torpedo that coasts from now.
+            return rel_pos + rel_vel * t + target_accel * (0.5 * t * t)
+
+        if distance <= 0:
+            t_intercept = 0.0
+        elif closing_rate > 0:
+            # Coasting intercept: the time at which the current closure
+            # (plus the target's along-LOS acceleration) eats the range.
+            # Delta-v then only has to remove the remaining lateral offset.
             t_intercept = distance / closing_rate
+            for _ in range(3):
+                t_intercept = min(
+                    max(0.0, (distance + 0.5 * accel_los * t_intercept ** 2)
+                        / closing_rate),
+                    3600.0,
+                )
+        elif current_accel > 0 and current_accel > accel_los:
+            # Opening: accelerate at the target from rest (in this frame):
+            # 0.5*(A - a_los)*t^2 = d + v_open*t, then refine so the burn
+            # covers the full (incl. lateral) offset: 0.5*A*t^2 = |offset(t)|.
+            v_open = -closing_rate
+            a_eff = current_accel - accel_los
+            t_intercept = (v_open + math.sqrt(v_open * v_open + 2 * a_eff * distance)) / a_eff
+            t_intercept = min(max(1.0, t_intercept), 3600.0)
+            for _ in range(3):
+                t_intercept = min(max(1.0, math.sqrt(
+                    2.0 * rel_offset(t_intercept).magnitude / current_accel)), 3600.0)
         else:
-            # Need to accelerate toward target
-            # Use kinematic equation: d = v0*t + 0.5*a*t^2
-            # Estimate assuming we accelerate directly toward target
-            if current_accel > 0:
-                # Quadratic solution
-                discriminant = rel_vel.magnitude_squared + 2 * current_accel * distance
-                if discriminant >= 0:
-                    t_intercept = (-rel_vel.magnitude + math.sqrt(discriminant)) / current_accel
-                    t_intercept = max(1.0, t_intercept)
-                else:
-                    t_intercept = distance / 1000  # Fallback estimate
-            else:
-                t_intercept = float('inf')
+            t_intercept = float('inf')
 
         # Cap at reasonable maximum
         t_intercept = min(t_intercept, 3600.0)  # 1 hour max
-
-        # Iterative refinement (3 iterations)
-        for _ in range(3):
-            # Predict target position at intercept time
-            # pos = pos0 + vel*t + 0.5*accel*t^2
-            predicted_target = (
-                target_pos +
-                target_vel * t_intercept +
-                target_accel * (0.5 * t_intercept * t_intercept)
-            )
-
-            # Update intercept time based on new distance
-            new_distance = (predicted_target - self.position).magnitude
-            if closing_rate > 0:
-                t_intercept = new_distance / closing_rate
-            elif current_accel > 0:
-                discriminant = rel_vel.magnitude_squared + 2 * current_accel * new_distance
-                if discriminant >= 0:
-                    t_intercept = (-rel_vel.magnitude + math.sqrt(discriminant)) / current_accel
-                    t_intercept = max(1.0, t_intercept)
-
-            t_intercept = min(t_intercept, 3600.0)
 
         # Final intercept position
         intercept_pos = (
@@ -1984,10 +1981,10 @@ class TorpedoGuidance:
                 reason=f"PURSUIT: closing={closing_speed_kps:.1f}km/s"
             )
 
-        # Time-to-go, floored at one guidance tick: inside the final tick the
-        # 1/t_go^2 gain would otherwise blow up on a miss the torpedo can no
-        # longer influence anyway.
-        t_go = max(distance_m / closing_speed_mps, max(dt, 1e-3))
+        # True time-to-go. It used to be floored at one guidance tick, which
+        # overstated the ZEM in the final tick.
+        t_go = max(distance_m / closing_speed_mps, 1e-3)
+        tick = max(dt, 1e-3)
 
         # ---- Augmented PN command (ZEM form). The perpendicular part of the
         # target's relative velocity is -lateral_vel (lateral_vel is the
@@ -1995,7 +1992,13 @@ class TorpedoGuidance:
         accel_perp = target_accel_est - los * target_accel_est.dot(los)
         zem_perp = lateral_vel * (-t_go) + accel_perp * (0.5 * t_go * t_go)
         predicted_miss_m = zem_perp.magnitude
-        a_cmd = zem_perp * (APN_NAV_RATIO / (t_go * t_go))
+        # The command is executed as a whole-tick impulse, which moves the
+        # miss by a*dt*t_go. Once t_go < N*dt the continuous-time gain N/t_go^2
+        # therefore over-corrects up to N-fold (at dt = 1 s a 80 m coasting
+        # miss was "corrected" to 248 m); cap it at the dead-beat gain
+        # 1/(t_go*dt), which nulls the ZEM in exactly one tick.
+        gain = min(APN_NAV_RATIO / (t_go * t_go), 1.0 / (t_go * tick))
+        a_cmd = zem_perp * gain
         a_cmd_mag = a_cmd.magnitude
 
         # ---- Commit logic: the NEZ is evaluated against the ASSUMED
@@ -2030,7 +2033,13 @@ class TorpedoGuidance:
         # component exactly what APN commanded.
         if want_closure:
             axial_fill = math.sqrt(accel_max * accel_max - a_cmd_mag * a_cmd_mag)
+            if terminal_burn and not below_cruise_floor:
+                # Spend the NEZ surplus, not a whole full-throttle tick: at
+                # late-flight mass one tick is ~0.6 km/s, which burned
+                # straight through the reserve this burn exists to keep.
+                axial_fill = min(axial_fill, surplus_kps * 1000.0 / tick)
             desired_accel = a_cmd + los * axial_fill
+            closure_throttle = min(1.0, desired_accel.magnitude / accel_max)
             if terminal_burn:
                 reason = (
                     f"TERMINAL(NEZ): {nez.time_to_go_s:.0f}s to impact, "
@@ -2045,7 +2054,7 @@ class TorpedoGuidance:
                     f"miss~{predicted_miss_m / 1000.0:.2f}km"
                 )
             return GuidanceCommand.burn(desired_accel.normalized(),
-                                        throttle=1.0, reason=reason)
+                                        throttle=closure_throttle, reason=reason)
 
         # ---- On course, no closure mandate: coast (delta-v preservation).
         if predicted_miss_m < APN_MISS_DEADBAND_M:

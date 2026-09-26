@@ -766,6 +766,9 @@ class ShipCombatState:
     attitude_control: Optional[AttitudeControlSpecs] = None
     rotation_state: Optional[RotationState] = None
     angular_velocity_rad_s: float = 0.0  # Current angular velocity
+    # Set by _rotate_ship_toward; a tick without an attitude command freezes
+    # the attitude, so _update_ship must not bank the rate for the next turn.
+    attitude_commanded: bool = False
 
     # Power system
     power_system: Optional[PowerSystem] = None
@@ -784,9 +787,9 @@ class ShipCombatState:
     # apart from pd_intercepts because a blinded torpedo is still inbound on a
     # ballistic course and still kills a target that does not maneuver.
     pd_seeker_kills: int = 0
-    # Electrical power the PD turrets drew from the bus last tick (GW).
-    # Written by _update_point_defense, read by _update_ship the next tick to
-    # subtract PD draw from the power available to the drive.
+    # Electrical power the PD turrets draw from the bus this tick (GW).
+    # Written by _update_point_defense, then read by _update_ship in the same
+    # tick to subtract PD draw from the power available to the drive.
     pd_power_draw_gw: float = 0.0
 
     @property
@@ -1537,7 +1540,8 @@ class CombatSimulation:
             return False
 
         target = self.get_ship(target_id)
-        if not target or target.is_destroyed or target.is_dying:
+        if (not target or target.is_destroyed or target.is_dying
+                or target.is_surrendered or ship.is_surrendered):
             return False
 
         # Check if target is in weapon arc before consuming ammo
@@ -1577,7 +1581,8 @@ class CombatSimulation:
 
     def _order_torpedo_launch(self, ship: ShipCombatState, command: dict) -> bool:
         target = self.get_ship(command.get('target_id'))
-        if not target or target.is_destroyed or target.is_dying or target.faction == ship.faction:
+        if (not target or target.is_destroyed or target.is_dying or target.faction == ship.faction
+                or target.is_surrendered or ship.is_surrendered):
             return False
         if self.torpedo_launch_capacity(ship.ship_id) <= 0:
             return False
@@ -1619,7 +1624,8 @@ class CombatSimulation:
         target_id = command.get('target_id')
         target = self.get_ship(target_id)
 
-        if not target or target.is_destroyed or target.is_dying:
+        if (not target or target.is_destroyed or target.is_dying
+                or target.is_surrendered or ship.is_surrendered):
             return False
 
         # Pick the first launcher with a round chambered and off cooldown. With a
@@ -1750,7 +1756,8 @@ class CombatSimulation:
                 continue
 
             target = self.get_ship(target_id)
-            if not target or target.is_destroyed or target.is_dying:
+            if (not target or target.is_destroyed or target.is_dying
+                    or target.is_surrendered):
                 self._weapon_status(ship, weapon_slot, 'target_unavailable', target_id)
                 continue
 
@@ -2102,8 +2109,17 @@ class CombatSimulation:
         # engagement symmetric between factions.
         self._process_pending_torpedo_launches()
         for ship in self.ships.values():
-            if not ship.is_destroyed and not ship.is_dying:
+            # A surrendered ship is out of the fight: its standing weapons
+            # orders must not keep firing (see also the target check below).
+            if not ship.is_destroyed and not ship.is_dying and not ship.is_surrendered:
                 self._process_weapons_orders(ship)
+
+        # Point defense engages incoming torpedoes and projectiles. It runs on
+        # the same start-of-step snapshot as fire control: it used to run
+        # after ships had moved but before torpedoes had, so every PD range
+        # mixed two instants (error = ship speed x dt; a 30 km/s fleet saw a
+        # torpedo 240 km out at 270 km, outside its 250 km envelope).
+        self._update_point_defense(dt)
 
         # Update all ships
         for ship in self.ships.values():
@@ -2112,9 +2128,6 @@ class CombatSimulation:
 
         # Update projectiles and check hits
         self._update_projectiles(dt)
-
-        # Point defense engages incoming torpedoes and projectiles
-        self._update_point_defense(dt)
 
         # Update torpedoes and check hits
         self._update_torpedoes(dt)
@@ -2159,6 +2172,7 @@ class CombatSimulation:
         throttle = 0.0
         gimbal_pitch = 0.0
         gimbal_yaw = 0.0
+        ship.attitude_commanded = False
 
         if ship.current_maneuver:
             maneuver = ship.current_maneuver
@@ -2206,7 +2220,10 @@ class CombatSimulation:
                         target = None
                         if maneuver.target_id:
                             target = self.get_ship(maneuver.target_id)
-                        else:
+                        if target is None or target.is_destroyed or target.is_dying:
+                            # No (live) assigned target: nearest live enemy,
+                            # never the wreck of a dead one.
+                            target = None
                             enemies = self.get_enemy_ships(ship.ship_id)
                             if enemies:
                                 target = min(enemies, key=lambda e: ship.distance_to(e))
@@ -2221,9 +2238,13 @@ class CombatSimulation:
 
                 elif maneuver.maneuver_type == ManeuverType.INTERCEPT and maneuver.target_id:
                     target = self.get_ship(maneuver.target_id)
-                    if target:
+                    if target and not target.is_destroyed and not target.is_dying:
                         intercept_dir = self._calculate_intercept_direction(ship, target)
                         self._rotate_ship_toward(ship, intercept_dir, dt, engines_on=(throttle > 0))
+                    else:
+                        # Target gone: coast (as PADLOCK does) instead of
+                        # burning at the wreck until the next checkpoint.
+                        throttle = 0.0
 
                 elif maneuver.maneuver_type == ManeuverType.BRAKE:
                     # Thrust retrograde (opposite to velocity) to slow down
@@ -2293,6 +2314,15 @@ class CombatSimulation:
                 # PADLOCK for tracking target while coasting,
                 # EVASIVE for automatic threat-aware evasion
 
+        # No attitude command this tick: the attitude model holds the nose
+        # where it is, so the stored rate must go with it. Keeping it let the
+        # NEXT turn start at a rate the ship was no longer turning at - e.g. a
+        # thrust-vectoring spin-up (~15 deg/s) reused by an RCS-only ROTATE
+        # (0.12 deg/s^2), finishing 90 deg ~7x faster than RCS allows.
+        if not ship.attitude_commanded:
+            ship.angular_velocity_rad_s = 0.0
+            ship.rotation_state = None
+
         # Apply engine damage to effective thrust
         engine_eff = ship.get_effective_thrust_fraction()
         effective_throttle = throttle * engine_eff
@@ -2341,8 +2371,10 @@ class CombatSimulation:
             # Scale engine waste heat with throttle (waste heat is proportional
             # to jet power, which is proportional to thrust). The old on/off
             # switch produced full-burn heat at any non-zero throttle, so a 5%
-            # station-keeping burn heated the ship like a max burn.
-            throttle_clamped = max(0.0, min(1.0, throttle))
+            # station-keeping burn heated the ship like a max burn. Use the
+            # throttle actually PRODUCED (engine damage, dry tanks): the
+            # requested one heated a dry-tanked ship like a full burn.
+            throttle_clamped = max(0.0, min(1.0, ship.applied_throttle))
             for source in ship.thermal_system.heat_sources:
                 if source.name == "engines":
                     base_kw = getattr(source, "_base_heat_kw", None)
@@ -2354,7 +2386,7 @@ class CombatSimulation:
                     break
             else:
                 # No 'engines' source registered - keep legacy behavior
-                ship.thermal_system.set_source_active("engines", throttle > 0)
+                ship.thermal_system.set_source_active("engines", throttle_clamped > 0)
 
             # Update thermal system (generates heat from active sources, dissipates via radiators)
             thermal_result = ship.thermal_system.update(dt)
@@ -2371,8 +2403,8 @@ class CombatSimulation:
 
         # Update power system (charges weapon capacitors)
         if ship.power_system:
-            # Set drive power consumption based on throttle
-            ship.power_system.set_drive_throttle(throttle)
+            # Set drive power consumption based on the throttle produced
+            ship.power_system.set_drive_throttle(ship.applied_throttle)
             # Update power distribution (charges capacitors from available power)
             ship.power_system.update(dt)
 
@@ -2445,6 +2477,7 @@ class CombatSimulation:
             dt: Time step in seconds
             engines_on: Whether main engines are firing (enables thrust vectoring)
         """
+        ship.attitude_commanded = True
         current_forward = ship.forward
         target_normalized = target_dir.normalized()
         angle_to_target = current_forward.angle_to(target_normalized)
@@ -2671,7 +2704,14 @@ class CombatSimulation:
             if proj_flight.target_ship_id != ship.ship_id:
                 continue
             proj = proj_flight.projectile
-            _add_threat(proj.position, proj.velocity, proj.kinetic_energy_gj)
+            # Energy the round would deliver: relative speed and remaining
+            # (post-ablation) mass, as in _resolve_projectile_hit. The
+            # world-frame kinetic_energy_gj swung 1.2 GJ -> 27-55 GJ with a
+            # 40 km/s fleet drift, skewing urgency and the TANK armour trial.
+            mass_kg = max(0.1, proj.mass_kg - getattr(proj, '_pd_ablation', 0.0))
+            rel_speed = (proj.velocity - ship.velocity).magnitude
+            _add_threat(proj.position, proj.velocity,
+                        0.5 * mass_kg * rel_speed ** 2 / 1e9)
 
         # Seeker-killed torpedoes: ballistic multi-tonne masses. Evade them
         # regardless of who launched them or whom they were homing on - a
@@ -4513,6 +4553,14 @@ class CombatSimulation:
         # a huge phantom acceleration into the first guidance solution.
         torp.last_observed_target_velocity = None
         torp.estimated_target_accel = Vector3D.zero()
+        # Closest approach and the target-side terminal latch were measured
+        # against the OLD target. Kept, they resolved the round against the
+        # new one on the first tick its CPA fell in-step - with the dead
+        # target's miss distance (phantom hits from 100+ km, or a live round
+        # discarded as a miss) - and put the new target straight into PRESENT.
+        torp_flight.min_distance_to_target = float('inf')
+        torp_flight.prev_distance_to_target = float('inf')
+        torp_flight.terminal_latched = False
 
         self._log_event(
             SimulationEventType.TORPEDO_RETARGETED,
@@ -4611,7 +4659,12 @@ class CombatSimulation:
                             nose_cone_length_m=20.0,
                             engine_section_length_m=20.0,
                         )
-                    approach_dir = (candidate.position - torp.position)
+                    # Aspect from the approach direction in the candidate's
+                    # frame (the bearing the round comes FROM), not from the
+                    # end-of-step position: on the step that holds the CPA
+                    # the round is already past the hull, so that bearing
+                    # made the aspect depend on where in dt the CPA fell.
+                    approach_dir = candidate.velocity - torp.velocity
                     if approach_dir.magnitude > 1e-6:
                         angle_to_forward = math.degrees(
                             candidate.forward.angle_to(approach_dir.normalized()))
@@ -4791,9 +4844,15 @@ class CombatSimulation:
                         engine_section_length_m=20.0,
                     )
 
-                # Get cross-section based on approach angle
-                approach_dir = (target.position - torp.position).normalized()
-                angle_to_forward = math.degrees(target.forward.angle_to(approach_dir))
+                # Cross-section from the approach direction in the target
+                # frame (bearing the torpedo comes FROM). The end-of-step
+                # position used before is already past the CPA on this step,
+                # which made the aspect depend on the step phase.
+                approach_dir = target.velocity - torp.velocity
+                if approach_dir.magnitude > 1e-6:
+                    angle_to_forward = math.degrees(target.forward.angle_to(approach_dir))
+                else:
+                    angle_to_forward = 90.0
 
                 if angle_to_forward < 30:
                     cross_section = geometry.nose_cross_section_m2
@@ -4824,7 +4883,12 @@ class CombatSimulation:
                 # NOTE: closest_dist_m now comes from the analytic within-step
                 # CPA above, so it is accurate even for very high closing
                 # speeds (no tick-boundary sampling error).
-                guidance_sigma_m = 150.0 if not torp.fuel_exhausted else 500.0
+                #
+                # One sigma for live and dry rounds. A dry tank used to get
+                # 500 m "for worse guidance", but the lost steering is already
+                # in the exact CPA; a wider Gaussian on top only made the dry
+                # round MORE forgiving (84% vs 13% hit at a 400 m CPA).
+                guidance_sigma_m = 150.0
 
                 miss_distance_m = max(0.0, closest_dist_m - target_radius_m)
                 if miss_distance_m <= 0.0:
@@ -5129,7 +5193,9 @@ class CombatSimulation:
         slugs only when no torpedo is inside this ship's envelope at all.
         """
         for ship in self.ships.values():
-            if ship.is_destroyed or ship.is_dying or not ship.point_defense:
+            if (ship.is_destroyed or ship.is_dying or ship.is_surrendered
+                    or not ship.point_defense):
+                ship.pd_power_draw_gw = 0.0
                 continue
 
             # Update PD cooldowns
@@ -5137,7 +5203,7 @@ class CombatSimulation:
                 pd.update(dt)
 
             # Reset the PD electrical-draw ledger for this tick; the dwell
-            # methods accumulate into it and _update_ship reads it next tick.
+            # methods accumulate into it and _update_ship reads it this tick.
             ship.pd_power_draw_gw = 0.0
 
             # Build prioritized target list for this ship
@@ -5209,14 +5275,17 @@ class CombatSimulation:
             distance_km = distance_m / 1000
 
             # Check if torpedo threatens this ship or allies
-            threatens_self = self._threatens_ship(torp.position, torp.velocity, ship.position)
+            threatens_self = self._threatens_ship(
+                torp.position, torp.velocity, ship.position, ship.velocity)
             target_is_self = torp.target_id == ship.ship_id
 
-            # Check if threatens allied ships
+            # Check if threatens allied ships (the ally it is homing on
+            # first, so time-to-impact is measured against the real victim)
             threatens_ally = False
             allied_target = None
-            for ally in allied_ships:
-                if self._threatens_ship(torp.position, torp.velocity, ally.position):
+            for ally in sorted(allied_ships, key=lambda a: a.ship_id != torp.target_id):
+                if self._threatens_ship(torp.position, torp.velocity,
+                                        ally.position, ally.velocity):
                     threatens_ally = True
                     allied_target = ally
                     break
@@ -5268,7 +5337,7 @@ class CombatSimulation:
             # what makes "savable" a formation property, not a lone-hull one.
             friendly_turrets_in_range = 0
             for friendly in [ship] + allied_ships:
-                if friendly.is_destroyed or friendly.is_dying:
+                if friendly.is_destroyed or friendly.is_dying or friendly.is_surrendered:
                     continue
                 f_dist_km = torp.position.distance_to(friendly.position) / 1000
                 friendly_turrets_in_range += sum(
@@ -5830,13 +5899,19 @@ class CombatSimulation:
         threat_pos: Vector3D,
         threat_vel: Vector3D,
         ship_pos: Vector3D,
+        ship_vel: Optional[Vector3D] = None,
         threat_range_m: float = 500_000
     ) -> bool:
-        """Check if a threat is approaching a ship."""
+        """Check if a threat is approaching a ship (in the ship's frame)."""
         distance = threat_pos.distance_to(ship_pos)
         if distance > threat_range_m:
             return False
-        return self._is_closing(threat_pos, threat_vel, ship_pos)
+        # Closing is a RELATIVE-velocity question. Testing the threat's world
+        # velocity made escort PD frame-dependent: with a common 30 km/s
+        # fleet drift an escort stopped listing a torpedo bearing down on
+        # its neighbour at all.
+        rel_vel = threat_vel - ship_vel if ship_vel is not None else threat_vel
+        return self._is_closing(threat_pos, rel_vel, ship_pos)
 
     def _on_collision_course(
         self,
