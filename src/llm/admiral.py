@@ -249,7 +249,10 @@ class LLMAdmiral:
     def wants_vision(self) -> bool:
         """True if this admiral should receive tactical-plot images."""
         from .admiral_view import is_vision_model
-        return bool(getattr(self.config, "vision", False)) and is_vision_model(self.config.model)
+        if not getattr(self.config, "vision", False):
+            return False
+        verified = getattr(self.config, "image_input", None)
+        return bool(verified) if verified is not None else is_vision_model(self.config.model)
 
     def set_ship_mapping(self, name_to_id: Dict[str, str]) -> None:
         """Set the mapping from ship names to IDs."""

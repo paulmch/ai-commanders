@@ -211,6 +211,20 @@ def apply_cache_breakpoint(
     return patched
 
 
+def forced_tool_use_conflicts(model: str, reasoning_effort: Optional[str]) -> bool:
+    """
+    True if a forced tool call ("required") may be rejected for this request.
+
+    Claude rejects forced tool use while thinking is on when served from
+    Amazon Bedrock (and on Fable 5.1 / Opus 5.5 everywhere), and OpenRouter
+    may route any Claude request to Bedrock. Such calls ask with "auto"
+    instead; callers that need a tool call (the draft) already re-prompt
+    when none arrives.
+    """
+    return (reasoning_effort not in (None, "none")
+            and _strip_prefix(model).startswith("anthropic/"))
+
+
 class CaptainClient:
     """
     LLM client for captain decision-making using OpenRouter directly.
@@ -405,6 +419,8 @@ class CaptainClient:
             LLMCallError: if the API call itself failed.
         """
         request_model = _strip_prefix(model or self.model)
+        if tool_choice == "required" and forced_tool_use_conflicts(request_model, self.reasoning_effort):
+            tool_choice = "auto"
 
         payload = {
             "model": request_model,

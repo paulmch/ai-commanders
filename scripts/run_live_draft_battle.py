@@ -18,11 +18,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from src.llm.battle_recorder import BattleRecorder
 from src.llm.battle_runner import BattleConfig, LLMBattleRunner, load_fleet_data
+from src.llm.battle_ticker import BattleTicker
 from src.llm.captain import LLMCaptainConfig
 from src.llm.client import CaptainClient
 from src.llm.fleet_config import AdmiralConfig, BattleFleetConfig
+from src.llm import fleet_draft
 from src.llm.fleet_draft import auto_draft, draft_summary_dict, draft_to_fleet_definition, run_admiral_draft
 from src.llm.mcp_http_server import MCPHttpServer
+from src.llm.mock_openrouter import mock_transport
 from src.llm.replay_audit import AuditedClient
 from src.llm.spending import RequestBudget
 
@@ -75,15 +78,23 @@ class SpectatorServer(MCPHttpServer):
 
 
 class LiveDraftRunner(LLMBattleRunner):
-    def configure_live(self, server, state, draft_recorders, output, step_delay=0.04):
+    ticker = None
+
+    def configure_live(self, server, state, draft_recorders, output, step_delay=0.04,
+                       ticker=None, vision_dir=None):
         self.live_server = server
         self.live_state = state
         self.draft_recorders = draft_recorders
         self.live_output = output
         self.step_delay = step_delay
+        self.ticker = ticker
+        self.vision_dir = vision_dir
 
     def setup_fleet_battle(self, fleet_data):
         super().setup_fleet_battle(fleet_data)
+        # Keep this battle's tactical-plot frames next to its other reports.
+        if self._admiral_view_dir and self.vision_dir:
+            self._admiral_view_dir = Path(self.vision_dir)
         for faction, recorder in self.draft_recorders.items():
             self.recorder.recording.assets.update(recorder.recording.assets)
             for event in recorder.events:
@@ -113,6 +124,11 @@ class LiveDraftRunner(LLMBattleRunner):
     def _log_fleet_decision(self, commands):
         super()._log_fleet_decision(commands)
         self.save_progress()
+        if self.ticker:
+            try:
+                self.ticker.checkpoint(self)
+            except Exception as exc:  # noqa: BLE001 - reporting must never stop a paid battle
+                print(f'[TICKER] checkpoint block failed: {type(exc).__name__}: {exc}', flush=True)
         self.check_budget()
 
     def check_budget(self):
@@ -142,12 +158,8 @@ class LiveDraftRunner(LLMBattleRunner):
         return result
 
 
-def make_client(args):
-    if args.offline:
-        return None, None
-    response = httpx.get('https://openrouter.ai/api/v1/models', timeout=30)
-    response.raise_for_status()
-    catalog = {m['id']: m for m in response.json()['data']}
+def validate_catalog(catalog, args):
+    """Refuse models the free catalog does not show fit for this battle; return pricing."""
     pricing = {}
     for model in (args.alpha_model, args.beta_model):
         entry = catalog.get(model)
@@ -155,11 +167,29 @@ def make_client(args):
             raise ValueError(f'Model unavailable or lacks tools: {model}')
         if args.reasoning not in (entry.get('reasoning', {}).get('supported_efforts') or []):
             raise ValueError(f'Model does not advertise {args.reasoning} reasoning: {model}')
+        modalities = entry.get('architecture', {}).get('input_modalities') or []
+        if args.admiral_vision and 'image' not in modalities:
+            raise ValueError(f'Model does not advertise image input (--admiral-vision): {model}')
         pricing[model] = entry['pricing']
+    return pricing
+
+
+def make_client(args):
+    if args.offline:
+        return None, None
+    # Free metadata call: availability, tools, reasoning efforts, modalities, prices.
+    response = httpx.get('https://openrouter.ai/api/v1/models', timeout=30)
+    response.raise_for_status()
+    pricing = validate_catalog({m['id']: m for m in response.json()['data']}, args)
     budget = RequestBudget(args.spend_limit, pricing)
     client = CaptainClient(model=args.alpha_model, temperature=None, max_tokens=8192,
                            reasoning_effort=args.reasoning, timeout=180,
-                           session_id=f'ai-commanders-{args.name}')
+                           session_id=f'ai-commanders-{args.name}',
+                           api_key='mock-no-network' if args.mock_llm else None)
+    if args.mock_llm:
+        # Every completion is answered in-process; nothing leaves the machine.
+        client._client = httpx.Client(transport=mock_transport(
+            pricing, args.points, args.max_ships, args.seed))
     client.budget = budget
     return client, budget
 
@@ -170,6 +200,21 @@ async def run(args):
     if output.exists() or report_dir.exists():
         raise FileExistsError(f'Choose a new --name; {args.name} already exists')
     client, budget = make_client(args)
+    report_dir.mkdir(parents=True, exist_ok=True)
+    mode = 'offline' if args.offline else 'mock' if args.mock_llm else ''
+    ticker = BattleTicker(
+        log_path=report_dir / 'ticker.log',
+        spend=lambda: (budget.reported_usd, budget.committed_usd) if budget else (0.0, 0.0),
+        limit_usd=None if args.offline else args.spend_limit, mode=mode,
+        models={'alpha': 'heuristic', 'beta': 'heuristic'} if args.offline else
+        {'alpha': args.alpha_model, 'beta': args.beta_model})
+    vision_note = ('Admiral vision ON: tactical plot to both admirals each checkpoint.'
+                   if args.admiral_vision and not args.offline else
+                   'Offline: no LLM admirals, so --admiral-vision is inert (use --mock-llm).'
+                   if args.admiral_vision else 'Admiral vision off.')
+    ticker.start(args.name, args.points, args.max_ships, args.turns,
+                 dict(fleet_draft.SHIP_POINT_COSTS),
+                 f'Reasoning {args.reasoning}. {vision_note}')
     state = LiveDraftState()
     server = SpectatorServer(host='localhost', port=args.port)
     server.set_draft_manager(state)
@@ -186,6 +231,9 @@ async def run(args):
         return {
             'name': args.name, 'models': models, 'points_per_side': args.points,
             'max_ships': args.max_ships, 'turns': args.turns, 'reasoning': args.reasoning,
+            'mode': mode or 'paid', 'admiral_vision': bool(args.admiral_vision and not args.offline),
+            'images_sent': budget.images_reserved if budget else 0,
+            'point_costs': dict(fleet_draft.SHIP_POINT_COSTS),
             'output_tokens_per_call': 8192, 'seed': args.seed,
             'stage': state.stage, 'error': state.error, 'finished': finished,
             'checkpoint': runner.checkpoint_count if runner else 0,
@@ -218,13 +266,15 @@ async def run(args):
                 selection = run_admiral_draft(
                     audited, model, f'Admiral {model.split("/")[-1]}', faction, fleet_data,
                     budget=args.points, max_ships=args.max_ships, initial_distance_km=500,
-                    seed=args.seed, captain_model=model, allow_auto_fallback=False)
+                    seed=args.seed, captain_model=model, allow_auto_fallback=False,
+                    verbose=not args.quiet)
             finally:
                 write_json(report_dir / f'{faction}_draft_calls.json', {
                     'assets': recorder.recording.assets, 'events': [e.to_dict() for e in recorder.events]})
         with state.lock:
             state.drafts[faction] = selection
         write_json(report_dir / f'{faction}_draft.json', draft_summary_dict(selection))
+        ticker.draft(faction, draft_summary_dict(selection))
         return selection
 
     def battle():
@@ -237,7 +287,9 @@ async def run(args):
             fleets[faction] = draft_to_fleet_definition(
                 selections[faction], 500, captain_model='heuristic' if args.offline else model,
                 admiral_config=None if args.offline else AdmiralConfig(
-                    model=model, name=f'Admiral {model.split("/")[-1]}', temperature=None),
+                    model=model, name=f'Admiral {model.split("/")[-1]}', temperature=None,
+                    # Catalog-verified in make_client; overrides the family allowlist.
+                    vision=args.admiral_vision, image_input=True if args.admiral_vision else None),
                 temperature=None)
         # First decision follows a 30s opening coast. Forty decisions then
         # each receive 30s of execution: a maximum 1,230s recorded battle.
@@ -249,9 +301,10 @@ async def run(args):
             record_battle=True, record_sim_trace=True, use_notebooks=False)
         write_json(report_dir / 'fleet_config.json', asdict(fc))
         runner = LiveDraftRunner(
-            BattleConfig.from_fleet_config(fc, recording_dir=str(report_dir), verbose=True),
+            BattleConfig.from_fleet_config(fc, recording_dir=str(report_dir), verbose=not args.quiet),
             LLMCaptainConfig('Alpha', 'Alpha'), LLMCaptainConfig('Beta', 'Beta'), client, fc)
-        runner.configure_live(server, state, draft_recorders, output, args.sim_step_delay)
+        runner.configure_live(server, state, draft_recorders, output, args.sim_step_delay,
+                              ticker=ticker, vision_dir=report_dir / 'vision')
         server.set_live_source(runner)
         result = runner.run_battle(fleet_data)
         write_json(output.with_suffix('.draft.json'), {
@@ -281,6 +334,12 @@ async def run(args):
             runner.recorder.recording.provenance['billing'] = report()
             runner.save_progress()
         print(json.dumps(report()), flush=True)
+        try:
+            ticker.result(runner, result.winner if result else None,
+                          (result.reason if result else None) or state.error,
+                          str(output), client.stats.calls if client else 0)
+        except Exception as exc:  # noqa: BLE001 - the replay is already saved
+            print(f'[TICKER] result block failed: {type(exc).__name__}: {exc}', flush=True)
     if not args.no_linger:
         print('Spectator server remains available; the same link now replays the battle.', flush=True)
         await asyncio.Event().wait()
@@ -303,12 +362,29 @@ def main():
     parser.add_argument('--sim-step-delay', type=float, default=0.04)
     parser.add_argument('--name', default='live_draft_' + datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S'))
     parser.add_argument('--offline', action='store_true', help='Free automatic drafts and heuristic captains for smoke testing')
+    parser.add_argument('--mock-llm', action='store_true',
+                        help='Free smoke test of the paid path: real catalog checks, budget and '
+                             'admiral vision, but every completion is answered in-process')
+    parser.add_argument('--admiral-vision', action='store_true',
+                        help='Attach the tactical-plot image to each admiral checkpoint call; '
+                             'refused unless both models advertise image input')
+    parser.add_argument('--quiet', action='store_true',
+                        help='Runner verbose logging off; stdout carries the ticker blocks')
     parser.add_argument('--no-linger', action='store_true', help='Close HTTP server after the battle')
     args = parser.parse_args()
+    if args.offline and args.mock_llm:
+        parser.error('--offline and --mock-llm are exclusive')
+    if args.admiral_vision and not args.offline:
+        try:
+            import matplotlib  # noqa: F401 - the tactical plot renderer
+        except ImportError:
+            parser.error('--admiral-vision needs matplotlib: uv sync --locked --all-extras')
     if args.turns < 1 or args.points < 1 or args.max_ships < 1 or args.sim_step_delay < 0:
         parser.error('Points, ships and turns must be positive; delay must be nonnegative')
     if Path(args.name).name != args.name or args.name in ('.', '..'):
         parser.error('--name must be a filename stem')
+    # Text followers read stdout through pipes/files: flush every line.
+    sys.stdout.reconfigure(line_buffering=True)
     asyncio.run(run(args))
 
 

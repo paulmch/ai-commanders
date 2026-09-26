@@ -88,3 +88,66 @@ def test_budget_denial_stops_live_runner():
 def test_spectator_routes_are_read_only():
     app = SpectatorServer().build_app()
     assert {route.method for route in app.router.routes()} <= {'GET', 'HEAD'}
+
+
+def test_catalog_check_refuses_vision_without_image_input_and_unadvertised_effort():
+    from scripts.run_live_draft_battle import validate_catalog
+    def entry(modalities, efforts=('max', 'high', 'low')):
+        return {'supported_parameters': ['tools', 'reasoning'],
+                'reasoning': {'supported_efforts': list(efforts)},
+                'architecture': {'input_modalities': list(modalities)},
+                'pricing': {'prompt': '0.000001', 'completion': '0.000002'}}
+    args = SimpleNamespace(alpha_model='a/vision', beta_model='b/text', reasoning='high',
+                           admiral_vision=True)
+    catalog = {'a/vision': entry(['text', 'image']), 'b/text': entry(['text'])}
+    with pytest.raises(ValueError, match='image input.*b/text'):
+        validate_catalog(catalog, args)
+    args.admiral_vision = False
+    assert set(validate_catalog(catalog, args)) == {'a/vision', 'b/text'}
+    args.reasoning = 'medium'
+    with pytest.raises(ValueError, match='medium reasoning'):
+        validate_catalog(catalog, args)
+
+
+def test_ticker_prints_greppable_checkpoint_and_result_blocks(tmp_path):
+    import io
+    import re
+    from src.llm.battle_ticker import BattleTicker
+    state = LiveDraftState()
+    state.drafts = {f: FleetDraft(faction=f, budget=14, points_spent=14,
+                                  ships=name_drafted_ships(['frigate', 'frigate'], f))
+                    for f in ('alpha', 'beta')}
+    fc = BattleFleetConfig(
+        battle_name='Ticker check',
+        alpha_fleet=draft_to_fleet_definition(state.drafts['alpha'], 300),
+        beta_fleet=draft_to_fleet_definition(state.drafts['beta'], 300),
+        time_limit_s=90, max_checkpoints=2, decision_interval_s=30, seed=3,
+        record_battle=True, record_sim_trace=True, personality_selection=False)
+    runner = LiveDraftRunner(BattleConfig.from_fleet_config(fc, verbose=False, recording_dir=str(tmp_path)),
+                             LLMCaptainConfig('A', 'A'), LLMCaptainConfig('B', 'B'), None, fc)
+    stream = io.StringIO()
+    ticker = BattleTicker(log_path=tmp_path / 'ticker.log', spend=lambda: (0.84, 0.84),
+                          limit_usd=4.5, models={'alpha': 'x/model-a', 'beta': 'y/model-b'},
+                          stream=stream)
+    for faction, draft in state.drafts.items():
+        ticker.draft(faction, {'budget': 14, 'points_spent': 14, 'formation_name': 'line',
+                               'ships': [{'ship_name': s.ship_name, 'ship_type': s.ship_type,
+                                          'cost': 7} for s in draft.ships]})
+    runner.configure_live(Mock(), state, {}, tmp_path / 'live.json', 0, ticker=ticker)
+    result = runner.run_battle(load_fleet_data())
+    ticker.result(runner, result.winner, result.reason, 'live.json', 0)
+    log = (tmp_path / 'ticker.log').read_text()
+    assert log == stream.getvalue()
+    blocks = re.split(r'(?m)^(?==== )', log)[1:]
+    headers = [b.splitlines()[0] for b in blocks]
+    assert headers[:2] == ['=== DRAFT ALPHA | model-a | 14/14 pts | spend $0.84/$4.50 ===',
+                           '=== DRAFT BETA | model-b | 14/14 pts | spend $0.84/$4.50 ===']
+    assert headers[2:4] == ['=== CP 1 | t=30s | spend $0.84/$4.50 ===',
+                            '=== CP 2 | t=60s | spend $0.84/$4.50 ===']
+    assert headers[4].startswith('=== RESULT | t=90s | after CP 2 |')
+    assert all(len(b.strip().splitlines()) <= 12 for b in blocks)
+    cp1 = blocks[2]
+    assert re.search(r'^ALPHA model-a: 2/2 alive, hull 100% \| \S+ FF 100% \| \S+ FF 100%$', cp1, re.M)
+    assert re.search(r'^Fire: A \d+ slugs/\d+ hit, 0 torps/0 impact, PD downed 0 torps ; B ', cp1, re.M)
+    assert 'A admiral: (no admiral - heuristic captains)' in cp1
+    assert 'Recording: live.json' in blocks[4]

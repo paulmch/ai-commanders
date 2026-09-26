@@ -48,6 +48,10 @@ class AdmiralConfig:
     # prompt (docs/admiral_vision.md). Only takes effect for vision-capable
     # models with matplotlib installed; silently text-only otherwise.
     vision: bool = False
+    # Image-input capability verified against the provider catalog (e.g.
+    # OpenRouter's architecture.input_modalities). None falls back to the
+    # conservative model-family allowlist in admiral_view.is_vision_model.
+    image_input: Optional[bool] = None
     # These are set at runtime by the Admiral
     name: Optional[str] = None
     personality: Optional[str] = None

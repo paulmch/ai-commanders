@@ -706,12 +706,20 @@ def run_admiral_draft(
         {"role": "user", "content": "Buy your fleet now with select_fleet."},
     ]
     flat: Optional[List[str]] = None
+    # Some provider endpoints reject a forced tool call (DeepSeek's own API,
+    # Claude with thinking on Bedrock). A rejected "required" is asked again
+    # once with "auto"; the prompts already insist on the tool.
+    tool_choice = "required"
     for attempt in range(3):
         try:
             calls = client.decide_with_tools(
                 messages, [SELECT_FLEET_TOOL], model=model,
-                tool_choice="required")
+                tool_choice=tool_choice)
         except LLMCallError as e:
+            if tool_choice == "required" and not e.retryable:
+                print(f"[DRAFT {faction}] forced tool call rejected ({e}); retrying with tool_choice=auto")
+                tool_choice = "auto"
+                continue
             print(f"[DRAFT {faction}] selection call failed: {e}")
             break
         select = next((c for c in calls if c.name == "select_fleet"), None)
@@ -757,8 +765,12 @@ def run_admiral_draft(
         try:
             calls = client.decide_with_tools(
                 form_messages, [SET_FORMATION_TOOL], model=model,
-                tool_choice="required")
+                tool_choice=tool_choice)
         except LLMCallError as e:
+            if tool_choice == "required" and not e.retryable:
+                print(f"[DRAFT {faction}] forced tool call rejected ({e}); retrying with tool_choice=auto")
+                tool_choice = "auto"
+                continue
             print(f"[DRAFT {faction}] formation call failed: {e}")
             break
         form = next((c for c in calls if c.name == "set_formation"), None)

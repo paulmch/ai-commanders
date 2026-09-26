@@ -65,7 +65,17 @@ Implemented in `src/llm/admiral_view.py` + hooks in `battle_runner.py` and
    `--admiral-vision` CLI flag on `run_llm_battle.py`; draft mode enables
    it by default), (b) `is_vision_model()` - a conservative model-family
    allowlist, and (c) matplotlib being installed (`viz` extra). Any miss
-   falls back silently to text-only.
+   falls back silently to text-only. `AdmiralConfig.image_input` overrides
+   (b) with a catalog-verified answer: `scripts/run_live_draft_battle.py
+   --admiral-vision` refuses to start unless OpenRouter lists `image` in
+   both models' `input_modalities`, then sets it, so vision is never
+   silently dropped in a paid live battle. Its frames land in
+   `data/recordings/<name>/vision/`.
+5. Budgeted battles (`RequestBudget`, `src/llm/spending.py`) reserve each
+   image as prompt tokens from its pixel size - Anthropic ~w*h/750 capped
+   at 4784 (the 2576 px high-res limit), other providers at least 3,000 -
+   priced at the higher of the prompt and advertised `image` rate. The
+   base64 bytes never count as text.
 
 Resolved questions:
 
