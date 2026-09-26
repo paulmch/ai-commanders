@@ -148,7 +148,9 @@ torpedo-armed hulls; all others fight with coilguns.
   low on software GL (no MSAA/god rays/dust) - pass `--gfx high` for beauty shots.
 - `--trace` recordings carry optional per-ship frame fields: `acc`, `omega`,
   `alpha`, `turn` ("tv"|"rcs"), `evade`, `tgt`, and `plan` {t_cp, dt, path,
-  sigma} (predicted path to the next checkpoint); header `decision_interval_s`.
+  sigma, fwd, mode, stale?} (predicted path to the next checkpoint; sigma is
+  calibrated per evasion mode; checkpoint frames are re-predicted after the
+  new orders apply, `stale` marks them until then); header `decision_interval_s`.
   Every consumer (TrajectoryPredictor, Rcs) must fall back gracefully on old
   recordings without them. Prediction must never draw from the battle RNG or
   change results - `tests/test_trajectory_prediction.py` pins seeded on/off

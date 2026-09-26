@@ -64,7 +64,7 @@ Open **[the GLM–Luna replay](http://localhost:5173/?recording=/recordings/glm_
 
 The viewer includes nine procedural hull designs in faction paint with hull codes and blinking navigation lights, turrets that track and recoil, point-defense ball mounts, opening torpedo doors, RCS jets that fire as the ships turn, fusion exhaust, white-hot coilgun tracers, detailed torpedoes, pulsed point-defense beams, and hits that leave cooling craters, venting breaches and smoke. Ships can become drifting, burning hulks before they tear apart. Everything, including destruction, reconstructs correctly when you scrub backward.
 
-**Trajectory tracks** (**T**) show where each ship will be at the next checkpoint. Recordings made with `--trace` store a prediction for every frame: a movement-only shadow of the simulation flies each ship's own guidance forward to the checkpoint without touching the battle's dice. During evasion the ship keeps jinking, so the predicted checkpoint marker drifts from frame to frame, and its rings show the expected spread. In replays, "predicted + actual" also draws the path the ship really flew. Older recordings fall back to a constant-acceleration projection.
+**Trajectory tracks** (**T**) show where each ship will be at the next checkpoint. Recordings made with `--trace` store a prediction for every frame: a movement-only shadow of the simulation flies each ship's own guidance forward to the checkpoint without touching the battle's dice. Evasion keeps nudging the ship, so the prediction is recomputed every second and the checkpoint marker wanders. The focused ship shows this directly: a dotted trail of where earlier frames predicted the checkpoint, rings for the 1σ/2σ spread, and a label such as "T+8s ±35 m". The trail and rings are drawn at the same exaggeration as the hulls so metre-scale jinks stay visible. The spread is calibrated per evasion mode, and reactive modes (run, present, brace) get a low-confidence style. In replays, "predicted + actual" also draws the path the ship really flew; a live checkpoint still waiting for orders shows a provisional marker. Older recordings fall back to a constant-acceleration projection.
 
 ![A battlecruiser's reactor breach throwing glowing debris and plasma into space](docs/images/readme/reactor-breach.png)
 
@@ -264,7 +264,7 @@ npm test
 npm run build
 ```
 
-The September 6 pass verified **1,695 Python tests and 15 viewer tests**, plus the production viewer build, seeded simulation comparisons, and live/replay browser checks.
+The September 26 pass verified **1,846 Python tests and 92 viewer tests** (CI now runs both), plus the production viewer build, seeded prediction on/off comparisons, and live/replay browser checks.
 
 For screenshots, install Playwright's browser once, stage a recording as above, then capture a frame:
 
