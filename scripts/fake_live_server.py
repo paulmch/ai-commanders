@@ -140,6 +140,14 @@ class FakeLiveServer:
         for ship_id, s1 in (f1.get("ships") or {}).items():
             if s1.get("destroyed") or s1.get("dying"):
                 continue
+            # Recordings with trajectory prediction carry the engine's own
+            # look-ahead for this frame: serve it as the live server does.
+            plan = s1.get("plan")
+            if plan and plan.get("path"):
+                t_cp = plan.get("t_cp", t_cp)
+                ships[ship_id] = {"path": plan["path"], "checkpoint_pos": plan["path"][-1],
+                                  "sigma": plan.get("sigma", 0.0), "dt": plan.get("dt")}
+                continue
             p1, v1 = s1["pos"], s1["vel"]
             s0 = (f0.get("ships") or {}).get(ship_id)
             if s0 and not s0.get("destroyed") and dt_f > 0:
@@ -150,7 +158,7 @@ class FakeLiveServer:
             for t in ts:
                 d = t - f1["t"]
                 path.append([p1[k] + v1[k] * d + 0.5 * a[k] * d * d for k in range(3)])
-            ships[ship_id] = {"path": path, "checkpoint_pos": path[-1]}
+            ships[ship_id] = {"path": path, "checkpoint_pos": path[-1], "sigma": 0.0}
 
         return json_response({"t": round(cur, 1), "t_checkpoint": t_cp, "ships": ships})
 
@@ -169,12 +177,15 @@ def main():
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--draft-seconds", type=float, default=0.0,
                         help="Serve a synthetic draft phase for N wall-clock seconds first")
-    parser.add_argument("--interval", type=float, default=30.0,
-                        help="Decision interval in sim seconds (default 30)")
+    parser.add_argument("--interval", type=float, default=None,
+                        help="Decision interval in sim seconds (default: the "
+                             "recording's decision_interval_s, else 30)")
     args = parser.parse_args()
 
     with open(args.recording) as f:
         recording = json.load(f)
+    if args.interval is None:
+        args.interval = float(recording.get("decision_interval_s") or 30.0)
 
     server = FakeLiveServer(recording, args.speed, args.draft_seconds, args.interval)
     app = web.Application()

@@ -84,6 +84,18 @@ class EventType(str, Enum):
     WEAPON_OVERHEAT = "weapon_overheat"
 
 
+# Optional per-ship sim_trace fields passed through verbatim when present.
+_TRACE_OPTIONAL_SHIP_KEYS = ("acc", "omega", "alpha", "turn", "evade", "tgt", "plan")
+
+
+def _interval_s(config: Any) -> Optional[float]:
+    """A config's decision_interval_s when it is a real number, else None."""
+    value = getattr(config, 'decision_interval_s', None)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return None
+
+
 @dataclass
 class BattleEvent:
     """A single recorded battle event."""
@@ -146,6 +158,8 @@ class BattleRecording:
     # Simulation trace - per-step tracking of all objects
     # Each frame: {"t": float, "ships": {...}, "projectiles": [...], "torpedoes": [...]}
     sim_trace: List[Dict[str, Any]] = field(default_factory=list)
+    # Seconds between decision checkpoints (sim_trace plans end on the next one)
+    decision_interval_s: Optional[float] = None
 
     # Result
     winner: Optional[str] = None
@@ -213,6 +227,7 @@ class BattleRecorder:
             time_limit_s=battle_config.time_limit_s,
             max_checkpoints=battle_config.max_checkpoints,
             unlimited_mode=getattr(battle_config, 'unlimited_mode', False),
+            decision_interval_s=_interval_s(battle_config),
         )
 
         # Record ship specs if available
@@ -251,6 +266,7 @@ class BattleRecorder:
             initial_distance_km=battle_config.initial_distance_km,
             time_limit_s=battle_config.time_limit_s,
             max_checkpoints=battle_config.max_checkpoints,
+            decision_interval_s=_interval_s(fleet_config) or _interval_s(battle_config),
         )
 
         # Record alpha fleet
@@ -1234,6 +1250,11 @@ class BattleRecorder:
                 "hull": ship.get("hull_pct", 100.0),
                 "armor": ship.get("armor", {}),
             }
+            # Optional enrichment (src/trajectory_prediction.TraceEnricher),
+            # already rounded by the producer.
+            for key in _TRACE_OPTIONAL_SHIP_KEYS:
+                if key in ship:
+                    frame["ships"][ship_id][key] = ship[key]
 
         # Record projectile states (coilgun slugs)
         for proj in projectiles:

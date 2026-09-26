@@ -244,8 +244,12 @@ SCENARIOS = {
 }
 
 
-def run_scenario(name: str) -> Optional[str]:
+def run_scenario(name: str, recording_dir: Optional[str] = None,
+                 predictions: bool = True) -> Optional[str]:
     config, alpha_cfg, beta_cfg, alpha_script, beta_script = SCENARIOS[name]()
+    if recording_dir:
+        config.recording_dir = recording_dir
+    config.record_predictions = predictions
     fleet_data = load_fleet_data()
 
     runner = ScriptedBattleRunner(
@@ -268,11 +272,15 @@ def run_scenario(name: str) -> Optional[str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("scenario", choices=[*SCENARIOS, "all"])
+    parser.add_argument("--recording-dir", default=None,
+                        help="Where to save recordings (default data/recordings)")
+    parser.add_argument("--no-predictions", action="store_true",
+                        help="Skip the per-frame predicted path (sim_trace 'plan')")
     args = parser.parse_args()
 
     names = list(SCENARIOS) if args.scenario == "all" else [args.scenario]
     for name in names:
-        run_scenario(name)
+        run_scenario(name, args.recording_dir, predictions=not args.no_predictions)
     return 0
 
 
