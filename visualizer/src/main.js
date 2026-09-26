@@ -468,6 +468,8 @@ class BattleVisualizer {
           state.radiatorsExtended = this.loader.getRadiatorStateAt(shipId, currentPlaybackTime);
           this.scene.updateShip(shipId, state);
         }
+        // RCS attitude jets, fired from the recorded rotation around this time
+        this.scene.rcs.update(this.scene.ships, this.loader.simTrace, currentPlaybackTime);
 
         // Update projectiles
         const activeProjectileIds = new Set();

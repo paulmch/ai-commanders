@@ -7,6 +7,7 @@ import { createTorch } from './render/Torch.js';
 import { Ribbon } from './render/Trails.js';
 import { Blast, ShipDestruction } from './render/Explosion.js';
 import { getGlowTexture } from './render/Textures.js';
+import { RcsSystem } from './render/Rcs.js';
 
 /**
  * SceneManager - owns the Three.js scene, camera, renderer and every
@@ -105,6 +106,7 @@ export class SceneManager {
       now: () => this.currentTime,
       spawnBlast: (o) => this._spawnBlast({ ...o, category: 'destruction' })
     };
+    this.rcs = new RcsSystem(this.fxCtx);   // RCS attitude jets (render/Rcs.js)
 
     this._updatePixelWorld();
     this.warmUp();
