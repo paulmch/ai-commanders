@@ -206,6 +206,21 @@ function easeOut(t, k = 3) { return 1 - Math.exp(-t * k); }
 const _dq = new THREE.Quaternion();
 const _dv = new THREE.Vector3();
 const WRECK_LIFE = 40;       // big hull sections and the debris cloud linger
+/** Dark coast before the reactor lets go (non-reactor kill, no sim death spiral). */
+export const WRECK_DRIFT_S = 5.0;
+
+/**
+ * Battle time at which the latest destruction sequence in `deathInfo`
+ * (BattleLoader.buildDeathInfo) has fully played out: drift + wreck life.
+ */
+export function latestWreckEnd(deathInfo) {
+  let end = -Infinity;
+  for (const d of Object.values(deathInfo || {})) {
+    const drift = d.reactorCause || d.wasDying ? 0 : WRECK_DRIFT_S;
+    end = Math.max(end, (d.time ?? 0) + drift + WRECK_LIFE);
+  }
+  return end;
+}
 const SHARD_FADE = [17, 22]; // small chunks fade out
 
 // ---------------------------------------------------------------------------

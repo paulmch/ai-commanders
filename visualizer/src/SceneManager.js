@@ -1,12 +1,13 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { Environment } from './render/Environment.js';
+import { Environment, disposeTree } from './render/Environment.js';
+import { getGraphicsSettings } from './render/Quality.js';
 import { PostFX } from './render/PostFX.js';
-import { buildHull, buildShipMaterials } from './render/Hulls.js';
+import { buildHull, buildShipMaterials, ACCENT_GLOW } from './render/Hulls.js';
 import { updateHullDetails } from './render/Hulls.js';
 import { createTorch } from './render/Torch.js';
 import { Ribbon } from './render/Trails.js';
-import { Blast, ShipDestruction } from './render/Explosion.js';
+import { Blast, ShipDestruction, WRECK_DRIFT_S } from './render/Explosion.js';
 import { DamageFX } from './render/DamageFX.js';
 import { getGlowTexture } from './render/Textures.js';
 import { RcsSystem } from './render/Rcs.js';
@@ -20,21 +21,15 @@ import { Projectiles } from './render/Projectiles.js';
  * exaggerated (a corvette is ~4 units long) so a fleet reads at the
  * hundreds-of-km ranges the sim fights at.
  */
-const _Z = new THREE.Vector3(0, 0, 1);
-
 export class SceneManager {
   constructor(canvas) {
     this.canvas = canvas;
     this.ships = new Map();
-    this.projectiles = new Map();
-    this.torpedoes = new Map();
-    this.beams = new Map();
     this.blasts = [];               // Blast instances, tagged with a category
     this.flares = [];               // lightweight sprite pings
     this.destructionEffects = [];   // ShipDestruction instances
     this.destroyedShips = new Set();
     this.dyingPopTimes = new Map();
-    this.predictedPaths = new Map();
     this.deathInfo = {};
 
     this.SCALE = 1 / 1000;
@@ -115,7 +110,39 @@ export class SceneManager {
     this.weapons = new Projectiles(this);
     this._updatePixelWorld();
     this.warmUp();
-    window.addEventListener('resize', () => this.onResize());
+    this._onResize = () => this.onResize();
+    window.addEventListener('resize', this._onResize);
+  }
+
+  /**
+   * Tear the whole viewer down before a new recording is loaded: every
+   * subsystem, every GPU resource still in the graph, the listeners and
+   * the renderer itself (the next SceneManager reuses the canvas).
+   */
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    window.removeEventListener('resize', this._onResize);
+    this.controls.dispose();
+    this.clearHitEffects();
+    this.clearSmallEffects();
+    this.clearDestructionEffects();
+    this._clearBlasts('damage');
+    this.tracks?.dispose();
+    this.weapons.dispose();
+    this.rcs.dispose();
+    this.damageFX.dispose();
+    this.environment.dispose();
+    this.postfx.dispose();
+    for (const ship of this.ships.values()) {
+      for (const t of ship.userData.torches || []) t.dispose();
+    }
+    disposeTree(this.scene);   // hulls, lights, rings: whatever is left
+    this.scene.clear();
+    this.ships.clear();
+    getGraphicsSettings(this.renderer).dispose();
+    this.renderer.renderLists.dispose();
+    this.renderer.dispose();
   }
 
   /** Faint concentric range rings every 100 km - a tactical scale cue. */
@@ -255,7 +282,6 @@ export class SceneManager {
 
   _extinguish(ship) {
     for (const t of ship.userData.torches || []) t.update(0, this.elapsed);
-    for (const nl of ship.userData.navLights || []) nl.sprite.material.opacity = 0;
   }
 
   _setDyingVents(ship, on) {
@@ -341,45 +367,7 @@ export class SceneManager {
         win *= 0.55 + 0.45 * (flick > (state.dying ? 0.2 : 0.55) ? 0.2 : 1.0);
       }
       mats.window.emissiveIntensity = win;
-      mats.accent.emissiveIntensity = state.dying ? 0.3 : 1.6 * (0.5 + 0.5 * hull);
-    }
-
-    // Nav lights: steady running lights, strobes on the masts
-    for (const nl of ud.navLights || []) {
-      if (nl.strobe) {
-        const period = nl.period * 1.8;
-        const ph = ((this.elapsed + nl.phase + ud.navPhase) % period) / period;
-        nl.sprite.material.opacity = state.dying ? 0 : (ph < 0.02 ? 0.35 : ph < 0.035 ? 0.15 : 0.03);
-      } else {
-        nl.sprite.material.opacity = state.dying ? 0.15 : 0.85;
-      }
-    }
-
-    // Turrets track the nearest enemy hull, slewing at a finite rate
-    const rigs = ud.turrets;
-    if (rigs && rigs.length) {
-      let best = null, bd = Infinity;
-      for (const o of this.ships.values()) {
-        if (o === ship || !o.visible || o.userData.faction === ud.faction) continue;
-        const d = o.position.distanceToSquared(ship.position);
-        if (d < bd) { bd = d; best = o; }
-      }
-      const tl = best ? ship.worldToLocal(best.position.clone()) : null;
-      const slew = 1 - Math.exp(-dt * 2.0);
-      for (const rig of rigs) {
-        let ty = 0, tp = 0.12;
-        if (tl) {
-          const v = tl.clone().sub(rig.mount.position).applyAxisAngle(_Z, -rig.mount.rotation.z);
-          ty = Math.atan2(v.x, v.z);
-          tp = THREE.MathUtils.clamp(Math.atan2(v.y, Math.hypot(v.x, v.z)), -0.04, 1.45);
-        }
-        let dy = ty - rig.yawAngle;
-        dy = Math.atan2(Math.sin(dy), Math.cos(dy));
-        rig.yawAngle += dy * slew;
-        rig.pitchAngle += (tp - rig.pitchAngle) * slew;
-        rig.yaw.rotation.y = rig.yawAngle;
-        rig.pitch.rotation.x = -rig.pitchAngle;
-      }
+      mats.accent.emissiveIntensity = (state.dying ? 0.19 : 0.5 + 0.5 * hull) * ACCENT_GLOW;
     }
 
     // Torches follow a smoothed throttle
@@ -392,239 +380,8 @@ export class SceneManager {
   }
 
   // ===========================================================================
-  // Projectiles (coilgun slugs)
-  // ===========================================================================
-  updateProjectile(proj) {
-    let p = this.projectiles.get(proj.id);
-    if (!p) {
-      // A coilgun slug is a tracer: a short hot streak along its velocity
-      // with a faint tail - deliberately unlike a torpedo's motor and trail
-      const group = new THREE.Group();
-      const core = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: getGlowTexture(), color: new THREE.Color(2.2, 2.0, 1.4),
-        transparent: true, blending: THREE.AdditiveBlending, depthWrite: false
-      }));
-      core.scale.setScalar(0.3);
-      core.renderOrder = 24;
-      group.add(core);
-      const tracer = new Ribbon({
-        maxPoints: 2, width: 0.055, taper: 0.5, head: [3.2, 2.8, 1.6], tail: [1.6, 1.0, 0.3],
-        intensity: 1.0, fadePow: 0.7, core: 8, halo: 0.2, maxWidthPx: 2
-      });
-      const trail = new Ribbon({
-        maxPoints: 24, width: 0.04, taper: 0.1, head: [1.4, 1.0, 0.4], tail: [0.5, 0.15, 0.02],
-        intensity: 0.6, fadePow: 1.8, minStep: 0.05, maxAge: 0.5, maxWidthPx: 1.5
-      });
-      this.scene.add(tracer.mesh);
-      this.scene.add(trail.mesh);
-      this.scene.add(group);
-      p = { group, core, tracer, trail, dir: new THREE.Vector3(0, 0, 1) };
-      this.projectiles.set(proj.id, p);
-    }
-    const pos = new THREE.Vector3(proj.position[0] * this.SCALE, proj.position[1] * this.SCALE, proj.position[2] * this.SCALE);
-    p.group.position.copy(pos);
-    if (proj.velocity) {
-      const v = new THREE.Vector3(proj.velocity[0], proj.velocity[1], proj.velocity[2]);
-      if (v.lengthSq() > 1e-6) p.dir.copy(v.normalize());
-    }
-    p.tracer.setPoints([pos, pos.clone().addScaledVector(p.dir, -1.3)]);
-    if (proj.velocity) {
-      const speed = Math.hypot(proj.velocity[0], proj.velocity[1], proj.velocity[2]) * this.SCALE;
-      p.trail.minStep = Math.max(0.05, speed * p.trail.maxAge / (p.trail.max - 4));
-    }
-    p.trail.push(pos, this.currentTime);
-    if (proj.pdEngaged) {
-      // under laser: ablating, hotter and redder
-      p.core.material.color.setRGB(3.0, 1.2, 0.5);
-      p.core.scale.setScalar(0.45 + 0.1 * Math.sin(this.elapsed * 6));
-    } else {
-      p.core.material.color.setRGB(2.2, 2.0, 1.4);
-      p.core.scale.setScalar(0.3);
-    }
-  }
-
-  cleanupProjectiles(activeIds) {
-    for (const [id, p] of this.projectiles) {
-      if (activeIds.has(id)) continue;
-      this.scene.remove(p.group);
-      this.scene.remove(p.trail.mesh);
-      this.scene.remove(p.tracer.mesh);
-      p.core.material.dispose();
-      p.trail.dispose();
-      p.tracer.dispose();
-      this.projectiles.delete(id);
-    }
-  }
-
-  // ===========================================================================
-  // Torpedoes
-  // ===========================================================================
-  createTorpedoMesh(torp) {
-    const group = new THREE.Group();
-    const isAlpha = (torp.source || '').startsWith('alpha');
-    const accent = isAlpha ? 0x2ad2ff : 0xff8a3c;
-    const body = new THREE.MeshStandardMaterial({ color: 0x8b9099, metalness: 0.85, roughness: 0.38 });
-    const dark = new THREE.MeshStandardMaterial({ color: 0x23262c, metalness: 0.8, roughness: 0.5 });
-    const stripe = new THREE.MeshStandardMaterial({ color: accent, emissive: accent, emissiveIntensity: 1.4, roughness: 0.4 });
-
-    const hull = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.24, 1.7, 12), body);
-    hull.rotation.x = Math.PI / 2;
-    group.add(hull);
-    const nose = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.7, 12), body);
-    nose.rotation.x = Math.PI / 2;
-    nose.position.z = 1.2;
-    group.add(nose);
-    const band = new THREE.Mesh(new THREE.CylinderGeometry(0.215, 0.215, 0.12, 12), stripe);
-    band.rotation.x = Math.PI / 2;
-    band.position.z = 0.55;
-    group.add(band);
-    const tail = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.16, 0.35, 12), dark);
-    tail.rotation.x = Math.PI / 2;
-    tail.position.z = -1.0;
-    group.add(tail);
-    for (let i = 0; i < 4; i++) {
-      const fin = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.34, 0.5), dark);
-      fin.position.set(0, 0.3, -0.75);
-      const pivot = new THREE.Group();
-      pivot.add(fin);
-      pivot.rotation.z = (i / 4) * Math.PI * 2;
-      group.add(pivot);
-    }
-    const light = this.tryPointLight(0xffb070, 0, 40);
-    const torch = createTorch({ radius: 0.28, length: 7, light, tint: 'chemical' });
-    torch.group.position.z = -1.2;
-    group.add(torch.group);
-
-    // Faint faction diamond at constant screen size so a torpedo stays
-    // identifiable at range, where its body is sub-pixel
-    const marker = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: this.getDiamondTexture(), color: accent, transparent: true, opacity: 0.32,
-      sizeAttenuation: false, depthTest: false, depthWrite: false, blending: THREE.AdditiveBlending
-    }));
-    marker.scale.set(0.013, 0.013, 1);
-    marker.renderOrder = 50;
-    group.add(marker);
-
-    const c = new THREE.Color(accent);
-    const trail = new Ribbon({
-      maxPoints: 64, width: 0.16, taper: 0.08, head: [c.r * 1.8, c.g * 1.8, c.b * 1.8],
-      tail: [c.r * 0.5, c.g * 0.4, c.b * 0.4], intensity: 0.75, fadePow: 1.6,
-      core: 5, halo: 0.18, maxWidthPx: 2.5, minStep: 0.08, maxAge: 2.5
-    });
-    group.userData = {
-      torch, light, trail, stripe, body, accent, marker, phase: Math.random() * Math.PI * 2, tumble: new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize()
-    };
-    return group;
-  }
-
-  updateTorpedo(torp) {
-    let t = this.torpedoes.get(torp.id);
-    if (!t) {
-      t = this.createTorpedoMesh(torp);
-      this.scene.add(t);
-      this.scene.add(t.userData.trail.mesh);
-      this.torpedoes.set(torp.id, t);
-    }
-    const pos = new THREE.Vector3(torp.position[0] * this.SCALE, torp.position[1] * this.SCALE, torp.position[2] * this.SCALE);
-    t.position.copy(pos);
-    const ud = t.userData;
-
-    // Retargeting ping + lock line (data-driven from the trace)
-    if (ud.currentTargetId === undefined) {
-      ud.currentTargetId = torp.target;
-    } else if (torp.target && torp.target !== ud.currentTargetId) {
-      ud.currentTargetId = torp.target;
-      ud.retargetAt = this.currentTime;
-      this.spawnSmallEffect([pos.x / this.SCALE, pos.y / this.SCALE, pos.z / this.SCALE], this.currentTime, 'retarget');
-    }
-    this._updateRetargetLine(t, torp, pos);
-
-    if (!torp.disabled && torp.velocity) {
-      const v = new THREE.Vector3(torp.velocity[0], torp.velocity[1], torp.velocity[2]);
-      if (v.lengthSq() > 0) t.lookAt(pos.clone().add(v.normalize()));
-    } else {
-      t.rotateOnAxis(ud.tumble, (this.delta || 0.016) * 1.1);
-    }
-
-    if (torp.disabled) {
-      ud.stripe.emissiveIntensity = 0.15;
-      ud.marker.material.opacity = 0.1;
-      ud.torch.update(0, this.elapsed);
-    } else {
-      ud.marker.material.opacity = 0.32;
-      ud.stripe.emissiveIntensity = 1.4;
-      ud.torch.update(torp.thrusting ? 0.9 : 0, this.elapsed);
-    }
-    // Exhaust dissipates after burnout or a seeker kill. Existing samples
-    // continue to age while the unpowered body coasts away.
-    const speed = torp.velocity ? Math.hypot(torp.velocity[0], torp.velocity[1], torp.velocity[2]) * this.SCALE : 10;
-    ud.trail.minStep = Math.max(0.05, speed * ud.trail.maxAge / (ud.trail.max - 4));
-    ud.trail.push(pos, this.currentTime, !torp.disabled && torp.thrusting);
-  }
-
-  _updateRetargetLine(torpedo, torp, pos) {
-    const RETARGET_LINE_S = 4.0;
-    const age = this.currentTime - (torpedo.userData.retargetAt ?? -Infinity);
-    const targetPos = (age >= 0 && age <= RETARGET_LINE_S) ? this.getEntityPosition('ship', torp.target) : null;
-    let line = torpedo.userData.retargetLine;
-    if (!targetPos) {
-      if (line) line.visible = false;
-      return;
-    }
-    if (!line) {
-      const geom = new THREE.BufferGeometry();
-      geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
-      line = new THREE.Line(geom, new THREE.LineBasicMaterial({
-        color: 0x66ffee, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false
-      }));
-      torpedo.userData.retargetLine = line;
-      this.scene.add(line);
-    }
-    const arr = line.geometry.attributes.position.array;
-    arr[0] = pos.x; arr[1] = pos.y; arr[2] = pos.z;
-    arr[3] = targetPos.x; arr[4] = targetPos.y; arr[5] = targetPos.z;
-    line.geometry.attributes.position.needsUpdate = true;
-    line.material.opacity = 0.55 * (1 - age / RETARGET_LINE_S);
-    line.visible = true;
-  }
-
-  cleanupTorpedoes(activeIds) {
-    for (const [id, t] of this.torpedoes) {
-      if (activeIds.has(id)) continue;
-      this.scene.remove(t);
-      this.scene.remove(t.userData.trail.mesh);
-      t.userData.trail.dispose();
-      t.userData.torch.dispose();
-      t.userData.marker.material.dispose();
-      if (t.userData.retargetLine) {
-        this.scene.remove(t.userData.retargetLine);
-        t.userData.retargetLine.geometry.dispose();
-        t.userData.retargetLine.material.dispose();
-      }
-      this.freePointLight(t.userData.light);
-      this.torpedoes.delete(id);
-    }
-  }
-
-  // ===========================================================================
   // Predicted paths (live mode)
   // ===========================================================================
-  getDiamondTexture() {
-    if (this._diamondTexture) return this._diamondTexture;
-    const size = 64;
-    const canvas = document.createElement('canvas');
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext('2d');
-    ctx.translate(size / 2, size / 2);
-    ctx.rotate(Math.PI / 4);
-    ctx.strokeStyle = 'rgba(255,255,255,1)';
-    ctx.lineWidth = 5;
-    ctx.strokeRect(-15, -15, 30, 30);
-    this._diamondTexture = new THREE.CanvasTexture(canvas);
-    return this._diamondTexture;
-  }
-
   /**
    * Predicted paths now render through render/Tracks.js (TrajectoryPredictor
    * drives live and replay alike, see main.js); null clears them.
@@ -637,15 +394,8 @@ export class SceneManager {
   // Entity lookup
   // ===========================================================================
   getEntityPosition(targetType, targetId) {
-    const weaponPosition = this.weapons.position(targetType, targetId);
-    if (weaponPosition) return weaponPosition;
-    if (targetType === 'torpedo') {
-      const t = this.torpedoes.get(targetId);
-      return t ? t.position : null;
-    }
-    if (targetType === 'slug' || targetType === 'projectile') {
-      const p = this.projectiles.get(targetId);
-      return p ? p.group.position : null;
+    if (targetType === 'torpedo' || targetType === 'slug' || targetType === 'projectile') {
+      return this.weapons.position(targetType, targetId);
     }
     const s = this.ships.get(targetId);
     return s && s.visible ? s.position : null;
@@ -657,109 +407,6 @@ export class SceneManager {
     const eff = this.destructionEffects.find(e => e.shipId === shipId);
     if (eff) return eff.position.clone();
     return ship ? ship.position.clone() : null;
-  }
-
-  // ===========================================================================
-  // PD beams
-  // ===========================================================================
-  updateContinuousBeams(activeSegments, time) {
-    this.currentTime = time;
-    const activeKeys = new Set();
-    for (const seg of activeSegments) {
-      const sourceShip = this.ships.get(seg.shipId);
-      const sourcePos = sourceShip && sourceShip.visible ? sourceShip.position : null;
-      const targetPos = this.getEntityPosition(seg.targetType, seg.targetId);
-      if (!sourcePos || !targetPos) continue;
-      activeKeys.add(seg.key);
-      let beam = this.beams.get(seg.key);
-      if (!beam) {
-        beam = this.createBeamMesh(seg, sourceShip);
-        this.beams.set(seg.key, beam);
-      }
-      const from = beam.muzzleOffset.clone().applyQuaternion(sourceShip.quaternion).add(sourcePos);
-      const dir = targetPos.clone().sub(from);
-      const length = dir.length();
-      if (length < 0.5) continue;
-      dir.normalize();
-
-      const fadeIn = Math.min(1, (time - seg.start) / 0.25 + 0.15);
-      const fadeOut = Math.min(1, Math.max(0, (seg.end + 1.0 - time) / 0.5));
-      const flicker = 0.94 + 0.045 * Math.sin(this.elapsed * 6.7 + beam.phase) + 0.015 * Math.sin(this.elapsed * 9.3 + beam.phase * 2);
-      const intensity = Math.min(fadeIn, fadeOut) * flicker;
-
-      beam.ribbon.setPoints([from, targetPos]);
-      beam.ribbon.material.uniforms.uIntensity.value = 0.85 * intensity;
-      beam.ribbon.material.uniforms.uTime.value = this.elapsed;
-      beam.muzzle.position.copy(from);
-      beam.muzzle.material.opacity = 0.6 * intensity;
-      beam.impact.position.copy(targetPos);
-      beam.impact.material.opacity = 0.6 * intensity;
-      beam.impact.scale.setScalar(1.6 * (1 + 0.12 * Math.sin(this.elapsed * 7.7 + beam.phase)));
-      beam.ribbon.mesh.visible = true;
-      beam.muzzle.visible = true;
-      beam.impact.visible = true;
-
-      // Ablation sparks at the impact point while the beam dwells
-      if (time - beam.lastSpark > 0.45 && intensity > 0.5) {
-        beam.lastSpark = time;
-        this._spawnBlast({
-          position: targetPos.clone(), scale: 0.6, spawnTime: time, kind: 'ablate',
-          dir: dir.clone().negate(), category: 'small'
-        });
-      }
-    }
-    for (const [key, beam] of this.beams) {
-      if (!activeKeys.has(key)) {
-        this.disposeBeam(beam);
-        this.beams.delete(key);
-      }
-    }
-  }
-
-  createBeamMesh(seg, sourceShip) {
-    const ribbon = new Ribbon({
-      maxPoints: 2, width: 0.075, taper: 1.0, head: [1.0, 0.72, 0.5], tail: [1.0, 0.55, 0.35],
-      intensity: 0.85, fadePow: 0, core: 10, halo: 0.25, shimmer: 0.22, maxWidthPx: 2
-    });
-    ribbon.mesh.renderOrder = 23;
-    this.scene.add(ribbon.mesh);
-    const muzzle = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: getGlowTexture(), color: new THREE.Color(1.4, 1.0, 0.7), transparent: true, opacity: 0,
-      blending: THREE.AdditiveBlending, depthWrite: false
-    }));
-    muzzle.scale.setScalar(0.5);
-    const impact = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: getGlowTexture(), color: new THREE.Color(1.6, 1.2, 0.85), transparent: true, opacity: 0,
-      blending: THREE.AdditiveBlending, depthWrite: false
-    }));
-    impact.scale.setScalar(0.9);
-    this.scene.add(muzzle);
-    this.scene.add(impact);
-    // Deterministic per-turret muzzle offset in ship-local space
-    let h = 0;
-    for (const c of seg.turret || '') h = (h * 31 + c.charCodeAt(0)) | 0;
-    const W = sourceShip?.userData.size?.width || 2;
-    const L = sourceShip?.userData.size?.length || 8;
-    const muzzleOffset = new THREE.Vector3(
-      ((h & 0xff) / 255 - 0.5) * W * 0.9,
-      (((h >> 8) & 0xff) / 255 - 0.5) * W * 0.9,
-      (((h >> 16) & 0xff) / 255 - 0.5) * L * 0.6
-    );
-    return { ribbon, muzzle, impact, muzzleOffset, phase: Math.random() * Math.PI * 2, lastSpark: -10 };
-  }
-
-  disposeBeam(beam) {
-    this.scene.remove(beam.ribbon.mesh);
-    this.scene.remove(beam.muzzle);
-    this.scene.remove(beam.impact);
-    beam.ribbon.dispose();
-    beam.muzzle.material.dispose();
-    beam.impact.material.dispose();
-  }
-
-  clearPDBeams() {
-    for (const beam of this.beams.values()) this.disposeBeam(beam);
-    this.beams.clear();
   }
 
   // ===========================================================================
@@ -828,8 +475,20 @@ export class SceneManager {
 
   spawnTorpedoDetonation(position, damageGj, currentTime) {
     const pos = new THREE.Vector3(position[0] * this.SCALE, position[1] * this.SCALE, position[2] * this.SCALE);
+    // A salvo landing on one hull in the same tick records identical impact
+    // points: two identical additive blasts would just double into a white
+    // blowout, so they merge into one detonation sized for the sum.
+    for (let i = this.blasts.length - 1; i >= 0; i--) {
+      const b = this.blasts[i];
+      if (b.kind !== 'warhead' || Math.abs(b.spawnTime - currentTime) > 0.05 || b.origin.distanceToSquared(pos) > 0.25) continue;
+      damageGj += b.damageGj || 0;
+      b.dispose();
+      this.blasts.splice(i, 1);
+    }
     const scale = Math.max(1.4, Math.min(3.2, 0.9 * Math.pow(Math.max(damageGj, 8), 0.3)));
-    this._spawnBlast({ position: pos, scale, spawnTime: currentTime, kind: 'warhead', category: 'hit' });
+    const blast = this._spawnBlast({ position: pos, scale, spawnTime: currentTime, kind: 'warhead', category: 'hit' });
+    blast.damageGj = damageGj;
+    return blast;
   }
 
   /**
@@ -934,7 +593,7 @@ export class SceneManager {
     // for a few seconds before the reactor lets go.
     const simDrifted = death.wasDying || shipGroup?.userData.wasDying;
     const spawnTime = death.time ?? currentTime;
-    const driftDuration = (death.reactorCause || simDrifted) ? 0 : 5.0;
+    const driftDuration = (death.reactorCause || simDrifted) ? 0 : WRECK_DRIFT_S;
     const vel = death.velocity || [0, 0, 0];
     const driftVel = new THREE.Vector3(vel[0], vel[1], vel[2]).multiplyScalar(this.SCALE);
     if (death.position) position = new THREE.Vector3(...death.position).multiplyScalar(this.SCALE);

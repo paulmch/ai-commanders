@@ -508,6 +508,21 @@ export class DebrisSet {
   }
 }
 
+/**
+ * First mark index to re-resolve after a backward seek to `t`: crater slots
+ * (mark.index % craterCap) and vent slots (vent order % ventCap) wrap
+ * independently, so each must replay its last `cap` entries up to t.
+ */
+export function rewindStart(marks, ventMarks, t, resolved, craterCap, ventCap) {
+  let start = resolved;
+  if (marks.length > craterCap) start = Math.min(start, Math.max(0, marksUpTo(marks, t) - craterCap));
+  if (ventMarks.length > ventCap) {
+    const k = marksUpTo(ventMarks, t);
+    if (k > 0) start = Math.min(start, ventMarks[Math.max(0, k - ventCap)].index);
+  }
+  return Math.min(resolved, start);
+}
+
 // ---------------------------------------------------------------------------
 // Per-ship view: craters, vents, sparks, arcs, smoke, flicker, radiators
 // ---------------------------------------------------------------------------
@@ -966,10 +981,7 @@ class ShipView {
     if (blink < 0.3 * level) mul *= 0.12;
     else if (blink > 1 - 0.1 * level) mul *= 1.5;
     if (ud.materials?.window) ud.materials.window.emissiveIntensity *= mul;
-    const blink2 = hash01(this.seed, Math.floor(now * 5), 42);
-    for (const nl of ud.navLights || []) {
-      if (blink2 < 0.45 * level) nl.sprite.material.opacity *= 0.1;
-    }
+    // nav lamps brown out on their own (HullLights, from hull + dying)
   }
 
   _applyRadiators(level) {
@@ -1005,13 +1017,20 @@ class ShipView {
     R.clone.emissiveIntensity = R.orig.emissiveIntensity * (1 - 0.85 * k);
   }
 
+  /**
+   * Backward seek: crater (192) and vent (40) slots wrap independently, so
+   * rewrite from the oldest mark whose slot a later mark may have taken -
+   * the last `cap` marks of each kind up to t. Future marks left in the
+   * other slots are hidden by the shaders (t0 > now).
+   */
+  _rewind(t) {
+    this.resolved = rewindStart(this.sd.marks, this.ventMarks, t, this.resolved,
+      this.craterCap, this.vents ? this.ventCap : Infinity);
+  }
+
   update(now) {
     const fx = this.fx;
-    const marks = this.sd.marks;
-    if (now < this.lastNow && marks.length > this.craterCap) {
-      // slots wrap: a backward seek must restore the craters they held
-      this.resolved = Math.max(0, marksUpTo(marks, now + 0.25) - this.craterCap);
-    }
+    if (now < this.lastNow) this._rewind(now + 0.25);
     this.lastNow = now;
     this.resolveUpTo(now + 0.25);
     const st = damageStateAt(fx.timeline, this.id, now, this.state);
@@ -1038,7 +1057,8 @@ class ShipView {
   dispose() {
     this.group.remove(this.craters);
     this.craters.geometry.dispose();
-    if (this.vents) { this.group.remove(this.vents); this.vents.geometry.dispose(); }
+    this.craters.dispose();   // instance matrix buffer
+    if (this.vents) { this.group.remove(this.vents); this.vents.geometry.dispose(); this.vents.dispose(); }
     if (this.sparks) {
       this.group.remove(this.sparks);
       this.sparks.geometry.dispose();
@@ -1227,13 +1247,17 @@ export class DamageFX {
       const sp = speedK * (0.25 + 1.1 * Math.pow(r(4), 1.6));
       vel.copy(baseVel).addScaledVector(dir, sp);
       axis.set(r(5) - 0.5, r(6) - 0.5, r(7) - 0.5).normalize();
-      const size = W * (0.005 + 0.018 * Math.pow(r(8), 2.4)) * (0.8 + 0.4 * m.severity);
-      const flat = r(9) < 0.5;
+      // Spall is torn plating: mostly thin flakes a few metres across on
+      // the (8x oversize) hull, a few chunkier bits; only a handful leave
+      // glowing, and they cool to bare metal within a second or so.
+      const size = W * (0.0025 + 0.009 * Math.pow(r(8), 2.4)) * (0.8 + 0.4 * m.severity);
+      const flat = r(9) < 0.7;
       _v.copy(P).addScaledVector(N, W * 0.02);
       const life = SPALL_LIFE * (0.55 + 0.45 * r(10));
-      const heat = (m.kind === 'slug' ? 0.45 : 0.8) * (0.4 + 0.8 * r(11));
+      const hot = r(11);
+      const heat = (m.kind === 'slug' ? 0.15 + 0.4 * hot * hot : 0.3 + 0.55 * hot * hot);
       this.spall.set(idx, _v, m.t, vel, life, axis, 1 + 5 * r(12),
-        size * (flat ? 1.5 : 1), size * (flat ? 0.3 : 0.9), size * (flat ? 1.1 : 1), heat);
+        size * (flat ? 1.4 : 0.8), size * (flat ? 0.16 + 0.18 * r(13) : 0.6), size * (flat ? 1.0 : 0.8), heat);
     }
   }
 
@@ -1308,6 +1332,21 @@ export class DamageFX {
   // -------------------------------------------------------------------------
   // Destruction helpers (used by ShipDestruction)
   // -------------------------------------------------------------------------
+
+  /** Release every view, the spall set and the shared programs (reload). */
+  dispose() {
+    for (const v of this.views.values()) v.dispose();
+    this.views.clear();
+    this.sm._clearBlasts?.('damage');
+    this.scene.remove(this.spall.mesh);
+    this.spall.mesh.dispose();
+    this.spall.dispose();
+    if (this._warm) { this.scene.remove(this._warm); this._warm = null; }
+    for (const m of [this.craterMat, this.ventMat, this.sparkMat, this.smokeMat, this.debrisMat, this.edgeMat, this.probe.material]) m.dispose();
+    for (const g of [this.planeGeom, this.coneGeom, this.chunkGeom]) g.dispose();
+    if (this.scene.userData.damageFX === this) delete this.scene.userData.damageFX;
+    this.timeline = null;
+  }
 
   /** A standalone instanced debris cloud (caller owns and disposes it). */
   createDebrisSet(capacity) {

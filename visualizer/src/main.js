@@ -14,6 +14,7 @@ import { generateShipSVG, getShipClassName, SHIP_SILHOUETTES } from './shipSilho
 import { TrajectoryPredictor } from './TrajectoryPredictor.js';
 import { TrackModeControl } from './TrackModeControl.js';
 import { Tracks } from './render/Tracks.js';
+import { latestWreckEnd } from './render/Explosion.js';
 
 class BattleVisualizer {
   constructor() {
@@ -362,18 +363,18 @@ class BattleVisualizer {
 
     // Initialize scene
     this.setLoadingStatus('Creating tactical display...');
+    this.scene?.dispose();   // no-op after a reset; guards any other reload path
     this.scene = new SceneManager(this.elements.canvas);
     this.tracks = new Tracks(this.scene, new TrajectoryPredictor(this.loader));
     this.scene.loader = this.loader;   // hull rigs read targets, shots, launches, PD dwell
     this.setLoadingProgress(60);
 
     // Initialize time controller. The extra seconds are an epilogue: a ship
-    // destroyed on the final tick still gets its full destruction sequence
+    // destroyed near the end still gets its full destruction sequence
     // instead of freezing mid-fireball when the recording ends. A live
     // battle has no epilogue until it actually ends - the timeline head IS
     // the latest frame.
-    const epilogue = this.live && !this.live.ended ? 0 : 20;
-    this.timeController = new TimeController(this.loader.duration + epilogue);
+    this.timeController = new TimeController(this.live && !this.live.ended ? this.loader.duration : this.replayEnd());
     this.timeController.onTimeChange((time, duration) => {
       this.updateTimeDisplay(time, duration);
     });
@@ -429,6 +430,14 @@ class BattleVisualizer {
       else this.timeController.pause();
     } else this.timeController.play();
     this.updatePlayPauseButton();
+  }
+
+  /**
+   * Replay timeline end: the recording plus a 20 s epilogue, extended until
+   * the latest wreck (drift + 40 s breakup) has fully played out.
+   */
+  replayEnd() {
+    return Math.max(this.loader.duration + 20, latestWreckEnd(this.loader.buildDeathInfo()));
   }
 
   /**
@@ -525,7 +534,8 @@ class BattleVisualizer {
         }
 
         // Predicted (and in replay, actual) tracks to the next checkpoint
-        this.tracks.frame(currentPlaybackTime, this.currentState.ships, this.trackControl.effectiveMode());
+        this.tracks.frame(currentPlaybackTime, this.currentState.ships, this.trackControl.effectiveMode(),
+          this.selectedShipId || this.cameraController.targetShipId);
 
         // Update camera
         if (this.needsFleetFraming) {
@@ -691,8 +701,8 @@ class BattleVisualizer {
 
     if (live.started) {
       live.lastFrameT = this.loader.duration;
-      // Restore the +20s destruction epilogue for the completed replay
-      this.timeController.setDuration(this.loader.duration + 20);
+      // Restore the destruction epilogue for the completed replay
+      this.timeController.setDuration(this.replayEnd());
       this.updateBattleInfo();
       this.populateTimelineMarkers();
       this.scene.updatePredictedPaths(null);
@@ -1458,28 +1468,9 @@ class BattleVisualizer {
       this.timeController.pause();
     }
 
-    // Clear scene objects
-    if (this.scene) {
-      this.scene.weapons.clear();
-      // Remove all ships
-      for (const [id, ship] of this.scene.ships) {
-        this.scene.scene.remove(ship);
-      }
-      this.scene.ships.clear();
-
-      // Remove all projectiles
-      this.scene.cleanupProjectiles(new Set());
-
-      // Remove all torpedoes
-      this.scene.cleanupTorpedoes(new Set());
-
-      // Clear PD beams, hit effects, and destruction effects
-      this.scene.clearPDBeams();
-      this.scene.clearHitEffects();
-      this.scene.clearSmallEffects();
-      this.scene.clearDestructionEffects();
-      this.scene.updatePredictedPaths(null);
-    }
+    // Tear down the scene: ships, effects, tracks, render targets,
+    // listeners and the renderer (the next load builds a fresh one)
+    this.scene?.dispose();
 
     // Reset state
     this.isInitialized = false;

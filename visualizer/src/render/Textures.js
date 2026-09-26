@@ -306,6 +306,21 @@ function heightToNormalCanvas(height, size, strength) {
   return canvas;
 }
 
+/** One soft, irregular paint flake (anti-aliased canvas path). */
+function chipFlake(ctx, x, y, r, rnd, col, alpha) {
+  const n = 7;
+  ctx.fillStyle = `rgba(${col[0]},${col[1]},${col[2]},${alpha})`;
+  ctx.beginPath();
+  for (let k = 0; k < n; k++) {
+    const a = (k / n) * Math.PI * 2 + rnd() * 0.5;
+    const rr = r * (0.55 + 0.6 * rnd());
+    if (k === 0) ctx.moveTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr * 0.75);
+    else ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr * 0.75);
+  }
+  ctx.closePath();
+  ctx.fill();
+}
+
 const _hullSets = new Map();
 
 /** Faction livery colours (sRGB 0-255), shared with the hull markings. */
@@ -337,6 +352,8 @@ export function getHullTextures(faction, variant = 'hull') {
       ? (isTrim ? [40, 45, 52] : [98, 107, 120])
       : (isTrim ? [46, 42, 40] : [114, 104, 97]);
   const accent = faction === 'alpha' ? [40, 200, 255] : [255, 130, 50];
+  // primer showing through chipped livery: dark, desaturated
+  const primer = faction === 'alpha' ? [52, 58, 66] : [66, 58, 54];
 
   const panels = isPaint
     ? subdividePanels(size, rnd, 64, 300)
@@ -378,8 +395,9 @@ export function getHullTextures(faction, variant = 'hull') {
       pRough = 0.38 + rnd() * 0.1;
       pMetal = 0.8;
     } else if (!isTrim && kind < 0.09) {
-      // faction-painted panel
-      col = accent.map((c, i) => c * 0.55 + base[i] * 0.45);
+      // faction-painted panel: a muted livery tone. Saturated accent
+      // plates tile into orange/cyan confetti on the big hulls at mid range.
+      col = accent.map((c, i) => c * 0.3 + base[i] * 0.7);
       pRough = 0.42;
       pMetal = 0.15;
     } else if (kind < (isTrim ? 0.4 : 0.16)) {
@@ -472,20 +490,36 @@ export function getHullTextures(faction, variant = 'hull') {
       actx.fillRect(p.x + inset, p.y + p.h - inset - 2, p.w - inset * 2, 2);
       actx.fillRect(p.x + p.w - inset - 2, p.y + inset, 2, p.h - inset * 2);
     }
-    // Chipped livery: bare metal flecks crowd the plate edges
+    // Chipped livery: a few worn clusters at plate corners and edges, each
+    // a handful of soft irregular flakes (dark primer, bright metal core).
+    // Isolated single-texel specks read as pixel noise up close and as grey
+    // speckle once minified, so there are none.
     if (isPaint) {
-      const chips = Math.floor((p.w + p.h) / 9);
-      for (let i = 0; i < chips; i++) {
-        const edge = rnd() < 0.5;
-        const cx0 = edge ? p.x + (rnd() < 0.5 ? 3 + rnd() * 8 : p.w - 3 - rnd() * 8) : p.x + rnd() * p.w;
-        const cy0 = edge ? p.y + rnd() * p.h : p.y + (rnd() < 0.5 ? 3 + rnd() * 8 : p.h - 3 - rnd() * 8);
-        const w = 1 + rnd() * 4, h = 1 + rnd() * 3;
-        const g = 120 + rnd() * 40;
-        actx.fillStyle = `rgb(${g | 0},${(g + 2) | 0},${(g + 6) | 0})`;
-        actx.fillRect(cx0, cy0, w, h);
-        fillRect(metal, Math.round(cx0), Math.round(cy0), Math.ceil(w), Math.ceil(h), 0.9);
-        fillRect(rough, Math.round(cx0), Math.round(cy0), Math.ceil(w), Math.ceil(h), 0.35);
-        fillRect(height, Math.round(cx0), Math.round(cy0), Math.ceil(w), Math.ceil(h), pHeight - 0.05);
+      const clusters = rnd() < 0.75 ? 1 + Math.floor(rnd() * 3) : 0;
+      for (let c = 0; c < clusters; c++) {
+        const corner = rnd() < 0.6;
+        const ex = corner ? (rnd() < 0.5 ? p.x + 5 : p.x + p.w - 5) : p.x + 8 + rnd() * Math.max(0, p.w - 16);
+        const ey = rnd() < 0.5 ? p.y + 5 : p.y + p.h - 5;
+        const flakes = 3 + Math.floor(rnd() * 5);
+        for (let i = 0; i < flakes; i++) {
+          const fx = ex + (rnd() - 0.5) * 20, fy = ey + (rnd() - 0.5) * 12;
+          const r = 1.6 + rnd() * 3.4;
+          chipFlake(actx, fx, fy, r, rnd, primer, 0.8);
+          chipFlake(actx, fx, fy, r * 0.55, rnd, [128, 130, 135], 0.75);
+          const core = r * 0.55;
+          for (let yy = Math.floor(fy - core); yy <= fy + core; yy++) {
+            for (let xx = Math.floor(fx - core); xx <= fx + core; xx++) {
+              if (Math.hypot(xx - fx, yy - fy) > core) continue;
+              fillRect(metal, xx, yy, 1, 1, 0.85);
+              fillRect(rough, xx, yy, 1, 1, 0.38);
+            }
+          }
+          for (let yy = Math.floor(fy - r); yy <= fy + r; yy++) {
+            for (let xx = Math.floor(fx - r); xx <= fx + r; xx++) {
+              if (Math.hypot(xx - fx, yy - fy) <= r) fillRect(height, xx, yy, 1, 1, pHeight - 0.04);
+            }
+          }
+        }
       }
     }
 
@@ -567,6 +601,41 @@ export function getHullTextures(faction, variant = 'hull') {
   };
   _hullSets.set(key, set);
   return set;
+}
+
+let _accentTex = null;
+/**
+ * Accent light strips: soft lamp cells in a glowing housing, used as the
+ * accent material's map + emissiveMap. Up close an accent box reads as a
+ * lit strip of cells instead of a flat, unshaded orange slab; at range
+ * the cells average out to the same glow. Every row and column keeps at
+ * least the housing level (0.5), so a sliver-thin accent band never lands
+ * on a dark gap. Greyscale (tinted by the material colour), tileable,
+ * mean ~0.68. Returns { map, emissiveMap }.
+ */
+export function getAccentTexture() {
+  if (_accentTex) return _accentTex;
+  const size = 128, cells = 4;
+  const canvas = canvasOf(size);
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(size, size);
+  const cell = (x) => {
+    const d = Math.abs(((x * cells) % 1) - 0.5);          // 0 centre .. 0.5 edge
+    const k = Math.min(1, Math.max(0, (0.46 - d) / 0.26));
+    return k * k * (3 - 2 * k);
+  };
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const v = 0.5 + 0.5 * cell((x + 0.5) / size) * cell((y + 0.5) / size);
+      const i = (y * size + x) * 4;
+      img.data[i] = img.data[i + 1] = img.data[i + 2] = v * 255;
+      img.data[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  // albedo in sRGB, emission linear
+  _accentTex = { map: texOf(canvas, { srgb: true, anisotropy: 4 }), emissiveMap: texOf(canvas, { anisotropy: 4 }) };
+  return _accentTex;
 }
 
 let _radiatorTex = null;

@@ -98,8 +98,20 @@ export class Environment {
     // PostFX reads this for the lens flare / god rays
     scene.userData.sun = { dir: this.sunDir, angularRadius: SUN_ANGULAR_RADIUS, color: this.sunColor };
 
-    this.gfx.onChange(() => this.applyQuality());
+    this._offGfx = this.gfx.onChange(() => this.applyQuality());
     this.gfx.installControls();
+  }
+
+  /** Release the baked sky, env map and every backdrop mesh (reload). */
+  dispose() {
+    this._offGfx?.();
+    this.scene.remove(this.group);
+    if (this.scene.environment === this.envRT?.texture) this.scene.environment = null;
+    delete this.scene.userData.sun;
+    this.skyRT?.dispose();
+    this.envRT?.dispose();
+    this.noiseVol?.dispose();
+    disposeTree(this.group);
   }
 
   applyQuality() {
@@ -658,3 +670,26 @@ export class Environment {
 
 const _fwd = new THREE.Vector3();
 const _up = new THREE.Vector3();
+
+/**
+ * Free the GPU resources of every mesh / points / line under `root`:
+ * geometries, materials and their (non render-target) textures. Shared
+ * cached textures are safe to dispose; three re-uploads them on next use.
+ */
+export function disposeTree(root) {
+  const seen = new Set();
+  const tex = (t) => {
+    if (t?.isTexture && !t.isRenderTargetTexture && !seen.has(t)) { seen.add(t); t.dispose(); }
+  };
+  root.traverse(o => {
+    if (o.geometry && !seen.has(o.geometry)) { seen.add(o.geometry); o.geometry.dispose(); }
+    if (o.isInstancedMesh) o.dispose();
+    for (const m of [].concat(o.material || [])) {
+      if (seen.has(m)) continue;
+      seen.add(m);
+      for (const k in m) tex(m[k]);
+      for (const k in m.uniforms || {}) tex(m.uniforms[k]?.value);
+      m.dispose();
+    }
+  });
+}
