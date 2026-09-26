@@ -232,11 +232,8 @@ class TestDamageComparison:
         # Siege salvo at 21.75 GJ is comparable
         assert salvo_damage == 21.75
 
-    def test_siege_dps_lower_than_standard(self, fleet_data):
-        """Siege coiler has lower sustained DPS than spinal coiler.
-
-        This is the tradeoff: massive alpha strike vs sustained damage.
-        """
+    def test_sustained_damage_accounts_for_both_salvos(self, fleet_data):
+        """Both coilers use full salvo cycles when comparing sustained damage."""
         siege = fleet_data["weapon_types"]["heavy_siege_coiler_mk3"]
         spinal = fleet_data["weapon_types"]["spinal_coiler_mk3"]
 
@@ -245,13 +242,16 @@ class TestDamageComparison:
         siege_cycle = (siege["salvo_size"] - 1) * siege["intra_salvo_cooldown_s"] + siege["cooldown_s"]
         siege_dps = (siege["kinetic_energy_gj"] * siege["salvo_size"]) / siege_cycle
 
-        # Spinal: 4.29 GJ per 15s = 0.29 GJ/s
-        spinal_dps = spinal["kinetic_energy_gj"] / spinal["cooldown_s"]
+        # Spinal: 5 x 4.29 GJ per 72s cycle = 0.298 GJ/s
+        spinal_cycle = ((spinal["salvo_size"] - 1)
+                        * spinal["intra_salvo_cooldown_s"] + spinal["cooldown_s"])
+        spinal_dps = spinal["kinetic_energy_gj"] * spinal["salvo_size"] / spinal_cycle
 
         # Siege actually has slightly higher DPS, but requires sustained engagement
         # The real tradeoff is burst damage vs flexibility
         assert siege_dps > 0.3  # Decent sustained damage
         assert spinal_dps > 0.25  # Also decent
+        assert siege_dps > spinal_dps
 
 
 # =============================================================================

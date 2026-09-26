@@ -128,8 +128,12 @@ class WeaponCapacitor:
                 capacity_mj = DEFAULT_KINETIC_ENERGY_MJ
             efficiency = KINETIC_WEAPON_EFFICIENCY
 
-        # Charge rate = energy / cooldown time
-        charge_rate_mw = capacity_mj / cooldown_s if cooldown_s > 0 else capacity_mj
+        # A salvo still spends one capacitor per shot. Size recharge for the
+        # intra-salvo cadence so the longer inter-salvo wait does not gate it.
+        recharge_s = cooldown_s
+        if weapon_data.get("salvo_size", 1) > 1:
+            recharge_s = weapon_data.get("intra_salvo_cooldown_s", cooldown_s)
+        charge_rate_mw = capacity_mj / recharge_s if recharge_s > 0 else capacity_mj
 
         return cls(
             capacity_mj=capacity_mj,
@@ -142,7 +146,10 @@ class WeaponCapacitor:
     @property
     def is_charged(self) -> bool:
         """Check if capacitor has enough energy to fire."""
-        return self.current_charge_mj >= self.capacity_mj
+        # Fractional recharge rates (e.g. siege coilers over 18s) can sum to
+        # a few ulps below capacity. Do not delay the shot by a whole sim tick.
+        return (self.current_charge_mj >= self.capacity_mj or math.isclose(
+            self.current_charge_mj, self.capacity_mj, rel_tol=1e-12, abs_tol=0.0))
 
     @property
     def charge_percent(self) -> float:

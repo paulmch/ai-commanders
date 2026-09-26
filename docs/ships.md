@@ -57,13 +57,19 @@ All ships use Adamantane armor. Weapons deal damage through kinetic energy ablat
 
 ### Coilgun Weapons
 
-| Weapon | Mass (kg) | Velocity (km/s) | Energy (GJ) | Flat Chip | Range (km) | Cooldown |
+| Weapon | Mass (kg) | Velocity (km/s) | Energy (GJ) | Flat Chip | Range (km) | Salvo / cooldown |
 |--------|-----------|-----------------|-------------|-----------|------------|----------|
-| Spinal Coiler Mk3 | 88 | 9.9 | 4.29 | 0.35 | 900 | 15s |
-| Heavy Siege Coiler Mk3 | 656 | 4.7 | 7.25 | 0.25 | 900 | 24s |
-| Heavy Coilgun Battery Mk3 | 50 | 7.0 | 1.22 | 0.35 | 600 | 20s |
-| Coilgun Battery Mk3 | 40 | 6.0 | 0.72 | 0.35 | 500 | 20s |
-| Light Coilgun Battery Mk3 | 10 | 5.0 | 0.125 | 0.35 | 400 | 20s |
+| Spinal Coiler Mk3 | 88 | 9.9 | 4.29 | 0.35 | 900 | 5 shots, 12s apart; then 24s (72s cycle) |
+| Heavy Siege Coiler Mk3 | 656 | 4.7 | 7.25 | 0.25 | 900 | 3 shots, 18s apart; then 24s (60s cycle) |
+| Heavy Coilgun Battery Mk3 | 50 | 7.0 | 1.22 | 0.35 | 600 | 5 shots, 10s apart; then 20s (60s cycle) |
+| Coilgun Battery Mk3 | 40 | 6.0 | 0.72 | 0.35 | 500 | 5 shots, 10s apart; then 20s (60s cycle) |
+| Light Coilgun Battery Mk3 | 10 | 5.0 | 0.125 | 0.35 | 400 | 5 shots, 10s apart; then 20s (60s cycle) |
+
+Each shot launches one slug and spends one round and one capacitor charge.
+Fire control checks the probability gate and arc for every shot. A blocked salvo
+keeps its next shot until firing is possible, then continues at the normal spacing;
+it never accumulates a burst of overdue shots. Timing matches the TI Mk3 templates;
+damage, velocity, mass, range, chipping and loadouts are unchanged.
 
 ### Torpedoes
 

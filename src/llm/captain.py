@@ -1162,12 +1162,42 @@ class LLMCaptain:
         else:
             info["angle_deg"] = 0
 
-        # Hit probability
-        if distance_km <= 500:
-            base_hit = max(0.05, 0.9 - (distance_km / 500) * 0.85)
-        else:
-            base_hit = 0.05
-        info["hit_chance"] = base_hit * 100
+        # Show the same P(hit) that gates each gun shot, plus the number of
+        # opportunities in this decision window (including a partial salvo).
+        from ..firecontrol import calculate_hit_probability
+        from ..geometry import ShipGeometry
+        from ..simulation import ManeuverType
+
+        geometry = getattr(enemy, "geometry", None) or ShipGeometry(
+            length_m=100.0, radius_m=12.5,
+            nose_cone_length_m=20.0, engine_section_length_m=20.0,
+        )
+        maneuver = getattr(enemy, "current_maneuver", None)
+        is_evading = (maneuver is not None
+                      and maneuver.maneuver_type == ManeuverType.EVASIVE)
+        window_s = getattr(simulation, "decision_interval", 30.0)
+        forecasts = []
+        for slot, ws in getattr(ship, "weapons", {}).items():
+            if ws.weapon.is_missile or ws.weapon.muzzle_velocity_kps <= 0:
+                continue
+            solution = calculate_hit_probability(
+                shooter_position=ship.position, shooter_velocity=ship.velocity,
+                target_position=enemy.position, target_velocity=enemy.velocity,
+                target_geometry=geometry, target_forward=enemy.forward,
+                muzzle_velocity_kps=ws.weapon.muzzle_velocity_kps,
+                target_is_evading=is_evading,
+            )
+            probability = solution.hit_probability if solution.can_fire else 0.0
+            in_arc = ws.is_target_in_arc(ship.forward, rel_pos.normalized())
+            shots = ws.shots_in_window(window_s) if in_arc and solution.can_fire else 0
+            forecasts.append({
+                "weapon_slot": slot, "weapon_name": ws.weapon.name,
+                "hit_probability": probability, "shots": shots,
+                "window_s": window_s, "expected_hits": probability * shots,
+            })
+        info["weapon_hit_forecasts"] = forecasts
+        info["hit_chance"] = 100 * max(
+            (f["hit_probability"] for f in forecasts), default=0.0)
 
         # Enemy condition
         info["hull_percent"] = enemy.hull_integrity

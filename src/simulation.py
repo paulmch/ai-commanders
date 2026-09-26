@@ -468,6 +468,8 @@ class WeaponState:
     current_aim_direction: Optional[Vector3D] = None
     mount_position: Optional[dict] = None
     slot_name: str = ""
+    salvo_index: int = 0  # Index of the NEXT shot; holds across fire-control pauses.
+    shots_fired: int = 0  # Lifetime count for cosmetic barrel alternation.
 
     def can_fire(self) -> bool:
         """Check if weapon can fire."""
@@ -478,12 +480,36 @@ class WeaponState:
         )
 
     def fire(self) -> bool:
-        """Attempt to fire the weapon. Returns True if successful."""
+        """Commit one shot. Paused salvos resume without skipped/catch-up shots."""
         if not self.can_fire():
             return False
         self.ammo_remaining -= 1
-        self.cooldown_remaining = self.weapon.cooldown_s
+        self.cooldown_remaining = self._cooldown_after_shot(self.salvo_index)
+        self.salvo_index = (self.salvo_index + 1) % self.weapon.salvo_size
+        self.shots_fired += 1
         return True
+
+    def _cooldown_after_shot(self, salvo_index: int) -> float:
+        if salvo_index + 1 < self.weapon.salvo_size:
+            return self.weapon.intra_salvo_cooldown_s
+        return self.weapon.cooldown_s
+
+    def shots_in_window(self, duration_s: float) -> int:
+        """Timing/ammo ceiling before the next checkpoint, excluding its endpoint.
+
+        Assumes fire control stays open and power/heat permit each shot. Does not
+        mutate the salvo, consume ammunition, or draw from the battle RNG.
+        """
+        if not self.is_operational:
+            return 0
+        time_s = max(0.0, self.cooldown_remaining)
+        index = self.salvo_index
+        shots = 0
+        while time_s < duration_s and shots < self.ammo_remaining:
+            shots += 1
+            time_s += self._cooldown_after_shot(index)
+            index = (index + 1) % self.weapon.salvo_size
+        return shots
 
     def update(self, dt: float) -> None:
         """Update cooldown timer."""
@@ -2027,6 +2053,9 @@ class CombatSimulation:
             'weapon_type': weapon.weapon_type,
             'weapon_name': weapon.name,
             'is_turreted': weapon.is_turreted,
+            'salvo_index': weapon_state.salvo_index,
+            'salvo_size': weapon.salvo_size,
+            'barrel': weapon_state.shots_fired % 2 if weapon.is_turreted else 0,
             'fire_direction': f"({fire_direction.x:.3f}, {fire_direction.y:.3f}, {fire_direction.z:.3f})"
         }
         # Add optional firing data if provided
@@ -3735,7 +3764,13 @@ class CombatSimulation:
                 -(deflection_m ** 2) / (2.0 * TERMINAL_DISPERSION_SIGMA_M ** 2)
             )
             effective_probability = proj_flight.hit_probability * geometry_factor
-            roll = self.rng.random()
+            # Salvos put different-speed rounds into the same integration step.
+            # Their processing order can change as dt shrinks; key dispersion
+            # to the round so that cannot swap which projectile hits (as with
+            # the per-torpedo RNG). This does not change P(hit) or damage.
+            roll = random.Random(
+                f"{self._initial_seed}:{proj_flight.projectile_id}:dispersion"
+            ).random()
             if roll >= effective_probability:
                 closest_km = proj_flight.min_distance_to_target / 1000.0
                 flight_time = self.current_time - proj_flight.launch_time
@@ -7028,6 +7063,8 @@ def create_ship_from_fleet_data(
                 "type": weapon_state.weapon.weapon_type,
                 "kinetic_energy_gj": weapon_state.weapon.kinetic_energy_gj,
                 "cooldown_s": weapon_state.weapon.cooldown_s,
+                "salvo_size": weapon_state.weapon.salvo_size,
+                "intra_salvo_cooldown_s": weapon_state.weapon.intra_salvo_cooldown_s,
                 "power_draw_mw": getattr(weapon_state.weapon, 'power_draw_mw', 5.0)
             }
             power_system.add_weapon_capacitor(slot_name, weapon_data)

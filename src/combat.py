@@ -138,7 +138,9 @@ class Weapon:
         name: Display name of the weapon.
         weapon_type: Internal type identifier (e.g., 'spinal_coiler_mk3').
         kinetic_energy_gj: Kinetic energy of projectile in gigajoules.
-        cooldown_s: Time between shots in seconds.
+        cooldown_s: Time after the last shot of a salvo, in seconds.
+        salvo_size: Number of individually gated shots per salvo.
+        intra_salvo_cooldown_s: Time between shots within a salvo.
         range_km: Maximum effective range in kilometers.
         flat_chipping: Armor ablation factor (0.0 to 1.0).
         mass_tons: Weapon system mass in metric tons.
@@ -166,6 +168,8 @@ class Weapon:
     pivot_range_deg: float = 180.0
     is_turreted: bool = True
     facing: str = "forward"
+    salvo_size: int = 1
+    intra_salvo_cooldown_s: float = 0.0
 
     @classmethod
     def from_json(cls, weapon_type: str, data: dict) -> Weapon:
@@ -205,6 +209,8 @@ class Weapon:
             pivot_range_deg=data.get("pivot_range_deg", 180.0),
             is_turreted=data.get("is_turreted", True),
             facing=data.get("facing", "forward"),
+            salvo_size=data.get("salvo_size", 1),
+            intra_salvo_cooldown_s=data.get("intra_salvo_cooldown_s", 0.0),
         )
 
     def is_in_range(self, distance_km: float) -> bool:

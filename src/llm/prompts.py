@@ -112,6 +112,18 @@ def get_ship_turn_time_90deg(ship_type: str) -> float:
     return turn_times.get(ship_type.lower(), 20.0)
 
 
+def _gun_cadence_for_prompt(spec: Dict[str, Any]) -> str:
+    """Describe individual shots and the wait after the last shot."""
+    cooldown = spec.get("cooldown_s", 0)
+    salvo = spec.get("salvo_size", 1)
+    if salvo <= 1:
+        return f"{cooldown:g}s cooldown between shots"
+    intra = spec.get("intra_salvo_cooldown_s", 0)
+    cycle = cooldown + (salvo - 1) * intra
+    return (f"{salvo}-shot salvos: {intra:g}s between shots, then {cooldown:g}s "
+            f"cooldown ({cycle:g}s cycle)")
+
+
 def format_weapon_groups_for_prompt(weapons: List[Dict], weapon_types: Dict[str, Any]) -> str:
     """Format weapon information grouped by type."""
     lines = []
@@ -120,6 +132,7 @@ def format_weapon_groups_for_prompt(weapons: List[Dict], weapon_types: Dict[str,
     spinals = []
     heavy_coilguns = []
     coilguns = []
+    other_guns = {}
     pd_lasers = []
 
     for w in weapons:
@@ -133,6 +146,8 @@ def format_weapon_groups_for_prompt(weapons: List[Dict], weapon_types: Dict[str,
             coilguns.append(w)
         elif wtype == "pd_laser":
             pd_lasers.append(w)
+        elif weapon_types.get(wtype, {}).get("kinetic_energy_gj", 0) > 0:
+            other_guns.setdefault(wtype, []).append(w)
 
     # Format each group
     if spinals:
@@ -140,32 +155,44 @@ def format_weapon_groups_for_prompt(weapons: List[Dict], weapon_types: Dict[str,
         vel = spec.get("muzzle_velocity_kps", 9.9)
         dmg = spec.get("kinetic_energy_gj", 4.32)
         rng = spec.get("range_km", 900)
-        cd = spec.get("cooldown_s", 15)
         lines.append(f"- Spinal Coilgun: {vel} km/s muzzle velocity, {dmg:.2f} GJ damage, {rng}km max range")
         lines.append(f"  * Fixed mount: REQUIRES nose within 30° of target to fire")
-        lines.append(f"  * {cd}s cooldown between shots")
+        lines.append(f"  * {_gun_cadence_for_prompt(spec)}")
 
     if heavy_coilguns:
         spec = weapon_types.get("heavy_coilgun_mk3", {})
         vel = spec.get("muzzle_velocity_kps", 7.0)
         dmg = spec.get("kinetic_energy_gj", 1.22)
         rng = spec.get("range_km", 600)
-        cd = spec.get("cooldown_s", 18)
         count = len(heavy_coilguns)
         lines.append(f"- Heavy Coilguns x{count}: {vel} km/s muzzle velocity, {dmg:.2f} GJ damage each, {rng}km max range")
         lines.append(f"  * Turreted: 180° firing arc, works during any maneuver")
-        lines.append(f"  * {cd}s cooldown between shots")
+        lines.append(f"  * {_gun_cadence_for_prompt(spec)}")
 
     if coilguns:
         spec = weapon_types.get("coilgun_mk3", {})
         vel = spec.get("muzzle_velocity_kps", 6.0)
         dmg = spec.get("kinetic_energy_gj", 0.72)
         rng = spec.get("range_km", 500)
-        cd = spec.get("cooldown_s", 20)
         count = len(coilguns)
         lines.append(f"- Coilguns x{count}: {vel} km/s muzzle velocity, {dmg:.2f} GJ damage each, {rng}km max range")
         lines.append(f"  * Turreted: 180° firing arc, works during any maneuver")
-        lines.append(f"  * {cd}s cooldown between shots")
+        lines.append(f"  * {_gun_cadence_for_prompt(spec)}")
+
+    for wtype, mounts in other_guns.items():
+        spec = weapon_types[wtype]
+        lines.append(
+            f"- {spec.get('name', wtype)} x{len(mounts)}: "
+            f"{spec['muzzle_velocity_kps']:g} km/s muzzle velocity, "
+            f"{spec['kinetic_energy_gj']:g} GJ damage each, "
+            f"{spec['range_km']:g}km max range"
+        )
+        pivot = spec.get("pivot_range_deg", 180)
+        if spec.get("is_turreted", True):
+            lines.append(f"  * Turreted: {pivot:g}° firing arc")
+        else:
+            lines.append(f"  * Fixed mount: REQUIRES nose within {pivot:g}° of target to fire")
+        lines.append(f"  * {_gun_cadence_for_prompt(spec)}")
 
     if pd_lasers:
         count = len(pd_lasers)
@@ -315,10 +342,10 @@ PROPULSION:
 WEAPONS:
 - Spinal Coilgun: 9.9 km/s muzzle velocity, 4.3 GJ damage, 900km max range
   * Fixed mount: REQUIRES nose within 30° of target to fire
-  * 15s cooldown between shots
+  * 5-shot salvos: 12s between shots, then 24s cooldown (72s cycle)
 - Turret Coilgun: 6.0 km/s muzzle velocity, 0.7 GJ damage, 500km max range
   * Turreted: 180° firing arc, works during any maneuver
-  * 20s cooldown between shots
+  * 5-shot salvos: 10s between shots, then 20s cooldown (60s cycle)
 - 2x Point Defense Lasers: Auto-engage torpedoes within 250km
 
 DEFENSE - ARMOR IS ASPECT-DEPENDENT (this is the single biggest survivability lever):
@@ -836,6 +863,8 @@ OTHER:
   When a maneuver expires, thrust stops; you coast with your existing momentum.
 - set_primary_target changes the target followed by persistent gun orders.
 - On gun ships, set_weapons_order sets firing policy; it persists until changed.
+- Guns fire salvos one slug at a time; the hit-probability gate and firing arc
+  are checked for EVERY shot. Interrupted salvos resume when firing is possible.
 - On torpedo ships, launch_torpedo orders a salvo for this decision window.
 Describing an action does not execute it. Use the corresponding tool.
 
@@ -1124,9 +1153,23 @@ def format_battlefield_overview(enemies: List[Dict[str, Any]], friendlies: List[
                 lines.append(f"    Capabilities: {accel}g accel, {delta_v} km/s delta-v, ~{turn_time:.0f}s turn")
                 lines.append(f"    Armament: {weapons_summary}")
 
-            # Hit probability
-            hit_chance = e.get("hit_chance", 0)
-            lines.append(f"    Hit probability: ~{hit_chance:.0f}%")
+            # Current fire-control probability and phase-aware shot opportunity.
+            forecasts = e.get("weapon_hit_forecasts")
+            if forecasts:
+                for forecast in forecasts:
+                    lines.append(
+                        f"    {forecast['weapon_slot']} ({forecast['weapon_name']}): "
+                        f"P(hit) {forecast['hit_probability']:.0%}; "
+                        f"expected hits/checkpoint if firing now: "
+                        f"{forecast['expected_hits']:.2f} "
+                        f"({forecast['hit_probability']:.0%} x "
+                        f"{forecast['shots']} shots/{forecast['window_s']:g}s)"
+                    )
+                lines.append("    Assumes current aim/evasion persist and power/heat permit; "
+                             "shot counts include cooldown, salvo position and ammo.")
+            else:
+                hit_chance = e.get("hit_chance", 0)
+                lines.append(f"    Hit probability: ~{hit_chance:.0f}%")
 
             # Targeting warning
             if has_us_targeted:
