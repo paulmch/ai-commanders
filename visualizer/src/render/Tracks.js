@@ -407,7 +407,7 @@ const ghostFragment = /* glsl */`
 // ---------------------------------------------------------------------------
 // Label: "T+12s" on a small canvas, redrawn only when the second changes
 // ---------------------------------------------------------------------------
-const LABEL_W = 128, LABEL_H = 32, LABEL_PX = 15;
+const LABEL_W = 128, LABEL_H = 32, LABEL_PX = 17;
 
 function makeLabel(color) {
   const canvas = document.createElement('canvas');
@@ -415,8 +415,12 @@ function makeLabel(color) {
   canvas.height = LABEL_H;
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
-  texture.minFilter = THREE.LinearFilter;
-  texture.generateMipmaps = false;
+  // The canvas is drawn at ~2x and minified through the mip chain: plain
+  // linear sampling of the 32-texel strip at 15-25 px smeared the glyphs,
+  // worst at gfx low where the pixel ratio is capped at 1.
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.generateMipmaps = true;
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
     map: texture, color: new THREE.Color(...color).lerp(new THREE.Color(1, 1, 1), 0.45),
     transparent: true, depthTest: false, depthWrite: false, sizeAttenuation: false
@@ -432,10 +436,14 @@ function drawLabel(label, seconds) {
   const text = `T+${seconds}s`;
   const { ctx } = label;
   ctx.clearRect(0, 0, LABEL_W, LABEL_H);
-  ctx.font = "600 22px 'Share Tech Mono', 'DejaVu Sans Mono', monospace";
+  ctx.font = "700 24px 'Share Tech Mono', 'DejaVu Sans Mono', monospace";
   ctx.textBaseline = 'middle';
-  ctx.shadowColor = 'rgba(0,0,0,0.9)';
-  ctx.shadowBlur = 4;
+  // A hard dark rim instead of a blurred shadow: it survives the 2x
+  // minification and keeps the caption legible over a bright track.
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+  ctx.strokeText(text, 4, LABEL_H / 2 + 1);
   ctx.fillStyle = '#ffffff';
   ctx.fillText(text, 4, LABEL_H / 2 + 1);
   label.texture.needsUpdate = true;

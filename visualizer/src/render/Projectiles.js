@@ -398,9 +398,12 @@ export class Projectiles {
     }
     // Coil discharge: white-hot flash, an expanding plasma ring around the
     // barrel axis and a short forward jet. Spinal mounts are the big guns.
-    const k = m.spinal ? 1.4 : 1.0, f = 1 - age / MUZZLE_LIFE;
+    // Sized to the hull: the ring that fits a dreadnought turret would
+    // swallow a frigate's whole beam.
+    const hullK = THREE.MathUtils.clamp((ship.userData.size?.width || 5.6) / 5.6, 0.4, 1);
+    const k = (m.spinal ? 1.4 : 1.0) * hullK, f = 1 - age / MUZZLE_LIFE;
     this.flashes.add(this.a, this.dir, k * (0.28 + age * 1.2), 2.2 * f * f * f, 1, m.seed);
-    this.flashes.add(this.a, this.dir, k * (0.2 + age * 4), 1.3 * f * f, 0, m.seed);
+    this.flashes.add(this.a, this.dir, k * (0.18 + age * 2.6), 1.3 * f * f, 0, m.seed);
     this.b.copy(this.a).addScaledVector(this.dir, k * (0.6 + age * 5));
     this.ribbons.add(this.a, this.b, k * 0.1, 1.4 * f * f, 0, m.seed);
   }

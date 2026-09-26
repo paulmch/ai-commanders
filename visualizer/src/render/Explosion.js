@@ -427,10 +427,15 @@ export class Blast {
     this.group.visible = true;
     this.group.position.copy(this.origin).addScaledVector(this.baseVel, age);
 
-    // Flash: instant, then fast exponential decay
+    // Flash: instant, then fast exponential decay. Up close the sprite
+    // would fill the frame with one flat HDR disc, so its footprint is
+    // capped at 0.4 of the camera distance (about a fifth of the view) and
+    // the fireball, shell and sparks carry the rest of the blast.
     const f = Math.exp(-age / K.flashFade);
     this.flash.material.opacity = Math.min(1, f * 1.2);
-    this.flash.scale.setScalar(this.flashScale * (1 + age * 1.5));
+    const camPos = this.ctx.camera?.position;
+    const cap = camPos ? camPos.distanceTo(this.group.position) * 0.4 : Infinity;
+    this.flash.scale.setScalar(Math.min(cap, this.flashScale * (1 + age * 1.5)));
 
     if (this.fire) {
       const life = K.fireLife;

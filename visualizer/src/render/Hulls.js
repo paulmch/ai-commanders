@@ -109,26 +109,26 @@ function scaleUVRange(g, start, count, sx, sy) {
 }
 
 /** Box faces: px nx (d x h), py ny (w x d), pz nz (w x h). */
-function fitBoxUVs(g, w, h, d, rnd) {
+function fitBoxUVs(g, w, h, d, rnd, texel = TEXEL) {
   const sizes = [[d, h], [d, h], [w, d], [w, d], [w, h], [w, h]];
   const idx = g.index;
   // group vertex ranges: vertices are laid out face by face in BoxGeometry
   const perFace = g.attributes.uv.count / 6;
   for (let f = 0; f < 6; f++) {
-    scaleUVRange(g, f * perFace, perFace, sizes[f][0] * TEXEL, sizes[f][1] * TEXEL);
+    scaleUVRange(g, f * perFace, perFace, sizes[f][0] * texel, sizes[f][1] * texel);
     offsetUVs(g, rnd(), rnd(), f * perFace, perFace);
   }
   void idx;
 }
 
-function fitCylinderUVs(g, r, len, rnd) {
+function fitCylinderUVs(g, r, len, rnd, texel = TEXEL) {
   const groups = g.groups.length ? g.groups : [{ start: 0, count: g.index.count }];
   // Torso vertices come first; caps after. Use the index groups to find
   // vertex ranges - torso is group 0.
   const uv = g.attributes.uv;
   const torsoVerts = groups.length > 1 ? Math.min(uv.count, indexRangeMaxVertex(g, groups[0]) + 1) : uv.count;
-  scaleUVRange(g, 0, torsoVerts, 2 * Math.PI * r * TEXEL, len * TEXEL);
-  if (torsoVerts < uv.count) scaleUVRange(g, torsoVerts, uv.count - torsoVerts, 2 * r * TEXEL, 2 * r * TEXEL);
+  scaleUVRange(g, 0, torsoVerts, 2 * Math.PI * r * texel, len * texel);
+  if (torsoVerts < uv.count) scaleUVRange(g, torsoVerts, uv.count - torsoVerts, 2 * r * texel, 2 * r * texel);
   offsetUVs(g, rnd(), rnd());
 }
 
@@ -146,6 +146,10 @@ export class HullKit {
   constructor(size, seed) {
     this.L = size.length;
     this.W = size.width;
+    // Plating density: a fixed tile size reads as a fine mosaic on the big
+    // hulls, so tiles grow with hull length above a destroyer (8 units) -
+    // a dreadnought's plates come out ~1.8x the size of a frigate's.
+    this.texel = TEXEL * Math.min(1, Math.pow(8 / this.L, 0.6));
     this.rnd = mulberry32(seed);
     this.parts = [];          // {geom, mat, center}
     this.radiators = [];      // {mesh} separate animated meshes
@@ -190,7 +194,7 @@ export class HullKit {
     const g = bevel > 0
       ? new RoundedBoxGeometry(w, h, d, seg, r)
       : new THREE.BoxGeometry(w, h, d);
-    fitBoxUVs(g, w, h, d, this.rnd);
+    fitBoxUVs(g, w, h, d, this.rnd, this.texel);
     const m = this.xf(x, y, z, ...(rot || [0, 0, 0]), parent);
     return this.add(mat, g, m);
   }
@@ -199,7 +203,7 @@ export class HullKit {
   drum(mat, r, len, z, { x = 0, y = 0, sides = 8, rTop = null, open = false, parent = null, rot = null } = {}) {
     const g = new THREE.CylinderGeometry(rTop ?? r, r, len, sides, 1, open);
     if (sides <= 8) g.rotateY(Math.PI / sides);
-    fitCylinderUVs(g, r, len, this.rnd);
+    fitCylinderUVs(g, r, len, this.rnd, this.texel);
     g.rotateX(Math.PI / 2);
     const m = this.xf(x, y, z, ...(rot || [0, 0, 0]), parent);
     return this.add(mat, g, m);
@@ -216,21 +220,21 @@ export class HullKit {
     g.rotateY(Math.PI / 4);
     g.rotateX(Math.PI / 2);
     g.scale(w * 2 * Math.SQRT2, h * 2 * Math.SQRT2, 1);
-    fitCylinderUVs(g, (w + h) * 0.5, len, this.rnd);
+    fitCylinderUVs(g, (w + h) * 0.5, len, this.rnd, this.texel);
     return this.add(mat, g, this.xf(0, 0, z, 0, 0, 0, parent));
   }
 
   /** Solid cone (radar dish, nose cap), axis along +Z. */
   cone(mat, r, len, x, y, z, { rot = null, sides = 12, parent = null } = {}) {
     const g = new THREE.ConeGeometry(r, len, sides);
-    fitCylinderUVs(g, r, len, this.rnd);
+    fitCylinderUVs(g, r, len, this.rnd, this.texel);
     g.rotateX(Math.PI / 2);
     return this.add(mat, g, this.xf(x, y, z, ...(rot || [0, 0, 0]), parent));
   }
 
   sphere(mat, r, x, y, z, { parent = null, ws = 12, hs = 8 } = {}) {
     const g = new THREE.SphereGeometry(r, ws, hs);
-    scaleUVRange(g, 0, g.attributes.uv.count, 2 * Math.PI * r * TEXEL, Math.PI * r * TEXEL);
+    scaleUVRange(g, 0, g.attributes.uv.count, 2 * Math.PI * r * this.texel, Math.PI * r * this.texel);
     return this.add(mat, g, this.xf(x, y, z, 0, 0, 0, parent));
   }
 
@@ -613,7 +617,7 @@ export class HullKit {
     for (const p of engineConfig.positions) {
       // bell: open cone, dark, with a stiffening ring and throat collar
       const bell = new THREE.CylinderGeometry(bellR * 0.5, bellR, L * 0.065, 18, 1, true);
-      fitCylinderUVs(bell, bellR, L * 0.065, this.rnd);
+      fitCylinderUVs(bell, bellR, L * 0.065, this.rnd, this.texel);
       bell.rotateX(Math.PI / 2);
       this.add('dark', bell, this.xf(p.x, p.y, -L * 0.515));
       this.drum('barrel', bellR * 1.02, L * 0.008, -L * 0.545, { x: p.x, y: p.y, sides: 18, open: true });
