@@ -76,19 +76,19 @@ hull's armour or magazine and its price follows. A hull pays for:
 | armour | 1 pt / 55 t | how hard it is to kill |
 | PD turret | 1 pt each | active defence |
 | gun mounts | 8 pts per GJ/s | sustained energy throughput |
-| torpedo rounds | 0.032 pts per stowed GJ | **magazine depth x per-round yield** |
+| torpedo rounds | 0.040 pts per stowed GJ | **magazine depth x per-round yield** |
 
-| Hull | Cost | Was | Notes |
-|------|-----:|----:|-------|
-| frigate | 7 | 8 | thin-skinned escort gunboat |
-| corvette | 17 | 10 | 3g torpedo boat, 8 rounds (144 GJ) |
-| destroyer | 18 | 16 | workhorse gun platform |
-| battlecruiser | 24 | 22 | cruiser guns, lighter armor |
-| cruiser | 28 | 26 | heavy combatant |
-| battleship | 42 | 40 | line of battle |
-| dreadnought | 53 | 55 | mobile fortress |
-| dreadnought_siege | 54 | 58 | 7.25 GJ siege spinal |
-| cruiser_torpedo | 58 | 30 | 4 launchers, 48 rounds (864 GJ) |
+| Hull | Cost | 2026-08-13 | Original | Notes |
+|------|-----:|-----:|----:|-------|
+| frigate | 7 | 7 | 8 | thin-skinned escort gunboat |
+| corvette | 18 | 17 | 10 | 3g torpedo boat, 8 rounds (144 GJ) |
+| destroyer | 18 | 18 | 16 | workhorse gun platform |
+| battlecruiser | 24 | 24 | 22 | cruiser guns, lighter armor |
+| cruiser | 28 | 28 | 26 | heavy combatant |
+| battleship | 42 | 42 | 40 | line of battle |
+| dreadnought | 53 | 53 | 55 | mobile fortress |
+| dreadnought_siege | 54 | 54 | 58 | 7.25 GJ siege spinal |
+| cruiser_torpedo | 65 | 58 | 30 | 4 launchers, 48 rounds (864 GJ) |
 
 ### Why torpedoes got expensive (2026-08-13 rebalance)
 
@@ -141,9 +141,90 @@ the 2026-08-11 note that "kiting is not available to battleship fleets" was
 true because nothing survived the approach at any composition.
 
 Caveat: 5 seeds per cell is a small sample, and both sides fly heuristic
-captains. If torpedoes should sit closer to even, `TORPEDO_POINTS_PER_GJ` is
-the one-line dial - lowering it to 0.028 puts `cruiser_torpedo` at 55, level
-with the dreadnought.
+captains. The 2026-09-26 recalibration below re-measured this with a proper
+harness. Its old-engine baseline does not reproduce the rock-paper-scissors
+result with corvette escorts.
+
+### 2026-09-26 recalibration: 0.032 -> 0.040
+
+The torpedo guidance fixes (final-second overshoot, terminal burn reserve,
+intercept time, hit aspect, retarget resets, fuel-out accuracy) and the
+cruiser_torpedo internals fix made torpedoes stronger. The dial was re-fit with
+`scripts/calibrate_torpedo_cost.py`, a reusable harness. It fights zero-LLM
+heuristic battles between fixed archetype fleets, each drafted greedily to the
+same budget at a given dial value:
+
+- **torpedo**: as many cruiser_torpedo as fit, then corvettes, then a frigate top-up
+- **gunline**: as many cruisers as fit, then destroyers, then frigates
+- **dread**: one dreadnought, then cruisers, then frigates
+- **balanced**: auto-draft's battleship / destroyer / corvette cycle, then frigates
+
+Each seed is fought twice with the sides swapped. The formation (staggered
+wall / line abreast / screen) cycles with the seed. Results are cached per
+battle, so re-runs and refinements are cheap.
+
+```bash
+uv run python scripts/calibrate_torpedo_cost.py --k 0.036,0.040,0.044 \
+    --budget 100,150,200 --seeds 24 --out calib.jsonl
+uv run python scripts/calibrate_torpedo_cost.py --engine-root ../other-checkout \
+    --k 0.032 --seeds 36 --out base.jsonl      # any checkout's engine
+```
+
+Torpedo-side results, W-D-L and score = (W + D/2) / N. Most battles run to
+the 25-checkpoint limit and are scored on tactical advantage.
+
+Old engine (`main` @ 7b6bc4a), 0.032, 36 seeds x 2 sides:
+
+| pts | torpedo fleet | vs gunline | vs dread | vs balanced | score |
+|----:|---------------|-----------:|---------:|------------:|------:|
+| 100 | CT + 2 CV + FF | 72-0-0 | 69-3-0 | 42-7-23 | 87% |
+| 150 | 2 CT + 2 CV | 72-0-0 | 70-2-0 | 42-9-21 | 88% |
+| 200 | 3 CT + CV + FF | 54-3-15 | 55-4-13 | 22-15-35 | 66% |
+
+Current engine at 150 pts, 36 seeds x 2 sides (score per matchup):
+
+| k | CT / CV cost | torpedo fleet | gunline | dread | balanced | score |
+|--:|:------------:|---------------|--------:|------:|---------:|------:|
+| 0.032 | 58 / 17 | 2 CT + 2 CV | 98% | 99% | 97% | 98% |
+| 0.036 | 62 / 17 | 2 CT + CV + FF | 57% | 48% | 54% | 53% |
+| **0.040** | **65 / 18** | **2 CT + CV** | **90%** | **57%** | **19%** | **56%** |
+| 0.044 | 69 / 19 | 2 CT + FF | 4% | 10% | 3% | 6% |
+| 0.048 | 72 / 19 | 2 CT | 3% | 57% | 15% | 25% |
+| 0.052 | 76 / 20 | CT + 3 CV + 2 FF | 94% | 95% | 88% | 92% |
+
+Current engine at 100 / 200 pts, 24 seeds x 2 sides:
+
+| k | 100 pts fleet | score | 200 pts fleet | score |
+|--:|---------------|------:|---------------|------:|
+| 0.034 | CT + 2 CV | 92% | 3 CT + CV | 73% |
+| 0.038 | CT + 2 CV | 92% | 3 CT + FF | 12% |
+| **0.040** | CT + CV + 2 FF | 39% | 3 CT | 25% |
+
+**Why 0.040.** Only the 0.034-0.041 range brings the 150-pt torpedo fleet near
+even. Inside that range, 0.040 has the smallest spread across budgets
+(39 / 56 / 25%). It is also never dominant, and at 150 pts it keeps a
+rock-paper-scissors shape: it beats the cruiser line (65-0-7), splits with
+the dreadnought mix (41-0-31) and loses to the battleship-heavy balanced
+mix. The value sits inside the 0.0392-0.0415 band, where no calibration
+fleet changes composition at any of the three budgets. The corvette's raw
+cost there (17.996) is at the centre of its 18-pt step.
+
+**What the dial cannot do.** No single value lands every budget in the 45-55%
+band. The torpedo fleet's result tracks how many **corvettes** the leftover
+budget buys, not the dial itself:
+
+- 2+ corvettes: 73-98%
+- one corvette: 53-56%
+- none: 6-25%
+
+A frigate escort is a net loss because it is killed almost every battle.
+Heuristic torpedo cruisers launch only ~14 of their 48 rounds in a 750 s
+battle, while corvettes empty their magazines. So per point, the corvette
+is the strongest torpedo platform. Yet this dial moves its price one sixth
+as fast as the cruiser_torpedo's (144 GJ vs 864 GJ stowed). Finer cost
+granularity would only move the cliffs. The likely fix is structural: price
+launch rate as well as stowed yield, so corvettes rise relative to
+cruiser_torpedo. Re-fit with the same harness after any such change.
 
 ## Cheap AI captains (src/llm/heuristic_captain.py)
 

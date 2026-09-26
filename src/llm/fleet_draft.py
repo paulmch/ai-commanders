@@ -58,10 +58,17 @@ from .client import LLMCallError
 ARMOR_TONS_PER_POINT = 55.0
 PD_POINTS_PER_TURRET = 1.0
 GUN_POINTS_PER_GJ_PER_S = 8.0
-# Points per GJ of stowed torpedo warhead energy. Set so a full 48-round
-# torpedo cruiser magazine (864 GJ) costs ~28 pts - the hull lands just
-# above a dreadnought, which is where a fleet-killer belongs.
-TORPEDO_POINTS_PER_GJ = 0.032
+# Points per GJ of stowed torpedo warhead energy: a full 48-round torpedo
+# cruiser magazine (864 GJ) costs ~35 pts, a corvette's 8 rounds ~6.
+# Recalibrated 0.032 -> 0.040 on 2026-09-26 with
+# scripts/calibrate_torpedo_cost.py after the torpedo guidance fixes made
+# torpedoes stronger (docs/draft_mode.md has the tables). 0.040 sits inside
+# a band (0.0392-0.0415) where no calibration fleet at 100/150/200 pts
+# changes composition, with cruiser_torpedo at 65 and the corvette at the
+# centre of its 18-pt step, so a small data edit does not flip the result.
+# It was the least budget-sensitive of the candidate bands, but no single
+# value is balanced at every budget; see the doc before retuning.
+TORPEDO_POINTS_PER_GJ = 0.040
 
 
 def _load_ship_specs() -> Dict[str, Any]:
