@@ -70,6 +70,11 @@ def main() -> int:
                         help="RNG seed for reproducible combat rolls")
     parser.add_argument("--trace", action="store_true",
                         help="Record full sim trace (for the 3D replay viewer)")
+    parser.add_argument("--no-predictions", action="store_true",
+                        help="With --trace: skip the per-frame predicted path "
+                             "to the next checkpoint (sim_trace 'plan')")
+    parser.add_argument("--recording-dir", default="data/recordings",
+                        help="Where to save the recording (default data/recordings)")
     parser.add_argument("--auto-draft", action="store_true",
                         help="Skip the LLM draft; both sides get deterministic auto-fleets")
     parser.add_argument("--no-admirals", action="store_true",
@@ -165,6 +170,8 @@ def main() -> int:
         personality_selection=False,
         record_battle=True,
         record_sim_trace=args.trace,
+        record_predictions=not args.no_predictions,
+        recording_dir=args.recording_dir,
         seed=args.seed,
     )
 

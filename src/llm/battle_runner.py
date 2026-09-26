@@ -64,6 +64,10 @@ class BattleConfig:
     # Detailed sim trace - records every step (position, velocity for all objects)
     # WARNING: Generates large files (~1MB per 10 minutes of battle)
     record_sim_trace: bool = False
+    # With the sim trace: record each ship's predicted path to the next
+    # checkpoint (`plan`, src/trajectory_prediction.py). Movement-only look
+    # ahead; never changes the battle, costs some wall time per frame.
+    record_predictions: bool = True
 
     # Fleet configuration (for multi-ship battles with Admirals)
     # If provided, overrides alpha/beta ship types and enables fleet mode
@@ -2569,12 +2573,35 @@ class LLMBattleRunner:
                 "is_disabled": torp_flight.is_disabled,
             })
 
+        self._enrich_trace_ships(ships)
+
         self.recorder.record_sim_frame(
             timestamp=self.simulation.current_time,
             ships=ships,
             projectiles=projectiles,
             torpedoes=torpedoes,
         )
+
+    def _enrich_trace_ships(self, ships: Dict[str, Dict[str, Any]]) -> None:
+        """Add kinematics + the predicted checkpoint plan to trace entries."""
+        if not getattr(self.recorder, "_is_recording", True):
+            return
+        enricher = getattr(self, "_trace_enricher", None)
+        if enricher is None:
+            from ..trajectory_prediction import TraceEnricher
+            interval = (self.fleet_config.decision_interval_s
+                        if getattr(self, "fleet_config", None) else self.config.decision_interval_s)
+            enricher = self._trace_enricher = TraceEnricher(
+                interval, predict=getattr(self.config, "record_predictions", True))
+        try:
+            enricher.enrich(self.simulation, ships)
+        except Exception:
+            # A look-ahead bug must never cost a (paid) battle: warn once and
+            # keep recording without predictions.
+            import traceback
+            print("[TRACE] trajectory prediction failed; disabled for this battle")
+            traceback.print_exc()
+            enricher.predict = False
 
     def _print_status(self) -> None:
         """Print current battle status."""

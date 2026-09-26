@@ -464,9 +464,14 @@ class MCPHttpServer:
     async def _handle_live_predictions(self, request: web.Request) -> web.Response:
         """
         Predicted path of every live ship to the next checkpoint, from the
-        last recorded frame: constant-acceleration extrapolation (a derived
-        from the last two frames), sampled every 2 s of sim time. Positions
-        in metres, matching frame `pos`.
+        last recorded frame. Positions in metres, matching frame `pos`.
+
+        Serves the frame's recorded `plan` (movement-only look-ahead that
+        follows the ship's own guidance and evasion, with `sigma` = 1-sigma
+        wobble dispersion of the checkpoint position, see
+        src/trajectory_prediction.py). Frames without a plan fall back to
+        constant-acceleration extrapolation (a derived from the last two
+        frames, sigma 0), sampled every 2 s of sim time.
         """
         empty = {"t": 0.0, "t_checkpoint": 0.0, "ships": {}}
         runner = self._battle_runner
@@ -489,6 +494,16 @@ class MCPHttpServer:
         for ship_id, state in last.get("ships", {}).items():
             if state.get("destroyed") or state.get("dying"):
                 continue
+            plan = state.get("plan")
+            if plan and plan.get("path"):
+                t_cp = float(plan.get("t_cp", t_cp))
+                ships[ship_id] = {
+                    "path": plan["path"],
+                    "checkpoint_pos": plan["path"][-1],
+                    "sigma": plan.get("sigma", 0.0),
+                    "dt": plan.get("dt"),
+                }
+                continue
             p1 = state["pos"]
             v1 = state["vel"]
             accel = [0.0, 0.0, 0.0]
@@ -509,7 +524,7 @@ class MCPHttpServer:
                 path.append(_at(dt))
                 dt += 2.0
             path.append(_at(horizon))
-            ships[ship_id] = {"path": path, "checkpoint_pos": path[-1]}
+            ships[ship_id] = {"path": path, "checkpoint_pos": path[-1], "sigma": 0.0}
 
         return web.json_response({
             "t": t1,
