@@ -21,6 +21,22 @@ export class Interpolator {
   }
 
   /**
+   * Cubic Hermite for positions sampled with velocities (h = sample spacing
+   * in seconds): C1-continuous across 1 Hz frames, so evasion jinks read as
+   * smooth arcs instead of 1 s polyline kinks
+   */
+  static hermiteVec3(p0, v0, p1, v1, h, t) {
+    const t2 = t * t, t3 = t2 * t;
+    const a = 2 * t3 - 3 * t2 + 1, b = (t3 - 2 * t2 + t) * h;
+    const c = 3 * t2 - 2 * t3, d = (t3 - t2) * h;
+    return [
+      a * p0[0] + b * v0[0] + c * p1[0] + d * v1[0],
+      a * p0[1] + b * v0[1] + c * p1[1] + d * v1[1],
+      a * p0[2] + b * v0[2] + c * p1[2] + d * v1[2]
+    ];
+  }
+
+  /**
    * Spherical linear interpolation for direction vectors
    * Used for orientation to avoid flipping
    */
@@ -84,7 +100,9 @@ export class Interpolator {
       }
 
       result[shipId] = {
-        position: this.lerpVec3(state0.pos, state1.pos, alpha),
+        position: frame1.t - frame0.t > 0 && state0.vel && state1.vel
+          ? this.hermiteVec3(state0.pos, state0.vel, state1.pos, state1.vel, frame1.t - frame0.t, alpha)
+          : this.lerpVec3(state0.pos, state1.pos, alpha),
         velocity: this.lerpVec3(state0.vel, state1.vel, alpha),
         forward: this.slerpVec3(state0.fwd, state1.fwd, alpha),
         thrust: this.lerp(state0.thrust || 0, state1.thrust || 0, alpha),

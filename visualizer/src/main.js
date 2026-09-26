@@ -11,6 +11,9 @@ import { TimeController } from './TimeController.js';
 import { CameraController } from './CameraController.js';
 import { ContactOverlay } from './ContactOverlay.js';
 import { generateShipSVG, getShipClassName, SHIP_SILHOUETTES } from './shipSilhouettes.js';
+import { TrajectoryPredictor } from './TrajectoryPredictor.js';
+import { TrackModeControl } from './TrackModeControl.js';
+import { Tracks } from './render/Tracks.js';
 
 class BattleVisualizer {
   constructor() {
@@ -45,6 +48,12 @@ class BattleVisualizer {
     this.decisions = new DecisionPanel(this);
     this.contacts = new ContactOverlay(document.getElementById('shipContacts'), id => this.selectShip(id));
     this.setupEventListeners();
+    // Trajectory tracks: T / playback-bar button; live PATHS mirrors it
+    this.trackControl = new TrackModeControl({
+      button: document.getElementById('tracksBtn'),
+      isLive: () => !!this.live && !this.live.ended,
+      onChange: mode => { if (this.live) { this.live.showPaths = mode !== 'off'; this.updateLiveHud(); } }
+    });
     this.hideLoading();
 
     // ?live=1 connects to a running battle server; ?recording=<url>
@@ -354,6 +363,7 @@ class BattleVisualizer {
     // Initialize scene
     this.setLoadingStatus('Creating tactical display...');
     this.scene = new SceneManager(this.elements.canvas);
+    this.tracks = new Tracks(this.scene, new TrajectoryPredictor(this.loader));
     this.setLoadingProgress(60);
 
     // Initialize time controller. The extra seconds are an epilogue: a ship
@@ -537,6 +547,9 @@ class BattleVisualizer {
           this.lastDestructionTime = currentPlaybackTime;
         }
 
+        // Predicted (and in replay, actual) tracks to the next checkpoint
+        this.tracks.frame(currentPlaybackTime, this.currentState.ships, this.trackControl.effectiveMode());
+
         // Update camera
         if (this.needsFleetFraming) {
           this.cameraController.focusFleet(this.currentState.ships);
@@ -589,7 +602,7 @@ class BattleVisualizer {
       waitingFor: [],
       draft: null,
       follow: true,
-      showPaths: true,
+      showPaths: this.trackControl.mode !== 'off',
       lastFrameT: 0,
       started: false, // battle data received and scene initialized
       ended: false,
@@ -619,9 +632,6 @@ class BattleVisualizer {
       const payload = await response.json();
       live.connected = true;
       await this.handleLivePayload(payload);
-      if (live.started && live.showPaths && !live.ended) {
-        await this.refreshPredictions();
-      }
     } catch (error) {
       console.warn('Live poll failed:', error);
       live.connected = false;
@@ -711,19 +721,6 @@ class BattleVisualizer {
     this.updateLiveHud();
   }
 
-  async refreshPredictions() {
-    try {
-      const response = await fetch(`${this.live.base}/predictions`);
-      if (!response.ok) return;
-      const predictions = await response.json();
-      if (this.scene && this.live.showPaths && !this.live.ended) {
-        this.scene.updatePredictedPaths(predictions);
-      }
-    } catch {
-      // Transient; the recording poll drives the reconnecting display
-    }
-  }
-
   /**
    * Track a few seconds behind the newest frame (interpolation cushion),
    * catching up smoothly after each poll extends the recording.
@@ -753,11 +750,8 @@ class BattleVisualizer {
 
   setLivePaths(on) {
     if (!this.live) return;
-    this.live.showPaths = on;
-    if (!on && this.scene) {
-      this.scene.updatePredictedPaths(null);
-    }
-    this.updateLiveHud();
+    // Same tracks as replay (TrajectoryPredictor over the streamed frames)
+    this.trackControl.set(on ? 'predicted' : 'off');
   }
 
   updateLiveHud() {
