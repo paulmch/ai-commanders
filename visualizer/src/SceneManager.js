@@ -7,6 +7,7 @@ import { createTorch } from './render/Torch.js';
 import { Ribbon } from './render/Trails.js';
 import { Blast, ShipDestruction } from './render/Explosion.js';
 import { getGlowTexture } from './render/Textures.js';
+import { Projectiles } from './render/Projectiles.js';
 
 /**
  * SceneManager - owns the Three.js scene, camera, renderer and every
@@ -106,6 +107,7 @@ export class SceneManager {
       spawnBlast: (o) => this._spawnBlast({ ...o, category: 'destruction' })
     };
 
+    this.weapons = new Projectiles(this);
     this._updatePixelWorld();
     this.warmUp();
     window.addEventListener('resize', () => this.onResize());
@@ -687,6 +689,8 @@ export class SceneManager {
   // Entity lookup
   // ===========================================================================
   getEntityPosition(targetType, targetId) {
+    const weaponPosition = this.weapons.position(targetType, targetId);
+    if (weaponPosition) return weaponPosition;
     if (targetType === 'torpedo') {
       const t = this.torpedoes.get(targetId);
       return t ? t.position : null;
