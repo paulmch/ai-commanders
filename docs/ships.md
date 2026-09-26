@@ -16,6 +16,7 @@ This document details all ship classes in AI Commanders, including their module 
    - [Battlecruiser](#battlecruiser)
    - [Battleship](#battleship)
    - [Dreadnought](#dreadnought)
+   - [Siege Dreadnought](#siege-dreadnought)
 5. [Combat Tables](#combat-tables)
    - [Shots to First Penetration](#shots-to-first-penetration)
    - [Shots to Destruction](#shots-to-destruction)
@@ -34,6 +35,7 @@ This document details all ship classes in AI Commanders, including their module 
 | Battlecruiser | 1,200 | 175 | 1.5 | 70 | 5 | Fast Capital |
 | Battleship | 1,600 | 200 | 1.0 | 80 | 8 | Line of Battle |
 | Dreadnought | 2,400 | 275 | 0.75 | 120 | 11 | Mobile Fortress |
+| Siege Dreadnought | 2,400 | 275 | 0.676 | 120 | 11 | Siege Variant |
 
 ### Rotation Times (90°)
 
@@ -278,8 +280,9 @@ Layer 9 (Tail): Main Engine Assembly
 Same hull and drive as the Cruiser, but it carries no guns at all: the gun batteries
 and part of their ammunition were traded for 4 torpedo launchers and extra armor mass
 (1,467 vs 1,296 tons). It closes under its nose armor and delivers saturation salvos -
-4 launchers with 12 rounds each fire 8 torpedoes per 30s decision cycle, enough to
+4 launchers with 12 rounds each fire 12 torpedoes per 30s decision cycle, enough to
 overwhelm a dreadnought's point defense in one coordinated strike.
+This assumes loaded, ready tubes at the start: launches occur at 0, 12 and 24 seconds.
 
 **Armor Sections:**
 
@@ -404,6 +407,16 @@ Layer 9: Heavy Coilgun Battery C, Heavy Coilgun Battery D, Point Defense Array
 Layer 10: Main Fuel Tank, Reserve Fuel Tanks (A/B)
 Layer 11 (Tail): Main Engine Assembly, Maneuvering Thrusters
 ```
+
+---
+
+### Siege Dreadnought
+
+The `dreadnought_siege` variant uses the Dreadnought's 275m hull, armor profile,
+crew of 120 and 12-layer internal layout. It replaces the spinal coiler with a
+Heavy Siege Coiler Mk3 (7.25 GJ, 4.7 km/s, 24s reload). Its total wet mass is
+8,837 tons and combat acceleration is 0.676g. The remaining gun batteries and
+four PD turrets match the Dreadnought; its defensive combat-table rows apply here too.
 
 ---
 

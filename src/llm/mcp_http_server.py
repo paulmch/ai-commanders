@@ -816,15 +816,7 @@ async def run_fleet_battle_with_http(
         # === SIMULATION PHASE ===
         http_server.set_battle_status(
             "running", checkpoint=runner.checkpoint_count, waiting_for=[])
-        steps = int(decision_interval)
-        for step_i in range(steps):
-            current_time = runner.simulation.current_time
-
-            # Capture Admiral pre-snapshots at T-15s before checkpoint
-            if current_time == next_checkpoint_time - runner.admiral_pre_snapshot_offset:
-                runner._capture_admiral_pre_snapshots()
-
-            runner.simulation.step()
+        for _ in runner._advance_to_checkpoint(next_checkpoint_time, fleet_mode=True):
 
             # Record sim frame if enabled
             if runner.recorder and runner.config.record_sim_trace:

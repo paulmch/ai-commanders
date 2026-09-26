@@ -659,6 +659,9 @@ class DamagePropagator:
         last_distance = 0.0
 
         for module in modules_in_path:
+            # An earlier module's spall may already have destroyed this one.
+            if module.is_destroyed:
+                continue
             # Check if we still have energy to deal damage
             if current_energy < self.min_energy_threshold_gj:
                 break
@@ -718,6 +721,10 @@ class DamagePropagator:
                     current_energy,
                 )
                 results.extend(spalling_results)
+                # Secondary fragments draw from the same projectile budget.
+                if current_energy * SPALLING_ENERGY_FACTOR >= self.min_energy_threshold_gj:
+                    current_energy *= 1.0 - SPALLING_ENERGY_FACTOR
+                    result.remaining_energy_gj = current_energy
 
             # Update tracking
             last_distance = module_distance
@@ -765,48 +772,20 @@ class DamagePropagator:
             energy_gj=spalling_energy,
         )
 
-        # Get modules that could be hit by spalling
-        # Spalling doesn't propagate through the whole ship, just nearby modules
-        for module in module_layout.modules:
-            if module.is_destroyed or module.name == destroyed_module.name:
-                continue
-
-            # Check if module is in spalling cone and close enough
-            distance = (module.position - destroyed_module.position).magnitude
-            if distance > 15.0:  # Spalling effective range ~15 meters
-                continue
-
-            if not spalling_cone.is_in_cone(module.position):
-                continue
-
-            # Calculate spalling damage
-            hit_fraction = spalling_cone.calculate_hit_fraction(
-                module.position,
-                module.radius_m
-            )
-
-            if hit_fraction <= 0:
-                continue
-
-            energy_at_module = spalling_cone.get_energy_at_distance(distance)
-            spalling_damage = energy_at_module * hit_fraction
-
-            if spalling_damage < self.min_energy_threshold_gj:
-                continue
-
-            health_before = module.health
-            absorbed = module.take_damage(spalling_damage)
-
-            result = ModuleDamageResult(
-                module_name=f"{module.name} (spalling)",
-                damage_taken_gj=absorbed,
-                health_before=health_before,
-                health_after=module.health,
-                destroyed=module.is_destroyed,
-                remaining_energy_gj=0.0,  # Spalling doesn't chain
-            )
-            results.append(result)
-
+        # Use one energy budget in distance order, just like the primary cone.
+        nearby = ModuleLayout(
+            modules=[m for m in module_layout.modules
+                     if m is not destroyed_module and not m.is_destroyed
+                     and (m.position - destroyed_module.position).magnitude <= 15.0],
+            ship_length_m=module_layout.ship_length_m,
+            ship_radius_m=module_layout.ship_radius_m,
+        )
+        results = DamagePropagator(
+            enable_spalling=False,
+            min_energy_threshold_gj=self.min_energy_threshold_gj,
+        ).propagate(spalling_cone, nearby)
+        for result in results:
+            result.module_name += " (spalling)"
         return results
 
     def propagate_from_hit_result(

@@ -251,7 +251,8 @@ class MCPController:
             if not ship_id:
                 continue
             ship = simulation.get_ship(ship_id)
-            if ship and not ship.is_destroyed:
+            if (ship and not ship.is_destroyed and not getattr(ship, "is_dying", False)
+                    and not getattr(ship, "is_surrendered", False)):
                 ship_data = self._build_friendly_ship_data(ship, captain, simulation)
                 friendly_ships.append(ship_data)
 
@@ -396,7 +397,9 @@ class MCPController:
 
         # Heatsink capacity
         heatsink_capacity = 0
-        if hasattr(ship, 'heatsink_capacity_gj'):
+        if getattr(ship, 'thermal_system', None):
+            heatsink_capacity = ship.thermal_system.heatsink.capacity_gj
+        elif hasattr(ship, 'heatsink_capacity_gj'):
             heatsink_capacity = ship.heatsink_capacity_gj
         elif hasattr(ship, 'thermal') and ship.thermal:
             heatsink_capacity = ship.thermal.heatsink_capacity_gj if hasattr(ship.thermal, 'heatsink_capacity_gj') else 0
@@ -914,6 +917,18 @@ def _apply_mcp_commands(
 
     for cmd in commands:
         try:
+            if cmd.command_type in (
+                MCPCommandType.SET_MANEUVER, MCPCommandType.SET_WEAPONS_ORDER,
+                MCPCommandType.SET_PRIMARY_TARGET, MCPCommandType.SET_RADIATORS,
+                MCPCommandType.LAUNCH_TORPEDO,
+            ):
+                ship = simulation.get_ship(cmd.ship_id)
+                if not ship:
+                    raise ValueError("Ship not found")
+                if ship.faction != faction:
+                    raise ValueError("Ship is not owned by the issuing faction")
+                if ship.is_destroyed or getattr(ship, "is_dying", False) or getattr(ship, "is_surrendered", False):
+                    raise ValueError("Ship is destroyed, dying, or surrendered")
             if cmd.command_type == MCPCommandType.SET_MANEUVER:
                 ship = simulation.get_ship(cmd.ship_id)
                 if ship:
@@ -934,7 +949,8 @@ def _apply_mcp_commands(
                         heading_direction=heading_direction,
                     )
                     # Use inject_command for consistency with LLM captain flow
-                    simulation.inject_command(cmd.ship_id, maneuver)
+                    if not simulation.inject_command(cmd.ship_id, maneuver):
+                        raise ValueError("Simulation rejected the maneuver")
                     results["applied"].append({
                         "command": "set_maneuver",
                         "ship_id": cmd.ship_id,
@@ -1039,10 +1055,12 @@ def _apply_mcp_commands(
 
                     # Use inject_command with same format as LLM captains
                     if orders:
-                        simulation.inject_command(cmd.ship_id, {
+                        accepted = simulation.inject_command(cmd.ship_id, {
                             "type": "weapons_orders",
                             "orders": orders,
                         })
+                        if not accepted:
+                            raise ValueError("Simulation rejected the weapons order")
                         results["applied"].append({
                             "command": "set_weapons_order",
                             "ship_id": cmd.ship_id,

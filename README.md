@@ -231,6 +231,14 @@ uv run python scripts/mcp_battle.py \
 
 This example gives the MCP-controlled Alpha side an automatic, heuristic opponent. Connect the client, draft a fleet, and signal `ready()` to advance. The same live viewer can spectate.
 
+Configure the client's MCP server command as:
+
+```bash
+uv run python -m src.llm.mcp_server --faction alpha --http http://localhost:8765
+```
+
+For a second MCP-controlled side, use `--faction beta` with the same battle endpoint.
+
 [Client configuration, tools, and battle flow →](docs/mcp-battles.md)
 
 ### Commander memory and learning

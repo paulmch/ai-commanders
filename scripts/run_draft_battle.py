@@ -90,8 +90,10 @@ def main() -> int:
     verbose = not args.quiet
     fleet_data = load_fleet_data()
 
+    alpha_captains = args.alpha_captain_model or args.captain_model
+    beta_captains = args.beta_captain_model or args.captain_model
     needs_llm = (not args.auto_draft or not args.no_admirals
-                 or args.captain_model != HEURISTIC_MODEL)
+                 or any(model != HEURISTIC_MODEL for model in (alpha_captains, beta_captains)))
     client = None
     if needs_llm:
         from src.llm.client import CaptainClient
@@ -142,8 +144,6 @@ def main() -> int:
             name=f"Admiral {_get_short_model_name(model)}",
         )
 
-    alpha_captains = args.alpha_captain_model or args.captain_model
-    beta_captains = args.beta_captain_model or args.captain_model
     fleet_config = BattleFleetConfig(
         battle_name=f"Draft Battle ({args.budget} pts)",
         alpha_fleet=draft_to_fleet_definition(

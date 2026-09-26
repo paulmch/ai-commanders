@@ -20,6 +20,7 @@ back to a deterministic auto-draft so a battle always starts.
 from __future__ import annotations
 
 import json
+import math
 import random
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -356,27 +357,34 @@ def validate_selection(
     if not isinstance(ships_arg, list) or not ships_arg:
         return None, 0, "You must buy at least one ship (ships array was empty)."
 
-    flat: List[str] = []
+    entries: List[Tuple[str, int]] = []
     spent = 0
+    n_ships = 0
     for entry in ships_arg:
+        if not isinstance(entry, dict):
+            return None, 0, "Each ships entry must be an object with ship_type and count."
         stype = str(entry.get("ship_type", "")).strip().lower()
         count = entry.get("count", 1)
         if stype not in SHIP_POINT_COSTS:
             return None, 0, (
                 f"Unknown hull '{stype}'. Valid hulls: "
                 f"{', '.join(SHIP_POINT_COSTS)}.")
-        if not isinstance(count, int) or count < 1:
+        if isinstance(count, bool) or not isinstance(count, int) or count < 1:
             return None, 0, f"Invalid count {count!r} for {stype}."
-        flat.extend([stype] * count)
+        # Tally only; the list is expanded after the limit checks so an
+        # external count like 10**100 cannot allocate a huge list.
+        entries.append((stype, count))
         spent += SHIP_POINT_COSTS[stype] * count
+        n_ships += count
 
     if spent > budget:
         return None, 0, (
             f"Over budget: that fleet costs {spent} points but you only have "
             f"{budget}. Drop or downgrade ships.")
-    if len(flat) > max_ships:
+    if n_ships > max_ships:
         return None, 0, (
-            f"Too many hulls: {len(flat)} ships, the cap is {max_ships}.")
+            f"Too many hulls: {n_ships} ships, the cap is {max_ships}.")
+    flat = [stype for stype, count in entries for _ in range(count)]
     return flat, spent, None
 
 
@@ -448,16 +456,26 @@ def apply_formation(
                          f"+/-{clamp:.0f} km cube")
         ship.offset_km = (cx, cy, cz)
 
-    # Enforce minimum separation with a simple lateral nudge
-    for i, a in enumerate(drafted):
-        for b in drafted[i + 1:]:
-            ax, ay, az = a.offset_km
-            bx, by, bz = b.offset_km
-            d2 = (ax - bx) ** 2 + (ay - by) ** 2 + (az - bz) ** 2
-            if d2 < MIN_SEPARATION_KM ** 2:
-                b.offset_km = (bx, by + MIN_SEPARATION_KM * 2, bz)
-                notes.append(f"nudged {b.ship_name} {MIN_SEPARATION_KM * 2:.0f} km "
-                             f"laterally (was overlapping {a.ship_name})")
+    # Place each hull against ALL settled predecessors. A later pairwise nudge
+    # can otherwise undo an earlier separation or push a hull outside the cube.
+    clamp = FORMATION_MAX_OFFSET_KM
+    for i, ship in enumerate(drafted):
+        x, y, z = (max(-clamp, min(clamp, c)) for c in ship.offset_km)
+        step = MIN_SEPARATION_KM * 2
+        candidates = [y] + [y + sign * step * n
+                            for n in range(1, math.ceil(2 * clamp / step) + 1)
+                            for sign in (1, -1)]
+        for cy in candidates:
+            if abs(cy) <= clamp and all(
+                math.dist((x, cy, z), other.offset_km) >= MIN_SEPARATION_KM
+                for other in drafted[:i]
+            ):
+                if (x, cy, z) != ship.offset_km:
+                    notes.append(f"nudged {ship.ship_name} to a separated slot inside the formation cube")
+                ship.offset_km = (x, cy, z)
+                break
+        else:
+            raise ValueError("Too many overlapping hulls for a separated lateral formation")
     return notes
 
 
@@ -500,6 +518,10 @@ def auto_draft(
     and greedily fills the budget, so two auto-drafted sides still produce an
     interesting asymmetric battle.
     """
+    if isinstance(budget, bool) or not isinstance(budget, int) or budget < min(SHIP_POINT_COSTS.values()):
+        raise ValueError("Draft budget must be an integer sufficient to buy at least one ship")
+    if isinstance(max_ships, bool) or not isinstance(max_ships, int) or max_ships < 1:
+        raise ValueError("max_ships must be a positive integer")
     rng = random.Random(seed if seed is not None else 0)
     doctrines = [
         ["destroyer", "destroyer", "cruiser", "frigate"],          # gunline
@@ -508,6 +530,8 @@ def auto_draft(
         ["dreadnought", "frigate", "corvette"],                    # flagship
     ]
     preference = doctrines[rng.randrange(len(doctrines))]
+    if not any(SHIP_POINT_COSTS[s] <= budget for s in preference):
+        preference = [min(SHIP_POINT_COSTS, key=SHIP_POINT_COSTS.get)]
 
     picked: List[str] = []
     spent = 0

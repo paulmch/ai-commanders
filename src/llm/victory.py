@@ -31,7 +31,7 @@ class VictoryEvaluator:
 
     def is_ship_destroyed(self, ship: Any) -> bool:
         """Check if ship is destroyed."""
-        return ship.is_destroyed
+        return ship.is_destroyed or getattr(ship, "is_dying", False) is True
 
     def is_ship_disabled(self, ship: Any) -> bool:
         """

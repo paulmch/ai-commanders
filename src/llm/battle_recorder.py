@@ -267,6 +267,7 @@ class BattleRecorder:
             time_limit_s=battle_config.time_limit_s,
             max_checkpoints=battle_config.max_checkpoints,
             decision_interval_s=_interval_s(fleet_config) or _interval_s(battle_config),
+            unlimited_mode=getattr(battle_config, 'unlimited_mode', False),
         )
 
         # Record alpha fleet
@@ -356,15 +357,25 @@ class BattleRecorder:
         # Weapons
         if hasattr(ship, 'weapons'):
             specs["weapons"] = {}
+            from ..simulation import WeaponState
             for slot, weapon in ship.weapons.items():
-                specs["weapons"][slot] = {
-                    "type": type(weapon).__name__,
-                    "damage_gj": getattr(weapon, 'damage_gj', 0),
-                }
+                if isinstance(weapon, WeaponState):
+                    # Sim ships hold WeaponState wrappers; the spec is .weapon
+                    wtype = weapon.weapon.weapon_type
+                    damage_gj = weapon.weapon.kinetic_energy_gj
+                else:
+                    wtype = type(weapon).__name__
+                    damage_gj = getattr(weapon, 'damage_gj', 0)
+                specs["weapons"][slot] = {"type": wtype, "damage_gj": damage_gj}
 
         # Propulsion
         specs["max_acceleration_g"] = getattr(ship, 'max_acceleration_g', 2.0)
         specs["delta_v_budget_kps"] = getattr(ship, 'delta_v_budget_kps', 500)
+        from ..physics import ShipState
+        state = getattr(ship, "kinematic_state", None)
+        if isinstance(state, ShipState):
+            specs["max_acceleration_g"] = state.max_acceleration_g()
+            specs["delta_v_budget_kps"] = state.remaining_delta_v_kps()
 
         return specs
 

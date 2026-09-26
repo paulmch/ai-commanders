@@ -576,7 +576,7 @@ class ModuleLayout:
         # Determine layout based on ship class
         layout_factory = _SHIP_LAYOUT_FACTORIES.get(
             ship_type,
-            _create_default_layout
+            _SHIP_LAYOUT_FACTORIES.get(hull_data.get("type"), _create_default_layout)
         )
 
         return layout_factory(ship_type, ship_data, ship_length, crew_count)

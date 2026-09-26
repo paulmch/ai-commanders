@@ -106,10 +106,18 @@ async def run_mcp_battle(
     )
 
     # Create client for non-MCP fleets (if any)
+    draft_config = fleet_config.draft
+    needs_llm = any(
+        (fleet.admiral is not None and fleet.admiral.enabled)
+        or (draft_config.captain_model != "heuristic" if draft_config and draft_config.enabled
+            else any(ship.model not in ("heuristic", "mcp", "dummy") for ship in fleet.ships))
+        for fleet in (fleet_config.alpha_fleet, fleet_config.beta_fleet)
+        if not (fleet.mcp and fleet.mcp.enabled)
+    )
     client = CaptainClient(
         model="anthropic/claude-sonnet-5",
         session_id=f"ai-commanders-mcp-{uuid.uuid4().hex[:16]}",
-    )
+    ) if needs_llm else None
 
     # Create dummy captain configs (required by runner but not used for MCP fleets)
     alpha_config = LLMCaptainConfig(
