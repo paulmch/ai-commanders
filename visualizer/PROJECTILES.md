@@ -24,8 +24,9 @@ give identical buffers; see tests), no per-frame allocation, no PointLights.
   `scene.weapons.ownsMoment(kind)` because this module draws them.
 - `main.js` reset: `scene.weapons.clear()`.
 
-Legacy `SceneManager.updateProjectile/updateTorpedo/updateContinuousBeams` are
-now unused (left in place to keep the shared-file diff small).
+The legacy `SceneManager.updateProjectile/updateTorpedo/updateContinuousBeams`
+paths were removed in the polish pass; `getEntityPosition` answers rounds from
+this module only.
 
 ## Rendering notes
 
@@ -34,8 +35,18 @@ now unused (left in place to keep the shared-file diff small).
 - Viewer hulls are ~8x oversize; `Projectiles.lift()` pushes a fresh torpedo
   out of its launcher's displayed hull (fading to zero by 2x hull radius) so
   launches are visible instead of hidden inside the mesh for ~10 s.
-- A hull kit may expose `ship.userData.weaponMounts[weapon_slot]` (Object3D)
-  for exact muzzle placement; otherwise spinal offsets / turret rigs are used.
+- Muzzles: a hull kit may expose `ship.userData.weaponMounts[weapon_slot]`
+  (Object3D); otherwise the turret rig in `userData.gunTurrets` whose `slot`
+  matches the shot's `weapon_slot` (barrel tip computed from the rig's fixed
+  mount and the round's launch bearing, never the animated rig state), else
+  the spinal mount. `muzzleLift()` offsets a fresh slug from ship centre to
+  that muzzle and blends the offset out over ~2 hull lengths of flight.
+- PD beams start at the lens of the firing ball (`userData.pdMounts` by
+  turret name, else by index; seeded hull point on hulls without mounts).
+- Hit flashes are placed on the face met in the target's frame (relative
+  velocity), so fleet drift cannot push a head-on hit to the flank.
+- `positionAt(type, id, t)` gives a round's displayed position straight from
+  the recording (HullRigs aims PD balls with it).
 - Old recordings lack terminal-burn flags; the plume phase is inferred from
   fuel use, range and closure (explicit phase fields win when present).
 
