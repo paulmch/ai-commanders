@@ -1,6 +1,6 @@
 {
   "battle_name": "MCP vs Gemini Fleet Battle",
-  "time_limit_s": 0,
+  "time_limit_s": 1200,
   "decision_interval_s": 30,
   "initial_distance_km": 1000,
   "unlimited_mode": true,

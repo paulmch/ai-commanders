@@ -66,6 +66,8 @@ class DraftManager:
         initial_distance_km: float,
         mcp_factions: Set[str],
     ):
+        from .fleet_config import DraftConfig
+        DraftConfig(budget=budget, max_ships=max_ships)
         self.fleet_data = fleet_data
         self.budget = budget
         self.max_ships = max_ships

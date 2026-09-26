@@ -54,7 +54,8 @@ class HeuristicCaptain(LLMCaptain):
         if self.has_surrendered:
             return []
         ship = simulation.get_ship(ship_id)
-        if not ship or ship.is_destroyed:
+        if (not ship or ship.is_destroyed or getattr(ship, "is_dying", False)
+                or getattr(ship, "is_surrendered", False)):
             return []
 
         if not self.weapon_groups and self.config.fleet_data and self.config.ship_type:
@@ -151,7 +152,10 @@ class HeuristicCaptain(LLMCaptain):
 
         # Radiators: shed heat when hot, button up under torpedo fire
         heat = getattr(ship, "heat_percent", 0.0) or 0.0
-        extended = bool(getattr(ship, "radiators_extended", False))
+        from ..thermal import RadiatorState
+        radiators = getattr(getattr(ship, "thermal_system", None), "radiators", None)
+        extended = bool(radiators and any(
+            rad.state == RadiatorState.EXTENDED for rad in radiators.radiators.values()))
         if not extended and heat > HEAT_EXTEND_PCT and not threat:
             calls.append(("set_radiators", {"extend": True}))
         elif extended and (threat or heat < HEAT_SAFE_PCT):

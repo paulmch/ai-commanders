@@ -86,6 +86,13 @@ class DraftConfig:
     # "mcp" placeholder captains (commands are injected directly).
     captain_model: str = "heuristic"
 
+    def __post_init__(self) -> None:
+        from .fleet_draft import SHIP_POINT_COSTS
+        if isinstance(self.budget, bool) or not isinstance(self.budget, int) or self.budget < min(SHIP_POINT_COSTS.values()):
+            raise ValueError("Draft budget must be an integer sufficient to buy at least one ship")
+        if isinstance(self.max_ships, bool) or not isinstance(self.max_ships, int) or self.max_ships < 1:
+            raise ValueError("max_ships must be a positive integer")
+
 
 @dataclass
 class ShipConfig:
@@ -166,8 +173,8 @@ class BattleFleetConfig:
         if draft_data and draft_data.get("enabled", True):
             draft = DraftConfig(
                 enabled=True,
-                budget=int(draft_data.get("budget", 100)),
-                max_ships=int(draft_data.get("max_ships", 8)),
+                budget=draft_data.get("budget", 100),
+                max_ships=draft_data.get("max_ships", 8),
                 captain_model=draft_data.get("captain_model", "heuristic"),
             )
 

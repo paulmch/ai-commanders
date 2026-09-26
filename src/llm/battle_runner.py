@@ -452,7 +452,7 @@ class LLMBattleRunner:
             captain.faction = "alpha"
 
             # Mark if captain has an Admiral
-            if self.fleet_config.alpha_fleet.admiral:
+            if self.fleet_config.alpha_fleet.admiral and self.fleet_config.alpha_fleet.admiral.enabled:
                 captain.has_admiral = True
 
             self.alpha_captains[ship_config.ship_id] = captain
@@ -510,7 +510,7 @@ class LLMBattleRunner:
             captain.faction = "beta"
 
             # Mark if captain has an Admiral
-            if self.fleet_config.beta_fleet.admiral:
+            if self.fleet_config.beta_fleet.admiral and self.fleet_config.beta_fleet.admiral.enabled:
                 captain.has_admiral = True
 
             self.beta_captains[ship_config.ship_id] = captain
@@ -532,7 +532,7 @@ class LLMBattleRunner:
                 fleet_data=fleet_data,
                 chat=self.mcp_chat,
             )
-        elif self.fleet_config.alpha_fleet.admiral:
+        elif self.fleet_config.alpha_fleet.admiral and self.fleet_config.alpha_fleet.admiral.enabled:
             from .admiral import LLMAdmiral
             self.alpha_admiral = LLMAdmiral(
                 config=self.fleet_config.alpha_fleet.admiral,
@@ -555,7 +555,7 @@ class LLMBattleRunner:
                 fleet_data=fleet_data,
                 chat=self.mcp_chat,
             )
-        elif self.fleet_config.beta_fleet.admiral:
+        elif self.fleet_config.beta_fleet.admiral and self.fleet_config.beta_fleet.admiral.enabled:
             from .admiral import LLMAdmiral
             self.beta_admiral = LLMAdmiral(
                 config=self.fleet_config.beta_fleet.admiral,
@@ -1588,6 +1588,8 @@ class LLMBattleRunner:
         enemy_admiral: Optional[LLMAdmiral],
     ) -> Any:
         """Get Admiral's decision for the checkpoint."""
+        if enemy_admiral is None:
+            enemy_admiral = self.beta_mcp if admiral.faction == "alpha" else self.alpha_mcp
         return admiral.decide(
             simulation=self.simulation,
             captains=friendly_captains,
@@ -2284,11 +2286,13 @@ class LLMBattleRunner:
         model: a draw is propose + accept, exactly as the MCP path already checks.
         Attributes are now read directly so a future rename fails loudly.
         """
-        if not (self.alpha_admiral and self.beta_admiral):
+        alpha = self.alpha_mcp or self.alpha_admiral
+        beta = self.beta_mcp or self.beta_admiral
+        if not (alpha and beta):
             return False
         return (
-            (self.alpha_admiral.has_proposed_draw and self.beta_admiral.has_accepted_draw)
-            or (self.beta_admiral.has_proposed_draw and self.alpha_admiral.has_accepted_draw)
+            (alpha.has_proposed_draw and beta.has_accepted_draw)
+            or (beta.has_proposed_draw and alpha.has_accepted_draw)
         )
 
     def _is_fleet_battle_over(self) -> bool:
@@ -2310,9 +2314,8 @@ class LLMBattleRunner:
             return True
 
         # Check for mutual Admiral draw
-        if self.alpha_admiral and self.beta_admiral:
-            if self._fleet_draw_agreed():
-                return True
+        if self._fleet_draw_agreed():
+            return True
 
         # In unlimited mode, only destruction/surrender/draw can end battle
         if self.config.unlimited_mode:
@@ -2330,11 +2333,13 @@ class LLMBattleRunner:
         # Count active ships
         alpha_active = sum(
             1 for ship in self.alpha_ships.values()
-            if not ship.is_destroyed and not getattr(ship, 'is_surrendered', False)
+            if not ship.is_destroyed and not getattr(ship, 'is_dying', False)
+            and not getattr(ship, 'is_surrendered', False)
         )
         beta_active = sum(
             1 for ship in self.beta_ships.values()
-            if not ship.is_destroyed and not getattr(ship, 'is_surrendered', False)
+            if not ship.is_destroyed and not getattr(ship, 'is_dying', False)
+            and not getattr(ship, 'is_surrendered', False)
         )
 
         # Determine outcome
@@ -2350,7 +2355,7 @@ class LLMBattleRunner:
             outcome = BattleOutcome.ALPHA_VICTORY
             winner = "alpha"
             reason = "Beta fleet eliminated"
-        elif self.alpha_admiral and self.beta_admiral:
+        elif (self.alpha_mcp or self.alpha_admiral) and (self.beta_mcp or self.beta_admiral):
             # Check for mutual draw
             if self._fleet_draw_agreed():
                 # Resolve by fleet points
