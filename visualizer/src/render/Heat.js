@@ -91,12 +91,17 @@ export function buildHeatTimelines(trace = [], events = []) {
       tl.initial = i0 >= 0 ? r.rad[i0] : 0;
       changes = [];
       let cur = tl.initial;
+      const orders = legacy.get(id) || [];
       for (let i = i0 + 1; i0 >= 0 && i < n; i++) {
         const v = r.rad[i];
         if (v < 0 || v === cur) continue;
         cur = v;
         const prev = r.radOut[i - 1];
-        changes.push({ t: r.t[i], ext: v === 1, radOut: prev === prev ? prev : 0 });
+        // The trace only shows the flip on the first frame after it: a
+        // matching radiator_change order since the previous frame dates it
+        // exactly (the checkpoint, in step with the decision log)
+        const ord = orders.find(o => o.ext === (v === 1) && o.t >= r.t[i - 1] && o.t <= r.t[i]);
+        changes.push({ t: ord ? ord.t : r.t[i], ext: v === 1, radOut: prev === prev ? prev : 0 });
       }
     } else {
       changes = (legacy.get(id) || []).slice().sort((a, b) => a.t - b.t)

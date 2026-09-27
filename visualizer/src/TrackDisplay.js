@@ -138,3 +138,75 @@ export function saveTrackScope(storage, scope) {
 export function inTrackScope(scope, id, focusId) {
   return scope !== 'focus' || (!!focusId && id === focusId);
 }
+
+// ---------------------------------------------------------------------------
+// Checkpoint hull ghost: screen-space limits
+// ---------------------------------------------------------------------------
+
+/** Ghost length on screen (px) below which it is too small to read, and where it is fully in. */
+export const GHOST_MIN_PX = 14, GHOST_FULL_PX = 40;
+/**
+ * Near-camera limits, as fractions of the viewport height: the ghost is
+ * never drawn longer than GHOST_CAP_FRAC (it shrinks about its centre past
+ * that), and fades out between the cap and GHOST_GONE_FRAC of its natural
+ * size - so a checkpoint the camera sits next to cannot loom across the
+ * screen. (Screen size ~ 1 / distance: this IS the approach-to-camera fade.)
+ */
+export const GHOST_CAP_FRAC = 0.22, GHOST_GONE_FRAC = 0.42;
+/** Clearance (px) from the focused hull at which a ghost in front of it is fully in. */
+export const GHOST_COVER_CLEAR_PX = 28;
+
+const smooth01 = (e0, e1, x) => {
+  const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
+  return t * t * (3 - 2 * t);
+};
+
+/**
+ * Hull-ghost look from its screen geometry.
+ * @param {number} px      natural on-screen length of the ghost hull (pixels)
+ * @param {number} viewPx  viewport height (pixels)
+ * @param {number} [gapPx] clearance (px) between the ghost and the focused
+ *   hull when the ghost is in front of it (<= 0: overlapping); Infinity when
+ *   it cannot cover the focused ship (no focus, or the ghost is behind it)
+ * @returns {{opacity: number, scale: number}} opacity multiplier 0..1 and
+ *   the scale that holds the drawn length at the cap
+ */
+export function ghostLook(px, viewPx, gapPx = Infinity, out = {}) {
+  const frac = viewPx > 0 ? px / viewPx : 0;
+  const readable = smooth01(GHOST_MIN_PX, GHOST_FULL_PX, px);
+  const near = 1 - smooth01(GHOST_CAP_FRAC, GHOST_GONE_FRAC, frac);
+  const clear = gapPx === Infinity ? 1 : smooth01(0, GHOST_COVER_CLEAR_PX, gapPx);
+  out.scale = frac > GHOST_CAP_FRAC ? GHOST_CAP_FRAC / frac : 1;
+  out.opacity = readable * near * clear;
+  return out;
+}
+
+/** Distance from point (px, py) to segment (ax, ay)-(bx, by). */
+function pointSegDist(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay;
+  const l2 = dx * dx + dy * dy;
+  const t = l2 > 0 ? Math.min(1, Math.max(0, ((px - ax) * dx + (py - ay) * dy) / l2)) : 0;
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+/**
+ * Clearance between two screen-space capsules (segment a0-a1 of radius ra,
+ * b0-b1 of radius rb; points as [x, y]): negative when they overlap. A hull
+ * seen on screen is roughly its projected spine thickened by its beam.
+ */
+export function capsuleGap2D(a0, a1, ra, b0, b1, rb) {
+  const cross = (o, p, q) => (p[0] - o[0]) * (q[1] - o[1]) - (p[1] - o[1]) * (q[0] - o[0]);
+  const d1 = cross(a0, a1, b0), d2 = cross(a0, a1, b1);
+  const d3 = cross(b0, b1, a0), d4 = cross(b0, b1, a1);
+  let d;
+  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
+    d = 0;   // the spines cross
+  } else {
+    d = Math.min(
+      pointSegDist(a0[0], a0[1], b0[0], b0[1], b1[0], b1[1]),
+      pointSegDist(a1[0], a1[1], b0[0], b0[1], b1[0], b1[1]),
+      pointSegDist(b0[0], b0[1], a0[0], a0[1], a1[0], a1[1]),
+      pointSegDist(b1[0], b1[1], a0[0], a0[1], a1[0], a1[1]));
+  }
+  return d - ra - rb;
+}

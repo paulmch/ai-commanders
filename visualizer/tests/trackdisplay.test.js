@@ -6,7 +6,8 @@ import {
 import { Interpolator } from '../src/Interpolator.js';
 import {
   hullExaggeration, magnifyRadius, magnifyOffset, formatSigma, formatCheckpointLabel,
-  isReactiveMode, nextTrackScope, loadTrackScope, saveTrackScope, inTrackScope, TRACK_SCOPE_KEY
+  isReactiveMode, nextTrackScope, loadTrackScope, saveTrackScope, inTrackScope, TRACK_SCOPE_KEY,
+  ghostLook, capsuleGap2D, GHOST_CAP_FRAC, GHOST_GONE_FRAC, GHOST_COVER_CLEAR_PX
 } from '../src/TrackDisplay.js';
 import { TrackHud, formatExaggeration } from '../src/TrackHud.js';
 import { TrackModeControl } from '../src/TrackModeControl.js';
@@ -236,4 +237,50 @@ test('RCS puffs scale sub-linearly with the jet', () => {
   close(puffScale(0.6), 0.6, 1e-12);
   const ratio = puffScale(dread) / puffScale(corvette);
   assert.ok(ratio > 1.5 && ratio < dread / corvette * 0.6, `sub-linear (${ratio})`);
+});
+
+test('checkpoint ghost: readable at mid and fleet range, never looming at the lens', () => {
+  const H = 720;
+  // too small to read / fully in at a mid-range size
+  assert.equal(ghostLook(8, H).opacity, 0);
+  assert.equal(ghostLook(60, H).opacity, 1);
+  assert.equal(ghostLook(60, H).scale, 1);
+  assert.equal(ghostLook(GHOST_CAP_FRAC * H, H).opacity, 1);
+  // approaching the camera: fades out monotonically, gone past the far limit
+  let prev = 1;
+  for (let f = GHOST_CAP_FRAC; f <= 1.5; f += 0.02) {
+    const o = ghostLook(f * H, H).opacity;
+    assert.ok(o <= prev + 1e-12, `opacity rises at ${f}`);
+    prev = o;
+  }
+  assert.equal(ghostLook(GHOST_GONE_FRAC * H, H).opacity, 0);
+  assert.equal(ghostLook(3 * H, H).opacity, 0);
+  // drawn length never exceeds the cap, whatever its natural size
+  for (const px of [100, 200, 400, 900, 5000]) {
+    const { scale } = ghostLook(px, H);
+    assert.ok(px * scale <= GHOST_CAP_FRAC * H + 1e-9, `drawn ${px * scale}px`);
+  }
+});
+
+test('checkpoint ghost never covers the focused hull', () => {
+  const H = 720;
+  assert.equal(ghostLook(80, H, -5).opacity, 0);   // overlapping, in front
+  assert.equal(ghostLook(80, H, 0).opacity, 0);    // touching
+  assert.ok(ghostLook(80, H, GHOST_COVER_CLEAR_PX / 2).opacity > 0.2);
+  assert.equal(ghostLook(80, H, GHOST_COVER_CLEAR_PX).opacity, 1);
+  assert.equal(ghostLook(80, H, Infinity).opacity, 1);   // behind it / no focus
+});
+
+test('capsuleGap2D: screen clearance between two hull silhouettes', () => {
+  // parallel spines 10 px apart, radii 2 + 3
+  close(capsuleGap2D([0, 0], [100, 0], 2, [0, 10], [100, 10], 3), 5, 1e-9);
+  // crossing spines overlap by the sum of the radii
+  close(capsuleGap2D([0, -50], [0, 50], 4, [-50, 0], [50, 0], 6), -10, 1e-9);
+  // end to end along a line
+  close(capsuleGap2D([0, 0], [10, 0], 1, [20, 0], [30, 0], 1), 8, 1e-9);
+  // a point-like ghost beside a hull
+  close(capsuleGap2D([5, 7], [5, 7], 1, [0, 0], [10, 0], 2), 4, 1e-9);
+  // symmetric
+  close(capsuleGap2D([0, 0], [100, 40], 3, [60, -20], [80, 90], 2),
+    capsuleGap2D([60, -20], [80, 90], 2, [0, 0], [100, 40], 3), 1e-9);
 });

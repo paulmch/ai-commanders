@@ -3,7 +3,7 @@ import { Ribbon } from './Trails.js';
 import { LOCUS_CAP } from '../TrajectoryPredictor.js';
 import {
   hullExaggeration, magnifyRadius, magnifyOffset, formatCheckpointLabel, isReactiveMode,
-  inTrackScope, GLYPH_RMAX_HULLS
+  inTrackScope, GLYPH_RMAX_HULLS, ghostLook, capsuleGap2D
 } from '../TrackDisplay.js';
 
 /**
@@ -612,6 +612,7 @@ export class Tracks {
     this._q = new THREE.Vector3();
     this._d = new Float64Array(3);
     this._locusPts = new Float64Array(LOCUS_CAP * 3);
+    this._ghostLook = { opacity: 0, scale: 1 };
     this._hud = { visible: true, togo: 0, stale: false, scope: 'all', focusId: null, exaggeration: [0, 0] };
   }
 
@@ -823,26 +824,75 @@ export class Tracks {
     const L = v.ghostLength;
     const dist = cam.position.distanceTo(cp);
     const px = L / Math.max(1e-6, pw * dist);
+    const viewPx = 2 * Math.tan(THREE.MathUtils.degToRad(cam.fov || 55) / 2) / Math.max(1e-9, pw);
     // Only when the hull is big enough on screen to read, and not while the
     // ghost still overlaps the real hull
     const sep = ship.position.distanceTo(cp);
-    const opacity = 0.75 * weight * THREE.MathUtils.smoothstep(px, 14, 40) * THREE.MathUtils.smoothstep(sep, L * 0.8, L * 2.0);
-    if (opacity < 0.01) {
+    let opacity = 0.75 * weight * THREE.MathUtils.smoothstep(sep, L * 0.8, L * 2.0);
+    // Near the lens: shrink to the screen-size cap and fade out
+    let look = ghostLook(px, viewPx, Infinity, this._ghostLook);
+    if (opacity * look.opacity < 0.01) {
       v.ghost.visible = false;
       return;
     }
-    v.ghostMaterial.uniforms.uOpacity.value = opacity;
-    v.ghost.position.copy(cp);
     // The predicted nose at the checkpoint when the plan carries it; else
     // the current attitude (a ship flies nose-first only while burning, so
     // the velocity was the wrong guess for a coasting or braking hull)
     const f = tr.cpFwd;
+    v.ghost.position.copy(cp);
     if (tr.hasFwd) {
       v.ghost.lookAt(this._q.set(cp.x + f[0], cp.y + f[1], cp.z + f[2]));
     } else {
       v.ghost.quaternion.copy(ship.quaternion);
     }
+    v.ghost.scale.setScalar(look.scale);
+    // Never over the focused hull: fade a ghost in front of it as their
+    // silhouettes close in
+    const gap = this._ghostCoverGap(v.ghost, L * look.scale, (ship.userData.size?.width || L * 0.2) * look.scale, cam, pw);
+    if (gap !== Infinity) look = ghostLook(px, viewPx, gap, this._ghostLook);
+    opacity *= look.opacity;
+    if (opacity < 0.01) {
+      v.ghost.visible = false;
+      return;
+    }
+    v.ghostMaterial.uniforms.uOpacity.value = opacity;
     v.ghost.visible = true;
+  }
+
+  /**
+   * Screen clearance (px) between a ghost (placed and oriented, drawn
+   * length/beam in scene units) and the focused ship when the ghost sits in
+   * front of it; Infinity when there is no focused ship or the ghost is
+   * behind it (the hull's depth then hides the overlap).
+   */
+  _ghostCoverGap(ghost, len, beam, cam, pw) {
+    const focus = this.focusId ? this.sm.ships?.get(this.focusId) : null;
+    if (!focus || !focus.visible) return Infinity;
+    const fL = focus.userData.size?.length || 8, fW = focus.userData.size?.width || fL * 0.2;
+    const V = cam.matrixWorldInverse;
+    const P = this._proj || (this._proj = {
+      c: new THREE.Vector3(), fwd: new THREE.Vector3(), g0: [0, 0], g1: [0, 0], f0: [0, 0], f1: [0, 0]
+    });
+    const gDepth = -P.c.copy(ghost.position).applyMatrix4(V).z;
+    const fDepth = -P.c.copy(focus.position).applyMatrix4(V).z;
+    if (!(gDepth > 0) || !(fDepth > 0) || gDepth > fDepth + 0.25 * fL) return Infinity;
+    const near = cam.near || 0.1;
+    this._spinePx(ghost, len / 2, V, pw, near, P.g0, P.g1);
+    this._spinePx(focus, fL / 2, V, pw, near, P.f0, P.f1);
+    return capsuleGap2D(P.g0, P.g1, beam / 2 / (gDepth * pw), P.f0, P.f1, fW / 2 / (fDepth * pw));
+  }
+
+  /** A hull's spine (centre +- half along its +Z) in screen pixels from the view centre. */
+  _spinePx(obj, half, V, pw, near, s0, s1) {
+    const P = this._proj;
+    P.fwd.set(0, 0, half).applyQuaternion(obj.quaternion);
+    for (let k = 0; k < 2; k++) {
+      const out = k ? s1 : s0;
+      const q = P.c.copy(obj.position).addScaledVector(P.fwd, k ? -1 : 1).applyMatrix4(V);
+      const d = Math.max(near, -q.z);
+      out[0] = q.x / (d * pw);
+      out[1] = q.y / (d * pw);
+    }
   }
 
   /** Hide everything until the next frame() (mode changes, live end, reset). */

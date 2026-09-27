@@ -61,6 +61,19 @@ test('old recordings deploy from radiator_change events and glow at a nominal le
   assert.ok(Number.isNaN(heatAt(tl, 75)));
 });
 
+test('a trace flip is dated by the radiator_change order since the previous frame', () => {
+  // the command lands at the checkpoint (30.0); the 1 Hz trace first shows rad=1 at 31
+  const events = [
+    { event_type: 'radiator_change', ship_id: 'beta_1', timestamp: 30, data: { extended: true } },
+    { event_type: 'radiator_change', ship_id: 'beta_1', timestamp: 10, data: { extended: true } }   // stale
+  ];
+  const tl = buildHeatTimelines(trace(60, t => ({ rad: t >= 31 && t < 45 ? 1 : 0 })), events).get('beta_1');
+  assert.equal(tl.flips.length, 2);
+  assert.equal(tl.flips[0].t, 30);
+  assert.equal(tl.flips[1].t, 45, 'no order at the retract: the trace frame stands');
+  assert.ok(Math.abs(deployProgress(tl, 31) - 1 / RADIATOR_DEPLOY_S) < 1e-9);
+});
+
 test('radiator fraction follows rad_out while extended and fades from the last output on retract', () => {
   const tl = buildHeatTimelines(trace(40, t => ({
     rad: t >= 5 && t < 20 ? 1 : 0,
