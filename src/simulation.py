@@ -31,7 +31,10 @@ try:
     from .physics import Vector3D, ShipState as KinematicState, propagate_state, create_ship_state_from_specs, intercept_time
     from .thermal import (
         ThermalSystem, RadiatorArray, HeatSink, RadiatorState,
-        RadiatorPosition, HEAT_GENERATION_RATES
+        RadiatorPosition, HEAT_GENERATION_RATES,
+        HEAT_GUN_HOLD_FRACTION, HEAT_AUTO_EXTEND_FRACTION,
+        REACTOR_MELTDOWN_HEAT_FRACTION, AUTO_RADIATOR_HYSTERESIS_PCT,
+        AUTO_RADIATOR_TORPEDO_ETA_S,
     )
     from .projectile import KineticProjectile, ProjectileLauncher
     from .torpedo import (
@@ -71,7 +74,10 @@ except ImportError:
     from physics import Vector3D, ShipState as KinematicState, propagate_state, create_ship_state_from_specs, intercept_time
     from thermal import (
         ThermalSystem, RadiatorArray, HeatSink, RadiatorState,
-        RadiatorPosition, HEAT_GENERATION_RATES
+        RadiatorPosition, HEAT_GENERATION_RATES,
+        HEAT_GUN_HOLD_FRACTION, HEAT_AUTO_EXTEND_FRACTION,
+        REACTOR_MELTDOWN_HEAT_FRACTION, AUTO_RADIATOR_HYSTERESIS_PCT,
+        AUTO_RADIATOR_TORPEDO_ETA_S,
     )
     from projectile import KineticProjectile, ProjectileLauncher
     from torpedo import (
@@ -213,9 +219,6 @@ PRESENT_THROTTLE_MOD = 0.05
 # wasted delta-v because the shooter/geometry will have changed.
 BALLISTIC_THREAT_HORIZON_S = 60.0
 
-# Thermal heat generation per coilgun shot (GJ)
-COILGUN_HEAT_PER_SHOT_GJ = 0.5
-
 # Two-stage ship death. A killing blow that does not destroy the reactor
 # leaves a combat-dead hulk whose containment is failing: it tumbles adrift,
 # torches sputtering, for a random 0..DYING_MAX_DURATION_S before the reactor
@@ -272,6 +275,8 @@ class SimulationEventType(Enum):
     # Thermal events
     THERMAL_WARNING = auto()
     THERMAL_CRITICAL = auto()
+    HEAT_WARNING = auto()        # upward crossing of a HEAT_WARNING_LEVELS level
+    REACTOR_MELTDOWN = auto()    # heat >= REACTOR_MELTDOWN_HEAT_FRACTION
     RADIATOR_EXTENDED = auto()
     RADIATOR_RETRACTED = auto()
     RADIATOR_DAMAGED = auto()
@@ -813,9 +818,9 @@ class ShipCombatState:
     # apart from pd_intercepts because a blinded torpedo is still inbound on a
     # ballistic course and still kills a target that does not maneuver.
     pd_seeker_kills: int = 0
-    # Electrical power the PD turrets draw from the bus this tick (GW).
-    # Written by _update_point_defense, then read by _update_ship in the same
-    # tick to subtract PD draw from the power available to the drive.
+    # Electrical power the PD turrets draw from the systems bus this tick (GW).
+    # Written by _update_point_defense; telemetry only (the drive no longer
+    # shares the weapons' power).
     pd_power_draw_gw: float = 0.0
 
     @property
@@ -845,10 +850,24 @@ class ShipCombatState:
 
     @property
     def heat_percent(self) -> float:
-        """Current heat level as percentage."""
+        """Current heat level as percentage (exceeds 100 past the sink rating)."""
         if self.thermal_system:
             return self.thermal_system.heat_percent
         return 0.0
+
+    @property
+    def heat_fraction(self) -> float:
+        """Current heat as a fraction of heat-sink capacity (may exceed 1.0)."""
+        if self.thermal_system:
+            return self.thermal_system.heat_fraction
+        return 0.0
+
+    @property
+    def radiators_extended(self) -> bool:
+        """True if any surviving radiator panel is out."""
+        if self.thermal_system:
+            return self.thermal_system.radiators_extended
+        return False
 
     @property
     def torpedo_launcher_count(self) -> int:
@@ -951,7 +970,8 @@ class ShipCombatState:
 
         Returns value from 0.0 to 1.0:
         - 1.0 = reactors fully operational
-        - 0.5 = reduced power (slower weapon cooldowns)
+        - 0.5 = systems bus at half power (the battery covers the deficit
+          until it runs dry, then capacitors charge at half rate)
         - 0.0 = reactors destroyed (no power)
 
         Multiple reactors provide redundancy.
@@ -1021,21 +1041,6 @@ class ShipCombatState:
 
         # Combined effect (both need to work well)
         return sensor_factor * (0.5 + 0.5 * bridge_factor)
-
-    def get_weapon_cooldown_multiplier(self) -> float:
-        """
-        Get weapon cooldown multiplier based on reactor damage.
-
-        Damaged reactors = slower weapon cycling.
-        Returns value >= 1.0 (1.0 = normal, 2.0 = double cooldown).
-        """
-        reactor_eff = self.reactor_effectiveness
-        if reactor_eff <= 0:
-            return 10.0  # Effectively disabled
-        if reactor_eff >= 1.0:
-            return 1.0
-        # Inverse relationship: 50% reactor = 2x cooldown
-        return 1.0 / reactor_eff
 
     @property
     def fuel_tank_effectiveness(self) -> float:
@@ -1571,6 +1576,10 @@ class CombatSimulation:
         if ship.power_system and not ship.power_system.can_weapon_fire(weapon_slot):
             return False
 
+        # Heat gate: guns hold fire at HEAT_GUN_HOLD_FRACTION and above
+        if self._guns_heat_limited(ship):
+            return False
+
         target = self.get_ship(target_id)
         if (not target or target.is_destroyed or target.is_dying
                 or target.is_surrendered or ship.is_surrendered):
@@ -1721,19 +1730,103 @@ class CombatSimulation:
         return False
 
     def _handle_radiator_command(self, ship: ShipCombatState, command: dict) -> bool:
-        """Handle a radiator extend/retract command."""
-        if not ship.thermal_system:
+        """
+        Handle a set_radiators command.
+
+        command: {'type': 'set_radiators', 'extend': bool} for manual control,
+        or {'type': 'set_radiators', 'mode': 'auto', 'auto_extend_pct': X} to
+        hand the radiators to the rule layer (_update_radiator_automation).
+        A manual extend/retract switches the ship back to manual mode. A
+        retract is refused while heat is at or above HEAT_AUTO_EXTEND_FRACTION
+        (the ladder holds the radiators out).
+        """
+        thermal = ship.thermal_system
+        if not thermal:
             return False
 
+        mode = str(command.get('mode') or 'manual').lower()
+        if mode == 'auto':
+            thermal.radiator_mode = 'auto'
+            pct = command.get('auto_extend_pct')
+            if pct is not None:
+                thermal.auto_extend_pct = max(0.0, min(100.0, float(pct)))
+            self._update_radiator_automation(ship)
+            return True
+
+        thermal.radiator_mode = 'manual'
         extend = command.get('extend', True)
         if extend:
-            ship.thermal_system.radiators.extend_all()
-            self._log_event(SimulationEventType.RADIATOR_EXTENDED, ship.ship_id)
+            self._set_radiators(ship, True)
         else:
-            ship.thermal_system.radiators.retract_all()
-            self._log_event(SimulationEventType.RADIATOR_RETRACTED, ship.ship_id)
+            if thermal.radiators_forced:
+                return False
+            self._set_radiators(ship, False)
 
         return True
+
+    def _set_radiators(self, ship: ShipCombatState, extend: bool,
+                       reason: Optional[str] = None) -> None:
+        """Extend/retract every surviving panel and log the change if any panel moved."""
+        radiators = ship.thermal_system.radiators
+        if extend:
+            if not radiators.any_retracted:
+                return
+            radiators.extend_all()
+            data = {'reason': reason} if reason else None
+            self._log_event(SimulationEventType.RADIATOR_EXTENDED, ship.ship_id, data=data)
+        else:
+            if not radiators.any_extended:
+                return
+            radiators.retract_all()
+            data = {'reason': reason} if reason else None
+            self._log_event(SimulationEventType.RADIATOR_RETRACTED, ship.ship_id, data=data)
+
+    def _guns_heat_limited(self, ship: ShipCombatState) -> bool:
+        """Guns hold fire at or above HEAT_GUN_HOLD_FRACTION of sink capacity."""
+        return (ship.thermal_system is not None
+                and ship.thermal_system.heat_fraction >= HEAT_GUN_HOLD_FRACTION)
+
+    def _torpedo_inbound(self, ship: ShipCombatState, horizon_s: float) -> bool:
+        """A live torpedo targets this ship, is closing, and arrives within horizon_s."""
+        for torp_flight in self.torpedoes:
+            torp = torp_flight.torpedo
+            if torp.target_id != ship.ship_id:
+                continue
+            rel_pos = torp.position - ship.position
+            dist_m = rel_pos.magnitude
+            if dist_m <= 0.0:
+                return True
+            closing_ms = -(torp.velocity - ship.velocity).dot(rel_pos * (1.0 / dist_m))
+            if closing_ms > 0.0 and dist_m / closing_ms < horizon_s:
+                return True
+        return False
+
+    def _update_radiator_automation(self, ship: ShipCombatState) -> None:
+        """
+        Rule-layer radiator control, every tick (deterministic, RNG-free).
+
+        1. The ladder: at HEAT_AUTO_EXTEND_FRACTION and above, any retracted
+           panel is forced out (reason 'heat_limit'), in any mode.
+        2. mode 'auto': extend at auto_extend_pct unless a torpedo is inbound
+           (AUTO_RADIATOR_TORPEDO_ETA_S); retract while one is inbound, or once
+           heat falls AUTO_RADIATOR_HYSTERESIS_PCT below the extend line.
+        """
+        thermal = ship.thermal_system
+        if thermal is None:
+            return
+        if thermal.radiators_forced:
+            self._set_radiators(ship, True, reason='heat_limit')
+            return
+        if thermal.radiator_mode != 'auto':
+            return
+        heat_pct = thermal.heat_percent
+        under_fire = self._torpedo_inbound(ship, AUTO_RADIATOR_TORPEDO_ETA_S)
+        if under_fire:
+            self._set_radiators(ship, False, reason='auto_under_fire')
+        elif heat_pct >= thermal.auto_extend_pct:
+            self._set_radiators(ship, True, reason='auto_heat')
+        elif heat_pct < thermal.auto_extend_pct - AUTO_RADIATOR_HYSTERESIS_PCT:
+            self._set_radiators(ship, False, reason='auto_cool')
 
     def _handle_weapons_order(self, ship: ShipCombatState, command: dict) -> bool:
         """Handle a weapons order command from LLM captain."""
@@ -1779,6 +1872,13 @@ class CombatSimulation:
             # starvation never slowed the guns.
             if ship.power_system and not ship.power_system.can_weapon_fire(weapon_slot):
                 self._weapon_status(ship, weapon_slot, 'capacitor_charging')
+                continue
+
+            # Heat gate: guns hold fire at HEAT_GUN_HOLD_FRACTION and above
+            # (point defense is not a weapons-order slot and keeps firing).
+            if self._guns_heat_limited(ship):
+                self._weapon_status(ship, weapon_slot, 'heat_limited',
+                                    heat=round(ship.heat_fraction, 3))
                 continue
 
             # Get target
@@ -2047,9 +2147,9 @@ class CombatSimulation:
         shooter.shots_fired += 1
         self.metrics.total_shots_fired += 1
 
-        # Add heat from firing
-        if shooter.thermal_system:
-            shooter.thermal_system.add_heat("coilgun", COILGUN_HEAT_PER_SHOT_GJ)
+        # Shot heat is charged once, by the capacitor discharge at the call
+        # site (power.fire_weapon: shot energy x (1 - efficiency)). The flat
+        # 0.5 GJ adder that used to sit here double-counted every shot.
 
         # Build event data with firing info for recording
         event_data = {
@@ -2362,22 +2462,8 @@ class CombatSimulation:
         engine_eff = ship.get_effective_thrust_fraction()
         effective_throttle = throttle * engine_eff
 
-        # PD electrical draw comes out of the same reactor budget as the
-        # drive: while the beams are on, the drive gets (reactor - PD draw).
-        # This coupling is exact, not tuned - and therefore honest about its
-        # magnitude: a 5 MW-beam turret draws 20 MW electrical against a
-        # ~306 TW torch reactor, a thrust loss of ~7e-8 per turret. The
-        # OPERATIVE costs of sustained PD fire at this reactor scale are the
-        # waste heat (see _pd_emit_beam) and, at full throttle, the battery
-        # drain that covers capacitor recharge when the drive has claimed the
-        # whole reactor output.
-        if ship.power_system and ship.pd_power_draw_gw > 0.0:
-            reactor_gw = ship.power_system.reactor.current_output_gw
-            if reactor_gw > 0.0:
-                drive_fraction = max(
-                    0.0, 1.0 - ship.pd_power_draw_gw / reactor_gw
-                )
-                effective_throttle *= drive_fraction
+        # PD, like every weapon, runs off the ship-systems bus (see
+        # PowerSystem.update); it no longer takes its draw out of the drive.
 
         # Record the average applied throttle, including fuel-limited burns.
         requested = ship.current_maneuver.throttle if ship.current_maneuver else 0.0
@@ -2403,51 +2489,46 @@ class CombatSimulation:
 
         # Update thermal system
         if ship.thermal_system:
-            # Scale engine waste heat with throttle (waste heat is proportional
-            # to jet power, which is proportional to thrust). The old on/off
-            # switch produced full-burn heat at any non-zero throttle, so a 5%
-            # station-keeping burn heated the ship like a max burn. Use the
-            # throttle actually PRODUCED (engine damage, dry tanks): the
-            # requested one heated a dry-tanked ship like a full burn.
-            throttle_clamped = max(0.0, min(1.0, ship.applied_throttle))
-            for source in ship.thermal_system.heat_sources:
-                if source.name == "engines":
-                    base_kw = getattr(source, "_base_heat_kw", None)
-                    if base_kw is None:
-                        base_kw = source.heat_generation_kw
-                        source._base_heat_kw = base_kw
-                    source.heat_generation_kw = base_kw * throttle_clamped
-                    source.active = throttle_clamped > 0
-                    break
-            else:
-                # No 'engines' source registered - keep legacy behavior
-                ship.thermal_system.set_source_active("engines", throttle_clamped > 0)
+            # Heat that reached the meltdown line this step (shots, PD bursts
+            # and last tick's heating) kills before the radiators get a say.
+            if ship.thermal_system.heat_fraction >= REACTOR_MELTDOWN_HEAT_FRACTION:
+                self._reactor_meltdown(ship)
+                return
 
-            # Update thermal system (generates heat from active sources, dissipates via radiators)
-            thermal_result = ship.thermal_system.update(dt)
+            # Drive waste heat scales with the throttle actually PRODUCED
+            # (engine damage, dry tanks): full burn = the radiators' rating.
+            ship.thermal_system.set_drive_throttle(ship.applied_throttle)
 
-            # Check for thermal warnings
-            if thermal_result['is_critical']:
-                self._log_event(SimulationEventType.THERMAL_CRITICAL, ship.ship_id, data={
-                    'heat_percent': thermal_result['heat_percent']
-                })
-            elif thermal_result['is_overheating']:
-                self._log_event(SimulationEventType.THERMAL_WARNING, ship.ship_id, data={
-                    'heat_percent': thermal_result['heat_percent']
+            # Radiators: the ladder's forced extension, then "auto" mode.
+            # Runs before the heat update so a panel that deploys this tick
+            # also rejects this tick (sim_trace 'rad' flips on this frame).
+            self._update_radiator_automation(ship)
+
+            # Generate continuous heat, reject through the radiators
+            ship.thermal_system.update(dt)
+
+            for level in ship.thermal_system.crossed_warning_levels():
+                self._log_event(SimulationEventType.HEAT_WARNING, ship.ship_id, data={
+                    'level': level,
+                    'heat': round(ship.thermal_system.heat_fraction, 3),
                 })
 
-        # Update power system (charges weapon capacitors)
+            if ship.thermal_system.heat_fraction >= REACTOR_MELTDOWN_HEAT_FRACTION:
+                self._reactor_meltdown(ship)
+                return
+
+        # Update power system: the systems bus charges the capacitors, scaled
+        # by reactor module health; the battery covers any deficit. This
+        # replaces both the full-throttle power cliff and the reactor-damage
+        # cooldown multiplier.
         if ship.power_system:
-            # Set drive power consumption based on the throttle produced
             ship.power_system.set_drive_throttle(ship.applied_throttle)
-            # Update power distribution (charges capacitors from available power)
+            ship.power_system.set_bus_scale(ship.reactor_effectiveness)
             ship.power_system.update(dt)
 
-        # Update weapon cooldowns (reactor damage slows recharge)
-        cooldown_multiplier = ship.get_weapon_cooldown_multiplier()
-        effective_cooldown_dt = dt / cooldown_multiplier  # Slower cooldown recovery
+        # Update weapon cooldowns
         for weapon_state in ship.weapons.values():
-            weapon_state.update(effective_cooldown_dt)
+            weapon_state.update(dt)
 
     def _update_dying_ship(self, ship: ShipCombatState, dt: float) -> None:
         """
@@ -4418,22 +4499,8 @@ class CombatSimulation:
         # so radiators were indestructible in actual battles - the only code
         # path that damages them lives in resolve_radiator_hit. Extended
         # radiators are fragile and have a meaningful chance of being struck.
-        if proj_flight.weapon is not None and target.thermal_system:
-            try:
-                rad_result = self.combat_resolver.radiator_resolver.resolve_radiator_hit(
-                    proj_flight.weapon, target.thermal_system, hit_location
-                )
-            except Exception:
-                rad_result = None  # thermal system without radiator API
-            if rad_result is not None and rad_result.hit:
-                self._log_event(SimulationEventType.RADIATOR_DAMAGED, target.ship_id, data={
-                    'radiator_position': rad_result.radiator_position,
-                    'damage_gj': rad_result.damage_taken_gj,
-                    'destroyed': rad_result.radiator_destroyed,
-                    'dissipation_lost_kw': rad_result.dissipation_lost_kw
-                })
-                print(f"  !!! [{target.ship_id}] RADIATOR HIT: {rad_result.radiator_position} "
-                      f"({'DESTROYED' if rad_result.radiator_destroyed else 'damaged'})")
+        if proj_flight.weapon is not None:
+            self._resolve_radiator_hit(target, proj_flight.weapon, hit_location)
 
         if penetrated:
             # 'remaining_energy_gj' mirrors the torpedo path's key name so both
@@ -4993,6 +5060,32 @@ class CombatSimulation:
                 self.torpedoes.remove(torp)
 
     @impact_evidence
+    def _resolve_radiator_hit(
+        self,
+        target: ShipCombatState,
+        weapon: Optional[Weapon],
+        hit_location: HitLocation,
+        energy_gj: Optional[float] = None,
+    ) -> None:
+        """Roll the one radiator-hit model for a hull hit and log any damage."""
+        if not target.thermal_system:
+            return
+        try:
+            rad_result = self.combat_resolver.radiator_resolver.resolve_radiator_hit(
+                weapon, target.thermal_system, hit_location, energy_gj=energy_gj
+            )
+        except Exception:
+            rad_result = None  # thermal system without radiator API
+        if rad_result is not None and rad_result.hit:
+            self._log_event(SimulationEventType.RADIATOR_DAMAGED, target.ship_id, data={
+                'radiator_position': rad_result.radiator_position,
+                'damage_gj': rad_result.damage_taken_gj,
+                'destroyed': rad_result.radiator_destroyed,
+                'dissipation_lost_kw': rad_result.dissipation_lost_kw
+            })
+            print(f"  !!! [{target.ship_id}] RADIATOR HIT: {rad_result.radiator_position} "
+                  f"({'DESTROYED' if rad_result.radiator_destroyed else 'damaged'})")
+
     def _resolve_torpedo_hit(
         self,
         torp_flight: TorpedoInFlight,
@@ -5064,6 +5157,10 @@ class CombatSimulation:
             'penetrator_mass_kg': penetrator_mass_kg,
             'hit_location': hit_location.value
         })
+
+        # Torpedo impacts roll for radiator damage like any other hit (same
+        # model: combat.radiator_hit_chance). They used to be exempt.
+        self._resolve_radiator_hit(target, None, hit_location, energy_gj=total_damage_gj)
 
         # Apply armor damage using physics-based ablation
         penetrated = False
@@ -5677,8 +5774,8 @@ class CombatSimulation:
         ship sustains a 100% duty cycle; a power-starved one (full-throttle
         drive plus a drained battery) simply cannot start the next burst.
 
-        Also accumulates the turret's electrical draw into
-        ship.pd_power_draw_gw for the drive-power coupling in _update_ship.
+        Also accumulates the turret's bus draw into ship.pd_power_draw_gw
+        (telemetry; the power itself comes off the systems bus).
         """
         if pd.burst_energy_j <= 0.0:
             if not pd.can_fire():
@@ -5700,10 +5797,12 @@ class CombatSimulation:
         emitted_j = min(pd.laser.power_w * dt, pd.burst_energy_j)
         pd.burst_energy_j -= emitted_j
 
-        # Ledger the electrical draw behind this tick's beam output.
-        if dt > 0:
+        # Ledger the bus draw behind this tick's beam output (TI turret
+        # figures: 40 MW while the beam is on, see PDLaser.electrical_draw_w).
+        if dt > 0 and pd.laser.power_w > 0:
             ship.pd_power_draw_gw += (
-                (emitted_j / dt) / PD_WALLPLUG_EFFICIENCY / 1e9
+                (emitted_j / dt) / pd.laser.power_w
+                * pd.laser.electrical_draw_w() / 1e9
             )
         return emitted_j
 
@@ -5717,22 +5816,16 @@ class CombatSimulation:
         burst_beam_j = pd.laser.power_w * max(pd.laser.cooldown_s, dt)
 
         if ship.power_system:
-            # Capacitors are sized at the ELECTRICAL energy of a burst
-            # (beam / PD_WALLPLUG_EFFICIENCY, see create_ship_from_fleet_data),
-            # so fire_weapon()'s heat - capacity * (1 - efficiency) - is
-            # exactly the burst's true waste heat.
+            # Capacitors hold one burst's draw at Terra Invicta's turret
+            # figures (shotPower / efficiency, see create_ship_from_fleet_data),
+            # so fire_weapon()'s heat - capacity * (1 - efficiency) - is the
+            # TI turret's waste heat per cycle (150 MJ = 30 MW while dwelling).
             heat_gj = ship.power_system.fire_weapon(pd.turret_name)
             if ship.thermal_system and heat_gj > 0:
                 ship.thermal_system.add_heat("weapons", heat_gj)
         elif ship.thermal_system:
-            # No power model: keep the thermal budget honest anyway. Waste
-            # heat = electrical - beam = beam * (1 - eta) / eta.
-            waste_heat_gj = (
-                burst_beam_j
-                * (1.0 - PD_WALLPLUG_EFFICIENCY) / PD_WALLPLUG_EFFICIENCY
-                / 1e9
-            )
-            ship.thermal_system.add_heat("weapons", waste_heat_gj)
+            # No power model: charge the same per-burst heat anyway.
+            ship.thermal_system.add_heat("weapons", pd.laser.burst_heat_j() / 1e9)
 
         pd.burst_energy_j += burst_beam_j
 
@@ -6363,7 +6456,8 @@ class CombatSimulation:
         print(f"  !!! [{ship.ship_id}] MORTALLY WOUNDED - reactor containment "
               f"failing, detonation in {ship.dying_time_remaining:.1f}s")
 
-    def _detonate_reactor(self, ship: ShipCombatState) -> None:
+    def _detonate_reactor(self, ship: ShipCombatState,
+                          cause: str = 'reactor_detonation') -> None:
         """
         The dying ship's reactor finally lets go. Destroying the reactor
         modules here matters beyond bookkeeping: the recorded
@@ -6376,7 +6470,20 @@ class CombatSimulation:
                 self._log_event(SimulationEventType.MODULE_DESTROYED, ship.ship_id, data={
                     'module_name': module.name
                 })
-        self._destroy_ship(ship, ship.kill_credit, cause='reactor_detonation')
+        self._destroy_ship(ship, ship.kill_credit, cause=cause)
+
+    def _reactor_meltdown(self, ship: ShipCombatState) -> None:
+        """
+        Heat reached REACTOR_MELTDOWN_HEAT_FRACTION: containment fails and the
+        reactor detonates at once - the same death as a reactor kill, with
+        cause 'reactor_overheat'. No kill credit: the ship cooked itself.
+        """
+        heat = ship.thermal_system.heat_fraction if ship.thermal_system else 0.0
+        self._log_event(SimulationEventType.REACTOR_MELTDOWN, ship.ship_id, data={
+            'heat': round(heat, 3),
+        })
+        print(f"  !!! [{ship.ship_id}] REACTOR MELTDOWN at {heat * 100:.0f}% heat")
+        self._detonate_reactor(ship, cause='reactor_overheat')
 
     def _destroy_ship(
         self,
@@ -7009,7 +7116,9 @@ def create_ship_from_fleet_data(
             wavelength_nm=pd_info.get("wavelength_nm", pd_specs.get("wavelength_nm", 1000.0)),
             range_km=pd_info.get("range_km", pd_specs.get("range_km", 100.0)),
             cooldown_s=pd_info.get("cooldown_s", pd_specs.get("cooldown_s", 0.5)),
-            name=turret_name
+            name=turret_name,
+            shot_power_mj=pd_info.get("shot_power_mj", pd_specs.get("shot_power_mj", 50.0)),
+            efficiency=pd_info.get("efficiency", pd_specs.get("efficiency", PD_WALLPLUG_EFFICIENCY)),
         )
         point_defense.append(PDLaserState(
             laser=pd_laser,
@@ -7074,19 +7183,21 @@ def create_ship_from_fleet_data(
                 "power_draw_mw": getattr(weapon_state.weapon, 'power_draw_mw', 5.0)
             }
             power_system.add_weapon_capacitor(slot_name, weapon_data)
-        # Add capacitors for PD lasers, sized at the ELECTRICAL energy of one
-        # burst: beam power / wall-plug efficiency (25% -> a 5 MW beam draws
-        # 20 MW from the bus). Two consequences, both deliberate:
-        #   - fire_weapon()'s heat, capacity * (1 - efficiency), equals the
-        #     burst's true waste heat (electrical minus beam), closing the
-        #     energy budget instead of undercounting it 4x;
-        #   - the charge rate (capacity / cooldown) is the turret's real
-        #     sustained draw, which at full drive throttle must come from the
-        #     battery - so firing hard while burning hard drains it.
+        # Add capacitors for PD lasers at Terra Invicta's PointDefenseLaserTurret
+        # figures: one burst (one cooldown of dwell) = one TI shot cycle, so
+        # the capacitor holds shotPower / efficiency = 50 MJ / 0.25 = 200 MJ
+        # and fire_weapon()'s heat, capacity * (1 - efficiency), is TI's
+        # 150 MJ per cycle - 30 MW into the hull while the turret dwells.
+        # The on-target beam stays the calibrated 5 MW dwell (25 MJ per
+        # burst); the remaining 25 MJ of TI's 50 MJ shot is not modelled as
+        # beam, so PD kill numbers are unchanged while its power and heat
+        # cost are TI's. The charge rate (capacity / cooldown = 40 MW) is the
+        # turret's sustained draw on the systems bus.
         for pd_state in point_defense:
             pd_data = {
                 "type": "point_defense",
-                "power_draw_mw": pd_state.laser.power_mw / PD_WALLPLUG_EFFICIENCY,
+                "shot_power_mj": pd_state.laser.shot_power_mj,
+                "efficiency": pd_state.laser.efficiency,
                 "cooldown_s": pd_state.laser.cooldown_s
             }
             power_system.add_weapon_capacitor(pd_state.turret_name, pd_data)

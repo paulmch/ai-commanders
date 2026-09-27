@@ -27,6 +27,31 @@ from .mcp_controller import MCPController, MCPControllerConfig, apply_mcp_comman
 from .mcp_chat import AdmiralChat
 
 
+def _thermal_trace_fields(ship: Any) -> Dict[str, Any]:
+    """
+    sim_trace heat telemetry (data contract, all optional):
+      heat      stored heat / sink capacity (3 dp, may exceed 1.0)
+      rad       1 radiators extended / 0 retracted - flips on the frame the
+                command or the ladder's auto-extend takes effect (the sim
+                deploys instantly; the viewer animates the transition)
+      heat_rate smoothed net change of stored heat, GW (signed, 3 dp)
+      rad_out   GW the radiators actually rejected this frame (3 dp; 0 when
+                retracted, when nothing is left to reject, or once the ship
+                is dying/destroyed and its thermal plant has stopped)
+    """
+    thermal = getattr(ship, 'thermal_system', None)
+    if thermal is None:
+        return {}
+    alive = not ship.is_destroyed and not getattr(ship, 'is_dying', False)
+    extended = thermal.radiators_extended
+    return {
+        "heat": round(thermal.heat_fraction, 3),
+        "rad": 1 if extended else 0,
+        "heat_rate": round(thermal.heat_rate_gw, 3) if alive else 0.0,
+        "rad_out": round(thermal.rad_out_gw, 3) if (alive and extended) else 0.0,
+    }
+
+
 @dataclass
 class BattleConfig:
     """Configuration for an LLM battle."""
@@ -2155,18 +2180,16 @@ class LLMBattleRunner:
         radiator_cmd = None
         for cmd in commands:
             if isinstance(cmd, dict) and cmd.get('type') == 'set_radiators':
-                radiator_cmd = cmd.get('extend', False)
+                radiator_cmd = cmd
                 break
 
         if radiator_cmd is not None:
-            parts.append("RAD:EXT" if radiator_cmd else "RAD:RET")
-        elif ship.thermal_system and hasattr(ship.thermal_system, 'radiators') and ship.thermal_system.radiators:
-            from ..thermal import RadiatorState
-            extended = any(
-                rad.state == RadiatorState.EXTENDED
-                for rad in ship.thermal_system.radiators.radiators.values()
-            )
-            parts.append("RAD:EXT" if extended else "RAD:RET")
+            if str(radiator_cmd.get('mode') or '').lower() == 'auto':
+                parts.append("RAD:AUTO")
+            else:
+                parts.append("RAD:EXT" if radiator_cmd.get('extend', False) else "RAD:RET")
+        elif ship.thermal_system:
+            parts.append("RAD:EXT" if ship.radiators_extended else "RAD:RET")
 
         return " | ".join(parts)
 
@@ -2206,20 +2229,14 @@ class LLMBattleRunner:
             if target_ship:
                 target_name = getattr(target_ship, 'name', target_id)
 
-        # Get radiator state
-        radiators_extended = False
+        # Get radiator state: the ordered one, else the engine's current one
+        # (an auto-mode order is resolved by the engine's rule layer).
+        radiators_extended = bool(ship.radiators_extended)
         for cmd in commands:
-            if isinstance(cmd, dict) and cmd.get('type') == 'set_radiators':
-                radiators_extended = cmd.get('extend', False)
+            if (isinstance(cmd, dict) and cmd.get('type') == 'set_radiators'
+                    and str(cmd.get('mode') or 'manual').lower() != 'auto'):
+                radiators_extended = bool(cmd.get('extend', False))
                 break
-        else:
-            # Fall back to current state
-            if ship.thermal_system and hasattr(ship.thermal_system, 'radiators') and ship.thermal_system.radiators:
-                from ..thermal import RadiatorState
-                radiators_extended = any(
-                    rad.state == RadiatorState.EXTENDED
-                    for rad in ship.thermal_system.radiators.radiators.values()
-                )
 
         # Get acknowledgment text from captain if available
         acknowledgment = None if getattr(captain, 'last_call_failed', False) else getattr(captain, 'last_acknowledgment', None)
@@ -2542,6 +2559,7 @@ class LLMBattleRunner:
                     "hull_pct": round(hull_pct, 1),
                     "armor": armor_data,
                 }
+                ships[ship_id].update(_thermal_trace_fields(ship))
 
         # Build projectile states
         projectiles = []
@@ -2963,7 +2981,6 @@ class LLMBattleRunner:
     def _build_ship_state_dict(self, ship: Any) -> Dict[str, Any]:
         """Build a comprehensive ship state dictionary for recording."""
         from ..combat import HitLocation
-        from ..thermal import RadiatorState
 
         state = {
             "ship_id": ship.ship_id,
@@ -2984,16 +3001,10 @@ class LLMBattleRunner:
             state["heat_percent"] = ship.thermal_system.heat_percent
             state["heatsink_energy_gj"] = ship.thermal_system.heatsink.current_heat_gj
             state["heatsink_capacity_gj"] = ship.thermal_system.heatsink.capacity_gj
-
-            # Radiator state
-            if ship.thermal_system.radiators:
-                extended = any(
-                    rad.state == RadiatorState.EXTENDED
-                    for rad in ship.thermal_system.radiators.radiators.values()
-                )
-                state["radiators_extended"] = extended
-            else:
-                state["radiators_extended"] = False
+            state["radiators_extended"] = ship.thermal_system.radiators_extended
+            state["radiator_mode"] = ship.thermal_system.radiator_mode
+            state["radiator_health_pct"] = round(ship.thermal_system.radiators.health_percent, 1)
+            state["heat_rate_mw"] = round(ship.thermal_system.heat_rate_gw * 1000.0, 1)
         else:
             state["heat_percent"] = 0
             state["radiators_extended"] = False
@@ -3250,12 +3261,29 @@ class LLMBattleRunner:
                 timestamp=timestamp,
                 ship_id=ship_id or "unknown",
                 extended=True,
+                reason=(data or {}).get("reason"),
             )
         elif event_type == SimulationEventType.RADIATOR_RETRACTED:
             self.recorder.record_radiator_change(
                 timestamp=timestamp,
                 ship_id=ship_id or "unknown",
                 extended=False,
+                reason=(data or {}).get("reason"),
+            )
+
+        # Heat ladder
+        elif event_type == SimulationEventType.HEAT_WARNING:
+            self.recorder.record_heat_warning(
+                timestamp=timestamp,
+                ship_id=ship_id or "unknown",
+                level=data.get("level", 0.0),
+                heat=data.get("heat", 0.0),
+            )
+        elif event_type == SimulationEventType.REACTOR_MELTDOWN:
+            self.recorder.record_reactor_meltdown(
+                timestamp=timestamp,
+                ship_id=ship_id or "unknown",
+                heat=data.get("heat", 0.0),
             )
 
         # Record thermal warnings

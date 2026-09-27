@@ -9,6 +9,15 @@ from typing import List, Dict, Any
 from copy import deepcopy
 import math
 
+try:
+    from ..thermal import AUTO_RADIATOR_DEFAULT_PCT as _AUTO_PCT
+    from ..thermal import HEAT_AUTO_EXTEND_FRACTION as _FORCED_FRACTION
+except ImportError:  # pragma: no cover - script-style imports (src/ on sys.path)
+    from thermal import AUTO_RADIATOR_DEFAULT_PCT as _AUTO_PCT
+    from thermal import HEAT_AUTO_EXTEND_FRACTION as _FORCED_FRACTION
+
+_FORCED_PCT = _FORCED_FRACTION * 100.0
+
 
 # Base captain tools - always available
 CAPTAIN_TOOLS_BASE = [
@@ -112,19 +121,41 @@ CAPTAIN_TOOLS_BASE = [
         "type": "function",
         "function": {
             "name": "set_radiators",
-            "description": "Extend or retract heat radiators",
+            "description": (
+                "Radiator control. Manual: extend=true (cooling, panels exposed to fire) or "
+                "extend=false (protected, no cooling). Or mode='auto' to hand them to the "
+                f"ship: it extends at auto_extend_pct heat (default {_AUTO_PCT:.0f}) and "
+                "retracts while a torpedo is inbound. Whatever you choose, radiators are "
+                f"FORCED out at {_FORCED_PCT:.0f}% heat and cannot be retracted until heat "
+                f"drops below {_FORCED_PCT:.0f}%."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "extend": {
                         "type": "boolean",
                         "description": (
-                            "True: Extend radiators for faster cooling (but vulnerable to damage). "
-                            "False: Retract radiators for protection (slower cooling)."
+                            "Manual control. True: extend for cooling (vulnerable to damage). "
+                            "False: retract for protection (no cooling)."
                         )
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["manual", "auto"],
+                        "description": (
+                            "'auto' lets the ship manage radiators every tick (extend when "
+                            "heat >= auto_extend_pct, retract under torpedo fire). 'manual' "
+                            "(default) uses extend."
+                        )
+                    },
+                    "auto_extend_pct": {
+                        "type": "number",
+                        "description": f"Heat % at which auto mode extends (default {_AUTO_PCT:.0f}).",
+                        "minimum": 0,
+                        "maximum": 100
                     }
                 },
-                "required": ["extend"]
+                "required": []
             }
         }
     },
@@ -394,6 +425,30 @@ RESPOND_TO_ORDERS_TOOL = {
         }
     }
 }
+
+
+def radiator_command_from_args(args: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Normalise set_radiators tool arguments into the engine command.
+
+    mode='auto' -> {'type': 'set_radiators', 'mode': 'auto', 'auto_extend_pct': X}
+    otherwise   -> {'type': 'set_radiators', 'extend': bool}
+    Shared by LLM captains, heuristic captains and MCP so all get the same rules.
+    """
+    args = args or {}
+    mode = str(args.get("mode") or "manual").strip().lower()
+    if mode == "auto":
+        pct = args.get("auto_extend_pct")
+        try:
+            pct = float(pct) if pct is not None else _AUTO_PCT
+        except (TypeError, ValueError):
+            pct = _AUTO_PCT
+        return {"type": "set_radiators", "mode": "auto",
+                "auto_extend_pct": max(0.0, min(100.0, pct))}
+    extend = args.get("extend", False)
+    if isinstance(extend, str):
+        extend = extend.strip().lower() in ("true", "1", "yes", "extend", "extended")
+    return {"type": "set_radiators", "extend": bool(extend)}
 
 
 def get_captain_tools(has_torpedoes: bool = False) -> List[Dict[str, Any]]:

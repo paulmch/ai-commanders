@@ -166,7 +166,10 @@
       "mount": "hull_turret",
       "pivot_range_deg": 180,
       "is_turreted": true,
-      "type": "point_defense"
+      "type": "point_defense",
+      "shot_power_mj": 50,
+      "efficiency": 0.25,
+      "heat_note": "Power and heat per 5 s burst follow TI's PointDefenseLaserTurret (shotPower 50 MJ at efficiency 0.25): 200 MJ drawn, 150 MJ waste heat = 30 MW while dwelling. The on-target beam stays the calibrated power_draw_mw = 5 MW dwell."
     }
   },
   "ships": {
@@ -269,8 +272,8 @@
               "x": 0.78,
               "side": "lateral"
             },
-            "mass_tons": 128,
-            "capacity_gj": 525,
+            "mass_tons": 78,
+            "capacity_gj": 320,
             "notes": "Single bank, aft section"
           }
         ]
@@ -309,12 +312,12 @@
       "thermal": {
         "heatsink": {
           "name": "Lithium Heat Sink",
-          "mass_tons": 128,
-          "capacity_gj": 525
+          "mass_tons": 78,
+          "capacity_gj": 320
         },
         "radiator": {
           "name": "Lithium Spray Radiator",
-          "mass_tons": 10,
+          "mass_tons": 60,
           "dissipation_kw_per_kg": 13
         },
         "battery": {
@@ -322,7 +325,8 @@
           "mass_tons": 20,
           "capacity_gj": 160,
           "recharge_rate_gj_s": 0.075
-        }
+        },
+        "refit_note": "Mass-neutral thermal refit of the 138 t LithiumHeatSink + radiator budget: 60 t LithiumSpray (13 kW/kg = 780 MW extended, sized to the drive's full-burn waste heat) + 78 t of heat sink at the TI Lithium ratio (525 GJ / 128 t) = 320 GJ."
       },
       "armor": {
         "type": "Adamantane",
@@ -505,8 +509,8 @@
               "x": 0.75,
               "side": "lateral"
             },
-            "mass_tons": 128,
-            "capacity_gj": 525,
+            "mass_tons": 78,
+            "capacity_gj": 320,
             "notes": "Single bank, aft section"
           }
         ]
@@ -556,12 +560,12 @@
       "thermal": {
         "heatsink": {
           "name": "Lithium Heat Sink",
-          "mass_tons": 128,
-          "capacity_gj": 525
+          "mass_tons": 78,
+          "capacity_gj": 320
         },
         "radiator": {
           "name": "Lithium Spray Radiator",
-          "mass_tons": 10,
+          "mass_tons": 60,
           "dissipation_kw_per_kg": 13
         },
         "battery": {
@@ -569,7 +573,8 @@
           "mass_tons": 20,
           "capacity_gj": 160,
           "recharge_rate_gj_s": 0.075
-        }
+        },
+        "refit_note": "Mass-neutral thermal refit of the 138 t LithiumHeatSink + radiator budget: 60 t LithiumSpray (13 kW/kg = 780 MW extended, sized to the drive's full-burn waste heat) + 78 t of heat sink at the TI Lithium ratio (525 GJ / 128 t) = 320 GJ."
       },
       "armor": {
         "type": "Adamantane",
@@ -762,8 +767,8 @@
               "x": 0.75,
               "side": "port"
             },
-            "mass_tons": 64,
-            "capacity_gj": 262,
+            "mass_tons": 39,
+            "capacity_gj": 160,
             "notes": "Port aft bank"
           },
           {
@@ -772,8 +777,8 @@
               "x": 0.75,
               "side": "starboard"
             },
-            "mass_tons": 64,
-            "capacity_gj": 263,
+            "mass_tons": 39,
+            "capacity_gj": 160,
             "notes": "Starboard aft bank"
           }
         ]
@@ -834,12 +839,12 @@
       "thermal": {
         "heatsink": {
           "name": "Lithium Heat Sink",
-          "mass_tons": 128,
-          "capacity_gj": 525
+          "mass_tons": 78,
+          "capacity_gj": 320
         },
         "radiator": {
           "name": "Lithium Spray Radiator",
-          "mass_tons": 10,
+          "mass_tons": 60,
           "dissipation_kw_per_kg": 13
         },
         "battery": {
@@ -847,7 +852,8 @@
           "mass_tons": 20,
           "capacity_gj": 160,
           "recharge_rate_gj_s": 0.075
-        }
+        },
+        "refit_note": "Mass-neutral thermal refit of the 138 t LithiumHeatSink + radiator budget: 60 t LithiumSpray (13 kW/kg = 780 MW extended, sized to the drive's full-burn waste heat) + 78 t of heat sink at the TI Lithium ratio (525 GJ / 128 t) = 320 GJ."
       },
       "armor": {
         "type": "Adamantane",
@@ -1050,8 +1056,8 @@
               "x": 0.72,
               "side": "port"
             },
-            "mass_tons": 64,
-            "capacity_gj": 262,
+            "mass_tons": 39,
+            "capacity_gj": 160,
             "notes": "Port aft bank"
           },
           {
@@ -1060,8 +1066,8 @@
               "x": 0.72,
               "side": "starboard"
             },
-            "mass_tons": 64,
-            "capacity_gj": 263,
+            "mass_tons": 39,
+            "capacity_gj": 160,
             "notes": "Starboard aft bank"
           }
         ]
@@ -1133,12 +1139,12 @@
       "thermal": {
         "heatsink": {
           "name": "Lithium Heat Sink",
-          "mass_tons": 128,
-          "capacity_gj": 525
+          "mass_tons": 78,
+          "capacity_gj": 320
         },
         "radiator": {
           "name": "Lithium Spray Radiator",
-          "mass_tons": 10,
+          "mass_tons": 60,
           "dissipation_kw_per_kg": 13
         },
         "battery": {
@@ -1146,7 +1152,8 @@
           "mass_tons": 20,
           "capacity_gj": 160,
           "recharge_rate_gj_s": 0.075
-        }
+        },
+        "refit_note": "Mass-neutral thermal refit of the 138 t LithiumHeatSink + radiator budget: 60 t LithiumSpray (13 kW/kg = 780 MW extended, sized to the drive's full-burn waste heat) + 78 t of heat sink at the TI Lithium ratio (525 GJ / 128 t) = 320 GJ."
       },
       "armor": {
         "type": "Adamantane",
@@ -1349,8 +1356,8 @@
               "x": 0.72,
               "side": "port"
             },
-            "mass_tons": 64,
-            "capacity_gj": 262,
+            "mass_tons": 39,
+            "capacity_gj": 160,
             "notes": "Port aft bank"
           },
           {
@@ -1359,8 +1366,8 @@
               "x": 0.72,
               "side": "starboard"
             },
-            "mass_tons": 64,
-            "capacity_gj": 263,
+            "mass_tons": 39,
+            "capacity_gj": 160,
             "notes": "Starboard aft bank"
           }
         ]
@@ -1432,12 +1439,12 @@
       "thermal": {
         "heatsink": {
           "name": "Lithium Heat Sink",
-          "mass_tons": 128,
-          "capacity_gj": 525
+          "mass_tons": 78,
+          "capacity_gj": 320
         },
         "radiator": {
           "name": "Lithium Spray Radiator",
-          "mass_tons": 10,
+          "mass_tons": 60,
           "dissipation_kw_per_kg": 13
         },
         "battery": {
@@ -1445,7 +1452,8 @@
           "mass_tons": 20,
           "capacity_gj": 160,
           "recharge_rate_gj_s": 0.075
-        }
+        },
+        "refit_note": "Mass-neutral thermal refit of the 138 t LithiumHeatSink + radiator budget: 60 t LithiumSpray (13 kW/kg = 780 MW extended, sized to the drive's full-burn waste heat) + 78 t of heat sink at the TI Lithium ratio (525 GJ / 128 t) = 320 GJ."
       },
       "armor": {
         "type": "Adamantane",
@@ -1668,8 +1676,8 @@
               "x": 0.7,
               "side": "port"
             },
-            "mass_tons": 43,
-            "capacity_gj": 175,
+            "mass_tons": 26,
+            "capacity_gj": 106,
             "notes": "Port aft bank"
           },
           {
@@ -1678,8 +1686,8 @@
               "x": 0.7,
               "side": "starboard"
             },
-            "mass_tons": 43,
-            "capacity_gj": 175,
+            "mass_tons": 26,
+            "capacity_gj": 106,
             "notes": "Starboard aft bank"
           },
           {
@@ -1688,8 +1696,8 @@
               "x": 0.8,
               "side": "ventral"
             },
-            "mass_tons": 42,
-            "capacity_gj": 175,
+            "mass_tons": 26,
+            "capacity_gj": 108,
             "notes": "Ventral auxiliary bank"
           }
         ]
@@ -1794,12 +1802,12 @@
       "thermal": {
         "heatsink": {
           "name": "Lithium Heat Sink",
-          "mass_tons": 128,
-          "capacity_gj": 525
+          "mass_tons": 78,
+          "capacity_gj": 320
         },
         "radiator": {
           "name": "Lithium Spray Radiator",
-          "mass_tons": 10,
+          "mass_tons": 60,
           "dissipation_kw_per_kg": 13
         },
         "battery": {
@@ -1807,7 +1815,8 @@
           "mass_tons": 20,
           "capacity_gj": 160,
           "recharge_rate_gj_s": 0.075
-        }
+        },
+        "refit_note": "Mass-neutral thermal refit of the 138 t LithiumHeatSink + radiator budget: 60 t LithiumSpray (13 kW/kg = 780 MW extended, sized to the drive's full-burn waste heat) + 78 t of heat sink at the TI Lithium ratio (525 GJ / 128 t) = 320 GJ."
       },
       "armor": {
         "type": "Adamantane",
@@ -2050,8 +2059,8 @@
               "x": 0.68,
               "side": "port"
             },
-            "mass_tons": 32,
-            "capacity_gj": 131,
+            "mass_tons": 19.5,
+            "capacity_gj": 80,
             "notes": "Port aft bank"
           },
           {
@@ -2060,8 +2069,8 @@
               "x": 0.68,
               "side": "starboard"
             },
-            "mass_tons": 32,
-            "capacity_gj": 131,
+            "mass_tons": 19.5,
+            "capacity_gj": 80,
             "notes": "Starboard aft bank"
           },
           {
@@ -2070,8 +2079,8 @@
               "x": 0.78,
               "side": "dorsal"
             },
-            "mass_tons": 32,
-            "capacity_gj": 131,
+            "mass_tons": 19.5,
+            "capacity_gj": 80,
             "notes": "Dorsal auxiliary bank"
           },
           {
@@ -2080,8 +2089,8 @@
               "x": 0.78,
               "side": "ventral"
             },
-            "mass_tons": 32,
-            "capacity_gj": 132,
+            "mass_tons": 19.5,
+            "capacity_gj": 80,
             "notes": "Ventral auxiliary bank"
           }
         ]
@@ -2219,12 +2228,12 @@
       "thermal": {
         "heatsink": {
           "name": "Lithium Heat Sink",
-          "mass_tons": 128,
-          "capacity_gj": 525
+          "mass_tons": 78,
+          "capacity_gj": 320
         },
         "radiator": {
           "name": "Lithium Spray Radiator",
-          "mass_tons": 10,
+          "mass_tons": 60,
           "dissipation_kw_per_kg": 13
         },
         "battery": {
@@ -2232,7 +2241,8 @@
           "mass_tons": 20,
           "capacity_gj": 160,
           "recharge_rate_gj_s": 0.075
-        }
+        },
+        "refit_note": "Mass-neutral thermal refit of the 138 t LithiumHeatSink + radiator budget: 60 t LithiumSpray (13 kW/kg = 780 MW extended, sized to the drive's full-burn waste heat) + 78 t of heat sink at the TI Lithium ratio (525 GJ / 128 t) = 320 GJ."
       },
       "armor": {
         "type": "Adamantane",
@@ -2475,8 +2485,8 @@
               "x": 0.68,
               "side": "port"
             },
-            "mass_tons": 32,
-            "capacity_gj": 131,
+            "mass_tons": 19.5,
+            "capacity_gj": 80,
             "notes": "Port aft bank"
           },
           {
@@ -2485,8 +2495,8 @@
               "x": 0.68,
               "side": "starboard"
             },
-            "mass_tons": 32,
-            "capacity_gj": 131,
+            "mass_tons": 19.5,
+            "capacity_gj": 80,
             "notes": "Starboard aft bank"
           },
           {
@@ -2495,8 +2505,8 @@
               "x": 0.78,
               "side": "dorsal"
             },
-            "mass_tons": 32,
-            "capacity_gj": 131,
+            "mass_tons": 19.5,
+            "capacity_gj": 80,
             "notes": "Dorsal auxiliary bank"
           },
           {
@@ -2505,8 +2515,8 @@
               "x": 0.78,
               "side": "ventral"
             },
-            "mass_tons": 32,
-            "capacity_gj": 132,
+            "mass_tons": 19.5,
+            "capacity_gj": 80,
             "notes": "Ventral auxiliary bank"
           }
         ]
@@ -2644,12 +2654,12 @@
       "thermal": {
         "heatsink": {
           "name": "Lithium Heat Sink",
-          "mass_tons": 128,
-          "capacity_gj": 525
+          "mass_tons": 78,
+          "capacity_gj": 320
         },
         "radiator": {
           "name": "Lithium Spray Radiator",
-          "mass_tons": 10,
+          "mass_tons": 60,
           "dissipation_kw_per_kg": 13
         },
         "battery": {
@@ -2657,7 +2667,8 @@
           "mass_tons": 20,
           "capacity_gj": 160,
           "recharge_rate_gj_s": 0.075
-        }
+        },
+        "refit_note": "Mass-neutral thermal refit of the 138 t LithiumHeatSink + radiator budget: 60 t LithiumSpray (13 kW/kg = 780 MW extended, sized to the drive's full-burn waste heat) + 78 t of heat sink at the TI Lithium ratio (525 GJ / 128 t) = 320 GJ."
       },
       "armor": {
         "type": "Adamantane",
@@ -2861,8 +2872,8 @@
               "x": 0.72,
               "side": "port"
             },
-            "mass_tons": 64,
-            "capacity_gj": 262,
+            "mass_tons": 39,
+            "capacity_gj": 160,
             "notes": "Port aft bank"
           },
           {
@@ -2871,8 +2882,8 @@
               "x": 0.72,
               "side": "starboard"
             },
-            "mass_tons": 64,
-            "capacity_gj": 263,
+            "mass_tons": 39,
+            "capacity_gj": 160,
             "notes": "Starboard aft bank"
           }
         ]
@@ -2919,12 +2930,12 @@
       "thermal": {
         "heatsink": {
           "name": "Lithium Heat Sink",
-          "mass_tons": 128,
-          "capacity_gj": 525
+          "mass_tons": 78,
+          "capacity_gj": 320
         },
         "radiator": {
           "name": "Lithium Spray Radiator",
-          "mass_tons": 10,
+          "mass_tons": 60,
           "dissipation_kw_per_kg": 13
         },
         "battery": {
@@ -2932,7 +2943,8 @@
           "mass_tons": 20,
           "capacity_gj": 160,
           "recharge_rate_gj_s": 0.075
-        }
+        },
+        "refit_note": "Mass-neutral thermal refit of the 138 t LithiumHeatSink + radiator budget: 60 t LithiumSpray (13 kW/kg = 780 MW extended, sized to the drive's full-burn waste heat) + 78 t of heat sink at the TI Lithium ratio (525 GJ / 128 t) = 320 GJ."
       },
       "armor": {
         "type": "Adamantane",

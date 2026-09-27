@@ -92,6 +92,9 @@ class FriendlyShipSnapshot:
     torpedoes_remaining: int = 0
     pd_turrets_total: int = 0
     pd_turrets_operational: int = 0
+    # ThermalSystem.outlook(): net heat rate, time to 100% / meltdown
+    # retracted vs extended, radiator mode and health (None if no thermal).
+    thermal: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -753,7 +756,9 @@ Be authentic to how you would command a fleet as {model_name}."""
             1 for pd in pd_list if getattr(pd, 'is_operational', True)
         )
 
+        thermal_system = getattr(ship, 'thermal_system', None)
         return FriendlyShipSnapshot(
+            thermal=thermal_system.outlook() if thermal_system is not None else None,
             torpedoes_remaining=torpedoes_remaining,
             pd_turrets_total=pd_total,
             pd_turrets_operational=pd_operational,

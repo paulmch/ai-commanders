@@ -197,6 +197,7 @@ class AdmiralViewState:
             "ARMOR_PENETRATED": "PENETRATION",
             "MODULE_DESTROYED": "module destroyed",
             "SHIP_DESTROYED": "SHIP DESTROYED",
+            "REACTOR_MELTDOWN": "REACTOR MELTDOWN",
         }
         out = []
         for ts, etype, ship_id, _ in self._events:

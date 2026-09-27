@@ -32,8 +32,15 @@ TORPEDO_MAX_LAUNCH_RANGE = 700.0
 TORPEDO_THREAT_ETA_S = 75.0
 OVERSHOOT_CLOSING_KPS = 12.0
 
-HEAT_EXTEND_PCT = 65.0
-HEAT_SAFE_PCT = 20.0
+# Heat management (percent of heat-sink capacity). The engine's ladder:
+# guns hold >= 90%, radiators forced out >= 100%, reactor meltdown >= 150%.
+HEAT_EXTEND_PCT = 65.0        # extend whenever no torpedo is inbound
+HEAT_EXTEND_SAFE_PCT = 35.0   # ...or earlier when nothing can shoot the panels
+HEAT_EMERGENCY_PCT = 85.0     # extend even under torpedo fire; cut the burn
+HEAT_EASE_PCT = 75.0          # start easing the burn below radiator capacity
+HEAT_SAFE_PCT = 20.0          # cool enough to button up
+HEAT_OVERLIMIT_PCT = 100.0    # past this even an evasion burn is capped
+SAFE_ENEMY_RANGE_KM = 800.0   # beyond every gun's reach: panels are safe out
 
 
 class HeuristicCaptain(LLMCaptain):
@@ -147,21 +154,68 @@ class HeuristicCaptain(LLMCaptain):
             maneuver = ("EVADE", 1.0)
         if maneuver is None:
             maneuver = self._doctrine_maneuver(dist_km, closing_kps)
-        calls.append(("set_maneuver", {
-            "maneuver_type": maneuver[0], "throttle": maneuver[1]}))
-
-        # Radiators: shed heat when hot, button up under torpedo fire
         heat = getattr(ship, "heat_percent", 0.0) or 0.0
-        from ..thermal import RadiatorState
-        radiators = getattr(getattr(ship, "thermal_system", None), "radiators", None)
-        extended = bool(radiators and any(
-            rad.state == RadiatorState.EXTENDED for rad in radiators.radiators.values()))
-        if not extended and heat > HEAT_EXTEND_PCT and not threat:
-            calls.append(("set_radiators", {"extend": True}))
-        elif extended and (threat or heat < HEAT_SAFE_PCT):
-            calls.append(("set_radiators", {"extend": False}))
+        throttle = self._heat_throttle_cap(ship, heat, maneuver[1], threat)
+        calls.append(("set_maneuver", {
+            "maneuver_type": maneuver[0], "throttle": throttle}))
+
+        # Radiators: shed heat when hot or when nothing can hit the panels,
+        # button up under torpedo fire - unless heat is past the emergency
+        # line, where cooling beats panel risk (the ladder would force them
+        # out at 100% anyway).
+        want = self._radiator_wish(ship, ship_id, heat, threat, enemies, simulation)
+        if want is not None and want != bool(getattr(ship, "radiators_extended", False)):
+            calls.append(("set_radiators", {"extend": want}))
 
         return calls
+
+    def _radiator_wish(self, ship, ship_id, heat, threat, enemies, simulation) -> Optional[bool]:
+        """True = extend, False = retract, None = leave as is."""
+        if getattr(ship, "thermal_system", None) is None:
+            return None
+        if heat >= HEAT_EMERGENCY_PCT:
+            return True
+        if threat:
+            return False
+        if heat >= HEAT_EXTEND_PCT:
+            return True
+        if heat >= HEAT_EXTEND_SAFE_PCT and self._panels_safe(ship, ship_id, enemies, simulation):
+            return True
+        if heat < HEAT_SAFE_PCT:
+            return False
+        return None
+
+    def _panels_safe(self, ship, ship_id, enemies, simulation) -> bool:
+        """No enemy within gun reach and no slug inbound on us."""
+        nearest_km = min(
+            (ship.position.distance_to(e.position) / 1000.0 for e in enemies),
+            default=float("inf"))
+        if nearest_km < SAFE_ENEMY_RANGE_KM:
+            return False
+        return not any(getattr(p, "target_ship_id", None) == ship_id
+                       for p in getattr(simulation, "projectiles", []) or [])
+
+    def _heat_throttle_cap(self, ship, heat: float, throttle: float, threat: bool) -> float:
+        """
+        Keep the drive under what the radiators can reject once the ship runs
+        hot. Full burn makes exactly the radiators' design rejection, so a
+        damaged array (or gunfire on top) means a full burn keeps heating.
+        A torpedo dodge keeps full throttle until heat passes 100%.
+        """
+        thermal = getattr(ship, "thermal_system", None)
+        if thermal is None or heat < HEAT_EASE_PCT:
+            return throttle
+        drive_full_kw = getattr(thermal, "drive_heat_full_kw", 0.0) or 0.0
+        if drive_full_kw <= 0:
+            return throttle
+        ratio = thermal.radiators.extended_dissipation_kw / drive_full_kw
+        if threat and heat < HEAT_OVERLIMIT_PCT:
+            return throttle
+        if heat >= HEAT_EMERGENCY_PCT:
+            cap = max(0.15, 0.5 * ratio)
+        else:
+            cap = max(0.3, 0.8 * ratio)
+        return round(min(throttle, cap), 2)
 
     # ------------------------------------------------------------------
     # Helpers

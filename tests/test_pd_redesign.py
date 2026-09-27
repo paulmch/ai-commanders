@@ -188,16 +188,18 @@ class TestDwellModel:
 class TestPowerHeatCoupling:
 
     def test_pd_capacitor_sized_for_electrical_energy(self, fleet_data):
-        """Capacitor stores beam/eta per burst, so its heat equals the true
-        waste heat and its charge rate is the turret's real bus draw."""
+        """Capacitor stores TI's PointDefenseLaserTurret draw per burst
+        (shotPower / efficiency = 50 MJ / 0.25), so its heat is TI's 150 MJ
+        per cycle and its charge rate the turret's real bus draw (40 MW)."""
         ship = create_ship_from_fleet_data("s", "destroyer", "alpha", fleet_data)
         for pd in ship.point_defense:
             cap = ship.power_system.weapon_capacitors[pd.turret_name]
-            beam_burst_mj = pd.laser.power_mw * pd.laser.cooldown_s
-            assert cap.capacity_mj == pytest.approx(
-                beam_burst_mj / PD_WALLPLUG_EFFICIENCY)
-            assert cap.charge_rate_mw == pytest.approx(
-                pd.laser.power_mw / PD_WALLPLUG_EFFICIENCY)
+            assert pd.laser.shot_power_mj == 50.0
+            assert pd.laser.efficiency == PD_WALLPLUG_EFFICIENCY == 0.25
+            assert cap.capacity_mj == pytest.approx(50.0 / 0.25)
+            assert cap.calculate_heat_generated() == pytest.approx(150.0)
+            assert cap.charge_rate_mw == pytest.approx(40.0)
+            assert pd.laser.waste_heat_w() == pytest.approx(30e6)
 
     def test_each_turret_has_its_own_capacitor(self, fleet_data):
         """Regression: both destroyer turrets were named 'PD Laser Turret' and
@@ -209,9 +211,9 @@ class TestPowerHeatCoupling:
             assert name in ship.power_system.weapon_capacitors
 
     def test_sustained_fire_raises_heat_and_draws_bus_power(self, fleet_data):
-        """120 s of 2-turret dwell must show up in the thermal ledger (waste
-        heat = 3x beam power at 25% wall-plug efficiency) and in the PD
-        electrical-draw ledger that competes with the drive."""
+        """120 s of 2-turret dwell must show up in the thermal ledger (TI
+        turret: 30 MW waste heat per firing turret) and in the PD bus-draw
+        ledger (40 MW per turret)."""
         def run(firing):
             sim = CombatSimulation(seed=3, time_step=1.0)
             d = create_ship_from_fleet_data(
@@ -237,21 +239,18 @@ class TestPowerHeatCoupling:
         idle_heat, idle_draw = run(False)
         fire_heat, fire_draw = run(True)
 
-        # Heat: 2 turrets x 15 MW waste heat -> +3.6 GJ over 120 s.
-        assert fire_heat > idle_heat + 1.0, (
+        # Heat: 2 turrets x 30 MW waste heat -> up to +7.2 GJ over 120 s.
+        assert fire_heat > idle_heat + 2.0, (
             f"sustained PD fire added only {fire_heat - idle_heat:.2f} GJ "
             f"of heat - the thermal coupling is not working"
         )
-        # Power: 2 turrets x 20 MW electrical = 0.04 GW while firing.
+        # Power: 2 turrets x 40 MW bus draw = 0.08 GW while firing.
         assert idle_draw == 0.0
-        assert fire_draw == pytest.approx(0.04, rel=0.05)
+        assert fire_draw == pytest.approx(0.08, rel=0.05)
 
-    def test_full_throttle_pd_fire_drains_the_battery(self, fleet_data):
-        """At throttle 1.0 the drive claims the whole reactor, so capacitor
-        recharge must come from the battery: same budget as the drive."""
-        ship = create_ship_from_fleet_data("s", "destroyer", "alpha", fleet_data)
+    @staticmethod
+    def _pd_fire_60s(ship):
         ps = ship.power_system
-        ps.set_drive_throttle(1.0)
         start_gj = ps.battery.current_charge_gj
         for _ in range(60):
             for pd in ship.point_defense:
@@ -261,11 +260,25 @@ class TestPowerHeatCoupling:
             for pd in ship.point_defense:
                 pd.update(1.0)
             ps.update(1.0)
-        drained = start_gj - ps.battery.current_charge_gj
-        # 2 turrets x 20 MW x 60 s = 2.4 GJ
-        assert drained == pytest.approx(2.4, rel=0.10), (
-            f"expected ~2.4 GJ battery drain from 60 s of 2-turret fire at "
-            f"full throttle, measured {drained:.2f} GJ"
+        return start_gj - ps.battery.current_charge_gj
+
+    def test_full_throttle_no_longer_starves_pd(self, fleet_data):
+        """The systems bus is separate from the drive: at throttle 1.0 a
+        healthy ship recharges its PD from the bus, not the battery (the old
+        full-throttle cliff is gone)."""
+        ship = create_ship_from_fleet_data("s", "destroyer", "alpha", fleet_data)
+        ship.power_system.set_drive_throttle(1.0)
+        assert self._pd_fire_60s(ship) == pytest.approx(0.0, abs=1e-9)
+
+    def test_dead_reactor_pd_fire_drains_the_battery(self, fleet_data):
+        """With the reactor modules gone the bus is dead and PD recharge
+        comes from the battery: 2 turrets x 40 MW x 60 s = 4.8 GJ."""
+        ship = create_ship_from_fleet_data("s", "destroyer", "alpha", fleet_data)
+        ship.power_system.set_bus_scale(0.0)
+        drained = self._pd_fire_60s(ship)
+        assert drained == pytest.approx(4.8, rel=0.10), (
+            f"expected ~4.8 GJ battery drain from 60 s of 2-turret fire on a "
+            f"dead bus, measured {drained:.2f} GJ"
         )
 
     def test_burst_start_is_gated_on_capacitor_charge(self, fleet_data):

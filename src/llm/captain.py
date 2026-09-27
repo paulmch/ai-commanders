@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 
 from .client import DEFAULT_MODEL, CaptainClient, LLMCallError, ToolCall
-from .tools import get_captain_tools, get_captain_tools_for_ship, get_weapon_groups_for_ship, PERSONALITY_SELECTION_TOOLS, RESPOND_TO_ORDERS_TOOL
+from .tools import get_captain_tools, get_captain_tools_for_ship, get_weapon_groups_for_ship, PERSONALITY_SELECTION_TOOLS, RESPOND_TO_ORDERS_TOOL, radiator_command_from_args
 from .prompts import (
     build_captain_prompt,
     build_captain_messages,
@@ -522,8 +522,11 @@ class LLMCaptain:
             elif tc.name == "launch_torpedo":
                 actions.append("LAUNCH TORPEDO")
             elif tc.name == "set_radiators":
-                extend = tc.arguments.get("extend", False)
-                actions.append("EXTEND radiators" if extend else "RETRACT radiators")
+                cmd = radiator_command_from_args(tc.arguments)
+                if cmd.get("mode") == "auto":
+                    actions.append(f"AUTO radiators (extend at {cmd['auto_extend_pct']:.0f}%)")
+                else:
+                    actions.append("EXTEND radiators" if cmd["extend"] else "RETRACT radiators")
             elif tc.name == "send_message":
                 msg = tc.arguments.get("message", "")[:30]
                 recipient = tc.arguments.get("recipient", "ALL_ENEMIES")
@@ -581,7 +584,9 @@ class LLMCaptain:
                     elif turret:
                         actions.append(f"turret:{turret}")
                 elif name == "set_radiators":
-                    actions.append("radiators:" + ("extend" if args.get("extend") else "retract"))
+                    cmd = radiator_command_from_args(args)
+                    actions.append("radiators:" + ("auto" if cmd.get("mode") == "auto"
+                                                   else "extend" if cmd["extend"] else "retract"))
                 elif name == "send_message":
                     actions.append("sent_msg")
                 elif name == "log_note":
@@ -898,19 +903,17 @@ class LLMCaptain:
         if ship.thermal_system:
             status["heat_percent"] = ship.thermal_system.heat_percent
             status["heatsink_capacity"] = ship.thermal_system.heatsink.capacity_gj
-            # Check if radiators extended
-            if ship.thermal_system.radiators:
-                from ..thermal import RadiatorState
-                extended = any(
-                    rad.state == RadiatorState.EXTENDED
-                    for rad in ship.thermal_system.radiators.radiators.values()
-                )
-                status["radiators_extended"] = extended
-            else:
-                status["radiators_extended"] = False
+            # Damaged-but-deployed panels count as extended (they still reject heat)
+            extended = getattr(ship.thermal_system, "radiators_extended", False)
+            status["radiators_extended"] = extended if isinstance(extended, bool) else False
+            # Net rate, time to 100% / meltdown retracted vs extended, panels
+            outlook = getattr(ship.thermal_system, "outlook", None)
+            outlook = outlook() if callable(outlook) else None
+            if isinstance(outlook, dict):
+                status["thermal"] = outlook
         else:
             status["heat_percent"] = 0
-            status["heatsink_capacity"] = 525
+            status["heatsink_capacity"] = 320
             status["radiators_extended"] = False
 
         # Armor
@@ -1793,11 +1796,7 @@ class LLMCaptain:
             ]
 
         elif name == "set_radiators":
-            extend = args.get("extend", False)
-            return {
-                "type": "set_radiators",
-                "extend": extend,
-            }
+            return radiator_command_from_args(args)
 
         elif name == "send_message":
             # Queue message for delivery and record in history

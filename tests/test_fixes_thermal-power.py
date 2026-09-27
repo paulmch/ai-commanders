@@ -161,21 +161,21 @@ class TestRadiatorPositionInterop:
 class TestHeatAccounting:
     """update() must report what actually happened to the stored heat."""
 
-    def test_absorb_with_overflow_reports_excess(self):
+    def test_heat_past_capacity_is_stored_not_discarded(self):
+        """The sink rating is 100% heat, not a wall: excess heat is kept (the
+        heat ladder acts on it) instead of being silently shed."""
         sink = HeatSink(capacity_gj=100.0, current_heat_gj=90.0)
-        absorbed, overflow = sink.absorb_with_overflow(30.0)
-        assert absorbed == pytest.approx(10.0)
-        assert overflow == pytest.approx(20.0)
-        assert sink.current_heat_gj == pytest.approx(100.0)
-        # Legacy boolean API keeps working.
-        assert sink.absorb(1.0) is False
+        assert sink.absorb(30.0) is False  # now past the rating...
+        assert sink.current_heat_gj == pytest.approx(120.0)  # ...and all of it kept
+        assert sink.heat_percent == pytest.approx(120.0)
+        assert sink.available_capacity_gj == 0.0
 
     @pytest.mark.parametrize(
         "capacity,initial,dissipation_kw,generation_kw",
         [
             (100.0, 0.0, 0.0, 1_000_000.0),        # heating, no radiators
             (100.0, 50.0, 2_000_000.0, 1_000_000.0),  # cooling
-            (10.0, 10.0, 0.0, 1_000_000.0),        # full sink, overflow
+            (10.0, 10.0, 0.0, 1_000_000.0),        # full sink keeps heating
             (10.0, 10.0, 2_000_000.0, 1_000_000.0),  # full sink, spare radiators
             (100.0, 0.0, 1_000_000.0, 1_000_000.0),  # exact equilibrium
         ],
@@ -191,21 +191,18 @@ class TestHeatAccounting:
         after = th.heatsink.current_heat_gj
         # net_heat_gj is the change in *stored* heat...
         assert result["net_heat_gj"] == pytest.approx(after - before)
-        # ...and the books balance: what was made either radiated, was stored,
-        # or was explicitly reported as overflow.
+        # ...and the books balance: what was made either radiated or was stored.
         assert result["heat_generated_gj"] == pytest.approx(
-            result["heat_dissipated_gj"]
-            + result["heat_overflow_gj"]
-            + (after - before)
+            result["heat_dissipated_gj"] + (after - before)
         )
-        assert result["heat_overflow_gj"] >= 0.0
+        assert result["rad_out_gw"] == pytest.approx(result["heat_dissipated_gj"])
 
-    def test_overflow_is_reported_not_hidden(self):
+    def test_full_sink_keeps_heating_past_100(self):
         th = make_thermal(10.0, 10.0, 0.0, 1_000_000.0)  # 1 GJ/s, sink full
         result = th.update(dt_seconds=1.0)
         assert result["heat_generated_gj"] == pytest.approx(1.0)
-        assert result["heat_overflow_gj"] == pytest.approx(1.0)
-        assert result["net_heat_gj"] == pytest.approx(0.0)
+        assert result["net_heat_gj"] == pytest.approx(1.0)
+        assert th.heat_fraction == pytest.approx(1.1)
 
     def test_full_sink_does_not_block_radiators(self):
         """Radiators with spare capacity must pass generated heat straight out."""
@@ -213,7 +210,6 @@ class TestHeatAccounting:
         th = make_thermal(10.0, 10.0, 2_000_000.0, 1_000_000.0)
         result = th.update(dt_seconds=1.0)
 
-        assert result["heat_overflow_gj"] == pytest.approx(0.0)
         # Generation is rejected directly; the remaining 1 GJ/s drains the sink.
         assert result["heat_dissipated_gj"] == pytest.approx(2.0)
         assert th.heatsink.current_heat_gj == pytest.approx(9.0)
@@ -308,6 +304,7 @@ class TestBatteryDischargeBudget:
             ),
         )
         ps.set_drive_throttle(0.0)
+        ps.set_bus_scale(0.0)  # reactor modules destroyed: battery only
         for i in range(n_weapons):
             cap = ps.add_weapon_capacitor(
                 f"gun_{i}",

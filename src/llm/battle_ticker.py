@@ -204,7 +204,7 @@ class BattleTicker:
                     died = self._death_times.get(sid)
                     entry += f" DEAD@{died:.0f}s" if died is not None else " DEAD"
                 else:
-                    entry += f" {hull:.0f}%"
+                    entry += f" hull {hull:.0f}%{self._armor_heat(ship)}"
                     if getattr(ship, "is_dying", False):
                         entry += " DYING"
                     elif getattr(ship, "is_surrendered", False):
@@ -222,6 +222,21 @@ class BattleTicker:
             lines.append(f"{faction.upper()} {model_label(self.models.get(faction))}: "
                          f"{alive}/{len(ships)} alive, hull {pct:.0f}% | " + " | ".join(entries))
         return lines
+
+    @staticmethod
+    def _armor_heat(ship: Any) -> str:
+        """' arm 3/36cm heat 42%': weakest facing now/originally, heat % (+' rad' if out)."""
+        text = ""
+        sections = getattr(getattr(ship, "armor", None), "sections", None) or {}
+        if sections:
+            weakest = min(sections.values(), key=lambda a: a.thickness_cm)
+            original = getattr(weakest, "original_thickness_cm", 0.0) or weakest.thickness_cm
+            text += f" arm {weakest.thickness_cm:.0f}/{original:.0f}cm"
+        if getattr(ship, "thermal_system", None) is not None:
+            text += f" heat {float(ship.heat_percent):.0f}%"
+            if getattr(ship, "radiators_extended", False) is True:
+                text += " rad"
+        return text
 
     def _faction(self, runner: Any, ship_id: Optional[str]) -> Optional[str]:
         for faction in FACTIONS:
@@ -252,8 +267,9 @@ class BattleTicker:
             elif et == "pd_torpedo_disabled" and self._faction(runner, e.ship_id):
                 stats[self._faction(runner, e.ship_id)]["pd_kills"] += 1
             elif et == "ship_destroyed":
-                kills.append(f"{self._name(runner, e.ship_id)} by "
-                             f"{self._name(runner, data.get('killer_id'))} "
+                killer = data.get('killer_id')
+                by = f" by {self._name(runner, killer)}" if killer else ""
+                kills.append(f"{self._name(runner, e.ship_id)}{by} "
                              f"({data.get('cause') or 'destroyed'}) @{e.timestamp:.0f}s")
             elif et == "ship_dying":
                 kills.append(f"{self._name(runner, e.ship_id)} crippled by "

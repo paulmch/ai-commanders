@@ -82,10 +82,14 @@ class EventType(str, Enum):
     SHIP_STATE = "ship_state"
     THERMAL_WARNING = "thermal_warning"
     WEAPON_OVERHEAT = "weapon_overheat"
+    HEAT_WARNING = "heat_warning"          # {level: 0.9|1.0|1.25, heat}
+    REACTOR_MELTDOWN = "reactor_meltdown"  # {heat}; ship_destroyed follows
 
 
 # Optional per-ship sim_trace fields passed through verbatim when present.
-_TRACE_OPTIONAL_SHIP_KEYS = ("acc", "omega", "alpha", "turn", "evade", "tgt", "plan")
+_TRACE_OPTIONAL_SHIP_KEYS = ("acc", "omega", "alpha", "turn", "evade", "tgt", "plan",
+                             # heat telemetry (battle_runner._thermal_trace_fields)
+                             "heat", "rad", "heat_rate", "rad_out")
 
 
 def _interval_s(config: Any) -> Optional[float]:
@@ -1054,13 +1058,46 @@ class BattleRecorder:
         timestamp: float,
         ship_id: str,
         extended: bool,
+        reason: Optional[str] = None,
     ) -> None:
-        """Record radiator state change."""
+        """Record radiator state change (reason: 'heat_limit', 'auto_*' when not a command)."""
+        data: Dict[str, Any] = {"extended": extended}
+        if reason:
+            data["reason"] = reason
         self._record_event(BattleEvent(
             timestamp=timestamp,
             event_type=EventType.RADIATOR_CHANGE,
             ship_id=ship_id,
-            data={"extended": extended}
+            data=data,
+        ))
+
+    def record_heat_warning(
+        self,
+        timestamp: float,
+        ship_id: str,
+        level: float,
+        heat: float,
+    ) -> None:
+        """Record an upward crossing of a heat-warning level (0.9 / 1.0 / 1.25)."""
+        self._record_event(BattleEvent(
+            timestamp=timestamp,
+            event_type=EventType.HEAT_WARNING,
+            ship_id=ship_id,
+            data={"ship_id": ship_id, "level": level, "heat": heat},
+        ))
+
+    def record_reactor_meltdown(
+        self,
+        timestamp: float,
+        ship_id: str,
+        heat: float,
+    ) -> None:
+        """Record a reactor meltdown (the ship_destroyed event follows, cause 'reactor_overheat')."""
+        self._record_event(BattleEvent(
+            timestamp=timestamp,
+            event_type=EventType.REACTOR_MELTDOWN,
+            ship_id=ship_id,
+            data={"ship_id": ship_id, "heat": heat},
         ))
 
     def record_thermal_warning(

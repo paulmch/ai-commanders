@@ -328,6 +328,11 @@ class PDLaser:
         range_km: Maximum effective range in kilometers.
         cooldown_s: Time between shots/bursts in seconds.
         name: Display name of the PD laser system.
+        shot_power_mj: Terra Invicta shotPower of the turret this models
+            (PointDefenseLaserTurret: 50 MJ). Sets the turret's power draw
+            and waste heat per burst, NOT its beam: the on-target dwell stays
+            power_mw (the calibrated kill model).
+        efficiency: Wall-plug efficiency (TI PointDefenseLaserTurret: 0.25).
     """
     power_mw: float = 5.0
     aperture_m: float = 0.5
@@ -335,6 +340,8 @@ class PDLaser:
     range_km: float = 100.0
     cooldown_s: float = 0.5
     name: str = "PD Laser Turret"
+    shot_power_mj: float = 50.0
+    efficiency: float = PD_WALLPLUG_EFFICIENCY
 
     @classmethod
     def from_fleet_data(cls, weapon_data: dict) -> PDLaser:
@@ -354,6 +361,8 @@ class PDLaser:
             range_km=weapon_data.get("range_km", 100.0),
             cooldown_s=weapon_data.get("cooldown_s", 0.5),
             name=weapon_data.get("name", "PD Laser Turret"),
+            shot_power_mj=weapon_data.get("shot_power_mj", 50.0),
+            efficiency=weapon_data.get("efficiency", PD_WALLPLUG_EFFICIENCY),
         )
 
     @property
@@ -623,13 +632,33 @@ class PDLaser:
             wavelength_m=self.wavelength_m,
         )
 
+    def burst_draw_j(self) -> float:
+        """
+        Energy one burst (one cooldown of dwell) draws from the systems bus.
+
+        Terra Invicta's laser convention: shotPower / efficiency. One burst of
+        our continuous-dwell turret stands in for one TI shot cycle.
+        """
+        return self.shot_power_mj * 1e6 / self.efficiency
+
+    def burst_heat_j(self) -> float:
+        """Waste heat one burst dumps into the hull: draw x (1 - efficiency)."""
+        return self.burst_draw_j() * (1.0 - self.efficiency)
+
     def electrical_draw_w(self) -> float:
-        """Bus power drawn while the beam is on (beam power / wall-plug eff)."""
-        return self.power_w / PD_WALLPLUG_EFFICIENCY
+        """Average bus draw while the turret fires continuously (40 MW for TI's turret)."""
+        return self.burst_draw_j() / self.cooldown_s if self.cooldown_s > 0 else 0.0
 
     def waste_heat_w(self) -> float:
-        """Heat rejected into the hull while the beam is on."""
-        return self.electrical_draw_w() - self.power_w
+        """
+        Continuous-dwell heat equivalent while the turret is firing.
+
+        TI's PointDefenseLaserTurret fires a 50 MJ shot every 5 s at 25%
+        efficiency: 150 MJ of waste heat per 5 s cycle = 30 MW. Our turret
+        dwells continuously and re-arms each cooldown, so while it is engaged
+        it runs that cycle back-to-back: 30 MW into the hull.
+        """
+        return self.burst_heat_j() / self.cooldown_s if self.cooldown_s > 0 else 0.0
 
 
 @dataclass
