@@ -51,7 +51,8 @@ ai-commanders/
 │   └── llm/                # OpenRouter client, captain/admiral agents (+vision),
 │                           # draft mode + heuristic captains, prompts, tools,
 │                           # battle runner/recorder, MCP servers, commander
-│                           # notebooks (notebook.py, cross-battle memory)
+│                           # notebooks (notebook.py, cross-battle memory),
+│                           # range_control.py (anti-merge headings/warnings)
 ├── tests/                  # pytest suite; test_fixes_*.py pin past bug fixes
 ├── scripts/
 │   ├── run_llm_battle.py   # CLI for AI vs AI battles (--fleet-config, --admiral-vision)
@@ -77,6 +78,13 @@ ai-commanders/
 - Trident torpedo: 250 kg penetrator, 14 km/s delta-v, 12g; guidance holds a
   ~12 km/s closure floor and dumps remaining delta-v in the terminal burn
 - PD laser: 250 km envelope, continuous dwell; one turret blinds ~5 km/s of closure
+- Coilguns fire Terra Invicta salvos: batteries 5 shots 10 s apart then 20 s
+  cooldown (5 per 60 s), spinals 5 per 72 s, siege coiler 3-shot salvo
+- Heat (TI-derived): Mk3 guns 0.7 efficient (coil 0.31 / heavy 0.52 / spinal
+  1.84 / siege 3.11 GJ per shot), PD 30 MW while dwelling; every hull has 60 t
+  radiators (780 MW extended) + a 320 GJ sink, and full-throttle drive heat
+  equals radiator rejection. Ladder: guns hold at 90%, radiators forced out at
+  100%, reactor meltdown at `REACTOR_MELTDOWN_HEAT_FRACTION` (150%, src/thermal.py)
 - Two-stage kills: a non-reactor killing blow leaves an untargetable dying hulk
   (tumbling, torch sputtering) that detonates 0-30 s later; hits on the hulk
   shorten the fuse, a reactor hit detonates it at once (`test_dying_ships.py`)
@@ -98,8 +106,18 @@ captains) run concurrently (BattleConfig.parallel_llm, on by default).
 Cross-battle: scripts/refine_commander.py distills notebook lessons from
 recordings, rematch-gates them, and battles opt in via use_notebooks/--notebooks.
 3. **Rule-based layer**: executes between checkpoints - fire control modes,
-   automatic point defense, threat-aware evasion (wobble vs guns, RUN from guided
-   torpedoes, PRESENT thickest armor when a hit is unavoidable)
+   automatic point defense, threat-aware evasion (jink vs guns, RUN from guided
+   torpedoes, PRESENT thickest armor when a hit is unavoidable; with no threat
+   EVADE weaves around the ship's CURRENT course and never chases)
+
+Range control (anti-merge): HEADING turns first, then burns (throttle 0 =
+attitude only, RCS, velocity untouched). `src/llm/range_control.py` gives
+captains, admirals and MCP clients, per enemy group, closing speed, closest
+approach, stopping distance, a merge warning and ready-made world-frame headings
+(cancel closure / open range / pass wide / flank / coast & shoot) whose stated
+effects are pinned by `tests/test_range_control_and_evade.py`. An admiral
+`issue_order(ship_name="all ships", heading, throttle)` is flown as a formation:
+throttles matched to the slowest hull, burn start synced (MCP: ship_id "all").
 
 MCP mode replaces the admiral+captains of a fleet with any MCP client
 (`src/llm/mcp_server.py`, one battle HTTP API on port 8765, `--faction alpha|beta`).
