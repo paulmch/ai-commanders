@@ -231,6 +231,49 @@ granularity would only move the cliffs. The likely fix is structural: price
 launch rate as well as stowed yield, so corvettes rise relative to
 cruiser_torpedo. Re-fit with the same harness after any such change.
 
+### 2026-09-27 re-check: salvo guns, heat ladder, range control
+
+The next engine round changed three things:
+
+- coilguns fire Terra Invicta salvos (5 shots per 60 s for batteries,
+  5 per 72 s for spinals)
+- a heat ladder (guns hold at 90%, meltdown at 150%)
+- EVADE and torpedo hulls now hold range instead of merging
+
+Gun hulls repriced by +1-2 pts from their own data. The torpedo hulls'
+prices did not move, and neither did the dial's plateaus. Re-run at
+viz-pass-3 @ bed65c5, 24 seeds x 2 sides:
+
+| k | CT / CV | 150 pts fleet | gunline | dread | balanced | score |
+|--:|:-------:|---------------|--------:|------:|---------:|------:|
+| 0.032 | 58 / 17 | 2 CT + 2 CV | 96% | 98% | 94% | 96% |
+| 0.035 | 61 / 17 | 2 CT + CV + FF | 46% | 46% | 67% | 53% |
+| **0.040** | **65 / 18** | **2 CT + CV** | **67%** | **65%** | **88%** | **73%** |
+| 0.044 | 69 / 19 | 2 CT + FF | 4% | 6% | 5% | 5% |
+| 0.048 | 72 / 19 | 2 CT | 15% | 1% | 42% | 19% |
+
+| k | 100 pts (gunline / dread / balanced) | 200 pts (gunline / dread / balanced) | mean |
+|--:|------------------|------------------|-----:|
+| 0.035 | 92% (96 / 99 / 81) | 68% (38 / 67 / 100) | 71% |
+| **0.040** | 41% (75 / 0 / 48) | 26% (26 / 50 / 2) | 47% |
+
+**0.040 stays.** Its 100 / 150 / 200 average (47%) is inside the target band.
+It is above the band only at 150 pts. The 0.035 alternative is
+torpedo-favoured at both 100 pts (92%) and 200 pts (68%). At 100 pts, 0.040
+keeps rock-paper-scissors: it beats the cruiser line and cannot touch the
+dreadnought mix. Against the previous engine it is better centred
+(mean 47% vs 40%) but more budget-sensitive: the spread widened from 31 to
+47 points, because 150 pts rose from 56% to 73%. The corvette cliff still
+dominates:
+
+- 2 corvettes: 92-96%
+- 1 corvette: 41-73%
+- none: 5-26%
+
+The single dial can only choose the least-bad plateau. The launch-rate term
+proposed above is now the gating change for balance that is robust across
+budgets.
+
 ## Cheap AI captains (src/llm/heuristic_captain.py)
 
 Ships whose config model is the sentinel `"heuristic"` get a rule-based
