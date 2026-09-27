@@ -17,9 +17,13 @@ from pathlib import Path
 from typing import Optional, Protocol, Union, runtime_checkable
 
 
-# Radiator vulnerability constants
-RADIATOR_HIT_CHANCE_RETRACTED = 0.05  # 5% chance to hit retracted radiators
-RADIATOR_HIT_CHANCE_EXTENDED = 0.20   # 20% chance to hit extended radiators
+# Radiator vulnerability constants - the ONE radiator-hit model (projectile and
+# torpedo impacts both roll through RadiatorHitResolver / radiator_hit_chance).
+# Radiators sit at the tail; a NOSE hit has the whole hull between it and them.
+RADIATOR_HIT_CHANCE_RETRACTED = 0.05  # 5% per flank/tail hit, panels tucked in
+RADIATOR_HIT_CHANCE_EXTENDED = 0.20   # 20% per flank/tail hit, panels out
+RADIATOR_HIT_CHANCE_NOSE_RETRACTED = 0.0   # tucked panels are shadowed by the hull
+RADIATOR_HIT_CHANCE_NOSE_EXTENDED = 0.10   # swept-back panels poke past the hull
 RADIATOR_ARMOR_RATING = 0.1           # Very fragile, only 10% damage reduction
 
 
@@ -673,6 +677,14 @@ class ShipArmor:
         return total
 
 
+def radiator_hit_chance(hit_location: "HitLocation", extended: bool) -> float:
+    """Chance that a hull hit at hit_location also strikes a radiator panel."""
+    if hit_location == HitLocation.NOSE:
+        return (RADIATOR_HIT_CHANCE_NOSE_EXTENDED if extended
+                else RADIATOR_HIT_CHANCE_NOSE_RETRACTED)
+    return RADIATOR_HIT_CHANCE_EXTENDED if extended else RADIATOR_HIT_CHANCE_RETRACTED
+
+
 class RadiatorHitResolver:
     """
     Resolves radiator hit checks during combat.
@@ -716,9 +728,10 @@ class RadiatorHitResolver:
 
     def resolve_radiator_hit(
         self,
-        weapon: Weapon,
+        weapon: Optional[Weapon],
         thermal_system: ThermalSystemProtocol,
-        hit_location: HitLocation
+        hit_location: HitLocation,
+        energy_gj: Optional[float] = None,
     ) -> Optional[RadiatorHitResult]:
         """
         Check for and resolve a radiator hit during combat.
@@ -728,9 +741,11 @@ class RadiatorHitResolver:
         and easily damaged, with only minimal armor protection.
 
         Args:
-            weapon: The weapon that scored the hit.
+            weapon: The weapon that scored the hit (None for a torpedo).
             thermal_system: The target ship's thermal management system.
             hit_location: Where on the hull the weapon hit.
+            energy_gj: Impact energy; defaults to the weapon's kinetic energy
+                (torpedo impacts pass their delivered energy).
 
         Returns:
             RadiatorHitResult if a radiator was targeted, None if no check needed.
@@ -742,14 +757,11 @@ class RadiatorHitResolver:
         # Check if this radiator is extended or retracted
         is_extended = thermal_system.is_radiator_extended(radiator_position)
 
-        # Determine hit chance based on radiator state
-        hit_chance = (
-            RADIATOR_HIT_CHANCE_EXTENDED if is_extended
-            else RADIATOR_HIT_CHANCE_RETRACTED
-        )
+        # Determine hit chance based on hit location and radiator state
+        hit_chance = radiator_hit_chance(hit_location, is_extended)
 
-        # Roll for radiator hit
-        if self.rng.random() > hit_chance:
+        # Roll for radiator hit (no roll at all when the panel is shadowed)
+        if hit_chance <= 0.0 or self.rng.random() > hit_chance:
             return RadiatorHitResult(
                 hit=False,
                 radiator_position=radiator_position.value
@@ -757,7 +769,8 @@ class RadiatorHitResolver:
 
         # Radiator was hit - calculate damage
         # Apply radiator armor rating (very fragile)
-        effective_damage = weapon.kinetic_energy_gj * (1.0 - RADIATOR_ARMOR_RATING)
+        impact_gj = energy_gj if energy_gj is not None else weapon.kinetic_energy_gj
+        effective_damage = impact_gj * (1.0 - RADIATOR_ARMOR_RATING)
 
         # Apply damage to the thermal system and get results
         damage_taken, destroyed, dissipation_lost = thermal_system.apply_radiator_damage(

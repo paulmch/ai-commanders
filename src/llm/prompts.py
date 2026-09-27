@@ -18,6 +18,9 @@ try:
         full_coupling_range_m,
     )
     from ..torpedo import MIN_CLOSING_SPEED_KPS
+    from .. import thermal as _thermal
+    from .. import combat as _combat
+    from ..power import KINETIC_WEAPON_EFFICIENCY
 except ImportError:  # pragma: no cover - script-style imports
     from pointdefense import (
         PDLaser,
@@ -26,6 +29,9 @@ except ImportError:  # pragma: no cover - script-style imports
         full_coupling_range_m,
     )
     from torpedo import MIN_CLOSING_SPEED_KPS
+    import thermal as _thermal
+    import combat as _combat
+    from power import KINETIC_WEAPON_EFFICIENCY
 
 
 # Closing speeds tabulated for the captain's PD block. The middle entry is the
@@ -95,6 +101,152 @@ def pd_doctrine_numbers(fleet_data: Optional[Dict[str, Any]]) -> Dict[str, float
         # Seconds a round at the closure floor spends inside the envelope.
         "envelope_crossing_s": laser.range_km / MIN_CLOSING_SPEED_KPS,
     }
+
+
+def thermal_doctrine_numbers(
+    fleet_data: Optional[Dict[str, Any]], ship_type: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Heat figures for prompts, derived from the same data and constants the
+    engine runs (ThermalSystem.from_ship_data, power.KINETIC_WEAPON_EFFICIENCY,
+    the heat ladder in src/thermal.py, combat.radiator_hit_chance), never
+    hand-quoted. Bound by tests/test_doctrine_accuracy.py.
+    """
+    ships = (fleet_data or {}).get("ships", {})
+    spec = ships.get(ship_type) if ship_type else None
+    if spec is None:
+        spec = ships.get("destroyer") or (next(iter(ships.values())) if ships else {})
+    thermal_data = (spec or {}).get("thermal", {})
+    radiators = _thermal.RadiatorArray.from_ship_data(thermal_data)
+    sink = _thermal.HeatSink.from_ship_data(thermal_data)
+    radiator_mw = radiators.nominal_dissipation_kw / 1000.0
+    drive_mw = radiator_mw * _thermal.DRIVE_HEAT_TO_RADIATOR_RATIO
+
+    weapon_types = (fleet_data or {}).get("weapon_types", {})
+    per_shot: Dict[str, float] = {}
+    for weapon in (spec or {}).get("weapons", []):
+        wt = weapon_types.get(weapon.get("type"), {})
+        ke = wt.get("kinetic_energy_gj", 0.0) or 0.0
+        if ke > 0:
+            per_shot[wt.get("name", weapon.get("type"))] = (
+                ke * (1.0 / KINETIC_WEAPON_EFFICIENCY - 1.0))
+    pd_spec = weapon_types.get("pd_laser")
+    laser = PDLaser.from_fleet_data(pd_spec) if pd_spec else PDLaser()
+
+    return {
+        "sink_gj": sink.capacity_gj,
+        "radiator_mw": radiator_mw,
+        "drive_full_mw": drive_mw,
+        "full_burn_fill_min": (sink.capacity_gj / (drive_mw / 1000.0) / 60.0
+                               if drive_mw > 0 else float("inf")),
+        "per_shot_gj": per_shot,
+        "pd_heat_mw": laser.waste_heat_w() / 1e6,
+        "gun_hold_pct": _thermal.HEAT_GUN_HOLD_FRACTION * 100.0,
+        "forced_pct": _thermal.HEAT_AUTO_EXTEND_FRACTION * 100.0,
+        "meltdown_pct": _thermal.REACTOR_MELTDOWN_HEAT_FRACTION * 100.0,
+        "auto_default_pct": _thermal.AUTO_RADIATOR_DEFAULT_PCT,
+        "rad_hit_extended_pct": _combat.RADIATOR_HIT_CHANCE_EXTENDED * 100.0,
+        "rad_hit_retracted_pct": _combat.RADIATOR_HIT_CHANCE_RETRACTED * 100.0,
+        "rad_hit_nose_extended_pct": _combat.RADIATOR_HIT_CHANCE_NOSE_EXTENDED * 100.0,
+        "rad_hit_nose_retracted_pct": _combat.RADIATOR_HIT_CHANCE_NOSE_RETRACTED * 100.0,
+    }
+
+
+def thermal_doctrine_block(nums: Dict[str, Any]) -> str:
+    """The captain's THERMAL doctrine block (static per hull, cacheable)."""
+    shots = ", ".join(f"{name} {gj:.2f} GJ" for name, gj in nums["per_shot_gj"].items())
+    lines = [
+        "THERMAL - HEAT IS A HARD LIMIT (heat can pass 100%; this ladder is enforced):",
+        f"- Heat sink: {nums['sink_gj']:.0f} GJ capacity",
+        f"- Radiators extended: +{nums['radiator_mw']:.0f} MW cooling; retracted: 0 MW cooling",
+        f"- Drive heat: {nums['drive_full_mw']:.0f} MW at full burn, proportional to throttle - "
+        f"exactly your radiator capacity. A full burn with radiators retracted fills the sink "
+        f"in ~{nums['full_burn_fill_min']:.0f} min; extended, the drive alone holds level and "
+        f"only weapon heat accumulates.",
+        (f"- Weapon heat per shot: {shots}. " if shots else "- ")
+        + f"Point defense: ~{nums['pd_heat_mw']:.0f} MW per firing turret.",
+        f"- >= {nums['gun_hold_pct']:.0f}% heat: your GUNS HOLD FIRE (point defense keeps firing).",
+        f"- >= {nums['forced_pct']:.0f}% heat: radiators are FORCED OUT (exposed to fire) and "
+        f"cannot be retracted until heat drops back below {nums['forced_pct']:.0f}%.",
+        f"- >= {nums['meltdown_pct']:.0f}% heat: REACTOR MELTDOWN - your ship is destroyed instantly.",
+        f"- Extended radiators are exposed and CAN be shot off: a hit on your flank or tail strikes "
+        f"a panel {nums['rad_hit_extended_pct']:.0f}% of the time (nose "
+        f"{nums['rad_hit_nose_extended_pct']:.0f}%); retracted {nums['rad_hit_retracted_pct']:.0f}% "
+        f"(nose {nums['rad_hit_nose_retracted_pct']:.0f}%). Each lost panel is a quarter of your "
+        f"cooling, permanently.",
+        f"- set_radiators(mode=\"auto\") hands them to the ship: extend at your chosen heat % "
+        f"(default {nums['auto_default_pct']:.0f}%), retract while a torpedo is inbound. To cool "
+        f"down: ease the burn below full, extend, or hold fire.",
+    ]
+    return "\n".join(lines)
+
+
+def _fmt_minutes(seconds: Optional[float]) -> str:
+    if seconds is None:
+        return "never"
+    if seconds <= 0:
+        return "NOW"
+    return f"{seconds / 60.0:.1f} min"
+
+
+def format_heat_status(thermal: Optional[Dict[str, Any]], heat_percent: float) -> Dict[str, str]:
+    """
+    Volatile heat lines for the status block from ThermalSystem.outlook():
+    heat % with the net rate, time to 100% / meltdown retracted vs extended,
+    and radiator mode + panel health.
+    """
+    if not thermal:
+        return {
+            "heat_line": f"{heat_percent:.0f}%",
+            "radiator_line": None,
+        }
+    ladder = (f"guns hold {_thermal.HEAT_GUN_HOLD_FRACTION * 100:.0f}%, radiators forced "
+              f"{_thermal.HEAT_AUTO_EXTEND_FRACTION * 100:.0f}%, MELTDOWN "
+              f"{_thermal.REACTOR_MELTDOWN_HEAT_FRACTION * 100:.0f}%")
+    heat_line = (
+        f"{thermal['heat_percent']:.0f}% ({thermal['heat_gj']:.0f}/{thermal['capacity_gj']:.0f} GJ), "
+        f"net {thermal['net_rate_mw']:+.0f} MW now [{ladder}]"
+    )
+    if thermal.get("guns_heat_limited"):
+        heat_line += " - GUNS HOLDING FIRE (too hot)"
+    def _path(t100: Optional[float], tmelt: Optional[float]) -> str:
+        if t100 is None:
+            return "never reaches 100%"
+        return f"100% in {_fmt_minutes(t100)}, meltdown in {_fmt_minutes(tmelt)}"
+
+    heat_line += (
+        f"\n  Outlook at current heat load ~{thermal['load_mw']:.0f} MW: RETRACTED -> "
+        f"{_path(thermal['time_to_100_retracted_s'], thermal['time_to_meltdown_retracted_s'])}"
+        f" | EXTENDED ({thermal['radiator_available_mw']:.0f} MW) -> "
+        f"{_path(thermal['time_to_100_extended_s'], thermal['time_to_meltdown_extended_s'])}"
+    )
+    state = "EXTENDED (+cooling, exposed to fire)" if thermal["radiators_extended"] \
+        else "RETRACTED (protected, no cooling)"
+    mode = thermal.get("radiator_mode", "manual")
+    mode_txt = (f"auto: extends at {thermal.get('auto_extend_pct', 0):.0f}%"
+                if mode == "auto" else "manual")
+    panels = thermal.get("radiator_panels") or {}
+    panel_txt = " ".join(
+        f"{k.replace('tail_', '')} {v:.0f}%" for k, v in panels.items())
+    radiator_line = (
+        f"{state} [{mode_txt}] - panels {panel_txt} = "
+        f"{thermal['radiator_available_mw']:.0f}/{thermal['radiator_rating_mw']:.0f} MW"
+    )
+    return {"heat_line": heat_line, "radiator_line": radiator_line}
+
+
+def format_heat_brief(thermal: Optional[Dict[str, Any]], heat_percent: float) -> str:
+    """One-line heat summary for the admiral's fleet table."""
+    if not thermal:
+        return f"{heat_percent:.0f}%"
+    text = (f"{thermal['heat_percent']:.0f}% (net {thermal['net_rate_mw']:+.0f} MW; "
+            f"100% in {_fmt_minutes(thermal['time_to_100_retracted_s'])} retracted / "
+            f"{_fmt_minutes(thermal['time_to_100_extended_s'])} extended; meltdown "
+            f"{_fmt_minutes(thermal['time_to_meltdown_retracted_s'])} / "
+            f"{_fmt_minutes(thermal['time_to_meltdown_extended_s'])})")
+    if thermal.get("guns_heat_limited"):
+        text += " GUNS HOLDING"
+    return text
 
 
 def get_ship_turn_time_90deg(ship_type: str) -> float:
@@ -331,16 +483,7 @@ DEFENSE - ARMOR IS ASPECT-DEPENDENT (this is the single biggest survivability le
 - The dangerous moment is the BREAK-AWAY turn after an attack run - that is when
   you swing your flank through the enemy's guns.
 
-THERMAL:
-- Heat sink: {heatsink_capacity:.0f} GJ capacity
-- Radiators extended: +130 MW cooling
-- Radiators retracted: 0 MW cooling
-- Engine heat: ~60 MW at full burn
-- Extended radiators are exposed and CAN be shot off: a hit that strikes them
-  permanently reduces your cooling. Retracting protects them but gives up all
-  cooling, so this is a real tradeoff.
-- Heat above 95% is flagged CRITICAL, but weapons keep firing: this simulation
-  applies no weapon lockout for heat.
+{thermal_block}
 """
 
 SHIP_CAPABILITIES_TEMPLATE = """
@@ -365,16 +508,7 @@ DEFENSE - ARMOR IS ASPECT-DEPENDENT (this is the single biggest survivability le
 - The dangerous moment is the BREAK-AWAY turn after an attack run - that is when
   you swing your flank through the enemy's guns.
 
-THERMAL:
-- Heat sink: {heatsink_capacity:.0f} GJ capacity
-- Radiators extended: +{cooling_mw:.0f} MW cooling
-- Radiators retracted: 0 MW cooling
-- Engine heat: ~60 MW at full burn
-- Extended radiators are exposed and CAN be shot off: a hit that strikes them
-  permanently reduces your cooling. Retracting protects them but gives up all
-  cooling, so this is a real tradeoff.
-- Heat above 95% is flagged CRITICAL, but weapons keep firing: this simulation
-  applies no weapon lockout for heat.
+{thermal_block}
 
 """
 
@@ -383,7 +517,7 @@ THERMAL:
 SHIP_STATUS_TEMPLATE = """
 CURRENT STATUS:
 - Hull: {hull_integrity:.0f}%
-- Heat: {heat_percent:.0f}%
+- Heat: {heat_line}
 - Delta-V remaining: {delta_v_remaining:.0f}/{delta_v_total:.0f} km/s
 - Radiators: {radiator_status}
 - Point defense: {pd_status}
@@ -564,17 +698,21 @@ def build_ship_status_block(
     damaged_modules: Optional[Dict[str, Any]] = None,
     pd_turrets_operational: Optional[int] = None,
     pd_turrets_total: Optional[int] = None,
+    thermal: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Build the volatile per-checkpoint ship status block.
 
     Split out of the capabilities section so the static ship specification can
     live in a cacheable system prompt while this changes every checkpoint.
+    thermal: ThermalSystem.outlook() - adds the net heat rate, time to 100% /
+    meltdown retracted vs extended, and radiator mode and panel health.
     """
     # Radiator damage IS live in the engine now (simulation.py resolves radiator
     # hits through RadiatorHitResolver), so the vulnerability is real and the
     # captain should be reasoning about it.
-    radiator_status = (
+    heat = format_heat_status(thermal, heat_percent)
+    radiator_status = heat["radiator_line"] or (
         "EXTENDED (+cooling, exposed to fire)" if radiators_extended
         else "RETRACTED (protected, no cooling)"
     )
@@ -589,7 +727,7 @@ def build_ship_status_block(
     return SHIP_STATUS_TEMPLATE.format(
         pd_status=pd_status,
         hull_integrity=hull_integrity,
-        heat_percent=heat_percent,
+        heat_line=heat["heat_line"],
         delta_v_remaining=delta_v_remaining,
         delta_v_total=delta_v_total,
         radiator_status=radiator_status,
@@ -642,13 +780,9 @@ def build_ship_capabilities_from_fleet(
     # Get ship class name (title case of ship_type)
     ship_class = ship_type.title()
 
-    # Radiator cooling straight from fleet data (RadiatorArray.from_thermal_data uses
-    # the same mass x dissipation product), so the prompt cannot drift from the sim.
-    radiator_spec = ship_spec.get("thermal", {}).get("radiator", {})
-    cooling_mw = (
-        radiator_spec.get("mass_tons", 10.0) * 1000.0
-        * radiator_spec.get("dissipation_kw_per_kg", 13.0)
-    ) / 1000.0
+    # Heat doctrine straight from fleet data and engine constants (the same
+    # RadiatorArray / HeatSink construction the sim uses), so it cannot drift.
+    thermal_block = thermal_doctrine_block(thermal_doctrine_numbers(fleet_data, ship_type))
 
     _armor = armor_from_fleet_data(ship_type, fleet_data)
     _torpedoes = _torpedo_capability_block(ship_type, fleet_data, decision_interval_s)
@@ -666,8 +800,7 @@ def build_ship_capabilities_from_fleet(
         delta_v_total=delta_v_total,
         turn_time=turn_time,
         weapons_section=weapons_section,
-        heatsink_capacity=heatsink_capacity,
-        cooling_mw=cooling_mw,
+        thermal_block=thermal_block,
         hull_integrity=hull_integrity,
         heat_percent=heat_percent,
         delta_v_remaining=delta_v_remaining,
@@ -984,6 +1117,7 @@ def build_ship_capabilities(
     damage_report = format_damage_report(damaged_modules or {})
 
     return SHIP_CAPABILITIES_DESTROYER.format(
+        thermal_block=thermal_doctrine_block(thermal_doctrine_numbers(None)),
         torpedo_block="",
         armor_aspect_block=_armor_aspect_block(151.2, 26.0, 30.3),
         nose_cone_deg=NOSE_HIT_CONE_DEG,
@@ -1487,6 +1621,7 @@ def build_captain_prompt(
         pd_turrets_total=ship_status.get("pd_turrets_total"),
         weapons=ship_status.get("weapons"),
         damaged_modules=ship_status.get("damaged_modules"),
+        thermal=ship_status.get("thermal"),
     )
 
     return CAPTAIN_SYSTEM_PROMPT.format(
@@ -1617,7 +1752,7 @@ HOW POINT DEFENSE ACTUALLY WORKS:
   kill: {pd_turrets_to_blind} turrets must bear on ONE round to blind it (impacts land
   at 13-28 km/s). A 1-2 turret hull never blinds a normally launched torpedo alone -
   massing turrets is the ONLY lever you have.
-- PD cost is negligible (~15 MW hull heat per firing turret, no thrust loss). Never
+- PD cost is small (~{pd_heat_mw:.0f} MW hull heat per firing turret, no thrust loss). Never
   restructure the fleet to "save" PD capacity.
 
 FORMATIONS FOR PD (what actually moves the numbers):
@@ -1700,6 +1835,13 @@ SHIP CAPABILITIES:
 - Spinal weapons need nose-on alignment (<30° to target)
 - Turrets can fire at 180° arc (more flexible)
 - Radiators EXTENDED = better cooling, but exposed panels can be shot off permanently.
+- HEAT LADDER (enforced; heat can pass 100%): >= {heat_hold_pct:.0f}% a ship's GUNS HOLD FIRE
+  (PD keeps firing); >= {heat_forced_pct:.0f}% its radiators are FORCED OUT (exposed to fire);
+  >= {heat_meltdown_pct:.0f}% REACTOR MELTDOWN - the ship is destroyed. A full burn makes exactly
+  the radiators' capacity in heat ({heat_drive_mw:.0f} MW): burning hard retracted fills a sink in
+  ~{heat_fill_min:.0f} min and gunfire/PD heat comes on top. Watch each ship's heat and time to
+  100% in the fleet table; tell hot ships to ease the burn, extend radiators or hold fire
+  (set_radiators mode="auto" lets a captain's ship manage its radiators itself).
 - Don't waste shots on fleeing enemies (5+ km/s separation) - focus on threats closing on you
 - A target at 100km closing at 3 km/s is MORE dangerous than one at 80km separating at 4 km/s
 
@@ -2063,9 +2205,16 @@ Fire spinal when aligned, turrets continuous fire. Stay mobile - don't be a sitt
         (fleet_data or {}).get("weapon_types", {}).get("pd_laser", {}).get("range_km", 250)
     )
     pd = pd_doctrine_numbers(fleet_data)
+    heat = thermal_doctrine_numbers(fleet_data)
 
     return ADMIRAL_SYSTEM_PROMPT.format(
         decision_interval_s=decision_interval_s,
+        pd_heat_mw=heat["pd_heat_mw"],
+        heat_hold_pct=heat["gun_hold_pct"],
+        heat_forced_pct=heat["forced_pct"],
+        heat_meltdown_pct=heat["meltdown_pct"],
+        heat_drive_mw=heat["drive_full_mw"],
+        heat_fill_min=heat["full_burn_fill_min"],
         pd_range_km=pd_range_km,
         pd_closure_floor_kps=pd["closure_floor_kps"],
         pd_envelope_crossing_s=pd["envelope_crossing_s"],
@@ -2182,7 +2331,7 @@ SHIP STATUS - {ship_name}:
   Position: ({pos['x']:.0f}, {pos['y']:.0f}, {pos['z']:.0f}) km
   Velocity: {ship.velocity_kps:.1f} km/s
   Hull: {ship.hull_integrity:.0f}%
-  Heat: {ship.heat_percent:.0f}%
+  Heat: {format_heat_brief(getattr(ship, 'thermal', None), ship.heat_percent)}
   Delta-V: {ship.delta_v_remaining:.1f} km/s remaining
   Weapons: {ship.weapons_summary}"""
                 break
@@ -2341,8 +2490,15 @@ def _format_friendly_fleet_full(friendly_ships: List[Any]) -> str:
         lines.append(f"  Velocity: {ship.velocity_kps:.1f} km/s")
         lines.append(f"  Hull: {ship.hull_integrity:.0f}%")
         lines.append(f"  Delta-V: {ship.delta_v_remaining:.0f} km/s remaining")
-        lines.append(f"  Heat: {ship.heat_percent:.0f}%")
-        lines.append(f"  Radiators: {'EXTENDED' if ship.radiators_extended else 'RETRACTED'}")
+        thermal = getattr(ship, 'thermal', None)
+        lines.append(f"  Heat: {format_heat_brief(thermal, ship.heat_percent)}")
+        rad_text = 'EXTENDED' if ship.radiators_extended else 'RETRACTED'
+        if thermal:
+            mode = thermal.get('radiator_mode', 'manual')
+            rad_text += (f" ({'auto @' + format(thermal.get('auto_extend_pct', 0), '.0f') + '%' if mode == 'auto' else 'manual'}, "
+                         f"panels {thermal.get('radiator_health_pct', 100):.0f}% = "
+                         f"{thermal.get('radiator_available_mw', 0):.0f} MW)")
+        lines.append(f"  Radiators: {rad_text}")
         lines.append(f"  Maneuver: {ship.current_maneuver}")
         lines.append(f"  Target: {ship.current_target or 'None'}")
 

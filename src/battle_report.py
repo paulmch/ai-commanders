@@ -964,10 +964,11 @@ def _build_ship_stats(
                     protection_percent=section.protection_percent
                 ))
 
-    # Check current heat
+    # Check current heat, and the thermal system's own running peak
     if ship.thermal_system:
         current_heat = ship.heat_percent
-        peak_heat = max(peak_heat, current_heat)
+        peak_heat = max(peak_heat, current_heat,
+                        getattr(ship.thermal_system, 'peak_heat_fraction', 0.0) * 100.0)
 
     return ShipBattleStats(
         ship_id=ship.ship_id,

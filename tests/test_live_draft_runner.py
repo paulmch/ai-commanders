@@ -147,7 +147,8 @@ def test_ticker_prints_greppable_checkpoint_and_result_blocks(tmp_path):
     assert headers[4].startswith('=== RESULT | t=90s | after CP 2 |')
     assert all(len(b.strip().splitlines()) <= 12 for b in blocks)
     cp1 = blocks[2]
-    assert re.search(r'^ALPHA model-a: 2/2 alive, hull 100% \| \S+ FF 100% \| \S+ FF 100%$', cp1, re.M)
+    ship_re = r'\S+ FF hull 100% arm \d+/\d+cm heat \d+%( rad)?'
+    assert re.search(rf'^ALPHA model-a: 2/2 alive, hull 100% \| {ship_re} \| {ship_re}$', cp1, re.M)
     assert re.search(r'^Fire: A \d+ slugs/\d+ hit, 0 torps/0 impact, PD downed 0 torps ; B ', cp1, re.M)
     assert 'A admiral: (no admiral - heuristic captains)' in cp1
     assert 'Recording: live.json' in blocks[4]

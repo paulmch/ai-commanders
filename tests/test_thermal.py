@@ -130,8 +130,8 @@ class TestRadiatorArray:
         thermal_data = fleet_data["ships"]["destroyer"]["thermal"]
         array = RadiatorArray.from_ship_data(thermal_data)
         array.extend_all()
-        # 10 tons * 13 kW/kg * 1000 = 130,000 kW
-        assert array.total_dissipation_kw == pytest.approx(130_000, rel=0.01)
+        # 60 tons * 13 kW/kg * 1000 = 780,000 kW (mass-neutral refit)
+        assert array.total_dissipation_kw == pytest.approx(780_000, rel=0.01)
 
     def test_radiator_extension_angle(self):
         """Radiators extend at 45° backwards."""
@@ -139,53 +139,25 @@ class TestRadiatorArray:
 
 
 class TestRadiatorHitProbability:
-    """Tests for radiator vulnerability based on hit location and angle."""
+    """The one radiator-hit model: combat.radiator_hit_chance (used for both
+    projectile and torpedo impacts by RadiatorHitResolver)."""
 
-    def test_tail_hit_exposes_all_radiators(self, fleet_data):
-        thermal_data = fleet_data["ships"]["destroyer"]["thermal"]
-        array = RadiatorArray.from_ship_data(thermal_data)
-        positions = array._get_vulnerable_positions(HitLocation.TAIL)
-        assert len(positions) == 4
+    def test_flank_and_tail_hits_expose_panels(self):
+        from combat import radiator_hit_chance
+        for loc in (HitLocation.LATERAL, HitLocation.TAIL):
+            assert radiator_hit_chance(loc, extended=True) == pytest.approx(0.20)
+            assert radiator_hit_chance(loc, extended=False) == pytest.approx(0.05)
 
-    def test_lateral_hit_exposes_two_radiators(self, fleet_data):
-        thermal_data = fleet_data["ships"]["destroyer"]["thermal"]
-        array = RadiatorArray.from_ship_data(thermal_data)
-        positions = array._get_vulnerable_positions(HitLocation.LATERAL)
-        assert len(positions) == 2
-        assert RadiatorPosition.TAIL_PORT in positions
-        assert RadiatorPosition.TAIL_STARBOARD in positions
+    def test_nose_hits_spare_retracted_panels(self):
+        from combat import radiator_hit_chance
+        assert radiator_hit_chance(HitLocation.NOSE, extended=False) == 0.0
+        assert radiator_hit_chance(HitLocation.NOSE, extended=True) == pytest.approx(0.10)
 
-    def test_nose_hit_no_exposure(self, fleet_data):
-        thermal_data = fleet_data["ships"]["destroyer"]["thermal"]
-        array = RadiatorArray.from_ship_data(thermal_data)
-        positions = array._get_vulnerable_positions(HitLocation.NOSE)
-        assert len(positions) == 0
-
-    def test_retracted_low_probability(self, fleet_data):
-        thermal_data = fleet_data["ships"]["destroyer"]["thermal"]
-        array = RadiatorArray.from_ship_data(thermal_data)
-        prob = array.get_hit_probability(HitLocation.TAIL)
-        assert prob == pytest.approx(0.05, abs=0.01)
-
-    def test_extended_tail_hit_probability(self, fleet_data):
-        """Tail hits see more of 45° angled radiators."""
-        thermal_data = fleet_data["ships"]["destroyer"]["thermal"]
-        array = RadiatorArray.from_ship_data(thermal_data)
-        array.extend_all()
-        prob = array.get_hit_probability(HitLocation.TAIL)
-        # ~0.19 due to angle exposure
-        assert prob > 0.15
-        assert prob < 0.25
-
-    def test_extended_lateral_reduced_probability(self, fleet_data):
-        """Lateral hits see less due to 45° backward angle."""
-        thermal_data = fleet_data["ships"]["destroyer"]["thermal"]
-        array = RadiatorArray.from_ship_data(thermal_data)
-        array.extend_all()
-        prob = array.get_hit_probability(HitLocation.LATERAL)
-        # ~0.11 due to cos(45°) factor
-        assert prob < 0.15
-        assert prob > 0.05
+    def test_extending_raises_exposure(self):
+        from combat import radiator_hit_chance
+        for loc in HitLocation:
+            assert (radiator_hit_chance(loc, extended=True)
+                    > radiator_hit_chance(loc, extended=False))
 
 
 # ============================================================================
@@ -198,26 +170,26 @@ class TestHeatSink:
     def test_heatsink_from_fleet_data(self, fleet_data):
         thermal_data = fleet_data["ships"]["destroyer"]["thermal"]
         heatsink = HeatSink.from_ship_data(thermal_data)
-        assert heatsink.capacity_gj == 525.0
+        assert heatsink.capacity_gj == 320.0
 
     def test_absorb_heat(self):
         sink = HeatSink(capacity_gj=100.0)
         assert sink.absorb(50.0) is True
         assert sink.current_heat_gj == 50.0
 
-    def test_absorb_overflow(self):
+    def test_absorb_past_capacity_keeps_the_heat(self):
         sink = HeatSink(capacity_gj=100.0, current_heat_gj=90.0)
         assert sink.absorb(20.0) is False
-        assert sink.current_heat_gj == 100.0
+        assert sink.current_heat_gj == 110.0
+        assert sink.heat_percent == pytest.approx(110.0)
 
-    def test_dump_to_radiators(self, fleet_data):
-        thermal_data = fleet_data["ships"]["destroyer"]["thermal"]
-        array = RadiatorArray.from_ship_data(thermal_data)
-        array.extend_all()
-        sink = HeatSink(capacity_gj=100.0, current_heat_gj=50.0)
-        dumped = sink.dump_to_radiators(array, dt_seconds=1.0)
-        assert dumped > 0
-        assert sink.current_heat_gj < 50.0
+    def test_extended_radiators_drain_the_sink(self, fleet_data):
+        thermal = ThermalSystem.from_ship_data(fleet_data["ships"]["destroyer"])
+        thermal.radiators.extend_all()
+        thermal.heatsink.current_heat_gj = 50.0
+        result = thermal.update(dt_seconds=1.0)
+        assert result["heat_dissipated_gj"] > 0
+        assert thermal.heatsink.current_heat_gj < 50.0
 
 
 # ============================================================================
@@ -263,8 +235,8 @@ class TestThermalScenarios:
         initial = destroyer_thermal.heatsink.current_heat_gj
         for _ in range(100):
             destroyer_thermal.update(dt_seconds=1.0)
-        # 130 MW radiators dissipate ~13 GJ in 100s
-        # Reactor adds ~0.1 GJ, net cooling ~12.9 GJ
+        # 780 MW radiators dissipate ~78 GJ in 100s
+        # Reactor adds ~0.1 GJ, net cooling ~77.9 GJ
         assert destroyer_thermal.heatsink.current_heat_gj < initial
         assert destroyer_thermal.heatsink.current_heat_gj < 190.0
 

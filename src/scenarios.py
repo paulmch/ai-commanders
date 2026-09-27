@@ -1168,8 +1168,8 @@ class ScenarioRunner:
                             'drive': {'thrust_mn': 58.56, 'exhaust_velocity_kps': 10256}
                         },
                         'thermal': {
-                            'heatsink': {'capacity_gj': 525},
-                            'radiator': {'mass_tons': 10, 'dissipation_kw_per_kg': 13}
+                            'heatsink': {'capacity_gj': 320},
+                            'radiator': {'mass_tons': 60, 'dissipation_kw_per_kg': 13}
                         },
                         'armor': {
                             'type': 'Titanium',

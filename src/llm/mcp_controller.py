@@ -28,6 +28,26 @@ if TYPE_CHECKING:
     from .captain import LLMCaptain
 
 
+def _thermal_outlook(ship: Any) -> Optional[Dict[str, Any]]:
+    """Heat outlook (rates, time to 100% / meltdown, radiator health) for MCP clients."""
+    thermal = getattr(ship, 'thermal_system', None)
+    if thermal is None or not hasattr(thermal, 'outlook'):
+        return None
+    try:
+        from ..thermal import (HEAT_GUN_HOLD_FRACTION, HEAT_AUTO_EXTEND_FRACTION,
+                               REACTOR_MELTDOWN_HEAT_FRACTION)
+    except ImportError:  # pragma: no cover - script-style imports
+        from thermal import (HEAT_GUN_HOLD_FRACTION, HEAT_AUTO_EXTEND_FRACTION,
+                             REACTOR_MELTDOWN_HEAT_FRACTION)
+    out = thermal.outlook()
+    out["ladder_pct"] = {
+        "guns_hold": HEAT_GUN_HOLD_FRACTION * 100.0,
+        "radiators_forced": HEAT_AUTO_EXTEND_FRACTION * 100.0,
+        "reactor_meltdown": REACTOR_MELTDOWN_HEAT_FRACTION * 100.0,
+    }
+    return {k: (round(v, 2) if isinstance(v, float) else v) for k, v in out.items()}
+
+
 def _radiators_extended(ship: Any) -> bool:
     """
     Report whether any radiator is actually extended.
@@ -37,15 +57,11 @@ def _radiators_extended(ship: Any) -> bool:
     extend_all() only extends the survivors, so a written flag can disagree
     with the simulation.
     """
-    from ..thermal import RadiatorState
-
     thermal = getattr(ship, 'thermal_system', None)
     if not thermal or not getattr(thermal, 'radiators', None):
         return False
-    return any(
-        rad.state == RadiatorState.EXTENDED
-        for rad in thermal.radiators.radiators.values()
-    )
+    # Damaged-but-deployed panels count as extended (they still reject heat).
+    return thermal.radiators.any_extended
 
 
 def _select_display_weapon(ship: Any):
@@ -417,6 +433,7 @@ class MCPController:
             "delta_v_remaining": ship.remaining_delta_v_kps,
             "heat_percent": ship.heat_percent if hasattr(ship, 'heat_percent') else 0,
             "heatsink_capacity_gj": heatsink_capacity,
+            "thermal": _thermal_outlook(ship),
             "max_acceleration_g": performance.get("combat_acceleration_g", 2.0),
             "max_delta_v": performance.get("delta_v_kps", 500),
             # Armor (per section)
@@ -1118,21 +1135,31 @@ def _apply_mcp_commands(
             elif cmd.command_type == MCPCommandType.SET_RADIATORS:
                 ship = simulation.get_ship(cmd.ship_id)
                 if ship:
-                    extend = cmd.parameters.get("extend", True)
-                    # Actually extend/retract radiators in thermal system.
-                    # No shadow flag: state reports the thermal system's real
-                    # state, since destroyed radiators cannot be extended.
+                    from .tools import radiator_command_from_args
+                    params = dict(cmd.parameters or {})
+                    if "extend" not in params and "mode" not in params:
+                        params["extend"] = True
+                    rad_cmd = radiator_command_from_args(params)
+                    # Through the engine's command path, so MCP gets the same
+                    # rules as captains: events are logged, 'auto' mode is
+                    # handed to the rule layer, and a retract at >= 100% heat
+                    # is refused. No shadow flag: state reports the thermal
+                    # system's real state.
                     if ship.thermal_system and ship.thermal_system.radiators:
-                        if extend:
-                            count = ship.thermal_system.radiators.extend_all()
-                        else:
-                            count = ship.thermal_system.radiators.retract_all()
+                        panels = ship.thermal_system.radiators.radiators.values()
+                        before = [p.state for p in panels]
+                        accepted = simulation.inject_command(ship.ship_id, rad_cmd)
+                        moved = sum(1 for p, b in zip(panels, before) if p.state != b)
                         results["applied"].append({
                             "command": "set_radiators",
                             "ship_id": cmd.ship_id,
-                            "extend": extend,
-                            "radiators_affected": count,
+                            "extend": rad_cmd.get("extend"),
+                            "mode": rad_cmd.get("mode", "manual"),
+                            "accepted": bool(accepted),
+                            "radiators_affected": moved,
                             "radiators_extended": _radiators_extended(ship),
+                            **({} if accepted else {
+                                "note": "refused: radiators are forced out at >= 100% heat"}),
                         })
                     else:
                         results["errors"].append({

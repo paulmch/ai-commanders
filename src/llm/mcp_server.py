@@ -38,6 +38,20 @@ except ImportError:
     stdio_server = None
 
 from .mcp_state import get_mcp_state, MCPCommand, MCPCommandType, MCPHttpClient
+try:
+    from ..thermal import (
+        AUTO_RADIATOR_DEFAULT_PCT,
+        HEAT_AUTO_EXTEND_FRACTION,
+        HEAT_GUN_HOLD_FRACTION,
+        REACTOR_MELTDOWN_HEAT_FRACTION,
+    )
+except ImportError:  # pragma: no cover - script-style imports (src/ on sys.path)
+    from thermal import (
+        AUTO_RADIATOR_DEFAULT_PCT,
+        HEAT_AUTO_EXTEND_FRACTION,
+        HEAT_GUN_HOLD_FRACTION,
+        REACTOR_MELTDOWN_HEAT_FRACTION,
+    )
 
 import math
 
@@ -648,7 +662,15 @@ def create_mcp_server(
             ),
             Tool(
                 name="set_radiators",
-                description="Extend or retract radiators",
+                description=(
+                    "Radiator control. Manual: extend=true (cooling, exposed to fire) / "
+                    "false (protected, no cooling). Or mode='auto': the ship extends at "
+                    f"auto_extend_pct heat (default {AUTO_RADIATOR_DEFAULT_PCT:.0f}) and "
+                    "retracts while a torpedo is inbound. Radiators are always forced out "
+                    f"at {HEAT_AUTO_EXTEND_FRACTION * 100:.0f}% heat; guns hold fire at "
+                    f"{HEAT_GUN_HOLD_FRACTION * 100:.0f}%; the reactor melts down at "
+                    f"{REACTOR_MELTDOWN_HEAT_FRACTION * 100:.0f}%."
+                ),
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -658,10 +680,20 @@ def create_mcp_server(
                         },
                         "extend": {
                             "type": "boolean",
-                            "description": "True to extend, False to retract",
+                            "description": "Manual mode: True to extend, False to retract",
+                        },
+                        "mode": {
+                            "type": "string",
+                            "enum": ["manual", "auto"],
+                            "description": "'auto' hands radiators to the ship; default 'manual'",
+                        },
+                        "auto_extend_pct": {
+                            "type": "number",
+                            "description": ("Auto mode: heat % at which to extend "
+                                            f"(default {AUTO_RADIATOR_DEFAULT_PCT:.0f})"),
                         },
                     },
-                    "required": ["ship_id", "extend"],
+                    "required": ["ship_id"],
                 },
             ),
             Tool(
@@ -1033,16 +1065,19 @@ def create_mcp_server(
             err = validate_ship_id(arguments.get("ship_id"))
             if err:
                 return [TextContent(type="text", text=f"ERROR: {err}")]
+            from .tools import radiator_command_from_args
+            rad_cmd = radiator_command_from_args(arguments)
             command = MCPCommand(
                 command_type=MCPCommandType.SET_RADIATORS,
                 ship_id=arguments.get("ship_id"),
-                parameters={
-                    "extend": arguments.get("extend"),
-                },
+                parameters={k: v for k, v in rad_cmd.items() if k != "type"},
                 timestamp=timestamp,
             )
             await add_command(command)
-            action = "Extended" if arguments.get("extend") else "Retracted"
+            if rad_cmd.get("mode") == "auto":
+                action = f"Auto radiators (extend at {rad_cmd['auto_extend_pct']:.0f}% heat)"
+            else:
+                action = "Extended" if rad_cmd["extend"] else "Retracted"
             return [TextContent(
                 type="text",
                 text=f"{action} radiators for {arguments.get('ship_id')}",

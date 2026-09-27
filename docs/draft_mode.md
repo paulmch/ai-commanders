@@ -240,7 +240,11 @@ are identical. Behavior:
 - Gunships close to effective range, brake off a blind overshoot, and
   coast-track through the knife-fight; pure torpedo hulls keep a 250 km
   standoff and launch probing salvos while closing.
-- Extends radiators above 65% heat, buttons up under torpedo fire.
+- Manages heat against the engine's ladder (guns hold at 90%, radiators
+  forced out at 100%, reactor meltdown at 150%): extends radiators at 65%
+  heat (35% when no enemy is within 800 km and no slug is inbound), buttons
+  up under torpedo fire unless past 85%, and above 75% eases the burn below
+  what its (possibly damaged) radiators can reject.
 
 Drafted ships are named by class nickname (Dart, Ward, Falchion, Lancer,
 Bastion, Harpoon, Sovereign, Colossus, Breaker) - "TIS Falchion-2" beats

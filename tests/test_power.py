@@ -123,9 +123,9 @@ class TestWeaponCapacitor:
         }
         cap = WeaponCapacitor.from_weapon_data(weapon_data, "coilgun")
 
-        # Capacity = kinetic energy * 2 (for coil efficiency)
-        assert cap.capacity_mj == 1000.0  # 0.5 GJ * 1000 * 2
-        assert cap.charge_rate_mw == 100.0  # 1000 MJ / 10s
+        # Capacity = kinetic energy / coil efficiency (TI Mk3: 0.7)
+        assert cap.capacity_mj == pytest.approx(500.0 / 0.7)
+        assert cap.charge_rate_mw == pytest.approx(500.0 / 0.7 / 10.0)
         assert cap.efficiency == KINETIC_WEAPON_EFFICIENCY
         assert cap.weapon_slot == "coilgun"
 
@@ -339,20 +339,20 @@ class TestPowerSystem:
         assert ps.drive_power_fraction == 0.0
 
     def test_get_available_power(self, basic_power_system):
-        """Test available power calculation."""
+        """The systems bus: every non-propulsion load, scaled by reactor
+        health, and independent of drive throttle (no full-throttle cliff)."""
         ps = basic_power_system
+        ps.add_weapon_capacitor(
+            "gun", {"type": "kinetic", "cooldown_s": 10.0, "kinetic_energy_gj": 0.7})
+        # 1000 MJ / 10 s = 100 MW for the gun + 1 GW battery recharge
+        assert ps.get_bus_rating_mw() == pytest.approx(1100.0)
 
-        # No drive usage - all power available
-        ps.set_drive_throttle(0.0)
-        assert ps.get_available_power_gw() == 100.0
+        for throttle in (0.0, 0.5, 1.0):
+            ps.set_drive_throttle(throttle)
+            assert ps.get_available_power_gw() == pytest.approx(1.1)
 
-        # 50% drive - half available
-        ps.set_drive_throttle(0.5)
-        assert ps.get_available_power_gw() == 50.0
-
-        # 100% drive - no power for weapons
-        ps.set_drive_throttle(1.0)
-        assert ps.get_available_power_gw() == 0.0
+        ps.set_bus_scale(0.5)  # half the reactor modules' output
+        assert ps.get_available_power_gw() == pytest.approx(0.55)
 
     def test_can_weapon_fire(self, basic_power_system):
         """Test weapon fire capability check."""
@@ -420,9 +420,8 @@ class TestPowerSystem:
         assert cap.is_charged
 
     def test_update_uses_battery_when_reactor_insufficient(self):
-        """Test battery supplements reactor power."""
-        # Small reactor that can't keep up
-        reactor = Reactor(max_output_gw=0.001)  # 1 MW
+        """Test battery supplements a damaged systems bus."""
+        reactor = Reactor(max_output_gw=306430.0)
         battery = Battery(
             capacity_gj=100.0,
             max_discharge_rate_gw=10.0,
@@ -430,6 +429,7 @@ class TestPowerSystem:
         )
         ps = PowerSystem(reactor=reactor, battery=battery)
         ps.set_drive_throttle(0.0)
+        ps.set_bus_scale(0.1)  # reactor modules mostly destroyed
 
         # Large capacitor that needs more power
         weapon_data = {
@@ -499,10 +499,11 @@ class TestPowerSystemIntegration:
         }
         cap = ps.add_weapon_capacitor("coilgun", coilgun_data)
 
-        # At 50% thrust, should have plenty of power
-        ps.set_drive_throttle(0.5)
-        available = ps.get_available_power_gw()
-        assert available > 100000  # Still massive power available
+        # Any thrust: the bus covers the gun's full-cadence draw plus the
+        # battery recharge, whatever the drive does
+        for throttle in (0.5, 1.0):
+            ps.set_drive_throttle(throttle)
+            assert ps.get_available_power_gw() * 1000.0 >= cap.charge_rate_mw
 
         # Coilgun should charge quickly
         cap.current_charge_mj = 0.0

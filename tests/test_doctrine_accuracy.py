@@ -409,16 +409,24 @@ class TestPDDoctrineNumbers:
         assert TORPEDO_ELECTRONICS_THRESHOLD_J == 50e6
         assert "50 MJ" in CAPTAIN_DOCTRINE
 
-    def test_waste_heat_is_15_mw_per_firing_turret(self, fleet):
-        """Doctrine (captain block + admiral): '~15 MW hull heat per turret'."""
+    def test_waste_heat_is_30_mw_per_firing_turret(self, fleet):
+        """Doctrine (captain block + admiral): '~30 MW hull heat per turret' -
+        Terra Invicta's PointDefenseLaserTurret (50 MJ shot / 0.25 efficiency
+        every 5 s -> 150 MJ of heat per cycle), charged by the engine per burst."""
         pd = pd_doctrine_numbers(fleet)
-        assert abs(pd["waste_heat_mw"] - 15.0) < 1.0, (
+        assert abs(pd["waste_heat_mw"] - 30.0) < 1.0, (
             f"waste heat per turret is now {pd['waste_heat_mw']:.1f} MW"
         )
         laser = PDLaser.from_fleet_data(fleet["weapon_types"]["pd_laser"])
-        assert laser.waste_heat_w() == laser.power_w * (
-            1 - PD_WALLPLUG_EFFICIENCY) / PD_WALLPLUG_EFFICIENCY
-        assert "~15 MW hull heat per firing turret" in ADMIRAL_DOCTRINE
+        assert laser.waste_heat_w() == pytest.approx(
+            laser.shot_power_mj * 1e6 / PD_WALLPLUG_EFFICIENCY
+            * (1 - PD_WALLPLUG_EFFICIENCY) / laser.cooldown_s)
+        # The engine charges exactly that per burst.
+        ship = create_ship_from_fleet_data("d", "destroyer", "alpha", fleet)
+        cap = ship.power_system.weapon_capacitors[ship.point_defense[0].turret_name]
+        assert cap.calculate_heat_generated() / laser.cooldown_s == pytest.approx(
+            pd["waste_heat_mw"])
+        assert "{pd_heat_mw:.0f} MW hull heat per firing turret" in ADMIRAL_DOCTRINE
 
     def test_guided_arrival_band_13_to_28_kps(self, fleet):
         """Doctrine: 'guided torpedoes arrive at 13-28 km/s'. Anchored by the
@@ -685,3 +693,141 @@ class TestFormationDoctrine:
             f"8-escort wall no longer reduces leakage ({walled}/6 vs {alone}/6) "
             "- the formation doctrine numbers are stale"
         )
+
+
+# =============================================================================
+# Heat: THERMAL block (captain) and HEAT LADDER (admiral)
+# =============================================================================
+
+class TestHeatDoctrine:
+    """Every number in the heat doctrine is interpolated from the engine and
+    the ladder it quotes is the ladder the engine enforces."""
+
+    @pytest.fixture(scope="class")
+    def destroyer_caps(self, fleet):
+        return build_ship_capabilities_from_fleet(
+            ship_name="TIS Line", ship_type="destroyer", fleet_data=fleet,
+            hull_integrity=100, heat_percent=0, delta_v_remaining=500,
+            nose_armor=151, lateral_armor=26, tail_armor=30,
+            heatsink_capacity=320, radiators_extended=False,
+        )
+
+    def test_ladder_quoted_from_the_engine_constants(self, destroyer_caps):
+        from src.thermal import (HEAT_GUN_HOLD_FRACTION, HEAT_AUTO_EXTEND_FRACTION,
+                                 REACTOR_MELTDOWN_HEAT_FRACTION)
+        assert (f">= {HEAT_GUN_HOLD_FRACTION * 100:.0f}% heat: your GUNS HOLD FIRE"
+                in destroyer_caps)
+        assert (f">= {HEAT_AUTO_EXTEND_FRACTION * 100:.0f}% heat: radiators are FORCED OUT"
+                in destroyer_caps)
+        assert (f">= {REACTOR_MELTDOWN_HEAT_FRACTION * 100:.0f}% heat: REACTOR MELTDOWN"
+                in destroyer_caps)
+        assert "no weapon lockout" not in destroyer_caps
+
+    def test_the_quoted_ladder_is_enforced(self, fleet):
+        """90%: guns hold (PD still fires); 100%: radiators forced out;
+        150%: meltdown through the reactor-detonation death path."""
+        from src.firecontrol import WeaponsCommand, WeaponsOrder
+        from src.thermal import (HEAT_GUN_HOLD_FRACTION, HEAT_AUTO_EXTEND_FRACTION,
+                                 REACTOR_MELTDOWN_HEAT_FRACTION)
+        sim = CombatSimulation(time_step=1.0, decision_interval=1e9, seed=5)
+        a = _build(sim, 'a', 'destroyer', 'alpha', fleet, 0, 0, 1)
+        _build(sim, 'b', 'destroyer', 'beta', fleet, 300, 0, -1)
+        sim.inject_command('a', {'type': 'set_target', 'target_id': 'b'})
+        sim.inject_command('a', {'type': 'weapons_order', 'order': WeaponsOrder(
+            command=WeaponsCommand.FIRE_IMMEDIATE, weapon_slot='all', target_id='b')})
+        cap = a.thermal_system.heatsink.capacity_gj
+
+        a.thermal_system.heatsink.current_heat_gj = cap * (HEAT_GUN_HOLD_FRACTION + 0.02)
+        shots = a.shots_fired
+        sim.step()
+        assert a.shots_fired == shots
+        assert any(e.data.get('reason') == 'heat_limited' for e in
+                   sim.get_events_by_type(SimulationEventType.WEAPON_STATUS))
+        assert not a.radiators_extended
+
+        a.thermal_system.heatsink.current_heat_gj = cap * (HEAT_AUTO_EXTEND_FRACTION + 0.01)
+        sim.step()
+        assert a.radiators_extended
+
+        a.thermal_system.heatsink.current_heat_gj = cap * REACTOR_MELTDOWN_HEAT_FRACTION
+        sim.step()
+        assert a.is_destroyed
+        destroyed = sim.get_events_by_type(SimulationEventType.SHIP_DESTROYED)
+        assert destroyed[-1].data['cause'] == 'reactor_overheat'
+
+    def test_drive_heat_equals_radiator_capacity(self, fleet, destroyer_caps):
+        from src.llm.prompts import thermal_doctrine_numbers
+        from src.thermal import ThermalSystem
+        nums = thermal_doctrine_numbers(fleet, "destroyer")
+        th = ThermalSystem.from_ship_data(fleet["ships"]["destroyer"])
+        assert th.drive_heat_full_kw == pytest.approx(th.radiators.nominal_dissipation_kw)
+        assert nums["drive_full_mw"] == pytest.approx(th.drive_heat_full_kw / 1000.0)
+        assert f"Drive heat: {nums['drive_full_mw']:.0f} MW at full burn" in destroyer_caps
+        assert f"+{nums['radiator_mw']:.0f} MW cooling" in destroyer_caps
+        assert f"Heat sink: {th.heatsink.capacity_gj:.0f} GJ" in destroyer_caps
+
+    def test_full_burn_fill_time_matches_the_engine(self, fleet, destroyer_caps):
+        """'A full burn with radiators retracted fills the sink in ~N min.'"""
+        from src.llm.prompts import thermal_doctrine_numbers
+        from src.thermal import ThermalSystem
+        nums = thermal_doctrine_numbers(fleet, "destroyer")
+        th = ThermalSystem.from_ship_data(fleet["ships"]["destroyer"])
+        th.set_drive_throttle(1.0)
+        t = 0
+        while th.heat_fraction < 1.0:
+            th.update(1.0)
+            t += 1
+        assert abs(t / 60.0 - nums["full_burn_fill_min"]) < 0.5
+        assert f"fills the sink in ~{nums['full_burn_fill_min']:.0f} min" in destroyer_caps
+
+    def test_per_shot_heat_matches_the_capacitor(self, fleet, destroyer_caps):
+        from src.llm.prompts import thermal_doctrine_numbers
+        nums = thermal_doctrine_numbers(fleet, "destroyer")
+        ship = create_ship_from_fleet_data("d", "destroyer", "alpha", fleet)
+        seen = set()
+        for slot, ws in ship.weapons.items():
+            if ws.weapon.kinetic_energy_gj <= 0:
+                continue
+            quoted = nums["per_shot_gj"][ws.weapon.name]
+            heat = ship.power_system.fire_weapon(slot)
+            assert heat == pytest.approx(quoted)
+            assert f"{ws.weapon.name} {quoted:.2f} GJ" in destroyer_caps
+            seen.add(ws.weapon.name)
+        assert seen == set(nums["per_shot_gj"])
+
+    def test_radiator_hit_chances_quoted_from_combat(self, destroyer_caps):
+        from src.combat import (RADIATOR_HIT_CHANCE_EXTENDED, RADIATOR_HIT_CHANCE_RETRACTED,
+                                RADIATOR_HIT_CHANCE_NOSE_EXTENDED,
+                                RADIATOR_HIT_CHANCE_NOSE_RETRACTED)
+        assert (f"strikes a panel {RADIATOR_HIT_CHANCE_EXTENDED * 100:.0f}% of the time "
+                f"(nose {RADIATOR_HIT_CHANCE_NOSE_EXTENDED * 100:.0f}%); retracted "
+                f"{RADIATOR_HIT_CHANCE_RETRACTED * 100:.0f}% "
+                f"(nose {RADIATOR_HIT_CHANCE_NOSE_RETRACTED * 100:.0f}%)") in destroyer_caps
+
+    def test_admiral_prompt_states_the_ladder_and_fleet_heat(self, fleet):
+        from unittest.mock import Mock
+        from src.llm.admiral import AdmiralConfig, LLMAdmiral
+        from src.llm.captain import LLMCaptain, LLMCaptainConfig
+        from src.llm.prompts import build_admiral_prompt, thermal_doctrine_numbers
+        from src.thermal import REACTOR_MELTDOWN_HEAT_FRACTION
+
+        sim = CombatSimulation(time_step=1.0, decision_interval=1e9, seed=42)
+        _build(sim, 'tg', 'destroyer', 'alpha', fleet, 0, 0, 1)
+        _build(sim, 'en', 'destroyer', 'beta', fleet, 600, 0, -1)
+        sim.get_ship('tg').thermal_system.set_drive_throttle(1.0)
+        for _ in range(5):
+            sim.step()
+        admiral = LLMAdmiral(AdmiralConfig(name="A", model="m"),
+                             faction="alpha", client=Mock(), fleet_data=fleet)
+        captain = LLMCaptain(LLMCaptainConfig(name="B", ship_name="tg",
+                                              ship_type="destroyer", fleet_data=fleet),
+                             client=Mock())
+        captain.ship_id = 'tg'
+        snap = admiral._build_snapshot(sim, [captain])
+        assert snap.friendly_ships[0].thermal is not None
+        text = build_admiral_prompt("A", "alpha", snap, snap, None, fleet)
+        nums = thermal_doctrine_numbers(fleet)
+        assert (f">= {REACTOR_MELTDOWN_HEAT_FRACTION * 100:.0f}% REACTOR MELTDOWN"
+                in text)
+        assert f"~{nums['pd_heat_mw']:.0f} MW hull heat per firing turret" in text
+        assert "100% in" in text and "retracted" in text  # fleet-table outlook

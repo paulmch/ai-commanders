@@ -7,13 +7,19 @@ This module implements spacecraft power management including:
 - Battery backup when reactor power is insufficient
 - Heat generation from weapon firing
 
-Power Flow Architecture:
-1. Reactor generates power (GW)
-2. Drives consume power proportional to throttle
-3. Remaining reactor power charges weapon capacitors
-4. If insufficient, batteries supplement
-5. Weapons can only fire when capacitor is full
-6. Firing generates heat sent to thermal system
+Power Flow Architecture (Terra Invicta: "ships generate power from a dedicated
+reactor that should be sufficient to all non-propulsion needs ... battery
+utility modules serve as a further backup"):
+1. The drive's power is its own business - drive throttle never starves weapons
+2. A ship-systems bus charges the weapon capacitors. It is rated at every
+   non-propulsion load at once (each capacitor's capacity / cooldown plus the
+   battery recharge rate), scaled by reactor module effectiveness
+   (set_bus_scale)
+3. When the bus falls short (damaged reactor), the battery covers the deficit
+   up to its discharge rate; bus surplus recharges the battery
+4. Weapons can only fire when their capacitor is full
+5. Firing generates heat (shot energy x (1 - efficiency)) sent to the thermal
+   system
 
 Based on Terra Invicta power mechanics.
 """
@@ -33,17 +39,35 @@ if TYPE_CHECKING:
 # CONSTANTS
 # =============================================================================
 
-# Efficiency factors for heat generation
-# Coilgun coils are ~50% efficient: the capacitor must store 2x the muzzle
-# kinetic energy, and the other half becomes waste heat. This value used to be
-# 0.70 while the capacitor was independently sized at 2x kinetic energy "for
-# 50% coil efficiency" - two contradictory efficiencies for the same shot, so
-# 40% of the stored energy was neither delivered to the slug nor accounted for
-# as heat. Sizing is now derived from this constant (see
-# WeaponCapacitor.from_weapon_data), keeping the energy budget closed.
-KINETIC_WEAPON_EFFICIENCY = 0.50  # 50% efficient, 50% waste heat
+# Efficiency factors for heat generation.
+# Our guns are the Mk3 magnetic guns, and Terra Invicta's Mk3 templates
+# (CoilgunBatteryMk3, HeavyCoilgunBatteryMk3, SpinalCoilerMk3,
+# HeavySiegeCoilerMk3) all have efficiency 0.7 (0.5 is TI's Mk1 value). A shot
+# draws shot energy = KE / efficiency from its capacitor and the difference,
+# KE x (1/efficiency - 1), is waste heat: coilgun 0.31 GJ, heavy 0.52 GJ,
+# spinal 1.84 GJ, siege 3.11 GJ per shot. Capacitor sizing and waste heat are
+# both derived from this constant (WeaponCapacitor.from_weapon_data), so the
+# per-shot energy budget stays closed; there is no separate per-shot adder.
+KINETIC_WEAPON_EFFICIENCY = 0.70  # TI Mk3 magnetic guns
 LASER_WEAPON_EFFICIENCY = 0.25    # Terra Invicta PD laser efficiency
 TORPEDO_LAUNCHER_EFFICIENCY = 0.90  # Mostly mechanical, low heat
+
+# Terra Invicta PointDefenseLaserTurret: one 50 MJ shot per 5 s cooldown at
+# efficiency 0.25 -> 200 MJ drawn and 150 MJ of waste heat per cycle. Our PD
+# turret is a continuous-dwell beam re-armed every cooldown (one burst = one
+# TI shot cycle), so the burst draws 200 MJ (40 MW) and dumps 150 MJ into the
+# hull: a 30 MW continuous-dwell equivalent while the turret is firing.
+TI_PD_SHOT_POWER_MJ = 50.0
+
+# Battery discharge limit as a multiple of its recharge rate. TI batteries have
+# no discharge-rate field; 10x (0.75 GW for the SuperconductingCoilBattery) is
+# a stated game assumption. It only binds when the systems bus is damaged:
+# a healthy bus covers every capacitor's full-cadence draw on its own.
+BATTERY_DISCHARGE_TO_RECHARGE_RATIO = 10.0
+
+# Capacitor charging priority on the systems bus: point defense first, then
+# torpedo launchers, then guns.
+CAPACITOR_PRIORITY = {"point_defense": 0, "missile": 1, "kinetic": 2}
 
 # Minimum power fraction for drives (can't drop below this)
 MIN_DRIVE_POWER_FRACTION = 0.1
@@ -80,6 +104,7 @@ class WeaponCapacitor:
     weapon_slot: str
     efficiency: float = KINETIC_WEAPON_EFFICIENCY
     current_charge_mj: float = 0.0
+    kind: str = "kinetic"  # "kinetic" | "point_defense" | "missile"
 
     @classmethod
     def from_weapon_data(
@@ -104,15 +129,21 @@ class WeaponCapacitor:
 
         # Determine energy per shot based on weapon type
         if weapon_type == "point_defense":
-            # Laser weapons use shot power
-            shot_power_mj = weapon_data.get("power_draw_mw", 5.0) * cooldown_s
-            capacity_mj = shot_power_mj
+            kind = "point_defense"
             efficiency = weapon_data.get("efficiency", LASER_WEAPON_EFFICIENCY)
+            if "shot_power_mj" in weapon_data:
+                # TI laser convention: the capacitor holds shotPower / efficiency
+                capacity_mj = weapon_data["shot_power_mj"] / efficiency
+            else:
+                # Legacy: electrical draw (MW) x burst length
+                capacity_mj = weapon_data.get("power_draw_mw", 5.0) * cooldown_s
         elif weapon_type == "missile":
             # Torpedo launchers have low energy requirement
+            kind = "missile"
             capacity_mj = DEFAULT_TORPEDO_LAUNCH_ENERGY_MJ
             efficiency = TORPEDO_LAUNCHER_EFFICIENCY
         else:
+            kind = "kinetic"
             # Kinetic weapons - use kinetic energy as proxy
             kinetic_energy_gj = weapon_data.get("kinetic_energy_gj", 0.0)
             if kinetic_energy_gj > 0:
@@ -136,7 +167,8 @@ class WeaponCapacitor:
             charge_rate_mw=charge_rate_mw,
             weapon_slot=weapon_slot,
             efficiency=efficiency,
-            current_charge_mj=capacity_mj  # Start fully charged
+            current_charge_mj=capacity_mj,  # Start fully charged
+            kind=kind,
         )
 
     @property
@@ -162,6 +194,11 @@ class WeaponCapacitor:
             self.capacity_mj,
             self.current_charge_mj + energy_mj
         )
+        # Snap float residue: capacity/cooldown summed over a cooldown's worth
+        # of ticks can land an ulp short of capacity (e.g. 6128.57 MJ / 15 s),
+        # which would hold the shot one extra tick - a dt-dependent delay.
+        if self.capacity_mj - self.current_charge_mj <= 1e-9 * self.capacity_mj:
+            self.current_charge_mj = self.capacity_mj
 
     def discharge(self) -> float:
         """
@@ -240,9 +277,9 @@ class Battery:
         capacity_gj = battery_data.get("capacity_gj", 160.0)
         recharge_rate = battery_data.get("recharge_rate_gj_s", 0.075)
 
-        # Discharge rate is typically higher than recharge
-        # Assume 10x recharge rate for discharge
-        discharge_rate = recharge_rate * 10
+        # TI has no discharge-rate field: stated game assumption, see
+        # BATTERY_DISCHARGE_TO_RECHARGE_RATIO.
+        discharge_rate = recharge_rate * BATTERY_DISCHARGE_TO_RECHARGE_RATIO
 
         return cls(
             capacity_gj=capacity_gj,
@@ -398,24 +435,32 @@ class PowerSystem:
     Complete power management system for a spacecraft.
 
     Manages power generation, distribution, and storage:
-    - Reactor provides primary power
-    - Drives consume power proportional to throttle
-    - Remaining power charges weapon capacitors
-    - Battery provides backup when reactor insufficient
+    - The drive runs off its own plant output; throttle never starves weapons
+    - A ship-systems bus charges the weapon capacitors at up to its rating
+      (by default the sum of every capacitor's full-cadence charge rate),
+      scaled by reactor module effectiveness
+    - The battery covers any bus deficit (damaged reactor) and recharges
+      from bus surplus
 
     Attributes:
         reactor: Ship's reactor for power generation.
         battery: Ship's battery for energy storage.
         weapon_capacitors: Dict mapping weapon slot to capacitor.
-        drive_power_fraction: Fraction of reactor power going to drives (0.0 to 1.0).
+        drive_power_fraction: Applied drive throttle (informational only).
+        bus_scale: Reactor module effectiveness, 0.0-1.0 (set_bus_scale).
+        bus_rating_mw: Explicit bus rating; None derives it from the capacitors.
     """
     reactor: Reactor
     battery: Battery
     weapon_capacitors: Dict[str, WeaponCapacitor] = field(default_factory=dict)
-    drive_power_fraction: float = 0.0  # Updated based on throttle
+    drive_power_fraction: float = 0.0  # Informational: applied drive throttle
+    bus_scale: float = 1.0
+    bus_rating_mw: Optional[float] = None
 
     # Statistics
     _total_heat_generated_gj: float = field(default=0.0, repr=False)
+    last_bus_draw_mw: float = field(default=0.0, repr=False)
+    last_battery_draw_mw: float = field(default=0.0, repr=False)
 
     @classmethod
     def from_ship_data(
@@ -439,8 +484,15 @@ class PowerSystem:
         reactor_data = propulsion.get("reactor", {})
         reactor = Reactor.from_ship_data(reactor_data)
 
-        # Create battery
-        battery_data = propulsion.get("battery", {})
+        # Create battery. Fleet data keeps it under thermal.battery (with the
+        # heat sink and radiators it shares the utility budget with); this
+        # used to read only propulsion.battery, so editing the data had no
+        # effect and the hard-coded defaults happened to match.
+        battery_data = (
+            ship_data.get("thermal", {}).get("battery")
+            or propulsion.get("battery")
+            or {}
+        )
         battery = Battery.from_ship_data(battery_data)
 
         # Create weapon capacitors
@@ -479,25 +531,41 @@ class PowerSystem:
 
     def set_drive_throttle(self, throttle: float) -> None:
         """
-        Set drive power consumption based on throttle.
+        Record the applied drive throttle (status only).
 
-        When drives are at 100%, they consume all reactor power.
-        When drives are at 0%, all power goes to weapons/battery.
+        The drive no longer shares the weapons' power: the old coupling gave
+        the guns 99.99% of a 306 TW reactor at 99% throttle and nothing but
+        the battery at exactly 100% - a cliff with no physical basis.
 
         Args:
             throttle: Drive throttle (0.0 to 1.0).
         """
         self.drive_power_fraction = max(0.0, min(1.0, throttle))
 
+    def set_bus_scale(self, scale: float) -> None:
+        """Scale the systems bus by reactor module effectiveness (0.0-1.0)."""
+        self.bus_scale = max(0.0, min(1.0, scale))
+
+    def get_bus_rating_mw(self) -> float:
+        """
+        Healthy bus rating: explicit, else every non-propulsion load at once -
+        each capacitor's full-cadence draw plus the battery's recharge rate
+        (TI: the systems reactor covers all non-propulsion needs). A healthy
+        ship therefore never waits on power; a damaged reactor does.
+        """
+        if self.bus_rating_mw is not None:
+            return self.bus_rating_mw
+        return (sum(c.charge_rate_mw for c in self.weapon_capacitors.values())
+                + self.battery.max_recharge_rate_gw * 1000.0)
+
     def get_available_power_gw(self) -> float:
         """
-        Get reactor power available for weapons and charging.
+        Get systems-bus power available for charging capacitors.
 
         Returns:
-            Available power in gigawatts.
+            Available power in gigawatts (bus rating x reactor effectiveness).
         """
-        drive_power = self.reactor.current_output_gw * self.drive_power_fraction
-        return self.reactor.current_output_gw - drive_power
+        return self.get_bus_rating_mw() * self.bus_scale / 1000.0
 
     def can_weapon_fire(self, weapon_slot: str) -> bool:
         """
@@ -542,26 +610,34 @@ class PowerSystem:
 
         return heat_gj
 
+    def _charge_order(self) -> List[WeaponCapacitor]:
+        """Capacitors in bus priority order (PD, then launchers, then guns)."""
+        return sorted(
+            self.weapon_capacitors.values(),
+            key=lambda c: CAPACITOR_PRIORITY.get(c.kind, len(CAPACITOR_PRIORITY)),
+        )
+
     def update(self, dt: float) -> float:
         """
         Update power system for one timestep.
 
-        Distributes available power to weapon capacitors,
-        uses battery if needed, and recharges battery with surplus.
+        Charges capacitors from the systems bus in priority order, covers any
+        shortfall from the battery (within its per-tick discharge budget) and
+        recharges the battery with bus surplus.
 
         Args:
             dt: Time step in seconds.
 
         Returns:
-            Total heat generated this timestep (gigajoules).
+            Total heat generated this timestep (gigajoules) - always 0: the
+            conversion loss is charged when a capacitor discharges.
         """
-        heat_generated_gj = 0.0
+        if dt <= 0:
+            return 0.0
 
-        # Get available reactor power (after drives)
-        available_power_gw = self.get_available_power_gw()
-
-        # Convert to MW for capacitor charging
-        available_power_mw = available_power_gw * 1000.0
+        available_mw = self.get_bus_rating_mw() * self.bus_scale
+        bus_used_mw = 0.0
+        battery_used_mw = 0.0
 
         # Battery energy budget for this whole timestep. Battery.discharge()
         # only caps power per invocation, so calling it once per uncharged
@@ -569,54 +645,39 @@ class PowerSystem:
         # i.e. N x max_discharge_rate_gw out of one battery in one tick.
         battery_budget_gj = max(0.0, self.battery.max_discharge_rate_gw * dt)
 
-        # Charge weapon capacitors
-        for slot_name, capacitor in self.weapon_capacitors.items():
+        for capacitor in self._charge_order():
             if capacitor.is_charged:
-                continue  # Already full
+                continue
+            # Draw only what this capacitor can still take this tick.
+            room_mw = (capacitor.capacity_mj - capacitor.current_charge_mj) / dt
+            need_mw = max(0.0, min(capacitor.charge_rate_mw, room_mw))
+            from_bus_mw = min(need_mw, available_mw)
+            available_mw -= from_bus_mw
+            bus_used_mw += from_bus_mw
 
-            needed_power_mw = capacitor.charge_rate_mw
+            shortfall_mw = need_mw - from_bus_mw
+            from_battery_mw = 0.0
+            if shortfall_mw > 0.0 and battery_budget_gj > 0.0:
+                request_gw = min(shortfall_mw / 1000.0, battery_budget_gj / dt)
+                battery_power_gw = self.battery.discharge(request_gw, dt)
+                battery_budget_gj = max(
+                    0.0, battery_budget_gj - battery_power_gw * dt
+                )
+                from_battery_mw = battery_power_gw * 1000.0
+                battery_used_mw += from_battery_mw
 
-            if available_power_mw >= needed_power_mw:
-                # Reactor can supply all needed power
-                energy_mj = needed_power_mw * dt
-                capacitor.charge(energy_mj)
-                available_power_mw -= needed_power_mw
-            else:
-                # Need battery supplement
-                reactor_contribution_mw = available_power_mw
-                shortfall_mw = needed_power_mw - reactor_contribution_mw
+            capacitor.charge((from_bus_mw + from_battery_mw) * dt)
 
-                # Try to get power from battery, within this tick's budget
-                shortfall_gw = shortfall_mw / 1000.0
-                budget_gw = (battery_budget_gj / dt) if dt > 0 else 0.0
-                request_gw = min(shortfall_gw, budget_gw)
-                if request_gw > 0.0:
-                    battery_power_gw = self.battery.discharge(request_gw, dt)
-                    battery_budget_gj = max(
-                        0.0, battery_budget_gj - battery_power_gw * dt
-                    )
-                else:
-                    battery_power_gw = 0.0
-                battery_power_mw = battery_power_gw * 1000.0
+        # Recharge battery with bus surplus
+        if available_mw > 0:
+            self.battery.recharge(available_mw / 1000.0, dt)
 
-                total_power_mw = reactor_contribution_mw + battery_power_mw
-                energy_mj = total_power_mw * dt
-                capacitor.charge(energy_mj)
-
-                available_power_mw = 0.0
-
-        # Recharge battery with surplus power
-        if available_power_mw > 0:
-            surplus_gw = available_power_mw / 1000.0
-            self.battery.recharge(surplus_gw, dt)
-
-        # Note: Reactor waste heat is already tracked by the ThermalSystem,
-        # which has dedicated heat sources for reactor and drives; adding
-        # reactor.calculate_waste_heat_gw() here would double-count it.
-        # Weapon heat is emitted at fire time by fire_weapon(), so this value
-        # is legitimately zero - charging a capacitor is modelled as lossless
-        # and the conversion loss is charged on discharge.
-        return heat_generated_gj
+        self.last_bus_draw_mw = bus_used_mw
+        self.last_battery_draw_mw = battery_used_mw
+        # Reactor waste heat is not added here: the thermal system carries the
+        # plant's housekeeping load and the drive's heat. Weapon heat is
+        # emitted at fire time by fire_weapon(); charging is lossless.
+        return 0.0
 
     def get_status(self) -> dict:
         """
@@ -634,9 +695,14 @@ class PowerSystem:
                 "charge_rate_mw": cap.charge_rate_mw
             }
 
+        rating = self.get_bus_rating_mw()
         return {
             "reactor_output_gw": self.reactor.current_output_gw,
             "available_power_gw": self.get_available_power_gw(),
+            "bus_rating_mw": rating,
+            "bus_percent": self.bus_scale * 100.0,
+            "bus_draw_mw": self.last_bus_draw_mw,
+            "battery_draw_mw": self.last_battery_draw_mw,
             "drive_power_fraction": self.drive_power_fraction,
             "battery_percent": self.battery.charge_percent,
             "battery_gj": self.battery.current_charge_gj,
@@ -662,7 +728,10 @@ def calculate_weapon_energy_mj(weapon_data: dict) -> float:
     weapon_type = weapon_data.get("type", "kinetic")
 
     if weapon_type == "point_defense":
-        # Laser - use power draw * dwell time
+        # Same derivation as WeaponCapacitor.from_weapon_data
+        if "shot_power_mj" in weapon_data:
+            return weapon_data["shot_power_mj"] / weapon_data.get(
+                "efficiency", LASER_WEAPON_EFFICIENCY)
         power_mw = weapon_data.get("power_draw_mw", 5.0)
         cooldown_s = weapon_data.get("cooldown_s", 5.0)
         return power_mw * cooldown_s

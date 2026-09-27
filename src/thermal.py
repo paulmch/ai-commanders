@@ -17,13 +17,6 @@ from enum import Enum
 from pathlib import Path
 from typing import List, Optional
 
-# Import HitLocation from combat module for integration
-try:
-    from .combat import HitLocation
-except ImportError:
-    from combat import HitLocation
-
-
 class RadiatorState(Enum):
     """Operational state of a droplet radiator."""
     RETRACTED = "retracted"
@@ -51,6 +44,61 @@ class RadiatorPosition(Enum):
 
 # Radiator extension angle - angled backwards toward engine
 RADIATOR_EXTENSION_ANGLE_DEG = 45.0
+
+
+# =============================================================================
+# HEAT LADDER
+# =============================================================================
+#
+# Heat is stored as a fraction of the heat-sink rating and is NEVER discarded:
+# past 100% the lithium runs above its design temperature and the stored heat
+# keeps climbing. What happens on the way up (fractions of sink capacity):
+#
+#   >= HEAT_GUN_HOLD_FRACTION        guns hold fire (weapon_status 'heat_limited');
+#                                    point defense keeps firing
+#   >= HEAT_AUTO_EXTEND_FRACTION     radiators are forced out (Terra Invicta's
+#                                    RetractRadiatorsCommand rule) and cannot be
+#                                    retracted until heat falls back below it
+#   >= REACTOR_MELTDOWN_HEAT_FRACTION reactor containment fails: the ship dies by
+#                                    immediate reactor detonation, cause
+#                                    'reactor_overheat'
+#
+# The drive is never throttled automatically - evasion always stays available.
+HEAT_GUN_HOLD_FRACTION = 0.90
+HEAT_AUTO_EXTEND_FRACTION = 1.00
+REACTOR_MELTDOWN_HEAT_FRACTION = 1.50
+
+# heat_warning events fire once per upward crossing of each level, and a level
+# re-arms only after heat falls HEAT_WARNING_REARM_FRACTION below it (no spam
+# while heat hovers on a threshold).
+HEAT_WARNING_LEVELS = (0.90, 1.00, 1.25)
+HEAT_WARNING_REARM_FRACTION = 0.05
+
+# set_radiators(mode="auto"): the rule layer extends the radiators when heat
+# reaches the ship's auto_extend_pct (default below) and no torpedo is inbound,
+# retracts them while a torpedo is inbound (unless the ladder forces them out)
+# and once heat has fallen AUTO_RADIATOR_HYSTERESIS_PCT below the extend line.
+AUTO_RADIATOR_DEFAULT_PCT = 65.0
+AUTO_RADIATOR_HYSTERESIS_PCT = 25.0
+# "Under fire" for the auto mode: a torpedo targeting the ship, closing, with
+# an ETA inside this window (the same horizon the heuristic captain dodges at).
+AUTO_RADIATOR_TORPEDO_ETA_S = 75.0
+
+# Smoothing for the reported heat rates (exponential moving averages, seconds).
+# Shots arrive as impulses (a spinal round dumps 1.8 GJ in one tick), so the
+# raw per-tick rate is spiky; these give a readable "net rate" and a load
+# estimate that includes gunfire.
+HEAT_RATE_SMOOTHING_S = 10.0
+HEAT_LOAD_SMOOTHING_S = 30.0
+
+# Drive waste heat at FULL throttle as a multiple of the ship's nominal
+# (undamaged, extended) radiator rejection. Terra Invicta sizes a ship's
+# radiators to reject the power plant's full-burn waste heat; we keep that
+# RULE at game scale (TI-literal is ~306 GW for the ICF VII + Protium torch,
+# which a 525 GJ sink holds for 1.7 s). With the 60 t LithiumSpray refit the
+# drive therefore makes 780 MW at full burn, i.e. DRIVE_HEAT_FRACTION =
+# 780 MW / 306.4 GW ~ 0.25% of the TI-literal figure. Linear in throttle.
+DRIVE_HEAT_TO_RADIATOR_RATIO = 1.0
 
 
 def coerce_radiator_position(position) -> RadiatorPosition:
@@ -217,7 +265,7 @@ class RadiatorArray:
             Configured RadiatorArray with four radiator panels.
         """
         radiator_data = thermal_data.get("radiator", {})
-        mass_tons = radiator_data.get("mass_tons", 10.0)
+        mass_tons = radiator_data.get("mass_tons", 60.0)
         dissipation_kw_per_kg = radiator_data.get("dissipation_kw_per_kg", 13.0)
 
         # Total dissipation capacity: mass * dissipation rate
@@ -274,119 +322,45 @@ class RadiatorArray:
                 count += 1
         return count
 
-    def get_hit_probability(self, hit_location: HitLocation) -> float:
-        """
-        Calculate probability of radiator being hit based on attack angle.
+    @property
+    def nominal_dissipation_kw(self) -> float:
+        """Rejection of the whole array undamaged and extended (the design rating)."""
+        return sum(r.max_dissipation_kw for r in self.radiators.values())
 
-        Only radiators on the side facing the attack can be hit.
-        Retracted radiators are tucked against the hull (~5% hit chance).
-        Extended radiators are more exposed (~20% hit chance).
+    @property
+    def extended_dissipation_kw(self) -> float:
+        """What the array would reject if extended now (damage included)."""
+        return sum(
+            0.0 if r.state == RadiatorState.DESTROYED
+            else r.max_dissipation_kw * r.health_percent / 100.0
+            for r in self.radiators.values()
+        )
 
-        Args:
-            hit_location: The attack vector/location.
+    @property
+    def any_extended(self) -> bool:
+        """True if any surviving panel is out (EXTENDED, or DAMAGED while out)."""
+        return any(
+            r.state in (RadiatorState.EXTENDED, RadiatorState.DAMAGED)
+            for r in self.radiators.values()
+        )
 
-        Returns:
-            Probability (0.0-1.0) that a radiator is hit.
-        """
-        # Determine which radiators can be hit based on attack angle
-        vulnerable_positions = self._get_vulnerable_positions(hit_location)
+    @property
+    def any_retracted(self) -> bool:
+        """True if any surviving panel is still tucked in."""
+        return any(r.state == RadiatorState.RETRACTED for r in self.radiators.values())
 
-        if not vulnerable_positions:
+    @property
+    def health_percent(self) -> float:
+        """Surviving rejection as a percentage of the design rating."""
+        nominal = self.nominal_dissipation_kw
+        if nominal <= 0:
             return 0.0
+        return 100.0 * self.extended_dissipation_kw / nominal
 
-        # Calculate hit probability based on radiator states
-        # We return the probability for any single radiator being hit
-        max_prob = 0.0
-        for pos in vulnerable_positions:
-            radiator = self.radiators.get(pos)
-            if radiator is None:
-                continue
-
-            if radiator.state == RadiatorState.DESTROYED:
-                continue
-            elif radiator.state == RadiatorState.RETRACTED:
-                # Tucked against hull, minimal exposure
-                prob = 0.05
-            else:
-                # Extended at 45° angle backwards
-                # Base exposure ~15% when extended (still tucked in droplet design)
-                # Angle affects effective cross-section:
-                # - Lateral hits see cos(45°) ≈ 0.707 of radiator
-                # - Tail hits see sin(45°) ≈ 0.707 of radiator
-                angle_factor = math.cos(math.radians(RADIATOR_EXTENSION_ANGLE_DEG))
-
-                if hit_location == HitLocation.TAIL:
-                    # Tail sees more of the angled radiator
-                    prob = 0.15 * (1.0 + (1.0 - angle_factor))  # ~0.19
-                else:
-                    # Lateral sees reduced cross-section
-                    prob = 0.15 * angle_factor  # ~0.11
-
-            max_prob = max(max_prob, prob)
-
-        return max_prob
-
-    def _get_vulnerable_positions(
-        self, hit_location: HitLocation
-    ) -> List[RadiatorPosition]:
-        """
-        Determine which radiator positions are vulnerable to a hit.
-
-        Radiators are located at the TAIL section (before drive, next to reactor).
-        - TAIL hits: Direct exposure to all 4 radiators (highest risk)
-        - LATERAL hits: Can strike tail_port OR tail_starboard
-        - NOSE hits: Must penetrate entire ship - radiators protected (minimal risk)
-
-        Args:
-            hit_location: The attack vector.
-
-        Returns:
-            List of radiator positions that could be hit.
-        """
-        if hit_location == HitLocation.TAIL:
-            # Tail hits directly expose all radiators around the engine section
-            return [
-                RadiatorPosition.TAIL_PORT,
-                RadiatorPosition.TAIL_STARBOARD,
-                RadiatorPosition.TAIL_DORSAL,
-                RadiatorPosition.TAIL_VENTRAL,
-            ]
-        elif hit_location == HitLocation.LATERAL:
-            # Lateral hits can strike port OR starboard tail radiators
-            return [RadiatorPosition.TAIL_PORT, RadiatorPosition.TAIL_STARBOARD]
-        elif hit_location == HitLocation.NOSE:
-            # Nose hits rarely reach tail radiators - would need full penetration
-            # Return empty - radiators protected by entire ship length
-            return []
-
-        return []
-
-    def get_random_vulnerable_radiator(
-        self, hit_location: HitLocation
-    ) -> Optional[DropletRadiator]:
-        """
-        Get a random non-destroyed radiator vulnerable to the given hit.
-
-        Args:
-            hit_location: The attack vector.
-
-        Returns:
-            A vulnerable radiator or None if none available.
-        """
-        import random
-
-        vulnerable_positions = self._get_vulnerable_positions(hit_location)
-        vulnerable_radiators = [
-            self.radiators[pos]
-            for pos in vulnerable_positions
-            if pos in self.radiators
-            and self.radiators[pos].state != RadiatorState.DESTROYED
-        ]
-
-        if not vulnerable_radiators:
-            return None
-
-        return random.choice(vulnerable_radiators)
+    # Radiator HIT chances live in one place: combat.radiator_hit_chance, used
+    # by combat.RadiatorHitResolver for both projectile and torpedo impacts.
+    # The array's own probability model (get_hit_probability) disagreed with it
+    # and was only ever exercised by this module's __main__, so it was removed.
 
 
 @dataclass
@@ -398,9 +372,14 @@ class HeatSink:
     thermal energy. This allows ships to temporarily exceed their
     radiator capacity during intense combat operations.
 
+    The rating is a design point, not a wall: heat past capacity_gj is still
+    stored (the sink runs hot) and drives the heat ladder - see
+    HEAT_GUN_HOLD_FRACTION / HEAT_AUTO_EXTEND_FRACTION /
+    REACTOR_MELTDOWN_HEAT_FRACTION. Nothing is ever silently discarded.
+
     Attributes:
-        capacity_gj: Maximum heat storage in gigajoules.
-        current_heat_gj: Current stored heat in gigajoules.
+        capacity_gj: Design heat capacity in gigajoules (100% heat).
+        current_heat_gj: Current stored heat in gigajoules (may exceed capacity).
     """
     capacity_gj: float
     current_heat_gj: float = 0.0
@@ -417,9 +396,16 @@ class HeatSink:
             Configured HeatSink instance.
         """
         heatsink_data = thermal_data.get("heatsink", {})
-        capacity = heatsink_data.get("capacity_gj", 525.0)
+        capacity = heatsink_data.get("capacity_gj", 320.0)
 
         return cls(capacity_gj=capacity, current_heat_gj=0.0)
+
+    @property
+    def heat_fraction(self) -> float:
+        """Stored heat as a fraction of the rating (may exceed 1.0)."""
+        if self.capacity_gj <= 0:
+            return 1.0
+        return self.current_heat_gj / self.capacity_gj
 
     @property
     def heat_percent(self) -> float:
@@ -427,88 +413,33 @@ class HeatSink:
         Get current heat level as percentage of capacity.
 
         Returns:
-            Heat percentage from 0.0 to 100.0.
+            Heat percentage; exceeds 100.0 when the sink runs past its rating.
         """
-        if self.capacity_gj <= 0:
-            return 100.0
-        return (self.current_heat_gj / self.capacity_gj) * 100.0
+        return self.heat_fraction * 100.0
 
     @property
     def available_capacity_gj(self) -> float:
         """
-        Get remaining heat absorption capacity.
+        Get remaining heat absorption capacity below the 100% rating.
 
         Returns:
-            Available capacity in gigajoules.
+            Available capacity in gigajoules (0 once the sink is at or past 100%).
         """
         return max(0.0, self.capacity_gj - self.current_heat_gj)
 
-    def absorb_with_overflow(self, heat_gj: float) -> tuple[float, float]:
-        """
-        Absorb heat into the sink, reporting how much did not fit.
-
-        Callers of the boolean :meth:`absorb` have no way to learn how much
-        heat was clipped, so the excess used to vanish silently. This variant
-        returns it explicitly.
-
-        Args:
-            heat_gj: Amount of heat to absorb in gigajoules.
-
-        Returns:
-            Tuple of (absorbed_gj, overflow_gj).
-        """
-        if heat_gj <= 0:
-            return (0.0, 0.0)
-
-        available = self.available_capacity_gj
-
-        if heat_gj <= available:
-            self.current_heat_gj += heat_gj
-            return (heat_gj, 0.0)
-
-        # Absorb what we can; the remainder is overflow the caller must handle.
-        self.current_heat_gj = self.capacity_gj
-        return (available, heat_gj - available)
-
     def absorb(self, heat_gj: float) -> bool:
         """
-        Absorb heat into the sink.
+        Store heat in the sink. Never clips: heat past the rating is kept.
 
         Args:
-            heat_gj: Amount of heat to absorb in gigajoules.
+            heat_gj: Amount of heat to absorb in gigajoules (<= 0 is ignored).
 
         Returns:
-            True if all heat was absorbed, False if sink is full.
+            True while the sink is still at or below its rating afterwards.
         """
-        _absorbed, overflow = self.absorb_with_overflow(heat_gj)
-        return overflow <= 0.0
-
-    def dump_to_radiators(
-        self, radiator_array: RadiatorArray, dt_seconds: float
-    ) -> float:
-        """
-        Transfer heat from sink to radiators for dissipation.
-
-        Args:
-            radiator_array: The ship's radiator array.
-            dt_seconds: Time step in seconds.
-
-        Returns:
-            Amount of heat dumped in gigajoules.
-        """
-        if self.current_heat_gj <= 0:
-            return 0.0
-
-        # Calculate heat that can be radiated this timestep
-        # dissipation_kw = kJ/s, so we convert to GJ
-        dissipation_gj_per_s = radiator_array.total_dissipation_kw / 1_000_000.0
-        max_dump_gj = dissipation_gj_per_s * dt_seconds
-
-        # Can't dump more than we have
-        actual_dump = min(max_dump_gj, self.current_heat_gj)
-        self.current_heat_gj -= actual_dump
-
-        return actual_dump
+        if heat_gj > 0:
+            self.current_heat_gj += heat_gj
+        return self.current_heat_gj <= self.capacity_gj
 
 
 @dataclass
@@ -528,28 +459,19 @@ class HeatSource:
 
 # Standard heat generation rates (kW)
 #
-# GAME-BALANCE VALUES, NOT PHYSICAL ONES. These are deliberately scaled far
-# below what the ship data implies, so that battles last minutes rather than
-# milliseconds. For reference, the physical numbers from data/fleet_ships.json
-# are roughly:
+# GAME-BALANCE VALUES, NOT PHYSICAL ONES. For reference, the physical numbers
+# from data/fleet_ships.json are roughly:
 #   reactor : 306,430 GW at 0.999 efficiency  -> ~306 GW of waste heat
 #   drive   : 58.56 MN at ve = 10,256 km/s    -> ~300 TW jet power
-# i.e. five to six orders of magnitude above the rates below. A 525 GJ heat
-# sink would saturate in under 2 ms at the physical reactor figure, so the
-# rates here are a stated fiction. See the audit note in the module docs before
-# "fixing" them: rebalancing requires the radiator array and heat sink to be
-# rescaled by the same factor.
-#
-# At the balance values: a destroyer with 58.56 MN thrust at full burn generates
-# ~59 MW of engine heat, and 4 extended radiators dissipate 130 MW total
-# (10 t * 13 kW/kg), so ships can cool while burning.
-# Combat heat from weapons adds significant thermal pressure.
+# A heat sink would saturate in about a second at the physical reactor figure,
+# so the drive's heat is instead tied to ONE rule borrowed from Terra Invicta:
+# radiators are sized to reject full-burn waste heat. Drive heat at full
+# throttle therefore equals the ship's nominal radiator rejection
+# (DRIVE_HEAT_TO_RADIATOR_RATIO), scaled linearly with applied throttle - see
+# ThermalSystem.set_drive_throttle. Weapon heat is per shot, charged by the
+# power system (power.WeaponCapacitor: shot energy x (1 - efficiency)).
 HEAT_GENERATION_RATES = {
-    "reactor_idle": 1000.0,          # Reactor at idle (1 MW)
-    "reactor_full_power": 50000.0,   # Reactor at full power (50 MW)
-    "engine_per_mn": 1000.0,         # Per MN of thrust (~59 MW for destroyer at full burn)
-    "coilgun_per_shot": 500.0,       # Per coilgun shot
-    "laser_pd_continuous": 100.0,    # Laser PD continuous operation
+    "reactor_idle": 1000.0,          # Systems plant housekeeping load (1 MW)
 }
 
 
@@ -565,13 +487,33 @@ class ThermalSystem:
     Attributes:
         heatsink: The ship's heat sink for thermal storage.
         radiators: The ship's radiator array for heat dissipation.
-        heat_sources: List of heat-generating systems.
+        heat_sources: Continuous heat sources (reactor housekeeping, drive).
+        drive_heat_full_kw: Drive waste heat at full throttle (kW).
+        radiator_mode: "manual" (captain extends/retracts) or "auto" (the rule
+            layer manages them, see AUTO_RADIATOR_DEFAULT_PCT).
+        auto_extend_pct: Heat % at which "auto" mode extends the radiators.
     """
     heatsink: HeatSink
     radiators: RadiatorArray
     heat_sources: List[HeatSource] = field(default_factory=list)
+    drive_heat_full_kw: float = 0.0
+    radiator_mode: str = "manual"
+    auto_extend_pct: float = AUTO_RADIATOR_DEFAULT_PCT
 
-    # Warning thresholds
+    # Telemetry, refreshed by update(). heat_rate_gw is the smoothed net change
+    # of STORED heat (signed); rad_out_gw is what the radiators actually
+    # rejected on the last update; load_gw estimates total generation
+    # (continuous sources now + smoothed per-shot impulses).
+    heat_rate_gw: float = 0.0
+    rad_out_gw: float = 0.0
+    continuous_gw: float = 0.0
+    impulse_gw: float = 0.0
+    peak_heat_fraction: float = 0.0
+    _impulse_pending_gj: float = field(default=0.0, repr=False)
+    _heat_at_last_update_gj: Optional[float] = field(default=None, repr=False)
+    _warned_levels: set = field(default_factory=set, repr=False)
+
+    # Warning thresholds (percent) for the is_overheating / is_critical flags
     OVERHEAT_THRESHOLD: float = 80.0
     CRITICAL_THRESHOLD: float = 95.0
 
@@ -580,8 +522,9 @@ class ThermalSystem:
         """
         Create a ThermalSystem from ship configuration data.
 
-        Initializes heat sink and radiators from fleet data, and creates
-        standard heat sources based on ship systems.
+        Initializes heat sink and radiators from fleet data, the reactor's
+        housekeeping load, and the drive (full-throttle heat = the radiator
+        array's design rejection, see DRIVE_HEAT_TO_RADIATOR_RATIO).
 
         Args:
             ship_data: Complete ship configuration dictionary.
@@ -593,59 +536,30 @@ class ThermalSystem:
 
         heatsink = HeatSink.from_ship_data(thermal_data)
         radiators = RadiatorArray.from_ship_data(thermal_data)
+        drive_heat_full_kw = radiators.nominal_dissipation_kw * DRIVE_HEAT_TO_RADIATOR_RATIO
 
-        # Create standard heat sources based on ship systems
-        heat_sources = []
-
-        # Reactor (always present)
-        heat_sources.append(HeatSource(
-            name="reactor",
-            heat_generation_kw=HEAT_GENERATION_RATES["reactor_idle"],
-            active=True,  # Reactor always running
-        ))
-
-        # Engine (based on propulsion)
-        propulsion = ship_data.get("propulsion", {})
-        drive = propulsion.get("drive", {})
-        thrust_mn = drive.get("thrust_mn", 58.56)
-        engine_heat = thrust_mn * HEAT_GENERATION_RATES["engine_per_mn"]
-        heat_sources.append(HeatSource(
-            name="engines",
-            heat_generation_kw=engine_heat,
-            active=False,  # Engines off by default
-        ))
-
-        # Weapons
-        weapons = ship_data.get("weapons", [])
-        coilgun_count = 0
-        pd_count = 0
-
-        for weapon in weapons:
-            weapon_type = weapon.get("type", "")
-            if "coilgun" in weapon_type or "coiler" in weapon_type:
-                coilgun_count += 1
-            elif "pd" in weapon_type or "laser" in weapon_type:
-                pd_count += 1
-
-        if coilgun_count > 0:
-            heat_sources.append(HeatSource(
-                name="coilguns",
-                heat_generation_kw=coilgun_count * HEAT_GENERATION_RATES["coilgun_per_shot"],
-                active=False,
-            ))
-
-        if pd_count > 0:
-            heat_sources.append(HeatSource(
-                name="point_defense",
-                heat_generation_kw=pd_count * HEAT_GENERATION_RATES["laser_pd_continuous"],
-                active=False,
-            ))
+        heat_sources = [
+            # Reactor housekeeping (always running)
+            HeatSource(
+                name="reactor",
+                heat_generation_kw=HEAT_GENERATION_RATES["reactor_idle"],
+                active=True,
+            ),
+            # Drive: scaled by applied throttle every tick (set_drive_throttle)
+            HeatSource(name="engines", heat_generation_kw=0.0, active=False),
+        ]
 
         return cls(
             heatsink=heatsink,
             radiators=radiators,
             heat_sources=heat_sources,
+            drive_heat_full_kw=drive_heat_full_kw,
         )
+
+    @property
+    def heat_fraction(self) -> float:
+        """Stored heat as a fraction of sink capacity (may exceed 1.0)."""
+        return self.heatsink.heat_fraction
 
     @property
     def heat_percent(self) -> float:
@@ -653,9 +567,14 @@ class ThermalSystem:
         Get current heat level as percentage of capacity.
 
         Returns:
-            Heat percentage from 0.0 to 100.0.
+            Heat percentage (exceeds 100.0 when the sink runs past its rating).
         """
         return self.heatsink.heat_percent
+
+    @property
+    def radiators_extended(self) -> bool:
+        """True if any surviving radiator panel is out."""
+        return self.radiators.any_extended
 
     @property
     def is_overheating(self) -> bool:
@@ -677,18 +596,50 @@ class ThermalSystem:
         """
         return self.heat_percent >= self.CRITICAL_THRESHOLD
 
+    @property
+    def guns_heat_limited(self) -> bool:
+        """Guns hold fire at or above HEAT_GUN_HOLD_FRACTION."""
+        return self.heat_fraction >= HEAT_GUN_HOLD_FRACTION
+
+    @property
+    def radiators_forced(self) -> bool:
+        """At or above HEAT_AUTO_EXTEND_FRACTION the radiators must be out."""
+        return self.heat_fraction >= HEAT_AUTO_EXTEND_FRACTION
+
+    @property
+    def meltdown(self) -> bool:
+        """Reactor containment has failed (REACTOR_MELTDOWN_HEAT_FRACTION)."""
+        return self.heat_fraction >= REACTOR_MELTDOWN_HEAT_FRACTION
+
     def add_heat(self, source_name: str, heat_gj: float) -> bool:
         """
-        Add heat from a specific source to the system.
+        Add a lump of heat (a shot, a PD burst, a launch) to the sink.
 
         Args:
             source_name: Name of the heat source (for logging).
             heat_gj: Amount of heat to add in gigajoules.
 
         Returns:
-            True if heat was absorbed, False if sink is full.
+            True while the sink is still at or below its rating afterwards.
+            The heat is stored either way.
         """
+        if heat_gj > 0:
+            self._impulse_pending_gj += heat_gj
         return self.heatsink.absorb(heat_gj)
+
+    def set_drive_throttle(self, throttle: float) -> None:
+        """
+        Scale the drive's waste heat to the throttle actually applied.
+
+        Waste heat is proportional to jet power, i.e. to thrust: full throttle
+        makes drive_heat_full_kw, a 5% station-keeping burn 5% of it.
+        """
+        throttle = max(0.0, min(1.0, throttle))
+        for source in self.heat_sources:
+            if source.name == "engines":
+                source.heat_generation_kw = self.drive_heat_full_kw * throttle
+                source.active = throttle > 0.0
+                return
 
     def set_source_active(self, source_name: str, active: bool) -> bool:
         """
@@ -727,59 +678,136 @@ class ThermalSystem:
         Generates heat from active sources, then dissipates through
         radiators. Returns status information about the update.
 
+        Net-flux accounting: continuous heat produced this step and heat
+        already stored (including shot heat added since the last update) are
+        rejected by the radiators up to their throughput; the rest stays in
+        the sink - past 100% if need be. Nothing is clipped or discarded.
+
         Args:
             dt_seconds: Time step in seconds.
 
         Returns:
             Dictionary with update statistics:
-            - heat_generated_gj: Heat produced by active sources this step
+            - heat_generated_gj: Continuous heat produced this step
             - heat_dissipated_gj: Heat radiated this step
-            - heat_overflow_gj: Heat that exceeded heat sink capacity and was
-              shed with no consequence (a full sink cannot store it)
-            - net_heat_gj: Actual change in stored heat (positive = heating up)
-            - heat_percent: Current heat level
-            - is_overheating: Whether in warning state
-            - is_critical: Whether in critical state
+            - net_heat_gj: Change in stored heat during this update
+            - heat_percent / heat_fraction: Current heat level
+            - rad_out_gw: Radiator rejection this step (GW)
+            - heat_rate_gw: Smoothed net change of stored heat (GW, signed)
+            - is_overheating / is_critical: 80% / 95% flags
         """
-        # Generate heat from active sources
-        heat_gen_kw = self.get_total_heat_generation_kw()
-        heat_gen_gj = (heat_gen_kw / 1_000_000.0) * dt_seconds
+        dt = max(0.0, dt_seconds)
+        before_gj = self.heatsink.current_heat_gj
+        if self._heat_at_last_update_gj is None:
+            # First update: shots already absorbed count from the start state.
+            self._heat_at_last_update_gj = before_gj - self._impulse_pending_gj
 
-        # Radiator throughput available this step (kW -> GJ/s -> GJ).
+        heat_gen_gj = (self.get_total_heat_generation_kw() / 1_000_000.0) * dt
         dissipation_capacity_gj = (
             self.radiators.total_dissipation_kw / 1_000_000.0
-        ) * dt_seconds
+        ) * dt
+        heat_dissipated = min(dissipation_capacity_gj, before_gj + heat_gen_gj)
+        self.heatsink.current_heat_gj = max(
+            0.0, before_gj + heat_gen_gj - heat_dissipated
+        )
+        after_gj = self.heatsink.current_heat_gj
 
-        # Net-flux accounting. Heat produced this step is rejected directly by
-        # the radiators up to their throughput; only the excess has to be
-        # buffered in the sink. The previous absorb-then-dump ordering let a
-        # full sink clip generated heat even when the radiators had spare
-        # capacity to reject it that very step.
-        net_into_sink_gj = heat_gen_gj - dissipation_capacity_gj
-
-        if net_into_sink_gj >= 0.0:
-            heat_dissipated = dissipation_capacity_gj
-            _absorbed, overflow_gj = self.heatsink.absorb_with_overflow(
-                net_into_sink_gj
+        if dt > 0.0:
+            self.rad_out_gw = heat_dissipated / dt
+            self.continuous_gw = heat_gen_gj / dt
+            # Smoothed rates. The stored-heat change includes shot impulses
+            # added since the previous update, so the net rate is complete.
+            actual_rate = (after_gj - self._heat_at_last_update_gj) / dt
+            a_rate = 1.0 - math.exp(-dt / HEAT_RATE_SMOOTHING_S)
+            a_load = 1.0 - math.exp(-dt / HEAT_LOAD_SMOOTHING_S)
+            self.heat_rate_gw += a_rate * (actual_rate - self.heat_rate_gw)
+            self.impulse_gw += a_load * (
+                self._impulse_pending_gj / dt - self.impulse_gw
             )
-        else:
-            # Radiators have spare capacity: drain the sink with the remainder.
-            overflow_gj = 0.0
-            spare_gj = -net_into_sink_gj
-            drained_gj = min(spare_gj, self.heatsink.current_heat_gj)
-            self.heatsink.current_heat_gj -= drained_gj
-            heat_dissipated = heat_gen_gj + drained_gj
+        self._impulse_pending_gj = 0.0
+        self._heat_at_last_update_gj = after_gj
+        self.peak_heat_fraction = max(self.peak_heat_fraction, self.heat_fraction)
 
         return {
             "heat_generated_gj": heat_gen_gj,
             "heat_dissipated_gj": heat_dissipated,
-            "heat_overflow_gj": overflow_gj,
-            # Change in *stored* heat: generation that neither radiated away
-            # nor overflowed the sink.
-            "net_heat_gj": heat_gen_gj - heat_dissipated - overflow_gj,
+            # Change in *stored* heat during this update.
+            "net_heat_gj": after_gj - before_gj,
             "heat_percent": self.heat_percent,
+            "heat_fraction": self.heat_fraction,
+            "rad_out_gw": self.rad_out_gw,
+            "heat_rate_gw": self.heat_rate_gw,
             "is_overheating": self.is_overheating,
             "is_critical": self.is_critical,
+        }
+
+    def crossed_warning_levels(self) -> List[float]:
+        """
+        Heat-warning levels crossed UPWARD since the last call (each fires once).
+
+        A level re-arms after heat drops HEAT_WARNING_REARM_FRACTION below it.
+        """
+        frac = self.heat_fraction
+        crossed = []
+        for level in HEAT_WARNING_LEVELS:
+            if level in self._warned_levels:
+                if frac < level - HEAT_WARNING_REARM_FRACTION:
+                    self._warned_levels.discard(level)
+            elif frac >= level:
+                self._warned_levels.add(level)
+                crossed.append(level)
+        return crossed
+
+    @property
+    def load_gw(self) -> float:
+        """Estimated total heat generation: continuous now + smoothed shot heat."""
+        return self.continuous_gw + self.impulse_gw
+
+    def outlook(self, load_gw: Optional[float] = None) -> dict:
+        """
+        Commander-facing heat outlook at a (default: current) heat load.
+
+        Returns heat level, the smoothed net rate, radiator health and the
+        time to 100% (radiators forced out) and to meltdown, both with the
+        radiators retracted and extended. Times are seconds, None = never
+        (the ship cools or holds at that load).
+        """
+        load = self.load_gw if load_gw is None else load_gw
+        heat_gj = self.heatsink.current_heat_gj
+        cap = self.heatsink.capacity_gj
+        ext_gw = self.radiators.extended_dissipation_kw / 1_000_000.0
+
+        def _time_to(level_frac: float, net_gw: float) -> Optional[float]:
+            gap = level_frac * cap - heat_gj
+            if gap <= 0.0:
+                return 0.0
+            if net_gw <= 1e-9:
+                return None
+            return gap / net_gw
+
+        panels = {
+            pos.value: (0.0 if r.state == RadiatorState.DESTROYED else r.health_percent)
+            for pos, r in self.radiators.radiators.items()
+        }
+        return {
+            "heat_percent": self.heat_percent,
+            "heat_gj": heat_gj,
+            "capacity_gj": cap,
+            "net_rate_mw": self.heat_rate_gw * 1000.0,
+            "load_mw": load * 1000.0,
+            "radiators_extended": self.radiators_extended,
+            "radiator_mode": self.radiator_mode,
+            "auto_extend_pct": self.auto_extend_pct,
+            "radiator_rating_mw": self.radiators.nominal_dissipation_kw / 1000.0,
+            "radiator_available_mw": ext_gw * 1000.0,
+            "radiator_health_pct": self.radiators.health_percent,
+            "radiator_panels": panels,
+            "drive_heat_full_mw": self.drive_heat_full_kw / 1000.0,
+            "guns_heat_limited": self.guns_heat_limited,
+            "time_to_100_retracted_s": _time_to(HEAT_AUTO_EXTEND_FRACTION, load),
+            "time_to_meltdown_retracted_s": _time_to(REACTOR_MELTDOWN_HEAT_FRACTION, load),
+            "time_to_100_extended_s": _time_to(HEAT_AUTO_EXTEND_FRACTION, load - ext_gw),
+            "time_to_meltdown_extended_s": _time_to(REACTOR_MELTDOWN_HEAT_FRACTION, load - ext_gw),
         }
 
     def get_status(self) -> dict:
@@ -812,6 +840,8 @@ class ThermalSystem:
             },
             "radiators": {
                 "total_dissipation_kw": self.radiators.total_dissipation_kw,
+                "mode": self.radiator_mode,
+                "auto_extend_pct": self.auto_extend_pct,
                 "panels": radiator_status,
             },
             "heat_sources": source_status,
@@ -964,72 +994,16 @@ if __name__ == "__main__":
     print("AI Commanders Thermal Management System")
     print("=" * 50)
 
-    # Load thermal system for a destroyer
     thermal = load_thermal_system(data_path, "destroyer")
-
     print("\nDestroyer Thermal System Status:")
     print(f"  Heat Sink Capacity: {thermal.heatsink.capacity_gj} GJ")
-    print(f"  Current Heat: {thermal.heatsink.current_heat_gj:.2f} GJ ({thermal.heat_percent:.1f}%)")
+    print(f"  Radiator rating: {thermal.radiators.nominal_dissipation_kw / 1000:.0f} MW")
+    print(f"  Drive heat at full burn: {thermal.drive_heat_full_kw / 1000:.0f} MW")
 
-    # Extend radiators
-    thermal.radiators.extend_all()
-    print(f"\n  Radiator Dissipation (extended): {thermal.radiators.total_dissipation_kw:.0f} kW")
-
-    # Show radiator status
-    print("\n  Radiator Panels:")
-    for pos, radiator in thermal.radiators.radiators.items():
-        print(f"    {pos.value}: {radiator.state.value}, "
-              f"{radiator.current_dissipation_kw:.0f} kW, "
-              f"{radiator.health_percent:.0f}% health")
-
-    # Show heat sources
-    print("\n  Heat Sources:")
-    for source in thermal.heat_sources:
-        status = "ACTIVE" if source.active else "inactive"
-        print(f"    {source.name}: {source.heat_generation_kw:.0f} kW ({status})")
-
-    # Simulate some combat operations
-    print("\n" + "=" * 50)
-    print("Simulating 60 seconds of combat...")
-
-    # Activate engines and weapons
-    thermal.set_source_active("engines", True)
-    thermal.set_source_active("coilguns", True)
-    thermal.set_source_active("point_defense", True)
-
-    # Simulate for 60 seconds
-    for t in range(60):
-        result = thermal.update(1.0)
-
-        if t % 10 == 0:
-            print(f"\n  t={t}s: Heat {result['heat_percent']:.1f}%, "
-                  f"+{result['heat_generated_gj']*1000:.1f} MJ, "
-                  f"-{result['heat_dissipated_gj']*1000:.1f} MJ")
-
-            if result['is_overheating']:
-                print("    WARNING: OVERHEATING!")
-            if result['is_critical']:
-                print("    CRITICAL: THERMAL EMERGENCY!")
-
-    # Test radiator damage
-    print("\n" + "=" * 50)
-    print("Simulating radiator damage...")
-
-    port_radiator = thermal.radiators.radiators[RadiatorPosition.TAIL_PORT]
-    print(f"\n  Port radiator before damage: {port_radiator.health_percent:.0f}% health")
-    port_radiator.damage(2.5)  # 2.5 GJ hit
-    print(f"  Port radiator after 2.5 GJ hit: {port_radiator.health_percent:.0f}% health, "
-          f"state: {port_radiator.state.value}")
-
-    print(f"\n  Total dissipation after damage: {thermal.radiators.total_dissipation_kw:.0f} kW")
-
-    # Test hit probability
-    print("\n" + "=" * 50)
-    print("Radiator hit probabilities:")
-
-    # HitLocation is already imported at module level with a relative-with-
-    # fallback import; re-importing it absolutely here only worked when src/
-    # happened to be on sys.path.
-    for loc in HitLocation:
-        prob = thermal.radiators.get_hit_probability(loc)
-        print(f"  {loc.value}: {prob*100:.0f}%")
+    print("\nFull burn, radiators retracted, 60 s steps:")
+    thermal.set_drive_throttle(1.0)
+    for t in range(0, 600, 60):
+        for _ in range(60):
+            thermal.update(1.0)
+        print(f"  t={t + 60:4d}s heat {thermal.heat_percent:6.1f}%")
+    print(f"  Outlook: {thermal.outlook()}")
