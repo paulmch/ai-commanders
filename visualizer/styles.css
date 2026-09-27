@@ -2051,3 +2051,20 @@ body {
   #shipTelemetry:not(.hidden) ~ .track-hud { display: none; }
   .track-legend { display: none; }
 }
+
+/* Battle title: one line - shrinks to fit (TitleFit.js), then ellipsizes;
+   the full name is the tooltip. A long draft name used to wrap to three
+   lines over the fleet scoreboard. */
+.header-center { min-width: 0; }
+.battle-title { max-width: 100%; min-width: 0; }
+.battle-title h1 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Ship Registry heat bars (HeatHud.js): 0..150 % (meltdown) with a tick at 100 % */
+.registry-heat { position: relative; display: block; height: 2px; margin-top: 2px; background: rgba(255,255,255,0.06); }
+.registry-heat[hidden] { display: none; }
+.registry-heat::after { content: ''; position: absolute; left: 66.667%; top: -1px; width: 1px; height: 4px; background: rgba(255,140,70,0.6); }
+.registry-heat i { display: block; height: 100%; width: 0; background: #6f8fa6; }
+.registry-heat[data-level="warm"] i { background: #c9a14a; }
+.registry-heat[data-level="hot"] i { background: #ff9a2e; }
+.registry-heat[data-level="crit"] i { background: #ff4a26; animation: heat-crit 0.8s ease-in-out infinite; }
+@keyframes heat-crit { 50% { opacity: 0.4; } }

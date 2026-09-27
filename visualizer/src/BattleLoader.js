@@ -272,7 +272,7 @@ export class BattleLoader {
   /**
    * Per-ship death analysis for the two-stage destruction sequence.
    *
-   * Returns { shipId: { time, position, forward, velocity, wasDying, reactorCause } }. A death is
+   * Returns { shipId: { time, position, forward, velocity, wasDying, reactorCause, meltdown? } }. A death is
    * a "reactor cause" when a module_destroyed for a reactor lands within
    * the death tick - that ship detonates immediately. Everything else
    * drifts dark for a few seconds before the reactor cooks off. Velocity
@@ -304,6 +304,17 @@ export class BattleLoader {
       const death = info[e.ship_id];
       if (death && e.timestamp >= death.time - 2.0 && e.timestamp <= death.time + 0.5) {
         death.reactorCause = true;
+      }
+    }
+    // Overheat meltdown (reactor_meltdown, or a kill with cause
+    // reactor_overheat): an immediate reactor detonation, drawn brighter
+    for (const e of this.events) {
+      const melt = e.event_type === 'reactor_meltdown'
+        || (e.event_type === 'ship_destroyed' && e.data?.cause === 'reactor_overheat');
+      const death = melt ? info[e.ship_id] : null;
+      if (death && e.timestamp >= death.time - 2.0 && e.timestamp <= death.time + 0.5) {
+        death.reactorCause = true;
+        death.meltdown = true;
       }
     }
     return info;

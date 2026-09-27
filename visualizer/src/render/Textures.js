@@ -669,11 +669,13 @@ export function getRadiatorTextures() {
 
   const emis = canvasOf(w, h);
   const ectx = emis.getContext('2d');
+  // Neutral (hot white root -> cooler, redder tip): the hue comes from the
+  // material's emissive colour, set per frame from rad_out (render/Heat.js)
   const grad = ectx.createLinearGradient(0, 0, 0, h);
-  grad.addColorStop(0, 'rgb(255,145,62)');
-  grad.addColorStop(0.22, 'rgb(215,72,25)');
-  grad.addColorStop(0.65, 'rgb(106,19,7)');
-  grad.addColorStop(1, 'rgb(24,3,1)');
+  grad.addColorStop(0, 'rgb(255,255,255)');
+  grad.addColorStop(0.22, 'rgb(236,214,196)');
+  grad.addColorStop(0.65, 'rgb(128,82,60)');
+  grad.addColorStop(1, 'rgb(34,12,6)');
   ectx.fillStyle = grad;
   ectx.fillRect(0, 0, w, h);
   ectx.fillStyle = 'rgba(0,0,0,0.75)';

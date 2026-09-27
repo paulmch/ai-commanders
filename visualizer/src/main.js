@@ -16,6 +16,8 @@ import { TrackModeControl } from './TrackModeControl.js';
 import { Tracks } from './render/Tracks.js';
 import { TrackHud } from './TrackHud.js';
 import { latestWreckEnd } from './render/Explosion.js';
+import { fitBattleTitle } from './TitleFit.js';
+import { updateRegistryHeat } from './HeatHud.js';
 
 class BattleVisualizer {
   constructor() {
@@ -559,6 +561,7 @@ class BattleVisualizer {
 
         // Update fleet status
         this.updateFleetStatus();
+        updateRegistryHeat(this.scene.heat, currentPlaybackTime);   // registry heat bars (HeatHud.js)
 
         // Process events
         this.processEvents();
@@ -819,6 +822,7 @@ class BattleVisualizer {
    */
   updateBattleInfo() {
     this.elements.battleName.textContent = this.loader.metadata.battleName || 'FLEET ENGAGEMENT';
+    fitBattleTitle(this.elements.battleName, this.elements.battleName.textContent);   // one line + tooltip
     this.elements.totalTime.textContent = this.formatTime(this.loader.duration);
   }
 
@@ -1324,6 +1328,8 @@ class BattleVisualizer {
       'pd_slug_destroyed': { class: 'pd', format: (e) => `PD KILL: ${shipName(e.ship_id)} vaporizes incoming slug` },
       'penetration': { class: 'destroyed', format: (e) => `ARMOR BREACH: ${shipName(e.ship_id)} ${e.data?.location}` },
       'radiator_change': { class: 'info', format: (e) => `${shipName(e.ship_id)} ${e.data?.extended ? 'extends' : 'retracts'} radiators` },
+      'heat_warning': { class: 'hit', format: (e) => `HEAT ${Math.round((e.data?.level || 0) * 100)}%: ${shipName(e.ship_id)} ${e.data?.level >= 1.25 ? 'nearing meltdown' : e.data?.level >= 1 ? 'radiators auto-extend' : 'guns hold fire'}` },
+      'reactor_meltdown': { class: 'destroyed', format: (e) => `MELTDOWN: ${shipName(e.ship_id)} reactor containment fails (heat ${Math.round((e.data?.heat || 0) * 100)}%)` },
       'maneuver': { class: 'info', format: (e) => `${shipName(e.ship_id)}: ${e.data?.maneuver_type}${e.data?.throttle != null ? ` @ ${Math.round(e.data.throttle * 100)}%` : ''}` },
       'message': { class: 'comms', format: (e) => `COMMS ${e.data?.sender_name || shipName(e.ship_id)}: "${e.data?.message}"` },
     };

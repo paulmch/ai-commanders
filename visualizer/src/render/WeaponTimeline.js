@@ -57,6 +57,39 @@ export function torpedoPower(a, b, dt, range, closure, disabled = false) {
 export function shotSlot(d) { return Number(d.weapon_slot?.split('_').at(-1)) || 0; }
 export function shotSpinal(d) { return !!d.weapon_name?.toLowerCase().includes('spinal'); }
 
+/** Twin-barrel turret: barrel centres across the gun (x, in units of the turret size s). */
+export const TWIN_BARREL_X = [-0.2, 0.2];
+
+/**
+ * Which barrel (0/1) of a twin turret a shot leaves from: the recorded
+ * `barrel` when present, else alternating by the shot's sequence number
+ * `seq` on that weapon slot. Spinal mounts have one bore (always 0).
+ */
+export function shotBarrel(d, seq = 0) {
+  if (shotSpinal(d || {})) return 0;
+  const b = d?.barrel;
+  if (b === 0 || b === 1) return b;
+  return Math.abs(Math.floor(seq || 0)) % 2;
+}
+
+/**
+ * Barrel of every shot_fired event, in event order (events sorted by time):
+ * a per ship + weapon-slot shot counter feeds the shotBarrel fallback.
+ * @returns {Map<Object, number>} event -> barrel
+ */
+export function assignBarrels(events) {
+  const seq = new Map(), out = new Map();
+  for (const e of events || []) {
+    if (e.event_type !== 'shot_fired') continue;
+    const d = e.data || {};
+    const key = `${e.ship_id}|${d.weapon_slot}`;
+    const n = seq.get(key) || 0;
+    seq.set(key, n + 1);
+    out.set(e, shotBarrel(d, n));
+  }
+  return out;
+}
+
 export function sampleIndex(samples, time) {
   let lo = 0, hi = samples.length - 1;
   while (lo < hi) {
@@ -125,6 +158,7 @@ export class WeaponTimeline {
     }
     const shots = new Map();
     const shotById = new Map();
+    const barrels = assignBarrels(events);
     for (const e of events) {
       const d = e.data || {};
       if (e.event_type === 'shot_fired') {
@@ -132,7 +166,7 @@ export class WeaponTimeline {
         shots.get(e.ship_id).push(e);
         if (d.projectile_id) shotById.set(d.projectile_id, e);
         this.moments.push({ time: e.timestamp, kind: 'muzzle', ship: e.ship_id, data: d,
-          slot: shotSlot(d), spinal: shotSpinal(d),
+          slot: shotSlot(d), spinal: shotSpinal(d), barrel: barrels.get(e) ?? 0,
           track: this.slugs.get(d.projectile_id) || null,
           seed: seedFor(`${e.ship_id}|${e.timestamp}|${d.weapon_slot}`) });
       }
@@ -188,7 +222,8 @@ export class WeaponTimeline {
       }
       const launch = shot ? shot.timestamp : first.t - 1;
       tr.source = first.state.source || shot?.ship_id || '';
-      tr.shot = shot ? { slot: shot.data?.weapon_slot, index: shotSlot(shot.data || {}), spinal: shotSpinal(shot.data || {}) } : null;
+      tr.shot = shot ? { slot: shot.data?.weapon_slot, index: shotSlot(shot.data || {}), spinal: shotSpinal(shot.data || {}),
+        barrel: barrels.get(shot) ?? 0 } : null;
       tr.start = Math.max(0, launch);
       // A disappearing round without a hit/intercept continues ballistically.
       // Rounds still present at the live edge must not be labelled as misses.

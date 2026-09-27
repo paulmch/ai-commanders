@@ -4,7 +4,7 @@ import { trailLifeCap, focusFade, closeUpK } from './CloseRange.js';
 import { WeaponRibbons, WeaponFlashes, TorpedoBodies } from './WeaponBatches.js';
 import {
   WeaponTimeline, makeSample, sampleTrack, seedFor, tracerLength,
-  missOpacity, beamPulse, torpedoPower, ION_LIFE, IMPACT_LIFE, OWNED_MOMENTS
+  missOpacity, beamPulse, torpedoPower, ION_LIFE, IMPACT_LIFE, OWNED_MOMENTS, TWIN_BARREL_X
 } from './WeaponTimeline.js';
 import {
   RCS_LAYOUT, ENGINE, PULSE, JET_COUNT, attitudeAt, jetLevels, makePulses, pulsesAt, throttleAt
@@ -226,6 +226,12 @@ export class Projectiles {
       out.dir.set(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch));
       // mount > yaw (0, .2s, 0) > pitch (0, .32s, .15s) > barrel tip 1.4s
       out.pos.set(0.15 * s * Math.sin(yaw), 0.52 * s, 0.15 * s * Math.cos(yaw)).addScaledVector(out.dir, 1.4 * s);
+      // Twin turret: from the barrel that fired (recorded, else alternating)
+      if (rig.barrels?.length === 2) {
+        const bx = TWIN_BARREL_X[shot.barrel === 1 ? 1 : 0] * s;
+        out.pos.x += bx * Math.cos(yaw);
+        out.pos.z -= bx * Math.sin(yaw);
+      }
       out.pos.applyAxisAngle(Z, rz).add(rig.mount.position);
       out.dir.applyAxisAngle(Z, rz);
       out.yaw = yaw; out.pitch = pitch; out.rig = rig;
@@ -554,7 +560,7 @@ export class Projectiles {
         this.aim.applyQuaternion(this.q2);
         if (this.aim.lengthSq() < 1e-10) this.aim.copy(Z); else this.aim.normalize();
       }
-      mz = this.localMuzzle(ship, { slot: m.data.weapon_slot, index: m.slot, spinal: m.spinal }, this.aim,
+      mz = this.localMuzzle(ship, { slot: m.data.weapon_slot, index: m.slot, spinal: m.spinal, barrel: m.barrel }, this.aim,
         { pos: new THREE.Vector3(), dir: new THREE.Vector3() });
     }
     m.muzzleLocal = mz;

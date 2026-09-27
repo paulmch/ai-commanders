@@ -12,6 +12,7 @@ import { DamageFX } from './render/DamageFX.js';
 import { getGlowTexture } from './render/Textures.js';
 import { RcsSystem } from './render/Rcs.js';
 import { Projectiles } from './render/Projectiles.js';
+import { HeatFX } from './render/Heat.js';
 
 /**
  * SceneManager - owns the Three.js scene, camera, renderer and every
@@ -106,6 +107,7 @@ export class SceneManager {
       spawnBlast: (o) => this._spawnBlast({ ...o, category: 'destruction' })
     };
     this.rcs = new RcsSystem(this.fxCtx);   // RCS attitude jets (render/Rcs.js)
+    this.heat = new HeatFX(this);           // radiators + hull heat (render/Heat.js)
 
     this.weapons = new Projectiles(this);
     this._updatePixelWorld();
@@ -131,6 +133,7 @@ export class SceneManager {
     this.tracks?.dispose();
     this.weapons.dispose();
     this.rcs.dispose();
+    this.heat.dispose();
     this.damageFX.dispose();
     this.environment.dispose();
     this.postfx.dispose();
@@ -196,7 +199,12 @@ export class SceneManager {
     const ribbon = new Ribbon({ maxPoints: 4, width: 0.1, head: [1, 1, 1], core: 8, halo: 0.2, shimmer: 0.2 });
     ribbon.setPoints([far, far.clone().add(new THREE.Vector3(1, 0, 0)), far.clone().add(new THREE.Vector3(2, 0, 0))]);
     this.scene.add(ribbon.mesh);
+    const heatProbe = this.heat.warmUpProbe(far);
+    this.scene.add(heatProbe);
     this.renderer.compile(this.scene, this.camera);
+    this.scene.remove(heatProbe);
+    heatProbe.geometry.dispose();
+    heatProbe.material.dispose();
     blast.dispose();
     crater.dispose();
     this.scene.remove(torch.group);
@@ -322,6 +330,7 @@ export class SceneManager {
         ship.visible = false;
       }
       this._setDyingVents(ship, false);
+      this.heat.hide(ship);
       return;
     }
 
@@ -345,18 +354,8 @@ export class SceneManager {
       if (this.dyingPopTimes.has(shipId)) this.dyingPopTimes.delete(shipId);
     }
 
-    // Rigid exchangers rotate about their root hinges instead of shrinking.
-    const radMats = ud.radiatorMaterials || [];
-    const timeStep = this.currentTime - (ud.radiatorTime ?? this.currentTime);
-    const snap = ud.radiatorTime === undefined || timeStep < 0 || timeStep > 0.5;
-    const k = snap ? 1 : Math.min(1, dt * 2.5);
-    ud.radiatorTime = this.currentTime;
-    const glowTarget = state.radiatorsExtended ? 1.15 : 0.0;
-    for (const m of radMats) m.emissiveIntensity += (glowTarget - m.emissiveIntensity) * k;
-    for (const panel of ud.radiators || []) {
-      const angle = panel.userData.deployedAngle + (state.radiatorsExtended ? 0 : panel.userData.foldDirection * 1.42);
-      panel.rotation.z += (angle - panel.rotation.z) * k;
-    }
+    // Radiator deploy/glow and hull heat, on battle time (render/Heat.js)
+    this.heat.updateShip(ship, state);
 
     // Windows and accents: dim and flicker as the hull fails
     const mats = ud.materials;
@@ -416,10 +415,11 @@ export class SceneManager {
     const blast = new Blast(this.fxCtx, o);
     blast.category = o.category || 'hit';
     this.blasts.push(blast);
-    if (blast.fresh && (o.kind === 'reactor' || o.kind === 'warhead')) {
+    if (blast.fresh && (o.kind === 'reactor' || o.kind === 'warhead' || o.kind === 'meltdown')) {
       const d = this.camera.position.distanceTo(o.position);
-      const reach = o.scale * (o.kind === 'reactor' ? 45 : 18);
-      this.shake = Math.min(1.2, this.shake + Math.min(1, (reach / Math.max(d, 1)) ** 1.5) * (o.kind === 'reactor' ? 1 : 0.4));
+      const big = o.kind !== 'warhead';
+      const reach = o.scale * (big ? (o.kind === 'meltdown' ? 55 : 45) : 18);
+      this.shake = Math.min(1.2, this.shake + Math.min(1, (reach / Math.max(d, 1)) ** 1.5) * (big ? 1 : 0.4));
     }
     return blast;
   }
@@ -602,7 +602,8 @@ export class SceneManager {
     }
 
     const eff = new ShipDestruction(this.fxCtx, {
-      shipGroup, shipId, position, driftVel, driftDuration, scale, spawnTime
+      shipGroup, shipId, position, driftVel, driftDuration, scale, spawnTime,
+      meltdown: !!death.meltdown   // reactor_overheat: the brighter detonation variant
     });
     this.destructionEffects.push(eff);
     return eff;

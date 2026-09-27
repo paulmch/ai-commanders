@@ -94,14 +94,16 @@ export function secondsToGo(togo) {
 
 /**
  * Caption of the focused ship's checkpoint marker:
- * "T+25s ±180 m", "T+25s ±1.2 km · RUN", "T+3s · ORDERS PENDING".
+ * "T+25s ±180 m", "T+25s ±1.2 km · RUN", "T+3s · ORDERS PENDING",
+ * "T+25s · HEADING 60%" (a HEADING maneuver with its throttle).
  */
-export function formatCheckpointLabel({ togo, sigma = 0, stale = false, mode = null } = {}) {
+export function formatCheckpointLabel({ togo, sigma = 0, stale = false, mode = null, maneuver = null, throttle = null } = {}) {
   let s = `T+${secondsToGo(togo)}s`;
   const spread = formatSigma(sigma);
   if (spread) s += ` ${spread}`;
   if (stale) s += ' · ORDERS PENDING';
   else if (isReactiveMode(mode)) s += ` · ${mode.toUpperCase()}`;
+  else if (maneuver === 'HEADING') s += typeof throttle === 'number' && throttle >= 0 ? ` · HEADING ${Math.round(throttle * 100)}%` : ' · HEADING';
   return s;
 }
 
