@@ -283,7 +283,16 @@ class MCPController:
         summary_parts = [f"{count} {stype.title()}" for stype, count in type_counts.items()]
         fleet_summary = f"{len(friendly_ships)} ships: {', '.join(summary_parts)}"
 
+        # Range control: the same precomputed headings an LLM admiral sees.
+        from .range_control import mcp_range_control
+        own_ships = [simulation.get_ship(s["ship_id"]) for s in friendly_ships]
+        try:
+            range_control = mcp_range_control(simulation, [s for s in own_ships if s is not None])
+        except Exception:  # advisory only
+            range_control = {}
+
         return MCPBattleState(
+            range_control=range_control,
             timestamp=simulation.current_time,
             faction=self.faction,
             friendly_ships=friendly_ships,
@@ -859,10 +868,45 @@ class MCPController:
         return msg
 
 
+def expand_fleet_heading_commands(commands, simulation, faction):
+    """
+    set_maneuver HEADING with ship_id "all" (any range_control.FLEET_ALIASES
+    name) -> one HEADING per live own ship, throttle matched to the slowest
+    hull and a common burn start (range_control.formation_heading_maneuvers),
+    so the formation holds. Other commands pass through unchanged.
+    """
+    from .range_control import is_fleet_alias, formation_heading_maneuvers
+    out = []
+    for cmd in commands:
+        if (cmd.command_type == MCPCommandType.SET_MANEUVER and is_fleet_alias(cmd.ship_id)
+                and str(cmd.parameters.get("maneuver_type", "")).upper() == "HEADING"):
+            own = [s for s in simulation.get_ships_by_faction(faction)
+                   if not s.is_destroyed and not getattr(s, "is_dying", False)
+                   and not getattr(s, "is_surrendered", False)]
+            try:
+                maneuvers = formation_heading_maneuvers(
+                    simulation, own, cmd.parameters.get("heading_direction"),
+                    float(cmd.parameters.get("throttle", 1.0) or 0.0))
+            except (TypeError, ValueError):
+                out.append(cmd)  # rejected downstream with a clear error
+                continue
+            for sid, m in maneuvers.items():
+                out.append(MCPCommand(
+                    command_type=MCPCommandType.SET_MANEUVER, ship_id=sid,
+                    parameters={**cmd.parameters, "throttle": m.throttle,
+                                "heading_direction": m.heading_direction,
+                                "burn_start_time": m.burn_start_time, "formation": True},
+                    timestamp=cmd.timestamp))
+            continue
+        out.append(cmd)
+    return out
+
+
 def apply_mcp_commands_to_simulation(commands, simulation, faction):
     """Record human/MCP intent and route execution through the shared ledger."""
     from ..replay_evidence import json_value
     from ..simulation import SimulationEventType
+    commands = expand_fleet_heading_commands(commands, simulation, faction)
     recorder = getattr(simulation, 'recorder', None)
     if recorder:
         for sid in dict.fromkeys(c.ship_id for c in commands if c.ship_id):
@@ -947,6 +991,7 @@ def _apply_mcp_commands(
                         throttle=cmd.parameters.get("throttle", 1.0),
                         target_id=cmd.parameters.get("target_id"),
                         heading_direction=heading_direction,
+                        burn_start_time=cmd.parameters.get("burn_start_time"),
                     )
                     # Use inject_command for consistency with LLM captain flow
                     if not simulation.inject_command(cmd.ship_id, maneuver):

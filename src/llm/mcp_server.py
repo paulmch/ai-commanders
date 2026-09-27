@@ -525,13 +525,30 @@ def create_mcp_server(
             ),
             Tool(
                 name="set_maneuver",
-                description="Set ship maneuver (movement control). INTERCEPT: burn toward target. EVASIVE: random evasive pattern. BRAKE: flip and decelerate. MAINTAIN: coast at current velocity. PADLOCK: coast while tracking target with nose. HEADING: fly in specific 3D direction.",
+                description=(
+                    "Set ship maneuver (movement control). INTERCEPT: burn toward target "
+                    "(first approach / finishing a cripple only - it builds closure that ends "
+                    "in a merge). EVASIVE: threat-aware defense; with no threat it weaves "
+                    "around the CURRENT course (never chases, never brakes). BRAKE: burn "
+                    "against own velocity. MAINTAIN: coast. PADLOCK: coast with the nose "
+                    "tracking the target (spinal on him). HEADING: point along a world-frame "
+                    "direction, turn first, then burn at throttle (the drive thrusts along the "
+                    "nose); throttle 0 = attitude only (nose turns on RCS, zero velocity "
+                    "change). Range control = HEADING: get_battle_state.range_control lists "
+                    "ready-made headings per enemy group (cancel closure, open range, pass "
+                    "wide, flank). ship_id \"all\" with HEADING flies one heading as a "
+                    "formation: throttle is a fraction of the SLOWEST hull's acceleration, "
+                    "each hull scaled, burns start together."
+                ),
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "ship_id": {
                             "type": "string",
-                            "description": "ID of the ship",
+                            "description": (
+                                "ID of the ship, or \"all\" (HEADING only) for a "
+                                "formation-matched heading for the whole fleet"
+                            ),
                         },
                         "maneuver_type": {
                             "type": "string",
@@ -542,7 +559,10 @@ def create_mcp_server(
                             "type": "number",
                             "minimum": 0,
                             "maximum": 1,
-                            "description": "Throttle setting (0-1)",
+                            "description": (
+                                "Throttle setting (0-1). HEADING with 0 = attitude only "
+                                "(nose to the direction, coast, no burn)"
+                            ),
                         },
                         "target_id": {
                             "type": "string",
@@ -920,9 +940,15 @@ def create_mcp_server(
             )]
 
         elif name == "set_maneuver":
-            err = validate_ship_id(arguments.get("ship_id"))
+            from .range_control import is_fleet_alias
+            fleet_heading = (is_fleet_alias(arguments.get("ship_id"))
+                             and arguments.get("maneuver_type") == "HEADING")
+            err = None if fleet_heading else validate_ship_id(arguments.get("ship_id"))
             if err:
                 return [TextContent(type="text", text=f"ERROR: {err}")]
+            if fleet_heading and not arguments.get("heading_direction"):
+                return [TextContent(type="text", text=(
+                    "ERROR: ship_id 'all' needs maneuver_type HEADING with heading_direction"))]
             maneuver_type = arguments.get("maneuver_type")
             valid_maneuvers = ["INTERCEPT", "EVASIVE", "BRAKE", "MAINTAIN", "PADLOCK", "HEADING"]
             if maneuver_type not in valid_maneuvers:

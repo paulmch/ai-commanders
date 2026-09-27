@@ -609,7 +609,8 @@ class TestTraceEnricher:
             enricher.enrich(sim, entries)
         a = entries["a"]
         assert a["evade"] == "wobble"
-        assert a["tgt"] == "b"            # the nearest enemy it homes on
+        # A wobbling EVASIVE holds its own course: it homes on nobody.
+        assert a["tgt"] is None
         assert a["plan"]["sigma"] > 0.0
 
 

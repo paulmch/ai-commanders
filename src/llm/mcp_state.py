@@ -75,6 +75,11 @@ class MCPBattleState:
     # Pending draw proposal from enemy
     enemy_proposed_draw: bool = False
 
+    # Range control (src/llm/range_control.py): per enemy group closest
+    # approach, stopping distance, merge warning and ready-made world-frame
+    # headings for set_maneuver HEADING, plus formation throttles.
+    range_control: Dict[str, Any] = field(default_factory=dict)
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
@@ -89,6 +94,7 @@ class MCPBattleState:
             "is_battle_active": self.is_battle_active,
             "checkpoint_number": self.checkpoint_number,
             "enemy_proposed_draw": self.enemy_proposed_draw,
+            "range_control": self.range_control,
         }
 
 

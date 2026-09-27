@@ -1652,6 +1652,7 @@ class LLMBattleRunner:
         one captain's wall-clock instead of the fleet's sum. Order delivery
         and reporting stay sequential in fleet order.
         """
+        self._apply_admiral_headings(captain_entries, admiral_orders)
         for ship_id, captain, faction in captain_entries:
             captain.clear_admiral_context()
             if ship_id in admiral_orders:
@@ -1691,6 +1692,58 @@ class LLMBattleRunner:
                 self._record_captain_decision(ship_id, captain, commands)
         return all_commands
 
+    def _apply_admiral_headings(
+        self,
+        captain_entries: List[Tuple[str, LLMCaptain, str]],
+        admiral_orders: Dict[str, List[Any]],
+    ) -> None:
+        """
+        Fly admiral HEADING orders at once, before the captains decide.
+
+        A structured heading (issue_order heading/throttle) is a maneuver, not
+        advice: it is injected as the ship's HEADING and the captain sees it as
+        already applied (a captain maneuver still overrides it). Orders that
+        inherit an "all ships" heading are expanded together through
+        formation_heading_maneuvers: every hull's throttle is matched to the
+        slowest hull's acceleration and the burn starts when the slowest has
+        turned, so the formation holds.
+        """
+        from ..simulation import Maneuver, ManeuverType
+        from .range_control import formation_heading_maneuvers
+
+        formations: Dict[Tuple[Any, ...], List[Tuple[Any, Any]]] = {}
+        for ship_id, _captain, faction in captain_entries:
+            orders = [o for o in admiral_orders.get(ship_id, [])
+                      if isinstance(getattr(o, "heading", None), dict)]
+            ship = self.simulation.get_ship(ship_id)
+            if not orders or ship is None:
+                continue
+            order = orders[-1]
+            throttle = 1.0 if order.throttle is None else float(order.throttle)
+            if getattr(order, "formation", False) is True:
+                key = (faction, tuple(round(float(order.heading.get(k, 0.0)), 6) for k in "xyz"),
+                       round(throttle, 6))
+                formations.setdefault(key, []).append((ship, order))
+                continue
+            maneuver = Maneuver(
+                maneuver_type=ManeuverType.HEADING,
+                start_time=self.simulation.current_time,
+                duration=getattr(self.simulation, "decision_interval", 30.0),
+                throttle=throttle,
+                heading_direction=dict(order.heading),
+            )
+            if self.simulation.inject_command(ship_id, maneuver):
+                order.applied_throttle = throttle
+
+        for (_faction, _h, throttle), members in formations.items():
+            ships = [ship for ship, _ in members]
+            maneuvers = formation_heading_maneuvers(
+                self.simulation, ships, members[0][1].heading, throttle)
+            for ship, order in members:
+                maneuver = maneuvers.get(ship.ship_id)
+                if maneuver is not None and self.simulation.inject_command(ship.ship_id, maneuver):
+                    order.applied_throttle = maneuver.throttle
+
     def _ships_meta(self) -> Dict[str, Dict[str, str]]:
         """ship_id -> {name, type, faction} for the tactical renderer."""
         meta: Dict[str, Dict[str, str]] = {}
@@ -1724,9 +1777,19 @@ class LLMBattleRunner:
         self._report_admiral_plan_update(admiral, decision, faction)
         for order in decision.fleet_orders:
             sid = self._find_ship_id_by_name(order.target_ship_id, faction) or order.target_ship_id
+            extra = {}
+            if isinstance(getattr(order, "heading", None), dict):
+                extra = {"heading": order.heading, "throttle": order.throttle,
+                         "formation": bool(getattr(order, "formation", False))}
             self.recorder.record_admiral_order(self.simulation.current_time, admiral.name, sid,
                 order.target_ship_id, order.order_text, order.priority, order.suggested_target,
-                torpedo_target=getattr(order, "torpedo_target", None), torpedo_salvo=getattr(order, "torpedo_salvo", None))
+                torpedo_target=getattr(order, "torpedo_target", None), torpedo_salvo=getattr(order, "torpedo_salvo", None),
+                **extra)
+        fleet_heading = getattr(decision, "fleet_heading", None)
+        if isinstance(getattr(fleet_heading, "heading", None), dict):
+            self.recorder.record_admiral_order(self.simulation.current_time, admiral.name, "all ships",
+                "all ships", fleet_heading.order_text, fleet_heading.priority, None,
+                heading=fleet_heading.heading, throttle=fleet_heading.throttle, formation=True)
 
     def _report_admiral_plan_update(
         self,
@@ -2199,6 +2262,13 @@ class LLMBattleRunner:
                 if not target_id:
                     target_id = cmd.target_id
                 break
+        else:
+            # No maneuver of its own: an admiral HEADING order applied this
+            # checkpoint is what the ship flies.
+            current = ship.current_maneuver
+            if current is not None and current.start_time == self.simulation.current_time:
+                maneuver_type = current.maneuver_type.name
+                throttle = current.throttle
 
         # Get target name
         if target_id:

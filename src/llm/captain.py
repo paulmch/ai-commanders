@@ -378,6 +378,14 @@ class LLMCaptain:
         if len(prompt_messages) > 1:
             turn_parts.append(prompt_messages[1]["content"])
 
+        # Range control: closest approach, stopping distance, merge warning and
+        # ready-made world-frame headings (cancel closure / open range / pass
+        # wide / flank / coast & shoot) - the vector math done for the captain.
+        from .range_control import captain_range_control
+        range_text = captain_range_control(simulation, ship)
+        if range_text:
+            turn_parts.append(range_text)
+
         # Torpedo threats / magazine. _build_tactical_status has always computed
         # `torpedo_threats`, but nothing ever rendered it, so a captain was never
         # told a torpedo was inbound, and the remaining torpedo count (the ship's
