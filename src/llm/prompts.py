@@ -882,25 +882,46 @@ You are Captain {captain_name}, commanding {ship_name} in a space combat simulat
 === CONTROLS ===
 
 MANEUVERS:
-- INTERCEPT: THRUST toward target - actively closes distance, builds velocity toward enemy
+- INTERCEPT: burn straight at the target. Only for the first approach from far out or to
+  finish a cripple - it builds closure you cannot take back (see RANGE CONTROL below).
 - EVADE: Threat-aware defense, BEST during active combat. Versus gun rounds it jinks
   (hard to hit). Versus guided torpedoes it automatically RUNS (burns away from the
   round to cut closure and buy your PD dwell time) and in the final seconds
   automatically PRESENTS your thickest armor to the impact. Only EVADE does this -
   any other maneuver takes torpedoes, including blinded ones, without reacting.
-- BRAKE: Slow down - use when closing too fast (>3 km/s relative)
+  With no threat it weaves around your CURRENT course: it never chases, but it
+  never brakes either - EVADE does not stop a merge.
+- BRAKE: burn against your own (world-frame) velocity - not against the enemy's
 - MAINTAIN: Coast - no thrust, no rotation, pure drift
-- PADLOCK: ROTATE ONLY, NO THRUST - keeps nose pointed at target but does NOT move toward it!
-           Use PADLOCK for tracking/firing while coasting. You will NOT close distance!
-- set_heading: Fly specific direction - for angled approaches, flanking, disengaging
+- PADLOCK: coast with the nose tracking the target (spinal on him). NO closing thrust;
+  the drive idles at 5% only while turning, for fast thrust-vectored turns.
+- set_heading(direction, throttle): point the ship along a WORLD-frame direction. It
+  turns onto the heading first, then burns (the drive thrusts along the NOSE).
+  throttle 0 = ATTITUDE ONLY: the nose turns on RCS and you coast with zero change of
+  velocity (e.g. spinal on a fixed bearing) - RCS turns are slow, see your turn times.
   NOTE ON FRAMES: set_heading takes a WORLD-frame direction vector (x, y, z world axes),
   NOT a ship-relative one. Enemy bearings printed as ahead/starboard/above are relative
   to YOUR NOSE; the "Nose pointing" vector above tells you how the two frames line up.
 
-*** CRITICAL: PADLOCK vs INTERCEPT ***
-PADLOCK @ 70% = Rotate to track target, NO closing thrust. You stay on current trajectory!
-INTERCEPT @ 70% = Thrust TOWARD target at 70% throttle. You actively close distance!
-To CLOSE RANGE: use INTERCEPT or set_heading with vector toward enemy. PADLOCK will NOT close!
+=== RANGE CONTROL (Newtonian - read this) ===
+- There are no brakes, only burns. Stopping a closure takes v^2/(2a) of room plus the
+  flip: at 4.6 km/s closure a 3g corvette needs 156 s / 359 km (+18 s to flip), a 1g
+  battleship 469 s / 1078 km (+55 s). By the time the enemy "looks close" the merge is
+  locked in: a pass at a few km, seconds of fire, then flying apart.
+- INTERCEPT only for the first approach or finishing a cripple. For EVERYTHING that
+  involves range - approach angle, holding range, kiting, avoiding a merge, flanking -
+  use set_heading with a vector from RANGE CONTROL in your tactical data:
+    cancel closure    burn against the relative velocity - range holds where it stops
+    open range        burn straight away from the enemy group
+    pass wide         burn across the line of sight - a merge becomes a wide pass
+    flank left/right  move across his line of fire
+  Each line gives the burn time, the effect, and which way your NOSE points meanwhile.
+  Renew the same heading each checkpoint until the stated burn time is used up.
+- "!! MERGE IN ..." means act THIS checkpoint; if braking is too late, pass wide.
+- RHYTHM: burn phases and shooting phases alternate. Burning for range points the nose
+  along the heading - cancel closure = TAIL to the enemy: thin tail armor exposed,
+  spinal masked, turrets only if he is inside their arc. Then coast and shoot: PADLOCK
+  (or set_heading toward him at throttle 0) swings nose armor and spinal back on him.
 
 === TACTICAL OPTIONS (pick your style) ===
 
@@ -912,21 +933,21 @@ OPTION A - HEAD-ON CHARGE:
   Cons: Short engagement window, hard to hit at high relative velocity, wastes fuel
 
 OPTION B - CONTROLLED PASSES (recommended for accuracy):
-  1. INTERCEPT or set_heading to approach (you must thrust to close distance!)
-  2. PADLOCK when in range - coast while tracking, fire spinal during the pass
-     (PADLOCK only rotates to track - you coast on momentum, no thrust toward target)
-  3. After pass: BRAKE to kill velocity, set up another pass
+  1. Approach (INTERCEPT from far out, or set_heading for your approach angle)
+  2. Before you are committed: cancel closure (or pass wide) so the pass is slow or wide
+  3. Coast and shoot: PADLOCK - spinal and nose armor on him during the pass
   Pros: Better hit probability, more sustained fire, fuel efficient
   Cons: Takes longer to close, requires planning
 
 OPTION C - EVADE AND SHOOT:
-  EVADE constantly - random thrust makes you unpredictable
+  EVADE constantly - random thrust makes you unpredictable (holds your course)
   Pros: Very hard to hit, fires continuously
-  Cons: Burns fuel faster, harder to line up spinal shots
+  Cons: Burns fuel faster, harder to line up spinal shots, does not control range
 
-OPTION D - RANGE CONTROL:
-  Use set_heading to maintain preferred range (e.g., 100-200km)
-  BRAKE if closing too fast, INTERCEPT if separating
+OPTION D - HOLD RANGE / KITE:
+  cancel closure at your chosen range, then alternate coast-and-shoot with short
+  range-correcting burns (set_heading from RANGE CONTROL). A faster hull can hold
+  range on a slower one indefinitely.
   Pros: Controls engagement tempo, picks your range
   Cons: Requires more active management
 
@@ -994,6 +1015,9 @@ OTHER:
 *** EXECUTE YOUR ORDERS WITH THE AVAILABLE TOOLS ***
 - Renew set_maneuver or set_heading each checkpoint to keep maneuvering.
   When a maneuver expires, thrust stops; you coast with your existing momentum.
+  Exception: a HEADING ORDER from your admiral is already applied to your ship -
+  calling set_maneuver/set_heading REPLACES it (and breaks formation). Only override
+  it for a reason (e.g. EVADE an inbound torpedo).
 - set_primary_target changes the target followed by persistent gun orders.
 - On gun ships, set_weapons_order sets firing policy; it persists until changed.
 - Guns fire salvos one slug at a time; the hit-probability gate and firing arc
@@ -1410,6 +1434,8 @@ def format_current_config(
         elif maneuver_type == "EVASIVE" and evasion_status:
             mode = evasion_status.get("mode", "WOBBLE")
             lines.append(f"  Current maneuver: {maneuver_type} @ {throttle_pct}% throttle")
+            if mode == "WOBBLE":
+                mode = "WOBBLE (no threat: weaving around your current course - not braking)"
             lines.append(f"    Evasion mode: {mode}")
         else:
             lines.append(f"  Current maneuver: {maneuver_type} @ {throttle_pct}% throttle")
@@ -1731,17 +1757,37 @@ They can discuss with you (up to 2 exchanges) before finalizing.
 === TACTICAL COMMAND REFERENCE ===
 
 MANEUVERS (tell captains which to use):
-- INTERCEPT: THRUST toward target - actively closes distance, builds velocity toward enemy
-- EVADE: Evasive thrust while fighting - BEST during active combat!
-- BRAKE: Slow down - use when closing too fast (>3 km/s relative)
+- INTERCEPT: burn straight at the target - only for the first approach or finishing a cripple
+- EVADE: Threat-aware defense - jinks vs guns, RUNS/PRESENTS vs torpedoes. With no threat
+  it weaves around the ship's CURRENT course: it never chases and never brakes, so an
+  EVADE order does not stop a merge.
+- BRAKE: burn against the ship's own (world-frame) velocity
 - MAINTAIN: Coast at current velocity - no thrust, no rotation
-- PADLOCK: ROTATE ONLY, NO THRUST - keeps nose on target but does NOT close distance!
-- set_heading: Fly specific direction - for angled approaches, flanking
+- PADLOCK: coast with the nose tracking the target (spinal on him), NO closing thrust
+- HEADING (issue_order heading={{x,y,z}}, throttle): fly a WORLD-frame direction - the ship
+  turns onto it, then burns (the drive thrusts along the NOSE). throttle 0 = attitude only
+  (nose turns, no burn, e.g. spinals back on the enemy). Applied directly to the ship.
 
-*** CRITICAL: PADLOCK vs INTERCEPT ***
-PADLOCK @ 70% = Rotate to track, NO thrust toward target. Ship stays on current trajectory!
-INTERCEPT @ 70% = Thrust TOWARD target at 70%. Ship actively closes distance!
-To CLOSE RANGE: order INTERCEPT or set_heading with vector toward enemy. PADLOCK will NOT close!
+=== RANGE CONTROL (Newtonian - your most important lever) ===
+- No brakes, only burns. Stopping a closure takes v^2/(2a) of room plus the flip: at
+  4.6 km/s closure a 3g corvette needs 156 s / 359 km (+18 s flip), a 1g battleship
+  469 s / 1078 km (+55 s). Fleets that "look close" are already committed to a merge -
+  both sides fly through each other in seconds and nothing meaningful happens after.
+- INTERCEPT only for the first approach or finishing a cripple. Use HEADING for
+  everything involving range: approach angle, holding range, kiting, avoiding merges,
+  flanking. RANGE CONTROL in the fleet situation lists ready-made world-frame headings
+  per enemy group (cancel closure, open range, pass wide, flank left/right) with the
+  burn time, the effect, and which way the NOSE points meanwhile. Renew each checkpoint
+  until the stated burn time is used up. "!! MERGE IN ..." = act THIS checkpoint.
+- FORMATION: one heading for the whole fleet = issue_order(ship_name="all ships",
+  heading=..., throttle=...) on the directive call. Each hull's throttle is scaled to the
+  SLOWEST hull's acceleration and the burn starts when the slowest has turned, so the
+  formation (and its overlapping PD) holds. Per-ship orders inherit it unless they set
+  their own heading.
+- RHYTHM: burn phases and shooting phases alternate. Burning for range points the nose
+  along the heading (cancel closure = TAILS to the enemy: thin tail armor, spinals
+  masked). Then coast and shoot: PADLOCK or HEADING toward the enemy at throttle 0 puts
+  nose armor and spinals back on him.
 
 === FLEET TACTICAL OPTIONS ===
 
@@ -1753,16 +1799,15 @@ OPTION A - MASS CHARGE:
   Cons: Brief engagement window, ships scatter after pass
 
 OPTION B - CONTROLLED FORMATION PASSES (recommended):
-  1. Order INTERCEPT or set_heading to approach (must thrust to close distance!)
+  1. Approach as a formation ("all ships" heading, or INTERCEPT from far out)
   2. Keep ships together for overlapping point defense coverage
-  3. PADLOCK during passes - coast and track for sustained spinal fire
-     (PADLOCK only rotates - ships coast on momentum, no thrust toward target)
-  4. After pass: BRAKE, reform, set up another pass
+  3. Before you are committed: cancel closure (or pass wide) as a formation
+  4. Coast and shoot: PADLOCK - spinals and nose armor on target during the pass
   Pros: Better accuracy, mutual PD support, sustained damage
   Cons: Requires coordination, takes longer
 
 OPTION C - HAMMER AND ANVIL:
-  Heavy ships hold range (EVADE or MAINTAIN), lighter ships flank
+  Heavy ships hold range (cancel-closure HEADING), lighter ships flank (flank HEADING)
   Pin enemy between groups, crossfire from multiple angles
   Pros: Divides enemy attention, creates flanking opportunities
   Cons: Complex coordination, risks defeat in detail if separated
@@ -1828,7 +1873,7 @@ Enemy ships in FLANKING positions can hit your ships on the LATERAL (side) - eas
 - Cross-section: Nose-on = tiny target, Lateral = huge target (5-10x easier to hit)
 - Your job: Position the fleet so enemies are always in FRONT of your ships
 - Watch for enemy flanking maneuvers (ships trying to get perpendicular angles)
-- If an enemy is flanking: order affected ships to reorient (INTERCEPT or PADLOCK toward them)
+- If an enemy is flanking: order affected ships to reorient (PADLOCK toward them)
 - Multi-ship coordination: If enemy splits, assign ships to cover each threat vector
 Preventing flanking is tactical positioning - captains execute, YOU direct!
 
@@ -1847,6 +1892,8 @@ To ACTUALLY maintain formation:
   - Example: Destroyer matching dreadnought = (0.75/2.0) = 37% throttle
 
 Quick math: throttle_for_fast_ship = (slow_ship_g / fast_ship_g) × 100%
+The "all ships" heading order does this math for you (and syncs the burn start);
+RANGE CONTROL lists the matched throttle per hull.
 
 If you DON'T care about formation (valid strategies):
   - Faster ships engage first as vanguard, heavies follow
@@ -1933,6 +1980,8 @@ You see the battle at two points in time to analyze trajectories and momentum.
 
 === ENEMY FLEET STATUS (OBSERVABLE) ===
 {enemy_fleet_status}
+
+{range_control}
 
 === PROJECTILES IN FLIGHT ===
 {projectile_info}
@@ -2039,6 +2088,12 @@ def _generate_ship_class_stats(snapshot: Any, fleet_data: Dict[str, Any]) -> str
         lines.append(f"- {ship_type.title()}: {accel}g ({maneuver}), {delta_v} km/s delta-v, {weapons_str}")
 
     return "\n".join(lines) if lines else "- Check FLEET CAPABILITIES section for ship stats"
+
+
+def _text_attr(obj: Any, name: str) -> str:
+    """A string attribute of a snapshot-like object, "" when absent/not text."""
+    value = getattr(obj, name, "") if obj is not None else ""
+    return value if isinstance(value, str) else ""
 
 
 def build_admiral_prompt(
@@ -2177,8 +2232,12 @@ Call set_fleet_directive with the overall strategy for your {num_ships} ships:
 {ship_order_checklist}
 
 Individual ship orders are requested in a SEPARATE call immediately after this one,
-one ship at a time. Do NOT call issue_order now - orders issued on this call are
-discarded. Make the directive concrete enough that the per-ship orders follow from it.
+one ship at a time. Do NOT call issue_order now for individual ships - those orders
+are discarded. The ONE order this call accepts is a fleet-wide formation heading:
+issue_order(ship_name="all ships", order_text=..., heading={{x,y,z}}, throttle=T) -
+every ship flies it (throttle scaled per hull to your slowest ship, burns start
+together) unless its own order sets another heading. Make the directive concrete
+enough that the per-ship orders follow from it.
 
 Ships are shown as: NAME [ID] (e.g., "OCS Gemini-1 [beta_1]")
 You can use EITHER the name OR the ID when naming ships or targets.
@@ -2277,6 +2336,7 @@ Fire spinal when aligned, turrets continuous fire. Stay mobile - don't be a sitt
         change_analysis=change_analysis,
         friendly_fleet_status=friendly_status,
         enemy_fleet_status=enemy_status,
+        range_control=_text_attr(snapshot_t_zero, "range_control"),
         projectile_info=projectile_info,
         communications_section=communications_section,
         enemy_admiral_note=enemy_admiral_note,
@@ -2345,6 +2405,7 @@ def build_admiral_ship_order_prompt(
     snapshot: Any,
     personality: Optional[str] = None,
     standing_plan: Optional[str] = None,
+    fleet_heading: Any = None,
 ) -> str:
     """
     Build prompt for Admiral to issue order to a specific ship.
@@ -2397,6 +2458,18 @@ SHIP STATUS - {ship_name}:
         f"\nYOUR STANDING BATTLE PLAN (keep this order consistent with it):\n\"{standing_plan}\"\n"
         if standing_plan else ""
     )
+    range_block = _text_attr(snapshot, "range_control")
+    fleet_heading_line = ""
+    heading = getattr(fleet_heading, "heading", None)
+    if isinstance(heading, dict):
+        thr = getattr(fleet_heading, "throttle", 1.0)
+        thr = 1.0 if thr is None else thr
+        fleet_heading_line = (
+            f"\nFLEET HEADING IN FORCE (your \"all ships\" order): "
+            f"({heading.get('x', 0):+.2f},{heading.get('y', 0):+.2f},{heading.get('z', 0):+.2f}) "
+            f"at {thr * 100:.0f}% of the slowest hull. {ship_name} flies it (throttle scaled "
+            f"to hold formation) unless you give it its own heading now.\n"
+        )
 
     return f"""You are {admiral_name}, commanding a fleet in space combat.
 {plan_line}
@@ -2407,25 +2480,29 @@ Now you must issue a specific tactical order to {ship_name}.
 {ship_info}
 
 {enemy_summary}
-{personality_line}
+{range_block}
+{fleet_heading_line}{personality_line}
 
 You MUST call the issue_order tool with:
 - ship_name: "{ship_name}"
 - order_text: Specific tactical instructions for this ship
 - priority: CRITICAL, HIGH, NORMAL, or LOW
 - suggested_target: (optional) Recommended enemy ship name
+- heading + throttle: (optional) a WORLD-frame {{x,y,z}} from RANGE CONTROL, applied to the
+  ship at once (throttle 0 = attitude only: nose onto the heading, no burn)
 
 Your order should:
 1. Be consistent with your fleet directive
-2. Specify a maneuver (INTERCEPT, PADLOCK, EVASIVE, HEADING)
+2. Specify a maneuver (HEADING, PADLOCK, EVASIVE, INTERCEPT)
 3. Specify throttle level (e.g., "70% throttle")
 4. Specify target assignment
 5. Include any special weapon instructions
 
-*** CRITICAL: PADLOCK vs INTERCEPT ***
-- PADLOCK = ROTATE ONLY, NO THRUST. Ship keeps nose on target but does NOT close distance!
-- INTERCEPT = THRUST toward target. Ship actively closes distance!
-To CLOSE RANGE: order INTERCEPT or set_heading with vector toward enemy. PADLOCK will NOT close!
+*** RANGE IS CONTROLLED WITH HEADINGS ***
+- INTERCEPT only for the first approach or finishing a cripple - it builds closure that
+  ends in a merge. To hold range, kite, pass wide or flank: a HEADING from RANGE CONTROL.
+- PADLOCK = nose on target, NO thrust: the coast-and-shoot phase between burns.
+- EVASIVE holds the current course (dodges fire, never brakes, never chases).
 
 CALL issue_order NOW for {ship_name}."""
 
@@ -2666,6 +2743,23 @@ def format_admiral_orders_for_captain(
                     f"      >>> COORDINATED SALVO: launch {salvo} torpedo(es){at} "
                     f"THIS CHECKPOINT, timed with the rest of the fleet. Do not hold."
                 )
+            heading = getattr(order, "heading", None)
+            if isinstance(heading, dict):
+                thr = getattr(order, "applied_throttle", None)
+                if thr is None:
+                    thr = getattr(order, "throttle", None)
+                thr = 1.0 if thr is None else thr
+                formation = (" [FORMATION: throttle matched to the slowest hull, burn "
+                             "starts with the fleet]" if getattr(order, "formation", False) else "")
+                what = ("attitude only - nose onto it, no burn" if thr <= 0
+                        else f"at {thr * 100:.0f}% throttle")
+                lines.append(
+                    f"      >>> HEADING ORDER (ALREADY APPLIED to your ship): "
+                    f"({heading.get('x', 0):+.2f},{heading.get('y', 0):+.2f},"
+                    f"{heading.get('z', 0):+.2f}) {what}{formation}. Keep it: calling "
+                    f"set_maneuver/set_heading replaces it. Override only for a reason "
+                    f"(e.g. EVADE an inbound torpedo)."
+                )
     else:
         lines.append("\n!!! WARNING: NO ORDERS RECEIVED FOR YOUR SHIP !!!")
         lines.append("Your Admiral may have forgotten to issue you orders.")
@@ -2692,14 +2786,22 @@ def format_admiral_orders_for_captain(
     lines.append("respond_to_orders = WORDS ONLY (tells Admiral your intent)")
     lines.append("set_maneuver = ACTUAL MOVEMENT (makes ship move)")
     lines.append("")
+    heading_applied = any(isinstance(getattr(o, "heading", None), dict) for o in orders or [])
     lines.append("YOU MUST CALL BOTH:")
     lines.append("  1. respond_to_orders (acknowledge/deviate)")
-    lines.append("  2. set_maneuver (EVADE/INTERCEPT/etc)")
+    if heading_applied:
+        lines.append("  2. NO set_maneuver/set_heading: your HEADING ORDER is already flying")
+        lines.append("     (call one ONLY to deviate, e.g. EVADE an inbound torpedo)")
+    else:
+        lines.append("  2. set_maneuver (EVADE/INTERCEPT/etc)")
     lines.append("  3. set_primary_target (who to aim at)")
     lines.append("  4. set_weapons_order (how to fire)")
     lines.append("")
-    lines.append("If you ONLY call respond_to_orders -> your ship DRIFTS and DIES")
-    lines.append("Saying 'I will evade' is NOT the same as calling set_maneuver!")
+    if heading_applied:
+        lines.append("Acknowledging keeps the admiral's heading; a maneuver call replaces it.")
+    else:
+        lines.append("If you ONLY call respond_to_orders -> your ship DRIFTS and DIES")
+        lines.append("Saying 'I will evade' is NOT the same as calling set_maneuver!")
     lines.append("")
     lines.append("NOTE: Only your Admiral can propose draws.")
     lines.append("=" * 60)

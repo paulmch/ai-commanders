@@ -831,3 +831,60 @@ class TestHeatDoctrine:
                 in text)
         assert f"~{nums['pd_heat_mw']:.0f} MW hull heat per firing turret" in text
         assert "100% in" in text and "retracted" in text  # fleet-table outlook
+
+
+class TestRangeControlDoctrine:
+    """
+    Guards the Newtonian RANGE CONTROL doctrine (captain + admiral): the
+    stopping example taken from the Sonnet-5 vs DeepSeek merge (4.6 km/s
+    closure), the flip times quoted next to it, and PADLOCK's token burn.
+    """
+
+    CLOSURE_MPS = 4600.0
+    # (hull, stop seconds, stop km, 180-degree thrust-vectored flip seconds)
+    QUOTED = (("corvette", 156, 359, 18), ("battleship", 469, 1078, 55))
+
+    def test_stopping_example_matches_hull_acceleration(self, fleet):
+        from src.physics import G_STANDARD
+        from src.llm.range_control import stopping
+        for stype, secs, km, _ in self.QUOTED:
+            accel = fleet["ships"][stype]["performance"]["combat_acceleration_g"] * G_STANDARD
+            t, d = stopping(self.CLOSURE_MPS, accel)
+            assert round(t) == secs, stype
+            assert int(d / 1000.0) == km, stype
+
+    def test_engine_hulls_brake_as_quoted(self, fleet):
+        """The live ships (thrust/mass) agree with the class figures."""
+        from src.llm.range_control import ship_accel_ms2, stopping
+        for stype, secs, km, _ in self.QUOTED:
+            ship = create_ship_from_fleet_data("s", stype, "alpha", fleet,
+                                               position=Vector3D(0, 0, 0))
+            t, d = stopping(self.CLOSURE_MPS, ship_accel_ms2(ship))
+            assert t == pytest.approx(secs, abs=1.0), stype
+            assert d / 1000.0 == pytest.approx(km, abs=1.5), stype
+
+    def test_flip_times_match_the_turn_estimator(self, fleet):
+        sim = CombatSimulation(seed=1)
+        for stype, _, _, flip in self.QUOTED:
+            ship = create_ship_from_fleet_data("s", stype, "alpha", fleet,
+                                               position=Vector3D(0, 0, 0))
+            assert round(sim._estimate_turn_time(ship, math.pi, engines_on=True)) == flip
+
+    def test_both_doctrines_quote_the_example(self):
+        for doctrine in (CAPTAIN_DOCTRINE, ADMIRAL_DOCTRINE):
+            text = " ".join(doctrine.split())
+            assert "at 4.6 km/s closure a 3g corvette needs 156 s / 359 km (+18 s" in text
+            assert "1g battleship 469 s / 1078 km (+55 s)" in text
+
+    def test_padlock_idles_the_drive_at_5_percent_only_while_turning(self, fleet):
+        assert "the drive idles at 5% only while turning" in " ".join(CAPTAIN_DOCTRINE.split())
+        sim = CombatSimulation(seed=1, time_step=1.0)
+        me = _build(sim, "me", "corvette", "alpha", fleet, 0, 0, 1)
+        _build(sim, "foe", "corvette", "beta", fleet, 0, 0, -1)
+        sim.ships["foe"].kinematic_state.position = Vector3D(0, 300_000, 0)
+        me.current_maneuver = Maneuver(ManeuverType.PADLOCK, start_time=0.0, target_id="foe")
+        sim._update_ship(me, 1.0)
+        assert me.applied_throttle == pytest.approx(0.05)
+        for _ in range(40):
+            sim._update_ship(me, 1.0)
+        assert me.applied_throttle == 0.0

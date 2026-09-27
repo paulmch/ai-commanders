@@ -23,9 +23,10 @@ Evasion is continued where it is deterministic:
   ballistically as threats; rounds fired later cannot be foreseen.
 * RUN / PRESENT react to guided torpedoes; the shadow flies copies of the
   torpedoes in flight with the real guidance law (no PD, no hit roll).
-* WOBBLE (no dangerous threat) jitters the aim with ``sim.rng.gauss`` every
-  tick - genuinely random. The shadow flies the NOMINAL command (zero
-  wobble) and estimates the 1-sigma dispersion of the checkpoint position
+* WOBBLE (no dangerous threat) holds the ship's own course with a weave
+  keyed on (seed, ship, 8 s cycle) - reproduced exactly - and jitters the
+  aim with ``sim.rng.gauss`` every tick - genuinely random. The shadow flies
+  the NOMINAL command (zero jitter) and estimates the 1-sigma dispersion of the checkpoint position
   from a small Monte Carlo of the one-axis rotation controller chasing the
   jittered aim (:func:`wobble_sigma_m`).
 * What the shadow cannot foresee (rounds fired later, torpedo launches, PD
@@ -673,8 +674,8 @@ class TraceEnricher:
       evade  None | "wobble" | "evade" | "tank" | "brace" | "run" | "present"
              - active mode of an EVASIVE maneuver.
       tgt    ship id the maneuver steers relative to (INTERCEPT / PADLOCK
-             target; for a wobbling EVASIVE without one, the nearest enemy
-             it homes on), else None.
+             target, or an explicitly assigned one), else None. A wobbling
+             EVASIVE holds its own course and homes on nobody.
       plan   see predict_plans(); omitted for dying ships and when
              prediction is disabled. A frame taken AT a checkpoint is
              recorded before that checkpoint's orders exist: its plan
@@ -748,10 +749,8 @@ class TraceEnricher:
                 if maneuver.maneuver_type == ManeuverType.EVASIVE:
                     mode = getattr(ship, "execution_mode", None)
                     evade = mode.lower() if isinstance(mode, str) else None
-                    if tgt is None and mode == "WOBBLE":
-                        enemies = sim.get_enemy_ships(sid)
-                        if enemies:
-                            tgt = min(enemies, key=lambda e: ship.distance_to(e)).ship_id
+                    # A wobbling EVASIVE holds its own course: it no longer
+                    # homes on the nearest enemy, so it has no implicit tgt.
 
             entry["acc"] = _vec(acc, 3)
             entry["omega"] = _vec(omega, 5)

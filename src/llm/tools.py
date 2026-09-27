@@ -33,14 +33,19 @@ CAPTAIN_TOOLS_BASE = [
                         "type": "string",
                         "enum": ["INTERCEPT", "EVADE", "BRAKE", "MAINTAIN", "PADLOCK"],
                         "description": (
-                            "INTERCEPT: Burn toward target - for approach only, not combat! "
+                            "INTERCEPT: Burn toward target - first approach or finishing a "
+                            "cripple only; it builds closure that ends in a merge. "
                             "EVADE: Threat-aware defense - jinks vs gun fire; vs guided "
                             "torpedoes auto-RUNS (cuts closure, buys PD dwell) and in the "
                             "final seconds auto-PRESENTS your thickest armor. The ONLY "
                             "maneuver that dodges blinded torpedoes - use it under torpedo fire. "
-                            "BRAKE: Flip and burn to slow down - use when closing too fast. "
+                            "With no threat it weaves around your CURRENT course: never "
+                            "chases, never brakes. "
+                            "BRAKE: Flip and burn against your own velocity. "
                             "MAINTAIN: Coast at current velocity - no thrust, no tracking. "
-                            "PADLOCK: Coast while tracking target with nose - fire spinal during passes."
+                            "PADLOCK: Coast while tracking target with nose - fire spinal during "
+                            "passes (no closing thrust). To control RANGE use set_heading with a "
+                            "vector from RANGE CONTROL."
                         )
                     },
                     "throttle": {
@@ -180,7 +185,14 @@ CAPTAIN_TOOLS_BASE = [
         "type": "function",
         "function": {
             "name": "set_heading",
-            "description": "Set a course in a specific 3D direction. Use for custom positioning, flanking, or disengaging.",
+            "description": (
+                "Point the ship along a WORLD-frame direction. With throttle > 0 it turns "
+                "onto the heading first, then burns (the drive thrusts along the NOSE): "
+                "range control - cancel closure, open range, pass wide, flank (ready-made "
+                "vectors in RANGE CONTROL). With throttle 0 it is ATTITUDE ONLY: the nose "
+                "turns onto the direction on RCS and you coast with zero change of velocity "
+                "(e.g. spinal on the enemy; PADLOCK tracks a moving target and turns faster)."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -212,7 +224,10 @@ CAPTAIN_TOOLS_BASE = [
                         "type": "number",
                         "minimum": 0.0,
                         "maximum": 1.0,
-                        "description": "Throttle level (0.0-1.0)"
+                        "description": (
+                            "Throttle level (0.0-1.0). 0 = attitude only: turn the nose, "
+                            "no burn, velocity unchanged."
+                        )
                     }
                 },
                 "required": ["direction", "throttle"]

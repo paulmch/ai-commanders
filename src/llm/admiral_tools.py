@@ -75,6 +75,37 @@ ADMIRAL_TOOLS = [
                             "aimed at, if different from suggested_target. Concentrating a "
                             "fleet-wide salvo on one hull is how you overwhelm point defense."
                         )
+                    },
+                    "heading": {
+                        "type": "object",
+                        "description": (
+                            "Optional: WORLD-frame direction {x, y, z} this ship flies this "
+                            "checkpoint - applied at once as its HEADING maneuver (the "
+                            "captain may still override). The drive thrusts along the NOSE, "
+                            "so the ship turns onto the heading first, then burns. Copy a "
+                            "vector from RANGE CONTROL (cancel closure / open range / pass "
+                            "wide / flank). With ship_name \"all ships\" ONE heading goes to "
+                            "the whole fleet, each hull's throttle scaled so all accelerate "
+                            "like the slowest hull and the burn starting together: the "
+                            "formation holds."
+                        ),
+                        "properties": {
+                            "x": {"type": "number"},
+                            "y": {"type": "number"},
+                            "z": {"type": "number"}
+                        },
+                        "required": ["x", "y", "z"]
+                    },
+                    "throttle": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1,
+                        "description": (
+                            "Throttle for the heading (default 1.0). 0 = attitude only: "
+                            "the nose turns onto the heading and the ship coasts (e.g. "
+                            "spinals back on the enemy). For \"all ships\" it is a fraction "
+                            "of the SLOWEST hull's acceleration."
+                        )
                     }
                 },
                 "required": ["ship_name", "order_text"]

@@ -33,6 +33,13 @@ class AdmiralOrder:
     suggested_target: Optional[str] = None  # Enemy ship name to focus on
     torpedo_salvo: Optional[int] = None  # Coordinated launch: rounds this checkpoint
     torpedo_target: Optional[str] = None  # Enemy to concentrate the salvo on
+    # Structured HEADING order (world frame), applied directly as the ship's
+    # maneuver by the runner. formation=True: part of a fleet-wide heading,
+    # throttle is a fraction of the slowest hull's acceleration.
+    heading: Optional[Dict[str, float]] = None
+    throttle: Optional[float] = None
+    formation: bool = False
+    applied_throttle: Optional[float] = None  # per-hull throttle the runner applied
 
 
 @dataclass
@@ -48,6 +55,60 @@ class AdmiralDecision:
     reasoning: str = ""  # Admiral's tactical reasoning (for logs)
     call_failed: bool = False  # True if the LLM call errored (not a real decision)
     battle_plan_update: Optional[str] = None  # New standing plan set this checkpoint
+    # Fleet-wide formation heading (issue_order to "all ships" on the
+    # directive call); per-ship orders without their own heading inherit it.
+    fleet_heading: Optional[AdmiralOrder] = None
+
+
+def _heading_arg(value: Any) -> Optional[Dict[str, float]]:
+    """A valid {x, y, z} heading from tool arguments, else None."""
+    if not isinstance(value, dict):
+        return None
+    try:
+        h = {k: float(value.get(k, 0.0)) for k in ("x", "y", "z")}
+    except (TypeError, ValueError):
+        return None
+    if (h["x"] ** 2 + h["y"] ** 2 + h["z"] ** 2) ** 0.5 < 1e-9:
+        return None
+    return h
+
+
+def _throttle_arg(value: Any) -> float:
+    try:
+        return max(0.0, min(1.0, float(value)))
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def _fleet_heading_order(args: Dict[str, Any]) -> Optional["AdmiralOrder"]:
+    """issue_order(ship_name="all ships", heading=...) -> the fleet-wide order."""
+    from .range_control import is_fleet_alias
+    heading = _heading_arg(args.get("heading"))
+    if heading is None or not is_fleet_alias(args.get("ship_name")):
+        return None
+    return AdmiralOrder(
+        target_ship_id="all ships",
+        target_ship_name="all ships",
+        order_text=args.get("order_text", ""),
+        priority=args.get("priority", "NORMAL"),
+        heading=heading,
+        throttle=_throttle_arg(args.get("throttle", 1.0)),
+        formation=True,
+    )
+
+
+def _attach_heading(order: "AdmiralOrder", args: Dict[str, Any],
+                    fleet_heading: Optional["AdmiralOrder"]) -> None:
+    """Own heading from the order's arguments, else the fleet heading in force."""
+    heading = _heading_arg(args.get("heading"))
+    if heading is not None:
+        order.heading = heading
+        order.throttle = _throttle_arg(args.get("throttle", 1.0))
+        order.formation = False
+    elif fleet_heading is not None and fleet_heading.heading is not None:
+        order.heading = dict(fleet_heading.heading)
+        order.throttle = fleet_heading.throttle
+        order.formation = True
 
 
 @dataclass
@@ -174,6 +235,10 @@ class AdmiralSnapshot:
 
     # Fleet capabilities summary
     fleet_summary: str  # e.g., "2 ships: 1 Destroyer, 1 Frigate"
+
+    # Range control (src/llm/range_control.py): fleet centre vs enemy groups,
+    # precomputed headings, formation throttles. Filled for the T=0 snapshot.
+    range_control: str = ""
 
 
 class LLMAdmiral:
@@ -386,6 +451,16 @@ Be authentic to how you would command a fleet as {model_name}."""
                         'ship_type': captain.config.ship_type,
                     })
 
+        # Range control: closest approach / stopping distance / ready-made
+        # world-frame headings for the fleet centre, plus formation throttles.
+        from .range_control import admiral_range_control
+        snapshot_t0.range_control = admiral_range_control(
+            simulation,
+            [s for s in (simulation.get_ship(a['ship_id']) for a in active_ships)
+             if s is not None and not getattr(s, 'is_dying', False)
+             and not getattr(s, 'is_surrendered', False)],
+        )
+
         # PHASE 1: Get fleet directive (overall strategy)
         prompt = build_admiral_prompt(
             admiral_name=self.config.name,
@@ -468,6 +543,12 @@ Be authentic to how you would command a fleet as {model_name}."""
                     self.standing_plan = plan
                     self.standing_plan_time = simulation.current_time
                     decision.battle_plan_update = plan
+            elif name == "issue_order":
+                # The only order this call accepts: ONE fleet-wide formation
+                # heading (ship_name "all ships"). Per-ship orders come next.
+                fleet_order = _fleet_heading_order(args)
+                if fleet_order is not None:
+                    decision.fleet_heading = fleet_order
             elif name == "message_enemy_admiral":
                 self._pending_enemy_message = args.get("message", "")
                 decision.message_to_enemy_admiral = self._pending_enemy_message
@@ -489,6 +570,7 @@ Be authentic to how you would command a fleet as {model_name}."""
                 snapshot_t0=snapshot_t0,
                 fleet_directive=decision.fleet_directive,
                 simulation=simulation,
+                fleet_heading=decision.fleet_heading,
             )
 
         if self.parallel_ship_orders and len(active_ships) > 1:
@@ -517,6 +599,7 @@ Be authentic to how you would command a fleet as {model_name}."""
         snapshot_t0: 'AdmiralSnapshot',
         fleet_directive: str,
         simulation: Any,
+        fleet_heading: Optional[AdmiralOrder] = None,
     ) -> Optional[AdmiralOrder]:
         """
         Issue a specific order to a single ship.
@@ -542,6 +625,7 @@ Be authentic to how you would command a fleet as {model_name}."""
             snapshot=snapshot_t0,
             personality=self.config.personality,
             standing_plan=self.standing_plan,
+            fleet_heading=fleet_heading,
         )
 
         messages = [
@@ -563,7 +647,7 @@ Be authentic to how you would command a fleet as {model_name}."""
         for call in tool_calls:
             if call.name == "issue_order":
                 args = call.arguments
-                return AdmiralOrder(
+                order = AdmiralOrder(
                     target_ship_id=ship_info['ship_id'],
                     target_ship_name=ship_info['ship_name'],
                     order_text=args.get("order_text", "Continue as directed."),
@@ -572,15 +656,19 @@ Be authentic to how you would command a fleet as {model_name}."""
                     torpedo_salvo=args.get("torpedo_salvo"),
                     torpedo_target=args.get("torpedo_target"),
                 )
+                _attach_heading(order, args, fleet_heading)
+                return order
 
         # If no order was issued, create a default order
-        return AdmiralOrder(
+        order = AdmiralOrder(
             target_ship_id=ship_info['ship_id'],
             target_ship_name=ship_info['ship_name'],
             order_text=f"[AUTO] Continue per fleet directive: {fleet_directive[:100]}...",
             priority="NORMAL",
             suggested_target=None,
         )
+        _attach_heading(order, {}, fleet_heading)
+        return order
 
     def respond_to_captain(
         self,
@@ -941,6 +1029,10 @@ Be authentic to how you would command a fleet as {model_name}."""
                 ship_name = args.get("ship_name", "")
                 ship_id = self._ship_name_to_id.get(ship_name, ship_name)
 
+                fleet_order = _fleet_heading_order(args)
+                if fleet_order is not None:
+                    decision.fleet_heading = fleet_order
+                    continue
                 order = AdmiralOrder(
                     target_ship_id=ship_id,
                     target_ship_name=ship_name,
@@ -950,6 +1042,7 @@ Be authentic to how you would command a fleet as {model_name}."""
                     torpedo_salvo=args.get("torpedo_salvo"),
                     torpedo_target=args.get("torpedo_target"),
                 )
+                _attach_heading(order, args, None)
                 decision.fleet_orders.append(order)
 
             elif name == "set_fleet_directive":

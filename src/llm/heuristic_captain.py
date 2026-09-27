@@ -30,6 +30,9 @@ GUN_KNIFE_RANGE = 120.0
 TORPEDO_STANDOFF = 250.0
 TORPEDO_MAX_LAUNCH_RANGE = 700.0
 TORPEDO_THREAT_ETA_S = 75.0
+# A torpedo hull inside TORPEDO_STANDOFF closing faster than this burns to
+# hold range (range-control heading) instead of weaving on course.
+HOLD_RANGE_CLOSING_KPS = 0.3
 OVERSHOOT_CLOSING_KPS = 12.0
 
 # Heat management (percent of heat-sink capacity). The engine's ladder:
@@ -140,24 +143,41 @@ class HeuristicCaptain(LLMCaptain):
                 salvo = min(int(order.torpedo_salvo), max_salvo)
                 if order.torpedo_target:
                     torp_target = self._match_enemy(order.torpedo_target, enemies) or target
-            elif (closing_kps > 0 and dist_km < TORPEDO_MAX_LAUNCH_RANGE
+            elif (closing_kps > -0.1 and dist_km < TORPEDO_MAX_LAUNCH_RANGE
                   and checkpoint % 2 == 1):
                 salvo = min(2, max_salvo)
             if salvo > 0:
                 calls.append(("launch_torpedo", {
                     "count": salvo, "target_id": torp_target.ship_id}))
 
-        # Maneuver priority: dodge torpedoes > admiral keyword > role doctrine
+        # Maneuver priority: dodge torpedoes > admiral heading order (already
+        # applied by the runner - keep it, it holds the formation) > admiral
+        # keyword > role doctrine
         threat = self._torpedo_threat(ship, ship_id, simulation)
+        admiral_heading = bool(order and isinstance(getattr(order, "heading", None), dict))
         maneuver = self._admiral_maneuver(order_text)
         if threat:
             maneuver = ("EVADE", 1.0)
+        elif admiral_heading:
+            maneuver = ("KEEP", 0.0)
         if maneuver is None:
             maneuver = self._doctrine_maneuver(dist_km, closing_kps)
         heat = getattr(ship, "heat_percent", 0.0) or 0.0
-        throttle = self._heat_throttle_cap(ship, heat, maneuver[1], threat)
-        calls.append(("set_maneuver", {
-            "maneuver_type": maneuver[0], "throttle": throttle}))
+        if maneuver[0] == "HOLD_RANGE":
+            call = self._range_control_call(ship, target, simulation, maneuver[1])
+            if call is None:
+                maneuver = ("EVADE", maneuver[1])
+            else:
+                args = call[1] if len(call) > 1 else None
+                if isinstance(args, dict) and "throttle" in args:
+                    # The heat cap applies to range-control burns too.
+                    args["throttle"] = self._heat_throttle_cap(
+                        ship, heat, args["throttle"], threat)
+                calls.append(call)
+        if maneuver[0] not in ("KEEP", "HOLD_RANGE"):
+            throttle = self._heat_throttle_cap(ship, heat, maneuver[1], threat)
+            calls.append(("set_maneuver", {
+                "maneuver_type": maneuver[0], "throttle": throttle}))
 
         # Radiators: shed heat when hot or when nothing can hit the panels,
         # button up under torpedo fire - unless heat is past the emergency
@@ -279,7 +299,8 @@ class HeuristicCaptain(LLMCaptain):
             (("evade", "evasive", "dodge"), ("EVADE", 1.0)),
             (("brake", "slow down", "kill velocity"), ("BRAKE", 0.8)),
             (("padlock", "hold position", "coast and track"), ("PADLOCK", 1.0)),
-            (("kite", "keep range", "stand off", "maintain distance"), ("EVADE", 0.7)),
+            (("kite", "keep range", "stand off", "standoff", "maintain distance",
+              "hold range", "cancel closure"), ("HOLD_RANGE", 1.0)),
             (("intercept", "close", "attack run", "charge", "engage close"),
              ("INTERCEPT", 0.9)),
         ]
@@ -299,7 +320,33 @@ class HeuristicCaptain(LLMCaptain):
             if dist_km > GUN_KNIFE_RANGE:
                 return ("INTERCEPT", 0.7)
             return ("PADLOCK", 1.0)
-        # Pure torpedo hull: stay out of gun range, keep the seeker geometry
+        # Pure torpedo hull: stay out of gun range, keep the seeker geometry.
+        # Inside the standoff range and still closing, burn against the
+        # relative velocity (EVADE would hold course straight into a merge).
         if dist_km < TORPEDO_STANDOFF:
+            if closing_kps > HOLD_RANGE_CLOSING_KPS:
+                return ("HOLD_RANGE", 1.0)
             return ("EVADE", 0.9)
         return ("INTERCEPT", 0.6)
+
+    def _range_control_call(self, ship, target, simulation, throttle: float):
+        """set_heading call for the precomputed range-control heading vs the
+        target's group: cancel closure, or pass wide when braking is too late."""
+        from .range_control import analyze_range_control
+        try:
+            infos = analyze_range_control(simulation, [ship], detail=False)
+        except Exception:
+            return None
+        group = next((g for g in infos if target.ship_id in g.ship_ids), None)
+        if group is None:
+            return None
+        option = None
+        if group.warning and "too late" in group.warning:
+            option = group.option("wide")
+        option = option or group.option("cancel")
+        if option is None or option.throttle <= 0:
+            return None
+        h = option.heading
+        return ("set_heading", {
+            "direction": {"x": round(h.x, 4), "y": round(h.y, 4), "z": round(h.z, 4)},
+            "throttle": round(min(1.0, option.throttle * throttle), 3)})

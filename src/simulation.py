@@ -219,6 +219,37 @@ PRESENT_THROTTLE_MOD = 0.05
 # wasted delta-v because the shooter/geometry will have changed.
 BALLISTIC_THREAT_HORIZON_S = 60.0
 
+# EVADE with no actionable threat (execution mode WOBBLE) jinks around the
+# ship's CURRENT course instead of chasing anyone: the velocity it had when
+# it fell into WOBBLE is latched and held, and every WOBBLE_JINK_CYCLE_S a
+# fresh random offset (perpendicular to that course, drawn from a throwaway
+# RNG keyed on seed/ship/cycle so seeded battles and the prediction shadow
+# reproduce it) of WOBBLE_JINK_ACCEL_S seconds of the ship's acceleration is
+# added to the held velocity. The ship burns toward that target velocity with
+# a WOBBLE_HOLD_TAU_S time constant. Net effect: a bounded weave (a corvette
+# at full throttle strays ~0.1 km/s from its course) with no mean change of
+# course or closure - "hold the wall" stays a wall.
+WOBBLE_JINK_CYCLE_S = 8.0
+WOBBLE_JINK_ACCEL_S = 4.0
+WOBBLE_HOLD_TAU_S = 2.0
+# Inside this velocity error the ship coasts instead of chattering.
+WOBBLE_DEADBAND_MPS = 5.0
+# Below this speed there is no meaningful course to jink around: the weave is
+# then laid out across the line of sight to the nearest enemy.
+WOBBLE_MIN_COURSE_MPS = 50.0
+# Token throttle while turning (thrust vectoring needs a lit drive); the same
+# trick as PRESENT_THROTTLE_MOD and PADLOCK.
+MANEUVER_TURN_THROTTLE = 0.05
+_WOBBLE_JINK_SALT = 0x77AB_B1E5
+
+# HEADING turns first, then burns: the main drive thrusts along the nose, so
+# full throttle while the nose is still swinging round spends delta-v in the
+# wrong direction (a 180-degree flip at full burn used to throw a corvette
+# ~0.3 km/s sideways). Outside this cone the ship turns on a token throttle;
+# inside it the ordered throttle applies. Throttle 0 is attitude-only: the
+# nose turns on RCS alone and the velocity does not change at all.
+HEADING_BURN_CONE_DEG = 10.0
+
 # Two-stage ship death. A killing blow that does not destroy the reactor
 # leaves a combat-dead hulk whose containment is failing: it tumbles adrift,
 # torches sputtering, for a random 0..DYING_MAX_DURATION_S before the reactor
@@ -366,6 +397,14 @@ class Maneuver:
     target_id: Optional[str] = None
     heading_direction: Optional[Dict[str, float]] = None
     evasion_intensity: str = "MODERATE"
+    # HEADING only: hold the main burn (turn, then wait nose-on) until this
+    # sim time. Formation orders set it so every hull starts burning together
+    # after the slowest one has finished its turn.
+    burn_start_time: Optional[float] = None
+    # EVASIVE/WOBBLE runtime state: the course (velocity) being held and the
+    # last tick it was held on (see WOBBLE_JINK_CYCLE_S).
+    hold_velocity: Optional[Vector3D] = None
+    hold_velocity_t: float = -1.0
 
     def is_complete(self, current_time: float) -> bool:
         """Check if maneuver has completed."""
@@ -1527,6 +1566,18 @@ class CombatSimulation:
 
         # Handle different command types
         if isinstance(command, Maneuver):
+            previous = ship.current_maneuver
+            if (command.maneuver_type == ManeuverType.EVASIVE
+                    and command.hold_velocity is None
+                    and previous is not None
+                    and previous.maneuver_type == ManeuverType.EVASIVE
+                    and previous.hold_velocity is not None):
+                # A renewed EVADE keeps the course it was holding: re-latching
+                # the current velocity every checkpoint would bank whatever
+                # jink offset the ship happened to be flying at that instant,
+                # a random walk off course.
+                command.hold_velocity = previous.hold_velocity
+                command.hold_velocity_t = previous.hold_velocity_t
             ship.current_maneuver = command
             self._log_event(SimulationEventType.MANEUVER_STARTED, ship_id, data={
                 'maneuver_type': command.maneuver_type.name,
@@ -2351,24 +2402,16 @@ class CombatSimulation:
                         # TANK: turn best armor toward the ballistic threat.
                         self._rotate_ship_toward(ship, evade_dir, dt, engines_on=(throttle > 0))
                     elif mode == 'WOBBLE':
-                        # Minor random wobble - still head toward target but with variation
-                        target = None
-                        if maneuver.target_id:
-                            target = self.get_ship(maneuver.target_id)
-                        if target is None or target.is_destroyed or target.is_dying:
-                            # No (live) assigned target: nearest live enemy,
-                            # never the wreck of a dead one.
-                            target = None
-                            enemies = self.get_enemy_ships(ship.ship_id)
-                            if enemies:
-                                target = min(enemies, key=lambda e: ship.distance_to(e))
-
-                        if target:
-                            intercept_dir = self._calculate_intercept_direction(ship, target)
-                            # Add small random wobble (±5°)
+                        # No actionable threat: jink around the CURRENT course.
+                        # This used to intercept the nearest enemy with a
+                        # wobble, so a defensive order ("hold the wall, do not
+                        # chase") chased - and every fleet merged.
+                        jink_dir, throttle = self._wobble_hold_course(ship, maneuver, throttle)
+                        if jink_dir is not None:
+                            # Small random wobble (±5°) on the aim, as before
                             wobble = self.rng.gauss(0, math.radians(5))
-                            intercept_dir = intercept_dir.rotate_around_axis(ship.up, wobble)
-                            self._rotate_ship_toward(ship, intercept_dir, dt, engines_on=(throttle > 0))
+                            jink_dir = jink_dir.rotate_around_axis(ship.up, wobble)
+                            self._rotate_ship_toward(ship, jink_dir, dt, engines_on=(throttle > 0))
                     # BRACE mode: no thrust, just take the hit
 
                 elif maneuver.maneuver_type == ManeuverType.INTERCEPT and maneuver.target_id:
@@ -2420,12 +2463,26 @@ class CombatSimulation:
                             angle_to_heading = math.acos(max(-1.0, min(1.0,
                                 ship.kinematic_state.forward.dot(direction))))
                             needs_rotation = angle_to_heading > math.radians(2.0)
-                            # Use thrust vectoring for rotation if needed, or if already thrusting
-                            self._rotate_ship_toward(ship, direction, dt,
-                                engines_on=(throttle > 0 or needs_rotation))
-                            # If throttle was 0 but we need rotation, use small throttle for TV
-                            if throttle == 0 and needs_rotation:
-                                throttle = 0.05
+                            burn_held = (maneuver.burn_start_time is not None
+                                         and self.current_time < maneuver.burn_start_time - 1e-9)
+                            if throttle <= 0:
+                                # Attitude only: point the nose (e.g. spinal
+                                # on the enemy) on RCS and coast - no burn,
+                                # no change of velocity.
+                                self._rotate_ship_toward(ship, direction, dt, engines_on=False)
+                                throttle = 0.0
+                            elif (angle_to_heading > math.radians(HEADING_BURN_CONE_DEG)
+                                  or burn_held):
+                                # Turn first (token throttle keeps thrust
+                                # vectoring available), burn once nose-on.
+                                # The token scales with the ordered throttle so
+                                # formation-matched hulls drift equally.
+                                self._rotate_ship_toward(ship, direction, dt,
+                                    engines_on=needs_rotation)
+                                throttle = (throttle * MANEUVER_TURN_THROTTLE
+                                            if needs_rotation else 0.0)
+                            else:
+                                self._rotate_ship_toward(ship, direction, dt, engines_on=True)
 
                 elif maneuver.maneuver_type == ManeuverType.PADLOCK and maneuver.target_id:
                     # Padlock - track target with nose, minimal thrust for rotation
@@ -3475,6 +3532,70 @@ class CombatSimulation:
             'threat_count': threat_count,
             'evade_direction': evade_dir.to_tuple() if evade_dir else None,
         }
+
+    def _wobble_hold_course(
+        self,
+        ship: ShipCombatState,
+        maneuver: Maneuver,
+        throttle: float,
+    ) -> tuple[Optional[Vector3D], float]:
+        """
+        EVADE with no actionable threat: jink around the current course.
+
+        Latches the ship's velocity when it (re)enters WOBBLE - at the start
+        of the order, or when a threat-driven mode (EVADE/RUN/...) hands
+        back - and steers toward that held velocity plus a per-cycle jink
+        offset (see WOBBLE_JINK_CYCLE_S). Never references an enemy's
+        position except to lay out the weave of a ship at rest, so it cannot
+        close (or open) range on its own.
+
+        Returns (aim direction or None to hold attitude, throttle).
+        """
+        now = self.current_time
+        step = self.time_step if getattr(self, 'time_step', 0) else 1.0
+        if (maneuver.hold_velocity is None
+                or now - maneuver.hold_velocity_t > 1.5 * step + 1e-9):
+            v = ship.velocity
+            maneuver.hold_velocity = Vector3D(v.x, v.y, v.z)
+        maneuver.hold_velocity_t = now
+        course = maneuver.hold_velocity
+
+        a_max = (ship.kinematic_state.max_acceleration_ms2()
+                 * ship.get_effective_thrust_fraction() * max(0.0, throttle))
+        if a_max <= 0.0:
+            return None, 0.0
+
+        # Jink offset for this cycle, perpendicular to the held course.
+        if course.magnitude > WOBBLE_MIN_COURSE_MPS:
+            axis = course.normalized()
+        else:
+            enemies = self.get_enemy_ships(ship.ship_id)
+            nearest = min(enemies, key=lambda e: ship.distance_to(e)) if enemies else None
+            los = (nearest.position - ship.position) if nearest else Vector3D(0, 0, 0)
+            axis = los.normalized() if los.magnitude > 1.0 else ship.forward
+        perp = axis.cross(Vector3D(0, 0, 1))
+        if perp.magnitude < 0.1:
+            perp = axis.cross(Vector3D(0, 1, 0))
+        perp = perp.normalized()
+        cycle = int(now / WOBBLE_JINK_CYCLE_S)
+        ship_key = zlib.crc32(ship.ship_id.encode('utf-8'))
+        jink_rng = random.Random(
+            (self._initial_seed * 1_000_003) ^ (ship_key * 65_537)
+            ^ (cycle * 7_919) ^ _WOBBLE_JINK_SALT
+        )
+        phi = jink_rng.uniform(0.0, 2.0 * math.pi)
+        jink = perp.rotate_around_axis(axis, phi) * (a_max * WOBBLE_JINK_ACCEL_S)
+
+        error = course + jink - ship.velocity
+        err = error.magnitude
+        if err < WOBBLE_DEADBAND_MPS:
+            return None, 0.0
+        direction = error * (1.0 / err)
+        demand = min(1.0, err / (a_max * WOBBLE_HOLD_TAU_S))
+        # Burn only with the nose's share of the wanted direction; a token
+        # throttle keeps thrust vectoring for the turn.
+        align = max(0.0, ship.forward.dot(direction))
+        return direction, throttle * max(demand * align, MANEUVER_TURN_THROTTLE)
 
     def _calculate_intercept_direction(
         self,
