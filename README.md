@@ -191,11 +191,11 @@ It is a tactical game simulation: ordinary steps are one second, and gun hit res
 | Frigate | 7 | Fast, lightly armored gunboat |
 | Corvette | 18 | Fast torpedo boat |
 | Destroyer | 18 | General-purpose gun platform |
-| Battlecruiser | 24 | Fast capital gunship |
-| Cruiser | 28 | Heavier armored gunship |
-| Battleship | 42 | Line-of-battle capital |
-| Dreadnought | 53 | Heavy fleet anchor |
-| Siege dreadnought | 54 | Dreadnought with a siege spinal weapon |
+| Battlecruiser | 25 | Fast capital gunship |
+| Cruiser | 29 | Heavier armored gunship |
+| Battleship | 43 | Line-of-battle capital |
+| Dreadnought | 55 | Heavy fleet anchor |
+| Siege dreadnought | 56 | Dreadnought with a siege spinal weapon |
 | Torpedo cruiser | 65 | Four launchers, deep magazines, and escort point defense |
 
 Costs are derived from the current ship data and scoring formula. [Ship reference](docs/ships.md) · [Draft rules and cost model](docs/draft_mode.md)

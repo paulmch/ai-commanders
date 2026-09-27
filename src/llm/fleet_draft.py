@@ -68,6 +68,10 @@ GUN_POINTS_PER_GJ_PER_S = 8.0
 # centre of its 18-pt step, so a small data edit does not flip the result.
 # It was the least budget-sensitive of the candidate bands, but no single
 # value is balanced at every budget; see the doc before retuning.
+# Re-checked 2026-09-27 on the salvo-gun / heat-ladder / range-control
+# engine: still the best single value (41 / 73 / 26% torpedo score at
+# 100 / 150 / 200 pts). The corvette-count cliff, not this dial, sets the
+# spread.
 TORPEDO_POINTS_PER_GJ = 0.040
 
 
