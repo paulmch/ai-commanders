@@ -632,6 +632,7 @@ export class Tracks {
     this.root.visible = true;
     const withActual = mode === 'actual';
     this.focusId = focusId || this._implicitFocus();
+    this._states = ships;   // focused caption: maneuver + throttle
     this.update(this.predictor.predict(time, ships, withActual), time, withActual);
   }
 
@@ -721,7 +722,9 @@ export class Tracks {
       this._setLocus(v, tr, k, rMax, markerW * (isFocus ? 1 : 0.75), lowConf);
 
       if (this.showLabels && isFocus && clear > 0.01) {
-        drawLabel(v.label, formatCheckpointLabel({ togo, sigma: tr.sigma, stale: tr.stale, mode: tr.mode }));
+        const st = this._states?.[id];
+        drawLabel(v.label, formatCheckpointLabel({ togo, sigma: tr.sigma, stale: tr.stale, mode: tr.mode,
+          maneuver: st?.maneuver, throttle: st?.thrust }));
         const sp = v.label.sprite;
         sp.position.copy(cp);
         sp.scale.set(LABEL_PX * (LABEL_W / LABEL_H) * pw, LABEL_PX * pw, 1);

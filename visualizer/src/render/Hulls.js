@@ -4,6 +4,7 @@ import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 import { getHullTextures, getRadiatorTextures, getAccentTexture, mulberry32 } from './Textures.js';
 import { buildHullLights } from './HullLights.js';
 import { buildMarkings, hullCode } from './HullMarkings.js';
+import { TWIN_BARREL_X } from './WeaponTimeline.js';
 export { updateHullDetails } from './HullRigs.js';
 
 /**
@@ -671,13 +672,22 @@ export class HullKit {
     yaw.add(pitch);
     const pk = new HullKit({ length: this.L, width: this.W }, this.rnd() * 1e6);
     pk.box('dark', s * 0.6, s * 0.3, s * 0.28, 0, 0, s * 0.12, { bevel: 0.25 });   // mantlet
-    for (const bx of [-0.2, 0.2]) {
-      pk.drum('barrel', s * 0.06, s * 1.25, s * 0.78, { x: bx * s, sides: 8 });
-      pk.drum('dark', s * 0.085, s * 0.14, s * 1.33, { x: bx * s, sides: 8 });   // muzzle brake
-      pk.drum('dark', s * 0.09, s * 0.12, s * 0.45, { x: bx * s, sides: 8 });    // recoil collar
-    }
     pk._mergeInto(pitch, mats);
-    return { mount, yaw, pitch, s, yawAngle: 0, pitchAngle: 0.12, pitchZ: pitch.position.z, slot: r.slot };
+    // Twin barrels, each its own group so the one that fired recoils
+    // (HullRigs) and the round leaves its muzzle (Projectiles)
+    const barrels = TWIN_BARREL_X.map((bx) => {
+      const g = new THREE.Group();
+      g.name = 'turret_barrel';
+      g.position.x = bx * s;
+      const bk = new HullKit({ length: this.L, width: this.W }, pk.rnd() * 1e6);
+      bk.drum('barrel', s * 0.06, s * 1.25, s * 0.78, { sides: 8 });
+      bk.drum('barrel', s * 0.085, s * 0.14, s * 1.33, { sides: 8 });   // muzzle brake
+      bk.drum('barrel', s * 0.09, s * 0.12, s * 0.45, { sides: 8 });    // recoil collar
+      bk._mergeInto(g, mats);
+      pitch.add(g);
+      return g;
+    });
+    return { mount, yaw, pitch, barrels, s, yawAngle: 0, pitchAngle: 0.12, pitchZ: pitch.position.z, slot: r.slot };
   }
 
   /** PD ball mount: one mesh (sphere, emitter housing, lens barrel). */

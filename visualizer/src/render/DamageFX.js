@@ -1012,9 +1012,9 @@ class ShipView {
       // severed coolant loop: the wing goes cold and scorched while the
       // rest of the array keeps glowing
       R.clone.color.setRGB(1 - 0.6 * k, 1 - 0.66 * k, 1 - 0.7 * k);
-      R.clone.emissive.setRGB(1, 0.4, 0.2);
     }
     R.clone.emissiveIntensity = R.orig.emissiveIntensity * (1 - 0.85 * k);
+    R.clone.emissive.copy(R.orig.emissive);   // glow hue follows rad_out (render/Heat.js)
   }
 
   /**

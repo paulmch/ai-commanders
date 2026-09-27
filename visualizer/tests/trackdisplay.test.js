@@ -168,6 +168,10 @@ test('captions state the true spread; scope helpers persist', () => {
   assert.equal(formatCheckpointLabel({ togo: 3, sigma: 50, mode: 'wobble' }), 'T+3s ±50 m', 'wobble is modelled');
   assert.equal(formatCheckpointLabel({ togo: 3, stale: true, mode: 'run' }), 'T+3s · ORDERS PENDING');
   assert.equal(formatCheckpointLabel({ togo: -1 }), 'T+0s');
+  assert.equal(formatCheckpointLabel({ togo: 24.2, sigma: 183, maneuver: 'HEADING', throttle: 0.6 }), 'T+25s ±180 m · HEADING 60%');
+  assert.equal(formatCheckpointLabel({ togo: 5, maneuver: 'HEADING' }), 'T+5s · HEADING');
+  assert.equal(formatCheckpointLabel({ togo: 5, maneuver: 'HEADING', throttle: 1, mode: 'run' }), 'T+5s · RUN', 'evasion wins');
+  assert.equal(formatCheckpointLabel({ togo: 5, maneuver: 'INTERCEPT', throttle: 1 }), 'T+5s');
   assert.ok(isReactiveMode('PRESENT') && !isReactiveMode('wobble') && !isReactiveMode(null));
   assert.equal(formatExaggeration([61.5, 61.5]), '×62');
   assert.equal(formatExaggeration([57.6, 80]), '×58–80');

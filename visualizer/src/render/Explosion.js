@@ -120,7 +120,8 @@ function shellMaterial() {
       uNoise: { value: getNoiseTexture() },
       uColor: { value: new THREE.Color(0.55, 0.75, 1.0) },
       uIntensity: { value: 1 },
-      uSeed: { value: 0 }
+      uSeed: { value: 0 },
+      uRimPow: { value: 3.4 }
     },
     vertexShader: /* glsl */`
       varying vec3 vNormal;
@@ -141,6 +142,7 @@ function shellMaterial() {
       uniform vec3 uColor;
       uniform float uIntensity;
       uniform float uSeed;
+      uniform float uRimPow;
       varying vec3 vNormal;
       varying vec3 vView;
       varying vec3 vLocal;
@@ -149,7 +151,7 @@ function shellMaterial() {
       void main() {
         #include <logdepthbuf_fragment>
         float ndv = abs(dot(normalize(vNormal), normalize(vView)));
-        float rim = pow(1.0 - ndv, 3.4);
+        float rim = pow(1.0 - ndv, uRimPow);
         float n = tri(uNoise, vLocal * 2.5 + uSeed, vLocal).g;
         float ragged = 0.55 + 0.9 * n;
         gl_FragColor = vec4(uColor * rim * ragged * uIntensity, 1.0);
@@ -238,6 +240,21 @@ const KINDS = {
     streaks: 700, streakSpeed: [3, 13], streakLife: [1.2, 5], streakLen: 0.9, streakW: 0.05,
     puffs: 10, puffSize: [0.6, 1.5], puffSpeed: [0.3, 1.4], puffLife: 12,
     light: 25, lightLife: 2.2
+  },
+  // Overheat meltdown: containment lost to heat rather than a hit. Hotter
+  // and brighter than a reactor kill: a white core flash, a whiter
+  // fireball and a slow violet-white plasma shell that cools to orange.
+  meltdown: {
+    duration: 16, flash: 3.8, flashFade: 0.26, screenFlash: 0.85,
+    fireR: 1.45, fireGrow: 1.4, fireLife: 7, fireTurb: 1.15, fireHeat: 1.7,
+    shellR: 22, shellLife: 2.8, shellW: 0.34, shellColor: [0.7, 0.82, 1.25],
+    core: { size: 1.7, life: 0.55, level: 7 },
+    plasma: { r: 4.0, life: 4.5, rimPow: 3.0, level: 0.85, hot: [0.95, 0.88, 1.6], cool: [1.4, 0.5, 0.12] },
+    lobes: 8, ringR: 15, ringLife: 3.6,
+    sparks: 3000, sparkSpeed: [3, 19], sparkLife: [2, 8], sparkSize: 0.08,
+    streaks: 850, streakSpeed: [3.5, 15], streakLife: [1.2, 5.5], streakLen: 1.0, streakW: 0.055,
+    puffs: 10, puffSize: [0.7, 1.7], puffSpeed: [0.4, 1.6], puffLife: 12,
+    light: 34, lightLife: 2.8
   },
   // Torpedo warhead: penetrator flash, fast plasma front, brief fireball
   warhead: {
@@ -329,7 +346,8 @@ export class Blast {
 
     // Fireball
     if (K.fireR > 0) {
-      this.fire = new THREE.Mesh(o.kind === 'reactor' ? fireGeom() : smallFireGeom(), fireballMaterial());
+      const big = o.kind === 'reactor' || o.kind === 'meltdown';
+      this.fire = new THREE.Mesh(big ? fireGeom() : smallFireGeom(), fireballMaterial());
       this.fire.material.uniforms.uSeed.value = this.seed;
       this.fire.material.uniforms.uTurb.value = K.fireTurb;
       this.fire.renderOrder = 35;
@@ -341,9 +359,29 @@ export class Blast {
     if (K.shellR > 0) {
       this.shell = new THREE.Mesh(shellGeom(), shellMaterial());
       this.shell.material.uniforms.uSeed.value = this.seed;
+      if (K.shellColor) this.shell.material.uniforms.uColor.value.setRGB(...K.shellColor);
       this.shell.renderOrder = 36;
       this.shell.frustumCulled = false;
       this.group.add(this.shell);
+    }
+
+    // Meltdown: white-hot core flash and a thick, slow plasma shell
+    if (K.core) {
+      this.core = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: glow, color: new THREE.Color(K.core.level, K.core.level, K.core.level),
+        transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false
+      }));
+      this.core.renderOrder = 41;
+      this.group.add(this.core);
+    }
+    if (K.plasma) {
+      this.plasma = new THREE.Mesh(shellGeom(), shellMaterial());
+      const u = this.plasma.material.uniforms;
+      u.uSeed.value = this.seed + 3.1;
+      u.uRimPow.value = K.plasma.rimPow;
+      this.plasma.renderOrder = 36;
+      this.plasma.frustumCulled = false;
+      this.group.add(this.plasma);
     }
 
     this.lobes = [];
@@ -384,7 +422,7 @@ export class Blast {
     this.puffs = new PuffCloud({
       count: K.puffs, size: K.puffSize.map(v => v * s), speed: K.puffSpeed.map(v => v * s),
       duration: K.puffLife, spread: s * 0.3, rnd, stagger: 0.25, grow: 1.2,
-      intensity: o.kind === 'impact' || o.kind === 'pop' ? 0.45 : (o.kind === 'reactor' ? 0.2 : 0.3)
+      intensity: o.kind === 'impact' || o.kind === 'pop' ? 0.45 : (o.kind === 'reactor' || o.kind === 'meltdown' ? 0.2 : 0.3)
     });
     if (dir && (o.kind === 'impact' || o.kind === 'pop')) {
       // spall goes out along the surface normal
@@ -404,7 +442,8 @@ export class Blast {
     }
 
     // Pool light: positioned in world space each update, never reparented
-    this.light = K.light > 0 ? ctx.tryLight(0xffd2a0, 0, s * 60, o.kind === 'reactor' ? 4 : 0) : null;
+    this.light = K.light > 0 ? ctx.tryLight(o.kind === 'meltdown' ? 0xffeef8 : 0xffd2a0, 0, s * 60,
+      o.kind === 'reactor' || o.kind === 'meltdown' ? 4 : 0) : null;
 
     // Screen flash scaled by how close the camera is - only for a blast
     // happening now, not one re-created by a timeline seek
@@ -445,7 +484,7 @@ export class Blast {
       this.fire.scale.setScalar(r);
       const u = this.fire.material.uniforms;
       u.uTime.value = age;
-      u.uHeat.value = 1.25 * Math.pow(1 - p, 0.85);
+      u.uHeat.value = (K.fireHeat || 1.25) * Math.pow(1 - p, 0.85);
       u.uAlpha.value = Math.min(1, age / 0.12) * Math.pow(1 - p, 0.6);
       u.uIntensity.value = 1.4 * (0.5 + 0.5 * Math.exp(-age / (life * 0.35)));
       u.uTurb.value = K.fireTurb * (0.7 + p * 0.9);
@@ -479,6 +518,22 @@ export class Blast {
       this.shell.material.uniforms.uIntensity.value = K.shellW * 1.8 * Math.pow(1 - p, 3.5);
       this.shell.visible = p < 1;
     }
+    if (this.core) {
+      const c = K.core, f = Math.exp(-age / c.life);
+      this.core.visible = f > 0.01;
+      this.core.material.opacity = Math.min(1, f * 1.4);
+      this.core.scale.setScalar(Math.min(cap * 0.8, s * c.size * (0.6 + age * 2.2)));
+    }
+    if (this.plasma) {
+      const P = K.plasma, p = Math.min(1, age / P.life);
+      this.plasma.visible = p < 1;
+      this.plasma.scale.setScalar(s * P.r * (0.03 + easeOut(p * 2.4, 1.3)));
+      // violet-white while it is bright, cooling to orange as it fades
+      const u = this.plasma.material.uniforms, k = THREE.MathUtils.smoothstep(p, 0.35, 0.9);
+      u.uColor.value.setRGB(
+        P.hot[0] + (P.cool[0] - P.hot[0]) * k, P.hot[1] + (P.cool[1] - P.hot[1]) * k, P.hot[2] + (P.cool[2] - P.hot[2]) * k);
+      u.uIntensity.value = P.level * Math.min(1, age / 0.2) * Math.pow(1 - p, 1.8);
+    }
     this.sparks.setAge(age);
     this.streaks.setAge(age);
     this.puffs.setAge(age);
@@ -504,6 +559,8 @@ export class Blast {
     this.flash.material.dispose();
     if (this.fire) this.fire.material.dispose();
     if (this.shell) this.shell.material.dispose();
+    if (this.core) this.core.material.dispose();
+    if (this.plasma) this.plasma.material.dispose();
     for (const lobe of this.lobes) lobe.mesh.material.dispose();
     if (this.ejecta) this.ejecta.material.dispose();
     this.sparks.dispose();
@@ -533,6 +590,7 @@ export class ShipDestruction {
     this.driftDuration = o.driftDuration;
     this.scale = o.scale;
     this.spawnTime = o.spawnTime;
+    this.meltdown = !!o.meltdown;   // overheat: detonates as the 'meltdown' blast
     this.totalDuration = this.driftDuration + WRECK_LIFE;
     this.rnd = mulberry32(Math.floor(o.spawnTime * 131 + 7));
     const rnd = this.rnd;
@@ -609,7 +667,7 @@ export class ShipDestruction {
     for (const v of this.vents) { v.torch.group.visible = false; }
 
     this.ctx.spawnBlast({
-      position: reactorWorld, scale: this.scale, spawnTime: now, kind: 'reactor',
+      position: reactorWorld, scale: this.scale, spawnTime: now, kind: this.meltdown ? 'meltdown' : 'reactor',
       baseVel: this.driftVel,
       axis: new THREE.Vector3(0, 0, 1).applyQuaternion(g?.quaternion || new THREE.Quaternion())
     });

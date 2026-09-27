@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { updateHullLights } from './HullLights.js';
+import { assignBarrels } from './WeaponTimeline.js';
 
 /**
  * Per-frame hull animation driven by the recording, all on BATTLE time so
@@ -8,7 +9,8 @@ import { updateHullLights } from './HullLights.js';
  *   - coilgun turrets train on the ship's actual target (last shot fired,
  *     else the captain's ordered target, else the nearest enemy), re-lay
  *     onto the next shot's target in the second before it fires, and
- *     recoil when their weapon slot fires
+ *     recoil when their weapon slot fires (twin mounts: the barrel that
+ *     fired, from the shot's `barrel` or alternating shot by shot)
  *   - PD ball turrets swing onto the torpedo / slug their dwell segment is
  *     burning (pd_fired turret_name -> pd rig), else sweep a search pattern
  *
@@ -32,9 +34,10 @@ export function shipEventIndex(events) {
   const shots = new Map();
   const launches = new Map();
   const push = (m, k, v) => { if (!m.has(k)) m.set(k, []); m.get(k).push(v); };
+  const barrels = assignBarrels(events);
   for (const e of events || []) {
     if (e.event_type === 'shot_fired') {
-      push(shots, e.ship_id, { t: e.timestamp, target: e.data?.target_id, slot: e.data?.weapon_slot });
+      push(shots, e.ship_id, { t: e.timestamp, target: e.data?.target_id, slot: e.data?.weapon_slot, barrel: barrels.get(e) ?? 0 });
     } else if (e.event_type === 'torpedo_launched') {
       push(launches, e.ship_id, { t: e.timestamp, target: e.data?.target_id });
     }
@@ -210,12 +213,24 @@ export function updateHullDetails(ship, state, scene) {
       }
       rig.yaw.rotation.y = rig.yawAngle;
       rig.pitch.rotation.x = -rig.pitchAngle;
-      // Recoil from this mount's own weapon slot
-      let k = 0;
+      // Recoil from this mount's own weapon slot; on a twin mount the
+      // barrel that fired runs back and the cradle only kicks a little
+      let k = -1, k0 = -1, k1 = -1;
       for (let i = last; !dying && i >= 0 && t - shots[i].t <= 1.4; i--) {
-        if (shots[i].slot === rig.slot) { k = recoil(t - shots[i].t); break; }
+        if (shots[i].slot !== rig.slot) continue;
+        const r = recoil(t - shots[i].t);
+        if (k < 0) k = r;
+        if (shots[i].barrel === 1) { if (k1 < 0) k1 = r; } else if (k0 < 0) k0 = r;
+        if (!rig.barrels || (k0 >= 0 && k1 >= 0)) break;
       }
-      rig.pitch.position.z = rig.pitchZ - k * rig.s * 0.3;
+      k = Math.max(0, k);
+      if (rig.barrels?.length === 2) {
+        rig.pitch.position.z = rig.pitchZ - k * rig.s * 0.06;
+        rig.barrels[0].position.z = k0 > 0 ? -k0 * rig.s * 0.3 : 0;
+        rig.barrels[1].position.z = k1 > 0 ? -k1 * rig.s * 0.3 : 0;
+      } else {
+        rig.pitch.position.z = rig.pitchZ - k * rig.s * 0.3;
+      }
     }
   }
 

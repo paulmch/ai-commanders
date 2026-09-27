@@ -85,7 +85,7 @@ test('a slug leaves its turret muzzle and blends onto its recorded track', () =>
   try {
     fx.update(loader, 0.001);
     const tr = fx.timeline.slugs.get('s1');
-    assert.deepEqual(tr.shot, { slot: 'weapon_1', index: 1, spinal: false });
+    assert.deepEqual(tr.shot, { slot: 'weapon_1', index: 1, spinal: false, barrel: 0 });
     // at launch: at the barrel tip above the dorsal mount, not the ship centre
     const p0 = fx.positionAt('slug', 's1', 0, new THREE.Vector3());
     const alpha = fx.manager.ships.get('alpha');
