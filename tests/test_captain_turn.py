@@ -811,3 +811,39 @@ class TestThreatDisplayAgreement:
         assert len(wrecks) == tactical["evasion_status"]["blinded_wrecks"] == 1
         assert wrecks[0]["own_side"] is True
         assert wrecks[0]["miss_km"] == pytest.approx(1.0, abs=0.01)
+
+
+class TestLegacyMessages:
+    """COMMS-6: CaptainMessage deliveries are labelled by the SENDER's side."""
+
+    def test_friendly_and_enemy_messages_are_split_and_survive_a_re_decide(self):
+        from src.llm.communication import CaptainMessage
+        sim, me, foe = _sim_pair(400.0, 0.0)
+        mate = create_ship_from_fleet_data("alpha_2", "corvette", "alpha", FLEET,
+                                           position=Vector3D(0, 40_000, 0))
+        mate.name = "TIS Dart-2"
+        sim.add_ship(mate)
+        client, seen = _client({})
+        captain = _captain(client=client)
+        captain.receive_messages([
+            CaptainMessage(sender_id="alpha_2", sender_name="Captain Dart-2",
+                           ship_name="TIS Dart-2", content="Taking the destroyer.", timestamp=0.0),
+            CaptainMessage(sender_id="beta_1", sender_name="Captain Foe",
+                           ship_name="OCS Lancer-1", content="Surrender.", timestamp=0.0),
+        ])
+        captain.decide("alpha_1", sim)
+        turn = seen[0]["messages"][-1]["content"]
+        fleet_net = turn.split("FLEET NET")[1].split("ENEMY TRANSMISSIONS")[0]
+        assert "TIS Dart-2 [alpha_2]" in fleet_net and "Taking the destroyer." in fleet_net
+        assert "Surrender." in turn.split("ENEMY TRANSMISSIONS")[1]
+        assert "ENEMY TRANSMISSION:" not in turn
+
+        captain.revert_last_decision()  # discussion re-decide, same checkpoint
+        captain.decide("alpha_1", sim)
+        assert "Taking the destroyer." in seen[-1]["messages"][-1]["content"]
+
+        # Next checkpoint: the exchange moves to the side-labelled log.
+        sim.current_time = 30.0
+        log = captain._format_message_history(before=30.0)
+        assert "[TIS Dart-2 [alpha_2] (friendly)]" in log
+        assert "[ENEMY OCS Lancer-1 [beta_1]]" in log

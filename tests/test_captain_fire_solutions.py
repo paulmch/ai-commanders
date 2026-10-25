@@ -288,8 +288,21 @@ class TestExecutionFeedback:
         a = _ship(sim, fleet, "alpha_1", "destroyer", "alpha", 0.0)
         a.name = "TIS One"
         _ship(sim, fleet, "alpha_2", "destroyer", "alpha", 0.0, y_km=50.0)
+        _ship(sim, fleet, "beta_1", "destroyer", "beta", 900.0, fwd=-1.0)
+        # A checkpoint happened at T+0 (the enemy was ordered); ours were not.
+        sim.inject_command("beta_1", Maneuver(ManeuverType.MAINTAIN, start_time=0.0, duration=30))
         for _ in range(31):
             sim.step()
         text = execution_feedback(sim, ["alpha_1", "alpha_2"])
         assert "TIS One [alpha_1] NO COMMANDS ISSUED" in text
         assert "alpha_2 NO COMMANDS ISSUED" in text
+
+
+def test_opening_coast_before_the_first_checkpoint_is_not_idle(fleet):
+    """Battles open with a coast to the first checkpoint: not a missed order."""
+    sim = CombatSimulation(time_step=1.0, decision_interval=30, seed=1)
+    _ship(sim, fleet, "alpha_1", "destroyer", "alpha", 0.0)
+    for _ in range(30):
+        sim.step()
+    assert idle_checkpoints(sim.events, "alpha_1", sim.current_time, 30) == []
+    assert "NO COMMANDS" not in execution_feedback(sim, ["alpha_1"])

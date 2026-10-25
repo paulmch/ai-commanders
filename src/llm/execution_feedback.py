@@ -87,19 +87,26 @@ def idle_checkpoints(events: Iterable[Any], ship_id: str, now: float, interval: 
     Start times of the consecutive past decision windows, newest first, in
     which this ship was issued no command at all (window k is
     [now - k*interval, now - (k-1)*interval)). Admiral heading orders count
-    as commands - they go through the same injection.
+    as commands - they go through the same injection. Windows before the
+    battle's first command (the opening coast to the first checkpoint) are
+    not decision windows and never count.
     """
     issued = set()
+    first_issue = None
     for event in events:
-        if event.ship_id != ship_id or event.event_type.name != "COMMAND_STATUS":
+        if event.event_type.name != "COMMAND_STATUS" or event.data.get("status") != "issued":
             continue
-        if event.data.get("status") != "issued" or event.timestamp >= now:
+        if first_issue is None or event.timestamp < first_issue:
+            first_issue = event.timestamp
+        if event.ship_id != ship_id or event.timestamp >= now:
             continue
         issued.add(int((now - event.timestamp - 1e-9) // interval) + 1)
+    if first_issue is None:
+        return []
     starts = []
     for k in range(1, max_back + 1):
         start = now - k * interval
-        if start < -1e-9 or k in issued:
+        if start < first_issue - 1e-6 or k in issued:
             break
         starts.append(start)
     return starts

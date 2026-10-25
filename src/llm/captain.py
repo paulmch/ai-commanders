@@ -754,6 +754,10 @@ class LLMCaptain:
         now = simulation.current_time
         own_faction = getattr(ship, "faction", None)
         items: List[Dict[str, Any]] = []
+        # A discussion re-decide in the same checkpoint must still see the
+        # legacy deliveries the first decide() consumed.
+        cached_t, cached = getattr(self, "_legacy_comms", (None, []))
+        legacy: List[Dict[str, Any]] = list(cached) if cached_t == now else []
         for item in getattr(self, "inbox", None) or []:
             if not isinstance(item, dict):
                 continue
@@ -779,7 +783,7 @@ class LLMCaptain:
                 text = msg.content
             else:
                 text = msg.format_for_llm()
-            items.append({
+            legacy.append({
                 "channel": "fleet_net" if friendly else "enemy_broadcast",
                 "sender_role": "admiral" if msg.message_type in (
                     MessageType.ADMIRAL_ORDER, MessageType.ADMIRAL_TO_ADMIRAL) else "captain",
@@ -794,7 +798,8 @@ class LLMCaptain:
                 sender=ship_ref(msg.ship_name or msg.sender_name, msg.sender_id),
                 side="friendly" if friendly else "enemy", received_at=now)
         self.received_messages.clear()
-        return items
+        self._legacy_comms = (now, legacy)
+        return items + legacy
 
     def _add_launch_status(self, status: Dict[str, Any], ship: Any, simulation: Any) -> None:
         """Tube readiness and launches possible before the next decision."""
