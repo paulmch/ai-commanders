@@ -944,35 +944,68 @@ _PCT_THROTTLE = re.compile(
 _THROTTLE_PCT = re.compile(r"\bthrottle\s*(?:of|at|to|=|:)?\s*(\d{1,3}(?:\.\d+)?)\s*%", re.IGNORECASE)
 _THROTTLE_FRAC = re.compile(
     r"\bthrottle\s*(?:of|at|to|=|:)?\s*(0(?:\.\d+)?|1(?:\.0+)?)(?!\d|\.\d|\s*%)", re.IGNORECASE)
-_ZERO_THROTTLE = re.compile(r"\bzero\s+throttle\b", re.IGNORECASE)
+# Stated zeros: "zero throttle", "NO thrust", "no closing burn", "engine off".
+_ZERO_THROTTLE = re.compile(
+    r"\b(?:zero\s+(?:throttle|thrust)|no\s+(?:closing\s+|main\s+|forward\s+)?(?:thrust|burns?)"
+    r"|engines?\s+off)\b", re.IGNORECASE)
 # "do NOT burn at 60% throttle", "instead of the 50% throttle": not an order.
 _THROTTLE_NEGATION = re.compile(
     r"\b(?:not|no|never|don'?t|avoid|stand\s+down|instead\s+of|cancel|stop)\b[^.;:]{0,30}$",
     re.IGNORECASE)
+# A throttle in a conditional or future clause is not the order for now:
+# "when it falls to ~350 km, ... burn at ~50% throttle", "if he launches,
+# burn at 100%", "next checkpoint we burn at 80%", "expect the PADLOCK order
+# - no burn". The marker counts before the throttle in its clause; after it
+# only a condition does ("burn at 60% throttle only if range < 200 km") - a
+# trailing "(expect ~64 s, renew next checkpoint)" does not.
+_CONDITION_BEFORE = re.compile(
+    r"\b(?:if|when|whenever|unless|once|until|after|later|expect\w*|be\s+ready|should|"
+    r"in\s+case|as\s+soon\s+as|next\s+(?:checkpoint|turn|phase))\b", re.IGNORECASE)
+_CONDITION_AFTER = re.compile(r"\b(?:if|unless|when|whenever|once|in\s+case)\b", re.IGNORECASE)
+# Clause boundaries: sentence ends (not the dots of "0.4" / "(+1.00,...)"),
+# semicolons, colons and line breaks.
+_CLAUSE_END = re.compile(r"[.!?](?=\s|$)|[;:\n]")
 # Spread of stated throttles still read as ONE intent, and the gap to the
 # structured throttle that is a contradiction rather than rounding.
 THROTTLE_TEXT_SPREAD = 0.05
 THROTTLE_CONFLICT_GAP = 0.15
 
 
+def _conditional(text: str, start: int, end: int) -> bool:
+    """True when the throttle at text[start:end] sits in a conditional or
+    future clause (_CONDITION_BEFORE / _CONDITION_AFTER)."""
+    head = max((m.end() for m in _CLAUSE_END.finditer(text, 0, start)), default=0)
+    tail = _CLAUSE_END.search(text, end)
+    return bool(_CONDITION_BEFORE.search(text, head, start)
+                or _CONDITION_AFTER.search(text, end, tail.start() if tail else len(text)))
+
+
 def text_throttles(text: str) -> List[float]:
     """
-    Throttles (0..1) an order's prose states, in order. A positive one right
-    after a negation ("do not burn at 60% throttle") is left out; a zero
-    never is ("no closing burn (throttle 0)" states the zero).
+    Throttles (0..1) an order's prose states for NOW, in order. A positive
+    one right after a negation ("do not burn at 60% throttle") is left out;
+    a zero never is ("no closing burn (throttle 0)" states the zero, and so
+    do "NO thrust" / "no burn"). Throttles in a conditional or future clause
+    ("when it falls to 350 km, burn at 50% throttle") are left out.
     """
     found: List[Tuple[int, float]] = []
     text = str(text or "")
-    for pattern, scale in ((_PCT_THROTTLE, 0.01), (_THROTTLE_PCT, 0.01), (_THROTTLE_FRAC, 1.0)):
-        for m in pattern.finditer(text):
-            value = float(m.group(1)) * scale
-            if value > 1.0 + 1e-9:
-                continue
-            if value > 0 and _THROTTLE_NEGATION.search(text[max(0, m.start() - 40):m.start()]):
-                continue
-            if all(abs(pos - m.start()) > 12 for pos, _ in found):
-                found.append((m.start(), value))
-    found.extend((m.start(), 0.0) for m in _ZERO_THROTTLE.finditer(text))
+    matches = [(m, scale) for pattern, scale in ((_PCT_THROTTLE, 0.01), (_THROTTLE_PCT, 0.01),
+                                                 (_THROTTLE_FRAC, 1.0))
+               for m in pattern.finditer(text)]
+    matches += [(m, 0.0) for m in _ZERO_THROTTLE.finditer(text)]
+    for m, scale in matches:
+        value = float(m.group(1)) * scale if scale else 0.0
+        if value > 1.0 + 1e-9:
+            continue
+        if value > 0 and _THROTTLE_NEGATION.search(text[max(0, m.start() - 40):m.start()]):
+            continue
+        if _conditional(text, m.start(), m.end()):
+            continue
+        # One statement matched twice ("throttle 40%" by two patterns, "no
+        # burn (throttle 0)") counts once.
+        if all(abs(pos - m.start()) > (30 if v == value else 12) for pos, v in found):
+            found.append((m.start(), value))
     return [v for _, v in sorted(found)]
 
 

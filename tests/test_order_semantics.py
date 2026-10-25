@@ -191,6 +191,18 @@ class TestThrottleConflict:
         ("Zero throttle - coast nose-on", [0.0]),
         ("Do NOT burn at 60% throttle; hold.", []),
         ("Hold the line at 450 km, 30% of the fleet is engaged", []),
+        # Stated zeros in words.
+        ("PADLOCK - nose-on, NO thrust (coast-and-shoot).", [0.0]),
+        ("Coast, no burn, guns free.", [0.0]),
+        # Conditional / future clauses are not the order for now.
+        ("Coast now; if he launches, burn at 100% throttle away.", []),
+        ("PADLOCK. Burn at 60% throttle only if range < 200 km.", []),
+        ("Hold PADLOCK, no burn. Next checkpoint we burn at 80% throttle.", [0.0]),
+        ("At ~350 km expect the fleet PADLOCK order - nose on target, no burn.", []),
+        # ... but a trailing note is not a condition, nor is "until".
+        ("Execute the burn on heading (-1.00,-0.03,-0.02) at 100% throttle for this "
+         "checkpoint (expect ~64 s, renew next checkpoint).", [1.0]),
+        ("Burn at 40% throttle until relative speed is ~0.", [0.4]),
     ])
     def test_stated_throttles(self, text, expected):
         assert text_throttles(text) == expected
@@ -198,6 +210,27 @@ class TestThrottleConflict:
     def _order(self, text, spec=None, heading=None, throttle=1.0):
         return AdmiralOrder(target_ship_id="alpha_1", target_ship_name="A", order_text=text,
                             maneuver=spec, heading=heading, throttle=throttle)
+
+    def test_coast_now_brake_later_padlock_is_no_conflict(self):
+        # Recorded (NEW mirror battle, T+150 OCS Ward-2): a correct PADLOCK
+        # whose text plans a later brake burn was told "!! ... fly it yourself".
+        spec = {"maneuver_type": "PADLOCK", "target": "TIS Sovereign-1", "evade": "dodge",
+                "throttle": 1.0}
+        text = ("MAINTAIN PADLOCK on TIS Sovereign-1 \u2014 nose-on, NO thrust (coast-and-shoot). "
+                "Do not fly the +X fleet burn; you are already closing at 0.6 km/s and a "
+                "tail-on burn would mask your guns and invite a merge. Hold the current "
+                "velocity vector and shoot: Coilgun Battery Mk3 on TIS Sovereign-1, "
+                "FIRE_WHEN_OPTIMAL (lower spinal/turret gates as fleet-directed so guns actually "
+                "fire). Track the range to Sovereign-1; when it falls to ~350 km, execute a "
+                "short controlled brake burn on heading (+0.99,+0.13,+0.02) at ~50% throttle to "
+                "kill closure near 350 km, then immediately re-establish PADLOCK nose-on TIS "
+                "Sovereign-1.")
+        assert text_throttles(text) == [0.0]
+        assert order_throttle_conflict(self._order(text, spec)) is None
+        for text in ("PADLOCK. Burn at 60% throttle only if range < 200 km.",
+                     "Coast now; if he launches, burn at 100% throttle away.",
+                     "Hold PADLOCK, no burn. Next checkpoint we burn at 80% throttle."):
+            assert order_throttle_conflict(self._order(text, spec)) is None
 
     def test_padlock_said_throttle_0_is_no_conflict(self):
         spec = {"maneuver_type": "PADLOCK", "target": "OCS Lancer-2", "throttle": 1.0}
