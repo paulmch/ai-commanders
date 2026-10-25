@@ -727,7 +727,16 @@ export class Projectiles {
     const R = 1 / Math.sqrt((c / (L * 0.5)) ** 2 + (1 - c * c) / (W * 0.5) ** 2);
     if (!dudSkims(m, R)) return;   // scene units are km: R compares with the recorded CPA
     this.vel.fromArray(this.shipSample.vel).multiplyScalar(SCALE);
-    this.a.copy(this.b).addScaledVector(this.u, R).addScaledVector(this.vel, age);
+    // The skid sits on the drawn plating facing the pass: cast in from
+    // outside along -u onto the hull kit (DamageFX), lifted a hair so the
+    // flash is never buried in the mesh; else on the hull's ellipse.
+    this.c.copy(target.position).addScaledVector(this.u, L + W);
+    this.d.copy(this.u).negate();
+    if (this.manager.damageFX?.hullSurface?.(m.target, this.c, this.d, this.a, this.e)) {
+      this.a.addScaledVector(this.u, W * 0.04);
+    } else {
+      this.a.copy(this.b).addScaledVector(this.u, R).addScaledVector(this.vel, age);
+    }
     this.skid.copy(this.travel).addScaledVector(this.u, 0.2).normalize();
     const life = 1 - age / IMPACT_LIFE, px = this.pixelAt(this.a);
     this.flashes.add(this.a, this.u, Math.max(W * 0.25 * (1 + age * 2), px * 3 * life), 1.6 * Math.exp(-age * 10) * life, 2, m.seed);

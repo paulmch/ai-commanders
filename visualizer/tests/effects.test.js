@@ -561,3 +561,19 @@ test('torn sections carry the hulk\'s wear instead of clean livery', () => {
   const clean = breakHull(g, rnd, null, { armor: { nose: 1, lateral: 1, tail: 1 }, soot: 0, skin: fx.view('beta_1').wear });
   for (const sec of clean.sections) assert.equal(sec.wear, null);
 });
+
+test('a dud skids on the drawn plating: the hull raycast follows the group pose', () => {
+  const g = boxShip(8, 2);
+  g.position.set(5, 0, 0);
+  g.rotation.set(0, Math.PI / 2, 0);          // long axis along world x
+  const { fx } = stubFx(fleetRecording(), new Map([['beta_1', g]]));
+  const P = new THREE.Vector3(), N = new THREE.Vector3();
+  assert.equal(fx.hullSurface('beta_1', new THREE.Vector3(7, 10, 0), new THREE.Vector3(0, -1, 0), P, N), true);
+  near(P.y, 1); near(P.x, 7); near(N.y, 1);
+  // along the (rotated) long axis the bow face is 4 out
+  assert.equal(fx.hullSurface('beta_1', new THREE.Vector3(20, 0, 0), new THREE.Vector3(-1, 0, 0), P, N), true);
+  near(P.x, 9); near(N.x, 1);
+  // a ray that clears the hull, and a ship that is not drawn
+  assert.equal(fx.hullSurface('beta_1', new THREE.Vector3(30, 10, 0), new THREE.Vector3(0, -1, 0), P, N), false);
+  assert.equal(fx.hullSurface('nobody', new THREE.Vector3(7, 10, 0), new THREE.Vector3(0, -1, 0), P, N), false);
+});

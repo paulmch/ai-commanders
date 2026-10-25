@@ -86,6 +86,9 @@ const RADIATOR_SIDE = { dorsal: [0, 1], ventral: [0, -1], port: [1, 0], starboar
 
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
+const _ho = new THREE.Vector3();
+const _hd = new THREE.Vector3();
+const _inv = new THREE.Matrix4();
 const _q = new THREE.Quaternion();
 const _q2 = new THREE.Quaternion();
 const _m = new THREE.Matrix4();
@@ -1559,6 +1562,26 @@ export class DamageFX {
     if (!v) return null;
     this.markWorld(m, v.resolve(m), outP, outN);
     return m;
+  }
+
+  /**
+   * First point of a ship's drawn hull along a world-space ray (scene
+   * units) from `origin` along unit `dir`, at the ship group's current
+   * pose, with the outward surface normal (world). False when the ray
+   * misses or the ship is not drawn. (Projectiles.dud: a skid on the
+   * plating, never inside it.)
+   */
+  hullSurface(shipId, origin, dir, outP, outN) {
+    const v = this.view(shipId);
+    if (!v) return false;
+    const g = v.group;
+    g.updateWorldMatrix(true, false);
+    _inv.copy(g.matrixWorld).invert();
+    const hit = v._cast(_ho.copy(origin).applyMatrix4(_inv), _hd.copy(dir).transformDirection(_inv));
+    if (!hit) return false;
+    outP.copy(hit.p).applyMatrix4(g.matrixWorld);
+    outN.copy(hit.n).transformDirection(g.matrixWorld);
+    return true;
   }
 
   /** Per-frame: called by SceneManager with the playback time. */

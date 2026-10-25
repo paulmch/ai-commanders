@@ -66,7 +66,11 @@ this module only.
   `DUD_REACH_KM` is a dud candidate; `dud()` shows the ones whose recorded
   closest approach lies inside the displayed hull's radius toward the round
   (`dudSkims`; P(hit) >= `DUD_P` when no closest approach is recorded) as a
-  spark skid off the plating. Misses that cleared the drawn hull show nothing.
+  spark skid off the plating, placed by `damageFX.hullSurface` (a ray cast in
+  from outside onto the hull kit; the hull ellipse sat inside the box-like
+  mesh and buried the flash). Misses that cleared the drawn hull show nothing.
+  The loader's torpedo `miss` flare (main.js) still pops at the round's last
+  sample as well.
 - `positionAt(type, id, t)` gives a round's displayed position straight from
   the recording (HullRigs aims PD balls with it).
 - Old recordings lack terminal-burn flags; the plume phase is inferred from
