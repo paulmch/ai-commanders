@@ -359,7 +359,8 @@ class AdmiralSnapshot:
     ship_types: Dict[str, str] = field(default_factory=dict)   # id -> class
     range_groups: List[Any] = field(default_factory=list)      # GroupRangeInfo, fleet centre
     group_range_change_km: Dict[str, float] = field(default_factory=dict)  # vs T-15 s
-    group_motion: Dict[str, Tuple[float, float]] = field(default_factory=dict)
+    group_motion: Dict[str, Tuple[float, float]] = field(default_factory=dict)  # battle frame, m/s
+    group_burn_g: Dict[str, float] = field(default_factory=dict)  # their thrust toward us (- away)
     groups_opened: List[str] = field(default_factory=list)     # closing -> opening since last CP
     own_centre: Dict[str, Any] = field(default_factory=dict)
     headings: str = ""                                         # option lines + FORMATION
@@ -1112,8 +1113,9 @@ Be authentic to how you would command a fleet as {model_name}."""
         enemies: List[Any],
     ) -> None:
         """Fill the turn-state fields of a checkpoint snapshot (see _build_snapshot)."""
-        from .range_control import (analyze_range_control, format_heading_options,
-                                    format_range_control, formation_line)
+        from .range_control import (analyze_range_control, current_accel,
+                                    format_heading_options, format_range_control,
+                                    formation_line)
         now = simulation.current_time
         interval = float(getattr(simulation, "decision_interval", 30.0) or 30.0)
         snap.checkpoint = self.decision_count + 1
@@ -1144,8 +1146,6 @@ Be authentic to how you would command a fleet as {model_name}."""
         group_of = {sid: info.label for info in infos for sid in info.ship_ids}
         if live_own:
             own_pos, own_vel = intel.centre(live_own)
-            everyone = live_own + live_enemies
-            _, com_vel = intel.centre(everyone)
             spread = max((s.position - own_pos).magnitude for s in live_own) / 1000.0
             snap.own_centre = {
                 "pos_km": (own_pos.x / 1000.0, own_pos.y / 1000.0, own_pos.z / 1000.0),
@@ -1162,8 +1162,9 @@ Be authentic to how you would command a fleet as {model_name}."""
                 if not group:
                     continue
                 g_pos, g_vel = intel.centre(group)
-                snap.group_motion[info.label] = intel.motion_split(
-                    own_pos, own_vel, g_pos, g_vel, com_vel)
+                snap.group_motion[info.label] = intel.motion_split(own_pos, own_vel, g_pos, g_vel)
+                snap.group_burn_g[info.label] = intel.burn_toward_g(
+                    own_pos, g_pos, [current_accel(m) for m in group])
                 delta = _range_change(prev15, [s.ship_id for s in live_own], info.ship_ids,
                                       info.range_km)
                 if delta is not None:

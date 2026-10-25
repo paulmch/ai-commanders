@@ -114,6 +114,10 @@ def _current_accel(ship: Any) -> Vector3D:
     return ks.forward * (ks.thrust_n * throttle / ks.mass_kg)
 
 
+# Public name: the admiral's GEOMETRY reports which way each enemy group burns.
+current_accel = _current_accel
+
+
 def _turn_time(sim: Any, ships: Sequence[Any], direction: Vector3D, engines_on: bool) -> float:
     """Longest bang-bang turn (from rest) any of ``ships`` needs to face ``direction``."""
     worst = 0.0

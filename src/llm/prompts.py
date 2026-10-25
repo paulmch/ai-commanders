@@ -1827,8 +1827,10 @@ HEAT AND RESOURCES:
 
 ADDITIONAL NOTES:
 - Captains are AI commanders - be specific about priorities and targets
-- GEOMETRY shows each group's range change over the last 15 s and who is doing the
-  closing; SINCE LAST CHECKPOINT shows kills, losses and who hit whom
+- GEOMETRY shows each group's range change over the last 15 s, who has done the
+  closing (each side's speed along the line in the battle frame, where the fleets
+  started) and which way they burn now; SINCE LAST CHECKPOINT shows kills, losses
+  and who hit whom
 - TIMING: Each order is LOCKED for {decision_interval_s:g} seconds. No "if X then Y" contingencies.
   Give ONE clear order per ship. Captains cannot react mid-checkpoint.
 {enemy_admiral_note}
@@ -2546,6 +2548,7 @@ def _format_geometry(snapshot: Any) -> str:
     own_gun_range = max([getattr(r, "gun_range_km", 0.0) or 0.0 for r in own_rows] or [0.0])
     changes = getattr(snapshot, "group_range_change_km", None) or {}
     motion = getattr(snapshot, "group_motion", None) or {}
+    burns = getattr(snapshot, "group_burn_g", None) or {}
     opened = set(getattr(snapshot, "groups_opened", None) or [])
 
     def gun_reach(who: str, reach_km: float, info: Any) -> str:
@@ -2573,6 +2576,10 @@ def _format_geometry(snapshot: Any) -> str:
             ours, theirs = motion[info.label]
             head += (f" = you {abs(ours) / 1000.0:.1f} km/s {'toward' if ours >= 0 else 'away from'} them"
                      f" + they {abs(theirs) / 1000.0:.1f} {'toward' if theirs >= 0 else 'away from'} you")
+        if info.label in burns:
+            g = burns[info.label]
+            head += ("; they coast" if abs(g) < 0.05 else
+                     f"; they burn {'toward you' if g > 0 else 'away'} {abs(g):.1f}g")
         lines.append(head)
         if info.cpa_t_s > 0.5:
             who = f" ({info.cpa_ship})" if info.cpa_ship else ""

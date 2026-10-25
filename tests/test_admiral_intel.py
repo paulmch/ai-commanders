@@ -416,6 +416,42 @@ class TestGeometry:
             ours, theirs = snap.group_motion[group.label]
             assert (ours + theirs) / 1000.0 == pytest.approx(group.closing_kps, abs=0.02)
 
+    @staticmethod
+    def _one_v_one(own_vel_kps, en_vel_kps, en_throttle=0.0):
+        sim = CombatSimulation(decision_interval=30.0, seed=1)
+        sim.current_time = 60.0
+        ship(sim, "alpha_1", "corvette", "alpha", (0, 0, 0), vel_kps=own_vel_kps)
+        foe = ship(sim, "beta_1", "battleship", "beta", (100, 0, 0), vel_kps=en_vel_kps,
+                   fwd=(-1, 0, 0))
+        foe.applied_throttle = en_throttle
+        snap, text = live_turn(make_admiral("alpha"), sim, caps_from_sim(sim, "alpha"))
+        line = next(l for l in section(text, "=== GEOMETRY").splitlines()
+                    if l.startswith("GROUP A"))
+        return snap, line
+
+    def test_who_is_closing_follows_who_moved_not_ship_counts(self):
+        """1 v 1 at 100 km closing 2 km/s, three ways. In the old centre-of-
+        mass frame all three printed 'you 1.0 + they 1.0'."""
+        _, line = self._one_v_one((2, 0, 0), (0, 0, 0))          # we charge a sitting enemy
+        assert "= you 2.0 km/s toward them + they 0.0 toward you; they coast" in line
+        _, line = self._one_v_one((0, 0, 0), (-2, 0, 0))         # he charges us
+        assert "= you 0.0 km/s toward them + they 2.0 toward you" in line
+        _, line = self._one_v_one((-3, 0, 0), (-5, 0, 0))        # we run, he chases faster
+        assert "= you 3.0 km/s away from them + they 5.0 toward you" in line
+
+    def test_geometry_says_which_way_they_burn_now(self):
+        snap, line = self._one_v_one((0, 0, 0), (-2, 0, 0), en_throttle=1.0)
+        assert snap.group_burn_g["GROUP A"] == pytest.approx(1.0, abs=0.05)   # 1 g battleship
+        assert line.endswith("; they burn toward you 1.0g")
+        # Nose away from us at full throttle: burning away (braking his charge).
+        sim = CombatSimulation(decision_interval=30.0, seed=1)
+        ship(sim, "alpha_1", "corvette", "alpha", (0, 0, 0))
+        foe = ship(sim, "beta_1", "battleship", "beta", (100, 0, 0), vel_kps=(-2, 0, 0),
+                   fwd=(1, 0, 0))
+        foe.applied_throttle = 1.0
+        _, text = live_turn(make_admiral("alpha"), sim, caps_from_sim(sim, "alpha"))
+        assert "+ they 2.0 toward you; they burn away 1.0g" in text
+
     def test_enemy_rows_use_the_fleet_centre_and_name_the_nearest_hull(self):
         _, sim, snap, msgs = battle_a_turn("alpha", t=180)
         sov = next(e for e in snap.enemy_ships if e.ship_id == "beta_1")

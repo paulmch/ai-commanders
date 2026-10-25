@@ -732,21 +732,39 @@ def direction_str(v: Vector3D) -> str:
     return f"({u.x:+.2f},{u.y:+.2f},{u.z:+.2f})"
 
 
-def motion_split(own_pos: Vector3D, own_vel: Vector3D, en_pos: Vector3D, en_vel: Vector3D,
-                 com_vel: Vector3D) -> Tuple[float, float]:
+def motion_split(own_pos: Vector3D, own_vel: Vector3D, en_pos: Vector3D,
+                 en_vel: Vector3D) -> Tuple[float, float]:
     """
-    Who is doing the closing: each side's velocity in the battle's centre-of-
-    mass frame, projected on the line between them. Returns (ours toward
-    them, theirs toward us) in m/s; their sum is the closing speed. Fixes the
-    symmetric "Enemy fleeing" both admirals were told after a pass.
+    Who is doing the closing: each side's velocity in the battle frame (the
+    simulation's world frame - fleets start the battle at rest in it unless a
+    config gives them a velocity), projected on the line between them.
+    Returns (ours toward them, theirs toward us) in m/s; their sum is the
+    closing speed. Fixes the symmetric "Enemy fleeing" both admirals were
+    told after a pass.
+
+    Not the two fleets' centre-of-mass frame: there the split depends only on
+    the ship counts, never on who moved (one ship each always splits 50/50,
+    whether we charged a sitting enemy or he charged us).
     """
     rel = en_pos - own_pos
     if rel.magnitude < 1.0:
         return 0.0, 0.0
     los = rel.normalized()
-    ours = (own_vel - com_vel).dot(los)
-    theirs = -(en_vel - com_vel).dot(los)
-    return ours, theirs
+    return own_vel.dot(los), -en_vel.dot(los)
+
+
+def burn_toward_g(own_pos: Vector3D, en_pos: Vector3D, accels: Sequence[Vector3D]) -> float:
+    """
+    An enemy group's mean current thrust acceleration along the line toward
+    us, in g (negative = burning away). Velocity says who HAS closed; the
+    burn says who is closing NOW - a fleet braking after a charge still shows
+    its old speed toward us while its torch points at us.
+    """
+    rel = own_pos - en_pos
+    if rel.magnitude < 1.0 or not accels:
+        return 0.0
+    los = rel.normalized()
+    return sum(a.dot(los) for a in accels) / len(accels) / G_STANDARD
 
 
 # =============================================================================
