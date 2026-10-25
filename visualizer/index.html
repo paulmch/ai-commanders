@@ -35,19 +35,33 @@
           <span class="title-prefix">ENGAGEMENT //</span>
           <h1 id="battleName">FLEET BATTLE</h1>
         </div>
-        <div class="fleet-summary">
-          <div class="fleet-indicator alpha">
-            <span class="fleet-label">ALPHA</span>
-            <span class="fleet-count" id="alphaCount">0/0</span>
-            <div class="fleet-bar"><div class="fleet-bar-fill" id="alphaBar"></div></div>
-            <span class="torp-count" id="alphaTorps"></span>
+        <!-- Scoreboard (src/Scoreboard.js): model, ships, hull pips, torpedoes, kills, spend; strength balance -->
+        <div class="scoreboard" id="scoreboard" aria-label="Scoreboard">
+          <div class="score-side alpha" data-side="alpha">
+            <span class="score-faction">ALPHA</span>
+            <span class="score-model" data-model></span>
+            <span class="score-ships" title="Ships fighting / fleet size"><b data-alive>0</b>/<span data-total>0</span></span>
+            <span class="score-pips" data-pips aria-hidden="true"></span>
+            <span class="score-stat score-hull" data-hull title="Fleet hull (lost and dying ships count as 0%)">100%</span>
+            <span class="score-stat score-torps" data-torps title="Torpedoes in flight"></span>
+            <span class="score-stat score-kills" data-kills title="Enemy ships knocked out">&#9760; 0</span>
+            <span class="score-stat score-points" data-points title="Draft points destroyed"></span>
+            <span class="score-stat score-spend" data-spend title="Reported model spend so far"></span>
           </div>
-          <div class="vs-separator">VS</div>
-          <div class="fleet-indicator beta">
-            <span class="fleet-label">BETA</span>
-            <span class="fleet-count" id="betaCount">0/0</span>
-            <div class="fleet-bar"><div class="fleet-bar-fill" id="betaBar"></div></div>
-            <span class="torp-count" id="betaTorps"></span>
+          <div class="score-balance" title="Remaining fleet strength">
+            <span class="score-vs">VS</span>
+            <span class="score-balance-track"><i data-balance></i></span>
+          </div>
+          <div class="score-side beta" data-side="beta">
+            <span class="score-faction">BETA</span>
+            <span class="score-model" data-model></span>
+            <span class="score-ships" title="Ships fighting / fleet size"><b data-alive>0</b>/<span data-total>0</span></span>
+            <span class="score-pips" data-pips aria-hidden="true"></span>
+            <span class="score-stat score-hull" data-hull title="Fleet hull (lost and dying ships count as 0%)">100%</span>
+            <span class="score-stat score-torps" data-torps title="Torpedoes in flight"></span>
+            <span class="score-stat score-kills" data-kills title="Enemy ships knocked out">&#9760; 0</span>
+            <span class="score-stat score-points" data-points title="Draft points destroyed"></span>
+            <span class="score-stat score-spend" data-spend title="Reported model spend so far"></span>
           </div>
         </div>
       </div>
@@ -75,8 +89,19 @@
       </div>
     </div>
 
+    <!-- Kill feed (src/KillFeed.js) and end-of-battle result (Scoreboard.js ResultBanner) -->
+    <div id="killFeed" class="kill-feed" aria-live="polite" hidden></div>
+    <div id="resultBanner" class="result-banner hidden" role="status" aria-live="polite">
+      <button class="result-close" data-close aria-label="Dismiss result">&times;</button>
+      <span class="result-kicker" data-kicker></span>
+      <strong class="result-title" data-title></strong>
+      <span class="result-reason" data-reason></span>
+      <div class="result-tally" data-tally></div>
+    </div>
+
     <div id="viewControls" class="view-controls hidden" aria-label="Battle view">
       <button id="fleetViewBtn" title="Frame active fleets (F)">FLEET VIEW <kbd>F</kbd></button>
+      <button id="commsBtn" aria-pressed="false" aria-controls="commsFeed" title="Command net: directives, orders, reports and messages (N)">NET <kbd>N</kbd></button>
       <button id="decisionsBtn" aria-expanded="false" aria-controls="decisionPanel" title="Explore decisions and consequences (D)">DECISIONS <kbd>D</kbd></button>
       <button id="contactsBtn" class="active" aria-pressed="true" title="Toggle contact labels (C)">CONTACTS <kbd>C</kbd></button>
     </div>
@@ -84,7 +109,7 @@
       <div class="panel-header"><span class="panel-title">INTENT → CONSEQUENCE</span><button data-close aria-label="Close decisions">×</button></div>
       <div class="decision-controls">
         <label>SHIP <select data-ship aria-label="Decision history ship"></select></label>
-        <div class="decision-navigation"><button data-prev aria-label="Previous decision">←</button><select data-decision aria-label="Decision checkpoint"></select><button data-next aria-label="Next decision">→</button></div>
+        <div class="decision-navigation"><button data-prev aria-label="Previous decision">←</button><select data-decision aria-label="Decision checkpoint"></select><button data-next aria-label="Next decision">→</button><button data-follow class="decision-follow active" aria-pressed="true">● LATEST</button></div>
       </div>
       <div class="decision-body" data-body></div>
     </aside>
@@ -122,6 +147,13 @@
       <div class="panel-header mini">
         <span class="panel-icon">▣</span>
         COMBAT LOG
+        <div class="log-filters" id="eventLogFilters" role="group" aria-label="Combat log filter">
+          <button type="button" data-log-filter="all" title="Everything">ALL</button>
+          <button type="button" data-log-filter="kills" title="Kills and battle result">KILL</button>
+          <button type="button" data-log-filter="fire" title="Shots, torpedoes, hits">FIRE</button>
+          <button type="button" data-log-filter="pd" title="Point defense">PD</button>
+          <button type="button" data-log-filter="command" title="Orders, reports, comms">CMD</button>
+        </div>
         <button id="collapseEventLog" class="collapse-btn" title="Collapse / expand log">+</button>
       </div>
       <div class="event-list" id="eventList"></div>
@@ -266,8 +298,31 @@
         </div>
     </aside>
 
-    <!-- Trajectory-track countdown, glyph legend and scope (src/TrackHud.js) -->
-    <div id="trackHud" class="track-hud hidden" aria-label="Trajectory tracks"></div>
+    <!-- Right column: command net (src/CommsFeed.js) above the track HUD -->
+    <div id="rightSidebar">
+      <aside id="commsFeed" class="panel comms-feed hidden" aria-label="Command net">
+        <div class="panel-header comms-head">
+          <span class="panel-title"><span class="panel-icon">◬</span>COMMAND NET</span>
+          <span class="comms-tabs" role="group" aria-label="Faction">
+            <button type="button" data-comms-faction="all">ALL</button>
+            <button type="button" data-comms-faction="alpha" class="alpha">ALPHA</button>
+            <button type="button" data-comms-faction="beta" class="beta">BETA</button>
+          </span>
+          <button type="button" class="panel-close" data-close aria-label="Close command net (N)">×</button>
+        </div>
+        <div class="comms-filters" role="group" aria-label="Traffic">
+          <button type="button" data-comms-group="all">ALL</button>
+          <button type="button" data-comms-group="command" title="Plans, directives and ship orders">ORDERS</button>
+          <button type="button" data-comms-group="reports" title="Captain reports, logs and queries">REPORTS</button>
+          <button type="button" data-comms-group="chatter" title="Fleet net, direct, enemy and automatic signals">CHATTER</button>
+          <button type="button" data-comms-group="issues" title="Deviations, refusals, critical orders, errors">ISSUES</button>
+        </div>
+        <div class="comms-standing" data-standing hidden></div>
+        <div class="comms-list" data-list></div>
+      </aside>
+      <!-- Trajectory-track countdown, glyph legend and scope (src/TrackHud.js) -->
+      <div id="trackHud" class="track-hud hidden" aria-label="Trajectory tracks"></div>
+    </div>
 
     <!-- Playback Controls -->
     <footer id="playbackControls">
@@ -281,6 +336,7 @@
 
         <div class="control-group timeline">
           <div class="timeline-wrapper">
+            <div class="timeline-cps" id="timelineCheckpoints" aria-label="Checkpoints"></div>
             <div class="timeline-track">
               <div class="timeline-progress" id="timelineProgress"></div>
               <div class="timeline-handle" id="timelineHandle"></div>

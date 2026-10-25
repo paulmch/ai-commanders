@@ -1,4 +1,5 @@
 import { DecisionIndex } from './DecisionIndex.js';
+import { buildHudIndex, appendHudIndex } from './HudIndex.js';
 import { getModulesForShipType } from './shipModules.js';
 
 /** First index in a timestamp-sorted array whose timestamp is >= t (or > t when strict). */
@@ -105,7 +106,8 @@ export class BattleLoader {
    * with delta = {frames, events}: only what arrived, all of it later than
    * everything already indexed. The builders below extend their indexes
    * from the delta, so a poll costs what it brings, not the whole battle
-   * (LV-15). A builder that ignores the delta argument simply rebuilds in
+   * (LV-15); the spectator HUD index (HudIndex.js) extends itself the same
+   * way. A builder that ignores the delta argument simply rebuilds in
    * full - correct, just not incremental. tests/live_append.test.js pins
    * parse(all) == parse(head) + appendLiveData(rest) for every field.
    * @param {{frames: Array, events: Array}|null} delta
@@ -134,6 +136,8 @@ export class BattleLoader {
     this.decisions = delta && this.decisions?.append
       ? this.decisions.append(delta.events)
       : new DecisionIndex(this.events, this.ships);
+    // Spectator HUD rows (log, command net, kills, markers): see HudIndex.js
+    this.hud = delta ? appendHudIndex(this, delta) : buildHudIndex(this);
     this.lastEventSequence = (delta ? delta.events : this.events)
       .reduce((max, e) => Math.max(max, e.sequence || 0), delta ? this.lastEventSequence || 0 : 0);
   }

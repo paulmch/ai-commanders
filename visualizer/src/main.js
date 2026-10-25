@@ -27,6 +27,13 @@ import { TrackHud } from './TrackHud.js';
 import { latestWreckEnd } from './render/Explosion.js';
 import { fitBattleTitle } from './TitleFit.js';
 import { updateRegistryHeat } from './HeatHud.js';
+import { CombatLog } from './CombatLog.js';
+import { CommsFeed } from './CommsFeed.js';
+import { KillFeed } from './KillFeed.js';
+import { Registry } from './Registry.js';
+import { Scoreboard, ResultBanner, resultBannerDue } from './Scoreboard.js';
+import { TimelineMarkers } from './TimelineMarkers.js';
+import { showLightbox } from './hudDom.js';
 
 class BattleVisualizer {
   constructor() {
@@ -63,6 +70,7 @@ class BattleVisualizer {
   async init() {
     this.cacheElements();
     this.decisions = new DecisionPanel(this);
+    this.initHud();   // scoreboard, kill feed, command net, combat log, registry, timeline markers
     this.contacts = new ContactOverlay(document.getElementById('shipContacts'), id => this.selectShip(id));
     this.setupEventListeners();
     // Trajectory tracks: T / playback-bar button; live PATHS mirrors it
@@ -106,10 +114,6 @@ class BattleVisualizer {
       // Header
       battleName: document.getElementById('battleName'),
       missionTime: document.getElementById('missionTime'),
-      alphaCount: document.getElementById('alphaCount'),
-      betaCount: document.getElementById('betaCount'),
-      alphaBar: document.getElementById('alphaBar'),
-      betaBar: document.getElementById('betaBar'),
 
       // Ship registry
       alphaShips: document.getElementById('alphaShips'),
@@ -310,6 +314,8 @@ class BattleVisualizer {
         this.toggleContacts();
       } else if (e.code === 'KeyA' && !e.shiftKey && this.isInitialized) {
         this.toggleDirector();
+      } else if (e.code === 'KeyN' && this.isInitialized) {
+        this.toggleComms();
       }
     });
 
@@ -433,6 +439,7 @@ class BattleVisualizer {
     this.updateBattleInfo();
     this.populateShipLists();
     this.decisions.reset();
+    this.resetHud();
     this.contacts.populate(this.loader.ships);
     document.getElementById('viewControls').classList.remove('hidden');
     this.populateTimelineMarkers();
@@ -462,7 +469,7 @@ class BattleVisualizer {
     if (replayParams.get('decisions') === '1') {
       this.decisions.setOpen(true);
       const decisionId = replayParams.get('decision');
-      if (decisionId && this.loader.decisions.byId.has(decisionId)) this.decisions.decisionId = decisionId;
+      if (decisionId && this.loader.decisions.byId.has(decisionId)) this.decisions.pin(decisionId);
       this.decisions.update(this.timeController.currentTime);
       if (this.live) this.timeController.play();
       else this.timeController.pause();
@@ -1403,120 +1410,32 @@ class BattleVisualizer {
    * Populate ship lists in registry panel
    */
   populateShipLists() {
-    this.elements.alphaShips.innerHTML = '';
-    this.elements.betaShips.innerHTML = '';
-
-    for (const [shipId, shipInfo] of Object.entries(this.loader.ships)) {
-      const li = document.createElement('li');
-      li.innerHTML = '<svg class="registry-silhouette" viewBox="0 0 120 80" aria-hidden="true"><path/></svg><span class="registry-identity"><span class="registry-name"></span><span class="registry-class"></span><span class="registry-health"><i></i></span></span><span class="registry-status"></span>';
-      li.querySelector('path').setAttribute('d', (SHIP_SILHOUETTES[shipInfo.type] || SHIP_SILHOUETTES.destroyer).body);
-      li.querySelector('.registry-name').textContent = shipInfo.name || shipId;
-      li.querySelector('.registry-class').textContent = getShipClassName(shipInfo.type);
-      li.tabIndex = 0;
-      li.setAttribute('role', 'button');
-      li.setAttribute('aria-label', `Inspect ${shipInfo.name || shipId}`);
-      li.dataset.shipId = shipId;
-      li.addEventListener('click', () => this.selectShip(shipId));
-      li.addEventListener('keydown', e => {
-        if (e.code === 'Enter' || e.code === 'Space') { e.preventDefault(); e.stopPropagation(); this.selectShip(shipId); }
-      });
-
-      if (shipInfo.faction === 'alpha') {
-        this.elements.alphaShips.appendChild(li);
-      } else {
-        this.elements.betaShips.appendChild(li);
-      }
-    }
+    this.registry.populate(this.loader.ships);
   }
 
   /**
    * Drop colored markers on the timeline for key battle moments
    */
   populateTimelineMarkers() {
-    const container = document.getElementById('timelineMarkers');
-    if (!container || !this.loader.duration) return;
-    container.innerHTML = '';
-
-    const markerTypes = {
-      'torpedo_impact': 'marker-impact',
-      'module_destroyed': 'marker-destroyed',
-      'torpedo_launched': 'marker-launch',
-      'message': 'marker-comms',
-      'captain_decision': 'marker-decision'
-    };
-
-    const checkpointTimes = new Set();
-    for (const event of this.loader.events) {
-      if (event.event_type === 'captain_decision') {
-        if (checkpointTimes.has(event.timestamp)) continue;
-        checkpointTimes.add(event.timestamp);
-      }
-      const cls = markerTypes[event.event_type];
-      if (!cls) continue;
-      const marker = document.createElement('div');
-      marker.className = `timeline-marker ${cls}`;
-      marker.style.left = `${(event.timestamp / this.timeController.duration) * 100}%`;
-      marker.title = `${this.formatTime(event.timestamp)} ${event.event_type.replace(/_/g, ' ')}`;
-      container.appendChild(marker);
-    }
+    if (!this.loader?.duration || !this.timeController) return;
+    this.timelineMarkers.build(this.loader.hud, this.timeController.duration, this.loader.ships);
   }
 
   /**
    * Update fleet status (alive counts)
    */
   updateFleetStatus() {
-    if (!this.currentState) return;
-
-    let alphaAlive = 0, alphaTotal = 0;
-    let betaAlive = 0, betaTotal = 0;
-
-    for (const [shipId, state] of Object.entries(this.currentState.ships)) {
-      const faction = shipId.startsWith('alpha') ? 'alpha' : 'beta';
-      // A dying ship is a confirmed kill counting down to its reactor
-      // detonation - it no longer counts toward the fleet's fighting strength.
-      if (faction === 'alpha') {
-        alphaTotal++;
-        if (!state.destroyed && !state.dying) alphaAlive++;
-      } else {
-        betaTotal++;
-        if (!state.destroyed && !state.dying) betaAlive++;
-      }
-    }
-
-    this.elements.alphaCount.textContent = `${alphaAlive}/${alphaTotal}`;
-    this.elements.betaCount.textContent = `${betaAlive}/${betaTotal}`;
-    this.elements.alphaBar.style.width = `${(alphaAlive / alphaTotal) * 100}%`;
-    this.elements.betaBar.style.width = `${(betaAlive / betaTotal) * 100}%`;
-
-    // In-flight ordnance per faction
-    let alphaTorps = 0, betaTorps = 0;
-    for (const torp of this.currentState.torpedoes || []) {
-      if ((torp.source || '').startsWith('alpha')) alphaTorps++;
-      else betaTorps++;
-    }
-    const alphaTorpsEl = document.getElementById('alphaTorps');
-    const betaTorpsEl = document.getElementById('betaTorps');
-    if (alphaTorpsEl) {
-      alphaTorpsEl.textContent = alphaTorps > 0 ? `▸ ${alphaTorps} ORDNANCE` : '';
-    }
-    if (betaTorpsEl) {
-      betaTorpsEl.textContent = betaTorps > 0 ? `▸ ${betaTorps} ORDNANCE` : '';
-    }
-
-    // Update ship list destroyed states
-    document.querySelectorAll('.ship-list li').forEach(li => {
-      const shipId = li.dataset.shipId;
-      const state = this.currentState.ships[shipId];
-      const hull = Math.round(Math.max(0, Math.min(100, state?.hull ?? 100)));
-      li.classList.toggle('dying', !!state?.dying);
-      li.querySelector('.registry-health i').style.width = `${state?.destroyed ? 0 : hull}%`;
-      li.querySelector('.registry-status').textContent = state?.destroyed ? 'LOST' : state?.dying ? 'CRIT' : `${hull}%`;
-      if (state?.destroyed) {
-        li.classList.add('destroyed');
-      } else {
-        li.classList.remove('destroyed');
-      }
-    });
+    if (!this.currentState || !this.loader?.hud) return;
+    const t = this.timeController.currentTime;
+    const hud = this.loader.hud;
+    const sides = this.scoreboard.update(this.currentState.ships, this.currentState.torpedoes, this.loader.ships, hud, t);
+    this.registry.update(this.currentState.ships, t, hud.kills);
+    this.killFeed.update(hud.kills, t);
+    // A dying ship is a confirmed kill counting down to its reactor
+    // detonation; the banner waits for the end of a replayed recording (a
+    // live battle's verdict is the live end card's, never both).
+    const over = resultBannerDue(t, this.loader.duration, this.live);
+    this.resultBanner.update(over, hud.result, sides, this.loader.duration);
   }
 
   /**
@@ -1528,9 +1447,7 @@ class BattleVisualizer {
     this.decisions.selectShip(shipId);
 
     // Update ship list UI
-    document.querySelectorAll('.ship-list li').forEach(li => {
-      li.classList.toggle('selected', li.dataset.shipId === shipId);
-    });
+    this.registry.select(shipId);
 
     // Show telemetry panel
     this.elements.shipTelemetry.classList.remove('hidden');
@@ -1545,7 +1462,7 @@ class BattleVisualizer {
     this.updateShipSilhouette(shipInfo?.type || 'destroyer');
 
     // Set faction color
-    const faction = shipId.startsWith('alpha') ? 'alpha' : 'beta';
+    const faction = shipInfo?.faction || (shipId.startsWith('alpha') ? 'alpha' : 'beta');
     this.elements.shipName.style.color = faction === 'alpha'
       ? 'var(--alpha-primary)'
       : 'var(--beta-primary)';
@@ -1563,9 +1480,7 @@ class BattleVisualizer {
     this.selectedShipId = null;
     this.elements.shipTelemetry.classList.add('hidden');
 
-    document.querySelectorAll('.ship-list li').forEach(li => {
-      li.classList.remove('selected');
-    });
+    this.registry.select(null);
 
     this.setCameraMode('free');
   }
@@ -1617,7 +1532,7 @@ class BattleVisualizer {
       return;
     }
 
-    const hull = state.hull || 100;
+    const hull = Math.max(0, Math.min(100, state.hull ?? 100));
     const thrust = (state.thrust || 0) * 100;
 
     this.elements.hullBar.style.width = `${hull}%`;
@@ -1775,13 +1690,19 @@ class BattleVisualizer {
         statusText = 'OK';
       }
 
-      item.innerHTML = `
-        <div class="module-icon">${icon}</div>
-        <div class="module-info">
-          <span class="module-name">${displayName}</span>
-          <span class="module-status">${statusText}</span>
-        </div>
-      `;
+      // Module keys come from the recording: build with textContent
+      const info = document.createElement('div');
+      info.className = 'module-info';
+      for (const [cls, text] of [['module-name', displayName], ['module-status', statusText]]) {
+        const span = document.createElement('span');
+        span.className = cls;
+        span.textContent = text;
+        info.appendChild(span);
+      }
+      const iconEl = document.createElement('div');
+      iconEl.className = 'module-icon';
+      iconEl.textContent = icon;
+      item.append(iconEl, info);
 
       this.elements.moduleGrid.appendChild(item);
     }
@@ -1868,58 +1789,78 @@ class BattleVisualizer {
   }
 
   /**
-   * Process and display events
+   * Bring the time-indexed HUD panels (combat log, command net) to the
+   * playhead. Both are pure functions of (time, index): a parked playhead
+   * re-renders nothing, a backward seek prunes, late live events append once.
    */
   processEvents() {
     const currentTime = this.timeController.currentTime;
-    const events = this.loader.getEventsInRange(this.lastTime, currentTime);
-
-    for (const event of events) {
-      this.addEventToLog(event);
-    }
-
+    const complete = !this.live || !!this.live.ended;
+    this.combatLog.setIndex(this.loader.hud);
+    this.combatLog.update(currentTime);
+    this.commsFeed.setIndex(this.loader.hud, complete);
+    this.commsFeed.update(currentTime);
     this.lastTime = currentTime;
   }
 
-  /**
-   * Add event to combat log
-   */
-  addEventToLog(event) {
-    const shipName = (id) => this.loader.ships[id]?.name || id || '?';
-    const eventTypes = {
-      'hit': { class: 'hit', format: (e) => `HIT: ${shipName(e.data?.shooter_id)} strikes ${shipName(e.ship_id)} ${e.data?.hit_location || ''} (${(e.data?.kinetic_energy_gj || 0).toFixed(1)} GJ)` },
-      'miss': { class: 'shot', format: (e) => `MISS: ${shipName(e.ship_id)} shot goes wide` },
-      'module_destroyed': { class: 'destroyed', format: (e) => `DESTROYED: ${shipName(e.ship_id)} lost ${e.data?.module_name}` },
-      'module_damaged': { class: 'hit', format: (e) => `DAMAGE: ${shipName(e.ship_id)} ${e.data?.module_name} (${(e.data?.damage_gj || 0).toFixed(1)} GJ)` },
-      'shot_fired': { class: 'shot', format: (e) => `FIRE: ${shipName(e.ship_id)} → ${shipName(e.data?.target_id)}` },
-      'torpedo_launched': { class: 'torpedo', format: (e) => `TORPEDO AWAY: ${shipName(e.ship_id)} → ${shipName(e.data?.target_id)}` },
-      'torpedo_impact': { class: 'destroyed', format: (e) => `TORPEDO IMPACT: ${shipName(e.data?.target_id)} takes ${(e.data?.total_damage_gj || 0).toFixed(0)} GJ (${e.data?.hit_location})` },
-      'torpedo_miss': { class: 'torpedo', format: (e) => `TORPEDO MISS: closest ${(e.data?.closest_approach_km || 0).toFixed(1)} km` },
-      'torpedo_fuel_exhausted': { class: 'torpedo', format: (e) => `BURNOUT: torpedo from ${shipName(e.ship_id)} ballistic` },
-      'torpedo_retargeted': { class: 'torpedo', format: (e) => `RETARGET: torpedo from ${shipName(e.ship_id)} swings onto ${shipName(e.data?.new_target_id)}` },
-      'pd_torpedo_disabled': { class: 'pd', format: (e) => `SEEKER KILL: ${shipName(e.ship_id)} PD blinds inbound torpedo` },
-      'pd_slug_destroyed': { class: 'pd', format: (e) => `PD KILL: ${shipName(e.ship_id)} vaporizes incoming slug` },
-      'penetration': { class: 'destroyed', format: (e) => `ARMOR BREACH: ${shipName(e.ship_id)} ${e.data?.location}` },
-      'radiator_change': { class: 'info', format: (e) => `${shipName(e.ship_id)} ${e.data?.extended ? 'extends' : 'retracts'} radiators` },
-      'heat_warning': { class: 'hit', format: (e) => `HEAT ${Math.round((e.data?.level || 0) * 100)}%: ${shipName(e.ship_id)} ${e.data?.level >= 1.25 ? 'nearing meltdown' : e.data?.level >= 1 ? 'radiators auto-extend' : 'guns hold fire'}` },
-      'reactor_meltdown': { class: 'destroyed', format: (e) => `MELTDOWN: ${shipName(e.ship_id)} reactor containment fails (heat ${Math.round((e.data?.heat || 0) * 100)}%)` },
-      'maneuver': { class: 'info', format: (e) => `${shipName(e.ship_id)}: ${e.data?.maneuver_type}${e.data?.throttle != null ? ` @ ${Math.round(e.data.throttle * 100)}%` : ''}` },
-      'message': { class: 'comms', format: (e) => `COMMS ${e.data?.sender_name || shipName(e.ship_id)}: "${e.data?.message}"` },
-    };
+  // ==================== Spectator HUD ====================
 
-    const config = eventTypes[event.event_type];
-    if (!config) return;
+  initHud() {
+    const $ = id => document.getElementById(id);
+    this.registry = new Registry({ root: $('shipRegistry'), alpha: this.elements.alphaShips, beta: this.elements.betaShips,
+      onSelect: id => this.selectShip(id) });
+    this.combatLog = new CombatLog({ list: this.elements.eventList, chips: $('eventLogFilters'),
+      onSeek: row => this.hudSeek(row.t, row.shipId) });
+    this.scoreboard = new Scoreboard({ root: $('scoreboard') });
+    this.resultBanner = new ResultBanner({ root: $('resultBanner') });
+    this.killFeed = new KillFeed({ root: $('killFeed'), onSeek: kill => this.hudSeek(kill.t - 5, kill.shipId) });
+    this.timelineMarkers = new TimelineMarkers({ events: $('timelineMarkers'), checkpoints: $('timelineCheckpoints'),
+      onSeek: (t, shipId) => this.hudSeek(t, shipId) });
+    this.commsFeed = new CommsFeed({
+      root: $('commsFeed'),
+      onSeek: row => this.hudSeek(row.t, row.shipId),
+      onWhy: row => this.decisions.openAt(row.shipId, row.decisionId),
+      onOpenChange: (open, user) => {
+        const button = $('commsBtn');
+        button?.classList.toggle('active', open);
+        button?.setAttribute('aria-pressed', String(open));
+        document.body.classList.toggle('comms-open', open);
+        // Only the viewer's own toggle is remembered, never the width-based default
+        if (user) try { window.localStorage.setItem('aic.viewer.commsOpen', open ? '1' : '0'); } catch { /* not persisted */ }
+      },
+      resolveImage: v => this.loader?.sourceData?.assets?.[v.ref]?.content?.[v.part]?.image_url?.url || null,
+      onImage: (src, caption) => showLightbox(document, src, caption)
+    });
+    $('commsBtn')?.addEventListener('click', () => this.toggleComms());
+  }
 
-    const item = document.createElement('div');
-    item.className = `event-item ${config.class}`;
-    item.innerHTML = `<span class="event-time">${this.formatTime(event.timestamp)}</span>${config.format(event)}`;
+  /** Per-recording HUD setup (initializeBattle). */
+  resetHud() {
+    this.scoreboard.populate(this.loader.ships, this.loader.hud);
+    this.resultBanner.reset();
+    this.killFeed.clear();
+    this.combatLog.clear();
+    this.commsFeed.clear();
+    // The command net opens by default where there is room for it, unless
+    // the viewer closed it last time.
+    let saved = null;
+    try { saved = window.localStorage.getItem('aic.viewer.commsOpen'); } catch { /* default */ }
+    this.commsFeed.setOpen(saved != null ? saved === '1' : window.innerWidth >= 1100);
+  }
 
-    this.elements.eventList.insertBefore(item, this.elements.eventList.firstChild);
+  toggleComms() {
+    this.commsFeed.setOpen(!this.commsFeed.open, true);
+    if (this.commsFeed.open && this.decisions.open) this.decisions.setOpen(false);
+  }
 
-    // Limit log size
-    while (this.elements.eventList.children.length > 50) {
-      this.elements.eventList.removeChild(this.elements.eventList.lastChild);
-    }
+  /** HUD click-through (log row, comms row, kill toast, timeline marker): pause at t and frame the ship. */
+  hudSeek(t, shipId = null) {
+    if (!this.timeController) return;
+    this.setLiveFollow(false);
+    this.timeController.pause();
+    this.timeController.seek(Math.max(0, Math.min(t, this.timeController.duration)));
+    this.updatePlayPauseButton();
+    if (shipId && this.loader?.ships[shipId]) this.pendingEvidenceFocus = shipId;
   }
 
   /**
@@ -2077,9 +2018,12 @@ class BattleVisualizer {
     this.currentState = null;
 
     // Clear UI
-    this.elements.alphaShips.innerHTML = '';
-    this.elements.betaShips.innerHTML = '';
-    this.elements.eventList.innerHTML = '';
+    this.registry.clear();
+    this.combatLog.clear();
+    this.commsFeed.clear();
+    this.killFeed.clear();
+    this.resultBanner.reset();
+    this.timelineMarkers.clear();
     this.elements.shipTelemetry.classList.add('hidden');
   }
 

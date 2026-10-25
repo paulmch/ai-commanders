@@ -47,7 +47,7 @@ export function updateRegistryHeat(heatFX, time, root = typeof document !== 'und
     const { width, level } = heatBar(h, MELTDOWN_HEAT, _bar);
     c.bar.hidden = level === 'none';
     if (width !== c.width) { c.width = width; c.fill.style.width = `${width}%`; }
-    if (level !== c.level) { c.level = level; c.bar.dataset.level = level; }
+    if (level !== c.level) { c.level = level; c.bar.dataset.level = level; li.dataset.heat = level; }
     const pct = h >= 0 ? Math.round(h * 100) : -1;
     if (pct !== c.pct) {
       c.pct = pct;
