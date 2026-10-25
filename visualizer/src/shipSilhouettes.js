@@ -129,7 +129,7 @@ export const SHIP_SILHOUETTES = {
     lateral: "M84,16 L30,16 L30,64 L84,64 Z",
     tail: "M30,22 L16,23 L16,57 L30,58 Z",
     hardpoints: [
-      { x: 99, y: 57.5, w: 26, h: 2.6, kind: 'spinal' },   // keel spinal muzzle
+      { x: 97, y: 57.5, w: 24, h: 2.6, kind: 'spinal' },   // keel spinal, muzzle at the bow
       { x: 90, y: 21, size: 6, kind: 'heavy' },            // heavy dorsal fwd
       { x: 88, y: 60.5, size: 6, kind: 'heavy' },          // heavy ventral fwd
       { x: 71.5, y: 29.5, size: 5.5, kind: 'heavy', far: true }, // heavy starboard
@@ -187,14 +187,14 @@ export function generateShipSVG(shipType) {
     <polygon id="armorLateral" class="armor-face lateral" points="${pathToPoints(ship.lateral)}" />
     <polygon id="armorTail" class="armor-face tail" points="${pathToPoints(ship.tail)}" />
 
-    <!-- Hardpoints -->
-    ${ship.hardpoints.map((hp) => {
+    <!-- Hardpoints (far-side ghosts first, behind their near twins) -->
+    ${[...ship.hardpoints.filter(hp => hp.far), ...ship.hardpoints.filter(hp => !hp.far)].map((hp) => {
       const w = hp.w ?? hp.size, h = hp.h ?? hp.size;
       return `
       <rect class="hardpoint ${hp.kind || ''}${hp.far ? ' far' : ''}"
             x="${hp.x - w / 2}" y="${hp.y - h / 2}"
             width="${w}" height="${h}"
-            rx="1" />`;
+            ${hardpointLook(hp, w, h)} />`;
     }).join('')}
 
     <!-- Engine glow -->
@@ -207,6 +207,22 @@ export function generateShipSVG(shipType) {
   `;
 
   return svg;
+}
+
+/**
+ * Per-kind shape and the see-through look of a starboard (`far`) mount, as
+ * SVG presentation attributes: styles.css styles .hardpoint's fill and
+ * stroke, and these only set what it leaves alone, so a far mount reads as
+ * a faint dashed ghost behind its port twin instead of a doubled square,
+ * and a PD mount as a dot. Class names stay on the rect for any CSS.
+ */
+export function hardpointLook(hp, w, h) {
+  const r = Math.min(w, h);
+  const rx = hp.kind === 'pd' ? r / 2 : hp.kind === 'battery' ? Math.min(1, r * 0.25)
+    : hp.kind === 'heavy' ? Math.min(0.8, r * 0.15) : 0.5;
+  let a = `rx="${+rx.toFixed(2)}"`;
+  if (hp.far) a += ' fill-opacity="0.3" stroke-opacity="0.55" stroke-dasharray="0.9 0.6"';
+  return a;
 }
 
 /**

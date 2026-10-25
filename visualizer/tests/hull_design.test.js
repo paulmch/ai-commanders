@@ -10,6 +10,7 @@ import { Projectiles } from '../src/render/Projectiles.js';
 import { magazineRoundState, updateMagazine, assignLaunches, hatchHinge, HATCH_OPEN, brownOut } from '../src/render/HullRigs.js';
 import { floodLevel, FLOOD_OPACITY, CODE_GLOW, LIVERY_FLOOD, GLASS_GLOW } from '../src/render/HullMarkings.js';
 import { HeatFX } from '../src/render/Heat.js';
+import { generateShipSVG, hardpointLook } from '../src/shipSilhouettes.js';
 
 // Displayed hull sizes (SceneManager.createShip baseSizes x 8)
 const BASE = {
@@ -459,4 +460,24 @@ test('stowed radiators telescope into their cassette instead of standing up as s
   wing.rotation.x = 0.3;
   fx.updateShip(ship, { radiatorsExtended: false });
   assert.equal(wing.rotation.x, 0.3);
+});
+
+test('HUD silhouettes: far-side mounts draw as ghosts, PD mounts as dots', () => {
+  for (const type of HULL_CLASSES) {
+    const svg = generateShipSVG(type);
+    const rects = [...svg.matchAll(/<rect class="hardpoint ([^"]*)"([^>]*)\/>/g)];
+    assert.ok(rects.length >= 2, `${type}: hardpoints drawn`);
+    // ghosts are drawn first, under the near mounts
+    const firstNear = rects.findIndex(r => !/\bfar\b/.test(r[1]));
+    assert.ok(rects.slice(firstNear).every(r => !/\bfar\b/.test(r[1])), `${type}: far mounts drawn behind`);
+    for (const [, cls, attrs] of rects) {
+      const far = /\bfar\b/.test(cls);
+      assert.equal(/fill-opacity="0\.3"/.test(attrs) && /stroke-dasharray/.test(attrs), far, `${type} ${cls}: ghost iff far`);
+      if (/\bpd\b/.test(cls)) {
+        const w = Number(attrs.match(/width="([\d.]+)"/)[1]);
+        assert.equal(Number(attrs.match(/rx="([\d.]+)"/)[1]), +(w / 2).toFixed(2), `${type}: PD is a dot`);
+      }
+    }
+  }
+  assert.equal(hardpointLook({ kind: 'battery' }, 4, 4), 'rx="1"');
 });
