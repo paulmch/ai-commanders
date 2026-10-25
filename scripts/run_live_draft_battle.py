@@ -24,6 +24,7 @@ from src.llm.client import CaptainClient
 from src.llm.fleet_config import AdmiralConfig, BattleFleetConfig
 from src.llm import fleet_draft
 from src.llm.fleet_draft import auto_draft, draft_summary_dict, draft_to_fleet_definition, run_admiral_draft
+from src.llm.live_status import PendingCalls, draft_live_entry
 from src.llm.mcp_http_server import MCPHttpServer
 from src.llm.mock_openrouter import mock_transport
 from src.llm.replay_audit import AuditedClient
@@ -39,26 +40,39 @@ def write_json(path, value):
 
 
 class LiveDraftState:
-    def __init__(self):
+    def __init__(self, models=None, budget=None):
         self.active = True
         self.drafts = {}
+        self.ready_at = {}
+        self.models = models or {}
+        self.budget = budget
+        self.started = time.monotonic()
         self.stage = 'Drafting fleets and formations'
         self.error = None
         self.lock = threading.Lock()
+
+    def commit(self, faction, selection):
+        with self.lock:
+            self.drafts[faction] = selection
+            self.ready_at[faction] = time.monotonic()
 
     def waiting_for(self):
         with self.lock:
             return [f for f in ('alpha', 'beta') if f not in self.drafts]
 
     def live_summary(self):
+        """Draft splash data. The admirals draft sealed and never read /live,
+        so a side's roster shows as soon as it is ready; the rationales wait
+        for both sides."""
         with self.lock:
-            return {f: {
-                'ready': f in self.drafts, 'is_mcp': False,
-                'ships': len(self.drafts[f].ships) if f in self.drafts else 0,
-                'points_spent': self.drafts[f].points_spent if f in self.drafts else 0,
-                'ship_names': [s.ship_name for s in self.drafts[f].ships] if f in self.drafts else [],
-                'formation_name': self.drafts[f].formation_name if f in self.drafts else '',
-            } for f in ('alpha', 'beta')}
+            both = all(f in self.drafts for f in ('alpha', 'beta'))
+            now = time.monotonic()
+            return {f: draft_live_entry(
+                self.drafts.get(f), ready=f in self.drafts, reveal_ships=f in self.drafts,
+                reveal_rationale=both, model=self.models.get(f), budget=self.budget,
+                elapsed_s=now - self.started,
+                ready_after_s=(self.ready_at[f] - self.started) if f in self.ready_at else None)
+                for f in ('alpha', 'beta')}
 
 
 class SpectatorServer(MCPHttpServer):
@@ -81,8 +95,9 @@ class LiveDraftRunner(LLMBattleRunner):
     ticker = None
 
     def configure_live(self, server, state, draft_recorders, output, step_delay=0.04,
-                       ticker=None, vision_dir=None):
+                       ticker=None, vision_dir=None, pending_calls=None):
         self.live_server = server
+        self.live_pending = pending_calls
         self.live_state = state
         self.draft_recorders = draft_recorders
         self.live_output = output
@@ -102,6 +117,13 @@ class LiveDraftRunner(LLMBattleRunner):
         self.recorder.recording.provenance['draft'] = {
             f: draft_summary_dict(d) for f, d in self.live_state.drafts.items()}
         self.recorder.recording.provenance['final_turn_execution_s'] = self.fleet_config.decision_interval_s
+        # Spectator wire: the same id the live block serves, and in-flight
+        # model calls for the deliberation card (AuditedClient registers them)
+        battle_id = getattr(self.live_server, 'battle_id', None)
+        if isinstance(battle_id, str):
+            self.recorder.recording.provenance['battle_id'] = battle_id
+        if self.live_pending is not None:
+            self.recorder.pending_calls = self.live_pending
         self.live_state.active = False
         self._record_sim_frame()
         self.save_progress()
@@ -117,8 +139,8 @@ class LiveDraftRunner(LLMBattleRunner):
     def _refresh_targeting_awareness(self):
         self.check_budget()
         self.live_state.stage = 'Admirals and captains deciding'
-        self.live_server.set_battle_status('paused', self.checkpoint_count,
-                                         waiting_for=['AI commanders'])
+        # waiting_for is derived per poll from the model calls in flight
+        self.live_server.set_battle_status('paused', self.checkpoint_count)
         super()._refresh_targeting_awareness()
 
     def _log_fleet_decision(self, commands):
@@ -215,12 +237,32 @@ async def run(args):
     ticker.start(args.name, args.points, args.max_ships, args.turns,
                  dict(fleet_draft.SHIP_POINT_COSTS),
                  f'Reasoning {args.reasoning}. {vision_note}')
-    state = LiveDraftState()
+    models = {'alpha': args.alpha_model, 'beta': args.beta_model}
+    shown_models = {'alpha': 'heuristic', 'beta': 'heuristic'} if args.offline else models
+    state = LiveDraftState(models=shown_models, budget=args.points)
+    pending = PendingCalls()
     server = SpectatorServer(host='localhost', port=args.port)
     server.set_draft_manager(state)
+    server.models = shown_models
+    server.pending_calls = pending
+    # save_progress() keeps this file current, so a viewer that loses the
+    # server mid-battle can still load everything up to the last checkpoint
+    server.replay_url = f'/recordings/{output.name}'
+
+    def spend():
+        return {
+            'reported_usd': round(budget.reported_usd, 4) if budget else 0.0,
+            'committed_usd': round(budget.committed_usd, 4) if budget else 0.0,
+            'limit_usd': None if args.offline else args.spend_limit,
+            'calls': client.stats.calls if client else 0,
+            'failures': client.stats.failures if client else 0,
+            'retries': client.stats.retries if client else 0,
+            'truncated': client.stats.truncated if client else 0,
+            'mode': mode or 'paid',
+        }
+    server.spend_provider = spend
     await server.start()
     print(f'WATCH: http://localhost:5173/?live=1&decisions=1', flush=True)
-    models = {'alpha': args.alpha_model, 'beta': args.beta_model}
     draft_recorders = {}
     runner = None
     result = None
@@ -256,6 +298,7 @@ async def run(args):
         model = models[faction]
         recorder = BattleRecorder()
         recorder._is_recording = True
+        recorder.pending_calls = pending   # the draft call shows on the splash
         draft_recorders[faction] = recorder
         if args.offline:
             selection = auto_draft(faction, args.points, args.max_ships,
@@ -271,8 +314,7 @@ async def run(args):
             finally:
                 write_json(report_dir / f'{faction}_draft_calls.json', {
                     'assets': recorder.recording.assets, 'events': [e.to_dict() for e in recorder.events]})
-        with state.lock:
-            state.drafts[faction] = selection
+        state.commit(faction, selection)
         write_json(report_dir / f'{faction}_draft.json', draft_summary_dict(selection))
         ticker.draft(faction, draft_summary_dict(selection))
         return selection
@@ -304,7 +346,8 @@ async def run(args):
             BattleConfig.from_fleet_config(fc, recording_dir=str(report_dir), verbose=not args.quiet),
             LLMCaptainConfig('Alpha', 'Alpha'), LLMCaptainConfig('Beta', 'Beta'), client, fc)
         runner.configure_live(server, state, draft_recorders, output, args.sim_step_delay,
-                              ticker=ticker, vision_dir=report_dir / 'vision')
+                              ticker=ticker, vision_dir=report_dir / 'vision',
+                              pending_calls=pending)
         server.set_live_source(runner)
         result = runner.run_battle(fleet_data)
         write_json(output.with_suffix('.draft.json'), {
@@ -328,11 +371,13 @@ async def run(args):
     finally:
         finished = True
         state.active = False
-        server.set_battle_status('ended', runner.checkpoint_count if runner else 0)
         write_json(report_dir / 'status.json', report())
         if runner and runner.recorder:
             runner.recorder.recording.provenance['billing'] = report()
             runner.save_progress()
+        # Only now: a viewer seeing "ended" must already find the verdict,
+        # the stop reason and the billing block in the recording
+        server.set_battle_status('ended', runner.checkpoint_count if runner else 0)
         print(json.dumps(report()), flush=True)
         try:
             ticker.result(runner, result.winner if result else None,
@@ -343,6 +388,8 @@ async def run(args):
     if not args.no_linger:
         print('Spectator server remains available; the same link now replays the battle.', flush=True)
         await asyncio.Event().wait()
+    # --no-linger: still let a polling viewer collect the final "ended" block
+    await server.linger_for_spectators()
     await server.stop()
     if state.error:
         raise RuntimeError(state.error)

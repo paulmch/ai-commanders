@@ -1,4 +1,6 @@
 """Record commander inputs once, retaining references from each model call."""
+import time
+
 from .client import CaptainClient
 from src.replay_evidence import json_value
 
@@ -15,7 +17,7 @@ class AuditedClient:
     def __getattr__(self, name):
         return getattr(self.client, name)
 
-    def _observe(self, payload, response):
+    def _observe(self, payload, response, started=None):
         # Store public output/tool calls only. Provider reasoning is not replay prose.
         choices = response.get('choices') or [{}]
         message = choices[0].get('message') or {}
@@ -28,12 +30,21 @@ class AuditedClient:
             message_refs=[self.recorder.asset(m) for m in payload.get('messages', [])],
             tools_ref=self.recorder.asset(payload.get('tools', [])),
             output={'content': message.get('content'), 'tool_calls': message.get('tool_calls', [])},
-            finish_reason=choices[0].get('finish_reason'))
+            finish_reason=choices[0].get('finish_reason'),
+            # Wall seconds from the agent's call to this response (spectator
+            # pacing only; never read by the simulation).
+            **({'latency_s': round(time.monotonic() - started, 2)} if started is not None else {}))
         self.last_call_event_id = event.event_id
 
     def _call(self, method, *args, **kwargs):
+        # Live spectators see in-flight calls (who the checkpoint waits for)
+        # when the runner hangs a live_status.PendingCalls on the recorder.
+        pending = getattr(self.recorder, 'pending_calls', None)
+        token = pending.start(self.actor, self.faction, self.ship_id,
+                              kwargs.get('model') or getattr(self.client, 'model', None)) if pending is not None else None
+        started = time.monotonic()
         try:
-            with self.client.audit_scope(self._observe):
+            with self.client.audit_scope(lambda payload, response: self._observe(payload, response, started)):
                 return getattr(self.client, method)(*args, **kwargs)
         except Exception as exc:
             self.recorder.record(self.simulation.current_time, 'model_error', self.ship_id,
@@ -42,6 +53,9 @@ class AuditedClient:
                                  message_refs=[self.recorder.asset(m) for m in (args[0] if args else kwargs.get('messages', []))],
                                  tools_ref=self.recorder.asset(args[1] if len(args) > 1 else kwargs.get('tools', [])))
             raise
+        finally:
+            if token is not None:
+                pending.finish(token)
 
     def decide_with_tools(self, *args, **kwargs):
         return self._call('decide_with_tools', *args, **kwargs)

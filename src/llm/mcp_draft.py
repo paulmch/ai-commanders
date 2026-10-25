@@ -15,6 +15,7 @@ drafts running in executor threads, hence the lock.
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -38,6 +39,7 @@ class FactionDraftSlot:
     draft: FleetDraft
     selected: bool = False
     committed: bool = False
+    committed_at: Optional[float] = None  # monotonic clock, for the live draft splash
 
 
 def _roster(draft: FleetDraft) -> List[Dict[str, Any]]:
@@ -73,6 +75,7 @@ class DraftManager:
         self.max_ships = max_ships
         self.initial_distance_km = initial_distance_km
         self.active = True
+        self.started = time.monotonic()
         self._catalog = build_catalog_text(fleet_data)
         self._lock = threading.Lock()
         self._slots: Dict[str, FactionDraftSlot] = {
@@ -208,6 +211,7 @@ class DraftManager:
                     "before ready()."
                 )
             slot.committed = True
+            slot.committed_at = time.monotonic()
             return True, None
 
     # === Non-MCP side (admiral / auto drafts, may arrive from a thread) ===
@@ -219,20 +223,26 @@ class DraftManager:
             slot.draft = draft
             slot.selected = True
             slot.committed = True
+            slot.committed_at = time.monotonic()
 
     # === Spectator summary (live viewer) ===
 
     def live_summary(self) -> Dict[str, Any]:
-        """Per-faction progress block for the live viewer."""
+        """Per-faction progress block for the live viewer.
+
+        Sealed picks: an MCP client could read /live too, so hull types,
+        names, formations and rationales are only revealed once every
+        faction has committed.
+        """
+        from .live_status import draft_live_entry
         with self._lock:
-            out = {}
-            for faction, slot in self._slots.items():
-                out[faction] = {
-                    "ready": slot.committed,
-                    "is_mcp": slot.is_mcp,
-                    "ships": len(slot.draft.ships),
-                    "points_spent": slot.draft.points_spent,
-                    "ship_names": [s.ship_name for s in slot.draft.ships],
-                    "formation_name": slot.draft.formation_name,
-                }
-            return out
+            reveal = all(s.committed for s in self._slots.values())
+            now = time.monotonic()
+            return {
+                faction: draft_live_entry(
+                    slot.draft, ready=slot.committed, is_mcp=slot.is_mcp,
+                    reveal_ships=reveal, reveal_rationale=reveal, budget=self.budget,
+                    elapsed_s=now - self.started,
+                    ready_after_s=(slot.committed_at - self.started) if slot.committed_at else None)
+                for faction, slot in self._slots.items()
+            }

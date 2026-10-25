@@ -17,6 +17,8 @@ import asyncio
 import dataclasses
 import json
 import math
+import time
+import uuid
 from bisect import bisect_right
 from typing import Dict, Any, List, Optional, Callable, Awaitable, TYPE_CHECKING
 
@@ -96,6 +98,18 @@ class MCPHttpServer:
         self._battle_status = "waiting"  # "waiting", "running", "paused", "ended"
         self._current_checkpoint = 0
         self._waiting_for: List[str] = []
+        self._status_since = time.monotonic()
+
+        # Live spectator wire. battle_id identifies this battle to the viewer:
+        # a restarted server (or the next battle on the same port) serves a
+        # new id, so the viewer resets instead of merging two battles.
+        self.battle_id = uuid.uuid4().hex[:12]
+        self.replay_url: Optional[str] = None       # saved replay the viewer can fall back to
+        self.models: Optional[Dict[str, str]] = None  # faction -> commander model, for the HUD
+        self.spend_provider: Optional[Callable[[], Dict[str, Any]]] = None
+        self.pending_calls: Any = None  # live_status.PendingCalls (else the recorder's)
+        self._live_polls = 0           # /live/recording responses served
+        self._live_ended_polls = 0     # ... of which carried status "ended"
 
         # Controllers for building state
         self._controllers: Dict[str, 'MCPController'] = {}
@@ -139,9 +153,24 @@ class MCPHttpServer:
         waiting_for: Optional[List[str]] = None,
     ) -> None:
         """Update battle status."""
+        if status != self._battle_status or checkpoint != self._current_checkpoint:
+            self._status_since = time.monotonic()
         self._battle_status = status
         self._current_checkpoint = checkpoint
         self._waiting_for = waiting_for or []
+
+    async def linger_for_spectators(self, timeout_s: float = 6.0) -> None:
+        """
+        Keep serving briefly after the battle ended so a polling viewer sees
+        the final "ended" block (and its follow-up fetch) instead of a dead
+        socket. Returns at once when nobody ever polled /live, and as soon as
+        two "ended" responses went out.
+        """
+        if not self._live_polls:
+            return
+        deadline = time.monotonic() + timeout_s
+        while self._live_ended_polls < 2 and time.monotonic() < deadline:
+            await asyncio.sleep(0.1)
 
     def build_app(self) -> 'web.Application':
         """Build the aiohttp application (separate from start() for tests)."""
@@ -377,8 +406,39 @@ class MCPHttpServer:
 
     # === Live spectator endpoints ===
 
+    def _pending_registry(self) -> Any:
+        """The PendingCalls registry: set on the server, else the recorder's."""
+        if self.pending_calls is not None:
+            return self.pending_calls
+        recorder = getattr(self._battle_runner, "recorder", None) if self._battle_runner else None
+        return getattr(recorder, "pending_calls", None) if recorder is not None else None
+
+    def _live_models(self) -> Dict[str, Optional[str]]:
+        """Commander per faction for the HUD: explicit, else MCP / admiral model."""
+        if self.models:
+            return dict(self.models)
+        runner = self._battle_runner
+        models: Dict[str, Optional[str]] = {}
+        for faction in ("alpha", "beta"):
+            if runner is not None and getattr(runner, f"{faction}_mcp", None):
+                models[faction] = "MCP"
+                continue
+            admiral = getattr(runner, f"{faction}_admiral", None) if runner is not None else None
+            models[faction] = getattr(admiral, "model", None) if admiral is not None else None
+        return models
+
     def _live_block(self) -> Dict[str, Any]:
-        """Battle-flow metadata block served with every /live response."""
+        """
+        Battle-flow metadata block served with every /live response.
+
+        Besides the flow fields (phase/status/checkpoint/sim clock) it
+        carries what a spectator needs to read a deliberation: battle_id
+        (identity across server restarts), status_age_s (wall seconds in the
+        current status, e.g. how long the commanders have been deciding),
+        pending_calls (commander model calls in flight, with their age),
+        spend/models when the runner provides them, and replay_url, the
+        saved recording to fall back to when the server goes away.
+        """
         runner = self._battle_runner
         drafting = self._draft_manager is not None and self._draft_manager.active
         phase = "draft" if drafting else (
@@ -388,6 +448,26 @@ class MCPHttpServer:
         fleet_config = getattr(runner, "fleet_config", None) if runner else None
         interval = float(getattr(fleet_config, "decision_interval_s", 30.0) or 30.0)
         next_cp = (math.floor(sim_time / interval + 1e-9) + 1) * interval
+        registry = self._pending_registry()
+        pending = registry.snapshot() if registry is not None else []
+        waiting = (self._draft_manager.waiting_for() if drafting
+                   else list(self._waiting_for))
+        if not drafting and self._battle_status == "paused":
+            # MCP factions the server waits on, plus sides with model calls
+            # in flight (LLM admirals and captains)
+            waiting = sorted(set(waiting) | {c["faction"] for c in pending if c.get("faction")})
+        spend = None
+        if self.spend_provider is not None:
+            try:
+                spend = self.spend_provider()
+            except Exception:  # noqa: BLE001 - spectator data must never break a poll
+                spend = None
+        recorder = getattr(runner, "recorder", None) if runner else None
+        rec = getattr(recorder, "recording", None) if recorder else None
+        result = None
+        if self._battle_status == "ended" and rec is not None:
+            result = {"winner": getattr(rec, "winner", None),
+                      "reason": getattr(rec, "result_reason", None)}
         return {
             "phase": phase,
             "status": self._battle_status,
@@ -395,10 +475,16 @@ class MCPHttpServer:
             "decision_interval_s": interval,
             "sim_time_s": sim_time,
             "next_checkpoint_t": next_cp,
-            "waiting_for": (self._draft_manager.waiting_for() if drafting
-                            else list(self._waiting_for)),
+            "waiting_for": waiting,
             "draft": (self._draft_manager.live_summary()
                       if self._draft_manager else None),
+            "battle_id": self.battle_id,
+            "status_age_s": round(time.monotonic() - self._status_since, 1),
+            "pending_calls": pending,
+            "models": self._live_models(),
+            "spend": spend,
+            "replay_url": self.replay_url,
+            "result": result,
         }
 
     async def _handle_live_recording(self, request: web.Request) -> web.Response:
@@ -456,8 +542,12 @@ class MCPHttpServer:
                     if event['data'].get('tools_ref'):
                         refs.add(event['data']['tools_ref'])
                 recording['assets'] = {key: rec.assets[key] for key in refs if key in rec.assets}
+        live = self._live_block()
+        self._live_polls += 1
+        if live["status"] == "ended":
+            self._live_ended_polls += 1
         return web.json_response({
-            "live": self._live_block(),
+            "live": live,
             "recording": recording,
         })
 
@@ -584,6 +674,8 @@ async def run_battle_with_http_server(
         return result
 
     finally:
+        # A polling spectator still gets the final "ended" block
+        await http_server.linger_for_spectators()
         await http_server.stop()
 
 
@@ -747,6 +839,7 @@ async def run_fleet_battle_with_http(
     from .mcp_controller import apply_mcp_commands_to_simulation
 
     runner.setup_fleet_battle(fleet_data)
+    _attach_live_status(runner, http_server)
 
     # Controllers exist only after setup - register them for /status introspection.
     if runner.alpha_mcp:
@@ -1155,5 +1248,26 @@ async def run_fleet_battle_with_http(
                     print(f"\n=== CHECKPOINT LIMIT REACHED ===")
                 break
 
+    # Verdict first: a spectator polling the moment the status flips to
+    # "ended" must find the winner/reason already in the recording.
+    result = runner._evaluate_fleet_result()
     http_server.set_battle_status("ended", checkpoint=runner.checkpoint_count)
-    return runner._evaluate_fleet_result()
+    return result
+
+
+def _attach_live_status(runner: Any, http_server: Any) -> None:
+    """
+    Spectator bookkeeping once the battle is set up: in-flight model calls
+    (PendingCalls on the recorder, read by AuditedClient) and the battle_id
+    in the recording's provenance so a saved replay is identifiable.
+    attach_audit() replaces provenance during setup, hence after it.
+    """
+    from .live_status import PendingCalls
+    recorder = getattr(runner, "recorder", None)
+    if recorder is None or not hasattr(recorder, "recording"):
+        return
+    if getattr(recorder, "pending_calls", None) is None:
+        recorder.pending_calls = PendingCalls()
+    battle_id = getattr(http_server, "battle_id", None)
+    if isinstance(battle_id, str):
+        recorder.recording.provenance["battle_id"] = battle_id
