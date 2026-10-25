@@ -2410,11 +2410,17 @@ def _compliance_text(compliance: Optional[Dict[str, Any]], snapshot: Any) -> Tup
     if ot and at and ot != at:
         parts.append(f"target {ot} -> {at}")
         followed = False
-    osalvo, launched = compliance.get("ordered_salvo"), compliance.get("launched")
+    def count(value: Any) -> int:
+        try:
+            return max(0, int(value or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    osalvo, launched = count(compliance.get("ordered_salvo")), count(compliance.get("launched"))
     if osalvo or launched:
-        if osalvo and (launched or 0) < osalvo:
+        if osalvo and launched < osalvo:
             followed = False
-        parts.append(f"salvo {osalvo or 0} ordered, {launched or 0} launched")
+        parts.append(f"salvo {osalvo} ordered, {launched} launched")
     return ("did: " + ", ".join(parts)) if parts else "", followed
 
 

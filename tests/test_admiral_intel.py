@@ -490,6 +490,15 @@ class TestCaptainReports:
         # Near the top: right after the NOW block.
         assert live.index("=== CAPTAIN REPORTS") < live.index("=== GEOMETRY")
 
+    def test_malformed_report_fields_do_not_break_the_turn(self):
+        odd = [{"ship_name": "TIS Dart-6", "status": None, "reason": 42,
+                "compliance": {"ordered_salvo": "2", "launched": None,
+                               "ordered_maneuver": None, "executed_maneuver": "EVASIVE"},
+                "contact": "not a dict", "request": {"text": None}}]
+        live = battle_a_turn("alpha", t=180, reports=odd)[3][1]["content"]
+        assert ("ACK TIS Dart-6 [alpha_6]: \"42\" | did: flew EVASIVE, salvo 2 ordered, "
+                "0 launched (NOT as ordered)") in live
+
     def test_missing_or_empty_reports_still_render_the_path(self):
         admiral, sim, snap, _ = battle_a_turn("alpha", t=180)
         assert admiral._captain_reports() == []           # attribute absent
