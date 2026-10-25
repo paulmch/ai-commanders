@@ -136,6 +136,12 @@ gunless torpedo hulls) whose stated effects are pinned by
 `tests/test_range_control_and_evade.py`. An admiral
 `issue_order(ship_name="all ships", heading, throttle)` is flown as a formation:
 throttles matched to the slowest hull, burn start synced (MCP: ship_id "all").
+A per-ship heading/maneuver REPLACES it for that ship (MAINTAIN/PADLOCK = engine
+off; given with a heading - PADLOCK only at throttle > 0 - the ship flies that
+HEADING instead); `evade` alone rides on it - or, with no fleet order, on the
+ship's current maneuver (`src/llm/maneuver_orders.py`, `tests/test_order_semantics.py`).
+The evade overlay burns at the order's throttle, at full throttle under a
+throttle-0 / engine-off order (`CombatSimulation._evasion_overlay`).
 Plain INTERCEPT never brakes (it merges); the anti-merge forms
 (`src/llm/maneuver_orders.py`; the same fields on captain set_maneuver /
 set_heading, admiral issue_order and MCP set_maneuver): INTERCEPT with

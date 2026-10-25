@@ -34,12 +34,14 @@ SIGNAL_LAUNCH = "LAUNCH"
 SIGNAL_KILL = "KILL"
 SIGNAL_LOSS = "LOSS"
 SIGNAL_PD_LOSS = "PD_LOSS"
+SIGNAL_TARGET = "TARGET"
 
 DATALINK_NAME = "FLEET DATALINK"
 
 # Inbox priority: LLM-authored traffic first (direct > admiral > fleet net >
 # enemy channel), then the datalink (deaths > PD losses > launches).
-_ENGINE_PRIORITY = {SIGNAL_KILL: 0, SIGNAL_LOSS: 0, SIGNAL_PD_LOSS: 1, SIGNAL_LAUNCH: 2}
+_ENGINE_PRIORITY = {SIGNAL_KILL: 0, SIGNAL_LOSS: 0, SIGNAL_PD_LOSS: 1, SIGNAL_LAUNCH: 2,
+                    SIGNAL_TARGET: 3}
 _CHANNEL_PRIORITY = {CHANNEL_DIRECT: 0, CHANNEL_ADMIRAL_TO_CAPTAIN: 1, CHANNEL_FLEET_NET: 2,
                      CHANNEL_ENEMY: 3}
 
@@ -103,6 +105,8 @@ def ordered_maneuvers(order: Any) -> List[str]:
     structured = getattr(order, "maneuver", None) or getattr(order, "maneuver_type", None)
     if isinstance(structured, dict):
         structured = structured.get("maneuver_type") or structured.get("type")
+    if structured == "OVERLAY":
+        return []  # evade alone (maneuver_orders.OVERLAY): no maneuver was ordered
     if structured:
         return [maneuver_name(str(structured).upper())]
     if isinstance(getattr(order, "heading", None), dict):
@@ -335,20 +339,26 @@ class EngineDatalink:
     """
     Turns the last interval's simulation events into fleet-net signals.
 
-    Friendly torpedo launches (target + live ETA), kills and losses, and PD
-    turrets lost are what a captain needs to coordinate without spending a
-    tool call on it. One signal per (launcher, target) pair, per death and
-    per ship that lost PD keeps the inbox budget for what LLMs wrote.
+    Friendly torpedo launches (target + live ETA), kills and losses, PD
+    turrets lost and primary-target SWITCHES (so focus fire is visible to
+    the fleet without a fleet_signal) are what a captain needs to coordinate
+    without spending a tool call on it. One signal per (launcher, target)
+    pair, per death, per ship that lost PD and per newly engaged target keeps
+    the inbox budget for what LLMs wrote.
     """
     cursor: int = 0
     announced_deaths: set = field(default_factory=set)
     pd_counts: Dict[str, int] = field(default_factory=dict)
+    # Last primary target each ship had (kept through a None after a kill).
+    targets: Dict[str, str] = field(default_factory=dict)
 
     def prime(self, simulation: Any) -> None:
-        """Start the event window and the PD baseline (battle setup)."""
+        """Start the event window and the PD / target baselines (battle setup)."""
         self.cursor = len(getattr(simulation, "events", []) or [])
-        self.pd_counts = {sid: pd_operational(ship)[0]
-                          for sid, ship in getattr(simulation, "ships", {}).items()}
+        ships = getattr(simulation, "ships", {})
+        self.pd_counts = {sid: pd_operational(ship)[0] for sid, ship in ships.items()}
+        self.targets = {sid: ship.primary_target_id for sid, ship in ships.items()
+                        if getattr(ship, "primary_target_id", None)}
 
     def collect(
         self,
@@ -445,6 +455,50 @@ class EngineDatalink:
                        alive_ids(faction, exclude=sid),
                        {"subject_id": sid, "subject_name": name, "pd_operational": ready,
                         "pd_total": total, "pd_lost": before - ready})
+            if msg:
+                out.append(msg)
+
+        out.extend(self._target_switches(simulation, channel, alive_ids, make))
+        return out
+
+    def _target_switches(self, simulation: Any, channel: FleetCommunicationChannel,
+                         alive_ids: Callable[..., List[str]],
+                         make: Callable[..., Optional[CommsMessage]]) -> List[CommsMessage]:
+        """
+        One TARGET signal per (faction, newly engaged enemy): the ships that
+        switched their primary target onto it since the last call, the
+        target(s) they left and how many of the fleet are on it now. A first
+        target is not a switch; a ship whose target died keeps it as "last"
+        until it picks the next one, so the retarget after a kill shows.
+        """
+        switched: Dict[Tuple[str, str], List[Tuple[str, str]]] = {}
+        for sid, (_, _, faction) in channel.ships.items():
+            ship = simulation.get_ship(sid)
+            if ship is None or not ship_alive(ship):
+                continue
+            current = getattr(ship, "primary_target_id", None)
+            if not current:
+                continue
+            before = self.targets.get(sid)
+            self.targets[sid] = current
+            if before and before != current and ship_alive(simulation.get_ship(current)):
+                switched.setdefault((faction, current), []).append((sid, before))
+        out: List[CommsMessage] = []
+        for (faction, target), movers in sorted(switched.items()):
+            names = [channel.ship_name(sid) for sid, _ in movers]
+            left = list(dict.fromkeys(channel.ship_name(b) for _, b in movers))
+            on_it = sum(1 for sid in channel.faction_ship_ids(faction)
+                        if ship_alive(simulation.get_ship(sid))
+                        and getattr(simulation.get_ship(sid), "primary_target_id", None) == target)
+            target_name = channel.ship_name(target)
+            text = (f"{', '.join(names)} switched to {target_name} (from {' / '.join(left)}) - "
+                    f"{on_it} of your ships on it now")
+            movers_ids = {sid for sid, _ in movers}
+            msg = make(faction, SIGNAL_TARGET, text,
+                       [sid for sid in alive_ids(faction) if sid not in movers_ids], {
+                           "subject_ids": sorted(movers_ids), "subject_names": names,
+                           "target_id": target, "target_name": target_name,
+                           "previous_target_names": left, "ships_on_target": on_it})
             if msg:
                 out.append(msg)
         return out

@@ -8,7 +8,7 @@ import json
 import re
 from src.replay_evidence import tool_evidence
 import math
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Tuple
 
 from .client import DEFAULT_MODEL, CaptainClient, LLMCallError, ToolCall
@@ -30,6 +30,7 @@ from .communication import (
 )
 from .tools import FLEET_SIGNAL_TOOL, REPORT_TO_ADMIRAL_TOOL
 from .admiral_tools import DISCUSS_WITH_ADMIRAL_TOOL
+from .maneuver_orders import maneuver_label
 
 
 # Tools that make the ship DO something (move, fire, aim). A decision that
@@ -752,22 +753,14 @@ class LLMCaptain:
 
     def _renewed_maneuver(self, ship: Any, now: float, interval: float) -> Optional[Any]:
         """The ship's current maneuver re-issued for the next window, if any."""
+        from .maneuver_orders import renewed_maneuver
         m = getattr(ship, "current_maneuver", None)
         if m is None or not hasattr(m, "start_time"):
             return None
         if m.start_time >= now - 1e-6:
             return None  # already fresh (e.g. an admiral heading applied now)
-        try:
-            names = {f.name for f in fields(m)}
-            changes = {"start_time": now, "duration": interval}
-            # Runtime latches and formation sync belong to the old window.
-            for name, value in (("burn_start_time", None), ("hold_velocity", None),
-                                ("hold_velocity_t", -1.0)):
-                if name in names:
-                    changes[name] = value
-            return replace(m, **changes)
-        except TypeError:
-            return None
+        # Runtime latches and formation sync belong to the old window.
+        return renewed_maneuver(ship, now, interval)
 
     def _lose_turn(self, ship: Any, simulation: Any, reason: str) -> List[Any]:
         """
@@ -783,7 +776,7 @@ class LLMCaptain:
         kept = fresh = None
         until = now + interval
         if renewed is not None:
-            kept = f"{renewed.maneuver_type.name}@{renewed.throttle * 100:.0f}%"
+            kept = maneuver_label(renewed.maneuver_type, renewed.throttle)
         else:
             # A maneuver set THIS checkpoint (the runner applied an admiral
             # HEADING / MANEUVER order before asking) needs no renewal - it
@@ -792,7 +785,7 @@ class LLMCaptain:
             if (m is not None and getattr(m, "start_time", None) is not None
                     and m.start_time >= now - 1e-6 and not m.is_complete(now + 1e-6)):
                 whose = "your Admiral's " if self._admiral_heading_applied() else ""
-                fresh = f"{whose}{m.maneuver_type.name}@{m.throttle * 100:.0f}%"
+                fresh = f"{whose}{maneuver_label(m.maneuver_type, m.throttle)}"
                 if 0 < m.duration < 1e6:  # duration <= 0: open-ended
                     until = m.start_time + m.duration
         self.lost_turn = {"time": now, "reason": reason, "renewed": kept, "kept": fresh,
@@ -828,9 +821,9 @@ class LLMCaptain:
     def _range_control(self, simulation: Any, ship: Any) -> Tuple[List[Any], str]:
         """Range-control analysis (merge warnings feed THREATS TO ME) and its block."""
         try:
-            from .range_control import analyze_range_control, format_range_control
+            from .range_control import analyze_range_control, format_captain_range_control
             infos = analyze_range_control(simulation, [ship], detail=True)
-            return infos, format_range_control(infos, who="Your")
+            return infos, format_captain_range_control(infos)
         except Exception:  # noqa: BLE001 - advisory only: never let it kill a decision
             return [], ""
 
@@ -1144,6 +1137,13 @@ class LLMCaptain:
                 capacity = None
             check["salvo"] = self._salvo_check_text(sol, int(salvo), capacity)
 
+        # The prose and the structured order disagree on the burn (e.g. "fly
+        # the fleet heading at 50%" under a structured MAINTAIN, which coasts).
+        from .maneuver_orders import order_throttle_conflict
+        conflict = order_throttle_conflict(order)
+        if conflict:
+            check["throttle"] = conflict
+
         # ENGINE ORDER CHECK: what the ordered motion does to the closest approach.
         motion = None
         heading = getattr(order, "heading", None)
@@ -1396,12 +1396,7 @@ class LLMCaptain:
         """Compact text for one executed tool call (None: shown elsewhere)."""
         args = args or {}
         if name == "set_maneuver":
-            thr = args.get("throttle", 1.0)
-            try:
-                thr = float(thr)
-            except (TypeError, ValueError):
-                thr = 1.0
-            return f"{args.get('maneuver_type', '?')}@{thr * 100:.0f}%"
+            return maneuver_label(args.get("maneuver_type", "?"), args.get("throttle", 1.0))
         if name == "set_heading":
             thr = args.get("throttle", 1.0)
             try:
@@ -1476,7 +1471,7 @@ class LLMCaptain:
         outcomes = self._launch_outcomes(simulation)
         interval = float(getattr(simulation, "decision_interval", 30.0) or 30.0) \
             if simulation is not None else 30.0
-        lines = ["YOUR RECENT DECISIONS (newest last; launches with what they did):"]
+        lines = ["YOUR RECENT DECISIONS (newest last):"]
         for d in self.decision_history[-last_n:]:
             t = d["time"]
             if d.get("lost"):
@@ -1744,7 +1739,7 @@ class LLMCaptain:
         """Render the captain's own notes back into the next turn."""
         if not self.captain_log:
             return ""
-        lines = ["YOUR CAPTAIN'S LOG (notes you wrote to your future self - execute or supersede them):"]
+        lines = ["YOUR CAPTAIN'S LOG (your notes - execute or supersede them):"]
         for entry in self.captain_log[-self.MAX_LOG_ENTRIES:]:
             lines.append(f"  T+{entry['time']:.0f}s: {entry['note']}")
         return "\n".join(lines)

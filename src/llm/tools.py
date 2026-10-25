@@ -126,8 +126,9 @@ CAPTAIN_TOOLS_BASE = [
                             "'full' = exactly EVADE under threat (RUNS from guided torpedoes - "
                             "buys PD time, costs closure). 'dodge' = keeps your course against "
                             "a guided torpedo until its final seconds, then presents your "
-                            "thickest armor; still jinks slugs and blinded torpedoes. Omit for "
-                            "no evasion."
+                            "thickest armor; still jinks slugs and blinded torpedoes. Evasion "
+                            "burns at your throttle - full throttle when the maneuver itself "
+                            "does not burn (MAINTAIN, PADLOCK, throttle 0). Omit for no evasion."
                         )
                     }
                 },
@@ -351,7 +352,9 @@ CAPTAIN_TOOLS_BASE = [
                         "description": (
                             "Optional evasion on top of the heading, as in set_maneuver: "
                             "'full' = EVADE while a threat is inbound, 'dodge' = same but "
-                            "never runs from a guided torpedo. Back on the heading when clear."
+                            "never runs from a guided torpedo. Back on the heading when clear. "
+                            "At throttle 0 (coast and shoot) the dodge still burns, at full "
+                            "throttle."
                         )
                     }
                 },
@@ -607,14 +610,12 @@ FLEET_SIGNAL_TOOL = {
         "name": "fleet_signal",
         "description": (
             "Signal your OWN fleet (the enemy never hears it), delivered at the NEXT "
-            "checkpoint. to=ADMIRAL is filed on your report: BREAKING_OFF as a DEVIATE, "
-            "the others as a request. Max "
-            f"{MAX_FLEET_SIGNALS_PER_DECISION} per decision. Launches, kills and PD losses are "
-            "shared automatically - do not repeat them. TARGET_CLAIM: claim a target before "
-            "committing a salvo so two ships do not waste rounds on one hull. TOT_SYNC: when "
-            "YOUR torpedoes reach target (eta_s), so peers launch to arrive together and split "
-            "its point defense. PD_COVER_REQUEST: ask a ship to cover you with its PD. "
-            "BREAKING_OFF: you leave the fight or your post - say why."
+            "checkpoint. Launches, kills, PD losses and target switches are shared "
+            "automatically - signal intent: TARGET_CLAIM (who takes which hull - focus fire, "
+            "no overkill), TOT_SYNC (when YOUR rounds land, eta_s, so peers launch to arrive "
+            "together), PD_COVER_REQUEST (to= an escort, when your PD cannot blind what is "
+            "inbound), BREAKING_OFF (you leave your post - say why). to=ADMIRAL is filed on "
+            f"your report. Max {MAX_FLEET_SIGNALS_PER_DECISION} per decision."
         ),
         "parameters": {
             "type": "object",

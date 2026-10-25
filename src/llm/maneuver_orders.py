@@ -586,6 +586,27 @@ def fleet_heading_vector(simulation: Any, ships: Sequence[Any],
 
 # issue_order maneuver names (HEADING is implied by heading/toward_*).
 ADMIRAL_MANEUVERS = ("INTERCEPT", "HOLD_RANGE", "EVADE", "BRAKE", "MAINTAIN", "PADLOCK", "HEADING")
+# Maneuvers whose drive never burns (simulation.py: MAINTAIN zeroes the
+# throttle, PADLOCK idles at 5% only while turning). Their throttle only
+# sets how hard an evade overlay may burn while a round is inbound.
+ENGINE_OFF_MANEUVERS = ("MAINTAIN", "PADLOCK")
+# Spec kind of an evade-only order with no fleet order to ride on: the ship
+# keeps flying its current maneuver, renewed for this checkpoint, with the
+# evasion overlay on top (admiral_spec_maneuver).
+OVERLAY = "OVERLAY"
+
+
+def maneuver_label(kind: Any, throttle: Any) -> str:
+    """'INTERCEPT@40%', but 'PADLOCK' / 'MAINTAIN': the drive is off, and a
+    throttle next to them read as a burn order."""
+    name = str(getattr(kind, "name", kind) or "?").upper()
+    if name in ENGINE_OFF_MANEUVERS:
+        return name
+    try:
+        pct = float(1.0 if throttle is None else throttle) * 100
+    except (TypeError, ValueError):
+        pct = 100.0
+    return f"{name}@{pct:.0f}%"
 
 
 def _quiet(parse, *a) -> Any:
@@ -596,6 +617,15 @@ def _quiet(parse, *a) -> Any:
         return None
 
 
+def _heading_given(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    try:
+        return any(abs(float(value.get(k, 0.0) or 0.0)) > 1e-9 for k in ("x", "y", "z"))
+    except (TypeError, ValueError):
+        return False
+
+
 def admiral_maneuver_spec(args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
     The structured maneuver of an issue_order call (maneuver, maneuver_target,
@@ -603,6 +633,21 @@ def admiral_maneuver_spec(args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     evade), normalised, or None when the call has none - a plain heading
     order stays exactly what it was. HEADING specs carry toward_point /
     toward_ship / evade for a heading order.
+
+    Combinations the admiral is told about (issue_order schema):
+    - evade alone: an OVERLAY spec - the overlay rides on the fleet order in
+      force (admiral._attach_heading), else on the ship's current maneuver;
+    - a heading with MAINTAIN or EVADE, or with PADLOCK at an explicit
+      throttle above 0, flies that HEADING: MAINTAIN and PADLOCK never burn,
+      so a heading given with them is the course the admiral meant (EVADE
+      becomes the 'full' overlay unless evade says otherwise; MAINTAIN
+      without a throttle turns the nose onto it at throttle 0). PADLOCK with
+      a heading and no burn keeps PADLOCK (its nose tracks the target);
+    - MAINTAIN / PADLOCK carry throttle 1.0: the drive is off either way, and
+      an evade overlay on them dodges at full power (an admiral "throttle 0"
+      meant "no burn"). The engine dodges at full power under any throttle-0
+      order too (simulation._evasion_overlay), so an attitude-only HEADING
+      with evade still dodges.
     """
     kind = str(args.get("maneuver") or "").strip().upper()
     if kind == "EVASIVE":
@@ -613,11 +658,24 @@ def admiral_maneuver_spec(args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     ref = args.get("toward_ship")
     ref = str(ref).strip() if ref is not None and str(ref).strip() else None
     evade = _quiet(parse_evade, args.get("evade"))
+    throttle_arg = _quiet(parse_number, args.get("throttle"), "throttle")
+    heading = _heading_given(args.get("heading"))
+    if kind in ("MAINTAIN", "EVADE") and heading and point is None and ref is None:
+        if kind == "EVADE" and evade is None:
+            evade = "full"
+        if kind == "MAINTAIN" and throttle_arg is None:
+            throttle_arg = 0.0      # MAINTAIN = no burn: the heading points the nose
+        kind = "HEADING"
+    elif (kind == "PADLOCK" and heading and point is None and ref is None
+          and throttle_arg is not None and throttle_arg > 0):
+        kind = "HEADING"
     if not kind:
         if point is None and ref is None and evade is None:
             return None
-        if point is None and ref is None and not isinstance(args.get("heading"), dict):
-            return None     # evade with nothing to fly
+        if point is None and ref is None and not heading:
+            # Evade with nothing of its own to fly: the overlay on whatever
+            # the ship flies (the fleet order, else its current maneuver).
+            return {"maneuver_type": OVERLAY, "evade": evade, "throttle": 1.0}
         kind = "HEADING"
     spec: Dict[str, Any] = {"maneuver_type": kind}
     if kind == "HEADING":
@@ -640,9 +698,47 @@ def admiral_maneuver_spec(args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 spec[key] = value
     if evade is not None and kind != "EVADE":
         spec["evade"] = evade
-    throttle = _quiet(parse_number, args.get("throttle"), "throttle")
-    spec["throttle"] = 1.0 if throttle is None else max(0.0, min(1.0, throttle))
+    if kind in ENGINE_OFF_MANEUVERS:
+        spec["throttle"] = 1.0
+    else:
+        spec["throttle"] = (1.0 if throttle_arg is None
+                            else max(0.0, min(1.0, throttle_arg)))
     return spec
+
+
+def spec_throttle(spec: Optional[Dict[str, Any]], args: Dict[str, Any]) -> float:
+    """
+    The order throttle for an issue_order call: the spec's (engine-off
+    maneuvers always 1.0, see admiral_maneuver_spec), else the throttle
+    argument (default 1.0), clamped to 0..1.
+    """
+    if spec and spec.get("throttle") is not None:
+        return float(spec["throttle"])
+    value = _quiet(parse_number, args.get("throttle", 1.0), "throttle")
+    return 1.0 if value is None else max(0.0, min(1.0, value))
+
+
+def renewed_maneuver(ship: Any, now: float, interval: float) -> Optional[Any]:
+    """
+    The ship's current maneuver re-issued for the window starting ``now``
+    (runtime latches and formation sync reset; a HOLD_RANGE keeps the range
+    it latched), or None when it has none. Used by a LOST captain turn and
+    by an admiral evade-only order (OVERLAY).
+    """
+    from dataclasses import fields, replace
+    m = getattr(ship, "current_maneuver", None)
+    if m is None or not hasattr(m, "start_time"):
+        return None
+    try:
+        names = {f.name for f in fields(m)}
+        changes: Dict[str, Any] = {"start_time": now, "duration": interval}
+        for name, value in (("burn_start_time", None), ("hold_velocity", None),
+                            ("hold_velocity_t", -1.0)):
+            if name in names:
+                changes[name] = value
+        return replace(m, **changes)
+    except TypeError:
+        return None
 
 
 def admiral_spec_maneuver(simulation: Any, ship: Any, spec: Dict[str, Any],
@@ -656,6 +752,20 @@ def admiral_spec_maneuver(simulation: Any, ship: Any, spec: Dict[str, Any],
     from ..simulation import Maneuver, ManeuverType
 
     kind = spec.get("maneuver_type", "MAINTAIN")
+    interval = getattr(simulation, "decision_interval", 30.0)
+    if kind == OVERLAY:
+        # Evade alone, no fleet order to ride on: the overlay on what the
+        # ship is flying, renewed for this checkpoint (a coasting ship
+        # coasts on, dodging).
+        evade = parse_evade(spec.get("evade")) or "full"
+        current = renewed_maneuver(ship, simulation.current_time, interval)
+        if current is None:
+            return Maneuver(maneuver_type=ManeuverType.MAINTAIN,
+                            start_time=simulation.current_time, duration=interval,
+                            throttle=1.0, evade=evade), []
+        if current.maneuver_type != ManeuverType.EVASIVE:
+            current.evade = evade
+        return current, []
     maneuver_type = ManeuverType["EVASIVE" if kind == "EVADE" else kind]
     args = {k: spec.get(k) for k in ("standoff_km", "arrival_closing_kps", "range_km",
                                      "evade", "toward_point", "toward_ship")}
@@ -716,6 +826,7 @@ def apply_admiral_spec(simulation: Any, ship: Any, order: Any, spec: Dict[str, A
 
     order.maneuver_error = None
     order.maneuver_applied = None
+    flying = getattr(ship, "current_maneuver", None) is not None
     try:
         maneuver, _notes = admiral_spec_maneuver(simulation, ship, spec, throttle)
         if maneuver.maneuver_type == ManeuverType.HEADING and not maneuver.live_heading:
@@ -730,11 +841,57 @@ def apply_admiral_spec(simulation: Any, ship: Any, order: Any, spec: Dict[str, A
     if not simulation.inject_command(ship.ship_id, maneuver):
         order.maneuver_error = "the ship cannot maneuver"
         return False
-    order.applied_throttle = throttle
     target = simulation.get_ship(maneuver.target_id) if maneuver.target_id else None
-    order.maneuver_applied = describe_maneuver_spec(
-        spec, getattr(target, "name", None) if target is not None else None)
+    target_name = getattr(target, "name", None) if target is not None else None
+    if spec.get("maneuver_type") == OVERLAY:
+        order.applied_throttle = maneuver.throttle
+        order.maneuver_applied = describe_overlay(maneuver, target_name, renewed=flying)
+        return True
+    order.applied_throttle = throttle
+    order.maneuver_applied = describe_maneuver_spec(spec, target_name)
     return True
+
+
+def fleet_order_text(fleet_order: Any) -> Optional[str]:
+    """
+    One line for an admiral's "all ships" order in force: "HEADING
+    (+1.00,+0.02,+0.00) @50%" or the maneuver ("PADLOCK OCS Lancer-2 (coasts,
+    engine off)"). None when it flies nothing.
+    """
+    spec = getattr(fleet_order, "maneuver", None)
+    heading = getattr(fleet_order, "heading", None)
+    plain = (spec is None or (spec.get("maneuver_type") == "HEADING"
+                              and not spec.get("toward_point") and not spec.get("toward_ship")))
+    if isinstance(heading, dict) and plain:
+        thr = getattr(fleet_order, "throttle", None)
+        thr = 1.0 if thr is None else float(thr)
+        text = (f"HEADING ({heading.get('x', 0):+.2f},{heading.get('y', 0):+.2f},"
+                f"{heading.get('z', 0):+.2f}) "
+                + ("attitude only (no burn)" if thr <= 0 else f"@{thr * 100:.0f}%"))
+        if spec and spec.get("evade"):
+            text += f", evade {spec['evade']}"
+        return text
+    return describe_maneuver_spec(spec) if spec else None
+
+
+def describe_overlay(maneuver: Any, target_name: Optional[str] = None,
+                     renewed: bool = True) -> str:
+    """What an OVERLAY order flies: the ship's own maneuver, renewed, + evade."""
+    if not renewed:
+        return f"coasting (engine off), evade {maneuver.evade}"
+    kind = _label(maneuver.maneuver_type.name)
+    if kind in ENGINE_OFF_MANEUVERS:
+        what = kind + (f" {target_name}" if target_name else "") + " (coasts, engine off)"
+    elif kind == "HEADING" and isinstance(maneuver.heading_direction, dict):
+        h = maneuver.heading_direction
+        what = (f"HEADING ({h.get('x', 0):+.2f},{h.get('y', 0):+.2f},{h.get('z', 0):+.2f}) "
+                + ("attitude only (no burn; the dodge burns at full throttle)"
+                   if maneuver.throttle <= 0 else f"@{maneuver.throttle * 100:.0f}%"))
+    else:
+        what = kind + (f" {target_name}" if target_name else "") + f" @{maneuver.throttle * 100:.0f}%"
+    if maneuver.maneuver_type.name == "EVASIVE":
+        return f"your current {what}, renewed"
+    return f"your current {what}, renewed, evade {maneuver.evade}"
 
 
 def describe_maneuver_spec(spec: Optional[Dict[str, Any]],
@@ -748,10 +905,18 @@ def describe_maneuver_spec(spec: Optional[Dict[str, Any]],
     if not spec:
         return None
     kind = str(spec.get("maneuver_type", "?"))
+    if kind == OVERLAY:
+        return f"your current maneuver kept, evade {spec.get('evade') or 'full'}"
     parts = [_label(kind)]
     target = target_name or spec.get("target")
     if target:
         parts[0] += f" {target}"
+    if kind in ENGINE_OFF_MANEUVERS:
+        # The drive is off: a throttle here would read as a burn order.
+        parts[0] += " (coasts, engine off)"
+        if spec.get("evade"):
+            parts.append(f"evade {spec['evade']}")
+        return ", ".join(parts)
     if spec.get("toward_ship"):
         parts[0] += f" to ship {spec['toward_ship']} (joins it, matching its velocity)"
     elif spec.get("toward_point"):
@@ -769,6 +934,121 @@ def describe_maneuver_spec(spec: Optional[Dict[str, Any]],
     if spec.get("evade"):
         parts.append(f"evade {spec['evade']}")
     return ", ".join(parts)
+
+
+# Throttles an admiral states in prose: "60% throttle", "throttle 40%",
+# "throttle 0", "at 100% of the slowest hull", "zero throttle".
+_PCT_THROTTLE = re.compile(
+    r"(\d{1,3}(?:\.\d+)?)\s*%\s*(?:throttle|of\s+(?:the\s+)?(?:slowest|your|max|full|formation))",
+    re.IGNORECASE)
+_THROTTLE_PCT = re.compile(r"\bthrottle\s*(?:of|at|to|=|:)?\s*(\d{1,3}(?:\.\d+)?)\s*%", re.IGNORECASE)
+_THROTTLE_FRAC = re.compile(
+    r"\bthrottle\s*(?:of|at|to|=|:)?\s*(0(?:\.\d+)?|1(?:\.0+)?)(?!\d|\.\d|\s*%)", re.IGNORECASE)
+# Stated zeros: "zero throttle", "NO thrust", "no closing burn", "engine off".
+_ZERO_THROTTLE = re.compile(
+    r"\b(?:zero\s+(?:throttle|thrust)|no\s+(?:closing\s+|main\s+|forward\s+)?(?:thrust|burns?)"
+    r"|engines?\s+off)\b", re.IGNORECASE)
+# "do NOT burn at 60% throttle", "instead of the 50% throttle": not an order.
+_THROTTLE_NEGATION = re.compile(
+    r"\b(?:not|no|never|don'?t|avoid|stand\s+down|instead\s+of|cancel|stop)\b[^.;:]{0,30}$",
+    re.IGNORECASE)
+# A throttle in a conditional or future clause is not the order for now:
+# "when it falls to ~350 km, ... burn at ~50% throttle", "if he launches,
+# burn at 100%", "next checkpoint we burn at 80%", "expect the PADLOCK order
+# - no burn". The marker counts before the throttle in its clause; after it
+# only a condition does ("burn at 60% throttle only if range < 200 km") - a
+# trailing "(expect ~64 s, renew next checkpoint)" does not.
+_CONDITION_BEFORE = re.compile(
+    r"\b(?:if|when|whenever|unless|once|until|after|later|expect\w*|be\s+ready|"
+    r"should\s+(?:he|she|it|they|the\s+enemy)|in\s+case|as\s+soon\s+as|"
+    r"next\s+(?:checkpoint|turn|phase))\b", re.IGNORECASE)
+_CONDITION_AFTER = re.compile(r"\b(?:if|unless|when|whenever|once|in\s+case)\b", re.IGNORECASE)
+# Clause boundaries: sentence ends (not the dots of "0.4" / "(+1.00,...)"),
+# semicolons, colons and line breaks.
+_CLAUSE_END = re.compile(r"[.!?](?=\s|$)|[;:\n]")
+# Spread of stated throttles still read as ONE intent, and the gap to the
+# structured throttle that is a contradiction rather than rounding.
+THROTTLE_TEXT_SPREAD = 0.05
+THROTTLE_CONFLICT_GAP = 0.15
+
+
+def _conditional(text: str, start: int, end: int) -> bool:
+    """True when the throttle at text[start:end] sits in a conditional or
+    future clause (_CONDITION_BEFORE / _CONDITION_AFTER)."""
+    head = max((m.end() for m in _CLAUSE_END.finditer(text, 0, start)), default=0)
+    tail = _CLAUSE_END.search(text, end)
+    return bool(_CONDITION_BEFORE.search(text, head, start)
+                or _CONDITION_AFTER.search(text, end, tail.start() if tail else len(text)))
+
+
+def text_throttles(text: str) -> List[float]:
+    """
+    Throttles (0..1) an order's prose states for NOW, in order. A positive
+    one right after a negation ("do not burn at 60% throttle") is left out;
+    a zero never is ("no closing burn (throttle 0)" states the zero, and so
+    do "NO thrust" / "no burn"). Throttles in a conditional or future clause
+    ("when it falls to 350 km, burn at 50% throttle") are left out.
+    """
+    found: List[Tuple[int, float]] = []
+    text = str(text or "")
+    matches = [(m, scale) for pattern, scale in ((_PCT_THROTTLE, 0.01), (_THROTTLE_PCT, 0.01),
+                                                 (_THROTTLE_FRAC, 1.0))
+               for m in pattern.finditer(text)]
+    matches += [(m, 0.0) for m in _ZERO_THROTTLE.finditer(text)]
+    for m, scale in matches:
+        value = float(m.group(1)) * scale if scale else 0.0
+        if value > 1.0 + 1e-9:
+            continue
+        if value > 0 and _THROTTLE_NEGATION.search(text[max(0, m.start() - 40):m.start()]):
+            continue
+        if _conditional(text, m.start(), m.end()):
+            continue
+        # One statement matched twice ("throttle 40%" by two patterns, "no
+        # burn (throttle 0)") counts once.
+        if all(abs(pos - m.start()) > (30 if v == value else 12) for pos, v in found):
+            found.append((m.start(), value))
+    return [v for _, v in sorted(found)]
+
+
+def order_throttle_conflict(order: Any) -> Optional[str]:
+    """
+    The order's prose vs the motion the runner applied, when they clearly
+    disagree (None otherwise): a MAINTAIN / PADLOCK (engine off) whose text
+    asks for a burn, or a burning order whose text says throttle 0 or a
+    clearly different throttle. Only stated throttles count, all agreeing
+    with each other - prose that names both a burn and a coast is not clear.
+    The applied order is what flies; the captain decides which was meant.
+    """
+    spec = getattr(order, "maneuver", None) or {}
+    heading = getattr(order, "heading", None)
+    if getattr(order, "maneuver_error", None) or not (spec or isinstance(heading, dict)):
+        return None
+    kind = str(spec.get("maneuver_type") or "HEADING")
+    if kind == OVERLAY:
+        return None
+    values = text_throttles(getattr(order, "order_text", "") or "")
+    if not values or max(values) - min(values) > THROTTLE_TEXT_SPREAD:
+        return None
+    stated = max(values)
+    if kind in ENGINE_OFF_MANEUVERS and not isinstance(heading, dict):
+        if stated <= 0:
+            return None
+        return (f"the text asks for a {stated * 100:.0f}% burn, but the applied {kind} coasts "
+                f"(engine off). If the burn is meant, fly it yourself (set_heading).")
+    throttle = getattr(order, "throttle", None)
+    throttle = 1.0 if throttle is None else float(throttle)
+    if stated <= 0 < throttle:
+        return (f"the text says throttle 0 (no burn), but the applied order burns at "
+                f"{throttle * 100:.0f}%. If a coast is meant, set throttle 0 yourself.")
+    # Range keeping (HOLD_RANGE, a standoff INTERCEPT, toward a point / ship)
+    # throttles itself: its throttle is a ceiling, not the burn.
+    keeps_range = (kind == "HOLD_RANGE" or spec.get("standoff_km") is not None
+                   or spec.get("arrival_closing_kps") is not None
+                   or bool(spec.get("toward_point") or spec.get("toward_ship")))
+    if stated > 0 and not keeps_range and abs(stated - throttle) > THROTTLE_CONFLICT_GAP:
+        return (f"the text says {stated * 100:.0f}% throttle, the applied order "
+                f"{throttle * 100:.0f}%.")
+    return None
 
 
 def admiral_order_moves_ship(order: Any) -> bool:
@@ -801,9 +1081,14 @@ def admiral_maneuver_lines(order: Any) -> List[str]:
                 f"(set_maneuver/set_heading)."]
     if isinstance(getattr(order, "heading", None), dict):
         if spec.get("evade"):
-            return [f"      >>> ...with evade {spec['evade']}: evasion flies the ship only "
-                    f"while a torpedo or slug is inbound, then the heading resumes."]
+            thr = getattr(order, "throttle", None)
+            power = (" (at full throttle: the heading itself does not burn)"
+                     if thr is not None and float(thr) <= 0 else "")
+            return [f"      >>> ...with evade {spec['evade']}: evasion flies the ship{power} "
+                    f"only while a torpedo or slug is inbound, then the heading resumes."]
         return []
     what = getattr(order, "maneuver_applied", None) or describe_maneuver_spec(spec)
-    return [f"      >>> MANEUVER ORDER (ALREADY APPLIED to your ship): {what}. Keep it: "
-            f"calling set_maneuver/set_heading replaces it. Override only for a reason."]
+    replaced = getattr(order, "replaces_fleet_order", None)
+    if isinstance(replaced, str) and replaced:
+        what += f" - for your ship INSTEAD of the fleet order {replaced}"
+    return [f"      >>> MANEUVER ORDER (ALREADY APPLIED to your ship): {what}."]

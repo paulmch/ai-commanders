@@ -543,13 +543,14 @@ class TestHeadingTowardShip:
 # Evasion overlay (R4)
 # =============================================================================
 
-def _flank_torpedo_run(evade, seconds=400):
+def _flank_torpedo_run(evade, seconds=400, throttle=0.5, applied=None):
     """A destroyer flying HEADING +x while a corvette 400 km off its flank
-    launches one torpedo at it."""
+    launches one torpedo at it. ``applied`` (a list) collects the destroyer's
+    (mode, applied throttle) per step."""
     sim = CombatSimulation(time_step=1.0, decision_interval=1e9, seed=42)
     me = _ship(sim, "tgt", "destroyer", "alpha", (0, 0, 0))
     atk = _ship(sim, "atk", "corvette", "beta", (0, 400, 0), fwd=(0, -1, 0))
-    sim.inject_command("tgt", Maneuver(ManeuverType.HEADING, start_time=0.0, throttle=0.5,
+    sim.inject_command("tgt", Maneuver(ManeuverType.HEADING, start_time=0.0, throttle=throttle,
                                        heading_direction={"x": 1, "y": 0, "z": 0}, evade=evade))
     sim.inject_command("atk", Maneuver(ManeuverType.MAINTAIN, start_time=0.0))
     assert sim.inject_command("atk", {"type": "launch_torpedo", "target_id": "tgt"})
@@ -557,6 +558,8 @@ def _flank_torpedo_run(evade, seconds=400):
     for _ in range(seconds):
         sim.step()
         modes.append(me.execution_mode)
+        if applied is not None:
+            applied.append((me.execution_mode, me.applied_throttle))
         if not sim.torpedoes:
             break
     impacts = sim.get_events_by_type(SimulationEventType.TORPEDO_IMPACT)
@@ -593,6 +596,32 @@ class TestEvasionOverlay:
         assert plain and plain[0].data["hit_location"] == "lateral"
         assert dodge and dodge[0].data["hit_location"] == "nose"
         assert full and full[0].data["hit_location"] == "nose"
+
+    def test_overlay_on_a_throttle_0_order_dodges_at_full_power(self):
+        # "Coast and shoot, evade dodge": an attitude-only HEADING (the fleet
+        # heading at throttle 0, MAINTAIN + heading) used to give the overlay
+        # throttle 0 * mod = 0 - it RAN at 0% and took the torpedo in the flank.
+        _, _, _, plain = _flank_torpedo_run(None, throttle=0.0)
+        assert plain and plain[0].data["hit_location"] == "lateral"
+        steps = []
+        _, me, modes, full = _flank_torpedo_run("full", throttle=0.0, applied=steps)
+        assert "RUN" in modes and full and full[0].data["hit_location"] == "nose"
+        assert max(thr for mode, thr in steps if mode == "RUN") == pytest.approx(1.0)
+        _, _, _, dodge = _flank_torpedo_run("dodge", throttle=0.0)
+        assert dodge and dodge[0].data["hit_location"] == "nose"
+
+    def test_throttle_0_order_with_overlay_never_burns_without_a_threat(self):
+        sim = CombatSimulation(time_step=1.0, decision_interval=1e9, seed=42)
+        me = _ship(sim, "tgt", "destroyer", "alpha", (0, 0, 0))
+        _coast(_ship(sim, "foe", "corvette", "beta", (0, 400, 0), fwd=(0, -1, 0)))
+        sim.inject_command("tgt", Maneuver(ManeuverType.HEADING, start_time=0.0, throttle=0.0,
+                                           heading_direction={"x": 0, "y": 1, "z": 0},
+                                           evade="full"))
+        for _ in range(60):
+            sim.step()
+            assert me.execution_mode == "HEADING" and me.applied_throttle == 0.0
+        assert me.velocity.magnitude == pytest.approx(0.0, abs=1e-6)
+        assert me.forward.y > 0.5           # the nose turns onto it (RCS, no burn)
 
 
 # =============================================================================

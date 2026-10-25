@@ -1,0 +1,43 @@
+=== TACTICAL DATA (T+180s) ===
+You are Captain Vance, commanding OCS Falchion-1. Decision 7: your orders lock for 30 s; next decision T+210.
+
+MY SHIP: OCS Falchion-1 [beta_5] - Destroyer, 2.0g, 90° turn ~20 s
+  position (-25.0,+9.0,+3.0) km | velocity (+2.90,-0.50,+0.10) km/s = 2.95 km/s | nose (-0.96,-0.27,+0.01)
+  hull 100% | armor nose 212 / lateral 36 / tail 42 cm | delta-v 500/500 km/s
+  heat 7% (22/320 GJ), net +48 MW
+  radiators RETRACTED (protected, no cooling) [manual] 780/780 MW
+  weapons: Spinal Coiler Mk3 FIRE_WHEN_OPTIMAL (1 ready) | Coilgun Battery Mk3 FIRE_WHEN_OPTIMAL (1 reloading 8 s) | PD 2/2 turrets (automatic)
+  flying: nothing - COASTING at 2.95 km/s
+  primary target: TIS Lancer-4 [alpha_4]
+  record: 3 shots, 1 hit, dealt 21.6 GJ, took 0.0 GJ
+
+THREATS TO ME (on a collision course: 0 gun rounds, 0 guided torpedoes, 0 blinded wrecks):
+  GUNS ON YOU: TIS Anvil-1 [alpha_9] 240 km, P(hit you) 21% x 4 shots/30s
+
+ENEMIES (8):
+  TIS Ward-2 [alpha_8] Frigate | 468 km, closing 1.16 km/s | dir_to (+0.99,-0.10,+0.00), 17° off nose | hull 100% | PD 2/2 | guns ~4 GJ/min | best P(hit) 13%
+  TIS Ward-1 [alpha_7] Frigate | 471 km, closing 1.18 km/s | dir_to (+0.99,-0.10,+0.00), 4° off nose | hull 100% | PD 2/2 | guns ~4 GJ/min | best P(hit) 13%
+  TIS Lancer-3 [alpha_3] Battlecruiser | 515 km, closing 0.81 km/s | dir_to (+0.99,-0.10,+0.00), 13° off your nose (ahead-port-above) | hull 100% | 1x Spinal, 2x Coilgun, PD 2/2 | guns ~25 GJ/min
+    guns: Spinal Coiler P(hit) 17%, 3 shots = 0.51 hits, ~0.73 GJ/shot | Coilgun P(hit) 17%, 3 shots = 0.51 hits, ~0.12 GJ/shot
+  TIS Lancer-2 [alpha_2] Battlecruiser | 517 km, closing 0.82 km/s | dir_to (+0.99,-0.10,+0.00), 6° off your nose (ahead-port-above) | hull 100% | 1x Spinal, 2x Coilgun, PD 2/2 | guns ~25 GJ/min
+    guns: Spinal Coiler P(hit) 18%, 3 shots = 0.54 hits, ~0.77 GJ/shot | Coilgun P(hit) 17%, 3 shots = 0.51 hits, ~0.12 GJ/shot
+  [PRIMARY] TIS Lancer-4 [alpha_4] Battlecruiser | 521 km, closing 0.80 km/s | dir_to (+0.99,-0.10,+0.00), 19° off your nose (ahead-port-above) | hull 100% | 1x Spinal, 2x Coilgun, PD 2/2 | guns ~25 GJ/min
+    guns: Spinal Coiler P(hit) 17%, 3 shots = 0.51 hits, ~0.72 GJ/shot | Coilgun P(hit) 17%, 3 shots = 0.51 hits, ~0.12 GJ/shot
+  TIS Lancer-1 [alpha_1] Battlecruiser | 525 km, closing 0.82 km/s | dir_to (+0.99,-0.10,+0.00), 0° off nose | hull 100% | PD 2/2 | guns ~25 GJ/min | best P(hit) 17%
+  TIS Falchion-2 [alpha_6] Destroyer | 601 km, closing 0.91 km/s | dir_to (+0.99,-0.10,+0.00), 21° off nose | hull 100%, nose Visible damage, flank Intact | PD 2/2 | guns ~4 GJ/min | best P(hit) 11%
+  TIS Falchion-1 [alpha_5] Destroyer | 606 km, closing 0.94 km/s | dir_to (+0.99,-0.10,+0.00), 31° off nose | hull 100% | PD 2/2 | guns ~4 GJ/min | no gun bears
+
+FRIENDLIES (PD umbrella over you: 17 turrets within 250 km - yours 2 + 7 ships; hull 100% and PD intact unless shown):
+  5 ships PADLOCK -> TIS Lancer-2 [alpha_2]:
+    OCS Sovereign-1 [beta_1] Battleship | 34 km dir_to (+0.98,-0.19,+0.00) | rel 0.24 km/s
+    OCS Sovereign-2 [beta_2] Battleship | 47 km dir_to (+0.98,-0.19,+0.00) | rel 0.24 km/s
+    OCS Falchion-2 [beta_3] Destroyer | 29 km dir_to (+0.98,-0.19,+0.00) | rel 0.24 km/s
+    OCS Ward-1 [beta_4] Frigate | 91 km dir_to (+0.98,-0.19,+0.00) | rel 0.24 km/s
+    OCS Ward-2 [beta_5] Frigate | 87 km dir_to (+0.98,-0.19,+0.00) | rel 0.24 km/s
+  OCS Ward-3 [beta_6] Frigate | 92 km dir_to (+0.98,-0.19,+0.00) | rel 0.24 km/s | HEADING (-1.00,+0.00,+0.00)@50% -> TIS Lancer-2 [alpha_2]
+  OCS Ward-4 [beta_7] Frigate | 106 km dir_to (+0.98,-0.19,+0.00) | rel 0.24 km/s | PADLOCK -> TIS Lancer-3 [alpha_3] | PD 1/2 | hull 63%
+
+YOUR RECENT DECISIONS (newest last):
+  T+150 EVADE@80% | torp x1 -> OCS Falchion-1 [beta_5]: 1 in flight | tgt OCS Falchion-1 [beta_5]
+
+DECISION POINT 7. Your orders, Captain: tool calls (set_maneuver/set_heading, set_weapons_order, set_primary_target); words alone do nothing.

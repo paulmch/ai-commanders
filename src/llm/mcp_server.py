@@ -567,7 +567,9 @@ def create_mcp_server(
                     "evade ('full' | 'dodge') adds threat-aware evasion to any "
                     "maneuver but EVASIVE: it flies the ship only while a torpedo or slug is "
                     "inbound ('dodge' never runs from a guided torpedo, presenting armor in "
-                    "its final seconds instead). Range control = HEADING: "
+                    "its final seconds instead), at the maneuver's throttle - full throttle "
+                    "when the maneuver itself does not burn (throttle 0, MAINTAIN, PADLOCK). "
+                    "Range control = HEADING: "
                     "get_battle_state.range_control lists ready-made headings per enemy group "
                     "(cancel closure, open range, pass wide, flank). ship_id \"all\" orders "
                     "the whole fleet: HEADING flies one heading as a formation (throttle is a "
@@ -644,7 +646,8 @@ def create_mcp_server(
                             "enum": ["full", "dodge"],
                             "description": (
                                 "Evasion overlay while a threat is inbound: 'full' = EVASIVE "
-                                "under threat, 'dodge' = never runs from a guided torpedo"
+                                "under threat, 'dodge' = never runs from a guided torpedo. "
+                                "Burns at the maneuver's throttle, full throttle at throttle 0"
                             ),
                         },
                         "heading_direction": {

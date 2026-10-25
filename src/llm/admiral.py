@@ -58,6 +58,10 @@ class AdmiralOrder:
     # was NOT applied and must choose a maneuver).
     maneuver_applied: Optional[str] = None
     maneuver_error: Optional[str] = None
+    # The fleet ("all ships") order this ship's own heading / maneuver
+    # replaced, e.g. "HEADING (+1.00,+0.02,+0.00) @50%" - shown to the
+    # captain so a per-ship MAINTAIN under a fleet burn reads as what it is.
+    replaces_fleet_order: Optional[str] = None
 
 
 @dataclass
@@ -115,7 +119,7 @@ def _fleet_heading_order(args: Dict[str, Any]) -> Optional["AdmiralOrder"]:
     """issue_order(ship_name="all ships", heading=... | maneuver=... |
     toward_point/toward_ship=...) -> the fleet-wide order."""
     from .range_control import is_fleet_alias
-    from .maneuver_orders import admiral_maneuver_spec
+    from .maneuver_orders import admiral_maneuver_spec, spec_throttle
     if not is_fleet_alias(args.get("ship_name")):
         return None
     heading = _heading_arg(args.get("heading"))
@@ -128,7 +132,7 @@ def _fleet_heading_order(args: Dict[str, Any]) -> Optional["AdmiralOrder"]:
         order_text=args.get("order_text", ""),
         priority=args.get("priority", "NORMAL"),
         heading=heading if spec is None or _plain_heading_spec(spec) else None,
-        throttle=_throttle_arg(args.get("throttle", 1.0)),
+        throttle=spec_throttle(spec, args),
         formation=True,
         maneuver=spec,
     )
@@ -137,33 +141,34 @@ def _fleet_heading_order(args: Dict[str, Any]) -> Optional["AdmiralOrder"]:
 def _attach_heading(order: "AdmiralOrder", args: Dict[str, Any],
                     fleet_heading: Optional["AdmiralOrder"]) -> None:
     """Own heading / structured maneuver from the order's arguments, else the
-    fleet order in force."""
-    from .maneuver_orders import admiral_maneuver_spec
+    fleet order in force. An evade-only order (OVERLAY spec) rides on the
+    fleet order; with none in force the runner puts the overlay on the
+    ship's current maneuver. An order of the ship's own that replaces a
+    fleet order in force says so (replaces_fleet_order, for the captain)."""
+    from .maneuver_orders import (
+        OVERLAY, admiral_maneuver_spec, fleet_order_text, spec_throttle)
     heading = _heading_arg(args.get("heading"))
     spec = admiral_maneuver_spec(args)
-    if spec is None and fleet_heading is not None and args.get("evade"):
+    fleet_flies = fleet_heading is not None and (
+        fleet_heading.heading is not None or getattr(fleet_heading, "maneuver", None))
+    if spec is not None and spec.get("maneuver_type") == OVERLAY and fleet_flies:
         # A per-ship evade on top of the fleet order in force: that ship
         # flies the fleet order with the evasion overlay.
-        from .maneuver_orders import parse_evade, ManeuverArgError
-        try:
-            evade = parse_evade(args.get("evade"))
-        except ManeuverArgError:
-            evade = None
-        if evade is not None:
-            fleet_spec = dict(getattr(fleet_heading, "maneuver", None)
-                              or {"maneuver_type": "HEADING",
-                                  "throttle": fleet_heading.throttle})
-            if fleet_spec.get("maneuver_type") != "EVADE":
-                fleet_spec["evade"] = evade
-                if fleet_heading.heading is not None:
-                    order.heading = dict(fleet_heading.heading)
-                order.maneuver = fleet_spec
-                order.throttle = fleet_heading.throttle
-                order.formation = True
-                return
+        fleet_spec = dict(getattr(fleet_heading, "maneuver", None)
+                          or {"maneuver_type": "HEADING",
+                              "throttle": fleet_heading.throttle})
+        if fleet_spec.get("maneuver_type") != "EVADE":
+            fleet_spec["evade"] = spec["evade"]
+            if fleet_heading.heading is not None:
+                order.heading = dict(fleet_heading.heading)
+            order.maneuver = fleet_spec
+            order.throttle = fleet_heading.throttle
+            order.formation = True
+            return
+        spec = None     # the fleet already EVADEs: inherit it below
     if spec is not None:
         order.maneuver = spec
-        order.throttle = _throttle_arg(args.get("throttle", 1.0))
+        order.throttle = spec_throttle(spec, args)
         order.formation = False
         if heading is not None and _plain_heading_spec(spec):
             order.heading = heading
@@ -171,14 +176,31 @@ def _attach_heading(order: "AdmiralOrder", args: Dict[str, Any],
         order.heading = heading
         order.throttle = _throttle_arg(args.get("throttle", 1.0))
         order.formation = False
-    elif fleet_heading is not None and (fleet_heading.heading is not None
-                                        or getattr(fleet_heading, "maneuver", None)):
+    elif fleet_flies:
         if fleet_heading.heading is not None:
             order.heading = dict(fleet_heading.heading)
         if getattr(fleet_heading, "maneuver", None):
             order.maneuver = dict(fleet_heading.maneuver)
         order.throttle = fleet_heading.throttle
         order.formation = True
+        return
+    if (fleet_flies and (order.maneuver or order.heading)
+            and _motion_key(order) != _motion_key(fleet_heading)):
+        order.replaces_fleet_order = fleet_order_text(fleet_heading)
+
+
+def _motion_key(order: "AdmiralOrder") -> Tuple[Any, ...]:
+    """What an order flies (maneuver, target, heading, point/ship) - evade
+    and throttle aside: a per-ship PADLOCK on the fleet's PADLOCK target
+    replaces nothing worth telling the captain."""
+    spec = getattr(order, "maneuver", None) or {}
+    heading = getattr(order, "heading", None)
+    target = str(spec.get("target") or spec.get("target_hint") or "")
+    return (spec.get("maneuver_type") or "HEADING",
+            target.split("[", 1)[0].strip().lower(),    # "OCS Lancer-2 [beta_2]"
+            tuple(round(float(heading.get(k, 0.0)), 2) for k in "xyz")
+            if isinstance(heading, dict) else None,
+            repr(spec.get("toward_point")), str(spec.get("toward_ship") or "").lower())
 
 
 def _accepts_kwarg(fn: Any, name: str) -> bool:

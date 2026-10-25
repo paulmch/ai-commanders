@@ -197,14 +197,13 @@ def corvette_kwargs():
         range_control="=== RANGE CONTROL (world-frame headings for set_heading) ===\n"
                       "GROUP A: OCS Falchion-1 (1 ship) - 110 km, closing 4.68 km/s",
         orders=orders, comms=comms, own_faction="alpha",
-        decision_history=("YOUR RECENT DECISIONS (newest last; launches with what they did):\n"
+        decision_history=("YOUR RECENT DECISIONS (newest last):\n"
                           "  T+150 EVADE@80% | torp x1 -> OCS Falchion-1 [beta_5]: 1 in flight | "
                           "tgt OCS Falchion-1 [beta_5]"),
-        captain_log="YOUR CAPTAIN'S LOG (notes you wrote to your future self - execute or "
-                    "supersede them):\n  T+150s: Salvo on Falchion-1, then open range.",
-        execution_feedback="ENGINE FEEDBACK (what your ship actually did; weapon policies "
-                           "persist, maneuvers and queued launches expire at the next "
-                           "checkpoint):\n  helm (T+151): RUN, requested 80% throttle, applied 80%",
+        captain_log="YOUR CAPTAIN'S LOG (your notes - execute or supersede them):\n"
+                    "  T+150s: Salvo on Falchion-1, then open range.",
+        execution_feedback="ENGINE FEEDBACK (what your ship actually did):\n"
+                           "  helm (T+151): RUN, requested 80% throttle, applied 80%",
         tool_names=["discuss_with_admiral", "fleet_signal", "launch_torpedo", "log_note",
                     "report_to_admiral", "send_message", "set_heading", "set_maneuver",
                     "set_primary_target", "set_radiators"],
@@ -256,6 +255,73 @@ def destroyer_kwargs():
     return kw
 
 
+def fleet_8v8_kwargs():
+    """
+    A gun destroyer facing 8 enemies with 7 friendlies (the 150-pt mirror
+    battle's shape): the turn that used to print a two-line fire solution
+    for every contact and one line per friendly flying the same order.
+    """
+    kw = destroyer_kwargs()
+    kw.update(orders=None)
+    tactical = dict(kw["tactical_status"])
+
+    def guns(p_spinal, p_coil, gj_spinal, gj_coil, shots=3):
+        return [
+            {"weapon_slot": "weapon_0", "weapon_name": "Spinal Coiler Mk3",
+             "hit_probability": p_spinal, "shots": shots, "window_s": 30.0,
+             "expected_hits": p_spinal * shots, "expected_gj_per_shot": gj_spinal},
+            {"weapon_slot": "weapon_1", "weapon_name": "Coilgun Battery Mk3",
+             "hit_probability": p_coil, "shots": shots, "window_s": 30.0,
+             "expected_hits": p_coil * shots, "expected_gj_per_shot": gj_coil},
+        ]
+
+    rows = [  # (id, name, type, km, closing, angle, spinal P, coil P, spinal GJ, coil GJ)
+        ("alpha_8", "TIS Ward-2", "frigate", 468.0, 1.16, 17.0, 0.13, 0.12, 0.57, 0.09),
+        ("alpha_7", "TIS Ward-1", "frigate", 471.0, 1.18, 4.0, 0.13, 0.12, 0.57, 0.09),
+        ("alpha_3", "TIS Lancer-3", "battlecruiser", 515.0, 0.81, 13.0, 0.17, 0.17, 0.73, 0.12),
+        ("alpha_2", "TIS Lancer-2", "battlecruiser", 517.0, 0.82, 6.0, 0.18, 0.17, 0.77, 0.12),
+        ("alpha_4", "TIS Lancer-4", "battlecruiser", 521.0, 0.80, 19.0, 0.17, 0.17, 0.72, 0.12),
+        ("alpha_1", "TIS Lancer-1", "battlecruiser", 525.0, 0.82, 0.0, 0.17, 0.17, 0.72, 0.12),
+        ("alpha_6", "TIS Falchion-2", "destroyer", 601.0, 0.91, 21.0, 0.11, 0.11, 0.47, 0.08),
+        ("alpha_5", "TIS Falchion-1", "destroyer", 606.0, 0.94, 31.0, 0.11, 0.12, 0.47, 0.08),
+    ]
+    enemies = []
+    for sid, name, stype, km, closing, angle, ps, pc, gs, gc in rows:
+        e = _enemy(sid, name, stype, km, closing, {"x": 0.99, "y": -0.1, "z": 0.0}, angle,
+                   gun_gj_per_min=25.0 if stype == "battlecruiser" else 4.0,
+                   is_primary_target=(sid == "alpha_4"))
+        e["weapon_hit_forecasts"] = guns(ps, pc, gs, gc, shots=0 if angle > 30 else 3)
+        enemies.append(e)
+    enemies[-2]["armor"] = {"nose_damage_pct": 30.0, "lateral_damage_pct": 0.0}
+    friendlies = []
+    for i, (name, stype, km, doing) in enumerate([
+            ("OCS Sovereign-1", "battleship", 34.0, "PADLOCK"),
+            ("OCS Sovereign-2", "battleship", 47.0, "PADLOCK"),
+            ("OCS Falchion-2", "destroyer", 29.0, "PADLOCK"),
+            ("OCS Ward-1", "frigate", 91.0, "PADLOCK"),
+            ("OCS Ward-2", "frigate", 87.0, "PADLOCK"),
+            ("OCS Ward-3", "frigate", 92.0, "HEADING"),
+            ("OCS Ward-4", "frigate", 106.0, "PADLOCK-other")]):
+        f = {"ship_id": f"beta_{i + 1}", "name": name, "ship_type": stype, "distance_km": km,
+             "dir_to": {"x": 0.98, "y": -0.19, "z": 0.0}, "rel_speed_kps": 0.24,
+             "hull_percent": 100.0, "pd_total": 3 if stype == "battleship" else 2,
+             "maneuver": {"type": "PADLOCK", "throttle": 1.0, "heading": None},
+             "target_id": "alpha_2", "target_name": "TIS Lancer-2"}
+        f["pd_operational"] = f["pd_total"]
+        if doing == "HEADING":
+            f["maneuver"] = {"type": "HEADING", "throttle": 0.5,
+                             "heading": {"x": -1.0, "y": 0.0, "z": 0.0}}
+        if doing == "PADLOCK-other":
+            f.update(target_id="alpha_3", target_name="TIS Lancer-3", hull_percent=63.0,
+                     pd_operational=1)
+        friendlies.append(f)
+    tactical.update(enemies=enemies, friendlies=friendlies, primary_target_id="alpha_4",
+                    pd_umbrella={"own": 2, "allies": [(f["name"], f["pd_operational"])
+                                                      for f in friendlies], "range_km": 250.0})
+    kw["tactical_status"] = tactical
+    return kw
+
+
 # =============================================================================
 # Golden turns
 # =============================================================================
@@ -269,6 +335,10 @@ class TestGoldenTurn:
     def test_destroyer_turn(self):
         turn = build_captain_messages(**destroyer_kwargs())[1]["content"]
         assert turn == _golden("captain_turn_destroyer.txt", turn), GOLDEN_HINT
+
+    def test_8v8_destroyer_turn(self):
+        turn = build_captain_messages(**fleet_8v8_kwargs())[1]["content"]
+        assert turn == _golden("captain_turn_8v8_destroyer.txt", turn), GOLDEN_HINT
 
     def test_turn_sections_come_in_the_cp06_order(self):
         turn = build_captain_messages(**corvette_kwargs())[1]["content"]
@@ -294,6 +364,101 @@ class TestGoldenTurn:
         fully loaded fixture turn stays under 7k.
         """
         assert len(build_captain_messages(**corvette_kwargs())[1]["content"]) < 7000
+        # 8v8 (pass-4 follow-up): ENEMIES + FRIENDLIES of a gun hull facing 8
+        # with 7 friendlies took 4,225 characters (1,847 o200k tokens) before
+        # the compact contacts and grouped friendlies; ~3k now.
+        turn = build_captain_messages(**fleet_8v8_kwargs())[1]["content"]
+        block = turn.split("ENEMIES (8):")[1].split("YOUR RECENT DECISIONS")[0]
+        assert len(block) < 3100
+
+
+class TestCompactContacts:
+    """Full fire solutions for the primary and the 2 best others, one
+    compact line for the rest; friendlies grouped by what they fly."""
+
+    def _turn(self, kw=None):
+        return build_captain_messages(**(kw or fleet_8v8_kwargs()))[1]["content"]
+
+    def test_primary_and_two_best_get_the_full_solution(self):
+        turn = self._turn()
+        enemies = turn.split("ENEMIES (8):\n")[1].split("\n\n")[0].splitlines()
+        full = [enemies[i - 1] for i, l in enumerate(enemies) if l.startswith("    guns:")]
+        assert len(full) == 3
+        # The primary, then the best expected GJ in the window (Lancer-2,
+        # 0.77 GJ/shot; Lancer-3, 0.73) - not the two nearest frigates.
+        assert [l.replace("[PRIMARY]", "").split("[")[0].strip() for l in full] == [
+            "TIS Lancer-3", "TIS Lancer-2", "TIS Lancer-4"]
+        assert full[2].startswith("  [PRIMARY] TIS Lancer-4")
+        compact = [l for l in enemies if l.startswith("  ") and not l.startswith("    ")
+                   and l not in full]
+        assert len(compact) == 5
+        for line in compact:
+            assert "off nose |" in line and "(ahead-" not in line
+            assert "Spinal" not in line and "Coilgun" not in line   # mounts: CLASS REFERENCE
+        assert "  TIS Ward-2 [alpha_8] Frigate | 468 km, closing 1.16 km/s | dir_to " \
+               "(+0.99,-0.10,+0.00), 17° off nose | hull 100% | PD 2/2 | guns ~4 GJ/min | " \
+               "best P(hit) 13%" in compact
+        # Out of arc: nothing bears this window, said so.
+        assert compact[-1].endswith("| no gun bears")
+        # Damage still shows on a compact line; intact armor nowhere.
+        assert "TIS Falchion-2 [alpha_6] Destroyer" in turn
+        assert "nose Visible damage, flank Intact" in turn and "armor intact" not in turn
+        # The legend moved to the cached doctrine.
+        assert "fire-control gate" not in turn
+        system = build_captain_messages(**fleet_8v8_kwargs())[0]["content"]
+        assert "P(hit) = the fire-control gate per shot now" in system
+        assert "the full fire solution for your primary target and the 2 best others" in system
+
+    def test_small_battles_keep_every_solution(self):
+        turn = self._turn(destroyer_kwargs())
+        assert "guns: Spinal Coiler P(hit) 12%, 3 shots = 0.36 hits, ~0.52 GJ/shot" in turn
+
+    def test_torpedo_hulls_rank_by_verdict(self):
+        kw = corvette_kwargs()
+        tactical = dict(kw["tactical_status"])
+        verdicts = ["UNREACHABLE", "UNREACHABLE", "REACHABLE", "TOO CLOSE", "REACHABLE"]
+        tactical["enemies"] = [
+            _enemy(f"beta_{i}", f"OCS Lancer-{i}", "destroyer", 100.0 + 50 * i, 1.0,
+                   {"x": 1.0, "y": 0.0, "z": 0.0}, 5.0, torpedo_verdict=v,
+                   torpedo_solution=f"{v} | details {i}", is_primary_target=(i == 2))
+            for i, v in enumerate(verdicts)]
+        kw["tactical_status"] = tactical
+        turn = self._turn(kw)
+        assert turn.count("    torpedo: ") == 3
+        assert "torpedo: REACHABLE | details 2" in turn and "torpedo: REACHABLE | details 4" in turn
+        assert "torpedo: TOO CLOSE | details 3" in turn      # next best verdict, not nearest
+        assert turn.count("| torpedo UNREACHABLE") == 2
+
+    def test_no_primary_target_the_nearest_gets_the_full_solution(self):
+        """With no primary, guns and INTERCEPT use the nearest enemy - its
+        solution must not be the one squeezed onto a compact line."""
+        kw = corvette_kwargs()
+        tactical = dict(kw["tactical_status"])
+        verdicts = ["REACHABLE", "REACHABLE", "REACHABLE", "TOO CLOSE", "UNREACHABLE"]
+        tactical["enemies"] = [
+            _enemy(f"beta_{i}", f"OCS Lancer-{i}", "destroyer", 400.0 - 50 * i, 1.0,
+                   {"x": 1.0, "y": 0.0, "z": 0.0}, 5.0, torpedo_verdict=v,
+                   torpedo_solution=f"{v} | details {i}")
+            for i, v in enumerate(verdicts)]
+        kw["tactical_status"] = tactical
+        turn = self._turn(kw)
+        assert turn.count("    torpedo: ") == 3
+        assert "torpedo: UNREACHABLE | details 4" in turn        # the nearest, 200 km
+        assert "torpedo: REACHABLE | details 0" in turn and "torpedo: REACHABLE | details 1" in turn
+        assert "| torpedo REACHABLE" in turn and "| torpedo TOO CLOSE" in turn
+
+    def test_friendlies_flying_the_same_order_share_a_line(self):
+        turn = self._turn()
+        block = turn.split("FRIENDLIES (")[1].split("\n\n")[0]
+        assert "hull 100% and PD intact unless shown):" in block
+        assert "\n  5 ships PADLOCK -> TIS Lancer-2 [alpha_2]:\n" in block
+        assert "    OCS Sovereign-1 [beta_1] Battleship | 34 km dir_to (+0.98,-0.19,+0.00) | " \
+               "rel 0.24 km/s\n" in block
+        assert ("  OCS Ward-3 [beta_6] Frigate | 92 km dir_to (+0.98,-0.19,+0.00) | rel 0.24 km/s | "
+                "HEADING (-1.00,+0.00,+0.00)@50% -> TIS Lancer-2 [alpha_2]") in block
+        # Only what is not intact is shown.
+        assert "PADLOCK -> TIS Lancer-3 [alpha_3] | PD 1/2 | hull 63%" in block
+        assert "PD 2/2" not in block and "hull 100% |" not in block
 
 
 # =============================================================================
@@ -330,7 +495,7 @@ class TestDoctrine:
         assert "TACTICAL OPTIONS" in system and "TORPEDO BOAT TACTICS" not in system
         assert "Spinal Coiler Mk3 FIRE_WHEN_OPTIMAL (1 ready)" in turn
         # Identical mounts grouped, expected damage per shot shown (R10).
-        assert "Coilgun Battery Mk3 x2 P(hit) 5%, 6 shots/30s = 0.30 hits" in turn
+        assert "Coilgun x2 P(hit) 5%, 6 shots = 0.30 hits" in turn
         assert "~0.52 GJ/shot" in turn
 
     def test_protocol_and_tool_names_follow_the_offered_tools(self):

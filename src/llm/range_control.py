@@ -33,6 +33,7 @@ these numbers come true (tests/test_range_control_and_evade.py).
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -70,6 +71,10 @@ ENEMY_ACCEL_HOLD_S = 120.0
 # rest get their status lines only.
 FULL_DETAIL_GROUPS = 2
 DETAIL_RANGE_KM = 1000.0
+# A captain's block lists every heading for the most urgent group and only
+# this many key headings for each later detailed group (see _key_options):
+# an 8v8 turn's second group used to add ~550 tokens of near-duplicate lines.
+CAPTAIN_SECONDARY_OPTIONS = 2
 # Relative speeds below this count as matched (nothing to cancel).
 MATCHED_MPS = 10.0
 # "Re-engage" (offered once the range is OPENING, i.e. after a pass): burn
@@ -928,15 +933,45 @@ def _detailed(i: int, info: GroupRangeInfo, max_detail: int) -> bool:
     return i < max_detail and (i == 0 or bool(info.warning) or info.range_km <= DETAIL_RANGE_KM)
 
 
+# Which options matter most for a group, by situation: a merge coming ->
+# cancel closure / pass wide (what the warning says to do); closing ->
+# cancel closure / coast & shoot; opening (after a pass) -> re-engage /
+# coast & shoot. Options with no heading (IMPOSSIBLE, already matched) skip.
+_KEY_OPTIONS = {
+    "merge": ("cancel", "wide", "left", "right", "open", "face"),
+    "closing": ("cancel", "face", "open", "wide"),
+    "opening": ("reengage", "face", "cancel", "open"),
+}
+
+
+def _key_options(info: GroupRangeInfo, n: int) -> List[HeadingOption]:
+    """The ``n`` options that matter most for ``info`` (_KEY_OPTIONS)."""
+    situation = ("merge" if info.warning else
+                 "closing" if info.closing_kps >= 0 else "opening")
+    usable = {o.key: o for o in info.options if o.throttle > 0 or o.key == "face"}
+    keys = [k for k in _KEY_OPTIONS[situation] if k in usable][:n]
+    return [o for o in info.options if o.key in keys]
+
+
+# "(tail armor 47 cm exposed)" on a burn option: a captain's MY SHIP already
+# lists its armor per face; the coast & shoot line keeps its "(nose armor".
+_EXPOSED_ARMOR = re.compile(r" \(\w+ armor \d+ cm exposed\)")
+
+
 def format_range_control(
     infos: Sequence[GroupRangeInfo],
     who: str = "Your",
     max_detail: int = FULL_DETAIL_GROUPS,
     where: Optional[str] = None,
+    secondary_options: Optional[int] = None,
+    armor_on_burns: bool = True,
 ) -> str:
     """
     Compact prompt block. ``who`` is "Your" (captain), "Fleet" (admiral,
     fleet centre) or "Ship" (the admiral's order for one ship).
+    ``secondary_options``: groups after the first list only that many key
+    headings (_key_options). ``armor_on_burns=False`` leaves the exposed
+    armor thickness off the burn options (the reader has it elsewhere).
     """
     if not infos:
         return ""
@@ -955,9 +990,22 @@ def format_range_control(
         if not _detailed(i, info, max_detail):
             continue
         target = info.names[0] if info.names else "target"
-        for opt in info.options:
-            lines.append(_option_line(opt, target, verb))
+        options = info.options
+        if i > 0 and secondary_options is not None:
+            options = _key_options(info, secondary_options)
+        for opt in options:
+            line = _option_line(opt, target, verb)
+            lines.append(line if armor_on_burns else _EXPOSED_ARMOR.sub("", line))
     return "\n".join(lines)
+
+
+def format_captain_range_control(infos: Sequence[GroupRangeInfo]) -> str:
+    """A captain's RANGE CONTROL: every heading for the most urgent group,
+    the key ones for the next (CAPTAIN_SECONDARY_OPTIONS), no armor numbers
+    on burns (MY SHIP lists them)."""
+    return format_range_control(infos, who="Your",
+                                secondary_options=CAPTAIN_SECONDARY_OPTIONS,
+                                armor_on_burns=False)
 
 
 def format_heading_options(
@@ -1006,7 +1054,7 @@ def captain_range_control(sim: Any, ship: Any) -> str:
         infos = analyze_range_control(sim, [ship], detail=True)
     except Exception:  # advisory only: never let it kill a decision
         return ""
-    return format_range_control(infos, who="Your")
+    return format_captain_range_control(infos)
 
 
 def admiral_range_control(sim: Any, ships: Sequence[Any], mcp: bool = False) -> str:

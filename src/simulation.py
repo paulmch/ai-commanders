@@ -4003,13 +4003,17 @@ class CombatSimulation:
         is actually inbound. Returns the throttle when evasion took the helm,
         None when nothing threatens and the base maneuver should fly.
         'dodge' never RUNs from a guided torpedo (see _calculate_evasion).
+        Evasion burns at the order's throttle, or at full throttle when the
+        order itself does not burn (throttle 0: an attitude-only HEADING, a
+        coasting PADLOCK / MAINTAIN) - a dodge at throttle 0 cannot move the
+        ship, and "coast and shoot, evade dodge" did order the dodge.
         """
         evade_dir, mode, throttle_mod = self._calculate_evasion(
             ship, dt, allow_run=(maneuver.evade != 'dodge'))
         if mode not in EVASION_OVERLAY_MODES:
             return None
         ship.execution_mode = mode
-        throttle = throttle * throttle_mod
+        throttle = (throttle if throttle > 0 else 1.0) * throttle_mod
         if mode in ('EVADE', 'TANK', 'RUN', 'PRESENT') and evade_dir:
             self._rotate_ship_toward(ship, evade_dir, dt, engines_on=(throttle > 0))
         # BRACE: no thrust, just take the hit

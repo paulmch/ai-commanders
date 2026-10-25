@@ -91,7 +91,9 @@ ADMIRAL_TOOLS = [
                             "wide / flank). With ship_name \"all ships\" ONE heading goes to "
                             "the whole fleet, each hull's throttle scaled so all accelerate "
                             "like the slowest hull and the burn starting together: the "
-                            "formation holds."
+                            "formation holds. A per-ship order with NO heading and NO maneuver "
+                            "flies that fleet heading (evade alone rides on it); its own "
+                            "heading or maneuver REPLACES it for that ship."
                         ),
                         "properties": {
                             "x": {"type": "number"},
@@ -105,10 +107,13 @@ ADMIRAL_TOOLS = [
                         "minimum": 0,
                         "maximum": 1,
                         "description": (
-                            "Throttle for the heading or maneuver (default 1.0). 0 = attitude "
-                            "only: the nose turns onto the heading and the ship coasts (e.g. "
-                            "spinals back on the enemy). For an \"all ships\" heading it is a "
-                            "fraction of the SLOWEST hull's acceleration."
+                            "Throttle for the heading or a burning maneuver (default 1.0). 0 = "
+                            "attitude only: the nose turns onto the heading and the ship coasts "
+                            "(e.g. spinals back on the enemy). For an \"all ships\" heading it "
+                            "is a fraction of the SLOWEST hull's acceleration. PADLOCK and "
+                            "MAINTAIN never burn - throttle does not apply to them, except "
+                            "that MAINTAIN + heading, or PADLOCK + heading at throttle above 0, "
+                            "flies that HEADING at this throttle (the nose follows the heading)."
                         )
                     },
                     "toward_point": {
@@ -141,15 +146,22 @@ ADMIRAL_TOOLS = [
                         "type": "string",
                         "enum": ["INTERCEPT", "HOLD_RANGE", "EVADE", "BRAKE", "MAINTAIN", "PADLOCK"],
                         "description": (
-                            "Optional structured maneuver, applied at once like heading (give "
-                            "one or the other; maneuver wins). INTERCEPT never brakes - it "
-                            "passes THROUGH the target at full closing speed - unless you give "
-                            "standoff_km: then it closes, flips, brakes and holds that range. "
-                            "HOLD_RANGE keeps range_km (default: the range when first ordered; "
-                            "re-issuing it keeps that range) to the target: the anti-merge "
-                            "order. With \"all ships\" every ship flies it. "
-                            "Each ship has ONE maneuver: to close in and still dodge, add evade "
-                            "instead of ordering INTERCEPT and EVADE together."
+                            "Optional structured maneuver, applied at once. It REPLACES the "
+                            "fleet (\"all ships\") order for this ship: leave it out to keep "
+                            "the fleet heading. MAINTAIN = engine OFF, the ship coasts (no "
+                            "turn, no burn). PADLOCK = engine off, the nose tracks the target "
+                            "(coast and shoot) - both unless you also give a heading (see "
+                            "below). To BURN on a course give heading + throttle. "
+                            "INTERCEPT never brakes - it passes THROUGH the target at full "
+                            "closing speed - unless you give standoff_km: then it closes, "
+                            "flips, brakes and holds that range. HOLD_RANGE keeps range_km "
+                            "(default: the range when first ordered; re-issuing it keeps that "
+                            "range) to the target: the anti-merge order. With \"all ships\" "
+                            "every ship flies it. A heading given with MAINTAIN or EVADE (or "
+                            "with PADLOCK at throttle above 0) is flown as that heading; with "
+                            "any other maneuver the maneuver wins. Each ship has ONE maneuver: "
+                            "to close in and still dodge, add evade instead of ordering "
+                            "INTERCEPT and EVADE together."
                         )
                     },
                     "maneuver_target": {
@@ -191,7 +203,13 @@ ADMIRAL_TOOLS = [
                             "Evasion on top of the heading / maneuver while a torpedo or slug "
                             "is actually inbound: 'full' = EVADE under threat (runs from guided "
                             "torpedoes, costing closure), 'dodge' = keeps course until a guided "
-                            "torpedo's final seconds, then presents armor; jinks slugs."
+                            "torpedo's final seconds, then presents armor; jinks slugs. It "
+                            "burns at the order's throttle - full throttle under an order that "
+                            "does not burn (throttle 0, PADLOCK, MAINTAIN). Given "
+                            "ALONE (no maneuver, no heading) it rides on the fleet order in "
+                            "force - or, with none, on what the ship is already flying - so "
+                            "never add MAINTAIN just to carry it: MAINTAIN switches the "
+                            "engine off."
                         )
                     }
                 },
