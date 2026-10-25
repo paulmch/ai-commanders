@@ -959,8 +959,9 @@ _THROTTLE_NEGATION = re.compile(
 # only a condition does ("burn at 60% throttle only if range < 200 km") - a
 # trailing "(expect ~64 s, renew next checkpoint)" does not.
 _CONDITION_BEFORE = re.compile(
-    r"\b(?:if|when|whenever|unless|once|until|after|later|expect\w*|be\s+ready|should|"
-    r"in\s+case|as\s+soon\s+as|next\s+(?:checkpoint|turn|phase))\b", re.IGNORECASE)
+    r"\b(?:if|when|whenever|unless|once|until|after|later|expect\w*|be\s+ready|"
+    r"should\s+(?:he|she|it|they|the\s+enemy)|in\s+case|as\s+soon\s+as|"
+    r"next\s+(?:checkpoint|turn|phase))\b", re.IGNORECASE)
 _CONDITION_AFTER = re.compile(r"\b(?:if|unless|when|whenever|once|in\s+case)\b", re.IGNORECASE)
 # Clause boundaries: sentence ends (not the dots of "0.4" / "(+1.00,...)"),
 # semicolons, colons and line breaks.

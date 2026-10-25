@@ -203,6 +203,8 @@ class TestThrottleConflict:
         ("Execute the burn on heading (-1.00,-0.03,-0.02) at 100% throttle for this "
          "checkpoint (expect ~64 s, renew next checkpoint).", [1.0]),
         ("Burn at 40% throttle until relative speed is ~0.", [0.4]),
+        ("You should burn at 50% throttle.", [0.5]),
+        ("Should he launch, burn at 100% throttle away.", []),
     ])
     def test_stated_throttles(self, text, expected):
         assert text_throttles(text) == expected
