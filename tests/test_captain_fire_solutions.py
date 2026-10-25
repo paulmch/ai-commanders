@@ -196,9 +196,51 @@ class TestTorpedoVerdicts:
         sim, sh, tg = _duel(fleet, 400.0, -6.0)
         sol = torpedo_solution(sim, sh, tg, fleet)
         assert sol.verdict in ("ESCAPABLE", "UNREACHABLE")
-        assert not sol.vs_evading.hits
+        if sol.verdict == "UNREACHABLE":   # decided by the coasting flight alone
+            assert not sol.vs_coasting.hits and sol.vs_evading is None
+        else:
+            assert sol.vs_coasting.hits and not sol.vs_evading.hits
         assert sol.closing_kps == pytest.approx(-6.0, abs=0.01)
         assert "OPENING" in sol.summary() or "EVADE" in sol.summary()
+
+    def test_reachable_needs_the_coasting_flight_to_connect(self, fleet):
+        """
+        Review repro (R11 regime): 300 km, 30 km off-axis, target opening
+        3 km/s. EVADE->PRESENT swung the evading corvette back into the round,
+        so a solution that flew only the evading case read REACHABLE - while a
+        target holding course outruns it. Coasting is flown first now, and a
+        miss there is UNREACHABLE (and the launch refused: he is opening).
+        """
+        from unittest.mock import Mock
+        from src.llm.captain import LLMCaptain, LLMCaptainConfig
+
+        sim = CombatSimulation(time_step=1.0, decision_interval=30, seed=5)
+        sh = create_ship_from_fleet_data("alpha_1", "corvette", "alpha", fleet,
+                                         position=Vector3D(0, 0, 0), velocity=Vector3D(0, 0, 0),
+                                         forward=Vector3D(1, 0, 0))
+        tg = create_ship_from_fleet_data("beta_1", "corvette", "beta", fleet,
+                                         position=Vector3D(300_000, 30_000, 0),
+                                         velocity=Vector3D(3_000, 0, 0),
+                                         forward=Vector3D(-1, 0, 0))
+        sim.add_ship(sh)
+        sim.add_ship(tg)
+        assert not fly_torpedo(sim, sh, tg, fleet, target_evades=False).hits
+        sol = torpedo_solution(sim, sh, tg, fleet)
+        assert sol.verdict == "UNREACHABLE" and sol.vs_evading is None
+        assert sol.summary().startswith("UNREACHABLE (OPENING 3.0 km/s): the round burns out")
+
+        captain = LLMCaptain(LLMCaptainConfig(name="C", ship_name="TIS A", ship_type="corvette",
+                                              fleet_data=fleet, has_torpedoes=True),
+                             client=Mock())
+        assert captain._torpedo_feasible(sim, "alpha_1", "beta_1", 1, {}) is False
+        assert "REFUSED" in captain.pending_tool_errors[-1]
+
+    def test_reachable_means_both_flights_connect(self, fleet):
+        sim, sh, tg = _duel(fleet, 400.0, 0.0)
+        sol = torpedo_solution(sim, sh, tg, fleet)
+        assert sol.verdict == "REACHABLE"
+        assert sol.vs_coasting.hits and sol.vs_evading.hits
+        assert sol.best_shot is sol.vs_evading   # the quoted shot: vs an evading target
 
     def test_overkill_counts_live_friendly_rounds_only(self, fleet):
         sim, sh, tg = _duel(fleet, 400.0, 0.0)

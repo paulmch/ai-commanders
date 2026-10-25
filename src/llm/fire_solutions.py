@@ -21,7 +21,9 @@ Verdicts (most severe first):
   ESCAPABLE    connects only if the target holds course; EVADE escapes it
   TOO CLOSE    connects, but guidance cannot build speed in the range left
   OVERKILL     enough friendly rounds are already inbound
-  REACHABLE    connects even against an evading target
+  REACHABLE    connects whether the target holds course or evades
+The coasting flight is flown first and decides UNREACHABLE on its own; the
+evading flight is flown only when the coasting one connects.
 """
 
 from __future__ import annotations
@@ -264,13 +266,19 @@ def torpedo_solution(
     inbound = len(rounds_inbound(sim, shooter.faction, target.ship_id))
     need = salvo_to_saturate(own + escorts, pd["turrets_to_blind_at_floor"])
 
-    evading = fly_torpedo(sim, shooter, target, fleet_data, target_evades=True)
-    if evading is None:
+    # Coasting first: a round that misses a target holding course is
+    # UNREACHABLE whatever an evading target would do. Evading is not always
+    # the harder case - EVADE->PRESENT can swing a fleeing target back into
+    # the round's path (measured: 300 km, 30 km off-axis, opening 3 km/s hits
+    # an evading corvette and burns out behind a coasting one) - so a
+    # REACHABLE verdict needs BOTH flights to connect.
+    coasting = fly_torpedo(sim, shooter, target, fleet_data, target_evades=False)
+    if coasting is None:
         if cache is not None:
             cache[key] = None
         return None
-    coasting = None if evading.hits else fly_torpedo(sim, shooter, target, fleet_data,
-                                                     target_evades=False)
+    evading = fly_torpedo(sim, shooter, target, fleet_data, target_evades=True) \
+        if coasting.hits else None
     sol = TorpedoSolution(
         target_id=target.ship_id, target_name=getattr(target, "name", target.ship_id),
         range_km=rng_m / 1000.0, closing_kps=closing,
@@ -279,13 +287,12 @@ def torpedo_solution(
         friendly_inbound=inbound,
     )
     shot = sol.best_shot
-    if shot is None:
+    if not coasting.hits:
         sol.verdict = "UNREACHABLE"
-        sol.reason = (f"the round {coasting.note if coasting else evading.note} "
-                      f"even if he holds course - expected ~0 GJ")
-    elif not evading.hits:
+        sol.reason = f"the round {coasting.note} even if he holds course - expected ~0 GJ"
+    elif evading is None or not evading.hits:
         sol.verdict = "ESCAPABLE"
-        sol.reason = f"if he EVADEs the round {evading.note}"
+        sol.reason = f"if he EVADEs the round {evading.note if evading else 'misses'}"
     elif (shot.impact_gj or 0.0) < LOW_YIELD_GJ:
         sol.verdict = "TOO CLOSE"
         sol.reason = (f"~{shot.impact_gj:.1f} GJ at {shot.impact_kps:.1f} km/s - "
