@@ -12,7 +12,7 @@ filters/scrolling, and for `command-net.png` a 2× device-scale crop.
 | File | Recording | Battle time | View |
 | --- | --- | ---: | --- |
 | `hero.png` | Showcase s0 (200 pt, dreadnoughts vs torpedo swarm) | 96.5s | `alpha_1` (dreadnought) at full thrust, PD beams on inbound torpedoes; 4.6 hull lengths, azimuth −36°, elevation 9°, 20° lens; HUD hidden |
-| `hull-lineup.png` | `rcs_showroom.json` as an empty stage | 5s | Showroom: every hull class spawned with the viewer's `createShip`, alpha column facing beta; top to bottom siege dreadnought, dreadnought, battleship, battlecruiser, torpedo cruiser, cruiser, destroyer, frigate, corvette; 12° lens; HUD hidden |
+| `hull-lineup.png` | `rcs_showroom.json` as an empty stage (any recording works: the hulls are spawned far from its ships) | 5s | Showroom: every hull class spawned with the viewer's `createShip`, alpha column facing beta; top to bottom siege dreadnought, dreadnought, battleship, battlecruiser, torpedo cruiser, cruiser, destroyer, frigate, corvette; 12° lens; HUD hidden |
 | `fleet-battle.png` | Claude Sonnet 5 vs DeepSeek V4.1 Flash, 150 pt | 151s | Fleet view one second after the first kill; scoreboard, kill toast, command net, registry, timeline lanes; track legend collapsed |
 | `torpedo-salvo.png` | Showcase s7 (200 pt, battleships vs torpedo swarm) | 203.3s | Two battleships' PD fans on an inbound torpedo, kinetic strike on `alpha_1`; explicit camera; HUD hidden |
 | `reactor-breach.jpg` | Showcase s7 | 205.7s | `alpha_1` battleship reactor breach 1.7 s after the kill, the sister ship's plume crossing the fireball; 5.5 hull lengths, azimuth −20°, elevation 20°; HUD hidden |
