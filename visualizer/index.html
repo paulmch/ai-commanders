@@ -59,13 +59,19 @@
       </div>
     </header>
 
-    <!-- Live battle HUD (only visible with ?live=1) -->
+    <!-- Live battle HUD (only visible with ?live=1). Overlays (draft splash,
+         deliberation / connection / end cards, auto-cam chip, off-screen
+         chevrons) are created by LiveCards.js, DraftSplash.js and
+         OffscreenIndicators.js. -->
     <div id="liveHud" class="live-hud hidden">
       <span class="live-dot" id="liveDot"></span>
       <span class="live-status-text" id="liveStatusText">CONNECTING&hellip;</span>
+      <span class="live-delay hidden" id="liveDelay" title="How far playback runs behind the battle server (broadcast delay)"></span>
       <div class="live-toggles">
-        <button class="live-toggle active" id="liveFollowBtn" title="Keep playback locked to the live head">&#10687; FOLLOW</button>
+        <button class="live-toggle" id="livePaceBtn" title="REALTIME: play at the chosen speed a little behind the battle, catching up only when far behind. LIVE EDGE: stay on the newest frame.">REALTIME</button>
+        <button class="live-toggle active" id="liveFollowBtn" title="Keep playback locked to the live broadcast">&#10687; FOLLOW</button>
         <button class="live-toggle active" id="livePathsBtn" title="Show predicted paths to the next checkpoint">&#9671; PATHS</button>
+        <button class="live-toggle" id="liveFleetsBtn" title="Both drafted fleets and their admirals' reasoning" style="display:none">&#9776; FLEETS</button>
       </div>
     </div>
 

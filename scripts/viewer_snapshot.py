@@ -57,6 +57,8 @@ FRAME_JS = """
 ({ focus, dist, az, el, camera, target }) => {
   const v = window.visualizer;
   const s = v.scene;
+  // The harness places the camera itself: keep the auto director out of it
+  v.cameraController?.setDirector?.(false);
   const T = s.THREE || null;
   let center = null, L = 8;
   if (focus) {

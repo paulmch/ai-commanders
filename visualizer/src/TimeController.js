@@ -1,13 +1,31 @@
 /**
  * TimeController - Manages playback timing
+ *
+ * `duration` is the length of the timeline (what the scrub bar spans and
+ * timeline markers are placed against). `available` is how much of it has
+ * footage: Infinity for a saved recording, the newest received frame in a
+ * live battle, where the bar already spans up to the next checkpoint. The
+ * playhead never runs or seeks past `available`; reaching it while more
+ * footage is due holds playback ("buffering") instead of pausing.
  */
 export class TimeController {
   constructor(duration) {
     this.duration = duration;
+    this.available = Infinity;
     this.currentTime = 0;
     this.playbackSpeed = 1.0;
     this.isPlaying = false;
     this.callbacks = [];
+  }
+
+  /** Latest time the playhead may reach (end of footage). */
+  get limit() {
+    return Math.min(this.duration, this.available);
+  }
+
+  /** True when playback is held at the end of the footage received so far. */
+  get buffering() {
+    return this.isPlaying && this.available < this.duration && this.currentTime >= this.available - 1e-6;
   }
 
   /**
@@ -46,8 +64,21 @@ export class TimeController {
    */
   setDuration(duration) {
     this.duration = duration;
-    if (this.currentTime > duration) {
-      this.currentTime = duration;
+    if (this.currentTime > this.limit) {
+      this.currentTime = this.limit;
+    }
+    this.notifyCallbacks();
+  }
+
+  /**
+   * Live mode: footage received so far (Infinity = all of it). The
+   * timeline itself (duration) may already extend further.
+   * @param {number} available - Newest frame time in seconds
+   */
+  setAvailable(available) {
+    this.available = available;
+    if (this.currentTime > this.limit) {
+      this.currentTime = this.limit;
     }
     this.notifyCallbacks();
   }
@@ -57,7 +88,7 @@ export class TimeController {
    * @param {number} time - Time in seconds
    */
   seek(time) {
-    this.currentTime = Math.max(0, Math.min(this.duration, time));
+    this.currentTime = Math.max(0, Math.min(this.limit, time));
     this.notifyCallbacks();
   }
 
@@ -76,11 +107,15 @@ export class TimeController {
   update(deltaTime) {
     if (!this.isPlaying) return;
 
+    const before = this.currentTime;
     this.currentTime += deltaTime * this.playbackSpeed;
 
     if (this.currentTime >= this.duration) {
       this.currentTime = this.duration;
       this.isPlaying = false;
+    } else if (this.currentTime > this.available) {
+      // More footage is coming (live): hold at its end, keep playing
+      this.currentTime = Math.max(before, this.available);
     }
 
     this.notifyCallbacks();
