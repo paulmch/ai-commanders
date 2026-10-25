@@ -5,7 +5,7 @@ import {
   getHullTextures, getRadiatorTextures, getAccentTexture, getHazardTexture, mulberry32
 } from './Textures.js';
 import { buildHullLights } from './HullLights.js';
-import { buildMarkings, buildFloodlights, hullCode } from './HullMarkings.js';
+import { buildMarkings, buildFloodlights, hullCode, LIVERY_FLOOD, GLASS_GLOW } from './HullMarkings.js';
 import { TWIN_BARREL_X } from './WeaponTimeline.js';
 export { updateHullDetails } from './HullRigs.js';
 
@@ -92,8 +92,7 @@ export const ACCENT_GLOW = 2.35;
 // rather than a liner's promenade deck.
 const WINDOW_EMISSIVE = new THREE.Color(0xffe4bd).multiplyScalar(0.5);
 
-/** Livery self-illumination (hull floodlights washing the paint). */
-export const LIVERY_FLOOD = 0.16;
+export { LIVERY_FLOOD };
 
 function factionAccent(faction) {
   return faction === 'alpha' ? 0x2ad2ff : 0xff8a3c;
@@ -138,15 +137,19 @@ export function buildShipMaterials(faction) {
       // Sensor windows and domes
       glass: new THREE.MeshStandardMaterial({
         color: 0x0c1c27, roughness: 0.12, metalness: 0.6, envMapIntensity: 1.6,
-        emissive: 0x0d3550, emissiveIntensity: 0.6
+        emissive: 0x0d3550, emissiveIntensity: GLASS_GLOW
       })
     });
   }
   const shared = _sharedMats.get(key);
   const accent = factionAccent(faction);
-  // Per-ship emissive materials (damage flicker, dying dimming)
+  // Per-ship emissive materials (damage flicker, dying dimming). Livery
+  // and sensor glass are self-lit too, so each ship gets its own copy that
+  // HullRigs browns out with the hull (floodLevel), like the codes.
   const mats = {
     ...shared,
+    paint: shared.paint.clone(),
+    glass: shared.glass.clone(),
     // Accent light strips: lamp cells (getAccentTexture, mean ~0.68 of the
     // peak), glow raised to keep the old read at range
     accent: new THREE.MeshStandardMaterial({

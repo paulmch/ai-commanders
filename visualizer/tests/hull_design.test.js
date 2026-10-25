@@ -7,8 +7,8 @@ import {
 } from '../src/render/Hulls.js';
 import { SceneManager } from '../src/SceneManager.js';
 import { Projectiles } from '../src/render/Projectiles.js';
-import { magazineRoundState, updateMagazine, assignLaunches, hatchHinge, HATCH_OPEN } from '../src/render/HullRigs.js';
-import { floodLevel } from '../src/render/HullMarkings.js';
+import { magazineRoundState, updateMagazine, assignLaunches, hatchHinge, HATCH_OPEN, brownOut } from '../src/render/HullRigs.js';
+import { floodLevel, FLOOD_OPACITY, CODE_GLOW, LIVERY_FLOOD, GLASS_GLOW } from '../src/render/HullMarkings.js';
 import { HeatFX } from '../src/render/Heat.js';
 
 // Displayed hull sizes (SceneManager.createShip baseSizes x 8)
@@ -421,6 +421,26 @@ test('floodlights burn on a sound hull and brown out with it', () => {
   for (let t = 0; t < 20; t += 0.05) dim = Math.min(dim, floodLevel(t, 0.5, true, 0.3));
   assert.ok(dim < 0.1);
   assert.equal(floodLevel(3.3, 0.4, false, 0.2), floodLevel(3.3, 0.4, false, 0.2));
+
+  // every self-lit thing on the plating follows that level: pools, codes,
+  // livery paint and sensor glass (a dying hulk's paint stops glowing)
+  const mk = () => ({
+    floodlights: { material: { opacity: 0 } }, hullMarkings: { material: { emissiveIntensity: 0 } },
+    materials: { paint: { emissiveIntensity: 0 }, glass: { emissiveIntensity: 0 } }
+  });
+  const sound = mk(), hulk = mk();
+  brownOut(sound, 1);
+  brownOut(hulk, dim);
+  assert.equal(sound.materials.paint.emissiveIntensity, LIVERY_FLOOD);
+  assert.equal(sound.materials.glass.emissiveIntensity, GLASS_GLOW);
+  assert.equal(sound.floodlights.material.opacity, FLOOD_OPACITY);
+  assert.equal(sound.hullMarkings.material.emissiveIntensity, CODE_GLOW);
+  assert.ok(hulk.materials.paint.emissiveIntensity < LIVERY_FLOOD * 0.1);
+  assert.ok(hulk.materials.glass.emissiveIntensity < GLASS_GLOW * 0.1);
+  brownOut({}, 0.5);   // a ship without any of them is fine
+  // and they are per-ship copies, not the faction's shared material
+  const src = readFileSync(new URL('../src/render/Hulls.js', import.meta.url), 'utf8');
+  assert.match(src, /paint: shared\.paint\.clone\(\),\s*glass: shared\.glass\.clone\(\)/);
 });
 
 test('stowed radiators telescope into their cassette instead of standing up as sails', () => {

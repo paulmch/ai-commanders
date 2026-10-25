@@ -22,6 +22,10 @@ import { FACTION_PAINT, getFloodTexture } from './Textures.js';
 export const FLOOD_OPACITY = 0.42;
 /** Hull-code self-illumination at full power. */
 export const CODE_GLOW = 0.32;
+/** Livery self-illumination at full power (the floodlights washing the paint). */
+export const LIVERY_FLOOD = 0.16;
+/** Sensor glass glow at full power. */
+export const GLASS_GLOW = 0.6;
 
 /**
  * Floodlight power 0..1 at battle time t: full on a sound hull, browning

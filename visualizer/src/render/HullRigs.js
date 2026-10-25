@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { updateHullLights } from './HullLights.js';
-import { floodLevel, FLOOD_OPACITY, CODE_GLOW } from './HullMarkings.js';
+import { floodLevel, FLOOD_OPACITY, CODE_GLOW, LIVERY_FLOOD, GLASS_GLOW } from './HullMarkings.js';
 import { assignBarrels } from './WeaponTimeline.js';
 
 /**
@@ -23,8 +23,9 @@ import { assignBarrels } from './WeaponTimeline.js';
  *     at its launch, a VLS hatch swings up in the 2.5 s before and stays
  *     open over the empty tube, its status lamp going from the faction
  *     colour to dark
- *   - navigation lamps blink (HullLights); floodlights and the self-lit
- *     hull codes brown out with the hull (HullMarkings.floodLevel)
+ *   - navigation lamps blink (HullLights); floodlights, the self-lit hull
+ *     codes, livery and sensor glass brown out with the hull
+ *     (HullMarkings.floodLevel)
  *
  * The scene may carry `scene.loader` (BattleLoader); without it (showroom,
  * tests) everything falls back to nearest-enemy aim and idle motion.
@@ -249,6 +250,19 @@ function pdTargetPosition(scene, seg, t) {
 }
 
 /**
+ * Everything self-lit on the plating follows the hull's power `lv`
+ * (floodLevel): floodlight pools, the hull codes, the livery paint and
+ * the sensor glass (per-ship copies, Hulls.buildShipMaterials).
+ */
+export function brownOut(ud, lv) {
+  if (ud.floodlights) ud.floodlights.material.opacity = FLOOD_OPACITY * lv;
+  if (ud.hullMarkings?.material) ud.hullMarkings.material.emissiveIntensity = CODE_GLOW * lv;
+  const mats = ud.materials;
+  if (mats?.paint) mats.paint.emissiveIntensity = LIVERY_FLOOD * lv;
+  if (mats?.glass) mats.glass.emissiveIntensity = GLASS_GLOW * lv;
+}
+
+/**
  * Hook called at the end of SceneManager.updateShip for every live ship.
  */
 export function updateHullDetails(ship, state, scene) {
@@ -261,11 +275,7 @@ export function updateHullDetails(ship, state, scene) {
     ud._isDead ||= () => !!scene.destroyedShips?.has(ud.shipId);
     updateHullLights(ud.hullLights, t, { dying, hull }, ud._isDead);
   }
-  if (ud.floodlights || ud.hullMarkings) {
-    const lv = floodLevel(t, hull, dying, (ud.navPhase || 0) % 1);
-    if (ud.floodlights) ud.floodlights.material.opacity = FLOOD_OPACITY * lv;
-    if (ud.hullMarkings?.material) ud.hullMarkings.material.emissiveIntensity = CODE_GLOW * lv;
-  }
+  brownOut(ud, floodLevel(t, hull, dying, (ud.navPhase || 0) % 1));
   const idx = indexFor(scene.loader);
   _m.compose(ship.position, ship.quaternion, ship.scale).invert();
 
