@@ -2589,7 +2589,7 @@ def _format_geometry(snapshot: Any) -> str:
             reach.append("your torpedoes: " + ", ".join(
                 f"{verdicts.count(v)} {v}" for v in ("GOOD", "POOR", "NO") if verdicts.count(v)))
         if their_tubes:
-            reach.append(f"their torpedoes: {their_tubes} tubes")
+            reach.append(f"their torpedoes: {their_tubes} tube{'s' if their_tubes > 1 else ''}")
         if reach:
             lines.append("  reach - " + "; ".join(reach))
         if info.label in opened:
@@ -2784,10 +2784,13 @@ def _format_torpedo_economy(snapshot: Any, fleet_data: Dict[str, Any]) -> str:
             need = soak + kill.get(e.ship_id, 6)
             text = (f"Salvo vs {_lbl(snapshot, e.ship_id)} ({sol.verdict}): {cover} PD turrets cover it "
                     f"-> ~{soak} soaked + {kill.get(e.ship_id, 6)} to kill = {need} together")
+            more = need - e.our_rounds_inbound
             if e.our_rounds_inbound:
                 text += (f"; {e.our_rounds_inbound} of yours already inbound -> "
-                         + ("ENOUGH, do not add (overkill)" if e.our_rounds_inbound >= need
-                            else f"{need - e.our_rounds_inbound} more"))
+                         + ("ENOUGH, do not add (overkill)" if more <= 0 else f"{more} more"))
+            available = getattr(snapshot, "launches_available", 0) or 0
+            if more > available:
+                text += f" (you can launch {available} now: not enough to kill through that PD)"
             lines.append(text)
         if not targets:
             lines.append("No target has a GOOD/POOR solution now: hold the magazine "
@@ -2796,8 +2799,8 @@ def _format_torpedo_economy(snapshot: Any, fleet_data: Dict[str, Any]) -> str:
                      "one by one - launch together or not at all.")
     if their_tubes or seen:
         left = sum(max(0, e.magazine - e.torpedoes_launched) for e in enemies if e.launchers)
-        lines.append(f"Theirs: {seen} launched so far; {their_tubes} tubes in their fleet "
-                     f"(~{left} rounds left). Inbound ones are under ORDNANCE.")
+        lines.append(f"Theirs: {seen} launched so far; {their_tubes} tube{'s' if their_tubes != 1 else ''} "
+                     f"in their fleet (~{left} rounds left). Inbound ones are under ORDNANCE.")
     else:
         lines.append("Theirs: no torpedo launchers in their fleet - nothing to EVADE from torpedoes.")
     return "\n".join(lines)

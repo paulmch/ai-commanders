@@ -767,10 +767,11 @@ def engine_notes(sim: Any, ship_ids: Iterable[str], since_t: float,
         mode = str((helm.get(sid) or {}).get("mode") or "").upper()
         if mode in EVASION_MODES:
             parts.append(f"helm {mode} ({EVASION_MODES[mode]})")
-        blocked = {slot: r for slot, r in (weapons.get(sid) or {}).items()
-                   if r and r not in _WEAPON_OK}
+        blocked = Counter(r for r in (weapons.get(sid) or {}).values()
+                          if r and r not in _WEAPON_OK)
         if blocked:
-            parts.append("guns held: " + ", ".join(f"{slot} {r}" for slot, r in sorted(blocked.items())))
+            parts.append("guns held: " + ", ".join(
+                f"{reason}" + (f" x{n}" if n > 1 else "") for reason, n in blocked.most_common()))
         for text, n in (problems.get(sid) or Counter()).items():
             parts.append(text + (f" x{n}" if n > 1 else ""))
         if parts:
