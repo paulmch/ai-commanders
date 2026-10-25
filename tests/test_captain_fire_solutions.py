@@ -306,3 +306,18 @@ def test_opening_coast_before_the_first_checkpoint_is_not_idle(fleet):
         sim.step()
     assert idle_checkpoints(sim.events, "alpha_1", sim.current_time, 30) == []
     assert "NO COMMANDS" not in execution_feedback(sim, ["alpha_1"])
+
+
+def test_torpedo_boat_doctrine_range_claim(fleet):
+    """
+    Guards TORPEDO_TACTICS_BLOCK: 'rounds launched from a few hundred km arrive
+    far harder than knife-fight launches' - flown on the engine.
+    """
+    from src.llm.prompts import TORPEDO_TACTICS_BLOCK
+    assert "a few hundred km arrive far harder than" in " ".join(TORPEDO_TACTICS_BLOCK.split())
+    near_sim, sh, tg = _duel(fleet, 20.0, 0.0)
+    near = fly_torpedo(near_sim, sh, tg, fleet, target_evades=False)
+    far_sim, sh, tg = _duel(fleet, 300.0, 0.0)
+    far = fly_torpedo(far_sim, sh, tg, fleet, target_evades=False)
+    assert near.hits and far.hits
+    assert far.impact_gj > 5.0 * near.impact_gj

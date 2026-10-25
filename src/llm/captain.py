@@ -511,7 +511,8 @@ class LLMCaptain:
         self._execute_round(tool_calls, simulation, ship_id, commands, executed, state)
 
         # R1: a reply with no action gets told so, in the same checkpoint.
-        while self._needs_followup(executed, commands, ship, now):
+        self._followups_used = {t: n for t, n in self._followups_used.items() if t >= now}
+        while enemies and self._needs_followup(executed, commands, ship, now):
             self._followups_used[now] = self._followups_used.get(now, 0) + 1
             self.last_followup_rounds += 1
             notice = self._followup_notice(executed, ship, simulation, tool_names)
