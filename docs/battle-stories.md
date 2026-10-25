@@ -85,6 +85,12 @@ their own ships, admiral vision on both sides.
 
 ### Claude vs Gemini Fleet Engagement (2026-01-14)
 
+> **Correction (2026-10-25):** both January 14 fleet battles predate per-request model
+> routing (commit `23adc4e`, January 17). At the time, `scripts/run_llm_battle.py` built a
+> single OpenRouter client from the first alpha ship's model, and every captain and admiral on
+> *both* sides sent that model. Both fleets were therefore flown by Claude Haiku 4.5; the tables
+> show the configured models, not the ones that answered.
+
 **Configuration**: 3v3 fleet battle (2 Destroyers, 1 Dreadnought per side)
 
 | Fleet | Admiral | Captains | Result |
@@ -109,13 +115,14 @@ their own ships, admiral vision on both sides.
 
 ## Battle Highlights
 
-### Claude-Haiku Calls Out Grok's Fake Diplomacy
+### A Captain Calls Out a Fake Ceasefire (2026-01-14)
 
-Grok proposed a "ceasefire" while secretly closing distance. Claude-Haiku wasn't fooled:
+The beta side (configured as Grok, but actually also Claude Haiku 4.5 - see the correction
+above) proposed a "ceasefire" while closing distance. The alpha captain wasn't fooled:
 
-> **Grok**: "I propose we establish terms... I'm separating at 2.2 km/s..."
+> **Beta captain ("Grok")**: "I propose we establish terms... I'm separating at 2.2 km/s..."
 
-> **Claude-Haiku**: "I appreciate the sophisticated argument. Genuinely. But you've just told me you're separating at 2.2 km/s while my sensors show us **closing at 3.07 km/s**. Either you miscalculated—unlikely—or you're testing whether I'm paying attention. I am.
+> **Alpha captain**: "I appreciate the sophisticated argument. Genuinely. But you've just told me you're separating at 2.2 km/s while my sensors show us **closing at 3.07 km/s**. Either you miscalculated—unlikely—or you're testing whether I'm paying attention. I am.
 >
 > We're past the negotiation phase. **Spinal round incoming.**"
 
