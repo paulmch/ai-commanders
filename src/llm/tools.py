@@ -126,8 +126,9 @@ CAPTAIN_TOOLS_BASE = [
                             "'full' = exactly EVADE under threat (RUNS from guided torpedoes - "
                             "buys PD time, costs closure). 'dodge' = keeps your course against "
                             "a guided torpedo until its final seconds, then presents your "
-                            "thickest armor; still jinks slugs and blinded torpedoes. Omit for "
-                            "no evasion."
+                            "thickest armor; still jinks slugs and blinded torpedoes. Evasion "
+                            "burns at your throttle - full throttle when the maneuver itself "
+                            "does not burn (MAINTAIN, PADLOCK, throttle 0). Omit for no evasion."
                         )
                     }
                 },
@@ -351,7 +352,9 @@ CAPTAIN_TOOLS_BASE = [
                         "description": (
                             "Optional evasion on top of the heading, as in set_maneuver: "
                             "'full' = EVADE while a threat is inbound, 'dodge' = same but "
-                            "never runs from a guided torpedo. Back on the heading when clear."
+                            "never runs from a guided torpedo. Back on the heading when clear. "
+                            "At throttle 0 (coast and shoot) the dodge still burns, at full "
+                            "throttle."
                         )
                     }
                 },

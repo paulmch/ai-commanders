@@ -60,15 +60,26 @@ def _weapon_text(data: Dict[str, Any], target: Optional[str]) -> str:
     return text
 
 
+# Execution modes of the evasion overlay (simulation.EVASION_OVERLAY_MODES)
+# and of EVASIVE: threat-aware evasion has the helm.
+_EVASION_MODES = ("EVADE", "TANK", "BRACE", "RUN", "PRESENT", "WOBBLE")
+
+
 def _helm_text(data: Dict[str, Any]) -> str:
     mode = data.get("mode", "?")
     req, applied = data.get("requested_throttle"), data.get("applied_throttle")
-    if mode == "COAST" or not req:
+    if mode == "COAST" or req is None:
         return "COASTING (no maneuver)"
     if mode in ("PADLOCK", "MAINTAIN"):
         # The drive is off by design: "requested 100%, applied 0% (turning
         # onto the burn line...)" read as a failed burn.
         return f"{mode}, coasting (engine off" + (", nose on target)" if mode == "PADLOCK" else ")")
+    if not req:
+        # A throttle-0 order: attitude only - unless its evade overlay has the
+        # helm, which burns at full throttle (simulation._evasion_overlay).
+        if mode in _EVASION_MODES and isinstance(applied, (int, float)):
+            return f"{mode} (evasion has the helm), applied {applied * 100:.0f}% throttle"
+        return f"{mode}, throttle 0 (attitude only, no burn)"
     if not isinstance(applied, (int, float)):
         return f"{mode}, requested {req * 100:.0f}% throttle"
     text = f"{mode}, requested {req * 100:.0f}% throttle, applied {applied * 100:.0f}%"

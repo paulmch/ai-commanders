@@ -167,6 +167,13 @@ class TestEngineOffRendering:
         assert _helm_text({"mode": "HEADING", "requested_throttle": 1.0,
                            "applied_throttle": 0.1}).endswith("(turning onto the burn line, "
                                                              "or fuel/engine limited)")
+        # A throttle-0 order is flying, not "no maneuver"; its evade overlay
+        # burns at full throttle while it has the helm.
+        assert _helm_text({"mode": "HEADING", "requested_throttle": 0.0,
+                           "applied_throttle": 0.0}) == "HEADING, throttle 0 (attitude only, no burn)"
+        assert _helm_text({"mode": "RUN", "requested_throttle": 0.0, "applied_throttle": 1.0}) == \
+            "RUN (evasion has the helm), applied 100% throttle"
+        assert _helm_text({"mode": "COAST", "requested_throttle": 0.0}) == "COASTING (no maneuver)"
 
 
 # =============================================================================
@@ -252,6 +259,14 @@ class TestSchemaAndDoctrine:
         assert ("FLEET ORDER IN FORCE (your \"all ships\" order): PADLOCK OCS Lancer-2 "
                 "(coasts, engine off), evade dodge. TIS Ward-1 flies it unless") in user
         assert "To keep it and dodge: evade alone." in user
+        coast = _fleet_heading_order({"ship_name": "all ships", "order_text": "",
+                                      "heading": {"x": 1, "y": 0, "z": 0}, "throttle": 0})
+        user = build_admiral_ship_order_messages(
+            admiral_name="A", ship_name="TIS Ward-1", ship_type="frigate", captain_name="C",
+            fleet_directive="Hold.", snapshot=None, fleet_heading=coast)[1]["content"]
+        assert ("FLEET HEADING IN FORCE (your \"all ships\" order): (+1.00,+0.00,+0.00) "
+                "attitude only (throttle 0, no burn). TIS Ward-1 flies it unless") in user
+        assert "To keep it and dodge: evade alone (the dodge burns at full throttle)." in user
 
 
 # =============================================================================
@@ -394,3 +409,68 @@ def test_maintain_with_a_heading_burns_through_the_runner():
     assert m.heading_direction == {"x": 0.0, "y": -1.0, "z": 0.0}
     assert "HEADING ORDER (ALREADY APPLIED to your ship): (+0.00,-1.00,+0.00) at 60% throttle" \
         in turns[1]["alpha_1"]
+
+
+FLEET_COAST = {"ship_name": "all ships", "order_text": "Coast and shoot.",
+               "heading": {"x": 1.0, "y": 0.0, "z": 0.0}, "throttle": 0}
+
+
+def _flank_torpedo_hit(maneuver):
+    """Fly ``maneuver`` (re-timed to t=0) on a destroyer while a corvette
+    400 km off its +y flank launches one torpedo at it: (hit location, max
+    throttle applied while evading)."""
+    from dataclasses import replace
+    from src.physics import Vector3D
+    from src.simulation import (CombatSimulation, Maneuver, SimulationEventType,
+                                create_ship_from_fleet_data)
+
+    sim = CombatSimulation(time_step=1.0, decision_interval=1e9, seed=42)
+    ships = {}
+    for sid, stype, faction, pos, fwd in (("tgt", "destroyer", "alpha", (0, 0, 0), (1, 0, 0)),
+                                          ("atk", "corvette", "beta", (0, 400e3, 0), (0, -1, 0))):
+        ships[sid] = create_ship_from_fleet_data(
+            sid, stype, faction, FLEET, position=Vector3D(*pos), velocity=Vector3D(0, 0, 0),
+            forward=Vector3D(*fwd))
+        ships[sid].name = sid
+        sim.add_ship(ships[sid])
+    sim.inject_command("tgt", replace(maneuver, start_time=0.0, duration=0.0,
+                                      burn_start_time=None))
+    sim.inject_command("atk", Maneuver(ManeuverType.MAINTAIN, start_time=0.0))
+    assert sim.inject_command("atk", {"type": "launch_torpedo", "target_id": "tgt"})
+    evading = 0.0
+    for _ in range(400):
+        sim.step()
+        if ships["tgt"].execution_mode in ("RUN", "EVADE", "PRESENT"):
+            evading = max(evading, ships["tgt"].applied_throttle)
+        if not sim.torpedoes:
+            break
+    impacts = sim.get_events_by_type(SimulationEventType.TORPEDO_IMPACT)
+    return (impacts[0].data["hit_location"] if impacts else None), evading
+
+
+def test_evade_alone_under_a_throttle_0_fleet_heading_still_dodges():
+    """A coast-and-shoot fleet heading (throttle 0) + per-ship evade alone:
+    the ship keeps the attitude-only heading, and the dodge it ordered burns
+    at full throttle while a round is inbound (it used to burn at 0 * mod
+    and take the torpedo in the flank). MAINTAIN + heading + evade is the
+    same order."""
+    def script(cp):
+        return [FLEET_COAST], {
+            "alpha_1": {"evade": "dodge"},
+            "alpha_2": {"maneuver": "MAINTAIN", "heading": {"x": 0.0, "y": -1.0, "z": 0.0},
+                        "evade": "full"},
+        }
+
+    _, flown, turns = _run_battle(script, checkpoints=1)
+    a1, a2 = flown[1]["alpha_1"], flown[1]["alpha_2"]
+    assert a1.maneuver_type == ManeuverType.HEADING and a1.throttle == 0.0
+    assert a1.evade == "dodge" and a1.heading_direction == {"x": 1.0, "y": 0.0, "z": 0.0}
+    assert a2.maneuver_type == ManeuverType.HEADING and a2.throttle == 0.0
+    assert a2.evade == "full" and a2.heading_direction == {"x": 0.0, "y": -1.0, "z": 0.0}
+    assert ("...with evade dodge: evasion flies the ship (at full throttle: the heading "
+            "itself does not burn) only while a torpedo or slug is inbound") in turns[1]["alpha_1"]
+    # What the runner flies dodges: the flank shot lands on the nose armor
+    # ('dodge' presents it on a token burn, 'full' RUNs at full throttle).
+    for maneuver, power in ((a1, 0.0), (a2, 0.99)):
+        location, evading = _flank_torpedo_hit(maneuver)
+        assert location == "nose" and evading > power

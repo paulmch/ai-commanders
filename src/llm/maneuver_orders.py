@@ -645,7 +645,9 @@ def admiral_maneuver_spec(args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
       a heading and no burn keeps PADLOCK (its nose tracks the target);
     - MAINTAIN / PADLOCK carry throttle 1.0: the drive is off either way, and
       an evade overlay on them dodges at full power (an admiral "throttle 0"
-      meant "no burn" and used to switch the dodge off).
+      meant "no burn"). The engine dodges at full power under any throttle-0
+      order too (simulation._evasion_overlay), so an attitude-only HEADING
+      with evade still dodges.
     """
     kind = str(args.get("maneuver") or "").strip().upper()
     if kind == "EVASIVE":
@@ -883,7 +885,8 @@ def describe_overlay(maneuver: Any, target_name: Optional[str] = None,
     elif kind == "HEADING" and isinstance(maneuver.heading_direction, dict):
         h = maneuver.heading_direction
         what = (f"HEADING ({h.get('x', 0):+.2f},{h.get('y', 0):+.2f},{h.get('z', 0):+.2f}) "
-                f"@{maneuver.throttle * 100:.0f}%")
+                + ("attitude only (no burn; the dodge burns at full throttle)"
+                   if maneuver.throttle <= 0 else f"@{maneuver.throttle * 100:.0f}%"))
     else:
         what = kind + (f" {target_name}" if target_name else "") + f" @{maneuver.throttle * 100:.0f}%"
     if maneuver.maneuver_type.name == "EVASIVE":
@@ -1044,8 +1047,11 @@ def admiral_maneuver_lines(order: Any) -> List[str]:
                 f"(set_maneuver/set_heading)."]
     if isinstance(getattr(order, "heading", None), dict):
         if spec.get("evade"):
-            return [f"      >>> ...with evade {spec['evade']}: evasion flies the ship only "
-                    f"while a torpedo or slug is inbound, then the heading resumes."]
+            thr = getattr(order, "throttle", None)
+            power = (" (at full throttle: the heading itself does not burn)"
+                     if thr is not None and float(thr) <= 0 else "")
+            return [f"      >>> ...with evade {spec['evade']}: evasion flies the ship{power} "
+                    f"only while a torpedo or slug is inbound, then the heading resumes."]
         return []
     what = getattr(order, "maneuver_applied", None) or describe_maneuver_spec(spec)
     replaced = getattr(order, "replaces_fleet_order", None)

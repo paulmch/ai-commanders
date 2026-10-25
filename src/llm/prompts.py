@@ -4096,9 +4096,13 @@ def build_admiral_ship_order_messages(
         parts.append(
             f"FLEET HEADING IN FORCE (your \"all ships\" order): "
             f"({heading.get('x', 0):+.2f},{heading.get('y', 0):+.2f},{heading.get('z', 0):+.2f}) "
-            f"at {thr * 100:.0f}% of the slowest hull. {ship_name} flies it (throttle scaled "
-            f"to hold formation) unless you give it its own heading or maneuver now (that "
-            f"REPLACES it; MAINTAIN coasts). To keep it and dodge: evade alone.")
+            + (f"attitude only (throttle 0, no burn). {ship_name} flies it"
+               if thr <= 0 else
+               f"at {thr * 100:.0f}% of the slowest hull. {ship_name} flies it (throttle scaled "
+               f"to hold formation)")
+            + f" unless you give it its own heading or maneuver now (that REPLACES it; "
+            f"MAINTAIN coasts). To keep it and dodge: evade alone"
+            + (" (the dodge burns at full throttle)." if thr <= 0 else "."))
     elif getattr(fleet_heading, "maneuver", None):
         from .maneuver_orders import fleet_order_text
         parts.append(
