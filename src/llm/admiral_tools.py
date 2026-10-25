@@ -247,12 +247,11 @@ DISCUSS_WITH_ADMIRAL_TOOL = {
     "function": {
         "name": "discuss_with_admiral",
         "description": (
-            "Ask your Admiral a question when your orders conflict with what your "
-            "sensors show and you need a decision NOW (not for status - use "
-            "report_to_admiral for that). The Admiral answers this checkpoint from a "
-            "live picture of your ship and its threats, and you then decide again "
-            "with the answer as a [CLARIFICATION] order - so every question costs "
-            f"a full extra decision. At most {MAX_DISCUSSION_EXCHANGES} exchanges per checkpoint."
+            "Ask your Admiral when your orders conflict with what your sensors show "
+            "and you need a decision now (status goes in report_to_admiral). Answered "
+            "this checkpoint from a live picture of your ship; you then decide again "
+            "with the answer, so each question costs a full extra decision. "
+            f"At most {MAX_DISCUSSION_EXCHANGES} exchanges per checkpoint."
         ),
         "parameters": {
             "type": "object",

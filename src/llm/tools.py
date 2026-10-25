@@ -421,15 +421,12 @@ REPORT_TO_ADMIRAL_TOOL = {
     "function": {
         "name": "report_to_admiral",
         "description": (
-            "Report to your Admiral. The Admiral reads every report at the NEXT checkpoint, "
-            "before issuing new orders, next to an engine compliance line (ordered vs flown "
-            "maneuver, target, salvo vs rounds launched). Plain compliance needs no report: "
-            "silence counts as ACK. Report DEVIATE when you deliberately do something other "
-            "than ordered - the order rests on stale intel, the ordered target is separating "
-            "or out of reach, a torpedo threat forces EVADE, a better shot exists - and say "
-            "what you see and what you do instead. Report UNABLE when you cannot comply "
-            "(magazine empty, weapon destroyed, no delta-v, heat). Add contact to pass on "
-            "sensor facts the Admiral may lack, request to ask for support."
+            "Report to your Admiral, who reads it at the NEXT checkpoint before new orders, "
+            "beside an engine compliance line (ordered vs flown maneuver, target, salvo vs "
+            "rounds launched). Plain compliance needs no report: silence = ACK. DEVIATE when "
+            "you deliberately do otherwise (stale intel, target separating or out of reach, "
+            "torpedoes force EVADE, a better shot) - say what you see and do instead. UNABLE "
+            "when you cannot comply (magazine empty, weapon lost, no delta-v, heat)."
         ),
         "parameters": {
             "type": "object",
@@ -437,17 +434,13 @@ REPORT_TO_ADMIRAL_TOOL = {
                 "status": {
                     "type": "string",
                     "enum": list(REPORT_STATUSES),
-                    "description": (
-                        "ACK: complying (optional - only to add intent/contact/request). "
-                        "DEVIATE: deliberately doing something else. UNABLE: cannot comply."
-                    ),
+                    "description": "ACK only to add intent, contact or request.",
                 },
                 "reason": {
                     "type": "string",
                     "description": (
-                        f"Required for DEVIATE/UNABLE, max {REPORT_REASON_CHARS} chars: the "
-                        "fact the Admiral is missing and what you do instead. E.g. 'Lancer-3 "
-                        "is SEPARATING at 2.8 km/s - holding torpedoes, EVADE until it turns.'"
+                        f"DEVIATE/UNABLE: required, max {REPORT_REASON_CHARS} chars - the fact "
+                        "the Admiral lacks and what you do instead."
                     ),
                 },
                 "intent": {
@@ -456,30 +449,20 @@ REPORT_TO_ADMIRAL_TOOL = {
                 },
                 "contact": {
                     "type": "object",
-                    "description": (
-                        "Optional sensor report on one enemy ship. CRIPPLED: armor/hull "
-                        "broken. PD_DOWN: its point defense is out - torpedoes will get "
-                        "through. TORPS_INBOUND: it launched at us."
-                    ),
+                    "description": "Optional sensor report on one enemy ship.",
                     "properties": {
-                        "ship": {"type": "string", "description": "Enemy ship name or id."},
+                        "ship": {"type": "string"},
                         "assessment": {"type": "string", "enum": list(CONTACT_ASSESSMENTS)},
-                        "note": {"type": "string",
-                                 "description": f"Max {CONTACT_NOTE_CHARS} chars."},
+                        "note": {"type": "string", "description": f"Max {CONTACT_NOTE_CHARS} chars."},
                     },
                     "required": ["ship", "assessment"],
                 },
                 "request": {
                     "type": "object",
-                    "description": (
-                        "Optional request. PD_COVER: put a PD ship near me. TORPEDO_SUPPORT: "
-                        "add rounds to my target. RETARGET: give me another target. "
-                        "FALL_BACK: permission to disengage. REINFORCE: send ships to me."
-                    ),
+                    "description": "Optional request for support.",
                     "properties": {
                         "kind": {"type": "string", "enum": list(REQUEST_KINDS)},
-                        "text": {"type": "string",
-                                 "description": f"Max {REQUEST_TEXT_CHARS} chars."},
+                        "text": {"type": "string", "description": f"Max {REQUEST_TEXT_CHARS} chars."},
                     },
                     "required": ["kind"],
                 },
@@ -496,16 +479,14 @@ FLEET_SIGNAL_TOOL = {
     "function": {
         "name": "fleet_signal",
         "description": (
-            "Signal your OWN fleet (the enemy never hears it). Delivered at the NEXT "
-            "checkpoint: other captains see it on their FLEET NET; ADMIRAL-addressed "
-            f"signals reach the Admiral with your report. Max {MAX_FLEET_SIGNALS_PER_DECISION} "
-            "per decision. Launches, kills and PD losses are already shared by the datalink - "
-            "do not repeat them. TARGET_CLAIM: 'I take <target>' - claim before committing "
-            "a salvo so two ships do not waste rounds on one hull. TOT_SYNC: announce when "
-            "YOUR torpedoes reach <target> (eta_s) so peers launch to arrive together and "
-            "split its point defense. PD_COVER_REQUEST: ask a ship to close and cover you "
-            "with its PD against inbound torpedoes. BREAKING_OFF: you are leaving the fight "
-            "or your post - say why. FREE: anything else."
+            "Signal your OWN fleet (the enemy never hears it), delivered at the NEXT "
+            "checkpoint; to=ADMIRAL rides on your report. Max "
+            f"{MAX_FLEET_SIGNALS_PER_DECISION} per decision. Launches, kills and PD losses are "
+            "shared automatically - do not repeat them. TARGET_CLAIM: claim a target before "
+            "committing a salvo so two ships do not waste rounds on one hull. TOT_SYNC: when "
+            "YOUR torpedoes reach target (eta_s), so peers launch to arrive together and split "
+            "its point defense. PD_COVER_REQUEST: ask a ship to cover you with its PD. "
+            "BREAKING_OFF: you leave the fight or your post - say why."
         ),
         "parameters": {
             "type": "object",
@@ -513,21 +494,12 @@ FLEET_SIGNAL_TOOL = {
                 "kind": {"type": "string", "enum": list(SIGNAL_KINDS)},
                 "to": {
                     "type": "string",
-                    "description": "ALL (default: every friendly ship), ADMIRAL, or one friendly ship's name or id.",
+                    "description": "ALL (default), ADMIRAL, or a friendly ship name/id.",
                 },
-                "target": {
-                    "type": "string",
-                    "description": "Enemy ship the signal is about (TARGET_CLAIM, TOT_SYNC).",
-                },
-                "eta_s": {
-                    "type": "number",
-                    "minimum": 0,
-                    "description": "TOT_SYNC: seconds until your rounds arrive on target.",
-                },
-                "text": {
-                    "type": "string",
-                    "description": f"Max {SIGNAL_TEXT_CHARS} chars.",
-                },
+                "target": {"type": "string", "description": "Enemy ship the signal is about."},
+                "eta_s": {"type": "number", "minimum": 0,
+                          "description": "TOT_SYNC: seconds until your rounds arrive."},
+                "text": {"type": "string", "description": f"Max {SIGNAL_TEXT_CHARS} chars."},
             },
             "required": ["kind", "text"],
         },

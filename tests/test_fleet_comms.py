@@ -267,13 +267,15 @@ class TestCaptainTools:
 
     def test_tools_offered(self):
         names = lambda c: {t["function"]["name"] for t in c.get_tools_for_context()}
-        admiral_fleet = names(captain_fixture())
-        assert {"report_to_admiral", "fleet_signal", "discuss_with_admiral"} <= admiral_fleet
-        assert "respond_to_orders" not in admiral_fleet
-        lone = captain_fixture(has_admiral=False)
-        assert not {"report_to_admiral", "fleet_signal"} & names(lone)
-        lone.fleet_peer_names = ["TIS Dart-2"]
-        assert "fleet_signal" in names(lone) and "report_to_admiral" not in names(lone)
+        flagship = captain_fixture()
+        assert {"report_to_admiral", "discuss_with_admiral"} <= names(flagship)
+        assert not {"respond_to_orders", "fleet_signal"} & names(flagship)  # no peers left
+        flagship.fleet_peer_names = ["TIS Dart-2"]
+        assert "fleet_signal" in names(flagship)
+        independent = captain_fixture(has_admiral=False)
+        assert not {"report_to_admiral", "fleet_signal"} & names(independent)
+        independent.fleet_peer_names = ["TIS Dart-2"]
+        assert "fleet_signal" in names(independent) and "report_to_admiral" not in names(independent)
 
     def test_tool_descriptions_quote_the_enforced_limits(self):
         """Prompt numbers are bound to the constants the code enforces."""

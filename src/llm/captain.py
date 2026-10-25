@@ -160,7 +160,7 @@ class LLMCaptain:
         # inbox: comms_message dicts delivered to this ship this checkpoint
         # (fleet net, direct, engine datalink, enemy channel) - replaced by
         # the runner every checkpoint. fleet_peer_names: living friendly
-        # ships, set with the inbox (gates fleet_signal outside admiral fleets).
+        # ships, set with the inbox (no peers: no fleet_signal tool).
         # discussions: this checkpoint's discuss_with_admiral Q&A.
         self.outbox: List[Dict[str, Any]] = []
         self.inbox: List[Dict[str, Any]] = []
@@ -283,7 +283,7 @@ class LLMCaptain:
         - Remove propose_draw and retract_draw (only Admiral can)
         - Add discuss_with_admiral and report_to_admiral (the captain->admiral
           channel; respond_to_orders survives only as an execution alias)
-        In a fleet (an Admiral or living friendly ships): add fleet_signal.
+        With living friendly ships to talk to: add fleet_signal.
         """
         # Get base tools
         tools = self._build_tools()
@@ -296,7 +296,7 @@ class LLMCaptain:
             ]
             tools.append(DISCUSS_WITH_ADMIRAL_TOOL)
             tools.append(REPORT_TO_ADMIRAL_TOOL)
-        if self.has_admiral or self.fleet_peer_names:
+        if self.fleet_peer_names:
             tools.append(FLEET_SIGNAL_TOOL)
 
         return tools
