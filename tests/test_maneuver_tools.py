@@ -853,3 +853,83 @@ class TestAdmiralPerShipEvade:
 
         assert run(None) == [("set_maneuver", "EVADE")]     # threat seen: it dodges itself
         assert run("dodge") == []                           # the order already dodges
+
+
+def test_admiral_hold_range_renewed_through_the_runner_keeps_its_range():
+    """The real checkpoint loop (not a hand-driven sim): the admiral orders
+    "all ships" HOLD_RANGE without a range at EVERY checkpoint while the
+    enemy closes at 1 km/s. The range latched at the first checkpoint must be
+    carried over by every renewal - re-latching would bleed it each time."""
+    from src.llm.battle_runner import BattleConfig, LLMBattleRunner
+    from src.llm.client import CallStats
+    from src.llm.fleet_config import BattleFleetConfig
+    from src.llm.prompts import CaptainPersonality
+
+    holder = {}
+    latched = {}
+
+    class Stub:
+        stats = CallStats()
+        session_id = None
+
+        def decide_with_tools(self, messages, tools, model=None, temperature=None,
+                              tool_choice="auto"):
+            sim = holder["runner"].simulation
+            beta = sim.get_ship("beta_1")
+            if not holder.get("launched"):
+                # The enemy closes at 1 km/s (and never maneuvers: the beta
+                # admiral's HOLD_RANGE on its own ship is NOT applied).
+                alpha = sim.get_ship("alpha_1")
+                beta.kinematic_state.velocity = (alpha.position - beta.position).normalized() * 1000.0
+                holder["launched"] = True
+            names = {t["function"]["name"] for t in tools}
+            if names == {"issue_order"}:
+                return [ToolCall(id="1", name="issue_order", arguments={
+                    "ship_name": "x", "order_text": "As the fleet.", "priority": "NORMAL"})]
+            if "set_fleet_directive" in names:
+                for sid in ("alpha_1", "alpha_2"):
+                    m = sim.get_ship(sid).current_maneuver
+                    if m is not None and m.maneuver_type == ManeuverType.HOLD_RANGE:
+                        latched.setdefault(sid, []).append(m.hold_range_m)
+                return [
+                    ToolCall(id="1", name="set_fleet_directive",
+                             arguments={"directive": "Hold the range."}),
+                    ToolCall(id="2", name="issue_order", arguments={
+                        "ship_name": "all ships", "order_text": "Hold the range.",
+                        "maneuver": "HOLD_RANGE", "maneuver_target": "OCS M"}),
+                ]
+            return [ToolCall(id="1", name="respond_to_orders",
+                             arguments={"response_type": "ACKNOWLEDGE"})]
+
+    fleet_config = BattleFleetConfig.from_dict({
+        "battle_name": "Hold", "time_limit_s": 600.0, "decision_interval_s": 30.0,
+        "initial_distance_km": 500.0,
+        "alpha_fleet": {"admiral": {"model": "stub/m"}, "ships": [
+            {"ship_type": "destroyer", "model": "stub/m"},
+            {"ship_type": "destroyer", "model": "stub/m"}]},
+        "beta_fleet": {"admiral": {"model": "stub/m"}, "ships": [
+            {"ship_type": "destroyer", "model": "stub/m"}]},
+    })
+    config = BattleConfig(initial_distance_km=500.0, time_limit_s=600.0, max_checkpoints=6,
+                          verbose=False, personality_selection=False, record_battle=False,
+                          parallel_llm=False, seed=7)
+    dummy = LLMCaptainConfig(name="-", ship_name="-", model="stub/m",
+                             personality=CaptainPersonality.BALANCED)
+    runner = LLMBattleRunner(config=config, alpha_config=dummy, beta_config=dummy,
+                             client=Stub(), fleet_config=fleet_config)
+    holder["runner"] = runner
+    runner.run_fleet_battle(FLEET)
+
+    sim = runner.simulation
+    for sid in ("alpha_1", "alpha_2"):
+        seen = latched[sid]
+        # Seen at checkpoints 2.. (the order of checkpoint 1 has flown since).
+        assert len(seen) >= 4 and seen[0] is not None
+        assert all(r == seen[0] for r in seen), seen
+        m = sim.get_ship(sid).current_maneuver
+        assert m.maneuver_type == ManeuverType.HOLD_RANGE and m.hold_range_m == seen[0]
+    # ...and it is being held: closure cancelled, working back out to it.
+    me, foe = sim.get_ship("alpha_1"), sim.get_ship("beta_1")
+    los = (foe.position - me.position).normalized()
+    assert (me.velocity - foe.velocity).dot(los) < 20.0
+    assert (foe.position - me.position).magnitude > 0.85 * latched["alpha_1"][0]
