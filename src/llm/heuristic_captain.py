@@ -150,11 +150,12 @@ class HeuristicCaptain(LLMCaptain):
                 calls.append(("launch_torpedo", {
                     "count": salvo, "target_id": torp_target.ship_id}))
 
-        # Maneuver priority: dodge torpedoes > admiral heading order (already
-        # applied by the runner - keep it, it holds the formation) > admiral
-        # keyword > role doctrine
+        # Maneuver priority: dodge torpedoes > admiral heading / structured
+        # maneuver order (already applied by the runner - keep it, it holds
+        # the formation) > admiral keyword > role doctrine
         threat = self._torpedo_threat(ship, ship_id, simulation)
-        admiral_heading = bool(order and isinstance(getattr(order, "heading", None), dict))
+        admiral_heading = bool(order and (isinstance(getattr(order, "heading", None), dict)
+                                          or getattr(order, "maneuver", None)))
         maneuver = self._admiral_maneuver(order_text)
         if threat:
             maneuver = ("EVADE", 1.0)

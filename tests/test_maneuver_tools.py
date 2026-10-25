@@ -394,3 +394,166 @@ class TestMcpSetManeuver:
         expected = (centre * -1.0).normalized()
         h = a.heading_direction
         assert (h["x"], h["y"], h["z"]) == pytest.approx(expected.to_tuple(), abs=1e-3)
+
+
+# =============================================================================
+# Admiral issue_order
+# =============================================================================
+
+class TestAdmiralOrders:
+
+    def test_spec_parsing(self):
+        from src.llm.maneuver_orders import admiral_maneuver_spec
+        assert admiral_maneuver_spec({"ship_name": "x", "heading": {"x": 1, "y": 0, "z": 0}}) is None
+        assert admiral_maneuver_spec({"evade": "full"}) is None     # nothing to fly
+        spec = admiral_maneuver_spec({"maneuver": "intercept", "suggested_target": "Falchion-1",
+                                      "standoff_km": "60", "arrival_closing_kps": -2,
+                                      "evade": "sideways", "throttle": 0.7})
+        assert spec == {"maneuver_type": "INTERCEPT", "target": "Falchion-1",
+                        "standoff_km": 60.0, "throttle": 0.7}
+        spec = admiral_maneuver_spec({"toward_point": {"x": 1, "y": 2, "z": 3}, "evade": "dodge"})
+        assert spec["maneuver_type"] == "HEADING" and spec["evade"] == "dodge"
+        assert spec["toward_point"] == {"x": 1.0, "y": 2.0, "z": 3.0}
+
+    def test_orders_carry_the_spec_and_inherit_the_fleet_order(self):
+        from src.llm.admiral import AdmiralOrder, _attach_heading, _fleet_heading_order
+        fleet = _fleet_heading_order({"ship_name": "all ships", "order_text": "Close to 80.",
+                                      "maneuver": "INTERCEPT", "maneuver_target": "beta_1",
+                                      "standoff_km": 80})
+        assert fleet.maneuver["standoff_km"] == 80.0 and fleet.heading is None
+        assert _fleet_heading_order({"ship_name": "Dart-1", "maneuver": "INTERCEPT"}) is None
+        plain = _fleet_heading_order({"ship_name": "all ships", "order_text": "",
+                                      "heading": {"x": 1, "y": 0, "z": 0}})
+        assert plain.maneuver is None and plain.heading == {"x": 1.0, "y": 0.0, "z": 0.0}
+        order = AdmiralOrder(target_ship_id="alpha_1", target_ship_name="A", order_text="Go.")
+        _attach_heading(order, {}, fleet)
+        assert order.maneuver == fleet.maneuver and order.formation is True
+        own = AdmiralOrder(target_ship_id="alpha_1", target_ship_name="A", order_text="Hold.")
+        _attach_heading(own, {"maneuver": "HOLD_RANGE", "range_km": 300}, fleet)
+        assert own.maneuver["maneuver_type"] == "HOLD_RANGE" and own.formation is False
+
+    def _apply(self, sim, orders):
+        from src.llm.battle_runner import LLMBattleRunner
+        fake = SimpleNamespace(simulation=sim, config=SimpleNamespace(verbose=False))
+        entries = [(sid, None, sim.get_ship(sid).faction) for sid in orders]
+        LLMBattleRunner._apply_admiral_headings(fake, entries, {k: [v] for k, v in orders.items()})
+
+    def test_runner_flies_structured_and_toward_orders(self):
+        from src.llm.admiral import AdmiralOrder
+        sim = _sim()
+        intercept = AdmiralOrder(target_ship_id="alpha_1", target_ship_name="A", order_text="",
+                                 throttle=0.8, maneuver={"maneuver_type": "INTERCEPT",
+                                                         "target": "Falchion-2",
+                                                         "standoff_km": 50.0, "evade": "dodge"})
+        point = AdmiralOrder(target_ship_id="alpha_2", target_ship_name="B", order_text="",
+                             throttle=1.0, maneuver={"maneuver_type": "HEADING",
+                                                     "toward_point": {"x": 0, "y": 0, "z": 0}})
+        self._apply(sim, {"alpha_1": intercept, "alpha_2": point})
+        m1 = sim.get_ship("alpha_1").current_maneuver
+        assert (m1.maneuver_type, m1.target_id, m1.standoff_m, m1.evade, m1.throttle) == (
+            ManeuverType.INTERCEPT, "beta_2", 50_000.0, "dodge", 0.8)
+        assert intercept.applied_throttle == 0.8
+        m2 = sim.get_ship("alpha_2").current_maneuver
+        assert m2.heading_point_km == {"x": 0.0, "y": 0.0, "z": 0.0}
+        # The captain is shown the bearing it was sent on.
+        assert point.heading == m2.heading_direction and point.heading["x"] < -0.99
+
+    def test_runner_formation_toward_point_is_one_heading(self):
+        from src.llm.admiral import AdmiralOrder
+        sim = _sim()
+        spec = {"maneuver_type": "HEADING", "toward_point": {"x": 0, "y": 0, "z": 0},
+                "evade": "full"}
+        orders = {sid: AdmiralOrder(target_ship_id=sid, target_ship_name=sid, order_text="",
+                                    throttle=1.0, formation=True, maneuver=dict(spec))
+                  for sid in ("alpha_1", "alpha_2")}
+        self._apply(sim, orders)
+        a, b = (sim.get_ship(s).current_maneuver for s in ("alpha_1", "alpha_2"))
+        assert a.heading_direction == b.heading_direction
+        assert a.burn_start_time == b.burn_start_time and a.evade == b.evade == "full"
+        assert a.heading_point_km is None
+
+    def test_captain_sees_the_applied_maneuver_order(self):
+        from src.llm.admiral import AdmiralOrder
+        from src.llm.prompts import format_admiral_orders_for_captain
+        order = AdmiralOrder(target_ship_id="a", target_ship_name="A", order_text="Close in.",
+                             throttle=1.0, maneuver={"maneuver_type": "HOLD_RANGE",
+                                                     "target": "Falchion-1", "range_km": 200.0})
+        text = format_admiral_orders_for_captain([order], "")
+        assert "MANEUVER ORDER (ALREADY APPLIED" in text and "hold 200 km" in text
+        assert "NO set_maneuver/set_heading" in text
+
+    def test_heuristic_captain_keeps_an_applied_maneuver_order(self):
+        from src.llm.admiral import AdmiralOrder
+        from src.llm.captain import LLMCaptainConfig
+        from src.llm.heuristic_captain import HEURISTIC_MODEL, HeuristicCaptain
+        sim = _sim()
+        captain = HeuristicCaptain(LLMCaptainConfig(
+            name="H", ship_name="TIS Dart-6", model=HEURISTIC_MODEL, ship_type="corvette",
+            fleet_data=FLEET))
+        captain.receive_admiral_orders([AdmiralOrder(
+            target_ship_id="alpha_1", target_ship_name="A", order_text="Hold at 200.",
+            throttle=1.0, maneuver={"maneuver_type": "HOLD_RANGE", "range_km": 200.0})])
+        captain.decide("alpha_1", sim)
+        names = [tc.name for tc in captain.last_tool_calls]
+        assert "set_maneuver" not in names and "set_heading" not in names
+
+
+def test_admiral_all_ships_standoff_intercept_end_to_end():
+    """Through the real runner: the directive call orders "all ships"
+    INTERCEPT with a standoff and the dodge overlay; every ship flies it at
+    once and every captain is shown it as already applied."""
+    from src.llm.battle_runner import BattleConfig, LLMBattleRunner
+    from src.llm.client import CallStats
+    from src.llm.fleet_config import BattleFleetConfig
+    from src.llm.prompts import CaptainPersonality
+
+    seen = {"captain": []}
+
+    class Stub:
+        stats = CallStats()
+        session_id = None
+
+        def decide_with_tools(self, messages, tools, model=None, temperature=None,
+                              tool_choice="auto"):
+            names = {t["function"]["name"] for t in tools}
+            if names == {"issue_order"}:
+                return [ToolCall(id="1", name="issue_order", arguments={
+                    "ship_name": "x", "order_text": "As the fleet.", "priority": "NORMAL"})]
+            if "set_fleet_directive" in names:
+                return [
+                    ToolCall(id="1", name="set_fleet_directive",
+                             arguments={"directive": "Close to 80 km and hold."}),
+                    ToolCall(id="2", name="issue_order", arguments={
+                        "ship_name": "all ships", "order_text": "Close to 80 km.",
+                        "maneuver": "INTERCEPT", "maneuver_target": "beta_1",
+                        "standoff_km": 80, "evade": "dodge", "throttle": 0.9}),
+                ]
+            seen["captain"].append(messages)
+            return [ToolCall(id="1", name="respond_to_orders",
+                             arguments={"response_type": "ACKNOWLEDGE"})]
+
+    fleet_config = BattleFleetConfig.from_dict({
+        "battle_name": "Standoff", "time_limit_s": 300.0, "decision_interval_s": 30.0,
+        "initial_distance_km": 500.0,
+        "alpha_fleet": {"admiral": {"model": "stub/m"}, "ships": [
+            {"ship_type": "corvette", "model": "stub/m"},
+            {"ship_type": "destroyer", "model": "stub/m"}]},
+        "beta_fleet": {"admiral": {"model": "stub/m"}, "ships": [
+            {"ship_type": "destroyer", "model": "stub/m"}]},
+    })
+    config = BattleConfig(initial_distance_km=500.0, time_limit_s=300.0, max_checkpoints=1,
+                          verbose=False, personality_selection=False, record_battle=False,
+                          parallel_llm=False, seed=7)
+    dummy = LLMCaptainConfig(name="-", ship_name="-", model="stub/m",
+                             personality=CaptainPersonality.BALANCED)
+    runner = LLMBattleRunner(config=config, alpha_config=dummy, beta_config=dummy,
+                             client=Stub(), fleet_config=fleet_config)
+    runner.run_fleet_battle(FLEET)
+
+    for sid in runner.alpha_captains:
+        m = runner.simulation.get_ship(sid).current_maneuver
+        assert (m.maneuver_type, m.target_id, m.standoff_m, m.evade, m.throttle) == (
+            ManeuverType.INTERCEPT, "beta_1", 80_000.0, "dodge", 0.9)
+    turns = [m[-1]["content"] for m in seen["captain"]]
+    assert turns and all("MANEUVER ORDER (ALREADY APPLIED" in t and "standoff 80 km" in t
+                         for t in turns)

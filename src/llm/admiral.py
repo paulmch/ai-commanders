@@ -40,6 +40,12 @@ class AdmiralOrder:
     throttle: Optional[float] = None
     formation: bool = False
     applied_throttle: Optional[float] = None  # per-hull throttle the runner applied
+    # Structured maneuver order (issue_order maneuver / toward_point /
+    # toward_ship / evade; maneuver_orders.admiral_maneuver_spec), applied by
+    # the runner like a heading: {"maneuver_type", "target", "standoff_km",
+    # "arrival_closing_kps", "range_km", "toward_point", "toward_ship",
+    # "evade", "throttle"}. None for prose-only and plain heading orders.
+    maneuver: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -81,32 +87,51 @@ def _throttle_arg(value: Any) -> float:
 
 
 def _fleet_heading_order(args: Dict[str, Any]) -> Optional["AdmiralOrder"]:
-    """issue_order(ship_name="all ships", heading=...) -> the fleet-wide order."""
+    """issue_order(ship_name="all ships", heading=... | maneuver=... |
+    toward_point/toward_ship=...) -> the fleet-wide order."""
     from .range_control import is_fleet_alias
+    from .maneuver_orders import admiral_maneuver_spec
+    if not is_fleet_alias(args.get("ship_name")):
+        return None
     heading = _heading_arg(args.get("heading"))
-    if heading is None or not is_fleet_alias(args.get("ship_name")):
+    spec = admiral_maneuver_spec(args)
+    if heading is None and spec is None:
         return None
     return AdmiralOrder(
         target_ship_id="all ships",
         target_ship_name="all ships",
         order_text=args.get("order_text", ""),
         priority=args.get("priority", "NORMAL"),
-        heading=heading,
+        heading=heading if spec is None or spec.get("maneuver_type") == "HEADING" else None,
         throttle=_throttle_arg(args.get("throttle", 1.0)),
         formation=True,
+        maneuver=spec,
     )
 
 
 def _attach_heading(order: "AdmiralOrder", args: Dict[str, Any],
                     fleet_heading: Optional["AdmiralOrder"]) -> None:
-    """Own heading from the order's arguments, else the fleet heading in force."""
+    """Own heading / structured maneuver from the order's arguments, else the
+    fleet order in force."""
+    from .maneuver_orders import admiral_maneuver_spec
     heading = _heading_arg(args.get("heading"))
-    if heading is not None:
+    spec = admiral_maneuver_spec(args)
+    if spec is not None:
+        order.maneuver = spec
+        order.throttle = _throttle_arg(args.get("throttle", 1.0))
+        order.formation = False
+        if spec.get("maneuver_type") == "HEADING" and heading is not None:
+            order.heading = heading
+    elif heading is not None:
         order.heading = heading
         order.throttle = _throttle_arg(args.get("throttle", 1.0))
         order.formation = False
-    elif fleet_heading is not None and fleet_heading.heading is not None:
-        order.heading = dict(fleet_heading.heading)
+    elif fleet_heading is not None and (fleet_heading.heading is not None
+                                        or getattr(fleet_heading, "maneuver", None)):
+        if fleet_heading.heading is not None:
+            order.heading = dict(fleet_heading.heading)
+        if getattr(fleet_heading, "maneuver", None):
+            order.maneuver = dict(fleet_heading.maneuver)
         order.throttle = fleet_heading.throttle
         order.formation = True
 

@@ -472,6 +472,113 @@ def fleet_heading_vector(simulation: Any, ships: Sequence[Any],
 # Admiral orders
 # ---------------------------------------------------------------------------
 
+# issue_order maneuver names (HEADING is implied by heading/toward_*).
+ADMIRAL_MANEUVERS = ("INTERCEPT", "HOLD_RANGE", "EVADE", "BRAKE", "MAINTAIN", "PADLOCK", "HEADING")
+
+
+def _quiet(parse, *a) -> Any:
+    """Admirals get no tool feedback: an unusable optional value is dropped."""
+    try:
+        return parse(*a)
+    except ManeuverArgError:
+        return None
+
+
+def admiral_maneuver_spec(args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    The structured maneuver of an issue_order call (maneuver, maneuver_target,
+    standoff_km, arrival_closing_kps, range_km, toward_point, toward_ship,
+    evade), normalised, or None when the call has none - a plain heading
+    order stays exactly what it was. HEADING specs carry toward_point /
+    toward_ship / evade for a heading order.
+    """
+    kind = str(args.get("maneuver") or "").strip().upper()
+    if kind == "EVASIVE":
+        kind = "EVADE"
+    if kind and kind not in ADMIRAL_MANEUVERS:
+        kind = ""
+    point = _quiet(parse_point_km, args.get("toward_point"))
+    ref = args.get("toward_ship")
+    ref = str(ref).strip() if ref is not None and str(ref).strip() else None
+    evade = _quiet(parse_evade, args.get("evade"))
+    if not kind:
+        if point is None and ref is None and evade is None:
+            return None
+        if point is None and ref is None and not isinstance(args.get("heading"), dict):
+            return None     # evade with nothing to fly
+        kind = "HEADING"
+    spec: Dict[str, Any] = {"maneuver_type": kind}
+    if kind == "HEADING":
+        if ref is not None:
+            spec["toward_ship"] = ref
+        elif point is not None:
+            spec["toward_point"] = point
+    else:
+        target = args.get("maneuver_target") or args.get("suggested_target")
+        if target and kind in ("INTERCEPT", "HOLD_RANGE", "PADLOCK"):
+            spec["target"] = str(target)
+        for key in ("standoff_km", "arrival_closing_kps", "range_km"):
+            value = _quiet(parse_number, args.get(key), key)
+            if value is not None and value >= 0:
+                spec[key] = value
+    if evade is not None and kind != "EVADE":
+        spec["evade"] = evade
+    throttle = _quiet(parse_number, args.get("throttle"), "throttle")
+    spec["throttle"] = 1.0 if throttle is None else max(0.0, min(1.0, throttle))
+    return spec
+
+
+def admiral_spec_maneuver(simulation: Any, ship: Any, spec: Dict[str, Any],
+                          throttle: float) -> Tuple[Any, List[str]]:
+    """
+    The engine Maneuver for an admiral's structured (non-formation) order on
+    ``ship``. INTERCEPT / HOLD_RANGE / PADLOCK fly relative to the named
+    target, else the ship's primary target, else the nearest enemy. Raises
+    ManeuverArgError when it cannot be flown (e.g. no such ship).
+    """
+    from ..simulation import Maneuver, ManeuverType
+
+    kind = spec.get("maneuver_type", "MAINTAIN")
+    maneuver_type = ManeuverType["EVASIVE" if kind == "EVADE" else kind]
+    args = {k: spec.get(k) for k in ("standoff_km", "arrival_closing_kps", "range_km",
+                                     "evade", "toward_point", "toward_ship")}
+    target_id = None
+    heading_direction = None
+    if maneuver_type == ManeuverType.HEADING:
+        live, notes = heading_target(simulation, ship.ship_id, args)
+        extras: Dict[str, Any] = dict(live or {})
+        heading_direction = extras.pop("heading_direction", None)
+        if args.get("evade"):
+            extras["evade"] = parse_evade(args["evade"])
+    else:
+        if maneuver_type in (ManeuverType.INTERCEPT, ManeuverType.PADLOCK,
+                             ManeuverType.HOLD_RANGE):
+            target = resolve_ship(simulation, ship.ship_id, spec.get("target"))
+            if target is None and spec.get("target"):
+                raise ManeuverArgError(f"no live ship named {spec['target']!r}")
+            if target is None:
+                target_id = getattr(ship, "primary_target_id", None)
+                if not target_id:
+                    enemies = simulation.get_enemy_ships(ship.ship_id)
+                    if enemies:
+                        target_id = min(enemies, key=lambda e: (e.position - ship.position)
+                                        .magnitude).ship_id
+            else:
+                target_id = target.ship_id
+            if target_id is None:
+                raise ManeuverArgError(f"{kind} has no target")
+        extras, notes = maneuver_extras(simulation, ship.ship_id, maneuver_type, args, target_id)
+    return Maneuver(
+        maneuver_type=maneuver_type,
+        target_id=target_id,
+        start_time=simulation.current_time,
+        duration=getattr(simulation, "decision_interval", 30.0),
+        throttle=throttle,
+        heading_direction=heading_direction,
+        **extras,
+    ), notes
+
+
 def describe_maneuver_spec(spec: Optional[Dict[str, Any]]) -> Optional[str]:
     """
     One line for an admiral's structured maneuver order (AdmiralOrder.maneuver),
