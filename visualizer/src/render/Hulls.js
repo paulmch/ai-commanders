@@ -98,6 +98,15 @@ function factionAccent(faction) {
   return faction === 'alpha' ? 0x2ad2ff : 0xff8a3c;
 }
 
+/**
+ * Scales on the textures' metalness (1 = the maps as painted). Armour and
+ * trim are part metal, not mirrors: fully metallic plating mostly reflects
+ * black sky, so shadowed recesses and the joints between sections read as
+ * empty space against the starfield.
+ */
+export const HULL_METALNESS = 0.7;
+export const TRIM_METALNESS = 0.55;
+
 export function buildShipMaterials(faction) {
   const key = faction;
   if (!_sharedMats.has(key)) {
@@ -108,12 +117,12 @@ export function buildShipMaterials(faction) {
       hull: new THREE.MeshStandardMaterial({
         map: hullT.map, normalMap: hullT.normalMap, normalScale: new THREE.Vector2(0.9, 0.9),
         roughnessMap: hullT.ormMap, metalnessMap: hullT.ormMap,
-        roughness: 1, metalness: 1, envMapIntensity: 1.0
+        roughness: 1, metalness: HULL_METALNESS, envMapIntensity: 1.0
       }),
       trim: new THREE.MeshStandardMaterial({
         map: trimT.map, normalMap: trimT.normalMap, normalScale: new THREE.Vector2(1.0, 1.0),
         roughnessMap: trimT.ormMap, metalnessMap: trimT.ormMap,
-        roughness: 1, metalness: 1, envMapIntensity: 0.9
+        roughness: 1, metalness: TRIM_METALNESS, envMapIntensity: 1.1
       }),
       // Faction livery: nose rims, drive bands, radiator cassettes, stripes.
       // Floodlit (a faint emissive copy of the albedo) so the livery still
@@ -125,7 +134,7 @@ export function buildShipMaterials(faction) {
         emissive: 0xffffff, emissiveMap: paintT.map, emissiveIntensity: LIVERY_FLOOD
       }),
       dark: new THREE.MeshStandardMaterial({
-        color: 0x1a1d22, roughness: 0.62, metalness: 0.85, envMapIntensity: 0.8
+        color: 0x2c3138, roughness: 0.6, metalness: 0.55, envMapIntensity: 0.9
       }),
       barrel: new THREE.MeshStandardMaterial({
         color: 0x2a2d33, roughness: 0.45, metalness: 0.95, envMapIntensity: 1.0
@@ -157,7 +166,8 @@ export function buildShipMaterials(faction) {
       map: getAccentTexture().map, emissiveMap: getAccentTexture().emissiveMap
     }),
     window: new THREE.MeshStandardMaterial({
-      color: 0x0a0a0c, emissive: WINDOW_EMISSIVE, emissiveIntensity: 2.6, roughness: 0.2, metalness: 0.2
+      // dark glass, not a hole: the unlit strip between lamps stays readable
+      color: 0x1a1f26, emissive: WINDOW_EMISSIVE, emissiveIntensity: 2.6, roughness: 0.25, metalness: 0.3
     }),
     bellHeat: new THREE.MeshStandardMaterial({
       color: 0x1a1010, emissive: 0xff7a30, emissiveIntensity: 0.0, roughness: 0.8, metalness: 0.2,
