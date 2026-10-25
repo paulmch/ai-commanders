@@ -878,6 +878,42 @@ class TestLostTurns:
         assert "LOST (reply cut off" in seen2[0]["messages"][-1]["content"]
         assert captain.lost_turn is None
 
+    def test_lost_turn_under_a_fresh_admiral_heading_is_not_called_a_coast(self):
+        """The runner applied the admiral's HEADING at T+60; the ship flies it on."""
+        cut = _respond([], finish="length")
+        client, seen = _client({0: cut, 1: cut})
+        sim, captain = _fleet_captain(client)
+        order = captain.admiral_orders[0]
+        order.heading, order.throttle = {"x": 0.0, "y": 1.0, "z": 0.0}, 0.5
+        sim.current_time = 60.0
+        me = sim.get_ship("alpha_1")
+        me.current_maneuver = Maneuver(ManeuverType.HEADING, start_time=60.0, duration=30.0,
+                                       throttle=0.5, heading_direction={"x": 0.0, "y": 1.0,
+                                                                        "z": 0.0})
+
+        assert captain.decide("alpha_1", sim) == []  # nothing to renew: it is fresh
+
+        notice = captain._format_lost_turn()
+        assert "your Admiral's HEADING@50% (applied at T+60) kept flying until T+90" in notice
+        assert "COASTED" not in notice
+        line = captain._format_decision_history(simulation=sim).splitlines()[-1]
+        assert line.endswith("- your Admiral's HEADING@50% kept flying")
+        assert "coasted" not in line
+
+        # Not an admiral's: worded without the attribution. No maneuver: a coast.
+        captain.admiral_orders[0].heading = None
+        captain.client, _ = _client({0: cut, 1: cut})
+        sim.current_time = 90.0
+        me.current_maneuver = Maneuver(ManeuverType.EVASIVE, start_time=90.0, duration=30.0)
+        captain.decide("alpha_1", sim)
+        assert "EVASIVE@100% (applied at T+90) kept flying" in captain._format_lost_turn()
+        captain.client, _ = _client({0: cut, 1: cut})
+        sim.current_time = 120.0
+        me.current_maneuver = None
+        captain.decide("alpha_1", sim)
+        assert "no maneuver was active, so the ship COASTED T+120-150" in \
+            captain._format_lost_turn()
+
     def test_a_retry_that_succeeds_is_a_normal_turn(self):
         client, seen = _client({0: _respond([], finish="error")})
         sim, captain = _fleet_captain(client)

@@ -758,16 +758,28 @@ class LLMCaptain:
         self.last_call_failed = True
         self.last_failure_reason = reason
         renewed = self._renewed_maneuver(ship, now, interval)
-        kept = None
+        kept = fresh = None
+        until = now + interval
         if renewed is not None:
             kept = f"{renewed.maneuver_type.name}@{renewed.throttle * 100:.0f}%"
-        self.lost_turn = {"time": now, "reason": reason, "renewed": kept,
-                          "until": now + interval}
+        else:
+            # A maneuver set THIS checkpoint (the runner applied an admiral
+            # HEADING / MANEUVER order before asking) needs no renewal - it
+            # flies on. The ship did not coast, and the record must not say so.
+            m = getattr(ship, "current_maneuver", None)
+            if (m is not None and getattr(m, "start_time", None) is not None
+                    and m.start_time >= now - 1e-6 and not m.is_complete(now + 1e-6)):
+                whose = "your Admiral's " if self._admiral_heading_applied() else ""
+                fresh = f"{whose}{m.maneuver_type.name}@{m.throttle * 100:.0f}%"
+                if 0 < m.duration < 1e6:  # duration <= 0: open-ended
+                    until = m.start_time + m.duration
+        self.lost_turn = {"time": now, "reason": reason, "renewed": kept, "kept": fresh,
+                          "until": until}
         self.decision_count += 1
         self.decision_history.append({
             "checkpoint": self.decision_count, "time": now, "tool_calls": [],
             "commands_count": 1 if renewed is not None else 0,
-            "lost": reason, "renewed": kept,
+            "lost": reason, "renewed": kept, "kept": fresh,
         })
         return [renewed] if renewed is not None else []
 
@@ -775,9 +787,14 @@ class LLMCaptain:
         lost = self.lost_turn
         if not lost:
             return None
-        what = (f"the engine renewed your previous {lost['renewed']} until T+{lost['until']:.0f}"
-                if lost.get("renewed") else
-                f"no maneuver was active, so the ship COASTED T+{lost['time']:.0f}-{lost['until']:.0f}")
+        if lost.get("renewed"):
+            what = f"the engine renewed your previous {lost['renewed']} until T+{lost['until']:.0f}"
+        elif lost.get("kept"):
+            what = (f"{lost['kept']} (applied at T+{lost['time']:.0f}) kept flying until "
+                    f"T+{lost['until']:.0f}")
+        else:
+            what = (f"no maneuver was active, so the ship COASTED "
+                    f"T+{lost['time']:.0f}-{lost['until']:.0f}")
         return (f"!! YOUR LAST ORDERS WERE LOST (T+{lost['time']:.0f}: {lost['reason']}): {what}. "
                 "Nothing else was aimed or launched. Re-issue your orders now.")
 
@@ -1422,6 +1439,7 @@ class LLMCaptain:
             t = d["time"]
             if d.get("lost"):
                 kept = (f"engine renewed {d['renewed']}" if d.get("renewed")
+                        else f"{d['kept']} kept flying" if d.get("kept")
                         else "the ship coasted")
                 lines.append(f"  T+{t:.0f} LOST ({d['lost']}) - {kept}")
                 continue
