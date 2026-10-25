@@ -763,6 +763,14 @@ export class RcsPlanner {
     this.roles = roles || jetRoles(mounts);
     this.axes = jetTorqueAxes(mounts, this.roles);
     this.trimTable = jetTrimTable(mounts, this.roles);
+    // the nozzles that can ever fire (attitude or trim): the renderer skips
+    // the rest (fore/aft and blocked ones, ~40% of a hull's nozzles)
+    const live = [];
+    for (let k = 0; k < this.jetCount; k++) {
+      const a = this.axes, tt = this.trimTable;
+      if (a[3 * k] || a[3 * k + 1] || tt[3 * k] || tt[3 * k + 1]) live.push(k);
+    }
+    this.live = Int16Array.from(live);
     this._dem = Array.from({ length: 11 }, () => new Float32Array(this.jetCount));
     this.cells = new Map();
   }
@@ -837,7 +845,7 @@ export class RcsPlanner {
         p.on[k] = this._pj.on;
         p.level[k] = this._pj.level;
         maxOn = Math.max(maxOn, p.on[k]);
-        if (this._pj.on >= JINK.kick && this._pj.level >= JINK.kickLevel) kicked = true;
+        if (mode === MODE_TV && this._pj.on >= JINK.kick && this._pj.level >= JINK.kickLevel) kicked = true;
       }
       if (jink === JINK_DODGE) {
         // Lateral trims: the side nozzles push toward where the nose is
@@ -1272,7 +1280,7 @@ export class RcsSystem {
 
   /** Write a ship's plumes from instance nj and puffs from np; the new counts land in _nj/_np. */
   _updateShip(planner, ship, time, nj, np) {
-    const n = planner.jetCount;
+    const live = planner.live;
     const frames = planner.jetFrames;
     const dims = planner.dims;
     const jl = dims.len;
@@ -1288,7 +1296,8 @@ export class RcsSystem {
     const ja = this.jetAttr.array;
     const pp = this.puffPos.array;
     const pc = this.puffCol.array;
-    for (let k = 0; k < n; k++) {
+    for (let q = 0; q < live.length; q++) {
+      const k = live[q];
       const I = planner.intensity(time, k);
       if (I < 0.01) continue;
       const fl = planner.flicker(time, k);
@@ -1332,7 +1341,8 @@ export class RcsSystem {
       const te = j * dt;
       const age = time - te;
       let qReady = false;
-      for (let k = 0; k < n && np < MAX_PUFFS; k++) {
+      for (let q = 0; q < live.length && np < MAX_PUFFS; q++) {
+        const k = live[q];
         const I = planner.intensity(te, k);
         if (I < 0.06) continue;
         // faint pulses (trims, the vectored-turn assist) vent fewer puffs
