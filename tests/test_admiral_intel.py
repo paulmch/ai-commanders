@@ -277,13 +277,18 @@ class TestTorpedoSolution:
         assert row.solution.verdict != "GOOD"
         assert "OCS Falchion-2 [beta_6] DD" in msgs[1]["content"]
 
-    def test_zero_closure_launch_matches_the_doctrine_anchor(self):
-        """Doctrine: 'launched with zero closure -> impacts ~13.5 km/s' (target
-        not running). The pursuit model must agree with the engine anchor."""
+    @pytest.mark.parametrize("closing_kps,lo,hi", [
+        (0.0, 12.5, 14.5),    # 'launched with zero closure -> impacts ~13.5 km/s'
+        (12.0, 14.0, 17.0),   # 'launched closing 12 km/s -> impacts ~14-17 km/s'
+        (26.0, 27.0, 30.0),   # 'launched closing 26 km/s -> impacts ~28 km/s'
+    ])
+    def test_pursuit_model_matches_the_measured_impact_anchors(self, closing_kps, lo, hi):
+        """The captain doctrine's impact speeds are measured on the engine
+        (400 km launch, target not running); the pursuit model must agree."""
         specs = _build_torpedo_specs(FLEET["weapon_types"]["torpedo_launcher"])
-        run = intel.solve_pursuit(400_000.0, 0.0, 0.0, 0.0, specs)
+        run = intel.solve_pursuit(400_000.0, closing_kps * 1000.0, 0.0, 0.0, specs)
         assert run["hit"]
-        assert run["impact_mps"] / 1000.0 == pytest.approx(13.5, abs=1.0)
+        assert lo <= run["impact_mps"] / 1000.0 <= hi
 
     def test_verdict_thresholds_sit_between_the_doctrine_anchors(self):
         ke = lambda v_kps: 0.5 * 250 * (v_kps * 1000) ** 2 / 1e9  # noqa: E731

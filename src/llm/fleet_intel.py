@@ -63,6 +63,11 @@ BALLISTIC_MIN_REL_SPEED_MPS = 100.0
 # Torpedo solution model: how far ahead to fly the 1-D pursuit and its step.
 SOLUTION_HORIZON_S = 900.0
 SOLUTION_STEP_S = 0.5
+# The terminal burn only spends the round's NEZ surplus in its last moments:
+# model it as at most this many seconds of full thrust at the end. Fitted to
+# the measured doctrine anchors (zero-closure launch -> ~13.5 km/s, closing
+# 12 km/s -> 14-17 km/s, head-on 26 km/s -> ~28 km/s; tests pin all three).
+TERMINAL_WINDOW_S = 25.0
 # Verdict thresholds on the impact energy of a round whose target RUNS. A
 # zero-closure launch lands ~13.5 km/s = ~23 GJ (doctrine anchor); a round
 # lobbed at a receding ship ~8 GJ "if it lands at all". GOOD needs at least
@@ -289,7 +294,8 @@ def solve_pursuit(
 
     The torpedo first spends whatever nulls the crossing (lateral) speed, then
     flies its guidance law: burn only while closure is under the floor
-    (MIN_CLOSING_SPEED_KPS) and dump the rest in the terminal burn. Thrust is
+    (MIN_CLOSING_SPEED_KPS), then a terminal burn of what is left (at most
+    TERMINAL_WINDOW_S of thrust). Thrust is
     the specs' thrust over the falling mass (rocket equation), so the burn
     shortens as propellant goes - the same drive the engine integrates.
 
@@ -321,8 +327,8 @@ def solve_pursuit(
             inside_t += dt
         if d <= 0:
             cross = inside_start_d / inside_t if inside_t > 0 else c
-            return {"hit": True, "tof_s": t, "impact_mps": c + max(0.0, dv),
-                    "cross_mps": cross}
+            dump = min(max(0.0, dv), specs.thrust_n / max(1.0, m) * TERMINAL_WINDOW_S)
+            return {"hit": True, "tof_s": t, "impact_mps": c + dump, "cross_mps": cross}
         if c <= 0 and dv <= 0:
             return {"hit": False, "short_m": d, "reason": "runs dry"}
     return {"hit": False, "short_m": d, "reason": "too slow"}
