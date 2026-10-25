@@ -114,6 +114,10 @@ const WEAR_FRAGMENT_MAIN = /* glsl */`
   // ablated armour: heat-darkened, pitted steel; the patch edges carry
   // bronze-to-blue temper colours and soot
   vec3 bare = mix(vec3(0.05, 0.048, 0.046), vec3(0.15, 0.14, 0.13), smoothstep(0.4, 0.8, n2.b)) * (0.85 + 0.3 * n1.g);
+  // burn blotches and bright gouged metal break up a fully stripped flank
+  bare = mix(bare, vec3(0.022, 0.019, 0.017), smoothstep(0.55, 0.8, n3.b) * 0.75);
+  float gouge = (1.0 - smoothstep(0.0, 0.025, abs(n2.a - 0.5))) * smoothstep(0.4, 0.6, n1.r);
+  bare += vec3(0.16, 0.155, 0.15) * gouge;
   vec3 temper = mix(vec3(0.2, 0.11, 0.045), vec3(0.06, 0.07, 0.15), smoothstep(0.3, 0.7, n2.r));
   vec3 sootC = vec3(0.025, 0.022, 0.02);
   // dying reactor: cracks glowing through the plating, spreading out from

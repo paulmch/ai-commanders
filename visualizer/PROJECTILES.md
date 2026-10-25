@@ -4,12 +4,17 @@
 (<= 0.46 battle seconds): coilgun slugs (velocity-aligned tracer, 1 s cooling
 wake, 6 s fading coast for misses), torpedoes (instanced finless body with a
 gimbaled bell, throttle/phase-sized motor plume + exhaust wake, RCS jets and
-puffs, faction diamond at fleet range), continuous PD
+puffs, faction arrowhead at fleet range pointing along its travel), continuous PD
 beams (burn spot on the facing surface of the round, ablation sparks), coil
 muzzle discharge, torpedo ignition/burn-out/seeker-kill/intercept flashes and
-the instant hull-impact flash + spark burst. `WeaponTimeline.js` indexes the
-recording; `WeaponBatches.js` holds the shared draws (ribbons, flashes,
-torpedo bodies + bells); `TorpedoRcs.js` is the torpedo thruster math. Everything is evaluated from battle time (seek/scrub/pause
+the instant hull-impact flash + spark burst (on the DamageFX crater of the
+round: pierce = spall jet, graze = fan along the plating; duds skip off the
+hull), and the fleet-range engagement lines (`TargetingLines.js`, ribbon kind
+8). `WeaponTimeline.js` indexes the recording (plus `threatsAt` for inbound
+torpedoes and the per-ship fire index); `WeaponBatches.js` holds the shared
+draws (ribbons, flashes, fleet-range markers, torpedo bodies + bells);
+`TorpedoRcs.js` is the torpedo thruster math. Slug and torpedo wakes carry the
+firing side in their seed (`factionSeed`). Everything is evaluated from battle time (seek/scrub/pause
 give identical buffers; see tests), no per-frame allocation, no PointLights.
 
 ## Merge hooks
@@ -18,9 +23,12 @@ give identical buffers; see tests), no per-frame allocation, no PointLights.
 - `SceneManager.getEntityPosition`: consults `this.weapons.position()` first.
 - `main.js` animation: `scene.weapons.update(loader, t)` replaces the old
   per-entity projectile/torpedo/PD-beam loops and the shot muzzle-flare loop.
-  The torpedo-moment loop and the visual-impact loop are KEPT: torpedo
-  detonations (`spawnTorpedoDetonation`), torpedo misses and coilgun hull hits
-  (`spawnHitEffect`, damage stream's aftermath) still spawn their Blasts;
+  The torpedo-moment loop and the visual-impact loop are KEPT, but with a
+  recording loaded `spawnTorpedoDetonation` / `spawnHitEffect` return at once
+  (`damageFX.ownsImpacts()`): DamageFX spawns every persistent hit blast from
+  the damage timeline (kineticStrike / breach / warhead for torpedoes by
+  recorded yield and breach, impact / pierce / graze for slugs) at the mark's
+  crater, carried with the struck ship. Torpedo misses still spawn their flare;
   moments in `OWNED_MOMENTS` (seeker kill, intercept, burnout) are skipped via
   `scene.weapons.ownsMoment(kind)` because this module draws them.
 - `main.js` reset: `scene.weapons.clear()`.
@@ -44,8 +52,12 @@ this module only.
   that muzzle and blends the offset out over ~2 hull lengths of flight.
 - PD beams start at the lens of the firing ball (`userData.pdMounts` by
   turret name, else by index; seeded hull point on hulls without mounts).
-- Hit flashes are placed on the face met in the target's frame (relative
-  velocity), so fleet drift cannot push a head-on hit to the flank.
+- Hit flashes sit on the crater `damageFX.surfaceFor(roundId)` resolves (the
+  same spot as the persistent blast, spall and scar); a round's last
+  sub-second flies into it (`surfaceImpact`, lazy). Without DamageFX they fall
+  back to the face met in the target's frame (relative velocity), so fleet
+  drift cannot push a head-on hit to the flank. Hit flashes keep a ~4 px
+  floor so a hit still reads at fleet range.
 - `positionAt(type, id, t)` gives a round's displayed position straight from
   the recording (HullRigs aims PD balls with it).
 - Old recordings lack terminal-burn flags; the plume phase is inferred from
