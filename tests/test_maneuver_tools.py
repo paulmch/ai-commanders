@@ -428,6 +428,14 @@ class TestAdmiralOrders:
         order = AdmiralOrder(target_ship_id="alpha_1", target_ship_name="A", order_text="Go.")
         _attach_heading(order, {}, fleet)
         assert order.maneuver == fleet.maneuver and order.formation is True
+        both = AdmiralOrder(target_ship_id="alpha_1", target_ship_name="A", order_text="Go.")
+        _attach_heading(both, {"heading": {"x": 1, "y": 0, "z": 0},
+                               "toward_point": {"x": 5, "y": 5, "z": 0}}, None)
+        assert both.heading is None and both.maneuver["toward_point"]["x"] == 5.0
+        dodge = AdmiralOrder(target_ship_id="alpha_1", target_ship_name="A", order_text="Go.")
+        _attach_heading(dodge, {"heading": {"x": 1, "y": 0, "z": 0}, "evade": "dodge"}, None)
+        assert dodge.heading == {"x": 1.0, "y": 0.0, "z": 0.0}
+        assert dodge.maneuver == {"maneuver_type": "HEADING", "evade": "dodge", "throttle": 1.0}
         own = AdmiralOrder(target_ship_id="alpha_1", target_ship_name="A", order_text="Hold.")
         _attach_heading(own, {"maneuver": "HOLD_RANGE", "range_km": 300}, fleet)
         assert own.maneuver["maneuver_type"] == "HOLD_RANGE" and own.formation is False

@@ -86,6 +86,13 @@ def _throttle_arg(value: Any) -> float:
         return 1.0
 
 
+def _plain_heading_spec(spec: Dict[str, Any]) -> bool:
+    """A HEADING spec that flies the given heading (evade only) rather than
+    toward a point / ship - only then is the heading argument the course."""
+    return (spec.get("maneuver_type") == "HEADING"
+            and not spec.get("toward_point") and not spec.get("toward_ship"))
+
+
 def _fleet_heading_order(args: Dict[str, Any]) -> Optional["AdmiralOrder"]:
     """issue_order(ship_name="all ships", heading=... | maneuver=... |
     toward_point/toward_ship=...) -> the fleet-wide order."""
@@ -102,7 +109,7 @@ def _fleet_heading_order(args: Dict[str, Any]) -> Optional["AdmiralOrder"]:
         target_ship_name="all ships",
         order_text=args.get("order_text", ""),
         priority=args.get("priority", "NORMAL"),
-        heading=heading if spec is None or spec.get("maneuver_type") == "HEADING" else None,
+        heading=heading if spec is None or _plain_heading_spec(spec) else None,
         throttle=_throttle_arg(args.get("throttle", 1.0)),
         formation=True,
         maneuver=spec,
@@ -120,7 +127,7 @@ def _attach_heading(order: "AdmiralOrder", args: Dict[str, Any],
         order.maneuver = spec
         order.throttle = _throttle_arg(args.get("throttle", 1.0))
         order.formation = False
-        if spec.get("maneuver_type") == "HEADING" and heading is not None:
+        if heading is not None and _plain_heading_spec(spec):
             order.heading = heading
     elif heading is not None:
         order.heading = heading
