@@ -205,3 +205,37 @@ class TestMcpCommandFeedback:
         # The next checkpoint's results replace them.
         controller.record_command_results({"applied": [], "errors": []}, 30.0)
         assert controller.build_state_for_mcp(sim, captains).to_dict()["command_feedback"] == []
+
+
+class TestMcpBattlePortFlag:
+    """scripts/mcp_battle.py --port was always overridden by the config's
+    mcp.http_port (default 8765), so a second battle could not pick a port."""
+
+    @staticmethod
+    def _run(monkeypatch, port):
+        import asyncio
+        import importlib.util
+        from pathlib import Path
+        import src.llm.mcp_http_server as http_server
+        seen = {}
+
+        async def fake_run(runner, fleet_data, host, port):
+            seen["port"] = port
+            outcome = types.SimpleNamespace(value="draw")
+            return types.SimpleNamespace(outcome=outcome, winner=None, reason="stub",
+                                         duration_s=0.0, checkpoints_used=0)
+
+        monkeypatch.setattr(http_server, "run_battle_with_http_server", fake_run)
+        root = Path(__file__).resolve().parents[1]
+        spec = importlib.util.spec_from_file_location("mcp_battle_script", root / "scripts" / "mcp_battle.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        asyncio.run(module.run_mcp_battle(str(root / "data" / "fleet_config_mcp_vs_mcp.json"),
+                                          verbose=False, http_port=port))
+        return seen["port"]
+
+    def test_explicit_port_wins_over_the_config(self, monkeypatch, capsys):
+        assert self._run(monkeypatch, 8899) == 8899
+
+    def test_config_port_is_the_default(self, monkeypatch, capsys):
+        assert self._run(monkeypatch, None) == 8765
