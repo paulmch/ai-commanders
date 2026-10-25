@@ -846,7 +846,11 @@ class MCPController:
             if cmd.command_type == MCPCommandType.SEND_MESSAGE:
                 content = cmd.parameters.get("content", "")
                 if content:
-                    self.chat.send_message(self.faction, content, current_time)
+                    # "all": the enemy captains hear it too, not only their admiral
+                    # (routed by LLMBattleRunner._bridge_mcp_messages).
+                    recipient = str(cmd.parameters.get("recipient") or "enemy").lower()
+                    self.chat.send_message(self.faction, content, current_time,
+                                           recipient="all" if recipient == "all" else "enemy")
                     applied.append({"command": "send_message", "content": content})
             elif cmd.command_type == MCPCommandType.PROPOSE_DRAW:
                 if cmd.parameters.get("accept"):

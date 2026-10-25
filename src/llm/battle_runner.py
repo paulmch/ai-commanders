@@ -16,10 +16,13 @@ from pathlib import Path
 
 from .client import CaptainClient
 from .captain import LLMCaptain, LLMCaptainConfig
-from .communication import CommunicationChannel, FleetCommunicationChannel, MessageType
+from .communication import (
+    CHANNEL_CAPTAIN_TO_ADMIRAL, CHANNEL_ENEMY, ROLE_ADMIRAL, ROLE_CAPTAIN, ROLE_MCP,
+    CommunicationChannel, FleetCommunicationChannel, MessageType, admiral_id,
+)
 from .victory import VictoryEvaluator, BattleOutcome
 from .prompts import CaptainPersonality
-from .battle_recorder import BattleRecorder, create_battle_filename
+from .battle_recorder import BattleRecorder, EventType, create_battle_filename
 from .fleet_config import (BattleFleetConfig, FleetDefinition, ShipConfig, AdmiralConfig, MCPConfig,
                            validate_battle_options, validate_fleet_config)
 from .admiral import LLMAdmiral, AdmiralOrder
@@ -219,6 +222,14 @@ class LLMBattleRunner:
         # one admiral has vision enabled on a vision-capable model.
         self._admiral_view = None
         self._admiral_view_dir: Optional[Path] = None
+
+        # Fleet comms bookkeeping (see the "Fleet comms" section below).
+        self._datalink = None                       # fleet_comms.EngineDatalink
+        self._filed_reports: Dict[str, List[Dict[str, Any]]] = {}   # faction -> filed at N
+        self._admiral_signals: Dict[str, List[Dict[str, Any]]] = {}  # ship -> to=ADMIRAL signals
+        self._admiral_deliveries: Dict[str, List[str]] = {}  # faction -> msg ids due at its admiral
+        self._admiral_inbox_cp: Dict[str, int] = {}  # faction -> checkpoint its inbox was handed over
+        self._mcp_chat_cursor = 0
 
     def _seed_rng(self) -> None:
         """
@@ -655,6 +666,10 @@ class LLMBattleRunner:
         # Disable auto decision callback - we'll call manually
         self.simulation._decision_callback = None
 
+        from .fleet_comms import EngineDatalink
+        self._datalink = EngineDatalink()
+        self._datalink.prime(self.simulation)
+
         # Initialize fleet battle recorder
         if self.config.record_battle:
             self.recorder = BattleRecorder()
@@ -835,53 +850,9 @@ class LLMBattleRunner:
             if self.config.verbose:
                 print(f"  -> {self.beta_captain.get_last_decision_summary()}")
 
-            # Phase 3: Queue outgoing messages
-            alpha_msg_data = self.alpha_captain.get_pending_message()
-            beta_msg_data = self.beta_captain.get_pending_message()
-
-            if alpha_msg_data:
-                # Extract content and recipient from dict
-                msg_content = alpha_msg_data.get("content", "") if isinstance(alpha_msg_data, dict) else str(alpha_msg_data)
-                msg_recipient = alpha_msg_data.get("recipient", "ALL_ENEMIES") if isinstance(alpha_msg_data, dict) else "ALL_ENEMIES"
-
-                # Only queue if recipient includes enemies (in 1v1, this is the other captain)
-                if msg_recipient in ("ALL", "ALL_ENEMIES", "SPECIFIC"):
-                    self.communication.queue_message(
-                        "alpha", msg_content, self.simulation.current_time
-                    )
-                if self.recorder:
-                    self.recorder.record_message(
-                        timestamp=self.simulation.current_time,
-                        sender_id="alpha",
-                        sender_name=self.alpha_config.name,
-                        ship_name=self.alpha_config.ship_name,
-                        message=msg_content,
-                    )
-                if self.config.verbose:
-                    recipient_tag = f" [{msg_recipient}]" if msg_recipient != "ALL_ENEMIES" else ""
-                    print(f"  [{self.alpha_config.ship_name}] {self.alpha_config.name}{recipient_tag}: \"{msg_content}\"")
-
-            if beta_msg_data:
-                # Extract content and recipient from dict
-                msg_content = beta_msg_data.get("content", "") if isinstance(beta_msg_data, dict) else str(beta_msg_data)
-                msg_recipient = beta_msg_data.get("recipient", "ALL_ENEMIES") if isinstance(beta_msg_data, dict) else "ALL_ENEMIES"
-
-                # Only queue if recipient includes enemies (in 1v1, this is the other captain)
-                if msg_recipient in ("ALL", "ALL_ENEMIES", "SPECIFIC"):
-                    self.communication.queue_message(
-                        "beta", msg_content, self.simulation.current_time
-                    )
-                if self.recorder:
-                    self.recorder.record_message(
-                        timestamp=self.simulation.current_time,
-                        sender_id="beta",
-                        sender_name=self.beta_config.name,
-                        ship_name=self.beta_config.ship_name,
-                        message=msg_content,
-                    )
-                if self.config.verbose:
-                    recipient_tag = f" [{msg_recipient}]" if msg_recipient != "ALL_ENEMIES" else ""
-                    print(f"  [{self.beta_config.ship_name}] {self.beta_config.name}{recipient_tag}: \"{msg_content}\"")
+            # Phase 3: Queue outgoing messages (every one composed this turn)
+            self._queue_duel_messages("alpha", self.alpha_captain, self.alpha_config)
+            self._queue_duel_messages("beta", self.beta_captain, self.beta_config)
 
             # Phase 4: Check surrender/draw
             if self.alpha_captain.has_surrendered:
@@ -1132,18 +1103,9 @@ class LLMBattleRunner:
             # Phase 1b: Admiral <-> Admiral diplomacy (provider-agnostic)
             self._exchange_admiral_messages()
 
-            # Phase 2: Deliver pending messages to captains
-            if self.fleet_communication:
-                for ship_id in list(self.alpha_captains.keys()) + list(self.beta_captains.keys()):
-                    msgs = self.fleet_communication.deliver_messages(ship_id)
-                    captain = self.alpha_captains.get(ship_id) or self.beta_captains.get(ship_id)
-                    if captain and msgs:
-                        captain.receive_messages(msgs)
-                        if self.config.verbose:
-                            for msg in msgs:
-                                print(f"  {msg.format_for_display()}")
-
-            # Phase 3: Captain decisions (with Admiral orders and discussion)
+            # Phase 2+3: Deliver fleet comms, then captain decisions (with
+            # Admiral orders and discussion) - both in _run_captain_decisions,
+            # shared with the async loop.
             all_commands = {}  # ship_id -> list of commands
             if self.config.verbose:
                 print("\n--- CAPTAIN DECISIONS ---")
@@ -1168,10 +1130,6 @@ class LLMBattleRunner:
             ]
 
             all_commands = self._run_captain_decisions(decidable, admiral_orders)
-
-            # Phase 4: Handle immediate messaging (captain to captain)
-            # Process any pending broadcast or enemy messages
-            self._handle_immediate_messaging()
 
             # Phase 5: Check surrender/draw
             self._check_fleet_surrender_draw()
@@ -1445,38 +1403,8 @@ class LLMBattleRunner:
             # the mixed cases), so the two paths cannot double-drain a mailbox.
             self._exchange_admiral_messages()
 
-            # === MESSAGE BRIDGE: MCP <-> LLM Admiral ===
-            # Deliver messages between MCP chat system and LLM Admiral messaging
-            if self.mcp_chat:
-                # MCP -> LLM Admiral: Deliver pending messages from MCP to LLM admirals
-                if self.alpha_mcp and self.beta_admiral:
-                    pending_for_beta = self.mcp_chat.get_pending_messages("beta")
-                    for msg in pending_for_beta:
-                        self.beta_admiral.receive_enemy_admiral_message(msg.content)
-                        if self.config.verbose:
-                            print(f"  [MSG] Alpha MCP -> Beta Admiral: \"{msg.content}\"")
-
-                if self.beta_mcp and self.alpha_admiral:
-                    pending_for_alpha = self.mcp_chat.get_pending_messages("alpha")
-                    for msg in pending_for_alpha:
-                        self.alpha_admiral.receive_enemy_admiral_message(msg.content)
-                        if self.config.verbose:
-                            print(f"  [MSG] Beta MCP -> Alpha Admiral: \"{msg.content}\"")
-
-                # LLM Admiral -> MCP: Add LLM admiral messages to MCP chat
-                if self.alpha_admiral and self.beta_mcp:
-                    alpha_msg = self.alpha_admiral.get_pending_enemy_message()
-                    if alpha_msg:
-                        self.mcp_chat.send_message("alpha", alpha_msg, self.simulation.current_time)
-                        if self.config.verbose:
-                            print(f"  [MSG] Alpha Admiral -> Beta MCP: \"{alpha_msg}\"")
-
-                if self.beta_admiral and self.alpha_mcp:
-                    beta_msg = self.beta_admiral.get_pending_enemy_message()
-                    if beta_msg:
-                        self.mcp_chat.send_message("beta", beta_msg, self.simulation.current_time)
-                        if self.config.verbose:
-                            print(f"  [MSG] Beta Admiral -> Alpha MCP: \"{beta_msg}\"")
+            # === MESSAGE BRIDGE: MCP <-> LLM Admiral (and MCP <-> MCP) ===
+            self._bridge_mcp_messages()
 
             # === CAPTAIN DECISIONS (only for non-MCP fleets) ===
             if self.config.verbose and (not self.alpha_mcp or not self.beta_mcp):
@@ -1506,9 +1434,6 @@ class LLMBattleRunner:
             all_commands.update(
                 self._run_captain_decisions(decidable, admiral_orders)
             )
-
-            # Handle immediate messaging
-            self._handle_immediate_messaging()
 
             # Check surrender/draw (including MCP)
             if self.alpha_mcp:
@@ -1621,6 +1546,7 @@ class LLMBattleRunner:
         """Get Admiral's decision for the checkpoint."""
         if enemy_admiral is None:
             enemy_admiral = self.beta_mcp if admiral.faction == "alpha" else self.alpha_mcp
+        self._prepare_admiral_inbox(admiral)
         return admiral.decide(
             simulation=self.simulation,
             captains=friendly_captains,
@@ -1642,6 +1568,8 @@ class LLMBattleRunner:
         """
         if self.config.parallel_llm and len(jobs) > 1:
             frames = [self._render_admiral_frame(admiral) for _, admiral, _, _ in jobs]
+            for _, admiral, _, _ in jobs:
+                self._prepare_admiral_inbox(admiral)
             with ThreadPoolExecutor(
                 max_workers=len(jobs),
                 thread_name_prefix="admiral-decide",
@@ -1678,6 +1606,7 @@ class LLMBattleRunner:
         and reporting stay sequential in fleet order.
         """
         self._apply_admiral_headings(captain_entries, admiral_orders)
+        self._deliver_fleet_messages(captain_entries)
         for ship_id, captain, faction in captain_entries:
             captain.clear_admiral_context()
             if ship_id in admiral_orders:
@@ -1713,8 +1642,8 @@ class LLMBattleRunner:
             if self.config.verbose:
                 print(f"  [{captain.ship_name}] -> "
                       f"{self._get_ship_status_line(ship_id, commands)}")
-            if record and self.recorder:
-                self._record_captain_decision(ship_id, captain, commands)
+            self._finish_captain_turn(ship_id, captain, faction, commands,
+                                      admiral_orders.get(ship_id), record=record)
         return all_commands
 
     def _apply_admiral_headings(
@@ -1847,8 +1776,13 @@ class LLMBattleRunner:
         """
         Get captain's decision, handling Admiral discussions.
 
-        If captain requests to discuss with Admiral, this handles
-        the synchronous discussion loop.
+        If the captain asks its Admiral (discuss_with_admiral), the Admiral
+        answers with a live battle context and the captain decides again with
+        the answer as a [CLARIFICATION] order. This repeats while the captain
+        keeps asking and has exchanges left (captain.max_discussion_exchanges,
+        the count the tool advertises - the old loop honoured only the first
+        and silently dropped the second). Every question in one turn is
+        answered before the re-decide.
         """
         admiral = self.alpha_admiral if faction == "alpha" else self.beta_admiral
 
@@ -1858,6 +1792,7 @@ class LLMBattleRunner:
         # Separate tactical commands from discussion requests
         # Tactical commands are things like maneuvers, fire commands, etc.
         from ..simulation import Maneuver
+        from .admiral import AdmiralOrder
 
         def is_tactical_command(cmd):
             # Maneuver objects are tactical commands
@@ -1870,37 +1805,45 @@ class LLMBattleRunner:
             # Other object types (e.g., dataclasses) are tactical commands
             return True
 
-        initial_tactical_commands = [c for c in commands if is_tactical_command(c)]
+        def questions_in(cmds):
+            return [c for c in cmds if isinstance(c, dict) and c.get('type') == 'discuss_with_admiral']
 
-        # Check if captain requested Admiral discussion
-        for cmd in commands:
-            if isinstance(cmd, dict) and cmd.get('type') == 'discuss_with_admiral':
-                if not admiral:
-                    continue
+        def redecide():
+            # Same checkpoint: drop the superseded turn's bookkeeping, and keep
+            # its comms (outbox, report) unless the new pass replaces them.
+            earlier = captain.take_comms_pass()
+            captain.revert_last_decision()
+            new = captain.decide(ship_id, self.simulation)
+            captain.restore_comms_pass(earlier)
+            return new
 
+        tactical = [c for c in commands if is_tactical_command(c)]
+        discussed = False
+        rounds = 0
+        while admiral and questions_in(commands) and rounds < captain.max_discussion_exchanges:
+            rounds += 1
+            discussed = True
+            for cmd in questions_in(commands):
                 question = cmd.get('question', '')
                 exchange = cmd.get('exchange_number', 1)
 
                 if self.config.verbose:
                     print(f"    [DISCUSS] {captain.name} asks Admiral:")
-                    # Print full question with indentation
                     for line in question.split('\n'):
                         print(f"      {line}")
 
-                # Get Admiral's response
                 response = admiral.respond_to_captain(
                     captain_ship_name=captain.ship_name,
                     question=question,
                     simulation=self.simulation,
+                    ship_id=ship_id,
                 )
 
                 if self.config.verbose:
                     print(f"    [ADMIRAL] {admiral.name} responds:")
-                    # Print full response with indentation
                     for line in response.split('\n'):
                         print(f"      {line}")
 
-                # Record the discussion
                 if self.recorder:
                     self.recorder.record_captain_admiral_discussion(
                         timestamp=self.simulation.current_time,
@@ -1911,77 +1854,44 @@ class LLMBattleRunner:
                         admiral_response=response,
                         exchange_number=exchange,
                     )
+                self._record_discussion_comms(ship_id, captain, admiral, question, response)
+                captain.discussions.append({
+                    "t": self.simulation.current_time, "question": question, "answer": response})
 
-                # After discussion, captain should make a new decision with the Admiral's response
-                # Inject the response into captain's context
-                from .admiral import AdmiralOrder
-                clarification_order = AdmiralOrder(
+                # The answer reaches the captain as an order it re-decides on.
+                captain.admiral_orders.append(AdmiralOrder(
                     target_ship_id=ship_id,
                     target_ship_name=captain.ship_name,
                     order_text=f"[CLARIFICATION] {response}",
                     priority="NORMAL",
                     suggested_target=None,
-                )
-                captain.admiral_orders.append(clarification_order)
+                ))
 
-                # Get a new decision from the captain with the clarification.
-                # Drop the superseded turn's bookkeeping first: this is still ONE
-                # checkpoint, and without this a single checkpoint appended up to
-                # three history entries (all stamped with the same sim time) and
-                # advanced "DECISION POINT n" three times.
-                captain.revert_last_decision()
-                new_commands = captain.decide(ship_id, self.simulation)
+            commands = redecide()
+            new_tactical = [c for c in commands if is_tactical_command(c)]
+            # Captain only acknowledged: keep the previous tactical commands.
+            if new_tactical:
+                tactical = new_tactical
 
-                # Filter out discussion requests from new commands
-                new_tactical_commands = [c for c in new_commands if is_tactical_command(c)]
+        if discussed and not tactical:
+            # No commands at all - force captain to decide again with explicit reminder
+            if self.config.verbose:
+                print(f"    [RETRY] {captain.name} must issue tactical commands...")
+            captain.admiral_orders.append(AdmiralOrder(
+                target_ship_id=ship_id,
+                target_ship_name=captain.ship_name,
+                order_text="[CRITICAL] You MUST call set_maneuver, set_primary_target, and set_weapons_order NOW. Responding with words only will cause your ship to DRIFT and DIE. CALL THE TOOLS!",
+                priority="CRITICAL",
+                suggested_target=None,
+            ))
+            tactical = [c for c in redecide() if is_tactical_command(c)]
+            if not tactical and self.config.verbose:
+                # Still nothing - warn and continue with empty commands (will drift)
+                print(f"    [WARNING] {captain.name} still issued no tactical commands after retry")
 
-                # Use new tactical commands if any, otherwise fall back to initial tactical commands
-                if new_tactical_commands:
-                    commands = new_tactical_commands
-                elif initial_tactical_commands:
-                    # Captain only acknowledged but didn't issue new commands
-                    # Use their initial tactical commands
-                    commands = initial_tactical_commands
-                else:
-                    # No commands at all - force captain to decide again with explicit reminder
-                    if self.config.verbose:
-                        print(f"    [RETRY] {captain.name} must issue tactical commands...")
-
-                    # Add a forceful reminder to the captain's orders
-                    from .admiral import AdmiralOrder
-                    force_order = AdmiralOrder(
-                        target_ship_id=ship_id,
-                        target_ship_name=captain.ship_name,
-                        order_text="[CRITICAL] You MUST call set_maneuver, set_primary_target, and set_weapons_order NOW. Responding with words only will cause your ship to DRIFT and DIE. CALL THE TOOLS!",
-                        priority="CRITICAL",
-                        suggested_target=None,
-                    )
-                    captain.admiral_orders.append(force_order)
-
-                    # Try one more time (same checkpoint - see above)
-                    captain.revert_last_decision()
-                    retry_commands = captain.decide(ship_id, self.simulation)
-                    retry_tactical = [c for c in retry_commands if is_tactical_command(c)]
-
-                    if retry_tactical:
-                        commands = retry_tactical
-                    else:
-                        # Still nothing - warn and continue with empty commands (will drift)
-                        if self.config.verbose:
-                            print(f"    [WARNING] {captain.name} still issued no tactical commands after retry")
-                        commands = []
-
-                break  # Only process one discussion per checkpoint
-
-        # Filter out any remaining discussion dicts
-        commands = [c for c in commands if not (isinstance(c, dict) and c.get('type') in ('discuss_with_admiral', 'discussion_limit_reached'))]
-
-        # Drain any message the captain composed this checkpoint. Fleet battles
-        # previously only ever *delivered* messages - nothing collected them - so
-        # send_message was a no-op while the model was told it had sent something.
-        self._collect_captain_message(captain, ship_id)
-
-        return commands
+        # Discussion markers never reach the engine. Outgoing comms are routed
+        # by _finish_captain_turn, sequentially after every captain decided.
+        return tactical
 
     def _all_captains(self) -> List[LLMCaptain]:
         """Every captain in the battle, in 1v1 or fleet mode."""
@@ -2013,7 +1923,9 @@ class LLMBattleRunner:
 
         Both mailboxes are drained before either is delivered so that a message
         sent this checkpoint cannot be handed back to its own author, and so both
-        sides see the same one-checkpoint delivery latency.
+        sides see the same one-checkpoint delivery latency. Each message is
+        recorded (comms_message, channel admiral_diplomacy); its comms_delivered
+        follows when the recipient next decides.
         """
         if not (self.alpha_admiral and self.beta_admiral):
             return
@@ -2023,69 +1935,420 @@ class LLMBattleRunner:
 
         if alpha_msg:
             self.beta_admiral.receive_enemy_admiral_message(alpha_msg)
+            self._record_diplomacy("alpha_admiral", ROLE_ADMIRAL, self.alpha_admiral.name,
+                                   "alpha", "beta", alpha_msg)
             if self.config.verbose:
                 print(f"  [MSG] Admiral {self.alpha_admiral.name} -> "
                       f"Admiral {self.beta_admiral.name}: \"{alpha_msg}\"")
         if beta_msg:
             self.alpha_admiral.receive_enemy_admiral_message(beta_msg)
+            self._record_diplomacy("beta_admiral", ROLE_ADMIRAL, self.beta_admiral.name,
+                                   "beta", "alpha", beta_msg)
             if self.config.verbose:
                 print(f"  [MSG] Admiral {self.beta_admiral.name} -> "
                       f"Admiral {self.alpha_admiral.name}: \"{beta_msg}\"")
 
-    def _handle_immediate_messaging(self) -> None:
-        """Handle immediate captain-to-captain messaging within checkpoint."""
-        if not self.fleet_communication:
+    def _bridge_mcp_messages(self) -> None:
+        """
+        MCP commander <-> LLM admiral (and MCP <-> MCP) diplomacy, recorded.
+
+        Shared by run_fleet_battle_async and the HTTP loop
+        (mcp_http_server.run_fleet_battle_with_http), which used to carry two
+        copies of this bridge and recorded none of the traffic.
+        """
+        chat = self.mcp_chat
+        if not chat:
             return
+        now = self.simulation.current_time
+        mcp = {"alpha": self.alpha_mcp, "beta": self.beta_mcp}
+        llm = {"alpha": self.alpha_admiral, "beta": self.beta_admiral}
 
-        # Process any immediate messages (broadcasts, captain-to-captain)
-        # Deliver to all relevant recipients
-        for ship_id in list(self.alpha_captains.keys()) + list(self.beta_captains.keys()):
-            immediate_msgs = self.fleet_communication.deliver_immediate_messages(ship_id)
-            captain = self.alpha_captains.get(ship_id) or self.beta_captains.get(ship_id)
-            if captain and immediate_msgs:
-                captain.receive_messages(immediate_msgs)
-                if self.config.verbose:
-                    for msg in immediate_msgs:
-                        print(f"  [IMMEDIATE] {msg.format_for_display()}")
+        # Record what MCP commanders put on the chat since the last bridge
+        # (to an enemy commander; an admiral-less enemy fleet gets it as a
+        # captain broadcast below instead).
+        history = chat.get_all_history()
+        for msg in history[self._mcp_chat_cursor:]:
+            sender = msg.sender_faction
+            if mcp.get(sender) is None or getattr(msg, "recipient", "enemy") == "relay":
+                continue  # LLM-admiral and relayed traffic is recorded where it is sent
+            other = "beta" if sender == "alpha" else "alpha"
+            if mcp.get(other) is not None or llm.get(other) is not None:
+                self._record_diplomacy(f"mcp:{sender}", ROLE_MCP, mcp[sender].name, sender, other,
+                                       msg.content, delivered_now=mcp.get(other) is not None)
+        self._mcp_chat_cursor = len(history)
 
-    def _collect_captain_message(self, captain: Any, ship_id: str) -> None:
-        """Route a captain's outgoing message into the fleet comms channel."""
-        if not self.fleet_communication:
+        for side, other in (("alpha", "beta"), ("beta", "alpha")):
+            if mcp[side] and llm[other]:
+                # MCP -> LLM admiral: read at the admiral's next decision;
+                # recipient "all" also reaches the enemy captains.
+                for msg in chat.get_pending_messages(other):
+                    llm[other].receive_enemy_admiral_message(msg.content)
+                    if getattr(msg, "recipient", "enemy") == "all":
+                        self._mcp_to_captains(side, other, msg.content)
+                    if self.config.verbose:
+                        print(f"  [MSG] {side.title()} MCP -> {other.title()} Admiral: \"{msg.content}\"")
+            elif mcp[side] and not mcp[other]:
+                # No commander on the other side: its captains are the audience.
+                for msg in chat.get_pending_messages(other):
+                    self._mcp_to_captains(side, other, msg.content)
+            # LLM admiral -> MCP: on the chat at once.
+            if llm[side] and mcp[other]:
+                text = llm[side].get_pending_enemy_message()
+                if text:
+                    chat.send_message(side, text, now)
+                    self._record_diplomacy(admiral_id(side), ROLE_ADMIRAL, llm[side].name,
+                                           side, other, text, delivered_now=True)
+                    if self.config.verbose:
+                        print(f"  [MSG] {side.title()} Admiral -> {other.title()} MCP: \"{text}\"")
+        self._mcp_chat_cursor = len(chat.get_all_history())
+
+    def _mcp_to_captains(self, side: str, other: str, text: str) -> None:
+        """An MCP commander's message as an enemy-channel broadcast to `other`'s captains."""
+        from .communication import CommsMessage
+        channel = self.fleet_communication
+        if not channel:
             return
-
-        msg_data = captain.get_pending_message()
-        if not msg_data:
+        recipients = [sid for sid in channel.faction_ship_ids(other) if self._comms_alive(sid)]
+        if not recipients:
             return
+        now = self.simulation.current_time
+        controller = self.alpha_mcp if side == "alpha" else self.beta_mcp
+        message = channel.post(CommsMessage(
+            msg_id=channel.next_msg_id(self.checkpoint_count, f"mcp:{side}"),
+            channel=CHANNEL_ENEMY, kind="FREE", sender_id=f"mcp:{side}", sender_role=ROLE_MCP,
+            sender_name=getattr(controller, "name", f"{side} commander"), faction=side,
+            recipient_spec="ALL_ENEMIES", recipient_ids=recipients, text=text,
+            checkpoint=self.checkpoint_count, sent_t=now, deliver_at_t=now))
+        self._record_comms(message)
 
-        if isinstance(msg_data, dict):
-            content = msg_data.get("content", "")
-            recipient = msg_data.get("recipient", "ALL_ENEMIES")
-            target_ship = msg_data.get("target_ship")
-        else:
-            content, recipient, target_ship = str(msg_data), "ALL_ENEMIES", None
+    # ------------------------------------------------------------------
+    # Fleet comms
+    #
+    # Per checkpoint, in every battle loop:
+    #   admiral decides  <- _prepare_admiral_inbox: reports filed last
+    #                       checkpoint (+ refreshed compliance) and diplomacy
+    #   captains decide  <- _deliver_fleet_messages: due fleet traffic and the
+    #                       engine datalink into captain.inbox (budgeted)
+    #   after each       -> _finish_captain_turn: route the outbox, record the
+    #                       decision, file the report for the next checkpoint
+    # ------------------------------------------------------------------
 
-        if not content:
+    def _events_now(self) -> List[Any]:
+        """Recorded events stamped with the current time (the list's tail), oldest first."""
+        if not self.recorder:
+            return []
+        now = self.simulation.current_time
+        events = self.recorder.events
+        i = len(events)
+        while i > 0 and events[i - 1].timestamp >= now - 1e-9:
+            i -= 1
+        return [e for e in events[i:] if abs(e.timestamp - now) <= 1e-9]
+
+    def _comms_alive(self, ship_id: str) -> bool:
+        """Can this ship still read and act on traffic? (unknown ids: yes)"""
+        from .fleet_comms import ship_alive
+        ship = self.simulation.get_ship(ship_id) if self.simulation else None
+        return ship is None or ship_alive(ship)
+
+    def _llm_admiral(self, faction: str) -> Optional[LLMAdmiral]:
+        """The faction's LLM admiral (None for MCP-commanded or admiral-less fleets)."""
+        return self.alpha_admiral if faction == "alpha" else self.beta_admiral
+
+    def _record_comms(self, message: Any, parents: Optional[List[str]] = None) -> None:
+        """comms_message event, plus the legacy 'message' event for the enemy channel."""
+        if not self.recorder:
             return
+        now = self.simulation.current_time
+        self.recorder.record_comms_message(now, message.to_dict(), parent_event_ids=parents)
+        if message.channel == CHANNEL_ENEMY and message.sender_role == ROLE_CAPTAIN:
+            # Legacy event: the viewer's combat log has always shown it.
+            self.recorder.record(now, EventType.MESSAGE.value, message.sender_id,
+                                 sender_name=message.sender_name, ship_name=message.sender_name,
+                                 message=message.text, msg_id=message.msg_id)
 
-        self.fleet_communication.queue_message(
-            sender_id=ship_id,
-            content=content,
-            timestamp=self.simulation.current_time,
-            recipient_id=target_ship if recipient == "SPECIFIC" else None,
-        )
-
+    def _record_delivered(self, msg_id: str, recipient_id: str, **extra: Any) -> None:
         if self.recorder:
-            self.recorder.record_message(
-                timestamp=self.simulation.current_time,
-                sender_id=ship_id,
-                sender_name=captain.name,
-                ship_name=captain.ship_name,
-                message=content,
-            )
+            now = self.simulation.current_time
+            self.recorder.record_comms_delivered(now, msg_id, recipient_id, delivered_t=now,
+                                                 checkpoint=self.checkpoint_count, **extra)
 
-        if self.config.verbose:
-            dest = target_ship if recipient == "SPECIFIC" and target_ship else recipient
-            print(f"  [MSG] {captain.ship_name} -> {dest}: \"{content[:60]}\"")
+    def _record_diplomacy(self, sender_id: str, role: str, sender_name: str, faction: str,
+                          other: str, text: str, delivered_now: bool = False) -> None:
+        """Admiral <-> admiral traffic (LLM or MCP) as a comms_message."""
+        from .communication import CHANNEL_DIPLOMACY, CommsMessage
+        if not self.fleet_communication:
+            return
+        now = self.simulation.current_time
+        interval = getattr(self.simulation, "decision_interval", 30.0)
+        recipient = f"mcp:{other}" if (self.alpha_mcp if other == "alpha" else self.beta_mcp) \
+            else admiral_id(other)
+        message = self.fleet_communication.log(CommsMessage(
+            msg_id=self.fleet_communication.next_msg_id(self.checkpoint_count, sender_id),
+            channel=CHANNEL_DIPLOMACY, kind="DIPLOMACY", sender_id=sender_id, sender_role=role,
+            sender_name=sender_name, faction=faction, recipient_spec="ENEMY ADMIRAL",
+            recipient_ids=[recipient], text=text, checkpoint=self.checkpoint_count,
+            sent_t=now, deliver_at_t=now if delivered_now else now + interval))
+        self._record_comms(message)
+        if delivered_now:
+            self._record_delivered(message.msg_id, recipient)
+        else:
+            self._admiral_deliveries.setdefault(other, []).append(message.msg_id)
+
+    def _record_discussion_comms(self, ship_id: str, captain: Any, admiral: Any,
+                                 question: str, answer: str) -> None:
+        """A discuss_with_admiral exchange as two comms_messages, delivered at once."""
+        from .communication import CHANNEL_ADMIRAL_TO_CAPTAIN, CommsMessage
+        channel = self.fleet_communication
+        if not channel:
+            return
+        now = self.simulation.current_time
+        faction = captain.faction
+        common = dict(faction=faction, checkpoint=self.checkpoint_count, sent_t=now, deliver_at_t=now)
+        ask = channel.log(CommsMessage(
+            msg_id=channel.next_msg_id(self.checkpoint_count, ship_id),
+            channel=CHANNEL_CAPTAIN_TO_ADMIRAL, kind="QUESTION", sender_id=ship_id,
+            sender_role=ROLE_CAPTAIN, sender_name=captain.ship_name, recipient_spec="ADMIRAL",
+            recipient_ids=[admiral_id(faction)], text=question, **common))
+        reply = channel.log(CommsMessage(
+            msg_id=channel.next_msg_id(self.checkpoint_count, admiral_id(faction)),
+            channel=CHANNEL_ADMIRAL_TO_CAPTAIN, kind="ANSWER", sender_id=admiral_id(faction),
+            sender_role=ROLE_ADMIRAL, sender_name=admiral.name, recipient_spec=captain.ship_name,
+            recipient_ids=[ship_id], text=answer, structured={"in_reply_to": ask.msg_id}, **common))
+        self._record_comms(ask)
+        self._record_delivered(ask.msg_id, admiral_id(faction))
+        self._record_comms(reply)
+        self._record_delivered(reply.msg_id, ship_id)
+
+    def _prepare_admiral_inbox(self, admiral: Any) -> None:
+        """
+        Hand an admiral what reached it since its last decision.
+
+        `admiral.captain_reports` is REPLACED with the reports its captains
+        filed at the previous checkpoint, compliance refreshed with what the
+        ships actually did over the interval. Runs right before the admiral
+        decides, once per checkpoint, in every loop.
+        """
+        faction = getattr(admiral, "faction", None)
+        if faction is None or self._admiral_inbox_cp.get(faction) == self.checkpoint_count:
+            return
+        self._admiral_inbox_cp[faction] = self.checkpoint_count
+        reports = [self._finalize_report(entry) for entry in self._filed_reports.pop(faction, [])]
+        admiral.captain_reports = reports
+        for report in reports:
+            self._record_delivered(report["report_id"], admiral_id(faction),
+                                   compliance=report.get("compliance"))
+        for msg_id in self._admiral_deliveries.pop(faction, []):
+            self._record_delivered(msg_id, admiral_id(faction))
+
+    def _deliver_fleet_messages(self, captain_entries: List[Tuple[str, Any, str]]) -> None:
+        """
+        One delivery round per checkpoint for the captains about to decide.
+
+        Generates the engine datalink signals (friendly launches with ETA,
+        kills/losses, PD losses) from the interval just fought, delivers every
+        due message to its living recipients, and REPLACES each deciding
+        captain's `inbox` (empty list included) with its budgeted share.
+        Enemy-channel traffic for an MCP-commanded fleet is relayed onto the
+        MCP chat. Shared by the sync, async and HTTP loops.
+        """
+        channel = self.fleet_communication
+        if not channel or not self.simulation:
+            return
+        from .communication import CHANNEL_ENEMY as ENEMY
+        from .fleet_comms import budget_inbox, ship_alive
+        now = self.simulation.current_time
+        readers = {ship_id: captain for ship_id, captain, _ in captain_entries}
+        factions = {faction for _, _, faction in captain_entries}
+
+        if self._datalink is not None:
+            for message in self._datalink.collect(
+                    self.simulation, channel, factions, self.checkpoint_count, now,
+                    lambda sender: channel.next_msg_id(self.checkpoint_count, sender)):
+                channel.post(message)
+                self._record_comms(message)
+
+        if self.mcp_chat:
+            for message in channel.due_messages(now):
+                if message.channel != ENEMY:
+                    continue
+                for side, controller in (("alpha", self.alpha_mcp), ("beta", self.beta_mcp)):
+                    if controller and any(channel.get_faction(r) == side for r in message.recipient_ids):
+                        self.mcp_chat.relay(message.faction, f"[{message.sender_name}] {message.text}", now)
+                        self._record_delivered(message.msg_id, f"mcp:{side}")
+
+        delivered = channel.deliver_due(now, list(readers))
+        for ship_id, captain in readers.items():
+            chosen = budget_inbox(delivered.get(ship_id, []))
+            captain.receive_inbox([m.inbox_item(now) for m in chosen], now)
+            captain.fleet_peer_names = [
+                channel.ship_name(sid) for sid in channel.faction_ship_ids(captain.faction)
+                if sid != ship_id and ship_alive(self.simulation.get_ship(sid))]
+            for message in chosen:
+                self._record_delivered(message.msg_id, ship_id)
+                if self.config.verbose:
+                    print(f"  [COMMS -> {captain.ship_name}] {message.format_for_display()}")
+
+    def _collect_captain_message(self, captain: Any, ship_id: str) -> List[Any]:
+        """
+        Route everything a captain composed this checkpoint.
+
+        Each outbox entry is resolved (faction-checked; ship ids or names;
+        ADMIRAL) and posted for the next checkpoint. A recipient that does not
+        resolve becomes a tool error the captain sees next turn instead of a
+        message silently queued for nobody - or for the enemy.
+        """
+        channel = self.fleet_communication
+        if not channel:
+            return []
+        from .communication import CommsMessage
+        now = self.simulation.current_time
+        interval = getattr(self.simulation, "decision_interval", 30.0)
+        faction = getattr(captain, "faction", None) or channel.get_faction(ship_id) or ""
+        parents = [e.event_id for e in self._events_now()
+                   if e.ship_id == ship_id and e.event_type == 'model_call'] or None
+        posted = []
+        for entry in captain.drain_outbox():
+            tool = entry.get("tool", "send_message")
+            resolution = channel.resolve(ship_id, entry.get("to"), friendly_only=(tool == "fleet_signal"),
+                                         alive=self._comms_alive)
+            if resolution.error:
+                captain._record_tool_error(f"{tool}: NOT SENT - {resolution.error}")
+                continue
+            structured = {k: entry[k] for k in ("target", "eta_s") if entry.get(k) is not None}
+            if entry.get("target"):
+                matches = channel.match_ship(entry["target"], prefer=lambda sid: channel.get_faction(sid) != faction)
+                if len(matches) == 1:
+                    structured["target_id"] = matches[0]
+            message = CommsMessage(
+                msg_id=channel.next_msg_id(self.checkpoint_count, ship_id),
+                channel=resolution.channel, kind=entry.get("kind") or "FREE",
+                sender_id=ship_id, sender_role=ROLE_CAPTAIN, sender_name=captain.ship_name,
+                faction=faction, recipient_spec=resolution.recipient_spec,
+                recipient_ids=resolution.recipient_ids, text=entry.get("text", ""),
+                structured=structured, checkpoint=self.checkpoint_count,
+                sent_t=now, deliver_at_t=now + interval)
+            if resolution.channel == CHANNEL_CAPTAIN_TO_ADMIRAL:
+                # Reaches the Admiral on this ship's report (next checkpoint).
+                channel.log(message)
+                self._admiral_signals.setdefault(ship_id, []).append(
+                    {"msg_id": message.msg_id, "kind": message.kind, "text": message.text,
+                     "target": entry.get("target"), "eta_s": entry.get("eta_s")})
+                self._admiral_deliveries.setdefault(faction, []).append(message.msg_id)
+            else:
+                channel.post(message)
+            self._record_comms(message, parents)
+            posted.append(message)
+            # Only traffic that actually left enters the captain's own log.
+            kind = f" [{message.kind}]" if tool == "fleet_signal" else ""
+            captain.note_sent(message.text, now, f"You -> {resolution.recipient_spec}{kind}")
+            if self.config.verbose:
+                print(f"  [MSG] {message.format_for_display()}")
+        return posted
+
+    def _build_captain_report(
+        self,
+        ship_id: str,
+        captain: Any,
+        faction: str,
+        commands: List[Any],
+        orders: Optional[List[Any]],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        This checkpoint's captain_report for a ship under an LLM admiral.
+
+        Explicit (report_to_admiral / respond_to_orders) or implicit: silence
+        is an ACK, a failed captain call an UNABLE - either way the admiral
+        gets the engine compliance line, which is what exposes an
+        acknowledge-and-drift captain. Filed now (compliance as committed),
+        refreshed for the admiral at the next checkpoint.
+        """
+        from .fleet_comms import (
+            commanded_target, committed_rounds, compliance, executed_maneuver,
+            fold_admiral_signals, primary_order,
+        )
+        channel = self.fleet_communication
+        if not channel or self._llm_admiral(faction) is None:
+            return None
+        ship = self.simulation.get_ship(ship_id)
+        if ship is None:
+            return None
+        now = self.simulation.current_time
+        explicit = getattr(captain, "order_response", None)
+        if explicit:
+            fields = {k: explicit.get(k) for k in ("status", "reason", "intent", "contact", "request")}
+            implicit = False
+        elif getattr(captain, "last_call_failed", False):
+            fields = {"status": "UNABLE", "reason": "no decision this checkpoint (captain call failed); "
+                      "the ship flies its previous orders", "intent": "", "contact": None, "request": None}
+            implicit = True
+        else:
+            fields = {"status": "ACK", "reason": "", "intent": "", "contact": None, "request": None}
+            implicit = True
+        order = primary_order(orders)
+        executed = executed_maneuver(ship, commands, now)
+        target_id = commanded_target(ship, commands)
+        report = {
+            "report_id": f"r{self.checkpoint_count}-{ship_id}",
+            "faction": faction,
+            "checkpoint": self.checkpoint_count,
+            "captain_name": captain.name,
+            "ship_name": captain.ship_name,
+            **fields,
+            "compliance": compliance(order, channel, executed, target_id,
+                                     committed_rounds(commands), final=False),
+            "ship_id": ship_id,
+            "filed_t": now,
+            "implicit": implicit,
+        }
+        fold_admiral_signals(report, self._admiral_signals.pop(ship_id, []))
+        if getattr(captain, "discussions", None):
+            report["discussion"] = [{"question": d["question"], "answer": d["answer"]}
+                                    for d in captain.discussions]
+        self._filed_reports.setdefault(faction, []).append({
+            "report": report, "order": order, "executed": executed, "target_id": target_id,
+            "cursor": len(self.simulation.events)})
+        return report
+
+    def _finalize_report(self, entry: Dict[str, Any]) -> Dict[str, Any]:
+        """A filed report as its admiral reads it: compliance over the whole interval."""
+        from .fleet_comms import compliance, ship_alive
+        report = dict(entry["report"])
+        ship_id = report["ship_id"]
+        if entry["order"] is not None:
+            launched = sum(1 for e in self.simulation.events[entry["cursor"]:]
+                           if e.ship_id == ship_id and e.event_type.name == "TORPEDO_LAUNCHED")
+            report["compliance"] = compliance(entry["order"], self.fleet_communication,
+                                              entry["executed"], entry["target_id"], launched, final=True)
+        report["ship_lost"] = not ship_alive(self.simulation.get_ship(ship_id))
+        report["delivered_t"] = self.simulation.current_time
+        return report
+
+    def _finish_captain_turn(
+        self,
+        ship_id: str,
+        captain: Any,
+        faction: str,
+        commands: List[Any],
+        orders: Optional[List[Any]] = None,
+        record: bool = True,
+    ) -> None:
+        """
+        After a captain decided: route its comms, record the decision (its
+        acknowledgment is the report text), file its report. Sequential, in
+        fleet order, so recorded event order does not depend on threads.
+        """
+        self._collect_captain_message(captain, ship_id)
+        report = self._build_captain_report(ship_id, captain, faction, commands, orders)
+        decision = None
+        if record and self.recorder:
+            decision = self._record_captain_decision(ship_id, captain, commands, report=report)
+        if report and self.recorder:
+            order_ids = [e.event_id for e in self._events_now()
+                         if e.ship_id == ship_id and e.event_type == 'admiral_order']
+            self.recorder.record_captain_report(
+                self.simulation.current_time, ship_id, report,
+                answers_order_event_id=order_ids[0] if order_ids else None,
+                decision_event_id=getattr(decision, "event_id", None))
 
     def _check_fleet_surrender_draw(self) -> None:
         """Check and handle surrenders and draws in fleet mode."""
@@ -2261,13 +2524,20 @@ class LLMBattleRunner:
         ship_id: str,
         captain: LLMCaptain,
         commands: List[Any],
-    ) -> None:
-        """Record captain's decision to battle recording."""
+        report: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Any]:
+        """
+        Record captain's decision to battle recording.
+
+        `report` is the captain_report filed for this decision (explicit or
+        implicit); its one-line text is the decision's acknowledgment.
+        """
         from ..simulation import Maneuver
+        from .fleet_comms import report_text
 
         ship = self.simulation.get_ship(ship_id)
         if not ship or not self.recorder:
-            return
+            return None
 
         # Extract maneuver info
         maneuver_type = "DRIFT"
@@ -2308,8 +2578,11 @@ class LLMBattleRunner:
                 radiators_extended = bool(cmd.get('extend', False))
                 break
 
-        # Get acknowledgment text from captain if available
-        acknowledgment = None if getattr(captain, 'last_call_failed', False) else getattr(captain, 'last_acknowledgment', None)
+        # The acknowledgment is the captain's report to its Admiral (it used to
+        # read `last_acknowledgment`, which nothing ever set: always null).
+        if report is None and getattr(captain, 'order_response', None):
+            report = captain.order_response
+        acknowledgment = report_text(report)
 
         from ..replay_evidence import json_value
         at_time = [e for e in self.recorder.events if e.timestamp == self.simulation.current_time]
@@ -2334,6 +2607,7 @@ class LLMBattleRunner:
             parent_event_ids=parents, faction=faction,
             model=getattr(captain.config, 'model', 'heuristic'),
             call_failed=bool(getattr(captain, 'last_call_failed', False)),
+            report_status=report.get('status') if report else None,
         )
         if event.event_id:
             self.simulation.evidence.decisions[ship_id] = event.event_id
@@ -2347,6 +2621,7 @@ class LLMBattleRunner:
                     captain_name=captain.name,
                     note=str(tc.arguments["note"]),
                 )
+        return event
 
     def _log_fleet_decision(self, all_commands: Dict[str, List[Any]]) -> None:
         """Log fleet decision point."""
@@ -2953,6 +3228,30 @@ class LLMBattleRunner:
                 "beta",
                 f"Beta tactical advantage ({beta_score:.1f} vs {alpha_score:.1f})"
             )
+
+    def _queue_duel_messages(self, side: str, captain: LLMCaptain, config: LLMCaptainConfig) -> None:
+        """1v1: queue every message a captain composed this turn for the other captain."""
+        while True:
+            msg_data = captain.get_pending_message()
+            if not msg_data:
+                return
+            msg_content = msg_data.get("content", "") if isinstance(msg_data, dict) else str(msg_data)
+            msg_recipient = msg_data.get("recipient", "ALL_ENEMIES") if isinstance(msg_data, dict) else "ALL_ENEMIES"
+
+            # Only queue if recipient includes enemies (in 1v1, this is the other captain)
+            if msg_recipient in ("ALL", "ALL_ENEMIES", "SPECIFIC"):
+                self.communication.queue_message(side, msg_content, self.simulation.current_time)
+            if self.recorder:
+                self.recorder.record_message(
+                    timestamp=self.simulation.current_time,
+                    sender_id=side,
+                    sender_name=config.name,
+                    ship_name=config.ship_name,
+                    message=msg_content,
+                )
+            if self.config.verbose:
+                recipient_tag = f" [{msg_recipient}]" if msg_recipient != "ALL_ENEMIES" else ""
+                print(f"  [{config.ship_name}] {config.name}{recipient_tag}: \"{msg_content}\"")
 
     def _evaluate_result(self) -> BattleResult:
         """Evaluate final battle result."""
