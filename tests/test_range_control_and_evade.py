@@ -373,9 +373,12 @@ class TestFormationHeading:
         accel = {s.ship_id: ship_accel_ms2(s) * maneuvers[s.ship_id].throttle for s in alpha}
         assert max(accel.values()) == pytest.approx(min(accel.values()), rel=1e-3)
         assert len({m.burn_start_time for m in maneuvers.values()}) == 1
-        # The admiral saw range control; the captains saw the applied order.
-        assert any("RANGE CONTROL" in m[0]["content"] for m in seen["phase1"])
-        assert any("FLEET HEADING IN FORCE" in m[0]["content"] for m in seen["order"])
+        # The admiral saw range control (its headings, in the live user turn);
+        # the per-ship order call saw the formation heading; the captains saw
+        # the applied order.
+        assert any("=== HEADINGS" in m[-1]["content"] and "cancel closure" in m[-1]["content"]
+                   for m in seen["phase1"])
+        assert any("FLEET HEADING IN FORCE" in m[-1]["content"] for m in seen["order"])
         captain_turns = [m[-1]["content"] for m in seen["captain"]]
         assert any("HEADING ORDER (ALREADY APPLIED" in t and "FORMATION" in t
                    for t in captain_turns)
