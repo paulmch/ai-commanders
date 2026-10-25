@@ -8,8 +8,28 @@ export const IMPACT_LIFE = 0.46;
 /** Loader torpedo moments this module renders itself (main.js skips them). */
 export const OWNED_MOMENTS = new Set(['seeker_kill', 'intercepted', 'destroyed', 'burnout']);
 export const SHUTTER = 0.085;
-/** A torpedo_miss closer than this (km) passed through the hull and failed its hit roll: a dud. */
-export const DUD_KM = 0.05;
+/**
+ * Torpedo misses that skip off the drawn plating ("duds"). The viewer's
+ * hulls are ~8x the sim's, so a round that missed the real hull by less
+ * than the displayed hull's radius would vanish inside it: the engine
+ * rolls P(hit) at closest approach, and a failed roll at 100 m is still
+ * well inside a drawn corvette. The timeline keeps every miss within
+ * DUD_REACH_KM (more than any drawn half-length) as a dud candidate;
+ * the renderer shows the ones inside the hull it draws (dudSkims).
+ */
+export const DUD_REACH_KM = 12;
+/** Without a recorded closest approach, a failed roll at this P(hit) or more brushed the hull. */
+export const DUD_P = 0.5;
+
+/**
+ * Whether dud moment `m` passed inside a drawn hull whose radius toward the
+ * round is `radiusKm`: its recorded closest approach, else (no closest
+ * approach recorded) a failed roll at P(hit) >= DUD_P.
+ */
+export function dudSkims(m, radiusKm) {
+  if (Number.isFinite(m.closestKm)) return m.closestKm < radiusKm;
+  return (m.probability ?? 0) >= DUD_P;
+}
 
 export function seedFor(id) {
   let h = 2166136261;
@@ -59,9 +79,28 @@ export function torpedoPower(a, b, dt, range, closure, disabled = false) {
 export function shotSlot(d) { return Number(d.weapon_slot?.split('_').at(-1)) || 0; }
 export function shotSpinal(d) { return !!d.weapon_name?.toLowerCase().includes('spinal'); }
 
-/** Spinal muzzle per hull: [fraction of hull width below the axis, of length forward]. */
-export const SPINAL_MUZZLE = { cruiser: [-0.42, 0.5], battlecruiser: [-0.245, 0.56], battleship: [-0.335, 0.5], dreadnought_siege: [-0.2, 0.8] };
+/**
+ * Spinal muzzle per hull: [fraction of hull width below the axis, of length
+ * forward]. Fallback for hull kits that do not export their own muzzle
+ * point (userData.spinalMuzzle); the entries match the kit's barrels.
+ */
+export const SPINAL_MUZZLE = {
+  cruiser: [-0.42, 0.5], battlecruiser: [-0.245, 0.56], battleship: [-0.335, 0.5],
+  dreadnought: [-0.32, 0.65], dreadnought_siege: [-0.2, 0.8]
+};
 export const SPINAL_MUZZLE_DEFAULT = [-0.31, 0.56];
+
+/**
+ * Hull-local spinal muzzle into `out` (a THREE.Vector3): the hull kit's own
+ * `userData.spinalMuzzle` when it exports one, else the SPINAL_MUZZLE
+ * fractions of the hull's width W and length L.
+ */
+export function spinalMuzzleInto(ud, W, L, out) {
+  const m = ud?.spinalMuzzle;
+  if (m && Number.isFinite(m.x) && Number.isFinite(m.y) && Number.isFinite(m.z)) return out.set(m.x, m.y, m.z);
+  const [y, z] = SPINAL_MUZZLE[ud?.shipType] || SPINAL_MUZZLE_DEFAULT;
+  return out.set(0, W * y, L * z);
+}
 
 /** Twin-barrel turret: barrel centres across the gun (x, in units of the turret size s). */
 export const TWIN_BARREL_X = [-0.2, 0.2];
@@ -204,11 +243,14 @@ export class WeaponTimeline {
         tr.end = e.timestamp;
         this.moments.push({ time: tr.end, kind: 'pop', track: tr, seed: tr.seed });
       }
-      // A round that brushed the hull yet failed its hit roll skips off the
-      // plating instead of vanishing inside the (oversize) hull
-      if (e.event_type === 'torpedo_miss' && (d.closest_approach_km ?? Infinity) < DUD_KM) {
-        this.moments.push({ time: e.timestamp, kind: 'dud', track: tr, target: d.target_id,
-          probability: d.hit_probability ?? null, seed: tr.seed });
+      // A round that passed inside the drawn (oversize) hull yet failed
+      // its hit roll skips off the plating instead of vanishing inside it
+      if (e.event_type === 'torpedo_miss') {
+        const cpa = Number.isFinite(d.closest_approach_km) ? d.closest_approach_km : null;
+        if (cpa !== null ? cpa < DUD_REACH_KM : (d.hit_probability ?? 0) >= DUD_P) {
+          this.moments.push({ time: e.timestamp, kind: 'dud', track: tr, target: d.target_id,
+            closestKm: cpa, probability: d.hit_probability ?? null, seed: tr.seed });
+        }
       }
     }
     for (const list of this.fire.values()) list.sort((a, b) => a.t - b.t);

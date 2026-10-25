@@ -26,6 +26,9 @@ import { getNoiseTexture } from './Textures.js';
 const WEAR_MATS = new Set(['hull', 'trim', 'paint', 'dark']);
 /** Below this the overlay stays hidden (and is never built). */
 export const WEAR_EPS = 0.015;
+// sanitised uniform inputs: a missing or non-finite value means "no wear"
+const unit = (x) => (Number.isFinite(x) ? Math.min(1, Math.max(0, x)) : 0);
+const lossOf = (remaining) => unit(1 - (Number.isFinite(remaining) ? remaining : 1));
 
 /**
  * Section weights for a ship-local surface point: nose / lateral / tail.
@@ -66,6 +69,7 @@ export function wearGeometry(parts) {
 
 const WEAR_VERTEX_PARS = /* glsl */`
   uniform float uInflate;
+  uniform vec3 uOrigin;
   varying vec3 vWearPos;
   varying vec3 vWearNor;
 `;
@@ -75,6 +79,7 @@ const WEAR_FRAGMENT_PARS = /* glsl */`
   uniform vec3 uLoss;
   uniform float uSoot;
   uniform float uGlow;
+  uniform float uSeam;
   uniform float uReactorZ;
   uniform float uSpread;
   uniform float uHalfL;
@@ -129,10 +134,11 @@ const WEAR_FRAGMENT_MAIN = /* glsl */`
   wearStrip = strip;
   wearGlow = glowA;
   float a = clamp(strip * 0.94 + (rim * 0.7 + soot * 0.78) * (1.0 - strip), 0.0, 0.96);
-  a = max(a, glowA);
+  // cooled cracks stay as scorched seams (torn sections after the blast)
+  a = max(a, max(glowA, crack * uSeam));
   if (a < 0.004) discard;
   vec3 skin = mix(sootC, temper, rim / max(1e-3, rim + soot));
-  diffuseColor = vec4(mix(skin, bare, strip), a);
+  diffuseColor = vec4(mix(skin, bare, strip), a * diffuseColor.a);   // .a = material opacity
 `;
 
 /**
@@ -157,19 +163,21 @@ export class HullWear {
       uLoss: { value: new THREE.Vector3() },
       uSoot: { value: 0 },
       uGlow: { value: 0 },
+      uSeam: { value: 0 },             // dark crack seams (torn sections only)
       uReactorZ: { value: ud.reactorPos?.z ?? -0.3 * this.L },
       uSpread: { value: 0.3 },
       uHalfL: { value: this.L * 0.5 },
       uFreq: { value: 0.45 / this.W },
       uSeed: { value: (seed % 997) * 0.0137 },
-      uInflate: { value: this.W * 0.0035 }
+      uInflate: { value: this.W * 0.0035 },
+      uOrigin: { value: new THREE.Vector3() }   // geometry offset from ship-local (torn sections)
     };
   }
 
   _build() {
     const geom = wearGeometry(this.group.userData.parts);
     if (!geom) { this.failed = true; return; }
-    this.uniforms.uWearNoise.value = getNoiseTexture();
+    this.uniforms.uWearNoise.value ||= getNoiseTexture();
     this.material = createWearMaterial(this.uniforms);
     this.mesh = new THREE.Mesh(geom, this.material);
     this.mesh.name = 'hull_wear';
@@ -183,22 +191,66 @@ export class HullWear {
    * @param {{nose, lateral, tail}} armor  remaining fraction per section (0..1)
    * @param {number} soot  0..1
    * @param {number} glow  0..1 dying-reactor crack glow
-   * @param {number} spread  0..1 how far along the hull the cracks reach
-   *                         from the reactor (fraction of the half length)
+   * @param {number} spread  how far along the hull the cracks reach from
+   *                         the reactor (fraction of the half length,
+   *                         DamageTimeline.crackSpread: 0.25 .. 1.85)
    * @returns {boolean} whether the overlay is drawn this frame
    */
   update(armor, soot, glow, spread = 0.3) {
-    const ln = 1 - (armor?.nose ?? 1), ll = 1 - (armor?.lateral ?? 1), lt = 1 - (armor?.tail ?? 1);
-    const any = Math.max(ln, ll, lt, soot, glow) > WEAR_EPS;
+    // Every uniform stays finite whatever the caller passes: GLSL ES leaves
+    // NaN undefined, and a driver that propagates it would paint the skin
+    // black or NaN (which bloom then smears across the frame)
+    const u = this.uniforms;
+    u.uLoss.value.set(lossOf(armor?.nose), lossOf(armor?.lateral), lossOf(armor?.tail));
+    u.uSoot.value = unit(soot);
+    u.uGlow.value = unit(glow);
+    u.uSpread.value = Number.isFinite(spread) ? Math.max(0, spread) : 0.3;
+    const L = u.uLoss.value;
+    const any = Math.max(L.x, L.y, L.z, u.uSoot.value, u.uGlow.value) > WEAR_EPS;
     if (!any) { if (this.mesh) this.mesh.visible = false; return false; }
     if (!this.mesh && !this.failed) this._build();
     if (!this.mesh) return false;
     this.mesh.visible = true;
-    this.uniforms.uLoss.value.set(ln, ll, lt);
-    this.uniforms.uSoot.value = soot;
-    this.uniforms.uGlow.value = glow;
-    this.uniforms.uSpread.value = spread;
     return true;
+  }
+
+  /**
+   * A frozen copy of this skin for a torn hull section (ShipDestruction):
+   * the hulk's last armour loss, soot and crack reach on the section's own
+   * hull `parts`, whose geometry is shifted by -origin like the section
+   * mesh. The noise and section weights still run in ship-local
+   * coordinates (uOrigin), so stripped patches and cracks stay where the
+   * hulk had them. The reactor has gone: the cracks no longer pulse but
+   * stay as dark seams, and the caller drives uGlow from the section's
+   * cooling heat (sectionCrackGlow) and fades it with `material.opacity`.
+   * Null when there is no wear to carry over (or no geometry); the caller
+   * owns the mesh. Its uniforms are `mesh.userData.uniforms`.
+   * @param {Array} parts   hull kit parts of the section (ship-local)
+   * @param {THREE.Vector3} origin  the section's ship-local centroid
+   * @param {{armor, soot, spread}} wear  wear at the detonation (hullWearAt)
+   */
+  sectionSkin(parts, origin, wear) {
+    const a = wear?.armor;
+    const loss = [lossOf(a?.nose), lossOf(a?.lateral), lossOf(a?.tail)];
+    const soot = unit(wear?.soot);
+    if (Math.max(...loss, soot) <= WEAR_EPS) return null;
+    const geom = wearGeometry(parts);
+    if (!geom) return null;
+    geom.translate(-origin.x, -origin.y, -origin.z);
+    const u = {};
+    // own vectors, shared noise texture (a cloned Texture would re-upload)
+    for (const [k, v] of Object.entries(this.uniforms)) u[k] = { value: v.value?.isVector3 ? v.value.clone() : v.value };
+    u.uLoss.value.set(...loss);
+    u.uSoot.value = soot;
+    u.uGlow.value = 0;
+    u.uSeam.value = 0.6;
+    u.uSpread.value = Number.isFinite(wear?.spread) ? Math.max(0, wear.spread) : 0.3;
+    u.uOrigin.value.copy(origin);
+    const mesh = new THREE.Mesh(geom, createWearMaterial(u));
+    mesh.name = 'hull_wear_section';
+    mesh.frustumCulled = false;
+    mesh.userData.uniforms = u;
+    return mesh;
   }
 
   dispose() {
@@ -208,6 +260,15 @@ export class HullWear {
     this.material.dispose();
     this.mesh = null;
   }
+}
+
+/**
+ * Crack glow 0..1 of a torn section from its cooling heat
+ * (ShipDestruction: ~2-3 at the blast, ~0.3 after 10 s): white-hot cracks
+ * that fade to the dark seams over the first seconds.
+ */
+export function sectionCrackGlow(heat) {
+  return Number.isFinite(heat) ? Math.min(1, Math.max(0, heat * 0.45)) : 0;
 }
 
 /** The shared-program wear material bound to `uniforms` (one per ship). */
@@ -222,7 +283,7 @@ export function createWearMaterial(uniforms) {
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>\n${WEAR_VERTEX_PARS}`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
-        vWearPos = position;
+        vWearPos = position + uOrigin;
         vWearNor = normal;
         transformed += normal * uInflate;`);
     sh.fragmentShader = sh.fragmentShader
@@ -239,6 +300,6 @@ export function createWearMaterial(uniforms) {
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         totalEmissiveRadiance += vec3(2.6, 0.7, 0.16) * wearGlow * 1.6;`);
   };
-  mat.customProgramCacheKey = () => 'hull-wear-v1';
+  mat.customProgramCacheKey = () => 'hull-wear-v2';
   return mat;
 }

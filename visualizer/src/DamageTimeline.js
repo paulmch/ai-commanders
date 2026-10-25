@@ -184,6 +184,19 @@ export function reactorPulse(ttd) {
   return Math.min(1, (0.3 + 0.7 * near) * (0.35 + 0.65 * beat * beat));
 }
 
+/**
+ * How far a dying reactor's cracks reach along the hull (fraction of the
+ * half length from the reactor) `ttd` seconds before detonation: 0.25 on a
+ * long fuse, 1.85 at the end. A ship that is not dying has no fuse (ttd
+ * Infinity) and keeps the 0.25 floor: Infinity / Infinity is NaN, and a
+ * NaN uniform is undefined behaviour in GLSL ES.
+ */
+export function crackSpread(ttd) {
+  if (!Number.isFinite(ttd)) return 0.25;
+  const t = Math.max(0, ttd);
+  return 0.25 + 1.6 * (1 - t / (t + 5));
+}
+
 /** Seconds spall debris from a mark stays in flight. */
 export const SPALL_LIFE = 14;
 
@@ -528,6 +541,25 @@ export function detonationTime(sd) {
   if (sd.deathTime !== null && sd.deathTime !== undefined) return sd.deathTime;
   const ev = sd.dyingEvent;
   return ev && ev.fuse != null ? ev.t + ev.fuse : null;
+}
+
+/**
+ * Hull wear inputs of a ship at battle time `now`, a pure function of time
+ * (scrub-exact): remaining armour per section (armorStateAt), soot 0..1
+ * from lost hull integrity and breaches, the dying reactor's crack glow
+ * (reactorPulse) and how far the cracks reach (crackSpread). `st` is
+ * damageStateAt for the same ship and time (computed when omitted).
+ *   -> {armor: {nose, lateral, tail}, soot, glow, spread}
+ */
+export function hullWearAt(timeline, shipId, now, st = null, out = {}) {
+  st = st || damageStateAt(timeline, shipId, now, {});
+  out.armor = armorStateAt(timeline, shipId, now, out.armor || null);
+  out.soot = st.dying ? 0.85 : clamp01((1 - st.hull) * 1.3 - 0.06 + 0.035 * st.breaches);
+  const det = st.dying ? detonationTime(timeline?.ships?.get(shipId)) : null;
+  const ttd = det !== null ? Math.max(0, det - now) : Infinity;
+  out.glow = det !== null ? reactorPulse(ttd) : 0;
+  out.spread = crackSpread(ttd);
+  return out;
 }
 
 /** Time of the latest slug or torpedo hit on a ship at or before `now` (-Infinity if none). */

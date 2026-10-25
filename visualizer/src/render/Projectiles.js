@@ -6,7 +6,7 @@ import { TargetingLines } from './TargetingLines.js';
 import {
   WeaponTimeline, makeSample, sampleTrack, seedFor, tracerLength,
   missOpacity, beamPulse, torpedoPower, ION_LIFE, IMPACT_LIFE, OWNED_MOMENTS, TWIN_BARREL_X,
-  SPINAL_MUZZLE, SPINAL_MUZZLE_DEFAULT
+  spinalMuzzleInto, dudSkims
 } from './WeaponTimeline.js';
 import {
   RCS_LAYOUT, ENGINE, PULSE, JET_COUNT, attitudeAt, jetLevels, makePulses, pulsesAt, throttleAt
@@ -264,8 +264,7 @@ export class Projectiles {
       out.yaw = yaw; out.pitch = pitch; out.rig = rig;
       return out;
     }
-    const [y, z] = SPINAL_MUZZLE[ud.shipType] || SPINAL_MUZZLE_DEFAULT;
-    out.pos.set(0, W * y, L * z);
+    spinalMuzzleInto(ud, W, L, out.pos);
     out.dir.copy(Z);
     out.rig = null;
     return out;
@@ -704,10 +703,10 @@ export class Projectiles {
   }
 
   /**
-   * Dud: a torpedo that passed within metres of the hull but failed its hit
-   * roll. On the 8x hull it would vanish inside the plating; instead it
+   * Dud: a torpedo that failed its hit roll on a pass inside the drawn
+   * hull. On the 8x hull it would vanish inside the plating; instead it
    * skips off the surface nearest its track in a spark streak along its
-   * relative travel.
+   * relative travel. Misses that cleared the drawn hull show nothing here.
    */
   dud(m, age) {
     const target = this.manager.ships.get(m.target);
@@ -726,6 +725,7 @@ export class Projectiles {
     this.axis.fromArray(this.shipSample.fwd).normalize();
     const c = Math.abs(this.u.dot(this.axis));
     const R = 1 / Math.sqrt((c / (L * 0.5)) ** 2 + (1 - c * c) / (W * 0.5) ** 2);
+    if (!dudSkims(m, R)) return;   // scene units are km: R compares with the recorded CPA
     this.vel.fromArray(this.shipSample.vel).multiplyScalar(SCALE);
     this.a.copy(this.b).addScaledVector(this.u, R).addScaledVector(this.vel, age);
     this.skid.copy(this.travel).addScaledVector(this.u, 0.2).normalize();

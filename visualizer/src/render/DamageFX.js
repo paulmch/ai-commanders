@@ -2,12 +2,12 @@ import * as THREE from 'three';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 import {
   buildDamageTimeline, shipStateAt, marksUpTo, damageStateAt, ventTau, localBasis,
-  hash01, SPALL_LIFE, impactScale, armorStateAt, detonationTime, reactorPulse
+  hash01, SPALL_LIFE, impactScale, hullWearAt
 } from '../DamageTimeline.js';
 import { getNoiseTexture, getPuffTexture, getGlowTexture, getStarTexture, mulberry32 } from './Textures.js';
 import { buildDebrisChunks } from './Hulls.js';
 import { HullWear, createWearMaterial } from './HullWear.js';
-import { SPINAL_MUZZLE, SPINAL_MUZZLE_DEFAULT } from './WeaponTimeline.js';
+import { spinalMuzzleInto } from './WeaponTimeline.js';
 
 /**
  * Persistent battle damage: everything that stays on or around a hull
@@ -605,8 +605,9 @@ class ShipView {
     this.emitterCount = -1;
     this.arcCycle = -1;
     this.lastNow = -Infinity;
-    this.wear = new HullWear(group, sd.seed);
-    this.armor = { nose: 1, lateral: 1, tail: 1 };
+    // the wear skin outlives a live-mode timeline rebuild (DamageFX.setRecording)
+    this.wear = fx._takeWear(sd.id, group, sd.seed);
+    this.wearIn = { armor: { nose: 1, lateral: 1, tail: 1 } };
     this.wrecks = null;             // resolved mounts (lazy: _assignWrecks)
   }
 
@@ -1089,8 +1090,7 @@ class ShipView {
           e.size = (rig.s || 0.5) * 0.75;
         }
       } else if (w.kind === 'spinal') {
-        const [y, z] = SPINAL_MUZZLE[ud.shipType] || SPINAL_MUZZLE_DEFAULT;
-        e.local = new THREE.Vector3(0, this.W * y, this.L * z);
+        e.local = spinalMuzzleInto(ud, this.W, this.L, new THREE.Vector3());
         e.normal = new THREE.Vector3(0, -0.45, 1).normalize();
         e.size = this.W * 0.16;
       } else if (w.kind === 'radiator' && panels.length) {
@@ -1184,11 +1184,8 @@ class ShipView {
 
     // Cumulative wear: armour stripped per recorded section, soot as the
     // hull fails, and a dying reactor's crack glow pulsing toward detonation
-    armorStateAt(fx.timeline, this.id, now, this.armor);
-    const soot = st.dying ? 0.85 : clamp01((1 - st.hull) * 1.3 - 0.06 + 0.035 * st.breaches);
-    const det = st.dying ? detonationTime(this.sd) : null;
-    const ttd = det !== null ? Math.max(0, det - now) : Infinity;
-    this.wear.update(this.armor, soot, det !== null ? reactorPulse(ttd) : 0, 0.25 + 1.6 * (1 - ttd / (ttd + 5)));
+    const w = hullWearAt(fx.timeline, this.id, now, st, this.wearIn);
+    this.wear.update(w.armor, w.soot, w.glow, w.spread);
   }
 
   dispose() {
@@ -1210,13 +1207,11 @@ class ShipView {
       for (const p of this.group.userData.radiators || []) p.rotation.x = 0;
       this.radDamage.clone.dispose();
     }
-    this.wear.dispose();
+    this.wear?.dispose();
     if (this.scorch) { this.group.remove(this.scorch); this.scorch.geometry.dispose(); this.scorch.dispose(); }
     for (const e of this.wrecks || []) if (e.rig?.pitch) e.rig.pitch.visible = true;
   }
 }
-
-function clamp01(x) { return x < 0 ? 0 : x > 1 ? 1 : x; }
 
 /**
  * World direction a strike's spall leaves along: out of a breach the jet
@@ -1255,6 +1250,7 @@ export class DamageFX {
     this.SCALE = sm.SCALE;
     this.timeline = null;
     this.views = new Map();
+    this._keptWear = new Map();   // ship id -> HullWear kept across setRecording
     this.shipIds = [];
     this.uNow = { value: 0 };
     this.uTime = { value: 0 };
@@ -1341,14 +1337,32 @@ export class DamageFX {
       const c = cache.get(this._markKey(m));
       if (c) { m._res = c.res; m._resGroup = c.group; }
     }
-    for (const v of this.views.values()) v.dispose();
+    // Keep each ship's wear skin: its merged overlay geometry depends only on
+    // the hull kit, and rebuilding every one on each 2 s live append was a
+    // periodic hitch. Only its uniforms follow the new timeline.
+    for (const v of this.views.values()) {
+      if (v.wear) { this._keptWear.set(v.id, v.wear); v.wear = null; }
+      v.dispose();
+    }
     this.views.clear();
+    for (const [id, w] of this._keptWear) {
+      if (this.sm.ships.get(id) !== w.group) { w.dispose(); this._keptWear.delete(id); }
+    }
     this.shipIds = [...this.timeline.ships.keys()];
     for (let b = 0; b < SPALL_BLOCKS; b++) this._freeSpall(b);
     this.spall.flush();
     this.sm._clearBlasts?.('damage');
     this.blastSpawned.clear();
     this.lastNow = -Infinity;
+  }
+
+  /** A ship view's wear skin: the one kept across setRecording when it is still on `group`. */
+  _takeWear(id, group, seed) {
+    const kept = this._keptWear.get(id);
+    this._keptWear.delete(id);
+    if (kept && kept.group === group && kept.seed === seed) return kept;
+    kept?.dispose();
+    return new HullWear(group, seed);
   }
 
   _markKey(m) {
@@ -1514,6 +1528,21 @@ export class DamageFX {
     }
   }
 
+  /**
+   * Hull wear of a ship at battle time `t` (hullWearAt) plus the ship's
+   * wear skin to copy it from (`skin`, HullWear.sectionSkin), for the torn
+   * sections of its breakup. Null without a recording or a drawn ship.
+   */
+  wearAt(shipId, t) {
+    const sd = this.timeline?.ships.get(shipId);
+    const g = this.sm.ships.get(shipId);
+    if (!sd || !g) return null;
+    const w = hullWearAt(this.timeline, shipId, t);
+    const v = this.views.get(shipId);
+    w.skin = v && v.group === g && v.wear ? v.wear : new HullWear(g, sd.seed);
+    return w;
+  }
+
   /** True once a recording is loaded: hit blasts then come from the damage timeline. */
   ownsImpacts() { return !!this.timeline; }
 
@@ -1564,6 +1593,8 @@ export class DamageFX {
   dispose() {
     for (const v of this.views.values()) v.dispose();
     this.views.clear();
+    for (const w of this._keptWear.values()) w.dispose();
+    this._keptWear.clear();
     this.sm._clearBlasts?.('damage');
     this.scene.remove(this.spall.mesh);
     this.spall.mesh.dispose();
@@ -1597,9 +1628,12 @@ export class DamageFX {
  * Split a built hull into big sections along the long axis with ragged
  * cuts: the reactor end is shredded into small chunks (buildDebrisChunks),
  * the rest breaks into one or two large sections that keep their shape.
- * @returns {null | {sections: [{mesh, center, cutLo, cutHi, overlay}], shards: [{mesh, center, size}]}}
+ * `wear` (DamageFX.wearAt at the detonation) carries the hulk's stripped
+ * armour, soot and reactor cracks onto each section (HullWear.sectionSkin),
+ * so a beaten hull does not snap back to clean livery when it breaks up.
+ * @returns {null | {sections: [{mesh, center, cutLo, cutHi, overlay, wear}], shards: [{mesh, center, size}]}}
  */
-export function breakHull(shipGroup, rnd, fx) {
+export function breakHull(shipGroup, rnd, fx, wear = null) {
   const ud = shipGroup.userData;
   const parts = ud.parts || [];
   const mats = ud.materials;
@@ -1666,7 +1700,13 @@ export function breakHull(shipGroup, rnd, fx) {
       mesh.renderOrder = 7;
       mesh.add(overlay);
     }
-    sections.push({ mesh, center: centroid, cutLo: lo, cutHi: hi, overlay, length: list.length });
+    // the hulk's wear, frozen at the detonation, between hull and edge glow
+    const skin = wear?.skin ? wear.skin.sectionSkin(list, centroid, wear) : null;
+    if (skin) {
+      skin.renderOrder = 7.5;
+      mesh.add(skin);
+    }
+    sections.push({ mesh, center: centroid, cutLo: lo, cutHi: hi, overlay, wear: skin, length: list.length });
   };
   if (three) {
     make(mid, cutA, cutB);

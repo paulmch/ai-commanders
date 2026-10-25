@@ -3,18 +3,21 @@ import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import {
   buildDamageTimeline, impactPreset, impactScale, buildWrecks, wrecksAt, armorStateAt,
-  detonationTime, reactorPulse, reactorPulseRate, lastHitAt, GRAZE_DEG
+  detonationTime, reactorPulse, reactorPulseRate, lastHitAt, GRAZE_DEG, crackSpread, hullWearAt
 } from '../src/DamageTimeline.js';
-import { strikeSpallDir, DamageFX } from '../src/render/DamageFX.js';
+import { strikeSpallDir, DamageFX, breakHull } from '../src/render/DamageFX.js';
 import { shipStateAt, localBasis } from '../src/DamageTimeline.js';
 import { blastKinds } from '../src/render/Explosion.js';
-import { WeaponTimeline, DUD_KM } from '../src/render/WeaponTimeline.js';
+import {
+  WeaponTimeline, DUD_REACH_KM, DUD_P, dudSkims, SPINAL_MUZZLE, spinalMuzzleInto
+} from '../src/render/WeaponTimeline.js';
+import { Projectiles } from '../src/render/Projectiles.js';
 import { BattleLoader } from '../src/BattleLoader.js';
 import { selectEngagements, ENGAGE_HOT_S, SHOT_MEMORY_S } from '../src/render/TargetingLines.js';
 import { factionSeed } from '../src/render/WeaponBatches.js';
 import { threatLabel, detonationLabel, hitFlash, THREAT_IMMINENT_S } from '../src/ContactOverlay.js';
 import { torchCough } from '../src/render/Torch.js';
-import { wearSectionWeights } from '../src/render/HullWear.js';
+import { wearSectionWeights, HullWear, sectionCrackGlow } from '../src/render/HullWear.js';
 
 const near = (a, b, eps = 1e-6) => assert.ok(Math.abs(a - b) < eps, `${a} != ${b}`);
 
@@ -39,6 +42,12 @@ test('the warhead fireball is chosen only for a recorded explosive yield', () =>
   // a stopped penetrator has no fireball and no glass-bubble shell
   assert.equal(kinds.kineticStrike.fireR, 0);
   assert.equal(kinds.kineticStrike.shellR, 0);
+  // nor do cook-offs (death-spiral secondaries, wrecked mounts): at their
+  // size the shock front read as a hard glass bubble around white bars
+  assert.equal(kinds.secondary.shellR, 0);
+  for (const k of ['secondary', 'reactor', 'meltdown', 'warhead']) {
+    assert.ok(kinds[k].streakW <= 0.024, `${k} streaks are bars`);
+  }
 });
 
 test('kinetic strikes are capped to the struck hull; warheads keep their size', () => {
@@ -161,6 +170,7 @@ function stubFx(rec, groups) {
     craterMat: new THREE.MeshBasicMaterial(), ventMat: new THREE.MeshBasicMaterial(),
     raycaster: new THREE.Raycaster(), probe: new THREE.Mesh(undefined, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide })),
     _cands: [], _hits: [], _st: { pos: [0, 0, 0], vel: [0, 0, 0], fwd: [0, 0, 1], hull: 1, dying: false, destroyed: false },
+    _keptWear: new Map(), spall: { hide() {}, flush() {} }, spallOwner: [],
     timeline: buildDamageTimeline(rec)
   });
   fx.probe.updateMatrixWorld();
@@ -265,7 +275,7 @@ function threatLoader() {
     { timestamp: 0, event_type: 'torpedo_launched', ship_id: 'alpha', data: { torpedo_id: 't2', target_id: 'beta' } },
     { timestamp: 1, event_type: 'shot_fired', ship_id: 'beta', data: { target_id: 'alpha', weapon_slot: 'weapon_0' } },
     { timestamp: 3, event_type: 'pd_torpedo_disabled', ship_id: 'beta', data: { torpedo_id: 't2' } },
-    { timestamp: 6, event_type: 'torpedo_miss', ship_id: 'alpha', data: { torpedo_id: 't1', target_id: 'beta', closest_approach_km: DUD_KM / 10, hit_probability: 0.98 } }
+    { timestamp: 6, event_type: 'torpedo_miss', ship_id: 'alpha', data: { torpedo_id: 't1', target_id: 'beta', closest_approach_km: 0.005, hit_probability: 0.98 } }
   ];
   loader.buildProjectileHitMap(); loader.buildLastProjectileStates(); loader.buildTorpedoTimeline();
   return loader;
@@ -299,6 +309,7 @@ test('a hit-roll failure inside the hull is a dud moment; shots and launches are
   assert.equal(dud.length, 1);
   assert.equal(dud[0].target, 'beta');
   assert.equal(dud[0].probability, 0.98);
+  near(dud[0].closestKm, 0.005);
   assert.equal(tl.lastFire('beta', 0.5), null);
   assert.equal(tl.lastFire('beta', 1).target, 'alpha');
   assert.equal(tl.lastFire('alpha', 10).torpedo, true);
@@ -373,4 +384,180 @@ test('wear sections follow the sim: bow-facing plating is nose, flanks lateral, 
   assert.ok(t3 > 0.95);
   for (const w of [wearSectionWeights(0.5, 0.6), wearSectionWeights(-0.4, -0.2)]) near(w[0] + w[1] + w[2], 1);
   assert.ok(l1 >= 0);
+});
+
+// --------------------------------------------------------------------------
+// Duds against the drawn hull
+// --------------------------------------------------------------------------
+test('a miss is a dud when it passed inside the drawn hull, not inside a fixed 50 m', () => {
+  const loader = new BattleLoader();
+  const ids = ['near', 'flank', 'wide', 'nocpa', 'nocpa_lo'];
+  loader.simTrace = [0, 1, 2].map(t => ({
+    t,
+    ships: { alpha: { pos: [0, 0, 0], vel: [0, 0, 0], fwd: [1, 0, 0] }, beta: { pos: [30000, 0, 0], vel: [0, 0, 0], fwd: [1, 0, 0] } },
+    torpedoes: ids.map(id => ({ id, pos: [10000 * t, 0, 0], vel: [10000, 0, 0], source: 'alpha', target: 'beta', dv_remaining: 5 }))
+  }));
+  const miss = (id, data) => ({ timestamp: 2, event_type: 'torpedo_miss', ship_id: 'alpha', data: { torpedo_id: id, target_id: 'beta', ...data } });
+  loader.events = [
+    ...ids.map(id => ({ timestamp: 0, event_type: 'torpedo_launched', ship_id: 'alpha', data: { torpedo_id: id, target_id: 'beta' } })),
+    // torpedo.json t=105: a failed 0.83 roll 100 m out, deep inside a drawn corvette
+    miss('near', { closest_approach_km: 0.09995, hit_probability: 0.83 }),
+    miss('flank', { closest_approach_km: 3, hit_probability: 0 }),
+    miss('wide', { closest_approach_km: 40, hit_probability: 0 }),
+    miss('nocpa', { hit_probability: 0.83 }),
+    miss('nocpa_lo', { hit_probability: 0.2 })
+  ];
+  loader.buildProjectileHitMap(); loader.buildLastProjectileStates(); loader.buildTorpedoTimeline();
+  const tl = new WeaponTimeline(loader);
+  const duds = new Map(tl.moments.filter(m => m.kind === 'dud').map(m => [m.track.id, m]));
+  assert.deepEqual([...duds.keys()].sort(), ['flank', 'near', 'nocpa']);
+  assert.ok(DUD_REACH_KM > 2.6 * 8 / 2, 'reach covers the drawn dreadnought half-length');
+  // drawn radius toward the round, km (scene units): corvette flank 0.52, dreadnought bow 10.4
+  const corvette = 0.13 * 8 / 2, dreadBow = 2.6 * 8 / 2;
+  assert.equal(dudSkims(duds.get('near'), corvette), true);
+  assert.equal(dudSkims(duds.get('flank'), corvette), false, 'cleared the drawn corvette');
+  assert.equal(dudSkims(duds.get('flank'), dreadBow), true, 'through the drawn dreadnought');
+  // no closest approach recorded: the failed roll's P(hit) decides
+  assert.equal(dudSkims(duds.get('nocpa'), corvette), true);
+  assert.equal(dudSkims({ closestKm: null, probability: DUD_P - 0.01 }, corvette), false);
+});
+
+// --------------------------------------------------------------------------
+// Spinal muzzles
+// --------------------------------------------------------------------------
+test('spinal muzzle: the hull kit\'s own point first, else the per-class table', () => {
+  assert.deepEqual(SPINAL_MUZZLE.dreadnought, [-0.32, 0.65]);
+  const W = 5.6, L = 20.8;
+  const muzzle = (ud) => Projectiles.prototype.localMuzzle.call({ s3: new THREE.Vector3() },
+    { userData: { size: { length: L, width: W }, ...ud } }, { spinal: true }, new THREE.Vector3(0, 0, 1),
+    { pos: new THREE.Vector3(), dir: new THREE.Vector3() }).pos;
+  near(muzzle({ shipType: 'dreadnought' }).distanceTo(new THREE.Vector3(0, -0.32 * W, 0.65 * L)), 0);
+  near(muzzle({ shipType: 'frigate' }).distanceTo(new THREE.Vector3(0, -0.31 * W, 0.56 * L)), 0);
+  const kit = new THREE.Vector3(0, -1.1, 14.2);
+  near(muzzle({ shipType: 'dreadnought', spinalMuzzle: kit }).distanceTo(kit), 0);
+  // the wrecked-mount scorch reads the same point
+  near(spinalMuzzleInto({ shipType: 'dreadnought', spinalMuzzle: kit }, W, L, new THREE.Vector3()).distanceTo(kit), 0);
+  near(spinalMuzzleInto({ shipType: 'battleship' }, W, L, new THREE.Vector3()).z, 0.5 * L);
+});
+
+// --------------------------------------------------------------------------
+// Hull wear: finite uniforms, kept across live rebuilds, carried into the breakup
+// --------------------------------------------------------------------------
+const finiteUniforms = (w) => {
+  for (const [k, u] of Object.entries(w.uniforms)) {
+    const v = u.value;
+    if (typeof v === 'number') assert.ok(Number.isFinite(v), `${k} = ${v}`);
+    else if (v?.isVector3) assert.ok(v.toArray().every(Number.isFinite), `${k} = ${v.toArray()}`);
+  }
+};
+// a drawn hull with a dummy noise texture (the real one needs a canvas)
+function wornShip(L, W) {
+  const g = boxShip(L, W);
+  g.userData.parts.push({ geom: new THREE.BoxGeometry(W * 0.5, W * 0.5, L * 0.2).translate(0, 0, L * 0.3), center: new THREE.Vector3(0, 0, L * 0.3), mat: 'hull' });
+  g.userData.materials = { hull: new THREE.MeshStandardMaterial() };
+  return g;
+}
+const seedNoise = (w) => { w.uniforms.uWearNoise.value ||= new THREE.Texture(); return w; };
+
+test('crack spread is finite with no fuse; the wear inputs follow the timeline', () => {
+  assert.equal(crackSpread(Infinity), 0.25);
+  assert.equal(crackSpread(NaN), 0.25);
+  near(crackSpread(0), 1.85);
+  near(crackSpread(5), 1.05);
+  assert.ok(crackSpread(1) > crackSpread(10));
+  const tl = buildDamageTimeline(fleetRecording());
+  const hurt = hullWearAt(tl, 'beta_1', 15);          // armour stripped, not dying
+  near(hurt.armor.lateral, 0.25);
+  assert.equal(hurt.glow, 0);
+  assert.equal(hurt.spread, 0.25);
+  const dying = hullWearAt(tl, 'beta_1', 30);         // death spiral, detonates at 33
+  assert.equal(dying.soot, 0.85);
+  near(dying.spread, crackSpread(3));
+  assert.ok(dying.glow > 0 && dying.glow <= 1);
+  for (const w of [hurt, dying, hullWearAt(tl, 'alpha_1', 30)]) {
+    for (const v of [w.soot, w.glow, w.spread, w.armor.nose, w.armor.lateral, w.armor.tail]) assert.ok(Number.isFinite(v));
+  }
+});
+
+test('HullWear uniforms stay finite for damaged, dying and garbage inputs', () => {
+  const w = seedNoise(new HullWear(wornShip(8, 2), 11));
+  assert.equal(w.update({ nose: 1, lateral: 0.25, tail: 1 }, 0.2, 0, crackSpread(Infinity)), true);
+  finiteUniforms(w);
+  near(w.uniforms.uLoss.value.y, 0.75);
+  w.update({ nose: 0.5, lateral: 0.1, tail: 0.9 }, 0.85, reactorPulse(2), crackSpread(2));
+  finiteUniforms(w);
+  // the pre-fix call: 0.25 + 1.6 * (1 - Infinity / Infinity) is NaN
+  w.update({ nose: NaN, lateral: undefined, tail: Infinity }, NaN, Infinity, 0.25 + 1.6 * (1 - Infinity / Infinity));
+  finiteUniforms(w);
+  assert.equal(w.uniforms.uSpread.value, 0.3);
+  // nothing to show: hidden, still finite
+  assert.equal(w.update({ nose: 1, lateral: 1, tail: 1 }, 0, 0, 0.25), false);
+  assert.equal(w.mesh.visible, false);
+  finiteUniforms(w);
+});
+
+test('ship views keep their wear skin across a live-mode rebuild', () => {
+  const rec = fleetRecording();
+  const ships = new Map([['beta_1', wornShip(8, 2)], ['alpha_1', wornShip(8, 2)]]);
+  const { fx } = stubFx(rec, ships);
+  const loader = { events: rec.events, simTrace: rec.sim_trace };
+  fx.setRecording(loader);
+  const wear = seedNoise(fx.view('beta_1').wear);
+  wear.update({ nose: 1, lateral: 0.25, tail: 1 }, 0.3, 0, 0.25);
+  const mesh = wear.mesh;
+  assert.ok(mesh && mesh.parent === ships.get('beta_1'));
+  // a 2 s live append: same skin, same merged geometry, still on the hull
+  fx.setRecording(loader);
+  assert.equal(fx.view('beta_1').wear, wear);
+  assert.equal(wear.mesh, mesh);
+  assert.equal(mesh.parent, ships.get('beta_1'));
+  // a ship whose drawn group was replaced gets a fresh skin; the old one is released
+  ships.set('beta_1', wornShip(8, 2));
+  fx.setRecording(loader);
+  assert.equal(wear.mesh, null);
+  assert.notEqual(fx.view('beta_1').wear, wear);
+  assert.equal(fx._keptWear.size, 0);
+});
+
+test('torn sections carry the hulk\'s wear instead of clean livery', () => {
+  const rec = fleetRecording();
+  const g = wornShip(8, 2);
+  g.userData.reactorPos = new THREE.Vector3(0, 0, -2.4);
+  const { fx } = stubFx(rec, new Map([['beta_1', g]]));
+  seedNoise(fx.view('beta_1').wear);
+  const wear = fx.wearAt('beta_1', 32.95);
+  assert.equal(wear.soot, 0.85);
+  near(wear.armor.lateral, 0.25);
+  assert.equal(wear.skin, fx.view('beta_1').wear);
+  const partsBefore = g.userData.parts.map(p => p.geom.attributes.position.array.slice());
+  let seed = 3;
+  const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  const broken = breakHull(g, rnd, null, wear);
+  assert.ok(broken.sections.length >= 1);
+  for (const sec of broken.sections) {
+    assert.ok(sec.wear, 'section has a wear skin');
+    assert.equal(sec.wear.parent, sec.mesh);
+    const u = sec.wear.userData.uniforms;
+    near(u.uOrigin.value.distanceTo(sec.center), 0);
+    near(u.uLoss.value.y, 0.75);
+    assert.equal(u.uSoot.value, 0.85);
+    assert.equal(u.uGlow.value, 0, 'the reactor has gone: no pulsing glow');
+    assert.ok(u.uSeam.value > 0, 'cracks stay as dark seams');
+    near(u.uSpread.value, wear.spread);
+    assert.equal(u.uWearNoise.value, wear.skin.uniforms.uWearNoise.value, 'shared noise, not a re-uploaded clone');
+    assert.notEqual(u.uLoss.value, wear.skin.uniforms.uLoss.value);
+    // noise stays in ship-local coordinates: the skin is offset by the section centroid
+    sec.wear.geometry.computeBoundingBox();
+    const bb = sec.wear.geometry.boundingBox;
+    assert.ok(bb.min.z < 0 && bb.max.z > 0, 'skin geometry centred like the section');
+  }
+  // the hull kit's own geometry is untouched
+  g.userData.parts.forEach((p, i) => assert.deepEqual(p.geom.attributes.position.array, partsBefore[i]));
+  // the cracks glow with the section's heat and cool to seams
+  assert.equal(sectionCrackGlow(2.5), 1);
+  assert.ok(sectionCrackGlow(0.3) < 0.2 && sectionCrackGlow(0.3) > 0);
+  assert.equal(sectionCrackGlow(NaN), 0);
+  // a pristine hulk carries nothing over
+  const clean = breakHull(g, rnd, null, { armor: { nose: 1, lateral: 1, tail: 1 }, soot: 0, skin: fx.view('beta_1').wear });
+  for (const sec of clean.sections) assert.equal(sec.wear, null);
 });

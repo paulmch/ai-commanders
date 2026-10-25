@@ -5,6 +5,7 @@ import { blastCloseDim } from './CloseRange.js';
 import { buildDebrisChunks } from './Hulls.js';
 import { createTorch } from './Torch.js';
 import { breakHull } from './DamageFX.js';
+import { sectionCrackGlow } from './HullWear.js';
 
 /**
  * Blasts and ship destruction.
@@ -339,13 +340,16 @@ const KINDS = {
     puffs: 4, puffSize: [0.4, 0.9], puffSpeed: [0.5, 1.4], puffLife: 2.4,
     light: 9, lightLife: 0.55, crater: true, cone: 0.88
   },
-  // Cook-off: munitions or a fuel cell going up on a chunk
+  // Cook-off: munitions or a fuel cell going up on a chunk (death-spiral
+  // secondaries, wrecked mounts). No shock shell: at this size the front
+  // was a hard-edged glass bubble around the fireball, never a shock wave;
+  // thin streaks like the reactor's, not white bars
   secondary: {
     duration: 4.0, flash: 2.5, flashFade: 0.15, screenFlash: 0.0,
     fireR: 0.9, fireGrow: 1.0, fireLife: 2.2, fireTurb: 0.5,
-    shellR: 1.3, shellLife: 0.7, shellW: 0.3,
+    shellR: 0,
     sparks: 320, sparkSpeed: [2, 9], sparkLife: [0.6, 3], sparkSize: 0.05,
-    streaks: 90, streakSpeed: [2, 8], streakLife: [0.5, 2], streakLen: 0.5, streakW: 0.03,
+    streaks: 80, streakSpeed: [2, 8], streakLife: [0.5, 2], streakLen: 0.5, streakW: 0.02,
     puffs: 4, puffSize: [0.35, 0.7], puffSpeed: [0.3, 1.0], puffLife: 3.5,
     light: 6, lightLife: 0.7
   },
@@ -753,7 +757,9 @@ export class ShipDestruction {
       const reactorLocal = g.userData.reactorPos || new THREE.Vector3();
       const L = g.userData.size?.length || this.scale;
       const fx = this.ctx.damage || this.ctx.scene.userData.damageFX || null;
-      const broken = fx ? breakHull(g, rnd, fx) : null;
+      // wear just before the reactor let go (scrub-exact, from the timeline)
+      const wear = fx?.wearAt?.(this.shipId, now - 0.05) || null;
+      const broken = fx ? breakHull(g, rnd, fx, wear) : null;
       const chunks = broken ? broken.shards : buildDebrisChunks(g, 9 + Math.floor(rnd() * 4), rnd);
       if (broken) {
         const axis = new THREE.Vector3(0, 0, 1).applyQuaternion(g.quaternion);
@@ -768,7 +774,7 @@ export class ShipDestruction {
           sec.mesh.quaternion.copy(g.quaternion);
           this.chunkGroup.add(sec.mesh);
           const entry = {
-            mesh: sec.mesh, overlay: sec.overlay, p0: worldCenter, vel, q0: g.quaternion.clone(),
+            mesh: sec.mesh, overlay: sec.overlay, wear: sec.wear, p0: worldCenter, vel, q0: g.quaternion.clone(),
             spinAxis, spinRate: 0.05 + 0.2 * rnd(), heat: 0.9 + 0.4 * rnd()
           };
           this.sections.push(entry);
@@ -939,6 +945,11 @@ export class ShipDestruction {
         sec.overlay.material.uniforms.uHeat.value = heat;
         sec.overlay.material.uniforms.uFade.value = secFade;
       }
+      if (sec.wear) {
+        // the hulk's wear rides on the section; its cracks cool with the edges
+        sec.wear.material.opacity = secFade;
+        sec.wear.userData.uniforms.uGlow.value = sectionCrackGlow(heat);
+      }
     }
     if (this.embers) {
       this.emberGroup.position.copy(this.emberOrigin).addScaledVector(this.driftVel, blastAge);
@@ -978,6 +989,7 @@ export class ShipDestruction {
         const mats = Array.isArray(c.mesh.material) ? c.mesh.material : [c.mesh.material];
         for (const m of mats) m.dispose();
         if (c.overlay) { c.overlay.geometry.dispose(); c.overlay.material.dispose(); }
+        if (c.wear) { c.wear.geometry.dispose(); c.wear.material.dispose(); }
       }
     }
     if (this.cloud) this.cloud.dispose();
