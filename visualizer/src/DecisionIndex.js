@@ -63,6 +63,7 @@ export class DecisionIndex {
     }
     const notes = this.events.filter(e => e.ship_id === decision.ship_id &&
       e.timestamp === decision.timestamp && e.event_type === 'captain_log');
+    const comms = this.comms(decision, next, time);
     const allLinked = modern ? this.linked.get(id) || [] : this.events.filter(e =>
       e.timestamp >= decision.timestamp && e.timestamp < next &&
       (e.ship_id === decision.ship_id || e.data.target_id === decision.ship_id));
@@ -92,7 +93,28 @@ export class DecisionIndex {
       e.data.target_id === decision.ship_id && e.timestamp >= decision.timestamp && e.timestamp < next && e.timestamp <= time);
     fact(`${received.length} incoming impacts during this decision window (context, not attribution).`, received);
     return {decision, modern, context: [...new Map([...context, ...parents.filter(e => e.event_type !== 'model_call')].map(e => [e.event_id, e])).values()],
-      calls: parents.filter(e => e.event_type === 'model_call'), notes, execution, outcomes, facts};
+      calls: parents.filter(e => e.event_type === 'model_call'), notes, execution, outcomes, facts, ...comms};
+  }
+
+  /**
+   * Structured comms around a decision (pass-4 schema): the captain_report it
+   * filed, the comms_message traffic it sent before the next decision, and
+   * the messages delivered to the ship since its previous decision (its
+   * inbox when it decided). All empty on recordings without comms events.
+   */
+  comms(decision, next = Infinity, time = Infinity) {
+    const ship = decision.ship_id;
+    const history = this.history(ship);
+    const prev = history[history.indexOf(decision) - 1]?.timestamp ?? -Infinity;
+    const window = e => e.timestamp >= decision.timestamp && e.timestamp < next && e.timestamp <= time;
+    const report = this.events.find(e => e.event_type === 'captain_report' && e.ship_id === ship && window(e)) || null;
+    const sent = this.events.filter(e => e.event_type === 'comms_message' && (e.data.sender_id || e.ship_id) === ship && window(e));
+    const deliveredAt = e => e.data.delivered_t ?? e.timestamp;
+    const inbox = new Set(this.events.filter(e => e.event_type === 'comms_delivered' &&
+      (e.data.recipient_id || e.ship_id) === ship && deliveredAt(e) > prev && deliveredAt(e) <= decision.timestamp)
+      .map(e => e.data.msg_id));
+    const received = inbox.size ? this.events.filter(e => e.event_type === 'comms_message' && inbox.has(e.data.msg_id)) : [];
+    return {report, sent, received};
   }
 }
 
@@ -106,6 +128,9 @@ export function describeEvent(e, ships = {}) {
     case 'admiral_order': return d.order_text;
     case 'captain_log': return d.note;
     case 'captain_admiral_discussion': return `Captain: ${d.captain_question}\nAdmiral: ${d.admiral_response}`;
+    case 'comms_message': return `${d.sender_name || d.sender_id || 'comms'} [${readable(d.channel)}]: ${d.text}`;
+    case 'captain_report': return `${String(d.status || 'ACK').toUpperCase()}: ${d.reason || d.intent || ''}`;
+    case 'message': return `${d.sender_name || ''}: ${d.message}`;
     case 'command_status': return `${readable(d.status)} · ${readable(d.command?.type || d.command?.maneuver_type || d.command?.command_type || 'command')}${d.reason ? ' · ' + d.reason : ''}`;
     case 'weapon_status': return `${readable(d.weapon_slot)} · ${readable(d.reason)}${target ? ' → ' + target : ''}`;
     case 'execution_state': return `${d.mode} · thrust ${Math.round((d.applied_throttle || 0) * 100)}% (ordered ${Math.round((d.requested_throttle || 0) * 100)}%)`;

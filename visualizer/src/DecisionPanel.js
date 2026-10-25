@@ -1,4 +1,6 @@
 import { describeEvent, readable } from './DecisionIndex.js';
+import { showLightbox } from './hudDom.js';
+import { checkpointAt } from './HudIndex.js';
 
 const node = (tag, text, cls) => {
   const el = document.createElement(tag);
@@ -14,6 +16,9 @@ export class DecisionPanel {
     this.open = false;
     this.shipId = null;
     this.decisionId = null;
+    // Follow the latest decision at the playhead until the viewer picks one
+    // (selector, arrows, an evidence jump); the header chip re-arms it.
+    this.followLatest = true;
     this.lastKey = '';
     this.root = document.getElementById('decisionPanel');
     this.toggle = document.getElementById('decisionsBtn');
@@ -29,6 +34,32 @@ export class DecisionPanel {
     this.root.querySelector('[data-prev]').addEventListener('click', () => this.step(-1));
     this.root.querySelector('[data-next]').addEventListener('click', () => this.step(1));
     this.body = this.root.querySelector('[data-body]');
+    this.followBtn = this.root.querySelector('[data-follow]');
+    this.followBtn?.addEventListener('click', () => this.setFollow(!this.followLatest));
+  }
+
+  /** Show this decision and stop following the latest (deep links). */
+  pin(id) {
+    this.decisionId = id;
+    this.followLatest = false;
+    this.lastKey = '';
+  }
+
+  setFollow(on) {
+    this.followLatest = !!on;
+    if (on) this.selectedEventId = null;
+    this.lastKey = '';
+    this.update(this.app.timeController?.currentTime || 0);
+  }
+
+  /** Open on a ship's decision (command-net WHY button); pins it. */
+  openAt(shipId, decisionId) {
+    if (!this.open) this.setOpen(true);
+    if (shipId && this.app.loader?.ships?.[shipId]) {
+      this.app.selectShip?.(shipId);
+      this.selectShip(shipId);
+    }
+    if (decisionId && this.app.loader?.decisions?.byId.has(decisionId)) this.choose(decisionId);
   }
 
   setOpen(open) {
@@ -46,6 +77,7 @@ export class DecisionPanel {
   reset() {
     this.shipId = null;
     this.decisionId = null;
+    this.followLatest = true;
     this.selectedEventId = null;
     this.lastKey = '';
     this.shipSelect.replaceChildren();
@@ -58,7 +90,7 @@ export class DecisionPanel {
   }
 
   selectShip(id) {
-    if (this.shipId !== id) { this.decisionId = null; this.selectedEventId = null; }
+    if (this.shipId !== id) { this.decisionId = null; this.selectedEventId = null; this.followLatest = true; }
     this.shipId = id;
     this.shipSelect.value = id || '';
     this.lastKey = '';
@@ -69,6 +101,7 @@ export class DecisionPanel {
     const e = this.app.loader.decisions.byId.get(id);
     if (!e) return;
     this.decisionId = id;
+    this.followLatest = false;
     this.selectedEventId = null;
     this.jump(e, false);
   }
@@ -81,6 +114,7 @@ export class DecisionPanel {
   }
 
   jump(event, focus = true) {
+    this.followLatest = false;
     this.app.setLiveFollow(false);
     this.app.timeController.pause();
     this.app.timeController.seek(event.timestamp);
@@ -117,15 +151,79 @@ export class DecisionPanel {
     return details;
   }
 
+  /**
+   * A model call's input: image parts (the admiral's tactical plot) render
+   * as thumbnails; the JSON keeps a size placeholder instead of the base64.
+   */
+  modelInput(call, assets, index) {
+    const images = [];
+    const messages = (call.data.message_refs || []).map(ref => {
+      const m = assets[ref];
+      if (!m) return {unavailable: ref};
+      if (!Array.isArray(m.content)) return m;
+      return {...m, content: m.content.map(part => {
+        const url = part?.type === 'image_url' ? part.image_url?.url : null;
+        if (!url) return part;
+        images.push(url);
+        return {type: 'image_url', image_url: `[image ${images.length}: ${Math.round(url.length * 0.75 / 1024)} KB, shown above]`};
+      })};
+    });
+    const admiral = call.data.actor === 'admiral';
+    const wrap = node('div', null, 'decision-model-input');
+    if (images.length) {
+      const fig = node('figure', null, 'decision-vision');
+      const n = checkpointAt(this.app.loader.hud?.checkpoints || [], call.timestamp);
+      const cp = n > 0 ? `CP${n} · ${clock(call.timestamp)}` : clock(call.timestamp);
+      const caption = `What ${admiral ? 'Admiral' : 'Captain'} ${call.data.model || ''} saw · ${cp}`;
+      for (const src of images) {
+        const thumb = node('button', null, 'decision-vision-thumb');
+        thumb.type = 'button';
+        thumb.title = 'Enlarge';
+        const img = document.createElement('img');
+        img.src = src;
+        img.alt = caption;
+        img.loading = 'lazy';
+        thumb.append(img);
+        thumb.addEventListener('click', () => showLightbox(document, src, caption));
+        fig.append(thumb);
+      }
+      fig.append(node('figcaption', caption));
+      wrap.append(fig);
+    }
+    wrap.append(this.rawDetails(`${admiral ? 'Admiral' : 'Captain'} model input · ${call.event_id}`, {
+      model: call.data.model, settings: call.data.request, messages,
+      tools: assets[call.data.tools_ref], finish_reason: call.data.finish_reason, usage: call.data.usage,
+    }));
+    return wrap;
+  }
+
+  renderFollow(index) {
+    const b = this.followBtn;
+    if (!b) return;
+    const pinned = !this.followLatest && index.byId.get(this.decisionId);
+    b.textContent = pinned ? `PINNED ${clock(pinned.timestamp)}` : '● LATEST';
+    b.classList.toggle('active', !pinned);
+    b.setAttribute('aria-pressed', String(!pinned));
+    b.title = pinned ? 'Showing a chosen decision. Click to follow the latest orders again.'
+      : 'Following the latest decision at the playhead. Pick a checkpoint to pin one.';
+  }
+
   update(time) {
     if (!this.open || !this.app.loader?.decisions) return;
     const index = this.app.loader.decisions;
     const history = index.history(this.shipId);
-    const key = `${Math.floor(time)}:${index.events.length}:${this.shipId}:${this.decisionId}`;
+    // Live follow keeps the panel on the newest orders as they arrive
+    const live = this.app.live;
+    if (live?.follow && live.started && !live.ended) this.followLatest = true;
+    // Resolve the decision BEFORE keying, or a followed panel never advances
+    if (this.followLatest || !this.decisionId || !index.byId.has(this.decisionId)) {
+      this.decisionId = index.latest(this.shipId, time)?.event_id;
+    }
+    const key = `${Math.floor(time)}:${index.events.length}:${this.shipId}:${this.decisionId}:${this.followLatest}`;
     if (key === this.lastKey) return;
     this.lastKey = key;
-    if (!this.decisionId || !index.byId.has(this.decisionId)) this.decisionId = index.latest(this.shipId, time)?.event_id;
     const detail = index.detail(this.decisionId, time);
+    this.renderFollow(index);
     const oldOptions = this.decisionSelect.options.length;
     if (oldOptions !== history.length || this.decisionSelect.dataset.ship !== this.shipId) {
       this.decisionSelect.replaceChildren();
@@ -145,10 +243,15 @@ export class DecisionPanel {
     const scroll = this.body.scrollTop;
     this.body.replaceChildren();
     if (!detail || detail.decision.timestamp > time) {
-      this.body.append(node('p', history.length ? 'No decision at this playhead. Use the checkpoint selector to jump to an order.' : 'This recording has no captain decisions for this ship.', 'decision-empty'));
+      const awaiting = live && !live.ended;
+      const text = awaiting && !history.some(e => e.timestamp <= time)
+        ? `Awaiting first orders: commanders deciding (CP${Math.max(1, (live.checkpoint || 0) + (live.status === 'paused' ? 0 : 1))}).`
+        : history.length ? 'No decision at this playhead. Use the checkpoint selector to jump to an order.'
+          : 'This recording has no captain decisions for this ship.';
+      this.body.append(node('p', text, 'decision-empty'));
       return;
     }
-    const {decision, context, calls, notes, execution, outcomes, facts, modern} = detail;
+    const {decision, context, calls, notes, execution, outcomes, facts, modern, report, sent = [], received = []} = detail;
     this.body.append(node('p', `${modern ? 'LINKED EXECUTION' : 'LEGACY · OBSERVED SEQUENCE'} · evidence through ${clock(time)}`, 'decision-badge'));
     const selectedEvent = index.byId.get(this.selectedEventId);
     if (selectedEvent && selectedEvent.timestamp <= time) {
@@ -163,10 +266,21 @@ export class DecisionPanel {
     for (const e of context) {
       intent.append(node('span', readable(e.event_type), 'decision-label'), this.eventButton(e));
     }
+    if (received.length) {
+      intent.append(node('span', `fleet net received · ${received.length}`, 'decision-label'));
+      for (const e of received) intent.append(this.eventButton(e));
+    }
     const orders = this.section('02 / Captain orders');
     orders.append(node('p', `${decision.data.captain_name || 'Commander'} · ${decision.data.model || 'model not recorded'}`, 'decision-muted'));
     if (decision.data.call_failed) orders.append(node('p', 'Model call failed; this is not a deliberate choice to issue no orders.', 'decision-rejected'));
-    if (decision.data.acknowledgment) orders.append(node('blockquote', decision.data.acknowledgment));
+    if (report) {
+      const status = String(report.data.status || 'ACK').toUpperCase();
+      orders.append(node('span', `report to admiral · ${status}`, `decision-label decision-report-${status.toLowerCase()}`));
+      const lines = [report.data.reason, report.data.intent && report.data.intent !== report.data.reason ? `Intent: ${report.data.intent}` : '',
+        report.data.request?.text ? `Request: ${report.data.request.text}` : ''].filter(Boolean);
+      orders.append(node('blockquote', lines.join('\n') || status));
+    } else if (decision.data.acknowledgment) orders.append(node('blockquote', decision.data.acknowledgment));
+    for (const e of sent) orders.append(this.eventButton(e));
     for (const e of notes) orders.append(this.eventButton(e));
     const tools = decision.data.tool_calls || [];
     if (tools.length) {
@@ -187,14 +301,8 @@ export class DecisionPanel {
     }
     for (const error of decision.data.tool_errors || []) orders.append(node('p', String(error), 'decision-rejected'));
     if (modern) orders.append(this.rawDetails('Resolved commands', decision.data.commands));
-    for (const call of calls) {
-      const assets = this.app.loader.sourceData.assets || {};
-      orders.append(this.rawDetails(`${call.data.actor === 'admiral' ? 'Admiral' : 'Captain'} model input · ${call.event_id}`, {
-        model: call.data.model, settings: call.data.request,
-        messages: (call.data.message_refs || []).map(ref => assets[ref] ?? {unavailable: ref}),
-        tools: assets[call.data.tools_ref], finish_reason: call.data.finish_reason, usage: call.data.usage,
-      }));
-    }
+    const assets = this.app.loader.sourceData.assets || {};
+    for (const call of calls) orders.append(this.modelInput(call, assets, index));
     const executionSection = this.section('03 / Ship execution');
     if (!execution.length) executionSection.append(node('p', 'No execution feedback recorded by this time.', 'decision-muted'));
     const latestExecution = execution.filter(e => e.event_type === 'execution_state').at(-1);

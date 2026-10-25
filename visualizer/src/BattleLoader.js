@@ -1,4 +1,5 @@
 import { DecisionIndex } from './DecisionIndex.js';
+import { buildHudIndex } from './HudIndex.js';
 import { getModulesForShipType } from './shipModules.js';
 
 /**
@@ -109,6 +110,8 @@ export class BattleLoader {
     // Radiator extended/retracted changes per ship
     this.buildRadiatorTimeline();
     this.decisions = new DecisionIndex(this.events, this.ships);
+    // Spectator HUD rows (log, command net, kills, markers): see HudIndex.js
+    this.hud = buildHudIndex(this);
     this.lastEventSequence = this.events.reduce((max, e) => Math.max(max, e.sequence || 0), 0);
   }
 
