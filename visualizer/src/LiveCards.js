@@ -286,8 +286,11 @@ export class DirectorChip {
     let text;
     let cls;
     if (!s?.enabled) { text = 'AUTO CAM OFF'; cls = 'off'; }
-    else if (s.hold === 'user') { text = `AUTO CAM PAUSED ${Math.ceil(s.secondsLeft || 0)}s`; cls = 'held'; }
-    else if (s.hold) { text = s.hold === 'ship' ? 'AUTO CAM · SHIP VIEW' : 'AUTO CAM PAUSED'; cls = 'held'; }
+    else if (s.hold === 'ship') { text = 'AUTO CAM · SHIP VIEW'; cls = 'held'; }
+    else if (s.hold) {
+      text = s.secondsLeft != null ? `AUTO CAM PAUSED ${Math.ceil(s.secondsLeft)}s` : 'AUTO CAM PAUSED';
+      cls = 'held';
+    }
     else { text = `AUTO CAM · ${({ kill: 'KILL', detonation: 'KILL', salvo: 'SALVO' })[s.shot] || 'FLEETS'}`; cls = 'on'; }
     const full = `${text} <kbd>A</kbd>`;
     if (full === this.text) return;

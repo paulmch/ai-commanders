@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import {
   CATCHUP_MAX_RATE, LIVE_CUSHION_S, LOST_AFTER_FAILURES, backoffDelay, checkpointNumber, classifyVerdict,
   defaultMaxLag, deliberationProgress, liveDelay, liveStartTime, newBattleReason, nextCheckpointAfter,
@@ -249,10 +250,10 @@ test('fleet framing looks across the axis between the fleets and fits them', () 
   assert.ok(centre.distanceTo(box) < 20);
 });
 
-function directorFixture() {
+function directorFixture(makeControls = null) {
   const camera = new THREE.PerspectiveCamera(55, 16 / 9, 0.2, 100000);
   const listeners = {};
-  const controls = {
+  const controls = makeControls ? makeControls(camera) : {
     target: new THREE.Vector3(), enabled: true, update() { camera.lookAt(this.target); },
     addEventListener(type, fn) { listeners[type] = fn; }
   };
@@ -289,7 +290,7 @@ test('director frames the fleets, cuts to kills, and yields to the viewer', () =
   assert.deepEqual(camera.position.toArray(), before.toArray());
   assert.equal(controller.directorState().hold, 'user');
   assert.ok(controller.directorState().secondsLeft <= DIRECTOR_USER_HOLD_S);
-  // Something else places the camera (a snapshot harness): hold until re-armed
+  // Something else places the camera (a script): the director steps aside
   controller.setDirector(true);
   controller.update(states, { time: 30, dt: 1 / 60 });
   camera.position.set(5, 5, 5);
@@ -306,6 +307,85 @@ test('director frames the fleets, cuts to kills, and yields to the viewer', () =
   camera.position.set(1, 2, 3);
   controller.update(states, { time: 40, dt: 1 / 60 });
   assert.deepEqual(camera.position.toArray(), [1, 2, 3], 'disarmed: the camera is the viewer\'s');
+});
+
+/** A canvas stand-in for a real OrbitControls: pointer listeners only. */
+function fakeCanvas() {
+  const listeners = {};
+  return {
+    style: {}, clientWidth: 960, clientHeight: 540,
+    addEventListener(type, fn) { (listeners[type] ||= []).push(fn); },
+    removeEventListener(type, fn) { listeners[type] = (listeners[type] || []).filter(f => f !== fn); },
+    setPointerCapture() {}, releasePointerCapture() {},
+    fire(type, e = {}) {
+      for (const fn of [...(listeners[type] || [])]) {
+        fn({ pointerId: 1, pointerType: 'mouse', button: 0, preventDefault() {}, ...e });
+      }
+    }
+  };
+}
+
+test('director takes over a damped OrbitControls without reading drag inertia as an outside move', () => {
+  // OrbitControls registers a keydown listener on the global document
+  const hadDocument = 'document' in globalThis;
+  if (!hadDocument) globalThis.document = { addEventListener() {}, removeEventListener() {} };
+  const canvas = fakeCanvas();
+  let controls = null;
+  try {
+    const { camera, controller } = directorFixture(cam => {
+      controls = new OrbitControls(cam, canvas);
+      controls.enableDamping = true;   // SceneManager's settings
+      controls.dampingFactor = 0.06;
+      return controls;
+    });
+    const states = { alpha_1: {}, beta_1: {} };
+    // One rendered frame at a software-GL rate: the director writes the
+    // camera, then scene.render() runs controls.update()
+    const frame = t => { controller.update(states, { time: t, dt: 0.25 }); controls.update(); };
+    const drag = () => {
+      canvas.fire('pointerdown', { clientX: 400, clientY: 300 });
+      canvas.fire('pointermove', { clientX: 520, clientY: 340 });
+      canvas.fire('pointerup');
+    };
+    controller.setDirector(true);
+    for (let i = 0; i < 4; i++) frame(i);
+    assert.equal(controller.directorState().active, true);
+    drag();
+    assert.equal(controller.directorState().hold, 'user');
+    // A pressed right after the drag, with the rotation still coasting
+    controller.setDirector(true);
+    const before = camera.position.clone();
+    for (let i = 0; i < 12; i++) frame(10 + i);
+    assert.equal(controller.directorState().hold, null, 're-armed director keeps flying');
+    assert.ok(camera.position.distanceTo(before) > 1, 'and it does fly');
+    // The drag hold runs out with inertia left (few frames rendered meanwhile)
+    drag();
+    controller.director.holdUntil = performance.now() - 1;
+    for (let i = 0; i < 12; i++) frame(30 + i);
+    assert.equal(controller.directorState().hold, null, 'hold expiry hands back cleanly');
+    // Settling the inertia never moves the camera itself
+    drag();
+    const pose = camera.position.clone();
+    controller.setDirector(true);
+    controller._settleControls();
+    assert.deepEqual(camera.position.toArray(), pose.toArray());
+    controls.update();
+    assert.ok(camera.position.distanceTo(pose) < 1e-9, 'no inertia left to coast on');
+    // A genuine outside placement still steps the director aside, and
+    // that pause runs out like a drag's
+    for (let i = 0; i < 2; i++) frame(50 + i);
+    camera.position.set(5, 5, 5);
+    frame(52);
+    const held = controller.directorState();
+    assert.equal(held.hold, 'external');
+    assert.ok(held.secondsLeft > 0 && held.secondsLeft <= DIRECTOR_USER_HOLD_S);
+    controller.director.holdUntil = performance.now() - 1;
+    frame(53);
+    assert.equal(controller.directorState().hold, null);
+  } finally {
+    controls?.dispose();
+    if (!hadDocument) delete globalThis.document;
+  }
 });
 
 test('off-screen chevrons sit where the ray to the fleet leaves the view', () => {

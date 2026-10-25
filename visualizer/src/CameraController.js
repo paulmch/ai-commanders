@@ -6,7 +6,7 @@ import * as THREE from 'three';
 // matter - kills and torpedo salvos. Shots are chosen by BATTLE time
 // (scrubbing replays the same cuts); the camera eases in wall time.
 
-/** Wall seconds a manual drag/zoom keeps the director away. */
+/** Wall seconds a manual drag/zoom (or an outside camera move) keeps the director away. */
 export const DIRECTOR_USER_HOLD_S = 20;
 const KILL_SHOT_S = 8;
 const DETONATION_SHOT_S = 6;
@@ -159,9 +159,10 @@ export class CameraController {
     this.lastPosition = null;
     this.lastTime = null;
     this.fleetFramed = true;
-    // Director: off until main.js arms it. hold: null | 'user' (drag/zoom,
-    // until holdUntil) | 'ship' (a ship is selected) | 'external' (someone
-    // else placed the camera - a harness or script; until re-armed)
+    // Director: off until main.js arms it. hold: null | 'user' (drag/zoom)
+    // | 'external' (someone else placed the camera - a script; a harness
+    // that frames its own shots disarms the director instead), both until
+    // holdUntil | 'ship' (a ship is selected; until deselected)
     this.director = { enabled: false, hold: null, holdUntil: 0, cuts: [], shot: null, written: null };
     this.onDirectorChange = null;
     this.orbitControls.addEventListener?.('start', () => {
@@ -183,12 +184,12 @@ export class CameraController {
     this.onDirectorChange?.(this.directorState());
   }
 
-  /** Pause the director: 'user' for DIRECTOR_USER_HOLD_S, else until released. */
+  /** Pause the director: 'ship' until released, else for DIRECTOR_USER_HOLD_S. */
   holdDirector(reason) {
     const d = this.director;
     if (!d.enabled) return;
     d.hold = reason;
-    d.holdUntil = reason === 'user' ? performance.now() + DIRECTOR_USER_HOLD_S * 1000 : Infinity;
+    d.holdUntil = reason === 'ship' ? Infinity : performance.now() + DIRECTOR_USER_HOLD_S * 1000;
     d.written = null;
     this.onDirectorChange?.(this.directorState());
   }
@@ -210,7 +211,8 @@ export class CameraController {
   /** {enabled, active, hold, secondsLeft, shot} for the HUD chip. */
   directorState() {
     const d = this.director;
-    const left = d.hold === 'user' ? Math.max(0, (d.holdUntil - performance.now()) / 1000) : null;
+    const left = d.hold && Number.isFinite(d.holdUntil)
+      ? Math.max(0, (d.holdUntil - performance.now()) / 1000) : null;
     return { enabled: d.enabled, active: d.enabled && !d.hold && this.mode === 'free', hold: d.hold,
       secondsLeft: left, shot: d.shot?.kind || (d.enabled ? 'fleet' : null) };
   }
@@ -224,14 +226,17 @@ export class CameraController {
   updateDirector(shipStates, { time = 0, dt = 1 / 60, torpedoes = [], shift = 0, widthShare = 0.62 } = {}) {
     const d = this.director;
     if (!d.enabled || this.mode !== 'free') return false;
-    if (d.hold === 'user' && performance.now() >= d.holdUntil) {
+    if (d.hold && performance.now() >= d.holdUntil) {
       d.hold = null;
       this.onDirectorChange?.(this.directorState());
     }
     if (d.hold) return false;
     const target = this.orbitControls.target;
-    // Someone else moved the camera since our last write (a snapshot
-    // harness, a script): step aside until re-armed.
+    // Taking the camera over (armed, re-armed, a hold lifted): first stop
+    // whatever a drag left coasting in the controls
+    if (!d.written) this._settleControls();
+    // Someone else moved the camera since our last write (a script): step
+    // aside for a while.
     if (d.written) {
       const dist = Math.max(1, this.camera.position.distanceTo(target));
       if (this.camera.position.distanceTo(d.written.position) > dist * 1e-3 ||
@@ -259,6 +264,28 @@ export class CameraController {
     d.written = { position: this.camera.position.clone(), target: target.clone() };
     this.fleetFramed = !cut;
     return true;
+  }
+
+  /**
+   * Drop OrbitControls' damping inertia without moving the camera. A drag
+   * leaves decaying rotate/pan deltas that every controls.update() (one per
+   * render) keeps applying; left in place when the director takes over,
+   * that drift past its write reads as an outside camera move and parks it
+   * on 'external'. three r160 keeps the deltas private: one undamped update
+   * applies and zeroes them, then the pose goes back.
+   */
+  _settleControls() {
+    const controls = this.orbitControls;
+    if (!controls?.enableDamping || typeof controls.update !== 'function') return;
+    const position = this.camera.position.clone();
+    const quaternion = this.camera.quaternion.clone();
+    const target = controls.target.clone();
+    controls.enableDamping = false;
+    controls.update();
+    controls.enableDamping = true;
+    this.camera.position.copy(position);
+    this.camera.quaternion.copy(quaternion);
+    controls.target.copy(target);
   }
 
   /** Points (scene units) of the live ships, plus in-flight torpedoes. */
