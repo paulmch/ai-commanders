@@ -176,11 +176,11 @@ class TestOrdnance:
         ordnance = section(text, "=== ORDNANCE IN FLIGHT ===")
         assert "none - nothing in flight is on course for your hulls" in ordnance
         assert "-> OCS beta_1 [beta_1]: 1 guided" in ordnance
-        assert "Inbound on" not in section(text, "!! NOW")
+        assert "Torpedoes inbound on" not in section(text, "!! NOW")
         # The same round IS inbound for the other side.
         _, beta_text = live_turn(make_admiral("beta"), sim, caps_from_sim(sim, "beta"))
         assert "1x torpedo -> OCS beta_1 [beta_1] from TIS alpha_1 [alpha_1]" in beta_text
-        assert "Inbound on: OCS beta_1 [beta_1] (1 torpedo ETA" in beta_text
+        assert "Torpedoes inbound on: OCS beta_1 [beta_1] (1 torpedo ETA" in beta_text
 
     def test_receding_blinded_wreck_is_spent_not_inbound(self):
         sim = self._duel()
@@ -215,7 +215,7 @@ class TestOrdnance:
         live = msgs[1]["content"]
         assert "dead torpedo" not in section(live, "INBOUND ON YOU")
         assert "10 of theirs are dead rounds on nobody's line" in live
-        assert "torpedo" not in section(live, "!! NOW")
+        assert "Torpedoes inbound on" not in section(live, "!! NOW")
 
     def test_no_eta_sentinel_anywhere(self):
         for faction in ("alpha", "beta"):

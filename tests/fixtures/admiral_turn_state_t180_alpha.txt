@@ -2,7 +2,6 @@
 
 !! NOW (act on these first)
 - GROUP A: MERGE IN 45 s at 1.4 km (OCS Lancer-3), too late to brake (need 368 km incl. flip, have 157 km); pass wide or burn laterally NOW.
-- Inbound on: TIS Dart-1 [alpha_1] (4 slugs ETA 1-2 s); TIS Dart-2 [alpha_2] (1 slug ETA 11 s) - see ORDNANCE
 
 === CAPTAIN REPORTS (filed at checkpoint 6) ===
 UNABLE TIS Dart-4 [alpha_4]: "magazine empty"

@@ -2351,28 +2351,27 @@ def _format_now(snapshot: Any, last_failure: Optional[Tuple[float, str]],
     for info in getattr(snapshot, "range_groups", None) or []:
         if info.warning:
             items.append(f"{info.label}: {info.warning}")
+    # Torpedoes (guided, or dead on a hull's line) are the ordnance an
+    # admiral acts on this checkpoint; gun rounds are listed under ORDNANCE.
     by_ship: Dict[str, List[Any]] = {}
     for r in _inbound_rounds(snapshot):
-        by_ship.setdefault(r.threat_id, []).append(r)
+        if r.kind == "torpedo":
+            by_ship.setdefault(r.threat_id, []).append(r)
     if by_ship:
         parts = []
         for sid, rounds in sorted(by_ship.items(),
                                   key=lambda kv: min((r.eta_s or 1e9) for r in kv[1])):
             kinds = []
-            torps = [r for r in rounds if r.kind == "torpedo" and not r.ballistic]
-            dead = [r for r in rounds if r.kind == "torpedo" and r.ballistic]
-            slugs = [r for r in rounds if r.kind == "slug"]
+            torps = [r for r in rounds if not r.ballistic]
+            dead = [r for r in rounds if r.ballistic]
             if torps:
                 kinds.append(f"{len(torps)} torpedo{'es' if len(torps) > 1 else ''} "
                              f"ETA {_span_text([r.eta_s for r in torps])} s")
             if dead:
                 kinds.append(f"{len(dead)} dead torpedo{'es' if len(dead) > 1 else ''} on its line "
                              f"in {_span_text([r.tca_s for r in dead])} s")
-            if slugs:
-                kinds.append(f"{len(slugs)} slug{'s' if len(slugs) > 1 else ''} "
-                             f"ETA {_span_text([r.eta_s for r in slugs])} s")
             parts.append(f"{_lbl(snapshot, sid)} ({', '.join(kinds)})")
-        items.append("Inbound on: " + "; ".join(parts[:5])
+        items.append("Torpedoes inbound on: " + "; ".join(parts[:5])
                      + (f"; +{len(parts) - 5} more" if len(parts) > 5 else "")
                      + " - see ORDNANCE")
     for row in getattr(snapshot, "friendly_ships", None) or []:
@@ -2388,7 +2387,7 @@ def _format_now(snapshot: Any, last_failure: Optional[Tuple[float, str]],
         items.append(f"Your fleet directive at T+{t:.0f}s FAILED ({why}): captains flew "
                      "without one. Answer with tool calls first, analysis short.")
     if not items:
-        items.append("nothing urgent: no merge warning, nothing inbound on your hulls")
+        items.append("nothing urgent: no merge warning, no torpedo inbound on your hulls")
     return "!! NOW (act on these first)\n" + "\n".join(f"- {i}" for i in items)
 
 
