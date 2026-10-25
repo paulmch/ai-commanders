@@ -9,11 +9,17 @@
  * footage is due holds playback ("buffering") instead of pausing.
  */
 export class TimeController {
-  constructor(duration) {
+  /**
+   * @param {number} duration - timeline span in seconds
+   * @param {Object} [opts] - {speed}: initial playback speed, so a speed the
+   *   viewer picked before the battle loaded (draft, battle switch) carries over
+   */
+  constructor(duration, { speed = 1.0 } = {}) {
     this.duration = duration;
     this.available = Infinity;
     this.currentTime = 0;
     this.playbackSpeed = 1.0;
+    this.setSpeed(speed);
     this.isPlaying = false;
     this.callbacks = [];
   }
@@ -54,6 +60,7 @@ export class TimeController {
    * @param {number} speed - Playback speed multiplier
    */
   setSpeed(speed) {
+    if (!Number.isFinite(speed)) return;
     this.playbackSpeed = Math.max(0.25, Math.min(8, speed));
   }
 

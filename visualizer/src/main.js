@@ -37,6 +37,10 @@ class BattleVisualizer {
 
     // State
     this.isInitialized = false;
+    // The speed the viewer picked. Lives here, not on the TimeController:
+    // a speed chosen before the battle loads (live draft, connecting, a
+    // battle switch, the file selector) must carry into the next one.
+    this.playbackSpeed = 1.0;
     this.live = null; // Live-mode state; null when replaying a saved recording
     this.selectedShipId = null;
     this.lastTime = 0;
@@ -393,7 +397,8 @@ class BattleVisualizer {
     // footage received so far up to the next checkpoint, and the playhead
     // may only run to the newest frame (available).
     const liveRunning = this.live && !this.live.ended;
-    this.timeController = new TimeController(liveRunning ? this.liveTimelineSpan() : this.replayEnd());
+    this.timeController = new TimeController(liveRunning ? this.liveTimelineSpan() : this.replayEnd(),
+      { speed: this.playbackSpeed });
     if (liveRunning) this.timeController.setAvailable(this.loader.duration);
     this.timeController.onTimeChange((time, duration) => {
       this.updateTimeDisplay(time, duration);
@@ -1837,9 +1842,9 @@ class BattleVisualizer {
    * Set playback speed
    */
   setPlaybackSpeed(speed) {
-    if (this.timeController) {
-      this.timeController.setSpeed(speed);
-    }
+    if (!Number.isFinite(speed)) return;
+    this.playbackSpeed = speed;
+    this.timeController?.setSpeed(speed);
   }
 
   /**

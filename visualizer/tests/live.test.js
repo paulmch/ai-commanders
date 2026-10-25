@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import * as THREE from 'three';
 import {
   CATCHUP_MAX_RATE, LIVE_CUSHION_S, LOST_AFTER_FAILURES, backoffDelay, checkpointNumber, classifyVerdict,
@@ -169,6 +170,22 @@ test('timeline spans past the footage; the playhead never runs past what arrived
   const replay = new TimeController(60);
   replay.seek(70);
   assert.equal(replay.currentTime, 60, 'replays are unchanged');
+});
+
+test('a speed picked before the battle loads carries into the new timeline', () => {
+  assert.equal(new TimeController(60).playbackSpeed, 1);
+  const tc = new TimeController(60, { speed: 2 });
+  assert.equal(tc.playbackSpeed, 2);
+  tc.play();
+  tc.update(5);
+  assert.equal(tc.currentTime, 10);
+  assert.equal(new TimeController(60, { speed: 64 }).playbackSpeed, 8, 'clamped like setSpeed');
+  assert.equal(new TimeController(60, { speed: NaN }).playbackSpeed, 1);
+  // main.js keeps the chosen speed on the app and hands it to every new
+  // TimeController, so the active speed button and the live head agree
+  // after the draft, a battle switch or another file
+  const main = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
+  assert.match(main, /new TimeController\([^;]*\{ speed: this\.playbackSpeed \}\)/);
 });
 
 // ----------------------------------------------------------------- director
