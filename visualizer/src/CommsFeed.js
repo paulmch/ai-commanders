@@ -184,7 +184,10 @@ export class CommsFeed {
     shown.length = 0;
     for (const r of desired) this._appendRow(r, false);
     if (!desired.length) {
-      this.list.append(node(this.doc, 'p', this.hud?.comms?.length ? 'No traffic on this filter yet.' : 'No command traffic recorded yet.', 'comms-empty'));
+      const filtered = this.faction !== 'all' || this.group !== 'all';
+      const text = !this.hud?.comms?.length ? 'No command traffic recorded yet.'
+        : filtered ? 'No traffic on this filter yet.' : 'No command traffic yet.';
+      this.list.append(node(this.doc, 'p', text, 'comms-empty'));
     }
     return 'rebuild';
   }

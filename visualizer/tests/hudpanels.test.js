@@ -300,4 +300,13 @@ test('command net with no traffic says so instead of rendering an empty column',
   assert.equal(list.querySelector('.comms-empty')?.textContent, 'No command traffic recorded yet.');
   assert.equal(feed.update(30), 'same', 'parked: nothing re-rendered');
   assert.equal(list.querySelectorAll('.comms-empty').length, 1);
+  // traffic recorded but none yet at the playhead (a live battle before CP1)
+  const busy = commsFixture();
+  busy.feed.update(10);
+  assert.equal(busy.list.querySelector('.comms-empty')?.textContent, 'No command traffic yet.');
+  busy.feed.update(40);
+  assert.equal(busy.list.querySelector('.comms-empty'), null, 'the first rows replace the line');
+  busy.feed.setFilter('all', 'issues');
+  busy.feed.update(10);
+  assert.equal(busy.list.querySelector('.comms-empty')?.textContent, 'No traffic on this filter yet.');
 });
