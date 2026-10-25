@@ -1835,8 +1835,7 @@ body {
 .fleet-section.beta .ship-list li.selected { border-color: var(--beta-dim); background: rgba(255,138,60,0.08); }
 
 .view-controls {
-  /* below the header's scoreboard strip (pass 4), which ends at ~62 px */
-  position: fixed; top: 64px; right: 16px; z-index: 25;
+  position: fixed; top: 57px; right: 16px; z-index: 25;
   display: flex; gap: 6px;
 }
 .view-controls.hidden { display: none; }
@@ -2431,6 +2430,14 @@ body.decisions-open .live-delib {
    the view controls (top 57px) */
 .title-prefix { display: none; }
 .battle-title h1 { font-size: 15px; }
+/* ...which, centred in the 72 px header, they did not (scoreboard 36-61 px
+   cut the tops of FLEET VIEW / NET / DECISIONS). Pinned from the top and
+   packed tighter they end at 56 px; the row cannot move down instead, the
+   live HUD starts at 84 px right under it. */
+@media (min-width: 681px) {
+  .header-center { align-self: flex-start; padding-top: 10px; gap: 1px; }
+  .header-center .scoreboard { padding-top: 1px; padding-bottom: 1px; }
+}
 
 .scoreboard {
   display: flex;
