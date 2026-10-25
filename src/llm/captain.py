@@ -20,7 +20,11 @@ from .prompts import (
     CaptainPersonality,
     PERSONALITY_PRESETS,
 )
-from .communication import CaptainMessage, MessageType
+from .communication import (
+    CaptainMessage, MessageType, MAX_DISCUSSION_EXCHANGES, MAX_ENEMY_MESSAGES_PER_DECISION,
+    MAX_FLEET_SIGNALS_PER_DECISION, SIGNAL_TEXT_CHARS, clip, normalize_report, normalize_signal,
+)
+from .tools import FLEET_SIGNAL_TOOL, REPORT_TO_ADMIRAL_TOOL
 from .admiral_tools import DISCUSS_WITH_ADMIRAL_TOOL
 
 
@@ -148,8 +152,25 @@ class LLMCaptain:
         self.admiral_orders: List[Any] = []  # Orders from Admiral
         self.fleet_directive: str = ""  # Overall fleet strategy
         self.discussion_exchanges: int = 0  # Track discussion rounds
-        self.max_discussion_exchanges: int = 2
-        self.order_response: Optional[Dict[str, Any]] = None  # Response to orders
+        self.max_discussion_exchanges: int = MAX_DISCUSSION_EXCHANGES
+        # This checkpoint's report to the Admiral (report_to_admiral, or the
+        # legacy respond_to_orders alias): {status, reason, intent, contact,
+        # request, tool}. The runner files it after the decision; the Admiral
+        # reads it at the next checkpoint (admiral.captain_reports).
+        self.order_response: Optional[Dict[str, Any]] = None
+
+        # Fleet comms. outbox: messages composed this checkpoint (fleet_signal,
+        # send_message), drained and routed by the runner after the decision.
+        # inbox: comms_message dicts delivered to this ship this checkpoint
+        # (fleet net, direct, engine datalink, enemy channel) - replaced by
+        # the runner every checkpoint. fleet_peer_names: living friendly
+        # ships, set with the inbox (no peers: no fleet_signal tool).
+        # discussions: this checkpoint's discuss_with_admiral Q&A.
+        self.outbox: List[Dict[str, Any]] = []
+        self.inbox: List[Dict[str, Any]] = []
+        self.inbox_delivered_t: Optional[float] = None
+        self.fleet_peer_names: List[str] = []
+        self.discussions: List[Dict[str, Any]] = []
 
     def setup_weapon_groups(self, ship_type: str, fleet_data: Dict[str, Any]) -> None:
         """Set up weapon groups based on ship type."""
@@ -264,8 +285,9 @@ class LLMCaptain:
 
         If Admiral exists:
         - Remove propose_draw and retract_draw (only Admiral can)
-        - Add discuss_with_admiral tool
-        - Add respond_to_orders tool if orders were received
+        - Add discuss_with_admiral and report_to_admiral (the captain->admiral
+          channel; respond_to_orders survives only as an execution alias)
+        With living friendly ships to talk to: add fleet_signal.
         """
         # Get base tools
         tools = self._build_tools()
@@ -276,11 +298,10 @@ class LLMCaptain:
                 t for t in tools
                 if t["function"]["name"] not in ("propose_draw", "retract_draw")
             ]
-            # Add discuss_with_admiral tool
             tools.append(DISCUSS_WITH_ADMIRAL_TOOL)
-            # Add respond_to_orders tool if we have orders
-            if self.admiral_orders or self.fleet_directive:
-                tools.append(RESPOND_TO_ORDERS_TOOL)
+            tools.append(REPORT_TO_ADMIRAL_TOOL)
+        if self.fleet_peer_names:
+            tools.append(FLEET_SIGNAL_TOOL)
 
         return tools
 
@@ -290,6 +311,7 @@ class LLMCaptain:
         self.fleet_directive = ""
         self.discussion_exchanges = 0
         self.order_response = None
+        self.discussions = []
 
     def decide(
         self,
@@ -1900,18 +1922,43 @@ class LLMCaptain:
             return radiator_command_from_args(args)
 
         elif name == "send_message":
-            # Queue message for delivery and record in history
-            message = args.get("message", "")
-            recipient = args.get("recipient", "ALL_ENEMIES")
-            target_ship = args.get("target_ship", None)
-
-            # Store message with recipient info
-            self.pending_message = {
-                "content": message,
+            # Enemy/open channel. Queued in the outbox; the runner routes it
+            # (faction-checked) after the decision. Several per decision are
+            # kept - the old single slot silently dropped all but the last.
+            text = clip(args.get("message"), SIGNAL_TEXT_CHARS)
+            if not text:
+                return None
+            sent = sum(1 for m in self.outbox if m["tool"] == "send_message")
+            if sent >= MAX_ENEMY_MESSAGES_PER_DECISION:
+                self._record_tool_error(
+                    f"send_message: only {MAX_ENEMY_MESSAGES_PER_DECISION} transmissions per "
+                    "decision - this one was not sent")
+                return None
+            recipient = str(args.get("recipient") or "ALL_ENEMIES").strip().upper()
+            target_ship = args.get("target_ship")
+            self.outbox.append({
+                "tool": "send_message",
+                "to": target_ship if recipient == "SPECIFIC" and target_ship else recipient,
                 "recipient": recipient,
                 "target_ship": target_ship,
-            }
-            self._record_sent_message(message, simulation.current_time)
+                "kind": "FREE",
+                "text": text,
+            })
+            return None
+
+        elif name == "fleet_signal":
+            signal, errors = normalize_signal(args)
+            for error in errors:
+                self._record_tool_error(error)
+            if signal is None:
+                return None
+            sent = sum(1 for m in self.outbox if m["tool"] == "fleet_signal")
+            if sent >= MAX_FLEET_SIGNALS_PER_DECISION:
+                self._record_tool_error(
+                    f"fleet_signal: only {MAX_FLEET_SIGNALS_PER_DECISION} signals per decision - "
+                    f"this {signal['kind']} was not sent")
+                return None
+            self.outbox.append({"tool": "fleet_signal", **signal})
             return None
 
         elif name == "log_note":
@@ -1977,31 +2024,25 @@ class LLMCaptain:
                 "exchange_number": self.discussion_exchanges,
             }
 
-        elif name == "respond_to_orders":
-            # Captain responding to Admiral orders
-            response_type = args.get("response_type", "ACKNOWLEDGE")
-            deviation_reason = args.get("deviation_reason", "")
-            acknowledgment_note = args.get("acknowledgment_note", "")
-
-            # Store the response for logging/display
-            self.order_response = {
-                "type": response_type,
-                "deviation_reason": deviation_reason,
-                "acknowledgment_note": acknowledgment_note,
-            }
-
-            if response_type == "DEVIATE":
-                print(f"  [DEVIATION] {self.name}:")
-                for line in deviation_reason.split('\n'):
-                    print(f"    {line}")
-            elif acknowledgment_note:
-                print(f"  [ACKNOWLEDGE] {self.name}:")
-                for line in acknowledgment_note.split('\n'):
-                    print(f"    {line}")
-            else:
-                print(f"  [ACKNOWLEDGE] {self.name}: Orders received, executing.")
-
-            return None  # No command, just tracking
+        elif name in ("report_to_admiral", "respond_to_orders"):
+            # Captain -> Admiral. respond_to_orders is the legacy alias (old
+            # prompts, recorded tool calls); its args map onto the report.
+            if not self.has_admiral:
+                self._record_tool_error(
+                    f"{name}: you have no Admiral - you are an independent command.")
+                return None
+            report, errors = normalize_report(args, legacy=(name == "respond_to_orders"))
+            for error in errors:
+                self._record_tool_error(error)
+            report["tool"] = name
+            # Legacy keys, for anything still reading the old response shape.
+            report["type"] = "ACKNOWLEDGE" if report["status"] == "ACK" else report["status"]
+            report["deviation_reason"] = report["reason"]
+            report["acknowledgment_note"] = report["intent"]
+            self.order_response = report
+            text = report["reason"] or report["intent"] or "Orders received, executing."
+            print(f"  [{report['status']}] {self.name}: {text}")
+            return None  # No command: the runner files it for the Admiral
 
         else:
             self._record_tool_error(f"unknown tool {name!r} - it was ignored.")
@@ -2009,19 +2050,89 @@ class LLMCaptain:
 
     def get_pending_message(self) -> Optional[Dict[str, Any]]:
         """
-        Get and clear pending outgoing message.
+        Pop the next outgoing enemy-channel message (1v1 duel path).
 
         Returns:
             Dict with 'content', 'recipient', 'target_ship' keys, or None
         """
         msg = self.pending_message
         self.pending_message = None
+        if isinstance(msg, str):  # legacy string format
+            return {"content": msg, "recipient": "ALL_ENEMIES", "target_ship": None}
+        if msg:
+            return msg
+        for i, entry in enumerate(self.outbox):
+            if entry.get("tool") == "send_message":
+                del self.outbox[i]
+                self._record_sent_message(entry["text"], self._last_decision_time())
+                return {"content": entry["text"], "recipient": entry.get("recipient", "ALL_ENEMIES"),
+                        "target_ship": entry.get("target_ship")}
+        return None
 
-        # Handle legacy string format
-        if isinstance(msg, str):
-            return {
-                "content": msg,
-                "recipient": "ALL_ENEMIES",
-                "target_ship": None,
-            }
-        return msg
+    def _last_decision_time(self) -> float:
+        return self.decision_history[-1]["time"] if self.decision_history else 0.0
+
+    def note_sent(self, text: str, time: float, to: str) -> None:
+        """
+        Log a message the runner actually transmitted (COMMUNICATION LOG).
+
+        `to` (recipient and signal kind, e.g. "ALL [TARGET_CLAIM]") leads the
+        logged text: the log entry has no recipient field, and "I claimed
+        Lancer to my fleet" must not read like a taunt sent to the enemy.
+        """
+        self._record_sent_message(f"-> {to}: {text}", time)
+
+    def drain_outbox(self) -> List[Dict[str, Any]]:
+        """
+        Take every message composed this checkpoint (fleet battles).
+
+        Entries: {tool: 'fleet_signal'|'send_message', to, kind, text, ...}.
+        A legacy `pending_message` dict (set directly by older callers) is
+        drained too, as a send_message.
+        """
+        out = list(self.outbox)
+        self.outbox = []
+        legacy = self.pending_message
+        self.pending_message = None
+        if isinstance(legacy, str):
+            legacy = {"content": legacy, "recipient": "ALL_ENEMIES", "target_ship": None}
+        if isinstance(legacy, dict) and legacy.get("content"):
+            recipient = str(legacy.get("recipient") or "ALL_ENEMIES").upper()
+            target = legacy.get("target_ship")
+            out.append({"tool": "send_message", "kind": "FREE", "text": str(legacy["content"]),
+                        "recipient": recipient, "target_ship": target,
+                        "to": target if recipient == "SPECIFIC" and target else recipient})
+        return out
+
+    def take_comms_pass(self) -> Dict[str, Any]:
+        """
+        Detach this decision pass's outbox and report (discussion re-decide).
+
+        The runner may re-run decide() in one checkpoint (after an Admiral
+        discussion); the re-run executes the comms tools again. The runner
+        detaches the superseded pass's comms here and hands them back to
+        `restore_comms_pass`, which keeps whatever the re-run did not replace.
+        """
+        taken = {"outbox": self.outbox, "report": self.order_response}
+        self.outbox = []
+        self.order_response = None
+        return taken
+
+    def restore_comms_pass(self, earlier: Dict[str, Any]) -> None:
+        """Fall back to an earlier pass's outbox/report where the re-run sent none."""
+        if not self.outbox:
+            self.outbox = list(earlier.get("outbox") or [])
+        if self.order_response is None:
+            self.order_response = earlier.get("report")
+
+    def receive_inbox(self, items: List[Dict[str, Any]], delivered_t: float) -> None:
+        """
+        This checkpoint's fleet comms (replaces the previous checkpoint's).
+
+        Data only: the captain prompt renders the inbox (FLEET NET / ENEMY
+        TRANSMISSIONS) and copies it into the COMMUNICATION LOG history,
+        de-duplicated by msg_id - logging it here as well would log every
+        message twice.
+        """
+        self.inbox = list(items)
+        self.inbox_delivered_t = delivered_t

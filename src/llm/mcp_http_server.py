@@ -950,32 +950,10 @@ async def run_fleet_battle_with_http(
                         f"(checkpoint {runner.checkpoint_count})"
                     )
 
-        # === MESSAGE BRIDGE: MCP <-> LLM Admiral ===
-        # Present in run_fleet_battle_async but lost in this fork: without it an
-        # MCP commander's send_message never reaches an LLM admiral opponent and
-        # vice versa, so mixed MCP-vs-LLM battles were mute in both directions.
-        if runner.mcp_chat:
-            if runner.alpha_mcp and runner.beta_admiral:
-                for msg in runner.mcp_chat.get_pending_messages("beta"):
-                    runner.beta_admiral.receive_enemy_admiral_message(msg.content)
-                    dbg(f"  [MSG] Alpha MCP -> Beta Admiral: \"{msg.content}\"")
-
-            if runner.beta_mcp and runner.alpha_admiral:
-                for msg in runner.mcp_chat.get_pending_messages("alpha"):
-                    runner.alpha_admiral.receive_enemy_admiral_message(msg.content)
-                    dbg(f"  [MSG] Beta MCP -> Alpha Admiral: \"{msg.content}\"")
-
-            if runner.alpha_admiral and runner.beta_mcp:
-                alpha_msg = runner.alpha_admiral.get_pending_enemy_message()
-                if alpha_msg:
-                    runner.mcp_chat.send_message("alpha", alpha_msg, runner.simulation.current_time)
-                    dbg(f"  [MSG] Alpha Admiral -> Beta MCP: \"{alpha_msg}\"")
-
-            if runner.beta_admiral and runner.alpha_mcp:
-                beta_msg = runner.beta_admiral.get_pending_enemy_message()
-                if beta_msg:
-                    runner.mcp_chat.send_message("beta", beta_msg, runner.simulation.current_time)
-                    dbg(f"  [MSG] Beta Admiral -> Alpha MCP: \"{beta_msg}\"")
+        # === MESSAGE BRIDGE: MCP <-> LLM Admiral (and MCP <-> MCP) ===
+        # Shared with run_fleet_battle_async (it used to be two copies, and
+        # this fork once lost it): delivers and records the diplomacy.
+        runner._bridge_mcp_messages()
 
         # Reset mcp_factions for next checkpoint
         mcp_factions = []
@@ -1035,6 +1013,21 @@ async def run_fleet_battle_with_http(
         # (MCP fleets have their commands applied directly via apply_mcp_commands_to_simulation)
         all_commands = {}
 
+        # Fleet comms: one delivery round for every captain about to decide
+        # (the HTTP loop does not go through runner._run_captain_decisions).
+        deciding = [
+            (ship_id, captain, faction)
+            for faction, captains, ships, mcp in (
+                ("alpha", runner.alpha_captains, runner.alpha_ships, runner.alpha_mcp),
+                ("beta", runner.beta_captains, runner.beta_ships, runner.beta_mcp))
+            if not mcp
+            for ship_id, captain in captains.items()
+            if not ((ship := ships.get(ship_id)) and (
+                ship.is_destroyed or getattr(ship, 'is_dying', False)
+                or getattr(ship, 'is_surrendered', False)))
+        ]
+        runner._deliver_fleet_messages(deciding)
+
         # Process non-MCP alpha captains
         if not runner.alpha_mcp:
             if runner.config.verbose and runner.alpha_captains:
@@ -1063,7 +1056,8 @@ async def run_fleet_battle_with_http(
                     ship_id, captain, "alpha"
                 )
                 all_commands[ship_id] = commands
-                runner._record_captain_decision(ship_id, captain, commands)
+                runner._finish_captain_turn(ship_id, captain, "alpha", commands,
+                                            admiral_orders.get(ship_id))
 
                 if runner.config.verbose:
                     print(f"    -> {runner._get_ship_status_line(ship_id, commands)}")
@@ -1100,7 +1094,8 @@ async def run_fleet_battle_with_http(
                     )
                     dbg(f"[DEBUG] {ship_id} captain returned {len(commands)} commands: {[type(c).__name__ for c in commands]}")
                     all_commands[ship_id] = commands
-                    runner._record_captain_decision(ship_id, captain, commands)
+                    runner._finish_captain_turn(ship_id, captain, "beta", commands,
+                                                admiral_orders.get(ship_id))
                 except Exception as e:
                     print(f"[ERROR] {ship_id} captain decision failed: {e}")
                     import traceback
@@ -1112,9 +1107,6 @@ async def run_fleet_battle_with_http(
 
                 if runner.config.verbose:
                     print(f"    -> {runner._get_ship_status_line(ship_id, commands)}")
-
-        # Handle immediate messaging
-        runner._handle_immediate_messaging()
 
         # === MCP SURRENDER / MUTUAL DRAW ===
         # _check_fleet_surrender_draw() only inspects captains and LLM admirals,

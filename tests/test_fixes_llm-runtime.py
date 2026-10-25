@@ -595,6 +595,9 @@ class TestAdmiralMessaging:
         runner.fleet_communication.register_ship(
             "alpha_1", "Alpha Captain", "Alpha", "alpha"
         )
+        runner.fleet_communication.register_ship(
+            "beta_1", "Beta Captain", "Beta", "beta"
+        )
         captain = runner.alpha_captain
         captain.pending_message = {
             "content": "Break off or be destroyed.",
@@ -606,6 +609,9 @@ class TestAdmiralMessaging:
 
         queued = runner.fleet_communication.pending_messages
         assert [m.content for m in queued] == ["Break off or be destroyed."]
+        # ALL_ENEMIES is the enemy channel - and only the enemy hears it.
+        assert queued[0].channel == "enemy_broadcast"
+        assert queued[0].recipient_ids == ["beta_1"]
         # Drained, so it is not re-sent next checkpoint.
         assert captain.get_pending_message() is None
 

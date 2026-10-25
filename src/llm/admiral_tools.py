@@ -7,6 +7,8 @@ rather than directly controlling ships.
 
 from typing import List, Dict, Any
 
+from .communication import MAX_DISCUSSION_EXCHANGES
+
 
 # Admiral tools for fleet command
 ADMIRAL_TOOLS = [
@@ -261,7 +263,7 @@ ADMIRAL_TOOLS = [
             "name": "message_enemy_admiral",
             "description": (
                 "Send a message to the enemy Admiral (if one exists). "
-                "This is delivered immediately within the same checkpoint. "
+                "The enemy Admiral reads it at its next decision (the next checkpoint). "
                 "Use for negotiations, demands, or psychological warfare."
             ),
             "parameters": {
@@ -328,9 +330,11 @@ DISCUSS_WITH_ADMIRAL_TOOL = {
     "function": {
         "name": "discuss_with_admiral",
         "description": (
-            "Ask your Admiral a question or request clarification on orders. "
-            "Limited to 2 exchanges per checkpoint. Your Admiral will respond "
-            "before you finalize your decision."
+            "Ask your Admiral when your orders conflict with what your sensors show "
+            "and you need a decision now (status goes in report_to_admiral). Answered "
+            "this checkpoint from a live picture of your ship; you then decide again "
+            "with the answer, so each question costs a full extra decision. "
+            f"At most {MAX_DISCUSSION_EXCHANGES} exchanges per checkpoint."
         ),
         "parameters": {
             "type": "object",

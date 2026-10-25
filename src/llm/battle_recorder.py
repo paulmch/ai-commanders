@@ -64,9 +64,18 @@ class EventType(str, Enum):
     PD_TORPEDO_DESTROYED = "pd_torpedo_destroyed"
 
     # Communication
-    MESSAGE = "message"
+    MESSAGE = "message"  # legacy: enemy-channel text (1v1 and fleet), sender/ship/message
     SURRENDER = "surrender"
     DRAW_PROPOSAL = "draw_proposal"
+
+    # Fleet comms (src/llm/communication.py). Every message on every channel
+    # is a comms_message; each recipient that actually got it (prompt or MCP
+    # chat) a comms_delivered - a message with none was never delivered.
+    # captain_report: a captain's report to its admiral with the engine's
+    # ordered-vs-executed compliance line.
+    COMMS_MESSAGE = "comms_message"
+    COMMS_DELIVERED = "comms_delivered"
+    CAPTAIN_REPORT = "captain_report"
 
     # Self-authored durable state (admiral standing plan, captain's log)
     ADMIRAL_PLAN = "admiral_plan"
@@ -1023,6 +1032,86 @@ class BattleRecorder:
                 "ship_name": ship_name,
                 "message": message,
             }
+        ))
+
+    def record_comms_message(
+        self,
+        timestamp: float,
+        message: Dict[str, Any],
+        parent_event_ids: Optional[List[str]] = None,
+    ) -> BattleEvent:
+        """
+        Record one fleet comms message (CommsMessage.to_dict()).
+
+        data: {msg_id, channel, kind, sender_id, sender_role, sender_name,
+        faction, recipient_spec, recipient_ids, text, structured, checkpoint,
+        sent_t, deliver_at_t} (+ parent_event_ids: the sender's model call).
+        ship_id is the sending ship for captain traffic, else None.
+        """
+        data = dict(message)
+        if parent_event_ids:
+            data["parent_event_ids"] = list(parent_event_ids)
+        ship_id = data.get("sender_id") if data.get("sender_role") == "captain" else None
+        return self._record_event(BattleEvent(
+            timestamp=timestamp,
+            event_type=EventType.COMMS_MESSAGE,
+            ship_id=ship_id,
+            data=json_value(data),
+        ))
+
+    def record_comms_delivered(
+        self,
+        timestamp: float,
+        msg_id: str,
+        recipient_id: str,
+        delivered_t: float,
+        checkpoint: int,
+        **extra: Any,
+    ) -> BattleEvent:
+        """
+        Record that a recipient was handed a message (ship_id = recipient).
+
+        recipient_id is a ship id, '<faction>_admiral' or 'mcp:<faction>'. A
+        captain_report's delivery to its admiral carries the refreshed
+        `compliance` as an extra field.
+        """
+        return self._record_event(BattleEvent(
+            timestamp=timestamp,
+            event_type=EventType.COMMS_DELIVERED,
+            ship_id=recipient_id,
+            data=json_value({
+                "msg_id": msg_id,
+                "recipient_id": recipient_id,
+                "delivered_t": delivered_t,
+                "checkpoint": checkpoint,
+                **extra,
+            }),
+        ))
+
+    def record_captain_report(
+        self,
+        timestamp: float,
+        ship_id: str,
+        report: Dict[str, Any],
+        answers_order_event_id: Optional[str] = None,
+        decision_event_id: Optional[str] = None,
+    ) -> BattleEvent:
+        """
+        Record a captain's report to its admiral (ship_id = reporter).
+
+        data: {report_id, faction, checkpoint, captain_name, ship_name,
+        status: ACK|DEVIATE|UNABLE, reason, intent, contact|null,
+        request|null, compliance|null, implicit, ...} plus the order it
+        answers and the decision it belongs to.
+        """
+        data = dict(report)
+        data["answers_order_event_id"] = answers_order_event_id
+        data["decision_event_id"] = decision_event_id
+        return self._record_event(BattleEvent(
+            timestamp=timestamp,
+            event_type=EventType.CAPTAIN_REPORT,
+            ship_id=ship_id,
+            data=json_value(data),
         ))
 
     def record_surrender(

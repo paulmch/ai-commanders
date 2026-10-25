@@ -798,7 +798,11 @@ def create_mcp_server(
             ),
             Tool(
                 name="send_message",
-                description="Send a message to enemy admiral (max 3 per turn)",
+                description=(
+                    "Send a message to the enemy commander (max 3 per turn). An enemy "
+                    "LLM admiral reads it at its next decision; an enemy fleet without "
+                    "an admiral hears it as an open-channel broadcast to its captains."
+                ),
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -809,7 +813,10 @@ def create_mcp_server(
                         "recipient": {
                             "type": "string",
                             "enum": ["enemy", "all"],
-                            "description": "Message recipient",
+                            "description": (
+                                "enemy (default): the enemy commander. all: the enemy "
+                                "commander and every enemy captain."
+                            ),
                         },
                     },
                     "required": ["content"],

@@ -359,6 +359,19 @@ class LLMAdmiral:
         # All communications log (for oversight of captain messages)
         self._communications_log: List[CaptainMessage] = []
 
+        # Captain reports filed at the previous checkpoint (report_to_admiral,
+        # implicit ACKs, ADMIRAL-addressed fleet signals and discussion Q&A),
+        # each with an engine compliance line - captain_report dicts set by
+        # the runner before decide(). The admiral's only view of what its
+        # captains said and actually did.
+        self.captain_reports: List[Dict[str, Any]] = []
+
+        # discuss_with_admiral exchanges, oldest first: {t, checkpoint,
+        # ship_name, question, answer}. Fed back into later replies to the
+        # same captain; this checkpoint's Q&A also rides on that ship's
+        # captain report at the next checkpoint.
+        self.discussion_log: List[Dict[str, Any]] = []
+
         # Ship name to ID mapping (set during setup)
         self._ship_name_to_id: Dict[str, str] = {}
 
@@ -733,19 +746,28 @@ Be authentic to how you would command a fleet as {model_name}."""
         captain_ship_name: str,
         question: str,
         simulation: Any,
+        ship_id: Optional[str] = None,
     ) -> str:
         """
         Respond to a captain's discussion request.
+
+        The reply prompt alone holds only the plan and recent orders; the
+        user turn adds a compact live picture measured from the asking ship
+        (its state, enemies by range and closing speed, torpedoes on it),
+        this checkpoint's directive and order, and earlier exchanges with the
+        same captain. The exchange is remembered in `discussion_log`.
 
         Args:
             captain_ship_name: Name of the captain's ship
             question: Captain's question
             simulation: Current simulation state
+            ship_id: The asking ship's id (looked up from the name if omitted)
 
         Returns:
             Admiral's response text
         """
         from .prompts import build_admiral_response_prompt
+        from .fleet_comms import discussion_context
 
         # Get recent decisions for context (up to last 3)
         recent_decisions = self.order_history[-3:] if self.order_history else []
@@ -761,9 +783,24 @@ Be authentic to how you would command a fleet as {model_name}."""
             decision_interval_s=getattr(simulation, "decision_interval", 30.0),
         )
 
+        ship_id = ship_id or self._ship_name_to_id.get(captain_ship_name)
+        current = self.order_history[-1] if self.order_history else None
+        order_text = None
+        if current is not None:
+            for order in current.fleet_orders:
+                if order.target_ship_name == captain_ship_name or order.target_ship_id == ship_id:
+                    order_text = order.order_text
+                    break
+        context = discussion_context(
+            simulation, ship_id, captain_ship_name,
+            directive=self.last_directive,
+            order_text=order_text,
+            earlier=[qa for qa in self.discussion_log if qa["ship_name"] == captain_ship_name],
+        )
+
         messages = [
             {"role": "system", "content": prompt},
-            {"role": "user", "content": f"Captain of {captain_ship_name} asks: {question}"},
+            {"role": "user", "content": f"{context}\n\nCaptain of {captain_ship_name} asks: {question}"},
         ]
 
         # Get response (no tools, just text). Pass the admiral's own model -
@@ -773,7 +810,15 @@ Be authentic to how you would command a fleet as {model_name}."""
         except LLMCallError as e:
             print(f"[ADMIRAL {self.config.name}] reply to captain failed: {e}")
             return ""
-        return response.content
+        answer = response.content or ""
+        self.discussion_log.append({
+            "t": getattr(simulation, "current_time", 0.0),
+            "checkpoint": self.decision_count,
+            "ship_name": captain_ship_name,
+            "question": question,
+            "answer": answer,
+        })
+        return answer
 
     def receive_enemy_admiral_message(self, message: str) -> None:
         """Receive a message from enemy Admiral."""

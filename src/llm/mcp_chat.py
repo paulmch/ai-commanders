@@ -151,6 +151,27 @@ class AdmiralChat:
 
             return True
 
+    def relay(self, sender_faction: str, content: str, timestamp: float) -> ChatMessage:
+        """
+        Put traffic that is not the sending admiral's own on the chat.
+
+        Used for an enemy captain's open-channel transmission addressed to an
+        MCP-commanded fleet: queued for the other side like any message, but
+        outside the per-turn admiral limit (it is not the admiral talking).
+        """
+        with self._lock:
+            message = ChatMessage(
+                turn=self._current_turn,
+                timestamp=timestamp,
+                sender_faction=sender_faction,
+                content=content,
+                recipient="relay",
+            )
+            self._all_messages.append(message)
+            enemy_faction = "beta" if sender_faction == "alpha" else "alpha"
+            self._pending_delivery[enemy_faction].append(message)
+            return message
+
     def get_pending_messages(self, faction: str) -> List[ChatMessage]:
         """
         Get and clear pending messages for a faction.

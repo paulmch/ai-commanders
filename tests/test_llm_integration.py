@@ -309,11 +309,13 @@ class TestLLMCaptain:
         cmd = captain._execute_tool(tool_call, mock_sim, "alpha")
 
         assert cmd is None  # No command returned
-        assert captain.pending_message == {
+        # Queued in the outbox; the 1v1 path pops it in the legacy shape.
+        assert captain.get_pending_message() == {
             "content": "Prepare to be destroyed!",
             "recipient": "ALL_ENEMIES",
             "target_ship": None,
         }
+        assert captain.get_pending_message() is None
 
     def test_tool_execution_surrender(self):
         """surrender tool should set flag."""
