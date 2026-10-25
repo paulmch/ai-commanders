@@ -62,7 +62,10 @@ def test_fixture_events_follow_the_comms_schema(tmp_path):
         d = _data(e)
         assert set(d) == COMMS_MESSAGE_KEYS
         assert d["channel"] in CHANNELS and d["sender_role"] in ROLES
-        assert e["ship_id"] == d["sender_id"]
+        # ship_id is the sending ship; engine datalink traffic ("engine:alpha")
+        # has no ship (battle_recorder.record_comms_message).
+        assert e["ship_id"] == d["sender_id"] or (
+            e["ship_id"] is None and d["sender_role"] == "engine")
         assert d["deliver_at_t"] >= d["sent_t"] == e["timestamp"]
         assert isinstance(d["recipient_ids"], list) and isinstance(d["structured"], dict)
     assert {e["data"]["channel"] for e in by_type["comms_message"]} == CHANNELS
