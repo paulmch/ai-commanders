@@ -290,6 +290,80 @@ class TestTorpedoSolution:
         assert run["hit"]
         assert lo <= run["impact_mps"] / 1000.0 <= hi
 
+    @staticmethod
+    def _engine_impact(target_type, rng_km, closing_kps):
+        """One real Trident on the shipped engine at a target that RUNS from
+        launch (EVADE, nose already pointing away), PD removed so only
+        guidance and kinematics count: (impact km/s, GJ), or None on a miss."""
+        from src.simulation import Maneuver, ManeuverType
+        sim = CombatSimulation(time_step=0.5, decision_interval=1e9, seed=3)
+        shooter = ship(sim, "sh", "corvette", "beta", (rng_km, 0, 0), fwd=(-1, 0, 0))
+        target = ship(sim, "tg", target_type, "alpha", (0, 0, 0), vel_kps=(closing_kps, 0, 0),
+                      fwd=(-1, 0, 0))
+        target.point_defense = []
+        specs = intel.torpedo_specs_for(sim, FLEET, [shooter])
+        sol = intel.torpedo_solution(shooter.position, shooter.velocity, target, specs, FLEET,
+                                     None, salvo_available=1)
+        target.current_maneuver = Maneuver(maneuver_type=ManeuverType.EVASIVE, start_time=0.0,
+                                           duration=1e9, throttle=1.0)
+        assert sim.inject_command("sh", {"type": "launch_torpedo", "target_id": "tg"})
+        while sim.current_time < 600.0 and sim.torpedoes:
+            for ev in sim.step():
+                if ev.event_type == SimulationEventType.TORPEDO_IMPACT:
+                    return sol, (ev.data["impact_speed_kps"], ev.data["total_damage_gj"])
+        return sol, None
+
+    @pytest.mark.parametrize("target_type,rng_km,closing_kps", [
+        ("battleship", 30.0, 0.0),
+        ("battleship", 100.0, 0.0),
+        ("battleship", 100.0, 6.0),
+        ("battleship", 250.0, 2.0),
+        ("battleship", 400.0, 0.0),
+        ("corvette", 100.0, 0.0),
+        ("corvette", 250.0, 2.0),
+    ])
+    def test_solution_matches_the_engine_at_every_range(self, target_type, rng_km, closing_kps):
+        """
+        The pursuit model flies the engine's own throttle law (full thrust
+        below the closure floor, then only the NEZ surplus), so a short-range
+        launch is NOT credited with thrust it had no time to fire: at 100 km
+        and zero closure the engine lands ~6 km/s / ~5 GJ, not the ~13 km/s
+        a long flight reaches. Within a few percent and never optimistic.
+        """
+        sol, hit = self._engine_impact(target_type, rng_km, closing_kps)
+        assert hit is not None, "reference launch must connect"
+        engine_kps, engine_gj = hit
+        assert sol.impact_kps is not None
+        assert 0.88 * engine_kps <= sol.impact_kps <= 1.03 * engine_kps
+        if engine_gj < intel.GOOD_ENERGY_GJ:
+            assert sol.verdict != "GOOD", (sol.verdict, sol.energy_gj, engine_gj)
+        if engine_gj < intel.NO_ENERGY_GJ:
+            assert sol.verdict == "NO"
+
+    def test_short_range_zero_closure_launch_is_not_good(self):
+        """Reviewer repro: 100 km, nobody closing - the engine lands < 5 GJ."""
+        sol = _solution("battleship", 100.0, 0.0)
+        assert sol.verdict == "NO"
+        assert sol.energy_gj < intel.NO_ENERGY_GJ
+        assert "lands only" in sol.reason
+
+    def test_salvo_sizing_scales_with_the_energy_each_round_lands(self):
+        assert intel.kill_rounds_at(6, 22.0) == 6
+        assert intel.kill_rounds_at(6, 30.0) == 6          # never fewer than the doctrine
+        assert intel.kill_rounds_at(6, 11.0) == 12
+        assert intel.kill_rounds_at(4, None) == 4
+        _, _, _, msgs = battle_a_turn("alpha", t=180)
+        econ = section(msgs[1]["content"], "=== TORPEDO ECONOMY ===")
+        line = next(l for l in econ.splitlines() if "OCS Falchion-2 [beta_6]" in l)
+        assert "(POOR)" in line and " to kill at ~7 GJ each = " in line
+
+    def test_salvo_sizing_reference_is_the_doctrine_number(self):
+        from src.llm.prompts import ADMIRAL_TORPEDO_DOCTRINE
+        assert intel.KILL_ROUNDS_REF_GJ == 22.0
+        assert f"(~{intel.KILL_ROUNDS_REF_GJ:.0f} GJ/round, evading targets): " \
+               f"{intel.KILL_ROUNDS_LIGHT} rounds kill a" in ADMIRAL_TORPEDO_DOCTRINE
+        assert f"{intel.KILL_ROUNDS_HEAVY} rounds kill anything" in ADMIRAL_TORPEDO_DOCTRINE
+
     def test_verdict_thresholds_sit_between_the_doctrine_anchors(self):
         ke = lambda v_kps: 0.5 * 250 * (v_kps * 1000) ** 2 / 1e9  # noqa: E731
         assert intel.GOOD_ENERGY_GJ < ke(13.5)        # a zero-closure launch is GOOD

@@ -19,14 +19,14 @@ Torpedoes - yours: none | theirs: none
 You: 8 ships, centre (7,29,5) km, 2.9 km/s toward (+0.99,+0.11,+0.02), spread 51 km
 GROUP A (OCS Sovereign [beta_1] BB, OCS Falchion-2 [beta_6] DD, OCS Lancer-1 [beta_2] BC, OCS Lancer-2 [beta_3] BC, OCS Lancer-3 [beta_4] BC): 157 km, closing 4.03 km/s (-60 km in 15 s) = you 1.5 km/s toward them + they 2.5 toward you
   if both coast: closest 1.4 km (OCS Lancer-3) in 45 s | your stop 276 km / 137 s at 3.0g +15 s flip - TOO LATE to brake
-  reach - their guns reach 900 km (IN RANGE now); your torpedoes: 5 GOOD
+  reach - their guns reach 900 km (IN RANGE now); your torpedoes: 5 POOR
 
 === ENEMY THREAT TABLE (range/closure from your fleet centre) ===
-OCS Sovereign [beta_1] BB 1.0g | 118 km +4.1 km/s | nearest TIS Dart-1 [alpha_1] 76 km | hull 100% | PD 3/3 | 1 spinal + 3 heavy coil + 1 coil | dealt nothing | torpedo GOOD 22 s ~16 GJ
-OCS Falchion-2 [beta_6] DD 2.0g | 149 km +4.0 km/s | nearest TIS Dart-1 [alpha_1] 112 km | hull 100% | PD 2/2 | 1 spinal + 1 coil | dealt nothing | torpedo GOOD 27 s ~19 GJ
-OCS Lancer-1 [beta_2] BC 1.5g | 167 km +4.2 km/s | nearest TIS Dart-1 [alpha_1] 122 km | hull 100% | PD 2/2 | 1 spinal + 2 coil | dealt nothing | torpedo GOOD 28 s ~22 GJ, 2 of yours inbound
-OCS Lancer-2 [beta_3] BC 1.5g | 173 km +4.1 km/s | nearest TIS Dart-1 [alpha_1] 130 km | hull 100% | PD 2/2 | 1 spinal + 2 coil | dealt nothing | torpedo GOOD 30 s ~22 GJ, 2 of yours inbound
-OCS Lancer-3 [beta_4] BC 1.5g | 190 km +3.9 km/s | nearest TIS Dart-1 [alpha_1] 152 km | hull 100% | PD 2/2 | 1 spinal + 2 coil | dealt nothing | torpedo GOOD 32 s ~25 GJ
+OCS Sovereign [beta_1] BB 1.0g | 118 km +4.1 km/s | nearest TIS Dart-1 [alpha_1] 76 km | hull 100% | PD 3/3 | 1 spinal + 3 heavy coil + 1 coil | dealt nothing | torpedo POOR (slow arrival) ~6 GJ
+OCS Falchion-2 [beta_6] DD 2.0g | 149 km +4.0 km/s | nearest TIS Dart-1 [alpha_1] 112 km | hull 100% | PD 2/2 | 1 spinal + 1 coil | dealt nothing | torpedo POOR (slow arrival) ~7 GJ
+OCS Lancer-1 [beta_2] BC 1.5g | 167 km +4.2 km/s | nearest TIS Dart-1 [alpha_1] 122 km | hull 100% | PD 2/2 | 1 spinal + 2 coil | dealt nothing | torpedo POOR (slow arrival) ~8 GJ, 2 of yours inbound
+OCS Lancer-2 [beta_3] BC 1.5g | 173 km +4.1 km/s | nearest TIS Dart-1 [alpha_1] 130 km | hull 100% | PD 2/2 | 1 spinal + 2 coil | dealt nothing | torpedo POOR (slow arrival) ~8 GJ, 2 of yours inbound
+OCS Lancer-3 [beta_4] BC 1.5g | 190 km +3.9 km/s | nearest TIS Dart-1 [alpha_1] 152 km | hull 100% | PD 2/2 | 1 spinal + 2 coil | dealt nothing | torpedo POOR (slow arrival) ~9 GJ
 
 === ORDNANCE IN FLIGHT ===
 INBOUND ON YOU (can hit your hulls):
@@ -42,9 +42,9 @@ YOURS:
 
 === TORPEDO ECONOMY ===
 Yours: 64/64 rounds left; 24 launches possible before T+210s (reload 12 s = up to 3 per tube per checkpoint)
-Salvo vs OCS Sovereign [beta_1] (GOOD): 11 PD turrets cover it -> ~5 soaked + 6 to kill = 11 together
-Salvo vs OCS Falchion-2 [beta_6] (GOOD): 11 PD turrets cover it -> ~5 soaked + 4 to kill = 9 together
-Salvo vs OCS Lancer-1 [beta_2] (GOOD): 11 PD turrets cover it -> ~5 soaked + 6 to kill = 11 together; 2 of yours already inbound -> 9 more
+Salvo vs OCS Sovereign [beta_1] (POOR): 11 PD turrets cover it -> ~5 soaked + 22 to kill at ~6 GJ each = 27 together (you can launch 24 now: not enough to kill through that PD)
+Salvo vs OCS Falchion-2 [beta_6] (POOR): 11 PD turrets cover it -> ~5 soaked + 13 to kill at ~7 GJ each = 18 together
+Salvo vs OCS Lancer-1 [beta_2] (POOR): 11 PD turrets cover it -> ~5 soaked + 17 to kill at ~8 GJ each = 22 together; 2 of yours already inbound -> 20 more
 Trickled rounds die: 1-2 rounds into 3+ turrets are blinded one by one - launch together or not at all.
 Theirs: no torpedo launchers in their fleet - nothing to EVADE from torpedoes.
 

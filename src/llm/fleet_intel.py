@@ -30,11 +30,17 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 try:
     from ..physics import G_STANDARD, Vector3D
     from ..pointdefense import PDLaser, TORPEDO_ELECTRONICS_THRESHOLD_J
-    from ..torpedo import MIN_CLOSING_SPEED_KPS, TorpedoGuidance
+    from ..torpedo import (
+        ASSUMED_TARGET_MAX_LATERAL_ACCEL_MS2, MIN_CLOSING_SPEED_KPS, NEZ_DV_RESERVE_KPS,
+        NEZ_GUIDANCE_MARGIN, TERMINAL_MIN_BURN_KPS, TorpedoGuidance,
+    )
 except ImportError:  # pragma: no cover - script-style imports
     from physics import G_STANDARD, Vector3D
     from pointdefense import PDLaser, TORPEDO_ELECTRONICS_THRESHOLD_J
-    from torpedo import MIN_CLOSING_SPEED_KPS, TorpedoGuidance
+    from torpedo import (
+        ASSUMED_TARGET_MAX_LATERAL_ACCEL_MS2, MIN_CLOSING_SPEED_KPS, NEZ_DV_RESERVE_KPS,
+        NEZ_GUIDANCE_MARGIN, TERMINAL_MIN_BURN_KPS, TorpedoGuidance,
+    )
 
 from .battle_ticker import TYPE_ABBR
 
@@ -63,11 +69,6 @@ BALLISTIC_MIN_REL_SPEED_MPS = 100.0
 # Torpedo solution model: how far ahead to fly the 1-D pursuit and its step.
 SOLUTION_HORIZON_S = 900.0
 SOLUTION_STEP_S = 0.5
-# The terminal burn only spends the round's NEZ surplus in its last moments:
-# model it as at most this many seconds of full thrust at the end. Fitted to
-# the measured doctrine anchors (zero-closure launch -> ~13.5 km/s, closing
-# 12 km/s -> 14-17 km/s, head-on 26 km/s -> ~28 km/s; tests pin all three).
-TERMINAL_WINDOW_S = 25.0
 # Verdict thresholds on the impact energy of a round whose target RUNS. A
 # zero-closure launch lands ~13.5 km/s = ~23 GJ (doctrine anchor); a round
 # lobbed at a receding ship ~8 GJ "if it lands at all". GOOD needs at least
@@ -85,6 +86,10 @@ RECEDING_KPS = 0.5
 KILL_ROUNDS_LIGHT = 4
 KILL_ROUNDS_HEAVY = 6
 LIGHT_HULLS = frozenset({"corvette", "frigate", "destroyer"})
+# The per-round impact energy those counts were measured at ("SIZING at
+# moderate closure (~22 GJ/round ...)"). A slower round needs proportionally
+# more company - a lower bound, since a weak round also penetrates worse.
+KILL_ROUNDS_REF_GJ = 22.0
 
 
 # =============================================================================
@@ -293,11 +298,21 @@ def solve_pursuit(
     the target RUNS (full acceleration straight away) for the whole flight.
 
     The torpedo first spends whatever nulls the crossing (lateral) speed, then
-    flies its guidance law: burn only while closure is under the floor
-    (MIN_CLOSING_SPEED_KPS), then a terminal burn of what is left (at most
-    TERMINAL_WINDOW_S of thrust). Thrust is
-    the specs' thrust over the falling mass (rocket equation), so the burn
-    shortens as propellant goes - the same drive the engine integrates.
+    flies the engine's own throttle law (TorpedoGuidance._collision_course_guidance)
+    step by step:
+
+    - below the closure floor (MIN_CLOSING_SPEED_KPS): full thrust;
+    - at or above it: the terminal burn, which only ever spends the
+      no-escape-zone SURPLUS - delta-v beyond what a worst-case 3 g jink could
+      still demand over the remaining time to go
+      (NEZ_GUIDANCE_MARGIN * a_t * t_go + NEZ_DV_RESERVE_KPS, nez_status) -
+      and only once that surplus clears TERMINAL_MIN_BURN_KPS.
+
+    The surplus grows as t_go falls, so a long flight dumps nearly all its
+    delta-v into closure, while a short-range launch arrives still climbing
+    toward the floor with most of its delta-v unspent: thrust the round never
+    had time to fire is never counted. Thrust is the specs' thrust over the
+    falling mass (rocket equation), the same drive the engine integrates.
 
     Returns hit (bool), tof_s, impact_mps, cross_mps (mean closure while
     inside the PD envelope - what PD dwell depends on), short_m.
@@ -309,14 +324,24 @@ def solve_pursuit(
     dv -= max(0.0, lateral_mps)
     if dv < 0:
         return {"hit": False, "short_m": range_m, "reason": "crossing too fast"}
+    a_t = ASSUMED_TARGET_MAX_LATERAL_ACCEL_MS2
+    reserve = NEZ_DV_RESERVE_KPS * 1000.0
+    min_burn = TERMINAL_MIN_BURN_KPS * 1000.0
     c, d, t = closing_mps, range_m, 0.0
     inside_t = 0.0
     inside_start_d = min(d, pd_envelope_m)
     dt = SOLUTION_STEP_S
     while t < horizon_s:
-        if c < floor_mps and dv > 0:
-            a = specs.thrust_n / max(1.0, m)
-            burn = min(a * dt, floor_mps - c, dv)
+        burn = 0.0
+        a = specs.thrust_n / max(1.0, m)
+        if dv > 0:
+            if c < floor_mps:
+                burn = min(a * dt, dv)
+            elif d > 0:
+                surplus = dv - (NEZ_GUIDANCE_MARGIN * a_t * (d / c) + reserve)
+                if surplus > min_burn and a >= NEZ_GUIDANCE_MARGIN * a_t:
+                    burn = min(a * dt, surplus)
+        if burn > 0:
             c += burn
             dv -= burn
             m *= math.exp(-burn / ve)
@@ -327,8 +352,7 @@ def solve_pursuit(
             inside_t += dt
         if d <= 0:
             cross = inside_start_d / inside_t if inside_t > 0 else c
-            dump = min(max(0.0, dv), specs.thrust_n / max(1.0, m) * TERMINAL_WINDOW_S)
-            return {"hit": True, "tof_s": t, "impact_mps": c + dump, "cross_mps": cross}
+            return {"hit": True, "tof_s": t, "impact_mps": c, "cross_mps": cross}
         if c <= 0 and dv <= 0:
             return {"hit": False, "short_m": d, "reason": "runs dry"}
     return {"hit": False, "short_m": d, "reason": "too slow"}
@@ -419,6 +443,13 @@ def kill_rounds(ship_type: Optional[str], hull_pct: Optional[float] = None) -> i
     if hull_pct is not None and hull_pct < 50.0:
         base = max(2, base // 2)
     return base
+
+
+def kill_rounds_at(rounds: int, energy_gj: Optional[float]) -> int:
+    """``rounds`` (sized at KILL_ROUNDS_REF_GJ each) rescaled to rounds that land ``energy_gj``."""
+    if energy_gj and 0.0 < energy_gj < KILL_ROUNDS_REF_GJ:
+        return math.ceil(rounds * KILL_ROUNDS_REF_GJ / energy_gj)
+    return rounds
 
 
 # =============================================================================

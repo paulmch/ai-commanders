@@ -2138,7 +2138,9 @@ def _verdict_legend(flags: Dict[str, bool]) -> str:
         f"  EVADE does): GOOD = reaches him and lands >= {GOOD_ENERGY_GJ:.0f} GJ; POOR = reaches,\n"
         "  but he is receding or it arrives slow - long PD dwell, a fraction of the damage;\n"
         f"  NO = runs dry short, lands < {NO_ENERGY_GJ:.0f} GJ, or his PD blinds more slow rounds\n"
-        "  than you can launch. Launch on GOOD; POOR only to empty a doomed magazine.\n")
+        "  than you can launch. Launch on GOOD; POOR only to empty a doomed magazine.\n"
+        "  A round needs distance to build speed: launched close, it arrives slow whatever\n"
+        "  the closure - the verdict already counts that.\n")
 
 
 def build_admiral_static(
@@ -2774,9 +2776,9 @@ def _format_torpedo_economy(snapshot: Any, fleet_data: Dict[str, Any]) -> str:
                      f"T+{snapshot.timestamp + interval:.0f}s (reload {reload_s:.0f} s = up to {per} "
                      f"per tube per checkpoint)")
         try:
-            from .fleet_intel import turrets_to_blind
+            from .fleet_intel import kill_rounds_at, turrets_to_blind
         except ImportError:  # pragma: no cover
-            from llm.fleet_intel import turrets_to_blind
+            from llm.fleet_intel import kill_rounds_at, turrets_to_blind
         floor_k = turrets_to_blind(fleet_data, MIN_CLOSING_SPEED_KPS)
         kill = getattr(snapshot, "kill_rounds", None) or {}
         rank = {"GOOD": 0, "POOR": 1, "NO": 2}
@@ -2786,9 +2788,13 @@ def _format_torpedo_economy(snapshot: Any, fleet_data: Dict[str, Any]) -> str:
             sol = e.solution
             cover = sol.pd_cover if sol.pd_cover is not None else e.pd_operational
             soak = sol.soak if sol.soak is not None else cover // max(1, floor_k)
-            need = soak + kill.get(e.ship_id, 6)
+            # Sized at the doctrine's per-round energy; slow rounds need more.
+            to_kill = kill_rounds_at(kill.get(e.ship_id, 6), sol.energy_gj)
+            each = (f" at ~{sol.energy_gj:.0f} GJ each"
+                    if to_kill != kill.get(e.ship_id, 6) else "")
+            need = soak + to_kill
             text = (f"Salvo vs {_lbl(snapshot, e.ship_id)} ({sol.verdict}): {cover} PD turrets cover it "
-                    f"-> ~{soak} soaked + {kill.get(e.ship_id, 6)} to kill = {need} together")
+                    f"-> ~{soak} soaked + {to_kill} to kill{each} = {need} together")
             more = need - e.our_rounds_inbound
             if e.our_rounds_inbound:
                 text += (f"; {e.our_rounds_inbound} of yours already inbound -> "
