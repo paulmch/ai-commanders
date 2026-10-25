@@ -1757,21 +1757,30 @@ def stopping_distance_m(speed_mps: float, decel_ms2: float,
 
 
 def max_arrival_speed_mps(distance_m: float, decel_ms2: float, flip_s: float = 0.0,
-                          end_speed_mps: float = 0.0) -> float:
+                          end_speed_mps: float = 0.0, flip_accel_ms2: float = 0.0) -> float:
     """
     Fastest speed toward a stop point ``distance_m`` away from which the ship
     can still arrive at ``end_speed_mps``: it coasts through a ``flip_s`` turn
     and then decelerates at ``decel_ms2``, i.e. the root v of
     ``d = v * flip_s + (v^2 - v_end^2) / (2 a)``. Below zero distance only the
     end speed is allowed (and nothing at all without deceleration).
+
+    ``flip_accel_ms2`` > 0: the approach speed keeps growing at that rate
+    through the flip (a target burning toward us while we turn), so the
+    brake starts from ``v + p * flip_s`` after covering
+    ``v * flip_s + p * flip_s^2 / 2``.
     """
     end = max(0.0, end_speed_mps)
-    if decel_ms2 <= 0.0:
+    if decel_ms2 <= 0.0 or distance_m <= 0.0:
         return end
-    d = max(0.0, distance_m)
+    f = max(0.0, flip_s)
+    p = max(0.0, flip_accel_ms2)
+    d = distance_m + 0.5 * p * f * f
     a = decel_ms2
-    at = a * max(0.0, flip_s)
-    return max(end, -at + math.sqrt(at * at + end * end + 2.0 * a * d))
+    at = a * f
+    # u: the speed when the brake starts.
+    u = -at + math.sqrt(at * at + end * end + 2.0 * a * d)
+    return max(end, u - p * f)
 
 
 def required_decel_ms2(speed_mps: float, distance_m: float,

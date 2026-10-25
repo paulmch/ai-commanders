@@ -215,14 +215,48 @@ class TestInterceptStandoff:
         assert abs(r_end - 120_000.0) < 3_000.0 and v_end < 20.0
         assert me.execution_mode == foe.execution_mode == "HOLD"
 
-    def test_arrival_speed_alone_arrives_slowly_at_the_target(self):
+    def test_arrival_speed_alone_arrives_matched_on_the_target(self):
+        """Without a standoff there is no room past the target to slow down
+        in: the arrival speed is capped to nothing and the ship arrives
+        matched on it (it used to pass through it every couple of minutes)."""
         sim, me, foe = _duel()
-        _, _, log = _fly(sim, me, foe, _intercept(arrival_kps=0.5), 500)
-        # It reaches the target (standoff 0) no faster than the arrival speed,
-        # then holds on it.
+        _, _, log = _fly(sim, me, foe, _intercept(arrival_kps=1.0), 600, renew_s=30)
+        # Braking all the way in (a 1 km/s arrival would cross at 1 km/s).
         near = [v for _, r, v, _ in log if r < 1_000.0]
-        assert near and max(near) <= 500.0 * 1.05
+        assert near and max(near) <= 250.0
         assert log[-1][3] == "HOLD" and log[-1][2] < 20.0
+        # Arrived once, then stayed: no periodic pass-throughs.
+        far_again = [t for t, r, _, _ in log if t > log[0][0] + 400 and r > 10_000.0]
+        assert not far_again
+
+    @pytest.mark.parametrize("standoff_km,arrival_kps", [(50.0, 2.0), (100.0, 3.0)])
+    def test_fast_arrival_speed_never_flies_through(self, standoff_km, arrival_kps):
+        """An arrival speed is capped to what the overshoot can still be
+        stopped from well inside the standoff; once held, re-approaches
+        arrive matched (the reviewer's repro passed the target at 0.9 km)."""
+        sim, me, foe = _duel()
+        best_r, _, log = _fly(sim, me, foe, _intercept(standoff_km, arrival_kps, renew=True),
+                              600, renew_s=30)
+        assert best_r >= 0.5 * standoff_km * 1000.0
+        _, r_end, v_end, mode = log[-1]
+        assert abs(r_end - standoff_km * 1000.0) < 3_000.0 and v_end < 20.0
+        assert mode == "HOLD" and me.current_maneuver._range_arrived
+        # It still kept some momentum: crossed the standoff faster than a
+        # matched arrival would have.
+        crossing = [v for _, r, v, _ in log if abs(r - standoff_km * 1000.0) < 2_000.0]
+        assert max(crossing) > 300.0
+
+    def test_arrival_speed_is_spent_after_the_first_arrival(self):
+        sim, me, foe = _duel()
+        make = _intercept(50.0, 1.0)
+        m = make(sim)
+        m._range_arrived = True
+        sim.inject_command("me", m)
+        sim.step()
+        # v_end 0: the cap is the matched-arrival one.
+        again = make(sim)
+        sim.inject_command("me", again)
+        assert again._range_arrived     # carried over on renewal
 
     def test_no_target_coasts(self):
         sim, me, foe = _duel()
@@ -244,6 +278,16 @@ class TestInterceptStandoff:
                          standoff_m=50_000.0)
         sim.inject_command("me", other)
         assert other._range_phase is None
+        # toward_point / toward_ship carry theirs for the same aim only.
+        point = _heading(sim, point_km={"x": 9, "y": 0, "z": 0})
+        sim.inject_command("me", point)
+        point._range_phase, point._range_side = "ARRIVE", 1.0
+        same = _heading(sim, point_km={"x": 9, "y": 0, "z": 0})
+        sim.inject_command("me", same)
+        assert (same._range_phase, same._range_side) == ("ARRIVE", 1.0)
+        moved = _heading(sim, point_km={"x": 9, "y": 5, "z": 0})
+        sim.inject_command("me", moved)
+        assert moved._range_phase is None
 
 
 # =============================================================================
@@ -273,6 +317,54 @@ class TestHoldRange:
         assert all(abs(r - 200_000.0) < 3_000.0 for _, r, _, _ in tail)
         assert all(v < 20.0 for _, _, v, _ in tail)
         assert me.applied_throttle == pytest.approx(0.5, abs=0.05)
+
+    @pytest.mark.parametrize("make", [_hold(150.0), _intercept(150.0)])
+    def test_holds_against_a_charger_at_three_quarters_of_our_acceleration(self, make):
+        """A 1.5 g cruiser charges a 2 g destroyer on plain INTERCEPT: the
+        relative braking left is a quarter of ours, still enough. The stop is
+        planned on it (and on the closure his charge adds during our flip),
+        so the destroyer arrives at 150 km instead of flying through him."""
+        sim = CombatSimulation(seed=7, time_step=1.0)
+        me = _ship(sim, "me", "destroyer", "alpha", (0, 0, 0))
+        foe = _ship(sim, "foe", "cruiser", "beta", (400, 0, 0), fwd=(-1, 0, 0))
+        foe.current_maneuver = Maneuver(ManeuverType.INTERCEPT, start_time=0.0, throttle=1.0,
+                                        target_id="me")
+        best_r, _, log = _fly(sim, me, foe, make, 600)
+        assert best_r >= 145_000.0
+        tail = log[-100:]
+        assert all(abs(r - 150_000.0) < 3_000.0 and v < 20.0 for _, r, v, _ in tail)
+
+    def test_equal_charger_is_matched_not_closed_on(self):
+        """He out-burns any stop we could plan (equal acceleration): never
+        CLOSE on him - match his burn (HOLD) and buy time. The closure his
+        head start built stays bounded; nothing flies through."""
+        sim, me, foe = _duel()
+        foe.current_maneuver = Maneuver(ManeuverType.INTERCEPT, start_time=0.0, throttle=1.0,
+                                        target_id="me")
+        best_r, _, log = _fly(sim, me, foe, _hold(150.0), 500)
+        assert best_r > 100_000.0
+        modes = [m for _, _, _, m in log[2:]]
+        assert set(modes) <= {"HOLD", "OPEN"}
+        closing = []
+        for _, r, v, _ in log:
+            closing.append(v)
+        assert max(closing[60:]) < 700.0
+        # ...and it is burning AWAY from him, not toward him.
+        los = (foe.position - me.position).normalized()
+        assert me.forward.dot(los) < -0.9 and me.applied_throttle > 0.9
+
+    def test_overshoot_while_braking_is_not_read_as_arrived(self):
+        """ARRIVE latched outside the wanted range, now inside it and still
+        closing at 1.5 km/s: it keeps braking (ARRIVE), it does not call that
+        HOLD (the sign-flipped 'toward' used to read as arrived)."""
+        sim, me, foe = _duel(foe_km=140.0, my_vel=(1.5, 0.0, 0.0))
+        m = _hold(150.0)(sim)
+        m._range_phase, m._range_side = "ARRIVE", 1.0
+        me.kinematic_state.forward = Vector3D(-1, 0, 0)
+        sim.inject_command("me", m)
+        sim.step()
+        assert m._range_phase == "ARRIVE" and me.execution_mode == "ARRIVE"
+        assert me.applied_throttle == pytest.approx(1.0)
 
     def test_opens_to_the_range_when_too_close(self):
         sim, me, foe = _duel(foe_km=50.0)
@@ -344,13 +436,45 @@ class TestHeadingTowardPoint:
             closest = min(closest, (me.position - point).magnitude)
         assert closest < 5_000.0
 
-    def test_coasts_inside_the_arrival_radius(self):
+    def test_holds_inside_the_arrival_radius(self):
         sim = CombatSimulation(seed=3, time_step=1.0)
         me = _ship(sim, "me", "corvette", "alpha", (0, 0, 0))
         sim.inject_command("me", _heading(sim, point_km={"x": 1.0, "y": 0.0, "z": 0.0}))
         sim.step()
         assert 1_000.0 < HEADING_POINT_ARRIVAL_M
-        assert me.applied_throttle == 0.0
+        assert me.applied_throttle == 0.0 and me.execution_mode == "HOLD"
+
+    @pytest.mark.parametrize("stype,side_kps,dist_km,seconds", [
+        ("destroyer", 0.0, 200.0, 400),
+        ("destroyer", 3.0, 200.0, 650),
+        ("battleship", 2.0, 200.0, 850),
+        ("corvette", 5.0, 300.0, 650),
+    ])
+    def test_reaches_and_stops_at_the_point(self, stype, side_kps, dist_km, seconds):
+        """Mid-battle ships carry km/s of sideways velocity: burning along
+        the bearing only circled the point (the reviewer's repro never got
+        closer than it started). The burn now follows the velocity change
+        that heads for the point - sideways drift cancelled - and it flips
+        and brakes in time: it ends ON the point, stopped, and stays."""
+        sim = CombatSimulation(seed=3, time_step=1.0)
+        me = _ship(sim, "me", stype, "alpha", (0, 0, 0), vel_kps=(0.0, side_kps, 0.0))
+        point = Vector3D(dist_km * 1000.0, 0.0, 0.0)
+        make = lambda s: Maneuver(ManeuverType.HEADING, start_time=s.current_time, duration=30.0,
+                                  throttle=1.0, heading_point_km={"x": dist_km, "y": 0, "z": 0})
+        sim.inject_command("me", make(sim))
+        arrived = None
+        for k in range(seconds):
+            if k and k % 30 == 0:
+                sim.inject_command("me", make(sim))      # renewed like a captain would
+            sim.step()
+            d = (me.position - point).magnitude
+            if arrived is None and d < HEADING_POINT_ARRIVAL_M and me.velocity.magnitude < 50.0:
+                arrived = sim.current_time
+            if arrived is not None:
+                assert d < 2.5 * HEADING_POINT_ARRIVAL_M      # no fly-through after arrival
+        assert arrived is not None
+        assert (me.position - point).magnitude < HEADING_POINT_ARRIVAL_M
+        assert me.velocity.magnitude < 20.0
 
 
 class TestHeadingTowardShip:
@@ -386,6 +510,23 @@ class TestHeadingTowardShip:
             sim.step()
         assert _range_m(me, foe) < 0.5 * start
         assert me.current_maneuver.heading_direction is not None
+
+    @pytest.mark.parametrize("my_vel,foe_vel", [((0.0, 3.0, 0.0), (0.0, 0.0, 0.0)),
+                                                ((0.0, 0.0, 0.0), (0.0, 3.0, 0.0))])
+    def test_joins_the_ship_despite_relative_sideways_velocity(self, my_vel, foe_vel):
+        """Pure pursuit with 3 km/s of relative sideways velocity never got
+        closer than it started; toward_ship now flies to the ship and falls
+        in alongside it, matching its velocity."""
+        sim = CombatSimulation(seed=3, time_step=1.0)
+        me = _ship(sim, "me", "destroyer", "alpha", (0, 0, 0), vel_kps=my_vel)
+        foe = _ship(sim, "foe", "destroyer", "beta", (300, 0, 0), vel_kps=foe_vel)
+        _coast(foe)
+        sim.inject_command("me", _heading(sim, ship_id="foe"))
+        for _ in range(700):
+            sim.step()
+        assert _range_m(me, foe) < 2 * HEADING_POINT_ARRIVAL_M
+        assert (me.velocity - foe.velocity).magnitude < 20.0
+        assert me.execution_mode == "HOLD"
 
     def test_dead_ship_coasts(self):
         sim = CombatSimulation(seed=3, time_step=1.0)
