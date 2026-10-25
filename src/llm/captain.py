@@ -30,6 +30,7 @@ from .communication import (
 )
 from .tools import FLEET_SIGNAL_TOOL, REPORT_TO_ADMIRAL_TOOL
 from .admiral_tools import DISCUSS_WITH_ADMIRAL_TOOL
+from .maneuver_orders import maneuver_label
 
 
 # Tools that make the ship DO something (move, fire, aim). A decision that
@@ -775,7 +776,7 @@ class LLMCaptain:
         kept = fresh = None
         until = now + interval
         if renewed is not None:
-            kept = f"{renewed.maneuver_type.name}@{renewed.throttle * 100:.0f}%"
+            kept = maneuver_label(renewed.maneuver_type, renewed.throttle)
         else:
             # A maneuver set THIS checkpoint (the runner applied an admiral
             # HEADING / MANEUVER order before asking) needs no renewal - it
@@ -784,7 +785,7 @@ class LLMCaptain:
             if (m is not None and getattr(m, "start_time", None) is not None
                     and m.start_time >= now - 1e-6 and not m.is_complete(now + 1e-6)):
                 whose = "your Admiral's " if self._admiral_heading_applied() else ""
-                fresh = f"{whose}{m.maneuver_type.name}@{m.throttle * 100:.0f}%"
+                fresh = f"{whose}{maneuver_label(m.maneuver_type, m.throttle)}"
                 if 0 < m.duration < 1e6:  # duration <= 0: open-ended
                     until = m.start_time + m.duration
         self.lost_turn = {"time": now, "reason": reason, "renewed": kept, "kept": fresh,
@@ -1395,12 +1396,7 @@ class LLMCaptain:
         """Compact text for one executed tool call (None: shown elsewhere)."""
         args = args or {}
         if name == "set_maneuver":
-            thr = args.get("throttle", 1.0)
-            try:
-                thr = float(thr)
-            except (TypeError, ValueError):
-                thr = 1.0
-            return f"{args.get('maneuver_type', '?')}@{thr * 100:.0f}%"
+            return maneuver_label(args.get("maneuver_type", "?"), args.get("throttle", 1.0))
         if name == "set_heading":
             thr = args.get("throttle", 1.0)
             try:

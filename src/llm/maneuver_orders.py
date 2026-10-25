@@ -596,6 +596,19 @@ ENGINE_OFF_MANEUVERS = ("MAINTAIN", "PADLOCK")
 OVERLAY = "OVERLAY"
 
 
+def maneuver_label(kind: Any, throttle: Any) -> str:
+    """'INTERCEPT@40%', but 'PADLOCK' / 'MAINTAIN': the drive is off, and a
+    throttle next to them read as a burn order."""
+    name = str(getattr(kind, "name", kind) or "?").upper()
+    if name in ENGINE_OFF_MANEUVERS:
+        return name
+    try:
+        pct = float(1.0 if throttle is None else throttle) * 100
+    except (TypeError, ValueError):
+        pct = 100.0
+    return f"{name}@{pct:.0f}%"
+
+
 def _quiet(parse, *a) -> Any:
     """Admirals get no tool feedback: an unusable optional value is dropped."""
     try:

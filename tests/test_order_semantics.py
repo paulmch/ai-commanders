@@ -146,6 +146,20 @@ class TestEngineOffRendering:
         assert _maneuver_text({"type": "MAINTAIN", "throttle": 1.0}) == "MAINTAIN"
         assert _maneuver_text({"type": "INTERCEPT", "throttle": 0.4}) == "INTERCEPT@40%"
 
+    def test_decision_history_and_lost_turns(self):
+        from src.llm.maneuver_orders import maneuver_label
+        assert maneuver_label("PADLOCK", 1.0) == "PADLOCK"
+        assert maneuver_label(ManeuverType.MAINTAIN, 1.0) == "MAINTAIN"
+        assert maneuver_label("INTERCEPT", 0.4) == "INTERCEPT@40%"
+        from src.llm.captain import LLMCaptain
+        captain = LLMCaptain(LLMCaptainConfig(name="c", ship_name="TIS Ward-1",
+                                              ship_type="destroyer", fleet_data=FLEET),
+                             client=None)
+        captain.last_tool_calls = [ToolCall(id="1", name="set_maneuver", arguments={
+            "maneuver_type": "PADLOCK", "throttle": 1.0})]
+        assert "PADLOCK" in captain.get_last_decision_summary()
+        assert "PADLOCK@" not in captain.get_last_decision_summary()
+
     def test_engine_feedback(self):
         text = _helm_text({"mode": "PADLOCK", "requested_throttle": 1.0, "applied_throttle": 0.0})
         assert text == "PADLOCK, coasting (engine off, nose on target)"
