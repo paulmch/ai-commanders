@@ -23,6 +23,12 @@ Examples:
     uv run python scripts/viewer_snapshot.py --recording torpedo.json \
         --time 60 --camera -40,25,80 --target 0,0,0 --out /tmp/wide.png
 
+    # a 2x close crop of the HUD (CSS-pixel clip at device scale 2 -> 1600x900),
+    # with extra viewer URL parameters
+    uv run python scripts/viewer_snapshot.py --recording intent_qwen_gptoss.json \
+        --time 184.8 --query "decisions=1&decision=e152" --width 1200 --height 660 \
+        --scale 2 --clip 392,117,800,450 --out /tmp/panel.png
+
 Without --focus/--camera the shot keeps the viewer's default camera. The
 viewer's auto director (which eases the camera in wall time, so its framing
 depends on how many frames rendered while loading) stays off unless
@@ -134,16 +140,19 @@ def stop_vite(proc: subprocess.Popen) -> None:
 
 
 def page_url_for(port: int, recording: str, gfx: str | None = None,
-                 director: bool = False) -> str:
+                 director: bool = False, query: str | None = None) -> str:
     """Viewer URL for a recording file name (under public/recordings) or a full URL.
     The auto director is off (?director=0) unless asked for: shots must not
-    depend on how far it had eased the camera by the time the page loaded."""
+    depend on how far it had eased the camera by the time the page loaded.
+    `query` appends extra viewer parameters (e.g. "decisions=1&decision=e152")."""
     url = recording if "://" in recording else f"/recordings/{recording}"
     page_url = f"http://127.0.0.1:{port}/?recording={url}"
     if gfx:
         page_url += f"&gfx={gfx}"
     if not director:
         page_url += "&director=0"
+    if query:
+        page_url += "&" + query.lstrip("?&")
     return page_url
 
 
@@ -151,6 +160,16 @@ def parse_vec(s: str | None):
     if not s:
         return None
     return [float(x) for x in s.split(",")]
+
+
+def parse_clip(s: str | None):
+    """'x,y,w,h' in CSS pixels -> Playwright screenshot clip (None = full page)."""
+    if not s:
+        return None
+    x, y, w, h = (float(v) for v in s.split(","))
+    if w <= 0 or h <= 0:
+        raise ValueError("--clip width and height must be positive")
+    return {"x": x, "y": y, "width": w, "height": h}
 
 
 def main() -> int:
@@ -182,19 +201,24 @@ def main() -> int:
     p.add_argument("--out", required=True,
                    help="output PNG; use %%02d for --sequence frames")
     p.add_argument("--eval", help="extra JS to run after framing (window.visualizer in scope)")
+    p.add_argument("--query", help="extra viewer URL parameters, e.g. 'decisions=1&decision=e152'")
+    p.add_argument("--scale", type=float, default=1.0,
+                   help="device scale factor: output pixels = CSS size x scale (crisp HUD text)")
+    p.add_argument("--clip", help="x,y,w,h region in CSS pixels to keep (default: whole viewport)")
     p.add_argument("--director", action="store_true",
                    help="keep the viewer's auto director flying the camera when no --focus/"
                         "--camera is given (framing then depends on load timing)")
     args = p.parse_args()
 
+    clip = parse_clip(args.clip)
     vite = start_vite(args.port)
-    page_url = page_url_for(args.port, args.recording, args.gfx, args.director)
+    page_url = page_url_for(args.port, args.recording, args.gfx, args.director, args.query)
 
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True, args=CHROME_ARGS)
             page = browser.new_page(viewport={"width": args.width, "height": args.height},
-                                    device_scale_factor=1)
+                                    device_scale_factor=args.scale)
             errors: list[str] = []
             page.on("console", lambda m: errors.append(m.text)
                     if m.type in ("error", "warning") else None)
@@ -236,7 +260,7 @@ def main() -> int:
                 wait_frames(2)
                 page.evaluate(FRAME_JS, frame_opts)
                 wait_frames(2)
-                page.screenshot(path=path, timeout=180_000)  # llvmpipe under load
+                page.screenshot(path=path, timeout=180_000, clip=clip)  # llvmpipe under load
                 print("wrote", path)
 
             # A clean seek: jump a little before the target so the first
@@ -264,7 +288,7 @@ def main() -> int:
                     wait_frames(2)
                     path = args.out % i if "%" in args.out else args.out
                     bt = page.evaluate("window.visualizer.timeController.currentTime")
-                    page.screenshot(path=path, timeout=180_000)  # llvmpipe under load
+                    page.screenshot(path=path, timeout=180_000, clip=clip)  # llvmpipe under load
                     print(f"wrote {path}  battle t={bt:.1f}")
             if errors:
                 print("--- console errors/warnings ---")
