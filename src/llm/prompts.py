@@ -2209,10 +2209,16 @@ def _expected_gj(e: Dict[str, Any]) -> float:
 
 def _full_solution_indices(enemies: List[Dict[str, Any]], has_guns: bool,
                            has_torpedoes: bool) -> set:
-    """Which contacts get the full fire solution: the primary + the best others."""
+    """Which contacts get the full fire solution: the primary + the best others.
+    With no primary target the nearest enemy stands in: it is the one the guns
+    and INTERCEPT default to."""
     if len(enemies) <= FULL_SOLUTION_CONTACTS:
         return set(range(len(enemies)))
     chosen = [i for i, e in enumerate(enemies) if e.get("is_primary_target")][:1]
+    if not chosen:
+        chosen = [min(range(len(enemies)),
+                      key=lambda i: (math.inf if enemies[i].get("distance_km") is None
+                                     else float(enemies[i]["distance_km"])))]
 
     def rank(i: int) -> Tuple[float, float, int]:
         e = enemies[i]

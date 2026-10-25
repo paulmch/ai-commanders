@@ -420,7 +420,7 @@ class TestCompactContacts:
         tactical["enemies"] = [
             _enemy(f"beta_{i}", f"OCS Lancer-{i}", "destroyer", 100.0 + 50 * i, 1.0,
                    {"x": 1.0, "y": 0.0, "z": 0.0}, 5.0, torpedo_verdict=v,
-                   torpedo_solution=f"{v} | details {i}")
+                   torpedo_solution=f"{v} | details {i}", is_primary_target=(i == 2))
             for i, v in enumerate(verdicts)]
         kw["tactical_status"] = tactical
         turn = self._turn(kw)
@@ -428,6 +428,24 @@ class TestCompactContacts:
         assert "torpedo: REACHABLE | details 2" in turn and "torpedo: REACHABLE | details 4" in turn
         assert "torpedo: TOO CLOSE | details 3" in turn      # next best verdict, not nearest
         assert turn.count("| torpedo UNREACHABLE") == 2
+
+    def test_no_primary_target_the_nearest_gets_the_full_solution(self):
+        """With no primary, guns and INTERCEPT use the nearest enemy - its
+        solution must not be the one squeezed onto a compact line."""
+        kw = corvette_kwargs()
+        tactical = dict(kw["tactical_status"])
+        verdicts = ["REACHABLE", "REACHABLE", "REACHABLE", "TOO CLOSE", "UNREACHABLE"]
+        tactical["enemies"] = [
+            _enemy(f"beta_{i}", f"OCS Lancer-{i}", "destroyer", 400.0 - 50 * i, 1.0,
+                   {"x": 1.0, "y": 0.0, "z": 0.0}, 5.0, torpedo_verdict=v,
+                   torpedo_solution=f"{v} | details {i}")
+            for i, v in enumerate(verdicts)]
+        kw["tactical_status"] = tactical
+        turn = self._turn(kw)
+        assert turn.count("    torpedo: ") == 3
+        assert "torpedo: UNREACHABLE | details 4" in turn        # the nearest, 200 km
+        assert "torpedo: REACHABLE | details 0" in turn and "torpedo: REACHABLE | details 1" in turn
+        assert "| torpedo REACHABLE" in turn and "| torpedo TOO CLOSE" in turn
 
     def test_friendlies_flying_the_same_order_share_a_line(self):
         turn = self._turn()
