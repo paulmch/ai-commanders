@@ -162,8 +162,70 @@ export function ventLife(mark) {
   return ventTau(mark) * Math.log(Math.max(1.0001, mark.ventSize / 0.035));
 }
 
+/**
+ * Dying-reactor pulse rate (Hz) `ttd` seconds before detonation: ~0.6 Hz
+ * with a long fuse, climbing to 4 Hz at the end (f = 0.5 + 3.5 / (ttd + 1)).
+ */
+export function reactorPulseRate(ttd) {
+  return 0.5 + 3.5 / (Math.max(0, ttd) + 1);
+}
+
+/**
+ * Dying-reactor glow 0..1 at `ttd` seconds before detonation: pulses at
+ * reactorPulseRate over a floor that brightens as the fuse runs down. The
+ * phase is the closed-form integral of the rate, so the glow is a pure
+ * function of battle time (scrub-exact). 0 once detonated or unknown.
+ */
+export function reactorPulse(ttd) {
+  if (!(ttd >= 0) || !Number.isFinite(ttd)) return 0;
+  const phase = -2 * Math.PI * (0.5 * ttd + 3.5 * Math.log(ttd + 1));
+  const near = 1 - ttd / (ttd + 6);
+  const beat = 0.5 + 0.5 * Math.sin(phase);
+  return Math.min(1, (0.3 + 0.7 * near) * (0.35 + 0.65 * beat * beat));
+}
+
 /** Seconds spall debris from a mark stays in flight. */
 export const SPALL_LIFE = 14;
+
+/** A coilgun hit this far off the armour normal skids along the plating. */
+export const GRAZE_DEG = 60;
+
+/** Fleet-range bracket flash after a weapon hit (ContactOverlay). */
+export const HIT_FLASH_S = 1.5;
+
+/**
+ * Persistent blast preset (render/Explosion.js KINDS) for a hit mark.
+ * Torpedoes are 250 kg kinetic penetrators: only a recorded explosive
+ * yield (legacy warhead rounds) gets the warhead fireball; a round the
+ * armour stops is a kinetic strike, one that punches through a breach.
+ * Coilgun slugs pierce when they penetrate, skid in a spark fan along the
+ * plating when grazing, and otherwise crater the armour.
+ */
+export function impactPreset(m) {
+  if (m.kind === 'torpedo') {
+    if (m.explosive > 0) return 'warhead';
+    return m.penetrated ? 'breach' : 'kineticStrike';
+  }
+  if (m.kind === 'slug') {
+    if (m.penetrated) return 'pierce';
+    return (m.angle || 0) > GRAZE_DEG ? 'graze' : 'impact';
+  }
+  return null;
+}
+
+/**
+ * Blast scale (scene km) of a hit mark's preset on a hull drawn `W` wide.
+ * Kinetic strikes are capped to a fraction of the displayed beam so a
+ * stopped penetrator never swallows the ship it bounced off; a warhead
+ * keeps its old energy-driven size.
+ */
+export function impactScale(m, W) {
+  const E = Math.max(0.1, m.energy || 1);
+  const preset = m.strike || impactPreset(m);
+  if (preset === 'warhead') return Math.max(1.4, Math.min(3.2, 0.9 * Math.pow(Math.max(E, 8), 0.3)));
+  if (preset === 'kineticStrike' || preset === 'breach') return Math.min(0.35 * W, 0.22 * Math.pow(E, 0.4));
+  return Math.min(0.3 * W, Math.max(0.12, 0.2 * Math.pow(E, 0.35)));
+}
 
 // ---------------------------------------------------------------------------
 // Timeline
@@ -204,17 +266,18 @@ export function buildDamageTimeline(rec, opts = {}) {
     if (!ships.has(id)) {
       ships.set(id, {
         id, seed: hashString(id), marks: [], dyingStart: null, deathTime: null,
-        modules: [], firstT: null
+        modules: [], firstT: null, armor0: null, dyingEvent: null, wrecks: []
       });
     }
     return ships.get(id);
   };
 
-  // Death spiral windows from the trace
+  // Death spiral windows and as-built armour from the trace
   for (const frame of trace) {
     for (const [id, s] of Object.entries(frame.ships || {})) {
       const sd = ensure(id);
       if (sd.firstT === null) sd.firstT = frame.t;
+      if (!sd.armor0 && s.armor) sd.armor0 = { ...s.armor };
       if (s.dying && sd.dyingStart === null && sd.deathTime === null) sd.dyingStart = frame.t;
       if (s.destroyed && sd.deathTime === null) sd.deathTime = frame.t;
     }
@@ -226,16 +289,44 @@ export function buildDamageTimeline(rec, opts = {}) {
     for (const tp of frame.torpedoes || []) torpLast.set(tp.id, tp.pos);
   }
 
-  // Same-tick bookkeeping: kinetic armour breaches and module hits
+  // Same-tick bookkeeping: kinetic armour breaches and module hits. A
+  // torpedo's breach is read from events naming the round (v3: armour
+  // damage / hull damage / penetration carry torpedo_id or ordnance_id),
+  // else from the same-tick kinetic armour event of matching energy.
   const kineticPen = [];        // {ship, t, dmg, penetrated}
+  const torpPen = new Map();    // torpedo id -> penetrated
+  const penTicks = [];          // legacy penetration events: {ship, t}
+  const warheads = new Map();   // torpedo id -> launch warhead_gj
+  const wreckEvents = [];
+  const gunShots = new Map();   // ship -> Map(slot -> [t]) (non-spinal guns)
   for (const e of events) {
     const d = e.data || {};
-    if (e.event_type === 'armor_damage' && d.source === 'kinetic') {
+    const type = e.event_type;
+    if (type === 'armor_damage' && d.torpedo_id) {
+      torpPen.set(d.torpedo_id, !!torpPen.get(d.torpedo_id) || !!d.penetrated);
+    } else if (type === 'armor_damage' && d.source === 'kinetic') {
       kineticPen.push({ ship: e.ship_id, t: e.timestamp, dmg: d.damage_gj, penetrated: !!d.penetrated });
-    } else if (e.event_type === 'module_damaged' || e.event_type === 'module_destroyed') {
+    } else if (type === 'damage_taken' && (d.torpedo_id || d.ordnance_id)) {
+      torpPen.set(d.torpedo_id || d.ordnance_id, true);   // armour already gone
+    } else if (type === 'penetration') {
+      if (d.ordnance_id) torpPen.set(d.ordnance_id, true);
+      else penTicks.push({ ship: e.ship_id, t: e.timestamp });
+    } else if (type === 'torpedo_launched') {
+      warheads.set(d.torpedo_id, d.warhead_gj || 0);
+    } else if (type === 'ship_dying') {
+      ensure(e.ship_id).dyingEvent = { t: e.timestamp, fuse: d.detonation_in_s ?? null };
+    } else if (type === 'shot_fired' && d.weapon_slot && !(d.weapon_name || '').toLowerCase().includes('spinal')) {
+      if (!gunShots.has(e.ship_id)) gunShots.set(e.ship_id, new Map());
+      const slots = gunShots.get(e.ship_id);
+      if (!slots.has(d.weapon_slot)) slots.set(d.weapon_slot, []);
+      slots.get(d.weapon_slot).push(e.timestamp);
+    }
+    if (type === 'module_damaged' || type === 'module_destroyed') {
       ensure(e.ship_id).modules.push({ t: e.timestamp, name: d.module_name || '' });
     }
+    if (type === 'module_destroyed' || type === 'radiator_damaged') wreckEvents.push(e);
   }
+  for (const [id, list] of buildWrecks(wreckEvents, gunShots)) ensure(id).wrecks = list;
 
   const tmp = { pos: [0, 0, 0], vel: [0, 0, 0], fwd: [0, 0, 1], hull: 1, dying: false, destroyed: false };
   const addMark = (shipId, m, fromWorld) => {
@@ -258,22 +349,32 @@ export function buildDamageTimeline(rec, opts = {}) {
   for (const e of events) {
     const d = e.data || {};
     if (e.event_type === 'hit') {
-      const shooter = d.shooter_id ? shipStateAt(trace, d.shooter_id, e.timestamp) : null;
+      const shooterId = d.shooter_id || d.source_ship_id;
+      const shooter = shooterId ? shipStateAt(trace, shooterId, e.timestamp) : null;
       addMark(e.ship_id, {
         t: impactTime(e), eventT: e.timestamp, kind: 'slug',
         section: normSection(d.hit_location),
         energy: d.kinetic_energy_gj || 1,
-        penetrated: !!d.penetrated, critical: !!d.critical_hit
+        penetrated: !!d.penetrated, critical: !!d.critical_hit,
+        angle: d.impact_angle_deg || 0, ordnanceId: d.projectile_id || null
       }, shooter ? shooter.pos : null);
     } else if (e.event_type === 'torpedo_impact') {
       const target = d.target_id || e.ship_id;
       const dmg = d.total_damage_gj || 8;
-      const pen = kineticPen.find(k => k.ship === target && Math.abs(k.t - e.timestamp) < 1e-6 &&
-        Math.abs((k.dmg || 0) - dmg) < 1e-3);
+      let pen = torpPen.get(d.torpedo_id);
+      if (pen === undefined) {
+        const k = kineticPen.find(k => k.ship === target && Math.abs(k.t - e.timestamp) < 1e-6 &&
+          Math.abs((k.dmg || 0) - dmg) < 1e-3);
+        pen = k ? k.penetrated : penTicks.some(p => p.ship === target && Math.abs(p.t - e.timestamp) < 1e-6);
+      }
+      // Older recordings carry no explosive split: a round launched with a
+      // warhead is an explosive one, everything else a kinetic penetrator
+      const explosive = d.explosive_damage_gj ?? ((warheads.get(d.torpedo_id) || 0) > 0 ? dmg : 0);
       addMark(target, {
         t: e.timestamp, eventT: e.timestamp, kind: 'torpedo',
         section: normSection(d.hit_location),
-        energy: dmg, penetrated: !!pen?.penetrated, critical: false
+        energy: dmg, penetrated: !!pen, critical: false, explosive,
+        speed: d.impact_speed_kps || 0, ordnanceId: d.torpedo_id || null
       }, torpLast.get(d.torpedo_id) || null);
     }
   }
@@ -283,7 +384,8 @@ export function buildDamageTimeline(rec, opts = {}) {
   for (const sd of ships.values()) {
     if (sd.dyingStart === null) continue;
     const t0 = sd.dyingStart;
-    const t1 = sd.deathTime ?? t0 + 30;
+    const fuse = sd.dyingEvent?.fuse;
+    const t1 = sd.deathTime ?? (fuse != null ? t0 + fuse : t0 + 30);
     const span = Math.max(0.5, t1 - t0);
     for (let b = 0; b < 2; b++) {
       const u = hash01(sd.seed, 7001, b);
@@ -306,6 +408,7 @@ export function buildDamageTimeline(rec, opts = {}) {
   }
 
   const all = [];
+  const byOrdnance = new Map();
   for (const sd of ships.values()) {
     sd.marks.sort((a, b) => a.t - b.t || a.eventT - b.eventT);
     sd.marks.forEach((m, i) => {
@@ -314,11 +417,127 @@ export function buildDamageTimeline(rec, opts = {}) {
       m.uid = `${sd.id}#${i}`;
       m.seed = (Math.imul(sd.seed ^ 0x5bd1e995, 31) + i * 7919) >>> 0;
       finishMark(m, sd);
+      if (m.ordnanceId) byOrdnance.set(m.ordnanceId, m);
       all.push(m);
     });
   }
   all.sort((a, b) => a.t - b.t);
-  return { trace, ships, marks: all };
+  return { trace, ships, marks: all, byOrdnance };
+}
+
+// ---------------------------------------------------------------------------
+// Wrecked mounts
+// ---------------------------------------------------------------------------
+
+/** Hull side a radiator_position names ('tail_dorsal' -> dorsal). */
+function radiatorSide(pos) {
+  const p = (pos || '').toLowerCase();
+  for (const side of ['dorsal', 'ventral', 'port', 'starboard']) if (p.includes(side)) return side;
+  return 'dorsal';
+}
+
+/**
+ * Mounts knocked out over the battle, per ship, in time order:
+ *   {t, kind: 'gun'|'spinal'|'radiator', slot, side, destroyed, name}
+ * A destroyed 'Coilgun Battery' / turret names no weapon slot, so the slot
+ * is inferred from the guns that never fire again after it: the one that
+ * fired last is the one that was knocked out (null when none fired - the
+ * renderer then picks a seeded mount). Radiator damage names the wing's
+ * side ('tail_port'); a destroyed wing is torn off rather than buckled.
+ *
+ * @param {Array} events     module_destroyed / radiator_damaged events, time sorted
+ * @param {Map}   gunShots   ship -> Map(weapon slot -> [shot times]), non-spinal guns
+ * @returns {Map<string, Array>}
+ */
+export function buildWrecks(events, gunShots = new Map()) {
+  const out = new Map();
+  const push = (id, w) => { if (!out.has(id)) out.set(id, []); out.get(id).push(w); };
+  const taken = new Map();   // ship -> Set(slot)
+  for (const e of events || []) {
+    const d = e.data || {};
+    const ship = e.ship_id;
+    if (e.event_type === 'radiator_damaged') {
+      push(ship, { t: e.timestamp, kind: 'radiator', side: radiatorSide(d.radiator_position),
+        end: (d.radiator_position || '').toLowerCase().startsWith('nose') ? 'nose' : 'tail',
+        destroyed: !!d.destroyed, name: d.radiator_position || 'radiator' });
+      continue;
+    }
+    if (e.event_type !== 'module_destroyed') continue;
+    const name = (d.module_name || '').toLowerCase();
+    if (name.includes('spinal')) {
+      push(ship, { t: e.timestamp, kind: 'spinal', slot: null, name: d.module_name });
+    } else if (name.includes('coilgun') || name.includes('turret') || name.includes('battery')) {
+      if (!taken.has(ship)) taken.set(ship, new Set());
+      const used = taken.get(ship);
+      let slot = null, latest = -Infinity;
+      for (const [s, times] of gunShots.get(ship) || []) {
+        if (used.has(s) || times.some(x => x > e.timestamp + 0.5)) continue;
+        const last = times.filter(x => x <= e.timestamp + 0.5).at(-1);
+        if (last !== undefined && last > latest) { latest = last; slot = s; }
+      }
+      if (slot) used.add(slot);
+      push(ship, { t: e.timestamp, kind: 'gun', slot, name: d.module_name });
+    }
+  }
+  return out;
+}
+
+/** Wrecks of one ship that have happened by `now` (pure filter). */
+export function wrecksAt(sd, now) {
+  const list = sd?.wrecks;
+  if (!list || !list.length) return [];
+  return list.filter(w => w.t <= now);
+}
+
+// ---------------------------------------------------------------------------
+// Armour, countdown, recent hits
+// ---------------------------------------------------------------------------
+
+/**
+ * Remaining armour per section as a fraction of the as-built thickness
+ * (first recorded frame), lerped between frames like shipStateAt.
+ * Sections a recording never lists stay at 1. Writes into `out`.
+ * {nose, lateral, tail} in 0..1
+ */
+export function armorStateAt(timeline, shipId, t, out = null) {
+  const o = out || { nose: 1, lateral: 1, tail: 1 };
+  o.nose = 1; o.lateral = 1; o.tail = 1;
+  const sd = timeline?.ships?.get(shipId);
+  const a0 = sd?.armor0;
+  const b = a0 ? frameBracket(timeline.trace, t) : null;
+  if (!b) return o;
+  const s0 = timeline.trace[b.i0].ships?.[shipId];
+  const s1 = timeline.trace[b.i1].ships?.[shipId] || s0;
+  if (!s0?.armor) return o;
+  for (const k of ['nose', 'lateral', 'tail']) {
+    const init = a0[k];
+    if (!(init > 0)) continue;
+    const v0 = s0.armor[k] ?? init, v1 = s1?.armor?.[k] ?? v0;
+    o[k] = clamp01((v0 + (v1 - v0) * b.a) / init);
+  }
+  return o;
+}
+
+/**
+ * Battle time a dying hulk's reactor lets go, or null when the ship never
+ * enters the death spiral: the recorded death when the trace has it
+ * (replay), else the ship_dying fuse (live, before the end is streamed).
+ */
+export function detonationTime(sd) {
+  if (!sd || (sd.dyingStart === null && !sd.dyingEvent)) return null;
+  if (sd.deathTime !== null && sd.deathTime !== undefined) return sd.deathTime;
+  const ev = sd.dyingEvent;
+  return ev && ev.fuse != null ? ev.t + ev.fuse : null;
+}
+
+/** Time of the latest slug or torpedo hit on a ship at or before `now` (-Infinity if none). */
+export function lastHitAt(sd, now) {
+  const marks = sd?.marks;
+  if (!marks) return -Infinity;
+  for (let i = marksUpTo(marks, now) - 1; i >= 0; i--) {
+    if (marks[i].kind === 'slug' || marks[i].kind === 'torpedo') return marks[i].t;
+  }
+  return -Infinity;
 }
 
 /** Severity, aim and vent parameters (all seeded, no Math.random). */
@@ -367,6 +586,7 @@ function finishMark(m, sd) {
     m.kind === 'pop' ? 4 : Math.min(10, 3 + Math.round(E * 0.8));
   if (m.penetrated) m.debris = Math.min(32, m.debris + 5);
   m.blast = m.kind === 'pop' || m.kind === 'secondary' ? m.kind : null;
+  m.strike = impactPreset(m);
 }
 
 /** Marks of one ship with t <= now (binary search on the sorted list). */

@@ -2,10 +2,12 @@ import * as THREE from 'three';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 import {
   buildDamageTimeline, shipStateAt, marksUpTo, damageStateAt, ventTau, localBasis,
-  hash01, SPALL_LIFE
+  hash01, SPALL_LIFE, impactScale, armorStateAt, detonationTime, reactorPulse
 } from '../DamageTimeline.js';
 import { getNoiseTexture, getPuffTexture, getGlowTexture, getStarTexture, mulberry32 } from './Textures.js';
 import { buildDebrisChunks } from './Hulls.js';
+import { HullWear, createWearMaterial } from './HullWear.js';
+import { SPINAL_MUZZLE, SPINAL_MUZZLE_DEFAULT } from './WeaponTimeline.js';
 
 /**
  * Persistent battle damage: everything that stays on or around a hull
@@ -17,7 +19,14 @@ import { buildDebrisChunks } from './Hulls.js';
  *  - venting jets from breaches (atmosphere / fuel / coolant) that bleed down
  *  - electrical sparks and arcs, failing lights on a badly hurt hull
  *  - a smoke-and-ember trail behind heavily damaged ships
- *  - scorched, buckled radiator wings
+ *  - scorched, buckled radiator wings (event-driven where the recording
+ *    names the wing: radiator_damaged)
+ *  - wrecked mounts: a destroyed gun battery loses its cradle and barrels,
+ *    cooks off once and keeps a scorched crater on its ring
+ *  - the persistent part of every weapon hit (kinetic strike, breach,
+ *    pierce, graze, legacy warhead), on the displayed hull at the crater
+ *  - cumulative hull wear (HullWear): armour stripped per section, soot,
+ *    and a dying reactor's pulsing crack glow
  *  - death-spiral secondaries walking along the hull toward the reactor
  *  - hull breakup helpers for ShipDestruction: 2-3 big sections with
  *    glowing torn edges, an instanced debris cloud
@@ -68,6 +77,12 @@ const SMOKE_LIFE = 6.5;
 const SMOKE_CAP = 72;
 const SPALL_BLOCK = 32;
 const SPALL_BLOCKS = 128;
+// Longest-lived strike preset (legacy warhead, 5.5 s) plus margin: the
+// window in which a strike blast is (re)spawned at its recorded age
+const STRIKE_WINDOW = 6;
+const WRECK_CAP = 12;
+// Hull-local outward normal of each radiator side (+X is port in lookAt's frame)
+const RADIATOR_SIDE = { dorsal: [0, 1], ventral: [0, -1], port: [1, 0], starboard: [-1, 0] };
 
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
@@ -589,6 +604,9 @@ class ShipView {
     this.emitterCount = -1;
     this.arcCycle = -1;
     this.lastNow = -Infinity;
+    this.wear = new HullWear(group, sd.seed);
+    this.armor = { nose: 1, lateral: 1, tail: 1 };
+    this.wrecks = null;             // resolved mounts (lazy: _assignWrecks)
   }
 
   _buildPartIndex() {
@@ -722,7 +740,9 @@ class ShipView {
   _writeCrater(m, res) {
     const slot = m.index % this.craterCap;
     const W = this.W;
-    const radius = W * (m.kind === 'pop' ? 0.1 : m.kind === 'torpedo' ? 0.09 : 0.06) * (0.7 + 0.9 * m.severity);
+    // ~1.6x the first-pass size so wounds still read once the ship is a few
+    // dozen pixels long; a torpedo strike gouges wider than a slug
+    const radius = W * (m.kind === 'pop' ? 0.16 : m.kind === 'torpedo' ? 0.15 : 0.095) * (0.7 + 0.9 * m.severity);
     _q.setFromUnitVectors(_Z, res.n);
     _q2.setFromAxisAngle(_Z, hash01(m.seed, 11) * Math.PI * 2);
     _q.multiply(_q2);
@@ -984,29 +1004,47 @@ class ShipView {
     // nav lamps brown out on their own (HullLights, from hull + dying)
   }
 
-  _applyRadiators(level) {
+  /**
+   * Radiator wings: recorded radiator_damaged events buckle and scorch the
+   * named wing from their time on (harder when destroyed); on recordings
+   * without them, wings buckle with the hull's damage level as before.
+   */
+  _applyRadiators(level, now) {
     const ud = this.group.userData;
     const panels = ud.radiators || [];
     if (!panels.length) return;
+    // event damage per wing at `now`: 0 none, 1 damaged, 2 destroyed
+    let hit = 0;
+    const evt = this._radEvt || (this._radEvt = new Array(panels.length).fill(0));
+    evt.fill(0);
+    for (const w of this.wrecks || []) {
+      if (w.kind !== 'radiator' || w.panel < 0 || now < w.t) continue;
+      evt[w.panel] = Math.max(evt[w.panel], w.destroyed ? 2 : 1);
+      hit = hit * 3 + evt[w.panel] + 1;
+    }
     if (!this.radDamage) {
-      if (level <= 0) return;
+      if (level <= 0 && !hit) return;
       const orig = ud.radiatorMaterials?.[0];
       if (!orig) return;
       const clone = orig.clone();
-      this.radDamage = { orig, clone, meshes: [], level: -1, bent: new Array(panels.length).fill(false) };
+      this.radDamage = { orig, clone, meshes: [], level: -1, hit: -1, bent: new Array(panels.length).fill(false) };
       panels.forEach((panel, i) => {
         panel.traverse(c => { if (c.isMesh && c.material === orig) this.radDamage.meshes.push({ mesh: c, panel: i }); });
       });
     }
     const R = this.radDamage;
-    const k = Math.min(1, level);
-    if (Math.abs(level - R.level) > 1e-3) {
-      // which wings are hit and how far they buckle: a pure function of level
+    const k = Math.min(1, Math.max(level, hit ? 0.75 : 0));
+    if (Math.abs(level - R.level) > 1e-3 || hit !== R.hit) {
+      // which wings are hit and how far they buckle: a pure function of
+      // level and the recorded wing hits up to now
       R.level = level;
+      R.hit = hit;
       for (let i = 0; i < panels.length; i++) {
-        R.bent[i] = hash01(this.seed, 1000 + i) < level * 0.9;
+        const byLevel = hash01(this.seed, 1000 + i) < level * 0.9;
+        R.bent[i] = byLevel || evt[i] > 0;
         const h = hash01(this.seed, 1100 + i);
-        panels[i].rotation.x = R.bent[i] ? (h < 0.5 ? -1 : 1) * (0.12 + 0.3 * h) * level : 0;
+        const amount = evt[i] === 2 ? 1.25 : evt[i] === 1 ? Math.max(level, 0.7) : level;
+        panels[i].rotation.x = R.bent[i] ? (h < 0.5 ? -1 : 1) * (0.12 + 0.3 * h) * amount : 0;
       }
       for (const e of R.meshes) e.mesh.material = R.bent[e.panel] ? R.clone : R.orig;
       // severed coolant loop: the wing goes cold and scorched while the
@@ -1015,6 +1053,95 @@ class ShipView {
     }
     R.clone.emissiveIntensity = R.orig.emissiveIntensity * (1 - 0.85 * k);
     R.clone.emissive.copy(R.orig.emissive);   // glow hue follows rad_out (render/Heat.js)
+  }
+
+  // -- wrecked mounts -----------------------------------------------------------
+  /**
+   * Resolve the timeline's wrecks onto this hull once: gun batteries onto
+   * their turret rig (by the inferred weapon slot, else a seeded free one),
+   * the spinal mount onto its muzzle, radiator hits onto the wing on the
+   * named side. Each gets a hull-local scorch point; guns keep their rig.
+   */
+  _assignWrecks() {
+    const ud = this.group.userData;
+    const list = this.sd.wrecks || [];
+    const guns = ud.gunTurrets || [];
+    const panels = ud.radiators || [];
+    const used = new Set();
+    const Zl = new THREE.Vector3(0, 0, 1);
+    this.wrecks = [];
+    list.forEach((w, i) => {
+      const e = { t: w.t, kind: w.kind, destroyed: !!w.destroyed, rig: null, panel: -1, local: null, normal: null, size: 0,
+        slump: (hash01(this.seed, 1200 + i) - 0.5) * 2.2, uid: `${this.id}#w${i}` };
+      if (w.kind === 'gun' && guns.length) {
+        let rig = w.slot ? guns.find(r => r.slot === w.slot && !used.has(r)) : null;
+        if (!rig) {
+          const free = guns.filter(r => !used.has(r));
+          if (free.length) rig = free[Math.floor(hash01(this.seed, 1300 + i) * free.length)];
+        }
+        if (rig?.mount) {
+          used.add(rig);
+          e.rig = rig;
+          const rz = rig.mount.rotation.z;
+          e.normal = new THREE.Vector3(-Math.sin(rz), Math.cos(rz), 0);
+          e.local = rig.mount.position.clone().addScaledVector(e.normal, (rig.s || 0.5) * 0.3);
+          e.size = (rig.s || 0.5) * 0.75;
+        }
+      } else if (w.kind === 'spinal') {
+        const [y, z] = SPINAL_MUZZLE[ud.shipType] || SPINAL_MUZZLE_DEFAULT;
+        e.local = new THREE.Vector3(0, this.W * y, this.L * z);
+        e.normal = new THREE.Vector3(0, -0.45, 1).normalize();
+        e.size = this.W * 0.16;
+      } else if (w.kind === 'radiator' && panels.length) {
+        const [sx, sy] = RADIATOR_SIDE[w.side] || RADIATOR_SIDE.dorsal;
+        let best = -1, bd = -Infinity;
+        panels.forEach((p, k) => {
+          const l = Math.hypot(p.position.x, p.position.y) || 1;
+          const d = (p.position.x * sx + p.position.y * sy) / l + (w.end === 'tail' ? -0.1 : 0.1) * Math.sign(p.position.z);
+          if (d > bd) { bd = d; best = k; }
+        });
+        e.panel = best;
+      }
+      if (e.local || e.rig || e.panel >= 0) this.wrecks.push(e);
+    });
+    // scorch decals on the wrecked mounts (crater shader, time-gated by t0)
+    const decals = this.wrecks.filter(e => e.local);
+    if (decals.length) {
+      const n = Math.min(WRECK_CAP, decals.length);
+      const g = new THREE.InstancedBufferGeometry();
+      g.index = this.fx.planeGeom.index;
+      g.setAttribute('position', this.fx.planeGeom.attributes.position);
+      g.setAttribute('uv', this.fx.planeGeom.attributes.uv);
+      const a = new Float32Array(n * 4);
+      this.scorch = new THREE.InstancedMesh(g, this.fx.craterMat, n);
+      for (let i = 0; i < n; i++) {
+        const e = decals[i];
+        _q.setFromUnitVectors(Zl, e.normal);
+        _v.copy(e.local).addScaledVector(e.normal, this.W * 0.012);
+        _s.set(e.size * 2, e.size * 2, 1);
+        _m.compose(_v, _q, _s);
+        this.scorch.setMatrixAt(i, _m);
+        a[i * 4] = e.t; a[i * 4 + 1] = 1.5; a[i * 4 + 2] = hash01(this.seed, 1400 + i) * 97; a[i * 4 + 3] = 1;
+      }
+      g.setAttribute('aCrater', new THREE.InstancedBufferAttribute(a, 4));
+      this.scorch.frustumCulled = false;
+      this.scorch.renderOrder = 6;
+      this.scorch.userData.damageFx = true;
+      this.group.add(this.scorch);
+    }
+  }
+
+  /** Wrecked gun mounts: cradle and barrels gone, the housing slumped. */
+  _applyWrecks(now) {
+    if (!this.sd.wrecks?.length) return;
+    if (!this.wrecks) this._assignWrecks();
+    for (const e of this.wrecks) {
+      if (!e.rig) continue;
+      const gone = now >= e.t;
+      if (e.rig.pitch) e.rig.pitch.visible = !gone;
+      // HullRigs re-lays the housing every frame; a dead one stays put
+      if (gone && e.rig.yaw) e.rig.yaw.rotation.y = e.slump;
+    }
   }
 
   /**
@@ -1051,7 +1178,16 @@ class ShipView {
       this.arcs.visible = false;
     }
     this._applyFlicker(now, st.flicker);
-    this._applyRadiators(st.radiator);
+    this._applyWrecks(now);
+    this._applyRadiators(st.radiator, now);
+
+    // Cumulative wear: armour stripped per recorded section, soot as the
+    // hull fails, and a dying reactor's crack glow pulsing toward detonation
+    armorStateAt(fx.timeline, this.id, now, this.armor);
+    const soot = st.dying ? 0.85 : clamp01((1 - st.hull) * 1.3 - 0.06 + 0.035 * st.breaches);
+    const det = st.dying ? detonationTime(this.sd) : null;
+    const ttd = det !== null ? Math.max(0, det - now) : Infinity;
+    this.wear.update(this.armor, soot, det !== null ? reactorPulse(ttd) : 0, 0.25 + 1.6 * (1 - ttd / (ttd + 5)));
   }
 
   dispose() {
@@ -1073,7 +1209,38 @@ class ShipView {
       for (const p of this.group.userData.radiators || []) p.rotation.x = 0;
       this.radDamage.clone.dispose();
     }
+    this.wear.dispose();
+    if (this.scorch) { this.group.remove(this.scorch); this.scorch.geometry.dispose(); this.scorch.dispose(); }
+    for (const e of this.wrecks || []) if (e.rig?.pitch) e.rig.pitch.visible = true;
   }
+}
+
+function clamp01(x) { return x < 0 ? 0 : x > 1 ? 1 : x; }
+
+/**
+ * World direction a strike's spall leaves along: out of a breach the jet
+ * follows the normal; a grazing slug skids along the plating; otherwise
+ * the cone sits between the normal and the mirrored approach.
+ * @param {Object} m   hit mark (approach is ship-local, toward the attacker)
+ * @param {THREE.Vector3} N  world surface normal
+ */
+export function strikeSpallDir(m, N, out) {
+  const B = localBasis(m.shipFwd || [0, 0, 1], _basis);
+  const a = m.approach || [0, 0, 1];
+  // incoming travel direction (world): away from the attacker
+  _v2.set(
+    -(B.x[0] * a[0] + B.y[0] * a[1] + B.z[0] * a[2]),
+    -(B.x[1] * a[0] + B.y[1] * a[1] + B.z[1] * a[2]),
+    -(B.x[2] * a[0] + B.y[2] * a[1] + B.z[2] * a[2]));
+  const dn = _v2.dot(N);
+  if (m.strike === 'pierce' || m.strike === 'breach') return out.copy(N);
+  if (m.strike === 'graze') {
+    out.copy(_v2).addScaledVector(N, -dn);
+    if (out.lengthSq() < 1e-6) return out.copy(N);
+    return out.normalize().addScaledVector(N, 0.3).normalize();
+  }
+  out.copy(_v2).addScaledVector(N, -2 * dn);   // mirrored approach
+  return out.multiplyScalar(0.6).add(N).normalize();
 }
 
 // ---------------------------------------------------------------------------
@@ -1145,6 +1312,8 @@ export class DamageFX {
     warm.add(new THREE.Points(sg, this.sparkMat));
     warm.add(new THREE.Mesh(billboardGeometry(1, ['aS0', 'aS1', 'aS2']), this.smokeMat));
     warm.add(new THREE.Mesh(this.planeGeom, this.edgeMat));
+    this._warmWear = createWearMaterial(new HullWear(warm).uniforms);
+    warm.add(new THREE.Mesh(this.planeGeom, this._warmWear));
     const ag = new THREE.BufferGeometry();
     ag.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
     warm.add(new THREE.LineSegments(ag, new THREE.LineBasicMaterial({ transparent: true, blending: THREE.AdditiveBlending, depthWrite: false })));
@@ -1159,6 +1328,7 @@ export class DamageFX {
    * rebuilds via a cache keyed by mark identity.
    */
   setRecording(loader) {
+    this.loader = loader;
     const cache = new Map();
     if (this.timeline) {
       for (const m of this.timeline.marks) if (m._res) cache.set(this._markKey(m), { res: m._res, group: m._resGroup });
@@ -1281,28 +1451,84 @@ export class DamageFX {
     this.spall.flush();
   }
 
-  /** Death-spiral secondaries: Blasts anchored to their scheduled times. */
+  /**
+   * Blasts anchored to their recorded times: weapon strikes (on the hull
+   * at the mark's crater, carried with the struck ship), death-spiral
+   * secondaries and mount cook-offs. A backward seek clears them and they
+   * respawn mid-life from the same times.
+   */
   _updateBlasts(now) {
     const marks = this.timeline.marks;
-    const lo = marksUpTo(marks, now - 4.0);
+    const lo = marksUpTo(marks, now - STRIKE_WINDOW);
     const hi = marksUpTo(marks, now);
+    const SC = this.SCALE;
     for (let i = lo; i < hi; i++) {
       const m = marks[i];
-      if (!m.blast || this.blastSpawned.has(m.uid)) continue;
+      const kind = m.blast || m.strike;
+      if (!kind || this.blastSpawned.has(m.uid)) continue;
+      if (m.blast && now - m.t > 4.0) continue;
       const v = this.view(m.shipId);
       if (!v) continue;
       this.blastSpawned.add(m.uid);
       const res = v.resolve(m);
       const P = new THREE.Vector3(), N = new THREE.Vector3();
       this.markWorld(m, res, P, N);
-      P.addScaledVector(N, v.W * 0.05);
-      const SC = this.SCALE;
+      const baseVel = new THREE.Vector3(m.shipVel[0] * SC, m.shipVel[1] * SC, m.shipVel[2] * SC);
+      if (m.blast) {
+        P.addScaledVector(N, v.W * 0.05);
+        this.sm._spawnBlast({
+          position: P, dir: N, kind: m.blast, category: 'damage', spawnTime: m.t,
+          scale: v.W * (m.blast === 'secondary' ? 0.45 : 0.7), baseVel
+        });
+        continue;
+      }
+      P.addScaledVector(N, v.W * 0.015);
       this.sm._spawnBlast({
-        position: P, dir: N, kind: m.blast, category: 'damage', spawnTime: m.t,
-        scale: v.W * (m.blast === 'secondary' ? 0.45 : 0.7),
-        baseVel: new THREE.Vector3(m.shipVel[0] * SC, m.shipVel[1] * SC, m.shipVel[2] * SC)
+        position: P, dir: strikeSpallDir(m, N, new THREE.Vector3()), kind: m.strike, category: 'damage',
+        spawnTime: m.t, scale: impactScale(m, v.W), baseVel
       });
     }
+    // Mount cook-offs: a destroyed battery / spinal mount goes up once
+    for (const v of this.views.values()) {
+      if (!v.sd.wrecks?.length) continue;
+      if (!v.wrecks) v._assignWrecks();
+      for (const e of v.wrecks) {
+        if (!e.local || e.t > now || now - e.t > 4.0 || this.blastSpawned.has(e.uid)) continue;
+        const st = shipStateAt(this.timeline.trace, v.id, e.t, this._st);
+        if (!st) continue;
+        this.blastSpawned.add(e.uid);
+        const B = localBasis(st.fwd, _basis);
+        const P = new THREE.Vector3(), N = new THREE.Vector3();
+        const toWorld = (l, out, w) => out.set(
+          B.x[0] * l.x + B.y[0] * l.y + B.z[0] * l.z + w[0],
+          B.x[1] * l.x + B.y[1] * l.y + B.z[1] * l.z + w[1],
+          B.x[2] * l.x + B.y[2] * l.y + B.z[2] * l.z + w[2]);
+        toWorld(e.local, P, [st.pos[0] * SC, st.pos[1] * SC, st.pos[2] * SC]);
+        toWorld(e.normal, N, [0, 0, 0]).normalize();
+        this.sm._spawnBlast({
+          position: P.addScaledVector(N, e.size * 0.3), dir: N, kind: 'secondary', category: 'damage', spawnTime: e.t,
+          scale: e.size * 0.9, baseVel: new THREE.Vector3(st.vel[0] * SC, st.vel[1] * SC, st.vel[2] * SC)
+        });
+      }
+    }
+  }
+
+  /** True once a recording is loaded: hit blasts then come from the damage timeline. */
+  ownsImpacts() { return !!this.timeline; }
+
+  /**
+   * Where a slug / torpedo struck, on the displayed hull: the crater point
+   * of its mark (raycast against the hull kit, cached) in world scene
+   * units at the impact time, with the outward surface normal. Returns the
+   * mark, or null when the round left no mark (or no ship is drawn).
+   */
+  surfaceFor(ordnanceId, outP, outN) {
+    const m = ordnanceId ? this.timeline?.byOrdnance?.get(ordnanceId) : null;
+    if (!m) return null;
+    const v = this.view(m.shipId);
+    if (!v) return null;
+    this.markWorld(m, v.resolve(m), outP, outN);
+    return m;
   }
 
   /** Per-frame: called by SceneManager with the playback time. */
@@ -1342,7 +1568,7 @@ export class DamageFX {
     this.spall.mesh.dispose();
     this.spall.dispose();
     if (this._warm) { this.scene.remove(this._warm); this._warm = null; }
-    for (const m of [this.craterMat, this.ventMat, this.sparkMat, this.smokeMat, this.debrisMat, this.edgeMat, this.probe.material]) m.dispose();
+    for (const m of [this.craterMat, this.ventMat, this.sparkMat, this.smokeMat, this.debrisMat, this.edgeMat, this.probe.material, this._warmWear]) m.dispose();
     for (const g of [this.planeGeom, this.coneGeom, this.chunkGeom]) g.dispose();
     if (this.scene.userData.damageFX === this) delete this.scene.userData.damageFX;
     this.timeline = null;

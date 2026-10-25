@@ -373,7 +373,7 @@ export class SceneManager {
     const targetThrust = state.thrust || 0;
     ud.smoothThrust += (targetThrust - ud.smoothThrust) * (1 - Math.exp(-dt * 3.0));
     const thrust = ud.smoothThrust;
-    for (const t of ud.torches) t.update(thrust, this.elapsed, state.dying ? 0.7 : 0);
+    for (const t of ud.torches) t.update(thrust, this.elapsed, state.dying ? 0.7 : 0, this.currentTime);
     if (mats) mats.bellHeat.emissiveIntensity = 0.3 + 2.8 * thrust;
     updateHullDetails(ship, state, this);   // hull rigs, doors, nav lamps (render/HullRigs.js)
   }
@@ -444,10 +444,15 @@ export class SceneManager {
   }
 
   /**
-   * Coilgun impact on a hull. Spall is thrown back along the shot's
-   * approach, approximated by the direction from the nearest ship centre.
+   * Coilgun impact on a hull. With a recording loaded the persistent hit
+   * blasts (strike, breach, graze, spall) are spawned by DamageFX from the
+   * damage timeline, placed on the displayed hull surface and carried with
+   * the struck ship - this legacy path only serves callers without one.
+   * Spall is thrown back along the shot's approach, approximated by the
+   * direction from the nearest ship centre.
    */
   spawnHitEffect(position, energyGj, currentTime, opts = {}) {
+    if (this.damageFX?.ownsImpacts()) return null;
     const pos = new THREE.Vector3(position[0] * this.SCALE, position[1] * this.SCALE, position[2] * this.SCALE);
     let dir = null, baseVel = null;
     let best = Infinity;
@@ -474,6 +479,9 @@ export class SceneManager {
   }
 
   spawnTorpedoDetonation(position, damageGj, currentTime) {
+    // Torpedo strikes come from DamageFX too (kinetic strike / breach, the
+    // warhead fireball only for rounds with a recorded explosive yield)
+    if (this.damageFX?.ownsImpacts()) return null;
     const pos = new THREE.Vector3(position[0] * this.SCALE, position[1] * this.SCALE, position[2] * this.SCALE);
     // A salvo landing on one hull in the same tick records identical impact
     // points: two identical additive blasts would just double into a white

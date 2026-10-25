@@ -113,7 +113,11 @@ function fireballMaterial() {
   });
 }
 
-// Shock front: a thin, ragged fresnel shell
+// Shock front: a ragged plasma shell. The surface is gently noise-displaced
+// so the silhouette is never a clean circle, and a noise threshold tears
+// the rim into filaments; Blast.update keeps it dark for its first tens of
+// milliseconds (born at the fireball's skin) - a perfect fresnel sphere at
+// full strength from age 0 read as a glass bubble around the blast.
 function shellMaterial() {
   return new THREE.ShaderMaterial({
     uniforms: {
@@ -121,18 +125,24 @@ function shellMaterial() {
       uColor: { value: new THREE.Color(0.55, 0.75, 1.0) },
       uIntensity: { value: 1 },
       uSeed: { value: 0 },
-      uRimPow: { value: 3.4 }
+      uRimPow: { value: 2.6 },
+      uTear: { value: 0.5 }
     },
     vertexShader: /* glsl */`
+      uniform sampler2D uNoise;
+      uniform float uSeed;
       varying vec3 vNormal;
       varying vec3 vView;
       varying vec3 vLocal;
+      ${TRIPLANAR_GLSL}
       #include <common>
-  #include <logdepthbuf_pars_vertex>
+      #include <logdepthbuf_pars_vertex>
       void main() {
         vLocal = normalize(position);
+        float bump = tri(uNoise, vLocal * 0.9 + uSeed * 0.37, vLocal).r;
+        vec3 p = position * (0.95 + 0.1 * bump);
         vNormal = normalize(normalMatrix * normal);
-        vec4 wp = modelMatrix * vec4(position, 1.0);
+        vec4 wp = modelMatrix * vec4(p, 1.0);
         vView = -(viewMatrix * wp).xyz;
         gl_Position = projectionMatrix * viewMatrix * wp;
         #include <logdepthbuf_vertex>
@@ -143,6 +153,7 @@ function shellMaterial() {
       uniform float uIntensity;
       uniform float uSeed;
       uniform float uRimPow;
+      uniform float uTear;
       varying vec3 vNormal;
       varying vec3 vView;
       varying vec3 vLocal;
@@ -153,7 +164,10 @@ function shellMaterial() {
         float ndv = abs(dot(normalize(vNormal), normalize(vView)));
         float rim = pow(1.0 - ndv, uRimPow);
         float n = tri(uNoise, vLocal * 2.5 + uSeed, vLocal).g;
-        float ragged = 0.55 + 0.9 * n;
+        float n2 = tri(uNoise, vLocal * 6.5 - uSeed * 1.3, vLocal).b;
+        // torn into filaments: patches of the front simply are not there
+        float tear = smoothstep(uTear - 0.18, uTear + 0.18, n * 0.75 + n2 * 0.45 + rim * 0.2);
+        float ragged = (0.45 + 0.9 * n) * mix(1.0, tear, 0.85);
         gl_FragColor = vec4(uColor * rim * ragged * uIntensity, 1.0);
       }`,
     side: THREE.DoubleSide,
@@ -202,7 +216,7 @@ let _fireGeom = null, _shellGeom = null, _smallFireGeom = null, _ejectaGeom = nu
 // PolyhedronGeometry subdivides linearly: detail d gives 20*(d+1)^2 faces
 function fireGeom() { return _fireGeom || (_fireGeom = new THREE.IcosahedronGeometry(1, 28)); }
 function smallFireGeom() { return _smallFireGeom || (_smallFireGeom = new THREE.IcosahedronGeometry(1, 14)); }
-function shellGeom() { return _shellGeom || (_shellGeom = new THREE.IcosahedronGeometry(1, 12)); }
+function shellGeom() { return _shellGeom || (_shellGeom = new THREE.IcosahedronGeometry(1, 24)); }
 
 function easeOut(t, k = 3) { return 1 - Math.exp(-t * k); }
 
@@ -225,6 +239,11 @@ export function latestWreckEnd(deathInfo) {
   return end;
 }
 const SHARD_FADE = [17, 22]; // small chunks fade out
+// Blasts born on a hull's skin: spall puffs are thrown along the surface normal
+const SURFACE_KINDS = new Set(['impact', 'pop', 'graze', 'pierce', 'kineticStrike', 'breach']);
+
+/** Blast presets (exported for tests: kinds and their durations). */
+export function blastKinds() { return KINDS; }
 
 // ---------------------------------------------------------------------------
 // Blast
@@ -237,7 +256,7 @@ const KINDS = {
     shellR: 18, shellLife: 2.4, shellW: 0.32,
     lobes: 6, ringR: 12, ringLife: 3.2,
     sparks: 2600, sparkSpeed: [2.5, 16], sparkLife: [2, 7], sparkSize: 0.075,
-    streaks: 700, streakSpeed: [3, 13], streakLife: [1.2, 5], streakLen: 0.9, streakW: 0.05,
+    streaks: 520, streakSpeed: [3, 13], streakLife: [1.2, 5], streakLen: 0.9, streakW: 0.022,
     puffs: 10, puffSize: [0.6, 1.5], puffSpeed: [0.3, 1.4], puffLife: 12,
     light: 25, lightLife: 2.2
   },
@@ -252,7 +271,7 @@ const KINDS = {
     plasma: { r: 4.0, life: 4.5, rimPow: 3.0, level: 0.85, hot: [0.95, 0.88, 1.6], cool: [1.4, 0.5, 0.12] },
     lobes: 8, ringR: 15, ringLife: 3.6,
     sparks: 3000, sparkSpeed: [3, 19], sparkLife: [2, 8], sparkSize: 0.08,
-    streaks: 850, streakSpeed: [3.5, 15], streakLife: [1.2, 5.5], streakLen: 1.0, streakW: 0.055,
+    streaks: 620, streakSpeed: [3.5, 15], streakLife: [1.2, 5.5], streakLen: 1.0, streakW: 0.024,
     puffs: 10, puffSize: [0.7, 1.7], puffSpeed: [0.4, 1.6], puffLife: 12,
     light: 34, lightLife: 2.8
   },
@@ -263,7 +282,7 @@ const KINDS = {
     shellR: 10, shellLife: 1.3, shellW: 0.3,
     lobes: 3, ringR: 7, ringLife: 1.7,
     sparks: 900, sparkSpeed: [3, 18], sparkLife: [0.8, 3.5], sparkSize: 0.06,
-    streaks: 260, streakSpeed: [4, 14], streakLife: [0.6, 2.5], streakLen: 0.8, streakW: 0.04,
+    streaks: 260, streakSpeed: [4, 14], streakLife: [0.6, 2.5], streakLen: 0.8, streakW: 0.024,
     puffs: 9, puffSize: [0.9, 1.8], puffSpeed: [0.4, 1.6], puffLife: 4.5,
     light: 14, lightLife: 0.9
   },
@@ -275,6 +294,50 @@ const KINDS = {
     streaks: 120, streakSpeed: [3, 10], streakLife: [0.4, 1.8], streakLen: 0.6, streakW: 0.03,
     puffs: 3, puffSize: [0.5, 1.0], puffSpeed: [0.5, 1.5], puffLife: 2.2,
     light: 5, lightLife: 0.5, crater: true, cone: 0.75
+  },
+  // Slug skidding off the plating far from the normal: a fan of sparks
+  // along the surface and a shallow gouge, hardly any vapour
+  graze: {
+    duration: 2.0, flash: 2.2, flashFade: 0.08, screenFlash: 0.0,
+    fireR: 0, shellR: 0,
+    sparks: 260, sparkSpeed: [3, 14], sparkLife: [0.3, 1.4], sparkSize: 0.04,
+    streaks: 130, streakSpeed: [4, 14], streakLife: [0.25, 1.0], streakLen: 0.7, streakW: 0.025,
+    puffs: 1, puffSize: [0.3, 0.6], puffSpeed: [0.3, 0.8], puffLife: 1.2,
+    light: 3, lightLife: 0.3, crater: true, craterK: 0.55, cone: 0.92
+  },
+  // Slug through the armour: entry flash, a spall jet blown back out of
+  // the hole and a brief fire inside it
+  pierce: {
+    duration: 3.0, flash: 3.0, flashFade: 0.12, screenFlash: 0.0, flashR: 1.6,
+    fireR: 0.45, fireGrow: 2.0, fireLife: 1.0, fireTurb: 0.5,
+    shellR: 0,
+    sparks: 420, sparkSpeed: [2, 13], sparkLife: [0.5, 2.4], sparkSize: 0.05,
+    streaks: 150, streakSpeed: [3, 11], streakLife: [0.4, 1.6], streakLen: 0.6, streakW: 0.03,
+    puffs: 3, puffSize: [0.4, 0.8], puffSpeed: [0.5, 1.4], puffLife: 2.2,
+    light: 5, lightLife: 0.5, crater: true, cone: 0.88
+  },
+  // Kinetic torpedo stopped by the armour. 250 kg at ~14 km/s dumps its
+  // energy as a white flash, a plume of vaporised armour blown off the
+  // plating and a spall cone - no fireball: there is no explosive.
+  kineticStrike: {
+    duration: 3.2, flash: 3.4, flashFade: 0.12, screenFlash: 0.05, flashR: 1.9,
+    fireR: 0, shellR: 0,
+    sparks: 520, sparkSpeed: [1.5, 10], sparkLife: [0.4, 2.4], sparkSize: 0.05,
+    streaks: 190, streakSpeed: [2, 10], streakLife: [0.3, 1.6], streakLen: 0.6, streakW: 0.032,
+    puffs: 6, puffSize: [0.45, 1.0], puffSpeed: [0.6, 1.8], puffLife: 2.0,
+    light: 8, lightLife: 0.35, crater: true, cone: 0.78
+  },
+  // Kinetic torpedo through the armour: entry flash, a jet of spall and
+  // vapour blown back out of the hole and a small fire inside it (the
+  // venting that follows is DamageFX's)
+  breach: {
+    duration: 4.0, flash: 3.4, flashFade: 0.13, screenFlash: 0.08, flashR: 2.2,
+    fireR: 0.6, fireGrow: 1.8, fireLife: 1.5, fireTurb: 0.6,
+    shellR: 0,
+    sparks: 520, sparkSpeed: [2, 12], sparkLife: [0.5, 2.6], sparkSize: 0.05,
+    streaks: 190, streakSpeed: [3, 12], streakLife: [0.4, 1.8], streakLen: 0.6, streakW: 0.035,
+    puffs: 4, puffSize: [0.4, 0.9], puffSpeed: [0.5, 1.4], puffLife: 2.4,
+    light: 9, lightLife: 0.55, crater: true, cone: 0.88
   },
   // Cook-off: munitions or a fuel cell going up on a chunk
   secondary: {
@@ -339,7 +402,7 @@ export class Blast {
       map: glow, color: new THREE.Color(K.flash, K.flash * 0.95, K.flash * 0.85),
       transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false
     }));
-    this.flashScale = s * (K.fireR > 0 ? 5 : 1.1);
+    this.flashScale = s * (K.flashR ?? (K.fireR > 0 ? 5 : 1.1));
     this.flash.scale.setScalar(this.flashScale);
     this.flash.renderOrder = 40;
     this.group.add(this.flash);
@@ -419,12 +482,14 @@ export class Blast {
       dir, cone: K.cone ?? 0, intensity: 1.4
     });
     this.group.add(this.streaks.object);
+    const surface = SURFACE_KINDS.has(o.kind);
     this.puffs = new PuffCloud({
       count: K.puffs, size: K.puffSize.map(v => v * s), speed: K.puffSpeed.map(v => v * s),
       duration: K.puffLife, spread: s * 0.3, rnd, stagger: 0.25, grow: 1.2,
-      intensity: o.kind === 'impact' || o.kind === 'pop' ? 0.45 : (o.kind === 'reactor' || o.kind === 'meltdown' ? 0.2 : 0.3)
+      intensity: surface ? (o.kind === 'kineticStrike' || o.kind === 'breach' ? 0.55 : 0.45)
+        : (o.kind === 'reactor' || o.kind === 'meltdown' ? 0.2 : 0.3)
     });
-    if (dir && (o.kind === 'impact' || o.kind === 'pop')) {
+    if (dir && surface) {
       // spall goes out along the surface normal
       for (const p of this.puffs.puffs) { p.vel.lerp(dir.clone().multiplyScalar(p.vel.length()), 0.7); }
     }
@@ -436,7 +501,7 @@ export class Blast {
         map: glow, color: new THREE.Color(2.4, 0.9, 0.3),
         transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false
       }));
-      this.crater.scale.setScalar(s * 0.9);
+      this.crater.scale.setScalar(s * (K.craterK ?? 0.9));
       this.crater.renderOrder = 34;
       this.group.add(this.crater);
     }
@@ -477,10 +542,12 @@ export class Blast {
     const cap = camPos ? camPos.distanceTo(this.group.position) * 0.4 : Infinity;
     this.flash.scale.setScalar(Math.min(cap, this.flashScale * (1 + age * 1.5)));
 
+    let fireRadius = 0;
     if (this.fire) {
       const life = K.fireLife;
       const p = Math.min(1, age / life);
       const r = s * K.fireR * (0.25 + easeOut(age * K.fireGrow, 1.6) * 1.0) * (1 + p * 0.6);
+      fireRadius = age < life ? r : 0;
       this.fire.scale.setScalar(r);
       const u = this.fire.material.uniforms;
       u.uTime.value = age;
@@ -512,10 +579,15 @@ export class Blast {
       this.ejecta.material.uniforms.uIntensity.value = 2.5 * Math.pow(1 - p, 2);
     }
     if (this.shell) {
+      // The front is born at the fireball's skin, not as a tiny bright
+      // bead in its middle, and fades in over its first ~0.1 s
       const p = Math.min(1, age / K.shellLife);
-      const r = s * K.shellR * (0.05 + easeOut(p * 3.2, 1.8));
+      const r = Math.max(fireRadius * 1.04, s * K.shellR * (0.05 + easeOut(p * 3.2, 1.8)));
       this.shell.scale.setScalar(r);
-      this.shell.material.uniforms.uIntensity.value = K.shellW * 1.8 * Math.pow(1 - p, 3.5);
+      const rise = THREE.MathUtils.smoothstep(age, Math.min(0.05, K.shellLife * 0.1), Math.min(0.22, K.shellLife * 0.3));
+      this.shell.material.uniforms.uIntensity.value = K.shellW * 1.8 * Math.pow(1 - p, 3.5) * rise;
+      // the front tears open as it thins out
+      this.shell.material.uniforms.uTear.value = 0.42 + 0.3 * p;
       this.shell.visible = p < 1;
     }
     if (this.core) {
@@ -530,6 +602,7 @@ export class Blast {
       this.plasma.scale.setScalar(s * P.r * (0.03 + easeOut(p * 2.4, 1.3)));
       // violet-white while it is bright, cooling to orange as it fades
       const u = this.plasma.material.uniforms, k = THREE.MathUtils.smoothstep(p, 0.35, 0.9);
+      u.uTear.value = 0.3 + 0.35 * p;
       u.uColor.value.setRGB(
         P.hot[0] + (P.cool[0] - P.hot[0]) * k, P.hot[1] + (P.cool[1] - P.hot[1]) * k, P.hot[2] + (P.cool[2] - P.hot[2]) * k);
       u.uIntensity.value = P.level * Math.min(1, age / 0.2) * Math.pow(1 - p, 1.8);
@@ -809,9 +882,11 @@ export class ShipDestruction {
         this.tumble.setFromAxisAngle(this.tumbleAxis, this.tumbleRate * age);
         g.quaternion.copy(this.initialOrientation).multiply(this.tumble);
         for (const v of this.vents) {
+          // pressure pulses on battle time (a paused frame keeps its look);
+          // the wall clock only scrolls the plume's turbulence
           const a = age - v.start;
-          const on = a > 0 ? Math.min(1, a / 0.6) * (0.55 + 0.45 * Math.sin(wallTime * 1.7 + v.phase)) : 0;
-          v.torch.update(on, wallTime, 0.85);
+          const on = a > 0 ? Math.min(1, a / 0.6) * (0.55 + 0.45 * Math.sin(now * 1.7 + v.phase)) : 0;
+          v.torch.update(on, wallTime, 0.85, now);
         }
       }
       for (const pop of this.pops) {
