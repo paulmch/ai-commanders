@@ -1028,3 +1028,64 @@ class TestLegacyMessages:
         assert "[TIS Dart-2 [alpha_2] (friendly)]" in log
         assert "[ENEMY OCS Lancer-1 [beta_1]]" in log
 
+
+class TestInboxEntersTheLogOnce:
+    """
+    Comms contract: the runner's receive_inbox only STORES captain.inbox; the
+    captain's turn renders it (FLEET NET / ENEMY TRANSMISSIONS) and is the one
+    place it enters message_history - once per message, even across a
+    same-checkpoint re-decide, and never in the same turn's COMMUNICATION LOG.
+    """
+
+    WINGMAN = {"msg_id": "cp1-alpha_2-1", "channel": "fleet_net", "kind": "TARGET_CLAIM",
+               "sender_role": "captain", "sender_name": "TIS Dart-2", "sender_id": "alpha_2",
+               "faction": "alpha", "recipient_spec": "ALL", "recipient_ids": ["alpha_1"],
+               "text": "Taking the destroyer.", "sent_t": 0.0, "delivered_t": 0.0}
+    DATALINK = {"msg_id": "cp1-engine-1", "channel": "fleet_net", "kind": "LAUNCH",
+                "sender_role": "engine", "sender_name": "DATALINK", "sender_id": None,
+                "faction": "alpha", "text": "TIS Dart-2 launched 1 torpedo at OCS Lancer-1, "
+                "impact ~T+45.", "sent_t": 0.0, "delivered_t": 0.0}
+
+    def _decide(self, captain, sim, seen):
+        captain.decide("alpha_1", sim)
+        return seen[-1]["messages"][-1]["content"]
+
+    def test_one_inbox_item_is_one_history_entry(self):
+        sim, me, foe = _sim_pair(400.0, 0.0)
+        client, seen = _client({})
+        captain = _captain(client=client)
+        captain.inbox = [dict(self.WINGMAN), dict(self.DATALINK)]
+
+        turn = self._decide(captain, sim, seen)
+        fleet_net = turn.split("FLEET NET")[1]
+        assert "Taking the destroyer." in fleet_net and "launched 1 torpedo" in fleet_net
+        assert "COMMUNICATION LOG" not in turn  # nothing from EARLIER checkpoints yet
+        assert [m["text"] for m in captain.message_history] == ["Taking the destroyer."]
+
+        # A discussion re-decide in the same checkpoint sees the same inbox.
+        captain.revert_last_decision()
+        turn = self._decide(captain, sim, seen)
+        assert "Taking the destroyer." in turn.split("FLEET NET")[1]
+        assert len(captain.message_history) == 1
+
+        # Next checkpoint (inbox replaced): in the log once; the datalink
+        # telemetry never enters it.
+        captain.inbox = []
+        sim.current_time = 30.0
+        turn = self._decide(captain, sim, seen)
+        log = turn.split("COMMUNICATION LOG (earlier checkpoints):")[1]
+        assert log.count("Taking the destroyer.") == 1
+        assert "[TIS Dart-2 [alpha_2] (friendly)]" in log
+        assert "launched 1 torpedo" not in turn
+        assert len(captain.message_history) == 1
+
+    def test_items_without_a_msg_id_are_deduplicated_too(self):
+        sim, me, foe = _sim_pair(400.0, 0.0)
+        client, seen = _client({})
+        captain = _captain(client=client)
+        item = {k: v for k, v in self.WINGMAN.items() if k != "msg_id"}
+        captain.inbox = [item]
+        self._decide(captain, sim, seen)
+        captain.revert_last_decision()
+        self._decide(captain, sim, seen)
+        assert len(captain.message_history) == 1

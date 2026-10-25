@@ -818,7 +818,15 @@ class LLMCaptain:
         (filled by the runner, comms schema) plus legacy CaptainMessage
         deliveries, each classified by the SENDER's side - nothing is
         labelled enemy traffic just for having arrived.
+
+        This is the ONE place received traffic enters ``message_history``
+        (the comms runner's ``receive_inbox`` only stores the list), once per
+        message: a same-checkpoint re-decide sees the same inbox again and is
+        de-duplicated by msg_id. Engine datalink items (sender_role 'engine':
+        launches, kills, PD losses) are telemetry - shown in FLEET NET the
+        turn they arrive, kept out of the 6-entry log they would flush.
         """
+        from .prompts import is_friendly_comms
         now = simulation.current_time
         own_faction = getattr(ship, "faction", None)
         items: List[Dict[str, Any]] = []
@@ -830,12 +838,13 @@ class LLMCaptain:
             if not isinstance(item, dict):
                 continue
             items.append(item)
-            msg_id = item.get("msg_id")
-            if msg_id and msg_id in self._recorded_msg_ids:
+            if item.get("sender_role") == "engine":
                 continue
-            if msg_id:
-                self._recorded_msg_ids.add(msg_id)
-            from .prompts import is_friendly_comms
+            key = item.get("msg_id") or (item.get("sender_id"), item.get("sent_t"),
+                                         str(item.get("text", "")))
+            if key in self._recorded_msg_ids:
+                continue
+            self._recorded_msg_ids.add(key)
             self._record_received_message(
                 str(item.get("text", "")), float(item.get("sent_t", now) or now),
                 sender=ship_ref(item.get("sender_name"), item.get("sender_id")),
