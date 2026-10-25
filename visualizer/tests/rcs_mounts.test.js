@@ -4,8 +4,8 @@ import * as THREE from 'three';
 import { assembleHull, HULL_CLASSES, RCS_S, fitScale } from '../src/render/Hulls.js';
 import { SceneManager } from '../src/SceneManager.js';
 import {
-  jetDims, jetFrames, jetInstanceMatrix, jetClearance, jetRoles, jetTorqueAxes,
-  jetDemands, JET_ROOT, ROLE_RADIAL, ROLE_SIDE, ROLE_BLOCKED
+  jetDims, jetFrames, jetInstanceMatrix, jetClearance, jetRoles, jetTorqueAxes, jetTrimTable,
+  jetDemands, jetTrims, JET_ROOT, ROLE_RADIAL, ROLE_SIDE, ROLE_BLOCKED
 } from '../src/render/Rcs.js';
 
 // Displayed hull sizes (SceneManager.createShip baseSizes x 8)
@@ -90,15 +90,17 @@ for (const type of Object.keys(BASE)) {
     const stations = new Set(mounts.map(m => Math.round(m.pos.z * 2)));
     assert.equal(radial.length, 4 * Math.round(mounts.length / 20));
     assert.ok(stations.size >= 2);
-    // both ends of the hull can turn it
+    // both ends of the hull can turn it and trim it
     const axes = jetTorqueAxes(mounts, roles);
+    const table = jetTrimTable(mounts, roles);
     for (const end of [1, -1]) {
       const at = mounts.map((m, i) => i).filter(i => Math.sign(mounts[i].pos.z) === end);
       assert.ok(at.some(i => Math.hypot(axes[3 * i], axes[3 * i + 1]) > 0.45), `${type} attitude jets at ${end}`);
+      assert.ok(at.filter(i => Math.hypot(table[3 * i], table[3 * i + 1]) > 0).length >= 4, `${type} trim jets at ${end}`);
     }
   });
 
-  test(`${type}: a pitch is a balanced nose/tail couple`, () => {
+  test(`${type}: a pitch is a balanced nose/tail couple; a trim is a pure push`, () => {
     const { kit, roles } = hullOf(type);
     const mounts = kit.rcsMounts;
     const n = mounts.length;
@@ -119,5 +121,20 @@ for (const type of Object.keys(BASE)) {
     // (the dreadnought splits its nose share over two stations)
     assert.ok(Math.abs(F.y) < 0.05 * (nose + tail) && Math.abs(F.x) < 0.05 * (nose + tail), `net force ${F.toArray()}`);
     assert.ok(T.x < 0, `torque ${T.toArray()}`);
+
+    // push the hull toward +x: side (or radial) nozzles facing -x, nose and
+    // tail moments balanced
+    const table = jetTrimTable(mounts, roles);
+    const tr = jetTrims(table, 1, 0, new Float32Array(n));
+    const P = new THREE.Vector3(), Q = new THREE.Vector3();
+    for (let i = 0; i < n; i++) {
+      if (tr[i] <= 0) continue;
+      const f = mounts[i].dir.clone().multiplyScalar(-tr[i]);
+      P.add(f);
+      Q.add(r.copy(mounts[i].pos).cross(f));
+    }
+    assert.ok(P.x > 0.5 && Math.abs(P.y) < 0.05 * P.x, `push ${P.toArray()}`);
+    // no pitch/yaw from the push (about the hull origin)
+    assert.ok(Math.abs(Q.y) < 0.05 * P.x * Math.abs(mounts[0].pos.z) + 1e-6, `yaw torque ${Q.toArray()}`);
   });
 }

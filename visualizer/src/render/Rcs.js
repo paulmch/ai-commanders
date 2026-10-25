@@ -20,6 +20,13 @@ import { RCS_S, fitScale } from './Hulls.js';
  * when a turn starts and when it reverses into braking, and the odd
  * attitude-hold blip otherwise.
  *
+ * Evasion (simulation.py EVASIVE: EVADE/WOBBLE/RUN jinks, PRESENT/TANK
+ * armour pointing) is flown by swinging the nose and burning the torch, so
+ * the jink itself shows as rotation: every time the aim jumps to a new
+ * jink the spin is redirected, which fires an attitude kick here even when
+ * it doesn't persist, and while a dodging ship's nose sweeps the side
+ * nozzles add small lateral trims toward where the nose is heading.
+ *
  * Everything visible at battle time t is a pure function of the recording
  * around t (pulse timing is hashed from battle-time cells, puffs are
  * re-derived from their emission slot), so scrubbing and seeking are
@@ -33,22 +40,51 @@ import { RCS_S, fitScale } from './Hulls.js';
 
 const DEG = Math.PI / 180;
 
-/** Attitude authority per class, deg/s^2 (data/fleet_ships.json attitude_control). */
+/**
+ * Attitude authority per class, deg/s^2, and the turn-rate cap, deg/s, for
+ * torch vectoring (tv, wtv) and RCS only (rcs, wrcs)
+ * (data/fleet_ships.json attitude_control).
+ */
 export const ATTITUDE = {
-  corvette: { tv: 2.445, rcs: 0.1227 },
-  frigate: { tv: 1.589, rcs: 0.0518 },
-  destroyer: { tv: 0.847, rcs: 0.0221 },
-  cruiser: { tv: 0.454, rcs: 0.0085 },
-  cruiser_torpedo: { tv: 0.454, rcs: 0.0085 },
-  battlecruiser: { tv: 0.454, rcs: 0.0085 },
-  battleship: { tv: 0.265, rcs: 0.0043 },
-  dreadnought: { tv: 0.144, rcs: 0.0017 },
-  dreadnought_siege: { tv: 0.13, rcs: 0.00154 }
+  corvette: { tv: 2.445, rcs: 0.1227, wtv: 14.83, wrcs: 3.32 },
+  frigate: { tv: 1.589, rcs: 0.0518, wtv: 11.96, wrcs: 2.16 },
+  destroyer: { tv: 0.847, rcs: 0.0221, wtv: 8.73, wrcs: 1.41 },
+  cruiser: { tv: 0.454, rcs: 0.0085, wtv: 6.39, wrcs: 0.87 },
+  cruiser_torpedo: { tv: 0.454, rcs: 0.0085, wtv: 6.39, wrcs: 0.87 },
+  battlecruiser: { tv: 0.454, rcs: 0.0085, wtv: 6.39, wrcs: 0.87 },
+  battleship: { tv: 0.265, rcs: 0.0043, wtv: 4.88, wrcs: 0.62 },
+  dreadnought: { tv: 0.144, rcs: 0.0017, wtv: 3.61, wrcs: 0.39 },
+  dreadnought_siege: { tv: 0.13, rcs: 0.00154, wtv: 3.42, wrcs: 0.37 }
 };
 
 export const MODE_NONE = 0;
 export const MODE_TV = 1;
 export const MODE_RCS = 2;
+
+/**
+ * Evasion state per frame: DODGE = the ship is jinking its course (EVADE,
+ * WOBBLE, RUN), FACE = it is swinging armour onto a threat (PRESENT, TANK).
+ * BRACE does nothing and counts as neither.
+ */
+export const JINK_NONE = 0;
+export const JINK_DODGE = 1;
+export const JINK_FACE = 2;
+const JINK_OF = {
+  evade: JINK_DODGE, wobble: JINK_DODGE, run: JINK_DODGE,
+  present: JINK_FACE, tank: JINK_FACE
+};
+
+/** Jink cue tuning. */
+export const JINK = {
+  hold: 2,            // frames an evasion state is held across mode flicker
+  kick: 0.3,          // s: attitude kick as the spin swings onto a new jink
+  kickLevel: 0.8,
+  kickCells: 3,       // at most one jink kick per this many cells
+  assist: 0.5,        // level of the pulses that follow a jinking weave
+  trimOn: 0.3,        // s: lateral trim fired with a jink kick
+  trimLevel: 0.55,
+  sweep: [0.15, 0.6]  // nose rate (share of the class's cap) where sweep trims fade in
+};
 
 /** Pulse timing, battle seconds. */
 export const RCS_TIMING = {
@@ -160,11 +196,24 @@ export function smoothingWindow(aref) {
 }
 
 /**
+ * Evasion state of one trace frame (JINK_*): the recorder's `evade` field
+ * when the trace has it, else the execution mode, else (recordings older
+ * than both) an EVASIVE maneuver order.
+ */
+export function jinkOf(s) {
+  if ('evade' in s) return JINK_OF[s.evade] || JINK_NONE;
+  if (s.execution_mode) return JINK_OF[String(s.execution_mode).toLowerCase()] || JINK_NONE;
+  return s.maneuver === 'EVASIVE' ? JINK_DODGE : JINK_NONE;
+}
+
+/**
  * Per-frame attitude kinematics for one ship.
  * @returns {Object} typed arrays over trace frames: t, fwd (xyz), dem
  *   (world-frame angular acceleration past the noise deadband, divided by
  *   what the active actuator delivers: |dem| = 1 is a full-authority
- *   bang-bang turn), mode (MODE_*), alive, evade
+ *   bang-bang turn), mode (MODE_*), alive, evade (JINK_*, held across
+ *   JINK.hold frames of mode flicker), swing (world nose velocity over the
+ *   interval starting at the frame, rad/s - what the viewer's slerp shows)
  */
 export function buildShipKinematics(trace, shipId, shipType) {
   const n = trace ? trace.length : 0;
@@ -175,11 +224,13 @@ export function buildShipKinematics(trace, shipId, shipType) {
     dem: new Float32Array(3 * n),
     mode: new Int8Array(n),
     alive: new Uint8Array(n),
-    evade: new Uint8Array(n)
+    evade: new Uint8Array(n),
+    swing: new Float32Array(3 * n)
   };
   const att = ATTITUDE[shipType] || ATTITUDE.destroyer;
   const aTv = (att.tv + att.rcs) * DEG;
   const aRcs = att.rcs * DEG;
+  const jink = new Uint8Array(n);
   const present = new Uint8Array(n);
   const recA = new Uint8Array(n);
   const recW = new Uint8Array(n);
@@ -208,10 +259,26 @@ export function buildShipKinematics(trace, shipId, shipType) {
       recOmega[3 * i] = s.omega[0]; recOmega[3 * i + 1] = s.omega[1]; recOmega[3 * i + 2] = s.omega[2];
     }
     if ('turn' in s) turn[i] = s.turn === 'rcs' ? MODE_RCS : s.turn === 'tv' ? MODE_TV : MODE_NONE;
-    if (s.evade) k.evade[i] = 1;
+    jink[i] = jinkOf(s);
   }
 
   const ok = (j) => j >= 0 && j < n && present[j] && k.alive[j];
+
+  // The sim re-decides evasion every tick and a jinking ship flickers
+  // between EVADE and its order's own mode (PADLOCK, HEADING...) every
+  // second or two: hold the state across short gaps, a dodge winning over
+  // armour pointing
+  for (let i = 0; i < n; i++) {
+    let e = JINK_NONE;
+    for (let j = Math.max(0, i - JINK.hold); j <= Math.min(n - 1, i + JINK.hold) && e !== JINK_DODGE; j++) {
+      if (jink[j] === JINK_DODGE || (jink[j] === JINK_FACE && e === JINK_NONE)) e = jink[j];
+    }
+    k.evade[i] = ok(i) ? e : JINK_NONE;
+    if (ok(i) && ok(i + 1)) {
+      const h = k.t[i + 1] - k.t[i] || 1;
+      for (let c = 0; c < 3; c++) k.swing[3 * i + c] = (k.fwd[3 * (i + 1) + c] - k.fwd[3 * i + c]) / h;
+    }
+  }
   for (let i = 0; i < n; i++) {
     if (!ok(i)) continue;
     let mode;
@@ -314,9 +381,11 @@ function locate(k, t) {
 }
 
 /**
- * Kinematic sample at time t. Writes into `out`: alive, mode, evade,
- * fwd [x,y,z] (unit), demand [x,y,z] (world, normalised - see dem above).
- * The mode comes from whichever bracketing frame contributes more demand.
+ * Kinematic sample at time t. Writes into `out`: alive, mode, jink
+ * (JINK_*), evade (jink !== JINK_NONE), fwd [x,y,z] (unit), demand [x,y,z]
+ * (world, normalised - see dem above), swing [x,y,z] (world nose velocity,
+ * rad/s). The mode comes from whichever bracketing frame contributes more
+ * demand.
  */
 export function sampleKinematics(k, t, out) {
   out.alive = false;
@@ -324,7 +393,10 @@ export function sampleKinematics(k, t, out) {
   const [i, f] = locate(k, t);
   const j = f > 0 ? i + 1 : i;
   out.alive = !!k.alive[i];     // the interpolator holds frame0 state until the next frame lands
-  out.evade = !!(k.evade[i] || k.evade[j]);
+  const ei = k.evade[i], ej = k.evade[j];
+  out.jink = ei === JINK_DODGE || ej === JINK_DODGE ? JINK_DODGE : ei || ej;
+  out.evade = out.jink !== JINK_NONE;
+  for (let c = 0; c < 3; c++) out.swing[c] = k.swing[3 * i + c];
   const D = k.dem;
   for (let c = 0; c < 3; c++) out.demand[c] = D[3 * i + c] + (D[3 * j + c] - D[3 * i + c]) * f;
   const wi = (1 - f) * Math.hypot(D[3 * i], D[3 * i + 1], D[3 * i + 2]);
@@ -339,7 +411,10 @@ export function sampleKinematics(k, t, out) {
 }
 
 export function newSample() {
-  return { alive: false, mode: MODE_NONE, evade: false, fwd: [0, 0, 1], demand: [0, 0, 0] };
+  return {
+    alive: false, mode: MODE_NONE, jink: JINK_NONE, evade: false,
+    fwd: [0, 0, 1], demand: [0, 0, 0], swing: [0, 0, 0]
+  };
 }
 
 /**
@@ -384,6 +459,22 @@ export function bodyDemand(sample, out) {
   return out;
 }
 const _bx = [0, 0, 0], _by = [0, 0, 0];
+
+/**
+ * Nose velocity in body x/y (rad/s): the way the nose is sweeping, which
+ * is where the torch's thrust is about to point.
+ * @returns {number[]} out [sx, sy]
+ */
+export function bodySwing(sample, out) {
+  out[0] = out[1] = 0;
+  if (!sample.alive) return out;
+  const X = _bx, Y = _by;
+  lookAtBasis(sample.fwd, X, Y);
+  const w = sample.swing;
+  out[0] = w[0] * X[0] + w[1] * X[1] + w[2] * X[2];
+  out[1] = w[0] * Y[0] + w[1] * Y[1] + w[2] * Y[2];
+  return out;
+}
 
 // ---------------------------------------------------------------------------
 // Jets
@@ -506,6 +597,56 @@ export function jetDemands(axes, dx, dy, out) {
 }
 
 /**
+ * Lateral trim jets: per jet the unit body x/y reaction force and station
+ * z (3 per jet), zero force for jets that don't trim. Side nozzles do it;
+ * an end of the hull (nose z >= 0, tail z < 0) without any usable ones -
+ * the raycast quads, or side nozzles all blocked by fittings - trims with
+ * its radial ones.
+ * @returns {Float32Array} 3 per jet: fx, fy, z
+ */
+export function jetTrimTable(mounts, roles = jetRoles(mounts)) {
+  const out = new Float32Array(mounts.length * 3);
+  const end = (m) => (vx(m.pos, 2) >= 0 ? 0 : 1);
+  const sideAt = [false, false];
+  mounts.forEach((m, i) => { if (roles[i] === ROLE_SIDE) sideAt[end(m)] = true; });
+  mounts.forEach((m, i) => {
+    out[3 * i + 2] = vx(m.pos, 2);
+    if (roles[i] !== (sideAt[end(m)] ? ROLE_SIDE : ROLE_RADIAL)) return;
+    const fx = -vx(m.dir, 0), fy = -vx(m.dir, 1);
+    const l = Math.hypot(fx, fy) || 1;
+    out[3 * i] = fx / l;
+    out[3 * i + 1] = fy / l;
+  });
+  return out;
+}
+
+/**
+ * Per-jet share (0..1) of a lateral push along body (ux, uy) (unit): the
+ * side nozzles facing away from it, nose and tail weighted so their
+ * moments cancel - a pure translation, no torque. Zero when only one end
+ * of the hull can push that way.
+ */
+export function jetTrims(table, ux, uy, out) {
+  const n = table.length / 3;
+  let mn = 0, mt = 0, best = 0;
+  for (let i = 0; i < n; i++) {
+    const d = table[3 * i] * ux + table[3 * i + 1] * uy;
+    const sh = d > 0.5 ? d : 0;
+    out[i] = sh;
+    const z = table[3 * i + 2];
+    if (z >= 0) mn += sh * z; else mt -= sh * z;
+  }
+  const kn = mn > mt ? mt / mn : 1;
+  const kt = mt > mn ? mn / mt : 1;
+  for (let i = 0; i < n; i++) {
+    out[i] *= table[3 * i + 2] >= 0 ? kn : kt;
+    best = Math.max(best, out[i]);
+  }
+  if (best > 0) for (let i = 0; i < n; i++) out[i] /= best;
+  return out;
+}
+
+/**
  * Default mounts: an RCS quad (up/down/left/right nozzles) at a nose and a
  * tail station. `radius(z, axis)` returns the hull's surface distance from
  * the axis along a body axis at station z (from raycasts), or null.
@@ -531,8 +672,11 @@ export function riseOf(now, prev) {
  * One pulse cell's plan for one jet, from its torque demand sampled around
  * the cell start: `now`, `prev` (kickLookback earlier), `fut` (the smaller
  * of +0.5 s and +1 s: whether the demand persists) and `prevRise` (the
- * strongest rise of ANY jet over the previous two cells, so a turn gets one
- * kick, and spin reversals every frame can't strobe couples at full power).
+ * strongest rise of ANY jet over the previous two cells - JINK.kickCells
+ * while evading - so a turn gets one kick, and spin reversals every frame
+ * can't strobe couples at full power) and `jink` (JINK_*: the ship is
+ * evading, so a spin swung onto a new jink kicks even though the
+ * transient doesn't persist).
  * @returns {{on:number, level:number}} on-time (s, 0 = silent) and level 0..1
  */
 export function planJet(j, mode, out = { on: 0, level: 0 }) {
@@ -553,14 +697,25 @@ export function planJet(j, mode, out = { on: 0, level: 0 }) {
   // gets one full-strength kick as it starts (or flips into braking) and a
   // faint steady assist after that
   const sustained = Math.min(j.now, j.fut);
-  if (riseOf(j.now, j.prev) > 0.5 && j.prevRise <= 0.5 && sustained >= 0.25) {
+  const kicks = riseOf(j.now, j.prev) > 0.5 && j.prevRise <= 0.5;
+  if (kicks && sustained >= 0.25) {
     out.level = 1;
     out.on = RCS_TIMING.kick;
     return out;
   }
-  const duty = 0.45 * sustained;
+  if (kicks && j.jink && j.now >= 0.25) {
+    // Evading: the aim jumped to a new jink and the spin is being swung
+    // onto it - one firm kick, however briefly the sim holds that torque
+    out.level = JINK.kickLevel;
+    out.on = JINK.kick;
+    return out;
+  }
+  // (a jinking ship's weave reverses every second or two: there the assist
+  // follows the demand as it comes rather than only once it holds, and
+  // reads a little firmer - the quads are visibly working the weave)
+  const duty = 0.45 * (j.jink ? j.now : sustained);
   if (duty < 0.15) return out;
-  out.level = RCS_TIMING.tvGain;
+  out.level = j.jink ? JINK.assist : RCS_TIMING.tvGain;
   out.on = Math.max(RCS_TIMING.minPulse, duty * P);
   return out;
 }
@@ -584,6 +739,7 @@ export class RcsPlanner {
   constructor(o) {
     this.shipId = o.shipId;
     this.shipType = o.shipType;
+    this.att = ATTITUDE[o.shipType] || ATTITUDE.destroyer;
     this.seed = seedOf(o.shipId);
     this.phase = hash01(this.seed, 11) * RCS_TIMING.cell;
     this.setMounts(o.mounts, o.roles);
@@ -593,9 +749,11 @@ export class RcsPlanner {
     this.traceLen = -1;
     this.cells = new Map();
     this._s = newSample();
+    this._s2 = newSample();
     this._d = [0, 0];
+    this._w = [0, 0];
     this._pj = { on: 0, level: 0 };
-    this._j = { now: 0, prev: 0, fut: 0, prevRise: 0 };
+    this._j = { now: 0, prev: 0, fut: 0, prevRise: 0, jink: JINK_NONE };
     if (o.trace) this.setTrace(o.trace);
   }
 
@@ -604,7 +762,8 @@ export class RcsPlanner {
     this.jetCount = mounts.length;
     this.roles = roles || jetRoles(mounts);
     this.axes = jetTorqueAxes(mounts, this.roles);
-    this._dem = [0, 1, 2, 3, 4, 5, 6, 7].map(() => new Float32Array(this.jetCount));
+    this.trimTable = jetTrimTable(mounts, this.roles);
+    this._dem = Array.from({ length: 11 }, () => new Float32Array(this.jetCount));
     this.cells = new Map();
   }
 
@@ -644,9 +803,9 @@ export class RcsPlanner {
     const s = this.sample(tc, this._s);
     if (s.alive) {
       const mode = s.mode;
-      const evade = s.evade;
+      const jink = s.jink || JINK_NONE;
       const lb = RCS_TIMING.kickLookback;
-      const [dn, dp, df1, df2, dq, dqp, dr, drp] = this._dem;
+      const [dn, dp, df1, df2, dq, dqp, dr, drp, dx, dxp, tr] = this._dem;
       this._jetDemandAt(tc, dn);
       this._jetDemandAt(tc - lb, dp);
       this._jetDemandAt(tc + 0.5, df1);
@@ -659,20 +818,58 @@ export class RcsPlanner {
       for (let k = 0; k < n; k++) {
         recentRise = Math.max(recentRise, riseOf(dq[k], dqp[k]), riseOf(dr[k], drp[k]));
       }
+      if (jink) {
+        // a battleship swinging onto a new jink every second or two would
+        // otherwise kick every other cell
+        for (let cc = 3; cc <= JINK.kickCells; cc++) {
+          this._jetDemandAt(tc - cc * P, dx);
+          this._jetDemandAt(tc - cc * P - lb, dxp);
+          for (let k = 0; k < n; k++) recentRise = Math.max(recentRise, riseOf(dx[k], dxp[k]));
+        }
+      }
       const j = this._j;
       j.prevRise = recentRise;
-      let maxOn = 0;
+      j.jink = jink;
+      let maxOn = 0, kicked = false;
       for (let k = 0; k < n; k++) {
         j.now = dn[k]; j.prev = dp[k]; j.fut = Math.min(df1[k], df2[k]);
         planJet(j, mode, this._pj);
         p.on[k] = this._pj.on;
         p.level[k] = this._pj.level;
         maxOn = Math.max(maxOn, p.on[k]);
+        if (this._pj.on >= JINK.kick && this._pj.level >= JINK.kickLevel) kicked = true;
+      }
+      if (jink === JINK_DODGE) {
+        // Lateral trims: the side nozzles push toward where the nose is
+        // sweeping (the torch's thrust is about to point there) - with
+        // each jink kick, and as sparse short pulses while it sweeps fast.
+        // The main drive does the dodging; this is the trim layer
+        const w = bodySwing(this.sample(tc + 0.4, this._s2), this._w);
+        const rate = Math.hypot(w[0], w[1]);
+        const cap = (mode === MODE_RCS ? this.att.wrcs : this.att.wtv) * DEG;
+        const sweep = smooth(JINK.sweep[0], JINK.sweep[1], rate / cap);
+        let on = 0, level = 0;
+        if (kicked && rate > 0) {
+          on = JINK.trimOn;
+          level = JINK.trimLevel;
+        } else if (sweep > 0 && hash01(this.seed, c, 21) < 0.12 + 0.2 * sweep) {
+          on = RCS_TIMING.minPulse + 0.08 * sweep;
+          level = 0.25 + 0.15 * sweep;
+        }
+        if (on > 0) {
+          jetTrims(this.trimTable, w[0] / rate, w[1] / rate, tr);
+          for (let k = 0; k < n; k++) {
+            if (tr[k] < 0.05) continue;
+            p.on[k] = Math.max(p.on[k], on);
+            p.level[k] = Math.max(p.level[k], level * tr[k]);
+          }
+          maxOn = Math.max(maxOn, on);
+        }
       }
       if (maxOn === 0) {
         // Attitude hold: an occasional blip on a random couple, more often
-        // while the ship is jinking
-        const rate = evade ? 0.3 : 0.05;
+        // while the ship holds armour on a threat or jinks
+        const rate = jink === JINK_FACE ? 0.25 : jink === JINK_DODGE ? 0.1 : 0.05;
         if (hash01(this.seed, c, 7) < rate) {
           const th = hash01(this.seed, c, 8) * Math.PI * 2;
           const dh = this._dem[0];
@@ -831,7 +1028,7 @@ const puffFragment = /* glsl */`
 `;
 
 const MAX_JETS = 512;      // cone instances (2 per firing jet)
-const MAX_PUFFS = 3072;    // puffs + nozzle glows
+const MAX_PUFFS = 4096;    // puffs + nozzle glows
 const _zAxis = new THREE.Vector3(0, 0, 1);
 
 /**
@@ -1138,6 +1335,8 @@ export class RcsSystem {
       for (let k = 0; k < n && np < MAX_PUFFS; k++) {
         const I = planner.intensity(te, k);
         if (I < 0.06) continue;
+        // faint pulses (trims, the vectored-turn assist) vent fewer puffs
+        if (I < 0.5 && hash01(planner.seed, j, k * 5) > 2 * I) continue;
         const h1 = hash01(planner.seed, j, k * 5 + 1);
         const lifeK = life * (0.55 + 0.45 * h1);
         if (age > lifeK) continue;
