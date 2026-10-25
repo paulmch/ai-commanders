@@ -401,6 +401,13 @@ class FleetCommunicationChannel:
         key = " ".join(str(name or "").split()).lower()
         if not key:
             return []
+        # The label form the turn states teach, "OCS Lancer-1 [beta_2]": the id wins.
+        if key.endswith("]") and "[" in key:
+            label_id = key[key.rindex("[") + 1:-1].strip()
+            ids = [sid for sid in self.ships if sid.lower() == label_id and sid != exclude]
+            if ids:
+                return ids
+            key = key[:key.rindex("[")].strip()
         exact, short = [], []
         for sid, (_, ship_name, _) in self.ships.items():
             if sid == exclude:

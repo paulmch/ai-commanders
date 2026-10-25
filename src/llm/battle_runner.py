@@ -1967,7 +1967,7 @@ class LLMBattleRunner:
             captain.admiral_orders.append(AdmiralOrder(
                 target_ship_id=ship_id,
                 target_ship_name=captain.ship_name,
-                order_text="[CRITICAL] You MUST call set_maneuver, set_primary_target, and set_weapons_order NOW. Responding with words only will cause your ship to DRIFT and DIE. CALL THE TOOLS!",
+                order_text=self._force_retry_text(captain),
                 priority="CRITICAL",
                 suggested_target=None,
             ))
@@ -1979,6 +1979,22 @@ class LLMBattleRunner:
         # Discussion markers never reach the engine. Outgoing comms are routed
         # by _finish_captain_turn, sequentially after every captain decided.
         return tactical
+
+    @staticmethod
+    def _force_retry_text(captain: LLMCaptain) -> str:
+        """Last-resort order after a discussion produced no commands; names only
+        the tools this hull has (a corvette has no set_weapons_order)."""
+        from .prompts import ship_has_guns
+        cfg = getattr(captain, "config", None)
+        ship_type = getattr(cfg, "ship_type", None)
+        fleet_data = getattr(cfg, "fleet_data", None)
+        tools = ["set_maneuver (or set_heading)", "set_primary_target"]
+        if ship_has_guns(ship_type, fleet_data):
+            tools.append("set_weapons_order")
+        if getattr(cfg, "has_torpedoes", False):
+            tools.append("launch_torpedo if you have a solution")
+        return ("[CRITICAL] No commands issued yet this checkpoint. Call " + ", ".join(tools)
+                + " NOW - words alone leave your ship drifting.")
 
     def _all_captains(self) -> List[LLMCaptain]:
         """Every captain in the battle, in 1v1 or fleet mode."""

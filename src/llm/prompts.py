@@ -3221,7 +3221,8 @@ def _format_captain_reports(reports: Optional[List[Dict[str, Any]]], snapshot: A
         who = _lbl(snapshot, sid, r.get("ship_name")) if sid else (r.get("ship_name") or "?")
         did, followed = _compliance_text(r.get("compliance"), snapshot)
         contact, request = r.get("contact"), r.get("request")
-        if status == "ACK" and followed and not contact and not request:
+        discussion = [d for d in (r.get("discussion") or []) if isinstance(d, dict)]
+        if status == "ACK" and followed and not contact and not request and not discussion:
             acks.append(who)
             continue
         text = f"{status} {who}"
@@ -3237,6 +3238,9 @@ def _format_captain_reports(reports: Optional[List[Dict[str, Any]]], snapshot: A
             text += f" | asks [{request.get('kind') or 'request'}]: {_clip(request['text'], 120)}"
         if did:
             text += f" | {did}" + ("" if followed else " (NOT as ordered)")
+        for d in discussion[-2:]:
+            text += (f" | asked you: \"{_clip(d.get('question', ''), 100)}\""
+                     f" -> you said: \"{_clip(d.get('answer', ''), 100)}\"")
         lines.append(text)
     if acks:
         lines.append(f"ACK, nothing to flag ({len(acks)}): " + ", ".join(acks))
