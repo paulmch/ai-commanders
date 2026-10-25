@@ -204,6 +204,20 @@ test('no nav lamp sits on a hull code', () => {
   }
 });
 
+test('no radiator cassette or wing covers a hull code', () => {
+  for (const type of HULL_CLASSES) {
+    const k = kitFor(type);
+    for (const m of k.markings) {
+      for (const r of k.radiators) {
+        const p = r.mesh.position;
+        const alongZ = Math.abs(p.z - m.z) < r.len / 2 + m.w / 2;
+        const near = Math.hypot(p.x - m.x, p.y - m.y) < k.W * 0.12;
+        assert.ok(!(alongZ && near), `${type}: radiator at z ${p.z.toFixed(2)} over the code at z ${m.z.toFixed(2)}`);
+      }
+    }
+  }
+});
+
 test('every hull is one connected structure (no floating masts or parts)', () => {
   for (const type of HULL_CLASSES) {
     const k = kitFor(type);

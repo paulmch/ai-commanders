@@ -1363,9 +1363,10 @@ function hullFrigate(k) {
   for (let i = 0; i < 4; i++) k.rib('trim', R * 1.04, L * 0.012, -L * 0.31 + i * L * 0.13);
   for (let i = 0; i < 3; i++) {
     const z = -L * 0.245 + i * L * 0.13;
-    k.deckRing(R, z, { skipFaces: i === 1 ? [0, 4, 6] : [6] });
+    k.deckRing(R, z, { skipFaces: i === 2 ? [0, 4, 6] : [6] });
   }
-  k.markings2(ap, 0, -L * 0.115, W * 0.1);
+  // codes forward of the radiator cassettes on the same flats
+  k.markings2(ap, 0, L * 0.015, W * 0.1);
   // Comms boom where the old billboard fin stood
   k.boom(k.mastH * 1.5, 0, ap, -L * 0.02);
   k.spineStripe(ap, -L * 0.33, -L * 0.07, R * 0.5);
@@ -1711,7 +1712,7 @@ function hullDreadnought(k, opts = {}) {
     // Spinal coiler along the keel, between the lower sponsons, its
     // muzzle well proud of the glacis (SPINAL dreadnought: -0.32 W, 0.65 L)
     k.box('trim', W * 0.16, W * 0.15, L * 0.75, 0, -W * 0.32, L * 0.2, { bevel: 0.3 });
-    k.box('accent', W * 0.06, W * 0.04, L * 0.72, 0, -W * 0.4, L * 0.2, { bevel: 0 });
+    k.box('accent', W * 0.03, W * 0.03, L * 0.72, 0, -W * 0.397, L * 0.2, { bevel: 0 });
     k.drum('barrel', W * 0.06, L * 0.14, L * 0.58, { y: -W * 0.32, sides: 12 });
     for (const bz of [L * 0.535, L * 0.565, L * 0.595]) {
       k.drum('accent', W * 0.078, W * 0.02, bz, { y: -W * 0.32, sides: 12 });
