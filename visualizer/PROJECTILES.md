@@ -48,8 +48,11 @@ this module only.
   (Object3D); otherwise the turret rig in `userData.gunTurrets` whose `slot`
   matches the shot's `weapon_slot` (barrel tip computed from the rig's fixed
   mount and the round's launch bearing, never the animated rig state), else
-  the spinal mount. `muzzleLift()` offsets a fresh slug from ship centre to
-  that muzzle and blends the offset out over ~2 hull lengths of flight.
+  the spinal mount: the kit's `userData.spinalMuzzle`, else the per-class
+  `SPINAL_MUZZLE` table in `WeaponTimeline.js` (`spinalMuzzleInto`; DamageFX
+  puts a wrecked spinal's scorch on the same point). `muzzleLift()` offsets a
+  fresh slug from ship centre to that muzzle and blends the offset out over
+  ~2 hull lengths of flight.
 - PD beams start at the lens of the firing ball (`userData.pdMounts` by
   turret name, else by index; seeded hull point on hulls without mounts).
 - Hit flashes sit on the crater `damageFX.surfaceFor(roundId)` resolves (the
@@ -58,6 +61,12 @@ this module only.
   back to the face met in the target's frame (relative velocity), so fleet
   drift cannot push a head-on hit to the flank. Hit flashes keep a ~4 px
   floor so a hit still reads at fleet range.
+- Duds: the engine rolls a torpedo's P(hit) at closest approach, so a failed
+  roll at 100 m still passed deep inside the ~8x drawn hull. Every miss within
+  `DUD_REACH_KM` is a dud candidate; `dud()` shows the ones whose recorded
+  closest approach lies inside the displayed hull's radius toward the round
+  (`dudSkims`; P(hit) >= `DUD_P` when no closest approach is recorded) as a
+  spark skid off the plating. Misses that cleared the drawn hull show nothing.
 - `positionAt(type, id, t)` gives a round's displayed position straight from
   the recording (HullRigs aims PD balls with it).
 - Old recordings lack terminal-burn flags; the plume phase is inferred from
