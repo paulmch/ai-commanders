@@ -2645,7 +2645,8 @@ MANEUVERS (tell captains which to use):
 - BRAKE: burn against the ship's own (world-frame) velocity
 - MAINTAIN: engine OFF - coast at current velocity, no thrust, no rotation
 - PADLOCK: engine off, the nose tracks the target (spinal on him) - coast and shoot
-  (MAINTAIN and PADLOCK never burn: throttle does not apply to them)
+  (MAINTAIN and PADLOCK never burn: throttle does not apply to them - but given WITH a
+  heading, MAINTAIN, or PADLOCK at throttle > 0, flies that HEADING at the throttle instead)
 - HEADING (issue_order heading={{x,y,z}}, throttle): fly a WORLD-frame direction - the ship
   turns onto it, then burns (the drive thrusts along the NOSE). throttle 0 = attitude only
   (nose turns, no burn, e.g. spinals back on the enemy). Applied directly to the ship.
@@ -3047,7 +3048,7 @@ one ship at a time. Do NOT call issue_order now for individual ships - those ord
 are discarded. The ONE order this call accepts is a fleet-wide formation heading:
 issue_order(ship_name="all ships", order_text=..., heading={x,y,z}, throttle=T) -
 every ship flies it (throttle scaled per hull to your slowest ship, burns start
-together) unless its own order sets another heading. Make the directive concrete
+together) unless its own order sets another heading or maneuver. Make the directive concrete
 enough that the per-ship orders follow from it.
 
 Ships are shown as: NAME [ID] (e.g., "OCS Gemini-1 [beta_1]")

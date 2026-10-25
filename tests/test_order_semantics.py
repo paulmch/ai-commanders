@@ -280,6 +280,19 @@ class TestSchemaAndDoctrine:
         assert "ALONE (no maneuver, no heading) it rides on the fleet order" in evade
         assert "never add MAINTAIN just to carry it" in evade
         assert "PADLOCK and MAINTAIN never burn" in _issue_order_param("throttle")
+        # ... and every "never burn" says what a heading given with them does
+        # (admiral_maneuver_spec flies it).
+        assert ("except that MAINTAIN + heading, or PADLOCK + heading at throttle above 0, "
+                "flies that HEADING at this throttle") in _issue_order_param("throttle")
+        assert "both unless you also give a heading" in maneuver
+        from src.llm.prompts import ADMIRAL_DOCTRINE_CORE
+        core = " ".join(ADMIRAL_DOCTRINE_CORE.split())
+        assert ("(MAINTAIN and PADLOCK never burn: throttle does not apply to them - but given "
+                "WITH a heading, MAINTAIN, or PADLOCK at throttle > 0, flies that HEADING") in core
+        from src.llm.prompts import build_admiral_static
+        directive = " ".join(build_admiral_static("A", "alpha", FLEET, None,
+                                                  phase="directive").split())
+        assert "unless its own order sets another heading or maneuver" in directive
 
     def test_per_ship_order_doctrine_and_fleet_order_notice(self):
         assert "give\n  neither heading nor maneuver to keep it flying the fleet order" in \
