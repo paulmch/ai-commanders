@@ -373,9 +373,12 @@ class TestFormationHeading:
         accel = {s.ship_id: ship_accel_ms2(s) * maneuvers[s.ship_id].throttle for s in alpha}
         assert max(accel.values()) == pytest.approx(min(accel.values()), rel=1e-3)
         assert len({m.burn_start_time for m in maneuvers.values()}) == 1
-        # The admiral saw range control; the captains saw the applied order.
-        assert any("RANGE CONTROL" in m[0]["content"] for m in seen["phase1"])
-        assert any("FLEET HEADING IN FORCE" in m[0]["content"] for m in seen["order"])
+        # The admiral saw range control (its headings, in the live user turn);
+        # the per-ship order call saw the formation heading; the captains saw
+        # the applied order.
+        assert any("=== HEADINGS" in m[-1]["content"] and "cancel closure" in m[-1]["content"]
+                   for m in seen["phase1"])
+        assert any("FLEET HEADING IN FORCE" in m[-1]["content"] for m in seen["order"])
         captain_turns = [m[-1]["content"] for m in seen["captain"]]
         assert any("HEADING ORDER (ALREADY APPLIED" in t and "FORMATION" in t
                    for t in captain_turns)
@@ -553,3 +556,112 @@ def test_corvette_group_kites_a_battleship_line_with_the_precomputed_headings():
     assert closest > target_km - 2 * tol_km          # never merged, never even close
     assert worst_dev < 1000.0                         # formation held to < 1 km
     assert walls[0].velocity.magnitude > 5000.0       # the line really was charging
+
+
+# =============================================================================
+# ADM-09: honest cancel option, re-engage after a pass, torpedo launch window
+# =============================================================================
+
+class TestRangeControlHonesty:
+
+    def test_out_accelerated_cancel_is_impossible_not_matched(self):
+        """A 1 g battle line vs a 3 g corvette swarm burning at it: no burn of
+        ours can null the closure, and the block must not claim it is matched."""
+        sim = CombatSimulation(seed=1, time_step=1.0)
+        me = _ship(sim, "bb", "battleship", "alpha", (0, 0, 0))
+        for i in range(3):
+            d = _ship(sim, f"d{i}", "corvette", "beta", (300, 5 * i, 0), vel_kps=(-2.0, 0, 0),
+                      fwd=(-1, 0, 0))
+            d.applied_throttle = 1.0
+        group = analyze_range_control(sim, [me])[0]
+        assert group.rel_speed_kps * 1000.0 > 10.0
+        cancel = group.option("cancel")
+        assert cancel.throttle == 0.0
+        assert cancel.effect.startswith("IMPOSSIBLE: he out-accelerates you")
+        text = captain_range_control(sim, me)
+        assert "matched" not in text
+        assert "out-accelerates you toward you - braking cannot stop it" in text
+
+    def test_matched_only_when_really_matched(self):
+        sim = CombatSimulation(seed=1, time_step=1.0)
+        me = _ship(sim, "me", "destroyer", "alpha", (0, 0, 0), vel_kps=(0.005, 0, 0))
+        foe = _ship(sim, "foe", "cruiser", "beta", (400, 0, 0), fwd=(-1, 0, 0))
+        _coast(foe)
+        cancel = analyze_range_control(sim, [me])[0].option("cancel")
+        assert cancel.effect.startswith("already matched")
+
+    def test_opening_range_offers_a_re_engage_heading_that_works(self):
+        # After a pass: 100 km apart and opening at 4 km/s.
+        sim = CombatSimulation(seed=1, time_step=1.0)
+        me = _ship(sim, "me", "corvette", "alpha", (0, 0, 0), vel_kps=(-2.0, 0, 0))
+        foe = _ship(sim, "foe", "destroyer", "beta", (100, 10, 0), vel_kps=(2.0, 0, 0),
+                    fwd=(-1, 0, 0))
+        _coast(foe)
+        group = analyze_range_control(sim, [me])[0]
+        assert group.closing_kps < -3.9
+        assert group.option("cancel").label == "hold range"
+        opt = group.option("reengage")
+        assert opt is not None and opt.label == "re-engage"
+        assert "range stops opening after" in opt.effect
+        _fly_option(sim, me, opt)
+        rel = (foe.position - me.position)
+        closing = -(rel.normalized().dot(foe.velocity - me.velocity)) / 1000.0
+        assert closing == pytest.approx(1.0, abs=0.15)          # REENGAGE_CLOSING_KPS
+        assert _range_km(me, foe) == pytest.approx(opt.end_range_km, rel=0.02)
+
+    def test_re_engage_against_an_enemy_still_burning_away(self):
+        """Reviewer repro: he flees at 2 km/s AND keeps burning away at 2 g.
+        The re-engage burn must include his burn (it used to ignore it and
+        promise 'range stops opening' while the range was still opening)."""
+        sim = CombatSimulation(seed=1, time_step=1.0)
+        me = _ship(sim, "me", "corvette", "alpha", (0, 0, 0))
+        foe = _ship(sim, "foe", "destroyer", "beta", (200, 0, 0), vel_kps=(2.0, 0, 0))
+        foe.applied_throttle = 1.0
+        foe.current_maneuver = Maneuver(ManeuverType.HEADING, start_time=0.0, duration=1e9,
+                                        throttle=1.0, heading_direction={"x": 1, "y": 0, "z": 0})
+        group = analyze_range_control(sim, [me])[0]
+        hold, opt = group.option("cancel"), group.option("reengage")
+        assert hold.label == "hold range" and opt.throttle == pytest.approx(1.0)
+        # Matching his burn AND turning the opening into a closure takes longer
+        # than matching it alone (the old option was shorter: impossible).
+        assert opt.turn_s + opt.burn_s > hold.turn_s + hold.burn_s
+        assert "while you keep matching his 2.0g burn" in opt.effect
+        _fly_option(sim, me, opt)
+        assert foe.velocity.x > 7000.0                          # he really kept burning
+        rel = foe.position - me.position
+        closing = -(rel.normalized().dot(foe.velocity - me.velocity)) / 1000.0
+        assert closing == pytest.approx(1.0, abs=0.15)          # REENGAGE_CLOSING_KPS
+        assert _range_km(me, foe) == pytest.approx(opt.end_range_km, rel=0.03)
+
+    def test_re_engage_is_impossible_when_he_out_accelerates_you(self):
+        sim = CombatSimulation(seed=1, time_step=1.0)
+        me = _ship(sim, "me", "destroyer", "alpha", (0, 0, 0))
+        foe = _ship(sim, "foe", "corvette", "beta", (200, 0, 0), vel_kps=(2.0, 0, 0))
+        foe.applied_throttle = 1.0                                # 3 g away from a 2 g hull
+        group = analyze_range_control(sim, [me])[0]
+        opt = group.option("reengage")
+        assert opt.throttle == 0.0
+        assert opt.effect.startswith("IMPOSSIBLE: he out-accelerates you away from you")
+        assert group.option("cancel").effect.endswith("the range opens as long as he keeps burning")
+        text = captain_range_control(sim, me)
+        assert "re-engage" in text and "stops opening" not in text
+
+    def test_closing_range_has_no_re_engage_option(self):
+        sim, me, foe = _duel("corvette", "battleship", 500.0, 1.5)
+        assert analyze_range_control(sim, [me])[0].option("reengage") is None
+
+    def test_gunless_group_gets_the_launch_window_not_coast_and_shoot(self):
+        sim, me, foe = _duel("corvette", "battleship", 500.0, 1.5)
+        face = analyze_range_control(sim, [me])[0].option("face")
+        assert face.label == "coast & launch"
+        assert "torpedoes launched now keep their solution" in face.effect
+        sim, me, foe = _duel("destroyer", "battleship", 500.0, 1.5)
+        assert analyze_range_control(sim, [me])[0].option("face").label == "coast & shoot"
+
+    def test_ship_frame_block_for_the_admirals_per_ship_order(self):
+        from src.llm.range_control import format_range_control
+        sim, me, foe = _duel("destroyer", "cruiser", 400.0, 1.0)
+        text = format_range_control(analyze_range_control(sim, [me]), who="Ship", max_detail=1)
+        assert "issue_order heading= for this ship" in text
+        assert "If it coasts:" in text and "Its stop:" in text
+        assert "heading(" in text and "set_heading(" not in text

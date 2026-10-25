@@ -319,12 +319,16 @@ class TestAdmiralPromptSelfConsistency:
         assert "EITHER the name OR the ID" in prompt
         assert "NOT ship IDs" not in prompt
 
+    # The PD/torpedo doctrine is composed in only when torpedoes are in the
+    # battle (ADM-10), so these PD-range checks field an enemy torpedo cruiser.
+    TORPEDO_BATTLE = {"ours": ["destroyer"], "theirs": ["cruiser_torpedo"]}
+
     def test_shared_point_defense_claim_matches_pd_range(self, fleet):
         """There is no 50 km sharing radius anywhere in the PD code."""
         prompt = build_admiral_prompt(
             admiral_name="Adm", faction="alpha", snapshot_t_minus_15=None,
             snapshot_t_zero=_admiral_snapshot(), personality=None,
-            fleet_data=fleet, phase="full",
+            fleet_data=fleet, phase="full", battle_classes=self.TORPEDO_BATTLE,
         )
         assert "within 50km share point defense" not in prompt
         pd_range = fleet["weapon_types"]["pd_laser"]["range_km"]
@@ -336,7 +340,7 @@ class TestAdmiralPromptSelfConsistency:
         prompt = build_admiral_prompt(
             admiral_name="Adm", faction="alpha", snapshot_t_minus_15=None,
             snapshot_t_zero=_admiral_snapshot(), personality=None,
-            fleet_data=mutated, phase="full",
+            fleet_data=mutated, phase="full", battle_classes=self.TORPEDO_BATTLE,
         )
         assert "333 km laser range" in prompt
 
@@ -365,9 +369,10 @@ class TestAdmiralPromptIsCacheable:
         ):
             assert prompt.index(static_heading) < marker, static_heading
         for volatile_heading in (
-            "=== DUAL TEMPORAL SNAPSHOT ===",
-            "=== ENEMY FLEET STATUS (OBSERVABLE) ===",
-            "=== PROJECTILES IN FLIGHT ===",
+            "!! NOW (act on these first)",
+            "=== ENEMY THREAT TABLE",
+            "=== YOUR FLEET",
+            "=== YOUR STANDING BATTLE PLAN",
         ):
             assert prompt.index(volatile_heading) > marker, volatile_heading
 

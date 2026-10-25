@@ -53,12 +53,14 @@ ADMIRAL_TOOLS = [
                     "torpedo_salvo": {
                         "type": "integer",
                         "minimum": 0,
-                        "maximum": 4,
+                        "maximum": 12,
                         "description": (
                             "Optional: order this ship to launch N torpedoes this "
                             "checkpoint (0 = hold). Only torpedo-armed hulls can comply - "
-                            "a launcher reloads every 12s so 2 per launcher per decision "
-                            "is the ceiling. Use this to COORDINATE a simultaneous "
+                            "a launcher reloads every 12s, so 3 per launcher per 30s "
+                            "checkpoint is the ceiling (a 4-tube torpedo cruiser: 12; "
+                            "YOUR FLEET lists each ship's launchable count). "
+                            "Use this to COORDINATE a simultaneous "
                             "time-on-target across several ships: rounds arriving "
                             "together split enemy PD dwell, while trickled rounds are "
                             "blinded one at a time (measured vs 4 PD turrets: 4 "

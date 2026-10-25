@@ -1615,6 +1615,13 @@ class LLMBattleRunner:
                 # No hasattr guard: a missing attribute is a bug that must
                 # surface, not silently degrade to "no directive".
                 directive = getattr(admiral, "last_directive", None) if admiral else None
+                # last_directive holds THIS checkpoint's directive only ("" when
+                # the directive call failed). One issued for an earlier sim time
+                # is stale and is never handed over as current (ADM-02: beta's
+                # captains flew the T+180 directive through the T+210 merge).
+                issued = getattr(admiral, "last_directive_t", None) if admiral else None
+                if directive and issued is not None and issued != self.simulation.current_time:
+                    directive = ""
                 captain.receive_admiral_orders(orders, directive)
 
         if self.config.verbose:
@@ -1788,6 +1795,16 @@ class LLMBattleRunner:
         directive = getattr(decision, 'fleet_directive', None)
         if directive:
             self.recorder.record_admiral_directive(self.simulation.current_time, admiral.name, faction, directive)
+        # A checkpoint without a directive is a visible event, not a silence
+        # (the ticker used to print "(no new directive)" for a truncated call).
+        failure = getattr(decision, 'directive_failure', None)
+        recovered = getattr(decision, 'directive_recovered', None)
+        if isinstance(failure, str) and failure:
+            self.recorder.record(self.simulation.current_time, 'admiral_directive_failed',
+                                 admiral_name=admiral.name, faction=faction, reason=failure)
+        elif isinstance(recovered, str) and recovered:
+            self.recorder.record(self.simulation.current_time, 'admiral_directive_retried',
+                                 admiral_name=admiral.name, faction=faction, reason=recovered)
         self._report_admiral_plan_update(admiral, decision, faction)
         for order in decision.fleet_orders:
             sid = self._find_ship_id_by_name(order.target_ship_id, faction) or order.target_ship_id

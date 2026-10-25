@@ -15,9 +15,10 @@ group:
   and their own stopping time/distance at full deceleration (plus the flip),
 * a plain merge warning when a pass inside MERGE_KM is coming,
 * ready-made headings with a one-line effect estimate each - cancel closure
-  (hold range), open range, pass wide (turn a merge into a wide pass), flank
-  left/right - and the paired attitude-only option (nose back on the enemy
-  to shoot while coasting),
+  (hold range), open range, re-engage (after a pass, when the range is
+  opening), pass wide (turn a merge into a wide pass), flank left/right - and
+  the paired attitude-only option (nose back on the enemy to shoot while
+  coasting; for a gunless torpedo group, the launch window),
 * formation throttles: one heading for several hulls only holds formation
   if every hull accelerates like the slowest one.
 
@@ -71,6 +72,11 @@ FULL_DETAIL_GROUPS = 2
 DETAIL_RANGE_KM = 1000.0
 # Relative speeds below this count as matched (nothing to cancel).
 MATCHED_MPS = 10.0
+# "Re-engage" (offered once the range is OPENING, i.e. after a pass): burn
+# until the relative velocity is a gentle closure of this speed along the
+# line of sight - slow enough to stop again, fast enough to matter. Torpedo
+# launches need closure >= 0 to keep a solution; guns want 1-3 km/s.
+REENGAGE_CLOSING_KPS = 1.0
 # Weapon arcs (angle between the nose and the target line).
 SPINAL_ARC_DEG = 30.0
 TURRET_ARC_DEG = 90.0
@@ -106,6 +112,10 @@ def _current_accel(ship: Any) -> Vector3D:
     if ks.mass_kg <= 0 or throttle <= 0:
         return Vector3D(0.0, 0.0, 0.0)
     return ks.forward * (ks.thrust_n * throttle / ks.mass_kg)
+
+
+# Public name: the admiral's GEOMETRY reports which way each enemy group burns.
+current_accel = _current_accel
 
 
 def _turn_time(sim: Any, ships: Sequence[Any], direction: Vector3D, engines_on: bool) -> float:
@@ -315,7 +325,7 @@ def _propagate(
 @dataclass
 class HeadingOption:
     """One precomputed heading and what it does."""
-    key: str            # cancel | open | wide | left | right | face
+    key: str            # cancel | open | reengage | wide | left | right | face
     label: str
     heading: Vector3D   # unit, world frame
     throttle: float     # 0 = attitude only
@@ -581,7 +591,11 @@ def _analyze_group(sim, own, own_pos, own_vel, accel, members, interval_s, detai
     e_acc_mag = e_acc.magnitude
     h, t_f, solved = None, 0.0, None
     dv = v.magnitude
-    if dv > MATCHED_MPS or e_acc_mag > 0.05 * accel:
+    # After a pass the same burn stops the range OPENING: name it for what it
+    # does then ("hold range"), not "cancel closure" of a closure that is gone.
+    cancel_label = "cancel closure" if closing >= 0 else "hold range"
+    attempted = dv > MATCHED_MPS or e_acc_mag > 0.05 * accel
+    if attempted:
         h = (v * -1.0).normalized() if dv > 1e-6 else (e_acc.normalized() if e_acc_mag > 0 else los * -1.0)
         for _ in range(2):                 # turn time depends on the heading
             t_f = _burn_start(sim, own, h)
@@ -603,19 +617,33 @@ def _analyze_group(sim, own, own_pos, own_vel, accel, members, interval_s, detai
         effect = f"rel. speed ~0 after {end:.0f} s, range then holds ~{hold_km:.0f} km"
         if e_acc_mag > 0.02 * G_STANDARD:
             effect += f" while you keep matching his {e_acc_mag / G_STANDARD:.1f}g burn"
-        if m_min / 1000.0 < 0.8 * hold_km:
+        if m_min / 1000.0 < 0.8 * hold_km and m_t > 1.0:
             effect += f" (passes {m_min / 1000.0:.0f} km first)"
         cancel_opt = HeadingOption(
-            key="cancel", label="cancel closure", heading=h, throttle=throttle,
+            key="cancel", label=cancel_label, heading=h, throttle=throttle,
             turn_s=t_f, burn_s=burn, effect=f"{when}: {effect}",
             aspect=_nose_aspect(h, los, own, detail, end),
             cpa_km=m_min / 1000.0, cpa_t_s=m_t,
             end_range_km=hold_km, rel_speed_end_kps=ve.magnitude / 1000.0)
         info.options.append(cancel_opt)
         info.flip_s = t_f
+    elif attempted:
+        # The solve failed: no burn of ours can null the relative velocity
+        # because he accelerates harder along the line than we can. This used
+        # to print "already matched ... the range holds" right under the merge
+        # warning that said the opposite (audit ADM-09). No heading is given.
+        info.options.append(HeadingOption(
+            key="cancel", label=cancel_label, heading=los * -1.0, throttle=0.0,
+            turn_s=0.0, burn_s=0.0,
+            effect=(f"IMPOSSIBLE: he out-accelerates you along the line "
+                    f"({e_acc_mag / G_STANDARD:.1f}g burn vs your {accel / G_STANDARD:.1f}g; "
+                    f"rel. speed {dv:.0f} m/s) - "
+                    + ("only pass wide / flank changes the merge" if closing >= 0 else
+                       "the range opens as long as he keeps burning")),
+            rel_speed_end_kps=dv / 1000.0))
     else:
         info.options.append(HeadingOption(
-            key="cancel", label="cancel closure", heading=los * -1.0, throttle=0.0,
+            key="cancel", label=cancel_label, heading=los * -1.0, throttle=0.0,
             turn_s=0.0, burn_s=0.0,
             effect=f"already matched (rel. speed {dv:.0f} m/s): coast and the range holds",
             end_range_km=rng / 1000.0, rel_speed_end_kps=dv / 1000.0))
@@ -638,6 +666,13 @@ def _analyze_group(sim, own, own_pos, own_vel, accel, members, interval_s, detai
         effect=f"{_span(end, interval_s)}: then {pe.magnitude / 1000.0:.0f} km, {rate} km/s",
         aspect=_nose_aspect(away, los, own, detail, end),
         cpa_km=m_min / 1000.0, cpa_t_s=m_t, end_range_km=pe.magnitude / 1000.0))
+
+    # ---- re-engage: after a pass, turn the opening into a gentle closure --
+    if closing < 0:
+        reengage = _reengage_option(sim, own, p, v, e_acc, los, accel, interval_s, detail,
+                                    evaluate)
+        if reengage is not None:
+            info.options.append(reengage)
 
     # ---- pass wide: push the existing miss wider --------------------------
     left, right = _flank_axes(los)
@@ -689,14 +724,25 @@ def _analyze_group(sim, own, own_pos, own_vel, accel, members, interval_s, detai
             cpa_km=m_min / 1000.0, cpa_t_s=m_t))
 
     # ---- coast & shoot: attitude only, nose back on them -----------------
+    # A gunless (torpedo) group has nothing to "shoot" while coasting; its
+    # version of the same attitude-only option is the launch window - and the
+    # one condition that decides it is that the range is not opening.
     tv = _turn_time(sim, own, los, engines_on=True)
     rcs = _turn_time(sim, own, los, engines_on=False)
-    info.options.append(HeadingOption(
-        key="face", label="coast & shoot", heading=los, throttle=0.0,
-        turn_s=rcs, burn_s=0.0,
-        effect=("nose already on him" if rcs < 1.0 else
-                f"RCS turn ~{rcs:.0f} s, no drift; PADLOCK ~{tv:.0f} s (token burn, few m/s)"),
-        aspect=_nose_aspect(los, los, own, detail).replace(" exposed)", ")")))
+    turn_text = ("nose already on him" if rcs < 1.0 else
+                 f"RCS turn ~{rcs:.0f} s, no drift; PADLOCK ~{tv:.0f} s (token burn, few m/s)")
+    if _gun_arcs(own) is None:
+        window = ("closing: torpedoes launched now keep their solution" if closing >= 0 else
+                  "range OPENING: launches now chase a receding target - re-engage first")
+        info.options.append(HeadingOption(
+            key="face", label="coast & launch", heading=los, throttle=0.0,
+            turn_s=rcs, burn_s=0.0, effect=f"{turn_text}; {window}",
+            aspect=_nose_aspect(los, los, own, detail).replace(" exposed)", ")")))
+    else:
+        info.options.append(HeadingOption(
+            key="face", label="coast & shoot", heading=los, throttle=0.0,
+            turn_s=rcs, burn_s=0.0, effect=turn_text,
+            aspect=_nose_aspect(los, los, own, detail).replace(" exposed)", ")")))
 
     # ---- merge warning ----------------------------------------------------
     if closing > 0 and info.cpa_km < MERGE_KM and base_t < CPA_HORIZON_S:
@@ -723,6 +769,65 @@ def _analyze_group(sim, own, own_pos, own_vel, accel, members, interval_s, detai
                 f"within {slack_s:.0f} s (need {need_km:.0f} km incl. flip, have "
                 f"{info.range_km:.0f} km). Cancel closure now, or pass wide.")
     return info
+
+
+def _reengage_option(sim, own, p, v, e_acc, los, accel, interval_s, detail, evaluate):
+    """
+    'Re-engage' heading for an OPENING range (after a pass): burn so the
+    relative velocity becomes a closure of REENGAGE_CLOSING_KPS along the line
+    of sight, lateral drift nulled, WHILE he keeps his current burn - solved
+    like the cancel option (_cancel_solve with the closure as the target
+    velocity), so a fleeing enemy lengthens the burn instead of being ignored.
+    Reports when the range stops opening, how far out that is, and the
+    closure once the burn ends; when he out-accelerates us away from us there
+    is no such burn and the option says so instead of offering a heading.
+    """
+    target_v = los * (REENGAGE_CLOSING_KPS * 1000.0)   # our velocity rel. to them, wanted
+    e_acc_mag = e_acc.magnitude
+    if accel <= 0 or ((target_v - v).magnitude < MATCHED_MPS and e_acc_mag < 0.05 * accel):
+        return None
+    # Solve on the velocity error w.r.t. the wanted closure: the cancel solve
+    # nulls (v1 - target_v) against his burn. Window 0: full throttle, no
+    # stretching - this burn is meant to finish, not to be renewed as a hold.
+    need = target_v - v
+    h = need.normalized() if need.magnitude > 1e-6 else (e_acc.normalized() if e_acc_mag > 0 else los)
+    t_f, solved = 0.0, None
+    for _ in range(2):                     # turn time depends on the heading
+        t_f = _burn_start(sim, own, h)
+        v1 = v - e_acc * t_f
+        solved = _cancel_solve(v1 - target_v, e_acc, accel, 0.0)
+        if solved is None:
+            break
+        h, throttle, burn = solved
+    if solved is None:
+        return HeadingOption(
+            key="reengage", label="re-engage", heading=los, throttle=0.0,
+            turn_s=0.0, burn_s=0.0,
+            effect=(f"IMPOSSIBLE: he out-accelerates you away from you "
+                    f"({e_acc_mag / G_STANDARD:.1f}g burn vs your {accel / G_STANDARD:.1f}g) - "
+                    f"the range opens as long as he keeps burning"))
+    end = t_f + burn
+    segs = [(t_f, end, h * (accel * throttle))]
+    hold = max(ENEMY_ACCEL_HOLD_S, end)     # consistent with the solve: he keeps burning
+    # Sample the burn to find where the opening turns into closure.
+    step = max(1.0, end / 60.0)
+    probes = [k * step for k in range(int(end / step) + 2)]
+    track = _propagate(p, v, segs, e_acc, hold, horizon_s=max(end, 1.0), probe_times=probes)
+    peak_km, peak_t = p.magnitude / 1000.0, 0.0
+    for t, (pp, _) in sorted(track.probes.items()):
+        if pp.magnitude / 1000.0 > peak_km:
+            peak_km, peak_t = pp.magnitude / 1000.0, t
+    _, _, _, (pe, ve) = evaluate(segs, probe=end, enemy_until=hold, horizon=end)
+    los_e = (pe * -1.0).normalized() if pe.magnitude > 1.0 else los
+    c_e = ve.dot(los_e) / 1000.0
+    effect = (f"{_span(end, interval_s)}: range stops opening after ~{peak_t:.0f} s at "
+              f"~{peak_km:.0f} km, then closing {c_e:.1f} km/s from {pe.magnitude / 1000.0:.0f} km")
+    if e_acc_mag > 0.02 * G_STANDARD:
+        effect += f" while you keep matching his {e_acc_mag / G_STANDARD:.1f}g burn"
+    return HeadingOption(
+        key="reengage", label="re-engage", heading=h, throttle=throttle, turn_s=t_f,
+        burn_s=burn, effect=effect, aspect=_nose_aspect(h, los, own, detail, end),
+        end_range_km=pe.magnitude / 1000.0, rel_speed_end_kps=ve.magnitude / 1000.0)
 
 
 def _cancel_solve(v1: Vector3D, e_acc: Vector3D, accel: float,
@@ -802,16 +907,25 @@ def _group_header(info: GroupRangeInfo) -> str:
             f" - {info.range_km:.0f} km, {rate}")
 
 
+_SUBJECT = {"Your": "you coast", "Fleet": "the fleet coasts", "Ship": "it coasts"}
+_STOPPER = {"Your": "Your", "Fleet": "Fleet", "Ship": "Its"}
+
+
 def _group_status(info: GroupRangeInfo, who: str) -> str:
     ship = f" ({info.cpa_ship})" if info.cpa_ship else ""
     cpa = (f"closest approach {info.cpa_km:.1f} km{ship} in {info.cpa_t_s:.0f} s"
            if info.cpa_t_s > 0.5 else "range not closing (closest is now)")
     stop = ""
     if info.closing_kps > 0 and info.stop_s > 0:
-        stop = (f" {who} stop: {info.stop_s:.0f} s / {info.stop_km:.0f} km at "
+        stop = (f" {_STOPPER.get(who, who)} stop: {info.stop_s:.0f} s / {info.stop_km:.0f} km at "
                 f"{info.accel_g:.1f}g (+{info.flip_s:.0f} s flip).")
-    subject = "you coast" if who == "Your" else "the fleet coasts"
+    subject = _SUBJECT.get(who, "the fleet coasts")
     return f"  If {subject}: {cpa}.{stop}"
+
+
+def _detailed(i: int, info: GroupRangeInfo, max_detail: int) -> bool:
+    """The most urgent group always gets options; the next only if it matters."""
+    return i < max_detail and (i == 0 or bool(info.warning) or info.range_km <= DETAIL_RANGE_KM)
 
 
 def format_range_control(
@@ -820,13 +934,17 @@ def format_range_control(
     max_detail: int = FULL_DETAIL_GROUPS,
     where: Optional[str] = None,
 ) -> str:
-    """Compact prompt block. ``who`` is "Your" (captain) or "Fleet" (admiral)."""
+    """
+    Compact prompt block. ``who`` is "Your" (captain), "Fleet" (admiral,
+    fleet centre) or "Ship" (the admiral's order for one ship).
+    """
     if not infos:
         return ""
     verb = "set_heading" if who == "Your" else "heading"
     if where is None:
-        where = ("set_heading" if who == "Your"
-                 else "issue_order heading= (fleet centre; see FORMATION)")
+        where = {"Your": "set_heading",
+                 "Ship": "issue_order heading= for this ship"}.get(
+                     who, "issue_order heading= (fleet centre; see FORMATION)")
     lines = [f"=== RANGE CONTROL (world-frame headings for {where}; the drive "
              "thrusts along the NOSE) ==="]
     for i, info in enumerate(infos):
@@ -834,13 +952,52 @@ def format_range_control(
         lines.append(_group_status(info, who))
         if info.warning:
             lines.append(f"  !! {info.warning}")
-        if i >= max_detail or (i > 0 and not info.warning
-                                and info.range_km > DETAIL_RANGE_KM):
+        if not _detailed(i, info, max_detail):
             continue
         target = info.names[0] if info.names else "target"
         for opt in info.options:
             lines.append(_option_line(opt, target, verb))
     return "\n".join(lines)
+
+
+def format_heading_options(
+    infos: Sequence[GroupRangeInfo],
+    max_detail: int = FULL_DETAIL_GROUPS,
+    verb: str = "heading",
+) -> str:
+    """
+    Only the precomputed heading options per group (the admiral's turn state
+    states each group's range, closest approach and stop data in its own
+    GEOMETRY block, so they are not repeated here).
+    """
+    lines = []
+    for i, info in enumerate(infos):
+        if not _detailed(i, info, max_detail):
+            continue
+        target = info.names[0] if info.names else "target"
+        lines.append(f"{info.label} ({target}{' +' + str(len(info.names) - 1) if len(info.names) > 1 else ''}):")
+        for opt in info.options:
+            lines.append(_option_line(opt, target, verb))
+    return "\n".join(lines)
+
+
+def formation_line(live: Sequence[Any], mcp: bool = False) -> str:
+    """The FORMATION advice: per-hull throttles that hold the formation."""
+    if len(live) <= 1:
+        return ""
+    thr = formation_throttles(live, 1.0)
+    slowest = min(live, key=ship_accel_ms2)
+    parts = ", ".join(f"{getattr(s, 'name', None) or s.ship_id} {thr[s.ship_id] * 100:.0f}%"
+                      for s in live)
+    return (
+        f"FORMATION: headings above are for the fleet centre (slowest hull "
+        f"{ship_accel_ms2(slowest) / G_STANDARD:.2f}g sets the pace, slowest turn sets the "
+        f"flip). Same heading with equal acceleration keeps the formation: throttles "
+        f"for 100% of the slowest hull = {parts}. " + (
+            "Easiest: ONE set_maneuver with ship_id \"all\", HEADING, heading_direction "
+            "and throttle" if mcp else
+            "Easiest: ONE issue_order with ship_name=\"all ships\", heading and throttle")
+        + " - each hull's throttle is scaled and the burn starts together.")
 
 
 def captain_range_control(sim: Any, ship: Any) -> str:
@@ -866,20 +1023,9 @@ def admiral_range_control(sim: Any, ships: Sequence[Any], mcp: bool = False) -> 
     where = ("set_maneuver HEADING heading_direction (fleet centre; ship_id \"all\" = "
              "formation)" if mcp else None)
     lines = [format_range_control(infos, who="Fleet", where=where)]
-    if len(live) > 1:
-        thr = formation_throttles(live, 1.0)
-        slowest = min(live, key=ship_accel_ms2)
-        parts = ", ".join(f"{getattr(s, 'name', None) or s.ship_id} {thr[s.ship_id] * 100:.0f}%"
-                          for s in live)
-        lines.append(
-            f"FORMATION: headings above are for the fleet centre (slowest hull "
-            f"{ship_accel_ms2(slowest) / G_STANDARD:.2f}g sets the pace, slowest turn sets the "
-            f"flip). Same heading with equal acceleration keeps the formation: throttles "
-            f"for 100% of the slowest hull = {parts}. " + (
-                "Easiest: ONE set_maneuver with ship_id \"all\", HEADING, heading_direction "
-                "and throttle" if mcp else
-                "Easiest: ONE issue_order with ship_name=\"all ships\", heading and throttle")
-            + " - each hull's throttle is scaled and the burn starts together.")
+    formation = formation_line(live, mcp)
+    if formation:
+        lines.append(formation)
     return "\n".join(lines)
 
 

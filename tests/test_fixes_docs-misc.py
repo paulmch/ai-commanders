@@ -219,29 +219,38 @@ class TestPromptFormatters:
         assert "12.0" in text and "30.0" in text
 
     def test_enemy_fleet_view_hides_internal_state_from_the_admiral(self, fleet_data):
-        """An admiral sees position/velocity/class capabilities only - never the
-        enemy's propellant, heat, or module hit points."""
-        from src.llm.prompts import _format_enemy_fleet_observable
+        """An admiral sees position/velocity/class capabilities and observed
+        damage (hull %, PD turrets) - never the enemy's propellant, heat, or
+        module hit points. (Hull is observable damage: the threat table shows
+        it on purpose since the pass-4 admiral audit, ADM-07.)"""
+        from src.llm.admiral import EnemyShipSnapshot
+        from src.llm.prompts import _format_threat_table
 
-        enemy = SimpleNamespace(
+        enemy = EnemyShipSnapshot(
             ship_id="beta_1", ship_name="HFS Foe", ship_type="destroyer",
             position_km={"x": 100.0, "y": 0.0, "z": 0.0}, velocity_kps=5.0,
+            velocity_vector={"x": -5.0, "y": 0.0, "z": 0.0},
             distance_from_closest_friendly_km=250.0, closing_rate_kps=2.0,
-            # Secrets that must not be rendered:
-            propellant_kg=987654.0, hull_integrity=13.0, heat_percent=91.0,
-            reactor_hp=42.0,
+            hull_integrity=13.0,
         )
-        text = _format_enemy_fleet_observable([enemy], fleet_data)
+        # Secrets that must not be rendered:
+        enemy.propellant_kg = 987654.0
+        enemy.heat_percent = 91.0
+        enemy.reactor_hp = 42.0
+        snapshot = SimpleNamespace(enemy_ships=[enemy], friendly_ships=[], labels={})
+        text = _format_threat_table(snapshot)
 
         assert "HFS Foe" in text
         assert "beta_1" in text  # the admiral needs the id to address orders
-        for secret in ("987654", "propellant", "reactor", "13", "91"):
+        assert "hull 13%" in text
+        for secret in ("987654", "propellant", "reactor", "91"):
             assert secret not in text.lower(), secret
 
     def test_enemy_fleet_view_handles_no_contacts(self, fleet_data):
-        from src.llm.prompts import _format_enemy_fleet_observable
+        from src.llm.prompts import _format_threat_table
 
-        assert "No enemy" in _format_enemy_fleet_observable([], fleet_data)
+        snapshot = SimpleNamespace(enemy_ships=[], friendly_ships=[], labels={})
+        assert "No enemy" in _format_threat_table(snapshot)
 
     def test_armor_condition_is_monotonic(self):
         from src.llm.prompts import assess_armor_condition
