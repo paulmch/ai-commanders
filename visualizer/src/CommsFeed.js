@@ -160,7 +160,8 @@ export class CommsFeed {
   _sync(desired) {
     const shown = this.shown;
     const same = shown.length === desired.length && shown.every((id, i) => id === desired[i].id);
-    if (same) return 'same';
+    // nothing to show: still (re)write the empty-state line (filter or index changed)
+    if (same && desired.length) return 'same';
     const last = shown.length ? shown[shown.length - 1] : null;
     const q = last == null ? -1 : desired.findIndex(r => r.id === last);
     if (q >= 0) {

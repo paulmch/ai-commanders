@@ -283,3 +283,21 @@ test('visible rows and standing orders are pure functions of time', () => {
   assert.equal(standingOrders(hud.comms, 61).alpha.directive.text, 'Salvo now.');
   assert.equal(standingOrders(hud.comms, 61).alpha.plan.text, 'Phase 1: close.');
 });
+
+test('command net with no traffic says so instead of rendering an empty column', () => {
+  const doc = new FakeDocument();
+  const root = build(doc, ['aside', { class: 'hidden' },
+    ['button', { 'data-comms-faction': 'all' }], ['button', { 'data-comms-group': 'all' }],
+    ['div', { 'data-standing': '' }], ['div', { 'data-list': '' }]]);
+  const ships = { alpha_1: { faction: 'alpha', name: 'TIS Dart-1', type: 'corvette' } };
+  const hud = buildHudIndex({ events: [], ships, simTrace: [], metadata: {}, sourceData: {}, duration: 120 });
+  assert.equal(hud.comms.length, 0);
+  const feed = new CommsFeed({ root, doc, store: null });
+  feed.setOpen(true);
+  feed.setIndex(hud, true);
+  feed.update(30);
+  const list = root.querySelector('[data-list]');
+  assert.equal(list.querySelector('.comms-empty')?.textContent, 'No command traffic recorded yet.');
+  assert.equal(feed.update(30), 'same', 'parked: nothing re-rendered');
+  assert.equal(list.querySelectorAll('.comms-empty').length, 1);
+});

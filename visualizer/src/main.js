@@ -1831,10 +1831,13 @@ class BattleVisualizer {
     this.combatLog.clear();
     this.commsFeed.clear();
     // The command net opens by default where there is room for it, unless
-    // the viewer closed it last time.
+    // the viewer closed it last time - or the replay carries no command
+    // traffic at all (heuristic captains, pre-pass-4 recordings): an empty
+    // column would only hide a third of the battle and the AUTO CAM chip.
     let saved = null;
     try { saved = window.localStorage.getItem('aic.viewer.commsOpen'); } catch { /* default */ }
-    this.commsFeed.setOpen(saved != null ? saved === '1' : window.innerWidth >= 1100);
+    const traffic = !!this.live || (this.loader.hud?.comms?.length || 0) > 0;
+    this.commsFeed.setOpen(saved != null ? saved === '1' : window.innerWidth >= 1100 && traffic);
   }
 
   toggleComms() {
