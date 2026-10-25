@@ -821,9 +821,9 @@ class LLMCaptain:
     def _range_control(self, simulation: Any, ship: Any) -> Tuple[List[Any], str]:
         """Range-control analysis (merge warnings feed THREATS TO ME) and its block."""
         try:
-            from .range_control import analyze_range_control, format_range_control
+            from .range_control import analyze_range_control, format_captain_range_control
             infos = analyze_range_control(simulation, [ship], detail=True)
-            return infos, format_range_control(infos, who="Your")
+            return infos, format_captain_range_control(infos)
         except Exception:  # noqa: BLE001 - advisory only: never let it kill a decision
             return [], ""
 

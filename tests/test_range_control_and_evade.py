@@ -665,3 +665,81 @@ class TestRangeControlHonesty:
         assert "issue_order heading= for this ship" in text
         assert "If it coasts:" in text and "Its stop:" in text
         assert "heading(" in text and "set_heading(" not in text
+
+
+class TestCaptainBlockSize:
+    """Captain prompt size (pass-4 follow-up): the RANGE CONTROL block grew
+    to ~1000 tokens once a second enemy group was in range - every heading
+    for both groups, each with the armor thickness MY SHIP already lists."""
+
+    @staticmethod
+    def _two_groups():
+        sim = CombatSimulation(seed=3, time_step=1.0)
+        me = _ship(sim, "me", "destroyer", "alpha", (0, 0, 0), vel_kps=(2.0, 0, 0))
+        near = _ship(sim, "near", "frigate", "beta", (80, 5, 0), fwd=(-1, 0, 0))
+        far = _ship(sim, "far", "cruiser", "beta", (0, 400, 0), vel_kps=(0, -1.0, 0),
+                    fwd=(0, -1, 0))
+        _coast(near)
+        _coast(far)
+        return sim, me
+
+    @staticmethod
+    def _group_lines(text, label):
+        lines = text.splitlines()
+        start = next(i for i, l in enumerate(lines) if l.startswith(label))
+        end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("GROUP")),
+                   len(lines))
+        return [l[2:16].strip() for l in lines[start + 1:end]       # labels are padded to 14
+                if l.startswith("  ") and not l.strip().startswith(("If ", "!!"))]
+
+    def test_second_group_lists_its_key_headings_only(self):
+        sim, me = self._two_groups()
+        infos = analyze_range_control(sim, [me])
+        assert [i.names for i in infos] == [["near"], ["far"]]
+        assert infos[0].warning and not infos[1].warning and infos[1].closing_kps > 0
+        text = captain_range_control(sim, me)
+        assert self._group_lines(text, "GROUP A") == [
+            "cancel closure", "open range", "pass wide", "flank left", "flank right",
+            "coast & shoot"]
+        # Closing, no merge: hold the range or turn the guns on him.
+        assert self._group_lines(text, "GROUP B") == ["cancel closure", "coast & shoot"]
+        # The admiral's fleet view keeps every heading for both groups.
+        fleet = admiral_range_control(sim, [me])
+        assert len(self._group_lines(fleet, "GROUP B")) == len(infos[1].options)
+
+    def test_no_armor_numbers_on_burns_for_the_captain(self):
+        from src.llm.range_control import format_range_control
+        sim, me = self._two_groups()
+        text = captain_range_control(sim, me)
+        assert "cm exposed" not in text
+        assert "TAIL to enemy" in text and "(nose armor " in text   # coast & shoot keeps it
+        ship = format_range_control(analyze_range_control(sim, [me]), who="Ship", max_detail=1)
+        assert "(tail armor " in ship and "cm exposed" in ship
+
+    @pytest.mark.parametrize("warning,closing,expected", [
+        ("MERGE IN 40 s", 2.0, ["cancel", "wide"]),
+        (None, 1.0, ["cancel", "face"]),
+        (None, -1.0, ["reengage", "face"]),
+    ])
+    def test_key_options_by_situation(self, warning, closing, expected):
+        from src.llm.range_control import GroupRangeInfo, HeadingOption, _key_options
+        x = Vector3D(1.0, 0.0, 0.0)
+        opts = [HeadingOption(key=k, label=k, heading=x, throttle=0.0 if k == "face" else 1.0,
+                              turn_s=0.0, burn_s=30.0, effect="")
+                for k in ("cancel", "open", "reengage", "wide", "left", "right", "face")]
+        info = GroupRangeInfo(label="GROUP B", names=["x"], ship_ids=["x"], range_km=300.0,
+                              closing_kps=closing, rel_speed_kps=abs(closing), cpa_km=10.0,
+                              cpa_t_s=100.0, stop_s=0.0, stop_km=0.0, flip_s=0.0, accel_g=2.0,
+                              warning=warning, options=opts)
+        assert sorted(o.key for o in _key_options(info, 2)) == sorted(expected)
+        # An option with no heading (IMPOSSIBLE / already matched) is skipped.
+        opts[0].throttle = 0.0
+        keys = [o.key for o in _key_options(info, 2)]
+        assert "cancel" not in keys and len(keys) == 2
+
+    def test_doctrine_legend_quotes_the_constant(self):
+        from src.llm.prompts import build_captain_doctrine
+        from src.llm.range_control import CAPTAIN_SECONDARY_OPTIONS
+        system = " ".join(build_captain_doctrine(ship_type="destroyer", fleet_data=FLEET).split())
+        assert (f"RANGE CONTROL: every heading for the most urgent group, the "
+                f"{CAPTAIN_SECONDARY_OPTIONS} key ones for the next") in system

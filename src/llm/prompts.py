@@ -1153,6 +1153,8 @@ your ship actually did with your last orders, and any call that was rejected).
   compact line for the rest ({compact_solution}; mounts in CLASS REFERENCE); armor only
   when damaged.{gun_legend}
 - FRIENDLIES: grouped by maneuver and target; hull 100% and PD intact unless shown.
+- RANGE CONTROL: every heading for the most urgent group, the {range_secondary} key ones for
+  the next (armor per face: MY SHIP).
 - ENGINE FEEDBACK: weapon policies persist; maneuvers and queued launches expire at the next
   checkpoint.
 
@@ -1682,6 +1684,15 @@ def build_personality_prompt(
     return personality_prompt
 
 
+def _captain_secondary_options() -> int:
+    """range_control.CAPTAIN_SECONDARY_OPTIONS (the doctrine quotes it)."""
+    try:
+        from .range_control import CAPTAIN_SECONDARY_OPTIONS
+    except ImportError:  # pragma: no cover - script-style imports
+        from llm.range_control import CAPTAIN_SECONDARY_OPTIONS
+    return CAPTAIN_SECONDARY_OPTIONS
+
+
 def build_captain_doctrine(
     ship_type: Optional[str] = None,
     fleet_data: Optional[Dict[str, Any]] = None,
@@ -1794,6 +1805,7 @@ def build_captain_doctrine(
             + (" (launch_torpedo can take its own target_id)" if has_torps else "")),
         comms_block="\n".join(comms) + "\n",
         full_others=FULL_SOLUTION_CONTACTS - 1,
+        range_secondary=_captain_secondary_options(),
         compact_solution=" / ".join(
             (["best P(hit) of a gun that bears"] if has_guns else [])
             + (["torpedo verdict"] if has_torps else []))
