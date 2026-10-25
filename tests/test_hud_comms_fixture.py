@@ -62,7 +62,9 @@ def test_fixture_events_follow_the_comms_schema(tmp_path):
         d = _data(e)
         assert set(d) == COMMS_MESSAGE_KEYS
         assert d["channel"] in CHANNELS and d["sender_role"] in ROLES
-        assert e["ship_id"] == d["sender_id"]
+        # BattleRecorder.record_comms_message: the sending ship for captain
+        # traffic, else None (the engine datalink signs 'engine:<faction>')
+        assert e["ship_id"] == (d["sender_id"] if d["sender_role"] == "captain" else None)
         assert d["deliver_at_t"] >= d["sent_t"] == e["timestamp"]
         assert isinstance(d["recipient_ids"], list) and isinstance(d["structured"], dict)
     assert {e["data"]["channel"] for e in by_type["comms_message"]} == CHANNELS
