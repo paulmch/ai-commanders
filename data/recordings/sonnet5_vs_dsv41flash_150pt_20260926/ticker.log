@@ -1,0 +1,116 @@
+=== BATTLE sonnet5_vs_dsv41flash_150pt_20260926 | claude-sonnet-5 vs deepseek-v4.1-flash | spend $0.00/$6.00 ===
+150 pts/side, max 8 ships, 15 turns of 30s. Reasoning low. Admiral vision ON: tactical plot to both admirals each checkpoint.
+Costs: CO=corvette:18 FF=frigate:7 DD=destroyer:18 CA=cruiser:28 BC=battlecruiser:24 BB=battleship:42 DN=dreadnought:53 DS=dreadnought_siege:54 CT=cruiser_torpedo:65
+=== DRAFT ALPHA | claude-sonnet-5 | 144/150 pts | spend $0.02/$6.00 ===
+Ships (8): Dart-1 CO 18 | Dart-2 CO 18 | Dart-3 CO 18 | Dart-4 CO 18 | Dart-5 CO 18 | Dart-6 CO 18 | Dart-7 CO 18 | Dart-8 CO 18
+Formation: Spread Vanguard Cluster - Corvettes clustered within ~100km for overlapping PD coverage against torpedoes, with slight forward stagge...
+Concept: Uniform 3g torpedo-boat swarm: all corvettes move at the same fast speed, so the fleet can dictate range, evade heavy capital fire, and m...
+=== DRAFT BETA | deepseek-v4.1-flash | 150/150 pts | spend $0.02/$6.00 ===
+Ships (6): Sovereign BB 42 | Lancer-1 BC 24 | Lancer-2 BC 24 | Lancer-3 BC 24 | Falchion-1 DD 18 | Falchion-2 DD 18
+Formation: Overlapping PD Wall - Sovereign (toughest hull) pushed to +x as the vanguard to eat the first exchange. Falchions screen ahead-le...
+Concept: A single cohesive kinetic battle line: one 262mm-nose battleship anchors point defense (3 turrets) while three battlecruisers and two des...
+=== CP 1 | t=30s | spend $0.41/$6.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO 100% | Dart-2 CO 100% | Dart-3 CO 100% | Dart-4 CO 100% | Dart-5 CO 100% | Dart-6 CO 100% | Dart-7 CO 100% | Dart-8 CO 100%
+BETA deepseek-v4.1-flash: 6/6 alive, hull 100% | Sovereign BB 100% | Lancer-1 BC 100% | Lancer-2 BC 100% | Lancer-3 BC 100% | Falchion-1 DD 100% | Falchion-2 DD 100%
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: All Dart corvettes: INTERCEPT toward enemy fleet center (approx X=260,Y=0,Z=0) at 70% throttle, staying in tight formation for mutual poi...
+B admiral: ADVANCE IN A TIGHT MUTUALLY-SUPPORTING WALL. All ships throttle to match the Sovereign's 1.0g so the formation stays cohesive and our 13...
+=== CP 2 | t=60s | spend $0.78/$6.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO 100% | Dart-2 CO 100% | Dart-3 CO 100% | Dart-4 CO 100% | Dart-5 CO 100% | Dart-6 CO 100% | Dart-7 CO 100% | Dart-8 CO 100%
+BETA deepseek-v4.1-flash: 6/6 alive, hull 100% | Sovereign BB 100% | Lancer-1 BC 100% | Lancer-2 BC 100% | Lancer-3 BC 100% | Falchion-1 DD 100% | Falchion-2 DD 100%
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Continue closing toward OCS Falchion-1 at full intercept, maintaining tight grouping for mutual PD support. Hold torpedoes until range cl...
+B admiral: (no new directive)
+=== CP 3 | t=90s | spend $1.18/$6.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO 100% | Dart-2 CO 100% | Dart-3 CO 100% | Dart-4 CO 100% | Dart-5 CO 100% | Dart-6 CO 100% | Dart-7 CO 100% | Dart-8 CO 100%
+BETA deepseek-v4.1-flash: 6/6 alive, hull 100% | Sovereign BB 100% | Lancer-1 BC 100% | Lancer-2 BC 100% | Lancer-3 BC 100% | Falchion-1 DD 100% | Falchion-2 DD 100%
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 6 torps/0 impact, PD downed 0 torps ; B 2 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: All Dart corvettes continue INTERCEPT toward enemy formation, staying tight for mutual PD coverage. At this checkpoint, ALL 8 ships fire...
+B admiral: Phase 1 continues: advance in a TIGHT WALL directly at the enemy, matched throttle so no ship outruns the wall (Sovereign 100%, Lancers 6...
+=== CP 4 | t=120s | spend $1.57/$6.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO 100% | Dart-2 CO 100% | Dart-3 CO 100% | Dart-4 CO 100% | Dart-5 CO 100% | Dart-6 CO 100% | Dart-7 CO 100% | Dart-8 CO 100%
+BETA deepseek-v4.1-flash: 6/6 alive, hull 100% | Sovereign BB 100% | Lancer-1 BC 100% | Lancer-2 BC 100% | Lancer-3 BC 100% | Falchion-1 DD 100% [intercept] | Falchion-2 DD 100%
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Continue closing on OCS Falchion-1 - 6 torpedoes already inbound and about to arrive (ETA 37-51s). Maintain INTERCEPT toward Falchion-1 t...
+B admiral: HOLD THE WALL, KEEP CLOSING. FALCHION-1: EVADE HARD NOW - six torpedoes inbound - stay inside the wall so all 13 PD turrets cover you. Al...
+=== CP 5 | t=150s | spend $1.98/$6.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO 100% | Dart-2 CO 100% | Dart-3 CO 100% [intercept] | Dart-4 CO 100% | Dart-5 CO 100% | Dart-6 CO 100% | Dart-7 CO 100% | Dart-8 CO 100%
+BETA deepseek-v4.1-flash: 6/6 alive, hull 100% | Sovereign BB 100% | Lancer-1 BC 100% [intercept] | Lancer-2 BC 100% [intercept] | Lancer-3 BC 100% [intercept] | Falchion-1 DD 100% [present] | Falchion-2 DD 100% [intercept]
+Hits: A:Dart-5>B:Falchion-1 torp x1 | A:Dart-6>B:Falchion-1 torp x1
+Kills: none
+Fire: A 0 slugs/0 hit, 8 torps/2 impact, PD downed 0 torps ; B 5 slugs/0 hit, 0 torps/0 impact, PD downed 5 torps
+A admiral: All Darts continue closing on the enemy formation (currently ~200km, closing 4km/s). This checkpoint: fire a SYNCHRONIZED full torpedo sa...
+B admiral: HOLD THE PD WALL AND CLOSE. Do not string out — keep all six hulls mutually inside point-defense range on the enemy threat axis. Focus fi...
+=== CP 6 | t=180s | spend $2.38/$6.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO 100% | Dart-2 CO 100% | Dart-3 CO 100% | Dart-4 CO 100% | Dart-5 CO 100% | Dart-6 CO 100% | Dart-7 CO 100% | Dart-8 CO 100%
+BETA deepseek-v4.1-flash: 5/6 alive, hull 83% | Sovereign BB 100% [intercept] | Lancer-1 BC 100% [present] | Lancer-2 BC 100% [present] | Lancer-3 BC 100% [wobble] | Falchion-1 DD DEAD@150s | Falchion-2 DD 100% [wobble]
+Hits: A:Dart-7>B:Falchion-1 torp x1 | A:Dart-8>B:Falchion-1 torp x1 | B:Sovereign>A:Dart-1 gun x1
+Kills: B:Falchion-1 crippled by A:Dart-7 (detonates in 26s) @150s ; B:Falchion-1 by A:Dart-7 (reactor_destroyed) @150s
+Fire: A 0 slugs/0 hit, 8 torps/2 impact, PD downed 0 torps ; B 5 slugs/1 hit, 0 torps/0 impact, PD downed 5 torps
+A admiral: Falchion-1 is down. Continue closing on the enemy formation - all ships INTERCEPT toward center of mass. Existing torpedoes are chewing o...
+B admiral: Hold the PD wall — all 13 turrets massed on the inbound torpedo corridor. Ships under torpedo attack (OCS Sovereign, OCS Lancer-1, OCS La...
+=== CP 7 | t=210s | spend $2.79/$6.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO 100% [intercept] | Dart-2 CO 100% [intercept] | Dart-3 CO 100% [intercept] | Dart-4 CO 100% [intercept] | Dart-5 CO 100% [intercept] | Dart-6 CO 100% [intercept] | Dart-7 CO 100% [intercept] | Dart-8 CO 100% [intercept]
+BETA deepseek-v4.1-flash: 5/6 alive, hull 83% | Sovereign BB 100% [wobble] | Lancer-1 BC 100% [wobble] | Lancer-2 BC 100% [wobble] | Lancer-3 BC 100% [wobble] | Falchion-1 DD DEAD@150s | Falchion-2 DD 100% [present]
+Hits: B:Sovereign>A:Dart-1 gun x6 | B:Lancer-2>A:Dart-1 gun x2 | B:Lancer-3>A:Dart-2 gun x2 | A:Dart-3>B:Lancer-1 torp x1 | A:Dart-7>B:Lancer-1 torp x1 | +9 more
+Kills: none
+Fire: A 0 slugs/0 hit, 8 torps/7 impact, PD downed 0 torps ; B 24 slugs/14 hit, 0 torps/0 impact, PD downed 7 torps
+A admiral: We are now in knife-fight range (5-25km) with the enemy formation. Finish off OCS Falchion-2 (already taking torpedo hits) with remaining...
+B admiral: (no new directive)
+=== CP 8 | t=240s | spend $3.20/$6.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO 100% | Dart-2 CO 100% | Dart-3 CO 100% | Dart-4 CO 100% | Dart-5 CO 100% | Dart-6 CO 100% | Dart-7 CO 100% [wobble] | Dart-8 CO 100%
+BETA deepseek-v4.1-flash: 5/6 alive, hull 83% | Sovereign BB 100% [coast] | Lancer-1 BC 100% [wobble] | Lancer-2 BC 100% [wobble] | Lancer-3 BC 100% | Falchion-1 DD DEAD@150s | Falchion-2 DD 100%
+Hits: A:Dart-7>B:Falchion-2 torp x2 | A:Dart-8>B:Falchion-2 torp x2 | B:Lancer-3>A:Dart-2 gun x2 | A:Dart-2>B:Lancer-2 torp x1
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/5 impact, PD downed 0 torps ; B 19 slugs/2 hit, 0 torps/0 impact, PD downed 4 torps
+A admiral: We overshot the enemy formation and are now separating at ~4.6 km/s - do NOT fire torpedoes into a receding fleet, they'll be wasted. All...
+B admiral: (no new directive)
+=== CP 9 | t=270s | spend $3.64/$6.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO 100% | Dart-2 CO 100% | Dart-3 CO 100% | Dart-4 CO 100% | Dart-5 CO 100% | Dart-6 CO 100% | Dart-7 CO 100% | Dart-8 CO 100% [intercept]
+BETA deepseek-v4.1-flash: 5/6 alive, hull 83% | Sovereign BB 100% [wobble] | Lancer-1 BC 100% [wobble] | Lancer-2 BC 100% [wobble] | Lancer-3 BC 100% [intercept] | Falchion-1 DD DEAD@150s | Falchion-2 DD 100% [intercept]
+Hits: B:Lancer-2>A:Dart-1 spinal x1
+Kills: none
+Fire: A 0 slugs/0 hit, 8 torps/0 impact, PD downed 0 torps ; B 25 slugs/1 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Enemy fleet is fleeing but still within torpedo envelope (139-230km). Concentrate ALL corvettes on OCS Falchion-2 (destroyer, only 2 PD t...
+B admiral: ALL SHIPS: EVADE NOW. Ten blinded ballistic torpedo wrecks are inbound on every hull — PD has already killed their seekers, so only maneu...
+=== CP 10 | t=300s | spend $4.06/$6.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO 100% | Dart-2 CO 100% | Dart-3 CO 100% | Dart-4 CO 100% | Dart-5 CO 100% | Dart-6 CO 100% | Dart-7 CO 100% | Dart-8 CO 100% [wobble]
+BETA deepseek-v4.1-flash: 5/6 alive, hull 83% | Sovereign BB 100% [wobble] | Lancer-1 BC 100% [wobble] | Lancer-2 BC 100% [wobble] | Lancer-3 BC 100% [wobble] | Falchion-1 DD DEAD@150s | Falchion-2 DD 100% [run]
+Hits: B:Lancer-3>A:Dart-2 gun x2
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/2 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Enemy fleet is fleeing (all separating ~2-3 km/s) but we have 7 torpedoes already inbound on OCS Falchion-2 - stay the course to keep it...
+B admiral: STALEMATE HOLD — NO PURSUIT. The enemy swarm is separating at 1.7-3.8 km/s; our 1.0-1.5g hulls cannot catch 3.0g corvettes, so do NOT bur...
+=== CP 11 | t=330s | spend $4.29/$6.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO 100% | Dart-2 CO 100% | Dart-3 CO 100% | Dart-4 CO 100% | Dart-5 CO 100% | Dart-6 CO 100% | Dart-7 CO 100% | Dart-8 CO 100%
+BETA deepseek-v4.1-flash: 5/6 alive, hull 83% | Sovereign BB 100% [wobble] | Lancer-1 BC 100% [wobble] | Lancer-2 BC 100% [wobble] | Lancer-3 BC 100% [wobble] | Falchion-1 DD DEAD@150s | Falchion-2 DD 100% [evade]
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 4 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 3 torps
+A admiral: Reject the enemy's draw - we have 18 torpedoes remaining to their 0, and Falchion-2 already has 8 inbound torpedoes that will finish it....
+B admiral: PHASE 3 — HOLD THE WALL, RIDE OUT THE TORPEDO WAVE. Enemy corvettes are separating at 1-2.7 km/s and our 1.0-1.5g hulls cannot catch 3.0g...
+=== CP 12 | t=360s | spend $4.67/$6.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO 100% [intercept] | Dart-2 CO 100% | Dart-3 CO 100% | Dart-4 CO 100% | Dart-5 CO 100% | Dart-6 CO 100% | Dart-7 CO 100% | Dart-8 CO 100%
+BETA deepseek-v4.1-flash: 5/6 alive, hull 83% | Sovereign BB 100% | Lancer-1 BC 100% [wobble] | Lancer-2 BC 100% [wobble] | Lancer-3 BC 100% [wobble] | Falchion-1 DD DEAD@150s | Falchion-2 DD 100% [run]
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 7 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 5 torps
+A admiral: We are winning decisively (22 torpedoes in flight vs 0 enemy). Reject the draw. Continue closing the range as a tight group toward the en...
+B admiral: HOLD THE WALL — do not chase. The swarm is separating at 0.3-1.9 km/s and 3.0g corvettes cannot be run down by our 1.0-2.0g hulls; pursui...
+=== RESULT | t=360s | after CP 12 | spend $4.67/$6.00 ===
+Winner: NONE - RuntimeError: Spending ceiling reached; battle stopped and partial replay saved
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO 100% [intercept] | Dart-2 CO 100% | Dart-3 CO 100% | Dart-4 CO 100% | Dart-5 CO 100% | Dart-6 CO 100% | Dart-7 CO 100% | Dart-8 CO 100%
+BETA deepseek-v4.1-flash: 5/6 alive, hull 83% | Sovereign BB 100% | Lancer-1 BC 100% [wobble] | Lancer-2 BC 100% [wobble] | Lancer-3 BC 100% [wobble] | Falchion-1 DD DEAD@150s | Falchion-2 DD 100% [run]
+Final interval - Hits: none
+Final interval - Kills: none
+Final interval - Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+Spend: $4.6740 reported, $4.6786 committed of $6.00 limit, 350 model calls
+Recording: /home/plmch/ai-commanders/visualizer/public/recordings/sonnet5_vs_dsv41flash_150pt_20260926.json
