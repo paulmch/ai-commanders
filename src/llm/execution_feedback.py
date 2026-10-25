@@ -149,12 +149,12 @@ def execution_feedback(simulation: Any, ship_ids: Iterable[str]) -> str:
             lines.append(line + ".")
         helm = latest.get((sid, "helm"))
         if helm is not None:
-            lines.append(f"  {prefix}helm (T+{helm.timestamp:.0f}): {_helm_text(helm.data)}")
+            lines.append(f"  {prefix}helm (since T+{helm.timestamp:.0f}): {_helm_text(helm.data)}")
         for (ship_id, slot), event in sorted(latest.items(), key=lambda kv: kv[0][1]):
             if ship_id != sid or slot == "helm":
                 continue
             target = _name(simulation, event.target_id) if event.target_id else None
-            lines.append(f"  {prefix}{slot} (T+{event.timestamp:.0f}): "
+            lines.append(f"  {prefix}{slot} (since T+{event.timestamp:.0f}): "
                          f"{_weapon_text(event.data, target)}")
     for event in problems[-MAX_PROBLEMS:]:
         prefix = f"{_name(simulation, event.ship_id)} " if multi else ""

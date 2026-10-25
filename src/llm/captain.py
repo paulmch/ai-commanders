@@ -2553,6 +2553,9 @@ class LLMCaptain:
         """
         if not self.config.has_torpedoes or not self.config.fleet_data or not enemies:
             return
+        remaining = getattr(ship, "torpedoes_remaining", None)
+        if isinstance(remaining, (int, float)) and remaining <= 0:
+            return  # magazine empty: no launch to plan
         infos = {e["ship_id"]: e for e in status.get("enemies", [])}
         nearest = sorted(enemies, key=lambda e: (e.position - ship.position).magnitude)
         for e in nearest[:MAX_TORPEDO_SOLUTIONS]:

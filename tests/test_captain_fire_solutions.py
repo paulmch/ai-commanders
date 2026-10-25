@@ -280,7 +280,7 @@ class TestExecutionFeedback:
                        {"weapon_slot": "weapon_0", "reason": "probability_gate",
                         "hit_probability": 0.18, "min_hit_probability": 0.3})
         text = execution_feedback(sim, ["alpha_1"])
-        assert "weapon_0 (T+0): held: P(hit) 0.18 below your 0.30 gate" in text
+        assert "weapon_0 (since T+0): held: P(hit) 0.18 below your 0.30 gate" in text
         assert "{" not in text
 
     def test_admiral_view_prefixes_ship_names(self, fleet):
