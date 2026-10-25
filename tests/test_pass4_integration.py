@@ -170,3 +170,38 @@ class TestDuelShipsCarryTheirNames:
         tactical = runner.alpha_captain._build_tactical_status(
             sim.get_ship("alpha"), sim.get_ship("beta"), sim)
         assert [e["name"] for e in tactical["enemies"]] == ["HFS Hammer"]
+
+
+class TestMcpCommandFeedback:
+    """An MCP commander's set_maneuver is only checked statically when it is
+    queued; the engine applies it at ready(). A rejection there (INTERCEPT
+    with no target, a toward_ship that does not resolve) and the engine's
+    notes (HOLD_RANGE latching its range) reached only the server console -
+    the commander was told 'Maneuver set'. They now ride the next state."""
+
+    def test_rejections_and_notes_reach_the_next_state(self):
+        from tests.test_maneuver_tools import FLEET, _sim
+        from src.llm.mcp_controller import (
+            MCPController, MCPControllerConfig, apply_mcp_commands_to_simulation)
+        from src.llm.mcp_state import MCPCommand, MCPCommandType
+        sim = _sim()
+        results = apply_mcp_commands_to_simulation([
+            MCPCommand(MCPCommandType.SET_MANEUVER, ship_id="alpha_1",
+                       parameters={"maneuver_type": "INTERCEPT"}),
+            MCPCommand(MCPCommandType.SET_MANEUVER, ship_id="alpha_2",
+                       parameters={"maneuver_type": "HOLD_RANGE", "target_id": "beta_2"}),
+        ], sim, "alpha")
+        controller = MCPController(MCPControllerConfig(faction="alpha"), FLEET)
+        assert controller.build_state_for_mcp(sim, []).to_dict()["command_feedback"] == []
+        controller.record_command_results(results, sim.current_time)
+        captains = [types.SimpleNamespace(ship_id=sid, config=types.SimpleNamespace(
+            ship_type=sim.get_ship(sid).ship_type, name=sid)) for sid in ("alpha_1", "alpha_2")]
+        feedback = controller.build_state_for_mcp(sim, captains).to_dict()["command_feedback"]
+        rejected = [f for f in feedback if f["status"] == "rejected"]
+        noted = [f for f in feedback if f["status"] == "applied"]
+        assert [(f["ship_id"], f["command"]) for f in rejected] == [("alpha_1", "set_maneuver")]
+        assert "needs target_id" in rejected[0]["error"]
+        assert [f["ship_id"] for f in noted] == ["alpha_2"] and "km now" in noted[0]["notes"][0]
+        # The next checkpoint's results replace them.
+        controller.record_command_results({"applied": [], "errors": []}, 30.0)
+        assert controller.build_state_for_mcp(sim, captains).to_dict()["command_feedback"] == []

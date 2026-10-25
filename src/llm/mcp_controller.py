@@ -219,6 +219,9 @@ class MCPController:
         # Pending message to enemy (via chat system)
         self._pending_enemy_message: Optional[str] = None
 
+        # Engine verdicts on the last applied commands (record_command_results)
+        self.command_feedback: List[Dict[str, Any]] = []
+
         # Ship mappings
         self._ship_id_to_name: Dict[str, str] = {}
         self._ship_name_to_id: Dict[str, str] = {}
@@ -227,6 +230,26 @@ class MCPController:
     def name(self) -> str:
         """Get controller name."""
         return self.config.name
+
+    def record_command_results(self, results: Dict[str, Any], timestamp: float) -> None:
+        """
+        Keep what apply_mcp_commands_to_simulation made of this checkpoint's
+        commands for the next state snapshot (MCPBattleState.command_feedback):
+        every rejected command with its reason, and every applied one that
+        carries engine notes. Rejections used to reach only the server
+        console, so an MCP commander never learned an order was dropped.
+        """
+        feedback: List[Dict[str, Any]] = []
+        for entry in results.get("errors") or []:
+            feedback.append({"t": timestamp, "status": "rejected",
+                             "command": entry.get("command"), "ship_id": entry.get("ship_id"),
+                             "error": entry.get("error")})
+        for entry in results.get("applied") or []:
+            if entry.get("notes"):
+                feedback.append({"t": timestamp, "status": "applied",
+                                 "command": entry.get("command"), "ship_id": entry.get("ship_id"),
+                                 "notes": list(entry["notes"])})
+        self.command_feedback = feedback
 
     def set_ship_mapping(self, name_to_id: Dict[str, str]) -> None:
         """Set the mapping from ship names to IDs."""
@@ -327,6 +350,7 @@ class MCPController:
             is_battle_active=self.is_battle_active,
             checkpoint_number=self.checkpoint_number,
             enemy_proposed_draw=self.enemy_proposed_draw,
+            command_feedback=list(self.command_feedback),
         )
 
     def _build_friendly_ship_data(

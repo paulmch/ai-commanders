@@ -1308,10 +1308,14 @@ class LLMBattleRunner:
                 results = apply_mcp_commands_to_simulation(
                     mcp_commands, self.simulation, "alpha"
                 )
+                self.alpha_mcp.record_command_results(results, self.simulation.current_time)
 
                 if self.config.verbose and results.get("applied"):
                     for cmd_result in results["applied"]:
                         print(f"    Applied: {cmd_result}")
+                if self.config.verbose:
+                    for cmd_error in results.get("errors", []):
+                        print(f"    [MCP ERROR] {cmd_error}")
 
             elif self.alpha_admiral:
                 # LLM Admiral: use existing logic
@@ -1366,10 +1370,14 @@ class LLMBattleRunner:
                 results = apply_mcp_commands_to_simulation(
                     mcp_commands, self.simulation, "beta"
                 )
+                self.beta_mcp.record_command_results(results, self.simulation.current_time)
 
                 if self.config.verbose and results.get("applied"):
                     for cmd_result in results["applied"]:
                         print(f"    Applied: {cmd_result}")
+                if self.config.verbose:
+                    for cmd_error in results.get("errors", []):
+                        print(f"    [MCP ERROR] {cmd_error}")
 
             elif self.beta_admiral:
                 # LLM Admiral: use existing logic

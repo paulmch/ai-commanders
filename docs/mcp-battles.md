@@ -98,6 +98,10 @@ not stop there). `get_battle_state().range_control` lists ready-made
 headings per enemy group. `send_message` reaches the enemy commander, or with
 `recipient="all"` the enemy captains too.
 
+A tool reply only confirms that a command was queued; the engine applies it at
+`ready()`. The next `get_battle_state().command_feedback` lists any command it
+rejected, with the reason, and its notes on applied ones.
+
 ## Watch and inspect
 
 Start the viewer in another terminal:
