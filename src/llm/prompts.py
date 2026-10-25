@@ -954,20 +954,24 @@ GUN_PHYSICS_REFERENCE = """
 PROJECTILE PHYSICS (for your calculations):
 - Spinal round: 9.9 km/s → at 100km takes ~10s, at 200km ~20s, at 500km ~50s
 - Turret round: 6.0 km/s → at 100km takes ~17s, at 200km ~33s, at 500km ~83s
-- EVADE maneuver: cuts enemy hit probability by ~40% (x0.6 multiplier in the
-  fire-control model), via random jinking ~500m/s lateral
+- A round lands only if its target is still within ~0.5 km of the aim point when it
+  arrives, so FLIGHT TIME is what kills accuracy: a hull's unforeseen burns grow as
+  0.5*a*t^2, and a ship whose evasion is on (the EVADE maneuver, or any maneuver
+  with evade dodge/full) jinks off every round it sees coming - the longer the
+  flight, the surer the dodge. The EVADE maneuver also costs every round x0.6, even
+  point-blank (the evade overlay does not).
 - Your ship width: ~20m, length ~125m
 
-HIT PROBABILITY BY RANGE (spinal, 9.9 km/s, vs a non-evading destroyer):
-- 50km: ~82% - knife fight, almost guaranteed hits
-- 100km: ~64% - close combat, most shots land
-- 200km: ~39% - medium range, and already worse than a coin flip
-- 400km: ~17% - long range, mostly misses
-- 600km+: ~10% - sniping, lucky hits only
-Turrets (6.0 km/s) are worse at every range, and evasion multiplies whatever is left
-by 0.6: an evading target at 200km is ~20% for turrets, ~23% for the spinal.
-- Closing velocity improves hit chance (harder to dodge)
-- Larger hulls are easier to hit; corvettes are much harder than dreadnoughts
+HIT PROBABILITY PER ROUND vs a destroyer (spinal 9.9 km/s / turret 6.0 km/s):
+                   50km    100km   150km   200km   300km   400km
+- holding course:  82/79%  64/57%  48/37%  36/20%  18/4%   7/1%
+- evade dodge:     82/77%  60/29%  30/5%   10/1%   1/0%    0/0%
+- EVADE maneuver:  49/46%  36/17%  18/3%   6/1%    1/0%    0/0%
+Agile hulls escape sooner (a dodging frigate: spinal 46% at 100km, 14% at 150km),
+heavy ones later (a dodging battleship: 38% at 200km, 9% at 300km). The P(hit) on
+your ENEMIES lines is this model for the live geometry - fire on it, and close range
+before you shoot at a dodger.
+- Closing velocity improves hit chance (shorter flight, less time to dodge)
 - TO WIN: Close range aggressively OR have overwhelming accuracy advantage
 """
 
@@ -2211,7 +2215,8 @@ def format_enemy_contacts(
                        is not None else "")
                     for f in forecasts))
     if has_guns and any(e.get("weapon_hit_forecasts") for e in enemies):
-        lines.append("  (guns: P(hit) is the fire-control gate per shot now; shots counted for the next "
+        lines.append("  (guns: P(hit) is the fire-control gate per shot now - it already counts where his "
+                     "maneuvering and dodging can take him during the round's flight; shots counted for the next "
                      f"{decision_interval_s:g} s incl. salvo cooldown, if aim and evasion persist)")
     return "\n".join(lines)
 
@@ -2661,8 +2666,13 @@ GUNNERY:
 - High closing velocity = harder to hit (brief engagement window); 0 km/s relative and
   no evasion = sitting duck. Sweet spot: 1-3 km/s relative with active maneuvering.
 - Spinal weapons need nose-on alignment (<30 deg to target); turrets fire over a 180 deg arc.
-- Cross-section: nose-on = tiny target, lateral = 5-10x easier to hit. Keep enemies in
-  FRONT of your ships; if one flanks, reorient the affected ships (PADLOCK toward it).
+- Range is accuracy: a round hits only if its target is still near the aim point when it
+  arrives, and a ship flying EVADE or evade dodge/full jinks off rounds it sees coming.
+  Per-round P(hit) vs a dodging destroyer: spinal 60% at 100 km, 10% at 200 km, 1% at
+  300 km. Do not plan gun fights at dodgers beyond ~150 km.
+- Cross-section matters less: broadside is ~1.5x the hit chance of nose-on at 200 km
+  (~1.2x at 100 km). Keep enemies in FRONT of your ships; if one flanks, reorient the
+  affected ships (PADLOCK toward it).
 - Weapon modes: FIRE_IMMEDIATE (close range), FIRE_WHEN_OPTIMAL (recommended),
   FIRE_AT_RANGE (harassing fire), HOLD_FIRE (heat management).
 - Target priority: CLOSING targets first (committed); a SEPARATING ship (5+ km/s) is

@@ -167,12 +167,18 @@ class TestEvasionClaimMatchesFireControl:
                 target_is_evading=evading,
             ).hit_probability
 
+        # Without target motion this is the conversion part alone, where
+        # EVASIVE is a flat x0.6. (Since the 2026-10 fire-control
+        # recalibration evasion's main effect - jinking off rounds during their
+        # flight - lives in the track part, and the doctrine quotes it as the
+        # per-range table bound in test_prompt_structure; the doctrine no
+        # longer calls EVADE a flat "40%" cut.)
         ratio = prob(True) / prob(False)
-        assert ratio > 0.55, "evasion is now stronger than the doctrine claims"
+        assert ratio == pytest.approx(0.6, abs=0.01)
 
         text = PROJECTILE_PHYSICS_REFERENCE.lower()
         assert "halves enemy hit probability" not in text
-        assert "40%" in text and "0.6" in text
+        assert "evade maneuver also costs every round x0.6" in " ".join(text.split())
 
 
 class TestFrameLabelsAreHonest:

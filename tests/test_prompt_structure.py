@@ -97,38 +97,85 @@ class TestPromptMatchesSimulation:
     def test_documented_hit_probabilities_match_the_model(self):
         """
         Regression: the doctrine quoted a hardcoded accuracy table that had drifted
-        from firecontrol.calculate_hit_probability - it promised ~50% at 200 km
-        where the model yields ~39%, biasing captains toward standing off at ranges
-        that are less effective than advertised.
+        from the fire-control model - first ~50% at 200 km where the model said
+        ~39%, then a model that itself ignored where the target goes during the
+        flight (captains were shown 12-19% at 435-490 km while 0/609 rounds
+        beyond 200 km landed on dodging targets). Every number in the table is
+        the live CombatSimulation.gun_firing_solution - the FIRE_WHEN_OPTIMAL
+        gate - for a destroyer holding course, flying PADLOCK with evade
+        'dodge', or flying the EVADE maneuver (ManeuverType.EVASIVE; the 2026-10
+        recalibration moved them all;
+        see scripts/fire_control_calibration.py).
         """
-        from src.firecontrol import calculate_hit_probability
-        from src.physics import Vector3D
-        from src.simulation import create_ship_from_fleet_data
-        from src.llm.prompts import PROJECTILE_PHYSICS_REFERENCE
+        from src.llm.prompts import ADMIRAL_GUN_DOCTRINE, PROJECTILE_PHYSICS_REFERENCE
 
-        with open("data/fleet_ships.json") as f:
-            fleet = json.load(f)
-        target = create_ship_from_fleet_data("t", "destroyer", "beta", fleet)
+        def flat(text):
+            return " ".join(text.split())
 
-        documented = {50: 82, 100: 64, 200: 39, 400: 17, 600: 10}
-        for range_km, claimed in documented.items():
-            solution = calculate_hit_probability(
-                shooter_position=Vector3D(0, 0, 0),
-                shooter_velocity=Vector3D(0, 0, 0),
-                target_position=Vector3D(range_km * 1000, 0, 0),
-                target_velocity=Vector3D(0, 0, 0),
-                target_geometry=target.geometry,
-                target_forward=Vector3D(-1, 0, 0),
-                muzzle_velocity_kps=9.9,
-                target_is_evading=False,
-            )
-            actual = solution.hit_probability * 100
-            assert abs(actual - claimed) <= 3.0, (
-                f"Doctrine tells captains ~{claimed}% at {range_km} km but the "
-                f"simulation computes {actual:.1f}%. Update the table in "
-                f"PROJECTILE_PHYSICS_REFERENCE or the accuracy model."
-            )
-            assert f"{claimed}%" in PROJECTILE_PHYSICS_REFERENCE
+        doctrine = flat(PROJECTILE_PHYSICS_REFERENCE)
+        ranges = (50, 100, 150, 200, 300, 400)
+        table = {
+            "holding course": ((82, 79), (64, 57), (48, 37), (36, 20), (18, 4), (7, 1)),
+            "evade dodge": ((82, 77), (60, 29), (30, 5), (10, 1), (1, 0), (0, 0)),
+            "EVADE maneuver": ((49, 46), (36, 17), (18, 3), (6, 1), (1, 0), (0, 0)),
+        }
+        for mode, cells in table.items():
+            row = f"- {mode}: " + " ".join(f"{s}/{t}%" for s, t in cells)
+            assert row in doctrine, f"doctrine row drifted: {row!r}"
+            for range_km, (spinal, turret) in zip(ranges, cells):
+                for muzzle, claimed in ((9.9, spinal), (6.0, turret)):
+                    actual = _doctrine_p_hit("destroyer", mode, range_km, muzzle) * 100
+                    assert abs(actual - claimed) <= 1.0, (
+                        f"Doctrine tells captains {claimed}% ({mode}, {range_km} km, "
+                        f"{muzzle} km/s) but the gate computes {actual:.1f}%. Update "
+                        f"GUN_PHYSICS_REFERENCE or the fire-control model.")
+        examples = (
+            ("frigate", 100, 46, "a dodging frigate: spinal 46% at 100km"),
+            ("frigate", 150, 14, "14% at 150km"),
+            ("battleship", 200, 38, "a dodging battleship: 38% at 200km"),
+            ("battleship", 300, 9, "9% at 300km"),
+        )
+        for hull, range_km, claimed, text in examples:
+            assert text in doctrine
+            actual = _doctrine_p_hit(hull, "evade dodge", range_km, 9.9) * 100
+            assert abs(actual - claimed) <= 1.0, (hull, range_km, actual)
+        assert "x0.6" in doctrine  # EVADE's conversion penalty (firecontrol)
+
+        admiral = flat(ADMIRAL_GUN_DOCTRINE)
+        assert "spinal 60% at 100 km, 10% at 200 km, 1% at 300 km" in admiral
+        for range_km, claimed in ((100, 60), (200, 10), (300, 1)):
+            actual = _doctrine_p_hit("destroyer", "evade dodge", range_km, 9.9) * 100
+            assert abs(actual - claimed) <= 1.0, (range_km, actual)
+        assert "broadside is ~1.5x the hit chance of nose-on at 200 km (~1.2x at 100 km)" in admiral
+        for range_km, claimed in ((200, 1.5), (100, 1.2)):
+            ratio = (_doctrine_p_hit("destroyer", "holding course", range_km, 9.9, broadside=True)
+                     / _doctrine_p_hit("destroyer", "holding course", range_km, 9.9))
+            assert abs(ratio - claimed) <= 0.06, (range_km, ratio)
+
+
+def _doctrine_p_hit(hull, mode, range_km, muzzle_kps, broadside=False):
+    """The gate's P(hit) for a battleship's gun with this muzzle velocity at a
+    stationary target `range_km` out, nose-on unless broadside."""
+    from src.physics import Vector3D
+    from src.simulation import CombatSimulation, Maneuver, ManeuverType, create_ship_from_fleet_data
+
+    with open("data/fleet_ships.json") as f:
+        fleet = json.load(f)
+    sim = CombatSimulation(seed=0)
+    shooter = create_ship_from_fleet_data("a", "battleship", "alpha", fleet,
+                                          position=Vector3D(0, 0, 0), forward=Vector3D(1, 0, 0))
+    target = create_ship_from_fleet_data(
+        "b", hull, "beta", fleet, position=Vector3D(range_km * 1000.0, 0, 0),
+        forward=Vector3D(0, 1, 0) if broadside else Vector3D(-1, 0, 0))
+    sim.add_ship(shooter)
+    sim.add_ship(target)
+    if mode == "evade dodge":
+        target.current_maneuver = Maneuver(ManeuverType.PADLOCK, 0.0, target_id="a", evade="dodge")
+    elif mode == "EVADE maneuver":
+        target.current_maneuver = Maneuver(ManeuverType.EVASIVE, 0.0)
+    weapon = next(w for w in shooter.weapons.values()
+                  if abs(w.weapon.muzzle_velocity_kps - muzzle_kps) < 1e-9)
+    return sim.gun_firing_solution(shooter, target, weapon).hit_probability
 
 
 class TestCacheRequestShape:
