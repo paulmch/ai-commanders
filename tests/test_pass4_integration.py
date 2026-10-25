@@ -78,3 +78,19 @@ class TestForceRetryNamesOnlyRealTools:
     def test_gun_hull_keeps_set_weapons_order(self):
         text = LLMBattleRunner._force_retry_text(self._captain("destroyer", False))
         assert "set_weapons_order" in text and "launch_torpedo" not in text
+
+
+class TestManeuverTargetsAcceptLabels:
+    """Admirals write maneuver targets as 'NAME [id]' (the label every turn
+    state uses); battle 2026-10-25 had a PADLOCK order rejected for it."""
+
+    def test_label_form_resolves_by_id(self):
+        from tests.test_maneuver_tools import _sim
+        from src.llm.maneuver_orders import resolve_ship
+        sim = _sim()
+        assert resolve_ship(sim, "alpha_1", "OCS Falchion-2 [beta_2]").ship_id == "beta_2"
+        # The id inside the brackets wins over the name in front of it.
+        assert resolve_ship(sim, "alpha_1", "OCS Falchion-1 [beta_2]").ship_id == "beta_2"
+        # Unknown id: fall back to the name.
+        assert resolve_ship(sim, "alpha_1", "OCS Falchion-1 [nope]").ship_id == "beta_1"
+        assert resolve_ship(sim, "alpha_1", "[nope]") is None

@@ -140,6 +140,16 @@ def resolve_ship(simulation: Any, own_ship_id: str, ref: Any) -> Optional[Any]:
         return None
     pools = [list(simulation.get_enemy_ships(own_ship_id)),
              list(simulation.get_friendly_ships(own_ship_id))]
+    # The label form the turn states teach, "OCS Lancer-2 [beta_2]": the id wins.
+    if wanted.endswith("]") and "[" in wanted:
+        label_id = wanted[wanted.rindex("[") + 1:-1].strip()
+        for pool in pools:
+            for ship in pool:
+                if str(getattr(ship, "ship_id", "")).lower() == label_id:
+                    return ship
+        wanted = wanted[:wanted.rindex("[")].strip()
+        if not wanted:
+            return None
     for pool in pools:
         for ship in pool:
             if wanted in _ship_names(ship):
