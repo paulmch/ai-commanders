@@ -148,3 +148,25 @@ class TestMcpOrdnanceSources:
         assert [(t["source_ship"], t["source_name"]) for t in torps] == [("beta_1", "OCS beta_1")]
         slugs = controller._build_projectile_data(sim)
         assert [(p["source_ship"], p["source_name"]) for p in slugs] == [("beta_1", "OCS beta_1")]
+
+
+class TestDuelShipsCarryTheirNames:
+    """Every prompt labels other ships by ship.name; only the fleet setup set
+    it, so a 1v1 captain's ENEMIES line read 'beta Destroyer'."""
+
+    def test_duel_enemy_is_labelled_by_its_name(self):
+        from unittest.mock import Mock
+        from src.llm.battle_runner import BattleConfig
+        from src.llm.captain import LLMCaptainConfig
+        fleet = load_fleet_data()
+        config = BattleConfig(verbose=False, record_battle=False, personality_selection=False)
+        alpha = LLMCaptainConfig(name="Captain A", ship_name="TIS Anvil", fleet_data=fleet)
+        beta = LLMCaptainConfig(name="Captain B", ship_name="HFS Hammer", fleet_data=fleet)
+        runner = LLMBattleRunner(config, alpha, beta, client=Mock())
+        runner.setup_battle(fleet)
+        sim = runner.simulation
+        assert sim.get_ship("alpha").name == "TIS Anvil"
+        assert sim.get_ship("beta").name == "HFS Hammer"
+        tactical = runner.alpha_captain._build_tactical_status(
+            sim.get_ship("alpha"), sim.get_ship("beta"), sim)
+        assert [e["name"] for e in tactical["enemies"]] == ["HFS Hammer"]
