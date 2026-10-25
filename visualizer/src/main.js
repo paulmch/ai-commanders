@@ -441,8 +441,9 @@ class BattleVisualizer {
     // Start animation loop
     this.startAnimationLoop();
 
-    // Live: join one checkpoint before the live edge (or at the start)
-    if (liveRunning) {
+    // Live: join one checkpoint before the live edge (or at the start); a
+    // battle that already ended is a replay, watched from the beginning
+    if (liveRunning && this.live.phase !== 'ended') {
       this.timeController.seek(liveStartTime(this.loader.duration, this.live.interval, this.live.status));
     }
 
