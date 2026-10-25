@@ -124,16 +124,24 @@ export function frameGroups(points, { fov = 55, aspect = 16 / 9, groupA = null, 
   if (fallbackDir && side.dot(fallbackDir) < 0) side.negate();
   const dir = side.multiplyScalar(Math.cos(FLEET_ELEVATION)).add(new THREE.Vector3(0, Math.sin(FLEET_ELEVATION), 0));
   const position = target.clone().addScaledVector(dir, distance);
-  if (shift) {
-    // Centre the action in the free area between the side panels: slide
-    // camera and target so the target appears at NDC x = shift
-    const halfWidth = distance * Math.tan(halfFov) * aspect;
-    const right = new THREE.Vector3().crossVectors(dir.clone().negate(), new THREE.Vector3(0, 1, 0)).normalize();
-    const slide = right.multiplyScalar(-shift * halfWidth);
-    target.add(slide);
-    position.add(slide);
-  }
-  return { target, position, radius };
+  return slideToFreeArea({ target, position, radius }, shift, fov, aspect);
+}
+
+/**
+ * Centre a framing in the area the side panels leave free: slide camera
+ * and target sideways so the target appears at NDC x = shift.
+ */
+export function slideToFreeArea(frame, shift, fov = 55, aspect = 16 / 9) {
+  if (!shift) return frame;
+  const view = frame.target.clone().sub(frame.position);
+  const distance = view.length();
+  const right = new THREE.Vector3().crossVectors(view, new THREE.Vector3(0, 1, 0));
+  if (right.lengthSq() < 1e-12) return frame;
+  const halfWidth = distance * Math.tan(THREE.MathUtils.degToRad(fov) / 2) * aspect;
+  const slide = right.normalize().multiplyScalar(-shift * halfWidth);
+  frame.target.add(slide);
+  frame.position.add(slide);
+  return frame;
 }
 
 /**
@@ -213,7 +221,7 @@ export class CameraController {
    * @param {Object} shipStates - interpolated states
    * @param {Object} ctx - {time (battle s), dt (wall s), torpedoes}
    */
-  updateDirector(shipStates, { time = 0, dt = 1 / 60, torpedoes = [], shift = 0 } = {}) {
+  updateDirector(shipStates, { time = 0, dt = 1 / 60, torpedoes = [], shift = 0, widthShare = 0.62 } = {}) {
     const d = this.director;
     if (!d.enabled || this.mode !== 'free') return false;
     if (d.hold === 'user' && performance.now() >= d.holdUntil) {
@@ -234,14 +242,17 @@ export class CameraController {
     }
     const cut = activeCut(d.cuts, time);
     this.director.shift = shift;
+    this.director.widthShare = widthShare;
     const desired = (cut && this.frameCut(cut, shipStates, time, torpedoes)) || this.frameFleets(shipStates, torpedoes);
     const changed = (d.shot?.kind || null) !== (cut?.kind || null) || d.shot?.subject !== cut?.subject;
     d.shot = cut;
     if (changed) this.onDirectorChange?.(this.directorState());
     if (!desired) return false;
-    // Cuts move briskly, the fleet view drifts; first frame after arming snaps close
+    // Cuts move briskly, the fleet view drifts; only the very first frame
+    // snaps (from the scene's default camera) - re-arming eases back
     const rate = cut ? 3.2 : 1.5;
-    const blend = d.written ? 1 - Math.exp(-rate * Math.min(0.1, Math.max(0, dt))) : 1;
+    const blend = d.everWritten ? 1 - Math.exp(-rate * Math.min(0.1, Math.max(0, dt))) : 1;
+    d.everWritten = true;
     this.camera.position.lerp(desired.position, blend);
     target.lerp(desired.target, blend);
     this.camera.lookAt(target);
@@ -283,7 +294,8 @@ export class CameraController {
       for (const effect of this.sceneManager.destructionEffects || []) points.push(effect.position.clone());
     }
     return frameGroups(points, { fov: this.camera.fov, aspect: this.camera.aspect, groupA, groupB,
-      fallbackDir: this._currentDir(), shift: this.director.shift || 0 });
+      fallbackDir: this._currentDir(), shift: this.director.shift || 0,
+      widthShare: this.director.widthShare || 0.62 });
   }
 
   frameCut(cut, shipStates, time, torpedoes) {
@@ -295,7 +307,8 @@ export class CameraController {
       const subject = cut.subject ? this.sceneManager.getShipPosition(cut.subject) : null;
       const groupA = shooters.points.length ? shooters.points.reduce((a, p) => a.add(p), new THREE.Vector3()).divideScalar(shooters.points.length) : null;
       return frameGroups(points, { fov: this.camera.fov, aspect: this.camera.aspect, groupA, groupB: subject,
-        fallbackDir: this._currentDir(), widthShare: 0.55, shift: this.director.shift || 0 });
+        fallbackDir: this._currentDir(), widthShare: 0.9 * (this.director.widthShare || 0.62),
+        shift: this.director.shift || 0 });
     }
     // Kill / detonation: a slow orbit round the dying hull
     const pos = this.sceneManager.getShipPosition(cut.subject);
@@ -311,7 +324,8 @@ export class CameraController {
     const turn = Math.atan2(view.x, view.z) - Math.atan2(offset.x, offset.z);
     if (cut._turn === undefined) cut._turn = turn;
     offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), cut._turn);
-    return { target: pos, position: pos.clone().addScaledVector(offset, radius), radius };
+    return slideToFreeArea({ target: pos, position: pos.clone().addScaledVector(offset, radius), radius },
+      this.director.shift || 0, this.camera.fov, this.camera.aspect);
   }
 
   /**
