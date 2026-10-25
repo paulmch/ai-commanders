@@ -73,7 +73,7 @@ def test_weapon_wait_is_transition_only_and_visible_without_recorder(fleet):
     states = [e for e in sim.events if e.event_type == SimulationEventType.WEAPON_STATUS]
     assert len(states) == len(sim.get_ship('a').weapons_orders)
     assert all(e.data['reason'] == 'hold_fire' for e in states)
-    assert 'hold_fire' in execution_feedback(sim, ['a'])
+    assert 'HOLD_FIRE (your order)' in execution_feedback(sim, ['a'])
     assert not execution_feedback(sim, ['b'])
 
 
