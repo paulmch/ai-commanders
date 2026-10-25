@@ -2680,7 +2680,9 @@ GUNNERY:
   arrives, and a ship flying EVADE or evade dodge/full jinks off rounds it sees coming.
   Per-round P(hit) vs a dodging destroyer: spinal 55% at 100 km, 10% at 200 km, 2% at
   300 km - and a dodger your fleet already keeps jinking is far harder (21% at 100 km).
-  Do not plan gun fights at dodgers beyond ~150 km.
+  Massed fire does not fix that: in a recorded fleet battle where every ship flew evade
+  dodge, 0 of 188 rounds at 100-300km landed where this model promised ~16. Do not plan
+  gun fights at dodgers beyond ~150 km.
 - Cross-section matters less: broadside is ~1.5x the hit chance of nose-on at 200 km
   (~1.2x at 100 km). Keep enemies in FRONT of your ships; if one flanks, reorient the
   affected ships (PADLOCK toward it).

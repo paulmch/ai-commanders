@@ -164,12 +164,15 @@ def test_the_flash_mirror_dodgers_are_the_known_residual(shots):
 
 
 def test_doctrine_states_the_residual(shots):
-    from src.llm.prompts import GUN_PHYSICS_REFERENCE
+    """Captains and admirals are told the measured residual, in numbers
+    bound to the fixture."""
+    from src.llm.prompts import ADMIRAL_GUN_DOCTRINE, GUN_PHYSICS_REFERENCE
     mid = [r for r in shots if r["source"] == FLASH_MIRROR and r["class"] == "dodge"
            and 100 <= r["range_km"] < 300]
     n, hits, new, _ = _summary(mid)
-    doctrine = " ".join(GUN_PHYSICS_REFERENCE.split())
-    assert f"{hits} of {n} rounds at 100-300km landed where this model promised ~{new:.0f}" in doctrine
+    claim = f"{hits} of {n} rounds at 100-300km landed where this model promised ~{new:.0f}"
+    for doctrine in (GUN_PHYSICS_REFERENCE, ADMIRAL_GUN_DOCTRINE):
+        assert claim in " ".join(doctrine.split())
 
 
 def test_mid_jink_dodgers_are_harder_and_the_forecast_says_so(shots):
