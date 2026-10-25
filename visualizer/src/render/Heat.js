@@ -20,7 +20,11 @@ import { getNoiseTexture } from './Textures.js';
 
 /** Panels unfold/fold over this many battle seconds. */
 export const RADIATOR_DEPLOY_S = 3.5;
-/** Stowed panels fold this far (rad) about their root hinge, flat on the hull. */
+/**
+ * Legacy fold: wings without a stow mode fold this far (rad) about their
+ * root hinge. Kit radiators (stow 'telescope') instead retract along their
+ * span into a cassette on the hull, keeping userData.stowScale of it.
+ */
 export const RADIATOR_FOLD_RAD = 1.42;
 /** Extended LithiumSpray rejection at the operating temperature (60 t x 13 kW/kg). */
 export const RAD_FULL_GW = 0.78;
@@ -420,9 +424,15 @@ export class HeatFX {
     const e = easeDeploy(p);
     const panels = ud.radiators;
     if (panels) {
+      // rotation.z / scale.y only: DamageFX owns rotation.x (buckled wings)
       for (let i = 0; i < panels.length; i++) {
         const u = panels[i].userData;
-        panels[i].rotation.z = u.deployedAngle + u.foldDirection * RADIATOR_FOLD_RAD * (1 - e);
+        if (u.stow === 'telescope') {
+          panels[i].rotation.z = u.deployedAngle;
+          panels[i].scale.y = u.stowScale + (1 - u.stowScale) * e;
+        } else {
+          panels[i].rotation.z = u.deployedAngle + u.foldDirection * RADIATOR_FOLD_RAD * (1 - e);
+        }
       }
     }
     const glow = radiatorGlow(frac, this._glow);
