@@ -98,6 +98,12 @@ class TestWhenToSignal:
             line = next(l for l in block.splitlines() if l.strip().startswith(kind))
             trigger, example = line.split(":", 1)
             assert len(trigger.split()) > 3 and example.count('"') == 2, kind
+        # The examples name no real hull: a model must not copy "Ward-1
+        # finishes Lancer-2" onto ships that exist in the battle.
+        from src.llm.fleet_draft import CLASS_NICKNAMES
+        for nickname in CLASS_NICKNAMES.values():
+            assert nickname not in block, nickname
+        assert "<friend> finishes <enemy A>" in block
         # Without peers there is no fleet_signal tool - and no fleet_signal text.
         solo = build_captain_doctrine(ship_type="destroyer", fleet_data=FLEET,
                                       tool_names=["set_maneuver"])

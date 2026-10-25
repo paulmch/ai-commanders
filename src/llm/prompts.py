@@ -1762,14 +1762,15 @@ def build_captain_doctrine(
         comms += [
             "- fleet_signal (read in FLEET NET next checkpoint; launches, kills, PD losses and target",
             "  switches already reach your fleet as ENGINE lines) - signal your INTENT, when you:",
-            "    TARGET_CLAIM  claim or split targets (focus fire, no overkill): \"Taking Lancer-3;"
-            " Ward-1 finishes Lancer-2.\"",
-            "    TOT_SYNC  launch for a joint arrival: eta_s=45 \"3 rounds on Lancer-2 - launch to"
+            "    TARGET_CLAIM  claim or split targets (focus fire, no overkill): \"Taking <enemy B>;"
+            " <friend> finishes <enemy A>.\"",
+            "    TOT_SYNC  launch for a joint arrival: eta_s=45 \"3 rounds on <enemy A> - launch to"
             " land with them.\"",
-            "    PD_COVER_REQUEST  face more rounds than your PD blinds: to=Ward-2 \"4 inbound,"
+            "    PD_COVER_REQUEST  face more rounds than your PD blinds: to=<friend> \"4 inbound,"
             " 2 turrets here - cover me.\"",
-            "    BREAKING_OFF  leave your post or the formation: \"Hull 30%, opening range - Ward-2"
-            " take my lane.\"",
+            "    BREAKING_OFF  leave your post or the formation: \"Hull 30%, opening range -"
+            " <friend> take my lane.\"",
+            "  (<enemy A> / <friend>: real ship names from your ENEMIES / FRIENDLIES.)",
         ]
     if "send_message" in names or not names:
         comms.append("- send_message: the OPEN channel - the ENEMY reads it (taunts, surrender "
