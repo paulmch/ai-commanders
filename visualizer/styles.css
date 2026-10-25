@@ -2143,6 +2143,12 @@ body {
   color: var(--text-primary);
 }
 .live-delib[hidden] { display: none; }
+/* With the decision panel open (the default spectator link) the card sits
+   in the strip between the registry and the panel */
+body.decisions-open .live-delib {
+  width: max(320px, min(560px, calc(100vw - 32px - 484px - 248px)));
+  transform: translateX(calc(-50% - 118px));
+}
 .ld-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; }
 .ld-kicker { font-family: var(--font-display); font-size: 11px; letter-spacing: 0.16em; color: var(--accent-warning); }
 .ld-cp { color: var(--text-secondary); letter-spacing: 0.08em; }

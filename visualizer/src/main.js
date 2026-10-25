@@ -584,7 +584,7 @@ class BattleVisualizer {
           this.pendingEvidenceFocus = null;
         }
         this.cameraController.update(this.currentState.ships,
-          { time: currentPlaybackTime, dt: deltaTime, torpedoes: this.currentState.torpedoes, shift: this.directorShift() });
+          { time: currentPlaybackTime, dt: deltaTime, torpedoes: this.currentState.torpedoes, ...this.directorFrame() });
 
         // Update selected ship telemetry
         if (this.selectedShipId && this.currentState.ships[this.selectedShipId]) {
@@ -652,26 +652,31 @@ class BattleVisualizer {
   }
 
   /**
-   * Where the auto director centres the action (NDC x): the middle of the
-   * view left free by the registry and any right-hand panel. Re-measured
-   * at most twice a second.
+   * Where the auto director puts the action: centred (NDC x `shift`) in the
+   * view left free by the registry and any right-hand panel, filling a
+   * matching share of the width. Re-measured at most twice a second.
    */
-  directorShift() {
+  directorFrame() {
     const now = performance.now();
-    if (this._shiftAt && now - this._shiftAt < 500) return this._shift;
-    this._shiftAt = now;
+    if (this._frameAt && now - this._frameAt < 500) return this._frame;
+    this._frameAt = now;
     const width = window.innerWidth || 1;
     const side = (id, onLeft) => {
       const el = document.getElementById(id);
-      if (!el || el.classList.contains('hidden') || el.offsetParent === null) return 0;
+      // getClientRects: empty when not rendered (offsetParent is null for
+      // the position:fixed sidebar even while it shows)
+      if (!el || el.hidden || el.classList.contains('hidden') || !el.getClientRects().length) return 0;
       const r = el.getBoundingClientRect();
       if (r.width <= 0 || r.height <= 0) return 0;
       return onLeft ? (r.right < width / 2 ? r.right : 0) : (r.left > width / 2 ? width - r.left : 0);
     };
     const left = side('leftSidebar', true);
     const right = Math.max(side('shipTelemetry', false), side('decisionPanel', false));
-    this._shift = (left - right) / width;
-    return this._shift;
+    const free = Math.max(0.3, (width - left - right) / width);
+    // 0.62 of the width with the registry alone (free ~0.85), scaled down
+    // when a right-hand panel narrows the view
+    this._frame = { shift: (left - right) / width, widthShare: 0.73 * free };
+    return this._frame;
   }
 
   /** A: arm the auto director (or switch it off when it is already flying). */

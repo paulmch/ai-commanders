@@ -61,6 +61,9 @@ export function avoidBlockers(edge, blockers, step = 18, tries = 24) {
   return edge;
 }
 
+/** Rendered and not hidden (offsetParent is null for position:fixed panels). */
+const shown = el => !!el && !el.hidden && !el.classList.contains('hidden') && el.getClientRects().length > 0;
+
 export class OffscreenIndicators {
   constructor({ onFleet, onShip } = {}) {
     this.root = document.createElement('div');
@@ -94,7 +97,7 @@ export class OffscreenIndicators {
     const boxes = [];
     for (const id of ['trackHud', 'viewControls', 'directorChip', 'liveHud', 'liveConnection']) {
       const el = document.getElementById(id);
-      if (!el || el.hidden || el.classList.contains('hidden') || el.offsetParent === null) continue;
+      if (!shown(el)) continue;
       const r = el.getBoundingClientRect();
       if (r.width > 0 && r.height > 0) boxes.push({ left: r.left - 8, top: r.top - 8, right: r.right + 8, bottom: r.bottom + 8 });
     }
@@ -105,13 +108,13 @@ export class OffscreenIndicators {
   insetRect(width, height) {
     const rect = { left: 16, top: 96, right: width - 16, bottom: height - 104 };
     const left = document.getElementById('leftSidebar');
-    if (left && left.offsetParent !== null) {
+    if (shown(left)) {
       const r = left.getBoundingClientRect();
       if (r.width > 0 && r.right < width / 2) rect.left = Math.max(rect.left, r.right + 10);
     }
     for (const id of ['shipTelemetry', 'decisionPanel']) {
       const panel = document.getElementById(id);
-      if (!panel || panel.classList.contains('hidden') || panel.offsetParent === null) continue;
+      if (!shown(panel)) continue;
       const r = panel.getBoundingClientRect();
       if (r.width > 0 && r.left > width / 2) rect.right = Math.min(rect.right, r.left - 10);
     }
