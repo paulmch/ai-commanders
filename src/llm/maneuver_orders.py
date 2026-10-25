@@ -1038,5 +1038,4 @@ def admiral_maneuver_lines(order: Any) -> List[str]:
     replaced = getattr(order, "replaces_fleet_order", None)
     if isinstance(replaced, str) and replaced:
         what += f" - for your ship INSTEAD of the fleet order {replaced}"
-    return [f"      >>> MANEUVER ORDER (ALREADY APPLIED to your ship): {what}. Keep it: "
-            f"calling set_maneuver/set_heading replaces it. Override only for a reason."]
+    return [f"      >>> MANEUVER ORDER (ALREADY APPLIED to your ship): {what}."]

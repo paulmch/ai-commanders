@@ -93,11 +93,11 @@ class TestWhenToSignal:
             ship_type="destroyer", fleet_data=FLEET, has_admiral=True,
             tool_names=["fleet_signal", "report_to_admiral", "set_maneuver"])
         block = system.split("COMMUNICATION (", 1)[1].split("OTHER:", 1)[0]
-        assert "target switches reach them automatically" in block
+        assert "target\n  switches already reach your fleet as ENGINE lines" in block
         for kind in ("TARGET_CLAIM", "TOT_SYNC", "PD_COVER_REQUEST", "BREAKING_OFF"):
             line = next(l for l in block.splitlines() if l.strip().startswith(kind))
-            example = block.splitlines()[block.splitlines().index(line) + 1]
-            assert " - " in line and '"' in example, kind
+            trigger, example = line.split(":", 1)
+            assert len(trigger.split()) > 3 and example.count('"') == 2, kind
         # Without peers there is no fleet_signal tool - and no fleet_signal text.
         solo = build_captain_doctrine(ship_type="destroyer", fleet_data=FLEET,
                                       tool_names=["set_maneuver"])

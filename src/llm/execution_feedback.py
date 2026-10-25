@@ -161,12 +161,17 @@ def execution_feedback(simulation: Any, ship_ids: Iterable[str]) -> str:
         helm = latest.get((sid, "helm"))
         if helm is not None:
             lines.append(f"  {prefix}helm (since T+{helm.timestamp:.0f}): {_helm_text(helm.data)}")
+        # Mounts in the same state share a line ("weapon_1, weapon_2 (since
+        # T+90): held: ...") - a battleship's four batteries used to print it 4x.
+        same: Dict[str, List[str]] = {}
         for (ship_id, slot), event in sorted(latest.items(), key=lambda kv: kv[0][1]):
             if ship_id != sid or slot == "helm":
                 continue
             target = _name(simulation, event.target_id) if event.target_id else None
-            lines.append(f"  {prefix}{slot} (since T+{event.timestamp:.0f}): "
-                         f"{_weapon_text(event.data, target)}")
+            text = f"(since T+{event.timestamp:.0f}): {_weapon_text(event.data, target)}"
+            same.setdefault(text, []).append(slot)
+        for text, slots in same.items():
+            lines.append(f"  {prefix}{', '.join(slots)} {text}")
     for event in problems[-MAX_PROBLEMS:]:
         prefix = f"{_name(simulation, event.ship_id)} " if multi else ""
         reason = event.data.get("reason") or ""
@@ -175,5 +180,6 @@ def execution_feedback(simulation: Any, ship_ids: Iterable[str]) -> str:
                      f"{str(event.data['status']).upper()}" + (f": {reason}" if reason else ""))
     if not lines:
         return ""
-    return ("ENGINE FEEDBACK (what your ship actually did; weapon policies persist, maneuvers and "
-            "queued launches expire at the next checkpoint):\n" + "\n".join(lines))
+    # What persists (weapon policies) and what expires (maneuvers, queued
+    # launches) is in the captain's cached doctrine (YOUR TURN).
+    return "ENGINE FEEDBACK (what your ship actually did):\n" + "\n".join(lines)

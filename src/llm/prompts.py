@@ -9,6 +9,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from enum import Enum
 
 import math
+import re
 
 try:
     from ..pointdefense import (
@@ -467,6 +468,7 @@ def format_enemy_weapons_summary(
     weapon_types: Optional[Dict[str, Any]] = None,
     torpedoes_remaining: Optional[int] = None,
     pd_operational: Optional[int] = None,
+    guns: bool = True,
 ) -> str:
     """
     Short armament summary for a hull: EVERY weapon type it mounts.
@@ -479,6 +481,8 @@ def format_enemy_weapons_summary(
 
     torpedoes_remaining / pd_operational: live counts when observed (the
     magazine total from the spec otherwise; PD shown as live/total).
+    guns=False leaves the gun mounts out (a compact ENEMIES line: they are
+    in the cached CLASS REFERENCE, the live threat in "guns ~N GJ/min").
     """
     counts: Dict[str, int] = {}
     order: List[str] = []
@@ -504,9 +508,9 @@ def format_enemy_weapons_summary(
             parts.append(f"{n}x Torpedo tube ({rounds} {left})")
         elif name == "PD" and pd_operational is not None:
             parts.append(f"PD {pd_operational}/{n}")
-        else:
+        elif guns or name == "PD":
             parts.append(f"{n}x {name}")
-    return ", ".join(parts) if parts else "Unknown armament"
+    return ", ".join(parts) if parts else ("Unknown armament" if guns else "")
 
 
 def class_reference_block(fleet_data: Optional[Dict[str, Any]]) -> str:
@@ -1145,6 +1149,12 @@ Every turn lists, in order: MY SHIP (your world position, velocity and nose - th
 set_heading uses), THREATS TO ME, ENEMIES, FRIENDLIES, RANGE CONTROL, ORDERS, FLEET NET /
 ENEMY TRANSMISSIONS, then your recent decisions, captain's log and ENGINE FEEDBACK (what
 your ship actually did with your last orders, and any call that was rejected).
+- ENEMIES: the full fire solution for your primary target and the {full_others} best others, one
+  compact line for the rest ({compact_solution}; mounts in CLASS REFERENCE); armor only
+  when damaged.{gun_legend}
+- FRIENDLIES: grouped by maneuver and target; hull 100% and PD intact unless shown.
+- ENGINE FEEDBACK: weapon policies persist; maneuvers and queued launches expire at the next
+  checkpoint.
 
 *** EXECUTE YOUR ORDERS WITH THE AVAILABLE TOOLS ***
 - EVERY decision needs at least one action tool: {action_tools}.
@@ -1152,9 +1162,9 @@ your ship actually did with your last orders, and any call that was rejected).
 - Renew set_maneuver or set_heading each checkpoint to keep maneuvering.
   When a maneuver expires, thrust stops; you coast with your existing momentum.
   MAINTAIN is a deliberate coast - call it when coasting IS the plan.
-  Exception: a HEADING ORDER from your admiral is already applied to your ship -
-  calling set_maneuver/set_heading REPLACES it (and breaks formation). Only override
-  it for a reason (e.g. EVADE an inbound torpedo).
+  Exception: a HEADING or MANEUVER ORDER from your admiral is already applied to your
+  ship - calling set_maneuver/set_heading REPLACES it (and breaks formation). Only
+  override it for a reason (e.g. EVADE an inbound torpedo).
 {execute_weapon_notes}Describing an action does not execute it. Use the corresponding tool.
 
 TIMING: You make ONE decision now. It is LOCKED for {decision_interval_s:g} seconds until next checkpoint.
@@ -1739,17 +1749,16 @@ def build_captain_doctrine(
     comms = ["COMMUNICATION (only when it changes what someone will do):"]
     if "fleet_signal" in names:
         comms += [
-            "- fleet_signal: your fleet reads it in FLEET NET next checkpoint. Launches, kills, PD",
-            "  losses and target switches reach them automatically (ENGINE lines) - signal the",
-            "  INTENT they cannot see, one call, when:",
-            "    TARGET_CLAIM - you claim a hull or split fire, for focus fire or to stop overkill:",
-            "      \"Taking Lancer-3; Lancer-2 is at 20% - Ward-1 alone finishes her.\"",
-            "    TOT_SYNC - you launch and want others to land together (eta_s = your impact):",
-            "      eta_s=45 \"3 rounds on Lancer-2 - launch to arrive with them.\"",
-            "    PD_COVER_REQUEST - torpedoes inbound that your own PD cannot blind (to= an escort):",
-            "      \"4 rounds from Lancer-4, I have 2 turrets - close to 50 km and cover me.\"",
-            "    BREAKING_OFF - you leave your post, target or the formation:",
-            "      \"Hull 30%, opening range - Ward-2 take my lane.\"",
+            "- fleet_signal (read in FLEET NET next checkpoint; launches, kills, PD losses and target",
+            "  switches already reach your fleet as ENGINE lines) - signal your INTENT, when you:",
+            "    TARGET_CLAIM  claim or split targets (focus fire, no overkill): \"Taking Lancer-3;"
+            " Ward-1 finishes Lancer-2.\"",
+            "    TOT_SYNC  launch for a joint arrival: eta_s=45 \"3 rounds on Lancer-2 - launch to"
+            " land with them.\"",
+            "    PD_COVER_REQUEST  face more rounds than your PD blinds: to=Ward-2 \"4 inbound,"
+            " 2 turrets here - cover me.\"",
+            "    BREAKING_OFF  leave your post or the formation: \"Hull 30%, opening range - Ward-2"
+            " take my lane.\"",
         ]
     if "send_message" in names or not names:
         comms.append("- send_message: the OPEN channel - the ENEMY reads it (taunts, surrender "
@@ -1784,6 +1793,14 @@ def build_captain_doctrine(
              if has_guns else "the enemy INTERCEPT/PADLOCK and your launches follow by default")
             + (" (launch_torpedo can take its own target_id)" if has_torps else "")),
         comms_block="\n".join(comms) + "\n",
+        full_others=FULL_SOLUTION_CONTACTS - 1,
+        compact_solution=" / ".join(
+            (["best P(hit) of a gun that bears"] if has_guns else [])
+            + (["torpedo verdict"] if has_torps else []))
+        or "no fire solution",
+        gun_legend=(f" Gun lines: P(hit) = the fire-control gate per shot now;\n  shots = your "
+                    f"chances in the next {decision_interval_s:g} s incl. salvo cooldown, if aim "
+                    f"and evasion persist." if has_guns else ""),
         action_tools=", ".join(actions),
         execute_weapon_notes="".join(f"{line}\n" for line in weapon_notes),
         decision_interval_s=decision_interval_s,
@@ -2158,6 +2175,46 @@ def _group_forecasts(forecasts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return list(grouped.values())
 
 
+# ENEMIES: full fire solutions for the primary target and the best others
+# (gun hulls: expected GJ in the window; launchers: torpedo verdict), one
+# compact line for every other contact. An 8v8 turn used to print a two-line
+# solution block for all 8 enemies (pass-4 follow-up: captain prompt size).
+FULL_SOLUTION_CONTACTS = 3
+_TORPEDO_VERDICT_RANK = {"REACHABLE": 0, "ESCAPABLE": 1, "OVERKILL": 2, "TOO CLOSE": 3,
+                         "UNREACHABLE": 4}
+
+
+def _gun_label(name: Any) -> str:
+    """'Coilgun Battery Mk3' -> 'Coilgun' (MY SHIP lists the full mount names)."""
+    return re.sub(r"\s+(?:Battery|Mk\s?\d+)\b", "", str(name)).strip() or str(name)
+
+
+def _expected_gj(e: Dict[str, Any]) -> float:
+    """GJ this hull's guns are expected to land on ``e`` in the window."""
+    return sum(float(f.get("shots") or 0) * float(f.get("expected_gj_per_shot") or 0.0)
+               for f in e.get("weapon_hit_forecasts") or [])
+
+
+def _full_solution_indices(enemies: List[Dict[str, Any]], has_guns: bool,
+                           has_torpedoes: bool) -> set:
+    """Which contacts get the full fire solution: the primary + the best others."""
+    if len(enemies) <= FULL_SOLUTION_CONTACTS:
+        return set(range(len(enemies)))
+    chosen = [i for i, e in enumerate(enemies) if e.get("is_primary_target")][:1]
+
+    def rank(i: int) -> Tuple[float, float, int]:
+        e = enemies[i]
+        torp = (_TORPEDO_VERDICT_RANK.get(e.get("torpedo_verdict") or "", 9)
+                if has_torpedoes and not has_guns else 0)
+        return (torp, -_expected_gj(e) if has_guns else 0.0, i)
+
+    for i in sorted((i for i in range(len(enemies)) if i not in chosen), key=rank):
+        if len(chosen) >= FULL_SOLUTION_CONTACTS:
+            break
+        chosen.append(i)
+    return set(chosen)
+
+
 def format_enemy_contacts(
     enemies: List[Dict[str, Any]],
     fleet_data: Optional[Dict[str, Any]] = None,
@@ -2169,15 +2226,19 @@ def format_enemy_contacts(
     ENEMIES: one line of live state per contact, then the fire solution that
     matters for THIS hull - a flown torpedo line (TOF, impact energy, PD
     cover, friendly rounds inbound, REACHABLE/...) on launchers, gun
-    forecasts on gun ships. Static class data is in the cached CLASS
-    REFERENCE.
+    forecasts on gun ships - for the primary target and the best others
+    (FULL_SOLUTION_CONTACTS). Every other contact is one compact line: the
+    torpedo verdict / P(hit) per gun, no body-frame words. The legend (what
+    P(hit) and shots mean, the window) and dir_to are in the cached doctrine;
+    static class data is in its CLASS REFERENCE.
     """
     if not enemies:
         return "ENEMIES: none detected"
     weapon_types = (fleet_data or {}).get("weapon_types", {})
-    lines = [f"ENEMIES ({len(enemies)}; dir_to = world unit vector from you to him - paste it "
-             "into set_heading):"]
-    for e in enemies:
+    full = _full_solution_indices(enemies, has_guns, has_torpedoes)
+    lines = [f"ENEMIES ({len(enemies)}):"]
+    for i, e in enumerate(enemies):
+        compact = i not in full
         sid = e.get("ship_id", "")
         stype = e.get("ship_type")
         cls = e.get("ship_class")
@@ -2190,89 +2251,123 @@ def format_enemy_contacts(
             line += f" | dir_to {_vec(e['dir_to'])}"
         angle = e.get("angle_deg")
         if angle is not None:
-            words = _body_words(e.get("relative_bearing_km"))
-            line += f", {angle:.0f}° off your nose" + (f" ({words})" if words else "")
+            words = "" if compact else _body_words(e.get("relative_bearing_km"))
+            line += (f", {angle:.0f}° off {'nose' if compact else 'your nose'}"
+                     + (f" ({words})" if words else ""))
         armor = e.get("armor") or {}
         nose = assess_armor_condition(armor.get("nose_damage_pct", 0))
         flank = assess_armor_condition(armor.get("lateral_damage_pct", 0))
-        cond = "armor intact" if nose == flank == "Intact" else f"nose {nose}, flank {flank}"
-        line += f" | hull {e.get('hull_percent', 100):.0f}%, {cond}"
+        line += f" | hull {e.get('hull_percent', 100):.0f}%"
+        if not nose == flank == "Intact":     # intact armor goes unsaid (doctrine)
+            line += f", nose {nose}, flank {flank}"
         spec = (fleet_data or {}).get("ships", {}).get(stype or "", {})
         if spec:
-            line += " | " + format_enemy_weapons_summary(
+            armament = format_enemy_weapons_summary(
                 spec.get("weapons", []), weapon_types,
                 torpedoes_remaining=e.get("torpedoes_remaining"),
-                pd_operational=e.get("pd_operational"))
+                pd_operational=e.get("pd_operational"), guns=not compact)
+            if armament:
+                line += " | " + armament
         threat = _enemy_threat_text(e)
         if threat:
             line += f" | {threat}"
         if e.get("has_us_targeted"):
             line += " | !! HAS YOU TARGETED"
-        lines.append(line)
-        if has_torpedoes:
-            sol = e.get("torpedo_solution")
+        sol = e.get("torpedo_solution") if has_torpedoes else None
+        forecasts = _group_forecasts(e.get("weapon_hit_forecasts") or []) if has_guns else []
+        if compact:
             if sol:
-                lines.append(f"    torpedo: {sol}")
-        if has_guns:
-            forecasts = _group_forecasts(e.get("weapon_hit_forecasts") or [])
+                verdict = e.get("torpedo_verdict") or re.split(r"[ :(|]", str(sol), 1)[0]
+                line += f" | torpedo {verdict}"
             if forecasts:
-                lines.append("    guns: " + " | ".join(
-                    f"{f['weapon_name']}{' x' + str(f['mounts']) if f['mounts'] > 1 else ''} "
-                    f"P(hit) {f['hit_probability']:.0%}, {f['shots']} shots/{f['window_s']:g}s = "
-                    f"{f['expected_hits']:.2f} hits"
-                    + (f", ~{f['expected_gj_per_shot']:.2f} GJ/shot" if f.get("expected_gj_per_shot")
-                       is not None else "")
-                    for f in forecasts))
-    if has_guns and any(e.get("weapon_hit_forecasts") for e in enemies):
-        lines.append("  (guns: P(hit) is the fire-control gate per shot now; shots counted for the next "
-                     f"{decision_interval_s:g} s incl. salvo cooldown, if aim and evasion persist)")
+                bearing = [f["hit_probability"] for f in forecasts if f["shots"]]
+                line += (f" | best P(hit) {max(bearing):.0%}" if bearing
+                         else " | no gun bears")
+            lines.append(line)
+            continue
+        lines.append(line)
+        if sol:
+            lines.append(f"    torpedo: {sol}")
+        if forecasts:
+            lines.append("    guns: " + " | ".join(
+                f"{_gun_label(f['weapon_name'])}{' x' + str(f['mounts']) if f['mounts'] > 1 else ''} "
+                f"P(hit) {f['hit_probability']:.0%}, {f['shots']} shots = "
+                f"{f['expected_hits']:.2f} hits"
+                + (f", ~{f['expected_gj_per_shot']:.2f} GJ/shot" if f.get("expected_gj_per_shot")
+                   is not None else "")
+                for f in forecasts))
     return "\n".join(lines)
+
+
+def _friendly_doing(f: Dict[str, Any]) -> Optional[str]:
+    """'INTERCEPT@40% -> OCS Lancer-1 [beta_1]' (None when not reported)."""
+    if "maneuver" not in f:
+        return None
+    text = _maneuver_text(f.get("maneuver"))
+    if f.get("target_name"):
+        text += f" -> {ship_ref(f['target_name'], f.get('target_id'))}"
+    return text
+
+
+def _friendly_line(f: Dict[str, Any], doing: bool = True) -> str:
+    line = ship_ref(f.get("name"), f.get("ship_id"))
+    if f.get("ship_type"):
+        line += f" {class_label(f['ship_type'])}"
+    line += f" | {f.get('distance_km', 0):.0f} km"
+    if f.get("dir_to"):
+        line += f" dir_to {_vec(f['dir_to'])}"
+    elif f.get("relative_bearing_km"):
+        b = f["relative_bearing_km"]
+        line += (f" ({abs(b.get('forward', 0)):.0f} km {'ahead' if b.get('forward', 0) >= 0 else 'behind'}, "
+                 f"{abs(b.get('starboard', 0)):.0f} km {'starboard' if b.get('starboard', 0) >= 0 else 'port'})")
+    elif f.get("relative_position"):
+        line += f" (world frame {_vec(f['relative_position'], '+.0f')} km)"
+    if f.get("rel_speed_kps") is not None:
+        line += f" | rel {f['rel_speed_kps']:.2f} km/s"
+    if doing and "maneuver" in f:
+        line += f" | {_friendly_doing(f)}"
+    if f.get("torpedoes_remaining") is not None:
+        line += f" | torps {f['torpedoes_remaining']}"
+        if f.get("rounds_in_flight"):
+            line += f", {f['rounds_in_flight']} in flight"
+            if f.get("first_impact_s") is not None:
+                line += f" (first lands ~{f['first_impact_s']:.0f} s)"
+    if f.get("pd_total") and f.get("pd_operational", f["pd_total"]) < f["pd_total"]:
+        line += f" | PD {f['pd_operational']}/{f['pd_total']}"
+    if round(float(f.get("hull_percent", 100) or 0)) < 100:
+        line += f" | hull {f['hull_percent']:.0f}%"
+    return line
 
 
 def format_friendlies(
     friendlies: List[Dict[str, Any]],
     umbrella: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """FRIENDLIES: who is where, doing what, at whom - and the PD over you."""
+    """
+    FRIENDLIES: who is where, doing what, at whom - and the PD over you.
+    Ships flying the same maneuver at the same target share one heading
+    line ("3 ships PADLOCK -> OCS Lancer-2 [beta_2]:"), which also shows the
+    fleet's fire split at a glance; hull and PD appear only when not intact.
+    """
     if not friendlies:
         return "FRIENDLIES: none"
-    head = "FRIENDLIES"
+    head = ""
     if umbrella:
         allies = umbrella.get("allies") or []
         total = umbrella.get("own", 0) + sum(n for _, n in allies)
-        head += (f" (PD umbrella over you: {total} turrets within {umbrella.get('range_km', 250):.0f} km"
-                 f" - yours {umbrella.get('own', 0)} + {len(allies)} "
-                 f"{'ship' if len(allies) == 1 else 'ships'})")
-    lines = [head + ":"]
+        head = (f"PD umbrella over you: {total} turrets within {umbrella.get('range_km', 250):.0f} km"
+                f" - yours {umbrella.get('own', 0)} + {len(allies)} "
+                f"{'ship' if len(allies) == 1 else 'ships'}; ")
+    lines = [f"FRIENDLIES ({head}hull 100% and PD intact unless shown):"]
+    groups: Dict[Optional[str], List[Dict[str, Any]]] = {}
     for f in friendlies:
-        line = f"  {ship_ref(f.get('name'), f.get('ship_id'))}"
-        if f.get("ship_type"):
-            line += f" {class_label(f['ship_type'])}"
-        line += f" | {f.get('distance_km', 0):.0f} km"
-        if f.get("dir_to"):
-            line += f" dir_to {_vec(f['dir_to'])}"
-        elif f.get("relative_bearing_km"):
-            b = f["relative_bearing_km"]
-            line += (f" ({abs(b.get('forward', 0)):.0f} km {'ahead' if b.get('forward', 0) >= 0 else 'behind'}, "
-                     f"{abs(b.get('starboard', 0)):.0f} km {'starboard' if b.get('starboard', 0) >= 0 else 'port'})")
-        elif f.get("relative_position"):
-            line += f" (world frame {_vec(f['relative_position'], '+.0f')} km)"
-        if f.get("rel_speed_kps") is not None:
-            line += f" | rel {f['rel_speed_kps']:.2f} km/s"
-        if "maneuver" in f:
-            line += f" | {_maneuver_text(f.get('maneuver'))}"
-            if f.get("target_name"):
-                line += f" -> {ship_ref(f['target_name'], f.get('target_id'))}"
-        if f.get("torpedoes_remaining") is not None:
-            line += f" | torps {f['torpedoes_remaining']}"
-            if f.get("rounds_in_flight"):
-                line += f", {f['rounds_in_flight']} in flight"
-                if f.get("first_impact_s") is not None:
-                    line += f" (first lands ~{f['first_impact_s']:.0f} s)"
-        if f.get("pd_total"):
-            line += f" | PD {f.get('pd_operational', f['pd_total'])}/{f['pd_total']}"
-        line += f" | hull {f.get('hull_percent', 100):.0f}%"
-        lines.append(line)
+        groups.setdefault(_friendly_doing(f), []).append(f)
+    for doing, members in groups.items():
+        if doing is not None and len(members) > 1:
+            lines.append(f"  {len(members)} ships {doing}:")
+            lines.extend("    " + _friendly_line(f, doing=False) for f in members)
+        else:
+            lines.extend("  " + _friendly_line(f) for f in members)
     return "\n".join(lines)
 
 
@@ -2420,8 +2515,8 @@ def build_captain_turn(
         actions.append("launch_torpedo")
     actions.append("set_primary_target")
     sections.append(
-        f"DECISION POINT {decision_number or 1}. What are your orders, Captain? Issue them as tool "
-        f"calls ({', '.join(actions)}); words alone do nothing.")
+        f"DECISION POINT {decision_number or 1}. Your orders, Captain: tool calls "
+        f"({', '.join(actions)}); words alone do nothing.")
     return "\n\n".join(s for s in sections if s)
 
 
@@ -4199,9 +4294,7 @@ def format_admiral_orders_for_captain(
                 lines.append(
                     f"      >>> HEADING ORDER (ALREADY APPLIED to your ship): "
                     f"({heading.get('x', 0):+.2f},{heading.get('y', 0):+.2f},"
-                    f"{heading.get('z', 0):+.2f}) {what}{formation}. Keep it: calling "
-                    f"set_maneuver/set_heading replaces it. Override only for a reason "
-                    f"(e.g. EVADE an inbound torpedo).")
+                    f"{heading.get('z', 0):+.2f}) {what}{formation}.")
             # [D maneuver] structured admiral maneuver (AdmiralOrder.maneuver:
             # INTERCEPT with standoff, HOLD_RANGE, ...): ALREADY APPLIED by the
             # runner, or NOT APPLIED with the reason.
@@ -4232,12 +4325,13 @@ def format_admiral_orders_for_captain(
                      "discuss_with_admiral (\"Admiral, I received no orders. What are my "
                      "instructions?\"); otherwise use your best judgment.")
 
-    reply = (f"  REPLY: acting on these orders with your tools IS your acknowledgment. Call "
-             f"{reply_tool} only to DEVIATE or report UNABLE (say why), or to send a request or "
-             f"contact report. A CHECK above that says the order fails is a reason to DEVIATE.")
+    # The protocol (silence = ACK, when to DEVIATE) is in the cached doctrine.
+    reply = (f"  REPLY: acting IS your acknowledgment; {reply_tool} only to DEVIATE/UNABLE "
+             f"(say why) or with a request/contact.")
     if applied:
         reply += (f" Your {'/'.join(dict.fromkeys(applied))} is already flying: no maneuver call "
-                  "needed unless you deviate - still set your target and weapons/launches.")
+                  "needed unless you deviate (calling one replaces it) - still set your target "
+                  "and weapons/launches.")
     lines.append(reply)
     return "\n".join(lines)
 

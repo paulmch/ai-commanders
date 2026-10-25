@@ -325,6 +325,22 @@ class TestExecutionFeedback:
         assert "weapon_0 (since T+0): held: P(hit) 0.18 below your 0.30 gate" in text
         assert "{" not in text
 
+    def test_mounts_in_the_same_state_share_a_line(self, fleet):
+        from src.simulation import SimulationEventType as T
+        sim = CombatSimulation(time_step=1.0, decision_interval=30, seed=1)
+        _ship(sim, fleet, "alpha_1", "battleship", "alpha", 0.0)
+        sim.inject_command("alpha_1", Maneuver(ManeuverType.MAINTAIN, start_time=0.0, duration=30))
+        for slot, p in (("weapon_0", 0.18), ("weapon_1", 0.17), ("weapon_2", 0.17),
+                        ("weapon_3", 0.17)):
+            sim._log_event(T.WEAPON_STATUS, "alpha_1", "beta_1",
+                           {"weapon_slot": slot, "reason": "probability_gate",
+                            "hit_probability": p, "min_hit_probability": 0.3})
+        lines = execution_feedback(sim, ["alpha_1"]).splitlines()
+        assert lines[1:] == [
+            "  weapon_0 (since T+0): held: P(hit) 0.18 below your 0.30 gate (target beta_1)",
+            "  weapon_1, weapon_2, weapon_3 (since T+0): held: P(hit) 0.17 below your 0.30 gate "
+            "(target beta_1)"]
+
     def test_admiral_view_prefixes_ship_names(self, fleet):
         sim = CombatSimulation(time_step=1.0, decision_interval=30, seed=1)
         a = _ship(sim, fleet, "alpha_1", "destroyer", "alpha", 0.0)

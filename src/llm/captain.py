@@ -1475,7 +1475,7 @@ class LLMCaptain:
         outcomes = self._launch_outcomes(simulation)
         interval = float(getattr(simulation, "decision_interval", 30.0) or 30.0) \
             if simulation is not None else 30.0
-        lines = ["YOUR RECENT DECISIONS (newest last; launches with what they did):"]
+        lines = ["YOUR RECENT DECISIONS (newest last):"]
         for d in self.decision_history[-last_n:]:
             t = d["time"]
             if d.get("lost"):
@@ -1743,7 +1743,7 @@ class LLMCaptain:
         """Render the captain's own notes back into the next turn."""
         if not self.captain_log:
             return ""
-        lines = ["YOUR CAPTAIN'S LOG (notes you wrote to your future self - execute or supersede them):"]
+        lines = ["YOUR CAPTAIN'S LOG (your notes - execute or supersede them):"]
         for entry in self.captain_log[-self.MAX_LOG_ENTRIES:]:
             lines.append(f"  T+{entry['time']:.0f}s: {entry['note']}")
         return "\n".join(lines)
