@@ -16,7 +16,7 @@ const ORIGIN = new THREE.Vector3();
 const X = new THREE.Vector3(1, 0, 0);
 const SCALE = 0.001;
 // Spinal muzzle (fraction of hull width below the axis, of length forward)
-const SPINAL = { cruiser: [-0.42, 0.5], battlecruiser: [-0.245, 0.56], battleship: [-0.335, 0.5], dreadnought: [-0.32, 0.65], dreadnought_siege: [-0.2, 0.8] };
+const SPINAL = { cruiser: [-0.42, 0.5], battlecruiser: [-0.245, 0.56], battleship: [-0.335, 0.5], dreadnought_siege: [-0.2, 0.8] };
 const MUZZLE_LIFE = 0.3;
 // Longest on-screen wake (px); only bites in close-ups (see trail())
 const TRAIL_CAP_PX = { slug: 140, torpedo: 200 };

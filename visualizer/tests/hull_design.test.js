@@ -32,6 +32,39 @@ function kitFor(type, faction = 'alpha') {
   }
   return _kits.get(key);
 }
+const _rayMat = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
+/**
+ * Everything solid on a hull, in hull space, for ray tests: the baked
+ * parts, the radiator wings (deployed, their widest reach) and the
+ * magazine (CT hatches closed, corvette rail rounds). Turret and PD rigs
+ * are built in build() with materials, so they are not in here.
+ */
+function solids(k) {
+  if (k._solids) return k._solids;
+  const meshes = k.parts.map(p => new THREE.Mesh(p.geom, _rayMat));
+  for (const r of k.radiators) {
+    r.mesh.updateMatrixWorld(true);
+    for (const p of r.kit.parts) {
+      const m = new THREE.Mesh(p.geom, _rayMat);
+      m.matrixAutoUpdate = false;
+      m.matrixWorld.copy(r.mesh.matrixWorld);
+      meshes.push(m);
+    }
+  }
+  for (const e of k.magazine) {
+    const g = e.kind === 'rack'
+      ? new THREE.BoxGeometry(e.s, e.s, e.s * 6.3).translate(0, 0, e.s * 0.25)
+      : new THREE.BoxGeometry(e.s * 0.9, e.s * 0.1, e.s * 0.9);
+    const m = new THREE.Mesh(g, _rayMat);
+    m.position.copy(e.pos);
+    m.quaternion.copy(e.quat);
+    meshes.push(m);
+  }
+  for (const m of meshes) if (m.matrixAutoUpdate) m.updateMatrixWorld(true);
+  return (k._solids = meshes);
+}
+const FACE_N = { '+x': [1, 0, 0], '-x': [-1, 0, 0], '+y': [0, 1, 0], '-y': [0, -1, 0] };
+
 /** Outward axis of a mount rotated `angle` about Z (0 = dorsal). */
 function mountSide(angle) {
   const x = -Math.sin(angle), y = Math.cos(angle);
@@ -133,11 +166,16 @@ test('spinal muzzles sit on real barrels where Projectiles fires them from', () 
       && p.geom.boundingBox.distanceToPoint(k.spinalMuzzle) < k.W * 0.02
       && p.geom.boundingBox.max.z >= k.spinalMuzzle.z - k.L * 0.03);
     assert.ok(hit, `${type}: no barrel at the spinal muzzle`);
+    // and the bore is clear: no plating in front of the muzzle
+    const rc = new THREE.Raycaster(k.spinalMuzzle.clone().add(new THREE.Vector3(0, 0, k.L * 0.002)),
+      new THREE.Vector3(0, 0, 1), 0, k.L * 0.3);
+    const block = rc.intersectObjects(solids(k), false)[0];
+    assert.ok(!block, `${type}: spinal bore blocked ${block?.distance.toFixed(2)} ahead of the muzzle`);
   }
-  // the dreadnought's spinal is a real gun now, its muzzle past the bow
+  // the dreadnought's spinal is a real gun now, not an accent bar
   const dn = kitFor('dreadnought');
-  const bow = Math.max(...dn.parts.filter(p => p.mat === 'hull').map(p => p.geom.boundingBox.max.z));
-  assert.ok(dn.spinalMuzzle.z > bow, 'dreadnought muzzle ahead of the bow');
+  assert.ok(dn.parts.some(p => p.mat === 'barrel' && p.geom.boundingBox.min.z > dn.L * 0.35
+    && Math.abs(p.center.y - dn.spinalMuzzle.y) < dn.W * 0.01), 'dreadnought keel barrel');
 });
 
 test('no painted crayon prow: livery stays off the bow tip and reaches the aft half', () => {

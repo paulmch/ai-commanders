@@ -1401,7 +1401,7 @@ function hullDestroyer(k) {
   k.box('accent', W * 0.07, W * 0.04, L * 0.78, 0, -W * 0.31, L * 0.05, { bevel: 0 });
   k.box('trim', W * 0.15, W * 0.1, L * 0.8, 0, -W * 0.29, L * 0.03, { bevel: 0.3 });
   k.drum('barrel', W * 0.06, L * 0.12, L * 0.5, { y: -W * 0.31, sides: 10 });
-  k.drum('dark', W * 0.085, L * 0.03, L * 0.55, { y: -W * 0.31, sides: 10 });
+  k.drum('dark', W * 0.085, L * 0.03, L * 0.545, { y: -W * 0.31, sides: 10 });   // brake face = muzzle
   k.box('trim', W * 0.22, W * 0.14, L * 0.12, 0, -W * 0.3, -L * 0.3, { bevel: 0.3 });
   k.spinalMuzzle = new THREE.Vector3(0, -W * 0.31, L * 0.56);
   // flank armour + pipes
@@ -1476,7 +1476,7 @@ function hullCruiser(k, opts = {}) {
     k.box('accent', W * 0.06, W * 0.04, L * 0.7, 0, -W * 0.42, L * 0.05, { bevel: 0 });
     k.box('trim', W * 0.14, W * 0.1, L * 0.72, 0, -W * 0.4, L * 0.03, { bevel: 0.3 });
     k.drum('barrel', W * 0.055, L * 0.12, L * 0.44, { y: -W * 0.42, sides: 10 });
-    k.drum('dark', W * 0.08, L * 0.03, L * 0.49, { y: -W * 0.42, sides: 10 });
+    k.drum('dark', W * 0.08, L * 0.03, L * 0.485, { y: -W * 0.42, sides: 10 });   // brake face = muzzle
     k.spinalMuzzle = new THREE.Vector3(0, -W * 0.42, L * 0.5);
     // weapon_1 port (+X), weapon_2 starboard (-X) batteries
     k.turret('coilgun', ap, 0, L * 0.15, -Math.PI / 2);
@@ -1578,7 +1578,7 @@ function hullBattlecruiser(k) {
   k.box('accent', W * 0.06, W * 0.04, L * 0.75, 0, -W * 0.245, L * 0.05, { bevel: 0 });
   k.box('trim', W * 0.13, W * 0.09, L * 0.76, 0, -W * 0.23, L * 0.04, { bevel: 0.3 });
   k.drum('barrel', W * 0.05, L * 0.12, L * 0.5, { y: -W * 0.245, sides: 10 });
-  k.drum('dark', W * 0.07, L * 0.03, L * 0.55, { y: -W * 0.245, sides: 10 });
+  k.drum('dark', W * 0.07, L * 0.03, L * 0.545, { y: -W * 0.245, sides: 10 });   // brake face = muzzle
   k.spinalMuzzle = new THREE.Vector3(0, -W * 0.245, L * 0.56);
   for (const sx of [-1, 1]) {
     k.armorBelt(W * 0.05, W * 0.3, L * 0.34, sx * W * 0.26, 0, L * 0.19, { face: sx > 0 ? '+x' : '-x', mat: 'paint' });
@@ -1630,7 +1630,7 @@ function hullBattleship(k) {
   k.box('accent', W * 0.06, W * 0.04, L * 0.66, 0, -W * 0.335, L * 0.08, { bevel: 0 });
   k.box('trim', W * 0.14, W * 0.1, L * 0.68, 0, -W * 0.32, L * 0.06, { bevel: 0.3 });
   k.drum('barrel', W * 0.055, L * 0.12, L * 0.44, { y: -W * 0.335, sides: 10 });
-  k.drum('dark', W * 0.08, L * 0.03, L * 0.49, { y: -W * 0.335, sides: 10 });
+  k.drum('dark', W * 0.08, L * 0.03, L * 0.485, { y: -W * 0.335, sides: 10 });   // brake face = muzzle
   k.spinalMuzzle = new THREE.Vector3(0, -W * 0.335, L * 0.5);
   // Sensor farm between the batteries
   k.sensorCluster(0.5 * k.k, -W * 0.28, top, -L * 0.1);
@@ -1709,17 +1709,21 @@ function hullDreadnought(k, opts = {}) {
   k.noseCap({ z0: L * 0.5, len: L * 0.07, w: W * 0.5, h: W * 0.5, tw: 0.62, th: 0.62, layers: 3 });
   k.greebles('+y', W * 0.32, [-W * 0.26, -W * 0.1], [L * 0.24, L * 0.36], 3, W * 0.03, W * 0.05);
   if (!opts.siege) {
-    // Spinal coiler along the keel, between the lower sponsons, its
-    // muzzle well proud of the glacis (SPINAL dreadnought: -0.32 W, 0.65 L)
-    k.box('trim', W * 0.16, W * 0.15, L * 0.75, 0, -W * 0.32, L * 0.2, { bevel: 0.3 });
-    k.box('accent', W * 0.03, W * 0.03, L * 0.72, 0, -W * 0.397, L * 0.2, { bevel: 0 });
-    k.drum('barrel', W * 0.06, L * 0.14, L * 0.58, { y: -W * 0.32, sides: 12 });
-    for (const bz of [L * 0.535, L * 0.565, L * 0.595]) {
-      k.drum('accent', W * 0.078, W * 0.02, bz, { y: -W * 0.32, sides: 12 });
-      k.drum('trim', W * 0.085, W * 0.035, bz + W * 0.03, { y: -W * 0.32, sides: 12 });
+    // Spinal coiler along the keel, between the lower sponsons; the barrel
+    // runs out under the glacis to the bow line. Its muzzle is the shared
+    // default spinal muzzle (-0.31 W, 0.56 L, as on the destroyer), so
+    // Projectiles needs no per-hull entry for it - hull_design.test.js
+    // pins the two together.
+    const ky = -W * 0.31;
+    k.box('trim', W * 0.16, W * 0.15, L * 0.605, 0, ky, L * 0.1275, { bevel: 0.3 });
+    k.box('accent', W * 0.03, W * 0.03, L * 0.58, 0, ky - W * 0.077, L * 0.13, { bevel: 0 });
+    k.drum('barrel', W * 0.06, L * 0.13, L * 0.48, { y: ky, sides: 12 });
+    for (const bz of [L * 0.45, L * 0.478, L * 0.506]) {
+      k.drum('accent', W * 0.078, W * 0.02, bz, { y: ky, sides: 12 });
+      k.drum('trim', W * 0.085, W * 0.035, bz + W * 0.03, { y: ky, sides: 12 });
     }
-    k.drum('dark', W * 0.09, L * 0.03, L * 0.635, { y: -W * 0.32, sides: 12 });
-    k.spinalMuzzle = new THREE.Vector3(0, -W * 0.32, L * 0.65);
+    k.drum('dark', W * 0.09, L * 0.03, L * 0.545, { y: ky, sides: 12 });
+    k.spinalMuzzle = new THREE.Vector3(0, ky, L * 0.56);
   }
   // Sensor farms along the keel line instead of towers
   for (const [tz, sz] of [[L * 0.12, 0.6], [-L * 0.33, 0.5]]) {
@@ -1763,7 +1767,7 @@ function hullDreadnought(k, opts = {}) {
       k.drum('accent', W * 0.11, W * 0.03, bz, { y: -W * 0.2, sides: 10 });
       k.drum('trim', W * 0.12, W * 0.06, bz + W * 0.05, { y: -W * 0.2, sides: 10 });
     }
-    k.drum('dark', W * 0.1, L * 0.04, L * 0.8, { y: -W * 0.2, sides: 12 });
+    k.drum('dark', W * 0.1, L * 0.04, L * 0.78, { y: -W * 0.2, sides: 12 });   // brake face = muzzle
     k.spinalMuzzle = new THREE.Vector3(0, -W * 0.2, L * 0.8);
     // fire-control mast stands on the bow citadel (top at 0.32 W)
     k.mast(k.mastH * 1.6, W * 0.14, W * 0.32, L * 0.3, -0.3);
