@@ -426,12 +426,13 @@ test('a miss is a dud when it passed inside the drawn hull, not inside a fixed 5
 // Spinal muzzles
 // --------------------------------------------------------------------------
 test('spinal muzzle: the hull kit\'s own point first, else the per-class table', () => {
-  assert.deepEqual(SPINAL_MUZZLE.dreadnought, [-0.32, 0.65]);
+  // matches the pass-4 hull kit's keel spinal (Hulls.js exports the same point)
+  assert.deepEqual(SPINAL_MUZZLE.dreadnought, [-0.31, 0.56]);
   const W = 5.6, L = 20.8;
   const muzzle = (ud) => Projectiles.prototype.localMuzzle.call({ s3: new THREE.Vector3() },
     { userData: { size: { length: L, width: W }, ...ud } }, { spinal: true }, new THREE.Vector3(0, 0, 1),
     { pos: new THREE.Vector3(), dir: new THREE.Vector3() }).pos;
-  near(muzzle({ shipType: 'dreadnought' }).distanceTo(new THREE.Vector3(0, -0.32 * W, 0.65 * L)), 0);
+  near(muzzle({ shipType: 'dreadnought' }).distanceTo(new THREE.Vector3(0, -0.31 * W, 0.56 * L)), 0);
   near(muzzle({ shipType: 'frigate' }).distanceTo(new THREE.Vector3(0, -0.31 * W, 0.56 * L)), 0);
   const kit = new THREE.Vector3(0, -1.1, 14.2);
   near(muzzle({ shipType: 'dreadnought', spinalMuzzle: kit }).distanceTo(kit), 0);

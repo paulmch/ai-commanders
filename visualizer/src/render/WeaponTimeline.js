@@ -86,7 +86,7 @@ export function shotSpinal(d) { return !!d.weapon_name?.toLowerCase().includes('
  */
 export const SPINAL_MUZZLE = {
   cruiser: [-0.42, 0.5], battlecruiser: [-0.245, 0.56], battleship: [-0.335, 0.5],
-  dreadnought: [-0.32, 0.65], dreadnought_siege: [-0.2, 0.8]
+  dreadnought: [-0.31, 0.56], dreadnought_siege: [-0.2, 0.8]
 };
 export const SPINAL_MUZZLE_DEFAULT = [-0.31, 0.56];
 
