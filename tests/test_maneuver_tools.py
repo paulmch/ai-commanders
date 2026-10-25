@@ -266,3 +266,131 @@ def test_describe_maneuver_spec():
                                    "standoff_km": 50, "evade": "dodge", "throttle": 0.8})
     assert line == "INTERCEPT Falchion-2, standoff 50 km, 80% throttle, evade dodge"
     assert describe_maneuver_spec(None) is None
+
+
+# =============================================================================
+# MCP set_maneuver
+# =============================================================================
+
+def _mcp_call(**arguments):
+    """Dispatch one MCP set_maneuver call in shared-memory mode; returns the
+    response text and the queued command (or None)."""
+    import asyncio
+    import mcp.types as mcp_types
+    from src.llm.mcp_server import create_mcp_server
+    from src.llm.mcp_state import MCPSharedState, get_mcp_state
+    MCPSharedState.reset()
+    state = get_mcp_state()
+    state.register_faction("alpha")
+    server = create_mcp_server("alpha")
+    handler = server.request_handlers[mcp_types.CallToolRequest]
+    request = mcp_types.CallToolRequest(
+        method="tools/call",
+        params=mcp_types.CallToolRequestParams(name="set_maneuver", arguments=arguments))
+    text = asyncio.run(handler(request)).root.content[0].text
+    queued = state.get_pending_commands("alpha")
+    return text, (queued[0] if queued else None)
+
+
+def _mcp_apply(sim, **parameters):
+    from src.llm.mcp_controller import apply_mcp_commands_to_simulation
+    from src.llm.mcp_state import MCPCommand, MCPCommandType
+    ship_id = parameters.pop("ship_id", "alpha_1")
+    cmd = MCPCommand(MCPCommandType.SET_MANEUVER, ship_id=ship_id, parameters=parameters)
+    return apply_mcp_commands_to_simulation([cmd], sim, "alpha")
+
+
+class TestMcpSetManeuver:
+
+    def test_schema(self):
+        from tests.test_fixes_mcp import _list_tools
+        schema = _list_tools()["set_maneuver"].inputSchema
+        props = schema["properties"]
+        assert "HOLD_RANGE" in props["maneuver_type"]["enum"]
+        for key in ("standoff_km", "arrival_closing_kps", "range_km", "evade",
+                    "toward_point", "toward_ship"):
+            assert key in props
+        assert "NEVER BRAKES" in _list_tools()["set_maneuver"].description
+
+    def test_plain_call_queues_the_old_parameters(self):
+        text, cmd = _mcp_call(ship_id="alpha_1", maneuver_type="INTERCEPT", target_id="beta_1")
+        assert cmd.parameters == {"maneuver_type": "INTERCEPT", "throttle": 1.0,
+                                  "target_id": "beta_1", "heading_direction": None}
+        assert "NOTE" not in text
+
+    def test_new_parameters_ride_along_and_are_validated(self):
+        text, cmd = _mcp_call(ship_id="alpha_1", maneuver_type="INTERCEPT", target_id="beta_1",
+                              standoff_km=50, evade="dodge")
+        assert cmd.parameters["standoff_km"] == 50 and cmd.parameters["evade"] == "dodge"
+        assert "standoff_km=50" in text
+        # Schema validation (minimum 0) or our own check - either way nothing queues.
+        text, cmd = _mcp_call(ship_id="alpha_1", maneuver_type="INTERCEPT", standoff_km=-1)
+        assert cmd is None and ("ERROR" in text or "minimum" in text)
+        text, cmd = _mcp_call(ship_id="alpha_1", maneuver_type="HEADING",
+                              toward_point={"x": 1, "y": 2})
+        assert cmd is None
+        text, cmd = _mcp_call(ship_id="alpha_1", maneuver_type="HEADING")
+        assert "HEADING needs" in text and cmd is None
+
+    def test_position_like_heading_direction_gets_a_note(self):
+        text, cmd = _mcp_call(ship_id="alpha_1", maneuver_type="HEADING",
+                              heading_direction={"x": 90, "y": 55, "z": 10})
+        assert cmd is not None and "use toward_point" in text
+
+    def test_apply_standoff_by_name_and_hold_range_default(self):
+        sim = _sim()
+        result = _mcp_apply(sim, maneuver_type="INTERCEPT", target_id="Falchion-1",
+                            standoff_km=50, throttle=1.0)
+        assert result["errors"] == []
+        m = sim.get_ship("alpha_1").current_maneuver
+        assert m.target_id == "beta_1" and m.standoff_m == 50_000.0
+        result = _mcp_apply(sim, maneuver_type="HOLD_RANGE", target_id="beta_2")
+        m = sim.get_ship("alpha_1").current_maneuver
+        assert m.maneuver_type == ManeuverType.HOLD_RANGE and m.hold_range_m > 100_000.0
+
+    def test_apply_plain_command_unchanged(self):
+        sim = _sim()
+        _mcp_apply(sim, maneuver_type="INTERCEPT", target_id="beta_1", throttle=0.5,
+                   heading_direction=None)
+        m = sim.get_ship("alpha_1").current_maneuver
+        assert m == Maneuver(ManeuverType.INTERCEPT, start_time=0.0, duration=30.0,
+                             throttle=0.5, target_id="beta_1")
+
+    def test_intercept_without_target_uses_the_primary_target_or_errors(self):
+        sim = _sim()
+        result = _mcp_apply(sim, maneuver_type="INTERCEPT")
+        assert "needs target_id" in result["errors"][0]["error"]
+        sim.get_ship("alpha_1").primary_target_id = "beta_2"
+        result = _mcp_apply(sim, maneuver_type="INTERCEPT")
+        assert result["errors"] == []
+        assert sim.get_ship("alpha_1").current_maneuver.target_id == "beta_2"
+
+    def test_apply_toward_point_and_toward_ship(self):
+        sim = _sim()
+        _mcp_apply(sim, maneuver_type="HEADING", toward_point={"x": 90, "y": 55, "z": 10})
+        m = sim.get_ship("alpha_1").current_maneuver
+        assert m.heading_point_km == {"x": 90.0, "y": 55.0, "z": 10.0}
+        assert m.heading_direction["x"] < -0.98
+        _mcp_apply(sim, maneuver_type="HEADING", toward_ship="beta_2", evade="full")
+        m = sim.get_ship("alpha_1").current_maneuver
+        assert m.heading_target_id == "beta_2" and m.evade == "full"
+
+    def test_fleet_orders(self):
+        """ship_id "all": INTERCEPT goes to every ship; HEADING toward_point
+        is ONE heading from the fleet centre, flown as a formation."""
+        sim = _sim()
+        result = _mcp_apply(sim, ship_id="all", maneuver_type="INTERCEPT", target_id="beta_1",
+                            standoff_km=40)
+        assert {r["ship_id"] for r in result["applied"]} == {"alpha_1", "alpha_2"}
+        assert all(sim.get_ship(s).current_maneuver.standoff_m == 40_000.0
+                   for s in ("alpha_1", "alpha_2"))
+        _mcp_apply(sim, ship_id="all", maneuver_type="HEADING",
+                   toward_point={"x": 0, "y": 0, "z": 0}, throttle=1.0)
+        a, b = (sim.get_ship(s).current_maneuver for s in ("alpha_1", "alpha_2"))
+        assert a.heading_direction == b.heading_direction
+        assert a.heading_point_km is None          # a fixed formation heading
+        assert a.burn_start_time == b.burn_start_time
+        centre = (sim.get_ship("alpha_1").position + sim.get_ship("alpha_2").position) * 0.5
+        expected = (centre * -1.0).normalized()
+        h = a.heading_direction
+        assert (h["x"], h["y"], h["z"]) == pytest.approx(expected.to_tuple(), abs=1e-3)

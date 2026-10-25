@@ -351,6 +351,124 @@ def position_like_direction_note(
 
 
 # ---------------------------------------------------------------------------
+# MCP set_maneuver
+# ---------------------------------------------------------------------------
+
+# Optional set_maneuver parameters an MCP command carries when given.
+MCP_MANEUVER_OPTIONS = ("standoff_km", "arrival_closing_kps", "range_km", "evade",
+                        "toward_point", "toward_ship")
+
+
+def mcp_maneuver_check(maneuver_type: str, args: Dict[str, Any]) -> List[str]:
+    """
+    Validate an MCP set_maneuver call's optional parameters before it is
+    queued (the battle state is not at hand here; ships are resolved when the
+    command is applied). Returns notes for the tool response; raises
+    ManeuverArgError for values that cannot be flown.
+    """
+    notes: List[str] = []
+    for key in ("standoff_km", "arrival_closing_kps", "range_km"):
+        value = parse_number(args.get(key), key)
+        if value is not None and value < 0:
+            raise ManeuverArgError(f"{key} must be >= 0, got {value:g}")
+    parse_evade(args.get("evade"))
+    parse_point_km(args.get("toward_point"))
+    if maneuver_type == "EVASIVE" and args.get("evade"):
+        notes.append("evade is implied by EVASIVE and is ignored")
+    if maneuver_type != "HEADING" and (args.get("toward_point") or args.get("toward_ship")):
+        notes.append("toward_point / toward_ship apply to HEADING only and are ignored")
+    direction = args.get("heading_direction")
+    if maneuver_type == "HEADING" and isinstance(direction, dict) and not (
+            args.get("toward_point") or args.get("toward_ship")):
+        try:
+            d = Vector3D(float(direction.get("x", 0.0)), float(direction.get("y", 0.0)),
+                         float(direction.get("z", 0.0)))
+        except (TypeError, ValueError):
+            d = None
+        if d is not None and d.magnitude > POSITION_LIKE_MAGNITUDE:
+            u = d.normalized()
+            notes.append(
+                f"heading_direction is a DIRECTION, flown as ({u.x:+.2f},{u.y:+.2f},{u.z:+.2f}) "
+                f"from wherever the ship is - if ({d.x:g}, {d.y:g}, {d.z:g}) is a position in "
+                f"km, use toward_point instead")
+    return notes
+
+
+def mcp_maneuver_fields(
+    simulation: Any,
+    ship_id: str,
+    maneuver_type: Any,
+    params: Dict[str, Any],
+) -> Tuple[Optional[str], Optional[Dict[str, Any]], Dict[str, Any], List[str]]:
+    """
+    (target_id, heading_direction, engine extras, notes) for an MCP
+    set_maneuver command that uses any of the optional parameters: names are
+    resolved to ids, INTERCEPT / PADLOCK / HOLD_RANGE default to the ship's
+    primary target, HEADING takes toward_point / toward_ship. Raises
+    ManeuverArgError when the order cannot be flown.
+    """
+    from ..simulation import ManeuverType
+
+    target_id = params.get("target_id")
+    if target_id and simulation.get_ship(target_id) is None:
+        target = resolve_ship(simulation, ship_id, target_id)
+        if target is None:
+            raise ManeuverArgError(
+                f"no live ship {target_id!r} for target_id. Ships: "
+                f"{ship_choices(simulation, ship_id)}")
+        target_id = target.ship_id
+    if not target_id and maneuver_type in (ManeuverType.INTERCEPT, ManeuverType.PADLOCK,
+                                           ManeuverType.HOLD_RANGE):
+        ship = simulation.get_ship(ship_id)
+        target_id = getattr(ship, "primary_target_id", None)
+        if not target_id:
+            raise ManeuverArgError(f"{maneuver_type.name} needs target_id (no primary target set)")
+    heading_direction = params.get("heading_direction")
+    if maneuver_type == ManeuverType.HEADING:
+        live, notes = heading_target(simulation, ship_id, params)
+        extras: Dict[str, Any] = {}
+        if live is not None:
+            extras.update(live)
+            heading_direction = extras.pop("heading_direction", None)
+        evade = parse_evade(params.get("evade"))
+        if evade is not None:
+            extras["evade"] = evade
+        return target_id, heading_direction, extras, notes
+    extras, notes = maneuver_extras(simulation, ship_id, maneuver_type, params, target_id)
+    return target_id, heading_direction, extras, notes
+
+
+def fleet_heading_vector(simulation: Any, ships: Sequence[Any],
+                         params: Dict[str, Any]) -> Optional[Dict[str, float]]:
+    """
+    The ONE heading a fleet flies for an "all ships" HEADING order: the given
+    direction, or the bearing from the fleet centre to toward_point /
+    toward_ship now (re-bearing every hull on its own would collapse the
+    formation onto one point). None when nothing usable is given.
+    """
+    live = [s for s in ships if not s.is_destroyed and not getattr(s, "is_dying", False)]
+    if not live:
+        return None
+    n = float(len(live))
+    centre = Vector3D(sum(s.position.x for s in live) / n, sum(s.position.y for s in live) / n,
+                      sum(s.position.z for s in live) / n)
+    ref = params.get("toward_ship")
+    if ref is not None and str(ref).strip():
+        target = resolve_ship(simulation, live[0].ship_id, ref)
+        if target is None:
+            raise ManeuverArgError(
+                f"toward_ship: no live ship named {ref!r}. Ships: "
+                f"{ship_choices(simulation, live[0].ship_id)}")
+        return _unit_dict(target.position - centre)
+    point = parse_point_km(params.get("toward_point"))
+    if point is not None:
+        return _unit_dict(Vector3D(point["x"] * 1000.0, point["y"] * 1000.0,
+                                   point["z"] * 1000.0) - centre)
+    direction = params.get("heading_direction")
+    return direction if isinstance(direction, dict) and direction else None
+
+
+# ---------------------------------------------------------------------------
 # Admiral orders
 # ---------------------------------------------------------------------------
 
