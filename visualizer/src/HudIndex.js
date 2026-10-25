@@ -593,6 +593,7 @@ export function buildHitBins(events, ships, duration, bin = 5) {
     const k = Math.min(n - 1, Math.floor(e.timestamp / bin));
     if (bins[f]) bins[f][k]++;
   }
+  bins.bin = bin;   // seconds per bin: the chart spans bins * bin, not the timeline's epilogue
   return bins;
 }
 

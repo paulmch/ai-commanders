@@ -100,15 +100,16 @@ export class CommsFeed {
     this.standingKey = '';
     root?.querySelectorAll('[data-comms-faction]').forEach(b => b.addEventListener('click', () => this.setFilter(b.dataset.commsFaction, this.group)));
     root?.querySelectorAll('[data-comms-group]').forEach(b => b.addEventListener('click', () => this.setFilter(this.faction, b.dataset.commsGroup)));
-    root?.querySelector('[data-close]')?.addEventListener('click', () => this.setOpen(false));
+    root?.querySelector('[data-close]')?.addEventListener('click', () => this.setOpen(false, true));
     this._renderFilters();
   }
 
-  setOpen(open) {
+  /** @param {boolean} user - the viewer toggled it (persisted), vs. the per-recording default */
+  setOpen(open, user = false) {
     this.open = !!open;
     this.root?.classList.toggle('hidden', !this.open);
     this.key = '';
-    this.onOpenChange?.(this.open);
+    this.onOpenChange?.(this.open, user);
   }
 
   /** New or rebuilt index. complete = no more data will arrive (replay or ended live battle). */

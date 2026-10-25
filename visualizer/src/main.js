@@ -1246,12 +1246,13 @@ class BattleVisualizer {
       root: $('commsFeed'),
       onSeek: row => this.hudSeek(row.t, row.shipId),
       onWhy: row => this.decisions.openAt(row.shipId, row.decisionId),
-      onOpenChange: open => {
+      onOpenChange: (open, user) => {
         const button = $('commsBtn');
         button?.classList.toggle('active', open);
         button?.setAttribute('aria-pressed', String(open));
         document.body.classList.toggle('comms-open', open);
-        try { window.localStorage.setItem('aic.viewer.commsOpen', open ? '1' : '0'); } catch { /* not persisted */ }
+        // Only the viewer's own toggle is remembered, never the width-based default
+        if (user) try { window.localStorage.setItem('aic.viewer.commsOpen', open ? '1' : '0'); } catch { /* not persisted */ }
       },
       resolveImage: v => this.loader?.sourceData?.assets?.[v.ref]?.content?.[v.part]?.image_url?.url || null,
       onImage: (src, caption) => showLightbox(document, src, caption)
@@ -1274,7 +1275,7 @@ class BattleVisualizer {
   }
 
   toggleComms() {
-    this.commsFeed.setOpen(!this.commsFeed.open);
+    this.commsFeed.setOpen(!this.commsFeed.open, true);
     if (this.commsFeed.open && this.decisions.open) this.decisions.setOpen(false);
   }
 

@@ -46,6 +46,9 @@ export class DecisionPanel {
   }
 
   setFollow(on) {
+    // Pinning in a followed live battle must release the live head first,
+    // or update() re-arms LATEST on the next frame
+    if (!on) this.app.setLiveFollow?.(false);
     this.followLatest = !!on;
     if (on) this.selectedEventId = null;
     this.lastKey = '';

@@ -136,11 +136,14 @@ test('timeline marks: numbered checkpoints, salvos, kills; every marker seeks', 
   assert.equal(kill.faction, 'beta');
   assert.equal(kill.seekLead, 5);
   assert.ok(sparkPaths({ alpha: [0, 2, 1], beta: [1, 0, 0] }).alpha.startsWith('M'));
+  assert.equal(hud.hitBins.bin, 5);
   const doc = new FakeDocument();
   const events = doc.createElement('div'), cps = doc.createElement('div');
   const seeks = [];
-  new TimelineMarkers({ events, checkpoints: cps, doc, onSeek: (t, id) => seeks.push([t, id]) }).build(hud, 120, ships);
+  new TimelineMarkers({ events, checkpoints: cps, doc, onSeek: (t, id) => seeks.push([t, id]) }).build(hud, 150, ships);
   assert.equal(cps.children.length, 2);
+  // 120 s of bins (+1 partial) on a 150 s track that includes the epilogue
+  assert.equal(events.querySelector('svg').style.width, `${(25 * 5 / 150) * 100}%`);
   events.querySelector('.marker-kill').click();
   assert.deepEqual(seeks, [[85, 'beta_1']]);
 });

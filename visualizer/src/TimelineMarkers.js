@@ -94,6 +94,9 @@ export class TimelineMarkers {
       svg.setAttribute('viewBox', '0 0 1000 16');
       svg.setAttribute('preserveAspectRatio', 'none');
       svg.setAttribute('aria-hidden', 'true');
+      // The bins cover the recording; the track also holds the wreck epilogue
+      const span = hud.hitBins.alpha.length * (hud.hitBins.bin || 5);
+      svg.style.width = `${Math.min(100, (span / duration) * 100)}%`;
       const paths = sparkPaths(hud.hitBins);
       for (const f of ['alpha', 'beta']) {
         if (!paths[f]) continue;

@@ -68,12 +68,19 @@ test('picking a decision pins it until LATEST is re-armed', () => {
 
 test('live follow forces the latest decision; before any orders the panel says it is waiting', () => {
   const live = { started: true, ended: false, follow: true, checkpoint: 1, status: 'paused' };
-  const { panel } = panelFixture({ live });
+  const { panel, app } = panelFixture({ live });
+  app.setLiveFollow = on => { live.follow = on; };
   panel.followLatest = false;
   panel.update(20);
   assert.match(panel.body.textContent, /Awaiting first orders: commanders deciding \(CP1\)/);
   panel.update(62);
   assert.equal(selected(panel), 'e3');
+  // The PINNED chip releases the live head, so the pin survives the next frame
+  panel.setFollow(false);
+  assert.equal(live.follow, false);
+  panel.update(95);
+  assert.equal(selected(panel), 'e3');
+  assert.match(panel.followBtn.textContent, /PINNED 01:00/);
 });
 
 test('admiral vision renders as a thumbnail and the raw JSON carries no base64', () => {
