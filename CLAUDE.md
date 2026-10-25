@@ -118,6 +118,9 @@ approach, stopping distance, a merge warning and ready-made world-frame headings
 effects are pinned by `tests/test_range_control_and_evade.py`. An admiral
 `issue_order(ship_name="all ships", heading, throttle)` is flown as a formation:
 throttles matched to the slowest hull, burn start synced (MCP: ship_id "all").
+A per-ship heading/maneuver REPLACES it for that ship (MAINTAIN/PADLOCK = engine
+off, never a burn); `evade` alone rides on it - or, with no fleet order, on the
+ship's current maneuver (`src/llm/maneuver_orders.py`, `tests/test_order_semantics.py`).
 
 MCP mode replaces the admiral+captains of a fleet with any MCP client
 (`src/llm/mcp_server.py`, one battle HTTP API on port 8765, `--faction alpha|beta`).

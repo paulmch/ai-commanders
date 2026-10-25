@@ -103,6 +103,8 @@ def ordered_maneuvers(order: Any) -> List[str]:
     structured = getattr(order, "maneuver", None) or getattr(order, "maneuver_type", None)
     if isinstance(structured, dict):
         structured = structured.get("maneuver_type") or structured.get("type")
+    if structured == "OVERLAY":
+        return []  # evade alone (maneuver_orders.OVERLAY): no maneuver was ordered
     if structured:
         return [maneuver_name(str(structured).upper())]
     if isinstance(getattr(order, "heading", None), dict):

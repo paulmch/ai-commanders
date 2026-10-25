@@ -8,7 +8,7 @@ import json
 import re
 from src.replay_evidence import tool_evidence
 import math
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Tuple
 
 from .client import DEFAULT_MODEL, CaptainClient, LLMCallError, ToolCall
@@ -752,22 +752,14 @@ class LLMCaptain:
 
     def _renewed_maneuver(self, ship: Any, now: float, interval: float) -> Optional[Any]:
         """The ship's current maneuver re-issued for the next window, if any."""
+        from .maneuver_orders import renewed_maneuver
         m = getattr(ship, "current_maneuver", None)
         if m is None or not hasattr(m, "start_time"):
             return None
         if m.start_time >= now - 1e-6:
             return None  # already fresh (e.g. an admiral heading applied now)
-        try:
-            names = {f.name for f in fields(m)}
-            changes = {"start_time": now, "duration": interval}
-            # Runtime latches and formation sync belong to the old window.
-            for name, value in (("burn_start_time", None), ("hold_velocity", None),
-                                ("hold_velocity_t", -1.0)):
-                if name in names:
-                    changes[name] = value
-            return replace(m, **changes)
-        except TypeError:
-            return None
+        # Runtime latches and formation sync belong to the old window.
+        return renewed_maneuver(ship, now, interval)
 
     def _lose_turn(self, ship: Any, simulation: Any, reason: str) -> List[Any]:
         """
@@ -1143,6 +1135,13 @@ class LLMCaptain:
             except Exception:  # noqa: BLE001 - display only
                 capacity = None
             check["salvo"] = self._salvo_check_text(sol, int(salvo), capacity)
+
+        # The prose and the structured order disagree on the burn (e.g. "fly
+        # the fleet heading at 50%" under a structured MAINTAIN, which coasts).
+        from .maneuver_orders import order_throttle_conflict
+        conflict = order_throttle_conflict(order)
+        if conflict:
+            check["throttle"] = conflict
 
         # ENGINE ORDER CHECK: what the ordered motion does to the closest approach.
         motion = None

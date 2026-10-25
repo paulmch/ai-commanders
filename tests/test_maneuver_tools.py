@@ -423,7 +423,9 @@ class TestAdmiralOrders:
     def test_spec_parsing(self):
         from src.llm.maneuver_orders import admiral_maneuver_spec
         assert admiral_maneuver_spec({"ship_name": "x", "heading": {"x": 1, "y": 0, "z": 0}}) is None
-        assert admiral_maneuver_spec({"evade": "full"}) is None     # nothing to fly
+        # Evade alone: the overlay on whatever the ship flies (fleet order, else its own).
+        assert admiral_maneuver_spec({"evade": "full"}) == {
+            "maneuver_type": "OVERLAY", "evade": "full", "throttle": 1.0}
         spec = admiral_maneuver_spec({"maneuver": "intercept", "suggested_target": "Falchion-1",
                                       "standoff_km": "60", "arrival_closing_kps": -2,
                                       "evade": "sideways", "throttle": 0.7})

@@ -1831,6 +1831,8 @@ def _maneuver_text(m: Optional[Dict[str, Any]]) -> str:
         return "coasting"
     kind = m.get("type", "?")
     kind = "EVADE" if kind == "EVASIVE" else kind
+    if kind in ("MAINTAIN", "PADLOCK"):
+        return kind  # the drive is off: "PADLOCK@100%" read as a burn
     text = f"{kind}@{float(m.get('throttle', 1.0)) * 100:.0f}%"
     if kind == "HEADING" and m.get("heading"):
         text = f"HEADING {_vec(m['heading'])}@{float(m.get('throttle', 1.0)) * 100:.0f}%"
@@ -2517,8 +2519,9 @@ MANEUVERS (tell captains which to use):
   it weaves around the ship's CURRENT course: it never chases and never brakes, so an
   EVADE order does not stop a merge.
 - BRAKE: burn against the ship's own (world-frame) velocity
-- MAINTAIN: Coast at current velocity - no thrust, no rotation
-- PADLOCK: coast with the nose tracking the target (spinal on him), NO closing thrust
+- MAINTAIN: engine OFF - coast at current velocity, no thrust, no rotation
+- PADLOCK: engine off, the nose tracks the target (spinal on him) - coast and shoot
+  (MAINTAIN and PADLOCK never burn: throttle does not apply to them)
 - HEADING (issue_order heading={{x,y,z}}, throttle): fly a WORLD-frame direction - the ship
   turns onto it, then burns (the drive thrusts along the NOSE). throttle 0 = attitude only
   (nose turns, no burn, e.g. spinals back on the enemy). Applied directly to the ship.
@@ -2538,9 +2541,11 @@ MANEUVERS (tell captains which to use):
 - FORMATION: one heading for the whole fleet = issue_order(ship_name="all ships",
   heading=..., throttle=...) on the directive call. Each hull's throttle is scaled to the
   SLOWEST hull's acceleration and the burn starts when the slowest has turned, so the
-  formation (and its overlapping PD) holds. Per-ship orders inherit it unless they set
-  their own heading. Same throttle on different hulls is NOT the same acceleration:
-  a 2g destroyer at 70% still out-runs a 0.75g dreadnought at 70%.
+  formation (and its overlapping PD) holds. Per-ship orders inherit it unless they give
+  their own heading or maneuver, which REPLACES it for that ship (a per-ship MAINTAIN
+  coasts while the fleet burns); evade alone rides on it. Same throttle on different
+  hulls is NOT the same acceleration: a 2g destroyer at 70% still out-runs a 0.75g
+  dreadnought at 70%.
 - RHYTHM: burn phases and shooting phases alternate. Burning for range points the nose
   along the heading (cancel closure = TAILS to the enemy: thin tail armor, spinals
   masked). Then coast and shoot: PADLOCK or HEADING toward the enemy at throttle 0 puts
@@ -2709,20 +2714,22 @@ THIS CALL: ONE order for ONE ship (named in the request) - call issue_order for 
 - suggested_target: (optional) recommended enemy ship (name or id)
 - heading + throttle: (optional) a WORLD-frame {{x,y,z}} from RANGE CONTROL, applied to the
   ship at once (throttle 0 = attitude only: nose onto the heading, no burn)
+- maneuver / evade: (optional) a maneuver REPLACES the fleet order for this ship; give
+  neither heading nor maneuver to keep it flying the fleet order, and evade alone to add
+  dodging on top of it. MAINTAIN = engine off (coast); never add it just to carry evade
 - torpedo_salvo + torpedo_target: (torpedo hulls) rounds to launch THIS checkpoint,
   timed with the rest of the fleet
 
 Your order should:
 1. Be consistent with your fleet directive and standing plan
-2. Specify a maneuver (HEADING, PADLOCK, EVASIVE, INTERCEPT)
-3. Specify throttle level (e.g., "70% throttle")
-4. Specify target assignment
-5. Include any special weapon instructions
+2. Say the maneuver in the text AND in the structured fields - the fields are what flies
+3. Specify target assignment
+4. Include any special weapon instructions
 
 *** RANGE IS CONTROLLED WITH HEADINGS ***
 - INTERCEPT only for the first approach or finishing a cripple - it builds closure that
   ends in a merge. To hold range, kite, pass wide or flank: a HEADING from RANGE CONTROL.
-- PADLOCK = nose on target, NO thrust: the coast-and-shoot phase between burns.
+- PADLOCK = nose on target, engine off: the coast-and-shoot phase between burns.
 - EVASIVE holds the current course (dodges fire, never brakes, never chases).
 - Everything in the request is measured from THIS ship (ranges, closures, torpedo
   verdicts, inbound rounds){torpedo_note}
@@ -3984,7 +3991,14 @@ def build_admiral_ship_order_messages(
             f"FLEET HEADING IN FORCE (your \"all ships\" order): "
             f"({heading.get('x', 0):+.2f},{heading.get('y', 0):+.2f},{heading.get('z', 0):+.2f}) "
             f"at {thr * 100:.0f}% of the slowest hull. {ship_name} flies it (throttle scaled "
-            f"to hold formation) unless you give it its own heading now.")
+            f"to hold formation) unless you give it its own heading or maneuver now (that "
+            f"REPLACES it; MAINTAIN coasts). To keep it and dodge: evade alone.")
+    elif getattr(fleet_heading, "maneuver", None):
+        from .maneuver_orders import fleet_order_text
+        parts.append(
+            f"FLEET ORDER IN FORCE (your \"all ships\" order): {fleet_order_text(fleet_heading)}. "
+            f"{ship_name} flies it unless you give it its own heading or maneuver now (that "
+            f"REPLACES it). To keep it and dodge: evade alone.")
 
     label = _lbl(snapshot, ship_id, ship_name) if ship_id else ship_name
     if row is not None:
@@ -4095,6 +4109,8 @@ def format_admiral_orders_for_captain(
     state, passed in ``checks`` parallel to ``orders``):
       target  - the named target with the captain's OWN sensor range/closure
       salvo   - SALVO CHECK from a flown torpedo (UNREACHABLE / OVERKILL ...)
+      throttle- the text's stated throttle vs the applied order (a MAINTAIN
+                under "burn at 50%" coasts: maneuver_orders.order_throttle_conflict)
       engine  - ENGINE ORDER CHECK of the ordered maneuver/heading
       points  - absolute positions quoted in the text, resolved to dir_to
       numbers - distances in the text that disagree with the sensors
@@ -4166,6 +4182,9 @@ def format_admiral_orders_for_captain(
                              "starts with the fleet]" if getattr(order, "formation", False) else "")
                 what = ("attitude only - nose onto it, no burn" if thr <= 0
                         else f"at {thr * 100:.0f}% throttle")
+                replaced = getattr(order, "replaces_fleet_order", None)
+                if isinstance(replaced, str) and replaced:
+                    formation += f" - for your ship INSTEAD of the fleet order {replaced}"
                 lines.append(
                     f"      >>> HEADING ORDER (ALREADY APPLIED to your ship): "
                     f"({heading.get('x', 0):+.2f},{heading.get('y', 0):+.2f},"
@@ -4180,6 +4199,8 @@ def format_admiral_orders_for_captain(
             if (getattr(order, "maneuver", None) and not isinstance(heading, dict)
                     and admiral_order_moves_ship(order)):
                 applied.append("MANEUVER ORDER")
+            if check.get("throttle"):
+                lines.append(f"      !! ORDER TEXT vs APPLIED: {check['throttle']}")
             if check.get("engine"):
                 lines.append(f"      >>> ENGINE ORDER CHECK: {check['engine']}")
             for point in check.get("points") or []:

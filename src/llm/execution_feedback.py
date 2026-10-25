@@ -65,6 +65,10 @@ def _helm_text(data: Dict[str, Any]) -> str:
     req, applied = data.get("requested_throttle"), data.get("applied_throttle")
     if mode == "COAST" or not req:
         return "COASTING (no maneuver)"
+    if mode in ("PADLOCK", "MAINTAIN"):
+        # The drive is off by design: "requested 100%, applied 0% (turning
+        # onto the burn line...)" read as a failed burn.
+        return f"{mode}, coasting (engine off" + (", nose on target)" if mode == "PADLOCK" else ")")
     if not isinstance(applied, (int, float)):
         return f"{mode}, requested {req * 100:.0f}% throttle"
     text = f"{mode}, requested {req * 100:.0f}% throttle, applied {applied * 100:.0f}%"
