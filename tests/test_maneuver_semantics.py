@@ -203,6 +203,18 @@ class TestInterceptStandoff:
         assert max(applied) <= 0.4 + 1e-9
         assert me.execution_mode == "HOLD"
 
+    def test_two_ships_closing_to_one_standoff_meet_at_it(self):
+        """Both sides INTERCEPT each other with the same standoff: each
+        accounts for the other's charge and braking, no merge, no crawl."""
+        sim, me, foe = _duel()
+        sim.inject_command("foe", Maneuver(ManeuverType.INTERCEPT, start_time=0.0,
+                                           target_id="me", standoff_m=120_000.0))
+        best_r, _, log = _fly(sim, me, foe, _intercept(120.0), 600)
+        assert best_r >= 115_000.0
+        _, r_end, v_end, _ = log[-1]
+        assert abs(r_end - 120_000.0) < 3_000.0 and v_end < 20.0
+        assert me.execution_mode == foe.execution_mode == "HOLD"
+
     def test_arrival_speed_alone_arrives_slowly_at_the_target(self):
         sim, me, foe = _duel()
         _, _, log = _fly(sim, me, foe, _intercept(arrival_kps=0.5), 500)
@@ -247,6 +259,20 @@ class TestHoldRange:
         tail = log[-120:]
         assert all(abs(r - 200_000.0) < 3_000.0 for _, r, _, _ in tail)
         assert all(v < 20.0 for _, _, v, _ in tail)
+
+    def test_holds_against_a_charging_target(self):
+        """He burns at us at 1 g; a 2 g destroyer holding 200 km matches his
+        burn instead of being run down (the old cancel-closure heading
+        assumed he coasts)."""
+        sim, me, foe = _duel()
+        foe.current_maneuver = Maneuver(ManeuverType.INTERCEPT, start_time=0.0, throttle=0.5,
+                                        target_id="me")
+        best_r, _, log = _fly(sim, me, foe, _hold(200.0), 450)
+        assert best_r >= 195_000.0
+        tail = log[-100:]
+        assert all(abs(r - 200_000.0) < 3_000.0 for _, r, _, _ in tail)
+        assert all(v < 20.0 for _, _, v, _ in tail)
+        assert me.applied_throttle == pytest.approx(0.5, abs=0.05)
 
     def test_opens_to_the_range_when_too_close(self):
         sim, me, foe = _duel(foe_km=50.0)

@@ -268,6 +268,9 @@ HEADING_POINT_ARRIVAL_M = 2000.0
 # The stop is planned on this share of the deceleration the ship can make, so
 # a nose still settling or engine damage mid-brake does not overshoot.
 RANGE_BRAKE_ACCEL_FRACTION = 0.8
+# Against a target burning toward us the plan subtracts his acceleration, but
+# never below this share of ours (see _fly_range_keeping).
+RANGE_MIN_PLAN_FRACTION = 0.3
 # ...plus this many seconds of travel at the current closing speed.
 RANGE_BRAKE_MARGIN_S = 3.0
 # HOLD takes over within this range error (from a standing start, or once
@@ -3950,21 +3953,25 @@ class CombatSimulation:
         accel = a_full * throttle
         if accel <= 0.0:
             return 0.0
-        # Deceleration we plan the stop on, less whatever the target's own
-        # burn adds to our approach speed.
+        # The target's own burn along the line: push > 0 adds to our approach
+        # speed (he charges), < 0 takes it off (he brakes too).
         target_acc = self._thrust_accel(target)
-        push = max(0.0, -sign * target_acc.dot(los))
-        decel = RANGE_BRAKE_ACCEL_FRACTION * accel - push
+        push = -sign * target_acc.dot(los)
+        # Deceleration we plan the stop on: our share, less his charge - but
+        # never planned below a floor, or a charging enemy would make us
+        # brake from any range (and two ships both closing to a standoff
+        # would back away from each other).
+        decel = max(RANGE_MIN_PLAN_FRACTION * accel,
+                    RANGE_BRAKE_ACCEL_FRACTION * accel - max(0.0, push))
 
         brake_dir = (rel_v * -1.0).normalized() if rel_v.magnitude > 1.0 else los * -sign
         margin = max(0.0, toward) * (RANGE_BRAKE_MARGIN_S + dt)
-
-        def must_arrive(flip_s: float) -> bool:
-            if toward <= v_end:
-                return False
-            if decel <= 0.0:
-                return True     # he out-accelerates us: brake now, best effort
-            return toward >= max_arrival_speed_mps(dist - margin, decel, flip_s, v_end)
+        # The fastest approach speed the flip from the current attitude plus
+        # the planned deceleration can still stop at the wanted range.
+        flip_s = self._estimate_turn_time(ship, ship.forward.angle_to(brake_dir),
+                                          engines_on=True)
+        cap = max_arrival_speed_mps(dist - margin, decel, flip_s, v_end)
+        must_arrive = toward > v_end and toward >= cap
 
         move = 'CLOSE' if sign > 0 else 'OPEN'
         phase = maneuver._range_phase
@@ -3972,40 +3979,31 @@ class CombatSimulation:
             phase = 'HOLD' if dist <= RANGE_HOLD_ZONE_M else move
         if phase in ('CLOSE', 'OPEN'):
             phase = move    # passed the wanted range: head back for it
-            flip_s = self._estimate_turn_time(ship, ship.forward.angle_to(brake_dir),
-                                              engines_on=True)
             if dist <= RANGE_HOLD_ZONE_M and toward <= v_end + RANGE_ARRIVED_MPS:
                 phase = 'HOLD'
-            elif must_arrive(flip_s):
+            elif must_arrive:
                 phase = 'ARRIVE'
         elif phase == 'ARRIVE':
             if toward <= v_end + RANGE_ARRIVED_MPS:
                 phase = 'HOLD' if dist <= RANGE_HOLD_EXIT_M else move
-            elif dist > RANGE_HOLD_EXIT_M and decel > 0.0:
+            elif dist > RANGE_HOLD_EXIT_M:
                 # Fleeing target: re-close only well below the stoppable
                 # speed (a full flip back costs time), never flip-flop.
-                flip_s = self._estimate_turn_time(ship, math.pi, engines_on=True)
-                limit = max_arrival_speed_mps(dist - margin, decel, flip_s, v_end)
+                limit = max_arrival_speed_mps(
+                    dist - margin, decel,
+                    self._estimate_turn_time(ship, math.pi, engines_on=True), v_end)
                 if toward < RANGE_RECLOSE_FRACTION * limit:
                     phase = move
         elif phase == 'HOLD':
             if dist > RANGE_HOLD_EXIT_M:
-                phase = move
-                flip_s = self._estimate_turn_time(ship, ship.forward.angle_to(brake_dir),
-                                                  engines_on=True)
-                if must_arrive(flip_s):
-                    phase = 'ARRIVE'
+                phase = 'ARRIVE' if must_arrive else move
         maneuver._range_phase = phase
         ship.execution_mode = phase
 
         if phase in ('CLOSE', 'OPEN'):
-            # Head for the range at up to the fastest speed a full flip and
-            # the planned deceleration can still stop, nulling any sideways
-            # drift: burning straight at him while drifting sideways turns
-            # into an orbit at the range where thrust equals v^2/r.
-            flip_s = self._estimate_turn_time(ship, math.pi, engines_on=True)
-            cap = (max_arrival_speed_mps(dist - margin, decel, flip_s, v_end)
-                   if decel > 0.0 else v_end)
+            # Head for the range at up to the stoppable speed, nulling any
+            # sideways drift: burning straight at him while drifting sideways
+            # turns into an orbit at the range where thrust equals v^2/r.
             dv = los * (sign * cap) - rel_v
             mag = dv.magnitude
             if mag < RANGE_HOLD_DEADBAND_MPS:
@@ -4015,9 +4013,12 @@ class CombatSimulation:
 
         if phase == 'ARRIVE':
             # Constant-deceleration guidance: the deceleration that lands
-            # exactly on the wanted range at the arrival speed; thrust against
-            # the relative velocity also kills the lateral drift.
-            need = required_decel_ms2(toward, dist, v_end)
+            # exactly on the wanted range at the arrival speed, plus his
+            # charge (or less his own braking - two ships braking toward one
+            # standoff share the work instead of both braking in full and
+            # crawling in); thrust against the relative velocity also kills
+            # the lateral drift.
+            need = max(0.0, required_decel_ms2(toward, dist, v_end) + push)
             axis_share = max(0.1, toward / max(rel_v.magnitude, 1.0))
             demand = need / (axis_share * a_full) if a_full > 0 else 1.0
             return self._turn_then_burn(ship, brake_dir, min(throttle, demand), dt)
@@ -4025,8 +4026,7 @@ class CombatSimulation:
         # HOLD: null the relative velocity (matching his burn), and drift
         # back onto the range when off it by more than the dead zone.
         off = max(0.0, dist - RANGE_HOLD_DEADZONE_M)
-        speed = min(off / RANGE_HOLD_TAU_S,
-                    max_arrival_speed_mps(off, max(decel, 0.0)) if decel > 0.0 else 0.0)
+        speed = min(off / RANGE_HOLD_TAU_S, max_arrival_speed_mps(off, decel))
         wanted_rel_v = los * (sign * speed)
         dv = wanted_rel_v - rel_v
         if dv.magnitude < RANGE_HOLD_DEADBAND_MPS and target_acc.magnitude < 0.01 * a_full:
