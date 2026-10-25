@@ -149,7 +149,9 @@ class TestCacheRequestShape:
 
         assert isinstance(out[0]["content"], list), "system content must be block form"
         block = out[0]["content"][0]
-        assert block["cache_control"] == {"type": "ephemeral"}
+        # 1-hour lifetime: checkpoints are 7-17 min apart in wall-clock time,
+        # past the 5-minute default (audit CP-05).
+        assert block["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
         assert block["text"] == "stable doctrine"
         # The volatile turn must NOT be marked, or the breakpoint moves every turn.
         assert out[1]["content"] == "volatile turn"

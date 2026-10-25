@@ -94,6 +94,14 @@ class CallStats:
     cache_discount: float = 0.0
     cost_usd: float = 0.0
     unpriced_calls: int = 0
+    # Prompt-cache outcome per call, from usage.prompt_tokens_details: a HIT
+    # read a cached prefix, a WRITE (miss) paid to store one, COLD did
+    # neither. A battle whose calls are all WRITE pays the cache surcharge
+    # and never collects it (CP-05) - these counters make that visible.
+    cache_write_tokens: int = 0
+    cache_hits: int = 0
+    cache_writes: int = 0
+    cache_cold: int = 0
     errors: List[str] = field(default_factory=list)
     _lock: threading.Lock = field(
         default_factory=threading.Lock, repr=False, compare=False
@@ -103,6 +111,18 @@ class CallStats:
     def cache_hit_rate(self) -> float:
         """Fraction of prompt tokens served from cache across this client."""
         return (self.cached_tokens / self.prompt_tokens) if self.prompt_tokens else 0.0
+
+    def cache_summary(self) -> str:
+        """One line for tickers/logs: did the prompt cache actually pay?"""
+        with self._lock:
+            calls = self.cache_hits + self.cache_writes + self.cache_cold
+            if not calls:
+                return "cache: no calls yet"
+            rate = (self.cached_tokens / self.prompt_tokens) if self.prompt_tokens else 0.0
+            return (f"cache: {self.cache_hits} hit / {self.cache_writes} write / "
+                    f"{self.cache_cold} cold calls, {self.cached_tokens / 1000:.1f}k read + "
+                    f"{self.cache_write_tokens / 1000:.1f}k written of "
+                    f"{self.prompt_tokens / 1000:.1f}k prompt tokens ({rate:.0%} read)")
 
     def record_call(self) -> None:
         with self._lock:
@@ -130,8 +150,15 @@ class CallStats:
             else:
                 self.cost_usd += float(usage['cost'])
             self.prompt_tokens += usage.get("prompt_tokens", 0) or 0
-            details = usage.get("prompt_tokens_details") or {}
-            self.cached_tokens += details.get("cached_tokens", 0) or 0
+            cached, written = cache_usage(usage)
+            self.cached_tokens += cached
+            self.cache_write_tokens += written
+            if cached:
+                self.cache_hits += 1
+            elif written:
+                self.cache_writes += 1
+            else:
+                self.cache_cold += 1
             discount = usage.get("cache_discount")
             if discount:
                 self.cache_discount += discount
@@ -142,6 +169,17 @@ class CallStats:
             # Keep the log bounded; a wedged battle should not accumulate forever.
             if len(self.errors) < 50:
                 self.errors.append(msg)
+
+
+def cache_usage(usage: Optional[Dict[str, Any]]) -> "tuple[int, int]":
+    """(cached_tokens read, cache_write_tokens) from an OpenRouter usage block."""
+    details = (usage or {}).get("prompt_tokens_details") or {}
+    try:
+        cached = int(details.get("cached_tokens", 0) or 0)
+        written = int(details.get("cache_write_tokens", 0) or 0)
+    except (TypeError, ValueError):
+        return 0, 0
+    return cached, written
 
 
 def _strip_prefix(model: str) -> str:
@@ -178,9 +216,31 @@ def cache_minimum_tokens(model: str) -> int:
     return _CACHE_MIN_TOKENS.get(_strip_prefix(model), 1024)
 
 
+# Cache lifetime per provider family (OpenRouter passes cache_control.ttl
+# through to Anthropic). The default ephemeral entry lives 5 minutes, but the
+# checkpoints of a real LLM battle are 7-17 minutes apart in wall-clock time:
+# battle A's Sonnet captains wrote their 9.1k-token prefix on 87 of 95 calls
+# and read it on 8, and its admiral wrote 381k cache tokens and read none -
+# every write a 25% surcharge that was never collected (audit CP-05). A 1-hour
+# entry costs 2x base input to write instead of 1.25x and is read at 0.1x, so
+# it pays for itself on its first re-read and survives the gap. Families not
+# listed keep the plain ephemeral marker (Gemini/Qwen manage their own TTL).
+CACHE_TTL_BY_PREFIX: Dict[str, str] = {"anthropic/": "1h"}
+
+
+def cache_ttl_for(model: str) -> Optional[str]:
+    """The cache_control ttl to request for this model, or None for the default."""
+    name = _strip_prefix(model)
+    for prefix, ttl in CACHE_TTL_BY_PREFIX.items():
+        if name.startswith(prefix):
+            return ttl
+    return None
+
+
 def apply_cache_breakpoint(
     messages: List[Dict[str, Any]],
     model: str,
+    ttl: Optional[str] = "auto",
 ) -> List[Dict[str, Any]]:
     """
     Mark the system prompt as a cache breakpoint for providers that need one.
@@ -189,23 +249,38 @@ def apply_cache_breakpoint(
     breakpoint on the system message also covers the (stable) tool definitions.
     Providers that cache automatically are left untouched, since the markup is
     unnecessary there and can be rejected.
+
+    ttl: "auto" picks the family lifetime (CACHE_TTL_BY_PREFIX - 1h for
+    Anthropic); None forces the provider default; any other string is sent as
+    cache_control.ttl. A system message already in block form gets the marker
+    on its last text block.
     """
     if not messages or not needs_explicit_cache_breakpoint(model):
         return messages
+    if ttl == "auto":
+        ttl = cache_ttl_for(model)
+    control: Dict[str, str] = {"type": "ephemeral"}
+    if ttl:
+        control["ttl"] = ttl
 
     patched = []
     marked = False
     for msg in messages:
-        if not marked and msg.get("role") == "system" and isinstance(msg.get("content"), str):
+        content = msg.get("content")
+        if not marked and msg.get("role") == "system" and isinstance(content, str):
             patched.append({
                 "role": "system",
-                "content": [{
-                    "type": "text",
-                    "text": msg["content"],
-                    "cache_control": {"type": "ephemeral"},
-                }],
+                "content": [{"type": "text", "text": content, "cache_control": control}],
             })
             marked = True
+        elif not marked and msg.get("role") == "system" and isinstance(content, list):
+            blocks = [dict(b) if isinstance(b, dict) else b for b in content]
+            for block in reversed(blocks):
+                if isinstance(block, dict) and block.get("type") == "text":
+                    block["cache_control"] = control
+                    marked = True
+                    break
+            patched.append({**msg, "content": blocks})
         else:
             patched.append(msg)
     return patched
@@ -272,6 +347,14 @@ class CaptainClient:
         self.reasoning_effort = reasoning_effort
         self.stats = CallStats()
         self._audit_local = threading.local()
+        # Outcome of the calling thread's most recent request (finish_reason,
+        # usage): calls run concurrently, so this is thread-local. Callers that
+        # must tell a truncated answer from a deliberate empty one read it via
+        # last_call_meta() - decide_with_tools() itself only returns tool calls.
+        self._call_meta = threading.local()
+        # Per-call prompt-cache line on stdout (AIC_LOG_CACHE=1); the running
+        # totals are always in stats.cache_summary().
+        self.log_cache = os.getenv("AIC_LOG_CACHE", "") not in ("", "0")
         self.budget = None
 
         if not self.api_key:
@@ -307,15 +390,49 @@ class CaptainClient:
             "X-Title": "AI Commanders",
         }
 
-    def _post(self, payload: Dict[str, Any], what: str) -> Dict[str, Any]:
+    def last_call_meta(self) -> Dict[str, Any]:
+        """
+        finish_reason / usage of THIS thread's last completed request.
+
+        {} before the first call. Keys: model, finish_reason, usage,
+        reasoning_tokens, completion_tokens, max_tokens, content_chars.
+        """
+        return dict(getattr(self._call_meta, "meta", None) or {})
+
+    def _note_call(self, request_model: str, data: Dict[str, Any], max_tokens: int) -> None:
+        choice = (data.get("choices") or [{}])[0]
+        message = choice.get("message", {}) or {}
+        usage = data.get("usage") or {}
+        details = usage.get("completion_tokens_details") or {}
+        self._call_meta.meta = {
+            "model": request_model,
+            "finish_reason": choice.get("finish_reason"),
+            "usage": usage,
+            "reasoning_tokens": details.get("reasoning_tokens"),
+            "completion_tokens": usage.get("completion_tokens"),
+            "max_tokens": max_tokens,
+            "content_chars": len(message.get("content") or ""),
+        }
+        if self.log_cache and usage:
+            cached, written = cache_usage(usage)
+            outcome = "HIT" if cached else ("WRITE" if written else "cold")
+            print(f"[LLM CACHE] {request_model}: {outcome} read {cached} / write {written} "
+                  f"of {usage.get('prompt_tokens', 0)} prompt tokens", flush=True)
+
+    def _post(self, payload: Dict[str, Any], what: str,
+              reasoning_effort: Optional[str] = None) -> Dict[str, Any]:
         """
         POST with bounded retries on transient failures.
+
+        reasoning_effort overrides the client's own effort for this request
+        (e.g. a cheaper retry after a reasoning model ran out of tokens).
 
         Raises:
             LLMCallError: on a non-retryable error, or after exhausting retries.
         """
-        if self.reasoning_effort is not None:
-            payload['reasoning'] = {'effort': self.reasoning_effort}
+        effort = reasoning_effort or self.reasoning_effort
+        if effort is not None:
+            payload['reasoning'] = {'effort': effort}
         last_error: Optional[str] = None
         last_status: Optional[int] = None
 
@@ -396,6 +513,8 @@ class CaptainClient:
         model: Optional[str] = None,
         temperature: Optional[float] = None,
         tool_choice: str = "auto",
+        max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> List[ToolCall]:
         """
         Make a decision using tool/function calling.
@@ -410,6 +529,9 @@ class CaptainClient:
                 to say. Pass "required" where a tool call IS the answer (the
                 draft phase): reasoning models otherwise burn their turn
                 thinking out loud and the caller sees no call at all.
+            max_tokens / reasoning_effort: per-call overrides of the client
+                defaults (the admiral's retry after a truncated directive).
+                The outcome (finish_reason, usage) is in last_call_meta().
 
         Returns:
             List of ToolCall objects representing the LLM's decisions. An empty
@@ -419,15 +541,17 @@ class CaptainClient:
             LLMCallError: if the API call itself failed.
         """
         request_model = _strip_prefix(model or self.model)
-        if tool_choice == "required" and forced_tool_use_conflicts(request_model, self.reasoning_effort):
+        effort = reasoning_effort or self.reasoning_effort
+        if tool_choice == "required" and forced_tool_use_conflicts(request_model, effort):
             tool_choice = "auto"
+        limit = int(max_tokens or self.max_tokens)
 
         payload = {
             "model": request_model,
             "messages": apply_cache_breakpoint(messages, request_model),
             "tools": tools,
             "tool_choice": tool_choice,
-            "max_tokens": self.max_tokens,
+            "max_tokens": limit,
             # Ask OpenRouter to report cache effectiveness so a silently cold
             # cache shows up as a number instead of an unnoticed cost.
             "usage": {"include": True},
@@ -440,9 +564,12 @@ class CaptainClient:
         if self.session_id:
             payload["session_id"] = self.session_id
 
-        data = self._post(payload, f"decide_with_tools[{request_model}]")
+        self._call_meta.meta = {}
+        data = self._post(payload, f"decide_with_tools[{request_model}]",
+                          reasoning_effort=reasoning_effort)
 
         self.stats.record_usage(data.get("usage") or {})
+        self._note_call(request_model, data, limit)
 
         choice = (data.get("choices") or [{}])[0]
         message = choice.get("message", {}) or {}
@@ -450,7 +577,7 @@ class CaptainClient:
 
         if finish_reason == "length":
             self.stats.record_truncated()
-            print(f"[LLM WARN] Response truncated at max_tokens={self.max_tokens} "
+            print(f"[LLM WARN] Response truncated at max_tokens={limit} "
                   f"for {request_model}; some orders may be missing.")
 
         return self._parse_tool_calls(message, finish_reason)
@@ -491,9 +618,11 @@ class CaptainClient:
         if self.session_id:
             payload["session_id"] = self.session_id
 
+        self._call_meta.meta = {}
         data = self._post(payload, f"complete[{request_model}]")
 
         self.stats.record_usage(data.get("usage") or {})
+        self._note_call(request_model, data, self.max_tokens)
 
         choice = (data.get("choices") or [{}])[0]
         message = choice.get("message", {}) or {}
