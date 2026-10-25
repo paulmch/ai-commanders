@@ -483,7 +483,7 @@ class TestDoctrine:
         for text in (system, turn):
             assert "SPINAL" not in text  # "SPINAL CAN FIRE", "SPINAL ALIGNED", ...
             for gun_text in ("set_weapons_order", "spinal_mode", "Spinal coilgun",
-                             "Angle to primary target", "AMMO NOTE", "HIT PROBABILITY BY RANGE",
+                             "Angle to primary target", "AMMO NOTE", "HIT PROBABILITY PER ROUND",
                              "PROJECTILE PHYSICS", "TACTICAL OPTIONS", "spinal masked",
                              "Hit probability", "P(hit)", "Turret coilgun"):
                 assert gun_text not in text, gun_text
@@ -491,7 +491,7 @@ class TestDoctrine:
 
     def test_gun_hulls_keep_gun_doctrine(self):
         system, turn = (m["content"] for m in build_captain_messages(**destroyer_kwargs()))
-        assert "HIT PROBABILITY BY RANGE" in system and "set_weapons_order" in system
+        assert "HIT PROBABILITY PER ROUND" in system and "set_weapons_order" in system
         assert "TACTICAL OPTIONS" in system and "TORPEDO BOAT TACTICS" not in system
         assert "Spinal Coiler Mk3 FIRE_WHEN_OPTIMAL (1 ready)" in turn
         # Identical mounts grouped, expected damage per shot shown (R10).

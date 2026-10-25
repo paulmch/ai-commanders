@@ -2164,29 +2164,15 @@ class LLMCaptain:
 
         # Show the same P(hit) that gates each gun shot, plus the number of
         # opportunities in this decision window (including a partial salvo).
-        from ..firecontrol import calculate_hit_probability
-        from ..geometry import ShipGeometry
-        from ..simulation import ManeuverType
-
-        geometry = getattr(enemy, "geometry", None) or ShipGeometry(
-            length_m=100.0, radius_m=12.5,
-            nose_cone_length_m=20.0, engine_section_length_m=20.0,
-        )
-        maneuver = getattr(enemy, "current_maneuver", None)
-        is_evading = (maneuver is not None
-                      and maneuver.maneuver_type == ManeuverType.EVASIVE)
+        # simulation.gun_firing_solution is the gate's own call: it prices in
+        # where the target can be by the time the round arrives (dodges,
+        # unforeseen burns), not just the round's dispersion.
         window_s = getattr(simulation, "decision_interval", 30.0)
         forecasts = []
         for slot, ws in getattr(ship, "weapons", {}).items():
             if ws.weapon.is_missile or ws.weapon.muzzle_velocity_kps <= 0:
                 continue
-            solution = calculate_hit_probability(
-                shooter_position=ship.position, shooter_velocity=ship.velocity,
-                target_position=enemy.position, target_velocity=enemy.velocity,
-                target_geometry=geometry, target_forward=enemy.forward,
-                muzzle_velocity_kps=ws.weapon.muzzle_velocity_kps,
-                target_is_evading=is_evading,
-            )
+            solution = simulation.gun_firing_solution(ship, enemy, ws)
             probability = solution.hit_probability if solution.can_fire else 0.0
             in_arc = ws.is_target_in_arc(ship.forward, rel_pos.normalized())
             shots = ws.shots_in_window(window_s) if in_arc and solution.can_fire else 0
@@ -2770,7 +2756,6 @@ class LLMCaptain:
         fleet = self.config.fleet_data
         hulls, guns = [], []
         from .fire_solutions import fly_torpedo
-        from ..firecontrol import calculate_hit_probability
         evading = bool(ship.current_maneuver is not None
                        and getattr(ship.current_maneuver.maneuver_type, 'name', '') == 'EVASIVE')
         window_s = getattr(simulation, "decision_interval", 30.0)
@@ -2806,11 +2791,8 @@ class LLMCaptain:
                         or not getattr(ws, 'is_operational', True)):
                     continue
                 try:
-                    sol = calculate_hit_probability(
-                        shooter_position=e.position, shooter_velocity=e.velocity,
-                        target_position=ship.position, target_velocity=ship.velocity,
-                        target_geometry=ship.geometry, target_forward=ship.forward,
-                        muzzle_velocity_kps=w.muzzle_velocity_kps, target_is_evading=evading)
+                    # His gate's own number against us - our dodge included.
+                    sol = simulation.gun_firing_solution(e, ship, ws)
                 except (AttributeError, TypeError):
                     continue
                 if not sol.can_fire or not ws.is_target_in_arc(e.forward, to_me.normalized()):

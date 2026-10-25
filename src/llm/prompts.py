@@ -958,20 +958,31 @@ GUN_PHYSICS_REFERENCE = """
 PROJECTILE PHYSICS (for your calculations):
 - Spinal round: 9.9 km/s → at 100km takes ~10s, at 200km ~20s, at 500km ~50s
 - Turret round: 6.0 km/s → at 100km takes ~17s, at 200km ~33s, at 500km ~83s
-- EVADE maneuver: cuts enemy hit probability by ~40% (x0.6 multiplier in the
-  fire-control model), via random jinking ~500m/s lateral
+- A round lands only if its target is still within ~0.5 km of the aim point when it
+  arrives, so FLIGHT TIME is what kills accuracy: a hull's unforeseen burns grow as
+  0.5*a*t^2, and a ship whose evasion is on (the EVADE maneuver, or any maneuver
+  with evade dodge/full) jinks off every round it sees coming - the longer the
+  flight, the surer the dodge. The EVADE maneuver also costs every round x0.6, even
+  point-blank (the evade overlay does not).
 - Your ship width: ~20m, length ~125m
 
-HIT PROBABILITY BY RANGE (spinal, 9.9 km/s, vs a non-evading destroyer):
-- 50km: ~82% - knife fight, almost guaranteed hits
-- 100km: ~64% - close combat, most shots land
-- 200km: ~39% - medium range, and already worse than a coin flip
-- 400km: ~17% - long range, mostly misses
-- 600km+: ~10% - sniping, lucky hits only
-Turrets (6.0 km/s) are worse at every range, and evasion multiplies whatever is left
-by 0.6: an evading target at 200km is ~20% for turrets, ~23% for the spinal.
-- Closing velocity improves hit chance (harder to dodge)
-- Larger hulls are easier to hit; corvettes are much harder than dreadnoughts
+HIT PROBABILITY PER ROUND vs a destroyer (spinal 9.9 km/s / turret 6.0 km/s):
+                   50km    100km   150km   200km   300km   400km
+- holding course:  82/79%  64/57%  48/37%  36/20%  18/4%   7/1%
+- evade dodge:     82/73%  55/26%  27/6%   10/1%   2/0%    0/0%
+- dodge, mid-jink: 74/37%  21/3%   4/1%    1/0%    0/0%    0/0%
+- EVADE maneuver:  49/46%  36/24%  22/7%   11/2%   2/0%    1/0%
+"Mid-jink" is a dodger caught already burning off another round - what your other
+ships' fire does to it. Agile hulls escape sooner (a dodging frigate: spinal 42% at
+100km, 14% at 150km), heavy ones later (a dodging battleship: 31% at 200km, 8% at
+300km). The P(hit) on your ENEMIES lines is this model for the live geometry - fire
+on it, and close range before you shoot at a dodger. Under a whole fleet's fire
+dodgers do even better than shown: in a recorded fleet battle where every ship flew
+evade dodge, 0 of 188 rounds at 100-300km landed where this model promised ~16.
+- Closing speed RAISES hit chance (shorter flight, less time to dodge); crossing
+  (lateral) speed lowers it, and an opening range lowers it most. Spinal vs a
+  destroyer holding course at 200km: 36% at rest, 47% closing at 3 km/s, 28%
+  crossing at 3 km/s, 20% opening at 3 km/s
 - TO WIN: Close range aggressively OR have overwhelming accuracy advantage
 """
 
@@ -996,7 +1007,7 @@ You can fight however you want. Here are some approaches to consider:
 OPTION A - HEAD-ON CHARGE:
   INTERCEPT constantly → high closing velocity → brief exchange → fly past
   Pros: Simple, aggressive, intimidating
-  Cons: Short engagement window, hard to hit at high relative velocity, wastes fuel
+  Cons: Short engagement window (few salvos before the merge), wastes fuel
 
 OPTION B - CONTROLLED PASSES (recommended for accuracy):
   1. Approach (INTERCEPT from far out, or set_heading for your approach angle)
@@ -1018,9 +1029,10 @@ OPTION D - HOLD RANGE / KITE:
   Cons: Requires more active management
 
 KEY PHYSICS TO REMEMBER:
-- High relative velocity = harder to hit (projectiles lead wrong, brief window)
-- 0 km/s relative + no evasion = sitting duck (easy hit)
-- Sweet spot: 1-3 km/s relative with active maneuvering
+- Closing speed RAISES P(hit) per round (shorter flight); crossing (lateral) speed
+  lowers it, an opening range lowers it most
+- The price of closure is time: a fast pass is a short window and ends in a merge
+  unless you cancel closure in time (RANGE CONTROL)
 - Spinal weapons ONLY fire if nose within 30° of target - PADLOCK helps with this
 - Turrets fire at 180° arc - don't need nose-on alignment"""
 
@@ -1811,7 +1823,7 @@ def build_captain_doctrine(
             (["best P(hit) of a gun that bears"] if has_guns else [])
             + (["torpedo verdict"] if has_torps else []))
         or "no fire solution",
-        gun_legend=(f" Gun lines: P(hit) = the fire-control gate per shot now;\n  shots = your "
+        gun_legend=(f" Gun lines: P(hit) = the fire-control gate per shot now - it already counts\n  where his maneuvering and dodging can take him during the round's flight; shots = your "
                     f"chances in the next {decision_interval_s:g} s incl. salvo cooldown, if aim "
                     f"and evasion persist." if has_guns else ""),
         action_tools=", ".join(actions),
@@ -2789,11 +2801,21 @@ OPTION D - FOCUS FIRE ROTATION:
   Cons: Other enemies fire freely while ignored
 
 GUNNERY:
-- High closing velocity = harder to hit (brief engagement window); 0 km/s relative and
-  no evasion = sitting duck. Sweet spot: 1-3 km/s relative with active maneuvering.
+- Closing speed RAISES per-round P(hit) (shorter flight); crossing (lateral) speed lowers
+  it and an opening range lowers it most - spinal vs a destroyer holding course at 200 km:
+  36% at rest, 47% closing at 3 km/s, 28% crossing, 20% opening. The price of closure is
+  a short window and a merge unless the ships cancel closure in time.
 - Spinal weapons need nose-on alignment (<30 deg to target); turrets fire over a 180 deg arc.
-- Cross-section: nose-on = tiny target, lateral = 5-10x easier to hit. Keep enemies in
-  FRONT of your ships; if one flanks, reorient the affected ships (PADLOCK toward it).
+- Range is accuracy: a round hits only if its target is still near the aim point when it
+  arrives, and a ship flying EVADE or evade dodge/full jinks off rounds it sees coming.
+  Per-round P(hit) vs a dodging destroyer: spinal 55% at 100 km, 10% at 200 km, 2% at
+  300 km - and a dodger your fleet already keeps jinking is far harder (21% at 100 km).
+  Massed fire does not fix that: in a recorded fleet battle where every ship flew evade
+  dodge, 0 of 188 rounds at 100-300km landed where this model promised ~16. Do not plan
+  gun fights at dodgers beyond ~150 km.
+- Cross-section matters less: broadside is ~1.5x the hit chance of nose-on at 200 km
+  (~1.2x at 100 km). Keep enemies in FRONT of your ships; if one flanks, reorient the
+  affected ships (PADLOCK toward it).
 - Weapon modes: FIRE_IMMEDIATE (close range), FIRE_WHEN_OPTIMAL (recommended),
   FIRE_AT_RANGE (harassing fire), HOLD_FIRE (heat management).
 - Target priority: CLOSING targets first (committed); a SEPARATING ship (5+ km/s) is

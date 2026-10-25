@@ -202,8 +202,20 @@ class TestFleetControlCommands:
 
 class TestHitProbability:
 
+    def test_matches_the_gate(self, sim):
+        """With the simulation, the MCP number IS the FIRE_WHEN_OPTIMAL gate's
+        (target motion and dodging included)."""
+        shooter = sim.get_ship("alpha_2")
+        target = sim.get_ship("beta_1")
+        result = compute_hit_probability(shooter, target, sim)
+        weapon_state = shooter.weapons[result["weapon_slot"]]
+        expected = sim.gun_firing_solution(shooter, target, weapon_state)
+        assert expected.hit_probability > 0, "fixture geometry must allow a shot"
+        assert result["hit_chance"] == pytest.approx(100.0 * expected.hit_probability)
+
     def test_matches_firecontrol_model(self, sim):
         # alpha_2 is the destroyer: the only hull carrying a spinal coilgun.
+        # Without a simulation only the conversion part is available.
         shooter = sim.get_ship("alpha_2")
         target = sim.get_ship("beta_1")
         result = compute_hit_probability(shooter, target)
@@ -265,7 +277,7 @@ class TestHitProbability:
         enemy = next(e for e in state.enemy_ships if e["ship_id"] == "beta_1")
 
         shooter = sim.get_ship(enemy["hit_chance_shooter_id"])
-        model = compute_hit_probability(shooter, target)["hit_chance"]
+        model = compute_hit_probability(shooter, target, sim)["hit_chance"]
         assert enemy["hit_chance"] == pytest.approx(model)
 
         # The removed formula was 100 * (1 - d/1500); at 800 km it claimed ~47%.

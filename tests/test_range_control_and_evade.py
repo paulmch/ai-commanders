@@ -646,6 +646,29 @@ class TestRangeControlHonesty:
         text = captain_range_control(sim, me)
         assert "re-engage" in text and "stops opening" not in text
 
+    def test_equal_acceleration_flight_is_impossible_not_a_runaway_solve(self):
+        """Seeded battle hang (run_draft_battle --seed 11 --budget 200): a
+        corvette fleeing a corvette at the same 3 g (4e-6 m/s^2 apart) gave
+        the cancel solve a 9e8 s burn, and integrating it in 2 s steps never
+        finished. A burn past the search horizon is no plan: both the hold
+        and the re-engage option say IMPOSSIBLE, and the analysis is instant."""
+        import time
+        from src.llm.range_control import MAX_SOLVE_BURN_S, current_accel
+        sim = CombatSimulation(seed=1, time_step=1.0)
+        me = _ship(sim, "me", "corvette", "alpha", (0, 0, 0))
+        foe = _ship(sim, "foe", "corvette", "beta", (200, 0, 0), vel_kps=(2.0, 0, 0))
+        foe.applied_throttle = 0.9999999                      # a hair slower than us
+        assert 0.0 < ship_accel_ms2(me) - current_accel(foe).magnitude < 1e-4
+        t0 = time.perf_counter()
+        group = analyze_range_control(sim, [me])[0]
+        text = captain_range_control(sim, me)
+        assert time.perf_counter() - t0 < 5.0
+        for key in ("cancel", "reengage"):
+            opt = group.option(key)
+            assert opt.throttle == 0.0 and opt.burn_s <= MAX_SOLVE_BURN_S
+            assert opt.effect.startswith("IMPOSSIBLE: he burns as hard as you can"), opt.effect
+        assert "stops opening" not in text
+
     def test_closing_range_has_no_re_engage_option(self):
         sim, me, foe = _duel("corvette", "battleship", 500.0, 1.5)
         assert analyze_range_control(sim, [me])[0].option("reengage") is None

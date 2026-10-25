@@ -63,7 +63,8 @@ try:
         dwell_coupling_fraction,
     )
     from .firecontrol import (
-        calculate_hit_probability, FiringSolution,
+        calculate_hit_probability, FiringSolution, TargetMotion,
+        HIT_TOLERANCE_M, TERMINAL_DISPERSION_SIGMA_M,
         HelmCommand, WeaponsCommand, TacticalPosture,
         HelmOrder, WeaponsOrder, TacticalOrder, WeaponsOfficer
     )
@@ -107,7 +108,8 @@ except ImportError:
         dwell_coupling_fraction,
     )
     from firecontrol import (
-        calculate_hit_probability, FiringSolution,
+        calculate_hit_probability, FiringSolution, TargetMotion,
+        HIT_TOLERANCE_M, TERMINAL_DISPERSION_SIGMA_M,
         HelmCommand, WeaponsCommand, TacticalPosture,
         HelmOrder, WeaponsOrder, TacticalOrder, WeaponsOfficer
     )
@@ -129,35 +131,10 @@ HIT_DETECTION_RADIUS = 50.0
 # Terminal ballistics of kinetic rounds
 # -----------------------------------------------------------------------------
 
-# Extra radius added to the target hull for the swept-geometry hit test.
-# A destroyer is ~15 m radius, so 500 m is ~33x the hull: this is not a
-# physical hull size, it is the envelope inside which fire control COULD still
-# convert the shot given weapon spread and tracking error. Passing the gate is
-# therefore "close enough to try", not "hit" - see
-# CombatSimulation._resolve_projectile_hit_geometric.
-#
-# Do not shrink this to make deflection matter: it is the same envelope for
-# every gun in the game, so changing it rebalances all gun combat at once.
-# The geometry is made to matter inside the envelope instead, via
-# TERMINAL_DISPERSION_SIGMA_M below.
-HIT_TOLERANCE_M = 500.0
-
-# 1-sigma of the unmodelled terminal dispersion (barrel jitter, sensor noise,
-# last-instant target motion the fire-control solution never saw), expressed as
-# a lateral offset at the target.
-#
-# The simulation propagates the round's real trajectory, so it already knows
-# how far from the hull the round actually passed. That realized margin is a
-# deterministic offset; this sigma is the random part that decides whether the
-# round still clips the hull from that offset. For a 2-D Gaussian dispersion
-# and a hull much smaller than sigma, P(hit) falls off as exp(-margin^2/2sigma^2).
-#
-# Anchored to the tolerance envelope rather than tuned: the envelope is 2 sigma,
-# i.e. a round passing at the very edge of what fire control could convert is a
-# 2-sigma event. A round that passes THROUGH the hull (margin 0) is unaffected,
-# so a clean firing solution behaves exactly as it did before this factor
-# existed and the launch-time P(hit) keeps its full meaning.
-TERMINAL_DISPERSION_SIGMA_M = HIT_TOLERANCE_M / 2.0
+# HIT_TOLERANCE_M (the 500 m gate around the hull a round must pass through to
+# roll for a hit) and TERMINAL_DISPERSION_SIGMA_M (the geometry factor's sigma)
+# live in firecontrol.py: the fire-control forecast (calculate_hit_probability)
+# is the expectation of exactly this gate + roll, so both read one definition.
 
 # -----------------------------------------------------------------------------
 # Evasion tuning constants (see CombatSimulation._calculate_evasion)
@@ -220,6 +197,15 @@ PRESENT_THROTTLE_MOD = 0.05
 # inside this time-to-closest-approach window; beyond it a lateral jink is
 # wasted delta-v because the shooter/geometry will have changed.
 BALLISTIC_THREAT_HORIZON_S = 60.0
+
+# Ballistic EVADE needs time: EVASION_TURN_ALLOWANCE_S to swing the nose off
+# the line of fire, then at least EVASION_MIN_JINK_S of lateral burn. A round
+# closer than their sum is tanked or braced for instead (see
+# _ballistic_evasion_decision). The fire-control forecast reads the same
+# numbers (CombatSimulation.target_motion) so it never credits a dodge the
+# evasion would not fly.
+EVASION_TURN_ALLOWANCE_S = 5.0
+EVASION_MIN_JINK_S = 2.0
 
 # Commander threat display (status only, never steers the ship): a
 # seeker-killed torpedo counts as a threat to a ship only when its straight-
@@ -463,6 +449,29 @@ def maneuver_reacts_to_threats(maneuver: Optional['Maneuver']) -> bool:
         return False
     return (maneuver.maneuver_type == ManeuverType.EVASIVE
             or bool(getattr(maneuver, 'evade', None)))
+
+
+def fire_control_record(solution: FiringSolution) -> Optional[dict]:
+    """
+    The fire-control forecast's inputs for one shot, recorded on shot_fired
+    as 'fc' (scripts/fire_control_calibration.py re-evaluates the model from
+    them): track probability and displacement sigma, plus the TargetMotion -
+    acceleration, dodge throttle (None = does not dodge), whether it flies
+    EVASIVE, missed jink burn and pending HEADING burn.
+    """
+    motion = solution.target_motion
+    if motion is None:
+        return None
+    return {
+        'track': round(solution.track_probability, 4),
+        'sigma_m': round(solution.displacement_sigma_m, 1),
+        'a': round(motion.accel_ms2, 3),
+        'dodge': round(motion.dodge_throttle, 2) if motion.dodges else None,
+        'evasive': motion.evasive,
+        'jink': round(motion.jink_accel_ms2, 3),
+        'pend': round(motion.pending_burn_ms2, 3),
+        'pend_in': round(motion.pending_burn_in_s, 2),
+    }
 
 
 @dataclass
@@ -1288,15 +1297,20 @@ class ProjectileInFlight:
         launch_time: When projectile was launched.
         min_distance_to_target: Closest distance achieved to target (meters).
         prev_distance_to_target: Previous tick's distance to target (for miss detection).
-        hit_probability: Fire-control P(hit) captured at launch (None = unknown).
+        hit_probability: Fire-control P(hit) captured at launch (None = unknown):
+            the forecast, conversion x track (see firecontrol).
+        conversion_probability: The part of it the dispersion roll consumes -
+            P(lands | arrives where aimed). None = use hit_probability (rounds
+            launched without a split solution, e.g. tests).
         launch_miss_margin_m: How far from the target hull this round was
             predicted to pass at the instant it was fired, assuming both ships
             hold their velocities. This is the firing solution's own aim error,
-            and it is ALREADY priced into hit_probability (flight-time and
-            crossing-angle penalties). Recorded so that the terminal geometry
-            check can charge only for deflection acquired AFTER launch - PD
-            ablation recoil, and maneuvering the solution did not anticipate -
-            instead of billing the shot twice for the same lead error.
+            and it is ALREADY priced into the conversion probability
+            (flight-time and crossing-angle penalties). Recorded so that the
+            terminal geometry check can charge only for deflection acquired
+            AFTER launch - PD ablation recoil, and maneuvering the solution did
+            not anticipate - instead of billing the shot twice for the same
+            lead error.
         weapon: The weapon that fired this projectile (for chipping/radiator stats).
     """
     projectile_id: str
@@ -1309,6 +1323,7 @@ class ProjectileInFlight:
     hit_probability: Optional[float] = None
     launch_miss_margin_m: float = 0.0
     weapon: Optional[Weapon] = None
+    conversion_probability: Optional[float] = None
 
 
 @dataclass
@@ -2076,7 +2091,7 @@ class CombatSimulation:
 
     def _process_weapons_orders(self, ship: ShipCombatState, debug: bool = False) -> None:
         """Process weapons orders and fire weapons according to their orders."""
-        from .firecontrol import WeaponsCommand, calculate_hit_probability
+        from .firecontrol import WeaponsCommand
 
         if not ship.weapons_orders:
             if debug:
@@ -2142,36 +2157,10 @@ class CombatSimulation:
                     self._weapon_status(ship, weapon_slot, 'no_intercept', target_id)
                     continue
 
-            # Calculate firing solution
-            # NOTE: compare against the enum member itself. The member is named
-            # EVASIVE (there is no 'EVADE'), so the old string comparison
-            # ('EVADE') was always False and the evasion penalty never applied.
-            is_evading = (target.current_maneuver is not None and
-                         hasattr(target.current_maneuver, 'maneuver_type') and
-                         target.current_maneuver.maneuver_type == ManeuverType.EVASIVE)
-
-            # Use target geometry if available, otherwise create a simple one
-            # (ShipGeometry has no beam_m/nose_section_length kwargs - passing
-            # them raised TypeError and crashed the sim for geometry-less ships)
-            target_geometry = target.geometry
-            if not target_geometry:
-                target_geometry = ShipGeometry(
-                    length_m=100.0,
-                    radius_m=12.5,
-                    nose_cone_length_m=20.0,
-                    engine_section_length_m=20.0,
-                )
-
-            solution = calculate_hit_probability(
-                shooter_position=ship.position,
-                shooter_velocity=ship.velocity,
-                target_position=target.position,
-                target_velocity=target.velocity,
-                target_geometry=target_geometry,
-                target_forward=target.forward,
-                muzzle_velocity_kps=weapon_state.weapon.muzzle_velocity_kps,
-                target_is_evading=is_evading,
-            )
+            # Calculate firing solution: the same call every commander-facing
+            # P(hit) uses (captain forecasts, MCP), so the gate a captain sets
+            # is checked against the number the captain was shown.
+            solution = self.gun_firing_solution(ship, target, weapon_state)
 
             if not solution.can_fire:
                 self._weapon_status(ship, weapon_slot, 'no_firing_solution', target_id)
@@ -2206,6 +2195,8 @@ class CombatSimulation:
                     eta_s=time_to_target,
                     hit_probability=solution.hit_probability,
                     weapon_slot=weapon_slot,
+                    conversion_probability=solution.conversion_probability,
+                    fire_control=fire_control_record(solution),
                 ):
                     self._weapon_status(ship, weapon_slot, 'lead_unavailable', target_id)
                     continue
@@ -2224,6 +2215,139 @@ class CombatSimulation:
     # -------------------------------------------------------------------------
     # Projectile Launch
     # -------------------------------------------------------------------------
+
+    def target_motion(self, target: ShipCombatState,
+                      shooter: Optional[ShipCombatState] = None) -> TargetMotion:
+        """
+        What ``target`` can do to a round while it flies, for the fire-control
+        forecast (firecontrol.displacement_sigma_m): its full-thrust
+        acceleration now (engine damage included), whether its evasion dodges
+        inbound rounds (EVASIVE, or the evade overlay on any other maneuver)
+        at what throttle - with the evasion's own horizon and minimum time to
+        go - the part of a jink it is flying now that the lead does not
+        extrapolate, and an ordered HEADING burn that has not lit yet. ``shooter`` (the firing
+        ship) sets the line of fire the burns are measured across; without it
+        their full magnitude counts.
+
+        Everything here is observable from outside (hull class, drive state,
+        the target's habit of jinking off rounds, which way it is turning);
+        nothing reads the RNG.
+        """
+        accel = 0.0
+        ks = getattr(target, 'kinematic_state', None)
+        if ks is not None:
+            accel = ks.max_acceleration_ms2() * target.get_effective_thrust_fraction()
+        maneuver = target.current_maneuver
+        dodges = (maneuver_reacts_to_threats(maneuver)
+                  and not target.is_destroyed and not target.is_dying)
+        throttle = float(maneuver.throttle) if maneuver is not None else 0.0
+        line = None
+        if shooter is not None:
+            rel = target.position - shooter.position
+            if rel.magnitude > 1.0:
+                line = rel.normalized()
+
+        def across(v: Vector3D) -> float:
+            """Magnitude of v across the line of fire."""
+            if line is None:
+                return v.magnitude
+            return (v - line * v.dot(line)).magnitude
+
+        # A jink in progress: the evade overlay has the helm (a threat holds
+        # it) and the drive is pushing the ship somewhere its lead
+        # (_estimate_target_acceleration, which reads the base maneuver) does
+        # not go. The EVASIVE maneuver's lead already assumes half a burn
+        # along the nose; firecontrol prices it with its own dodge fraction.
+        evasive = maneuver is not None and maneuver.maneuver_type == ManeuverType.EVASIVE
+        jink = 0.0
+        if (dodges and not evasive and ks is not None
+                and getattr(target, 'execution_mode', None) in EVASION_OVERLAY_MODES):
+            jink = across(self._thrust_accel(target)
+                          - self._estimate_target_acceleration(target))
+
+        # The HEADING burn the lead does not see yet. The lead extrapolates
+        # the drive's output now; a HEADING order turns first (token throttle
+        # until inside HEADING_BURN_CONE_DEG, or held until a formation's
+        # burn_start_time) and then burns at the ordered throttle along the
+        # ordered heading - a burn that lights pending_in seconds from now.
+        # Inside the cone the nose is still swinging the last few degrees
+        # onto the heading, so the same difference (ordered burn minus the
+        # drive's output) is the part of the burn the lead aims wrong.
+        pending, pending_in = 0.0, 0.0
+        if (ks is not None and maneuver is not None
+                and maneuver.maneuver_type == ManeuverType.HEADING
+                and not maneuver.live_heading and maneuver.heading_direction
+                and throttle > 0.0
+                and not (dodges and getattr(target, 'execution_mode', None) in EVASION_OVERLAY_MODES)):
+            hd = maneuver.heading_direction
+            direction = Vector3D(hd.get('x', 0.0), hd.get('y', 0.0), hd.get('z', 0.0))
+            if direction.magnitude > 0.0:
+                direction = direction.normalized()
+                cone = math.radians(HEADING_BURN_CONE_DEG)
+                angle = target.forward.angle_to(direction)
+                hold = (maneuver.burn_start_time - self.current_time
+                        if maneuver.burn_start_time is not None else 0.0)
+                if angle > cone or hold > 1e-9:
+                    pending_in = max(self._heading_burn_light_s(target, direction), hold)
+                if math.isfinite(pending_in):     # a hull that cannot turn never lights it
+                    pending = across(direction * (accel * min(1.0, throttle))
+                                     - self._thrust_accel(target))
+                else:
+                    pending_in = 0.0
+
+        return TargetMotion(
+            accel_ms2=accel,
+            dodges=dodges,
+            evasive=evasive,
+            dodge_throttle=max(0.0, min(1.0, throttle)),
+            dodge_horizon_s=BALLISTIC_THREAT_HORIZON_S,
+            dodge_min_time_s=EVASION_TURN_ALLOWANCE_S + EVASION_MIN_JINK_S,
+            jink_accel_ms2=jink,
+            pending_burn_ms2=pending,
+            pending_burn_in_s=pending_in,
+        )
+
+    def gun_firing_solution(
+        self,
+        shooter: ShipCombatState,
+        target: ShipCombatState,
+        weapon_state: 'WeaponState',
+    ) -> FiringSolution:
+        """
+        The firing solution for one gun at one target right now - the single
+        source of P(hit): the FIRE_WHEN_OPTIMAL gate, the per-round forecast
+        recorded on shot_fired, captain forecasts and threat lines, and MCP
+        hit chances all call this.
+        """
+        # Looked up at call time (tests isolate fire control by patching it).
+        from .firecontrol import calculate_hit_probability
+        # Compare against the enum member: the evasive maneuver is
+        # ManeuverType.EVASIVE (there is no 'EVADE'); this flag only feeds the
+        # conversion roll's legacy x0.6. Whether the target DODGES rounds
+        # (EVASIVE or the evade overlay) is TargetMotion.dodges.
+        maneuver = target.current_maneuver
+        is_evading = (maneuver is not None
+                      and getattr(maneuver, 'maneuver_type', None) == ManeuverType.EVASIVE)
+        # Use target geometry if available, otherwise create a simple one
+        # (ShipGeometry has no beam_m/nose_section_length kwargs - passing
+        # them raised TypeError and crashed the sim for geometry-less ships)
+        target_geometry = target.geometry or ShipGeometry(
+            length_m=100.0,
+            radius_m=12.5,
+            nose_cone_length_m=20.0,
+            engine_section_length_m=20.0,
+        )
+        return calculate_hit_probability(
+            shooter_position=shooter.position,
+            shooter_velocity=shooter.velocity,
+            target_position=target.position,
+            target_velocity=target.velocity,
+            target_geometry=target_geometry,
+            target_forward=target.forward,
+            muzzle_velocity_kps=weapon_state.weapon.muzzle_velocity_kps,
+            target_is_evading=is_evading,
+            target_motion=self.target_motion(target, shooter),
+        )
 
     def _estimate_target_acceleration(self, target: ShipCombatState) -> Vector3D:
         """
@@ -2278,28 +2402,23 @@ class CombatSimulation:
             # Use forward direction as approximation (conservative)
             return target.forward * max_accel_ms2 * throttle * 0.5
 
-        elif maneuver_type == ManeuverType.BURN:
-            # Burning in specified direction
-            if maneuver.direction:
-                return maneuver.direction.normalized() * max_accel_ms2 * throttle
-            return target.forward * max_accel_ms2 * throttle
-
-        elif maneuver_type == ManeuverType.HEADING:
-            if maneuver.live_heading:
-                # toward_point / toward_ship steer their own burn (and
-                # brake): read the drive's actual output.
-                return self._thrust_accel(target)
-            # Flying toward a heading - accelerating in that direction
-            if maneuver.heading_direction:
-                heading = maneuver.heading_direction
-                accel_dir = Vector3D(
-                    heading.get('x', 0),
-                    heading.get('y', 0),
-                    heading.get('z', 0)
-                )
-                if accel_dir.magnitude > 0:
-                    return accel_dir.normalized() * max_accel_ms2 * throttle
-            return target.forward * max_accel_ms2 * throttle
+        elif maneuver_type in (ManeuverType.BURN, ManeuverType.HEADING):
+            # Read the drive's actual output - what a fire-control track sees
+            # in the plume - not the order. HEADING turns first and burns once
+            # nose-on (token throttle meanwhile), formation orders hold the
+            # burn until burn_start_time, toward_point/toward_ship throttle
+            # down to arrive, and throttle 0 only points the nose: extrapolating
+            # "full burn along the ordered heading" through any of those
+            # over-led the round by 0.5 * a * T^2 (13 km for a 2 g hull and a
+            # 36 s flight). Measured: replaying recorded rounds at HEADING
+            # targets 200+ km out (n=432, mostly the old-code flash mirror)
+            # against the targets' real paths, rounds aimed this way pass the
+            # 500 m gate 40% of the time vs 32% for the order-read lead; in
+            # seeded engine engagements against HEADING burners gate passes
+            # go 0.97/0.90/0.84 -> 1.00/0.96/0.87 for flights <12/12-25/25-40 s
+            # (0.62 -> 0.59 beyond 40 s, where the turn-phase plume
+            # under-reads a burn that is about to start).
+            return self._thrust_accel(target)
 
         elif maneuver_type == ManeuverType.PADLOCK:
             # Padlock - tracking target rotationally, no thrust
@@ -2318,6 +2437,8 @@ class CombatSimulation:
         eta_s: float = None,
         hit_probability: float = None,
         weapon_slot: int = None,
+        conversion_probability: float = None,
+        fire_control: Optional[dict] = None,
     ) -> bool:
         """Launch a kinetic projectile from shooter toward target.
 
@@ -2331,8 +2452,12 @@ class CombatSimulation:
             weapon_state: Weapon being fired
             distance_m: Distance to target in meters (for recording)
             eta_s: Estimated time to target in seconds (for recording)
-            hit_probability: Probability of hit (for recording)
+            hit_probability: Fire-control P(hit) forecast (recorded)
             weapon_slot: Weapon slot index (for recording)
+            conversion_probability: P(lands | arrives where aimed) - what the
+                terminal dispersion roll consumes (None = hit_probability)
+            fire_control: The forecast's inputs (fire_control_record), recorded
+                on shot_fired as 'fc' so calibration can re-evaluate the model
 
         Returns:
             True if projectile was launched, False if target not in arc.
@@ -2378,6 +2503,7 @@ class CombatSimulation:
             target_ship_id=target.ship_id,
             launch_time=self.current_time,
             hit_probability=hit_probability,
+            conversion_probability=conversion_probability,
             launch_miss_margin_m=self._projectile_miss_margin_m(
                 projectile.position, projectile.velocity, target
             ),
@@ -2412,6 +2538,10 @@ class CombatSimulation:
             event_data['eta_s'] = eta_s
         if hit_probability is not None:
             event_data['hit_probability'] = hit_probability
+        if conversion_probability is not None:
+            event_data['conversion_probability'] = conversion_probability
+        if fire_control:
+            event_data['fc'] = fire_control
         if weapon_slot is not None:
             event_data['weapon_slot'] = weapon_slot
 
@@ -3037,6 +3167,42 @@ class CombatSimulation:
             return 2.0 * math.sqrt(angle_rad / accel)
         return angle_rad / max_vel + max_vel / accel
 
+    def _heading_burn_light_s(self, ship: ShipCombatState, direction: Vector3D) -> float:
+        """
+        Seconds until a HEADING turn onto ``direction`` brings the nose inside
+        HEADING_BURN_CONE_DEG, where the ordered burn lights: the bang-bang
+        turn (thrust vectoring) through the whole angle, from the turn rate
+        the ship already has toward it, minus the braking tail it flies
+        inside the cone. A from-rest turn to the cone edge overstates it for
+        a ship already swinging round (it reaches the cone at speed).
+        """
+        angle = ship.forward.angle_to(direction)
+        cone = math.radians(HEADING_BURN_CONE_DEG)
+        if angle <= cone:
+            return 0.0
+        alpha, w_max = self._get_rotation_params(ship, True)
+        if alpha <= 0.0 or w_max <= 0.0:
+            return float('inf')
+        rs = getattr(ship, 'rotation_state', None)
+        w0 = 0.0
+        if rs is not None and rs.target_direction.distance_to(direction) <= 0.1:
+            w0 = min(abs(getattr(ship, 'angular_velocity_rad_s', 0.0) or 0.0), w_max)
+
+        def whole_turn(theta: float, w: float) -> float:
+            if w * w / (2.0 * alpha) >= theta:
+                return w / alpha                      # braking already
+            w_peak = math.sqrt(alpha * theta + w * w / 2.0)
+            if w_peak <= w_max:
+                return (2.0 * w_peak - w) / alpha
+            ramp = (w_max * w_max - w * w) / (2.0 * alpha) + w_max * w_max / (2.0 * alpha)
+            return (2.0 * w_max - w) / alpha + (theta - ramp) / w_max
+
+        # The last `cone` of a bang-bang turn: braking from at most w_max.
+        brake = w_max * w_max / (2.0 * alpha)
+        tail = (math.sqrt(2.0 * cone / alpha) if brake >= cone
+                else (cone - brake) / w_max + w_max / alpha)
+        return max(0.0, whole_turn(angle, w0) - tail)
+
     def _max_turn_angle(
         self,
         ship: ShipCombatState,
@@ -3342,10 +3508,10 @@ class CombatSimulation:
         """
         # Check if evasion is possible
         # Need: time to turn + time to build displacement > TCA
-        turn_time = 5.0  # ~22° turn at 4.4°/s - enough to get significant lateral
+        turn_time = EVASION_TURN_ALLOWANCE_S  # enough of a turn to get significant lateral
         jink_time = most_urgent['tca'] - turn_time
 
-        if jink_time > 2.0:  # At least 2s to build displacement
+        if jink_time > EVASION_MIN_JINK_S:  # time to build displacement
             # Calculate potential displacement
             # At 45° off-axis, lateral accel ≈ 0.7 * max_accel
             max_accel = 20.0  # ~2g in m/s²
@@ -4500,9 +4666,15 @@ class CombatSimulation:
         # (HIT_TOLERANCE_M, ~33x the hull radius) that represents the weapon's
         # dispersion/tracking-error envelope, so passing it means "close enough
         # that fire control COULD convert this". Whether the shot actually
-        # lands is decided here by rolling against the fire-control P(hit)
-        # captured at launch. Without this roll the reported probability was
-        # decorative and realized hit rate was ~100% at any in-range distance.
+        # lands is decided here by rolling against the fire-control
+        # CONVERSION probability captured at launch - P(lands | it arrives
+        # where it was aimed). Not the forecast hit_probability: that one
+        # already prices in the chance the target is no longer inside this
+        # gate (firecontrol track_probability), and the gate itself has just
+        # been decided physically, so rolling against it would charge the
+        # target's motion twice. Without this roll the reported probability
+        # was decorative and realized hit rate was ~100% at any in-range
+        # distance.
         #
         # The roll used to consult ONLY that launch-time estimate, which meant
         # the round's real trajectory was computed and then thrown away: a
@@ -4518,14 +4690,17 @@ class CombatSimulation:
         # The charge is on the CHANGE in miss margin, not the absolute margin.
         # That distinction is what keeps this a bug fix rather than a
         # rebalance: the fire-control solution's own lead error is already
-        # priced into hit_probability via the flight-time and crossing-angle
+        # priced into the conversion probability via the flight-time and crossing-angle
         # penalties, so billing the shot again for the resulting geometric
         # miss would double-charge it (measured: charging the absolute margin
         # drove crossing-target hit rate from 22% to 0%). What is NOT priced in
         # is anything that moved the round or the target after the trigger -
         # PD ablation recoil, a jink the solution never saw - and that is
         # exactly what this term now rewards.
-        if proj_flight.hit_probability is not None:
+        conversion = (proj_flight.conversion_probability
+                      if proj_flight.conversion_probability is not None
+                      else proj_flight.hit_probability)
+        if conversion is not None:
             margin_m = self._projectile_miss_margin_m(
                 proj_flight.projectile.position,
                 proj_flight.projectile.velocity,
@@ -4536,7 +4711,7 @@ class CombatSimulation:
             geometry_factor = math.exp(
                 -(deflection_m ** 2) / (2.0 * TERMINAL_DISPERSION_SIGMA_M ** 2)
             )
-            effective_probability = proj_flight.hit_probability * geometry_factor
+            effective_probability = conversion * geometry_factor
             # Salvos put different-speed rounds into the same integration step.
             # Their processing order can change as dt shrinks; key dispersion
             # to the round so that cannot swap which projectile hits (as with
@@ -4554,6 +4729,7 @@ class CombatSimulation:
                     'flight_time_s': flight_time,
                     'detection': 'dispersion_roll',
                     'hit_probability': proj_flight.hit_probability,
+                    'conversion_probability': conversion,
                     'miss_margin_m': margin_m,
                     'launch_miss_margin_m': proj_flight.launch_miss_margin_m,
                     'deflection_m': deflection_m,
@@ -4562,7 +4738,7 @@ class CombatSimulation:
                     'roll': roll
                 })
                 print(f"  --- [{proj_flight.source_ship_id}] MISS {proj_flight.target_ship_id} "
-                      f"(dispersion, P={proj_flight.hit_probability:.0%}"
+                      f"(dispersion, P={conversion:.0%}"
                       f"x{geometry_factor:.2f} @ {deflection_m:.0f}m deflection, "
                       f"roll={roll:.2f})")
                 return

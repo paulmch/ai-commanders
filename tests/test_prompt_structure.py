@@ -97,38 +97,136 @@ class TestPromptMatchesSimulation:
     def test_documented_hit_probabilities_match_the_model(self):
         """
         Regression: the doctrine quoted a hardcoded accuracy table that had drifted
-        from firecontrol.calculate_hit_probability - it promised ~50% at 200 km
-        where the model yields ~39%, biasing captains toward standing off at ranges
-        that are less effective than advertised.
+        from the fire-control model - first ~50% at 200 km where the model said
+        ~39%, then a model that itself ignored where the target goes during the
+        flight (captains were shown 12-19% at 435-490 km while 0/609 rounds
+        beyond 200 km landed on dodging targets). Every number in the table is
+        the live CombatSimulation.gun_firing_solution - the FIRE_WHEN_OPTIMAL
+        gate - for a destroyer holding course, flying PADLOCK with evade
+        'dodge' (between jinks, or caught mid-jink: burning across the line of
+        fire), or flying the EVADE maneuver (ManeuverType.EVASIVE; the 2026-10
+        recalibrations moved them; see scripts/fire_control_calibration.py).
         """
-        from src.firecontrol import calculate_hit_probability
-        from src.physics import Vector3D
-        from src.simulation import create_ship_from_fleet_data
-        from src.llm.prompts import PROJECTILE_PHYSICS_REFERENCE
+        from src.llm.prompts import ADMIRAL_GUN_DOCTRINE, PROJECTILE_PHYSICS_REFERENCE
 
-        with open("data/fleet_ships.json") as f:
-            fleet = json.load(f)
-        target = create_ship_from_fleet_data("t", "destroyer", "beta", fleet)
+        def flat(text):
+            return " ".join(text.split())
 
-        documented = {50: 82, 100: 64, 200: 39, 400: 17, 600: 10}
-        for range_km, claimed in documented.items():
-            solution = calculate_hit_probability(
-                shooter_position=Vector3D(0, 0, 0),
-                shooter_velocity=Vector3D(0, 0, 0),
-                target_position=Vector3D(range_km * 1000, 0, 0),
-                target_velocity=Vector3D(0, 0, 0),
-                target_geometry=target.geometry,
-                target_forward=Vector3D(-1, 0, 0),
-                muzzle_velocity_kps=9.9,
-                target_is_evading=False,
-            )
-            actual = solution.hit_probability * 100
-            assert abs(actual - claimed) <= 3.0, (
-                f"Doctrine tells captains ~{claimed}% at {range_km} km but the "
-                f"simulation computes {actual:.1f}%. Update the table in "
-                f"PROJECTILE_PHYSICS_REFERENCE or the accuracy model."
-            )
-            assert f"{claimed}%" in PROJECTILE_PHYSICS_REFERENCE
+        doctrine = flat(PROJECTILE_PHYSICS_REFERENCE)
+        ranges = (50, 100, 150, 200, 300, 400)
+        table = {
+            "holding course": ((82, 79), (64, 57), (48, 37), (36, 20), (18, 4), (7, 1)),
+            "evade dodge": ((82, 73), (55, 26), (27, 6), (10, 1), (2, 0), (0, 0)),
+            "dodge, mid-jink": ((74, 37), (21, 3), (4, 1), (1, 0), (0, 0), (0, 0)),
+            "EVADE maneuver": ((49, 46), (36, 24), (22, 7), (11, 2), (2, 0), (1, 0)),
+        }
+        for mode, cells in table.items():
+            row = f"- {mode}: " + " ".join(f"{s}/{t}%" for s, t in cells)
+            assert row in doctrine, f"doctrine row drifted: {row!r}"
+            for range_km, (spinal, turret) in zip(ranges, cells):
+                for muzzle, claimed in ((9.9, spinal), (6.0, turret)):
+                    actual = _doctrine_p_hit("destroyer", mode, range_km, muzzle) * 100
+                    assert abs(actual - claimed) <= 1.0, (
+                        f"Doctrine tells captains {claimed}% ({mode}, {range_km} km, "
+                        f"{muzzle} km/s) but the gate computes {actual:.1f}%. Update "
+                        f"GUN_PHYSICS_REFERENCE or the fire-control model.")
+        examples = (
+            ("frigate", 100, 42, "a dodging frigate: spinal 42% at 100km"),
+            ("frigate", 150, 14, "14% at 150km"),
+            ("battleship", 200, 31, "a dodging battleship: 31% at 200km"),
+            ("battleship", 300, 8, "8% at 300km"),
+        )
+        for hull, range_km, claimed, text in examples:
+            assert text in doctrine
+            actual = _doctrine_p_hit(hull, "evade dodge", range_km, 9.9) * 100
+            assert abs(actual - claimed) <= 1.0, (hull, range_km, actual)
+        assert "x0.6" in doctrine  # EVADE's conversion penalty (firecontrol)
+
+        admiral = flat(ADMIRAL_GUN_DOCTRINE)
+        assert "spinal 55% at 100 km, 10% at 200 km, 2% at 300 km" in admiral
+        for range_km, claimed in ((100, 55), (200, 10), (300, 2)):
+            actual = _doctrine_p_hit("destroyer", "evade dodge", range_km, 9.9) * 100
+            assert abs(actual - claimed) <= 1.0, (range_km, actual)
+        assert "far harder (21% at 100 km)" in admiral
+        assert abs(_doctrine_p_hit("destroyer", "dodge, mid-jink", 100, 9.9) * 100 - 21) <= 1.0
+        assert "broadside is ~1.5x the hit chance of nose-on at 200 km (~1.2x at 100 km)" in admiral
+        for range_km, claimed in ((200, 1.5), (100, 1.2)):
+            ratio = (_doctrine_p_hit("destroyer", "holding course", range_km, 9.9, broadside=True)
+                     / _doctrine_p_hit("destroyer", "holding course", range_km, 9.9))
+            assert abs(ratio - claimed) <= 0.06, (range_km, ratio)
+
+
+    def test_closing_raises_and_crossing_lowers_hit_probability(self):
+        """
+        The doctrine used to say "high closing velocity = harder to hit ...
+        sweet spot 1-3 km/s relative". The gate says the opposite: closure
+        shortens the flight (P(hit) up), crossing and opening speed lower it.
+        Every quoted number is the live gate's.
+        """
+        from src.llm.prompts import ADMIRAL_GUN_DOCTRINE, GUN_PHYSICS_REFERENCE, GUN_TACTICS_BLOCK
+
+        def flat(text):
+            return " ".join(text.split())
+
+        cases = {"at rest": (0.0, 0.0), "closing": (-3000.0, 0.0),
+                 "crossing": (0.0, 3000.0), "opening": (3000.0, 0.0)}
+        p = {k: _doctrine_p_hit("destroyer", "holding course", 200, 9.9, velocity=v) * 100
+             for k, v in cases.items()}
+        assert p["closing"] > p["at rest"] > p["crossing"] > p["opening"], p
+        for mode in ("holding course", "evade dodge"):
+            for muzzle in (9.9, 6.0):
+                for rng in (100, 200, 300):
+                    at_rest = _doctrine_p_hit("destroyer", mode, rng, muzzle)
+                    closing = _doctrine_p_hit("destroyer", mode, rng, muzzle, velocity=(-3000.0, 0.0))
+                    crossing = _doctrine_p_hit("destroyer", mode, rng, muzzle, velocity=(0.0, 3000.0))
+                    assert closing > at_rest >= crossing, (mode, muzzle, rng)
+
+        claims = {"at rest": 36, "closing": 47, "crossing": 28, "opening": 20}
+        for key, claimed in claims.items():
+            assert abs(p[key] - claimed) <= 1.0, (key, p[key])
+        physics = flat(GUN_PHYSICS_REFERENCE)
+        assert ("Spinal vs a destroyer holding course at 200km: 36% at rest, 47% closing at "
+                "3 km/s, 28% crossing at 3 km/s, 20% opening at 3 km/s") in physics
+        admiral = flat(ADMIRAL_GUN_DOCTRINE)
+        assert ("spinal vs a destroyer holding course at 200 km: 36% at rest, 47% closing at "
+                "3 km/s, 28% crossing, 20% opening") in admiral
+        for text in (physics, flat(GUN_TACTICS_BLOCK), admiral):
+            assert "Closing speed RAISES" in text
+            assert "harder to hit" not in text and "Sweet spot" not in text
+
+
+def _doctrine_p_hit(hull, mode, range_km, muzzle_kps, broadside=False, velocity=(0.0, 0.0)):
+    """The gate's P(hit) for a battleship's gun with this muzzle velocity at a
+    target `range_km` out down +x, nose-on unless broadside, moving at
+    `velocity` (vx, vy) m/s - negative vx closes on the shooter at rest."""
+    from src.physics import Vector3D
+    from src.simulation import CombatSimulation, Maneuver, ManeuverType, create_ship_from_fleet_data
+
+    with open("data/fleet_ships.json") as f:
+        fleet = json.load(f)
+    sim = CombatSimulation(seed=0)
+    shooter = create_ship_from_fleet_data("a", "battleship", "alpha", fleet,
+                                          position=Vector3D(0, 0, 0), forward=Vector3D(1, 0, 0))
+    target = create_ship_from_fleet_data(
+        "b", hull, "beta", fleet, position=Vector3D(range_km * 1000.0, 0, 0),
+        velocity=Vector3D(velocity[0], velocity[1], 0.0),
+        forward=Vector3D(0, 1, 0) if broadside else Vector3D(-1, 0, 0))
+    sim.add_ship(shooter)
+    sim.add_ship(target)
+    if mode == "evade dodge":
+        target.current_maneuver = Maneuver(ManeuverType.PADLOCK, 0.0, target_id="a", evade="dodge")
+    elif mode == "dodge, mid-jink":
+        # Its evasion is flying it: full burn across the line of fire (nose
+        # broadside on), which a PADLOCK dodger's lead does not extrapolate.
+        target.current_maneuver = Maneuver(ManeuverType.PADLOCK, 0.0, target_id="a", evade="dodge")
+        target.kinematic_state.forward = Vector3D(0, 1, 0)
+        target.execution_mode = "EVADE"
+        target.applied_throttle = 1.0
+    elif mode == "EVADE maneuver":
+        target.current_maneuver = Maneuver(ManeuverType.EVASIVE, 0.0)
+    weapon = next(w for w in shooter.weapons.values()
+                  if abs(w.weapon.muzzle_velocity_kps - muzzle_kps) < 1e-9)
+    return sim.gun_firing_solution(shooter, target, weapon).hit_probability
 
 
 class TestCacheRequestShape:

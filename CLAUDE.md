@@ -65,6 +65,7 @@ ai-commanders/
 │   ├── viewer_snapshot.py  # headless Playwright screenshots of the 3D viewer
 │   ├── mcp_battle.py       # CLI for MCP-controlled battles
 │   ├── refine_commander.py # Post-battle lesson distillation + rematch gating
+│   ├── fire_control_calibration.py  # gun P(hit) vs engine outcomes (recordings + seeded harness)
 │   └── calculate_shots_to_kill.py  # Regenerates docs/ships.md combat tables
 ├── docs/ships.md           # Ship specs + simulated shots-to-kill tables
 └── visualizer/             # Three.js 3D battle replay viewer; src/render/ holds
@@ -217,6 +218,17 @@ torpedo-armed hulls; all others fight with coilguns.
 - Numbers quoted in captain/admiral doctrine (`src/llm/prompts.py`) are bound to
   engine constants or seeded runs by `tests/test_doctrine_accuracy.py` - change the
   engine and the tests will tell you which prompt claims drifted.
+- Gun P(hit) (`firecontrol.calculate_hit_probability` = conversion x track, via
+  `CombatSimulation.gun_firing_solution` for the FIRE_WHEN_OPTIMAL gate, captain/MCP
+  forecasts and shot_fired) is pinned against what the engine delivers by
+  `tests/test_fire_control_calibration.py`, per target maneuver class (EVASIVE, evade
+  overlay, HEADING turning / burning, INTERCEPT, PADLOCK) x 100 km so errors cannot
+  cancel. The dispersion roll consumes only the conversion part; shot_fired records the
+  forecast's inputs (`fc`: dodge, missed jink burn, pending HEADING burn). If the gate,
+  the roll, evasion/dodging or the lead changes, re-run `scripts/fire_control_calibration.py`
+  (harness + table) and regenerate the fixture; the doctrine P(hit) table is bound by
+  `tests/test_prompt_structure.py`. Known residual: LLM fleets dodging a whole fleet's
+  fire were hit even less than forecast (firecontrol.JINK_ACCEL_FRACTION).
 - After any armor or damage-model change, regenerate the combat tables in
   `docs/ships.md` with `uv run python scripts/calculate_shots_to_kill.py`.
 - Draft point costs are DERIVED from `data/fleet_ships.json`, not hand-typed

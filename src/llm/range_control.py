@@ -54,6 +54,16 @@ CPA_HORIZON_S = 900.0
 # Integration step of the relative-motion estimate (the closest approach is
 # refined inside each step, so this only bounds the acceleration error).
 PREDICT_STEP_S = 2.0
+# Longest burn a cancel / hold / re-engage solve may ask for. Against an enemy
+# burning away at (almost) our own acceleration the quadratic in
+# _cancel_solve still has a root, at an absurd burn time (9e8 s for two
+# corvettes 4e-6 m/s^2 apart), and integrating that burn in PREDICT_STEP_S
+# steps hung a seeded battle. A burn longer than the closest-approach search
+# horizon is no plan: the option is reported IMPOSSIBLE instead.
+MAX_SOLVE_BURN_S = CPA_HORIZON_S
+# Hard cap on any _propagate horizon (bounds its work to
+# PROPAGATE_MAX_S / PREDICT_STEP_S steps per segment whatever a caller asks).
+PROPAGATE_MAX_S = 2.0 * CPA_HORIZON_S
 # "Pass wide" burns just long enough to make the pass this wide (or as wide
 # as it still can before the pass), and never longer than PASS_WIDE_MAX_BURN_S.
 PASS_WIDE_TARGET_KM = 150.0
@@ -262,6 +272,7 @@ def _propagate(
     closest approach inside the horizon (refined within each step) and the
     relative state at every probe time.
     """
+    horizon_s = min(horizon_s, PROPAGATE_MAX_S)
     probes = sorted({round(t, 6) for t in probe_times if 0.0 <= t <= horizon_s})
     cuts = {0.0, horizon_s, min(enemy_until_s, horizon_s)}
     for t0, t1, _ in own_segments:
@@ -640,7 +651,7 @@ def _analyze_group(sim, own, own_pos, own_vel, accel, members, interval_s, detai
         info.options.append(HeadingOption(
             key="cancel", label=cancel_label, heading=los * -1.0, throttle=0.0,
             turn_s=0.0, burn_s=0.0,
-            effect=(f"IMPOSSIBLE: he out-accelerates you along the line "
+            effect=(f"IMPOSSIBLE: he {_outruns(e_acc_mag, accel)} along the line "
                     f"({e_acc_mag / G_STANDARD:.1f}g burn vs your {accel / G_STANDARD:.1f}g; "
                     f"rel. speed {dv:.0f} m/s) - "
                     + ("only pass wide / flank changes the merge" if closing >= 0 else
@@ -808,7 +819,7 @@ def _reengage_option(sim, own, p, v, e_acc, los, accel, interval_s, detail, eval
         return HeadingOption(
             key="reengage", label="re-engage", heading=los, throttle=0.0,
             turn_s=0.0, burn_s=0.0,
-            effect=(f"IMPOSSIBLE: he out-accelerates you away from you "
+            effect=(f"IMPOSSIBLE: he {_outruns(e_acc_mag, accel)} away from you "
                     f"({e_acc_mag / G_STANDARD:.1f}g burn vs your {accel / G_STANDARD:.1f}g) - "
                     f"the range opens as long as he keeps burning"))
     end = t_f + burn
@@ -835,6 +846,13 @@ def _reengage_option(sim, own, p, v, e_acc, los, accel, interval_s, detail, eval
         end_range_km=pe.magnitude / 1000.0, rel_speed_end_kps=ve.magnitude / 1000.0)
 
 
+def _outruns(e_acc_mag: float, accel: float) -> str:
+    """Why a cancel / re-engage solve failed: he out-accelerates us, or
+    (MAX_SOLVE_BURN_S) burns so nearly as hard that matching him would take
+    longer than the closest-approach horizon."""
+    return "out-accelerates you" if e_acc_mag >= accel else "burns as hard as you can"
+
+
 def _cancel_solve(v1: Vector3D, e_acc: Vector3D, accel: float,
                   window_s: float) -> Optional[Tuple[Vector3D, float, float]]:
     """
@@ -845,7 +863,8 @@ def _cancel_solve(v1: Vector3D, e_acc: Vector3D, accel: float,
     burn is shorter than ``window_s`` (the rest of this checkpoint) the burn
     is stretched over the window at reduced throttle instead, so a renewed
     order does not overshoot. None when the enemy out-accelerates us along
-    the needed direction (no solution).
+    the needed direction (no solution), or matches us so closely that the
+    burn would outlast MAX_SOLVE_BURN_S (no usable solution).
     """
     vv = v1.dot(v1)
     if vv < 1e-9:
@@ -859,7 +878,7 @@ def _cancel_solve(v1: Vector3D, e_acc: Vector3D, accel: float,
     if disc < 0:
         return None
     u = (b + math.sqrt(disc)) / vv
-    if u <= 0:
+    if u <= 0 or u * MAX_SOLVE_BURN_S < 1.0:
         return None
     burn = 1.0 / u
     thr = 1.0

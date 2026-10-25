@@ -111,6 +111,18 @@ def calculate_kinetic_damage(projectile, target, armor, impact_angle):
 
 ### Accuracy and Hit Probability
 
+> As implemented (`src/firecontrol.py`): a slug can only hit if its real trajectory
+> passes inside a 500 m gate around the target's real hull, then it rolls against a
+> conversion probability (angular size, flight time, crossing, EVASIVE x0.6) times a
+> geometry factor. The P(hit) commanders see and FIRE_WHEN_OPTIMAL gates on is
+> conversion x track, where track is the expected gate x geometry factor given how far
+> the target can move unforeseen during the flight: its dodge if its evasion is on
+> (more if it is caught mid-jink, burning across the line of fire where its lead does
+> not look), and a HEADING burn that lights once it has turned onto the heading.
+> Calibration against engine outcomes, per maneuver class:
+> `scripts/fire_control_calibration.py`.
+> The sketch below is the original design.
+
 ```python
 def calculate_hit_probability(turret, target, distance):
     """Calculate probability of hitting target"""
