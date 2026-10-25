@@ -2399,11 +2399,43 @@ _STATUS_ORDER = {"UNABLE": 0, "DEVIATE": 1, "ACK": 2}
 
 
 def _compliance_text(compliance: Optional[Dict[str, Any]], snapshot: Any) -> Tuple[str, bool]:
-    """('did: ...', followed?) from a report's compliance record."""
+    """
+    ('did: ...', followed?) from a report's compliance record.
+
+    The comms layer's own verdict (fleet_comms.compliance: ``followed`` and
+    one ``deviations`` line per mismatch) is authoritative when present - it
+    resolved the ordered target to a hull and knows which maneuvers the order
+    allowed. Older records without it are judged here on the raw fields, with
+    targets resolved through the snapshot's labels so 'OCS Lancer-1 [beta_2]',
+    'OCS Lancer-1' and 'beta_2' are the same ship.
+    """
     if not isinstance(compliance, dict):
         return "", True
+
+    def count(value: Any) -> int:
+        try:
+            return max(0, int(value or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    em = compliance.get("executed_maneuver")
+    salvo_raw = compliance.get("ordered_salvo")
+    osalvo, launched = count(salvo_raw), count(compliance.get("launched"))
+    verb = "committed" if compliance.get("final") is False else "launched"
+    salvo_text = f"salvo {osalvo} ordered, {launched} {verb}" if (osalvo or launched) else ""
+
+    verdict, deviations = compliance.get("followed"), compliance.get("deviations")
+    if isinstance(verdict, bool) or isinstance(deviations, list):
+        lines = [_clip(d, 120) for d in deviations or [] if d] if isinstance(deviations, list) else []
+        followed = verdict if isinstance(verdict, bool) else not lines
+        if lines:
+            return "did: " + "; ".join(lines), followed
+        parts = [p for p in (f"flew {em}" if em else "", salvo_text) if p]
+        return ("did: " + ", ".join(parts)) if parts else "", followed
+
+    # Legacy record: compare the fields.
     parts, followed = [], True
-    om, em = compliance.get("ordered_maneuver"), compliance.get("executed_maneuver")
+    om = compliance.get("ordered_maneuver")
     if om or em:
         if om and em and str(om).upper() != str(em).upper():
             parts.append(f"ordered {om} -> flew {em}")
@@ -2411,20 +2443,29 @@ def _compliance_text(compliance: Optional[Dict[str, Any]], snapshot: Any) -> Tup
         elif em:
             parts.append(f"flew {em}")
     ot, at = compliance.get("ordered_target"), compliance.get("actual_target")
-    if ot and at and ot != at:
-        parts.append(f"target {ot} -> {at}")
-        followed = False
-    def count(value: Any) -> int:
+    if ot:
         try:
-            return max(0, int(value or 0))
-        except (TypeError, ValueError):
-            return 0
+            from .fleet_intel import resolve_ship_ref, split_label
+        except ImportError:  # pragma: no cover
+            from llm.fleet_intel import resolve_ship_ref, split_label
+        labels = getattr(snapshot, "labels", None) or {}
+        names = {sid: split_label(lbl)[0] or sid for sid, lbl in labels.items()}
 
-    osalvo, launched = count(compliance.get("ordered_salvo")), count(compliance.get("launched"))
-    if osalvo or launched:
-        if osalvo and launched < osalvo:
+        def key(ref: Any) -> str:
+            return resolve_ship_ref(ref, names) or split_label(ref)[0].lower()
+
+        if not at or key(ot) != key(at):
+            shown = [_lbl(snapshot, resolve_ship_ref(r, names), split_label(r)[0]) if r
+                     else "nothing" for r in (ot, at)]
+            parts.append(f"target {shown[0]} -> {shown[1]}")
             followed = False
-        parts.append(f"salvo {osalvo} ordered, {launched} launched")
+    if osalvo and launched < osalvo:
+        followed = False
+    elif launched and str(salvo_raw).strip() == "0":
+        followed = False                    # an explicit hold, broken
+        salvo_text = f"salvo hold ordered, {launched} {verb}"
+    if salvo_text:
+        parts.append(salvo_text)
     return ("did: " + ", ".join(parts)) if parts else "", followed
 
 

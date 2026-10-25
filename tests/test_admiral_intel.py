@@ -622,6 +622,85 @@ class TestCaptainReports:
         text = format_admiral_turn_state(snap, FLEET, captain_reports=[])
         assert "(no reports filed last checkpoint)" in text
 
+    def test_comms_verdict_is_authoritative(self):
+        """An A-shaped report (fleet_comms.compliance): the target is written as
+        the turn state labels it, the comms layer judged it followed - it must
+        not be flagged by comparing raw strings."""
+        followed = {"ship_name": "TIS Dart-2", "ship_id": "alpha_2", "status": "ACK",
+                    "compliance": {"ordered_maneuver": "INTERCEPT", "executed_maneuver": "INTERCEPT",
+                                   "ordered_target": "OCS Lancer-1 [beta_2]",
+                                   "actual_target": "OCS Lancer-1", "ordered_salvo": None,
+                                   "launched": 0, "final": True, "followed": True,
+                                   "deviations": []}}
+        deviated = {"ship_name": "TIS Dart-3", "ship_id": "alpha_3", "status": "ACK",
+                    "compliance": {"ordered_maneuver": "INTERCEPT/EVADE",
+                                   "executed_maneuver": "HEADING",
+                                   "ordered_target": "OCS Lancer-1", "actual_target": None,
+                                   "ordered_salvo": 3, "launched": 1, "final": False,
+                                   "followed": False,
+                                   "deviations": ["maneuver: ordered INTERCEPT/EVADE, flew HEADING",
+                                                  "target: ordered OCS Lancer-1, engaging nothing",
+                                                  "salvo: ordered 3, committed 1"]}}
+        live = battle_a_turn("alpha", t=180, reports=[followed, deviated])[3][1]["content"]
+        block = section(live, "=== CAPTAIN REPORTS")
+        assert "ACK, nothing to flag (1): TIS Dart-2 [alpha_2]" in block
+        assert ("ACK TIS Dart-3 [alpha_3] | did: maneuver: ordered INTERCEPT/EVADE, flew HEADING; "
+                "target: ordered OCS Lancer-1, engaging nothing; salvo: ordered 3, committed 1 "
+                "(NOT as ordered)") in block
+
+    def test_legacy_record_resolves_labels_and_flags_a_dropped_target(self):
+        def report(ot, at, salvo=None, launched=0):
+            return {"ship_name": "TIS Dart-2", "ship_id": "alpha_2", "status": "ACK",
+                    "compliance": {"ordered_maneuver": "INTERCEPT",
+                                   "executed_maneuver": "INTERCEPT", "ordered_target": ot,
+                                   "actual_target": at, "ordered_salvo": salvo,
+                                   "launched": launched}}
+
+        def block(r):
+            return section(battle_a_turn("alpha", t=180, reports=[r])[3][1]["content"],
+                           "=== CAPTAIN REPORTS")
+
+        # Label vs name vs id of the same hull: complied.
+        for ot, at in (("OCS Lancer-1 [beta_2]", "OCS Lancer-1"), ("beta_2", "OCS Lancer-1"),
+                       ("ocs lancer-1", "OCS Lancer-1 [beta_2]")):
+            assert "nothing to flag (1)" in block(report(ot, at)), (ot, at)
+        # Ordered a target, engaging nothing: a deviation (it used to need both set).
+        text = block(report("OCS Lancer-1 [beta_2]", None))
+        assert "target OCS Lancer-1 [beta_2] -> nothing (NOT as ordered)" in text
+        text = block(report("OCS Lancer-1", "OCS Lancer-2"))
+        assert "target OCS Lancer-1 [beta_2] -> OCS Lancer-2 [beta_3] (NOT as ordered)" in text
+        # An explicit hold, broken.
+        text = block(report(None, None, salvo=0, launched=2))
+        assert "salvo hold ordered, 2 launched (NOT as ordered)" in text
+
+    def test_order_targets_written_as_labels_reach_the_stack_as_names(self):
+        """The turn state teaches 'NAME [ID]'; captains, the comms compliance
+        matcher and the recorder match bare names / ids."""
+        client = ScriptedClient([([DIRECTIVE], "tool_calls")])
+
+        def order_call(messages, tools, **kw):
+            return [ToolCall(id="o", name="issue_order", arguments={
+                "ship_name": "TIS Dart-1 [alpha_1]", "order_text": "Kill Lancer-1.",
+                "suggested_target": "OCS Lancer-1 [beta_2]", "torpedo_salvo": 2,
+                "torpedo_target": "Lancer-1 [beta_2]"})]
+
+        admiral, decision, _ = _decide(client)
+        assert decision.fleet_orders
+        admiral.client = types.SimpleNamespace(decide_with_tools=order_call)
+        order = admiral._issue_ship_order(
+            ship_info={"ship_id": "alpha_1", "ship_name": "TIS Dart-1", "ship_type": "corvette",
+                       "captain_name": "C1"},
+            snapshot_t0=admiral._prev_snapshot, fleet_directive="Hold.",
+            simulation=battle_a_sim(180))
+        assert order.suggested_target == "OCS Lancer-1"
+        assert order.torpedo_target == "OCS Lancer-1"            # the id decides
+        # Phase-1 style issue_order: the ship label resolves to its id.
+        legacy = admiral._execute_tools([ToolCall(id="x", name="issue_order", arguments={
+            "ship_name": "TIS Dart-1 [alpha_1]", "order_text": "Hold.",
+            "suggested_target": "[beta_2]"})], 180.0)
+        assert legacy.fleet_orders[0].target_ship_id == "alpha_1"
+        assert legacy.fleet_orders[0].suggested_target == "OCS Lancer-1"
+
     def test_per_ship_order_shows_that_ships_report(self):
         admiral, sim, snap, _ = battle_a_turn("alpha", t=180)
         admiral.captain_reports = REPORTS

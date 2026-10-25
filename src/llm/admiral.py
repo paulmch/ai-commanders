@@ -460,6 +460,9 @@ class LLMAdmiral:
         self._magazine_start: Optional[int] = None
         # Compact situation text of the last checkpoint (respond_to_captain).
         self._last_brief: str = ""
+        # Every ship's id -> name (both sides), for resolving the "NAME [id]"
+        # labels the turn state teaches the admiral to write in tool calls.
+        self._ship_names: Dict[str, str] = {}
 
     @property
     def name(self) -> str:
@@ -478,6 +481,11 @@ class LLMAdmiral:
             return False
         verified = getattr(self.config, "image_input", None)
         return bool(verified) if verified is not None else is_vision_model(self.config.model)
+
+    def _plain_ref(self, value: Any) -> Any:
+        """An order's target as captains, comms and the recorder match it: the
+        ship's full name instead of the "NAME [id]" label (fleet_intel.plain_ship_ref)."""
+        return intel.plain_ship_ref(value, self._ship_names)
 
     def set_ship_mapping(self, name_to_id: Dict[str, str]) -> None:
         """Set the mapping from ship names to IDs."""
@@ -911,9 +919,9 @@ Be authentic to how you would command a fleet as {model_name}."""
                     target_ship_name=ship_info['ship_name'],
                     order_text=args.get("order_text", "Continue as directed."),
                     priority=args.get("priority", "NORMAL"),
-                    suggested_target=args.get("suggested_target"),
+                    suggested_target=self._plain_ref(args.get("suggested_target")),
                     torpedo_salvo=args.get("torpedo_salvo"),
-                    torpedo_target=args.get("torpedo_target"),
+                    torpedo_target=self._plain_ref(args.get("torpedo_target")),
                 )
                 _attach_heading(order, args, fleet_heading)
                 return order
@@ -1123,6 +1131,7 @@ Be authentic to how you would command a fleet as {model_name}."""
         for sid, ship in getattr(simulation, "ships", {}).items():
             snap.labels[sid] = intel.ship_label(ship)
             snap.ship_types[sid] = getattr(ship, "ship_type", "") or ""
+            self._ship_names[sid] = intel.ship_name(ship)
         for kind, rows in (("ours", snap.friendly_ships), ("theirs", snap.enemy_ships)):
             for row in rows:
                 if row.ship_type and row.ship_type not in self._battle_classes[kind]:
@@ -1475,7 +1484,10 @@ Be authentic to how you would command a fleet as {model_name}."""
 
             if name == "issue_order":
                 ship_name = args.get("ship_name", "")
-                ship_id = self._ship_name_to_id.get(ship_name, ship_name)
+                ship_id = self._ship_name_to_id.get(ship_name)
+                if ship_id is None:
+                    # "NAME [id]" as the turn state labels every ship.
+                    ship_id = intel.resolve_ship_ref(ship_name, self._ship_names) or ship_name
 
                 fleet_order = _fleet_heading_order(args)
                 if fleet_order is not None:
@@ -1486,9 +1498,9 @@ Be authentic to how you would command a fleet as {model_name}."""
                     target_ship_name=ship_name,
                     order_text=args.get("order_text", ""),
                     priority=args.get("priority", "NORMAL"),
-                    suggested_target=args.get("suggested_target"),
+                    suggested_target=self._plain_ref(args.get("suggested_target")),
                     torpedo_salvo=args.get("torpedo_salvo"),
-                    torpedo_target=args.get("torpedo_target"),
+                    torpedo_target=self._plain_ref(args.get("torpedo_target")),
                 )
                 _attach_heading(order, args, None)
                 decision.fleet_orders.append(order)

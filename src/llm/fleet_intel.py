@@ -23,6 +23,7 @@ digest), ADM-13 (one label format for every ship).
 from __future__ import annotations
 
 import math
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -115,6 +116,55 @@ def label(name: Optional[str], ship_id: Optional[str]) -> str:
 
 def ship_label(ship: Any) -> str:
     return label(ship_name(ship), getattr(ship, "ship_id", None))
+
+
+_LABEL_RE = re.compile(r"^(.*?)\s*\[([^\[\]]+)\]\s*$")
+
+
+def split_label(text: Any) -> Tuple[str, Optional[str]]:
+    """'OCS Lancer-1 [beta_2]' -> ('OCS Lancer-1', 'beta_2'); a bare name or id -> (it, None)."""
+    text = " ".join(str(text or "").split())
+    match = _LABEL_RE.match(text)
+    if not match:
+        return text, None
+    return match.group(1).strip(), match.group(2).strip()
+
+
+def resolve_ship_ref(text: Any, names: Dict[str, str]) -> Optional[str]:
+    """
+    The ship id a reference means, or None: a 'NAME [id]' label (the id
+    decides), a bare id, or a full name (case-insensitive). ``names`` maps
+    ship id -> ship name. Admirals copy the turn state's labels verbatim
+    into tool arguments, so every consumer must accept that form too.
+    """
+    name, sid = split_label(text)
+    if sid and sid in names:
+        return sid
+    key = (name or sid or "").lower()
+    if not key:
+        return None
+    for ship_id, ship_nm in names.items():
+        if key == ship_id.lower() or key == " ".join(str(ship_nm or "").split()).lower():
+            return ship_id
+    return None
+
+
+def plain_ship_ref(text: Any, names: Dict[str, str]) -> Any:
+    """
+    An order field in the form the rest of the stack matches on: a
+    'NAME [id]' label becomes that ship's full name (resolved through the id,
+    so a mislabelled pair still lands on the right hull); anything else is
+    returned unchanged. Captain prompts, the comms layer's compliance check
+    and the recorder all match bare names and ids, not labels.
+    """
+    if not isinstance(text, str):
+        return text
+    name, sid = split_label(text)
+    if sid is None:
+        return text
+    if sid in names:
+        return names[sid] or sid
+    return name or sid
 
 
 def class_abbr(ship_type: Optional[str]) -> str:
