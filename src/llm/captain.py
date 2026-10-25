@@ -648,9 +648,7 @@ class LLMCaptain:
             # Truncate long messages
             if len(text) > 100:
                 text = text[:100] + "..."
-            # Fleet traffic carries its own label ("You -> ALL", "Dart-3",
-            # "ENEMY Lancer-2"); 1v1 entries only know self vs enemy.
-            who = msg.get("label") or ("You" if sender == "self" else "Enemy")
+            who = "You" if sender == "self" else "Enemy"
             lines.append(f"  T+{time:.0f}s [{who}]: \"{text}\"")
 
         return "\n".join(lines)
@@ -908,20 +906,21 @@ class LLMCaptain:
 
         return "\n".join(lines)
 
-    def _record_sent_message(self, message: str, time: float, label: Optional[str] = None) -> None:
+    def _record_sent_message(self, message: str, time: float) -> None:
         """Record a message sent by this captain."""
-        entry = {"sender": "self", "time": time, "text": message}
-        if label:
-            entry["label"] = label
-        self.message_history.append(entry)
+        self.message_history.append({
+            "sender": "self",
+            "time": time,
+            "text": message,
+        })
 
-    def _record_received_message(self, message: str, time: float, label: Optional[str] = None,
-                                 sender: str = "enemy") -> None:
-        """Record a received message (1v1: always the enemy; fleet: labelled by sender)."""
-        entry = {"sender": sender, "time": time, "text": message}
-        if label:
-            entry["label"] = label
-        self.message_history.append(entry)
+    def _record_received_message(self, message: str, time: float) -> None:
+        """Record a message received from enemy."""
+        self.message_history.append({
+            "sender": "enemy",
+            "time": time,
+            "text": message,
+        })
 
     def _build_ship_status(self, ship: Any) -> Dict[str, Any]:
         """Build ship status dict from ship state."""
@@ -1980,9 +1979,15 @@ class LLMCaptain:
     def _last_decision_time(self) -> float:
         return self.decision_history[-1]["time"] if self.decision_history else 0.0
 
-    def note_sent(self, text: str, time: float, label: str) -> None:
-        """Log a message the runner actually transmitted (COMMUNICATION LOG)."""
-        self._record_sent_message(text, time, label=label)
+    def note_sent(self, text: str, time: float, to: str) -> None:
+        """
+        Log a message the runner actually transmitted (COMMUNICATION LOG).
+
+        `to` (recipient and signal kind, e.g. "ALL [TARGET_CLAIM]") leads the
+        logged text: the log entry has no recipient field, and "I claimed
+        Lancer to my fleet" must not read like a taunt sent to the enemy.
+        """
+        self._record_sent_message(f"-> {to}: {text}", time)
 
     def drain_outbox(self) -> List[Dict[str, Any]]:
         """
@@ -2031,22 +2036,10 @@ class LLMCaptain:
         """
         This checkpoint's fleet comms (replaces the previous checkpoint's).
 
-        LLM-authored traffic also enters the COMMUNICATION LOG history with
-        its sender and side; engine datalink items are telemetry and stay out
-        of it (they would flush the 6-entry window every checkpoint).
+        Data only: the captain prompt renders the inbox (FLEET NET / ENEMY
+        TRANSMISSIONS) and copies it into the COMMUNICATION LOG history,
+        de-duplicated by msg_id - logging it here as well would log every
+        message twice.
         """
         self.inbox = list(items)
         self.inbox_delivered_t = delivered_t
-        for item in items:
-            if item.get("sender_role") == "engine":
-                continue
-            name = item.get("sender_name") or item.get("sender_id") or "?"
-            if item.get("faction") != getattr(self, "faction", None):
-                label, sender = f"ENEMY {name}", "enemy"
-            elif item.get("channel") == "admiral_to_captain":
-                label, sender = f"Admiral {name}", "admiral"
-            else:
-                to = "you" if item.get("channel") == "direct" else item.get("recipient_spec") or "you"
-                label, sender = f"{name} -> {to}", "friendly"
-            self._record_received_message(item.get("text", ""), item.get("sent_t", delivered_t),
-                                          label=label, sender=sender)

@@ -2240,7 +2240,7 @@ class LLMBattleRunner:
             posted.append(message)
             # Only traffic that actually left enters the captain's own log.
             kind = f" [{message.kind}]" if tool == "fleet_signal" else ""
-            captain.note_sent(message.text, now, f"You -> {resolution.recipient_spec}{kind}")
+            captain.note_sent(message.text, now, f"{resolution.recipient_spec}{kind}")
             if self.config.verbose:
                 print(f"  [MSG] {message.format_for_display()}")
         return posted
