@@ -971,7 +971,10 @@ Agile hulls escape sooner (a dodging frigate: spinal 46% at 100km, 14% at 150km)
 heavy ones later (a dodging battleship: 38% at 200km, 9% at 300km). The P(hit) on
 your ENEMIES lines is this model for the live geometry - fire on it, and close range
 before you shoot at a dodger.
-- Closing velocity improves hit chance (shorter flight, less time to dodge)
+- Closing speed RAISES hit chance (shorter flight, less time to dodge); crossing
+  (lateral) speed lowers it, and an opening range lowers it most. Spinal vs a
+  destroyer holding course at 200km: 36% at rest, 47% closing at 3 km/s, 28%
+  crossing at 3 km/s, 20% opening at 3 km/s
 - TO WIN: Close range aggressively OR have overwhelming accuracy advantage
 """
 
@@ -996,7 +999,7 @@ You can fight however you want. Here are some approaches to consider:
 OPTION A - HEAD-ON CHARGE:
   INTERCEPT constantly → high closing velocity → brief exchange → fly past
   Pros: Simple, aggressive, intimidating
-  Cons: Short engagement window, hard to hit at high relative velocity, wastes fuel
+  Cons: Short engagement window (few salvos before the merge), wastes fuel
 
 OPTION B - CONTROLLED PASSES (recommended for accuracy):
   1. Approach (INTERCEPT from far out, or set_heading for your approach angle)
@@ -1018,9 +1021,10 @@ OPTION D - HOLD RANGE / KITE:
   Cons: Requires more active management
 
 KEY PHYSICS TO REMEMBER:
-- High relative velocity = harder to hit (projectiles lead wrong, brief window)
-- 0 km/s relative + no evasion = sitting duck (easy hit)
-- Sweet spot: 1-3 km/s relative with active maneuvering
+- Closing speed RAISES P(hit) per round (shorter flight); crossing (lateral) speed
+  lowers it, an opening range lowers it most
+- The price of closure is time: a fast pass is a short window and ends in a merge
+  unless you cancel closure in time (RANGE CONTROL)
 - Spinal weapons ONLY fire if nose within 30° of target - PADLOCK helps with this
 - Turrets fire at 180° arc - don't need nose-on alignment"""
 
@@ -2663,8 +2667,10 @@ OPTION D - FOCUS FIRE ROTATION:
   Cons: Other enemies fire freely while ignored
 
 GUNNERY:
-- High closing velocity = harder to hit (brief engagement window); 0 km/s relative and
-  no evasion = sitting duck. Sweet spot: 1-3 km/s relative with active maneuvering.
+- Closing speed RAISES per-round P(hit) (shorter flight); crossing (lateral) speed lowers
+  it and an opening range lowers it most - spinal vs a destroyer holding course at 200 km:
+  36% at rest, 47% closing at 3 km/s, 28% crossing, 20% opening. The price of closure is
+  a short window and a merge unless the ships cancel closure in time.
 - Spinal weapons need nose-on alignment (<30 deg to target); turrets fire over a 180 deg arc.
 - Range is accuracy: a round hits only if its target is still near the aim point when it
   arrives, and a ship flying EVADE or evade dodge/full jinks off rounds it sees coming.

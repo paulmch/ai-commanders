@@ -153,9 +153,49 @@ class TestPromptMatchesSimulation:
             assert abs(ratio - claimed) <= 0.06, (range_km, ratio)
 
 
-def _doctrine_p_hit(hull, mode, range_km, muzzle_kps, broadside=False):
+    def test_closing_raises_and_crossing_lowers_hit_probability(self):
+        """
+        The doctrine used to say "high closing velocity = harder to hit ...
+        sweet spot 1-3 km/s relative". The gate says the opposite: closure
+        shortens the flight (P(hit) up), crossing and opening speed lower it.
+        Every quoted number is the live gate's.
+        """
+        from src.llm.prompts import ADMIRAL_GUN_DOCTRINE, GUN_PHYSICS_REFERENCE, GUN_TACTICS_BLOCK
+
+        def flat(text):
+            return " ".join(text.split())
+
+        cases = {"at rest": (0.0, 0.0), "closing": (-3000.0, 0.0),
+                 "crossing": (0.0, 3000.0), "opening": (3000.0, 0.0)}
+        p = {k: _doctrine_p_hit("destroyer", "holding course", 200, 9.9, velocity=v) * 100
+             for k, v in cases.items()}
+        assert p["closing"] > p["at rest"] > p["crossing"] > p["opening"], p
+        for mode in ("holding course", "evade dodge"):
+            for muzzle in (9.9, 6.0):
+                for rng in (100, 200, 300):
+                    at_rest = _doctrine_p_hit("destroyer", mode, rng, muzzle)
+                    closing = _doctrine_p_hit("destroyer", mode, rng, muzzle, velocity=(-3000.0, 0.0))
+                    crossing = _doctrine_p_hit("destroyer", mode, rng, muzzle, velocity=(0.0, 3000.0))
+                    assert closing > at_rest >= crossing, (mode, muzzle, rng)
+
+        claims = {"at rest": 36, "closing": 47, "crossing": 28, "opening": 20}
+        for key, claimed in claims.items():
+            assert abs(p[key] - claimed) <= 1.0, (key, p[key])
+        physics = flat(GUN_PHYSICS_REFERENCE)
+        assert ("Spinal vs a destroyer holding course at 200km: 36% at rest, 47% closing at "
+                "3 km/s, 28% crossing at 3 km/s, 20% opening at 3 km/s") in physics
+        admiral = flat(ADMIRAL_GUN_DOCTRINE)
+        assert ("spinal vs a destroyer holding course at 200 km: 36% at rest, 47% closing at "
+                "3 km/s, 28% crossing, 20% opening") in admiral
+        for text in (physics, flat(GUN_TACTICS_BLOCK), admiral):
+            assert "Closing speed RAISES" in text
+            assert "harder to hit" not in text and "Sweet spot" not in text
+
+
+def _doctrine_p_hit(hull, mode, range_km, muzzle_kps, broadside=False, velocity=(0.0, 0.0)):
     """The gate's P(hit) for a battleship's gun with this muzzle velocity at a
-    stationary target `range_km` out, nose-on unless broadside."""
+    target `range_km` out down +x, nose-on unless broadside, moving at
+    `velocity` (vx, vy) m/s - negative vx closes on the shooter at rest."""
     from src.physics import Vector3D
     from src.simulation import CombatSimulation, Maneuver, ManeuverType, create_ship_from_fleet_data
 
@@ -166,6 +206,7 @@ def _doctrine_p_hit(hull, mode, range_km, muzzle_kps, broadside=False):
                                           position=Vector3D(0, 0, 0), forward=Vector3D(1, 0, 0))
     target = create_ship_from_fleet_data(
         "b", hull, "beta", fleet, position=Vector3D(range_km * 1000.0, 0, 0),
+        velocity=Vector3D(velocity[0], velocity[1], 0.0),
         forward=Vector3D(0, 1, 0) if broadside else Vector3D(-1, 0, 0))
     sim.add_ship(shooter)
     sim.add_ship(target)
