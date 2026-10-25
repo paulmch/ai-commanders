@@ -751,6 +751,17 @@ class TestCaptainReports:
         assert "ITS CAPTAIN'S LAST REPORT: DEVIATE TIS Dart-2 [alpha_2]" in user
         assert "(NOT as ordered)" in user
 
+    def test_per_ship_order_shows_a_plain_ack_as_one_ship(self):
+        # Not the fleet block's roll call "ACK, nothing to flag (1): TIS Dart-1 [alpha_1]".
+        admiral, sim, snap, _ = battle_a_turn("alpha", t=180)
+        msgs = build_admiral_ship_order_messages(
+            admiral_name="A", ship_name="TIS Dart-1", ship_type="corvette", captain_name="C1",
+            fleet_directive="Hold the wall.", snapshot=snap, ship_id="alpha_1",
+            ship_view=admiral._ship_view(sim, "alpha_1", snap), captain_report=REPORTS[0])
+        user = msgs[1]["content"]
+        assert "ITS CAPTAIN'S LAST REPORT: ACK - flew its orders, nothing to flag\n" in user
+        assert "nothing to flag (1)" not in user
+
 
 # =============================================================================
 # ADM-02: directive failure - retry, then an honest empty directive

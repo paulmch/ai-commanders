@@ -4005,7 +4005,11 @@ def build_admiral_ship_order_messages(
 
     if captain_report:
         report = _format_captain_reports([captain_report], snapshot).split("\n", 1)
-        parts.append("ITS CAPTAIN'S LAST REPORT: " + (report[1] if len(report) > 1 else "(empty)"))
+        body = report[1] if len(report) > 1 else "(empty)"
+        if body.startswith("ACK, nothing to flag ("):
+            # The fleet block's collapsed-ACK roll call, for one ship.
+            body = "ACK - flew its orders, nothing to flag"
+        parts.append("ITS CAPTAIN'S LAST REPORT: " + body)
     elif captain_report is None and getattr(snapshot, "checkpoint", 0) and snapshot.checkpoint > 1:
         parts.append("ITS CAPTAIN'S LAST REPORT: none filed")
 
