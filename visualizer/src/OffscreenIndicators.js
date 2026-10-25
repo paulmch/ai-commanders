@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { panelShown as shown, viewInsets } from './ViewInsets.js';
 
 /**
  * Edge chevrons for what is outside the view (LV-09): one per fleet with
@@ -61,8 +62,20 @@ export function avoidBlockers(edge, blockers, step = 18, tries = 24) {
   return edge;
 }
 
-/** Rendered and not hidden (offsetParent is null for position:fixed panels). */
-const shown = el => !!el && !el.hidden && !el.classList.contains('hidden') && el.getClientRects().length > 0;
+/**
+ * Viewport area left for the battle: inside the header and transport bar
+ * and clear of the side columns (`insets`, ViewInsets.viewInsets). A ship
+ * under the command net or the registry is off screen for the chevrons.
+ */
+export function insetRectFor(width, height, insets = {}) {
+  const rect = { left: 16, top: 96, right: width - 16, bottom: height - 104 };
+  if (insets.left > 0) rect.left = Math.max(rect.left, insets.left + 10);
+  if (insets.right > 0) rect.right = Math.min(rect.right, width - insets.right - 10);
+  return rect;
+}
+
+/** Corner and top-centre HUD boxes a chevron slides clear of (avoidBlockers). */
+export const BLOCKER_IDS = ['trackHud', 'viewControls', 'directorChip', 'liveHud', 'liveConnection', 'killFeed', 'resultBanner'];
 
 export class OffscreenIndicators {
   constructor({ onFleet, onShip } = {}) {
@@ -95,7 +108,7 @@ export class OffscreenIndicators {
   /** Screen boxes a chevron must not sit under (corner HUD panels). */
   blockers() {
     const boxes = [];
-    for (const id of ['trackHud', 'viewControls', 'directorChip', 'liveHud', 'liveConnection']) {
+    for (const id of BLOCKER_IDS) {
       const el = document.getElementById(id);
       if (!shown(el)) continue;
       const r = el.getBoundingClientRect();
@@ -104,21 +117,9 @@ export class OffscreenIndicators {
     return boxes;
   }
 
-  /** Viewport area left for the battle (inside the HUD panels). */
+  /** Viewport area left for the battle (inside the HUD panels and side columns). */
   insetRect(width, height) {
-    const rect = { left: 16, top: 96, right: width - 16, bottom: height - 104 };
-    const left = document.getElementById('leftSidebar');
-    if (shown(left)) {
-      const r = left.getBoundingClientRect();
-      if (r.width > 0 && r.right < width / 2) rect.left = Math.max(rect.left, r.right + 10);
-    }
-    for (const id of ['shipTelemetry', 'decisionPanel']) {
-      const panel = document.getElementById(id);
-      if (!shown(panel)) continue;
-      const r = panel.getBoundingClientRect();
-      if (r.width > 0 && r.left > width / 2) rect.right = Math.min(rect.right, r.left - 10);
-    }
-    return rect;
+    return insetRectFor(width, height, viewInsets(document, width));
   }
 
   /**

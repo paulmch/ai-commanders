@@ -15,6 +15,21 @@ import { Projectiles } from './render/Projectiles.js';
 import { HeatFX } from './render/Heat.js';
 
 /**
+ * Put the canvas's WebGL pixel-unpack state back to its defaults when a
+ * renderer is torn down. The context outlives the renderer (the next
+ * SceneManager - a live battle switch, Load New Recording - gets the same
+ * one from canvas.getContext), and three's new WebGLState allocates its
+ * empty 3D / 2D-array textures with texImage3D before it touches the
+ * unpack flags: left at UNPACK_FLIP_Y = true by the last image upload, both
+ * fail with INVALID_OPERATION (two console warnings per new scene).
+ */
+export function resetUnpackState(gl) {
+  if (!gl?.pixelStorei) return;
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+}
+
+/**
  * SceneManager - owns the Three.js scene, camera, renderer and every
  * battle visual. main.js drives it with interpolated state each frame.
  *
@@ -129,6 +144,7 @@ export class SceneManager {
     this.clearHitEffects();
     this.clearSmallEffects();
     this.clearDestructionEffects();
+    this._disposeWarm();
     this._clearBlasts('damage');
     this.tracks?.dispose();
     this.weapons.dispose();
@@ -145,6 +161,7 @@ export class SceneManager {
     this.ships.clear();
     getGraphicsSettings(this.renderer).dispose();
     this.renderer.renderLists.dispose();
+    resetUnpackState(this.renderer.getContext?.());
     this.renderer.dispose();
   }
 
@@ -201,16 +218,47 @@ export class SceneManager {
     this.scene.add(ribbon.mesh);
     const heatProbe = this.heat.warmUpProbe(far);
     this.scene.add(heatProbe);
+    // Compile the variants that are actually drawn: the scene renders into
+    // PostFX's HDR target (linear output, no tone mapping), and compiling
+    // for the canvas built programs nothing ever used.
+    const prevTarget = this.renderer.getRenderTarget();
+    this.renderer.setRenderTarget(this.postfx.sceneRT || null);
     this.renderer.compile(this.scene, this.camera);
-    this.scene.remove(heatProbe);
-    heatProbe.geometry.dispose();
-    heatProbe.material.dispose();
-    blast.dispose();
-    crater.dispose();
-    this.scene.remove(torch.group);
-    torch.dispose();
-    this.scene.remove(ribbon.mesh);
-    ribbon.dispose();
+    this.renderer.setRenderTarget(prevTarget);
+    // compile() only queues the work (parallel shader compile): the driver
+    // finishes it at the program's first query. Query them now, at load,
+    // instead of at the first kill.
+    for (const program of this.renderer.info.programs || []) program.getUniforms?.();
+    // Keep the warm-up copies, hidden, for the scene's lifetime: three
+    // deletes a program with the last material using it, so disposing them
+    // here threw the compiled programs away and the first kill of a battle
+    // compiled every blast shader again mid-fight (a multi-second stall on
+    // software GL). They hold no pool light and are never updated.
+    for (const b of [blast, crater]) {
+      this.freePointLight(b.light);
+      b.light = null;
+      b.group.visible = false;
+    }
+    torch.group.visible = false;
+    ribbon.mesh.visible = false;
+    heatProbe.visible = false;
+    this._warm = { blast, crater, torch, ribbon, heatProbe };
+  }
+
+  /** Release the warm-up copies (SceneManager.dispose). */
+  _disposeWarm() {
+    const w = this._warm;
+    if (!w) return;
+    this._warm = null;
+    w.blast.dispose();
+    w.crater.dispose();
+    this.scene.remove(w.torch.group);
+    w.torch.dispose();
+    this.scene.remove(w.ribbon.mesh);
+    w.ribbon.dispose();
+    this.scene.remove(w.heatProbe);
+    w.heatProbe.geometry.dispose();
+    w.heatProbe.material.dispose();
   }
 
   _updatePixelWorld() {

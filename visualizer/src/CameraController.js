@@ -477,8 +477,13 @@ export class CameraController {
     if (this.mode !== 'free') this.setMode(this.mode, shipId);
   }
 
-  /** Frame the active fleets with room for the side panels (F re-arms a held director). */
-  focusFleet(shipStates) {
+  /**
+   * Frame the active fleets with room for the side panels (F re-arms a held
+   * director). `frame` {shift, widthShare} (ViewInsets.freeViewFrame) centres
+   * them in the view the HUD columns leave free; without it the fleets fill
+   * 0.65 of the full width.
+   */
+  focusFleet(shipStates, frame = null) {
     if (this.director.enabled) {
       this.releaseDirector();
       this.director.written = null;
@@ -497,10 +502,16 @@ export class CameraController {
     const center = bounds.getCenter(new THREE.Vector3());
     const radius = Math.max(25, bounds.getSize(new THREE.Vector3()).length() / 2);
     const halfFov = THREE.MathUtils.degToRad(this.camera.fov) / 2;
-    const horizontal = Math.atan(Math.tan(halfFov) * this.camera.aspect * 0.65);
+    const share = Number.isFinite(frame?.widthShare) && frame.widthShare > 0 ? frame.widthShare : 0.65;
+    const horizontal = Math.atan(Math.tan(halfFov) * this.camera.aspect * share);
     const distance = radius / Math.sin(Math.min(halfFov, horizontal)) * 1.1;
-    this.camera.position.copy(center).addScaledVector(new THREE.Vector3(0, 0.6, 1).normalize(), distance);
-    this.orbitControls.target.copy(center);
+    const view = slideToFreeArea({
+      target: center,
+      position: center.clone().addScaledVector(new THREE.Vector3(0, 0.6, 1).normalize(), distance),
+      radius
+    }, Number.isFinite(frame?.shift) ? frame.shift : 0, this.camera.fov, this.camera.aspect);
+    this.camera.position.copy(view.position);
+    this.orbitControls.target.copy(view.target);
     this.orbitControls.update();
     this.fleetFramed = true;
   }

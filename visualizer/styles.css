@@ -2159,6 +2159,15 @@ body.decisions-open .live-delib {
   width: max(320px, min(560px, calc(100vw - 32px - 484px - 248px)));
   transform: translateX(calc(-50% - 118px));
 }
+/* With the command net open (default from 1100 px) the card centres in the
+   strip between the registry (248) and the net (316 from the right edge)
+   instead of running under the net's left edge */
+@media (min-width: 901px) {
+  body.comms-open:not(.decisions-open) .live-delib {
+    width: min(660px, calc(100vw - 32px - 316px - 248px));
+    transform: translateX(calc(-50% - 34px));
+  }
+}
 .ld-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; }
 .ld-kicker { font-family: var(--font-display); font-size: 11px; letter-spacing: 0.16em; color: var(--accent-warning); }
 .ld-cp { color: var(--text-secondary); letter-spacing: 0.08em; }
@@ -2369,6 +2378,11 @@ body.decisions-open .live-delib {
 .director-chip.on .dc-dot { animation: livePulse 1.6s ease-in-out infinite; }
 .director-chip kbd { font: inherit; opacity: 0.55; }
 #shipTelemetry:not(.hidden) ~ .director-chip { right: 308px; }
+/* The right column (command net, track HUD; z 30) starts below the chip
+   instead of covering it: the net is open by default on wide screens */
+@media (min-width: 901px) {
+  #app:has(> .director-chip:not([hidden])) #rightSidebar { top: 122px; }
+}
 
 /* Off-screen chevrons */
 #offscreenIndicators { position: fixed; inset: 0; z-index: 13; pointer-events: none; }
@@ -2416,6 +2430,14 @@ body.decisions-open .live-delib {
    the view controls (top 57px) */
 .title-prefix { display: none; }
 .battle-title h1 { font-size: 15px; }
+/* ...which, centred in the 72 px header, they did not (scoreboard 36-61 px
+   cut the tops of FLEET VIEW / NET / DECISIONS). Pinned from the top and
+   packed tighter they end at 56 px; the row cannot move down instead, the
+   live HUD starts at 84 px right under it. */
+@media (min-width: 681px) {
+  .header-center { align-self: flex-start; padding-top: 10px; gap: 1px; }
+  .header-center .scoreboard { padding-top: 1px; padding-bottom: 1px; }
+}
 
 .scoreboard {
   display: flex;
@@ -2470,6 +2492,10 @@ body.decisions-open .live-delib {
 }
 .kill-feed[hidden] { display: none; }
 #liveHud:not(.hidden) ~ .kill-feed { top: 122px; }
+/* The checkpoint deliberation card owns the top centre while the battle is
+   parked at a checkpoint (often right after a kill): the toasts drop to
+   just above the transport bar instead of hiding under it */
+#app:has(> .live-delib:not([hidden])) .kill-feed { top: auto; bottom: 108px; flex-direction: column-reverse; }
 .kill-toast {
   pointer-events: auto; cursor: pointer;
   display: grid; gap: 1px; min-width: 300px; max-width: min(460px, calc(100vw - 32px));

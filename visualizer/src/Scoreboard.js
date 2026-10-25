@@ -113,6 +113,30 @@ export class Scoreboard {
     }
   }
 
+  /**
+   * Back to the empty strip (no battle on screen): a torn-down battle - the
+   * live wire switching to a new battle, the file selector - must not leave
+   * its models, pips and tallies in the header through the next draft.
+   */
+  clear() {
+    this.populate({}, null);
+    for (const f of SIDES) {
+      const els = this.sideEls[f];
+      if (!els) continue;
+      setText(els.alive, 0);
+      setText(els.total, 0);
+      setText(els.hull, '100%');
+      setText(els.torps, '');
+      setText(els.kills, '☠ 0');
+      setText(els.points, '');
+      setText(els.spend, '');
+    }
+    if (this.balance) {
+      this.balance.style.width = '50%';
+      if (this.balance.parentNode) this.balance.parentNode.title = 'Remaining fleet strength';
+    }
+  }
+
   update(states, torpedoes, ships, hud, t) {
     const sides = computeSides(states, torpedoes, ships, hud, t);
     for (const f of SIDES) {

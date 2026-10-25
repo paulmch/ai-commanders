@@ -28,12 +28,13 @@ import { latestWreckEnd } from './render/Explosion.js';
 import { fitBattleTitle } from './TitleFit.js';
 import { updateRegistryHeat } from './HeatHud.js';
 import { CombatLog } from './CombatLog.js';
-import { CommsFeed } from './CommsFeed.js';
+import { CommsFeed, commsToggle } from './CommsFeed.js';
 import { KillFeed } from './KillFeed.js';
 import { Registry } from './Registry.js';
 import { Scoreboard, ResultBanner, resultBannerDue } from './Scoreboard.js';
 import { TimelineMarkers } from './TimelineMarkers.js';
 import { showLightbox } from './hudDom.js';
+import { freeViewFrame, viewInsets } from './ViewInsets.js';
 
 class BattleVisualizer {
   constructor() {
@@ -324,7 +325,7 @@ class BattleVisualizer {
       if (this.scene) {
         this.scene.onResize();
         const cam = this.cameraController;
-        if (cam?.fleetFramed && !cam.director.enabled) cam.focusFleet(this.currentState?.ships);
+        if (cam?.fleetFramed && !cam.director.enabled) cam.focusFleet(this.currentState?.ships, this.directorFrame(true));
       }
     });
   }
@@ -588,7 +589,7 @@ class BattleVisualizer {
 
         // Update camera
         if (this.needsFleetFraming) {
-          this.cameraController.focusFleet(this.currentState.ships);
+          this.cameraController.focusFleet(this.currentState.ships, this.directorFrame(true));
           this.needsFleetFraming = false;
         }
         if (this.pendingEvidenceFocus) {
@@ -665,30 +666,18 @@ class BattleVisualizer {
   }
 
   /**
-   * Where the auto director puts the action: centred (NDC x `shift`) in the
-   * view left free by the registry and any right-hand panel, filling a
-   * matching share of the width. Re-measured at most twice a second.
+   * Where the auto director and the fleet view put the action: centred (NDC
+   * x `shift`) in the view left free by the registry and the right-hand
+   * columns (telemetry, decisions, command net), filling a matching share
+   * of the width (ViewInsets.js). Re-measured at most twice a second;
+   * `fresh` re-measures now (a panel was just toggled).
    */
-  directorFrame() {
+  directorFrame(fresh = false) {
     const now = performance.now();
-    if (this._frameAt && now - this._frameAt < 500) return this._frame;
+    if (!fresh && this._frameAt && now - this._frameAt < 500) return this._frame;
     this._frameAt = now;
     const width = window.innerWidth || 1;
-    const side = (id, onLeft) => {
-      const el = document.getElementById(id);
-      // getClientRects: empty when not rendered (offsetParent is null for
-      // the position:fixed sidebar even while it shows)
-      if (!el || el.hidden || el.classList.contains('hidden') || !el.getClientRects().length) return 0;
-      const r = el.getBoundingClientRect();
-      if (r.width <= 0 || r.height <= 0) return 0;
-      return onLeft ? (r.right < width / 2 ? r.right : 0) : (r.left > width / 2 ? width - r.left : 0);
-    };
-    const left = side('leftSidebar', true);
-    const right = Math.max(side('shipTelemetry', false), side('decisionPanel', false));
-    const free = Math.max(0.3, (width - left - right) / width);
-    // 0.62 of the width with the registry alone (free ~0.85), scaled down
-    // when a right-hand panel narrows the view
-    this._frame = { shift: (left - right) / width, widthShare: 0.73 * free };
+    this._frame = freeViewFrame(width, viewInsets(document, width));
     return this._frame;
   }
 
@@ -706,12 +695,12 @@ class BattleVisualizer {
     const cam = this.cameraController;
     if (!cam || !this.currentState) return;
     if (cam.director.enabled) {
-      cam.focusFleet(this.currentState.ships);
+      cam.focusFleet(this.currentState.ships, this.directorFrame(true));
       return;
     }
     const ships = Object.fromEntries(Object.entries(this.currentState.ships)
       .filter(([id]) => (this.loader.ships[id]?.faction || id.split('_')[0]) === faction));
-    cam.focusFleet(ships);
+    cam.focusFleet(ships, this.directorFrame(true));
   }
 
   /** End card / kill list: play from t (leaves the live head). */
@@ -1488,7 +1477,7 @@ class BattleVisualizer {
   showFleetView() {
     if (!this.isInitialized) return;
     this.deselectShip();
-    this.cameraController.focusFleet(this.currentState?.ships);
+    this.cameraController.focusFleet(this.currentState?.ships, this.directorFrame(true));
   }
 
   toggleContacts() {
@@ -1842,15 +1831,19 @@ class BattleVisualizer {
     this.combatLog.clear();
     this.commsFeed.clear();
     // The command net opens by default where there is room for it, unless
-    // the viewer closed it last time.
+    // the viewer closed it last time - or the replay carries no command
+    // traffic at all (heuristic captains, pre-pass-4 recordings): an empty
+    // column would only hide a third of the battle and the AUTO CAM chip.
     let saved = null;
     try { saved = window.localStorage.getItem('aic.viewer.commsOpen'); } catch { /* default */ }
-    this.commsFeed.setOpen(saved != null ? saved === '1' : window.innerWidth >= 1100);
+    const traffic = !!this.live || (this.loader.hud?.comms?.length || 0) > 0;
+    this.commsFeed.setOpen(saved != null ? saved === '1' : window.innerWidth >= 1100 && traffic);
   }
 
   toggleComms() {
-    this.commsFeed.setOpen(!this.commsFeed.open, true);
-    if (this.commsFeed.open && this.decisions.open) this.decisions.setOpen(false);
+    const next = commsToggle(this.commsFeed.open, this.decisions.open);
+    this.commsFeed.setOpen(next.open, true);
+    if (next.closeDecisions) this.decisions.setOpen(false);
   }
 
   /** HUD click-through (log row, comms row, kill toast, timeline marker): pause at t and frame the ship. */
@@ -2017,14 +2010,30 @@ class BattleVisualizer {
     this.lastMomentTime = 0;
     this.currentState = null;
 
-    // Clear UI
+    // Clear UI: nothing of the old battle may linger into the next one
+    // (a live battle switch shows the new draft under this header)
     this.registry.clear();
     this.combatLog.clear();
     this.commsFeed.clear();
     this.killFeed.clear();
     this.resultBanner.reset();
+    this.scoreboard.clear();
     this.timelineMarkers.clear();
     this.elements.shipTelemetry.classList.add('hidden');
+    this.resetHeader();
+  }
+
+  /** Header and transport back to their no-battle state. */
+  resetHeader() {
+    this.elements.battleName.textContent = 'FLEET BATTLE';
+    fitBattleTitle(this.elements.battleName, 'FLEET BATTLE');
+    this.elements.missionTime.textContent = this.formatTimeFull(0);
+    this.elements.timeInput.value = this.formatTime(0);
+    this.elements.totalTime.textContent = this.formatTime(0);
+    this.elements.timelineProgress.style.width = '0%';
+    this.elements.timelineHandle.style.left = '0%';
+    this.elements.timeline.value = 0;
+    this.updatePlayPauseButton();
   }
 
   delay(ms) {

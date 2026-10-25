@@ -6,7 +6,7 @@ import { computeSides, resultTitle, cleanReason, ResultBanner, Scoreboard, resul
 import { feedAt, killLines, KillFeed } from '../src/KillFeed.js';
 import { timelineMarks, sparkPaths, TimelineMarkers } from '../src/TimelineMarkers.js';
 import { registryDensity, registryStatus } from '../src/Registry.js';
-import { CommsFeed, visibleComms, standingOrders } from '../src/CommsFeed.js';
+import { CommsFeed, commsToggle, visibleComms, standingOrders } from '../src/CommsFeed.js';
 
 const HOSTILE = '<img src=x onerror="alert(1)"><b>Strike your colours</b>';
 const ships = {
@@ -109,6 +109,21 @@ test('scoreboard DOM writes the model and only changed values', () => {
   assert.equal(alpha.querySelector('[data-points]').textContent, '31 pts');
   assert.equal(root.querySelector('[data-side="beta"]').querySelector('[data-alive]').textContent, '1');
   assert.equal(root.querySelector('[data-side="beta"]').querySelectorAll('i').length, 2, 'one pip per ship');
+  // torn down (live battle switch, file selector): nothing of the old battle stays in the header
+  board.clear();
+  for (const f of ['alpha', 'beta']) {
+    const el = root.querySelector(`[data-side="${f}"]`);
+    assert.equal(el.querySelector('[data-model]').textContent, '');
+    assert.equal(el.querySelector('[data-kills]').textContent, '☠ 0');
+    assert.equal(el.querySelector('[data-points]').textContent, '');
+    assert.deepEqual([el.querySelector('[data-alive]').textContent, el.querySelector('[data-total]').textContent], ['0', '0']);
+    assert.equal(el.querySelectorAll('i').length, 0, 'no pips');
+  }
+  // and the next battle repopulates from scratch
+  board.populate(ships, hud);
+  board.update({}, [], ships, hud, 10);
+  assert.equal(alpha.querySelector('[data-kills]').textContent, '☠ 0');
+  assert.equal(alpha.querySelectorAll('i').length, 2);
 });
 
 test('kill feed: the hulk counts down, then lingers as destroyed, then clears', () => {
@@ -282,4 +297,39 @@ test('visible rows and standing orders are pure functions of time', () => {
   assert.equal(visibleComms(hud.comms, 61, 'all', 'all', 3).length, 3, 'capped to the newest rows');
   assert.equal(standingOrders(hud.comms, 61).alpha.directive.text, 'Salvo now.');
   assert.equal(standingOrders(hud.comms, 61).alpha.plan.text, 'Phase 1: close.');
+});
+
+test('command net with no traffic says so instead of rendering an empty column', () => {
+  const doc = new FakeDocument();
+  const root = build(doc, ['aside', { class: 'hidden' },
+    ['button', { 'data-comms-faction': 'all' }], ['button', { 'data-comms-group': 'all' }],
+    ['div', { 'data-standing': '' }], ['div', { 'data-list': '' }]]);
+  const ships = { alpha_1: { faction: 'alpha', name: 'TIS Dart-1', type: 'corvette' } };
+  const hud = buildHudIndex({ events: [], ships, simTrace: [], metadata: {}, sourceData: {}, duration: 120 });
+  assert.equal(hud.comms.length, 0);
+  const feed = new CommsFeed({ root, doc, store: null });
+  feed.setOpen(true);
+  feed.setIndex(hud, true);
+  feed.update(30);
+  const list = root.querySelector('[data-list]');
+  assert.equal(list.querySelector('.comms-empty')?.textContent, 'No command traffic recorded yet.');
+  assert.equal(feed.update(30), 'same', 'parked: nothing re-rendered');
+  assert.equal(list.querySelectorAll('.comms-empty').length, 1);
+  // traffic recorded but none yet at the playhead (a live battle before CP1)
+  const busy = commsFixture();
+  busy.feed.update(10);
+  assert.equal(busy.list.querySelector('.comms-empty')?.textContent, 'No command traffic yet.');
+  busy.feed.update(40);
+  assert.equal(busy.list.querySelector('.comms-empty'), null, 'the first rows replace the line');
+  busy.feed.setFilter('all', 'issues');
+  busy.feed.update(10);
+  assert.equal(busy.list.querySelector('.comms-empty')?.textContent, 'No traffic on this filter yet.');
+});
+
+test('N with the decisions panel up brings the (hidden) command net back instead of closing it unseen', () => {
+  assert.deepEqual(commsToggle(true, false), { open: false, closeDecisions: false }, 'visible net: N closes it');
+  assert.deepEqual(commsToggle(false, false), { open: true, closeDecisions: false });
+  // open but hidden under the decisions panel: N shows it, the panel yields
+  assert.deepEqual(commsToggle(true, true), { open: true, closeDecisions: true });
+  assert.deepEqual(commsToggle(false, true), { open: true, closeDecisions: true });
 });

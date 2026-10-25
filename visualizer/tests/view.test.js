@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { updateTrailHistory } from '../src/render/Trails.js';
 import { CameraController } from '../src/CameraController.js';
-import { placeContactLabel } from '../src/ContactOverlay.js';
+import { CONTACT_PANEL_IDS, placeContactLabel, threatBadgeBox, threatLabel } from '../src/ContactOverlay.js';
 
 const options = { maxAge: 2.5, minStep: 0.5, max: 64 };
 
@@ -110,4 +110,26 @@ test('fleet framing fits both fleets on a narrow viewport and ignores old wreck 
   assert.equal(controller.fleetFramed, true);
   controller.setMode('orbit', 'alpha');
   assert.equal(controller.fleetFramed, false);
+});
+
+const boxesOverlap = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+
+test('a threat badge is reserved: no label - the ship\'s own included - covers it', () => {
+  const text = threatLabel({ count: 3, eta: 41 });
+  assert.equal(text, '3 TORP · 41s');
+  const x = 500, y = 300;
+  const badge = threatBadgeBox(x, y, text);
+  // the label's preferred slot (right of the bracket, centred) used to sit on the badge
+  assert.ok(boxesOverlap({ x: x + 18, y: y - 17, w: 126, h: 34 }, badge));
+  const occupied = [{ x: x - 10, y: y - 10, w: 20, h: 20 }, badge];
+  const own = placeContactLabel(x, y, 1, occupied, 1280, 720);
+  assert.ok(own && !boxesOverlap(own, badge));
+  occupied.push(own);
+  // a neighbour just left of it whose labels go right
+  const other = placeContactLabel(x - 30, y + 4, 1, [...occupied, { x: x - 40, y: y - 6, w: 20, h: 20 }], 1280, 720);
+  assert.ok(!other || !boxesOverlap(other, badge));
+  // the badge grows with its text
+  assert.ok(threatBadgeBox(x, y, '12 TORP · 104s').w > badge.w);
+  // contacts also keep clear of the live overlays and the AUTO CAM chip
+  for (const id of ['commsFeed', 'killFeed', 'directorChip', 'liveDeliberation']) assert.ok(CONTACT_PANEL_IDS.includes(id), id);
 });

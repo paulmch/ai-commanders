@@ -45,6 +45,18 @@ export function visibleComms(rows, t, faction = 'all', group = 'all', max = 150,
 }
 
 /** Latest directive (and plan) per faction at t: {alpha: {directive, plan}, beta: {...}}. */
+/**
+ * N / NET button: what the command net and the decisions panel do next.
+ * The two share the right column and the decisions panel wins it (CSS hides
+ * an open net under it), so while it is up N brings the net back instead of
+ * closing a net nobody can see.
+ * @returns {{open: boolean, closeDecisions: boolean}}
+ */
+export function commsToggle(commsOpen, decisionsOpen) {
+  const visible = !!commsOpen && !decisionsOpen;
+  return { open: !visible, closeDecisions: !visible && !!decisionsOpen };
+}
+
 export function standingOrders(rows, t) {
   const out = { alpha: { directive: null, plan: null }, beta: { directive: null, plan: null } };
   const n = upperBound(rows || [], t);
@@ -160,7 +172,8 @@ export class CommsFeed {
   _sync(desired) {
     const shown = this.shown;
     const same = shown.length === desired.length && shown.every((id, i) => id === desired[i].id);
-    if (same) return 'same';
+    // nothing to show: still (re)write the empty-state line (filter or index changed)
+    if (same && desired.length) return 'same';
     const last = shown.length ? shown[shown.length - 1] : null;
     const q = last == null ? -1 : desired.findIndex(r => r.id === last);
     if (q >= 0) {
@@ -183,7 +196,10 @@ export class CommsFeed {
     shown.length = 0;
     for (const r of desired) this._appendRow(r, false);
     if (!desired.length) {
-      this.list.append(node(this.doc, 'p', this.hud?.comms?.length ? 'No traffic on this filter yet.' : 'No command traffic recorded yet.', 'comms-empty'));
+      const filtered = this.faction !== 'all' || this.group !== 'all';
+      const text = !this.hud?.comms?.length ? 'No command traffic recorded yet.'
+        : filtered ? 'No traffic on this filter yet.' : 'No command traffic yet.';
+      this.list.append(node(this.doc, 'p', text, 'comms-empty'));
     }
     return 'rebuild';
   }
