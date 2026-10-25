@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { updateHullLights } from './HullLights.js';
+import { floodLevel, FLOOD_OPACITY, CODE_GLOW, LIVERY_FLOOD, GLASS_GLOW } from './HullMarkings.js';
 import { assignBarrels } from './WeaponTimeline.js';
 
 /**
@@ -18,7 +19,13 @@ import { assignBarrels } from './WeaponTimeline.js';
  * paused frame, a replayed frame and a direct seek give the same pose; a
  * dying ship's mounts fall into a fixed, seeded slump.
  *   - torpedo launch doors open around each torpedo_launched event
- *   - navigation lamps blink (HullLights)
+ *   - torpedo magazines empty round by round: a rack round leaves its rail
+ *     at its launch, a VLS hatch swings up in the 2.5 s before and stays
+ *     open over the empty tube, its status lamp going from the faction
+ *     colour to dark
+ *   - navigation lamps blink (HullLights); floodlights, the self-lit hull
+ *     codes, livery and sensor glass brown out with the hull
+ *     (HullMarkings.floodLevel)
  *
  * The scene may carry `scene.loader` (BattleLoader); without it (showroom,
  * tests) everything falls back to nearest-enemy aim and idle motion.
@@ -96,6 +103,84 @@ export function assignLaunches(launches, banks) {
   return out;
 }
 
+/**
+ * One magazine round at battle time t, given the launch time `tl` dealt to
+ * it (undefined: never fired). open: hatch slide 0..1 (opens over the
+ * second from 2.5 s before launch, stays open); lamp: 0 loaded, 1 firing,
+ * 2 expended; gone: the round has left (rack rounds vanish).
+ */
+export function magazineRoundState(tl, t, out = { open: 0, lamp: 0, gone: false }) {
+  if (tl === undefined || !(t >= tl - 2.5)) {
+    out.open = 0; out.lamp = 0; out.gone = false;
+    return out;
+  }
+  out.open = Math.min(1, (t - (tl - 2.5)) / 1.0);
+  out.lamp = t < tl + 0.6 ? 1 : 2;
+  out.gone = t >= tl;
+  return out;
+}
+
+/** Open VLS hatch: swung up past upright (rad), leaning outboard. */
+export const HATCH_OPEN = 1.65;
+
+const _rs = { open: 0, lamp: 0, gone: false };
+const _mm = new THREE.Matrix4();
+const _hm = new THREE.Matrix4();
+const _hp = new THREE.Vector3();
+const _zero = new THREE.Matrix4().makeScale(0, 0, 0);
+const _firing = new THREE.Color(2.4, 2.2, 1.9);
+const _spent = new THREE.Color(0.07, 0.015, 0.01);
+
+/**
+ * Hatch-local swing of a VLS hatch (cell size s, 0.9 s square, 0.1 s
+ * thick) opened `open` 0..1: a turn about its outboard bottom edge (local
+ * +X, along Z) by up to HATCH_OPEN, so it stands up over the coaming
+ * instead of sliding off the bank.
+ */
+export function hatchHinge(s, open, out = new THREE.Matrix4()) {
+  _hp.set(s * 0.45, -s * 0.05, 0);
+  out.makeRotationZ(-HATCH_OPEN * open);
+  // T(edge) R T(-edge)
+  const e = out.elements;
+  const px = _hp.x, py = _hp.y;
+  e[12] = px - (e[0] * px + e[4] * py);
+  e[13] = py - (e[1] * px + e[5] * py);
+  return out;
+}
+
+/**
+ * Pose a hull's magazine (Hulls.js _buildMagazine) at battle time t.
+ * times[bank] = sorted launch times dealt to that bank; a bank's k-th
+ * launch empties its k-th round. Only rounds whose state changed are
+ * rewritten.
+ */
+export function updateMagazine(mag, times, t) {
+  let dirty = false;
+  for (let i = 0; i < mag.entries.length; i++) {
+    const e = mag.entries[i];
+    const st = magazineRoundState(times[e.bank]?.[mag.order[i]], t, _rs);
+    const key = Math.round(st.open * 1000) + st.lamp * 10000 + (st.gone ? 100000 : 0);
+    if (mag.state[i] === key) continue;
+    mag.state[i] = key;
+    dirty = true;
+    if (mag.kind === 'rack') {
+      mag.body.setMatrixAt(i, st.gone ? _zero : mag.base[i]);
+    } else {
+      _mm.copy(mag.base[i]);
+      if (e.hinge && st.open > 0) _mm.multiply(hatchHinge(e.s, st.open, _hm));
+      mag.body.setMatrixAt(i, _mm);
+      mag.lamp?.setMatrixAt(i, _mm);   // the status lamp rides on the hatch
+      if (mag.lamp) mag.lamp.setColorAt(i, st.lamp === 0 ? mag.loaded : st.lamp === 1 ? _firing : _spent);
+    }
+  }
+  if (dirty) {
+    mag.body.instanceMatrix.needsUpdate = true;
+    if (mag.lamp) mag.lamp.instanceMatrix.needsUpdate = true;
+    if (mag.lamp?.instanceColor) mag.lamp.instanceColor.needsUpdate = true;
+  }
+  return dirty;
+}
+
 /** Ship-local -> mount-local (mount rotated about Z by rotation.z). */
 function toMount(inv, mount, world, out) {
   out.copy(world).applyMatrix4(inv).sub(mount.position).applyAxisAngle(_Z, -mount.rotation.z);
@@ -165,6 +250,19 @@ function pdTargetPosition(scene, seg, t) {
 }
 
 /**
+ * Everything self-lit on the plating follows the hull's power `lv`
+ * (floodLevel): floodlight pools, the hull codes, the livery paint and
+ * the sensor glass (per-ship copies, Hulls.buildShipMaterials).
+ */
+export function brownOut(ud, lv) {
+  if (ud.floodlights) ud.floodlights.material.opacity = FLOOD_OPACITY * lv;
+  if (ud.hullMarkings?.material) ud.hullMarkings.material.emissiveIntensity = CODE_GLOW * lv;
+  const mats = ud.materials;
+  if (mats?.paint) mats.paint.emissiveIntensity = LIVERY_FLOOD * lv;
+  if (mats?.glass) mats.glass.emissiveIntensity = GLASS_GLOW * lv;
+}
+
+/**
  * Hook called at the end of SceneManager.updateShip for every live ship.
  */
 export function updateHullDetails(ship, state, scene) {
@@ -177,6 +275,7 @@ export function updateHullDetails(ship, state, scene) {
     ud._isDead ||= () => !!scene.destroyedShips?.has(ud.shipId);
     updateHullLights(ud.hullLights, t, { dying, hull }, ud._isDead);
   }
+  brownOut(ud, floodLevel(t, hull, dying, (ud.navPhase || 0) % 1));
   const idx = indexFor(scene.loader);
   _m.compose(ship.position, ship.quaternion, ship.scale).invert();
 
@@ -281,5 +380,14 @@ export function updateHullDetails(ship, state, scene) {
       d.mesh.position.copy(d.closed).addScaledVector(d.slide, o);
       d.mesh.visible = true;
     }
+  }
+  // --- torpedo magazine -------------------------------------------------------
+  const mag = ud.magazine;
+  if (mag) {
+    if (!mag.times || mag.idx !== idx) {
+      mag.times = assignLaunches(idx?.launches.get(ud.shipId), mag.banks);
+      mag.idx = idx;
+    }
+    updateMagazine(mag, mag.times, t);
   }
 }

@@ -638,6 +638,72 @@ export function getAccentTexture() {
   return _accentTex;
 }
 
+let _hazardTex = null;
+/**
+ * Hazard livery for launcher rims and magazine hatches: diagonal yellow /
+ * black stripes on worn paint. Tileable (stripe pitch 1/4 of the tile),
+ * used with UVs fitted to physical size like the plating. Returns { map }.
+ */
+export function getHazardTexture() {
+  if (_hazardTex) return _hazardTex;
+  const size = 128;
+  const canvas = canvasOf(size);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'rgb(28,28,26)';
+  ctx.fillRect(0, 0, size, size);
+  ctx.fillStyle = 'rgb(214,170,42)';
+  const pitch = size / 4;
+  for (let x = -size; x < size * 2; x += pitch) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x + pitch / 2, 0);
+    ctx.lineTo(x + pitch / 2 + size, size);
+    ctx.lineTo(x + size, size);
+    ctx.closePath();
+    ctx.fill();
+  }
+  // wear: soft dark scuffs so the stripes don't read as a flat decal
+  const rnd = mulberry32(2024);
+  for (let i = 0; i < 60; i++) {
+    ctx.fillStyle = `rgba(20,18,16,${0.15 + rnd() * 0.3})`;
+    ctx.beginPath();
+    ctx.arc(rnd() * size, rnd() * size, 1 + rnd() * 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  _hazardTex = { map: texOf(canvas, { srgb: true, anisotropy: 4 }) };
+  return _hazardTex;
+}
+
+let _floodTex = null;
+/**
+ * Floodlight pool: the soft fan of light a hull floodlight throws on the
+ * plating beside it - bright at the lamp end (v = 0), widening and fading
+ * along the face. Greyscale alpha for an additive quad.
+ */
+export function getFloodTexture() {
+  if (_floodTex) return _floodTex;
+  const w = 128, h = 128;
+  const canvas = canvasOf(w, h);
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(w, h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const u = (x + 0.5) / w * 2 - 1;        // across the beam
+      const v = (y + 0.5) / h;                // away from the lamp
+      const spread = 0.3 + 0.7 * v;           // the beam widens away from the lamp
+      const across = Math.exp(-Math.pow(u / spread, 2) * 2.4);
+      const along = Math.pow(1 - v, 1.3) * Math.min(1, v * 10);
+      const a = Math.max(0, Math.min(1, across * along));
+      const i = (y * w + x) * 4;
+      img.data[i] = img.data[i + 1] = img.data[i + 2] = 255;
+      img.data[i + 3] = a * 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  _floodTex = texOf(canvas, { repeat: false, anisotropy: 4 });
+  return _floodTex;
+}
+
 let _radiatorTex = null;
 /**
  * Radiator panel: coolant channels running along the panel with the
