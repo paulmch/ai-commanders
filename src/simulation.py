@@ -2318,28 +2318,23 @@ class CombatSimulation:
             # Use forward direction as approximation (conservative)
             return target.forward * max_accel_ms2 * throttle * 0.5
 
-        elif maneuver_type == ManeuverType.BURN:
-            # Burning in specified direction
-            if maneuver.direction:
-                return maneuver.direction.normalized() * max_accel_ms2 * throttle
-            return target.forward * max_accel_ms2 * throttle
-
-        elif maneuver_type == ManeuverType.HEADING:
-            if maneuver.live_heading:
-                # toward_point / toward_ship steer their own burn (and
-                # brake): read the drive's actual output.
-                return self._thrust_accel(target)
-            # Flying toward a heading - accelerating in that direction
-            if maneuver.heading_direction:
-                heading = maneuver.heading_direction
-                accel_dir = Vector3D(
-                    heading.get('x', 0),
-                    heading.get('y', 0),
-                    heading.get('z', 0)
-                )
-                if accel_dir.magnitude > 0:
-                    return accel_dir.normalized() * max_accel_ms2 * throttle
-            return target.forward * max_accel_ms2 * throttle
+        elif maneuver_type in (ManeuverType.BURN, ManeuverType.HEADING):
+            # Read the drive's actual output - what a fire-control track sees
+            # in the plume - not the order. HEADING turns first and burns once
+            # nose-on (token throttle meanwhile), formation orders hold the
+            # burn until burn_start_time, toward_point/toward_ship throttle
+            # down to arrive, and throttle 0 only points the nose: extrapolating
+            # "full burn along the ordered heading" through any of those
+            # over-led the round by 0.5 * a * T^2 (13 km for a 2 g hull and a
+            # 36 s flight). Measured: replaying recorded rounds at HEADING
+            # targets 200+ km out (n=432, mostly the old-code flash mirror)
+            # against the targets' real paths, rounds aimed this way pass the
+            # 500 m gate 40% of the time vs 32% for the order-read lead; in
+            # seeded engine engagements against HEADING burners gate passes
+            # go 0.97/0.90/0.84 -> 1.00/0.96/0.87 for flights <12/12-25/25-40 s
+            # (0.62 -> 0.59 beyond 40 s, where the turn-phase plume
+            # under-reads a burn that is about to start).
+            return self._thrust_accel(target)
 
         elif maneuver_type == ManeuverType.PADLOCK:
             # Padlock - tracking target rotationally, no thrust

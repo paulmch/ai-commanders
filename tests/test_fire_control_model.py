@@ -238,3 +238,27 @@ class TestSimulationWiring:
         sim._resolve_projectile_hit_geometric(flight, target, None, target.position)
         assert not [e for e in sim.events if e.event_type == SimulationEventType.PROJECTILE_MISS]
         assert [e for e in sim.events if e.event_type == SimulationEventType.PROJECTILE_IMPACT]
+
+
+class TestTheLeadReadsThePlume:
+    """The lead extrapolates the drive's actual output for HEADING and BURN
+    targets, not the order (a HEADING ship turns first on a token throttle;
+    reading 'full burn along the heading' over-led rounds by 0.5 a T^2)."""
+
+    def test_turning_heading_target_is_not_led_at_full_burn(self, fleet):
+        sim, _, target = _duel(fleet)
+        target.current_maneuver = Maneuver(
+            ManeuverType.HEADING, 0.0, throttle=1.0, heading_direction={"x": 0.0, "y": 1.0, "z": 0.0})
+        target.applied_throttle = 0.05          # still swinging round (token throttle)
+        accel = sim._estimate_target_acceleration(target)
+        assert accel.magnitude == pytest.approx(0.05 * target.kinematic_state.max_acceleration_ms2(), rel=1e-6)
+        assert accel.normalized().dot(target.forward) == pytest.approx(1.0)
+
+    def test_burning_target_is_led_with_its_burn(self, fleet):
+        sim, _, target = _duel(fleet)
+        target.current_maneuver = Maneuver(ManeuverType.BURN, 0.0, throttle=1.0, direction=Vector3D(0, 1, 0))
+        target.kinematic_state.forward = Vector3D(0, 1, 0)
+        target.applied_throttle = 1.0
+        accel = sim._estimate_target_acceleration(target)
+        assert accel.magnitude == pytest.approx(target.kinematic_state.max_acceleration_ms2(), rel=1e-6)
+        assert accel.y > 0

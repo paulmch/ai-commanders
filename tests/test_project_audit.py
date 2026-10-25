@@ -158,6 +158,10 @@ def test_unreachable_accelerating_lead_does_not_spend_ammo(fleet):
     target = sim.get_ship("b")
     target.kinematic_state.position = Vector3D(6_000_000, 0, 0)
     target.current_maneuver = Maneuver(ManeuverType.BURN, 0, direction=Vector3D(0, 1, 0))
+    # The lead extrapolates the drive's actual output (what fire control can
+    # see), not the order, so the burn must be lit: nose along +y, full thrust.
+    target.kinematic_state.forward = Vector3D(0, 1, 0)
+    target.applied_throttle = 1.0
     before_ammo = weapon.ammo_remaining
     before_heat = shooter.heat_percent
     capacitor = shooter.power_system.weapon_capacitors[slot]
