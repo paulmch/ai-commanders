@@ -14,7 +14,7 @@ THREATS TO ME (on a collision course: 0 gun rounds, 1 guided torpedo, 1 blinded 
   INBOUND ORDNANCE: 2 torpedo(es):
     - torpedo from OCS Lancer-3: 180 km, closing 12.4 km/s, IMPACT IN 15s, est ~30 GJ | NEZ: CANNOT be outrun | PD kill needs ~3 turret(s), you have 1 + allies 1 bearing: your PD umbrella CANNOT stop it
     - BLINDED torpedo from TIS Dart-2 [alpha_2] - YOUR OWN SIDE'S round: 40 km, closing 9.0 km/s, IMPACT IN 4s, est ~10 GJ | ballistic wreck: KEEP MANEUVERING and it misses (passes 0.4 km from you if you hold course)
-  TORPEDO HULLS TARGETING YOU: OCS Lancer-3 [beta_7] (4 tubes, 40 rounds) - a launch now lands in ~38 s, BEFORE you decide again. Opening range before they launch is the only escape; EVADE (auto-RUN) now.
+  TORPEDO HULLS TARGETING YOU: OCS Lancer-3 [beta_7] (4 tubes, 40 rounds) - a launch now lands in ~38 s: after a launch you get at most ONE more decision. Opening range before they launch is the only escape; EVADE (auto-RUN) early.
   !! GROUP A: MERGE IN 24 s at 1.2 km (OCS Falchion-1), too late to brake (need 375 km incl. flip, have 110 km); pass wide or burn laterally NOW.
 
 ENEMIES (2; dir_to = world unit vector from you to him - paste it into set_heading):

@@ -2098,9 +2098,12 @@ def format_threats_to_me(
             soon = min(etas)
             line += (f" - a launch now lands in ~{soon:.0f}"
                      f"{'-' + format(max(etas), '.0f') if max(etas) - soon >= 5 else ''} s")
-            if soon <= decision_interval_s * 2:
+            if soon <= decision_interval_s:
                 line += (", BEFORE you decide again. Opening range before they launch is the only "
                          "escape; EVADE (auto-RUN) now.")
+            elif soon <= decision_interval_s * 2:
+                line += (": after a launch you get at most ONE more decision. Opening range before "
+                         "they launch is the only escape; EVADE (auto-RUN) early.")
         lines.append(line)
     if guns:
         lines.append("  GUNS ON YOU: " + "; ".join(
