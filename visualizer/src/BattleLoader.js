@@ -1,6 +1,19 @@
 import { DecisionIndex } from './DecisionIndex.js';
 import { getModulesForShipType } from './shipModules.js';
 
+/** First index in a timestamp-sorted array whose timestamp is >= t (or > t when strict). */
+export function lowerBoundByTime(items, t, strict = false) {
+  let lo = 0, hi = items.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    const ts = items[mid].timestamp;
+    if (ts < t || (strict && ts === t)) lo = mid + 1; else hi = mid;
+  }
+  return lo;
+}
+
+const eventOrder = (a, b) => a.timestamp - b.timestamp || (a.sequence || 0) - (b.sequence || 0);
+
 /**
  * BattleLoader - Loads and parses battle recording JSON files
  */
@@ -14,6 +27,8 @@ export class BattleLoader {
     this.duration = 0;
     // Map projectile_id -> hit event with impact_position for extrapolation
     this.projectileHits = new Map();
+    // projectile_id -> kinetic energy of its first hit event (visual impacts)
+    this.projectileHitEnergy = new Map();
     // Map projectile_id -> last known state for extrapolation
     this.lastProjectileState = new Map();
     // Ship damage tracking: shipId -> { armor: {nose, lateral, tail}, modules: {name: {damaged, destroyed}} }
@@ -72,6 +87,8 @@ export class BattleLoader {
 
     // Parse events
     this.events = (data.events || []).sort((a, b) => a.timestamp - b.timestamp);
+    this._eventKeys = null;   // live dedup counts, built on the first append
+    this._deathScan = null;
 
     // Extract ship information
     this.initializeShips(data);
@@ -84,32 +101,41 @@ export class BattleLoader {
 
   /**
    * Rebuild every timeline derived from sim_trace and events. Called by
-   * parse() and again after each live-mode append (rebuild-from-scratch is
-   * cheap at recording sizes).
+   * parse() (delta = null: from scratch) and after each live-mode append
+   * with delta = {frames, events}: only what arrived, all of it later than
+   * everything already indexed. The builders below extend their indexes
+   * from the delta, so a poll costs what it brings, not the whole battle
+   * (LV-15). A builder that ignores the delta argument simply rebuilds in
+   * full - correct, just not incremental. tests/live_append.test.js pins
+   * parse(all) == parse(head) + appendLiveData(rest) for every field.
+   * @param {{frames: Array, events: Array}|null} delta
    */
-  rebuildDerivedState() {
+  rebuildDerivedState(delta = null) {
     // Projectile hit map for extrapolation
-    this.buildProjectileHitMap();
+    this.buildProjectileHitMap(delta);
 
     // Last known projectile states from sim_trace
-    this.buildLastProjectileStates();
+    this.buildLastProjectileStates(delta);
 
     // Ship damage timeline from events
-    this.buildShipDamageTimeline(this.sourceData);
+    this.buildShipDamageTimeline(this.sourceData, delta);
 
     // Ship target timeline from captain decisions
-    this.buildShipTargetTimeline();
+    this.buildShipTargetTimeline(delta);
 
     // Torpedo lifecycle map (launch -> flight -> outcome)
-    this.buildTorpedoTimeline();
+    this.buildTorpedoTimeline(delta);
 
     // Collapse per-tick pd_fired events into continuous dwell segments
-    this.buildPDBeamSegments();
+    this.buildPDBeamSegments(delta);
 
     // Radiator extended/retracted changes per ship
-    this.buildRadiatorTimeline();
-    this.decisions = new DecisionIndex(this.events, this.ships);
-    this.lastEventSequence = this.events.reduce((max, e) => Math.max(max, e.sequence || 0), 0);
+    this.buildRadiatorTimeline(delta);
+    this.decisions = delta && this.decisions?.append
+      ? this.decisions.append(delta.events)
+      : new DecisionIndex(this.events, this.ships);
+    this.lastEventSequence = (delta ? delta.events : this.events)
+      .reduce((max, e) => Math.max(max, e.sequence || 0), delta ? this.lastEventSequence || 0 : 0);
   }
 
   /**
@@ -134,15 +160,20 @@ export class BattleLoader {
 
     // IDs survive late arrivals at the same paused simulation time. Legacy
     // recordings use occurrence counts, preserving repeated identical events.
+    // The counts persist across polls (only new events are keyed).
     const key = e => e.event_id || JSON.stringify(e);
-    const counts = new Map();
-    for (const e of this.events) counts.set(key(e), (counts.get(key(e)) || 0) + 1);
+    if (!this._eventKeys) {
+      this._eventKeys = new Map();
+      for (const e of this.events) this._eventKeys.set(key(e), (this._eventKeys.get(key(e)) || 0) + 1);
+    }
+    const counts = this._eventKeys;
     const seen = new Map();
     const newEvents = (chunk.events || []).filter(e => {
       const k = key(e), n = (seen.get(k) || 0) + 1;
       seen.set(k, n);
       return n > (counts.get(k) || 0);
     });
+    for (const [k, n] of seen) counts.set(k, Math.max(counts.get(k) || 0, n));
     this.sourceData.assets = {...this.sourceData.assets, ...chunk.assets};
     if (chunk.commentary) this.sourceData.commentary = chunk.commentary;
 
@@ -152,14 +183,20 @@ export class BattleLoader {
 
     if (newFrames.length === 0 && newEvents.length === 0) return false;
 
+    // A live poll's events almost always follow everything already held:
+    // append and extend the indexes. Anything older (a late event, a saved
+    // replay merged in) re-sorts and rebuilds from scratch.
+    newEvents.sort(eventOrder);
+    const tail = this.events[this.events.length - 1];
+    const inOrder = !tail || !newEvents.length || eventOrder(tail, newEvents[0]) <= 0;
     this.simTrace.push(...newFrames);
-    this.events.push(...newEvents);
-    this.events.sort((a, b) => a.timestamp - b.timestamp || (a.sequence || 0) - (b.sequence || 0));
+    for (const e of newEvents) this.events.push(e);
+    if (!inOrder) this.events.sort(eventOrder);
     if (this.simTrace.length > 0) {
       this.duration = this.simTrace[this.simTrace.length - 1].t;
     }
 
-    this.rebuildDerivedState();
+    this.rebuildDerivedState(inOrder ? { frames: newFrames, events: newEvents } : null);
     return true;
   }
 
@@ -280,13 +317,18 @@ export class BattleLoader {
    * vector.
    */
   buildDeathInfo() {
-    const info = {};
+    // The frame scan is the expensive part and only ever grows at the end
+    // (live appends): resume it where the last call stopped.
     const trace = this.simTrace || [];
-    for (let i = 0; i < trace.length; i++) {
+    let scan = this._deathScan;
+    if (!scan || scan.trace !== trace || scan.next > trace.length) {
+      scan = this._deathScan = { trace, next: 0, base: {} };
+    }
+    for (let i = scan.next; i < trace.length; i++) {
       for (const [shipId, s] of Object.entries(trace[i].ships || {})) {
-        if (s.destroyed && !(shipId in info)) {
+        if (s.destroyed && !(shipId in scan.base)) {
           const prev = i > 0 ? trace[i - 1].ships?.[shipId] : null;
-          info[shipId] = {
+          scan.base[shipId] = {
             time: trace[i].t,
             position: s.pos || prev?.pos,
             forward: s.fwd || prev?.fwd,
@@ -297,6 +339,9 @@ export class BattleLoader {
         }
       }
     }
+    scan.next = trace.length;
+    const info = {};
+    for (const [shipId, base] of Object.entries(scan.base)) info[shipId] = { ...base };
     for (const e of this.events) {
       if (e.event_type !== 'module_destroyed') continue;
       const name = (e.data?.module_name || '').toLowerCase();
@@ -327,7 +372,8 @@ export class BattleLoader {
    * @returns {Array} Events in range
    */
   getEventsInRange(startTime, endTime) {
-    return this.events.filter(e => e.timestamp >= startTime && e.timestamp <= endTime);
+    // events are kept sorted by timestamp: two binary searches, not a scan
+    return this.events.slice(lowerBoundByTime(this.events, startTime), lowerBoundByTime(this.events, endTime, true));
   }
 
   /**
@@ -337,11 +383,7 @@ export class BattleLoader {
    * @returns {Array} PD fired events
    */
   getPDEventsInRange(startTime, endTime) {
-    return this.events.filter(e =>
-      e.event_type === 'pd_fired' &&
-      e.timestamp >= startTime &&
-      e.timestamp <= endTime
-    );
+    return this.getEventsInRange(startTime, endTime).filter(e => e.event_type === 'pd_fired');
   }
 
   /**
@@ -351,11 +393,7 @@ export class BattleLoader {
    * @returns {Array} Hit events with impact data
    */
   getHitEventsInRange(startTime, endTime) {
-    return this.events.filter(e =>
-      e.event_type === 'hit' &&
-      e.timestamp >= startTime &&
-      e.timestamp <= endTime
-    );
+    return this.getEventsInRange(startTime, endTime).filter(e => e.event_type === 'hit');
   }
 
   /**
@@ -379,10 +417,16 @@ export class BattleLoader {
   /**
    * Build map of projectile_id -> hit event for extrapolation
    */
-  buildProjectileHitMap() {
-    this.projectileHits.clear();
-    for (const event of this.events) {
+  buildProjectileHitMap(delta = null) {
+    if (!delta) {
+      this.projectileHits.clear();
+      this.projectileHitEnergy.clear();
+    }
+    for (const event of delta ? delta.events : this.events) {
       if (event.event_type === 'hit' && event.data?.projectile_id) {
+        if (!this.projectileHits.has(event.data.projectile_id)) {
+          this.projectileHitEnergy.set(event.data.projectile_id, event.data.kinetic_energy_gj);
+        }
         this.projectileHits.set(event.data.projectile_id, {
           timestamp: event.timestamp,
           impact_position: event.data.impact_position,
@@ -396,9 +440,9 @@ export class BattleLoader {
    * Track last known state of each projectile from sim_trace
    * Used for extrapolating projectiles after they leave the trace
    */
-  buildLastProjectileStates() {
-    this.lastProjectileState.clear();
-    for (const frame of this.simTrace) {
+  buildLastProjectileStates(delta = null) {
+    if (!delta) this.lastProjectileState.clear();
+    for (const frame of delta ? delta.frames : this.simTrace) {
       if (!frame.projectiles) continue;
       for (const proj of frame.projectiles) {
         this.lastProjectileState.set(proj.id, {
@@ -491,7 +535,11 @@ export class BattleLoader {
    * Build ship damage timeline from events
    * Extracts initial armor from sim_trace (t=0 or first frame) and tracks module events
    */
-  buildShipDamageTimeline(data) {
+  buildShipDamageTimeline(data, delta = null) {
+    if (delta && this.shipDamageState.size) {
+      this.addModuleEvents(delta.events);
+      return;
+    }
     this.shipDamageState.clear();
     this.initialArmor.clear();
 
@@ -536,8 +584,12 @@ export class BattleLoader {
       });
     }
 
-    // Process module damage and destruction events
-    for (const event of this.events) {
+    this.addModuleEvents(this.events);
+  }
+
+  /** Module damage / destruction events into the per-ship damage state. */
+  addModuleEvents(events) {
+    for (const event of events) {
       if (event.event_type === 'module_destroyed' && event.data) {
         const shipId = event.ship_id;
         const state = this.shipDamageState.get(shipId);
@@ -566,11 +618,11 @@ export class BattleLoader {
   /**
    * Build ship target timeline from captain_decision events
    */
-  buildShipTargetTimeline() {
-    this.shipTargets.clear();
+  buildShipTargetTimeline(delta = null) {
+    if (!delta) this.shipTargets.clear();
 
     // Process captain_decision events to track targets
-    for (const event of this.events) {
+    for (const event of delta ? delta.events : this.events) {
       const resolved = event.event_type === 'command_status' && event.data?.status === 'accepted' &&
         Object.hasOwn(event.data, 'resolved_target_id');
       if (resolved || (event.event_type === 'captain_decision' && event.data)) {
@@ -755,8 +807,8 @@ export class BattleLoader {
    * known kinematic state from the trace (for extrapolating the final
    * sub-second of flight, which happens between 1Hz trace frames).
    */
-  buildTorpedoTimeline() {
-    this.torpedoes.clear();
+  buildTorpedoTimeline(delta = null) {
+    if (!delta) this.torpedoes.clear();
 
     const ensure = (id) => {
       if (!this.torpedoes.has(id)) {
@@ -765,7 +817,7 @@ export class BattleLoader {
       return this.torpedoes.get(id);
     };
 
-    for (const event of this.events) {
+    for (const event of delta ? delta.events : this.events) {
       const d = event.data || {};
       switch (event.event_type) {
         case 'torpedo_launched':
@@ -824,7 +876,7 @@ export class BattleLoader {
     }
 
     // Last known state of each torpedo from the trace
-    for (const frame of this.simTrace) {
+    for (const frame of delta ? delta.frames : this.simTrace) {
       if (!frame.torpedoes) continue;
       for (const torp of frame.torpedoes) {
         const rec = ensure(torp.id);
@@ -1015,11 +1067,16 @@ export class BattleLoader {
    * beam weapon. Events <= 2s apart on the same (ship, turret, target) are
    * one dwell.
    */
-  buildPDBeamSegments() {
-    this.pdBeamSegments = [];
-    const open = new Map();
+  buildPDBeamSegments(delta = null) {
+    // Segments are listed in start order; the newest one per (ship, turret,
+    // target) stays open so a live append can extend its dwell in place.
+    if (!delta || !this._pdOpen) {
+      this.pdBeamSegments = [];
+      this._pdOpen = new Map();
+    }
+    const open = this._pdOpen;
 
-    const pdEvents = this.events
+    const pdEvents = (delta ? delta.events : this.events)
       .filter(e => e.event_type === 'pd_fired')
       .sort((a, b) => a.timestamp - b.timestamp);
 
@@ -1033,8 +1090,7 @@ export class BattleLoader {
         cur.ticks++;
         cur.energyJ += d.energy_delivered_j || d.heat_delivered_j || 0;
       } else {
-        if (cur) this.pdBeamSegments.push(cur);
-        open.set(key, {
+        const seg = {
           key: `${key}|${e.timestamp}`,
           shipId: e.ship_id,
           turret: d.turret_name || 'pd',
@@ -1044,11 +1100,10 @@ export class BattleLoader {
           end: e.timestamp,
           ticks: 1,
           energyJ: d.energy_delivered_j || d.heat_delivered_j || 0
-        });
+        };
+        open.set(key, seg);
+        this.pdBeamSegments.push(seg);
       }
-    }
-    for (const seg of open.values()) {
-      this.pdBeamSegments.push(seg);
     }
   }
 
@@ -1064,9 +1119,9 @@ export class BattleLoader {
   /**
    * Build radiator state timeline from radiator_change events
    */
-  buildRadiatorTimeline() {
-    this.radiatorTimeline.clear();
-    for (const event of this.events) {
+  buildRadiatorTimeline(delta = null) {
+    if (!delta) this.radiatorTimeline.clear();
+    for (const event of delta ? delta.events : this.events) {
       if (event.event_type !== 'radiator_change') continue;
       if (!this.radiatorTimeline.has(event.ship_id)) {
         this.radiatorTimeline.set(event.ship_id, []);
@@ -1128,16 +1183,14 @@ export class BattleLoader {
 
       // Check if impact crossed within this time window
       if (effectiveHitTime > startTime && effectiveHitTime <= endTime) {
-        // Get hit event data for energy info
-        const hitEvent = this.events.find(e =>
-          e.event_type === 'hit' && e.data?.projectile_id === projId
-        );
-
+        // Energy of the projectile's (first) hit event, indexed by
+        // buildProjectileHitMap - a scan of every event per impact cost
+        // ~50 ms per live poll on long battles
         impacts.push({
           projectile_id: projId,
           timestamp: effectiveHitTime,
           impact_position: hitInfo.impact_position,
-          kinetic_energy_gj: hitEvent?.data?.kinetic_energy_gj || 1,
+          kinetic_energy_gj: this.projectileHitEnergy.get(projId) || 1,
           target_id: hitInfo.target_id
         });
       }

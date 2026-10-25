@@ -8,8 +8,17 @@ import { BattleLoader } from './BattleLoader.js';
 import { Interpolator } from './Interpolator.js';
 import { SceneManager } from './SceneManager.js';
 import { TimeController } from './TimeController.js';
-import { CameraController } from './CameraController.js';
+import { CameraController, buildDirectorCuts } from './CameraController.js';
 import { ContactOverlay } from './ContactOverlay.js';
+import {
+  LOST_AFTER_FAILURES, backoffDelay, checkpointNumber, classifyVerdict, defaultMaxLag,
+  newLiveClientId, recordingQuery,
+  deliberationProgress, formatClock, liveDelay, liveStartTime, newBattleReason, nextCheckpointAfter,
+  paceLiveHead
+} from './LiveSession.js';
+import { ConnectionCard, DeliberationCard, DirectorChip, EndCard } from './LiveCards.js';
+import { DraftSplash, normaliseDraftEntry } from './DraftSplash.js';
+import { OffscreenIndicators } from './OffscreenIndicators.js';
 import { generateShipSVG, getShipClassName, SHIP_SILHOUETTES } from './shipSilhouettes.js';
 import { TrajectoryPredictor } from './TrajectoryPredictor.js';
 import { TrackModeControl } from './TrackModeControl.js';
@@ -29,6 +38,10 @@ class BattleVisualizer {
 
     // State
     this.isInitialized = false;
+    // The speed the viewer picked. Lives here, not on the TimeController:
+    // a speed chosen before the battle loads (live draft, connecting, a
+    // battle switch, the file selector) must carry into the next one.
+    this.playbackSpeed = 1.0;
     this.live = null; // Live-mode state; null when replaying a saved recording
     this.selectedShipId = null;
     this.lastTime = 0;
@@ -59,6 +72,7 @@ class BattleVisualizer {
       onChange: mode => { if (this.live) { this.live.showPaths = mode !== 'off'; this.updateLiveHud(); } }
     });
     this.trackHud = new TrackHud({ root: document.getElementById('trackHud') });   // countdown, legend, Shift+T scope
+    this.initLiveUi();
     this.hideLoading();
 
     // ?live=1 connects to a running battle server; ?recording=<url>
@@ -294,6 +308,8 @@ class BattleVisualizer {
         this.decisions.setOpen(false);
       } else if (e.code === 'KeyC') {
         this.toggleContacts();
+      } else if (e.code === 'KeyA' && !e.shiftKey && this.isInitialized) {
+        this.toggleDirector();
       }
     });
 
@@ -301,7 +317,8 @@ class BattleVisualizer {
     window.addEventListener('resize', () => {
       if (this.scene) {
         this.scene.onResize();
-        if (this.cameraController?.fleetFramed) this.cameraController.focusFleet(this.currentState?.ships);
+        const cam = this.cameraController;
+        if (cam?.fleetFramed && !cam.director.enabled) cam.focusFleet(this.currentState?.ships);
       }
     });
   }
@@ -377,9 +394,13 @@ class BattleVisualizer {
     // Initialize time controller. The extra seconds are an epilogue: a ship
     // destroyed near the end still gets its full destruction sequence
     // instead of freezing mid-fireball when the recording ends. A live
-    // battle has no epilogue until it actually ends - the timeline head IS
-    // the latest frame.
-    this.timeController = new TimeController(this.live && !this.live.ended ? this.loader.duration : this.replayEnd());
+    // battle has no epilogue until it actually ends: its timeline spans the
+    // footage received so far up to the next checkpoint, and the playhead
+    // may only run to the newest frame (available).
+    const liveRunning = this.live && !this.live.ended;
+    this.timeController = new TimeController(liveRunning ? this.liveTimelineSpan() : this.replayEnd(),
+      { speed: this.playbackSpeed });
+    if (liveRunning) this.timeController.setAvailable(this.loader.duration);
     this.timeController.onTimeChange((time, duration) => {
       this.updateTimeDisplay(time, duration);
     });
@@ -391,7 +412,10 @@ class BattleVisualizer {
       this.scene.controls,
       this.scene
     );
-    this.needsFleetFraming = window.innerWidth < 900;
+    this.cameraController.onDirectorChange = state => this.directorChip?.update(state);
+    // Auto director on unless ?director=0 (a harness placing the camera itself)
+    const directorOn = new URLSearchParams(window.location.search).get('director') !== '0';
+    this.needsFleetFraming = !directorOn && window.innerWidth < 900;
 
     // Create ships
     this.setLoadingStatus('Spawning fleet assets...');
@@ -401,6 +425,8 @@ class BattleVisualizer {
     // Death causes + final vectors drive the two-stage destruction sequence
     this.scene.deathInfo = this.loader.buildDeathInfo();
     this.scene.damageFX?.setRecording(this.loader);
+    this.cameraController.setDirectorCuts(buildDirectorCuts(this.loader.events, this.scene.deathInfo));
+    this.cameraController.setDirector(directorOn);
     this.setLoadingProgress(100);
 
     // Update UI
@@ -414,11 +440,18 @@ class BattleVisualizer {
 
     // Hide loading and start
     this.isInitialized = true;
+    this.directorChip?.setVisible(true);
     await this.delay(300);
     this.hideLoading();
 
     // Start animation loop
     this.startAnimationLoop();
+
+    // Live: join one checkpoint before the live edge (or at the start); a
+    // battle that already ended is a replay, watched from the beginning
+    if (liveRunning && this.live.phase !== 'ended') {
+      this.timeController.seek(liveStartTime(this.loader.duration, this.live.interval, this.live.status));
+    }
 
     // Deep links can open a specific decision at an observed outcome.
     const replayParams = new URLSearchParams(window.location.search);
@@ -538,8 +571,12 @@ class BattleVisualizer {
           this.lastDestructionTime = currentPlaybackTime;
         }
 
-        // Predicted (and in replay, actual) tracks to the next checkpoint
-        this.tracks.frame(currentPlaybackTime, this.currentState.ships, this.trackControl.effectiveMode(),
+        // Predicted (and in replay, actual) tracks to the next checkpoint.
+        // Past the last frame (epilogue, finished live battle) there is no
+        // next checkpoint: no tracks, no stale countdown.
+        const trackMode = this.trackControl.effectiveMode();
+        this.tracks.frame(currentPlaybackTime, this.currentState.ships,
+          currentPlaybackTime > this.loader.duration + 0.5 ? 'off' : trackMode,
           this.selectedShipId || this.cameraController.targetShipId);
 
         // Update camera
@@ -552,7 +589,8 @@ class BattleVisualizer {
           this.cameraController.setMode('orbit', this.pendingEvidenceFocus);
           this.pendingEvidenceFocus = null;
         }
-        this.cameraController.update(this.currentState.ships);
+        this.cameraController.update(this.currentState.ships,
+          { time: currentPlaybackTime, dt: deltaTime, torpedoes: this.currentState.torpedoes, ...this.directorFrame() });
 
         // Update selected ship telemetry
         if (this.selectedShipId && this.currentState.ships[this.selectedShipId]) {
@@ -569,7 +607,11 @@ class BattleVisualizer {
 
       // Render
       this.scene.render();
-      if (this.isInitialized) this.contacts.update(this.scene, this.currentState?.ships, this.selectedShipId);
+      if (this.isInitialized) {
+        this.contacts.update(this.scene, this.currentState?.ships, this.selectedShipId);
+        this.offscreen?.update(this.scene, this.currentState?.ships, this.loader.ships, this.selectedShipId);
+        this.directorChip?.update(this.cameraController.directorState());
+      }
 
       this.animationId = requestAnimationFrame(animate);
     };
@@ -578,92 +620,273 @@ class BattleVisualizer {
   }
 
   // ==================== Live mode ====================
+  //
+  // A live battle streams in bursts: one decision interval of footage in a
+  // few seconds, then nothing while the commanders deliberate. The viewer
+  // plays it like a broadcast with a short delay (LiveSession.paceLiveHead),
+  // shows who the battle is waiting for at each checkpoint, survives server
+  // restarts (battle_id) and crashes (backoff, connection-lost card, saved
+  // replay), and closes with a verdict card once the footage has played out.
+
+  /** Live overlays: draft splash, deliberation / connection / end cards, auto-cam chip, off-screen chevrons. */
+  initLiveUi() {
+    this.draftSplash = new DraftSplash({ onDismiss: () => this.dismissDraftSplash() });
+    this.deliberationCard = new DeliberationCard();
+    this.connectionCard = new ConnectionCard({
+      onReplay: () => this.loadSavedReplay(),
+      onRetry: () => this.retryLiveNow(),
+      onStop: () => this.endLiveHere(),
+    });
+    this.endCard = new EndCard({
+      onSeek: t => this.watchFrom(t),
+      onReplay: () => this.watchFrom(0),
+      onDecisions: () => this.decisions.setOpen(true),
+    });
+    this.directorChip = new DirectorChip({ onToggle: () => this.toggleDirector() });
+    this.directorChip.setVisible(false);
+    this.offscreen = new OffscreenIndicators({
+      onFleet: faction => this.frameFaction(faction),
+      onShip: id => this.selectShip(id),
+    });
+    document.getElementById('livePaceBtn')?.addEventListener('click', () => {
+      if (this.live) this.setLivePace(this.live.pace === 'edge' ? 'realtime' : 'edge');
+    });
+    document.getElementById('liveFleetsBtn')?.addEventListener('click', () => this.showDraftRecap());
+    this.elements.liveStatusText?.addEventListener('click', () => {
+      if (this.live?.ended && this.live.endShown) this.showEndCard();
+    });
+  }
+
+  /**
+   * Where the auto director puts the action: centred (NDC x `shift`) in the
+   * view left free by the registry and any right-hand panel, filling a
+   * matching share of the width. Re-measured at most twice a second.
+   */
+  directorFrame() {
+    const now = performance.now();
+    if (this._frameAt && now - this._frameAt < 500) return this._frame;
+    this._frameAt = now;
+    const width = window.innerWidth || 1;
+    const side = (id, onLeft) => {
+      const el = document.getElementById(id);
+      // getClientRects: empty when not rendered (offsetParent is null for
+      // the position:fixed sidebar even while it shows)
+      if (!el || el.hidden || el.classList.contains('hidden') || !el.getClientRects().length) return 0;
+      const r = el.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0) return 0;
+      return onLeft ? (r.right < width / 2 ? r.right : 0) : (r.left > width / 2 ? width - r.left : 0);
+    };
+    const left = side('leftSidebar', true);
+    const right = Math.max(side('shipTelemetry', false), side('decisionPanel', false));
+    const free = Math.max(0.3, (width - left - right) / width);
+    // 0.62 of the width with the registry alone (free ~0.85), scaled down
+    // when a right-hand panel narrows the view
+    this._frame = { shift: (left - right) / width, widthShare: 0.73 * free };
+    return this._frame;
+  }
+
+  /** A: arm the auto director (or switch it off when it is already flying). */
+  toggleDirector() {
+    const cam = this.cameraController;
+    if (!cam) return;
+    const on = !(cam.director.enabled && !cam.director.hold);
+    if (on && this.selectedShipId) this.deselectShip();   // the director flies the free camera
+    cam.setDirector(on);
+  }
+
+  /** Off-screen chevron click: frame that fleet (re-arms a held director). */
+  frameFaction(faction) {
+    const cam = this.cameraController;
+    if (!cam || !this.currentState) return;
+    if (cam.director.enabled) {
+      cam.focusFleet(this.currentState.ships);
+      return;
+    }
+    const ships = Object.fromEntries(Object.entries(this.currentState.ships)
+      .filter(([id]) => (this.loader.ships[id]?.faction || id.split('_')[0]) === faction));
+    cam.focusFleet(ships);
+  }
+
+  /** End card / kill list: play from t (leaves the live head). */
+  watchFrom(t) {
+    if (!this.timeController) return;
+    this.setLiveFollow(false);
+    this.timeController.seek(t);
+    this.timeController.play();
+    this.updatePlayPauseButton();
+  }
 
   /**
    * Enter live mode: poll the battle server, stream frames into the
    * loader, and keep playback tracking the live head.
    * @param {string} base - Base URL of the live API (default '/live')
+   * @param {Object} [opts] - {banner}: HUD notice, e.g. after a battle switch
    */
-  startLiveMode(base) {
+  startLiveMode(base, { banner = null } = {}) {
+    const now = performance.now();
     this.live = {
       base: base,
+      clientId: newLiveClientId(),   // names this viewer to the server's end-of-battle linger
+      battleId: null,
       phase: null,
       status: null,
+      prevStatus: null,
+      statusSince: now,
       checkpoint: 0,
       simTimeS: 0,
       nextCheckpointT: 0,
+      interval: 30,
       waitingFor: [],
       draft: null,
+      stage: null,
+      error: null,
+      pendingCalls: [],
+      statusAge: null,
+      receivedAt: now,
+      spend: null,
+      models: null,
+      replayUrl: null,
+      result: null,
+      provenance: null,
       follow: true,
+      pace: 'realtime',   // 'realtime' (broadcast delay) | 'edge' (hug the newest frame)
+      paceState: 'playing',
       showPaths: this.trackControl.mode !== 'off',
       lastFrameT: 0,
       started: false, // battle data received and scene initialized
       ended: false,
+      endShown: false,
+      verdict: null,
       connected: false,
+      everConnected: false,
+      failures: 0,
+      lost: false,
+      stopped: false,
+      lastOkAt: now,
+      nextPollAt: now,
       timer: null,
+      uiTimer: null,
       polling: false,
+      sawDraft: false,
+      splashUntil: 0,
+      recapOpen: false,
+      banner,
+      bannerUntil: banner ? now + 8000 : 0,
     };
     this.hideFileSelector();
     this.elements.liveHud.classList.remove('hidden');
+    // HUD clocks (deliberation timer, delay, retry countdown) tick between polls
+    this.live.uiTimer = setInterval(() => this.updateLiveHud(), 500);
     this.updateLiveHud();
     this.pollLive();
   }
 
+  /** A different battle is on the wire: tear this one down and follow the new one. */
+  restartLiveMode(banner) {
+    const base = this.live?.base || '/live';
+    this.teardownBattle();
+    this.startLiveMode(base, { banner });
+  }
+
   /**
-   * One poll cycle. Reschedules itself (~2s); fetch failures show
-   * "reconnecting" in the HUD and never kill the loop.
+   * One poll cycle. Reschedules itself: every 2 s while the server answers,
+   * backing off 2 -> 4 -> 8 -> 15 s while it does not. After
+   * LOST_AFTER_FAILURES misses the connection-lost card offers the saved
+   * replay; retries continue in the background.
    */
   async pollLive() {
     const live = this.live;
-    if (!live || live.ended || live.polling) return;
+    if (!live || live.ended || live.polling || live.stopped) return;
     live.polling = true;
-
+    if (live.timer) { clearTimeout(live.timer); live.timer = null; }
+    let ok = false;
     try {
-      const sinceQ = live.started ? `?since_t=${live.lastFrameT}&since_seq=${this.loader?.lastEventSequence || 0}` : '';
-      const response = await fetch(`${live.base}/recording${sinceQ}`);
+      const query = recordingQuery({ clientId: live.clientId, started: live.started,
+        lastFrameT: live.lastFrameT, lastSeq: this.loader?.lastEventSequence });
+      const response = await fetch(`${live.base}/recording${query}`, { cache: 'no-store' });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const payload = await response.json();
-      live.connected = true;
+      if (this.live !== live) return;   // torn down or switched battles meanwhile
+      ok = true;
+      live.connected = live.everConnected = true;
+      live.failures = 0;
+      live.lost = false;
+      live.lastOkAt = performance.now();
       await this.handleLivePayload(payload);
     } catch (error) {
+      if (this.live !== live) return;
       console.warn('Live poll failed:', error);
       live.connected = false;
-      this.updateLiveHud();
+      live.failures++;
+      if (live.everConnected && live.failures >= LOST_AFTER_FAILURES) live.lost = true;
+    } finally {
+      if (this.live === live) live.polling = false;
     }
+    if (this.live !== live || live.ended || live.stopped) return;
+    // Before the first answer the server is probably still starting: keep it brisk
+    const delay = ok ? 2 : backoffDelay(live.everConnected ? live.failures : Math.min(live.failures, 2));
+    live.nextPollAt = performance.now() + delay * 1000;
+    live.timer = setTimeout(() => this.pollLive(), delay * 1000);
+    this.updateLiveHud();
+  }
 
-    live.polling = false;
-    if (!live.ended) {
-      live.timer = setTimeout(() => this.pollLive(), 2000);
-    }
+  retryLiveNow() {
+    const live = this.live;
+    if (!live || live.ended) return;
+    live.stopped = false;
+    this.pollLive();
   }
 
   async handleLivePayload(payload) {
     const live = this.live;
     const info = payload.live || {};
+    const reason = newBattleReason(
+      { battleId: live.battleId, started: live.started, lastFrameT: live.lastFrameT, interval: live.interval }, info);
+    if (reason) {
+      console.info(`Live: a new battle is on the wire (${reason}); switching`);
+      this.restartLiveMode('NEW BATTLE DETECTED');
+      return;
+    }
+    live.battleId = info.battle_id || live.battleId;
     live.phase = info.phase;
     live.status = info.status;
+    if (live.status !== live.prevStatus) {
+      live.prevStatus = live.status;
+      live.statusSince = performance.now();
+    }
     live.checkpoint = info.checkpoint ?? 0;
     live.simTimeS = info.sim_time_s ?? 0;
     live.nextCheckpointT = info.next_checkpoint_t ?? 0;
+    live.interval = info.decision_interval_s || live.interval || 30;
     live.waitingFor = info.waiting_for || [];
-    live.draft = info.draft || null;
+    live.draft = info.draft || live.draft;
+    live.stage = info.stage ?? null;
+    live.error = info.error ?? null;
+    live.pendingCalls = info.pending_calls || [];
+    live.statusAge = typeof info.status_age_s === 'number' ? info.status_age_s : null;
+    live.receivedAt = performance.now();
+    live.spend = info.spend ?? live.spend;
+    live.models = info.models || live.models;
+    live.replayUrl = info.replay_url ?? live.replayUrl;
+    live.result = info.result ?? live.result;
+    if (info.phase === 'draft') live.sawDraft = true;
 
     const recording = payload.recording;
+    if (recording?.provenance) live.provenance = recording.provenance;
     if (!live.started) {
       // recording stays null through the draft phase; wait for frames so
       // the interpolator always has something to bracket
       if (recording && (recording.sim_trace || []).length > 0) {
         await this.initializeBattle(recording, 'LIVE');
+        if (this.live !== live) return;
         live.started = true;
         live.lastFrameT = this.loader.duration;
+        // Coming from the draft: keep the committed fleets (and both
+        // admirals' reasoning, now unsealed) up while the fleets close
+        if (live.sawDraft) live.splashUntil = performance.now() + 14000;
       }
-    } else if (recording && this.loader.appendLiveData(recording)) {
-      live.lastFrameT = this.loader.duration;
-      this.scene.deathInfo = this.loader.buildDeathInfo();
-      this.scene.damageFX?.setRecording(this.loader);
-      this.timeController.setDuration(this.loader.duration);
-      this.updateBattleInfo();
-      this.populateTimelineMarkers();
+    } else if (recording) {
+      this.applyLiveChunk(recording);
     }
 
     if (info.phase === 'ended' && !live.ended) {
@@ -674,72 +897,219 @@ class BattleVisualizer {
   }
 
   /**
-   * Battle over: one final full fetch (no since_t) to guarantee
-   * completeness, then stop polling and hand back to normal replay.
+   * Merge one poll's recording chunk. Deliberation-only polls (orders,
+   * model calls) skip the death / damage / director rebuilds.
    */
-  async finishLiveBattle() {
+  applyLiveChunk(recording) {
+    const loader = this.loader;
+    const frames = loader.simTrace.length;
+    if (!loader.appendLiveData(recording)) {
+      this.updateLiveTimeline();
+      return false;
+    }
+    this.live.lastFrameT = loader.duration;
+    const commandLayer = /^(model_|admiral_|captain_|comms_|command_status|decision_point|message$)/;
+    const combat = loader.simTrace.length > frames ||
+      (recording.events || []).some(e => !commandLayer.test(e.event_type || ''));
+    if (combat) {
+      this.scene.deathInfo = loader.buildDeathInfo();
+      this.scene.damageFX?.setRecording(loader);
+      this.cameraController.setDirectorCuts(buildDirectorCuts(loader.events, this.scene.deathInfo));
+    }
+    this.updateLiveTimeline();
+    this.updateBattleInfo();
+    this.populateTimelineMarkers();
+    return true;
+  }
+
+  /**
+   * Live timeline: the bar spans the footage received plus the run up to the
+   * next checkpoint (so its marker sits at its true place); the playhead may
+   * only reach the newest frame.
+   */
+  liveTimelineSpan() {
     const live = this.live;
-    live.ended = true;
+    const available = this.loader?.duration || 0;
+    return Math.max(available, nextCheckpointAfter(Math.max(live?.simTimeS || 0, available), live?.interval || 30)) + 5;
+  }
+
+  updateLiveTimeline() {
+    const tc = this.timeController;
+    if (!tc || !this.live || this.live.ended) return;
+    tc.setAvailable(this.loader.duration);
+    tc.setDuration(this.liveTimelineSpan());
+    this.updateBufferMask();
+  }
+
+  /** Hatched span of the timeline whose footage has not arrived yet. */
+  updateBufferMask() {
+    let mask = document.getElementById('liveBufferMask');
+    const track = document.querySelector('#playbackControls .timeline-track');
+    if (!mask && track) {
+      mask = document.createElement('div');
+      mask.id = 'liveBufferMask';
+      mask.className = 'live-buffer-mask';
+      mask.title = 'Not received yet';
+      track.appendChild(mask);
+    }
+    if (!mask) return;
+    const tc = this.timeController;
+    const show = !!(this.live?.started && !this.live.ended && tc && tc.available < tc.duration);
+    mask.hidden = !show;
+    if (show) mask.style.left = `${(tc.available / tc.duration) * 100}%`;
+  }
+
+  /**
+   * Battle over: one more incremental fetch as a safety net (the server
+   * lingers for it), then hand back to normal replay. The 'ended' poll
+   * itself already carried the verdict, so a failed fetch loses nothing.
+   */
+  async finishLiveBattle({ fetchFinal = true } = {}) {
+    const live = this.live;
     if (live.timer) {
       clearTimeout(live.timer);
       live.timer = null;
     }
-
-    try {
-      const response = await fetch(`${live.base}/recording`);
-      if (response.ok) {
-        const payload = await response.json();
-        const recording = payload.recording;
-        if (recording) {
-          if (!live.started && (recording.sim_trace || []).length > 0) {
-            await this.initializeBattle(recording, 'LIVE');
-            live.started = true;
-          } else if (live.started) {
-            this.loader.appendLiveData(recording);
-            this.scene.deathInfo = this.loader.buildDeathInfo();
-            this.scene.damageFX?.setRecording(this.loader);
-          }
+    if (fetchFinal && live.started && !live.lost) {
+      try {
+        const query = recordingQuery({ clientId: live.clientId, started: true,
+          lastFrameT: live.lastFrameT, lastSeq: this.loader.lastEventSequence });
+        const response = await fetch(`${live.base}/recording${query}`, { cache: 'no-store' });
+        if (response.ok && this.live === live) {
+          const payload = await response.json();
+          if (payload.recording?.provenance) live.provenance = payload.recording.provenance;
+          if (payload.recording) this.applyLiveChunk(payload.recording);
+          live.result = payload.live?.result ?? live.result;
         }
+      } catch (error) {
+        console.warn('Final live fetch failed (keeping what was received):', error);
       }
-    } catch (error) {
-      console.warn('Final live fetch failed:', error);
     }
-
+    if (this.live !== live) return;
+    live.ended = true;
+    live.lost = false;
+    live.recapOpen = false;
+    this.connectionCard.hide();
+    this.deliberationCard.hide();
     if (live.started) {
       live.lastFrameT = this.loader.duration;
       // Restore the destruction epilogue for the completed replay
+      this.timeController.setAvailable(Infinity);
       this.timeController.setDuration(this.replayEnd());
+      this.updateBufferMask();
       this.updateBattleInfo();
       this.populateTimelineMarkers();
-      this.scene.updatePredictedPaths(null);
+      this.scene.updatePredictedPaths?.(null);
+      if (live.follow) {
+        this.timeController.play();   // play out the delayed footage at the chosen speed
+        this.updatePlayPauseButton();
+      }
     }
+    live.verdict = this.computeVerdict();
     this.updateLiveHud();
   }
 
+  computeVerdict() {
+    const live = this.live;
+    const meta = this.loader?.metadata || {};
+    return classifyVerdict({
+      winner: (live.started ? meta.winner : null) ?? live.result?.winner ?? null,
+      reason: (live.started ? meta.resultReason : null) ?? live.result?.reason ?? live.error ?? null,
+      events: live.started ? this.loader.events : [],
+      billing: live.provenance?.billing || null,
+      lost: !!live.endedLost,
+    });
+  }
+
+  /** Server gone: load its saved replay (written every checkpoint) and finish from it. */
+  async loadSavedReplay() {
+    const live = this.live;
+    if (!live?.replayUrl || live.replayLoading) return;
+    live.replayLoading = true;
+    this.updateLiveHud();
+    try {
+      const response = await fetch(live.replayUrl, { cache: 'no-store' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      if (this.live !== live) return;
+      const savedId = data.provenance?.battle_id;
+      if (savedId && live.battleId && savedId !== live.battleId) {
+        console.warn(`Saved replay ${live.replayUrl} is battle ${savedId}, not ${live.battleId}`);
+      }
+      live.stopped = true;
+      if (live.timer) { clearTimeout(live.timer); live.timer = null; }
+      if (data.provenance) live.provenance = data.provenance;
+      if (!live.started) {
+        if ((data.sim_trace || []).length) {
+          await this.initializeBattle(data, 'LIVE');
+          if (this.live !== live) return;
+          live.started = true;
+        }
+      } else {
+        this.applyLiveChunk(data);
+      }
+      live.result = { winner: data.winner ?? null, reason: data.result_reason ?? null };
+      live.endedLost = !data.winner && !data.result_reason;
+      live.lost = true;   // no final fetch from a dead server
+      await this.finishLiveBattle({ fetchFinal: false });
+    } catch (error) {
+      console.warn('Saved replay failed:', error);
+      live.replayError = `Saved replay unavailable (${error.message || error})`;
+    } finally {
+      if (this.live === live) {
+        live.replayLoading = false;
+        this.updateLiveHud();
+      }
+    }
+  }
+
+  /** Stop polling and treat what was received as the whole battle. */
+  async endLiveHere() {
+    const live = this.live;
+    if (!live || live.ended) return;
+    live.stopped = true;
+    live.endedLost = true;
+    live.lost = true;
+    await this.finishLiveBattle({ fetchFinal: false });
+  }
+
   /**
-   * Track a few seconds behind the newest frame (interpolation cushion),
-   * catching up smoothly after each poll extends the recording.
+   * Advance the live head (broadcast delay, see LiveSession.paceLiveHead).
+   * Speed buttons set the rate; it only speeds up past maxLag behind.
    */
   updateFollowHead(deltaTime) {
     const tc = this.timeController;
-    // At a paused checkpoint, show newly arriving orders at the checkpoint's
-    // exact time. A permanent interpolation cushion would hide them throughout
-    // the entire model-thinking phase.
-    const target = Math.max(0, tc.duration - (this.live.status === 'paused' ? 0 : 3));
-    const err = target - tc.currentTime;
-    const rate = err > 0 ? Math.min(1 + err * 0.75, 16) : 0;
-    tc.currentTime = Math.min(target, tc.currentTime + deltaTime * rate);
-    tc.notifyCallbacks();
+    const live = this.live;
+    const step = paceLiveHead({
+      current: tc.currentTime, available: this.loader.duration, dt: deltaTime,
+      speed: tc.playbackSpeed, status: live.status, pace: live.pace, maxLag: defaultMaxLag(live.interval),
+    });
+    live.paceState = step.state;
+    if (step.time !== tc.currentTime) {
+      tc.currentTime = step.time;
+      tc.notifyCallbacks();
+    }
   }
 
   setLiveFollow(on) {
     if (!this.live || this.live.follow === on) return;
     this.live.follow = on;
-    if (on && this.timeController) {
-      this.timeController.seek(Math.max(0, this.timeController.duration - 3));
-      this.timeController.play();
+    if (on && this.timeController && !this.live.ended && this.loader) {
+      const tc = this.timeController;
+      // Rejoin the broadcast; from far back, start at the last interval
+      if (this.loader.duration - tc.currentTime > defaultMaxLag(this.live.interval)) {
+        tc.seek(Math.max(0, this.loader.duration - this.live.interval));
+      }
+      tc.play();
       this.updatePlayPauseButton();
     }
+    this.updateLiveHud();
+  }
+
+  setLivePace(pace) {
+    if (!this.live) return;
+    this.live.pace = pace === 'edge' ? 'edge' : 'realtime';
+    if (!this.live.follow) this.setLiveFollow(true);
     this.updateLiveHud();
   }
 
@@ -749,34 +1119,91 @@ class BattleVisualizer {
     this.trackControl.set(on ? 'predicted' : 'off');
   }
 
+  /** Wall seconds in the server's current status (deliberation timer). */
+  liveStatusElapsed() {
+    const live = this.live;
+    const now = performance.now();
+    if (live.statusAge != null) return live.statusAge + (now - live.receivedAt) / 1000;
+    return (now - live.statusSince) / 1000;
+  }
+
+  /**
+   * The live HUD and overlays. Runs on every poll and twice a second
+   * (clocks); every element writes the DOM only when its text changes.
+   */
   updateLiveHud() {
     const live = this.live;
     if (!live) return;
-
-    this.elements.liveDot.classList.toggle(
-      'active',
-      live.connected && !live.ended && live.status !== 'paused'
-    );
+    const now = performance.now();
+    const tc = this.timeController;
+    const current = live.started && tc ? tc.currentTime : 0;
+    const available = live.started ? this.loader.duration : 0;
+    const atEdge = live.started && !live.ended && available - current < 2.5;
+    const deciding = live.connected && live.status === 'paused' && live.started && !live.ended;
+    const elapsed = this.liveStatusElapsed();
 
     let text;
-    if (!live.connected) {
-      text = live.phase ? 'RECONNECTING…' : 'CONNECTING…';
-    } else if (live.phase === 'draft') {
-      text = this.formatDraftStatus(live.draft);
-    } else if (live.ended || live.phase === 'ended') {
-      const winner = this.loader?.metadata?.winner;
-      const reason = this.loader?.metadata?.resultReason;
-      text = winner
-        ? `BATTLE COMPLETE — ${String(winner).toUpperCase()} VICTORIOUS`
-        : 'BATTLE COMPLETE — DRAW';
-      if (reason) text += ` · ${reason}`;
+    let dot;
+    if (live.ended) {
+      const footageLeft = live.started ? this.loader.duration - current : 0;
+      if (live.endShown || !live.started || footageLeft <= 0.5) {
+        const v = live.verdict || this.computeVerdict();
+        text = `${v.title}${v.detail ? ` — ${v.detail}` : ''}`;
+      } else {
+        text = `BATTLE OVER · ${formatClock(footageLeft)} OF FOOTAGE TO PLAY`;
+      }
+      dot = 'ended';
+    } else if (live.lost) {
+      text = 'CONNECTION LOST · battle server not responding';
+      dot = 'lost';
+    } else if (!live.connected) {
+      const wait = Math.max(0, Math.ceil((live.nextPollAt - now) / 1000));
+      text = live.everConnected
+        ? `RECONNECTING · ${live.failures} missed · retry in ${wait}s`
+        : `CONNECTING…${live.failures ? ` retry in ${wait}s` : ''}`;
+      dot = 'wait';
+    } else if (!live.started) {
+      text = live.phase === 'draft' ? this.formatDraftStatus(live.draft)
+        : `WAITING FOR THE BATTLE${live.stage ? ` · ${live.stage}` : ''}`;
+      dot = 'deciding';
+    } else if (deciding && atEdge) {
+      text = `CP${live.checkpoint} · COMMANDERS DECIDING ${formatClock(elapsed)}`;
+      dot = 'deciding';
     } else {
-      text = `LIVE · CHECKPOINT ${live.checkpoint} · T+${Math.round(live.simTimeS)}s`;
-      if (live.waitingFor.length > 0) {
-        text += ` · WAITING FOR: ${live.waitingFor.join(', ')}`;
+      text = `LIVE · T+${Math.round(current)}s`;
+      if (live.status === 'paused') text += ` · CP${live.checkpoint} DECIDING ${formatClock(elapsed)}`;
+      if (!live.follow) text += ' · REVIEWING';
+      dot = 'live';
+    }
+    if (live.bannerUntil > now) text = `${live.banner} · ${text}`;
+    if (this.elements.liveStatusText.textContent !== text) this.elements.liveStatusText.textContent = text;
+    this.elements.liveStatusText.classList.toggle('clickable', !!(live.ended && live.endShown));
+    const dotClass = `live-dot ${dot}${dot === 'live' ? ' active' : ''}`;
+    if (this.elements.liveDot.className !== dotClass) this.elements.liveDot.className = dotClass;
+
+    // Delay chip: how far the playhead runs behind the battle server
+    const delayEl = document.getElementById('liveDelay');
+    if (delayEl) {
+      const show = live.started && !live.ended;
+      delayEl.classList.toggle('hidden', !show);
+      if (show) {
+        const delay = liveDelay(Math.max(live.simTimeS, available), current);
+        const label = !live.follow ? `−${Math.round(delay)}s · PAUSED HEAD`
+          : live.paceState === 'catching-up' ? `⏩ −${Math.round(delay)}s`
+            : delay < 2.5 ? 'AT LIVE EDGE' : `DELAY −${Math.round(delay)}s`;
+        if (delayEl.textContent !== label) delayEl.textContent = label;
+        delayEl.classList.toggle('catching', live.paceState === 'catching-up');
       }
     }
-    this.elements.liveStatusText.textContent = text;
+    const paceBtn = document.getElementById('livePaceBtn');
+    if (paceBtn) {
+      const label = live.pace === 'edge' ? 'LIVE EDGE' : 'REALTIME';
+      if (paceBtn.textContent !== label) paceBtn.textContent = label;
+      paceBtn.classList.toggle('active', live.follow);
+      paceBtn.style.display = live.started && !live.ended ? '' : 'none';
+    }
+    const fleetsBtn = document.getElementById('liveFleetsBtn');
+    if (fleetsBtn) fleetsBtn.style.display = live.started && live.provenance?.draft ? '' : 'none';
 
     this.elements.liveFollowBtn.classList.toggle('active', live.follow);
     this.elements.livePathsBtn.classList.toggle('active', live.showPaths);
@@ -784,37 +1211,183 @@ class BattleVisualizer {
     this.elements.liveFollowBtn.style.display = togglesHidden ? 'none' : '';
     this.elements.livePathsBtn.style.display = togglesHidden ? 'none' : '';
 
+    // Deliberation card at the live edge; a compact HUD suffix otherwise
+    if (deciding && atEdge && live.connected) this.deliberationCard.show(this.deliberationView(elapsed));
+    else this.deliberationCard.hide();
+
+    if (live.lost && !live.ended) {
+      this.connectionCard.show({
+        failures: live.failures,
+        nextRetryS: live.stopped ? null : Math.max(0, (live.nextPollAt - now) / 1000),
+        lastGoodS: (now - live.lastOkAt) / 1000,
+        replayUrl: live.replayUrl,
+        loading: live.replayLoading,
+        message: live.replayError || null,
+      });
+    } else {
+      this.connectionCard.hide();
+    }
+
+    this.updateDraftSplash(now);
+
+    // Verdict card once the delayed footage has played out (no spoilers)
+    if (live.ended && !live.endShown && (!live.started || current >= this.loader.duration + 2)) {
+      live.endShown = true;
+      this.showEndCard();
+    }
     this.updateCheckpointMarker();
   }
 
+  /** Data for the deliberation card at checkpoint live.simTimeS. */
+  deliberationView(elapsed) {
+    const live = this.live;
+    const cpT = live.simTimeS || this.loader.duration;
+    const alive = { alpha: 0, beta: 0 };
+    for (const [id, s] of Object.entries(this.loader.simTrace.at(-1)?.ships || {})) {
+      if (s.destroyed || s.dying || s.surrendered) continue;
+      const f = this.loader.ships[id]?.faction || id.split('_')[0];
+      if (f in alive) alive[f]++;
+    }
+    const progress = deliberationProgress({
+      events: this.loader.getEventsInRange(cpT - 1e-3, cpT + 1e-3), ships: this.loader.ships,
+      checkpointT: cpT, alive, pending: live.pendingCalls,
+    });
+    const waiting = !live.pendingCalls.length && live.waitingFor.length
+      ? `Waiting for ${live.waitingFor.join(', ')}` : null;
+    return {
+      checkpoint: live.checkpoint, checkpointT: cpT, elapsed, progress, models: live.models,
+      spend: live.spend, stage: live.stage, error: live.error || waiting,
+      shipName: id => this.loader.ships[id]?.name || id,
+    };
+  }
+
   formatDraftStatus(draft) {
-    if (!draft) return 'DRAFT PHASE';
+    if (!draft) return 'FLEET DRAFT';
     const parts = [];
     for (const [faction, d] of Object.entries(draft)) {
       if (!d) continue;
-      const verb = d.ready ? 'ready' : 'picking';
-      parts.push(`${faction} ${verb} (${d.ships} ships, ${d.points_spent} pts)`);
+      parts.push(`${faction.toUpperCase()} ${d.ready ? 'READY' : d.is_mcp ? 'MCP PICKING' : 'PICKING'}`);
     }
-    return `DRAFT PHASE — ${parts.join(' · ')}`;
+    return `FLEET DRAFT · ${parts.join(' · ')}`;
+  }
+
+  /** Draft splash while drafting, briefly at battle start, and when reopened (FLEETS). */
+  updateDraftSplash(now) {
+    const live = this.live;
+    let mode = null;
+    if (!live.started && live.phase === 'draft') mode = 'draft';
+    else if (live.recapOpen) mode = 'recap';
+    else if (live.started && live.splashUntil > now && !live.ended) mode = 'starting';
+    if (!mode) {
+      if (this.draftSplash.visible) this.draftSplash.hide();
+      return;
+    }
+    const summary = live.provenance?.draft;
+    const pick = f => (mode !== 'draft' && summary?.[f])
+      ? normaliseDraftEntry(summary[f], f, live.models?.[f])
+      : normaliseDraftEntry(live.draft?.[f], f, live.models?.[f]);
+    const pending = {};
+    for (const call of live.pendingCalls || []) {
+      if (call.faction && pending[call.faction] == null) pending[call.faction] = call.age_s + (now - live.receivedAt) / 1000;
+    }
+    const elapsed = live.draft?.alpha?.elapsed_s ?? live.draft?.beta?.elapsed_s;
+    this.draftSplash.show({
+      mode, alpha: pick('alpha'), beta: pick('beta'), pending,
+      elapsed: elapsed != null ? elapsed + (now - live.receivedAt) / 1000 : this.liveStatusElapsed(),
+    });
+  }
+
+  dismissDraftSplash() {
+    if (!this.live) return;
+    this.live.splashUntil = 0;
+    this.live.recapOpen = false;
+  }
+
+  showDraftRecap() {
+    if (!this.live?.provenance?.draft) return;
+    this.live.recapOpen = true;
+    this.updateLiveHud();
+  }
+
+  showEndCard() {
+    if (!this.live) return;
+    this.endCard.show(this.buildEndSummary());
+  }
+
+  /** Verdict, kills, survivors and spend for the end card. */
+  buildEndSummary() {
+    const live = this.live;
+    const verdict = live.verdict || this.computeVerdict();
+    const spend = live.spend;
+    const billing = live.provenance?.billing || (spend ? {
+      reported_cost_usd: spend.reported_usd, spend_limit_usd: spend.limit_usd, calls: spend.calls,
+      failures: spend.failures, mode: spend.mode } : null);
+    const summary = { verdict, duration: live.simTimeS, checkpoints: live.checkpoint, kills: [],
+      survivors: { alpha: [], beta: [] }, fleetSize: { alpha: 0, beta: 0 }, billing, models: live.models };
+    if (!live.started || !this.loader) return summary;
+    const loader = this.loader;
+    const name = id => loader.ships[id]?.name || id;
+    const deaths = this.scene?.deathInfo || loader.buildDeathInfo();
+    const first = new Map();
+    for (const e of loader.events) {
+      if ((e.event_type === 'ship_dying' || e.event_type === 'ship_destroyed') && e.ship_id && !first.has(e.ship_id)) {
+        first.set(e.ship_id, { t: e.timestamp, killer: e.data?.killer_id });
+      }
+    }
+    for (const id of new Set([...first.keys(), ...Object.keys(deaths)])) {
+      const info = loader.ships[id] || {};
+      const k = first.get(id);
+      summary.kills.push({ t: k?.t ?? deaths[id].time, name: name(id), type: info.type,
+        faction: info.faction || id.split('_')[0], killer: k?.killer ? name(k.killer) : null });
+    }
+    summary.kills.sort((a, b) => a.t - b.t);
+    const last = loader.simTrace.at(-1)?.ships || {};
+    for (const [id, info] of Object.entries(loader.ships)) {
+      const f = info.faction;
+      if (!(f in summary.fleetSize)) continue;
+      summary.fleetSize[f]++;
+      const s = last[id];
+      if (s && !s.destroyed && !s.dying) summary.survivors[f].push({ name: name(id), type: info.type, hull: s.hull ?? 100 });
+    }
+    summary.duration = loader.duration;
+    summary.checkpoints = live.checkpoint || loader.sourceData?.total_checkpoints || 0;
+    return summary;
   }
 
   /**
-   * Gold tick on the timeline at the next admiral checkpoint
+   * Gold tick on the timeline at the playhead's next checkpoint (or the one
+   * being decided), labelled with the time to go / deliberation clock.
    */
   updateCheckpointMarker() {
     const el = this.elements.checkpointMarker;
     if (!el) return;
     const live = this.live;
-    const duration = this.timeController?.duration || 0;
-    if (!live?.started || live.ended || !duration || !live.nextCheckpointT) {
+    const tc = this.timeController;
+    if (!live?.started || live.ended || !tc?.duration) {
       el.classList.add('hidden');
       return;
     }
-    const percent = Math.min(100, (live.nextCheckpointT / duration) * 100);
-    el.style.left = `${percent}%`;
-    el.title = `Next checkpoint T+${Math.round(live.nextCheckpointT)}s`;
-    this.elements.checkpointLabel.textContent = `CP${live.checkpoint + 1}`;
+    const t = tc.currentTime;
+    const deciding = live.status === 'paused' && this.loader.duration - t < 2.5;
+    const cpT = deciding ? live.simTimeS : nextCheckpointAfter(t, live.interval);
+    const n = deciding ? live.checkpoint : checkpointNumber(cpT, live.interval);
+    const label = deciding ? `CP${n} · DECIDING ${formatClock(this.liveStatusElapsed())}` : `CP${n} · ${formatClock(cpT - t)}`;
+    el.style.left = `${Math.min(100, (cpT / tc.duration) * 100)}%`;
+    el.title = `Checkpoint ${n} at T+${Math.round(cpT)}s`;
+    if (this.elements.checkpointLabel.textContent !== label) this.elements.checkpointLabel.textContent = label;
+    el.classList.toggle('deciding', deciding);
     el.classList.remove('hidden');
+  }
+
+  hideLiveOverlays() {
+    this.draftSplash?.hide();
+    this.deliberationCard?.hide();
+    this.connectionCard?.hide();
+    this.endCard?.hide();
+    this.directorChip?.setVisible(false);
+    this.offscreen?.clear();
+    const mask = document.getElementById('liveBufferMask');
+    if (mask) mask.hidden = true;
   }
 
   /**
@@ -1273,9 +1846,9 @@ class BattleVisualizer {
    * Set playback speed
    */
   setPlaybackSpeed(speed) {
-    if (this.timeController) {
-      this.timeController.setSpeed(speed);
-    }
+    if (!Number.isFinite(speed)) return;
+    this.playbackSpeed = speed;
+    this.timeController?.setSpeed(speed);
   }
 
   /**
@@ -1456,15 +2029,26 @@ class BattleVisualizer {
    * Reset state and show file selector to load a new recording
    */
   resetAndShowFileSelector() {
+    this.teardownBattle();
+    this.showFileSelector();
+  }
+
+  /**
+   * Stop the battle on screen: polling, playback, the scene and its UI.
+   * Shared by the file selector reset and a live battle switch.
+   */
+  teardownBattle() {
     this.decisions.setOpen(false);
     this.pendingEvidenceFocus = null;
     // Leaving live mode: stop polling, hide the HUD and checkpoint marker
     if (this.live) {
       if (this.live.timer) clearTimeout(this.live.timer);
+      if (this.live.uiTimer) clearInterval(this.live.uiTimer);
       this.live = null;
       this.elements.liveHud.classList.add('hidden');
       this.elements.checkpointMarker?.classList.add('hidden');
     }
+    this.hideLiveOverlays();
 
     // Stop animation loop
     if (this.animationId) {
@@ -1497,9 +2081,6 @@ class BattleVisualizer {
     this.elements.betaShips.innerHTML = '';
     this.elements.eventList.innerHTML = '';
     this.elements.shipTelemetry.classList.add('hidden');
-
-    // Show file selector
-    this.showFileSelector();
   }
 
   delay(ms) {

@@ -28,6 +28,31 @@ export class DecisionIndex {
     }
   }
 
+  /**
+   * Live mode (BattleLoader.appendLiveData): index events that sort after
+   * everything already indexed, instead of re-copying the whole battle on
+   * every poll. Same result as constructing from the concatenated list.
+   */
+  append(events) {
+    const offset = this.events.length;
+    const added = events.map((e, i) => ({...e, event_id: eventId(e, offset + i), data: e.data || {}}));
+    for (const e of added) {
+      this.events.push(e);
+      this.byId.set(e.event_id, e);
+      if (e.event_type !== 'captain_decision') continue;
+      this.decisions.push(e);
+      if (!this.byShip.has(e.ship_id)) this.byShip.set(e.ship_id, []);
+      this.byShip.get(e.ship_id).push(e);
+      this.linked.set(e.event_id, []);
+    }
+    for (const e of added) {
+      for (const id of new Set([...(e.data.decision_ids || []), e.data.decision_id].filter(Boolean))) {
+        this.linked.get(id)?.push(e);
+      }
+    }
+    return this;
+  }
+
   history(shipId) { return this.byShip.get(shipId) || []; }
   latest(shipId, time) { return this.history(shipId).filter(e => e.timestamp <= time).at(-1); }
 

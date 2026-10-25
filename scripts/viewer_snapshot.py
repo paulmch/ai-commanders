@@ -23,6 +23,11 @@ Examples:
     uv run python scripts/viewer_snapshot.py --recording torpedo.json \
         --time 60 --camera -40,25,80 --target 0,0,0 --out /tmp/wide.png
 
+Without --focus/--camera the shot keeps the viewer's default camera. The
+viewer's auto director (which eases the camera in wall time, so its framing
+depends on how many frames rendered while loading) stays off unless
+--director is given.
+
 The viewer exposes window.visualizer; camera framing is done with
 page.evaluate so hidden ships (destroyed hulks) are framed from their
 destruction effect instead.
@@ -54,9 +59,13 @@ CHROME_ARGS = [
 ]
 
 FRAME_JS = """
-({ focus, dist, az, el, camera, target }) => {
+({ focus, dist, az, el, camera, target, director }) => {
   const v = window.visualizer;
   const s = v.scene;
+  // --director with no framing given: the auto director keeps the camera
+  if (director && !focus && !camera) return null;
+  // The harness places the camera itself: keep the auto director out of it
+  v.cameraController?.setDirector?.(false);
   const T = s.THREE || null;
   let center = null, L = 8;
   if (focus) {
@@ -124,6 +133,20 @@ def stop_vite(proc: subprocess.Popen) -> None:
         pass
 
 
+def page_url_for(port: int, recording: str, gfx: str | None = None,
+                 director: bool = False) -> str:
+    """Viewer URL for a recording file name (under public/recordings) or a full URL.
+    The auto director is off (?director=0) unless asked for: shots must not
+    depend on how far it had eased the camera by the time the page loaded."""
+    url = recording if "://" in recording else f"/recordings/{recording}"
+    page_url = f"http://127.0.0.1:{port}/?recording={url}"
+    if gfx:
+        page_url += f"&gfx={gfx}"
+    if not director:
+        page_url += "&director=0"
+    return page_url
+
+
 def parse_vec(s: str | None):
     if not s:
         return None
@@ -159,13 +182,13 @@ def main() -> int:
     p.add_argument("--out", required=True,
                    help="output PNG; use %%02d for --sequence frames")
     p.add_argument("--eval", help="extra JS to run after framing (window.visualizer in scope)")
+    p.add_argument("--director", action="store_true",
+                   help="keep the viewer's auto director flying the camera when no --focus/"
+                        "--camera is given (framing then depends on load timing)")
     args = p.parse_args()
 
     vite = start_vite(args.port)
-    url = args.recording if "://" in args.recording else f"/recordings/{args.recording}"
-    page_url = f"http://127.0.0.1:{args.port}/?recording={url}"
-    if args.gfx:
-        page_url += f"&gfx={args.gfx}"
+    page_url = page_url_for(args.port, args.recording, args.gfx, args.director)
 
     try:
         with sync_playwright() as pw:
@@ -199,6 +222,7 @@ def main() -> int:
             frame_opts = {
                 "focus": args.focus, "dist": args.dist, "az": args.az, "el": args.el,
                 "camera": parse_vec(args.camera), "target": parse_vec(args.target),
+                "director": args.director,
             }
 
             def seek(t: float) -> None:
