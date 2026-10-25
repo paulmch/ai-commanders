@@ -637,7 +637,9 @@ def _analyze_group(sim, own, own_pos, own_vel, accel, members, interval_s, detai
             turn_s=0.0, burn_s=0.0,
             effect=(f"IMPOSSIBLE: he out-accelerates you along the line "
                     f"({e_acc_mag / G_STANDARD:.1f}g burn vs your {accel / G_STANDARD:.1f}g; "
-                    f"rel. speed {dv:.0f} m/s) - only pass wide / flank changes the merge"),
+                    f"rel. speed {dv:.0f} m/s) - "
+                    + ("only pass wide / flank changes the merge" if closing >= 0 else
+                       "the range opens as long as he keeps burning")),
             rel_speed_end_kps=dv / 1000.0))
     else:
         info.options.append(HeadingOption(
@@ -773,34 +775,57 @@ def _reengage_option(sim, own, p, v, e_acc, los, accel, interval_s, detail, eval
     """
     'Re-engage' heading for an OPENING range (after a pass): burn so the
     relative velocity becomes a closure of REENGAGE_CLOSING_KPS along the line
-    of sight, lateral drift nulled. Reports when the range stops opening, how
-    far out that is, and the closure once the burn ends.
+    of sight, lateral drift nulled, WHILE he keeps his current burn - solved
+    like the cancel option (_cancel_solve with the closure as the target
+    velocity), so a fleeing enemy lengthens the burn instead of being ignored.
+    Reports when the range stops opening, how far out that is, and the
+    closure once the burn ends; when he out-accelerates us away from us there
+    is no such burn and the option says so instead of offering a heading.
     """
     target_v = los * (REENGAGE_CLOSING_KPS * 1000.0)   # our velocity rel. to them, wanted
-    need = target_v - v
-    if need.magnitude < MATCHED_MPS or accel <= 0:
+    e_acc_mag = e_acc.magnitude
+    if accel <= 0 or ((target_v - v).magnitude < MATCHED_MPS and e_acc_mag < 0.05 * accel):
         return None
-    h = need.normalized()
-    t_f = _burn_start(sim, own, h)
-    burn = need.magnitude / accel
+    # Solve on the velocity error w.r.t. the wanted closure: the cancel solve
+    # nulls (v1 - target_v) against his burn. Window 0: full throttle, no
+    # stretching - this burn is meant to finish, not to be renewed as a hold.
+    need = target_v - v
+    h = need.normalized() if need.magnitude > 1e-6 else (e_acc.normalized() if e_acc_mag > 0 else los)
+    t_f, solved = 0.0, None
+    for _ in range(2):                     # turn time depends on the heading
+        t_f = _burn_start(sim, own, h)
+        v1 = v - e_acc * t_f
+        solved = _cancel_solve(v1 - target_v, e_acc, accel, 0.0)
+        if solved is None:
+            break
+        h, throttle, burn = solved
+    if solved is None:
+        return HeadingOption(
+            key="reengage", label="re-engage", heading=los, throttle=0.0,
+            turn_s=0.0, burn_s=0.0,
+            effect=(f"IMPOSSIBLE: he out-accelerates you away from you "
+                    f"({e_acc_mag / G_STANDARD:.1f}g burn vs your {accel / G_STANDARD:.1f}g) - "
+                    f"the range opens as long as he keeps burning"))
     end = t_f + burn
-    segs = [(t_f, end, h * accel)]
+    segs = [(t_f, end, h * (accel * throttle))]
+    hold = max(ENEMY_ACCEL_HOLD_S, end)     # consistent with the solve: he keeps burning
     # Sample the burn to find where the opening turns into closure.
     step = max(1.0, end / 60.0)
     probes = [k * step for k in range(int(end / step) + 2)]
-    track = _propagate(p, v, segs, e_acc, ENEMY_ACCEL_HOLD_S, horizon_s=max(end, 1.0),
-                       probe_times=probes)
+    track = _propagate(p, v, segs, e_acc, hold, horizon_s=max(end, 1.0), probe_times=probes)
     peak_km, peak_t = p.magnitude / 1000.0, 0.0
     for t, (pp, _) in sorted(track.probes.items()):
         if pp.magnitude / 1000.0 > peak_km:
             peak_km, peak_t = pp.magnitude / 1000.0, t
-    _, _, _, (pe, ve) = evaluate(segs, probe=end)
+    _, _, _, (pe, ve) = evaluate(segs, probe=end, enemy_until=hold, horizon=end)
     los_e = (pe * -1.0).normalized() if pe.magnitude > 1.0 else los
     c_e = ve.dot(los_e) / 1000.0
     effect = (f"{_span(end, interval_s)}: range stops opening after ~{peak_t:.0f} s at "
               f"~{peak_km:.0f} km, then closing {c_e:.1f} km/s from {pe.magnitude / 1000.0:.0f} km")
+    if e_acc_mag > 0.02 * G_STANDARD:
+        effect += f" while you keep matching his {e_acc_mag / G_STANDARD:.1f}g burn"
     return HeadingOption(
-        key="reengage", label="re-engage", heading=h, throttle=1.0, turn_s=t_f,
+        key="reengage", label="re-engage", heading=h, throttle=throttle, turn_s=t_f,
         burn_s=burn, effect=effect, aspect=_nose_aspect(h, los, own, detail, end),
         end_range_km=pe.magnitude / 1000.0, rel_speed_end_kps=ve.magnitude / 1000.0)
 

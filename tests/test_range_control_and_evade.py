@@ -609,6 +609,43 @@ class TestRangeControlHonesty:
         assert closing == pytest.approx(1.0, abs=0.15)          # REENGAGE_CLOSING_KPS
         assert _range_km(me, foe) == pytest.approx(opt.end_range_km, rel=0.02)
 
+    def test_re_engage_against_an_enemy_still_burning_away(self):
+        """Reviewer repro: he flees at 2 km/s AND keeps burning away at 2 g.
+        The re-engage burn must include his burn (it used to ignore it and
+        promise 'range stops opening' while the range was still opening)."""
+        sim = CombatSimulation(seed=1, time_step=1.0)
+        me = _ship(sim, "me", "corvette", "alpha", (0, 0, 0))
+        foe = _ship(sim, "foe", "destroyer", "beta", (200, 0, 0), vel_kps=(2.0, 0, 0))
+        foe.applied_throttle = 1.0
+        foe.current_maneuver = Maneuver(ManeuverType.HEADING, start_time=0.0, duration=1e9,
+                                        throttle=1.0, heading_direction={"x": 1, "y": 0, "z": 0})
+        group = analyze_range_control(sim, [me])[0]
+        hold, opt = group.option("cancel"), group.option("reengage")
+        assert hold.label == "hold range" and opt.throttle == pytest.approx(1.0)
+        # Matching his burn AND turning the opening into a closure takes longer
+        # than matching it alone (the old option was shorter: impossible).
+        assert opt.turn_s + opt.burn_s > hold.turn_s + hold.burn_s
+        assert "while you keep matching his 2.0g burn" in opt.effect
+        _fly_option(sim, me, opt)
+        assert foe.velocity.x > 7000.0                          # he really kept burning
+        rel = foe.position - me.position
+        closing = -(rel.normalized().dot(foe.velocity - me.velocity)) / 1000.0
+        assert closing == pytest.approx(1.0, abs=0.15)          # REENGAGE_CLOSING_KPS
+        assert _range_km(me, foe) == pytest.approx(opt.end_range_km, rel=0.03)
+
+    def test_re_engage_is_impossible_when_he_out_accelerates_you(self):
+        sim = CombatSimulation(seed=1, time_step=1.0)
+        me = _ship(sim, "me", "destroyer", "alpha", (0, 0, 0))
+        foe = _ship(sim, "foe", "corvette", "beta", (200, 0, 0), vel_kps=(2.0, 0, 0))
+        foe.applied_throttle = 1.0                                # 3 g away from a 2 g hull
+        group = analyze_range_control(sim, [me])[0]
+        opt = group.option("reengage")
+        assert opt.throttle == 0.0
+        assert opt.effect.startswith("IMPOSSIBLE: he out-accelerates you away from you")
+        assert group.option("cancel").effect.endswith("the range opens as long as he keeps burning")
+        text = captain_range_control(sim, me)
+        assert "re-engage" in text and "stops opening" not in text
+
     def test_closing_range_has_no_re_engage_option(self):
         sim, me, foe = _duel("corvette", "battleship", 500.0, 1.5)
         assert analyze_range_control(sim, [me])[0].option("reengage") is None
