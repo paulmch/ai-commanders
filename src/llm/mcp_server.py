@@ -546,18 +546,20 @@ def create_mcp_server(
                     "building closure and passes THROUGH the target at full closing speed (a "
                     "merge). Give standoff_km and it closes, flips, brakes and holds that "
                     "range instead (arrival_closing_kps = closing speed still allowed on "
-                    "arrival). HOLD_RANGE: keep range_km (default: the range now) to "
-                    "target_id - closes or opens to it, then cancels closure and holds (the "
-                    "anti-merge maneuver). EVASIVE: threat-aware defense; with no threat it "
+                    "the first arrival, capped so the overshoot is stopped inside the "
+                    "standoff). HOLD_RANGE: keep range_km (default: the range when first "
+                    "ordered; renewing keeps it) to target_id - closes or opens to it, then "
+                    "cancels closure and holds (the anti-merge maneuver). EVASIVE: threat-aware defense; with no threat it "
                     "weaves around the CURRENT course (never chases, never brakes). BRAKE: "
                     "burn against own velocity (world frame). MAINTAIN: coast. PADLOCK: coast "
                     "with the nose tracking the target (spinal on him). HEADING: fly a "
-                    "world-frame DIRECTION (heading_direction), or toward a position "
-                    "(toward_point, km) or a ship (toward_ship) along its CURRENT bearing; it "
-                    "turns first, then burns at throttle (the drive thrusts along the nose); "
-                    "throttle 0 = attitude only (nose turns on RCS, zero velocity change); "
-                    "never brakes. A direction is not a destination: to go TO a position use "
-                    "toward_point. evade ('full' | 'dodge') adds threat-aware evasion to any "
+                    "world-frame DIRECTION (heading_direction): it turns first, then burns at "
+                    "throttle (the drive thrusts along the nose) and never brakes; throttle 0 "
+                    "= attitude only (nose turns on RCS, zero velocity change). A direction "
+                    "is not a destination: to go TO a position use toward_point (km) - the "
+                    "ship flies there and STOPS (flip and brake timed for it); toward_ship "
+                    "flies to that ship and falls in alongside it, matching its velocity. "
+                    "evade ('full' | 'dodge') adds threat-aware evasion to any "
                     "maneuver but EVASIVE: it flies the ship only while a torpedo or slug is "
                     "inbound ('dodge' never runs from a guided torpedo, presenting armor in "
                     "its final seconds instead). Range control = HEADING: "
@@ -566,7 +568,8 @@ def create_mcp_server(
                     "the whole fleet: HEADING flies one heading as a formation (throttle is a "
                     "fraction of the SLOWEST hull's acceleration, each hull scaled, burns start "
                     "together; toward_point/toward_ship become the heading from the fleet "
-                    "centre), any other maneuver is given to every ship."
+                    "centre - it does not brake there, re-issue it), any other maneuver is "
+                    "given to every ship."
                 ),
                 inputSchema={
                     "type": "object",
@@ -619,13 +622,17 @@ def create_mcp_server(
                             "minimum": 0,
                             "description": (
                                 "INTERCEPT: closing speed still allowed on reaching standoff_km "
-                                "(default 0 = arrive matched)"
+                                "(default 0 = arrive matched); first arrival only, capped so the "
+                                "overshoot is stopped inside the standoff"
                             ),
                         },
                         "range_km": {
                             "type": "number",
                             "minimum": 0,
-                            "description": "HOLD_RANGE: the range to keep (default: the current range)",
+                            "description": (
+                                "HOLD_RANGE: the range to keep (default: the range when first "
+                                "ordered; renewing keeps it)"
+                            ),
                         },
                         "evade": {
                             "type": "string",
@@ -655,8 +662,7 @@ def create_mcp_server(
                             "type": "object",
                             "description": (
                                 "HEADING instead of heading_direction: a WORLD position in km "
-                                "(the frame of position_km); the ship flies toward its current "
-                                "bearing and coasts once there"
+                                "(the frame of position_km); the ship flies there and stops"
                             ),
                             "properties": {
                                 "x": {"type": "number", "description": "World X, km"},
@@ -668,8 +674,8 @@ def create_mcp_server(
                         "toward_ship": {
                             "type": "string",
                             "description": (
-                                "HEADING instead of heading_direction: a ship id or name; the "
-                                "heading follows its CURRENT bearing (pure pursuit)"
+                                "HEADING instead of heading_direction: a ship id or name; flies "
+                                "to it and falls in alongside, matching its velocity"
                             ),
                         },
                     },

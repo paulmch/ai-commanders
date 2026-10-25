@@ -2760,16 +2760,10 @@ def format_admiral_orders_for_captain(
                     f"set_maneuver/set_heading replaces it. Override only for a reason "
                     f"(e.g. EVADE an inbound torpedo)."
                 )
-            # [D maneuver] structured admiral maneuver (INTERCEPT standoff,
-            # HOLD_RANGE, ...; AdmiralOrder.maneuver), applied by the runner.
-            spec = getattr(order, "maneuver", None)
-            if spec and not isinstance(heading, dict):
-                from .maneuver_orders import describe_maneuver_spec
-                lines.append(
-                    f"      >>> MANEUVER ORDER (ALREADY APPLIED to your ship): "
-                    f"{describe_maneuver_spec(spec)}. Keep it: calling set_maneuver/"
-                    f"set_heading replaces it. Override only for a reason."
-                )
+            # [D maneuver] structured admiral maneuver (AdmiralOrder.maneuver):
+            # ALREADY APPLIED by the runner, or NOT APPLIED with the reason.
+            from .maneuver_orders import admiral_maneuver_lines
+            lines.extend(admiral_maneuver_lines(order))
     else:
         lines.append("\n!!! WARNING: NO ORDERS RECEIVED FOR YOUR SHIP !!!")
         lines.append("Your Admiral may have forgotten to issue you orders.")
@@ -2796,8 +2790,8 @@ def format_admiral_orders_for_captain(
     lines.append("respond_to_orders = WORDS ONLY (tells Admiral your intent)")
     lines.append("set_maneuver = ACTUAL MOVEMENT (makes ship move)")
     lines.append("")
-    heading_applied = any(isinstance(getattr(o, "heading", None), dict)
-                          or getattr(o, "maneuver", None) for o in orders or [])
+    from .maneuver_orders import admiral_order_moves_ship   # [D maneuver]
+    heading_applied = any(admiral_order_moves_ship(o) for o in orders or [])
     lines.append("YOU MUST CALL BOTH:")
     lines.append("  1. respond_to_orders (acknowledge/deviate)")
     if heading_applied:

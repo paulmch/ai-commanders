@@ -123,6 +123,10 @@ class LLMCaptain:
         # the model never learns that a call was rejected and repeats it forever.
         self.pending_tool_errors: List[str] = []
         self.last_tool_errors: List[str] = []
+        # Accepted-with-a-warning results (e.g. a launch the engine check says
+        # is ESCAPABLE or OVERKILL): the tool's answer, replayed next turn.
+        self.pending_tool_notes: List[str] = []
+        self.last_tool_notes: List[str] = []
 
         # Captain's log: self-authored notes (log_note tool) echoed back into
         # every subsequent turn. The rest of the prompt is telemetry the harness
@@ -342,6 +346,8 @@ class LLMCaptain:
         # start a fresh error bucket for the calls we are about to execute.
         self.last_tool_errors = self.pending_tool_errors
         self.pending_tool_errors = []
+        self.last_tool_notes = self.pending_tool_notes
+        self.pending_tool_notes = []
 
         # Build history context
         decision_history = self._format_decision_history(last_n=5)
@@ -513,9 +519,20 @@ class LLMCaptain:
                 target = tc.arguments.get("target_name", "?")
                 actions.append(f"TARGET: {target}")
             elif tc.name == "set_heading":
-                direction = tc.arguments.get("direction", {})
+                direction = tc.arguments.get("direction") or {}
                 throttle = tc.arguments.get("throttle", 1.0)
-                actions.append(f"HEADING ({direction.get('x', 0):.1f},{direction.get('y', 0):.1f},{direction.get('z', 0):.1f}) @ {throttle*100:.0f}%")
+                point = tc.arguments.get("toward_point")
+                if tc.arguments.get("toward_ship"):
+                    where = f"to ship {tc.arguments['toward_ship']}"
+                elif isinstance(point, dict):
+                    where = (f"to point ({point.get('x', 0)},{point.get('y', 0)},"
+                             f"{point.get('z', 0)}) km")
+                elif isinstance(direction, dict):
+                    where = (f"({direction.get('x', 0):.1f},{direction.get('y', 0):.1f},"
+                             f"{direction.get('z', 0):.1f})")
+                else:
+                    where = "(?)"
+                actions.append(f"HEADING {where} @ {throttle*100:.0f}%")
             elif tc.name == "set_weapons_order":
                 spinal = tc.arguments.get("spinal_mode")
                 turret = tc.arguments.get("turret_mode")
@@ -766,24 +783,19 @@ class LLMCaptain:
         self.pending_tool_errors.append(message)
 
     def _record_tool_note(self, message: str) -> None:
-        """
-        Record something the next turn must know about a call that WAS
-        executed (an ignored parameter, a direction that looks like a
-        position). It rides the tool-error channel - the only one replayed
-        into the next turn - so the text itself says it was accepted.
-        """
-        if not message.startswith("NOTE"):
-            message = f"NOTE (executed, not rejected) - {message}"
-        print(f"[CAPTAIN {self.name}] {message}")
-        self.pending_tool_errors.append(message)
+        """An accepted call's answer worth seeing next turn (e.g. a launch warning)."""
+        self.pending_tool_notes.append(message)
 
     def _format_tool_errors(self) -> str:
-        """Format last turn's rejected tool calls for the next prompt."""
-        if not self.last_tool_errors:
-            return ""
-        lines = ["ERRORS FROM YOUR LAST ORDERS (these calls were REJECTED, reissue correctly):"]
-        for err in self.last_tool_errors[-5:]:
-            lines.append(f"  - {err}")
+        """Format last turn's rejected tool calls (and launch warnings) for the next prompt."""
+        lines = []
+        if self.last_tool_errors:
+            lines.append("ERRORS FROM YOUR LAST ORDERS (these calls were REJECTED, reissue correctly):")
+            lines.extend(f"  - {err}" for err in self.last_tool_errors[-5:])
+        notes = getattr(self, "last_tool_notes", None) or []
+        if notes:
+            lines.append("ENGINE NOTES ON YOUR LAST ORDERS (accepted, but check these):")
+            lines.extend(f"  - {note}" for note in notes[-4:])
         return "\n".join(lines)
 
     # Keep the echoed log small: it rides in the volatile user turn every
@@ -1706,7 +1718,8 @@ class LLMCaptain:
             # a ship's current bearing (toward_point / toward_ship).
             from ..simulation import Maneuver, ManeuverType
             from .maneuver_orders import (
-                ManeuverArgError, heading_target, parse_evade, position_like_direction_note)
+                ManeuverArgError, heading_target, parse_evade, position_like_direction_note,
+                usable_direction)
             throttle = args.get("throttle", 1.0)
             extras: Dict[str, Any] = {}
             try:
@@ -1724,7 +1737,15 @@ class LLMCaptain:
                 extras.update(live)
                 direction = extras.pop("heading_direction", None)
             else:
-                direction = args.get("direction", {"x": 1, "y": 0, "z": 0})
+                direction = args.get("direction")
+                if not usable_direction(direction):
+                    # No silent default: a call without a usable direction
+                    # used to burn along world +X.
+                    self._record_tool_error(
+                        f"set_heading: needs direction {{x, y, z}} (a world-frame direction, "
+                        f"not all zero), toward_point {{x, y, z}} km or toward_ship - got "
+                        f"direction={direction!r}")
+                    return None
                 # A position pasted from the orders is still flown as the
                 # direction it literally is - but say so (CP-03).
                 if isinstance(direction, dict) and (self.admiral_orders or self.fleet_directive):

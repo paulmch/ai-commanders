@@ -1736,7 +1736,7 @@ class LLMBattleRunner:
         from ..simulation import Maneuver, ManeuverType
         from .range_control import formation_heading_maneuvers
         from .maneuver_orders import (
-            ManeuverArgError, admiral_spec_maneuver, fleet_heading_vector)
+            ManeuverArgError, apply_admiral_spec, fleet_heading_vector)
 
         formations: Dict[Tuple[Any, ...], List[Tuple[Any, Any]]] = {}
         for ship_id, _captain, faction in captain_entries:
@@ -1749,46 +1749,42 @@ class LLMBattleRunner:
             order = orders[-1]
             throttle = 1.0 if order.throttle is None else float(order.throttle)
             spec = getattr(order, "maneuver", None)
+            if spec:
+                order.maneuver_error = None
+                order.maneuver_applied = None
             if spec and spec.get("maneuver_type") != "HEADING":
                 # Structured maneuver (INTERCEPT standoff, HOLD_RANGE, EVADE,
                 # ...): each ship flies its own, "all ships" included.
-                try:
-                    maneuver, _notes = admiral_spec_maneuver(self.simulation, ship, spec, throttle)
-                except (ManeuverArgError, KeyError, ValueError) as e:
+                if not apply_admiral_spec(self.simulation, ship, order, spec, throttle):
                     if self.config.verbose:
-                        print(f"  [{ship_id}] admiral maneuver not applied: {e}")
-                    continue
-                if self.simulation.inject_command(ship_id, maneuver):
-                    order.applied_throttle = throttle
+                        print(f"  [{ship_id}] admiral maneuver not applied: "
+                              f"{order.maneuver_error}")
                 continue
             if getattr(order, "formation", False) is True:
-                if spec:
-                    key = (faction, tuple(sorted((k, repr(v)) for k, v in spec.items())),
+                if spec and (spec.get("toward_point") or spec.get("toward_ship")):
+                    # Grouped without evade: a per-ship evade overlay still
+                    # flies in the same throttle-matched formation.
+                    key = (faction, tuple(sorted((k, repr(v)) for k, v in spec.items()
+                                                 if k != "evade")),
                            repr(order.heading), round(throttle, 6))
                 else:
+                    # A plain heading (an evade-only spec included: it flies
+                    # with the rest of the formation, overlay on top).
+                    if not isinstance(order.heading, dict):
+                        order.maneuver_error = "no heading to fly"
+                        continue
                     key = (faction,
                            tuple(round(float(order.heading.get(k, 0.0)), 6) for k in "xyz"),
                            round(throttle, 6))
                 formations.setdefault(key, []).append((ship, order))
                 continue
             if spec:
-                # HEADING toward a point / ship (re-aimed every tick), or a
+                # HEADING to a point / ship (flies there and stops), or a
                 # heading with the evasion overlay.
-                try:
-                    maneuver, _notes = admiral_spec_maneuver(self.simulation, ship, spec, throttle)
-                except (ManeuverArgError, KeyError, ValueError) as e:
+                if not apply_admiral_spec(self.simulation, ship, order, spec, throttle):
                     if self.config.verbose:
-                        print(f"  [{ship_id}] admiral heading not applied: {e}")
-                    continue
-                if maneuver.heading_direction is None and isinstance(order.heading, dict):
-                    maneuver.heading_direction = dict(order.heading)
-                if maneuver.heading_direction is None:
-                    continue
-                if not isinstance(order.heading, dict):
-                    # What the captain is shown as already applied.
-                    order.heading = dict(maneuver.heading_direction)
-                if self.simulation.inject_command(ship_id, maneuver):
-                    order.applied_throttle = throttle
+                        print(f"  [{ship_id}] admiral heading not applied: "
+                              f"{order.maneuver_error}")
                 continue
             maneuver = Maneuver(
                 maneuver_type=ManeuverType.HEADING,
@@ -1806,14 +1802,18 @@ class LLMBattleRunner:
             first = members[0][1]
             spec = getattr(first, "maneuver", None)
             heading = first.heading
+            error = None
             if spec and (spec.get("toward_point") or spec.get("toward_ship")):
                 # One heading from the fleet centre: re-aiming every hull at
                 # the point on its own would collapse the formation.
                 try:
                     heading = fleet_heading_vector(self.simulation, ships, spec)
-                except ManeuverArgError:
-                    heading = None
+                except ManeuverArgError as e:
+                    heading, error = None, str(e)
             if not isinstance(heading, dict):
+                for _ship, order in members:
+                    if getattr(order, "maneuver", None):
+                        order.maneuver_error = error or "no heading to fly"
                 continue
             maneuvers = formation_heading_maneuvers(
                 self.simulation, ships, heading, throttle)
@@ -1821,8 +1821,9 @@ class LLMBattleRunner:
                 maneuver = maneuvers.get(ship.ship_id)
                 if maneuver is None:
                     continue
-                if spec and spec.get("evade"):
-                    maneuver.evade = spec["evade"]
+                evade = (getattr(order, "maneuver", None) or {}).get("evade")
+                if evade:
+                    maneuver.evade = evade
                 if not isinstance(order.heading, dict):
                     order.heading = dict(maneuver.heading_direction)
                 if self.simulation.inject_command(ship.ship_id, maneuver):

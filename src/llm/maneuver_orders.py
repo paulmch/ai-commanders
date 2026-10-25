@@ -8,6 +8,7 @@ applied by battle_runner._apply_admiral_headings) and MCP clients
                 (INTERCEPT arrival control), range_km (HOLD_RANGE),
                 evade ('full' | 'dodge': the evasion overlay)
   set_heading   toward_point {x, y, z km} | toward_ship (name or id), evade
+                (fly there and stop: the engine's range keeping)
 
 Every parameter is optional. With none of them given, callers build exactly
 the engine Maneuver they built before these existed (bit-identical seeded
@@ -120,11 +121,17 @@ def _ship_names(ship: Any) -> Tuple[str, ...]:
     return name.lower(), short.lower(), str(ship.ship_id).lower()
 
 
+def _squash(text: str) -> str:
+    """'OCS Falchion-1' / 'falchion 1' / 'Falchion_1' -> comparable form."""
+    return re.sub(r"[\s_\-]+", "", text)
+
+
 def resolve_ship(simulation: Any, own_ship_id: str, ref: Any) -> Optional[Any]:
     """
     The ship a commander named (id, full name, name without the hull prefix,
-    then a unique partial name): enemies first, then friendlies. None if no
-    live ship matches.
+    then a unique partial name - spaces, dashes and underscores ignored, so
+    "Falchion 1" finds "OCS Falchion-1"): enemies first, then friendlies.
+    None if no live ship matches (or a partial name matches several).
     """
     if ref is None:
         return None
@@ -137,8 +144,13 @@ def resolve_ship(simulation: Any, own_ship_id: str, ref: Any) -> Optional[Any]:
         for ship in pool:
             if wanted in _ship_names(ship):
                 return ship
+    squashed = _squash(wanted)
     for pool in pools:
-        partial = [s for s in pool if wanted in _ship_names(s)[0]]
+        for ship in pool:
+            if squashed in {_squash(n) for n in _ship_names(ship)}:
+                return ship
+    for pool in pools:
+        partial = [s for s in pool if squashed and squashed in _squash(_ship_names(s)[0])]
         if len(partial) == 1:
             return partial[0]
     return None
@@ -194,6 +206,9 @@ def maneuver_extras(
             extras["standoff_m"] = standoff * 1000.0
         if arrival is not None:
             extras["arrival_closing_mps"] = arrival * 1000.0
+            note = arrival_cap_note(simulation, ship_id, args, standoff, arrival)
+            if note:
+                notes.append(note)
         if keep is not None:
             notes.append("range_km applies to HOLD_RANGE only and was ignored "
                          "(INTERCEPT stops at standoff_km)")
@@ -209,9 +224,13 @@ def maneuver_extras(
         if arrival is not None:
             notes.append("arrival_closing_kps applies to INTERCEPT only and was ignored")
         if keep is None:
-            keep_m = current_range_m(simulation, ship_id, target_id)
-            if keep_m is not None:
-                extras["hold_range_m"] = keep_m
+            # Left to the engine: it latches the range at the first tick and a
+            # renewed order keeps that range. Filling in the range NOW would
+            # re-latch on every renewal - against a closing enemy the hold
+            # would bleed range checkpoint after checkpoint.
+            note = hold_range_default_note(simulation, ship_id, target_id)
+            if note:
+                notes.append(note)
         else:
             extras["hold_range_m"] = keep * 1000.0
     else:
@@ -225,6 +244,72 @@ def maneuver_extras(
         else:
             extras["evade"] = evade
     return extras, notes
+
+
+def hold_range_default_note(simulation: Any, ship_id: str,
+                            target_id: Optional[str]) -> Optional[str]:
+    """
+    What a HOLD_RANGE without range_km will hold: the range it already
+    latched (a renewal on the same target), else the range right now.
+    """
+    from ..simulation import ManeuverType
+
+    ship = _get_ship(simulation, ship_id)
+    current = getattr(ship, "current_maneuver", None) if ship is not None else None
+    if (current is not None and current.maneuver_type == ManeuverType.HOLD_RANGE
+            and current.target_id == target_id and current.hold_range_m is not None):
+        return (f"HOLD_RANGE keeps the {current.hold_range_m / 1000.0:.0f} km it latched "
+                f"when first ordered (give range_km to change it)")
+    now = current_range_m(simulation, ship_id, target_id)
+    if now is None:
+        return None
+    return (f"HOLD_RANGE holds the range when it starts, {now / 1000.0:.0f} km now; "
+            f"renewing it keeps that range (give range_km for a set range)")
+
+
+def arrival_cap_note(simulation: Any, ship_id: str, args: Dict[str, Any],
+                     standoff_km: Optional[float], arrival_kps: float) -> Optional[str]:
+    """
+    The engine flies an INTERCEPT arrival speed no faster than the overshoot
+    past the standoff can still be stopped inside it (no fly-through); say so
+    when the asked-for speed is over that - or when there is no standoff to
+    overshoot into at all.
+    """
+    if arrival_kps <= 0:
+        return None
+    if not standoff_km:
+        return ("arrival_closing_kps without standoff_km: there is no room past the target "
+                "to slow down in, so the ship arrives matched ON the target - give standoff_km "
+                "for a range to arrive at")
+    try:
+        from ..simulation import RANGE_ARRIVAL_ROOM_FRACTION, RANGE_BRAKE_ACCEL_FRACTION
+        from ..maneuvers import max_arrival_speed_mps
+    except ImportError:  # pragma: no cover - script-style imports
+        return None
+    ship = _get_ship(simulation, ship_id)
+    if ship is None:
+        return None
+    throttle = parse_number(args.get("throttle"), "throttle")
+    throttle = 1.0 if throttle is None else max(0.0, min(1.0, throttle))
+    try:
+        accel = (ship.kinematic_state.max_acceleration_ms2()
+                 * ship.get_effective_thrust_fraction() * throttle)
+    except Exception:
+        return None
+    cap_kps = max_arrival_speed_mps(RANGE_ARRIVAL_ROOM_FRACTION * standoff_km * 1000.0,
+                                    RANGE_BRAKE_ACCEL_FRACTION * accel) / 1000.0
+    if arrival_kps <= cap_kps + 1e-6:
+        return None
+    return (f"arrival_closing_kps {arrival_kps:g} is capped to ~{cap_kps:.1f} km/s: faster "
+            f"could not be stopped inside the {standoff_km:g} km standoff at your acceleration "
+            f"(less if the target burns toward you)")
+
+
+def _get_ship(simulation: Any, ship_id: str) -> Optional[Any]:
+    try:
+        return simulation.get_ship(ship_id)
+    except Exception:
+        return None
 
 
 def current_range_m(simulation: Any, ship_id: str, target_id: Optional[str]) -> Optional[float]:
@@ -287,6 +372,18 @@ def heading_target(
     if ship is not None:
         fields["heading_direction"] = _unit_dict(aim - ship.position)
     return fields, notes
+
+
+def usable_direction(direction: Any) -> bool:
+    """A set_heading direction that can be flown: {x, y, z} numbers, not all zero."""
+    if not isinstance(direction, dict) or not direction:
+        return False
+    try:
+        components = [float(direction.get(k, 0.0) or 0.0) for k in ("x", "y", "z")]
+    except (TypeError, ValueError):
+        return False
+    return (all(math.isfinite(c) for c in components)
+            and any(abs(c) > 1e-9 for c in components))
 
 
 def coordinate_triples(texts: Iterable[str]) -> List[Tuple[float, float, float]]:
@@ -378,6 +475,11 @@ def mcp_maneuver_check(maneuver_type: str, args: Dict[str, Any]) -> List[str]:
     if maneuver_type != "HEADING" and (args.get("toward_point") or args.get("toward_ship")):
         notes.append("toward_point / toward_ship apply to HEADING only and are ignored")
     direction = args.get("heading_direction")
+    if (maneuver_type == "HEADING" and not (args.get("toward_point") or args.get("toward_ship"))
+            and not usable_direction(direction)):
+        raise ManeuverArgError(
+            f"HEADING needs heading_direction {{x, y, z}} (not all zero), toward_point or "
+            f"toward_ship - got heading_direction={direction!r}")
     if maneuver_type == "HEADING" and isinstance(direction, dict) and not (
             args.get("toward_point") or args.get("toward_ship")):
         try:
@@ -513,10 +615,15 @@ def admiral_maneuver_spec(args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             spec["toward_ship"] = ref
         elif point is not None:
             spec["toward_point"] = point
-    else:
-        target = args.get("maneuver_target") or args.get("suggested_target")
-        if target and kind in ("INTERCEPT", "HOLD_RANGE", "PADLOCK"):
-            spec["target"] = str(target)
+    elif kind in ("INTERCEPT", "HOLD_RANGE", "PADLOCK"):
+        # An explicit maneuver_target must resolve (else the order is not
+        # applied and the captain is told); the gun target is only a hint -
+        # it is often prose ("the nearest destroyer").
+        if args.get("maneuver_target"):
+            spec["target"] = str(args["maneuver_target"])
+        elif args.get("suggested_target"):
+            spec["target_hint"] = str(args["suggested_target"])
+    if kind != "HEADING":
         for key in ("standoff_km", "arrival_closing_kps", "range_km"):
             value = _quiet(parse_number, args.get(key), key)
             if value is not None and value >= 0:
@@ -555,7 +662,12 @@ def admiral_spec_maneuver(simulation: Any, ship: Any, spec: Dict[str, Any],
                              ManeuverType.HOLD_RANGE):
             target = resolve_ship(simulation, ship.ship_id, spec.get("target"))
             if target is None and spec.get("target"):
-                raise ManeuverArgError(f"no live ship named {spec['target']!r}")
+                raise ManeuverArgError(
+                    f"no live ship named {spec['target']!r} (ships: "
+                    f"{ship_choices(simulation, ship.ship_id)})")
+            if target is None and spec.get("target_hint"):
+                # The order's gun target, if it names a ship; else fall back.
+                target = resolve_ship(simulation, ship.ship_id, spec["target_hint"])
             if target is None:
                 target_id = getattr(ship, "primary_target_id", None)
                 if not target_id:
@@ -579,23 +691,63 @@ def admiral_spec_maneuver(simulation: Any, ship: Any, spec: Dict[str, Any],
     ), notes
 
 
-def describe_maneuver_spec(spec: Optional[Dict[str, Any]]) -> Optional[str]:
+def apply_admiral_spec(simulation: Any, ship: Any, order: Any, spec: Dict[str, Any],
+                       throttle: float) -> bool:
+    """
+    Fly one admiral structured maneuver order (AdmiralOrder.maneuver) on
+    ``ship`` (battle_runner._apply_admiral_headings). On success the order
+    records what was flown (maneuver_applied, naming the ship it resolved
+    to) and its applied_throttle; when it cannot be flown (no such ship,
+    nothing to steer at) it records maneuver_error, the ship keeps its
+    previous maneuver and the captain is told the order was NOT applied
+    (admiral_maneuver_lines). Returns whether it was applied.
+    """
+    from ..simulation import ManeuverType
+
+    order.maneuver_error = None
+    order.maneuver_applied = None
+    try:
+        maneuver, _notes = admiral_spec_maneuver(simulation, ship, spec, throttle)
+        if maneuver.maneuver_type == ManeuverType.HEADING and not maneuver.live_heading:
+            if maneuver.heading_direction is None and isinstance(
+                    getattr(order, "heading", None), dict):
+                maneuver.heading_direction = dict(order.heading)
+            if not usable_direction(maneuver.heading_direction):
+                raise ManeuverArgError("no heading to fly")
+    except (ManeuverArgError, KeyError, ValueError) as e:
+        order.maneuver_error = str(e) or type(e).__name__
+        return False
+    if not simulation.inject_command(ship.ship_id, maneuver):
+        order.maneuver_error = "the ship cannot maneuver"
+        return False
+    order.applied_throttle = throttle
+    target = simulation.get_ship(maneuver.target_id) if maneuver.target_id else None
+    order.maneuver_applied = describe_maneuver_spec(
+        spec, getattr(target, "name", None) if target is not None else None)
+    return True
+
+
+def describe_maneuver_spec(spec: Optional[Dict[str, Any]],
+                           target_name: Optional[str] = None) -> Optional[str]:
     """
     One line for an admiral's structured maneuver order (AdmiralOrder.maneuver),
     e.g. "INTERCEPT Dart-2, standoff 50 km, evade dodge" - for the captain's
-    order rendering and logs. None when there is no spec.
+    order rendering and logs. ``target_name``: the ship it was actually flown
+    against (overrides the spec's). None when there is no spec.
     """
     if not spec:
         return None
     kind = str(spec.get("maneuver_type", "?"))
     parts = [_label(kind)]
-    if spec.get("target"):
-        parts[0] += f" {spec['target']}"
+    target = target_name or spec.get("target")
+    if target:
+        parts[0] += f" {target}"
     if spec.get("toward_ship"):
-        parts.append(f"toward ship {spec['toward_ship']}")
-    if spec.get("toward_point"):
+        parts[0] += f" to ship {spec['toward_ship']} (joins it, matching its velocity)"
+    elif spec.get("toward_point"):
         p = spec["toward_point"]
-        parts.append(f"toward point ({p.get('x', 0):g}, {p.get('y', 0):g}, {p.get('z', 0):g}) km")
+        parts[0] += (f" to point ({p.get('x', 0):g}, {p.get('y', 0):g}, {p.get('z', 0):g}) km "
+                     f"(flies there and stops)")
     if spec.get("standoff_km") is not None:
         parts.append(f"standoff {spec['standoff_km']:g} km")
     if spec.get("arrival_closing_kps") is not None:
@@ -607,3 +759,41 @@ def describe_maneuver_spec(spec: Optional[Dict[str, Any]]) -> Optional[str]:
     if spec.get("evade"):
         parts.append(f"evade {spec['evade']}")
     return ", ".join(parts)
+
+
+def admiral_order_moves_ship(order: Any) -> bool:
+    """
+    True when the runner flies this admiral order on the ship: a heading, or
+    a structured maneuver that was applied (not one marked maneuver_error).
+    """
+    if getattr(order, "maneuver_error", None):
+        return False
+    return (isinstance(getattr(order, "heading", None), dict)
+            or bool(getattr(order, "maneuver", None)))
+
+
+def admiral_maneuver_lines(order: Any) -> List[str]:
+    """
+    The captain-facing lines for an admiral order's structured maneuver
+    (AdmiralOrder.maneuver, applied by battle_runner._apply_admiral_headings):
+    ALREADY APPLIED (keep it), or NOT APPLIED with the reason (the ship is
+    still flying whatever it flew before - choose a maneuver). A plain
+    heading order is rendered by its own HEADING ORDER line; only its evade
+    overlay is added here.
+    """
+    spec = getattr(order, "maneuver", None)
+    if not spec:
+        return []
+    error = getattr(order, "maneuver_error", None)
+    if error:
+        return [f"      >>> MANEUVER ORDER NOT APPLIED ({describe_maneuver_spec(spec)}): "
+                f"{error}. Your ship is still flying its previous maneuver - choose your own "
+                f"(set_maneuver/set_heading)."]
+    if isinstance(getattr(order, "heading", None), dict):
+        if spec.get("evade"):
+            return [f"      >>> ...with evade {spec['evade']}: evasion flies the ship only "
+                    f"while a torpedo or slug is inbound, then the heading resumes."]
+        return []
+    what = getattr(order, "maneuver_applied", None) or describe_maneuver_spec(spec)
+    return [f"      >>> MANEUVER ORDER (ALREADY APPLIED to your ship): {what}. Keep it: "
+            f"calling set_maneuver/set_heading replaces it. Override only for a reason."]

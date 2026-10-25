@@ -43,9 +43,11 @@ CAPTAIN_TOOLS_BASE = [
                             "THROUGH the target at full closing speed (a merge - seconds of "
                             "fire, then flying apart). Give standoff_km and it closes, flips, "
                             "brakes and holds that range instead. "
-                            "HOLD_RANGE: keep range_km (default: the range now) to the target - "
-                            "closes or opens to it, then cancels closure and holds it (the "
-                            "anti-merge maneuver; matches his course as he moves). "
+                            "HOLD_RANGE: keep range_km (default: the range when first ordered - "
+                            "renewing the order keeps it) to the target - closes or opens to it, "
+                            "then cancels closure and holds it (the anti-merge maneuver; matches "
+                            "his course and burn as he moves; if he out-accelerates you it "
+                            "matches his burn and buys time instead of closing). "
                             "EVADE: Threat-aware defense - jinks vs gun fire; vs guided "
                             "torpedoes auto-RUNS (cuts closure, buys PD dwell) and in the "
                             "final seconds auto-PRESENTS your thickest armor. Dodges blinded "
@@ -94,13 +96,19 @@ CAPTAIN_TOOLS_BASE = [
                             "INTERCEPT only: the closing speed you may still carry when you "
                             "reach standoff_km (default 0 = arrive matched). More keeps "
                             "momentum but carries you inside the standoff before it holds. "
-                            "Given without standoff_km it is the speed you arrive ON the target."
+                            "First arrival only, and capped so the overshoot can still be "
+                            "stopped well inside the standoff - you never fly through the "
+                            "target. Without standoff_km there is no room to overshoot: you "
+                            "arrive matched on the target."
                         )
                     },
                     "range_km": {
                         "type": "number",
                         "minimum": 0,
-                        "description": "HOLD_RANGE only: the range to keep (default: the current range)."
+                        "description": (
+                            "HOLD_RANGE only: the range to keep (default: the range when the "
+                            "order starts; renewing the order keeps that range)."
+                        )
                     },
                     "evade": {
                         "type": "string",
@@ -255,11 +263,13 @@ CAPTAIN_TOOLS_BASE = [
                 "CONTROL). With throttle 0 it is ATTITUDE ONLY: the nose turns on RCS and you "
                 "coast with zero change of velocity (e.g. spinal on the enemy; PADLOCK tracks a "
                 "moving target and turns faster). A DIRECTION IS NOT A DESTINATION: direction "
-                "(90,55,10) flies along that vector from wherever you are, so to go TO a "
-                "position copied from an order use toward_point. toward_point/toward_ship "
-                "re-aim at the CURRENT bearing continuously but never brake - you fly through "
-                "unless you stop burning (to stop at a range from a ship use set_maneuver "
-                "INTERCEPT with standoff_km, or HOLD_RANGE)."
+                "(90,55,10) flies along that vector from wherever you are and never brakes, "
+                "so to go TO a position copied from an order use toward_point: the ship flies "
+                "there and STOPS (burn, flip and brake timed for you, sideways drift "
+                "cancelled). toward_ship flies to that ship and falls in alongside it, "
+                "matching its velocity (rejoin a friendly; to stand off an enemy use "
+                "set_maneuver INTERCEPT with standoff_km, or HOLD_RANGE). Throttle caps every "
+                "burn; throttle 0 only turns the nose onto the current bearing."
             ),
             "parameters": {
                 "type": "object",
@@ -294,7 +304,7 @@ CAPTAIN_TOOLS_BASE = [
                         "description": (
                             "Instead of direction: a WORLD position in km (the frame of ship "
                             "positions, e.g. a rally point or fleet centre from your orders). "
-                            "The ship flies toward its current bearing and coasts once there."
+                            "The ship flies there and stops, holding position at it."
                         ),
                         "properties": {
                             "x": {"type": "number", "description": "World X, km"},
@@ -306,8 +316,10 @@ CAPTAIN_TOOLS_BASE = [
                     "toward_ship": {
                         "type": "string",
                         "description": (
-                            "Instead of direction: a ship name or id. The heading follows that "
-                            "ship's CURRENT bearing (pure pursuit, no lead; INTERCEPT leads)."
+                            "Instead of direction: a ship name or id. Flies to that ship and "
+                            "falls in alongside it, matching its velocity (rejoin a friendly; "
+                            "against an enemy use set_maneuver INTERCEPT standoff_km / "
+                            "HOLD_RANGE)."
                         )
                     },
                     "throttle": {

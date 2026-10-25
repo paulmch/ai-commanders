@@ -126,12 +126,21 @@ class TestSetManeuver:
                      target_id="Nonesuch") is None
         assert "OCS Falchion-1 [beta_1]" in captain.pending_tool_errors[-1]
 
-    def test_hold_range_defaults_to_the_current_range(self):
+    def test_hold_range_default_is_latched_by_the_engine(self):
+        """No range_km: the tool leaves the range to the engine (latched at
+        the first tick, kept on renewal) and tells the captain what it holds."""
         sim, captain = _sim(), _captain()
         m = _call(captain, sim, "set_maneuver", maneuver_type="HOLD_RANGE", target_id="beta_1")
         expected = (sim.get_ship("beta_1").position - sim.get_ship("alpha_1").position).magnitude
         assert m.maneuver_type == ManeuverType.HOLD_RANGE
-        assert m.hold_range_m == pytest.approx(expected, abs=1.0)
+        assert m.hold_range_m is None
+        assert f"{expected / 1000:.0f} km now" in captain.pending_tool_notes[-1]
+        assert captain.pending_tool_errors == []
+        sim.inject_command("alpha_1", m)
+        sim.step()
+        assert m.hold_range_m == pytest.approx(expected, abs=50.0)
+        _call(captain, sim, "set_maneuver", maneuver_type="HOLD_RANGE", target_id="beta_1")
+        assert f"keeps the {expected / 1000:.0f} km it latched" in captain.pending_tool_notes[-1]
 
     def test_hold_range_takes_range_km_and_reads_standoff_as_range(self):
         sim, captain = _sim(), _captain()
@@ -141,14 +150,18 @@ class TestSetManeuver:
         m = _call(captain, sim, "set_maneuver", maneuver_type="HOLD_RANGE",
                   target_id="beta_1", standoff_km=150)
         assert m.hold_range_m == 150_000.0
-        assert "standoff_km as range_km" in captain.pending_tool_errors[-1]
-        assert captain.pending_tool_errors[-1].startswith("NOTE (executed, not rejected)")
+        # Accepted-call notes ride the notes channel, not the REJECTED errors.
+        assert "standoff_km as range_km" in captain.pending_tool_notes[-1]
+        assert captain.pending_tool_errors == []
+        captain.last_tool_notes, captain.pending_tool_notes = captain.pending_tool_notes, []
+        text = captain._format_tool_errors()
+        assert "ENGINE NOTES ON YOUR LAST ORDERS (accepted" in text and "REJECTED" not in text
 
     def test_misplaced_parameters_are_noted_not_fatal(self):
         sim, captain = _sim(), _captain()
         m = _call(captain, sim, "set_maneuver", maneuver_type="BRAKE", standoff_km=50)
         assert m.maneuver_type == ManeuverType.BRAKE and m.standoff_m is None
-        assert "does not apply to BRAKE" in captain.pending_tool_errors[-1]
+        assert "does not apply to BRAKE" in captain.pending_tool_notes[-1]
 
     def test_evade_overlay_and_bad_values(self):
         sim, captain = _sim(), _captain()
@@ -203,7 +216,7 @@ class TestSetHeading:
         m = _call(captain, sim, "set_heading", direction={"x": 1, "y": 0, "z": 0},
                   toward_point={"x": 0, "y": 0, "z": 0}, throttle=1.0)
         assert m.heading_point_km == {"x": 0.0, "y": 0.0, "z": 0.0}
-        assert "ignored direction" in captain.pending_tool_errors[-1]
+        assert "ignored direction" in captain.pending_tool_notes[-1]
 
     def test_unknown_ship_and_bad_point_are_rejected(self):
         sim, captain = _sim(), _captain()
@@ -228,7 +241,7 @@ class TestPositionLikeDirectionGuard:
         m = _call(captain, sim, "set_heading", direction={"x": 90, "y": 55, "z": 10},
                   throttle=1.0)
         assert m.heading_direction == {"x": 90, "y": 55, "z": 10}   # still a direction
-        note = captain.pending_tool_errors[-1]
+        note = captain.pending_tool_notes[-1]
         assert "ACCEPTED as a DIRECTION" in note
         assert "toward_point={x: 90, y: 55, z: 10}" in note
         # The audit measured 144.5 deg off the enemy centroid; to the quoted
@@ -236,7 +249,7 @@ class TestPositionLikeDirectionGuard:
         me = sim.get_ship("alpha_1").position
         off = Vector3D(90, 55, 10).normalized().angle_to((Vector3D(90e3, 55e3, 10e3) - me).normalized())
         assert f"{math.degrees(off):.0f} deg off" in note and 140 < math.degrees(off) < 150
-        captain.last_tool_errors, captain.pending_tool_errors = captain.pending_tool_errors, []
+        captain.last_tool_notes, captain.pending_tool_notes = captain.pending_tool_notes, []
         assert "ACCEPTED as a DIRECTION" in captain._format_tool_errors()
 
     def test_unit_vectors_and_unrelated_vectors_are_left_alone(self):
@@ -246,12 +259,12 @@ class TestPositionLikeDirectionGuard:
               throttle=1.0)
         _call(captain, sim, "set_heading", direction={"x": -97, "y": 4, "z": -12},
               throttle=1.0)
-        assert captain.pending_tool_errors == []
+        assert captain.pending_tool_errors == [] and captain.pending_tool_notes == []
 
     def test_no_orders_no_guard(self):
         sim, captain = _sim(), _captain()
         _call(captain, sim, "set_heading", direction={"x": 90, "y": 55, "z": 10}, throttle=1.0)
-        assert captain.pending_tool_errors == []
+        assert captain.pending_tool_errors == [] and captain.pending_tool_notes == []
 
     def test_coordinate_formats(self):
         text = ("approach X=260, Y=0, Z=0 then hold; rally (100 km, -20 km, 5 km); "
@@ -346,7 +359,12 @@ class TestMcpSetManeuver:
         assert m.target_id == "beta_1" and m.standoff_m == 50_000.0
         result = _mcp_apply(sim, maneuver_type="HOLD_RANGE", target_id="beta_2")
         m = sim.get_ship("alpha_1").current_maneuver
-        assert m.maneuver_type == ManeuverType.HOLD_RANGE and m.hold_range_m > 100_000.0
+        # No range_km: the engine latches the range at the first tick (and a
+        # renewal keeps it); the response says what it holds.
+        assert m.maneuver_type == ManeuverType.HOLD_RANGE and m.hold_range_m is None
+        assert "km now" in result["applied"][0]["notes"][0]
+        sim.step()
+        assert m.hold_range_m > 100_000.0
 
     def test_apply_plain_command_unchanged(self):
         sim = _sim()
@@ -409,8 +427,13 @@ class TestAdmiralOrders:
         spec = admiral_maneuver_spec({"maneuver": "intercept", "suggested_target": "Falchion-1",
                                       "standoff_km": "60", "arrival_closing_kps": -2,
                                       "evade": "sideways", "throttle": 0.7})
-        assert spec == {"maneuver_type": "INTERCEPT", "target": "Falchion-1",
+        # The gun target is only a hint for the maneuver target...
+        assert spec == {"maneuver_type": "INTERCEPT", "target_hint": "Falchion-1",
                         "standoff_km": 60.0, "throttle": 0.7}
+        # ...an explicit maneuver_target is binding.
+        spec = admiral_maneuver_spec({"maneuver": "HOLD_RANGE", "maneuver_target": "Falchion-2",
+                                      "suggested_target": "Falchion-1"})
+        assert spec["target"] == "Falchion-2" and "target_hint" not in spec
         spec = admiral_maneuver_spec({"toward_point": {"x": 1, "y": 2, "z": 3}, "evade": "dodge"})
         assert spec["maneuver_type"] == "HEADING" and spec["evade"] == "dodge"
         assert spec["toward_point"] == {"x": 1.0, "y": 2.0, "z": 3.0}
@@ -461,10 +484,13 @@ class TestAdmiralOrders:
         assert (m1.maneuver_type, m1.target_id, m1.standoff_m, m1.evade, m1.throttle) == (
             ManeuverType.INTERCEPT, "beta_2", 50_000.0, "dodge", 0.8)
         assert intercept.applied_throttle == 0.8
+        assert intercept.maneuver_applied == "INTERCEPT OCS Falchion-2, standoff 50 km, evade dodge"
+        assert intercept.maneuver_error is None
         m2 = sim.get_ship("alpha_2").current_maneuver
         assert m2.heading_point_km == {"x": 0.0, "y": 0.0, "z": 0.0}
-        # The captain is shown the bearing it was sent on.
-        assert point.heading == m2.heading_direction and point.heading["x"] < -0.99
+        # The captain is shown the destination, not a bearing it will not hold.
+        assert point.heading is None
+        assert "to point (0, 0, 0) km (flies there and stops)" in point.maneuver_applied
 
     def test_runner_formation_toward_point_is_one_heading(self):
         from src.llm.admiral import AdmiralOrder
@@ -563,5 +589,267 @@ def test_admiral_all_ships_standoff_intercept_end_to_end():
         assert (m.maneuver_type, m.target_id, m.standoff_m, m.evade, m.throttle) == (
             ManeuverType.INTERCEPT, "beta_1", 80_000.0, "dodge", 0.9)
     turns = [m[-1]["content"] for m in seen["captain"]]
-    assert turns and all("MANEUVER ORDER (ALREADY APPLIED" in t and "standoff 80 km" in t
-                         for t in turns)
+    applied = [t for t in turns if "MANEUVER ORDER (ALREADY APPLIED" in t]
+    assert len(applied) == len(runner.alpha_captains) == 2
+    assert all("INTERCEPT OCS M, standoff 80 km" in t for t in applied)
+    # The beta admiral sent the same order - maneuver_target "beta_1" is its
+    # own ship, which it cannot intercept: NOT applied, and its captain is
+    # told so (and must choose a maneuver) instead of "ALREADY APPLIED".
+    not_applied = [t for t in turns if "MANEUVER ORDER NOT APPLIED" in t]
+    assert len(not_applied) == 1 and "no live ship named 'beta_1'" in not_applied[0]
+    assert "2. set_maneuver (EVADE/INTERCEPT/etc)" in not_applied[0]
+
+
+# =============================================================================
+# Review fixes (pass-4 adversarial review of the maneuver workstream)
+# =============================================================================
+
+def _closing_duel():
+    """Destroyer alpha_1 at the origin, beta_1 400 km out closing at 3 km/s."""
+    sim = CombatSimulation(seed=1, time_step=1.0, decision_interval=30.0)
+    for sid, name, faction, pos, vel, fwd in (
+            ("alpha_1", "TIS Ward-1", "alpha", (0, 0, 0), (0, 0, 0), (1, 0, 0)),
+            ("beta_1", "OCS Falchion-1", "beta", (400, 0, 0), (-3, 0, 0), (-1, 0, 0))):
+        ship = create_ship_from_fleet_data(sid, "destroyer", faction, FLEET,
+                                           position=Vector3D(*(c * 1000.0 for c in pos)),
+                                           velocity=Vector3D(*(c * 1000.0 for c in vel)),
+                                           forward=Vector3D(*fwd))
+        ship.name = name
+        sim.add_ship(ship)
+    sim.get_ship("beta_1").current_maneuver = Maneuver(ManeuverType.MAINTAIN, start_time=0.0,
+                                                       duration=0.0)
+    return sim
+
+
+class TestHoldRangeRenewal:
+    """HOLD_RANGE without range_km, renewed at every checkpoint through the
+    TOOLS (the engine path was always fine): the range latched by the first
+    order is kept. Filling in "the range now" at every renewal used to bleed
+    400 km down to ~95 km against a 3 km/s closer."""
+
+    def _fly(self, issue, checkpoints=20):
+        sim = _closing_duel()
+        me, foe = sim.get_ship("alpha_1"), sim.get_ship("beta_1")
+        latched = []
+        for _ in range(checkpoints):
+            issue(sim)
+            sim.step()
+            latched.append(me.current_maneuver.hold_range_m)
+            for _ in range(29):
+                sim.step()
+        return latched, (foe.position - me.position).magnitude
+
+    def test_captain_renewal_keeps_the_first_range(self):
+        captain = LLMCaptain(LLMCaptainConfig(name="c", ship_name="TIS Ward-1",
+                                              ship_type="destroyer", fleet_data=FLEET),
+                             client=Mock())
+
+        def issue(sim):
+            m = captain._execute_tool(ToolCall(id="1", name="set_maneuver", arguments={
+                "maneuver_type": "HOLD_RANGE", "target_id": "Falchion-1"}), sim, "alpha_1")
+            assert sim.inject_command("alpha_1", m)
+        latched, final = self._fly(issue)
+        assert latched[0] == pytest.approx(400_000.0, abs=1_000.0)
+        assert all(r == latched[0] for r in latched)
+        assert final == pytest.approx(latched[0], abs=3_000.0)
+
+    def test_admiral_renewal_keeps_the_first_range(self):
+        from src.llm.admiral import AdmiralOrder
+        from src.llm.maneuver_orders import apply_admiral_spec
+
+        def issue(sim):
+            order = AdmiralOrder(target_ship_id="alpha_1", target_ship_name="TIS Ward-1",
+                                 order_text="Hold the range.", throttle=1.0,
+                                 maneuver={"maneuver_type": "HOLD_RANGE",
+                                           "target": "Falchion-1", "throttle": 1.0})
+            assert apply_admiral_spec(sim, sim.get_ship("alpha_1"), order, order.maneuver, 1.0)
+        latched, final = self._fly(issue)
+        assert all(r == latched[0] for r in latched)
+        assert final == pytest.approx(latched[0], abs=3_000.0)
+
+    def test_mcp_renewal_keeps_the_first_range(self):
+        def issue(sim):
+            result = _mcp_apply(sim, maneuver_type="HOLD_RANGE", target_id="beta_1")
+            assert result["errors"] == []
+        latched, final = self._fly(issue)
+        assert all(r == latched[0] for r in latched)
+        assert final == pytest.approx(latched[0], abs=3_000.0)
+
+
+class TestSetHeadingNeedsSomethingToFly:
+
+    @pytest.mark.parametrize("args", [
+        {"throttle": 1.0},
+        {"throttle": 1.0, "toward_point": None},
+        {"throttle": 1.0, "toward_ship": ""},
+        {"throttle": 1.0, "direction": {}},
+        {"throttle": 1.0, "direction": None},
+        {"throttle": 1.0, "direction": {"x": 0, "y": 0, "z": 0}},
+    ])
+    def test_rejected_instead_of_burning_along_plus_x(self, args):
+        sim, captain = _sim(), _captain()
+        assert captain._execute_tool(ToolCall(id="c", name="set_heading", arguments=args),
+                                     sim, "alpha_1") is None
+        assert "set_heading: needs direction" in captain.pending_tool_errors[-1]
+
+    def test_mcp_zero_heading_is_rejected(self):
+        text, cmd = _mcp_call(ship_id="alpha_1", maneuver_type="HEADING",
+                              heading_direction={"x": 0, "y": 0, "z": 0})
+        assert cmd is None and "HEADING needs heading_direction" in text
+
+    def test_decision_summary_reads_toward_orders(self):
+        captain = _captain()
+        captain.last_tool_calls = [
+            ToolCall(id="1", name="set_heading", arguments={
+                "toward_point": {"x": 90, "y": 55, "z": 10}, "direction": None,
+                "throttle": 1.0})]
+        assert "HEADING to point (90,55,10) km @ 100%" in captain.get_last_decision_summary()
+
+
+class TestArrivalSpeedNotes:
+
+    def test_arrival_over_the_stoppable_speed_is_noted(self):
+        sim, captain = _sim(), _captain()
+        m = _call(captain, sim, "set_maneuver", maneuver_type="INTERCEPT", target_id="beta_1",
+                  standoff_km=50, arrival_closing_kps=5)
+        assert m.arrival_closing_mps == 5_000.0     # the engine caps it per tick
+        assert "capped to ~" in captain.pending_tool_notes[-1]
+        captain.pending_tool_notes = []
+        _call(captain, sim, "set_maneuver", maneuver_type="INTERCEPT", target_id="beta_1",
+              standoff_km=50, arrival_closing_kps=0.3)
+        assert captain.pending_tool_notes == []
+
+    def test_arrival_without_standoff_is_explained(self):
+        sim, captain = _sim(), _captain()
+        _call(captain, sim, "set_maneuver", maneuver_type="INTERCEPT", target_id="beta_1",
+              arrival_closing_kps=1)
+        assert "arrives matched ON the target" in captain.pending_tool_notes[-1]
+
+
+class TestAdmiralOrderNotApplied:
+    """An admiral maneuver whose target does not resolve is not flown - and
+    must not be shown to the captain as ALREADY APPLIED (the heuristic
+    captain then KEPT a maneuver its ship was not flying)."""
+
+    def _order(self, sim, **args):
+        from src.llm.admiral import AdmiralOrder, _attach_heading
+        order = AdmiralOrder(target_ship_id="alpha_1", target_ship_name="TIS Dart-6",
+                             order_text="Close to 80 km and hold.",
+                             suggested_target=args.get("suggested_target"))
+        _attach_heading(order, {"ship_name": "TIS Dart-6", "maneuver": "INTERCEPT",
+                                "standoff_km": 80, **args}, None)
+        sim.inject_command("alpha_1", Maneuver(ManeuverType.BRAKE, start_time=0.0,
+                                               duration=30.0, throttle=1.0))
+        TestAdmiralOrders()._apply(sim, {"alpha_1": order})
+        return order
+
+    @pytest.mark.parametrize("name", ["Nonesuch", "Falchion", "the nearest destroyer"])
+    def test_unresolvable_maneuver_target_is_not_shown_as_applied(self, name):
+        from src.llm.prompts import format_admiral_orders_for_captain
+        sim = _sim()
+        order = self._order(sim, maneuver_target=name)
+        assert order.maneuver_error and name in order.maneuver_error
+        assert order.applied_throttle is None
+        assert sim.get_ship("alpha_1").current_maneuver.maneuver_type == ManeuverType.BRAKE
+        text = format_admiral_orders_for_captain([order], "")
+        assert "ALREADY APPLIED" not in text
+        assert "MANEUVER ORDER NOT APPLIED" in text and "choose your own" in text
+        assert "NO set_maneuver/set_heading" not in text
+
+    def test_heuristic_captain_flies_its_own_maneuver_then(self):
+        from src.llm.heuristic_captain import HEURISTIC_MODEL, HeuristicCaptain
+        sim = _sim()
+        order = self._order(sim, maneuver_target="Nonesuch")
+        captain = HeuristicCaptain(LLMCaptainConfig(
+            name="H", ship_name="TIS Dart-6", model=HEURISTIC_MODEL, ship_type="corvette",
+            fleet_data=FLEET))
+        captain.receive_admiral_orders([order])
+        captain.decide("alpha_1", sim)
+        names = [tc.name for tc in captain.last_tool_calls]
+        assert "set_maneuver" in names or "set_heading" in names
+
+    @pytest.mark.parametrize("hint,expected", [
+        ("Falchion-2", "beta_2"),                 # the gun target names a ship: used
+        ("the nearest destroyer", "beta_1"),      # prose: nearest enemy instead
+        ("Falchion", "beta_1"),                   # ambiguous: nearest enemy instead
+    ])
+    def test_gun_target_is_only_a_hint(self, hint, expected):
+        from src.llm.prompts import format_admiral_orders_for_captain
+        sim = _sim()
+        order = self._order(sim, suggested_target=hint)
+        m = sim.get_ship("alpha_1").current_maneuver
+        assert order.maneuver_error is None and order.applied_throttle == 1.0
+        assert (m.maneuver_type, m.target_id, m.standoff_m) == (
+            ManeuverType.INTERCEPT, expected, 80_000.0)
+        name = sim.get_ship(expected).name
+        assert order.maneuver_applied.startswith(f"INTERCEPT {name}, standoff 80 km")
+        assert f"ALREADY APPLIED to your ship): INTERCEPT {name}" in \
+            format_admiral_orders_for_captain([order], "")
+
+    def test_names_resolve_with_spaces_for_dashes(self):
+        sim = _sim()
+        order = self._order(sim, maneuver_target="Falchion 2")
+        assert order.maneuver_error is None
+        assert sim.get_ship("alpha_1").current_maneuver.target_id == "beta_2"
+
+
+class TestAdmiralPerShipEvade:
+
+    def test_per_ship_evade_flies_the_fleet_heading_with_the_overlay(self):
+        """issue_order(ship, evade=dodge) under an "all ships" heading: the
+        ship keeps the fleet heading, in the same throttle-matched formation,
+        with the overlay on top (it used to drop the evade)."""
+        from src.llm.admiral import AdmiralOrder, _attach_heading, _fleet_heading_order
+        sim = _sim()
+        fleet = _fleet_heading_order({"ship_name": "all ships", "order_text": "",
+                                      "heading": {"x": -1, "y": 0, "z": 0}, "throttle": 1.0})
+        dodger = AdmiralOrder(target_ship_id="alpha_1", target_ship_name="TIS Dart-6",
+                              order_text="Dodge their torpedoes.")
+        _attach_heading(dodger, {"ship_name": "TIS Dart-6", "evade": "dodge"}, fleet)
+        assert dodger.heading == fleet.heading and dodger.formation is True
+        assert dodger.maneuver["evade"] == "dodge"
+        other = AdmiralOrder(target_ship_id="alpha_2", target_ship_name="TIS Ward-1",
+                             order_text="Hold formation.")
+        _attach_heading(other, {"ship_name": "TIS Ward-1"}, fleet)
+        TestAdmiralOrders()._apply(sim, {"alpha_1": dodger, "alpha_2": other})
+        a, b = (sim.get_ship(s).current_maneuver for s in ("alpha_1", "alpha_2"))
+        assert a.heading_direction == b.heading_direction
+        assert a.burn_start_time == b.burn_start_time        # one formation
+        assert (a.evade, b.evade) == ("dodge", None)
+
+    def test_heuristic_keeps_an_applied_order_that_already_dodges(self):
+        from src.llm.admiral import AdmiralOrder
+        from src.llm.heuristic_captain import HEURISTIC_MODEL, HeuristicCaptain
+        from src.simulation import CombatSimulation as Sim
+
+        def run(evade):
+            sim = Sim(time_step=1.0, decision_interval=30.0, seed=42)
+            for sid, name, stype, faction, pos, fwd in (
+                    ("alpha_1", "TIS Ward-1", "destroyer", "alpha", (0, 0, 0), (1, 0, 0)),
+                    ("beta_1", "OCS Dart-1", "corvette", "beta", (150, 0, 0), (-1, 0, 0))):
+                ship = create_ship_from_fleet_data(
+                    sid, stype, faction, FLEET, position=Vector3D(*(c * 1000.0 for c in pos)),
+                    velocity=Vector3D(0, 0, 0), forward=Vector3D(*fwd))
+                ship.name = name
+                sim.add_ship(ship)
+            sim.inject_command("beta_1", Maneuver(ManeuverType.MAINTAIN, start_time=0.0))
+            assert sim.inject_command("beta_1", {"type": "launch_torpedo", "target_id": "alpha_1"})
+            for _ in range(20):
+                sim.step()
+            spec = {"maneuver_type": "INTERCEPT", "target": "OCS Dart-1", "standoff_km": 100.0,
+                    "throttle": 1.0}
+            if evade:
+                spec["evade"] = evade
+            order = AdmiralOrder(target_ship_id="alpha_1", target_ship_name="TIS Ward-1",
+                                 order_text="Close to 100 km.", throttle=1.0, maneuver=spec)
+            TestAdmiralOrders()._apply(sim, {"alpha_1": order})
+            captain = HeuristicCaptain(LLMCaptainConfig(
+                name="H", ship_name="TIS Ward-1", model=HEURISTIC_MODEL,
+                ship_type="destroyer", fleet_data=FLEET))
+            captain.receive_admiral_orders([order])
+            captain.decide("alpha_1", sim)
+            return [(tc.name, tc.arguments.get("maneuver_type"))
+                    for tc in captain.last_tool_calls if tc.name in ("set_maneuver", "set_heading")]
+
+        assert run(None) == [("set_maneuver", "EVADE")]     # threat seen: it dodges itself
+        assert run("dodge") == []                           # the order already dodges
