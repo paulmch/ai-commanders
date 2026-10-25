@@ -68,12 +68,14 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 import numpy as np
 
 try:
-    from .simulation import CombatSimulation, ManeuverType, ShipCombatState
+    from .simulation import (CombatSimulation, ManeuverType, ShipCombatState,
+                             EVASION_OVERLAY_MODES, maneuver_reacts_to_threats)
     from .physics import Vector3D, propagate_state
     from .replay_evidence import ExecutionEvidence
     from .torpedo import TorpedoGuidance, GuidanceMode, SAFE_ARMING_DISTANCE_M
 except ImportError:  # legacy imports with src/ on sys.path
-    from simulation import CombatSimulation, ManeuverType, ShipCombatState
+    from simulation import (CombatSimulation, ManeuverType, ShipCombatState,
+                            EVASION_OVERLAY_MODES, maneuver_reacts_to_threats)
     from physics import Vector3D, propagate_state
     from replay_evidence import ExecutionEvidence
     from torpedo import TorpedoGuidance, GuidanceMode, SAFE_ARMING_DISTANCE_M
@@ -195,8 +197,8 @@ def _ghost_ship(ship: ShipCombatState) -> _GhostShip:
     ghost.kinematic_state = ship.kinematic_state.copy()
     ghost.rotation_state = copy.copy(ship.rotation_state)
     ghost.current_maneuver = copy.copy(ship.current_maneuver)
-    if (ship.current_maneuver is not None
-            and ship.current_maneuver.maneuver_type == ManeuverType.EVASIVE):
+    # EVASIVE, or any maneuver with the evasion overlay (Maneuver.evade).
+    if maneuver_reacts_to_threats(ship.current_maneuver):
         ghost.armor = _ghost_armor(ship.armor)
     # Subsystems the shadow must not tick.
     ghost.thermal_system = None
@@ -262,8 +264,7 @@ class PredictionSimulation(CombatSimulation):
         # Threats only matter to ships whose maneuver reacts to them.
         evaders = {
             sid for sid, s in self.ships.items()
-            if s.current_maneuver is not None
-            and s.current_maneuver.maneuver_type == ManeuverType.EVASIVE
+            if maneuver_reacts_to_threats(s.current_maneuver)
             and not s.is_destroyed and not s.is_dying
         }
         self.projectiles = [
@@ -485,9 +486,10 @@ REACTIVE_SIGMA_K: Dict[str, float] = {
 
 
 def _evasion_mode(ship: Any) -> Optional[str]:
-    """The ship's evasion execution mode, or None when not EVASIVE."""
+    """The ship's evasion execution mode, or None when not evading (EVASIVE,
+    or the evasion overlay of another maneuver while it has the helm)."""
     maneuver = ship.current_maneuver
-    if maneuver is None or maneuver.maneuver_type != ManeuverType.EVASIVE:
+    if not maneuver_reacts_to_threats(maneuver):
         return None
     mode = getattr(ship, "execution_mode", None)
     return mode if mode in _EVASION_MODES else None
@@ -672,10 +674,12 @@ class TraceEnricher:
              vectoring while the torch burns, RCS with it cold; None when
              not torquing (and for dying hulks - attitude control is dead).
       evade  None | "wobble" | "evade" | "tank" | "brace" | "run" | "present"
-             - active mode of an EVASIVE maneuver.
-      tgt    ship id the maneuver steers relative to (INTERCEPT / PADLOCK
-             target, or an explicitly assigned one), else None. A wobbling
-             EVASIVE holds its own course and homes on nobody.
+             - active mode of an EVASIVE maneuver, or of another maneuver's
+             evasion overlay (Maneuver.evade) while it has the helm.
+      tgt    ship id the maneuver steers relative to (INTERCEPT / PADLOCK /
+             HOLD_RANGE target, HEADING toward_ship, or an explicitly
+             assigned one), else None. A wobbling EVASIVE holds its own
+             course and homes on nobody.
       plan   see predict_plans(); omitted for dying ships and when
              prediction is disabled. A frame taken AT a checkpoint is
              recorded before that checkpoint's orders exist: its plan
@@ -745,12 +749,18 @@ class TraceEnricher:
             evade = None
             tgt = None
             if maneuver is not None:
-                tgt = maneuver.target_id
+                # HEADING toward_ship steers on that ship's bearing.
+                tgt = maneuver.target_id or getattr(maneuver, "heading_target_id", None)
                 if maneuver.maneuver_type == ManeuverType.EVASIVE:
                     mode = getattr(ship, "execution_mode", None)
                     evade = mode.lower() if isinstance(mode, str) else None
                     # A wobbling EVASIVE holds its own course: it no longer
                     # homes on the nearest enemy, so it has no implicit tgt.
+                elif getattr(maneuver, "evade", None):
+                    # Evasion overlay: only while it has the helm.
+                    mode = getattr(ship, "execution_mode", None)
+                    if mode in EVASION_OVERLAY_MODES:
+                        evade = mode.lower()
 
             entry["acc"] = _vec(acc, 3)
             entry["omega"] = _vec(omega, 5)

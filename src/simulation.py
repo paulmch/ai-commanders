@@ -26,7 +26,7 @@ from typing import Optional, Callable, Any, Dict
 
 # Import from existing modules using try/except for compatibility
 try:
-    from .replay_evidence import ExecutionEvidence, impact_evidence
+    from .replay_evidence import ExecutionEvidence, impact_evidence, OMIT_IF_NONE
     from .battle_timing import MIN_DECISION_INTERVAL, MAX_DECISION_INTERVAL
     from .physics import Vector3D, ShipState as KinematicState, propagate_state, create_ship_state_from_specs, intercept_time
     from .thermal import (
@@ -68,8 +68,9 @@ try:
         HelmOrder, WeaponsOrder, TacticalOrder, WeaponsOfficer
     )
     from .power import PowerSystem, WeaponCapacitor, Battery, Reactor
+    from .maneuvers import max_arrival_speed_mps, required_decel_ms2
 except ImportError:
-    from replay_evidence import ExecutionEvidence, impact_evidence
+    from replay_evidence import ExecutionEvidence, impact_evidence, OMIT_IF_NONE
     from battle_timing import MIN_DECISION_INTERVAL, MAX_DECISION_INTERVAL
     from physics import Vector3D, ShipState as KinematicState, propagate_state, create_ship_state_from_specs, intercept_time
     from thermal import (
@@ -111,6 +112,7 @@ except ImportError:
         HelmOrder, WeaponsOrder, TacticalOrder, WeaponsOfficer
     )
     from power import PowerSystem, WeaponCapacitor, Battery, Reactor
+    from maneuvers import max_arrival_speed_mps, required_decel_ms2
 
 
 # =============================================================================
@@ -250,6 +252,49 @@ _WOBBLE_JINK_SALT = 0x77AB_B1E5
 # nose turns on RCS alone and the velocity does not change at all.
 HEADING_BURN_CONE_DEG = 10.0
 
+# HEADING toward a point (toward_point): inside this distance of the point the
+# bearing is meaningless (it swings round as the ship passes) - coast instead
+# of chasing it.
+HEADING_POINT_ARRIVAL_M = 2000.0
+
+# Range keeping: INTERCEPT with a standoff / arrival speed, and HOLD_RANGE.
+# Plain INTERCEPT never brakes - it builds closure until it passes through the
+# target. Range keeping flies latched phases instead (Maneuver._range_phase):
+#   CLOSE/OPEN  head for the wanted range (INTERCEPT guidance when closing),
+#   ARRIVE      flip and burn against the relative velocity once the flip plus
+#               the stopping distance at the current closing speed have used
+#               up the range still to go (src/maneuvers.py kinematics),
+#   HOLD        keep the range: null the relative velocity, nudge onto it.
+# The stop is planned on this share of the deceleration the ship can make, so
+# a nose still settling or engine damage mid-brake does not overshoot.
+RANGE_BRAKE_ACCEL_FRACTION = 0.8
+# ...plus this many seconds of travel at the current closing speed.
+RANGE_BRAKE_MARGIN_S = 3.0
+# HOLD takes over within this range error (from a standing start, or once
+# ARRIVE has killed the closure) and hands back past RANGE_HOLD_EXIT_M.
+RANGE_HOLD_ZONE_M = 2000.0
+RANGE_HOLD_EXIT_M = 8000.0
+# ARRIVE gives up and re-closes (a fleeing target) only when the speed toward
+# the wanted range drops below this share of the fastest still-stoppable one:
+# the gap keeps the ship from flipping back and forth.
+RANGE_RECLOSE_FRACTION = 0.5
+# ARRIVE is done once the speed toward the wanted range is down to the
+# arrival speed plus this.
+RANGE_ARRIVED_MPS = 10.0
+# HOLD: inside RANGE_HOLD_DEADZONE_M of the wanted range only the relative
+# velocity is cancelled; beyond it the ship drifts back toward the range at
+# |error| / RANGE_HOLD_TAU_S (capped by what it can still stop from). The
+# relative velocity error is closed with a RANGE_HOLD_VEL_TAU_S time constant,
+# and inside RANGE_HOLD_DEADBAND_MPS the ship coasts instead of chattering.
+RANGE_HOLD_DEADZONE_M = 1000.0
+RANGE_HOLD_TAU_S = 30.0
+RANGE_HOLD_VEL_TAU_S = 4.0
+RANGE_HOLD_DEADBAND_MPS = 5.0
+
+# Execution modes the evasion overlay (Maneuver.evade) reports while it has
+# the helm; anything else is the base maneuver flying.
+EVASION_OVERLAY_MODES = frozenset({'EVADE', 'TANK', 'BRACE', 'RUN', 'PRESENT'})
+
 # Two-stage ship death. A killing blow that does not destroy the reactor
 # leaves a combat-dead hulk whose containment is failing: it tumbles adrift,
 # torches sputtering, for a random 0..DYING_MAX_DURATION_S before the reactor
@@ -373,6 +418,19 @@ class ManeuverType(Enum):
     MAINTAIN = auto()       # Hold current course (coast, no thrust)
     HEADING = auto()        # Fly in a specific 3D direction
     PADLOCK = auto()        # Track target with nose, no thrust (coast while aiming)
+    HOLD_RANGE = auto()     # Keep a set range to a target (close/open to it, then hold)
+
+
+def maneuver_reacts_to_threats(maneuver: Optional['Maneuver']) -> bool:
+    """
+    True when the maneuver steers by incoming threats: EVASIVE always, any
+    other maneuver when it carries the evasion overlay (Maneuver.evade).
+    The prediction shadow uses this to decide which ships need the threats.
+    """
+    if maneuver is None:
+        return False
+    return (maneuver.maneuver_type == ManeuverType.EVASIVE
+            or bool(getattr(maneuver, 'evade', None)))
 
 
 @dataclass
@@ -388,6 +446,9 @@ class Maneuver:
         direction: Thrust or rotation direction.
         target_id: Target ship ID for intercept maneuvers.
         heading_direction: Direction dict for HEADING maneuvers {x, y, z}.
+
+    Every field after hold_velocity_t is optional and None by default; a
+    maneuver that sets none of them flies exactly as before they existed.
     """
     maneuver_type: ManeuverType
     start_time: float
@@ -405,6 +466,38 @@ class Maneuver:
     # last tick it was held on (see WOBBLE_JINK_CYCLE_S).
     hold_velocity: Optional[Vector3D] = None
     hold_velocity_t: float = -1.0
+    # HEADING toward a POINT (world frame, km) or toward a SHIP: the heading is
+    # re-aimed at the point's / ship's CURRENT bearing every tick (and written
+    # back to heading_direction for consumers). Coasts once within
+    # HEADING_POINT_ARRIVAL_M of the point, or if the ship is gone.
+    heading_point_km: Optional[Dict[str, float]] = field(default=None, metadata=OMIT_IF_NONE)
+    heading_target_id: Optional[str] = field(default=None, metadata=OMIT_IF_NONE)
+    # INTERCEPT arrival control: stop closing at this range (m) and hold it /
+    # cross it at no more than this closing speed (m/s). Either one switches
+    # INTERCEPT from "burn to the end" to range keeping (RANGE_* constants).
+    standoff_m: Optional[float] = field(default=None, metadata=OMIT_IF_NONE)
+    arrival_closing_mps: Optional[float] = field(default=None, metadata=OMIT_IF_NONE)
+    # HOLD_RANGE: the range (m) to keep to target_id; None = the range at the
+    # first tick (cancel closure where you are).
+    hold_range_m: Optional[float] = field(default=None, metadata=OMIT_IF_NONE)
+    # Evasion overlay for any non-EVASIVE maneuver: 'full' hands the helm to
+    # threat-aware evasion (RUN/PRESENT/jink) whenever a threat is actually
+    # inbound; 'dodge' does the same except it never RUNs from a guided
+    # torpedo (keeps closing, presents armor in the final seconds). With no
+    # threat the base maneuver flies.
+    evade: Optional[str] = field(default=None, metadata=OMIT_IF_NONE)
+    # Range-keeping runtime phase (CLOSE/OPEN/ARRIVE/HOLD); carried over when
+    # the same order is renewed (see _execute_command). Underscored: not part
+    # of the recorded command.
+    _range_phase: Optional[str] = field(default=None, repr=False)
+
+    @property
+    def range_keeping(self) -> bool:
+        """INTERCEPT with arrival control, or HOLD_RANGE."""
+        if self.maneuver_type == ManeuverType.HOLD_RANGE:
+            return True
+        return (self.maneuver_type == ManeuverType.INTERCEPT
+                and (self.standoff_m is not None or self.arrival_closing_mps is not None))
 
     def is_complete(self, current_time: float) -> bool:
         """Check if maneuver has completed."""
@@ -1544,6 +1637,23 @@ class CombatSimulation:
         self._log_event(SimulationEventType.WEAPON_STATUS, ship.ship_id, target_id,
                         {'weapon_slot': slot, 'reason': reason, **details})
 
+    @staticmethod
+    def _carry_range_keeping(command: Maneuver, previous: Maneuver) -> None:
+        """
+        A renewed range-keeping order on the same target keeps the phase it
+        was flying: re-deciding from scratch every checkpoint would turn a
+        ship that has just flipped to brake back toward the target. A renewed
+        HOLD_RANGE without a range keeps the range it latched instead of
+        re-latching wherever the ship has drifted to.
+        """
+        if not previous.range_keeping or previous.target_id != command.target_id:
+            return
+        if (command.maneuver_type == ManeuverType.HOLD_RANGE
+                and previous.maneuver_type == ManeuverType.HOLD_RANGE
+                and command.hold_range_m is None):
+            command.hold_range_m = previous.hold_range_m
+        command._range_phase = previous._range_phase
+
     def _execute_command(self, ship_id: str, command: Any) -> bool:
         """
         Inject a command for a ship to execute.
@@ -1578,12 +1688,21 @@ class CombatSimulation:
                 # a random walk off course.
                 command.hold_velocity = previous.hold_velocity
                 command.hold_velocity_t = previous.hold_velocity_t
+            if command.range_keeping and previous is not None:
+                self._carry_range_keeping(command, previous)
             ship.current_maneuver = command
-            self._log_event(SimulationEventType.MANEUVER_STARTED, ship_id, data={
+            data = {
                 'maneuver_type': command.maneuver_type.name,
                 'duration': command.duration, 'throttle': command.throttle,
                 'target_id': command.target_id, 'heading_direction': command.heading_direction
-            })
+            }
+            # Optional parameters only when given: plain orders log as before.
+            for key in ('heading_point_km', 'heading_target_id', 'standoff_m',
+                        'arrival_closing_mps', 'hold_range_m', 'evade'):
+                value = getattr(command, key)
+                if value is not None:
+                    data[key] = value
+            self._log_event(SimulationEventType.MANEUVER_STARTED, ship_id, data=data)
             return True
 
         if isinstance(command, dict):
@@ -2082,10 +2201,18 @@ class CombatSimulation:
             return Vector3D.zero()
 
         elif maneuver_type == ManeuverType.INTERCEPT:
+            if maneuver.range_keeping:
+                # Standoff INTERCEPT throttles and flips on its own: read
+                # the drive's actual output instead of the ordered throttle.
+                return self._thrust_accel(target)
             # Intercepting - accelerating toward some target
             # The actual direction depends on their target, but we can
             # approximate as accelerating in their forward direction
             return target.forward * max_accel_ms2 * throttle
+
+        elif maneuver_type == ManeuverType.HOLD_RANGE:
+            # Range keeping mostly coasts with small corrections.
+            return self._thrust_accel(target)
 
         elif maneuver_type == ManeuverType.EVASIVE:
             # Evading - direction changes frequently, hard to predict
@@ -2371,8 +2498,18 @@ class CombatSimulation:
             else:
                 throttle = maneuver.throttle
 
+                # Evasion overlay (Maneuver.evade): while a threat is actually
+                # inbound, threat-aware evasion flies the ship; otherwise the
+                # base maneuver below does.
+                overlay_throttle = None
+                if maneuver.evade and maneuver.maneuver_type != ManeuverType.EVASIVE:
+                    overlay_throttle = self._evasion_overlay(ship, maneuver, throttle, dt)
+
                 # Apply maneuver-specific logic
-                if maneuver.maneuver_type == ManeuverType.BURN and maneuver.direction:
+                if overlay_throttle is not None:
+                    throttle = overlay_throttle
+
+                elif maneuver.maneuver_type == ManeuverType.BURN and maneuver.direction:
                     # Rotate to burn direction (engines on if throttle > 0)
                     self._rotate_ship_toward(ship, maneuver.direction, dt, engines_on=(throttle > 0))
 
@@ -2417,11 +2554,26 @@ class CombatSimulation:
                 elif maneuver.maneuver_type == ManeuverType.INTERCEPT and maneuver.target_id:
                     target = self.get_ship(maneuver.target_id)
                     if target and not target.is_destroyed and not target.is_dying:
-                        intercept_dir = self._calculate_intercept_direction(ship, target)
-                        self._rotate_ship_toward(ship, intercept_dir, dt, engines_on=(throttle > 0))
+                        if maneuver.range_keeping and throttle > 0:
+                            # Standoff / arrival speed given: close, flip,
+                            # brake and hold instead of burning to the end.
+                            throttle = self._fly_range_keeping(ship, target, maneuver, throttle, dt)
+                        else:
+                            intercept_dir = self._calculate_intercept_direction(ship, target)
+                            self._rotate_ship_toward(ship, intercept_dir, dt, engines_on=(throttle > 0))
                     else:
                         # Target gone: coast (as PADLOCK does) instead of
                         # burning at the wreck until the next checkpoint.
+                        throttle = 0.0
+
+                elif maneuver.maneuver_type == ManeuverType.HOLD_RANGE:
+                    target = self.get_ship(maneuver.target_id) if maneuver.target_id else None
+                    if (target and not target.is_destroyed and not target.is_dying
+                            and throttle > 0):
+                        throttle = self._fly_range_keeping(ship, target, maneuver, throttle, dt)
+                    else:
+                        # No target (or no throttle): nothing to keep the
+                        # range to - coast.
                         throttle = 0.0
 
                 elif maneuver.maneuver_type == ManeuverType.BRAKE:
@@ -2449,9 +2601,16 @@ class CombatSimulation:
                     throttle = 0.0
 
                 elif maneuver.maneuver_type == ManeuverType.HEADING:
-                    # Fly in a specific 3D direction
-                    if maneuver.heading_direction:
-                        heading = maneuver.heading_direction
+                    # Fly in a specific 3D direction - or along the CURRENT
+                    # bearing of a point / ship (toward_point, toward_ship).
+                    heading = maneuver.heading_direction
+                    if (maneuver.heading_point_km is not None
+                            or maneuver.heading_target_id is not None):
+                        heading = self._live_heading(ship, maneuver)
+                        if heading is None:
+                            # At the point, or the ship is gone: coast.
+                            throttle = 0.0
+                    if heading:
                         direction = Vector3D(
                             heading.get('x', 0),
                             heading.get('y', 0),
@@ -3013,6 +3172,7 @@ class CombatSimulation:
         self,
         ship: ShipCombatState,
         dt: float,
+        allow_run: bool = True,
     ) -> tuple[Optional[Vector3D], str, float]:
         """
         Calculate threat-aware evasion maneuver.
@@ -3037,6 +3197,11 @@ class CombatSimulation:
         Priority: PRESENT (imminent unavoidable torpedo) > EVADE (a slug
         arriving sooner than the torpedo) > RUN (guided torpedo inbound) >
         EVADE/TANK/BRACE (ballistic only) > WOBBLE (no threats).
+
+        allow_run=False (the 'dodge' evasion overlay) skips RUN: a guided
+        torpedo that is not yet terminal is left to point defense and the
+        ship keeps flying its own maneuver (WOBBLE is returned when nothing
+        else applies).
 
         Returns:
             Tuple of (evasion_direction, mode, throttle_modifier)
@@ -3076,7 +3241,7 @@ class CombatSimulation:
                     return decision
 
         # ---- 3. Guided torpedoes inbound: run to buy PD time ----
-        if guided:
+        if guided and allow_run:
             run_dir = self._calculate_run_direction(ship, guided)
             return run_dir, 'RUN', 1.0
 
@@ -3666,6 +3831,211 @@ class CombatSimulation:
 
         # PHASE 4: On good intercept course - burn toward target
         return los
+
+    # -------------------------------------------------------------------------
+    # Maneuver extensions: live headings, range keeping, evasion overlay
+    # -------------------------------------------------------------------------
+
+    def _live_heading(self, ship: ShipCombatState, maneuver: Maneuver) -> Optional[Dict[str, float]]:
+        """
+        HEADING toward a point / ship: the unit vector along its CURRENT
+        bearing (written back to maneuver.heading_direction, so gun lead
+        estimates and status readers see what is flown), or None when there
+        is nothing to steer at - the ship is gone, or we are within
+        HEADING_POINT_ARRIVAL_M of it.
+        """
+        if maneuver.heading_target_id is not None:
+            target = self.get_ship(maneuver.heading_target_id)
+            if target is None or target.is_destroyed or target.is_dying:
+                return None
+            aim = target.position
+        else:
+            p = maneuver.heading_point_km or {}
+            try:
+                aim = Vector3D(float(p.get('x', 0.0)) * 1000.0, float(p.get('y', 0.0)) * 1000.0,
+                               float(p.get('z', 0.0)) * 1000.0)
+            except (TypeError, ValueError, AttributeError):
+                return None
+        to_aim = aim - ship.position
+        distance = to_aim.magnitude
+        if distance < HEADING_POINT_ARRIVAL_M:
+            return None
+        u = to_aim * (1.0 / distance)
+        heading = {'x': u.x, 'y': u.y, 'z': u.z}
+        maneuver.heading_direction = heading
+        return heading
+
+    def _evasion_overlay(self, ship: ShipCombatState, maneuver: Maneuver,
+                         throttle: float, dt: float) -> Optional[float]:
+        """
+        Maneuver.evade: let threat-aware evasion fly the ship while a threat
+        is actually inbound. Returns the throttle when evasion took the helm,
+        None when nothing threatens and the base maneuver should fly.
+        'dodge' never RUNs from a guided torpedo (see _calculate_evasion).
+        """
+        evade_dir, mode, throttle_mod = self._calculate_evasion(
+            ship, dt, allow_run=(maneuver.evade != 'dodge'))
+        if mode not in EVASION_OVERLAY_MODES:
+            return None
+        ship.execution_mode = mode
+        throttle = throttle * throttle_mod
+        if mode in ('EVADE', 'TANK', 'RUN', 'PRESENT') and evade_dir:
+            self._rotate_ship_toward(ship, evade_dir, dt, engines_on=(throttle > 0))
+        # BRACE: no thrust, just take the hit
+        return throttle
+
+    @staticmethod
+    def _thrust_accel(ship: ShipCombatState) -> Vector3D:
+        """Acceleration the ship's drive is producing right now (m/s^2)."""
+        ks = ship.kinematic_state
+        applied = getattr(ship, 'applied_throttle', 0.0) or 0.0
+        if ks.mass_kg <= 0 or applied <= 0:
+            return Vector3D(0.0, 0.0, 0.0)
+        return ks.forward * (ks.thrust_n * applied / ks.mass_kg)
+
+    def _turn_then_burn(self, ship: ShipCombatState, direction: Vector3D,
+                        throttle: float, dt: float) -> float:
+        """
+        HEADING's attitude rule for a burn along ``direction``: outside
+        HEADING_BURN_CONE_DEG turn on a token throttle (thrust vectoring),
+        inside it burn at ``throttle``. Returns the throttle to apply.
+        """
+        angle = ship.forward.angle_to(direction)
+        if angle > math.radians(HEADING_BURN_CONE_DEG):
+            self._rotate_ship_toward(ship, direction, dt, engines_on=True)
+            return throttle * MANEUVER_TURN_THROTTLE
+        self._rotate_ship_toward(ship, direction, dt, engines_on=True)
+        return throttle
+
+    def _fly_range_keeping(self, ship: ShipCombatState, target: ShipCombatState,
+                           maneuver: Maneuver, throttle: float, dt: float) -> float:
+        """
+        One tick of range keeping - INTERCEPT with standoff_m /
+        arrival_closing_mps, or HOLD_RANGE - against a live ``target``.
+        Steers the ship, latches the phase on the maneuver (see the RANGE_*
+        constants) and returns the throttle to apply.
+
+        One-dimensional along the line of sight: ``error`` is the range still
+        to go (positive = too far), ``toward`` the speed at which the ship
+        approaches the wanted range. The ship heads for the range (CLOSE with
+        the INTERCEPT guidance, OPEN straight out), flips to ARRIVE once the
+        flip plus the stopping distance at ``toward`` have used up the range
+        still to go, and HOLDs the range once there (cancel closure, then a
+        gentle drift back onto the range). Pure kinematics, no RNG.
+        """
+        to_target = target.position - ship.position
+        rng = to_target.magnitude
+        los = to_target * (1.0 / rng) if rng > 1.0 else ship.forward
+        rel_v = ship.velocity - target.velocity
+        closing = rel_v.dot(los)
+
+        if maneuver.maneuver_type == ManeuverType.HOLD_RANGE:
+            if maneuver.hold_range_m is None:
+                maneuver.hold_range_m = rng     # hold the range we are at
+            want = max(0.0, maneuver.hold_range_m)
+            end_speed = 0.0
+        else:
+            want = max(0.0, maneuver.standoff_m or 0.0)
+            end_speed = max(0.0, maneuver.arrival_closing_mps or 0.0)
+
+        error = rng - want
+        sign = 1.0 if error >= 0.0 else -1.0
+        dist = abs(error)
+        toward = closing * sign
+        # The arrival speed is a closing speed: it only applies coming in.
+        v_end = end_speed if sign > 0 else 0.0
+
+        a_full = (ship.kinematic_state.max_acceleration_ms2()
+                  * ship.get_effective_thrust_fraction())
+        accel = a_full * throttle
+        if accel <= 0.0:
+            return 0.0
+        # Deceleration we plan the stop on, less whatever the target's own
+        # burn adds to our approach speed.
+        target_acc = self._thrust_accel(target)
+        push = max(0.0, -sign * target_acc.dot(los))
+        decel = RANGE_BRAKE_ACCEL_FRACTION * accel - push
+
+        brake_dir = (rel_v * -1.0).normalized() if rel_v.magnitude > 1.0 else los * -sign
+        margin = max(0.0, toward) * (RANGE_BRAKE_MARGIN_S + dt)
+
+        def must_arrive(flip_s: float) -> bool:
+            if toward <= v_end:
+                return False
+            if decel <= 0.0:
+                return True     # he out-accelerates us: brake now, best effort
+            return toward >= max_arrival_speed_mps(dist - margin, decel, flip_s, v_end)
+
+        move = 'CLOSE' if sign > 0 else 'OPEN'
+        phase = maneuver._range_phase
+        if phase is None:
+            phase = 'HOLD' if dist <= RANGE_HOLD_ZONE_M else move
+        if phase in ('CLOSE', 'OPEN'):
+            phase = move    # passed the wanted range: head back for it
+            flip_s = self._estimate_turn_time(ship, ship.forward.angle_to(brake_dir),
+                                              engines_on=True)
+            if dist <= RANGE_HOLD_ZONE_M and toward <= v_end + RANGE_ARRIVED_MPS:
+                phase = 'HOLD'
+            elif must_arrive(flip_s):
+                phase = 'ARRIVE'
+        elif phase == 'ARRIVE':
+            if toward <= v_end + RANGE_ARRIVED_MPS:
+                phase = 'HOLD' if dist <= RANGE_HOLD_EXIT_M else move
+            elif dist > RANGE_HOLD_EXIT_M and decel > 0.0:
+                # Fleeing target: re-close only well below the stoppable
+                # speed (a full flip back costs time), never flip-flop.
+                flip_s = self._estimate_turn_time(ship, math.pi, engines_on=True)
+                limit = max_arrival_speed_mps(dist - margin, decel, flip_s, v_end)
+                if toward < RANGE_RECLOSE_FRACTION * limit:
+                    phase = move
+        elif phase == 'HOLD':
+            if dist > RANGE_HOLD_EXIT_M:
+                phase = move
+                flip_s = self._estimate_turn_time(ship, ship.forward.angle_to(brake_dir),
+                                                  engines_on=True)
+                if must_arrive(flip_s):
+                    phase = 'ARRIVE'
+        maneuver._range_phase = phase
+        ship.execution_mode = phase
+
+        if phase in ('CLOSE', 'OPEN'):
+            # Head for the range at up to the fastest speed a full flip and
+            # the planned deceleration can still stop, nulling any sideways
+            # drift: burning straight at him while drifting sideways turns
+            # into an orbit at the range where thrust equals v^2/r.
+            flip_s = self._estimate_turn_time(ship, math.pi, engines_on=True)
+            cap = (max_arrival_speed_mps(dist - margin, decel, flip_s, v_end)
+                   if decel > 0.0 else v_end)
+            dv = los * (sign * cap) - rel_v
+            mag = dv.magnitude
+            if mag < RANGE_HOLD_DEADBAND_MPS:
+                return 0.0
+            demand = mag / (a_full * RANGE_HOLD_VEL_TAU_S)
+            return self._turn_then_burn(ship, dv * (1.0 / mag), min(throttle, demand), dt)
+
+        if phase == 'ARRIVE':
+            # Constant-deceleration guidance: the deceleration that lands
+            # exactly on the wanted range at the arrival speed; thrust against
+            # the relative velocity also kills the lateral drift.
+            need = required_decel_ms2(toward, dist, v_end)
+            axis_share = max(0.1, toward / max(rel_v.magnitude, 1.0))
+            demand = need / (axis_share * a_full) if a_full > 0 else 1.0
+            return self._turn_then_burn(ship, brake_dir, min(throttle, demand), dt)
+
+        # HOLD: null the relative velocity (matching his burn), and drift
+        # back onto the range when off it by more than the dead zone.
+        off = max(0.0, dist - RANGE_HOLD_DEADZONE_M)
+        speed = min(off / RANGE_HOLD_TAU_S,
+                    max_arrival_speed_mps(off, max(decel, 0.0)) if decel > 0.0 else 0.0)
+        wanted_rel_v = los * (sign * speed)
+        dv = wanted_rel_v - rel_v
+        if dv.magnitude < RANGE_HOLD_DEADBAND_MPS and target_acc.magnitude < 0.01 * a_full:
+            return 0.0
+        command = dv * (1.0 / RANGE_HOLD_VEL_TAU_S) + target_acc
+        mag = command.magnitude
+        if mag <= 1e-9:
+            return 0.0
+        return self._turn_then_burn(ship, command * (1.0 / mag), min(throttle, mag / a_full), dt)
 
     # -------------------------------------------------------------------------
     # Projectile Update
