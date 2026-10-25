@@ -140,3 +140,28 @@ def test_model_beats_the_old_number_on_likelihood(shots):
         return -sum(math.log(min(0.999, max(1e-4, r[key]))) if r["hit"]
                     else math.log(1 - min(0.999, max(1e-4, r[key]))) for r in shots)
     assert nll("new") < 0.85 * nll("old")
+
+
+@pytest.mark.parametrize("seed, range_km", [(21, 120), (26, 300)])
+def test_live_engine_delivers_the_forecast(seed, range_km):
+    """The fixture is a snapshot; this re-runs the engine. A battleship fires
+    FIRE_IMMEDIATE at a dodging hull (PADLOCK + evade 'dodge') for 150 s
+    (scripts/fire_control_calibration.py harness, seeded): the hits must be
+    what the recorded per-round P(hit) forecast, within Poisson-binomial
+    noise - and far from what the conversion number alone promised at range.
+    If evasion, the gate or the dispersion roll changes, this moves."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("fcc", "scripts/fire_control_calibration.py")
+    fcc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fcc)
+    hull = "destroyer" if range_km < 200 else "battleship"
+    rounds = fcc.harness_run(seed, "padlock_dodge", hull, range_km, fcc.load_fleet())
+    assert len(rounds) >= 40
+    hits = sum(r["outcome"] == "hit" for r in rounds)
+    expected = sum(r["p_shown"] for r in rounds)
+    sd = math.sqrt(sum(r["p_shown"] * (1 - r["p_shown"]) for r in rounds))
+    assert abs(hits - expected) <= 3 * sd + 2, (hits, expected, sd)
+    if range_km >= 200:
+        old = sum(r["p_conv"] for r in rounds)
+        old_sd = math.sqrt(sum(r["p_conv"] * (1 - r["p_conv"]) for r in rounds))
+        assert old - hits > 3 * old_sd + 2, (hits, old, old_sd)
