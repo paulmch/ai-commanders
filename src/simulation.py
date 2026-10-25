@@ -221,6 +221,17 @@ PRESENT_THROTTLE_MOD = 0.05
 # wasted delta-v because the shooter/geometry will have changed.
 BALLISTIC_THREAT_HORIZON_S = 60.0
 
+# Commander threat display (status only, never steers the ship): a
+# seeker-killed torpedo counts as a threat to a ship only when its straight-
+# line closest approach passes within WRECK_THREAT_MISS_KM of it inside the
+# next WRECK_THREAT_HORIZON_S. Counting every blinded round in the battle
+# (including the ship's OWN side's, drifting away 300 km off) told captains
+# "Incoming threats: 6" next to "INBOUND ORDNANCE: none" and sent them into
+# EVADE against nothing. The horizon spans the next decision plus one, so a
+# wreck that will arrive before the captain decides again is always listed.
+WRECK_THREAT_MISS_KM = 5.0
+WRECK_THREAT_HORIZON_S = 120.0
+
 # EVADE with no actionable threat (execution mode WOBBLE) jinks around the
 # ship's CURRENT course instead of chasing anyone: the velocity it had when
 # it fell into WOBBLE is latched and held, and every WOBBLE_JINK_CYCLE_S a
@@ -3735,24 +3746,74 @@ class CombatSimulation:
 
         return best_direction
 
+    def blinded_wreck_threats(
+        self,
+        ship: ShipCombatState,
+        horizon_s: float = WRECK_THREAT_HORIZON_S,
+        miss_km: float = WRECK_THREAT_MISS_KM,
+    ) -> list[dict]:
+        """
+        Seeker-killed torpedoes on a collision course with ``ship``.
+
+        A blinded round is ballistic, so its straight-line closest approach
+        is exact while the ship coasts. Listed whoever launched it - a dead
+        seeker does not discriminate - but only when it actually passes
+        within ``miss_km`` inside ``horizon_s``. Read-only (display/status).
+        """
+        out = []
+        for torp_flight in self.torpedoes:
+            if not torp_flight.is_disabled:
+                continue
+            torp = torp_flight.torpedo
+            rel_pos = torp.position - ship.position
+            rel_vel = torp.velocity - ship.velocity
+            vv = rel_vel.dot(rel_vel)
+            if vv < 1e-6:
+                continue
+            tca = -rel_pos.dot(rel_vel) / vv
+            if tca < 0 or tca > horizon_s:
+                continue
+            miss_m = (rel_pos + rel_vel * tca).magnitude
+            if miss_m > miss_km * 1000.0:
+                continue
+            distance_m = rel_pos.magnitude
+            closing_ms = -rel_pos.dot(rel_vel) / distance_m if distance_m > 0 else 0.0
+            out.append({
+                'torp_flight': torp_flight,
+                'tca_s': tca,
+                'miss_m': miss_m,
+                'distance_m': distance_m,
+                'closing_ms': closing_ms,
+                'ke_gj': 0.5 * torp.specs.penetrator_mass_kg * vv / 1e9,
+            })
+        out.sort(key=lambda t: t['tca_s'])
+        return out
+
     def _get_evasion_status(self, ship: ShipCombatState) -> dict:
         """Get current evasion status for tactical display."""
         evade_dir, mode, throttle = self._calculate_evasion(ship, 0.0)
 
-        # Count incoming threats: projectiles aimed at us, guided torpedoes
-        # homing on us, and any seeker-killed torpedo coasting nearby.
-        threat_count = sum(
+        # Threats on a collision course with THIS ship: projectiles aimed at
+        # it, guided torpedoes homing on it, and seeker-killed wrecks whose
+        # closest approach actually passes close (whoever launched them).
+        # Counting every blinded round in the battle reported the ship's own
+        # side's distant wrecks as incoming fire.
+        gun_rounds = sum(
             1 for p in self.projectiles
             if p.target_ship_id == ship.ship_id
         )
-        threat_count += sum(
+        guided = sum(
             1 for t in self.torpedoes
-            if t.is_disabled or t.torpedo.target_id == ship.ship_id
+            if not t.is_disabled and t.torpedo.target_id == ship.ship_id
         )
+        wrecks = len(self.blinded_wreck_threats(ship))
 
         return {
             'mode': mode,
-            'threat_count': threat_count,
+            'threat_count': gun_rounds + guided + wrecks,
+            'gun_rounds': gun_rounds,
+            'guided_torpedoes': guided,
+            'blinded_wrecks': wrecks,
             'evade_direction': evade_dir.to_tuple() if evade_dir else None,
         }
 

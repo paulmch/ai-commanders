@@ -480,7 +480,18 @@ class CaptainClient:
         self.stats.record_error(msg)
         raise LLMCallError(msg, status_code=last_status, retryable=True)
 
+    def last_finish_reason(self) -> Optional[str]:
+        """
+        finish_reason of this thread's most recent decide_with_tools reply.
+
+        Lets a caller tell "the model chose to call nothing" from "the reply
+        was cut off / errored before any tool call" (finish_reason 'length' /
+        'error'), which decide_with_tools' plain list cannot express.
+        """
+        return getattr(self._audit_local, "last_finish_reason", None)
+
     def _parse_tool_calls(self, message: Dict[str, Any], finish_reason: Optional[str]) -> List[ToolCall]:
+        self._audit_local.last_finish_reason = finish_reason
         tool_calls: List[ToolCall] = []
         for tc in message.get("tool_calls") or []:
             raw_args = tc.get("function", {}).get("arguments", "")

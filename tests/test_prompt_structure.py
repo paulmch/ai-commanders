@@ -73,8 +73,8 @@ class TestPromptCacheability:
         kw = _kwargs(120.0, 80.0, 40.0, 120.0)
         combined = "\n\n".join(m["content"] for m in build_captain_messages(**kw))
 
-        for required in ("CURRENT STATUS", "=== CONTROLS ===", "TACTICAL DATA",
-                         "WEAPON STATUS", "Hull:"):
+        for required in ("MY SHIP", "=== CONTROLS ===", "TACTICAL DATA",
+                         "weapons:", "hull ", "THREATS TO ME", "ENEMIES", "FRIENDLIES"):
             assert required in combined, f"{required!r} vanished from the prompt"
 
     def test_live_armor_values_reach_the_captain(self):

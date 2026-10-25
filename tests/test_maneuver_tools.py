@@ -514,7 +514,7 @@ class TestAdmiralOrders:
                                                      "target": "Falchion-1", "range_km": 200.0})
         text = format_admiral_orders_for_captain([order], "")
         assert "MANEUVER ORDER (ALREADY APPLIED" in text and "hold 200 km" in text
-        assert "NO set_maneuver/set_heading" in text
+        assert "Your MANEUVER ORDER is already flying: no maneuver call needed" in text
 
     def test_heuristic_captain_keeps_an_applied_maneuver_order(self):
         from src.llm.admiral import AdmiralOrder
@@ -597,7 +597,8 @@ def test_admiral_all_ships_standoff_intercept_end_to_end():
     # told so (and must choose a maneuver) instead of "ALREADY APPLIED".
     not_applied = [t for t in turns if "MANEUVER ORDER NOT APPLIED" in t]
     assert len(not_applied) == 1 and "no live ship named 'beta_1'" in not_applied[0]
-    assert "2. set_maneuver (EVADE/INTERCEPT/etc)" in not_applied[0]
+    assert "choose your own (set_maneuver/set_heading)" in not_applied[0]
+    assert "is already flying" not in not_applied[0]
 
 
 # =============================================================================

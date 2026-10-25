@@ -1,0 +1,27 @@
+=== TACTICAL DATA (T+180s) ===
+You are Captain Vance, commanding OCS Falchion-1. Decision 7: your orders lock for 30 s; next decision T+210.
+
+MY SHIP: OCS Falchion-1 [beta_5] - Destroyer, 2.0g, 90° turn ~20 s
+  position (-25.0,+9.0,+3.0) km | velocity (+2.90,-0.50,+0.10) km/s = 2.95 km/s | nose (-0.96,-0.27,+0.01)
+  hull 100% | armor nose 212 / lateral 36 / tail 42 cm | delta-v 500/500 km/s
+  heat 7% (22/320 GJ), net +48 MW
+  radiators RETRACTED (protected, no cooling) [manual] 780/780 MW
+  weapons: Spinal Coiler Mk3 FIRE_WHEN_OPTIMAL (1 ready) | Coilgun Battery Mk3 FIRE_WHEN_OPTIMAL (1 reloading 8 s) | PD 2/2 turrets (automatic)
+  flying: nothing - COASTING at 2.95 km/s
+  primary target: none (guns and INTERCEPT use the nearest enemy)
+  record: 3 shots, 1 hit, dealt 21.6 GJ, took 0.0 GJ
+
+THREATS TO ME (on a collision course: 0 gun rounds, 0 guided torpedoes, 0 blinded wrecks):
+  GUNS ON YOU: TIS Anvil-1 [alpha_9] 240 km, P(hit you) 21% x 4 shots/30s
+
+ENEMIES (1; dir_to = world unit vector from you to him - paste it into set_heading):
+  [PRIMARY] TIS Dart-3 [alpha_3] Corvette | 110 km, closing 4.68 km/s | dir_to (+0.99,-0.12,-0.02), 3° off your nose (ahead-port-above) | hull 100%, armor intact | 1x Torpedo tube (7 rounds left), PD 1/1 | !! HAS YOU TARGETED
+    guns: Spinal Coiler Mk3 P(hit) 12%, 3 shots/30s = 0.36 hits, ~0.52 GJ/shot | Coilgun Battery Mk3 x2 P(hit) 5%, 6 shots/30s = 0.30 hits, ~0.04 GJ/shot
+  (guns: P(hit) is the fire-control gate per shot now; shots counted for the next 30 s incl. salvo cooldown, if aim and evasion persist)
+
+FRIENDLIES: none
+
+YOUR RECENT DECISIONS (newest last; launches with what they did):
+  T+150 EVADE@80% | torp x1 -> OCS Falchion-1 [beta_5]: 1 in flight | tgt OCS Falchion-1 [beta_5]
+
+DECISION POINT 7. What are your orders, Captain? Issue them as tool calls (set_maneuver/set_heading, set_weapons_order, set_primary_target); words alone do nothing.

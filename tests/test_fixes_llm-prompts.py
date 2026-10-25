@@ -233,12 +233,16 @@ class TestEnemyClassAndCapabilitiesReachTheCaptain:
             "hull_percent": 80.0, "armor": {}, "hit_chance": 39.0,
             "is_primary_target": True,
         }]
-        user_turn = build_captain_messages(**kwargs)[1]["content"]
+        system, user_turn = (m["content"] for m in build_captain_messages(**kwargs))
 
+        # Live state per enemy in the turn: class and full armament...
+        line = next(l for l in user_turn.splitlines() if "OCS G [beta_1]" in l)
+        assert "Dreadnought" in line
+        assert "1x Spinal" in line and "5x Heavy Coilgun" in line
+        # ...static class performance in the cached CLASS REFERENCE.
         spec = fleet["ships"]["dreadnought"]["performance"]
-        assert "Capabilities:" in user_turn
-        assert f"{spec['combat_acceleration_g']}g accel" in user_turn
-        assert "Armament:" in user_turn
+        ref = next(l for l in system.splitlines() if l.strip().startswith("Dreadnought "))
+        assert f"{spec['combat_acceleration_g']}g" in ref
 
 
 def _admiral_snapshot():

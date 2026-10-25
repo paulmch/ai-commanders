@@ -5,10 +5,11 @@ Makes strategic decisions via tool/function calling.
 """
 
 import json
+import re
 from src.replay_evidence import tool_evidence
 import math
-from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
+from dataclasses import dataclass, field, fields, replace
+from typing import List, Dict, Any, Optional, Tuple
 
 from .client import DEFAULT_MODEL, CaptainClient, LLMCallError, ToolCall
 from .tools import get_captain_tools, get_captain_tools_for_ship, get_weapon_groups_for_ship, PERSONALITY_SELECTION_TOOLS, RESPOND_TO_ORDERS_TOOL, radiator_command_from_args
@@ -17,6 +18,9 @@ from .prompts import (
     build_captain_messages,
     build_personality_selection_prompt,
     format_admiral_orders_for_captain,
+    ship_has_guns,
+    ship_ref,
+    pd_doctrine_numbers,
     CaptainPersonality,
     PERSONALITY_PRESETS,
 )
@@ -26,6 +30,104 @@ from .communication import (
 )
 from .tools import FLEET_SIGNAL_TOOL, REPORT_TO_ADMIRAL_TOOL
 from .admiral_tools import DISCUSS_WITH_ADMIRAL_TOOL
+
+
+# Tools that make the ship DO something (move, fire, aim). A decision that
+# produces none of their commands leaves the ship coasting with its guns on
+# whatever policy they had - measured across three prompt-carrying battles,
+# 31% of captain decisions were exactly that (an acknowledgment and nothing
+# else), and two whole sides never moved or fired.
+ACTION_TOOLS = frozenset({"set_maneuver", "set_heading", "launch_torpedo",
+                          "set_weapons_order", "set_primary_target"})
+# Follow-up rounds per checkpoint when a reply issued no action (all decide()
+# calls of one checkpoint - discussion re-decides included - share it).
+MAX_FOLLOWUP_ROUNDS = 2
+# finish_reason values that mean the reply was cut off or broke, not that the
+# model chose to say nothing (CP-09: 'length' at max_tokens spent entirely on
+# reasoning, 'error' mid-generation - both used to be recorded as "none").
+FAILED_FINISH_REASONS = frozenset({"error", "length"})
+# Torpedo fire solutions per decision: the nearest contacts get a flown
+# solution (each ~5-50 ms of shadow engine), the rest are out of reach anyway.
+MAX_TORPEDO_SOLUTIONS = 6
+MAX_THREAT_HULL_SOLUTIONS = 4
+# Distances quoted in an order that disagree with this ship's sensors by more
+# than this (and by NUMBER_CHECK_MIN_KM) get a NUMBER CHECK line.
+NUMBER_CHECK_REL = 0.3
+NUMBER_CHECK_MIN_KM = 30.0
+_TRIPLE_RE = re.compile(
+    r"\(\s*([+-]?\d+(?:\.\d+)?)\s*,\s*([+-]?\d+(?:\.\d+)?)\s*,\s*([+-]?\d+(?:\.\d+)?)\s*\)")
+_XYZ_RE = re.compile(
+    r"X\s*=\s*([+-]?\d+(?:\.\d+)?)\s*,?\s*Y\s*=\s*([+-]?\d+(?:\.\d+)?)\s*,?\s*Z\s*=\s*([+-]?\d+(?:\.\d+)?)",
+    re.IGNORECASE)
+# A distance, not a speed: "86 km" but never the "3" of "3 km/s".
+_KM_RE = re.compile(r"(\d+(?:\.\d+)?)\s*km\b(?!\s*/\s*s)", re.IGNORECASE)
+_THROTTLE_RE = re.compile(r"(\d{1,3})\s*%")
+_INTERCEPT_RE = re.compile(r"\bINTERCEPT\b", re.IGNORECASE)
+# Order prose is not a parser: these keep the text heuristics from printing
+# an engine "check" of something the order does not say (a CHECK showing an
+# order failing is a reason to DEVIATE, so a false one does real harm).
+_NEGATION_RE = re.compile(r"\b(?:not|no|never|avoid|don'?t|cancel|stop|without)\b",
+                          re.IGNORECASE)
+_SPEED_AFTER_RE = re.compile(r"\s*(?:k?m\s*/\s*s|kps)\b", re.IGNORECASE)
+_VELOCITY_BEFORE_RE = re.compile(r"\b(?:vel(?:ocity)?|moving|speed|drift(?:ing)?)\b[^()]{0,16}$",
+                                 re.IGNORECASE)
+_NOT_THROTTLE_RE = re.compile(r"\b(?:hull|armou?r|heat|fuel|integrity|health|delta|dv|PD)\b",
+                              re.IGNORECASE)
+
+
+def _ordered_intercept(text: str) -> Optional[float]:
+    """
+    Throttle (0-1) of an INTERCEPT the order text actually orders, or None.
+
+    Skips a negated mention ("do NOT intercept"), and reads the throttle only
+    from a percentage next to the word - in the same clause right after it
+    ("INTERCEPT Lancer-1 at 80%", "INTERCEPT@80%") or just before it ("80%
+    INTERCEPT") - never from an unrelated "hull is at 40%". 1.0 when unstated.
+    """
+    for m in _INTERCEPT_RE.finditer(text):
+        clause = re.split(r"[.;:!?,\n]", text[max(0, m.start() - 40):m.start()])[-1]
+        if _NEGATION_RE.search(" ".join(clause.split()[-3:])):
+            continue
+        after = re.split(r"[.;!?\n]", text[m.end():m.end() + 40], maxsplit=1)[0]
+        pct = _THROTTLE_RE.search(after)
+        if pct is not None and _NOT_THROTTLE_RE.search(after[:pct.start()][-14:]):
+            pct = None
+        if pct is None:
+            pct = re.search(r"(\d{1,3})\s*%\s*(?:throttle\s*|thrust\s*)?$",
+                            text[max(0, m.start() - 18):m.start()], re.IGNORECASE)
+        return min(100, int(pct.group(1))) / 100.0 if pct else 1.0
+    return None
+
+
+def _quoted_triples(text: str) -> List[Tuple[float, float, float]]:
+    """
+    Coordinate triples quoted in order text ("(90,55,10)", "X=90, Y=55,
+    Z=10"), minus velocities: a triple followed by km/s / m/s, or introduced
+    by "velocity" / "moving at", is a speed, not a position.
+    """
+    out = []
+    for m in list(_TRIPLE_RE.finditer(text)) + list(_XYZ_RE.finditer(text)):
+        if _SPEED_AFTER_RE.match(text, m.end()):
+            continue
+        if _VELOCITY_BEFORE_RE.search(text[max(0, m.start() - 30):m.start()]):
+            continue
+        out.append((float(m.group(1)), float(m.group(2)), float(m.group(3))))
+    return out
+
+
+def _has_launchers(ship: Any) -> bool:
+    """True when the ship mounts torpedo launchers (tolerates test doubles)."""
+    launchers = getattr(ship, "ready_torpedo_launchers", None)
+    if isinstance(launchers, (list, tuple)):
+        return bool(launchers)
+    single = getattr(ship, "torpedo_launcher", None)
+    return single is not None and hasattr(single, "current_magazine")
+
+
+def _bare_name(name: str) -> str:
+    """'OCS Lancer-4' -> 'Lancer-4' (admiral prose drops the fleet prefix)."""
+    parts = str(name).split(" ", 1)
+    return parts[1] if len(parts) == 2 and parts[0].isupper() and len(parts[0]) <= 4 else str(name)
 
 
 @dataclass
@@ -131,6 +233,23 @@ class LLMCaptain:
         # is ESCAPABLE or OVERKILL): the tool's answer, replayed next turn.
         self.pending_tool_notes: List[str] = []
         self.last_tool_notes: List[str] = []
+
+        # Failed / truncated model calls (CP-09). lost_turn is the notice for
+        # the NEXT prompt; last_failure_reason is for the battle record.
+        self.lost_turn: Optional[Dict[str, Any]] = None
+        self.last_failure_reason: Optional[str] = None
+        # Follow-up rounds already spent per checkpoint time (R1).
+        self._followups_used: Dict[float, int] = {}
+        self.last_followup_rounds = 0
+        # Shadow-engine fire solutions, memoised per decision.
+        self._solution_cache: Dict[Any, Any] = {}
+        # Standing orders as last seen (directive text/time, orders/time), so
+        # a checkpoint without new orders shows the old ones WITH their age.
+        self._last_directive_seen: Optional[Tuple[str, float]] = None
+        self._last_orders_seen: Optional[Tuple[List[Any], float]] = None
+        # Tool names offered so far (sticky: keeps the cached doctrine stable).
+        self._known_tool_names: set = set()
+        self._recorded_msg_ids: set = set()
 
         # Captain's log: self-authored notes (log_note tool) echoed back into
         # every subsequent turn. The rest of the prompt is telemetry the harness
@@ -276,6 +395,9 @@ class LLMCaptain:
         """
         self.admiral_orders = orders
         self.fleet_directive = fleet_directive
+        # Orders reached this ship this checkpoint (an empty directive then
+        # means "no NEW directive", not "nothing was delivered").
+        self.orders_delivered = True
         # Reset discussion counter for new checkpoint
         self.discussion_exchanges = 0
 
@@ -309,6 +431,7 @@ class LLMCaptain:
         """Clear Admiral context at end of checkpoint."""
         self.admiral_orders = []
         self.fleet_directive = ""
+        self.orders_delivered = False
         self.discussion_exchanges = 0
         self.order_response = None
         self.discussions = []
@@ -321,6 +444,14 @@ class LLMCaptain:
         """
         Make strategic decisions using LLM tool calls.
 
+        One request per checkpoint normally. Two harness rules on top:
+        - a reply that issues NO action (only a report, a note, prose) gets a
+          follow-up request in the same checkpoint saying so, up to
+          MAX_FOLLOWUP_ROUNDS (R1: ack-only turns left ships drifting);
+        - a call that fails or is cut off before any tool call is retried
+          once, and if it still fails the previous maneuver is renewed and the
+          next prompt says the orders were lost (CP-09).
+
         Args:
             ship_id: ID of this captain's ship
             simulation: CombatSimulation instance
@@ -330,6 +461,8 @@ class LLMCaptain:
         """
         self.last_tool_calls = []
         self.last_requested_tool_calls = []
+        self.last_followup_rounds = 0
+        self.last_failure_reason = None
         if self.has_surrendered:
             return []
 
@@ -337,6 +470,10 @@ class LLMCaptain:
         ship = simulation.get_ship(ship_id)
         if not ship or ship.is_destroyed:
             return []
+        self.ship_id = ship_id
+        now = float(getattr(simulation, "current_time", 0.0))
+        interval = float(getattr(simulation, "decision_interval", 30.0) or 30.0)
+        self._decision_interval_s = interval
 
         # Set up weapon groups if not done yet
         if not self.weapon_groups and self.config.fleet_data and self.config.ship_type:
@@ -347,22 +484,17 @@ class LLMCaptain:
         enemy = enemies[0] if enemies else None
 
         # Build status dicts
+        self._solution_cache = {}
         ship_status = self._build_ship_status(ship)
+        self._add_launch_status(ship_status, ship, simulation)
         tactical_status = self._build_tactical_status(ship, enemy, simulation)
 
         # Update battle tracking
         distance_km = tactical_status.get("distance_km", 1000)
         self._update_battle_tracking(distance_km)
 
-        # Record received messages to history and format for prompt
-        messages_text = ""
-        if self.received_messages:
-            for msg in self.received_messages:
-                self._record_received_message(msg.content, msg.timestamp)
-            messages_text = "\n".join(
-                msg.format_for_llm() for msg in self.received_messages
-            )
-            self.received_messages.clear()
+        # FLEET NET / ENEMY TRANSMISSIONS for this checkpoint (inbox + legacy).
+        comms = self._collect_comms(simulation, ship)
 
         # Roll last turn's rejected tool calls into this turn's feedback, then
         # start a fresh error bucket for the calls we are about to execute.
@@ -371,14 +503,24 @@ class LLMCaptain:
         self.last_tool_notes = self.pending_tool_notes
         self.pending_tool_notes = []
 
-        # Build history context
-        decision_history = self._format_decision_history(last_n=5)
-        message_history = self._format_message_history(last_n=6)
-        battle_summary = self._format_battle_summary(distance_km)
-        shot_history = self._format_shot_history(last_n=10)
+        # Get context-appropriate tools (may exclude draw tools if Admiral exists)
+        tools = self.get_tools_for_context()
+        tool_names = self._tool_names(tools)
 
-        # Build prompt
-        recent_hits_text = self._format_recent_hits()
+        # Range control: closest approach, stopping distance, merge warning and
+        # ready-made world-frame headings (cancel closure / open range / pass
+        # wide / flank / coast & shoot) - the vector math done for the captain.
+        range_infos, range_text = self._range_control(simulation, ship)
+        merge_warnings = [f"{info.label}: {info.warning}" for info in range_infos if info.warning]
+
+        orders_text = None
+        if self.has_admiral:
+            orders_text = self._format_orders(simulation, ship, tactical_status, range_infos,
+                                              tool_names)
+
+        from .execution_feedback import execution_feedback
+        feedback = execution_feedback(simulation, [ship_id])
+
         prompt_kwargs = dict(
             captain_name=self.config.name,
             ship_name=self.config.ship_name,
@@ -386,108 +528,152 @@ class LLMCaptain:
             tactical_status=tactical_status,
             personality=self.config.personality,
             personality_text=self.personality_text,
-            received_messages=messages_text if messages_text else None,
-            decision_history=decision_history,
-            message_history=message_history,
-            battle_summary=battle_summary,
-            shot_history=shot_history,
-            recent_hits=recent_hits_text if recent_hits_text else None,
+            decision_history=self._format_decision_history(last_n=5, simulation=simulation),
+            message_history=self._format_message_history(last_n=6, before=now),
+            battle_summary=self._format_battle_summary(distance_km),
+            shot_history=self._format_shot_history(last_n=10),
+            recent_hits=self._format_recent_hits() or None,
             ship_type=self.config.ship_type,
             fleet_data=self.config.fleet_data,
             notebook_text=self.config.notebook_text,
-            decision_interval_s=getattr(simulation, "decision_interval", 30.0),
+            decision_interval_s=interval,
+            decision_number=self.decision_count + 1,
+            lost_turn=self._format_lost_turn(),
+            range_control=range_text,
+            merge_warnings=merge_warnings,
+            orders=orders_text,
+            comms=comms,
+            own_faction=getattr(ship, "faction", None),
+            captain_log=self._format_captain_log() or None,
+            execution_feedback=feedback or None,
+            tool_errors=self._format_tool_errors() or None,
+            tool_names=tool_names,
+            has_admiral=self.has_admiral,
         )
-
         # Split into a stable system prompt and a volatile user turn so the
         # provider can serve the doctrine from cache across checkpoints.
-        prompt_messages = build_captain_messages(**prompt_kwargs)
-
-        turn_parts = []
-        if len(prompt_messages) > 1:
-            turn_parts.append(prompt_messages[1]["content"])
-
-        # Range control: closest approach, stopping distance, merge warning and
-        # ready-made world-frame headings (cancel closure / open range / pass
-        # wide / flank / coast & shoot) - the vector math done for the captain.
-        from .range_control import captain_range_control
-        range_text = captain_range_control(simulation, ship)
-        if range_text:
-            turn_parts.append(range_text)
-
-        # Torpedo threats / magazine. _build_tactical_status has always computed
-        # `torpedo_threats`, but nothing ever rendered it, so a captain was never
-        # told a torpedo was inbound, and the remaining torpedo count (the ship's
-        # scarcest munition) was never disclosed either.
-        torpedo_text = self._format_torpedo_section(ship_status, tactical_status)
-        if torpedo_text:
-            turn_parts.append(torpedo_text)
-
-        log_text = self._format_captain_log()
-        if log_text:
-            turn_parts.append(log_text)
-
-        # Admiral orders change per checkpoint - they belong in the volatile turn.
-        if self.has_admiral and (self.admiral_orders or self.fleet_directive):
-            turn_parts.append(format_admiral_orders_for_captain(
-                self.admiral_orders,
-                self.fleet_directive,
-            ))
-
-        from .execution_feedback import execution_feedback
-        feedback = execution_feedback(simulation, [ship_id])
-        if feedback:
-            turn_parts.append(feedback)
-        errors_text = self._format_tool_errors()
-        if errors_text:
-            turn_parts.append(errors_text)
-
-        turn_parts.append(
-            f"DECISION POINT {self.decision_count + 1}. What are your orders, Captain?"
-        )
-
-        messages = [prompt_messages[0], {"role": "user", "content": "\n\n".join(turn_parts)}]
-
-        # Get context-appropriate tools (may exclude draw tools if Admiral exists)
-        self._decision_interval_s = getattr(simulation, "decision_interval", 30.0)
-        tools = self.get_tools_for_context()
+        messages = build_captain_messages(**prompt_kwargs)
+        self.lost_turn = None  # delivered
 
         # Call LLM with tools (use captain's configured model)
+        tool_calls, failure = self._call_model(messages, tools)
+        if failure is not None:
+            # One retry, with a nudge: a truncated reply usually spent its
+            # whole budget reasoning, an errored one may simply recover.
+            retry = self._with_notice(messages, (
+                f"=== RETRY (same checkpoint, T+{now:.0f}) ===\nYour previous reply failed before "
+                f"any tool call ({failure}). Keep your reasoning short and issue your orders as "
+                "tool calls now."))
+            tool_calls, failure = self._call_model(retry, tools)
+            if failure is not None:
+                return self._lose_turn(ship, simulation, failure)
+        self.last_call_failed = False
+
+        commands: List[Any] = []
+        executed: List[ToolCall] = []
+        requested: List[ToolCall] = list(tool_calls)
+        state = {"maneuver_issued": False}
+        self._execute_round(tool_calls, simulation, ship_id, commands, executed, state)
+
+        # R1: a reply with no action gets told so, in the same checkpoint.
+        self._followups_used = {t: n for t, n in self._followups_used.items() if t >= now}
+        while enemies and self._needs_followup(executed, commands, ship, now):
+            self._followups_used[now] = self._followups_used.get(now, 0) + 1
+            self.last_followup_rounds += 1
+            notice = self._followup_notice(executed, ship, simulation, tool_names)
+            calls, failure = self._call_model(self._with_notice(messages, notice), tools)
+            if failure is not None:
+                print(f"[CAPTAIN {self.config.name}] follow-up failed: {failure}")
+                break
+            requested.extend(calls)
+            self._execute_round(calls, simulation, ship_id, commands, executed, state)
+
+        # Track decision
+        self.decision_count += 1
+        self.last_tool_calls = executed  # Store only executed calls for verbose output
+        self.last_requested_tool_calls = requested
+        self.decision_history.append({
+            "checkpoint": self.decision_count,
+            "time": now,
+            "tool_calls": [{"name": tc.name, "args": tc.arguments} for tc in executed],
+            "commands_count": len(commands),
+            "followups": self.last_followup_rounds,
+            "acted": any(self._is_action_command(c) for c in commands),
+        })
+
+        return commands
+
+    # ------------------------------------------------------------------
+    # decide() helpers
+    # ------------------------------------------------------------------
+
+    def _call_model(self, messages: List[Dict[str, Any]],
+                    tools: List[Dict[str, Any]]) -> Tuple[List[ToolCall], Optional[str]]:
+        """
+        One model request -> (tool calls, failure reason or None).
+
+        A reply that ends with finish_reason 'error' or 'length' and carries no
+        tool call is a FAILURE, not a decision to do nothing.
+        """
         try:
             # Per-captain temperature was parsed from fleet config and stored, but
             # never sent - every captain silently sampled at the shared client's
             # default regardless of its configured value.
-            tool_calls = self.client.decide_with_tools(
+            calls = self.client.decide_with_tools(
                 messages,
                 tools,
                 model=self.config.model,
                 temperature=self.config.temperature,
             )
         except LLMCallError as e:
-            # Distinguish "call failed" from "captain chose to do nothing": do not
-            # advance decision history, and mark the turn as degraded.
             print(f"[CAPTAIN {self.config.name}] decision call failed: {e}")
-            self.last_call_failed = True
-            return []
-        self.last_call_failed = False
-        self.last_requested_tool_calls = tool_calls
+            return [], f"model call failed: {e}"
+        calls = list(calls or [])
+        finish = getattr(self.client, "last_finish_reason", None)
+        finish = finish() if callable(finish) else None
+        if not calls and isinstance(finish, str) and finish in FAILED_FINISH_REASONS:
+            what = ("cut off at the output limit" if finish == "length"
+                    else "the provider returned an error")
+            print(f"[CAPTAIN {self.config.name}] reply {what} with no tool call")
+            return [], f"reply {what} (finish_reason={finish}) before any tool call"
+        return calls, None
 
-        # Execute tool calls
+    @staticmethod
+    def _with_notice(messages: List[Dict[str, Any]], notice: str) -> List[Dict[str, Any]]:
+        """
+        Same request with a notice appended to the user turn.
+
+        A fresh request rather than an assistant/tool-result continuation:
+        reasoning models reject a continuation whose assistant turn lacks the
+        (unavailable) thinking blocks, and the system prefix stays cached.
+        """
+        out = [dict(m) for m in messages]
+        out[-1]["content"] = f"{out[-1]['content']}\n\n{notice}"
+        return out
+
+    def _execute_round(self, tool_calls: List[ToolCall], simulation: Any, ship_id: str,
+                       commands: List[Any], executed: List[ToolCall],
+                       state: Dict[str, Any]) -> None:
+        """Execute one round of tool calls into ``commands`` / ``executed``."""
         # Track maneuver commands - only one maneuver per decision allowed
         maneuver_tools = {"set_maneuver", "set_heading"}
-        maneuver_issued = False
-
-        commands = []
-        executed_tool_calls = []  # Track actually executed tool calls
+        seen = {(tc.name, json.dumps(tc.arguments, sort_keys=True, default=str))
+                for tc in executed}
         for tc in tool_calls:
+            key = (tc.name, json.dumps(tc.arguments, sort_keys=True, default=str))
+            if key in seen and tc.name not in ACTION_TOOLS:
+                continue  # a follow-up repeating the report / note verbatim
+            seen.add(key)
             # Skip duplicate maneuver commands (only first one takes effect)
             if tc.name in maneuver_tools:
-                if maneuver_issued:
-                    self.pending_tool_errors.append(f'{tc.name}: ignored because only the first maneuver is applied in a decision')
-                    continue  # Skip this maneuver, one already issued
-                maneuver_issued = True
+                if state.get("maneuver_issued"):
+                    self.pending_tool_errors.append(
+                        f'{tc.name}: ignored because only the first maneuver is applied in a decision')
+                    continue
+                state["maneuver_issued"] = True
 
             cmd = self._execute_tool(tc, simulation, ship_id)
-            executed_tool_calls.append(tc)
+            executed.append(tc)
             if cmd is not None:
                 # A tool may emit a salvo (e.g. launch_torpedo count=2).
                 if isinstance(cmd, list):
@@ -495,17 +681,583 @@ class LLMCaptain:
                 else:
                     commands.append(cmd)
 
-        # Track decision
-        self.decision_count += 1
-        self.last_tool_calls = executed_tool_calls  # Store only executed calls for verbose output
-        self.decision_history.append({
-            "checkpoint": self.decision_count,
-            "time": simulation.current_time,
-            "tool_calls": [{"name": tc.name, "args": tc.arguments} for tc in tool_calls],
-            "commands_count": len(commands),
-        })
+    @staticmethod
+    def _is_action_command(cmd: Any) -> bool:
+        """A command that moves, aims or fires the ship (not radiators/notes)."""
+        if isinstance(cmd, dict):
+            return cmd.get("type") in ("set_target", "weapons_orders", "weapons_order",
+                                       "launch_torpedo")
+        return cmd is not None  # Maneuver objects (and any other engine command)
 
-        return commands
+    def _admiral_heading_applied(self) -> bool:
+        """
+        True when an admiral order this checkpoint carries motion the runner
+        already applied to the ship: a HEADING (``heading``) or a structured
+        maneuver (``maneuver``: INTERCEPT with standoff, HOLD_RANGE, ...).
+        """
+        return any(isinstance(getattr(o, "heading", None), dict) or getattr(o, "maneuver", None)
+                   for o in self.admiral_orders or [])
+
+    def _needs_followup(self, executed: List[ToolCall], commands: List[Any],
+                        ship: Any, now: float) -> bool:
+        """
+        True when this checkpoint's replies issued no action and a follow-up
+        round is still allowed. Not when the captain surrendered, asked its
+        admiral (the runner re-decides with the answer), or is already flying
+        an admiral HEADING / MANEUVER order (acknowledging it is the
+        prescribed reply - a follow-up would push a set_maneuver over it).
+        """
+        if self.has_surrendered or any(self._is_action_command(c) for c in commands):
+            return False
+        names = {tc.name for tc in executed}
+        if "discuss_with_admiral" in names or "surrender" in names:
+            return False
+        if self._admiral_heading_applied():
+            return False
+        return self._followups_used.get(now, 0) < MAX_FOLLOWUP_ROUNDS
+
+    def _followup_notice(self, executed: List[ToolCall], ship: Any, simulation: Any,
+                         tool_names: List[str]) -> str:
+        """The 'NO COMMANDS ISSUED' follow-up for an action-less reply."""
+        now = simulation.current_time
+        if executed:
+            called = ", ".join(
+                tc.name + (f"({tc.arguments.get('response_type') or tc.arguments.get('status')})"
+                           if tc.arguments.get("response_type") or tc.arguments.get("status") else "")
+                for tc in executed)
+            what = f"Your reply called only: {called} - recorded."
+        else:
+            what = "Your reply contained no tool calls."
+        speed = ship.velocity.magnitude / 1000.0
+        m = getattr(ship, "current_maneuver", None)
+        if m is not None and not m.is_complete(now + 1e-6):
+            motion = (f"Your {m.maneuver_type.name} maneuver keeps running, but nothing was "
+                      "aimed, launched or renewed.")
+        else:
+            motion = (f"No maneuver is active, so the ship COASTS at {speed:.2f} km/s for the next "
+                      f"{simulation.decision_interval:g} s.")
+        actions = ["set_maneuver or set_heading (MAINTAIN = a deliberate coast)"]
+        if "set_weapons_order" in tool_names:
+            actions.append("set_weapons_order")
+        if "launch_torpedo" in tool_names:
+            actions.append("launch_torpedo")
+        actions.append("set_primary_target")
+        lines = [f"=== FOLLOW-UP (same checkpoint, T+{now:.0f}) ===",
+                 f"{what} NO COMMANDS ISSUED: nothing will move, aim or fire. {motion}"]
+        if self.pending_tool_errors:
+            lines.append("Rejected: " + "; ".join(self.pending_tool_errors[-3:]))
+        lines.append(f"Issue your orders now as tool calls: {', '.join(actions)}. "
+                     "Do not repeat the report or the note.")
+        return "\n".join(lines)
+
+    def _renewed_maneuver(self, ship: Any, now: float, interval: float) -> Optional[Any]:
+        """The ship's current maneuver re-issued for the next window, if any."""
+        m = getattr(ship, "current_maneuver", None)
+        if m is None or not hasattr(m, "start_time"):
+            return None
+        if m.start_time >= now - 1e-6:
+            return None  # already fresh (e.g. an admiral heading applied now)
+        try:
+            names = {f.name for f in fields(m)}
+            changes = {"start_time": now, "duration": interval}
+            # Runtime latches and formation sync belong to the old window.
+            for name, value in (("burn_start_time", None), ("hold_velocity", None),
+                                ("hold_velocity_t", -1.0)):
+                if name in names:
+                    changes[name] = value
+            return replace(m, **changes)
+        except TypeError:
+            return None
+
+    def _lose_turn(self, ship: Any, simulation: Any, reason: str) -> List[Any]:
+        """
+        CP-09: the model failed twice. Keep flying the previous maneuver for
+        another window instead of letting it expire mid-merge, record the turn
+        as LOST (not as a deliberate "none") and tell the next prompt.
+        """
+        now = simulation.current_time
+        interval = getattr(simulation, "decision_interval", 30.0)
+        self.last_call_failed = True
+        self.last_failure_reason = reason
+        renewed = self._renewed_maneuver(ship, now, interval)
+        kept = fresh = None
+        until = now + interval
+        if renewed is not None:
+            kept = f"{renewed.maneuver_type.name}@{renewed.throttle * 100:.0f}%"
+        else:
+            # A maneuver set THIS checkpoint (the runner applied an admiral
+            # HEADING / MANEUVER order before asking) needs no renewal - it
+            # flies on. The ship did not coast, and the record must not say so.
+            m = getattr(ship, "current_maneuver", None)
+            if (m is not None and getattr(m, "start_time", None) is not None
+                    and m.start_time >= now - 1e-6 and not m.is_complete(now + 1e-6)):
+                whose = "your Admiral's " if self._admiral_heading_applied() else ""
+                fresh = f"{whose}{m.maneuver_type.name}@{m.throttle * 100:.0f}%"
+                if 0 < m.duration < 1e6:  # duration <= 0: open-ended
+                    until = m.start_time + m.duration
+        self.lost_turn = {"time": now, "reason": reason, "renewed": kept, "kept": fresh,
+                          "until": until}
+        self.decision_count += 1
+        self.decision_history.append({
+            "checkpoint": self.decision_count, "time": now, "tool_calls": [],
+            "commands_count": 1 if renewed is not None else 0,
+            "lost": reason, "renewed": kept, "kept": fresh,
+        })
+        return [renewed] if renewed is not None else []
+
+    def _format_lost_turn(self) -> Optional[str]:
+        lost = self.lost_turn
+        if not lost:
+            return None
+        if lost.get("renewed"):
+            what = f"the engine renewed your previous {lost['renewed']} until T+{lost['until']:.0f}"
+        elif lost.get("kept"):
+            what = (f"{lost['kept']} (applied at T+{lost['time']:.0f}) kept flying until "
+                    f"T+{lost['until']:.0f}")
+        else:
+            what = (f"no maneuver was active, so the ship COASTED "
+                    f"T+{lost['time']:.0f}-{lost['until']:.0f}")
+        return (f"!! YOUR LAST ORDERS WERE LOST (T+{lost['time']:.0f}: {lost['reason']}): {what}. "
+                "Nothing else was aimed or launched. Re-issue your orders now.")
+
+    def _tool_names(self, tools: List[Dict[str, Any]]) -> List[str]:
+        """Names of the offered tools, sticky across the battle (cache-stable doctrine)."""
+        self._known_tool_names.update(t["function"]["name"] for t in tools)
+        return sorted(self._known_tool_names)
+
+    def _range_control(self, simulation: Any, ship: Any) -> Tuple[List[Any], str]:
+        """Range-control analysis (merge warnings feed THREATS TO ME) and its block."""
+        try:
+            from .range_control import analyze_range_control, format_range_control
+            infos = analyze_range_control(simulation, [ship], detail=True)
+            return infos, format_range_control(infos, who="Your")
+        except Exception:  # noqa: BLE001 - advisory only: never let it kill a decision
+            return [], ""
+
+    def _collect_comms(self, simulation: Any, ship: Any) -> List[Dict[str, Any]]:
+        """
+        This checkpoint's traffic as comms_message dicts: ``self.inbox``
+        (filled by the runner, comms schema) plus legacy CaptainMessage
+        deliveries, each classified by the SENDER's side - nothing is
+        labelled enemy traffic just for having arrived.
+
+        This is the ONE place received traffic enters ``message_history``
+        (the comms runner's ``receive_inbox`` only stores the list), once per
+        message: a same-checkpoint re-decide sees the same inbox again and is
+        de-duplicated by msg_id. Engine datalink items (sender_role 'engine':
+        launches, kills, PD losses) are telemetry - shown in FLEET NET the
+        turn they arrive, kept out of the 6-entry log they would flush.
+        """
+        from .prompts import is_friendly_comms
+        now = simulation.current_time
+        own_faction = getattr(ship, "faction", None)
+        items: List[Dict[str, Any]] = []
+        # A discussion re-decide in the same checkpoint must still see the
+        # legacy deliveries the first decide() consumed.
+        cached_t, cached = getattr(self, "_legacy_comms", (None, []))
+        legacy: List[Dict[str, Any]] = list(cached) if cached_t == now else []
+        for item in getattr(self, "inbox", None) or []:
+            if not isinstance(item, dict):
+                continue
+            items.append(item)
+            if item.get("sender_role") == "engine":
+                continue
+            key = item.get("msg_id") or (item.get("sender_id"), item.get("sent_t"),
+                                         str(item.get("text", "")))
+            if key in self._recorded_msg_ids:
+                continue
+            self._recorded_msg_ids.add(key)
+            self._record_received_message(
+                str(item.get("text", "")), float(item.get("sent_t", now) or now),
+                sender=ship_ref(item.get("sender_name"), item.get("sender_id")),
+                side="friendly" if is_friendly_comms(item, own_faction) else "enemy",
+                received_at=now)
+        for msg in self.received_messages:
+            sender_ship = (simulation.get_ship(msg.sender_id)
+                           if getattr(msg, "sender_id", None) and hasattr(simulation, "get_ship")
+                           else None)
+            friendly = bool(sender_ship is not None and own_faction is not None
+                            and sender_ship.faction == own_faction)
+            if msg.message_type == MessageType.NORMAL:
+                text = msg.content
+            else:
+                text = msg.format_for_llm()
+            legacy.append({
+                "channel": "fleet_net" if friendly else "enemy_broadcast",
+                "sender_role": "admiral" if msg.message_type in (
+                    MessageType.ADMIRAL_ORDER, MessageType.ADMIRAL_TO_ADMIRAL) else "captain",
+                "sender_name": msg.ship_name or msg.sender_name,
+                "sender_id": msg.sender_id,
+                "faction": sender_ship.faction if sender_ship is not None else None,
+                "text": text,
+                "sent_t": msg.timestamp,
+            })
+            self._record_received_message(
+                msg.content, msg.timestamp,
+                sender=ship_ref(msg.ship_name or msg.sender_name, msg.sender_id),
+                side="friendly" if friendly else "enemy", received_at=now)
+        self.received_messages.clear()
+        self._legacy_comms = (now, legacy)
+        return items + legacy
+
+    def _add_launch_status(self, status: Dict[str, Any], ship: Any, simulation: Any) -> None:
+        """Tube readiness and launches possible before the next decision."""
+        if status.get("torpedoes_remaining") is None:
+            return
+        now = getattr(simulation, "current_time", 0.0)
+        tubes = []
+        for tube in getattr(ship, "ready_torpedo_launchers", None) or []:
+            try:
+                wait = max(0.0, tube.last_launch_time + tube.cooldown_seconds - now)
+            except (AttributeError, TypeError):
+                continue
+            tubes.append({"ready": wait <= 0 and tube.current_magazine > 0, "cooldown": wait})
+        if tubes:
+            status["torpedo_tubes"] = tubes
+        try:
+            status["launch_capacity"] = self._max_torpedo_salvo(ship.ship_id, simulation)
+        except Exception:  # noqa: BLE001 - display only
+            pass
+
+    # ------------------------------------------------------------------
+    # Ship resolution, fire solutions, order checks
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _resolve_ship(ref: Any, ships: List[Any]) -> Tuple[Optional[Any], List[Any]]:
+        """
+        Find a ship by id, exact name, bare name ("Lancer-4" for "OCS
+        Lancer-4") or a UNIQUE partial match. Returns (ship, candidates):
+        ship is None when nothing or several ships match (candidates then
+        lists the ambiguous matches). Names repeat across fleets ("TIS
+        Lancer-1" / "OCS Lancer-1"), so a first-substring-wins match picked
+        whichever ship happened to be listed first.
+        """
+        text = str(ref or "").strip()
+        if not text:
+            return None, []
+        low = text.lower()
+        exact = [s for s in ships
+                 if s.ship_id == text or str(getattr(s, "name", s.ship_id)).lower() == low]
+        if exact:
+            return exact[0], []
+        bare = [s for s in ships
+                if _bare_name(getattr(s, "name", s.ship_id)).lower() == _bare_name(text).lower()]
+        if len(bare) == 1:
+            return bare[0], []
+        partial = [s for s in ships if low in str(getattr(s, "name", s.ship_id)).lower()]
+        if len(partial) == 1:
+            return partial[0], []
+        return None, bare or partial
+
+    def _torpedo_solution(self, simulation: Any, ship: Any, target: Any):
+        """Flown torpedo fire solution (memoised per decision); None if n/a."""
+        if target is None or not self.config.fleet_data or not self.config.has_torpedoes:
+            return None
+        from .fire_solutions import torpedo_solution
+        if len(self._solution_cache) > 256:  # callers that never reset it per decision
+            self._solution_cache.clear()
+        try:
+            return torpedo_solution(simulation, ship, target, self.config.fleet_data,
+                                    cache=self._solution_cache)
+        except Exception as e:  # noqa: BLE001 - advisory only, never fail a decision
+            print(f"[CAPTAIN {self.config.name}] torpedo solution failed: {e}")
+            return None
+
+    @staticmethod
+    def _salvo_check_text(sol: Any, ordered: int, capacity: Optional[int]) -> str:
+        if sol is None:
+            return ""
+        if sol.verdict == "UNREACHABLE":
+            text = f"{sol.summary()}. DEVIATE is the correct response - say why."
+        elif sol.verdict == "ESCAPABLE":
+            text = f"{sol.summary()}. Launch only if he is not evading; otherwise DEVIATE."
+        elif sol.verdict in ("TOO CLOSE", "OVERKILL"):
+            text = f"{sol.summary()}. DEVIATE (say why) unless the admiral knows better."
+        else:
+            text = sol.summary()
+        if capacity is not None and ordered > capacity:
+            text += f" You can launch only {capacity} before your next decision."
+        return text
+
+    def _cpa_under_burn(self, simulation: Any, ship: Any, enemies: List[Any],
+                        direction: Any, throttle: float, burn_s: float,
+                        horizon_s: float = 600.0) -> Optional[Tuple[float, float, str, float]]:
+        """
+        Closest approach to any enemy if this ship turns onto ``direction``,
+        burns ``burn_s`` at ``throttle`` and then coasts (enemies coast).
+        Returns (cpa_km, t_s, enemy name, relative speed km/s at the pass).
+        """
+        from ..physics import Vector3D
+        try:
+            accel = ship.kinematic_state.max_acceleration_ms2() * ship.get_effective_thrust_fraction()
+        except (AttributeError, TypeError):
+            return None
+        d = direction.normalized() if direction.magnitude > 0 else direction
+        turn_s = 0.0
+        if hasattr(simulation, "_estimate_turn_time"):
+            try:
+                turn_s = simulation._estimate_turn_time(ship, ship.forward.angle_to(d), engines_on=True)
+            except (AttributeError, TypeError, ValueError):
+                turn_s = 0.0
+        a = d * (accel * max(0.0, min(1.0, throttle)))
+        best = None
+        dt = 1.0
+        for e in enemies:
+            p = ship.position - e.position
+            v = ship.velocity - e.velocity
+            t = 0.0
+            while t < horizon_s:
+                acc = a if turn_s <= t < turn_s + burn_s else Vector3D(0.0, 0.0, 0.0)
+                p = p + v * dt + acc * (0.5 * dt * dt)
+                v = v + acc * dt
+                t += dt
+                rng = p.magnitude
+                if best is None or rng < best[0]:
+                    best = (rng, t, getattr(e, "name", e.ship_id), v.magnitude, e.ship_id)
+                # Past the closest approach and opening after the burn: done.
+                if t > turn_s + burn_s and p.dot(v) > 0:
+                    break
+        if best is None:
+            return None
+        return best[0] / 1000.0, best[1], ship_ref(best[2], best[4]), best[3] / 1000.0
+
+    def _spec_motion(self, spec: Dict[str, Any], thr: float, target: Any, ship: Any,
+                     enemies: List[Any], friendlies: List[Any],
+                     interval: float) -> Optional[Tuple[str, Any, float, float]]:
+        """
+        The straight-line motion of an admiral's structured maneuver, for the
+        ENGINE ORDER CHECK - (label, direction, throttle, burn s) - or None.
+
+        Only what flies straight is modelled: a plain INTERCEPT (it never
+        brakes) and a HEADING toward a point or ship. An INTERCEPT with a
+        standoff or arrival speed, HOLD_RANGE and the rest brake or steer on
+        their own, so a straight-burn closest approach would be a false MERGE.
+        """
+        from ..physics import Vector3D
+        kind = str(spec.get("maneuver_type") or "").upper()
+        if thr <= 0:
+            return None
+        if kind == "INTERCEPT":
+            if spec.get("standoff_km") is not None or spec.get("arrival_closing_kps") is not None:
+                return None
+            aim = self._resolve_ship(spec["target"], enemies)[0] if spec.get("target") else None
+            aim = aim or target
+            if aim is None and self.primary_target_id:
+                aim = next((e for e in enemies if e.ship_id == self.primary_target_id), None)
+            if aim is None and enemies:
+                aim = min(enemies, key=lambda e: (e.position - ship.position).magnitude)
+            if aim is None:
+                return None
+            return (f"INTERCEPT@{thr * 100:.0f}% held for 2 checkpoints",
+                    aim.position - ship.position, thr, 2 * interval)
+        if kind == "HEADING":
+            vec = None
+            point = spec.get("toward_point")
+            if isinstance(point, dict):
+                vec = Vector3D(float(point.get("x", 0)) * 1000.0, float(point.get("y", 0)) * 1000.0,
+                               float(point.get("z", 0)) * 1000.0) - ship.position
+            elif spec.get("toward_ship"):
+                other, _ = self._resolve_ship(spec["toward_ship"], list(enemies) + list(friendlies))
+                vec = other.position - ship.position if other is not None else None
+            if vec is not None and vec.magnitude > 0:
+                return ("this heading for one checkpoint, then coasting", vec, thr, interval)
+        return None
+
+    @staticmethod
+    def _enemy_mention(text: str, enemy: Any, own_side: List[Any]) -> Optional[re.Match]:
+        """
+        Where ``text`` names ``enemy``: by id, full name, or bare name - the
+        bare name only when no ship of ours shares it and no other fleet's
+        prefix stands in front of it ("Form up on TIS Lancer-2" is not about
+        OCS Lancer-2; names repeat across fleets).
+        """
+        name = str(getattr(enemy, "name", enemy.ship_id))
+        for candidate in (enemy.ship_id, name):
+            m = re.search(r"(?<![\w-])" + re.escape(candidate) + r"(?![\w-])", text, re.IGNORECASE)
+            if m:
+                return m
+        bare = _bare_name(name)
+        ours = [str(getattr(s, "name", s.ship_id)) for s in own_side]
+        if bare == name or any(_bare_name(n).lower() == bare.lower() for n in ours):
+            return None
+        # Our fleet prefixes ("TIS"), when they differ from the enemy's.
+        foreign = {n[:-len(_bare_name(n))].strip().upper() for n in ours if _bare_name(n) != n}
+        foreign.discard(name[:-len(bare)].strip().upper())
+        for m in re.finditer(r"(?<![\w-])" + re.escape(bare) + r"(?![\w-])", text, re.IGNORECASE):
+            prefix = re.search(r"(\w+)\s+$", text[max(0, m.start() - 8):m.start()])
+            if prefix and prefix.group(1).upper() in foreign:
+                continue
+            return m
+        return None
+
+    def _order_check(self, order: Any, simulation: Any, ship: Any,
+                     range_infos: List[Any]) -> Dict[str, Any]:
+        """Engine-resolved lines for one order (see format_admiral_orders_for_captain)."""
+        from ..physics import Vector3D
+        from .range_control import MERGE_KM
+        check: Dict[str, Any] = {}
+        enemies = simulation.get_enemy_ships(ship.ship_id)
+        friendlies = (simulation.get_friendly_ships(ship.ship_id)
+                      if hasattr(simulation, "get_friendly_ships") else [])
+        text = str(getattr(order, "order_text", "") or "")
+        interval = float(getattr(simulation, "decision_interval", 30.0) or 30.0)
+
+        target = None
+        tname = getattr(order, "suggested_target", None) or getattr(order, "torpedo_target", None)
+        if tname:
+            target, candidates = self._resolve_ship(tname, enemies)
+            if target is not None:
+                rel = target.position - ship.position
+                rng = rel.magnitude
+                closing = -(rel.normalized()).dot(target.velocity - ship.velocity) / 1000.0 if rng else 0.0
+                closing = 0.0 if abs(closing) < 0.005 else closing
+                rate = (f"closing {closing:.2f} km/s" if closing >= 0
+                        else f"OPENING {-closing:.2f} km/s")
+                line = (f"{ship_ref(getattr(target, 'name', target.ship_id), target.ship_id)} - "
+                        f"your sensors: {rng / 1000.0:.0f} km, {rate}")
+                twin, _ = self._resolve_ship(_bare_name(str(tname)), list(friendlies) + [ship])
+                if twin is not None and _bare_name(str(tname)) == _bare_name(getattr(twin, "name", "")):
+                    line += (f" (the name also matches your own "
+                             f"{ship_ref(getattr(twin, 'name', twin.ship_id), twin.ship_id)})")
+                check["target"] = line
+            elif candidates:
+                check["target"] = (f"{tname} is ambiguous: " + ", ".join(
+                    ship_ref(getattr(c, "name", c.ship_id), c.ship_id) for c in candidates[:4])
+                    + " - name the id")
+            else:
+                check["target"] = f"{tname} - no such enemy on your sensors (destroyed or misnamed?)"
+
+        salvo = getattr(order, "torpedo_salvo", None)
+        if salvo and self.config.has_torpedoes:
+            tgt = target
+            if getattr(order, "torpedo_target", None):
+                tgt, _ = self._resolve_ship(order.torpedo_target, enemies)
+            if tgt is None and self.primary_target_id:
+                tgt = next((e for e in enemies if e.ship_id == self.primary_target_id), None)
+            if tgt is None and enemies:
+                tgt = min(enemies, key=lambda e: (e.position - ship.position).magnitude)
+            sol = self._torpedo_solution(simulation, ship, tgt)
+            try:
+                capacity = self._max_torpedo_salvo(ship.ship_id, simulation)
+            except Exception:  # noqa: BLE001 - display only
+                capacity = None
+            check["salvo"] = self._salvo_check_text(sol, int(salvo), capacity)
+
+        # ENGINE ORDER CHECK: what the ordered motion does to the closest approach.
+        motion = None
+        heading = getattr(order, "heading", None)
+        spec = getattr(order, "maneuver", None)
+        thr = getattr(order, "applied_throttle", None)
+        thr = getattr(order, "throttle", None) if thr is None else thr
+        if isinstance(heading, dict):
+            thr = 1.0 if thr is None else float(thr)
+            vec = Vector3D(float(heading.get("x", 0)), float(heading.get("y", 0)),
+                           float(heading.get("z", 0)))
+            if vec.magnitude > 0 and thr > 0:
+                motion = ("this heading for one checkpoint, then coasting", vec, thr, interval)
+        elif isinstance(spec, dict):
+            # A structured admiral maneuver (AdmiralOrder.maneuver), applied by
+            # the runner: it, not the prose, is what the ship flies.
+            if thr is None:
+                thr = spec.get("throttle")
+            motion = self._spec_motion(spec, 1.0 if thr is None else float(thr), target,
+                                       ship, enemies, friendlies, interval)
+        else:
+            thr = _ordered_intercept(text)
+            aim = target
+            if aim is None and self.primary_target_id:
+                aim = next((e for e in enemies if e.ship_id == self.primary_target_id), None)
+            if aim is None and enemies:
+                aim = min(enemies, key=lambda e: (e.position - ship.position).magnitude)
+            if thr is not None and aim is not None and thr > 0:
+                motion = (f"INTERCEPT@{thr * 100:.0f}% held for 2 checkpoints",
+                          aim.position - ship.position, thr, 2 * interval)
+        if motion and enemies:
+            label, vec, thr, burn = motion
+            res = self._cpa_under_burn(simulation, ship, enemies, vec, thr, burn)
+            if res is not None:
+                cpa_km, t_s, who, rel_kps = res
+                engine = (f"{label} -> closest approach {cpa_km:.1f} km to {who} in {t_s:.0f} s, "
+                          f"passing at {rel_kps:.1f} km/s")
+                if cpa_km < MERGE_KM:
+                    engine += " = a MERGE (seconds of fire, then flying apart)"
+                    if any(getattr(i, "warning", None) for i in range_infos):
+                        check["conflict"] = ("Your order and RANGE CONTROL conflict (merge): choose "
+                                             "and explain - DEVIATE is allowed.")
+                check["engine"] = engine
+
+        # Absolute positions quoted in the text: resolve to a direction from here.
+        own_km = ship.position * (1.0 / 1000.0)
+        points = []
+        for x, y, z in _quoted_triples(text):
+            p = Vector3D(x, y, z)
+            if p.magnitude <= 2.0:
+                continue  # a unit-ish direction, not a position
+            off = p - own_km
+            if off.magnitude <= 0:
+                continue
+            u = off.normalized()
+            points.append(f"({p.x:.0f},{p.y:.0f},{p.z:.0f}) km is a POSITION: from you dir_to "
+                          f"({u.x:+.2f},{u.y:+.2f},{u.z:+.2f}), {off.magnitude:.0f} km - "
+                          f"set_heading takes that direction, not the position")
+            if len(points) >= 2:
+                break
+        if points:
+            check["points"] = points
+
+        # Distances quoted for named enemies vs this ship's own sensors.
+        numbers = []
+        own_side = list(friendlies) + [ship]
+        for e in enemies:
+            m = self._enemy_mention(text, e, own_side)
+            if not m:
+                continue
+            # The distance quoted right after the name, inside the same clause.
+            snippet = re.split(r"[.;]\s", text[m.end():m.end() + 40], maxsplit=1)[0]
+            km = _KM_RE.search(snippet)
+            if not km:
+                continue
+            claimed = float(km.group(1))
+            actual = (e.position - ship.position).magnitude / 1000.0
+            if abs(claimed - actual) > max(NUMBER_CHECK_MIN_KM, NUMBER_CHECK_REL * actual):
+                numbers.append(f"order quotes {claimed:.0f} km next to "
+                               f"{ship_ref(getattr(e, 'name', e.ship_id), e.ship_id)}; "
+                               f"your sensors: {actual:.0f} km from you")
+            if len(numbers) >= 2:
+                break
+        if numbers:
+            check["numbers"] = numbers
+        return check
+
+    def _format_orders(self, simulation: Any, ship: Any, tactical_status: Dict[str, Any],
+                       range_infos: List[Any], tool_names: List[str]) -> str:
+        """The ORDERS block: orders as fields, with ages and engine checks."""
+        now = simulation.current_time
+        delivered = getattr(self, "orders_delivered", bool(self.admiral_orders or self.fleet_directive))
+        directive = self.fleet_directive if delivered else None
+        previous_directive = self._last_directive_seen
+        if directive:
+            self._last_directive_seen = (directive, now)
+            previous_directive = None
+        orders = list(self.admiral_orders or [])
+        previous_orders = self._last_orders_seen
+        standing = [o for o in orders if not str(o.order_text).lstrip().startswith("[CLARIFICATION]")]
+        if standing:
+            self._last_orders_seen = (standing, now)
+        checks = []
+        for order in orders:
+            try:
+                checks.append(self._order_check(order, simulation, ship, range_infos))
+            except Exception as e:  # noqa: BLE001 - checks are advisory
+                print(f"[CAPTAIN {self.config.name}] order check failed: {e}")
+                checks.append({})
+        reply = "report_to_admiral" if "report_to_admiral" in tool_names else "respond_to_orders"
+        return format_admiral_orders_for_captain(
+            orders, directive, now=now, checks=checks, reply_tool=reply,
+            previous_directive=previous_directive,
+            previous_orders=None if orders else previous_orders,
+        )
 
     def revert_last_decision(self) -> None:
         """
@@ -600,74 +1352,199 @@ class LLMCaptain:
         else:
             return "No actions"
 
-    def _format_decision_history(self, last_n: int = 5) -> str:
-        """Format recent decision history for the prompt."""
+    def _launch_outcomes(self, simulation: Any) -> Dict[str, Dict[str, Any]]:
+        """
+        torpedo_id -> {t, target_id, outcome, gj} for every round THIS ship
+        launched, from the simulation's own event log (impact > PD-destroyed
+        > blinded > fuel out > retargeted > in flight).
+        """
+        ship_id = getattr(self, "ship_id", None)
+        events = getattr(simulation, "events", None) if simulation is not None else None
+        if not ship_id or not events:
+            return {}
+        rank = {"in flight": 0, "retargeted": 1, "fuel out": 2, "blinded": 3,
+                "destroyed by PD": 4, "hit": 5}
+        out: Dict[str, Dict[str, Any]] = {}
+        for ev in events:
+            kind = getattr(getattr(ev, "event_type", None), "name", "")
+            data = getattr(ev, "data", None) or {}
+            tid = data.get("torpedo_id")
+            if not tid:
+                continue
+            if kind == "TORPEDO_LAUNCHED" and ev.ship_id == ship_id:
+                out[tid] = {"t": ev.timestamp, "target_id": ev.target_id,
+                            "outcome": "in flight", "gj": 0.0}
+                continue
+            rec = out.get(tid)
+            if rec is None:
+                continue
+            outcome = {"TORPEDO_IMPACT": "hit", "PD_TORPEDO_DESTROYED": "destroyed by PD",
+                       "PD_TORPEDO_DISABLED": "blinded", "TORPEDO_FUEL_EXHAUSTED": "fuel out",
+                       "TORPEDO_RETARGETED": "retargeted"}.get(kind)
+            if outcome is None:
+                continue
+            if outcome == "hit":
+                rec["gj"] = float(data.get("total_damage_gj", 0.0) or 0.0)
+            if outcome == "retargeted":
+                rec["target_id"] = data.get("new_target_id", rec["target_id"])
+            if rank[outcome] > rank[rec["outcome"]]:
+                rec["outcome"] = outcome
+        return out
+
+    @staticmethod
+    def _history_part(name: str, args: Dict[str, Any], resolve) -> Optional[str]:
+        """Compact text for one executed tool call (None: shown elsewhere)."""
+        args = args or {}
+        if name == "set_maneuver":
+            thr = args.get("throttle", 1.0)
+            try:
+                thr = float(thr)
+            except (TypeError, ValueError):
+                thr = 1.0
+            return f"{args.get('maneuver_type', '?')}@{thr * 100:.0f}%"
+        if name == "set_heading":
+            thr = args.get("throttle", 1.0)
+            try:
+                thr = float(thr)
+            except (TypeError, ValueError):
+                thr = 1.0
+            d = args.get("direction")
+            if isinstance(d, dict):
+                where = (f"({float(d.get('x', 0)):+.2f},{float(d.get('y', 0)):+.2f},"
+                         f"{float(d.get('z', 0)):+.2f})")
+            elif isinstance(args.get("toward_point"), dict):
+                p = args["toward_point"]
+                where = (f"toward point ({float(p.get('x', 0)):+.0f},{float(p.get('y', 0)):+.0f},"
+                         f"{float(p.get('z', 0)):+.0f}) km")
+            elif args.get("toward_ship"):
+                where = f"toward {resolve(args['toward_ship'])}"
+            else:
+                where = "?"
+            return f"HEADING {where}@{thr * 100:.0f}%"
+        if name == "set_weapons_order":
+            modes = [f"{k[:-5]} {v}" for k, v in args.items() if k.endswith("_mode") and v]
+            return "guns " + (", ".join(modes) if modes else "FIRE_WHEN_OPTIMAL")
+        if name == "set_primary_target":
+            return f"tgt {resolve(args.get('target_id') or args.get('target_name', '?'))}"
+        if name == "set_radiators":
+            cmd = radiator_command_from_args(args)
+            return "radiators " + ("auto" if cmd.get("mode") == "auto"
+                                   else "extend" if cmd["extend"] else "retract")
+        if name in ("respond_to_orders", "report_to_admiral"):
+            kind = args.get("response_type") or args.get("status") or "ACK"
+            kind = "ACK" if str(kind).upper().startswith("ACK") else str(kind).upper()
+            reason = args.get("deviation_reason") or args.get("reason") or ""
+            reason = " ".join(str(reason).split())
+            return f"report {kind}" + (f": {reason[:60]}{'...' if len(reason) > 60 else ''}"
+                                       if reason and kind != "ACK" else "")
+        if name in ("send_message", "fleet_signal"):
+            return "signal fleet" if name == "fleet_signal" else \
+                f"msg {str(args.get('recipient', 'ALL_ENEMIES')).lower()}"
+        if name == "log_note":
+            return "log"
+        if name == "discuss_with_admiral":
+            return "asked admiral"
+        if name in ("surrender", "propose_draw", "retract_draw"):
+            return name.upper()
+        if name == "launch_torpedo":
+            return None  # rendered from the launch events, with outcomes
+        return name
+
+    def _format_decision_history(self, last_n: int = 5, simulation: Any = None) -> str:
+        """
+        Recent decisions as issued, newest last, with what the launches did.
+
+        Every executed tool appears (torpedo launches, headings, targets,
+        reports); the old renderer knew maneuvers and spinal/turret orders
+        only, so a torpedo boat's history read "none" on the turn it fired.
+        """
         if not self.decision_history:
             return ""
+        names: Dict[str, str] = {}
+        ships = getattr(simulation, "ships", None) if simulation is not None else None
+        by_name = ({str(getattr(s, "name", sid)).lower(): sid for sid, s in ships.items()}
+                   if isinstance(ships, dict) else {})
 
-        recent = self.decision_history[-last_n:]
-        lines = ["YOUR RECENT DECISIONS:"]
+        def resolve(ref: Any) -> str:
+            ref = str(ref)
+            if ref not in names:
+                sid = ref if isinstance(ships, dict) and ref in ships else by_name.get(ref.lower())
+                ship = ships.get(sid) if sid else None
+                names[ref] = ship_ref(getattr(ship, "name", sid), sid) if ship is not None else ref
+            return names[ref]
 
-        for decision in recent:
-            checkpoint = decision["checkpoint"]
-            time = decision["time"]
-            actions = []
-
-            for tc in decision["tool_calls"]:
-                name = tc["name"]
-                args = tc["args"]
-
-                if name == "set_maneuver":
-                    maneuver = args.get("maneuver_type", "?")
-                    throttle = args.get("throttle", 1.0)
-                    actions.append(f"{maneuver}@{throttle*100:.0f}%")
-                elif name == "set_weapons_order":
-                    spinal = args.get("spinal_mode", "")
-                    turret = args.get("turret_mode", "")
-                    if spinal and turret:
-                        actions.append(f"weapons:{spinal}/{turret}")
-                    elif spinal:
-                        actions.append(f"spinal:{spinal}")
-                    elif turret:
-                        actions.append(f"turret:{turret}")
-                elif name == "set_radiators":
-                    cmd = radiator_command_from_args(args)
-                    actions.append("radiators:" + ("auto" if cmd.get("mode") == "auto"
-                                                   else "extend" if cmd["extend"] else "retract"))
-                elif name == "send_message":
-                    actions.append("sent_msg")
-                elif name == "log_note":
-                    actions.append("logged_note")
-                elif name == "surrender":
-                    actions.append("SURRENDER")
-                elif name == "propose_draw":
-                    actions.append("PROPOSE_DRAW")
-                elif name == "retract_draw":
-                    actions.append("RETRACT_DRAW")
-
-            action_str = ", ".join(actions) if actions else "none"
-            lines.append(f"  T+{time:.0f}s: {action_str}")
-
+        outcomes = self._launch_outcomes(simulation)
+        interval = float(getattr(simulation, "decision_interval", 30.0) or 30.0) \
+            if simulation is not None else 30.0
+        lines = ["YOUR RECENT DECISIONS (newest last; launches with what they did):"]
+        for d in self.decision_history[-last_n:]:
+            t = d["time"]
+            if d.get("lost"):
+                kept = (f"engine renewed {d['renewed']}" if d.get("renewed")
+                        else f"{d['kept']} kept flying" if d.get("kept")
+                        else "the ship coasted")
+                lines.append(f"  T+{t:.0f} LOST ({d['lost']}) - {kept}")
+                continue
+            parts = []
+            requested = 0
+            for tc in d["tool_calls"]:
+                if tc["name"] == "launch_torpedo":
+                    try:
+                        requested += int(tc["args"].get("count", 1))
+                    except (TypeError, ValueError):
+                        requested += 1
+                part = self._history_part(tc["name"], tc["args"], resolve)
+                if part:
+                    parts.append(part)
+            launched = [r for r in outcomes.values() if t - 1e-6 <= r["t"] < t + interval - 1e-6]
+            if launched:
+                by_target: Dict[str, List[Dict[str, Any]]] = {}
+                for r in launched:
+                    by_target.setdefault(r["target_id"], []).append(r)
+                for target_id, rounds in by_target.items():
+                    hits = [r for r in rounds if r["outcome"] == "hit"]
+                    tally = []
+                    if hits:
+                        tally.append(f"{len(hits)} hit {sum(r['gj'] for r in hits):.0f} GJ")
+                    for outcome in ("destroyed by PD", "blinded", "fuel out", "retargeted",
+                                    "in flight"):
+                        n = sum(1 for r in rounds if r["outcome"] == outcome)
+                        if n:
+                            tally.append(f"{n} {outcome}")
+                    parts.append(f"torp x{len(rounds)} -> {resolve(target_id)}: {', '.join(tally)}")
+            elif requested:
+                parts.append(f"torp x{requested} requested - none left the tube")
+            text = " | ".join(parts) if parts else "none"
+            if d.get("followups"):
+                text += f" (after {d['followups']} follow-up{'s' if d['followups'] > 1 else ''})"
+            if d.get("acted") is False:
+                text += " - NO COMMANDS: the ship coasted"
+            lines.append(f"  T+{t:.0f} {text}")
         return "\n".join(lines)
 
-    def _format_message_history(self, last_n: int = 6) -> str:
-        """Format recent message history for the prompt."""
-        if not self.message_history:
+    def _format_message_history(self, last_n: int = 6, before: Optional[float] = None) -> str:
+        """
+        Earlier traffic, labelled by side. Messages that arrived THIS
+        checkpoint (received_at == before) are in FLEET NET / ENEMY
+        TRANSMISSIONS already and are not repeated here.
+        """
+        msgs = [m for m in self.message_history
+                if before is None or m.get("received_at") is None or m["received_at"] < before]
+        if not msgs:
             return ""
-
-        recent = self.message_history[-last_n:]
-        lines = ["COMMUNICATION LOG:"]
-
-        for msg in recent:
-            sender = msg["sender"]
-            time = msg["time"]
+        lines = ["COMMUNICATION LOG (earlier checkpoints):"]
+        for msg in msgs[-last_n:]:
             text = msg["text"]
             # Truncate long messages
             if len(text) > 100:
                 text = text[:100] + "..."
-            who = "You" if sender == "self" else "Enemy"
-            lines.append(f"  T+{time:.0f}s [{who}]: \"{text}\"")
-
+            if msg["sender"] == "self":
+                who = "You"
+            elif msg.get("side") == "friendly":
+                who = f"{msg.get('from') or 'friendly'} (friendly)"
+            else:
+                who = f"ENEMY {msg.get('from') or ''}".rstrip()
+            lines.append(f"  T+{msg['time']:.0f}s [{who}]: \"{text}\"")
         return "\n".join(lines)
 
     def _format_battle_summary(self, distance_km: float) -> str:
@@ -675,14 +1552,11 @@ class LLMCaptain:
         if self.initial_distance_km is None:
             return ""
 
-        lines = ["BATTLE PROGRESSION:"]
-        lines.append(f"  Started: {self.initial_distance_km:.0f} km apart")
-        lines.append(f"  Closest approach: {self.min_distance_km:.0f} km")
+        line = (f"BATTLE PROGRESSION: started {self.initial_distance_km:.0f} km apart, closest "
+                f"approach so far {self.min_distance_km:.0f} km")
         if self.passes_count > 0:
-            lines.append(f"  Close passes (<100km): {self.passes_count}")
-        lines.append(f"  Checkpoints elapsed: {self.decision_count}")
-
-        return "\n".join(lines)
+            line += f", {self.passes_count} close pass{'es' if self.passes_count > 1 else ''} (<100 km)"
+        return line
 
     def _update_battle_tracking(self, distance_km: float) -> None:
         """Update battle state tracking for history context."""
@@ -805,8 +1679,49 @@ class LLMCaptain:
         self.pending_tool_errors.append(message)
 
     def _record_tool_note(self, message: str) -> None:
-        """An accepted call's answer worth seeing next turn (e.g. a launch warning)."""
+        """
+        An EXECUTED call's answer worth seeing next turn (a launch warning, an
+        ignored parameter). Its own channel, replayed as "ENGINE NOTES ON YOUR
+        LAST ORDERS (accepted ...)": on the tool-error channel it would sit
+        under "REJECTED, reissue correctly" and invite a second launch.
+        """
+        print(f"[CAPTAIN {self.name}] note: {message}")
         self.pending_tool_notes.append(message)
+
+    def _torpedo_feasible(self, simulation: Any, ship_id: str, target_id: str,
+                          count: int, args: Dict[str, Any]) -> bool:
+        """
+        Launch feasibility from a flown shadow round (see fire_solutions).
+
+        Refused: UNREACHABLE while the target is opening (it misses even if he
+        holds course) - unless override_check=true. Accepted with a warning
+        note: UNREACHABLE while closing (rare), ESCAPABLE, TOO CLOSE, OVERKILL,
+        and a lone round trickled into point defense that blinds it.
+        """
+        get_ship = getattr(simulation, "get_ship", None)
+        if get_ship is None:
+            return True
+        ship, target = get_ship(ship_id), get_ship(target_id)
+        if ship is None or target is None:
+            return True
+        sol = self._torpedo_solution(simulation, ship, target)
+        if sol is None:
+            return True
+        ref = ship_ref(getattr(target, 'name', target_id), target_id)
+        override = str(args.get("override_check", "")).lower() in ("true", "1", "yes")
+        if sol.verdict == "UNREACHABLE" and sol.closing_kps < 0 and not override:
+            self._record_tool_error(
+                f"launch_torpedo x{count} -> {ref}: REFUSED, {sol.summary()}. "
+                f"Pass override_check=true to launch anyway.")
+            return False
+        if sol.verdict != "REACHABLE":
+            self._record_tool_note(f"launch_torpedo x{count} -> {ref} launched: {sol.summary()}")
+        elif count + sol.friendly_inbound < sol.salvo_to_saturate:
+            self._record_tool_note(
+                f"launch_torpedo x{count} -> {ref} launched: TRICKLE - {sol.pd_cover} PD turrets "
+                f"cover him; rounds arriving alone get blinded (salvo >= "
+                f"{sol.salvo_to_saturate} together needed, {sol.friendly_inbound} already inbound)")
+        return True
 
     def _format_tool_errors(self) -> str:
         """Format last turn's rejected tool calls (and launch warnings) for the next prompt."""
@@ -938,11 +1853,16 @@ class LLMCaptain:
             "text": message,
         })
 
-    def _record_received_message(self, message: str, time: float) -> None:
-        """Record a message received from enemy."""
+    def _record_received_message(self, message: str, time: float,
+                                 sender: Optional[str] = None, side: str = "enemy",
+                                 received_at: Optional[float] = None) -> None:
+        """Record a received message with the sender's side (friendly/enemy)."""
         self.message_history.append({
-            "sender": "enemy",
+            "sender": "enemy" if side != "friendly" else "friendly",
+            "side": side,
+            "from": sender,
             "time": time,
+            "received_at": received_at,
             "text": message,
         })
 
@@ -1001,6 +1921,34 @@ class LLMCaptain:
                     "cooldown": weapon_state.cooldown_remaining if hasattr(weapon_state, 'cooldown_remaining') else 0,
                 }
         status["weapons"] = weapon_status
+
+        # Gun groups as the captain commands them (one entry per weapon group:
+        # mode, how many mounts are ready / reloading / destroyed). Keyed by
+        # slot - the name-keyed dict above merges identical turrets.
+        gun_groups = []
+        weapons = getattr(ship, 'weapons', None) or {}
+        for group, slots in (self.weapon_groups or {}).items():
+            states = [weapons[s] for s in slots if s in weapons]
+            if not states:
+                continue
+            ready = reloading_n = destroyed = 0
+            reloading = []
+            for ws in states:
+                if not getattr(ws, 'is_operational', True):
+                    destroyed += 1
+                elif getattr(ws, 'cooldown_remaining', 0) > 0:
+                    reloading.append(float(ws.cooldown_remaining))
+                else:
+                    ready += 1
+            weapon = getattr(states[0], 'weapon', None)
+            label = getattr(weapon, 'name', None) or group.replace('_', ' ').title()
+            mode = (self.current_weapon_orders.get(group)
+                    or (self.current_weapon_orders.get('turret') if group != 'spinal' else None)
+                    or 'HOLD_FIRE')
+            gun_groups.append({'group': group, 'label': label, 'mode': mode, 'count': len(states),
+                               'ready': ready, 'reloading': reloading, 'destroyed': destroyed})
+        if gun_groups:
+            status["gun_groups"] = gun_groups
 
         # Torpedo magazine. The launch_torpedo tool warns "Limited ammunition!"
         # but the remaining count was never disclosed anywhere, so the captain had
@@ -1251,8 +2199,40 @@ class LLMCaptain:
                 "weapon_slot": slot, "weapon_name": ws.weapon.name,
                 "hit_probability": probability, "shots": shots,
                 "window_s": window_s, "expected_hits": probability * shots,
+                # Expected damage per shot (P(hit) x round energy): the number
+                # that ranks targets, not closeness (R10).
+                "expected_gj_per_shot": probability * float(
+                    getattr(ws.weapon, "kinetic_energy_gj", 0.0) or 0.0),
             })
         info["weapon_hit_forecasts"] = forecasts
+
+        # World-frame unit vector to him (paste-able into set_heading), his
+        # live point defense and magazine, and his remaining gun output.
+        if distance_m > 0:
+            u = rel_pos.normalized()
+            info["dir_to"] = {"x": u.x, "y": u.y, "z": u.z}
+        pd_list = getattr(enemy, "point_defense", None)
+        if isinstance(pd_list, (list, tuple)):
+            info["pd_operational"] = sum(1 for pd in pd_list if getattr(pd, "is_operational", True))
+        if _has_launchers(enemy):
+            remaining = getattr(enemy, "torpedoes_remaining", None)
+            if isinstance(remaining, (int, float)):
+                info["torpedoes_remaining"] = int(remaining)
+        gun_rate = 0.0
+        enemy_weapons = getattr(enemy, "weapons", None)
+        for ews in (enemy_weapons.values() if isinstance(enemy_weapons, dict) else ()):
+            w = getattr(ews, "weapon", None)
+            if (w is None or getattr(w, "is_missile", False)
+                    or (getattr(w, "muzzle_velocity_kps", 0) or 0) <= 0
+                    or not getattr(ews, "is_operational", True)):
+                continue
+            salvo = max(1, int(getattr(w, "salvo_size", 1) or 1))
+            cycle = (float(getattr(w, "cooldown_s", 0) or 0)
+                     + (salvo - 1) * float(getattr(w, "intra_salvo_cooldown_s", 0) or 0))
+            if cycle > 0:
+                gun_rate += float(getattr(w, "kinetic_energy_gj", 0) or 0) * salvo * 60.0 / cycle
+        if gun_rate > 0:
+            info["gun_gj_per_min"] = gun_rate
         info["hit_chance"] = 100 * max(
             (f["hit_probability"] for f in forecasts), default=0.0)
 
@@ -1326,23 +2306,53 @@ class LLMCaptain:
         enemies_info.sort(key=lambda x: (not x["is_primary_target"], x["distance_km"]))
         status["enemies"] = enemies_info
 
-        # Build friendly info list (simpler, less detail needed)
+        # MY SHIP in the world frame: position and velocity are what
+        # set_heading directions and admiral coordinates are expressed in.
+        # Captains used to get neither, and copied absolute positions from
+        # orders into set_heading (one corvette burned 144 deg off target).
+        try:
+            pos, vel = ship.position, ship.velocity
+            own = {
+                "ship_id": ship.ship_id,
+                "position_km": {"x": pos.x / 1000, "y": pos.y / 1000, "z": pos.z / 1000},
+                "velocity_kps": {"x": vel.x / 1000, "y": vel.y / 1000, "z": vel.z / 1000},
+                "speed_kps": vel.magnitude / 1000,
+            }
+            try:
+                own["accel_g"] = (ship.kinematic_state.max_acceleration_ms2()
+                                  * ship.get_effective_thrust_fraction() / 9.80665)
+            except (AttributeError, TypeError):
+                pass
+            if hasattr(simulation, "_estimate_turn_time"):
+                try:
+                    own["turn_90_s"] = simulation._estimate_turn_time(
+                        ship, math.pi / 2, engines_on=True)
+                except (AttributeError, TypeError, ValueError):
+                    pass
+            status["own"] = own
+        except AttributeError:
+            pass
+
+        # Friendlies: where, doing what, at whom, with how much PD - formation
+        # defense is real only if the captain can see who covers whom.
+        pd_range_km = None
+        if self.config.fleet_data:
+            pd_range_km = pd_doctrine_numbers(self.config.fleet_data)["range_km"]
+        umbrella = []
         for f in all_friendlies:
             if f.ship_id == ship.ship_id:
                 continue  # Skip self
-            rel_pos = f.position - ship.position
-            distance_km = rel_pos.magnitude / 1000
-            status["friendlies"].append({
-                "ship_id": f.ship_id,
-                "name": getattr(f, 'name', f.ship_id),
-                "distance_km": distance_km,
-                "hull_percent": f.hull_integrity,
-                "relative_position": {
-                    "x": rel_pos.x / 1000,
-                    "y": rel_pos.y / 1000,
-                    "z": rel_pos.z / 1000,
-                },
-            })
+            status["friendlies"].append(self._friendly_info(ship, f, simulation, all_enemies))
+            info = status["friendlies"][-1]
+            if (pd_range_km is not None and info.get("pd_operational")
+                    and info["distance_km"] <= pd_range_km):
+                umbrella.append((info["name"], info["pd_operational"]))
+        own_pd_list = getattr(ship, 'point_defense', None)
+        own_pd = [pd for pd in (own_pd_list if isinstance(own_pd_list, (list, tuple)) else [])
+                  if getattr(pd, 'is_operational', True)]
+        if pd_range_km is not None:
+            status["pd_umbrella"] = {"own": len(own_pd), "allies": umbrella,
+                                     "range_km": pd_range_km}
 
         # Legacy fields for backward compatibility (from primary target or first enemy)
         primary_enemy = None
@@ -1541,7 +2551,7 @@ class LLMCaptain:
                               if t['t_go'] not in (0, float('inf')) else 0.0)
                 source_id = getattr(tf, 'source_ship_id', 'Unknown')
                 source_ship = simulation.get_ship(source_id) if source_id else None
-                source_name = (getattr(source_ship, 'name', source_id)
+                source_name = (ship_ref(getattr(source_ship, 'name', source_id), source_id)
                                if source_ship else source_id)
                 torpedo_threats.append({
                     "distance_km": t['distance_m'] / 1000,
@@ -1555,9 +2565,33 @@ class LLMCaptain:
                     "pd_turrets_needed": _pd_triage(
                         tf, t['distance_m'] / 1000, closing_ms),
                     "own_pd_turrets": len(own_pd),
+                    # Allied turrets whose envelope the round's path to us
+                    # crosses: their dwell stacks with ours (CP-13).
+                    "allied_pd_turrets": self._allied_pd_on_path(
+                        ship, tf.torpedo.position, all_friendlies, pd_range_km),
                 })
 
-        if hasattr(simulation, 'torpedoes') and simulation.torpedoes:
+        # Blinded wrecks: only those on a COLLISION course with this ship, from
+        # whichever side - the engine's own closest-approach filter, the same
+        # one behind the threat count, so the count and the list agree.
+        if hasattr(simulation, 'blinded_wreck_threats'):
+            for w in simulation.blinded_wreck_threats(ship):
+                tf = w['torp_flight']
+                source_id = getattr(tf, 'source_ship_id', None)
+                source_ship = simulation.get_ship(source_id) if source_id else None
+                torpedo_threats.append({
+                    "distance_km": w['distance_m'] / 1000,
+                    "closing_kps": w['closing_ms'] / 1000,
+                    "eta_seconds": w['tca_s'],
+                    "source": (ship_ref(getattr(source_ship, 'name', source_id), source_id)
+                               if source_ship else source_id),
+                    "blinded": True,
+                    "own_side": bool(source_ship is not None
+                                     and source_ship.faction == ship.faction),
+                    "miss_km": w['miss_m'] / 1000,
+                    "est_impact_gj": w['ke_gj'],
+                })
+        elif hasattr(simulation, 'torpedoes') and simulation.torpedoes:
             for torp_flight in simulation.torpedoes:
                 torp = torp_flight.torpedo
                 is_blinded = getattr(torp_flight, 'is_disabled', False)
@@ -1606,6 +2640,10 @@ class LLMCaptain:
             current_maneuver_info = {
                 "type": maneuver_type,
                 "throttle": throttle,
+                # When it was issued and how long it runs: a maneuver that
+                # ends at this checkpoint must be renewed or the ship coasts.
+                "start_time": getattr(maneuver, 'start_time', None),
+                "duration": getattr(maneuver, 'duration', None),
             }
             # Add heading direction if it's a heading maneuver
             if hasattr(maneuver, 'heading_direction') and maneuver.heading_direction:
@@ -1622,7 +2660,175 @@ class LLMCaptain:
             evasion_status = simulation._get_evasion_status(ship)
             status["evasion_status"] = evasion_status
 
+        # Fire solutions this hull can act on, and who can hit it next.
+        self._add_torpedo_solutions(status, ship, all_enemies, simulation)
+        self._add_threats_to_me(status, ship, all_enemies, simulation)
         return status
+
+    @staticmethod
+    def _allied_pd_on_path(ship: Any, torp_pos: Any, friendlies: List[Any],
+                           pd_range_km: Optional[float]) -> int:
+        """Allied live PD turrets within PD range of the segment torpedo -> ship."""
+        if pd_range_km is None:
+            return 0
+        a, b = torp_pos, ship.position
+        ab = b - a
+        L2 = ab.dot(ab)
+        total = 0
+        for f in friendlies:
+            if f.ship_id == ship.ship_id:
+                continue
+            n = sum(1 for pd in (getattr(f, 'point_defense', None) or [])
+                    if getattr(pd, 'is_operational', True))
+            if not n:
+                continue
+            t = 0.0 if L2 <= 0 else max(0.0, min(1.0, (f.position - a).dot(ab) / L2))
+            if (f.position - (a + ab * t)).magnitude <= pd_range_km * 1000.0:
+                total += n
+        return total
+
+    def _friendly_info(self, ship: Any, f: Any, simulation: Any,
+                       enemies: List[Any]) -> Dict[str, Any]:
+        """One friendly as the FRIENDLIES block shows it."""
+        rel_pos = f.position - ship.position
+        distance_m = rel_pos.magnitude
+        info: Dict[str, Any] = {
+            "ship_id": f.ship_id,
+            "name": getattr(f, 'name', f.ship_id),
+            "ship_type": getattr(f, 'ship_type', None),
+            "distance_km": distance_m / 1000,
+            "hull_percent": f.hull_integrity,
+            "relative_position": {"x": rel_pos.x / 1000, "y": rel_pos.y / 1000,
+                                  "z": rel_pos.z / 1000},
+        }
+        if distance_m > 0:
+            u = rel_pos.normalized()
+            info["dir_to"] = {"x": u.x, "y": u.y, "z": u.z}
+        try:
+            info["rel_speed_kps"] = (f.velocity - ship.velocity).magnitude / 1000
+        except AttributeError:
+            pass
+        m = getattr(f, 'current_maneuver', None)
+        if m is not None and hasattr(m, 'maneuver_type'):
+            info["maneuver"] = {"type": m.maneuver_type.name,
+                                "throttle": getattr(m, 'throttle', 1.0),
+                                "heading": getattr(m, 'heading_direction', None)}
+        elif hasattr(f, 'current_maneuver'):
+            info["maneuver"] = None
+        tid = getattr(f, 'primary_target_id', None)
+        if tid:
+            tgt = simulation.get_ship(tid) if hasattr(simulation, 'get_ship') else None
+            info["target_id"] = tid
+            info["target_name"] = getattr(tgt, 'name', tid) if tgt else tid
+        pd_list = getattr(f, 'point_defense', None)
+        if isinstance(pd_list, (list, tuple)) and pd_list:
+            info["pd_total"] = len(pd_list)
+            info["pd_operational"] = sum(1 for pd in pd_list if getattr(pd, 'is_operational', True))
+        if _has_launchers(f):
+            remaining = getattr(f, 'torpedoes_remaining', None)
+            if isinstance(remaining, (int, float)):
+                info["torpedoes_remaining"] = int(remaining)
+            in_flight = []
+            for tf in getattr(simulation, 'torpedoes', None) or []:
+                if tf.source_ship_id != f.ship_id or getattr(tf, 'is_disabled', False):
+                    continue
+                tgt = simulation.get_ship(tf.torpedo.target_id)
+                if tgt is None:
+                    continue
+                off = tgt.position - tf.torpedo.position
+                closing = -(off.normalized()).dot(tgt.velocity - tf.torpedo.velocity) \
+                    if off.magnitude > 0 else 0.0
+                in_flight.append(off.magnitude / closing if closing > 1.0 else None)
+            if in_flight:
+                info["rounds_in_flight"] = len(in_flight)
+                etas = [e for e in in_flight if e is not None]
+                if etas:
+                    info["first_impact_s"] = min(etas)
+        return info
+
+    def _add_torpedo_solutions(self, status: Dict[str, Any], ship: Any,
+                               enemies: List[Any], simulation: Any) -> None:
+        """
+        Flown torpedo solutions for the nearest contacts (torpedo hulls only):
+        TOF, impact energy, PD cover, friendly rounds inbound and a verdict.
+        """
+        if not self.config.has_torpedoes or not self.config.fleet_data or not enemies:
+            return
+        remaining = getattr(ship, "torpedoes_remaining", None)
+        if isinstance(remaining, (int, float)) and remaining <= 0:
+            return  # magazine empty: no launch to plan
+        infos = {e["ship_id"]: e for e in status.get("enemies", [])}
+        nearest = sorted(enemies, key=lambda e: (e.position - ship.position).magnitude)
+        for e in nearest[:MAX_TORPEDO_SOLUTIONS]:
+            sol = self._torpedo_solution(simulation, ship, e)
+            if sol is not None and e.ship_id in infos:
+                infos[e.ship_id]["torpedo_solution"] = sol.summary()
+                infos[e.ship_id]["torpedo_verdict"] = sol.verdict
+
+    def _add_threats_to_me(self, status: Dict[str, Any], ship: Any,
+                           enemies: List[Any], simulation: Any) -> None:
+        """
+        Enemy torpedo hulls that have this ship targeted (and when a launch
+        made now would land: a flown shadow round), and enemy guns on it.
+        """
+        targeting = set(self.targeting_me or [])
+        fleet = self.config.fleet_data
+        hulls, guns = [], []
+        from .fire_solutions import fly_torpedo
+        from ..firecontrol import calculate_hit_probability
+        evading = bool(ship.current_maneuver is not None
+                       and getattr(ship.current_maneuver.maneuver_type, 'name', '') == 'EVASIVE')
+        window_s = getattr(simulation, "decision_interval", 30.0)
+        for e in sorted(enemies, key=lambda x: (x.position - ship.position).magnitude):
+            if e.ship_id not in targeting:
+                continue
+            rng_km = (e.position - ship.position).magnitude / 1000
+            remaining = getattr(e, 'torpedoes_remaining', 0)
+            remaining = remaining if isinstance(remaining, (int, float)) else 0
+            launchers = getattr(e, 'ready_torpedo_launchers', None)
+            launchers = launchers if isinstance(launchers, (list, tuple)) else []
+            if launchers and remaining > 0 and len(hulls) < MAX_THREAT_HULL_SOLUTIONS:
+                key = ("threat", round(float(simulation.current_time), 3), e.ship_id, ship.ship_id)
+                shot = self._solution_cache.get(key)
+                if key not in self._solution_cache and fleet:
+                    try:
+                        shot = fly_torpedo(simulation, e, ship, fleet, target_evades=evading)
+                    except Exception:  # noqa: BLE001 - advisory only
+                        shot = None
+                    self._solution_cache[key] = shot
+                hulls.append({"ship_id": e.ship_id, "name": getattr(e, 'name', e.ship_id),
+                              "tubes": len(launchers), "rounds": int(remaining),
+                              "range_km": rng_km,
+                              "launch_tof_s": shot.tof_s if shot is not None and shot.hits else None})
+            best, shots = 0.0, 0
+            to_me = ship.position - e.position
+            if to_me.magnitude <= 0:
+                continue
+            e_weapons = getattr(e, 'weapons', None)
+            for ws in (e_weapons.values() if isinstance(e_weapons, dict) else ()):
+                w = getattr(ws, 'weapon', None)
+                if (w is None or w.is_missile or w.muzzle_velocity_kps <= 0
+                        or not getattr(ws, 'is_operational', True)):
+                    continue
+                try:
+                    sol = calculate_hit_probability(
+                        shooter_position=e.position, shooter_velocity=e.velocity,
+                        target_position=ship.position, target_velocity=ship.velocity,
+                        target_geometry=ship.geometry, target_forward=ship.forward,
+                        muzzle_velocity_kps=w.muzzle_velocity_kps, target_is_evading=evading)
+                except (AttributeError, TypeError):
+                    continue
+                if not sol.can_fire or not ws.is_target_in_arc(e.forward, to_me.normalized()):
+                    continue
+                best = max(best, sol.hit_probability)
+                shots += ws.shots_in_window(window_s)
+            if shots:
+                guns.append({"ship_id": e.ship_id, "name": getattr(e, 'name', e.ship_id),
+                             "range_km": rng_km, "p_hit": best, "shots": shots})
+        if hulls:
+            status["torpedo_hulls_on_me"] = hulls
+        if guns:
+            status["guns_on_me"] = guns
 
     @tool_evidence
     def _execute_tool(
@@ -1710,28 +2916,30 @@ class LLMCaptain:
             )
 
         elif name == "set_primary_target":
-            # Set the primary target for this captain
-            target_name = args.get("target_name", "")
-            # Find enemy ship by name
+            # Set the primary target for this captain: by id, exact name, bare
+            # name or a UNIQUE partial match (names repeat across fleets, so
+            # "first substring wins" could silently pick the wrong ship).
+            target_ref = args.get("target_id") or args.get("target_name", "")
             enemies = simulation.get_enemy_ships(ship_id)
             # The captain-side field alone is not enough: the Admiral's per-ship
             # snapshot (current_target / targeted_by) reads ship.primary_target_id,
             # which is only written by a 'set_target' command. Returning the command
             # as well as setting the local field keeps the two in sync.
-            for enemy in enemies:
-                enemy_name = getattr(enemy, 'name', enemy.ship_id)
-                if enemy_name.lower() == target_name.lower() or enemy.ship_id == target_name:
-                    self.primary_target_id = enemy.ship_id
-                    return {"type": "set_target", "target_id": enemy.ship_id}
-            # If not found, try partial match
-            for enemy in enemies:
-                enemy_name = getattr(enemy, 'name', enemy.ship_id)
-                if target_name.lower() in enemy_name.lower():
-                    self.primary_target_id = enemy.ship_id
-                    return {"type": "set_target", "target_id": enemy.ship_id}
-            valid = ", ".join(getattr(e, 'name', e.ship_id) for e in enemies) or "(none)"
+            enemy, candidates = self._resolve_ship(target_ref, enemies)
+            if enemy is not None:
+                self.primary_target_id = enemy.ship_id
+                return {"type": "set_target", "target_id": enemy.ship_id}
+            if candidates:
+                self._record_tool_error(
+                    f"set_primary_target: '{target_ref}' is ambiguous - "
+                    + ", ".join(ship_ref(getattr(c, 'name', c.ship_id), c.ship_id) for c in candidates)
+                    + ". Pass target_id."
+                )
+                return None
+            valid = ", ".join(ship_ref(getattr(e, 'name', e.ship_id), e.ship_id)
+                              for e in enemies) or "(none)"
             self._record_tool_error(
-                f"set_primary_target: no enemy named '{target_name}'. Valid targets: {valid}"
+                f"set_primary_target: no enemy named '{target_ref}'. Valid targets: {valid}"
             )
             return None
 
@@ -1865,16 +3073,15 @@ class LLMCaptain:
             target_id = None
             explicit = args.get("target_name")
             if explicit:
-                for enemy in enemies:
-                    enemy_name = getattr(enemy, 'name', enemy.ship_id)
-                    if (enemy_name.lower() == explicit.lower()
-                            or enemy.ship_id == explicit
-                            or explicit.lower() in enemy_name.lower()):
-                        target_id = enemy.ship_id
-                        break
-                if target_id is None:
+                enemy, candidates = self._resolve_ship(explicit, enemies)
+                if enemy is not None:
+                    target_id = enemy.ship_id
+                else:
+                    which = (" is ambiguous (" + ", ".join(
+                        ship_ref(getattr(c, 'name', c.ship_id), c.ship_id) for c in candidates)
+                        + ")") if candidates else " matches no enemy"
                     self._record_tool_error(
-                        f"launch_torpedo: no enemy named '{explicit}'; using primary target"
+                        f"launch_torpedo: '{explicit}'{which}; using primary target"
                     )
             if target_id is None and self.primary_target_id:
                 if any(e.ship_id == self.primary_target_id for e in enemies):
@@ -1893,7 +3100,12 @@ class LLMCaptain:
                 if any(e.ship_id == self.primary_target_id for e in enemies):
                     target_id = self.primary_target_id
             if target_id is None:
-                target_id = enemies[0].ship_id
+                # Nearest contact (the enemy list's order is arbitrary).
+                try:
+                    me = simulation.get_ship(ship_id)
+                    target_id = min(enemies, key=lambda e: (e.position - me.position).magnitude).ship_id
+                except (AttributeError, TypeError):
+                    target_id = enemies[0].ship_id
 
             # Reserve only rounds that can leave a tube before the next decision.
             try:
@@ -1911,6 +3123,14 @@ class LLMCaptain:
                 self._record_tool_error(
                     "launch_torpedo: magazine empty or launcher still reloading"
                 )
+                return None
+
+            # Feasibility: fly the round on the engine shadow first. A launch
+            # that misses even if the target holds course while it OPENS range
+            # is refused (19 of 49 rounds in one battle went at receding
+            # targets for 0 GJ); every other doubtful verdict is accepted with
+            # the warning as the tool's answer (shown next turn).
+            if not self._torpedo_feasible(simulation, ship_id, target_id, count, args):
                 return None
 
             return [
