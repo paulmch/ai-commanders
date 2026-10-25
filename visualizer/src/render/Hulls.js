@@ -266,7 +266,7 @@ export class HullKit {
     this.rcsMounts = [];      // {pos, dir} RCS nozzle exits, hull-local
     this.markings = [];       // hull-code decal placements
     this.floods = [];         // floodlight pools {x,y,z,face,len,width,dir}
-    this.magazine = [];       // torpedo rounds {kind,bank,pos,quat,s,slide}
+    this.magazine = [];       // torpedo rounds {kind,bank,pos,quat,s,hinge}
     this.doors = [];          // {kit, bank, slide} torpedo launch doors
     this.drive = null;        // {shape:'torch'|'box'|'drum', ...} set by the class builder
     this.hasSpinal = false;   // weapon_0 is a spinal mount (turrets start at weapon_1)
@@ -856,14 +856,16 @@ export class HullKit {
    * banks round robin (one bank per launcher, as the doors were) and
    * empty a bank's rounds in call order.
    *   kind 'rack': an external round, body along +Z (corvette rails)
-   *   kind 'cell': a VLS hatch at pos facing the bank's `up`; it slides by
-   *                `slide` when its round fires and stays open (empty)
+   *   kind 'cell': a VLS hatch at pos, its local +Y the bank's `up`; with
+   *                `hinge` it swings up about its local +X edge when its
+   *                round fires (HullRigs.HATCH_OPEN: just past upright,
+   *                leaning outboard over the coaming) and stays open
    * `matrix` places the round/hatch (hull-local), `s` is the cell size.
    */
-  magazineRound(kind, bank, matrix, s, { slide = null } = {}) {
+  magazineRound(kind, bank, matrix, s, { hinge = false } = {}) {
     const pos = new THREE.Vector3(), quat = new THREE.Quaternion(), scl = new THREE.Vector3();
     matrix.decompose(pos, quat, scl);
-    this.magazine.push({ kind, bank, pos, quat, s, slide: slide ? slide.clone() : null });
+    this.magazine.push({ kind, bank, pos, quat, s, hinge });
   }
 
   /**
@@ -1521,9 +1523,10 @@ function hullCruiser(k, opts = {}) {
 /**
  * Torpedo cruiser: the cruiser drum wearing four raised VLS banks (one per
  * launcher) of 2 x 6 cells - 48 rounds, the fleet_ships magazine (4 x 12).
- * Each cell's hatch slides open as its round fires and stays open; its
- * status lamp goes from the faction colour to dark. The banks turn the
- * drum's octagon into a cross: a different silhouette from the gun cruiser.
+ * Each cell's hatch swings up as its round fires and stays open over the
+ * dark, empty tube; its status lamp goes from the faction colour to dark.
+ * The banks turn the drum's octagon into a cross: a different silhouette
+ * from the gun cruiser.
  */
 function hullTorpedoCruiser(k) {
   const L = k.L, W = k.W;
@@ -1545,11 +1548,14 @@ function hullTorpedoCruiser(k) {
     for (let row = 0; row < 6; row++) {
       for (let col = 0; col < 2; col++) {
         const cx = (col - 0.5) * W * 0.2, cz = (2.5 - row) * L * 0.052;
-        // hot tube mouth under the hatch, then the hatch itself (instanced)
+        // the cell under the hatch: dark well, bare gunmetal bore ring
+        // round a dark tube mouth (an empty cell reads dark, not lit)
         k.box('dark', cs * 0.92, W * 0.01, cs * 0.92, cx, top - W * 0.004, cz, { bevel: 0, parent: P });
-        k.drum('accent', cs * 0.28, W * 0.004, 0, { sides: 12, parent: k.xf(cx, top + W * 0.002, cz, Math.PI / 2, 0, 0, P) });
-        const slide = new THREE.Vector3((col ? 1 : -1) * cs * 0.82, 0, 0).applyAxisAngle(new THREE.Vector3(0, 0, 1), angle);
-        k.magazineRound('cell', bi, k.xf(cx, top + cs * 0.06, cz, 0, 0, 0, P), cs, { slide });
+        k.drum('barrel', cs * 0.32, W * 0.004, 0, { sides: 12, parent: k.xf(cx, top + W * 0.002, cz, Math.PI / 2, 0, 0, P) });
+        k.drum('dark', cs * 0.24, W * 0.004, 0, { sides: 12, parent: k.xf(cx, top + W * 0.003, cz, Math.PI / 2, 0, 0, P) });
+        // the hatch (instanced), turned so its hinge edge (local +X) is
+        // outboard: the two columns open away from each other
+        k.magazineRound('cell', bi, k.xf(cx, top + cs * 0.06, cz, 0, col ? 0 : Math.PI, 0, P), cs, { hinge: true });
       }
     }
   };

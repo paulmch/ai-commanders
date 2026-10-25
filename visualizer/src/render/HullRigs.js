@@ -20,8 +20,9 @@ import { assignBarrels } from './WeaponTimeline.js';
  * dying ship's mounts fall into a fixed, seeded slump.
  *   - torpedo launch doors open around each torpedo_launched event
  *   - torpedo magazines empty round by round: a rack round leaves its rail
- *     at its launch, a VLS hatch slides open in the 2.5 s before and stays
- *     open, its status lamp going from the faction colour to dark
+ *     at its launch, a VLS hatch swings up in the 2.5 s before and stays
+ *     open over the empty tube, its status lamp going from the faction
+ *     colour to dark
  *   - navigation lamps blink (HullLights); floodlights and the self-lit
  *     hull codes brown out with the hull (HullMarkings.floodLevel)
  *
@@ -118,11 +119,33 @@ export function magazineRoundState(tl, t, out = { open: 0, lamp: 0, gone: false 
   return out;
 }
 
+/** Open VLS hatch: swung up past upright (rad), leaning outboard. */
+export const HATCH_OPEN = 1.65;
+
 const _rs = { open: 0, lamp: 0, gone: false };
 const _mm = new THREE.Matrix4();
+const _hm = new THREE.Matrix4();
+const _hp = new THREE.Vector3();
 const _zero = new THREE.Matrix4().makeScale(0, 0, 0);
 const _firing = new THREE.Color(2.4, 2.2, 1.9);
 const _spent = new THREE.Color(0.07, 0.015, 0.01);
+
+/**
+ * Hatch-local swing of a VLS hatch (cell size s, 0.9 s square, 0.1 s
+ * thick) opened `open` 0..1: a turn about its outboard bottom edge (local
+ * +X, along Z) by up to HATCH_OPEN, so it stands up over the coaming
+ * instead of sliding off the bank.
+ */
+export function hatchHinge(s, open, out = new THREE.Matrix4()) {
+  _hp.set(s * 0.45, -s * 0.05, 0);
+  out.makeRotationZ(-HATCH_OPEN * open);
+  // T(edge) R T(-edge)
+  const e = out.elements;
+  const px = _hp.x, py = _hp.y;
+  e[12] = px - (e[0] * px + e[4] * py);
+  e[13] = py - (e[1] * px + e[5] * py);
+  return out;
+}
 
 /**
  * Pose a hull's magazine (Hulls.js _buildMagazine) at battle time t.
@@ -143,17 +166,15 @@ export function updateMagazine(mag, times, t) {
       mag.body.setMatrixAt(i, st.gone ? _zero : mag.base[i]);
     } else {
       _mm.copy(mag.base[i]);
-      if (e.slide && st.open > 0) {
-        _mm.elements[12] += e.slide.x * st.open;
-        _mm.elements[13] += e.slide.y * st.open;
-        _mm.elements[14] += e.slide.z * st.open;
-      }
+      if (e.hinge && st.open > 0) _mm.multiply(hatchHinge(e.s, st.open, _hm));
       mag.body.setMatrixAt(i, _mm);
+      mag.lamp?.setMatrixAt(i, _mm);   // the status lamp rides on the hatch
       if (mag.lamp) mag.lamp.setColorAt(i, st.lamp === 0 ? mag.loaded : st.lamp === 1 ? _firing : _spent);
     }
   }
   if (dirty) {
     mag.body.instanceMatrix.needsUpdate = true;
+    if (mag.lamp) mag.lamp.instanceMatrix.needsUpdate = true;
     if (mag.lamp?.instanceColor) mag.lamp.instanceColor.needsUpdate = true;
   }
   return dirty;

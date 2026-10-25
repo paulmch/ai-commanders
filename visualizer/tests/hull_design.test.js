@@ -7,7 +7,7 @@ import {
 } from '../src/render/Hulls.js';
 import { SceneManager } from '../src/SceneManager.js';
 import { Projectiles } from '../src/render/Projectiles.js';
-import { magazineRoundState, updateMagazine, assignLaunches } from '../src/render/HullRigs.js';
+import { magazineRoundState, updateMagazine, assignLaunches, hatchHinge, HATCH_OPEN } from '../src/render/HullRigs.js';
 import { floodLevel } from '../src/render/HullMarkings.js';
 import { HeatFX } from '../src/render/Heat.js';
 
@@ -328,12 +328,38 @@ test('torpedo carriers carry their whole magazine, one bank per launcher', () =>
   const banks = new Map();
   for (const e of ct.magazine) banks.set(e.bank, (banks.get(e.bank) || 0) + 1);
   assert.deepEqual([...banks.values()], [12, 12, 12, 12]);
-  assert.ok(ct.magazine.every(e => e.kind === 'cell' && e.slide));
+  assert.ok(ct.magazine.every(e => e.kind === 'cell' && e.hinge));
   const k = kitFor('corvette');
   assert.equal(k.magazine.length, 8);
   assert.ok(k.magazine.every(e => e.kind === 'rack'));
   // the rails ride both chines, where the focus and chase cameras see them
   assert.equal(k.magazine.filter(e => e.pos.x > 0).length, 4);
+});
+
+test('open VLS hatches swing up over their own bank instead of sliding off it', () => {
+  const ct = kitFor('cruiser_torpedo');
+  const s = ct.magazine[0].s;
+  // hatch-local: closed is the identity, open stands up over the hinge edge
+  assert.ok(hatchHinge(s, 0).equals(new THREE.Matrix4()));
+  const corners = [];
+  for (const x of [-0.45, 0.45]) for (const y of [-0.05, 0.05]) for (const z of [-0.45, 0.45]) {
+    corners.push(new THREE.Vector3(x * s, y * s, z * s).applyMatrix4(hatchHinge(s, 1)));
+  }
+  const ext = (a, f) => f(...corners.map(c => c[a]));
+  assert.ok(ext('y', Math.max) > 0.8 * s, 'an open hatch stands up');
+  assert.ok(ext('y', Math.min) > -0.1 * s, 'and does not dig into the deck');
+  // (an outer-column hinge sits 0.23 cells inside the coaming)
+  assert.ok(ext('x', Math.max) < 0.45 * s + 0.22 * s, `leans outboard onto the coaming at most (${ext('x', Math.max) / s})`);
+  assert.ok(HATCH_OPEN > Math.PI / 2 && HATCH_OPEN < Math.PI * 0.6);
+  // every hatch hinges on its outboard edge: the two columns open apart
+  const hingeDir = new THREE.Vector3(), up = new THREE.Vector3(), across = new THREE.Vector3();
+  for (const e of ct.magazine) {
+    hingeDir.set(1, 0, 0).applyQuaternion(e.quat);
+    up.set(0, 1, 0).applyQuaternion(e.quat);
+    across.set(up.y, -up.x, 0);                    // the bank's local +X
+    const cx = e.pos.dot(across);                  // the cell's column offset
+    assert.ok(Math.abs(cx) > s * 0.3 && Math.sign(hingeDir.dot(across)) === Math.sign(cx), 'hinge outboard');
+  }
 });
 
 test('magazine rounds empty on battle time and come back on a backward seek', () => {
@@ -367,6 +393,25 @@ test('magazine rounds empty on battle time and come back on a backward seek', ()
   assert.ok(!shown(0) && shown(1));
   updateMagazine(mag, times, 0);
   assert.ok(shown(0) && shown(1));
+
+  // a VLS cell: the hatch and its status lamp swing open together, and a
+  // backward seek closes them again
+  const inst = () => ({ m: [new THREE.Matrix4()], c: [], setMatrixAt(i, m) { this.m[i].copy(m); },
+    setColorAt(i, c) { this.c[i] = c; }, instanceMatrix: {}, instanceColor: {} });
+  const base = new THREE.Matrix4().makeTranslation(0, 2, 0);
+  const cell = {
+    kind: 'cell', entries: [{ bank: 0, s: 0.4, hinge: true }], order: [0], banks: 1, base: [base],
+    body: inst(), lamp: inst(), loaded: new THREE.Color(0, 1, 1), state: new Float32Array(1).fill(-1)
+  };
+  const ct = assignLaunches([{ t: 10 }], 1);
+  updateMagazine(cell, ct, 5);
+  assert.ok(cell.body.m[0].equals(base) && cell.lamp.c[0] === cell.loaded);
+  updateMagazine(cell, ct, 30);
+  assert.ok(!cell.body.m[0].equals(base), 'hatch open');
+  assert.ok(cell.lamp.m[0].equals(cell.body.m[0]), 'lamp rides the hatch');
+  assert.ok(cell.lamp.c[0].r < 0.1 && cell.lamp.c[0].g < 0.1, 'lamp dark once spent');
+  updateMagazine(cell, ct, 2);
+  assert.ok(cell.body.m[0].equals(base) && cell.lamp.m[0].equals(base), 'closed again on a seek back');
 });
 
 test('floodlights burn on a sound hull and brown out with it', () => {
