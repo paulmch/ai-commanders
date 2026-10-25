@@ -18,6 +18,12 @@ except ImportError:  # pragma: no cover - script-style imports (src/ on sys.path
 
 _FORCED_PCT = _FORCED_FRACTION * 100.0
 
+from .communication import (
+    CONTACT_ASSESSMENTS, CONTACT_NOTE_CHARS, MAX_ENEMY_MESSAGES_PER_DECISION,
+    MAX_FLEET_SIGNALS_PER_DECISION, REPORT_INTENT_CHARS, REPORT_REASON_CHARS,
+    REPORT_STATUSES, REQUEST_KINDS, REQUEST_TEXT_CHARS, SIGNAL_KINDS, SIGNAL_TEXT_CHARS,
+)
+
 
 # Base captain tools - always available
 CAPTAIN_TOOLS_BASE = [
@@ -238,22 +244,27 @@ CAPTAIN_TOOLS_BASE = [
         "type": "function",
         "function": {
             "name": "send_message",
-            "description": "OPTIONAL: Send a message to other ships. Use sparingly - only when you have something meaningful to communicate (tactical threats, surrender demands, or psychological warfare). You do NOT need to send a message every checkpoint.",
+            "description": (
+                "OPTIONAL: transmit on the OPEN channel - the ENEMY hears it (at their next "
+                "checkpoint). For taunts, surrender demands or answering an enemy hail. Never "
+                "put your plans here; in a fleet, coordinate with fleet_signal and report "
+                f"with report_to_admiral. Max {MAX_ENEMY_MESSAGES_PER_DECISION} per decision."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "message": {
                         "type": "string",
-                        "description": "Brief message content (keep it short and impactful)"
+                        "description": f"Message text (max {SIGNAL_TEXT_CHARS} chars)."
                     },
                     "recipient": {
                         "type": "string",
-                        "enum": ["ALL", "ALL_ENEMIES", "ALL_FRIENDLIES", "SPECIFIC"],
-                        "description": "Who receives the message (default: ALL_ENEMIES)"
+                        "enum": ["ALL_ENEMIES", "SPECIFIC"],
+                        "description": "ALL_ENEMIES (default) or SPECIFIC: one enemy ship."
                     },
                     "target_ship": {
                         "type": "string",
-                        "description": "Ship name if recipient is SPECIFIC"
+                        "description": "Enemy ship name or id when recipient is SPECIFIC."
                     }
                 },
                 "required": ["message"]
@@ -310,7 +321,9 @@ CAPTAIN_TOOLS_BASE = [
                 "multi-checkpoint plan coherent: what you are trying to do, what would "
                 "change your mind, what to check next checkpoint. "
                 "E.g. 'Pass 1 done, missed. BRAKE now, re-attack from his tail; if his "
-                "PD drops below 3 turrets, commit torpedoes.' Keep it under ~250 chars."
+                "PD drops below 3 turrets, commit torpedoes.' Keep it under ~250 chars. "
+                "Private: nobody else reads it - tell your Admiral with report_to_admiral, "
+                "other ships with fleet_signal."
             ),
             "parameters": {
                 "type": "object",
@@ -400,15 +413,137 @@ PERSONALITY_SELECTION_TOOL = {
 # Tools for personality selection phase only
 PERSONALITY_SELECTION_TOOLS = [PERSONALITY_SELECTION_TOOL]
 
-# Tool for responding to Admiral orders
+# Captain -> Admiral report. Replaces respond_to_orders, whose ACK/DEVIATE text
+# was stored on the captain and never read by anyone: the Admiral now gets
+# every report at the next checkpoint together with an engine compliance line.
+REPORT_TO_ADMIRAL_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "report_to_admiral",
+        "description": (
+            "Report to your Admiral. The Admiral reads every report at the NEXT checkpoint, "
+            "before issuing new orders, next to an engine compliance line (ordered vs flown "
+            "maneuver, target, salvo vs rounds launched). Plain compliance needs no report: "
+            "silence counts as ACK. Report DEVIATE when you deliberately do something other "
+            "than ordered - the order rests on stale intel, the ordered target is separating "
+            "or out of reach, a torpedo threat forces EVADE, a better shot exists - and say "
+            "what you see and what you do instead. Report UNABLE when you cannot comply "
+            "(magazine empty, weapon destroyed, no delta-v, heat). Add contact to pass on "
+            "sensor facts the Admiral may lack, request to ask for support."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": list(REPORT_STATUSES),
+                    "description": (
+                        "ACK: complying (optional - only to add intent/contact/request). "
+                        "DEVIATE: deliberately doing something else. UNABLE: cannot comply."
+                    ),
+                },
+                "reason": {
+                    "type": "string",
+                    "description": (
+                        f"Required for DEVIATE/UNABLE, max {REPORT_REASON_CHARS} chars: the "
+                        "fact the Admiral is missing and what you do instead. E.g. 'Lancer-3 "
+                        "is SEPARATING at 2.8 km/s - holding torpedoes, EVADE until it turns.'"
+                    ),
+                },
+                "intent": {
+                    "type": "string",
+                    "description": f"Optional, max {REPORT_INTENT_CHARS} chars: your plan for the next checkpoint.",
+                },
+                "contact": {
+                    "type": "object",
+                    "description": (
+                        "Optional sensor report on one enemy ship. CRIPPLED: armor/hull "
+                        "broken. PD_DOWN: its point defense is out - torpedoes will get "
+                        "through. TORPS_INBOUND: it launched at us."
+                    ),
+                    "properties": {
+                        "ship": {"type": "string", "description": "Enemy ship name or id."},
+                        "assessment": {"type": "string", "enum": list(CONTACT_ASSESSMENTS)},
+                        "note": {"type": "string",
+                                 "description": f"Max {CONTACT_NOTE_CHARS} chars."},
+                    },
+                    "required": ["ship", "assessment"],
+                },
+                "request": {
+                    "type": "object",
+                    "description": (
+                        "Optional request. PD_COVER: put a PD ship near me. TORPEDO_SUPPORT: "
+                        "add rounds to my target. RETARGET: give me another target. "
+                        "FALL_BACK: permission to disengage. REINFORCE: send ships to me."
+                    ),
+                    "properties": {
+                        "kind": {"type": "string", "enum": list(REQUEST_KINDS)},
+                        "text": {"type": "string",
+                                 "description": f"Max {REQUEST_TEXT_CHARS} chars."},
+                    },
+                    "required": ["kind"],
+                },
+            },
+            "required": ["status"],
+        },
+    },
+}
+
+# Captain -> captain coordination on the fleet net. send_message is the enemy
+# channel; this one never leaves the fleet.
+FLEET_SIGNAL_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "fleet_signal",
+        "description": (
+            "Signal your OWN fleet (the enemy never hears it). Delivered at the NEXT "
+            "checkpoint: other captains see it on their FLEET NET; ADMIRAL-addressed "
+            f"signals reach the Admiral with your report. Max {MAX_FLEET_SIGNALS_PER_DECISION} "
+            "per decision. Launches, kills and PD losses are already shared by the datalink - "
+            "do not repeat them. TARGET_CLAIM: 'I take <target>' - claim before committing "
+            "a salvo so two ships do not waste rounds on one hull. TOT_SYNC: announce when "
+            "YOUR torpedoes reach <target> (eta_s) so peers launch to arrive together and "
+            "split its point defense. PD_COVER_REQUEST: ask a ship to close and cover you "
+            "with its PD against inbound torpedoes. BREAKING_OFF: you are leaving the fight "
+            "or your post - say why. FREE: anything else."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string", "enum": list(SIGNAL_KINDS)},
+                "to": {
+                    "type": "string",
+                    "description": "ALL (default: every friendly ship), ADMIRAL, or one friendly ship's name or id.",
+                },
+                "target": {
+                    "type": "string",
+                    "description": "Enemy ship the signal is about (TARGET_CLAIM, TOT_SYNC).",
+                },
+                "eta_s": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "TOT_SYNC: seconds until your rounds arrive on target.",
+                },
+                "text": {
+                    "type": "string",
+                    "description": f"Max {SIGNAL_TEXT_CHARS} chars.",
+                },
+            },
+            "required": ["kind", "text"],
+        },
+    },
+}
+
+# Legacy tool: no longer offered (report_to_admiral replaces it), but a
+# captain calling it - an old prompt, a recorded tool call, a test - is
+# executed as an alias of report_to_admiral.
 RESPOND_TO_ORDERS_TOOL = {
     "type": "function",
     "function": {
         "name": "respond_to_orders",
         "description": (
-            "Respond to your Admiral's orders. You MUST call this tool when you have "
-            "received orders from your Admiral. Either acknowledge you will follow them, "
-            "or explain why you are deviating."
+            "Legacy alias of report_to_admiral: acknowledge your Admiral's orders or "
+            "explain why you are deviating. The Admiral reads it at the next checkpoint."
         ),
         "parameters": {
             "type": "object",
