@@ -157,6 +157,13 @@ def compute_hit_probability(shooter: Any, target: Any) -> Dict[str, Any]:
     return result
 
 
+def _ship_display_name(simulation: Any, ship_id: Optional[str]) -> str:
+    """A ship's display name (set as ship.name by the battle runner), else its id."""
+    ship = simulation.get_ship(ship_id) if ship_id else None
+    return (getattr(ship, 'name', None) or getattr(ship, 'ship_name', None)
+            or ship_id or 'Unknown')
+
+
 @dataclass
 class MCPControllerConfig:
     """Configuration for an MCP-controlled fleet."""
@@ -640,10 +647,7 @@ class MCPController:
                     weapon_type = "Spinal" if proj_speed_kps > 8 else "Turret"
 
                     # Get source ship name
-                    source_name = proj.source_ship_id
-                    source_ship = simulation.get_ship(proj.source_ship_id)
-                    if source_ship:
-                        source_name = getattr(source_ship, 'ship_name', proj.source_ship_id)
+                    source_name = _ship_display_name(simulation, proj.source_ship_id)
 
                     # Calculate bearing to target (what direction it's coming from)
                     bearing = self._calculate_bearing(target, proj_pos, proj_vel)
@@ -746,16 +750,15 @@ class MCPController:
                         approach_speed = torp.velocity.dot(to_target) if hasattr(torp.velocity, 'dot') else torp.velocity.magnitude
                         eta = (target_ship.position - torp.position).magnitude / approach_speed if approach_speed > 0 else 999
 
-                        # Get source info
-                        source_name = getattr(torp, 'source_ship_id', 'Unknown')
-                        source_ship = simulation.get_ship(source_name) if source_name != 'Unknown' else None
-                        if source_ship:
-                            source_name = getattr(source_ship, 'ship_name', source_name)
+                        # Source: the launcher is on the TorpedoInFlight
+                        # record, not on the Torpedo physics object (reading
+                        # it there made every source "Unknown").
+                        source_id = torp_flight.source_ship_id or 'Unknown'
 
                         torpedoes.append({
                             "target_ship": torp.target_id,
-                            "source_ship": getattr(torp, 'source_ship_id', 'Unknown'),
-                            "source_name": source_name,
+                            "source_ship": source_id,
+                            "source_name": _ship_display_name(simulation, source_id),
                             "distance_km": dist_km,
                             "eta_seconds": eta,
                             "speed_kps": torp.velocity.magnitude / 1000 if hasattr(torp, 'velocity') else 0,

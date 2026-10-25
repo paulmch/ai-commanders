@@ -117,3 +117,34 @@ class TestAdmiralPromptScript:
         assert "=== FLEET SITUATION === T+30s" in text
         assert "TIS Haiku-3 [alpha_3] DN" in text
         assert "=== ENEMY THREAT TABLE" in text
+
+
+class TestMcpOrdnanceSources:
+    """get_battle_state names who fired each inbound round. The torpedo
+    source was read off the Torpedo physics object (it lives on the
+    TorpedoInFlight record), so every inbound torpedo came from 'Unknown'."""
+
+    @staticmethod
+    def _sim():
+        from tests.test_admiral_intel import FLEET, add_torpedo, ship
+        from src.simulation import CombatSimulation, ProjectileInFlight
+        from src.projectile import KineticProjectile
+        from src.physics import Vector3D
+        sim = CombatSimulation(decision_interval=30.0, seed=1)
+        ship(sim, "alpha_1", "destroyer", "alpha", (0, 0, 0))
+        ship(sim, "beta_1", "corvette", "beta", (300, 0, 0), fwd=(-1, 0, 0))
+        add_torpedo(sim, "torp_beta_1_0001", "beta_1", "alpha_1", (200, 0, 0), (-12, 0, 0))
+        sim.projectiles.append(ProjectileInFlight(
+            projectile_id="p1", projectile=KineticProjectile(
+                mass_kg=50.0, velocity=Vector3D(-8000.0, 0, 0), position=Vector3D(250e3, 0, 0)),
+            source_ship_id="beta_1", target_ship_id="alpha_1"))
+        return sim, FLEET
+
+    def test_inbound_torpedo_and_slug_name_their_shooter(self):
+        from src.llm.mcp_controller import MCPController, MCPControllerConfig
+        sim, fleet = self._sim()
+        controller = MCPController(MCPControllerConfig(faction="alpha"), fleet)
+        torps = controller._build_torpedo_data(sim, [{"ship_id": "alpha_1"}])
+        assert [(t["source_ship"], t["source_name"]) for t in torps] == [("beta_1", "OCS beta_1")]
+        slugs = controller._build_projectile_data(sim)
+        assert [(p["source_ship"], p["source_name"]) for p in slugs] == [("beta_1", "OCS beta_1")]
