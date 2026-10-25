@@ -101,7 +101,7 @@ export class CommsFeed {
     this.shown = [];               // row ids in the DOM, oldest first
     this.rowEls = new Map();       // id -> element
     this.groupEls = new Map();     // cp -> {section, count}
-    this.deliveryRows = new Map(); // id -> {row, el, text, comp, compKey}: chips that follow the playhead
+    this.deliveryRows = new Map(); // id -> {row, rowEl, el, text, comp, compKey}: chips that follow the playhead
     this.key = '';
     this.deliveryKey = '';
     this.standingKey = '';
@@ -266,7 +266,7 @@ export class CommsFeed {
         const dl = r.msgId ? node(d, 'span', '', 'comms-chip comms-delivery') : null;
         chips.append(comp);
         if (dl) chips.append(dl);
-        this.deliveryRows.set(r.id, { row: r, el: dl, text: '', comp, compKey: null });
+        this.deliveryRows.set(r.id, { row: r, rowEl: el, el: dl, text: null, comp, compKey: null });
       }
       if (r.decisionId && this.onWhy) {
         const why = node(d, 'button', 'WHY ›', 'comms-why');
@@ -350,6 +350,8 @@ export class CommsFeed {
       els.push(chip);
     }
     entry.comp.replaceChildren(...els);
+    // An ACK the engine finds off orders gets the deviation edge too
+    entry.rowEl.classList.toggle('off-orders', !!c?.deviated && entry.row.status === 'ACK');
   }
 
   _renderStanding(t) {

@@ -233,6 +233,9 @@ test('command net: a report shows its delivery to the admiral and swaps to the c
     ev(30, 'admiral_order', 'alpha_1', { faction: 'alpha', order_text: 'Launch 2 at Falchion-1.', torpedo_salvo: 2, torpedo_target: 'beta_1' }),
     ev(30, 'captain_report', 'alpha_1', { report_id: 'r1-alpha_1', faction: 'alpha', checkpoint: 1, ship_name: 'TIS Dart-1', status: 'ACK',
       reason: 'Salvo away on the mark.', compliance: compliance(2, false, []) }),
+    // Routed nowhere recorded: its delivery chip must stay hidden
+    msg(30, 'm9', { channel: 'captain_to_admiral', sender_id: 'alpha_1', sender_role: 'captain', sender_name: 'TIS Dart-1', faction: 'alpha',
+      recipient_ids: [], text: 'Request permission to close.', deliver_at_t: 60 }),
     ev(60, 'decision_point_reached'),
     ev(60, 'comms_delivered', 'alpha_admiral', { msg_id: 'r1-alpha_1', recipient_id: 'alpha_admiral', delivered_t: 60, checkpoint: 2,
       compliance: compliance(1, true, ['salvo: ordered 2, launched 1']) })
@@ -247,13 +250,19 @@ test('command net: a report shows its delivery to the admiral and swaps to the c
   feed.update(45);
   assert.equal(report().querySelector('.comms-delivery').textContent, 'IN TRANSIT · due 01:00');
   assert.deepEqual(chips(), [], 'as filed: the salvo was committed');
+  assert.ok(!report().classList.contains('off-orders'));
   feed.update(60);
   assert.equal(report().querySelector('.comms-delivery').textContent, '✓ DELIVERED 01:00');
   assert.deepEqual(chips(), ['SALVO: ordered 2, launched 1']);
+  assert.ok(report().classList.contains('off-orders'), 'the ACK row carries the deviation edge');
   assert.ok(report().querySelector('.comms-deviation').classList.contains('final'));
+  const delivery = list.querySelectorAll('.comms-delivery');
+  assert.equal(delivery.length, 2);
+  assert.ok(delivery.every(c => c.hidden === !c.textContent) && delivery.some(c => c.hidden), 'an empty delivery chip is hidden, not an empty box');
   assert.match(report().querySelector('.comms-deviation').title, /as the admiral read it at 01:00/);
   feed.update(45);
   assert.deepEqual(chips(), [], 'scrubbing back restores the filed verdict');
+  assert.ok(!report().classList.contains('off-orders'));
   // ISSUES: the ACK joins once the admiral's copy shows it off orders
   feed.setFilter('all', 'issues');
   feed.update(45);

@@ -31,10 +31,10 @@ export function timelineMarks(hud, duration, ships = {}) {
     const c = traffic.get(r.cp) || { orders: 0, acks: 0, deviations: 0, drift: 0, messages: 0 };
     if (r.kind === 'order' || r.kind === 'directive') c.orders++;
     else if (r.status === 'DEVIATE' || r.status === 'UNABLE') c.deviations++;
-    else if (r.kind === 'report') {
+    else if (r.kind === 'report' && r.status) {
       c.acks++;
       if (complianceAt(r, hud.deliveries)?.deviated) c.drift++;
-    } else if (['net', 'enemy', 'message', 'engine'].includes(r.kind)) c.messages++;
+    } else if (['net', 'enemy', 'message', 'engine', 'report'].includes(r.kind)) c.messages++;   // incl. captain_to_admiral traffic
     traffic.set(r.cp, c);
   }
   for (const cp of cps) {

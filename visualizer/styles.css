@@ -2293,6 +2293,7 @@ body {
 .comms-row.kind-enemy .comms-text, .comms-row.kind-message .comms-text { font-style: italic; }
 .comms-row.status-deviate, .comms-row.status-unable { border-left-color: var(--accent-warning); background: rgba(255, 136, 0, 0.06); }
 .comms-row.status-deviate .comms-tag, .comms-row.status-unable .comms-tag { color: var(--accent-warning); }
+.comms-row.off-orders { border-left-color: var(--accent-warning); border-left-style: dotted; }
 .comms-row.status-query .comms-tag { color: #ffd479; }
 .comms-row.prio-critical .comms-priority { color: var(--accent-critical); }
 .comms-row.kind-error, .comms-row.kind-system { border-left-color: var(--accent-critical); background: rgba(255, 0, 85, 0.05); }
