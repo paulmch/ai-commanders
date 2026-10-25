@@ -6,7 +6,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import {
   CATCHUP_MAX_RATE, LIVE_CUSHION_S, LOST_AFTER_FAILURES, backoffDelay, checkpointNumber, classifyVerdict,
   defaultMaxLag, deliberationProgress, liveDelay, liveStartTime, newBattleReason, nextCheckpointAfter,
-  paceLiveHead
+  newLiveClientId, paceLiveHead, recordingQuery
 } from '../src/LiveSession.js';
 import { TimeController } from '../src/TimeController.js';
 import { CameraController, activeCut, buildDirectorCuts, frameGroups, DIRECTOR_USER_HOLD_S } from '../src/CameraController.js';
@@ -103,6 +103,18 @@ test('a different battle on the wire is detected', () => {
   assert.equal(newBattleReason(legacy, { sim_time_s: 7, phase: 'battle' }), 'sim clock went back');
   assert.equal(newBattleReason(legacy, { sim_time_s: 0, phase: 'draft' }), 'draft restarted');
   assert.equal(newBattleReason({ ...legacy, started: false }, { sim_time_s: 0, phase: 'draft' }), null);
+});
+
+test('every poll names this viewer so the server lingers for each spectator', () => {
+  const a = newLiveClientId(), b = newLiveClientId();
+  assert.match(a, /^[0-9a-z]{12}$/);
+  assert.notEqual(a, b);
+  assert.equal(recordingQuery({ clientId: 'v1' }), '?client=v1', 'before the battle: the whole recording');
+  assert.equal(recordingQuery({ clientId: 'v1', started: true, lastFrameT: 92.5, lastSeq: 314 }),
+    '?since_t=92.5&since_seq=314&client=v1');
+  assert.equal(recordingQuery({ started: true, lastFrameT: 3 }), '?since_t=3&since_seq=0');
+  assert.equal(recordingQuery(), '');
+  assert.equal(recordingQuery({ clientId: 'a b&c' }), '?client=a%20b%26c');
 });
 
 // ---------------------------------------------------------------- verdicts

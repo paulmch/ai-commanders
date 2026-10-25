@@ -8,6 +8,7 @@ model calls go through a stub client.
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -25,7 +26,7 @@ from src.llm.fleet_config import BattleFleetConfig
 from src.llm.fleet_draft import FleetDraft, auto_draft, draft_to_fleet_definition, name_drafted_ships
 from src.llm.live_status import PendingCalls, draft_live_entry
 from src.llm.mcp_draft import DraftManager
-from src.llm.mcp_http_server import MCPHttpServer
+from src.llm.mcp_http_server import LIVE_CLIENT_ACTIVE_S, MCPHttpServer
 from src.llm.replay_audit import AuditedClient
 
 FLEET_DATA = json.loads((Path(__file__).parent.parent / "data" / "fleet_ships.json").read_text())
@@ -208,19 +209,68 @@ def test_linger_returns_at_once_without_spectators_and_after_two_ended_polls():
         assert loop.time() - t0 < 0.5          # nobody ever polled
         client = await _client(server)
         try:
-            await client.get("/live/recording")
+            await client.get("/live/recording?client=v1")
             linger = asyncio.ensure_future(server.linger_for_spectators(timeout_s=5))
             await asyncio.sleep(0.2)
-            assert not linger.done()            # one ended poll so far
-            await client.get("/live/recording")
+            assert not linger.done()            # the end, but not the final fetch yet
+            await client.get("/live/recording?client=v1&since_t=2&since_seq=0")
             await asyncio.wait_for(linger, 1.0)
         finally:
             await client.close()
         t0 = loop.time()
         server2 = MCPHttpServer()
-        server2._live_polls = 1                 # watched, but never saw the end
-        await server2.linger_for_spectators(timeout_s=0.3)
+        server2._live_clients["v9"] = {"last": time.monotonic(), "ended": 0}
+        await server2.linger_for_spectators(timeout_s=0.3)   # watching, never saw the end
         assert 0.25 < loop.time() - t0 < 1.5
+    asyncio.run(scenario())
+
+
+def test_linger_waits_for_every_spectator_not_the_first_two_ended_fetches():
+    """Two viewers watching: A's ended poll and final fetch must not end the
+    linger while B, polling 2 s later, has not been told the battle ended."""
+
+    async def scenario():
+        server = MCPHttpServer()
+        server.set_live_source(_runner())
+        server.set_battle_status("running")
+        a, b = await _client(server), await _client(server)
+        try:
+            await a.get("/live/recording?client=A")
+            await b.get("/live/recording?client=B")
+            server.set_battle_status("ended")
+            linger = asyncio.ensure_future(server.linger_for_spectators(timeout_s=5))
+            ended = await (await a.get("/live/recording?client=A")).json()
+            assert ended["live"]["status"] == "ended"
+            await a.get("/live/recording?client=A&since_t=2&since_seq=1")
+            await asyncio.sleep(0.3)
+            assert not linger.done(), "viewer B has not seen the end yet"
+            await b.get("/live/recording?client=B")
+            await asyncio.sleep(0.2)
+            assert not linger.done()
+            await b.get("/live/recording?client=B&since_t=2&since_seq=1")
+            await asyncio.wait_for(linger, 1.0)
+            # A viewer that stopped polling before the end holds nobody up
+            server._live_clients["gone"] = {
+                "last": time.monotonic() - LIVE_CLIENT_ACTIVE_S - 1, "ended": 0}
+            await asyncio.wait_for(server.linger_for_spectators(timeout_s=5), 0.5)
+            # Viewers without a client id (older builds) share one entry,
+            # which is the old single-spectator behaviour
+            server2 = MCPHttpServer()
+            server2.set_live_source(_runner())
+            server2.set_battle_status("ended")
+            c = await _client(server2)
+            try:
+                await c.get("/live/recording")
+                linger2 = asyncio.ensure_future(server2.linger_for_spectators(timeout_s=5))
+                await asyncio.sleep(0.2)
+                assert not linger2.done()
+                await c.get("/live/recording?since_t=2")
+                await asyncio.wait_for(linger2, 1.0)
+            finally:
+                await c.close()
+        finally:
+            await a.close()
+            await b.close()
     asyncio.run(scenario())
 
 

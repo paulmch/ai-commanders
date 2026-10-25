@@ -12,6 +12,7 @@ import { CameraController, buildDirectorCuts } from './CameraController.js';
 import { ContactOverlay } from './ContactOverlay.js';
 import {
   LOST_AFTER_FAILURES, backoffDelay, checkpointNumber, classifyVerdict, defaultMaxLag,
+  newLiveClientId, recordingQuery,
   deliberationProgress, formatClock, liveDelay, liveStartTime, newBattleReason, nextCheckpointAfter,
   paceLiveHead
 } from './LiveSession.js';
@@ -725,6 +726,7 @@ class BattleVisualizer {
     const now = performance.now();
     this.live = {
       base: base,
+      clientId: newLiveClientId(),   // names this viewer to the server's end-of-battle linger
       battleId: null,
       phase: null,
       status: null,
@@ -799,8 +801,9 @@ class BattleVisualizer {
     if (live.timer) { clearTimeout(live.timer); live.timer = null; }
     let ok = false;
     try {
-      const sinceQ = live.started ? `?since_t=${live.lastFrameT}&since_seq=${this.loader?.lastEventSequence || 0}` : '';
-      const response = await fetch(`${live.base}/recording${sinceQ}`, { cache: 'no-store' });
+      const query = recordingQuery({ clientId: live.clientId, started: live.started,
+        lastFrameT: live.lastFrameT, lastSeq: this.loader?.lastEventSequence });
+      const response = await fetch(`${live.base}/recording${query}`, { cache: 'no-store' });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const payload = await response.json();
       if (this.live !== live) return;   // torn down or switched battles meanwhile
@@ -969,8 +972,9 @@ class BattleVisualizer {
     }
     if (fetchFinal && live.started && !live.lost) {
       try {
-        const q = `?since_t=${live.lastFrameT}&since_seq=${this.loader.lastEventSequence || 0}`;
-        const response = await fetch(`${live.base}/recording${q}`, { cache: 'no-store' });
+        const query = recordingQuery({ clientId: live.clientId, started: true,
+          lastFrameT: live.lastFrameT, lastSeq: this.loader.lastEventSequence });
+        const response = await fetch(`${live.base}/recording${query}`, { cache: 'no-store' });
         if (response.ok && this.live === live) {
           const payload = await response.json();
           if (payload.recording?.provenance) live.provenance = payload.recording.provenance;

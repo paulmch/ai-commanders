@@ -92,6 +92,10 @@ late orders at a paused checkpoint and lets repeated/final full fetches merge
 without duplicate events. Incremental responses include assets referenced by new
 model calls. Clients using only `since_t` retain the earlier endpoint behaviour.
 The fake live server supplies stable sequence IDs for legacy recordings too.
+Each poll also carries `client=<id>` (one per viewer session): once the battle
+ends the server keeps serving, `--no-linger` included, until every viewer that
+polled in the last 20 s has fetched the end (its "ended" poll and the final
+catch-up fetch), for at most 10 s.
 
 ## Summaries and optional model commentary
 

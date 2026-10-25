@@ -114,6 +114,28 @@ export function backoffDelay(failures) {
 }
 
 /**
+ * A fresh id naming this viewer's live session to the server, whose
+ * end-of-battle linger waits for every spectator it knows by id.
+ */
+export function newLiveClientId() {
+  const uuid = globalThis.crypto?.randomUUID?.();
+  return (uuid ? uuid.replace(/-/g, '') : Math.random().toString(36).slice(2) + Date.now().toString(36)).slice(0, 12);
+}
+
+/**
+ * Query string of a /live/recording poll: the incremental cursor once the
+ * battle is on screen (before that the whole recording-so-far), plus the
+ * viewer's client id.
+ * @param {Object} q - {clientId, started, lastFrameT, lastSeq}
+ */
+export function recordingQuery({ clientId = null, started = false, lastFrameT = 0, lastSeq = 0 } = {}) {
+  const params = [];
+  if (started) params.push(`since_t=${lastFrameT}`, `since_seq=${lastSeq || 0}`);
+  if (clientId) params.push(`client=${encodeURIComponent(clientId)}`);
+  return params.length ? `?${params.join('&')}` : '';
+}
+
+/**
  * Is this payload from a different battle than the one on screen?
  * Servers send battle_id; for older servers a sim clock that jumped back
  * by more than one interval (or a draft after the battle started) means

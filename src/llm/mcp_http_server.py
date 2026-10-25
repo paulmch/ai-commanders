@@ -42,6 +42,13 @@ if TYPE_CHECKING:
     from .mcp_controller import MCPController
     from .mcp_draft import DraftManager
 
+# A spectator counts as watching while it polled /live/recording this
+# recently: the viewer polls every 2 s and backs off to 15 s between misses.
+LIVE_CLIENT_ACTIVE_S = 20.0
+# "ended" responses a viewer needs: the poll that carries the end, then the
+# viewer's final catch-up fetch (finishLiveBattle in visualizer/src/main.js).
+LIVE_ENDED_FETCHES = 2
+
 
 if AIOHTTP_AVAILABLE:
     @web.middleware
@@ -110,6 +117,9 @@ class MCPHttpServer:
         self.pending_calls: Any = None  # live_status.PendingCalls (else the recorder's)
         self._live_polls = 0           # /live/recording responses served
         self._live_ended_polls = 0     # ... of which carried status "ended"
+        # Per spectator (the viewer's `client` id, else its remote address):
+        # {"last": monotonic time of its last poll, "ended": "ended" responses}
+        self._live_clients: Dict[str, Dict[str, float]] = {}
 
         # Controllers for building state
         self._controllers: Dict[str, 'MCPController'] = {}
@@ -159,18 +169,43 @@ class MCPHttpServer:
         self._current_checkpoint = checkpoint
         self._waiting_for = waiting_for or []
 
-    async def linger_for_spectators(self, timeout_s: float = 6.0) -> None:
+    async def linger_for_spectators(self, timeout_s: float = 10.0) -> None:
         """
-        Keep serving briefly after the battle ended so a polling viewer sees
-        the final "ended" block (and its follow-up fetch) instead of a dead
-        socket. Returns at once when nobody ever polled /live, and as soon as
-        two "ended" responses went out.
+        Keep serving after the battle ended until every spectator still
+        watching has fetched the end - its "ended" poll and the follow-up
+        final fetch - instead of finding a dead socket on its next poll.
+        Spectators are told apart by the viewer's `client` query parameter
+        (viewers without one share an entry per remote address); one counts
+        as watching while it polled within LIVE_CLIENT_ACTIVE_S. Returns at
+        once when nobody is watching, at timeout_s regardless.
         """
-        if not self._live_polls:
-            return
         deadline = time.monotonic() + timeout_s
-        while self._live_ended_polls < 2 and time.monotonic() < deadline:
+        while True:
+            now = time.monotonic()
+            waiting = [c for c in self._live_clients.values()
+                       if now - c["last"] <= LIVE_CLIENT_ACTIVE_S
+                       and c["ended"] < LIVE_ENDED_FETCHES]
+            if not waiting or now >= deadline:
+                return
             await asyncio.sleep(0.1)
+
+    def _note_live_poll(self, request: 'web.Request', ended: bool) -> None:
+        """Book one /live/recording response against its spectator."""
+        self._live_polls += 1
+        if ended:
+            self._live_ended_polls += 1
+        key = request.query.get("client", "")[:64] or f"remote:{request.remote}"
+        now = time.monotonic()
+        client = self._live_clients.get(key)
+        if client is None:
+            if len(self._live_clients) >= 256:   # forget long-gone viewers
+                for gone in [k for k, c in self._live_clients.items()
+                             if now - c["last"] > LIVE_CLIENT_ACTIVE_S]:
+                    del self._live_clients[gone]
+            client = self._live_clients[key] = {"last": now, "ended": 0}
+        client["last"] = now
+        if ended:
+            client["ended"] += 1
 
     def build_app(self) -> 'web.Application':
         """Build the aiohttp application (separate from start() for tests)."""
@@ -493,7 +528,8 @@ class MCPHttpServer:
         the web viewer's normal loader can parse it. `?since_t=` narrows
         sim_trace/events to entries after that sim time (metadata always
         included). `recording` is null until the battle is set up (draft
-        phase, or recording/sim-trace disabled in the config).
+        phase, or recording/sim-trace disabled in the config). `?client=`
+        names the spectator, so the end-of-battle linger waits for each one.
         """
         since_arg = request.query.get("since_t")
         try:
@@ -543,9 +579,7 @@ class MCPHttpServer:
                         refs.add(event['data']['tools_ref'])
                 recording['assets'] = {key: rec.assets[key] for key in refs if key in rec.assets}
         live = self._live_block()
-        self._live_polls += 1
-        if live["status"] == "ended":
-            self._live_ended_polls += 1
+        self._note_live_poll(request, live["status"] == "ended")
         return web.json_response({
             "live": live,
             "recording": recording,
