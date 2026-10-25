@@ -1880,6 +1880,24 @@ body {
 .contact-leader { position: absolute; top: 10px; left: 10px; height: 1px; background: currentColor; opacity: 0.25; transform-origin: left center; pointer-events: none; }
 .ship-contact:focus-visible { outline: 2px solid white; outline-offset: 4px; }
 #shipContacts[hidden], .ship-contact[hidden], .contact-label[hidden], .contact-leader[hidden] { display: none !important; }
+/* Combat state at fleet range (ContactOverlay): inbound torpedoes, imminent
+   impact, dying-reactor countdown pulse (--pulse quickens toward zero) */
+.contact-threat {
+  position: absolute; left: 21px; top: -12px; padding: 0 3px; white-space: nowrap;
+  font: 9px var(--font-mono); letter-spacing: 0.04em; color: #ff6a7c;
+  background: rgba(24,0,8,0.82); border: 1px solid rgba(255,0,85,0.55); pointer-events: none;
+}
+.contact-threat[hidden] { display: none !important; }
+.ship-contact.imminent .contact-bracket { border-color: var(--accent-critical); animation: contact-pulse 0.42s ease-in-out infinite alternate; }
+.ship-contact.imminent .contact-threat { color: #fff; background: rgba(150,0,40,0.9); }
+.ship-contact.dying .contact-bracket { animation: contact-pulse var(--pulse, 0.8s) ease-in-out infinite alternate; }
+@keyframes contact-pulse {
+  from { opacity: 0.45; box-shadow: 0 0 1px rgba(255,0,85,0.2); }
+  to { opacity: 1; box-shadow: 0 0 9px rgba(255,0,85,0.95); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ship-contact.imminent .contact-bracket, .ship-contact.dying .contact-bracket { animation: none; }
+}
 
 @media (max-width: 1200px) {
   #leftSidebar { width: 212px; }

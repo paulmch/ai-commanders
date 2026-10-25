@@ -9,9 +9,20 @@ const additive = {
   blendDst: THREE.OneFactor, blendEquation: THREE.AddEquation
 };
 
+/**
+ * Ribbon seed with the firing faction folded in: kinds that tint by side
+ * (slug tracer halo and wake, torpedo wake, engagement line) decode it as
+ * code = floor(w / 2) - 0 neutral, 1 alpha, 2 beta - and seed = w - 2 code.
+ */
+export function factionSeed(seed, faction) {
+  const s = seed - Math.floor(seed);
+  return s + (faction === 'alpha' ? 2 : faction === 'beta' ? 4 : 0);
+}
+
 // One draw for all streaks, curved trail segments, motor plumes, PD ribbons
 // and torpedo RCS jets. Kinds: 0 slug tracer, 1 slug wake, 2 PD beam,
-// 3 motor plume, 4 spark, 5 retarget dash, 6 torpedo wake, 7 RCS jet.
+// 3 motor plume, 4 spark, 5 retarget dash, 6 torpedo wake, 7 RCS jet,
+// 8 engagement line (fleet range: who is shooting at whom).
 const ribbonVertex = /* glsl */`
   attribute vec3 aFrom;
   attribute vec3 aTo;
@@ -34,13 +45,14 @@ const ribbonVertex = /* glsl */`
     float pixel = uPixelWorld * max(0.01, -p.z);
     float kind = aStyle.z;
     bool plume = kind > 2.5 && kind < 3.5;
-    bool jet = kind > 6.5;
+    bool engage = kind > 7.5;
+    bool jet = kind > 6.5 && !engage;
     // Half-width floor >= 1 px: a narrower strip rasterises as beads.
-    float floorPx = kind < 0.5 ? 1.1 : kind < 1.5 ? 1.0 : kind < 2.5 ? 0.6 : plume ? 1.2 : jet ? 0.7 : 1.0;
-    float capPx = plume ? 64.0 : jet ? 16.0 : kind > 5.5 ? 24.0 : kind > 1.5 && kind < 2.5 ? 2.2 : 3.0;
+    float floorPx = kind < 0.5 ? 1.1 : kind < 1.5 ? 1.0 : kind < 2.5 ? 0.6 : plume ? 1.2 : engage ? 0.75 : jet ? 0.7 : 1.0;
+    float capPx = plume ? 64.0 : engage ? 0.75 : jet ? 16.0 : kind > 5.5 ? 24.0 : kind > 1.5 && kind < 2.5 ? 2.2 : 3.0;
     float width = max(pixel * floorPx, min(aStyle.x, pixel * capPx));
     // Thin effects retain a controlled subpixel contribution at fleet scale.
-    float minCover = kind < 0.5 ? 0.5 : kind < 1.5 ? 0.07 : kind < 2.5 ? 0.35 : jet ? 0.1 : kind > 5.5 ? 0.12 : 0.3;
+    float minCover = kind < 0.5 ? 0.5 : kind < 1.5 ? 0.07 : kind < 2.5 ? 0.35 : engage ? 1.0 : jet ? 0.1 : kind > 5.5 ? 0.12 : 0.3;
     vCover = max(minCover, min(1.0, aStyle.x / width));
     // Half-width in pixels: the fragment keeps the bright core >= ~1.5 px
     // wide so a thin line never alternates hit/miss (beading) along its run.
@@ -77,17 +89,26 @@ const ribbonFragment = /* glsl */`
     float ends = smoothstep(0.0, 0.025, x) * (1.0-smoothstep(0.75, 1.0, x));
     vec3 color;
     float kind = vStyle.z;
+    // firing side folded into the seed (factionSeed): 0 neutral, 1 alpha, 2 beta
+    float side = floor(vStyle.w * 0.5 + 0.001);
+    float seed = vStyle.w - 2.0 * side;
     if (kind < 0.5) {
-      vec3 edge = mix(vec3(1.6,0.36,0.055), vec3(0.06,0.6,0.85), smoothstep(0.2,1.0,x));
+      // White-hot core for every slug; the halo carries the firing side
+      vec3 edge = side < 0.5 ? mix(vec3(1.6,0.36,0.055), vec3(0.06,0.6,0.85), smoothstep(0.2,1.0,x))
+        : side < 1.5 ? mix(vec3(0.25,0.95,1.9), vec3(0.04,0.4,1.1), smoothstep(0.2,1.0,x))
+        : mix(vec3(1.9,0.62,0.08), vec3(1.1,0.2,0.03), smoothstep(0.2,1.0,x));
       color = (vec3(3.4,3.05,2.65)*core + edge*halo*0.75) * pow(1.0-x,0.45) * ends;
     } else if (kind < 1.5) {
-      // Slug wake: ionised track cooling from straw-white to faint cyan
+      // Slug wake: ionised track cooling from straw-white to the side's tint
       float cooling = pow(max(0.0,1.0-vAge),1.6);
-      float wisps = 0.75+0.25*sin(x*13.0 + vStyle.w*51.0 - uTime*2.0);
-      color = mix(vec3(0.04,0.26,0.4),vec3(1.0,0.72,0.4),cooling*cooling)
+      float wisps = 0.75+0.25*sin(x*13.0 + seed*51.0 - uTime*2.0);
+      vec3 cold = side < 0.5 ? vec3(0.04,0.26,0.4) : side < 1.5 ? vec3(0.03,0.3,0.7) : vec3(0.55,0.13,0.02);
+      color = mix(cold,vec3(1.0,0.72,0.4),cooling*cooling)
         * (core*0.6 + halo*0.5) * cooling * wisps;
     } else if (kind < 2.5) {
-      float packets = 0.82+0.18*sin(x*55.0-uTime*58.0+vStyle.w*17.0);
+      // PD beam: warm white, chopped into energy packets marching out to
+      // the round, so a beam never reads as a slug tracer
+      float packets = 0.42+0.58*smoothstep(0.25,0.55,fract(x*26.0-uTime*7.0+seed*17.0));
       // Several turrets share a line of fire: keep pixel-floor beams slim.
       float slim = mix(0.6, 1.0, smoothstep(0.7, 2.0, vPx));
       // aAge fades a close-up's split beam ends out toward the cut (0 = full)
@@ -96,7 +117,7 @@ const ribbonFragment = /* glsl */`
       // Motor plume: broad white-hot core out of the nozzle with shock
       // cells, wrapped in a longer orange sheath that fades to the tip.
       float cells = pow(0.5+0.5*cos(x*47.0),10.0)*exp(-x*4.0);
-      float ripple = 0.87+0.13*sin(x*67.0-uTime*19.0+vStyle.w*21.0);
+      float ripple = 0.87+0.13*sin(x*67.0-uTime*19.0+seed*21.0);
       float hot = exp(-y*y*min(7.0, aa)) * exp(-x*3.8) * (1.0+cells);
       float sheath = exp(-y*y*2.2) * (1.0-y) * exp(-x*1.7);
       color = (vec3(2.6,2.2,1.7)*hot + vec3(1.35,0.45,0.12)*sheath)
@@ -107,11 +128,19 @@ const ribbonFragment = /* glsl */`
       float dash = smoothstep(0.25,0.4,fract(x*32.0));
       color = vec3(0.08,0.55,0.5)*halo*dash;
     } else if (kind < 6.5) {
-      // Torpedo exhaust wake: hot orange near the motor, dull red-brown aft
+      // Torpedo exhaust wake: hot orange near the motor, cooling aft into
+      // the launching side's tint
       float cooling = pow(max(0.0,1.0-vAge),1.4);
-      float wisps = 0.7+0.3*sin(x*9.0 + vStyle.w*37.0 - uTime*1.3);
-      color = mix(vec3(0.22,0.07,0.03),vec3(1.5,0.72,0.3),cooling*cooling)
+      float wisps = 0.7+0.3*sin(x*9.0 + seed*37.0 - uTime*1.3);
+      vec3 cold = side < 0.5 ? vec3(0.22,0.07,0.03) : side < 1.5 ? vec3(0.05,0.2,0.48) : vec3(0.42,0.09,0.02);
+      color = mix(cold,vec3(1.5,0.72,0.3),cooling*cooling)
         * (core*0.7 + halo*0.45) * cooling * wisps;
+    } else if (kind > 7.5) {
+      // Engagement line: a thin faction-coloured dash marching from the
+      // shooter to its target; aAge carries the dash count for the length
+      float dash = smoothstep(0.3, 0.42, fract(x * vAge - uTime * 1.2)) * (1.0 - smoothstep(0.8, 0.92, fract(x * vAge - uTime * 1.2)));
+      vec3 tint = side < 1.5 ? vec3(0.16,0.82,1.0) : vec3(1.0,0.54,0.24);
+      color = tint * core * (0.35 + 0.65 * dash) * smoothstep(0.0, 0.04, x) * (1.0 - smoothstep(0.9, 1.0, x));
     } else {
       // RCS jet: white-hot at the nozzle, cooling to pale blue as it thins
       float fall = exp(-x*2.2) * smoothstep(0.0,0.04,x) * (1.0-smoothstep(0.5,1.0,x));
@@ -139,8 +168,6 @@ const flashVertex = /* glsl */`
     // RCS puffs (kind 5) keep their energy when held at the pixel floor, so
     // they fade out with range instead of growing into dots.
     vCover = puff ? min(1.0, aStyle.x*aStyle.x/(r*r)) : 1.0;
-    // Faction markers (kinds 3/4) hold a constant ~12 px screen size.
-    if (aStyle.z > 2.5 && !puff) r = pixel*6.0;
     if (aStyle.z < 0.5) {
       vec3 n = normalize(aAxis);
       vec3 right = normalize(cross(n, abs(n.y) < 0.9 ? vec3(0.0,1.0,0.0) : vec3(1.0,0.0,0.0)));
@@ -180,11 +207,6 @@ const flashFragment = /* glsl */`
       // RCS nozzle glow / exhaust puff: white kernel in a cold blue skirt
       col = vec3(1.9,2.1,2.5)*exp(-r*r*10.0)
         + vec3(0.3,0.55,1.1)*exp(-r*r*3.2)*(1.0-smoothstep(0.55,1.0,r))*0.75;
-    } else if (vStyle.z > 2.5) {
-      // Faction diamond so a torpedo stays identifiable when sub-pixel
-      float d = abs(p.x) + abs(p.y);
-      float edge = exp(-pow((d-0.62)*10.0,2.0));
-      col = (vStyle.z < 3.5 ? vec3(0.16,0.82,1.0) : vec3(1.0,0.54,0.24)) * edge;
     } else if (vStyle.z > 1.5) {
       float rays = pow(max(0.0,1.0-abs(p.x*p.y)*60.0),3.0)*exp(-r*5.0);
       col += vec3(1.6,0.95,0.4)*rays;
@@ -193,15 +215,77 @@ const flashFragment = /* glsl */`
   }
 `;
 
+// Torpedo marker at fleet range: a filled faction arrowhead pointing along
+// the round's screen-space heading, with a dark outline so it reads against
+// bright nebula and explosions - unlike the Tracks checkpoint diamond.
+const markerVertex = /* glsl */`
+  attribute vec3 aCenter;
+  attribute vec3 aAxis;
+  attribute vec4 aStyle; // half-size px, intensity, side (0 alpha / 1 beta), unused
+  uniform float uPixelWorld;
+  varying vec2 vUv;
+  varying vec4 vStyle;
+  #include <common>
+  #include <logdepthbuf_pars_vertex>
+  void main() {
+    vec3 p = (viewMatrix * vec4(aCenter, 1.0)).xyz;
+    float pixel = uPixelWorld * max(0.01, -p.z);
+    vec3 ax = mat3(viewMatrix) * aAxis;
+    vec2 d = length(ax.xy) > 1e-6 ? normalize(ax.xy) : vec2(0.0, 1.0);
+    vec2 q = position.xy * 2.0 * aStyle.x * pixel;
+    p.xy += q.x * vec2(d.y, -d.x) + q.y * d;
+    gl_Position = projectionMatrix * vec4(p, 1.0);
+    vUv = uv;
+    vStyle = aStyle;
+    #include <logdepthbuf_vertex>
+  }
+`;
+
+const markerFragment = /* glsl */`
+  varying vec2 vUv;
+  varying vec4 vStyle;
+  #include <common>
+  #include <logdepthbuf_pars_fragment>
+  float cross2(vec2 a, vec2 b) { return a.x * b.y - a.y * b.x; }
+  float segDist(vec2 p, vec2 a, vec2 b) {
+    vec2 pa = p - a, ba = b - a;
+    return length(pa - ba * clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0));
+  }
+  bool inTri(vec2 p, vec2 a, vec2 b, vec2 c) {
+    float s1 = cross2(b - a, p - a), s2 = cross2(c - b, p - b), s3 = cross2(a - c, p - c);
+    return (s1 >= 0.0 && s2 >= 0.0 && s3 >= 0.0) || (s1 <= 0.0 && s2 <= 0.0 && s3 <= 0.0);
+  }
+  void main() {
+    #include <logdepthbuf_fragment>
+    vec2 p = vUv * 2.0 - 1.0;
+    // dart: tip, right wing, notch, left wing (+y = heading)
+    vec2 T = vec2(0.0, 0.92), R = vec2(0.62, -0.62), N = vec2(0.0, -0.22), L = vec2(-0.62, -0.62);
+    float d = min(min(segDist(p, T, R), segDist(p, R, N)), min(segDist(p, N, L), segDist(p, L, T)));
+    bool inside = inTri(p, T, R, N) || inTri(p, T, N, L);
+    float px = 1.0 / max(1.0, vStyle.x);           // one pixel in quad units
+    float fill = inside ? 1.0 : 1.0 - smoothstep(0.0, px, d);
+    float outline = 1.0 - smoothstep(px * 1.0, px * 2.2, d);
+    vec3 tint = vStyle.z < 0.5 ? vec3(0.16,0.82,1.0) : vec3(1.0,0.54,0.24);
+    float a = max(fill, outline * 0.75) * vStyle.y;
+    gl_FragColor = vec4(tint * 1.25 * fill * vStyle.y, a);
+  }
+`;
+
+const premultiplied = {
+  transparent: true, depthWrite: false, side: THREE.DoubleSide,
+  blending: THREE.CustomBlending, blendSrc: THREE.OneFactor,
+  blendDst: THREE.OneMinusSrcAlphaFactor, blendEquation: THREE.AddEquation
+};
+
 /** Reusable instance buffers. Resizes only when a new peak exceeds capacity. */
 class QuadBatch {
-  constructor(scene, fields, vertexShader, fragmentShader, capacity) {
+  constructor(scene, fields, vertexShader, fragmentShader, capacity, blending = additive) {
     this.fields = fields;
     this.capacity = capacity;
     this.count = 0;
     this.material = new THREE.ShaderMaterial({
       uniforms: { uTime: { value: 0 }, uPixelWorld: Ribbon.pixelWorld },
-      vertexShader, fragmentShader, ...additive
+      vertexShader, fragmentShader, ...blending
     });
     this.geometry = this.allocate(capacity);
     this.mesh = new THREE.Mesh(this.geometry, this.material);
@@ -272,6 +356,23 @@ export class WeaponFlashes extends QuadBatch {
     a.aCenter.setXYZ(i, center.x, center.y, center.z);
     a.aAxis.setXYZ(i, axis.x, axis.y, axis.z);
     a.aStyle.setXYZW(i, radius, intensity, kind, seed);
+  }
+}
+
+/** Fleet-range torpedo markers (arrowheads), drawn over the additive effects. */
+export class WeaponMarkers extends QuadBatch {
+  constructor(scene) {
+    super(scene, { aCenter: 3, aAxis: 3, aStyle: 4 }, markerVertex, markerFragment, 64, premultiplied);
+    this.mesh.renderOrder = 26;
+  }
+  /** @param {string} faction 'alpha' | 'beta'; halfPx marker half-size in pixels */
+  add(center, axis, intensity, faction, halfPx = 7) {
+    if (intensity <= 0) return;
+    this.reserve();
+    const i = this.count++, a = this.geometry.attributes;
+    a.aCenter.setXYZ(i, center.x, center.y, center.z);
+    a.aAxis.setXYZ(i, axis.x, axis.y, axis.z);
+    a.aStyle.setXYZW(i, halfPx, Math.min(1, intensity), faction === 'beta' ? 1 : 0, 0);
   }
 }
 
