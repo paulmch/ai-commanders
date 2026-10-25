@@ -434,7 +434,10 @@ REPORT_TO_ADMIRAL_TOOL = {
                 "status": {
                     "type": "string",
                     "enum": list(REPORT_STATUSES),
-                    "description": "ACK only to add intent, contact or request.",
+                    "description": (
+                        "ACK only to add a contact or request: an ACK with nothing else "
+                        "(intent included) is filed as 'nothing to flag'."
+                    ),
                 },
                 "reason": {
                     "type": "string",
@@ -445,7 +448,10 @@ REPORT_TO_ADMIRAL_TOOL = {
                 },
                 "intent": {
                     "type": "string",
-                    "description": f"Optional, max {REPORT_INTENT_CHARS} chars: your plan for the next checkpoint.",
+                    "description": (
+                        f"Optional, max {REPORT_INTENT_CHARS} chars: your plan for the next "
+                        "checkpoint, read beside a DEVIATE, UNABLE, contact or request."
+                    ),
                 },
                 "contact": {
                     "type": "object",
@@ -480,7 +486,8 @@ FLEET_SIGNAL_TOOL = {
         "name": "fleet_signal",
         "description": (
             "Signal your OWN fleet (the enemy never hears it), delivered at the NEXT "
-            "checkpoint; to=ADMIRAL rides on your report. Max "
+            "checkpoint. to=ADMIRAL is filed on your report: BREAKING_OFF as a DEVIATE, "
+            "the others as a request. Max "
             f"{MAX_FLEET_SIGNALS_PER_DECISION} per decision. Launches, kills and PD losses are "
             "shared automatically - do not repeat them. TARGET_CLAIM: claim a target before "
             "committing a salvo so two ships do not waste rounds on one hull. TOT_SYNC: when "

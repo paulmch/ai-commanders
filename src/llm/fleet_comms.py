@@ -21,6 +21,8 @@ from .communication import (
     INBOX_MAX_ENEMY_ITEMS,
     INBOX_MAX_ITEMS,
     REPORT_INTENT_CHARS,
+    REPORT_REASON_CHARS,
+    REQUEST_TEXT_CHARS,
     ROLE_ENGINE,
     CommsMessage,
     FleetCommunicationChannel,
@@ -54,6 +56,13 @@ _LOWERCASE_MANEUVER_WORDS = ("intercept", "evade", "brake", "padlock")
 _UPPER_RE = re.compile(r"\b(" + "|".join(sorted(
     (re.escape(w) for w in _MANEUVER_WORDS), key=len, reverse=True)) + r")\b")
 _LOWER_RE = re.compile(r"\b(" + "|".join(_LOWERCASE_MANEUVER_WORDS) + r")\b", re.IGNORECASE)
+# "INTERCEPT (NOT PADLOCK)", "do NOT padlock yet", "never EVADE": a maneuver
+# word right after a negation is what the admiral ruled out, not ordered.
+_NEGATION_RE = re.compile(r"\b(not|no|never|don'?t|avoid|stop|cease)\W+(\w+\W+)?$", re.IGNORECASE)
+# An order steering to coordinates - "(260,0,0)", "(X=260, Y=0)", "(~90,55)" -
+# can only be flown with set_heading: INTERCEPT takes a ship, not a point.
+_COORD = r"\s*(?:[xyz]\s*[=:~]?\s*)?~?\s*[-+]?\d+(?:\.\d+)?\s*(?:km)?\s*"
+_POINT_RE = re.compile(r"\(" + _COORD + "," + _COORD + r"[,)]", re.IGNORECASE)
 
 
 def maneuver_name(maneuver_type: Any) -> str:
@@ -84,7 +93,10 @@ def ordered_maneuvers(order: Any) -> List[str]:
 
     A structured maneuver on the order (if the order schema carries one) or a
     structured heading wins; otherwise the prose is scanned - maneuver names
-    in capitals first, then the unambiguous verbs in any case.
+    in capitals first, then the unambiguous verbs in any case. A name right
+    after a negation ("NOT PADLOCK", "do not evade") is not an order. Prose
+    often names several ("INTERCEPT ...; EVADE if torpedoes come inbound"):
+    flying any one of them complies.
     """
     if order is None:
         return []
@@ -96,9 +108,14 @@ def ordered_maneuvers(order: Any) -> List[str]:
     if isinstance(getattr(order, "heading", None), dict):
         return ["HEADING"]
     text = str(getattr(order, "order_text", "") or "")
-    found = [_MANEUVER_WORDS[m.group(1)] for m in _UPPER_RE.finditer(text)]
+
+    def asked(matches: Iterable[Any]) -> List[str]:
+        return [_MANEUVER_WORDS[m.group(1).upper()] for m in matches
+                if not _NEGATION_RE.search(text[max(0, m.start() - 24):m.start()])]
+
+    found = asked(_UPPER_RE.finditer(text))
     if not found:
-        found = [_MANEUVER_WORDS[m.group(1).upper()] for m in _LOWER_RE.finditer(text)]
+        found = asked(_LOWER_RE.finditer(text))
     seen: List[str] = []
     for name in found:
         if name not in seen:
@@ -166,12 +183,24 @@ def compliance(
     Plan schema keys {ordered_maneuver, executed_maneuver, ordered_target,
     actual_target, ordered_salvo, launched} plus `final` (False at filing:
     `launched` counts the rounds the captain committed; True in the Admiral's
-    copy at the next checkpoint: the rounds that actually left the tubes) and
-    `deviations` - one short line per mismatch, empty when the ship complied.
+    copy at the next checkpoint: the rounds that actually left the tubes),
+    `deviations` - one short line per mismatch, empty when the ship complied -
+    and `followed` (no deviations). `deviations`/`followed` are the verdict.
+
+    `ordered_maneuver` stays a single comparable value for consumers that
+    test it against `executed_maneuver`: an order naming several maneuvers
+    ("INTERCEPT ...; EVADE if torpedoes come inbound", all of them in
+    `ordered_maneuvers`) records the one the ship flew when it flew one of
+    them, and the "/"-joined options when it flew none - so equal means
+    complied and different means deviated, as `deviations` says.
     """
     if order is None:
         return None
     ordered = ordered_maneuvers(order)
+    accepted = list(ordered)
+    if ordered and "HEADING" not in accepted and _POINT_RE.search(str(getattr(order, "order_text", "") or "")):
+        accepted.append("HEADING")  # "INTERCEPT toward (260,0,0)" flown as set_heading to the point
+    flew_ordered = not ordered or executed in accepted
     raw_target = getattr(order, "torpedo_target", None) or getattr(order, "suggested_target", None)
     ordered_target_id = None
     if raw_target:
@@ -188,7 +217,7 @@ def compliance(
         salvo = None
 
     deviations: List[str] = []
-    if ordered and executed not in ordered:
+    if not flew_ordered:
         deviations.append(f"maneuver: ordered {'/'.join(ordered)}, flew {executed}")
     if ordered_target_id and actual_target_id != ordered_target_id:
         deviations.append(f"target: ordered {ordered_target}, engaging {actual_target or 'nothing'}")
@@ -198,13 +227,15 @@ def compliance(
     elif salvo == 0 and launched > 0:
         deviations.append(f"salvo: ordered hold, {verb} {launched}")
     return {
-        "ordered_maneuver": "/".join(ordered) or None,
+        "ordered_maneuver": (executed if ordered and flew_ordered else "/".join(ordered)) or None,
+        "ordered_maneuvers": ordered,
         "executed_maneuver": executed,
         "ordered_target": ordered_target,
         "actual_target": actual_target,
         "ordered_salvo": salvo,
         "launched": launched,
         "final": final,
+        "followed": not deviations,
         "deviations": deviations,
     }
 
@@ -232,25 +263,46 @@ def report_text(report: Optional[Dict[str, Any]]) -> Optional[str]:
 
 def fold_admiral_signals(report: Dict[str, Any], signals: List[Dict[str, Any]]) -> None:
     """
-    Attach the ship's ADMIRAL-addressed fleet_signals to its report.
+    File the ship's ADMIRAL-addressed fleet_signals on its report.
 
-    The Admiral's one input channel is captain_reports, so a signal sent
-    to=ADMIRAL rides on the sender's report: kept verbatim under `signals`,
-    a PD_COVER_REQUEST becomes the report's request when it has none, and
-    the first signal fills an empty intent.
+    The Admiral's one input channel is captain_reports, and its CAPTAIN
+    REPORTS view collapses a report with status ACK, no deviation, no contact
+    and no request into "ACK, nothing to flag". So each signal is filed in a
+    field that view always shows, never only under `signals` (kept verbatim):
+    - BREAKING_OFF makes an ACK a DEVIATE (the captain is leaving its
+      orders), its text the reason when the captain gave none;
+    - PD_COVER_REQUEST is a PD_COVER request;
+    - TARGET_CLAIM / TOT_SYNC / FREE fill the request slot with the signal's
+      own kind (the Admiral reads "asks [TOT_SYNC]: ..."), the next one an
+      empty intent.
+    Slots the captain's own report_to_admiral already filled are kept.
     """
     if not signals:
         return
     report.setdefault("signals", []).extend(signals)
     for sig in signals:
-        if sig.get("kind") == "PD_COVER_REQUEST" and not report.get("request"):
-            report["request"] = {"kind": "PD_COVER", "text": clip(sig.get("text"), 120)}
-    if not report.get("intent"):
-        sig = signals[0]
-        head = sig.get("kind", "FREE") + (f" {sig['target']}" if sig.get("target") else "")
+        kind = sig.get("kind") or "FREE"
+        text = str(sig.get("text") or "")
+        head = kind + (f" {sig['target']}" if sig.get("target") else "")
         if sig.get("eta_s") is not None:
             head += f" ETA {sig['eta_s']:.0f}s"
-        report["intent"] = clip(f"[{head}] {sig.get('text', '')}", REPORT_INTENT_CHARS)
+        if kind == "BREAKING_OFF":
+            if report.get("status", "ACK") == "ACK":
+                report["status"] = "DEVIATE"
+                report["implicit"] = False
+            if not report.get("reason"):
+                report["reason"] = clip(f"[{head}] {text}", REPORT_REASON_CHARS)
+                continue
+        elif not report.get("request"):
+            if kind == "PD_COVER_REQUEST":
+                report["request"] = {"kind": "PD_COVER", "text": clip(text, REQUEST_TEXT_CHARS)}
+            else:
+                lead = head[len(kind):].strip()
+                report["request"] = {"kind": kind,
+                                     "text": clip(f"{lead} - {text}" if lead else text, REQUEST_TEXT_CHARS)}
+            continue
+        if not report.get("intent"):
+            report["intent"] = clip(f"[{head}] {text}", REPORT_INTENT_CHARS)
 
 
 # ---------------------------------------------------------------------------

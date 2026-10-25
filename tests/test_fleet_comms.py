@@ -7,6 +7,9 @@ the comms tools and the runner's shared delivery):
   resolve by ship id or name and dead ships are skipped;
 - a captain's DEVIATE at checkpoint N reaches its admiral at N+1 with an
   ordered-vs-executed compliance line, and a silent captain still gets one;
+- consumers that compare ordered_maneuver with executed_maneuver get the
+  verdict `deviations` gives, and ADMIRAL-addressed fleet signals land in
+  report fields the admiral's CAPTAIN REPORTS view never collapses;
 - engine auto-signals (launches with ETA, kills/losses, PD losses) land in
   the peers' inbox; every loop (sync, async, HTTP) delivers;
 - comms_message / comms_delivered / captain_report events carry the schema.
@@ -31,7 +34,7 @@ from src.llm.communication import (
     REPORT_INTENT_CHARS, REPORT_REASON_CHARS, SIGNAL_TEXT_CHARS, CommsMessage,
     FleetCommunicationChannel,
 )
-from src.llm.fleet_comms import EngineDatalink, budget_inbox, ordered_maneuvers
+from src.llm.fleet_comms import EngineDatalink, budget_inbox, compliance, ordered_maneuvers
 from src.llm.fleet_config import BattleFleetConfig
 
 FLEET = json.loads((Path(__file__).parent.parent / "data" / "fleet_ships.json").read_text())
@@ -277,6 +280,23 @@ class TestCaptainTools:
         independent.fleet_peer_names = ["TIS Dart-2"]
         assert "fleet_signal" in names(independent) and "report_to_admiral" not in names(independent)
 
+    def test_inbox_is_data_and_only_sent_traffic_is_logged(self):
+        """
+        receive_inbox only stores: the captain prompt (workstream C) renders
+        the inbox and copies it into the COMMUNICATION LOG, de-duplicated by
+        msg_id - logging here too would log every message twice.
+        """
+        captain = captain_fixture()
+        item = {"msg_id": "m1-alpha_2-1", "channel": CHANNEL_FLEET_NET, "kind": "TARGET_CLAIM",
+                "sender_role": "captain", "sender_name": "TIS Dart-2", "faction": "alpha",
+                "text": "Lancer-1 is mine.", "sent_t": 30.0, "delivered_t": 60.0}
+        captain.receive_inbox([item], 60.0)
+        assert (captain.inbox, captain.inbox_delivered_t) == ([item], 60.0)
+        assert captain.message_history == []
+        captain.note_sent("Hold your rounds.", 60.0, "ALL [TARGET_CLAIM]")
+        assert captain.message_history == [
+            {"sender": "self", "time": 60.0, "text": "-> ALL [TARGET_CLAIM]: Hold your rounds."}]
+
     def test_tool_descriptions_quote_the_enforced_limits(self):
         """Prompt numbers are bound to the constants the code enforces."""
         from src.llm.admiral_tools import DISCUSS_WITH_ADMIRAL_TOOL
@@ -304,6 +324,63 @@ def test_ordered_maneuvers_reads_structure_then_prose():
     assert ordered_maneuvers(order("Intercept the nearest enemy.")) == ["INTERCEPT"]
     assert ordered_maneuvers(order("Maintain formation and keep heading toward the fleet.")) == []
     assert ordered_maneuvers(SimpleNamespace(order_text="x", heading={"x": 1})) == ["HEADING"]
+    # What the admiral rules out is not an order (baseline battle A, verbatim).
+    assert ordered_maneuvers(order("PHASE 1 - INTERCEPT (NOT PADLOCK): thrust at the enemy")) == ["INTERCEPT"]
+    assert ordered_maneuvers(order("INTERCEPT on the axis, do NOT PADLOCK yet; EVADE if torpedoes")) == [
+        "INTERCEPT", "EVADE"]
+    assert ordered_maneuvers(order("Do not evade yet - intercept the nearest corvette.")) == ["INTERCEPT"]
+
+
+def consumer_reads_followed(comp):
+    """
+    How the admiral's CAPTAIN REPORTS and the viewer's chips read a
+    compliance record: ordered_maneuver vs executed_maneuver, as strings.
+    """
+    om, em = comp["ordered_maneuver"], comp["executed_maneuver"]
+    return om is None or em is None or str(om).upper() == str(em).upper()
+
+
+class TestCompliance:
+    """ordered_maneuver must give string-comparing consumers the verdict `deviations` gives."""
+
+    @staticmethod
+    def comp(text, executed):
+        order = SimpleNamespace(order_text=text, heading=None, target_ship_id="alpha_1",
+                                suggested_target=None, torpedo_target=None, torpedo_salvo=None)
+        return compliance(order, channel_fixture(), executed, None, 0, final=True)
+
+    MULTI = "INTERCEPT OCS Lancer-2 at 60% and fire when optimal; EVADE if torpedoes come inbound."
+
+    @pytest.mark.parametrize("executed", ["INTERCEPT", "EVADE"])
+    def test_flying_any_ordered_option_complies(self, executed):
+        comp = self.comp(self.MULTI, executed)
+        assert comp["deviations"] == [] and comp["followed"] is True
+        assert comp["ordered_maneuvers"] == ["INTERCEPT", "EVADE"]
+        assert comp["ordered_maneuver"] == executed
+        assert consumer_reads_followed(comp)
+
+    def test_flying_none_of_them_deviates(self):
+        comp = self.comp(self.MULTI, "BRAKE")
+        assert comp["deviations"] == ["maneuver: ordered INTERCEPT/EVADE, flew BRAKE"]
+        assert comp["followed"] is False and comp["ordered_maneuver"] == "INTERCEPT/EVADE"
+        assert not consumer_reads_followed(comp)
+
+    def test_steering_to_coordinates_complies_with_a_heading(self):
+        comp = self.comp("INTERCEPT toward enemy fleet center (X=260,Y=0,Z=0) at 70% throttle", "HEADING")
+        assert comp["deviations"] == [] and consumer_reads_followed(comp)
+        assert self.comp("INTERCEPT OCS Lancer-2 at 70% throttle", "HEADING")["deviations"]
+
+    def test_consumers_and_deviations_always_agree(self):
+        """Order shapes from baseline battle A: a string compare and `deviations` agree."""
+        pairs = [(self.MULTI, "INTERCEPT"), (self.MULTI, "DRIFT"),
+                 ("PHASE 1 - INTERCEPT (NOT PADLOCK): thrust at the enemy", "PADLOCK"),
+                 ("COAST and shoot: hold your current velocity.", "MAINTAIN"),
+                 ("Close on Lancer-2. If torpedoes are inbound, evade; otherwise intercept.", "EVADE"),
+                 ("Hold fire, await orders.", "INTERCEPT")]
+        for text, executed in pairs:
+            comp = self.comp(text, executed)
+            maneuver_ok = not any(d.startswith("maneuver") for d in comp["deviations"])
+            assert consumer_reads_followed(comp) == maneuver_ok, (text, executed, comp)
 
 
 def test_inbox_budget_puts_llm_traffic_first_and_caps_enemy_chatter():
@@ -434,6 +511,10 @@ class TestFleetNet:
         hail = next(i for i in lancer if i["channel"] == CHANNEL_ENEMY)
         assert hail["text"] == "Strike your colours, Lancer."
         assert not [i for i in harpoon if i["channel"] == CHANNEL_ENEMY]  # own taunt not echoed
+        # The sender's log holds what left, once each, with where it went.
+        sent = [m["text"] for m in runner.alpha_captains["alpha_1"].message_history if m["sender"] == "self"]
+        assert sent == ["-> ALL [TARGET_CLAIM]: I take Lancer - hold your rounds.",
+                        "-> ALL_ENEMIES: Strike your colours, Lancer."]
 
     def test_datalink_announces_a_friendly_launch_with_eta(self, tmp_path):
         stub = Stub(captain=self.signal_script)
@@ -505,6 +586,112 @@ class TestFleetNet:
                         if e.timestamp == 30.0 and e.ship_id == "alpha_1")
         assert any("NOT SENT" in err and "ENEMY" in err for err in decision.data["tool_errors"])
         assert not [e for e in events(runner, "comms_message") if e.data["sender_id"] == "alpha_1"]
+
+
+class TestAdmiralReadsReports:
+    """
+    The Admiral's CAPTAIN REPORTS view (workstream B) shows a report in full
+    unless it is a bare ACK - status ACK, ordered_maneuver == executed_maneuver,
+    no contact, no request - which it collapses into "ACK, nothing to flag".
+    These run real runner output through that rule, and through B's renderer
+    itself once it is in the tree.
+    """
+
+    MULTI = "INTERCEPT OCS Lancer at 60% and fire when optimal; EVADE if torpedoes come inbound."
+
+    @staticmethod
+    def bare_ack(report):
+        return (report["status"] == "ACK" and consumer_reads_followed(report["compliance"] or {
+            "ordered_maneuver": None, "executed_maneuver": None})
+            and not report.get("contact") and not report.get("request"))
+
+    @staticmethod
+    def render(reports):
+        from src.llm import prompts
+        renderer = getattr(prompts, "_format_captain_reports", None)
+        if renderer is None:
+            pytest.skip("CAPTAIN REPORTS renderer (workstream B) is not in this tree")
+        snapshot = SimpleNamespace(
+            friendly_ships=[SimpleNamespace(ship_id=r["ship_id"], ship_name=r["ship_name"]) for r in reports],
+            enemy_ships=[], labels={}, checkpoint=2)
+        return renderer(reports, snapshot)
+
+    def run_multi(self, tmp_path):
+        def script(ctx):
+            flown = "BRAKE" if ctx.model == "stub/harpoon" else "INTERCEPT"
+            return [("set_maneuver", {"maneuver_type": flown, "throttle": 0.3})]
+        stub = Stub(captain=script, order=lambda ship: {"order_text": self.MULTI, "priority": "NORMAL"})
+        make_runner(stub, tmp_path).run_fleet_battle(FLEET)
+        return {r["ship_id"]: r for r in stub.reports[("alpha", 2)]}
+
+    def run_signals(self, tmp_path):
+        def script(ctx):
+            calls = [("set_maneuver", {"maneuver_type": "INTERCEPT", "throttle": 0.3})]
+            if ctx.cp == 1 and ctx.model == "stub/dart":
+                calls.append(("fleet_signal", {"kind": "BREAKING_OFF", "to": "ADMIRAL",
+                                               "text": "Breaking off after this pass - PD down to 1 turret."}))
+            if ctx.cp == 1 and ctx.model == "stub/harpoon":
+                calls.append(("fleet_signal", {"kind": "TOT_SYNC", "to": "ADMIRAL", "target": "OCS Lancer",
+                                               "eta_s": 45, "text": "Two rounds on Lancer, launch to match."}))
+                calls.append(("fleet_signal", {"kind": "FREE", "to": "ADMIRAL",
+                                               "text": "Lancer's PD favours its port side."}))
+            return calls
+        stub = Stub(captain=script)
+        runner = make_runner(stub, tmp_path)
+        runner.run_fleet_battle(FLEET)
+        return runner, {r["ship_id"]: r for r in stub.reports[("alpha", 2)]}
+
+    def test_complying_with_a_multi_maneuver_order_is_a_bare_ack(self, tmp_path):
+        reports = self.run_multi(tmp_path)
+        dart, harpoon = reports["alpha_1"], reports["alpha_2"]
+        assert dart["compliance"]["ordered_maneuvers"] == ["INTERCEPT", "EVADE"]
+        assert dart["compliance"]["deviations"] == [] and self.bare_ack(dart)
+        assert harpoon["compliance"]["deviations"] == ["maneuver: ordered INTERCEPT/EVADE, flew BRAKE"]
+        assert not self.bare_ack(harpoon)
+
+    def test_admiral_signals_are_never_a_bare_ack(self, tmp_path):
+        runner, reports = self.run_signals(tmp_path)
+        dart, harpoon = reports["alpha_1"], reports["alpha_2"]
+        assert (dart["status"], dart["implicit"]) == ("DEVIATE", False)
+        assert dart["reason"] == "[BREAKING_OFF] Breaking off after this pass - PD down to 1 turret."
+        assert harpoon["status"] == "ACK"
+        assert harpoon["request"] == {"kind": "TOT_SYNC",
+                                      "text": "OCS Lancer ETA 45s - Two rounds on Lancer, launch to match."}
+        assert harpoon["intent"] == "[FREE] Lancer's PD favours its port side."
+        assert [s["kind"] for s in harpoon["signals"]] == ["TOT_SYNC", "FREE"]
+        assert not self.bare_ack(dart) and not self.bare_ack(harpoon)
+        # The recorded report and the decision's acknowledgment say the same.
+        recorded = {e.ship_id: e.data for e in events(runner, "captain_report") if e.timestamp == 30.0}
+        assert recorded["alpha_1"]["status"] == "DEVIATE"
+        decision = next(e for e in events(runner, "captain_decision")
+                        if e.timestamp == 30.0 and e.ship_id == "alpha_1")
+        assert decision.data["acknowledgment"].startswith("DEVIATE | [BREAKING_OFF]")
+
+    def test_signal_slots_keep_what_the_captain_reported(self):
+        from src.llm.fleet_comms import fold_admiral_signals
+        report = {"status": "DEVIATE", "reason": "Lancer separating.", "intent": "",
+                  "request": {"kind": "RETARGET", "text": "give me Falchion"}, "contact": None}
+        fold_admiral_signals(report, [{"kind": "BREAKING_OFF", "text": "out of delta-v"},
+                                      {"kind": "TARGET_CLAIM", "target": "OCS Falchion", "text": "mine"}])
+        assert report["status"] == "DEVIATE" and report["reason"] == "Lancer separating."
+        assert report["request"]["kind"] == "RETARGET"
+        assert report["intent"] == "[BREAKING_OFF] out of delta-v"
+        assert len(report["signals"]) == 2
+
+    def test_admiral_renderer_shows_what_the_reports_carry(self, tmp_path):
+        multi = self.run_multi(tmp_path / "multi")
+        text = self.render(list(multi.values()))
+        lines = text.splitlines()
+        dart_lines = [ln for ln in lines if "TIS Dart" in ln]
+        harpoon_lines = [ln for ln in lines if "TIS Harpoon" in ln]
+        assert dart_lines and not any("NOT as ordered" in ln for ln in dart_lines), text
+        assert any("NOT as ordered" in ln for ln in harpoon_lines), text
+
+        _, signalled = self.run_signals(tmp_path / "signals")
+        text = self.render(list(signalled.values()))
+        assert "Breaking off after this pass" in text and "DEVIATE" in text, text
+        assert "Two rounds on Lancer" in text and "TOT_SYNC" in text, text
+        assert "nothing to flag" not in text, text
 
 
 class TestDatalink:
