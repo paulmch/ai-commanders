@@ -614,7 +614,7 @@ class TestDirectiveFailure:
         assert admiral.last_directive == ""
         assert len(client.calls) == 1   # no retry, no per-ship orders
 
-    def test_runner_never_hands_captains_a_stale_directive(self):
+    def test_runner_never_hands_captains_a_stale_directive(self, tmp_path):
         from src.llm.battle_runner import BattleConfig, LLMBattleRunner
         from src.llm.captain import LLMCaptainConfig
         from src.llm.client import CallStats
@@ -649,7 +649,7 @@ class TestDirectiveFailure:
         })
         config = BattleConfig(initial_distance_km=600.0, time_limit_s=300.0, max_checkpoints=2,
                               verbose=False, personality_selection=False, record_battle=True,
-                              parallel_llm=False, seed=7)
+                              recording_dir=str(tmp_path), parallel_llm=False, seed=7)
         dummy = LLMCaptainConfig(name="-", ship_name="-", model="stub/m",
                                  personality=CaptainPersonality.BALANCED)
         runner = LLMBattleRunner(config=config, alpha_config=dummy, beta_config=dummy,
