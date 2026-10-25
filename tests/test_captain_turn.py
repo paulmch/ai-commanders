@@ -495,15 +495,17 @@ class TestOrderChecks:
     def test_positions_and_numbers_in_the_text_are_resolved(self):
         sim, me, foe = _sim_pair(400.0, 0.0)
         check = _captain()._order_check(
-            _order("Form on the fleet centre (X=90, Y=55, Z=10); Lancer-1 is 86 km out."),
+            _order("Form on the fleet centre (X=90, Y=55, Z=10); OCS Lancer-1 is 86 km out."),
             sim, me, [])
         (point,) = check["points"]
         assert point.startswith("(90,55,10) km is a POSITION: from you dir_to (+0.85,+0.52,+0.09)")
         (number,) = check["numbers"]
         assert number == ("order quotes 86 km next to OCS Lancer-1 [beta_1]; your sensors: "
                           "400 km from you")
-        # A number in the next clause is not a claim about the ship.
-        check = _captain()._order_check(_order("Hit Lancer-1. Then hold 300 km."), sim, me, [])
+        # By id works too; a number in the next clause is not a claim about the ship.
+        check = _captain()._order_check(_order("beta_1 is 86 km out."), sim, me, [])
+        assert check["numbers"][0].startswith("order quotes 86 km next to OCS Lancer-1")
+        check = _captain()._order_check(_order("Hit OCS Lancer-1. Then hold 300 km."), sim, me, [])
         assert "numbers" not in check
 
     def test_name_shared_with_a_friendly_is_flagged(self):
@@ -511,6 +513,143 @@ class TestOrderChecks:
         check = _captain()._order_check(_order(suggested_target="Lancer-1"), sim, me, [])
         assert check["target"].startswith("OCS Lancer-1 [beta_1]")
         assert "also matches your own TIS Lancer-1 [alpha_1]" in check["target"]
+
+
+class TestOrderTextHeuristics:
+    """
+    The prose heuristics never print an engine "check" of something the order
+    does not say: a CHECK showing an order failing is a reason to DEVIATE.
+    """
+
+    def _two_fleets(self):
+        """Us: TIS Lancer-1 + TIS Lancer-2 (40 km abeam). Them: OCS Lancer-1/-2."""
+        sim, me, foe = _sim_pair(400.0, 0.0)
+        mate = create_ship_from_fleet_data("alpha_2", "corvette", "alpha", FLEET,
+                                           position=Vector3D(0, 40_000, 0))
+        mate.name = "TIS Lancer-2"
+        sim.add_ship(mate)
+        foe2 = create_ship_from_fleet_data("beta_2", "destroyer", "beta", FLEET,
+                                           position=Vector3D(420_000, 0, 0))
+        foe2.name = "OCS Lancer-2"
+        sim.add_ship(foe2)
+        return sim, me
+
+    def test_a_friendly_sharing_the_bare_name_is_not_number_checked(self):
+        """CP-17 collision: 'TIS Lancer-2 (40 km)' is our wingman, not OCS Lancer-2."""
+        sim, me = self._two_fleets()
+        check = _captain()._order_check(
+            _order("Form up on TIS Lancer-2 (40 km off your beam) and screen it."), sim, me, [])
+        assert "numbers" not in check
+        check = _captain()._order_check(
+            _order("Screen Lancer-2 (40 km off your beam)."), sim, me, [])
+        assert "numbers" not in check  # bare name: ours or theirs - not claimed
+        # Named in full (or by id), the enemy is still checked.
+        check = _captain()._order_check(_order("OCS Lancer-2 is 40 km out."), sim, me, [])
+        assert check["numbers"] == ["order quotes 40 km next to OCS Lancer-2 [beta_2]; your "
+                                    "sensors: 420 km from you"]
+        check = _captain()._order_check(_order("Lancer-2 [beta_2] is 40 km out."), sim, me, [])
+        assert "OCS Lancer-2 [beta_2]" in check["numbers"][0]
+
+    def test_a_foreign_fleet_prefix_hides_a_unique_bare_name(self):
+        sim, me, foe = _sim_pair(400.0, 0.0)
+        foe.name = "OCS Falchion-1"
+        captain = _captain()
+        assert "numbers" not in captain._order_check(
+            _order("Escort TIS Falchion-1 (40 km)."), sim, me, [])
+        assert "numbers" in captain._order_check(_order("Falchion-1 is 40 km out."), sim, me, [])
+
+    def test_negated_intercept_and_an_unrelated_percentage_are_not_checked(self):
+        sim, me, foe = _sim_pair(150.0, 4.0, my_type="destroyer")
+        captain = _captain("destroyer")
+        for text in ("Hold position, do NOT intercept; your hull is at 40%.",
+                     "Don't INTERCEPT OCS Lancer-1, keep range.",
+                     "Avoid an INTERCEPT at all costs."):
+            assert "engine" not in captain._order_check(_order(text), sim, me, []), text
+        # An INTERCEPT order reads its throttle only next to the word.
+        check = captain._order_check(_order("INTERCEPT OCS Lancer-1; your hull is at 40%."),
+                                     sim, me, [])
+        assert check["engine"].startswith("INTERCEPT@100%")
+        check = captain._order_check(_order("No hesitation, INTERCEPT@60% now."), sim, me, [])
+        assert check["engine"].startswith("INTERCEPT@60%")
+        check = captain._order_check(_order("At 30% INTERCEPT OCS Lancer-1."), sim, me, [])
+        assert check["engine"].startswith("INTERCEPT@30%")
+
+    def test_velocity_triples_are_not_positions_and_speeds_not_distances(self):
+        sim, me, foe = _sim_pair(300.0, 2.0, my_type="destroyer")
+        captain = _captain("destroyer")
+        check = captain._order_check(
+            _order("OCS Lancer-1 is moving at (3.5, -1.2, 0.4) km/s. Hold here."), sim, me, [])
+        assert "points" not in check and "numbers" not in check
+        check = captain._order_check(_order("Enemy velocity (3500, -1200, 400), rally at "
+                                            "(100, -20, 5)."), sim, me, [])
+        assert len(check["points"]) == 1 and check["points"][0].startswith("(100,-20,5) km")
+        # "closing at 3 km/s" is a speed, not a 3 km range claim.
+        check = captain._order_check(_order("OCS Lancer-1 closing at 3 km/s."), sim, me, [])
+        assert "numbers" not in check
+
+
+class TestStructuredAdmiralManeuver:
+    """
+    AdmiralOrder.maneuver (maneuver workstream): a structured maneuver the
+    runner applies like a heading. Only getattr is used - the field may be
+    absent on older order objects.
+    """
+
+    def test_no_follow_up_while_an_admiral_maneuver_is_flying(self):
+        ack = _respond([("respond_to_orders", {"response_type": "ACKNOWLEDGE"})])
+        client, seen = _client({0: ack})
+        sim, captain = _fleet_captain(client)
+        captain.admiral_orders[0].maneuver = {"maneuver_type": "INTERCEPT",
+                                              "target": "OCS Lancer-1", "standoff_km": 50.0,
+                                              "throttle": 1.0}
+        captain.decide("alpha_1", sim)
+        assert len(seen) == 1
+
+    def test_reply_line_names_the_applied_maneuver(self):
+        order = _order("Hold 200 km on Lancer-1.")
+        order.maneuver = {"maneuver_type": "HOLD_RANGE", "target": "OCS Lancer-1",
+                          "range_km": 200.0, "throttle": 1.0}
+        text = format_admiral_orders_for_captain([order], "Go.", now=0.0)
+        assert "Your MANEUVER ORDER is already flying" in text
+        heading = _order("Formation heading.")
+        heading.heading = {"x": 1.0, "y": 0.0, "z": 0.0}
+        text = format_admiral_orders_for_captain([heading, order], "Go.", now=0.0)
+        assert "Your HEADING ORDER/MANEUVER ORDER is already flying" in text
+
+    def test_engine_check_follows_the_spec_not_the_prose(self):
+        sim, me, foe = _sim_pair(150.0, 4.0, my_type="destroyer")
+        captain = _captain("destroyer")
+        warn = [Mock(warning="MERGE IN 30 s")]
+        # Standoff INTERCEPT brakes on its own: no straight-burn MERGE claim,
+        # even though the prose says INTERCEPT.
+        order = _order("INTERCEPT OCS Lancer-1 at 80%, stop 50 km out.")
+        order.maneuver = {"maneuver_type": "INTERCEPT", "target": "OCS Lancer-1",
+                          "standoff_km": 50.0, "throttle": 0.8}
+        check = captain._order_check(order, sim, me, warn)
+        assert "engine" not in check and "conflict" not in check
+        # A plain structured INTERCEPT is a straight burn: checked at its throttle.
+        order = _order("Close the range.")
+        order.maneuver = {"maneuver_type": "INTERCEPT", "target": "OCS Lancer-1",
+                          "throttle": 0.6}
+        check = captain._order_check(order, sim, me, warn)
+        assert check["engine"].startswith("INTERCEPT@60%") and "MERGE" in check["engine"]
+        assert "conflict" in check
+        # HEADING toward a ship flies the bearing to it.
+        order = _order("Turn onto them.")
+        order.maneuver = {"maneuver_type": "HEADING", "toward_ship": "OCS Lancer-1",
+                          "throttle": 1.0}
+        check = captain._order_check(order, sim, me, [])
+        assert check["engine"].startswith("this heading for one checkpoint")
+
+    def test_tool_notes_ride_their_own_channel(self):
+        """An executed call's note is not shown as a REJECTED call to reissue."""
+        captain = _captain()
+        captain._record_tool_note("set_maneuver HOLD_RANGE: read standoff_km as range_km")
+        assert captain.pending_tool_errors == []
+        captain.last_tool_notes, captain.pending_tool_notes = captain.pending_tool_notes, []
+        text = captain._format_tool_errors()
+        assert "ENGINE NOTES ON YOUR LAST ORDERS (accepted" in text
+        assert "REJECTED" not in text
 
 
 class TestNamesAndTargets:
@@ -852,3 +991,4 @@ class TestLegacyMessages:
         log = captain._format_message_history(before=30.0)
         assert "[TIS Dart-2 [alpha_2] (friendly)]" in log
         assert "[ENEMY OCS Lancer-1 [beta_1]]" in log
+

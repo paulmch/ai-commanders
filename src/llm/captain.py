@@ -55,8 +55,60 @@ _TRIPLE_RE = re.compile(
 _XYZ_RE = re.compile(
     r"X\s*=\s*([+-]?\d+(?:\.\d+)?)\s*,?\s*Y\s*=\s*([+-]?\d+(?:\.\d+)?)\s*,?\s*Z\s*=\s*([+-]?\d+(?:\.\d+)?)",
     re.IGNORECASE)
-_KM_RE = re.compile(r"(\d+(?:\.\d+)?)\s*km\b", re.IGNORECASE)
+# A distance, not a speed: "86 km" but never the "3" of "3 km/s".
+_KM_RE = re.compile(r"(\d+(?:\.\d+)?)\s*km\b(?!\s*/\s*s)", re.IGNORECASE)
 _THROTTLE_RE = re.compile(r"(\d{1,3})\s*%")
+_INTERCEPT_RE = re.compile(r"\bINTERCEPT\b", re.IGNORECASE)
+# Order prose is not a parser: these keep the text heuristics from printing
+# an engine "check" of something the order does not say (a CHECK showing an
+# order failing is a reason to DEVIATE, so a false one does real harm).
+_NEGATION_RE = re.compile(r"\b(?:not|no|never|avoid|don'?t|cancel|stop|without)\b",
+                          re.IGNORECASE)
+_SPEED_AFTER_RE = re.compile(r"\s*(?:k?m\s*/\s*s|kps)\b", re.IGNORECASE)
+_VELOCITY_BEFORE_RE = re.compile(r"\b(?:vel(?:ocity)?|moving|speed|drift(?:ing)?)\b[^()]{0,16}$",
+                                 re.IGNORECASE)
+_NOT_THROTTLE_RE = re.compile(r"\b(?:hull|armou?r|heat|fuel|integrity|health|delta|dv|PD)\b",
+                              re.IGNORECASE)
+
+
+def _ordered_intercept(text: str) -> Optional[float]:
+    """
+    Throttle (0-1) of an INTERCEPT the order text actually orders, or None.
+
+    Skips a negated mention ("do NOT intercept"), and reads the throttle only
+    from a percentage next to the word - in the same clause right after it
+    ("INTERCEPT Lancer-1 at 80%", "INTERCEPT@80%") or just before it ("80%
+    INTERCEPT") - never from an unrelated "hull is at 40%". 1.0 when unstated.
+    """
+    for m in _INTERCEPT_RE.finditer(text):
+        clause = re.split(r"[.;:!?,\n]", text[max(0, m.start() - 40):m.start()])[-1]
+        if _NEGATION_RE.search(" ".join(clause.split()[-3:])):
+            continue
+        after = re.split(r"[.;!?\n]", text[m.end():m.end() + 40], maxsplit=1)[0]
+        pct = _THROTTLE_RE.search(after)
+        if pct is not None and _NOT_THROTTLE_RE.search(after[:pct.start()][-14:]):
+            pct = None
+        if pct is None:
+            pct = re.search(r"(\d{1,3})\s*%\s*(?:throttle\s*|thrust\s*)?$",
+                            text[max(0, m.start() - 18):m.start()], re.IGNORECASE)
+        return min(100, int(pct.group(1))) / 100.0 if pct else 1.0
+    return None
+
+
+def _quoted_triples(text: str) -> List[Tuple[float, float, float]]:
+    """
+    Coordinate triples quoted in order text ("(90,55,10)", "X=90, Y=55,
+    Z=10"), minus velocities: a triple followed by km/s / m/s, or introduced
+    by "velocity" / "moving at", is a speed, not a position.
+    """
+    out = []
+    for m in list(_TRIPLE_RE.finditer(text)) + list(_XYZ_RE.finditer(text)):
+        if _SPEED_AFTER_RE.match(text, m.end()):
+            continue
+        if _VELOCITY_BEFORE_RE.search(text[max(0, m.start() - 30):m.start()]):
+            continue
+        out.append((float(m.group(1)), float(m.group(2)), float(m.group(3))))
+    return out
 
 
 def _has_launchers(ship: Any) -> bool:
@@ -72,15 +124,6 @@ def _bare_name(name: str) -> str:
     """'OCS Lancer-4' -> 'Lancer-4' (admiral prose drops the fleet prefix)."""
     parts = str(name).split(" ", 1)
     return parts[1] if len(parts) == 2 and parts[0].isupper() and len(parts[0]) <= 4 else str(name)
-
-
-def _mentions(text: str, name: str) -> Optional[re.Match]:
-    """Word-bounded mention of a ship name (or its bare form) in free text."""
-    for candidate in (name, _bare_name(name)):
-        m = re.search(r"(?<![\w-])" + re.escape(candidate) + r"(?![\w-])", text, re.IGNORECASE)
-        if m:
-            return m
-    return None
 
 
 @dataclass
@@ -625,7 +668,13 @@ class LLMCaptain:
         return cmd is not None  # Maneuver objects (and any other engine command)
 
     def _admiral_heading_applied(self) -> bool:
-        return any(isinstance(getattr(o, "heading", None), dict) for o in self.admiral_orders or [])
+        """
+        True when an admiral order this checkpoint carries motion the runner
+        already applied to the ship: a HEADING (``heading``) or a structured
+        maneuver (``maneuver``: INTERCEPT with standoff, HOLD_RANGE, ...).
+        """
+        return any(isinstance(getattr(o, "heading", None), dict) or getattr(o, "maneuver", None)
+                   for o in self.admiral_orders or [])
 
     def _needs_followup(self, executed: List[ToolCall], commands: List[Any],
                         ship: Any, now: float) -> bool:
@@ -633,7 +682,8 @@ class LLMCaptain:
         True when this checkpoint's replies issued no action and a follow-up
         round is still allowed. Not when the captain surrendered, asked its
         admiral (the runner re-decides with the answer), or is already flying
-        an admiral HEADING order (acknowledging it is the prescribed reply).
+        an admiral HEADING / MANEUVER order (acknowledging it is the
+        prescribed reply - a follow-up would push a set_maneuver over it).
         """
         if self.has_surrendered or any(self._is_action_command(c) for c in commands):
             return False
@@ -924,6 +974,75 @@ class LLMCaptain:
             return None
         return best[0] / 1000.0, best[1], ship_ref(best[2], best[4]), best[3] / 1000.0
 
+    def _spec_motion(self, spec: Dict[str, Any], thr: float, target: Any, ship: Any,
+                     enemies: List[Any], friendlies: List[Any],
+                     interval: float) -> Optional[Tuple[str, Any, float, float]]:
+        """
+        The straight-line motion of an admiral's structured maneuver, for the
+        ENGINE ORDER CHECK - (label, direction, throttle, burn s) - or None.
+
+        Only what flies straight is modelled: a plain INTERCEPT (it never
+        brakes) and a HEADING toward a point or ship. An INTERCEPT with a
+        standoff or arrival speed, HOLD_RANGE and the rest brake or steer on
+        their own, so a straight-burn closest approach would be a false MERGE.
+        """
+        from ..physics import Vector3D
+        kind = str(spec.get("maneuver_type") or "").upper()
+        if thr <= 0:
+            return None
+        if kind == "INTERCEPT":
+            if spec.get("standoff_km") is not None or spec.get("arrival_closing_kps") is not None:
+                return None
+            aim = self._resolve_ship(spec["target"], enemies)[0] if spec.get("target") else None
+            aim = aim or target
+            if aim is None and self.primary_target_id:
+                aim = next((e for e in enemies if e.ship_id == self.primary_target_id), None)
+            if aim is None and enemies:
+                aim = min(enemies, key=lambda e: (e.position - ship.position).magnitude)
+            if aim is None:
+                return None
+            return (f"INTERCEPT@{thr * 100:.0f}% held for 2 checkpoints",
+                    aim.position - ship.position, thr, 2 * interval)
+        if kind == "HEADING":
+            vec = None
+            point = spec.get("toward_point")
+            if isinstance(point, dict):
+                vec = Vector3D(float(point.get("x", 0)) * 1000.0, float(point.get("y", 0)) * 1000.0,
+                               float(point.get("z", 0)) * 1000.0) - ship.position
+            elif spec.get("toward_ship"):
+                other, _ = self._resolve_ship(spec["toward_ship"], list(enemies) + list(friendlies))
+                vec = other.position - ship.position if other is not None else None
+            if vec is not None and vec.magnitude > 0:
+                return ("this heading for one checkpoint, then coasting", vec, thr, interval)
+        return None
+
+    @staticmethod
+    def _enemy_mention(text: str, enemy: Any, own_side: List[Any]) -> Optional[re.Match]:
+        """
+        Where ``text`` names ``enemy``: by id, full name, or bare name - the
+        bare name only when no ship of ours shares it and no other fleet's
+        prefix stands in front of it ("Form up on TIS Lancer-2" is not about
+        OCS Lancer-2; names repeat across fleets).
+        """
+        name = str(getattr(enemy, "name", enemy.ship_id))
+        for candidate in (enemy.ship_id, name):
+            m = re.search(r"(?<![\w-])" + re.escape(candidate) + r"(?![\w-])", text, re.IGNORECASE)
+            if m:
+                return m
+        bare = _bare_name(name)
+        ours = [str(getattr(s, "name", s.ship_id)) for s in own_side]
+        if bare == name or any(_bare_name(n).lower() == bare.lower() for n in ours):
+            return None
+        # Our fleet prefixes ("TIS"), when they differ from the enemy's.
+        foreign = {n[:-len(_bare_name(n))].strip().upper() for n in ours if _bare_name(n) != n}
+        foreign.discard(name[:-len(bare)].strip().upper())
+        for m in re.finditer(r"(?<![\w-])" + re.escape(bare) + r"(?![\w-])", text, re.IGNORECASE):
+            prefix = re.search(r"(\w+)\s+$", text[max(0, m.start() - 8):m.start()])
+            if prefix and prefix.group(1).upper() in foreign:
+                continue
+            return m
+        return None
+
     def _order_check(self, order: Any, simulation: Any, ship: Any,
                      range_infos: List[Any]) -> Dict[str, Any]:
         """Engine-resolved lines for one order (see format_admiral_orders_for_captain)."""
@@ -980,23 +1099,30 @@ class LLMCaptain:
         # ENGINE ORDER CHECK: what the ordered motion does to the closest approach.
         motion = None
         heading = getattr(order, "heading", None)
+        spec = getattr(order, "maneuver", None)
+        thr = getattr(order, "applied_throttle", None)
+        thr = getattr(order, "throttle", None) if thr is None else thr
         if isinstance(heading, dict):
-            thr = getattr(order, "applied_throttle", None)
-            thr = getattr(order, "throttle", None) if thr is None else thr
             thr = 1.0 if thr is None else float(thr)
             vec = Vector3D(float(heading.get("x", 0)), float(heading.get("y", 0)),
                            float(heading.get("z", 0)))
             if vec.magnitude > 0 and thr > 0:
                 motion = ("this heading for one checkpoint, then coasting", vec, thr, interval)
-        elif re.search(r"\bINTERCEPT\b", text, re.IGNORECASE):
+        elif isinstance(spec, dict):
+            # A structured admiral maneuver (AdmiralOrder.maneuver), applied by
+            # the runner: it, not the prose, is what the ship flies.
+            if thr is None:
+                thr = spec.get("throttle")
+            motion = self._spec_motion(spec, 1.0 if thr is None else float(thr), target,
+                                       ship, enemies, friendlies, interval)
+        else:
+            thr = _ordered_intercept(text)
             aim = target
             if aim is None and self.primary_target_id:
                 aim = next((e for e in enemies if e.ship_id == self.primary_target_id), None)
             if aim is None and enemies:
                 aim = min(enemies, key=lambda e: (e.position - ship.position).magnitude)
-            m = _THROTTLE_RE.search(text)
-            thr = min(100, int(m.group(1))) / 100.0 if m else 1.0
-            if aim is not None and thr > 0:
+            if thr is not None and aim is not None and thr > 0:
                 motion = (f"INTERCEPT@{thr * 100:.0f}% held for 2 checkpoints",
                           aim.position - ship.position, thr, 2 * interval)
         if motion and enemies:
@@ -1016,8 +1142,8 @@ class LLMCaptain:
         # Absolute positions quoted in the text: resolve to a direction from here.
         own_km = ship.position * (1.0 / 1000.0)
         points = []
-        for m in list(_TRIPLE_RE.finditer(text)) + list(_XYZ_RE.finditer(text)):
-            p = Vector3D(float(m.group(1)), float(m.group(2)), float(m.group(3)))
+        for x, y, z in _quoted_triples(text):
+            p = Vector3D(x, y, z)
             if p.magnitude <= 2.0:
                 continue  # a unit-ish direction, not a position
             off = p - own_km
@@ -1034,8 +1160,9 @@ class LLMCaptain:
 
         # Distances quoted for named enemies vs this ship's own sensors.
         numbers = []
+        own_side = list(friendlies) + [ship]
         for e in enemies:
-            m = _mentions(text, getattr(e, "name", e.ship_id))
+            m = self._enemy_mention(text, e, own_side)
             if not m:
                 continue
             # The distance quoted right after the name, inside the same clause.
@@ -1492,7 +1619,13 @@ class LLMCaptain:
         self.pending_tool_errors.append(message)
 
     def _record_tool_note(self, message: str) -> None:
-        """An accepted call's answer worth seeing next turn (e.g. a launch warning)."""
+        """
+        An EXECUTED call's answer worth seeing next turn (a launch warning, an
+        ignored parameter). Its own channel, replayed as "ENGINE NOTES ON YOUR
+        LAST ORDERS (accepted ...)": on the tool-error channel it would sit
+        under "REJECTED, reissue correctly" and invite a second launch.
+        """
+        print(f"[CAPTAIN {self.name}] note: {message}")
         self.pending_tool_notes.append(message)
 
     def _torpedo_feasible(self, simulation: Any, ship_id: str, target_id: str,

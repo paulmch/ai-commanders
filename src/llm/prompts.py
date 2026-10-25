@@ -3500,7 +3500,7 @@ def format_admiral_orders_for_captain(
         lines.append(line)
 
     clar_idx = max((i for i, o in enumerate(orders or []) if _is_clarification(o)), default=-1)
-    heading_applied = False
+    applied: List[str] = []  # admiral motion the runner already put on the ship
     if orders:
         for i, order in enumerate(orders):
             check = checks[i] if i < len(checks) else {}
@@ -3535,7 +3535,7 @@ def format_admiral_orders_for_captain(
                     lines.append(f"          SALVO CHECK: {check['salvo']}")
             heading = getattr(order, "heading", None)
             if isinstance(heading, dict):
-                heading_applied = True
+                applied.append("HEADING ORDER")
                 thr = getattr(order, "applied_throttle", None)
                 if thr is None:
                     thr = getattr(order, "throttle", None)
@@ -3550,6 +3550,10 @@ def format_admiral_orders_for_captain(
                     f"{heading.get('z', 0):+.2f}) {what}{formation}. Keep it: calling "
                     f"set_maneuver/set_heading replaces it. Override only for a reason "
                     f"(e.g. EVADE an inbound torpedo).")
+            elif getattr(order, "maneuver", None):
+                # A structured admiral maneuver (AdmiralOrder.maneuver: INTERCEPT
+                # with standoff, HOLD_RANGE, ...) - also applied by the runner.
+                applied.append("MANEUVER ORDER")
             if check.get("engine"):
                 lines.append(f"      >>> ENGINE ORDER CHECK: {check['engine']}")
             for point in check.get("points") or []:
@@ -3573,9 +3577,9 @@ def format_admiral_orders_for_captain(
     reply = (f"  REPLY: acting on these orders with your tools IS your acknowledgment. Call "
              f"{reply_tool} only to DEVIATE or report UNABLE (say why), or to send a request or "
              f"contact report. A CHECK above that says the order fails is a reason to DEVIATE.")
-    if heading_applied:
-        reply += (" Your HEADING ORDER is already flying: no maneuver call needed unless you "
-                  "deviate - still set your target and weapons/launches.")
+    if applied:
+        reply += (f" Your {'/'.join(dict.fromkeys(applied))} is already flying: no maneuver call "
+                  "needed unless you deviate - still set your target and weapons/launches.")
     lines.append(reply)
     return "\n".join(lines)
 
