@@ -2,21 +2,27 @@
 LLM Admiral - Fleet commander that issues orders to ship captains.
 
 The Admiral:
-- Sees dual temporal snapshots (T-15s and T=0) for trajectory analysis
+- Sees a compact, ranked turn state built from the simulation each checkpoint
+  (urgent items, captain reports, what changed, geometry per enemy group,
+  threat table, ordnance and torpedo economy, fleet roster - prompts.py),
+  with the battle-static doctrine and capabilities in a separate cacheable
+  system prompt
 - Has full visibility into friendly ship status and capabilities
 - Issues text orders to captains
 - Can negotiate with enemy Admiral (immediate)
 - Controls draw proposals for the fleet
 """
 
+import inspect
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional, TYPE_CHECKING
+from typing import Dict, Any, List, Optional, Tuple, TYPE_CHECKING
 
 from .client import LLMCallError
 from .fleet_config import AdmiralConfig
 from .admiral_tools import get_admiral_tools
 from .communication import CaptainMessage
+from . import fleet_intel as intel
 
 if TYPE_CHECKING:
     from .client import CaptainClient
@@ -58,6 +64,12 @@ class AdmiralDecision:
     # Fleet-wide formation heading (issue_order to "all ships" on the
     # directive call); per-ship orders without their own heading inherit it.
     fleet_heading: Optional[AdmiralOrder] = None
+    # Why this checkpoint has no fleet directive ("truncated at 8192 tokens",
+    # "provider error", "no set_fleet_directive call", "call error: ...").
+    # None when the directive arrived. Recorded as admiral_directive_failed.
+    directive_failure: Optional[str] = None
+    # The first attempt failed this way but the retry delivered a directive.
+    directive_recovered: Optional[str] = None
 
 
 def _heading_arg(value: Any) -> Optional[Dict[str, float]]:
@@ -111,6 +123,68 @@ def _attach_heading(order: "AdmiralOrder", args: Dict[str, Any],
         order.formation = True
 
 
+def _accepts_kwarg(fn: Any, name: str) -> bool:
+    """True if ``fn`` takes keyword ``name`` (test stubs often do not)."""
+    try:
+        params = inspect.signature(fn).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(p.name == name or p.kind == inspect.Parameter.VAR_KEYWORD for p in params)
+
+
+def _has_directive(calls: List[Any]) -> bool:
+    return any(getattr(c, "name", None) == "set_fleet_directive"
+               and str((getattr(c, "arguments", None) or {}).get("directive") or "").strip()
+               for c in calls)
+
+
+def _failure_text(meta: Dict[str, Any]) -> str:
+    """Why a directive call came back without a directive, from its call meta."""
+    finish = meta.get("finish_reason")
+    if finish == "length":
+        reasoning = meta.get("reasoning_tokens")
+        spent = f", {reasoning} of them reasoning" if reasoning else ""
+        return f"truncated at {meta.get('max_tokens') or '?'} tokens{spent}"
+    if finish == "error":
+        return "provider error (finish_reason=error)"
+    if finish == "content_filter":
+        return "blocked by the provider content filter"
+    return "no set_fleet_directive call"
+
+
+def _with_retry_nudge(messages: List[Dict[str, Any]], failure: str) -> List[Dict[str, Any]]:
+    """Same request (cached system prefix intact) with a short-answer nudge."""
+    nudge = (f"\n\nRETRY: your previous answer for this checkpoint produced no fleet directive "
+             f"({failure}). Call set_fleet_directive NOW, at most 120 words, no long analysis. "
+             f"Add set_battle_plan / an \"all ships\" heading only if they changed.")
+    out = [dict(m) for m in messages]
+    last = out[-1]
+    content = last.get("content")
+    if isinstance(content, list):
+        last["content"] = list(content) + [{"type": "text", "text": nudge.strip()}]
+    else:
+        last["content"] = f"{content or ''}{nudge}"
+    return out
+
+
+def _range_change(prev15: Optional["AdmiralSnapshot"], own_ids: List[str],
+                  enemy_ids: List[str], range_now_km: float) -> Optional[float]:
+    """Change of a group's range from our fleet centre over the pre-snapshot gap."""
+    if prev15 is None:
+        return None
+    own = [r.position_km for r in prev15.friendly_ships if r.ship_id in own_ids]
+    them = [r.position_km for r in prev15.enemy_ships if r.ship_id in enemy_ids]
+    if not own or not them:
+        return None
+
+    def mean(points):
+        return [sum(p[k] for p in points) / len(points) for k in ("x", "y", "z")]
+
+    a, b = mean(own), mean(them)
+    then = sum((a[i] - b[i]) ** 2 for i in range(3)) ** 0.5
+    return range_now_km - then
+
+
 @dataclass
 class FriendlyShipSnapshot:
     """Full status snapshot for a friendly ship."""
@@ -156,6 +230,12 @@ class FriendlyShipSnapshot:
     # ThermalSystem.outlook(): net heat rate, time to 100% / meltdown
     # retracted vs extended, radiator mode and health (None if no thermal).
     thermal: Optional[Dict[str, Any]] = None
+    # Torpedo tubes, their class magazine, and launches still possible
+    # before the next checkpoint (simulation.torpedo_launch_capacity).
+    launchers: int = 0
+    magazine_capacity: int = 0
+    launches_available: int = 0
+    gun_range_km: float = 0.0
 
 
 @dataclass
@@ -170,9 +250,32 @@ class EnemyShipSnapshot:
     velocity_kps: float
     velocity_vector: Dict[str, float]
 
-    # Distance from our ships
+    # Range and closure to the NEAREST friendly hull (not the fleet: see
+    # range_km/closing_kps). Kept for older consumers; rendered as "nearest".
     distance_from_closest_friendly_km: float
     closing_rate_kps: float  # Positive = closing
+
+    # Fleet-level view (ADM-04/07): range and closure from our fleet centre,
+    # which friendly hull is nearest, observed damage and armament, what it
+    # has done to us, and whether a torpedo launched now can catch it.
+    range_km: Optional[float] = None
+    closing_kps: Optional[float] = None
+    nearest_own_id: Optional[str] = None
+    hull_integrity: Optional[float] = None
+    accel_g: float = 0.0
+    pd_operational: int = 0
+    pd_total: int = 0
+    armament: str = ""
+    launchers: int = 0
+    magazine: int = 0
+    torpedoes_launched: int = 0
+    targeting_id: Optional[str] = None
+    dealt_hits: int = 0
+    dealt_gj: float = 0.0
+    solution: Any = None          # fleet_intel.TorpedoSolution from our launchers
+    our_rounds_inbound: int = 0   # our guided rounds homing on it now
+    group: str = ""
+    gun_range_km: float = 0.0
 
 
 @dataclass
@@ -184,6 +287,13 @@ class ProjectileSnapshot:
     distance_km: float
     eta_seconds: float
     damage_gj: float
+    # Side and state (ADM-01): "ours"/"theirs"; guided | blinded | dry |
+    # orphaned | ballistic. threat_ship: the hull a guided round homes on or
+    # a ballistic one will actually strike (engine closest-approach test),
+    # None for a spent round on nobody's line.
+    side: str = ""
+    state: str = ""
+    threat_ship: Optional[str] = None
 
 
 def _projectile_weapon_label(proj_flight: Any) -> str:
@@ -240,6 +350,30 @@ class AdmiralSnapshot:
     # precomputed headings, formation throttles. Filled for the T=0 snapshot.
     range_control: str = ""
 
+    # Live turn-state inputs (filled by LLMAdmiral._build_snapshot with a
+    # full=True build; empty defaults keep hand-built snapshots rendering).
+    faction: str = ""
+    checkpoint: int = 0
+    decision_interval_s: float = 30.0
+    labels: Dict[str, str] = field(default_factory=dict)       # id -> "NAME [id]"
+    ship_types: Dict[str, str] = field(default_factory=dict)   # id -> class
+    range_groups: List[Any] = field(default_factory=list)      # GroupRangeInfo, fleet centre
+    group_range_change_km: Dict[str, float] = field(default_factory=dict)  # vs T-15 s
+    group_motion: Dict[str, Tuple[float, float]] = field(default_factory=dict)
+    groups_opened: List[str] = field(default_factory=list)     # closing -> opening since last CP
+    own_centre: Dict[str, Any] = field(default_factory=dict)
+    headings: str = ""                                         # option lines + FORMATION
+    rounds: List[Any] = field(default_factory=list)            # fleet_intel.RoundInfo
+    digest: Any = None                                         # fleet_intel.CheckpointDigest
+    hull_before: Dict[str, float] = field(default_factory=dict)
+    hull_now: Dict[str, float] = field(default_factory=dict)
+    torpedo_magazine: Tuple[int, int] = (0, 0)                 # (remaining, battle-start)
+    launches_available: int = 0
+    reload_s: float = 0.0
+    enemy_torpedoes_seen: int = 0
+    engine_notes: List[str] = field(default_factory=list)
+    kill_rounds: Dict[str, int] = field(default_factory=dict)
+
 
 class LLMAdmiral:
     """
@@ -270,7 +404,17 @@ class LLMAdmiral:
 
         # State
         self.decision_count = 0
+        # CONTRACT (battle_runner, captains, MCP): last_directive holds THIS
+        # checkpoint's directive only - "" when the directive call failed, never
+        # a previous checkpoint's text dressed up as current (ADM-02). Set
+        # together with last_directive_t (the sim time it was issued for).
         self.last_directive: Optional[str] = None
+        self.last_directive_t: Optional[float] = None
+        # The last directive that actually arrived and when; shown to the
+        # admiral's own per-ship calls (labelled stale) after a failure.
+        self._good_directive: Optional[Tuple[float, str]] = None
+        # Why the previous checkpoint's directive call failed, for the NOW block.
+        self._last_failure: Optional[Tuple[float, str]] = None
         self.order_history: List[AdmiralDecision] = []
         self.has_proposed_draw = False
         self.has_accepted_draw = False
@@ -303,6 +447,18 @@ class LLMAdmiral:
 
         # Ship name to ID mapping (set during setup)
         self._ship_name_to_id: Dict[str, str] = {}
+
+        # Battle-static view: every ship class seen on each side (union, in
+        # first-seen order). It feeds the cached system prompt, so it only
+        # grows - a dead class keeps its line and the prefix stays byte-stable.
+        self._battle_classes: Dict[str, List[str]] = {"ours": [], "theirs": []}
+        # Previous checkpoint's snapshot (hull deltas, closure flips) and its time.
+        self._prev_snapshot: Optional["AdmiralSnapshot"] = None
+        self._last_decision_t: Optional[float] = None
+        # Battle-start torpedo magazine of the fleet (economy line).
+        self._magazine_start: Optional[int] = None
+        # Compact situation text of the last checkpoint (respond_to_captain).
+        self._last_brief: str = ""
 
     @property
     def name(self) -> str:
@@ -421,6 +577,13 @@ Be authentic to how you would command a fleet as {model_name}."""
 
         Called at checkpoint, BEFORE captains decide.
 
+        A directive call that comes back without set_fleet_directive (output
+        truncated at max_tokens, a provider-side error, or simply no call) is
+        retried once with a short nudge and a cheaper budget. If that fails
+        too, the checkpoint has NO directive: last_directive becomes "" and
+        the failure is recorded on the decision - captains are never handed
+        the previous checkpoint's text as if it were current (ADM-02).
+
         Args:
             simulation: Combat simulation instance
             captains: List of friendly captains
@@ -429,13 +592,15 @@ Be authentic to how you would command a fleet as {model_name}."""
         Returns:
             AdmiralDecision with orders for captains
         """
-        from .prompts import build_admiral_prompt, build_admiral_ship_order_prompt
+        from .prompts import build_admiral_messages, build_admiral_situation_brief
 
-        # Build current snapshot
-        snapshot_t0 = self._build_snapshot(simulation, captains)
-
-        # Initialize decision
-        decision = AdmiralDecision(timestamp=simulation.current_time)
+        now = simulation.current_time
+        snapshot_t0 = self._build_snapshot(simulation, captains, full=True)
+        decision = AdmiralDecision(timestamp=now)
+        try:
+            self._last_brief = build_admiral_situation_brief(snapshot_t0)
+        except Exception:  # noqa: BLE001 - reply context only
+            self._last_brief = ""
 
         # Get list of active ships that need orders
         active_ships = []
@@ -451,18 +616,10 @@ Be authentic to how you would command a fleet as {model_name}."""
                         'ship_type': captain.config.ship_type,
                     })
 
-        # Range control: closest approach / stopping distance / ready-made
-        # world-frame headings for the fleet centre, plus formation throttles.
-        from .range_control import admiral_range_control
-        snapshot_t0.range_control = admiral_range_control(
-            simulation,
-            [s for s in (simulation.get_ship(a['ship_id']) for a in active_ships)
-             if s is not None and not getattr(s, 'is_dying', False)
-             and not getattr(s, 'is_surrendered', False)],
-        )
-
-        # PHASE 1: Get fleet directive (overall strategy)
-        prompt = build_admiral_prompt(
+        # PHASE 1: Get fleet directive (overall strategy). Battle-static
+        # doctrine + capabilities go in the system message (a stable,
+        # cacheable prefix); the live turn state is the user message.
+        messages = build_admiral_messages(
             admiral_name=self.config.name,
             faction=self.faction,
             snapshot_t_minus_15=self._snapshot_t_minus_15,
@@ -478,16 +635,15 @@ Be authentic to how you would command a fleet as {model_name}."""
             standing_plan_time=self.standing_plan_time,
             notebook_text=getattr(self.config, "notebook_text", None),
             decision_interval_s=getattr(simulation, "decision_interval", 30.0),
+            captain_reports=self._captain_reports(),
+            last_directive_failure=self._last_failure,
+            battle_classes=self._battle_classes,
         )
 
         user_text = (f"ADMIRAL CHECKPOINT {self.decision_count + 1}. "
                      "Set your fleet directive (overall strategy). "
-                     "You will issue individual ship orders next.")
-
-        from .execution_feedback import execution_feedback
-        feedback = execution_feedback(simulation, [s['ship_id'] for s in active_ships])
-        if feedback:
-            user_text += '\n\n' + feedback
+                     "You will issue individual ship orders next.\n\n"
+                     + messages[1]["content"])
 
         # Attach the tactical plot as an image content part when available.
         # OpenRouter forwards multi-part user content to multimodal models;
@@ -499,30 +655,35 @@ Be authentic to how you would command a fleet as {model_name}."""
                     "\n\nA tactical plot of the battlefield is attached: "
                     "left panel top-down (X/Y in km), right panel 3D "
                     "perspective. Cyan = alpha fleet, orange = beta fleet. "
-                    "Diamonds are torpedoes (grey = seeker blinded), yellow "
+                    "Diamonds are torpedoes (grey = dead seeker), yellow "
                     "dots are coilgun slugs, red lines are active PD beams, "
-                    "faint trails show torpedo paths over the last 25s, and "
-                    "arrows show velocity. Use it to judge geometry: "
-                    "bearings, formation shape, converging torpedo streams, "
-                    "who is closing and who is kiting.")},
+                    "faint trails show torpedo paths over the last 25s, "
+                    "arrows show velocity, the dashed ring is your PD "
+                    "envelope around your fleet centre and X marks the "
+                    "closest approach of the nearest enemy group if both "
+                    "sides coast. Use it to judge geometry: bearings, "
+                    "formation shape, converging torpedo streams, who is "
+                    "closing and who is kiting.")},
                 {"type": "image_url", "image_url": {"url": png_to_data_url(battle_image_png)}},
             ]
         else:
             user_content = user_text
 
         messages = [
-            {"role": "system", "content": prompt},
+            messages[0],
             {"role": "user", "content": user_content},
         ]
 
-        # Call LLM for directive (use admiral's configured model)
-        try:
-            tool_calls = self.client.decide_with_tools(messages, self.tools, model=self.config.model)
-        except LLMCallError as e:
+        tool_calls, failure, recovered, call_error = self._directive_call(messages)
+        self._last_decision_t = now
+        self._prev_snapshot = snapshot_t0
+        if call_error:
             # A failed call is NOT a decision to stand down - flag it so the
             # battle record shows a degraded turn rather than a deliberate one.
-            print(f"[ADMIRAL {self.config.name}] directive call failed: {e}")
+            print(f"[ADMIRAL {self.config.name}] directive call failed: {call_error}")
             decision.call_failed = True
+            decision.directive_failure = f"call error: {call_error}"
+            self._publish_directive(decision, now)
             return decision
 
         # Extract directive and any draw/message actions
@@ -531,12 +692,7 @@ Be authentic to how you would command a fleet as {model_name}."""
             args = call.arguments
 
             if name == "set_fleet_directive":
-                decision.fleet_directive = args.get("directive", "")
-                # Publish it on the admiral itself. battle_runner and the MCP
-                # servers all read `admiral.last_directive`; the attribute never
-                # existed, so the entire output of the Phase-1 strategy call was
-                # discarded and captains never received a fleet directive.
-                self.last_directive = decision.fleet_directive
+                decision.fleet_directive = (args.get("directive") or "").strip()
             elif name == "set_battle_plan":
                 plan = args.get("plan", "").strip()
                 if plan:
@@ -561,6 +717,13 @@ Be authentic to how you would command a fleet as {model_name}."""
             elif name == "reject_fleet_draw":
                 decision.rejected_draw = True
 
+        if failure:
+            decision.call_failed = True
+            decision.directive_failure = failure
+            print(f"[ADMIRAL {self.config.name}] NO fleet directive at T+{now:.0f}s: {failure}")
+        decision.directive_recovered = recovered
+        self._publish_directive(decision, now)
+
         # PHASE 2: Issue order to each ship individually. All orders derive
         # from the same frozen snapshot and directive, so they are independent
         # calls - fan them out and collect in fleet order.
@@ -571,6 +734,7 @@ Be authentic to how you would command a fleet as {model_name}."""
                 fleet_directive=decision.fleet_directive,
                 simulation=simulation,
                 fleet_heading=decision.fleet_heading,
+                directive_failure=decision.directive_failure,
             )
 
         if self.parallel_ship_orders and len(active_ships) > 1:
@@ -593,6 +757,79 @@ Be authentic to how you would command a fleet as {model_name}."""
 
         return decision
 
+    def _publish_directive(self, decision: AdmiralDecision, now: float) -> None:
+        """Apply the last_directive contract for this checkpoint."""
+        self.last_directive = decision.fleet_directive or ""
+        self.last_directive_t = now
+        if decision.fleet_directive:
+            self._good_directive = (now, decision.fleet_directive)
+            self._last_failure = None
+        else:
+            self._last_failure = (now, decision.directive_failure or "no directive")
+
+    def _captain_reports(self) -> List[Dict[str, Any]]:
+        """Reports filed by our captains at the previous checkpoint (comms intake)."""
+        reports = getattr(self, "captain_reports", None)
+        return [r for r in (reports or []) if isinstance(r, dict)]
+
+    # -- directive call with one cheap retry --------------------------------
+
+    _EFFORT_LADDER = ("xhigh", "high", "medium", "low")
+
+    def _tool_call(self, messages, tools, **overrides) -> Tuple[List[Any], Dict[str, Any], Optional[str]]:
+        """(tool calls, call meta, error text) - overrides only where supported."""
+        fn = self.client.decide_with_tools
+        kwargs = {k: v for k, v in overrides.items()
+                  if v is not None and _accepts_kwarg(fn, k)}
+        try:
+            calls = fn(messages, tools, model=self.config.model, **kwargs)
+        except LLMCallError as e:
+            return [], {}, str(e)
+        meta_fn = getattr(self.client, "last_call_meta", None)
+        meta = meta_fn() if callable(meta_fn) else {}
+        return list(calls or []), (meta if isinstance(meta, dict) else {}), None
+
+    def _directive_call(self, messages) -> Tuple[List[Any], Optional[str], Optional[str], Optional[str]]:
+        """
+        Phase-1 call. Returns (tool calls, failure, recovered, call_error):
+        failure = why there is still no directive; recovered = why the first
+        attempt failed when the retry saved it; call_error = LLMCallError text
+        (no retry: the client already retried transient errors).
+        """
+        calls, meta, error = self._tool_call(messages, self.tools)
+        if error:
+            return [], None, None, error
+        if _has_directive(calls):
+            return calls, None, None, None
+
+        first = _failure_text(meta)
+        overrides: Dict[str, Any] = {}
+        effort = getattr(self.client, "reasoning_effort", None)
+        if meta.get("finish_reason") == "length":
+            # Reasoning ate the budget (battle A: 7,005 of 8,192 tokens):
+            # one step less reasoning if there is a step left, else more room.
+            if isinstance(effort, str) and effort in self._EFFORT_LADDER[:-1]:
+                overrides["reasoning_effort"] = self._EFFORT_LADDER[
+                    self._EFFORT_LADDER.index(effort) + 1]
+            else:
+                limit = meta.get("max_tokens") or getattr(self.client, "max_tokens", None)
+                if isinstance(limit, int) and limit > 0:
+                    overrides["max_tokens"] = int(limit * 1.5)
+        print(f"[ADMIRAL {self.config.name}] directive call returned no directive "
+              f"({first}) - retrying once with a short-answer nudge")
+        retry_calls, retry_meta, retry_error = self._tool_call(
+            _with_retry_nudge(messages, first), self.tools, **overrides)
+        if retry_error:
+            return calls, f"{first}; retry: call error", None, None
+        if _has_directive(retry_calls):
+            # Keep a battle plan / heading from the cut-off first answer if the
+            # short retry did not repeat it.
+            names = {c.name for c in retry_calls}
+            extra = [c for c in calls if c.name not in names
+                     and c.name in ("set_battle_plan", "issue_order")]
+            return retry_calls + extra, None, first, None
+        return calls + retry_calls, f"{first}; retry: {_failure_text(retry_meta)}", None, None
+
     def _issue_ship_order(
         self,
         ship_info: dict,
@@ -600,23 +837,40 @@ Be authentic to how you would command a fleet as {model_name}."""
         fleet_directive: str,
         simulation: Any,
         fleet_heading: Optional[AdmiralOrder] = None,
+        directive_failure: Optional[str] = None,
     ) -> Optional[AdmiralOrder]:
         """
         Issue a specific order to a single ship.
 
+        The prompt is built in THAT ship's frame (ranges, closures, torpedo
+        solutions and threats measured from it - R6/ADM-08), with its
+        captain's last report, and split into a battle-static system message
+        plus the per-ship user turn.
+
         Args:
             ship_info: Dict with ship_id, ship_name, captain_name, ship_type
             snapshot_t0: Current battle snapshot
-            fleet_directive: The fleet-wide strategy
+            fleet_directive: The fleet-wide strategy ("" if none this checkpoint)
             simulation: Current simulation
+            directive_failure: why this checkpoint has no directive, if so
 
         Returns:
             AdmiralOrder for this ship
         """
-        from .prompts import build_admiral_ship_order_prompt
+        from .prompts import build_admiral_ship_order_messages
 
-        # Build focused prompt for this ship
-        prompt = build_admiral_ship_order_prompt(
+        try:
+            ship_view = self._ship_view(simulation, ship_info['ship_id'], snapshot_t0)
+        except Exception as e:  # noqa: BLE001 - advisory data must not kill the order
+            print(f"[ADMIRAL {self.config.name}] ship view for {ship_info['ship_id']} failed: {e}")
+            ship_view = {}
+        report = next((r for r in self._captain_reports()
+                       if r.get("ship_name") == ship_info['ship_name']
+                       or r.get("ship_id") == ship_info['ship_id']), None)
+        previous = None
+        if directive_failure and self._good_directive:
+            previous = self._good_directive
+        messages = build_admiral_ship_order_messages(
             admiral_name=self.config.name,
             ship_name=ship_info['ship_name'],
             ship_type=ship_info['ship_type'],
@@ -626,12 +880,16 @@ Be authentic to how you would command a fleet as {model_name}."""
             personality=self.config.personality,
             standing_plan=self.standing_plan,
             fleet_heading=fleet_heading,
+            ship_id=ship_info['ship_id'],
+            ship_view=ship_view,
+            captain_report=report,
+            directive_failure=directive_failure,
+            previous_directive=previous,
+            faction=self.faction,
         )
-
-        messages = [
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": f"Issue tactical order to {ship_info['ship_name']}. You MUST call issue_order for this ship."},
-        ]
+        messages[1]["content"] = (
+            f"Issue tactical order to {ship_info['ship_name']}. You MUST call issue_order "
+            f"for this ship.\n\n{messages[1]['content']}")
 
         # Use only the issue_order tool for this call
         order_tool = [t for t in self.tools if t.get("function", {}).get("name") == "issue_order"]
@@ -660,15 +918,58 @@ Be authentic to how you would command a fleet as {model_name}."""
                 return order
 
         # If no order was issued, create a default order
+        basis = (f"fleet directive: {fleet_directive[:100]}..." if fleet_directive
+                 else "standing orders (no fleet directive this checkpoint)")
         order = AdmiralOrder(
             target_ship_id=ship_info['ship_id'],
             target_ship_name=ship_info['ship_name'],
-            order_text=f"[AUTO] Continue per fleet directive: {fleet_directive[:100]}...",
+            order_text=f"[AUTO] Continue per {basis}",
             priority="NORMAL",
             suggested_target=None,
         )
         _attach_heading(order, {}, fleet_heading)
         return order
+
+    def _ship_view(self, simulation: Any, ship_id: str, snapshot: 'AdmiralSnapshot') -> Dict[str, Any]:
+        """
+        One ship's own frame for its order prompt: every enemy's range,
+        closure and torpedo solution measured FROM THIS SHIP, the rounds
+        inbound on it, and its own range-control block.
+        """
+        from .range_control import analyze_range_control, format_range_control
+        ship = simulation.get_ship(ship_id)
+        if ship is None:
+            return {}
+        enemies = [e for e in simulation.get_enemy_ships(ship_id) if intel.is_live(e)]
+        has_tubes = bool(getattr(ship, "torpedoes_remaining", 0))
+        specs = intel.torpedo_specs_for(simulation, self.fleet_data, [ship]) if has_tubes else None
+        salvo = intel.launch_capacity(simulation, ship)
+        rows = []
+        for enemy in enemies:
+            rel = enemy.position - ship.position
+            rng = rel.magnitude
+            row = {
+                "id": enemy.ship_id,
+                "range_km": rng / 1000.0,
+                "closing_kps": intel._closing(rel, enemy.velocity - ship.velocity) / 1000.0,
+                "bearing": intel.direction_str(rel),
+                "solution": None,
+            }
+            if specs is not None:
+                row["solution"] = intel.torpedo_solution(
+                    ship.position, ship.velocity, enemy, specs, self.fleet_data,
+                    simulation, salvo_available=max(1, snapshot.launches_available or salvo))
+            rows.append(row)
+        rows.sort(key=lambda r: r["range_km"])
+        inbound = [r for r in snapshot.rounds
+                   if r.threat_id == ship_id and (r.side == "theirs" or r.ballistic)]
+        try:
+            infos = analyze_range_control(simulation, [ship], detail=True)
+            rc_text = format_range_control(infos, who="Ship", max_detail=1)
+        except Exception:  # noqa: BLE001 - advisory only
+            rc_text = ""
+        return {"enemies": rows, "inbound": inbound, "range_control": rc_text,
+                "launches_available": salvo}
 
     def respond_to_captain(
         self,
@@ -701,6 +1002,7 @@ Be authentic to how you would command a fleet as {model_name}."""
             recent_decisions=recent_decisions,
             standing_plan=self.standing_plan,
             decision_interval_s=getattr(simulation, "decision_interval", 30.0),
+            situation=getattr(self, "_last_brief", "") or None,
         )
 
         messages = [
@@ -739,10 +1041,19 @@ Be authentic to how you would command a fleet as {model_name}."""
         self,
         simulation: Any,
         captains: List['LLMCaptain'],
+        full: bool = False,
     ) -> AdmiralSnapshot:
-        """Build a complete snapshot of current battle state."""
+        """
+        Build a snapshot of the current battle state.
+
+        full=True (the checkpoint snapshot) adds everything the turn state is
+        built from: fleet-centre geometry per enemy group, side-attributed
+        ordnance, the since-last-checkpoint digest, the threat table and the
+        torpedo economy. The T-15 s pre-snapshot only needs positions.
+        """
         # Get friendly ships
         friendly_snapshots = []
+        own_ships = []
         for captain in captains:
             # Use ship_id to look up ship (set by battle_runner)
             ship_id = getattr(captain, 'ship_id', None)
@@ -750,12 +1061,14 @@ Be authentic to how you would command a fleet as {model_name}."""
                 continue
             ship = simulation.get_ship(ship_id)
             if ship and not ship.is_destroyed:
+                own_ships.append(ship)
                 friendly_snapshots.append(
                     self._build_friendly_snapshot(ship, captain, simulation)
                 )
 
         # Get enemy ships
         enemy_snapshots = []
+        enemies = []
         if captains:
             # Get first captain's ship to find enemies
             first_ship_id = getattr(captains[0], 'ship_id', None)
@@ -763,6 +1076,7 @@ Be authentic to how you would command a fleet as {model_name}."""
                 first_ship_id = captains[0].config.ship_name
             for enemy in simulation.get_enemy_ships(first_ship_id):
                 if not enemy.is_destroyed:
+                    enemies.append(enemy)
                     enemy_snapshots.append(
                         self._build_enemy_snapshot(enemy, friendly_snapshots, simulation)
                     )
@@ -778,13 +1092,159 @@ Be authentic to how you would command a fleet as {model_name}."""
         summary_parts = [f"{count} {stype.title()}" for stype, count in type_counts.items()]
         fleet_summary = f"{len(friendly_snapshots)} ships: {', '.join(summary_parts)}"
 
-        return AdmiralSnapshot(
+        snapshot = AdmiralSnapshot(
             timestamp=simulation.current_time,
             friendly_ships=friendly_snapshots,
             enemy_ships=enemy_snapshots,
             projectiles=projectile_snapshots,
             fleet_summary=fleet_summary,
+            faction=self.faction,
         )
+        if full:
+            self._enrich_snapshot(snapshot, simulation, own_ships, enemies)
+        return snapshot
+
+    def _enrich_snapshot(
+        self,
+        snap: AdmiralSnapshot,
+        simulation: Any,
+        own_ships: List[Any],
+        enemies: List[Any],
+    ) -> None:
+        """Fill the turn-state fields of a checkpoint snapshot (see _build_snapshot)."""
+        from .range_control import (analyze_range_control, format_heading_options,
+                                    format_range_control, formation_line)
+        now = simulation.current_time
+        interval = float(getattr(simulation, "decision_interval", 30.0) or 30.0)
+        snap.checkpoint = self.decision_count + 1
+        snap.decision_interval_s = interval
+        for sid, ship in getattr(simulation, "ships", {}).items():
+            snap.labels[sid] = intel.ship_label(ship)
+            snap.ship_types[sid] = getattr(ship, "ship_type", "") or ""
+        for kind, rows in (("ours", snap.friendly_ships), ("theirs", snap.enemy_ships)):
+            for row in rows:
+                if row.ship_type and row.ship_type not in self._battle_classes[kind]:
+                    self._battle_classes[kind].append(row.ship_type)
+
+        live_own = [s for s in own_ships if intel.is_live(s)]
+        live_enemies = [e for e in enemies if intel.is_live(e)]
+
+        # Geometry: fleet centre vs enemy groups (range control).
+        try:
+            infos = analyze_range_control(simulation, live_own, live_enemies, detail=False) \
+                if live_own and live_enemies else []
+        except Exception as e:  # noqa: BLE001 - advisory only
+            print(f"[ADMIRAL {self.config.name}] range control failed: {e}")
+            infos = []
+        snap.range_groups = infos
+        formation = formation_line(live_own)
+        snap.headings = "\n".join(x for x in (format_heading_options(infos), formation) if x)
+        snap.range_control = "\n".join(
+            x for x in (format_range_control(infos, who="Fleet"), formation) if x)
+        group_of = {sid: info.label for info in infos for sid in info.ship_ids}
+        if live_own:
+            own_pos, own_vel = intel.centre(live_own)
+            everyone = live_own + live_enemies
+            _, com_vel = intel.centre(everyone)
+            spread = max((s.position - own_pos).magnitude for s in live_own) / 1000.0
+            snap.own_centre = {
+                "pos_km": (own_pos.x / 1000.0, own_pos.y / 1000.0, own_pos.z / 1000.0),
+                "speed_kps": own_vel.magnitude / 1000.0,
+                "direction": intel.direction_str(own_vel),
+                "spread_km": spread, "n": len(live_own),
+            }
+            members = {}
+            for e in live_enemies:
+                members.setdefault(group_of.get(e.ship_id, ""), []).append(e)
+            prev15 = self._snapshot_t_minus_15
+            for info in infos:
+                group = members.get(info.label) or []
+                if not group:
+                    continue
+                g_pos, g_vel = intel.centre(group)
+                snap.group_motion[info.label] = intel.motion_split(
+                    own_pos, own_vel, g_pos, g_vel, com_vel)
+                delta = _range_change(prev15, [s.ship_id for s in live_own], info.ship_ids,
+                                      info.range_km)
+                if delta is not None:
+                    snap.group_range_change_km[info.label] = delta
+        else:
+            own_pos = own_vel = None
+
+        # Ordnance in flight, side-attributed (ADM-01).
+        launcher_ships = [s for s in live_own if getattr(s, "torpedoes_remaining", 0)
+                          or getattr(s, "ready_torpedo_launchers", None)]
+        specs = (intel.torpedo_specs_for(simulation, self.fleet_data, launcher_ships)
+                 if launcher_ships else None)
+        snap.rounds = intel.gather_rounds(simulation, self.faction, specs)
+
+        # Since the last checkpoint (ADM-06).
+        since = self._last_decision_t if self._last_decision_t is not None else now - interval
+        snap.digest = intel.checkpoint_digest(simulation, self.faction, since, now)
+        prev = self._prev_snapshot
+        if prev is not None:
+            snap.hull_before = {r.ship_id: r.hull_integrity for r in prev.friendly_ships}
+            snap.hull_before.update({r.ship_id: r.hull_integrity for r in prev.enemy_ships
+                                     if r.hull_integrity is not None})
+        for ship in list(own_ships) + list(enemies):
+            snap.hull_now[ship.ship_id] = float(getattr(ship, "hull_integrity", 100.0))
+        for entry in snap.digest.kills + snap.digest.losses:
+            dead = simulation.get_ship(entry["ship_id"])
+            if dead is not None:
+                snap.hull_now.setdefault(entry["ship_id"], float(dead.hull_integrity))
+
+        # Torpedo economy.
+        remaining = sum(r.torpedoes_remaining for r in snap.friendly_ships)
+        if self._magazine_start is None:
+            self._magazine_start = sum(r.magazine_capacity for r in snap.friendly_ships)
+        snap.torpedo_magazine = (remaining, self._magazine_start or 0)
+        snap.launches_available = sum(r.launches_available for r in snap.friendly_ships)
+        snap.reload_s = float(((self.fleet_data or {}).get("weapon_types") or {})
+                              .get("torpedo_launcher", {}).get("cooldown_s", 12.0))
+        ledger = intel.damage_ledger(simulation, self.faction)
+        snap.enemy_torpedoes_seen = int(sum(r["torpedoes_launched"] for r in ledger.values()))
+
+        # Threat table rows: fleet-centre frame, damage dealt, torpedo solution.
+        prev_closing = {r.ship_id: r.closing_kps for r in (prev.enemy_ships if prev else [])}
+        live_launchers = [s for s in launcher_ships if intel.is_live(s)]
+        launch_pos = launch_vel = None
+        if live_launchers:
+            launch_pos, launch_vel = intel.centre(live_launchers)
+        inbound_ours = {}
+        for r in snap.rounds:
+            if r.side == "ours" and r.state == "guided":
+                inbound_ours[r.target_id] = inbound_ours.get(r.target_id, 0) + 1
+        by_id = {e.ship_id: e for e in enemies}
+        for row in snap.enemy_ships:
+            enemy = by_id.get(row.ship_id)
+            if enemy is None:
+                continue
+            row.group = group_of.get(row.ship_id, "")
+            if own_pos is not None:
+                rel = enemy.position - own_pos
+                row.range_km = rel.magnitude / 1000.0
+                row.closing_kps = intel._closing(rel, enemy.velocity - own_vel) / 1000.0
+            if live_own:
+                nearest = min(live_own, key=lambda s: (s.position - enemy.position).magnitude)
+                row.nearest_own_id = nearest.ship_id
+            hit = ledger.get(row.ship_id) or {}
+            row.dealt_hits = int(hit.get("hits", 0))
+            row.dealt_gj = float(hit.get("gj", 0.0))
+            row.torpedoes_launched = int(hit.get("torpedoes_launched", 0))
+            row.our_rounds_inbound = inbound_ours.get(row.ship_id, 0)
+            snap.kill_rounds[row.ship_id] = intel.kill_rounds(row.ship_type, row.hull_integrity)
+            if specs is not None and launch_pos is not None and intel.is_live(enemy):
+                row.solution = intel.torpedo_solution(
+                    launch_pos, launch_vel, enemy, specs, self.fleet_data, simulation,
+                    salvo_available=max(1, snap.launches_available))
+        for info in infos:
+            was = [prev_closing.get(sid) for sid in info.ship_ids if prev_closing.get(sid) is not None]
+            if info.closing_kps < 0 and was and sum(1 for c in was if c > 0) * 2 > len(was):
+                snap.groups_opened.append(info.label)
+
+        snap.engine_notes = intel.engine_notes(
+            simulation, [s.ship_id for s in own_ships], since,
+            label_of=lambda sid: snap.labels.get(sid, sid))
 
     def _build_friendly_snapshot(
         self,
@@ -820,7 +1280,7 @@ Be authentic to how you would command a fleet as {model_name}."""
         targeted_by = []
         for enemy in simulation.get_enemy_ships(ship.ship_id):
             if hasattr(enemy, 'primary_target_id') and enemy.primary_target_id == ship.ship_id:
-                targeted_by.append(getattr(enemy, 'name', None) or enemy.ship_id)
+                targeted_by.append(intel.ship_label(enemy))
 
         # Current maneuver
         maneuver_str = "MAINTAIN"
@@ -843,6 +1303,7 @@ Be authentic to how you would command a fleet as {model_name}."""
         pd_operational = sum(
             1 for pd in pd_list if getattr(pd, 'is_operational', True)
         )
+        armament = intel.class_armament(captain.config.ship_type, self.fleet_data)
 
         thermal_system = getattr(ship, 'thermal_system', None)
         return FriendlyShipSnapshot(
@@ -850,6 +1311,10 @@ Be authentic to how you would command a fleet as {model_name}."""
             torpedoes_remaining=torpedoes_remaining,
             pd_turrets_total=pd_total,
             pd_turrets_operational=pd_operational,
+            launchers=armament["launchers"],
+            magazine_capacity=armament["magazine"],
+            launches_available=intel.launch_capacity(simulation, ship),
+            gun_range_km=armament["gun_range_km"],
             ship_id=ship.ship_id,
             ship_name=getattr(ship, 'name', None) or ship.ship_id,
             ship_type=captain.config.ship_type,
@@ -886,7 +1351,8 @@ Be authentic to how you would command a fleet as {model_name}."""
         vel_vector = {"x": vel.x / 1000, "y": vel.y / 1000, "z": vel.z / 1000}
         vel_kps = vel.magnitude / 1000
 
-        # Find closest friendly and closing rate
+        # Range and closing rate to the NEAREST friendly hull. The fleet-level
+        # numbers (from the fleet centre) are filled in by _enrich_snapshot.
         min_dist = float('inf')
         closing_rate = 0.0
         for friendly in friendly_ships:
@@ -906,79 +1372,60 @@ Be authentic to how you would command a fleet as {model_name}."""
                 if dist > 0:
                     closing_rate = -(dx*dvx + dy*dvy + dz*dvz) / dist
 
+        ship_type = ship.ship_type if hasattr(ship, 'ship_type') else "unknown"
+        armament = intel.class_armament(ship_type, self.fleet_data)
+        pd_op, pd_total = intel.pd_turrets(ship)
         return EnemyShipSnapshot(
             ship_id=ship.ship_id,
             ship_name=getattr(ship, 'name', None) or ship.ship_id,
-            ship_type=ship.ship_type if hasattr(ship, 'ship_type') else "unknown",
+            ship_type=ship_type,
             position_km=pos_km,
             velocity_kps=vel_kps,
             velocity_vector=vel_vector,
             distance_from_closest_friendly_km=min_dist,
             closing_rate_kps=closing_rate,
+            hull_integrity=float(getattr(ship, "hull_integrity", 100.0)),
+            accel_g=intel.max_accel_ms2(ship) / 9.80665,
+            pd_operational=pd_op,
+            pd_total=pd_total,
+            armament=armament["summary"],
+            launchers=armament["launchers"],
+            magazine=armament["magazine"],
+            targeting_id=getattr(ship, "primary_target_id", None),
+            gun_range_km=armament["gun_range_km"],
         )
 
     def _build_projectile_snapshots(self, simulation: Any) -> List[ProjectileSnapshot]:
         """
-        Build snapshots of ordnance in flight.
+        Build snapshots of ordnance in flight, side-attributed and classified.
 
         Torpedoes were previously invisible to the admiral entirely - the one
         weapon whose defense (ordering EVADE, massing PD) is the admiral's job.
+        Then they were all shown, our own included and blinded wrecks receding
+        from everyone counted as "inbound" (ADM-01): a dead round now carries a
+        threat_ship only when the engine's closest-approach test says it will
+        actually strike that hull.
         """
         snapshots = []
-
-        # Torpedoes first: they are the ordnance the admiral must react to.
-        for torp_flight in getattr(simulation, 'torpedoes', []) or []:
-            torp = torp_flight.torpedo
-            target = simulation.get_ship(torp.target_id)
-            if not target:
-                continue
-            dist_m = torp.position.distance_to(target.position)
-            rel_vel = torp.velocity - target.velocity
-            closing_ms = (
-                -rel_vel.dot((torp.position - target.position).normalized())
-                if dist_m > 0 else 0.0
-            )
-            eta = dist_m / closing_ms if closing_ms > 0 else 999
-            # Projected impact energy: current relative speed plus whatever
-            # closure the remaining burn can still add (same estimate the
-            # ship-side threat gatherer uses; prioritisation only).
-            burn_gain = min(
-                torp.remaining_delta_v_kps * 1000.0,
-                torp.specs.acceleration_at_mass(torp.current_mass_kg) * eta
-                if eta < 999 else torp.remaining_delta_v_kps * 1000.0,
-            )
-            impact_speed = rel_vel.magnitude + max(0.0, burn_gain)
-            ke_gj = (0.5 * torp.specs.penetrator_mass_kg * impact_speed ** 2 / 1e9
-                     + torp.specs.warhead_yield_gj)
-            label = ("Torpedo (BLINDED, ballistic)"
-                     if torp_flight.is_disabled else "Torpedo (guided)")
+        rounds = intel.gather_rounds(simulation, self.faction)
+        for r in sorted(rounds, key=lambda r: (r.kind != "torpedo", r.eta_s if r.eta_s is not None else 1e9)):
+            if r.kind == "torpedo":
+                label = ("Torpedo (guided)" if r.state == "guided"
+                         else "Torpedo (BLINDED, ballistic)" if r.state == "blinded"
+                         else f"Torpedo ({r.state.upper()}, ballistic)")
+            else:
+                label = r.weapon
             snapshots.append(ProjectileSnapshot(
-                source_ship=torp_flight.source_ship_id,
-                target_ship=torp.target_id,
+                source_ship=r.source_id,
+                target_ship=r.threat_id or r.target_id,
                 weapon_type=label,
-                distance_km=dist_m / 1000,
-                eta_seconds=eta,
-                damage_gj=ke_gj,
+                distance_km=r.range_km if r.range_km is not None else 0.0,
+                eta_seconds=r.eta_s if r.eta_s is not None else float("inf"),
+                damage_gj=r.energy_gj,
+                side=r.side,
+                state=r.state,
+                threat_ship=r.threat_id,
             ))
-
-        for proj in simulation.projectiles:
-            # Calculate ETA based on distance and velocity
-            if hasattr(proj, 'target_ship_id') and proj.target_ship_id:
-                target = simulation.get_ship(proj.target_ship_id)
-                if target:
-                    dist = proj.projectile.distance_to(target.position) / 1000  # km
-                    rel_vel = proj.projectile.velocity.magnitude / 1000  # km/s
-                    eta = dist / rel_vel if rel_vel > 0 else 999
-
-                    snapshots.append(ProjectileSnapshot(
-                        source_ship=proj.source_ship_id,
-                        target_ship=proj.target_ship_id,
-                        weapon_type=_projectile_weapon_label(proj),
-                        distance_km=dist,
-                        eta_seconds=eta,
-                        damage_gj=proj.projectile.kinetic_energy_gj,
-                    ))
-
         return snapshots
 
     def _build_weapons_summary(self, ship_spec: Dict[str, Any]) -> str:

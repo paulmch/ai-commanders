@@ -130,14 +130,36 @@ class BattleTicker:
         lines += self._digest_lines(runner, events)
         directives = {e.data.get("faction"): e.data.get("directive")
                       for e in events if e.event_type == "admiral_directive"}
+        failures = {e.data.get("faction"): e.data.get("reason")
+                    for e in events if e.event_type == "admiral_directive_failed"}
+        retried = {e.data.get("faction"): e.data.get("reason")
+                   for e in events if e.event_type == "admiral_directive_retried"}
         for faction in FACTIONS:
             admiral = getattr(runner, f"{faction}_admiral", None)
             if admiral is None:
                 text = "(no admiral - heuristic captains)"
+            elif failures.get(faction):
+                text = (f"(DIRECTIVE FAILED: {clip(failures[faction], 90)} - "
+                        "captains get no directive this checkpoint)")
             else:
                 text = clip(directives.get(faction)) or "(no new directive)"
+                if retried.get(faction):
+                    text += f" [after retry: {clip(retried[faction], 60)}]"
             lines.append(f"{faction[0].upper()} admiral: {text}")
+        cache = self._cache_line(runner)
+        if cache:
+            lines.append(cache)
         return self.emit(lines)
+
+    @staticmethod
+    def _cache_line(runner: Any) -> str:
+        """Running prompt-cache totals of the battle's client (CP-05 proof)."""
+        stats = getattr(getattr(runner, "client", None), "stats", None)
+        summary = getattr(stats, "cache_summary", None)
+        if not callable(summary):
+            return ""
+        text = summary()
+        return f"Prompt {text}" if isinstance(text, str) and "no calls" not in text else ""
 
     def result(self, runner: Any, winner: Optional[str], reason: Optional[str],
                recording: str, calls: int = 0) -> str:

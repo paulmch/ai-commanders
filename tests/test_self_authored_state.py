@@ -129,11 +129,14 @@ class TestStandingPlan:
         admiral.decide(simulation=empty_sim(t=120.0), captains=[])
 
         # First positional arg of the last phase-1 call is the messages list.
+        # The plan is live state: it rides in the user turn, after the cached
+        # battle-static system prompt (build_admiral_messages).
         messages = client.decide_with_tools.call_args[0][0]
-        system_prompt = messages[0]["content"]
-        assert "YOUR STANDING BATTLE PLAN" in system_prompt
-        assert self.PLAN in system_prompt
-        assert "T+90s" in system_prompt
+        live_turn = messages[-1]["content"]
+        assert "YOUR STANDING BATTLE PLAN" in live_turn
+        assert self.PLAN in live_turn
+        assert "T+90s" in live_turn
+        assert self.PLAN not in messages[0]["content"]
 
     def test_unset_plan_renders_a_nudge(self):
         prompt = build_admiral_prompt(
