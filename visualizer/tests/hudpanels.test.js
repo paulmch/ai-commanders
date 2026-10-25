@@ -6,7 +6,7 @@ import { computeSides, resultTitle, cleanReason, ResultBanner, Scoreboard, resul
 import { feedAt, killLines, KillFeed } from '../src/KillFeed.js';
 import { timelineMarks, sparkPaths, TimelineMarkers } from '../src/TimelineMarkers.js';
 import { registryDensity, registryStatus } from '../src/Registry.js';
-import { CommsFeed, visibleComms, standingOrders } from '../src/CommsFeed.js';
+import { CommsFeed, commsToggle, visibleComms, standingOrders } from '../src/CommsFeed.js';
 
 const HOSTILE = '<img src=x onerror="alert(1)"><b>Strike your colours</b>';
 const ships = {
@@ -324,4 +324,12 @@ test('command net with no traffic says so instead of rendering an empty column',
   busy.feed.setFilter('all', 'issues');
   busy.feed.update(10);
   assert.equal(busy.list.querySelector('.comms-empty')?.textContent, 'No traffic on this filter yet.');
+});
+
+test('N with the decisions panel up brings the (hidden) command net back instead of closing it unseen', () => {
+  assert.deepEqual(commsToggle(true, false), { open: false, closeDecisions: false }, 'visible net: N closes it');
+  assert.deepEqual(commsToggle(false, false), { open: true, closeDecisions: false });
+  // open but hidden under the decisions panel: N shows it, the panel yields
+  assert.deepEqual(commsToggle(true, true), { open: true, closeDecisions: true });
+  assert.deepEqual(commsToggle(false, true), { open: true, closeDecisions: true });
 });

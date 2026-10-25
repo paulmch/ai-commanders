@@ -45,6 +45,18 @@ export function visibleComms(rows, t, faction = 'all', group = 'all', max = 150,
 }
 
 /** Latest directive (and plan) per faction at t: {alpha: {directive, plan}, beta: {...}}. */
+/**
+ * N / NET button: what the command net and the decisions panel do next.
+ * The two share the right column and the decisions panel wins it (CSS hides
+ * an open net under it), so while it is up N brings the net back instead of
+ * closing a net nobody can see.
+ * @returns {{open: boolean, closeDecisions: boolean}}
+ */
+export function commsToggle(commsOpen, decisionsOpen) {
+  const visible = !!commsOpen && !decisionsOpen;
+  return { open: !visible, closeDecisions: !visible && !!decisionsOpen };
+}
+
 export function standingOrders(rows, t) {
   const out = { alpha: { directive: null, plan: null }, beta: { directive: null, plan: null } };
   const n = upperBound(rows || [], t);

@@ -28,7 +28,7 @@ import { latestWreckEnd } from './render/Explosion.js';
 import { fitBattleTitle } from './TitleFit.js';
 import { updateRegistryHeat } from './HeatHud.js';
 import { CombatLog } from './CombatLog.js';
-import { CommsFeed } from './CommsFeed.js';
+import { CommsFeed, commsToggle } from './CommsFeed.js';
 import { KillFeed } from './KillFeed.js';
 import { Registry } from './Registry.js';
 import { Scoreboard, ResultBanner, resultBannerDue } from './Scoreboard.js';
@@ -1841,8 +1841,9 @@ class BattleVisualizer {
   }
 
   toggleComms() {
-    this.commsFeed.setOpen(!this.commsFeed.open, true);
-    if (this.commsFeed.open && this.decisions.open) this.decisions.setOpen(false);
+    const next = commsToggle(this.commsFeed.open, this.decisions.open);
+    this.commsFeed.setOpen(next.open, true);
+    if (next.closeDecisions) this.decisions.setOpen(false);
   }
 
   /** HUD click-through (log row, comms row, kill toast, timeline marker): pause at t and frame the ship. */
