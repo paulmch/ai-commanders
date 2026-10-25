@@ -15,6 +15,21 @@ import { Projectiles } from './render/Projectiles.js';
 import { HeatFX } from './render/Heat.js';
 
 /**
+ * Put the canvas's WebGL pixel-unpack state back to its defaults when a
+ * renderer is torn down. The context outlives the renderer (the next
+ * SceneManager - a live battle switch, Load New Recording - gets the same
+ * one from canvas.getContext), and three's new WebGLState allocates its
+ * empty 3D / 2D-array textures with texImage3D before it touches the
+ * unpack flags: left at UNPACK_FLIP_Y = true by the last image upload, both
+ * fail with INVALID_OPERATION (two console warnings per new scene).
+ */
+export function resetUnpackState(gl) {
+  if (!gl?.pixelStorei) return;
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+}
+
+/**
  * SceneManager - owns the Three.js scene, camera, renderer and every
  * battle visual. main.js drives it with interpolated state each frame.
  *
@@ -145,6 +160,7 @@ export class SceneManager {
     this.ships.clear();
     getGraphicsSettings(this.renderer).dispose();
     this.renderer.renderLists.dispose();
+    resetUnpackState(this.renderer.getContext?.());
     this.renderer.dispose();
   }
 

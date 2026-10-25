@@ -137,3 +137,16 @@ test('dust octaves cross-fade continuously across zoom', () => {
   const below = dustLayerScales(8 / 0.9 * (1 - 1e-9)), above = dustLayerScales(8 / 0.9 * (1 + 1e-9));
   assert.ok(below.w0 < 1e-6 && Math.abs(below.s1 - above.s0) < 1e-9 && above.w1 < 1e-6);
 });
+
+test('a torn-down scene leaves the shared GL context with default unpack flags', async () => {
+  // the next SceneManager reuses the canvas's context; three allocates its
+  // empty 3D textures with texImage3D before setting FLIP_Y itself
+  const { resetUnpackState } = await import('../src/SceneManager.js');
+  const calls = [];
+  const gl = { UNPACK_FLIP_Y_WEBGL: 0x9240, UNPACK_PREMULTIPLY_ALPHA_WEBGL: 0x9241, pixelStorei: (k, v) => calls.push([k, v]) };
+  resetUnpackState(gl);
+  assert.deepEqual(calls, [[0x9240, false], [0x9241, false]]);
+  resetUnpackState(null);   // no context (already lost): nothing to do
+  resetUnpackState({});
+  assert.equal(calls.length, 2);
+});
