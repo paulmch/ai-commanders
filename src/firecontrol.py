@@ -109,9 +109,11 @@ UNFORESEEN_ACCEL_FRACTION = 0.018
 # at frigates..dreadnoughts flying PADLOCK+dodge, HOLD_RANGE+dodge and
 # EVASIVE, 40-400 km): the measured escape curve is one curve in T / t90 for
 # every hull, and this term reproduces it within 0.66-1.23x per 100 km bucket
-# (buckets with 5+ hits). In recorded battles, where a target dodges a whole
-# fleet's fire under escort point defense, rounds land somewhat less often
-# still (100-199 km: 0.11 observed vs 0.18 predicted). Same form and
+# (buckets with 5+ hits). Not modelled: how much fire the dodger is under.
+# Four shooters on one dodger cut its hit rate to 0.6-0.75x of one shooter's;
+# pooled over recorded battles dodgers at 100-199 km were hit 0.11 vs 0.18
+# forecast, and in the 2026-10 flash mirror (every dodger under a whole
+# fleet's fire) 2 of 216 rounds at 100-300 km landed. Same form and
 # magnitude as trajectory_prediction's REACTIVE_SIGMA_K['EVADE'].
 DODGE_ACCEL_FRACTION = 0.14
 DODGE_REACTION_TURN_FRACTION = 0.16

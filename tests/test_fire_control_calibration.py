@@ -2,13 +2,16 @@
 P(hit) calibration against what the engine actually delivered.
 
 tests/fixtures/fire_control_shots.json holds 4.2k resolved gun rounds
-(scripts/fire_control_calibration.py fixture) from 13 recorded battles (LLM
+(scripts/fire_control_calibration.py fixture) from 12 recorded battles (LLM
 and heuristic fleets, including the 2026-10 flash mirrors that exposed the
 problem) - every round at an evasion-armed target or 300+ km out, 1 in 4 of
 the closer ones at other targets - plus 1 in 20 rounds from the seeded
 engine harness against dodging/EVASIVE frigates..dreadnoughts. For each
 round: range, time of flight, target hull, whether its evasion was armed
 (and its throttle), the engine's conversion probability and whether it hit.
+The heuristic_seed*_pre sources are scripts/run_draft_battle.py --auto-draft
+--no-admirals --trace --seed 5/7 (budget 100), 9 (150), 11 (200) at the
+commit before the recalibration; the rest are visualizer recordings.
 
 The model's P(hit) for a round is its conversion probability x the track
 probability from CombatSimulation.target_motion for that hull - the same
@@ -19,9 +22,11 @@ regenerate the fixture.
 
 Tolerances: within 1.5x for rounds at non-reacting targets (n >= 30, >= 5
 hits). Rounds at dodging targets get 1.75x: how well a ship dodges depends
-on how much fire it is under (one shooter in the harness, a fleet's worth
-plus escort point defense in the flash mirror - that battle's 100-199 km
-bucket sits at ~1.6x). The old number was 3-60x off there.
+on how much fire it is under, which the model does not see (one shooter in
+the harness; four shooters on one dodger cut its hit rate to 0.6-0.75x;
+pooled over the battles the 100-199 km bucket sits at 1.64x, and the flash
+mirror alone - a whole fleet's fire on every dodger - is still ~10x
+optimistic there). The old number was 3-60x off.
 """
 
 import collections
