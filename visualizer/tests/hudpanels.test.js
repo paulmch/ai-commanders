@@ -128,7 +128,8 @@ test('kill feed: the hulk counts down, then lingers as destroyed, then clears', 
 test('timeline marks: numbered checkpoints, salvos, kills; every marker seeks', () => {
   const { hud } = fixture();
   const marks = timelineMarks(hud, 120, ships);
-  assert.deepEqual(marks.filter(m => m.kind === 'checkpoint').map(m => [m.label, m.pct]), [['1', 25], ['2', 50]]);
+  assert.deepEqual(marks.filter(m => m.kind === 'checkpoint').map(m => [m.label, m.pct, m.flag]), [['1', 25, 'deviation'], ['2', 50, null]]);
+  assert.match(marks[0].title, /CP1 · 00:30 · 3 orders · 0 ACK · 1 DEVIATE\/UNABLE · 2 messages/);
   const salvo = marks.find(m => m.kind === 'salvo');
   assert.match(salvo.title, /ALPHA torpedo salvo ×1 → OCS Falchion-1/);
   const kill = marks.find(m => m.kind === 'kill');

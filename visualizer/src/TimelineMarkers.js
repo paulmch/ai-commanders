@@ -23,9 +23,22 @@ export function timelineMarks(hud, duration, ships = {}) {
   const out = [];
   const cps = hud.checkpoints || [];
   const labelEvery = cps.length > 24 ? 5 : cps.length > 12 ? 2 : 1;
+  // Command traffic per checkpoint: deviations flag the tick, the tooltip counts the rest
+  const traffic = new Map();
+  for (const r of hud.comms || []) {
+    const c = traffic.get(r.cp) || { orders: 0, acks: 0, deviations: 0, messages: 0 };
+    if (r.kind === 'order' || r.kind === 'directive') c.orders++;
+    else if (r.status === 'DEVIATE' || r.status === 'UNABLE') c.deviations++;
+    else if (r.kind === 'report') c.acks++;
+    else if (['net', 'enemy', 'message', 'engine'].includes(r.kind)) c.messages++;
+    traffic.set(r.cp, c);
+  }
   for (const cp of cps) {
+    const c = traffic.get(cp.n);
+    const counts = c ? ` · ${c.orders} orders · ${c.acks} ACK${c.deviations ? ` · ${c.deviations} DEVIATE/UNABLE` : ''}${c.messages ? ` · ${c.messages} messages` : ''}` : '';
     out.push({ lane: 'cp', kind: 'checkpoint', t: cp.t, pct: pct(cp.t), label: cp.n % labelEvery === 0 || cp.n === 1 ? String(cp.n) : '',
-      title: `CP${cp.n} · ${clockText(cp.t)} · orders issued`, faction: null, shipId: null, seekLead: 0 });
+      title: `CP${cp.n} · ${clockText(cp.t)}${counts || ' · orders issued'}`, faction: null, shipId: null, seekLead: 0,
+      flag: c?.deviations ? 'deviation' : null });
   }
   for (const s of hud.salvos || []) {
     const targets = s.targets.map(([name, n]) => `${name}${n > 1 ? ' ×' + n : ''}`).join(', ');
@@ -92,7 +105,7 @@ export class TimelineMarkers {
       eventNodes.push(svg);
     }
     for (const m of marks) {
-      const el = node(d, 'button', m.label, `timeline-marker marker-${m.kind}${m.faction ? ' ' + m.faction : ''}`);
+      const el = node(d, 'button', m.label, `timeline-marker marker-${m.kind}${m.faction ? ' ' + m.faction : ''}${m.flag ? ' flag-' + m.flag : ''}`);
       el.type = 'button';
       el.style.left = `${m.pct}%`;
       el.title = m.title;
