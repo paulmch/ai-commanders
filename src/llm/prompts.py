@@ -2456,7 +2456,7 @@ def _format_captain_reports(reports: Optional[List[Dict[str, Any]]], snapshot: A
             text += f" | {did}" + ("" if followed else " (NOT as ordered)")
         lines.append(text)
     if acks:
-        lines.append(f"ACK and did as ordered ({len(acks)}): " + ", ".join(acks))
+        lines.append(f"ACK, nothing to flag ({len(acks)}): " + ", ".join(acks))
     return "\n".join(lines)
 
 
@@ -2730,8 +2730,8 @@ def _format_ordnance(snapshot: Any) -> str:
         fate = ""
         if reach:
             k = sum(1 for v in reach if v)
-            fate = (f", all {k} still catch a runner" if k == len(reach)
-                    else f", {k}/{len(reach)} still catch a runner, the rest run dry first")
+            fate = (f", {k}/{len(reach)} still catch a runner"
+                    + ("" if k == len(reach) else ", the rest run dry first"))
         etas = [r.eta_s for r in rs if r.eta_s is not None]
         when = f"ETA {_span_text(etas)} s" if etas else "not closing yet"
         lines.append(f"  -> {_lbl(snapshot, target)}: {len(rs)} guided, {when}{fate}")

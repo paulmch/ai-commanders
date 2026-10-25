@@ -156,6 +156,66 @@ class TestCacheRequestShape:
         # The volatile turn must NOT be marked, or the breakpoint moves every turn.
         assert out[1]["content"] == "volatile turn"
 
+    def test_cache_lifetime_per_provider_family(self):
+        from src.llm.client import apply_cache_breakpoint
+
+        msgs = [{"role": "system", "content": "doctrine"}, {"role": "user", "content": "turn"}]
+        google = apply_cache_breakpoint(msgs, "google/gemini-3.5-flash")[0]["content"][0]
+        assert google["cache_control"] == {"type": "ephemeral"}   # provider-managed TTL
+        forced = apply_cache_breakpoint(msgs, "anthropic/claude-sonnet-5", ttl=None)
+        assert forced[0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_block_form_system_message_is_marked_on_its_last_text_block(self):
+        from src.llm.client import apply_cache_breakpoint
+
+        msgs = [{"role": "system", "content": [{"type": "text", "text": "a"},
+                                               {"type": "text", "text": "b"}]},
+                {"role": "user", "content": "turn"}]
+        out = apply_cache_breakpoint(msgs, "anthropic/claude-sonnet-5")
+        assert "cache_control" not in out[0]["content"][0]
+        assert out[0]["content"][1]["cache_control"]["ttl"] == "1h"
+        assert "cache_control" not in msgs[0]["content"][1], "caller's message mutated"
+
+    def test_cache_outcomes_are_counted_per_call(self):
+        from src.llm.client import CallStats
+
+        stats = CallStats()
+        stats.record_usage({"prompt_tokens": 1000, "prompt_tokens_details": {"cached_tokens": 900}})
+        stats.record_usage({"prompt_tokens": 1000,
+                            "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 950}})
+        stats.record_usage({"prompt_tokens": 500, "prompt_tokens_details": {}})
+        assert (stats.cache_hits, stats.cache_writes, stats.cache_cold) == (1, 1, 1)
+        assert stats.cache_write_tokens == 950
+        assert stats.cache_summary().startswith("cache: 1 hit / 1 write / 1 cold calls, 0.9k read")
+
+    def test_per_call_overrides_and_finish_reason_reach_the_caller(self):
+        import httpx
+        from src.llm.client import CaptainClient
+
+        sent = []
+
+        def respond(request):
+            sent.append(json.loads(request.content))
+            return httpx.Response(200, json={
+                "choices": [{"message": {"content": None, "tool_calls": []},
+                             "finish_reason": "length"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 8192,
+                          "completion_tokens_details": {"reasoning_tokens": 7005},
+                          "prompt_tokens_details": {"cached_tokens": 0}}})
+
+        client = CaptainClient(model="anthropic/claude-sonnet-5", api_key="test",
+                               max_tokens=8192, reasoning_effort="medium")
+        client._client = httpx.Client(transport=httpx.MockTransport(respond))
+        assert client.decide_with_tools([{"role": "user", "content": "x"}], []) == []
+        meta = client.last_call_meta()
+        assert meta["finish_reason"] == "length" and meta["reasoning_tokens"] == 7005
+        assert meta["max_tokens"] == 8192
+        client.decide_with_tools([{"role": "user", "content": "x"}], [],
+                                 max_tokens=12288, reasoning_effort="low")
+        assert sent[0]["reasoning"] == {"effort": "medium"} and sent[0]["max_tokens"] == 8192
+        assert sent[1]["reasoning"] == {"effort": "low"} and sent[1]["max_tokens"] == 12288
+        assert client.stats.truncated == 2
+
     def test_auto_caching_providers_are_left_alone(self):
         from src.llm.client import apply_cache_breakpoint
 

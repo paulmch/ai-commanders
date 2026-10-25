@@ -888,3 +888,75 @@ class TestRangeControlDoctrine:
         for _ in range(40):
             sim._update_ship(me, 1.0)
         assert me.applied_throttle == 0.0
+
+
+# =============================================================================
+# Admiral turn-state claims (pass 4, workstream B)
+# =============================================================================
+
+class TestAdmiralIntelClaims:
+    """
+    Numbers the admiral is told about torpedo economy and dead rounds, bound
+    to the engine: launches per tube per checkpoint, magazines, and the
+    'a dead round within 0.5 km in 60 s is a threat' rule (ADM-01/05/10).
+    """
+
+    def test_launches_per_tube_per_checkpoint_is_what_the_engine_allows(self, fleet):
+        from src.llm.prompts import torpedo_launches_per_checkpoint
+        quoted = torpedo_launches_per_checkpoint(fleet, 30.0)
+        for stype in ("corvette", "cruiser_torpedo"):
+            sim = CombatSimulation(time_step=1.0, decision_interval=30.0, seed=1)
+            ship = _build(sim, "s", stype, "alpha", fleet, 0, 0, 1)
+            tubes = len(ship.ready_torpedo_launchers)
+            assert sim.torpedo_launch_capacity("s") == quoted * tubes, stype
+        assert quoted == 3
+
+    def test_admiral_doctrine_and_issue_order_quote_those_numbers(self, fleet):
+        from src.llm.admiral_tools import ADMIRAL_TOOLS
+        from src.llm.prompts import build_admiral_static
+        reload_s = fleet["weapon_types"]["torpedo_launcher"]["cooldown_s"]
+        text = " ".join(build_admiral_static(
+            "A", "alpha", fleet, None, phase="directive",
+            battle_classes={"ours": ["corvette", "cruiser_torpedo"], "theirs": ["battleship"]}).split())
+        assert f"Reload {reload_s}s -> at most 3 launches per tube per 30s checkpoint" in text
+        mag = fleet["weapon_types"]["torpedo_launcher"]["magazine"]
+        assert f"corvette {mag} rounds (1 tube x {mag})" in text
+        cruiser = [w for w in fleet["ships"]["cruiser_torpedo"]["weapons"]
+                   if w["type"] == "torpedo_launcher"]
+        per = cruiser[0]["magazine"]
+        assert f"cruiser torpedo {per * len(cruiser)} rounds ({len(cruiser)} tubes x {per})" in text
+        salvo = next(t for t in ADMIRAL_TOOLS if t["function"]["name"] == "issue_order")[
+            "function"]["parameters"]["properties"]["torpedo_salvo"]
+        desc = " ".join(salvo["description"].split())
+        assert f"reloads every {reload_s}s, so 3 per launcher per 30s checkpoint" in desc
+        assert f"a {len(cruiser)}-tube torpedo cruiser: {3 * len(cruiser)}" in desc
+        assert salvo["maximum"] >= 3 * len(cruiser)
+
+    def test_dead_round_threat_rule_is_the_engines_evasion_trigger(self, fleet):
+        """The turn state calls a dead round a threat when it passes within
+        WRECK_THREAT_MISS_M inside the engine's ballistic horizon: exactly when
+        an EVADE ship's evasion reacts to it (not WOBBLE)."""
+        from src.llm import fleet_intel as intel
+        from src.simulation import BALLISTIC_THREAT_HORIZON_S
+        assert intel.ballistic_horizon_s() == BALLISTIC_THREAT_HORIZON_S
+        doctrine = " ".join(ADMIRAL_DOCTRINE.split())
+        assert "passes within {wreck_miss_km:.1f} km" in doctrine
+
+        def mode(miss_m, eta_s=20.0):
+            sim = CombatSimulation(time_step=1.0, decision_interval=1e9, seed=1)
+            ship = _build(sim, "tg", "destroyer", "alpha", fleet, 0, 0, 1)
+            _evade(ship)
+            wreck = _ballistic_trident(10_000.0 * eta_s, 10_000.0, "tg", disabled=True)
+            wreck.torpedo.position = Vector3D(10_000.0 * eta_s, miss_m, 0)
+            sim.torpedoes.append(wreck)
+            flagged = intel.ballistic_threat(wreck.torpedo.position, wreck.torpedo.velocity,
+                                             [ship]) is not None
+            return sim._calculate_evasion(ship, 0.0)[1], flagged
+
+        engine, ours = mode(0.8 * intel.WRECK_THREAT_MISS_M)
+        assert engine != "WOBBLE" and ours
+        engine, ours = mode(1.5 * intel.WRECK_THREAT_MISS_M)
+        assert engine == "WOBBLE" and not ours
+        engine, ours = mode(0.8 * intel.WRECK_THREAT_MISS_M,
+                            eta_s=BALLISTIC_THREAT_HORIZON_S + 15)
+        assert engine == "WOBBLE" and not ours

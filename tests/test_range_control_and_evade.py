@@ -556,3 +556,75 @@ def test_corvette_group_kites_a_battleship_line_with_the_precomputed_headings():
     assert closest > target_km - 2 * tol_km          # never merged, never even close
     assert worst_dev < 1000.0                         # formation held to < 1 km
     assert walls[0].velocity.magnitude > 5000.0       # the line really was charging
+
+
+# =============================================================================
+# ADM-09: honest cancel option, re-engage after a pass, torpedo launch window
+# =============================================================================
+
+class TestRangeControlHonesty:
+
+    def test_out_accelerated_cancel_is_impossible_not_matched(self):
+        """A 1 g battle line vs a 3 g corvette swarm burning at it: no burn of
+        ours can null the closure, and the block must not claim it is matched."""
+        sim = CombatSimulation(seed=1, time_step=1.0)
+        me = _ship(sim, "bb", "battleship", "alpha", (0, 0, 0))
+        for i in range(3):
+            d = _ship(sim, f"d{i}", "corvette", "beta", (300, 5 * i, 0), vel_kps=(-2.0, 0, 0),
+                      fwd=(-1, 0, 0))
+            d.applied_throttle = 1.0
+        group = analyze_range_control(sim, [me])[0]
+        assert group.rel_speed_kps * 1000.0 > 10.0
+        cancel = group.option("cancel")
+        assert cancel.throttle == 0.0
+        assert cancel.effect.startswith("IMPOSSIBLE: he out-accelerates you")
+        text = captain_range_control(sim, me)
+        assert "matched" not in text
+        assert "out-accelerates you toward you - braking cannot stop it" in text
+
+    def test_matched_only_when_really_matched(self):
+        sim = CombatSimulation(seed=1, time_step=1.0)
+        me = _ship(sim, "me", "destroyer", "alpha", (0, 0, 0), vel_kps=(0.005, 0, 0))
+        foe = _ship(sim, "foe", "cruiser", "beta", (400, 0, 0), fwd=(-1, 0, 0))
+        _coast(foe)
+        cancel = analyze_range_control(sim, [me])[0].option("cancel")
+        assert cancel.effect.startswith("already matched")
+
+    def test_opening_range_offers_a_re_engage_heading_that_works(self):
+        # After a pass: 100 km apart and opening at 4 km/s.
+        sim = CombatSimulation(seed=1, time_step=1.0)
+        me = _ship(sim, "me", "corvette", "alpha", (0, 0, 0), vel_kps=(-2.0, 0, 0))
+        foe = _ship(sim, "foe", "destroyer", "beta", (100, 10, 0), vel_kps=(2.0, 0, 0),
+                    fwd=(-1, 0, 0))
+        _coast(foe)
+        group = analyze_range_control(sim, [me])[0]
+        assert group.closing_kps < -3.9
+        assert group.option("cancel").label == "hold range"
+        opt = group.option("reengage")
+        assert opt is not None and opt.label == "re-engage"
+        assert "range stops opening after" in opt.effect
+        _fly_option(sim, me, opt)
+        rel = (foe.position - me.position)
+        closing = -(rel.normalized().dot(foe.velocity - me.velocity)) / 1000.0
+        assert closing == pytest.approx(1.0, abs=0.15)          # REENGAGE_CLOSING_KPS
+        assert _range_km(me, foe) == pytest.approx(opt.end_range_km, rel=0.02)
+
+    def test_closing_range_has_no_re_engage_option(self):
+        sim, me, foe = _duel("corvette", "battleship", 500.0, 1.5)
+        assert analyze_range_control(sim, [me])[0].option("reengage") is None
+
+    def test_gunless_group_gets_the_launch_window_not_coast_and_shoot(self):
+        sim, me, foe = _duel("corvette", "battleship", 500.0, 1.5)
+        face = analyze_range_control(sim, [me])[0].option("face")
+        assert face.label == "coast & launch"
+        assert "torpedoes launched now keep their solution" in face.effect
+        sim, me, foe = _duel("destroyer", "battleship", 500.0, 1.5)
+        assert analyze_range_control(sim, [me])[0].option("face").label == "coast & shoot"
+
+    def test_ship_frame_block_for_the_admirals_per_ship_order(self):
+        from src.llm.range_control import format_range_control
+        sim, me, foe = _duel("destroyer", "cruiser", 400.0, 1.0)
+        text = format_range_control(analyze_range_control(sim, [me]), who="Ship", max_detail=1)
+        assert "issue_order heading= for this ship" in text
+        assert "If it coasts:" in text and "Its stop:" in text
+        assert "heading(" in text and "set_heading(" not in text
