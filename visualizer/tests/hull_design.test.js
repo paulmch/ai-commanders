@@ -242,15 +242,59 @@ test('no nav lamp sits on a hull code', () => {
   }
 });
 
-test('no radiator cassette or wing covers a hull code', () => {
-  for (const type of HULL_CLASSES) {
-    const k = kitFor(type);
-    for (const m of k.markings) {
-      for (const r of k.radiators) {
-        const p = r.mesh.position;
-        const alongZ = Math.abs(p.z - m.z) < r.len / 2 + m.w / 2;
-        const near = Math.hypot(p.x - m.x, p.y - m.y) < k.W * 0.12;
-        assert.ok(!(alongZ && near), `${type}: radiator at z ${p.z.toFixed(2)} over the code at z ${m.z.toFixed(2)}`);
+test('every hull code is visible: nothing between the outside and the decal, plating behind it', () => {
+  const rc = new THREE.Raycaster();
+  const n = new THREE.Vector3(), across = new THREE.Vector3(), p = new THREE.Vector3(), o = new THREE.Vector3();
+  for (const faction of ['alpha', 'beta']) {
+    for (const type of HULL_CLASSES) {
+      const k = kitFor(type, faction);
+      assert.ok(k.markings.length >= 1, `${type}: no hull code`);
+      const reach = Math.max(3, k.W * 1.2);
+      for (const m of k.markings) {
+        n.fromArray(FACE_N[m.face]);
+        across.set(m.face[1] === 'x' ? 0 : 1, m.face[1] === 'x' ? 1 : 0, 0);
+        let covered = 0, floating = 0;
+        for (let i = 0; i < 9; i++) {
+          for (let j = 0; j < 3; j++) {
+            p.set(m.x, m.y, m.z).addScaledVector(across, (j - 1) * m.h * 0.35);
+            p.z += (i - 4) / 4 * m.w * 0.45;
+            // from outside straight onto the decal: the first hit must be
+            // the decal's own plating, beyond it
+            rc.set(o.copy(p).addScaledVector(n, reach), n.clone().negate());
+            rc.near = 0; rc.far = reach - 1e-4;
+            if (rc.intersectObjects(solids(k), false).length) covered++;
+            // painted on plating: a surface just behind the decal
+            rc.set(p, n.clone().negate());
+            rc.far = k.W * 0.03;
+            if (!rc.intersectObjects(solids(k), false).length) floating++;
+          }
+        }
+        const at = `${faction} ${type} ${m.face} code at z ${(m.z / k.L).toFixed(3)} L`;
+        assert.equal(covered, 0, `${at}: ${covered}/27 points covered`);
+        assert.equal(floating, 0, `${at}: ${floating}/27 points off the plating`);
+      }
+    }
+  }
+});
+
+test('no nav lamp or floodlight is buried in the hull', () => {
+  const dirs = [];
+  for (const x of [-1, 0, 1]) for (const y of [-1, 0, 1]) for (const z of [-1, 0, 1]) {
+    if (x || y || z) dirs.push(new THREE.Vector3(x, y, z).normalize());
+  }
+  const rc = new THREE.Raycaster();
+  for (const faction of ['alpha', 'beta']) {
+    for (const type of HULL_CLASSES) {
+      const k = kitFor(type, faction);
+      for (const l of k.lamps) {
+        // a lamp on open plating sees about a hemisphere (9 of 26 rays)
+        let open = 0;
+        for (const d of dirs) {
+          rc.set(l.pos, d);
+          rc.near = l.size * 0.6; rc.far = Math.max(3, k.W * 1.2);
+          if (!rc.intersectObjects(solids(k), false).length) open++;
+        }
+        assert.ok(open >= 3, `${faction} ${type}: ${l.kind} lamp at ${l.pos.toArray().map(v => (v / k.L).toFixed(3))} L sees out along ${open}/26 rays`);
       }
     }
   }

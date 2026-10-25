@@ -762,6 +762,10 @@ export class HullKit {
   /**
    * Hull code decal (white on the plating) on a flat face, washed by a
    * hull floodlight just aft of it so it reads on the shadowed side too.
+   * flood 'fore' puts the lamp just ahead of the code, shining aft (for a
+   * code in a recess whose aft end is walled in), false drops it.
+   * hull_design.test.js ray-tests every placement: nothing may stand
+   * between the outside and the decal, and plating must be right behind it.
    */
   marking(x, y, z, h, face, { flood = true } = {}) {
     const off = this.W * 0.004;
@@ -769,7 +773,8 @@ export class HullKit {
     const oy = face === '+y' ? off : face === '-y' ? -off : 0;
     const w = h * 4;
     this.markings.push({ x: x + ox, y: y + oy, z, w, h, face });
-    if (flood) this.flood(x, y, z - w * 0.62, face, w * 1.45, h * 2.4, 1);
+    if (flood === 'fore') this.flood(x, y, z + w * 0.62, face, w * 1.45, h * 2.4, -1);
+    else if (flood) this.flood(x, y, z - w * 0.62, face, w * 1.45, h * 2.4, 1);
   }
 
   /** Both flanks at once. */
@@ -1299,7 +1304,10 @@ function hullCorvette(k) {
   // Raised dorsal spine (machinery, PD, sensors) with the livery stripe
   const spineY = deck + W * 0.035;
   k.box('hull', R * 0.92, W * 0.07, L * 0.42, 0, deck, -L * 0.07, { bevel: 0.4 });
-  k.spineStripe(spineY, -L * 0.27, L * 0.12, R * 0.62);
+  // (the stripe breaks for the hull code, painted on the bare deck)
+  const codeZ = -L * 0.045, codeH = W * 0.09;
+  k.spineStripe(spineY, -L * 0.27, codeZ - codeH * 2 - L * 0.008, R * 0.62);
+  k.spineStripe(spineY, codeZ + codeH * 2 + L * 0.008, L * 0.12, R * 0.62);
   k.box('hull', R * 0.8, W * 0.05, L * 0.3, 0, -deck, -L * 0.08, { bevel: 0.4 });
   // ops deck forward, crew decks aft
   k.rib('accent', R * 1.012, L * 0.006, L * 0.26, { sides: 6 });
@@ -1325,10 +1333,10 @@ function hullCorvette(k) {
   // dorsal PD aft (pd_0), sensors, mast
   k.pd(0, spineY, -L * 0.2);
   k.sensorCluster(0.3 * k.k, 0, spineY, L * 0.04);
-  k.mast(k.mastH * 0.8, R * 0.28, spineY, -L * 0.1, 0.15);
+  k.mast(k.mastH * 0.8, R * 0.28, spineY, -L * 0.125, 0.15);   // aft of the code
   k.greebles('-y', -deck - W * 0.025, [-R * 0.3, R * 0.3], [-L * 0.22, L * 0.04], 6, W * 0.04, W * 0.07);
   k.runningLights(R * 1.02, 0, L * 0.295);
-  k.marking(0, spineY, -L * 0.06, W * 0.09, '+y');
+  k.marking(0, spineY, codeZ, codeH, '+y');
   k.rcsStation(L * 0.235, R * 0.72, R * 0.46, k.rcsS, { diag: true });
   k.strobe(0, 0, L * 0.455, 0);
   k.formationLamp(0, spineY + W * 0.04, L * 0.12);
@@ -1347,7 +1355,7 @@ function hullFrigate(k) {
   const hw = W * 0.62, hh = W * 0.56;
   // Sensor head carrying the nose battery (weapon_0)
   k.box('hull', hw, hh, L * 0.2, 0, 0, L * 0.33, { bevel: 0.3 });
-  k.noseCap({ z0: L * 0.43, len: L * 0.06, w: hw, h: hh, tw: 0.78, th: 0.78, layers: 2, tip: 'dome' });
+  const domeZ = k.noseCap({ z0: L * 0.43, len: L * 0.06, w: hw, h: hh, tw: 0.78, th: 0.78, layers: 2, tip: 'dome' });
   k.frameBand('trim', hw * 1.02, hh * 1.02, L * 0.235, L * 0.012);
   k.opsBand(hw, hh, L * 0.41, W * 0.012);
   k.deckBand(hw, hh, L * 0.3, { top: false });
@@ -1365,8 +1373,10 @@ function hullFrigate(k) {
     const z = -L * 0.245 + i * L * 0.13;
     k.deckRing(R, z, { skipFaces: i === 2 ? [0, 4, 6] : [6] });
   }
-  // codes forward of the radiator cassettes on the same flats
-  k.markings2(ap, 0, L * 0.015, W * 0.1);
+  // Codes in the slot between the radiator cassette lids (front edge at
+  // -0.014 L) and the fore rib (0.074 L); the floodlight sits on the rib
+  // and shines aft, since the cassette walls the slot in behind
+  k.markings2(ap, 0, L * 0.03, W * 0.09, { flood: 'fore' });
   // Comms boom where the old billboard fin stood
   k.boom(k.mastH * 1.5, 0, ap, -L * 0.02);
   k.spineStripe(ap, -L * 0.33, -L * 0.07, R * 0.5);
@@ -1378,7 +1388,8 @@ function hullFrigate(k) {
   k.sensorCluster(0.28 * k.k, 0, ap, L * 0.06);
   k.runningLights(hw / 2 + 0.01, 0, L * 0.4);
   k.rcsStation(L * 0.28, hw * 0.5, hh * 0.5, k.rcsS, { diag: true });
-  k.strobe(0, 0, L * 0.5, 0);
+  // strobe on the crown of the sensor dome (radius 0.85 x the 0.39 hh tip)
+  k.strobe(0, 0, domeZ + hh * 0.39 * 0.75 + k.lampS * 0.3, 0);
   k.formationLamp(0, -ap - W * 0.02, -L * 0.1);
   const rad = k.radiatorSize(2, { maxSpan: W * 1.4, maxLen: L * 0.32 });
   k.radiator(rad.span, rad.len, ap, 0, -L * 0.36 + rad.len / 2 + L * 0.01, -Math.PI / 2);
@@ -1490,7 +1501,10 @@ function hullCruiser(k, opts = {}) {
   k.mast(k.mastH * 1.1, W * 0.14, ap, -L * 0.03, -0.12);
   k.greebles('+y', ap, [-W * 0.2, W * 0.2], [-L * 0.24, -L * 0.2], 3, W * 0.035, W * 0.07);
   k.greebles('-y', -ap, [-W * 0.2, W * 0.2], [-L * 0.24, -L * 0.12], 6, W * 0.035, W * 0.07);
-  k.runningLights(ap + 0.01, 0, L * 0.05);
+  // (the torpedo cruiser's flank banks cover the drum flats: its running
+  // lights go on the collar, ahead of the livery band)
+  if (torpedo) k.runningLights(Rc * Math.cos(Math.PI / 8) + 0.01, 0, L * 0.34);
+  else k.runningLights(ap + 0.01, 0, L * 0.05);
   k.rcsStation(L * 0.172, W * 0.287, W * 0.287, k.rcsS, { diag: true });
   k.strobe(0, 0, L * (torpedo ? 0.452 : 0.502), 0);
   k.formationLamp(0, Rc + 0.02, L * 0.24);
@@ -1539,12 +1553,16 @@ function hullTorpedoCruiser(k) {
       }
     }
   };
+  // Dorsal/ventral banks forward, flank banks further aft: the corners
+  // clear each other, and the drum's flank flats stay bare between the
+  // flank banks (ending 0.11 L) and the collar rib (0.193 L)
   bank(L * 0.04, 0, 0);
   bank(L * 0.04, Math.PI, 1);
-  bank(-L * 0.04, -Math.PI / 2, 2);
-  bank(-L * 0.04, Math.PI / 2, 3);
-  // Hull codes on the dorsal bank's flanks
-  k.markings2(W * 0.25 + 0.01, ap + W * 0.13, L * 0.04, W * 0.075);
+  bank(-L * 0.07, -Math.PI / 2, 2);
+  bank(-L * 0.07, Math.PI / 2, 3);
+  // Hull codes on those bare flats, lit from the collar step (the bank
+  // walls the slot in behind them)
+  k.markings2(ap, 0, L * 0.148, W * 0.075, { flood: 'fore' });
   // Four PD balls round the collar (pd_0..pd_3)
   const pr = W * 0.48 * Math.SQRT1_2;
   k.pd(pr, pr, L * 0.3, -Math.PI / 4);
@@ -1598,7 +1616,7 @@ function hullBattlecruiser(k) {
   k.rcsStation(L * 0.3, fw * 0.49, fh * 0.49, k.rcsS, { diag: true });
   k.strobe(0, 0, L * 0.555, 0);
   k.formationLamp(0, W * 0.3, L * 0.02);
-  k.formationLamp(0, ah / 2 + 0.02, -L * 0.3);
+  k.formationLamp(0, W * 0.295 + 0.02, -L * 0.3);   // on the dorsal spine (top 0.295 W)
   const rad = k.radiatorSize(2, { maxSpan: W * 0.9, maxLen: L * 0.17 });
   k.radiator(rad.span, rad.len, 0, W * 0.18, -L * 0.07, 0);
   k.radiator(rad.span, rad.len, 0, -W * 0.18, -L * 0.07, Math.PI);
