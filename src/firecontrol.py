@@ -90,9 +90,10 @@ TERMINAL_DISPERSION_SIGMA_M = HIT_TOLERANCE_M / 2.0
 # full-thrust acceleration. Its displacement at impact is
 # UNFORESEEN_ACCEL_FRACTION * a * T^2 / 2 (T = time of flight), the same
 # k * a_max * tau^2 / 2 form trajectory_prediction.reactive_sigma_m uses.
-# Calibrated (maximum likelihood) on 4,655 shots at non-evading targets in ten
-# recorded battles (LLM and heuristic, 2026-08..10); observed/predicted per
-# 100 km bucket stays within 0.8-1.15x out to 600 km.
+# Calibrated (maximum likelihood) on ~4,600 rounds fired at non-evading
+# targets in 12 recorded battles (LLM and heuristic fleets, 2026-09..10);
+# predicted/observed per 100 km bucket is 0.81-1.12x out to 600 km
+# (scripts/fire_control_calibration.py).
 UNFORESEEN_ACCEL_FRACTION = 0.018
 
 # Dodge dispersion of a target whose evasion reacts to inbound rounds (EVASIVE,
@@ -107,8 +108,11 @@ UNFORESEEN_ACCEL_FRACTION = 0.018
 # the live engine (scripts/fire_control_calibration.py harness: 12.8k rounds
 # at frigates..dreadnoughts flying PADLOCK+dodge, HOLD_RANGE+dodge and
 # EVASIVE, 40-400 km): the measured escape curve is one curve in T / t90 for
-# every hull, and this term reproduces it within 0.65-1.2x per bucket. Same
-# form and magnitude as trajectory_prediction's REACTIVE_SIGMA_K['EVADE'].
+# every hull, and this term reproduces it within 0.66-1.23x per 100 km bucket
+# (buckets with 5+ hits). In recorded battles, where a target dodges a whole
+# fleet's fire under escort point defense, rounds land somewhat less often
+# still (100-199 km: 0.11 observed vs 0.18 predicted). Same form and
+# magnitude as trajectory_prediction's REACTIVE_SIGMA_K['EVADE'].
 DODGE_ACCEL_FRACTION = 0.14
 DODGE_REACTION_TURN_FRACTION = 0.16
 
