@@ -297,6 +297,11 @@ class TestCaptainTools:
         assert captain.message_history == [
             {"sender": "self", "time": 60.0, "text": "-> ALL [TARGET_CLAIM]: Hold your rounds."}]
 
+    def test_legacy_message_types_survive(self):
+        """The captain prompt maps legacy CaptainMessages to sender roles by these types."""
+        from src.llm.communication import MessageType
+        assert {"ADMIRAL_ORDER", "CAPTAIN_TO_ADMIRAL", "ADMIRAL_TO_ADMIRAL"} <= set(MessageType.__members__)
+
     def test_tool_descriptions_quote_the_enforced_limits(self):
         """Prompt numbers are bound to the constants the code enforces."""
         from src.llm.admiral_tools import DISCUSS_WITH_ADMIRAL_TOOL

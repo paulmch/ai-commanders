@@ -24,7 +24,12 @@ class MessageType(Enum):
     PROPOSE_DRAW = auto()
     RETRACT_DRAW = auto()
     ACCEPT_DRAW = auto()
-    # Admiral-to-admiral display formatting (fleet traffic uses CommsMessage)
+    # Admiral-related types. Fleet traffic now travels as CommsMessage on a
+    # channel; ADMIRAL_TO_ADMIRAL still formats diplomacy, and the other two
+    # stay so code that classifies legacy CaptainMessages by type (the
+    # captain prompt's sender-role mapping) keeps working.
+    ADMIRAL_ORDER = auto()
+    CAPTAIN_TO_ADMIRAL = auto()
     ADMIRAL_TO_ADMIRAL = auto()
     BROADCAST = auto()  # All captains can see
 
