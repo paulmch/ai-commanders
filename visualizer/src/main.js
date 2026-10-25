@@ -2009,14 +2009,30 @@ class BattleVisualizer {
     this.lastMomentTime = 0;
     this.currentState = null;
 
-    // Clear UI
+    // Clear UI: nothing of the old battle may linger into the next one
+    // (a live battle switch shows the new draft under this header)
     this.registry.clear();
     this.combatLog.clear();
     this.commsFeed.clear();
     this.killFeed.clear();
     this.resultBanner.reset();
+    this.scoreboard.clear();
     this.timelineMarkers.clear();
     this.elements.shipTelemetry.classList.add('hidden');
+    this.resetHeader();
+  }
+
+  /** Header and transport back to their no-battle state. */
+  resetHeader() {
+    this.elements.battleName.textContent = 'FLEET BATTLE';
+    fitBattleTitle(this.elements.battleName, 'FLEET BATTLE');
+    this.elements.missionTime.textContent = this.formatTimeFull(0);
+    this.elements.timeInput.value = this.formatTime(0);
+    this.elements.totalTime.textContent = this.formatTime(0);
+    this.elements.timelineProgress.style.width = '0%';
+    this.elements.timelineHandle.style.left = '0%';
+    this.elements.timeline.value = 0;
+    this.updatePlayPauseButton();
   }
 
   delay(ms) {

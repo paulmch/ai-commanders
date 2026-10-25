@@ -109,6 +109,21 @@ test('scoreboard DOM writes the model and only changed values', () => {
   assert.equal(alpha.querySelector('[data-points]').textContent, '31 pts');
   assert.equal(root.querySelector('[data-side="beta"]').querySelector('[data-alive]').textContent, '1');
   assert.equal(root.querySelector('[data-side="beta"]').querySelectorAll('i').length, 2, 'one pip per ship');
+  // torn down (live battle switch, file selector): nothing of the old battle stays in the header
+  board.clear();
+  for (const f of ['alpha', 'beta']) {
+    const el = root.querySelector(`[data-side="${f}"]`);
+    assert.equal(el.querySelector('[data-model]').textContent, '');
+    assert.equal(el.querySelector('[data-kills]').textContent, '☠ 0');
+    assert.equal(el.querySelector('[data-points]').textContent, '');
+    assert.deepEqual([el.querySelector('[data-alive]').textContent, el.querySelector('[data-total]').textContent], ['0', '0']);
+    assert.equal(el.querySelectorAll('i').length, 0, 'no pips');
+  }
+  // and the next battle repopulates from scratch
+  board.populate(ships, hud);
+  board.update({}, [], ships, hud, 10);
+  assert.equal(alpha.querySelector('[data-kills]').textContent, '☠ 0');
+  assert.equal(alpha.querySelectorAll('i').length, 2);
 });
 
 test('kill feed: the hulk counts down, then lingers as destroyed, then clears', () => {
