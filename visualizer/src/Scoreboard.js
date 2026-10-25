@@ -21,7 +21,7 @@ const SIDES = ['alpha', 'beta'];
  */
 export function computeSides(states, torpedoes, ships, hud, t) {
   const sides = {};
-  for (const f of SIDES) sides[f] = { alive: 0, total: 0, dying: 0, lost: 0, hull: 0, hullPct: 0, strength: 0, maxStrength: 0, torps: 0, kills: 0, spend: 0, pips: [] };
+  for (const f of SIDES) sides[f] = { alive: 0, total: 0, dying: 0, lost: 0, hull: 0, hullPct: 0, strength: 0, maxStrength: 0, torps: 0, kills: 0, points: 0, spend: 0, pips: [] };
   for (const [id, info] of Object.entries(ships || {})) {
     const s = sides[info.faction];
     if (!s) continue;
@@ -43,7 +43,10 @@ export function computeSides(states, torpedoes, ships, hud, t) {
   for (const k of hud?.kills || []) {
     if (!killStateAt(k, t)) continue;
     const killer = k.faction === 'alpha' ? 'beta' : k.faction === 'beta' ? 'alpha' : null;
-    if (killer) sides[killer].kills++;
+    if (killer) {
+      sides[killer].kills++;
+      sides[killer].points += hud.costs?.[k.shipId] || 0;
+    }
   }
   for (const f of SIDES) {
     const s = sides[f];
@@ -81,7 +84,7 @@ export class Scoreboard {
       this.sideEls[f] = {
         model: el.querySelector('[data-model]'), alive: el.querySelector('[data-alive]'), total: el.querySelector('[data-total]'),
         pips: el.querySelector('[data-pips]'), hull: el.querySelector('[data-hull]'), torps: el.querySelector('[data-torps]'),
-        kills: el.querySelector('[data-kills]'), spend: el.querySelector('[data-spend]'), pipEls: []
+        kills: el.querySelector('[data-kills]'), points: el.querySelector('[data-points]'), spend: el.querySelector('[data-spend]'), pipEls: []
       };
     }
     this.balance = root?.querySelector('[data-balance]');
@@ -120,6 +123,7 @@ export class Scoreboard {
       setText(els.hull, `${s.hullPct}%`);
       setText(els.torps, s.torps ? `▸${s.torps}` : '');
       setText(els.kills, `☠ ${s.kills}`);
+      setText(els.points, s.points > 0 ? `${s.points} pts` : '');
       setText(els.spend, s.spend > 0 ? `$${s.spend.toFixed(2)}` : '');
       s.pips.forEach((p, i) => {
         const pe = els.pipEls[i];
@@ -188,7 +192,7 @@ export class ResultBanner {
         const s = sides[f];
         const el = node(this.doc, 'span', null, `result-side ${f}`);
         el.append(node(this.doc, 'b', f.toUpperCase()), node(this.doc, 'span',
-          ` ${s.alive}/${s.total} ships · ${s.kills} kill${s.kills === 1 ? '' : 's'} · hull ${s.hullPct}%`));
+          ` ${s.alive}/${s.total} ships · ${s.kills} kill${s.kills === 1 ? '' : 's'}${s.points ? ` (${s.points} pts)` : ''} · hull ${s.hullPct}%`));
         return el;
       };
       tally.replaceChildren(part('alpha'), part('beta'));

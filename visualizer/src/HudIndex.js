@@ -661,8 +661,14 @@ export function buildHudIndex(loader) {
     alpha: src.alpha_model || src.alpha_fleet?.admiral?.model || '',
     beta: src.beta_model || src.beta_fleet?.admiral?.model || ''
   };
+  // Draft point cost per ship (provenance.draft), when the battle was drafted
+  const costs = {};
+  for (const f of ['alpha', 'beta']) {
+    for (const s of src.provenance?.draft?.[f]?.ships || []) if (s?.ship_id && Number.isFinite(s.cost)) costs[s.ship_id] = s.cost;
+  }
   return {
     ids,
+    costs,
     checkpoints,
     comms: buildComms(events, ids, ships, checkpoints),
     deliveries: buildDeliveries(events),

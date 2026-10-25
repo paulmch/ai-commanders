@@ -13,9 +13,19 @@ import { node, setText, defaultDoc } from './hudDom.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
-/** 'compact' / 'dense' density class for a fleet roster size. */
-export function registryDensity(count) {
-  return count > 16 ? 'dense' : count > 8 ? 'compact' : '';
+// Row heights (px) of the three registry densities, plus the panel chrome
+// (title bar, two fleet headers, padding) they share.
+const ROW_PX = [['', 53], ['compact', 24], ['dense', 19]];
+const CHROME_PX = 120;
+
+/**
+ * The roomiest density whose rows all fit in `available` px of sidebar:
+ * '' (two-line rows), 'compact' (one line) or 'dense'. Past that the list
+ * scrolls, with a fade hint.
+ */
+export function registryDensity(count, available = Infinity) {
+  for (const [cls, row] of ROW_PX) if (count * row + CHROME_PX <= available) return cls;
+  return 'dense';
 }
 
 /** Registry status text for a ship at t. */
@@ -43,6 +53,16 @@ export class Registry {
     this.onSelect = onSelect;
     this.doc = doc;
     this.rows = new Map();   // shipId -> {li, bar, status, hull, text, cls}
+    if (typeof window !== 'undefined') window.addEventListener('resize', () => this.relayout());
+  }
+
+  /** Pick the density that fits the sidebar (the combat log keeps its collapsed strip). */
+  relayout() {
+    const sidebar = this.root?.parentElement;
+    const height = sidebar?.clientHeight || 0;
+    const density = registryDensity(this.rows.size, height ? height - 48 : Infinity);
+    this.root?.classList.toggle('compact', density !== '');
+    this.root?.classList.toggle('dense', density === 'dense');
   }
 
   populate(ships) {
@@ -50,10 +70,6 @@ export class Registry {
     this.rows.clear();
     this.lists.alpha?.replaceChildren();
     this.lists.beta?.replaceChildren();
-    const count = Object.keys(ships || {}).length;
-    const density = registryDensity(count);
-    this.root?.classList.toggle('compact', density !== '');
-    this.root?.classList.toggle('dense', density === 'dense');
     for (const [shipId, info] of Object.entries(ships || {})) {
       const li = node(d, 'li');
       const svg = d.createElementNS(SVG_NS, 'svg');
@@ -82,6 +98,7 @@ export class Registry {
       (info.faction === 'alpha' ? this.lists.alpha : this.lists.beta)?.appendChild(li);
       this.rows.set(shipId, { li, bar, status, hull: -1, text: '', cls: '' });
     }
+    this.relayout();
   }
 
   /**

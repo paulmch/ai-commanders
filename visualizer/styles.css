@@ -2081,6 +2081,9 @@ body {
   justify-content: center;
   gap: 12px;
   max-width: 100%;
+  padding: 2px 12px;
+  background: rgba(4, 9, 16, 0.78);
+  border: 1px solid var(--border-subtle);
   font-family: var(--font-mono);
   font-size: 11px;
   letter-spacing: 0.04em;
@@ -2108,12 +2111,13 @@ body {
 .score-torps { color: #ffbb55; }
 .score-kills { color: var(--text-primary); }
 .score-spend { color: var(--text-secondary); }
+.score-points { color: var(--text-secondary); }
 .score-balance { display: flex; flex-direction: column; align-items: center; gap: 2px; flex: 0 0 74px; }
 .score-vs { font: 9px var(--font-display); color: var(--text-dim); letter-spacing: 0.2em; }
 .score-balance-track { position: relative; display: block; width: 100%; height: 3px; background: var(--beta-primary); box-shadow: 0 0 6px var(--beta-glow); }
 .score-balance-track i { position: absolute; left: 0; top: 0; bottom: 0; width: 50%; background: var(--alpha-primary); box-shadow: 0 0 6px var(--alpha-glow); transition: width 0.4s ease; }
 .score-balance-track::after { content: ''; position: absolute; left: 50%; top: -2px; width: 1px; height: 7px; background: rgba(255, 255, 255, 0.5); }
-@media (max-width: 1400px) { .score-spend { display: none; } .score-model { max-width: 110px; } }
+@media (max-width: 1400px) { .score-spend, .score-points { display: none; } .score-model { max-width: 110px; } }
 @media (max-width: 1200px) { .score-model { display: none; } .header-left { display: none; } }
 
 /* Kill feed: toasts under the header, replayed from the recording */
@@ -2323,6 +2327,14 @@ body {
 .ship-list { display: flex; flex-direction: column; }
 .ship-list li.destroyed { order: 1; }
 .ship-list li.low .registry-status { color: var(--accent-warning); }
+/* Heat badge (HeatHud sets data-heat): guns holding / radiators forced out / meltdown risk */
+.ship-list li[data-heat="hot"] .registry-name::after,
+.ship-list li[data-heat="crit"] .registry-name::after {
+  content: 'HEAT'; margin-left: 5px; padding: 0 3px; font: 8px/10px var(--font-mono); letter-spacing: 0.06em;
+  vertical-align: 1px; color: #120800; background: #ff9a2e;
+}
+.ship-list li[data-heat="crit"] .registry-name::after { background: #ff4a26; animation: heat-crit 0.8s ease-in-out infinite; }
+.ship-list li.destroyed .registry-name::after { content: none; }
 .ship-list li.dying { animation: none; }
 .ship-list li.dying .registry-status { animation: heat-crit 0.8s ease-in-out infinite; }
 #shipRegistry.compact .panel-header { padding: 7px 10px; }
@@ -2335,7 +2347,8 @@ body {
 #shipRegistry.compact .registry-name { font-size: 12px; line-height: 14px; }
 #shipRegistry.compact .registry-status { align-self: center; padding-top: 0; }
 #shipRegistry.compact .registry-heat { margin-top: 1px; }
-#shipRegistry.dense .ship-list li { min-height: 19px; padding: 1px 4px; }
+#shipRegistry.dense > .panel-header { display: none; }
+#shipRegistry.dense .ship-list li { min-height: 18px; padding: 0 4px; }
 #shipRegistry.dense .registry-name { font-size: 11px; line-height: 12px; }
 #shipRegistry.dense .registry-silhouette { display: none; }
 #shipRegistry .panel-content { overflow-y: auto; min-height: 0; }
