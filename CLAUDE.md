@@ -190,10 +190,14 @@ torpedo-armed hulls; all others fight with coilguns.
 - Gun P(hit) (`firecontrol.calculate_hit_probability` = conversion x track, via
   `CombatSimulation.gun_firing_solution` for the FIRE_WHEN_OPTIMAL gate, captain/MCP
   forecasts and shot_fired) is pinned against what the engine delivers by
-  `tests/test_fire_control_calibration.py`. The dispersion roll consumes only the
-  conversion part. If the gate, the roll, evasion/dodging or the lead changes, re-run
-  `scripts/fire_control_calibration.py` (harness + table) and regenerate the fixture; the
-  doctrine P(hit) table is bound by `tests/test_prompt_structure.py`.
+  `tests/test_fire_control_calibration.py`, per target maneuver class (EVASIVE, evade
+  overlay, HEADING turning / burning, INTERCEPT, PADLOCK) x 100 km so errors cannot
+  cancel. The dispersion roll consumes only the conversion part; shot_fired records the
+  forecast's inputs (`fc`: dodge, missed jink burn, pending HEADING burn). If the gate,
+  the roll, evasion/dodging or the lead changes, re-run `scripts/fire_control_calibration.py`
+  (harness + table) and regenerate the fixture; the doctrine P(hit) table is bound by
+  `tests/test_prompt_structure.py`. Known residual: LLM fleets dodging a whole fleet's
+  fire were hit even less than forecast (firecontrol.JINK_ACCEL_FRACTION).
 - After any armor or damage-model change, regenerate the combat tables in
   `docs/ships.md` with `uv run python scripts/calculate_shots_to_kill.py`.
 - Draft point costs are DERIVED from `data/fleet_ships.json`, not hand-typed

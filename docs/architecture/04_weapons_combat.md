@@ -116,8 +116,11 @@ def calculate_kinetic_damage(projectile, target, armor, impact_angle):
 > conversion probability (angular size, flight time, crossing, EVASIVE x0.6) times a
 > geometry factor. The P(hit) commanders see and FIRE_WHEN_OPTIMAL gates on is
 > conversion x track, where track is the expected gate x geometry factor given how far
-> the target can move unforeseen - and dodge, if its evasion is on - during the
-> flight. Calibration against engine outcomes: `scripts/fire_control_calibration.py`.
+> the target can move unforeseen during the flight: its dodge if its evasion is on
+> (more if it is caught mid-jink, burning across the line of fire where its lead does
+> not look), and a HEADING burn that lights once it has turned onto the heading.
+> Calibration against engine outcomes, per maneuver class:
+> `scripts/fire_control_calibration.py`.
 > The sketch below is the original design.
 
 ```python

@@ -965,12 +965,16 @@ PROJECTILE PHYSICS (for your calculations):
 HIT PROBABILITY PER ROUND vs a destroyer (spinal 9.9 km/s / turret 6.0 km/s):
                    50km    100km   150km   200km   300km   400km
 - holding course:  82/79%  64/57%  48/37%  36/20%  18/4%   7/1%
-- evade dodge:     82/77%  60/29%  30/5%   10/1%   1/0%    0/0%
-- EVADE maneuver:  49/46%  36/17%  18/3%   6/1%    1/0%    0/0%
-Agile hulls escape sooner (a dodging frigate: spinal 46% at 100km, 14% at 150km),
-heavy ones later (a dodging battleship: 38% at 200km, 9% at 300km). The P(hit) on
-your ENEMIES lines is this model for the live geometry - fire on it, and close range
-before you shoot at a dodger.
+- evade dodge:     82/73%  55/26%  27/6%   10/1%   2/0%    0/0%
+- dodge, mid-jink: 74/37%  21/3%   4/1%    1/0%    0/0%    0/0%
+- EVADE maneuver:  49/46%  36/24%  22/7%   11/2%   2/0%    1/0%
+"Mid-jink" is a dodger caught already burning off another round - what your other
+ships' fire does to it. Agile hulls escape sooner (a dodging frigate: spinal 42% at
+100km, 14% at 150km), heavy ones later (a dodging battleship: 31% at 200km, 8% at
+300km). The P(hit) on your ENEMIES lines is this model for the live geometry - fire
+on it, and close range before you shoot at a dodger. Under a whole fleet's fire
+dodgers do even better than shown: in a recorded fleet battle where every ship flew
+evade dodge, 0 of 188 rounds at 100-300km landed where this model promised ~16.
 - Closing speed RAISES hit chance (shorter flight, less time to dodge); crossing
   (lateral) speed lowers it, and an opening range lowers it most. Spinal vs a
   destroyer holding course at 200km: 36% at rest, 47% closing at 3 km/s, 28%
@@ -2674,8 +2678,9 @@ GUNNERY:
 - Spinal weapons need nose-on alignment (<30 deg to target); turrets fire over a 180 deg arc.
 - Range is accuracy: a round hits only if its target is still near the aim point when it
   arrives, and a ship flying EVADE or evade dodge/full jinks off rounds it sees coming.
-  Per-round P(hit) vs a dodging destroyer: spinal 60% at 100 km, 10% at 200 km, 1% at
-  300 km. Do not plan gun fights at dodgers beyond ~150 km.
+  Per-round P(hit) vs a dodging destroyer: spinal 55% at 100 km, 10% at 200 km, 2% at
+  300 km - and a dodger your fleet already keeps jinking is far harder (21% at 100 km).
+  Do not plan gun fights at dodgers beyond ~150 km.
 - Cross-section matters less: broadside is ~1.5x the hit chance of nose-on at 200 km
   (~1.2x at 100 km). Keep enemies in FRONT of your ships; if one flanks, reorient the
   affected ships (PADLOCK toward it).

@@ -98,25 +98,66 @@ UNFORESEEN_ACCEL_FRACTION = 0.018
 
 # Dodge dispersion of a target whose evasion reacts to inbound rounds (EVASIVE,
 # or any maneuver flown with the evade overlay). From the moment a round is
-# inside its threat horizon the ship turns across the line of fire and burns
-# at its maneuver throttle until the round's predicted miss clears ~500 m; it
-# picks its side at random each 8 s jink cycle and weighs every inbound round,
-# so where it ends up is a spread, not a fixed offset. Modelled as an extra
-# 1-sigma displacement DODGE_ACCEL_FRACTION * a * throttle * tau^2 / 2, with
-# tau the time the ship has to dodge after a reaction delay of
-# DODGE_REACTION_TURN_FRACTION of its own 90-degree turn time. Calibrated on
-# the live engine (scripts/fire_control_calibration.py harness: 12.8k rounds
-# at frigates..dreadnoughts flying PADLOCK+dodge, HOLD_RANGE+dodge and
-# EVASIVE, 40-400 km): the measured escape curve is one curve in T / t90 for
-# every hull, and this term reproduces it within 0.66-1.23x per 100 km bucket
-# (buckets with 5+ hits). Not modelled: how much fire the dodger is under.
-# Four shooters on one dodger cut its hit rate to 0.6-0.75x of one shooter's;
-# pooled over recorded battles dodgers at 100-199 km were hit 0.11 vs 0.18
-# forecast, and in the 2026-10 flash mirror (every dodger under a whole
-# fleet's fire) 2 of 216 rounds at 100-300 km landed. Same form and
-# magnitude as trajectory_prediction's REACTIVE_SIGMA_K['EVADE'].
-DODGE_ACCEL_FRACTION = 0.14
-DODGE_REACTION_TURN_FRACTION = 0.16
+# inside its threat horizon the ship swings across the line of fire with its
+# drive lit and burns at its maneuver throttle until the round's predicted
+# miss clears ~500 m; it picks its side at random each 8 s jink cycle and
+# weighs every inbound round, so where it ends up is a spread, not a fixed
+# offset. Modelled as an extra 1-sigma displacement
+# k * a * throttle * min(T, horizon)^2 / 2 (the swing builds displacement
+# from the start - fitting a reaction delay drove it to zero), with k:
+#   DODGE_ACCEL_FRACTION            the evade overlay on another maneuver;
+#   EVASIVE_DODGE_ACCEL_FRACTION    the EVASIVE maneuver. Its lead
+#       (CombatSimulation._estimate_target_acceleration) already assumes half
+#       a burn along the nose, which tracks part of every jink, and between
+#       threats it weaves around its course anyway: rounds lose less to the
+#       dodge itself (the conversion roll charges EVASIVE x0.6 on top).
+# Calibrated together with JINK_ACCEL_FRACTION (maximum likelihood) on the
+# live engine: 85k rounds from 1, 2, 4 and 8 shooters at frigates..
+# dreadnoughts flying PADLOCK + dodge, HOLD_RANGE + dodge and EVASIVE,
+# 40-400 km (scripts/fire_control_calibration.py harness); per maneuver class,
+# shooter count and 100 km bucket (30+ hits) the forecast is 0.65-1.17x of
+# what landed.
+DODGE_ACCEL_FRACTION = 0.10
+EVASIVE_DODGE_ACCEL_FRACTION = 0.06
+
+# A dodger whose evasion is flying it RIGHT NOW (mid-jink) is already burning
+# across the line of fire, and its lead does not extrapolate that burn (a
+# PADLOCK dodger is led as if it coasts). The part of its drive output the
+# lead misses (CombatSimulation.target_motion: drive output minus the lead's
+# assumed acceleration, across the line of fire) keeps pushing it while the
+# jink holds: JINK_ACCEL_FRACTION * a_missed * min(T, horizon)^2 / 2, no
+# minimum time to go (it is already moving). Live engine, PADLOCK / HOLD_RANGE
+# dodgers at 100-300 km: rounds that found one mid-jink landed 0.15 per round,
+# rounds between jinks 0.18 (forecast 0.12 / 0.20). This is how fleet fire
+# shows up: other ships' rounds keep a dodger jinking; a separate fleet-fire
+# factor (dodge x f under 2+ shooters) fitted to 0.7-1.0 next to this term,
+# so it is not modelled. Not for the EVASIVE maneuver: its lead and
+# EVASIVE_DODGE_ACCEL_FRACTION cover it.
+#
+# Known residual: in the 2026-10 flash mirror (LLM fleets, every ship PADLOCK /
+# HOLD_RANGE + evade 'dodge' under a whole fleet's fire, new orders every
+# checkpoint) the dodgers moved 2-4x farther across the line of fire during a
+# flight (median 0.45 of a*T^2/2, vs 0.10-0.24 in seeded engine runs of the
+# same shape), and 0 of 188 rounds at 100-300 km landed where this model
+# forecasts ~16. Seeded fleet-vs-fleet runs with fixed orders do not
+# reproduce it (there the forecast is 0.74-0.96x of what landed), so nothing
+# visible at fire time predicts it; the doctrine tells commanders instead
+# (prompts.GUN_PHYSICS_REFERENCE), and tests/test_fire_control_calibration.py
+# pins it.
+JINK_ACCEL_FRACTION = 0.39
+
+# A HEADING target still turning onto its ordered heading (or holding a
+# synchronised burn start) burns at the ordered throttle once inside
+# HEADING_BURN_CONE_DEG, and its lead (the drive's actual output: a token
+# throttle while turning) does not see that burn coming. Its displacement
+# across the line of fire grows from the moment the burn lights:
+# PENDING_BURN_FRACTION * a_burn * (T - t_light)^2 / 2 (the same difference
+# - ordered burn minus drive output - covers the last few degrees of swing
+# inside the cone). Fitted on HEADING rounds from 32 seeded battles and the
+# live-engine harness: close to the full burn (a deterministic offset of
+# a T^2/2 in one direction is a ~0.7 sigma spread; the rest is orders that
+# change at the next checkpoint).
+PENDING_BURN_FRACTION = 0.9
 
 
 @dataclass(frozen=True)
@@ -127,42 +168,62 @@ class TargetMotion:
     Attributes:
         accel_ms2: Full-throttle acceleration available now (m/s^2, after
             engine damage).
-        turn_90_s: Time for a 90-degree turn with the drive lit (thrust
-            vectoring), the target's reaction scale.
         dodges: Whether its evasion reacts to inbound rounds (EVASIVE, or the
             evade overlay on any other maneuver).
+        evasive: It flies the EVASIVE maneuver (EVASIVE_DODGE_ACCEL_FRACTION)
+            rather than the evade overlay (DODGE_ACCEL_FRACTION).
         dodge_throttle: Throttle its evasion burns at (the maneuver's).
         dodge_horizon_s: Evasion only sees rounds this close in time to go
             (simulation.BALLISTIC_THREAT_HORIZON_S).
         dodge_min_time_s: Evasion needs at least this much time to go to
             jink at all (simulation EVASION_TURN_ALLOWANCE_S +
             EVASION_MIN_JINK_S); closer rounds are taken or tanked.
+        jink_accel_ms2: The overlay's evasion is flying it now: the part of
+            its drive output, across the line of fire, that the lead does
+            not extrapolate (0 when not jinking).
+        pending_burn_ms2: An ordered HEADING burn the lead does not see yet
+            (ordered burn minus drive output, across the line of fire).
+        pending_burn_in_s: When that burn lights (rest of the turn onto the
+            heading, or a held formation start; 0 when already burning).
     """
     accel_ms2: float
-    turn_90_s: float
     dodges: bool = False
+    evasive: bool = False
     dodge_throttle: float = 1.0
     dodge_horizon_s: float = 60.0
     dodge_min_time_s: float = 7.0
+    jink_accel_ms2: float = 0.0
+    pending_burn_ms2: float = 0.0
+    pending_burn_in_s: float = 0.0
 
 
 def displacement_sigma_m(time_of_flight_s: float, motion: TargetMotion) -> float:
     """
     1-sigma (per axis, across the line of fire) of where the target will be,
     relative to the firing solution's aim point, when a round fired now
-    arrives: unforeseen maneuvering plus - for a target that dodges - its
-    dodge. Grows as T^2: a 1 g target moves 0.5 * a * t^2 = 4.4 km in 30 s.
+    arrives: unforeseen maneuvering, plus - for a target that dodges - its
+    dodge and the jink it is already flying, plus an ordered burn about to
+    light. Grows as T^2: a 1 g target moves 0.5 * a * t^2 = 4.4 km in 30 s.
     """
     t = max(0.0, float(time_of_flight_s))
     a = max(0.0, float(motion.accel_ms2))
     sigma_free = UNFORESEEN_ACCEL_FRACTION * a * t * t / 2.0
-    sigma_dodge = 0.0
-    if motion.dodges and t >= motion.dodge_min_time_s:
-        tau = min(t, motion.dodge_horizon_s) - DODGE_REACTION_TURN_FRACTION * max(0.0, motion.turn_90_s)
-        if tau > 0.0:
+    sigma_dodge = sigma_jink = sigma_pending = 0.0
+    if motion.dodges:
+        td = min(t, motion.dodge_horizon_s)
+        if t >= motion.dodge_min_time_s:
+            k = EVASIVE_DODGE_ACCEL_FRACTION if motion.evasive else DODGE_ACCEL_FRACTION
             throttle = max(0.0, min(1.0, motion.dodge_throttle))
-            sigma_dodge = DODGE_ACCEL_FRACTION * a * throttle * tau * tau / 2.0
-    return math.hypot(sigma_free, sigma_dodge)
+            sigma_dodge = k * a * throttle * td * td / 2.0
+        jink = max(0.0, float(motion.jink_accel_ms2))
+        if jink > 0.0 and not motion.evasive:
+            sigma_jink = JINK_ACCEL_FRACTION * jink * td * td / 2.0
+    pending = max(0.0, float(motion.pending_burn_ms2))
+    if pending > 0.0:
+        tp = t - max(0.0, float(motion.pending_burn_in_s))
+        if tp > 0.0:
+            sigma_pending = PENDING_BURN_FRACTION * pending * tp * tp / 2.0
+    return math.sqrt(sigma_free ** 2 + sigma_dodge ** 2 + sigma_jink ** 2 + sigma_pending ** 2)
 
 
 def track_probability(
@@ -215,6 +276,7 @@ class FiringSolution:
             target motion was supplied.
         displacement_sigma_m: The target's 1-sigma unforeseen displacement at
             impact behind track_probability (0 when none was modelled).
+        target_motion: The TargetMotion the forecast used (None = none).
     """
     can_fire: bool
     hit_probability: float
@@ -225,6 +287,7 @@ class FiringSolution:
     conversion_probability: Optional[float] = None
     track_probability: float = 1.0
     displacement_sigma_m: float = 0.0
+    target_motion: Optional[TargetMotion] = None
 
     def __post_init__(self) -> None:
         if self.conversion_probability is None:
@@ -416,6 +479,7 @@ def calculate_hit_probability(
         conversion_probability=conversion,
         track_probability=track,
         displacement_sigma_m=sigma_m,
+        target_motion=target_motion,
     )
 
 
