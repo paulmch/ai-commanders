@@ -673,7 +673,16 @@ def _event_name(event: Any) -> str:
 
 def checkpoint_digest(sim: Any, faction: str, since_t: float,
                       until_t: Optional[float] = None) -> CheckpointDigest:
-    """Kills, losses, hits and ordnance outcomes in (since_t, until_t]."""
+    """
+    Kills, losses, hits and ordnance outcomes in [since_t, until_t).
+
+    Half-open at the END, not the start: a sim step logs its events at the
+    step's start time, and the decisions at checkpoint T run before the step
+    that begins at T. So an event stamped T (every launch the captains
+    ordered at T, the first salvo after it) happened AFTER the checkpoint-T
+    decision and belongs to the window that starts at T; nothing stamped
+    until_t has happened yet when the admiral decides at until_t.
+    """
     until_t = sim.current_time if until_t is None else until_t
     digest = CheckpointDigest(since_t=since_t, until_t=until_t)
 
@@ -685,7 +694,7 @@ def checkpoint_digest(sim: Any, faction: str, since_t: float,
 
     for event in getattr(sim, "events", None) or []:
         ts = getattr(event, "timestamp", 0.0)
-        if ts <= since_t or ts > until_t:
+        if ts < since_t or ts >= until_t:
             continue
         name = _event_name(event)
         data = getattr(event, "data", None) or {}
@@ -840,7 +849,9 @@ def engine_notes(sim: Any, ship_ids: Iterable[str], since_t: float,
     """
     What the engine actually did with our ships' orders, compactly: helm
     modes that differ from a plain burn (evasion), guns held by a gate, and
-    commands rejected/cancelled/expired since ``since_t`` (ADM-07g). Built
+    commands rejected/cancelled/expired at or after ``since_t`` (ADM-07g; a
+    rejection of an order issued at the previous decision is stamped with
+    that decision's time, see checkpoint_digest). Built
     from the same WEAPON_STATUS / EXECUTION_STATE / COMMAND_STATUS events the
     captains' execution feedback reads.
     """
@@ -859,7 +870,7 @@ def engine_notes(sim: Any, ship_ids: Iterable[str], since_t: float,
             helm[sid] = data
         elif name == "WEAPON_STATUS":
             weapons.setdefault(sid, {})[str(data.get("weapon_slot", "?"))] = str(data.get("reason", ""))
-        elif (name == "COMMAND_STATUS" and getattr(event, "timestamp", 0.0) > since_t
+        elif (name == "COMMAND_STATUS" and getattr(event, "timestamp", 0.0) >= since_t
               and data.get("status") in ("rejected", "cancelled", "expired")):
             command = data.get("command") or {}
             kind = (command.get("type") or command.get("maneuver_type") or "command"
