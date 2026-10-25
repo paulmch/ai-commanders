@@ -283,8 +283,12 @@ are identical. Behavior:
 
 - Obeys the admiral's structured order fields (`suggested_target`,
   `torpedo_salvo`, `torpedo_target`) and simple order-text keywords
-  (evade / brake / padlock / kite / intercept).
-- Evades incoming guided torpedoes (ETA < 75 s) at full throttle.
+  (evade / brake / padlock / kite / intercept). A heading or structured
+  maneuver order (standoff INTERCEPT, HOLD_RANGE, toward_point/ship) is flown
+  by the runner and the captain keeps it; an order whose target did not
+  resolve was not applied, and the captain flies its own maneuver instead.
+- Evades incoming guided torpedoes (ETA < 75 s) at full throttle, unless the
+  admiral's applied order carries the evade overlay (that already dodges).
 - Gunships close to effective range, brake off a blind overshoot, and
   coast-track through the knife-fight; pure torpedo hulls keep a 250 km
   standoff and launch probing salvos while closing.

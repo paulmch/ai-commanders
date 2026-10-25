@@ -18,7 +18,7 @@ echo "OPENROUTER_API_KEY=sk-or-v1-your-key-here" > .env
 ## Running Tests
 
 ```bash
-uv run pytest tests/ -v   # ~1500 tests, ~1-2 minutes
+uv run pytest tests/ -v   # ~2300 tests, ~1-2 minutes
 ```
 
 CI (`.github/workflows/tests.yml`) runs the same suite on Python 3.10-3.12 with
@@ -52,7 +52,11 @@ ai-commanders/
 │                           # draft mode + heuristic captains, prompts, tools,
 │                           # battle runner/recorder, MCP servers, commander
 │                           # notebooks (notebook.py, cross-battle memory),
-│                           # range_control.py (anti-merge headings/warnings)
+│                           # range_control.py (anti-merge headings/warnings),
+│                           # maneuver_orders.py (standoff/HOLD_RANGE/toward_*),
+│                           # communication.py + fleet_comms.py (fleet net,
+│                           # captain reports, engine datalink), fleet_intel.py
+│                           # (admiral turn state), fire_solutions.py (captain)
 ├── tests/                  # pytest suite; test_fixes_*.py pin past bug fixes
 ├── scripts/
 │   ├── run_llm_battle.py   # CLI for AI vs AI battles (--fleet-config, --admiral-vision)
@@ -97,9 +101,21 @@ Hierarchical control:
    Keeps a private standing battle plan (set_battle_plan) echoed back each
    checkpoint - its only cross-checkpoint memory of its own intent
 2. **Captain LLM**: tool calls every 30s decision cycle (maneuver, weapons order,
-   torpedo launch, radiators, messages, captain's-log notes via log_note). Tool
-   surface is derived from the hull's actual armament - gun tools only on gun
-   ships, torpedo tools only on torpedo ships
+   torpedo launch, radiators, captain's-log notes via log_note, and comms:
+   report_to_admiral - DEVIATE/UNABLE/request/contact, acting on orders is the
+   ACK; respond_to_orders is its alias - fleet_signal to its own fleet's FLEET
+   NET, send_message on the open channel the ENEMY reads, discuss_with_admiral).
+   Tool surface is derived from the hull's actual armament - gun tools only on
+   gun ships, torpedo tools only on torpedo ships
+
+Fleet comms (src/llm/communication.py, fleet_comms.py): captain reports reach
+the admiral at the next checkpoint (CAPTAIN REPORTS, with the engine's
+ordered-vs-executed compliance); fleet_signal traffic, admiral notes and the
+engine datalink (launches with target and ETA, kills, losses, PD losses) reach
+captains as FLEET NET, enemy open-channel traffic as ENEMY TRANSMISSIONS.
+Recorded as comms_message / comms_delivered / captain_report events. A failed
+directive call leaves captains "(no new fleet directive this checkpoint)" and
+is recorded as admiral_directive_failed.
 
 Within a checkpoint, independent LLM calls (both admirals, per-ship orders, all
 captains) run concurrently (BattleConfig.parallel_llm, on by default).
@@ -114,10 +130,19 @@ Range control (anti-merge): HEADING turns first, then burns (throttle 0 =
 attitude only, RCS, velocity untouched). `src/llm/range_control.py` gives
 captains, admirals and MCP clients, per enemy group, closing speed, closest
 approach, stopping distance, a merge warning and ready-made world-frame headings
-(cancel closure / open range / pass wide / flank / coast & shoot) whose stated
-effects are pinned by `tests/test_range_control_and_evade.py`. An admiral
+(cancel closure - "hold range" once the closure is gone / open range / re-engage
+after a pass / pass wide / flank left|right / coast & shoot - "coast & launch" on
+gunless torpedo hulls) whose stated effects are pinned by
+`tests/test_range_control_and_evade.py`. An admiral
 `issue_order(ship_name="all ships", heading, throttle)` is flown as a formation:
 throttles matched to the slowest hull, burn start synced (MCP: ship_id "all").
+Plain INTERCEPT never brakes (it merges); the anti-merge forms
+(`src/llm/maneuver_orders.py`; the same fields on captain set_maneuver /
+set_heading, admiral issue_order and MCP set_maneuver): INTERCEPT with
+standoff_km (+ arrival_closing_kps) closes, flips and holds that range;
+HOLD_RANGE keeps range_km to a target; HEADING toward_point flies to a position
+and stops there, toward_ship falls in alongside a ship; evade ('full'|'dodge')
+overlays threat evasion on any other maneuver.
 
 MCP mode replaces the admiral+captains of a fleet with any MCP client
 (`src/llm/mcp_server.py`, one battle HTTP API on port 8765, `--faction alpha|beta`).

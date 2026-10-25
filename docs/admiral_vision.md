@@ -54,9 +54,15 @@ Implemented in `src/llm/admiral_view.py` + hooks in `battle_runner.py` and
 2. At each admiral checkpoint, `_get_admiral_decision` renders the live sim
    to a PNG - left panel annotated top-down plot, right panel a true 3D
    perspective (Z gets a minimum visual thickness so planar battles stay
-   readable; tick labels carry real values). Frames are also saved to
-   `data/recordings/vision/<timestamp>/cpNNN_<faction>.png` for post-battle
-   review.
+   readable; tick labels carry real values). Unlike the replay script above,
+   the live frame names the commanded maneuver only on the viewer's own
+   cards, draws its fleet's 250 km PD envelope ring and the nearest enemy
+   group's closest-approach marker and merge countdown, and draws a dead
+   (seeker-blinded) torpedo only while its straight line threatens a live
+   hull (the engine's 0.5 km / 60 s collision test) - spent wrecks are
+   counted, not drawn, so they no longer stretch the zoom. Frames are also
+   saved to `data/recordings/vision/<timestamp>/cpNNN_<faction>.png` for
+   post-battle review.
 3. The PNG rides into the admiral's Phase-1 directive call as an
    `image_url` content part (base64 data URL) with a legend in the text.
    Phase-2 per-ship order calls stay text-only (image cost x N ships was
