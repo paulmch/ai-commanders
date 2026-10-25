@@ -101,10 +101,93 @@ ADMIRAL_TOOLS = [
                         "minimum": 0,
                         "maximum": 1,
                         "description": (
-                            "Throttle for the heading (default 1.0). 0 = attitude only: "
-                            "the nose turns onto the heading and the ship coasts (e.g. "
-                            "spinals back on the enemy). For \"all ships\" it is a fraction "
-                            "of the SLOWEST hull's acceleration."
+                            "Throttle for the heading or maneuver (default 1.0). 0 = attitude "
+                            "only: the nose turns onto the heading and the ship coasts (e.g. "
+                            "spinals back on the enemy). For an \"all ships\" heading it is a "
+                            "fraction of the SLOWEST hull's acceleration."
+                        )
+                    },
+                    "toward_point": {
+                        "type": "object",
+                        "description": (
+                            "Optional, instead of heading: a WORLD position in km to go to "
+                            "(a heading is a DIRECTION, not a destination - never put a "
+                            "position in heading). The ship flies there and STOPS (burn, flip "
+                            "and brake are timed for it). For \"all ships\": one heading from "
+                            "the fleet centre toward it, flown as a formation - that does not "
+                            "brake at the point, so re-issue it each checkpoint."
+                        ),
+                        "properties": {
+                            "x": {"type": "number"},
+                            "y": {"type": "number"},
+                            "z": {"type": "number"}
+                        },
+                        "required": ["x", "y", "z"]
+                    },
+                    "toward_ship": {
+                        "type": "string",
+                        "description": (
+                            "Optional, instead of heading: fly to this ship (name or id) and "
+                            "fall in alongside it, matching its velocity - to rejoin a "
+                            "friendly. To stand off an enemy use maneuver INTERCEPT with "
+                            "standoff_km, or HOLD_RANGE."
+                        )
+                    },
+                    "maneuver": {
+                        "type": "string",
+                        "enum": ["INTERCEPT", "HOLD_RANGE", "EVADE", "BRAKE", "MAINTAIN", "PADLOCK"],
+                        "description": (
+                            "Optional structured maneuver, applied at once like heading (give "
+                            "one or the other; maneuver wins). INTERCEPT never brakes - it "
+                            "passes THROUGH the target at full closing speed - unless you give "
+                            "standoff_km: then it closes, flips, brakes and holds that range. "
+                            "HOLD_RANGE keeps range_km (default: the range when first ordered; "
+                            "re-issuing it keeps that range) to the target: the anti-merge "
+                            "order. With \"all ships\" every ship flies it. "
+                            "Each ship has ONE maneuver: to close in and still dodge, add evade "
+                            "instead of ordering INTERCEPT and EVADE together."
+                        )
+                    },
+                    "maneuver_target": {
+                        "type": "string",
+                        "description": (
+                            "Enemy name or id the INTERCEPT / HOLD_RANGE / PADLOCK flies "
+                            "relative to. Default: suggested_target if it names a ship, else "
+                            "the ship's own target, else the nearest enemy. A maneuver_target "
+                            "that names no live ship is NOT applied (the captain is told)."
+                        )
+                    },
+                    "standoff_km": {
+                        "type": "number",
+                        "minimum": 0,
+                        "description": "INTERCEPT: stop closing at this range and hold it."
+                    },
+                    "arrival_closing_kps": {
+                        "type": "number",
+                        "minimum": 0,
+                        "description": (
+                            "INTERCEPT: closing speed still allowed on reaching standoff_km "
+                            "(default 0 = arrive matched); first arrival only, capped so the "
+                            "overshoot is stopped well inside the standoff (never a "
+                            "fly-through)."
+                        )
+                    },
+                    "range_km": {
+                        "type": "number",
+                        "minimum": 0,
+                        "description": (
+                            "HOLD_RANGE: the range to keep (default: the range when first "
+                            "ordered; re-issuing keeps it)."
+                        )
+                    },
+                    "evade": {
+                        "type": "string",
+                        "enum": ["full", "dodge"],
+                        "description": (
+                            "Evasion on top of the heading / maneuver while a torpedo or slug "
+                            "is actually inbound: 'full' = EVADE under threat (runs from guided "
+                            "torpedoes, costing closure), 'dodge' = keeps course until a guided "
+                            "torpedo's final seconds, then presents armor; jinks slugs."
                         )
                     }
                 },

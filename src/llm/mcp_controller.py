@@ -887,35 +887,49 @@ class MCPController:
 
 def expand_fleet_heading_commands(commands, simulation, faction):
     """
-    set_maneuver HEADING with ship_id "all" (any range_control.FLEET_ALIASES
-    name) -> one HEADING per live own ship, throttle matched to the slowest
+    set_maneuver with ship_id "all" (any range_control.FLEET_ALIASES name):
+    HEADING -> one HEADING per live own ship, throttle matched to the slowest
     hull and a common burn start (range_control.formation_heading_maneuvers),
-    so the formation holds. Other commands pass through unchanged.
+    so the formation holds; toward_point / toward_ship become the heading from
+    the fleet centre (maneuver_orders.fleet_heading_vector). Any other
+    maneuver -> the same order for every live own ship. Other commands pass
+    through unchanged.
     """
     from .range_control import is_fleet_alias, formation_heading_maneuvers
+    from .maneuver_orders import ManeuverArgError, fleet_heading_vector
     out = []
     for cmd in commands:
-        if (cmd.command_type == MCPCommandType.SET_MANEUVER and is_fleet_alias(cmd.ship_id)
-                and str(cmd.parameters.get("maneuver_type", "")).upper() == "HEADING"):
-            own = [s for s in simulation.get_ships_by_faction(faction)
-                   if not s.is_destroyed and not getattr(s, "is_dying", False)
-                   and not getattr(s, "is_surrendered", False)]
-            try:
-                maneuvers = formation_heading_maneuvers(
-                    simulation, own, cmd.parameters.get("heading_direction"),
-                    float(cmd.parameters.get("throttle", 1.0) or 0.0))
-            except (TypeError, ValueError):
-                out.append(cmd)  # rejected downstream with a clear error
-                continue
-            for sid, m in maneuvers.items():
-                out.append(MCPCommand(
-                    command_type=MCPCommandType.SET_MANEUVER, ship_id=sid,
-                    parameters={**cmd.parameters, "throttle": m.throttle,
-                                "heading_direction": m.heading_direction,
-                                "burn_start_time": m.burn_start_time, "formation": True},
-                    timestamp=cmd.timestamp))
+        if cmd.command_type != MCPCommandType.SET_MANEUVER or not is_fleet_alias(cmd.ship_id):
+            out.append(cmd)
             continue
-        out.append(cmd)
+        own = [s for s in simulation.get_ships_by_faction(faction)
+               if not s.is_destroyed and not getattr(s, "is_dying", False)
+               and not getattr(s, "is_surrendered", False)]
+        if str(cmd.parameters.get("maneuver_type", "")).upper() != "HEADING":
+            for ship in own:
+                out.append(MCPCommand(
+                    command_type=MCPCommandType.SET_MANEUVER, ship_id=ship.ship_id,
+                    parameters=dict(cmd.parameters), timestamp=cmd.timestamp))
+            continue
+        params = dict(cmd.parameters)
+        try:
+            if params.get("toward_point") or params.get("toward_ship"):
+                params["heading_direction"] = fleet_heading_vector(simulation, own, params)
+                params.pop("toward_point", None)
+                params.pop("toward_ship", None)
+            maneuvers = formation_heading_maneuvers(
+                simulation, own, params.get("heading_direction"),
+                float(params.get("throttle", 1.0) or 0.0))
+        except (TypeError, ValueError, ManeuverArgError):
+            out.append(cmd)  # rejected downstream with a clear error
+            continue
+        for sid, m in maneuvers.items():
+            out.append(MCPCommand(
+                command_type=MCPCommandType.SET_MANEUVER, ship_id=sid,
+                parameters={**params, "throttle": m.throttle,
+                            "heading_direction": m.heading_direction,
+                            "burn_start_time": m.burn_start_time, "formation": True},
+                timestamp=cmd.timestamp))
     return out
 
 
@@ -995,10 +1009,31 @@ def _apply_mcp_commands(
                 if ship:
                     # Convert maneuver type string to enum
                     maneuver_type_str = cmd.parameters.get("maneuver_type", "MAINTAIN")
+                    if maneuver_type_str == "EVADE":
+                        maneuver_type_str = "EVASIVE"
                     maneuver_type = ManeuverType[maneuver_type_str]
 
                     # Get heading direction if provided (for HEADING maneuver)
                     heading_direction = cmd.parameters.get("heading_direction")
+                    target_id = cmd.parameters.get("target_id")
+
+                    # Optional parameters (standoff, hold range, evade, toward
+                    # point/ship, target by name): none given -> exactly the
+                    # maneuver this command always built.
+                    from .maneuver_orders import (
+                        MCP_MANEUVER_OPTIONS, ManeuverArgError, mcp_maneuver_fields)
+                    extras, notes = {}, []
+                    if (maneuver_type == ManeuverType.HOLD_RANGE
+                            or any(cmd.parameters.get(k) not in (None, "")
+                                   for k in MCP_MANEUVER_OPTIONS)
+                            or (target_id and simulation.get_ship(target_id) is None)
+                            or (not target_id and maneuver_type in (
+                                ManeuverType.INTERCEPT, ManeuverType.PADLOCK))):
+                        try:
+                            target_id, heading_direction, extras, notes = mcp_maneuver_fields(
+                                simulation, cmd.ship_id, maneuver_type, cmd.parameters)
+                        except ManeuverArgError as e:
+                            raise ValueError(str(e))
 
                     # Create maneuver (same format as LLM captains)
                     maneuver = Maneuver(
@@ -1006,19 +1041,23 @@ def _apply_mcp_commands(
                         start_time=simulation.current_time,
                         duration=simulation.decision_interval,
                         throttle=cmd.parameters.get("throttle", 1.0),
-                        target_id=cmd.parameters.get("target_id"),
+                        target_id=target_id,
                         heading_direction=heading_direction,
                         burn_start_time=cmd.parameters.get("burn_start_time"),
+                        **extras,
                     )
                     # Use inject_command for consistency with LLM captain flow
                     if not simulation.inject_command(cmd.ship_id, maneuver):
                         raise ValueError("Simulation rejected the maneuver")
-                    results["applied"].append({
+                    applied = {
                         "command": "set_maneuver",
                         "ship_id": cmd.ship_id,
                         "maneuver": maneuver_type_str,
                         "heading_direction": heading_direction,
-                    })
+                    }
+                    if notes:
+                        applied["notes"] = notes
+                    results["applied"].append(applied)
                 else:
                     results["errors"].append({
                         "command": "set_maneuver",

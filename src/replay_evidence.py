@@ -5,12 +5,18 @@ from enum import Enum
 from functools import wraps
 
 
+# Dataclass field metadata: leave the field out of the record while it is
+# None (optional parameters added later keep old records byte-identical).
+OMIT_IF_NONE = {'omit_if_none': True}
+
+
 def json_value(value):
     if isinstance(value, Enum):
         return value.name
     if is_dataclass(value):
         return {f.name: json_value(getattr(value, f.name)) for f in fields(value)
-                if not f.name.startswith('_')}
+                if not f.name.startswith('_')
+                and not (f.metadata.get('omit_if_none') and getattr(value, f.name) is None)}
     if isinstance(value, dict):
         return {str(k): json_value(v) for k, v in value.items() if not str(k).startswith('_')}
     if isinstance(value, (tuple, list)):

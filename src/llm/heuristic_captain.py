@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .captain import LLMCaptain, LLMCaptainConfig
 from .client import ToolCall
+from .maneuver_orders import admiral_order_moves_ship
 
 # Sentinel model id that makes the battle runner build a HeuristicCaptain
 # instead of an LLM-backed captain.
@@ -150,13 +151,18 @@ class HeuristicCaptain(LLMCaptain):
                 calls.append(("launch_torpedo", {
                     "count": salvo, "target_id": torp_target.ship_id}))
 
-        # Maneuver priority: dodge torpedoes > admiral heading order (already
-        # applied by the runner - keep it, it holds the formation) > admiral
-        # keyword > role doctrine
+        # Maneuver priority: dodge torpedoes > admiral heading / structured
+        # maneuver order (already applied by the runner - keep it, it holds
+        # the formation) > admiral keyword > role doctrine
         threat = self._torpedo_threat(ship, ship_id, simulation)
-        admiral_heading = bool(order and isinstance(getattr(order, "heading", None), dict))
+        # Only an order the runner actually flew (one whose target did not
+        # resolve was NOT applied: fly our own maneuver instead).
+        admiral_heading = bool(order and admiral_order_moves_ship(order))
+        # An applied order with the evasion overlay already dodges the
+        # torpedo (and keeps its course otherwise): no need to override it.
+        overlay = admiral_heading and bool((getattr(order, "maneuver", None) or {}).get("evade"))
         maneuver = self._admiral_maneuver(order_text)
-        if threat:
+        if threat and not overlay:
             maneuver = ("EVADE", 1.0)
         elif admiral_heading:
             maneuver = ("KEEP", 0.0)

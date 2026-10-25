@@ -540,19 +540,36 @@ def create_mcp_server(
             Tool(
                 name="set_maneuver",
                 description=(
-                    "Set ship maneuver (movement control). INTERCEPT: burn toward target "
-                    "(first approach / finishing a cripple only - it builds closure that ends "
-                    "in a merge). EVASIVE: threat-aware defense; with no threat it weaves "
-                    "around the CURRENT course (never chases, never brakes). BRAKE: burn "
-                    "against own velocity. MAINTAIN: coast. PADLOCK: coast with the nose "
-                    "tracking the target (spinal on him). HEADING: point along a world-frame "
-                    "direction, turn first, then burn at throttle (the drive thrusts along the "
-                    "nose); throttle 0 = attitude only (nose turns on RCS, zero velocity "
-                    "change). Range control = HEADING: get_battle_state.range_control lists "
-                    "ready-made headings per enemy group (cancel closure, open range, pass "
-                    "wide, flank). ship_id \"all\" with HEADING flies one heading as a "
-                    "formation: throttle is a fraction of the SLOWEST hull's acceleration, "
-                    "each hull scaled, burns start together."
+                    "Set ship maneuver (movement control) until the next checkpoint; one "
+                    "maneuver per ship (a new call replaces it). INTERCEPT: burn toward "
+                    "target_id on a collision course. Plain INTERCEPT NEVER BRAKES: it keeps "
+                    "building closure and passes THROUGH the target at full closing speed (a "
+                    "merge). Give standoff_km and it closes, flips, brakes and holds that "
+                    "range instead (arrival_closing_kps = closing speed still allowed on "
+                    "the first arrival, capped so the overshoot is stopped inside the "
+                    "standoff). HOLD_RANGE: keep range_km (default: the range when first "
+                    "ordered; renewing keeps it) to target_id - closes or opens to it, then "
+                    "cancels closure and holds (the anti-merge maneuver). EVASIVE: threat-aware defense; with no threat it "
+                    "weaves around the CURRENT course (never chases, never brakes). BRAKE: "
+                    "burn against own velocity (world frame). MAINTAIN: coast. PADLOCK: coast "
+                    "with the nose tracking the target (spinal on him). HEADING: fly a "
+                    "world-frame DIRECTION (heading_direction): it turns first, then burns at "
+                    "throttle (the drive thrusts along the nose) and never brakes; throttle 0 "
+                    "= attitude only (nose turns on RCS, zero velocity change). A direction "
+                    "is not a destination: to go TO a position use toward_point (km) - the "
+                    "ship flies there and STOPS (flip and brake timed for it); toward_ship "
+                    "flies to that ship and falls in alongside it, matching its velocity. "
+                    "evade ('full' | 'dodge') adds threat-aware evasion to any "
+                    "maneuver but EVASIVE: it flies the ship only while a torpedo or slug is "
+                    "inbound ('dodge' never runs from a guided torpedo, presenting armor in "
+                    "its final seconds instead). Range control = HEADING: "
+                    "get_battle_state.range_control lists ready-made headings per enemy group "
+                    "(cancel closure, open range, pass wide, flank). ship_id \"all\" orders "
+                    "the whole fleet: HEADING flies one heading as a formation (throttle is a "
+                    "fraction of the SLOWEST hull's acceleration, each hull scaled, burns start "
+                    "together; toward_point/toward_ship become the heading from the fleet "
+                    "centre - it does not brake there, re-issue it), any other maneuver is "
+                    "given to every ship."
                 ),
                 inputSchema={
                     "type": "object",
@@ -560,14 +577,21 @@ def create_mcp_server(
                         "ship_id": {
                             "type": "string",
                             "description": (
-                                "ID of the ship, or \"all\" (HEADING only) for a "
-                                "formation-matched heading for the whole fleet"
+                                "ID of the ship, or \"all\" for the whole fleet (HEADING as "
+                                "a formation-matched heading)"
                             ),
                         },
                         "maneuver_type": {
                             "type": "string",
-                            "enum": ["INTERCEPT", "EVASIVE", "BRAKE", "MAINTAIN", "PADLOCK", "HEADING"],
-                            "description": "Type of maneuver: INTERCEPT (approach target), EVASIVE (dodge), BRAKE (slow down), MAINTAIN (coast), PADLOCK (track target, no thrust), HEADING (fly in direction)",
+                            "enum": ["INTERCEPT", "HOLD_RANGE", "EVASIVE", "BRAKE", "MAINTAIN",
+                                     "PADLOCK", "HEADING"],
+                            "description": (
+                                "Type of maneuver: INTERCEPT (approach target; never brakes "
+                                "unless standoff_km), HOLD_RANGE (keep range_km to target), "
+                                "EVASIVE (dodge), BRAKE (slow down), MAINTAIN (coast), PADLOCK "
+                                "(track target, no thrust), HEADING (fly a direction / toward a "
+                                "point or ship)"
+                            ),
                         },
                         "throttle": {
                             "type": "number",
@@ -580,7 +604,43 @@ def create_mcp_server(
                         },
                         "target_id": {
                             "type": "string",
-                            "description": "Target ship ID (required for INTERCEPT, EVASIVE, PADLOCK)",
+                            "description": (
+                                "Target ship ID (or name) for INTERCEPT, HOLD_RANGE, PADLOCK; "
+                                "default: the ship's primary target"
+                            ),
+                        },
+                        "standoff_km": {
+                            "type": "number",
+                            "minimum": 0,
+                            "description": (
+                                "INTERCEPT: stop closing at this range and hold it (the flip "
+                                "and braking burn are timed for you)"
+                            ),
+                        },
+                        "arrival_closing_kps": {
+                            "type": "number",
+                            "minimum": 0,
+                            "description": (
+                                "INTERCEPT: closing speed still allowed on reaching standoff_km "
+                                "(default 0 = arrive matched); first arrival only, capped so the "
+                                "overshoot is stopped inside the standoff"
+                            ),
+                        },
+                        "range_km": {
+                            "type": "number",
+                            "minimum": 0,
+                            "description": (
+                                "HOLD_RANGE: the range to keep (default: the range when first "
+                                "ordered; renewing keeps it)"
+                            ),
+                        },
+                        "evade": {
+                            "type": "string",
+                            "enum": ["full", "dodge"],
+                            "description": (
+                                "Evasion overlay while a threat is inbound: 'full' = EVASIVE "
+                                "under threat, 'dodge' = never runs from a guided torpedo"
+                            ),
                         },
                         "heading_direction": {
                             "type": "object",
@@ -589,7 +649,7 @@ def create_mcp_server(
                                 "normalized). Same coordinate system as position_km and "
                                 "velocity_vector in get_battle_state - NOT relative to the "
                                 "ship's nose. To fly at an enemy, use "
-                                "(enemy.position_km - own.position_km)."
+                                "(enemy.position_km - own.position_km), or toward_ship."
                             ),
                             "properties": {
                                 "x": {"type": "number", "description": "World X component"},
@@ -597,6 +657,26 @@ def create_mcp_server(
                                 "z": {"type": "number", "description": "World Z component"}
                             },
                             "required": ["x", "y", "z"]
+                        },
+                        "toward_point": {
+                            "type": "object",
+                            "description": (
+                                "HEADING instead of heading_direction: a WORLD position in km "
+                                "(the frame of position_km); the ship flies there and stops"
+                            ),
+                            "properties": {
+                                "x": {"type": "number", "description": "World X, km"},
+                                "y": {"type": "number", "description": "World Y, km"},
+                                "z": {"type": "number", "description": "World Z, km"}
+                            },
+                            "required": ["x", "y", "z"]
+                        },
+                        "toward_ship": {
+                            "type": "string",
+                            "description": (
+                                "HEADING instead of heading_direction: a ship id or name; flies "
+                                "to it and falls in alongside, matching its velocity"
+                            ),
                         },
                     },
                     "required": ["ship_id", "maneuver_type"],
@@ -973,30 +1053,44 @@ def create_mcp_server(
 
         elif name == "set_maneuver":
             from .range_control import is_fleet_alias
-            fleet_heading = (is_fleet_alias(arguments.get("ship_id"))
-                             and arguments.get("maneuver_type") == "HEADING")
-            err = None if fleet_heading else validate_ship_id(arguments.get("ship_id"))
+            from .maneuver_orders import (
+                MCP_MANEUVER_OPTIONS, ManeuverArgError, mcp_maneuver_check)
+            maneuver_type = arguments.get("maneuver_type")
+            if maneuver_type == "EVADE":
+                maneuver_type = "EVASIVE"   # captains' name for it
+            fleet = is_fleet_alias(arguments.get("ship_id"))
+            err = None if fleet else validate_ship_id(arguments.get("ship_id"))
             if err:
                 return [TextContent(type="text", text=f"ERROR: {err}")]
-            if fleet_heading and not arguments.get("heading_direction"):
-                return [TextContent(type="text", text=(
-                    "ERROR: ship_id 'all' needs maneuver_type HEADING with heading_direction"))]
-            maneuver_type = arguments.get("maneuver_type")
-            valid_maneuvers = ["INTERCEPT", "EVASIVE", "BRAKE", "MAINTAIN", "PADLOCK", "HEADING"]
+            valid_maneuvers = ["INTERCEPT", "HOLD_RANGE", "EVASIVE", "BRAKE", "MAINTAIN",
+                               "PADLOCK", "HEADING"]
             if maneuver_type not in valid_maneuvers:
                 return [TextContent(
                     type="text",
                     text=f"ERROR: Unknown maneuver_type '{maneuver_type}'. Valid: {valid_maneuvers}",
                 )]
+            if maneuver_type == "HEADING" and not any(
+                    arguments.get(k) for k in ("heading_direction", "toward_point", "toward_ship")):
+                return [TextContent(type="text", text=(
+                    "ERROR: HEADING needs heading_direction, toward_point or toward_ship"))]
+            try:
+                notes = mcp_maneuver_check(maneuver_type, arguments)
+            except ManeuverArgError as e:
+                return [TextContent(type="text", text=f"ERROR: {e}")]
+            parameters = {
+                "maneuver_type": maneuver_type,
+                "throttle": arguments.get("throttle", 1.0),
+                "target_id": arguments.get("target_id"),
+                "heading_direction": arguments.get("heading_direction"),
+            }
+            # Optional parameters ride along only when given.
+            for key in MCP_MANEUVER_OPTIONS:
+                if arguments.get(key) not in (None, ""):
+                    parameters[key] = arguments[key]
             command = MCPCommand(
                 command_type=MCPCommandType.SET_MANEUVER,
                 ship_id=arguments.get("ship_id"),
-                parameters={
-                    "maneuver_type": arguments.get("maneuver_type"),
-                    "throttle": arguments.get("throttle", 1.0),
-                    "target_id": arguments.get("target_id"),
-                    "heading_direction": arguments.get("heading_direction"),
-                },
+                parameters=parameters,
                 timestamp=timestamp,
             )
             await add_command(command)
@@ -1004,10 +1098,13 @@ def create_mcp_server(
             if arguments.get("heading_direction"):
                 hd = arguments.get("heading_direction")
                 heading_info = f" direction=({hd.get('x', 0)}, {hd.get('y', 0)}, {hd.get('z', 0)})"
-            return [TextContent(
-                type="text",
-                text=f"Maneuver set for {arguments.get('ship_id')}: {arguments.get('maneuver_type')}{heading_info}",
-            )]
+            extra = "".join(f" {k}={arguments[k]}" for k in MCP_MANEUVER_OPTIONS
+                            if arguments.get(k) not in (None, ""))
+            text = (f"Maneuver set for {arguments.get('ship_id')}: "
+                    f"{maneuver_type}{heading_info}{extra}")
+            if notes:
+                text += "\n" + "\n".join(f"NOTE: {n}" for n in notes)
+            return [TextContent(type="text", text=text)]
 
         elif name == "set_weapons_order":
             err = validate_ship_id(arguments.get("ship_id"))

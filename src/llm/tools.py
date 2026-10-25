@@ -25,34 +25,104 @@ CAPTAIN_TOOLS_BASE = [
         "type": "function",
         "function": {
             "name": "set_maneuver",
-            "description": "Set ship maneuver until the next decision checkpoint",
+            "description": (
+                "Set ship maneuver until the next decision checkpoint. ONE maneuver per "
+                "decision: set_maneuver and set_heading share a single slot and only the "
+                "first call counts. To close in AND dodge torpedoes, add evade to "
+                "INTERCEPT/HOLD_RANGE instead of a second call."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "maneuver_type": {
                         "type": "string",
-                        "enum": ["INTERCEPT", "EVADE", "BRAKE", "MAINTAIN", "PADLOCK"],
+                        "enum": ["INTERCEPT", "HOLD_RANGE", "EVADE", "BRAKE", "MAINTAIN", "PADLOCK"],
                         "description": (
-                            "INTERCEPT: Burn toward target - first approach or finishing a "
-                            "cripple only; it builds closure that ends in a merge. "
+                            "INTERCEPT: burn toward the target on a collision course. Plain "
+                            "INTERCEPT NEVER BRAKES: it keeps building closure and passes "
+                            "THROUGH the target at full closing speed (a merge - seconds of "
+                            "fire, then flying apart). Give standoff_km and it closes, flips, "
+                            "brakes and holds that range instead. "
+                            "HOLD_RANGE: keep range_km (default: the range when first ordered - "
+                            "renewing the order keeps it) to the target - closes or opens to it, "
+                            "then cancels closure and holds it (the anti-merge maneuver; matches "
+                            "his course and burn as he moves; if he out-accelerates you it "
+                            "matches his burn and buys time instead of closing). "
                             "EVADE: Threat-aware defense - jinks vs gun fire; vs guided "
                             "torpedoes auto-RUNS (cuts closure, buys PD dwell) and in the "
-                            "final seconds auto-PRESENTS your thickest armor. The ONLY "
-                            "maneuver that dodges blinded torpedoes - use it under torpedo fire. "
-                            "With no threat it weaves around your CURRENT course: never "
+                            "final seconds auto-PRESENTS your thickest armor. Dodges blinded "
+                            "torpedoes - use it (or evade on another maneuver) under torpedo "
+                            "fire. With no threat it weaves around your CURRENT course: never "
                             "chases, never brakes. "
-                            "BRAKE: Flip and burn against your own velocity. "
+                            "BRAKE: Flip and burn against your own velocity (world frame, not "
+                            "relative to the enemy - HOLD_RANGE matches an enemy). "
                             "MAINTAIN: Coast at current velocity - no thrust, no tracking. "
                             "PADLOCK: Coast while tracking target with nose - fire spinal during "
-                            "passes (no closing thrust). To control RANGE use set_heading with a "
-                            "vector from RANGE CONTROL."
+                            "passes (no closing thrust). For a world direction, a position or "
+                            "a ship's bearing use set_heading (RANGE CONTROL lists ready-made "
+                            "headings)."
                         )
                     },
                     "throttle": {
                         "type": "number",
                         "minimum": 0,
                         "maximum": 1,
-                        "description": "Throttle level 0.0-1.0 (default 1.0)"
+                        "description": (
+                            "Throttle level 0.0-1.0 (default 1.0). Caps every burn of the "
+                            "maneuver, braking included."
+                        )
+                    },
+                    "target_id": {
+                        "type": "string",
+                        "description": (
+                            "Ship to fly relative to (INTERCEPT, HOLD_RANGE, PADLOCK): name or "
+                            "id. Default: your primary target. Does NOT change what your guns "
+                            "shoot at (that is set_primary_target)."
+                        )
+                    },
+                    "standoff_km": {
+                        "type": "number",
+                        "minimum": 0,
+                        "description": (
+                            "INTERCEPT only: stop closing at this range and hold it. The flip "
+                            "and the braking burn are timed for you from your closing speed "
+                            "and acceleration. Without it INTERCEPT never brakes."
+                        )
+                    },
+                    "arrival_closing_kps": {
+                        "type": "number",
+                        "minimum": 0,
+                        "description": (
+                            "INTERCEPT only: the closing speed you may still carry when you "
+                            "reach standoff_km (default 0 = arrive matched). More keeps "
+                            "momentum but carries you inside the standoff before it holds. "
+                            "First arrival only, and capped so the overshoot can still be "
+                            "stopped well inside the standoff - you never fly through the "
+                            "target. Without standoff_km there is no room to overshoot: you "
+                            "arrive matched on the target."
+                        )
+                    },
+                    "range_km": {
+                        "type": "number",
+                        "minimum": 0,
+                        "description": (
+                            "HOLD_RANGE only: the range to keep (default: the range when the "
+                            "order starts; renewing the order keeps that range)."
+                        )
+                    },
+                    "evade": {
+                        "type": "string",
+                        "enum": ["full", "dodge"],
+                        "description": (
+                            "Evasion on top of INTERCEPT/HOLD_RANGE/PADLOCK/BRAKE/MAINTAIN: "
+                            "while a torpedo or slug is actually inbound, threat-aware evasion "
+                            "flies the ship, and the maneuver resumes once it is clear. "
+                            "'full' = exactly EVADE under threat (RUNS from guided torpedoes - "
+                            "buys PD time, costs closure). 'dodge' = keeps your course against "
+                            "a guided torpedo until its final seconds, then presents your "
+                            "thickest armor; still jinks slugs and blinded torpedoes. Omit for "
+                            "no evasion."
+                        )
                     }
                 },
                 "required": ["maneuver_type"]
@@ -186,12 +256,20 @@ CAPTAIN_TOOLS_BASE = [
         "function": {
             "name": "set_heading",
             "description": (
-                "Point the ship along a WORLD-frame direction. With throttle > 0 it turns "
-                "onto the heading first, then burns (the drive thrusts along the NOSE): "
-                "range control - cancel closure, open range, pass wide, flank (ready-made "
-                "vectors in RANGE CONTROL). With throttle 0 it is ATTITUDE ONLY: the nose "
-                "turns onto the direction on RCS and you coast with zero change of velocity "
-                "(e.g. spinal on the enemy; PADLOCK tracks a moving target and turns faster)."
+                "Fly along a WORLD-frame DIRECTION, or toward a position (toward_point) or a "
+                "ship (toward_ship) - give exactly one. With throttle > 0 it turns onto the "
+                "heading first, then burns (the drive thrusts along the NOSE): range control - "
+                "cancel closure, open range, pass wide, flank (ready-made vectors in RANGE "
+                "CONTROL). With throttle 0 it is ATTITUDE ONLY: the nose turns on RCS and you "
+                "coast with zero change of velocity (e.g. spinal on the enemy; PADLOCK tracks a "
+                "moving target and turns faster). A DIRECTION IS NOT A DESTINATION: direction "
+                "(90,55,10) flies along that vector from wherever you are and never brakes, "
+                "so to go TO a position copied from an order use toward_point: the ship flies "
+                "there and STOPS (burn, flip and brake timed for you, sideways drift "
+                "cancelled). toward_ship flies to that ship and falls in alongside it, "
+                "matching its velocity (rejoin a friendly; to stand off an enemy use "
+                "set_maneuver INTERCEPT with standoff_km, or HOLD_RANGE). Throttle caps every "
+                "burn; throttle 0 only turns the nose onto the current bearing."
             ),
             "parameters": {
                 "type": "object",
@@ -202,7 +280,8 @@ CAPTAIN_TOOLS_BASE = [
                             "Direction vector in WORLD-frame coordinates (will be normalized). "
                             "NOT ship-relative: these are the same world axes used for ship "
                             "positions. Enemy bearings shown as ahead/starboard/above are "
-                            "relative to your nose - use your 'Nose pointing' vector to convert."
+                            "relative to your nose - use your 'Nose pointing' vector to convert. "
+                            "A direction, never a position: for a position use toward_point."
                         ),
                         "properties": {
                             "x": {
@@ -220,6 +299,29 @@ CAPTAIN_TOOLS_BASE = [
                         },
                         "required": ["x", "y", "z"]
                     },
+                    "toward_point": {
+                        "type": "object",
+                        "description": (
+                            "Instead of direction: a WORLD position in km (the frame of ship "
+                            "positions, e.g. a rally point or fleet centre from your orders). "
+                            "The ship flies there and stops, holding position at it."
+                        ),
+                        "properties": {
+                            "x": {"type": "number", "description": "World X, km"},
+                            "y": {"type": "number", "description": "World Y, km"},
+                            "z": {"type": "number", "description": "World Z, km"}
+                        },
+                        "required": ["x", "y", "z"]
+                    },
+                    "toward_ship": {
+                        "type": "string",
+                        "description": (
+                            "Instead of direction: a ship name or id. Flies to that ship and "
+                            "falls in alongside it, matching its velocity (rejoin a friendly; "
+                            "against an enemy use set_maneuver INTERCEPT standoff_km / "
+                            "HOLD_RANGE)."
+                        )
+                    },
                     "throttle": {
                         "type": "number",
                         "minimum": 0.0,
@@ -228,9 +330,18 @@ CAPTAIN_TOOLS_BASE = [
                             "Throttle level (0.0-1.0). 0 = attitude only: turn the nose, "
                             "no burn, velocity unchanged."
                         )
+                    },
+                    "evade": {
+                        "type": "string",
+                        "enum": ["full", "dodge"],
+                        "description": (
+                            "Optional evasion on top of the heading, as in set_maneuver: "
+                            "'full' = EVADE while a threat is inbound, 'dodge' = same but "
+                            "never runs from a guided torpedo. Back on the heading when clear."
+                        )
                     }
                 },
-                "required": ["direction", "throttle"]
+                "required": ["throttle"]
             }
         }
     },

@@ -123,6 +123,10 @@ class LLMCaptain:
         # the model never learns that a call was rejected and repeats it forever.
         self.pending_tool_errors: List[str] = []
         self.last_tool_errors: List[str] = []
+        # Accepted-with-a-warning results (e.g. a launch the engine check says
+        # is ESCAPABLE or OVERKILL): the tool's answer, replayed next turn.
+        self.pending_tool_notes: List[str] = []
+        self.last_tool_notes: List[str] = []
 
         # Captain's log: self-authored notes (log_note tool) echoed back into
         # every subsequent turn. The rest of the prompt is telemetry the harness
@@ -342,6 +346,8 @@ class LLMCaptain:
         # start a fresh error bucket for the calls we are about to execute.
         self.last_tool_errors = self.pending_tool_errors
         self.pending_tool_errors = []
+        self.last_tool_notes = self.pending_tool_notes
+        self.pending_tool_notes = []
 
         # Build history context
         decision_history = self._format_decision_history(last_n=5)
@@ -513,9 +519,20 @@ class LLMCaptain:
                 target = tc.arguments.get("target_name", "?")
                 actions.append(f"TARGET: {target}")
             elif tc.name == "set_heading":
-                direction = tc.arguments.get("direction", {})
+                direction = tc.arguments.get("direction") or {}
                 throttle = tc.arguments.get("throttle", 1.0)
-                actions.append(f"HEADING ({direction.get('x', 0):.1f},{direction.get('y', 0):.1f},{direction.get('z', 0):.1f}) @ {throttle*100:.0f}%")
+                point = tc.arguments.get("toward_point")
+                if tc.arguments.get("toward_ship"):
+                    where = f"to ship {tc.arguments['toward_ship']}"
+                elif isinstance(point, dict):
+                    where = (f"to point ({point.get('x', 0)},{point.get('y', 0)},"
+                             f"{point.get('z', 0)}) km")
+                elif isinstance(direction, dict):
+                    where = (f"({direction.get('x', 0):.1f},{direction.get('y', 0):.1f},"
+                             f"{direction.get('z', 0):.1f})")
+                else:
+                    where = "(?)"
+                actions.append(f"HEADING {where} @ {throttle*100:.0f}%")
             elif tc.name == "set_weapons_order":
                 spinal = tc.arguments.get("spinal_mode")
                 turret = tc.arguments.get("turret_mode")
@@ -765,13 +782,20 @@ class LLMCaptain:
         print(f"[CAPTAIN {self.name}] {message}")
         self.pending_tool_errors.append(message)
 
+    def _record_tool_note(self, message: str) -> None:
+        """An accepted call's answer worth seeing next turn (e.g. a launch warning)."""
+        self.pending_tool_notes.append(message)
+
     def _format_tool_errors(self) -> str:
-        """Format last turn's rejected tool calls for the next prompt."""
-        if not self.last_tool_errors:
-            return ""
-        lines = ["ERRORS FROM YOUR LAST ORDERS (these calls were REJECTED, reissue correctly):"]
-        for err in self.last_tool_errors[-5:]:
-            lines.append(f"  - {err}")
+        """Format last turn's rejected tool calls (and launch warnings) for the next prompt."""
+        lines = []
+        if self.last_tool_errors:
+            lines.append("ERRORS FROM YOUR LAST ORDERS (these calls were REJECTED, reissue correctly):")
+            lines.extend(f"  - {err}" for err in self.last_tool_errors[-5:])
+        notes = getattr(self, "last_tool_notes", None) or []
+        if notes:
+            lines.append("ENGINE NOTES ON YOUR LAST ORDERS (accepted, but check these):")
+            lines.extend(f"  - {note}" for note in notes[-4:])
         return "\n".join(lines)
 
     # Keep the echoed log small: it rides in the volatile user turn every
@@ -1601,6 +1625,8 @@ class LLMCaptain:
 
         if name == "set_maneuver":
             from ..simulation import Maneuver, ManeuverType
+            from .maneuver_orders import (
+                ManeuverArgError, maneuver_extras, resolve_ship, ship_choices)
             try:
                 # Map LLM-friendly names to actual enum values
                 maneuver_name = args["maneuver_type"]
@@ -1608,29 +1634,58 @@ class LLMCaptain:
                     maneuver_name = "EVASIVE"  # LLM uses EVADE, enum uses EVASIVE
                 maneuver_type = ManeuverType[maneuver_name]
                 throttle = args.get("throttle", 1.0)
-
-                # For INTERCEPT and PADLOCK, use primary target or first enemy
-                target_id = None
-                if maneuver_type in (ManeuverType.INTERCEPT, ManeuverType.PADLOCK):
-                    if self.primary_target_id:
-                        target_id = self.primary_target_id
-                    else:
-                        enemies = simulation.get_enemy_ships(ship_id)
-                        target_id = enemies[0].ship_id if enemies else None
-
-                return Maneuver(
-                    maneuver_type=maneuver_type,
-                    target_id=target_id,
-                    start_time=simulation.current_time,
-                    duration=getattr(simulation, "decision_interval", 30.0),
-                    throttle=throttle,
-                )
             except (KeyError, ValueError) as e:
                 self._record_tool_error(
                     f"set_maneuver: invalid maneuver_type {args.get('maneuver_type')!r} ({e}). "
                     f"Valid values: {', '.join(m.name for m in ManeuverType)}"
                 )
                 return None
+
+            # INTERCEPT / PADLOCK / HOLD_RANGE fly relative to a ship: the
+            # one named in target_id (one call instead of set_primary_target
+            # first - and it leaves the gun target alone), else the primary
+            # target, else the first enemy.
+            target_id = None
+            if maneuver_type in (ManeuverType.INTERCEPT, ManeuverType.PADLOCK,
+                                 ManeuverType.HOLD_RANGE):
+                ref = args.get("target_id")
+                if ref is not None and str(ref).strip():
+                    target = resolve_ship(simulation, ship_id, ref)
+                    if target is None:
+                        self._record_tool_error(
+                            f"set_maneuver: no live ship named {ref!r} for target_id. "
+                            f"Ships: {ship_choices(simulation, ship_id)}")
+                        return None
+                    target_id = target.ship_id
+                elif self.primary_target_id:
+                    target_id = self.primary_target_id
+                else:
+                    enemies = simulation.get_enemy_ships(ship_id)
+                    target_id = enemies[0].ship_id if enemies else None
+
+            # Optional parameters (standoff, arrival speed, hold range, evade):
+            # none given -> exactly the maneuver this tool always built.
+            extras: Dict[str, Any] = {}
+            if maneuver_type == ManeuverType.HOLD_RANGE or any(
+                    args.get(k) not in (None, "") for k in
+                    ("standoff_km", "arrival_closing_kps", "range_km", "evade")):
+                try:
+                    extras, notes = maneuver_extras(simulation, ship_id, maneuver_type,
+                                                    args, target_id)
+                except ManeuverArgError as e:
+                    self._record_tool_error(f"set_maneuver: {e}")
+                    return None
+                for note in notes:
+                    self._record_tool_note(f"set_maneuver {maneuver_type.name}: {note}")
+
+            return Maneuver(
+                maneuver_type=maneuver_type,
+                target_id=target_id,
+                start_time=simulation.current_time,
+                duration=getattr(simulation, "decision_interval", 30.0),
+                throttle=throttle,
+                **extras,
+            )
 
         elif name == "set_primary_target":
             # Set the primary target for this captain
@@ -1659,10 +1714,47 @@ class LLMCaptain:
             return None
 
         elif name == "set_heading":
-            # Set a course in a specific 3D direction
+            # Set a course in a specific 3D direction - or toward a position /
+            # a ship's current bearing (toward_point / toward_ship).
             from ..simulation import Maneuver, ManeuverType
-            direction = args.get("direction", {"x": 1, "y": 0, "z": 0})
+            from .maneuver_orders import (
+                ManeuverArgError, heading_target, parse_evade, position_like_direction_note,
+                usable_direction)
             throttle = args.get("throttle", 1.0)
+            extras: Dict[str, Any] = {}
+            try:
+                live, notes = heading_target(simulation, ship_id, args)
+                if args.get("evade") not in (None, ""):
+                    evade = parse_evade(args.get("evade"))
+                    if evade is not None:
+                        extras["evade"] = evade
+            except ManeuverArgError as e:
+                self._record_tool_error(f"set_heading: {e}")
+                return None
+            for note in notes:
+                self._record_tool_note(f"set_heading: {note}")
+            if live is not None:
+                extras.update(live)
+                direction = extras.pop("heading_direction", None)
+            else:
+                direction = args.get("direction")
+                if not usable_direction(direction):
+                    # No silent default: a call without a usable direction
+                    # used to burn along world +X.
+                    self._record_tool_error(
+                        f"set_heading: needs direction {{x, y, z}} (a world-frame direction, "
+                        f"not all zero), toward_point {{x, y, z}} km or toward_ship - got "
+                        f"direction={direction!r}")
+                    return None
+                # A position pasted from the orders is still flown as the
+                # direction it literally is - but say so (CP-03).
+                if isinstance(direction, dict) and (self.admiral_orders or self.fleet_directive):
+                    texts = [getattr(o, "order_text", "") or "" for o in self.admiral_orders or []]
+                    texts.append(self.fleet_directive or "")
+                    note = position_like_direction_note(
+                        direction, simulation.get_ship(ship_id), texts)
+                    if note:
+                        self._record_tool_note(note)
 
             return Maneuver(
                 maneuver_type=ManeuverType.HEADING,
@@ -1671,6 +1763,7 @@ class LLMCaptain:
                 duration=getattr(simulation, "decision_interval", 30.0),
                 throttle=throttle,
                 heading_direction=direction,
+                **extras,
             )
 
         elif name == "set_weapons_order":
