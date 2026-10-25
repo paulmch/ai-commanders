@@ -1,13 +1,17 @@
 /**
  * HudIndex - the spectator HUD's DOM-free view of a recording.
  *
- * Built once per parse / live append (BattleLoader.rebuildDerivedState) from
- * the sorted event list, so every HUD surface (combat log, command net, kill
- * feed, scoreboard, timeline markers) is a pure function of the playhead:
- * binary-search the precomputed, time-sorted rows instead of re-querying
- * events every frame. Rows carry the source event id, which is the identity
- * the DOM layers dedupe on - a parked playhead or a late same-time arrival
- * can never insert a row twice.
+ * Built once per parse (BattleLoader.rebuildDerivedState) from the sorted
+ * event list, and EXTENDED on each live append from the delta - the events
+ * and frames that arrived, all sorting after everything already indexed
+ * (appendHudIndex; LV-15: a poll costs what it brings, not the whole
+ * battle). Either way the result is the same object a single parse of the
+ * whole recording builds, field for field. Every HUD surface (combat log,
+ * command net, kill feed, scoreboard, timeline markers) is then a pure
+ * function of the playhead: binary-search the precomputed, time-sorted rows
+ * instead of re-querying events every frame. Rows carry the source event
+ * id, which is the identity the DOM layers dedupe on - a parked playhead or
+ * a late same-time arrival can never insert a row twice.
  *
  * Understands both the structured comms schema (comms_message /
  * comms_delivered / captain_report) and every legacy shape (message,
@@ -115,14 +119,10 @@ export function legacyReport(decision) {
 
 const CHECKPOINT_SOURCES = new Set(['decision_point_reached', 'captain_decision', 'admiral_directive', 'admiral_order']);
 
-/**
- * [{t, n}] sorted. Numbered `checkpoint` events win; otherwise any decision
- * point (t > 0: the t=0 decision point precedes the first orders) counts in
- * order, CP1 first - the live HUD's numbering.
- */
-export function buildCheckpoints(events) {
-  const times = new Map();
-  for (const e of events) {
+/** Fold events[from..] into checkpoint times: Map t -> recorded number | null. */
+function addCheckpointTimes(times, events, from = 0) {
+  for (let i = from; i < events.length; i++) {
+    const e = events[i];
     const t = e.timestamp;
     if (!(t > 0)) continue;
     if (e.event_type === 'checkpoint') {
@@ -132,8 +132,20 @@ export function buildCheckpoints(events) {
       times.set(t, null);
     }
   }
-  return [...times.entries()].sort((a, b) => a[0] - b[0])
-    .map(([t, n], i) => ({ t, n: n ?? i + 1 }));
+}
+
+const checkpointList = times => [...times.entries()].sort((a, b) => a[0] - b[0])
+  .map(([t, n], i) => ({ t, n: n ?? i + 1 }));
+
+/**
+ * [{t, n}] sorted. Numbered `checkpoint` events win; otherwise any decision
+ * point (t > 0: the t=0 decision point precedes the first orders) counts in
+ * order, CP1 first - the live HUD's numbering.
+ */
+export function buildCheckpoints(events) {
+  const times = new Map();
+  addCheckpointTimes(times, events);
+  return checkpointList(times);
 }
 
 /** Checkpoint number in force at time t (0 before the first). */
@@ -160,14 +172,22 @@ export const COMMS_GROUPS = {
   command: new Set(['plan', 'directive', 'order']),
   reports: new Set(['report', 'log', 'discussion']),
   chatter: new Set(['net', 'enemy', 'message', 'engine']),
-  issues: null // status DEVIATE / UNABLE, errors and system rows (see commsMatches)
+  issues: null // status DEVIATE / UNABLE, compliance deviations, errors and system rows (see commsMatches)
 };
 
-export function commsMatches(entry, faction = 'all', group = 'all') {
+/**
+ * Does a row pass the panel filter? `ctx` {deliveries, t} makes the ISSUES
+ * group time-aware: an ACK whose compliance the admiral later reads as off
+ * orders (comms_delivered.compliance) joins it once that copy is delivered.
+ */
+export function commsMatches(entry, faction = 'all', group = 'all', ctx = null) {
   if (faction !== 'all' && entry.faction !== faction && !entry.open && entry.faction) return false;
   if (group === 'all') return true;
-  if (group === 'issues') return entry.kind === 'error' || entry.kind === 'system' ||
-    entry.status === 'DEVIATE' || entry.status === 'UNABLE' || entry.priority === 'CRITICAL';
+  if (group === 'issues') {
+    if (entry.kind === 'error' || entry.kind === 'system' ||
+      entry.status === 'DEVIATE' || entry.status === 'UNABLE' || entry.priority === 'CRITICAL') return true;
+    return !!(ctx ? complianceAt(entry, ctx.deliveries, ctx.t) : entry.compliance)?.deviated;
+  }
   return COMMS_GROUPS[group]?.has(entry.kind) ?? true;
 }
 
@@ -190,8 +210,18 @@ function salvoChips(d, ships) {
   return chips;
 }
 
-function complianceChips(c, ships) {
+/** 'maneuver: ordered INTERCEPT, flew EVADE' -> 'MANEUVER: ordered INTERCEPT, flew EVADE'. */
+const deviationChip = line => String(line).replace(/^\s*([a-z][\w ]*):/i, (_, label) => `${label.toUpperCase()}:`);
+
+/**
+ * Chips for a compliance block. The engine's verdict (`deviations`, one
+ * line per mismatch, [] when the ship complied) is used whenever it was
+ * recorded; only schema-only blocks without it fall back to comparing the
+ * ordered/executed fields here.
+ */
+export function complianceChips(c, ships = {}) {
   if (!c) return [];
+  if (Array.isArray(c.deviations)) return c.deviations.filter(Boolean).map(deviationChip);
   const chips = [];
   const same = (a, b) => a == null || b == null || String(a).toUpperCase() === String(b).toUpperCase();
   if (!same(c.ordered_maneuver, c.executed_maneuver)) chips.push(`ORDERED ${c.ordered_maneuver} · FLEW ${c.executed_maneuver}`);
@@ -204,40 +234,74 @@ function complianceChips(c, ships) {
   return chips;
 }
 
+/** {chips, deviated, final} summary of a compliance block (null when none was recorded). */
+export function summarizeCompliance(c, ships = {}) {
+  if (!c || typeof c !== 'object') return null;
+  const chips = complianceChips(c, ships);
+  return { chips, deviated: chips.length > 0, final: c.final === true };
+}
+
 /**
- * Normalized command-net rows, time-sorted. Each row:
- * {id, eventId, t, cp, faction, open, kind, tag, from, fromId, to, toIds,
- *  text, reply, status, priority, chips[], msgId, deliverAt, shipId, decisionId}
+ * The compliance a report row shows at playhead t: the copy delivered to the
+ * admiral (final: rounds that actually left the tubes over the interval)
+ * once that delivery has happened, else the one filed with the report
+ * (rounds committed). {chips, deviated, final, delivered, at} or null.
  */
-export function buildComms(events, ids, ships, checkpoints) {
-  const rows = [];
-  const seen = new Set();
-  const cpOf = e => Number.isFinite(e.data?.checkpoint) ? e.data.checkpoint : checkpointAt(checkpoints, e.timestamp);
-  // A structured captain_report supersedes the same captain's legacy
-  // acknowledgment for that checkpoint (new recordings carry both).
-  const reported = new Set();
-  for (const e of events) {
-    if (e.event_type === 'captain_report' && e.ship_id) reported.add(`${e.ship_id}:${cpOf(e)}`);
+export function complianceAt(row, deliveries, t = Infinity) {
+  if (row.msgId && deliveries) {
+    const list = deliveries.get(row.msgId) || [];
+    for (let i = list.length - 1; i >= 0; i--) {
+      const x = list[i];
+      if (x.compliance && x.t <= t + 1e-6) return { ...x.compliance, delivered: true, at: x.t };
+    }
   }
-  // Latest decision per ship and time, so a report row can open its decision
+  return row.compliance ? { ...row.compliance, delivered: false, at: row.t } : null;
+}
+
+const commsRow = (e, id) => ({
+  eventId: id, t: e.timestamp, cp: 0, faction: null, open: false, from: '', fromId: null,
+  to: '', toIds: [], text: '', reply: '', status: null, priority: null, chips: [], msgId: null,
+  deliverAt: null, compliance: null, shipId: null, decisionId: null
+});
+
+/**
+ * Normalized command-net rows for events[from, to), time-sorted. Each row:
+ * {id, eventId, t, cp, faction, open, kind, tag, from, fromId, to, toIds,
+ *  text, reply, status, priority, chips[], msgId, deliverAt, compliance,
+ *  shipId, decisionId}
+ *
+ * Every cross-event link is local to one timestamp - a captain_report
+ * replaces its captain's legacy acknowledgment row recorded at the same
+ * time, a row's WHY opens the decision its ship recorded at that time - so
+ * the rows of a timestamp depend only on the events at that timestamp (plus
+ * the checkpoints before it). That is what lets a live append re-derive
+ * just the latest timestamp (HudBuilder) and still match a full build.
+ * @param {Object} o - {seen: ids already indexed (dedupe), interval: decision interval s}
+ */
+export function buildComms(events, ids, ships, checkpoints, { from = 0, to = events.length, seen = new Set(), interval = 30 } = {}) {
+  const rows = [];
+  const cpOf = e => Number.isFinite(e.data?.checkpoint) ? e.data.checkpoint : checkpointAt(checkpoints, e.timestamp);
+  const at = e => `${e.ship_id}:${e.timestamp}`;
+  // A structured captain_report supersedes the same captain's legacy
+  // acknowledgment (new recordings carry both, at the same time), and the
+  // latest decision per ship and time lets a row open its decision.
+  const reported = new Set();
   const decisionAt = new Map();
-  events.forEach((e, i) => {
-    if (e.event_type === 'captain_decision') decisionAt.set(`${e.ship_id}:${e.timestamp}`, ids[i]);
-  });
+  for (let i = from; i < to; i++) {
+    const e = events[i];
+    if (e.event_type === 'captain_report' && e.ship_id) reported.add(at(e));
+    else if (e.event_type === 'captain_decision') decisionAt.set(at(e), ids[i]);
+  }
 
   const push = (e, i, row) => {
     const id = row.id || ids[i];
     if (seen.has(id)) return;
     seen.add(id);
-    rows.push({
-      eventId: ids[i], t: e.timestamp, cp: cpOf(e), faction: null, open: false, from: '', fromId: null,
-      to: '', toIds: [], text: '', reply: '', status: null, priority: null, chips: [], msgId: null,
-      deliverAt: null, shipId: null, decisionId: decisionAt.get(`${e.ship_id}:${e.timestamp}`) || null,
-      ...row, id
-    });
+    rows.push({ ...commsRow(e, ids[i]), cp: cpOf(e), decisionId: decisionAt.get(at(e)) || null, ...row, id });
   };
 
-  events.forEach((e, i) => {
+  for (let i = from; i < to; i++) {
+    const e = events[i];
     const d = e.data || {};
     const ship = e.ship_id;
     switch (e.event_type) {
@@ -256,18 +320,25 @@ export function buildComms(events, ids, ships, checkpoints) {
         break;
       case 'captain_report': {
         const status = normalizeStatus(d.status);
-        const text = d.reason || d.intent || d.request?.text || '';
+        const faction = d.faction || factionOf(ship, ships);
+        const text = d.reason || d.intent || d.request?.text || (d.implicit && status === 'ACK' ? 'No report filed: implicit ACK, flying its orders.' : '');
         const extra = [];
         if (d.reason && d.intent && d.intent !== d.reason) extra.push(`Intent: ${d.intent}`);
         if (d.contact?.note) extra.push(`Contact: ${d.contact.note}`);
         if (d.request?.text && d.request.text !== text) extra.push(`Request: ${d.request.text}`);
-        const chips = complianceChips(d.compliance, ships);
+        const chips = [];
         if (d.contact?.ship) chips.push(`CONTACT ${d.contact.ship}${d.contact.assessment ? ' · ' + d.contact.assessment : ''}`);
         if (d.request?.kind) chips.push(`REQUEST ${String(d.request.kind).toUpperCase()}`);
+        // The report travels to the admiral, who reads it (with the engine's
+        // compliance refreshed) at its next turn: comms_delivered msg_id =
+        // report_id, recipient '<faction>_admiral'.
+        const routed = !!(d.report_id && faction);
         push(e, i, {
-          kind: 'report', tag: status, status, faction: d.faction || factionOf(ship, ships),
+          kind: 'report', tag: status, status, faction,
           from: d.ship_name || nameOf(ship, ships) || d.captain_name || '', fromId: ship || null, shipId: ship || null,
-          to: 'ADMIRAL', text, reply: extra.join(' · '), chips
+          to: 'ADMIRAL', toIds: routed ? [`${faction}_admiral`] : [], msgId: routed ? d.report_id : null,
+          deliverAt: routed ? e.timestamp + interval : null, compliance: summarizeCompliance(d.compliance, ships),
+          text, reply: extra.join(' · '), chips, decisionId: d.decision_event_id || decisionAt.get(at(e)) || null
         });
         break;
       }
@@ -278,7 +349,7 @@ export function buildComms(events, ids, ships, checkpoints) {
             text: 'Captain model call failed; the ship keeps its previous orders.', decisionId: ids[i] });
           break;
         }
-        if (reported.has(`${ship}:${cpOf(e)}`)) break;
+        if (reported.has(at(e))) break;
         const report = legacyReport(e);
         if (report) {
           push(e, i, { id: `${ids[i]}:report`, kind: 'report', tag: report.status, status: report.status, faction,
@@ -332,14 +403,15 @@ export function buildComms(events, ids, ships, checkpoints) {
         push(e, i, { kind: 'system', tag: 'DRAW OFFER', faction: factionOf(ship, ships), from: d.captain_name || nameOf(ship, ships), fromId: ship, shipId: ship, text: d.message || 'Proposes a draw.' });
         break;
     }
-  });
+  }
   return rows;
 }
 
-/** msg_id -> [{t, recipientId}] sorted. */
-export function buildDeliveries(events) {
-  const out = new Map();
-  for (const e of events) {
+/** Fold comms_delivered events[from..] into msg_id -> [{t, recipientId, compliance}] (re-sorting touched lists). */
+function addDeliveries(out, events, from = 0, ships = {}) {
+  const touched = new Set();
+  for (let i = from; i < events.length; i++) {
+    const e = events[i];
     if (e.event_type !== 'comms_delivered') continue;
     const d = e.data || {};
     if (!d.msg_id) continue;
@@ -347,19 +419,29 @@ export function buildDeliveries(events) {
     const list = out.get(d.msg_id);
     const recipientId = d.recipient_id || e.ship_id;
     if (!list.some(x => x.recipientId === recipientId)) {
-      list.push({ t: Number.isFinite(d.delivered_t) ? d.delivered_t : e.timestamp, recipientId });
+      // A captain report's delivery carries the compliance as the admiral read it
+      list.push({ t: Number.isFinite(d.delivered_t) ? d.delivered_t : e.timestamp, recipientId,
+        compliance: summarizeCompliance(d.compliance, ships) });
+      touched.add(list);
     }
   }
-  for (const list of out.values()) list.sort((a, b) => a.t - b.t);
+  for (const list of touched) list.sort((a, b) => a.t - b.t);
   return out;
+}
+
+/** msg_id -> [{t, recipientId, compliance}] sorted. */
+export function buildDeliveries(events, ships = {}) {
+  return addDeliveries(new Map(), events, 0, ships);
 }
 
 /**
  * Delivery state of a comms row at time t: null (no routing recorded),
  * {state: 'transit'|'partial'|'delivered'|'undelivered', done, total, at}.
- * 'undelivered' only once the recording is complete (no live data to come).
+ * 'undelivered' only once the recording is complete (no live data to come)
+ * and the due time - or the end of the recording, for traffic due after the
+ * battle ended - has passed.
  */
-export function deliveryAt(row, deliveries, t, complete = false) {
+export function deliveryAt(row, deliveries, t, complete = false, end = Infinity) {
   if (!row.msgId) return null;
   const list = deliveries.get(row.msgId) || [];
   const total = Math.max(row.toIds.length, list.length);
@@ -367,7 +449,9 @@ export function deliveryAt(row, deliveries, t, complete = false) {
   if (total === 0) return null;
   if (done.length >= total) return { state: 'delivered', done: done.length, total, at: done.at(-1).t };
   if (done.length > 0) return { state: 'partial', done: done.length, total, at: done.at(-1).t };
-  if (complete && list.length === 0 && (row.deliverAt == null || t >= row.deliverAt)) return { state: 'undelivered', done: 0, total, at: null };
+  if (complete && list.length === 0 && (row.deliverAt == null || t >= Math.min(row.deliverAt, end) - 1e-6)) {
+    return { state: 'undelivered', done: 0, total, at: null };
+  }
   return { state: 'transit', done: 0, total, at: row.deliverAt };
 }
 
@@ -381,90 +465,120 @@ const weaponOf = ordnance => {
 };
 
 /**
+ * Kill bookkeeping as three append-only folds - death events, first dying /
+ * destroyed flags per ship in the trace, hits per target - combined into
+ * the kill list on demand (a handful of lost ships).
+ */
+class KillFold {
+  constructor() {
+    this.byShip = new Map();
+    this.traceDying = new Map();
+    this.traceDead = new Map();
+    this.hitsOn = new Map();
+  }
+
+  events(events, ids, from = 0) {
+    const rec = id => {
+      if (!this.byShip.has(id)) this.byShip.set(id, { shipId: id, dyingT: null, destroyedT: null, detonateAt: null, killerId: null,
+        ordnanceId: null, cause: null, inferred: false, eventId: null });
+      return this.byShip.get(id);
+    };
+    for (let i = from; i < events.length; i++) {
+      const e = events[i];
+      const d = e.data || {};
+      // Every landed hit, for the killers the engine did not attribute
+      let target = null, shooter = null, ordnance = null;
+      if (e.event_type === 'torpedo_impact') { target = d.target_id; shooter = e.ship_id; ordnance = d.torpedo_id; }
+      else if (e.event_type === 'hit') { target = e.ship_id; shooter = d.shooter_id || d.source_ship_id; ordnance = d.projectile_id || 'proj'; }
+      if (target) {
+        if (!this.hitsOn.has(target)) this.hitsOn.set(target, []);
+        this.hitsOn.get(target).push({ t: e.timestamp, shooter, ordnance });
+      }
+      if (!e.ship_id) continue;
+      if (e.event_type === 'ship_dying') {
+        const r = rec(e.ship_id);
+        if (r.dyingT == null) {
+          r.dyingT = e.timestamp;
+          if (Number.isFinite(d.detonation_in_s)) r.detonateAt = e.timestamp + d.detonation_in_s;
+          r.killerId ??= d.killer_id || null;
+          r.ordnanceId ??= d.ordnance_id || null;
+          r.eventId ??= ids[i];
+        }
+      } else if (e.event_type === 'ship_destroyed') {
+        const r = rec(e.ship_id);
+        if (r.destroyedT == null) {
+          r.destroyedT = e.timestamp;
+          r.cause = d.cause || r.cause;
+          r.killerId ??= d.killer_id || null;
+          r.ordnanceId ??= d.ordnance_id || null;
+          r.eventId ??= ids[i];
+        }
+      } else if (e.event_type === 'reactor_meltdown') {
+        const r = rec(e.ship_id);
+        r.cause = 'reactor_overheat';
+        r.destroyedT ??= e.timestamp;
+        r.eventId ??= ids[i];
+      }
+    }
+  }
+
+  /** Pre-v3 recordings: deaths only exist as sim_trace flags. */
+  frames(frames) {
+    for (const frame of frames || []) {
+      for (const [id, s] of Object.entries(frame.ships || {})) {
+        if (s.dying && !this.traceDying.has(id)) this.traceDying.set(id, frame.t);
+        if (s.destroyed && !this.traceDead.has(id)) this.traceDead.set(id, frame.t);
+      }
+    }
+  }
+
+  kills(ships) {
+    const byShip = new Map([...this.byShip].map(([id, r]) => [id, { ...r }]));
+    const rec = id => {
+      if (!byShip.has(id)) byShip.set(id, { shipId: id, dyingT: null, destroyedT: null, detonateAt: null, killerId: null,
+        ordnanceId: null, cause: null, inferred: false, eventId: null });
+      return byShip.get(id);
+    };
+    for (const [id, t] of this.traceDead) {
+      const r = rec(id);
+      r.destroyedT ??= t;
+      if (r.dyingT == null && this.traceDying.has(id) && this.traceDying.get(id) < t) r.dyingT = this.traceDying.get(id);
+    }
+    for (const [id, t] of this.traceDying) {
+      const r = rec(id);
+      r.dyingT ??= t;
+    }
+    const out = [];
+    for (const r of byShip.values()) {
+      const t = r.dyingT ?? r.destroyedT;
+      if (t == null) continue;
+      // Killer for kills the engine did not attribute: the last hit that landed
+      // on the ship within a minute before it was knocked out (marked inferred).
+      if (!r.killerId && r.cause !== 'reactor_overheat') {
+        const last = (this.hitsOn.get(r.shipId) || []).filter(h => h.t <= t + 0.5 && h.t >= t - 60).at(-1);
+        if (last?.shooter) { r.killerId = last.shooter; r.ordnanceId ??= last.ordnance; r.inferred = true; }
+      }
+      const info = ships[r.shipId] || {};
+      out.push({
+        ...r, t, name: info.name || r.shipId, type: info.type || '', faction: factionOf(r.shipId, ships),
+        killerName: r.killerId ? nameOf(r.killerId, ships) : '', killerFaction: factionOf(r.killerId, ships),
+        weapon: r.cause === 'reactor_overheat' ? 'meltdown' : weaponOf(r.ordnanceId)
+      });
+    }
+    return out.sort((a, b) => a.t - b.t);
+  }
+}
+
+/**
  * One record per lost ship, sorted by the moment it was knocked out:
  * {shipId, name, type, faction, t, dyingT, destroyedT, detonateAt, killerId,
  *  killerName, killerFaction, weapon, ordnanceId, cause, inferred, eventId}
  */
 export function buildKills(events, ids, trace, ships) {
-  const byShip = new Map();
-  const rec = id => {
-    if (!byShip.has(id)) byShip.set(id, { shipId: id, dyingT: null, destroyedT: null, detonateAt: null, killerId: null,
-      ordnanceId: null, cause: null, inferred: false, eventId: null });
-    return byShip.get(id);
-  };
-  events.forEach((e, i) => {
-    const d = e.data || {};
-    if (!e.ship_id) return;
-    if (e.event_type === 'ship_dying') {
-      const r = rec(e.ship_id);
-      if (r.dyingT == null) {
-        r.dyingT = e.timestamp;
-        if (Number.isFinite(d.detonation_in_s)) r.detonateAt = e.timestamp + d.detonation_in_s;
-        r.killerId ??= d.killer_id || null;
-        r.ordnanceId ??= d.ordnance_id || null;
-        r.eventId ??= ids[i];
-      }
-    } else if (e.event_type === 'ship_destroyed') {
-      const r = rec(e.ship_id);
-      if (r.destroyedT == null) {
-        r.destroyedT = e.timestamp;
-        r.cause = d.cause || r.cause;
-        r.killerId ??= d.killer_id || null;
-        r.ordnanceId ??= d.ordnance_id || null;
-        r.eventId ??= ids[i];
-      }
-    } else if (e.event_type === 'reactor_meltdown') {
-      const r = rec(e.ship_id);
-      r.cause = 'reactor_overheat';
-      r.destroyedT ??= e.timestamp;
-      r.eventId ??= ids[i];
-    }
-  });
-  // Pre-v3 recordings: deaths only exist as sim_trace flags
-  const traceDying = new Map(), traceDead = new Map();
-  for (const frame of trace || []) {
-    for (const [id, s] of Object.entries(frame.ships || {})) {
-      if (s.dying && !traceDying.has(id)) traceDying.set(id, frame.t);
-      if (s.destroyed && !traceDead.has(id)) traceDead.set(id, frame.t);
-    }
-  }
-  for (const [id, t] of traceDead) {
-    const r = rec(id);
-    r.destroyedT ??= t;
-    if (r.dyingT == null && traceDying.has(id) && traceDying.get(id) < t) r.dyingT = traceDying.get(id);
-  }
-  for (const [id, t] of traceDying) {
-    const r = rec(id);
-    r.dyingT ??= t;
-  }
-  // Killer for kills the engine did not attribute: the last hit that landed
-  // on the ship within a minute before it was knocked out (marked inferred).
-  const hitsOn = new Map();
-  for (const e of events) {
-    const d = e.data || {};
-    let target = null, shooter = null, ordnance = null;
-    if (e.event_type === 'torpedo_impact') { target = d.target_id; shooter = e.ship_id; ordnance = d.torpedo_id; }
-    else if (e.event_type === 'hit') { target = e.ship_id; shooter = d.shooter_id || d.source_ship_id; ordnance = d.projectile_id || 'proj'; }
-    if (!target || !byShip.has(target)) continue;
-    if (!hitsOn.has(target)) hitsOn.set(target, []);
-    hitsOn.get(target).push({ t: e.timestamp, shooter, ordnance });
-  }
-  const out = [];
-  for (const r of byShip.values()) {
-    const t = r.dyingT ?? r.destroyedT;
-    if (t == null) continue;
-    if (!r.killerId && r.cause !== 'reactor_overheat') {
-      const last = (hitsOn.get(r.shipId) || []).filter(h => h.t <= t + 0.5 && h.t >= t - 60).at(-1);
-      if (last?.shooter) { r.killerId = last.shooter; r.ordnanceId ??= last.ordnance; r.inferred = true; }
-    }
-    const info = ships[r.shipId] || {};
-    out.push({
-      ...r, t, name: info.name || r.shipId, type: info.type || '', faction: factionOf(r.shipId, ships),
-      killerName: r.killerId ? nameOf(r.killerId, ships) : '', killerFaction: factionOf(r.killerId, ships),
-      weapon: r.cause === 'reactor_overheat' ? 'meltdown' : weaponOf(r.ordnanceId)
-    });
-  }
-  return out.sort((a, b) => a.t - b.t);
+  const fold = new KillFold();
+  fold.events(events, ids);
+  fold.frames(trace);
+  return fold.kills(ships);
 }
 
 /**
@@ -536,72 +650,126 @@ export function formatLogEvent(e, ships = {}) {
   }
 }
 
+const DEATH_EVENTS = new Set(['ship_dying', 'ship_destroyed', 'reactor_meltdown']);
+
+/** Fold events[from..] into log rows (append-only) and the set of ships whose death an event reports. */
+function addLogRows(rows, attributed, events, ids, from, ships) {
+  for (let i = from; i < events.length; i++) {
+    const e = events[i];
+    if (DEATH_EVENTS.has(e.event_type)) attributed.add(e.ship_id);
+    const f = formatLogEvent(e, ships);
+    if (f) rows.push({ id: ids[i], t: e.timestamp, ...f, shipId: e.ship_id || null });
+  }
+}
+
+/**
+ * The log: event rows plus a synthetic row for every kill no event reports
+ * (pre-v3 recordings), merged in time order - a kill row after the event
+ * rows of its second. Returns the event-row array itself when there is
+ * nothing to merge (every v3+ recording), so a live append stays O(delta).
+ */
+function mergeKillRows(rows, attributed, kills) {
+  const synthetic = kills.filter(k => !attributed.has(k.shipId))
+    .map(k => ({ id: `kill:${k.shipId}`, t: k.t, cls: 'kill', cat: 'kills', text: `KILL: ${describeKill(k)}`, shipId: k.shipId }));
+  if (!synthetic.length) return rows;
+  const out = [];
+  let j = 0;
+  for (const r of rows) {
+    while (j < synthetic.length && synthetic[j].t < r.t) out.push(synthetic[j++]);
+    out.push(r);
+  }
+  while (j < synthetic.length) out.push(synthetic[j++]);
+  return out;
+}
+
 /** Time-sorted log rows {id, t, cls, cat, text, shipId}, plus inferred-kill rows for pre-v3 recordings. */
 export function buildLog(events, ids, ships, kills) {
   const rows = [];
   const attributed = new Set();
-  events.forEach((e, i) => {
-    if (e.event_type === 'ship_dying' || e.event_type === 'ship_destroyed' || e.event_type === 'reactor_meltdown') attributed.add(e.ship_id);
-    const f = formatLogEvent(e, ships);
-    if (f) rows.push({ id: ids[i], t: e.timestamp, ...f, shipId: e.ship_id || null });
-  });
-  let synthetic = false;
-  for (const k of kills) {
-    if (attributed.has(k.shipId)) continue;
-    synthetic = true;
-    rows.push({ id: `kill:${k.shipId}`, t: k.t, cls: 'kill', cat: 'kills', text: `KILL: ${describeKill(k)}`, shipId: k.shipId });
-  }
-  if (synthetic) rows.sort((a, b) => a.t - b.t);
-  return rows;
+  addLogRows(rows, attributed, events, ids, 0, ships);
+  return mergeKillRows(rows, attributed, kills);
 }
 
 /* ------------------------------------------------------------------------ */
 /* Timeline marks, spend, vision                                             */
 /* ------------------------------------------------------------------------ */
 
-/** Torpedo launches grouped per faction within `window` seconds: {t, faction, count, targets: [[name, n]], shipIds}. */
-export function buildSalvos(events, ships, window = 3) {
-  const open = new Map();
-  const out = [];
-  for (const e of events) {
-    if (e.event_type !== 'torpedo_launched') continue;
-    const faction = factionOf(e.ship_id, ships) || 'unknown';
-    let s = open.get(faction);
-    if (!s || e.timestamp - s.t > window) {
-      s = { t: e.timestamp, faction, count: 0, targets: new Map(), shipIds: new Set() };
-      open.set(faction, s);
-      out.push(s);
-    }
-    s.count++;
-    s.shipIds.add(e.ship_id);
-    const target = nameOf(e.data?.target_id, ships) || 'no lock';
-    s.targets.set(target, (s.targets.get(target) || 0) + 1);
+/** Torpedo launches grouped per faction within `window` seconds (fold: open groups stay extendable). */
+class SalvoFold {
+  constructor(window = 3) {
+    this.window = window;
+    this.open = new Map();
+    this.groups = [];
   }
-  return out.map(s => ({ ...s, targets: [...s.targets.entries()].sort((a, b) => b[1] - a[1]), shipIds: [...s.shipIds] }));
+
+  add(events, from, ships) {
+    for (let i = from; i < events.length; i++) {
+      const e = events[i];
+      if (e.event_type !== 'torpedo_launched') continue;
+      const faction = factionOf(e.ship_id, ships) || 'unknown';
+      let s = this.open.get(faction);
+      if (!s || e.timestamp - s.t > this.window) {
+        s = { t: e.timestamp, faction, count: 0, targets: new Map(), shipIds: new Set() };
+        this.open.set(faction, s);
+        this.groups.push(s);
+      }
+      s.count++;
+      s.shipIds.add(e.ship_id);
+      const target = nameOf(e.data?.target_id, ships) || 'no lock';
+      s.targets.set(target, (s.targets.get(target) || 0) + 1);
+    }
+  }
+
+  salvos() {
+    return this.groups.map(s => ({ ...s, targets: [...s.targets.entries()].sort((a, b) => b[1] - a[1]), shipIds: [...s.shipIds] }));
+  }
 }
 
-/** Per-faction hit counts in `bin`-second bins: {alpha: Int[], beta: Int[]} (faction = shooter). */
-export function buildHitBins(events, ships, duration, bin = 5) {
-  const n = Math.max(1, Math.ceil((duration || 0) / bin) + 1);
-  const bins = { alpha: new Array(n).fill(0), beta: new Array(n).fill(0) };
-  for (const e of events) {
+/** Torpedo launches grouped per faction within `window` seconds: {t, faction, count, targets: [[name, n]], shipIds}. */
+export function buildSalvos(events, ships, window = 3) {
+  const fold = new SalvoFold(window);
+  fold.add(events, 0, ships);
+  return fold.salvos();
+}
+
+/** Fold hits in events[from..] into raw per-faction counts per `bin`-second bin (faction = shooter). */
+function addHits(raw, events, from, ships, bin) {
+  for (let i = from; i < events.length; i++) {
+    const e = events[i];
     let shooter = null;
     if (e.event_type === 'hit') shooter = e.data?.shooter_id || e.data?.source_ship_id;
     else if (e.event_type === 'torpedo_impact') shooter = e.ship_id;
     else continue;
     const f = factionOf(shooter, ships);
-    const k = Math.min(n - 1, Math.floor(e.timestamp / bin));
-    if (bins[f]) bins[f][k]++;
+    if (!raw[f]) continue;
+    const k = Math.max(0, Math.floor(e.timestamp / bin));
+    raw[f][k] = (raw[f][k] || 0) + 1;
+  }
+}
+
+/** Raw bin counts laid over the recording: ceil(duration / bin) + 1 bins, later hits in the last. */
+function hitBinsFor(raw, duration, bin) {
+  const n = Math.max(1, Math.ceil((duration || 0) / bin) + 1);
+  const bins = { alpha: new Array(n).fill(0), beta: new Array(n).fill(0) };
+  for (const f of ['alpha', 'beta']) {
+    const counts = raw[f];
+    for (let k = 0; k < counts.length; k++) if (counts[k]) bins[f][Math.min(n - 1, k)] += counts[k];
   }
   bins.bin = bin;   // seconds per bin: the chart spans bins * bin, not the timeline's epilogue
   return bins;
 }
 
-/** Cumulative reported model spend per faction: {alpha: [{t, total}], beta: [...]}. */
-export function buildSpend(events) {
-  const out = { alpha: [], beta: [] };
-  const totals = { alpha: 0, beta: 0 };
-  for (const e of events) {
+/** Per-faction hit counts in `bin`-second bins: {alpha: Int[], beta: Int[]} (faction = shooter). */
+export function buildHitBins(events, ships, duration, bin = 5) {
+  const raw = { alpha: [], beta: [] };
+  addHits(raw, events, 0, ships, bin);
+  return hitBinsFor(raw, duration, bin);
+}
+
+/** Fold model_call costs in events[from..] into cumulative per-faction spend (arrays extended in place). */
+function addSpend(out, totals, events, from = 0) {
+  for (let i = from; i < events.length; i++) {
+    const e = events[i];
     if (e.event_type !== 'model_call') continue;
     const f = e.data?.faction;
     const cost = Number(e.data?.usage?.cost);
@@ -609,6 +777,12 @@ export function buildSpend(events) {
     totals[f] += cost;
     out[f].push({ t: e.timestamp, total: totals[f] });
   }
+}
+
+/** Cumulative reported model spend per faction: {alpha: [{t, total}], beta: [...]}. */
+export function buildSpend(events) {
+  const out = { alpha: [], beta: [] };
+  addSpend(out, { alpha: 0, beta: 0 }, events);
   return out;
 }
 
@@ -618,68 +792,202 @@ export function spendAt(spend, faction, t) {
   return i >= 0 ? list[i].total : 0;
 }
 
-/** Admiral tactical-plot images: [{t, faction, callId, ref, part}] (assets keep the data URL). */
-export function buildVisions(events, ids, assets = {}) {
+/** Admiral model calls with message refs in events[from..]: [{t, faction, callId, refs}]. */
+function addAdmiralCalls(out, events, ids, from = 0) {
+  for (let i = from; i < events.length; i++) {
+    const e = events[i];
+    if (e.event_type !== 'model_call' || e.data?.actor !== 'admiral' || !e.data.message_refs?.length) continue;
+    out.push({ t: e.timestamp, faction: e.data.faction || null, callId: ids[i], refs: e.data.message_refs });
+  }
+}
+
+/** Images among the calls' messages, resolved against the assets held now (they can arrive after the call). */
+function visionsOf(calls, assets = {}) {
   const out = [];
-  events.forEach((e, i) => {
-    if (e.event_type !== 'model_call' || e.data?.actor !== 'admiral') return;
-    for (const ref of e.data.message_refs || []) {
+  for (const call of calls) {
+    for (const ref of call.refs) {
       const content = assets?.[ref]?.content;
       if (!Array.isArray(content)) continue;
       content.forEach((p, part) => {
-        if (p?.type === 'image_url' && p.image_url?.url) out.push({ t: e.timestamp, faction: e.data.faction || null, callId: ids[i], ref, part });
+        if (p?.type === 'image_url' && p.image_url?.url) out.push({ t: call.t, faction: call.faction, callId: call.callId, ref, part });
       });
     }
-  });
+  }
   return out;
 }
 
-/** The recorded result: {winner, reason, stopped} from metadata and battle_end / battle_stopped events. */
-export function buildResult(events, meta = {}) {
-  let stopped = null, ended = null;
-  for (const e of events) {
-    if (e.event_type === 'battle_stopped') stopped = { t: e.timestamp, reason: e.data?.reason || '' };
-    else if (e.event_type === 'battle_end') ended = { t: e.timestamp, winner: e.data?.winner ?? null, reason: e.data?.reason || '' };
+/** Admiral tactical-plot images: [{t, faction, callId, ref, part}] (assets keep the data URL). */
+export function buildVisions(events, ids, assets = {}) {
+  const calls = [];
+  addAdmiralCalls(calls, events, ids);
+  return visionsOf(calls, assets);
+}
+
+/** Last battle_stopped / battle_end in events[from..], folded into `end` {stopped, ended}. */
+function addEnd(end, events, from = 0) {
+  for (let i = from; i < events.length; i++) {
+    const e = events[i];
+    if (e.event_type === 'battle_stopped') end.stopped = { t: e.timestamp, reason: e.data?.reason || '' };
+    else if (e.event_type === 'battle_end') end.ended = { t: e.timestamp, winner: e.data?.winner ?? null, reason: e.data?.reason || '' };
   }
+}
+
+function resultOf({ stopped, ended }, meta = {}) {
   const reason = meta.resultReason || ended?.reason || stopped?.reason || '';
   const winner = meta.winner ?? ended?.winner ?? null;
   const halted = !!stopped || (!winner && /stopped|ceiling|budget|error|exception/i.test(reason));
   return { winner, reason, stopped: halted, known: !!(winner || reason || stopped || ended) };
 }
 
+/** The recorded result: {winner, reason, stopped} from metadata and battle_end / battle_stopped events. */
+export function buildResult(events, meta = {}) {
+  const end = { stopped: null, ended: null };
+  addEnd(end, events);
+  return resultOf(end, meta);
+}
+
+/* ------------------------------------------------------------------------ */
+/* The index: full build and live append                                     */
+/* ------------------------------------------------------------------------ */
+
 /**
- * Everything the HUD needs, rebuilt from scratch per parse / live append.
+ * Incremental state behind one loader's hud. Every field is a fold over the
+ * events (and frames) in order, so indexing them in one pass or in any
+ * number of in-order appends ends in the same state. The command net is the
+ * exception that proves it: rows at the latest timestamp can still change
+ * (that checkpoint's orders and reports trickle in over several polls), so
+ * they stay "open" and are re-derived with each append; rows of earlier
+ * timestamps are final.
+ */
+class HudBuilder {
+  constructor(loader) {
+    this.shipsRef = loader.ships;
+    this.ships = loader.ships || {};
+    this.eventsRef = loader.events;
+    this.count = 0;           // events indexed
+    this.ids = [];
+    this.cpTimes = new Map();
+    this.checkpoints = [];
+    this.comms = [];
+    this.commsSeen = new Set(); // ids of final (frozen) rows
+    this.openFrom = 0;        // first event of the open (latest) timestamp
+    this.frozenRows = 0;      // comms rows before the open timestamp
+    this.deliveries = new Map();
+    this.killFold = new KillFold();
+    this.logRows = [];
+    this.attributed = new Set();
+    this.salvoFold = new SalvoFold();
+    this.hitRaw = { alpha: [], beta: [] };
+    this.spend = { alpha: [], beta: [] };
+    this.spendTotals = { alpha: 0, beta: 0 };
+    this.admiralCalls = [];
+    this.end = { stopped: null, ended: null };
+  }
+
+  /** Is `delta` (the last `n` events of the loader) a clean append to what this builder indexed? */
+  canAppend(loader, n) {
+    const events = loader.events || [];
+    return loader.ships === this.shipsRef && events === this.eventsRef &&
+      events.length - n === this.count && (this.count === 0 || events[this.count - 1] === this.last);
+  }
+
+  /** Index events[count..] and `frames` (all sorting after what is indexed). */
+  add(loader, frames) {
+    const events = loader.events || [];
+    const ships = this.ships;
+    const from = this.count;
+    for (let i = from; i < events.length; i++) this.ids.push(eventId(events[i], i));
+    const ids = this.ids;
+    addCheckpointTimes(this.cpTimes, events, from);
+    this.checkpoints = checkpointList(this.cpTimes);
+    addDeliveries(this.deliveries, events, from, ships);
+    this.killFold.events(events, ids, from);
+    this.killFold.frames(frames);
+    addLogRows(this.logRows, this.attributed, events, ids, from, ships);
+    this.salvoFold.add(events, from, ships);
+    addHits(this.hitRaw, events, from, ships, HIT_BIN_S);
+    addSpend(this.spend, this.spendTotals, events, from);
+    addAdmiralCalls(this.admiralCalls, events, ids, from);
+    addEnd(this.end, events, from);
+
+    // Command net: drop the open rows, re-derive them together with the new events
+    this.comms.length = this.frozenRows;
+    const local = new Set();
+    const seen = { has: id => this.commsSeen.has(id) || local.has(id), add: id => local.add(id) };
+    const interval = Number(loader.sourceData?.decision_interval_s) || 30;
+    for (const row of buildComms(events, ids, ships, this.checkpoints, { from: this.openFrom, seen, interval })) this.comms.push(row);
+    this.count = events.length;
+    this.last = events[events.length - 1];
+    if (this.count) {
+      // Everything within a microsecond of the newest event stays open
+      // (checkpointAt resolves a row's checkpoint with that tolerance)
+      const cut = this.last.timestamp - 1e-6;
+      this.openFrom = lowerBound(events, cut, e => e.timestamp);
+      const frozen = lowerBound(this.comms, cut);
+      for (let i = this.frozenRows; i < frozen; i++) this.commsSeen.add(this.comms[i].id);
+      this.frozenRows = frozen;
+    }
+  }
+
+  /** The hud object: a new one per build / append (panels key on its identity), sharing the append-only arrays. */
+  snapshot(loader) {
+    const src = loader.sourceData || {};
+    const models = {
+      alpha: src.alpha_model || src.alpha_fleet?.admiral?.model || '',
+      beta: src.beta_model || src.beta_fleet?.admiral?.model || ''
+    };
+    // Draft point cost per ship (provenance.draft), when the battle was drafted
+    const costs = {};
+    for (const f of ['alpha', 'beta']) {
+      for (const s of src.provenance?.draft?.[f]?.ships || []) if (s?.ship_id && Number.isFinite(s.cost)) costs[s.ship_id] = s.cost;
+    }
+    const kills = this.killFold.kills(this.ships);
+    return {
+      ids: this.ids,
+      costs,
+      checkpoints: this.checkpoints,
+      comms: this.comms,
+      deliveries: this.deliveries,
+      kills,
+      log: mergeKillRows(this.logRows, this.attributed, kills),
+      salvos: this.salvoFold.salvos(),
+      hitBins: hitBinsFor(this.hitRaw, loader.duration, HIT_BIN_S),
+      spend: this.spend,
+      visions: visionsOf(this.admiralCalls, src.assets),
+      result: resultOf(this.end, loader.metadata || {}),
+      models,
+      duration: loader.duration || 0
+    };
+  }
+}
+
+const HIT_BIN_S = 5;
+
+/** loader -> its HudBuilder. Kept off the loader and off loader.hud: both are plain, comparable data. */
+const builders = new WeakMap();
+
+/**
+ * Everything the HUD needs, built from scratch (parse, or a live poll that
+ * brought events older than ones already held).
  * @param {Object} loader - {events, ships, simTrace, metadata, sourceData, duration}
  */
 export function buildHudIndex(loader) {
-  const events = loader.events || [];
-  const ships = loader.ships || {};
-  const ids = events.map((e, i) => eventId(e, i));
-  const checkpoints = buildCheckpoints(events);
-  const kills = buildKills(events, ids, loader.simTrace, ships);
-  const src = loader.sourceData || {};
-  const models = {
-    alpha: src.alpha_model || src.alpha_fleet?.admiral?.model || '',
-    beta: src.beta_model || src.beta_fleet?.admiral?.model || ''
-  };
-  // Draft point cost per ship (provenance.draft), when the battle was drafted
-  const costs = {};
-  for (const f of ['alpha', 'beta']) {
-    for (const s of src.provenance?.draft?.[f]?.ships || []) if (s?.ship_id && Number.isFinite(s.cost)) costs[s.ship_id] = s.cost;
-  }
-  return {
-    ids,
-    costs,
-    checkpoints,
-    comms: buildComms(events, ids, ships, checkpoints),
-    deliveries: buildDeliveries(events),
-    kills,
-    log: buildLog(events, ids, ships, kills),
-    salvos: buildSalvos(events, ships),
-    hitBins: buildHitBins(events, ships, loader.duration),
-    spend: buildSpend(events),
-    visions: buildVisions(events, ids, src.assets),
-    result: buildResult(events, loader.metadata || {}),
-    models
-  };
+  const builder = new HudBuilder(loader);
+  builder.add(loader, loader.simTrace || []);
+  if (loader && typeof loader === 'object') builders.set(loader, builder);
+  return builder.snapshot(loader);
+}
+
+/**
+ * Extend the loader's index with a live append. `delta` = {events, frames}:
+ * what arrived, already pushed onto loader.events / loader.simTrace, all of
+ * it sorting after everything indexed (BattleLoader.appendLiveData passes
+ * null otherwise). Costs O(delta + the open timestamp), not O(battle); any
+ * mismatch with what the builder indexed falls back to a full build.
+ */
+export function appendHudIndex(loader, delta) {
+  const builder = builders.get(loader);
+  if (!delta || !builder || !builder.canAppend(loader, delta.events?.length || 0)) return buildHudIndex(loader);
+  builder.add(loader, delta.frames || []);
+  return builder.snapshot(loader);
 }

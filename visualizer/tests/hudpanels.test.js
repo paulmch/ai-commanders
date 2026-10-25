@@ -213,6 +213,51 @@ test('command net: delivery state follows the playhead; filters; recorded text s
   assert.deepEqual(rowTags(list), ['ORDER', 'DEVIATE'], 'critical orders and deviations');
 });
 
+test('command net: a report shows its delivery to the admiral and swaps to the compliance the admiral read', () => {
+  const doc = new FakeDocument();
+  const root = build(doc, ['aside', {}, ['button', { 'data-comms-group': 'all' }], ['button', { 'data-comms-group': 'issues' }],
+    ['div', { 'data-standing': '' }], ['div', { 'data-list': '' }]]);
+  const compliance = (launched, final, deviations) => ({ ordered_maneuver: 'INTERCEPT', executed_maneuver: 'INTERCEPT', ordered_target: 'OCS Falchion-1',
+    actual_target: 'OCS Falchion-1', ordered_salvo: 2, launched, final, deviations });
+  const events = [
+    ev(30, 'decision_point_reached'),
+    ev(30, 'admiral_order', 'alpha_1', { faction: 'alpha', order_text: 'Launch 2 at Falchion-1.', torpedo_salvo: 2, torpedo_target: 'beta_1' }),
+    ev(30, 'captain_report', 'alpha_1', { report_id: 'r1-alpha_1', faction: 'alpha', checkpoint: 1, ship_name: 'TIS Dart-1', status: 'ACK',
+      reason: 'Salvo away on the mark.', compliance: compliance(2, false, []) }),
+    ev(60, 'decision_point_reached'),
+    ev(60, 'comms_delivered', 'alpha_admiral', { msg_id: 'r1-alpha_1', recipient_id: 'alpha_admiral', delivered_t: 60, checkpoint: 2,
+      compliance: compliance(1, true, ['salvo: ordered 2, launched 1']) })
+  ];
+  const hud = buildHudIndex({ events, ships, simTrace: [], metadata: {}, sourceData: { decision_interval_s: 30 }, duration: 90 });
+  const feed = new CommsFeed({ root, doc, store: null });
+  feed.setOpen(true);
+  feed.setIndex(hud, true);
+  const list = root.querySelector('[data-list]');
+  const report = () => list.querySelectorAll('.comms-row').find(r => r.classList.contains('kind-report'));
+  const chips = () => report().querySelectorAll('.comms-deviation').map(c => c.textContent);
+  feed.update(45);
+  assert.equal(report().querySelector('.comms-delivery').textContent, 'IN TRANSIT · due 01:00');
+  assert.deepEqual(chips(), [], 'as filed: the salvo was committed');
+  feed.update(60);
+  assert.equal(report().querySelector('.comms-delivery').textContent, '✓ DELIVERED 01:00');
+  assert.deepEqual(chips(), ['SALVO: ordered 2, launched 1']);
+  assert.ok(report().querySelector('.comms-deviation').classList.contains('final'));
+  assert.match(report().querySelector('.comms-deviation').title, /as the admiral read it at 01:00/);
+  feed.update(45);
+  assert.deepEqual(chips(), [], 'scrubbing back restores the filed verdict');
+  // ISSUES: the ACK joins once the admiral's copy shows it off orders
+  feed.setFilter('all', 'issues');
+  feed.update(45);
+  assert.equal(list.querySelectorAll('.comms-row').length, 0);
+  feed.update(60);
+  assert.deepEqual(list.querySelectorAll('.comms-row').map(r => r.querySelector('.comms-tag').textContent), ['ACK']);
+  assert.deepEqual(doc.innerHTMLWrites, []);
+  // The timeline flags the checkpoint whose ACK drifted
+  const cp1 = timelineMarks(hud, 90, ships).find(m => m.kind === 'checkpoint' && m.t === 30);
+  assert.equal(cp1.flag, 'deviation');
+  assert.match(cp1.title, /1 ACK \(1 off orders\)/);
+});
+
 test('visible rows and standing orders are pure functions of time', () => {
   const { hud } = fixture();
   assert.equal(visibleComms(hud.comms, 29).length, 0);

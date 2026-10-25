@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   buildCheckpoints, checkpointAt, buildComms, buildDeliveries, deliveryAt, buildKills, killStateAt,
   describeKill, buildLog, buildSalvos, buildSpend, spendAt, buildResult, buildHudIndex, commsMatches,
-  normalizeStatus, lowerBound, upperBound, shortModel, formatLogEvent
+  normalizeStatus, lowerBound, upperBound, shortModel, formatLogEvent, complianceAt, complianceChips
 } from '../src/HudIndex.js';
 import { CombatLog } from '../src/CombatLog.js';
 import { BattleLoader } from '../src/BattleLoader.js';
@@ -107,7 +107,10 @@ test('structured comms: captain_report supersedes the legacy ack, channels map, 
   assert.equal(auto.kind, 'engine');
   assert.equal(report.text, 'Lancer-1 is closer.');
   assert.match(report.reply, /Intent: Engaging Lancer-1/);
-  assert.deepEqual(report.chips, ['ORDERED INTERCEPT · FLEW EVADE', 'TARGET OCS Falchion-1 → OCS Lancer-1', 'SALVO 2/4', 'CONTACT OCS Lancer-1 · closing']);
+  assert.deepEqual(report.chips, ['CONTACT OCS Lancer-1 · closing']);
+  // No engine verdict recorded (schema-only block): the fields are compared here
+  assert.deepEqual(report.compliance.chips, ['ORDERED INTERCEPT · FLEW EVADE', 'TARGET OCS Falchion-1 → OCS Lancer-1', 'SALVO 2/4']);
+  assert.equal(report.compliance.deviated, true);
   const deliveries = buildDeliveries(events);
   assert.equal(deliveries.get('m1').length, 1, 'duplicate delivery events collapse');
   assert.equal(deliveryAt(net, deliveries, 31).state, 'transit');
@@ -115,7 +118,55 @@ test('structured comms: captain_report supersedes the legacy ack, channels map, 
   assert.equal(deliveryAt(enemy, deliveries, 31).state, 'partial');
   assert.equal(deliveryAt(auto, deliveries, 31, false).state, 'transit');
   assert.equal(deliveryAt(auto, deliveries, 31, true).state, 'undelivered');
-  assert.equal(deliveryAt(report, deliveries, 31), null);
+  // The report is routed to the admiral, who reads it at its next turn
+  assert.deepEqual([report.msgId, report.toIds, report.deliverAt], ['r1', ['alpha_admiral'], 60]);
+  assert.deepEqual(deliveryAt(report, deliveries, 31), { state: 'transit', done: 0, total: 1, at: 60 });
+});
+
+test('captain reports travel to the admiral: delivery, and the compliance it read (final) replaces the filed one', () => {
+  const filed = { ordered_maneuver: 'INTERCEPT', executed_maneuver: 'INTERCEPT', ordered_target: 'the cruiser', actual_target: 'OCS Lancer-1',
+    ordered_salvo: 4, launched: 4, final: false, followed: true, deviations: [] };
+  const events = [
+    ev(30, 'decision_point_reached'),
+    ev(30, 'captain_decision', 'alpha_1', { acknowledgment: 'ACK', commands: [] }, 'dec-a1'),
+    ev(30, 'captain_report', 'alpha_1', { report_id: 'r1-alpha_1', faction: 'alpha', checkpoint: 1, ship_name: 'TIS Dart-1', status: 'ACK',
+      reason: '', intent: '', contact: null, request: null, compliance: filed, implicit: true, decision_event_id: 'dec-a1' }),
+    ev(30, 'captain_report', 'alpha_2', { report_id: 'r1-alpha_2', faction: 'alpha', checkpoint: 1, ship_name: 'TIS Dart-2', status: 'ACK',
+      reason: 'On it.', compliance: { ...filed, launched: 2, deviations: ['salvo: ordered 4, committed 2'] } }),
+    ev(60, 'decision_point_reached'),
+    ev(60, 'comms_delivered', 'alpha_admiral', { msg_id: 'r1-alpha_1', recipient_id: 'alpha_admiral', delivered_t: 60, checkpoint: 2,
+      compliance: { ...filed, launched: 1, final: true, followed: false, deviations: ['salvo: ordered 4, launched 1'] } }),
+    // The last checkpoint's report: the battle ends before the admiral's next turn
+    ev(90, 'captain_report', 'alpha_1', { report_id: 'r3-alpha_1', faction: 'alpha', checkpoint: 3, status: 'DEVIATE', reason: 'Breaking off.' })
+  ];
+  const cps = buildCheckpoints(events);
+  const rows = buildComms(events, ids(events), ships, cps, { interval: 30 });
+  const [implicit, partial, last] = rows;
+  assert.equal(rows.length, 3, 'the reports replace the legacy ack');
+  assert.deepEqual([implicit.msgId, implicit.toIds, implicit.deliverAt, implicit.decisionId], ['r1-alpha_1', ['alpha_admiral'], 60, 'dec-a1']);
+  assert.match(implicit.text, /implicit ACK/);
+  // The engine's verdict wins over a field comparison: an unresolved raw
+  // ordered target ('the cruiser') is not a deviation the engine counted
+  assert.deepEqual(implicit.compliance, { chips: [], deviated: false, final: false });
+  assert.deepEqual(complianceChips({ ordered_target: 'the cruiser', actual_target: 'OCS Lancer-1' }), ['TARGET the cruiser → OCS Lancer-1'], 'fallback without a verdict');
+  assert.deepEqual(partial.compliance.chips, ['SALVO: ordered 4, committed 2']);
+  const deliveries = buildDeliveries(events);
+  assert.equal(deliveryAt(implicit, deliveries, 45).state, 'transit');
+  assert.equal(deliveryAt(implicit, deliveries, 45).at, 60);
+  assert.deepEqual(deliveryAt(implicit, deliveries, 60), { state: 'delivered', done: 1, total: 1, at: 60 });
+  // Filed (rounds committed) until the admiral's copy arrives, then that copy (rounds launched)
+  assert.deepEqual(complianceAt(implicit, deliveries, 59), { chips: [], deviated: false, final: false, delivered: false, at: 30 });
+  assert.deepEqual(complianceAt(implicit, deliveries, 60), { chips: ['SALVO: ordered 4, launched 1'], deviated: true, final: true, delivered: true, at: 60 });
+  // ISSUES takes the acknowledge-and-drift report once the admiral's copy shows it
+  assert.ok(!commsMatches(implicit, 'all', 'issues', { deliveries, t: 59 }));
+  assert.ok(commsMatches(implicit, 'all', 'issues', { deliveries, t: 60 }));
+  assert.ok(commsMatches(partial, 'all', 'issues'), 'filed deviations count without a delivery');
+  // Never delivered: the alpha_2 report once its due time passes; the last
+  // report once the recording ends (due after the battle)
+  assert.equal(deliveryAt(partial, deliveries, 61, true).state, 'undelivered');
+  assert.equal(deliveryAt(partial, deliveries, 61, false).state, 'transit', 'live: it may still come');
+  assert.equal(deliveryAt(last, deliveries, 100, true, 112).state, 'transit');
+  assert.equal(deliveryAt(last, deliveries, 112, true, 112).state, 'undelivered');
 });
 
 test('duplicate event ids index once', () => {

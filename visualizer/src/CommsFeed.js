@@ -4,7 +4,9 @@
  *
  * Rows come from loader.hud.comms (HudIndex.buildComms): admiral plans,
  * directives and per-ship orders (priority, salvo chips), captain reports
- * (ACK / DEVIATE / UNABLE with reason and the engine's compliance check),
+ * (ACK / DEVIATE / UNABLE with reason and the engine's compliance check:
+ * as filed, then as the admiral read it once the report was delivered at
+ * its next turn, with the rounds that actually left the tubes),
  * captain logs and queries, fleet-net signals, direct messages, engine
  * auto-signals, enemy transmissions and system rows. Legacy recordings
  * (message / acknowledgment-only) render through the same rows.
@@ -16,7 +18,7 @@
  * rows, and anything else (seek back, filter, re-sorted live data) rebuilds
  * once. All recorded text is written with textContent.
  */
-import { upperBound, clockText, commsMatches, deliveryAt } from './HudIndex.js';
+import { upperBound, clockText, commsMatches, deliveryAt, complianceAt } from './HudIndex.js';
 import { node, setText, defaultDoc } from './hudDom.js';
 
 const STORE_KEY = 'aic.viewer.commsFilter';
@@ -27,12 +29,17 @@ function storage() {
   try { return typeof window !== 'undefined' ? window.localStorage : null; } catch { return null; }
 }
 
-/** Visible rows at t for a filter: the last `max` matching rows with row.t <= t (oldest first). */
-export function visibleComms(rows, t, faction = 'all', group = 'all', max = 150) {
+/**
+ * Visible rows at t for a filter: the last `max` matching rows with
+ * row.t <= t (oldest first). With `deliveries`, ISSUES also takes the ACKs
+ * whose delivered compliance shows the ship off its orders by t.
+ */
+export function visibleComms(rows, t, faction = 'all', group = 'all', max = 150, deliveries = null) {
   const n = upperBound(rows || [], t);
+  const ctx = deliveries ? { deliveries, t } : null;
   const out = [];
   for (let i = n - 1; i >= 0 && out.length < max; i--) {
-    if (commsMatches(rows[i], faction, group)) out.push(rows[i]);
+    if (commsMatches(rows[i], faction, group, ctx)) out.push(rows[i]);
   }
   return out.reverse();
 }
@@ -94,7 +101,7 @@ export class CommsFeed {
     this.shown = [];               // row ids in the DOM, oldest first
     this.rowEls = new Map();       // id -> element
     this.groupEls = new Map();     // cp -> {section, count}
-    this.deliveryRows = new Map(); // id -> {row, el}
+    this.deliveryRows = new Map(); // id -> {row, el, text, comp, compKey}: chips that follow the playhead
     this.key = '';
     this.deliveryKey = '';
     this.standingKey = '';
@@ -137,11 +144,13 @@ export class CommsFeed {
     if (!this.open || !this.list || !this.hud) return 'closed';
     const rows = this.hud.comms || [];
     const n = upperBound(rows, t);
-    const key = `${this.faction}:${this.group}:${n}:${rows.length}`;
+    // ISSUES depends on which report deliveries have happened by t
+    const epoch = this.group === 'issues' ? `:${this._deliveryEpoch(t)}` : '';
+    const key = `${this.faction}:${this.group}:${n}:${rows.length}${epoch}`;
     let result = 'same';
     if (key !== this.key) {
       this.key = key;
-      result = this._sync(visibleComms(rows, t, this.faction, this.group));
+      result = this._sync(visibleComms(rows, t, this.faction, this.group, 150, this.group === 'issues' ? this.hud.deliveries : null));
       this._renderStanding(t);
     }
     this._updateDeliveries(t);
@@ -248,13 +257,16 @@ export class CommsFeed {
     el.append(meta);
     if (r.text) el.append(node(d, 'div', r.text, 'comms-text'));
     if (r.reply) el.append(node(d, 'div', r.reply, 'comms-reply'));
-    if (r.chips?.length || r.msgId || r.decisionId) {
+    if (r.chips?.length || r.msgId || r.compliance || r.decisionId) {
       const chips = node(d, 'div', null, 'comms-chips');
       for (const c of r.chips || []) chips.append(node(d, 'span', c, 'comms-chip'));
-      if (r.msgId) {
-        const dl = node(d, 'span', '', 'comms-chip comms-delivery');
-        chips.append(dl);
-        this.deliveryRows.set(r.id, { row: r, el: dl, text: '' });
+      if (r.msgId || r.compliance) {
+        // Filled by _updateDeliveries: both change with the playhead
+        const comp = node(d, 'span', null, 'comms-compliance');
+        const dl = r.msgId ? node(d, 'span', '', 'comms-chip comms-delivery') : null;
+        chips.append(comp);
+        if (dl) chips.append(dl);
+        this.deliveryRows.set(r.id, { row: r, el: dl, text: '', comp, compKey: null });
       }
       if (r.decisionId && this.onWhy) {
         const why = node(d, 'button', 'WHY ›', 'comms-why');
@@ -287,27 +299,57 @@ export class CommsFeed {
     el.append(fig);
   }
 
-  _updateDeliveries(t) {
-    if (!this.deliveryRows.size) return;
+  /** How many delivery-relevant moments (deliveries, due times, the recording's end) lie at or before t. */
+  _deliveryEpoch(t) {
     if (!this.deliveryTimes) {
       const times = [];
       for (const list of this.hud.deliveries?.values?.() || []) for (const x of list) times.push(x.t);
       for (const r of this.hud.comms || []) if (r.deliverAt != null) times.push(r.deliverAt);
+      if (this.hud.duration > 0) times.push(this.hud.duration);
       this.deliveryTimes = times.sort((a, b) => a - b);
     }
-    const key = `${upperBound(this.deliveryTimes, t, x => x)}:${this.deliveryRows.size}:${this.complete}:${this.key}`;
+    return upperBound(this.deliveryTimes, t + 1e-6, x => x);
+  }
+
+  _updateDeliveries(t) {
+    if (!this.deliveryRows.size) return;
+    const key = `${this._deliveryEpoch(t)}:${this.deliveryRows.size}:${this.complete}:${this.key}`;
     if (key === this.deliveryKey) return;
     this.deliveryKey = key;
+    const end = this.hud.duration > 0 ? this.hud.duration : Infinity;
     for (const entry of this.deliveryRows.values()) {
-      const state = deliveryAt(entry.row, this.hud.deliveries, t, this.complete);
-      const text = state ? DELIVERY_TEXT[state.state](state) : '';
-      if (text !== entry.text) {
-        entry.text = text;
-        setText(entry.el, text);
-        entry.el.dataset.state = state?.state || '';
-        entry.el.hidden = !text;
+      if (entry.el) {
+        const state = deliveryAt(entry.row, this.hud.deliveries, t, this.complete, end);
+        const text = state ? DELIVERY_TEXT[state.state](state) : '';
+        if (text !== entry.text) {
+          entry.text = text;
+          setText(entry.el, text);
+          entry.el.dataset.state = state?.state || '';
+          entry.el.hidden = !text;
+        }
       }
+      this._renderCompliance(entry, complianceAt(entry.row, this.hud.deliveries, t));
     }
+  }
+
+  /**
+   * Compliance chips of a report: the engine's verdict as filed (rounds
+   * committed) until the admiral's copy is delivered, then that copy (rounds
+   * launched over the interval) - the one the admiral actually acted on.
+   */
+  _renderCompliance(entry, c) {
+    const key = c ? `${c.delivered}:${c.at}:${c.chips.join('|')}` : '';
+    if (key === entry.compKey) return;
+    entry.compKey = key;
+    const d = this.doc;
+    const els = [];
+    const when = c?.delivered ? `as the admiral read it at ${clockText(c.at)}` : 'as filed';
+    for (const text of c?.chips || []) {
+      const chip = node(d, 'span', text, `comms-chip comms-deviation${c.delivered ? ' final' : ''}`);
+      chip.title = `Off orders (${when}; engine check)`;
+      els.push(chip);
+    }
+    entry.comp.replaceChildren(...els);
   }
 
   _renderStanding(t) {

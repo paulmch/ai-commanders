@@ -2274,6 +2274,10 @@ body {
 .comms-delivery { color: var(--text-secondary); background: rgba(255, 255, 255, 0.03); border-color: var(--border-subtle); }
 .comms-delivery[data-state="delivered"] { color: var(--accent-success); }
 .comms-delivery[data-state="undelivered"] { color: var(--accent-critical); border-color: rgba(255, 0, 85, 0.35); }
+/* Engine compliance verdict on a report: as filed, then (.final) as the admiral read it */
+.comms-compliance { display: contents; }
+.comms-deviation { color: var(--accent-warning); background: rgba(255, 136, 0, 0.08); border-color: rgba(255, 136, 0, 0.35); }
+.comms-deviation.final { border-color: rgba(255, 136, 0, 0.75); }
 .comms-why { margin-left: auto; padding: 0 5px; background: none; border: 1px solid var(--border-subtle); color: var(--alpha-primary); font: 9px var(--font-mono); cursor: pointer; }
 .comms-why:hover { border-color: var(--alpha-primary); }
 /* Row kinds */

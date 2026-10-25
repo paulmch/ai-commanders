@@ -1,6 +1,8 @@
 import { DecisionIndex } from './DecisionIndex.js';
-import { buildHudIndex } from './HudIndex.js';
+import { buildHudIndex, appendHudIndex } from './HudIndex.js';
 import { getModulesForShipType } from './shipModules.js';
+
+const eventOrder = (a, b) => a.timestamp - b.timestamp || (a.sequence || 0) - (b.sequence || 0);
 
 /**
  * BattleLoader - Loads and parses battle recording JSON files
@@ -85,10 +87,14 @@ export class BattleLoader {
 
   /**
    * Rebuild every timeline derived from sim_trace and events. Called by
-   * parse() and again after each live-mode append (rebuild-from-scratch is
-   * cheap at recording sizes).
+   * parse() (delta = null: from scratch) and after each live-mode append
+   * with delta = {frames, events}: only what arrived, all of it later than
+   * everything already indexed. The HUD index extends itself from the delta
+   * (LV-15: a poll costs what it brings); the other timelines rebuild in
+   * full - correct, just not incremental.
+   * @param {{frames: Array, events: Array}|null} delta
    */
-  rebuildDerivedState() {
+  rebuildDerivedState(delta = null) {
     // Projectile hit map for extrapolation
     this.buildProjectileHitMap();
 
@@ -111,7 +117,7 @@ export class BattleLoader {
     this.buildRadiatorTimeline();
     this.decisions = new DecisionIndex(this.events, this.ships);
     // Spectator HUD rows (log, command net, kills, markers): see HudIndex.js
-    this.hud = buildHudIndex(this);
+    this.hud = delta ? appendHudIndex(this, delta) : buildHudIndex(this);
     this.lastEventSequence = this.events.reduce((max, e) => Math.max(max, e.sequence || 0), 0);
   }
 
@@ -155,14 +161,20 @@ export class BattleLoader {
 
     if (newFrames.length === 0 && newEvents.length === 0) return false;
 
+    // A live poll's events almost always follow everything already held:
+    // append and extend the indexes. Anything older (a late event, a saved
+    // replay merged in) re-sorts and rebuilds from scratch.
+    newEvents.sort(eventOrder);
+    const tail = this.events[this.events.length - 1];
+    const inOrder = !tail || !newEvents.length || eventOrder(tail, newEvents[0]) <= 0;
     this.simTrace.push(...newFrames);
-    this.events.push(...newEvents);
-    this.events.sort((a, b) => a.timestamp - b.timestamp || (a.sequence || 0) - (b.sequence || 0));
+    for (const e of newEvents) this.events.push(e);
+    if (!inOrder) this.events.sort(eventOrder);
     if (this.simTrace.length > 0) {
       this.duration = this.simTrace[this.simTrace.length - 1].t;
     }
 
-    this.rebuildDerivedState();
+    this.rebuildDerivedState(inOrder ? { frames: newFrames, events: newEvents } : null);
     return true;
   }
 
