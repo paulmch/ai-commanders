@@ -62,12 +62,10 @@ def test_fixture_events_follow_the_comms_schema(tmp_path):
         d = _data(e)
         assert set(d) == COMMS_MESSAGE_KEYS
         assert d["channel"] in CHANNELS and d["sender_role"] in ROLES
-        # Plan schema: ship_id is the sending SHIP; admiral and engine (datalink)
-        # traffic has none (the recorder writes sender_id 'engine:<faction>' etc.).
-        if d["sender_role"] == "captain":
-            assert e["ship_id"] == d["sender_id"]
-        else:
-            assert e["ship_id"] in (None, d["sender_id"])
+        # Contract: ship_id is the sending ship, else None. The battle's own
+        # engine datalink (fleet_comms) also runs in this fixture battle and
+        # signs as sender_id 'engine:<faction>' with no ship.
+        assert e["ship_id"] == (d["sender_id"] if d["sender_role"] == "captain" else None)
         assert d["deliver_at_t"] >= d["sent_t"] == e["timestamp"]
         assert isinstance(d["recipient_ids"], list) and isinstance(d["structured"], dict)
     assert {e["data"]["channel"] for e in by_type["comms_message"]} == CHANNELS

@@ -80,6 +80,12 @@ class MCPBattleState:
     # headings for set_maneuver HEADING, plus formation throttles.
     range_control: Dict[str, Any] = field(default_factory=dict)
 
+    # What the engine made of the commands applied at the previous checkpoint:
+    # rejected ones with the reason, and notes on applied ones (a HOLD_RANGE
+    # latching its range, a standoff order's caps). The MCP commander has no
+    # other way to learn that an order was dropped.
+    command_feedback: List[Dict[str, Any]] = field(default_factory=list)
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
@@ -95,6 +101,7 @@ class MCPBattleState:
             "checkpoint_number": self.checkpoint_number,
             "enemy_proposed_draw": self.enemy_proposed_draw,
             "range_control": self.range_control,
+            "command_feedback": self.command_feedback,
         }
 
 

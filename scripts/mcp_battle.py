@@ -74,7 +74,7 @@ async def run_mcp_battle(
     config_path: str,
     verbose: bool = True,
     http_host: str = "localhost",
-    http_port: int = 8765,
+    http_port: int = None,
     draft: bool = False,
     draft_budget: int = None,
     draft_max_ships: int = None,
@@ -145,11 +145,15 @@ async def run_mcp_battle(
         print("Warning: No MCP configuration found. Running as standard fleet battle.")
         result = runner.run_fleet_battle(fleet_data)
     else:
-        # Get HTTP port from config if specified
-        if fleet_config.alpha_fleet.mcp and fleet_config.alpha_fleet.mcp.enabled:
-            http_port = fleet_config.alpha_fleet.mcp.http_port
-        elif fleet_config.beta_fleet.mcp and fleet_config.beta_fleet.mcp.enabled:
-            http_port = fleet_config.beta_fleet.mcp.http_port
+        # An explicit --port wins; otherwise the config's mcp.http_port (the
+        # config used to override --port unconditionally, so it never worked).
+        if http_port is None:
+            if fleet_config.alpha_fleet.mcp and fleet_config.alpha_fleet.mcp.enabled:
+                http_port = fleet_config.alpha_fleet.mcp.http_port
+            elif fleet_config.beta_fleet.mcp and fleet_config.beta_fleet.mcp.enabled:
+                http_port = fleet_config.beta_fleet.mcp.http_port
+            else:
+                http_port = 8765
 
         # Import HTTP server module
         from src.llm.mcp_http_server import run_battle_with_http_server
@@ -211,8 +215,8 @@ def main():
     parser.add_argument(
         "--port",
         type=int,
-        default=8765,
-        help="HTTP API server port (default: 8765)",
+        default=None,
+        help="HTTP API server port (default: the config's mcp.http_port, else 8765)",
     )
     parser.add_argument(
         "--host",

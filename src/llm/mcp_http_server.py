@@ -1063,9 +1063,12 @@ async def run_fleet_battle_with_http(
                             print(f"    Applied: {cmd_result}")
 
                     # Errors used to be dropped on the floor: a bad ship id or
-                    # maneuver name vanished with no signal to anyone.
+                    # maneuver name vanished with no signal to anyone. The
+                    # commander reads them (and engine notes) in its next state.
                     for cmd_error in results.get("errors", []):
                         print(f"    [MCP ERROR] {cmd_error}")
+                    if controller:
+                        controller.record_command_results(results, runner.simulation.current_time)
 
             if mcp_factions:
                 await asyncio.sleep(0.1)

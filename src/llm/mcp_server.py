@@ -504,7 +504,12 @@ def create_mcp_server(
         return [
             Tool(
                 name="get_battle_state",
-                description="Get current battle state snapshot",
+                description=(
+                    "Get current battle state snapshot. command_feedback lists what the "
+                    "engine made of your previous checkpoint's commands: any it REJECTED "
+                    "(with the reason - that order never ran) and engine notes on applied "
+                    "ones (e.g. the range a HOLD_RANGE latched)."
+                ),
                 inputSchema={
                     "type": "object",
                     "properties": {},

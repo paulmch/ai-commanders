@@ -86,6 +86,22 @@ server exposes the full tool schemas, including communication, surrender, draw,
 and draft tools. Maneuvers last for the configured decision window; gun firing
 policies persist until changed.
 
+A plain `INTERCEPT` never brakes: it builds closure and passes through the
+target (a merge). To arrive and stay at a range, give `standoff_km` (and
+optionally `arrival_closing_kps`), or use `HOLD_RANGE` with `range_km`.
+`HEADING` takes a world-frame `heading_direction`, or `toward_point` (km; the
+ship stops there) or `toward_ship` (falls in alongside it); `evade="full"` or
+`"dodge"` adds threat evasion to any other maneuver. `ship_id="all"` orders
+the whole fleet: a `HEADING` is flown as a formation (throttle scaled to the
+slowest hull; `toward_*` becomes the heading from the fleet centre and does
+not stop there). `get_battle_state().range_control` lists ready-made
+headings per enemy group. `send_message` reaches the enemy commander, or with
+`recipient="all"` the enemy captains too.
+
+A tool reply only confirms that a command was queued; the engine applies it at
+`ready()`. The next `get_battle_state().command_feedback` lists any command it
+rejected, with the reason, and its notes on applied ones.
+
 ## Watch and inspect
 
 Start the viewer in another terminal:

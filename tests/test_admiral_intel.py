@@ -547,6 +547,45 @@ class TestDigest:
         assert "Torpedoes - yours: 2 launched, 2 hit, 1 blinded by PD | theirs: none" in since
         assert "Gun rounds - yours: none | theirs: 1 fired, 1 hit" in since
 
+    def test_launch_ordered_at_a_checkpoint_counts_in_the_window_it_opens(self):
+        """
+        Decisions at checkpoint T run before the sim step that starts at T,
+        and a step stamps its events with its start time: every launch the
+        captains order at T is stamped T. The digest the admiral reads at
+        T+30 must count it - a (since, until] window dropped every ordered
+        launch (and the first salvo after each checkpoint) from SINCE LAST
+        CHECKPOINT - while nothing stamped T+30 has happened yet when it reads.
+        """
+        sim = CombatSimulation(decision_interval=30.0, seed=2)
+        ship(sim, "alpha_1", "corvette", "alpha", (0, 0, 0))
+        ship(sim, "beta_1", "battleship", "beta", (400, 0, 0), fwd=(-1, 0, 0))
+        sim.current_time = sim.last_decision_time = 30.0
+        assert sim.inject_command("alpha_1", {"type": "launch_torpedo", "target_id": "beta_1"})
+        while sim.current_time < 60.0:
+            sim.step()
+        launches = [e.timestamp for e in sim.events
+                    if e.event_type == SimulationEventType.TORPEDO_LAUNCHED]
+        assert launches == [30.0]
+        assert intel.checkpoint_digest(sim, "alpha", 30.0, 60.0).torps["ours"]["launched"] == 1
+        assert intel.checkpoint_digest(sim, "alpha", 0.0, 30.0).torps["ours"]["launched"] == 0
+
+        admiral = make_admiral("alpha")
+        admiral._last_decision_t = 30.0
+        _, text = live_turn(admiral, sim, caps_from_sim(sim, "alpha"))
+        since = section(text, "=== SINCE LAST CHECKPOINT (T+30 -> T+60) ===")
+        assert "Torpedoes - yours: 1 launched" in since
+
+    def test_engine_notes_keep_a_rejection_stamped_at_the_previous_decision(self):
+        sim = CombatSimulation(decision_interval=30.0, seed=1)
+        ship(sim, "alpha_1", "corvette", "alpha", (0, 0, 0))
+        E = SimulationEventType
+        for ts, reason in ((29.0, "older"), (30.0, "at the decision")):
+            sim.events.append(SimulationEvent(E.COMMAND_STATUS, ts, "alpha_1", None, {
+                "status": "rejected", "reason": reason, "command": {"type": "launch_torpedo"}}))
+        text = "\n".join(intel.engine_notes(sim, ["alpha_1"], since_t=30.0))
+        assert "launch_torpedo rejected (at the decision)" in text
+        assert "older" not in text
+
 
 # =============================================================================
 # ADM-03 rendering: CAPTAIN REPORTS from admiral.captain_reports
@@ -711,6 +750,17 @@ class TestCaptainReports:
         user = msgs[1]["content"]
         assert "ITS CAPTAIN'S LAST REPORT: DEVIATE TIS Dart-2 [alpha_2]" in user
         assert "(NOT as ordered)" in user
+
+    def test_per_ship_order_shows_a_plain_ack_as_one_ship(self):
+        # Not the fleet block's roll call "ACK, nothing to flag (1): TIS Dart-1 [alpha_1]".
+        admiral, sim, snap, _ = battle_a_turn("alpha", t=180)
+        msgs = build_admiral_ship_order_messages(
+            admiral_name="A", ship_name="TIS Dart-1", ship_type="corvette", captain_name="C1",
+            fleet_directive="Hold the wall.", snapshot=snap, ship_id="alpha_1",
+            ship_view=admiral._ship_view(sim, "alpha_1", snap), captain_report=REPORTS[0])
+        user = msgs[1]["content"]
+        assert "ITS CAPTAIN'S LAST REPORT: ACK - flew its orders, nothing to flag\n" in user
+        assert "nothing to flag (1)" not in user
 
 
 # =============================================================================

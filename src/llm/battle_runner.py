@@ -286,6 +286,9 @@ class LLMBattleRunner:
             velocity=Vector3D(0, 0, 0),
             forward=Vector3D(1, 0, 0),
         )
+        # Display name, as setup_fleet_battle sets it: prompts label every
+        # other ship by ship.name, so without it the duel enemy was a bare "beta".
+        alpha_ship.name = self.alpha_config.ship_name
         self.simulation.add_ship(alpha_ship)
 
         # Create beta ship (right side, facing left)
@@ -298,6 +301,7 @@ class LLMBattleRunner:
             velocity=Vector3D(0, 0, 0),
             forward=Vector3D(-1, 0, 0),
         )
+        beta_ship.name = self.beta_config.ship_name
         self.simulation.add_ship(beta_ship)
 
         # Store fleet_data on the runner
@@ -1304,10 +1308,14 @@ class LLMBattleRunner:
                 results = apply_mcp_commands_to_simulation(
                     mcp_commands, self.simulation, "alpha"
                 )
+                self.alpha_mcp.record_command_results(results, self.simulation.current_time)
 
                 if self.config.verbose and results.get("applied"):
                     for cmd_result in results["applied"]:
                         print(f"    Applied: {cmd_result}")
+                if self.config.verbose:
+                    for cmd_error in results.get("errors", []):
+                        print(f"    [MCP ERROR] {cmd_error}")
 
             elif self.alpha_admiral:
                 # LLM Admiral: use existing logic
@@ -1362,10 +1370,14 @@ class LLMBattleRunner:
                 results = apply_mcp_commands_to_simulation(
                     mcp_commands, self.simulation, "beta"
                 )
+                self.beta_mcp.record_command_results(results, self.simulation.current_time)
 
                 if self.config.verbose and results.get("applied"):
                     for cmd_result in results["applied"]:
                         print(f"    Applied: {cmd_result}")
+                if self.config.verbose:
+                    for cmd_error in results.get("errors", []):
+                        print(f"    [MCP ERROR] {cmd_error}")
 
             elif self.beta_admiral:
                 # LLM Admiral: use existing logic
