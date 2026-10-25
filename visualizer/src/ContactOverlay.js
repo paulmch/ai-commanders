@@ -28,6 +28,20 @@ export function hitFlash(age) {
 
 const overlaps = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 
+/**
+ * Screen box of a contact's threat badge (.contact-threat: 9px mono at
+ * left 21px / top -12px of the 20 px bracket centred on x, y). Reserved
+ * before labels are placed so no label covers it, the ship's own included.
+ */
+export function threatBadgeBox(x, y, text) {
+  return { x: x + 10, y: y - 23, w: 10 + 6 * String(text || '').length, h: 15 };
+}
+
+/** HUD panels contact brackets and labels keep clear of (looked up lazily: some mount after the overlay). */
+export const CONTACT_PANEL_IDS = ['battleHeader', 'shipRegistry', 'shipTelemetry', 'decisionPanel', 'eventLog', 'liveHud',
+  'viewControls', 'playbackControls', 'trackHud', 'commsFeed', 'killFeed', 'resultBanner',   // spectator HUD (pass 4)
+  'directorChip', 'liveDeliberation', 'liveConnection'];                                      // live wire (pass 4)
+
 /** Choose a clear label position while leaving the contact at its true location. */
 export function placeContactLabel(x, y, side, occupied, width, height) {
   const w = 126, h = 34;
@@ -58,9 +72,15 @@ export class ContactOverlay {
     this.enabled = true;
     this.point = new THREE.Vector3();
     this.view = new THREE.Vector3();
-    this.panels = ['battleHeader', 'shipRegistry', 'shipTelemetry', 'decisionPanel', 'eventLog', 'liveHud', 'viewControls', 'playbackControls', 'trackHud',
-      'commsFeed', 'killFeed', 'resultBanner']   // spectator HUD panels (pass 4)
-      .map(id => document.getElementById(id)).filter(Boolean);
+    this.panels = [];
+  }
+
+  /** The HUD panel elements (re-resolved until every one has mounted). */
+  panelElements() {
+    if (this.panels.length < CONTACT_PANEL_IDS.length) {
+      this.panels = CONTACT_PANEL_IDS.map(id => document.getElementById(id)).filter(Boolean);
+    }
+    return this.panels;
   }
 
   populate(ships) {
@@ -95,7 +115,7 @@ export class ContactOverlay {
     const width = window.innerWidth, height = window.innerHeight;
     const camera = scene.camera;
     camera.updateMatrixWorld();
-    const occupied = this.panels.filter(panel => getComputedStyle(panel).visibility !== 'hidden').map(panel => {
+    const occupied = this.panelElements().filter(panel => !panel.hidden && getComputedStyle(panel).visibility !== 'hidden').map(panel => {
       const r = panel.getBoundingClientRect();
       return { x: r.left - 6, y: r.top - 6, w: r.width + 12, h: r.height + 12 };
     }).filter(r => r.w > 12 && r.h > 12);
@@ -113,13 +133,19 @@ export class ContactOverlay {
       if (Math.abs(this.point.x) > 0.98 || Math.abs(this.point.y) > 0.96 || this.point.z > 1) continue;
       const x = (this.point.x + 1) * width / 2, y = (1 - this.point.y) * height / 2;
       if (occupied.some(r => overlaps({ x: x - 8, y: y - 8, w: 16, h: 16 }, r))) continue;
-      candidates.push({ id, contact, state, x, y });
+      // Inbound torpedoes: count and soonest ETA by the bracket
+      const th = state.dying ? null : threats?.get(id);
+      candidates.push({ id, contact, state, x, y, th, threatText: threatLabel(th) });
     }
-    // Reserve every bracket before placing labels; a label must never hide
-    // another ship. Selected contacts get first choice of the remaining space.
-    occupied.push(...candidates.map(({ x, y }) => ({ x: x - 10, y: y - 10, w: 20, h: 20 })));
+    // Reserve every bracket and threat badge before placing labels; a label
+    // must never hide another ship or a badge. Selected contacts get first
+    // choice of the remaining space.
+    for (const { x, y, threatText } of candidates) {
+      occupied.push({ x: x - 10, y: y - 10, w: 20, h: 20 });
+      if (threatText) occupied.push(threatBadgeBox(x, y, threatText));
+    }
     candidates.sort((a, b) => Number(b.id === selectedId) - Number(a.id === selectedId));
-    for (const { id, contact, state, x, y } of candidates) {
+    for (const { id, contact, state, x, y, th, threatText: text } of candidates) {
       const { button, info, label, detail, leader, health, bracket, threat } = contact;
       button.hidden = false;
       button.style.transform = `translate(${x - 10}px, ${y - 10}px)`;
@@ -135,9 +161,6 @@ export class ContactOverlay {
         button.style.setProperty('--pulse', `${(0.5 / reactorPulseRate(Number.isFinite(ttd) ? ttd : 30)).toFixed(3)}s`);
       }
       detail.textContent = state.dying ? detonationLabel(ttd) : `${getShipClassName(info.type)} · ${hull}%`;
-      // Inbound torpedoes: count and soonest ETA by the bracket
-      const th = state.dying ? null : threats?.get(id);
-      const text = threatLabel(th);
       threat.hidden = !text;
       if (text) threat.textContent = text;
       button.classList.toggle('threatened', !!text);
