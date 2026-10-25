@@ -2369,6 +2369,11 @@ body.decisions-open .live-delib {
 .director-chip.on .dc-dot { animation: livePulse 1.6s ease-in-out infinite; }
 .director-chip kbd { font: inherit; opacity: 0.55; }
 #shipTelemetry:not(.hidden) ~ .director-chip { right: 308px; }
+/* The right column (command net, track HUD; z 30) starts below the chip
+   instead of covering it: the net is open by default on wide screens */
+@media (min-width: 901px) {
+  #app:has(> .director-chip:not([hidden])) #rightSidebar { top: 122px; }
+}
 
 /* Off-screen chevrons */
 #offscreenIndicators { position: fixed; inset: 0; z-index: 13; pointer-events: none; }
