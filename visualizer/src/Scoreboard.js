@@ -144,7 +144,20 @@ export class Scoreboard {
   }
 }
 
-/** End-of-battle card: winner / draw / stopped with the reason and final tallies. */
+/**
+ * Is the replay result banner due? Only when replaying a recording (no live
+ * session, ended or not) with the playhead at its end. A live battle's
+ * verdict belongs to the live wire's end card (LiveCards.EndCard, shown
+ * once the stream ends), so the two never stack.
+ * @param {number} t - playhead
+ * @param {number} duration - recording duration
+ * @param {Object|null} live - the viewer's live-mode state (null in replay)
+ */
+export function resultBannerDue(t, duration, live) {
+  return !live && duration > 0 && t >= duration - 1e-3;
+}
+
+/** End-of-battle card for a replayed recording: winner / draw / stopped with the reason and final tallies. */
 export class ResultBanner {
   constructor({ root, doc = defaultDoc() } = {}) {
     this.root = root;

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { FakeDocument, build, allElements } from './fakedom.js';
 import { buildHudIndex } from '../src/HudIndex.js';
-import { computeSides, resultTitle, cleanReason, ResultBanner, Scoreboard } from '../src/Scoreboard.js';
+import { computeSides, resultTitle, cleanReason, ResultBanner, Scoreboard, resultBannerDue } from '../src/Scoreboard.js';
 import { feedAt, killLines, KillFeed } from '../src/KillFeed.js';
 import { timelineMarks, sparkPaths, TimelineMarkers } from '../src/TimelineMarkers.js';
 import { registryDensity, registryStatus } from '../src/Registry.js';
@@ -82,6 +82,15 @@ test('result banner: winner, budget stop, draw; exception prefixes are stripped'
   root.querySelector('[data-close]').click();
   banner.update(true, hud.result, sides, 120);
   assert.ok(root.classList.contains('hidden'), 'dismissal sticks until the next recording');
+});
+
+test('result banner is the replay verdict only: a live session (running or ended) leaves it to the live end card', () => {
+  assert.equal(resultBannerDue(120, 120, null), true);
+  assert.equal(resultBannerDue(119, 120, null), false);
+  assert.equal(resultBannerDue(140, 120, null), true, 'wreck epilogue past the last frame');
+  assert.equal(resultBannerDue(120, 120, { ended: false }), false);
+  assert.equal(resultBannerDue(120, 120, { ended: true }), false, 'never stacks with the live end card');
+  assert.equal(resultBannerDue(0, 0, null), false, 'nothing loaded');
 });
 
 test('scoreboard DOM writes the model and only changed values', () => {

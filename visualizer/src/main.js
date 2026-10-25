@@ -22,7 +22,7 @@ import { CombatLog } from './CombatLog.js';
 import { CommsFeed } from './CommsFeed.js';
 import { KillFeed } from './KillFeed.js';
 import { Registry } from './Registry.js';
-import { Scoreboard, ResultBanner } from './Scoreboard.js';
+import { Scoreboard, ResultBanner, resultBannerDue } from './Scoreboard.js';
 import { TimelineMarkers } from './TimelineMarkers.js';
 import { showLightbox } from './hudDom.js';
 
@@ -859,8 +859,9 @@ class BattleVisualizer {
     this.registry.update(this.currentState.ships, t, hud.kills);
     this.killFeed.update(hud.kills, t);
     // A dying ship is a confirmed kill counting down to its reactor
-    // detonation; the banner waits for the end of a finished battle.
-    const over = t >= this.loader.duration - 1e-3 && (!this.live || this.live.ended);
+    // detonation; the banner waits for the end of a replayed recording (a
+    // live battle's verdict is the live end card's, never both).
+    const over = resultBannerDue(t, this.loader.duration, this.live);
     this.resultBanner.update(over, hud.result, sides, this.loader.duration);
   }
 
