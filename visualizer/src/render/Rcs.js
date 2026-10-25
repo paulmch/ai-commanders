@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { getPuffTexture, getGlowTexture, getNoiseTexture } from './Textures.js';
+import { RCS_S, fitScale } from './Hulls.js';
 
 /**
  * RCS attitude jets.
@@ -26,7 +27,8 @@ import { getPuffTexture, getGlowTexture, getNoiseTexture } from './Textures.js';
  *
  * Body frame (matches Object3D.lookAt with world +Y up): +Z nose, +X right,
  * +Y up. Mount contract (hulls stream): ship.userData.rcsMounts =
- * [{pos: Vector3 hull-local, dir: Vector3 unit outward nozzle axis}, ...].
+ * [{pos: Vector3 hull-local, dir: Vector3 unit outward nozzle axis}, ...],
+ * each the exit of a nozzle on a thruster block of size RCS_S * fitScale(L).
  */
 
 const DEG = Math.PI / 180;
@@ -69,6 +71,31 @@ export const RCS_TIMING = {
 export const PUFF_BASE = 0.6;
 export function puffScale(jetLen) {
   return jetLen > 0 ? PUFF_BASE * Math.sqrt(jetLen / PUFF_BASE) : PUFF_BASE;
+}
+
+/**
+ * Jet plume size in thruster-block units (block = RCS_S * fitScale(L), the
+ * same physical size on every hull): plume length at full intensity, the
+ * radius parameter of the sheath and core cones (the cone root is JET_ROOT
+ * of it, so the sheath leaves the nozzle at about the bell mouth, 0.13
+ * block) and the nozzle flash sprite.
+ */
+export const JET_BLOCKS = { len: 4.5, sheath: 0.5, core: 0.24, flash: 2.2 };
+/** Plume radius at the nozzle, as a share of the cone's radius parameter. */
+export const JET_ROOT = 0.3;
+
+/** Jet dimensions (scene units) for a hull of length L. */
+export function jetDims(L) {
+  const s = RCS_S * fitScale(L);
+  const len = JET_BLOCKS.len * s;
+  return {
+    block: s,
+    len,
+    sheath: JET_BLOCKS.sheath * s,
+    core: JET_BLOCKS.core * s,
+    flash: JET_BLOCKS.flash * s,
+    puff: puffScale(len)
+  };
 }
 
 // Recorded headings are rounded to 4 decimals: sigma of one component
@@ -363,18 +390,89 @@ const _bx = [0, 0, 0], _by = [0, 0, 0];
 // ---------------------------------------------------------------------------
 const vx = (v, i) => (Array.isArray(v) ? v[i] : i === 0 ? v.x : i === 1 ? v.y : v.z);
 
+export const ROLE_RADIAL = 0;
+export const ROLE_SIDE = 1;
+export const ROLE_AXIAL = 2;
+export const ROLE_BLOCKED = 3;
+
 /**
- * Torque axis of each jet in the body frame, scaled by its leverage: the
- * reaction force is opposite the nozzle axis, torque = r x F about the hull
- * origin, divided by the best jet's torque. Jets with under a third of the
- * best leverage (fore/aft translation nozzles near the axis) get a zero
- * axis and never fire for rotation.
+ * Free run of each nozzle's plume (scene units, Infinity = clear for at
+ * least `len`): the first hit of its axis on the hull's own plating
+ * (userData.parts, hull-local; bounding boxes are culled first, so this is
+ * a handful of small-part raycasts per nozzle, once per hull).
+ * @returns {Float32Array} per mount
+ */
+export function jetClearance(mounts, parts, len) {
+  const out = new Float32Array(mounts.length).fill(Infinity);
+  if (!parts || !parts.length) return out;
+  const mat = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
+  const meshes = parts.map(p => {
+    if (!p.geom.boundingBox) p.geom.computeBoundingBox();
+    return new THREE.Mesh(p.geom, mat);
+  });
+  const ray = new THREE.Raycaster();
+  const o = new THREE.Vector3(), d = new THREE.Vector3(), hb = new THREE.Vector3();
+  const hits = [];
+  mounts.forEach((m, i) => {
+    d.set(vx(m.dir, 0), vx(m.dir, 1), vx(m.dir, 2)).normalize();
+    // start just off the bell mouth, clear of the nozzle's own block
+    o.set(vx(m.pos, 0), vx(m.pos, 1), vx(m.pos, 2)).addScaledVector(d, len * 0.005);
+    ray.set(o, d);
+    ray.far = len;
+    let best = Infinity;
+    for (const mesh of meshes) {
+      if (!ray.ray.intersectBox(mesh.geometry.boundingBox, hb) || hb.distanceTo(o) > len) continue;
+      hits.length = 0;
+      mesh.raycast(ray, hits);
+      for (const h of hits) best = Math.min(best, h.distance);
+    }
+    out[i] = best;
+  });
+  mat.dispose();
+  return out;
+}
+
+/**
+ * What each nozzle of a thruster block is for, from its geometry: RADIAL
+ * (pointing straight out from the hull axis - the attitude couples),
+ * SIDE (tangential, along the skin - lateral trims) or AXIAL (fore/aft).
+ * With `free` (jetClearance) a nozzle whose plume would run into the hull
+ * within `len` - a side nozzle facing a torpedo rail or a launcher bank -
+ * is BLOCKED and never fires.
+ * @returns {Int8Array} ROLE_* per mount
+ */
+export function jetRoles(mounts, free = null, len = 0) {
+  const out = new Int8Array(mounts.length);
+  mounts.forEach((m, i) => {
+    if (free && free[i] < len) { out[i] = ROLE_BLOCKED; return; }
+    const dx = vx(m.dir, 0), dy = vx(m.dir, 1), dz = vx(m.dir, 2);
+    const dl = Math.hypot(dx, dy, dz) || 1;
+    if (Math.abs(dz) / dl > 0.7) { out[i] = ROLE_AXIAL; return; }
+    const rx = vx(m.pos, 0), ry = vx(m.pos, 1);
+    const rl = Math.hypot(rx, ry), ql = Math.hypot(dx, dy);
+    out[i] = rl === 0 || (rx * dx + ry * dy) / (rl * ql) > 0.8 ? ROLE_RADIAL : ROLE_SIDE;
+  });
+  return out;
+}
+
+/**
+ * Unit torque axis of each attitude jet in the body frame: the reaction
+ * force is opposite the nozzle axis, torque = r x F about the hull origin.
+ * Only radial nozzles turn the ship (a block's side nozzles point the same
+ * ways from a few cm along the skin, and are kept for trims), and of those
+ * only the ones with at least a third of the best leverage - fore/aft
+ * nozzles near the axis get a zero axis and never fire for rotation. Axes
+ * are unit length rather than leverage-scaled, so the nose and tail
+ * stations fire a balanced couple (a pure torque) wherever they sit.
+ * The couple's slight roll on hulls whose blocks sit off the diagonal is
+ * left in (paired blocks cancel it).
  * @returns {Float32Array} 3 per jet
  */
-export function jetTorqueAxes(mounts) {
+export function jetTorqueAxes(mounts, roles = jetRoles(mounts)) {
   const out = new Float32Array(mounts.length * 3);
   let best = 0;
   mounts.forEach((m, i) => {
+    if (roles[i] !== ROLE_RADIAL) return;
     const rx = vx(m.pos, 0), ry = vx(m.pos, 1), rz = vx(m.pos, 2);
     const dl = Math.hypot(vx(m.dir, 0), vx(m.dir, 1), vx(m.dir, 2)) || 1;
     const Fx = -vx(m.dir, 0) / dl, Fy = -vx(m.dir, 1) / dl, Fz = -vx(m.dir, 2) / dl;
@@ -383,9 +481,18 @@ export function jetTorqueAxes(mounts) {
     out[3 * i + 2] = rx * Fy - ry * Fx;
     best = Math.max(best, Math.hypot(out[3 * i], out[3 * i + 1], out[3 * i + 2]));
   });
+  // An end of the hull with several stations (the dreadnought's two bow
+  // quads) shares its half of the couple between them
+  const stations = [new Set(), new Set()];
+  const end = (m) => (vx(m.pos, 2) >= 0 ? 0 : 1);
+  const lever = (i) => Math.hypot(out[3 * i], out[3 * i + 1], out[3 * i + 2]);
+  mounts.forEach((m, i) => {
+    if (best > 0 && lever(i) >= best / 3) stations[end(m)].add(Math.round(vx(m.pos, 2) * 1000));
+  });
+  const share = stations.map(st => Math.min(stations[0].size || 1, stations[1].size || 1) / (st.size || 1));
   for (let i = 0; i < mounts.length; i++) {
-    const l = Math.hypot(out[3 * i], out[3 * i + 1], out[3 * i + 2]);
-    const sc = best > 0 && l >= best / 3 ? 1 / best : 0;
+    const l = lever(i);
+    const sc = best > 0 && l >= best / 3 ? share[end(mounts[i])] / l : 0;
     for (let c = 0; c < 3; c++) out[3 * i + c] *= sc;
   }
   return out;
@@ -470,7 +577,8 @@ export function pulseEnvelope(tau, on) {
 // ---------------------------------------------------------------------------
 export class RcsPlanner {
   /**
-   * @param {Object} o shipId, shipType, mounts [{pos, dir}], source
+   * @param {Object} o shipId, shipType, mounts [{pos, dir}], roles
+   *   (optional jetRoles, e.g. with the hull's clearance), source
    *   ({sample(t, out)}) or trace
    */
   constructor(o) {
@@ -478,7 +586,7 @@ export class RcsPlanner {
     this.shipType = o.shipType;
     this.seed = seedOf(o.shipId);
     this.phase = hash01(this.seed, 11) * RCS_TIMING.cell;
-    this.setMounts(o.mounts);
+    this.setMounts(o.mounts, o.roles);
     this.source = o.source || null;
     this.kin = null;
     this.traceRef = null;
@@ -491,10 +599,11 @@ export class RcsPlanner {
     if (o.trace) this.setTrace(o.trace);
   }
 
-  setMounts(mounts) {
+  setMounts(mounts, roles = null) {
     this.mounts = mounts;
     this.jetCount = mounts.length;
-    this.axes = jetTorqueAxes(mounts);
+    this.roles = roles || jetRoles(mounts);
+    this.axes = jetTorqueAxes(mounts, this.roles);
     this._dem = [0, 1, 2, 3, 4, 5, 6, 7].map(() => new Float32Array(this.jetCount));
     this.cells = new Map();
   }
@@ -623,7 +732,7 @@ function jetGeometry() {
   const along = 14;
   for (let i = 0; i <= along; i++) {
     const t = i / along;
-    const flare = 0.3 + 0.7 * smooth(0, 0.45, t);
+    const flare = JET_ROOT + (1 - JET_ROOT) * smooth(0, 0.45, t);
     const taper = Math.pow(1 - smooth(0.5, 1.0, t), 0.6);
     pts.push(new THREE.Vector2(Math.max(0.01, flare * taper), t));
   }
@@ -723,8 +832,34 @@ const puffFragment = /* glsl */`
 
 const MAX_JETS = 512;      // cone instances (2 per firing jet)
 const MAX_PUFFS = 3072;    // puffs + nozzle glows
-const _up = new THREE.Vector3(0, 1, 0);
 const _zAxis = new THREE.Vector3(0, 0, 1);
+
+/**
+ * Per-jet frames: hull-local nozzle exit `pos`, outward axis `dir`, the
+ * rotation `q` taking the plume's +Z onto it and a lateral basis u, v.
+ * A plume instance is compose(pos, q, (r, r, len)) in hull space, so it
+ * starts on the nozzle mouth and streams out along the mount's axis.
+ */
+export function jetFrames(mounts) {
+  return mounts.map(m => {
+    const pos = new THREE.Vector3(vx(m.pos, 0), vx(m.pos, 1), vx(m.pos, 2));
+    const dir = new THREE.Vector3(vx(m.dir, 0), vx(m.dir, 1), vx(m.dir, 2)).normalize();
+    const q = new THREE.Quaternion().setFromUnitVectors(_zAxis, dir);
+    const u = new THREE.Vector3(1, 0, 0).applyQuaternion(q);
+    const v = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
+    return { pos, dir, q, u, v };
+  });
+}
+
+/**
+ * Hull-space plume instance of one jet (layer 0 core, 1 sheath) at
+ * effective intensity Ie: length and radius from the block-sized dims.
+ */
+export function jetInstanceMatrix(frame, dims, layer, Ie, out, _s = new THREE.Vector3()) {
+  const len = dims.len * (layer ? 1.0 : 0.75) * (0.55 + 0.45 * Ie);
+  const rad = layer ? dims.sheath : dims.core;
+  return out.compose(frame.pos, frame.q, _s.set(rad, rad, len));
+}
 
 /**
  * Scene-side RCS renderer. One instanced cone mesh for every jet in the
@@ -812,6 +947,8 @@ export class RcsSystem {
     this._Y = new THREE.Vector3();
     this._Z = new THREE.Vector3();
     this._one = new THREE.Vector3(1, 1, 1);
+    this._nj = 0;   // _updateShip's running instance counts
+    this._np = 0;
   }
 
   /**
@@ -872,21 +1009,15 @@ export class RcsSystem {
     let p = this.planners.get(shipId);
     if (p && p.group === ship) return p;
     const mounts = this._mountsFor(ship);
-    p = new RcsPlanner({ shipId, shipType: ship.userData.shipType, mounts, source: this.sources.get(shipId) });
+    // Plumes sized from the thruster block, which is one physical size on
+    // every hull: a dreadnought's jets match a corvette's. Nozzles whose
+    // plume would run into the hull's own fittings never fire
+    const dims = jetDims(ship.userData.size?.length || 8);
+    const roles = jetRoles(mounts, jetClearance(mounts, ship.userData.parts, dims.len), dims.len);
+    p = new RcsPlanner({ shipId, shipType: ship.userData.shipType, mounts, roles, source: this.sources.get(shipId) });
     p.group = ship;
-    const ud = ship.userData;
-    const L = ud.size?.length || 8, W = ud.size?.width || 1.6;
-    p.jetLen = 0.36 * W + 0.06 * L;
-    p.puffLen = puffScale(p.jetLen);
-    // Per-jet frames: local transform (+Z to nozzle axis) and a lateral basis
-    p.jetFrames = mounts.map(m => {
-      const pos = new THREE.Vector3(...m.pos);
-      const dir = new THREE.Vector3(...m.dir);
-      const q = new THREE.Quaternion().setFromUnitVectors(_zAxis, dir);
-      const u = new THREE.Vector3(1, 0, 0).applyQuaternion(q);
-      const v = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
-      return { pos, dir, q, u, v };
-    });
+    p.dims = dims;
+    p.jetFrames = jetFrames(mounts);
     this.planners.set(shipId, p);
     return p;
   }
@@ -912,8 +1043,8 @@ export class RcsSystem {
           if (!trace || !trace.length) continue;
           planner.setTrace(trace);
         }
-        const r = this._updateShip(planner, ship, time, nj, np);
-        nj = r[0]; np = r[1];
+        this._updateShip(planner, ship, time, nj, np);
+        nj = this._nj; np = this._np;
       }
     }
 
@@ -942,11 +1073,13 @@ export class RcsSystem {
     return out.setFromRotationMatrix(this._basis);
   }
 
+  /** Write a ship's plumes from instance nj and puffs from np; the new counts land in _nj/_np. */
   _updateShip(planner, ship, time, nj, np) {
     const n = planner.jetCount;
     const frames = planner.jetFrames;
-    const jl = planner.jetLen;
-    const pj = planner.puffLen || jl;
+    const dims = planner.dims;
+    const jl = dims.len;
+    const pj = dims.puff;
     this._shipM.compose(ship.position, ship.quaternion, this._one);
     this._shipM.setPosition(
       ship.position.x - this._origin.x,
@@ -965,9 +1098,7 @@ export class RcsSystem {
       const Ie = I * fl;
       const fr = frames[k];
       for (let layer = 0; layer < 2 && nj < MAX_JETS; layer++) {
-        const len = jl * (layer ? 1.0 : 0.75) * (0.55 + 0.45 * Ie);
-        const rad = jl * (layer ? 0.2 : 0.09);
-        this._m.compose(fr.pos, fr.q, this._v.set(rad, rad, len));
+        jetInstanceMatrix(fr, dims, layer, Ie, this._m, this._v);
         this._m2.multiplyMatrices(this._shipM, this._m);
         this._m2.toArray(jm, nj * 16);
         ja[nj * 4] = Ie;
@@ -978,9 +1109,9 @@ export class RcsSystem {
       }
       if (np < MAX_PUFFS) {
         // nozzle flash (negative size = glow texture)
-        this._p.copy(fr.dir).multiplyScalar(jl * 0.06).add(fr.pos).applyMatrix4(this._shipM);
+        this._p.copy(fr.dir).multiplyScalar(dims.block * 0.15).add(fr.pos).applyMatrix4(this._shipM);
         pp[np * 4] = this._p.x; pp[np * 4 + 1] = this._p.y; pp[np * 4 + 2] = this._p.z;
-        pp[np * 4 + 3] = -pj * (0.5 + 0.5 * Ie);
+        pp[np * 4 + 3] = -dims.flash * (0.5 + 0.5 * Ie);
         const g = 1.4 * Ie;
         pc[np * 4] = 0.75 * g; pc[np * 4 + 1] = 0.85 * g; pc[np * 4 + 2] = 1.0 * g;
         pc[np * 4 + 3] = 0;
@@ -993,7 +1124,9 @@ export class RcsSystem {
     const life = RCS_TIMING.puffLife;
     const j0 = Math.ceil((time - life) / dt);
     const j1 = Math.floor(time / dt);
-    if (j1 < j0) return [nj, np];
+    this._nj = nj;
+    this._np = np;
+    if (j1 < j0) return;
     // correction from the traced to the rendered orientation (they differ
     // only if the interpolator smooths differently); applied to past poses
     this._traceQuat(planner, time, this._qc);
@@ -1042,7 +1175,7 @@ export class RcsSystem {
         np++;
       }
     }
-    return [nj, np];
+    this._np = np;
   }
 
   dispose() {
