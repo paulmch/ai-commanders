@@ -807,14 +807,25 @@ class TestClientErrorHandling:
         assert client.decide_with_tools([{"role": "user", "content": "hi"}], []) == []
         assert client.stats.malformed_arguments == 1
 
-    def test_captain_failure_does_not_pollute_decision_history(self):
+    def test_captain_failure_is_recorded_as_lost_not_as_none(self):
+        """
+        A failed call is retried once; if it fails again the turn is recorded
+        as LOST (never as a deliberate "none"), the battle record sees
+        call_failed, and the next prompt says the orders were lost (CP-09).
+        """
         captain = make_captain()
         captain.client.decide_with_tools.side_effect = LLMCallError("boom")
         runner = make_runner()
 
         commands = captain.decide("alpha", runner.simulation)
 
-        assert commands == []
+        assert commands == []  # nothing was flying, so nothing to renew
+        assert captain.client.decide_with_tools.call_count == 2  # one retry
         assert captain.last_call_failed is True
-        assert captain.decision_history == []
-        assert captain.decision_count == 0
+        assert "boom" in captain.last_failure_reason
+        assert len(captain.decision_history) == 1
+        assert "boom" in captain.decision_history[0]["lost"]
+        assert "LOST" in captain._format_decision_history()
+        assert captain._format_decision_history().count("none") == 0
+        notice = captain._format_lost_turn()
+        assert "YOUR LAST ORDERS WERE LOST" in notice and "COASTED" in notice

@@ -168,16 +168,24 @@ CAPTAIN_TOOLS_BASE = [
         "type": "function",
         "function": {
             "name": "set_primary_target",
-            "description": "Designate a specific enemy ship as your primary target. Weapons and intercept maneuvers will focus on this target.",
+            "description": (
+                "Designate an enemy ship as your primary target: guns and INTERCEPT/PADLOCK "
+                "follow it. Names can repeat across fleets - the ship id ([beta_3] in your "
+                "turn) is unambiguous."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "target_name": {
                         "type": "string",
-                        "description": "Name of enemy ship to target (e.g., 'ENS Aggressor')"
+                        "description": "Enemy ship name or id (e.g. 'OCS Lancer-1' or 'beta_3')"
+                    },
+                    "target_id": {
+                        "type": "string",
+                        "description": "Enemy ship id (e.g. 'beta_3'); wins over target_name"
                     }
                 },
-                "required": ["target_name"]
+                "required": []
             }
         }
     },
@@ -326,28 +334,24 @@ CAPTAIN_TOOLS_BASE = [
     },
 ]
 
-# Torpedo tool - only available if ship has torpedoes
+# Torpedo tool - only available if ship has torpedoes. The physics and salvo
+# doctrine live in the cached system prompt (TORPEDOES block); repeating them
+# here cost ~1.7k characters per call. The tool's answer is a feasibility
+# check flown on the engine: a launch that misses even if an OPENING target
+# holds course is refused, other doubtful verdicts come back as warnings.
 TORPEDO_TOOL = {
     "type": "function",
     "function": {
         "name": "launch_torpedo",
         "description": (
-            "Launch torpedoes at an enemy. Kinetic penetrators, 14 km/s own delta-v at "
-            "12g; impact energy scales with the SQUARE of closing speed. Measured: a "
-            "launch with zero closure lands ~23 GJ, a hard head-on (26 km/s) ~95 GJ, a "
-            "lob at a receding ship ~8 GJ - and a receding EVADING ship usually escapes "
-            "outright, wasting the round. Fire when CLOSING. A closing launch vs a lone "
-            "ship connects almost always (12g guidance cannot be out-turned; lone-ship "
-            "PD only blinds slow rounds). Rounds arriving TOGETHER split enemy PD dwell "
-            "- launch your salvo in one decision rather than trickling. Each launcher "
-            "reloads in 12s. Ready tubes fire together; remaining requested rounds "
-            "queue until reload, expiring at the next checkpoint. Magazine is limited - "
-            "check YOUR TORPEDOES REMAINING. If a round's target dies mid-flight, a "
-            "live-seeker round RETARGETS a reachable enemy on its own (delta-v "
-            "permitting): a fresh seeker picks the intercept leaving the most fuel "
-            "(hardest impact), a PD-singed seeker races the FASTEST intercept before "
-            "it goes blind. Overkill partially recycles; blinded or burned-out "
-            "rounds are still wasted."
+            "Launch torpedoes at an enemy before the next checkpoint. Check the target's "
+            "torpedo line in ENEMIES first: launch at REACHABLE targets; UNREACHABLE, "
+            "ESCAPABLE (he only has to EVADE), TOO CLOSE and OVERKILL launches waste rounds. "
+            "The engine flies the round before launching: a round that misses even if an "
+            "OPENING target holds course is REFUSED; other doubtful launches go ahead and "
+            "the warning is shown to you next turn. Ready tubes fire together, the rest "
+            "queue for reload and expire at the next checkpoint; rounds arriving together "
+            "split enemy point defense - salvo, don't trickle."
         ),
         "parameters": {
             "type": "object",
@@ -357,9 +361,8 @@ TORPEDO_TOOL = {
                     "minimum": 1,
                     "maximum": 3,
                     "description": (
-                        "How many torpedoes to launch before the next checkpoint. "
-                        "Ready tubes launch now; additional rounds wait for reload. Salvos are harder "
-                        "for point defense to stop than single launches. Defaults to 1."
+                        "Rounds to launch before the next checkpoint (ready tubes now, the "
+                        "rest on reload). Defaults to 1."
                     ),
                 },
                 "target_id": {
@@ -367,6 +370,13 @@ TORPEDO_TOOL = {
                     "description": (
                         "Ship ID to target (e.g. 'beta_1'). Defaults to your primary target. "
                         "Use this to split a salvo onto a different ship than your guns."
+                    ),
+                },
+                "override_check": {
+                    "type": "boolean",
+                    "description": (
+                        "Launch even when the engine check says the round cannot reach "
+                        "(default false). Only with a reason the check cannot see."
                     ),
                 },
             },

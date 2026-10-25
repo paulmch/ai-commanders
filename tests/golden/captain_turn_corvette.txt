@@ -1,0 +1,59 @@
+=== TACTICAL DATA (T+180s) ===
+You are Captain Dart-3, commanding TIS Dart-3. Decision 7: your orders lock for 30 s; next decision T+210.
+
+MY SHIP: TIS Dart-3 [alpha_3] - Corvette, 3.0g, 90° turn ~12 s
+  position (-25.0,+9.0,+3.0) km | velocity (+2.90,-0.50,+0.10) km/s = 2.95 km/s | nose (-0.96,-0.27,+0.01)
+  hull 100% | armor nose 212 / lateral 36 / tail 42 cm | delta-v 500/500 km/s
+  heat 7% (22/320 GJ), net +48 MW
+  radiators RETRACTED (protected, no cooling) [manual] 780/780 MW
+  weapons: torpedoes 7/8, tubes 1/1 ready, up to 3 launches before your next decision | PD 1/1 turrets (automatic)
+  flying: EVADE@80% (mode RUN) - issued T+150, EXPIRES NOW: renew it or the ship coasts
+  primary target: OCS Falchion-1 [beta_5]
+
+THREATS TO ME (on a collision course: 0 gun rounds, 1 guided torpedo, 1 blinded wreck):
+  INBOUND ORDNANCE: 2 torpedo(es):
+    - torpedo from OCS Lancer-3: 180 km, closing 12.4 km/s, IMPACT IN 15s, est ~30 GJ | NEZ: CANNOT be outrun | PD kill needs ~3 turret(s), you have 1 + allies 1 bearing: your PD umbrella CANNOT stop it
+    - BLINDED torpedo from TIS Dart-2 [alpha_2] - YOUR OWN SIDE'S round: 40 km, closing 9.0 km/s, IMPACT IN 4s, est ~10 GJ | ballistic wreck: KEEP MANEUVERING and it misses (passes 0.4 km from you if you hold course)
+  TORPEDO HULLS TARGETING YOU: OCS Lancer-3 [beta_7] (4 tubes, 40 rounds) - a launch now lands in ~38 s, BEFORE you decide again. Opening range before they launch is the only escape; EVADE (auto-RUN) now.
+  !! GROUP A: MERGE IN 24 s at 1.2 km (OCS Falchion-1), too late to brake (need 375 km incl. flip, have 110 km); pass wide or burn laterally NOW.
+
+ENEMIES (2; dir_to = world unit vector from you to him - paste it into set_heading):
+  [PRIMARY] OCS Falchion-1 [beta_5] Destroyer | 110 km, closing 4.68 km/s | dir_to (-0.99,+0.12,+0.02), 7° off your nose (ahead-port-above) | hull 100%, armor intact | 1x Spinal, 1x Coilgun, PD 2/2 | guns ~21 GJ/min | !! HAS YOU TARGETED
+    torpedo: REACHABLE | TOF ~9 s, ~16.2 km/s ~33 GJ | PD over him 2+4 -> salvo >= 3 together | friendly rounds inbound 1
+  OCS Lancer-3 [beta_7] Torpedo Cruiser | 251 km, OPENING 3.51 km/s | dir_to (-0.80,-0.60,+0.00), 41° off your nose (ahead-port-above) | hull 100%, nose Visible damage, flank Intact | 4x Torpedo tube (40 rounds left), PD 4/4 | !! HAS YOU TARGETED
+    torpedo: UNREACHABLE (OPENING 3.5 km/s): the round burns out before intercept even if he holds course - expected ~0 GJ
+
+FRIENDLIES (PD umbrella over you: 2 turrets within 250 km - yours 1 + 1 ship):
+  TIS Dart-1 [alpha_1] Corvette | 37 km dir_to (+0.54,-0.81,+0.27) | rel 0.21 km/s | EVADE@80% -> OCS Falchion-1 [beta_5] | torps 6, 1 in flight (first lands ~25 s) | PD 1/1 | hull 100%
+
+=== RANGE CONTROL (world-frame headings for set_heading) ===
+GROUP A: OCS Falchion-1 (1 ship) - 110 km, closing 4.68 km/s
+
+ORDERS FROM YOUR ADMIRAL (T+180):
+  FLEET DIRECTIVE: (no new fleet directive this checkpoint) - last one (issued T+150, 30 s old): Hit the destroyers first; torpedo cruisers last.
+  !!![CRITICAL] (issued T+180, this checkpoint) INTERCEPT toward OCS Falchion-1 at 80%; fleet centre (90,55,10).
+      >>> TARGET: OCS Lancer-3 [beta_7] - your sensors: 251 km, OPENING 3.51 km/s
+      >>> COORDINATED SALVO: launch 1 torpedo(es) at OCS Lancer-3 THIS CHECKPOINT, timed with the rest of the fleet.
+          SALVO CHECK: UNREACHABLE (OPENING 3.5 km/s): the round burns out before intercept even if he holds course - expected ~0 GJ. DEVIATE is the correct response - say why.
+      >>> ENGINE ORDER CHECK: INTERCEPT@80% held for 2 checkpoints -> closest approach 1.2 km to OCS Falchion-1 [beta_5] in 24 s, passing at 4.7 km/s = a MERGE (seconds of fire, then flying apart)
+      >>> POSITION IN ORDER: (90,55,10) km is a POSITION: from you dir_to (+0.99,+0.40,+0.06), 125 km - set_heading takes that direction, not the position
+      !! Your order and RANGE CONTROL conflict (merge): choose and explain - DEVIATE is allowed.
+  REPLY: acting on these orders with your tools IS your acknowledgment. Call report_to_admiral only to DEVIATE or report UNABLE (say why), or to send a request or contact report. A CHECK above that says the order fails is a reason to DEVIATE.
+
+FLEET NET (your fleet, your admiral and engine signals):
+  T+150 TIS Dart-1 [alpha_1] -> fleet: "Taking Falchion-1 with 2 rounds at T+180, cover me."
+  T+165 ENGINE -> fleet: "TIS Dart-4 launched 2 torpedoes at OCS Falchion-1 [beta_5], ETA ~T+205."
+
+ENEMY TRANSMISSIONS (open channel - the enemy is talking):
+  T+150 OCS Lancer-3 [beta_7]: "Your corvettes will burn."
+
+YOUR RECENT DECISIONS (newest last; launches with what they did):
+  T+150 EVADE@80% | torp x1 -> OCS Falchion-1 [beta_5]: 1 in flight | tgt OCS Falchion-1 [beta_5]
+
+YOUR CAPTAIN'S LOG (notes you wrote to your future self - execute or supersede them):
+  T+150s: Salvo on Falchion-1, then open range.
+
+ENGINE FEEDBACK (what your ship actually did; weapon policies persist, maneuvers and queued launches expire at the next checkpoint):
+  helm (T+151): RUN, requested 80% throttle, applied 80%
+
+DECISION POINT 7. What are your orders, Captain? Issue them as tool calls (set_maneuver/set_heading, launch_torpedo, set_primary_target); words alone do nothing.
