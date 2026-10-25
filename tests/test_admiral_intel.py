@@ -725,11 +725,17 @@ class TestDirectiveFailure:
             assert 'You have already set the fleet directive:\n""' not in text
             assert "NO FLEET DIRECTIVE THIS CHECKPOINT - the directive call failed (truncated" in text
             assert "Your last directive (T+165s - STALE" in text
+            # Nothing here asserts what captains do or do not see of the old
+            # one: the captain prompt may echo it, labelled as not current.
+            assert "captains do not see" not in text and "Captains receive none" not in text
         # The next checkpoint's NOW block says so.
         client.script = [([DIRECTIVE], "tool_calls")]
         admiral.decide(simulation=battle_a_sim(270), captains=captains_for("alpha"))
         phase1 = [c for c in client.calls if "set_fleet_directive" in c["names"]][-1]
-        assert "Your fleet directive at T+180s FAILED (truncated" in phase1["messages"][-1]["content"]
+        now = phase1["messages"][-1]["content"]
+        assert "Your fleet directive at T+180s FAILED (truncated" in now
+        assert "captains were told there was no new directive" in now
+        assert "flew without one" not in now
 
     def test_call_error_is_a_failed_checkpoint_without_retry(self):
         client = ScriptedClient([LLMCallError("HTTP 400: bad model")])
@@ -739,6 +745,14 @@ class TestDirectiveFailure:
         assert len(client.calls) == 1   # no retry, no per-ship orders
 
     def test_runner_never_hands_captains_a_stale_directive(self, tmp_path):
+        """
+        Checkpoint 1's directive is never handed to a checkpoint-2 captain as
+        its CURRENT directive. The captain prompt may still quote it, but only
+        on a line that says there is no new fleet directive (the captain
+        workstream echoes the last one, labelled with its age). Judged per
+        captain turn, not by counting calls: a captain may get follow-up calls.
+        """
+        import re
         from src.llm.battle_runner import BattleConfig, LLMBattleRunner
         from src.llm.captain import LLMCaptainConfig
         from src.llm.client import CallStats
@@ -748,7 +762,19 @@ class TestDirectiveFailure:
         script = [([ToolCall(id="d", name="set_fleet_directive",
                              arguments={"directive": "CHECKPOINT-ONE DIRECTIVE"})], "tool_calls"),
                   ([], "length"), ([], "length")]
-        captain_turns = []
+        captain_turns = []          # (directive calls made so far, prompt text)
+        directive_calls = [0]
+
+        def flatten(messages):
+            out = []
+            for m in messages:
+                content = m.get("content") if isinstance(m, dict) else None
+                if isinstance(content, list):
+                    out.extend(str(part.get("text", "")) for part in content
+                               if isinstance(part, dict))
+                elif content:
+                    out.append(str(content))
+            return "\n".join(out)
 
         class Stub(ScriptedClient):
             stats = CallStats()
@@ -757,8 +783,10 @@ class TestDirectiveFailure:
             def decide_with_tools(self, messages, tools, model=None, temperature=None,
                                   tool_choice="auto", max_tokens=None, reasoning_effort=None):
                 names = {t["function"]["name"] for t in tools}
-                if "set_fleet_directive" not in names and names != {"issue_order"}:
-                    captain_turns.append(messages)
+                if "set_fleet_directive" in names:
+                    directive_calls[0] += 1
+                elif names != {"issue_order"}:
+                    captain_turns.append((directive_calls[0], flatten(messages)))
                     return [ToolCall(id="c", name="respond_to_orders",
                                      arguments={"response_type": "ACKNOWLEDGE"})]
                 return super().decide_with_tools(messages, tools, model, temperature,
@@ -779,9 +807,18 @@ class TestDirectiveFailure:
         runner = LLMBattleRunner(config=config, alpha_config=dummy, beta_config=dummy,
                                  client=Stub(script), fleet_config=fleet_config)
         runner.run_fleet_battle(FLEET)
-        alpha_turns = [m for m in captain_turns
-                       if "CHECKPOINT-ONE DIRECTIVE" in "".join(str(x["content"]) for x in m)]
-        assert len(alpha_turns) == 1, "the checkpoint-1 directive reached a checkpoint-2 captain"
+
+        current = re.compile(r"FLEET DIRECTIVE[^:\n]*:\s*CHECKPOINT-ONE DIRECTIVE")
+        first = [text for n, text in captain_turns if n == 1]
+        assert any(current.search(text) for text in first), "control: checkpoint 1 got it"
+        second = [text for n, text in captain_turns if n >= 2]
+        assert second, "the checkpoint-2 captains were never prompted"
+        for text in second:
+            assert not current.search(text), \
+                "the checkpoint-1 directive reached a checkpoint-2 captain as current"
+            for line in text.splitlines():
+                if "CHECKPOINT-ONE DIRECTIVE" in line:
+                    assert "no new fleet directive" in line.lower(), line
         failed = [e for e in runner.recorder.events if e.event_type == "admiral_directive_failed"]
         assert len(failed) == 1 and failed[0].data["faction"] == "alpha"
         assert failed[0].data["reason"].startswith("truncated at 8192 tokens")
@@ -811,8 +848,8 @@ def test_ticker_prints_the_failed_directive_and_cache_line():
     BattleTicker(stream=stream).checkpoint(runner)
     text = stream.getvalue()
     assert "A admiral: Hold the wall." in text
-    assert ("B admiral: (DIRECTIVE FAILED: truncated at 8192 tokens - captains get no "
-            "directive this checkpoint)") in text
+    assert ("B admiral: (DIRECTIVE FAILED: truncated at 8192 tokens - no new directive for "
+            "the captains this checkpoint)") in text
     assert "Prompt cache: 1 hit / 1 write / 0 cold calls, 0.8k read + 0.9k written" in text
 
 

@@ -140,7 +140,7 @@ class BattleTicker:
                 text = "(no admiral - heuristic captains)"
             elif failures.get(faction):
                 text = (f"(DIRECTIVE FAILED: {clip(failures[faction], 90)} - "
-                        "captains get no directive this checkpoint)")
+                        "no new directive for the captains this checkpoint)")
             else:
                 text = clip(directives.get(faction)) or "(no new directive)"
                 if retried.get(faction):

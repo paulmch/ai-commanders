@@ -2388,8 +2388,8 @@ def _format_now(snapshot: Any, last_failure: Optional[Tuple[float, str]],
             items.append(f"{_lbl(snapshot, row.ship_id, row.ship_name)}: {', '.join(problems)}")
     if last_failure:
         t, why = last_failure
-        items.append(f"Your fleet directive at T+{t:.0f}s FAILED ({why}): captains flew "
-                     "without one. Answer with tool calls first, analysis short.")
+        items.append(f"Your fleet directive at T+{t:.0f}s FAILED ({why}): captains were told "
+                     "there was no new directive. Answer with tool calls first, analysis short.")
     if not items:
         items.append("nothing urgent: no merge warning, no torpedo inbound on your hulls")
     return "!! NOW (act on these first)\n" + "\n".join(f"- {i}" for i in items)
@@ -3191,12 +3191,12 @@ def build_admiral_ship_order_messages(
         parts.append(f"You have already set the fleet directive:\n\"{fleet_directive}\"")
     else:
         why = f" - the directive call failed ({directive_failure})" if directive_failure else ""
-        text = (f"NO FLEET DIRECTIVE THIS CHECKPOINT{why}. Captains receive none, so this order "
-                "is all this ship gets: make it complete.")
+        text = (f"NO FLEET DIRECTIVE THIS CHECKPOINT{why}. Captains are told there is no new "
+                "directive, so this order is all the new guidance this ship gets: make it complete.")
         if previous_directive:
             t, prev = previous_directive
-            text += (f"\nYour last directive (T+{t:.0f}s - STALE, for your reference only, the "
-                     f"captains do not see it): \"{_clip(prev, 400)}\"")
+            text += (f"\nYour last directive (T+{t:.0f}s - STALE, for your reference only; it was "
+                     f"not reissued as this checkpoint's directive): \"{_clip(prev, 400)}\"")
         parts.append(text)
     heading = getattr(fleet_heading, "heading", None)
     if isinstance(heading, dict):
