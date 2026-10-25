@@ -157,7 +157,9 @@ test('spinal muzzles sit on real barrels where Projectiles fires them from', () 
     const k = kitFor(type);
     if (!k.hasSpinal) { assert.equal(k.spinalMuzzle, null, type); continue; }
     assert.ok(k.spinalMuzzle, `${type}: spinal muzzle exported`);
-    const ship = { userData: { size: { length: k.L, width: k.W }, shipType: type } };
+    // the userData a built hull carries (Hulls.build exports spinalMuzzle;
+    // Projectiles may take it directly or fall back to its per-class table)
+    const ship = { userData: { size: { length: k.L, width: k.W }, shipType: type, spinalMuzzle: k.spinalMuzzle } };
     const out = Projectiles.prototype.localMuzzle.call(pick, ship, { spinal: true }, new THREE.Vector3(0, 0, 1),
       { pos: new THREE.Vector3(), dir: new THREE.Vector3() });
     assert.ok(out.pos.distanceTo(k.spinalMuzzle) < 1e-6, `${type}: Projectiles muzzle ${out.pos.toArray()} vs hull ${k.spinalMuzzle.toArray()}`);
