@@ -1835,7 +1835,8 @@ body {
 .fleet-section.beta .ship-list li.selected { border-color: var(--beta-dim); background: rgba(255,138,60,0.08); }
 
 .view-controls {
-  position: fixed; top: 57px; right: 16px; z-index: 25;
+  /* below the header's scoreboard strip (pass 4), which ends at ~62 px */
+  position: fixed; top: 64px; right: 16px; z-index: 25;
   display: flex; gap: 6px;
 }
 .view-controls.hidden { display: none; }
