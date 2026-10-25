@@ -4,10 +4,11 @@ In-process stand-in for OpenRouter chat completions, for free smoke tests.
 `mock_transport()` returns an httpx transport that answers CaptainClient
 requests locally with minimal, valid tool calls for every call type the
 battle makes (draft selection and formation, admiral directive and per-ship
-orders, captain turns) and an OpenRouter-shaped `usage` block whose `cost` is
-computed from catalog pricing. Swapping it into a real CaptainClient runs the
-whole paid code path (payload building, reasoning, budget reservation with
-images, settlement, audit) without a network call or an API key.
+orders, captain turns with scripted fleet comms) and an OpenRouter-shaped
+`usage` block whose `cost` is computed from catalog pricing. Swapping it into
+a real CaptainClient runs the whole paid code path (payload building,
+reasoning, budget reservation with images, settlement, audit) without a
+network call or an API key.
 """
 import json
 import math
@@ -55,8 +56,38 @@ def _mock_calls(payload: Dict[str, Any], points: int, max_ships: int, seed: int)
                                         "turret_mode": "FIRE_WHEN_OPTIMAL"})]
         if "launch_torpedo" in names:
             calls.append(("launch_torpedo", {"count": 1}))
+        calls.extend(_mock_comms(names, text))
         return [c for c in calls if c[0] in names]
     return []
+
+
+def _mock_comms(names, text):
+    """
+    Scripted fleet comms so a mock battle exercises every channel: a DEVIATE
+    report and a target claim at the first decision, a time-on-target signal
+    at the second, an explicit ACK at the third (other turns: implicit ACK).
+    """
+    match = re.search(r"DECISION POINT (\d+)\.", text)
+    point = int(match.group(1)) if match else 0
+    calls = []
+    if "report_to_admiral" in names:
+        if point == 1:
+            calls.append(("report_to_admiral", {
+                "status": "DEVIATE",
+                "reason": "MOCK: ordered target is opening; holding at 40% until it turns.",
+                "contact": {"ship": "nearest enemy", "assessment": "SEPARATING",
+                            "note": "mock contact report"}}))
+        elif point == 3:
+            calls.append(("report_to_admiral", {"status": "ACK",
+                                                "intent": "MOCK: pressing the attack."}))
+    if "fleet_signal" in names:
+        if point == 1:
+            calls.append(("fleet_signal", {"kind": "TARGET_CLAIM", "to": "ALL",
+                                           "text": "MOCK: I take the nearest enemy."}))
+        elif point == 2 and "launch_torpedo" in names:
+            calls.append(("fleet_signal", {"kind": "TOT_SYNC", "to": "ALL", "eta_s": 40,
+                                           "text": "MOCK: my rounds arrive in ~40 s."}))
+    return calls
 
 
 def mock_transport(pricing: Dict[str, Dict[str, Any]], points: int = 100,
