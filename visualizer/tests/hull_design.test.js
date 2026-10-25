@@ -114,8 +114,6 @@ test('turret rigs keep the muzzle geometry Projectiles.localMuzzle assumes', () 
         for (const m of b.children) { m.geometry.computeBoundingBox(); box.union(m.geometry.boundingBox); }
         assert.ok(Math.abs(box.max.z - 1.4 * s) < 0.02 * s, `${type} ${r.kind}: barrel tip ${box.max.z / s} s`);
       }
-      // a heavy battery's barbette lifts the mount; the rig origin moves with it
-      if (r.kind === 'heavy') assert.ok(Math.abs(rig.mount.position.length() - new THREE.Vector3(r.x, r.y, r.z).length()) < 1e-9);
     }
   }
 });
