@@ -275,10 +275,13 @@ test('incoming torpedoes: count, soonest closing ETA and seeker-blinded rounds',
   const tl = new WeaponTimeline(threatLoader());
   const at2 = tl.threatsAt(2).get('beta');
   assert.equal(at2.count, 2);
+  assert.equal(at2.live, 2);
   near(at2.eta, (100000 - 20000) / 10000, 1e-6);
   near(at2.rangeKm, 80);
+  // a seeker-blinded round still closing keeps counting: it coasts on and can strike
   const at4 = tl.threatsAt(4).get('beta');
-  assert.equal(at4.count, 1);
+  assert.equal(at4.count, 2);
+  assert.equal(at4.live, 1);
   assert.equal(at4.blind, 1);
   assert.equal(tl.threatsAt(2).get('alpha'), undefined);
   // reuse of the output map does not leak entries
@@ -286,7 +289,7 @@ test('incoming torpedoes: count, soonest closing ETA and seeker-blinded rounds',
   tl.threatsAt(2, out);
   assert.ok(!out.has('stale'));
   assert.equal(threatLabel(at2), '2 TORP · 8s');
-  assert.equal(threatLabel({ count: 0, blind: 2 }), '');
+  assert.equal(threatLabel({ count: 0, live: 0, blind: 0 }), '');
   assert.ok(at2.eta < THREAT_IMMINENT_S);
 });
 

@@ -264,10 +264,11 @@ export class WeaponTimeline {
    * Torpedoes inbound on each ship at battle time `time`, from the
    * recording alone (range and closure of each round in flight against its
    * own target), so it works the same in replay and live:
-   *   Map target id -> {count, blind, eta, rangeKm}
-   * `count` live rounds (seeker intact) with the soonest closing ETA in
-   * seconds (Infinity when none is closing); `blind` seeker-killed rounds
-   * still coasting at it.
+   *   Map target id -> {count, live, blind, eta, rangeKm}
+   * `live` rounds with an intact seeker, `blind` seeker-killed rounds still
+   * closing on it (they coast on and can still strike); `count` = both.
+   * `eta` is the soonest closing time in seconds (Infinity when none is
+   * closing), `rangeKm` the nearest inbound round.
    */
   threatsAt(time, out = new Map()) {
     out.clear();
@@ -282,10 +283,12 @@ export class WeaponTimeline {
       const range = Math.hypot(dx, dy, dz);
       const closure = range > 0
         ? ((s.vel[0] - g.vel[0]) * dx + (s.vel[1] - g.vel[1]) * dy + (s.vel[2] - g.vel[2]) * dz) / range : 0;
+      const blind = time >= tr.disabledAt || !!s.state.disabled;
+      if (blind && !(closure > 1)) continue;   // coasting away: no longer a threat
       let e = out.get(target);
-      if (!e) out.set(target, e = { count: 0, blind: 0, eta: Infinity, rangeKm: Infinity });
-      if (time >= tr.disabledAt || s.state.disabled) { e.blind++; continue; }
+      if (!e) out.set(target, e = { count: 0, live: 0, blind: 0, eta: Infinity, rangeKm: Infinity });
       e.count++;
+      if (blind) e.blind++; else e.live++;
       e.rangeKm = Math.min(e.rangeKm, range / 1000);
       if (closure > 1) e.eta = Math.min(e.eta, range / closure);
     }

@@ -150,7 +150,8 @@ function craterMaterial(uNow) {
         float spread = 0.3 + 0.45 * clamp(heat, 0.0, 1.2);
         float core = 1.0 - smoothstep(0.0, spread, rr);
         float lip = exp(-pow((rr - 0.38) / 0.1, 2.0)) * smoothstep(0.25, 0.7, m.r + 0.25 * m.g);
-        float rim = breached * exp(-pow((rr - 0.22) / 0.06, 2.0));
+        // the breach rim glows in torn segments, never a clean HUD-like ring
+        float rim = breached * exp(-pow((rr - 0.22) / 0.06, 2.0)) * smoothstep(0.3, 0.62, m.g * 0.8 + n.b * 0.5);
         float mask = max(core * (0.55 + 0.7 * m.r) * (1.0 - hole * 0.85), max(lip * (0.5 + 0.9 * m.r), rim * 1.3));
         float h = heat * mask;
         vec3 glow = heatRamp(h) * smoothstep(0.015, 0.1, h);

@@ -7,7 +7,8 @@ export const THREAT_IMMINENT_S = 10;
 
 /**
  * Fleet-range threat readout for one ship ('3 TORP · 6s'; '' when nothing
- * live is inbound). `threat` is a WeaponTimeline.threatsAt entry.
+ * is inbound). `threat` is a WeaponTimeline.threatsAt entry: live rounds
+ * plus seeker-blinded ones still closing (they can still strike).
  */
 export function threatLabel(threat) {
   if (!threat || !(threat.count > 0)) return '';
