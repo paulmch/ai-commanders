@@ -260,7 +260,8 @@ HEADING_POINT_ARRIVAL_M = 2000.0
 # Range keeping: INTERCEPT with a standoff / arrival speed, and HOLD_RANGE.
 # Plain INTERCEPT never brakes - it builds closure until it passes through the
 # target. Range keeping flies latched phases instead (Maneuver._range_phase):
-#   CLOSE/OPEN  head for the wanted range (INTERCEPT guidance when closing),
+#   CLOSE/OPEN  head for the wanted range at up to the speed that can still
+#               be stopped there, nulling sideways drift,
 #   ARRIVE      flip and burn against the relative velocity once the flip plus
 #               the stopping distance at the current closing speed have used
 #               up the range still to go (src/maneuvers.py kinematics),
@@ -3920,11 +3921,12 @@ class CombatSimulation:
 
         One-dimensional along the line of sight: ``error`` is the range still
         to go (positive = too far), ``toward`` the speed at which the ship
-        approaches the wanted range. The ship heads for the range (CLOSE with
-        the INTERCEPT guidance, OPEN straight out), flips to ARRIVE once the
-        flip plus the stopping distance at ``toward`` have used up the range
-        still to go, and HOLDs the range once there (cancel closure, then a
-        gentle drift back onto the range). Pure kinematics, no RNG.
+        approaches the wanted range. The ship heads for the range (CLOSE in,
+        OPEN out) no faster than it can still stop there, flips to ARRIVE once
+        the flip plus the stopping distance at ``toward`` have used up the
+        range still to go, and HOLDs the range once there (cancel closure,
+        then a gentle drift back onto the range). The target's own burn is
+        planned around. Pure kinematics, no RNG.
         """
         to_target = target.position - ship.position
         rng = to_target.magnitude
