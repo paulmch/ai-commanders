@@ -18,7 +18,7 @@ Torpedoes - yours: none | theirs: none
 
 === GEOMETRY (from your fleet centre; + closing, - opening) ===
 You: 8 ships, centre (7,29,5) km, 2.9 km/s toward (+0.99,+0.11,+0.02), spread 51 km
-GROUP A [OCS Sovereign [beta_1] BB, OCS Falchion-2 [beta_6] DD, OCS Lancer-1 [beta_2] BC, OCS Lancer-2 [beta_3] BC, OCS Lancer-3 [beta_4] BC]: 157 km, closing 4.03 km/s (-60 km in 15 s) = you 1.5 km/s toward them + they 2.5 toward you
+GROUP A (OCS Sovereign [beta_1] BB, OCS Falchion-2 [beta_6] DD, OCS Lancer-1 [beta_2] BC, OCS Lancer-2 [beta_3] BC, OCS Lancer-3 [beta_4] BC): 157 km, closing 4.03 km/s (-60 km in 15 s) = you 1.5 km/s toward them + they 2.5 toward you
   if both coast: closest 1.4 km (OCS Lancer-3) in 45 s | your stop 276 km / 137 s at 3.0g +15 s flip - TOO LATE to brake
   reach - their guns reach 900 km (IN RANGE now); your torpedoes: 5 GOOD
 

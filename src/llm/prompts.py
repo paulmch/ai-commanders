@@ -2559,7 +2559,7 @@ def _format_geometry(snapshot: Any) -> str:
             comp += f", +{len(info.ship_ids) - 5}"
         rate = (f"closing {info.closing_kps:.2f} km/s" if info.closing_kps >= 0
                 else f"OPENING {-info.closing_kps:.2f} km/s")
-        head = f"{info.label} [{comp}]: {info.range_km:.0f} km, {rate}"
+        head = f"{info.label} ({comp}): {info.range_km:.0f} km, {rate}"
         if info.label in changes:
             head += f" ({changes[info.label]:+.0f} km in 15 s)"
         if info.label in motion:
