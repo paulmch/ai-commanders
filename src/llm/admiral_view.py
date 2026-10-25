@@ -38,6 +38,13 @@ TRAIL_WINDOW_S = 25.0
 # PD beam lines are drawn for engagements within this many seconds of "now".
 PD_BEAM_WINDOW_S = 1.5
 
+# PD envelope ring drawn around the viewing fleet's centre (km), and the
+# dead-round threat test (same numbers as src/llm/fleet_intel.py: the
+# engine's evasion trigger, miss <= 0.5 km within 60 s).
+PD_RING_KM = 250.0
+WRECK_MISS_KM = 0.5
+WRECK_HORIZON_S = 60.0
+
 # ---------------------------------------------------------------------------
 # Vision capability
 # ---------------------------------------------------------------------------
@@ -122,12 +129,71 @@ def build_live_frame(simulation: Any) -> Dict[str, Any]:
         frame["torpedoes"].append({
             "id": torp_flight.torpedo_id,
             "pos": [torp.position.x, torp.position.y, torp.position.z],
+            "vel": [torp.velocity.x, torp.velocity.y, torp.velocity.z],
             "source": torp_flight.source_ship_id,
             "target": torp.target_id,
             "disabled": torp_flight.is_disabled,
         })
 
     return frame
+
+
+def wreck_threatens(tp: Dict[str, Any], frame: Dict[str, Any]) -> bool:
+    """
+    True if a dead (seeker-blinded) torpedo's straight line passes within
+    WRECK_MISS_KM of a live ship in the next WRECK_HORIZON_S - the engine's
+    own collision test. Rounds without a velocity (old frames) count as
+    threats, so nothing real is ever hidden.
+    """
+    vel = tp.get("vel")
+    if not vel:
+        return True
+    for ship in frame.get("ships", {}).values():
+        if ship.get("destroyed"):
+            continue
+        rp = [tp["pos"][i] - ship["pos"][i] for i in range(3)]
+        rv = [vel[i] - ship["vel"][i] for i in range(3)]
+        vv = sum(c * c for c in rv)
+        if vv < 1e4:  # < 100 m/s relative: parked
+            continue
+        tca = -sum(rp[i] * rv[i] for i in range(3)) / vv
+        if 0.0 <= tca <= WRECK_HORIZON_S:
+            miss = math.sqrt(sum((rp[i] + rv[i] * tca) ** 2 for i in range(3)))
+            if miss <= WRECK_MISS_KM * 1000.0:
+                return True
+    return False
+
+
+def range_overlay(simulation: Any, faction: Optional[str]) -> Dict[str, Any]:
+    """
+    Closest-approach marker and merge countdown for the viewing fleet vs the
+    most urgent enemy group (src/llm/range_control.py), in plot units (km).
+    """
+    if not faction:
+        return {}
+    try:
+        from .range_control import analyze_range_control
+        own = [s for s in simulation.ships.values()
+               if s.faction == faction and not s.is_destroyed
+               and not getattr(s, "is_dying", False)]
+        infos = analyze_range_control(simulation, own, detail=False) if own else []
+    except Exception:  # noqa: BLE001 - the plot must never fail on advice
+        return {}
+    if not infos:
+        return {}
+    info = infos[0]
+    n = len(own)
+    cx = sum(s.position.x for s in own) / n
+    cy = sum(s.position.y for s in own) / n
+    vx = sum(s.velocity.x for s in own) / n
+    vy = sum(s.velocity.y for s in own) / n
+    out: Dict[str, Any] = {"label": info.label}
+    if info.cpa_t_s > 0.5 and info.closing_kps > 0:
+        out["cpa"] = ((cx + vx * info.cpa_t_s) / 1000.0, (cy + vy * info.cpa_t_s) / 1000.0)
+        out["cpa_text"] = f"{info.label} closest {info.cpa_km:.1f} km in {info.cpa_t_s:.0f}s"
+    if info.warning and info.warning.startswith("MERGE IN"):
+        out["merge"] = info.warning.split(":")[0].split(" at ")[0]
+    return out
 
 
 class AdmiralViewState:
@@ -220,6 +286,7 @@ class AdmiralViewState:
             beams=self.active_pd_beams(frame["t"]),
             recent_events=self.recent_events(frame["t"]),
             faction=faction,
+            overlay=range_overlay(simulation, faction),
         )
 
 
@@ -270,14 +337,20 @@ def render_frame_png(
     beams: List[Tuple[str, str]],
     recent_events: Optional[List[Tuple[float, str]]] = None,
     faction: Optional[str] = None,
+    overlay: Optional[Dict[str, Any]] = None,
 ) -> Optional[bytes]:
     """
     Render one battle frame to PNG bytes.
 
     Left panel: annotated top-down tactical plot (the workhorse - names,
-    hull, maneuver, headings, velocity vectors, torpedo trails, PD beams).
+    hull, speed, headings, velocity vectors, torpedo trails, PD beams, the
+    viewer's PD envelope ring and the nearest group's closest approach).
     Right panel: 3D perspective of the same state, which is what makes
     out-of-plane geometry (climbing torpedoes, stacked formations) legible.
+
+    Dead torpedoes on nobody's line are counted but neither drawn nor allowed
+    to stretch the zoom (a cloud of receding wrecks squeezed both fleets into
+    a corner of the cp009_beta plot - audit ADM-12).
     """
     plt = _get_plt()
     if plt is None:
@@ -293,8 +366,12 @@ def render_frame_png(
     ax.set_facecolor(BG)
 
     km = 1 / 1000.0
-    torp_pos = {tp["id"]: (tp["pos"][0] * km, tp["pos"][1] * km)
-                for tp in frame.get("torpedoes", [])}
+    overlay = overlay or {}
+    all_torps = frame.get("torpedoes", [])
+    shown = [tp for tp in all_torps if not tp.get("disabled") or wreck_threatens(tp, frame)]
+    shown_ids = {tp["id"] for tp in shown}
+    spent = len(all_torps) - len(shown)
+    torp_pos = {tp["id"]: (tp["pos"][0] * km, tp["pos"][1] * km) for tp in shown}
     ship_pos = {sid: (s["pos"][0] * km, s["pos"][1] * km)
                 for sid, s in frame.get("ships", {}).items()}
 
@@ -307,15 +384,15 @@ def render_frame_png(
                     color="#ff3322", lw=1.2, alpha=0.85, zorder=2)
 
     # Torpedo trails + markers
-    torp_source = {tp["id"]: tp["source"] for tp in frame.get("torpedoes", [])}
+    torp_source = {tp["id"]: tp["source"] for tp in all_torps}
     for torp_id, pts in trails.items():
-        if len(pts) > 1:
+        if len(pts) > 1 and (torp_id in shown_ids or torp_id not in torp_source):
             xs = [p[0] * km for p in pts]
             ys = [p[1] * km for p in pts]
             src = _torpedo_source(torp_id, torp_source)
             ax.plot(xs, ys, color=FACTION_COLORS[_faction_of(src, ships_meta)],
                     lw=0.8, alpha=0.35, zorder=3)
-    for tp in frame.get("torpedoes", []):
+    for tp in shown:
         x, y = tp["pos"][0] * km, tp["pos"][1] * km
         color = FACTION_COLORS[_faction_of(tp["source"], ships_meta)]
         ax.scatter([x], [y], marker="D", s=28,
@@ -353,15 +430,28 @@ def render_frame_png(
         meta = ships_meta.get(ship_id, {})
         name = meta.get("name", ship_id)
         cls = meta.get("type", "").replace("_", " ")
+        # Speed is the full 3D speed; "burning"/"coasting" is the visible
+        # torch. The enemy's commanded maneuver is not observable, so only
+        # the viewer's own cards name it.
+        speed3 = math.sqrt(sum(c * c for c in s["vel"])) * km
+        own = faction is None or ship_faction == faction
         label = (f"{name} · {cls}\n"
-                 f"{s.get('hull', 100):.0f}%  "
-                 f"{'thr' if s.get('thrust', 0) > 0.05 else 'cst'} "
-                 f"{speed:.1f}km/s  {s.get('maneuver', '')}")
+                 f"hull {s.get('hull', 100):.0f}% | {speed3:.1f} km/s | "
+                 f"{'burning' if s.get('thrust', 0) > 0.05 else 'coasting'}"
+                 + (f" | {s.get('maneuver', '')}" if own and s.get('maneuver') else ""))
         entries[ship_faction].append((y, x, label, color))
 
     # NB: loop variables must not shadow the `faction` PARAMETER - doing so
     # relabeled every frame's "YOU COMMAND" banner as the last side iterated.
-    for side_faction, side_x, ha in (("alpha", 0.015, "left"), ("beta", 0.985, "right")):
+    # Each fleet's cards go on the margin its ships are nearest to: after a
+    # pass the fleets swap sides and fixed margins drew every leader line
+    # across the whole plot.
+    def mean_x(side):
+        xs = [e[1] for e in entries[side]]
+        return sum(xs) / len(xs) if xs else 0.0
+
+    left, right = ("alpha", "beta") if mean_x("alpha") <= mean_x("beta") else ("beta", "alpha")
+    for side_faction, side_x, ha in ((left, 0.015, "left"), (right, 0.985, "right")):
         cards = sorted(entries[side_faction], key=lambda e: -e[0])  # top-down by y
         n = len(cards)
         if not n:
@@ -407,17 +497,59 @@ def render_frame_png(
                 fontsize=7.5, color="#7f8fa0", family="monospace",
                 va="bottom", ha="center")
 
-    torps_a = sum(1 for tp in frame.get("torpedoes", [])
-                  if _faction_of(tp["source"], ships_meta) == "alpha")
-    torps_b = len(frame.get("torpedoes", [])) - torps_a
+    # PD envelope of the viewing fleet, and the nearest group's closest
+    # approach if both sides coast (from range control).
+    if faction:
+        own_pts = [ship_pos[sid] for sid, s in frame.get("ships", {}).items()
+                   if not s.get("destroyed") and _faction_of(sid, ships_meta) == faction]
+        if own_pts:
+            from matplotlib.patches import Circle
+            cx = sum(p[0] for p in own_pts) / len(own_pts)
+            cy = sum(p[1] for p in own_pts) / len(own_pts)
+            ax.add_patch(Circle((cx, cy), PD_RING_KM, fill=False, ls="--", lw=0.8,
+                                ec=FACTION_COLORS.get(faction, TEXT), alpha=0.45, zorder=1))
+            ax.annotate(f"PD {PD_RING_KM:.0f} km", (cx, cy + PD_RING_KM), fontsize=7,
+                        color="#7f8fa0", family="monospace", ha="center", va="bottom")
+    if overlay.get("cpa"):
+        px, py = overlay["cpa"]
+        ax.scatter([px], [py], marker="x", s=70, c="#ffcc00", linewidths=1.6, zorder=6)
+        ax.annotate(overlay.get("cpa_text", "closest approach"), (px, py), fontsize=7.5,
+                    color="#ffcc00", family="monospace", xytext=(6, -10),
+                    textcoords="offset points")
+
+    def torp_counts(side):
+        mine = [tp for tp in all_torps if _faction_of(tp["source"], ships_meta) == side]
+        live = sum(1 for tp in mine if not tp.get("disabled"))
+        return f"{side} {live} live/{len(mine) - live} dead"
+
     you = ""
     if faction:
-        you = f"   YOU COMMAND: {faction.upper()} " \
+        you = f"   YOU: {faction.upper()} " \
               f"({'cyan' if faction == 'alpha' else 'orange'})"
+    merge = f"   !! {overlay['merge']}" if overlay.get("merge") else ""
     ax.set_title(
-        f"TACTICAL PLOT  T+{t:.0f}s   "
-        f"torpedoes: alpha {torps_a} / beta {torps_b}{you}",
-        color=TEXT, fontsize=10.5, family="monospace", pad=12)
+        f"TACTICAL PLOT  T+{t:.0f}s   torpedoes {torp_counts('alpha')} | "
+        f"{torp_counts('beta')}{you}{merge}",
+        color=TEXT, fontsize=10.0, family="monospace", pad=12)
+    if spent:
+        ax.text(0.99, 0.99, f"{spent} dead torpedoes off any hull's line: not drawn",
+                transform=ax.transAxes, fontsize=7, color="#7f8fa0",
+                family="monospace", ha="right", va="top")
+
+    # Zoom on ships and live/threatening ordnance only.
+    xs = [p[0] for p in ship_pos.values()] + [p[0] for p in torp_pos.values()]
+    ys = [p[1] for p in ship_pos.values()] + [p[1] for p in torp_pos.values()]
+    alive_ids = [sid for sid, s in frame.get("ships", {}).items() if not s.get("destroyed")]
+    if alive_ids:
+        xs = [ship_pos[sid][0] for sid in alive_ids] + [p[0] for p in torp_pos.values()]
+        ys = [ship_pos[sid][1] for sid in alive_ids] + [p[1] for p in torp_pos.values()]
+    if overlay.get("cpa"):
+        xs.append(overlay["cpa"][0])
+        ys.append(overlay["cpa"][1])
+    if xs:
+        pad = max(40.0, 0.12 * max(max(xs) - min(xs), max(ys) - min(ys)))
+        ax.set_xlim(min(xs) - pad, max(xs) + pad)
+        ax.set_ylim(min(ys) - pad, max(ys) + pad)
 
     ax.grid(color=GRID, lw=0.4, alpha=0.6)
     ax.set_axisbelow(True)
@@ -428,7 +560,8 @@ def render_frame_png(
     ax.set_ylabel("Y (km)", color="#5a6b7c", fontsize=8)
     ax.set_aspect("equal", adjustable="datalim")
 
-    _render_3d_panel(ax3d, frame, ships_meta, trails)
+    _render_3d_panel(ax3d, {**frame, "torpedoes": shown}, ships_meta,
+                     {k: v for k, v in trails.items() if k in shown_ids or k not in torp_source})
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", facecolor=BG, bbox_inches="tight")
@@ -472,9 +605,13 @@ def _render_3d_panel(ax3d, frame, ships_meta, trails) -> None:
         if math.hypot(vx, vy, vz) > 1.0:
             ax3d.plot([x, x + vx], [y, y + vy], [z, z + vz],
                       color=color, lw=1.1, alpha=0.6)
-        name = ships_meta.get(ship_id, {}).get("name", ship_id)
-        ax3d.text(x, y, z, f"  {name}", fontsize=7, color=TEXT,
-                  family="monospace")
+        # Short names ("Dart-3", not "TIS Dart-3"): full names piled into
+        # an unreadable block at fleet scale.
+        name = str(ships_meta.get(ship_id, {}).get("name", ship_id))
+        parts = name.split(" ", 1)
+        short = parts[1] if len(parts) == 2 and parts[0].isupper() else name
+        ax3d.text(x, y, z, f" {short}", fontsize=5.5, color=TEXT,
+                  family="monospace", alpha=0.85)
 
     # Near-honest aspect: box proportional to data extents, except Z gets a
     # minimum visual thickness. A perfectly planar battle would otherwise
