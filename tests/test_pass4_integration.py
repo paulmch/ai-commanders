@@ -239,3 +239,15 @@ class TestMcpBattlePortFlag:
 
     def test_config_port_is_the_default(self, monkeypatch, capsys):
         assert self._run(monkeypatch, None) == 8765
+
+
+class TestCaptainTurnHeader:
+    def test_header_reads_without_a_decision_number(self):
+        from tests.test_captain_turn import corvette_kwargs
+        from src.llm.prompts import build_captain_messages
+        kwargs = corvette_kwargs()
+        numbered = build_captain_messages(**kwargs)[1]["content"]
+        assert ". Decision " in numbered and ": your orders lock for 30 s" in numbered
+        kwargs.pop("decision_number", None)
+        bare = build_captain_messages(**kwargs)[1]["content"]
+        assert ". Your orders lock for 30 s" in bare and ". your" not in bare

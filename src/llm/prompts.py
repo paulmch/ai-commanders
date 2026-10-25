@@ -2368,8 +2368,8 @@ def build_captain_turn(
     who = strip_captain_title(captain_name)
     header.append(
         f"You are Captain {who}, commanding {ship_name}."
-        + (f" Decision {decision_number}:" if decision_number else "")
-        + f" your orders lock for {decision_interval_s:g} s; next decision T+{sim_time + decision_interval_s:.0f}.")
+        + (f" Decision {decision_number}: your" if decision_number else " Your")
+        + f" orders lock for {decision_interval_s:g} s; next decision T+{sim_time + decision_interval_s:.0f}.")
     sections.append("\n".join(header))
     if lost_turn:
         sections.append(lost_turn)
