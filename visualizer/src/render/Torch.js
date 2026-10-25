@@ -122,6 +122,20 @@ function torchMaterial(core, edge, intensity, diamonds) {
   });
 }
 
+const coughHash = (k) => { const x = Math.sin(k * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
+
+/**
+ * Failing-drive cough 0..1 at battle time t: seeded dropouts on a 0.22 s
+ * grid, eased between grid points (no strobing), so a sputtering torch is a
+ * pure function of the timeline. 1 = the plume all but cuts out.
+ */
+export function torchCough(t) {
+  const u = t / 0.22, k = Math.floor(u), f = u - k;
+  const level = (i) => { const h = coughHash(i); return h > 0.55 ? (h - 0.55) / 0.45 : 0.15 * h; };
+  const s = f * f * (3 - 2 * f);
+  return level(k) + (level(k + 1) - level(k)) * s;
+}
+
 /**
  * @param {Object} opts
  *   radius   - nozzle radius (scene units)
@@ -171,11 +185,14 @@ export function createTorch({ radius, length, light = null, tint = 'fusion', int
     group,
     light,
     /**
-     * @param {number} thrust    0..1 (already smoothed by the caller)
-     * @param {number} time      wall-clock seconds for turbulence
-     * @param {number} sputter   0..1 extra flicker (dying drives)
+     * @param {number} thrust       0..1 (already smoothed by the caller)
+     * @param {number} time         wall-clock seconds for turbulence
+     * @param {number} sputter      0..1 extra flicker (dying drives)
+     * @param {number} sputterTime  battle seconds driving the sputter, so a
+     *                              paused or scrubbed frame always shows the
+     *                              same cough (falls back to `time`)
      */
-    update(thrust, time, sputter = 0) {
+    update(thrust, time, sputter = 0, sputterTime = undefined) {
       state.thrust = thrust;
       if (thrust < 0.015) {
         group.visible = false;
@@ -186,7 +203,7 @@ export function createTorch({ radius, length, light = null, tint = 'fusion', int
       // Slow breathing only - anything above ~1.5 Hz aliases into strobing
       let breathe = 0.965 + 0.025 * Math.sin(time * 4.3 + phase) + 0.012 * Math.sin(time * 7.1 + phase * 1.7);
       if (sputter > 0) {
-        breathe *= 1 - sputter * (0.5 + 0.5 * Math.sin(time * 5.9 + phase * 2.3)) * 0.7;
+        breathe *= 1 - sputter * 0.75 * torchCough(sputterTime ?? time);
       }
       // Throttle response: an idle torch is a short violet flicker, full
       // burn a long white spike

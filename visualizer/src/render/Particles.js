@@ -218,7 +218,8 @@ export class StreakBurst {
         void main() {
           float age = max(uAge, 0.0);
           float f = clamp(age / aLife, 0.0, 1.0);
-          vec3 p = aPos0 + dragPos(aVel, uDrag, age);
+          vec3 travel = dragPos(aVel, uDrag, age);
+          vec3 p = aPos0 + travel;
           vec3 v = dragVel(aVel, uDrag, age);
           vec4 pv = modelViewMatrix * vec4(p, 1.0);
           vec3 vv = normalMatrix * v;
@@ -226,14 +227,17 @@ export class StreakBurst {
           float dl = length(d);
           d = dl > 1e-5 ? d / dl : vec2(1.0, 0.0);
           vec2 perp = vec2(-d.y, d.x);
-          // streak length follows current speed so it shortens as it slows
+          // streak length follows current speed so it shortens as it slows,
+          // and never exceeds the distance flown: streaks grow out of the
+          // blast centre instead of starting as overlapping full-length bars
           float speedK = exp(-uDrag * age);
           float len = uLen * (0.45 + aSeed * 0.9) * (0.25 + 0.75 * speedK);
+          len = min(len, 2.0 * length(travel));
           float wid = uWidth * (0.6 + aSeed * 0.7);
           pv.xy += d * position.x * len + perp * position.y * wid;
           gl_Position = projectionMatrix * pv;
           vUv = uv;
-          float fade = uAge < 0.0 ? 0.0 : pow(1.0 - f, 1.4);
+          float fade = uAge < 0.0 ? 0.0 : pow(1.0 - f, 1.4) * smoothstep(0.0, 0.06, age);
           vAlpha = fade;
           float cool = smoothstep(0.0, 0.5 + aSeed * 0.45, f);
           vColor = mix(mix(uHot, uWarm, smoothstep(0.0, 0.5, cool)), uCool, smoothstep(0.5, 1.0, cool));

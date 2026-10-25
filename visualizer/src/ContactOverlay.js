@@ -1,5 +1,30 @@
 import * as THREE from 'three';
 import { getShipClassName } from './shipSilhouettes.js';
+import { detonationTime, lastHitAt, reactorPulseRate, HIT_FLASH_S } from './DamageTimeline.js';
+
+/** Inbound torpedoes closer than this (s) pulse the bracket red. */
+export const THREAT_IMMINENT_S = 10;
+
+/**
+ * Fleet-range threat readout for one ship ('3 TORP · 6s'; '' when nothing
+ * is inbound). `threat` is a WeaponTimeline.threatsAt entry: live rounds
+ * plus seeker-blinded ones still closing (they can still strike).
+ */
+export function threatLabel(threat) {
+  if (!threat || !(threat.count > 0)) return '';
+  const eta = Number.isFinite(threat.eta) ? `${Math.max(0, Math.round(threat.eta))}s` : '--';
+  return `${threat.count} TORP · ${eta}`;
+}
+
+/** Dying-hulk countdown text, `ttd` seconds to the reactor letting go. */
+export function detonationLabel(ttd) {
+  return Number.isFinite(ttd) ? `DETONATION ${Math.max(0, Math.ceil(ttd))}s` : 'REACTOR UNSTABLE';
+}
+
+/** Bracket flash 0..1 for a hit `age` seconds ago (fades over HIT_FLASH_S). */
+export function hitFlash(age) {
+  return age >= 0 && age <= HIT_FLASH_S ? (1 - age / HIT_FLASH_S) ** 1.5 : 0;
+}
 
 const overlaps = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 
@@ -16,12 +41,20 @@ export function placeContactLabel(x, y, side, occupied, width, height) {
   return null;
 }
 
-/** Screen-space contact brackets and labels for ships too distant to read by eye. */
+/**
+ * Screen-space contact brackets and labels for ships too distant to read by
+ * eye. At fleet range each bracket also carries the ship's combat state:
+ * an incoming-torpedo badge ('3 TORP · 6s', the bracket pulsing red inside
+ * THREAT_IMMINENT_S), a flash on every hit, and on a dying hulk the
+ * detonation countdown with a pulse that quickens toward zero. The C toggle
+ * also hides the engagement lines (render/TargetingLines.js).
+ */
 export class ContactOverlay {
   constructor(container, selectShip) {
     this.container = container;
     this.selectShip = selectShip;
     this.contacts = new Map();
+    this.threats = new Map();
     this.enabled = true;
     this.point = new THREE.Vector3();
     this.view = new THREE.Vector3();
@@ -39,21 +72,26 @@ export class ContactOverlay {
       button.className = `ship-contact ${info.faction}`;
       button.dataset.shipId = id;
       button.setAttribute('aria-label', `Inspect ${info.name || id}`);
-      button.innerHTML = '<span class="contact-bracket"></span><span class="contact-leader"></span><span class="contact-label"><span class="contact-name"></span><span class="contact-detail"></span><span class="contact-health"><i></i></span></span>';
+      button.innerHTML = '<span class="contact-bracket"></span><span class="contact-threat" hidden></span><span class="contact-leader"></span><span class="contact-label"><span class="contact-name"></span><span class="contact-detail"></span><span class="contact-health"><i></i></span></span>';
       button.querySelector('.contact-name').textContent = info.name || id;
       button.addEventListener('click', () => this.selectShip(id));
       this.container.appendChild(button);
       this.contacts.set(id, {
         button, info, label: button.querySelector('.contact-label'),
         detail: button.querySelector('.contact-detail'), leader: button.querySelector('.contact-leader'),
-        health: button.querySelector('.contact-health i')
+        health: button.querySelector('.contact-health i'), bracket: button.querySelector('.contact-bracket'),
+        threat: button.querySelector('.contact-threat')
       });
     }
   }
 
   update(scene, states, selectedId) {
     this.container.hidden = !this.enabled;
+    if (scene.weapons?.engagements) scene.weapons.engagements.enabled = this.enabled;
     if (!this.enabled) return;
+    const now = scene.currentTime || 0;
+    const threats = scene.weapons?.timeline?.threatsAt ? scene.weapons.timeline.threatsAt(now, this.threats) : null;
+    const damage = scene.damageFX?.timeline || null;
     const width = window.innerWidth, height = window.innerHeight;
     const camera = scene.camera;
     camera.updateMatrixWorld();
@@ -82,13 +120,32 @@ export class ContactOverlay {
     occupied.push(...candidates.map(({ x, y }) => ({ x: x - 10, y: y - 10, w: 20, h: 20 })));
     candidates.sort((a, b) => Number(b.id === selectedId) - Number(a.id === selectedId));
     for (const { id, contact, state, x, y } of candidates) {
-      const { button, info, label, detail, leader, health } = contact;
+      const { button, info, label, detail, leader, health, bracket, threat } = contact;
       button.hidden = false;
       button.style.transform = `translate(${x - 10}px, ${y - 10}px)`;
       button.classList.toggle('selected', id === selectedId);
       button.classList.toggle('dying', !!state.dying);
       const hull = Math.round(THREE.MathUtils.clamp(state.hull ?? 100, 0, 100));
-      detail.textContent = state.dying ? 'REACTOR UNSTABLE' : `${getShipClassName(info.type)} · ${hull}%`;
+      const sd = damage?.ships.get(id);
+      let ttd = NaN;
+      if (state.dying) {
+        const det = detonationTime(sd);
+        ttd = det !== null ? det - now : NaN;
+        // the bracket pulse quickens with the reactor (DamageTimeline.reactorPulseRate)
+        button.style.setProperty('--pulse', `${(0.5 / reactorPulseRate(Number.isFinite(ttd) ? ttd : 30)).toFixed(3)}s`);
+      }
+      detail.textContent = state.dying ? detonationLabel(ttd) : `${getShipClassName(info.type)} · ${hull}%`;
+      // Inbound torpedoes: count and soonest ETA by the bracket
+      const th = state.dying ? null : threats?.get(id);
+      const text = threatLabel(th);
+      threat.hidden = !text;
+      if (text) threat.textContent = text;
+      button.classList.toggle('threatened', !!text);
+      button.classList.toggle('imminent', !!text && th.eta < THREAT_IMMINENT_S);
+      // A hit flashes the bracket white for HIT_FLASH_S
+      const flash = hitFlash(now - lastHitAt(sd, now));
+      bracket.style.boxShadow = flash > 0 ? `0 0 ${(3 + 9 * flash).toFixed(1)}px rgba(255,244,228,${(0.35 + 0.65 * flash).toFixed(2)})` : '';
+      bracket.style.borderColor = flash > 0 ? `rgba(255,250,240,${(0.45 + 0.55 * flash).toFixed(2)})` : '';
       button.title = `${info.name || id} · ${getShipClassName(info.type)} · hull ${hull}%`;
       health.style.width = `${hull}%`;
       const box = placeContactLabel(x, y, info.faction === 'alpha' ? -1 : 1, occupied, width, height);

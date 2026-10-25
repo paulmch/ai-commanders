@@ -8,6 +8,28 @@ export const IMPACT_LIFE = 0.46;
 /** Loader torpedo moments this module renders itself (main.js skips them). */
 export const OWNED_MOMENTS = new Set(['seeker_kill', 'intercepted', 'destroyed', 'burnout']);
 export const SHUTTER = 0.085;
+/**
+ * Torpedo misses that skip off the drawn plating ("duds"). The viewer's
+ * hulls are ~8x the sim's, so a round that missed the real hull by less
+ * than the displayed hull's radius would vanish inside it: the engine
+ * rolls P(hit) at closest approach, and a failed roll at 100 m is still
+ * well inside a drawn corvette. The timeline keeps every miss within
+ * DUD_REACH_KM (more than any drawn half-length) as a dud candidate;
+ * the renderer shows the ones inside the hull it draws (dudSkims).
+ */
+export const DUD_REACH_KM = 12;
+/** Without a recorded closest approach, a failed roll at this P(hit) or more brushed the hull. */
+export const DUD_P = 0.5;
+
+/**
+ * Whether dud moment `m` passed inside a drawn hull whose radius toward the
+ * round is `radiusKm`: its recorded closest approach, else (no closest
+ * approach recorded) a failed roll at P(hit) >= DUD_P.
+ */
+export function dudSkims(m, radiusKm) {
+  if (Number.isFinite(m.closestKm)) return m.closestKm < radiusKm;
+  return (m.probability ?? 0) >= DUD_P;
+}
 
 export function seedFor(id) {
   let h = 2166136261;
@@ -56,6 +78,29 @@ export function torpedoPower(a, b, dt, range, closure, disabled = false) {
 /** Numeric weapon slot ("weapon_2" -> 2) and spinal flag of a shot_fired payload. */
 export function shotSlot(d) { return Number(d.weapon_slot?.split('_').at(-1)) || 0; }
 export function shotSpinal(d) { return !!d.weapon_name?.toLowerCase().includes('spinal'); }
+
+/**
+ * Spinal muzzle per hull: [fraction of hull width below the axis, of length
+ * forward]. Fallback for hull kits that do not export their own muzzle
+ * point (userData.spinalMuzzle); the entries match the kit's barrels.
+ */
+export const SPINAL_MUZZLE = {
+  cruiser: [-0.42, 0.5], battlecruiser: [-0.245, 0.56], battleship: [-0.335, 0.5],
+  dreadnought: [-0.32, 0.65], dreadnought_siege: [-0.2, 0.8]
+};
+export const SPINAL_MUZZLE_DEFAULT = [-0.31, 0.56];
+
+/**
+ * Hull-local spinal muzzle into `out` (a THREE.Vector3): the hull kit's own
+ * `userData.spinalMuzzle` when it exports one, else the SPINAL_MUZZLE
+ * fractions of the hull's width W and length L.
+ */
+export function spinalMuzzleInto(ud, W, L, out) {
+  const m = ud?.spinalMuzzle;
+  if (m && Number.isFinite(m.x) && Number.isFinite(m.y) && Number.isFinite(m.z)) return out.set(m.x, m.y, m.z);
+  const [y, z] = SPINAL_MUZZLE[ud?.shipType] || SPINAL_MUZZLE_DEFAULT;
+  return out.set(0, W * y, L * z);
+}
 
 /** Twin-barrel turret: barrel centres across the gun (x, in units of the turret size s). */
 export const TWIN_BARREL_X = [-0.2, 0.2];
@@ -132,6 +177,10 @@ export class WeaponTimeline {
     this.slugs = new Map();
     this.torpedoes = new Map();
     this.moments = [];
+    // Per ship, time sorted: every shot and torpedo launch with its target
+    // (engagement lines brighten on them, and fall back to them for ships
+    // whose trace carries no fire-control target)
+    this.fire = new Map();
     const trace = loader.simTrace || [];
     const events = loader.events || [];
     this.end = trace.at(-1)?.t ?? 0;
@@ -161,6 +210,10 @@ export class WeaponTimeline {
     const barrels = assignBarrels(events);
     for (const e of events) {
       const d = e.data || {};
+      if ((e.event_type === 'shot_fired' || e.event_type === 'torpedo_launched') && e.ship_id && d.target_id) {
+        if (!this.fire.has(e.ship_id)) this.fire.set(e.ship_id, []);
+        this.fire.get(e.ship_id).push({ t: e.timestamp, target: d.target_id, torpedo: e.event_type === 'torpedo_launched' });
+      }
       if (e.event_type === 'shot_fired') {
         if (!shots.has(e.ship_id)) shots.set(e.ship_id, []);
         shots.get(e.ship_id).push(e);
@@ -190,7 +243,17 @@ export class WeaponTimeline {
         tr.end = e.timestamp;
         this.moments.push({ time: tr.end, kind: 'pop', track: tr, seed: tr.seed });
       }
+      // A round that passed inside the drawn (oversize) hull yet failed
+      // its hit roll skips off the plating instead of vanishing inside it
+      if (e.event_type === 'torpedo_miss') {
+        const cpa = Number.isFinite(d.closest_approach_km) ? d.closest_approach_km : null;
+        if (cpa !== null ? cpa < DUD_REACH_KM : (d.hit_probability ?? 0) >= DUD_P) {
+          this.moments.push({ time: e.timestamp, kind: 'dud', track: tr, target: d.target_id,
+            closestKm: cpa, probability: d.hit_probability ?? null, seed: tr.seed });
+        }
+      }
     }
+    for (const list of this.fire.values()) list.sort((a, b) => a.t - b.t);
     // Keep exactly the loader's travel-adjusted impact timing.
     for (const hit of loader.getVisualImpacts?.(-Infinity, Infinity) || []) {
       const tr = this.slugs.get(hit.projectile_id);
@@ -237,6 +300,53 @@ export class WeaponTimeline {
       tr.thrusters = buildTorpedoThrusters(tr.samples);
     }
     this.moments.sort((a, b) => a.time - b.time);
+  }
+
+  /**
+   * Torpedoes inbound on each ship at battle time `time`, from the
+   * recording alone (range and closure of each round in flight against its
+   * own target), so it works the same in replay and live:
+   *   Map target id -> {count, live, blind, eta, rangeKm}
+   * `live` rounds with an intact seeker, `blind` seeker-killed rounds still
+   * closing on it (they coast on and can still strike); `count` = both.
+   * `eta` is the soonest closing time in seconds (Infinity when none is
+   * closing), `rangeKm` the nearest inbound round.
+   */
+  threatsAt(time, out = new Map()) {
+    out.clear();
+    const s = this._ts || (this._ts = makeSample()), g = this._tg || (this._tg = makeSample());
+    for (const tr of this.torpedoes.values()) {
+      if (time < tr.start || time >= tr.end || !tr.samples.length) continue;
+      this.sample(tr, time, s);
+      const target = s.state?.target;
+      const ship = target ? this.ships.get(target) : null;
+      if (!ship || !sampleTrack(ship, time, g) || g.state?.destroyed) continue;
+      const dx = g.pos[0] - s.pos[0], dy = g.pos[1] - s.pos[1], dz = g.pos[2] - s.pos[2];
+      const range = Math.hypot(dx, dy, dz);
+      const closure = range > 0
+        ? ((s.vel[0] - g.vel[0]) * dx + (s.vel[1] - g.vel[1]) * dy + (s.vel[2] - g.vel[2]) * dz) / range : 0;
+      const blind = time >= tr.disabledAt || !!s.state.disabled;
+      if (blind && !(closure > 1)) continue;   // coasting away: no longer a threat
+      let e = out.get(target);
+      if (!e) out.set(target, e = { count: 0, live: 0, blind: 0, eta: Infinity, rangeKm: Infinity });
+      e.count++;
+      if (blind) e.blind++; else e.live++;
+      e.rangeKm = Math.min(e.rangeKm, range / 1000);
+      if (closure > 1) e.eta = Math.min(e.eta, range / closure);
+    }
+    return out;
+  }
+
+  /** Latest shot / launch of a ship at or before `time` ({t, target, torpedo} or null). */
+  lastFire(shipId, time) {
+    const list = this.fire.get(shipId);
+    if (!list || !list.length || list[0].t > time) return null;
+    let lo = 0, hi = list.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (list[mid].t <= time) lo = mid; else hi = mid - 1;
+    }
+    return list[lo];
   }
 
   sample(tr, time, out) {
