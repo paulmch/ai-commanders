@@ -607,14 +607,12 @@ FLEET_SIGNAL_TOOL = {
         "name": "fleet_signal",
         "description": (
             "Signal your OWN fleet (the enemy never hears it), delivered at the NEXT "
-            "checkpoint. to=ADMIRAL is filed on your report: BREAKING_OFF as a DEVIATE, "
-            "the others as a request. Max "
-            f"{MAX_FLEET_SIGNALS_PER_DECISION} per decision. Launches, kills and PD losses are "
-            "shared automatically - do not repeat them. TARGET_CLAIM: claim a target before "
-            "committing a salvo so two ships do not waste rounds on one hull. TOT_SYNC: when "
-            "YOUR torpedoes reach target (eta_s), so peers launch to arrive together and split "
-            "its point defense. PD_COVER_REQUEST: ask a ship to cover you with its PD. "
-            "BREAKING_OFF: you leave the fight or your post - say why."
+            "checkpoint. Launches, kills, PD losses and target switches are shared "
+            "automatically - signal intent: TARGET_CLAIM (who takes which hull - focus fire, "
+            "no overkill), TOT_SYNC (when YOUR rounds land, eta_s, so peers launch to arrive "
+            "together), PD_COVER_REQUEST (to= an escort, when your PD cannot blind what is "
+            "inbound), BREAKING_OFF (you leave your post - say why). to=ADMIRAL is filed on "
+            f"your report. Max {MAX_FLEET_SIGNALS_PER_DECISION} per decision."
         ),
         "parameters": {
             "type": "object",

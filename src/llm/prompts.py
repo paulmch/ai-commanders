@@ -1736,10 +1736,21 @@ def build_captain_doctrine(
         weapon_notes.append("- launch_torpedo orders a salvo for this decision window; check the "
                             "torpedo line of the target first.")
 
-    comms = ["COMMUNICATION (optional - only when it changes what someone will do):"]
+    comms = ["COMMUNICATION (only when it changes what someone will do):"]
     if "fleet_signal" in names:
-        comms.append("- fleet_signal: a short line to your own fleet (launch intent, target split, "
-                     "PD cover request); your fleet reads it in FLEET NET.")
+        comms += [
+            "- fleet_signal: your fleet reads it in FLEET NET next checkpoint. Launches, kills, PD",
+            "  losses and target switches reach them automatically (ENGINE lines) - signal the",
+            "  INTENT they cannot see, one call, when:",
+            "    TARGET_CLAIM - you claim a hull or split fire, for focus fire or to stop overkill:",
+            "      \"Taking Lancer-3; Lancer-2 is at 20% - Ward-1 alone finishes her.\"",
+            "    TOT_SYNC - you launch and want others to land together (eta_s = your impact):",
+            "      eta_s=45 \"3 rounds on Lancer-2 - launch to arrive with them.\"",
+            "    PD_COVER_REQUEST - torpedoes inbound that your own PD cannot blind (to= an escort):",
+            "      \"4 rounds from Lancer-4, I have 2 turrets - close to 50 km and cover me.\"",
+            "    BREAKING_OFF - you leave your post, target or the formation:",
+            "      \"Hull 30%, opening range - Ward-2 take my lane.\"",
+        ]
     if "send_message" in names or not names:
         comms.append("- send_message: the OPEN channel - the ENEMY reads it (taunts, surrender "
                      "demands). Not for coordination.")
