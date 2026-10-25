@@ -18,7 +18,7 @@ echo "OPENROUTER_API_KEY=sk-or-v1-your-key-here" > .env
 ## Running Tests
 
 ```bash
-uv run pytest tests/ -v   # ~2300 tests, ~1-2 minutes
+uv run pytest tests/ -v   # ~2400 tests, ~2-3 minutes
 ```
 
 CI (`.github/workflows/tests.yml`) runs the same suite on Python 3.10-3.12 with
@@ -71,7 +71,12 @@ ai-commanders/
 └── visualizer/             # Three.js 3D battle replay viewer; src/render/ holds
                             # the PBR hull kit (Hulls + HullLights/Markings/Rigs),
                             # Projectiles (in-flight weapons), DamageFX, Rcs,
-                            # Tracks, Environment/SkyTextures, PostFX/Bloom/Quality
+                            # Tracks, Environment/SkyTextures, PostFX/Bloom/Quality,
+                            # HullWear, TargetingLines; src/ holds the spectator
+                            # HUD (HudIndex, Scoreboard, KillFeed, CommsFeed,
+                            # TimelineMarkers, Registry) and live mode
+                            # (LiveSession, LiveCards, DraftSplash,
+                            # OffscreenIndicators, ViewInsets)
 ```
 
 ## Key Constants
