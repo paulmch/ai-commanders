@@ -94,3 +94,26 @@ class TestManeuverTargetsAcceptLabels:
         # Unknown id: fall back to the name.
         assert resolve_ship(sim, "alpha_1", "OCS Falchion-1 [nope]").ship_id == "beta_1"
         assert resolve_ship(sim, "alpha_1", "[nope]") is None
+
+
+class TestAdmiralPromptScript:
+    """scripts/test_admiral_prompt.py builds snapshots by hand; it had rotted
+    (FriendlyShipSnapshot gained weapons_destroyed) without anything noticing."""
+
+    def test_script_renders_the_prompt(self):
+        import importlib.util
+        import io
+        from contextlib import redirect_stdout
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parents[1] / "scripts" / "test_admiral_prompt.py"
+        spec = importlib.util.spec_from_file_location("test_admiral_prompt_script", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        out = io.StringIO()
+        with redirect_stdout(out):
+            module.main()
+        text = out.getvalue()
+        assert "=== FLEET SITUATION === T+30s" in text
+        assert "TIS Haiku-3 [alpha_3] DN" in text
+        assert "=== ENEMY THREAT TABLE" in text
