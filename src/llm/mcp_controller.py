@@ -90,13 +90,15 @@ def _select_display_weapon(ship: Any):
     return chosen if chosen else (None, None)
 
 
-def compute_hit_probability(shooter: Any, target: Any) -> Dict[str, Any]:
+def compute_hit_probability(shooter: Any, target: Any, simulation: Any = None) -> Dict[str, Any]:
     """
     Compute the hit probability the simulation would use to resolve a shot.
 
-    Mirrors CombatSimulation._process_weapons_orders so the number shown to an
-    MCP commander is the number that actually gates the shot, instead of an
-    ad-hoc distance curve.
+    With ``simulation`` this is CombatSimulation.gun_firing_solution - the
+    number that actually gates the shot (FIRE_WHEN_OPTIMAL), target motion
+    and dodging included - instead of an ad-hoc distance curve. Without it
+    only the round's conversion (dispersion) part can be computed, which is
+    an upper bound: it assumes the target is still where the round was aimed.
 
     Returns:
         Dict with "hit_chance" (percent, 0-100), "weapon_slot" and
@@ -117,6 +119,11 @@ def compute_hit_probability(shooter: Any, target: Any) -> Dict[str, Any]:
     result["weapon_slot"] = slot
     result["muzzle_velocity_kps"] = muzzle_velocity_kps
 
+    if simulation is not None and hasattr(simulation, "gun_firing_solution"):
+        solution = simulation.gun_firing_solution(shooter, target, weapon_state)
+        result["hit_chance"] = 100.0 * solution.hit_probability if solution.can_fire else 0.0
+        return result
+
     target_geometry = getattr(target, 'geometry', None)
     if not target_geometry:
         # Same fallback the simulation uses when a ship has no geometry.
@@ -130,11 +137,8 @@ def compute_hit_probability(shooter: Any, target: Any) -> Dict[str, Any]:
             engine_section_length_m=20.0,
         )
 
-    # Evasion test mirrors simulation._process_weapons_orders. NOTE: that call
-    # site compares against the name 'EVADE', which is not a ManeuverType member
-    # (the evasive maneuver is ManeuverType.EVASIVE), so the simulation itself
-    # currently never applies the evasion penalty. Accept both spellings here so
-    # the displayed number stays right once that comparison is corrected.
+    # Evasion test mirrors CombatSimulation.gun_firing_solution (accepts the
+    # legacy 'EVADE' spelling too).
     maneuver = getattr(target, 'current_maneuver', None)
     is_evading = (
         maneuver is not None
@@ -546,16 +550,16 @@ class MCPController:
                 dot = max(-1.0, min(1.0, dot))
                 angle_deg = math.degrees(math.acos(dot))
 
-        # Hit chance from the real fire-control model (angular size, flight time,
-        # aspect, closing rate, evasion) - the same call the simulation makes when
-        # it decides whether a shot connects. The previous linear "1 - d/1500"
-        # curve reported 2-6x the true value and had no relation to what the
-        # weapons actually do.
+        # Hit chance from the real fire-control model (dispersion, flight
+        # time, aspect, closing rate, and where his maneuvering and dodging
+        # can take him before the round arrives) - the same call that gates
+        # the shot. The previous linear "1 - d/1500" curve reported 2-6x the
+        # true value and had no relation to what the weapons actually do.
         hit_chance = 0.0
         hit_chance_weapon = None
         shooter = simulation.get_ship(closest_friendly_id) if closest_friendly_id else None
         if shooter is not None:
-            solution = compute_hit_probability(shooter, ship)
+            solution = compute_hit_probability(shooter, ship, simulation)
             hit_chance = solution["hit_chance"]
             hit_chance_weapon = solution["weapon_slot"]
 
