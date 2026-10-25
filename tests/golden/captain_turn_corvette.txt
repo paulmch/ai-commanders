@@ -9,6 +9,7 @@ MY SHIP: TIS Dart-3 [alpha_3] - Corvette, 3.0g, 90° turn ~12 s
   weapons: torpedoes 7/8, tubes 1/1 ready, up to 3 launches before your next decision | PD 1/1 turrets (automatic)
   flying: EVADE@80% (mode RUN) - issued T+150, EXPIRES NOW: renew it or the ship coasts
   primary target: OCS Falchion-1 [beta_5]
+  record: 3 shots, 1 hit, dealt 21.6 GJ, took 0.0 GJ
 
 THREATS TO ME (on a collision course: 0 gun rounds, 1 guided torpedo, 1 blinded wreck):
   INBOUND ORDNANCE: 2 torpedo(es):

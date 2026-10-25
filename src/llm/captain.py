@@ -1037,15 +1037,17 @@ class LLMCaptain:
             m = _mentions(text, getattr(e, "name", e.ship_id))
             if not m:
                 continue
-            km = _KM_RE.search(text[m.end():m.end() + 40])
+            # The distance quoted right after the name, inside the same clause.
+            snippet = re.split(r"[.;]\s", text[m.end():m.end() + 40], maxsplit=1)[0]
+            km = _KM_RE.search(snippet)
             if not km:
                 continue
             claimed = float(km.group(1))
             actual = (e.position - ship.position).magnitude / 1000.0
             if abs(claimed - actual) > max(NUMBER_CHECK_MIN_KM, NUMBER_CHECK_REL * actual):
-                numbers.append(f"order says {claimed:.0f} km for "
+                numbers.append(f"order quotes {claimed:.0f} km next to "
                                f"{ship_ref(getattr(e, 'name', e.ship_id), e.ship_id)}; "
-                               f"from you it is {actual:.0f} km")
+                               f"your sensors: {actual:.0f} km from you")
             if len(numbers) >= 2:
                 break
         if numbers:

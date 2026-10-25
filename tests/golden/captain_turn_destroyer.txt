@@ -9,6 +9,7 @@ MY SHIP: OCS Falchion-1 [beta_5] - Destroyer, 2.0g, 90° turn ~20 s
   weapons: Spinal Coiler Mk3 FIRE_WHEN_OPTIMAL (1 ready) | Coilgun Battery Mk3 FIRE_WHEN_OPTIMAL (1 reloading 8 s) | PD 2/2 turrets (automatic)
   flying: nothing - COASTING at 2.95 km/s
   primary target: none (guns and INTERCEPT use the nearest enemy)
+  record: 3 shots, 1 hit, dealt 21.6 GJ, took 0.0 GJ
 
 THREATS TO ME (on a collision course: 0 gun rounds, 0 guided torpedoes, 0 blinded wrecks):
   GUNS ON YOU: TIS Anvil-1 [alpha_9] 240 km, P(hit you) 21% x 4 shots/30s

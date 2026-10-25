@@ -126,6 +126,7 @@ def corvette_kwargs():
                 "velocity_kps": {"x": 2.9, "y": -0.5, "z": 0.1}, "speed_kps": 2.95,
                 "accel_g": 3.0, "turn_90_s": 11.8},
         "primary_target_id": "beta_5",
+        "our_shots": 3, "our_hits": 1, "our_damage_dealt": 21.6, "our_damage_taken": 0.0,
         "enemies": enemies,
         "friendlies": friendlies,
         "pd_umbrella": {"own": 1, "allies": [("TIS Dart-1", 1)], "range_km": 250.0},
@@ -499,7 +500,11 @@ class TestOrderChecks:
         (point,) = check["points"]
         assert point.startswith("(90,55,10) km is a POSITION: from you dir_to (+0.85,+0.52,+0.09)")
         (number,) = check["numbers"]
-        assert "order says 86 km for OCS Lancer-1 [beta_1]; from you it is 400 km" == number
+        assert number == ("order quotes 86 km next to OCS Lancer-1 [beta_1]; your sensors: "
+                          "400 km from you")
+        # A number in the next clause is not a claim about the ship.
+        check = _captain()._order_check(_order("Hit Lancer-1. Then hold 300 km."), sim, me, [])
+        assert "numbers" not in check
 
     def test_name_shared_with_a_friendly_is_flagged(self):
         sim, me, foe = _sim_pair(400.0, 0.0)

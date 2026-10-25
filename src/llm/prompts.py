@@ -1993,6 +1993,12 @@ def format_my_ship(
             target = ship_ref(e.get("name"), pid)
     lines.append(f"  primary target: {target or 'none (guns and INTERCEPT use the nearest enemy)'}")
 
+    shots = tactical_status.get("our_shots")
+    if shots:
+        lines.append(f"  record: {shots} shot{'s' if shots != 1 else ''}, "
+                     f"{tactical_status.get('our_hits', 0)} hit, dealt "
+                     f"{tactical_status.get('our_damage_dealt', 0.0):.1f} GJ, took "
+                     f"{tactical_status.get('our_damage_taken', 0.0):.1f} GJ")
     damage = format_damage_report(ship_status.get("damaged_modules") or {})
     if damage:
         lines.append("  " + damage.replace("\n  - ", "\n    - "))
