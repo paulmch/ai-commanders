@@ -298,8 +298,12 @@ class HudCommsRunner(LLMBattleRunner):
     Before the captains decide: admiral_plan / admiral_directive /
     admiral_order (the legacy admiral events), engine auto-signals and an
     admiral_to_captain message (comms_message), and comms_delivered for
-    every message whose delivery time has come. After: captain_report
-    (ACK / DEVIATE / UNABLE with the order-vs-execution compliance block),
+    every message whose delivery time has come, including the previous
+    checkpoint's captain reports to their admiral (comms_delivered msg_id =
+    report_id, recipient '<faction>_admiral', compliance refreshed with the
+    rounds that actually left the tubes: final). After: captain_report
+    (ACK / DEVIATE / UNABLE with the engine's order-vs-execution compliance
+    block and its `deviations` verdict, rounds committed: filed),
     fleet_net contact reports, a direct message, a captain_to_admiral
     request, enemy broadcasts (one carrying HTML, to prove the viewer
     escapes it), admiral diplomacy, a message that is never delivered, a
@@ -311,7 +315,8 @@ class HudCommsRunner(LLMBattleRunner):
 
     def setup_fleet_battle(self, fleet_data: Dict[str, Any]) -> None:
         super().setup_fleet_battle(fleet_data)
-        self._net = {"msg": 0, "report": 0, "pending": [], "orders": {}, "last_t": 0.0}
+        self._net = {"msg": 0, "report": 0, "pending": [], "orders": {}, "last_t": 0.0,
+                     "reports": {"alpha": [], "beta": []}}
 
     # -- helpers ------------------------------------------------------------
 
@@ -353,6 +358,33 @@ class HudCommsRunner(LLMBattleRunner):
                                      "deliver_at": t + delay, "blocked": blocked})
         return msg_id
 
+    def _compliance(self, order: Dict[str, Any], executed: Optional[str], actual: Optional[str],
+                    launched: int, final: bool) -> Dict[str, Any]:
+        """Compliance block in the comms runner's shape (src/llm/fleet_comms.compliance)."""
+        maneuver, target, salvo = order.get("maneuver"), order.get("target"), order.get("salvo")
+        flew = not maneuver or executed == maneuver
+        deviations = []
+        if not flew:
+            deviations.append(f"maneuver: ordered {maneuver}, flew {executed}")
+        if target and actual != target:
+            deviations.append(f"target: ordered {self._name(target)}, engaging {self._name(actual) if actual else 'nothing'}")
+        verb = "launched" if final else "committed"
+        if salvo and launched < salvo:
+            deviations.append(f"salvo: ordered {salvo}, {verb} {launched}")
+        return {"ordered_maneuver": maneuver, "ordered_maneuvers": [maneuver] if maneuver else [],
+                "executed_maneuver": executed, "ordered_target": self._name(target) if target else None,
+                "actual_target": self._name(actual) if actual else None, "ordered_salvo": salvo,
+                "launched": launched, "final": final, "followed": not deviations, "deviations": deviations}
+
+    def _deliver_reports(self, t: float, cp: int, faction: str) -> None:
+        """The admiral reads last checkpoint's reports: compliance over the whole interval."""
+        for r in self._net["reports"][faction]:
+            launched = len(self._launches({r["ship_id"]}, r["t"], t))
+            self.recorder.record(t, "comms_delivered", f"{faction}_admiral", msg_id=r["report_id"],
+                                 recipient_id=f"{faction}_admiral", delivered_t=t, checkpoint=cp,
+                                 compliance=self._compliance(r["order"], r["executed"], r["actual"], launched, True))
+        self._net["reports"][faction] = []
+
     def _deliver(self, t: float, cp: int) -> None:
         keep = []
         for p in self._net["pending"]:
@@ -385,6 +417,7 @@ class HudCommsRunner(LLMBattleRunner):
     def _before_decisions(self, t: float, cp: int) -> None:
         rec = self.recorder
         for faction in ("alpha", "beta"):
+            self._deliver_reports(t, cp, faction)
             alive = self._alive(faction)
             if not alive:
                 continue
@@ -443,7 +476,8 @@ class HudCommsRunner(LLMBattleRunner):
                 decision = decisions.get(sid)
                 executed = decision.data.get("maneuver_type") if decision else None
                 actual = decision.data.get("target_id") if decision else None
-                launched = len(self._launches({sid}, t - interval, t))
+                commands = decision.data.get("commands") or [] if decision else []
+                committed = sum(1 for c in commands if isinstance(c, dict) and c.get("type") == "launch_torpedo")
                 self._net["report"] += 1
                 status, reason, request = "ACK", "", None
                 intent = f"{executed or 'Holding'} on {self._name(actual or order.get('target'))}."
@@ -457,15 +491,16 @@ class HudCommsRunner(LLMBattleRunner):
                     reason = "Launchers still cycling - salvo will be late by one checkpoint."
                     request = {"kind": "reload", "text": "Shift my salvo to the next checkpoint."}
                 target, rng = self._nearest(sid, faction)
-                rec.record(t, "captain_report", sid, report_id=f"r{self._net['report']:03d}", faction=faction,
+                report_id = f"r{self._net['report']:03d}"
+                rec.record(t, "captain_report", sid, report_id=report_id, faction=faction,
                            checkpoint=cp, captain_name=captain.name, ship_name=self._name(sid), status=status,
                            reason=reason, intent=intent,
                            contact={"ship": self._name(target), "assessment": "closing" if rng < 300 else "holding",
                                     "note": f"{rng:.0f} km"} if target and i == 0 else None,
                            request=request,
-                           compliance={"ordered_maneuver": order.get("maneuver"), "executed_maneuver": executed,
-                                       "ordered_target": order.get("target"), "actual_target": actual,
-                                       "ordered_salvo": order.get("salvo"), "launched": launched})
+                           compliance=self._compliance(order, executed, actual, committed, False))
+                self._net["reports"][faction].append({"report_id": report_id, "ship_id": sid, "t": t, "order": order,
+                                                      "executed": executed, "actual": actual})
                 if i == 0 and cp % 2 == 1:
                     rec.record_captain_log(t, sid, captain.name,
                                            f"CP{cp}: {executed or 'holding'}, hull {self.simulation.get_ship(sid).hull_integrity:.0f}%. "

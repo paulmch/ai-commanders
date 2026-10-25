@@ -209,12 +209,13 @@ for (const path of RECORDINGS) {
     const rec = JSON.parse(readFileSync(path, 'utf8'));
     rec.events.sort((a, b) => a.timestamp - b.timestamp || (a.sequence || 0) - (b.sequence || 0));
     // 8 s polls, and every checkpoint's events split in three by sequence
+    // (orders and reports trickling in while the battle waits on the models)
     const cuts = new Set();
     for (let t = 8; t < rec.events.at(-1).timestamp; t += 8) cuts.add(rec.events.findIndex(e => e.timestamp > t));
     const byT = new Map();
     rec.events.forEach((e, i) => { if (!byT.has(e.timestamp)) byT.set(e.timestamp, []); byT.get(e.timestamp).push(i); });
     for (const list of byT.values()) {
-      if (list.length < 6) continue;
+      if (!list.some(i => rec.events[i].event_type === 'captain_decision')) continue;
       cuts.add(list[Math.floor(list.length / 3)]);
       cuts.add(list[Math.floor((2 * list.length) / 3)]);
     }

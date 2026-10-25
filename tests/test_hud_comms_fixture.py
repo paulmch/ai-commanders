@@ -24,6 +24,8 @@ REPORT_KEYS = {"report_id", "faction", "checkpoint", "captain_name", "ship_name"
                "intent", "contact", "request", "compliance"}
 COMPLIANCE_KEYS = {"ordered_maneuver", "executed_maneuver", "ordered_target", "actual_target",
                    "ordered_salvo", "launched"}
+# What the comms runner adds (src/llm/fleet_comms.compliance): the engine's verdict
+VERDICT_KEYS = {"ordered_maneuvers", "final", "followed", "deviations"}
 
 
 def _load_script(name):
@@ -66,11 +68,22 @@ def test_fixture_events_follow_the_comms_schema(tmp_path):
     assert {e["data"]["channel"] for e in by_type["comms_message"]} == CHANNELS
     assert {"captain", "admiral", "engine"} <= {e["data"]["sender_role"] for e in by_type["comms_message"]}
 
+    reports = {e["data"]["report_id"]: e for e in by_type["captain_report"]}
     delivered = set()
+    report_deliveries = []
     for e in by_type["comms_delivered"]:
         d = _data(e)
-        assert set(d) == DELIVERED_KEYS
         assert e["ship_id"] == d["recipient_id"]
+        if d["msg_id"] in reports:
+            # A report reaches its admiral at the next checkpoint, compliance refreshed (final)
+            report_deliveries.append(e)
+            filed = reports[d["msg_id"]]
+            assert set(d) == DELIVERED_KEYS | {"compliance"}
+            assert d["recipient_id"] == f"{filed['data']['faction']}_admiral"
+            assert d["delivered_t"] == e["timestamp"] > filed["timestamp"]
+            assert set(d["compliance"]) == COMPLIANCE_KEYS | VERDICT_KEYS and d["compliance"]["final"] is True
+            continue
+        assert set(d) == DELIVERED_KEYS
         msg = messages[d["msg_id"]]["data"]
         assert d["recipient_id"] in msg["recipient_ids"]
         assert d["delivered_t"] >= msg["deliver_at_t"] and d["delivered_t"] == e["timestamp"]
@@ -83,10 +96,13 @@ def test_fixture_events_follow_the_comms_schema(tmp_path):
         d = _data(e)
         assert set(d) == REPORT_KEYS
         assert d["status"] in ("ACK", "DEVIATE", "UNABLE")
-        assert set(d["compliance"]) == COMPLIANCE_KEYS
+        assert set(d["compliance"]) == COMPLIANCE_KEYS | VERDICT_KEYS and d["compliance"]["final"] is False
+        assert d["compliance"]["followed"] == (not d["compliance"]["deviations"])
         assert d["contact"] is None or set(d["contact"]) == {"ship", "assessment", "note"}
         assert d["request"] is None or set(d["request"]) == {"kind", "text"}
     assert {e["data"]["status"] for e in by_type["captain_report"]} >= {"ACK", "DEVIATE"}
+    assert report_deliveries, "reports are delivered to the admiral"
+    assert any(e["data"]["compliance"]["deviations"] for e in by_type["captain_report"]), "some filed report is off orders"
 
     # Every legacy shape the viewer still reads
     for legacy in ("message", "admiral_directive", "admiral_plan", "admiral_order", "captain_log",
