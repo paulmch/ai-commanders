@@ -1003,7 +1003,9 @@ class ShipCombatState:
     # Attitude control (rotation)
     attitude_control: Optional[AttitudeControlSpecs] = None
     rotation_state: Optional[RotationState] = None
-    angular_velocity_rad_s: float = 0.0  # Current angular velocity
+    angular_velocity_rad_s: float = 0.0  # Current angular velocity (magnitude)
+    # Unit axis the ship spins about (right-hand rule); None at rest.
+    angular_axis: Optional[Vector3D] = None
     # Set by _rotate_ship_toward; a tick without an attitude command freezes
     # the attitude, so _update_ship must not bank the rate for the next turn.
     attitude_commanded: bool = False
@@ -2933,6 +2935,7 @@ class CombatSimulation:
         # (0.12 deg/s^2), finishing 90 deg ~7x faster than RCS allows.
         if not ship.attitude_commanded:
             ship.angular_velocity_rad_s = 0.0
+            ship.angular_axis = None
             ship.rotation_state = None
 
         # Apply engine damage to effective thrust
@@ -3080,28 +3083,46 @@ class CombatSimulation:
 
         # Tolerance for "close enough"
         ANGLE_TOLERANCE = 0.01  # ~0.6 degrees
-        VELOCITY_TOLERANCE = 0.01  # rad/s
-
-        # Check if rotation is complete
-        if angle_to_target < ANGLE_TOLERANCE and abs(ship.angular_velocity_rad_s) < VELOCITY_TOLERANCE:
-            ship.angular_velocity_rad_s = 0.0
-            ship.rotation_state = None
-            return
 
         # Get attitude control specs (use defaults if not set)
         # Engine damage reduces thrust vectoring but RCS still works
         angular_accel, max_angular_vel = self._get_rotation_params(ship, engines_on)
+        authority = angular_accel * dt          # rate change available this tick
+
+        # The ship's spin is a vector: |rate| about angular_axis. It used to be
+        # a bare magnitude re-pointed at the target every tick, so a turn could
+        # reverse - or stop dead at the target - instantly at any rate (a
+        # battleship spun up on thrust vectoring reversed on RCS at ~850x its
+        # authority). Now the spin is carried honestly: only `authority` per
+        # tick can change it.
+        w_mag = ship.angular_velocity_rad_s
+        axis_prev = getattr(ship, 'angular_axis', None)
+
+        # Done: on target, and slow enough to stop within this tick.
+        if angle_to_target < ANGLE_TOLERANCE and w_mag <= max(authority, 1e-9):
+            self._stop_rotation(ship)
+            return
 
         # Calculate rotation axis
         rotation_axis = current_forward.cross(target_normalized)
         if rotation_axis.magnitude < 1e-6:
-            # Vectors are nearly parallel
-            if angle_to_target < ANGLE_TOLERANCE:
-                # Already facing target
-                ship.angular_velocity_rad_s = 0.0
-                return
-            # Use up as rotation axis for 180-degree flip
-            rotation_axis = ship.up
+            if angle_to_target < ANGLE_TOLERANCE and axis_prev is not None:
+                # On target but still spinning: the spin carries on.
+                rotation_axis = axis_prev
+            else:
+                # Use up as rotation axis for 180-degree flip
+                rotation_axis = ship.up
+        elif (axis_prev is not None and w_mag > 0.0
+              and angle_to_target > math.pi / 2
+              and axis_prev.dot(rotation_axis) > 0.0):
+            # Far from the target any axis across the nose gets there: keep
+            # the spin's own axis (made perpendicular to the nose) instead of
+            # the exact great circle. Near a flip the great-circle axis swings
+            # wildly with a slightly jittered aim (WOBBLE's +-5 deg), and
+            # chasing it braked the spin to nothing.
+            along = axis_prev - current_forward * axis_prev.dot(current_forward)
+            if along.magnitude > 1e-6:
+                rotation_axis = along
         rotation_axis = rotation_axis.normalized()
 
         # Check if we need to initialize or update rotation state
@@ -3116,56 +3137,84 @@ class CombatSimulation:
                 phase="accelerate"
             )
 
-        # Bang-bang control logic
-        # To stop from velocity ω with deceleration α: need angle = ω²/(2α)
-        current_omega = abs(ship.angular_velocity_rad_s)
-        stopping_angle = (current_omega ** 2) / (2 * angular_accel) if angular_accel > 0 else 0
-
-        # Determine phase: accelerate or decelerate
-        if angle_to_target <= stopping_angle + ANGLE_TOLERANCE:
-            # Need to brake NOW to stop at target
-            phase = "decelerate"
-        elif current_omega >= max_angular_vel:
-            # At max velocity, coast or brake slightly
-            phase = "coast"
+        # Split the carried spin: w_par about the new axis (negative = still
+        # turning AWAY from the target), w_perp sideways. The sideways part is
+        # braked first, out of the same per-tick authority.
+        if w_mag > 0.0 and axis_prev is not None:
+            w_vec = axis_prev * w_mag
+            w_par = w_vec.dot(rotation_axis)
+            w_perp = w_vec - rotation_axis * w_par
         else:
-            # Still accelerating
-            phase = "accelerate"
+            w_par = w_mag
+            w_perp = Vector3D(0.0, 0.0, 0.0)
+        budget = authority
+        perp = w_perp.magnitude
+        if perp > 1e-12:
+            cut = min(perp, budget)
+            w_perp = w_perp * ((perp - cut) / perp)
+            budget -= cut
+        else:
+            w_perp = Vector3D(0.0, 0.0, 0.0)
 
+        if w_par < 0.0:
+            # Turning the wrong way: brake (it may cross zero this tick).
+            phase = "decelerate"
+            w_par = w_par + budget
+        else:
+            # Discrete bang-bang: the fastest rate this tick from which the
+            # per-tick braking still stops on the target. Flying w for one
+            # tick and then braking by `authority` per tick covers about
+            # w^2/(2a) + w*dt/2, so w_cmd solves that = angle.
+            current_omega = w_par
+            if angular_accel > 0.0:
+                w_cmd = angular_accel * (-0.5 * dt + math.sqrt(
+                    0.25 * dt * dt + 2.0 * angle_to_target / angular_accel))
+            else:
+                w_cmd = current_omega
+            w_cmd = min(w_cmd, max_angular_vel)
+            lo = max(0.0, current_omega - budget)
+            hi = min(max(current_omega, max_angular_vel), current_omega + budget)
+            w_par = max(lo, min(hi, w_cmd))
+            if w_par > current_omega + 1e-12:
+                phase = "accelerate"
+            elif w_par < current_omega - 1e-12:
+                phase = "decelerate"
+            else:
+                phase = "coast"
         ship.rotation_state.phase = phase
 
-        # Apply torque based on phase
-        if phase == "accelerate":
-            # Accelerate rotation
-            new_omega = current_omega + angular_accel * dt
-            new_omega = min(new_omega, max_angular_vel)
-            ship.angular_velocity_rad_s = new_omega
-        elif phase == "decelerate":
-            # Decelerate rotation (braking)
-            new_omega = current_omega - angular_accel * dt
-            new_omega = max(0.0, new_omega)
-            ship.angular_velocity_rad_s = new_omega
-        else:  # coast
-            # Maintain current velocity (maybe slight adjustment)
-            pass
-
-        # Apply rotation for this time step
-        rotation_amount = ship.angular_velocity_rad_s * dt
-
-        # Don't overshoot
-        rotation_amount = min(rotation_amount, angle_to_target)
+        # Travel this tick. Landing exactly on the target is allowed when the
+        # remaining rate could be stopped within one tick (normal bang-bang
+        # arrival); a faster spin overshoots and has to come back.
+        travel = w_par * dt
+        if w_par > 0.0 and travel > angle_to_target and w_par <= authority + 1e-12:
+            travel = angle_to_target
+        rotation_vec = rotation_axis * travel + w_perp * dt
+        rotation_amount = rotation_vec.magnitude
 
         if rotation_amount > 0:
+            axis = rotation_vec * (1.0 / rotation_amount)
             # Update forward and up vectors
             new_forward = ship.kinematic_state.forward.rotate_around_axis(
-                rotation_axis, rotation_amount
+                axis, rotation_amount
             )
             new_up = ship.kinematic_state.up.rotate_around_axis(
-                rotation_axis, rotation_amount
+                axis, rotation_amount
             )
 
             ship.kinematic_state.forward = new_forward.normalized()
             ship.kinematic_state.up = new_up.normalized()
+
+        spin = rotation_axis * w_par + w_perp
+        ship.angular_velocity_rad_s = spin.magnitude
+        ship.angular_axis = (spin * (1.0 / ship.angular_velocity_rad_s)
+                             if ship.angular_velocity_rad_s > 1e-12 else None)
+
+    @staticmethod
+    def _stop_rotation(ship: ShipCombatState) -> None:
+        ship.angular_velocity_rad_s = 0.0
+        ship.angular_axis = None
+        ship.rotation_state = None
 
     def _get_rotation_params(
         self,

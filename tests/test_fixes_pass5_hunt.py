@@ -246,19 +246,13 @@ def _battleship_sim():
     return sim, ship
 
 
-@pytest.mark.xfail(strict=False, reason=(
-    "Rotation keeps only a scalar |omega| and re-points the rotation axis at "
-    "the target every tick, so a turn can reverse instantly. A battleship "
-    "spun up on thrust vectoring to 0.047 rad/s and then turning on RCS "
-    "(7.5e-5 rad/s^2) toward a point 1 deg behind its nose turns -0.0175 "
-    "rad/s the next tick (a 0.064 rad/s change, ~850x its authority) and "
-    "stops dead (the overshoot clamp brakes for free). Seen in seed 5 "
-    "budget 150: battleship alpha_1 in PADLOCK at t=281-282. Not fixed: "
-    "_rotate_ship_toward also flies every evasion jink, and evasion is "
-    "pinned by the fire-control calibration fixture. Proposed fix: keep a "
-    "signed rate along the previous axis, project it onto the new axis, "
-    "brake a negative component at the available authority, and allow "
-    "overshoot when the rate exceeds what one tick of braking can stop."))
+# Rotation used to keep only a scalar |omega| re-pointed at the target every
+# tick, so a turn could reverse - or stop dead on the target - at any rate: a
+# battleship spun up on thrust vectoring to 0.047 rad/s and then turning on
+# RCS (7.5e-5 rad/s^2) toward a point 1 deg behind its nose turned -0.0175
+# rad/s the next tick (~850x its authority). Seen in seed 5 budget 150:
+# battleship alpha_1 in PADLOCK at t=281-282. The spin is now a vector that
+# only the available authority can change.
 def test_rcs_turn_cannot_reverse_a_thrust_vectored_spin_in_one_tick():
     import math
     from src.physics import Vector3D
@@ -403,3 +397,45 @@ def test_torpedo_forecast_shadow_is_silent_and_isolated(capsys):
     assert sim.rng.getstate() == rng_state
     assert sim._damage_rng.getstate() == dmg_state
     assert not sim.torpedoes and sh.torpedoes_remaining == sh.torpedo_launcher.magazine_capacity
+
+
+def test_fast_spin_on_rcs_overshoots_instead_of_stopping_dead():
+    import math
+    from src.physics import Vector3D
+    sim, ship = _battleship_sim()
+    for _ in range(10):
+        sim._rotate_ship_toward(ship, Vector3D(0, 1, 0), 1.0, engines_on=True)
+    rate = ship.angular_velocity_rad_s
+    ahead = ship.forward.rotate_around_axis(Vector3D(0, 0, 1), math.radians(0.5))
+    sim._rotate_ship_toward(ship, ahead, 1.0, engines_on=False)
+    rcs_alpha = math.radians(ship.attitude_control.rcs_angular_accel_deg_s2)
+    assert ship.angular_velocity_rad_s >= rate - 1.01 * rcs_alpha
+    assert ship.forward.angle_to(ahead) > math.radians(1.0)   # swung past
+
+
+@pytest.mark.parametrize("hull", ["corvette", "frigate", "destroyer", "cruiser",
+                                  "battleship", "dreadnought"])
+@pytest.mark.parametrize("engines_on", [True, False])
+def test_90_degree_turn_from_rest_matches_the_hull_rating(hull, engines_on):
+    """CLAUDE.md / fleet_ships.json 90-degree turn times, thrust vectoring and
+    RCS. The scalar integrator beat them through its free stop at the target
+    (battleship TV 32 s against 36.9 s)."""
+    import math
+    from src.physics import Vector3D
+    from src.simulation import CombatSimulation, create_ship_from_fleet_data
+    with open("data/fleet_ships.json") as f:
+        data = json.load(f)
+    spec = data["ships"][hull]["attitude_control"]
+    rated = spec["thrust_vectoring" if engines_on else "rcs"]["time_to_rotate_90_deg_s"]
+    sim = CombatSimulation(time_step=1.0, decision_interval=1e9, seed=1)
+    ship = create_ship_from_fleet_data("s", hull, "alpha", data, Vector3D(0, 0, 0),
+                                       Vector3D(0, 0, 0), Vector3D(1, 0, 0))
+    sim.add_ship(ship)
+    target = Vector3D(0, 1, 0)
+    t = 0
+    while t < 2000:
+        sim._rotate_ship_toward(ship, target, 1.0, engines_on=engines_on)
+        t += 1
+        if ship.forward.angle_to(target) < math.radians(0.6) and ship.angular_velocity_rad_s < 1e-3:
+            break
+    assert abs(t - rated) <= max(1.5, 0.06 * rated), (t, rated)
