@@ -5,7 +5,9 @@ import { getGraphicsSettings } from './render/Quality.js';
 import { PostFX } from './render/PostFX.js';
 import { buildHull, buildShipMaterials, ACCENT_GLOW } from './render/Hulls.js';
 import { updateHullDetails } from './render/Hulls.js';
-import { createTorch } from './render/Torch.js';
+import { createTorch, damagedNozzle } from './render/Torch.js';
+
+const _nozzle = { level: 1, sputter: 0 };
 
 const _plumeTurn = new THREE.Vector3();
 const _plumeQ = new THREE.Quaternion();
@@ -436,7 +438,20 @@ export class SceneManager {
     if (Array.isArray(state.omega) && !state.dying) {
       turn = _plumeTurn.fromArray(state.omega).applyQuaternion(_plumeQ.copy(ship.quaternion).invert());
     }
-    for (const t of ud.torches) t.update(thrust, this.elapsed, state.dying ? 0.7 : 0, this.currentTime, turn);
+    // Drive damage (recorded mount_damaged, kind engine): dark bells, the
+    // rest burning rough; the trace's thrust already carries the loss
+    const eng = this.damageFX?.engineAt?.(shipId, this.currentTime) || null;
+    for (let i = 0; i < ud.torches.length; i++) {
+      const dying = state.dying ? 0.7 : 0;
+      if (!eng) { ud.torches[i].update(thrust, this.elapsed, dying, this.currentTime, turn); continue; }
+      if (ud.driveSeed === undefined) {
+        let h = 0;
+        for (const c of shipId) h = (h * 31 + c.charCodeAt(0)) | 0;
+        ud.driveSeed = Math.abs(h) % 100000;   // from the id: the same bells die on every load
+      }
+      const nz = damagedNozzle(eng.health, i, ud.torches.length, ud.driveSeed, _nozzle);
+      ud.torches[i].update(Math.min(1, thrust * nz.level), this.elapsed, Math.max(dying, nz.sputter), this.currentTime, turn);
+    }
     if (mats) mats.bellHeat.emissiveIntensity = 0.3 + 2.8 * thrust;
     updateHullDetails(ship, state, this);   // hull rigs, doors, nav lamps (render/HullRigs.js)
   }

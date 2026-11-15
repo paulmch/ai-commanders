@@ -120,10 +120,10 @@ const fragmentShader = /* glsl */`
 
     // Throat: a white-hot ball sitting in the nozzle exit. Its skirt falls
     // on the bells around it, which is the heat glow on the engine block.
-    float sf = uR0 * (0.55 + 0.25 * uThrust);
+    float sf = uR0 * (0.4 + 0.16 * uThrust);
     vec3 fc = ro - vec3(0.0, 0.0, -0.25 * uR0);
     float fd2 = dot(fc, fc) - pow(dot(fc, rd), 2.0);
-    col += mix(uCore, uSheath, 0.3) * uFlare * (exp(-fd2 / (sf * sf)) + 0.16 * exp(-fd2 / (sf * sf * 9.0)));
+    col += mix(uCore, uSheath, 0.3) * uFlare * (exp(-fd2 / (sf * sf)) + 0.1 * exp(-fd2 / (sf * sf * 7.0)));
 
     // Chord of the ray through the slab 0 <= s <= uLen (s = distance aft)
     float sA = -ro.z, sD = -rd.z;
@@ -282,6 +282,32 @@ export function plumeShape(thrust) {
 /** Extra core/sheath level of a dying drive at full sputter (x 1 + this). */
 export const DYING_GASP = 1.6;
 
+/**
+ * One bell of a damaged drive (recorded `mount_damaged`, kind engine):
+ * some bells are dark, the rest burn harder and rough to make up the thrust
+ * the ship still has. Which bells die is seeded per ship, and a bell that is
+ * dark at one damage level stays dark at every higher one. Pure.
+ *
+ * @param {number} health  engine health 0-100 (100 = intact)
+ * @param {number} i       bell index, @param {number} n bells in the drive
+ * @param {number} seed    per-ship seed
+ * @returns out {level, sputter}: thrust multiplier (0 = dark) and cough 0..1
+ */
+export function damagedNozzle(health, i, n, seed, out = { level: 1, sputter: 0 }) {
+  const dmg = Math.max(0, Math.min(1, 1 - health / 100));
+  out.level = 1; out.sputter = 0;
+  if (dmg <= 0 || n <= 0) return out;
+  const dead = health <= 0 ? n : Math.min(n - 1, Math.round(dmg * n * 0.85));
+  // rank of this bell in the seeded death order
+  const h = (k) => coughHash(seed * 0.001 + k * 7.31);
+  let rank = 0;
+  for (let k = 0; k < n; k++) if (h(k) < h(i) || (h(k) === h(i) && k < i)) rank++;
+  if (rank < dead) { out.level = 0; return out; }
+  out.level = Math.min(1.35, n / (n - dead));
+  out.sputter = Math.min(0.85, 0.25 + 0.7 * dmg + 0.2 * h(i + 31));
+  return out;
+}
+
 /** Seconds the exhaust at the plume tip has been in flight, for the sweep. */
 export const SWEEP_AGE_S = 2.2;
 /** Largest tip offset of a swept plume, as a fraction of its length. */
@@ -325,7 +351,9 @@ export function createTorch({ radius, length, light = null, tint = 'fusion', int
     core: TORCH_LEVELS.core * I * k.core,
     sheath: TORCH_LEVELS.sheath * I * k.wide,
     halo: TORCH_LEVELS.halo * I * k.wide,
-    flare: TORCH_LEVELS.flare * Math.min(1, I) * k.core
+    // per bell, and inside the liner: a big cluster must not weld its
+    // throats into one blob that hides the bells
+    flare: TORCH_LEVELS.flare * Math.min(1, I) * Math.min(k.core, 1.6 * k.wide)
   };
 
   shared.uNoise.value = getNoiseTexture();

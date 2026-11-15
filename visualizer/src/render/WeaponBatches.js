@@ -129,11 +129,16 @@ const ribbonFragment = /* glsl */`
     } else if (kind < 2.5) {
       // PD beam: warm white, chopped into energy packets marching out to
       // the round, so a beam never reads as a slug tracer
-      float packets = 0.42+0.58*smoothstep(0.25,0.55,fract(x*26.0-uTime*7.0+seed*17.0));
+      // (pass 5: a continuous-dwell laser, not a dashed rope) - a thin hot
+      // core in a soft green glow, unbroken from turret to round, with a
+      // fast shallow flicker on battle time. Green separates it from the
+      // white/blue/amber coilgun tracers and from both faction colours.
+      float flick = 0.86 + 0.14 * sin(uTime*47.0 + seed*91.0) * sin(uTime*13.0 + seed*37.0);
+      float thin = exp(-y*y*min(70.0, aa*2.5));
       // Several turrets share a line of fire: keep pixel-floor beams slim.
       float slim = mix(0.6, 1.0, smoothstep(0.7, 2.0, vPx));
       // aAge fades a close-up's split beam ends out toward the cut (0 = full)
-      color = (vec3(1.1,0.77,0.5)*core + vec3(0.5,0.13,0.035)*halo*0.3)*packets*slim*(1.0-vAge);
+      color = (vec3(1.5,2.9,1.5)*thin + vec3(0.2,1.25,0.3)*core*0.55 + vec3(0.05,0.55,0.12)*halo*0.45)*flick*slim*(1.0-vAge);
     } else if (kind < 3.5) {
       // Motor plume: broad white-hot core out of the nozzle with shock
       // cells, wrapped in a longer orange sheath that fades to the tip.
@@ -224,6 +229,10 @@ const flashFragment = /* glsl */`
       float arc = pow(0.5+0.5*sin(angle*7.0+vStyle.w*73.0),3.0);
       float ring = exp(-pow((r-0.67)*24.0,2.0))*(0.3+0.7*arc);
       col = vec3(2.6,3.2,3.6)*exp(-r*r*45.0) + vec3(0.16,1.15,1.9)*ring + vec3(0.06,0.3,0.6)*halo*0.5;
+    } else if (vStyle.z > 5.5) {
+      // PD laser glint (emitter lens, burn spot): white kernel, green skirt
+      col = vec3(2.0,2.6,2.0)*exp(-r*r*14.0)
+        + vec3(0.15,1.1,0.25)*exp(-r*r*3.4)*(1.0-smoothstep(0.55,1.0,r))*0.8;
     } else if (vStyle.z > 4.5) {
       // RCS nozzle glow / exhaust puff: white kernel in a cold blue skirt
       col = vec3(1.9,2.1,2.5)*exp(-r*r*10.0)
