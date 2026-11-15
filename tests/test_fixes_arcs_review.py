@@ -485,3 +485,60 @@ class TestCommanderNumbersUnderArcs:
             from src.llm import prompts
             assert max(counts[-10:]) == 2 and fitted == 3
             assert "head-on, 2 of a battleship's 3" in " ".join(prompts.CAPTAIN_DOCTRINE.split())
+
+
+# =============================================================================
+# Finding 4: blind cones about the thrust axis that no roll can clear - the
+# commander-facing ARCS lines must say so plainly
+# =============================================================================
+
+class TestBlindConesAreStatedPlainly:
+
+    @staticmethod
+    def _real_sim():
+        return CombatSimulation(time_step=1.0, decision_interval=1e9, seed=5)
+
+    def test_cones_are_real_no_mount_of_the_kind_bears_at_any_roll(self):
+        from src.llm.arcs_status import blind_cones
+        for hull in wa.load_hull_mounts().values():
+            cones = blind_cones(hull)
+            for kind in ("pd", "gun"):
+                masks = [m.mask for m in hull.mounts if m.kind == kind]
+                for end, sign in (("nose", 1.0), ("stern", -1.0)):
+                    a = math.radians(cones[f"{kind}_{end}"])
+                    if not masks or a <= 0.0:
+                        continue
+                    for k in range(360):           # every roll, 1 degree apart
+                        p = math.radians(k)
+                        cell = wa.cell_index(sign * math.cos(a), math.sin(a) * math.cos(p),
+                                             math.sin(a) * math.sin(p))
+                        assert all(mk[cell] for mk in masks), (hull.hull, kind, end, k)
+
+    def test_a_target_dead_ahead_of_a_cruiser_says_turn_the_ship(self):
+        from src.llm.arcs_status import blind_cones, gun_arcs_text
+        sim = self._real_sim()
+        if blind_cones(sim.hull_mounts["cruiser"])["gun_nose"] < 1.0:
+            pytest.skip("the cruiser's batteries bear dead ahead on this mount table")
+        a = _ship(sim, "a", "alpha", Vector3D(0, 0, 0), hull="cruiser")
+        _ship(sim, "b", "beta", Vector3D(150_000, 0, 0), forward=Vector3D(-1, 0, 0))
+        _fire_at(a, "b", slots=("weapon_1", "weapon_2"))
+        sim.step()
+        text = gun_arcs_text(sim, a, sim.get_ship("b"))
+        assert "weapon_1 masked: the target is 0 deg off the nose" in text
+        assert "weapon_2 masked: the target is 0 deg off the nose" in text
+        assert text.count("inside the hull's blind cone") == 2 and "turn the ship" in text
+
+    def test_a_torpedo_dead_astern_of_a_dreadnought_says_no_roll_helps(self):
+        from src.llm.arcs_status import arcs_status_lines, blind_cones
+        sim = self._real_sim()
+        if blind_cones(sim.hull_mounts["dreadnought"])["pd_stern"] < 1.0:
+            pytest.skip("the dreadnought's PD bears dead astern on this mount table")
+        d = _ship(sim, "d", "alpha", Vector3D(0, 0, 0), hull="dreadnought")
+        _ship(sim, "e", "beta", Vector3D(-900_000, 0, 0), forward=Vector3D(1, 0, 0))
+        _torpedo(sim, "t", Vector3D(-200_000, 0, 0), Vector3D(4000.0, 0, 0), "d", "e")
+        sim.step()
+        lines = arcs_status_lines(sim, d)
+        pd = [l for l in lines if l.startswith("ARCS PD:")]
+        assert pd and "0 of 4 turrets bear" in pd[0] and "no roll helps" in pd[0], lines
+        assert any(l.startswith("ARCS blind cones") and "PD within" in l and "stern" in l
+                   for l in lines), lines
