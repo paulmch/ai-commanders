@@ -164,6 +164,10 @@ def fly_torpedo(
         return None
     try:
         shadow = CombatSimulation(time_step=_shadow_dt(sim), decision_interval=1e9, seed=0)
+        # A private forecast: no console narration. Its throw-away 'target'
+        # used to print MODULE DESTROYED / MORTALLY WOUNDED into the battle
+        # log ~70 times per battle.
+        shadow.echo = False
         sh = _clone(shooter, "shooter", "alpha", fleet_data)
         tg = _clone(target, "target", "beta", fleet_data)
     except Exception:  # noqa: BLE001 - advisory only, never fail a decision

@@ -256,6 +256,7 @@ class PredictionSimulation(CombatSimulation):
         self._initial_seed = source._initial_seed
         self.rng = _NominalRng()
         self.evidence = ExecutionEvidence()
+        self.echo = False        # no console narration from the shadow
         self.events = []
         self._event_callbacks = []
         self.pending_torpedo_launches = []

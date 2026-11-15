@@ -372,3 +372,34 @@ def test_left_battle_torpedo_does_not_enter_captain_shot_history(fleet):
               "closest_approach_km": 9000.0, "hit_probability": 0.0}))
     assert len(captain.shot_history) == before
 
+
+# ---------------------------------------------------------------------------
+# The torpedo forecast shadow (fire_solutions.fly_torpedo) narrated into the
+# battle log: its throw-away 'target' printed MODULE DESTROYED / MORTALLY
+# WOUNDED ~70 times per heuristic battle log. Shadows now run with echo off,
+# and they never touch the real battle's events or random streams.
+# ---------------------------------------------------------------------------
+
+def test_torpedo_forecast_shadow_is_silent_and_isolated(capsys):
+    from src.llm.fire_solutions import fly_torpedo
+    from src.physics import Vector3D
+    from src.simulation import CombatSimulation, create_ship_from_fleet_data
+    with open("data/fleet_ships.json") as f:
+        data = json.load(f)
+    sim = CombatSimulation(time_step=1.0, decision_interval=30.0, seed=7)
+    sh = create_ship_from_fleet_data("a1", "corvette", "alpha", data, Vector3D(0, 0, 0),
+                                     Vector3D(0, 0, 0), Vector3D(1, 0, 0))
+    tg = create_ship_from_fleet_data("b1", "frigate", "beta", data, Vector3D(150_000, 0, 0),
+                                     Vector3D(0, 0, 0), Vector3D(1, 0, 0))  # tail-on: the hit wrecks a module
+    sim.add_ship(sh)
+    sim.add_ship(tg)
+    rng_state, dmg_state = sim.rng.getstate(), sim._damage_rng.getstate()
+    n_events = len(sim.events)
+    capsys.readouterr()
+    shots = [fly_torpedo(sim, sh, tg, data, target_evades=False) for _ in range(3)]
+    assert any(s is not None and s.hits for s in shots)
+    assert capsys.readouterr().out == ""
+    assert len(sim.events) == n_events
+    assert sim.rng.getstate() == rng_state
+    assert sim._damage_rng.getstate() == dmg_state
+    assert not sim.torpedoes and sh.torpedoes_remaining == sh.torpedo_launcher.magazine_capacity
