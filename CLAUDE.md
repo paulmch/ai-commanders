@@ -259,6 +259,15 @@ torpedo-armed hulls; all others fight with coilguns.
   (harness + table) and regenerate the fixture; the doctrine P(hit) table is bound by
   `tests/test_prompt_structure.py`. Known residual: LLM fleets dodging a whole fleet's
   fire were hit even less than forecast (firecontrol.JINK_ACCEL_FRACTION).
+- Side symmetry: the engine must not care which fleet is alpha or was added
+  first. `CombatSimulation.step()` resolves weapons fire, point defence and
+  the ship updates (`_update_ships`: every ship steers on the start-of-step
+  state of the others, new states are staged and installed together) each from
+  one snapshot. `tests/test_side_symmetry.py` pins it exactly: mirrored
+  RNG-free (or flat-RNG) engagements stay mirror images and do not depend on
+  insertion order. Per-tick logic that reads another ship must never see a
+  ship already updated this tick (a mirrored HOLD_RANGE pair used to split
+  into CLOSE and HOLD that way, and mirror battles went to one side by roster).
 - After any armor or damage-model change, regenerate the combat tables in
   `docs/ships.md` with `uv run python scripts/calculate_shots_to_kill.py`.
 - Draft point costs are DERIVED from `data/fleet_ships.json`, not hand-typed

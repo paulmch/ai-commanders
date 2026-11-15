@@ -280,17 +280,20 @@ class PredictionSimulation(CombatSimulation):
     def _log_event(self, *args: Any, **kwargs: Any) -> None:  # type: ignore[override]
         return None
 
+    def _advance_ship(self, ship: Any, dt: float) -> None:  # type: ignore[override]
+        if ship.is_destroyed:
+            return
+        if ship.is_dying:
+            # The hulk's torch flicker is random: coast it (it only
+            # matters as a target for someone else's guidance).
+            ship.kinematic_state = propagate_state(ship.kinematic_state, dt, 0.0)
+            return
+        self._update_ship(ship, dt)
+
     def advance(self, dt: float) -> None:
-        """One shadow tick: ships (in dict order, like step()), then threats."""
-        for ship in self.ships.values():
-            if ship.is_destroyed:
-                continue
-            if ship.is_dying:
-                # The hulk's torch flicker is random: coast it (it only
-                # matters as a target for someone else's guidance).
-                ship.kinematic_state = propagate_state(ship.kinematic_state, dt, 0.0)
-                continue
-            self._update_ship(ship, dt)
+        """One shadow tick: ships (from one start-of-tick snapshot, like
+        step()), then threats."""
+        self._update_ships(dt)
 
         for rnd in self.projectiles:
             rnd.position = rnd.position + rnd.velocity * dt

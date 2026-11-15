@@ -2676,18 +2676,9 @@ class CombatSimulation:
         # torpedo 240 km out at 270 km, outside its 250 km envelope).
         self._update_point_defense(dt)
 
-        # Update all ships
-        for ship in self.ships.values():
-            if not ship.is_destroyed:
-                self._update_ship(ship, dt)
-            else:
-                # A wreck keeps coasting on its last velocity (no thrust, no
-                # control). It used to freeze in space while its recorded
-                # velocity stayed at the last value. Everything that fights
-                # (targeting, PD, collisions, blasts, victory) skips
-                # is_destroyed ships, so only its position moves.
-                ks = ship.kinematic_state
-                ks.position = ks.position + ks.velocity * dt
+        # Update all ships (each one against the same start-of-step picture
+        # of the others, see _update_ships)
+        self._update_ships(dt)
 
         # Update projectiles and check hits
         self._update_projectiles(dt)
@@ -2728,6 +2719,61 @@ class CombatSimulation:
     # -------------------------------------------------------------------------
     # Ship Update
     # -------------------------------------------------------------------------
+
+    def _update_ships(self, dt: float) -> None:
+        """
+        Advance every ship one step, each against the SAME start-of-step
+        snapshot of all the others.
+
+        Ships used to be updated in place, one after another in dict order,
+        so a ship updated later steered on the already-moved position,
+        velocity and drive burn of every ship updated before it, while the
+        first ones saw everybody at the start of the step. Dict order is
+        alpha first, and the difference is not small: two mirrored fleets
+        ordered to HOLD_RANGE on each other did not fly mirrored courses -
+        alpha, seeing beta's drives still cold, went to CLOSE at full throttle;
+        beta, updated next, saw alpha already charging, planned around that
+        burn and sat in HOLD at 5%. Mirror battles were then decided by which
+        fleet had been added to the simulation first (same seed, insertion
+        order swapped: the winner swapped with it).
+
+        Here each ship's new state is staged and its start-of-step state put
+        back until every ship has been updated, exactly as weapons fire and
+        point defence already resolve from one snapshot (see step()). What
+        another ship's steering reads - kinematic state, the drive's applied
+        throttle (_thrust_accel) and the standing maneuver (_keeps_range) - is
+        therefore the same for every ship, whatever the insertion order.
+        (Not covered: a reactor meltdown inside this loop flips is_destroyed /
+        is_dying at once, as before.)
+        """
+        staged = []
+        for ship in self.ships.values():
+            seen_by_others = (ship.kinematic_state.copy(),
+                              getattr(ship, 'applied_throttle', 0.0),
+                              ship.current_maneuver)
+            self._advance_ship(ship, dt)
+            staged.append((ship, ship.kinematic_state,
+                           getattr(ship, 'applied_throttle', 0.0),
+                           ship.current_maneuver))
+            (ship.kinematic_state, ship.applied_throttle,
+             ship.current_maneuver) = seen_by_others
+        for ship, state, applied_throttle, maneuver in staged:
+            ship.kinematic_state = state
+            ship.applied_throttle = applied_throttle
+            ship.current_maneuver = maneuver
+
+    def _advance_ship(self, ship: ShipCombatState, dt: float) -> None:
+        """One ship's step inside _update_ships: fly it, or coast the wreck."""
+        if not ship.is_destroyed:
+            self._update_ship(ship, dt)
+        else:
+            # A wreck keeps coasting on its last velocity (no thrust, no
+            # control). It used to freeze in space while its recorded
+            # velocity stayed at the last value. Everything that fights
+            # (targeting, PD, collisions, blasts, victory) skips
+            # is_destroyed ships, so only its position moves.
+            ks = ship.kinematic_state
+            ks.position = ks.position + ks.velocity * dt
 
     def _update_ship(self, ship: ShipCombatState, dt: float) -> None:
         """Update a single ship for one time step."""
