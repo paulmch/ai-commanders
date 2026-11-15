@@ -248,7 +248,7 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--recording", required=True,
-                   help="file name under visualizer/public/recordings/ (or a full URL)")
+                   help="file name under visualizer/public/recordings/, .json or .json.gz (or a full URL)")
     p.add_argument("--time", type=float, default=0.0, help="seek time in seconds")
     p.add_argument("--focus", help="ship id to frame")
     p.add_argument("--dist", type=float, default=3.0, help="camera distance in hull lengths")

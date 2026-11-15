@@ -37,6 +37,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from src.recording_io import load_recording  # noqa: E402
+
 GOLDEN_PATH = Path(__file__).with_name("perf_check_golden.json")
 
 # name -> (kind, params). Different seeds draft different rosters; both
@@ -121,7 +123,7 @@ def run_battle_case(seed: int, doctrine: str, trace: bool, budget: int = 200,
         with contextlib.redirect_stdout(io.StringIO()):
             result = runner.run_battle(fleet_data)
         cpu = time.process_time() - t0
-        recording = json.loads(Path(result.recording_file).read_text())
+        recording = load_recording(result.recording_file)
         sim = runner.simulation
 
     # Full-precision end state: recorded events are rounded, and only the RNG

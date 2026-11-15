@@ -159,6 +159,10 @@ class BattleConfig:
     # Recording
     record_battle: bool = True
     recording_dir: str = "data/recordings"
+    # Recording file format: gzip-compressed compact JSON (battle_*.json.gz,
+    # 20-37x smaller) or plain indented JSON (battle_*.json). Every reader
+    # takes both (src/recording_io.py).
+    compress_recording: bool = True
 
     # Detailed sim trace - records every step (position, velocity for all objects)
     # WARNING: Generates large files (~1MB per 10 minutes of battle)
@@ -3109,9 +3113,11 @@ class LLMBattleRunner:
             filename = create_battle_filename(
                 self.recorder.recording.alpha_model,
                 self.recorder.recording.beta_model,
+                compress=self.config.compress_recording,
             )
             filepath = Path(self.config.recording_dir) / filename
-            self.recording_file = self.recorder.save(str(filepath))
+            self.recording_file = self.recorder.save(
+                str(filepath), compress=self.config.compress_recording)
 
             if self.config.verbose:
                 print(f"Recording saved to: {self.recording_file}")
@@ -3623,9 +3629,11 @@ class LLMBattleRunner:
             filename = create_battle_filename(
                 self.alpha_config.model,
                 self.beta_config.model,
+                compress=self.config.compress_recording,
             )
             filepath = Path(self.config.recording_dir) / filename
-            self.recording_file = self.recorder.save(str(filepath))
+            self.recording_file = self.recorder.save(
+                str(filepath), compress=self.config.compress_recording)
 
             if self.config.verbose:
                 print(f"Recording saved to: {self.recording_file}")

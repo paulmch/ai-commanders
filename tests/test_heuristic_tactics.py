@@ -344,12 +344,13 @@ def _small_battle(tmp_path, doctrines, hulls=MIXED, seed=21, time_limit=240.0, d
     dummy = LLMCaptainConfig("A", "A", model=HEURISTIC_MODEL)
     runner = LLMBattleRunner(bc, dummy, dummy, None, config)
     runner.run_battle(load_fleet_data())
-    path = next(p for p in tmp_path.glob("*.json") if not p.name.endswith(".draft.json"))
+    from src.recording_io import iter_recordings, load_recording
+    path = next(iter_recordings(tmp_path))
     spec = importlib.util.spec_from_file_location(
         "tactics_eval", Path(__file__).parent.parent / "scripts" / "tactics_eval.py")
     ev = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(ev)
-    recording = json.loads(path.read_text())
+    recording = load_recording(path)
     return ev.analyze(str(path)), recording
 
 

@@ -362,10 +362,10 @@ def test_heuristic_draft_battle_end_to_end(tmp_path):
 
     # Recording written to the temp dir, not the repo - and it must show the
     # fleets actually engaging (ordnance in the air).
-    import json
-    recordings = list(tmp_path.glob("*.json"))
+    from src.recording_io import iter_recordings, load_recording
+    recordings = list(iter_recordings(tmp_path))
     assert recordings, "no recording written"
-    recording = json.loads(recordings[0].read_text())
+    recording = load_recording(recordings[0])
     event_types = {e["event_type"] for e in recording.get("events", [])}
     assert event_types & {"shot_fired", "torpedo_launched"}, \
         f"no ordnance events in {event_types}"

@@ -20,6 +20,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from src.recording_io import load_recording
 from src.physics import Vector3D
 from src.projectile import KineticProjectile
 from src.simulation import (
@@ -309,7 +310,7 @@ class TestIsolation:
                 config=config, alpha_config=a_cfg, beta_config=b_cfg, client=None,
                 alpha_script=a_script, beta_script=b_script)
             result = runner.run_battle(gen.load_fleet_data())
-            recordings[on] = json.loads(Path(result.recording_file).read_text())
+            recordings[on] = load_recording(result.recording_file)
 
         on, off = recordings[True], recordings[False]
         assert on["decision_interval_s"] == 30.0
@@ -491,7 +492,7 @@ def _scripted_run(tmp_path, refresh=True):
     if not refresh:
         runner._refresh_checkpoint_plans = lambda: None
     result = runner.run_battle(gen.load_fleet_data())
-    return json.loads(Path(result.recording_file).read_text())
+    return load_recording(result.recording_file)
 
 
 def _plan_errors(rec):

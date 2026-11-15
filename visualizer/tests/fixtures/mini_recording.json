@@ -1,0 +1,670 @@
+{
+  "recording_version": "3.0",
+  "provenance": {
+    "seed": 1,
+    "decision_interval_s": 30.0,
+    "engine_revision": "cf00cd5594fbb6cdee599dfd8b669ad33ce70e9d",
+    "source_sha256": "49f3afb47ed467e03004ee08ffa049fc6ed9ba1e9e596ca8fa35f6b2008637c9",
+    "fleet_data_sha256": "8b04f793781e94edf0edd15bcc2ffbc7a10e86c19917bcf8a05529418aecdc20",
+    "config": {
+      "initial_distance_km": 100.0,
+      "initial_offset_km": 1.0,
+      "time_limit_s": 90.0,
+      "decision_interval_s": 30.0,
+      "max_checkpoints": 3,
+      "unlimited_mode": false,
+      "alpha_ship_type": "destroyer",
+      "beta_ship_type": "destroyer",
+      "verbose": false,
+      "parallel_llm": true,
+      "heuristic_doctrine": {
+        "alpha": "tactical",
+        "beta": "tactical"
+      },
+      "personality_selection": false,
+      "record_battle": true,
+      "recording_dir": "/home/plmch/aic-wt/p5/shots/gzip/t3_1",
+      "compress_recording": false,
+      "save_recording": true,
+      "record_sim_trace": true,
+      "record_predictions": false,
+      "fleet_config_path": null,
+      "seed": 1,
+      "use_notebooks": false
+    },
+    "attribution": "execution_dependencies"
+  },
+  "assets": {},
+  "commentary": [],
+  "recorded_at": "2026-11-15T13:07:09.548363",
+  "is_fleet_battle": true,
+  "battle_name": "gzip codec fixture",
+  "alpha_model": "heuristic",
+  "beta_model": "heuristic",
+  "alpha_name": "",
+  "beta_name": "",
+  "alpha_ship": "TIS Harpoon",
+  "beta_ship": "OCS Bastion",
+  "alpha_personality": "",
+  "beta_personality": "",
+  "initial_distance_km": 100.0,
+  "time_limit_s": 90.0,
+  "max_checkpoints": 3,
+  "unlimited_mode": false,
+  "alpha_specs": {},
+  "beta_specs": {},
+  "alpha_fleet": {
+    "admiral": null,
+    "ships": [
+      {
+        "ship_id": "alpha_1",
+        "ship_type": "cruiser_torpedo",
+        "hull_integrity": 100.0,
+        "armor": {
+          "nose": {
+            "thickness_cm": 240.7,
+            "material": "titanium"
+          },
+          "lateral": {
+            "thickness_cm": 41.3,
+            "material": "titanium"
+          },
+          "tail": {
+            "thickness_cm": 48.2,
+            "material": "titanium"
+          }
+        },
+        "weapons": {
+          "weapon_0": {
+            "type": "torpedo_launcher",
+            "damage_gj": 0.0
+          },
+          "weapon_1": {
+            "type": "torpedo_launcher",
+            "damage_gj": 0.0
+          },
+          "weapon_2": {
+            "type": "torpedo_launcher",
+            "damage_gj": 0.0
+          },
+          "weapon_3": {
+            "type": "torpedo_launcher",
+            "damage_gj": 0.0
+          },
+          "pd_0": {
+            "type": "pd_laser",
+            "damage_gj": 0.0
+          },
+          "pd_1": {
+            "type": "pd_laser",
+            "damage_gj": 0.0
+          },
+          "pd_2": {
+            "type": "pd_laser",
+            "damage_gj": 0.0
+          },
+          "pd_3": {
+            "type": "pd_laser",
+            "damage_gj": 0.0
+          }
+        },
+        "max_acceleration_g": 1.4998540101117206,
+        "delta_v_budget_kps": 501.6804468718278,
+        "ship_name": "TIS Harpoon"
+      }
+    ]
+  },
+  "beta_fleet": {
+    "admiral": null,
+    "ships": [
+      {
+        "ship_id": "beta_1",
+        "ship_type": "cruiser",
+        "hull_integrity": 100.0,
+        "armor": {
+          "nose": {
+            "thickness_cm": 240.7,
+            "material": "titanium"
+          },
+          "lateral": {
+            "thickness_cm": 41.3,
+            "material": "titanium"
+          },
+          "tail": {
+            "thickness_cm": 48.2,
+            "material": "titanium"
+          }
+        },
+        "weapons": {
+          "weapon_0": {
+            "type": "spinal_coiler_mk3",
+            "damage_gj": 4.29
+          },
+          "weapon_1": {
+            "type": "coilgun_mk3",
+            "damage_gj": 0.72
+          },
+          "weapon_2": {
+            "type": "coilgun_mk3",
+            "damage_gj": 0.72
+          },
+          "pd_0": {
+            "type": "pd_laser",
+            "damage_gj": 0.0
+          },
+          "pd_1": {
+            "type": "pd_laser",
+            "damage_gj": 0.0
+          }
+        },
+        "max_acceleration_g": 1.4998540101117206,
+        "delta_v_budget_kps": 501.6804468718278,
+        "ship_name": "OCS Bastion"
+      }
+    ]
+  },
+  "events": [
+    {
+      "event_id": "e1",
+      "sequence": 1,
+      "timestamp": 0.0,
+      "event_type": "battle_start",
+      "ship_id": null,
+      "data": {
+        "is_fleet_battle": true,
+        "battle_name": "Draft Battle (100 pts)",
+        "distance_km": 100.0,
+        "alpha_ships": 1,
+        "beta_ships": 1,
+        "alpha_admiral": null,
+        "beta_admiral": null
+      }
+    },
+    {
+      "event_id": "e2",
+      "sequence": 2,
+      "timestamp": 0.0,
+      "event_type": "decision_point_reached",
+      "ship_id": null,
+      "data": {
+        "time": 0.0,
+        "target_id": null
+      }
+    },
+    {
+      "event_id": "e3",
+      "sequence": 3,
+      "timestamp": 0.0,
+      "event_type": "execution_state",
+      "ship_id": "alpha_1",
+      "data": {
+        "mode": "COAST",
+        "requested_throttle": 0.0,
+        "applied_throttle": 0.0,
+        "engine_fraction": 1.0,
+        "fuel_fraction": 1.0,
+        "target_id": null
+      }
+    },
+    {
+      "event_id": "e4",
+      "sequence": 4,
+      "timestamp": 0.0,
+      "event_type": "execution_state",
+      "ship_id": "beta_1",
+      "data": {
+        "mode": "COAST",
+        "requested_throttle": 0.0,
+        "applied_throttle": 0.0,
+        "engine_fraction": 1.0,
+        "fuel_fraction": 1.0,
+        "target_id": null
+      }
+    }
+  ],
+  "sim_trace": [
+    {
+      "t": 1.0,
+      "ships": {
+        "alpha_1": {
+          "pos": [
+            -50000.0,
+            0.0,
+            0.0
+          ],
+          "vel": [
+            0,
+            0,
+            0
+          ],
+          "fwd": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "thrust": 0.0,
+          "requested_thrust": 0.0,
+          "execution_mode": "COAST",
+          "maneuver": "MAINTAIN",
+          "destroyed": false,
+          "dying": false,
+          "hull": 100.0,
+          "armor": {
+            "nose": 240.7,
+            "lateral": 41.3,
+            "tail": 48.2
+          },
+          "acc": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "omega": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "alpha": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "turn": null,
+          "evade": null,
+          "tgt": null,
+          "heat": 0.0,
+          "rad": 0,
+          "heat_rate": 0.0,
+          "rad_out": 0.0
+        },
+        "beta_1": {
+          "pos": [
+            50000.0,
+            0.0,
+            0.0
+          ],
+          "vel": [
+            0,
+            0,
+            0
+          ],
+          "fwd": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "thrust": 0.0,
+          "requested_thrust": 0.0,
+          "execution_mode": "COAST",
+          "maneuver": "MAINTAIN",
+          "destroyed": false,
+          "dying": false,
+          "hull": 100.0,
+          "armor": {
+            "nose": 240.7,
+            "lateral": 41.3,
+            "tail": 48.2
+          },
+          "acc": [
+            -0.0,
+            0.0,
+            0.0
+          ],
+          "omega": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "alpha": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "turn": null,
+          "evade": null,
+          "tgt": null,
+          "heat": 0.0,
+          "rad": 0,
+          "heat_rate": 0.0,
+          "rad_out": 0.0
+        }
+      },
+      "projectiles": [],
+      "torpedoes": []
+    },
+    {
+      "t": 2.0,
+      "ships": {
+        "alpha_1": {
+          "pos": [
+            -50000.0,
+            0.0,
+            0.0
+          ],
+          "vel": [
+            0,
+            0,
+            0
+          ],
+          "fwd": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "thrust": 0.0,
+          "requested_thrust": 0.0,
+          "execution_mode": "COAST",
+          "maneuver": "MAINTAIN",
+          "destroyed": false,
+          "dying": false,
+          "hull": 100.0,
+          "armor": {
+            "nose": 240.7,
+            "lateral": 41.3,
+            "tail": 48.2
+          },
+          "acc": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "omega": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "alpha": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "turn": null,
+          "evade": null,
+          "tgt": null,
+          "heat": 0.0,
+          "rad": 0,
+          "heat_rate": 0.0,
+          "rad_out": 0.0
+        },
+        "beta_1": {
+          "pos": [
+            50000.0,
+            0.0,
+            0.0
+          ],
+          "vel": [
+            0,
+            0,
+            0
+          ],
+          "fwd": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "thrust": 0.0,
+          "requested_thrust": 0.0,
+          "execution_mode": "COAST",
+          "maneuver": "MAINTAIN",
+          "destroyed": false,
+          "dying": false,
+          "hull": 100.0,
+          "armor": {
+            "nose": 240.7,
+            "lateral": 41.3,
+            "tail": 48.2
+          },
+          "acc": [
+            -0.0,
+            0.0,
+            0.0
+          ],
+          "omega": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "alpha": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "turn": null,
+          "evade": null,
+          "tgt": null,
+          "heat": 0.0,
+          "rad": 0,
+          "heat_rate": 0.0,
+          "rad_out": 0.0
+        }
+      },
+      "projectiles": [],
+      "torpedoes": []
+    },
+    {
+      "t": 3.0,
+      "ships": {
+        "alpha_1": {
+          "pos": [
+            -50000.0,
+            0.0,
+            0.0
+          ],
+          "vel": [
+            0,
+            0,
+            0
+          ],
+          "fwd": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "thrust": 0.0,
+          "requested_thrust": 0.0,
+          "execution_mode": "COAST",
+          "maneuver": "MAINTAIN",
+          "destroyed": false,
+          "dying": false,
+          "hull": 100.0,
+          "armor": {
+            "nose": 240.7,
+            "lateral": 41.3,
+            "tail": 48.2
+          },
+          "acc": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "omega": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "alpha": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "turn": null,
+          "evade": null,
+          "tgt": null,
+          "heat": 0.0,
+          "rad": 0,
+          "heat_rate": 0.0,
+          "rad_out": 0.0
+        },
+        "beta_1": {
+          "pos": [
+            50000.0,
+            0.0,
+            0.0
+          ],
+          "vel": [
+            0,
+            0,
+            0
+          ],
+          "fwd": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "thrust": 0.0,
+          "requested_thrust": 0.0,
+          "execution_mode": "COAST",
+          "maneuver": "MAINTAIN",
+          "destroyed": false,
+          "dying": false,
+          "hull": 100.0,
+          "armor": {
+            "nose": 240.7,
+            "lateral": 41.3,
+            "tail": 48.2
+          },
+          "acc": [
+            -0.0,
+            0.0,
+            0.0
+          ],
+          "omega": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "alpha": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "turn": null,
+          "evade": null,
+          "tgt": null,
+          "heat": 0.0,
+          "rad": 0,
+          "heat_rate": 0.0,
+          "rad_out": 0.0
+        }
+      },
+      "projectiles": [],
+      "torpedoes": []
+    },
+    {
+      "t": 4.0,
+      "ships": {
+        "alpha_1": {
+          "pos": [
+            -50000.0,
+            0.0,
+            0.0
+          ],
+          "vel": [
+            0,
+            0,
+            0
+          ],
+          "fwd": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "thrust": 0.0,
+          "requested_thrust": 0.0,
+          "execution_mode": "COAST",
+          "maneuver": "MAINTAIN",
+          "destroyed": false,
+          "dying": false,
+          "hull": 100.0,
+          "armor": {
+            "nose": 240.7,
+            "lateral": 41.3,
+            "tail": 48.2
+          },
+          "acc": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "omega": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "alpha": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "turn": null,
+          "evade": null,
+          "tgt": null,
+          "heat": 0.0,
+          "rad": 0,
+          "heat_rate": 0.0,
+          "rad_out": 0.0
+        },
+        "beta_1": {
+          "pos": [
+            50000.0,
+            0.0,
+            0.0
+          ],
+          "vel": [
+            0,
+            0,
+            0
+          ],
+          "fwd": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "thrust": 0.0,
+          "requested_thrust": 0.0,
+          "execution_mode": "COAST",
+          "maneuver": "MAINTAIN",
+          "destroyed": false,
+          "dying": false,
+          "hull": 100.0,
+          "armor": {
+            "nose": 240.7,
+            "lateral": 41.3,
+            "tail": 48.2
+          },
+          "acc": [
+            -0.0,
+            0.0,
+            0.0
+          ],
+          "omega": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "alpha": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "turn": null,
+          "evade": null,
+          "tgt": null,
+          "heat": 0.0,
+          "rad": 0,
+          "heat_rate": 0.0,
+          "rad_out": 0.0
+        }
+      },
+      "projectiles": [],
+      "torpedoes": []
+    }
+  ],
+  "decision_interval_s": 30.0,
+  "winner": "alpha",
+  "result_reason": "Alpha tactical advantage (110.2 vs 39.4)",
+  "duration_s": 90.0,
+  "total_checkpoints": 2,
+  "alpha_ships_remaining": 1,
+  "beta_ships_remaining": 1
+}

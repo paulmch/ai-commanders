@@ -194,7 +194,7 @@ def encode(frames_dir: Path, n: int, fps: float, out: Path, gif: bool, gif_width
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--recording", required=True,
-                   help="file name under visualizer/public/recordings/ (or a full URL)")
+                   help="file name under visualizer/public/recordings/, .json or .json.gz (or a full URL)")
     p.add_argument("--start", type=float, required=True, help="battle time of the first frame (s)")
     p.add_argument("--duration", type=float, required=True, help="battle seconds to render")
     p.add_argument("--fps", type=float, default=24.0, help="frames per battle second")
