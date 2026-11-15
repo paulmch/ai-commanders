@@ -1,6 +1,7 @@
 import { DecisionIndex } from './DecisionIndex.js';
 import { buildHudIndex, appendHudIndex } from './HudIndex.js';
 import { getModulesForShipType } from './shipModules.js';
+import { fetchRecording } from './RecordingCodec.js';
 
 /** First index in a timestamp-sorted array whose timestamp is >= t (or > t when strict). */
 export function lowerBoundByTime(items, t, strict = false) {
@@ -48,15 +49,10 @@ export class BattleLoader {
 
   /**
    * Load a battle recording from URL
-   * @param {string} url - URL to the JSON recording file
+   * @param {string} url - URL to the recording (.json or .json.gz; RecordingCodec.js)
    */
   async load(url) {
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`Failed to load recording: ${response.statusText}`);
-    }
-    const data = await response.json();
-    return this.parse(data);
+    return this.parse(await fetchRecording(url));
   }
 
   /**
