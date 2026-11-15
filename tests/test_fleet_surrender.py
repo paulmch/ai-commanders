@@ -111,3 +111,59 @@ def test_the_mcp_http_loop_records_the_fleet_surrender(fleet):
                                        has_proposed_draw=False, has_accepted_draw=False)
     assert apply_mcp_fleet_control(runner) is False
     assert [e.ship_id for e in _surrenders(runner)] == ["alpha_1", "alpha_2"]
+
+
+# ---------------------------------------------------------------------------
+# 2. The result reason says how the fleet was lost (outcome unchanged)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("fates, reason", [
+    (["destroyed", "destroyed", "dying"], "Beta fleet eliminated"),
+    (["surrendered", "surrendered", "surrendered"],
+     "Beta fleet surrendered (3 ships struck their colours)"),
+    (["destroyed", "surrendered", "surrendered"],
+     "Beta fleet destroyed or surrendered (1 destroyed, 2 surrendered)"),
+])
+def test_the_reason_names_how_the_fleet_was_lost(fleet, fates, reason):
+    runner = make_runner(fleet, ["frigate"], ["corvette"] * 3, record=False)
+    for ship, fate in zip(runner.beta_ships.values(), fates):
+        setattr(ship, f"is_{fate}", True)
+    # (a dying hulk keeps the battle running until it detonates)
+    assert runner._is_fleet_battle_over() is ("dying" not in fates)
+    result = runner._evaluate_fleet_result()
+    assert result.outcome == BattleOutcome.ALPHA_VICTORY and result.winner == "alpha"
+    assert result.reason == reason
+
+
+def test_one_surrendered_ship_reads_in_the_singular(fleet):
+    runner = make_runner(fleet, ["frigate"], ["corvette"], record=False)
+    runner.beta_ships["beta_1"].is_surrendered = True
+    assert runner._evaluate_fleet_result().reason == "Beta fleet surrendered (1 ship struck its colours)"
+
+
+def test_an_mcp_fleet_surrender_does_not_count_its_dead_as_surrendered(fleet):
+    runner = make_runner(fleet, ["frigate", "frigate"], ["destroyer"], record=False)
+    runner.alpha_ships["alpha_1"].is_destroyed = True
+    runner._surrender_fleet_ships(runner.alpha_ships, "Commander MCP")
+    result = runner._evaluate_fleet_result()
+    assert result.winner == "beta"
+    assert result.reason == "Alpha fleet destroyed or surrendered (1 destroyed, 1 surrendered)"
+
+
+def test_mutual_loss_names_both_fleets(fleet):
+    runner = make_runner(fleet, ["frigate"], ["frigate"], record=False)
+    runner.alpha_ships["alpha_1"].is_destroyed = True
+    runner.beta_ships["beta_1"].is_surrendered = True
+    result = runner._evaluate_fleet_result()
+    assert result.outcome == BattleOutcome.DRAW and result.winner is None
+    assert result.reason == ("Mutual destruction/surrender: Alpha fleet eliminated; "
+                             "Beta fleet surrendered (1 ship struck its colours)")
+
+
+def test_combat_ineffective_ending_keeps_its_reason(fleet):
+    runner = make_runner(fleet, ["frigate"], ["frigate"], record=False)
+    assert not runner._is_fleet_battle_over()
+    _disarm(runner.simulation, runner.alpha_ships["alpha_1"])
+    result = runner._evaluate_fleet_result()
+    assert result.winner == "beta"
+    assert result.reason.startswith("Alpha fleet combat-ineffective")

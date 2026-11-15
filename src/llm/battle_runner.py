@@ -2932,6 +2932,30 @@ class LLMBattleRunner:
         outcome, winner, reason = self._evaluate_fleet_tactical_advantage()
         return outcome, winner, f"Both fleets combat-ineffective - on points: {reason}"
 
+    def _fleet_loss_reason(self, faction: str) -> str:
+        """
+        How a fleet with no ship left in the fight was lost (result reason):
+        "<Side> fleet eliminated" when every ship was destroyed (a dying
+        hulk counts as destroyed), "<Side> fleet surrendered (N ships struck
+        their colours)" when none was destroyed, and "<Side> fleet destroyed
+        or surrendered (D destroyed, S surrendered)" for a mix.
+        """
+        ships = (self.alpha_ships if faction == "alpha" else self.beta_ships).values()
+        # Destroyed first: an MCP fleet surrender flags dead ships too.
+        destroyed = sum(1 for s in ships if s.is_destroyed or getattr(s, 'is_dying', False))
+        surrendered = sum(1 for s in ships
+                          if not (s.is_destroyed or getattr(s, 'is_dying', False))
+                          and getattr(s, 'is_surrendered', False))
+        side = faction.title()
+        if surrendered == 0:
+            return f"{side} fleet eliminated"
+        if destroyed == 0:
+            plural = "ship" if surrendered == 1 else "ships"
+            return (f"{side} fleet surrendered ({surrendered} {plural} struck "
+                    f"{'its' if surrendered == 1 else 'their'} colours)")
+        return (f"{side} fleet destroyed or surrendered "
+                f"({destroyed} destroyed, {surrendered} surrendered)")
+
     def _evaluate_fleet_result(self) -> BattleResult:
         """Evaluate final fleet battle result."""
         # Count active ships
@@ -2950,15 +2974,16 @@ class LLMBattleRunner:
         if alpha_active == 0 and beta_active == 0:
             outcome = BattleOutcome.DRAW
             winner = None
-            reason = "Mutual destruction/surrender"
+            reason = (f"Mutual destruction/surrender: {self._fleet_loss_reason('alpha')}; "
+                      f"{self._fleet_loss_reason('beta')}")
         elif alpha_active == 0:
             outcome = BattleOutcome.BETA_VICTORY
             winner = "beta"
-            reason = "Alpha fleet eliminated"
+            reason = self._fleet_loss_reason("alpha")
         elif beta_active == 0:
             outcome = BattleOutcome.ALPHA_VICTORY
             winner = "alpha"
-            reason = "Beta fleet eliminated"
+            reason = self._fleet_loss_reason("beta")
         elif (ineffective := self._combat_ineffective_outcome()) is not None:
             outcome, winner, reason = ineffective
         elif (self.alpha_mcp or self.alpha_admiral) and (self.beta_mcp or self.beta_admiral):
