@@ -1247,7 +1247,9 @@ export class HullKit {
     for (let i = 0; i < seats.length; i++) {
       for (let j = i + 1; j < seats.length; j++) dMin = Math.min(dMin, Math.hypot(seats[i].x - seats[j].x, seats[i].y - seats[j].y));
     }
-    const zM = zT - bl * 0.36, wall = bellR * flare(0.36) * 0.96;
+    // (pipes stop at the bell's outer wall where their aft edge meets it -
+    // any deeper and the pipe end shows through the liner)
+    const zM = zT - bl * 0.36, wall = bellR * flare(0.36 + bellR * 0.11 / bl);
     for (let i = 0; i < seats.length; i++) {
       for (let j = i + 1; j < seats.length; j++) {
         const dx = seats[j].x - seats[i].x, dy = seats[j].y - seats[i].y, dist = Math.hypot(dx, dy);
