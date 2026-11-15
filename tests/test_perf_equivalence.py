@@ -616,3 +616,111 @@ class TestRecordingToJsonWithoutDeepCopy:
         rec.events.append({"data": {"bad": object()}})
         with pytest.raises(TypeError):
             rec.to_json()
+
+
+# ---------------------------------------------------------------------------
+# Hit location (scalar) and PD turret cover (hoisted)
+# ---------------------------------------------------------------------------
+
+class TestHitLocationScalar:
+    def test_same_section_as_vector_form(self):
+        from src.combat import HitLocation
+        from src.geometry import NOSE_HIT_ANGLE_THRESHOLD, TAIL_HIT_ANGLE_THRESHOLD
+
+        def reference(impact_vector, ship_orientation):
+            angle_deg = math.degrees(
+                impact_vector.normalized().angle_to(ship_orientation.normalized()))
+            if angle_deg > (180.0 - NOSE_HIT_ANGLE_THRESHOLD):
+                return HitLocation.NOSE
+            if angle_deg < (180.0 - TAIL_HIT_ANGLE_THRESHOLD):
+                return HitLocation.TAIL
+            return HitLocation.LATERAL
+
+        geometry = _hull("cruiser").geometry
+        rng = random.Random(12)
+        seen = set()
+        for i in range(30000):
+            forward = rand_vec(rng, 10 ** rng.uniform(-2, 2))
+            impact = rand_vec(rng, 10 ** rng.uniform(-2, 5))
+            if i % 3 == 0:
+                # On a cone edge (nose / tail threshold), where one ulp decides.
+                edge = math.radians(rng.choice([180.0 - NOSE_HIT_ANGLE_THRESHOLD,
+                                                180.0 - TAIL_HIT_ANGLE_THRESHOLD]))
+                axis = forward.cross(rand_vec(rng, 1.0))
+                impact = forward.normalized().rotate_around_axis(axis, edge) * rng.uniform(1, 9e3)
+            if i % 1001 == 0:
+                impact = Vector3D(0.0, 0.0, 0.0)
+            got = geometry.calculate_hit_location(impact, forward)
+            assert got is reference(impact, forward)
+            seen.add(got)
+        assert seen == {HitLocation.NOSE, HitLocation.LATERAL, HitLocation.TAIL}
+
+
+class TestPdTargetListTurretCover:
+    """_build_pd_target_list reads the friendly turret cover once per list;
+    it must follow turret damage and hull losses from one tick to the next."""
+
+    def _setup(self):
+        fleet = load_fleet()
+        sim = CombatSimulation(time_step=1.0, decision_interval=30.0, seed=3)
+        ships = []
+        for i, (kind, y) in enumerate([("destroyer", 0.0), ("cruiser", 30e3), ("frigate", -40e3)]):
+            ship = create_ship_from_fleet_data(
+                f"beta_{i}", kind, "beta", fleet, position=Vector3D(0.0, y, 0.0),
+                forward=Vector3D(1, 0, 0))
+            sim.add_ship(ship)
+            ships.append(ship)
+        shooter = create_ship_from_fleet_data(
+            "alpha_0", "cruiser_torpedo", "alpha", fleet, position=Vector3D(260e3, 0, 0),
+            forward=Vector3D(-1, 0, 0))
+        sim.add_ship(shooter)
+        return sim, ships, shooter
+
+    def _launch(self, sim, shooter, target_id, n):
+        import contextlib
+        import io
+        with contextlib.redirect_stdout(io.StringIO()):
+            for _ in range(n):
+                sim.inject_command(shooter.ship_id, {
+                    "type": "launch_torpedo", "target_id": target_id})
+            for _ in range(3):
+                sim.step()
+        return [t for t in sim.torpedoes if not t.is_disabled]
+
+    def test_savability_follows_turret_and_hull_losses(self):
+        sim, ships, shooter = self._setup()
+        torps = self._launch(sim, shooter, "beta_0", 4)
+        assert len(torps) >= 2
+
+        def reference_turrets(torp):
+            count = 0
+            for friendly in [ships[0]] + sim.get_friendly_ships("beta_0"):
+                if friendly.is_destroyed or friendly.is_dying or friendly.is_surrendered:
+                    continue
+                d_km = torp.torpedo.position.distance_to(friendly.position) / 1000
+                count += sum(1 for pd in friendly.point_defense
+                             if pd.is_operational and d_km <= pd.laser.range_km)
+            return count
+
+        def check():
+            listed = [t for t in sim._build_pd_target_list(ships[0])
+                      if t["target_type"] == "torpedo"]
+            assert listed
+            for t in listed:
+                assert t["savable"] == (t["turrets_needed_kill"] <= reference_turrets(t["target"]))
+            return [(t["target_id"], t["savable"], t["priority"]) for t in listed]
+
+        # Bring the torpedoes inside every envelope so cover is what decides.
+        for t in torps:
+            t.torpedo.position = Vector3D(120e3, 0.0, 0.0)
+        check()
+        for pd in ships[1].point_defense:          # battle damage: turrets wrecked
+            pd.is_operational = False
+        check()
+        ships[2].is_destroyed = True               # a hull lost
+        check()
+        for pd in ships[0].point_defense:
+            pd.is_operational = False
+        check()
+        ships[1].is_surrendered = True
+        check()

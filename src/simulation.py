@@ -6610,6 +6610,17 @@ class CombatSimulation:
             default=0.0,
         )
 
+        # Turret cover of every friendly hull that can still shoot: position
+        # and the envelope of each operational turret. Constant while the
+        # list is built (nothing moves or is damaged in here), so it is read
+        # once instead of per torpedo x hull x turret.
+        turret_cover = [
+            (friendly.position,
+             [pd.laser.range_km for pd in friendly.point_defense if pd.is_operational])
+            for friendly in [ship] + allied_ships
+            if not (friendly.is_destroyed or friendly.is_dying or friendly.is_surrendered)
+        ] if self.torpedoes else []
+
         # Assess all torpedoes
         for torp_flight in self.torpedoes:
             if torp_flight.is_disabled:
@@ -6686,14 +6697,12 @@ class CombatSimulation:
             # Fleet-wide turrets that can still reach this torpedo. This is
             # what makes "savable" a formation property, not a lone-hull one.
             friendly_turrets_in_range = 0
-            for friendly in [ship] + allied_ships:
-                if friendly.is_destroyed or friendly.is_dying or friendly.is_surrendered:
-                    continue
-                f_dist_km = torp.position.distance_to(friendly.position) / 1000
-                friendly_turrets_in_range += sum(
-                    1 for pd in friendly.point_defense
-                    if pd.is_operational and f_dist_km <= pd.laser.range_km
-                )
+            torp_pos = torp.position
+            for friendly_pos, turret_ranges_km in turret_cover:
+                f_dist_km = torp_pos.distance_to(friendly_pos) / 1000
+                for turret_range_km in turret_ranges_km:
+                    if f_dist_km <= turret_range_km:
+                        friendly_turrets_in_range += 1
 
             savable = turrets_needed <= friendly_turrets_in_range
 
