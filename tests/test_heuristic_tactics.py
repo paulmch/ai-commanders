@@ -41,6 +41,16 @@ def _captain(stype, doctrine=None, name="me"):
         doctrine=doctrine)
 
 
+def _assert_withdraws(m, foe_dir_x=1.0):
+    """A withdrawal inside the retreat range: a full burn away from the gun,
+    WITHDRAW_ANGLE_DEG off the line (flank, not tail, to his guns)."""
+    import math
+    assert m.maneuver_type == ManeuverType.HEADING and m.throttle == 1.0
+    h = m.heading_direction
+    cos_off = -h["x"] * foe_dir_x / math.sqrt(h["x"] ** 2 + h["y"] ** 2 + h["z"] ** 2)
+    assert cos_off == pytest.approx(math.cos(math.radians(T.WITHDRAW_ANGLE_DEG)), abs=0.02)
+
+
 def _maneuver(commands):
     found = [c for c in commands if isinstance(c, Maneuver)]
     assert found, commands
@@ -149,15 +159,32 @@ def test_gun_policy_never_brakes_under_fire():
     a, R = 2.0 * 9.81, T.SPINAL_ENGAGE_RANGE_KM
     assert T.gun_maneuver(500.0, 0.0, R, a) == ("INTERCEPT", {})          # sprint
     assert T.gun_maneuver(400.0, 3.0, R, a) == ("PADLOCK", {})            # fast enough: coast
-    # Inside the guns: coast nose-on through the pass, closing or not...
-    for closing in (5.0, 1.0, -0.2):
+    # Inside the guns: coast nose-on through the pass while it is closing...
+    for closing in (5.0, 1.0):
         assert T.gun_maneuver(150.0, closing, R, a)[0] == "PADLOCK"
     for closing in (5.0, 1.0, -1.0):
         assert T.gun_maneuver(20.0, closing, R, a)[0] == "PADLOCK"
     # ...re-close nose first once the pass has opened the range...
-    assert T.gun_maneuver(T.REENGAGE_RANGE_KM + 10, -1.0, R, a) == ("INTERCEPT", {})
+    assert T.gun_maneuver(R * T.HOLD_BAND_FACTOR + 10, -1.0, R, a) == ("INTERCEPT", {})
     # ...and hold the engagement range once the closure is gone.
     assert T.gun_maneuver(R * 1.1, 0.1, R, a) == ("HOLD_RANGE", {"range_km": R})
+
+
+@pytest.mark.parametrize("range_km", [150.0, 190.0, 201.0, 220.0, 240.0, 300.0])
+@pytest.mark.parametrize("closing", [0.0, -0.2, 0.3])
+@pytest.mark.parametrize("accel_g", [1.0, 2.0])
+def test_gun_ship_never_stalls_outside_the_hold_band(range_km, closing, accel_g):
+    # Review round 3, finding 1: between ~81 and ~245 km with no closure every
+    # branch returned PADLOCK (engine off) and two destroyers sat at 220 km
+    # for the whole battle.
+    kind, _ = T.gun_maneuver(range_km, closing, T.SPINAL_ENGAGE_RANGE_KM, accel_g * 9.81)
+    assert kind == "INTERCEPT"
+
+
+def test_destroyers_started_inside_the_dead_zone_close(tmp_path):
+    stats, _ = _small_battle(tmp_path, TACTICAL, hulls=("destroyer",), time_limit=330.0,
+                             distance_km=220.0)
+    assert stats["closest_km"] < 150.0, stats
 
 
 def test_gun_ship_faces_the_nearest_gun_and_shoots_the_target():
@@ -197,16 +224,14 @@ def test_torpedo_boat_holds_its_standoff_from_the_nearest_gun():
     assert m.hold_range_m == pytest.approx(T.TORPEDO_STANDOFF_KM * 1000.0)
 
 
-def test_crippled_ship_opens_range_with_full_evasion(monkeypatch):
+def test_crippled_ship_opens_range(monkeypatch):
     sim = CombatSimulation(seed=6, time_step=1.0)
     _ship(sim, "me", "destroyer", "alpha", (0, 0, 0))
     _ship(sim, "foe", "cruiser", "beta", (80, 0, 0), fwd=(-1, 0, 0))
     monkeypatch.setattr(T, "hull_pct", lambda s: T.CRIPPLED_HULL_PCT - 5.0 if s.ship_id == "me" else 100.0)
     m = _maneuver(_captain("destroyer").decide("me", sim))
-    assert m.maneuver_type == ManeuverType.HOLD_RANGE
-    assert m.target_id == "foe"
-    assert m.hold_range_m == pytest.approx(T.RETREAT_RANGE_KM * 1000.0)
-    assert m.evade == "full"
+    _assert_withdraws(m)
+    assert m.evade is None              # the overlay would replace the withdrawal
 
 
 # ---------------------------------------------------------------------------
@@ -297,17 +322,20 @@ MIXED = ("destroyer", "destroyer", "corvette", "corvette")
 GUNS = ("destroyer", "destroyer", "frigate")
 
 
-def _small_battle(tmp_path, doctrines, hulls=MIXED, seed=21, time_limit=240.0):
+def _small_battle(tmp_path, doctrines, hulls=MIXED, seed=21, time_limit=240.0, distance_km=450.0,
+                  beta_hulls=None):
     import importlib.util
     from src.llm.battle_runner import BattleConfig, LLMBattleRunner, load_fleet_data
     from src.llm.fleet_config import BattleFleetConfig
 
     ships = [{"ship_type": t, "model": HEURISTIC_MODEL}
              for t in hulls]
+    beta_ships = ships if beta_hulls is None else [
+        {"ship_type": t, "model": HEURISTIC_MODEL} for t in beta_hulls]
     config = BattleFleetConfig.from_dict({
-        "alpha_fleet": {"ships": ships}, "beta_fleet": {"ships": ships},
+        "alpha_fleet": {"ships": ships}, "beta_fleet": {"ships": beta_ships},
         "record_battle": True, "record_sim_trace": True, "personality_selection": False,
-        "seed": seed, "time_limit_s": time_limit, "initial_distance_km": 450.0,
+        "seed": seed, "time_limit_s": time_limit, "initial_distance_km": distance_km,
     })
     bc = BattleConfig.from_fleet_config(config, verbose=False)
     bc.heuristic_doctrine = dict(doctrines)
@@ -405,13 +433,13 @@ def _wreck_guns(ship):
 def test_a_ship_with_every_gun_wrecked_withdraws_and_says_so():
     sim = CombatSimulation(seed=8, time_step=1.0)
     me = _ship(sim, "me", "destroyer", "alpha", (0, 0, 0))
+    _ship(sim, "mate", "destroyer", "alpha", (0, -40, 0))     # still armed: no surrender
     _ship(sim, "foe", "cruiser", "beta", (90, 0, 0), fwd=(-1, 0, 0))
     _wreck_guns(me)
     assert T.role(me) == "unarmed"
     captain = _captain("destroyer")
     m = _maneuver(captain.decide("me", sim))
-    assert m.maneuver_type == ManeuverType.HOLD_RANGE
-    assert m.hold_range_m == pytest.approx(T.RETREAT_RANGE_KM * 1000.0)
+    _assert_withdraws(m)
     assert [x["kind"] for x in captain.outbox if x["tool"] == "fleet_signal"][0] == "BREAKING_OFF"
 
 
@@ -448,3 +476,189 @@ def test_ships_burn_away_from_a_dying_hulk():
     m = _maneuver(_captain("destroyer").decide("me", sim))
     assert m.maneuver_type == ManeuverType.HEADING
     assert m.heading_direction["x"] < -0.99         # straight away from the hulk
+
+
+@pytest.mark.parametrize("stype,foe", [("destroyer", "cruiser"), ("cruiser_torpedo", "battleship")])
+@pytest.mark.parametrize("rng_km", [290.0, 340.0, 351.0, 360.0, 400.0])
+def test_a_crippled_ship_stays_withdrawn_at_any_range(monkeypatch, stype, foe, rng_km):
+    # Review round 3, finding 4: beyond 350 km a crippled gun ship fell through
+    # to the attack branch and sprinted back in (a torpedo cruiser to its
+    # 300 km standoff), right after signalling BREAKING_OFF.
+    sim = CombatSimulation(seed=6, time_step=1.0)
+    _ship(sim, "me", stype, "alpha", (0, 0, 0))
+    _ship(sim, "foe", foe, "beta", (rng_km, 0, 0), fwd=(-1, 0, 0))
+    monkeypatch.setattr(T, "hull_pct", lambda s: T.CRIPPLED_HULL_PCT - 5.0 if s.ship_id == "me" else 100.0)
+    m = _maneuver(_captain(stype).decide("me", sim))
+    if rng_km < T.RETREAT_RANGE_KM:
+        _assert_withdraws(m)
+    else:
+        assert m.maneuver_type == ManeuverType.HOLD_RANGE and m.target_id == "foe"
+        assert m.hold_range_m >= rng_km * 1000.0 - 1.0
+
+
+def test_a_disarmed_ship_under_fire_actually_opens_range(tmp_path, monkeypatch):
+    # Review round 3, finding 2: HOLD_RANGE 350 with evade 'full' was flown as
+    # the evasion overlay while he shot at us, and the range kept closing.
+    from src.llm.battle_runner import LLMBattleRunner
+    orig = LLMBattleRunner.setup_fleet_battle
+
+    def setup(self, fleet_data):
+        orig(self, fleet_data)
+        _wreck_guns(self.simulation.get_ship("alpha_1"))
+
+    monkeypatch.setattr(LLMBattleRunner, "setup_fleet_battle", setup)
+    # A destroyer (2 g) disarmed at t=0 withdraws from a cruiser (1.5 g) that
+    # can shoot but not catch it.
+    # (An armed frigate keeps alpha in the fight, so it does not surrender.)
+    _, rec = _small_battle(tmp_path, TACTICAL, hulls=("destroyer", "frigate"),
+                           beta_hulls=("cruiser",), time_limit=240.0, distance_km=150.0)
+    frames = rec["sim_trace"]
+    import math
+
+    def rng(frame):
+        s = frame["ships"]
+        return math.dist(s["alpha_1"]["pos"], s["beta_1"]["pos"]) / 1000.0
+    shots = [e for e in rec["events"] if e["event_type"] == "shot_fired" and e["ship_id"] == "beta_1"]
+    assert shots, "the withdrawing ship must be under fire for this test"
+    assert rng(frames[-1]) > rng(frames[30]) + 15.0, (rng(frames[30]), rng(frames[-1]))
+
+
+def test_a_lone_disarmed_ship_surrenders():
+    # Review round 3, finding 3: nothing to shoot with and no armed ship of
+    # its own left to protect - it surrenders instead of fleeing forever.
+    sim = CombatSimulation(seed=8, time_step=1.0)
+    me = _ship(sim, "me", "destroyer", "alpha", (0, 0, 0))
+    _ship(sim, "foe", "destroyer", "beta", (300, 0, 0), fwd=(-1, 0, 0))
+    _wreck_guns(me)
+    captain = _captain("destroyer")
+    captain.decide("me", sim)
+    assert captain.has_surrendered
+    # With an armed friend still fighting it withdraws instead.
+    sim2 = CombatSimulation(seed=8, time_step=1.0)
+    me2 = _ship(sim2, "me", "destroyer", "alpha", (0, 0, 0))
+    _ship(sim2, "mate", "destroyer", "alpha", (0, 30, 0))
+    _ship(sim2, "foe", "destroyer", "beta", (300, 0, 0), fwd=(-1, 0, 0))
+    _wreck_guns(me2)
+    captain2 = _captain("destroyer")
+    captain2.decide("me", sim2)
+    assert not captain2.has_surrendered
+
+
+def test_chasers_leave_a_disarmed_runner_for_an_armed_enemy():
+    sim = CombatSimulation(seed=8, time_step=1.0)
+    me = _ship(sim, "me", "destroyer", "alpha", (0, 0, 0))
+    runner = _ship(sim, "runner", "destroyer", "beta", (260, 0, 0), vel_kps=(2.0, 0, 0))
+    _ship(sim, "armed", "cruiser", "beta", (0, 420, 0), fwd=(0, -1, 0))
+    _wreck_guns(runner)
+    assert T.gun_target(me, [runner, sim.get_ship("armed")], "runner").ship_id == "armed"
+
+
+def test_the_duel_runner_honours_the_doctrine():
+    # Review round 3, finding 6: the 1v1 path built its captains without a faction.
+    from src.llm.battle_runner import BattleConfig, LLMBattleRunner
+    cfg = BattleConfig(verbose=False, personality_selection=False, record_battle=False,
+                       heuristic_doctrine={"alpha": DOCTRINE_LEGACY, "beta": DOCTRINE_TACTICAL})
+    runner = LLMBattleRunner(cfg, LLMCaptainConfig("A", "A", model=HEURISTIC_MODEL),
+                             LLMCaptainConfig("B", "B", model=HEURISTIC_MODEL), None)
+    from src.llm.battle_runner import load_fleet_data
+    runner.setup_battle(load_fleet_data())
+    assert (runner.alpha_captain.doctrine, runner.beta_captain.doctrine) == (
+        DOCTRINE_LEGACY, DOCTRINE_TACTICAL)
+
+
+def test_fleet_configs_carry_the_heuristic_doctrine():
+    # Review round 3, finding 7: --fleet-config / MCP battles had no way to
+    # pick the doctrine.
+    from src.llm.battle_runner import BattleConfig
+    from src.llm.fleet_config import BattleFleetConfig
+    ships = [{"ship_type": "destroyer", "model": HEURISTIC_MODEL}]
+    both = BattleFleetConfig.from_dict({"alpha_fleet": {"ships": ships}, "beta_fleet": {"ships": ships},
+                                        "heuristic_doctrine": "legacy"})
+    assert BattleConfig.from_fleet_config(both).heuristic_doctrine == {
+        "alpha": DOCTRINE_LEGACY, "beta": DOCTRINE_LEGACY}
+    split = BattleFleetConfig.from_dict({"alpha_fleet": {"ships": ships}, "beta_fleet": {"ships": ships},
+                                         "heuristic_doctrine": {"beta": "legacy"}})
+    assert BattleConfig.from_fleet_config(split).heuristic_doctrine == {"beta": DOCTRINE_LEGACY}
+    with pytest.raises(ValueError):
+        BattleFleetConfig.from_dict({"alpha_fleet": {"ships": ships}, "beta_fleet": {"ships": ships},
+                                     "heuristic_doctrine": "berserk"})
+
+
+def test_fixture_and_calibration_scripts_default_to_legacy():
+    import importlib.util
+    import inspect
+    root = Path(__file__).parent.parent / "scripts"
+    spec = importlib.util.spec_from_file_location("gtb", root / "generate_test_battle.py")
+    gtb = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gtb)
+    assert inspect.signature(gtb.hud_comms_battle).parameters["doctrine"].default == DOCTRINE_LEGACY
+    text = (root / "calibrate_torpedo_cost.py").read_text()
+    assert '"--doctrine", choices=("legacy", "tactical"), default="legacy"' in text
+    assert 'heuristic_doctrine={"alpha": task.get("doctrine", "legacy")' in text
+
+
+def test_inbound_torpedo_puts_the_evade_overlay_on_the_order(monkeypatch):
+    sim = CombatSimulation(seed=9, time_step=1.0)
+    _ship(sim, "me", "destroyer", "alpha", (0, 0, 0))
+    _ship(sim, "foe", "destroyer", "beta", (500, 0, 0), fwd=(-1, 0, 0))
+    captain = _captain("destroyer")
+    assert _maneuver(captain.decide("me", sim)).evade is None
+    monkeypatch.setattr(HeuristicCaptain, "_torpedo_threat", lambda self, *a: True)
+    m = _maneuver(_captain("destroyer").decide("me", sim))
+    assert m.maneuver_type == ManeuverType.INTERCEPT and m.evade == "full"
+
+
+def test_the_formation_throttle_is_what_the_ship_flies():
+    sim = CombatSimulation(seed=9, time_step=1.0)
+    _ship(sim, "a1", "destroyer", "alpha", (0, 0, 0))
+    _ship(sim, "a2", "frigate", "alpha", (0, 20, 0))
+    _ship(sim, "b1", "destroyer", "beta", (500, 0, 0), fwd=(-1, 0, 0))
+    m = _maneuver(_captain("frigate", name="a2").decide("a2", sim))
+    want = T.fleet_plan(sim, "alpha").formation_throttle["a2"]
+    assert want == pytest.approx(2.0 / 3.0, abs=0.01)       # a 3 g frigate waits for a 2 g destroyer
+    assert m.maneuver_type == ManeuverType.INTERCEPT and m.throttle == pytest.approx(want)
+
+
+# Golden: the legacy doctrine is the pass-4 captain bit for bit (the
+# fire-control fixture's heuristic battles were flown with it). A change to
+# the ENGINE moves this hash too - then re-pin it in the same commit; a
+# change that moves it without an engine change has altered legacy.
+LEGACY_GOLDEN_SHA256 = "9500f81e054473020b01aa462e8be4705706026de3dfb20bb51e8d3bb850d7b0"
+
+
+def test_legacy_battle_event_stream_is_pinned(tmp_path):
+    import hashlib
+    _, rec = _small_battle(tmp_path, {"alpha": DOCTRINE_LEGACY, "beta": DOCTRINE_LEGACY},
+                           time_limit=150.0)
+    stream = [(e["timestamp"], e["event_type"], e["ship_id"],
+               json.dumps(e["data"], sort_keys=True, default=str))
+              for e in rec["events"] if e["event_type"] not in ("battle_start", "battle_end")]
+    digest = hashlib.sha256(json.dumps(stream).encode()).hexdigest()
+    assert digest == LEGACY_GOLDEN_SHA256, digest
+
+
+def test_a_hulk_on_top_of_the_ship_still_gives_a_heading():
+    sim = CombatSimulation(seed=8, time_step=1.0)
+    _ship(sim, "me", "destroyer", "alpha", (0, 0, 0))
+    _ship(sim, "mate", "cruiser", "alpha", (0, 0, 0)).is_dying = True
+    _ship(sim, "foe", "cruiser", "beta", (200, 0, 0), fwd=(-1, 0, 0))
+    m = _maneuver(_captain("destroyer").decide("me", sim))
+    assert m.maneuver_type == ManeuverType.HEADING
+    assert m.heading_direction["x"] < -0.99            # away from the enemy
+
+
+def test_the_last_ship_of_a_fleet_does_not_signal():
+    sim = CombatSimulation(seed=8, time_step=1.0)
+    _ship(sim, "me", "destroyer", "alpha", (0, 0, 0))
+    _ship(sim, "foe", "cruiser", "beta", (300, 0, 0), fwd=(-1, 0, 0))
+    captain = _captain("destroyer")
+    captain.decide("me", sim)
+    assert not [m for m in captain.outbox if m["tool"] == "fleet_signal"]
+
+
+def test_mirror_draft_needs_auto_draft():
+    import subprocess
+    import sys as _sys
+    r = subprocess.run([_sys.executable, "scripts/run_draft_battle.py", "--mirror-draft", "--quiet"],
+                       capture_output=True, text=True, cwd=Path(__file__).parent.parent, timeout=120)
+    assert r.returncode != 0 and "--mirror-draft needs --auto-draft" in r.stderr

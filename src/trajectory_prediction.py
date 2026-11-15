@@ -467,7 +467,7 @@ _EVASION_MODES: Tuple[str, ...] = ("WOBBLE", "EVADE", "TANK", "BRACE", "RUN", "P
 # checkpoint position disperses by k * a_max * tau^2 / 2 (tau = time to go).
 #
 # Calibrated on the two showcase battles (run_draft_battle.py --auto-draft
-# --no-admirals --seed 3 --budget 100 and --seed 11 --budget 200; 13.2k
+# --no-admirals --doctrine legacy --seed 3 --budget 100 and --seed 11 --budget 200; 13.2k
 # plans) so that the total sigma (this in quadrature with the WOBBLE Monte
 # Carlo term) puts 90% of actual checkpoint positions within 2 sigma for
 # ships in each current mode; held-out seeds 5 and 7 (--budget 150) land

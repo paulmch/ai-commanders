@@ -264,7 +264,7 @@ battle with `--trace` (no LLM), 420 s long. Not in the repository; regenerate
 it (fully offline, no API key, about half a minute) and copy it into place:
 
 ```bash
-uv run python scripts/run_draft_battle.py --auto-draft --no-admirals --trace --seed 4 --budget 200 --time-limit 420 --recording-dir /tmp/p5_demo
+uv run python scripts/run_draft_battle.py --auto-draft --no-admirals --trace --seed 4 --budget 200 --time-limit 420 --doctrine legacy --recording-dir /tmp/p5_demo
 cp "$(ls -t /tmp/p5_demo/battle_*[0-9].json | head -1)" visualizer/public/recordings/p5_damage_demo.json
 ```
 
