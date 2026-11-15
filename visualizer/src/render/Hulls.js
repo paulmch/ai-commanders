@@ -388,7 +388,7 @@ export function octSectionGeometry(w0, h0, ct0, cb0, w1, h1, ct1, cb1, len, dy =
     tri(A[i], A[j], B[j], out);
     tri(A[i], B[j], B[i], out);
   }
-  const zc0 = new THREE.Vector3(0, 0, 0), zc1 = new THREE.Vector3(0, 0, len);
+  const zc0 = new THREE.Vector3(0, 0, 0), zc1 = new THREE.Vector3(0, dy, len);
   for (let i = 0; i < 8; i++) {
     const j = (i + 1) % 8;
     tri(zc0, A[i], A[j], out.set(0, 0, -1));
