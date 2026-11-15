@@ -6125,7 +6125,10 @@ class CombatSimulation:
                     continue
 
                 flight_time = self.current_time - torp_flight.launch_time
-                if flight_time > 3600 or current_dist > 10_000_000:
+                # (balance, pass 5) a SPENT round - see _torpedo_is_spent -
+                # is culled here as a miss instead of drifting for an hour.
+                if (flight_time > 3600 or current_dist > 10_000_000
+                        or self._torpedo_is_spent(torp_flight)):
                     self._log_torpedo_left_battle(torp_flight, current_dist)
                     torpedoes_to_remove.append(torp_flight)
                 continue
@@ -6353,7 +6356,9 @@ class CombatSimulation:
 
             # Check if torpedo is too far or timed out
             flight_time = self.current_time - torp_flight.launch_time
-            if ((flight_time > 3600 or current_dist > 10_000_000)  # 1 hour or 10,000 km
+            # (balance, pass 5) ... or spent: tanks dry and opening on every hull.
+            if ((flight_time > 3600 or current_dist > 10_000_000  # 1 hour or 10,000 km
+                 or (torp.fuel_exhausted and self._torpedo_is_spent(torp_flight)))
                     and torp_flight not in torpedoes_to_remove):
                 self._log_torpedo_left_battle(torp_flight, current_dist)
                 torpedoes_to_remove.append(torp_flight)
@@ -6365,6 +6370,44 @@ class CombatSimulation:
                 self.metrics.torpedo_main_engine_dv_kps += torp.main_engine_dv_used_kps
                 self.metrics.torpedo_rcs_dv_kps += torp.rcs_dv_used_kps
                 self.torpedoes.remove(torp)
+
+    # A round that can no longer steer (seeker killed, target gone with no
+    # replacement, or tanks dry) is SPENT once it is opening on every live
+    # hull and farther than this from all of them: beyond the 250 km PD
+    # envelope, receding at km/s, it will never touch anything again. Spent
+    # rounds used to stay in self.torpedoes for an hour of flight, and "a
+    # round of its own still in flight" (battle_damage.side_can_deal_damage)
+    # kept a fleet with empty tubes "able to deal damage": in one inspected
+    # battle 10 of 32 rounds were still listed at 600 s with every magazine
+    # empty, and only 10 of 534 tournament battles were ever ruled
+    # combat-ineffective. Culled with the existing left_battle miss event.
+    SPENT_TORPEDO_CULL_RANGE_M = 300_000.0
+
+    def _torpedo_is_spent(self, torp_flight: 'TorpedoInFlight') -> bool:
+        """True for an unguided round that is opening on every live hull
+        beyond SPENT_TORPEDO_CULL_RANGE_M (see the constant)."""
+        torp = torp_flight.torpedo
+        orphan = self.get_ship(torp.target_id)
+        if not (torp_flight.is_disabled or torp.fuel_exhausted
+                or orphan is None or orphan.is_destroyed):
+            return False
+        # With no enemy hull left alive there is nothing to rule a round out
+        # against (and the battle is over): an orphan keeps coasting as before.
+        source = self.get_ship(torp_flight.source_ship_id)
+        if source is not None and not any(
+                not s.is_destroyed and s.faction != source.faction
+                for s in self.ships.values()):
+            return False
+        for ship in self.ships.values():
+            if ship.is_destroyed:
+                continue
+            rel_pos = ship.position - torp.position
+            if rel_pos.magnitude <= self.SPENT_TORPEDO_CULL_RANGE_M:
+                return False
+            # Closing: the hull's bearing and the relative velocity agree
+            if rel_pos.dot(torp.velocity - ship.velocity) > 0.0:
+                return False
+        return True
 
     def _log_torpedo_left_battle(self, torp_flight: 'TorpedoInFlight',
                                  current_dist_m: float) -> None:

@@ -627,7 +627,7 @@ def test_the_formation_throttle_is_what_the_ship_flies():
 # sweeps its torches across its neighbours when it turns - 43 `plume_wash`
 # events are the whole difference (with the hook off the stream still hashes
 # to the previous pin, 9500f81e...).
-LEGACY_GOLDEN_SHA256 = "2f0d8e6953e752537adef55a6e2d1eb6103fe4651e81fa0b6830e7a0e7b72dad"
+LEGACY_GOLDEN_SHA256 = "086ac07034f2d256cf7d6cb12c42fecec95bfcf3a98812bfa2bb3cfa1903037b"
 
 
 def test_legacy_battle_event_stream_is_pinned(tmp_path):

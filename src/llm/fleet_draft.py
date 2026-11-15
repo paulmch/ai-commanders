@@ -63,21 +63,47 @@ except ImportError:  # pragma: no cover - script-style import path
 ARMOR_TONS_PER_POINT = 55.0
 PD_POINTS_PER_TURRET = 1.0
 GUN_POINTS_PER_GJ_PER_S = 8.0
-# Points per GJ of stowed torpedo warhead energy: a full 48-round torpedo
-# cruiser magazine (864 GJ) costs ~35 pts, a corvette's 8 rounds ~6.
-# Recalibrated 0.032 -> 0.040 on 2026-09-26 with
-# scripts/calibrate_torpedo_cost.py after the torpedo guidance fixes made
-# torpedoes stronger (docs/draft_mode.md has the tables). 0.040 sits inside
-# a band (0.0392-0.0415) where no calibration fleet at 100/150/200 pts
-# changes composition, with cruiser_torpedo at 65 and the corvette at the
-# centre of its 18-pt step, so a small data edit does not flip the result.
-# It was the least budget-sensitive of the candidate bands, but no single
-# value is balanced at every budget; see the doc before retuning.
-# Re-checked 2026-09-27 on the salvo-gun / heat-ladder / range-control
-# engine: still the best single value (41 / 73 / 26% torpedo score at
-# 100 / 150 / 200 pts). The corvette-count cliff, not this dial, sets the
-# spread.
-TORPEDO_POINTS_PER_GJ = 0.040
+# Points per GJ of stowed torpedo warhead energy, i.e. per round x yield.
+#
+# History of the dial: 0.032 (2026-08-13), 0.040 (2026-09-26, re-checked
+# 2026-09-27) - both fitted against the old heuristic captain, which launched
+# about 14 of a torpedo cruiser's 48 rounds in a battle.
+#
+# 2026-11-15 (pass 5): 0.040 -> 0.102, i.e. 0.72 -> 1.84 pts per stowed
+# round. The tactical captains mass and synchronise salvos and empty every
+# magazine in the first 90-150 s, before a gun fleet starting 500 km away has
+# fired a round. Measured with scripts/draft_tournament.py (seeded round
+# robin, both side assignments), at the old prices:
+#   - 144 pts of corvettes (8 hulls, 64 rounds) annihilated every 150-pt gun
+#     fleet without loss; so did 108 pts (6 hulls), and 54 pts (3 hulls, 24
+#     rounds) still destroyed 76-147 pts of each;
+#   - a launched round destroyed 2.2-6.1 pts of gun hulls (2.2 with rounds
+#     left over, 6.1 for three boats against a battle line, 3-4 typically), at
+#     150 and at 200 pts alike, while it cost 0.72 pts - 2.25 with its share
+#     of the corvette around it.
+# The magazine is therefore priced so that a torpedo hull costs about what
+# its rounds destroy, at the LOW end of that range (gun fleets are about to
+# close better, and a torpedo cruiser is one hull to lose): 8 rounds on a
+# corvette come to 27 pts all-in (3.4 per round), 48 on a torpedo cruiser to
+# 119 (2.5 per round). 0.102 sits inside the band (0.0993-0.1060) in which
+# neither price moves and the 150-pt torpedo doctrine stays "one torpedo
+# cruiser plus a corvette".
+#
+# What this dial can NOT do is balance the verdicts: a corvette salvo is a
+# step function (two boats' salvos are blinded and miss, three boats' kill a
+# battle line) and the boats are never caught afterwards - see the
+# "2026-11-15" section of docs/draft_mode.md before retuning.
+#
+# 2026-11-15, round 2: 0.102 -> 0.080 (cruiser_torpedo 119 -> 100, corvette
+# 27 -> 24). A hard constraint from the owner's side: EVERY hull must be
+# draftable at DEFAULT_POINT_BUDGET (100), and a 119-pt torpedo cruiser was
+# not. 0.080 is the dearest dial that keeps it at 100 (the band is
+# 0.0797-0.0808; tests/test_draft_tournament.py pins the constraint). It is
+# BELOW what the magazine destroys: on the merged engine (gun ships close, a
+# dry fleet surrenders or is ruled out, the verdict is scored at draft
+# prices) a torpedo hull with a few frigates still beats every gun fleet.
+# That needs point defence and range to bite, not a price.
+TORPEDO_POINTS_PER_GJ = 0.080
 
 
 def _load_ship_specs() -> Dict[str, Any]:
@@ -525,16 +551,28 @@ def world_positions_km(
 # Auto-draft (fallback + offline testing)
 # ---------------------------------------------------------------------------
 
+# Auto-draft doctrines: the hull preference cycle each one buys from. The
+# ORDER is part of the seed contract (auto_draft picks by index from the seed).
+AUTO_DRAFT_DOCTRINES: Dict[str, List[str]] = {
+    "gunline": ["destroyer", "destroyer", "cruiser", "frigate"],
+    "torpedo": ["cruiser_torpedo", "corvette", "corvette", "frigate"],
+    "combined": ["battleship", "destroyer", "corvette"],
+    "flagship": ["dreadnought", "frigate", "corvette"],
+}
+
+
 def auto_draft(
     faction: str,
     budget: int = DEFAULT_POINT_BUDGET,
     max_ships: int = DEFAULT_MAX_SHIPS,
     seed: Optional[int] = None,
+    doctrine: Optional[str] = None,
 ) -> FleetDraft:
     """
     Deterministic budget-respecting draft used when no admiral drafts.
 
-    Picks a doctrine (gunline / torpedo swarm / combined arms) from the seed
+    Picks a doctrine (gunline / torpedo swarm / combined arms / flagship) from
+    the seed - or the named one, `doctrine`, a key of AUTO_DRAFT_DOCTRINES -
     and greedily fills the budget, so two auto-drafted sides still produce an
     interesting asymmetric battle.
     """
@@ -543,13 +581,16 @@ def auto_draft(
     if isinstance(max_ships, bool) or not isinstance(max_ships, int) or max_ships < 1:
         raise ValueError("max_ships must be a positive integer")
     rng = random.Random(seed if seed is not None else 0)
-    doctrines = [
-        ["destroyer", "destroyer", "cruiser", "frigate"],          # gunline
-        ["cruiser_torpedo", "corvette", "corvette", "frigate"],    # torpedo swarm
-        ["battleship", "destroyer", "corvette"],                   # combined arms
-        ["dreadnought", "frigate", "corvette"],                    # flagship
-    ]
+    doctrines = list(AUTO_DRAFT_DOCTRINES.values())
+    # The seed draw happens even for a named doctrine, so the RNG stream (and
+    # anything later drawn from it) does not depend on how it was chosen.
     preference = doctrines[rng.randrange(len(doctrines))]
+    if doctrine is not None:
+        if doctrine not in AUTO_DRAFT_DOCTRINES:
+            raise ValueError(f"unknown auto-draft doctrine {doctrine!r} "
+                             f"(one of {', '.join(AUTO_DRAFT_DOCTRINES)})")
+        preference = AUTO_DRAFT_DOCTRINES[doctrine]
+    preference = list(preference)
     if not any(SHIP_POINT_COSTS[s] <= budget for s in preference):
         preference = [min(SHIP_POINT_COSTS, key=SHIP_POINT_COSTS.get)]
 
