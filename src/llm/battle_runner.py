@@ -3654,6 +3654,7 @@ class LLMBattleRunner:
                     torpedo_id=data.get("projectile_id", "unknown"),
                     closest_approach_km=data.get("closest_approach_km", 0),
                     hit_probability=data.get("hit_probability", 0),
+                    reason=data.get("reason"),
                 )
             else:
                 self.recorder.record_miss(
