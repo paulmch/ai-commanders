@@ -39,9 +39,15 @@ winner in every probe; rotating the battlefield 180 degrees changed nothing.
 holds ten exact mirror tests, seven of which fail on the old engine, and `scripts/mirror_probe.py`
 checks a full battle tick by tick.
 
-**After the fix:** 180 mirror battles gave alpha 62, beta 52, draws 66 (alpha share of decisive
-battles 0.54, 95 % interval 0.45-0.63). One sample of seeds still leaned to alpha and did not
-repeat on fresh seeds.
+**After the fix:** 838 fresh mirror battles on the merged engine gave alpha 227, beta 234, draws
+377 (alpha share of decisive battles 0.49, 95 % interval 0.45-0.54). No roster is one-sided
+beyond chance (smallest per-roster p = 0.18 before any correction for eight rosters), and paired
+survivors, damage, hits and torpedo hits show no side difference. With every random roll forced to
+one value, whole 600 s battles stay exact mirrors on every tick. A true effect of a few points
+cannot be excluded: the interval is about plus or minus five points. A second pass also staged
+the death flags (a reactor meltdown inside the ship loop used to be seen at once by ships updated
+later). Gun-roster results still depend on ship order through the shared battle RNG, which is
+coupling, not bias.
 
 ### Damage has consequences (`src/battle_damage.py`)
 
@@ -78,8 +84,15 @@ ships flew directly astern of each other at full burn.
 - The crew accumulates a radiation dose, shielded by the armour on the facing presented. Impaired
   at 2 Sv (weapons cycle 1.5 times slower), incapacitated at 8 Sv (the ship coasts and cannot
   fight).
-- The tactical captains ease a lead ship's throttle when a friendly is astern. Captains, admirals
-  and MCP clients see PLUME WASH and CREW DOSE status lines.
+- **Drive interlock.** The engine caps any ship's throttle so its exhaust puts at most 0.5 GJ/s
+  on an allied ship, whoever commands it; enemies never limit it. It is computed from the
+  start-of-tick snapshot, is always on (also during torpedo evasion; the exemption is a switch,
+  off), and commanders see "DRIVE INTERLOCK: throttle held at 3 % of the ordered 100 %". The
+  tactical captains additionally side-slip a burn so the jet clears a friend.
+- **Crew state reaches every commander.** Own-ship status, the weapon lines (combined cycle
+  factor), the admiral's "needs a decision now" block, fleet-net datalink lines for fleet-mates,
+  MCP state, and enemy ships ("NOT MANEUVERING, NOT FIRING"). An incapacitated crew gets no
+  captain call and no admiral order; orders to it come back as not executable.
 
 | km astern, full burn | Heat GJ/s | Armour cm/s | Dose Sv/s, destroyer bow |
 |---|---|---|---|
@@ -89,9 +102,12 @@ ships flew directly astern of each other at full burn.
 | 50 | 0.79 | 0 | 0.005 |
 
 Formations sat in friendly exhaust for 30 to 400 ship-seconds per battle before the mechanic
-existed. No winner changed across seven seeded battles. In the scripted column demo a destroyer
-11 km astern of a battleship takes 464 GJ, loses its four bow fittings and ends with an impaired
-crew; with avoidance it takes nothing.
+existed. In the scripted column demo a destroyer 11 km astern of a battleship takes 464 GJ, loses
+its four bow fittings and ends with an impaired crew; with the interlock it takes at most
+0.49 GJ/s and 0.07 Sv. With the interlock on, seven tactical battles kept identical outcomes;
+four legacy-doctrine battles (close time-limit verdicts) all changed result, with ships held for
+50-81 ship-seconds each, 0-10 of them while evading a torpedo. Friendly peaks of 0.64-0.85 GJ/s
+still occur against the 0.5 threshold; the missed case was not traced.
 
 Torpedoes in a plume are implemented but switched off (`PLUME_AFFECTS_TORPEDOES = False`). Four
 seeded battles came out identical with it on, but they barely contained a tail chase, so that is
@@ -106,8 +122,11 @@ no armed friend surrendering. The pass-4 captain stays available as `--doctrine 
 bit-for-bit unchanged.
 
 On equal fleets the new doctrine beat the old one 48 wins, 1 draw, 3 losses over 52 battles,
-including seeds it was not tuned on. **That figure was measured before the side-symmetry fix** and
-needs re-measuring. An independent review found eight defects in the first version (gun ships
+including seeds it was not tuned on, and the same totals held when re-measured after the
+side-symmetry fix. **After the torpedo reprice the battleship roster regressed** from 12 wins of
+12 to 5 wins, 2 draws, 5 losses, because auto-draft now buys that roster fewer corvettes and the
+doctrine had leaned on their torpedoes; the other rosters held (41 of 52 overall). In mirror
+self-play the torpedo-heavy rosters now mostly end in mutual surrender once both sides are dry. An independent review found eight defects in the first version (gun ships
 stalling at zero closure between 81 and 245 km, a withdrawal order that was not flown under fire,
 a disarmed ship fleeing until the time limit); all were addressed.
 
@@ -160,8 +179,20 @@ swarm wins every pairing at 100, 150 and 200 points, usually without losing a sh
 - It is a step function: two corvettes win nothing, three win nine of ten.
 - A launched round destroys 2.2-6.1 points of gun hull and cost 0.72 points.
 
-Raising the torpedo price weight helped at 150 points only and left the torpedo cruiser too
-expensive for the default 100-point budget. The cause is mechanical, not a matter of price.
+The cause is mechanical, not a matter of price. What landed: spent torpedoes leave the battle,
+the time-limit verdict values hulls at their draft price, and the torpedo price weight went from
+0.040 to 0.080 (corvette 18 to 24 points, torpedo cruiser 65 to 100, the dearest setting at which
+every hull fits the default 100-point budget). A torpedo cruiser behind a frigate screen still
+wins every battle at 150 and 200 points.
+
+**The lever, parked on `wt5/balance-pd` (not green, 15 tests red).** Blinded rounds still hit:
+70-77 % of hits taken came from rounds whose seeker was already dead. Lowering the seeker-kill
+energy from 50 MJ to 29 MJ or below flips it: the screened torpedo fleet then loses to the two
+turret-rich fleets and still beats the slow, turret-poor ones. But any value in that range lets a
+lone two-turret hull blind a single round, which contradicts an explicit design guard ("a lone
+ship does not stop a committed torpedo"), and it leaves the gun line and escort fleets at 89-95 %
+of the field. That is an owner decision before it can be finished. Range also still costs a
+torpedo nothing (a 500 km shot arrives faster, not weaker), with no small fix.
 
 ## Open
 
@@ -172,9 +203,15 @@ expensive for the default 100-point budget. The cause is mechanical, not a matte
   a target's orders on the checkpoint tick.
 - **First orders arrive at T+30 s.** Every hull idles for the first interval. Moving the first
   checkpoint to T+0 fails nine tests that pin the schedule and adds a paid round to LLM battles.
-- **Plume avoidance** exists only for the tactical rule-based captains, as a throttle cap on the
-  lead ship. LLM commanders get warnings only. An impaired crew's "slower response" is not built.
-- **Ambient occlusion** is implemented but not visible in the reference frames.
+- **Plume.** An impaired crew's "slower response" is not built (only slower weapon cycling). The
+  formation throttle matching does not know about the interlock, so a held lead falls behind
+  unless its captain side-slips. The doctrine text does not mention the interlock.
+- **Point defence and torpedo range** as described under Balance.
+- **Seeded battles are bit-reproducible only within one Python minor version.** 3.11 and 3.12
+  differ in the last bits; `scripts/perf_check_golden.json` was recorded on 3.12.
+- **Ambient occlusion** is on for the high tier (hull pixels about 9 % darker in recesses on a
+  shadow-side close-up); its frame cost is unmeasured.
+- **Director.** Live mode, the highlight keys and surrender shots have unit tests only.
 - **Not seen in a frame:** several torpedo effects, blast scorch on a victim, a dead tube.
 - **Generated artifacts.** The fire-control fixture was not regenerated and its tests still pass;
   its heuristic battles must be regenerated with `--doctrine legacy`. Showcase recordings from
