@@ -400,7 +400,7 @@ function plateTextures(faction, variant) {
   for (const p of slabs) {
     const tone = 1 + (rnd() - 0.5) * 0.07;
     const col = base.map(c => c * tone);
-    const pRough = (isPaint ? 0.46 : 0.5) + (rnd() - 0.5) * 0.16;
+    const pRough = (isPaint ? 0.46 : 0.5) + (rnd() - 0.5) * 0.1;
     const pHeight = 0.6 + rnd() * 0.15;
     const x0 = p.x + gap, y0 = p.y + gap, w = p.w - gap * 2, h = p.h - gap * 2;
     actx.fillStyle = rgb(col);
@@ -424,9 +424,9 @@ function plateTextures(faction, variant) {
         const cx0 = xs[a], cy0 = ys[b], cw = xs[a + 1] - xs[a], ch = ys[b + 1] - ys[b];
         const kind = rnd();
         let ccol = col, cRough = pRough;
-        if (!isPaint && kind < 0.06) { ccol = col.map((c, i) => c * 0.95 + bareMetal[i] * 0.06); cRough = pRough - 0.06; fillRect(metal, cx0, cy0, cw, ch, 0.2); }
+        if (!isPaint && kind < 0.06) { ccol = col.map((c, i) => c * 0.95 + bareMetal[i] * 0.06); cRough = pRough - 0.03; fillRect(metal, cx0, cy0, cw, ch, 0.15); }
         else if (!isPaint && kind < 0.11) ccol = accent.map((c, i) => c * 0.035 + col[i] * 0.965);
-        else if (kind < 0.24) { ccol = col.map(c => c * 0.96); cRough = pRough + 0.05; }
+        else if (kind < 0.24) { ccol = col.map(c => c * 0.96); cRough = pRough + 0.02; }
         else if (kind < 0.36) ccol = col.map(c => c * 1.03);
         if (ccol !== col) {
           actx.fillStyle = rgb(ccol);
@@ -495,9 +495,11 @@ function plateTextures(faction, variant) {
         }
       }
     }
+    // (panel lines are albedo only: relief at panel scale turns a face lit
+    // at a glancing angle into brickwork)
     actx.fillStyle = 'rgba(0,0,0,0.11)';
-    for (const cx of xs.slice(1, -1)) { actx.fillRect(cx, iy, lw, ih); fillRect(height, cx, iy, lw, ih, pHeight - 0.03); }
-    for (const cy of ys.slice(1, -1)) { actx.fillRect(ix, cy, iw, lw); fillRect(height, ix, cy, iw, lw, pHeight - 0.03); }
+    for (const cx of xs.slice(1, -1)) { actx.fillRect(cx, iy, lw, ih); fillRect(height, cx, iy, lw, ih, pHeight - 0.01); }
+    for (const cy of ys.slice(1, -1)) { actx.fillRect(ix, cy, iw, lw); fillRect(height, ix, cy, iw, lw, pHeight - 0.01); }
 
     // bolt rows along the slab edges (fine)
     const bi = gap + bev + px(4), step = px(28), rr = Math.max(0.9, 1.3 * S);
@@ -870,8 +872,10 @@ export function getBellHeatTexture() {
   if (_bellHeatTex) return _bellHeatTex;
   const w = 80, n = 128;
   const data = new Uint8Array(w * n * 4);
-  const stops = [[0, [255, 238, 205]], [0.05, [255, 184, 96]], [0.16, [214, 84, 26]], [0.34, [112, 28, 9]],
-    [0.6, [36, 8, 4]], [1, [5, 2, 2]]];
+  // (steep enough that the outer half stays dark at full thrust too, when
+  // SceneManager drives the intensity ten times higher than at idle)
+  const stops = [[0, [255, 238, 205]], [0.05, [255, 184, 96]], [0.15, [200, 72, 22]], [0.32, [84, 18, 6]],
+    [0.55, [20, 5, 3]], [1, [3, 1, 1]]];
   for (let j = 0; j < n; j++) {
     const v = j / (n - 1);
     let k = 0;
