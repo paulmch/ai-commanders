@@ -469,6 +469,25 @@ export class SceneManager {
       if (!ship.visible) continue;
       ship.traverse(_flagShadow);
     }
+    // Wreck sections and chunks live outside the ship groups and fade out
+    // through a transparent material: they receive, and cast while solid.
+    for (const eff of this.destructionEffects) {
+      eff.chunkGroup?.traverse(_flagWreckShadow);
+    }
+  }
+
+  /** Visible hulls as { pos, r } for the shadow fit (reused, no per-frame garbage). */
+  _collectShadowSubjects() {
+    const list = this._shadowSubjects || (this._shadowSubjects = []);
+    let n = 0;
+    for (const ship of this.ships.values()) {
+      if (!ship.visible) continue;
+      const s = list[n] || (list[n] = { pos: null, r: 0, a: 0 });
+      s.pos = ship.position;
+      s.r = (ship.userData.size?.length || 8) * 0.6;
+      n++;
+    }
+    return n;
   }
 
   // ===========================================================================
@@ -750,7 +769,9 @@ export class SceneManager {
     this.rangeRingMaterial.opacity = 0.12 * THREE.MathUtils.smoothstep(viewingDistance, 45, 250);
     this.tacticalOverlay.visible = this.rangeRingMaterial.opacity > 0.002;
     if (this.frameIndex % 20 === 0) this._flagShadowMeshes();
-    this.environment.update(this.camera, this.delta, this.controls.target, viewingDistance);
+    const subjectCount = this._collectShadowSubjects();
+    this.environment.update(this.camera, this.delta, this.controls.target, viewingDistance,
+      this._shadowSubjects, subjectCount);
     this.postfx.update(this.delta);
 
     // Camera shake from nearby detonations, applied only for the draw
@@ -777,4 +798,12 @@ function _flagShadow(o) {
   if (!m || !m.isMeshStandardMaterial) return;
   o.receiveShadow = true;
   o.castShadow = !m.transparent && m.blending === THREE.NormalBlending && m.depthWrite !== false;
+}
+
+function _flagWreckShadow(o) {
+  if (!o.isMesh) return;
+  const m = Array.isArray(o.material) ? o.material[0] : o.material;
+  if (!m || !m.isMeshStandardMaterial) return;
+  o.receiveShadow = true;
+  o.castShadow = m.depthWrite !== false && m.opacity > 0.5;
 }

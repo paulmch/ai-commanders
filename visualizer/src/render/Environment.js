@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { GLSL_NOISE, makeStarCatalogue, getGasGiantTexture, makeRingTexture, makeNoiseVolumeTexture } from './SkyTextures.js';
 import { getGraphicsSettings } from './Quality.js';
 import { DustMotes } from './DustMotes.js';
-import { shadowBoxRadius, shadowBasis, fitSunShadow } from './sunShadow.js';
+import { shadowBasis, fitSunShadow, chooseShadowFocus, quantiseShadowRadius } from './sunShadow.js';
 
 /**
  * Space environment:
@@ -63,6 +63,14 @@ const STAR_MAX = 9000;
 // Key light. With the shadow map the key:fill ratio carries the form: a hard
 // sun ~4x the combined fill (hemisphere + rim + planet-shine + IBL).
 export const SUN_INTENSITY = 4.4;
+// Image-based fill baked into the PMREM environment (never drawn on the
+// visible sky). With ambient occlusion carrying the small-scale structure,
+// the shadow side can take real fill without going flat: a cool lobe
+// opposite the sun, the gas giant's warm bounce from where the planet
+// actually is, and a low floor so no face is ever pure black.
+export const ENV_FILL = [0.2, 0.3, 0.52];
+export const ENV_BOUNCE = [0.5, 0.33, 0.19];
+export const ENV_AMBIENT = [0.035, 0.045, 0.07];
 
 export class Environment {
   constructor(scene, renderer) {
@@ -72,6 +80,7 @@ export class Environment {
     this.sunDir = new THREE.Vector3(0.62, 0.42, 0.28).normalize();
     this.sunColor = new THREE.Color(1.0, 0.93, 0.82);
     this.time = 0;
+    this.fillScale = 1;   // look-dev knob: scales the IBL fill terms (rebuild with _buildEnvMap)
 
     // Galactic frame: band tilted ~16 deg off the fleet-view centre so the
     // Milky Way crosses the frame diagonally instead of sitting behind the
@@ -182,12 +191,14 @@ export class Environment {
     this._shBasis = shadowBasis(this.sunDir);
   }
 
-  _fitShadow(camera, focus, viewDist) {
+  _fitShadow(camera, focus, viewDist, subjects, subjectCount) {
     const light = this.sunLight;
     if (!light.castShadow || !focus) return;
     const sh = light.shadow;
-    const R = shadowBoxRadius(viewDist, camera.fov, camera.aspect);
-    const fit = fitSunShadow(focus, this._shBasis, R, sh.mapSize.x, light.target.position, light.position);
+    camera.updateMatrixWorld();
+    const R = quantiseShadowRadius(
+      chooseShadowFocus(camera, focus, viewDist, subjects || _noSubjects, subjectCount || 0, _shCenter));
+    const fit = fitSunShadow(_shCenter, this._shBasis, R, sh.mapSize.x, light.target.position, light.position);
     const cam = sh.camera;
     if (cam.right !== R) {
       cam.left = -R; cam.right = R; cam.top = R; cam.bottom = -R;
@@ -353,7 +364,10 @@ export class Environment {
         uSky: { value: this.skyRT.texture },
         uIntensity: { value: intensity },
         uFillDir: { value: this.sunDir.clone().negate().add(new THREE.Vector3(0, -0.25, 0)).normalize() },
-        uFill: { value: new THREE.Color(0, 0, 0) }
+        uFill: { value: new THREE.Color(0, 0, 0) },
+        uBounceDir: { value: this.planetDir },
+        uBounce: { value: new THREE.Color(0, 0, 0) },
+        uAmbient: { value: new THREE.Color(0, 0, 0) }
       },
       vertexShader: /* glsl */`
         varying vec3 vDir;
@@ -368,6 +382,9 @@ export class Environment {
         uniform float uIntensity;
         uniform vec3 uFillDir;
         uniform vec3 uFill;
+        uniform vec3 uBounceDir;
+        uniform vec3 uBounce;
+        uniform vec3 uAmbient;
         varying vec3 vDir;
         ${LOG_DEPTH_F}
         void main() {
@@ -375,7 +392,11 @@ export class Environment {
           vec3 d = normalize(vDir);
           vec3 c = textureCube(uSky, d).rgb;
           c = c * c * uIntensity;
+          // IBL-only fill terms (all zero on the visible sky): a cool lobe
+          // opposite the sun, the planet's warm bounce, a floor of starlight
           c += uFill * max(0.0, dot(d, uFillDir));
+          float pb = max(0.0, dot(d, uBounceDir));
+          c += uBounce * pb * pb + uAmbient;
           gl_FragColor = vec4(c, 1.0);
         }`,
       side: THREE.BackSide,
@@ -719,7 +740,10 @@ export class Environment {
   _buildEnvMap() {
     const envScene = new THREE.Scene();
     const sky = new THREE.Mesh(new THREE.BoxGeometry(2000, 2000, 2000), this._skyMaterial(2.6));
-    sky.material.uniforms.uFill.value.setRGB(0.1, 0.15, 0.27);
+    const k = this.fillScale;
+    sky.material.uniforms.uFill.value.setRGB(...ENV_FILL).multiplyScalar(k);
+    sky.material.uniforms.uBounce.value.setRGB(...ENV_BOUNCE).multiplyScalar(k);
+    sky.material.uniforms.uAmbient.value.setRGB(...ENV_AMBIENT).multiplyScalar(k);
     envScene.add(sky);
     const sun = new THREE.Mesh(new THREE.SphereGeometry(900 * Math.tan(0.03), 16, 12),
       new THREE.MeshBasicMaterial({ color: new THREE.Color(30, 27, 23) }));
@@ -736,6 +760,7 @@ export class Environment {
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     const rt = pmrem.fromScene(envScene, 0.02, 0.1, 5000);
     this.scene.environment = rt.texture;
+    this.envRT?.dispose();
     this.envRT = rt;
     pmrem.dispose();
     sky.geometry.dispose(); sky.material.dispose();
@@ -744,9 +769,9 @@ export class Environment {
   }
 
   // -------------------------------------------------------------------------
-  update(camera, delta, focus = null, viewDist = 0) {
+  update(camera, delta, focus = null, viewDist = 0, subjects = null, subjectCount = 0) {
     this.time += delta;
-    this._fitShadow(camera, focus, viewDist || camera.userData.viewDist || 100);
+    this._fitShadow(camera, focus, viewDist || camera.userData.viewDist || 100, subjects, subjectCount);
     const cp = camera.position;
     // Keep the far backdrop centred on the camera so it never gets parallax
     this.skyMesh.position.copy(cp);
@@ -775,6 +800,8 @@ export class Environment {
 const _fwd = new THREE.Vector3();
 const _up = new THREE.Vector3();
 const _right = new THREE.Vector3();
+const _shCenter = new THREE.Vector3();
+const _noSubjects = [];
 
 /**
  * Free the GPU resources of every mesh / points / line under `root`:

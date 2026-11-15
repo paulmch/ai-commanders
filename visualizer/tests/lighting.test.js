@@ -101,3 +101,57 @@ test('ring profile: dense main ring, dark division, fine ringlets, clean edges',
   for (let x = Math.floor(0.26 * w); x < Math.floor(0.54 * w); x++) rough += Math.abs(p[x * 4 + 3] - p[(x + 1) * 4 + 3]);
   assert.ok(rough / (0.28 * w) > 1.5, `fine structure (${rough / (0.28 * w)})`);
 });
+
+test('shadow focus: fits the hulls on screen, not the look-at point', async () => {
+  const { chooseShadowFocus, quantiseShadowRadius } = await import('../src/render/sunShadow.js');
+  const cam = new THREE.PerspectiveCamera(55, 16 / 9, 0.2, 800000);
+  const aim = (pos, at) => { cam.position.copy(pos); cam.lookAt(at); cam.updateMatrixWorld(); };
+  const sub = (x, y, z, r) => ({ pos: new THREE.Vector3(x, y, z), r, a: 0 });
+  const c = new THREE.Vector3();
+
+  // no hulls: the view fit around the target (round-1 behaviour)
+  aim(new THREE.Vector3(0, 0, 100), new THREE.Vector3(0, 0, 0));
+  const target = new THREE.Vector3(0, 0, 0);
+  const viewR = chooseShadowFocus(cam, target, 100, [], 0, c);
+  assert.ok(Math.abs(viewR - 100 * Math.tan(THREE.MathUtils.degToRad(27.5)) * (16 / 9) * 1.08) < 1e-9);
+  assert.ok(c.distanceTo(target) < 1e-12);
+
+  // one hull in a wide view: the box shrinks onto the hull
+  const one = [sub(5, 0, 0, 10)];
+  const r1 = chooseShadowFocus(cam, target, 100, one, 1, c);
+  assert.ok(Math.abs(r1 - 11.5) < 1e-9 && c.distanceTo(one[0].pos) < 1e-9);
+  assert.ok(r1 < viewR / 4, 'several times the resolution of the view fit');
+
+  // look-at point far behind two framed hulls (harness --camera/--target):
+  // the box covers both hulls instead of a huge square around the target
+  const far = new THREE.Vector3(0, 0, -5000);
+  aim(new THREE.Vector3(0, 0, 100), far);
+  const two = [sub(-12, 0, 0, 8), sub(14, 3, -10, 6)];
+  const r2 = chooseShadowFocus(cam, far, 5100, two, 2, c);
+  for (const s of two) assert.ok(c.distanceTo(s.pos) + s.r <= r2 + 1e-9, 'hull inside the box');
+  assert.ok(r2 < 30);
+
+  // a small distant hull, or one behind the camera, does not blow the box up
+  const mixed = [sub(0, 0, 0, 10), sub(40, 20, -900, 6), sub(0, 0, 400, 10)];
+  const r3 = chooseShadowFocus(cam, far, 5100, mixed, 3, c);
+  assert.ok(Math.abs(r3 - 11.5) < 1e-9 && c.distanceTo(mixed[0].pos) < 1e-9);
+  // ... nor does a comparable hull that is too far away to share a map
+  const apart = [sub(-150, 0, -200, 10), sub(150, 0, -200, 10)];
+  aim(new THREE.Vector3(0, 0, 100), new THREE.Vector3(0, 0, -200));
+  const r4 = chooseShadowFocus(cam, new THREE.Vector3(0, 0, -200), 300, apart, 2, c);
+  assert.ok(Math.abs(r4 - 11.5) < 1e-9);
+
+  // zoomed inside the main hull: the tighter view fit wins
+  aim(new THREE.Vector3(0, 0, 8), new THREE.Vector3(0, 0, 0));
+  const big = [sub(0, 0, 0, 12)];
+  const r5 = chooseShadowFocus(cam, target, 8, big, 1, c);
+  assert.ok(r5 < 12 && c.distanceTo(target) < 1e-12);
+
+  assert.equal(quantiseShadowRadius(11.5), 2 ** 3.75);
+  assert.equal(quantiseShadowRadius(0.1), 4);
+});
+
+test('ambient occlusion is a high-tier feature', () => {
+  assert.equal(QUALITY_PRESETS.low.ao, false);
+  assert.equal(QUALITY_PRESETS.high.ao, true);
+});
