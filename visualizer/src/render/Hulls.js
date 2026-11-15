@@ -1333,6 +1333,7 @@ export class HullKit {
     const ball = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(geoms, false), mats.hull);
     for (const g of geoms) g.dispose();
     ball.name = `hull_${name}`;
+    ball.castShadow = ball.receiveShadow = true;
     ball.position.y = s * 0.3;
     ball.rotation.order = 'YXZ';
     mount.add(ball);
@@ -1364,6 +1365,7 @@ export class HullKit {
       lamp.name = 'hull_magazine_lamp';
     }
     body.name = kind === 'rack' ? 'hull_magazine_rack' : 'hull_magazine_hatch';
+    body.castShadow = body.receiveShadow = true;
     const base = [];
     const m = new THREE.Matrix4();
     const one = new THREE.Vector3(1, 1, 1);
@@ -1428,6 +1430,7 @@ export class HullKit {
       const mesh = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(geoms, false), mats.hull);
       for (const g of geoms) g.dispose();
       mesh.name = 'hull_launch_door';
+      mesh.castShadow = mesh.receiveShadow = true;
       group.add(mesh);
       return { mesh, bank: d.bank, slide: d.slide, closed: new THREE.Vector3() };
     });
