@@ -443,7 +443,7 @@ export function buildComms(events, ids, ships, checkpoints, { from = 0, to = eve
         break;
       case 'ship_surrendered':   // fleet-battle surrender event (same row as the 1v1 `surrender`)
       case 'surrender':
-        push(e, i, { kind: 'system', tag: 'SURRENDER', faction: factionOf(ship, ships), from: d.captain_name || nameOf(ship, ships), fromId: ship, shipId: ship, text: `${nameOf(ship, ships)} surrenders.` });
+        push(e, i, { kind: 'system', tag: 'SURRENDER', faction: factionOf(ship, ships), from: d.captain_name || nameOf(ship, ships), fromId: ship, shipId: ship, text: `${nameOf(ship, ships)} surrenders${d.reason ? `: ${clip(d.reason, 200)}` : '.'}` });
         break;
       case 'draw_proposal':
         push(e, i, { kind: 'system', tag: 'DRAW OFFER', faction: factionOf(ship, ships), from: d.captain_name || nameOf(ship, ships), fromId: ship, shipId: ship, text: d.message || 'Proposes a draw.' });
@@ -717,9 +717,12 @@ export function formatLogEvent(e, ships = {}) {
       return { cls: 'kill', cat: 'kills', text: `CRIPPLED: ${n(e.ship_id)}${by}${fuse}` };
     }
     case 'ship_destroyed': return { cls: 'kill', cat: 'kills', text: `KILL: ${n(e.ship_id)} destroyed${d.cause ? ` (${readable(d.cause)})` : ''}${d.killer_id ? ` · ${n(d.killer_id)}` : ''}` };
+    case 'surrender':
+    case 'ship_surrendered':
     case 'captain_decision': {
-      const quit = surrenderCall(e);
-      return quit ? { cls: 'system', cat: 'kills', text: `SURRENDER: ${n(e.ship_id)} strikes its colours${quit.reason ? ` (${clip(quit.reason, 120)})` : ''}` } : null;
+      // The recorded event, or (fleet battles before it existed) the captain's tool call; addLogRows keeps one per ship
+      const quit = e.event_type === 'captain_decision' ? surrenderCall(e) : { reason: String(d.reason || '') };
+      return quit ? { cls: 'system', cat: 'kills', surrender: true, text: `SURRENDER: ${n(e.ship_id)} strikes its colours${quit.reason ? ` (${clip(quit.reason, 120)})` : ''}` } : null;
     }
     case 'maneuver': return { cls: 'info', cat: 'command', text: `${n(e.ship_id)}: ${d.maneuver_type}${d.throttle != null ? ` @ ${Math.round(d.throttle * 100)}%` : ''}` };
     case 'admiral_directive_failed': return { cls: 'system', cat: 'command', text: `NO DIRECTIVE ${String(d.faction || '').toUpperCase()}: admiral's directive call failed${d.reason ? ` (${clip(d.reason, 120)})` : ''}` };
@@ -743,7 +746,15 @@ function addLogRows(rows, attributed, events, ids, from, ships) {
     const e = events[i];
     if (DEATH_EVENTS.has(e.event_type)) attributed.add(e.ship_id);
     const f = formatLogEvent(e, ships);
-    if (f) rows.push({ id: ids[i], t: e.timestamp, ...f, shipId: e.ship_id || null });
+    if (!f) continue;
+    if (f.surrender) {
+      // One SURRENDER line per ship: the event and the tool call of the same surrender are one fact
+      const key = `surrender:${e.ship_id}`;
+      if (attributed.has(key)) continue;
+      attributed.add(key);
+    }
+    const { surrender, ...row } = f;
+    rows.push({ id: ids[i], t: e.timestamp, ...row, shipId: e.ship_id || null });
   }
 }
 

@@ -94,7 +94,19 @@ export function endCause(result, sides = null) {
   if (/^both fleets combat-ineffective/i.test(reason)) {
     return { side: 'both', headline: 'NEITHER FLEET CAN STILL FIGHT', detail: reason.replace(/^.*?on points:\s*/i, 'on points: ') };
   }
-  // "<Side> fleet eliminated" also covers a fleet whose last ships surrendered
+  // The engine says so itself (pass-5 end reasons): "<Side> fleet surrendered (N ships struck
+  // their colours)" / "<Side> fleet destroyed or surrendered (D destroyed, S surrendered)"
+  const sur = /^(alpha|beta) fleet (?:destroyed or )?surrendered \((?:(\d+) destroyed, )?(\d+) (?:ships? struck|surrendered)/i.exec(reason);
+  if (sur) {
+    const side = sur[1].toLowerCase();
+    const n = Number(sur[3]);
+    const s = sides?.[side];
+    return { side, headline: `${side.toUpperCase()} FLEET SURRENDERED`,
+      detail: `${n} ship${n === 1 ? '' : 's'} struck ${n === 1 ? 'its' : 'their'} colours${sur[2] ? `, ${sur[2]} destroyed` : ''}`,
+      // What the fitting data adds to the recorded reason
+      note: s?.fit && s.alive > 0 && s.armed === 0 ? 'none able to deal damage' : '' };
+  }
+  // Older recordings: "<Side> fleet eliminated" also covers a fleet whose last ships surrendered
   // (the engine counts them out) - typically because none could still deal
   // damage. The recording shows which: say so. Never relabels any other verdict.
   if (!/eliminated|surrender/i.test(reason)) return null;
@@ -297,7 +309,7 @@ export class ResultBanner {
     const cause = endCause(result, sides);
     const causeEl = r.querySelector('[data-cause]');
     if (causeEl) {
-      setText(causeEl, cause ? (cause.inferred ? `${cause.headline} · ${cause.detail}` : cause.headline) : '');
+      setText(causeEl, cause ? (cause.inferred ? `${cause.headline} · ${cause.detail}` : cause.note ? `${cause.headline} · ${cause.note}` : cause.headline) : '');
       causeEl.hidden = !cause;
       causeEl.dataset.side = cause?.side || '';
     }

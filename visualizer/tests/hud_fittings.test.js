@@ -628,6 +628,47 @@ test('plume events stream like everything else, and recordings without them are 
   assert.ok(Object.values(plain.fittings.states).every(list => list.every(st => st.crew === 'fit' && st.dose === 0)));
 });
 
+test('recorded fleet surrenders and the truthful end reasons (pass-5 engine) are used as recorded', () => {
+  // The doc's example: three corvettes surrender at 150 s, each with its event and its tool call
+  const evs = events().filter(e => e.event_type !== 'battle_end');
+  let seq = 9500;
+  const reason = 'all weapons out, no armed ship left to protect';
+  for (const id of ['beta_1', 'beta_2']) {
+    evs.push({ event_id: `q${++seq}`, sequence: seq, timestamp: 150, event_type: 'captain_decision', ship_id: id, data: { tool_calls: [{ name: 'surrender', arguments: { reason } }] } });
+    evs.push({ event_id: `q${++seq}`, sequence: seq, timestamp: 150, event_type: 'surrender', ship_id: id,
+      data: { captain_name: 'Captain X', faction: 'beta', reason, hull_pct: 100.0, could_deal_damage: false } });
+  }
+  evs.push({ event_id: 'qend', sequence: 9999, timestamp: 150, event_type: 'battle_end', ship_id: null, data: { winner: 'alpha', reason: 'Beta fleet surrendered (2 ships struck their colours)' } });
+  const hud = hudOf(evs);
+  assert.deepEqual(hud.surrenders.map(s => [s.t, s.shipId, s.reason]), [[150, 'beta_1', reason], [150, 'beta_2', reason]]);
+  const rows = hud.comms.filter(r => r.tag === 'SURRENDER');
+  assert.deepEqual(rows.map(r => r.shipId), ['beta_1', 'beta_2'], 'one row per ship: the event, not event + tool call');
+  assert.match(rows[0].text, /OCS Sovereign-1 surrenders: all weapons out/);
+  assert.equal(hud.log.filter(r => r.text.startsWith('SURRENDER:')).length, 2, 'one log line per ship');
+  assert.ok(hud.log.every(r => !('surrender' in r)));
+  const states = { alpha_1: { hull: 90 }, alpha_2: { hull: 100 }, alpha_3: { destroyed: true }, beta_1: { hull: 80 }, beta_2: { hull: 70 } };
+  const sides = computeSides(states, [], ships, hud, 150);
+  assert.deepEqual([sides.beta.alive, sides.beta.surrendered, sides.beta.armed], [2, 2, 0]);
+  assert.deepEqual(endCause(hud.result, sides), { side: 'beta', headline: 'BETA FLEET SURRENDERED', detail: '2 ships struck their colours', note: 'none able to deal damage' });
+  assert.deepEqual(endCause({ winner: 'alpha', reason: 'Beta fleet destroyed or surrendered (5 destroyed, 3 surrendered)' }),
+    { side: 'beta', headline: 'BETA FLEET SURRENDERED', detail: '3 ships struck their colours, 5 destroyed', note: '' });
+  assert.equal(endCause({ winner: 'beta', reason: 'Alpha fleet surrendered (1 ship struck its colours)' }).detail, '1 ship struck its colours');
+  assert.equal(endCause({ winner: null, reason: 'Mutual destruction/surrender: Alpha fleet eliminated; Beta fleet eliminated' }), null);
+  const doc = new FakeDocument();
+  const root = build(doc, ['div', { class: 'result-banner hidden' }, ['button', { 'data-close': '' }], ['span', { 'data-kicker': '' }], ['strong', { 'data-title': '' }],
+    ['span', { 'data-cause': '', hidden: '' }], ['span', { 'data-reason': '' }], ['div', { 'data-tally': '' }]]);
+  new ResultBanner({ root, doc }).update(true, hud.result, sides, 150);
+  assert.equal(root.querySelector('[data-cause]').textContent, 'BETA FLEET SURRENDERED · none able to deal damage');
+  assert.equal(root.querySelector('[data-reason]').textContent, 'Beta fleet surrendered (2 ships struck their colours)');
+  // Streamed: same rows and log
+  const loader = loaderOf([]);
+  buildHudIndex(loader);
+  let live;
+  for (const e of evs) { loader.events.push(e); live = appendHudIndex(loader, { events: [e], frames: [] }); }
+  assert.deepStrictEqual(live.log, hud.log);
+  assert.deepStrictEqual(live.surrenders, hud.surrenders);
+});
+
 test('a recorded ship_surrendered event counts like a surrender', () => {
   const evs = events().filter(e => e.event_type !== 'battle_end');
   evs.push({ event_id: 'ss1', sequence: 9001, timestamp: 140, event_type: 'ship_surrendered', ship_id: 'beta_2', data: { reason: 'all weapons out' } });

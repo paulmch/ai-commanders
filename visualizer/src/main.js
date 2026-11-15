@@ -1319,7 +1319,7 @@ class BattleVisualizer {
     // A battle that ended because a side could no longer deal damage says so in words (as the replay banner does)
     // (same wording as the replay banner, including a fleet whose last ships surrendered or cannot fight)
     const cause = endCause({ winner: verdict?.kind === 'victory' ? verdict.faction : null, reason: verdict?.detail }, this.lastSides);
-    if (cause) verdict = { ...verdict, detail: `${cause.headline} · ${cause.detail}${cause.inferred && verdict.detail ? ` (${verdict.detail})` : ''}` };
+    if (cause) verdict = { ...verdict, detail: `${cause.headline} · ${cause.detail}${cause.note ? `, ${cause.note}` : ''}${cause.inferred && verdict.detail ? ` (${verdict.detail})` : ''}` };
     const spend = live.spend;
     const billing = live.provenance?.billing || (spend ? {
       reported_cost_usd: spend.reported_usd, spend_limit_usd: spend.limit_usd, calls: spend.calls,
