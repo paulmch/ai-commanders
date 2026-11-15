@@ -142,12 +142,18 @@ class Vector3D:
 
     def angle_to(self, other: Vector3D) -> float:
         """Angle between vectors in radians."""
-        dot = self.dot(other)
-        mags = self.magnitude * other.magnitude
+        dot = self.x * other.x + self.y * other.y + self.z * other.z
+        mags = (math.sqrt(self.x**2 + self.y**2 + self.z**2)
+                * math.sqrt(other.x**2 + other.y**2 + other.z**2))
         if mags == 0:
             return 0.0
         # Clamp to avoid floating point errors with acos
-        cos_angle = max(-1.0, min(1.0, dot / mags))
+        # (max(-1.0, min(1.0, c)) spelled out, same result for every c)
+        cos_angle = dot / mags
+        if not cos_angle < 1.0:
+            cos_angle = 1.0
+        if not cos_angle > -1.0:
+            cos_angle = -1.0
         return math.acos(cos_angle)
 
     def rotate_around_axis(self, axis: Vector3D, angle_rad: float) -> Vector3D:

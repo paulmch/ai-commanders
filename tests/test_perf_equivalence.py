@@ -352,3 +352,214 @@ class TestMicroStepFastPath:
         assert sim._coast_micro_steps(f, ship, start, 1.0, 20001.0, 0.001, 5000) == untouched
         ship.geometry = None
         assert sim._coast_micro_steps(flight(closing), ship, start, 1.0, 20001.0, 0.001, 5000) == untouched
+
+
+# ---------------------------------------------------------------------------
+# Point-defense geometry helpers
+# ---------------------------------------------------------------------------
+
+def reference_threatens_ship(threat_pos, threat_vel, ship_pos, ship_vel=None,
+                             threat_range_m=500_000):
+    distance = threat_pos.distance_to(ship_pos)
+    if distance > threat_range_m:
+        return False
+    rel_vel = threat_vel - ship_vel if ship_vel is not None else threat_vel
+    to_target = ship_pos - threat_pos
+    return rel_vel.dot(to_target) > 0
+
+
+def reference_on_collision_course(obj_pos, obj_vel, target_pos, target_vel,
+                                  miss_threshold_m=5000.0):
+    rel_pos = obj_pos - target_pos
+    rel_vel = obj_vel - target_vel
+    rel_speed_sq = rel_vel.dot(rel_vel)
+    if rel_speed_sq < 1e-10:
+        return rel_pos.magnitude < miss_threshold_m
+    t_cpa = -rel_pos.dot(rel_vel) / rel_speed_sq
+    if t_cpa < 0:
+        return False
+    cpa_pos = rel_pos + rel_vel * t_cpa
+    return cpa_pos.magnitude < miss_threshold_m
+
+
+def reference_closing_speed(obj_pos, obj_vel, target_pos, target_vel):
+    rel_pos = target_pos - obj_pos
+    rel_vel = obj_vel - target_vel
+    if rel_pos.magnitude < 1.0:
+        return 0.0
+    return rel_vel.dot(rel_pos.normalized())
+
+
+class TestPdGeometryScalar:
+    def _cases(self, seed, n):
+        rng = random.Random(seed)
+        for i in range(n):
+            scale = rng.choice([0.3, 2e3, 6e3, 3e5, 6e5, 2e6])
+            target = rand_vec(rng, 1e6)
+            obj = target + rand_vec(rng, scale)
+            tv = rand_vec(rng, 3e4)
+            ov = tv + rand_vec(rng, rng.choice([1e-7, 50.0, 9e3]))
+            if i % 3 == 0:      # aimed at (or directly away from) the target
+                ov = tv + (target - obj).normalized() * rng.choice([-7e3, 7e3])
+                ov = ov + rand_vec(rng, rng.choice([0.0, 5.0, 200.0]))
+            yield obj, ov, target, tv
+
+    def test_threatens_ship(self):
+        sim = CombatSimulation(seed=1)
+        seen = set()
+        for obj, ov, target, tv in self._cases(6, 20000):
+            for ship_vel in (tv, None):
+                got = sim._threatens_ship(obj, ov, target, ship_vel)
+                assert got is reference_threatens_ship(obj, ov, target, ship_vel)
+                seen.add(got)
+        assert sim._threatens_ship(Vector3D(0, 0, 0), Vector3D(1, 0, 0), Vector3D(900.0, 0, 0),
+                                   None, threat_range_m=800.0) is False
+        assert seen == {True, False}
+
+    def test_on_collision_course(self):
+        sim = CombatSimulation(seed=1)
+        seen = set()
+        for obj, ov, target, tv in self._cases(7, 20000):
+            got = sim._on_collision_course(obj, ov, target, tv)
+            assert got is reference_on_collision_course(obj, ov, target, tv)
+            seen.add(got)
+        assert seen == {True, False}
+
+    def test_closing_speed(self):
+        sim = CombatSimulation(seed=1)
+        zero = False
+        for obj, ov, target, tv in self._cases(8, 20000):
+            got = sim._calculate_closing_speed(obj, ov, target, tv)
+            assert bits(got) == bits(reference_closing_speed(obj, ov, target, tv))
+            zero = zero or (target - obj).magnitude < 1.0
+        assert zero
+
+
+class TestAngleToInlined:
+    def test_bit_identical_to_chained_form(self):
+        def reference(a, b):
+            dot = a.dot(b)
+            mags = a.magnitude * b.magnitude
+            if mags == 0:
+                return 0.0
+            return math.acos(max(-1.0, min(1.0, dot / mags)))
+
+        rng = random.Random(9)
+        for i in range(20000):
+            a = rand_vec(rng, 10 ** rng.uniform(-3, 7))
+            b = rand_vec(rng, 10 ** rng.uniform(-3, 7))
+            if i % 4 == 0:
+                b = a * rng.choice([1.0, -1.0, 3.7, -1e-3])      # (anti)parallel: clamp
+            if i % 97 == 0:
+                b = Vector3D(0.0, 0.0, 0.0)
+            assert bits(a.angle_to(b)) == bits(reference(a, b))
+        nan = Vector3D(float("nan"), 1.0, 0.0)
+        assert bits(nan.angle_to(Vector3D(1.0, 0.0, 0.0))) == bits(
+            reference(nan, Vector3D(1.0, 0.0, 0.0)))
+
+
+# ---------------------------------------------------------------------------
+# PRESENT scoring: memoised armor trial
+# ---------------------------------------------------------------------------
+
+def reference_trial(section, ke_gj):
+    """What _presentation_score did inline: trial the impact on a deep copy."""
+    import copy
+    trial = copy.deepcopy(section)
+    return trial.apply_energy_damage(energy_gj=ke_gj, flat_chipping=0.3, impact_area_m2=0.1)[1]
+
+
+class TestPresentationTrialMemo:
+    def _section(self, ship, name="lateral"):
+        return ship.armor.get_section(name)
+
+    def test_matches_direct_trial_and_leaves_section_untouched(self):
+        sim = CombatSimulation(seed=1)
+        rng = random.Random(10)
+        for ship_type in ("corvette", "destroyer", "battleship"):
+            ship = _hull(ship_type)
+            for name in ("nose", "lateral", "tail"):
+                section = self._section(ship, name)
+                before = dict(vars(section))
+                for _ in range(40):
+                    ke = rng.choice([0.0, 0.5, 3.0, 12.0, 80.0, 900.0]) * rng.uniform(0.5, 1.5)
+                    for _repeat in range(2):          # second call is served from the memo
+                        assert bits(sim._trial_energy_to_hull_gj(section, ke)) == bits(
+                            reference_trial(section, ke))
+                assert vars(section) == before
+        assert sim._trial_hull_cache            # it did memoise
+
+    @pytest.mark.parametrize("field,change", [
+        ("thickness_cm", lambda v: v * 0.4),               # ablation
+        ("thickness_cm", lambda v: 0.0),                   # breached
+        ("chipping_fraction", lambda v: 0.35),
+        ("kinetics_resist", lambda v: 0.1),
+        ("chip_resist", lambda v: 0.9),
+        ("baryonic_half_cm", lambda v: v * 3.0),
+        ("heat_of_vaporization_mj_kg", lambda v: v * 0.25),
+        ("density", lambda v: v * 0.5),
+    ])
+    def test_every_section_attribute_is_part_of_the_key(self, field, change):
+        """Invalidation: a memoised answer is never served for armor that has
+        changed - whatever attribute changed."""
+        sim = CombatSimulation(seed=1)
+        section = self._section(_hull("cruiser"))
+        ke = 40.0
+        first = sim._trial_energy_to_hull_gj(section, ke)
+        entries = len(sim._trial_hull_cache)
+        setattr(section, field, change(getattr(section, field)))
+        after = sim._trial_energy_to_hull_gj(section, ke)
+        assert len(sim._trial_hull_cache) == entries + 1          # a new key, not a hit
+        assert bits(after) == bits(reference_trial(section, ke))
+        assert bits(first) == bits(sim._trial_hull_cache[next(iter(sim._trial_hull_cache))])
+
+    def test_real_damage_between_calls_is_seen(self):
+        sim = CombatSimulation(seed=1)
+        section = self._section(_hull("destroyer"))
+        intact = sim._trial_energy_to_hull_gj(section, 60.0)
+        for _ in range(6):                                   # real hits ablate the plate
+            section.apply_energy_damage(energy_gj=60.0, flat_chipping=0.3, impact_area_m2=0.1)
+            assert bits(sim._trial_energy_to_hull_gj(section, 60.0)) == bits(
+                reference_trial(section, 60.0))
+        assert sim._trial_energy_to_hull_gj(section, 60.0) > intact
+
+    def test_memo_is_per_simulation_and_bounded(self):
+        a, b = CombatSimulation(seed=1), CombatSimulation(seed=1)
+        section = self._section(_hull("destroyer"))
+        a._trial_energy_to_hull_gj(section, 5.0)
+        assert "_trial_hull_cache" not in vars(b)
+        a._TRIAL_HULL_CACHE_MAX = 16
+        for i in range(200):
+            assert bits(a._trial_energy_to_hull_gj(section, 1.0 + i)) == bits(
+                reference_trial(section, 1.0 + i))
+            assert len(a._trial_hull_cache) <= 16
+
+    def test_unkeyable_section_is_trialled_directly(self):
+        sim = CombatSimulation(seed=1)
+        section = self._section(_hull("destroyer"))
+        section.notes = ["unhashable"]                       # a list defeats the key
+        assert bits(sim._trial_energy_to_hull_gj(section, 30.0)) == bits(
+            reference_trial(section, 30.0))
+        assert not sim._trial_hull_cache
+
+    def test_presentation_score_unchanged_through_armor_damage(self):
+        """_presentation_score on one simulation, before and after the armor
+        is shot up, equals the same scoring done with fresh deep-copy trials
+        (a second simulation whose memo is bypassed)."""
+        sim, fresh = CombatSimulation(seed=1), CombatSimulation(seed=1)
+        fresh._trial_energy_to_hull_gj = reference_trial
+        ship = _hull("cruiser", forward=Vector3D(0.3, -0.8, 0.52).normalized())
+        rng = random.Random(11)
+        threats = []
+        for _ in range(6):
+            bearing = rand_vec(rng, 1.0).normalized()
+            threats.append({"bearing": bearing, "ke_gj": rng.uniform(5.0, 120.0),
+                            "rel_vel": bearing * -rng.uniform(4e3, 1.5e4) + rand_vec(rng, 800.0)})
+        attitudes = [rand_vec(rng, 1.0).normalized() for _ in range(40)]
+        for round_ in range(4):
+            for forward in attitudes:
+                assert sim._presentation_score(ship, forward, threats) == \
+                    fresh._presentation_score(ship, forward, threats)
+            for name in ("nose", "lateral", "tail"):
+                self._section(ship, name).apply_energy_damage(
+                    energy_gj=70.0 * (round_ + 1), flat_chipping=0.3, impact_area_m2=0.1)

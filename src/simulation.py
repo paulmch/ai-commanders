@@ -3750,18 +3750,61 @@ class CombatSimulation:
             weighted_thickness += t['ke_gj'] * section.thickness_cm
 
             # Simulate the impact on a copy of the section (same parameters
-            # as the kinetic phase of _resolve_torpedo_hit).
-            trial = copy.deepcopy(section)
-            _, to_hull_gj, _ = trial.apply_energy_damage(
-                energy_gj=t['ke_gj'],
-                flat_chipping=0.3,
-                impact_area_m2=0.1,
-            )
-            total_gj += to_hull_gj
+            # as the kinetic phase of _resolve_torpedo_hit); the trial is
+            # memoised by value, see _trial_energy_to_hull_gj.
+            total_gj += self._trial_energy_to_hull_gj(section, t['ke_gj'])
 
         # Round the leading components so float noise cannot defeat the
         # tie-breaks (1e-3 GJ / 0.1 energy-weighted-cm resolution).
         return (round(total_gj, 3), round(-weighted_thickness, 1), center_distance)
+
+    #: Entries kept by _trial_energy_to_hull_gj before the memo is dropped.
+    _TRIAL_HULL_CACHE_MAX = 4096
+
+    def _trial_energy_to_hull_gj(self, section: Any, ke_gj: float) -> float:
+        """
+        Energy (GJ) that reaches the hull if a torpedo carrying ``ke_gj``
+        struck ``section`` as it stands now: the impact is trialled on a copy
+        (same parameters as the kinetic phase of _resolve_torpedo_hit), the
+        section itself is not touched.
+
+        _presentation_score asks this for every candidate attitude x every
+        terminal torpedo, but the answer depends only on which section is
+        struck and with how much energy - a ship weighing 50 attitudes
+        against 8 torpedoes repeats the same 24 trials 400 times, every tick,
+        and again in every prediction shadow. So the trial is memoised.
+
+        The memo is keyed by VALUE: the section's class and every one of its
+        attributes (thickness, chipping, material constants, ...) plus the
+        energy. Nothing has to invalidate it - armor that is ablated, chipped
+        or replaced simply produces a different key - and a stale entry can
+        never be returned (tests/test_perf_equivalence.py mutates each
+        input). It lives on the simulation instance (the prediction shadow
+        gets its own) and is dropped when it grows past
+        _TRIAL_HULL_CACHE_MAX entries. A section that cannot be keyed (no
+        instance dict, unhashable attribute) is trialled directly.
+        """
+        cache = self.__dict__.get('_trial_hull_cache')
+        if cache is None:
+            cache = self.__dict__['_trial_hull_cache'] = {}
+        try:
+            key = (type(section), ke_gj, tuple(vars(section).items()))
+            cached = cache.get(key)
+        except TypeError:
+            key = cached = None
+        if cached is not None:
+            return cached
+        trial = copy.deepcopy(section)
+        _, to_hull_gj, _ = trial.apply_energy_damage(
+            energy_gj=ke_gj,
+            flat_chipping=0.3,
+            impact_area_m2=0.1,
+        )
+        if key is not None:
+            if len(cache) >= self._TRIAL_HULL_CACHE_MAX:
+                cache.clear()
+            cache[key] = to_hull_gj
+        return to_hull_gj
 
     def _expected_presentation_damage_gj(
         self,
@@ -7206,15 +7249,24 @@ class CombatSimulation:
         threat_range_m: float = 500_000
     ) -> bool:
         """Check if a threat is approaching a ship (in the ship's frame)."""
-        distance = threat_pos.distance_to(ship_pos)
+        # Scalar form (PD calls this per ship x threat x ally every tick);
+        # the same operations as distance_to / the relative velocity /
+        # _is_closing, in the same order.
+        tx = ship_pos.x - threat_pos.x
+        ty = ship_pos.y - threat_pos.y
+        tz = ship_pos.z - threat_pos.z
+        distance = math.sqrt((threat_pos.x - ship_pos.x)**2 + (threat_pos.y - ship_pos.y)**2
+                             + (threat_pos.z - ship_pos.z)**2)
         if distance > threat_range_m:
             return False
         # Closing is a RELATIVE-velocity question. Testing the threat's world
         # velocity made escort PD frame-dependent: with a common 30 km/s
         # fleet drift an escort stopped listing a torpedo bearing down on
         # its neighbour at all.
-        rel_vel = threat_vel - ship_vel if ship_vel is not None else threat_vel
-        return self._is_closing(threat_pos, rel_vel, ship_pos)
+        if ship_vel is not None:
+            return ((threat_vel.x - ship_vel.x) * tx + (threat_vel.y - ship_vel.y) * ty
+                    + (threat_vel.z - ship_vel.z) * tz) > 0
+        return (threat_vel.x * tx + threat_vel.y * ty + threat_vel.z * tz) > 0
 
     def _on_collision_course(
         self,
@@ -7230,27 +7282,34 @@ class CombatSimulation:
         Uses closest point of approach (CPA) calculation.
         The 5km threshold accounts for hit probability at close range.
         """
+        # Scalar form of the Vector3D expressions, operation for operation
+        # (PD calls this per ship x slug x ally every tick).
         # Relative position and velocity
-        rel_pos = obj_pos - target_pos
-        rel_vel = obj_vel - target_vel
+        rx = obj_pos.x - target_pos.x
+        ry = obj_pos.y - target_pos.y
+        rz = obj_pos.z - target_pos.z
+        vx = obj_vel.x - target_vel.x
+        vy = obj_vel.y - target_vel.y
+        vz = obj_vel.z - target_vel.z
 
-        rel_speed_sq = rel_vel.dot(rel_vel)
+        rel_speed_sq = vx * vx + vy * vy + vz * vz
         if rel_speed_sq < 1e-10:
             # Not moving relative to each other
-            return rel_pos.magnitude < miss_threshold_m
+            return math.sqrt(rx**2 + ry**2 + rz**2) < miss_threshold_m
 
         # Time to closest point of approach
-        t_cpa = -rel_pos.dot(rel_vel) / rel_speed_sq
+        t_cpa = -(rx * vx + ry * vy + rz * vz) / rel_speed_sq
 
         if t_cpa < 0:
             # CPA is in the past, object moving away
             return False
 
         # Position at CPA
-        cpa_pos = rel_pos + rel_vel * t_cpa
-        miss_distance = cpa_pos.magnitude
+        cx = rx + vx * t_cpa
+        cy = ry + vy * t_cpa
+        cz = rz + vz * t_cpa
 
-        return miss_distance < miss_threshold_m
+        return math.sqrt(cx**2 + cy**2 + cz**2) < miss_threshold_m
 
     def _calculate_closing_speed(
         self,
@@ -7260,15 +7319,20 @@ class CombatSimulation:
         target_vel: Vector3D
     ) -> float:
         """Calculate closing speed between object and target."""
-        rel_pos = target_pos - obj_pos
-        rel_vel = obj_vel - target_vel
-        distance = rel_pos.magnitude
+        # Scalar form of: rel_pos = target_pos - obj_pos; rel_vel = obj_vel -
+        # target_vel; rel_vel.dot(rel_pos.normalized()) - same operations.
+        rx = target_pos.x - obj_pos.x
+        ry = target_pos.y - obj_pos.y
+        rz = target_pos.z - obj_pos.z
+        distance = math.sqrt(rx**2 + ry**2 + rz**2)
 
         if distance < 1.0:
             return 0.0
 
         # Closing speed is component of relative velocity toward target
-        return rel_vel.dot(rel_pos.normalized())
+        return ((obj_vel.x - target_vel.x) * (rx / distance)
+                + (obj_vel.y - target_vel.y) * (ry / distance)
+                + (obj_vel.z - target_vel.z) * (rz / distance))
 
     def _is_closing(self, pos: Vector3D, vel: Vector3D, target_pos: Vector3D) -> bool:
         """Check if object is closing on target."""
