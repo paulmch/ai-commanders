@@ -770,3 +770,12 @@ def test_a_coasting_gun_ship_holds_its_aspect_not_nose_on():
     h = m.heading_direction
     off = math.degrees(math.acos(h["x"] / math.sqrt(h["x"] ** 2 + h["y"] ** 2 + h["z"] ** 2)))
     assert off == pytest.approx(T.gun_aspect_deg("cruiser"), abs=0.5)
+
+
+def test_capital_hulls_padlock_instead_of_holding_an_aspect():
+    sim = CombatSimulation(seed=12, time_step=1.0)
+    _ship(sim, "me", "battleship", "alpha", (0, 0, 0), vel_kps=(1.0, 0, 0))
+    _ship(sim, "foe", "battleship", "beta", (120, 0, 0), fwd=(-1, 0, 0))
+    assert T.gun_aspect_deg("battleship") > 0.0          # the data has a gain...
+    m = _maneuver(_captain("battleship").decide("me", sim))
+    assert m.maneuver_type == ManeuverType.PADLOCK      # ...a slow hull cannot hold it

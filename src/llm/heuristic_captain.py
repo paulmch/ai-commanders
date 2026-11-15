@@ -475,7 +475,11 @@ class HeuristicCaptain(LLMCaptain):
         for a fixed attitude to keep it inside the nose-armour arc."""
         aspect = tactics.gun_aspect_deg(getattr(ship, "ship_type", ""))
         rng_km = ship.position.distance_to(face.position) / 1000.0
-        if aspect <= 0.0 or rng_km < tactics.ASPECT_MIN_RANGE_KM:
+        if aspect <= 0.0 or rng_km < tactics.ASPECT_MIN_RANGE_KM or tactics.is_capital(ship):
+            # Capital hulls PADLOCK: a fixed 30 s attitude drifts off the
+            # target and a slow hull (and its slow roll) never re-settles -
+            # measured on the pass-5 masks, battleships fired ~5 % fewer
+            # rounds at their aspect than PADLOCKed nose-on.
             return order("PADLOCK", face, 1.0)
         d = tactics.aspect_direction(ship, face, aspect)
         args = {"maneuver_type": "HEADING", "throttle": 0.0,
