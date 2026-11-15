@@ -32,9 +32,9 @@ filters/scrolling, and for `command-net.png` a 2× device-scale crop.
 
   ```bash
   uv run python scripts/run_draft_battle.py --auto-draft --no-admirals --trace \
-    --seed 0 --budget 200 --time-limit 420    # -> stage as showcase_s0_200pt.json
+    --seed 0 --budget 200 --time-limit 420 --doctrine legacy  # -> showcase_s0_200pt.json
   uv run python scripts/run_draft_battle.py --auto-draft --no-admirals --trace \
-    --seed 7 --budget 200 --time-limit 420    # -> stage as showcase_s7_200pt.json
+    --seed 7 --budget 200 --time-limit 420 --doctrine legacy  # -> showcase_s7_200pt.json
   ```
 
 Stage recordings in `visualizer/public/recordings/` as described in the

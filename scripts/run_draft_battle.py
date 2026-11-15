@@ -97,6 +97,8 @@ def main() -> int:
                              "(data/notebooks) into each model's prompts")
     parser.add_argument("--quiet", "-q", action="store_true", help="Quiet mode")
     args = parser.parse_args()
+    if args.mirror_draft and not args.auto_draft:
+        parser.error("--mirror-draft needs --auto-draft (it gives both sides the same auto-draft)")
 
     verbose = not args.quiet
     fleet_data = load_fleet_data()
