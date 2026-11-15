@@ -41,7 +41,7 @@ filters/scrolling, and for `command-net.png` a 2× device-scale crop.
   [`docs/pass-5-recording-additions.md`](../../pass-5-recording-additions.md))
 - Pass-5 plume demo: `p5_plume_demo.json` (`scripts/generate_test_battle.py plume_wash`,
   see [`docs/pass-5-recording-additions.md`](../../pass-5-recording-additions.md))
-- Pass-5 tactics showcase: `p5_tactics_s4.json` (heuristic captains, `tactical`
+- Pass-5 tactics showcase: `p5_readme_torpedo_strike.json` (heuristic captains, `tactical`
   doctrine)
 - Showcase s0 / s7: free heuristic draft battles recorded on the pass-4 engine
   with the commands below. The frames here are taken from those pass-4
@@ -125,7 +125,7 @@ $SNAP --recording p5_plume_demo.json --time 55 --focus alpha_2 --dist 2.4 --az 3
   --hide-ui --eval "$TRACKS_OFF" --out plume-wash.png
 
 # torpedo-strike.png
-$SNAP --recording p5_tactics_s4.json --time 100.5 --focus beta_1 --dist 2.6 --az 35 --el 18 \
+$SNAP --recording p5_readme_torpedo_strike.json --time 100.5 --focus beta_1 --dist 2.6 --az 35 --el 18 \
   --hide-ui --eval "$TRACKS_OFF" --out torpedo-strike.png
 ```
 
@@ -148,3 +148,8 @@ starts (the splash still up, both fleets committed); for
 legend collapsed, and the frame taken 1.5 s after the deliberation card for
 checkpoint 5 appears. The live pacing and deliberation progress come from the
 fake server's replay of the recording, not from a running battle.
+
+`p5_readme_torpedo_strike.json` is a frozen copy of the tactical-doctrine showcase battle
+(`run_draft_battle.py --auto-draft --no-admirals --trace --seed 4 --budget 200 --time-limit 600`)
+as recorded on November 15, 2026, before later engine and price changes; re-running the command
+on a later engine gives a different battle.

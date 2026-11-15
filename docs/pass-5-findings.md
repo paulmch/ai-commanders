@@ -39,7 +39,9 @@ winner in every probe; rotating the battlefield 180 degrees changed nothing.
 holds ten exact mirror tests, seven of which fail on the old engine, and `scripts/mirror_probe.py`
 checks a full battle tick by tick.
 
-**After the fix:** 838 fresh mirror battles on the merged engine gave alpha 227, beta 234, draws
+**After the fix:** 838 fresh mirror battles on the merged engine (before the drive interlock, the
+spent-torpedo cull and the final surrender rule were merged; an exact flat-RNG mirror check on the
+final code, three fleet types, still ends 289.9 vs 289.9, 293.3 vs 293.3 and 320.0 vs 320.0) gave alpha 227, beta 234, draws
 377 (alpha share of decisive battles 0.49, 95 % interval 0.45-0.54). No roster is one-sided
 beyond chance (smallest per-roster p = 0.18 before any correction for eight rosters), and paired
 survivors, damage, hits and torpedo hits show no side difference. With every random roll forced to
@@ -166,7 +168,12 @@ alters battles.
   the scoreboard counts working guns and tubes; kills carry what the blast caught; the result
   banner says why a battle ended. `admiral_directive_failed` events, a gap from pass 4, are shown.
 
-Viewer tests rose from 276 to 334; the Python suite from about 2,430 to 2,745.
+- **Director.** Key A films a replay from a shot list built out of the recording (salvo over the
+  shooter's shoulder, torpedo run-in, pull-back sized from the blast's real extent), with shake on
+  battle time; `[` and `]` jump between highlights; `scripts/viewer_clip.py` renders a time range
+  to MP4 or GIF.
+
+Viewer tests rose from 276 to 356; the Python suite from about 2,430 to 2,829.
 
 ## Balance: prices cannot fix the torpedo problem
 
