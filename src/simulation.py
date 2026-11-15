@@ -1676,9 +1676,17 @@ class CombatSimulation:
                     orders = command.get('orders', [command.get('order')])
                     keys = ['weapon:' + slot for slot, order in ship.weapons_orders.items()
                             if order in orders]
+            # One 'superseded' per replaced command, once it governs nothing:
+            # a weapons order binds one key per slot, so a 3-gun ship used to
+            # log the same command superseded three times.
+            replaced = []
             for key in keys:
                 previous = self.evidence.bind(ship_id, key, cid)
-                if previous and previous != cid:
+                if previous and previous != cid and previous not in replaced:
+                    replaced.append(previous)
+            still_bound = set(self.evidence.active.get(ship_id, {}).values())
+            for previous in replaced:
+                if previous not in still_bound:
                     self._command_status(ship_id, previous, 'superseded')
         return success
 
