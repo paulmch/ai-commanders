@@ -595,3 +595,43 @@ def test_fixture_and_calibration_scripts_default_to_legacy():
     text = (root / "calibrate_torpedo_cost.py").read_text()
     assert '"--doctrine", choices=("legacy", "tactical"), default="legacy"' in text
     assert 'heuristic_doctrine={"alpha": task.get("doctrine", "legacy")' in text
+
+
+def test_inbound_torpedo_puts_the_evade_overlay_on_the_order(monkeypatch):
+    sim = CombatSimulation(seed=9, time_step=1.0)
+    _ship(sim, "me", "destroyer", "alpha", (0, 0, 0))
+    _ship(sim, "foe", "destroyer", "beta", (500, 0, 0), fwd=(-1, 0, 0))
+    captain = _captain("destroyer")
+    assert _maneuver(captain.decide("me", sim)).evade is None
+    monkeypatch.setattr(HeuristicCaptain, "_torpedo_threat", lambda self, *a: True)
+    m = _maneuver(_captain("destroyer").decide("me", sim))
+    assert m.maneuver_type == ManeuverType.INTERCEPT and m.evade == "full"
+
+
+def test_the_formation_throttle_is_what_the_ship_flies():
+    sim = CombatSimulation(seed=9, time_step=1.0)
+    _ship(sim, "a1", "destroyer", "alpha", (0, 0, 0))
+    _ship(sim, "a2", "frigate", "alpha", (0, 20, 0))
+    _ship(sim, "b1", "destroyer", "beta", (500, 0, 0), fwd=(-1, 0, 0))
+    m = _maneuver(_captain("frigate", name="a2").decide("a2", sim))
+    want = T.fleet_plan(sim, "alpha").formation_throttle["a2"]
+    assert want == pytest.approx(2.0 / 3.0, abs=0.01)       # a 3 g frigate waits for a 2 g destroyer
+    assert m.maneuver_type == ManeuverType.INTERCEPT and m.throttle == pytest.approx(want)
+
+
+# Golden: the legacy doctrine is the pass-4 captain bit for bit (the
+# fire-control fixture's heuristic battles were flown with it). A change to
+# the ENGINE moves this hash too - then re-pin it in the same commit; a
+# change that moves it without an engine change has altered legacy.
+LEGACY_GOLDEN_SHA256 = "9500f81e054473020b01aa462e8be4705706026de3dfb20bb51e8d3bb850d7b0"
+
+
+def test_legacy_battle_event_stream_is_pinned(tmp_path):
+    import hashlib
+    _, rec = _small_battle(tmp_path, {"alpha": DOCTRINE_LEGACY, "beta": DOCTRINE_LEGACY},
+                           time_limit=150.0)
+    stream = [(e["timestamp"], e["event_type"], e["ship_id"],
+               json.dumps(e["data"], sort_keys=True, default=str))
+              for e in rec["events"] if e["event_type"] not in ("battle_start", "battle_end")]
+    digest = hashlib.sha256(json.dumps(stream).encode()).hexdigest()
+    assert digest == LEGACY_GOLDEN_SHA256, digest
