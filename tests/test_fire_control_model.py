@@ -105,11 +105,18 @@ class TestDisplacementSigma:
         assert displacement_sigma_m(20.0, dodger) > 5 * displacement_sigma_m(20.0, calm)
 
     def test_dodge_term(self):
+        """The overlay's dodge is a burn of bounded length (DODGE_BURN_S):
+        T^2 / 2 while it lasts, linear after; EVASIVE weaves on (T^2)."""
+        from src.firecontrol import DODGE_BURN_S
         m = TargetMotion(accel_ms2=10.0, dodges=True, dodge_throttle=0.5)
         t = 40.0
         free = UNFORESEEN_ACCEL_FRACTION * 10.0 * t * t / 2
-        dodge = DODGE_ACCEL_FRACTION * 10.0 * 0.5 * t * t / 2
+        dodge = DODGE_ACCEL_FRACTION * 10.0 * 0.5 * DODGE_BURN_S * (t - DODGE_BURN_S / 2)
         assert displacement_sigma_m(t, m) == pytest.approx(math.hypot(free, dodge))
+        short = 15.0
+        assert displacement_sigma_m(short, m) == pytest.approx(math.hypot(
+            UNFORESEEN_ACCEL_FRACTION * 10.0 * short * short / 2,
+            DODGE_ACCEL_FRACTION * 10.0 * 0.5 * short * short / 2))
         evasive = TargetMotion(accel_ms2=10.0, dodges=True, evasive=True, dodge_throttle=0.5)
         dodge = EVASIVE_DODGE_ACCEL_FRACTION * 10.0 * 0.5 * t * t / 2
         assert displacement_sigma_m(t, evasive) == pytest.approx(math.hypot(free, dodge))
@@ -141,9 +148,10 @@ class TestDisplacementSigma:
     def test_dodging_starts_at_the_threat_horizon(self):
         """Evasion ignores rounds more than dodge_horizon_s out: a 90 s round
         is dodged for the last 60 s only."""
+        from src.firecontrol import DODGE_BURN_S
         m = TargetMotion(accel_ms2=10.0, dodges=True, dodge_horizon_s=60.0)
         free = UNFORESEEN_ACCEL_FRACTION * 10.0 * 90.0 ** 2 / 2
-        dodge = DODGE_ACCEL_FRACTION * 10.0 * 60.0 ** 2 / 2
+        dodge = DODGE_ACCEL_FRACTION * 10.0 * DODGE_BURN_S * (60.0 - DODGE_BURN_S / 2)
         assert displacement_sigma_m(90.0, m) == pytest.approx(math.hypot(free, dodge))
 
 

@@ -116,7 +116,7 @@ class TestPromptMatchesSimulation:
         ranges = (50, 100, 150, 200, 300, 400)
         table = {
             "holding course": ((82, 79), (64, 57), (48, 37), (36, 20), (18, 4), (7, 1)),
-            "evade dodge": ((82, 70), (50, 19), (20, 3), (7, 1), (1, 0), (0, 0)),
+            "evade dodge": ((82, 70), (50, 19), (20, 4), (7, 1), (1, 0), (0, 0)),
             "dodge, mid-jink": ((74, 36), (20, 3), (4, 1), (1, 0), (0, 0), (0, 0)),
             "EVADE maneuver": ((49, 46), (35, 22), (21, 6), (10, 2), (2, 0), (0, 0)),
         }
@@ -134,7 +134,7 @@ class TestPromptMatchesSimulation:
             ("frigate", 100, 35, "a dodging frigate: spinal 35% at 100km"),
             ("frigate", 150, 10, "10% at 150km"),
             ("battleship", 200, 24, "a dodging battleship: 24% at 200km"),
-            ("battleship", 300, 5, "5% at 300km"),
+            ("battleship", 300, 6, "6% at 300km"),
         )
         for hull, range_km, claimed, text in examples:
             assert text in doctrine

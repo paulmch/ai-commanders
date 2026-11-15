@@ -994,16 +994,16 @@ PROJECTILE PHYSICS (for your calculations):
 HIT PROBABILITY PER ROUND vs a destroyer (spinal 9.9 km/s / turret 6.0 km/s):
                    50km    100km   150km   200km   300km   400km
 - holding course:  82/79%  64/57%  48/37%  36/20%  18/4%   7/1%
-- evade dodge:     82/70%  50/19%  20/3%   7/1%    1/0%    0/0%
+- evade dodge:     82/70%  50/19%  20/4%   7/1%    1/0%    0/0%
 - dodge, mid-jink: 74/36%  20/3%   4/1%    1/0%    0/0%    0/0%
 - EVADE maneuver:  49/46%  35/22%  21/6%   10/2%   2/0%    0/0%
 "Mid-jink" is a dodger caught already burning off another round - what your other
 ships' fire does to it. Agile hulls escape sooner (a dodging frigate: spinal 35% at
-100km, 10% at 150km), heavy ones later (a dodging battleship: 24% at 200km, 5% at
+100km, 10% at 150km), heavy ones later (a dodging battleship: 24% at 200km, 6% at
 300km). The P(hit) on your ENEMIES lines is this model for the live geometry - fire
 on it, and close range before you shoot at a dodger. Under a whole fleet's fire
 dodgers do even better than shown: in a recorded fleet battle where every ship flew
-evade dodge, 0 of 188 rounds at 100-300km landed where this model promised ~12.
+evade dodge, 0 of 188 rounds at 100-300km landed where this model promised ~13.
 - Closing speed RAISES hit chance (shorter flight, less time to dodge); crossing
   (lateral) speed lowers it, and an opening range lowers it most. Spinal vs a
   destroyer holding course at 200km: 36% at rest, 47% closing at 3 km/s, 28%
@@ -2858,7 +2858,7 @@ GUNNERY:
   Per-round P(hit) vs a dodging destroyer: spinal 50% at 100 km, 7% at 200 km, 1% at
   300 km - and a dodger your fleet already keeps jinking is far harder (20% at 100 km).
   Massed fire does not fix that: in a recorded fleet battle where every ship flew evade
-  dodge, 0 of 188 rounds at 100-300km landed where this model promised ~12. Do not plan
+  dodge, 0 of 188 rounds at 100-300km landed where this model promised ~13. Do not plan
   gun fights at dodgers beyond ~150 km.
 - Cross-section matters less: broadside is ~1.5x the hit chance of nose-on at 200 km
   (~1.2x at 100 km). Keep enemies in FRONT of your ships; if one flanks, reorient the
