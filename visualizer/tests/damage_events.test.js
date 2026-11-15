@@ -10,6 +10,7 @@ import { mountVentTime, MOUNT_VENT_S } from '../src/render/DamageFX.js';
 import { blastKinds } from '../src/render/Explosion.js';
 import { WeaponTimeline } from '../src/render/WeaponTimeline.js';
 import { BattleLoader } from '../src/BattleLoader.js';
+import { formatLogEvent } from '../src/HudIndex.js';
 
 // Pass-5 damage events (docs/pass-5-recording-additions.md), field for field
 const ship = (pos, extra = {}) => ({ pos, vel: [0, 0, 0], fwd: [1, 0, 0], hull: 100, thrust: 1, ...extra });
@@ -199,4 +200,24 @@ test('a torpedo blinded by a reactor blast loses its seeker at the blast', () =>
   // without the event the round keeps its seeker
   loader.events = [];
   assert.equal(new WeaponTimeline(loader).torpedoes.get('torp_1').disabledAt, Infinity);
+});
+
+test('combat log names the new damage: mounts, drive, cook-off, blast victims', () => {
+  const ships = {};
+  const row = (event_type, data, ship_id = 'alpha_1') => formatLogEvent({ event_type, ship_id, data }, ships);
+  const gun = row('mount_damaged', { kind: 'gun', slot: 'weapon_0', weapon_name: 'Coilgun Battery Mk3', health_pct: 4.6, destroyed: false, cause: 'surface_hit' });
+  assert.equal(gun.cls, 'hit');
+  assert.match(gun.text, /^MOUNT HIT: .* Coilgun Battery Mk3 at 5%$/);
+  const pd = row('mount_damaged', { kind: 'pd', slot: 'pd_1', health_pct: 0, destroyed: true, cause: 'reactor_blast' });
+  assert.equal(pd.cls, 'destroyed');
+  assert.match(pd.text, /^MOUNT DESTROYED: .* lost PD turret pd_1 · reactor blast$/);
+  assert.match(row('mount_damaged', { kind: 'launcher', destroyed: true }).text, /lost torpedo tube$/);
+  assert.match(row('mount_damaged', { kind: 'engine', destroyed: false, thrust_fraction: 0.618 }).text, /^DRIVE HIT: .* down to 62% thrust$/);
+  assert.match(row('mount_damaged', { kind: 'engine', destroyed: true, thrust_fraction: 0 }).text, /^DRIVE OUT: .* is adrift$/);
+  assert.match(row('magazine_cookoff', { module_name: 'Main Magazine', torpedoes_lost: 0, gun_rounds_lost: 1125 }).text, /^COOK-OFF: .* Main Magazine burns \(1125 rounds lost\)$/);
+  assert.match(row('magazine_cookoff', { module_name: 'Main Magazine', torpedoes_lost: 24 }).text, /24 torpedoes lost/);
+  const blast = row('blast_damage', { source_ship_id: 'beta_5', distance_km: 3.56, armor_ablation_cm: 7.9, hit_location: 'lateral' });
+  assert.equal(blast.cat, 'kills');
+  assert.match(blast.text, /^BLAST: .* caught 3\.6 km from .* reactor \(-7\.9 cm lateral armour\)$/);
+  assert.match(row('blast_damage', { source_ship_id: 'beta_5', distance_km: 3, fuse_cut_s: 11.8 }).text, /fuse -11\.8 s/);
 });
