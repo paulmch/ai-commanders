@@ -3973,7 +3973,10 @@ class LLMBattleRunner:
                     source_ship=source_name,
                 )
 
-        elif event.event_type == SimulationEventType.PROJECTILE_MISS:
+        elif (event.event_type == SimulationEventType.PROJECTILE_MISS
+              # A round culled 10,000 km out is bookkeeping, not a shot the
+              # captain can learn from (it would land in the >300 km bracket).
+              and data.get("reason") != "left_battle"):
             self._record_captain_shot(
                 source_id=data.get("source_ship_id") or event.ship_id,
                 target_id=event.target_id,

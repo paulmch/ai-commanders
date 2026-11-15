@@ -324,3 +324,16 @@ def test_uncapped_auto_draft_is_unchanged():
     # Budget 100 never reaches the cap: rosters stay exactly as before.
     assert [s.ship_type for s in auto_draft("alpha", 100, 8, seed=2).ships] == [
         "destroyer", "destroyer", "cruiser", "frigate", "destroyer", "frigate"]
+
+
+def test_left_battle_torpedo_does_not_enter_captain_shot_history(fleet):
+    from src.simulation import SimulationEvent, SimulationEventType
+    runner = make_runner(fleet, ["corvette"], ["destroyer"])
+    captain = runner.get_captain_for_ship("alpha_1")
+    before = len(captain.shot_history)
+    runner._feed_captain_event(SimulationEvent(
+        event_type=SimulationEventType.PROJECTILE_MISS, timestamp=800.0,
+        ship_id="alpha_1", target_id="beta_1",
+        data={"projectile_id": "torp_x", "type": "torpedo", "reason": "left_battle",
+              "closest_approach_km": 9000.0, "hit_probability": 0.0}))
+    assert len(captain.shot_history) == before
