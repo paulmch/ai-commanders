@@ -291,3 +291,48 @@ test('remnant glow and drive transients are pure functions of battle time / the 
   assert.ok(Math.abs(at(0.1).thrustRate - 0.8) < 1e-12 && Math.abs(at(0.9).thrustRate - 0.8) < 1e-12);
   assert.ok(Math.abs(at(0.5).thrust - 0.6) < 1e-12);
 });
+
+// ---------------------------------------------------------------------------
+// Drive plume wash (plume lane)
+// ---------------------------------------------------------------------------
+import { washAt, washHeat, WASH_COOL_S } from '../src/DamageTimeline.js';
+
+test('plume wash: the facing heats on entry, follows the recorded rate, cools after the exit', () => {
+  const rec = recording(false);
+  const wash = (timestamp, phase, rate, extra = {}) => ({ timestamp, event_type: 'plume_wash', ship_id: 'a',
+    data: { source_ship_id: 'b', phase, heat_rate_gj_s: rate, peak_heat_rate_gj_s: extra.peak ?? rate, hit_location: 'nose', swept: !!extra.swept, target_id: null } });
+  rec.events = [wash(2, 'enter', 12.8), wash(7, 'sustain', 16), wash(9, 'exit', 0, { peak: 16 }),
+    wash(10.5, 'enter', 0.08, { swept: false }), wash(11.5, 'exit', 0, { peak: 0.19, swept: true })];
+  const tl = buildDamageTimeline(rec);
+  const sd = tl.ships.get('a');
+  assert.deepEqual(sd.washes.map(w => [w.source, w.t0, w.t1, w.section, w.swept, w.peak]), [['b', 2, 9, 'nose', false, 16], ['b', 10.5, 11.5, 'nose', true, 0.19]]);
+  // nothing before the jet arrives, and nothing on a ship that is never washed
+  assert.equal(washAt(sd, 1.9).heat, 0);
+  assert.equal(washAt(tl.ships.get('b'), 5).heat, 0);
+  assert.equal(washAt(undefined, 5).heat, 0);
+  // builds over the first second or two, then tracks the rate between samples
+  const h0 = washAt(sd, 2.05).heat, h1 = washAt(sd, 3.5).heat, h2 = washAt(sd, 7).heat;
+  assert.ok(h0 > 0 && h0 < h1 && h1 < h2, `${h0} ${h1} ${h2}`);
+  assert.ok(Math.abs(h2 - washHeat(16)) < 0.01 && washAt(sd, 7).rate === 16 && washAt(sd, 7).source === 'b' && washAt(sd, 7).jet === 'b' && washAt(sd, 7).section === 'nose');
+  assert.ok(Math.abs(washAt(sd, 4.5).rate - 14.4) < 1e-9, 'rate eased between the 5 s samples');
+  // after the exit: no wash rate (no impingement), the plating cools over seconds
+  const c1 = washAt(sd, 9.5), c2 = washAt(sd, 10.4);
+  assert.equal(c1.rate, 0);
+  assert.equal(c1.jet, null);
+  assert.ok(c1.heat < h2 && c2.heat < c1.heat && c2.heat > 0);
+  assert.ok(Math.abs(c1.heat - washHeat(16) * Math.exp(-0.5 / WASH_COOL_S)) < 0.02);
+  assert.equal(c1.t, 9, 'the glow stays where the jet last was');
+  // a short swept crossing flares at its peak rate, then cools away
+  const sweep = washAt(sd, 11.2);
+  assert.ok(sweep.rate >= 0.19 && sweep.jet === 'b', 'the jet is on the hull again');
+  assert.ok(sweep.heat > 0);
+  assert.equal(washAt(sd, 40).heat, 0);
+  // pure: same answer whenever asked, in any order
+  assert.deepEqual(washAt(sd, 7), washAt(sd, 7));
+  // heat scale: a faint wash is dull red, the demo's 16 GJ/s yellow-white, point blank white
+  assert.ok(washHeat(0) === 0 && washHeat(0.2) < 0.4 && washHeat(16) === 1 && washHeat(69) > 1.4 && washHeat(1e6) <= 1.6);
+  // fittings burned by the wash use the ordinary dead-mount path
+  rec.events.push({ timestamp: 5, event_type: 'mount_damaged', ship_id: 'a', data: { kind: 'pd', slot: 'pd_0', index: 0, health_pct: 0, destroyed: true, cause: 'plume_wash', hit_location: 'nose', source_ship_id: 'b' } });
+  const w = buildDamageTimeline(rec).ships.get('a').wrecks;
+  assert.deepEqual(w.map(x => [x.t, x.kind, x.slot, x.destroyed, x.cause]), [[5, 'pd', 'pd_0', true, 'plume_wash']]);
+});

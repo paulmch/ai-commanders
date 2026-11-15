@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 import {
   buildDamageTimeline, shipStateAt, marksUpTo, damageStateAt, ventTau, localBasis,
-  hash01, SPALL_LIFE, impactScale, hullWearAt
+  hash01, SPALL_LIFE, impactScale, hullWearAt, washAt, worldToLocalDir
 } from '../DamageTimeline.js';
 import { getNoiseTexture, getPuffTexture, getGlowTexture, getStarTexture, mulberry32 } from './Textures.js';
 import { buildDebrisChunks } from './Hulls.js';
@@ -419,6 +419,61 @@ function debrisMaterial(uNow) {
 }
 
 /** Additive glow on torn hull edges: same geometry, drawn over the section. */
+/** Peak radiance scale of the plume-wash glow (heat ramp x this; scene HDR). */
+export const WASH_GLOW = 0.85;
+
+/**
+ * Plume-wash glow: drawn over the hull with the hull's own geometry. The
+ * face normal comes from screen-space derivatives of the hull-local
+ * position, so it follows whatever plating the hull kit builds.
+ */
+function washMaterial() {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uNoise: { value: getNoiseTexture() }, uDir: { value: new THREE.Vector3(0, 0, 1) },
+      uHeat: { value: 0 }, uSpan: { value: 1 }, uSeed: { value: 0 }, uGain: { value: WASH_GLOW }
+    },
+    vertexShader: /* glsl */`
+      varying vec3 vLocal;
+      #include <common>
+      #include <logdepthbuf_pars_vertex>
+      void main() {
+        vLocal = position;
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        gl_Position = projectionMatrix * mvPosition;
+        #include <logdepthbuf_vertex>
+      }`,
+    fragmentShader: /* glsl */`
+      uniform sampler2D uNoise;
+      uniform vec3 uDir;
+      uniform float uHeat;
+      uniform float uSpan;
+      uniform float uSeed;
+      uniform float uGain;
+      varying vec3 vLocal;
+      #include <common>
+      #include <logdepthbuf_pars_fragment>
+      ${HEAT_GLSL}
+      void main() {
+        #include <logdepthbuf_fragment>
+        vec3 n = normalize(cross(dFdx(vLocal), dFdy(vLocal)));
+        float facing = dot(n, uDir);              // 1 = square to the jet
+        if (facing < 0.03) discard;
+        // hottest where the jet axis (through the hull centre) meets the plating
+        vec3 off = vLocal - uDir * dot(vLocal, uDir);
+        float r = length(off) / uSpan;
+        float spot = exp(-r * r * 1.2);
+        float n1 = texture2D(uNoise, vLocal.xy * 0.33 + vec2(vLocal.z * 0.19, uSeed)).r;
+        float n2 = texture2D(uNoise, vLocal.zy * 0.9 + vec2(uSeed * 1.7, 0.3)).g;
+        float h = uHeat * pow(facing, 0.7) * (0.3 + 0.7 * spot) * (0.7 + 0.45 * n1 + 0.2 * n2);
+        if (h < 0.03) discard;
+        gl_FragColor = vec4(heatRamp(h) * smoothstep(0.03, 0.14, h) * uGain, 1.0);
+      }`,
+    depthFunc: THREE.LessEqualDepth,
+    ...ADDITIVE
+  });
+}
+
 function edgeGlowMaterial() {
   return new THREE.ShaderMaterial({
     uniforms: {
@@ -750,6 +805,49 @@ class ShipView {
     m._res = hit;
     m._resGroup = this.group;
     return hit;
+  }
+
+  /**
+   * Drive plume wash (recorded plume_wash): the plating that faces the
+   * emitter's jet glows on the hull itself - an additive overlay on the
+   * hull kit's own part geometry, hottest where the jet axis meets the
+   * hull and falling off across the facing. Heat and jet direction are a
+   * pure function of battle time (washAt + the trace); after the exit the
+   * glow stays on the plating it heated and cools there.
+   */
+  _applyWash(now) {
+    if (!this.sd.washes?.length) return;
+    const w = washAt(this.sd, now, this._wash || (this._wash = {}));
+    if (w.heat <= 0) { if (this.washGroup) this.washGroup.visible = false; return; }
+    const fx = this.fx, trace = fx.timeline.trace;
+    const a = shipStateAt(trace, this.id, w.t, fx._st);
+    if (!a) return;
+    const ap = a.pos.slice(), af = a.fwd.slice();
+    const b = shipStateAt(trace, w.source, w.t, fx._st);
+    if (!b) return;
+    const dx = b.pos[0] - ap[0], dy = b.pos[1] - ap[1], dz = b.pos[2] - ap[2];
+    const l = Math.hypot(dx, dy, dz) || 1;
+    const d = worldToLocalDir(af, [dx / l, dy / l, dz / l]);
+    if (!this.washGroup) {
+      this.washMat = washMaterial();
+      this.washMat.uniforms.uSeed.value = (this.seed % 977) / 977;
+      this.washGroup = new THREE.Group();
+      this.washGroup.userData.damageFx = true;
+      for (const p of this.parts) {
+        const mesh = new THREE.Mesh(p.geom, this.washMat);   // the hull's own geometry: never disposed here
+        mesh.frustumCulled = false;
+        mesh.renderOrder = 7;
+        mesh.userData.damageFx = true;
+        mesh.castShadow = false;
+        this.washGroup.add(mesh);
+      }
+      this.group.add(this.washGroup);
+    }
+    this.washGroup.visible = true;
+    const u = this.washMat.uniforms;
+    u.uDir.value.set(d[0], d[1], d[2]).normalize();
+    u.uHeat.value = w.heat;
+    u.uSpan.value = this.W * 0.8;
   }
 
   /**
@@ -1272,6 +1370,7 @@ class ShipView {
     this._applyFlicker(now, st.flicker);
     this._applyWrecks(now);
     this._applyRadiators(st.radiator, now);
+    this._applyWash(now);
 
     // Cumulative wear: armour stripped per recorded section, soot as the
     // hull fails, and a dying reactor's crack glow pulsing toward detonation
@@ -1280,6 +1379,7 @@ class ShipView {
   }
 
   dispose() {
+    if (this.washGroup) { this.group.remove(this.washGroup); this.washMat.dispose(); this.washGroup = null; }
     this.group.remove(this.craters);
     this.craters.geometry.dispose();
     this.craters.dispose();   // instance matrix buffer

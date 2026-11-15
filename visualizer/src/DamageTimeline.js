@@ -280,7 +280,7 @@ export function buildDamageTimeline(rec, opts = {}) {
       ships.set(id, {
         id, seed: hashString(id), marks: [], dyingStart: null, deathTime: null,
         modules: [], firstT: null, armor0: null, dyingEvent: null, wrecks: [],
-        engine: [], blastHits: [], cookoffs: []
+        engine: [], blastHits: [], cookoffs: [], washes: []
       });
     }
     return ships.get(id);
@@ -355,6 +355,25 @@ export function buildDamageTimeline(rec, opts = {}) {
       reactorBlasts.push(e);
     } else if (type === 'magazine_cookoff') {
       cookoffEvents.push(e);
+    } else if (type === 'plume_wash') {
+      // Drive plume wash (pass 5, plume lane): one episode per (emitter,
+      // victim) from `enter` through `sustain` samples to `exit`
+      if (d.phase === 'enter' || d.phase === 'sustain' || d.phase === 'exit') {
+        const sd = ensure(e.ship_id);
+        const src = d.source_ship_id || '';
+        let ep = null;
+        for (let i = sd.washes.length - 1; i >= 0 && !ep; i--) if (sd.washes[i].source === src && sd.washes[i].t1 === null) ep = sd.washes[i];
+        if (d.phase === 'enter' || !ep) {
+          ep = { source: src, t0: e.timestamp, t1: null, samples: [], peak: 0, section: 'lateral', swept: false };
+          sd.washes.push(ep);
+        }
+        const rate = d.phase === 'exit' ? 0 : Math.max(0, Number(d.heat_rate_gj_s) || 0);
+        if (d.phase !== 'exit') ep.samples.push({ t: e.timestamp, rate });
+        ep.peak = Math.max(ep.peak, Number(d.peak_heat_rate_gj_s) || 0, rate);
+        if (d.hit_location) ep.section = normSection(d.hit_location);
+        ep.swept = ep.swept || !!d.swept;
+        if (d.phase === 'exit') ep.t1 = e.timestamp;
+      }
     }
   }
   // Reactor blasts (pass 5): the detonation's reach, for the shock shell.
@@ -545,6 +564,61 @@ export function buildDamageTimeline(rec, opts = {}) {
     if (moved) sd.wrecks.sort((a, b) => a.t - b.t);
   }
   return { trace, ships, marks: all, byOrdnance, blasts };
+}
+
+/** Seconds the washed plating takes to come up to heat / to cool again. */
+export const WASH_RISE_S = 0.8;
+export const WASH_COOL_S = 3.5;
+/** Episodes this short that were flagged `swept` flare at their peak rate. */
+export const WASH_SWEEP_S = 4;
+
+/**
+ * Plating heat (the crater heat-ramp scale: ~0.3 dull red, ~0.6 orange,
+ * 1 yellow-white, 1.5 white) for a plume wash of `rate` GJ/s: 0.2 GJ/s is a
+ * dull red, the demo's 13-16 GJ/s yellow-white, a point-blank 40+ white.
+ */
+export function washHeat(rate) {
+  if (!(rate > 0)) return 0;
+  return Math.min(1.6, 0.25 + 0.75 * Math.sqrt(rate / 16));
+}
+
+/**
+ * Plume wash on a ship at battle time `now`, from its recorded episodes
+ * (sd.washes): the hottest one decides. While washed the heat follows the
+ * recorded rate (eased between the 5 s samples) and builds over WASH_RISE_S
+ * from the entry; after the exit it cools over WASH_COOL_S. A pure function
+ * of the events at or before `now`.
+ *   -> out {heat, source, section, t (battle time of the jet geometry that
+ *           heated the plating: now, or that episode's exit); rate (GJ/s) and
+ *           jet (emitter id) of the jet on the hull right now, 0 / null when
+ *           the ship is only cooling}
+ */
+export function washAt(sd, now, out = {}) {
+  out.heat = 0; out.rate = 0; out.source = null; out.section = null; out.t = now; out.jet = null;
+  const list = sd?.washes;
+  if (!list || !list.length) return out;
+  for (const w of list) {
+    if (now < w.t0 || !w.samples.length) continue;
+    const end = w.t1 === null ? Infinity : w.t1;
+    const tt = Math.min(now, end);
+    // recorded rate at tt: eased between samples, held after the last one
+    const S = w.samples;
+    let rate = S[S.length - 1].rate;
+    for (let i = 0; i < S.length; i++) {
+      if (tt <= S[i].t) {
+        rate = i === 0 ? S[0].rate : S[i - 1].rate + (S[i].rate - S[i - 1].rate) * ((tt - S[i - 1].t) / Math.max(1e-6, S[i].t - S[i - 1].t));
+        break;
+      }
+    }
+    if (w.swept && end - w.t0 <= WASH_SWEEP_S) rate = Math.max(rate, w.peak);   // a brief crossing flares
+    let heat = washHeat(rate) * (1 - Math.exp(-(tt - w.t0 + 0.35) / WASH_RISE_S));
+    if (now > end) heat *= Math.exp(-(now - end) / WASH_COOL_S);
+    // the jet that is on the hull right now (strongest), for the impingement
+    if (now <= end && rate > out.rate) { out.rate = rate; out.jet = w.source; }
+    if (heat > out.heat) { out.heat = heat; out.source = w.source; out.section = w.section; out.t = tt; }
+  }
+  if (out.heat < 0.01) { out.heat = 0; out.rate = 0; out.jet = null; }
+  return out;
 }
 
 /** Seconds a reactor blast's front takes to reach its blast radius. */

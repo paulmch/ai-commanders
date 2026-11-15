@@ -9,6 +9,7 @@ import {
   spinalMuzzleInto, dudSkims
 } from './WeaponTimeline.js';
 import { SLUG_LOOK, MUZZLE_LOOK, muzzlePop, POP_LIGHTS } from './GunLooks.js';
+import { washAt } from '../DamageTimeline.js';
 import {
   RCS_LAYOUT, ENGINE, PULSE, JET_COUNT, attitudeAt, jetLevels, makePulses, pulsesAt, throttleAt
 } from './TorpedoRcs.js';
@@ -122,6 +123,7 @@ export class Projectiles {
     for (let i = 0; i < this.pops.length; i++) this.pops[i].w = 0;
     for (let i = lo; i < moments.length && moments[i].time <= time; i++) this.moment(moments[i], time);
     this.popLights();
+    this.plumeWash(time);
     this.engagements.draw(time);
     this.ribbons.end(); this.flashes.end(); this.markers.end(); this.bodies.end();
   }
@@ -662,6 +664,48 @@ export class Projectiles {
       this.flashes.add(this.b, this.dir, k * (0.08 + age * 2.4), 0.7 * f * f, 0, m.seed + 0.43);
     }
     this.offerPop(this.a, muzzlePop(age, MUZZLE_LIFE) * look.light, look.reach * hullK);
+  }
+
+  /**
+   * Drive plume wash (recorded plume_wash) where the jet meets the victim:
+   * a bright impingement glow on the plating that faces the emitter and a
+   * spray of ablated material streaming on downstream past the hull, both
+   * scaled by the recorded heat rate. Seeded births on a fixed cadence, so
+   * a paused or scrubbed frame shows the same spray.
+   */
+  plumeWash(time) {
+    const ships = this.manager.damageFX?.timeline?.ships;
+    if (!ships) return;
+    for (const [id, sd] of ships) {
+      if (!sd.washes || !sd.washes.length) continue;
+      const w = washAt(sd, time, this.wash || (this.wash = {}));
+      if (!(w.rate > 0)) continue;
+      const vic = this.manager.ships.get(id), em = this.manager.ships.get(w.jet);
+      const size = vic?.userData.size;
+      if (!vic?.visible || !em?.visible || !size) continue;
+      this.t1.subVectors(em.position, vic.position);
+      const dist = this.t1.length();
+      if (dist < 1e-6) continue;
+      this.t1.divideScalar(dist);                       // toward the emitter
+      this.axis.set(0, 0, 1).applyQuaternion(vic.quaternion);
+      const c = this.t1.dot(this.axis);
+      const R = 1 / Math.sqrt((c / (size.length * 0.5)) ** 2 + (1 - c * c) / (size.width * 0.5) ** 2);
+      this.a.copy(vic.position).addScaledVector(this.t1, R * 0.92);
+      const k = Math.min(1.6, Math.sqrt(w.rate / 16));
+      const seed = seedFor(id);
+      const flick = 0.88 + 0.12 * Math.sin(time * 23 + seed * 40);
+      // stagnation glow: hot gas piling up against the plating
+      this.flashes.add(this.a, this.t1, size.width * (0.55 + 0.4 * k), 0.75 * k * w.heat * flick, 5, seed);
+      this.flashes.add(this.a, this.t1, size.width * 0.3, 1.1 * k * w.heat * flick, 1, seed);
+      // ablated plating carried on down the jet, past the hull
+      this.t2.copy(this.t1).negate();
+      this.s1.set(0, 0, 0);
+      const cadence = 0.11, tick = Math.floor(time / cadence);
+      for (let j = 0; j < 7; j++) {
+        const age = time - (tick - j) * cadence;
+        this.sparks(this.a, this.t2, this.s1, age, 0.75, size.width * 2.2 * (0.5 + 0.5 * k), seed + (tick - j) * 0.0137, 5, 0.85 * Math.min(1, k), 2.4);
+      }
+    }
   }
 
   /** Offer a muzzle flash for one of the frame's light pops (strongest win). */
