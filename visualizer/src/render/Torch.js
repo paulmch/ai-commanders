@@ -39,7 +39,7 @@ const vertexShader = /* glsl */`
 
   // Linear in t, so the bound stays a convex cone; the last term makes room
   // for the swept centreline (uBend * s^2, at most its tip offset)
-  float boundR(float t) { return uW * uR0 * mix(3.8, 15.0, t) + t * length(uBend) * uLen * uLen; }
+  float boundR(float t) { return uW * uR0 * mix(3.8, 11.0, t) + t * length(uBend) * uLen * uLen; }
 
   void main() {
     // Unit cone (z 0 .. -1, radius 1) shaped here: a short collar forward of
@@ -191,9 +191,9 @@ const fragmentShader = /* glsl */`
         // would shimmer or vanish; keep it (and the sheath) a readable
         // streak that still tells who is burning and which way
         float px = uPixelWorld * max(te, 0.01);
-        float sc = max(uW * uR0 * (0.34 + 1.0 * t) * pinch, 0.8 * px);
-        float ss = max(uW * uR0 * (0.85 + 5.2 * pow(t, 0.6)), 1.5 * px);
-        float sh = uW * uR0 * (1.7 + 8.6 * pow(t, 0.8));
+        float sc = max(uW * uR0 * (0.34 + 0.7 * t) * pinch, 0.8 * px);
+        float ss = max(uW * uR0 * (0.85 + 2.9 * pow(t, 0.7)), 1.5 * px);
+        float sh = uW * uR0 * (1.7 + 6.2 * pow(t, 0.8));
         float ga = a - tcs, gb = b - tcs;
 
         // White-hot only at the throat and in the knots; the core cools to

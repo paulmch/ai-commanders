@@ -366,7 +366,10 @@ const KINDS = {
   // was a hard-edged glass bubble around the fireball, never a shock wave;
   // thin streaks like the reactor's, not white bars
   secondary: {
-    duration: 4.0, flash: 2.5, flashFade: 0.15, screenFlash: 0.0,
+    // (a small hard kernel instead of the default 5x glow disc, which
+    // saturated into a flat white bubble round the mount for its first frames)
+    duration: 4.0, flash: 2.2, flashFade: 0.13, screenFlash: 0.0, flashR: 2.0,
+    core: { size: 0.8, life: 0.09, level: 5 },
     fireR: 0.9, fireGrow: 1.0, fireLife: 2.2, fireTurb: 0.5,
     shellR: 0,
     sparks: 320, sparkSpeed: [2, 9], sparkLife: [0.6, 3], sparkSize: 0.05,
