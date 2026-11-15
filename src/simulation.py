@@ -70,6 +70,7 @@ try:
     )
     from .power import PowerSystem, WeaponCapacitor, Battery, Reactor
     from .maneuvers import max_arrival_speed_mps, required_decel_ms2
+    from . import battle_damage
 except ImportError:
     from replay_evidence import ExecutionEvidence, impact_evidence, OMIT_IF_NONE
     from battle_timing import MIN_DECISION_INTERVAL, MAX_DECISION_INTERVAL
@@ -115,6 +116,7 @@ except ImportError:
     )
     from power import PowerSystem, WeaponCapacitor, Battery, Reactor
     from maneuvers import max_arrival_speed_mps, required_decel_ms2
+    import battle_damage
 
 
 # =============================================================================
@@ -381,6 +383,13 @@ class SimulationEventType(Enum):
     PD_TORPEDO_DESTROYED = auto()
     PD_SLUG_DAMAGED = auto()
     PD_SLUG_DESTROYED = auto()
+
+    # Battle-damage consequences (src/battle_damage.py; recorded under the
+    # lower-cased name, see docs/pass-5-recording-additions.md)
+    MOUNT_DAMAGED = auto()       # a gun mount / PD turret degraded or knocked out
+    REACTOR_BLAST = auto()       # a dead ship's reactor detonation and what it caught
+    BLAST_DAMAGE = auto()        # one ship caught in a reactor blast
+    MAGAZINE_COOKOFF = auto()    # a destroyed magazine burned rounds / blew neighbours
 
     # Control events
     DECISION_POINT_REACHED = auto()
@@ -664,6 +673,9 @@ class WeaponState:
     slot_name: str = ""
     salvo_index: int = 0  # Index of the NEXT shot; holds across fire-control pauses.
     shots_fired: int = 0  # Lifetime count for cosmetic barrel alternation.
+    # Mount health 0-100 (src/battle_damage.py): a damaged mount cycles slower
+    # (mount_cooldown_factor), at 0 the weapon is knocked out.
+    mount_health: float = 100.0
 
     def can_fire(self) -> bool:
         """Check if weapon can fire."""
@@ -685,8 +697,12 @@ class WeaponState:
 
     def _cooldown_after_shot(self, salvo_index: int) -> float:
         if salvo_index + 1 < self.weapon.salvo_size:
-            return self.weapon.intra_salvo_cooldown_s
-        return self.weapon.cooldown_s
+            base = self.weapon.intra_salvo_cooldown_s
+        else:
+            base = self.weapon.cooldown_s
+        if self.mount_health < 100.0:
+            return base * battle_damage.mount_cooldown_factor(self.mount_health)
+        return base
 
     def shots_in_window(self, duration_s: float) -> int:
         """Timing/ammo ceiling before the next checkpoint, excluding its endpoint.
@@ -882,6 +898,8 @@ class PDLaserState:
     heat_delivered_j: float = 0.0
     turret_name: str = "PD-1"
     burst_energy_j: float = 0.0
+    # Turret health 0-100 (src/battle_damage.py); at 0 the turret is lost.
+    mount_health: float = 100.0
 
     def can_fire(self) -> bool:
         """Check if PD laser can engage."""
@@ -1430,6 +1448,9 @@ class EngagementMetrics:
     total_torpedo_intercepted: int = 0
     total_torpedo_seeker_killed: int = 0
     total_torpedo_hits_after_seeker_kill: int = 0
+    # Torpedoes destroyed / seeker-blinded by a reactor blast (not PD's work).
+    total_torpedo_blast_destroyed: int = 0
+    total_torpedo_blast_blinded: int = 0
     total_damage_dealt: float = 0.0
     ships_destroyed: list[str] = field(default_factory=list)
     battle_duration: float = 0.0
@@ -1554,8 +1575,17 @@ class CombatSimulation:
         # battles non-reproducible (marginal rolls flipped run to run).
         self._torpedo_seq = 0
         self._projectile_seq = 0
+        # projectile_id -> firing weapon slot, so a round's impact / miss
+        # events name the gun that fired it (see _log_event).
+        self._projectile_slots: dict[str, str] = {}
         self.combat_resolver = CombatResolver(rng=self.rng)
         self.damage_propagator = DamagePropagator()
+        # Battle-damage consequences (src/battle_damage.py) roll on their own
+        # stream derived from the battle seed, so they never shift the main
+        # RNG that decides hits; reactor blasts queue here and resolve once
+        # per tick.
+        self._damage_rng = random.Random(f"{seed}:battle_damage")
+        self._pending_blasts: list[dict] = []
 
         # Decision callback
         self._decision_callback: Optional[Callable[[str, 'CombatSimulation'], list[Any]]] = None
@@ -1676,9 +1706,17 @@ class CombatSimulation:
                     orders = command.get('orders', [command.get('order')])
                     keys = ['weapon:' + slot for slot, order in ship.weapons_orders.items()
                             if order in orders]
+            # One 'superseded' per replaced command, once it governs nothing:
+            # a weapons order binds one key per slot, so a 3-gun ship used to
+            # log the same command superseded three times.
+            replaced = []
             for key in keys:
                 previous = self.evidence.bind(ship_id, key, cid)
-                if previous and previous != cid:
+                if previous and previous != cid and previous not in replaced:
+                    replaced.append(previous)
+            still_bound = set(self.evidence.active.get(ship_id, {}).values())
+            for previous in replaced:
+                if previous not in still_bound:
                     self._command_status(ship_id, previous, 'superseded')
         return success
 
@@ -2544,6 +2582,7 @@ class CombatSimulation:
             event_data['fc'] = fire_control
         if weapon_slot is not None:
             event_data['weapon_slot'] = weapon_slot
+            self._projectile_slots[proj_id] = weapon_slot
 
         self._log_event(SimulationEventType.PROJECTILE_LAUNCHED, shooter.ship_id, target.ship_id, event_data)
 
@@ -2638,8 +2677,18 @@ class CombatSimulation:
         # Update torpedoes and check hits
         self._update_torpedoes(dt)
 
+        # Reactor detonations queued by this tick's deaths reach their
+        # surroundings (ships, torpedoes); deaths they cause detonate next tick.
+        battle_damage.resolve_pending_blasts(self)
+
         # Check for battle end conditions
         self._check_battle_end()
+        if not self._running:
+            # Last tick: a chain detonation queued while resolving the blasts
+            # above would never get its tick - flush it so the recording
+            # still carries every blast.
+            while self._pending_blasts:
+                battle_damage.resolve_pending_blasts(self)
 
         # Advance time
         self.current_time += dt
@@ -5364,6 +5413,11 @@ class CombatSimulation:
         if proj_flight.weapon is not None:
             self._resolve_radiator_hit(target, proj_flight.weapon, hit_location)
 
+        # External fittings (gun mounts, PD turrets) can be struck by any
+        # hull hit, penetrating or not.
+        battle_damage.resolve_surface_hit(
+            self, target, hit_location, effective_ke_gj, proj_flight.source_ship_id)
+
         if penetrated:
             # 'remaining_energy_gj' mirrors the torpedo path's key name so both
             # penetration events have one shape for downstream consumers;
@@ -5409,7 +5463,8 @@ class CombatSimulation:
                     self._log_event(SimulationEventType.MODULE_DAMAGED, target.ship_id, data={
                         'module_name': module.name,
                         'damage_gj': energy_applied,
-                        'destroyed': was_destroyed
+                        'destroyed': was_destroyed,
+                        'health_pct': round(module.health_percent, 1),
                     })
                     if was_destroyed:
                         self._log_event(SimulationEventType.MODULE_DESTROYED, target.ship_id, data={
@@ -5418,6 +5473,8 @@ class CombatSimulation:
                         print(f"  !!! [{target.ship_id}] MODULE DESTROYED: {module.name}")
                         # Disable corresponding weapon if weapon module destroyed
                         self._disable_weapon_for_module(target, module.name)
+                        battle_damage.resolve_magazine_cookoff(
+                            self, target, module, proj_flight.source_ship_id)
 
         # A hit on an already-dying hulk vents more of the failing reactor
         # containment: the detonation comes forward in proportion to the
@@ -5684,6 +5741,7 @@ class CombatSimulation:
 
                 flight_time = self.current_time - torp_flight.launch_time
                 if flight_time > 3600 or current_dist > 10_000_000:
+                    self._log_torpedo_left_battle(torp_flight, current_dist)
                     torpedoes_to_remove.append(torp_flight)
                 continue
 
@@ -5910,7 +5968,9 @@ class CombatSimulation:
 
             # Check if torpedo is too far or timed out
             flight_time = self.current_time - torp_flight.launch_time
-            if flight_time > 3600 or current_dist > 10_000_000:  # 1 hour or 10,000 km
+            if ((flight_time > 3600 or current_dist > 10_000_000)  # 1 hour or 10,000 km
+                    and torp_flight not in torpedoes_to_remove):
+                self._log_torpedo_left_battle(torp_flight, current_dist)
                 torpedoes_to_remove.append(torp_flight)
 
         # Remove finished torpedoes and accumulate delta-v stats
@@ -5920,6 +5980,24 @@ class CombatSimulation:
                 self.metrics.torpedo_main_engine_dv_kps += torp.main_engine_dv_used_kps
                 self.metrics.torpedo_rcs_dv_kps += torp.rcs_dv_used_kps
                 self.torpedoes.remove(torp)
+
+    def _log_torpedo_left_battle(self, torp_flight: 'TorpedoInFlight',
+                                 current_dist_m: float) -> None:
+        """
+        A round culled at the battle edge (10,000 km from its target, or an
+        hour of flight) is a miss. The cull used to drop it with no event, so
+        seeker-killed rounds coasting away vanished from the recording and
+        the torpedo ledger could not balance.
+        """
+        closest_m = min(torp_flight.min_distance_to_target, current_dist_m)
+        self._log_event(SimulationEventType.PROJECTILE_MISS,
+                        torp_flight.source_ship_id, torp_flight.torpedo.target_id, {
+            'projectile_id': torp_flight.torpedo_id,
+            'closest_approach_km': closest_m / 1000.0,
+            'hit_probability': 0.0,
+            'type': 'torpedo',
+            'reason': 'left_battle',
+        })
 
     @impact_evidence
     def _resolve_radiator_hit(
@@ -5939,11 +6017,29 @@ class CombatSimulation:
         except Exception:
             rad_result = None  # thermal system without radiator API
         if rad_result is not None and rad_result.hit:
+            # dissipation_lost_kw is the LIVE rejection lost (0 for a retracted
+            # panel); capacity_lost_kw is the rated rejection the panel can
+            # never give again, whatever its state when it was hit.
+            try:
+                panel = target.thermal_system.radiators.radiators.get(
+                    RadiatorPosition(rad_result.radiator_position))
+            except Exception:
+                panel = None
+            health_pct = panel.health_percent if panel is not None else 0.0
+            # DropletRadiator.damage: 20% health per GJ.
+            capacity_lost_kw = (
+                panel.max_dissipation_kw * rad_result.damage_taken_gj * 20.0 / 100.0
+                if panel is not None else 0.0
+            )
             self._log_event(SimulationEventType.RADIATOR_DAMAGED, target.ship_id, data={
                 'radiator_position': rad_result.radiator_position,
                 'damage_gj': rad_result.damage_taken_gj,
                 'destroyed': rad_result.radiator_destroyed,
-                'dissipation_lost_kw': rad_result.dissipation_lost_kw
+                'dissipation_lost_kw': rad_result.dissipation_lost_kw,
+                'capacity_lost_kw': round(capacity_lost_kw, 1),
+                'health_pct': round(health_pct, 1),
+                'array_health_pct': round(
+                    target.thermal_system.radiators.health_percent, 1),
             })
             print(f"  !!! [{target.ship_id}] RADIATOR HIT: {rad_result.radiator_position} "
                   f"({'DESTROYED' if rad_result.radiator_destroyed else 'damaged'})")
@@ -6023,6 +6119,8 @@ class CombatSimulation:
         # Torpedo impacts roll for radiator damage like any other hit (same
         # model: combat.radiator_hit_chance). They used to be exempt.
         self._resolve_radiator_hit(target, None, hit_location, energy_gj=total_damage_gj)
+        battle_damage.resolve_surface_hit(
+            self, target, hit_location, total_damage_gj, torp_flight.source_ship_id)
 
         # Apply armor damage using physics-based ablation
         penetrated = False
@@ -6135,7 +6233,8 @@ class CombatSimulation:
                 self._log_event(SimulationEventType.MODULE_DAMAGED, target.ship_id, data={
                     'module_name': module.name,
                     'damage_gj': energy_applied,
-                    'destroyed': was_destroyed
+                    'destroyed': was_destroyed,
+                    'health_pct': round(module.health_percent, 1),
                 })
                 if was_destroyed:
                     self._log_event(SimulationEventType.MODULE_DESTROYED, target.ship_id, data={
@@ -6144,6 +6243,8 @@ class CombatSimulation:
                     print(f"  !!! [{target.ship_id}] MODULE DESTROYED: {module.name}")
                     # Disable corresponding weapon if weapon module destroyed
                     self._disable_weapon_for_module(target, module.name)
+                    battle_damage.resolve_magazine_cookoff(
+                        self, target, module, torp_flight.source_ship_id)
 
         # A torpedo landing on an already-dying hulk vents more of the
         # failing reactor containment: bring the detonation forward in
@@ -7367,6 +7468,9 @@ class CombatSimulation:
             'hull_integrity': ship.hull_integrity,
             'cause': cause,
         })
+        # The reactor has gone up: its blast reaches the surroundings at the
+        # end of this tick (battle_damage.resolve_pending_blasts).
+        battle_damage.queue_reactor_blast(self, ship, cause)
 
     # -------------------------------------------------------------------------
     # Decision Points
@@ -7449,6 +7553,16 @@ class CombatSimulation:
         data: Optional[dict] = None
     ) -> SimulationEvent:
         """Log a simulation event and notify callbacks."""
+        # A gun round's impact / miss names the slot that fired it. Those
+        # events carried no slot (or 'unknown'), so every recorded hit and
+        # miss, every captain's shot history ("You fired unknown") and every
+        # DAMAGE TAKEN line lost the weapon.
+        if (event_type in (SimulationEventType.PROJECTILE_IMPACT,
+                           SimulationEventType.PROJECTILE_MISS)
+                and data and data.get('weapon_slot') in (None, 'unknown')):
+            slot = self._projectile_slots.get(data.get('projectile_id'))
+            if slot is not None:
+                data = {**data, 'weapon_slot': slot}
         event = SimulationEvent(
             event_type=event_type,
             timestamp=self.current_time,

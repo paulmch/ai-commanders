@@ -537,7 +537,11 @@ def analyze_range_control(
 
     own_pos = _mean([s.position for s in own])
     own_vel = _mean([s.velocity for s in own])
-    accel = min(ship_accel_ms2(s) for s in own)
+    # A hull with a dead drive (battle damage) is left behind, exactly as
+    # formation_throttles leaves it out of the match: the fleet picture is
+    # the slowest hull that can still burn. All adrift -> 0 (nothing to fly).
+    burning = [a for a in (ship_accel_ms2(s) for s in own) if a > 0]
+    accel = min(burning) if burning else 0.0
 
     infos: List[GroupRangeInfo] = []
     for members in group_enemies(own_pos, enemies):
@@ -1053,7 +1057,8 @@ def formation_line(live: Sequence[Any], mcp: bool = False) -> str:
     if len(live) <= 1:
         return ""
     thr = formation_throttles(live, 1.0)
-    slowest = min(live, key=ship_accel_ms2)
+    # Same rule as formation_throttles: a hull with no thrust does not set the pace.
+    slowest = min([s for s in live if ship_accel_ms2(s) > 0] or live, key=ship_accel_ms2)
     parts = ", ".join(f"{getattr(s, 'name', None) or s.ship_id} {thr[s.ship_id] * 100:.0f}%"
                       for s in live)
     return (

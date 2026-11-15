@@ -55,6 +55,31 @@ def _thermal_trace_fields(ship: Any) -> Dict[str, Any]:
     }
 
 
+
+# Time-limit "tactical advantage" value of each hull class. Every hull in
+# data/fleet_ships.json needs an entry: a missing one (the torpedo cruiser and
+# the siege dreadnought were) silently scored as a destroyer, so losing a siege
+# dreadnought cost its fleet 30 points instead of 105.
+SHIP_CLASS_VALUES = {
+    "corvette": 10,
+    "frigate": 15,
+    "destroyer": 20,
+    "cruiser": 30,
+    "cruiser_torpedo": 30,
+    "battlecruiser": 40,
+    "battleship": 50,
+    "dreadnought": 70,
+    "dreadnought_siege": 70,
+}
+
+
+def ship_class_value(ship_type: str) -> float:
+    """Tactical-advantage value of a hull class (variants fall back to their base hull)."""
+    key = (ship_type or "destroyer").lower()
+    if key in SHIP_CLASS_VALUES:
+        return SHIP_CLASS_VALUES[key]
+    return SHIP_CLASS_VALUES.get(key.split("_")[0], SHIP_CLASS_VALUES["destroyer"])
+
 @dataclass
 class BattleConfig:
     """Configuration for an LLM battle."""
@@ -3202,6 +3227,14 @@ class LLMBattleRunner:
         # Damage dealt (1 point per GJ)
         points += ship.damage_dealt_gj
 
+        # A lost ship keeps the damage it dealt, nothing else. Fleet draws sum
+        # this over every hull, and a destroyed ship still carries its last
+        # hull integrity and delta-v: a fleet that had lost half its ships
+        # could win an agreed draw "on points".
+        if (ship.is_destroyed or getattr(ship, 'is_dying', False)
+                or getattr(ship, 'is_surrendered', False)):
+            return points
+
         # Hull integrity bonus (up to 50 points)
         points += ship.hull_integrity * 0.5  # 100% hull = 50 points
 
@@ -3276,20 +3309,9 @@ class LLMBattleRunner:
         beta_score = 0.0
 
         # Score for surviving ships (ship value based on class)
-        ship_values = {
-            "corvette": 10,
-            "frigate": 15,
-            "destroyer": 20,
-            "cruiser": 30,
-            "battlecruiser": 40,
-            "battleship": 50,
-            "dreadnought": 70,
-        }
-
         # Alpha fleet scoring
         for ship in self.alpha_ships.values():
-            ship_type = getattr(ship, 'ship_type', 'destroyer').lower()
-            base_value = ship_values.get(ship_type, 20)
+            base_value = ship_class_value(getattr(ship, 'ship_type', 'destroyer'))
 
             if ship.is_destroyed or getattr(ship, 'is_dying', False):
                 # Destroyed ships count against you. A dying ship is a
@@ -3308,8 +3330,7 @@ class LLMBattleRunner:
 
         # Beta fleet scoring
         for ship in self.beta_ships.values():
-            ship_type = getattr(ship, 'ship_type', 'destroyer').lower()
-            base_value = ship_values.get(ship_type, 20)
+            base_value = ship_class_value(getattr(ship, 'ship_type', 'destroyer'))
 
             if ship.is_destroyed or getattr(ship, 'is_dying', False):
                 alpha_score += base_value * 1.5
@@ -3640,6 +3661,7 @@ class LLMBattleRunner:
                     torpedo_id=data.get("projectile_id", "unknown"),
                     closest_approach_km=data.get("closest_approach_km", 0),
                     hit_probability=data.get("hit_probability", 0),
+                    reason=data.get("reason"),
                 )
             else:
                 self.recorder.record_miss(
@@ -3958,7 +3980,10 @@ class LLMBattleRunner:
                     source_ship=source_name,
                 )
 
-        elif event.event_type == SimulationEventType.PROJECTILE_MISS:
+        elif (event.event_type == SimulationEventType.PROJECTILE_MISS
+              # A round culled 10,000 km out is bookkeeping, not a shot the
+              # captain can learn from (it would land in the >300 km bracket).
+              and data.get("reason") != "left_battle"):
             self._record_captain_shot(
                 source_id=data.get("source_ship_id") or event.ship_id,
                 target_id=event.target_id,

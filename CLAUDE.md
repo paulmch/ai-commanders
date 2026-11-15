@@ -58,6 +58,8 @@ ai-commanders/
 │   ├── pointdefense.py     # Continuous-dwell PD lasers, per-turret capacitors
 │   ├── projectile.py / firecontrol.py / targeting.py / maneuvers.py
 │   ├── damage.py / modules.py / geometry.py / thermal.py / power.py
+│   ├── battle_damage.py    # damage consequences: surface fittings (mounts, PD,
+│   │                       # tubes, drive), reactor blast, magazine cook-off
 │   ├── trajectory_prediction.py  # movement-only shadow sim -> per-frame sim_trace 'plan'
 │   └── llm/                # OpenRouter client, captain/admiral agents (+vision),
 │                           # draft mode + heuristic captains, prompts, tools,
@@ -106,6 +108,17 @@ ai-commanders/
   radiators (780 MW extended) + a 320 GJ sink, and full-throttle drive heat
   equals radiator rejection. Ladder: guns hold at 90%, radiators forced out at
   100%, reactor meltdown at `REACTOR_MELTDOWN_HEAT_FRACTION` (150%, src/thermal.py)
+- Damage consequences (`src/battle_damage.py`, `tests/test_battle_damage.py`,
+  recorded per `docs/pass-5-recording-additions.md`): any hull hit can strike an
+  external fitting (15% nose / 25% flank or tail; gun mounts and torpedo tubes
+  35% health per GJ, PD turrets 60%; a damaged mount cycles up to 2x slower, a
+  wrecked tube loses its rounds; 30% of tail hits strike the drive, 15% thrust
+  per GJ). Every death is a reactor blast (15 km for a cruiser, x sqrt(dry
+  mass)): facing armour, heat pulse, extended radiators, fittings, dying hulks'
+  fuses; torpedoes die inside 25% of the radius and go blind inside 60%. A
+  destroyed magazine burns half the rounds and blows non-critical neighbours.
+  These rolls use `CombatSimulation._damage_rng` (seed-derived), never the
+  battle RNG that decides hits
 - Two-stage kills: a non-reactor killing blow leaves an untargetable dying hulk
   (tumbling, torch sputtering) that detonates 0-30 s later; hits on the hulk
   shorten the fuse, a reactor hit detonates it at once (`test_dying_ships.py`)

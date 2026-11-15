@@ -153,6 +153,37 @@ test('all weapon buffers match on direct seek, playback, backward seek and pause
   } finally { fx.dispose(); direct.dispose(); }
 });
 
+test('muzzle light pops borrow pool lights as a pure function of battle time', () => {
+  const loader = recording(), fx = renderer();
+  const pool = [new THREE.PointLight(), new THREE.PointLight(), new THREE.PointLight()];
+  fx.manager.tryPointLight = (color, intensity, distance, reserve) => {
+    assert.equal(reserve, 2, 'pops draw on the reserve, never on a torch light');
+    const l = pool.pop() || null;
+    if (l) { l.intensity = intensity; l.distance = distance; }
+    return l;
+  };
+  fx.manager.freePointLight = (l) => { l.intensity = 0; pool.push(l); };
+  try {
+    fx.update(loader, 0.03);          // 30 ms after alpha's spinal shot
+    const lit = fx.pops.filter(p => p.light);
+    assert.equal(lit.length, 1);
+    const intensity = lit[0].light.intensity, at = lit[0].light.position.clone();
+    assert.ok(intensity > 10 && lit[0].light.distance > 5);
+    fx.update(loader, 0.2);
+    assert.ok(lit[0].light.intensity < intensity * 0.1, 'a pop, not a lamp');
+    fx.update(loader, 5);             // long after: the light is back in the pool
+    assert.equal(pool.length, 3);
+    assert.ok(fx.pops.every(p => !p.light));
+    fx.update(loader, 0.03);          // seek back: the same pop again
+    const again = fx.pops.filter(p => p.light);
+    assert.equal(again.length, 1);
+    assert.equal(again[0].light.intensity, intensity);
+    assert.deepEqual(again[0].light.position.toArray(), at.toArray());
+    fx.clear();
+    assert.equal(pool.length, 3);
+  } finally { fx.dispose(); }
+});
+
 test('a PD destruction pops without retaining a live torpedo body', () => {
   const loader = recording();
   loader.events = loader.events.filter(e => e.event_type !== 'torpedo_impact');

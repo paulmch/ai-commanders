@@ -10,11 +10,12 @@ export const SHIP_SILHOUETTES = {
   // spinal | battery | heavy | pd | launcher; `far` marks a starboard mount
   // seen through the hull. Squares take `size`, bars take w x h.
 
-  // Corvette - torpedo boat: hex hull, stepped needle bow, rails, bare torch
+  // Corvette - torpedo boat: hex hull, stepped needle bow, rails, bare torch,
+  // swept keel blade aft and the sensor lance over the bow
   corvette: {
-    body: "M106,38.5 L106,41.5 L102,43.5 L101,44.5 L97,46 L96,47.5 L88,48 L32,48 L32,47 L24,47 L24,51 L20,51 L20,29 L24,29 L24,33 L32,33 L32,32 L42,32 L42,29 L80,29 L80,32 L88,32 L96,32.5 L97,34 L101,35.5 L102,36.5 Z",
+    body: "M106,38.5 L106,41.5 L102,43.5 L101,44.5 L97,46 L96,47.5 L88,48 L58,48 L41,55.5 L33,55.5 L37,48 L32,48 L32,47 L24,47 L24,51 L20,51 L20,29 L24,29 L24,33 L32,33 L32,32 L42,32 L42,29 L74,29 L74,27.8 L110,27.8 L110,28.6 L80,28.6 L80,32 L88,32 L96,32.5 L97,34 L101,35.5 L102,36.5 Z",
     nose: "M106,38.5 L106,41.5 L102,43.5 L101,44.5 L97,46 L96,47.5 L88,48 L88,32 L96,32.5 L97,34 L101,35.5 L102,36.5 Z",
-    lateral: "M88,32 L80,32 L80,29 L42,29 L42,32 L32,32 L32,48 L88,48 Z",
+    lateral: "M88,32 L80,32 L80,29 L42,29 L42,32 L32,32 L32,48 L37,48 L33,55.5 L41,55.5 L58,48 L88,48 Z",
     tail: "M32,33 L24,33 L24,29 L20,29 L20,51 L24,51 L24,47 L32,47 Z",
     hardpoints: [
       { x: 76, y: 40.5, w: 15, h: 4, kind: 'launcher' },   // 8-round rails

@@ -171,6 +171,15 @@ export class BloomChain {
     return low.texture;
   }
 
+  /**
+   * The accumulated bloom at mip `i` (0 = half res, 1 = quarter, ...) from
+   * the last render(): PostFX stretches the quarter-res level into the
+   * anamorphic streak. Null when the chain is too short.
+   */
+  level(i) {
+    return this.up[i] || null;
+  }
+
   dispose(all = true) {
     for (const t of this.down) t.dispose();
     for (const t of this.up) t?.dispose();

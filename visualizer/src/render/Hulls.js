@@ -1,8 +1,7 @@
 import * as THREE from 'three';
-import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 import {
-  getHullTextures, getRadiatorTextures, getAccentTexture, getHazardTexture, mulberry32
+  getHullTextures, getRadiatorTextures, getAccentTexture, getHazardTexture, getBellHeatTexture, mulberry32
 } from './Textures.js';
 import { buildHullLights } from './HullLights.js';
 import { buildMarkings, buildFloodlights, hullCode, LIVERY_FLOOD, GLASS_GLOW } from './HullMarkings.js';
@@ -41,7 +40,17 @@ export { updateHullDetails } from './HullRigs.js';
  *                         DamageFX owns rotation.x (buckled wings)
  */
 
-const TEXEL = 1.35;   // plating tiles per scene unit
+const TEXEL = 1.0;    // plating tiles per scene unit
+/** Chamfer width against the old rounded-corner radius. */
+const CHAMFER = 0.8;
+/** Materials that take a per-part tone step / only the drive soot. */
+const TONED_MATS = new Set(['hull', 'trim', 'paint']);
+const SOOTED_MATS = new Set(['dark', 'barrel']);
+/** Bell alloy tints on the 'barrel' gunmetal: heat-bronzed skin, dark lip. */
+const BELL_TINT = [1.75, 1.35, 1.05];
+const BELL_LIP_TINT = [0.8, 0.78, 0.8];
+/** Opaque structure that casts and receives shadows (not lamps or glass). */
+const SHADOW_MATS = new Set(['hull', 'trim', 'paint', 'dark', 'barrel', 'hazard', 'radiator']);
 
 // ---------------------------------------------------------------------------
 // Absolute fitting sizes
@@ -57,7 +66,7 @@ const TEXEL = 1.35;   // plating tiles per scene unit
 /** Mount size `s` (scene units) per weapon kind, before fitScale. */
 export const WEAPON_SIZE = { coilgun: 0.62, heavy: 0.86, pd: 0.42 };
 /** Deck window height; spacing and count follow from it. */
-export const WINDOW_S = 0.05;
+export const WINDOW_S = 0.038;
 /** RCS thruster block size. */
 export const RCS_S = 0.15;
 /** Sensor mast height. */
@@ -99,13 +108,20 @@ function factionAccent(faction) {
 }
 
 /**
- * Scales on the textures' metalness (1 = the maps as painted). Armour and
- * trim are part metal, not mirrors: fully metallic plating mostly reflects
- * black sky, so shadowed recesses and the joints between sections read as
- * empty space against the starfield.
+ * Scales on the textures' metalness (1 = the maps as painted). The plate
+ * maps paint armour as a dielectric coat (~0.08) with part-metal worn
+ * edges, chips and bare replacement plates, so the hull keeps its diffuse
+ * colour in shadow and only the wear glints. Trim (bare structure) is part metal,
+ * not a mirror: fully metallic structure mostly reflects black sky, so
+ * recesses and joints would read as empty space against the starfield.
+ *
+ * hull / trim / paint / dark / barrel multiply their albedo by the part's
+ * vertex colour (HullKit.add): a per-part tone step, drive soot toward the
+ * stern and explicit tints (heat-blued bells) - macro variation the tiling
+ * maps cannot give.
  */
-export const HULL_METALNESS = 0.7;
-export const TRIM_METALNESS = 0.55;
+export const HULL_METALNESS = 1.0;
+export const TRIM_METALNESS = 0.6;
 
 export function buildShipMaterials(faction) {
   const key = faction;
@@ -115,29 +131,29 @@ export function buildShipMaterials(faction) {
     const paintT = getHullTextures(faction, 'paint');
     _sharedMats.set(key, {
       hull: new THREE.MeshStandardMaterial({
-        map: hullT.map, normalMap: hullT.normalMap, normalScale: new THREE.Vector2(0.9, 0.9),
+        map: hullT.map, normalMap: hullT.normalMap, normalScale: new THREE.Vector2(1.35, 1.35),
         roughnessMap: hullT.ormMap, metalnessMap: hullT.ormMap,
-        roughness: 1, metalness: HULL_METALNESS, envMapIntensity: 1.0
+        roughness: 1, metalness: HULL_METALNESS, envMapIntensity: 1.0, vertexColors: true
       }),
       trim: new THREE.MeshStandardMaterial({
         map: trimT.map, normalMap: trimT.normalMap, normalScale: new THREE.Vector2(1.0, 1.0),
         roughnessMap: trimT.ormMap, metalnessMap: trimT.ormMap,
-        roughness: 1, metalness: TRIM_METALNESS, envMapIntensity: 1.1
+        roughness: 1, metalness: TRIM_METALNESS, envMapIntensity: 1.1, vertexColors: true
       }),
       // Faction livery: nose rims, drive bands, radiator cassettes, stripes.
       // Floodlit (a faint emissive copy of the albedo) so the livery still
       // names the side on a shadowed or backlit hull.
       paint: new THREE.MeshStandardMaterial({
-        map: paintT.map, normalMap: paintT.normalMap, normalScale: new THREE.Vector2(0.8, 0.8),
+        map: paintT.map, normalMap: paintT.normalMap, normalScale: new THREE.Vector2(1.2, 1.2),
         roughnessMap: paintT.ormMap, metalnessMap: paintT.ormMap,
-        roughness: 1, metalness: 1, envMapIntensity: 0.85,
+        roughness: 1, metalness: 1, envMapIntensity: 0.85, vertexColors: true,
         emissive: 0xffffff, emissiveMap: paintT.map, emissiveIntensity: LIVERY_FLOOD
       }),
       dark: new THREE.MeshStandardMaterial({
-        color: 0x2c3138, roughness: 0.6, metalness: 0.55, envMapIntensity: 0.9
+        color: 0x2c3138, roughness: 0.6, metalness: 0.55, envMapIntensity: 0.9, vertexColors: true
       }),
       barrel: new THREE.MeshStandardMaterial({
-        color: 0x2a2d33, roughness: 0.45, metalness: 0.95, envMapIntensity: 1.0
+        color: 0x2a2d33, roughness: 0.45, metalness: 0.95, envMapIntensity: 1.0, vertexColors: true
       }),
       // Launcher rims and magazine clamps
       hazard: new THREE.MeshStandardMaterial({
@@ -169,9 +185,11 @@ export function buildShipMaterials(faction) {
       // dark glass, not a hole: the unlit strip between lamps stays readable
       color: 0x1a1f26, emissive: WINDOW_EMISSIVE, emissiveIntensity: 2.6, roughness: 0.25, metalness: 0.3
     }),
+    // Bell liners: the emissive map carries the colour (white-hot throat
+    // to dull red lip); SceneManager drives the intensity with thrust
     bellHeat: new THREE.MeshStandardMaterial({
-      color: 0x1a1010, emissive: 0xff7a30, emissiveIntensity: 0.0, roughness: 0.8, metalness: 0.2,
-      side: THREE.DoubleSide
+      color: 0x0e0b0b, emissive: 0xffffff, emissiveMap: getBellHeatTexture(), emissiveIntensity: 0.0,
+      roughness: 0.85, metalness: 0.1, side: THREE.DoubleSide
     })
   };
   // Non-enumerable so code iterating the material set only sees materials
@@ -256,6 +274,79 @@ export function taperBoxGeometry(w0, h0, w1, h1, len, rnd = Math.random, texel =
   return g;
 }
 
+/**
+ * Armour box with every edge cut by a flat 45-degree chamfer of width `t`:
+ * 6 faces, 12 edge facets, 8 corner triangles (44 triangles, against ~300
+ * for the rounded box it replaces). Flat normals, so each facet takes the
+ * key light as its own plane - plate, not putty. Non-indexed; face UVs
+ * are fitted to physical size with a random offset per face (12 draws of
+ * `rnd`, as fitBoxUVs made).
+ */
+export function chamferBoxGeometry(w, h, d, t, rnd = Math.random, texel = TEXEL) {
+  const H = [w / 2, h / 2, d / 2];
+  t = Math.min(t, H[0] * 0.98, H[1] * 0.98, H[2] * 0.98);
+  const pos = [], uv = [];
+  const offs = [];
+  for (let i = 0; i < 12; i++) offs.push(rnd());
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), n = new THREE.Vector3();
+  const pt = (c) => new THREE.Vector3(c[0], c[1], c[2]);
+  // quad p0..p3 (any winding), turned to face `out`; u runs p0->p1, v p1->p2
+  const quad = (p0, p1, p2, p3, out, ox, oy) => {
+    a.subVectors(p1, p0); b.subVectors(p2, p0); n.crossVectors(a, b);
+    const uw = p0.distanceTo(p1) * texel, uh = p1.distanceTo(p2) * texel;
+    let P = [p0, p1, p2, p3], U = [[0, 0], [uw, 0], [uw, uh], [0, uh]];
+    if (n.dot(out) < 0) { P = [p0, p3, p2, p1]; U = [U[0], U[3], U[2], U[1]]; }
+    for (const i of [0, 1, 2, 0, 2, 3]) { pos.push(P[i].x, P[i].y, P[i].z); uv.push(U[i][0] + ox, U[i][1] + oy); }
+  };
+  const tri = (p0, p1, p2, out) => {
+    a.subVectors(p1, p0); b.subVectors(p2, p0); n.crossVectors(a, b);
+    const P = n.dot(out) < 0 ? [p0, p2, p1] : [p0, p1, p2];
+    for (const p of P) { pos.push(p.x, p.y, p.z); uv.push(offs[0], offs[1]); }
+  };
+  const out = new THREE.Vector3();
+  // faces
+  for (let i = 0; i < 3; i++) {
+    const j = (i + 1) % 3, k = (i + 2) % 3;
+    for (const s of [1, -1]) {
+      const c = (sj, sk) => { const v = [0, 0, 0]; v[i] = s * H[i]; v[j] = sj * (H[j] - t); v[k] = sk * (H[k] - t); return pt(v); };
+      const f = i * 2 + (s > 0 ? 0 : 1);
+      // u along the longer in-plane axis keeps streaks consistent per face
+      out.set(0, 0, 0).setComponent(i, s);
+      quad(c(-1, -1), c(1, -1), c(1, 1), c(-1, 1), out, offs[f * 2], offs[f * 2 + 1]);
+    }
+  }
+  if (t > 0) {
+    // edge facets: along axis i, between the faces of axes j and k
+    let e = 0;
+    for (let i = 0; i < 3; i++) {
+      const j = (i + 1) % 3, k = (i + 2) % 3;
+      for (const sj of [1, -1]) for (const sk of [1, -1]) {
+        const c = (si, onJ) => {
+          const v = [0, 0, 0];
+          v[i] = si * (H[i] - t);
+          v[j] = sj * (onJ ? H[j] : H[j] - t);
+          v[k] = sk * (onJ ? H[k] - t : H[k]);
+          return pt(v);
+        };
+        out.set(0, 0, 0).setComponent(j, sj).setComponent(k, sk);
+        quad(c(-1, true), c(1, true), c(1, false), c(-1, false), out, offs[e % 12], offs[(e + 5) % 12]);
+        e++;
+      }
+    }
+    for (const sx of [1, -1]) for (const sy of [1, -1]) for (const sz of [1, -1]) {
+      out.set(sx, sy, sz);
+      tri(new THREE.Vector3(sx * H[0], sy * (H[1] - t), sz * (H[2] - t)),
+        new THREE.Vector3(sx * (H[0] - t), sy * H[1], sz * (H[2] - t)),
+        new THREE.Vector3(sx * (H[0] - t), sy * (H[1] - t), sz * H[2]), out);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.computeVertexNormals();
+  return g;
+}
+
 // ---------------------------------------------------------------------------
 // Kit
 // ---------------------------------------------------------------------------
@@ -269,6 +360,9 @@ export class HullKit {
     this.texel = TEXEL * Math.min(1, Math.pow(8 / this.L, 0.6));
     this.k = fitScale(this.L);
     this.rnd = mulberry32(seed);
+    // Own stream for part tones: tinting never shifts the layout stream
+    this.tintRnd = mulberry32((seed ^ 0x5bd1e995) >>> 0);
+    this.soot = true;         // darken toward the drive (off for sub-kits)
     this.faction = 'alpha';   // livery pattern (buildHull sets it)
     this.parts = [];          // {geom, mat, center}
     this.radiators = [];      // {mesh} separate animated meshes
@@ -311,16 +405,47 @@ export class HullKit {
 
   // -- core add -------------------------------------------------------------
   /** Add a geometry under a transform. `mat` is a material key. */
-  add(mat, geom, matrix) {
+  add(mat, geom, matrix, tint = null) {
     // RoundedBoxGeometry is non-indexed; mergeGeometries needs all parts
     // alike, so everything goes non-indexed
     if (geom.index) geom = geom.toNonIndexed();
     geom.applyMatrix4(matrix);
     geom.computeBoundingBox();
+    this._colour(mat, geom, tint);
     const c = new THREE.Vector3();
     geom.boundingBox.getCenter(c);
     this.parts.push({ geom, mat, center: c });
     return geom;
+  }
+
+  /**
+   * Vertex colours (every part carries them, so parts always merge): a
+   * per-part tone step on plating, soot building up over the aft fifth of
+   * the hull, or an explicit `tint` [r, g, b] multiplier.
+   */
+  _colour(mat, geom, tint) {
+    const pos = geom.attributes.position;
+    const col = new Float32Array(pos.count * 3);
+    let r = 1, g = 1, b = 1;
+    const plated = TONED_MATS.has(mat);
+    if (tint) [r, g, b] = tint;
+    else if (plated) {
+      const t = 1 + (this.tintRnd() - 0.5) * (mat === 'paint' ? 0.14 : 0.2);
+      const warm = (this.tintRnd() - 0.5) * 0.04;
+      r = t * (1 + warm); g = t; b = t * (1 - warm);
+    }
+    const z0 = -this.L * 0.3, z1 = -this.L * 0.5;
+    const sootK = this.soot && !tint ? (plated ? 0.5 : SOOTED_MATS.has(mat) ? 0.25 : 0) : 0;
+    for (let i = 0; i < pos.count; i++) {
+      let k = 1;
+      if (sootK) {
+        const u = Math.min(1, Math.max(0, (pos.getZ(i) - z0) / (z1 - z0)));
+        k = 1 - sootK * u * u * (3 - 2 * u);
+      }
+      // soot is warm black: blue falls fastest
+      col[i * 3] = r * k; col[i * 3 + 1] = g * k; col[i * 3 + 2] = b * (k - (1 - k) * 0.12);
+    }
+    geom.setAttribute('color', new THREE.BufferAttribute(col, 3));
   }
 
   /** Compose translate + euler rotation. */
@@ -332,15 +457,30 @@ export class HullKit {
   }
 
   // -- primitives -----------------------------------------------------------
-  /** Bevelled plating box. */
-  box(mat, w, h, d, x, y, z, { rot = null, bevel = 0.35, seg = 2, parent = null } = {}) {
-    const r = Math.min(w, h, d) * 0.5 * bevel;
-    const g = bevel > 0
-      ? new RoundedBoxGeometry(w, h, d, seg, r)
-      : new THREE.BoxGeometry(w, h, d);
-    fitBoxUVs(g, w, h, d, this.rnd, this.texel);
+  /**
+   * Plating box, edges cut by flat chamfers (`bevel` = chamfer as a share
+   * of half the smallest side). `seg` is kept for callers; chamfers have
+   * no segments.
+   */
+  box(mat, w, h, d, x, y, z, { rot = null, bevel = 0.35, seg = 2, parent = null, tint = null } = {}) {
+    let g;
+    if (bevel > 0) g = chamferBoxGeometry(w, h, d, Math.min(w, h, d) * 0.5 * bevel * CHAMFER, this.rnd, this.texel);
+    else {
+      g = new THREE.BoxGeometry(w, h, d);
+      fitBoxUVs(g, w, h, d, this.rnd, this.texel);
+    }
     const m = this.xf(x, y, z, ...(rot || [0, 0, 0]), parent);
-    return this.add(mat, g, m);
+    return this.add(mat, g, m, tint);
+  }
+
+  /**
+   * Tapered end cap on a box section (w x h): from the section's end face
+   * at zEnd it narrows to (w tw) x (h th) over `len` toward `dir` (+1 the
+   * nose, -1 the stern). Turns a brick end into a faired pod.
+   */
+  endCap(mat, w, h, len, x, y, zEnd, dir, { tw = 0.62, th = 0.62, tint = null } = {}) {
+    const g = taperBoxGeometry(w, h, w * tw, h * th, len, this.rnd, this.texel);
+    return this.add(mat, g, this.xf(x, y, zEnd, 0, dir < 0 ? Math.PI : 0, 0), tint);
   }
 
   /** Drum with its axis along Z. sides=8 gives the octagonal hull look. */
@@ -404,6 +544,9 @@ export class HullKit {
     layers = 3, step = 0.9, x = 0, y = 0, tip = 'lens', rim = true }) {
     const seg = len / layers;
     const round = r !== null;
+    // livery collar: most of the first armour layer on a full (3-layer)
+    // cap, a thin rim on the short ones (paint stays off the bow tip)
+    const rimU = layers >= 3 ? 0.6 : 0.32;
     const lerp = (a, b, u) => a + (b - a) * u;
     for (let i = 0; i < layers; i++) {
       const u0 = i / layers, u1 = (i + 1) / layers;
@@ -412,7 +555,7 @@ export class HullKit {
         const rb = r * lerp(1, taper, u0) * (i ? step : 1);
         const rt = r * lerp(1, taper, u1);
         this.drum('hull', rb, seg, zA + seg / 2, { rTop: rt, sides, x, y, sx, sy });
-        if (i === 0 && rim) this.drum('paint', rb * 1.025, seg * 0.32, zA + seg * 0.16, { rTop: lerp(rb, rt, 0.32) * 1.025, sides, x, y, sx, sy });
+        if (i === 0 && rim) this.drum('paint', rb * 1.025, seg * rimU, zA + seg * rimU / 2, { rTop: lerp(rb, rt, rimU) * 1.025, sides, x, y, sx, sy });
       } else {
         const k0 = i ? step : 1;
         const bw = w * lerp(1, tw, u0) * k0, bh = h * lerp(1, th, u0) * k0;
@@ -420,7 +563,7 @@ export class HullKit {
         this.taperBox('hull', bw, bh, fw, fh, seg, x, y, zA);
         if (i === 0 && rim) {
           const e = 1.03;
-          this.taperBox('paint', bw * e, bh * e, lerp(bw, fw, 0.32) * e, lerp(bh, fh, 0.32) * e, seg * 0.32, x, y, zA);
+          this.taperBox('paint', bw * e, bh * e, lerp(bw, fw, rimU) * e, lerp(bh, fh, rimU) * e, seg * rimU, x, y, zA);
         }
       }
     }
@@ -437,6 +580,15 @@ export class HullKit {
       this.drum('dark', tr * 0.92, len * 0.06, zf - len * 0.01, { x, y, sides: 16 });
     }
     return zf;
+  }
+
+  /** Round strut between two hull-local points. */
+  rod(mat, r, a, b, { sides = 6, tint = null } = {}) {
+    const len = a.distanceTo(b);
+    const g = new THREE.CylinderGeometry(r, r, len, sides, 1, false);
+    const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
+    const m = new THREE.Matrix4().compose(a.clone().add(b).multiplyScalar(0.5), q, new THREE.Vector3(1, 1, 1));
+    return this.add(mat, g, m, tint);
   }
 
   /** Solid cone (radar dish, nose cap), axis along +Z. */
@@ -491,7 +643,20 @@ export class HullKit {
    */
   armorBelt(w, h, d, x, y, z, { face = '+y', mat = 'hull' } = {}) {
     this.box('trim', w * 1.06, h * 0.45, d * 1.04, x, y, z, { bevel: 0.2 });
-    this.box(mat, w, h, d, x, y + (face === '+y' ? h * 0.3 : face === '-y' ? -h * 0.3 : 0), z, { bevel: 0.45 });
+    // The slab is laid as separate plates along the hull with open joints
+    // down to the backing; alternate plates are cut shorter across the
+    // belt, so its edge steps like fitted armour instead of running as
+    // one extruded bar.
+    const flank = face[1] === 'x';
+    const across = flank ? h : w;
+    const n = Math.max(2, Math.min(7, Math.round(d / (across * 1.15))));
+    const joint = Math.min(0.035 * this.k, d / n * 0.12);
+    const oy = face === '+y' ? h * 0.3 : face === '-y' ? -h * 0.3 : 0;
+    for (let i = 0; i < n; i++) {
+      const zc = z - d / 2 + (i + 0.5) * (d / n);
+      const cut = i % 2 ? 0.88 : 1;
+      this.box(mat, flank ? w : w * cut, flank ? h * cut : h, d / n - joint, x, y + oy, zc, { bevel: 0.45 });
+    }
   }
 
   /**
@@ -892,6 +1057,7 @@ export class HullKit {
     // Local +Y is the deployed span. A mirrored mount must point outboard.
     if (-Math.sin(angle) * x + Math.cos(angle) * y < 0) angle += Math.PI;
     const wing = new HullKit({ length: this.L, width: this.W }, this.rnd() * 1e6);
+    wing.soot = false;
     const bays = Math.max(3, Math.min(7, Math.round(len / span * 3)));
     const bayLen = len / bays;
     const rail = t * 1.8;
@@ -1015,29 +1181,114 @@ export class HullKit {
       this.strobe(0, r * 1.04, -L * 0.47, 0.5);
       this.strobe(0, -r * 1.04, -L * 0.47, 0.55);
     }
+    // Bells: a lathed bell contour (steep at the throat, straightening to
+    // the lip) in heat-blued alloy, with a rolled lip, stiffening hoops,
+    // gimbal actuators and a throat collar. The mouth plane and centres are
+    // where SceneManager seats the plumes. The inner liners of all bells
+    // are ONE mesh on the bellHeat material, whose emissive map runs from
+    // a white-hot injector plate at the throat to a dull red lip.
+    const zT = -L * 0.4825, bl = L * 0.065;
+    const flare = (u) => 0.34 + 0.66 * (1 - Math.pow(1 - u, 1.9));
+    const contour = (k, n = 9) => Array.from({ length: n }, (_, i) => {
+      const u = i / (n - 1);
+      return new THREE.Vector2(k * bellR * flare(u), u * bl);
+    });
+    const liners = [];
     for (const p of engineConfig.positions) {
-      // bell: open cone, dark, with a stiffening ring and throat collar
-      const bell = new THREE.CylinderGeometry(bellR * 0.5, bellR, L * 0.065, 18, 1, true);
-      fitCylinderUVs(bell, bellR, L * 0.065, this.rnd, this.texel);
-      bell.rotateX(Math.PI / 2);
-      this.add('dark', bell, this.xf(p.x, p.y, -L * 0.515));
-      this.drum('barrel', bellR * 1.02, L * 0.008, -L * 0.545, { x: p.x, y: p.y, sides: 18, open: true });
-      this.drum('trim', bellR * 0.58, L * 0.02, -L * 0.485, { x: p.x, y: p.y, sides: 12 });
-      if (d.shape === 'torch') {
-        // magnetic nozzle: coil rings standing off the bell
-        this.drum('trim', bellR * 1.2, L * 0.006, -L * 0.53, { x: p.x, y: p.y, sides: 18, open: true });
-        this.drum('accent', bellR * 1.12, L * 0.003, -L * 0.536, { x: p.x, y: p.y, sides: 18, open: true });
+      const bell = new THREE.LatheGeometry(contour(1), 20);
+      bell.rotateX(-Math.PI / 2);
+      this.add('barrel', bell, this.xf(p.x, p.y, zT), BELL_TINT);
+      this.add('barrel', new THREE.TorusGeometry(bellR, bellR * 0.06, 6, 20), this.xf(p.x, p.y, zT - bl), BELL_LIP_TINT);
+      for (const u of [0.3, 0.62]) {
+        this.add('barrel', new THREE.TorusGeometry(bellR * flare(u) * 1.02, bellR * 0.035, 4, 20),
+          this.xf(p.x, p.y, zT - bl * u), BELL_LIP_TINT);
       }
-      // inner heat liner: separate animated mesh
-      const liner = new THREE.Mesh(
-        new THREE.CylinderGeometry(bellR * 0.46, bellR * 0.94, L * 0.06, 18, 1, true),
-        null);
-      liner.geometry.rotateX(Math.PI / 2);
-      liner.position.set(p.x, p.y, -L * 0.515);
-      this.bellHeat.push(liner);
+      this.drum('trim', bellR * 0.58, L * 0.02, -L * 0.485, { x: p.x, y: p.y, sides: 12 });
+      // gimbal actuators from the thrust plate to the first hoop
+      for (let a = 0; a < 3; a++) {
+        const ang = a / 3 * Math.PI * 2 + Math.PI / 6;
+        const c = Math.cos(ang), sn = Math.sin(ang);
+        this.rod('barrel', bellR * 0.05,
+          new THREE.Vector3(p.x + c * bellR * 0.52, p.y + sn * bellR * 0.52, -L * 0.478),
+          new THREE.Vector3(p.x + c * bellR * flare(0.3) * 1.04, p.y + sn * bellR * flare(0.3) * 1.04, zT - bl * 0.3));
+      }
+      if (d.shape === 'torch') {
+        // magnetic nozzle: coil rings hugging the bell (the pair of bells
+        // sits lip to lip, so a wider ring would cut into its neighbour)
+        this.drum('trim', bellR * 1.05, L * 0.006, -L * 0.53, { x: p.x, y: p.y, sides: 18, open: true });
+        this.drum('accent', bellR * 1.03, L * 0.003, -L * 0.536, { x: p.x, y: p.y, sides: 18, open: true });
+      }
+      // inner heat liner (v = 0 at the throat) + injector plate. The
+      // throat is sunk into the thrust plate, so the injector disc sits
+      // just proud of the plate's aft face (-0.5 L on every drive shape):
+      // looking up a bell shows a white-hot core, never the plating
+      // behind it. Its glow runs from v = 0 at the centre to the liner's
+      // own v where they meet.
+      const liner = new THREE.LatheGeometry(contour(0.93), 20);
+      liner.rotateX(-Math.PI / 2);
+      liner.translate(p.x, p.y, zT);
+      const zI = -L * 0.5012, uI = (zT - zI) / bl;
+      const plate = new THREE.CircleGeometry(bellR * 0.93 * flare(uI), 20);
+      plate.rotateY(Math.PI);
+      plate.translate(p.x, p.y, zI);
+      const puv = plate.attributes.uv;
+      for (let i = 0; i < puv.count; i++) puv.setXY(i, 0.5, i === 0 ? 0 : uI);
+      liners.push(liner, plate);
       // feed pipes from the skirt to the bell
       this.drum('barrel', bellR * 0.12, L * 0.05, -L * 0.465, { x: p.x * 0.9, y: p.y * 0.9, sides: 6 });
     }
+    // Thrust structure between the bells: a coolant manifold linking
+    // neighbouring throats just proud of the thrust plate, a pump pod on
+    // each bell, and - where the bells ring an empty centre - the reactor's
+    // exhaust plug. What the chase camera looks at is machinery, not a
+    // blank plate with cones on it.
+    const seats = engineConfig.positions;
+    let dMin = Infinity;
+    for (let i = 0; i < seats.length; i++) {
+      for (let j = i + 1; j < seats.length; j++) dMin = Math.min(dMin, Math.hypot(seats[i].x - seats[j].x, seats[i].y - seats[j].y));
+    }
+    // (pipes stop at the bell's outer wall where their aft edge meets it -
+    // any deeper and the pipe end shows through the liner)
+    const zM = zT - bl * 0.36, wall = bellR * flare(0.36 + bellR * 0.11 / bl);
+    for (let i = 0; i < seats.length; i++) {
+      for (let j = i + 1; j < seats.length; j++) {
+        const dx = seats[j].x - seats[i].x, dy = seats[j].y - seats[i].y, dist = Math.hypot(dx, dy);
+        if (dist > dMin * 1.25 || dist <= wall * 2.05) continue;
+        const ux = dx / dist, uy = dy / dist;
+        this.rod('barrel', bellR * 0.11,
+          new THREE.Vector3(seats[i].x + ux * wall, seats[i].y + uy * wall, zM),
+          new THREE.Vector3(seats[j].x - ux * wall, seats[j].y - uy * wall, zM), { sides: 8, tint: BELL_LIP_TINT });
+        this.sphere('trim', bellR * 0.17, seats[i].x + dx / 2, seats[i].y + dy / 2, zM, { ws: 8, hs: 6 });
+      }
+    }
+    let cx = 0, cy = 0;
+    for (const p of seats) { cx += p.x / seats.length; cy += p.y / seats.length; }
+    const rMin = Math.min(...seats.map(p => Math.hypot(p.x - cx, p.y - cy)));
+    for (const p of seats) {
+      // pump pod hard against each bell's outer wall: inboard on a ring
+      // of bells, dorsal on rows and pairs (no inboard room there)
+      const r = Math.hypot(p.x - cx, p.y - cy) || 1;
+      const perp = rMin > bellR * 2.1 ? [-(p.x - cx) / r, -(p.y - cy) / r] : [0, 1];
+      const px = p.x + perp[0] * bellR * 0.98, py = p.y + perp[1] * bellR * 0.98;
+      this.drum('trim', bellR * 0.2, L * 0.022, -L * 0.502, { x: px, y: py, sides: 10 });
+      this.drum('barrel', bellR * 0.12, L * 0.008, -L * 0.515, { x: px, y: py, sides: 10 });
+    }
+    if (seats.length >= 5 && rMin > bellR * 2.1) {
+      const rc = (rMin - bellR) * 0.78;
+      this.drum('trim', rc, L * 0.016, -L * 0.502, { x: cx, y: cy, sides: 12 });
+      this.drum('accent', rc * 0.66, L * 0.004, -L * 0.511, { x: cx, y: cy, sides: 12 });
+      const plug = new THREE.ConeGeometry(rc * 0.62, L * 0.04, 16);
+      plug.rotateX(-Math.PI / 2);                 // apex aft
+      this.add('barrel', plug, this.xf(cx, cy, -L * 0.53), BELL_TINT);
+      for (const u of [0.35, 0.7]) {
+        this.add('barrel', new THREE.TorusGeometry(rc * 0.62 * (1 - u) * 1.04, rc * 0.03, 4, 16),
+          this.xf(cx, cy, -L * 0.51 - L * 0.04 * u), BELL_LIP_TINT);
+      }
+    }
+    const linerMesh = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(liners, false), null);
+    for (const g of liners) g.dispose();
+    linerMesh.name = 'hull_bell_liners';
+    this.bellHeat.push(linerMesh);
   }
 
   // -- assembly -------------------------------------------------------------
@@ -1054,6 +1305,9 @@ export class HullKit {
       if (!merged) { console.error('hull merge failed for', key); continue; }
       const mesh = new THREE.Mesh(merged, mats[key]);
       mesh.name = `hull_${key}`;
+      // ready for the sun shadow pass (lights only cost when it is on)
+      mesh.castShadow = SHADOW_MATS.has(key);
+      mesh.receiveShadow = SHADOW_MATS.has(key);
       group.add(mesh);
     }
   }
@@ -1074,6 +1328,7 @@ export class HullKit {
     yaw.position.y = s * 0.2;
     mount.add(yaw);
     const yk = new HullKit({ length: this.L, width: this.W }, this.rnd() * 1e6);
+    yk.soot = false;
     yk.box('trim', s * 0.9, s * 0.1, s * 0.62, 0, s * 0.05, -s * 0.1, { bevel: 0.2 });
     if (heavy) {
       // armoured gunhouse: sloped glacis, raised rangefinder ears
@@ -1091,6 +1346,7 @@ export class HullKit {
     pitch.position.set(0, s * 0.32, s * 0.15);
     yaw.add(pitch);
     const pk = new HullKit({ length: this.L, width: this.W }, this.rnd() * 1e6);
+    pk.soot = false;
     pk.box('dark', s * (heavy ? 0.7 : 0.6), s * (heavy ? 0.34 : 0.3), s * 0.28, 0, 0, s * 0.12, { bevel: 0.25 });   // mantlet
     pk._mergeInto(pitch, mats);
     // Twin barrels, each its own group so the one that fired recoils
@@ -1100,6 +1356,7 @@ export class HullKit {
       g.name = 'turret_barrel';
       g.position.x = bx * s;
       const bk = new HullKit({ length: this.L, width: this.W }, pk.rnd() * 1e6);
+      bk.soot = false;
       bk.drum('barrel', s * (heavy ? 0.07 : 0.06), s * 1.25, s * 0.78, { sides: 8 });
       bk.drum('barrel', s * (heavy ? 0.095 : 0.085), s * 0.14, s * 1.33, { sides: 8 });   // muzzle brake
       bk.drum('barrel', s * 0.09, s * 0.12, s * 0.45, { sides: 8 });                     // recoil collar
@@ -1121,6 +1378,7 @@ export class HullKit {
     mount.position.set(r.x, r.y, r.z);
     mount.rotation.z = r.angle;
     const bk = new HullKit({ length: this.L, width: this.W }, this.rnd() * 1e6);
+    bk.soot = false;
     bk.sphere('hull', s * 0.3, 0, 0, 0, { ws: 14, hs: 10 });
     bk.box('hull', s * 0.2, s * 0.2, s * 0.32, 0, 0, s * 0.24, { bevel: 0.35, seg: 1 });
     bk.drum('hull', s * 0.05, s * 0.36, s * 0.5, { sides: 8 });
@@ -1130,6 +1388,7 @@ export class HullKit {
     const ball = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(geoms, false), mats.hull);
     for (const g of geoms) g.dispose();
     ball.name = `hull_${name}`;
+    ball.castShadow = ball.receiveShadow = true;
     ball.position.y = s * 0.3;
     ball.rotation.order = 'YXZ';
     mount.add(ball);
@@ -1152,6 +1411,8 @@ export class HullKit {
       body = new THREE.InstancedMesh(rackRoundGeometry(s), rackRoundMaterial(), n);
     } else {
       const g = new THREE.BoxGeometry(s * 0.9, s * 0.1, s * 0.9);
+      // mats.hull multiplies by vertex colour: hatches are plain plate
+      g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 3).fill(1), 3));
       body = new THREE.InstancedMesh(g, mats.hull, n);
       const lg = new THREE.BoxGeometry(s * 0.22, s * 0.04, s * 0.22);
       lg.translate(s * 0.28, s * 0.07, -s * 0.28);
@@ -1159,6 +1420,7 @@ export class HullKit {
       lamp.name = 'hull_magazine_lamp';
     }
     body.name = kind === 'rack' ? 'hull_magazine_rack' : 'hull_magazine_hatch';
+    body.castShadow = body.receiveShadow = true;
     const base = [];
     const m = new THREE.Matrix4();
     const one = new THREE.Vector3(1, 1, 1);
@@ -1223,6 +1485,7 @@ export class HullKit {
       const mesh = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(geoms, false), mats.hull);
       for (const g of geoms) g.dispose();
       mesh.name = 'hull_launch_door';
+      mesh.castShadow = mesh.receiveShadow = true;
       group.add(mesh);
       return { mesh, bank: d.bank, slide: d.slide, closed: new THREE.Vector3() };
     });
@@ -1360,6 +1623,23 @@ function hullCorvette(k) {
   const rz = -L * 0.335 + rad.len / 2;
   k.radiator(rad.span, rad.len, R, 0, rz, -Math.PI / 2);
   k.radiator(rad.span, rad.len, -R, 0, rz, Math.PI / 2);
+  // Class identity: a swept ventral keel blade in livery (the smallest hull
+  // carries the boldest colour) and a long sensor lance over the bow -
+  // a torpedo boat reads as a dart, not a small cruiser.
+  {
+    const g = taperBoxGeometry(W * 0.04, L * 0.24, W * 0.022, L * 0.09, W * 0.34, k.rnd, k.texel);
+    const m = k.xf(0, -deck - W * 0.02, -L * 0.19, Math.PI / 2, 0, 0);
+    const shear = new THREE.Matrix4();
+    shear.elements[6] = 0.75;                    // z += 0.75 y: swept aft going down
+    k.add('paint', g, shear.multiply(m));
+    k.box('trim', W * 0.07, W * 0.05, L * 0.26, 0, -deck - W * 0.03, -L * 0.19, { bevel: 0.4 });
+    const a = new THREE.Vector3(R * 0.2, spineY + W * 0.02, L * 0.1);
+    const b = new THREE.Vector3(R * 0.2, spineY + W * 0.02, L * 0.5);
+    k.rod('barrel', W * 0.012, a, b);
+    k.box('trim', W * 0.05, W * 0.05, L * 0.03, R * 0.2, spineY + W * 0.01, L * 0.125, { bevel: 0.3 });
+    k.drum('trim', W * 0.022, L * 0.03, L * 0.45, { x: R * 0.2, y: spineY + W * 0.02, sides: 8 });
+    k.drum('glass', W * 0.016, L * 0.012, L * 0.502, { x: R * 0.2, y: spineY + W * 0.02, sides: 8 });
+  }
   k.drive = { shape: 'torch', z: -L * 0.35, r: R };
   k.reactorPos.set(0, 0, -L * 0.42);
 }
@@ -1409,6 +1689,8 @@ function hullFrigate(k) {
   const rad = k.radiatorSize(2, { maxSpan: W * 1.4, maxLen: L * 0.32 });
   k.radiator(rad.span, rad.len, ap, 0, -L * 0.36 + rad.len / 2 + L * 0.01, -Math.PI / 2);
   k.radiator(rad.span, rad.len, -ap, 0, -L * 0.36 + rad.len / 2 + L * 0.01, Math.PI / 2);
+  // Gun head faired back onto the neck truss instead of ending as a brick
+  k.endCap('hull', hw, hh, L * 0.045, 0, 0, L * 0.23, -1, { tw: 0.56, th: 0.6 });
   k.drive = { shape: 'torch', z: -L * 0.365, r: R };
   k.reactorPos.set(0, 0, -L * 0.42);
 }
@@ -1639,6 +1921,9 @@ function hullBattlecruiser(k) {
   const rad = k.radiatorSize(2, { maxSpan: W * 0.9, maxLen: L * 0.17 });
   k.radiator(rad.span, rad.len, 0, W * 0.18, -L * 0.07, 0);
   k.radiator(rad.span, rad.len, 0, -W * 0.18, -L * 0.07, Math.PI);
+  // The split hull as two faired pods on the waist truss, not two bricks
+  k.endCap('hull', fw, fh, L * 0.05, 0, 0, L * 0.02, -1, { tw: 0.7, th: 0.72 });
+  k.endCap('hull', aw, ah, L * 0.045, 0, 0, -L * 0.16, 1, { tw: 0.6, th: 0.62 });
   k.drive = { shape: 'box', w: W * 0.9, h: W * 0.42 };
   k.reactorPos.set(0, 0, -L * 0.32);
 }
@@ -1816,6 +2101,13 @@ function hullDreadnought(k, opts = {}) {
     for (const sy of [-1, 1]) {
       const a = Math.atan2(-sx, sy);   // local +Y -> (sx, sy) diagonal
       k.radiator(rad.span, rad.len, sx * W * 0.52, sy * W * 0.52, -L * 0.33 + rad.len / 2 + L * 0.005, a);
+    }
+  }
+  // Faired sponson tails in livery: the flagship's colours from the chase
+  // camera, and four armoured pods instead of four brick ends
+  for (const sx of [-1, 1]) {
+    for (const sy of [-1, 1]) {
+      k.endCap('paint', W * 0.32, W * 0.32, L * 0.05, sx * W * 0.36, sy * W * 0.36, -L * 0.34, -1, { tw: 0.58, th: 0.58 });
     }
   }
   k.drive = { shape: 'drum', r: W * 0.5 };

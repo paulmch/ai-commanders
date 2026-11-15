@@ -6,6 +6,9 @@ import { PostFX } from './render/PostFX.js';
 import { buildHull, buildShipMaterials, ACCENT_GLOW } from './render/Hulls.js';
 import { updateHullDetails } from './render/Hulls.js';
 import { createTorch } from './render/Torch.js';
+
+const _plumeTurn = new THREE.Vector3();
+const _plumeQ = new THREE.Quaternion();
 import { Ribbon } from './render/Trails.js';
 import { Blast, ShipDestruction, WRECK_DRIFT_S } from './render/Explosion.js';
 import { DamageFX } from './render/DamageFX.js';
@@ -80,6 +83,11 @@ export class SceneManager {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    // Sun shadows (high tier): always "enabled" on the renderer - whether a
+    // shadow map is actually rendered is the sun light's castShadow, which
+    // Environment drives from the quality preset (off = zero cost).
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
 
     this.controls = new OrbitControls(this.camera, this.canvas);
     this.controls.enableDamping = true;
@@ -300,8 +308,10 @@ export class SceneManager {
     for (let e = 0; e < engineConfig.count; e++) {
       const p = engineConfig.positions[e];
       const light = e === 0 ? this.tryPointLight(0x7fb0ff, 0, size.length * 5) : null;
-      const torch = createTorch({ radius: plumeR, length: plumeLength, light, tint: 'fusion' });
+      const torch = createTorch({ radius: plumeR, length: plumeLength, light, tint: 'fusion', cluster: engineConfig.count });
       torch.group.position.set(p.x, p.y, -size.length * 0.53);
+      // Bells are canted a few degrees off the drive axis: the plumes fan out
+      torch.group.rotation.set(0.28 * p.y / size.width, -0.28 * p.x / size.width, 0);
       group.add(torch.group);
       torches.push(torch);
     }
@@ -421,9 +431,29 @@ export class SceneManager {
     const targetThrust = state.thrust || 0;
     ud.smoothThrust += (targetThrust - ud.smoothThrust) * (1 - Math.exp(-dt * 3.0));
     const thrust = ud.smoothThrust;
-    for (const t of ud.torches) t.update(thrust, this.elapsed, state.dying ? 0.7 : 0, this.currentTime);
+    // Plume sweep: the recorded turn rate in the hull frame (render/Torch.js)
+    let turn = null;
+    if (Array.isArray(state.omega) && !state.dying) {
+      turn = _plumeTurn.fromArray(state.omega).applyQuaternion(_plumeQ.copy(ship.quaternion).invert());
+    }
+    for (const t of ud.torches) t.update(thrust, this.elapsed, state.dying ? 0.7 : 0, this.currentTime, turn);
     if (mats) mats.bellHeat.emissiveIntensity = 0.3 + 2.8 * thrust;
     updateHullDetails(ship, state, this);   // hull rigs, doors, nav lamps (render/HullRigs.js)
+  }
+
+  /**
+   * Hull self-shadowing: every lit (MeshStandard) hull mesh receives the
+   * sun shadow, the opaque ones cast it. Flagged by material type, not by
+   * name, and re-swept every few frames so parts other modules add later
+   * (rigs, radiators, breach geometry) join in without knowing about it.
+   * Plumes, sprites, beams and lamp instances are other material types and
+   * never cast. Flags are inert while the sun light casts no shadow (low).
+   */
+  _flagShadowMeshes() {
+    for (const ship of this.ships.values()) {
+      if (!ship.visible) continue;
+      ship.traverse(_flagShadow);
+    }
   }
 
   // ===========================================================================
@@ -704,7 +734,8 @@ export class SceneManager {
     this.camera.userData.viewDist = viewingDistance; // Environment dust-mote scale
     this.rangeRingMaterial.opacity = 0.12 * THREE.MathUtils.smoothstep(viewingDistance, 45, 250);
     this.tacticalOverlay.visible = this.rangeRingMaterial.opacity > 0.002;
-    this.environment.update(this.camera, this.delta);
+    if (this.frameIndex % 20 === 0) this._flagShadowMeshes();
+    this.environment.update(this.camera, this.delta, this.controls.target, viewingDistance);
     this.postfx.update(this.delta);
 
     // Camera shake from nearby detonations, applied only for the draw
@@ -722,4 +753,13 @@ export class SceneManager {
     this.camera.position.copy(saved);
     this.frameIndex++;
   }
+}
+
+function _flagShadow(o) {
+  if (!o.isMesh || o.userData.shadowFlagged) return;
+  o.userData.shadowFlagged = true;
+  const m = Array.isArray(o.material) ? o.material[0] : o.material;
+  if (!m || !m.isMeshStandardMaterial) return;
+  o.receiveShadow = true;
+  o.castShadow = !m.transparent && m.blending === THREE.NormalBlending && m.depthWrite !== false;
 }
