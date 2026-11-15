@@ -3030,9 +3030,6 @@ class CombatSimulation:
             # hulk is then - not v*dt behind it. No RNG draw here.
             ship.kinematic_state = propagate_state(ship.kinematic_state, dt, 0.0, 0.0, 0.0)
             self._detonate_reactor(ship)
-            # The wreck still coasts through this tick (see step()).
-            ks = ship.kinematic_state
-            ks.position = ks.position + ks.velocity * dt
             return
 
         # Torch flicker
