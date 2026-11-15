@@ -583,7 +583,32 @@ def test_turn_time_after_a_sideways_spin_to_a_far_target(hull, target_deg):
 # throttle; six rounds forecast at 0.72 all passed outside the gate.
 # ---------------------------------------------------------------------------
 
-def _switch_tick_rounds(seed, first="burn"):
+def _new_order(kind, t, d):
+    from src.simulation import Maneuver, ManeuverType
+    if kind == "HEADING":
+        return Maneuver(ManeuverType.HEADING, t, duration=1e9, throttle=1.0,
+                        heading_direction={"x": d.x, "y": d.y, "z": d.z})
+    if kind == "ATTITUDE":
+        return Maneuver(ManeuverType.HEADING, t, duration=1e9, throttle=0.0,
+                        heading_direction={"x": d.x, "y": d.y, "z": d.z})
+    if kind == "PADLOCK":
+        return Maneuver(ManeuverType.PADLOCK, t, duration=1e9, target_id="shooter")
+    if kind == "MAINTAIN":
+        return Maneuver(ManeuverType.MAINTAIN, t, duration=1e9, throttle=0.0)
+    if kind == "INTERCEPT":
+        return Maneuver(ManeuverType.INTERCEPT, t, duration=1e9, throttle=1.0, target_id="shooter")
+    if kind == "STANDOFF":
+        return Maneuver(ManeuverType.INTERCEPT, t, duration=1e9, throttle=1.0,
+                        target_id="shooter", standoff_m=100e3)
+    if kind == "HOLD_RANGE":
+        return Maneuver(ManeuverType.HOLD_RANGE, t, duration=1e9, throttle=1.0,
+                        target_id="shooter", hold_range_m=150e3)
+    if kind == "BURN":
+        return Maneuver(ManeuverType.BURN, t, duration=1e9, throttle=1.0, direction=d)
+    raise ValueError(kind)
+
+
+def _switch_tick_rounds(seed, first="burn", to="HEADING"):
     import contextlib
     import io
     import math
@@ -605,17 +630,17 @@ def _switch_tick_rounds(seed, first="burn"):
     sim.add_ship(sh)
     sh.current_maneuver = Maneuver(ManeuverType.PADLOCK, 0, duration=1e9, target_id="target")
     f0 = tgt.forward.rotate_around_axis(Vector3D(0, 0, 1), math.radians(rng.uniform(60, 120)))
-    tgt.current_maneuver = Maneuver(ManeuverType.HEADING, 0, duration=1e9, throttle=1.0,
-                                    heading_direction={"x": f0.x, "y": f0.y, "z": f0.z})
+    tgt.current_maneuver = (Maneuver(ManeuverType.HEADING, 0, duration=1e9, throttle=1.0,
+                                     heading_direction={"x": f0.x, "y": f0.y, "z": f0.z})
+                            if first == "burn" else
+                            Maneuver(ManeuverType.MAINTAIN, 0, duration=1e9, throttle=0.0))
     shots, out, stale_next = {}, {}, []
     with contextlib.redirect_stdout(io.StringIO()):
         while sim.current_time < 70.0:
             if abs(sim.current_time - 30.0) < 1e-6:
                 ang = rng.uniform(60, 150) * rng.choice([-1, 1])
                 d = tgt.forward.rotate_around_axis(Vector3D(0, 0, 1), math.radians(ang))
-                tgt.current_maneuver = Maneuver(
-                    ManeuverType.HEADING, sim.current_time, duration=1e9, throttle=1.0,
-                    heading_direction={"x": d.x, "y": d.y, "z": d.z})
+                tgt.current_maneuver = _new_order(to, sim.current_time, d)
                 sh.weapons_orders = {s: WeaponsOrder(WeaponsCommand.FIRE_IMMEDIATE, s, "target",
                                                      min_hit_probability=0.0)
                                      for s in sh.weapons if not s.startswith("pd_")}
@@ -782,3 +807,43 @@ def test_an_uncommanded_tick_brakes_the_spin_on_rcs_instead_of_zeroing_it():
         sim._update_ship(ship, 1.0)
         ticks += 1
     assert ticks == math.ceil(w0 / a_rcs - 1e-9)     # stops at RCS authority, not at once
+
+
+
+def _switch_check(to, seeds=range(1, 9), first="burn"):
+    import math
+    rounds = []
+    for seed in seeds:
+        rounds += _switch_tick_rounds(seed, first=first, to=to)[0]
+    hits = sum(h for _, _, h in rounds)
+    forecast = sum(p for p, _, _ in rounds)
+    sd = math.sqrt(sum(p * (1 - p) for p, _, _ in rounds))
+    return len(rounds), hits, forecast, sd
+
+
+@pytest.mark.parametrize("to", ["HEADING", "ATTITUDE", "HOLD_RANGE", "STANDOFF",
+                                "PADLOCK", "MAINTAIN"])
+def test_every_order_that_ends_a_burn_is_forecast_on_its_first_tick(to):
+    """Reviewer finding 5. A torpedo cruiser at full burn gets a new order and
+    a battleship fires on that tick. Orders whose lead reads the drive
+    (HEADING - turning or attitude only -, HOLD_RANGE, a standoff INTERCEPT)
+    see the old burn on that tick and are charged it as stale; orders whose
+    lead reads the order (PADLOCK, MAINTAIN) need no charge. Seeds 1-24:
+    0/120 hits forecast 0.8-0.9 for the first four (were 77), 78 vs 77
+    (PADLOCK) and 82 vs 77 (MAINTAIN)."""
+    n, hits, forecast, sd = _switch_check(to)
+    assert n >= 30
+    assert abs(hits - forecast) <= 3.0 * sd + 2.0, (to, n, hits, forecast)
+
+
+@pytest.mark.xfail(strict=False, reason=(
+    "Not a stale input: the new order burns WHILE its nose swings onto a new "
+    "direction (BURN, plain INTERCEPT), and the lead extrapolates the burn "
+    "along the current nose. Seeds 1-24, full-burn cruiser re-ordered 60-150 "
+    "deg away: BURN from a coast 8 hits vs 62 forecast, INTERCEPT from a burn "
+    "57 vs 77. Needs a turning-burn term in the track model (the same gap "
+    "as the INTERCEPT 400-499 km residual); not fitted."))
+@pytest.mark.parametrize("first, to", [("coast", "BURN"), ("burn", "INTERCEPT")])
+def test_a_burn_while_turning_is_forecast_on_its_first_tick(first, to):
+    n, hits, forecast, sd = _switch_check(to, seeds=range(1, 25), first=first)
+    assert abs(hits - forecast) <= 3.0 * sd + 2.0, (to, n, hits, forecast)

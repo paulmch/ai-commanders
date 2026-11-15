@@ -2502,6 +2502,26 @@ class CombatSimulation:
                 else:
                     pending_in = 0.0
 
+        # Any other fresh order whose lead reads the drive (HEADING without a
+        # pending turn-then-burn - attitude only, toward a point or ship -
+        # BURN, HOLD_RANGE, a range-keeping INTERCEPT): on its first tick the
+        # drive still shows the last order's burn. BURN burns along the nose
+        # from the first tick; the range-keeping orders and attitude-only
+        # HEADING start from a coast (they turn first), so the whole old burn
+        # is stale. Orders whose lead reads the ORDER (PADLOCK, MAINTAIN,
+        # plain INTERCEPT, EVASIVE) are led from the new order at once.
+        if (stale == 0.0 and ks is not None and maneuver is not None
+                and maneuver is not getattr(target, 'flown_maneuver', maneuver)
+                and not (dodges and getattr(target, 'execution_mode', None) in EVASION_OVERLAY_MODES)):
+            mt = maneuver.maneuver_type
+            reads_drive = (mt in (ManeuverType.HEADING, ManeuverType.BURN, ManeuverType.HOLD_RANGE)
+                           or (mt == ManeuverType.INTERCEPT and maneuver.range_keeping))
+            if reads_drive and not (mt == ManeuverType.HEADING and pending_in > 0.0):
+                expected = Vector3D(0.0, 0.0, 0.0)
+                if mt == ManeuverType.BURN and maneuver.direction and ks.mass_kg > 0:
+                    expected = ks.forward * (ks.thrust_n * max(0.0, min(1.0, throttle)) / ks.mass_kg)
+                stale = across(self._estimate_target_acceleration(target) - expected)
+
         return TargetMotion(
             accel_ms2=accel,
             dodges=dodges,
