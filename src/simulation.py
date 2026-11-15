@@ -6896,16 +6896,43 @@ class CombatSimulation:
         return arcs
 
     def _arcs_begin_tick(self) -> None:
-        """Body frame of every live hull from the start-of-step attitude."""
+        """
+        Body frame of every live hull from the start-of-step attitude. A hull
+        that is out of the fight stands its mounts down (idle, any reported
+        mask closed with its cause): a destroyed, dying or surrendered ship
+        all of them, a crew-incapacitated one its guns (its PD is automatic
+        and keeps working).
+        """
         now = self.current_time
         for ship in self.ships.values():
-            if ship.is_destroyed:
-                continue
             arcs = ship.arcs
+            if ship.is_destroyed or ship.is_dying or ship.is_surrendered:
+                if arcs is not None and arcs.mounts and not arcs.stood_down:
+                    arcs.stood_down = True
+                    cause = ('destroyed' if ship.is_destroyed else
+                             'dying' if ship.is_dying else 'surrendered')
+                    self._arcs_stand_down(ship, arcs.mounts, cause)
+                if ship.is_destroyed:
+                    continue
+            elif ship.crew_incapacitated and arcs is not None and arcs.guns:
+                self._arcs_stand_down(ship, arcs.guns.values(), 'crew_incapacitated')
             if arcs is None:
                 arcs = self._arcs_for(ship)
             ks = ship.kinematic_state
             arcs.set_frame(ks.forward, ks.up, now)
+
+    def _arcs_stand_down(self, ship: ShipCombatState, mounts, cause: str) -> None:
+        """Idle the mounts; a mask that was reported gets its exit event."""
+        for mount in mounts:
+            if mount.masked_reported:
+                self._log_event(SimulationEventType.MOUNT_MASKED, ship.ship_id, mount.target_id, {
+                    'slot': mount.slot, 'kind': mount.kind, 'masked': False,
+                    'duration_s': self.current_time - mount.masked_since, 'cause': cause,
+                })
+            mount.masked_since = None
+            mount.masked_reported = False
+            mount.fallback_id = None
+            mount.idle()
 
     def _arcs_note_mask(self, ship: ShipCombatState, mount, state: int, reason: str) -> None:
         """

@@ -646,6 +646,10 @@ def test_the_formation_throttle_is_what_the_ship_flies():
 # courses) and what wash remains is recorded as `plume_wash`.
 # (Re-pinned once more: `plume_wash` events gained the `radiators` list -
 # empty in this battle; same 1532 events, same courses.)
+# (Re-pinned for weapon arcs (src/weapon_arcs.py, pass 5 wave 4): mounts fire
+# only where their own hull leaves them clear and after slewing, ships roll to
+# unmask - and re-pinned whenever data/hull_mounts.json is re-exported, e.g.
+# gun turrets depressing 10 degrees instead of 2.)
 # (Re-pinned for the round-2 PD placement: the destroyer and torpedo cruiser
 # PD masks in data/hull_mounts.json changed, so which turret bears on which
 # torpedo changed; no engine code changed.)

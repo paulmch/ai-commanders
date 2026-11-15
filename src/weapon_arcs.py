@@ -404,7 +404,7 @@ class ShipArcs:
     """
 
     __slots__ = ("hull", "mounts", "guns", "pd", "roll", "roll_rate", "roll_goal",
-                 "goal_since", "goal_eta", "fx", "fy", "fz", "lx", "ly", "lz", "ux", "uy", "uz",
+                 "goal_since", "goal_eta", "stood_down", "fx", "fy", "fz", "lx", "ly", "lz", "ux", "uy", "uz",
                  "frame_time")
 
     def __init__(self, hull: Optional[HullMounts], ship) -> None:
@@ -417,6 +417,7 @@ class ShipArcs:
         self.roll_goal = 0.0
         self.goal_since = None      # battle time the standing goal was chosen
         self.goal_eta = 0.0         # ...and the roll time it was planned with (s)
+        self.stood_down = False     # mounts idled for good (ship out of the fight)
         self.fx, self.fy, self.fz = 1.0, 0.0, 0.0
         self.lx, self.ly, self.lz = 0.0, 1.0, 0.0
         self.ux, self.uy, self.uz = 0.0, 0.0, 1.0
@@ -500,11 +501,6 @@ class ShipArcs:
             az, el = az_el_deg(m.ax, m.ay, m.az)
             out.append([round(az, 1), round(el, 1), m.state])
         return out
-
-
-def rolled(by: float, bz: float, cos_phi: float, sin_phi: float):
-    """Body (y, z) of a fixed world direction after the ship rolls by phi more."""
-    return by * cos_phi + bz * sin_phi, bz * cos_phi - by * sin_phi
 
 
 def roll_time_s(angle_rad: float, accel: float, max_rate: float) -> float:

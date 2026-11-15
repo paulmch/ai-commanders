@@ -328,3 +328,55 @@ class TestNoFreeSnapInBattle:
         monkeypatch.setattr(CombatSimulation, "settle_arcs", logged)
         _draft_battle(104, time_limit=90.0)
         assert calls == [30.0], calls
+
+
+# =============================================================================
+# Finding 7: bookkeeping - a reported mask was never closed when its ship
+# left the fight, and such ships reported their last state (often 2,
+# 'on target') for the rest of the battle
+# =============================================================================
+
+class TestMountsStandDownWhenTheShipIsOut:
+
+    def _masked(self):
+        sim = _sim(_table())
+        a = _ship(sim, "a", "alpha", Vector3D(0, 0, 0))
+        _ship(sim, "low", "beta", Vector3D(100_000, 0, -60_000), forward=Vector3D(-1, 0, 0))
+        _fire_at(a, "low")                       # named target: no fallback
+        for _ in range(6):
+            sim.step()
+        m = a.weapons["weapon_1"].mount
+        assert m.masked_reported
+        return sim, a, m
+
+    @staticmethod
+    def _exits(sim):
+        return [e for e in sim.events if e.event_type == SimulationEventType.MOUNT_MASKED
+                and e.data["masked"] is False]
+
+    @pytest.mark.parametrize("how", ["is_destroyed", "is_dying", "is_surrendered"])
+    def test_a_reported_mask_is_closed_and_the_mounts_go_idle(self, how):
+        sim, a, m = self._masked()
+        setattr(a, how, True)
+        sim.step()
+        exits = self._exits(sim)
+        assert len(exits) == 1 and exits[0].data["slot"] == "weapon_1"
+        assert exits[0].data["cause"] == how[3:]
+        assert all(mount.state == wa.IDLE for mount in a.arcs.mounts)
+        for _ in range(3):
+            sim.step()
+        assert len(self._exits(sim)) == 1          # once
+
+    def test_a_crew_incapacitated_ship_idles_its_guns_not_its_pd(self):
+        sim = _sim(_table(**ALL_OPEN))
+        a = _ship(sim, "a", "alpha", Vector3D(0, 0, 0))
+        _ship(sim, "b", "beta", Vector3D(150_000, 0, 0), forward=Vector3D(-1, 0, 0))
+        _fire_at(a, "b")
+        sim.step()
+        assert a.weapons["weapon_1"].mount.state == wa.ON_TARGET
+        a.crew_incapacitated = True
+        _torpedo(sim, "t", Vector3D(0, 200_000, 0), Vector3D(0, -4000.0, 0), "a", "b")
+        for _ in range(3):
+            sim.step()
+        assert a.weapons["weapon_1"].mount.state == wa.IDLE
+        assert any(m.state == wa.ON_TARGET for m in a.arcs.pd)

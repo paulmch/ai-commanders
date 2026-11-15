@@ -826,6 +826,19 @@ angle alone: it also moves whenever the hull turns its nose (the body frame turn
 | `up` | [x, y, z], 4 decimals | hull dorsal axis in world coordinates, roll included; unit, perpendicular to `fwd`. A dying hulk's `up` tumbles with it. |
 | `tur` | list of `[az_deg, el_deg, state]`, 0.1 degree | one entry per mount in `data/hull_mounts.json` order for the hull class (launchers included: always state 0, along their axis). Aim direction in the body frame above. `state`: 0 idle / stowed (no target), 1 slewing, 2 on target and clear, 3 target masked by the own hull (spinal: outside its gimbal). |
 
+**Timing of `tur` against events (one frame offset, by design).** The trace is recorded
+after each engine step: the frame stamped `T` holds positions, attitude and `tur` at the
+END of the tick that ran from `T - dt` to `T`, while that tick's events (`shot_fired`,
+`pd_fired`, `mount_masked`, ...) are stamped `T - dt`. So the mount state that gated an
+event stamped `t` is in the frame stamped `t + dt` (in the 2026-11-15 demo every
+`shot_fired`/`pd_fired` has state 2 there; the frame stamped `t` shows the state BEFORE
+the tick and can be 1 or 3 for a mount that arrived during it). That is what an
+interpolating viewer wants: `visualizer/src/Interpolator.js` blends `tur` between the
+frames around the replay time (`render/HullRigs.js` poses from the blend), so during an
+event's tick the turret visibly finishes its slew onto the target - the engine fires a
+mount in the tick in which it arrives. The engine therefore keeps this stamping; a
+consumer that wants "the state that allowed this event" reads the next frame.
+
 Real frame (alpha_1 at t = 100.0 s in the demo; mounts in `hull_mounts.json` order):
 
 ```json
@@ -837,7 +850,9 @@ Real frame (alpha_1 at t = 100.0 s in the demo; mounts in `hull_mounts.json` ord
 
 Emitted once when a mount has been masked for `MOUNT_MASKED_REPORT_S` with a target
 (`masked: true`), and once when it clears (`masked: false`): the target moved into the
-arc, the ship rolled or turned, or the mount lost its target. `ship_id` is the ship,
+arc, the ship rolled or turned, the mount lost its target, or the ship left the fight
+(destroyed, dying, surrendered, or - guns only - crew incapacitated: the exit then carries
+`cause` and every mount of that ship reports `tur` state 0 from then on). `ship_id` is the ship,
 `target_id` the ship it wants to shoot (PD: the torpedo / slug id is in `target_id`).
 
 | field | type | meaning |
@@ -848,6 +863,7 @@ arc, the ship rolled or turned, or the mount lost its target. `ship_id` is the s
 | `reason` | string (entry only) | `hull` (own structure in the way) or `gimbal` (spinal: target outside `pivot_range_deg`) |
 | `since` | float s (entry only) | battle time the mount became masked (3 s before the event) |
 | `duration_s` | float s (exit only) | how long it was masked |
+| `cause` | string (exit only, optional) | `destroyed`, `dying`, `surrendered` or `crew_incapacitated` when the ship leaving the fight closed the episode |
 
 ```json
 {"event_id": "e120", "sequence": 120, "timestamp": 33.0, "event_type": "mount_masked", "ship_id": "alpha_1", "data": {"slot": "weapon_3", "kind": "gun", "masked": true, "reason": "hull", "since": 30.0, "target_id": "beta_4"}}
@@ -887,4 +903,4 @@ no LLM):
 - Gun fight: 241 rounds (`shot_fired`) from 124 s to 419 s; `mount_masked` 218 events (20 gun entries, 86 PD entries, 4 spinal gimbal entries); `weapon_status` `masked` x18, `slewing` x1.
 - First masked battery: `alpha_1` `weapon_3` at 33 s, clear at 285 s after 255 s.
 - Kills: `beta_3` at 285 s.
-- A mount of a ship that dies while masked gets no exit event (its `tur` simply stops changing).
+- (Recorded before the arcs review fixes: there a mount of a ship that died while masked got no exit event and its `tur` simply stopped changing; now the exit is emitted with `cause` and the ship's mounts go to state 0. The turrets also snapped onto their first targets at 30 s; now the engagement is settled at that checkpoint and later first designations slew.)
