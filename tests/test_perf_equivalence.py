@@ -211,3 +211,144 @@ class TestMovingCylinderRejection:
         got = sim._check_moving_cylinder_intersection(start, end, ship, ts, te, 0.0)
         assert _same_sweep(got, reference_moving_cylinder(sim, start, end, ship, ts, te, 0.0))
         assert got[0] is True
+
+
+# ---------------------------------------------------------------------------
+# Terminal micro-step fast path
+# ---------------------------------------------------------------------------
+
+def _no_fast_path(proj_flight, target_ship, target_start, time_remaining,
+                  current_dist, micro_dt_max, max_micro_steps):
+    """_coast_micro_steps that takes no steps: the full loop does everything."""
+    return time_remaining, 0.0, 0, current_dist
+
+
+def _gun_engagement(seed, target_type, range_km, target_maneuver, duration_s, fast,
+                    mutate=None):
+    """A battleship shooting every gun at one target. Returns the complete
+    event stream and the full-precision end state."""
+    import contextlib
+    import io
+    from src.firecontrol import WeaponsCommand, WeaponsOrder
+    from src.simulation import Maneuver, ManeuverType
+
+    fleet = load_fleet()
+    rng = random.Random(seed)
+    sim = CombatSimulation(time_step=1.0, decision_interval=30.0, seed=seed)
+    calls = {"n": 0, "steps": 0}
+    if fast:
+        real = sim._coast_micro_steps
+
+        def counted(*args):
+            out = real(*args)
+            calls["n"] += 1
+            calls["steps"] += out[2]
+            return out
+        sim._coast_micro_steps = counted
+    else:
+        sim._coast_micro_steps = _no_fast_path
+    target = create_ship_from_fleet_data(
+        "target", target_type, "beta", fleet, position=Vector3D(range_km * 1000.0, 0, 0),
+        velocity=rand_vec(rng, 900.0), forward=rand_vec(rng, 1.0).normalized())
+    shooter = create_ship_from_fleet_data(
+        "shooter", "battleship", "alpha", fleet, position=Vector3D(0, 0, 0),
+        forward=Vector3D(1, 0, 0))
+    sim.add_ship(target)
+    sim.add_ship(shooter)
+    shooter.current_maneuver = Maneuver(ManeuverType.PADLOCK, 0, duration=1e9, target_id="target")
+    shooter.weapons_orders = {
+        slot: WeaponsOrder(WeaponsCommand.FIRE_IMMEDIATE, slot, "target", min_hit_probability=0.0)
+        for slot in shooter.weapons if not slot.startswith("pd_")}
+    if target_maneuver == "coast":
+        target.current_maneuver = Maneuver(ManeuverType.MAINTAIN, 0, duration=1e9, throttle=0.0)
+    elif target_maneuver == "evasive":
+        target.current_maneuver = Maneuver(ManeuverType.EVASIVE, 0, duration=1e9, throttle=1.0)
+    else:
+        target.current_maneuver = Maneuver(ManeuverType.PADLOCK, 0, duration=1e9, throttle=1.0,
+                                           target_id="shooter", evade="dodge")
+    events = []
+    with contextlib.redirect_stdout(io.StringIO()):
+        while sim.current_time < duration_s and not target.is_destroyed:
+            if mutate is not None:
+                mutate(sim, target)
+            for ev in sim.step():
+                events.append((ev.event_type.name, repr(ev.timestamp), ev.ship_id, ev.target_id,
+                               json.dumps(ev.data, sort_keys=True, default=repr)))
+    end = [repr(sim.rng.getstate()), repr(sim._damage_rng.getstate())]
+    for ship in sim.ships.values():
+        end += [repr(c) for v in (ship.position, ship.velocity, ship.forward)
+                for c in (v.x, v.y, v.z)]
+    for flight in sim.projectiles:
+        p = flight.projectile.position
+        end += [flight.projectile_id, repr(p.x), repr(p.y), repr(p.z),
+                repr(flight.min_distance_to_target), repr(flight.prev_distance_to_target)]
+    return events, end, calls
+
+
+class TestMicroStepFastPath:
+    """_coast_micro_steps runs the uneventful terminal micro-steps in scalar
+    arithmetic; the battle must be bit-identical to running every micro-step
+    through the full loop."""
+
+    @pytest.mark.parametrize("seed,target_type,range_km,maneuver", [
+        (11, "destroyer", 40, "coast"),        # hits (hull and proximity)
+        (12, "frigate", 120, "evasive"),       # mostly misses
+        (13, "cruiser", 80, "dodge"),          # evade overlay, PD ablation
+        (14, "dreadnought", 60, "coast"),
+    ])
+    def test_engagement_bit_identical_to_full_loop(self, seed, target_type, range_km, maneuver):
+        fast = _gun_engagement(seed, target_type, range_km, maneuver, 45.0, fast=True)
+        slow = _gun_engagement(seed, target_type, range_km, maneuver, 45.0, fast=False)
+        assert fast[0] == slow[0]
+        assert fast[1] == slow[1]
+        kinds = {e[0] for e in fast[0]}
+        assert "PROJECTILE_IMPACT" in kinds or "PROJECTILE_MISS" in kinds
+        # ... and the fast path really carried the terminal phase.
+        assert fast[2]["n"] > 0 and fast[2]["steps"] > 500 * fast[2]["n"] / 2
+
+    def test_reads_live_state_every_call(self):
+        """Nothing is cached between calls: the target's velocity, attitude
+        and hull size change mid-battle (burns, turns, and here a hull that
+        is resized between ticks) and the fast path follows, still matching
+        the full loop bit for bit."""
+        def mutate(sim, target):
+            if 18.0 <= sim.current_time < 30.0:
+                target.geometry.radius_m += 15.0
+                target.geometry.length_m += 40.0
+                target.kinematic_state.velocity = (
+                    target.kinematic_state.velocity + Vector3D(3.0, -7.0, 2.0))
+
+        fast = _gun_engagement(21, "destroyer", 50, "coast", 45.0, fast=True, mutate=mutate)
+        slow = _gun_engagement(21, "destroyer", 50, "coast", 45.0, fast=False, mutate=mutate)
+        plain = _gun_engagement(21, "destroyer", 50, "coast", 45.0, fast=True)
+        assert fast[0] == slow[0] and fast[1] == slow[1]
+        assert fast[0] != plain[0]             # the mutation mattered
+
+    def test_declines_what_it_does_not_model(self):
+        """Unknown projectile types, hulls without geometry and rounds with
+        no relative motion are left entirely to the full loop."""
+        from src.simulation import ProjectileInFlight
+        from src.projectile import KineticProjectile
+
+        sim = CombatSimulation(seed=1)
+        ship = _hull("destroyer")
+        ship.kinematic_state.velocity = Vector3D(100.0, 0.0, 0.0)
+        start = Vector3D(0.0, 0.0, 0.0)
+
+        def flight(velocity, cls=KineticProjectile):
+            proj = cls(position=Vector3D(-20000.0, 30.0, 0.0), velocity=velocity, mass_kg=10.0)
+            return ProjectileInFlight("p1", proj, "shooter", "target")
+
+        class OddRound(KineticProjectile):
+            pass
+
+        untouched = (1.0, 0.0, 0, 20001.0)
+        closing = Vector3D(8000.0, 0.0, 0.0)
+        assert sim._coast_micro_steps(flight(closing), ship, start, 1.0, 20001.0, 0.001, 5000)[2] > 0
+        f = flight(closing, OddRound)
+        assert sim._coast_micro_steps(f, ship, start, 1.0, 20001.0, 0.001, 5000) == untouched
+        assert vbits(f.projectile.position) == vbits(Vector3D(-20000.0, 30.0, 0.0))
+        f = flight(Vector3D(100.0, 0.0, 0.0))            # same velocity as the target
+        assert sim._coast_micro_steps(f, ship, start, 1.0, 20001.0, 0.001, 5000) == untouched
+        ship.geometry = None
+        assert sim._coast_micro_steps(flight(closing), ship, start, 1.0, 20001.0, 0.001, 5000) == untouched

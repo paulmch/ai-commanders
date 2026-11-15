@@ -4594,6 +4594,14 @@ class CombatSimulation:
                 micro_steps = 0
                 hit_detected = False
 
+                # Leading micro-steps in which nothing can happen (no hit, no
+                # proximity hit, no miss) run in scalar arithmetic; the loop
+                # below takes over at the first step that needs a decision.
+                time_remaining, time_elapsed, micro_steps, current_dist = (
+                    self._coast_micro_steps(
+                        proj_flight, target_ship, target_pos_at_step_start,
+                        time_remaining, current_dist, MICRO_DT, MAX_MICRO_STEPS))
+
                 while time_remaining > 0 and micro_steps < MAX_MICRO_STEPS:
                     micro_dt = min(MICRO_DT, time_remaining)
 
@@ -4709,6 +4717,149 @@ class CombatSimulation:
         for proj in projectiles_to_remove:
             if proj in self.projectiles:
                 self.projectiles.remove(proj)
+
+    def _coast_micro_steps(
+        self,
+        proj_flight: ProjectileInFlight,
+        target_ship: ShipCombatState,
+        target_start: Vector3D,
+        time_remaining: float,
+        current_dist: float,
+        micro_dt_max: float,
+        max_micro_steps: int,
+    ) -> tuple[float, float, int, float]:
+        """
+        Fast path of the terminal micro-step loop in ``_update_projectiles``.
+
+        A round spends its last ~4 s of flight in 1 ms micro-steps, and in
+        nearly all of them it is simply still on its way: no hull hit, no
+        proximity hit, no miss. This runs exactly those leading uneventful
+        micro-steps in scalar arithmetic (no Vector3D temporaries, no calls)
+        and stops BEFORE the first step in which anything could be decided,
+        leaving that step and the rest to the loop in ``_update_projectiles``.
+
+        It performs the loop's floating-point operations one for one, in the
+        same order (position accumulated as ``p + v * micro_dt``, target as
+        ``start + v_target * time_elapsed``, the closest-approach formula of
+        ``_calculate_time_to_closest_approach``, ``**2`` in the magnitudes),
+        so position, ``min_distance_to_target``, the step counter and the
+        carried distance are bit-identical to running the full loop - pinned
+        by ``tests/test_perf_equivalence.py`` and ``scripts/perf_check.py``.
+        If you change the micro-step loop, change this to match (or make it
+        return its inputs unchanged: the loop is then the whole truth again).
+
+        A step is left to the full loop when any of these holds:
+        - the swept segment is not clearly outside the hull's bounding sphere
+          (same conservative test as ``_check_moving_cylinder_intersection``);
+        - closest approach falls inside the step and within the proximity
+          radius (the loop's proximity-hit test, evaluated exactly);
+        - the loop's miss test is true (evaluated exactly).
+
+        Nothing is cached: every input is read from the live objects on each
+        call, and the target does not change while one round is being
+        stepped.
+
+        Returns ``(time_remaining, time_elapsed, micro_steps, current_dist)``
+        after the steps taken; ``proj.position`` and
+        ``proj_flight.min_distance_to_target`` are updated in place.
+        """
+        proj = proj_flight.projectile
+        geom = target_ship.geometry
+        pos = proj.position
+        vel = proj.velocity
+        tvel = target_ship.velocity
+        if (geom is None or type(proj) is not KineticProjectile
+                or type(pos) is not Vector3D or type(vel) is not Vector3D
+                or type(tvel) is not Vector3D or type(target_start) is not Vector3D):
+            return time_remaining, 0.0, 0, current_dist
+
+        px, py, pz = pos.x, pos.y, pos.z
+        vx, vy, vz = vel.x, vel.y, vel.z
+        tvx, tvy, tvz = tvel.x, tvel.y, tvel.z
+        sx, sy, sz = target_start.x, target_start.y, target_start.z
+
+        # _calculate_time_to_closest_approach: rel_vel and its square are the
+        # same every micro-step (both velocities are constant in the loop).
+        rvx = vx - tvx
+        rvy = vy - tvy
+        rvz = vz - tvz
+        vel_mag_sq = rvx * rvx + rvy * rvy + rvz * rvz
+        if not vel_mag_sq >= 1e-10:
+            # No relative motion (or NaN): the loop's own special case.
+            return time_remaining, 0.0, 0, current_dist
+
+        proximity_m = geom.radius_m + HIT_TOLERANCE_M
+        sphere_sq = (geom.length_m / 2.0) ** 2 + (geom.radius_m + HIT_TOLERANCE_M) ** 2
+        min_dist = proj_flight.min_distance_to_target
+        sqrt = math.sqrt
+        time_elapsed = 0.0
+        micro_steps = 0
+
+        while time_remaining > 0 and micro_steps < max_micro_steps:
+            # micro_dt = min(MICRO_DT, time_remaining)
+            micro_dt = time_remaining if time_remaining < micro_dt_max else micro_dt_max
+
+            # Target at the start of the micro-step, round and target at its end
+            ax = sx + tvx * time_elapsed
+            ay = sy + tvy * time_elapsed
+            az = sz + tvz * time_elapsed
+            nx = px + vx * micro_dt
+            ny = py + vy * micro_dt
+            nz = pz + vz * micro_dt
+            elapsed_end = time_elapsed + micro_dt
+            bx = sx + tvx * elapsed_end
+            by = sy + tvy * elapsed_end
+            bz = sz + tvz * elapsed_end
+
+            # Hull hit possible? (segment in the target frame vs bounding sphere)
+            rx = px - ax
+            ry = py - ay
+            rz = pz - az
+            lx = (nx - (bx - ax)) - px
+            ly = (ny - (by - ay)) - py
+            lz = (nz - (bz - az)) - pz
+            if not (rx * rx + ry * ry + rz * rz
+                    > 4.0 * (sphere_sq + (lx * lx + ly * ly + lz * lz))):
+                break
+
+            # new_dist = proj.distance_to(target_pos_at_micro_end)
+            new_dist = sqrt((nx - bx) ** 2 + (ny - by) ** 2 + (nz - bz) ** 2)
+
+            # micro_tca, micro_closest = _calculate_time_to_closest_approach(
+            #     prev_position, proj.velocity, target_pos_at_micro_start, target velocity)
+            tca = -(rx * rvx + ry * rvy + rz * rvz) / vel_mag_sq
+            if tca < 0:
+                closest = sqrt(rx ** 2 + ry ** 2 + rz ** 2)
+            else:
+                cx = rx + rvx * tca
+                cy = ry + rvy * tca
+                cz = rz + rvz * tca
+                closest = sqrt(cx ** 2 + cy ** 2 + cz ** 2)
+
+            # Proximity hit: the loop resolves it
+            if 0 <= tca <= micro_dt and closest <= proximity_m:
+                break
+
+            # closest_this_step = min(new_dist, micro_closest); min-distance tracking
+            closest_this_step = closest if closest < new_dist else new_dist
+            new_min = closest_this_step if closest_this_step < min_dist else min_dist
+
+            # Miss: the loop logs it
+            if new_dist > current_dist and current_dist < new_min + 100:
+                break
+
+            # Uneventful step: commit it
+            px, py, pz = nx, ny, nz
+            time_elapsed = elapsed_end
+            min_dist = new_min
+            current_dist = new_dist
+            time_remaining -= micro_dt
+            micro_steps += 1
+
+        if micro_steps:
+            proj.position = Vector3D(px, py, pz)
+            proj_flight.min_distance_to_target = min_dist
+        return time_remaining, time_elapsed, micro_steps, current_dist
 
     def _resolve_projectile_hit_geometric(
         self,
