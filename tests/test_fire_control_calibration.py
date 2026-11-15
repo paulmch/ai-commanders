@@ -36,8 +36,9 @@ roll consumes the legacy conversion formula
 (_resolve_projectile_hit_geometric); if that roll, the gate, evasion or the
 lead changes, regenerate the fixture.
 
-Buckets: maneuver class (EVASIVE, dodge = the evade overlay on another
-maneuver, HEADING:turn / HEADING:burn / HEADING:attitude, HOLD_RANGE,
+Buckets: maneuver class (EVASIVE, dodge:<base> = the evade overlay on another
+maneuver, by base maneuver - dodge:PADLOCK, dodge:HOLD_RANGE -, HEADING:turn /
+HEADING:burn / HEADING:attitude, HOLD_RANGE,
 INTERCEPT, PADLOCK ...) x 100 km; harness dodgers also split by one shooter
 vs a fleet of 2-8. A bucket with n >= 30 and >= 5 hits must be within
 RATIO_TOLERANCE; one with fewer hits must be Poisson-plausible both ways.
@@ -119,7 +120,7 @@ def historical(fcc):
 
 def _bucket(r):
     cls = r["class"]
-    if r["harness"] and cls in ("dodge", "EVASIVE"):
+    if r["harness"] and (cls.startswith("dodge") or cls == "EVASIVE"):
         cls += ":fleet" if r["n"] >= 2 else ":alone"
     return cls, min(int(r["range_km"] // 100), 5)
 
@@ -173,7 +174,8 @@ def test_battle_rounds_are_calibrated_per_maneuver_class(shots):
 def test_harness_rounds_are_calibrated_per_maneuver_class(shots):
     checked = _check([r for r in shots if r["harness"]], "harness")
     classes = {k[0] for k in checked}
-    for cls in ("dodge:alone", "dodge:fleet", "EVASIVE:alone", "EVASIVE:fleet", "HEADING:turn"):
+    for cls in ("dodge:PADLOCK:alone", "dodge:PADLOCK:fleet", "dodge:HOLD_RANGE:alone",
+                "dodge:HOLD_RANGE:fleet", "EVASIVE:alone", "EVASIVE:fleet", "HEADING:turn"):
         assert cls in classes, (cls, sorted(classes))
 
 
@@ -199,7 +201,7 @@ def test_the_flash_mirror_dodgers_are_the_known_residual(historical):
     commanders instead (test_doctrine_states_the_residual). Pinned both ways:
     a forecast drifting back toward the old number fails, and so does one
     tuned to this single battle at the expense of the rest."""
-    mirror = [r for r in historical if r["source"] == FLASH_MIRROR and r["class"] == "dodge"]
+    mirror = [r for r in historical if r["source"] == FLASH_MIRROR and r["class"].startswith("dodge")]
     mid = [r for r in mirror if 100 <= r["range_km"] < 300]
     n, hits, new, old = _summary(mid)
     assert (n, hits) == (188, 0)
@@ -214,7 +216,7 @@ def test_doctrine_states_the_residual(historical):
     """Captains and admirals are told the measured residual, in numbers
     bound to the fixture."""
     from src.llm.prompts import ADMIRAL_GUN_DOCTRINE, GUN_PHYSICS_REFERENCE
-    mid = [r for r in historical if r["source"] == FLASH_MIRROR and r["class"] == "dodge"
+    mid = [r for r in historical if r["source"] == FLASH_MIRROR and r["class"].startswith("dodge")
            and 100 <= r["range_km"] < 300]
     n, hits, new, _ = _summary(mid)
     claim = f"{hits} of {n} rounds at 100-300km landed where this model promised ~{new:.0f}"
@@ -228,7 +230,7 @@ def test_mid_jink_dodgers_are_harder_and_the_forecast_says_so(shots):
     a dodger between jinks - fleet fire keeps a dodger jinking - and the
     forecast follows (JINK_ACCEL_FRACTION)."""
     def rate(jinking):
-        g = [r for r in shots if r["harness"] and r["class"] == "dodge"
+        g = [r for r in shots if r["harness"] and r["class"] == "dodge:PADLOCK"
              and (r["jink"] > 0.5) == jinking and 100 <= r["range_km"] < 300]
         n, hits, new, _ = _summary(g)
         assert n >= 500
@@ -243,7 +245,8 @@ def test_the_old_number_was_the_problem(shots):
     at dodging targets beyond 200 km, where ~2-4% lands (it was the LLM flash
     mirror that showed it; on the current engine the harness and battles
     say the same)."""
-    far = [r for r in shots if r["class"] in ("dodge", "EVASIVE") and r["range_km"] >= 200]
+    far = [r for r in shots if (r["class"].startswith("dodge") or r["class"] == "EVASIVE")
+           and r["range_km"] >= 200]
     n, hits, new, old = _summary(far)
     assert n > 5000
     assert old / n > 0.2 and old > 8 * hits

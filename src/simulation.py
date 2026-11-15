@@ -3511,7 +3511,11 @@ class CombatSimulation:
 
         # Travel this tick. Landing exactly on the target is allowed when the
         # remaining rate could be stopped within one tick (normal bang-bang
-        # arrival); a faster spin overshoots and has to come back.
+        # arrival); a faster spin overshoots and has to come back. On that
+        # arrival tick the nose's actual rate (travel / dt) can differ from the
+        # stored rate by up to one tick's authority, so the attitude's rate
+        # changes by up to ~2x one tick's authority between the ticks either
+        # side of it (never more).
         travel = w_par * dt
         if w_par > 0.0 and travel > angle_to_target and w_par <= authority + 1e-12:
             travel = angle_to_target
@@ -3692,6 +3696,10 @@ class CombatSimulation:
         overshoots and comes back. _estimate_turn_time is the from-rest
         special case. ``forward`` / ``spin`` (rad/s vector) override the
         ship's own (spin None = the ship's, a zero vector = at rest).
+        Used with engines_on=True only: an RCS turn begun from a spin far
+        above the RCS rate limit (a thrust-vectoring rate) is overestimated
+        (811 s estimated for 627 s flown in the reviewer's case) - nothing
+        asks that.
         """
         # params: (angular accel, max rate) for engines_on, when the caller
         # already has them (_get_rotation_params reads the engine modules).

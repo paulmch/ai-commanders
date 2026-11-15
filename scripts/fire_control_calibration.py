@@ -104,7 +104,8 @@ def load_fleet() -> dict:
 def maneuver_class(row: dict) -> str:
     """
     The target's maneuver class at fire time, the calibration test's buckets:
-    EVASIVE; 'dodge' (any other maneuver with the evade overlay); HEADING
+    EVASIVE; 'dodge:<base maneuver>' (any other maneuver with the evade
+    overlay, e.g. dodge:PADLOCK, dodge:HOLD_RANGE); HEADING
     split into 'HEADING:turn' (its ordered burn not lit yet: turning onto
     the heading or a held start), 'HEADING:burn' and 'HEADING:attitude'
     (throttle 0); else the maneuver type (INTERCEPT, PADLOCK, HOLD_RANGE ...).
@@ -113,7 +114,9 @@ def maneuver_class(row: dict) -> str:
     if mt == "EVASIVE":
         return "EVASIVE"
     if row.get("dodge") is not None:
-        return "dodge"
+        # by base maneuver: a PADLOCK dodger is led as if it coasts, a
+        # HOLD_RANGE one from its drive - their errors must not cancel
+        return f"dodge:{mt}"
     if mt == "HEADING":
         if not (row.get("throttle") or 0.0) > 0.0:
             return "HEADING:attitude"
