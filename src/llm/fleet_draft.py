@@ -561,6 +561,22 @@ def auto_draft(
         spent += SHIP_POINT_COSTS[stype]
         idx += 1
 
+    # The hull cap can bind long before the budget does (the gunline fielded
+    # the same 144-point fleet at budgets 150 to 300). Then upgrade: swap the
+    # cheapest hull for the dearest doctrine hull the remaining points allow,
+    # until no swap fits.
+    if len(picked) >= max_ships:
+        while True:
+            i = min(range(len(picked)), key=lambda k: (SHIP_POINT_COSTS[picked[k]], k))
+            cheapest = SHIP_POINT_COSTS[picked[i]]
+            upgrades = [s for s in preference
+                        if cheapest < SHIP_POINT_COSTS[s] <= budget - spent + cheapest]
+            if not upgrades:
+                break
+            best = max(upgrades, key=lambda s: (SHIP_POINT_COSTS[s], -preference.index(s)))
+            spent += SHIP_POINT_COSTS[best] - cheapest
+            picked[i] = best
+
     draft = FleetDraft(
         faction=faction, budget=budget,
         points_spent=spent, auto=True,

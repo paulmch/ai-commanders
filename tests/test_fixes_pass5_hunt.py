@@ -289,3 +289,38 @@ def test_destroyed_wreck_keeps_drifting():
     x0 = ship.position.x
     sim.step()
     assert ship.position.x == pytest.approx(x0 + 1000.0, abs=1.0)
+
+
+# ---------------------------------------------------------------------------
+# 6. Auto-draft spends its budget when the hull cap binds.
+#
+# auto_draft ("greedily fills the budget") cycles its doctrine's hulls until
+# the 8-hull cap, then stops: the gunline doctrine fielded the same 144-point
+# fleet at budgets 150, 200, 250 and 300 - in the seeded 250-point battle
+# (seed 10) alpha fought with 144 points against beta's 222. Once the cap
+# binds, the cheapest hulls are now upgraded to the doctrine's dearer ones
+# while the budget allows.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("seed", range(4))
+@pytest.mark.parametrize("budget", [200, 250, 300])
+def test_capped_auto_draft_upgrades_instead_of_leaving_points_unspent(seed, budget):
+    from src.llm.fleet_draft import SHIP_POINT_COSTS, auto_draft
+    draft = auto_draft("alpha", budget=budget, max_ships=8, seed=seed)
+    types = [s.ship_type for s in draft.ships]
+    assert draft.points_spent == sum(SHIP_POINT_COSTS[t] for t in types) <= budget
+    assert len(types) <= 8
+    left = budget - draft.points_spent
+    if len(types) == 8:
+        # No hull could be swapped for a dearer one of the same doctrine.
+        doctrine = set(types)
+        dearest = max(SHIP_POINT_COSTS[t] for t in doctrine)
+        assert all(SHIP_POINT_COSTS[t] == dearest
+                   or dearest - SHIP_POINT_COSTS[t] > left for t in types), (types, left)
+
+
+def test_uncapped_auto_draft_is_unchanged():
+    from src.llm.fleet_draft import auto_draft
+    # Budget 100 never reaches the cap: rosters stay exactly as before.
+    assert [s.ship_type for s in auto_draft("alpha", 100, 8, seed=2).ships] == [
+        "destroyer", "destroyer", "cruiser", "frigate", "destroyer", "frigate"]
