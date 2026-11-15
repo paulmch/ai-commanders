@@ -255,7 +255,7 @@ const COMPOSITE_FRAG = /* glsl */`
 // SceneManager's renderer setup for tone mapping / exposure).
 export const BLOOM_THRESHOLD = 1.35;
 export const BLOOM_STRENGTH = 0.22;
-export const STREAK_STRENGTH = 0.13;
+export const STREAK_STRENGTH = 0.1;
 export const GRADE = 0.2;
 
 export class PostFX {

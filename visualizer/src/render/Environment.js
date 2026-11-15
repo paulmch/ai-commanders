@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLSL_NOISE, makeStarCatalogue, getGasGiantTexture, makeRingTexture, makeNoiseVolumeTexture } from './SkyTextures.js';
 import { getGraphicsSettings } from './Quality.js';
 import { DustMotes } from './DustMotes.js';
+import { shadowBoxRadius, shadowBasis, fitSunShadow } from './sunShadow.js';
 
 /**
  * Space environment:
@@ -145,7 +146,7 @@ export class Environment {
     this.group.add(this.planetLight);
 
     // Faint cool ambient so unlit faces aren't pure black on screen
-    this.ambient = new THREE.HemisphereLight(0x2c3b60, 0x0c0a10, 0.26);
+    this.ambient = new THREE.HemisphereLight(0x2c3b60, 0x0c0a10, 0.32);
     this.group.add(this.ambient);
 
     // Rim: a cool light from beyond the subject, re-aimed every frame so
@@ -156,16 +157,10 @@ export class Environment {
   }
 
   // -------------------------------------------------------------------------
-  // Sun shadow map (high tier). The scene is hundreds of km across and a
-  // hull is a few units long, so one map cannot cover the battle: the
-  // orthographic shadow box is re-fitted every frame to what the camera is
-  // looking at - a square around the orbit focus sized to the view at focus
-  // depth - which keeps about one shadow texel per screen pixel at any
-  // zoom. Its size moves in quarter-octave steps and its centre snaps to
-  // whole texels, so shadow edges do not crawl while orbiting or panning.
-  // three renders BACK faces into the map for the (closed, front-sided)
-  // hull parts: lit faces are never in the map, so there is no acne to
-  // bias away and no peter-panning at contacts.
+  // Sun shadow map (high tier): the box is refit to the camera focus every
+  // frame (render/sunShadow.js). three renders BACK faces into the map for
+  // the closed, front-sided hull parts: lit faces are never in the map, so
+  // there is no acne to bias away and no peter-panning at contacts.
   _shadowSize() {
     const p = this.gfx.preset;
     if (!p.shadows) return 0;
@@ -183,41 +178,23 @@ export class Environment {
       sh.map = null;
     }
     light.castShadow = size > 0;
-    // light-space basis exactly as LightShadow.updateMatrices builds it
-    // (lookAt with world up): needed for the texel snap
-    this._shZ = this.sunDir.clone();
-    this._shX = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), this._shZ).normalize();
-    this._shY = new THREE.Vector3().crossVectors(this._shZ, this._shX).normalize();
+    this._shBasis = shadowBasis(this.sunDir);
   }
 
   _fitShadow(camera, focus, viewDist) {
     const light = this.sunLight;
     if (!light.castShadow || !focus) return;
     const sh = light.shadow;
-    const size = sh.mapSize.x;
-    const fovT = Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5);
-    let R = Math.max(viewDist, 1) * fovT * Math.max(camera.aspect, 1) * 1.08;
-    R = THREE.MathUtils.clamp(R, 4, 4000);
-    R = Math.pow(2, Math.ceil(Math.log2(R) * 4) / 4);
-    const texel = (2 * R) / size;
-    const x = Math.round(focus.dot(this._shX) / texel) * texel;
-    const y = Math.round(focus.dot(this._shY) / texel) * texel;
-    const z = focus.dot(this._shZ);
-    // casters up-sun of the box still shadow into it: keep a hull-length
-    // margin on the depth range
-    const margin = 60;
-    const D = R + margin;
-    light.target.position.set(0, 0, 0)
-      .addScaledVector(this._shX, x).addScaledVector(this._shY, y).addScaledVector(this._shZ, z);
-    light.position.copy(light.target.position).addScaledVector(this._shZ, D);
+    const R = shadowBoxRadius(viewDist, camera.fov, camera.aspect);
+    const fit = fitSunShadow(focus, this._shBasis, R, sh.mapSize.x, light.target.position, light.position);
     const cam = sh.camera;
-    if (cam.right !== R || cam.far !== 2 * D) {
+    if (cam.right !== R) {
       cam.left = -R; cam.right = R; cam.top = R; cam.bottom = -R;
-      cam.near = 0.5; cam.far = 2 * D;
+      cam.near = fit.near; cam.far = fit.far;
       cam.updateProjectionMatrix();
     }
-    sh.normalBias = texel * 1.2;
-    sh.bias = -texel * 0.6 / (cam.far - cam.near);
+    sh.normalBias = fit.normalBias;
+    sh.bias = fit.bias;
   }
 
   // -------------------------------------------------------------------------
@@ -397,7 +374,7 @@ export class Environment {
           vec3 d = normalize(vDir);
           vec3 c = textureCube(uSky, d).rgb;
           c = c * c * uIntensity;
-          c += uFill * pow(max(0.0, dot(d, uFillDir)), 1.5);
+          c += uFill * max(0.0, dot(d, uFillDir));
           gl_FragColor = vec4(c, 1.0);
         }`,
       side: THREE.BackSide,
@@ -741,7 +718,7 @@ export class Environment {
   _buildEnvMap() {
     const envScene = new THREE.Scene();
     const sky = new THREE.Mesh(new THREE.BoxGeometry(2000, 2000, 2000), this._skyMaterial(2.6));
-    sky.material.uniforms.uFill.value.setRGB(0.085, 0.125, 0.23);
+    sky.material.uniforms.uFill.value.setRGB(0.1, 0.15, 0.27);
     envScene.add(sky);
     const sun = new THREE.Mesh(new THREE.SphereGeometry(900 * Math.tan(0.03), 16, 12),
       new THREE.MeshBasicMaterial({ color: new THREE.Color(30, 27, 23) }));
@@ -778,10 +755,17 @@ export class Environment {
     this.planetGroup.position.copy(cp).addScaledVector(this.planetDir, PLANET_DIST);
     this.planetCenter.copy(this.planetGroup.position);
 
-    // Rim light from beyond the subject, a little above the view axis
+    // Rim / kicker: a cool light from beyond the subject, a little above the
+    // view axis and swung toward the side of the frame AWAY from the sun, so
+    // the faces the key leaves in shadow get a blue edge-light (warm key,
+    // cool kicker) instead of a flat ambient. The swing follows the sun's
+    // screen side smoothly, so orbiting through the sun line never pops.
     camera.getWorldDirection(_fwd);
     _up.copy(camera.up).applyQuaternion(camera.quaternion);
-    this.rimLight.position.copy(_fwd).addScaledVector(_up, 0.35).normalize().multiplyScalar(1000);
+    _right.crossVectors(_fwd, _up).normalize();
+    const side = THREE.MathUtils.clamp(this.sunDir.dot(_right) * 2.5, -1, 1);
+    this.rimLight.position.copy(_fwd).addScaledVector(_up, 0.3).addScaledVector(_right, -0.6 * side)
+      .normalize().multiplyScalar(1000);
 
     this.dust.update(camera, delta);
   }
@@ -789,6 +773,7 @@ export class Environment {
 
 const _fwd = new THREE.Vector3();
 const _up = new THREE.Vector3();
+const _right = new THREE.Vector3();
 
 /**
  * Free the GPU resources of every mesh / points / line under `root`:
