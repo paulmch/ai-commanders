@@ -1992,6 +1992,16 @@ function hullCruiser(k, opts = {}) {
     // weapon_1 port (+X), weapon_2 starboard (-X) batteries
     k.turret('coilgun', ap, 0, L * 0.15, -Math.PI / 2);
     k.turret('coilgun', -ap, 0, L * 0.15, Math.PI / 2);
+    // gun decks: an armoured apron ahead of each flank battery, faired into
+    // the collar, and a blast ramp behind it - the batteries sit in the
+    // hull's lines instead of standing on a bare drum
+    for (const sx of [1, -1]) {
+      const P = k.xf(sx * ap, 0, L * 0.15, 0, 0, -sx * Math.PI / 2);
+      k.taper('hull', W * 0.3, W * 0.09, W * 0.16, W * 0.02, L * 0.06, 0, W * 0.03, -L * 0.043,
+        { c0: W * 0.035, cb0: 0, c1: W * 0.01, cb1: 0, dy: -W * 0.025, dir: -1, parent: P });
+      k.taper('hull', W * 0.3, W * 0.09, W * 0.3, W * 0.12, L * 0.012, 0, W * 0.03, L * 0.043,
+        { c0: W * 0.035, cb0: 0, c1: W * 0.04, cb1: 0, dy: W * 0.015, parent: P });
+    }
     // PD aft: dorsal pd_0, ventral pd_1
     k.pd(0, ap, -L * 0.16);
     k.pd(0, -ap, -L * 0.16, Math.PI);
