@@ -262,6 +262,7 @@ def test_every_loaded_tube_with_a_shot_fires():
     assert launched == capacity
 
 
+@pytest.mark.usefixtures("all_round_fire")  # exact head-on scenario; see tests/conftest.py
 def test_a_lone_corvette_still_fires_at_a_covered_group():
     # One tube cannot saturate a destroyer and four PD escorts; holding would
     # gain nothing (reloads do not stack): it fires, flagged as short.

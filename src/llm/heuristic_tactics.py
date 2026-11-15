@@ -653,7 +653,11 @@ def _salvo_plan(simulation: Any, boats: List[Any], enemies: List[Any], focus: Op
     left = {b.ship_id: int(simulation.torpedo_launch_capacity(b.ship_id)) for b in boats}
 
     def need_for(enemy) -> int:
-        own, escorts, _ = pd_cover(simulation, enemy, pd["range_km"])
+        # Turrets that BEAR on rounds coming from the nearest boat (weapon
+        # arcs: a turret masked by its own hull is no cover).
+        near = min(boats, key=lambda b: (_km(b, enemy), b.ship_id))
+        own, escorts, _ = pd_cover(simulation, enemy, pd["range_km"],
+                                   threat_from=near.position)
         need = salvo_to_saturate(own + escorts, pd["turrets_to_blind_at_floor"])
         inbound = len(rounds_inbound(simulation, boats[0].faction, enemy.ship_id))
         return max(0, need + SALVO_MARGIN_ROUNDS - inbound)

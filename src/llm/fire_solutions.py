@@ -171,6 +171,8 @@ def fly_torpedo(
         # ...and no drive-plume wash: the forecast's throw-away ships must
         # not cook each other (src/drive_plume.py).
         shadow.plume_wash_enabled = False
+        # ...and no weapon arcs: PD is stripped and nothing fires guns here.
+        shadow.weapon_arcs = False
         sh = _clone(shooter, "shooter", "alpha", fleet_data)
         tg = _clone(target, "target", "beta", fleet_data)
     except Exception:  # noqa: BLE001 - advisory only, never fail a decision
@@ -201,13 +203,24 @@ def fly_torpedo(
                                          else f"no intercept within {horizon_s:.0f} s"))
 
 
-def pd_cover(sim: Any, target: Any, pd_range_km: float) -> Tuple[int, int, List[Tuple[str, int]]]:
+def pd_cover(sim: Any, target: Any, pd_range_km: float,
+             threat_from: Any = None) -> Tuple[int, int, List[Tuple[str, int]]]:
     """
     Live point-defense turrets covering ``target``: its own, and its allies'
     within ``pd_range_km`` of it (they bear on rounds in its terminal path).
     Returns (own, escorts_total, [(escort name, turrets), ...]).
+
+    With ``threat_from`` (the position the rounds come from) and weapon arcs
+    on, only turrets that BEAR are counted: those whose own hull leaves the
+    line of sight toward the threat open at the hull's present attitude
+    (src/weapon_arcs.py). A fleet's cover against one direction is then
+    lower than its turret count - about half on two-turret hulls.
     """
+    from .arcs_status import pd_turrets_bearing
+
     def live(ship) -> int:
+        if threat_from is not None:
+            return pd_turrets_bearing(sim, ship, threat_from)[0]
         return sum(1 for pd in (getattr(ship, "point_defense", None) or [])
                    if getattr(pd, "is_operational", True))
 
@@ -269,7 +282,7 @@ def torpedo_solution(
     closing = (-(rel.normalized()).dot(target.velocity - shooter.velocity) / 1000.0
                if rng_m > 0 else 0.0)
     pd = pd_doctrine_numbers(fleet_data)
-    own, escorts, _ = pd_cover(sim, target, pd["range_km"])
+    own, escorts, _ = pd_cover(sim, target, pd["range_km"], threat_from=shooter.position)
     inbound = len(rounds_inbound(sim, shooter.faction, target.ship_id))
     need = salvo_to_saturate(own + escorts, pd["turrets_to_blind_at_floor"])
 

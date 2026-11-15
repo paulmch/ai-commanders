@@ -1068,3 +1068,59 @@ class TestDrivePlumeDoctrine:
         flank_cm = tail.armor.get_section(dp.HitLocation.LATERAL).thickness_cm
         assert tail.crew_dose_sv == pytest.approx(rate * dp.dose_shielding(flank_cm), rel=0.03)
         assert 0.8 * rate < tail.crew_dose_sv < rate
+
+
+# =============================================================================
+# Weapon arcs (src/weapon_arcs.py): the one doctrine sentence and its numbers
+# =============================================================================
+
+class TestWeaponArcsDoctrine:
+    """'A mount cannot fire through its own hull: ... sees about N% of the
+    sky, batteries train at B deg/s (heavy H, PD P) ... ~T s per 90 deg on a
+    cruiser' - N from data/hull_mounts.json, B/H/P from the engine constants,
+    T from the cruiser's RCS authority."""
+
+    def _numbers(self):
+        import json
+        from src.llm.arcs_status import arcs_doctrine_numbers
+        with open("data/fleet_ships.json") as f:
+            return arcs_doctrine_numbers(json.load(f))
+
+    def test_the_sentence_quotes_the_engine(self):
+        import re
+        from src.llm.prompts import GUN_PHYSICS_REFERENCE
+        n = self._numbers()
+        text = " ".join(GUN_PHYSICS_REFERENCE.split())
+        m = re.search(r"sees about (\d+)% of the sky, batteries train at (\d+) deg/s "
+                      r"\(heavy (\d+), PD (\d+)\), and the ship rolls itself to unmask "
+                      r"\(~(\d+) s per 90 deg on a cruiser\)", text)
+        assert m, "the weapon-arcs doctrine sentence is missing from GUN_PHYSICS_REFERENCE"
+        quoted = [float(g) for g in m.groups()]
+        assert quoted[0] == pytest.approx(n["open_sky_pct"], abs=1.5)
+        assert quoted[1] == n["battery_deg_s"]
+        assert quoted[2] == n["heavy_deg_s"]
+        assert quoted[3] == n["pd_deg_s"]
+        assert quoted[4] == pytest.approx(n["cruiser_roll_90_s"], abs=1.0)
+
+    def test_the_roll_time_is_what_the_engine_flies(self):
+        """A cruiser ordered to roll 90 degrees arrives in the quoted time."""
+        import json
+        import math
+        from src import weapon_arcs
+        from src.physics import Vector3D
+        from src.simulation import CombatSimulation, create_ship_from_fleet_data
+        with open("data/fleet_ships.json") as f:
+            fleet = json.load(f)
+        sim = CombatSimulation(time_step=1.0, decision_interval=1e9, seed=1,
+                               weapon_arcs_enabled=True, roll_to_unmask=True)
+        sim.echo = False
+        ship = create_ship_from_fleet_data("a", "cruiser", "alpha", fleet,
+                                           position=Vector3D(0, 0, 0), forward=Vector3D(1, 0, 0))
+        sim.add_ship(ship)
+        sim.step()
+        ship.arcs.roll_goal = ship.arcs.roll + math.pi / 2.0
+        ticks = 0
+        while ship.arcs.roll != ship.arcs.roll_goal and ticks < 1000:
+            sim.step()
+            ticks += 1
+        assert ticks == pytest.approx(self._numbers()["cruiser_roll_90_s"], abs=3.0)

@@ -448,6 +448,50 @@ class TestPointDefenceArcs:
             pytest.fail("no closure in 3-29 km/s needs exactly two turrets")
 
 
+class TestCommandersCountWhatBears:
+
+    def _scene(self, arcs=True):
+        sim = _sim(_table(), arcs=arcs)
+        d = _ship(sim, "d", "alpha", Vector3D(0, 0, 0))
+        e = _ship(sim, "e", "beta", Vector3D(0, 300_000, 0), forward=Vector3D(0, -1, 0))
+        return sim, d, e
+
+    def test_pd_cover_against_a_direction_counts_turrets_that_bear(self):
+        from src.llm.fire_solutions import pd_cover
+        sim, d, e = self._scene()
+        assert pd_cover(sim, d, 250.0)[0] == 2                        # turrets fitted
+        assert pd_cover(sim, d, 250.0, threat_from=e.position)[0] == 1    # port turret only
+        off, d2, e2 = self._scene(arcs=False)
+        assert pd_cover(off, d2, 250.0, threat_from=e2.position)[0] == 2
+
+    def test_gun_lines_say_what_bears_and_what_unmasks_the_rest(self):
+        from src.llm import arcs_status
+        sim, d, e = self._scene()
+        below = _ship(sim, "f", "beta", Vector3D(0, 100_000, -100_000), forward=Vector3D(0, -1, 0))
+        d.primary_target_id = "f"
+        sim.step()
+        report = arcs_status.gun_report(sim, d, below)
+        battery = next(r for r in report["mounts"] if r["slot"] == "weapon_1")
+        assert battery["bears"] is False
+        deg, secs = battery["unmask"]
+        accel, rate = sim._arcs_roll_params(d)
+        assert 30.0 <= deg <= 60.0                 # 45 degrees below the deck, 15 degree steps
+        assert secs == pytest.approx(wa.roll_time_s(math.radians(deg), accel, rate))
+        text = arcs_status.gun_arcs_text(sim, d, below)
+        assert "0 of 2 gun mounts bear" in text and "weapon_1 masked by own hull" in text
+        assert f"{deg:.0f} deg roll" in text
+        assert arcs_status.mount_bears(sim, d, "weapon_1", below) is False
+        above = _ship(sim, "g", "beta", Vector3D(100_000, 0, 40_000), forward=Vector3D(-1, 0, 0))
+        assert arcs_status.mount_bears(sim, d, "weapon_1", above) is True
+        assert "2 of 2 gun mounts bear" in arcs_status.gun_arcs_text(sim, d, above)
+        lines = arcs_status.arcs_status_lines(sim, d)
+        assert any(line.startswith("ARCS vs") for line in lines)
+        # arcs off: nothing to report, every mount counts
+        off, d2, e2 = self._scene(arcs=False)
+        assert arcs_status.arcs_status_lines(off, d2) == []
+        assert arcs_status.mount_bears(off, d2, "weapon_1", e2) is True
+
+
 # =============================================================================
 # Recording
 # =============================================================================

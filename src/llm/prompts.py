@@ -1008,6 +1008,10 @@ evade dodge, 0 of 188 rounds at 100-300km landed where this model promised ~16.
   (lateral) speed lowers it, and an opening range lowers it most. Spinal vs a
   destroyer holding course at 200km: 36% at rest, 47% closing at 3 km/s, 28%
   crossing at 3 km/s, 20% opening at 3 km/s
+- A mount cannot fire through its own hull: a turret battery or PD laser sees about
+  51% of the sky, batteries train at 30 deg/s (heavy 15, PD 120), and the ship rolls
+  itself to unmask (~113 s per 90 deg on a cruiser) - count the mounts that BEAR
+  (ARCS lines), not the mounts fitted.
 - TO WIN: Close range aggressively OR have overwhelming accuracy advantage
 """
 
@@ -1505,6 +1509,8 @@ def format_battlefield_overview(enemies: List[Dict[str, Any]], friendlies: List[
                     )
                 lines.append("    Assumes current aim/evasion persist and power/heat permit; "
                              "shot counts include cooldown, salvo position and ammo.")
+                if e.get("gun_arcs"):
+                    lines.append(f"    Arcs: {e['gun_arcs']}")
             else:
                 hit_chance = e.get("hit_chance", 0)
                 lines.append(f"    Hit probability: ~{hit_chance:.0f}%")
@@ -2358,6 +2364,8 @@ def format_enemy_contacts(
                 + (f", ~{f['expected_gj_per_shot']:.2f} GJ/shot" if f.get("expected_gj_per_shot")
                    is not None else "")
                 for f in forecasts))
+            if e.get("gun_arcs"):
+                lines.append(f"    arcs: {e['gun_arcs']}")
     return "\n".join(lines)
 
 

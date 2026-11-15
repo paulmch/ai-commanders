@@ -13,6 +13,7 @@ from typing import List, Dict, Any, Optional, Tuple
 
 from .client import DEFAULT_MODEL, CaptainClient, LLMCallError, ToolCall
 from .tools import get_captain_tools, get_captain_tools_for_ship, get_weapon_groups_for_ship, PERSONALITY_SELECTION_TOOLS, RESPOND_TO_ORDERS_TOOL, radiator_command_from_args
+from . import arcs_status
 from .prompts import (
     build_captain_prompt,
     build_captain_messages,
@@ -508,7 +509,7 @@ class LLMCaptain:
         ship_status = self._build_ship_status(ship)
         # Drive plume wash (src/drive_plume.py): whose exhaust this ship sits
         # in, which friendlies its own exhaust reaches.
-        plume = _plume_status_lines(simulation, ship)
+        plume = _plume_status_lines(simulation, ship) + arcs_status.arcs_status_lines(simulation, ship)
         if plume:
             ship_status["plume_wash"] = plume
         self._add_launch_status(ship_status, ship, simulation)
@@ -2210,9 +2211,11 @@ class LLMCaptain:
             solution = simulation.gun_firing_solution(ship, enemy, ws)
             probability = solution.hit_probability if solution.can_fire else 0.0
             in_arc = ws.is_target_in_arc(ship.forward, rel_pos.normalized())
-            shots = ws.shots_in_window(window_s) if in_arc and solution.can_fire else 0
+            # Weapon arcs: a mount masked by the ship's own hull fires nothing
+            bears = arcs_status.mount_bears(simulation, ship, slot, enemy)
+            shots = ws.shots_in_window(window_s) if in_arc and bears and solution.can_fire else 0
             forecasts.append({
-                "weapon_slot": slot, "weapon_name": ws.weapon.name,
+                "weapon_slot": slot, "weapon_name": ws.weapon.name, "bears": bears,
                 "hit_probability": probability, "shots": shots,
                 "window_s": window_s, "expected_hits": probability * shots,
                 # Expected damage per shot (P(hit) x round energy): the number
@@ -2221,6 +2224,9 @@ class LLMCaptain:
                     getattr(ws.weapon, "kinetic_energy_gj", 0.0) or 0.0),
             })
         info["weapon_hit_forecasts"] = forecasts
+        gun_arcs = arcs_status.gun_arcs_text(simulation, ship, enemy)
+        if gun_arcs:
+            info["gun_arcs"] = gun_arcs
 
         # World-frame unit vector to him (paste-able into set_heading), his
         # live point defense and magazine, and his remaining gun output.
