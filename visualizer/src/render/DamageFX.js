@@ -8,6 +8,23 @@ import { getNoiseTexture, getPuffTexture, getGlowTexture, getStarTexture, mulber
 import { buildDebrisChunks } from './Hulls.js';
 import { HullWear, createWearMaterial } from './HullWear.js';
 import { spinalMuzzleInto } from './WeaponTimeline.js';
+import { BlastShells } from './BlastShell.js';
+import { engineStateAt } from '../DamageTimeline.js';
+
+/** A destroyed mount keeps spitting sparks this long, thinning out. */
+export const MOUNT_VENT_S = 26;
+const MOUNT_VENT_STEP = 1.15;
+
+/**
+ * Spark spits of a destroyed mount: the k-th one fires at this battle time
+ * after the mount died, or -1 when the thinning vent skips it. Pure.
+ */
+export function mountVentTime(seed, k) {
+  const n = Math.floor(MOUNT_VENT_S / MOUNT_VENT_STEP);
+  if (k < 0 || k >= n) return -1;
+  if (hash01(seed, 4100 + k) > 1 - 0.85 * (k / n)) return -1;
+  return 0.7 + k * MOUNT_VENT_STEP + 0.6 * hash01(seed, 4200 + k);
+}
 
 /**
  * Persistent battle damage: everything that stays on or around a hull
@@ -747,7 +764,8 @@ class ShipView {
     const W = this.W;
     // ~1.6x the first-pass size so wounds still read once the ship is a few
     // dozen pixels long; a torpedo strike gouges wider than a slug
-    const radius = W * (m.kind === 'pop' ? 0.16 : m.kind === 'torpedo' ? 0.15 : 0.095) * (0.7 + 0.9 * m.severity);
+    const radius = W * (m.kind === 'pop' ? 0.16 : m.kind === 'torpedo' ? 0.15 : m.kind === 'scorch' ? 0.2 :
+      m.kind === 'cookoff' ? 0.19 : 0.095) * (0.7 + 0.9 * m.severity);
     _q.setFromUnitVectors(_Z, res.n);
     _q2.setFromAxisAngle(_Z, hash01(m.seed, 11) * Math.PI * 2);
     _q.multiply(_q2);
@@ -1077,15 +1095,50 @@ class ShipView {
     this.wrecks = [];
     list.forEach((w, i) => {
       const e = { t: w.t, kind: w.kind, destroyed: !!w.destroyed, rig: null, panel: -1, local: null, normal: null, size: 0,
-        slump: (hash01(this.seed, 1200 + i) - 0.5) * 2.2, uid: `${this.id}#w${i}` };
-      if (w.kind === 'gun' && guns.length) {
-        let rig = w.slot ? guns.find(r => r.slot === w.slot && !used.has(r)) : null;
+        slump: (hash01(this.seed, 1200 + i) - 0.5) * 2.2, uid: `${this.id}#w${i}`,
+        hitOnly: !!w.hit, mount: !!w.mount, seed: (this.seed + 7919 * (i + 1)) >>> 0 };
+      if (w.kind === 'pd') {
+        // PD dome by turret name (pd_N), else by index: scorch on the ball
+        const pds = ud.pdTurrets || [], mounts = ud.pdMounts || [];
+        let k = mounts.findIndex(p => p.name === w.slot);
+        if (k < 0 && mounts.length) k = (w.index || 0) % mounts.length;
+        if (k >= 0) {
+          const p = mounts[k].pos;
+          e.rig = pds.find(r => r.name === mounts[k].name) || null;
+          e.pd = true;
+          e.normal = new THREE.Vector3(p.x, p.y, 0);
+          if (e.normal.lengthSq() < 1e-6) e.normal.set(0, 1, 0); else e.normal.normalize();
+          e.size = Math.max(this.W * 0.07, (e.rig?.s || 0.4) * 0.55);
+          e.local = new THREE.Vector3(p.x, p.y, p.z).addScaledVector(e.normal, e.size * 0.25);
+        }
+      } else if (w.kind === 'launcher') {
+        // Torpedo tube: its launch door when the hull has them, else a
+        // seeded point on the flank
+        const doors = ud.launchDoors || [];
+        const door = doors.find(d => d.bank === w.index) || (doors.length ? doors[(w.index || 0) % doors.length] : null);
+        if (door?.closed) {
+          e.normal = new THREE.Vector3(door.closed.x, door.closed.y, 0);
+          if (e.normal.lengthSq() < 1e-6) e.normal.set(0, 1, 0); else e.normal.normalize();
+          e.local = door.closed.clone().addScaledVector(e.normal, this.W * 0.03);
+        } else {
+          const az = hash01(this.seed, 1500 + (w.index || 0)) * Math.PI * 2;
+          const z = (hash01(this.seed, 1600 + (w.index || 0)) - 0.4) * this.L * 0.5;
+          const hit = this._cast(new THREE.Vector3(Math.cos(az) * this.W * 2, Math.sin(az) * this.W * 2, z),
+            new THREE.Vector3(-Math.cos(az), -Math.sin(az), 0));
+          if (hit) { e.local = hit.p.clone(); e.normal = hit.n.clone(); }
+        }
+        e.size = this.W * 0.13;
+      } else if (w.kind === 'gun' && guns.length) {
+        // a mount_damaged event names its slot: several events may strike
+        // the same rig, and a hit that leaves it working does not claim it
+        let rig = w.slot ? guns.find(r => r.slot === w.slot && (w.mount || !used.has(r))) : null;
+        if (!rig && w.mount) rig = guns[(w.index || 0) % guns.length];
         if (!rig) {
           const free = guns.filter(r => !used.has(r));
           if (free.length) rig = free[Math.floor(hash01(this.seed, 1300 + i) * free.length)];
         }
         if (rig?.mount) {
-          used.add(rig);
+          if (!e.hitOnly) used.add(rig);
           e.rig = rig;
           const rz = rig.mount.rotation.z;
           e.normal = new THREE.Vector3(-Math.sin(rz), Math.cos(rz), 0);
@@ -1140,8 +1193,13 @@ class ShipView {
     if (!this.sd.wrecks?.length) return;
     if (!this.wrecks) this._assignWrecks();
     for (const e of this.wrecks) {
-      if (!e.rig) continue;
+      if (!e.rig || e.hitOnly) continue;
       const gone = now >= e.t;
+      if (e.pd) {
+        // dead PD dome: the ball is gone from its cup, the scorch stays
+        if (e.rig.ball) e.rig.ball.visible = !gone;
+        continue;
+      }
       if (e.rig.pitch) e.rig.pitch.visible = !gone;
       // HullRigs re-lays the housing every frame; a dead one stays put
       if (gone && e.rig.yaw) e.rig.yaw.rotation.y = e.slump;
@@ -1283,6 +1341,7 @@ export class DamageFX {
     this.spallOwner = new Array(SPALL_BLOCKS).fill(null);
 
     this.blastSpawned = new Set();
+    this.shells = new BlastShells(this.scene);   // reactor blast reach (render/BlastShell.js)
     this._addWarmObjects();
     // ShipDestruction finds the breakup helpers through its fx context
     this.scene.userData.damageFX = this;
@@ -1317,6 +1376,7 @@ export class DamageFX {
     const ag = new THREE.BufferGeometry();
     ag.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
     warm.add(new THREE.LineSegments(ag, new THREE.LineBasicMaterial({ transparent: true, blending: THREE.AdditiveBlending, depthWrite: false })));
+    warm.add(this.shells.warmMesh());
     warm.traverse(o => { o.frustumCulled = false; });
     this.scene.add(warm);
     this._warm = warm;
@@ -1461,7 +1521,7 @@ export class DamageFX {
     const hi = marksUpTo(marks, now);
     for (let i = lo; i < hi; i++) {
       const m = marks[i];
-      if (m._spallBlock >= 0) continue;
+      if (m._spallBlock >= 0 || !(m.debris > 0)) continue;
       const v = this.view(m.shipId);
       if (!v) continue;
       this._allocSpall(m, v);
@@ -1496,7 +1556,7 @@ export class DamageFX {
         P.addScaledVector(N, v.W * 0.05);
         this.sm._spawnBlast({
           position: P, dir: N, kind: m.blast, category: 'damage', spawnTime: m.t,
-          scale: v.W * (m.blast === 'secondary' ? 0.45 : 0.7), baseVel
+          scale: v.W * (m.blast === 'secondary' ? 0.45 : m.blast === 'cookoff' ? 0.62 : 0.7), baseVel
         });
         continue;
       }
@@ -1511,24 +1571,49 @@ export class DamageFX {
       if (!v.sd.wrecks?.length) continue;
       if (!v.wrecks) v._assignWrecks();
       for (const e of v.wrecks) {
-        if (!e.local || e.t > now || now - e.t > 4.0 || this.blastSpawned.has(e.uid)) continue;
-        const st = shipStateAt(this.timeline.trace, v.id, e.t, this._st);
-        if (!st) continue;
+        if (!e.local || e.t > now) continue;
+        // a destroyed fitting (mount_damaged) keeps spitting sparks for a
+        // while, thinning out: seeded spits on battle time
+        if (e.mount && !e.hitOnly && now - e.t < MOUNT_VENT_S + 1) {
+          const k = Math.floor((now - e.t - 0.7) / MOUNT_VENT_STEP);
+          for (let j = Math.max(0, k - 1); j <= k; j++) {
+            const dt = mountVentTime(e.seed, j);
+            const key = `${e.uid}v${j}`;
+            if (dt < 0 || now < e.t + dt || now - (e.t + dt) > 0.8 || this.blastSpawned.has(key)) continue;
+            this.blastSpawned.add(key);
+            this._spawnMountBlast(v, e, e.t + dt, 'ablate', e.size * 1.5);
+          }
+        }
+        if (now - e.t > 4.0 || this.blastSpawned.has(e.uid)) continue;
         this.blastSpawned.add(e.uid);
-        const B = localBasis(st.fwd, _basis);
-        const P = new THREE.Vector3(), N = new THREE.Vector3();
-        const toWorld = (l, out, w) => out.set(
-          B.x[0] * l.x + B.y[0] * l.y + B.z[0] * l.z + w[0],
-          B.x[1] * l.x + B.y[1] * l.y + B.z[1] * l.z + w[1],
-          B.x[2] * l.x + B.y[2] * l.y + B.z[2] * l.z + w[2]);
-        toWorld(e.local, P, [st.pos[0] * SC, st.pos[1] * SC, st.pos[2] * SC]);
-        toWorld(e.normal, N, [0, 0, 0]).normalize();
-        this.sm._spawnBlast({
-          position: P.addScaledVector(N, e.size * 0.3), dir: N, kind: 'secondary', category: 'damage', spawnTime: e.t,
-          scale: e.size * 0.9, baseVel: new THREE.Vector3(st.vel[0] * SC, st.vel[1] * SC, st.vel[2] * SC)
-        });
+        // struck but working: a spit of sparks; knocked out: it goes up once
+        this._spawnMountBlast(v, e, e.t, e.hitOnly ? 'pop' : 'secondary', e.size * (e.hitOnly ? 1.3 : 0.9));
       }
     }
+  }
+
+  /** A blast on a wrecked mount `e` of view `v`, born at battle time `t`. */
+  _spawnMountBlast(v, e, t, kind, scale) {
+    const SC = this.SCALE;
+    const st = shipStateAt(this.timeline.trace, v.id, t, this._st);
+    if (!st) return;
+    const B = localBasis(st.fwd, _basis);
+    const P = new THREE.Vector3(), N = new THREE.Vector3();
+    const toWorld = (l, out, w) => out.set(
+      B.x[0] * l.x + B.y[0] * l.y + B.z[0] * l.z + w[0],
+      B.x[1] * l.x + B.y[1] * l.y + B.z[1] * l.z + w[1],
+      B.x[2] * l.x + B.y[2] * l.y + B.z[2] * l.z + w[2]);
+    toWorld(e.local, P, [st.pos[0] * SC, st.pos[1] * SC, st.pos[2] * SC]);
+    toWorld(e.normal, N, [0, 0, 0]).normalize();
+    this.sm._spawnBlast({
+      position: P.addScaledVector(N, e.size * 0.3), dir: N, kind, category: 'damage', spawnTime: t,
+      scale, baseVel: new THREE.Vector3(st.vel[0] * SC, st.vel[1] * SC, st.vel[2] * SC)
+    });
+  }
+
+  /** Drive damage of a ship at battle time `now` (engineStateAt), or null. */
+  engineAt(shipId, now) {
+    return engineStateAt(this.timeline?.ships.get(shipId), now);
   }
 
   /**
@@ -1604,6 +1689,7 @@ export class DamageFX {
     }
     this._updateSpall(now);
     this._updateBlasts(now);
+    this.shells.update(this.timeline.blasts, now, this.SCALE);
     this.sm._updateBlasts('damage', now);
     this.lastNow = now;
   }
@@ -1619,6 +1705,7 @@ export class DamageFX {
     for (const w of this._keptWear.values()) w.dispose();
     this._keptWear.clear();
     this.sm._clearBlasts?.('damage');
+    this.shells.dispose();
     this.scene.remove(this.spall.mesh);
     this.spall.mesh.dispose();
     this.spall.dispose();
