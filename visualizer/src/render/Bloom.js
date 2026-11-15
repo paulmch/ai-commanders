@@ -180,6 +180,11 @@ export class BloomChain {
     return this.up[i] || null;
   }
 
+  /** The coarsest thresholded level (a few dozen texels): PostFX meters exposure from it. */
+  coarsest() {
+    return this.down.length ? this.down[this.down.length - 1].texture : null;
+  }
+
   dispose(all = true) {
     for (const t of this.down) t.dispose();
     for (const t of this.up) t?.dispose();
