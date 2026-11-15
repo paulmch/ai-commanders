@@ -123,10 +123,11 @@ export const SHIP_SILHOUETTES = {
     engineGlow: { x: 9, y: 40, width: 10, height: 16 }
   },
 
-  // Dreadnought - quad-lobe fortress, stepped citadel bow, keel spinal
+  // Dreadnought - cruciform armoured hull, spine sloping onto the citadel,
+  // long glacis bow, keel ram housing the spinal
   dreadnought: {
-    body: "M110,33.5 L110,46.5 L104,53 L96,53 L96,57 L84,57 L84,64 L30,64 L30,58 L16,57 L16,23 L30,22 L30,16 L84,16 L84,23 L96,23 L96,27 L104,27 Z",
-    nose: "M110,33.5 L110,46.5 L104,53 L96,53 L96,57 L84,57 L84,23 L96,23 L96,27 L104,27 Z",
+    body: "M110,34.8 L110,45.2 L99,53 L97,53 L97,56.5 L84,60.5 L84,64 L30,64 L30,58 L16,57 L16,23 L30,22 L30,16 L84,16 L88,23 L96,23 L96,27 L99,27 Z",
+    nose: "M110,34.8 L110,45.2 L99,53 L97,53 L97,56.5 L84,60.5 L84,16 L88,23 L96,23 L96,27 L99,27 Z",
     lateral: "M84,16 L30,16 L30,64 L84,64 Z",
     tail: "M30,22 L16,23 L16,57 L30,58 Z",
     hardpoints: [

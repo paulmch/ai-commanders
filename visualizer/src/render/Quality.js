@@ -26,6 +26,7 @@ export const QUALITY_PRESETS = {
     shadows: false,      // sun shadow map (hull self-shadowing)
     shadowMapSize: 0,
     streak: false,       // anamorphic lens streak off the bloom chain
+    ao: false,           // screen-space ambient occlusion
     pixelRatioCap: 1
   },
   high: {
@@ -40,6 +41,7 @@ export const QUALITY_PRESETS = {
     shadows: true,
     shadowMapSize: 4096, // halved on software GL (Environment._shadowSize)
     streak: true,
+    ao: true,
     pixelRatioCap: 1.5
   }
 };

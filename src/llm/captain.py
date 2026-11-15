@@ -208,6 +208,7 @@ class LLMCaptain:
         self.received_messages: List[CaptainMessage] = []
         self.message_history: List[Dict[str, Any]] = []  # Full conversation log
         self.has_surrendered = False
+        self.surrender_reason: Optional[str] = None
         self.has_proposed_draw = False
         self.has_retracted_draw = False
 
@@ -3201,6 +3202,8 @@ class LLMCaptain:
 
         elif name == "surrender":
             self.has_surrendered = True
+            reason = (args or {}).get("reason") if isinstance(args, dict) else None
+            self.surrender_reason = str(reason) if reason else None
             return None
 
         elif name == "propose_draw":

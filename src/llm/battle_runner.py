@@ -915,20 +915,14 @@ class LLMBattleRunner:
             # Phase 4: Check surrender/draw
             if self.alpha_captain.has_surrendered:
                 self.communication.alpha_surrendered = True
-                if self.recorder:
-                    self.recorder.record_surrender(
-                        timestamp=self.simulation.current_time,
-                        ship_id="alpha",
-                        captain_name=self.alpha_config.name,
-                    )
+                self._record_ship_surrender(
+                    self.simulation.get_ship("alpha"), self.alpha_config.name,
+                    getattr(self.alpha_captain, 'surrender_reason', None))
             if self.beta_captain.has_surrendered:
                 self.communication.beta_surrendered = True
-                if self.recorder:
-                    self.recorder.record_surrender(
-                        timestamp=self.simulation.current_time,
-                        ship_id="beta",
-                        captain_name=self.beta_config.name,
-                    )
+                self._record_ship_surrender(
+                    self.simulation.get_ship("beta"), self.beta_config.name,
+                    getattr(self.beta_captain, 'surrender_reason', None))
             # Handle alpha draw proposals/retractions
             if self.alpha_captain.has_proposed_draw and not self._alpha_draw_notified:
                 # Queue message to notify beta captain
@@ -1504,21 +1498,15 @@ class LLMBattleRunner:
             # Check surrender/draw (including MCP)
             if self.alpha_mcp:
                 if self.alpha_mcp.has_surrendered:
-                    # Mark all alpha ships as surrendered
-                    for ship_id in self.alpha_ships:
-                        ship = self.simulation.get_ship(ship_id)
-                        if ship:
-                            ship.is_surrendered = True
+                    # Mark all alpha ships as surrendered (recorded per ship)
+                    self._surrender_fleet_ships(self.alpha_ships, self.alpha_mcp.name)
                     if self.config.verbose:
                         print(f"  [SURRENDER] {self.alpha_mcp.name} surrenders")
 
             if self.beta_mcp:
                 if self.beta_mcp.has_surrendered:
-                    # Mark all beta ships as surrendered
-                    for ship_id in self.beta_ships:
-                        ship = self.simulation.get_ship(ship_id)
-                        if ship:
-                            ship.is_surrendered = True
+                    # Mark all beta ships as surrendered (recorded per ship)
+                    self._surrender_fleet_ships(self.beta_ships, self.beta_mcp.name)
                     if self.config.verbose:
                         print(f"  [SURRENDER] {self.beta_mcp.name} surrenders")
 
@@ -2519,6 +2507,41 @@ class LLMBattleRunner:
                 answers_order_event_id=order_ids[0] if order_ids else None,
                 decision_event_id=getattr(decision, "event_id", None))
 
+    def _record_ship_surrender(self, ship: Any, captain_name: str,
+                               reason: Optional[str] = None) -> None:
+        """
+        Record a `surrender` event for a ship striking its colours, once per
+        ship. Call it BEFORE setting is_surrendered: could_deal_damage is
+        read from the ship's fittings (a surrendered ship never can). Ships
+        already destroyed or dying are not surrenders and are skipped.
+        """
+        if ship is None or ship.is_destroyed or getattr(ship, 'is_dying', False):
+            return
+        recorded = self.__dict__.setdefault('_surrenders_recorded', set())
+        if ship.ship_id in recorded or getattr(ship, 'is_surrendered', False):
+            return
+        recorded.add(ship.ship_id)
+        if not self.recorder:
+            return
+        from ..battle_damage import ship_can_deal_damage
+        self.recorder.record_surrender(
+            timestamp=self.simulation.current_time,
+            ship_id=ship.ship_id,
+            captain_name=captain_name,
+            faction=getattr(ship, 'faction', None),
+            reason=reason,
+            hull_pct=getattr(ship, 'hull_integrity', 0.0),
+            could_deal_damage=ship_can_deal_damage(ship),
+        )
+
+    def _surrender_fleet_ships(self, ships: Dict[str, Any], commander_name: str) -> None:
+        """An MCP commander surrendered its fleet: every ship strikes its colours."""
+        for ship_id in ships:
+            ship = self.simulation.get_ship(ship_id)
+            if ship:
+                self._record_ship_surrender(ship, commander_name, reason=None)
+                ship.is_surrendered = True
+
     def _check_fleet_surrender_draw(self) -> None:
         """Check and handle surrenders and draws in fleet mode."""
         # Check each captain for surrender
@@ -2526,6 +2549,8 @@ class LLMBattleRunner:
             if captain.has_surrendered:
                 ship = self.simulation.get_ship(ship_id)
                 if ship and not getattr(ship, 'is_surrendered', False):
+                    self._record_ship_surrender(
+                        ship, captain.name, getattr(captain, 'surrender_reason', None))
                     ship.is_surrendered = True
                     ship.current_maneuver = None  # Stop maneuvering
                     if self.config.verbose:
@@ -2907,6 +2932,30 @@ class LLMBattleRunner:
         outcome, winner, reason = self._evaluate_fleet_tactical_advantage()
         return outcome, winner, f"Both fleets combat-ineffective - on points: {reason}"
 
+    def _fleet_loss_reason(self, faction: str) -> str:
+        """
+        How a fleet with no ship left in the fight was lost (result reason):
+        "<Side> fleet eliminated" when every ship was destroyed (a dying
+        hulk counts as destroyed), "<Side> fleet surrendered (N ships struck
+        their colours)" when none was destroyed, and "<Side> fleet destroyed
+        or surrendered (D destroyed, S surrendered)" for a mix.
+        """
+        ships = (self.alpha_ships if faction == "alpha" else self.beta_ships).values()
+        # Destroyed first: an MCP fleet surrender flags dead ships too.
+        destroyed = sum(1 for s in ships if s.is_destroyed or getattr(s, 'is_dying', False))
+        surrendered = sum(1 for s in ships
+                          if not (s.is_destroyed or getattr(s, 'is_dying', False))
+                          and getattr(s, 'is_surrendered', False))
+        side = faction.title()
+        if surrendered == 0:
+            return f"{side} fleet eliminated"
+        if destroyed == 0:
+            plural = "ship" if surrendered == 1 else "ships"
+            return (f"{side} fleet surrendered ({surrendered} {plural} struck "
+                    f"{'its' if surrendered == 1 else 'their'} colours)")
+        return (f"{side} fleet destroyed or surrendered "
+                f"({destroyed} destroyed, {surrendered} surrendered)")
+
     def _evaluate_fleet_result(self) -> BattleResult:
         """Evaluate final fleet battle result."""
         # Count active ships
@@ -2925,15 +2974,16 @@ class LLMBattleRunner:
         if alpha_active == 0 and beta_active == 0:
             outcome = BattleOutcome.DRAW
             winner = None
-            reason = "Mutual destruction/surrender"
+            reason = (f"Mutual destruction/surrender: {self._fleet_loss_reason('alpha')}; "
+                      f"{self._fleet_loss_reason('beta')}")
         elif alpha_active == 0:
             outcome = BattleOutcome.BETA_VICTORY
             winner = "beta"
-            reason = "Alpha fleet eliminated"
+            reason = self._fleet_loss_reason("alpha")
         elif beta_active == 0:
             outcome = BattleOutcome.ALPHA_VICTORY
             winner = "alpha"
-            reason = "Beta fleet eliminated"
+            reason = self._fleet_loss_reason("beta")
         elif (ineffective := self._combat_ineffective_outcome()) is not None:
             outcome, winner, reason = ineffective
         elif (self.alpha_mcp or self.alpha_admiral) and (self.beta_mcp or self.beta_admiral):

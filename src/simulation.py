@@ -3829,18 +3829,61 @@ class CombatSimulation:
             weighted_thickness += t['ke_gj'] * section.thickness_cm
 
             # Simulate the impact on a copy of the section (same parameters
-            # as the kinetic phase of _resolve_torpedo_hit).
-            trial = copy.deepcopy(section)
-            _, to_hull_gj, _ = trial.apply_energy_damage(
-                energy_gj=t['ke_gj'],
-                flat_chipping=0.3,
-                impact_area_m2=0.1,
-            )
-            total_gj += to_hull_gj
+            # as the kinetic phase of _resolve_torpedo_hit); the trial is
+            # memoised by value, see _trial_energy_to_hull_gj.
+            total_gj += self._trial_energy_to_hull_gj(section, t['ke_gj'])
 
         # Round the leading components so float noise cannot defeat the
         # tie-breaks (1e-3 GJ / 0.1 energy-weighted-cm resolution).
         return (round(total_gj, 3), round(-weighted_thickness, 1), center_distance)
+
+    #: Entries kept by _trial_energy_to_hull_gj before the memo is dropped.
+    _TRIAL_HULL_CACHE_MAX = 4096
+
+    def _trial_energy_to_hull_gj(self, section: Any, ke_gj: float) -> float:
+        """
+        Energy (GJ) that reaches the hull if a torpedo carrying ``ke_gj``
+        struck ``section`` as it stands now: the impact is trialled on a copy
+        (same parameters as the kinetic phase of _resolve_torpedo_hit), the
+        section itself is not touched.
+
+        _presentation_score asks this for every candidate attitude x every
+        terminal torpedo, but the answer depends only on which section is
+        struck and with how much energy - a ship weighing 50 attitudes
+        against 8 torpedoes repeats the same 24 trials 400 times, every tick,
+        and again in every prediction shadow. So the trial is memoised.
+
+        The memo is keyed by VALUE: the section's class and every one of its
+        attributes (thickness, chipping, material constants, ...) plus the
+        energy. Nothing has to invalidate it - armor that is ablated, chipped
+        or replaced simply produces a different key - and a stale entry can
+        never be returned (tests/test_perf_equivalence.py mutates each
+        input). It lives on the simulation instance (the prediction shadow
+        gets its own) and is dropped when it grows past
+        _TRIAL_HULL_CACHE_MAX entries. A section that cannot be keyed (no
+        instance dict, unhashable attribute) is trialled directly.
+        """
+        cache = self.__dict__.get('_trial_hull_cache')
+        if cache is None:
+            cache = self.__dict__['_trial_hull_cache'] = {}
+        try:
+            key = (type(section), ke_gj, tuple(vars(section).items()))
+            cached = cache.get(key)
+        except TypeError:
+            key = cached = None
+        if cached is not None:
+            return cached
+        trial = copy.deepcopy(section)
+        _, to_hull_gj, _ = trial.apply_energy_damage(
+            energy_gj=ke_gj,
+            flat_chipping=0.3,
+            impact_area_m2=0.1,
+        )
+        if key is not None:
+            if len(cache) >= self._TRIAL_HULL_CACHE_MAX:
+                cache.clear()
+            cache[key] = to_hull_gj
+        return to_hull_gj
 
     def _expected_presentation_damage_gj(
         self,
@@ -4673,6 +4716,14 @@ class CombatSimulation:
                 micro_steps = 0
                 hit_detected = False
 
+                # Leading micro-steps in which nothing can happen (no hit, no
+                # proximity hit, no miss) run in scalar arithmetic; the loop
+                # below takes over at the first step that needs a decision.
+                time_remaining, time_elapsed, micro_steps, current_dist = (
+                    self._coast_micro_steps(
+                        proj_flight, target_ship, target_pos_at_step_start,
+                        time_remaining, current_dist, MICRO_DT, MAX_MICRO_STEPS))
+
                 while time_remaining > 0 and micro_steps < MAX_MICRO_STEPS:
                     micro_dt = min(MICRO_DT, time_remaining)
 
@@ -4788,6 +4839,164 @@ class CombatSimulation:
         for proj in projectiles_to_remove:
             if proj in self.projectiles:
                 self.projectiles.remove(proj)
+
+    def _coast_micro_steps(
+        self,
+        proj_flight: ProjectileInFlight,
+        target_ship: ShipCombatState,
+        target_start: Vector3D,
+        time_remaining: float,
+        current_dist: float,
+        micro_dt_max: float,
+        max_micro_steps: int,
+    ) -> tuple[float, float, int, float]:
+        """
+        Fast path of the terminal micro-step loop in ``_update_projectiles``.
+
+        A round spends its last ~4 s of flight in 1 ms micro-steps, and in
+        nearly all of them it is simply still on its way: no hull hit, no
+        proximity hit, no miss. This runs exactly those leading uneventful
+        micro-steps in scalar arithmetic (no Vector3D temporaries, no calls)
+        and stops BEFORE the first step in which anything could be decided,
+        leaving that step and the rest to the loop in ``_update_projectiles``.
+
+        It performs the loop's floating-point operations one for one, in the
+        same order (position accumulated as ``p + v * micro_dt``, target as
+        ``start + v_target * time_elapsed``, the closest-approach formula of
+        ``_calculate_time_to_closest_approach``, ``**2`` in the magnitudes),
+        so position, ``min_distance_to_target``, the step counter and the
+        carried distance are bit-identical to running the full loop - pinned
+        by ``tests/test_perf_equivalence.py`` and ``scripts/perf_check.py``.
+        If you change the micro-step loop, change this to match (or make it
+        return its inputs unchanged: the loop is then the whole truth again).
+
+        A step is left to the full loop when any of these holds:
+        - the swept segment is not clearly outside the hull's bounding sphere
+          (same conservative test as ``_check_moving_cylinder_intersection``);
+        - closest approach falls inside the step and within the proximity
+          radius (the loop's proximity-hit test, evaluated exactly);
+        - the loop's miss test is true (evaluated exactly).
+
+        Nothing is cached: every input is read from the live objects on each
+        call, and the target does not change while one round is being
+        stepped.
+
+        Returns ``(time_remaining, time_elapsed, micro_steps, current_dist)``
+        after the steps taken; ``proj.position`` and
+        ``proj_flight.min_distance_to_target`` are updated in place.
+        """
+        proj = proj_flight.projectile
+        geom = target_ship.geometry
+        pos = proj.position
+        vel = proj.velocity
+        tvel = target_ship.velocity
+        if (geom is None or type(proj) is not KineticProjectile
+                or type(pos) is not Vector3D or type(vel) is not Vector3D
+                or type(tvel) is not Vector3D or type(target_start) is not Vector3D):
+            return time_remaining, 0.0, 0, current_dist
+
+        px, py, pz = pos.x, pos.y, pos.z
+        vx, vy, vz = vel.x, vel.y, vel.z
+        tvx, tvy, tvz = tvel.x, tvel.y, tvel.z
+        sx, sy, sz = target_start.x, target_start.y, target_start.z
+
+        # _calculate_time_to_closest_approach: rel_vel and its square are the
+        # same every micro-step (both velocities are constant in the loop).
+        rvx = vx - tvx
+        rvy = vy - tvy
+        rvz = vz - tvz
+        vel_mag_sq = rvx * rvx + rvy * rvy + rvz * rvz
+        if not vel_mag_sq >= 1e-10:
+            # No relative motion (or NaN): the loop's own special case.
+            return time_remaining, 0.0, 0, current_dist
+
+        proximity_m = geom.radius_m + HIT_TOLERANCE_M
+        sphere_sq = (geom.length_m / 2.0) ** 2 + (geom.radius_m + HIT_TOLERANCE_M) ** 2
+        min_dist = proj_flight.min_distance_to_target
+        sqrt = math.sqrt
+        time_elapsed = 0.0
+        micro_steps = 0
+
+        # Steps during which the round cannot reach the hull's bounding
+        # sphere at all: in the target frame it closes by at most
+        # step_m = |rel_vel| * micro_dt per step, so from clear_m out it
+        # stays more than a sphere radius (plus ten steps and 10 m) outside
+        # the sphere for clear_steps steps, and the per-step hull test below
+        # is skipped for them. (Only the hull test: closest approach, the
+        # proximity hit and the miss test are still evaluated every step.)
+        clear_steps = 0
+        step_m = sqrt(vel_mag_sq) * micro_dt_max
+        clear_m = (sqrt((px - sx) ** 2 + (py - sy) ** 2 + (pz - sz) ** 2)
+                   - 2.0 * sqrt(sphere_sq) - 10.0 * step_m - 10.0)
+        if step_m > 0.0 and 0.0 < clear_m < 1e15:
+            clear_steps = int(clear_m / step_m)
+
+        while time_remaining > 0 and micro_steps < max_micro_steps:
+            # micro_dt = min(MICRO_DT, time_remaining)
+            micro_dt = time_remaining if time_remaining < micro_dt_max else micro_dt_max
+
+            # Target at the start of the micro-step, round and target at its end
+            ax = sx + tvx * time_elapsed
+            ay = sy + tvy * time_elapsed
+            az = sz + tvz * time_elapsed
+            nx = px + vx * micro_dt
+            ny = py + vy * micro_dt
+            nz = pz + vz * micro_dt
+            elapsed_end = time_elapsed + micro_dt
+            bx = sx + tvx * elapsed_end
+            by = sy + tvy * elapsed_end
+            bz = sz + tvz * elapsed_end
+
+            # Hull hit possible? (segment in the target frame vs bounding sphere)
+            rx = px - ax
+            ry = py - ay
+            rz = pz - az
+            if micro_steps >= clear_steps:
+                lx = (nx - (bx - ax)) - px
+                ly = (ny - (by - ay)) - py
+                lz = (nz - (bz - az)) - pz
+                if not (rx * rx + ry * ry + rz * rz
+                        > 4.0 * (sphere_sq + (lx * lx + ly * ly + lz * lz))):
+                    break
+
+            # new_dist = proj.distance_to(target_pos_at_micro_end)
+            new_dist = sqrt((nx - bx) ** 2 + (ny - by) ** 2 + (nz - bz) ** 2)
+
+            # micro_tca, micro_closest = _calculate_time_to_closest_approach(
+            #     prev_position, proj.velocity, target_pos_at_micro_start, target velocity)
+            tca = -(rx * rvx + ry * rvy + rz * rvz) / vel_mag_sq
+            if tca < 0:
+                closest = sqrt(rx ** 2 + ry ** 2 + rz ** 2)
+            else:
+                cx = rx + rvx * tca
+                cy = ry + rvy * tca
+                cz = rz + rvz * tca
+                closest = sqrt(cx ** 2 + cy ** 2 + cz ** 2)
+
+            # Proximity hit: the loop resolves it
+            if 0 <= tca <= micro_dt and closest <= proximity_m:
+                break
+
+            # closest_this_step = min(new_dist, micro_closest); min-distance tracking
+            closest_this_step = closest if closest < new_dist else new_dist
+            new_min = closest_this_step if closest_this_step < min_dist else min_dist
+
+            # Miss: the loop logs it
+            if new_dist > current_dist and current_dist < new_min + 100:
+                break
+
+            # Uneventful step: commit it
+            px, py, pz = nx, ny, nz
+            time_elapsed = elapsed_end
+            min_dist = new_min
+            current_dist = new_dist
+            time_remaining -= micro_dt
+            micro_steps += 1
+
+        if micro_steps:
+            proj.position = Vector3D(px, py, pz)
+            proj_flight.min_distance_to_target = min_dist
+        return time_remaining, time_elapsed, micro_steps, current_dist
 
     def _resolve_projectile_hit_geometric(
         self,
@@ -4997,34 +5206,64 @@ class CombatSimulation:
             sign to detect past-closest-approach projectiles (the old version
             clamped to 0.0, which made those checks dead code).
         """
+        # Scalar form of the Vector3D expressions (rel_pos = proj_pos -
+        # target_pos, rel_vel = proj_vel - target_vel, dot products,
+        # magnitudes), operation for operation, so the results are
+        # bit-identical: this runs once per projectile micro-step (millions of
+        # calls per battle) and the temporaries dominated its cost.
         # Relative position and velocity
-        rel_pos = proj_pos - target_pos
-        rel_vel = proj_vel - target_vel
+        rx = proj_pos.x - target_pos.x
+        ry = proj_pos.y - target_pos.y
+        rz = proj_pos.z - target_pos.z
+        vx = proj_vel.x - target_vel.x
+        vy = proj_vel.y - target_vel.y
+        vz = proj_vel.z - target_vel.z
 
-        vel_mag_sq = rel_vel.dot(rel_vel)
+        vel_mag_sq = vx * vx + vy * vy + vz * vz
 
         if vel_mag_sq < 1e-10:
             # No relative motion - current distance is closest
-            return 0.0, rel_pos.magnitude
+            return 0.0, math.sqrt(rx**2 + ry**2 + rz**2)
 
         # TCA = -dot(r, v) / |v|^2
-        tca = -rel_pos.dot(rel_vel) / vel_mag_sq
+        tca = -(rx * vx + ry * vy + rz * vz) / vel_mag_sq
 
         if tca < 0:
             # Already past closest approach - receding from here on
-            return tca, rel_pos.magnitude
+            return tca, math.sqrt(rx**2 + ry**2 + rz**2)
 
         # Calculate closest approach distance
-        closest_pos = rel_pos + rel_vel * tca
-        closest_dist = closest_pos.magnitude
+        cx = rx + vx * tca
+        cy = ry + vy * tca
+        cz = rz + vz * tca
 
-        return tca, closest_dist
+        return tca, math.sqrt(cx**2 + cy**2 + cz**2)
 
     def _check_moving_cylinder_intersection(
         self, start: Vector3D, end: Vector3D, ship: ShipCombatState,
         target_start: Vector3D, target_end: Vector3D, tolerance: float,
     ) -> tuple[bool, Optional[Vector3D], Optional[Vector3D]]:
         """Sweep in the translating target frame, then restore world coordinates."""
+        # Cheap rejection before any vector is built: the hull cylinder lies
+        # inside the sphere of radius sqrt(half_length^2 + radius^2) around
+        # the target, and a segment that starts further out than that sphere
+        # plus its own length cannot reach it. The test is conservative by a
+        # wide margin (factor 2 on squared distance, i.e. the segment stays
+        # 40% of (sphere + length) clear), so rounding can never turn a
+        # segment the full check would call a hit into a rejection; anything
+        # near - or any NaN - falls through to the exact check below.
+        geom = ship.geometry
+        if geom is not None:
+            sx = start.x - target_start.x
+            sy = start.y - target_start.y
+            sz = start.z - target_start.z
+            lx = (end.x - (target_end.x - target_start.x)) - start.x
+            ly = (end.y - (target_end.y - target_start.y)) - start.y
+            lz = (end.z - (target_end.z - target_start.z)) - start.z
+            reach_sq = ((geom.length_m / 2.0) ** 2 + (geom.radius_m + tolerance) ** 2
+                        + (lx * lx + ly * ly + lz * lz))
+            if sx * sx + sy * sy + sz * sz > 4.0 * reach_sq:
+                return False, None, None
         displacement = target_end - target_start
         hit, _, fraction = self._check_line_cylinder_intersection_at_pos(
             start, end - displacement, ship, target_start, tolerance)
@@ -6465,6 +6704,17 @@ class CombatSimulation:
             default=0.0,
         )
 
+        # Turret cover of every friendly hull that can still shoot: position
+        # and the envelope of each operational turret. Constant while the
+        # list is built (nothing moves or is damaged in here), so it is read
+        # once instead of per torpedo x hull x turret.
+        turret_cover = [
+            (friendly.position,
+             [pd.laser.range_km for pd in friendly.point_defense if pd.is_operational])
+            for friendly in [ship] + allied_ships
+            if not (friendly.is_destroyed or friendly.is_dying or friendly.is_surrendered)
+        ] if self.torpedoes else []
+
         # Assess all torpedoes
         for torp_flight in self.torpedoes:
             if torp_flight.is_disabled:
@@ -6541,14 +6791,12 @@ class CombatSimulation:
             # Fleet-wide turrets that can still reach this torpedo. This is
             # what makes "savable" a formation property, not a lone-hull one.
             friendly_turrets_in_range = 0
-            for friendly in [ship] + allied_ships:
-                if friendly.is_destroyed or friendly.is_dying or friendly.is_surrendered:
-                    continue
-                f_dist_km = torp.position.distance_to(friendly.position) / 1000
-                friendly_turrets_in_range += sum(
-                    1 for pd in friendly.point_defense
-                    if pd.is_operational and f_dist_km <= pd.laser.range_km
-                )
+            torp_pos = torp.position
+            for friendly_pos, turret_ranges_km in turret_cover:
+                f_dist_km = torp_pos.distance_to(friendly_pos) / 1000
+                for turret_range_km in turret_ranges_km:
+                    if f_dist_km <= turret_range_km:
+                        friendly_turrets_in_range += 1
 
             savable = turrets_needed <= friendly_turrets_in_range
 
@@ -6589,32 +6837,42 @@ class CombatSimulation:
             return targets
 
         # Assess all projectiles (slugs)
+        # This loop runs ships x slugs x allies every tick, and nearly every
+        # slug is rejected. Nothing moves while the list is built, so each
+        # ship's position/velocity is read once (they are property chains),
+        # and the range is only worked out for the slugs that are kept.
+        ship_pos = ship.position
+        ship_vel = ship.velocity
+        ship_faction = ship.faction
+        ally_states = [(ally, ally.position, ally.velocity) for ally in allied_ships]
+        on_collision_course = self._on_collision_course
         for proj_flight in self.projectiles:
             # Don't target own faction's projectiles
             source_ship = self.get_ship(proj_flight.source_ship_id)
-            if source_ship and source_ship.faction == ship.faction:
+            if source_ship and source_ship.faction == ship_faction:
                 continue
 
             proj = proj_flight.projectile
-            distance_m = proj.position.distance_to(ship.position)
-            distance_km = distance_m / 1000
+            proj_pos = proj.position
+            proj_vel = proj.velocity
 
             # Check collision course with self
-            on_collision_self = self._on_collision_course(
-                proj.position, proj.velocity, ship.position, ship.velocity
-            )
+            on_collision_self = on_collision_course(proj_pos, proj_vel, ship_pos, ship_vel)
 
             # Check collision course with allies
             threatens_ally = False
             allied_target = None
-            for ally in allied_ships:
-                if self._on_collision_course(proj.position, proj.velocity, ally.position, ally.velocity):
+            for ally, ally_pos, ally_vel in ally_states:
+                if on_collision_course(proj_pos, proj_vel, ally_pos, ally_vel):
                     threatens_ally = True
                     allied_target = ally
                     break
 
             if not (on_collision_self or threatens_ally):
                 continue
+
+            distance_m = proj_pos.distance_to(ship_pos)
+            distance_km = distance_m / 1000
 
             if on_collision_self:
                 priority = self.PD_PRIORITY_SLUG_INTERCEPT
@@ -7104,15 +7362,24 @@ class CombatSimulation:
         threat_range_m: float = 500_000
     ) -> bool:
         """Check if a threat is approaching a ship (in the ship's frame)."""
-        distance = threat_pos.distance_to(ship_pos)
+        # Scalar form (PD calls this per ship x threat x ally every tick);
+        # the same operations as distance_to / the relative velocity /
+        # _is_closing, in the same order.
+        tx = ship_pos.x - threat_pos.x
+        ty = ship_pos.y - threat_pos.y
+        tz = ship_pos.z - threat_pos.z
+        distance = math.sqrt((threat_pos.x - ship_pos.x)**2 + (threat_pos.y - ship_pos.y)**2
+                             + (threat_pos.z - ship_pos.z)**2)
         if distance > threat_range_m:
             return False
         # Closing is a RELATIVE-velocity question. Testing the threat's world
         # velocity made escort PD frame-dependent: with a common 30 km/s
         # fleet drift an escort stopped listing a torpedo bearing down on
         # its neighbour at all.
-        rel_vel = threat_vel - ship_vel if ship_vel is not None else threat_vel
-        return self._is_closing(threat_pos, rel_vel, ship_pos)
+        if ship_vel is not None:
+            return ((threat_vel.x - ship_vel.x) * tx + (threat_vel.y - ship_vel.y) * ty
+                    + (threat_vel.z - ship_vel.z) * tz) > 0
+        return (threat_vel.x * tx + threat_vel.y * ty + threat_vel.z * tz) > 0
 
     def _on_collision_course(
         self,
@@ -7128,27 +7395,34 @@ class CombatSimulation:
         Uses closest point of approach (CPA) calculation.
         The 5km threshold accounts for hit probability at close range.
         """
+        # Scalar form of the Vector3D expressions, operation for operation
+        # (PD calls this per ship x slug x ally every tick).
         # Relative position and velocity
-        rel_pos = obj_pos - target_pos
-        rel_vel = obj_vel - target_vel
+        rx = obj_pos.x - target_pos.x
+        ry = obj_pos.y - target_pos.y
+        rz = obj_pos.z - target_pos.z
+        vx = obj_vel.x - target_vel.x
+        vy = obj_vel.y - target_vel.y
+        vz = obj_vel.z - target_vel.z
 
-        rel_speed_sq = rel_vel.dot(rel_vel)
+        rel_speed_sq = vx * vx + vy * vy + vz * vz
         if rel_speed_sq < 1e-10:
             # Not moving relative to each other
-            return rel_pos.magnitude < miss_threshold_m
+            return math.sqrt(rx**2 + ry**2 + rz**2) < miss_threshold_m
 
         # Time to closest point of approach
-        t_cpa = -rel_pos.dot(rel_vel) / rel_speed_sq
+        t_cpa = -(rx * vx + ry * vy + rz * vz) / rel_speed_sq
 
         if t_cpa < 0:
             # CPA is in the past, object moving away
             return False
 
         # Position at CPA
-        cpa_pos = rel_pos + rel_vel * t_cpa
-        miss_distance = cpa_pos.magnitude
+        cx = rx + vx * t_cpa
+        cy = ry + vy * t_cpa
+        cz = rz + vz * t_cpa
 
-        return miss_distance < miss_threshold_m
+        return math.sqrt(cx**2 + cy**2 + cz**2) < miss_threshold_m
 
     def _calculate_closing_speed(
         self,
@@ -7158,15 +7432,20 @@ class CombatSimulation:
         target_vel: Vector3D
     ) -> float:
         """Calculate closing speed between object and target."""
-        rel_pos = target_pos - obj_pos
-        rel_vel = obj_vel - target_vel
-        distance = rel_pos.magnitude
+        # Scalar form of: rel_pos = target_pos - obj_pos; rel_vel = obj_vel -
+        # target_vel; rel_vel.dot(rel_pos.normalized()) - same operations.
+        rx = target_pos.x - obj_pos.x
+        ry = target_pos.y - obj_pos.y
+        rz = target_pos.z - obj_pos.z
+        distance = math.sqrt(rx**2 + ry**2 + rz**2)
 
         if distance < 1.0:
             return 0.0
 
         # Closing speed is component of relative velocity toward target
-        return rel_vel.dot(rel_pos.normalized())
+        return ((obj_vel.x - target_vel.x) * (rx / distance)
+                + (obj_vel.y - target_vel.y) * (ry / distance)
+                + (obj_vel.z - target_vel.z) * (rz / distance))
 
     def _is_closing(self, pos: Vector3D, vel: Vector3D, target_pos: Vector3D) -> bool:
         """Check if object is closing on target."""
