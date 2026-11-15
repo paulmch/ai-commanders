@@ -8,6 +8,9 @@ import {
 } from '../src/Director.js';
 import { shotPose, clearObstacles, obstaclesOf, fitDistance } from '../src/DirectorCamera.js';
 import { CameraController, DIRECTOR_BLEND_S } from '../src/CameraController.js';
+import { shipDetonationTime, blastFrameTime, wreckDriftS, WRECK_DRIFT_S, buildDamageTimeline } from '../src/DamageTimeline.js';
+import { blastExtent, blastExtentOver, blastKinds, latestWreckEnd } from '../src/render/Explosion.js';
+import { readFileSync } from 'node:fs';
 
 // ------------------------------------------------------------- fixtures
 
@@ -187,26 +190,29 @@ test('old recording without the pass-5 events: frame-derived deaths still get a 
   const legacy = [ev(40, 'torpedo_launched', 'alpha_1', {}), ev(40.5, 'torpedo_launched', 'alpha_1', {}), ev(41, 'torpedo_launched', 'alpha_2', {})];
   const shots = buildShotList(legacy, deaths);
   assertWellFormed(shots, 'legacy');
-  const kill = shotAt(shots, 90);
+  // No reactor cause and no sim death spiral: the viewer coasts the wreck
+  // dark for WRECK_DRIFT_S before it blows, and the shot waits with it
+  const kill = shotAt(shots, 90 + WRECK_DRIFT_S);
   assert.equal(kill.type, 'pullback');
+  assert.equal(kill.t, 90 + WRECK_DRIFT_S);
   assert.equal(kill.kills[0].radiusKm, 15, 'default blast radius');
-  assert.equal(shotAt(shots, 150).subject, 'alpha_3');
+  assert.equal(shotAt(shots, 150 + WRECK_DRIFT_S).subject, 'alpha_3');
   assert.equal(shotAt(shots, 40).kind, 'salvo');
   // Nothing at all: one wide shot
   const empty = buildShotList([], {});
   assert.deepEqual(empty.map(s => [s.type, s.t0, s.t1]), [['wide', 0, Infinity]]);
   assert.equal(buildShotList(undefined, undefined).length, 1);
   // Shake still has its sources
-  assert.deepEqual(buildShakeSources(legacy, deaths).map(s => [s.t, s.ship]), [[90, 'beta_1'], [150, 'alpha_3']]);
+  assert.deepEqual(buildShakeSources(legacy, deaths).map(s => [s.t, s.ship]), [[95, 'beta_1'], [155, 'alpha_3']]);
   // ... and the camera frames it without the events' positions
   const { controller, states, camera } = stage(POSITIONS, { deaths });
   controller.setDirectorRecording({ events: legacy, deathInfo: deaths });
   controller.setDirector(true);
-  controller.update(states(91), { time: 91 });
+  controller.update(states(96), { time: 96 });
   assert.equal(controller.directorState().type, 'pullback');
   assert.ok(Number.isFinite(camera.position.x));
   // A shot whose subject never spawned falls back to the wide view
-  controller.update(states(151), { time: 151 });
+  controller.update(states(156), { time: 156 });
   assert.equal(controller.directorState().type, 'wide');
 });
 
@@ -446,38 +452,71 @@ test('shake decays on battle time and is a pure function of it', () => {
   assert.ok(impactPulse([100], 100) === 1 && impactPulse([100], 100.5) < 0.4 && impactPulse([100], 103) === 0);
 });
 
-test('controller shake: applied for the frame, never accumulates, identical after seeking away and back', () => {
+test('controller shake: on the camera for the draw only, never accumulates, identical after seeking away and back', () => {
   const events = battleEvents();
   const { controller, states, camera, controls } = stage(POSITIONS);
   controller.setDirectorRecording({ events, deathInfo: {} });
+  const HOME = new THREE.Vector3(200, 10, 40);
+  const place = () => { camera.position.copy(HOME); controls.target.set(200, 0, 0); camera.lookAt(controls.target); };
+  // One rendered frame, as main.js does it: update, shake on, draw, shake off
+  let drawn = null;
+  const frame = t => {
+    controller.update(states(t), { time: t });
+    controller.applyShake(states(t), t);
+    drawn = { position: camera.position.clone(), quaternion: camera.quaternion.clone(), shaking: !!controller.shakeOffset };
+    controller.removeShake();
+  };
   // Manual free camera near the blast at (200, 0, 0): shake works without the director
-  const place = () => { camera.position.set(200, 10, 40); controls.target.set(200, 0, 0); camera.lookAt(controls.target); };
   place();
-  controller.update(states(95), { time: 95 });
-  assert.equal(controller.shakeOffset, null, 'calm before the blast');
-  controller.update(states(100.3), { time: 100.3 });
-  assert.ok(controller.shakeOffset, 'shaking 0.3 s after the detonation');
-  const shaken = camera.position.clone();
-  assert.ok(shaken.distanceTo(new THREE.Vector3(200, 10, 40)) > 1e-4);
-  // Paused on the same battle time: the same pose every frame
-  for (let i = 0; i < 30; i++) controller.update(states(100.3), { time: 100.3 });
-  assert.ok(camera.position.distanceTo(shaken) < 1e-9, 'no accumulation');
-  // Away (decayed) and back
-  controller.update(states(150), { time: 150 });
+  const rest = camera.quaternion.clone();
+  frame(95);
+  assert.equal(drawn.shaking, false, 'calm before the blast');
+  frame(100.3);
+  assert.ok(drawn.shaking, 'shaking 0.3 s after the detonation');
+  const shaken = drawn.position.clone();
+  assert.ok(shaken.distanceTo(HOME) > 1e-4);
+  // Between frames the camera is exactly where it was put: no residual
   assert.equal(controller.shakeOffset, null);
-  assert.ok(camera.position.distanceTo(new THREE.Vector3(200, 10, 40)) < 1e-9, 'offset fully removed');
+  assert.deepEqual(camera.position.toArray(), HOME.toArray());
+  assert.deepEqual(controls.target.toArray(), [200, 0, 0]);
+  assert.ok(camera.quaternion.angleTo(rest) < 1e-12, 'orientation restored too');
+  // Paused on the same battle time: the same drawn pose every frame
+  for (let i = 0; i < 30; i++) frame(100.3);
+  assert.ok(drawn.position.distanceTo(shaken) < 1e-12, 'no accumulation');
+  assert.deepEqual(camera.position.toArray(), HOME.toArray());
+  // Something places the camera absolutely between two shaken frames (a
+  // ship focus, the fleet view, a capture harness): it stays exactly there
+  controller.focusOnShip('beta_1', states(100.4));
+  const focused = camera.position.clone();
+  frame(100.4);
+  assert.ok(drawn.shaking);
+  assert.deepEqual(camera.position.toArray(), focused.toArray(), 'no stale offset taken off an absolute placement');
+  controller.setMode('free');
+  // A draw that never finished (shake on, no removeShake) is cleaned up by the next update
+  place();
+  controller.applyShake(states(100.3), 100.3);
   controller.update(states(100.3), { time: 100.3 });
-  assert.ok(camera.position.distanceTo(shaken) < 1e-9, 'same frame after seeking away and back');
-  // Later in battle time it is weaker
-  controller.update(states(101.5), { time: 101.5 });
-  const later = camera.position.distanceTo(new THREE.Vector3(200, 10, 40));
-  assert.ok(later < shaken.distanceTo(new THREE.Vector3(200, 10, 40)));
+  assert.deepEqual(camera.position.toArray(), HOME.toArray());
+  // Away (decayed) and back
+  frame(150);
+  assert.equal(drawn.shaking, false);
+  frame(100.3);
+  assert.ok(drawn.position.distanceTo(shaken) < 1e-12, 'same frame after seeking away and back');
+  frame(101.5);
+  assert.ok(drawn.position.distanceTo(HOME) < shaken.distanceTo(HOME), 'weaker later in battle time');
   // With the director flying: same guarantee
   controller.setDirector(true);
-  const poseAt = t => { controller.update(states(t), { time: t }); return camera.position.clone(); };
-  const a = poseAt(100.3);
-  poseAt(60);
-  assert.ok(poseAt(100.3).distanceTo(a) < 1e-9);
+  frame(100.3);
+  const a = drawn.position.clone();
+  frame(60);
+  frame(100.3);
+  assert.ok(drawn.position.distanceTo(a) < 1e-12);
+  // The scene no longer has a wall-clock shake of its own, and main.js wraps the draw
+  const scene = readFileSync(new URL('../src/SceneManager.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(scene, /this\.shake\b/);
+  const main = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
+  assert.match(main, /applyShake\([^;]*;\s*this\.scene\.render\(\);\s*if \(shaking\) this\.cameraController\.removeShake\(\)/);
+  assert.doesNotMatch(main, /scene\.shake/);
 });
 
 test('controller in live mode reacts to events; when the battle ends it may look ahead', () => {
@@ -501,4 +540,136 @@ test('controller in live mode reacts to events; when the battle ends it may look
   legacy.controller.update(legacy.states(12), { time: 12, dt: 1 / 60 });
   assert.equal(legacy.controller.directorState().shot, 'kill');
   assert.equal(legacy.controller.directorState().type, null);
+});
+
+test('kills are keyed on the time the viewer detonates the ship, the rule the effects use', () => {
+  // The trace flags the ship destroyed one frame after its ship_destroyed event
+  assert.equal(blastFrameTime(102, 101), 102);
+  assert.equal(blastFrameTime(null, 101), 101, 'no frame yet (live): the event tick');
+  assert.equal(blastFrameTime(110, 101), 101, 'an unrelated later frame is not this blast');
+  assert.equal(shipDetonationTime({ time: 102, reactorCause: true }, 101), 102);
+  assert.equal(shipDetonationTime({ time: 102, wasDying: true }, 101), 102);
+  assert.equal(shipDetonationTime(null, 101), 101);
+  assert.equal(shipDetonationTime({ time: 90 }), 90 + WRECK_DRIFT_S, 'old recording: dark coast first');
+  assert.equal(shipDetonationTime(null), null);
+  assert.equal(wreckDriftS({ reactorCause: true }), 0);
+  assert.equal(latestWreckEnd({ a: { time: 700 } }), 700 + WRECK_DRIFT_S + 40, 'Explosion.js uses the same drift rule');
+  // The same time the blast shell is dated at
+  const trace = [100, 101, 102, 103].map(t => ({ t, ships: {
+    beta_1: { pos: [200000 - 300 * (t - 100), 0, 0], vel: [-300, 0, 0], fwd: [-1, 0, 0], hull: 50, destroyed: t >= 102 },
+    alpha_1: { pos: [-200000, 0, 0], vel: [0, 0, 0], fwd: [1, 0, 0], hull: 100, destroyed: false } } }));
+  const events = blast(101, 'beta_1', [199700, 0, 0], 18.4, 'alpha_1');
+  const deaths = { beta_1: { time: 102, position: [199400, 0, 0], velocity: [-300, 0, 0], reactorCause: true } };
+  const timeline = buildDamageTimeline({ events, simTrace: trace, ships: { beta_1: {}, alpha_1: {} } });
+  const shellT = timeline.blasts[0].t;
+  assert.equal(shellT, 102);
+  const kill = buildHighlights(events, deaths).find(h => h.kind === 'kill');
+  assert.equal(kill.t, shellT, 'director and blast shell agree');
+  assert.equal(kill.eventT, 101);
+  const shots = buildShotList(events, deaths);
+  const pull = shots.find(s => s.type === 'pullback');
+  assert.equal(pull.t0, shellT - PULLBACK_PRE_S, 'pull-back starts a second before the flash, not before the event');
+  assert.ok(pull.lockTo >= shellT + DETONATION_LOCK_S);
+  assert.equal(buildShakeSources(events, deaths)[0].t, shellT, 'and so does the shake');
+  // Live: the shot may start at the event tick (all it knows), never before
+  const live = buildShotList(events, {}, { lookahead: false }).find(s => s.type === 'pullback');
+  assert.equal(live.t0, 101);
+  // The camera is still close at the event tick and pulls back with the flash,
+  // centred on the wreck as it coasts on
+  const { controller, camera, controls } = stage({ alpha_1: [-200000, 0, 0], beta_1: [200000, 0, 0] }, { deaths });
+  controller.setDirectorRecording({ events, deathInfo: deaths });
+  controller.setDirector(true);
+  const stateAt = t => ({ alpha_1: { position: [-200000, 0, 0], forward: [1, 0, 0], thrust: 0 },
+    beta_1: { position: [200000 - 300 * (t - 100), 0, 0], forward: [-1, 0, 0], thrust: 0, destroyed: t >= 102 } });
+  const distAt = t => { controller.update(stateAt(t), { time: t }); return camera.position.distanceTo(controls.target); };
+  const close = distAt(101.2);
+  assert.ok(Math.abs(distAt(101.35) - close) < 0.01 * close, 'still close after the event tick: the flash is a frame later');
+  const atFlash = distAt(102.0);
+  const wide = distAt(103.3);
+  assert.ok(atFlash > close && atFlash < wide, 'moving out as it blows');
+  assert.ok(wide > 1.3 * close, 'out with the blast');
+  controller.update(stateAt(105), { time: 105 });
+  assert.ok(Math.abs(controls.target.x - (199.4 - 0.3 * 3)) < 0.5, 'centre coasts with the wreck');
+});
+
+test('the pull-back fits what the death blast still draws, asked of the effect', () => {
+  const K = blastKinds().reactor;
+  assert.equal(blastExtent('reactor', 12, -1), 0);
+  assert.equal(blastExtent('nope', 12, 1), 0);
+  assert.equal(blastExtent('reactor', 12, K.duration + 1), 0);
+  // Early: the shock front, far beyond the fireball; later only the fireball and its lobes
+  const early = blastExtent('reactor', 12, 0.4);
+  const late = blastExtent('reactor', 12, 3);
+  assert.ok(early > 100, `shock front ${early.toFixed(0)}`);
+  assert.ok(late > 12 * K.fireR && late < 0.5 * early, `fireball ${late.toFixed(1)}`);
+  assert.equal(blastExtent('reactor', 6, 3), late / 2, 'linear in the blast scale');
+  assert.ok(blastExtentOver('reactor', 12, 1.5, 5) >= late);
+  // the bright ejecta ring at +1.2 s is wider than the fireball that outlasts it
+  assert.ok(blastExtentOver('reactor', 12, 1.0, 1.6) > 1.5 * blastExtentOver('reactor', 12, 2.0, 5));
+  assert.ok(blastExtentOver('meltdown', 12, 1.5, 5) > blastExtentOver('reactor', 12, 1.5, 5));
+  // The camera uses it: a larger visual extent pulls back further
+  const events = battleEvents();
+  const farAt = extent => {
+    const { controller, states, camera } = stage(POSITIONS, { lengths: { beta_1: 16 } });
+    controller.sceneManager.deathBlastExtent = () => extent;
+    controller.setDirectorRecording({ events, deathInfo: {} });
+    controller.setDirector(true);
+    controller.update(states(104.5), { time: 104.5 });
+    return camera.position.distanceTo(new THREE.Vector3(200, 0, 0));
+  };
+  assert.ok(farAt(0) >= fitDistance(18.4, 55, 16 / 9, 0.62, 1.15) - 1e-6, 'never less than the recorded radius');
+  assert.ok(farAt(40) >= fitDistance(40, 55, 16 / 9, 0.62, 1.15) - 1e-6);
+  assert.ok(farAt(40) > 1.5 * farAt(0));
+});
+
+test('plume wash with a real cost and surrenders are highlights with their own shots', () => {
+  const wash = (t, phase, heat, fittings = []) => ev(t, 'plume_wash', 'alpha_2',
+    { source_ship_id: 'alpha_1', phase, heat_gj: heat, fittings_hit: fittings, armor_ablation_cm: 0.2 });
+  const events = [
+    // a brush with no cost: not a highlight
+    ev(10, 'plume_wash', 'beta_2', { source_ship_id: 'beta_1', phase: 'enter', heat_gj: 3, fittings_hit: [] }),
+    ev(12, 'plume_wash', 'beta_2', { source_ship_id: 'beta_1', phase: 'exit', heat_gj: 6, fittings_hit: [] }),
+    wash(30, 'enter', 12.8), wash(35, 'sustain', 80, ['gun:weapon_0']), wash(55, 'sustain', 385, ['gun:weapon_0', 'pd:pd_0']),
+    wash(69, 'exit', 463),
+    ev(40, 'plume_wash', 'torp_1', { source_ship_id: 'alpha_1', phase: 'torpedo_blinded' }),
+    ev(150, 'surrender', 'beta_3', { hull_pct: 40 }),
+    ev(150, 'surrender', 'beta_4', { hull_pct: 80 }),
+    ev(300, 'surrender', 'alpha_2', { hull_pct: 10 }),
+  ];
+  const hs = buildHighlights(events, {});
+  assert.deepEqual(hs.map(h => [h.kind, h.t, h.subject]), [
+    ['plume_wash', 30, 'alpha_2'], ['surrender', 150, 'beta_3'], ['surrender', 300, 'alpha_2']]);
+  assert.equal(hs[0].target, 'alpha_1');
+  assert.deepEqual(hs[1].ships, ['beta_3', 'beta_4']);
+  const shots = buildShotList(events, {});
+  assertWellFormed(shots, 'wash');
+  const w = shotAt(shots, 31);
+  assert.deepEqual([w.type, w.kind, w.cast], ['wide', 'plume_wash', ['alpha_1', 'alpha_2']]);
+  assert.ok(w.t0 < 30, 'replay: on the pair before the ship enters the jet');
+  assert.deepEqual([shotAt(shots, 151).type, shotAt(shots, 151).cast], ['wide', ['beta_3', 'beta_4']]);
+  assert.deepEqual([shotAt(shots, 301).type, shotAt(shots, 301).subject], ['orbit', 'alpha_2']);
+  assert.ok(highlightList(events, {}).some(h => h.label === 'plume wash'));
+  assert.ok(highlightList(events, {}).some(h => h.label === '2 surrender'));
+  // Live: a highlight only once the cost is on record, and the past never changes
+  const live = buildShotList(events, {}, { lookahead: false });
+  assertWellFormed(live, 'wash live');
+  assert.equal(shotAt(live, 31).kind, 'fleet');
+  assert.deepEqual([shotAt(live, 36).kind, shotAt(live, 36).t0], ['plume_wash', 35]);
+  for (const now of [30, 35, 55, 69, 150]) {
+    const partial = buildShotList(events.filter(e => e.timestamp <= now), {}, { lookahead: false });
+    for (let t = 0; t <= now; t += 0.5) {
+      assert.deepEqual([shotAt(partial, t).kind, shotAt(partial, t).t0], [shotAt(live, t).kind, shotAt(live, t).t0], `live prefix at ${t} / ${now}`);
+    }
+  }
+  // The two-shot frames the emitter and the washed ship together
+  const { controller, states, camera } = stage({ alpha_1: [0, 0, 0], alpha_2: [-9000, 500, 0], beta_3: [300000, 0, 0], beta_4: [305000, 0, 0] });
+  controller.setDirectorRecording({ events, deathInfo: {} });
+  controller.setDirector(true);
+  controller.update(states(32), { time: 32 });
+  camera.updateMatrixWorld();
+  for (const p of [[0, 0, 0], [-9, 0.5, 0]]) {
+    const ndc = new THREE.Vector3(...p).project(camera);
+    assert.ok(Math.abs(ndc.x) < 0.7 && Math.abs(ndc.y) < 0.7, 'emitter and washed ship in frame');
+  }
+  assert.ok(camera.position.distanceTo(new THREE.Vector3(-4.5, 0.25, 0)) < 200, 'a close two-shot, not the fleet view');
 });

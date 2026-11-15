@@ -622,10 +622,13 @@ class BattleVisualizer {
         this.processEvents();
       }
 
-      // Render. Blast shake is the camera controller's (battle time,
-      // Director.shakeAt): keep the scene's wall-clock shake out of it
-      this.scene.shake = 0;
+      // Render, with the blast shake on the camera for this draw only
+      // (battle time, Director.shakeAt): nothing that places the camera
+      // between frames ever sees the offset
+      const shaking = this.isInitialized && this.currentState;
+      if (shaking) this.cameraController.applyShake(this.currentState.ships, this.timeController.currentTime);
       this.scene.render();
+      if (shaking) this.cameraController.removeShake();
       if (this.isInitialized) {
         this.contacts.update(this.scene, this.currentState?.ships, this.selectedShipId);
         this.offscreen?.update(this.scene, this.currentState?.ships, this.loader.ships, this.selectedShipId);

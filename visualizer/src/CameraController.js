@@ -311,6 +311,8 @@ export class CameraController {
       thrust: id => shipStates?.[id]?.thrust || 0,
       length: id => this.getShipLength(id),
       deathTime: id => (Number.isFinite(deaths[id]?.time) ? deaths[id].time : Infinity),
+      // What the death blast visibly draws between two ages after it goes off
+      blastExtent: (id, fromAge, toAge) => scene.deathBlastExtent?.(id, fromAge, toAge) ?? 0,
       faction: id => scene.ships.get(id)?.userData?.faction || String(id).split('_')[0],
       fov: this.camera.fov, aspect: this.camera.aspect, shift, widthShare, scale
     };
@@ -318,22 +320,26 @@ export class CameraController {
 
   // --------------------------------------------------------------- shake
 
-  /** Take last frame's shake offset back off the camera. */
-  _removeShake() {
+  /** Take the shake offset back off the camera (right after the draw). */
+  removeShake() {
     const off = this.shakeOffset;
     if (!off) return;
     this.camera.position.sub(off.position);
     this.orbitControls.target.sub(off.target);
+    this.camera.lookAt(this.orbitControls.target);
     this.shakeOffset = null;
   }
 
   /**
-   * Blast shake for this frame: energy and distance set the amplitude, it
-   * decays on battle time (Director.shakeAt), and the offset is taken off
-   * again before the next update - nothing accumulates, and a frame at
-   * time t looks the same however the playhead got there.
+   * Blast shake for one draw: energy and distance set the amplitude and it
+   * decays on battle time (Director.shakeAt). main.js calls this just
+   * before scene.render() and removeShake() right after, so the offset
+   * never outlives the frame: nothing accumulates, code that places the
+   * camera between frames never sees it, and a frame at time t looks the
+   * same however the playhead got there.
    */
-  _applyShake(shipStates, time) {
+  applyShake(shipStates, time) {
+    this.removeShake();
     if (!this.shakeSources.length || !Number.isFinite(time)) return;
     const scale = this.sceneManager.SCALE ?? 1 / 1000;
     const cam = this.camera.position;
@@ -484,12 +490,7 @@ export class CameraController {
    * @param {Object} shipStates - Current ship states from interpolator
    */
   update(shipStates, directorContext = null) {
-    this._removeShake();
-    this._updateMode(shipStates, directorContext);
-    this._applyShake(shipStates, directorContext?.time ?? this.sceneManager.currentTime);
-  }
-
-  _updateMode(shipStates, directorContext = null) {
+    this.removeShake();   // (a draw that was never finished)
     if (this.mode === 'free') {
       if (directorContext) this.updateDirector(shipStates, directorContext);
       return;

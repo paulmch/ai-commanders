@@ -11,6 +11,8 @@
 // triggers it, and shots already on screen never change when more of the
 // battle arrives.
 
+import { shipDetonationTime } from './DamageTimeline.js';
+
 /** No shot is shorter than this (battle seconds). */
 export const MIN_SHOT_S = 3.0;
 /** A reactor blast holds the camera this long (no cut away mid-detonation). */
@@ -26,6 +28,7 @@ const STRIKE_WINDOW_S = 2.5;
 const CHAIN_WINDOW_S = 4.0;      // kills this close in time ...
 const CHAIN_RANGE_KM = 60;       // ... and space share one widening shot
 const DEFAULT_BLAST_KM = 15;
+const WASH_COST_GJ = 50;         // plume-wash heat that counts as a real cost
 const WIDE_FILL_S = 9;
 const BEAUTY_FILL_S = 7;
 
@@ -45,8 +48,9 @@ function distKm(a, b) {
  * Kinds: kill (one or a chain of reactor blasts), dying (a hulk waiting to
  * blow), strike (torpedoes arriving on one ship), salvo (3+ launches by one
  * fleet), cookoff, disarmed (a ship's last recorded gun/tube knocked out),
- * first_fire (the first gun shot) and closest (closest approach of the
- * fleets, from the trace). Old recordings without the pass-5 events fall
+ * first_fire (the first gun shot), plume_wash (a ship burned in another's
+ * drive exhaust, once it costs something), surrender, and closest (closest
+ * approach of the fleets, from the trace). Old recordings without the pass-5 events fall
  * back to frame-derived deaths (deathInfo) with a default blast radius.
  * @param {Array} events - loader events (sorted by time)
  * @param {Object} deathInfo - BattleLoader.buildDeathInfo()
@@ -64,6 +68,9 @@ export function buildHighlights(events = [], deathInfo = {}, { simTrace = null, 
   const launches = new Map();    // faction -> launches
   const impacts = new Map();     // target -> impacts
   const mounts = new Map();      // ship -> Map(slot -> destroyed)
+  const washes = new Map();      // "ship|emitter" -> open episode
+  const washList = [];
+  const surrenders = [];
   let firstFire = null;
   for (const e of events || []) {
     const t = e?.timestamp;
@@ -125,15 +132,50 @@ export function buildHighlights(events = [], deathInfo = {}, { simTrace = null, 
       case 'shot_fired':
         if (!firstFire) firstFire = e;
         break;
+      case 'plume_wash': {
+        // One episode per (washed ship, emitter): enter .. exit. It is a
+        // highlight once it has a real cost (a fitting burned, or heat /
+        // armour that matters), from the tick that cost is on record.
+        const src = d.source_ship_id;
+        if (!src || !e.ship_id || d.phase === 'torpedo_blinded') break;
+        const key = `${e.ship_id}|${src}`;
+        let w = washes.get(key);
+        if (!w || w.closed) { w = { t0: t, t1: t, costAt: null, heat: 0, fittings: 0, closed: false }; washes.set(key, w); washList.push({ ship: e.ship_id, source: src, w }); }
+        w.t1 = t;
+        w.heat = Math.max(w.heat, num(d.heat_gj));
+        w.fittings = Math.max(w.fittings, (d.fittings_hit || []).length);
+        if (w.costAt === null && (w.fittings > 0 || w.heat >= WASH_COST_GJ || num(d.armor_ablation_cm) >= 1)) w.costAt = t;
+        if (d.phase === 'exit') w.closed = true;
+        break;
+      }
+      case 'surrender':
+        if (e.ship_id) surrenders.push({ t, id: e.ship_id });
+        break;
       default:
     }
   }
   // Frame-derived deaths (old recordings, or a death the events missed)
   for (const [id, info] of Object.entries(deathInfo || {})) {
-    if (!Number.isFinite(info?.time)) continue;
-    const k = death(id);
-    if (k.t === null) k.t = info.time;
-    if (!k.position && Array.isArray(info.position)) k.position = info.position;
+    if (Number.isFinite(info?.time)) death(id);
+  }
+  // A kill is keyed on the time the viewer DETONATES the ship (one trace
+  // frame after the ship_destroyed event, plus a dark coast for old
+  // recordings: DamageTimeline.shipDetonationTime, the rule the effects
+  // use), so the pull-back happens with the flash. eventT stays the tick
+  // the engine recorded: live mode may not start a shot before it knows.
+  for (const k of deaths.values()) {
+    const info = (deathInfo || {})[k.id] || null;
+    k.eventT = k.t;
+    k.t = shipDetonationTime(info, k.eventT);
+    if (k.t === null) continue;
+    if (k.eventT === null) k.eventT = k.t;
+    k.posT = k.eventT;
+    if (Array.isArray(info?.position) && Number.isFinite(info.time)) {
+      // where the trace has the wreck when it blows, coasting on with it
+      k.position = info.position;
+      k.posT = info.time;
+      k.velocity = Array.isArray(info.velocity) ? info.velocity : null;
+    }
   }
 
   // Kills, chained when close in time and space
@@ -150,12 +192,12 @@ export function buildHighlights(events = [], deathInfo = {}, { simTrace = null, 
     const first = chain[0];
     const radius = Math.max(...chain.map(k => k.radiusKm ?? DEFAULT_BLAST_KM));
     out.push({
-      kind: 'kill', t: first.t, tLast: chain.at(-1).t,
+      kind: 'kill', t: first.t, tLast: chain.at(-1).t, eventT: Math.min(first.eventT, first.t),
       // (causal: scored by the first blast alone - the chain is the future)
       score: causal ? 100 + (first.radiusKm ?? DEFAULT_BLAST_KM) : 100 + radius + 25 * (chain.length - 1),
       subject: first.id, others: [...new Set(chain.map(k => k.killer).filter(Boolean))],
       kills: chain.map(k => ({ id: k.id, t: k.t, killer: k.killer, radiusKm: k.radiusKm ?? DEFAULT_BLAST_KM,
-        yieldGj: k.yieldGj, position: k.position })),
+        yieldGj: k.yieldGj, position: k.position, posT: k.posT, velocity: k.velocity || null })),
       dyingAt: first.dyingAt !== null && first.dyingAt < first.t ? first.dyingAt : null
     });
   }
@@ -221,6 +263,23 @@ export function buildHighlights(events = [], deathInfo = {}, { simTrace = null, 
     }
   }
 
+  // Drive-plume wash with a real cost: the emitter's jet and the ship in it
+  for (const { ship, source, w } of washList) {
+    if (w.costAt === null) continue;
+    out.push({ kind: 'plume_wash', t: causal ? w.costAt : w.t0, until: causal ? w.costAt + 6 : w.t1,
+      score: 50 + (causal ? 0 : Math.min(25, w.heat / 20) + 3 * Math.min(4, w.fittings)),
+      subject: ship, target: source, others: [source] });
+  }
+  // Surrenders: ships of one fleet striking at the same checkpoint are one moment
+  for (let i = 0; i < surrenders.length;) {
+    let j = i;
+    while (j + 1 < surrenders.length && surrenders[j + 1].t - surrenders[i].t <= 1 &&
+      factionOf(surrenders[j + 1].id) === factionOf(surrenders[i].id)) j++;
+    const ids = causal ? [surrenders[i].id] : surrenders.slice(i, j + 1).map(s => s.id);
+    out.push({ kind: 'surrender', t: surrenders[i].t, score: 75, subject: ids[0], others: ids.slice(1), ships: ids });
+    i = j + 1;
+  }
+
   if (firstFire) {
     out.push({ kind: 'first_fire', t: firstFire.timestamp, score: 45, subject: firstFire.ship_id,
       target: firstFire.data?.target_id || null, others: [] });
@@ -262,11 +321,12 @@ function candidatesFor(h, lookahead, deathTime) {
       const last = h.tLast ?? h.t;
       const pull = {
         ...base, type: 'pullback', kills: h.kills,
-        start: lookahead ? h.t - PULLBACK_PRE_S : h.t, end: last + PULLBACK_POST_S,
-        lockFrom: lookahead ? h.t - PULLBACK_PRE_S : h.t, lockTo: last + DETONATION_LOCK_S,
-        // Live: the shot on screen keeps its minimum length, so the cut
-        // may arrive with the blast already under way (its shell lasts 5 s)
-        startBy: h.t + (lookahead ? 1.5 : 2.5)
+        // Live: from the tick the kill is on record (the blast follows
+        // within a frame); the shot on screen keeps its minimum length, so
+        // the cut may arrive with the blast under way (its shell lasts 5 s)
+        start: lookahead ? h.t - PULLBACK_PRE_S : h.eventT, end: last + PULLBACK_POST_S,
+        lockFrom: lookahead ? h.t - PULLBACK_PRE_S : h.eventT, lockTo: last + DETONATION_LOCK_S,
+        startBy: lookahead ? h.t + 1.5 : h.eventT + 2.5
       };
       if (!lookahead) return [pull];
       // The approach: over the killer's shoulder while it still lives (a
@@ -303,6 +363,17 @@ function candidatesFor(h, lookahead, deathTime) {
       return [{ ...base, type: 'orbit', start: lookahead ? h.t - 1.5 : h.t, end: h.t + 3.5, impacts: [h.t] }];
     case 'disarmed':
       return [{ ...base, type: 'orbit', start: lookahead ? h.t - 1.5 : h.t, end: h.t + 3.5, impacts: [h.t] }];
+    case 'plume_wash': {
+      // Two-shot from the side: the emitter's jet and the ship inside it
+      const start = lookahead ? h.t - 1.5 : h.t;
+      return [{ ...base, type: 'wide', cast: [h.target, h.subject], target: h.target,
+        start, end: Math.max(start + MIN_SHOT_S, Math.min(h.until + 1, start + 9)) }];
+    }
+    case 'surrender':
+      // One ship: a slow orbit of it. Several: the group that struck together
+      return [h.ships.length > 1
+        ? { ...base, type: 'wide', cast: h.ships, start: lookahead ? h.t - 1.5 : h.t, end: h.t + 5 }
+        : { ...base, type: 'orbit', start: lookahead ? h.t - 1.5 : h.t, end: h.t + 5 }];
     case 'first_fire':
       return [{ ...base, type: 'shoulder', target: h.target, start: lookahead ? h.t - 2 : h.t, end: h.t + 4 }];
     case 'closest':
@@ -477,7 +548,7 @@ export function highlightList(events = [], deathInfo = {}, { simTrace = null, mi
   const label = h => ({
     kill: h.kills?.length > 1 ? `${h.kills.length} kills` : 'kill', dying: 'dying hulk', strike: 'torpedo strike',
     salvo: `salvo x${h.count}`, cookoff: 'magazine cook-off', disarmed: 'disarmed', first_fire: 'first gun exchange',
-    closest: 'closest approach'
+    closest: 'closest approach', plume_wash: 'plume wash', surrender: h.ships?.length > 1 ? `${h.ships.length} surrender` : 'surrender'
   })[h.kind] || h.kind;
   const list = [];
   for (const h of buildHighlights(events, deathInfo, { simTrace })) {
@@ -517,7 +588,8 @@ export function buildShakeSources(events = [], deathInfo = {}) {
     if (!Number.isFinite(e?.timestamp)) continue;
     if (e.event_type === 'reactor_blast') {
       blasted.add(e.ship_id);
-      sources.push({ t: e.timestamp, position: Array.isArray(e.data?.position) ? e.data.position : null, ship: e.ship_id,
+      sources.push({ t: shipDetonationTime((deathInfo || {})[e.ship_id] || null, e.timestamp),
+        position: Array.isArray(e.data?.position) ? e.data.position : null, ship: e.ship_id,
         energyGj: num(e.data?.yield_gj, 400), reachKm: 1.5 * num(e.data?.radius_km, DEFAULT_BLAST_KM) });
     } else if (e.event_type === 'torpedo_impact' && e.data?.target_id) {
       sources.push({ t: e.timestamp, position: null, ship: e.data.target_id,
@@ -528,7 +600,7 @@ export function buildShakeSources(events = [], deathInfo = {}) {
   }
   for (const [id, info] of Object.entries(deathInfo || {})) {
     if (blasted.has(id) || !Number.isFinite(info?.time)) continue;
-    sources.push({ t: info.time, position: Array.isArray(info.position) ? info.position : null, ship: id,
+    sources.push({ t: shipDetonationTime(info), position: Array.isArray(info.position) ? info.position : null, ship: id,
       energyGj: 400, reachKm: 1.5 * DEFAULT_BLAST_KM });
   }
   return sources.sort((a, b) => a.t - b.t);
