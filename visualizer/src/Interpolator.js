@@ -117,6 +117,10 @@ export class Interpolator {
         velocity: this.lerpVec3(state0.vel, state1.vel, alpha),
         forward,
         up,
+        // recorded turret aims (weapon-arcs engine): both frames' lists and
+        // the blend, slerped per mount by render/TurretArcs.turAim
+        tur: Array.isArray(state0.tur) || Array.isArray(state1.tur)
+          ? { a: state0.tur || state1.tur, b: state1.tur || state0.tur, f: alpha } : null,
         thrust: this.lerp(state0.thrust || 0, state1.thrust || 0, alpha),
         // throttle slope over this interval (1/s): drive ignition / shutdown
         thrustRate: frame1.t - frame0.t > 0 ? ((state1.thrust || 0) - (state0.thrust || 0)) / (frame1.t - frame0.t) : 0,

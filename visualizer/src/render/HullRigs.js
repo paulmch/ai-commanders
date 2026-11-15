@@ -2,18 +2,28 @@ import * as THREE from 'three';
 import { updateHullLights } from './HullLights.js';
 import { floodLevel, FLOOD_OPACITY, CODE_GLOW, LIVERY_FLOOD, GLASS_GLOW } from './HullMarkings.js';
 import { assignBarrels } from './WeaponTimeline.js';
+import { arcsFor, clampToArc, slewDir, slewProgress, mountAngles, mountDir, turAim, pdPlan } from './TurretArcs.js';
+import { GUN_DEPRESSION_DEG, PD_DEPRESSION_DEG } from './MountLimits.js';
 
 /**
  * Per-frame hull animation driven by the recording, all on BATTLE time so
  * paused frames and timeline seeks are deterministic:
  *
- *   - coilgun turrets train on the ship's actual target (last shot fired,
- *     else the captain's ordered target, else the nearest enemy), re-lay
- *     onto the next shot's target in the second before it fires, and
- *     recoil when their weapon slot fires (twin mounts: the barrel that
- *     fired, from the shot's `barrel` or alternating shot by shot)
- *   - PD ball turrets swing onto the torpedo / slug their dwell segment is
- *     burning (pd_fired turret_name -> pd rig), else sweep a search pattern
+ *   - recordings from the weapon-arcs engine carry every mount's aim per
+ *     trace frame (`tur`: [az, el, state] in the body frame): turrets and
+ *     PD balls are posed from it, slerped between frames, so they slew at
+ *     the engine's rates and stop at the edge of their arc when masked
+ *   - without `tur`: coilgun turrets train on the ship's actual target
+ *     (last shot fired, else the captain's ordered target, else the nearest
+ *     enemy), slew onto the next shot's target at their class traverse rate
+ *     so they arrive as it fires, and never aim into a direction their arc
+ *     mask (data/hull_mounts.json) blocks: a masked mount rests at the edge
+ *   - PD ball turrets slew onto the torpedo / slug their dwell segment is
+ *     burning (TurretArcs.pdPlan: the recorded turret, or on old recordings
+ *     a mount with a clear line), arriving as the dwell starts, else sweep
+ *     a search pattern
+ *   - turrets recoil when their weapon slot fires (twin mounts: the barrel
+ *     that fired, from the shot's `barrel` or alternating shot by shot)
  *
  * Poses are pure functions of battle time (no per-frame slew state), so a
  * paused frame, a replayed frame and a direct seek give the same pose; a
@@ -32,8 +42,6 @@ import { assignBarrels } from './WeaponTimeline.js';
  */
 
 const _m = new THREE.Matrix4();
-const _v = new THREE.Vector3();
-const _Z = new THREE.Vector3(0, 0, 1);
 const _indexCache = new WeakMap();
 
 /** Per-ship shot and torpedo-launch timelines from the event log. */
@@ -181,12 +189,6 @@ export function updateMagazine(mag, times, t) {
   return dirty;
 }
 
-/** Ship-local -> mount-local (mount rotated about Z by rotation.z). */
-function toMount(inv, mount, world, out) {
-  out.copy(world).applyMatrix4(inv).sub(mount.position).applyAxisAngle(_Z, -mount.rotation.z);
-  return out;
-}
-
 function enemyOk(scene, ud, tid) {
   if (!tid) return null;
   const o = scene.ships.get(tid);
@@ -215,17 +217,34 @@ function gunTarget(ship, scene, idx, t) {
   return o;
 }
 
-function activePD(scene, t) {
-  if (scene._hullPdT !== t) {
-    scene._hullPdT = t;
-    scene._hullPd = scene.loader?.getActivePDBeams ? scene.loader.getActivePDBeams(t) : [];
-  }
-  return scene._hullPd;
-}
-
-const RELAY_S = 1.2;
 const _aim = new THREE.Vector2();
 const _p = new THREE.Vector3();
+const _dA = new THREE.Vector3(), _dB = new THREE.Vector3(), _dC = new THREE.Vector3();
+const GUN_PITCH_MIN = -GUN_DEPRESSION_DEG * Math.PI / 180;
+const PD_PITCH_MIN = -PD_DEPRESSION_DEG * Math.PI / 180;
+/** Gun rest pose (no target): trained along the hull, barrels slightly up. */
+const GUN_REST_PITCH = 0.12;
+/** A PD ball stays on its round while the beam is lit: 1 s past the last recorded tick (beamPulse). */
+const PD_HOLD_S = 1.0;
+
+/** Hull-local unit direction from a mount to a world point (`inv` = inverse ship matrix). */
+function localDirTo(inv, mount, world, out) {
+  out.copy(world).applyMatrix4(inv).sub(mount.position);
+  return out.lengthSq() > 0 ? out.normalize() : out.set(0, 0, 1);
+}
+
+/**
+ * Last entry of a start-sorted segment list with start <= t, or -1.
+ */
+function lastStarted(list, t) {
+  if (!list || !list.length || list[0].start > t) return -1;
+  let lo = 0, hi = list.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (list[mid].start <= t) lo = mid; else hi = mid - 1;
+  }
+  return lo;
+}
 
 /** Stable 0..1 hash of (ship id, mount index) for the dead-mount slump. */
 function hashRig(id, i) {
@@ -234,19 +253,83 @@ function hashRig(id, i) {
   return (h >>> 0) / 4294967296;
 }
 
-/** Yaw/pitch (x/y of out) that lay a gun rig on `target` (rest pose if none). */
-function aimGun(rig, target, out) {
-  if (!target) return out.set(0, 0.12);
-  const v = toMount(_m, rig.mount, target.position, _v);
-  return out.set(Math.atan2(v.x, v.z),
-    THREE.MathUtils.clamp(Math.atan2(v.y, Math.hypot(v.x, v.z)), -0.04, 1.45));
+/** Hull-local aim that lays a gun rig on `target` (rest pose if none). */
+function gunDir(rig, target, out) {
+  if (!target) return mountDir(rig.mount.rotation.z, 0, GUN_REST_PITCH, out);
+  return localDirTo(_m, rig.mount, target.position, out);
 }
 
-/** Where the dwell's round is at battle time t (recording-derived when possible). */
+/**
+ * Where the dwell's round is at battle time t, straight from the recording
+ * (never from what was last drawn); null when it is not in flight then.
+ */
 function pdTargetPosition(scene, seg, t) {
   const at = scene.weapons?.positionAt?.(seg.targetType, seg.targetId, t, _p);
   if (at !== undefined) return at;
   return scene.getEntityPosition ? scene.getEntityPosition(seg.targetType, seg.targetId) : null;
+}
+
+/**
+ * Gun turret aim without the engine's `tur`: on the ship's target, slewing
+ * at the mount's class rate onto the next shot's target so it arrives as
+ * that shot fires, clamped to the mount's arc. Pure in (t, recording).
+ * Writes yaw/pitch to `out`; returns true when the mount is masked.
+ */
+export function fallbackGunAim(rig, arc, target, next, tNext, t, out) {
+  gunDir(rig, target, _dA);
+  if (next) {
+    gunDir(rig, next, _dB);
+    const w = slewProgress(_dA.angleTo(_dB), arc?.rate || 0.5, tNext, t);
+    slewDir(_dA, _dB, w, _dA);
+  }
+  const masked = arc ? clampToArc(arc, _dA, _dA) : false;
+  mountAngles(rig.mount.rotation.z, _dA, out);
+  out.y = Math.max(GUN_PITCH_MIN, out.y);
+  return masked;
+}
+
+/**
+ * PD ball aim without the engine's `tur`: a search sweep, slewing at the
+ * PD traverse rate onto the round of this turret's next dwell so it is on
+ * it when the beam lights, tracking the round through the dwell, then
+ * slewing back; clamped to the mount's arc. `segs` are this turret's
+ * dwells sorted by start (TurretArcs.pdPlan). Pure in (t, recording).
+ * Writes yaw/pitch to `out`; returns true when the mount is masked.
+ */
+export function fallbackPdAim(scene, rig, arc, segs, t, out) {
+  const rz = rig.mount.rotation.z;
+  const rate = arc?.rate || 2;
+  // search sweep, on battle time
+  const D = mountDir(rz, rig.phase * 2 + 1.1 * Math.sin(t * 0.31 + rig.phase * 5),
+    0.45 + 0.3 * Math.sin(t * 0.23 + rig.phase * 3), _dA);
+  const i = lastStarted(segs, t);
+  const cur = i >= 0 ? segs[i] : null;
+  if (cur) {
+    // the round at t while it burns, else where it was when the dwell ended
+    const hold = cur.end + PD_HOLD_S;
+    const pos = pdTargetPosition(scene, cur, Math.min(t, hold)) || pdTargetPosition(scene, cur, cur.end)
+      || pdTargetPosition(scene, cur, cur.start);
+    if (pos) {
+      localDirTo(_m, rig.mount, pos, _dB);
+      if (t <= hold) D.copy(_dB);
+      else slewDir(_dB, D, slewProgress(_dB.angleTo(D), rate, hold + _dB.angleTo(D) / rate, t), D);
+    }
+  }
+  const nxt = segs && i + 1 < segs.length ? segs[i + 1] : null;
+  if (nxt) {
+    const pos = pdTargetPosition(scene, nxt, t) || pdTargetPosition(scene, nxt, nxt.start);
+    if (pos) {
+      // leave in time to be on the next round as its beam lights, but not
+      // before this one's last recorded tick
+      localDirTo(_m, rig.mount, pos, _dC);
+      const T = D.angleTo(_dC) / rate;
+      const depart = Math.max(nxt.start - T, cur ? cur.end : -Infinity);
+      slewDir(D, _dC, slewProgress(T * rate, rate, depart + T, t), D);
+    }
+  }
+  const masked = arc ? clampToArc(arc, D, D) : false;
+  mountAngles(rz, D, out);
+  return masked;
 }
 
 /**
@@ -279,37 +362,39 @@ export function updateHullDetails(ship, state, scene) {
   const idx = indexFor(scene.loader);
   _m.compose(ship.position, ship.quaternion, ship.scale).invert();
 
+  const arcs = arcsFor(ud.shipType);
+  const tur = state.tur || null;   // {a, b, f}: the engine's recorded mount aims
+
   // --- coilgun turrets ------------------------------------------------------
   const guns = ud.gunTurrets;
   if (guns && guns.length) {
     const shots = idx?.shots.get(ud.shipId);
     const last = lastIndexBefore(shots, t);
-    const target = dying ? null : gunTarget(ship, scene, idx, t);
-    // Re-lay onto the next shot's target during the second before it fires
-    let next = null, w = 0;
+    const target = dying || tur ? null : gunTarget(ship, scene, idx, t);
+    // The next shot's target: the mount slews onto it in time to fire
     const nx = shots?.[last + 1];
-    if (!dying && nx && nx.t - t < RELAY_S) {
-      next = enemyOk(scene, ud, nx.target);
-      if (next === target) next = null;
-      else w = THREE.MathUtils.smoothstep(1 - (nx.t - t) / RELAY_S, 0, 1);
-    }
+    let next = !dying && !tur && nx ? enemyOk(scene, ud, nx.target) : null;
+    if (next === target) next = null;
     for (let r = 0; r < guns.length; r++) {
       const rig = guns[r];
+      const arc = arcs?.bySlot.get(rig.slot) || null;
+      let st = -1;
       if (dying) {
         // fixed, seeded slump: power gone, barrels sag to the stops
         rig.yawAngle = (hashRig(ud.shipId, r) - 0.5) * 1.6;
         rig.pitchAngle = -0.04;
       } else {
-        aimGun(rig, target, _aim);
-        if (next) {
-          const y0 = _aim.x, p0 = _aim.y;
-          aimGun(rig, next, _aim);
-          _aim.x = y0 + Math.atan2(Math.sin(_aim.x - y0), Math.cos(_aim.x - y0)) * w;
-          _aim.y = p0 + (_aim.y - p0) * w;
+        if (tur && arc) st = turAim(tur, arc.index, _dA);
+        if (st >= 0) {
+          // the engine's aim, as recorded (body frame -> this mount's yaw/pitch)
+          mountAngles(rig.mount.rotation.z, _dA, _aim);
+        } else {
+          st = fallbackGunAim(rig, arc, target, next, nx ? nx.t : 0, t, _aim) ? 3 : -1;
         }
         rig.yawAngle = _aim.x;
         rig.pitchAngle = _aim.y;
       }
+      rig.arcState = st;
       rig.yaw.rotation.y = rig.yawAngle;
       rig.pitch.rotation.x = -rig.pitchAngle;
       // Recoil from this mount's own weapon slot; on a twin mount the
@@ -336,34 +421,22 @@ export function updateHullDetails(ship, state, scene) {
   // --- PD ball turrets -------------------------------------------------------
   const pds = ud.pdTurrets;
   if (pds && pds.length) {
-    const segs = dying ? [] : activePD(scene, t);
+    const plan = dying || tur ? null : pdPlan(scene)?.get(ud.shipId);
     for (let r = 0; r < pds.length; r++) {
       const rig = pds[r];
-      let ty, tp;
+      const arc = arcs?.bySlot.get(rig.name) || null;
+      const rz = rig.mount.rotation.z;
+      let st = -1;
       if (dying) {
-        ty = rig.phase * 2;
-        tp = -0.12;
+        _aim.set(rig.phase * 2, -0.12);
+      } else if (tur && arc && (st = turAim(tur, arc.index, _dA)) >= 0) {
+        mountAngles(rz, _dA, _aim);
       } else {
-        // Search sweep, on battle time
-        ty = rig.phase * 2 + 1.1 * Math.sin(t * 0.31 + rig.phase * 5);
-        tp = 0.45 + 0.3 * Math.sin(t * 0.23 + rig.phase * 3);
-        let seg = null;
-        for (const s of segs) {
-          if (s.shipId === ud.shipId && s.turret === rig.name && t >= s.start && t <= s.end + 0.6) { seg = s; break; }
-        }
-        const pos = seg ? pdTargetPosition(scene, seg, t) : null;
-        if (pos) {
-          // swing from the sweep onto the round over the first 0.3 s of
-          // dwell, and back to the sweep in the 0.6 s after it ends
-          const v = toMount(_m, rig.mount, pos, _v);
-          const k = THREE.MathUtils.smoothstep(t - seg.start, 0, 0.3) * (1 - THREE.MathUtils.smoothstep(t - seg.end, 0.1, 0.6));
-          const dy = Math.atan2(v.x, v.z) - ty;
-          ty += Math.atan2(Math.sin(dy), Math.cos(dy)) * k;
-          tp += (Math.atan2(v.y, Math.hypot(v.x, v.z)) - tp) * k;
-        }
+        st = fallbackPdAim(scene, rig, arc, plan?.get(rig.name), t, _aim) ? 3 : -1;
       }
-      rig.yawAngle = ty;
-      rig.pitchAngle = THREE.MathUtils.clamp(tp, -0.12, 1.5);
+      rig.arcState = st;
+      rig.yawAngle = _aim.x;
+      rig.pitchAngle = THREE.MathUtils.clamp(_aim.y, dying ? -0.12 : PD_PITCH_MIN, Math.PI / 2);
       rig.ball.rotation.set(-rig.pitchAngle, rig.yawAngle, 0, 'YXZ');
     }
   }

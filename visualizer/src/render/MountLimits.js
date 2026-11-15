@@ -48,3 +48,13 @@ export function unpackMask(hex) {
   }
   return mask;
 }
+
+/**
+ * Traverse rates by weapon type, degrees per second: the engine's named
+ * constants in src/weapon_arcs.py (PD_TRAVERSE_DEG_S,
+ * LIGHT_BATTERY_TRAVERSE_DEG_S, BATTERY_TRAVERSE_DEG_S,
+ * HEAVY_BATTERY_TRAVERSE_DEG_S). Spinals have none: the gimbal follows the
+ * lead at once, the hull is the traverse. The viewer only needs them for
+ * recordings without the `tur` trace field.
+ */
+export const TRAVERSE_DEG_S = { pd_laser: 120, light_coilgun_mk3: 45, coilgun_mk3: 30, heavy_coilgun_mk3: 15 };

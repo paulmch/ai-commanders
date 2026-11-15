@@ -14,6 +14,8 @@ import {
   RCS_LAYOUT, ENGINE, PULSE, JET_COUNT, attitudeAt, jetLevels, makePulses, pulsesAt, throttleAt
 } from './TorpedoRcs.js';
 import { hullQuat, validUp } from '../HullFrame.js';
+import { arcsFor, isBlocked, pdPlan, hullExit } from './TurretArcs.js';
+import { GUN_DEPRESSION_DEG } from './MountLimits.js';
 const _fwdArr = [0, 0, 1], _quatArr = [0, 0, 0, 1];
 
 const Z = new THREE.Vector3(0, 0, 1);
@@ -270,14 +272,23 @@ export class Projectiles {
     const ud = ship.userData;
     const W = ud.size.width, L = ud.size.length;
     const rigs = ud.gunTurrets?.length ? ud.gunTurrets : ud.turrets;
-    const rig = !shot.spinal && rigs?.length
+    let rig = !shot.spinal && rigs?.length
       ? rigs.find(r => r.slot && r.slot === shot.slot) || rigs[shot.index % rigs.length] : null;
     if (rig?.mount) {
+      // Recordings older than the arcs engine fired through the ship: a
+      // shot whose line is blocked for its own mount is shown from a
+      // battery that has a clear line (the engine never records one now)
+      const arcs = arcsFor(ud.shipType);
+      const own = arcs?.bySlot.get(rig.slot);
+      if (own && isBlocked(own, aim)) {
+        const alt = rigs.find(r => { const a = arcs.bySlot.get(r.slot); return r.mount && a && !isBlocked(a, aim); });
+        if (alt) rig = alt;
+      }
       const s = rig.s || 0.5, rz = rig.mount.rotation.z;
       // aim in the mount frame, clamped to the rig's elevation limits
       const v = this.s3.copy(aim).applyAxisAngle(Z, -rz);
       const yaw = Math.atan2(v.x, v.z);
-      const pitch = THREE.MathUtils.clamp(Math.atan2(v.y, Math.hypot(v.x, v.z)), -0.04, 1.45);
+      const pitch = THREE.MathUtils.clamp(Math.atan2(v.y, Math.hypot(v.x, v.z)), -GUN_DEPRESSION_DEG * Math.PI / 180, Math.PI / 2);
       out.dir.set(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch));
       // mount > yaw (0, .2s, 0) > pitch (0, .32s, .15s) > barrel tip 1.4s
       out.pos.set(0.15 * s * Math.sin(yaw), 0.52 * s, 0.15 * s * Math.cos(yaw)).addScaledVector(out.dir, 1.4 * s);
@@ -530,7 +541,15 @@ export class Projectiles {
       // From the firing PD ball's lens (the ball itself slews onto the round).
       this.a.copy(mount.pos).applyQuaternion(ship.quaternion).add(ship.position);
       this.dir.subVectors(target, this.a).normalize();
-      this.a.addScaledVector(this.dir, mount.reach);
+      let reach = mount.reach;
+      if (seg.arcMasked) {
+        // Old recording, no PD mount has a clear line to this round: the
+        // beam is not drawn through the ship, it starts where the line
+        // leaves the hull's bounding ellipsoid
+        this.q.copy(ship.quaternion).invert();
+        reach = Math.max(reach, hullExit(mount.pos, this.s3.copy(this.dir).applyQuaternion(this.q), W, L));
+      }
+      this.a.addScaledVector(this.dir, reach);
     } else {
       this.a.set((random(seg.mountSeed, 1) - 0.5) * W * 0.85, (random(seg.mountSeed, 2) - 0.5) * W * 0.85, (random(seg.mountSeed, 3) - 0.5) * L * 0.6);
       this.a.applyQuaternion(ship.quaternion).add(ship.position);
@@ -589,14 +608,18 @@ export class Projectiles {
    * without PD mounts (then a seeded hull point is used). Cached per segment.
    */
   pdMount(seg, ship) {
+    // which turret shows this dwell: the recorded one, or on recordings
+    // older than the arcs engine a mount with a clear line (TurretArcs)
+    pdPlan(this.manager);
     if (seg.mountShip === ship) return seg.mount;
     const ud = ship.userData;
     const list = ud.pdMounts;
     let mount = null;
     if (list?.length) {
-      let i = list.findIndex(p => p.name === seg.turret);
+      const turret = seg.arcTurret ?? seg.turret;
+      let i = list.findIndex(p => p.name === turret);
       if (i < 0) {
-        const n = Number(String(seg.turret ?? '').split('_').at(-1));
+        const n = Number(String(turret ?? '').split('_').at(-1));
         if (Number.isFinite(n) && n >= 0) i = n % list.length;
       }
       if (i >= 0) {
