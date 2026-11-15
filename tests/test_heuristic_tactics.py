@@ -623,7 +623,7 @@ def test_the_formation_throttle_is_what_the_ship_flies():
 # fire-control fixture's heuristic battles were flown with it). A change to
 # the ENGINE moves this hash too - then re-pin it in the same commit; a
 # change that moves it without an engine change has altered legacy.
-LEGACY_GOLDEN_SHA256 = "9500f81e054473020b01aa462e8be4705706026de3dfb20bb51e8d3bb850d7b0"
+LEGACY_GOLDEN_SHA256 = "df43adb8f710f02af6c4aced90abe1b8c7484467aec177da7286bca8ffe75d23"
 
 
 def test_legacy_battle_event_stream_is_pinned(tmp_path):

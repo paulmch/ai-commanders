@@ -6027,6 +6027,13 @@ class CombatSimulation:
         if not (torp_flight.is_disabled or torp.fuel_exhausted
                 or orphan is None or orphan.is_destroyed):
             return False
+        # With no enemy hull left alive there is nothing to rule a round out
+        # against (and the battle is over): an orphan keeps coasting as before.
+        source = self.get_ship(torp_flight.source_ship_id)
+        if source is not None and not any(
+                not s.is_destroyed and s.faction != source.faction
+                for s in self.ships.values()):
+            return False
         for ship in self.ships.values():
             if ship.is_destroyed:
                 continue
