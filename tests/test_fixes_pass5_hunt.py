@@ -68,3 +68,24 @@ def test_losing_a_siege_dreadnought_costs_as_much_as_a_dreadnought(fleet):
     assert outcome == BattleOutcome.DRAW, reason
     assert winner is None
 
+
+# ---------------------------------------------------------------------------
+# 2. Draw-accepted points ignore lost ships.
+#
+# _evaluate_fleet_result summed _calculate_battle_points over EVERY ship, so
+# a destroyed hull still earned its hull-integrity bonus (up to 50) and its
+# delta-v bonus (up to 30): a fleet that had lost half its ships could win
+# an agreed draw "on points".
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("status", ["is_destroyed", "is_dying", "is_surrendered"])
+def test_agreed_draw_does_not_score_lost_ships(fleet, status):
+    runner = make_runner(fleet, ["destroyer"], ["destroyer", "destroyer"])
+    runner.alpha_mcp = SimpleNamespace(has_proposed_draw=True, has_accepted_draw=False)
+    runner.beta_admiral = SimpleNamespace(has_proposed_draw=False, has_accepted_draw=True)
+    setattr(runner.beta_ships["beta_2"], status, True)
+    result = runner._evaluate_fleet_result()
+    assert "Draw accepted" in result.reason
+    # Equal surviving hulls, beta lost one: beta must not come out ahead.
+    assert result.outcome != BattleOutcome.BETA_VICTORY, result.reason
+

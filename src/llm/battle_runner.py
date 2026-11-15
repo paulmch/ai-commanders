@@ -3220,6 +3220,14 @@ class LLMBattleRunner:
         # Damage dealt (1 point per GJ)
         points += ship.damage_dealt_gj
 
+        # A lost ship keeps the damage it dealt, nothing else. Fleet draws sum
+        # this over every hull, and a destroyed ship still carries its last
+        # hull integrity and delta-v: a fleet that had lost half its ships
+        # could win an agreed draw "on points".
+        if (ship.is_destroyed or getattr(ship, 'is_dying', False)
+                or getattr(ship, 'is_surrendered', False)):
+            return points
+
         # Hull integrity bonus (up to 50 points)
         points += ship.hull_integrity * 0.5  # 100% hull = 50 points
 
