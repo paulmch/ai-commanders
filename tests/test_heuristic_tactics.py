@@ -635,3 +635,30 @@ def test_legacy_battle_event_stream_is_pinned(tmp_path):
               for e in rec["events"] if e["event_type"] not in ("battle_start", "battle_end")]
     digest = hashlib.sha256(json.dumps(stream).encode()).hexdigest()
     assert digest == LEGACY_GOLDEN_SHA256, digest
+
+
+def test_a_hulk_on_top_of_the_ship_still_gives_a_heading():
+    sim = CombatSimulation(seed=8, time_step=1.0)
+    _ship(sim, "me", "destroyer", "alpha", (0, 0, 0))
+    _ship(sim, "mate", "cruiser", "alpha", (0, 0, 0)).is_dying = True
+    _ship(sim, "foe", "cruiser", "beta", (200, 0, 0), fwd=(-1, 0, 0))
+    m = _maneuver(_captain("destroyer").decide("me", sim))
+    assert m.maneuver_type == ManeuverType.HEADING
+    assert m.heading_direction["x"] < -0.99            # away from the enemy
+
+
+def test_the_last_ship_of_a_fleet_does_not_signal():
+    sim = CombatSimulation(seed=8, time_step=1.0)
+    _ship(sim, "me", "destroyer", "alpha", (0, 0, 0))
+    _ship(sim, "foe", "cruiser", "beta", (300, 0, 0), fwd=(-1, 0, 0))
+    captain = _captain("destroyer")
+    captain.decide("me", sim)
+    assert not [m for m in captain.outbox if m["tool"] == "fleet_signal"]
+
+
+def test_mirror_draft_needs_auto_draft():
+    import subprocess
+    import sys as _sys
+    r = subprocess.run([_sys.executable, "scripts/run_draft_battle.py", "--mirror-draft", "--quiet"],
+                       capture_output=True, text=True, cwd=Path(__file__).parent.parent, timeout=120)
+    assert r.returncode != 0 and "--mirror-draft needs --auto-draft" in r.stderr

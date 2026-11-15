@@ -276,7 +276,10 @@ class HeuristicCaptain(LLMCaptain):
                         calls.append(("launch_torpedo", {"count": salvo,
                                                          "target_id": torp_target_id}))
 
-        calls.extend(self._fleet_net_signals(ship, ship_id, enemies, plan))
+        if any(tactics._alive(f) for f in simulation.get_friendly_ships(ship_id)
+               if f.ship_id != ship_id):
+            # (The last ship of a fleet has nobody to signal to.)
+            calls.extend(self._fleet_net_signals(ship, ship_id, enemies, plan))
 
         threat = self._torpedo_threat(ship, ship_id, simulation)
         heat = getattr(ship, "heat_percent", 0.0) or 0.0
@@ -301,7 +304,12 @@ class HeuristicCaptain(LLMCaptain):
                 "throttle": self._heat_throttle_cap(ship, heat, maneuver[1], threat)}))
         elif (hulk := tactics.blast_threat(simulation, ship)) is not None:
             # A dying hulk's reactor is about to go: get out of the blast.
-            away = (ship.position - hulk.position).normalized()
+            away = ship.position - hulk.position
+            if away.magnitude < 1.0:
+                # Sitting on the hulk: burn away from the nearest enemy instead.
+                near = min(enemies, key=lambda e: (ship.position.distance_to(e.position), e.ship_id))
+                away = ship.position - near.position
+            away = away.normalized()
             calls.append(("set_heading", {
                 "direction": {"x": round(away.x, 4), "y": round(away.y, 4), "z": round(away.z, 4)},
                 "throttle": self._heat_throttle_cap(ship, heat, 1.0, threat)}))
