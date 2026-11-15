@@ -555,16 +555,30 @@ class TestManeuversIgnoreDeadTargets:
         assert ship.velocity.magnitude == 0.0
 
     def test_wobble_falls_back_to_a_live_enemy(self):
-        sim = CombatSimulation(time_step=1.0, seed=1)
-        ship = _ship(sim, "a", "corvette", "alpha", Vector3D(0, 0, 0), Vector3D(0, 1, 0))
-        dead = _ship(sim, "b", "destroyer", "beta", Vector3D(0, 300e3, 0))
-        _ship(sim, "c", "destroyer", "beta", Vector3D(0, -300e3, 0))
-        dead.is_destroyed = True
-        sim.inject_command("a", Maneuver(ManeuverType.EVASIVE, start_time=0.0,
-                                         throttle=1.0, target_id="b"))
-        _steps(sim, 30)
-        # heading for the live enemy at -y, not the wreck at +y
-        assert ship.velocity.y < 0.0
+        """A ship at rest lays its WOBBLE weave across the line to the
+        nearest LIVE enemy (it never chases anyone): with the wreck 200 km
+        along x and the live enemy 300 km along -y, the jinks go across y,
+        mostly along x. (This used to assert the ship flew toward the live
+        enemy; WOBBLE has not chased anyone since it learned to hold its
+        course, and that sign was only the turning transient of a flip.)
+        Control: with the wreck alive (nearest) the weave is laid across x."""
+        def weave(wreck_dead):
+            sim = CombatSimulation(time_step=1.0, seed=1)
+            ship = _ship(sim, "a", "corvette", "alpha", Vector3D(0, 0, 0), Vector3D(0, 1, 0))
+            wreck = _ship(sim, "b", "destroyer", "beta", Vector3D(200e3, 0, 0))
+            _ship(sim, "c", "destroyer", "beta", Vector3D(0, -300e3, 0))
+            wreck.is_destroyed = wreck_dead
+            sim.inject_command("a", Maneuver(ManeuverType.EVASIVE, start_time=0.0,
+                                             throttle=1.0, target_id="b"))
+            vx = vy = 0.0
+            for _ in range(40):
+                _steps(sim, 1)
+                vx, vy = max(vx, abs(ship.velocity.x)), max(vy, abs(ship.velocity.y))
+            return vx, vy
+        vx, vy = weave(True)
+        assert vx > vy, (vx, vy)
+        vx, vy = weave(False)
+        assert vx < vy, (vx, vy)
 
 
 # ---------------------------------------------------------------------------

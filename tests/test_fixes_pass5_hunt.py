@@ -543,17 +543,16 @@ def test_fast_hull_still_runs_and_turns_back_before_impact():
     assert struck and set(struck) == {"nose"}, struck
 
 
-@pytest.mark.xfail(strict=False, reason=(
-    "_turn_time_to under-estimates a turn begun with a large SIDEWAYS spin "
-    "toward a far target: a cruiser / battleship spun out of the turn's plane "
-    "for 6 s and then ordered 120 deg round reaches the 10 deg burn cone in "
-    "38 / 52 s stepped against 21 / 29 s estimated (the sideways drift is "
-    "added as hypot(theta, w_perp^2 / 2a), which misses how the swing "
-    "carries on while it is braked). Not fixed: spins in the turn's plane "
-    "(toward / away) are within 0.9-1.3x; fixing it moves the fire-control "
-    "forecast (pending burn light time) and the fixture."))
-@pytest.mark.parametrize("hull", ["cruiser", "battleship"])
-def test_turn_time_after_a_sideways_spin_to_a_far_target(hull):
+# A ship spun out of the turn's plane and then ordered far round: the
+# estimate used to add the sideways swing as hypot(theta, w_perp^2 / 2a)
+# (cruiser 21 s against 38 s stepped, battleship 29 s against 52 s), and the
+# integrator itself kept a spin axis whose swing passed 60 deg from the
+# target. Now the integrator keeps a spin's axis only while its swing passes
+# within SPIN_AXIS_KEEP_DEG of the target, and _turn_time_to brakes the
+# sideways spin first and flies the turn from where that leaves the nose.
+@pytest.mark.parametrize("hull", ["corvette", "destroyer", "cruiser", "battleship", "dreadnought"])
+@pytest.mark.parametrize("target_deg", [60, 120, 170])
+def test_turn_time_after_a_sideways_spin_to_a_far_target(hull, target_deg):
     import math
     from src.physics import Vector3D
     from src.simulation import CombatSimulation, create_ship_from_fleet_data
@@ -565,7 +564,7 @@ def test_turn_time_after_a_sideways_spin_to_a_far_target(hull):
     sim.add_ship(ship)
     for _ in range(6):
         sim._rotate_ship_toward(ship, Vector3D(0, 0, 1), 1.0, engines_on=True)
-    target = Vector3D(math.cos(math.radians(120)), math.sin(math.radians(120)), 0)
+    target = Vector3D(math.cos(math.radians(target_deg)), math.sin(math.radians(target_deg)), 0)
     predicted = sim._turn_time_to(ship, target, engines_on=True)
     t = 0
     while t < 600:

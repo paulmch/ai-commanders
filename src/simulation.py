@@ -194,6 +194,12 @@ PRESENT_HOLD_WINDOW_S = 10.0
 # RUN from a salvo 70 s out could not flip back and took it in the tail.
 RUN_MIN_BURN_S = 10.0
 
+# Far from its target (more than 90 deg) a spinning ship keeps its spin's own
+# axis rather than the exact great circle, as long as the swing about it
+# passes within this angle of the target (_rotate_ship_toward). Covers
+# WOBBLE's +-5 deg aim jitter near a flip.
+SPIN_AXIS_KEEP_DEG = 10.0
+
 # Aim this far INSIDE the chosen armor section's arc rather than at its
 # edge. Terminal jitter (bearing drift, residual angular rate) of a few
 # degrees must not flip the struck section from nose to lateral.
@@ -3371,9 +3377,14 @@ class CombatSimulation:
             # the spin's own axis (made perpendicular to the nose) instead of
             # the exact great circle. Near a flip the great-circle axis swings
             # wildly with a slightly jittered aim (WOBBLE's +-5 deg), and
-            # chasing it braked the spin to nothing.
+            # chasing it braked the spin to nothing. Only while the swing
+            # about that axis still passes the target (within
+            # SPIN_AXIS_KEEP_DEG): a spin across the turn - a cruiser
+            # rolled out of the plane and ordered 120 deg round - used to be
+            # kept too and flew a long detour past the target.
             along = axis_prev - current_forward * axis_prev.dot(current_forward)
-            if along.magnitude > 1e-6:
+            if (along.magnitude > 1e-6 and abs(target_normalized.dot(along.normalized()))
+                    < math.sin(math.radians(SPIN_AXIS_KEEP_DEG))):
                 rotation_axis = along
         rotation_axis = rotation_axis.normalized()
 
@@ -3563,6 +3574,7 @@ class CombatSimulation:
         engines_on: bool = True,
         forward: Optional[Vector3D] = None,
         spin: Optional[Vector3D] = None,
+        _depth: int = 0,
     ) -> float:
         """
         Time to bring the nose onto ``direction`` from the current attitude
@@ -3603,12 +3615,31 @@ class CombatSimulation:
         w_par = spin.dot(axis)
         w_perp = (spin - axis * w_par).magnitude
         if theta > math.pi / 2 and w_par > 0.0:
-            # The integrator keeps the spin's own axis this far off target.
-            w_par, w_perp = w_mag, 0.0
-        t = w_perp / alpha
-        if w_perp > 0.0:
-            # The sideways spin is braked first; meanwhile it carries the
-            # nose off the turn's plane.
+            # The integrator keeps the spin's own axis this far off target
+            # while the swing about it passes the target (SPIN_AXIS_KEEP_DEG).
+            spin_axis = spin * (1.0 / w_mag)
+            along = spin_axis - fwd * spin_axis.dot(fwd)
+            if (along.magnitude > 1e-6 and abs(target.dot(along.normalized()))
+                    < math.sin(math.radians(SPIN_AXIS_KEEP_DEG))):
+                w_par, w_perp = w_mag, 0.0
+        t = 0.0
+        if w_perp > 1e-9:
+            if _depth < 3:
+                # The sideways spin is braked first (it takes the whole
+                # authority); meanwhile it swings the nose w_perp^2 / 2a off
+                # the turn's plane and the in-plane spin carries on
+                # unchanged. Then the turn is flown from where that leaves
+                # the nose (the great circle from there is a new one).
+                t_p = w_perp / alpha
+                perp_vec = spin - axis * w_par
+                rv = perp_vec * (0.5 * t_p) + axis * (w_par * t_p)
+                ang = rv.magnitude
+                fwd2 = (fwd.rotate_around_axis(rv * (1.0 / ang), ang).normalized()
+                        if ang > 1e-12 else fwd)
+                return t_p + self._turn_time_to(ship, direction, engines_on,
+                                                forward=fwd2, spin=axis * w_par,
+                                                _depth=_depth + 1)
+            t = w_perp / alpha
             theta = math.hypot(theta, w_perp * w_perp / (2.0 * alpha))
         if w_par < 0.0:
             swing = w_par * w_par / (2.0 * alpha)
