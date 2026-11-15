@@ -394,3 +394,28 @@ def test_captain_sees_an_enemy_crew_out_of_action_in_its_contact_line():
     dp._irradiate(sim, foe, 6.0, "lead")
     info = captain._build_enemy_info(lead, foe, sim)
     assert "NOT MANEUVERING, NOT FIRING (crew incapacitated by plume wash)" in format_enemy_contacts([info], FLEET)
+
+
+def test_admiral_spends_no_order_call_on_an_incapacitated_crew(tmp_path):
+    import re
+    from tests.test_fleet_comms import Stub, make_runner
+    stub = Stub()
+    runner = make_runner(stub, tmp_path)
+    runner.setup_fleet_battle(FLEET)
+    sim = runner.simulation
+    dp._irradiate(sim, sim.get_ship("alpha_2"), 9.0, "alpha_1")
+    ordered, prompts = [], []
+    real = stub.decide_with_tools
+
+    def spy(messages, tools, **kwargs):
+        text = messages[-1]["content"] if isinstance(messages[-1]["content"], str) else ""
+        if {t["function"]["name"] for t in tools} == {"issue_order"}:
+            ordered.append(re.search(r"Issue tactical order to (.+?)\. You MUST", text).group(1))
+        prompts.append(text)
+        return real(messages, tools, **kwargs)
+    stub.decide_with_tools = spy
+    runner.alpha_admiral.decide(simulation=sim, captains=list(runner.alpha_captains.values()))
+    names = {sid: runner.fleet_communication.ship_name(sid) for sid in ("alpha_1", "alpha_2")}
+    assert len(ordered) == 1 and names["alpha_1"] in ordered[0] and names["alpha_2"] not in ordered[0]
+    # ...while the fleet picture the admiral reads marks the ship.
+    assert any("CREW INCAPACITATED by plume radiation (9.0 Sv) - CANNOT EXECUTE ORDERS" in p for p in prompts)

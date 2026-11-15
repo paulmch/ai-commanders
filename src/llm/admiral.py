@@ -749,7 +749,11 @@ Be authentic to how you would command a fleet as {model_name}."""
             ship_id = getattr(captain, 'ship_id', None)
             if ship_id:
                 ship = simulation.get_ship(ship_id)
-                if ship and not ship.is_destroyed:
+                # A crew incapacitated by plume radiation cannot execute
+                # anything: it stays in the fleet picture (marked), but no
+                # per-ship order call is spent on it.
+                if (ship and not ship.is_destroyed
+                        and getattr(ship, 'crew_incapacitated', False) is not True):
                     active_ships.append({
                         'ship_id': ship_id,
                         'ship_name': captain.ship_name,
