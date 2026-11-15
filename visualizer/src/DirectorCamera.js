@@ -221,8 +221,8 @@ function shoulder(shot, t, world) {
   const up = inPlaneUp(d);
   const k = (1.14 - 0.14 * ease((t - shot.t0) / 5)) * L;
   return {
-    position: S.clone().addScaledVector(d, -2.3 * k).addScaledVector(Z, 1.15 * k).addScaledVector(up, 0.5 * k),
-    target: S.clone().addScaledVector(d, 2.6 * L).addScaledVector(up, 0.2 * L)
+    position: S.clone().addScaledVector(d, -1.7 * k).addScaledVector(Z, 0.95 * k).addScaledVector(up, 0.4 * k),
+    target: S.clone().addScaledVector(d, 1.6 * L).addScaledVector(up, 0.15 * L)
   };
 }
 
@@ -238,7 +238,7 @@ function runin(shot, t, world) {
   const a = firingLine(from, V, new THREE.Vector3(world.faction(shot.subject) === 'alpha' ? -1 : 1, 0, 0), L);
   const up = inPlaneUp(a);
   const span = Math.max(0.5, shot.t - shot.t0);
-  let D = lerp(8.5, 3.4, ease((t - shot.t0) / span)) * L;
+  let D = lerp(4.8, 2.6, ease((t - shot.t0) / span)) * L;
   D *= 1 - 0.08 * impactPulse(shot.impacts, t);
   const dir = a.clone().multiplyScalar(-0.82).addScaledVector(Z, 0.5).addScaledVector(up, 0.28).normalize();
   return { position: V.clone().addScaledVector(dir, D), target: V };
@@ -286,8 +286,10 @@ function pullback(shot, t, world) {
   const live = world.pos(first.id);
   if (live && t < first.t) centre.lerp(live, 1 - ease((t - (first.t - PULLBACK_PRE_S)) / PULLBACK_PRE_S));
   const near = Math.max(2.4 * L, 1.3 * first.radiusKm);
-  const far = Math.max(1.35 * near, fitDistance(reach, world.fov, world.aspect, world.widthShare));
-  const D = lerp(near, far, easeOut((t - (first.t - 0.2)) / 2.4));
+  // The fireball and debris outgrow the nominal radius: fit it with room
+  // to spare and keep drifting out for as long as the shot holds
+  const far = Math.max(1.35 * near, fitDistance(reach, world.fov, world.aspect, world.widthShare, 1.75));
+  const D = lerp(near, far, easeOut((t - (first.t - 0.2)) / 2.4)) * (1 + 0.04 * Math.max(0, t - first.t));
   // From the killer's side of the line of fire, off the battle plane
   const killer = first.killer ? world.pos(first.killer) : null;
   const k = directionTo(killer, firstAt, new THREE.Vector3(0, 0, 0));
