@@ -94,9 +94,19 @@ ROLL_GUN_HYSTERESIS_FRACTION = 0.15
 # so the planner prefers attitudes that hold a target with margin.
 ROLL_MARGIN_DEG = 7.5
 ROLL_MARGIN_SAMPLES_RAD = (0.0, math.radians(ROLL_MARGIN_DEG), -math.radians(ROLL_MARGIN_DEG))
-# ...and a new goal must win at least this many of those samples of one
-# turret-on-torpedo pair over the standing goal before the ship re-rolls.
-ROLL_PD_HYSTERESIS_SAMPLES = 2
+# ...and a new goal must win at least one WHOLE turret-on-torpedo pair (all
+# of its samples) over the standing goal before the ship re-rolls. (Two
+# samples - less than one pair - let every small shift of an inbound salvo's
+# bearing flip the goal between two attitudes on alternate re-plans.)
+ROLL_PD_HYSTERESIS_SAMPLES = len(ROLL_MARGIN_SAMPLES_RAD)
+# A goal, once chosen, stands at least this long (battle time) before a
+# re-plan may replace it: a hull that needs 70-250 s per 90 degrees of roll
+# gains nothing from a goal that changes every 5 s.
+ROLL_GOAL_COMMIT_S = 15.0
+# A goal chosen for the guns alone (no PD gain) stands until the hull could
+# have rolled there (its planned roll time) - otherwise a slow hull abandons
+# a 135 degree roll after 15 s and 2 degrees and rolls back. A better PD
+# answer to an inbound torpedo may still replace it after ROLL_GOAL_COMMIT_S.
 # Inbound torpedoes this close (multiples of the PD envelope) drive the roll.
 ROLL_PD_HORIZON_ENVELOPES = 2.0
 
@@ -268,7 +278,7 @@ class MountState:
 
     __slots__ = ("slot", "kind", "index", "mask", "rate", "ax", "ay", "az",
                  "trained", "state", "target_id", "wx", "wy", "wz", "has_want",
-                 "masked_since", "masked_reported", "stamp")
+                 "masked_since", "masked_reported", "stamp", "fallback_id")
 
     def __init__(self, mount: HullMount, rate_deg_s: float):
         self.slot = mount.slot
@@ -287,10 +297,26 @@ class MountState:
         self.masked_since = None
         self.masked_reported = False
         self.stamp = -1.0
+        self.fallback_id = None     # enemy engaged this tick while the target is masked
 
     def bears(self, bx: float, by: float, bz: float) -> bool:
         """True when the mount can fire in this body-frame direction."""
         return not self.mask[cell_index(bx, by, bz)]
+
+    def check(self, wx: float, wy: float, wz: float) -> int:
+        """
+        State toward a wanted direction WITHOUT moving the mount: for a
+        second designation inside a tick in which the mount has already
+        slewed (it moves at most once per tick).
+        """
+        self.wx, self.wy, self.wz = wx, wy, wz
+        self.has_want = True
+        if self.mask[cell_index(wx, wy, wz)]:
+            self.state = MASKED
+        else:
+            dot = self.ax * wx + self.ay * wy + self.az * wz
+            self.state = ON_TARGET if dot >= _COS_AIM_TOL else SLEWING
+        return self.state
 
     def idle(self) -> None:
         self.state = IDLE
@@ -301,9 +327,10 @@ class MountState:
         """
         Slew toward the wanted body-frame direction for ``dt`` seconds along
         the great circle and return the new state. A mount whose target is
-        masked trains to the edge of its arc and waits there. The very first
-        designation is free (mounts are trained on the enemy while the fleets
-        are still far outside gun range).
+        masked trains to the edge of its arc and waits there. ``dt == 0``
+        (CombatSimulation.settle_arcs, before the shooting starts) puts a
+        mount that has never been trained straight onto an open target, as
+        after the approach; every other designation slews at the rate.
         """
         self.wx, self.wy, self.wz = wx, wy, wz
         self.has_want = True
@@ -311,7 +338,7 @@ class MountState:
         want_blocked = mask[cell_index(wx, wy, wz)]
         if not self.trained:
             self.trained = True
-            if not want_blocked:
+            if not want_blocked and dt == 0.0:
                 self.ax, self.ay, self.az = wx, wy, wz
                 self.state = ON_TARGET
                 return ON_TARGET
@@ -350,6 +377,7 @@ class MountState:
 
 
 _AIM_TOL = math.radians(AIM_TOLERANCE_DEG)
+_COS_AIM_TOL = math.cos(_AIM_TOL)
 
 
 def _toward(ax, ay, az, wx, wy, wz, theta, step):
@@ -376,7 +404,8 @@ class ShipArcs:
     """
 
     __slots__ = ("hull", "mounts", "guns", "pd", "roll", "roll_rate", "roll_goal",
-                 "fx", "fy", "fz", "lx", "ly", "lz", "ux", "uy", "uz", "frame_time")
+                 "goal_since", "goal_eta", "stood_down", "fx", "fy", "fz", "lx", "ly", "lz", "ux", "uy", "uz",
+                 "frame_time")
 
     def __init__(self, hull: Optional[HullMounts], ship) -> None:
         self.hull = hull
@@ -386,6 +415,9 @@ class ShipArcs:
         self.roll = 0.0
         self.roll_rate = 0.0
         self.roll_goal = 0.0
+        self.goal_since = None      # battle time the standing goal was chosen
+        self.goal_eta = 0.0         # ...and the roll time it was planned with (s)
+        self.stood_down = False     # mounts idled for good (ship out of the fight)
         self.fx, self.fy, self.fz = 1.0, 0.0, 0.0
         self.lx, self.ly, self.lz = 0.0, 1.0, 0.0
         self.ux, self.uy, self.uz = 0.0, 0.0, 1.0
@@ -469,11 +501,6 @@ class ShipArcs:
             az, el = az_el_deg(m.ax, m.ay, m.az)
             out.append([round(az, 1), round(el, 1), m.state])
         return out
-
-
-def rolled(by: float, bz: float, cos_phi: float, sin_phi: float):
-    """Body (y, z) of a fixed world direction after the ship rolls by phi more."""
-    return by * cos_phi + bz * sin_phi, bz * cos_phi - by * sin_phi
 
 
 def roll_time_s(angle_rad: float, accel: float, max_rate: float) -> float:

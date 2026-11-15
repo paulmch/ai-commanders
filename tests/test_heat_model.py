@@ -193,7 +193,6 @@ class TestHeatLadder:
         assert not sim.inject_command("a", {"type": "fire_at", "weapon_slot": "weapon_1",
                                             "target_id": "b"})
 
-    @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py
     def test_point_defense_keeps_firing_above_90(self, fleet):
         from tests.test_doctrine_accuracy import _ballistic_trident
         sim = CombatSimulation(time_step=1.0, decision_interval=1e9, seed=3)

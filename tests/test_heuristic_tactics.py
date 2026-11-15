@@ -517,6 +517,13 @@ def test_a_disarmed_ship_under_fire_actually_opens_range(tmp_path, monkeypatch):
         _wreck_guns(self.simulation.get_ship("alpha_1"))
 
     monkeypatch.setattr(LLMBattleRunner, "setup_fleet_battle", setup)
+    # This pins the withdrawal, not the cruiser's gunnery: keep its batteries
+    # on its primary (the destroyer) even where their hull masks it - with the
+    # masked-battery fallback (src/simulation._arcs_fallback_target) they
+    # kill the frigate inside two minutes and the battle ends before the
+    # range can open.
+    from src.simulation import CombatSimulation
+    monkeypatch.setattr(CombatSimulation, "_arcs_fallback_allowed", staticmethod(lambda order: False))
     # A destroyer (2 g) disarmed at t=0 withdraws from a cruiser (1.5 g) that
     # can shoot but not catch it.
     # (An armed frigate keeps alpha in the fight, so it does not surrender.)
@@ -647,10 +654,18 @@ def test_the_formation_throttle_is_what_the_ship_flies():
 # courses) and what wash remains is recorded as `plume_wash`.
 # (Re-pinned once more: `plume_wash` events gained the `radiators` list -
 # empty in this battle; same 1532 events, same courses.)
+# (Re-pinned for weapon arcs (src/weapon_arcs.py, pass 5 wave 4): mounts fire
+# only where their own hull leaves them clear and after slewing, ships roll to
+# unmask - and re-pinned whenever data/hull_mounts.json is re-exported, e.g.
+# gun turrets depressing 10 degrees instead of 2.)
 # (Re-pinned for the round-2 PD placement: the destroyer and torpedo cruiser
 # PD masks in data/hull_mounts.json changed, so which turret bears on which
 # torpedo changed; no engine code changed.)
-LEGACY_GOLDEN_SHA256 = "eb441522072826589fb142b981b2138956f60ae05fb9f9c70d609afbdb8554b1"
+# (Re-pinned for the roll planner fix (arcs review, finding 1): roll goals
+# need a whole turret-torpedo pair of PD gain, stand >= 15 s and are scored by
+# the roll reachable before impact, so hulls roll less and some mounts bear
+# at other ticks; no change to motion.)
+LEGACY_GOLDEN_SHA256 = "acbc1892baca6367b2755f4857a29a3674f614dd778d13ddba225ccd4d7cf342"
 
 
 def test_legacy_battle_event_stream_is_pinned(tmp_path):

@@ -54,6 +54,52 @@ def pd_turrets_bearing(sim: Any, ship: Any, point: Any) -> Tuple[int, int]:
     return bearing, len(turrets)
 
 
+_CONE_CACHE: Dict[Tuple[int, str], Dict[str, float]] = {}
+
+
+def blind_cones(hull: Any) -> Dict[str, float]:
+    """
+    Half-angles (degrees) of the cones about the thrust axis inside which NO
+    mount of a kind bears at ANY roll - roll turns a direction about that
+    axis, so only a turn of the ship uncovers them. Keys 'pd_nose',
+    'pd_stern', 'gun_nose', 'gun_stern'; 0 when the kind bears on the axis.
+    Geometry of data/hull_mounts.json only, cached per hull class.
+    """
+    key = (id(hull), getattr(hull, "hull", ""))
+    out = _CONE_CACHE.get(key)
+    if out is not None:
+        return out
+    out = {}
+    for kind in ("pd", "gun"):
+        masks = [m.mask for m in hull.mounts if m.kind == kind]
+        for end, sign in (("nose", 1.0), ("stern", -1.0)):
+            cone = 0.0
+            if masks:
+                for step in range(0, 46):        # 0..45 degrees off the axis
+                    a = math.radians(step)
+                    bears = False
+                    for k in range(360):         # every roll, 1 degree apart
+                        p = math.radians(k)
+                        cell = weapon_arcs.cell_index(sign * math.cos(a), math.sin(a) * math.cos(p),
+                                                      math.sin(a) * math.sin(p))
+                        if any(not mk[cell] for mk in masks):
+                            bears = True
+                            break
+                    if bears:
+                        break
+                    cone = float(step)
+            out[f"{kind}_{end}"] = cone
+    _CONE_CACHE[key] = out
+    return out
+
+
+def _axis_angle(body: Tuple[float, float, float]) -> Tuple[str, float]:
+    """('nose'|'stern', degrees off that end of the thrust axis)."""
+    x = max(-1.0, min(1.0, body[0]))
+    off_nose = math.degrees(math.acos(x))
+    return ("nose", off_nose) if off_nose <= 90.0 else ("stern", 180.0 - off_nose)
+
+
 def unmask_roll(sim: Any, ship: Any, mount: Any, body: Tuple[float, float, float]
                 ) -> Optional[Tuple[float, float]]:
     """(roll in degrees, seconds) of the smallest roll that opens ``body`` for
@@ -103,6 +149,10 @@ def gun_report(sim: Any, ship: Any, target: Any) -> Optional[Dict[str, Any]]:
                                  or not mount.trained else math.acos(dot) / mount.rate)
             else:
                 row["unmask"] = unmask_roll(sim, ship, mount, want)
+                if row["unmask"] is None and arcs.hull is not None:
+                    end, off = _axis_angle(want)
+                    if off <= blind_cones(arcs.hull)[f"gun_{end}"]:
+                        row["cone"] = (end, off)
         rows.append(row)
     if not rows:
         return None
@@ -139,6 +189,10 @@ def gun_arcs_text(sim: Any, ship: Any, target: Any) -> Optional[str]:
             deg, secs = row["unmask"]
             parts.append(f"{row['slot']} masked by own hull, clears after a "
                          f"{deg:.0f} deg roll (~{secs:.0f} s)")
+        elif row.get("cone"):
+            end, off = row["cone"]
+            parts.append(f"{row['slot']} masked: the target is {off:.0f} deg off the {end}, inside "
+                         f"the hull's blind cone (no battery bears there at any roll) - turn the ship")
         else:
             parts.append(f"{row['slot']} masked by own hull, no roll clears it "
                          f"(change heading)")
@@ -171,11 +225,26 @@ def arcs_status_lines(sim: Any, ship: Any) -> List[str]:
         d = flight.torpedo.position.distance_to(ship.position)
         if nearest is None or d < nearest[0]:
             nearest = (d, flight)
+    cones = blind_cones(arcs.hull) if arcs.hull is not None else {}
     if nearest is not None:
         bearing, live = pd_turrets_bearing(sim, ship, nearest[1].torpedo.position)
         if live:
-            lines.append(f"ARCS PD: {bearing} of {live} turrets bear on the nearest hostile "
-                         f"torpedo ({nearest[0] / 1000.0:.0f} km)")
+            line = (f"ARCS PD: {bearing} of {live} turrets bear on the nearest hostile "
+                    f"torpedo ({nearest[0] / 1000.0:.0f} km)")
+            body = _body_dir(arcs, ship.position, nearest[1].torpedo.position)
+            if bearing == 0 and body is not None:
+                end, off = _axis_angle(body)
+                if off <= cones.get(f"pd_{end}", 0.0):
+                    line += (f": it is {off:.0f} deg off the {end}, inside the hull's PD blind "
+                             f"cone - no roll helps, turn the ship")
+            lines.append(line)
+    blind = [f"{kind} within {cones[f'{kind}_{end}']:.0f} deg of the {end}"
+             for kind in ("pd", "gun") for end in ("nose", "stern")
+             if cones.get(f"{kind}_{end}", 0.0) >= 1.0]
+    if blind:
+        lines.append("ARCS blind cones (no mount of that kind bears at any roll; only a turn "
+                     "uncovers them): " + ", ".join(b.replace("pd ", "PD ").replace("gun ", "guns ")
+                                                    for b in blind))
     roll_deg = math.degrees(arcs.roll_goal - arcs.roll)
     if abs(roll_deg) >= 1.0:
         lines.append(f"ARCS roll: rolling {abs(roll_deg):.0f} deg more to unmask (automatic)")

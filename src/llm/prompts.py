@@ -1147,8 +1147,10 @@ MANEUVERS:
   drifting together at 1 km/s still take rounds crossing the PD envelope at 12+ km/s
   and landing at 13-28 km/s: guidance holds a closure floor whatever the ships do. Judge PD
   by the "closing X km/s" on the INBOUND ORDNANCE line against the MJ-per-turret table
-  in your PD spec - never by your range rate. Measured: 1-2 turret hulls do NOT blind a
-  normal launch (<=46 of the 50 MJ needed); 3+ turrets on one round do. A lone ship
+  in your PD spec - never by your range rate. Measured: 1-2 turrets do NOT blind a
+  normal launch (<=46 of the 50 MJ needed); 3+ turrets that BEAR on one round do
+  (count the ARCS PD line, not the turrets fitted: head-on, 2 of a battleship's 3
+  bear). A lone ship
   does NOT stop a committed torpedo - EVADE, nose armor, kill the shooter.
 - A CLOSING torpedo is inside its No-Escape Zone almost from launch: no hull (max 3g)
   out-turns 12g guidance. But if you are already OPENING range when it launches,
