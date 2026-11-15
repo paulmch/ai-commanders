@@ -166,3 +166,33 @@ def test_blast_heat_stops_just_short_of_the_meltdown_line(heat0):
     sim.step()
     assert not victim.is_destroyed
     assert not _events(sim, SimulationEventType.REACTOR_MELTDOWN)
+
+
+# ---------------------------------------------------------------------------
+# Finding 5: recorded health 0.0 always means destroyed
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("kind", ["gun", "pd", "launcher", "engine"])
+@pytest.mark.parametrize("loss", [99.4, 99.5, 99.96, 100.0])
+def test_a_fitting_left_under_half_a_percent_is_destroyed(kind, loss):
+    sim = CombatSimulation(seed=1, time_step=1.0)
+    hull = "cruiser_torpedo" if kind == "launcher" else "cruiser"
+    ship = _ship(sim, "victim", "beta", Vector3D(0, 0, 0), ship_type=hull)
+    if kind == "gun":
+        fitting = bd._gun_fittings(ship, HitLocation.LATERAL)[0]
+    elif kind == "pd":
+        fitting = bd._pd_fittings(ship)[0]
+    elif kind == "launcher":
+        fitting = bd._launcher_fittings(ship)[0]
+    else:
+        module = ship._get_modules_by_type("engine")[0]
+        fitting = ("engine", module.name, module)
+    bd.damage_fitting(sim, ship, fitting, loss, "surface_hit", "x", HitLocation.LATERAL)
+    data = _events(sim, SimulationEventType.MOUNT_DAMAGED)[-1].data
+    assert data["destroyed"] == (data["health_pct"] == 0.0)
+    assert data["destroyed"] == (loss > 100.0 - bd.FITTING_DESTROYED_BELOW_PCT)
+    state = fitting[2]
+    health = state.health_percent if kind == "engine" else state.mount_health
+    assert (health == 0.0) == data["destroyed"]
+    if kind != "engine":
+        assert state.is_operational is (not data["destroyed"])

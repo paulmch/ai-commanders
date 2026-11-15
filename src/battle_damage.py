@@ -88,6 +88,14 @@ ENGINE_DAMAGE_PCT_PER_GJ = 15.0
 # fraction, capped at this factor (so a mount at 50% health or less fires at
 # half rate until it is wrecked).
 MOUNT_MAX_COOLDOWN_FACTOR = 2.0
+# A fitting left with less health than this is wrecked outright (0 %), so a
+# recorded health_pct of 0.0 always means destroyed.
+FITTING_DESTROYED_BELOW_PCT = 0.5
+
+
+def _remaining_health(before: float, loss: float) -> float:
+    after = max(0.0, before - loss)
+    return 0.0 if after < FITTING_DESTROYED_BELOW_PCT else after
 
 
 def mount_cooldown_factor(mount_health_pct: float) -> float:
@@ -175,7 +183,7 @@ def damage_fitting(
         return _damage_engine(sim, ship, state, health_loss_pct, cause,
                               source_ship_id, hit_location)
     before = state.mount_health
-    state.mount_health = max(0.0, before - health_loss_pct)
+    state.mount_health = _remaining_health(before, health_loss_pct)
     destroyed = state.mount_health <= 0.0
     if destroyed:
         state.is_operational = False
@@ -247,7 +255,7 @@ def _damage_engine(
     """Surface damage to an engine module; thrust follows engine_effectiveness."""
     SimulationEventType = _event_types(sim)
     before = module.health_percent
-    module.health_percent = max(0.0, before - health_loss_pct)
+    module.health_percent = _remaining_health(before, health_loss_pct)
     destroyed = module.is_destroyed
     engines = ship._get_modules_by_type("engine")
     sim._log_event(SimulationEventType.MOUNT_DAMAGED, ship.ship_id, data={

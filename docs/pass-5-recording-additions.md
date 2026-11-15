@@ -57,7 +57,7 @@ that fitting's state at t**; a fitting with no event is intact (100).
 | `weapon_name` | string | display name (`"Coilgun Battery Mk3"`, `"PD Laser"`, `"Torpedo Launcher"`, engine module name) |
 | `health_pct` | float 0-100 | fitting health after this event |
 | `health_lost_pct` | float | health removed by this event |
-| `destroyed` | bool | `true` when `health_pct` reached 0: the gun/tube/turret never fires again, a destroyed engine gives no thrust |
+| `destroyed` | bool | `true` exactly when `health_pct` is 0 (a fitting left under 0.5 % is destroyed): the gun/tube/turret never fires again, a destroyed engine gives no thrust |
 | `cooldown_factor` | float or null | `gun`/`launcher`, while not destroyed: the mount now needs this many times its normal cooldown between shots (1.0-2.0 = `min(2, 100/health_pct)`). Always `1.0` for a damaged `pd` turret (it keeps its full output until it is destroyed). `null` for `engine` and for every destroyed fitting |
 | `thrust_fraction` | float 0-1 | `engine` only: the ship's available thrust after this event. It equals engine health / 100 while health is above 25%; at 25% or less the drive stops producing thrust altogether (0 = adrift), before it is formally destroyed |
 | `torpedoes_lost` | int | `launcher` only, only when `destroyed`: rounds lost with the tube |
