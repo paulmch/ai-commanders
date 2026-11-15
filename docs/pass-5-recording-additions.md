@@ -752,3 +752,122 @@ New recordings are written gzip-compressed by default (lane `gzip`):
   varies: one LLM recording with 10 MB of replay-audit `assets` (model prompts
   and responses) went 31.8 MB -> 8.0 MB.
 - **`GET /live/recording`** is unchanged (an HTTP JSON payload, not a file).
+
+## Arcs lane (`src/weapon_arcs.py`)
+
+Weapon arcs and turret traverse: a battery or a PD laser fires only in a direction its
+own hull leaves open, and only once the mount has slewed onto it. The masks come from
+`data/hull_mounts.json` (generated from the viewer's hull kit by
+`visualizer/scripts/export_hull_mounts.mjs`; keyed by hull class, never by faction, ship
+or seed). Arcs decide WHETHER and WHEN a round or a beam leaves; hit rolls, lead and
+evasion are untouched. Simulation flags `weapon_arcs` and `roll_to_unmask` (both default
+on); a recording made with arcs off carries none of the fields below, and every consumer
+must fall back (the viewer keeps its own aiming and its own roll).
+
+### Body frame
+
+x = forward (nose), z = up (dorsal), y = z cross x (port). Azimuth = atan2(y, x), 0 at the
+nose, positive to port, (-180, 180]; elevation = asin(z), positive dorsal.
+
+The engine's `kinematic_state.up` is a NAVIGATION vector (evasion picks jink directions
+from it); the hull's real attitude is that frame rolled about `fwd` by the ship's roll
+angle. The trace records the result, so a consumer never needs the roll angle itself.
+
+### Constants a consumer needs
+
+| what | constant (`src/weapon_arcs.py`) | value |
+|---|---|---|
+| PD laser traverse | `PD_TRAVERSE_DEG_S` | 120 deg/s |
+| light battery traverse | `LIGHT_BATTERY_TRAVERSE_DEG_S` | 45 deg/s |
+| coilgun battery traverse | `BATTERY_TRAVERSE_DEG_S` | 30 deg/s |
+| heavy battery traverse | `HEAVY_BATTERY_TRAVERSE_DEG_S` | 15 deg/s |
+| on-target tolerance | `AIM_TOLERANCE_DEG` | 0.5 deg |
+| roll authority | `ROLL_RCS_AUTHORITY_FACTOR` | 3.3 x the hull's RCS pitch acceleration and rate cap |
+| roll re-plan lattice | `ROLL_REPLAN_INTERVAL_S` | every 5 s of battle time |
+| masked-report delay | `MOUNT_MASKED_REPORT_S` | 3 s |
+
+Why these rates: a PD director must hand over between the rounds of one salvo (a few
+degrees: free) and swing onto a second salvo from another quarter inside a tick or two;
+at 120 deg/s and the 1 s engine tick any retarget within 120 degrees costs no dwell and
+the far side costs one tick (5 % of the ~20 s a round spends in the 250 km envelope at
+the 12 km/s closure floor), so the pinned per-turret PD figures hold for a turret that
+bears. A battery (30 deg/s, 90 degrees in 3 s) loses at most one round of its 10 s salvo
+cadence to a 90 degree retarget; a heavy battery (15 deg/s, 90 degrees in 6 s) gives up
+most of a round and still out-turns every hull that carries it. Spinals have no traverse:
+the gimbal follows the lead inside `pivot_range_deg` and the hull is the traverse.
+
+Slew is along the great circle in the body frame. Per tick a mount moves up to
+rate x dt and fires in the tick in which it arrives. A mount whose target is masked
+creeps to the last open direction on that great circle (half-cell steps) and waits. The
+first designation of a battle is free, and at t = 0 every hull is already rolled for its
+first gun targets (`CombatSimulation.settle_arcs`): the fleets have been closing for
+minutes before the recording starts.
+
+### Trace frame fields (per ship, `--trace` recordings)
+
+| field | type | meaning |
+|---|---|---|
+| `up` | [x, y, z], 4 decimals | hull dorsal axis in world coordinates, roll included; unit, perpendicular to `fwd`. A dying hulk's `up` tumbles with it. |
+| `tur` | list of `[az_deg, el_deg, state]`, 0.1 degree | one entry per mount in `data/hull_mounts.json` order for the hull class (launchers included: always state 0, along their axis). Aim direction in the body frame above. `state`: 0 idle / stowed (no target), 1 slewing, 2 on target and clear, 3 target masked by the own hull (spinal: outside its gimbal). |
+
+Real frame (alpha_1 at t = 100.0 s in the demo; mounts in `hull_mounts.json` order):
+
+```json
+{"t": 100.0, "ships": {"alpha_1": {"fwd": [1.0, 0.0006, 0.0], "up": [0.0003, -0.5773, 0.8165],
+   "tur": [[0.5, -0.4, 2], [0.7, 0.0, 3], [0.5, -0.4, 2], [0.4, 15.0, 3], [0.4, -5.0, 3], [90.0, 30.0, 0], [0.0, -90.0, 0], [-90.0, 30.0, 0]], "...": "the other per-ship fields"}}}
+```
+
+### `mount_masked` - a mount with a target is masked by its own hull
+
+Emitted once when a mount has been masked for `MOUNT_MASKED_REPORT_S` with a target
+(`masked: true`), and once when it clears (`masked: false`): the target moved into the
+arc, the ship rolled or turned, or the mount lost its target. `ship_id` is the ship,
+`target_id` the ship it wants to shoot (PD: the torpedo / slug id is in `target_id`).
+
+| field | type | meaning |
+|---|---|---|
+| `slot` | string | `weapon_N` / `pd_N`, the `hull_mounts.json` slot |
+| `kind` | string | `gun`, `pd` or `spinal` |
+| `masked` | bool | true on entry, false on exit |
+| `reason` | string (entry only) | `hull` (own structure in the way) or `gimbal` (spinal: target outside `pivot_range_deg`) |
+| `since` | float s (entry only) | battle time the mount became masked (3 s before the event) |
+| `duration_s` | float s (exit only) | how long it was masked |
+
+```json
+{"event_id": "e120", "sequence": 120, "timestamp": 33.0, "event_type": "mount_masked", "ship_id": "alpha_1", "data": {"slot": "weapon_3", "kind": "gun", "masked": true, "reason": "hull", "since": 30.0, "target_id": "beta_4"}}
+{"event_id": "e4630", "sequence": 4630, "timestamp": 286.0, "event_type": "mount_masked", "ship_id": "alpha_1", "data": {"slot": "weapon_3", "kind": "gun", "masked": false, "duration_s": 256.0, "target_id": "beta_3"}}
+{"event_id": "e238", "sequence": 238, "timestamp": 85.0, "event_type": "mount_masked", "ship_id": "beta_1", "data": {"slot": "pd_0", "kind": "pd", "masked": true, "reason": "hull", "since": 82.0, "target_id": "torp_alpha_3_0001"}}
+{"event_id": "e5446", "sequence": 5446, "timestamp": 331.0, "event_type": "mount_masked", "ship_id": "alpha_1", "data": {"slot": "weapon_0", "kind": "spinal", "masked": true, "reason": "gimbal", "since": 328.0, "target_id": "beta_1"}}
+```
+
+### `weapon_status` reasons
+
+`weapon_status.reason` gains `masked` (the lead direction is behind the own hull) and
+`slewing` (the mount is still swinging onto it). Like every `weapon_status` they are
+emitted on transitions only.
+
+```json
+{"event_id": "e1283", "sequence": 1283, "timestamp": 165.0, "event_type": "weapon_status", "ship_id": "beta_3", "data": {"weapon_slot": "weapon_1", "reason": "masked", "command_ids": ["c19", "c101"], "decision_ids": ["e20", "e947"], "target_id": "alpha_1"}}
+{"event_id": "e5426", "sequence": 5426, "timestamp": 330.0, "event_type": "weapon_status", "ship_id": "alpha_1", "data": {"weapon_slot": "weapon_2", "reason": "slewing", "command_ids": ["c184", "c201"], "decision_ids": ["e4845", "e5361"], "target_id": "beta_1"}}
+```
+
+### What did NOT change
+
+`shot_fired` / `projectile_launched` and `pd_engaged` already name the slot / turret;
+their fields are unchanged. `fire_direction` on a shot is the world direction the round
+left in - by construction an open direction of that slot's mask in the frame built from
+the same frame's `fwd` + `up`.
+
+### Demo recording
+
+`visualizer/public/recordings/p5_arcs_demo.json` (seeded, `--trace`, heuristic captains,
+no LLM):
+
+- `scripts/run_draft_battle.py --auto-draft --no-admirals --seed 5 --trace --time-limit 420`: Draft Battle (100 pts); winner `alpha`, `Alpha tactical advantage (152.9 vs 115.1)`; 420 trace frames, 7100 events.
+- Every trace frame carries `up` and `tur` for every ship. Hulls start unrolled (`up` = +Z); the first gun targets are named at the 30 s checkpoint and the rolls begin there.
+- Roll to unmask: `beta_5` rolls from 38 s and reaches 180 degrees at 119 s (watch `up` leave +Z); 9 of 9 ships roll more than 10 degrees during the battle.
+- PD defence against a salvo: 8 torpedoes launched at 30-114 s; PD dwell on them (`pd_fired`, `target_type: "torpedo"`) from 82 s to 175 s, 8 seekers blinded (`pd_torpedo_disabled` at 98, 107, 118, 126, 138, 150, 163, 175 s), 3 impacts (99, 109, 119 s).
+- Gun fight: 250 rounds (`shot_fired`) from 124 s to 419 s; `mount_masked` 242 events (21 gun entries, 96 PD entries, 6 spinal gimbal entries); `weapon_status` `masked` x20, `slewing` x3.
+- First masked battery: `alpha_1` `weapon_3` at 33 s, clear at 286 s after 256 s.
+- Kills: `beta_3` at 289 s.
+- A mount of a ship that dies while masked gets no exit event (its `tur` simply stops changing).
