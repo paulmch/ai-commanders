@@ -193,3 +193,36 @@ class TestFireAtRetargetsTheMountForTheTick:
             sim.step()
         # 90 degrees at 30 deg/s: on in the third tick
         assert fired_at is not None and fired_at <= 4.0, fired_at
+
+
+# =============================================================================
+# Finding 2: no behavioural test pinned that a still-slewing PD turret holds
+# its dwell (simulation._update_point_defense: dwell only when ON_TARGET)
+# =============================================================================
+
+class TestPdSlewGate:
+
+    def test_a_pd_turret_dwells_only_once_it_has_slewed_onto_the_round(self):
+        """Both turrets bear everywhere (all-open table) and are trained on a
+        round to port; it vanishes and a second round appears ~170 degrees
+        away, inside the envelope. 170 degrees at 120 deg/s is two ticks: on
+        the first the turrets are assigned but still swinging and must put
+        no energy on it; on the second they are on and dwell."""
+        sim = _sim(_table(**ALL_OPEN))
+        _ship(sim, "d", "alpha", Vector3D(0, 0, 0))
+        _ship(sim, "e", "beta", Vector3D(0, 900_000, 0), forward=Vector3D(0, -1, 0))
+        first = _torpedo(sim, "t1", Vector3D(0, 200_000, 0), Vector3D(0, -4000.0, 0), "d", "e")
+        for _ in range(3):
+            sim.step()
+        pd = sim.ships["d"].arcs.pd
+        assert all(m.state == wa.ON_TARGET for m in pd)
+        sim.torpedoes.remove(first)
+        a = math.radians(-100.0)                  # ~170 degrees from the first round
+        pos = Vector3D(200_000 * math.cos(a), 200_000 * math.sin(a), 0)
+        second = _torpedo(sim, "t2", pos, pos.normalized() * -4000.0, "d", "e")
+        sim.step()
+        assert {m.state for m in pd} == {wa.SLEWING}
+        assert second.heat_absorbed_j == 0.0
+        sim.step()
+        assert all(m.state == wa.ON_TARGET for m in pd)
+        assert second.heat_absorbed_j > 0.0
