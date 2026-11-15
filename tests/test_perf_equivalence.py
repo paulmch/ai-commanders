@@ -563,3 +563,56 @@ class TestPresentationTrialMemo:
             for name in ("nose", "lateral", "tail"):
                 self._section(ship, name).apply_energy_damage(
                     energy_gj=70.0 * (round_ + 1), flat_chipping=0.3, impact_area_m2=0.1)
+
+
+# ---------------------------------------------------------------------------
+# Recording serialisation
+# ---------------------------------------------------------------------------
+
+class TestRecordingToJsonWithoutDeepCopy:
+    """BattleRecording.to_json serialises the fields directly instead of
+    deep-copying the recording through asdict() first."""
+
+    def _recording(self):
+        from dataclasses import dataclass, field
+        from src.llm.battle_recorder import BattleEvent, BattleRecording
+
+        @dataclass
+        class Nested:
+            name: str
+            values: list = field(default_factory=list)
+            inner: object = None
+
+        rec = BattleRecording()
+        rec.battle_name = "to_json équivalence"
+        rec.events = [
+            BattleEvent(1.5, "shot_fired", "alpha_1", {"p": 0.1 + 0.2, "v": [1e-9, -0.0, 3]},
+                        event_id="e1", sequence=1).to_dict(),
+            {"event_id": "e2", "data": {"nested": Nested("n", [1, (2, 3)], Nested("deep"))},
+             "tuple": (1, 2.5, None), "flag": True},
+            BattleEvent(2.0, "raw_dataclass_event", None, {"k": {"x": float("inf")}}),
+        ]
+        rec.sim_trace = [{"t": float(i), "ships": {"a": {"pos": [i * 0.1, -i, 7.25e6]}}}
+                         for i in range(5)]
+        rec.provenance = {"seed": 7, "empty": {}, "list": []}
+        return rec
+
+    @pytest.mark.parametrize("indent", [2, None, 0])
+    def test_same_text_as_asdict_route(self, indent):
+        from dataclasses import asdict
+        rec = self._recording()
+        assert rec.to_json(indent=indent) == json.dumps(asdict(rec), indent=indent)
+
+    def test_default_indent_and_to_dict_still_a_deep_copy(self):
+        from dataclasses import asdict
+        rec = self._recording()
+        assert rec.to_json() == json.dumps(asdict(rec), indent=2)
+        copy_ = rec.to_dict()
+        copy_["events"][0]["data"]["p"] = "changed"
+        assert rec.events[0]["data"]["p"] == 0.1 + 0.2
+
+    def test_unserialisable_value_still_raises(self):
+        rec = self._recording()
+        rec.events.append({"data": {"bad": object()}})
+        with pytest.raises(TypeError):
+            rec.to_json()

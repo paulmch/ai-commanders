@@ -14,7 +14,7 @@ import json
 import hashlib
 import threading
 from src.replay_evidence import json_value
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, fields, is_dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -109,6 +109,15 @@ def _interval_s(config: Any) -> Optional[float]:
     return None
 
 
+def _dataclass_as_json_object(obj: Any) -> Dict[str, Any]:
+    """json ``default`` hook: a dataclass instance as a dict of its fields, in
+    field order - what ``dataclasses.asdict`` turns it into, one level at a
+    time (the encoder calls back for nested instances)."""
+    if is_dataclass(obj) and not isinstance(obj, type):
+        return {f.name: getattr(obj, f.name) for f in fields(obj)}
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
 @dataclass
 class BattleEvent:
     """A single recorded battle event."""
@@ -186,7 +195,13 @@ class BattleRecording:
         return asdict(self)
 
     def to_json(self, indent: int = 2) -> str:
-        return json.dumps(self.to_dict(), indent=indent)
+        # Not json.dumps(self.to_dict()): asdict() deep-copies the whole
+        # recording first (millions of nodes for a traced fleet battle, a
+        # tenth of the battle's CPU time) only for the copy to be serialised
+        # and dropped. Serialising the fields directly gives the same text,
+        # byte for byte (tests/test_perf_equivalence.py).
+        return json.dumps({f.name: getattr(self, f.name) for f in fields(self)},
+                          indent=indent, default=_dataclass_as_json_object)
 
 
 class BattleRecorder:
