@@ -254,6 +254,36 @@ ship does not stop a committed torpedo"), and it leaves the gun line and escort 
 of the field. That is an owner decision before it can be finished. Range also still costs a
 torpedo nothing (a 500 km shot arrives faster, not weaker), with no small fix.
 
+## First LLM battles on this engine: Sonnet 5.5 against Sonnet 5
+
+The Anthropic API is now a native provider (`src/llm/anthropic_client.py`, official SDK; a bare
+model id such as `claude-sonnet-5-5` goes to Anthropic, a `vendor/model` id to OpenRouter). Four
+battles were run on November 15-16, 2026, engine `7b8a7e4`: 150-point draft, 20 checkpoints,
+medium effort on both sides, admiral vision, server-side fallbacks off so a refused turn could
+not be silently replayed by another model.
+
+| Battle | Alpha | Beta | Winner | Score | Cost |
+|---|---|---|---|---|---|
+| a | Sonnet 5.5: 4 battlecruisers, 2 destroyers, 2 frigates | Sonnet 5: dreadnought, 2 battlecruisers, 2 destroyers, frigate | Sonnet 5.5 | 238.0 to 153.9 | $8.31 |
+| b2 | Sonnet 5: 5 corvettes, 3 frigates | Sonnet 5.5: 4 battlecruisers, 2 destroyers, 2 frigates | Sonnet 5 | 368.8 to 58.6 | $6.06 |
+| c | Sonnet 5.5: 3 battlecruisers, 2 destroyers, 3 frigates | Sonnet 5: 3 battleships, 3 frigates | Sonnet 5.5 | 276.0 to 123.7 | $7.49 |
+| d | Sonnet 5: 6 battlecruisers | Sonnet 5.5: 4 battlecruisers, 2 destroyers, 2 frigates | Sonnet 5.5 | 252.4 to 127.4 | $7.13 |
+
+Sonnet 5.5 won three of four. Four battles with different drafted fleets are too few to rank the
+models, and the one Sonnet 5 win was decided in the draft: its five torpedo corvettes behind a
+frigate screen killed six of eight ships (40 torpedoes, 25 impacts) without loss, the torpedo
+dominance described under Balance, now found by an LLM. Sonnet 5.5 drafted nearly the same gun
+fleet every time; in one aborted attempt (b, $0.07) it failed the draft three times in a row
+(10 ships against a cap of 8, then 158 points against 150).
+
+All 2,277 calls of the four battles completed: no failures, truncations, malformed arguments or
+refusals, and about 70 % of prompt tokens were read from cache. Costs are computed from token
+usage and the price table, not reconciled against the provider's invoice. Both models reasoned
+about weapon arcs ("keep nose-on alignment during the burn so spinals stay unmasked"); neither
+mentioned the plume, the interlock or crew state, and the recordings show why: every friendly
+wash stayed under the interlock's 0.5 GJ/s limit. The recordings are in
+`data/recordings/p5_sonnet_battles_20261116/` (65 MB, not committed).
+
 ## Open
 
 - **Rotation physics is parked** on branch `wt5/hunt-rotation`: honest angular momentum (ships can
