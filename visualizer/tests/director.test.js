@@ -1,0 +1,481 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import * as THREE from 'three';
+
+import {
+  buildHighlights, buildShotList, shotAt, highlightList, stepHighlight, buildShakeSources, shakeAt,
+  handheldAt, impactPulse, closestApproach, MIN_SHOT_S, DETONATION_LOCK_S, PULLBACK_PRE_S, SHAKE_LIFE_S, SHOT_TYPES
+} from '../src/Director.js';
+import { shotPose, clearObstacles, obstaclesOf, fitDistance } from '../src/DirectorCamera.js';
+import { CameraController, DIRECTOR_BLEND_S } from '../src/CameraController.js';
+
+// ------------------------------------------------------------- fixtures
+
+const ev = (timestamp, event_type, ship_id, data = {}) => ({ timestamp, event_type, ship_id, data });
+const blast = (t, id, position, radius_km = 15, killer = null) => [
+  ev(t, 'ship_destroyed', id, { killer_id: killer }),
+  ev(t, 'reactor_blast', id, { position, radius_km, yield_gj: 400 })
+];
+
+/** A small battle with every kind of highlight. */
+function battleEvents() {
+  return [
+    ...[0, 0.5, 1, 1.5].map((dt, i) => ev(30 + dt, 'torpedo_launched', `alpha_${1 + (i % 2)}`, { target_id: 'beta_1' })),
+    ev(60, 'shot_fired', 'beta_2', { target_id: 'alpha_1' }),
+    ...[0, 0.5, 1].map(dt => ev(80 + dt, 'torpedo_impact', 'alpha_1', { target_id: 'beta_3', torpedo_id: `t${dt}`, total_damage_gj: 20 })),
+    ev(99, 'torpedo_impact', 'alpha_1', { target_id: 'beta_1', torpedo_id: 'tk', total_damage_gj: 24 }),
+    ev(100, 'magazine_cookoff', 'beta_1', { secondary_gj: 1.5, source_ship_id: 'alpha_1' }),
+    ...blast(100, 'beta_1', [200000, 0, 0], 18.4, 'alpha_1'),
+    ev(130, 'ship_dying', 'beta_2', { killer_id: 'alpha_2' }),
+    ...blast(142, 'beta_2', [210000, 20000, 0], 13, 'alpha_2'),
+    // Two ships on opposite fleets, same tick, far apart
+    ...blast(170, 'beta_3', [220000, -20000, 0], 10.6, 'alpha_1'),
+    ...blast(170, 'alpha_2', [-159000, 20000, 0], 15, 'beta_3'),
+    // A chain: two neighbours a second apart
+    ...blast(200, 'beta_4', [230000, 0, 0], 13, 'alpha_1'),
+    ...blast(201, 'beta_5', [236000, 4000, 0], 13, 'alpha_1'),
+  ].sort((a, b) => a.timestamp - b.timestamp);
+}
+
+/** Seeded dense battle: salvos, strikes and kills crowding each other. */
+function denseEvents(seed = 7, n = 60) {
+  let s = seed;
+  const rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 2 ** 32; };
+  const events = [];
+  const dead = new Set();
+  for (let i = 0; i < n; i++) {
+    const t = Math.round(rnd() * 400 * 2) / 2;
+    const roll = rnd();
+    const a = `alpha_${1 + Math.floor(rnd() * 6)}`;
+    const b = `beta_${1 + Math.floor(rnd() * 6)}`;
+    if (roll < 0.3) {
+      for (let k = 0; k < 4; k++) events.push(ev(t + k * 0.5, 'torpedo_launched', a, { target_id: b }));
+    } else if (roll < 0.6) {
+      for (let k = 0; k < 3; k++) events.push(ev(t + k * 0.5, 'torpedo_impact', a, { target_id: b, torpedo_id: `x${i}_${k}`, total_damage_gj: 20 }));
+    } else if (roll < 0.7) {
+      events.push(ev(t, 'magazine_cookoff', b, { secondary_gj: 2 }));
+    } else if (!dead.has(b)) {
+      dead.add(b);
+      if (rnd() < 0.4) events.push(ev(t - 8, 'ship_dying', b, { killer_id: a }));
+      events.push(...blast(t, b, [200000 + 9000 * rnd(), 30000 * rnd(), 0], 10 + 8 * rnd(), a));
+    }
+  }
+  return events.filter(e => e.timestamp >= 0).sort((x, y) => x.timestamp - y.timestamp);
+}
+
+function assertWellFormed(shots, label = '') {
+  assert.ok(shots.length > 0);
+  assert.equal(shots[0].t0, 0, `${label} starts at 0`);
+  assert.equal(shots.at(-1).t1, Infinity, `${label} covers the rest of the battle`);
+  shots.forEach((s, i) => {
+    assert.ok(SHOT_TYPES.includes(s.type), `${label} known shot type ${s.type}`);
+    assert.ok(s.t1 - s.t0 >= MIN_SHOT_S - 1e-9, `${label} shot ${i} (${s.type} ${s.t0}-${s.t1}) holds at least ${MIN_SHOT_S}s`);
+    if (i) assert.equal(shots[i - 1].t1, s.t0, `${label} no gap or overlap before shot ${i}`);
+    assert.equal(s.id, i);
+  });
+  // No cut inside a detonation lock
+  for (const s of shots) {
+    if (s.lockTo === undefined) continue;
+    for (const o of shots) {
+      const inside = o !== s && o.t0 > Math.max(s.t0, s.lockFrom) + 1e-9 && o.t0 < s.lockTo - 1e-9;
+      assert.ok(!inside, `${label} cut at ${o.t0} inside the detonation lock ${s.lockFrom}-${s.lockTo}`);
+    }
+    assert.ok(s.t1 >= s.lockTo - 1e-9, `${label} detonation shot held to the end of its lock`);
+  }
+}
+
+function stage(positions, { deaths = {}, lengths = {} } = {}) {
+  const camera = new THREE.PerspectiveCamera(55, 16 / 9, 0.2, 800000);
+  const listeners = {};
+  const controls = {
+    target: new THREE.Vector3(), enabled: true, update() { camera.lookAt(this.target); },
+    addEventListener(type, fn) { listeners[type] = fn; }
+  };
+  const scene = {
+    SCALE: 1 / 1000, currentTime: 0, delta: 1 / 60, destructionEffects: [], deathInfo: deaths,
+    ships: new Map(Object.keys(positions).map(id => [id, { userData: { size: { length: lengths[id] || 10 }, faction: id.split('_')[0] } }])),
+    getShipPosition: () => null
+  };
+  camera.position.set(0, 300, 400);
+  const controller = new CameraController(camera, controls, scene);
+  // Ships drift at constant velocity: state(t) is a pure function of t
+  const states = t => Object.fromEntries(Object.entries(positions).map(([id, p]) => [id, {
+    position: [p[0] + (p[3] || 0) * t, p[1] + (p[4] || 0) * t, p[2]], forward: [id.startsWith('alpha') ? 1 : -1, 0, 0],
+    velocity: [p[3] || 0, p[4] || 0, 0], thrust: 1, destroyed: deaths[id]?.time <= t
+  }]));
+  return { camera, controls, scene, controller, listeners, states };
+}
+
+const POSITIONS = {
+  alpha_1: [-200000, 0, 0, 300, 0], alpha_2: [-210000, 20000, 0, 300, 0],
+  beta_1: [200000, 0, 0, 0, 0], beta_2: [210000, 20000, 0, 0, 0], beta_3: [220000, -20000, 0, 0, 0],
+  beta_4: [230000, 0, 0, 0, 0], beta_5: [236000, 4000, 0, 0, 0]
+};
+
+// ----------------------------------------------------------- shot list
+
+test('shot list: deterministic, covers the battle, every shot holds its minimum', () => {
+  const events = battleEvents();
+  const a = buildShotList(events, {});
+  const b = buildShotList(structuredClone(events), {});
+  assert.deepEqual(a, b, 'a pure function of the recording');
+  assertWellFormed(a, 'replay');
+  for (const seed of [1, 7, 42, 99]) {
+    const dense = denseEvents(seed);
+    assertWellFormed(buildShotList(dense, {}), `dense replay seed ${seed}`);
+    assertWellFormed(buildShotList(dense, {}, { lookahead: false }), `dense live seed ${seed}`);
+    assert.deepEqual(buildShotList(dense, {}), buildShotList(dense, {}));
+  }
+  // The shot at t is a function of t alone
+  assert.equal(shotAt(a, 100.2), shotAt(a, 100.2));
+  assert.equal(shotAt(a, -5), a[0]);
+  assert.equal(shotAt(a, 1e9), a.at(-1));
+  for (const s of a) assert.equal(shotAt(a, s.t0), s);
+});
+
+test('replay cuts early: run-in before a strike kill, hulk orbit before it blows, pull-back holds the blast', () => {
+  const shots = buildShotList(battleEvents(), {});
+  const at = t => shotAt(shots, t);
+  // Salvo: over the launching ship's shoulder, starting before the first launch
+  const salvo = at(30);
+  assert.equal(salvo.type, 'shoulder');
+  assert.equal(salvo.kind, 'salvo');
+  assert.ok(salvo.t0 < 30 && salvo.subject.startsWith('alpha_') && salvo.target === 'beta_1');
+  // First gun exchange
+  assert.equal(at(60).kind, 'first_fire');
+  assert.equal(at(60).subject, 'beta_2');
+  // A strike without a kill: the run-in arrives before the first impact
+  const strike = at(80);
+  assert.deepEqual([strike.type, strike.kind, strike.subject], ['runin', 'strike', 'beta_3']);
+  assert.ok(strike.t0 <= 80 - MIN_SHOT_S);
+  // Kill at 100 by a torpedo strike: run-in, then the pull-back from just before the blast
+  assert.deepEqual([at(97).type, at(97).kind, at(97).subject], ['runin', 'kill', 'beta_1']);
+  const pull = at(100);
+  assert.equal(pull.type, 'pullback');
+  assert.equal(pull.t0, 100 - PULLBACK_PRE_S);
+  assert.ok(pull.t1 >= 100 + DETONATION_LOCK_S);
+  assert.equal(pull.kills[0].radiusKm, 18.4, 'blast radius from the reactor_blast event');
+  // The cook-off on the same tick did not cut into the detonation
+  assert.equal(at(100.5), pull);
+  // A dying hulk is orbited until just before it detonates
+  assert.deepEqual([at(135).type, at(135).kind, at(135).subject], ['orbit', 'dying', 'beta_2']);
+  assert.equal(at(141.5).type, 'pullback');
+  // Same tick, opposite fleets: one detonation shot, chosen by score then id - never both
+  const both = shots.filter(s => s.type === 'pullback' && s.t === 170);
+  assert.equal(both.length, 1);
+  assert.equal(both[0].subject, 'alpha_2', 'the larger blast wins');
+  // A chain of neighbours is one widening shot that holds for the last blast
+  const chain = at(200.5);
+  assert.deepEqual(chain.kills.map(k => k.id), ['beta_4', 'beta_5']);
+  assert.ok(chain.t1 >= 201 + DETONATION_LOCK_S);
+});
+
+test('a kill credited to a dead ship is not filmed over its shoulder', () => {
+  const events = [
+    ...blast(50, 'alpha_1', [-200000, 0, 0], 15, 'beta_1'),
+    ...blast(80, 'beta_2', [200000, 0, 0], 13, 'alpha_1'),   // alpha_1 died at 50
+    ...blast(120, 'beta_3', [220000, 0, 0], 13, 'alpha_2'),  // alpha_2 lives
+  ];
+  const shots = buildShotList(events, {});
+  const before = t => shotAt(shots, t - PULLBACK_PRE_S - 1);
+  assert.deepEqual([before(80).type, before(80).subject], ['runin', 'beta_2'], 'incoming fire at the victim');
+  assert.deepEqual([before(120).type, before(120).subject, before(120).target], ['shoulder', 'alpha_2', 'beta_3']);
+});
+
+test('old recording without the pass-5 events: frame-derived deaths still get a detonation shot', () => {
+  const deaths = { beta_1: { time: 90, position: [200000, 0, 0] }, alpha_3: { time: 150 } };
+  const legacy = [ev(40, 'torpedo_launched', 'alpha_1', {}), ev(40.5, 'torpedo_launched', 'alpha_1', {}), ev(41, 'torpedo_launched', 'alpha_2', {})];
+  const shots = buildShotList(legacy, deaths);
+  assertWellFormed(shots, 'legacy');
+  const kill = shotAt(shots, 90);
+  assert.equal(kill.type, 'pullback');
+  assert.equal(kill.kills[0].radiusKm, 15, 'default blast radius');
+  assert.equal(shotAt(shots, 150).subject, 'alpha_3');
+  assert.equal(shotAt(shots, 40).kind, 'salvo');
+  // Nothing at all: one wide shot
+  const empty = buildShotList([], {});
+  assert.deepEqual(empty.map(s => [s.type, s.t0, s.t1]), [['wide', 0, Infinity]]);
+  assert.equal(buildShotList(undefined, undefined).length, 1);
+  // Shake still has its sources
+  assert.deepEqual(buildShakeSources(legacy, deaths).map(s => [s.t, s.ship]), [[90, 'beta_1'], [150, 'alpha_3']]);
+  // ... and the camera frames it without the events' positions
+  const { controller, states, camera } = stage(POSITIONS, { deaths });
+  controller.setDirectorRecording({ events: legacy, deathInfo: deaths });
+  controller.setDirector(true);
+  controller.update(states(91), { time: 91 });
+  assert.equal(controller.directorState().type, 'pullback');
+  assert.ok(Number.isFinite(camera.position.x));
+  // A shot whose subject never spawned falls back to the wide view
+  controller.update(states(151), { time: 151 });
+  assert.equal(controller.directorState().type, 'wide');
+});
+
+test('live mode has no lookahead: shots start at or after their event and the past never changes', () => {
+  for (const events of [battleEvents(), denseEvents(3), denseEvents(11)]) {
+    const full = buildShotList(events, {}, { lookahead: false });
+    assertWellFormed(full, 'live');
+    for (const s of full) {
+      if (s.kind !== 'fleet') assert.ok(s.t0 >= s.t - 1e-9, `${s.type}/${s.kind} at ${s.t0} reacts to its event at ${s.t}`);
+      assert.notEqual(s.kind, 'beauty', 'no foreshadowing shots without a future');
+    }
+    // Feed the battle in as it happens: what was on screen stays as it was
+    const times = [...new Set(events.map(e => e.timestamp))];
+    for (const now of times) {
+      const partial = buildShotList(events.filter(e => e.timestamp <= now), {}, { lookahead: false });
+      for (let t = 0; t <= now; t += 0.5) {
+        const a = shotAt(partial, t);
+        const b = shotAt(full, t);
+        assert.deepEqual([a.type, a.kind, a.subject, a.t0], [b.type, b.kind, b.subject, b.t0],
+          `shot at ${t} unchanged by events after ${now}`);
+      }
+    }
+  }
+  // Replay looks ahead where live cannot
+  const replay = buildShotList(battleEvents(), {});
+  const live = buildShotList(battleEvents(), {}, { lookahead: false });
+  assert.equal(shotAt(replay, 97).type, 'runin');
+  assert.ok(shotAt(live, 97).t0 >= 80, 'live is still on the last thing that happened');
+  assert.equal(shotAt(live, 130.5).type, 'orbit', 'live reacts to the ship_dying event');
+  assert.equal(shotAt(live, 142.5).type, 'pullback');
+});
+
+test('highlights: scored moments, next / previous stepping', () => {
+  const events = battleEvents();
+  const hs = buildHighlights(events, {});
+  assert.deepEqual(hs, buildHighlights(events, {}));
+  const kinds = new Set(hs.map(h => h.kind));
+  for (const k of ['kill', 'dying', 'strike', 'salvo', 'cookoff', 'first_fire']) assert.ok(kinds.has(k), k);
+  const kill = hs.find(h => h.kind === 'kill' && h.subject === 'beta_1');
+  const salvo = hs.find(h => h.kind === 'salvo');
+  assert.ok(kill.score > salvo.score, 'a kill outranks a salvo');
+  const list = highlightList(events, {});
+  assert.ok(list.every((h, i) => !i || h.t - list[i - 1].t >= 2), 'one entry per moment');
+  assert.equal(list.find(h => h.t === 200).label, '2 kills');
+  assert.equal(stepHighlight(list, 0, 1), 27, 'next: three seconds before the salvo');
+  assert.equal(stepHighlight(list, 27, 1), 57);
+  assert.equal(stepHighlight(list, 100, -1), 96, 'previous: back to the start of the moment on screen');
+  assert.equal(stepHighlight(list, 96.5, -1), 77);
+  assert.equal(stepHighlight(list, 1e6, 1), null);
+  assert.equal(stepHighlight(list, 0, -1), null);
+  assert.equal(stepHighlight([], 10, 1), null);
+  // Disarmed: every gun/tube the recording saw hit is dead
+  const disarm = [
+    ev(10, 'mount_damaged', 'beta_1', { kind: 'gun', slot: 'weapon_0', destroyed: true }),
+    ev(12, 'mount_damaged', 'beta_1', { kind: 'pd', slot: 'pd_0', destroyed: true }),
+    ev(20, 'mount_damaged', 'beta_1', { kind: 'gun', slot: 'weapon_1', destroyed: false }),
+    ev(40, 'mount_damaged', 'beta_1', { kind: 'gun', slot: 'weapon_1', destroyed: true }),
+  ];
+  assert.deepEqual(buildHighlights(disarm, {}).map(h => [h.kind, h.t]), [['disarmed', 40]]);
+  // Closest approach from the trace
+  const trace = [0, 10, 20].map(t => ({ t, ships: {
+    alpha_1: { pos: [-100000 + t * 4000, 0, 0] }, beta_1: { pos: [100000 - t * 4000, 0, 0] } } }));
+  assert.deepEqual(closestApproach(trace), { t: 20, a: 'alpha_1', b: 'beta_1', distanceKm: 40 });
+  assert.equal(closestApproach(trace, 30), null);
+  assert.equal(closestApproach(null), null);
+});
+
+// ------------------------------------------------------------- framing
+
+test('poses are a function of battle time: scrubbing away and back gives the same camera', () => {
+  const events = battleEvents();
+  const run = times => {
+    const { controller, states, camera, controls } = stage(POSITIONS);
+    controller.setDirectorRecording({ events, deathInfo: {} });
+    controller.setDirector(true);
+    for (const t of times) controller.update(states(t), { time: t, dt: 0.1 });
+    return [...camera.position.toArray(), ...controls.target.toArray()];
+  };
+  for (const t of [5, 31, 60.5, 82, 97, 100.2, 101, 135, 141.6, 171, 201.5, 300]) {
+    assert.deepEqual(run([t]), run([0, 250, 100.3, 12, t]), `pose at ${t}`);
+    assert.deepEqual(run([t]), run([t - 0.2, t - 0.1, t]), `played into ${t}`);
+  }
+});
+
+test('every shot frames its subject from outside every hull and plume, with no jump inside a shot', () => {
+  const events = battleEvents();
+  const { controller, states, camera, controls } = stage(POSITIONS, { lengths: { beta_1: 16, alpha_1: 10.4 } });
+  controller.setDirectorRecording({ events, deathInfo: {} });
+  controller.setDirector(true);
+  let prev = null;
+  const seen = new Set();
+  for (let t = 0; t <= 215; t += 0.25) {
+    const ships = states(t);
+    controller.update(ships, { time: t, dt: 0.25 });
+    const shot = controller.director.shot;
+    seen.add(shot.type);
+    const world = controller._world(ships);
+    world.deathTime = id => (events.find(e => e.event_type === 'ship_destroyed' && e.ship_id === id)?.timestamp ?? Infinity);
+    const cam = camera.position.clone();
+    if (controller.shakeOffset) cam.sub(controller.shakeOffset.position);
+    camera.updateMatrixWorld();
+    if (shot.subject && !shot.kills) {
+      const ndc = world.pos(shot.subject).project(camera);
+      assert.ok(Math.abs(ndc.x) < 0.9 && Math.abs(ndc.y) < 0.9 && ndc.z < 1, `${shot.type} at ${t}: subject in frame (${ndc.x.toFixed(2)}, ${ndc.y.toFixed(2)})`);
+    }
+    if (shot.type !== 'wide') {
+      for (const o of obstaclesOf(world, t)) {
+        const ab = o.b.clone().sub(o.a);
+        const u = ab.lengthSq() > 1e-12 ? THREE.MathUtils.clamp(cam.clone().sub(o.a).dot(ab) / ab.lengthSq(), 0, 1) : 0;
+        assert.ok(cam.distanceTo(o.a.clone().addScaledVector(ab, u)) >= o.r * 0.999, `${shot.type} at ${t}: camera inside a hull or plume`);
+      }
+    }
+    assert.ok(cam.z > 0, 'camera stays on the +Z side of the battle plane');
+    const dist = cam.distanceTo(controls.target);
+    if (prev && prev.id === shot.id) {
+      assert.ok(cam.distanceTo(prev.cam) < 0.25 * Math.max(dist, prev.dist), `${shot.type} at ${t}: eased, no teleport inside a shot`);
+    }
+    prev = { id: shot.id, cam, dist };
+  }
+  for (const type of ['wide', 'shoulder', 'runin', 'orbit', 'pullback']) assert.ok(seen.has(type), `${type} used`);
+});
+
+test('the pull-back ends far enough to fit the blast radius, and widens for a chain', () => {
+  const events = battleEvents();
+  const { controller, states, camera, controls } = stage(POSITIONS, { lengths: { beta_1: 16 } });
+  controller.setDirectorRecording({ events, deathInfo: {} });
+  controller.setDirector(true);
+  const distAt = t => {
+    controller.update(states(t), { time: t });
+    const cam = camera.position.clone();
+    if (controller.shakeOffset) cam.sub(controller.shakeOffset.position);
+    return cam.distanceTo(new THREE.Vector3(200, 0, 0));
+  };
+  const near = distAt(99.2);
+  const far = distAt(104);
+  assert.ok(near < far * 0.8, 'starts close, pulls back');
+  assert.ok(near >= 1.3 * 18.4 - 1e-6, 'never inside the blast shell');
+  assert.ok(far >= fitDistance(18.4, 55, 16 / 9, 0.62) - 1.5, 'the whole shell fits the view');
+  // The shell's rim projects inside the frame
+  controller.update(states(104), { time: 104 });
+  camera.updateMatrixWorld();
+  for (const dir of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1]]) {
+    const rim = new THREE.Vector3(200, 0, 0).addScaledVector(new THREE.Vector3(...dir), 18.4).project(camera);
+    assert.ok(Math.abs(rim.x) < 1 && Math.abs(rim.y) < 1, `blast rim ${dir} in frame`);
+  }
+  // Chain at 200/201: by 204 both blasts are framed
+  controller.update(states(204), { time: 204 });
+  camera.updateMatrixWorld();
+  for (const p of [[230, 0, 0], [236, 4, 0]]) {
+    const ndc = new THREE.Vector3(...p).project(camera);
+    assert.ok(Math.abs(ndc.x) < 0.6 && Math.abs(ndc.y) < 0.6);
+  }
+  assert.ok(camera.position.distanceTo(controls.target) > fitDistance(13, 55, 16 / 9, 0.62));
+});
+
+test('clearObstacles pushes the camera out of a hull sphere and a plume capsule', () => {
+  const hull = { a: new THREE.Vector3(0, 0, 0), b: new THREE.Vector3(0, 0, 0), r: 5 };
+  const plume = { a: new THREE.Vector3(-5, 0, 0), b: new THREE.Vector3(-30, 0, 0), r: 4 };
+  const inside = clearObstacles(new THREE.Vector3(1, 1, 1), [hull, plume]);
+  assert.ok(inside.length() >= 5);
+  const inPlume = clearObstacles(new THREE.Vector3(-20, 0.5, 1), [hull, plume]);
+  assert.ok(Math.hypot(inPlume.y, inPlume.z) >= 4, 'radially out of the plume');
+  assert.equal(inPlume.x, -20);
+  const onAxis = clearObstacles(new THREE.Vector3(-20, 0, 0), [hull, plume]);
+  assert.ok(onAxis.z >= 4, 'dead centre leaves toward +Z');
+  const clear = new THREE.Vector3(40, 40, 40);
+  assert.deepEqual(clearObstacles(clear.clone(), [hull, plume]).toArray(), clear.toArray());
+  assert.equal(shotPose(null, 0, {}), null);
+});
+
+// ---------------------------------------------------------- controller
+
+test('manual input takes over at once; A hands the camera back with a wall-clock ease', () => {
+  const { controller, states, camera, controls, listeners } = stage(POSITIONS);
+  controller.setDirectorRecording({ events: battleEvents(), deathInfo: {} });
+  controller.setDirector(true);
+  controller.update(states(31), { time: 31 });
+  assert.equal(controller.directorState().active, true);
+  assert.equal(controller.directorState().shot, 'salvo', 'chip keeps its vocabulary');
+  assert.equal(controller.directorState().type, 'shoulder');
+  const directed = camera.position.clone();
+  // The viewer drags: the director lets go on that very frame
+  listeners.start();
+  camera.position.set(10, 20, 30);
+  controls.target.set(1, 2, 3);
+  controller.update(states(31.1), { time: 31.1 });
+  assert.deepEqual(camera.position.toArray(), [10, 20, 30]);
+  assert.equal(controller.directorState().hold, 'user');
+  assert.equal(controller.directorState().active, false);
+  // A (setDirector): back to the director, easing from where the viewer left it
+  controller.setDirector(true);
+  controller.update(states(31.1), { time: 31.1 });
+  assert.equal(controller.directorState().active, true);
+  assert.ok(camera.position.distanceTo(new THREE.Vector3(10, 20, 30)) < 0.2 * directed.distanceTo(new THREE.Vector3(10, 20, 30)),
+    'no teleport from the manual pose');
+  controller.director.blend.start -= DIRECTOR_BLEND_S * 1000 + 1;
+  controller.update(states(31.1), { time: 31.1 });
+  const fresh = stage(POSITIONS);
+  fresh.controller.setDirectorRecording({ events: battleEvents(), deathInfo: {} });
+  fresh.controller.setDirector(true);
+  fresh.controller.update(fresh.states(31.1), { time: 31.1 });
+  assert.deepEqual(camera.position.toArray(), fresh.camera.position.toArray(), 'eased all the way onto the director pose');
+  // Disarmed: the camera is the viewer's
+  controller.setDirector(false);
+  camera.position.set(1, 2, 3);
+  controller.update(states(40), { time: 40 });
+  assert.deepEqual(camera.position.toArray(), [1, 2, 3]);
+  assert.equal(controller.directorState().shot, null);
+});
+
+// --------------------------------------------------------------- shake
+
+test('shake decays on battle time and is a pure function of it', () => {
+  const sources = buildShakeSources(battleEvents(), {});
+  assert.ok(sources.every((s, i) => !i || s.t >= sources[i - 1].t));
+  const one = [{ t: 100, position: [0, 0, 0], ship: 'x', energyGj: 500, reachKm: 20 }];
+  const amp = (t, d = 10, src = one) => shakeAt(src, t, () => d).amp;
+  assert.equal(amp(99.99), 0, 'nothing before the blast');
+  assert.ok(amp(100) > 0.01);
+  let last = Infinity;
+  for (let t = 100; t <= 100 + SHAKE_LIFE_S; t += 0.1) {
+    const a = amp(t);
+    assert.ok(a <= last, `monotonic decay at ${t}`);
+    last = a;
+  }
+  assert.equal(amp(100 + SHAKE_LIFE_S), 0, 'gone after its life');
+  assert.ok(amp(100.2, 10) > amp(100.2, 200), 'weaker far away');
+  assert.equal(amp(100.2, 10), amp(100.2, 19), 'full strength inside the reach');
+  assert.ok(amp(100.2, 10, [{ ...one[0], energyGj: 2000 }]) > amp(100.2), 'scales with energy');
+  assert.ok(shakeAt([one[0], one[0], one[0], one[0], one[0], one[0]], 100, () => 1).amp <= 0.02 + 1e-12, 'capped');
+  assert.deepEqual(shakeAt(one, 100.37, () => 30), shakeAt(one, 100.37, () => 30));
+  assert.equal(shakeAt([], 5, () => 1).amp, 0);
+  // Handheld drift and the impact push are functions of battle time too
+  assert.deepEqual(handheldAt(12.5), handheldAt(12.5));
+  assert.ok(Math.abs(handheldAt(12.5).x) < 0.006);
+  assert.equal(impactPulse([100], 99), 0);
+  assert.ok(impactPulse([100], 100) === 1 && impactPulse([100], 100.5) < 0.4 && impactPulse([100], 103) === 0);
+});
+
+test('controller shake: applied for the frame, never accumulates, identical after seeking away and back', () => {
+  const events = battleEvents();
+  const { controller, states, camera, controls } = stage(POSITIONS);
+  controller.setDirectorRecording({ events, deathInfo: {} });
+  // Manual free camera near the blast at (200, 0, 0): shake works without the director
+  const place = () => { camera.position.set(200, 10, 40); controls.target.set(200, 0, 0); camera.lookAt(controls.target); };
+  place();
+  controller.update(states(95), { time: 95 });
+  assert.equal(controller.shakeOffset, null, 'calm before the blast');
+  controller.update(states(100.3), { time: 100.3 });
+  assert.ok(controller.shakeOffset, 'shaking 0.3 s after the detonation');
+  const shaken = camera.position.clone();
+  assert.ok(shaken.distanceTo(new THREE.Vector3(200, 10, 40)) > 1e-4);
+  // Paused on the same battle time: the same pose every frame
+  for (let i = 0; i < 30; i++) controller.update(states(100.3), { time: 100.3 });
+  assert.ok(camera.position.distanceTo(shaken) < 1e-9, 'no accumulation');
+  // Away (decayed) and back
+  controller.update(states(150), { time: 150 });
+  assert.equal(controller.shakeOffset, null);
+  assert.ok(camera.position.distanceTo(new THREE.Vector3(200, 10, 40)) < 1e-9, 'offset fully removed');
+  controller.update(states(100.3), { time: 100.3 });
+  assert.ok(camera.position.distanceTo(shaken) < 1e-9, 'same frame after seeking away and back');
+  // Later in battle time it is weaker
+  controller.update(states(101.5), { time: 101.5 });
+  const later = camera.position.distanceTo(new THREE.Vector3(200, 10, 40));
+  assert.ok(later < shaken.distanceTo(new THREE.Vector3(200, 10, 40)));
+  // With the director flying: same guarantee
+  controller.setDirector(true);
+  const poseAt = t => { controller.update(states(t), { time: t }); return camera.position.clone(); };
+  const a = poseAt(100.3);
+  poseAt(60);
+  assert.ok(poseAt(100.3).distanceTo(a) < 1e-9);
+});

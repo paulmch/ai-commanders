@@ -8,7 +8,8 @@ import { BattleLoader } from './BattleLoader.js';
 import { Interpolator } from './Interpolator.js';
 import { SceneManager } from './SceneManager.js';
 import { TimeController } from './TimeController.js';
-import { CameraController, buildDirectorCuts } from './CameraController.js';
+import { CameraController } from './CameraController.js';
+import { stepHighlight } from './Director.js';
 import { ContactOverlay } from './ContactOverlay.js';
 import {
   LOST_AFTER_FAILURES, backoffDelay, checkpointNumber, classifyVerdict, defaultMaxLag,
@@ -317,6 +318,11 @@ class BattleVisualizer {
         this.toggleDirector();
       } else if (e.code === 'KeyN' && this.isInitialized) {
         this.toggleComms();
+      } else if ((e.code === 'BracketRight' || e.code === 'BracketLeft') && this.isInitialized) {
+        // ] / [ : next / previous highlight (Director.highlightList)
+        const t = stepHighlight(this.cameraController.highlights, this.timeController.currentTime,
+          e.code === 'BracketRight' ? 1 : -1);
+        if (t !== null) { this.setLiveFollow(false); this.timeController.seek(t); }
       }
     });
 
@@ -432,7 +438,8 @@ class BattleVisualizer {
     // Death causes + final vectors drive the two-stage destruction sequence
     this.scene.deathInfo = this.loader.buildDeathInfo();
     this.scene.damageFX?.setRecording(this.loader);
-    this.cameraController.setDirectorCuts(buildDirectorCuts(this.loader.events, this.scene.deathInfo));
+    this.cameraController.setDirectorRecording({ events: this.loader.events, deathInfo: this.scene.deathInfo,
+      simTrace: this.loader.simTrace, live: !!liveRunning });
     this.cameraController.setDirector(directorOn);
     this.setLoadingProgress(100);
 
@@ -613,7 +620,9 @@ class BattleVisualizer {
         this.processEvents();
       }
 
-      // Render
+      // Render. Blast shake is the camera controller's (battle time,
+      // Director.shakeAt): keep the scene's wall-clock shake out of it
+      this.scene.shake = 0;
       this.scene.render();
       if (this.isInitialized) {
         this.contacts.update(this.scene, this.currentState?.ships, this.selectedShipId);
@@ -910,7 +919,8 @@ class BattleVisualizer {
     if (combat) {
       this.scene.deathInfo = loader.buildDeathInfo();
       this.scene.damageFX?.setRecording(loader);
-      this.cameraController.setDirectorCuts(buildDirectorCuts(loader.events, this.scene.deathInfo));
+      this.cameraController.setDirectorRecording({ events: loader.events, deathInfo: this.scene.deathInfo,
+        simTrace: loader.simTrace, live: !this.live?.ended });
     }
     this.updateLiveTimeline();
     this.updateBattleInfo();
@@ -983,6 +993,9 @@ class BattleVisualizer {
     }
     if (this.live !== live) return;
     live.ended = true;
+    // The battle is a replay now: the director may look ahead
+    this.cameraController?.setDirectorRecording({ events: this.loader.events, deathInfo: this.scene.deathInfo,
+      simTrace: this.loader.simTrace, live: false });
     live.lost = false;
     live.recapOpen = false;
     this.connectionCard.hide();
