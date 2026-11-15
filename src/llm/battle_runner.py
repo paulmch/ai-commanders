@@ -75,18 +75,19 @@ SHIP_CLASS_VALUES = {
 
 # Time-limit tactical score of a SURVIVING ship that battle damage left
 # combat-ineffective (src/battle_damage.py): its hull-remaining term is
-# multiplied by these. A hull that cannot deal damage (no operational gun
-# with ammunition, no tube with rounds) or cannot burn is worth less than an
-# intact one, even at full hull integrity.
+# multiplied by these. A hull whose every gun mount and torpedo tube is
+# wrecked, or that cannot burn, is worth less than an intact one even at full
+# hull integrity. Magazines fired dry do not count: spending ammunition must
+# not cost score.
 DISARMED_SHIP_SCORE_FACTOR = 0.25
 ADRIFT_SHIP_SCORE_FACTOR = 0.5
 
 
 def surviving_ship_score_factor(ship) -> float:
     """Multiplier on a surviving ship's hull-remaining score."""
-    from ..battle_damage import ship_can_deal_damage
+    from ..battle_damage import ship_disarmed_by_damage
     factor = 1.0
-    if not ship_can_deal_damage(ship):
+    if ship_disarmed_by_damage(ship):
         factor *= DISARMED_SHIP_SCORE_FACTOR
     engine = getattr(ship, "engine_effectiveness", 1.0)
     if isinstance(engine, (int, float)) and engine <= 0.0:

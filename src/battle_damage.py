@@ -729,6 +729,19 @@ def ship_can_deal_damage(ship: "ShipCombatState") -> bool:
                for l in (launchers if isinstance(launchers, (list, tuple)) else ()))
 
 
+def ship_disarmed_by_damage(ship: "ShipCombatState") -> bool:
+    """True when battle damage wrecked every gun mount and torpedo tube the
+    ship has. An intact ship that merely fired its magazines dry is NOT
+    disarmed by damage (spending ammunition must not cost score), and a hull
+    with no gun or tube at all is not either."""
+    weapons = getattr(ship, "weapons", None)
+    mounts = [ws for slot, ws in (weapons.items() if isinstance(weapons, dict) else ())
+              if not slot.startswith("pd") and (_is_gun(ws) or "torpedo" in
+              (getattr(getattr(ws, "weapon", None), "name", "") or "").lower())]
+    return bool(mounts) and not any(getattr(ws, "is_operational", True) is True
+                                    for ws in mounts)
+
+
 def side_can_deal_damage(sim: Any, ships: Any) -> bool:
     """True while a fleet can still deal damage: one of its ships can, or a
     round it already fired (torpedo or slug) is still in flight."""

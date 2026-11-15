@@ -382,6 +382,22 @@ def _set_adrift(sim, ship):
                           "surface_hit", "x", HitLocation.TAIL)
 
 
+def test_a_ship_that_fired_its_magazines_dry_is_not_scored_as_disarmed():
+    """Spent ammunition is not battle damage: only wrecked mounts discount a
+    survivor's time-limit score."""
+    from src.llm.battle_runner import surviving_ship_score_factor
+
+    runner = _fleet_runner(["corvette", "corvette"], ["corvette", "corvette"])
+    a1 = runner.alpha_ships["alpha_1"]
+    for launcher in a1.ready_torpedo_launchers:
+        launcher.current_magazine = 0
+    assert not bd.ship_can_deal_damage(a1)          # nothing left to shoot...
+    assert not bd.ship_disarmed_by_damage(a1)       # ...but nothing wrecked
+    assert surviving_ship_score_factor(a1) == 1.0
+    _disarm(runner.simulation, a1)
+    assert bd.ship_disarmed_by_damage(a1)
+
+
 def test_disarmed_and_adrift_survivors_score_less_at_the_time_limit():
     from src.llm.battle_runner import (ADRIFT_SHIP_SCORE_FACTOR,
                                        DISARMED_SHIP_SCORE_FACTOR,
