@@ -38,6 +38,15 @@ def _crew_state(ship):
     return crew_state(ship)
 
 
+def _arcs_status_lines(simulation, ship):
+    """Weapon-arc state lines (src/llm/arcs_status.py): what bears, what unmasks."""
+    from .arcs_status import arcs_status_lines
+    try:
+        return arcs_status_lines(simulation, ship)
+    except Exception:  # noqa: BLE001 - advisory only
+        return []
+
+
 def _plume_status_lines(simulation, ship):
     """drive_plume.plume_status_lines (works for both import styles)."""
     try:
@@ -533,6 +542,10 @@ class MCPController:
             # Drive plume wash warnings (whose exhaust this ship is in, which
             # friendlies its own exhaust reaches), one line each
             "plume_wash": _plume_status_lines(simulation, ship),
+            # Weapon arcs (src/llm/arcs_status.py): which gun mounts bear on
+            # the primary target, slew times, the roll that unmasks the rest,
+            # PD turrets bearing on the nearest hostile torpedo; one line each
+            "weapon_arcs": _arcs_status_lines(simulation, ship),
             # Crew radiation state: "fit" | "impaired" (weapons cycle slower) |
             # "incapacitated" (commands to this ship are rejected)
             "crew_state": _crew_state(ship),

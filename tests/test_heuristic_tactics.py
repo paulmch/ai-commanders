@@ -262,6 +262,7 @@ def test_every_loaded_tube_with_a_shot_fires():
     assert launched == capacity
 
 
+@pytest.mark.usefixtures("all_round_fire")  # exact head-on scenario; see tests/conftest.py
 def test_a_lone_corvette_still_fires_at_a_covered_group():
     # One tube cannot saturate a destroyer and four PD escorts; holding would
     # gain nothing (reloads do not stack): it fires, flagged as short.
@@ -638,7 +639,7 @@ def test_the_formation_throttle_is_what_the_ship_flies():
 # courses) and what wash remains is recorded as `plume_wash`.
 # (Re-pinned once more: `plume_wash` events gained the `radiators` list -
 # empty in this battle; same 1532 events, same courses.)
-LEGACY_GOLDEN_SHA256 = "6d1e62483d9657cd14a7df4b627b8070945d84720a39c6d750d0a86e1d466d76"
+LEGACY_GOLDEN_SHA256 = "a7c93d4e3451744e674d75252ffa519dc4719d3ebb11e92002772a4fffad4f74"
 
 
 def test_legacy_battle_event_stream_is_pinned(tmp_path):

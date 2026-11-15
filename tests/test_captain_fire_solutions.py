@@ -259,6 +259,7 @@ class TestTorpedoVerdicts:
         assert sol.verdict == "OVERKILL"
         assert sol.friendly_inbound == need + OVERKILL_MARGIN_ROUNDS
 
+    @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py
     def test_salvo_sizing_uses_the_bound_pd_numbers(self, fleet):
         """
         'salvo >= N together': every turrets_to_blind_at_floor turrets blind one

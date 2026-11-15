@@ -39,6 +39,15 @@ def _crew_state(ship):
     return crew_state(ship)
 
 
+def _arcs_status_lines(simulation, ship):
+    """Weapon-arc state lines (src/llm/arcs_status.py): what bears, what unmasks."""
+    from .arcs_status import arcs_status_lines
+    try:
+        return arcs_status_lines(simulation, ship)
+    except Exception:  # noqa: BLE001 - advisory only
+        return []
+
+
 def _plume_status_lines(simulation, ship):
     """drive_plume.plume_status_lines (works for both import styles)."""
     try:
@@ -1510,7 +1519,7 @@ Be authentic to how you would command a fleet as {model_name}."""
             weapons_cooling=weapons_cooling,
             weapons_destroyed=weapons_destroyed,
             fittings_damaged=_damaged_fitting_lines(ship),
-            plume_wash=_plume_status_lines(simulation, ship),
+            plume_wash=_plume_status_lines(simulation, ship) + _arcs_status_lines(simulation, ship),
             crew_state=_crew_state(ship),
             crew_dose_sv=float(getattr(ship, "crew_dose_sv", 0.0) or 0.0),
             current_maneuver=maneuver_str,
