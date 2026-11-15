@@ -5,6 +5,7 @@ import { DecisionPanel } from './DecisionPanel.js';
  */
 
 import { BattleLoader } from './BattleLoader.js';
+import { fetchRecording, readRecordingFile } from './RecordingCodec.js';
 import { Interpolator } from './Interpolator.js';
 import { SceneManager } from './SceneManager.js';
 import { TimeController } from './TimeController.js';
@@ -347,8 +348,7 @@ class BattleVisualizer {
     this.setLoadingStatus('Reading file...');
 
     try {
-      const text = await file.text();
-      const data = JSON.parse(text);
+      const data = await readRecordingFile(file);   // .json or .json.gz
       await this.initializeBattle(data, file.name);
     } catch (error) {
       console.error('Failed to load file:', error);
@@ -369,11 +369,8 @@ class BattleVisualizer {
     this.setLoadingStatus('Fetching recording...');
 
     try {
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
+      const data = await fetchRecording(url);   // .json or .json.gz
       this.setLoadingStatus('Parsing data...');
-      const data = await response.json();
       await this.initializeBattle(data, url.split('/').pop());
     } catch (error) {
       console.error('Failed to load URL:', error);
@@ -1042,9 +1039,7 @@ class BattleVisualizer {
     live.replayLoading = true;
     this.updateLiveHud();
     try {
-      const response = await fetch(live.replayUrl, { cache: 'no-store' });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json();
+      const data = await fetchRecording(live.replayUrl, { cache: 'no-store' });
       if (this.live !== live) return;
       const savedId = data.provenance?.battle_id;
       if (savedId && live.battleId && savedId !== live.battleId) {

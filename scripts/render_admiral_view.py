@@ -21,6 +21,10 @@ import argparse
 import json
 import math
 from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from src.recording_io import load_recording  # noqa: E402
 
 import matplotlib
 matplotlib.use("Agg")
@@ -190,7 +194,7 @@ def main() -> int:
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
 
-    data = json.loads(Path(args.recording).read_text())
+    data = load_recording(args.recording)
     sim_trace = data.get("sim_trace", [])
     if not sim_trace:
         print("Recording has no sim_trace (re-run battle with --trace)")

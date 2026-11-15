@@ -63,6 +63,8 @@ from typing import Dict, Iterable, List, Optional
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from src.recording_io import load_recording, recording_stem  # noqa: E402
+
 from src.firecontrol import (  # noqa: E402
     HIT_TOLERANCE_M, TargetMotion, WeaponsCommand, WeaponsOrder,
     displacement_sigma_m, track_probability,
@@ -184,9 +186,8 @@ def _lead_fraction(mtype: str, throttle: float, applied: float) -> float:
 
 def rows_from_recording(path: str, hulls: Optional[HullTable] = None) -> List[dict]:
     hulls = hulls or HullTable()
-    with open(path) as f:
-        rec = json.load(f)
-    name = Path(path).stem
+    rec = load_recording(path)
+    name = recording_stem(path)
     ship_types = {}
     for side in ("alpha", "beta"):
         for ship in (rec.get(f"{side}_fleet") or {}).get("ships", []):

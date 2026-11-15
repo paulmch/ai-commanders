@@ -39,6 +39,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from src.recording_io import load_recording
+
 from src.llm.battle_runner import BattleConfig, LLMBattleRunner, load_fleet_data
 from src.llm.captain import LLMCaptainConfig
 from src.llm.client import CaptainClient
@@ -70,7 +72,7 @@ def _print_entry(entry: dict, indent: str = "  ") -> None:
 
 
 def cmd_analyze(args: argparse.Namespace) -> int:
-    recording = json.loads(Path(args.recording).read_text())
+    recording = load_recording(args.recording)
     notebook_dir = Path(args.notebook_dir) if args.notebook_dir else None
 
     # Build the (model, role, side) jobs to refine.

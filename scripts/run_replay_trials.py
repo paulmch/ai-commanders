@@ -10,6 +10,7 @@ import httpx
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from src.recording_io import load_recording
 from src.llm.battle_runner import BattleConfig, LLMBattleRunner, load_fleet_data
 from src.llm.captain import LLMCaptainConfig
 from src.llm.client import CaptainClient
@@ -62,7 +63,7 @@ def main():
         try:
             with (args.report_dir / f'{name}.log').open('w') as log, redirect_stdout(log):
                 result = runner.run_battle(data)
-                recording = json.loads(Path(result.recording_file).read_text())
+                recording = load_recording(result.recording_file)
                 annotate_recording(recording, client, models[0], limit=3)
             recording.setdefault('provenance', {})['trial_cost_usd'] = budget.reported_usd - start_cost
             output = args.output / f'{name}.json'
