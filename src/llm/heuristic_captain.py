@@ -461,9 +461,29 @@ class HeuristicCaptain(LLMCaptain):
                 face = nearest_gun
             self._face_id = face.ship_id
             if km(face) < dist_km:
-                return order(kind, face, 1.0)
-        self._face_id = None
+                return self._aspect_or_padlock(ship, face, order)
+        else:
+            self._face_id = None
+        if kind == "PADLOCK":
+            return self._aspect_or_padlock(ship, target, order)
         return order(kind, target, throttle if kind == "INTERCEPT" else 1.0, **extra)
+
+    def _aspect_or_padlock(self, ship, face, order) -> Dict[str, Any]:
+        """Coast with the nose at the hull's gun aspect to ``face`` (weapon
+        arcs: heuristic_tactics.gun_aspect_deg) - an attitude-only HEADING -
+        or PADLOCK it nose-on when the aspect is 0 or the range is too short
+        for a fixed attitude to keep it inside the nose-armour arc."""
+        aspect = tactics.gun_aspect_deg(getattr(ship, "ship_type", ""))
+        rng_km = ship.position.distance_to(face.position) / 1000.0
+        if aspect <= 0.0 or rng_km < tactics.ASPECT_MIN_RANGE_KM:
+            return order("PADLOCK", face, 1.0)
+        d = tactics.aspect_direction(ship, face, aspect)
+        args = {"maneuver_type": "HEADING", "throttle": 0.0,
+                "direction": {"x": round(d.x, 4), "y": round(d.y, 4), "z": round(d.z, 4)}}
+        evade = order("PADLOCK", face, 1.0).get("evade")
+        if evade:
+            args["evade"] = evade
+        return args
 
     def _radiator_wish(self, ship, ship_id, heat, threat, enemies, simulation) -> Optional[bool]:
         """True = extend, False = retract, None = leave as is."""

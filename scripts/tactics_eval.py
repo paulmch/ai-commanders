@@ -123,6 +123,37 @@ def analyze(path: str) -> Dict[str, Any]:
     out["closest_km"] = best[0] / 1000.0 if best[2] is not None else None
     out["closest_rel_kps"] = best[1] / 1000.0 if best[2] is not None else None
     out["closest_t"] = best[2]
+
+    # Weapon arcs (trace 'tur'): share of gun-mount samples that bear (state 2
+    # on target and clear) among those with a target (1 slewing, 2, 3 masked),
+    # and gun rounds per side.
+    try:
+        from src.weapon_arcs import load_hull_mounts
+        mounts = load_hull_mounts()
+    except Exception:
+        mounts = {}
+    types = {}
+    for side in ("alpha", "beta"):
+        fleet = rec.get(f"{side}_fleet") or {}
+        for s in fleet.get("ships", []) if isinstance(fleet, dict) else []:
+            types[s.get("ship_id")] = s.get("ship_type")
+    bear = {"alpha": [0, 0], "beta": [0, 0]}
+    for frame in rec.get("sim_trace") or []:
+        for sid, s in frame.get("ships", {}).items():
+            tur = s.get("tur")
+            hm = mounts.get(types.get(sid))
+            side = side_of(sid)
+            if not tur or hm is None or side not in bear:
+                continue
+            for m, t in zip(hm.mounts, tur):
+                if m.kind in ("gun", "spinal") and len(t) > 2 and t[2] in (1, 2, 3):
+                    bear[side][1] += 1
+                    bear[side][0] += t[2] == 2
+    tot = [bear["alpha"][0] + bear["beta"][0], bear["alpha"][1] + bear["beta"][1]]
+    out["gun_bearing_share"] = tot[0] / tot[1] if tot[1] else None
+    for side in ("alpha", "beta"):
+        out[f"bearing_{side}"] = bear[side][0] / bear[side][1] if bear[side][1] else None
+        out[f"shots_{side}"] = sum(1 for e in shots if side_of(e["ship_id"]) == side)
     return out
 
 

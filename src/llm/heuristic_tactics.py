@@ -368,6 +368,92 @@ def boat_station_km(simulation: Any, boat: Any, anchor: Any) -> float:
     return round(max(TORPEDO_STANDOFF_KM, min(line + BOAT_BEHIND_LINE_KM, BOAT_STATION_MAX_KM)), 1)
 
 
+# Weapon arcs (src/weapon_arcs.py, data/hull_mounts.json): flown exactly
+# nose-on a hull masks most of its own batteries (a battleship bears its
+# spinal and 2 of 4 batteries, a destroyer has both PD turrets blocked dead
+# ahead). gun_aspect_deg picks, per hull class, the angle off the target line
+# up to ASPECT_MAX_DEG (inside the 30 deg nose-armour arc, with margin) that
+# brings more gun energy to bear (by ASPECT_MIN_GAIN) - over the engine's own
+# roll, which it flies to unmask - or as much and more PD turrets; else 0. Gun
+# ships coast at that aspect instead of PADLOCKed nose-on.
+ASPECT_MAX_DEG = 20.0
+ASPECT_STEP_DEG = 5.0
+ASPECT_ROLL_STEP_DEG = 15.0
+ASPECT_MIN_GAIN = 0.10
+# Closer than this a fixed 30 s attitude drifts too far off a passing
+# target: PADLOCK (tracking, nose-on) instead.
+ASPECT_MIN_RANGE_KM = 40.0
+_ASPECT_CACHE: Dict[str, float] = {}
+
+
+def _mount_energy_gj_s(ship_type: str) -> Dict[str, float]:
+    import json as _json
+    from pathlib import Path as _Path
+    data = _json.loads((_Path(__file__).resolve().parent.parent.parent / "data" / "fleet_ships.json").read_text())
+    kinds = data.get("weapon_types", {})
+    out = {}
+    for w in data.get("ships", {}).get(ship_type, {}).get("weapons", []) or []:
+        t = kinds.get(w.get("type"), {})
+        out[w.get("slot")] = float(t.get("kinetic_energy_gj", 0.0) or 0.0) / max(
+            1.0, float(t.get("cooldown_s", 10.0) or 10.0))
+    return out
+
+
+def gun_aspect_deg(ship_type: str) -> float:
+    """Best gun aspect (deg off the target line) for a hull class (cached)."""
+    if ship_type in _ASPECT_CACHE:
+        return _ASPECT_CACHE[ship_type]
+    try:
+        from ..weapon_arcs import cell_index, load_hull_mounts
+        hm = load_hull_mounts().get(ship_type)
+    except Exception:
+        hm = None
+    angle = 0.0
+    if hm is not None:
+        energy = _mount_energy_gj_s(ship_type)
+        guns = [m for m in hm.mounts if m.kind in ("gun", "spinal")]
+        pds = [m for m in hm.mounts if m.kind == "pd"]
+        steps = int(round(ASPECT_MAX_DEG / ASPECT_STEP_DEG))
+        table = []
+        for i in range(steps + 1):
+            th = math.radians(i * ASPECT_STEP_DEG)
+            top = None
+            for j in range(int(round(360.0 / ASPECT_ROLL_STEP_DEG))):
+                ph = math.radians(j * ASPECT_ROLL_STEP_DEG)
+                c = cell_index(math.cos(th), math.sin(th) * math.cos(ph), math.sin(th) * math.sin(ph))
+                key = (round(sum(energy.get(m.slot, 0.0) for m in guns if not m.mask[c]), 6),
+                       sum(1 for m in pds if not m.mask[c]))
+                if top is None or key > top:
+                    top = key
+            table.append((i * ASPECT_STEP_DEG, top[0], top[1]))
+        if guns and table:
+            _, e0, p0 = table[0]
+            # Off the line only for a real gain: ASPECT_MIN_GAIN more gun
+            # energy than nose-on, or as much and more PD turrets bearing.
+            better = [t for t in table[1:]
+                      if t[1] >= e0 * (1.0 + ASPECT_MIN_GAIN) or (t[1] >= e0 * (1.0 - 1e-6) and t[2] > p0)]
+            if better:
+                angle = max(better, key=lambda t: (round(t[1], 4), t[2], -t[0]))[0]
+    _ASPECT_CACHE[ship_type] = angle
+    return angle
+
+
+def aspect_direction(ship: Any, target: Any, aspect_deg: float) -> Any:
+    """World direction ``aspect_deg`` off the line to ``target``, turned
+    toward the side the nose already points (least turn; world +z when the
+    nose is on the line)."""
+    from ..physics import Vector3D
+    los = (target.position - ship.position).normalized()
+    fwd = ship.forward
+    side = fwd - los * fwd.dot(los)
+    if side.magnitude < 1e-3:
+        up = Vector3D(0.0, 0.0, 1.0) if abs(los.z) < 0.9 else Vector3D(0.0, 1.0, 0.0)
+        side = up - los * up.dot(los)
+    side = side.normalized()
+    a = math.radians(aspect_deg)
+    return (los * math.cos(a) + side * math.sin(a)).normalized()
+
+
 def should_surrender(simulation: Any, ship: Any, enemies: List[Any]) -> bool:
     """
     A disarmed ship strikes only when its whole side is out of the fight and
