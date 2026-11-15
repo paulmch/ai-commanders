@@ -38,6 +38,7 @@ from src.llm.fleet_draft import (
 )
 from src.llm.heuristic_captain import DEFAULT_DOCTRINE, DOCTRINES, HEURISTIC_MODEL
 from src.llm.prompts import CaptainPersonality
+from src.recording_io import sidecar_path
 
 
 def main() -> int:
@@ -86,6 +87,12 @@ def main() -> int:
                              "to the next checkpoint (sim_trace 'plan')")
     parser.add_argument("--recording-dir", default="data/recordings",
                         help="Where to save the recording (default data/recordings)")
+    parser.add_argument("--plain-json", action="store_true",
+                        help="Write the recording as plain indented JSON (battle_*.json) "
+                             "instead of the default gzip (battle_*.json.gz)")
+    parser.add_argument("--no-recording", action="store_true",
+                        help="Write no recording or draft sidecar (outcome-only sweeps: "
+                             "the result line and exit code are all you get)")
     parser.add_argument("--auto-draft", action="store_true",
                         help="Skip the LLM draft; both sides get deterministic auto-fleets")
     parser.add_argument("--no-admirals", action="store_true",
@@ -181,10 +188,11 @@ def main() -> int:
         max_checkpoints=args.max_checkpoints,
         verbose=verbose,
         personality_selection=False,
-        record_battle=True,
-        record_sim_trace=args.trace,
+        record_battle=not args.no_recording,
+        record_sim_trace=args.trace and not args.no_recording,
         record_predictions=not args.no_predictions,
         recording_dir=args.recording_dir,
+        compress_recording=not args.plain_json,
         seed=args.seed,
         heuristic_doctrine={"alpha": args.alpha_doctrine or args.doctrine,
                             "beta": args.beta_doctrine or args.doctrine},
@@ -210,7 +218,7 @@ def main() -> int:
     print(f"Duration: {result.duration_s:.0f}s, checkpoints: {result.checkpoints_used}")
     if result.recording_file:
         print(f"Recording: {result.recording_file}")
-        sidecar = Path(result.recording_file).with_suffix(".draft.json")
+        sidecar = sidecar_path(result.recording_file)
         sidecar.write_text(json.dumps({
             "budget": args.budget,
             "alpha_captain_model": alpha_captains,

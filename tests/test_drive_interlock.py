@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from src.recording_io import load_recording
 from src import battle_damage as bd
 from src import drive_plume as dp
 from src.physics import Vector3D
@@ -204,7 +205,7 @@ def test_seeded_column_battle_with_legacy_captains_is_no_longer_cooked(tmp_path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     _, path = module.drive_interlock_battle(recording_dir=str(tmp_path), doctrine="legacy")
-    rec = json.loads(Path(path).read_text())
+    rec = load_recording(path)
     held = [e for e in rec["events"] if e["event_type"] == "drive_interlock"]
     assert held and held[0]["ship_id"] == "alpha_1" and held[0]["data"]["phase"] == "enter"
     assert held[0]["data"]["friendly_ship_id"] == "alpha_2"

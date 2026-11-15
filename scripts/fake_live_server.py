@@ -31,11 +31,15 @@ import hashlib
 import json
 import math
 import os
+import sys
 import time
 from bisect import bisect_right
 from pathlib import Path
 
 from aiohttp import web
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from src.recording_io import load_recording  # noqa: E402
 
 # Recording-level keys that are not per-poll payload: trimmed like the real
 # server does (assets go out in full once, then only what new events cite).
@@ -369,7 +373,7 @@ def default_replay_url(path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("recording", help="Path to a saved battle recording JSON")
+    parser.add_argument("recording", help="Path to a saved battle recording (.json or .json.gz)")
     parser.add_argument("--speed", type=float, default=4.0,
                         help="Sim seconds per wall-clock second (default 4)")
     parser.add_argument("--port", type=int, default=8765)
@@ -393,8 +397,7 @@ def main():
                              "client sees the end, like a server without linger)")
     args = parser.parse_args()
 
-    with open(args.recording) as f:
-        recording = json.load(f)
+    recording = load_recording(args.recording)
     if args.interval is None:
         prov = recording.get("provenance") or {}
         args.interval = float(recording.get("decision_interval_s")

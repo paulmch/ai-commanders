@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from src.recording_io import load_recording
 from src import battle_damage as bd
 from src import drive_plume as dp
 from src.physics import Vector3D
@@ -829,7 +830,7 @@ def column_battles(tmp_path_factory):
         _, path = module.plume_wash_battle(
             recording_dir=str(tmp_path_factory.mktemp(doctrine)), doctrine=doctrine,
             interlock=False)
-        out[doctrine] = json.loads(Path(path).read_text())
+        out[doctrine] = load_recording(path)
     return out
 
 
