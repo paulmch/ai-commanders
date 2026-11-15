@@ -475,6 +475,13 @@ def _salvo_plan(simulation: Any, boats: List[Any], enemies: List[Any], focus: Op
     can saturate that one too, else joins the first (MAX_SALVOS_PER_CHECKPOINT).
     A gun ship already inside TORPEDO_PANIC_RANGE_KM of a boat gets that
     boat's rounds first.
+
+    Rounds that cannot saturate anything are launched anyway, on purpose:
+    a few single-tube boats can never assemble a saturating salvo, and
+    holding them for one (round 1) cost the battleship roster 4 of 4
+    mirror battles against legacy, which lands 5-6 such rounds a battle on
+    big hulls. The captain's launch check calls these TRICKLE (per launch
+    call, so the boats of one synchronized salvo each register one too).
     """
     from .fire_solutions import pd_cover, rounds_inbound, salvo_to_saturate
     from .prompts import pd_doctrine_numbers
