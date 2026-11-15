@@ -58,7 +58,8 @@ Open **[the Sonnet 5 vs DeepSeek torpedo swarm](http://localhost:5173/?recording
 | **D** | Open or close intent and consequence |
 | **C** | Toggle tactical contact labels |
 | **N** | Open or close the command net (directives, orders, captain reports, fleet signals) |
-| **A** | Toggle the automatic camera director (frames both fleets, cuts to kills and salvos; dragging pauses it) |
+| **A** | Toggle the automatic camera director (a shot list built from the recording: salvo launches over the shooter's shoulder, torpedo run-ins, hulk orbits, pull-backs on reactor blasts; dragging pauses it) |
+| **[ / ]** | Jump to the previous / next highlight (kills, strikes, salvos, the first gun exchange) |
 | **T** | Cycle trajectory tracks: off, predicted, predicted + actual (replay) |
 | **Shift+T** | Draw tracks for every ship or only the selected ship (also the ALL/SEL button in the track HUD) |
 | **G** | Switch graphics quality between low and high (`?gfx=low\|high\|auto` in the URL) |
@@ -310,6 +311,13 @@ uv run playwright install chromium
 uv run python scripts/viewer_snapshot.py \
   --recording glm_luna_200pt_live_20260906.json \
   --time 100 --focus alpha_1 --dist 2.2 --gfx high --out /tmp/cruiser.png
+```
+
+To render a clip (MP4, optionally a GIF) with the automatic director or an explicit camera path, frame by frame on battle time and resumable:
+
+```bash
+uv run python scripts/viewer_clip.py --recording p5_tactics_s4.json \
+  --start 98 --duration 6 --fps 10 --width 960 --height 540 --director --gif --out /tmp/kill.mp4
 ```
 
 The screenshot helper starts a local viewer if needed, or reuses the running one. Software renderers default to low graphics quality; pass `--gfx high` for full effects. It also supports explicit camera placement, hidden UI, and destruction sequences. [README screenshot sources](docs/images/readme/README.md)

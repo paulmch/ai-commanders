@@ -30,9 +30,8 @@ Examples:
         --scale 2 --clip 392,117,800,450 --out /tmp/panel.png
 
 Without --focus/--camera the shot keeps the viewer's default camera. The
-viewer's auto director (which eases the camera in wall time, so its framing
-depends on how many frames rendered while loading) stays off unless
---director is given.
+viewer's auto director stays off unless --director is given (its shots are
+a function of battle time, so a --director frame is reproducible).
 
 The viewer exposes window.visualizer; camera framing is done with
 page.evaluate so hidden ships (destroyed hulks) are framed from their
@@ -172,6 +171,79 @@ def parse_clip(s: str | None):
     return {"x": x, "y": y, "width": w, "height": h}
 
 
+class ViewerSession:
+    """A headless viewer page on a recording, paused and ready to seek.
+
+    Shared by this script and scripts/viewer_clip.py so both drive Chrome
+    the same way (flags, load wait, stalled-tab opt-out, paused stepping).
+    """
+
+    def __init__(self, pw, page_url: str, width: int, height: int, scale: float = 1.0,
+                 init_timeout_s: float = 120.0):
+        self.browser = pw.chromium.launch(headless=True, args=CHROME_ARGS)
+        self.page = self.browser.new_page(viewport={"width": width, "height": height},
+                                          device_scale_factor=scale)
+        self.errors: list[str] = []
+        self.page.on("console", lambda m: self.errors.append(m.text)
+                     if m.type in ("error", "warning") else None)
+        self.page.on("pageerror", lambda e: self.errors.append(str(e)))
+        self.page.goto(page_url, wait_until="domcontentloaded")
+        try:
+            self.page.wait_for_function("window.visualizer && window.visualizer.isInitialized",
+                                        timeout=init_timeout_s * 1000)
+        except Exception:
+            self.print_errors()   # a page error, or just a loaded machine
+            self.browser.close()
+            raise
+        # initializeBattle() auto-plays ~300 ms after isInitialized flips
+        self.page.wait_for_timeout(700)
+        self.pause()
+        # llvmpipe frames can take >1 s; the viewer's stalled-tab guard
+        # would otherwise skip every update
+        self.page.evaluate("window.visualizer.slowFrameOk = true")
+
+    def pause(self) -> None:
+        self.page.evaluate("window.visualizer.timeController.pause()")
+
+    def wait_frames(self, n: int, timeout_s: float = 180.0) -> None:
+        page = self.page
+        start = page.evaluate("window.visualizer.scene.frameIndex")
+        t0 = time.time()
+        while page.evaluate("window.visualizer.scene.frameIndex") < start + n:
+            if time.time() - t0 > timeout_s:
+                raise RuntimeError("renderer stalled")
+            page.wait_for_timeout(50)
+
+    def hide_ui(self) -> None:
+        self.page.add_style_tag(content="#app > *:not(canvas){display:none !important}")
+
+    def seek(self, t: float) -> None:
+        # Re-pause first: under load the viewer's auto-play timer can fire
+        # after the pause in __init__, and the sequence would then run on
+        # the wall clock instead of stepping
+        self.page.evaluate(
+            "t => { const tc = window.visualizer.timeController; tc.pause(); tc.seek(t); }", t)
+        self.wait_frames(1)
+
+    def clean_seek(self, t: float) -> None:
+        """Jump a little before the target so the first visible frame has
+        interpolated state, then land on it."""
+        self.seek(max(0.0, t - 0.05))
+        self.seek(t)
+
+    def battle_time(self) -> float:
+        return self.page.evaluate("window.visualizer.timeController.currentTime")
+
+    def print_errors(self) -> None:
+        if self.errors:
+            print("--- console errors/warnings ---")
+            for e in self.errors[:20]:
+                print(e[:300])
+
+    def close(self) -> None:
+        self.browser.close()
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -205,9 +277,11 @@ def main() -> int:
     p.add_argument("--scale", type=float, default=1.0,
                    help="device scale factor: output pixels = CSS size x scale (crisp HUD text)")
     p.add_argument("--clip", help="x,y,w,h region in CSS pixels to keep (default: whole viewport)")
+    p.add_argument("--init-timeout", type=float, default=120.0,
+                   help="seconds to wait for the viewer to load the recording (raise on a loaded machine)")
     p.add_argument("--director", action="store_true",
                    help="keep the viewer's auto director flying the camera when no --focus/"
-                        "--camera is given (framing then depends on load timing)")
+                        "--camera is given (its shot at time t is a function of t)")
     args = p.parse_args()
 
     clip = parse_clip(args.clip)
@@ -216,42 +290,19 @@ def main() -> int:
 
     try:
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True, args=CHROME_ARGS)
-            page = browser.new_page(viewport={"width": args.width, "height": args.height},
-                                    device_scale_factor=args.scale)
-            errors: list[str] = []
-            page.on("console", lambda m: errors.append(m.text)
-                    if m.type in ("error", "warning") else None)
-            page.on("pageerror", lambda e: errors.append(str(e)))
-            page.goto(page_url, wait_until="domcontentloaded")
-            page.wait_for_function("window.visualizer && window.visualizer.isInitialized",
-                                   timeout=120_000)
-            # initializeBattle() auto-plays ~300 ms after isInitialized flips
-            page.wait_for_timeout(700)
-            page.evaluate("window.visualizer.timeController.pause()")
-            # llvmpipe frames can take >1 s; the viewer's stalled-tab guard
-            # would otherwise skip every update
-            page.evaluate("window.visualizer.slowFrameOk = true")
-
-            def wait_frames(n: int, timeout_s: float = 60.0) -> None:
-                start = page.evaluate("window.visualizer.scene.frameIndex")
-                t0 = time.time()
-                while page.evaluate("window.visualizer.scene.frameIndex") < start + n:
-                    if time.time() - t0 > timeout_s:
-                        raise RuntimeError("renderer stalled")
-                    page.wait_for_timeout(50)
+            session = ViewerSession(pw, page_url, args.width, args.height, args.scale,
+                                    init_timeout_s=args.init_timeout)
+            page = session.page
+            wait_frames = session.wait_frames
+            seek = session.seek
             if args.hide_ui:
-                page.add_style_tag(content="#app > *:not(canvas){display:none !important}")
+                session.hide_ui()
 
             frame_opts = {
                 "focus": args.focus, "dist": args.dist, "az": args.az, "el": args.el,
                 "camera": parse_vec(args.camera), "target": parse_vec(args.target),
                 "director": args.director,
             }
-
-            def seek(t: float) -> None:
-                page.evaluate("t => window.visualizer.timeController.seek(t)", t)
-                wait_frames(1)
 
             def shoot(path: str) -> None:
                 page.evaluate(FRAME_JS, frame_opts)
@@ -263,10 +314,7 @@ def main() -> int:
                 page.screenshot(path=path, timeout=180_000, clip=clip)  # llvmpipe under load
                 print("wrote", path)
 
-            # A clean seek: jump a little before the target so the first
-            # visible frame has interpolated state, then land on it.
-            seek(max(0.0, args.time - 0.05))
-            seek(args.time)
+            session.clean_seek(args.time)
 
             if args.sequence <= 0:
                 shoot(args.out)
@@ -287,14 +335,11 @@ def main() -> int:
                         page.evaluate(FRAME_JS, frame_opts)
                     wait_frames(2)
                     path = args.out % i if "%" in args.out else args.out
-                    bt = page.evaluate("window.visualizer.timeController.currentTime")
+                    bt = session.battle_time()
                     page.screenshot(path=path, timeout=180_000, clip=clip)  # llvmpipe under load
                     print(f"wrote {path}  battle t={bt:.1f}")
-            if errors:
-                print("--- console errors/warnings ---")
-                for e in errors[:20]:
-                    print(e[:300])
-            browser.close()
+            session.print_errors()
+            session.close()
     finally:
         if vite:
             stop_vite(vite)
