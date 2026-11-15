@@ -366,13 +366,17 @@ function plateTextures(faction, variant) {
   const primer = faction === 'alpha' ? [52, 58, 66] : [66, 58, 54];
   const bareMetal = [176, 178, 184];
 
-  const plates = subdividePanels(size, rnd, px(150), px(400));
+  const plates = subdividePanels(size, rnd, px(170), px(520));
   const grime = makeFbm(size, 3, 4, rnd, 0.55);
   const micro = makeFbm(size, 48, 2, rnd, 0.5);
 
+  const rgb = (c, k = 1) => `rgb(${Math.min(255, c[0] * k) | 0},${Math.min(255, c[1] * k) | 0},${Math.min(255, c[2] * k) | 0})`;
+  const rgba = (c, a) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a})`;
   const albedo = canvasOf(size);
   const actx = albedo.getContext('2d');
-  actx.fillStyle = 'rgb(16,18,22)';              // seam channels
+  // seam channels: shadowed plate colour, not black - black seams turn the
+  // big hulls into a tile grid at fleet distance
+  actx.fillStyle = rgb(base, isPaint ? 0.34 : 0.4);
   actx.fillRect(0, 0, size, size);
 
   const height = new Float32Array(size * size).fill(0.12);
@@ -385,13 +389,11 @@ function plateTextures(faction, variant) {
       for (let xx = x; xx < x + w; xx++) field[row * size + (((xx % size) + size) % size)] = v;
     }
   };
-  const rgb = (c, k = 1) => `rgb(${Math.min(255, c[0] * k) | 0},${Math.min(255, c[1] * k) | 0},${Math.min(255, c[2] * k) | 0})`;
-  const rgba = (c, a) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a})`;
 
-  const gap = px(3);      // half seam channel
+  const gap = px(2);      // half seam channel
   const bev = px(4);      // bevel ramp width
   for (const p of plates) {
-    const tone = 1 + (rnd() - 0.5) * (isPaint ? 0.1 : 0.15);
+    const tone = 1 + (rnd() - 0.5) * (isPaint ? 0.08 : 0.1);
     const kind = isPaint ? 1 : rnd();
     let col = base.map(c => c * tone);
     let pRough = (isPaint ? 0.46 : 0.5) + (rnd() - 0.5) * 0.2;
@@ -402,10 +404,10 @@ function plateTextures(faction, variant) {
       pRough = 0.34 + rnd() * 0.1;
       pMetal = 0.9;
     } else if (kind < 0.11) {          // muted livery plate
-      col = accent.map((c, i) => c * 0.26 + base[i] * 0.74);
+      col = accent.map((c, i) => c * 0.16 + base[i] * 0.84);
       pRough = 0.42;
-    } else if (kind < 0.24) {          // darker composite plate
-      col = col.map(c => c * 0.8);
+    } else if (kind < 0.17) {          // darker composite plate
+      col = col.map(c => c * 0.91);
       pRough = 0.66 + rnd() * 0.12;
     }
     const x0 = p.x + gap, y0 = p.y + gap, w = p.w - gap * 2, h = p.h - gap * 2;
@@ -567,7 +569,7 @@ function plateTextures(faction, variant) {
   }
 
   // Dirt hugging the seams (soft, three widths), over every plate edge
-  for (const [lw, a] of [[px(22), 0.05], [px(13), 0.07], [px(7), 0.1]]) {
+  for (const [lw, a] of [[px(22), 0.04], [px(13), 0.05], [px(7), 0.07]]) {
     actx.strokeStyle = `rgba(0,0,0,${a})`;
     actx.lineWidth = lw;
     for (const p of plates) actx.strokeRect(p.x, p.y, p.w, p.h);
@@ -635,8 +637,8 @@ export function getHullTextures(faction, variant = 'hull') {
   const paint = FACTION_PAINT[faction] || FACTION_PAINT.alpha;
   const base = isPaint ? paint.map(c => c * 0.82)
     : faction === 'alpha'
-      ? (isTrim ? [40, 45, 52] : [98, 107, 120])
-      : (isTrim ? [46, 42, 40] : [114, 104, 97]);
+      ? (isTrim ? [58, 64, 74] : [98, 107, 120])
+      : (isTrim ? [66, 60, 55] : [114, 104, 97]);
   const accent = faction === 'alpha' ? [40, 200, 255] : [255, 130, 50];
   // primer showing through chipped livery: dark, desaturated
   const primer = faction === 'alpha' ? [52, 58, 66] : [66, 58, 54];

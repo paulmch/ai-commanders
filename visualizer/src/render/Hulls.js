@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 import {
   getHullTextures, getRadiatorTextures, getAccentTexture, getHazardTexture, getBellHeatTexture, mulberry32
@@ -42,6 +41,8 @@ export { updateHullDetails } from './HullRigs.js';
  */
 
 const TEXEL = 1.0;    // plating tiles per scene unit
+/** Chamfer width against the old rounded-corner radius. */
+const CHAMFER = 0.8;
 /** Materials that take a per-part tone step / only the drive soot. */
 const TONED_MATS = new Set(['hull', 'trim', 'paint']);
 const SOOTED_MATS = new Set(['dark', 'barrel']);
@@ -273,6 +274,79 @@ export function taperBoxGeometry(w0, h0, w1, h1, len, rnd = Math.random, texel =
   return g;
 }
 
+/**
+ * Armour box with every edge cut by a flat 45-degree chamfer of width `t`:
+ * 6 faces, 12 edge facets, 8 corner triangles (44 triangles, against ~300
+ * for the rounded box it replaces). Flat normals, so each facet takes the
+ * key light as its own plane - plate, not putty. Non-indexed; face UVs
+ * are fitted to physical size with a random offset per face (12 draws of
+ * `rnd`, as fitBoxUVs made).
+ */
+export function chamferBoxGeometry(w, h, d, t, rnd = Math.random, texel = TEXEL) {
+  const H = [w / 2, h / 2, d / 2];
+  t = Math.min(t, H[0] * 0.98, H[1] * 0.98, H[2] * 0.98);
+  const pos = [], uv = [];
+  const offs = [];
+  for (let i = 0; i < 12; i++) offs.push(rnd());
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), n = new THREE.Vector3();
+  const pt = (c) => new THREE.Vector3(c[0], c[1], c[2]);
+  // quad p0..p3 (any winding), turned to face `out`; u runs p0->p1, v p1->p2
+  const quad = (p0, p1, p2, p3, out, ox, oy) => {
+    a.subVectors(p1, p0); b.subVectors(p2, p0); n.crossVectors(a, b);
+    const uw = p0.distanceTo(p1) * texel, uh = p1.distanceTo(p2) * texel;
+    let P = [p0, p1, p2, p3], U = [[0, 0], [uw, 0], [uw, uh], [0, uh]];
+    if (n.dot(out) < 0) { P = [p0, p3, p2, p1]; U = [U[0], U[3], U[2], U[1]]; }
+    for (const i of [0, 1, 2, 0, 2, 3]) { pos.push(P[i].x, P[i].y, P[i].z); uv.push(U[i][0] + ox, U[i][1] + oy); }
+  };
+  const tri = (p0, p1, p2, out) => {
+    a.subVectors(p1, p0); b.subVectors(p2, p0); n.crossVectors(a, b);
+    const P = n.dot(out) < 0 ? [p0, p2, p1] : [p0, p1, p2];
+    for (const p of P) { pos.push(p.x, p.y, p.z); uv.push(offs[0], offs[1]); }
+  };
+  const out = new THREE.Vector3();
+  // faces
+  for (let i = 0; i < 3; i++) {
+    const j = (i + 1) % 3, k = (i + 2) % 3;
+    for (const s of [1, -1]) {
+      const c = (sj, sk) => { const v = [0, 0, 0]; v[i] = s * H[i]; v[j] = sj * (H[j] - t); v[k] = sk * (H[k] - t); return pt(v); };
+      const f = i * 2 + (s > 0 ? 0 : 1);
+      // u along the longer in-plane axis keeps streaks consistent per face
+      out.set(0, 0, 0).setComponent(i, s);
+      quad(c(-1, -1), c(1, -1), c(1, 1), c(-1, 1), out, offs[f * 2], offs[f * 2 + 1]);
+    }
+  }
+  if (t > 0) {
+    // edge facets: along axis i, between the faces of axes j and k
+    let e = 0;
+    for (let i = 0; i < 3; i++) {
+      const j = (i + 1) % 3, k = (i + 2) % 3;
+      for (const sj of [1, -1]) for (const sk of [1, -1]) {
+        const c = (si, onJ) => {
+          const v = [0, 0, 0];
+          v[i] = si * (H[i] - t);
+          v[j] = sj * (onJ ? H[j] : H[j] - t);
+          v[k] = sk * (onJ ? H[k] - t : H[k]);
+          return pt(v);
+        };
+        out.set(0, 0, 0).setComponent(j, sj).setComponent(k, sk);
+        quad(c(-1, true), c(1, true), c(1, false), c(-1, false), out, offs[e % 12], offs[(e + 5) % 12]);
+        e++;
+      }
+    }
+    for (const sx of [1, -1]) for (const sy of [1, -1]) for (const sz of [1, -1]) {
+      out.set(sx, sy, sz);
+      tri(new THREE.Vector3(sx * H[0], sy * (H[1] - t), sz * (H[2] - t)),
+        new THREE.Vector3(sx * (H[0] - t), sy * H[1], sz * (H[2] - t)),
+        new THREE.Vector3(sx * (H[0] - t), sy * (H[1] - t), sz * H[2]), out);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.computeVertexNormals();
+  return g;
+}
+
 // ---------------------------------------------------------------------------
 // Kit
 // ---------------------------------------------------------------------------
@@ -383,15 +457,30 @@ export class HullKit {
   }
 
   // -- primitives -----------------------------------------------------------
-  /** Bevelled plating box. */
-  box(mat, w, h, d, x, y, z, { rot = null, bevel = 0.35, seg = 2, parent = null } = {}) {
-    const r = Math.min(w, h, d) * 0.5 * bevel;
-    const g = bevel > 0
-      ? new RoundedBoxGeometry(w, h, d, seg, r)
-      : new THREE.BoxGeometry(w, h, d);
-    fitBoxUVs(g, w, h, d, this.rnd, this.texel);
+  /**
+   * Plating box, edges cut by flat chamfers (`bevel` = chamfer as a share
+   * of half the smallest side). `seg` is kept for callers; chamfers have
+   * no segments.
+   */
+  box(mat, w, h, d, x, y, z, { rot = null, bevel = 0.35, seg = 2, parent = null, tint = null } = {}) {
+    let g;
+    if (bevel > 0) g = chamferBoxGeometry(w, h, d, Math.min(w, h, d) * 0.5 * bevel * CHAMFER, this.rnd, this.texel);
+    else {
+      g = new THREE.BoxGeometry(w, h, d);
+      fitBoxUVs(g, w, h, d, this.rnd, this.texel);
+    }
     const m = this.xf(x, y, z, ...(rot || [0, 0, 0]), parent);
-    return this.add(mat, g, m);
+    return this.add(mat, g, m, tint);
+  }
+
+  /**
+   * Tapered end cap on a box section (w x h): from the section's end face
+   * at zEnd it narrows to (w tw) x (h th) over `len` toward `dir` (+1 the
+   * nose, -1 the stern). Turns a brick end into a faired pod.
+   */
+  endCap(mat, w, h, len, x, y, zEnd, dir, { tw = 0.62, th = 0.62, tint = null } = {}) {
+    const g = taperBoxGeometry(w, h, w * tw, h * th, len, this.rnd, this.texel);
+    return this.add(mat, g, this.xf(x, y, zEnd, 0, dir < 0 ? Math.PI : 0, 0), tint);
   }
 
   /** Drum with its axis along Z. sides=8 gives the octagonal hull look. */
@@ -455,6 +544,9 @@ export class HullKit {
     layers = 3, step = 0.9, x = 0, y = 0, tip = 'lens', rim = true }) {
     const seg = len / layers;
     const round = r !== null;
+    // livery collar: most of the first armour layer on a full (3-layer)
+    // cap, a thin rim on the short ones (paint stays off the bow tip)
+    const rimU = layers >= 3 ? 0.6 : 0.32;
     const lerp = (a, b, u) => a + (b - a) * u;
     for (let i = 0; i < layers; i++) {
       const u0 = i / layers, u1 = (i + 1) / layers;
@@ -463,7 +555,7 @@ export class HullKit {
         const rb = r * lerp(1, taper, u0) * (i ? step : 1);
         const rt = r * lerp(1, taper, u1);
         this.drum('hull', rb, seg, zA + seg / 2, { rTop: rt, sides, x, y, sx, sy });
-        if (i === 0 && rim) this.drum('paint', rb * 1.025, seg * 0.32, zA + seg * 0.16, { rTop: lerp(rb, rt, 0.32) * 1.025, sides, x, y, sx, sy });
+        if (i === 0 && rim) this.drum('paint', rb * 1.025, seg * rimU, zA + seg * rimU / 2, { rTop: lerp(rb, rt, rimU) * 1.025, sides, x, y, sx, sy });
       } else {
         const k0 = i ? step : 1;
         const bw = w * lerp(1, tw, u0) * k0, bh = h * lerp(1, th, u0) * k0;
@@ -471,7 +563,7 @@ export class HullKit {
         this.taperBox('hull', bw, bh, fw, fh, seg, x, y, zA);
         if (i === 0 && rim) {
           const e = 1.03;
-          this.taperBox('paint', bw * e, bh * e, lerp(bw, fw, 0.32) * e, lerp(bh, fh, 0.32) * e, seg * 0.32, x, y, zA);
+          this.taperBox('paint', bw * e, bh * e, lerp(bw, fw, rimU) * e, lerp(bh, fh, rimU) * e, seg * rimU, x, y, zA);
         }
       }
     }
@@ -551,7 +643,20 @@ export class HullKit {
    */
   armorBelt(w, h, d, x, y, z, { face = '+y', mat = 'hull' } = {}) {
     this.box('trim', w * 1.06, h * 0.45, d * 1.04, x, y, z, { bevel: 0.2 });
-    this.box(mat, w, h, d, x, y + (face === '+y' ? h * 0.3 : face === '-y' ? -h * 0.3 : 0), z, { bevel: 0.45 });
+    // The slab is laid as separate plates along the hull with open joints
+    // down to the backing; alternate plates are cut shorter across the
+    // belt, so its edge steps like fitted armour instead of running as
+    // one extruded bar.
+    const flank = face[1] === 'x';
+    const across = flank ? h : w;
+    const n = Math.max(2, Math.min(7, Math.round(d / (across * 1.15))));
+    const joint = Math.min(0.035 * this.k, d / n * 0.12);
+    const oy = face === '+y' ? h * 0.3 : face === '-y' ? -h * 0.3 : 0;
+    for (let i = 0; i < n; i++) {
+      const zc = z - d / 2 + (i + 0.5) * (d / n);
+      const cut = i % 2 ? 0.88 : 1;
+      this.box(mat, flank ? w : w * cut, flank ? h * cut : h, d / n - joint, x, y + oy, zc, { bevel: 0.45 });
+    }
   }
 
   /**
@@ -1460,6 +1565,23 @@ function hullCorvette(k) {
   const rz = -L * 0.335 + rad.len / 2;
   k.radiator(rad.span, rad.len, R, 0, rz, -Math.PI / 2);
   k.radiator(rad.span, rad.len, -R, 0, rz, Math.PI / 2);
+  // Class identity: a swept ventral keel blade in livery (the smallest hull
+  // carries the boldest colour) and a long sensor lance over the bow -
+  // a torpedo boat reads as a dart, not a small cruiser.
+  {
+    const g = taperBoxGeometry(W * 0.04, L * 0.24, W * 0.022, L * 0.09, W * 0.34, k.rnd, k.texel);
+    const m = k.xf(0, -deck - W * 0.02, -L * 0.19, Math.PI / 2, 0, 0);
+    const shear = new THREE.Matrix4();
+    shear.elements[6] = 0.75;                    // z += 0.75 y: swept aft going down
+    k.add('paint', g, shear.multiply(m));
+    k.box('trim', W * 0.07, W * 0.05, L * 0.26, 0, -deck - W * 0.03, -L * 0.19, { bevel: 0.4 });
+    const a = new THREE.Vector3(R * 0.2, spineY + W * 0.02, L * 0.1);
+    const b = new THREE.Vector3(R * 0.2, spineY + W * 0.02, L * 0.5);
+    k.rod('barrel', W * 0.012, a, b);
+    k.box('trim', W * 0.05, W * 0.05, L * 0.03, R * 0.2, spineY + W * 0.01, L * 0.125, { bevel: 0.3 });
+    k.drum('trim', W * 0.022, L * 0.03, L * 0.45, { x: R * 0.2, y: spineY + W * 0.02, sides: 8 });
+    k.drum('glass', W * 0.016, L * 0.012, L * 0.502, { x: R * 0.2, y: spineY + W * 0.02, sides: 8 });
+  }
   k.drive = { shape: 'torch', z: -L * 0.35, r: R };
   k.reactorPos.set(0, 0, -L * 0.42);
 }
@@ -1509,6 +1631,8 @@ function hullFrigate(k) {
   const rad = k.radiatorSize(2, { maxSpan: W * 1.4, maxLen: L * 0.32 });
   k.radiator(rad.span, rad.len, ap, 0, -L * 0.36 + rad.len / 2 + L * 0.01, -Math.PI / 2);
   k.radiator(rad.span, rad.len, -ap, 0, -L * 0.36 + rad.len / 2 + L * 0.01, Math.PI / 2);
+  // Gun head faired back onto the neck truss instead of ending as a brick
+  k.endCap('hull', hw, hh, L * 0.045, 0, 0, L * 0.23, -1, { tw: 0.56, th: 0.6 });
   k.drive = { shape: 'torch', z: -L * 0.365, r: R };
   k.reactorPos.set(0, 0, -L * 0.42);
 }
@@ -1739,6 +1863,9 @@ function hullBattlecruiser(k) {
   const rad = k.radiatorSize(2, { maxSpan: W * 0.9, maxLen: L * 0.17 });
   k.radiator(rad.span, rad.len, 0, W * 0.18, -L * 0.07, 0);
   k.radiator(rad.span, rad.len, 0, -W * 0.18, -L * 0.07, Math.PI);
+  // The split hull as two faired pods on the waist truss, not two bricks
+  k.endCap('hull', fw, fh, L * 0.05, 0, 0, L * 0.02, -1, { tw: 0.7, th: 0.72 });
+  k.endCap('hull', aw, ah, L * 0.045, 0, 0, -L * 0.16, 1, { tw: 0.6, th: 0.62 });
   k.drive = { shape: 'box', w: W * 0.9, h: W * 0.42 };
   k.reactorPos.set(0, 0, -L * 0.32);
 }
@@ -1916,6 +2043,13 @@ function hullDreadnought(k, opts = {}) {
     for (const sy of [-1, 1]) {
       const a = Math.atan2(-sx, sy);   // local +Y -> (sx, sy) diagonal
       k.radiator(rad.span, rad.len, sx * W * 0.52, sy * W * 0.52, -L * 0.33 + rad.len / 2 + L * 0.005, a);
+    }
+  }
+  // Faired sponson tails in livery: the flagship's colours from the chase
+  // camera, and four armoured pods instead of four brick ends
+  for (const sx of [-1, 1]) {
+    for (const sy of [-1, 1]) {
+      k.endCap('paint', W * 0.32, W * 0.32, L * 0.05, sx * W * 0.36, sy * W * 0.36, -L * 0.34, -1, { tw: 0.58, th: 0.58 });
     }
   }
   k.drive = { shape: 'drum', r: W * 0.5 };
