@@ -354,11 +354,43 @@ def test_runner_asks_an_incapacitated_crew_nothing_and_reports_the_order_not_exe
         target_ship_id = "alpha_2"
         maneuver = None
     orders = {"alpha_2": [Order()]}
+    orders["alpha_1"] = [Order()]
+    sim.get_ship("alpha_1").drive_interlock = {
+        "throttle_cap": 0.2, "ordered_throttle": 1.0, "friendly_ship_id": "alpha_2",
+        "distance_km": 14.0, "off_axis_deg": 1.0, "evading": False}
     commands = runner._run_captain_decisions(entries, orders)
     assert decided == ["alpha_1"] and commands["alpha_2"] == []
+    # The ship the interlock is holding: its report says so, and it is not a deviation.
+    from src.llm.prompts import _compliance_text
+    held = [e["report"] for e in runner._filed_reports["alpha"] if e["report"]["ship_id"] == "alpha_1"][0]
+    name = runner.fleet_communication.ship_name("alpha_2")
+    want = f"DRIVE INTERLOCK: throttle held at 20 % of the ordered 100 %: friendly"
+    assert held["drive_interlock"].startswith(want) and held["drive_interlock"].endswith("is 14 km astern in the jet")
+    assert held["compliance"]["interlock"] == held["drive_interlock"]
+    text, followed = _compliance_text(dict(held["compliance"], followed=True, deviations=[]), None)
+    assert "DRIVE INTERLOCK: throttle held at 20 % of the ordered 100 %" in text and followed is True
     filed = [e["report"] for e in runner._filed_reports.get("alpha", []) if e["report"]["ship_id"] == "alpha_2"]
     assert filed and filed[0]["status"] == "UNABLE" and filed[0]["implicit"] is True
     assert filed[0]["reason"].startswith("crew incapacitated by plume radiation (9.0 Sv): the ship cannot execute orders")
     comp = filed[0]["compliance"]
     assert comp["followed"] is False and comp["executable"] is False
     assert comp["deviations"][0] == "not executable: crew incapacitated by plume radiation"
+
+
+def test_captain_sees_an_enemy_crew_out_of_action_in_its_contact_line():
+    from unittest.mock import Mock
+    from src.llm.captain import LLMCaptain, LLMCaptainConfig
+    from src.llm.prompts import format_enemy_contacts
+    sim, lead, tail = _column()
+    foe = sim.ships["foe"]
+    captain = LLMCaptain(LLMCaptainConfig(name="C", ship_name="lead", ship_type="cruiser",
+                                          fleet_data=FLEET), client=Mock())
+    captain.ship_id = "lead"
+    assert "crew_state" not in captain._build_enemy_info(lead, foe, sim)
+    dp._irradiate(sim, foe, 2.5, "lead")
+    info = captain._build_enemy_info(lead, foe, sim)
+    assert info["crew_state"] == "impaired"
+    assert "crew impaired by plume wash (slower fire)" in format_enemy_contacts([info], FLEET)
+    dp._irradiate(sim, foe, 6.0, "lead")
+    info = captain._build_enemy_info(lead, foe, sim)
+    assert "NOT MANEUVERING, NOT FIRING (crew incapacitated by plume wash)" in format_enemy_contacts([info], FLEET)

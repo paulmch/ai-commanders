@@ -2480,6 +2480,7 @@ class LLMBattleRunner:
         }
         if crew_out:
             mark_not_executable(report["compliance"])
+        self._note_drive_interlock(report, ship)
         fold_admiral_signals(report, self._admiral_signals.pop(ship_id, []))
         if getattr(captain, "discussions", None):
             report["discussion"] = [{"question": d["question"], "answer": d["answer"]}
@@ -2488,6 +2489,21 @@ class LLMBattleRunner:
             "report": report, "order": order, "executed": executed, "target_id": target_id,
             "cursor": len(self.simulation.events)})
         return report
+
+    def _note_drive_interlock(self, report: Dict[str, Any], ship: Any) -> None:
+        """While the engine's drive interlock holds the ship's throttle
+        (src/drive_plume.py), say so in its report: the reduced burn is the
+        interlock's doing, not a deviation from the order."""
+        try:
+            from ..drive_plume import interlock_status_line
+        except ImportError:  # pragma: no cover - script-style import path
+            from drive_plume import interlock_status_line
+        line = interlock_status_line(self.simulation, ship) if ship is not None else None
+        if not line:
+            return
+        report["drive_interlock"] = line
+        if isinstance(report.get("compliance"), dict):
+            report["compliance"]["interlock"] = line
 
     def _finalize_report(self, entry: Dict[str, Any]) -> Dict[str, Any]:
         """A filed report as its admiral reads it: compliance over the whole interval."""
@@ -2502,6 +2518,7 @@ class LLMBattleRunner:
             if (entry["report"].get("compliance") or {}).get("executable") is False:
                 from .fleet_comms import mark_not_executable
                 mark_not_executable(report["compliance"])
+        self._note_drive_interlock(report, self.simulation.get_ship(ship_id))
         report["ship_lost"] = not ship_alive(self.simulation.get_ship(ship_id))
         report["delivered_t"] = self.simulation.current_time
         return report

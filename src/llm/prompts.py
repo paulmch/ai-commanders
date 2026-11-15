@@ -2318,6 +2318,10 @@ def format_enemy_contacts(
         line += f" | hull {e.get('hull_percent', 100):.0f}%"
         if not nose == flank == "Intact":     # intact armor goes unsaid (doctrine)
             line += f", nose {nose}, flank {flank}"
+        if e.get("crew_state") == "incapacitated":
+            line += " | NOT MANEUVERING, NOT FIRING (crew incapacitated by plume wash)"
+        elif e.get("crew_state") == "impaired":
+            line += " | crew impaired by plume wash (slower fire)"
         spec = (fleet_data or {}).get("ships", {}).get(stype or "", {})
         if spec:
             armament = format_enemy_weapons_summary(
@@ -3352,9 +3356,13 @@ def _compliance_text(compliance: Optional[Dict[str, Any]], snapshot: Any) -> Tup
     if isinstance(verdict, bool) or isinstance(deviations, list):
         lines = [_clip(d, 120) for d in deviations or [] if d] if isinstance(deviations, list) else []
         followed = verdict if isinstance(verdict, bool) else not lines
+        # The engine's drive interlock (a friendly in the jet) is a fact about
+        # the burn, never a deviation.
+        held = compliance.get("interlock")
+        held = [_clip(str(held), 160)] if held else []
         if lines:
-            return "did: " + "; ".join(lines), followed
-        parts = [p for p in (f"flew {em}" if em else "", salvo_text) if p]
+            return "did: " + "; ".join(lines + held), followed
+        parts = [p for p in (f"flew {em}" if em else "", salvo_text) if p] + held
         return ("did: " + ", ".join(parts)) if parts else "", followed
 
     # Legacy record: compare the fields.

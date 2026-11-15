@@ -131,6 +131,15 @@ def _bare_name(name: str) -> str:
     return parts[1] if len(parts) == 2 and parts[0].isupper() and len(parts[0]) <= 4 else str(name)
 
 
+def _crew_state(ship):
+    """drive_plume.crew_state (works for both import styles)."""
+    try:
+        from ..drive_plume import crew_state
+    except ImportError:  # imported as a top-level module
+        from drive_plume import crew_state
+    return crew_state(ship)
+
+
 def _plume_status_lines(simulation, ship):
     """drive_plume.plume_status_lines (works for both import styles)."""
     try:
@@ -2245,6 +2254,12 @@ class LLMCaptain:
 
         # Enemy condition
         info["hull_percent"] = enemy.hull_integrity
+        # Crew state as seen from outside (plume radiation, src/drive_plume.py):
+        # reported like hull and PD - an incapacitated enemy neither maneuvers
+        # nor fires and must not read as an intact threat.
+        enemy_crew = _crew_state(enemy)
+        if enemy_crew != "fit":
+            info["crew_state"] = enemy_crew
 
         # Armor status
         if enemy.armor:
