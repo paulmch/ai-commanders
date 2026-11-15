@@ -36,7 +36,7 @@ MODES = {"arcs+roll": (True, True), "arcs, no roll": (True, False), "arcs off": 
 
 
 def run_battle(job):
-    seed, budget, time_limit, mode, pair_index = job
+    seed, budget, time_limit, mode, pair_index, mounts_path = job
     arcs_on, roll_on = MODES[mode]
     from src import weapon_arcs
     from src.llm.battle_runner import BattleConfig, LLMBattleRunner, load_fleet_data
@@ -70,9 +70,9 @@ def run_battle(job):
 
     setup = LLMBattleRunner.setup_fleet_battle
     step = CombatSimulation.step
-    table = weapon_arcs.load_hull_mounts()
+    table = weapon_arcs.load_hull_mounts(mounts_path)
     # (scope, hull or fleet, self-homing?) -> [torpedo-ticks, sum bearing, sum turrets, ticks with 0 bearing]
-    pd = defaultdict(lambda: [0, 0, 0, 0])
+    pd = defaultdict(lambda: [0, 0, 0, 0, {}])   # ..., {turrets bearing k: ticks}
     stat_arcs = {}
 
     def probed_setup(self, data):
@@ -81,6 +81,7 @@ def run_battle(job):
         sim.echo = False
         sim.weapon_arcs = arcs_on
         sim.roll_to_unmask = roll_on
+        sim.hull_mounts = table
 
     def probed_step(self):
         if self is runner.simulation and self.torpedoes:
@@ -104,6 +105,7 @@ def run_battle(job):
                     masks = {m.slot: m.mask for m in hull.mounts} if hull else {}
                     turret_masks = [masks.get(f"pd_{i}") for i, _ in turrets]
                 else:
+                    arcs.set_frame(ship.forward, ship.kinematic_state.up, self.current_time)
                     turret_masks = [p.mount.mask if p.mount is not None else None
                                     for _, p in turrets]
                 envelope_m = max(p.laser.range_km for _, p in turrets) * 1000.0
@@ -128,6 +130,7 @@ def run_battle(job):
                         row[1] += bearing
                         row[2] += len(turrets)
                         row[3] += bearing == 0
+                        row[4][bearing] = row[4].get(bearing, 0) + 1
         return step(self)
 
     LLMBattleRunner.setup_fleet_battle = probed_setup
@@ -149,7 +152,7 @@ def run_battle(job):
         "winner": result.winner, "reason": result.reason, "duration_s": result.duration_s,
         "shots": shots, "kills": kills, "tally": dict(getattr(sim, "arcs_tally", {})),
         "ships_rolled": rolled, "ships": len(sim.ships),
-        "pd": [[*k, *v] for k, v in pd.items()],
+        "pd": [[*k, *v] for k, v in pd.items()],   # scope, name, homing, ticks, bearing, turrets, none, {k: ticks}
     }
 
 
@@ -160,9 +163,12 @@ def main() -> int:
     parser.add_argument("--time-limit", type=float, default=600.0)
     parser.add_argument("--jobs", type=int, default=6)
     parser.add_argument("--json", default=None, help="Write the raw per-battle rows here")
+    parser.add_argument("--mounts", default=None,
+                        help="Mount table to use instead of data/hull_mounts.json "
+                             "(e.g. an earlier placement, for a before/after on one engine)")
     args = parser.parse_args()
     seeds = [int(s) for s in args.seeds.split(",") if s]
-    jobs = [(seed, args.budget, args.time_limit, mode, i)
+    jobs = [(seed, args.budget, args.time_limit, mode, i, args.mounts)
             for i, seed in enumerate(seeds) for mode in MODES]
     with ProcessPoolExecutor(max_workers=args.jobs) as pool:
         rows = list(pool.map(run_battle, jobs))
@@ -175,7 +181,7 @@ def main() -> int:
             capture_output=True, text=True, cwd=Path(__file__).parent.parent).stdout.strip()
     except OSError:
         commit = "?"
-    print(f"data/hull_mounts.json: {commit}")
+    print(f"mount table: {args.mounts or 'data/hull_mounts.json'} ({'given file' if args.mounts else commit})")
     print(f"{len(seeds)} seeds x {len(MODES)} modes, budget {args.budget}, "
           f"time limit {args.time_limit:.0f} s\n")
 
@@ -196,21 +202,20 @@ def main() -> int:
         rel = sum(r["tally"].get("released", 0) for r in sel)
         masked = sum(r["tally"].get("masked", 0) for r in sel)
         slewing = sum(r["tally"].get("slewing", 0) for r in sel)
-        held = (f"released-by-fire-control ticks {rel}: held masked {masked} "
-                f"({100 * masked / rel:.1f}%), held slewing {slewing} ({100 * slewing / rel:.1f}%)"
+        held = (f"ready-ticks (a mount cleared to fire by fire control, counted every tick) "
+                f"{rel}: held masked {masked} ({100 * masked / rel:.1f}%), "
+                f"held slewing {slewing} ({100 * slewing / rel:.1f}%)"
                 if rel else "no gate")
         print(f"  {mode:<14} rounds fired {shots:>5}   {held}")
 
     for mode in MODES:
         print(f"\nPD BEARING, {mode} (torpedo-ticks inside the PD envelope; "
               f"bearing = turrets whose own hull leaves the line of sight open)")
-        agg = defaultdict(lambda: [0, 0, 0, 0])
+        agg = defaultdict(lambda: [0, 0, 0, 0, defaultdict(int)])
         for r in rows:
             if r["mode"] != mode:
                 continue
-            for scope, name, homing, n, bearing, turrets, zero in r["pd"]:
-                for h in ((homing,) if not homing else (True,)):
-                    pass
+            for scope, name, homing, n, bearing, turrets, zero, hist in r["pd"]:
                 for key in ((scope, name, "homing on the ship") if homing else None,
                             (scope, name, "all in envelope")):
                     if key is None:
@@ -220,12 +225,14 @@ def main() -> int:
                     a[1] += bearing
                     a[2] += turrets
                     a[3] += zero
-        print(f"  {'scope':<6}{'hull / fleet':<20}{'torpedoes':<20}{'ticks':>8}"
-              f"{'bearing/turrets':>18}{'none bears':>12}")
-        for (scope, name, which), (n, bearing, turrets, zero) in sorted(agg.items()):
-            print(f"  {scope:<6}{name:<20}{which:<20}{n:>8}"
-                  f"{(100 * bearing / turrets if turrets else 0):>17.1f}%"
-                  f"{(100 * zero / n if n else 0):>11.1f}%")
+                    for k, ticks in hist.items():
+                        a[4][int(k)] += ticks
+        print(f"  {'scope':<6}{'hull / fleet':<19}{'torpedoes':<20}{'ticks':>7}"
+              f"{'bearing/turrets':>17}   share of ticks with k turrets bearing")
+        for (scope, name, which), (n, bearing, turrets, zero, hist) in sorted(agg.items()):
+            shares = "  ".join(f"k={k}: {100 * hist[k] / n:.0f}%" for k in sorted(hist))
+            print(f"  {scope:<6}{name:<19}{which:<20}{n:>7}"
+                  f"{(100 * bearing / turrets if turrets else 0):>16.1f}%   {shares}")
     return 0
 
 

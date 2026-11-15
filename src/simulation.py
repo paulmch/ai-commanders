@@ -1564,6 +1564,7 @@ class CombatSimulation:
     weapon_arcs = False
     roll_to_unmask = False
     hull_mounts: dict = {}
+    _arcs_lead_cache: dict = {}
 
     def __init__(
         self,
@@ -1652,6 +1653,7 @@ class CombatSimulation:
         # Ticks on which fire control released a round from a trainable gun
         # mount, and how many of those the mount held back (masked / slewing).
         self.arcs_tally = {'released': 0, 'masked': 0, 'slewing': 0}
+        self._arcs_lead_cache: dict = {}
 
         # Decision callback
         self._decision_callback: Optional[Callable[[str, 'CombatSimulation'], list[Any]]] = None
@@ -6929,6 +6931,9 @@ class CombatSimulation:
         weapons = ship.weapons
         orders = ship.weapons_orders
         primary = ship.primary_target_id
+        # Turret mounts with the same target and muzzle velocity share one
+        # lead direction (it depends on nothing else), computed once a tick.
+        self._arcs_lead_cache = leads = {'ship': ship.ship_id, 'time': self.current_time}
         for slot, mount in arcs.guns.items():
             ws = weapons.get(slot)
             order = orders.get(slot)
@@ -6958,16 +6963,27 @@ class CombatSimulation:
         target_id = target.ship_id
         if mount.stamp == now and mount.target_id == target_id:
             return mount.state
-        saved_aim = weapon_state.current_aim_direction
-        fire_dir = weapon_state.calculate_fire_direction(
-            ship_forward=ship.forward,
-            ship_velocity=ship.velocity,
-            target_position=target.position,
-            target_velocity=target.velocity,
-            shooter_position=ship.position,
-            target_acceleration=self._estimate_target_acceleration(target),
-        )
-        weapon_state.current_aim_direction = saved_aim
+        leads = self._arcs_lead_cache
+        key = None
+        fire_dir = False
+        if (mount.kind == 'gun' and leads.get('ship') == ship.ship_id
+                and leads.get('time') == now):
+            key = (target_id, weapon_state.weapon.muzzle_velocity_kps,
+                   weapon_state.weapon.pivot_range_deg)
+            fire_dir = leads.get(key, False)
+        if fire_dir is False:
+            saved_aim = weapon_state.current_aim_direction
+            fire_dir = weapon_state.calculate_fire_direction(
+                ship_forward=ship.forward,
+                ship_velocity=ship.velocity,
+                target_position=target.position,
+                target_velocity=target.velocity,
+                shooter_position=ship.position,
+                target_acceleration=self._estimate_target_acceleration(target),
+            )
+            weapon_state.current_aim_direction = saved_aim
+            if key is not None:
+                leads[key] = fire_dir
         arcs = ship.arcs
         mount.target_id = target_id
         mount.stamp = now
@@ -6987,6 +7003,14 @@ class CombatSimulation:
         state = mount.train(bx, by, bz, dt)
         self._arcs_note_mask(ship, mount, state, 'hull')
         return state
+
+    def _arcs_pd_cell(self, ship: ShipCombatState, arcs, target_info: dict) -> int:
+        """Mask cell of the line of sight to a PD target (memoised per list)."""
+        cell = target_info.get('_cell')
+        if cell is None:
+            cell = target_info['_cell'] = weapon_arcs.cell_index(
+                *self._arcs_pd_dir(ship, arcs, target_info))
+        return cell
 
     def _arcs_pd_dir(self, ship: ShipCombatState, arcs, target_info: dict):
         """Body-frame line of sight from the ship to a PD target (memoised)."""
@@ -7017,14 +7041,17 @@ class CombatSimulation:
             mount.idle()
             return
         chosen = None
+        mask = mount.mask
         for info in targets:
-            body = self._arcs_pd_dir(ship, arcs, info)
-            if not mount.mask[weapon_arcs.cell_index(*body)]:
+            cell = info.get('_cell')
+            if cell is None:
+                cell = self._arcs_pd_cell(ship, arcs, info)
+            if not mask[cell]:
                 chosen = info
                 break
         if chosen is None:
             chosen = targets[0]
-            body = self._arcs_pd_dir(ship, arcs, chosen)
+        body = self._arcs_pd_dir(ship, arcs, chosen)
         state = mount.train(body[0], body[1], body[2], dt)
         mount.target_id = chosen['target_id']
         # Only a masked target inside the envelope is worth reporting.
@@ -7519,14 +7546,18 @@ class CombatSimulation:
         # weapon arcs, the turret's own hull does not mask the line of sight.
         arcs = ship.arcs if self.weapon_arcs else None
         if arcs is not None and arcs.mounts:
-            pd_dir = self._arcs_pd_dir
-            cell_index = weapon_arcs.cell_index
+            pd_cell = self._arcs_pd_cell
 
             def reaches(pd, info) -> bool:
                 if not pd.laser.is_in_range(info['distance_km']):
                     return False
                 mount = pd.mount
-                return mount is None or not mount.mask[cell_index(*pd_dir(ship, arcs, info))]
+                if mount is None:
+                    return True
+                cell = info.get('_cell')
+                if cell is None:
+                    cell = pd_cell(ship, arcs, info)
+                return not mount.mask[cell]
         else:
             def reaches(pd, info) -> bool:
                 return pd.laser.is_in_range(info['distance_km'])
