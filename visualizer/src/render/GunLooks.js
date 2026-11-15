@@ -25,8 +25,8 @@ export const SLUG_LOOK = [
 export const MUZZLE_LOOK = [
   { size: 0.9, jet: 1.0, sparks: 6, spray: 0.5, rings: 1, light: 22, reach: 14 },
   { size: 1.2, jet: 1.25, sparks: 9, spray: 0.6, rings: 1, light: 34, reach: 18 },
-  { size: 2.3, jet: 1.9, sparks: 16, spray: 0.7, rings: 2, light: 60, reach: 28 },
-  { size: 3.0, jet: 2.4, sparks: 22, spray: 0.8, rings: 3, light: 90, reach: 36 }
+  { size: 3.0, jet: 1.7, sparks: 16, spray: 0.6, rings: 2, light: 60, reach: 28 },
+  { size: 4.0, jet: 2.0, sparks: 22, spray: 0.7, rings: 3, light: 90, reach: 36 }
 ];
 
 /** Pool lights the muzzle flashes of one frame may borrow. */

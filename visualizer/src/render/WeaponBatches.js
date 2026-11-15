@@ -48,10 +48,11 @@ const ribbonVertex = /* glsl */`
     bool engage = kind > 7.5;
     bool jet = kind > 6.5 && !engage;
     // Half-width floor >= 1 px: a narrower strip rasterises as beads.
-    float floorPx = kind < 0.5 ? 1.1 : kind < 1.5 ? 1.0 : kind < 2.5 ? 0.6 : plume ? 1.2 : engage ? 0.75 : jet ? 0.7 : 1.0;
     // Slug tracers (kind 0) carry their gun class in aAge: heavier rounds
-    // are allowed a fatter streak (battery 3 px .. siege 7.5 px half-width)
+    // keep a fatter streak at the pixel floor (battery 1.1 px .. siege
+    // 2.15 px half-width) and are allowed a fatter one up close (3 .. 7.5 px)
     bool slug = kind < 0.5;
+    float floorPx = slug ? 1.1 + 0.35 * aAge.x : kind < 1.5 ? 1.0 : kind < 2.5 ? 0.6 : plume ? 1.2 : engage ? 0.75 : jet ? 0.7 : 1.0;
     float capPx = plume ? 64.0 : engage ? 0.75 : jet ? 16.0 : kind > 5.5 ? 24.0 : kind > 1.5 && kind < 2.5 ? 2.2
       : slug ? 3.0 + 1.5 * aAge.x : 3.0;
     float width = max(pixel * floorPx, min(aStyle.x, pixel * capPx));
