@@ -10,7 +10,7 @@ it does not depend on the order (or thread) in which the captains decide.
 The doctrine, in four behaviours:
 
 1. Focus fire. The fleet picks ONE target - close to the fleet's centre,
-   already damaged, thinly armoured or a soft torpedo boat - and keeps it
+   already damaged, thinly armoured, slow enough to hit (hittability) - and keeps it
    until it is dying or dead, or a markedly better one appears
    (FOCUS_SWITCH_MARGIN); torpedo salvos go at it first and gun ships with
    nothing in reach close on it. In reach, each gun ship weighs the same
@@ -25,12 +25,14 @@ The doctrine, in four behaviours:
    engagement range only when the closure happens to be nearly gone inside
    it (which can mean backing out to it). Torpedo boats HOLD_RANGE at a
    standoff outside the gun envelope.
-3. Massed torpedo salvos. Each salvo is sized to saturate its target's point
-   defence (its own turrets plus escorts within PD range) and drawn from the
-   loaded tubes of the boats nearest to it, one round per tube, all launched
-   in the same instant so they arrive together (a tube's second round would
-   follow a reload later, alone); a target the boats cannot saturate gets
-   nothing (rounds held).
+3. Torpedo employment. Every boat fires every round it can launch before
+   the next checkpoint at a target in reach (holding fire gains nothing:
+   reloads do not stack), with the first round of every tube leaving in the
+   same instant. Targets are ranked by torpedo_priority - big, slow hulls
+   under a thin point-defence umbrella, close to the boats - not by the gun
+   focus; rounds go first to the best target up to what saturates its PD,
+   the rest to a second target if that one can be saturated too, else to
+   the first.
 4. Self-preservation and formation. The evade overlay runs from (or presents
    armour to) guided torpedoes; a crippled ship opens range; on the approach
    every gun ship matches the slowest gun hull's acceleration so the fleet
@@ -42,6 +44,7 @@ Pure functions of the simulation state, no RNG.
 
 from __future__ import annotations
 
+import math
 import threading
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
@@ -62,6 +65,13 @@ TURRET_ENGAGE_RANGE_KM = 45.0
 # drive, after a SPRINT_FLIP_S flip), it flies plain INTERCEPT, up to
 # SPRINT_MAX_CLOSING_KPS; past that it coasts.
 SPRINT_MAX_CLOSING_KPS = 4.0
+# Capital ships (drive <= CAPITAL_ACCEL_G) turn too slowly to fight through a
+# fast pass (a dreadnought needs ~100 s to turn its nose round after it, tail
+# to the enemy meanwhile - round 1's dreadnoughts took 43 tail hits to 2 on
+# the nose): they close at most at CAPITAL_MAX_CLOSING_KPS and start shooting
+# from long range instead.
+CAPITAL_ACCEL_G = 1.05
+CAPITAL_MAX_CLOSING_KPS = 1.0
 SPRINT_BRAKE_FRACTION = 0.7
 SPRINT_FLIP_S = 40.0
 # Inside engagement range x this, with the closure nearly gone, HOLD_RANGE.
@@ -97,13 +107,23 @@ TORPEDO_PANIC_RANGE_KM = 170.0
 SALVO_MARGIN_ROUNDS = 1
 # Leftover tube capacity may open a second salvo on another target.
 MAX_SALVOS_PER_CHECKPOINT = 2
+# torpedo_priority scales: hull mass (a cruiser = 1), rounds needed to
+# saturate, boat-to-target range.
+TORPEDO_SIZE_REF_TONS = 3790.0
+TORPEDO_NEED_REF_ROUNDS = 3.0
+TORPEDO_RANGE_SCALE_KM = 300.0
 
 # Focus selection.
 FOCUS_RANGE_SCALE_KM = 100.0     # proximity weight halves at this range
 FOCUS_DAMAGE_WEIGHT = 1.5        # x(1 + w * hull lost)
 FOCUS_BREACH_BONUS = 0.5         # + when an armour facing is gone
 FOCUS_ARMOR_REF_CM = 150.0       # thinner nose armour = easier kill
-FOCUS_TORPEDO_BOAT_BONUS = 2.0   # soft, and its salvos kill our ships
+FOCUS_TORPEDO_BOAT_BONUS = 1.3   # its salvos kill our ships
+# Agile hulls jink off gun rounds and outrun torpedoes: a target is worth
+# 1 / (1 + its drive in g / FOCUS_AGILITY_REF_G) (a 3 g corvette 0.33, a 1 g
+# battleship 0.6). Round 1 chased kiting corvettes with guns and torpedoes
+# alike and landed 1-2 torpedoes a battle to legacy's 5-6 on big hulls.
+FOCUS_AGILITY_REF_G = 1.5
 FOCUS_SWITCH_MARGIN = 1.6        # a new focus must beat the old one by this
 # Each gun ship weighs the same priorities (damage, breach, thin armour,
 # torpedo boat) from ITS position, over a shorter range scale, with the fleet
@@ -115,9 +135,9 @@ FOCUS_SWITCH_MARGIN = 1.6        # a new focus must beat the old one by this
 # focus still steers ships with nothing in reach and the torpedo salvos.
 SHIP_RANGE_SCALE_KM = 80.0
 FOCUS_SHARE_BONUS = 1.0
-# "In reach": the doctrine's ~150 km beyond which gun fights at dodgers are
-# not planned (src/llm/prompts.py).
-GUN_REACH_KM = 150.0
+# "In reach": where the FIRE_WHEN_OPTIMAL gate still opens on a hull holding
+# course (legacy capital ships fire from ~200 km on average).
+GUN_REACH_KM = 250.0
 
 # Self-preservation.
 CRIPPLED_HULL_PCT = 35.0          # below this hull integrity: open range
@@ -211,13 +231,13 @@ def engage_range_km(ship: Any) -> float:
 
 
 def sprint_ok(range_km: float, engage_km: float, closing_kps: float, accel_ms2: float,
-              interval_s: float = 30.0) -> bool:
+              interval_s: float = 30.0, max_closing_kps: float = SPRINT_MAX_CLOSING_KPS) -> bool:
     """
     True while a plain INTERCEPT burn for one more decision interval still
     leaves room to stop at ``engage_km`` (gun_maneuver passes GUNS_HOT_KM;
     see SPRINT_*).
     """
-    if accel_ms2 <= 0.0 or closing_kps >= SPRINT_MAX_CLOSING_KPS:
+    if accel_ms2 <= 0.0 or closing_kps >= max_closing_kps:
         return False
     v0 = max(0.0, closing_kps) * 1000.0
     v1 = v0 + accel_ms2 * interval_s
@@ -227,7 +247,8 @@ def sprint_ok(range_km: float, engage_km: float, closing_kps: float, accel_ms2: 
 
 
 def gun_maneuver(range_km: float, closing_kps: float, engage_km: float, accel_ms2: float,
-                 interval_s: float = 30.0) -> Tuple[str, Dict[str, float]]:
+                 interval_s: float = 30.0,
+                 max_closing_kps: float = SPRINT_MAX_CLOSING_KPS) -> Tuple[str, Dict[str, float]]:
     """
     (maneuver type, set_maneuver extras) for a gun ship vs its target: sprint
     while a stop short of his guns stays possible, coast nose-on through the
@@ -237,12 +258,20 @@ def gun_maneuver(range_km: float, closing_kps: float, engage_km: float, accel_ms
     if (range_km <= engage_km * HOLD_BAND_FACTOR and abs(closing_kps) <= HOLD_CLOSING_KPS):
         return "HOLD_RANGE", {"range_km": engage_km}
     if range_km > GUNS_HOT_KM:
-        if sprint_ok(range_km, GUNS_HOT_KM, closing_kps, accel_ms2, interval_s):
+        if sprint_ok(range_km, GUNS_HOT_KM, closing_kps, accel_ms2, interval_s, max_closing_kps):
             return "INTERCEPT", {}
         return "PADLOCK", {}
     if closing_kps < -REENGAGE_OPENING_KPS and range_km > REENGAGE_RANGE_KM:
         return "INTERCEPT", {}
     return "PADLOCK", {}
+
+
+def is_capital(ship: Any) -> bool:
+    try:
+        full = ship.kinematic_state.max_acceleration_ms2()
+    except Exception:
+        return False
+    return 0.0 < full <= CAPITAL_ACCEL_G * STANDARD_G
 
 
 def max_accel_ms2(ship: Any) -> float:
@@ -299,7 +328,11 @@ def focus_priority(enemy: Any, centre: Any, range_scale_km: float = FOCUS_RANGE_
     kind = role(enemy)
     bonus = (FOCUS_TORPEDO_BOAT_BONUS if kind == "torpedo" else
              DISARMED_TARGET_FACTOR if kind == "unarmed" else 1.0)
-    return proximity * damage * softness * bonus
+    return proximity * damage * softness * bonus * hittability(enemy)
+
+
+def hittability(enemy: Any) -> float:
+    return 1.0 / (1.0 + max_accel_ms2(enemy) / STANDARD_G / FOCUS_AGILITY_REF_G)
 
 
 def pick_focus(enemies: List[Any], centre: Any, previous_id: Optional[str]) -> Optional[Any]:
@@ -359,9 +392,9 @@ class FleetPlan:
     time: float
     focus_id: Optional[str] = None
     # Torpedo salvos launched this checkpoint (empty = hold the rounds) and
-    # each boat's share: boat id -> (target id, rounds).
+    # each boat's share: boat id -> [(target id, rounds), ...].
     salvos: List[Salvo] = field(default_factory=list)
-    launches: Dict[str, Tuple[str, int]] = field(default_factory=dict)
+    launches: Dict[str, List[Tuple[str, int]]] = field(default_factory=dict)
     # The boats' target: the first salvo's, else the gun focus.
     torpedo_target_id: Optional[str] = None
     # Approach throttle per gun ship: matched to the slowest gun hull.
@@ -383,30 +416,35 @@ def _centre(ships: List[Any]) -> Any:
     return pos * (1.0 / len(ships))
 
 
-def tubes_ready_now(simulation: Any, boat: Any) -> int:
-    """Rounds this boat can put in the air in the same instant: loaded tubes
-    off cooldown (a tube's next round leaves a reload later and would arrive
-    alone), within the launch capacity the engine still has unreserved."""
-    now = float(getattr(simulation, "current_time", 0.0))
-    ready = sum(1 for tube in getattr(boat, "ready_torpedo_launchers", []) or []
-                if getattr(tube, "current_magazine", 0) > 0
-                and tube.last_launch_time + tube.cooldown_seconds <= now + 1e-6)
-    return min(ready, int(simulation.torpedo_launch_capacity(boat.ship_id)))
+def torpedo_priority(enemy: Any, boats: List[Any], need: int) -> float:
+    """
+    Worth of a torpedo target: a big, slow hull (it cannot outrun or out-jink
+    the round, and a kill is worth more) under a thin PD umbrella (few rounds
+    needed to saturate it), close to the boats (short flight, brief PD
+    dwell), already damaged.
+    """
+    from ..battle_damage import _hull_mass_tons
+    size = math.sqrt(max(_hull_mass_tons(enemy), 1.0) / TORPEDO_SIZE_REF_TONS)
+    d_km = min(_km(b, enemy) for b in boats)
+    damage = 1.0 + FOCUS_DAMAGE_WEIGHT * (1.0 - hull_pct(enemy) / 100.0)
+    return (size * damage * hittability(enemy) ** 2
+            / (1.0 + need / TORPEDO_NEED_REF_ROUNDS) / (1.0 + d_km / TORPEDO_RANGE_SCALE_KM))
 
 
 def _salvo_plan(simulation: Any, boats: List[Any], enemies: List[Any], focus: Optional[Any],
                 fleet_data: Optional[Dict[str, Any]]) -> List[Salvo]:
     """
-    This checkpoint's salvos: rounds that leave the tubes together
-    (tubes_ready_now), so they arrive together. Each is sized to the target's point defence
-    (salvo_to_saturate over its own turrets plus escorts within PD range,
-    + SALVO_MARGIN_ROUNDS, less friendly rounds already inbound) and drawn
-    from the boats nearest to it; capacity left over may take another target
-    (at most MAX_SALVOS_PER_CHECKPOINT). Targets: the gun focus first, then
-    the cheapest to saturate. A target the boats cannot saturate is skipped
-    unless it is a gun ship already inside TORPEDO_PANIC_RANGE_KM of a boat
-    (it gets everything in reach); when no salvo saturates anything, one
-    best-effort wave goes at the target closest to saturation.
+    This checkpoint's torpedo employment. Every boat with a round it can
+    launch before the next checkpoint and a target in reach fires it - a
+    tube that holds fire gains nothing (reloads do not stack). Targets by
+    torpedo_priority; the first round of every tube leaves in the same
+    instant (the rest follow at the tube's reload). Rounds go first to the
+    best target up to what saturates its point defence (salvo_to_saturate
+    over its own turrets plus escorts within PD range, + SALVO_MARGIN_ROUNDS,
+    less rounds already inbound); what is left opens a second salvo when it
+    can saturate that one too, else joins the first (MAX_SALVOS_PER_CHECKPOINT).
+    A gun ship already inside TORPEDO_PANIC_RANGE_KM of a boat gets that
+    boat's rounds first.
     """
     from .fire_solutions import pd_cover, rounds_inbound, salvo_to_saturate
     from .prompts import pd_doctrine_numbers
@@ -414,7 +452,7 @@ def _salvo_plan(simulation: Any, boats: List[Any], enemies: List[Any], focus: Op
     if not boats or not enemies:
         return []
     pd = pd_doctrine_numbers(fleet_data)
-    left = {b.ship_id: tubes_ready_now(simulation, b) for b in boats}
+    left = {b.ship_id: int(simulation.torpedo_launch_capacity(b.ship_id)) for b in boats}
 
     def need_for(enemy) -> int:
         own, escorts, _ = pd_cover(simulation, enemy, pd["range_km"])
@@ -422,55 +460,55 @@ def _salvo_plan(simulation: Any, boats: List[Any], enemies: List[Any], focus: Op
         inbound = len(rounds_inbound(simulation, boats[0].faction, enemy.ship_id))
         return max(0, need + SALVO_MARGIN_ROUNDS - inbound)
 
-    needs = {e.ship_id: need_for(e) for e in enemies}
-    candidates = sorted(enemies, key=lambda e: (e is not focus, needs[e.ship_id], e.ship_id))
-    salvos: List[Salvo] = []
-    for enemy in candidates:
-        if len(salvos) >= MAX_SALVOS_PER_CHECKPOINT:
-            break
-        shooters = sorted((b for b in boats if left[b.ship_id] > 0
-                           and _km(b, enemy) <= TORPEDO_LAUNCH_RANGE_KM),
-                          key=lambda b: (_km(b, enemy), b.ship_id))
-        available = sum(left[b.ship_id] for b in shooters)
-        need = needs[enemy.ship_id]
-        if available <= 0:
-            continue
-        panic = has_guns(enemy) and any(_km(b, enemy) <= TORPEDO_PANIC_RANGE_KM for b in shooters)
-        if panic:
-            want = available
-        elif need == 0 or available < need:
-            continue          # enough already inbound / cannot saturate: hold
-        else:
-            want = need
+    def shooters(enemy) -> List[Any]:
+        return sorted((b for b in boats if left[b.ship_id] > 0
+                       and _km(b, enemy) <= TORPEDO_LAUNCH_RANGE_KM),
+                      key=lambda b: (_km(b, enemy), b.ship_id))
+
+    def take(enemy, want: Optional[int]) -> Dict[str, int]:
         rounds: Dict[str, int] = {}
-        for b in shooters:
-            if want <= 0:
+        for b in shooters(enemy):
+            if want is not None and want <= 0:
                 break
-            n = min(left[b.ship_id], want)
+            n = left[b.ship_id] if want is None else min(left[b.ship_id], want)
             rounds[b.ship_id] = n
             left[b.ship_id] -= n
-            want -= n
-        salvos.append(Salvo(target_id=enemy.ship_id, rounds=rounds, need=need,
-                            available=available))
-    if not salvos:
-        # Nothing can be saturated: holding gains nothing (a tube holds one
-        # round, reloads do not stack), so every ready tube in reach fires
-        # one synchronized wave at the target closest to saturation.
-        best = None
-        for enemy in candidates:
-            shooters = [b for b in boats if left[b.ship_id] > 0
-                        and _km(b, enemy) <= TORPEDO_LAUNCH_RANGE_KM]
-            available = sum(left[b.ship_id] for b in shooters)
-            need = needs[enemy.ship_id]
-            if available <= 0 or need == 0:
-                continue
-            if best is None or need - available < best[0]:
-                best = (need - available, enemy, shooters, need, available)
-        if best is not None:
-            _, enemy, shooters, need, available = best
-            salvos.append(Salvo(target_id=enemy.ship_id,
-                                rounds={b.ship_id: left[b.ship_id] for b in shooters},
-                                need=need, available=available, saturating=False))
+            if want is not None:
+                want -= n
+        return rounds
+
+    needs = {e.ship_id: need_for(e) for e in enemies}
+    salvos: List[Salvo] = []
+    # A gun ship on top of a boat: everything that boat has, first.
+    for enemy in sorted(enemies, key=lambda e: e.ship_id):
+        close = [b for b in boats if left[b.ship_id] > 0 and has_guns(enemy)
+                 and _km(b, enemy) <= TORPEDO_PANIC_RANGE_KM]
+        if close:
+            rounds = {}
+            for b in close:
+                rounds[b.ship_id] = left[b.ship_id]
+                left[b.ship_id] = 0
+            salvos.append(Salvo(enemy.ship_id, rounds, needs[enemy.ship_id],
+                                sum(rounds.values()),
+                                sum(rounds.values()) >= needs[enemy.ship_id]))
+    ranked = sorted((e for e in enemies if needs[e.ship_id] > 0 and shooters(e)),
+                    key=lambda e: (-torpedo_priority(e, boats, needs[e.ship_id]), e.ship_id))
+    for enemy in ranked:
+        if len(salvos) >= MAX_SALVOS_PER_CHECKPOINT or not shooters(enemy):
+            continue
+        need = needs[enemy.ship_id]
+        available = sum(left[b.ship_id] for b in shooters(enemy))
+        if salvos and available < need:
+            continue        # a second target only if it can be saturated too
+        rounds = take(enemy, need if available >= need else None)
+        salvos.append(Salvo(enemy.ship_id, rounds, need, available, available >= need))
+    # Rounds still in the tubes join the first salvo they can reach.
+    for salvo in salvos:
+        target = next((e for e in enemies if e.ship_id == salvo.target_id), None)
+        if target is None:
+            continue
+        for boat_id, n in take(target, None).items():
+            salvo.rounds[boat_id] = salvo.rounds.get(boat_id, 0) + n
     return salvos
 
 
@@ -494,7 +532,8 @@ def compute_fleet_plan(simulation: Any, faction: str, previous: Optional[FleetPl
     plan.salvos = _salvo_plan(simulation, boats, enemies, focus, fleet_data)
     for salvo in plan.salvos:
         for boat_id, n in salvo.rounds.items():
-            plan.launches[boat_id] = (salvo.target_id, n)
+            if n > 0:
+                plan.launches.setdefault(boat_id, []).append((salvo.target_id, n))
     plan.torpedo_target_id = plan.salvos[0].target_id if plan.salvos else plan.focus_id
 
     gunships = [s for s in friends if role(s) == "gun"]
