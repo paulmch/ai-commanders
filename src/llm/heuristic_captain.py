@@ -15,10 +15,13 @@ from scripts/generate_test_battle.py, but reactive instead of pre-planned).
 Two doctrines:
 
 - "tactical" (default): flies inside a shared fleet plan
-  (src/llm/heuristic_tactics.py) - focus fire, range discipline by hull
-  role (standoff INTERCEPT then HOLD_RANGE instead of merging), massed
-  torpedo salvos sized to the target's point defence, the evade overlay
-  under fire, crippled ships open range, formation-matched approach.
+  (src/llm/heuristic_tactics.py) - reach-aware focus fire, nose-first gun
+  ships (closure cap, coast through a controlled pass facing the nearest
+  enemy gun, re-close nose first; they still pass through each other, at
+  ~3-4 km/s instead of ~6), torpedo boats holding a standoff and firing
+  one-round-per-tube salvos sized to the target's point defence, the evade
+  overlay against guided torpedoes, crippled ships opening range, a
+  formation-matched approach, and the plan announced on the FLEET NET.
 - "legacy": the pass-4 captain (nearest target, INTERCEPT/BRAKE/PADLOCK,
   two-round torpedo probes). Kept bit-for-bit reachable: the fire-control
   calibration fixture (tests/fixtures/fire_control_shots.json) holds rounds
@@ -79,6 +82,7 @@ class HeuristicCaptain(LLMCaptain):
         self.doctrine = doctrine
         self._decision_interval = 30.0
         self._broke_off = False
+        self._face_id: Optional[str] = None
 
     def select_personality(self, distance_km: float, verbose: bool = False) -> Dict[str, Any]:
         return {}
@@ -381,8 +385,15 @@ class HeuristicCaptain(LLMCaptain):
         if kind == "PADLOCK" and nearest_gun is not None and gun_km < dist_km:
             # Face the threat, shoot the focus: the nose (thickest armour,
             # spinal) tracks the nearest enemy gun while the turrets stay on
-            # the fleet's target.
-            return order(kind, nearest_gun, 1.0)
+            # the fleet's target. Sticky (FACE_SWITCH_FACTOR): a slow-turning
+            # hull swinging between threats shows its side to all of them.
+            face = next((e for e in gunned if e.ship_id == self._face_id), None)
+            if face is None or km(face) > tactics.FACE_SWITCH_FACTOR * gun_km:
+                face = nearest_gun
+            self._face_id = face.ship_id
+            if km(face) < dist_km:
+                return order(kind, face, 1.0)
+        self._face_id = None
         return order(kind, target, throttle if kind == "INTERCEPT" else 1.0, **extra)
 
     def _radiator_wish(self, ship, ship_id, heat, threat, enemies, simulation) -> Optional[bool]:

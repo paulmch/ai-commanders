@@ -17,11 +17,13 @@ The doctrine, in four behaviours:
    fire at their own ship's target, a focus out of reach would starve them.
 2. Range discipline by hull role, nose first. Gun ships sprint in while a
    stop short of the enemy's guns stays possible (a closure cap), then coast
-   nose-on through a controlled pass facing the nearest enemy gun, re-close
-   nose first once the range opens, and HOLD_RANGE at their engagement range
-   once the closure is gone; they never brake or open range under fire (that
-   shows the thin tail). Torpedo boats HOLD_RANGE at a standoff outside the
-   gun envelope.
+   nose-on through a controlled pass facing the nearest enemy gun and
+   re-close nose first once the range opens; they do not brake into the
+   enemy's guns (that shows the thin tail). They still pass through the
+   enemy fleet - slower than the legacy charge - and HOLD_RANGE at their
+   engagement range only when the closure happens to be nearly gone inside
+   it (which can mean backing out to it). Torpedo boats HOLD_RANGE at a
+   standoff outside the gun envelope.
 3. Massed torpedo salvos. Each salvo is sized to saturate its target's point
    defence (its own turrets plus escorts within PD range) and drawn from the
    loaded tubes of the boats nearest to it, one round per tube, all launched
@@ -76,6 +78,9 @@ HOLD_CLOSING_KPS = 0.4
 # pass speed outside the guns (flip, tail toward a charging enemy at
 # 200-300 km) lost 4 of 4 gun-heavy seeds; coasting in won 3 of 4.
 GUNS_HOT_KM = 200.0
+# A gun ship keeps facing the enemy gun it faces until another is this many
+# times closer.
+FACE_SWITCH_FACTOR = 1.5
 REENGAGE_OPENING_KPS = 0.3
 REENGAGE_RANGE_KM = 120.0
 
@@ -169,7 +174,8 @@ def sprint_ok(range_km: float, engage_km: float, closing_kps: float, accel_ms2: 
               interval_s: float = 30.0) -> bool:
     """
     True while a plain INTERCEPT burn for one more decision interval still
-    leaves room to stop at the engagement range (see SPRINT_*).
+    leaves room to stop at ``engage_km`` (gun_maneuver passes GUNS_HOT_KM;
+    see SPRINT_*).
     """
     if accel_ms2 <= 0.0 or closing_kps >= SPRINT_MAX_CLOSING_KPS:
         return False
