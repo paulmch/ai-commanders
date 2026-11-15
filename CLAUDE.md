@@ -154,8 +154,11 @@ Cross-battle: scripts/refine_commander.py distills notebook lessons from
 recordings, rematch-gates them, and battles opt in via use_notebooks/--notebooks.
 3. **Rule-based layer**: executes between checkpoints - fire control modes,
    automatic point defense, threat-aware evasion (jink vs guns, RUN from guided
-   torpedoes, PRESENT thickest armor when a hit is unavoidable; with no threat
-   EVADE weaves around the ship's CURRENT course and never chases)
+   torpedoes - only when the hull can turn away and back before impact, turn
+   times flown from its current spin (`CombatSimulation._turn_time_to`) - PRESENT
+   thickest armor when a hit is unavoidable; with no threat EVADE weaves around
+   the ship's CURRENT course and never chases). Rotation carries its angular
+   momentum: only the available authority changes a spin
 
 Range control (anti-merge): HEADING turns first, then burns (throttle 0 =
 attitude only, RCS, velocity untouched). `src/llm/range_control.py` gives

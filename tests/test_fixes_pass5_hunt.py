@@ -418,8 +418,9 @@ def test_fast_spin_on_rcs_overshoots_instead_of_stopping_dead():
 @pytest.mark.parametrize("engines_on", [True, False])
 def test_90_degree_turn_from_rest_matches_the_hull_rating(hull, engines_on):
     """CLAUDE.md / fleet_ships.json 90-degree turn times, thrust vectoring and
-    RCS. The scalar integrator beat them through its free stop at the target
-    (battleship TV 32 s against 36.9 s)."""
+    RCS, flown to a full stop: within a tick (TV) / 2% (RCS). The scalar
+    integrator beat them through its free stop at the target (battleship TV
+    32 s against 36.9 s)."""
     import math
     from src.physics import Vector3D
     from src.simulation import CombatSimulation, create_ship_from_fleet_data
@@ -436,9 +437,9 @@ def test_90_degree_turn_from_rest_matches_the_hull_rating(hull, engines_on):
     while t < 2000:
         sim._rotate_ship_toward(ship, target, 1.0, engines_on=engines_on)
         t += 1
-        if ship.forward.angle_to(target) < math.radians(0.6) and ship.angular_velocity_rad_s < 1e-3:
-            break
-    assert abs(t - rated) <= max(1.5, 0.06 * rated), (t, rated)
+        if ship.angular_velocity_rad_s == 0.0 and ship.forward.angle_to(target) < 0.01:
+            break                                   # on target and stopped
+    assert abs(t - rated) <= max(1.5, 0.02 * rated), (t, rated)
 
 
 # ---------------------------------------------------------------------------
