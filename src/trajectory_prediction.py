@@ -280,6 +280,13 @@ class PredictionSimulation(CombatSimulation):
     def _log_event(self, *args: Any, **kwargs: Any) -> None:  # type: ignore[override]
         return None
 
+    def _calculate_presentation_direction(self, ship: Any, terminal_threats: list) -> Any:  # type: ignore[override]
+        # Motion only: a presenting ship burns a 5 % token along its nose, so
+        # which armour facing it picks barely moves it. The shadow holds the
+        # nose instead of searching the reachable facings (that search was
+        # most of a traced torpedo battle's CPU).
+        return ship.forward
+
     def _advance_ship(self, ship: Any, dt: float) -> None:  # type: ignore[override]
         if ship.is_destroyed:
             return

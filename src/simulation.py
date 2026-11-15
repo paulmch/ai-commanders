@@ -212,6 +212,15 @@ SPIN_AXIS_KEEP_DEG = 10.0
 # ~355 times in 900 s and gained 266 m/s in 300 s).
 ATTITUDE_TV_HANDOVER_DEG = 2.0
 
+# Armour presentation (CombatSimulation._calculate_presentation_direction):
+# candidate facings closer than PRESENT_CANDIDATE_MERGE_DEG to one already
+# scored are skipped (a salvo's rounds arrive along nearly one bearing and
+# gave dozens of near-identical candidates), and the reachable attitude of a
+# spinning ship is found by bisection to 1 / 2^REACH_BISECTION_STEPS of the
+# turn (at rest it is closed-form).
+PRESENT_CANDIDATE_MERGE_DEG = 2.0
+REACH_BISECTION_STEPS = 8
+
 # Aim this far INSIDE the chosen armor section's arc rather than at its
 # edge. Terminal jitter (bearing drift, residual angular rate) of a few
 # degrees must not flip the struck section from nose to lateral.
@@ -3793,6 +3802,18 @@ class CombatSimulation:
         def partial(f: float) -> Vector3D:
             return fwd.rotate_around_axis(axis, angle * f).normalized()
 
+        w_now = ship.angular_velocity_rad_s or 0.0
+        if w_now <= 1e-9:
+            # At rest the from-rest bang-bang reach is closed-form (the
+            # inverse of _turn_time_to's from_rest).
+            alpha, w_max = params
+            if alpha <= 0.0 or angle <= 1e-9:
+                return fwd
+            if w_max > 0.0 and time_s > 2.0 * w_max / alpha:
+                reach = w_max * (time_s - w_max / alpha)
+            else:
+                reach = alpha * time_s * time_s / 4.0
+            return partial(min(1.0, max(0.0, reach / angle)))
         back = cache.get('back') if cache is not None else None
         if back is None:
             back = self._turn_time_to(ship, fwd, engines_on, params=params)
@@ -3806,7 +3827,7 @@ class CombatSimulation:
                 return fwd
             return fwd.rotate_around_axis(axis_prev, w * w / (2.0 * alpha)).normalized()
         lo, hi = 0.0, 1.0
-        for _ in range(14):
+        for _ in range(REACH_BISECTION_STEPS):
             mid = 0.5 * (lo + hi)
             if self._turn_time_to(ship, partial(mid), engines_on, params=params) <= time_s:
                 lo = mid
@@ -4545,8 +4566,16 @@ class CombatSimulation:
 
         # ---- Build candidate nose directions ----
         candidates: list[Vector3D] = [ship.forward]  # stop-turning baseline
+        # A salvo's rounds come down nearly one bearing: build the candidates
+        # from bearings PRESENT_CANDIDATE_MERGE_DEG apart (the pairwise plane
+        # normals of near-identical bearings are numerical noise).
+        merge_cos = math.cos(math.radians(PRESENT_CANDIDATE_MERGE_DEG))
+        bearings: list = []
         for t in terminal_threats:
             b = t['bearing']
+            if not any(b.dot(k) > merge_cos for k in bearings):
+                bearings.append(b)
+        for b in bearings:
             candidates.append(b)          # nose-on
             candidates.append(b * -1)     # tail-on
             side = b.cross(ship.up)
@@ -4555,7 +4584,7 @@ class CombatSimulation:
             if side.magnitude > 1e-6:
                 candidates.append(side.normalized())  # beam-on
 
-        if len(terminal_threats) >= 2:
+        if len(bearings) >= 2:
             mean = Vector3D.zero()
             for t in terminal_threats:
                 mean = mean + t['bearing'] * t['ke_gj']
@@ -4563,10 +4592,9 @@ class CombatSimulation:
                 mean = mean.normalized()
                 candidates.append(mean)
                 candidates.append(mean * -1)
-            for i in range(len(terminal_threats)):
-                for j in range(i + 1, len(terminal_threats)):
-                    normal = terminal_threats[i]['bearing'].cross(
-                        terminal_threats[j]['bearing'])
+            for i in range(len(bearings)):
+                for j in range(i + 1, len(bearings)):
+                    normal = bearings[i].cross(bearings[j])
                     if normal.magnitude > 1e-6:
                         candidates.append(normal.normalized())
 
@@ -4590,7 +4618,12 @@ class CombatSimulation:
         threat_cache: dict = {}
         rotation_params = self._get_rotation_params(ship, True)
         reach_cache: dict = {}
+        merge_cos = math.cos(math.radians(PRESENT_CANDIDATE_MERGE_DEG))
+        kept: list = []
         for cand in candidates:
+            if any(cand.dot(k) > merge_cos for k in kept):
+                continue
+            kept.append(cand)
             achieved = self._reachable_attitude(ship, cand, t_go_min, engines_on=True,
                                                 params=rotation_params, cache=reach_cache)
             score = self._presentation_score(ship, achieved, terminal_threats, threat_cache)

@@ -221,7 +221,7 @@ class TestEvasionPrediction:
         run_to(sim, 2.0)
         a = sim.ships["a"]
         torp = Torpedo(specs=TorpedoSpecs.trident(),
-                       # far enough out that a cruiser can afford to run
+                       # far enough out that the frigate can afford to run
                        position=a.position + Vector3D(900_000, 20_000, 0),
                        velocity=a.velocity + Vector3D(-4_000, 0, 0),
                        target_id="a", guidance_mode=GuidanceMode.COLLISION)
@@ -237,11 +237,14 @@ class TestEvasionPrediction:
             sim.step()
             modes.add(a.execution_mode)
         assert modes <= {"RUN", "PRESENT"}   # deterministic reactions only
-        # The path is exact here, but a real RUN could meet PD kills or new
-        # launches the shadow cannot see: it is flagged and dispersed.
+        # The path is exact while it runs; from t=27 s it PRESENTs, where the
+        # motion-only shadow holds the nose instead of searching the armour
+        # facings (PredictionSimulation._calculate_presentation_direction):
+        # a metre on the 5 % token burn. A real RUN could also meet PD kills
+        # or new launches the shadow cannot see: it is flagged and dispersed.
         assert plans["a"]["mode"] == "run"
         assert plans["a"]["sigma"] > 100.0
-        assert math.dist(plans["a"]["path"][-1], pos(a)) < 1.0
+        assert math.dist(plans["a"]["path"][-1], pos(a)) < 5.0
 
 
 class TestIsolation:
