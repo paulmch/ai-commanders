@@ -336,6 +336,7 @@ export class BattleLoader {
             time: trace[i].t,
             position: s.pos || prev?.pos,
             forward: s.fwd || prev?.fwd,
+            up: s.up || prev?.up || null,
             wasDying: !!prev?.dying,
             velocity: (prev && !prev.destroyed && prev.vel) ? prev.vel : [0, 0, 0],
             reactorCause: false

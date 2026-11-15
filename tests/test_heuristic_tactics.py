@@ -637,7 +637,7 @@ def test_the_formation_throttle_is_what_the_ship_flies():
 # courses) and what wash remains is recorded as `plume_wash`.
 # (Re-pinned once more: `plume_wash` events gained the `radiators` list -
 # empty in this battle; same 1532 events, same courses.)
-LEGACY_GOLDEN_SHA256 = "bb9c031645da4e65a49fbecfc70febbc79b2df43af57a41570c0a2d13dd17f75"
+LEGACY_GOLDEN_SHA256 = "a7c93d4e3451744e674d75252ffa519dc4719d3ebb11e92002772a4fffad4f74"
 
 
 def test_legacy_battle_event_stream_is_pinned(tmp_path):

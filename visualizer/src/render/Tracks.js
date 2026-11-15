@@ -841,6 +841,8 @@ export class Tracks {
     const f = tr.cpFwd;
     v.ghost.position.copy(cp);
     if (tr.hasFwd) {
+      // the plan predicts the nose only: keep the ship's current roll
+      v.ghost.up.set(0, 1, 0).applyQuaternion(ship.quaternion);
       v.ghost.lookAt(this._q.set(cp.x + f[0], cp.y + f[1], cp.z + f[2]));
     } else {
       v.ghost.quaternion.copy(ship.quaternion);

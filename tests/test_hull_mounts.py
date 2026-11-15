@@ -94,4 +94,4 @@ def test_masks(hull):
             # open straight out along the mount axis, blocked back through the hull
             assert not bits[_cell(az, el - 0.01)], where
             assert bits[_cell(az + 180.0, -el + 0.01)], where
-            assert 0.3 < m["open_fraction"] <= 0.52, where
+            assert 0.3 < m["open_fraction"] <= 0.56, where

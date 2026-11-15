@@ -19,6 +19,8 @@ import { getGlowTexture } from './render/Textures.js';
 import { RcsSystem } from './render/Rcs.js';
 import { Projectiles } from './render/Projectiles.js';
 import { HeatFX } from './render/Heat.js';
+import { hullQuat, validUp } from './HullFrame.js';
+const _hfFwd = [0, 0, 1], _hfQuat = [0, 0, 0, 1];
 
 /**
  * Put the canvas's WebGL pixel-unpack state back to its defaults when a
@@ -388,7 +390,17 @@ export class SceneManager {
     ship.position.set(state.position[0] * this.SCALE, state.position[1] * this.SCALE, state.position[2] * this.SCALE);
     if (state.forward) {
       const f = new THREE.Vector3(state.forward[0], state.forward[1], state.forward[2]);
-      if (f.lengthSq() > 0) ship.lookAt(ship.position.clone().add(f.normalize()));
+      if (f.lengthSq() > 0) {
+        f.normalize();
+        if (validUp(state.up)) {
+          // the ship's recorded roll: nose along fwd, dorsal along up
+          const q = hullQuat(f.toArray(_hfFwd), state.up, _hfQuat);
+          ship.quaternion.set(q[0], q[1], q[2], q[3]);
+        } else {
+          // older recordings carry no roll: nose along fwd, world-up +Y
+          ship.lookAt(ship.position.clone().add(f));
+        }
+      }
     }
 
     const dt = this.delta || 0.016;
@@ -718,7 +730,13 @@ export class SceneManager {
     const driftVel = new THREE.Vector3(vel[0], vel[1], vel[2]).multiplyScalar(this.SCALE);
     if (death.position) position = new THREE.Vector3(...death.position).multiplyScalar(this.SCALE);
     if (shipGroup && death.forward) {
-      shipGroup.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(...death.forward).normalize());
+      const df = new THREE.Vector3(...death.forward).normalize();
+      if (validUp(death.up)) {
+        const q = hullQuat(df.toArray(_hfFwd), death.up, _hfQuat);
+        shipGroup.quaternion.set(q[0], q[1], q[2], q[3]);
+      } else {
+        shipGroup.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), df);
+      }
     }
 
     const eff = new ShipDestruction(this.fxCtx, {

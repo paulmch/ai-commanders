@@ -67,11 +67,19 @@ function solids(k) {
 }
 const FACE_N = { '+x': [1, 0, 0], '-x': [-1, 0, 0], '+y': [0, 1, 0], '-y': [0, -1, 0] };
 
-/** Outward axis of a mount rotated `angle` about Z (0 = dorsal). */
-function mountSide(angle) {
+/**
+ * Faces a mount rotated `angle` about Z (0 = dorsal) may be filed under in
+ * data/fleet_ships.json: its own face, or for a shoulder mount (between
+ * two faces) either neighbour.
+ */
+function mountSides(angle) {
   const x = -Math.sin(angle), y = Math.cos(angle);
-  if (Math.abs(y) >= Math.abs(x)) return y > 0 ? 'dorsal' : 'ventral';
-  return x > 0 ? 'port' : 'starboard';
+  const out = [];
+  if (y > 0.45) out.push('dorsal');
+  if (y < -0.45) out.push('ventral');
+  if (x > 0.45) out.push('port');
+  if (x < -0.45) out.push('starboard');
+  return out;
 }
 
 test('every class assembles headless with known materials and finite geometry', () => {
@@ -104,7 +112,7 @@ test('mounts match data/fleet_ships.json: kinds, counts, slots, sides and statio
     const check = (rig, w, what) => {
       const mp = w.mount_position;
       if (!mp) return;
-      if (mp.side !== 'centerline') assert.equal(mountSide(rig.angle), mp.side, `${type} ${what} side`);
+      if (mp.side !== 'centerline') assert.ok(mountSides(rig.angle).includes(mp.side), `${type} ${what} side ${mp.side} vs ${mountSides(rig.angle)}`);
       const zData = L * (0.5 - mp.x);
       assert.ok(Math.abs(rig.z - zData) <= L * 0.2, `${type} ${what}: z ${(rig.z / L).toFixed(2)}L vs data ${(zData / L).toFixed(2)}L`);
     };
