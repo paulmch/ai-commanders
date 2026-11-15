@@ -112,13 +112,17 @@ UNFORESEEN_ACCEL_FRACTION = 0.018
 #       threats it weaves around its course anyway: rounds lose less to the
 #       dodge itself (the conversion roll charges EVASIVE x0.6 on top).
 # Calibrated together with JINK_ACCEL_FRACTION (maximum likelihood) on the
-# live engine: 85k rounds from 1, 2, 4 and 8 shooters at frigates..
+# live engine: 41k rounds from 1, 2, 4 and 8 shooters at frigates..
 # dreadnoughts flying PADLOCK + dodge, HOLD_RANGE + dodge and EVASIVE,
-# 40-400 km (scripts/fire_control_calibration.py harness); per maneuver class,
-# shooter count and 100 km bucket (30+ hits) the forecast is 0.65-1.17x of
-# what landed.
-DODGE_ACCEL_FRACTION = 0.10
-EVASIVE_DODGE_ACCEL_FRACTION = 0.06
+# 40-400 km (scripts/fire_control_calibration.py harness). Refitted
+# (0.10 -> 0.13, 0.06 -> 0.07; JINK unchanged) when rotation started carrying
+# its angular momentum: a jinking hull can no longer reverse a swing in one
+# tick, so it commits to each jink and strays farther from the lead. Per
+# maneuver class, shooter count and 100 km bucket (30+ hits) the forecast is
+# 0.6-1.25x of what landed, except fleet fire at 300-500 km (0.33-0.62x: the
+# dodge term grows with min(T, 60 s)^2 and over-charges the longest flights).
+DODGE_ACCEL_FRACTION = 0.13
+EVASIVE_DODGE_ACCEL_FRACTION = 0.07
 
 # A dodger whose evasion is flying it RIGHT NOW (mid-jink) is already burning
 # across the line of fire, and its lead does not extrapolate that burn (a
@@ -139,7 +143,7 @@ EVASIVE_DODGE_ACCEL_FRACTION = 0.06
 # checkpoint) the dodgers moved 2-4x farther across the line of fire during a
 # flight (median 0.45 of a*T^2/2, vs 0.10-0.24 in seeded engine runs of the
 # same shape), and 0 of 188 rounds at 100-300 km landed where this model
-# forecasts ~16. Seeded fleet-vs-fleet runs with fixed orders do not
+# forecasts ~12. Seeded fleet-vs-fleet runs with fixed orders do not
 # reproduce it (there the forecast is 0.74-0.96x of what landed), so nothing
 # visible at fire time predicts it; the doctrine tells commanders instead
 # (prompts.GUN_PHYSICS_REFERENCE), and tests/test_fire_control_calibration.py

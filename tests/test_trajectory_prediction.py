@@ -212,12 +212,15 @@ class TestEvasionPrediction:
         assert err < max(50.0, 4.0 * plans["a"]["sigma"])
 
     def test_run_from_guided_torpedo_is_continued(self):
-        sim = make_duel(ManeuverType.EVASIVE, a_type="cruiser", throttle=1.0)
+        # A frigate 900 km from the round: it can afford to run and turn back
+        # (a cruiser presents its nose instead).
+        sim = make_duel(ManeuverType.EVASIVE, a_type="frigate", throttle=1.0)
         sim.ships["a"].point_defense = []
         run_to(sim, 2.0)
         a = sim.ships["a"]
         torp = Torpedo(specs=TorpedoSpecs.trident(),
-                       position=a.position + Vector3D(250_000, 20_000, 0),
+                       # far enough out that a cruiser can afford to run
+                       position=a.position + Vector3D(900_000, 20_000, 0),
                        velocity=a.velocity + Vector3D(-4_000, 0, 0),
                        target_id="a", guidance_mode=GuidanceMode.COLLISION)
         torp.armed = True

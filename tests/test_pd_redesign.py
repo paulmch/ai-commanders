@@ -481,12 +481,16 @@ class TestWallOfShips:
                                   30_000 * math.sin(ang), 0),
                 forward=Vector3D(1, 0, 0))
             sim.add_ship(esc)
+        # Launched 1200 km out: the evading battleship has time to run (which
+        # buys the wall its dwell) and turn back. From 350 km it cannot, holds
+        # its nose on the salvo, and the wall blinds the rounds too late to
+        # dodge (prompts: "Returns need mass AND time").
         att = create_ship_from_fleet_data(
             "att", "cruiser_torpedo", "beta", fleet_data,
-            position=Vector3D(350_000, 0, 0), forward=Vector3D(-1, 0, 0))
+            position=Vector3D(1_200_000, 0, 0), forward=Vector3D(-1, 0, 0))
         sim.add_ship(att)
         launched, steps = 0, 0
-        while steps < 900:
+        while steps < 4000:
             if launched < salvo and sim.inject_command(
                     "att", {"type": "launch_torpedo", "target_id": "victim"}):
                 launched += 1

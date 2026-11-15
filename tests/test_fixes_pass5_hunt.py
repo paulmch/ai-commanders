@@ -439,3 +439,97 @@ def test_90_degree_turn_from_rest_matches_the_hull_rating(hull, engines_on):
         if ship.forward.angle_to(target) < math.radians(0.6) and ship.angular_velocity_rad_s < 1e-3:
             break
     assert abs(t - rated) <= max(1.5, 0.06 * rated), (t, rated)
+
+
+# ---------------------------------------------------------------------------
+# Evasion respects the turn physics. RUN -> PRESENT assumed the ship could
+# flip back instantly; with honest rotation a battleship that turned tail-on
+# to RUN from a salvo 70 s out could not turn back and took it in the tail
+# (3 tail impacts killed it). Turn times are now flown from the current spin
+# (_turn_time_to) and RUN is only started when the round trip fits.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("hull", ["corvette", "destroyer", "battleship"])
+@pytest.mark.parametrize("spin", ["away", "toward", "side"])
+@pytest.mark.parametrize("target_deg", [20, 90, 175])
+def test_turn_time_from_a_spin_matches_the_integrator(hull, spin, target_deg):
+    import math
+    from src.physics import Vector3D
+    from src.simulation import CombatSimulation, create_ship_from_fleet_data
+    with open("data/fleet_ships.json") as f:
+        data = json.load(f)
+    sim = CombatSimulation(time_step=1.0, decision_interval=1e9, seed=1)
+    ship = create_ship_from_fleet_data("s", hull, "alpha", data, Vector3D(0, 0, 0),
+                                       Vector3D(0, 0, 0), Vector3D(1, 0, 0))
+    sim.add_ship(ship)
+    spin_up = {"away": Vector3D(0, -1, 0), "toward": Vector3D(0, 1, 0),
+               "side": Vector3D(0, 0, 1)}[spin]
+    for _ in range(8):
+        sim._rotate_ship_toward(ship, spin_up, 1.0, engines_on=True)
+    assert ship.angular_velocity_rad_s > 0.0
+    target = ship.forward.rotate_around_axis(Vector3D(0, 0, 1), math.radians(target_deg))
+    predicted = sim._turn_time_to(ship, target, engines_on=True)
+    t = 0
+    while t < 600:
+        sim._rotate_ship_toward(ship, target, 1.0, engines_on=True)
+        t += 1
+        if ship.forward.angle_to(target) < 0.01 and ship.angular_velocity_rad_s < 1e-3:
+            break
+    assert 0.75 <= t / max(predicted, 1.0) <= 1.3, (t, predicted)
+
+
+def _salvo(hull, seed=23, range_km=450):
+    import math
+    import importlib.util
+    from src.simulation import CombatSimulation, SimulationEventType as ET
+    spec = importlib.util.spec_from_file_location("tda", "tests/test_doctrine_accuracy.py")
+    tda = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tda)
+    with open("data/fleet_ships.json") as f:
+        data = json.load(f)
+    sim = CombatSimulation(seed=seed, time_step=0.5, decision_interval=1e9)
+    sim.echo = False
+    victim = tda._build(sim, "victim", hull, "alpha", data, 0, 0, 1)
+    tda._evade(victim)
+    tda._build(sim, "att", "cruiser_torpedo", "beta", data, range_km, 0, -1)
+    launched, modes, struck = 0, [], []
+    for _ in range(1600):
+        if launched < 6:
+            if sim.inject_command("att", {"type": "launch_torpedo", "target_id": "victim"}):
+                launched += 1
+                continue
+        for ev in sim.step():
+            if ev.event_type == ET.TORPEDO_IMPACT and ev.data.get("hit_location"):
+                struck.append(ev.data["hit_location"])
+        if not modes or modes[-1][1] != victim.execution_mode:
+            modes.append((sim.current_time, victim.execution_mode))
+        if launched >= 6 and not sim.torpedoes:
+            break
+    return victim, modes, struck
+
+
+def test_slow_hull_presents_its_nose_instead_of_starting_a_flip_it_cannot_finish():
+    """A battleship has ~70 s against a salvo launched 450 km out: a 180 deg
+    flip to RUN and back takes ~110 s on thrust vectoring. It holds its
+    (thickest) nose on the salvo, every round strikes
+    the nose, and it survives - the old RUN tail-on took 3 tail hits and
+    died."""
+    victim, modes, struck = _salvo("battleship")
+    # (Just off the rail the rounds are not yet inside their no-escape zone,
+    # so it may start to run for a few seconds - a few degrees of swing.)
+    present_at = min(t for t, m in modes if m == "PRESENT")
+    assert present_at <= 10.0, modes
+    assert all(m == "PRESENT" for t, m in modes if t >= present_at)
+    assert len(struck) >= 4 and set(struck) == {"nose"}, struck
+    assert not victim.is_destroyed
+
+
+def test_fast_hull_still_runs_and_turns_back_before_impact():
+    """A frigate can afford the round trip: it runs first, then presents,
+    and the salvo strikes the nose."""
+    victim, modes, struck = _salvo("frigate")
+    names = [m for _, m in modes]
+    assert names[0] == "RUN", modes
+    run_until = min(t for t, m in modes if m == "PRESENT")
+    assert run_until >= 15.0, modes            # a real run, not a twitch
+    assert struck and set(struck) == {"nose"}, struck

@@ -969,16 +969,16 @@ PROJECTILE PHYSICS (for your calculations):
 HIT PROBABILITY PER ROUND vs a destroyer (spinal 9.9 km/s / turret 6.0 km/s):
                    50km    100km   150km   200km   300km   400km
 - holding course:  82/79%  64/57%  48/37%  36/20%  18/4%   7/1%
-- evade dodge:     82/73%  55/26%  27/6%   10/1%   2/0%    0/0%
-- dodge, mid-jink: 74/37%  21/3%   4/1%    1/0%    0/0%    0/0%
-- EVADE maneuver:  49/46%  36/24%  22/7%   11/2%   2/0%    1/0%
+- evade dodge:     82/70%  50/19%  20/3%   7/1%    1/0%    0/0%
+- dodge, mid-jink: 74/36%  20/3%   4/1%    1/0%    0/0%    0/0%
+- EVADE maneuver:  49/46%  35/22%  21/6%   10/2%   2/0%    0/0%
 "Mid-jink" is a dodger caught already burning off another round - what your other
-ships' fire does to it. Agile hulls escape sooner (a dodging frigate: spinal 42% at
-100km, 14% at 150km), heavy ones later (a dodging battleship: 31% at 200km, 8% at
+ships' fire does to it. Agile hulls escape sooner (a dodging frigate: spinal 35% at
+100km, 10% at 150km), heavy ones later (a dodging battleship: 24% at 200km, 5% at
 300km). The P(hit) on your ENEMIES lines is this model for the live geometry - fire
 on it, and close range before you shoot at a dodger. Under a whole fleet's fire
 dodgers do even better than shown: in a recorded fleet battle where every ship flew
-evade dodge, 0 of 188 rounds at 100-300km landed where this model promised ~16.
+evade dodge, 0 of 188 rounds at 100-300km landed where this model promised ~12.
 - Closing speed RAISES hit chance (shorter flight, less time to dodge); crossing
   (lateral) speed lowers it, and an opening range lowers it most. Spinal vs a
   destroyer holding course at 200km: 36% at rest, 47% closing at 3 km/s, 28%
@@ -2724,9 +2724,10 @@ HOW POINT DEFENSE ACTUALLY WORKS:
   so overlapping coverage genuinely stacks: every friendly turret within its envelope
   (~{pd_range_km:.0f} km laser range) of a torpedo's path adds dwell against it.
 - PD BLINDS torpedoes (seeker kill); the dead round then coasts in a straight line and
-  hits only a hull whose path that line crosses - one flying straight at it. Measured:
-  18/18 blinded rounds hit a non-evading battleship; the same attack on an evading one
-  behind 8 escorts landed 6/18. So a ship with torpedoes INBOUND (see ORDNANCE) must be
+  hits only a hull whose path that line crosses - one flying straight at it. Measured
+  (6-round salvos launched 1200 km out): 18/18 blinded rounds hit a non-evading
+  battleship behind 8 escorts; the same attack on an evading one landed 6/18. So a ship
+  with torpedoes INBOUND (see ORDNANCE) must be
   ordered to EVADE, or every PD kill is wasted; a dead round on nobody's line needs nothing.
 - DWELL IS SET BY THE TORPEDO'S CLOSING SPEED, NOT BY FLEET-TO-FLEET CLOSURE. Guidance
   holds a fuelled round at >={pd_closure_floor_kps:.0f} km/s however slowly the fleets
@@ -2742,9 +2743,13 @@ FORMATIONS FOR PD (what actually moves the numbers):
 - TURRET COUNT on the threat corridor is everything; ring radius is not - escort
   rings at 15, 30 and 120 km measured identically. Place escorts anywhere inside
   laser range of the axis the torpedoes come down; don't micro-manage spacing.
-- Returns need mass: vs a 6-round simultaneous salvo, an evading battleship leaked
-  17/18 alone, 15/18 with 4 destroyer escorts, 6/18 with 8. Fewer than ~4 escorts is
-  symbolic against a real salvo - concentrate the fleet or accept the hits.
+- Returns need mass AND time: vs a 6-round simultaneous salvo launched 1200 km out, an
+  evading battleship leaked 18/18 alone, 15/18 with 4 destroyer escorts, 6/18 with 8.
+  Launched 450 km out (~70 s of flight) it leaked 18/18 even behind 8: a 1g hull cannot
+  turn away to run and back in time, so it holds its nose armour on the salvo (and
+  survived it), and the escorts blind the rounds only in the last ~10 s - too late to
+  dodge. Fewer than ~4 escorts is symbolic against a real salvo - concentrate the fleet
+  or accept the hits.
 - The wall only protects ships that EVADE inside it (see blinding, above).
 """
 
@@ -2809,10 +2814,10 @@ GUNNERY:
 - Spinal weapons need nose-on alignment (<30 deg to target); turrets fire over a 180 deg arc.
 - Range is accuracy: a round hits only if its target is still near the aim point when it
   arrives, and a ship flying EVADE or evade dodge/full jinks off rounds it sees coming.
-  Per-round P(hit) vs a dodging destroyer: spinal 55% at 100 km, 10% at 200 km, 2% at
-  300 km - and a dodger your fleet already keeps jinking is far harder (21% at 100 km).
+  Per-round P(hit) vs a dodging destroyer: spinal 50% at 100 km, 7% at 200 km, 1% at
+  300 km - and a dodger your fleet already keeps jinking is far harder (20% at 100 km).
   Massed fire does not fix that: in a recorded fleet battle where every ship flew evade
-  dodge, 0 of 188 rounds at 100-300km landed where this model promised ~16. Do not plan
+  dodge, 0 of 188 rounds at 100-300km landed where this model promised ~12. Do not plan
   gun fights at dodgers beyond ~150 km.
 - Cross-section matters less: broadside is ~1.5x the hit chance of nose-on at 200 km
   (~1.2x at 100 km). Keep enemies in FRONT of your ships; if one flanks, reorient the

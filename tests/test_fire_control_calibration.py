@@ -145,7 +145,7 @@ def test_the_flash_mirror_dodgers_are_the_known_residual(shots):
     PADLOCK / HOLD_RANGE + evade 'dodge' under a whole fleet's fire. Not one
     of its 188 rounds at 100-300 km landed. The conversion number alone
     promised ~96 hits there and the single-shooter dodge model ~30; the
-    forecast now says ~15. The rest is the residual named at
+    forecast now says ~12. The rest is the residual named at
     firecontrol.JINK_ACCEL_FRACTION: those LLM-flown dodgers moved 2-4x
     farther during a flight than seeded engine dodgers under the same fire,
     which nothing visible at fire time predicts - the doctrine tells
@@ -209,13 +209,14 @@ def test_model_beats_the_old_number_on_likelihood(shots):
     assert nll("new") < 0.85 * nll("old")
 
 
-@pytest.mark.parametrize("seed, cls, hull, range_km, shooters, shooter_type", [
-    (21, "padlock_dodge", "destroyer", 120, 1, "battleship"),
-    (26, "padlock_dodge", "battleship", 300, 1, "battleship"),
-    (31, "padlock_dodge", "battleship", 160, 4, "cruiser"),
-    (17, "burn", "cruiser", 160, 1, "battleship"),
+@pytest.mark.parametrize("seed, cls, hull, range_km, shooters, shooter_type, engagements", [
+    (21, "padlock_dodge", "destroyer", 120, 1, "battleship", 1),
+    (26, "padlock_dodge", "battleship", 300, 1, "battleship", 1),
+    (31, "padlock_dodge", "battleship", 160, 4, "cruiser", 4),
+    (17, "burn", "cruiser", 160, 1, "battleship", 1),
 ])
-def test_live_engine_delivers_the_forecast(fcc, seed, cls, hull, range_km, shooters, shooter_type):
+def test_live_engine_delivers_the_forecast(fcc, seed, cls, hull, range_km, shooters, shooter_type,
+                                           engagements):
     """The fixture is a snapshot; this re-runs the engine
     (scripts/fire_control_calibration.py harness, seeded): a battleship, or a
     fleet of four cruisers, fires FIRE_IMMEDIATE for 150 s at a dodging hull
@@ -223,9 +224,19 @@ def test_live_engine_delivers_the_forecast(fcc, seed, cls, hull, range_km, shoot
     must be what the recorded per-round P(hit) forecast, within
     Poisson-binomial noise - and, at range or under fleet fire, far from what
     the conversion number alone promised. If evasion, the gate, the lead or
-    the dispersion roll changes, this moves."""
-    rounds = fcc.harness_run(seed, cls, hull, range_km, fcc.load_fleet(),
-                             shooters=shooters, spread_deg=40.0, shooter_type=shooter_type)
+    the dispersion roll changes, this moves.
+
+    The fleet-fire case pools four consecutive seeds: a battleship's jinks
+    are committed (its turn rate is carried, not re-pointed every tick), so
+    the rounds of ONE engagement are correlated - over 28 seeds of that
+    engagement 708 rounds hit against 791 forecast (1.12x), yet 5 single
+    engagements fall outside 3 sigma of their own Poisson-binomial spread,
+    both ways (seed 31: 0 against 15; seed 29: 45 against 28)."""
+    fleet = fcc.load_fleet()
+    rounds = []
+    for s in range(seed, seed + engagements):
+        rounds += fcc.harness_run(s, cls, hull, range_km, fleet, shooters=shooters,
+                                  spread_deg=40.0, shooter_type=shooter_type)
     assert len(rounds) >= 40
     hits = sum(r["outcome"] == "hit" for r in rounds)
     expected = sum(r["p_shown"] for r in rounds)

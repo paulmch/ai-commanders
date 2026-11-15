@@ -657,10 +657,14 @@ class TestThreatDisplayContract:
 class TestFormationDoctrine:
     def test_escort_wall_reduces_leakage(self, fleet):
         """Admiral doctrine: escorts cut salvo leakage, and the effect needs
-        mass (a big wall clearly beats none). Single seed of the measured
-        17/18 alone vs 6/18 with 8 escorts result."""
+        mass (a big wall clearly beats none) AND time. Single seed of the
+        measured (seeds 21-23) results: a salvo launched 1200 km out leaked
+        18/18 alone vs 6/18 with 8 escorts; launched 450 km out (~70 s) it
+        leaked 18/18 even behind 8 - the battleship cannot turn away to run
+        and back in time, presents its nose and survives, and the rounds are
+        blinded too late to dodge."""
 
-        def wall(n_escorts):
+        def wall(n_escorts, range_km):
             sim = CombatSimulation(seed=23, time_step=0.5, decision_interval=1e9)
             victim = _build(sim, 'victim', 'battleship', 'alpha', fleet, 0, 0, 1)
             _evade(victim)
@@ -672,9 +676,9 @@ class TestFormationDoctrine:
                                       30_000 * math.sin(ang), 0),
                     forward=Vector3D(1, 0, 0))
                 sim.add_ship(esc)
-            _build(sim, 'att', 'cruiser_torpedo', 'beta', fleet, 450, 0, -1)
+            _build(sim, 'att', 'cruiser_torpedo', 'beta', fleet, range_km, 0, -1)
             launched, hits = 0, 0
-            for _ in range(1600):
+            for _ in range(6000):
                 if launched < 6:
                     if sim.inject_command('att', {'type': 'launch_torpedo',
                                                   'target_id': 'victim'}):
@@ -685,14 +689,18 @@ class TestFormationDoctrine:
                         hits += 1
                 if launched >= 6 and not sim.torpedoes:
                     break
-            return hits
+            return hits, victim.is_destroyed
 
-        alone, walled = wall(0), wall(8)
+        (alone, _), (walled, _) = wall(0, 1200), wall(8, 1200)
         assert alone >= 5, f"lone battleship now stops salvos ({alone}/6 hit)"
-        assert walled < alone, (
+        assert walled <= 3 and walled < alone, (
             f"8-escort wall no longer reduces leakage ({walled}/6 vs {alone}/6) "
             "- the formation doctrine numbers are stale"
         )
+        short, short_killed = wall(8, 450)
+        assert short >= 5 and not short_killed, (
+            f"a 450 km salvo behind 8 escorts now lands {short}/6 "
+            f"(victim destroyed: {short_killed}) - the doctrine's short-salvo claim is stale")
 
 
 # =============================================================================

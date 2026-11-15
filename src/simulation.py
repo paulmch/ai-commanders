@@ -182,6 +182,14 @@ TERMINAL_TURN_MARGIN_CONTESTED = 1.2
 # threat bearing out of the armor cone right at impact (observed in testing).
 PRESENT_HOLD_WINDOW_S = 10.0
 
+# RUN is only started when the hull can turn away, burn at least this long,
+# and still turn back to its armour presentation before impact (see
+# CombatSimulation._run_round_trip_too_late). Below it the burn buys almost
+# no closure (10 s at 1 g is 0.1 km/s against km/s-scale closures) while the
+# turn out and back costs the facing: a battleship that flipped tail-on to
+# RUN from a salvo 70 s out could not flip back and took it in the tail.
+RUN_MIN_BURN_S = 10.0
+
 # Aim this far INSIDE the chosen armor section's arc rather than at its
 # edge. Terminal jitter (bearing drift, residual angular rate) of a few
 # degrees must not flip the struck section from nose to lateral.
@@ -3322,6 +3330,122 @@ class CombatSimulation:
                 else (cone - brake) / w_max + w_max / alpha)
         return max(0.0, whole_turn(angle, w0) - tail)
 
+    def _turn_time_to(
+        self,
+        ship: ShipCombatState,
+        direction: Vector3D,
+        engines_on: bool = True,
+        forward: Optional[Vector3D] = None,
+        spin: Optional[Vector3D] = None,
+    ) -> float:
+        """
+        Time to bring the nose onto ``direction`` from the current attitude
+        AND the current spin, as _rotate_ship_toward flies it: the spin
+        across the turn's axis is braked first, a spin the wrong way is
+        braked (the extra swing it carries is added to the turn), a spin
+        the right way is kept, and one too fast to stop on the target
+        overshoots and comes back. _estimate_turn_time is the from-rest
+        special case. ``forward`` / ``spin`` (rad/s vector) override the
+        ship's own (spin None = the ship's, a zero vector = at rest).
+        """
+        alpha, w_max = self._get_rotation_params(ship, engines_on)
+        if alpha <= 0.0:
+            return float('inf')
+        fwd = forward if forward is not None else ship.forward
+        if spin is None:
+            axis_prev = getattr(ship, 'angular_axis', None)
+            w = ship.angular_velocity_rad_s or 0.0
+            spin = axis_prev * w if (axis_prev is not None and w > 0.0) else Vector3D.zero()
+        target = direction.normalized()
+        theta = fwd.angle_to(target)
+        w_mag = spin.magnitude
+
+        def from_rest(angle: float) -> float:
+            if angle <= 1e-6:
+                return 0.0
+            theta_crit = w_max * w_max / alpha
+            if angle <= theta_crit:
+                return 2.0 * math.sqrt(angle / alpha)
+            return angle / w_max + w_max / alpha
+
+        if w_mag <= 1e-9:
+            return from_rest(theta)
+        axis = fwd.cross(target)
+        if axis.magnitude < 1e-6:
+            axis = spin * (1.0 / w_mag) if theta < 0.01 else ship.up
+        axis = axis.normalized()
+        w_par = spin.dot(axis)
+        w_perp = (spin - axis * w_par).magnitude
+        if theta > math.pi / 2 and w_par > 0.0:
+            # The integrator keeps the spin's own axis this far off target.
+            w_par, w_perp = w_mag, 0.0
+        t = w_perp / alpha
+        if w_perp > 0.0:
+            # The sideways spin is braked first; meanwhile it carries the
+            # nose off the turn's plane.
+            theta = math.hypot(theta, w_perp * w_perp / (2.0 * alpha))
+        if w_par < 0.0:
+            swing = w_par * w_par / (2.0 * alpha)
+            if theta + swing < math.pi:
+                # Brake the wrong-way spin, then turn back through the swing.
+                return t + (-w_par) / alpha + from_rest(theta + swing)
+            # The swing carries the nose past 180 deg off target, where the
+            # turn's axis flips: the ship carries on round the long way.
+            theta, w_par = 2.0 * math.pi - theta, -w_par
+        w0 = w_par
+        brake = w0 * w0 / (2.0 * alpha)
+        if brake >= theta:
+            # Too fast to stop on the target: brake, then come back.
+            past = math.fmod(brake - theta, 2.0 * math.pi)
+            return t + w0 / alpha + from_rest(min(past, 2.0 * math.pi - past))
+        w_peak = math.sqrt(alpha * theta + w0 * w0 / 2.0)
+        if w_peak <= w_max:
+            return t + (2.0 * w_peak - w0) / alpha
+        ramp = (w_max * w_max - w0 * w0) / (2.0 * alpha) + w_max * w_max / (2.0 * alpha)
+        return t + (2.0 * w_max - w0) / alpha + (theta - ramp) / w_max
+
+    def _reachable_attitude(
+        self,
+        ship: ShipCombatState,
+        direction: Vector3D,
+        time_s: float,
+        engines_on: bool = True,
+    ) -> Vector3D:
+        """
+        Where the nose can actually be after ``time_s`` when turning toward
+        ``direction``: the direction itself when _turn_time_to fits in the
+        time, else the farthest point along the great circle toward it that
+        does. A spinning ship that cannot even stop in time ends where its
+        spin carries it (the stopping attitude).
+        """
+        if self._turn_time_to(ship, direction, engines_on) <= time_s:
+            return direction.normalized()
+        fwd = ship.forward
+        angle = fwd.angle_to(direction)
+        axis = fwd.cross(direction)
+        if axis.magnitude < 1e-6:
+            axis = ship.up
+        axis = axis.normalized()
+
+        def partial(f: float) -> Vector3D:
+            return fwd.rotate_around_axis(axis, angle * f).normalized()
+
+        if self._turn_time_to(ship, fwd, engines_on) > time_s:
+            w = ship.angular_velocity_rad_s or 0.0
+            axis_prev = getattr(ship, 'angular_axis', None)
+            alpha, _ = self._get_rotation_params(ship, engines_on)
+            if axis_prev is None or w <= 0.0 or alpha <= 0.0:
+                return fwd
+            return fwd.rotate_around_axis(axis_prev, w * w / (2.0 * alpha)).normalized()
+        lo, hi = 0.0, 1.0
+        for _ in range(14):
+            mid = 0.5 * (lo + hi)
+            if self._turn_time_to(ship, partial(mid), engines_on) <= time_s:
+                lo = mid
+            else:
+                hi = mid
+        return partial(lo)
+
     def _max_turn_angle(
         self,
         ship: ShipCombatState,
@@ -3491,8 +3615,9 @@ class CombatSimulation:
             # seconds. The NEZ picks the pad: inside (escape provably
             # impossible) commit early; outside keep running longer. See the
             # constant block for the full rationale.
-            turn_needed_rad = self._presentation_angle_needed(ship, bearing)
-            turn_time_s = self._estimate_turn_time(ship, turn_needed_rad, engines_on=True)
+            # The turn time is flown from the spin the ship HAS (a ship
+            # still swinging away into RUN has to stop that first).
+            turn_time_s = self._presentation_turn_time(ship, bearing)
             pad = TERMINAL_TURN_MARGIN_NEZ if nez.inside else TERMINAL_TURN_MARGIN_CONTESTED
             terminal = t_go <= pad * turn_time_s + PRESENT_HOLD_WINDOW_S
             # Latch the commit (see TorpedoInFlight.terminal_latched). Only
@@ -3502,6 +3627,24 @@ class CombatSimulation:
                 terminal = True
             elif terminal and latch_commit:
                 torp_flight.terminal_latched = True
+
+            # Earliest arrival: the torpedo burns its remaining delta-v
+            # straight into closure. A torpedo just off the rail (not yet
+            # closing, t_go infinite) still arrives within this - the RUN
+            # round-trip check must not read "never" as "plenty of time".
+            accel = torp.specs.acceleration_at_mass(torp.current_mass_kg)
+            v0 = max(0.0, closing_speed)
+            dv = torp.remaining_delta_v_kps * 1000.0
+            if accel > 0.0 and dv > 0.0:
+                t_burn = dv / accel
+                d_burn = v0 * t_burn + 0.5 * accel * t_burn * t_burn
+                if d_burn >= distance_m:
+                    t_go_est = (-v0 + math.sqrt(v0 * v0 + 2.0 * accel * distance_m)) / accel
+                else:
+                    t_go_est = t_burn + (distance_m - d_burn) / (v0 + dv)
+            else:
+                t_go_est = t_go
+            t_go_est = min(t_go, t_go_est)
 
             urgency = (ke_gj / max(t_go, 0.5) if t_go != float('inf')
                        else ke_gj / GUIDED_TORPEDO_REACT_TIME_S)
@@ -3513,9 +3656,11 @@ class CombatSimulation:
                 'rel_vel': rel_vel,
                 'distance_m': distance_m,
                 't_go': t_go,
+                't_go_est': t_go_est,
                 'ke_gj': ke_gj,
                 'nez': nez,
                 'terminal': terminal,
+                'pad': pad,
                 'urgency': urgency,
             })
 
@@ -3597,7 +3742,22 @@ class CombatSimulation:
         # ---- 3. Guided torpedoes inbound: run to buy PD time ----
         if guided and allow_run:
             run_dir = self._calculate_run_direction(ship, guided)
-            return run_dir, 'RUN', 1.0
+            late = self._run_round_trip_too_late(ship, guided, run_dir)
+            if not late:
+                # Burn only once the nose points away: thrust while it still
+                # swings through the threat-facing half pushes the ship TOWARD
+                # the round (the token throttle keeps thrust vectoring lit).
+                if ship.forward.dot(run_dir) > 0.0:
+                    return run_dir, 'RUN', 1.0
+                return run_dir, 'RUN', MANEUVER_TURN_THROTTLE
+            # Running means turning away and then all the way back before
+            # impact; a hull that cannot finish that round trip presents
+            # its armour now instead of starting a flip it cannot complete.
+            if dt > 0:
+                for t in late:
+                    t['torp_flight'].terminal_latched = True
+            present_dir = self._calculate_presentation_direction(ship, late)
+            return present_dir, 'PRESENT', PRESENT_THROTTLE_MOD
 
         # ---- 4. Ballistic-only handling (original behaviour) ----
         if not dangerous_ballistic:
@@ -3654,6 +3814,44 @@ class CombatSimulation:
 
         return None
 
+    def _run_round_trip_too_late(
+        self,
+        ship: ShipCombatState,
+        guided_threats: list,
+        run_dir: Vector3D,
+    ) -> list:
+        """
+        The guided threats a RUN onto ``run_dir`` cannot pay for: turning
+        onto the run heading (from the current spin), at least
+        RUN_MIN_BURN_S of burn, then the padded turn back to the armour
+        presentation (from rest on the run heading) and the hold window must
+        all fit inside the threat's time to go (earliest arrival: t_go_est) -
+        the same budget the terminal trigger will ask for once the ship is
+        running. Only threats inside their no-escape zone count: outside it
+        running can make the round miss outright. Empty when running is
+        worth it (or the ship is already on the run heading: then the
+        terminal trigger alone decides).
+        """
+        out_s = self._turn_time_to(ship, run_dir, engines_on=True)
+        if out_s <= 1e-6:
+            return []
+        late = []
+        for t in guided_threats:
+            t_go = t.get('t_go_est', t['t_go'])
+            if t_go == float('inf'):
+                continue
+            nez = t.get('nez')
+            if nez is not None and not nez.inside:
+                # Outside the no-escape zone running can make the round miss
+                # outright (it runs out of delta-v): no turn back is owed.
+                continue
+            back_s = self._presentation_turn_time(
+                ship, t['bearing'], forward=run_dir, spin=Vector3D.zero())
+            budget = out_s + RUN_MIN_BURN_S + t['pad'] * back_s + PRESENT_HOLD_WINDOW_S
+            if t_go <= budget:
+                late.append(t)
+        return late
+
     def _calculate_run_direction(
         self,
         ship: ShipCombatState,
@@ -3687,10 +3885,48 @@ class CombatSimulation:
             sections[loc] = section.thickness_cm if section else 0.0
         return sections
 
+    def _presentation_turn_time(
+        self,
+        ship: ShipCombatState,
+        bearing: Vector3D,
+        forward: Optional[Vector3D] = None,
+        spin: Optional[Vector3D] = None,
+    ) -> float:
+        """
+        Time to bring ``bearing`` inside the (margined) arc of the thickest
+        armour section, from attitude ``forward`` (default: the ship's) and
+        the ship's current spin (``spin`` overrides, see _turn_time_to): the
+        great-circle turn of _presentation_angle_needed, flown from the spin
+        the ship actually has. A ship already inside the arc but spinning
+        out of it needs the time to stop and come back.
+        """
+        fwd = forward if forward is not None else ship.forward
+        needed = self._presentation_angle_needed(ship, bearing, forward=fwd)
+        thickness = self._armor_thicknesses(ship)
+        toward = bearing
+        if thickness is not None:
+            nose = thickness[HitLocation.NOSE]
+            lateral = thickness[HitLocation.LATERAL]
+            tail = thickness[HitLocation.TAIL]
+            if not (nose >= lateral and nose >= tail):
+                if tail >= lateral:
+                    toward = bearing * -1
+                elif fwd.angle_to(bearing) < math.pi / 2:
+                    toward = bearing * -1
+        if needed <= 1e-6:
+            facing = fwd
+        else:
+            axis = fwd.cross(toward)
+            if axis.magnitude < 1e-6:
+                axis = ship.up
+            facing = fwd.rotate_around_axis(axis.normalized(), needed).normalized()
+        return self._turn_time_to(ship, facing, engines_on=True, forward=fwd, spin=spin)
+
     def _presentation_angle_needed(
         self,
         ship: ShipCombatState,
         bearing: Vector3D,
+        forward: Optional[Vector3D] = None,
     ) -> float:
         """
         Rotation (rad) required to bring `bearing` inside the arc of the
@@ -3704,7 +3940,8 @@ class CombatSimulation:
         when the bearing is already inside the (margined) thickest arc.
         """
         thickness = self._armor_thicknesses(ship)
-        angle = ship.forward.angle_to(bearing)  # 0 = threat dead ahead
+        fwd = forward if forward is not None else ship.forward
+        angle = fwd.angle_to(bearing)  # 0 = threat dead ahead
         margin = math.radians(PRESENT_ARC_MARGIN_DEG)
         nose_arc = math.radians(NOSE_HIT_ANGLE_THRESHOLD) - margin
         tail_arc = math.radians(TAIL_HIT_ANGLE_THRESHOLD) + margin
@@ -3846,10 +4083,9 @@ class CombatSimulation:
             (t['t_go'] for t in terminal_threats if t['t_go'] != float('inf')),
             default=GUIDED_TORPEDO_REACT_TIME_S,
         )
-        theta_max = self._max_turn_angle(ship, t_go_min, engines_on=True)
 
         # ---- Build candidate nose directions ----
-        candidates: list[Vector3D] = [ship.forward]  # do-nothing baseline
+        candidates: list[Vector3D] = [ship.forward]  # stop-turning baseline
         for t in terminal_threats:
             b = t['bearing']
             candidates.append(b)          # nose-on
@@ -3883,19 +4119,14 @@ class CombatSimulation:
         # later ticks (observed: a lateral-thickest hull overshooting the
         # broadside band toward a thin tail-on facing). Each tick recomputes
         # with a fresh budget, so the command converges as time permits.
+        # Reachability is the real turn from the current attitude AND spin
+        # (_reachable_attitude / _turn_time_to): a ship still swinging away
+        # cannot stop dead, and a far facing it cannot finish is scored where
+        # the turn would actually leave the nose at impact.
         best_dir = ship.forward
         best_score: Optional[tuple] = None
         for cand in candidates:
-            angle = ship.forward.angle_to(cand)
-            if angle <= theta_max or angle <= 1e-6:
-                achieved = cand
-            else:
-                axis = ship.forward.cross(cand)
-                if axis.magnitude < 1e-6:
-                    # 180 deg flip: any axis perpendicular to forward works
-                    axis = ship.up
-                achieved = ship.forward.rotate_around_axis(
-                    axis.normalized(), theta_max).normalized()
+            achieved = self._reachable_attitude(ship, cand, t_go_min, engines_on=True)
             score = self._presentation_score(ship, achieved, terminal_threats)
             if best_score is None or score < best_score:
                 best_score = score
