@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { getNoiseTexture } from './Textures.js';
 import { getGraphicsSettings } from './Quality.js';
+import { Ribbon } from './Trails.js';
 
 /**
  * Fusion torch exhaust as a real volume. Each plume is ONE draw: a convex
@@ -29,6 +30,7 @@ const vertexShader = /* glsl */`
   uniform float uR0;
   uniform float uW;
   uniform vec2 uBend;
+  uniform float uPixelWorld;
   varying vec3 vPos;
   varying vec3 vCam;
   varying float vInside;
@@ -44,15 +46,18 @@ const vertexShader = /* glsl */`
     // the nozzle plane for the throat glow, then out to the plume tip
     float t = clamp(-position.z, 0.0, 1.0);
     float fwd = uR0 * 2.6;
-    vec3 lp = vec3(position.xy * boundR(t), mix(fwd, -uLen, t));
-    vPos = lp;
     vCam = (inverse(modelMatrix) * vec4(cameraPosition, 1.0)).xyz;
+    // Room for the pixel floor of the core and sheath at fleet range
+    float z = mix(fwd, -uLen, t);
+    float pad = 3.2 * uPixelWorld * length(vCam - vec3(0.0, 0.0, z));
+    vec3 lp = vec3(position.xy * (boundR(t) + pad), z);
+    vPos = lp;
     // Camera inside the cone: the front faces are behind it, so the back
     // faces carry the plume instead (see the fragment shader)
     float tc = clamp((fwd - vCam.z) / (fwd + uLen), 0.0, 1.0);
     float margin = 0.6 + 0.3 * uR0;
     vInside = (vCam.z < fwd + margin && vCam.z > -uLen - margin
-      && length(vCam.xy) < boundR(tc) + margin) ? 1.0 : 0.0;
+      && length(vCam.xy) < boundR(tc) * 1.02 + margin) ? 1.0 : 0.0;
     gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(lp, 1.0);
     #include <logdepthbuf_vertex>
   }
@@ -70,6 +75,7 @@ const fragmentShader = /* glsl */`
   uniform float uFlare;
   uniform float uSeed;
   uniform vec2 uBend;    // centreline sweep: lateral offset = uBend * s^2
+  uniform float uPixelWorld;
   uniform vec3 uI;       // core, sheath, halo side-on centreline radiance
   uniform vec3 uCore;
   uniform vec3 uSheath;
@@ -178,8 +184,12 @@ const fragmentShader = /* glsl */`
         float rise = smoothstep(0.0, uR0 * 0.7, s);
         float tip = 1.0 - smoothstep(0.35, 1.0, t);
         float env = rise * tip;
-        float sc = uW * uR0 * (0.34 + 1.0 * t) * pinch;
-        float ss = uW * uR0 * (0.85 + 5.2 * pow(t, 0.6));
+        // Pixel floor: at fleet range the core is thinner than a pixel and
+        // would shimmer or vanish; keep it (and the sheath) a readable
+        // streak that still tells who is burning and which way
+        float px = uPixelWorld * max(te, 0.01);
+        float sc = max(uW * uR0 * (0.34 + 1.0 * t) * pinch, 0.8 * px);
+        float ss = max(uW * uR0 * (0.85 + 5.2 * pow(t, 0.6)), 1.5 * px);
         float sh = uW * uR0 * (1.7 + 8.6 * pow(t, 0.8));
         float ga = a - tcs, gb = b - tcs;
 
@@ -332,6 +342,7 @@ export function createTorch({ radius, length, light = null, tint = 'fusion', int
       uFlare: { value: 0 },
       uSeed: { value: Math.random() },
       uBend: { value: new THREE.Vector2() },
+      uPixelWorld: Ribbon.pixelWorld,
       uI: { value: new THREE.Vector3() },
       uCore: { value: new THREE.Color(...(fusion ? [1.0, 0.96, 1.0] : [1.0, 0.94, 0.82])) },
       uSheath: { value: new THREE.Color(...(fusion ? [0.15, 0.41, 1.0] : [1.0, 0.52, 0.18])) },
