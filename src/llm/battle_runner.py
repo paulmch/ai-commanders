@@ -1678,6 +1678,13 @@ class LLMBattleRunner:
         one captain's wall-clock instead of the fleet's sum. Order delivery
         and reporting stay sequential in fleet order.
         """
+        # A crew incapacitated by plume radiation (src/drive_plume.py) decides
+        # nothing: no captain call, no order applied. An admiral order to it
+        # comes back as an UNABLE report whose compliance says "not executable".
+        crew_out = [entry for entry in captain_entries
+                    if getattr(self.simulation.get_ship(entry[0]), 'crew_incapacitated', False) is True]
+        if crew_out:
+            captain_entries = [entry for entry in captain_entries if entry not in crew_out]
         self._apply_admiral_headings(captain_entries, admiral_orders)
         self._deliver_fleet_messages(captain_entries)
         for ship_id, captain, faction in captain_entries:
@@ -1724,6 +1731,14 @@ class LLMBattleRunner:
                       f"{self._get_ship_status_line(ship_id, commands)}")
             self._finish_captain_turn(ship_id, captain, faction, commands,
                                       admiral_orders.get(ship_id), record=record)
+        for ship_id, captain, faction in crew_out:
+            all_commands[ship_id] = []
+            report = self._build_captain_report(ship_id, captain, faction, [],
+                                                admiral_orders.get(ship_id))
+            if report and self.recorder:
+                self.recorder.record_captain_report(
+                    self.simulation.current_time, ship_id, report,
+                    answers_order_event_id=None, decision_event_id=None)
         return all_commands
 
     def _apply_admiral_headings(
@@ -2440,7 +2455,7 @@ class LLMBattleRunner:
         """
         from .fleet_comms import (
             commanded_target, committed_rounds, compliance, executed_maneuver,
-            fold_admiral_signals, primary_order,
+            fold_admiral_signals, mark_not_executable, primary_order,
         )
         channel = self.fleet_communication
         if not channel or self._llm_admiral(faction) is None:
@@ -2450,7 +2465,13 @@ class LLMBattleRunner:
             return None
         now = self.simulation.current_time
         explicit = getattr(captain, "order_response", None)
-        if explicit:
+        crew_out = getattr(ship, "crew_incapacitated", False) is True
+        if crew_out:
+            fields = {"status": "UNABLE", "reason": "crew incapacitated by plume radiation "
+                      f"({getattr(ship, 'crew_dose_sv', 0.0):.1f} Sv): the ship cannot execute orders - "
+                      "it coasts and does not fire", "intent": "", "contact": None, "request": None}
+            implicit = True
+        elif explicit:
             fields = {k: explicit.get(k) for k in ("status", "reason", "intent", "contact", "request")}
             implicit = False
         elif getattr(captain, "last_call_failed", False):
@@ -2476,6 +2497,9 @@ class LLMBattleRunner:
             "filed_t": now,
             "implicit": implicit,
         }
+        if crew_out:
+            mark_not_executable(report["compliance"])
+        self._note_drive_interlock(report, ship)
         fold_admiral_signals(report, self._admiral_signals.pop(ship_id, []))
         if getattr(captain, "discussions", None):
             report["discussion"] = [{"question": d["question"], "answer": d["answer"]}
@@ -2484,6 +2508,21 @@ class LLMBattleRunner:
             "report": report, "order": order, "executed": executed, "target_id": target_id,
             "cursor": len(self.simulation.events)})
         return report
+
+    def _note_drive_interlock(self, report: Dict[str, Any], ship: Any) -> None:
+        """While the engine's drive interlock holds the ship's throttle
+        (src/drive_plume.py), say so in its report: the reduced burn is the
+        interlock's doing, not a deviation from the order."""
+        try:
+            from ..drive_plume import interlock_status_line
+        except ImportError:  # pragma: no cover - script-style import path
+            from drive_plume import interlock_status_line
+        line = interlock_status_line(self.simulation, ship) if ship is not None else None
+        if not line:
+            return
+        report["drive_interlock"] = line
+        if isinstance(report.get("compliance"), dict):
+            report["compliance"]["interlock"] = line
 
     def _finalize_report(self, entry: Dict[str, Any]) -> Dict[str, Any]:
         """A filed report as its admiral reads it: compliance over the whole interval."""
@@ -2495,6 +2534,10 @@ class LLMBattleRunner:
                            if e.ship_id == ship_id and e.event_type.name == "TORPEDO_LAUNCHED")
             report["compliance"] = compliance(entry["order"], self.fleet_communication,
                                               entry["executed"], entry["target_id"], launched, final=True)
+            if (entry["report"].get("compliance") or {}).get("executable") is False:
+                from .fleet_comms import mark_not_executable
+                mark_not_executable(report["compliance"])
+        self._note_drive_interlock(report, self.simulation.get_ship(ship_id))
         report["ship_lost"] = not ship_alive(self.simulation.get_ship(ship_id))
         report["delivered_t"] = self.simulation.current_time
         return report

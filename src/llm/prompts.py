@@ -2318,6 +2318,10 @@ def format_enemy_contacts(
         line += f" | hull {e.get('hull_percent', 100):.0f}%"
         if not nose == flank == "Intact":     # intact armor goes unsaid (doctrine)
             line += f", nose {nose}, flank {flank}"
+        if e.get("crew_state") == "incapacitated":
+            line += " | NOT MANEUVERING, NOT FIRING (crew incapacitated by plume wash)"
+        elif e.get("crew_state") == "impaired":
+            line += " | crew impaired by plume wash (slower fire)"
         spec = (fleet_data or {}).get("ships", {}).get(stype or "", {})
         if spec:
             armament = format_enemy_weapons_summary(
@@ -3301,6 +3305,13 @@ def _format_now(snapshot: Any, last_failure: Optional[Tuple[float, str]],
             problems.append(f"hull {row.hull_integrity:.0f}%")
         if row.heat_percent >= heat_hold_pct:
             problems.append(f"heat {row.heat_percent:.0f}% (guns hold at {heat_hold_pct:.0f}%)")
+        crew = getattr(row, "crew_state", "fit")
+        dose = getattr(row, "crew_dose_sv", 0.0) or 0.0
+        if crew == "incapacitated":
+            problems.append(f"CREW INCAPACITATED by plume radiation ({dose:.1f} Sv) - CANNOT EXECUTE "
+                            f"ORDERS (coasting, not firing)")
+        elif crew == "impaired":
+            problems.append(f"crew IMPAIRED by plume radiation ({dose:.1f} Sv): weapons cycle slower")
         if problems:
             items.append(f"{_lbl(snapshot, row.ship_id, row.ship_name)}: {', '.join(problems)}")
     if last_failure:
@@ -3345,9 +3356,13 @@ def _compliance_text(compliance: Optional[Dict[str, Any]], snapshot: Any) -> Tup
     if isinstance(verdict, bool) or isinstance(deviations, list):
         lines = [_clip(d, 120) for d in deviations or [] if d] if isinstance(deviations, list) else []
         followed = verdict if isinstance(verdict, bool) else not lines
+        # The engine's drive interlock (a friendly in the jet) is a fact about
+        # the burn, never a deviation.
+        held = compliance.get("interlock")
+        held = [_clip(str(held), 160)] if held else []
         if lines:
-            return "did: " + "; ".join(lines), followed
-        parts = [p for p in (f"flew {em}" if em else "", salvo_text) if p]
+            return "did: " + "; ".join(lines + held), followed
+        parts = [p for p in (f"flew {em}" if em else "", salvo_text) if p] + held
         return ("did: " + ", ".join(parts)) if parts else "", followed
 
     # Legacy record: compare the fields.
@@ -3607,6 +3622,11 @@ def _format_threat_table(snapshot: Any) -> str:
             parts.append(f"hull {e.hull_integrity:.0f}%")
         if e.pd_total:
             parts.append(f"PD {e.pd_operational}/{e.pd_total}")
+        enemy_crew = getattr(e, "crew_state", "fit")
+        if enemy_crew == "incapacitated":
+            parts.append("NOT MANEUVERING, NOT FIRING (crew incapacitated by plume wash)")
+        elif enemy_crew == "impaired":
+            parts.append("crew impaired by plume wash (slower fire)")
         arms = e.armament or ""
         if e.launchers:
             left = max(0, e.magazine - e.torpedoes_launched)

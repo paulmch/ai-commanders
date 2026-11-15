@@ -35,6 +35,15 @@ with open(REPO / "data" / "fleet_ships.json") as f:
 FULL = dp.PLUME_REFERENCE_JET_POWER_W
 
 
+@pytest.fixture(autouse=True)
+def _no_drive_interlock(monkeypatch):
+    """This module pins the wash MODEL (what a ship in a friendly jet takes).
+    The engine's drive interlock, which keeps a friendly out of that
+    situation in the first place, is switched off here and tested in
+    tests/test_drive_interlock.py."""
+    monkeypatch.setattr(dp, "PLUME_INTERLOCK_ENABLED", False)
+
+
 def _ship(sim, ship_id, faction, pos_km, ship_type="cruiser", forward=(1, 0, 0)):
     ship = create_ship_from_fleet_data(
         ship_id, ship_type, faction, FLEET,
@@ -812,9 +821,12 @@ def column_battles(tmp_path_factory):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     out = {}
+    # interlock=False: the scenario's point is the wash itself (the default of
+    # the demo generator); tests/test_drive_interlock.py flies it interlocked.
     for doctrine in ("legacy", "tactical"):
         _, path = module.plume_wash_battle(
-            recording_dir=str(tmp_path_factory.mktemp(doctrine)), doctrine=doctrine)
+            recording_dir=str(tmp_path_factory.mktemp(doctrine)), doctrine=doctrine,
+            interlock=False)
         out[doctrine] = json.loads(Path(path).read_text())
     return out
 

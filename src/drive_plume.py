@@ -162,6 +162,36 @@ PLUME_TORPEDO_KILL_DOSE_GJ = 10.0
 # axis. An actual wash is always shown.
 PLUME_RISK_MIN_GJ_PER_S = 1.0
 
+# DRIVE INTERLOCK. Automatic, in the engine's rule-based layer, for every
+# ship whoever commands it: each tick the main-drive throttle is capped so
+# that the exhaust puts at most PLUME_INTERLOCK_MAX_WASH_GJ_PER_S on any
+# FRIENDLY ship (same faction, alive; a surrendered friendly still has a crew
+# and counts, a dying hulk takes nothing from a wash and does not). Enemies
+# never limit the throttle. Same cone, same thrust-to-wash relation as the
+# damage; the caps of all ships come from the start-of-tick snapshot
+# (CombatSimulation._update_ships), so sides and ship order cannot matter.
+# The cap is conservative where the damage is exact: it takes the PEAK over
+# the swept axis (previous nose -> present nose), opens the cone by the turn
+# the ship can still make this tick (its angular rate x dt +
+# PLUME_INTERLOCK_MARGIN_DEG) and looks at the friendly both where it is and
+# where relative motion puts it a tick later. Below PLUME_INTERLOCK_MIN_THROTTLE
+# the drive is simply held off. A dying hulk's sputtering torch has nobody at
+# the controls and is not interlocked.
+PLUME_INTERLOCK_ENABLED = True
+PLUME_INTERLOCK_MAX_WASH_GJ_PER_S = 0.5
+PLUME_INTERLOCK_MARGIN_DEG = 1.0
+PLUME_INTERLOCK_MIN_THROTTLE = 0.02
+# Exemption for a ship evading a torpedo (RUN / PRESENT / EVADE ...): OFF -
+# the owner's rule is "always". Switch on to let a torpedo dodge keep its
+# throttle.
+PLUME_INTERLOCK_EXEMPT_TORPEDO_EVASION = False
+_EVASION_MODES = ("EVADE", "RUN", "PRESENT", "TANK", "BRACE")
+
+# The fleet datalink (src/llm/fleet_comms.py) reports a friendly as "taking
+# heavy plume wash" when the wash peaked above this rate since the last
+# checkpoint: the rate at which armour and fittings start to burn.
+PLUME_HEAVY_WASH_GJ_PER_S = PLUME_ABLATION_THRESHOLD_GJ_PER_S
+
 # Rule-based captains (src/llm/heuristic_tactics.py) and formation placement
 # (src/llm/fleet_draft.py) keep friendlies out of the cone with this margin:
 # a friendly counts as "in my exhaust" inside PLUME_AVOID_HALF_ANGLE_DEG of
@@ -411,11 +441,160 @@ def compute_washes(sim: Any, throttle_override: Optional[Dict[str, float]] = Non
 
 
 # =============================================================================
+# DRIVE INTERLOCK
+# =============================================================================
+
+def interlock_caps(sim: Any, dt: float) -> Dict[str, Tuple[float, str, float, float]]:
+    """Throttle cap per ship for this tick: {ship_id: (cap, limiting friendly
+    id, its distance km, its angle off the exhaust axis deg)} for every ship
+    whose full-throttle exhaust would put more than
+    PLUME_INTERLOCK_MAX_WASH_GJ_PER_S on a friendly. Pure: reads the current
+    (start-of-tick) state, mutates nothing, no RNG, no events."""
+    if not PLUME_INTERLOCK_ENABLED or not getattr(sim, "plume_wash_enabled", True):
+        return {}
+    ships = [s for s in sim.ships.values()
+             if not s.is_destroyed and not getattr(s, "is_dying", False)]
+    if len(ships) < 2:
+        return {}
+    previous_axes = getattr(sim, "_plume_axes", None) or {}
+    limit_m = PLUME_MAX_RANGE_KM * 1000.0
+    limit2 = limit_m * limit_m
+    data = []
+    for s in ships:
+        p, v = s.position, s.velocity
+        data.append((s, p.x, p.y, p.z, v.x, v.y, v.z))
+    out: Dict[str, Tuple[float, str, float, float]] = {}
+    for e, ex, ey, ez, evx, evy, evz in data:
+        if e.current_maneuver is None:
+            continue                      # nothing ordered: the torch is off
+        power = emitter_jet_power_w(e, 1.0)
+        if power <= 0.0:
+            continue
+        fwd = e.forward
+        axes = None
+        best: Optional[Tuple[float, str, float, float]] = None
+        for f, px, py, pz, fvx, fvy, fvz in data:
+            if f is e or f.faction != e.faction:
+                continue
+            rx, ry, rz = px - ex, py - ey, pz - ez
+            d2 = rx * rx + ry * ry + rz * rz
+            if d2 > limit2 or d2 <= 0.0:
+                continue
+            if axes is None:
+                axes = sweep_axes(previous_axes.get(e.ship_id), (fwd.x, fwd.y, fwd.z))
+                rate_rad = getattr(e, "angular_velocity_rad_s", 0.0) or 0.0
+                margin = math.degrees(abs(rate_rad)) * dt + PLUME_INTERLOCK_MARGIN_DEG
+            worst = 0.0
+            worst_d = worst_angle = 0.0
+            # The friendly now, and where relative motion puts it a tick later.
+            for qx, qy, qz in ((rx, ry, rz),
+                               (rx + (fvx - evx) * dt, ry + (fvy - evy) * dt, rz + (fvz - evz) * dt)):
+                d = math.sqrt(qx * qx + qy * qy + qz * qz)
+                if d <= 0.0:
+                    continue
+                for ax_x, ax_y, ax_z in axes:
+                    cos_angle = -(qx * ax_x + qy * ax_y + qz * ax_z) / d
+                    if cos_angle <= 0.0:
+                        continue
+                    angle = math.degrees(math.acos(min(1.0, cos_angle)))
+                    r = plume_heat_rate_gj_s(power, d / 1000.0, max(0.0, angle - margin))
+                    if r > worst:
+                        worst, worst_d, worst_angle = r, d / 1000.0, angle
+            if worst <= PLUME_INTERLOCK_MAX_WASH_GJ_PER_S:
+                continue
+            cap = PLUME_INTERLOCK_MAX_WASH_GJ_PER_S / worst
+            if cap < PLUME_INTERLOCK_MIN_THROTTLE:
+                cap = 0.0
+            if best is None or cap < best[0]:
+                best = (cap, f.ship_id, worst_d, worst_angle)
+        if best is not None:
+            out[e.ship_id] = best
+    return out
+
+
+def apply_interlock(sim: Any, ship: Any, throttle: float, dt: float) -> float:
+    """The throttle the drive may use this tick (called from _update_ship
+    with the throttle the maneuver wants). Records `drive_interlock`
+    enter / exit events and leaves ship.drive_interlock for the status."""
+    caps = getattr(sim, "_drive_interlock_caps", None)
+    entry = caps.get(ship.ship_id) if caps else None
+    mode = getattr(ship, "execution_mode", "") or ""
+    evading = mode in _EVASION_MODES
+    limited = (entry is not None and throttle > entry[0] + 1e-9
+               and not (PLUME_INTERLOCK_EXEMPT_TORPEDO_EVASION and evading))
+    active = getattr(sim, "_drive_interlock_active", None)
+    if not limited:
+        if getattr(ship, "drive_interlock", None) is not None:
+            ship.drive_interlock = None
+        if active and ship.ship_id in active:
+            episode = active.pop(ship.ship_id)
+            sim._log_event(_event_types(sim).DRIVE_INTERLOCK, ship.ship_id, data={
+                'phase': 'exit', 'friendly_ship_id': episode['friendly'],
+                'duration_s': round(episode['seconds'], 1),
+                'min_throttle_cap': round(episode['min_cap'], 3),
+                'evading_s': round(episode['evading'], 1)})
+        return throttle
+    cap, friendly_id, d_km, angle = entry
+    if active is None:
+        active = sim._drive_interlock_active = {}
+    stats = getattr(sim, "_drive_interlock_stats", None)
+    if stats is None:
+        stats = sim._drive_interlock_stats = {'ship_seconds': 0.0, 'evading_ship_seconds': 0.0,
+                                              'episodes': 0}
+    stats['ship_seconds'] += dt
+    stats['evading_ship_seconds'] += dt if evading else 0.0
+    episode = active.get(ship.ship_id)
+    if episode is None:
+        stats['episodes'] += 1
+        active[ship.ship_id] = episode = {'friendly': friendly_id, 'seconds': 0.0,
+                                          'min_cap': cap, 'evading': 0.0}
+        sim._log_event(_event_types(sim).DRIVE_INTERLOCK, ship.ship_id, data={
+            'phase': 'enter', 'friendly_ship_id': friendly_id,
+            'throttle_cap': round(cap, 3), 'ordered_throttle': round(throttle, 3),
+            'distance_km': round(d_km, 2), 'off_axis_deg': round(angle, 2),
+            'evading': evading, 'mode': mode})
+    episode['seconds'] += dt
+    episode['evading'] += dt if evading else 0.0
+    episode['min_cap'] = min(episode['min_cap'], cap)
+    episode['friendly'] = friendly_id
+    ship.drive_interlock = {'throttle_cap': cap, 'ordered_throttle': throttle,
+                            'friendly_ship_id': friendly_id, 'distance_km': d_km,
+                            'off_axis_deg': angle, 'evading': evading}
+    return cap
+
+
+def interlock_stats(sim: Any) -> dict:
+    """Ship-seconds the interlock limited a drive so far (a copy)."""
+    return dict(getattr(sim, "_drive_interlock_stats", None)
+                or {'ship_seconds': 0.0, 'evading_ship_seconds': 0.0, 'episodes': 0})
+
+
+def interlock_status_line(sim: Any, ship: Any) -> Optional[str]:
+    """'DRIVE INTERLOCK: throttle held at 20 % of the ordered 100 %: friendly
+    TIS Dart-2 is 14 km astern in the jet' while the interlock limits the ship."""
+    state = getattr(ship, "drive_interlock", None)
+    if not isinstance(state, dict):
+        return None
+    ships = getattr(sim, "ships", None)
+    friend = ships.get(state['friendly_ship_id']) if isinstance(ships, dict) else None
+    name = _name(friend) if friend is not None else state['friendly_ship_id']
+    return (f"DRIVE INTERLOCK: throttle held at {state['throttle_cap'] * 100:.0f} % of the ordered "
+            f"{state['ordered_throttle'] * 100:.0f} %: friendly {name} is "
+            f"{state['distance_km']:.0f} km astern in the jet")
+
+
+# =============================================================================
 # ENGINE HOOK
 # =============================================================================
 
 def _event_types(sim: Any) -> Any:
-    return sys.modules[type(sim).__module__].SimulationEventType
+    """SimulationEventType of the module that defines this simulation (or,
+    for the prediction shadow, its CombatSimulation base)."""
+    for cls in type(sim).__mro__:
+        found = getattr(sys.modules.get(cls.__module__), "SimulationEventType", None)
+        if found is not None:
+            return found
+    raise AttributeError("SimulationEventType")
 
 
 def _state(sim: Any) -> dict:
@@ -727,13 +906,16 @@ def plume_status_lines(sim: Any, ship: Any) -> List[str]:
     if getattr(ship, "is_destroyed", False) or getattr(ship, "is_dying", False):
         return []
     lines: List[str] = []
+    held = interlock_status_line(sim, ship)
+    if held:
+        lines.append(held)
     crew: List[str] = []         # the dose line goes after the wash warnings
     dose = getattr(ship, "crew_dose_sv", 0.0)
     if isinstance(dose, (int, float)) and dose >= 0.05:
         state = crew_state(ship)
         if state == "incapacitated":
             crew.append(f"CREW INCAPACITATED by plume radiation ({dose:.1f} Sv): the ship no "
-                         f"longer fights or maneuvers")
+                         f"longer fights or maneuvers and CANNOT EXECUTE ORDERS")
         elif state == "impaired":
             crew.append(f"CREW IMPAIRED by plume radiation ({dose:.1f} Sv, incapacitated at "
                          f"{PLUME_CREW_INCAPACITATED_SV:.0f}): weapons cycle "

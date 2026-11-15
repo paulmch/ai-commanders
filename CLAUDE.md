@@ -146,7 +146,15 @@ ai-commanders/
   cycle x1.5), 8 Sv = incapacitated (`crew_incapacitated`: coasts, never fires,
   cannot deal damage for the victory rule); `crew_radiation` events. No RNG,
   order-independent, off in the torpedo forecast shadow
-  (`sim.plume_wash_enabled`). Torpedoes are affected only behind
+  (`sim.plume_wash_enabled`). Drive interlock (`interlock_caps` /
+  `apply_interlock`, always on, also while evading; exemption constant
+  `PLUME_INTERLOCK_EXEMPT_TORPEDO_EVASION` is off): every ship's throttle is
+  capped each tick, from the start-of-tick snapshot, so its exhaust puts at
+  most 0.5 GJ/s on a FRIENDLY ship; enemies never limit it; `drive_interlock`
+  events, "DRIVE INTERLOCK: throttle held ..." status. An incapacitated crew is
+  asked nothing by the runner (UNABLE report, compliance "not executable"),
+  MCP commands to it are rejected; crew state and heavy wash go out on the
+  FLEET NET datalink (`CREW_STATE`, `PLUME_WASH`). Torpedoes are affected only behind
   `PLUME_AFFECTS_TORPEDOES` (off). Tactical heuristic captains ease the drive
   for a friendly astern (`heuristic_tactics.plume_safe_throttle`); commanders
   see PLUME WASH / PLUME RISK status lines

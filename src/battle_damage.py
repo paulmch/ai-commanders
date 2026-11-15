@@ -686,14 +686,25 @@ def damaged_fitting_lines(ship: "ShipCombatState") -> List[str]:
     weapons = getattr(ship, "weapons", None)
     for slot, ws in (weapons.items() if isinstance(weapons, dict) else ()):
         health = getattr(ws, "mount_health", 100.0)
+        # An irradiated (impaired) crew cycles every gun and tube slower
+        # (src/drive_plume.py); the line shows the combined factor.
+        crew = getattr(ws, "crew_cycle_factor", 1.0)
+        crew = crew if isinstance(crew, (int, float)) and crew > 1.0 else 1.0
         if (slot.startswith("pd") or not getattr(ws, "is_operational", True)
-                or not isinstance(health, (int, float)) or health >= 100.0):
+                or not isinstance(health, (int, float))
+                or (health >= 100.0 and crew == 1.0)):
             continue
         name = getattr(getattr(ws, "weapon", None), "name", None) or slot
         if "torpedo" in name.lower():
             name = "Torpedo Launcher"
-        lines.append(f"{name} [{slot}] DAMAGED {health:.0f} %, "
-                     f"cycle x{mount_cooldown_factor(health):.1f}")
+        if health >= 100.0:
+            lines.append(f"{name} [{slot}] crew impaired, cycle x{crew:.1f}")
+        elif crew > 1.0:
+            lines.append(f"{name} [{slot}] DAMAGED {health:.0f} %, crew impaired, "
+                         f"cycle x{mount_cooldown_factor(health) * crew:.1f}")
+        else:
+            lines.append(f"{name} [{slot}] DAMAGED {health:.0f} %, "
+                         f"cycle x{mount_cooldown_factor(health):.1f}")
     turrets = getattr(ship, "point_defense", None)
     for i, pd in enumerate(turrets if isinstance(turrets, (list, tuple)) else ()):
         health = getattr(pd, "mount_health", 100.0)

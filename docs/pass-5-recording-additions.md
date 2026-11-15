@@ -504,6 +504,80 @@ Example (demo recording, t = 50 s):
 The demo recording has no `incapacitated` event (same shape, `state:
 "incapacitated"`, `threshold_sv: 8.0`, `cooldown_factor: null`).
 
+### `drive_interlock` - the engine held a ship's throttle for a friendly in its jet
+
+`ship_id` = the ship whose main drive is being limited. Every ship has the
+interlock, whoever commands it (LLM, MCP, rule-based; also while evading):
+each tick its throttle is capped so that its exhaust puts at most 0.5 GJ/s on
+any friendly ship (same faction; a surrendered friendly counts, a dying hulk
+does not; enemies never limit it). The caps of all ships come from one
+start-of-tick snapshot. Frames show it as `thrust` below `requested_thrust`.
+
+- `phase: "enter"` on the first tick the cap is below the throttle the
+  maneuver wants;
+- `phase: "exit"` on the first tick it no longer is (the friendly cleared the
+  jet, or the ship stopped wanting to burn). A battle that ends while a ship
+  is held has no `exit`.
+
+| field | type | meaning |
+|---|---|---|
+| `phase` | string | `"enter"` or `"exit"` |
+| `friendly_ship_id` | string | the friendly the cap protects (the most limiting one; on `exit` the last one) |
+| `throttle_cap` | float 0-1 | `enter`: the throttle allowed (0 = drive held off) |
+| `ordered_throttle` | float 0-1 | `enter`: the throttle the maneuver wanted |
+| `distance_km` | float | `enter`: distance to that friendly |
+| `off_axis_deg` | float | `enter`: its angle off the exhaust axis |
+| `evading` | bool | `enter`: the ship was in a threat-evasion mode (EVADE / RUN / PRESENT / TANK / BRACE) |
+| `mode` | string | `enter`: the ship's execution mode at that moment |
+| `duration_s` | float | `exit`: how long the throttle was held |
+| `min_throttle_cap` | float | `exit`: the lowest cap of the episode |
+| `evading_s` | float | `exit`: seconds of it spent in a threat-evasion mode |
+
+Example (demo `p5_plume_interlock_demo.json`, t = 30 s and 60 s):
+
+```json
+{"event_id": "e64", "sequence": 64, "timestamp": 30.0, "event_type": "drive_interlock", "ship_id": "alpha_1", "data": {"phase": "enter", "friendly_ship_id": "alpha_2", "throttle_cap": 0.037, "ordered_throttle": 1.0, "distance_km": 11.0, "off_axis_deg": 1.04, "evading": false, "mode": "COAST", "target_id": null}}
+{"event_id": "e147", "sequence": 147, "timestamp": 60.0, "event_type": "drive_interlock", "ship_id": "alpha_1", "data": {"phase": "exit", "friendly_ship_id": "alpha_2", "duration_s": 30.0, "min_throttle_cap": 0.0, "evading_s": 0.0, "target_id": null}}
+```
+
+Demo: `visualizer/public/recordings/p5_plume_interlock_demo.json` (not
+committed) - the column battle of the plume demo below with the interlock on:
+
+```bash
+uv run python scripts/generate_test_battle.py drive_interlock --recording-dir /tmp/p5_interlock --out visualizer/public/recordings/p5_plume_interlock_demo.json
+```
+
+- t = 30-60 s: battleship `alpha_1` is held at 4 % -> 0 % of its ordered
+  100 % while destroyer `alpha_2` is 11 km astern in its jet;
+- t = 69-161 s: `alpha_2`, now ahead, is held at 7-32 % of its ordered 70 %
+  while `alpha_1` is astern of it (again briefly at 162-166 s);
+- friendly `plume_wash` never exceeds 0.49 GJ/s, the largest crew dose is
+  0.07 Sv, no `mount_damaged`, no `crew_radiation`.
+
+### Fleet-net datalink messages (`comms_message`, `sender_role: "engine"`)
+
+Two new `kind`s on the FLEET NET, recorded like the existing datalink
+traffic (`LAUNCH`, `KILL`, `LOSS`, `PD_LOSS`, `TARGET`):
+
+- `CREW_STATE` - a crew crossed a radiation threshold since the last
+  checkpoint. To the ship's own fleet (all but the ship itself): "TIS B CREW
+  IMPAIRED by plume radiation (2.4 Sv): its weapons cycle x1.5 slower" /
+  "TIS B CREW INCAPACITATED by plume radiation (8.8 Sv): it cannot fight,
+  maneuver or execute orders" (`structured`: `subject_id`, `crew_state`,
+  `dose_sv`, `source_ship_id`). To the other fleet, as seen from outside:
+  "TIS B took heavy plume wash from TIS A: crew impaired, slower fire" /
+  "TIS B has stopped maneuvering and firing after plume wash from TIS A: crew
+  incapacitated" (`structured.observed: true`, no dose).
+- `PLUME_WASH` - a friendly took a wash that peaked above 4 GJ/s since the
+  last checkpoint: "TIS B is taking heavy plume wash in TIS A's exhaust (11 s,
+  peak +32.8 GJ/s, 361 GJ, crew dose 8.8 Sv)" ("took" once the episode has
+  ended). Own fleet only.
+
+A `captain_report` for a ship whose crew is incapacitated is filed by the
+runner without a captain call: `status: "UNABLE"`, `implicit: true`, and its
+`compliance` carries `executable: false`, `followed: false` and the leading
+deviation `"not executable: crew incapacitated by plume radiation"`.
+
 ### Torpedoes in the plume (switch OFF in pass 5)
 
 `drive_plume.PLUME_AFFECTS_TORPEDOES` is `False`: recordings made with the
@@ -525,6 +599,10 @@ accumulates a dose (the ship-equivalent heat it flew through):
 `visualizer/public/recordings/p5_plume_demo.json` - a seeded battle from
 fixed start positions with per-tick frames and predicted paths (no LLM),
 180 s long, legacy heuristic captains (they know nothing of the plume).
+**The drive interlock is switched off for this recording** (the generator's
+default for this scenario), otherwise the battleship's throttle would be held
+and nothing below would happen; see `drive_interlock` above for the same
+battle with it on.
 Regenerate it (offline, no API key, a few seconds):
 
 ```bash

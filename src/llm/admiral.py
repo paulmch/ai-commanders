@@ -30,6 +30,15 @@ if TYPE_CHECKING:
 
 
 
+def _crew_state(ship):
+    """drive_plume.crew_state (works for both import styles)."""
+    try:
+        from ..drive_plume import crew_state
+    except ImportError:
+        from drive_plume import crew_state
+    return crew_state(ship)
+
+
 def _plume_status_lines(simulation, ship):
     """drive_plume.plume_status_lines (works for both import styles)."""
     try:
@@ -339,6 +348,10 @@ class FriendlyShipSnapshot:
     fittings_damaged: List[str] = field(default_factory=list)
     # Drive plume wash warnings (drive_plume.plume_status_lines).
     plume_wash: List[str] = field(default_factory=list)
+    # Crew radiation state (drive_plume.crew_state) and dose; an
+    # incapacitated crew cannot execute orders.
+    crew_state: str = "fit"
+    crew_dose_sv: float = 0.0
 
 
 @dataclass
@@ -368,6 +381,9 @@ class EnemyShipSnapshot:
     accel_g: float = 0.0
     pd_operational: int = 0
     pd_total: int = 0
+    # Observed from outside, like hull and PD: "fit", "impaired" (it took a
+    # heavy plume wash) or "incapacitated" (it no longer maneuvers or fires).
+    crew_state: str = "fit"
     armament: str = ""
     launchers: int = 0
     magazine: int = 0
@@ -733,7 +749,11 @@ Be authentic to how you would command a fleet as {model_name}."""
             ship_id = getattr(captain, 'ship_id', None)
             if ship_id:
                 ship = simulation.get_ship(ship_id)
-                if ship and not ship.is_destroyed:
+                # A crew incapacitated by plume radiation cannot execute
+                # anything: it stays in the fleet picture (marked), but no
+                # per-ship order call is spent on it.
+                if (ship and not ship.is_destroyed
+                        and getattr(ship, 'crew_incapacitated', False) is not True):
                     active_ships.append({
                         'ship_id': ship_id,
                         'ship_name': captain.ship_name,
@@ -1491,6 +1511,8 @@ Be authentic to how you would command a fleet as {model_name}."""
             weapons_destroyed=weapons_destroyed,
             fittings_damaged=_damaged_fitting_lines(ship),
             plume_wash=_plume_status_lines(simulation, ship),
+            crew_state=_crew_state(ship),
+            crew_dose_sv=float(getattr(ship, "crew_dose_sv", 0.0) or 0.0),
             current_maneuver=maneuver_str,
             current_target=ship.primary_target_id if hasattr(ship, 'primary_target_id') else None,
             radiators_extended=ship.radiators_extended if hasattr(ship, 'radiators_extended') else False,
@@ -1548,6 +1570,7 @@ Be authentic to how you would command a fleet as {model_name}."""
             accel_g=intel.max_accel_ms2(ship) / 9.80665,
             pd_operational=pd_op,
             pd_total=pd_total,
+            crew_state=_crew_state(ship),
             armament=armament["summary"],
             launchers=armament["launchers"],
             magazine=armament["magazine"],

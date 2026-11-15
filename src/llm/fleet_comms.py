@@ -35,13 +35,15 @@ SIGNAL_KILL = "KILL"
 SIGNAL_LOSS = "LOSS"
 SIGNAL_PD_LOSS = "PD_LOSS"
 SIGNAL_TARGET = "TARGET"
+SIGNAL_CREW = "CREW_STATE"      # a crew impaired / incapacitated by plume radiation
+SIGNAL_PLUME = "PLUME_WASH"     # a friendly taking heavy drive-plume wash
 
 DATALINK_NAME = "FLEET DATALINK"
 
 # Inbox priority: LLM-authored traffic first (direct > admiral > fleet net >
 # enemy channel), then the datalink (deaths > PD losses > launches).
-_ENGINE_PRIORITY = {SIGNAL_KILL: 0, SIGNAL_LOSS: 0, SIGNAL_PD_LOSS: 1, SIGNAL_LAUNCH: 2,
-                    SIGNAL_TARGET: 3}
+_ENGINE_PRIORITY = {SIGNAL_KILL: 0, SIGNAL_LOSS: 0, SIGNAL_CREW: 0, SIGNAL_PD_LOSS: 1,
+                    SIGNAL_PLUME: 1, SIGNAL_LAUNCH: 2, SIGNAL_TARGET: 3}
 _CHANNEL_PRIORITY = {CHANNEL_DIRECT: 0, CHANNEL_ADMIRAL_TO_CAPTAIN: 1, CHANNEL_FLEET_NET: 2,
                      CHANNEL_ENEMY: 3}
 
@@ -313,6 +315,15 @@ def fold_admiral_signals(report: Dict[str, Any], signals: List[Dict[str, Any]]) 
 # Engine datalink: auto-signals without an LLM call
 # ---------------------------------------------------------------------------
 
+def _heavy_wash_rate() -> float:
+    """drive_plume.PLUME_HEAVY_WASH_GJ_PER_S (works for both import styles)."""
+    try:
+        from ..drive_plume import PLUME_HEAVY_WASH_GJ_PER_S
+    except ImportError:
+        from drive_plume import PLUME_HEAVY_WASH_GJ_PER_S
+    return PLUME_HEAVY_WASH_GJ_PER_S
+
+
 def torpedo_eta(torp_flight: Any, target: Any) -> Optional[float]:
     """Seconds to impact of one round on its target, None when not closing."""
     torp = torp_flight.torpedo
@@ -332,6 +343,23 @@ def torpedo_etas(simulation: Any, source_id: str, target_id: str) -> List[float]
     etas = (torpedo_eta(tf, target) for tf in getattr(simulation, "torpedoes", None) or []
             if tf.source_ship_id == source_id and tf.torpedo.target_id == target_id)
     return [eta for eta in etas if eta is not None]
+
+
+CREW_OUT_REASON = "crew incapacitated by plume radiation"
+
+
+def mark_not_executable(record: Optional[Dict[str, Any]], why: str = CREW_OUT_REASON) -> Optional[Dict[str, Any]]:
+    """A compliance record for an order its ship could not execute at all
+    (an incapacitated crew): never 'followed', the reason leads the
+    deviations. None stays None (the ship had no order)."""
+    if not isinstance(record, dict):
+        return record
+    line = f"not executable: {why}"
+    deviations = [d for d in record.get("deviations") or [] if d != line]
+    record["deviations"] = [line] + deviations
+    record["followed"] = False
+    record["executable"] = False
+    return record
 
 
 @dataclass
@@ -390,8 +418,18 @@ class EngineDatalink:
 
         launches: Dict[Tuple[str, str], int] = {}
         deaths: List[Tuple[str, Optional[str]]] = []
+        crew_events: List[Any] = []
+        washes: Dict[str, Dict[str, Any]] = {}       # victim -> strongest heavy wash data
         for event in events:
             kind = event.event_type.name
+            if kind == "CREW_RADIATION" and event.ship_id:
+                crew_events.append(event)
+            elif kind == "PLUME_WASH" and event.ship_id and (event.data or {}).get("friendly"):
+                data = event.data
+                if (data.get("peak_heat_rate_gj_s") or 0.0) >= _heavy_wash_rate():
+                    best = washes.get(event.ship_id)
+                    if best is None or (data.get("heat_gj") or 0.0) >= (best.get("heat_gj") or 0.0):
+                        washes[event.ship_id] = data
             if kind == "TORPEDO_LAUNCHED" and event.ship_id and event.target_id:
                 key = (event.ship_id, event.target_id)
                 launches[key] = launches.get(key, 0) + 1
@@ -455,6 +493,59 @@ class EngineDatalink:
                        alive_ids(faction, exclude=sid),
                        {"subject_id": sid, "subject_name": name, "pd_operational": ready,
                         "pd_total": total, "pd_lost": before - ready})
+            if msg:
+                out.append(msg)
+
+        # Crew radiation thresholds (src/drive_plume.py): the ship's own fleet
+        # gets the gauge reading, the other fleet what can be seen from
+        # outside (the wash, and a ship that stopped maneuvering and firing).
+        for event in crew_events:
+            sid, data = event.ship_id, event.data or {}
+            own_faction = channel.get_faction(sid)
+            ship = simulation.get_ship(sid)
+            if not own_faction or not ship_alive(ship):
+                continue
+            name = channel.ship_name(sid)
+            source = data.get("source_ship_id")
+            source_name = channel.ship_name(source) if source else "a drive plume"
+            state, dose = data.get("state"), float(data.get("dose_sv") or 0.0)
+            structured = {"subject_id": sid, "subject_name": name, "crew_state": state,
+                          "source_ship_id": source, "source_name": source_name}
+            for faction in sorted({f for (_, _, f) in channel.ships.values()}):
+                own = faction == own_faction
+                if state == "incapacitated":
+                    text = (f"{name} CREW INCAPACITATED by plume radiation ({dose:.1f} Sv): "
+                            f"it cannot fight, maneuver or execute orders" if own else
+                            f"{name} has stopped maneuvering and firing after plume wash from "
+                            f"{source_name}: crew incapacitated")
+                else:
+                    text = (f"{name} CREW IMPAIRED by plume radiation ({dose:.1f} Sv): "
+                            f"its weapons cycle x{data.get('cooldown_factor') or 1.5:.1f} slower" if own else
+                            f"{name} took heavy plume wash from {source_name}: crew impaired, "
+                            f"slower fire")
+                msg = make(faction, SIGNAL_CREW, text,
+                           alive_ids(faction, exclude=sid if own else None),
+                           dict(structured, dose_sv=round(dose, 2)) if own else dict(structured, observed=True))
+                if msg:
+                    out.append(msg)
+
+        for sid, data in sorted(washes.items()):
+            faction = channel.get_faction(sid)
+            if not faction or not ship_alive(simulation.get_ship(sid)):
+                continue
+            name = channel.ship_name(sid)
+            source = data.get("source_ship_id")
+            source_name = channel.ship_name(source) if source else "?"
+            ongoing = data.get("phase") != "exit"
+            text = (f"{name} {'is taking' if ongoing else 'took'} heavy plume wash in {source_name}'s "
+                    f"exhaust ({data.get('duration_s', 0):.0f} s, peak +{data.get('peak_heat_rate_gj_s', 0):.1f} "
+                    f"GJ/s, {data.get('heat_gj', 0):.0f} GJ, crew dose {data.get('crew_dose_sv', 0) or 0:.1f} Sv)")
+            msg = make(faction, SIGNAL_PLUME, text, alive_ids(faction, exclude=sid), {
+                "subject_id": sid, "subject_name": name, "source_ship_id": source,
+                "source_name": source_name, "ongoing": ongoing,
+                "duration_s": data.get("duration_s"), "heat_gj": data.get("heat_gj"),
+                "peak_heat_rate_gj_s": data.get("peak_heat_rate_gj_s"),
+                "crew_dose_sv": data.get("crew_dose_sv")})
             if msg:
                 out.append(msg)
 
