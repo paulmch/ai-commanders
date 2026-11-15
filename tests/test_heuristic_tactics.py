@@ -528,11 +528,19 @@ def test_a_lone_disarmed_ship_surrenders():
     # its own left to protect - it surrenders instead of fleeing forever.
     sim = CombatSimulation(seed=8, time_step=1.0)
     me = _ship(sim, "me", "destroyer", "alpha", (0, 0, 0))
-    _ship(sim, "foe", "destroyer", "beta", (300, 0, 0), fwd=(-1, 0, 0))
+    _ship(sim, "foe", "destroyer", "beta", (200, 0, 0), vel_kps=(-1.0, 0, 0), fwd=(-1, 0, 0))
     _wreck_guns(me)
     captain = _captain("destroyer")
     captain.decide("me", sim)
-    assert captain.has_surrendered
+    assert captain.has_surrendered            # an equal-drive gun ship is closing in
+    # Nobody closing: it withdraws out of gun reach instead (round 5).
+    sim3 = CombatSimulation(seed=8, time_step=1.0)
+    me3 = _ship(sim3, "me", "destroyer", "alpha", (0, 0, 0))
+    _ship(sim3, "foe", "destroyer", "beta", (300, 0, 0), fwd=(-1, 0, 0))
+    _wreck_guns(me3)
+    captain3 = _captain("destroyer")
+    captain3.decide("me", sim3)
+    assert not captain3.has_surrendered
     # With an armed friend still fighting it withdraws instead.
     sim2 = CombatSimulation(seed=8, time_step=1.0)
     me2 = _ship(sim2, "me", "destroyer", "alpha", (0, 0, 0))
@@ -683,3 +691,19 @@ def test_a_lead_with_a_friend_in_its_jet_side_slips_instead_of_idling():
         import math
         h = m.heading_direction
         assert h["x"] / math.sqrt(h["x"] ** 2 + h["y"] ** 2 + h["z"] ** 2) >= math.cos(math.radians(46))
+
+
+def test_a_dry_torpedo_fleet_does_not_surrender_with_its_salvo_in_flight(tmp_path):
+    # Round 5: six corvettes v a gun line launched all their rounds and
+    # surrendered at the next checkpoint with 36 still in flight.
+    from src.llm.fleet_draft import auto_draft
+    gunline = tuple(s.ship_type for s in auto_draft("beta", budget=150, seed=1, doctrine="gunline").ships)
+    _, rec = _small_battle(tmp_path, TACTICAL, hulls=("corvette",) * 6, beta_hulls=gunline,
+                           seed=1, time_limit=420.0, distance_km=500.0)
+    frames = {round(f["t"]): f for f in rec["sim_trace"]}
+    surrenders = [e for e in rec["events"] if e["event_type"] == "surrender"
+                  and str(e.get("ship_id") or "").startswith("alpha")]
+    for e in surrenders:
+        frame = frames.get(round(e["timestamp"])) or frames[max(k for k in frames if k <= e["timestamp"])]
+        in_flight = [t for t in frame.get("torpedoes", []) if str(t.get("id", "")).startswith("torp_alpha")]
+        assert not in_flight, (e["timestamp"], len(in_flight))
