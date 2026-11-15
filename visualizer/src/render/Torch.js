@@ -39,7 +39,7 @@ const vertexShader = /* glsl */`
 
   // Linear in t, so the bound stays a convex cone; the last term makes room
   // for the swept centreline (uBend * s^2, at most its tip offset)
-  float boundR(float t) { return uW * uR0 * mix(3.8, 15.0, t) + t * length(uBend) * uLen * uLen; }
+  float boundR(float t) { return uW * uR0 * mix(3.8, 11.0, t) + t * length(uBend) * uLen * uLen; }
 
   void main() {
     // Unit cone (z 0 .. -1, radius 1) shaped here: a short collar forward of
@@ -74,6 +74,7 @@ const fragmentShader = /* glsl */`
   uniform float uDiamonds;
   uniform float uFlare;
   uniform float uSeed;
+  uniform float uPhase;  // per-bell shock cell phase 0..1
   uniform vec2 uBend;    // centreline sweep: lateral offset = uBend * s^2
   uniform float uPixelWorld;
   uniform vec3 uI;       // core, sheath, halo side-on centreline radiance
@@ -140,7 +141,9 @@ const fragmentShader = /* glsl */`
       float sinT = sqrt(dd);
       float tc = -dot(ro.xy, rd.xy) / dd;          // closest approach to the axis
       vec2 qc = ro.xy + rd.xy * tc;
-      float lam = uR0 * (4.0 + 3.0 * uThrust);     // shock cell length
+      // shock cell length, a little different on every bell (uPhase) so a
+      // cluster's cells never line up in rows across the plumes
+      float lam = uR0 * (4.0 + 3.0 * uThrust) * (0.86 + 0.28 * uPhase);
       // Down the axis (a chase camera sitting in the exhaust) the wide layers
       // are the whole plume deep: keep them a haze, not a blue screen
       float wide = mix(0.22, 1.0, smoothstep(0.05, 0.6, sinT));
@@ -172,12 +175,12 @@ const fragmentShader = /* glsl */`
         float haloTurb = mix(1.0, 0.4 + 1.2 * n1, rough);
 
         // Shock diamonds: the core necks down and flares at each cell
-        float ph = 6.28318 * s / lam - 2.0;
+        float ph = 6.28318 * s / lam - 2.0 - 6.28318 * uPhase;
         // (each cell weaker and blurrier than the last: three or four read,
         // then turbulence has eaten the pattern)
-        float cell = exp(-s / (lam * 1.7)) * uDiamonds;
+        float cell = exp(-s / (lam * 1.25)) * uDiamonds;
         float pinch = 1.0 - 0.4 * cos(ph) * cell;
-        float knot = 1.0 + 3.6 * pow(0.5 + 0.5 * cos(ph), mix(2.0, 5.0, cell)) * cell;
+        float knot = 1.0 + 2.4 * pow(0.5 + 0.5 * cos(ph), mix(1.3, 3.0, cell)) * cell;
         // Pressure pulses running down the sheath (slow: no strobing)
         float pulse = 1.0 + 0.14 * sin(6.28318 * (s / (uR0 * 24.0) - uTime * 0.8 + uSeed));
 
@@ -188,9 +191,9 @@ const fragmentShader = /* glsl */`
         // would shimmer or vanish; keep it (and the sheath) a readable
         // streak that still tells who is burning and which way
         float px = uPixelWorld * max(te, 0.01);
-        float sc = max(uW * uR0 * (0.34 + 1.0 * t) * pinch, 0.8 * px);
-        float ss = max(uW * uR0 * (0.85 + 5.2 * pow(t, 0.6)), 1.5 * px);
-        float sh = uW * uR0 * (1.7 + 8.6 * pow(t, 0.8));
+        float sc = max(uW * uR0 * (0.34 + 0.7 * t) * pinch, 0.8 * px);
+        float ss = max(uW * uR0 * (0.85 + 2.9 * pow(t, 0.7)), 1.5 * px);
+        float sh = uW * uR0 * (1.7 + 6.2 * pow(t, 0.8));
         float ga = a - tcs, gb = b - tcs;
 
         // White-hot only at the throat and in the knots; the core cools to
@@ -279,6 +282,31 @@ export function plumeShape(thrust) {
   };
 }
 
+/** Throttle slope (1/s) at which the ignition / shutdown transient saturates. */
+export const TRANSIENT_RATE = 0.55;
+/** Ignition: throat flare, core and shock knots flare up by 1 + these. */
+export const IGNITION_FLARE = 1.8;
+export const IGNITION_CORE = 0.55;
+export const IGNITION_KNOTS = 1.2;
+/** Shutdown: the core loses this fraction while the plume widens by 1 + bloom. */
+export const SHUTDOWN_CORE = 0.6;
+export const SHUTDOWN_BLOOM = 0.35;
+const _transient = { surge: 0, fade: 0 };
+
+/**
+ * Drive transient from the recorded throttle slope `rate` (per second, from
+ * two neighbouring trace frames): surge 0..1 while the throttle is coming
+ * up (light-off: hot throat, hard shock knots), fade 0..1 while it is
+ * coming down (the core gutters, the plume blooms out and thins). A pure
+ * function of the recording, so a scrub shows the same transient.
+ */
+export function plumeTransient(rate, out = { surge: 0, fade: 0 }) {
+  const r = Number.isFinite(rate) ? rate / TRANSIENT_RATE : 0;
+  out.surge = r > 0 ? Math.min(1, r) : 0;
+  out.fade = r < 0 ? Math.min(1, -r) : 0;
+  return out;
+}
+
 /** Extra core/sheath level of a dying drive at full sputter (x 1 + this). */
 export const DYING_GASP = 1.6;
 
@@ -338,7 +366,7 @@ export function plumeSweep(wx, wy, out = { x: 0, y: 0 }) {
  *   intensity - overall level scale
  *   cluster   - number of bells in the drive this nozzle belongs to
  */
-export function createTorch({ radius, length, light = null, tint = 'fusion', intensity = 1, cluster = 1 }) {
+export function createTorch({ radius, length, light = null, tint = 'fusion', intensity = 1, cluster = 1, phase: cellPhase = null }) {
   const group = new THREE.Group();
   const fusion = tint === 'fusion';
   const I = intensity;
@@ -369,6 +397,7 @@ export function createTorch({ radius, length, light = null, tint = 'fusion', int
       uDiamonds: { value: fusion ? 1.0 : 0.35 },
       uFlare: { value: 0 },
       uSeed: { value: Math.random() },
+      uPhase: { value: cellPhase ?? Math.random() },
       uBend: { value: new THREE.Vector2() },
       uPixelWorld: Ribbon.pixelWorld,
       uI: { value: new THREE.Vector3() },
@@ -386,6 +415,7 @@ export function createTorch({ radius, length, light = null, tint = 'fusion', int
     blendDst: THREE.OneFactor,
     blendEquation: THREE.AddEquation
   });
+  const diamonds = material.uniforms.uDiamonds.value;
   const plume = new THREE.Mesh(coneGeometry(), material);
   plume.frustumCulled = false;
   plume.renderOrder = 20;
@@ -417,7 +447,7 @@ export function createTorch({ radius, length, light = null, tint = 'fusion', int
      *                              frame (rad/s): the plume sweeps behind a
      *                              turning stern
      */
-    update(thrust, time, sputter = 0, sputterTime = undefined, turn = null) {
+    update(thrust, time, sputter = 0, sputterTime = undefined, turn = null, rate = 0) {
       state.thrust = thrust;
       if (thrust < 0.015) {
         group.visible = false;
@@ -434,6 +464,13 @@ export function createTorch({ radius, length, light = null, tint = 'fusion', int
         breathe *= 1 - sputter * 0.75 * torchCough(sputterTime ?? time);
         gasp = 1 + DYING_GASP * sputter;
       }
+      // Ignition / shutdown from the recorded throttle slope (battle time)
+      const tr = plumeTransient(rate, _transient);
+      if (tr.fade > 0) {
+        // confinement letting go: the core gutters while the plume blooms out
+        const cough = torchCough(sputterTime ?? time);
+        breathe *= 1 - 0.45 * tr.fade * cough;
+      }
       const shape = plumeShape(thrust);
       shared.uTime.value = time;
       u.uThrust.value = thrust;
@@ -445,9 +482,12 @@ export function createTorch({ radius, length, light = null, tint = 'fusion', int
       } else {
         u.uBend.value.set(0, 0);
       }
-      u.uW.value = shape.width;
-      u.uI.value.set(levels.core * shape.core * breathe * gasp, levels.sheath * shape.wide * breathe * gasp, levels.halo * shape.wide * breathe);
-      u.uFlare.value = levels.flare * Math.min(1, thrust * 1.3 * gasp * gasp) * breathe;
+      u.uW.value = shape.width * (1 + SHUTDOWN_BLOOM * tr.fade);
+      u.uDiamonds.value = diamonds * (1 + IGNITION_KNOTS * tr.surge);
+      const coreK = (1 + IGNITION_CORE * tr.surge) * (1 - SHUTDOWN_CORE * tr.fade);
+      u.uI.value.set(levels.core * shape.core * breathe * gasp * coreK, levels.sheath * shape.wide * breathe * gasp,
+        levels.halo * shape.wide * breathe * (1 + 0.6 * tr.fade));
+      u.uFlare.value = levels.flare * Math.min(1, thrust * 1.3 * gasp * gasp) * breathe * (1 + IGNITION_FLARE * tr.surge);
       if (light) {
         group.getWorldPosition(_wp);
         _wd.set(0, 0, -1).transformDirection(group.matrixWorld);

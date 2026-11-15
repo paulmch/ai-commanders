@@ -21,6 +21,7 @@ try:
     from ..torpedo import MIN_CLOSING_SPEED_KPS
     from .. import thermal as _thermal
     from .. import combat as _combat
+    from .. import drive_plume as _plume
     from ..power import KINETIC_WEAPON_EFFICIENCY
 except ImportError:  # pragma: no cover - script-style imports
     from pointdefense import (
@@ -32,6 +33,7 @@ except ImportError:  # pragma: no cover - script-style imports
     from torpedo import MIN_CLOSING_SPEED_KPS
     import thermal as _thermal
     import combat as _combat
+    import drive_plume as _plume
     from power import KINETIC_WEAPON_EFFICIENCY
 
 
@@ -153,6 +155,28 @@ def thermal_doctrine_numbers(
     }
 
 
+def plume_doctrine_line() -> str:
+    """The one doctrine sentence on drive plume wash (captains and admirals).
+    Every number is computed from src/drive_plume.py
+    (tests/test_doctrine_accuracy.py binds the wording to the engine)."""
+    def rate(km: float) -> float:
+        return _plume.plume_heat_rate_gj_s(_plume.PLUME_REFERENCE_JET_POWER_W, km, 0.0)
+    return (
+        f"DRIVE PLUME: a burning torch washes every ship, friend or foe, within "
+        f"{_plume.PLUME_MAX_HALF_ANGLE_DEG:g} deg of dead astern of it, out to "
+        f"{_plume.PLUME_MAX_RANGE_KM:.0f} km - on the axis of a full burn +{rate(5.0):.0f} GJ/s of "
+        f"heat at 5 km, +{rate(10.0):.0f} at 10 km, +{rate(20.0):.1f} at 20 km, +{rate(50.0):.1f} at "
+        f"50 km (scaled by throttle) - and inside ~{_plume.plume_ablation_range_km():.0f} km it also "
+        f"burns armour off the facing shown to it and wrecks exposed fittings (gun mounts, "
+        f"tubes, PD turrets). Wash heat stops at "
+        f"{_plume.PLUME_HEAT_CEILING_FRACTION * 100:.0f}%: it cripples, and the next heat source "
+        f"melts the reactor. The jet also irradiates the crew for good "
+        f"({_plume.plume_dose_rate_sv_s(rate(10.0), 0.0):.2f} Sv/s unshielded at 10 km, less behind "
+        f"thick armour on the facing shown): at {_plume.PLUME_CREW_IMPAIRED_SV:.0f} Sv weapons cycle "
+        f"x{_plume.PLUME_CREW_IMPAIRED_CYCLE_FACTOR:.1f} slower, at "
+        f"{_plume.PLUME_CREW_INCAPACITATED_SV:.0f} Sv the ship stops fighting and maneuvering.")
+
+
 def thermal_doctrine_block(nums: Dict[str, Any]) -> str:
     """The captain's THERMAL doctrine block (static per hull, cacheable)."""
     shots = ", ".join(f"{name} {gj:.2f} GJ" for name, gj in nums["per_shot_gj"].items())
@@ -178,6 +202,7 @@ def thermal_doctrine_block(nums: Dict[str, Any]) -> str:
         f"- set_radiators(mode=\"auto\") hands them to the ship: extend at your chosen heat % "
         f"(default {nums['auto_default_pct']:.0f}%), retract while a torpedo is inbound. To cool "
         f"down: ease the burn below full, extend, or hold fire.",
+        "- " + plume_doctrine_line(),
     ]
     return "\n".join(lines)
 
@@ -983,6 +1008,10 @@ evade dodge, 0 of 188 rounds at 100-300km landed where this model promised ~12.
   (lateral) speed lowers it, and an opening range lowers it most. Spinal vs a
   destroyer holding course at 200km: 36% at rest, 47% closing at 3 km/s, 28%
   crossing at 3 km/s, 20% opening at 3 km/s
+- A mount cannot fire through its own hull: a turret battery or PD laser sees about
+  53% of the sky, batteries train at 30 deg/s (heavy 15, PD 120), and the ship rolls
+  itself to unmask (~113 s per 90 deg on a cruiser) - count the mounts that BEAR
+  (ARCS lines), not the mounts fitted.
 - TO WIN: Close range aggressively OR have overwhelming accuracy advantage
 """
 
@@ -1118,8 +1147,10 @@ MANEUVERS:
   drifting together at 1 km/s still take rounds crossing the PD envelope at 12+ km/s
   and landing at 13-28 km/s: guidance holds a closure floor whatever the ships do. Judge PD
   by the "closing X km/s" on the INBOUND ORDNANCE line against the MJ-per-turret table
-  in your PD spec - never by your range rate. Measured: 1-2 turret hulls do NOT blind a
-  normal launch (<=46 of the 50 MJ needed); 3+ turrets on one round do. A lone ship
+  in your PD spec - never by your range rate. Measured: 1-2 turrets do NOT blind a
+  normal launch (<=46 of the 50 MJ needed); 3+ turrets that BEAR on one round do
+  (count the ARCS PD line, not the turrets fitted: head-on, 2 of a battleship's 3
+  bear). A lone ship
   does NOT stop a committed torpedo - EVADE, nose armor, kill the shooter.
 - A CLOSING torpedo is inside its No-Escape Zone almost from launch: no hull (max 3g)
   out-turns 12g guidance. But if you are already OPENING range when it launches,
@@ -1480,6 +1511,8 @@ def format_battlefield_overview(enemies: List[Dict[str, Any]], friendlies: List[
                     )
                 lines.append("    Assumes current aim/evasion persist and power/heat permit; "
                              "shot counts include cooldown, salvo position and ammo.")
+                if e.get("gun_arcs"):
+                    lines.append(f"    Arcs: {e['gun_arcs']}")
             else:
                 hit_chance = e.get("hit_chance", 0)
                 lines.append(f"    Hit probability: ~{hit_chance:.0f}%")
@@ -2015,6 +2048,7 @@ def format_my_ship(
         f"{ship_status.get('nose_armor', 0.0):.0f} / lateral {ship_status.get('lateral_armor', 0.0):.0f}"
         f" / tail {ship_status.get('tail_armor', 0.0):.0f} cm | delta-v {dv:.0f}/{dv_total:.0f} km/s")
     lines.extend(_heat_lines(ship_status))
+    lines.extend("  " + w for w in (ship_status.get("plume_wash") or []))
     weapons = _weapons_line(ship_status, ship_has_guns(ship_type, fleet_data),
                             (tactical_status.get("current_config") or {}).get("weapon_orders"))
     if weapons:
@@ -2292,6 +2326,10 @@ def format_enemy_contacts(
         line += f" | hull {e.get('hull_percent', 100):.0f}%"
         if not nose == flank == "Intact":     # intact armor goes unsaid (doctrine)
             line += f", nose {nose}, flank {flank}"
+        if e.get("crew_state") == "incapacitated":
+            line += " | NOT MANEUVERING, NOT FIRING (crew incapacitated by plume wash)"
+        elif e.get("crew_state") == "impaired":
+            line += " | crew impaired by plume wash (slower fire)"
         spec = (fleet_data or {}).get("ships", {}).get(stype or "", {})
         if spec:
             armament = format_enemy_weapons_summary(
@@ -2328,6 +2366,8 @@ def format_enemy_contacts(
                 + (f", ~{f['expected_gj_per_shot']:.2f} GJ/shot" if f.get("expected_gj_per_shot")
                    is not None else "")
                 for f in forecasts))
+            if e.get("gun_arcs"):
+                lines.append(f"    arcs: {e['gun_arcs']}")
     return "\n".join(lines)
 
 
@@ -2700,6 +2740,7 @@ HEAT AND RESOURCES:
   ~{heat_fill_min:.0f} min and gunfire/PD heat comes on top. YOUR FLEET shows heat and time to
   100% for every ship that is warming; tell hot ships to ease the burn, extend radiators or
   hold fire (set_radiators mode="auto" lets a captain's ship manage its radiators itself).
+- {plume_line}
 - {resources_line}
 
 ADDITIONAL NOTES:
@@ -3177,6 +3218,7 @@ For EACH ship in your fleet, you MUST call issue_order with:
         heat_drive_mw=heat["drive_full_mw"],
         heat_fill_min=heat["full_burn_fill_min"],
         pd_heat_mw=heat["pd_heat_mw"],
+        plume_line=plume_doctrine_line(),
         resources_line=_resources_line({"own_tubes": use_tubes}, fleet_data, own_classes),
         decision_interval_s=decision_interval_s,
         enemy_admiral_note=enemy_admiral_note,
@@ -3278,6 +3320,13 @@ def _format_now(snapshot: Any, last_failure: Optional[Tuple[float, str]],
             problems.append(f"hull {row.hull_integrity:.0f}%")
         if row.heat_percent >= heat_hold_pct:
             problems.append(f"heat {row.heat_percent:.0f}% (guns hold at {heat_hold_pct:.0f}%)")
+        crew = getattr(row, "crew_state", "fit")
+        dose = getattr(row, "crew_dose_sv", 0.0) or 0.0
+        if crew == "incapacitated":
+            problems.append(f"CREW INCAPACITATED by plume radiation ({dose:.1f} Sv) - CANNOT EXECUTE "
+                            f"ORDERS (coasting, not firing)")
+        elif crew == "impaired":
+            problems.append(f"crew IMPAIRED by plume radiation ({dose:.1f} Sv): weapons cycle slower")
         if problems:
             items.append(f"{_lbl(snapshot, row.ship_id, row.ship_name)}: {', '.join(problems)}")
     if last_failure:
@@ -3322,9 +3371,13 @@ def _compliance_text(compliance: Optional[Dict[str, Any]], snapshot: Any) -> Tup
     if isinstance(verdict, bool) or isinstance(deviations, list):
         lines = [_clip(d, 120) for d in deviations or [] if d] if isinstance(deviations, list) else []
         followed = verdict if isinstance(verdict, bool) else not lines
+        # The engine's drive interlock (a friendly in the jet) is a fact about
+        # the burn, never a deviation.
+        held = compliance.get("interlock")
+        held = [_clip(str(held), 160)] if held else []
         if lines:
-            return "did: " + "; ".join(lines), followed
-        parts = [p for p in (f"flew {em}" if em else "", salvo_text) if p]
+            return "did: " + "; ".join(lines + held), followed
+        parts = [p for p in (f"flew {em}" if em else "", salvo_text) if p] + held
         return ("did: " + ", ".join(parts)) if parts else "", followed
 
     # Legacy record: compare the fields.
@@ -3584,6 +3637,11 @@ def _format_threat_table(snapshot: Any) -> str:
             parts.append(f"hull {e.hull_integrity:.0f}%")
         if e.pd_total:
             parts.append(f"PD {e.pd_operational}/{e.pd_total}")
+        enemy_crew = getattr(e, "crew_state", "fit")
+        if enemy_crew == "incapacitated":
+            parts.append("NOT MANEUVERING, NOT FIRING (crew incapacitated by plume wash)")
+        elif enemy_crew == "impaired":
+            parts.append("crew impaired by plume wash (slower fire)")
         arms = e.armament or ""
         if e.launchers:
             left = max(0, e.magazine - e.torpedoes_launched)
@@ -3814,6 +3872,7 @@ def _format_fleet(snapshot: Any, phase: str) -> str:
         if r.weapons_destroyed:
             bits.append(f"LOST {', '.join(r.weapons_destroyed)}")
         bits.extend(getattr(r, "fittings_damaged", None) or [])
+        bits.extend(getattr(r, "plume_wash", None) or [])
         if r.delta_v_remaining < 300:
             bits.append(f"dv {r.delta_v_remaining:.0f} km/s")
         doing = r.current_maneuver
@@ -4170,6 +4229,7 @@ def build_admiral_ship_order_messages(
         status.append(f"  weapons: {row.weapons_summary}"
                       + (f" | LOST: {', '.join(row.weapons_destroyed)}" if row.weapons_destroyed else "")
                       + "".join(f" | {d}" for d in (getattr(row, "fittings_damaged", None) or [])))
+        status.extend(f"  {w}" for w in (getattr(row, "plume_wash", None) or []))
         doing = row.current_maneuver + (f" -> {_lbl(snapshot, row.current_target)}" if row.current_target else "")
         status.append(f"  now flying: {doing}"
                       + (f" | aimed at by {', '.join(row.targeted_by)}" if row.targeted_by else ""))

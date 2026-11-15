@@ -48,6 +48,8 @@ Open **[the Sonnet 5 vs DeepSeek torpedo swarm](http://localhost:5173/?recording
 
 *Claude Sonnet 5's eight-corvette torpedo swarm lands its first kill on DeepSeek V4.1 Flash's battle line, while the command net shows the synchronized salvo orders behind it.*
 
+**Recording files.** New battles are saved as gzip-compressed JSON (`battle_*.json.gz`, typically 15-37x smaller than the plain indented `.json` recordings above); pass `--plain-json` to the battle scripts for the old format, and `scripts/run_draft_battle.py --no-recording` for outcome-only sweeps. The viewer (URL, file selector, saved live replay) and every script read both formats, so `.json.gz` files can be copied into `visualizer/public/recordings/` and opened as `?recording=/recordings/<name>.json.gz`. `uv run python scripts/compress_recordings.py <dir> --dry-run` shows what gzipping an existing folder would save; without `--dry-run` it writes verified `.json.gz` copies (`--delete-originals` removes each original once its copy loads back identical).
+
 ### Viewer controls
 
 | Control | Action |
@@ -58,7 +60,8 @@ Open **[the Sonnet 5 vs DeepSeek torpedo swarm](http://localhost:5173/?recording
 | **D** | Open or close intent and consequence |
 | **C** | Toggle tactical contact labels |
 | **N** | Open or close the command net (directives, orders, captain reports, fleet signals) |
-| **A** | Toggle the automatic camera director (frames both fleets, cuts to kills and salvos; dragging pauses it) |
+| **A** | Toggle the automatic camera director (a shot list built from the recording: salvo launches over the shooter's shoulder, torpedo run-ins, hulk orbits, pull-backs on reactor blasts; dragging pauses it) |
+| **[ / ]** | Jump to the previous / next highlight (kills, strikes, salvos, the first gun exchange) |
 | **T** | Cycle trajectory tracks: off, predicted, predicted + actual (replay) |
 | **Shift+T** | Draw tracks for every ship or only the selected ship (also the ALL/SEL button in the track HUD) |
 | **G** | Switch graphics quality between low and high (`?gfx=low\|high\|auto` in the URL) |
@@ -83,6 +86,34 @@ Each of the nine hull classes has its own design, drawn to scale in faction live
 ![A battleship's reactor breach: an orange fireball inside an expanding shock shell, debris streaks, and a sister ship's engine plume crossing the blast](docs/images/readme/reactor-breach.jpg)
 
 *Seconds later that battleship's reactor goes up. Destruction is part of the recording: the camera can move, but the event stays tied to battle time.*
+
+**Damage is specific.** A hit can knock out an individual gun mount, torpedo tube, point-defense turret or the drive, and the ship registry shows one pip per fitting so you can see a battleship that still has most of its hull but none of its guns. Every death is a reactor blast with a shell drawn out to its real radius; ships inside it lose armour and fittings, torpedoes inside it die or go blind, and a destroyed magazine cooks off.
+
+![The replay HUD with fitting pips in the ship registry, a kill toast naming the blast radius and the ship it caught, and a DISARMED notice](docs/images/readme/fittings-hud.png)
+
+*One pip per gun, tube and point-defense turret; the kill toast says what the reactor blast caught.*
+
+![An orange reactor fireball inside a translucent blast shell, with escort ships beside it](docs/images/readme/blast-shell.jpg)
+
+*The shell marks the blast radius the engine used, so you can see which ships and torpedoes were inside it.*
+
+**The drive is a hazard.** A torch carries about 300 TW of jet power. A ship in another ship's exhaust takes heat, then armour and fitting damage, and its crew accumulates a radiation dose; the washed plating glows. An interlock throttles a drive that would wash an allied ship, and commanders see plume and crew warnings in their status.
+
+![A battleship under full burn seen from ahead, with a destroyer inside its exhaust, the destroyer's plating glowing](docs/images/readme/plume-wash.png)
+
+*A destroyer caught in a battleship's exhaust: the washed plating glows, fittings burn off and the crew takes a radiation dose.*
+
+![A dreadnought in three-quarter view with slab armour plating, wedge bow and parallel drive jets, point-defense lasers firing](docs/images/readme/dreadnought.png)
+
+*The dreadnought: slab armour on a cruciform core, lathed engine bells, every jet along the thrust axis.*
+
+![A torpedo salvo striking a battleship, with point-defense lasers and impact fountains](docs/images/readme/torpedo-strike.png)
+
+*A synchronised torpedo salvo lands on a battleship.*
+
+**The automatic director** (**A**) films a replay from a shot list built out of the recording, and `scripts/viewer_clip.py` renders any time range to MP4 or GIF:
+
+![A six-second clip: the camera runs in on a battleship, then pulls back as its reactor detonates](docs/images/pass5/director-kill.gif)
 
 ## Run a live battle
 
@@ -217,7 +248,7 @@ flowchart LR
 
 **Captains** receive their own state, threats, fire solutions, admiral orders with engine checks, fleet traffic, and execution feedback. Their tools match their hull's equipment. They choose targets, maneuvers, firing policies, torpedo launches, radiator state, and communications. They report to their admiral, signal each other, and keep a private log for later turns.
 
-**The simulation** advances between decisions. Coasting preserves momentum; turning and acceleration take time. Ballistic rounds inherit their launcher's velocity. Guided torpedoes have finite fuel, can lose their seekers to point defense, and can retarget reachable enemies when their original target dies. Armor is divided into nose, lateral, and tail facings, with penetration damaging internal modules.
+**The simulation** advances between decisions. Coasting preserves momentum; turning and acceleration take time. Ballistic rounds inherit their launcher's velocity. Guided torpedoes have finite fuel, can lose their seekers to point defense, and can retarget reachable enemies when their original target dies. Armor is divided into nose, lateral, and tail facings, with penetration damaging internal modules. Hits can also wreck external fittings one at a time, a ship's death is a reactor blast that reaches its neighbours, and a ship flying through another's drive exhaust takes heat, damage and crew radiation. Both fleets are advanced from the same start-of-tick snapshot, so neither side gains from being processed first; mirror-symmetry tests guard it. Every battery and point-defense turret has a firing arc computed from the ship's own geometry and a traverse rate: a weapon fires only when its line is clear of the hull and the turret has swung onto the target, and ships roll about their thrust axis to unmask weapons.
 
 It is a tactical game simulation: ordinary steps are one second, and gun hit resolution includes a probabilistic dispersion model. A fixed seed reproduces combat randomness for identical commands; it does not make live model responses deterministic. [Physics and targeting audit](docs/project-audit-2026-09-06.md)
 
@@ -310,6 +341,13 @@ uv run playwright install chromium
 uv run python scripts/viewer_snapshot.py \
   --recording glm_luna_200pt_live_20260906.json \
   --time 100 --focus alpha_1 --dist 2.2 --gfx high --out /tmp/cruiser.png
+```
+
+To render a clip (MP4, optionally a GIF) with the automatic director or an explicit camera path, frame by frame on battle time and resumable:
+
+```bash
+uv run python scripts/viewer_clip.py --recording p5_tactics_s4.json \
+  --start 98 --duration 6 --fps 10 --width 960 --height 540 --director --gif --out /tmp/kill.mp4
 ```
 
 The screenshot helper starts a local viewer if needed, or reuses the running one. Software renderers default to low graphics quality; pass `--gfx high` for full effects. It also supports explicit camera placement, hidden UI, and destruction sequences. [README screenshot sources](docs/images/readme/README.md)

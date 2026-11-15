@@ -71,12 +71,40 @@ function codeTexture(text, faction) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   // Stencil-style dark keyline so the code reads on lit and shadowed plating
+  // Faction emblem ahead of the code: alpha a delta, beta a barred ring -
+  // a shape, so the side reads without colour
+  const bar = FACTION_PAINT[faction] || FACTION_PAINT.alpha;
+  const lit = bar.map(c => Math.min(255, c * 1.35 + 30) | 0);
+  const ex = h * 0.52, ey = h * 0.44, er = h * 0.3;
+  ctx.lineJoin = 'round';
+  const emblem = () => {
+    ctx.beginPath();
+    if (faction === 'beta') {
+      ctx.arc(ex, ey, er, 0, Math.PI * 2);
+      ctx.moveTo(ex - er * 1.35, ey);
+      ctx.lineTo(ex + er * 1.35, ey);
+    } else {
+      ctx.moveTo(ex + er * 1.15, ey);
+      ctx.lineTo(ex - er * 0.9, ey - er);
+      ctx.lineTo(ex - er * 0.35, ey);
+      ctx.lineTo(ex - er * 0.9, ey + er);
+      ctx.closePath();
+    }
+  };
+  emblem();
+  ctx.lineWidth = 22;
+  ctx.strokeStyle = 'rgba(10,12,14,0.85)';
+  ctx.stroke();
+  emblem();
+  ctx.lineWidth = 11;
+  ctx.strokeStyle = `rgb(${lit[0]},${lit[1]},${lit[2]})`;
+  ctx.stroke();
+  const tx = h + (w - h) / 2, tw = (w - h) * 0.96;
   ctx.lineWidth = 10;
   ctx.strokeStyle = 'rgba(10,12,14,0.85)';
-  ctx.strokeText(text, w / 2, h * 0.44, w * 0.94);
+  ctx.strokeText(text, tx, h * 0.44, tw);
   ctx.fillStyle = 'rgb(232,230,220)';
-  ctx.fillText(text, w / 2, h * 0.44, w * 0.94);
-  const bar = FACTION_PAINT[faction] || FACTION_PAINT.alpha;
+  ctx.fillText(text, tx, h * 0.44, tw);
   ctx.fillStyle = `rgb(${bar[0]},${bar[1]},${bar[2]})`;
   ctx.fillRect(w * 0.08, h * 0.86, w * 0.84, h * 0.1);
   const t = new THREE.CanvasTexture(c);

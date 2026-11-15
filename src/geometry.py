@@ -240,14 +240,36 @@ class ShipGeometry:
         Returns:
             HitLocation enum (NOSE, LATERAL, or TAIL)
         """
+        # Scalar form of impact_vector.normalized().angle_to(
+        # ship_orientation.normalized()), operation for operation (PRESENT
+        # scoring asks this for every candidate attitude x every torpedo).
         # Normalize vectors
-        impact_dir = impact_vector.normalized()
-        ship_fwd = ship_orientation.normalized()
+        ix, iy, iz = impact_vector.x, impact_vector.y, impact_vector.z
+        mag = math.sqrt(ix**2 + iy**2 + iz**2)
+        if mag == 0:
+            ix, iy, iz = 0, 0, 0
+        else:
+            ix, iy, iz = ix / mag, iy / mag, iz / mag
+        fx, fy, fz = ship_orientation.x, ship_orientation.y, ship_orientation.z
+        mag = math.sqrt(fx**2 + fy**2 + fz**2)
+        if mag == 0:
+            fx, fy, fz = 0, 0, 0
+        else:
+            fx, fy, fz = fx / mag, fy / mag, fz / mag
 
         # Calculate angle between impact direction and ship forward
         # If projectile comes from ahead (opposite to forward), angle ~ 180 deg
         # If projectile comes from behind (same as forward), angle ~ 0 deg
-        angle_rad = impact_dir.angle_to(ship_fwd)
+        mags = math.sqrt(ix**2 + iy**2 + iz**2) * math.sqrt(fx**2 + fy**2 + fz**2)
+        if mags == 0:
+            angle_rad = 0.0
+        else:
+            cos_angle = (ix * fx + iy * fy + iz * fz) / mags
+            if not cos_angle < 1.0:
+                cos_angle = 1.0
+            if not cos_angle > -1.0:
+                cos_angle = -1.0
+            angle_rad = math.acos(cos_angle)
         angle_deg = math.degrees(angle_rad)
 
         # Impact from ahead means projectile direction is opposite to ship forward

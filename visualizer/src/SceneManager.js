@@ -3,7 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { Environment, disposeTree } from './render/Environment.js';
 import { getGraphicsSettings } from './render/Quality.js';
 import { PostFX } from './render/PostFX.js';
-import { buildHull, buildShipMaterials, ACCENT_GLOW } from './render/Hulls.js';
+import { buildHull, buildShipMaterials, hullSize, ACCENT_GLOW } from './render/Hulls.js';
 import { updateHullDetails } from './render/Hulls.js';
 import { createTorch, damagedNozzle } from './render/Torch.js';
 
@@ -12,12 +12,15 @@ const _nozzle = { level: 1, sputter: 0 };
 const _plumeTurn = new THREE.Vector3();
 const _plumeQ = new THREE.Quaternion();
 import { Ribbon } from './render/Trails.js';
-import { Blast, ShipDestruction, WRECK_DRIFT_S } from './render/Explosion.js';
+import { Blast, ShipDestruction, blastExtentOver } from './render/Explosion.js';
+import { wreckDriftS } from './DamageTimeline.js';
 import { DamageFX } from './render/DamageFX.js';
 import { getGlowTexture } from './render/Textures.js';
 import { RcsSystem } from './render/Rcs.js';
 import { Projectiles } from './render/Projectiles.js';
 import { HeatFX } from './render/Heat.js';
+import { hullQuat, validUp } from './HullFrame.js';
+const _hfFwd = [0, 0, 1], _hfQuat = [0, 0, 0, 1];
 
 /**
  * Put the canvas's WebGL pixel-unpack state back to its defaults when a
@@ -57,7 +60,6 @@ export class SceneManager {
     this.currentTime = 0;
     this.delta = 0;
     this.elapsed = 0;
-    this.shake = 0;
     this.frameIndex = 0;
 
     this.init();
@@ -283,19 +285,7 @@ export class SceneManager {
     const group = new THREE.Group();
     group.name = shipId;
 
-    const baseSizes = {
-      corvette: { length: 0.5, width: 0.13 },
-      frigate: { length: 0.72, width: 0.15 },
-      destroyer: { length: 1.0, width: 0.22 },
-      cruiser: { length: 1.3, width: 0.3 },
-      cruiser_torpedo: { length: 1.3, width: 0.3 },
-      battlecruiser: { length: 1.65, width: 0.3 },
-      battleship: { length: 2.0, width: 0.55 },
-      dreadnought: { length: 2.6, width: 0.7 },
-      dreadnought_siege: { length: 2.6, width: 0.7 }
-    };
-    const base = baseSizes[shipType] || baseSizes.destroyer;
-    const size = { length: base.length * 8, width: base.width * 8 };
+    const size = hullSize(shipType);
 
     const mats = buildShipMaterials(faction);
     const engineConfig = this.getEngineConfig(shipType, size);
@@ -310,10 +300,12 @@ export class SceneManager {
     for (let e = 0; e < engineConfig.count; e++) {
       const p = engineConfig.positions[e];
       const light = e === 0 ? this.tryPointLight(0x7fb0ff, 0, size.length * 5) : null;
-      const torch = createTorch({ radius: plumeR, length: plumeLength, light, tint: 'fusion', cluster: engineConfig.count });
+      const torch = createTorch({ radius: plumeR, length: plumeLength, light, tint: 'fusion', cluster: engineConfig.count,
+        phase: (e * 0.6180339887) % 1 });
       torch.group.position.set(p.x, p.y, -size.length * 0.53);
-      // Bells are canted a few degrees off the drive axis: the plumes fan out
-      torch.group.rotation.set(0.28 * p.y / size.width, -0.28 * p.x / size.width, 0);
+      // Every plume runs exactly down its bell's axis (the ship's thrust
+      // axis): a cluster is a bundle of parallel, collimated jets. The only
+      // deflection is the recorded turn sweep (render/Torch.js).
       group.add(torch.group);
       torches.push(torch);
     }
@@ -398,7 +390,17 @@ export class SceneManager {
     ship.position.set(state.position[0] * this.SCALE, state.position[1] * this.SCALE, state.position[2] * this.SCALE);
     if (state.forward) {
       const f = new THREE.Vector3(state.forward[0], state.forward[1], state.forward[2]);
-      if (f.lengthSq() > 0) ship.lookAt(ship.position.clone().add(f.normalize()));
+      if (f.lengthSq() > 0) {
+        f.normalize();
+        if (validUp(state.up)) {
+          // the ship's recorded roll: nose along fwd, dorsal along up
+          const q = hullQuat(f.toArray(_hfFwd), state.up, _hfQuat);
+          ship.quaternion.set(q[0], q[1], q[2], q[3]);
+        } else {
+          // older recordings carry no roll: nose along fwd, world-up +Y
+          ship.lookAt(ship.position.clone().add(f));
+        }
+      }
     }
 
     const dt = this.delta || 0.016;
@@ -429,10 +431,11 @@ export class SceneManager {
       mats.accent.emissiveIntensity = (state.dying ? 0.19 : 0.5 + 0.5 * hull) * ACCENT_GLOW;
     }
 
-    // Torches follow a smoothed throttle
-    const targetThrust = state.thrust || 0;
-    ud.smoothThrust += (targetThrust - ud.smoothThrust) * (1 - Math.exp(-dt * 3.0));
-    const thrust = ud.smoothThrust;
+    // Torches follow the recorded throttle (already eased between trace
+    // frames), never a wall-clock filter: a scrub shows the same plume
+    const thrust = state.thrust || 0;
+    ud.smoothThrust = thrust;
+    const rate = state.dying ? 0 : (state.thrustRate || 0);
     // Plume sweep: the recorded turn rate in the hull frame (render/Torch.js)
     let turn = null;
     if (Array.isArray(state.omega) && !state.dying) {
@@ -443,14 +446,14 @@ export class SceneManager {
     const eng = this.damageFX?.engineAt?.(shipId, this.currentTime) || null;
     for (let i = 0; i < ud.torches.length; i++) {
       const dying = state.dying ? 0.7 : 0;
-      if (!eng) { ud.torches[i].update(thrust, this.elapsed, dying, this.currentTime, turn); continue; }
+      if (!eng) { ud.torches[i].update(thrust, this.elapsed, dying, this.currentTime, turn, rate); continue; }
       if (ud.driveSeed === undefined) {
         let h = 0;
         for (const c of shipId) h = (h * 31 + c.charCodeAt(0)) | 0;
         ud.driveSeed = Math.abs(h) % 100000;   // from the id: the same bells die on every load
       }
       const nz = damagedNozzle(eng.health, i, ud.torches.length, ud.driveSeed, _nozzle);
-      ud.torches[i].update(Math.min(1, thrust * nz.level), this.elapsed, Math.max(dying, nz.sputter), this.currentTime, turn);
+      ud.torches[i].update(Math.min(1, thrust * nz.level), this.elapsed, Math.max(dying, nz.sputter), this.currentTime, turn, rate);
     }
     if (mats) mats.bellHeat.emissiveIntensity = 0.3 + 2.8 * thrust;
     updateHullDetails(ship, state, this);   // hull rigs, doors, nav lamps (render/HullRigs.js)
@@ -469,6 +472,25 @@ export class SceneManager {
       if (!ship.visible) continue;
       ship.traverse(_flagShadow);
     }
+    // Wreck sections and chunks live outside the ship groups and fade out
+    // through a transparent material: they receive, and cast while solid.
+    for (const eff of this.destructionEffects) {
+      eff.chunkGroup?.traverse(_flagWreckShadow);
+    }
+  }
+
+  /** Visible hulls as { pos, r } for the shadow fit (reused, no per-frame garbage). */
+  _collectShadowSubjects() {
+    const list = this._shadowSubjects || (this._shadowSubjects = []);
+    let n = 0;
+    for (const ship of this.ships.values()) {
+      if (!ship.visible) continue;
+      const s = list[n] || (list[n] = { pos: null, r: 0, a: 0 });
+      s.pos = ship.position;
+      s.r = (ship.userData.size?.length || 8) * 0.6;
+      n++;
+    }
+    return n;
   }
 
   // ===========================================================================
@@ -508,12 +530,6 @@ export class SceneManager {
     const blast = new Blast(this.fxCtx, o);
     blast.category = o.category || 'hit';
     this.blasts.push(blast);
-    if (blast.fresh && (o.kind === 'reactor' || o.kind === 'warhead' || o.kind === 'meltdown')) {
-      const d = this.camera.position.distanceTo(o.position);
-      const big = o.kind !== 'warhead';
-      const reach = o.scale * (big ? (o.kind === 'meltdown' ? 55 : 45) : 18);
-      this.shake = Math.min(1.2, this.shake + Math.min(1, (reach / Math.max(d, 1)) ** 1.5) * (big ? 1 : 0.4));
-    }
     return blast;
   }
 
@@ -681,12 +697,27 @@ export class SceneManager {
   // ===========================================================================
   // Ship destruction
   // ===========================================================================
-  createDestructionEffect(position, shipType, currentTime, shipId = null) {
+  /** Blast scale of a hull type's death (Explosion.js units). */
+  destructionScale(shipType) {
     const scaleFactors = {
       corvette: 0.6, frigate: 0.8, destroyer: 1.0, cruiser: 1.3, cruiser_torpedo: 1.3,
       battlecruiser: 1.6, battleship: 2.0, dreadnought: 2.5, dreadnought_siege: 2.5
     };
-    const scale = (scaleFactors[shipType] || 1.0) * 6;
+    return (scaleFactors[shipType] || 1.0) * 6;
+  }
+
+  /**
+   * Largest radius (scene units) this ship's death blast visibly draws
+   * between two ages after its detonation - what a camera has to fit.
+   */
+  deathBlastExtent(shipId, fromAge = 0, toAge = 6) {
+    const type = this.ships.get(shipId)?.userData?.shipType;
+    const kind = (this.deathInfo || {})[shipId]?.meltdown ? 'meltdown' : 'reactor';
+    return blastExtentOver(kind, this.destructionScale(type), fromAge, toAge);
+  }
+
+  createDestructionEffect(position, shipType, currentTime, shipId = null) {
+    const scale = this.destructionScale(shipType);
     const death = (this.deathInfo || {})[shipId] || {};
     const shipGroup = shipId ? this.ships.get(shipId) : null;
     // The sim's own death spiral (dying flag) already drifted the hulk; an
@@ -694,12 +725,18 @@ export class SceneManager {
     // for a few seconds before the reactor lets go.
     const simDrifted = death.wasDying || shipGroup?.userData.wasDying;
     const spawnTime = death.time ?? currentTime;
-    const driftDuration = (death.reactorCause || simDrifted) ? 0 : WRECK_DRIFT_S;
+    const driftDuration = simDrifted ? 0 : wreckDriftS(death);
     const vel = death.velocity || [0, 0, 0];
     const driftVel = new THREE.Vector3(vel[0], vel[1], vel[2]).multiplyScalar(this.SCALE);
     if (death.position) position = new THREE.Vector3(...death.position).multiplyScalar(this.SCALE);
     if (shipGroup && death.forward) {
-      shipGroup.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(...death.forward).normalize());
+      const df = new THREE.Vector3(...death.forward).normalize();
+      if (validUp(death.up)) {
+        const q = hullQuat(df.toArray(_hfFwd), death.up, _hfQuat);
+        shipGroup.quaternion.set(q[0], q[1], q[2], q[3]);
+      } else {
+        shipGroup.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), df);
+      }
     }
 
     const eff = new ShipDestruction(this.fxCtx, {
@@ -750,22 +787,14 @@ export class SceneManager {
     this.rangeRingMaterial.opacity = 0.12 * THREE.MathUtils.smoothstep(viewingDistance, 45, 250);
     this.tacticalOverlay.visible = this.rangeRingMaterial.opacity > 0.002;
     if (this.frameIndex % 20 === 0) this._flagShadowMeshes();
-    this.environment.update(this.camera, this.delta, this.controls.target, viewingDistance);
+    const subjectCount = this._collectShadowSubjects();
+    this.environment.update(this.camera, this.delta, this.controls.target, viewingDistance,
+      this._shadowSubjects, subjectCount);
     this.postfx.update(this.delta);
 
-    // Camera shake from nearby detonations, applied only for the draw
-    const saved = this.camera.position.clone();
-    if (this.shake > 0.001) {
-      const dist = this.camera.position.distanceTo(this.controls.target);
-      const amp = this.shake * dist * 0.006;
-      const t = this.elapsed;
-      this.camera.position.x += Math.sin(t * 37.1) * amp;
-      this.camera.position.y += Math.sin(t * 43.7 + 1.3) * amp * 0.8;
-      this.camera.position.z += Math.sin(t * 29.3 + 2.1) * amp * 0.6;
-      this.shake *= Math.exp(-this.delta * 3.2);
-    }
+    // (Blast shake is CameraController.applyShake / removeShake, wrapped
+    // round this call by main.js: battle time, deterministic under scrubbing)
     this.postfx.render();
-    this.camera.position.copy(saved);
     this.frameIndex++;
   }
 }
@@ -777,4 +806,12 @@ function _flagShadow(o) {
   if (!m || !m.isMeshStandardMaterial) return;
   o.receiveShadow = true;
   o.castShadow = !m.transparent && m.blending === THREE.NormalBlending && m.depthWrite !== false;
+}
+
+function _flagWreckShadow(o) {
+  if (!o.isMesh) return;
+  const m = Array.isArray(o.material) ? o.material[0] : o.material;
+  if (!m || !m.isMeshStandardMaterial) return;
+  o.receiveShadow = true;
+  o.castShadow = m.depthWrite !== false && m.opacity > 0.5;
 }

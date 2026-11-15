@@ -31,6 +31,7 @@ Two doctrines:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 from .captain import LLMCaptain, LLMCaptainConfig
@@ -239,13 +240,13 @@ class HeuristicCaptain(LLMCaptain):
         order_text = (order.order_text if order else "").lower()
         plan = tactics.fleet_plan(simulation, ship.faction, self.config.fleet_data)
         my_role = tactics.role(ship)
-        if my_role == "unarmed" and not self.has_admiral and not any(
-                tactics.role(f) != "unarmed" for f in simulation.get_friendly_ships(ship_id)
-                if f.ship_id != ship_id and tactics._alive(f)):
-            # Nothing to shoot with and no armed ship of ours left to screen
-            # or protect: strike, instead of fleeing to the time limit.
-            return [("surrender", {"reason": "all weapons out, no armed ship left to protect"})]
+        if (my_role == "unarmed" and not self.has_admiral
+                and tactics.should_surrender(simulation, ship, enemies)):
+            # Nothing to shoot with, no armed ship and no round of ours left
+            # in flight, and an enemy that can catch us is closing: strike.
+            return [("surrender", {"reason": "all weapons out, no rounds in flight, cannot get away"})]
         self._decision_interval = float(getattr(simulation, "decision_interval", 30.0) or 30.0)
+        self._sim = simulation
 
         target = self._tactical_target(ship, enemies, order, plan, my_role)
         calls.append(("set_primary_target", {"target_id": target.ship_id}))
@@ -316,6 +317,26 @@ class HeuristicCaptain(LLMCaptain):
         else:
             args = self._tactical_maneuver(ship, ship_id, target, enemies, plan, my_role, threat)
             args["throttle"] = self._heat_throttle_cap(ship, heat, args["throttle"], threat)
+            # ...and do not cook a friendly astern with the torch (src/drive_plume.py).
+            aim = args.get("direction") if args.get("maneuver_type") == "HEADING" else None
+            ordered = args["throttle"]
+            args["throttle"] = tactics.plume_safe_throttle(
+                simulation, ship, args["throttle"], threat, aim)
+            burn = None
+            if args["throttle"] < tactics.PLUME_SLIP_TRIGGER_SHARE * ordered:
+                # A friendly sits in the jet: side-slip the burn instead of idling.
+                if aim is not None:
+                    burn = SimpleNamespace(**aim)
+                elif args.get("maneuver_type") == "INTERCEPT" and args.get("target_id"):
+                    ref = simulation.get_ship(args["target_id"])
+                    burn = (ref.position - ship.position) if ref is not None else None
+            if burn is not None:
+                slipped, t = tactics.plume_clear_heading(simulation, ship, burn, ordered, threat)
+                if t > args["throttle"]:
+                    args = {"maneuver_type": "HEADING", "throttle": t,
+                            "direction": {"x": round(slipped.x, 4), "y": round(slipped.y, 4),
+                                          "z": round(slipped.z, 4)},
+                            **({"evade": args["evade"]} if args.get("evade") else {})}
             if args.get("maneuver_type") == "HEADING":
                 args.pop("maneuver_type")
                 calls.append(("set_heading", args))
@@ -418,9 +439,18 @@ class HeuristicCaptain(LLMCaptain):
                 return args
             return order("HOLD_RANGE", nearest_gun, 1.0,
                          range_km=round(max(tactics.RETREAT_RANGE_KM, gun_km), 1))
+        if my_role == "torpedo" and nearest_gun is None:
+            # No enemy gun left: nothing to stand off from. Close to a short
+            # launch range so rounds can reach - two boat fleets holding
+            # 300 km from each other never launched again (the launch check
+            # refuses rounds at an opening target) and sat to the time limit
+            # with loaded tubes.
+            prey = min(enemies, key=lambda e: (km(e), e.ship_id))
+            return order("INTERCEPT", prey, 1.0, standoff_km=tactics.BOAT_NO_GUNS_RANGE_KM)
         if my_role != "gun":
             anchor = nearest_gun or min(enemies, key=lambda e: (km(e), e.ship_id))
-            return order("HOLD_RANGE", anchor, 1.0, range_km=tactics.TORPEDO_STANDOFF_KM)
+            return order("HOLD_RANGE", anchor, 1.0,
+                         range_km=tactics.boat_station_km(self._sim, ship, anchor))
         r_km = tactics.engage_range_km(ship)
         dist_km, closing_kps = self._range_and_closing(ship, target)
         throttle = plan.formation_throttle.get(ship_id, 1.0) if dist_km > tactics.GUNS_HOT_KM else 1.0
@@ -439,9 +469,33 @@ class HeuristicCaptain(LLMCaptain):
                 face = nearest_gun
             self._face_id = face.ship_id
             if km(face) < dist_km:
-                return order(kind, face, 1.0)
-        self._face_id = None
+                return self._aspect_or_padlock(ship, face, order)
+        else:
+            self._face_id = None
+        if kind == "PADLOCK":
+            return self._aspect_or_padlock(ship, target, order)
         return order(kind, target, throttle if kind == "INTERCEPT" else 1.0, **extra)
+
+    def _aspect_or_padlock(self, ship, face, order) -> Dict[str, Any]:
+        """Coast with the nose at the hull's gun aspect to ``face`` (weapon
+        arcs: heuristic_tactics.gun_aspect_deg) - an attitude-only HEADING -
+        or PADLOCK it nose-on when the aspect is 0 or the range is too short
+        for a fixed attitude to keep it inside the nose-armour arc."""
+        aspect = tactics.gun_aspect_deg(getattr(ship, "ship_type", ""))
+        rng_km = ship.position.distance_to(face.position) / 1000.0
+        if aspect <= 0.0 or rng_km < tactics.ASPECT_MIN_RANGE_KM or tactics.is_capital(ship):
+            # Capital hulls PADLOCK: a fixed 30 s attitude drifts off the
+            # target and a slow hull (and its slow roll) never re-settles -
+            # measured on the pass-5 masks, battleships fired ~5 % fewer
+            # rounds at their aspect than PADLOCKed nose-on.
+            return order("PADLOCK", face, 1.0)
+        d = tactics.aspect_direction(ship, face, aspect)
+        args = {"maneuver_type": "HEADING", "throttle": 0.0,
+                "direction": {"x": round(d.x, 4), "y": round(d.y, 4), "z": round(d.z, 4)}}
+        evade = order("PADLOCK", face, 1.0).get("evade")
+        if evade:
+            args["evade"] = evade
+        return args
 
     def _radiator_wish(self, ship, ship_id, heat, threat, enemies, simulation) -> Optional[bool]:
         """True = extend, False = retract, None = leave as is."""

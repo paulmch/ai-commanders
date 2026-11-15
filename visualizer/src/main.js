@@ -5,10 +5,12 @@ import { DecisionPanel } from './DecisionPanel.js';
  */
 
 import { BattleLoader } from './BattleLoader.js';
+import { fetchRecording, readRecordingFile } from './RecordingCodec.js';
 import { Interpolator } from './Interpolator.js';
 import { SceneManager } from './SceneManager.js';
 import { TimeController } from './TimeController.js';
-import { CameraController, buildDirectorCuts } from './CameraController.js';
+import { CameraController } from './CameraController.js';
+import { stepHighlight } from './Director.js';
 import { ContactOverlay } from './ContactOverlay.js';
 import {
   LOST_AFTER_FAILURES, backoffDelay, checkpointNumber, classifyVerdict, defaultMaxLag,
@@ -319,6 +321,11 @@ class BattleVisualizer {
         this.toggleDirector();
       } else if (e.code === 'KeyN' && this.isInitialized) {
         this.toggleComms();
+      } else if ((e.code === 'BracketRight' || e.code === 'BracketLeft') && this.isInitialized) {
+        // ] / [ : next / previous highlight (Director.highlightList)
+        const t = stepHighlight(this.cameraController.highlights, this.timeController.currentTime,
+          e.code === 'BracketRight' ? 1 : -1);
+        if (t !== null) { this.setLiveFollow(false); this.timeController.seek(t); }
       }
     });
 
@@ -341,8 +348,7 @@ class BattleVisualizer {
     this.setLoadingStatus('Reading file...');
 
     try {
-      const text = await file.text();
-      const data = JSON.parse(text);
+      const data = await readRecordingFile(file);   // .json or .json.gz
       await this.initializeBattle(data, file.name);
     } catch (error) {
       console.error('Failed to load file:', error);
@@ -363,11 +369,8 @@ class BattleVisualizer {
     this.setLoadingStatus('Fetching recording...');
 
     try {
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
+      const data = await fetchRecording(url);   // .json or .json.gz
       this.setLoadingStatus('Parsing data...');
-      const data = await response.json();
       await this.initializeBattle(data, url.split('/').pop());
     } catch (error) {
       console.error('Failed to load URL:', error);
@@ -434,7 +437,8 @@ class BattleVisualizer {
     // Death causes + final vectors drive the two-stage destruction sequence
     this.scene.deathInfo = this.loader.buildDeathInfo();
     this.scene.damageFX?.setRecording(this.loader);
-    this.cameraController.setDirectorCuts(buildDirectorCuts(this.loader.events, this.scene.deathInfo));
+    this.cameraController.setDirectorRecording({ events: this.loader.events, deathInfo: this.scene.deathInfo,
+      simTrace: this.loader.simTrace, live: !!liveRunning });
     this.cameraController.setDirector(directorOn);
     this.setLoadingProgress(100);
 
@@ -615,8 +619,13 @@ class BattleVisualizer {
         this.processEvents();
       }
 
-      // Render
+      // Render, with the blast shake on the camera for this draw only
+      // (battle time, Director.shakeAt): nothing that places the camera
+      // between frames ever sees the offset
+      const shaking = this.isInitialized && this.currentState;
+      if (shaking) this.cameraController.applyShake(this.currentState.ships, this.timeController.currentTime);
       this.scene.render();
+      if (shaking) this.cameraController.removeShake();
       if (this.isInitialized) {
         this.contacts.update(this.scene, this.currentState?.ships, this.selectedShipId);
         this.offscreen?.update(this.scene, this.currentState?.ships, this.loader.ships, this.selectedShipId);
@@ -912,7 +921,8 @@ class BattleVisualizer {
     if (combat) {
       this.scene.deathInfo = loader.buildDeathInfo();
       this.scene.damageFX?.setRecording(loader);
-      this.cameraController.setDirectorCuts(buildDirectorCuts(loader.events, this.scene.deathInfo));
+      this.cameraController.setDirectorRecording({ events: loader.events, deathInfo: this.scene.deathInfo,
+        simTrace: loader.simTrace, live: !this.live?.ended });
     }
     this.updateLiveTimeline();
     this.updateBattleInfo();
@@ -985,6 +995,9 @@ class BattleVisualizer {
     }
     if (this.live !== live) return;
     live.ended = true;
+    // The battle is a replay now: the director may look ahead
+    this.cameraController?.setDirectorRecording({ events: this.loader.events, deathInfo: this.scene.deathInfo,
+      simTrace: this.loader.simTrace, live: false });
     live.lost = false;
     live.recapOpen = false;
     this.connectionCard.hide();
@@ -1026,9 +1039,7 @@ class BattleVisualizer {
     live.replayLoading = true;
     this.updateLiveHud();
     try {
-      const response = await fetch(live.replayUrl, { cache: 'no-store' });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json();
+      const data = await fetchRecording(live.replayUrl, { cache: 'no-store' });
       if (this.live !== live) return;
       const savedId = data.provenance?.battle_id;
       if (savedId && live.battleId && savedId !== live.battleId) {
@@ -1317,8 +1328,9 @@ class BattleVisualizer {
     const live = this.live;
     let verdict = live.verdict || this.computeVerdict();
     // A battle that ended because a side could no longer deal damage says so in words (as the replay banner does)
-    const cause = endCause({ reason: verdict?.detail });
-    if (cause) verdict = { ...verdict, detail: `${cause.headline} · ${cause.detail}` };
+    // (same wording as the replay banner, including a fleet whose last ships surrendered or cannot fight)
+    const cause = endCause({ winner: verdict?.kind === 'victory' ? verdict.faction : null, reason: verdict?.detail }, this.lastSides);
+    if (cause) verdict = { ...verdict, detail: `${cause.headline} · ${cause.detail}${cause.note ? `, ${cause.note}` : ''}${cause.inferred && verdict.detail ? ` (${verdict.detail})` : ''}` };
     const spend = live.spend;
     const billing = live.provenance?.billing || (spend ? {
       reported_cost_usd: spend.reported_usd, spend_limit_usd: spend.limit_usd, calls: spend.calls,
@@ -1423,6 +1435,7 @@ class BattleVisualizer {
     const t = this.timeController.currentTime;
     const hud = this.loader.hud;
     const sides = this.scoreboard.update(this.currentState.ships, this.currentState.torpedoes, this.loader.ships, hud, t);
+    this.lastSides = sides;
     this.registry.update(this.currentState.ships, t, hud.kills, hud.fittings);
     this.killFeed.update(hud.kills, t, hud);
     // A dying ship is a confirmed kill counting down to its reactor

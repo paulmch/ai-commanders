@@ -43,7 +43,7 @@ COMBAT_GIMBAL_ANGLE_DEG = 1.0  # Typical combat deflection
 # VECTOR3D CLASS
 # =============================================================================
 
-@dataclass
+@dataclass(slots=True)
 class Vector3D:
     """
     3D vector for positions, velocities, and directions in space.
@@ -59,6 +59,13 @@ class Vector3D:
     (= forward cross up) returns.
 
     All units in SI (meters, m/s, etc.) unless otherwise specified.
+
+    Performance: this is the engine's hottest type (tens of millions of
+    operations per battle). ``slots=True`` drops the per-instance dict, and
+    ``normalized`` / ``distance_to`` / ``__rmul__`` spell their arithmetic out
+    instead of chaining through other methods. The expressions are kept
+    operation-for-operation identical (``**2``, ``/ mag``, left-to-right
+    sums) so results are bit-identical - do not "simplify" them.
     """
     x: float = 0.0
     y: float = 0.0
@@ -78,7 +85,7 @@ class Vector3D:
 
     def __rmul__(self, scalar: float) -> Vector3D:
         """Right scalar multiplication."""
-        return self.__mul__(scalar)
+        return Vector3D(self.x * scalar, self.y * scalar, self.z * scalar)
 
     def __truediv__(self, scalar: float) -> Vector3D:
         """Scalar division."""
@@ -123,23 +130,30 @@ class Vector3D:
 
     def normalized(self) -> Vector3D:
         """Return unit vector in same direction."""
-        mag = self.magnitude
+        mag = math.sqrt(self.x**2 + self.y**2 + self.z**2)
         if mag == 0:
             return Vector3D(0, 0, 0)
-        return self / mag
+        return Vector3D(self.x / mag, self.y / mag, self.z / mag)
 
     def distance_to(self, other: Vector3D) -> float:
         """Distance to another point."""
-        return (self - other).magnitude
+        return math.sqrt((self.x - other.x)**2 + (self.y - other.y)**2
+                         + (self.z - other.z)**2)
 
     def angle_to(self, other: Vector3D) -> float:
         """Angle between vectors in radians."""
-        dot = self.dot(other)
-        mags = self.magnitude * other.magnitude
+        dot = self.x * other.x + self.y * other.y + self.z * other.z
+        mags = (math.sqrt(self.x**2 + self.y**2 + self.z**2)
+                * math.sqrt(other.x**2 + other.y**2 + other.z**2))
         if mags == 0:
             return 0.0
         # Clamp to avoid floating point errors with acos
-        cos_angle = max(-1.0, min(1.0, dot / mags))
+        # (max(-1.0, min(1.0, c)) spelled out, same result for every c)
+        cos_angle = dot / mags
+        if not cos_angle < 1.0:
+            cos_angle = 1.0
+        if not cos_angle > -1.0:
+            cos_angle = -1.0
         return math.acos(cos_angle)
 
     def rotate_around_axis(self, axis: Vector3D, angle_rad: float) -> Vector3D:

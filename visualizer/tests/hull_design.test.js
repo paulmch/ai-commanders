@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import * as THREE from 'three';
 import {
   assembleHull, HULL_CLASSES, HULL_MATERIAL_KEYS, WEAPON_SIZE, RAD_AREA, WINDOW_S, fitScale, HullKit,
-  chamferBoxGeometry
+  chamferBoxGeometry, octSectionGeometry
 } from '../src/render/Hulls.js';
 import { SceneManager } from '../src/SceneManager.js';
 import { Projectiles } from '../src/render/Projectiles.js';
@@ -67,11 +67,19 @@ function solids(k) {
 }
 const FACE_N = { '+x': [1, 0, 0], '-x': [-1, 0, 0], '+y': [0, 1, 0], '-y': [0, -1, 0] };
 
-/** Outward axis of a mount rotated `angle` about Z (0 = dorsal). */
-function mountSide(angle) {
+/**
+ * Faces a mount rotated `angle` about Z (0 = dorsal) may be filed under in
+ * data/fleet_ships.json: its own face, or for a shoulder mount (between
+ * two faces) either neighbour.
+ */
+function mountSides(angle) {
   const x = -Math.sin(angle), y = Math.cos(angle);
-  if (Math.abs(y) >= Math.abs(x)) return y > 0 ? 'dorsal' : 'ventral';
-  return x > 0 ? 'port' : 'starboard';
+  const out = [];
+  if (y > 0.45) out.push('dorsal');
+  if (y < -0.45) out.push('ventral');
+  if (x > 0.45) out.push('port');
+  if (x < -0.45) out.push('starboard');
+  return out;
 }
 
 test('every class assembles headless with known materials and finite geometry', () => {
@@ -104,7 +112,7 @@ test('mounts match data/fleet_ships.json: kinds, counts, slots, sides and statio
     const check = (rig, w, what) => {
       const mp = w.mount_position;
       if (!mp) return;
-      if (mp.side !== 'centerline') assert.equal(mountSide(rig.angle), mp.side, `${type} ${what} side`);
+      if (mp.side !== 'centerline') assert.ok(mountSides(rig.angle).includes(mp.side), `${type} ${what} side ${mp.side} vs ${mountSides(rig.angle)}`);
       const zData = L * (0.5 - mp.x);
       assert.ok(Math.abs(rig.z - zData) <= L * 0.2, `${type} ${what}: z ${(rig.z / L).toFixed(2)}L vs data ${(zData / L).toFixed(2)}L`);
     };
@@ -580,9 +588,11 @@ test('armour belts are laid as separate plates with open joints, stepped across 
 test('hull triangle budget: flat chamfers keep the static hull lighter than the rounded kit was', () => {
   const tris = (type) => kitFor(type).parts.reduce((s, p) => s + p.geom.attributes.position.count / 3, 0);
   // pass-4 kit (rounded boxes): corvette ~10.1k, destroyer ~14.2k, dreadnought ~29.2k
-  assert.ok(tris('corvette') < 9000, `corvette ${tris('corvette')}`);
-  assert.ok(tris('destroyer') < 12000, `destroyer ${tris('destroyer')}`);
-  assert.ok(tris('dreadnought') < 25000, `dreadnought ${tris('dreadnought')}`);
+  // pass 5 round 3 (sections, catwalks, cruciform dreadnought): 7.6k / 9.0k /
+  // 10.3k / 12.1k / 17.3k / 12.2k / 16.0k / 24.0k
+  const budget = { corvette: 8500, frigate: 10000, destroyer: 11500, cruiser: 13500, cruiser_torpedo: 19000,
+    battlecruiser: 13500, battleship: 17500, dreadnought: 26000 };
+  for (const [type, max] of Object.entries(budget)) assert.ok(tris(type) < max, `${type} ${tris(type)} >= ${max}`);
 });
 
 test('class identity: the corvette wears a livery keel blade below its hull and a bow sensor lance', () => {
@@ -593,4 +603,139 @@ test('class identity: the corvette wears a livery keel blade below its hull and 
   assert.ok(blade.geom.boundingBox.max.z < 0 && blade.geom.boundingBox.min.z > -0.4 * k.L, 'blade sits aft, clear of the bells');
   assert.ok(k.parts.some(p => p.mat === 'barrel' && p.geom.boundingBox.max.z > 0.49 * k.L
     && p.geom.boundingBox.max.z - p.geom.boundingBox.min.z > 0.3 * k.L), 'sensor lance');
+});
+
+// ---------------------------------------------------------------------------
+// Pass 5 rounds 2-3: shouldered sections, wedge bows, capital-ship form
+// ---------------------------------------------------------------------------
+
+test('shouldered section: flat mount faces, 45-degree shoulders, outward facets, sloped far end', () => {
+  const g = octSectionGeometry(2, 1, 0.2, 0.1, 2, 1, 0.2, 0.1, 3);
+  g.computeBoundingBox();
+  assert.deepEqual(g.boundingBox.min.toArray().map(v => +v.toFixed(6)), [-1, -0.5, 0]);
+  assert.deepEqual(g.boundingBox.max.toArray().map(v => +v.toFixed(6)), [1, 0.5, 3]);
+  const pos = g.attributes.position;
+  assert.ok(!g.index && g.attributes.uv && g.attributes.normal && pos.count === 32 * 3);
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), n = new THREE.Vector3(), m = new THREE.Vector3();
+  let topFlat = 0, sideFlat = 0, shoulder = 0;
+  for (let i = 0; i < pos.count; i += 3) {
+    a.fromBufferAttribute(pos, i); b.fromBufferAttribute(pos, i + 1); c.fromBufferAttribute(pos, i + 2);
+    n.crossVectors(b.clone().sub(a), c.clone().sub(a)).normalize();
+    m.copy(a).add(b).add(c).divideScalar(3);
+    const out = Math.abs(n.z) > 0.9 ? new THREE.Vector3(0, 0, m.z - 1.5) : new THREE.Vector3(m.x, m.y, 0);
+    assert.ok(n.dot(out) > 0, `facet ${i / 3} faces inward`);
+    if (n.y > 0.99) { topFlat++; for (const p of [a, b, c]) assert.ok(Math.abs(p.x) <= 0.8 + 1e-6 && Math.abs(p.y - 0.5) < 1e-6); }
+    if (n.x > 0.99) { sideFlat++; for (const p of [a, b, c]) assert.ok(p.y <= 0.3 + 1e-6 && p.y >= -0.4 - 1e-6); }
+    if (Math.abs(Math.abs(n.x) - Math.SQRT1_2) < 1e-6 && Math.abs(Math.abs(n.y) - Math.SQRT1_2) < 1e-6) shoulder++;
+  }
+  assert.equal(topFlat, 2);
+  assert.equal(sideFlat, 2);
+  assert.equal(shoulder, 8, 'four shoulders, two facets each');
+  // no shoulders: the degenerate facets are dropped, not emitted as slivers
+  assert.equal(octSectionGeometry(1, 1, 0, 0, 1, 1, 0, 0, 1).attributes.position.count, (8 + 4 + 4) * 3);
+  // dy: the far ring only
+  const t = octSectionGeometry(2, 1, 0.2, 0.2, 1, 0.4, 0.1, 0.1, 3, -0.3);
+  t.computeBoundingBox();
+  assert.ok(Math.abs(t.boundingBox.min.y - -0.5) < 1e-6 && Math.abs(t.boundingBox.max.y - 0.5) < 1e-6);
+  const tp = t.attributes.position;
+  for (let i = 0; i < tp.count; i++) if (tp.getZ(i) > 2.99) assert.ok(tp.getY(i) <= -0.1 + 1e-6 && tp.getY(i) >= -0.5 - 1e-6);
+});
+
+test('wedge bow: one sloped glacis to the tip, a raised plate on it, livery only at its root', () => {
+  const k = new HullKit({ length: 10, width: 2 }, 5);
+  const zf = k.wedgeBow({ z0: 1, len: 2, w: 2, h: 1, tw: 0.5, th: 0.3 });
+  assert.equal(zf, 3);
+  const hull = k.parts.filter(p => p.mat === 'hull'), paint = k.parts.filter(p => p.mat === 'paint');
+  assert.equal(hull.length, 2, 'glacis + applique plate (no stack of steps)');
+  assert.equal(paint.length, 1);
+  assert.ok(paint[0].geom.boundingBox.max.z <= 1 + 0.2 * 2 + 1e-6, 'collar stays at the root');
+  const main = hull.find(p => p.geom.boundingBox.max.z > 2.999);
+  const pos = main.geom.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const u = (pos.getZ(i) - 1) / 2;
+    assert.ok(Math.abs(pos.getX(i)) <= (1 - 0.5 * u) + 1e-5 && Math.abs(pos.getY(i)) <= 0.5 * (1 - 0.7 * u) + 1e-5, 'inside the linear taper');
+  }
+  const plate = hull.find(p => p !== main);
+  assert.ok(plate.geom.boundingBox.min.z > 1.5 && plate.geom.boundingBox.max.z < 2.8, 'plate over the middle of the bow');
+});
+
+test('capital bows are wedges: destroyer and up narrow monotonically from the bow root to the tip', () => {
+  const rc = new THREE.Raycaster();
+  const roots = { destroyer: 0.36, battlecruiser: 0.4, battleship: 0.28, dreadnought: 0.44 };
+  for (const [type, z0] of Object.entries(roots)) {
+    const k = kitFor(type);
+    const plating = k.parts.filter(p => p.mat === 'hull' || p.mat === 'paint').map(p => new THREE.Mesh(p.geom, _rayMat));
+    // (the only step up is the applique plate's own thickness, once)
+    let last = Infinity, first = null, ups = 0;
+    for (let i = 0; i <= 5; i++) {
+      const z = (z0 + 0.02 + i * 0.016) * k.L;
+      rc.set(new THREE.Vector3(0, 3 * k.W, z), new THREE.Vector3(0, -1, 0));
+      rc.near = 0; rc.far = 6 * k.W;
+      const hit = rc.intersectObjects(plating, false)[0];
+      assert.ok(hit, `${type}: no deck at ${z / k.L} L`);
+      if (hit.point.y > last + 1e-4) {
+        ups++;
+        assert.ok(hit.point.y - last < 0.05 * k.k, `${type}: bow deck steps up ${(hit.point.y - last).toFixed(3)} at ${(z / k.L).toFixed(3)} L`);
+      }
+      first ??= hit.point.y;
+      last = hit.point.y;
+    }
+    assert.ok(ups <= 1, `${type}: ${ups} steps up along the bow`);
+    assert.ok(last < first - 0.03 * k.W, `${type}: bow deck falls from ${first.toFixed(2)} to ${last.toFixed(2)}`);
+  }
+});
+
+test('dreadnought is one hull: spine, keel and flank strakes fill the valleys between its sponsons', () => {
+  const k = kitFor('dreadnought');
+  const rc = new THREE.Raycaster();
+  const plating = k.parts.filter(p => p.mat === 'hull').map(p => new THREE.Mesh(p.geom, _rayMat));
+  for (const zf of [-0.3, -0.22, 0.05, 0.15]) {
+    for (const [dx, dy] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
+      rc.set(new THREE.Vector3(dx * 2 * k.W, dy * 2 * k.W, zf * k.L), new THREE.Vector3(-dx, -dy, 0));
+      rc.near = 0; rc.far = 4 * k.W;
+      const hit = rc.intersectObjects(plating, false)[0];
+      const r = hit ? Math.hypot(hit.point.x, hit.point.y) : 0;
+      assert.ok(r > 0.5 * k.W, `valley at ${dx},${dy} z ${zf} L: surface at ${(r / k.W).toFixed(2)} W`);
+    }
+  }
+  // keel ram under the bow citadel, ending behind the spinal muzzle
+  rc.set(new THREE.Vector3(0, -2 * k.W, 0.3 * k.L), new THREE.Vector3(0, 1, 0));
+  const keel = rc.intersectObjects(plating, false)[0];
+  assert.ok(keel && keel.point.y < -0.42 * k.W, `keel ram at ${(keel?.point.y / k.W).toFixed(2)} W`);
+  const ram = k.parts.filter(p => p.mat === 'hull' && p.geom.boundingBox.min.y < -0.4 * k.W && p.geom.boundingBox.max.z > 0.4 * k.L);
+  assert.ok(ram.length && ram.every(p => p.geom.boundingBox.max.z < k.spinalMuzzle.z - 0.1 * k.L), 'ram stops short of the muzzle');
+});
+
+test('catwalks: grating, two rails and posts at one physical size, inside their run', () => {
+  const k = new HullKit({ length: 16, width: 4.4 }, 9);
+  k.catwalk(1, 2, -1, 3, { side: 1 });
+  const rails = k.parts.filter(p => p.mat === 'barrel');
+  assert.ok(rails.length >= 2 + 10, `${rails.length} rail parts`);
+  for (const p of k.parts) {
+    const b = p.geom.boundingBox;
+    assert.ok(b.min.z >= -1 - 0.01 && b.max.z <= 3 + 0.01 && b.min.y >= 2 - 1e-6 && b.max.y < 2 + 0.06 * k.k);
+  }
+  assert.ok(rails.every(p => p.center.x > 1), 'rail on the asked side');
+  const small = new HullKit({ length: 8, width: 1.76 }, 9);
+  small.catwalk(0, 0, 0, 2);
+  const hOf = (kit) => Math.max(...kit.parts.map(p => p.geom.boundingBox.max.y)) - Math.min(...kit.parts.map(p => p.geom.boundingBox.min.y));
+  assert.ok(Math.abs(hOf(k) / k.k - hOf(small) / small.k - 2 / k.k) < 1e-6 || Math.abs((hOf(k) - 2 + 2) / k.k - hOf(small) / small.k) < 1, 'rail height follows fitScale only');
+});
+
+test('docking ports: one collar size on every hull, standing on its face with two guide lamps', () => {
+  const span = (L) => {
+    const k = new HullKit({ length: L, width: L * 0.25 }, 4);
+    k.dockingPort(1, 0, 0, '+x');
+    assert.equal(k.lamps.length, 2);
+    assert.ok(k.lamps.every(l => l.pos.x > 1), 'lamps proud of the face');
+    const collar = k.parts.filter(p => p.mat === 'barrel');
+    assert.equal(collar.length, 1);
+    for (const p of k.parts) assert.ok(p.geom.boundingBox.min.x > 1 - 0.02 * k.k && p.geom.boundingBox.max.x < 1 + 0.2 * k.k, `${p.mat} off the face`);
+    const b = collar[0].geom.boundingBox;
+    return (b.max.z - b.min.z) / k.k;
+  };
+  assert.ok(Math.abs(span(8) - span(20.8)) < 1e-6, 'collar follows fitScale only');
+  for (const type of ['dreadnought', 'battleship']) {
+    assert.ok(kitFor(type).parts.some(p => p.mat === 'hazard'), `${type}: docking port`);
+  }
 });

@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from src.recording_io import load_recording
 from src.llm.battle_recorder import BattleRecorder
 from src.physics import Vector3D
 from src.simulation import (
@@ -195,7 +196,7 @@ def _scripted_torpedo_battle(tmp_path, name, checkpoints=4):
         config=config, alpha_config=a_cfg, beta_config=b_cfg, client=None,
         alpha_script=a_script, beta_script=b_script)
     result = runner.run_battle(gen.load_fleet_data())
-    return json.loads(Path(result.recording_file).read_text())
+    return load_recording(result.recording_file)
 
 
 class TestSeededBattle:

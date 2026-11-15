@@ -686,14 +686,25 @@ def damaged_fitting_lines(ship: "ShipCombatState") -> List[str]:
     weapons = getattr(ship, "weapons", None)
     for slot, ws in (weapons.items() if isinstance(weapons, dict) else ()):
         health = getattr(ws, "mount_health", 100.0)
+        # An irradiated (impaired) crew cycles every gun and tube slower
+        # (src/drive_plume.py); the line shows the combined factor.
+        crew = getattr(ws, "crew_cycle_factor", 1.0)
+        crew = crew if isinstance(crew, (int, float)) and crew > 1.0 else 1.0
         if (slot.startswith("pd") or not getattr(ws, "is_operational", True)
-                or not isinstance(health, (int, float)) or health >= 100.0):
+                or not isinstance(health, (int, float))
+                or (health >= 100.0 and crew == 1.0)):
             continue
         name = getattr(getattr(ws, "weapon", None), "name", None) or slot
         if "torpedo" in name.lower():
             name = "Torpedo Launcher"
-        lines.append(f"{name} [{slot}] DAMAGED {health:.0f} %, "
-                     f"cycle x{mount_cooldown_factor(health):.1f}")
+        if health >= 100.0:
+            lines.append(f"{name} [{slot}] crew impaired, cycle x{crew:.1f}")
+        elif crew > 1.0:
+            lines.append(f"{name} [{slot}] DAMAGED {health:.0f} %, crew impaired, "
+                         f"cycle x{mount_cooldown_factor(health) * crew:.1f}")
+        else:
+            lines.append(f"{name} [{slot}] DAMAGED {health:.0f} %, "
+                         f"cycle x{mount_cooldown_factor(health):.1f}")
     turrets = getattr(ship, "point_defense", None)
     for i, pd in enumerate(turrets if isinstance(turrets, (list, tuple)) else ()):
         health = getattr(pd, "mount_health", 100.0)
@@ -716,6 +727,8 @@ def ship_can_deal_damage(ship: "ShipCombatState") -> bool:
     if (getattr(ship, "is_destroyed", False) or getattr(ship, "is_dying", False)
             or getattr(ship, "is_surrendered", False)):
         return False
+    if getattr(ship, "crew_incapacitated", False) is True:
+        return False        # radiation (src/drive_plume.py): nobody left to fight her
     weapons = getattr(ship, "weapons", None)
     for slot, ws in (weapons.items() if isinstance(weapons, dict) else ()):
         if slot.startswith("pd") or not _is_gun(ws):
@@ -734,6 +747,8 @@ def ship_disarmed_by_damage(ship: "ShipCombatState") -> bool:
     ship has. An intact ship that merely fired its magazines dry is NOT
     disarmed by damage (spending ammunition must not cost score), and a hull
     with no gun or tube at all is not either."""
+    if getattr(ship, "crew_incapacitated", False) is True:
+        return True         # an incapacitated crew (src/drive_plume.py) is as good as disarmed
     weapons = getattr(ship, "weapons", None)
     mounts = [ws for slot, ws in (weapons.items() if isinstance(weapons, dict) else ())
               if not slot.startswith("pd") and (_is_gun(ws) or "torpedo" in

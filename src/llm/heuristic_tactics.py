@@ -47,6 +47,7 @@ from __future__ import annotations
 import math
 import threading
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
@@ -98,6 +99,15 @@ MIN_ADVANCE_KPS = 0.5
 # Torpedo boats (no guns) hold this range to the nearest enemy gun ship:
 # outside the gun envelope that matters, inside the torpedoes' reach.
 TORPEDO_STANDOFF_KM = 300.0
+# ...and never ahead of the own gun line (boat_station_km).
+BOAT_BEHIND_LINE_KM = 20.0
+# ...but no further out than this: behind a slow dreadnought line a boat
+# would hang back out of torpedo reach (round 6: dreadnought roster 12/0/0
+# -> 6/6/0 with no cap; 400 km cost the battleship roster, 450 km kept both).
+BOAT_STATION_MAX_KM = 450.0
+# With no enemy gun ship left a boat closes to this range (standoff
+# INTERCEPT) to launch.
+BOAT_NO_GUNS_RANGE_KM = 150.0
 # A boat launches only at targets within this range (a longer flight gives
 # the target's PD and evasion more time).
 TORPEDO_LAUNCH_RANGE_KM = 600.0
@@ -143,6 +153,7 @@ GUN_REACH_KM = 250.0
 CRIPPLED_HULL_PCT = 35.0          # below this hull integrity: open range
 RETREAT_RANGE_KM = 350.0          # ...to this range from the nearest gun ship
 WITHDRAW_ANGLE_DEG = 60.0         # withdrawal burn off the line to the gun
+SURRENDER_CATCH_RANGE_KM = 250.0  # a catching, closing gun ship this near: strike
 
 # Battle damage (src/battle_damage.py). A hull whose drive makes less than
 # FORMATION_MIN_DRIVE_FRACTION of its thrust no longer sets the fleet's
@@ -153,6 +164,15 @@ WITHDRAW_ANGLE_DEG = 60.0         # withdrawal burn off the line to the gun
 FORMATION_MIN_DRIVE_FRACTION = 0.5
 DISARMED_TARGET_FACTOR = 0.3
 BLAST_AVOID_FACTOR = 1.5
+
+# Drive plume (src/drive_plume.py). A ship does not burn friendlies with its
+# own torch: with a friendly inside the avoidance cone astern (the module's
+# PLUME_AVOID_HALF_ANGLE_DEG / PLUME_AVOID_RANGE_KM) it eases the drive until
+# the wash on that friendly is at most this much - under the 0.78 GJ/s the
+# radiators reject - and coasts when even PLUME_MIN_THROTTLE would exceed it.
+# A torpedo dodge keeps its throttle (survival first).
+PLUME_SAFE_WASH_GJ_PER_S = 0.5
+PLUME_MIN_THROTTLE = 0.05
 
 STANDARD_G = 9.81
 
@@ -196,7 +216,10 @@ def has_torpedoes(ship: Any) -> bool:
 def role(ship: Any) -> str:
     """'gun' (a working coilgun), 'torpedo' (loaded tubes only) or 'unarmed'
     (every gun mount wrecked and no round left in a working tube: battle
-    damage, src/battle_damage.py, or an empty magazine)."""
+    damage, src/battle_damage.py, an empty magazine, or a crew incapacitated
+    by plume radiation, src/drive_plume.py)."""
+    if getattr(ship, "crew_incapacitated", False) is True:
+        return "unarmed"
     if has_guns(ship):
         return "gun"
     if has_torpedoes(ship):
@@ -232,6 +255,238 @@ def drive_fraction(ship: Any) -> float:
         return float(ship.get_effective_thrust_fraction())
     except Exception:
         return 1.0
+
+
+def plume_safe_throttle(simulation: Any, ship: Any, throttle: float, threat: bool = False,
+                        direction: Any = None) -> float:
+    """The ordered throttle, eased so this ship's exhaust does not cook a
+    friendly astern of it (see PLUME_SAFE_WASH_GJ_PER_S).
+
+    The cone is checked along the nose as it points now and, for a HEADING
+    order, along the ordered ``direction`` as well, now and over the coming
+    decision interval (drive_plume.exhaust_clearance_km: a friendly just
+    ahead that a full burn would overtake ends up dead astern at point-blank
+    range). The wash is taken on the exhaust axis whatever the friendly's
+    exact angle inside the avoidance cone (the nose moves while the order
+    lasts).
+    """
+    if threat or throttle <= 0.0:
+        return throttle
+    try:
+        from .. import drive_plume as plume
+    except ImportError:  # pragma: no cover - script-style import path
+        import drive_plume as plume
+    if isinstance(direction, dict):
+        direction = SimpleNamespace(x=float(direction.get("x", 0.0)), y=float(direction.get("y", 0.0)),
+                                    z=float(direction.get("z", 0.0)))
+    horizon_s = float(getattr(simulation, "decision_interval", 30.0) or 30.0)
+    nearest_km = plume.exhaust_clearance_km(simulation, ship, None, horizon_s)
+    if direction is not None:
+        ordered = plume.exhaust_clearance_km(simulation, ship, direction, horizon_s)
+        if ordered is not None and (nearest_km is None or ordered < nearest_km):
+            nearest_km = ordered
+    if nearest_km is None:
+        return throttle
+    full = plume.plume_heat_rate_gj_s(plume.emitter_jet_power_w(ship, 1.0), nearest_km, 0.0)
+    if full <= PLUME_SAFE_WASH_GJ_PER_S:
+        return throttle
+    cap = PLUME_SAFE_WASH_GJ_PER_S / full
+    if cap < PLUME_MIN_THROTTLE:
+        return 0.0
+    return round(min(throttle, cap), 2)
+
+
+# When a friendly in the jet would make plume_safe_throttle idle (or nearly
+# idle) a burn, the burn is side-slipped instead: the first heading up to
+# PLUME_SLIP_MAX_DEG off the wanted one whose exhaust clears every friendly
+# at PLUME_SLIP_MIN_SHARE of the ordered throttle or better. Round 3's grid
+# had lead cruisers ordered INTERCEPT at throttle 0 for a whole checkpoint,
+# and withdrawals capped to 0, because a follower sat astern.
+PLUME_SLIP_ANGLES_DEG = (15.0, 30.0, 45.0)
+PLUME_SLIP_MIN_SHARE = 0.9
+PLUME_SLIP_TRIGGER_SHARE = 0.5
+
+
+def plume_clear_heading(simulation: Any, ship: Any, direction: Any, throttle: float,
+                        threat: bool = False) -> Tuple[Any, float]:
+    """(direction, throttle) for a burn along ``direction`` that does not
+    cook a friendly astern: the direction itself if the plume cap leaves it
+    at least PLUME_SLIP_TRIGGER_SHARE of ``throttle``, else the first
+    side-slipped heading (PLUME_SLIP_ANGLES_DEG, fixed order of sides) that
+    keeps PLUME_SLIP_MIN_SHARE, else the direction at its capped throttle."""
+    from ..physics import Vector3D
+    d = Vector3D(direction.x, direction.y, direction.z)
+    if d.magnitude <= 1e-9 or throttle <= 0.0:
+        return d, throttle
+    d = d.normalized()
+
+    from .. import drive_plume as plume
+    horizon_s = float(getattr(simulation, "decision_interval", 30.0) or 30.0)
+
+    def cap(v) -> float:
+        # Along the ordered line only: a HEADING order turns first and burns
+        # once the nose is on it (the present nose is what we leave).
+        if threat:
+            return throttle
+        km = plume.exhaust_clearance_km(simulation, ship, v, horizon_s)
+        if km is None:
+            return throttle
+        full = plume.plume_heat_rate_gj_s(plume.emitter_jet_power_w(ship, 1.0), km, 0.0)
+        if full <= PLUME_SAFE_WASH_GJ_PER_S:
+            return throttle
+        c = PLUME_SAFE_WASH_GJ_PER_S / full
+        return 0.0 if c < PLUME_MIN_THROTTLE else round(min(throttle, c), 2)
+    base = plume_safe_throttle(simulation, ship, throttle, threat, {"x": d.x, "y": d.y, "z": d.z})
+    if base >= PLUME_SLIP_TRIGGER_SHARE * throttle:
+        return d, base
+    ref = Vector3D(0.0, 0.0, 1.0) if abs(d.z) < 0.9 else Vector3D(0.0, 1.0, 0.0)
+    u = (ref - d * ref.dot(d)).normalized()
+    w = Vector3D(d.y * u.z - d.z * u.y, d.z * u.x - d.x * u.z, d.x * u.y - d.y * u.x)
+    for angle in PLUME_SLIP_ANGLES_DEG:
+        a = math.radians(angle)
+        for side in (w, w * -1.0, u, u * -1.0):
+            v = (d * math.cos(a) + side * math.sin(a)).normalized()
+            t = cap(v)
+            if t >= PLUME_SLIP_MIN_SHARE * throttle:
+                return v, t
+    return d, base
+
+
+def boat_station_km(simulation: Any, boat: Any, anchor: Any) -> float:
+    """
+    Range a torpedo boat holds to ``anchor`` (the nearest enemy gun):
+    TORPEDO_STANDOFF_KM, but never ahead of its own gun line - at least
+    BOAT_BEHIND_LINE_KM further from him than our nearest gun ship (up to
+    BOAT_STATION_MAX_KM), so the boat stays under the fleet's PD umbrella. Round 5 (after the torpedo
+    reprice left one or two corvettes per battleship fleet): a lone corvette
+    holding 300 km sat out in front of its battleships, was the nearest
+    target for every legacy probe and died alone at ~100 s, deciding the
+    battle on points.
+    """
+    guns = [s for s in getattr(simulation, "ships", {}).values()
+            if s.faction == boat.faction and s is not boat and _alive(s) and role(s) == "gun"]
+    if not guns:
+        return TORPEDO_STANDOFF_KM
+    line = min(_km(g, anchor) for g in guns)
+    return round(max(TORPEDO_STANDOFF_KM, min(line + BOAT_BEHIND_LINE_KM, BOAT_STATION_MAX_KM)), 1)
+
+
+# Weapon arcs (src/weapon_arcs.py, data/hull_mounts.json): flown exactly
+# nose-on a hull masks most of its own batteries (a battleship bears its
+# spinal and 2 of 4 batteries, a destroyer has both PD turrets blocked dead
+# ahead). gun_aspect_deg picks, per hull class, the angle off the target line
+# up to ASPECT_MAX_DEG (inside the 30 deg nose-armour arc, with margin) that
+# brings more gun energy to bear (by ASPECT_MIN_GAIN) - over the engine's own
+# roll, which it flies to unmask - or as much and more PD turrets; else 0. Gun
+# ships coast at that aspect instead of PADLOCKed nose-on.
+ASPECT_MAX_DEG = 20.0
+ASPECT_STEP_DEG = 5.0
+ASPECT_ROLL_STEP_DEG = 15.0
+ASPECT_MIN_GAIN = 0.10
+# Closer than this a fixed 30 s attitude drifts too far off a passing
+# target: PADLOCK (tracking, nose-on) instead.
+ASPECT_MIN_RANGE_KM = 40.0
+_ASPECT_CACHE: Dict[str, float] = {}
+
+
+def _mount_energy_gj_s(ship_type: str) -> Dict[str, float]:
+    import json as _json
+    from pathlib import Path as _Path
+    data = _json.loads((_Path(__file__).resolve().parent.parent.parent / "data" / "fleet_ships.json").read_text())
+    kinds = data.get("weapon_types", {})
+    out = {}
+    for w in data.get("ships", {}).get(ship_type, {}).get("weapons", []) or []:
+        t = kinds.get(w.get("type"), {})
+        out[w.get("slot")] = float(t.get("kinetic_energy_gj", 0.0) or 0.0) / max(
+            1.0, float(t.get("cooldown_s", 10.0) or 10.0))
+    return out
+
+
+def gun_aspect_deg(ship_type: str) -> float:
+    """Best gun aspect (deg off the target line) for a hull class (cached)."""
+    if ship_type in _ASPECT_CACHE:
+        return _ASPECT_CACHE[ship_type]
+    try:
+        from ..weapon_arcs import cell_index, load_hull_mounts
+        hm = load_hull_mounts().get(ship_type)
+    except Exception:
+        hm = None
+    angle = 0.0
+    if hm is not None:
+        energy = _mount_energy_gj_s(ship_type)
+        guns = [m for m in hm.mounts if m.kind in ("gun", "spinal")]
+        pds = [m for m in hm.mounts if m.kind == "pd"]
+        steps = int(round(ASPECT_MAX_DEG / ASPECT_STEP_DEG))
+        table = []
+        for i in range(steps + 1):
+            th = math.radians(i * ASPECT_STEP_DEG)
+            top = None
+            for j in range(int(round(360.0 / ASPECT_ROLL_STEP_DEG))):
+                ph = math.radians(j * ASPECT_ROLL_STEP_DEG)
+                c = cell_index(math.cos(th), math.sin(th) * math.cos(ph), math.sin(th) * math.sin(ph))
+                key = (round(sum(energy.get(m.slot, 0.0) for m in guns if not m.mask[c]), 6),
+                       sum(1 for m in pds if not m.mask[c]))
+                if top is None or key > top:
+                    top = key
+            table.append((i * ASPECT_STEP_DEG, top[0], top[1]))
+        if guns and table:
+            _, e0, p0 = table[0]
+            # Off the line only for a real gain: ASPECT_MIN_GAIN more gun
+            # energy than nose-on, or as much and more PD turrets bearing.
+            better = [t for t in table[1:]
+                      if t[1] >= e0 * (1.0 + ASPECT_MIN_GAIN) or (t[1] >= e0 * (1.0 - 1e-6) and t[2] > p0)]
+            if better:
+                angle = max(better, key=lambda t: (round(t[1], 4), t[2], -t[0]))[0]
+    _ASPECT_CACHE[ship_type] = angle
+    return angle
+
+
+def aspect_direction(ship: Any, target: Any, aspect_deg: float) -> Any:
+    """World direction ``aspect_deg`` off the line to ``target``, turned
+    toward the side the nose already points (least turn; world +z when the
+    nose is on the line)."""
+    from ..physics import Vector3D
+    los = (target.position - ship.position).normalized()
+    fwd = ship.forward
+    side = fwd - los * fwd.dot(los)
+    if side.magnitude < 1e-3:
+        up = Vector3D(0.0, 0.0, 1.0) if abs(los.z) < 0.9 else Vector3D(0.0, 1.0, 0.0)
+        side = up - los * up.dot(los)
+    side = side.normalized()
+    a = math.radians(aspect_deg)
+    return (los * math.cos(a) + side * math.sin(a)).normalized()
+
+
+def should_surrender(simulation: Any, ship: Any, enemies: List[Any]) -> bool:
+    """
+    A disarmed ship strikes only when its whole side is out of the fight and
+    it cannot get away:
+    - the side can no longer deal damage (battle_damage.side_can_deal_damage:
+      no armed ship AND no round of ours still in flight - round 4 surrendered
+      six corvettes with 36 of their rounds still on the way), and
+    - an enemy gun ship that can catch it (drive at least ours) is inside
+      SURRENDER_CATCH_RANGE_KM and closing, or the enemy cannot deal damage
+      either (two dry fleets would otherwise drift to the time limit).
+      Otherwise it withdraws out of gun reach.
+    """
+    from ..battle_damage import side_can_deal_damage
+    side = [s for s in getattr(simulation, "ships", {}).values()
+            if s.faction == ship.faction and _alive(s)]
+    if side_can_deal_damage(simulation, side):
+        return False
+    foes = [s for s in getattr(simulation, "ships", {}).values()
+            if s.faction != ship.faction and _alive(s)]
+    if not side_can_deal_damage(simulation, foes):
+        return True     # nobody on either side can hurt anyone: end the stall
+    mine = max_accel_ms2(ship)
+    for e in enemies:
+        if not has_guns(e) or _km(ship, e) > SURRENDER_CATCH_RANGE_KM:
+            continue
+        rel = e.position - ship.position
+        closing = -(e.velocity - ship.velocity).dot(rel.normalized()) if rel.magnitude > 0 else 0.0
+        if closing > 0.0 and max_accel_ms2(e) >= mine:
+            return True
+    return False
 
 
 def blast_threat(simulation: Any, ship: Any) -> Optional[Any]:
@@ -492,7 +747,11 @@ def _salvo_plan(simulation: Any, boats: List[Any], enemies: List[Any], focus: Op
     left = {b.ship_id: int(simulation.torpedo_launch_capacity(b.ship_id)) for b in boats}
 
     def need_for(enemy) -> int:
-        own, escorts, _ = pd_cover(simulation, enemy, pd["range_km"])
+        # Turrets that BEAR on rounds coming from the nearest boat (weapon
+        # arcs: a turret masked by its own hull is no cover).
+        near = min(boats, key=lambda b: (_km(b, enemy), b.ship_id))
+        own, escorts, _ = pd_cover(simulation, enemy, pd["range_km"],
+                                   threat_from=near.position)
         need = salvo_to_saturate(own + escorts, pd["turrets_to_blind_at_floor"])
         inbound = len(rounds_inbound(simulation, boats[0].faction, enemy.ship_id))
         return max(0, need + SALVO_MARGIN_ROUNDS - inbound)

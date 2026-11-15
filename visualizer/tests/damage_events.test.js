@@ -221,3 +221,118 @@ test('combat log names the new damage: mounts, drive, cook-off, blast victims', 
   assert.match(blast.text, /^BLAST: .* caught 3\.6 km from .* reactor \(-7\.9 cm lateral armour\)$/);
   assert.match(row('blast_damage', { source_ship_id: 'beta_5', distance_km: 3, fuse_cut_s: 11.8 }).text, /fuse -11\.8 s/);
 });
+
+// ---------------------------------------------------------------------------
+// Round 3: impacts on fittings, exit jets, remnant, drive transients
+// ---------------------------------------------------------------------------
+import { blastRemnantAt, REMNANT_LIFE_S } from '../src/render/BlastShell.js';
+import { plumeTransient, TRANSIENT_RATE } from '../src/render/Torch.js';
+import { Interpolator } from '../src/Interpolator.js';
+import { EXIT_MAX_BEAMS } from '../src/render/DamageFX.js';
+
+test('a round that strikes a fitting is marked for that mount; the blast coasts with the wreck', () => {
+  const rec = recording();
+  // the gun-mount hit at t=2 was made by a slug that also has a hit event
+  rec.events.unshift({ timestamp: 2, event_type: 'hit', ship_id: 'a', data: { projectile_id: 'slug_9', hit_location: 'lateral', kinetic_energy_gj: 2.7, penetrated: false, shooter_id: 'b' } });
+  rec.events.find(e => e.event_type === 'mount_damaged' && e.timestamp === 2).data.ordnance_id = 'slug_9';
+  const tl = buildDamageTimeline(rec);
+  const m = tl.byOrdnance.get('slug_9');
+  assert.equal(m.fitting, 'gun');
+  assert.equal(m.strike, 'impact');
+  const w = tl.ships.get('a').wrecks.find(x => x.ordnanceId === 'slug_9');
+  assert.equal(w.t, m.t, 'the mount sparks when the round is seen to land');
+  // an ordinary hit carries no fitting
+  rec.events.push({ timestamp: 7, event_type: 'hit', ship_id: 'a', data: { projectile_id: 'slug_10', hit_location: 'lateral', kinetic_energy_gj: 2.7, penetrated: true } });
+  const tl2 = buildDamageTimeline(rec);
+  assert.equal(tl2.byOrdnance.get('slug_10').fitting, undefined);
+  assert.equal(tl2.byOrdnance.get('slug_10').strike, 'pierce');
+  // the blast is centred on the wreck's trace position and carries its velocity
+  const moving = recording();
+  for (const f of moving.sim_trace) { f.ships.dead.vel = [0, 2000, 0]; f.ships.dead.pos = [4000, 8000 + 2000 * f.t, 0]; }
+  const b = buildDamageTimeline(moving).blasts[0];
+  assert.deepEqual(b.pos, [4000, 8000 + 2000 * b.t, 0]);
+  assert.deepEqual(b.vel, [0, 2000, 0]);
+});
+
+test('impact presets: stopped, penetrating and torpedo strikes are built differently', () => {
+  const K = blastKinds();
+  // armour-stopped slug: flash + plasma ring on the plating, no fire
+  assert.ok(K.impact.fireR === 0 && K.impact.ringR > 0 && K.impact.core && K.impact.crater);
+  // penetrating slug: a tighter, faster jet and a fire inside the hole
+  assert.ok(K.pierce.fireR > 0 && K.pierce.cone > K.impact.cone && K.pierce.streakSpeed[1] > K.impact.streakSpeed[1]);
+  // torpedo strikes are heavier than slug hits
+  assert.ok(K.kineticStrike.flash > K.impact.flash && K.kineticStrike.ringR > K.impact.ringR && K.kineticStrike.fireR === 0);
+  assert.ok(K.breach.fireR > 0 && K.breach.flash >= K.kineticStrike.flash);
+  // the exit jet is the tightest, fastest cone of all and has no shell
+  assert.ok(K.exitJet.cone >= 0.95 && K.exitJet.shellR === 0 && K.exitJet.streakSpeed[1] > K.breach.streakSpeed[1]);
+  for (const k of ['impact', 'pierce', 'kineticStrike', 'breach', 'exitJet']) {
+    assert.ok(K[k].duration <= 6 && K[k].streakW <= 0.024 && K[k].flashFade <= 0.13, `${k}: a hard, short flash`);
+  }
+  // the reactor kill opens with a hard white core that is gone in a blink
+  assert.ok(K.reactor.core.level >= 8 && K.reactor.core.life < 0.25);
+  assert.ok(EXIT_MAX_BEAMS > 1 && EXIT_MAX_BEAMS < 3);
+});
+
+test('remnant glow and drive transients are pure functions of battle time / the recording', () => {
+  assert.equal(blastRemnantAt(-1, 13).level, 0);
+  assert.equal(blastRemnantAt(REMNANT_LIFE_S, 13).level, 0);
+  assert.equal(blastRemnantAt(0.5, 13).level, 0, 'nothing while the fireball is young');
+  const mid = blastRemnantAt(8, 13), late = blastRemnantAt(26, 13);
+  assert.ok(mid.level > late.level && late.level > 0 && mid.r < 13 * 0.5 && late.cool > mid.cool);
+  assert.deepEqual(blastRemnantAt(8, 13), mid);
+
+  assert.deepEqual(plumeTransient(0), { surge: 0, fade: 0 });
+  assert.deepEqual(plumeTransient(undefined), { surge: 0, fade: 0 });
+  assert.deepEqual(plumeTransient(TRANSIENT_RATE * 2), { surge: 1, fade: 0 });
+  assert.deepEqual(plumeTransient(-TRANSIENT_RATE / 2), { surge: 0, fade: 0.5 });
+  // the slope comes from two neighbouring trace frames, the same at any playhead in between
+  const f = (thrust) => ({ pos: [0, 0, 0], vel: [0, 0, 0], fwd: [0, 0, 1], thrust });
+  const at = (a) => Interpolator.interpolateShips({ t: 10, ships: { s: f(0.2) } }, { t: 11, ships: { s: f(1.0) } }, a).s;
+  assert.ok(Math.abs(at(0.1).thrustRate - 0.8) < 1e-12 && Math.abs(at(0.9).thrustRate - 0.8) < 1e-12);
+  assert.ok(Math.abs(at(0.5).thrust - 0.6) < 1e-12);
+});
+
+// ---------------------------------------------------------------------------
+// Drive plume wash (plume lane)
+// ---------------------------------------------------------------------------
+import { washAt, washHeat, WASH_COOL_S } from '../src/DamageTimeline.js';
+
+test('plume wash: the facing heats on entry, follows the recorded rate, cools after the exit', () => {
+  const rec = recording(false);
+  const wash = (timestamp, phase, rate, extra = {}) => ({ timestamp, event_type: 'plume_wash', ship_id: 'a',
+    data: { source_ship_id: 'b', phase, heat_rate_gj_s: rate, peak_heat_rate_gj_s: extra.peak ?? rate, hit_location: 'nose', swept: !!extra.swept, target_id: null } });
+  rec.events = [wash(2, 'enter', 12.8), wash(7, 'sustain', 16), wash(9, 'exit', 0, { peak: 16 }),
+    wash(10.5, 'enter', 0.08, { swept: false }), wash(11.5, 'exit', 0, { peak: 0.19, swept: true })];
+  const tl = buildDamageTimeline(rec);
+  const sd = tl.ships.get('a');
+  assert.deepEqual(sd.washes.map(w => [w.source, w.t0, w.t1, w.section, w.swept, w.peak]), [['b', 2, 9, 'nose', false, 16], ['b', 10.5, 11.5, 'nose', true, 0.19]]);
+  // nothing before the jet arrives, and nothing on a ship that is never washed
+  assert.equal(washAt(sd, 1.9).heat, 0);
+  assert.equal(washAt(tl.ships.get('b'), 5).heat, 0);
+  assert.equal(washAt(undefined, 5).heat, 0);
+  // builds over the first second or two, then tracks the rate between samples
+  const h0 = washAt(sd, 2.05).heat, h1 = washAt(sd, 3.5).heat, h2 = washAt(sd, 7).heat;
+  assert.ok(h0 > 0 && h0 < h1 && h1 < h2, `${h0} ${h1} ${h2}`);
+  assert.ok(Math.abs(h2 - washHeat(16)) < 0.01 && washAt(sd, 7).rate === 16 && washAt(sd, 7).source === 'b' && washAt(sd, 7).jet === 'b' && washAt(sd, 7).section === 'nose');
+  assert.ok(Math.abs(washAt(sd, 4.5).rate - 14.4) < 1e-9, 'rate eased between the 5 s samples');
+  // after the exit: no wash rate (no impingement), the plating cools over seconds
+  const c1 = washAt(sd, 9.5), c2 = washAt(sd, 10.4);
+  assert.equal(c1.rate, 0);
+  assert.equal(c1.jet, null);
+  assert.ok(c1.heat < h2 && c2.heat < c1.heat && c2.heat > 0);
+  assert.ok(Math.abs(c1.heat - washHeat(16) * Math.exp(-0.5 / WASH_COOL_S)) < 0.02);
+  assert.equal(c1.t, 9, 'the glow stays where the jet last was');
+  // a short swept crossing flares at its peak rate, then cools away
+  const sweep = washAt(sd, 11.2);
+  assert.ok(sweep.rate >= 0.19 && sweep.jet === 'b', 'the jet is on the hull again');
+  assert.ok(sweep.heat > 0);
+  assert.equal(washAt(sd, 40).heat, 0);
+  // pure: same answer whenever asked, in any order
+  assert.deepEqual(washAt(sd, 7), washAt(sd, 7));
+  // heat scale: a faint wash is dull red, the demo's 16 GJ/s yellow-white, point blank white
+  assert.ok(washHeat(0) === 0 && washHeat(0.2) < 0.3 && washHeat(2) > 0.4 && washHeat(16) === 1 && washHeat(69) > 1.4 && washHeat(1e6) <= 1.6);
+  // fittings burned by the wash use the ordinary dead-mount path
+  rec.events.push({ timestamp: 5, event_type: 'mount_damaged', ship_id: 'a', data: { kind: 'pd', slot: 'pd_0', index: 0, health_pct: 0, destroyed: true, cause: 'plume_wash', hit_location: 'nose', source_ship_id: 'b' } });
+  const w = buildDamageTimeline(rec).ships.get('a').wrecks;
+  assert.deepEqual(w.map(x => [x.t, x.kind, x.slot, x.destroyed, x.cause]), [[5, 'pd', 'pd_0', true, 'plume_wash']]);
+});

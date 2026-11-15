@@ -196,7 +196,14 @@ def test_gun_ship_faces_the_nearest_gun_and_shoots_the_target():
     captain = _captain("destroyer")
     m = _maneuver(captain.decide("me", sim))
     assert captain.primary_target_id == "slow"
-    assert m.maneuver_type == ManeuverType.PADLOCK and m.target_id == "gun"
+    # The nose faces the nearest gun at the hull's gun aspect (weapon arcs).
+    import math
+    assert m.maneuver_type == ManeuverType.HEADING and m.throttle == 0.0
+    to_gun = (sim.get_ship("gun").position - sim.get_ship("me").position).normalized()
+    h = m.heading_direction
+    cos_off = (h["x"] * to_gun.x + h["y"] * to_gun.y + h["z"] * to_gun.z) / math.sqrt(
+        h["x"] ** 2 + h["y"] ** 2 + h["z"] ** 2)
+    assert math.degrees(math.acos(min(1.0, cos_off))) == pytest.approx(T.gun_aspect_deg("destroyer"), abs=0.5)
     assert m.evade is None                           # no dodge: it would swing the nose
 
 
@@ -262,6 +269,7 @@ def test_every_loaded_tube_with_a_shot_fires():
     assert launched == capacity
 
 
+@pytest.mark.usefixtures("all_round_fire")  # exact head-on scenario; see tests/conftest.py
 def test_a_lone_corvette_still_fires_at_a_covered_group():
     # One tube cannot saturate a destroyer and four PD escorts; holding would
     # gain nothing (reloads do not stack): it fires, flagged as short.
@@ -344,12 +352,13 @@ def _small_battle(tmp_path, doctrines, hulls=MIXED, seed=21, time_limit=240.0, d
     dummy = LLMCaptainConfig("A", "A", model=HEURISTIC_MODEL)
     runner = LLMBattleRunner(bc, dummy, dummy, None, config)
     runner.run_battle(load_fleet_data())
-    path = next(p for p in tmp_path.glob("*.json") if not p.name.endswith(".draft.json"))
+    from src.recording_io import iter_recordings, load_recording
+    path = next(iter_recordings(tmp_path))
     spec = importlib.util.spec_from_file_location(
         "tactics_eval", Path(__file__).parent.parent / "scripts" / "tactics_eval.py")
     ev = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(ev)
-    recording = json.loads(path.read_text())
+    recording = load_recording(path)
     return ev.analyze(str(path)), recording
 
 
@@ -375,7 +384,8 @@ def test_tactical_gun_fleets_make_a_controlled_pass(gun_battle, tmp_path):
     assert legacy["closest_rel_kps"] > 4.0, legacy
     assert stats["closest_rel_kps"] < 3.0, stats
     assert stats["shots"] > legacy["shots"], (stats, legacy)
-    assert stats["shots_eff_share"] > legacy["shots_eff_share"], (stats, legacy)
+    # (Weapon arcs: at its gun aspect a tactical fleet also lands rounds from
+    # beyond 150 km, so the share inside it is no longer above legacy's.)
 
 
 def test_tactical_torpedo_boats_launch_as_one_salvo(tactical_battle):
@@ -507,6 +517,13 @@ def test_a_disarmed_ship_under_fire_actually_opens_range(tmp_path, monkeypatch):
         _wreck_guns(self.simulation.get_ship("alpha_1"))
 
     monkeypatch.setattr(LLMBattleRunner, "setup_fleet_battle", setup)
+    # This pins the withdrawal, not the cruiser's gunnery: keep its batteries
+    # on its primary (the destroyer) even where their hull masks it - with the
+    # masked-battery fallback (src/simulation._arcs_fallback_target) they
+    # kill the frigate inside two minutes and the battle ends before the
+    # range can open.
+    from src.simulation import CombatSimulation
+    monkeypatch.setattr(CombatSimulation, "_arcs_fallback_allowed", staticmethod(lambda order: False))
     # A destroyer (2 g) disarmed at t=0 withdraws from a cruiser (1.5 g) that
     # can shoot but not catch it.
     # (An armed frigate keeps alpha in the fight, so it does not surrender.)
@@ -528,11 +545,19 @@ def test_a_lone_disarmed_ship_surrenders():
     # its own left to protect - it surrenders instead of fleeing forever.
     sim = CombatSimulation(seed=8, time_step=1.0)
     me = _ship(sim, "me", "destroyer", "alpha", (0, 0, 0))
-    _ship(sim, "foe", "destroyer", "beta", (300, 0, 0), fwd=(-1, 0, 0))
+    _ship(sim, "foe", "destroyer", "beta", (200, 0, 0), vel_kps=(-1.0, 0, 0), fwd=(-1, 0, 0))
     _wreck_guns(me)
     captain = _captain("destroyer")
     captain.decide("me", sim)
-    assert captain.has_surrendered
+    assert captain.has_surrendered            # an equal-drive gun ship is closing in
+    # Nobody closing: it withdraws out of gun reach instead (round 5).
+    sim3 = CombatSimulation(seed=8, time_step=1.0)
+    me3 = _ship(sim3, "me", "destroyer", "alpha", (0, 0, 0))
+    _ship(sim3, "foe", "destroyer", "beta", (300, 0, 0), fwd=(-1, 0, 0))
+    _wreck_guns(me3)
+    captain3 = _captain("destroyer")
+    captain3.decide("me", sim3)
+    assert not captain3.has_surrendered
     # With an armed friend still fighting it withdraws instead.
     sim2 = CombatSimulation(seed=8, time_step=1.0)
     me2 = _ship(sim2, "me", "destroyer", "alpha", (0, 0, 0))
@@ -623,7 +648,24 @@ def test_the_formation_throttle_is_what_the_ship_flies():
 # fire-control fixture's heuristic battles were flown with it). A change to
 # the ENGINE moves this hash too - then re-pin it in the same commit; a
 # change that moves it without an engine change has altered legacy.
-LEGACY_GOLDEN_SHA256 = "4af3acfd2d670b0f24f01c9a4f06e9643fe06e762f2f69a7130126f261f3cae6"
+# Re-pinned for the drive plume (src/drive_plume.py): the 5 km line abreast
+# sweeps its torches across its neighbours when it turns, the drive
+# interlock holds those burns (`drive_interlock` events, slightly different
+# courses) and what wash remains is recorded as `plume_wash`.
+# (Re-pinned once more: `plume_wash` events gained the `radiators` list -
+# empty in this battle; same 1532 events, same courses.)
+# (Re-pinned for weapon arcs (src/weapon_arcs.py, pass 5 wave 4): mounts fire
+# only where their own hull leaves them clear and after slewing, ships roll to
+# unmask - and re-pinned whenever data/hull_mounts.json is re-exported, e.g.
+# gun turrets depressing 10 degrees instead of 2.)
+# (Re-pinned for the round-2 PD placement: the destroyer and torpedo cruiser
+# PD masks in data/hull_mounts.json changed, so which turret bears on which
+# torpedo changed; no engine code changed.)
+# (Re-pinned for the roll planner fix (arcs review, finding 1): roll goals
+# need a whole turret-torpedo pair of PD gain, stand >= 15 s and are scored by
+# the roll reachable before impact, so hulls roll less and some mounts bear
+# at other ticks; no change to motion.)
+LEGACY_GOLDEN_SHA256 = "acbc1892baca6367b2755f4857a29a3674f614dd778d13ddba225ccd4d7cf342"
 
 
 def test_legacy_battle_event_stream_is_pinned(tmp_path):
@@ -662,3 +704,114 @@ def test_mirror_draft_needs_auto_draft():
     r = subprocess.run([_sys.executable, "scripts/run_draft_battle.py", "--mirror-draft", "--quiet"],
                        capture_output=True, text=True, cwd=Path(__file__).parent.parent, timeout=120)
     assert r.returncode != 0 and "--mirror-draft needs --auto-draft" in r.stderr
+
+
+def test_a_lead_with_a_friend_in_its_jet_side_slips_instead_of_idling():
+    # Round 4: the plume cap (src/drive_plume.py) idled lead cruisers for whole
+    # checkpoints (INTERCEPT at throttle 0) because a follower sat astern.
+    sim = CombatSimulation(seed=10, time_step=1.0)
+    _ship(sim, "lead", "cruiser", "alpha", (0, 0, 0))
+    _ship(sim, "tail", "destroyer", "alpha", (-3, 0, 0))
+    _ship(sim, "foe", "cruiser", "beta", (400, 0, 0), fwd=(-1, 0, 0))
+    idle = T.plume_safe_throttle(sim, sim.get_ship("lead"), 1.0)
+    assert idle < T.PLUME_SLIP_TRIGGER_SHARE            # straight ahead would cook the follower
+    m = _maneuver(_captain("cruiser", name="lead").decide("lead", sim))
+    assert m.throttle >= T.PLUME_SLIP_MIN_SHARE * T.fleet_plan(sim, "alpha").formation_throttle.get("lead", 1.0)
+    if m.maneuver_type == ManeuverType.HEADING:
+        import math
+        h = m.heading_direction
+        assert h["x"] / math.sqrt(h["x"] ** 2 + h["y"] ** 2 + h["z"] ** 2) >= math.cos(math.radians(46))
+
+
+def test_a_dry_torpedo_fleet_does_not_surrender_with_its_salvo_in_flight(tmp_path):
+    # Round 5: six corvettes v a gun line launched all their rounds and
+    # surrendered at the next checkpoint with 36 still in flight.
+    from src.llm.fleet_draft import auto_draft
+    gunline = tuple(s.ship_type for s in auto_draft("beta", budget=150, seed=1, doctrine="gunline").ships)
+    _, rec = _small_battle(tmp_path, TACTICAL, hulls=("corvette",) * 6, beta_hulls=gunline,
+                           seed=1, time_limit=420.0, distance_km=500.0)
+    frames = {round(f["t"]): f for f in rec["sim_trace"]}
+    surrenders = [e for e in rec["events"] if e["event_type"] == "surrender"
+                  and str(e.get("ship_id") or "").startswith("alpha")]
+    for e in surrenders:
+        frame = frames.get(round(e["timestamp"])) or frames[max(k for k in frames if k <= e["timestamp"])]
+        in_flight = [t for t in frame.get("torpedoes", []) if str(t.get("id", "")).startswith("torp_alpha")]
+        assert not in_flight, (e["timestamp"], len(in_flight))
+
+
+def test_a_torpedo_boat_keeps_station_behind_its_gun_line():
+    # Round 6: a lone corvette holding 300 km sat in front of its own
+    # battleships, outside their PD umbrella, and died alone to legacy probes.
+    sim = CombatSimulation(seed=11, time_step=1.0)
+    _ship(sim, "boat", "corvette", "alpha", (0, 0, 0))
+    _ship(sim, "bb", "battleship", "alpha", (-150, 20, 0))
+    _ship(sim, "foe", "destroyer", "beta", (300, 0, 0), fwd=(-1, 0, 0))
+    m = _maneuver(_captain("corvette", name="boat").decide("boat", sim))
+    assert m.maneuver_type == ManeuverType.HOLD_RANGE and m.target_id == "foe"
+    line_km = sim.get_ship("bb").position.distance_to(sim.get_ship("foe").position) / 1000.0
+    want_km = max(T.TORPEDO_STANDOFF_KM, min(line_km + T.BOAT_BEHIND_LINE_KM, T.BOAT_STATION_MAX_KM))
+    assert want_km > T.TORPEDO_STANDOFF_KM
+    assert m.hold_range_m == pytest.approx(want_km * 1000.0, abs=100.0)
+
+
+def test_gun_aspect_brings_more_batteries_to_bear_than_nose_on():
+    # Round 7 (weapon arcs): nose-on a battleship bears its spinal and 2 of 4
+    # batteries; the data-derived aspect keeps the target inside the nose
+    # armour arc and bears more.
+    import math
+    from src.weapon_arcs import cell_index, load_hull_mounts
+    from src.geometry import NOSE_HIT_ANGLE_THRESHOLD
+    for hull in ("battleship", "cruiser", "destroyer"):
+        a = T.gun_aspect_deg(hull)
+        assert 0.0 < a <= T.ASPECT_MAX_DEG < NOSE_HIT_ANGLE_THRESHOLD
+    hm = load_hull_mounts()["battleship"]
+    guns = [m for m in hm.mounts if m.kind in ("gun", "spinal")]
+
+    def bearing(th_deg):
+        th = math.radians(th_deg)
+        return max(sum(1 for m in guns if not m.mask[cell_index(
+            math.cos(th), math.sin(th) * math.cos(math.radians(p)), math.sin(th) * math.sin(math.radians(p)))])
+            for p in range(0, 360, 15))
+    assert bearing(T.gun_aspect_deg("battleship")) > bearing(0.0)
+
+
+def test_a_coasting_gun_ship_holds_its_aspect_not_nose_on():
+    import math
+    sim = CombatSimulation(seed=12, time_step=1.0)
+    me = _ship(sim, "me", "cruiser", "alpha", (0, 0, 0), vel_kps=(1.0, 0, 0))
+    _ship(sim, "foe", "cruiser", "beta", (120, 0, 0), fwd=(-1, 0, 0))
+    m = _maneuver(_captain("cruiser").decide("me", sim))
+    assert m.maneuver_type == ManeuverType.HEADING and m.throttle == 0.0     # attitude only
+    h = m.heading_direction
+    off = math.degrees(math.acos(h["x"] / math.sqrt(h["x"] ** 2 + h["y"] ** 2 + h["z"] ** 2)))
+    assert off == pytest.approx(T.gun_aspect_deg("cruiser"), abs=0.5)
+
+
+def test_capital_hulls_padlock_instead_of_holding_an_aspect():
+    sim = CombatSimulation(seed=12, time_step=1.0)
+    _ship(sim, "me", "battleship", "alpha", (0, 0, 0), vel_kps=(1.0, 0, 0))
+    _ship(sim, "foe", "battleship", "beta", (120, 0, 0), fwd=(-1, 0, 0))
+    assert T.gun_aspect_deg("battleship") > 0.0          # the data has a gain...
+    m = _maneuver(_captain("battleship").decide("me", sim))
+    assert m.maneuver_type == ManeuverType.PADLOCK      # ...a slow hull cannot hold it
+
+
+def test_boats_with_no_enemy_guns_left_close_to_launch():
+    sim = CombatSimulation(seed=14, time_step=1.0)
+    _ship(sim, "me", "corvette", "alpha", (0, 0, 0))
+    _ship(sim, "boat", "corvette", "beta", (400, 0, 0), fwd=(-1, 0, 0))
+    m = _maneuver(_captain("corvette").decide("me", sim))
+    assert m.maneuver_type == ManeuverType.INTERCEPT and m.target_id == "boat"
+    assert m.standoff_m == pytest.approx(T.BOAT_NO_GUNS_RANGE_KM * 1000.0)
+
+
+def test_two_dry_fleets_do_not_drift_to_the_time_limit():
+    sim = CombatSimulation(seed=15, time_step=1.0)
+    me = _ship(sim, "me", "corvette", "alpha", (0, 0, 0))
+    foe = _ship(sim, "foe", "corvette", "beta", (400, 0, 0), fwd=(-1, 0, 0))
+    for s in (me, foe):
+        for tube in s.ready_torpedo_launchers:
+            tube.current_magazine = 0
+    captain = _captain("corvette")
+    captain.decide("me", sim)
+    assert captain.has_surrendered

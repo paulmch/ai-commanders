@@ -29,6 +29,33 @@ if TYPE_CHECKING:
 
 
 
+def _crew_state(ship):
+    """drive_plume.crew_state (works for both import styles)."""
+    try:
+        from ..drive_plume import crew_state
+    except ImportError:
+        from drive_plume import crew_state
+    return crew_state(ship)
+
+
+def _arcs_status_lines(simulation, ship):
+    """Weapon-arc state lines (src/llm/arcs_status.py): what bears, what unmasks."""
+    from .arcs_status import arcs_status_lines
+    try:
+        return arcs_status_lines(simulation, ship)
+    except Exception:  # noqa: BLE001 - advisory only
+        return []
+
+
+def _plume_status_lines(simulation, ship):
+    """drive_plume.plume_status_lines (works for both import styles)."""
+    try:
+        from ..drive_plume import plume_status_lines
+    except ImportError:
+        from drive_plume import plume_status_lines
+    return plume_status_lines(simulation, ship)
+
+
 def _damaged_fitting_lines(ship):
     """battle_damage.damaged_fitting_lines (works for both import styles)."""
     try:
@@ -413,6 +440,12 @@ class MCPController:
                         from battle_damage import mount_cooldown_factor
                     weapon_info["mount_health_pct"] = round(health, 1)
                     weapon_info["cycle_factor"] = round(mount_cooldown_factor(health), 2)
+                crew_factor = getattr(weapon, 'crew_cycle_factor', 1.0)
+                if isinstance(crew_factor, (int, float)) and crew_factor > 1.0:
+                    # Impaired crew (plume radiation): combined cycle factor.
+                    weapon_info["crew_cycle_factor"] = round(crew_factor, 2)
+                    weapon_info["cycle_factor"] = round(
+                        weapon_info.get("cycle_factor", 1.0) * crew_factor, 2)
                 weapons_detailed[slot] = weapon_info
 
                 if hasattr(weapon, 'is_operational') and not weapon.is_operational:
@@ -506,6 +539,18 @@ class MCPController:
             "weapons_destroyed": weapons_destroyed,
             # Damaged-but-working fittings (guns, tubes, PD), one line each
             "damaged_fittings": _damaged_fitting_lines(ship),
+            # Drive plume wash warnings (whose exhaust this ship is in, which
+            # friendlies its own exhaust reaches), one line each
+            "plume_wash": _plume_status_lines(simulation, ship),
+            # Weapon arcs (src/llm/arcs_status.py): which gun mounts bear on
+            # the primary target, slew times, the roll that unmasks the rest,
+            # PD turrets bearing on the nearest hostile torpedo; one line each
+            "weapon_arcs": _arcs_status_lines(simulation, ship),
+            # Crew radiation state: "fit" | "impaired" (weapons cycle slower) |
+            # "incapacitated" (commands to this ship are rejected)
+            "crew_state": _crew_state(ship),
+            "crew_dose_sv": round(float(getattr(ship, "crew_dose_sv", 0.0) or 0.0), 2),
+            "can_execute_orders": _crew_state(ship) != "incapacitated",
             # Modules
             "damaged_modules": damaged_modules,
             # Combat stats
@@ -1058,6 +1103,10 @@ def _apply_mcp_commands(
                     raise ValueError("Ship is not owned by the issuing faction")
                 if ship.is_destroyed or getattr(ship, "is_dying", False) or getattr(ship, "is_surrendered", False):
                     raise ValueError("Ship is destroyed, dying, or surrendered")
+                if getattr(ship, "crew_incapacitated", False) is True:
+                    raise ValueError(
+                        "Crew incapacitated by plume radiation "
+                        f"({getattr(ship, 'crew_dose_sv', 0.0):.1f} Sv): the ship cannot execute orders")
             if cmd.command_type == MCPCommandType.SET_MANEUVER:
                 ship = simulation.get_ship(cmd.ship_id)
                 if ship:

@@ -1,6 +1,7 @@
 // Recording-only weapon math. Units here are metres / seconds; the renderer
 // converts to kilometres. No clock, random generator, or frame history.
 import { buildTorpedoThrusters } from './TorpedoRcs.js';
+import { lerpUp } from '../HullFrame.js';
 
 export const ION_LIFE = 1;
 export const MISS_LIFE = 6;
@@ -159,7 +160,7 @@ export function sampleIndex(samples, time) {
 }
 
 export function makeSample() {
-  return { pos: [0, 0, 0], vel: [0, 0, 0], fwd: [0, 0, 1], state: null, next: null, dt: 0 };
+  return { pos: [0, 0, 0], vel: [0, 0, 0], fwd: [0, 0, 1], up: null, _up: [0, 1, 0], state: null, next: null, dt: 0 };
 }
 
 /** Writes into caller-owned storage; backward seeks follow the same path. */
@@ -179,6 +180,8 @@ export function sampleTrack(track, time, out) {
     out.fwd[k] = (a.state.fwd?.[k] ?? (k === 2 ? 1 : 0)) * (1 - f)
       + (b.state.fwd?.[k] ?? (k === 2 ? 1 : 0)) * f;
   }
+  // recorded roll (ships of recordings with `up`); null keeps the lookAt roll
+  out.up = a.state.up || b.state.up ? lerpUp(a.state.up, b.state.up, f, out._up || (out._up = [0, 1, 0])) : null;
   out.state = a.state;
   out.next = b.state;
   out.dt = dt;

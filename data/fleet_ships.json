@@ -295,11 +295,11 @@
           "name": "PD Laser Turret",
           "slot": "pd_0",
           "mount_position": {
-            "x": 0.6,
+            "x": 0.38,
             "side": "dorsal"
           },
           "facing": "rear",
-          "notes": "Aft dorsal PD, covers upper hemisphere"
+          "notes": "Raised dorsal PD amidships: upper hemisphere, nose to stern over the hull; the ventral hemisphere is open"
         }
       ],
       "weapons_summary": {
@@ -532,22 +532,22 @@
           "name": "PD Laser Turret",
           "slot": "pd_0",
           "mount_position": {
-            "x": 0.65,
+            "x": 0.82,
             "side": "dorsal"
           },
           "facing": "rear",
-          "notes": "Aft dorsal PD, covers upper rear hemisphere"
+          "notes": "Raised dorsal PD aft: upper hemisphere"
         },
         {
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_1",
           "mount_position": {
-            "x": 0.65,
+            "x": 0.18,
             "side": "ventral"
           },
           "facing": "rear",
-          "notes": "Aft ventral PD, covers lower rear hemisphere"
+          "notes": "Raised ventral PD forward: lower hemisphere"
         }
       ],
       "weapons_summary": {
@@ -811,11 +811,11 @@
           "name": "PD Laser Turret",
           "slot": "pd_0",
           "mount_position": {
-            "x": 0.7,
+            "x": 0.66,
             "side": "dorsal"
           },
           "facing": "rear",
-          "notes": "Aft dorsal PD, covers upper rear hemisphere"
+          "notes": "Dorsal PD on a tall mast on the aft hull: upper hemisphere, over the battery to the bow and over the engine block astern"
         },
         {
           "type": "pd_laser",
@@ -826,7 +826,7 @@
             "side": "ventral"
           },
           "facing": "rear",
-          "notes": "Aft ventral PD, covers lower rear hemisphere"
+          "notes": "Raised ventral PD beside the spinal rail: lower hemisphere"
         }
       ],
       "weapons_summary": {
@@ -1111,22 +1111,22 @@
           "name": "PD Laser Turret",
           "slot": "pd_0",
           "mount_position": {
-            "x": 0.68,
+            "x": 0.14,
             "side": "dorsal"
           },
           "facing": "rear",
-          "notes": "Aft dorsal PD, covers upper rear hemisphere"
+          "notes": "Raised dorsal PD on the bow: upper hemisphere"
         },
         {
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_1",
           "mount_position": {
-            "x": 0.68,
+            "x": 0.78,
             "side": "ventral"
           },
           "facing": "rear",
-          "notes": "Aft ventral PD, covers lower rear hemisphere"
+          "notes": "Raised ventral PD aft: lower hemisphere"
         }
       ],
       "weapons_summary": {
@@ -1411,22 +1411,22 @@
           "name": "PD Laser Turret",
           "slot": "pd_0",
           "mount_position": {
-            "x": 0.68,
+            "x": 0.14,
             "side": "dorsal"
           },
           "facing": "rear",
-          "notes": "Aft dorsal PD, covers upper rear hemisphere"
+          "notes": "Raised dorsal PD on the bow: upper hemisphere"
         },
         {
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_1",
           "mount_position": {
-            "x": 0.68,
+            "x": 0.78,
             "side": "ventral"
           },
           "facing": "rear",
-          "notes": "Aft ventral PD, covers lower rear hemisphere"
+          "notes": "Raised ventral PD aft: lower hemisphere"
         }
       ],
       "weapons_summary": {
@@ -1763,33 +1763,33 @@
           "name": "PD Laser Turret",
           "slot": "pd_0",
           "mount_position": {
-            "x": 0.65,
-            "side": "dorsal"
+            "x": 0.3,
+            "side": "port"
           },
           "facing": "rear",
-          "notes": "Aft dorsal PD"
+          "notes": "Port dorsal shoulder PD forward (60 degrees off the dorsal line)"
         },
         {
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_1",
           "mount_position": {
-            "x": 0.65,
+            "x": 0.78,
             "side": "ventral"
           },
           "facing": "rear",
-          "notes": "Aft ventral PD"
+          "notes": "Raised ventral PD aft"
         },
         {
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_2",
           "mount_position": {
-            "x": 0.4,
-            "side": "port"
+            "x": 0.3,
+            "side": "starboard"
           },
           "facing": "broadside",
-          "notes": "Midship port PD"
+          "notes": "Starboard dorsal shoulder PD forward (60 degrees off the dorsal line)"
         }
       ],
       "weapons_summary": {
@@ -2178,44 +2178,44 @@
           "name": "PD Laser Turret",
           "slot": "pd_0",
           "mount_position": {
-            "x": 0.62,
+            "x": 0.7,
             "side": "dorsal"
           },
           "facing": "rear",
-          "notes": "Aft dorsal PD"
+          "notes": "Dorsal-port shoulder PD aft"
         },
         {
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_1",
           "mount_position": {
-            "x": 0.62,
+            "x": 0.34,
             "side": "ventral"
           },
           "facing": "rear",
-          "notes": "Aft ventral PD"
+          "notes": "Ventral-starboard shoulder PD forward"
         },
         {
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_2",
           "mount_position": {
-            "x": 0.38,
+            "x": 0.34,
             "side": "port"
           },
           "facing": "broadside",
-          "notes": "Midship port PD"
+          "notes": "Ventral-port shoulder PD forward"
         },
         {
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_3",
           "mount_position": {
-            "x": 0.38,
+            "x": 0.7,
             "side": "starboard"
           },
           "facing": "broadside",
-          "notes": "Midship starboard PD"
+          "notes": "Dorsal-starboard shoulder PD aft"
         }
       ],
       "weapons_summary": {
@@ -2604,44 +2604,44 @@
           "name": "PD Laser Turret",
           "slot": "pd_0",
           "mount_position": {
-            "x": 0.62,
+            "x": 0.7,
             "side": "dorsal"
           },
           "facing": "rear",
-          "notes": "Aft dorsal PD"
+          "notes": "Dorsal-port shoulder PD aft"
         },
         {
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_1",
           "mount_position": {
-            "x": 0.62,
+            "x": 0.34,
             "side": "ventral"
           },
           "facing": "rear",
-          "notes": "Aft ventral PD"
+          "notes": "Ventral-starboard shoulder PD forward"
         },
         {
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_2",
           "mount_position": {
-            "x": 0.38,
+            "x": 0.34,
             "side": "port"
           },
           "facing": "broadside",
-          "notes": "Midship port PD"
+          "notes": "Ventral-port shoulder PD forward"
         },
         {
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_3",
           "mount_position": {
-            "x": 0.38,
+            "x": 0.7,
             "side": "starboard"
           },
           "facing": "broadside",
-          "notes": "Midship starboard PD"
+          "notes": "Dorsal-starboard shoulder PD aft"
         }
       ],
       "weapons_summary": {

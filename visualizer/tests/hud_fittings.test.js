@@ -95,9 +95,15 @@ test('fitting layouts come from the fleet specs; a destroyed module maps to its 
   assert.deepEqual(slotsForModule('battleship', lay.beta_1, 'Point Defense Array').slots, ['pd_0', 'pd_1', 'pd_2']);
   assert.equal(slotsForModule('battleship', lay.beta_1, 'Main Engine Assembly').engine, true);
   assert.deepEqual(slotsForModule('battleship', lay.beta_1, 'Crew Quarters'), { slots: [], engine: false });
-  // A hull the module table does not know (torpedo cruiser) maps nothing but its drive
+  // The torpedo cruiser is built on the cruiser's module layout: its gun-module slots are tubes there
+  assert.deepEqual(slotsForModule('cruiser_torpedo', lay.alpha_1, 'Spinal Coiler Mount').slots, ['weapon_0']);
+  assert.deepEqual(slotsForModule('cruiser_torpedo', lay.alpha_1, 'Coilgun Battery A').slots, ['weapon_1']);
+  assert.deepEqual(slotsForModule('cruiser_torpedo', lay.alpha_1, 'Coilgun Battery B').slots, ['weapon_2']);
   assert.deepEqual(slotsForModule('cruiser_torpedo', lay.alpha_1, 'Torpedo Bay A').slots, []);
   assert.equal(slotsForModule('cruiser_torpedo', lay.alpha_1, 'Main Engine Assembly').engine, true);
+  // A hull the module table does not know maps nothing but its drive
+  assert.deepEqual(slotsForModule('mystery_boat', lay.alpha_1, 'Coilgun Battery A'), { slots: [], engine: false });
+  assert.equal(slotsForModule('mystery_boat', lay.alpha_1, 'Main Engine Assembly').engine, true);
 });
 
 test('fitting state at time t: the latest event at or before t per fitting, forwards and backwards', () => {
@@ -483,4 +489,191 @@ test('a blast that only grazes a ship stays on the kill toast: no victim notice'
   const hud = hudOf(evs.filter(e => !(e.event_type === 'mount_damaged' && e.data.cause === 'reactor_blast')));
   assert.ok(!hud.notices.some(n => n.kind === 'blast'));
   assert.equal(blastLine(hud.blasts.alpha_3), 'BLAST 11 km · caught OCS Falchion-1 · 1 torpedo killed, 2 blinded');
+});
+
+test('torpedo cruiser: a destroyed module silences its tube; engine module damage short of destruction cuts thrust', () => {
+  let seq = 5000;
+  const evs = [];
+  const ev = (t, type, ship_id, data = {}) => evs.push({ event_id: `m${++seq}`, sequence: seq, timestamp: t, event_type: type, ship_id, data });
+  ev(10, 'mount_damaged', 'beta_1', { kind: 'pd', slot: 'pd_0', index: 0, health_pct: 80, destroyed: false, cause: 'surface_hit' });   // a pass-5 recording
+  ev(20, 'module_destroyed', 'alpha_1', { module_name: 'Coilgun Battery A' });
+  ev(30, 'module_damaged', 'alpha_1', { module_name: 'Main Engine Assembly', damage_gj: 2, destroyed: false, health_pct: 60 });
+  ev(40, 'module_damaged', 'alpha_1', { module_name: 'Main Engine Assembly', damage_gj: 2, destroyed: false, health_pct: 20 });
+  ev(50, 'module_damaged', 'beta_1', { module_name: 'Crew Quarters', damage_gj: 2, destroyed: false, health_pct: 10 });
+  const hud = hudOf(evs);
+  const at = (id, t) => fittingsAt(hud.fittings, id, t);
+  assert.deepEqual(at('alpha_1', 25).tubes, ['ok', 'destroyed', 'ok', 'ok']);
+  assert.deepEqual([at('alpha_1', 29).thrust, at('alpha_1', 30).thrust, at('alpha_1', 40).thrust, at('alpha_1', 40).adrift], [1, 0.6, 0, true],
+    'health / 100 above 25 %, no thrust at or below it (engine_effectiveness)');
+  assert.equal(at('beta_1', 60).thrust, 1, 'other modules do not touch the drive');
+  assert.deepEqual(hud.notices.map(n => [n.t, n.kind, n.status]), [[30, 'drive', 'DRIVE HIT · 60% THRUST'], [40, 'adrift', 'ADRIFT']]);
+  // Two engine modules (dreadnought): the mean, as long as one still works
+  const src = sourceData();
+  src.beta_fleet.ships[0].ship_type = 'dreadnought';
+  const dn = [...evs];
+  const push = (t, type, ship_id, data) => dn.push({ event_id: `m${++seq}`, sequence: seq, timestamp: t, event_type: type, ship_id, data });
+  push(60, 'module_destroyed', 'beta_1', { module_name: 'Main Engine Assembly' });
+  const two = hudOf(dn, src);
+  assert.equal(fittingsAt(two.fittings, 'beta_1', 60).thrust, 0.5);
+  push(70, 'module_destroyed', 'beta_1', { module_name: 'Maneuvering Thrusters' });
+  assert.equal(fittingsAt(hudOf(dn, src).fittings, 'beta_1', 70).adrift, true);
+});
+
+// Plume lane (docs/pass-5-recording-additions.md): the doc's JSON examples, on this fixture's ships
+function plumeEvents() {
+  let seq = 7000;
+  const out = [];
+  const ev = (t, type, ship_id, data) => out.push({ event_id: `p${++seq}`, sequence: seq, timestamp: t, event_type: type, ship_id, data });
+  const wash = (t, victim, source, data) => ev(t, 'plume_wash', victim, { source_ship_id: source, friendly: victim.split('_')[0] === source.split('_')[0],
+    emitter_throttle: 1.0, swept: false, target_id: null, ...data });
+  wash(30, 'beta_2', 'beta_1', { phase: 'enter', distance_km: 10.99, off_axis_deg: 0.77, heat_rate_gj_s: 12.83, peak_heat_rate_gj_s: 12.83, duration_s: 1.0, heat_gj: 12.8,
+    armor_ablation_cm: 0.26, fittings_hit: [], hit_location: 'nose', dose_sv: 0.085, crew_dose_sv: 0.085, crew_state: 'fit', armor_remaining_cm: 150.94, heat: 0.043 });
+  ev(35, 'mount_damaged', 'beta_2', { kind: 'gun', slot: 'weapon_0', index: 0, weapon_name: 'Spinal Coiler Mk3', health_pct: 72.1, health_lost_pct: 27.9, destroyed: false,
+    cooldown_factor: 1.39, cause: 'plume_wash', hit_location: 'nose', source_ship_id: 'beta_1' });
+  ev(50, 'crew_radiation', 'beta_2', { state: 'impaired', dose_sv: 2.08, threshold_sv: 2.0, cooldown_factor: 1.5, source_ship_id: 'beta_1' });
+  wash(55, 'beta_2', 'beta_1', { phase: 'sustain', distance_km: 7.57, off_axis_deg: 1.94, heat_rate_gj_s: 16.01, peak_heat_rate_gj_s: 16.42, duration_s: 26.0, heat_gj: 385.4,
+    armor_ablation_cm: 8.44, fittings_hit: ['gun:weapon_0', 'gun:weapon_1', 'pd:pd_0', 'pd:pd_1'], hit_location: 'nose', dose_sv: 2.662, crew_dose_sv: 2.662, crew_state: 'impaired',
+    armor_remaining_cm: 142.76, heat: 1.256 });
+  wash(69, 'beta_2', 'beta_1', { phase: 'exit', distance_km: 3.69, off_axis_deg: 6.72, heat_rate_gj_s: 0.0, peak_heat_rate_gj_s: 16.42, emitter_throttle: 0.7, duration_s: 39.0,
+    heat_gj: 463.7, armor_ablation_cm: 9.99, fittings_hit: ['gun:weapon_0', 'gun:weapon_1', 'pd:pd_0', 'pd:pd_1'], hit_location: 'nose', dose_sv: 3.326, crew_dose_sv: 3.326,
+    crew_state: 'impaired', armor_remaining_cm: 141.21, heat: 1.488 });
+  // A weak, swept episode (peak 0.6 GJ/s): logged, but no toast and no mark
+  wash(97, 'alpha_1', 'alpha_2', { phase: 'enter', distance_km: 40, off_axis_deg: 4.0, heat_rate_gj_s: 0.5, peak_heat_rate_gj_s: 0.5, duration_s: 1.0, heat_gj: 0.5,
+    armor_ablation_cm: 0, fittings_hit: [], hit_location: 'nose', dose_sv: 0.001, crew_dose_sv: 0.001, crew_state: 'fit', armor_remaining_cm: 252.84, heat: 0.3 });
+  wash(154, 'alpha_1', 'alpha_2', { phase: 'exit', distance_km: 34.34, off_axis_deg: 4.35, heat_rate_gj_s: 0.0, peak_heat_rate_gj_s: 0.6, emitter_throttle: 0.4, duration_s: 57.0,
+    heat_gj: 25.5, armor_ablation_cm: 0.0, fittings_hit: [], hit_location: 'nose', swept: true, dose_sv: 0.061, crew_dose_sv: 0.061, crew_state: 'fit', armor_remaining_cm: 252.84, heat: 0.384 });
+  // A dying hulk in the jet is tracked but takes nothing: no notice
+  wash(160, 'alpha_3', 'beta_1', { phase: 'enter', distance_km: 5, off_axis_deg: 1, heat_rate_gj_s: 30, peak_heat_rate_gj_s: 30, duration_s: 1.0, heat_gj: 0,
+    armor_ablation_cm: 0, fittings_hit: [], hit_location: null, dose_sv: 0 });
+  ev(170, 'crew_radiation', 'beta_2', { state: 'incapacitated', dose_sv: 8.03, threshold_sv: 8.0, cooldown_factor: null, source_ship_id: 'alpha_1' });
+  return out;
+}
+
+test('plume wash and crew radiation: notices, crew state, flags, log lines and timeline marks', () => {
+  const hud = hudOf(plumeEvents());
+  assert.equal(hud.fittings.active, true, 'plume events alone switch the fitting HUD on');
+  assert.deepEqual(hud.notices.map(n => [n.t, n.kind, n.shipId, n.status]), [
+    [30, 'plume', 'beta_2', 'IN EXHAUST'],
+    [50, 'crew', 'beta_2', 'CREW IMPAIRED'],
+    [55, 'plume-update', 'beta_2', 'IN EXHAUST · 26 s'],
+    [69, 'plume-update', 'beta_2', 'OUT OF EXHAUST · 39 s'],
+    [170, 'crew', 'beta_2', 'CREW INCAPACITATED']
+  ]);
+  const detail = t => hud.notices.find(n => n.t === t).detail;
+  assert.equal(detail(30), 'of OCS Sovereign-1 (friendly) · 11.0 km astern · +13 GJ, −0.3 cm nose armour, 0.1 Sv');
+  assert.equal(detail(50), "2.1 Sv in OCS Sovereign-1's exhaust · guns and tubes cycle 1.5x slower");
+  assert.equal(detail(55), 'of OCS Sovereign-1 (friendly) · +385 GJ, −8.4 cm nose armour, 4 fittings burned, 2.7 Sv');
+  assert.equal(detail(69), 'of OCS Sovereign-1 (friendly) · +464 GJ, −10.0 cm nose armour, 4 fittings burned, 3.3 Sv');
+  assert.equal(detail(170), "8.0 Sv in TIS Harpoon-1's exhaust · the ship stops fighting and coasts");
+  // Crew state and dose at time t, forwards and backwards
+  const at = t => fittingsAt(hud.fittings, 'beta_2', t);
+  assert.deepEqual([at(29).crew, at(29).dose], ['fit', 0]);
+  assert.deepEqual([at(31).crew, at(31).dose], ['fit', 0.085]);
+  assert.deepEqual(at(35).guns, ['damaged', 'ok'], 'a fitting burned by the wash is an ordinary mount_damaged');
+  assert.deepEqual([at(50).crew, at(50).dose, fittingsFlag(at(50)), at(50).armed], ['impaired', 2.08, 'IMPAIRED', true]);
+  assert.equal(at(69).dose, 3.326);
+  assert.deepEqual([at(170).crew, fittingsFlag(at(170)), at(170).armed], ['incapacitated', 'CREW OUT', false]);
+  assert.match(fittingsText(at(60)), /Crew impaired \(2\.7 Sv\)/);
+  assert.deepEqual(registryStatus({ hull: 90 }, null, 60, at(60)), { text: 'IMPAIRED', level: 'impaired' });
+  assert.deepEqual(registryStatus({ hull: 90 }, null, 170, at(170)), { text: 'CREW OUT', level: 'crippled' });
+  // An incapacitated crew takes the ship out of the armed count
+  const states = { alpha_1: { hull: 90 }, alpha_2: { hull: 100 }, alpha_3: { hull: 100 }, beta_1: { hull: 80 }, beta_2: { hull: 70 } };
+  assert.deepEqual([computeSides(states, [], ships, hud, 169).beta.armed, computeSides(states, [], ships, hud, 170).beta.armed], [2, 1]);
+  // Feed: within the window the running update replaces the entry toast (one toast per ship's episode)
+  assert.deepEqual(noticesAt(hud.notices, 31).map(n => n.status), ['IN EXHAUST']);
+  assert.deepEqual(noticesAt(hud.notices, 56).map(n => n.status), ['IN EXHAUST · 26 s', 'CREW IMPAIRED']);
+  // Log
+  const log = hud.log.map(r => r.text);
+  assert.ok(log.includes("EXHAUST: OCS Falchion-1 enters OCS Sovereign-1's drive plume (friendly) at 11.0 km (12.8 GJ/s)"));
+  assert.ok(log.includes("EXHAUST: OCS Falchion-1 clears OCS Sovereign-1's drive plume (friendly) after 39 s (+463.7 GJ, -10.0 cm nose armour, 4 fittings burned)"));
+  assert.ok(log.includes("RADIATION: OCS Falchion-1 crew impaired - weapons cycle slower (2.1 Sv, OCS Sovereign-1's exhaust)"));
+  assert.ok(log.some(t => /^RADIATION: OCS Falchion-1 crew incapacitated - the ship stops fighting/.test(t)));
+  assert.equal(log.filter(t => t.startsWith('EXHAUST:')).length, 4, 'enter and exit of each episode on a living ship; sustain and hulks stay out');
+  // Timeline: one mark per strong episode (its entry) and one per crew threshold
+  const marks = timelineMarks(hud, 180, ships).filter(m => m.kind === 'notice');
+  assert.deepEqual(marks.map(m => [m.t, m.flag]), [[30, 'plume'], [50, 'crew'], [170, 'crew']]);
+  assert.match(marks[0].title, /00:30 OCS Falchion-1 IN EXHAUST — of OCS Sovereign-1 \(friendly\)/);
+
+  // Card: the crew line appears with the first dose
+  const doc = new FakeDocument();
+  const root = build(doc, ['div', { class: 'fit-card hidden' }]);
+  const card = new FittingsCard({ root, doc });
+  card.update(at(10));
+  assert.equal(root.querySelector('.fit-crew').hidden, true);
+  card.update(at(60));
+  assert.deepEqual([root.querySelector('.fit-crew').hidden, root.querySelector('.fit-crew').querySelector('.fit-value').textContent], [false, 'IMPAIRED · 2.7 Sv']);
+  assert.equal(root.querySelector('.fit-flag').textContent, 'IMPAIRED');
+  // Feed DOM
+  const feed = new KillFeed({ root: doc.createElement('div'), doc });
+  feed.update(hud.kills, 56, hud);
+  assert.deepEqual(feed.root.children.map(el => el.className.trim()), ['kill-toast notice notice-plume-update beta', 'kill-toast notice notice-crew beta']);
+});
+
+test('plume events stream like everything else, and recordings without them are untouched', () => {
+  const all = [...events(), ...plumeEvents()].sort((a, b) => a.timestamp - b.timestamp);
+  const loader = loaderOf([]);
+  buildHudIndex(loader);
+  let hud;
+  for (let i = 0; i < all.length; i++) {
+    loader.events.push(all[i]);
+    hud = appendHudIndex(loader, { events: [all[i]], frames: [] });
+    if (i % 7 === 0 || i === all.length - 1) {
+      const full = hudOf(all.slice(0, i + 1));
+      assert.deepStrictEqual(hud.fittings, full.fittings, `fittings after ${i + 1} events`);
+      assert.deepStrictEqual(hud.notices, full.notices, `notices after ${i + 1} events`);
+    }
+  }
+  const plain = hudOf();
+  assert.ok(!plain.notices.some(n => n.kind.startsWith('plume') || n.kind === 'crew'));
+  assert.ok(Object.values(plain.fittings.states).every(list => list.every(st => st.crew === 'fit' && st.dose === 0)));
+});
+
+test('recorded fleet surrenders and the truthful end reasons (pass-5 engine) are used as recorded', () => {
+  // The doc's example: three corvettes surrender at 150 s, each with its event and its tool call
+  const evs = events().filter(e => e.event_type !== 'battle_end');
+  let seq = 9500;
+  const reason = 'all weapons out, no armed ship left to protect';
+  for (const id of ['beta_1', 'beta_2']) {
+    evs.push({ event_id: `q${++seq}`, sequence: seq, timestamp: 150, event_type: 'captain_decision', ship_id: id, data: { tool_calls: [{ name: 'surrender', arguments: { reason } }] } });
+    evs.push({ event_id: `q${++seq}`, sequence: seq, timestamp: 150, event_type: 'surrender', ship_id: id,
+      data: { captain_name: 'Captain X', faction: 'beta', reason, hull_pct: 100.0, could_deal_damage: false } });
+  }
+  evs.push({ event_id: 'qend', sequence: 9999, timestamp: 150, event_type: 'battle_end', ship_id: null, data: { winner: 'alpha', reason: 'Beta fleet surrendered (2 ships struck their colours)' } });
+  const hud = hudOf(evs);
+  assert.deepEqual(hud.surrenders.map(s => [s.t, s.shipId, s.reason]), [[150, 'beta_1', reason], [150, 'beta_2', reason]]);
+  const rows = hud.comms.filter(r => r.tag === 'SURRENDER');
+  assert.deepEqual(rows.map(r => r.shipId), ['beta_1', 'beta_2'], 'one row per ship: the event, not event + tool call');
+  assert.match(rows[0].text, /OCS Sovereign-1 surrenders: all weapons out/);
+  assert.equal(hud.log.filter(r => r.text.startsWith('SURRENDER:')).length, 2, 'one log line per ship');
+  assert.ok(hud.log.every(r => !('surrender' in r)));
+  const states = { alpha_1: { hull: 90 }, alpha_2: { hull: 100 }, alpha_3: { destroyed: true }, beta_1: { hull: 80 }, beta_2: { hull: 70 } };
+  const sides = computeSides(states, [], ships, hud, 150);
+  assert.deepEqual([sides.beta.alive, sides.beta.surrendered, sides.beta.armed], [2, 2, 0]);
+  assert.deepEqual(endCause(hud.result, sides), { side: 'beta', headline: 'BETA FLEET SURRENDERED', detail: '2 ships struck their colours', note: 'none able to deal damage' });
+  assert.deepEqual(endCause({ winner: 'alpha', reason: 'Beta fleet destroyed or surrendered (5 destroyed, 3 surrendered)' }),
+    { side: 'beta', headline: 'BETA FLEET SURRENDERED', detail: '3 ships struck their colours, 5 destroyed', note: '' });
+  assert.equal(endCause({ winner: 'beta', reason: 'Alpha fleet surrendered (1 ship struck its colours)' }).detail, '1 ship struck its colours');
+  assert.equal(endCause({ winner: null, reason: 'Mutual destruction/surrender: Alpha fleet eliminated; Beta fleet eliminated' }), null);
+  const doc = new FakeDocument();
+  const root = build(doc, ['div', { class: 'result-banner hidden' }, ['button', { 'data-close': '' }], ['span', { 'data-kicker': '' }], ['strong', { 'data-title': '' }],
+    ['span', { 'data-cause': '', hidden: '' }], ['span', { 'data-reason': '' }], ['div', { 'data-tally': '' }]]);
+  new ResultBanner({ root, doc }).update(true, hud.result, sides, 150);
+  assert.equal(root.querySelector('[data-cause]').textContent, 'BETA FLEET SURRENDERED · none able to deal damage');
+  assert.equal(root.querySelector('[data-reason]').textContent, 'Beta fleet surrendered (2 ships struck their colours)');
+  // Streamed: same rows and log
+  const loader = loaderOf([]);
+  buildHudIndex(loader);
+  let live;
+  for (const e of evs) { loader.events.push(e); live = appendHudIndex(loader, { events: [e], frames: [] }); }
+  assert.deepStrictEqual(live.log, hud.log);
+  assert.deepStrictEqual(live.surrenders, hud.surrenders);
+});
+
+test('a recorded ship_surrendered event counts like a surrender', () => {
+  const evs = events().filter(e => e.event_type !== 'battle_end');
+  evs.push({ event_id: 'ss1', sequence: 9001, timestamp: 140, event_type: 'ship_surrendered', ship_id: 'beta_2', data: { reason: 'all weapons out' } });
+  evs.push({ event_id: 'ss2', sequence: 9002, timestamp: 140, event_type: 'captain_decision', ship_id: 'beta_2', data: { tool_calls: [{ name: 'surrender', arguments: { reason: 'all weapons out' } }] } });
+  const hud = hudOf(evs);
+  assert.deepEqual(hud.surrenders.map(s => [s.t, s.shipId, s.reason]), [[140, 'beta_2', 'all weapons out']]);
+  assert.equal(hud.comms.filter(r => r.tag === 'SURRENDER').length, 1, 'the event row wins over the tool call');
 });

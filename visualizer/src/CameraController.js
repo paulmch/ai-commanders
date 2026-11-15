@@ -1,4 +1,8 @@
 import * as THREE from 'three';
+import { buildShotList, shotAt, buildShakeSources, shakeAt, handheldAt, highlightList } from './Director.js';
+import { frameGroups, slideToFreeArea, shotPose } from './DirectorCamera.js';
+
+export { frameGroups, slideToFreeArea };
 
 // ---------------------------------------------------------------- director
 // The auto 'director' (LV-09 / FLEET-1): while the camera is free and the
@@ -13,7 +17,8 @@ const DETONATION_SHOT_S = 6;
 const SALVO_SHOT_S = 6;
 const SALVO_MIN = 3;
 const SALVO_WINDOW_S = 3;
-const FLEET_ELEVATION = THREE.MathUtils.degToRad(25);
+/** Wall seconds the camera takes to ease back from a manual pose to the director's. */
+export const DIRECTOR_BLEND_S = 0.9;
 const KILL_ORBIT_DEG_PER_S = 5;
 
 /**
@@ -90,61 +95,6 @@ export function activeCut(cuts, t) {
 }
 
 /**
- * Camera framing for a set of points (scene units): orbit target at their
- * centre, viewed from 25 degrees up and perpendicular to the axis between
- * the two groups (both fleets side by side), far enough that the bounds
- * fill widthShare of the screen width.
- * @param {THREE.Vector3[]} points
- * @param {Object} opts - {fov, aspect, groupA, groupB (centroids or null), fallbackDir, widthShare, minRadius}
- * @returns {{target: THREE.Vector3, position: THREE.Vector3, radius: number}|null}
- */
-export function frameGroups(points, { fov = 55, aspect = 16 / 9, groupA = null, groupB = null,
-  fallbackDir = null, widthShare = 0.62, minRadius = 25, shift = 0 } = {}) {
-  if (!points.length) return null;
-  const bounds = new THREE.Box3();
-  for (const p of points) bounds.expandByPoint(p);
-  const target = bounds.getCenter(new THREE.Vector3());
-  const radius = Math.max(minRadius, bounds.getSize(new THREE.Vector3()).length() / 2);
-  const halfFov = THREE.MathUtils.degToRad(fov) / 2;
-  const horizontal = Math.atan(Math.tan(halfFov) * aspect * widthShare);
-  const distance = radius / Math.sin(Math.min(halfFov, horizontal)) * 1.05;
-  let side = null;
-  if (groupA && groupB) {
-    const axis = groupB.clone().sub(groupA);
-    axis.y = 0;
-    if (axis.lengthSq() > 1e-6) side = new THREE.Vector3(-axis.z, 0, axis.x).normalize();
-  }
-  if (!side) {
-    side = (fallbackDir ? fallbackDir.clone() : new THREE.Vector3(0, 0, 1));
-    side.y = 0;
-    if (side.lengthSq() < 1e-9) side.set(0, 0, 1);
-    side.normalize();
-  }
-  // Keep the side the camera is already on (no flips across the battle)
-  if (fallbackDir && side.dot(fallbackDir) < 0) side.negate();
-  const dir = side.multiplyScalar(Math.cos(FLEET_ELEVATION)).add(new THREE.Vector3(0, Math.sin(FLEET_ELEVATION), 0));
-  const position = target.clone().addScaledVector(dir, distance);
-  return slideToFreeArea({ target, position, radius }, shift, fov, aspect);
-}
-
-/**
- * Centre a framing in the area the side panels leave free: slide camera
- * and target sideways so the target appears at NDC x = shift.
- */
-export function slideToFreeArea(frame, shift, fov = 55, aspect = 16 / 9) {
-  if (!shift) return frame;
-  const view = frame.target.clone().sub(frame.position);
-  const distance = view.length();
-  const right = new THREE.Vector3().crossVectors(view, new THREE.Vector3(0, 1, 0));
-  if (right.lengthSq() < 1e-12) return frame;
-  const halfWidth = distance * Math.tan(THREE.MathUtils.degToRad(fov) / 2) * aspect;
-  const slide = right.normalize().multiplyScalar(-shift * halfWidth);
-  frame.target.add(slide);
-  frame.position.add(slide);
-  return frame;
-}
-
-/**
  * CameraController - Manages camera modes (free, follow, orbit) and the
  * auto director that drives the free camera until the viewer takes over.
  */
@@ -163,7 +113,13 @@ export class CameraController {
     // | 'external' (someone else placed the camera - a script; a harness
     // that frames its own shots disarms the director instead), both until
     // holdUntil | 'ship' (a ship is selected; until deselected)
-    this.director = { enabled: false, hold: null, holdUntil: 0, cuts: [], shot: null, written: null };
+    this.director = { enabled: false, hold: null, holdUntil: 0, cuts: [], shot: null, written: null,
+      shots: null, blend: null };
+    // Blast shake (all camera modes): sources from the recording, the
+    // offset applied for the current frame (removed before the next)
+    this.shakeSources = [];
+    this.shakeOffset = null;
+    this.highlights = [];
     this.onDirectorChange = null;
     this.orbitControls.addEventListener?.('start', () => {
       this.fleetFramed = false;
@@ -208,13 +164,33 @@ export class CameraController {
     this.director.cuts = cuts || [];
   }
 
+  /**
+   * Give the director a recording: builds the shot list (Director.js), the
+   * highlight list and the shake sources. `live` = the battle is still
+   * running: no lookahead, shots react to events as they arrive. Without
+   * this call the director falls back to the legacy cut list.
+   * @param {Object} rec - {events, deathInfo, simTrace, live}
+   */
+  setDirectorRecording({ events = [], deathInfo = {}, simTrace = null, live = false } = {}) {
+    const d = this.director;
+    d.shots = buildShotList(events, deathInfo, { lookahead: !live, simTrace });
+    this.shakeSources = buildShakeSources(events, deathInfo);
+    this.highlights = highlightList(events, deathInfo, { simTrace: live ? null : simTrace });
+  }
+
   /** {enabled, active, hold, secondsLeft, shot} for the HUD chip. */
   directorState() {
     const d = this.director;
     const left = d.hold && Number.isFinite(d.holdUntil)
       ? Math.max(0, (d.holdUntil - performance.now()) / 1000) : null;
+    // `shot` keeps the names the HUD chip knows (kill / salvo / fleet);
+    // `type` and `kind` carry the director's own vocabulary
+    const kind = d.shot?.kind || null;
+    const legacy = !d.shot ? null : d.shot.type === undefined ? kind
+      : (kind === 'kill' || kind === 'dying') ? 'kill' : (kind === 'salvo' || kind === 'strike') ? 'salvo' : 'fleet';
     return { enabled: d.enabled, active: d.enabled && !d.hold && this.mode === 'free', hold: d.hold,
-      secondsLeft: left, shot: d.shot?.kind || (d.enabled ? 'fleet' : null) };
+      secondsLeft: left, shot: legacy || (d.enabled ? 'fleet' : null),
+      type: d.shot?.type || null, kind, subject: d.shot?.subject || null };
   }
 
   /**
@@ -233,8 +209,13 @@ export class CameraController {
     if (d.hold) return false;
     const target = this.orbitControls.target;
     // Taking the camera over (armed, re-armed, a hold lifted): first stop
-    // whatever a drag left coasting in the controls
-    if (!d.written) this._settleControls();
+    // whatever a drag left coasting in the controls, and ease in from the
+    // pose the viewer left (wall time; the very first frame snaps)
+    if (!d.written) {
+      this._settleControls();
+      d.blend = d.everWritten
+        ? { position: this.camera.position.clone(), target: target.clone(), start: performance.now() } : null;
+    }
     // Someone else moved the camera since our last write (a script): step
     // aside for a while.
     if (d.written) {
@@ -245,6 +226,7 @@ export class CameraController {
         return false;
       }
     }
+    if (d.shots) return this._directShot(shipStates, time, shift, widthShare);
     const cut = activeCut(d.cuts, time);
     this.director.shift = shift;
     this.director.widthShare = widthShare;
@@ -264,6 +246,121 @@ export class CameraController {
     d.written = { position: this.camera.position.clone(), target: target.clone() };
     this.fleetFramed = !cut;
     return true;
+  }
+
+  /**
+   * The shot-list director: the pose is a pure function of battle time
+   * (DirectorCamera.shotPose) plus a handheld drift on battle time; the
+   * only wall-clock term is the ease back from a manual pose.
+   */
+  _directShot(shipStates, time, shift, widthShare) {
+    const d = this.director;
+    const target = this.orbitControls.target;
+    const world = this._world(shipStates, shift, widthShare);
+    let shot = shotAt(d.shots, time);
+    let pose = shot ? shotPose(shot, time, world) : null;
+    if (!pose) {
+      // Subject not on stage (old recording, ship never spawned): wide
+      shot = { type: 'wide', kind: 'fleet', t0: shot?.t0 ?? 0, t1: shot?.t1 ?? Infinity, id: shot?.id ?? -1, subject: null };
+      pose = shotPose(shot, time, world);
+    }
+    const changed = d.shot?.id !== shot.id || d.shot?.type !== shot.type;
+    d.shot = shot;
+    if (changed) this.onDirectorChange?.(this.directorState());
+    if (!pose) return false;
+    // Handheld drift: a slow wander of the aim, on battle time
+    const view = pose.target.clone().sub(pose.position);
+    const dist = view.length();
+    const right = new THREE.Vector3().crossVectors(view, this.camera.up);
+    if (right.lengthSq() > 1e-12) {
+      right.normalize();
+      const up = new THREE.Vector3().crossVectors(right, view).normalize();
+      const hand = handheldAt(time, shot.type === 'wide' ? 0.5 : 1);
+      pose.target.addScaledVector(right, hand.x * dist).addScaledVector(up, hand.y * dist);
+    }
+    if (d.blend) {
+      const u = (performance.now() - d.blend.start) / (DIRECTOR_BLEND_S * 1000);
+      if (u >= 1) d.blend = null;
+      else {
+        const k = u <= 0 ? 0 : u * u * (3 - 2 * u);
+        pose.position.lerpVectors(d.blend.position, pose.position, k);
+        pose.target.lerpVectors(d.blend.target, pose.target, k);
+      }
+    }
+    d.everWritten = true;
+    this.camera.position.copy(pose.position);
+    target.copy(pose.target);
+    this.camera.lookAt(target);
+    d.written = { position: this.camera.position.clone(), target: target.clone() };
+    this.fleetFramed = shot.type === 'wide' && !shot.cast;
+    return true;
+  }
+
+  /** Where everything is right now, for DirectorCamera (scene units). */
+  _world(shipStates, shift = 0, widthShare = 0.62) {
+    const scene = this.sceneManager;
+    const scale = scene.SCALE ?? 1 / 1000;
+    const deaths = scene.deathInfo || {};
+    const vec = (v, k = 1) => (Array.isArray(v) && Number.isFinite(v[0]) ? new THREE.Vector3(v[0] * k, v[1] * k, v[2] * k) : null);
+    return {
+      ids: Object.keys(shipStates || {}),
+      // The recorded position first: a hidden hull's scene position
+      // depends on which effects happen to be alive (playback history)
+      pos: id => vec(shipStates?.[id]?.position, scale) || scene.getShipPosition(id),
+      fwd: id => { const f = vec(shipStates?.[id]?.forward); return f && f.lengthSq() > 1e-9 ? f.normalize() : null; },
+      thrust: id => shipStates?.[id]?.thrust || 0,
+      length: id => this.getShipLength(id),
+      deathTime: id => (Number.isFinite(deaths[id]?.time) ? deaths[id].time : Infinity),
+      // What the death blast visibly draws between two ages after it goes off
+      blastExtent: (id, fromAge, toAge) => scene.deathBlastExtent?.(id, fromAge, toAge) ?? 0,
+      faction: id => scene.ships.get(id)?.userData?.faction || String(id).split('_')[0],
+      fov: this.camera.fov, aspect: this.camera.aspect, shift, widthShare, scale
+    };
+  }
+
+  // --------------------------------------------------------------- shake
+
+  /** Take the shake offset back off the camera (right after the draw). */
+  removeShake() {
+    const off = this.shakeOffset;
+    if (!off) return;
+    this.camera.position.sub(off.position);
+    this.orbitControls.target.sub(off.target);
+    this.camera.lookAt(this.orbitControls.target);
+    this.shakeOffset = null;
+  }
+
+  /**
+   * Blast shake for one draw: energy and distance set the amplitude and it
+   * decays on battle time (Director.shakeAt). main.js calls this just
+   * before scene.render() and removeShake() right after, so the offset
+   * never outlives the frame: nothing accumulates, code that places the
+   * camera between frames never sees it, and a frame at time t looks the
+   * same however the playhead got there.
+   */
+  applyShake(shipStates, time) {
+    this.removeShake();
+    if (!this.shakeSources.length || !Number.isFinite(time)) return;
+    const scale = this.sceneManager.SCALE ?? 1 / 1000;
+    const cam = this.camera.position;
+    const sh = shakeAt(this.shakeSources, time, s => {
+      const p = s.position || shipStates?.[s.ship]?.position;
+      if (!Array.isArray(p)) return null;
+      return Math.hypot(p[0] * scale - cam.x, p[1] * scale - cam.y, p[2] * scale - cam.z);
+    });
+    if (sh.amp < 1e-5) return;
+    const target = this.orbitControls.target;
+    const view = target.clone().sub(cam);
+    const dist = view.length();
+    const right = new THREE.Vector3().crossVectors(view, this.camera.up);
+    if (right.lengthSq() < 1e-12) return;
+    right.normalize();
+    const up = new THREE.Vector3().crossVectors(right, view).normalize();
+    const offset = right.multiplyScalar(sh.x * dist).addScaledVector(up, sh.y * dist);
+    this.shakeOffset = { target: offset, position: offset.clone().multiplyScalar(0.3) };
+    cam.add(this.shakeOffset.position);
+    target.add(this.shakeOffset.target);
+    this.camera.lookAt(target);
   }
 
   /**
@@ -393,6 +490,7 @@ export class CameraController {
    * @param {Object} shipStates - Current ship states from interpolator
    */
   update(shipStates, directorContext = null) {
+    this.removeShake();   // (a draw that was never finished)
     if (this.mode === 'free') {
       if (directorContext) this.updateDirector(shipStates, directorContext);
       return;

@@ -18,8 +18,8 @@ def _snapshot_module():
 
 
 def test_default_shots_keep_the_auto_director_off():
-    # The director eases the camera in wall time from page load: left on,
-    # a shot without --focus/--camera framed however far it had got.
+    # Captures frame their own shots: the director stays out unless asked for
+    # (README captures and other harness users rely on this default).
     snap = _snapshot_module()
     url = snap.page_url_for(5181, "fleet_heur.json", gfx="low")
     assert url == "http://127.0.0.1:5181/?recording=/recordings/fleet_heur.json&gfx=low&director=0"

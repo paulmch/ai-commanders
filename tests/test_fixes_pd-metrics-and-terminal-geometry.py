@@ -510,6 +510,7 @@ class TestAblationRecoilIsCausallyLive:
             f"{bare}/{n} unescorted vs {escorted}/{n} escorted"
         )
 
+    @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py
     def test_a_symmetric_screen_cancels_its_own_push(self, fleet_data):
         """
         Four escorts on a ring push the round from opposite sides. The physics

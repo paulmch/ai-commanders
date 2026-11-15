@@ -78,6 +78,7 @@ async def run_mcp_battle(
     draft: bool = False,
     draft_budget: int = None,
     draft_max_ships: int = None,
+    plain_json: bool = False,
 ):
     """Run a battle with MCP configuration using HTTP API."""
     print(f"Loading config from {config_path}...")
@@ -103,6 +104,7 @@ async def run_mcp_battle(
     battle_config = BattleConfig.from_fleet_config(
         fleet_config,
         verbose=verbose,
+        compress_recording=not plain_json,
     )
 
     # Create client for non-MCP fleets (if any)
@@ -247,6 +249,13 @@ def main():
         help="Draft max hulls override (default: config value or 8)",
     )
 
+    parser.add_argument(
+        "--plain-json",
+        action="store_true",
+        help="Write the recording as plain indented JSON (battle_*.json) "
+             "instead of the default gzip (battle_*.json.gz)",
+    )
+
     args = parser.parse_args()
 
     if args.start_server:
@@ -262,6 +271,7 @@ def main():
             draft=args.draft,
             draft_budget=args.draft_budget,
             draft_max_ships=args.draft_max_ships,
+            plain_json=args.plain_json,
         ))
     else:
         parser.print_help()

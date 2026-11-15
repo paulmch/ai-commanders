@@ -96,8 +96,27 @@ def surviving_ship_score_factor(ship) -> float:
 
 
 def ship_class_value(ship_type: str) -> float:
-    """Tactical-advantage value of a hull class (variants fall back to their base hull)."""
+    """
+    Tactical-advantage value of a hull: its DRAFT PRICE (balance, pass 5).
+
+    The time-limit verdict used to weigh hulls with SHIP_CLASS_VALUES alone,
+    a hand-typed table unrelated to what a hull costs: a 7-point frigate
+    scored 15 and a 55-point dreadnought 70, so at equal points a frigate
+    screen out-scored a battle line by surviving. The verdict now reads the
+    derived draft price (fleet_draft.SHIP_POINT_COSTS, from
+    data/fleet_ships.json), so the draft and the scoreboard agree on what a
+    hull is worth. SHIP_CLASS_VALUES stays as the fallback for a hull the
+    price table does not know: its own entry, else its base hull's
+    ("cruiser_x" -> cruiser), else the destroyer's.
+    """
     key = (ship_type or "destroyer").lower()
+    try:
+        from .fleet_draft import SHIP_POINT_COSTS
+        price = SHIP_POINT_COSTS.get(key)
+    except Exception:           # pricing unavailable: the table decides
+        price = None
+    if price:
+        return float(price)
     if key in SHIP_CLASS_VALUES:
         return SHIP_CLASS_VALUES[key]
     return SHIP_CLASS_VALUES.get(key.split("_")[0], SHIP_CLASS_VALUES["destroyer"])
@@ -140,6 +159,10 @@ class BattleConfig:
     # Recording
     record_battle: bool = True
     recording_dir: str = "data/recordings"
+    # Recording file format: gzip-compressed compact JSON (battle_*.json.gz,
+    # 20-37x smaller) or plain indented JSON (battle_*.json). Every reader
+    # takes both (src/recording_io.py).
+    compress_recording: bool = True
 
     # Detailed sim trace - records every step (position, velocity for all objects)
     # WARNING: Generates large files (~1MB per 10 minutes of battle)
@@ -915,20 +938,14 @@ class LLMBattleRunner:
             # Phase 4: Check surrender/draw
             if self.alpha_captain.has_surrendered:
                 self.communication.alpha_surrendered = True
-                if self.recorder:
-                    self.recorder.record_surrender(
-                        timestamp=self.simulation.current_time,
-                        ship_id="alpha",
-                        captain_name=self.alpha_config.name,
-                    )
+                self._record_ship_surrender(
+                    self.simulation.get_ship("alpha"), self.alpha_config.name,
+                    getattr(self.alpha_captain, 'surrender_reason', None))
             if self.beta_captain.has_surrendered:
                 self.communication.beta_surrendered = True
-                if self.recorder:
-                    self.recorder.record_surrender(
-                        timestamp=self.simulation.current_time,
-                        ship_id="beta",
-                        captain_name=self.beta_config.name,
-                    )
+                self._record_ship_surrender(
+                    self.simulation.get_ship("beta"), self.beta_config.name,
+                    getattr(self.beta_captain, 'surrender_reason', None))
             # Handle alpha draw proposals/retractions
             if self.alpha_captain.has_proposed_draw and not self._alpha_draw_notified:
                 # Queue message to notify beta captain
@@ -1504,21 +1521,15 @@ class LLMBattleRunner:
             # Check surrender/draw (including MCP)
             if self.alpha_mcp:
                 if self.alpha_mcp.has_surrendered:
-                    # Mark all alpha ships as surrendered
-                    for ship_id in self.alpha_ships:
-                        ship = self.simulation.get_ship(ship_id)
-                        if ship:
-                            ship.is_surrendered = True
+                    # Mark all alpha ships as surrendered (recorded per ship)
+                    self._surrender_fleet_ships(self.alpha_ships, self.alpha_mcp.name)
                     if self.config.verbose:
                         print(f"  [SURRENDER] {self.alpha_mcp.name} surrenders")
 
             if self.beta_mcp:
                 if self.beta_mcp.has_surrendered:
-                    # Mark all beta ships as surrendered
-                    for ship_id in self.beta_ships:
-                        ship = self.simulation.get_ship(ship_id)
-                        if ship:
-                            ship.is_surrendered = True
+                    # Mark all beta ships as surrendered (recorded per ship)
+                    self._surrender_fleet_ships(self.beta_ships, self.beta_mcp.name)
                     if self.config.verbose:
                         print(f"  [SURRENDER] {self.beta_mcp.name} surrenders")
 
@@ -1671,6 +1682,13 @@ class LLMBattleRunner:
         one captain's wall-clock instead of the fleet's sum. Order delivery
         and reporting stay sequential in fleet order.
         """
+        # A crew incapacitated by plume radiation (src/drive_plume.py) decides
+        # nothing: no captain call, no order applied. An admiral order to it
+        # comes back as an UNABLE report whose compliance says "not executable".
+        crew_out = [entry for entry in captain_entries
+                    if getattr(self.simulation.get_ship(entry[0]), 'crew_incapacitated', False) is True]
+        if crew_out:
+            captain_entries = [entry for entry in captain_entries if entry not in crew_out]
         self._apply_admiral_headings(captain_entries, admiral_orders)
         self._deliver_fleet_messages(captain_entries)
         for ship_id, captain, faction in captain_entries:
@@ -1717,6 +1735,14 @@ class LLMBattleRunner:
                       f"{self._get_ship_status_line(ship_id, commands)}")
             self._finish_captain_turn(ship_id, captain, faction, commands,
                                       admiral_orders.get(ship_id), record=record)
+        for ship_id, captain, faction in crew_out:
+            all_commands[ship_id] = []
+            report = self._build_captain_report(ship_id, captain, faction, [],
+                                                admiral_orders.get(ship_id))
+            if report and self.recorder:
+                self.recorder.record_captain_report(
+                    self.simulation.current_time, ship_id, report,
+                    answers_order_event_id=None, decision_event_id=None)
         return all_commands
 
     def _apply_admiral_headings(
@@ -2433,7 +2459,7 @@ class LLMBattleRunner:
         """
         from .fleet_comms import (
             commanded_target, committed_rounds, compliance, executed_maneuver,
-            fold_admiral_signals, primary_order,
+            fold_admiral_signals, mark_not_executable, primary_order,
         )
         channel = self.fleet_communication
         if not channel or self._llm_admiral(faction) is None:
@@ -2443,7 +2469,13 @@ class LLMBattleRunner:
             return None
         now = self.simulation.current_time
         explicit = getattr(captain, "order_response", None)
-        if explicit:
+        crew_out = getattr(ship, "crew_incapacitated", False) is True
+        if crew_out:
+            fields = {"status": "UNABLE", "reason": "crew incapacitated by plume radiation "
+                      f"({getattr(ship, 'crew_dose_sv', 0.0):.1f} Sv): the ship cannot execute orders - "
+                      "it coasts and does not fire", "intent": "", "contact": None, "request": None}
+            implicit = True
+        elif explicit:
             fields = {k: explicit.get(k) for k in ("status", "reason", "intent", "contact", "request")}
             implicit = False
         elif getattr(captain, "last_call_failed", False):
@@ -2469,6 +2501,9 @@ class LLMBattleRunner:
             "filed_t": now,
             "implicit": implicit,
         }
+        if crew_out:
+            mark_not_executable(report["compliance"])
+        self._note_drive_interlock(report, ship)
         fold_admiral_signals(report, self._admiral_signals.pop(ship_id, []))
         if getattr(captain, "discussions", None):
             report["discussion"] = [{"question": d["question"], "answer": d["answer"]}
@@ -2477,6 +2512,21 @@ class LLMBattleRunner:
             "report": report, "order": order, "executed": executed, "target_id": target_id,
             "cursor": len(self.simulation.events)})
         return report
+
+    def _note_drive_interlock(self, report: Dict[str, Any], ship: Any) -> None:
+        """While the engine's drive interlock holds the ship's throttle
+        (src/drive_plume.py), say so in its report: the reduced burn is the
+        interlock's doing, not a deviation from the order."""
+        try:
+            from ..drive_plume import interlock_status_line
+        except ImportError:  # pragma: no cover - script-style import path
+            from drive_plume import interlock_status_line
+        line = interlock_status_line(self.simulation, ship) if ship is not None else None
+        if not line:
+            return
+        report["drive_interlock"] = line
+        if isinstance(report.get("compliance"), dict):
+            report["compliance"]["interlock"] = line
 
     def _finalize_report(self, entry: Dict[str, Any]) -> Dict[str, Any]:
         """A filed report as its admiral reads it: compliance over the whole interval."""
@@ -2488,6 +2538,10 @@ class LLMBattleRunner:
                            if e.ship_id == ship_id and e.event_type.name == "TORPEDO_LAUNCHED")
             report["compliance"] = compliance(entry["order"], self.fleet_communication,
                                               entry["executed"], entry["target_id"], launched, final=True)
+            if (entry["report"].get("compliance") or {}).get("executable") is False:
+                from .fleet_comms import mark_not_executable
+                mark_not_executable(report["compliance"])
+        self._note_drive_interlock(report, self.simulation.get_ship(ship_id))
         report["ship_lost"] = not ship_alive(self.simulation.get_ship(ship_id))
         report["delivered_t"] = self.simulation.current_time
         return report
@@ -2519,6 +2573,41 @@ class LLMBattleRunner:
                 answers_order_event_id=order_ids[0] if order_ids else None,
                 decision_event_id=getattr(decision, "event_id", None))
 
+    def _record_ship_surrender(self, ship: Any, captain_name: str,
+                               reason: Optional[str] = None) -> None:
+        """
+        Record a `surrender` event for a ship striking its colours, once per
+        ship. Call it BEFORE setting is_surrendered: could_deal_damage is
+        read from the ship's fittings (a surrendered ship never can). Ships
+        already destroyed or dying are not surrenders and are skipped.
+        """
+        if ship is None or ship.is_destroyed or getattr(ship, 'is_dying', False):
+            return
+        recorded = self.__dict__.setdefault('_surrenders_recorded', set())
+        if ship.ship_id in recorded or getattr(ship, 'is_surrendered', False):
+            return
+        recorded.add(ship.ship_id)
+        if not self.recorder:
+            return
+        from ..battle_damage import ship_can_deal_damage
+        self.recorder.record_surrender(
+            timestamp=self.simulation.current_time,
+            ship_id=ship.ship_id,
+            captain_name=captain_name,
+            faction=getattr(ship, 'faction', None),
+            reason=reason,
+            hull_pct=getattr(ship, 'hull_integrity', 0.0),
+            could_deal_damage=ship_can_deal_damage(ship),
+        )
+
+    def _surrender_fleet_ships(self, ships: Dict[str, Any], commander_name: str) -> None:
+        """An MCP commander surrendered its fleet: every ship strikes its colours."""
+        for ship_id in ships:
+            ship = self.simulation.get_ship(ship_id)
+            if ship:
+                self._record_ship_surrender(ship, commander_name, reason=None)
+                ship.is_surrendered = True
+
     def _check_fleet_surrender_draw(self) -> None:
         """Check and handle surrenders and draws in fleet mode."""
         # Check each captain for surrender
@@ -2526,6 +2615,8 @@ class LLMBattleRunner:
             if captain.has_surrendered:
                 ship = self.simulation.get_ship(ship_id)
                 if ship and not getattr(ship, 'is_surrendered', False):
+                    self._record_ship_surrender(
+                        ship, captain.name, getattr(captain, 'surrender_reason', None))
                     ship.is_surrendered = True
                     ship.current_maneuver = None  # Stop maneuvering
                     if self.config.verbose:
@@ -2907,6 +2998,30 @@ class LLMBattleRunner:
         outcome, winner, reason = self._evaluate_fleet_tactical_advantage()
         return outcome, winner, f"Both fleets combat-ineffective - on points: {reason}"
 
+    def _fleet_loss_reason(self, faction: str) -> str:
+        """
+        How a fleet with no ship left in the fight was lost (result reason):
+        "<Side> fleet eliminated" when every ship was destroyed (a dying
+        hulk counts as destroyed), "<Side> fleet surrendered (N ships struck
+        their colours)" when none was destroyed, and "<Side> fleet destroyed
+        or surrendered (D destroyed, S surrendered)" for a mix.
+        """
+        ships = (self.alpha_ships if faction == "alpha" else self.beta_ships).values()
+        # Destroyed first: an MCP fleet surrender flags dead ships too.
+        destroyed = sum(1 for s in ships if s.is_destroyed or getattr(s, 'is_dying', False))
+        surrendered = sum(1 for s in ships
+                          if not (s.is_destroyed or getattr(s, 'is_dying', False))
+                          and getattr(s, 'is_surrendered', False))
+        side = faction.title()
+        if surrendered == 0:
+            return f"{side} fleet eliminated"
+        if destroyed == 0:
+            plural = "ship" if surrendered == 1 else "ships"
+            return (f"{side} fleet surrendered ({surrendered} {plural} struck "
+                    f"{'its' if surrendered == 1 else 'their'} colours)")
+        return (f"{side} fleet destroyed or surrendered "
+                f"({destroyed} destroyed, {surrendered} surrendered)")
+
     def _evaluate_fleet_result(self) -> BattleResult:
         """Evaluate final fleet battle result."""
         # Count active ships
@@ -2925,15 +3040,16 @@ class LLMBattleRunner:
         if alpha_active == 0 and beta_active == 0:
             outcome = BattleOutcome.DRAW
             winner = None
-            reason = "Mutual destruction/surrender"
+            reason = (f"Mutual destruction/surrender: {self._fleet_loss_reason('alpha')}; "
+                      f"{self._fleet_loss_reason('beta')}")
         elif alpha_active == 0:
             outcome = BattleOutcome.BETA_VICTORY
             winner = "beta"
-            reason = "Alpha fleet eliminated"
+            reason = self._fleet_loss_reason("alpha")
         elif beta_active == 0:
             outcome = BattleOutcome.ALPHA_VICTORY
             winner = "alpha"
-            reason = "Beta fleet eliminated"
+            reason = self._fleet_loss_reason("beta")
         elif (ineffective := self._combat_ineffective_outcome()) is not None:
             outcome, winner, reason = ineffective
         elif (self.alpha_mcp or self.alpha_admiral) and (self.beta_mcp or self.beta_admiral):
@@ -2997,9 +3113,11 @@ class LLMBattleRunner:
             filename = create_battle_filename(
                 self.recorder.recording.alpha_model,
                 self.recorder.recording.beta_model,
+                compress=self.config.compress_recording,
             )
             filepath = Path(self.config.recording_dir) / filename
-            self.recording_file = self.recorder.save(str(filepath))
+            self.recording_file = self.recorder.save(
+                str(filepath), compress=self.config.compress_recording)
 
             if self.config.verbose:
                 print(f"Recording saved to: {self.recording_file}")
@@ -3118,6 +3236,10 @@ class LLMBattleRunner:
                     "armor": armor_data,
                 }
                 ships[ship_id].update(_thermal_trace_fields(ship))
+                # Weapon arcs: hull 'up' (roll included) and per-mount 'tur'
+                arcs_fields = getattr(self.simulation, 'arcs_trace_fields', None)
+                if arcs_fields is not None:
+                    ships[ship_id].update(arcs_fields(ship))
 
         # Build projectile states
         projectiles = []
@@ -3511,9 +3633,11 @@ class LLMBattleRunner:
             filename = create_battle_filename(
                 self.alpha_config.model,
                 self.beta_config.model,
+                compress=self.config.compress_recording,
             )
             filepath = Path(self.config.recording_dir) / filename
-            self.recording_file = self.recorder.save(str(filepath))
+            self.recording_file = self.recorder.save(
+                str(filepath), compress=self.config.compress_recording)
 
             if self.config.verbose:
                 print(f"Recording saved to: {self.recording_file}")

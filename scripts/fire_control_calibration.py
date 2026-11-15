@@ -63,6 +63,8 @@ from typing import Dict, Iterable, List, Optional
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from src.recording_io import load_recording, recording_stem  # noqa: E402
+
 from src.firecontrol import (  # noqa: E402
     HIT_TOLERANCE_M, TargetMotion, WeaponsCommand, WeaponsOrder,
     displacement_sigma_m, track_probability,
@@ -184,9 +186,8 @@ def _lead_fraction(mtype: str, throttle: float, applied: float) -> float:
 
 def rows_from_recording(path: str, hulls: Optional[HullTable] = None) -> List[dict]:
     hulls = hulls or HullTable()
-    with open(path) as f:
-        rec = json.load(f)
-    name = Path(path).stem
+    rec = load_recording(path)
+    name = recording_stem(path)
     ship_types = {}
     for side in ("alpha", "beta"):
         for ship in (rec.get(f"{side}_fleet") or {}).get("ships", []):
@@ -287,12 +288,20 @@ def _unit(rng: random.Random) -> Vector3D:
 
 def harness_run(seed: int, cls: str, target_type: str, range_km: float, fleet: dict,
                 shooters: int = 1, spread_deg: float = 40.0,
-                shooter_type: str = "battleship") -> List[dict]:
+                shooter_type: str = "battleship", weapon_arcs: bool = False) -> List[dict]:
     """One controlled engagement - ``shooters`` ships of ``shooter_type``
     spread over ``spread_deg`` of bearing, PADLOCKed on one target and
     firing FIRE_IMMEDIATE - returns one row per resolved round."""
     rng = random.Random(seed)
-    sim = CombatSimulation(time_step=1.0, decision_interval=30.0, seed=seed)
+    # A fire-control instrument: it measures what happens to a round that
+    # LEAVES, so it runs without weapon arcs (src/weapon_arcs.py), which only
+    # decide whether and when one leaves. With arcs no attitude lets its lone
+    # battleship fire all four batteries at one target (at most two bear), so
+    # the engagements would thin out below their statistical floor.
+    # (weapon_arcs=True flies the same engagement with arcs, for the test
+    # that the forecast still holds for the rounds that do leave.)
+    sim = CombatSimulation(time_step=1.0, decision_interval=30.0, seed=seed,
+                           weapon_arcs_enabled=weapon_arcs)
     target = create_ship_from_fleet_data(
         "target", target_type, "beta", fleet, position=Vector3D(range_km * 1000.0, 0, 0),
         velocity=_unit(rng) * rng.uniform(0, 1500),

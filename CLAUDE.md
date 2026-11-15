@@ -61,7 +61,11 @@ ai-commanders/
 │   ├── damage.py / modules.py / geometry.py / thermal.py / power.py
 │   ├── battle_damage.py    # damage consequences: surface fittings (mounts, PD,
 │   │                       # tubes, drive), reactor blast, magazine cook-off
+│   ├── drive_plume.py      # drive plume wash: heat/armour/fittings for ships in a
+│   │                       # burning torch's exhaust cone (no RNG, one snapshot per tick)
 │   ├── trajectory_prediction.py  # movement-only shadow sim -> per-frame sim_trace 'plan'
+│   ├── weapon_arcs.py      # weapon arcs + turret traverse: masks from data/hull_mounts.json,
+│   │                       # mount slew, roll-to-unmask (engine side: CombatSimulation._arcs_*)
 │   └── llm/                # OpenRouter client, captain/admiral agents (+vision),
 │                           # draft mode + heuristic captains, prompts, tools,
 │                           # battle runner/recorder, MCP servers, commander
@@ -75,20 +79,31 @@ ai-commanders/
 ├── scripts/
 │   ├── run_llm_battle.py   # CLI for AI vs AI battles (--fleet-config, --admiral-vision)
 │   ├── run_draft_battle.py # draft mode: point-budget fleets + formations
+│   ├── draft_tournament.py # seeded round robin of fleet archetypes at equal points (price balance)
 │   ├── generate_test_battle.py  # scripted no-LLM recordings for the viewer
 │   ├── viewer_snapshot.py  # headless Playwright screenshots of the 3D viewer
+│   ├── viewer_clip.py      # frame-stepped MP4/GIF clips (director or camera path, resumable)
 │   ├── mcp_battle.py       # CLI for MCP-controlled battles
 │   ├── refine_commander.py # Post-battle lesson distillation + rematch gating
 │   ├── fire_control_calibration.py  # gun P(hit) vs engine outcomes (recordings + seeded harness)
+│   ├── perf_check.py       # engine speed + bit-equality: seeded battles and a calibration
+│   │                       # slice hashed against perf_check_golden.json, CPU time per case,
+│   │                       # --profile CASE. An optimisation must leave every hash identical;
+│   │                       # re-record (--record) only on a commit that changes behaviour, with
+│   │                       # the Python minor version the golden is compared under (3.11 and
+│   │                       # 3.12 give different low bits: use --golden PATH for another one)
 │   └── calculate_shots_to_kill.py  # Regenerates docs/ships.md combat tables
 ├── docs/ships.md           # Ship specs + simulated shots-to-kill tables
 └── visualizer/             # Three.js 3D battle replay viewer; src/render/ holds
                             # the PBR hull kit (Hulls + HullLights/Markings/Rigs),
                             # Projectiles (in-flight weapons), DamageFX, Rcs,
                             # Tracks, Environment/SkyTextures, PostFX/Bloom/Quality,
-                            # HullWear, TargetingLines; src/ holds the spectator
-                            # HUD (HudIndex, Scoreboard, KillFeed, CommsFeed,
-                            # TimelineMarkers, Registry) and live mode
+                            # HullWear, TargetingLines, Torch (volumetric plumes),
+                            # GunLooks, BlastShell, sunShadow; src/ holds the
+                            # spectator HUD (HudIndex, Scoreboard, KillFeed,
+                            # CommsFeed, TimelineMarkers, Registry, FittingsIndex
+                            # + FittingsHud: per-ship fitting/crew state), the
+                            # auto director (Director, DirectorCamera) and live mode
                             # (LiveSession, LiveCards, DraftSplash,
                             # OffscreenIndicators, ViewInsets)
 ```
@@ -120,6 +135,51 @@ ai-commanders/
   destroyed magazine burns half the rounds and blows non-critical neighbours.
   These rolls use `CombatSimulation._damage_rng` (seed-derived), never the
   battle RNG that decides hits
+- Drive plume wash (`src/drive_plume.py`, `tests/test_drive_plume.py`, recorded as
+  `plume_wash` per `docs/pass-5-recording-additions.md`): a burning torch (300 TW
+  jet, the same on every hull) washes any ship within 7.5° of dead astern out to
+  100 km - on axis at full burn 40 GJ/s at 5 km, 16 at 10 km, 4.7 at 20 km, 0.8
+  at 50 km (Gaussian 3° core, scaled by the throttle actually produced); above
+  4 GJ/s it also burns armour and fittings off the washed facing. Heat stops at
+  149% (never a kill by itself). Above 0.78 GJ/s the wash also shreds EXTENDED
+  radiator panels (`radiator_damaged`, cause `plume_wash`; retracted ones are
+  safe) and the heat ladder does not force radiators out while the ship is in
+  such a jet (`drive_plume.radiators_in_jet`, gate in
+  `_update_radiator_automation`). A turning emitter sweeps its jet (axis sampled
+  every 1.5° between ticks, so a sweep cannot tunnel past a ship). Crew
+  radiation dose (`crew_dose_sv`, permanent): wash rate x 0.03 Sv/GJ x
+  exp(-armour cm / 100) on the washed facing; 2 Sv = impaired (guns and tubes
+  cycle x1.5), 8 Sv = incapacitated (`crew_incapacitated`: coasts, never fires,
+  cannot deal damage for the victory rule); `crew_radiation` events. No RNG,
+  order-independent, off in the torpedo forecast shadow
+  (`sim.plume_wash_enabled`). Drive interlock (`interlock_caps` /
+  `apply_interlock`, always on, also while evading; exemption constant
+  `PLUME_INTERLOCK_EXEMPT_TORPEDO_EVASION` is off): every ship's throttle is
+  capped each tick, from the start-of-tick snapshot, so its exhaust puts at
+  most 0.5 GJ/s on a FRIENDLY ship; enemies never limit it; `drive_interlock`
+  events, "DRIVE INTERLOCK: throttle held ..." status. An incapacitated crew is
+  asked nothing by the runner (UNABLE report, compliance "not executable"),
+  MCP commands to it are rejected; crew state and heavy wash go out on the
+  FLEET NET datalink (`CREW_STATE`, `PLUME_WASH`). Torpedoes are affected only behind
+  `PLUME_AFFECTS_TORPEDOES` (off). Tactical heuristic captains ease the drive
+  for a friendly astern (`heuristic_tactics.plume_safe_throttle`); commanders
+  see PLUME WASH / PLUME RISK status lines
+- Weapon arcs (`src/weapon_arcs.py`, `tests/test_weapon_arcs.py`, recorded per
+  `docs/pass-5-recording-additions.md` "Arcs lane"): every battery and PD turret
+  fires only in directions its own hull leaves open (`data/hull_mounts.json`, a
+  5 degree mask per mount, generated by `visualizer/scripts/export_hull_mounts.mjs`,
+  keyed by hull class) and only after slewing onto them (PD 120 deg/s, battery 30,
+  heavy 15; great circle, 1 s tick); spinals keep the analytic `pivot_range_deg`
+  gimbal. Body frame x forward / y port / z dorsal. `kinematic_state.up` is the
+  NAVIGATION up that evasion steers by - never write it; hull roll is a separate
+  angle (`ship.arcs.roll`, RCS roll authority = 3.3x pitch RCS) that the rule-based
+  layer drives to unmask (inbound torpedoes first, then gun energy; re-planned
+  every 5 s) and that never changes motion. Flags `CombatSimulation.weapon_arcs` /
+  `.roll_to_unmask` (default on; `AIC_WEAPON_ARCS=0` / `AIC_ROLL_TO_UNMASK=0` for
+  measurement, `scripts/arcs_stats.py`); the fire-control calibration harness and
+  the head-on PD scenario tests (`all_round_fire` fixture) run without arcs.
+  Anything that counts weapons must count weapons that BEAR
+  (`src/llm/arcs_status.py`, `fire_solutions.pd_cover(threat_from=...)`)
 - Two-stage kills: a non-reactor killing blow leaves an untargetable dying hulk
   (tumbling, torch sputtering) that detonates 0-30 s later; hits on the hulk
   shorten the fuse, a reactor hit detonates it at once (`test_dying_ships.py`)
@@ -213,6 +273,19 @@ endpoints for viewer development.
 The corvette (1 launcher) and torpedo cruiser (4 launchers, 12 rounds each) are the
 torpedo-armed hulls; all others fight with coilguns.
 
+## Recording Files
+
+New recordings are gzip (`battle_*.json.gz`: compact JSON, deterministic bytes:
+mtime 0, no file name); old plain `.json` recordings stay valid everywhere. All
+Python reads/writes go through `src/recording_io.py` (`load_recording` sniffs the
+gzip magic, `dump_recording` is atomic, `sidecar_path` gives `battle_x.draft.json`);
+never `json.load(open(recording))`. The viewer decodes through
+`visualizer/src/RecordingCodec.js` (magic-byte sniff + `DecompressionStream`).
+`BattleConfig.compress_recording`; `--plain-json` on the battle
+scripts, `run_draft_battle.py --no-recording`; `scripts/compress_recordings.py`
+converts a folder (verify before delete). `BattleRecording.to_json` (plain text,
+hashed by the perf harness) is unchanged.
+
 ## Viewer Rendering Notes
 
 - All custom `ShaderMaterial`s must include `<common>` + the `logdepthbuf_*`
@@ -220,8 +293,13 @@ torpedo-armed hulls; all others fight with coilguns.
   shader fails to compile or depth-tests wrongly).
 - `IcosahedronGeometry(r, detail)` subdivides linearly (20*(d+1)^2 faces) -
   use detail 12-28 for smooth blast spheres, not 3-5.
-- `RoundedBoxGeometry` is non-indexed; the hull kit converts every part with
-  `toNonIndexed()` before merging.
+- The hull kit (render/Hulls.js) builds parts from `chamferBoxGeometry` and
+  `octSectionGeometry` (shouldered sections, wedge bows), all non-indexed and
+  merged per material. Plated materials (`hull`, `trim`, `paint`, `dark`,
+  `barrel`) use vertex colours and one hull-space UV lattice: geometry added
+  outside `HullKit.add` needs a `color` attribute and UVs at `kit.texel` scale
+  or it renders black. `mats.bellHeat` is a MeshLambertMaterial; drive only its
+  `emissiveIntensity`.
 - Effects animate on battle time (spawnTime vs currentTime) so timeline
   scrubbing is deterministic; wall-clock only drives texture turbulence.
 - Verify visually with `uv run python scripts/viewer_snapshot.py` (see
@@ -241,6 +319,48 @@ torpedo-armed hulls; all others fight with coilguns.
   recordings without them. Prediction must never draw from the battle RNG or
   change results - `tests/test_trajectory_prediction.py` pins seeded on/off
   equality.
+- Render globals (lighting, shadows, IBL, post) live in render/Environment.js,
+  render/PostFX.js, render/Bloom.js, render/sunShadow.js and render/Quality.js;
+  effects and hull materials are tuned against them, so change them in one
+  place and re-shoot the reference frames. High tier only: sun shadow map
+  (box fitted each frame to the hulls on screen, `chooseShadowFocus`; hull
+  meshes are flagged cast/receive by material type in
+  `SceneManager._flagShadowMeshes`, so any opaque MeshStandardMaterial hull
+  part casts), screen-space AO (reads the LOGARITHMIC depth texture:
+  w = exp2(d * log2(far + 1)) - 1; held off emitters by luminance), the
+  anamorphic streak. Both tiers: the print grade and exposure adaptation
+  (metered from the coarsest bloom level, stateless so scrubbing stays
+  deterministic). Shadow-side fill is image-based (PMREM: cool anti-sun lobe,
+  planet bounce, floor - `ENV_FILL`/`ENV_BOUNCE`/`ENV_AMBIENT`), never drawn
+  on the visible sky.
+- Auto director: `src/Director.js` turns the recording into a shot list (pure,
+  no THREE; `lookahead: false` in live mode is causal), `src/DirectorCamera.js`
+  frames each shot type as a pure function of (shot, battle time, positions), and
+  `CameraController` applies it plus blast shake (`Director.shakeAt`, battle time).
+  Never add wall-clock easing to a director pose: `tests/director.test.js` pins
+  seek-away-and-back equality. Shake is on the camera only for the draw (`main.js`
+  wraps `scene.render()` in `applyShake` / `removeShake`). Kill shots and shake are
+  keyed on `DamageTimeline.shipDetonationTime` (the frame the viewer blows the ship
+  up), the pull-back distance on `Explosion.blastExtent` - change a blast's curves
+  in `Blast.update` and that function together.
+- Weapon arcs: `data/hull_mounts.json` (per hull class, every mount's pivot, axis
+  and blocked-direction mask in the body frame: x forward, y port, z dorsal =
+  hull-kit Z, X, Y) is GENERATED from the hull kit by
+  `node visualizer/scripts/export_hull_mounts.mjs` (`--report` prints PD/gun
+  coverage per hull), together with the viewer's copy
+  `visualizer/src/render/hullMountsData.js`. Regenerate both after moving a
+  turret, PD mount or superstructure block, or changing a hull's weapons;
+  `visualizer/tests/hull_mounts.test.js` fails until you do. Seed-/faction-
+  dependent decoration (greebles, livery) is tagged `seeded` and is not an
+  occluder, so the file is keyed by class only.
+- Hull attitude: trace frames with `up` orient the hull by `fwd` + `up`
+  (`src/HullFrame.js`, slerped as a rotation); without it the old lookAt roll
+  (world-up +Y). Every consumer that rebuilds the hull frame from a trace sample
+  must go through `hullBasis` / `hullQuat`. Mounts are posed from the trace's
+  `tur` ([az, el, state] per mount, hull_mounts order) when present; otherwise
+  `render/HullRigs.js` aims from the event log, clamped to the masks and slewed
+  at the engine's class rates (`MountLimits.TRAVERSE_DEG_S` mirrors
+  `src/weapon_arcs.py`), as pure functions of battle time.
 - Ownership: in-flight weapons live in render/Projectiles.js (WeaponTimeline
   decides what exists at time t); persistent hit aftermath and deaths in
   DamageTimeline.js + render/DamageFX.js; hulls expose `userData.rcsMounts` /
@@ -262,6 +382,15 @@ torpedo-armed hulls; all others fight with coilguns.
   (harness + table) and regenerate the fixture; the doctrine P(hit) table is bound by
   `tests/test_prompt_structure.py`. Known residual: LLM fleets dodging a whole fleet's
   fire were hit even less than forecast (firecontrol.JINK_ACCEL_FRACTION).
+- Side symmetry: the engine must not care which fleet is alpha or was added
+  first. `CombatSimulation.step()` resolves weapons fire, point defence and
+  the ship updates (`_update_ships`: every ship steers on the start-of-step
+  state of the others, new states are staged and installed together) each from
+  one snapshot. `tests/test_side_symmetry.py` pins it exactly: mirrored
+  RNG-free (or flat-RNG) engagements stay mirror images and do not depend on
+  insertion order. Per-tick logic that reads another ship must never see a
+  ship already updated this tick (a mirrored HOLD_RANGE pair used to split
+  into CLOSE and HOLD that way, and mirror battles went to one side by roster).
 - After any armor or damage-model change, regenerate the combat tables in
   `docs/ships.md` with `uv run python scripts/calculate_shots_to_kill.py`.
 - Draft point costs are DERIVED from `data/fleet_ships.json`, not hand-typed
@@ -270,3 +399,9 @@ torpedo-armed hulls; all others fight with coilguns.
   hull's armour or magazine and its price moves on its own; the cost table in
   `docs/draft_mode.md` then needs regenerating. Never re-add a hard-coded
   `SHIP_POINT_COSTS` literal - torpedo armament was nearly free that way.
+  After a change to torpedo guidance, point defence, the heuristic captains or
+  the time-limit scoring, re-run `scripts/draft_tournament.py` (cached by
+  engine source + rosters + hull prices + seed) before touching
+  `TORPEDO_POINTS_PER_GJ`. Every hull must stay draftable at the default
+  100-point budget (pinned), and the time-limit verdict values a hull at its
+  draft price (`ship_class_value`; `SHIP_CLASS_VALUES` is only the fallback).

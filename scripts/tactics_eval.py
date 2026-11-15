@@ -17,7 +17,10 @@ range, gun hit rate, torpedoes launched / hit, ships lost to heat.
         --pairings tactical:legacy legacy:tactical --mirror --out /tmp/eval
 
     # analyse existing recordings only
-    uv run python scripts/tactics_eval.py --analyze rec1.json rec2.json
+    uv run python scripts/tactics_eval.py --analyze rec1.json.gz rec2.json
+
+Each battle's row is cached in <out>/<tag>/metrics.json and its recording is
+deleted once analysed; --keep-recordings keeps them (gzip, battle_*.json.gz).
 
 Every battle is a separate process (BLAS threads capped), so a grid runs in
 parallel; --jobs caps how many at once.
@@ -26,7 +29,6 @@ parallel; --jobs caps how many at once.
 from __future__ import annotations
 
 import argparse
-import glob
 import json
 import math
 import os
@@ -37,6 +39,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from src.recording_io import iter_recordings, load_recording, sidecar_path  # noqa: E402
 
 # Gun rounds fired at or inside this range count as "inside effective range":
 # the doctrine's per-round P(hit) table (src/llm/prompts.py) drops below ~25%
@@ -49,8 +54,7 @@ def _dist(a, b) -> float:
 
 
 def analyze(path: str) -> Dict[str, Any]:
-    with open(path) as f:
-        rec = json.load(f)
+    rec = load_recording(path)
     events = rec.get("events", [])
     faction = {}
     for side in ("alpha", "beta"):
@@ -119,16 +123,55 @@ def analyze(path: str) -> Dict[str, Any]:
     out["closest_km"] = best[0] / 1000.0 if best[2] is not None else None
     out["closest_rel_kps"] = best[1] / 1000.0 if best[2] is not None else None
     out["closest_t"] = best[2]
+
+    # Weapon arcs (trace 'tur'): share of gun-mount samples that bear (state 2
+    # on target and clear) among those with a target (1 slewing, 2, 3 masked),
+    # and gun rounds per side.
+    try:
+        from src.weapon_arcs import load_hull_mounts
+        mounts = load_hull_mounts()
+    except Exception:
+        mounts = {}
+    types = {}
+    for side in ("alpha", "beta"):
+        fleet = rec.get(f"{side}_fleet") or {}
+        for s in fleet.get("ships", []) if isinstance(fleet, dict) else []:
+            types[s.get("ship_id")] = s.get("ship_type")
+    bear = {"alpha": [0, 0], "beta": [0, 0]}
+    for frame in rec.get("sim_trace") or []:
+        for sid, s in frame.get("ships", {}).items():
+            tur = s.get("tur")
+            hm = mounts.get(types.get(sid))
+            side = side_of(sid)
+            if not tur or hm is None or side not in bear:
+                continue
+            for m, t in zip(hm.mounts, tur):
+                if m.kind in ("gun", "spinal") and len(t) > 2 and t[2] in (1, 2, 3):
+                    bear[side][1] += 1
+                    bear[side][0] += t[2] == 2
+    tot = [bear["alpha"][0] + bear["beta"][0], bear["alpha"][1] + bear["beta"][1]]
+    out["gun_bearing_share"] = tot[0] / tot[1] if tot[1] else None
+    for side in ("alpha", "beta"):
+        out[f"bearing_{side}"] = bear[side][0] / bear[side][1] if bear[side][1] else None
+        out[f"shots_{side}"] = sum(1 for e in shots if side_of(e["ship_id"]) == side)
     return out
 
 
 def run_one(seed: int, budget: int, alpha: str, beta: str, mirror: bool, out_dir: str,
-            time_limit: float, extra: List[str]) -> Dict[str, Any]:
+            time_limit: float, extra: List[str], keep_recordings: bool = False) -> Dict[str, Any]:
+    """One battle -> its analysed row. The row is cached in <tag>/metrics.json;
+    the recording this call wrote (needed only for the analysis) is deleted
+    afterwards unless keep_recordings - a grid of traced fleet battles is
+    gigabytes. A recording already in the tag dir is analysed and kept."""
     tag = f"s{seed}_b{budget}_{alpha}-{beta}{'_m' if mirror else ''}"
     rec_dir = Path(out_dir) / tag
     rec_dir.mkdir(parents=True, exist_ok=True)
-    existing = sorted(p for p in glob.glob(str(rec_dir / "battle_*.json")) if not p.endswith(".draft.json"))
-    if not existing:
+    metrics = rec_dir / "metrics.json"
+    if metrics.exists():
+        return json.loads(metrics.read_text())
+    existing = [str(p) for p in iter_recordings(rec_dir, "battle_*")]
+    ran = not existing
+    if ran:
         cmd = ["uv", "run", "python", str(ROOT / "scripts" / "run_draft_battle.py"),
                "--auto-draft", "--no-admirals", "--trace", "--quiet",
                "--seed", str(seed), "--budget", str(budget), "--time-limit", str(time_limit),
@@ -138,11 +181,16 @@ def run_one(seed: int, budget: int, alpha: str, beta: str, mirror: bool, out_dir
                    MKL_NUM_THREADS="1", PYTHONUNBUFFERED="1")
         with open(rec_dir / "log.txt", "w") as log:
             subprocess.run(cmd, cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, check=False)
-        existing = sorted(p for p in glob.glob(str(rec_dir / "battle_*.json")) if not p.endswith(".draft.json"))
+        existing = [str(p) for p in iter_recordings(rec_dir, "battle_*")]
     if not existing:
         return {"tag": tag, "error": f"no recording (see {rec_dir / 'log.txt'})"}
     res = analyze(existing[-1])
     res.update(tag=tag, seed=seed, budget=budget, alpha=alpha, beta=beta)
+    metrics.write_text(json.dumps(res, indent=1))
+    if ran and not keep_recordings:   # never delete recordings this call did not write
+        for p in existing:
+            Path(p).unlink(missing_ok=True)
+            sidecar_path(p).unlink(missing_ok=True)
     return res
 
 
@@ -228,6 +276,9 @@ def main() -> int:
     ap.add_argument("--out", default="data/recordings/tactics_eval")
     ap.add_argument("--json", default=None, help="write all rows + summaries here")
     ap.add_argument("--analyze", nargs="+", default=None, help="only analyse these recordings")
+    ap.add_argument("--keep-recordings", action="store_true",
+                    help="keep each battle's recording (default: analyse it, cache the row "
+                         "in <out>/<tag>/metrics.json and delete the recording)")
     args = ap.parse_args()
 
     if args.analyze:
@@ -237,7 +288,8 @@ def main() -> int:
     jobs = [(s, b, *p.split(":"), args.mirror) for p in args.pairings
             for b in args.budgets for s in args.seeds]
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
-        rows = list(pool.map(lambda j: run_one(*j, args.out, args.time_limit, []), jobs))
+        rows = list(pool.map(lambda j: run_one(*j, args.out, args.time_limit, [],
+                                             args.keep_recordings), jobs))
     summaries = []
     for pairing in args.pairings:
         a, b = pairing.split(":")

@@ -14,7 +14,8 @@ import json
 import hashlib
 import threading
 from src.replay_evidence import json_value
-from dataclasses import dataclass, field, asdict
+from src import recording_io
+from dataclasses import dataclass, field, asdict, fields, is_dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -98,7 +99,10 @@ class EventType(str, Enum):
 # Optional per-ship sim_trace fields passed through verbatim when present.
 _TRACE_OPTIONAL_SHIP_KEYS = ("acc", "omega", "alpha", "turn", "evade", "tgt", "plan",
                              # heat telemetry (battle_runner._thermal_trace_fields)
-                             "heat", "rad", "heat_rate", "rad_out")
+                             "heat", "rad", "heat_rate", "rad_out",
+                             # weapon arcs (CombatSimulation.arcs_trace_fields):
+                             # hull up vector and per-mount [az, el, state]
+                             "up", "tur")
 
 
 def _interval_s(config: Any) -> Optional[float]:
@@ -107,6 +111,119 @@ def _interval_s(config: Any) -> Optional[float]:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return float(value)
     return None
+
+
+def _float_json(value: float) -> str:
+    """A float as json.dumps writes it (allow_nan=True)."""
+    if value != value:
+        return 'NaN'
+    if value == _INFINITY:
+        return 'Infinity'
+    if value == -_INFINITY:
+        return '-Infinity'
+    return float.__repr__(value)
+
+
+_INFINITY = float('inf')
+_encode_json_string = json.encoder.encode_basestring_ascii
+
+
+def dumps_indented(obj: Any, indent: int = 2) -> str:
+    """
+    ``json.dumps(obj, indent=indent, default=_dataclass_as_json_object)``,
+    byte for byte, for a positive int ``indent`` - written as one plain
+    recursion that appends to a list.
+
+    The standard library has no C encoder for indented output: it falls back
+    to a chain of Python generators that hands every scalar up through every
+    nesting level, which made saving a traced fleet recording (14 MB, 5
+    million nodes) a noticeable share of the battle. Same rules as the
+    stdlib encoder: ensure_ascii strings, repr floats with NaN/Infinity, dict
+    keys of str/int/float/bool/None, insertion order, "[]"/"{}" when empty,
+    dataclass instances as objects of their fields. Anything else raises
+    TypeError; BattleRecording.to_json then lets json.dumps produce the
+    result (or the proper error). tests/test_perf_equivalence.py pins the
+    byte equality.
+    """
+    out: List[str] = []
+    append = out.append
+    indents = ['\n' + ' ' * (indent * level) for level in range(64)]
+
+    float_repr = float.__repr__
+
+    def write(o: Any, level: int) -> None:
+        kind = type(o)
+        if kind is float:
+            # The common leaf by far (positions, velocities). repr() of a
+            # finite float never ends in a letter; 'nan'/'inf'/'-inf' do.
+            text = float_repr(o)
+            append(text if text[-1] not in 'fn' else _float_json(o))
+        elif isinstance(o, str):
+            append(_encode_json_string(o))
+        elif o is None:
+            append('null')
+        elif o is True:
+            append('true')
+        elif o is False:
+            append('false')
+        elif isinstance(o, int):
+            append(int.__repr__(o))
+        elif isinstance(o, float):
+            append(_float_json(o))
+        elif isinstance(o, (list, tuple)):
+            if not o:
+                append('[]')
+                return
+            inner = indents[level + 1]
+            separator = '[' + inner
+            for item in o:
+                append(separator)
+                write(item, level + 1)
+                separator = ',' + inner
+            append(indents[level])
+            append(']')
+        elif isinstance(o, dict):
+            if not o:
+                append('{}')
+                return
+            inner = indents[level + 1]
+            separator = '{' + inner
+            for key, value in o.items():
+                append(separator)
+                if isinstance(key, str):
+                    append(_encode_json_string(key))
+                elif key is True:
+                    append('"true"')
+                elif key is False:
+                    append('"false"')
+                elif key is None:
+                    append('"null"')
+                elif isinstance(key, int):
+                    append('"' + int.__repr__(key) + '"')
+                elif isinstance(key, float):
+                    append('"' + _float_json(key) + '"')
+                else:
+                    raise TypeError(f'keys must be str, int, float, bool or None, '
+                                    f'not {key.__class__.__name__}')
+                append(': ')
+                write(value, level + 1)
+                separator = ',' + inner
+            append(indents[level])
+            append('}')
+        else:
+            write(_dataclass_as_json_object(o), level)
+
+    write(obj, 0)
+    return ''.join(out)
+
+
+def _dataclass_as_json_object(obj: Any) -> Dict[str, Any]:
+    """json ``default`` hook: a dataclass instance as a dict of its fields, in
+    field order - what ``dataclasses.asdict`` turns it into, one level at a
+    time (the encoder calls back for nested instances)."""
+    if is_dataclass(obj) and not isinstance(obj, type):
+        return {f.name: getattr(obj, f.name) for f in fields(obj)}
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
 @dataclass
@@ -186,7 +303,25 @@ class BattleRecording:
         return asdict(self)
 
     def to_json(self, indent: int = 2) -> str:
-        return json.dumps(self.to_dict(), indent=indent)
+        # Not json.dumps(self.to_dict()): asdict() deep-copies the whole
+        # recording first (millions of nodes for a traced fleet battle, a
+        # tenth of the battle's CPU time) only for the copy to be serialised
+        # and dropped. Serialising the fields directly gives the same text,
+        # byte for byte (tests/test_perf_equivalence.py).
+        record = {f.name: getattr(self, f.name) for f in fields(self)}
+        if type(indent) is int and indent > 0:
+            try:
+                return dumps_indented(record, indent)
+            except (TypeError, IndexError, RecursionError):
+                pass    # something exotic: the stdlib encoder decides
+        return json.dumps(record, indent=indent, default=_dataclass_as_json_object)
+
+    def to_compact_json(self) -> str:
+        """The recording as compact JSON (no indent, ',' / ':' separators):
+        what goes inside a ``.json.gz`` recording. Parses to the same object
+        as ``to_json()``; the C encoder makes it ~3x faster to write."""
+        record = {f.name: getattr(self, f.name) for f in fields(self)}
+        return json.dumps(record, separators=(',', ':'), default=_dataclass_as_json_object)
 
 
 class BattleRecorder:
@@ -1127,13 +1262,31 @@ class BattleRecorder:
         timestamp: float,
         ship_id: str,
         captain_name: str,
+        faction: Optional[str] = None,
+        reason: Optional[str] = None,
+        hull_pct: Optional[float] = None,
+        could_deal_damage: Optional[bool] = None,
     ) -> None:
-        """Record a surrender."""
+        """Record a surrender (1v1 and fleet battles, once per ship).
+
+        data: captain_name always; faction, reason (null when the captain
+        gave none), hull_pct and could_deal_damage (the ship still had an
+        operational gun with ammunition or a tube with rounds when it struck
+        its colours) when the caller knows them.
+        """
+        data: Dict[str, Any] = {"captain_name": captain_name}
+        if faction is not None:
+            data["faction"] = faction
+            data["reason"] = reason
+        if hull_pct is not None:
+            data["hull_pct"] = round(float(hull_pct), 1)
+        if could_deal_damage is not None:
+            data["could_deal_damage"] = bool(could_deal_damage)
         self._record_event(BattleEvent(
             timestamp=timestamp,
             event_type=EventType.SURRENDER,
             ship_id=ship_id,
-            data={"captain_name": captain_name}
+            data=data,
         ))
 
     def record_draw_proposal(
@@ -1467,15 +1620,16 @@ class BattleRecorder:
 
         self._is_recording = False
 
-    def save(self, filepath: str) -> str:
-        """Save recording to JSON file."""
-        path = Path(filepath)
-        path.parent.mkdir(parents=True, exist_ok=True)
-
-        with open(path, 'w') as f:
-            f.write(self.recording.to_json())
-
-        return str(path)
+    def save(self, filepath: str, compress: Optional[bool] = None) -> str:
+        """
+        Save the recording. ``compress`` True writes gzip (compact JSON inside,
+        deterministic bytes; src/recording_io.py), False the plain indented
+        ``to_json()`` text; None decides by the ``.gz`` extension.
+        """
+        if compress is None:
+            compress = recording_io.is_gzip_path(filepath)
+        text = self.recording.to_compact_json() if compress else self.recording.to_json()
+        return recording_io.dump_recording(text, filepath, compress=compress)
 
     def get_recording(self) -> BattleRecording:
         """Get the current recording."""
@@ -1486,8 +1640,10 @@ def create_battle_filename(
     alpha_model: str,
     beta_model: str,
     timestamp: Optional[datetime] = None,
+    compress: bool = False,
 ) -> str:
-    """Generate a filename for a battle recording."""
+    """Generate a filename for a battle recording (``.json``, or ``.json.gz``
+    with ``compress``)."""
     if timestamp is None:
         timestamp = datetime.now()
 
@@ -1504,4 +1660,4 @@ def create_battle_filename(
     beta_clean = clean_name(beta_model)
     date_str = timestamp.strftime("%Y%m%d_%H%M%S")
 
-    return f"battle_{alpha_clean}_vs_{beta_clean}_{date_str}.json"
+    return f"battle_{alpha_clean}_vs_{beta_clean}_{date_str}" + recording_io.recording_suffix(compress)

@@ -147,6 +147,7 @@ export const SHIP_MODULES = {
   ],
   // Variants use base type modules
   dreadnought_siege: null, // uses dreadnought
+  cruiser_torpedo: null, // uses cruiser (src/modules.py builds the torpedo cruiser on the cruiser layout)
 };
 
 /**

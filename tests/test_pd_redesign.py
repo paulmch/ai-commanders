@@ -210,6 +210,7 @@ class TestPowerHeatCoupling:
         for name in names:
             assert name in ship.power_system.weapon_capacitors
 
+    @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py
     def test_sustained_fire_raises_heat_and_draws_bus_power(self, fleet_data):
         """120 s of 2-turret dwell must show up in the thermal ledger (TI
         turret: 30 MW waste heat per firing turret) and in the PD bus-draw
@@ -366,6 +367,7 @@ class TestPrioritisation:
                        and ev.data["target_type"] == "slug"]
         assert slug_events, "with no torpedoes around, PD should ablate slugs"
 
+    @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py
     def test_savable_torpedo_preferred_over_unsavable(self, fleet_data):
         """Two inbound torpedoes: one killable before impact, one not.
         Both turrets must dwell on the killable one."""
@@ -510,6 +512,7 @@ class TestWallOfShips:
         assert hits_screen < hits_alone, "4 escorts must reduce leakage"
         assert hits_wall <= hits_screen, "more escorts must never leak more"
 
+    @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py
     def test_multiple_hulls_concentrate_on_one_torpedo(self, fleet_data):
         """Overlapping envelopes: 3 hulls' turrets must deposit ~3x one
         hull's heat into the same torpedo."""
@@ -617,6 +620,7 @@ class TestAblationRecoil:
             f"{pf_escort.min_distance_to_target:.1f} m"
         )
 
+    @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py
     def test_recoil_pushes_slug_away_from_the_shooting_turret(self, fleet_data):
         """Momentum direction check: the plume leaves toward the turret, the
         slug gains velocity along turret->slug."""
