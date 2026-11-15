@@ -122,13 +122,39 @@ def run_battle_case(seed: int, doctrine: str, trace: bool, budget: int = 200,
             result = runner.run_battle(fleet_data)
         cpu = time.process_time() - t0
         recording = json.loads(Path(result.recording_file).read_text())
+        sim = runner.simulation
 
+    # Full-precision end state: recorded events are rounded, and only the RNG
+    # states prove that the number of draws did not change.
+    end_state = {
+        "t": repr(sim.current_time),
+        "rng": _sha(sim.rng.getstate()),
+        "damage_rng": _sha(sim._damage_rng.getstate()),
+        "ships": {
+            sid: [repr(v) for v in (
+                ship.position.x, ship.position.y, ship.position.z,
+                ship.velocity.x, ship.velocity.y, ship.velocity.z,
+                ship.forward.x, ship.forward.y, ship.forward.z,
+                ship.kinematic_state.mass_kg, ship.kinematic_state.propellant_kg,
+                ship.heat_fraction, ship.hull_integrity,
+                ship.is_destroyed, ship.is_dying)]
+            for sid, ship in sim.ships.items()
+        },
+        "projectiles": [[repr(v) for v in (p.projectile.position.x, p.projectile.position.y,
+                                           p.projectile.position.z, p.min_distance_to_target)]
+                        for p in sim.projectiles],
+        "torpedoes": [[repr(v) for v in (t.torpedo.position.x, t.torpedo.position.y,
+                                         t.torpedo.position.z, t.torpedo.velocity.x,
+                                         t.torpedo.velocity.y, t.torpedo.velocity.z)]
+                      for t in sim.torpedoes],
+    }
     events = recording["events"]
     hashes = {
         "events": _sha(events),
         "result": _sha([recording.get(k) for k in (
             "winner", "result_reason", "duration_s", "total_checkpoints",
             "alpha_ships_remaining", "beta_ships_remaining", "alpha_fleet", "beta_fleet")]),
+        "end_state": _sha(end_state),
     }
     if trace:
         hashes["sim_trace"] = _sha(recording.get("sim_trace"))
