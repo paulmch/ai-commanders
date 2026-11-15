@@ -270,4 +270,7 @@ torpedo-armed hulls; all others fight with coilguns.
   `SHIP_POINT_COSTS` literal - torpedo armament was nearly free that way.
   After a change to torpedo guidance, point defence, the heuristic captains or
   the time-limit scoring, re-run `scripts/draft_tournament.py` (cached by
-  engine source + rosters + seed) before touching `TORPEDO_POINTS_PER_GJ`.
+  engine source + rosters + hull prices + seed) before touching
+  `TORPEDO_POINTS_PER_GJ`. Every hull must stay draftable at the default
+  100-point budget (pinned), and the time-limit verdict values a hull at its
+  draft price (`ship_class_value`; `SHIP_CLASS_VALUES` is only the fallback).

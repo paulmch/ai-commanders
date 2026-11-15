@@ -88,7 +88,17 @@ GUN_POINTS_PER_GJ_PER_S = 8.0
 # step function (two boats' salvos are blinded and miss, three boats' kill a
 # battle line) and the boats are never caught afterwards - see the
 # "2026-11-15" section of docs/draft_mode.md before retuning.
-TORPEDO_POINTS_PER_GJ = 0.102
+#
+# 2026-11-15, round 2: 0.102 -> 0.080 (cruiser_torpedo 119 -> 100, corvette
+# 27 -> 24). A hard constraint from the owner's side: EVERY hull must be
+# draftable at DEFAULT_POINT_BUDGET (100), and a 119-pt torpedo cruiser was
+# not. 0.080 is the dearest dial that keeps it at 100 (the band is
+# 0.0797-0.0808; tests/test_draft_tournament.py pins the constraint). It is
+# BELOW what the magazine destroys: on the merged engine (gun ships close, a
+# dry fleet surrenders or is ruled out, the verdict is scored at draft
+# prices) a torpedo hull with a few frigates still beats every gun fleet.
+# That needs point defence and range to bite, not a price.
+TORPEDO_POINTS_PER_GJ = 0.080
 
 
 def _load_ship_specs() -> Dict[str, Any]:

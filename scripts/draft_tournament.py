@@ -2,7 +2,7 @@
 """
 Round-robin draft-balance tournament: is any fleet concept dominant at equal points?
 
-Seven fleet archetypes are drafted to the SAME point budget under a price
+Eight fleet archetypes are drafted to the SAME point budget under a price
 table and fight each other with the rule-based (tactical heuristic) captains,
 no admirals, no LLM. Every pairing is fought in both side assignments
 (alpha/beta swapped) per seed, so side bias cancels.
@@ -14,6 +14,7 @@ no admirals, no LLM. Every pairing is fought in both side assignments
     battleline  battleships, then destroyers
     escort      two battleships behind a frigate PD screen
     swarm       corvettes to the hull cap
+    screen      one torpedo cruiser behind a frigate screen
 
 The price table decides WHICH roster an archetype fields and what a hull is
 worth in a time-limit verdict; nothing else in a battle reads a price. So a
@@ -83,6 +84,12 @@ ARCHETYPES: Dict[str, Dict[str, Any]] = {
                "upgrade": ["battleship", "cruiser", "destroyer"]},
     "swarm": {"core": [("corvette", "max")], "cycle": [], "top_up": ["frigate"],
               "upgrade": ["cruiser_torpedo"]},
+    # A torpedo cruiser behind a frigate screen. Added in round 2: a fleet of
+    # torpedo hulls ALONE surrenders once its tubes are empty (it has no gun
+    # left), so "torpedo" and "swarm" understate torpedoes whenever their
+    # recipe happens to buy no gun hull. This one always has guns.
+    "screen": {"core": [("cruiser_torpedo", 1)], "cycle": ["frigate"], "top_up": [],
+               "upgrade": ["destroyer"]},
 }
 
 
@@ -307,6 +314,10 @@ def plan(args: argparse.Namespace, src: str, costs: Dict[str, int]):
             for b in names[i + 1:]:
                 if args.rows and a not in args.rows and b not in args.rows:
                     continue
+                versus = getattr(args, "versus", None)
+                if versus and not ((a in (args.rows or names) and b in versus)
+                                   or (b in (args.rows or names) and a in versus)):
+                    continue
                 if sorted(rosters[a]) == sorted(rosters[b]):
                     continue  # two archetypes that draft the same fleet
                 for seed in range(args.seed_start, args.seed_start + args.seeds):
@@ -475,6 +486,9 @@ def main() -> int:
                          "--archetypes/--rows like any other")
     ap.add_argument("--rows", type=lambda s: s.split(","), default=None,
                     help="Only fight pairings that involve one of these archetypes")
+    ap.add_argument("--versus", type=lambda s: s.split(","), default=None,
+                    help="With --rows: only fight a --rows archetype against one of these "
+                         "(skips the pairings among the rows themselves)")
     ap.add_argument("--max-ships", type=int, default=8)
     ap.add_argument("--distance", type=float, default=500.0)
     ap.add_argument("--time-limit", type=float, default=600.0)

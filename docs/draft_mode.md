@@ -76,30 +76,34 @@ hull's armour or magazine and its price follows. A hull pays for:
 | armour | 1 pt / 55 t | how hard it is to kill |
 | PD turret | 1 pt each | active defence |
 | gun mounts | 8 pts per GJ/s | sustained energy throughput |
-| torpedo rounds | 0.102 pts per stowed GJ (1.84 per round) | **magazine depth x per-round yield** |
+| torpedo rounds | 0.080 pts per stowed GJ (1.44 per round) | **magazine depth x per-round yield** |
 
 Gun throughput is `salvo_size * kinetic_energy_gj / (cooldown_s +
 (salvo_size - 1) * intra_salvo_cooldown_s)`. TI Mk3 timing gives batteries
 5 shots per 60s, spinals 5 per 72s, and siege coilers 3 per 60s, retaining
 our per-shot damage. The Cost column below includes this timing update.
 
-| Hull | Cost | 2026-09-27 | 2026-08-13 | Original | Notes |
-|------|-----:|-----:|-----:|----:|-------|
-| frigate | 7 | 7 | 7 | 8 | thin-skinned escort gunboat |
-| destroyer | 18 | 18 | 18 | 16 | workhorse gun platform |
-| battlecruiser | 25 | 25 | 24 | 22 | cruiser guns, lighter armor |
-| corvette | 27 | 18 | 17 | 10 | 3g torpedo boat, 8 rounds (144 GJ) |
-| cruiser | 29 | 29 | 28 | 26 | heavy combatant |
-| battleship | 43 | 43 | 42 | 40 | line of battle |
-| dreadnought | 55 | 55 | 53 | 55 | mobile fortress |
-| dreadnought_siege | 56 | 56 | 54 | 58 | 7.25 GJ siege spinal |
-| cruiser_torpedo | 119 | 65 | 58 | 30 | 4 launchers, 48 rounds (864 GJ) |
+| Hull | Cost | 2026-11-15 r1 | 2026-09-27 | 2026-08-13 | Original | Notes |
+|------|-----:|-----:|-----:|-----:|----:|-------|
+| frigate | 7 | 7 | 7 | 7 | 8 | thin-skinned escort gunboat |
+| destroyer | 18 | 18 | 18 | 18 | 16 | workhorse gun platform |
+| corvette | 24 | 27 | 18 | 17 | 10 | 3g torpedo boat, 8 rounds (144 GJ) |
+| battlecruiser | 25 | 25 | 25 | 24 | 22 | cruiser guns, lighter armor |
+| cruiser | 29 | 29 | 29 | 28 | 26 | heavy combatant |
+| battleship | 43 | 43 | 43 | 42 | 40 | line of battle |
+| dreadnought | 55 | 55 | 55 | 53 | 55 | mobile fortress |
+| dreadnought_siege | 56 | 56 | 56 | 54 | 58 | 7.25 GJ siege spinal |
+| cruiser_torpedo | 100 | 119 | 65 | 58 | 30 | 4 launchers, 48 rounds (864 GJ) |
 
-The Cost column is the 2026-11-15 (pass 5) table: only the torpedo dial moved
-(0.040 -> 0.102), so only the two torpedo hulls repriced. The measurement
-behind it, and what price could not fix, is in
+The Cost column is the 2026-11-15 (pass 5, round 2) table. Only the torpedo
+dial moves the two torpedo hulls: 0.040 -> 0.102 in round 1 (priced on what a
+magazine destroys), then back to 0.080, the dearest value at which every hull
+can still be drafted at the default 100-point budget. The same points are also
+what a hull is worth in a time-limit verdict (`ship_class_value` in
+`src/llm/battle_runner.py`). The measurements are in
 [2026-11-15: pass-5 tournament](#2026-11-15-pass-5-tournament-0040---0102)
-below; the sections before it are the history of the dial.
+and [round 2](#2026-11-15-round-2-mechanics-then-0102---0080) below; the
+sections before them are the history of the dial.
 
 ### Why torpedoes got expensive (2026-08-13 rebalance)
 

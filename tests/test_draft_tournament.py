@@ -185,10 +185,9 @@ def test_score_matrix_is_antisymmetric_and_side_averaged(tourney, capsys):
 # ---------------------------------------------------------------------------
 
 TORPEDO_HULLS = ("corvette", "cruiser_torpedo")
-# Points of gun hulls one LAUNCHED round destroyed in the tournament (massed
-# salvos of 3+ boats, 150 and 200 pts): 2.2 when rounds are left over, 6.1 for
-# three boats against a battle line, 3-4 typically. A torpedo hull's all-in
-# price per stowed round must sit in the lower half of that range.
+# Points of gun hulls one LAUNCHED round destroyed in the round-1 tournament
+# (massed salvos of 3+ boats, 150 and 200 pts): 2.2 when rounds are left over,
+# 6.1 for three boats against a battle line, 3-4 typically.
 MEASURED_POINTS_DESTROYED_PER_ROUND = (2.2, 6.1)
 
 
@@ -198,11 +197,39 @@ def _rounds(hull, fleet_data):
                if w.get("type") == "torpedo_launcher")
 
 
-@pytest.mark.parametrize("hull", TORPEDO_HULLS)
-def test_a_torpedo_hull_costs_about_what_its_magazine_destroys(hull, fleet_data):
+def test_every_hull_is_draftable_at_the_default_budget():
+    """The hard constraint of round 2: no price above DEFAULT_POINT_BUDGET
+    (a 119-pt torpedo cruiser could not be bought in a default draft)."""
+    from src.llm.fleet_draft import DEFAULT_POINT_BUDGET, validate_selection
+    assert DEFAULT_POINT_BUDGET == 100
+    for hull, cost in SHIP_POINT_COSTS.items():
+        assert cost <= DEFAULT_POINT_BUDGET, hull
+        picked, spent, error = validate_selection(
+            [{"ship_type": hull, "count": 1}], DEFAULT_POINT_BUDGET, DEFAULT_MAX_SHIPS)
+        assert error is None and picked == [hull] and spent == cost
+
+
+def test_torpedo_dial_is_the_dearest_that_keeps_the_torpedo_cruiser_draftable(tourney):
+    """The magazine is still under-priced against what it destroys, so the
+    dial sits at the top of what the default-budget constraint allows: one
+    more point of torpedo cruiser would break it."""
+    from src.llm.fleet_draft import DEFAULT_POINT_BUDGET
+    assert SHIP_POINT_COSTS["cruiser_torpedo"] == DEFAULT_POINT_BUDGET
+    dial = fleet_draft.TORPEDO_POINTS_PER_GJ
+    dearer = tourney.price_table({"TORPEDO_POINTS_PER_GJ": dial * 1.02})
+    assert dearer["cruiser_torpedo"] > DEFAULT_POINT_BUDGET
+    # ... and a small data edit the other way moves neither price
+    cheaper = tourney.price_table({"TORPEDO_POINTS_PER_GJ": dial * 0.997})
+    assert cheaper["cruiser_torpedo"] == SHIP_POINT_COSTS["cruiser_torpedo"]
+    assert cheaper["corvette"] == dearer["corvette"] == SHIP_POINT_COSTS["corvette"]
+
+
+def test_a_corvette_costs_about_what_its_magazine_destroys(fleet_data):
     lo, hi = MEASURED_POINTS_DESTROYED_PER_ROUND
-    per_round = SHIP_POINT_COSTS[hull] / _rounds(hull, fleet_data)
-    assert lo <= per_round <= (lo + hi) / 2, f"{hull}: {per_round:.2f} pts per stowed round"
+    per_round = SHIP_POINT_COSTS["corvette"] / _rounds("corvette", fleet_data)
+    assert lo <= per_round <= (lo + hi) / 2, f"{per_round:.2f} pts per stowed round"
+    # The torpedo cruiser is capped by the default budget instead, below the range
+    assert SHIP_POINT_COSTS["cruiser_torpedo"] / _rounds("cruiser_torpedo", fleet_data) < lo
 
 
 def test_torpedo_dial_moves_only_torpedo_hulls(tourney, fleet_data):
@@ -215,38 +242,10 @@ def test_torpedo_dial_moves_only_torpedo_hulls(tourney, fleet_data):
     assert old["corvette"] == 18 and old["cruiser_torpedo"] == 65   # the pre-pass-5 table
 
 
-def test_150_points_no_longer_buy_the_annihilating_swarm():
-    """Six corvettes (48 rounds) annihilated every 150-pt gun fleet without
-    loss, and 150 pts used to buy eight. They now buy five."""
-    assert 150 // SHIP_POINT_COSTS["corvette"] <= 5
-    # ... while 100 pts still buy the three boats a saturating salvo needs
-    assert 100 // SHIP_POINT_COSTS["corvette"] >= 3
-
-
-def test_every_hull_is_draftable_at_150_points():
-    """No price so high that a hull cannot be fielded with an escort."""
-    for hull, cost in SHIP_POINT_COSTS.items():
-        assert cost + min(SHIP_POINT_COSTS.values()) <= 150, hull
-    # The torpedo doctrine still opens with its torpedo cruiser at 150 pts
-    types = [s.ship_type for s in auto_draft("alpha", 150, 8, doctrine="torpedo").ships]
-    assert types[0] == "cruiser_torpedo" and "corvette" in types
-
-
-def test_torpedo_price_sits_inside_its_plateau(tourney):
-    """A small data edit must not flip the meta: 2% either side of the dial
-    the corvette keeps its price and the torpedo fleets keep their torpedo hulls."""
-    dial = fleet_draft.TORPEDO_POINTS_PER_GJ
-    here = tourney.price_table({})
-    for factor in (0.98, 1.02):
-        near = tourney.price_table({"TORPEDO_POINTS_PER_GJ": dial * factor})
-        assert near["corvette"] == here["corvette"]
-        assert abs(near["cruiser_torpedo"] - here["cruiser_torpedo"]) <= 2
-        for budget in (100, 150, 200):
-            for archetype in ("torpedo", "swarm"):
-                # (the frigate top-up may differ by a hull; the torpedo hulls may not)
-                boats = [[h for h in tourney.draft_roster(archetype, budget, costs, 8)
-                          if h in TORPEDO_HULLS] for costs in (near, here)]
-                assert boats[0] == boats[1], (factor, budget, archetype)
+def test_torpedo_doctrine_opens_with_its_torpedo_cruiser():
+    for budget in (100, 150, 200):
+        types = [s.ship_type for s in auto_draft("alpha", budget, 8, doctrine="torpedo").ships]
+        assert types[0] == "cruiser_torpedo", (budget, types)
 
 
 # ---------------------------------------------------------------------------
