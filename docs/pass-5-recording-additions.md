@@ -798,10 +798,24 @@ the gimbal follows the lead inside `pivot_range_deg` and the hull is the travers
 
 Slew is along the great circle in the body frame. Per tick a mount moves up to
 rate x dt and fires in the tick in which it arrives. A mount whose target is masked
-creeps to the last open direction on that great circle (half-cell steps) and waits. The
-first designation of a battle is free, and at t = 0 every hull is already rolled for its
-first gun targets (`CombatSimulation.settle_arcs`): the fleets have been closing for
-minutes before the recording starts.
+creeps to the last open direction on that great circle (half-cell steps) and waits.
+
+Two things are NOT rate limited, on purpose:
+- A mount's FIRST designation is free: the first time a mount is given a target it is
+  simply on it (if the direction is open). In draft battles the captains name their first
+  gun targets at the 30 s checkpoint, 400-500 km out and minutes before the first round, so
+  a recording shows the turrets snap from their stowed pose (along the mount axis) onto
+  the enemy in that one frame. Every later change of target or attitude is slewed.
+- `CombatSimulation.settle_arcs` (run once inside the first step, and callable by scripted
+  scenarios): hulls that ALREADY have gun targets at t = 0 start rolled for them. Draft
+  battles have no targets at t = 0, so there it does nothing: every hull starts unrolled
+  (`up` = +Z) and all roll seen in a recording is flown at the RCS roll rate.
+
+Roll: re-planned every 5 s (inbound torpedoes first, then gun energy, candidates scored at
+the angle and 7.5 degrees to either side so a hull settles with margin), flown with a
+rate profile that changes by at most the roll acceleration per tick. `up` is NOT the roll
+angle alone: it also moves whenever the hull turns its nose (the body frame turns with
+`fwd`), so a flip or a hard turn swings `up` much faster than the roll rate.
 
 ### Trace frame fields (per ship, `--trace` recordings)
 
@@ -835,9 +849,9 @@ arc, the ship rolled or turned, or the mount lost its target. `ship_id` is the s
 
 ```json
 {"event_id": "e120", "sequence": 120, "timestamp": 33.0, "event_type": "mount_masked", "ship_id": "alpha_1", "data": {"slot": "weapon_3", "kind": "gun", "masked": true, "reason": "hull", "since": 30.0, "target_id": "beta_4"}}
-{"event_id": "e4630", "sequence": 4630, "timestamp": 286.0, "event_type": "mount_masked", "ship_id": "alpha_1", "data": {"slot": "weapon_3", "kind": "gun", "masked": false, "duration_s": 256.0, "target_id": "beta_3"}}
+{"event_id": "e4842", "sequence": 4842, "timestamp": 285.0, "event_type": "mount_masked", "ship_id": "alpha_1", "data": {"slot": "weapon_3", "kind": "gun", "masked": false, "duration_s": 255.0, "target_id": "beta_3"}}
 {"event_id": "e238", "sequence": 238, "timestamp": 85.0, "event_type": "mount_masked", "ship_id": "beta_1", "data": {"slot": "pd_0", "kind": "pd", "masked": true, "reason": "hull", "since": 82.0, "target_id": "torp_alpha_3_0001"}}
-{"event_id": "e5446", "sequence": 5446, "timestamp": 331.0, "event_type": "mount_masked", "ship_id": "alpha_1", "data": {"slot": "weapon_0", "kind": "spinal", "masked": true, "reason": "gimbal", "since": 328.0, "target_id": "beta_1"}}
+{"event_id": "e5837", "sequence": 5837, "timestamp": 333.0, "event_type": "mount_masked", "ship_id": "beta_1", "data": {"slot": "weapon_0", "kind": "spinal", "masked": true, "reason": "gimbal", "since": 330.0, "target_id": "alpha_1"}}
 ```
 
 ### `weapon_status` reasons
@@ -847,8 +861,8 @@ arc, the ship rolled or turned, or the mount lost its target. `ship_id` is the s
 emitted on transitions only.
 
 ```json
-{"event_id": "e1283", "sequence": 1283, "timestamp": 165.0, "event_type": "weapon_status", "ship_id": "beta_3", "data": {"weapon_slot": "weapon_1", "reason": "masked", "command_ids": ["c19", "c101"], "decision_ids": ["e20", "e947"], "target_id": "alpha_1"}}
-{"event_id": "e5426", "sequence": 5426, "timestamp": 330.0, "event_type": "weapon_status", "ship_id": "alpha_1", "data": {"weapon_slot": "weapon_2", "reason": "slewing", "command_ids": ["c184", "c201"], "decision_ids": ["e4845", "e5361"], "target_id": "beta_1"}}
+{"event_id": "e1280", "sequence": 1280, "timestamp": 165.0, "event_type": "weapon_status", "ship_id": "beta_3", "data": {"weapon_slot": "weapon_1", "reason": "masked", "command_ids": ["c19", "c101"], "decision_ids": ["e20", "e947"], "target_id": "alpha_1"}}
+{"event_id": "e5778", "sequence": 5778, "timestamp": 330.0, "event_type": "weapon_status", "ship_id": "alpha_1", "data": {"weapon_slot": "weapon_2", "reason": "slewing", "command_ids": ["c184", "c201"], "decision_ids": ["e5070", "e5712"], "target_id": "beta_1"}}
 ```
 
 ### What did NOT change
@@ -860,14 +874,15 @@ the same frame's `fwd` + `up`.
 
 ### Demo recording
 
-`visualizer/public/recordings/p5_arcs_demo.json` (seeded, `--trace`, heuristic captains,
+`visualizer/public/recordings/p5_arcs_demo.json.gz` (gzip, read it with
+`src/recording_io.load_recording`; seeded, `--trace`, heuristic captains,
 no LLM):
 
-- `scripts/run_draft_battle.py --auto-draft --no-admirals --seed 5 --trace --time-limit 420`: Draft Battle (100 pts); winner `alpha`, `Alpha tactical advantage (152.9 vs 115.1)`; 420 trace frames, 7100 events.
-- Every trace frame carries `up` and `tur` for every ship. Hulls start unrolled (`up` = +Z); the first gun targets are named at the 30 s checkpoint and the rolls begin there.
-- Roll to unmask: `beta_5` rolls from 38 s and reaches 180 degrees at 119 s (watch `up` leave +Z); 9 of 9 ships roll more than 10 degrees during the battle.
-- PD defence against a salvo: 8 torpedoes launched at 30-114 s; PD dwell on them (`pd_fired`, `target_type: "torpedo"`) from 82 s to 175 s, 8 seekers blinded (`pd_torpedo_disabled` at 98, 107, 118, 126, 138, 150, 163, 175 s), 3 impacts (99, 109, 119 s).
-- Gun fight: 250 rounds (`shot_fired`) from 124 s to 419 s; `mount_masked` 242 events (21 gun entries, 96 PD entries, 6 spinal gimbal entries); `weapon_status` `masked` x20, `slewing` x3.
-- First masked battery: `alpha_1` `weapon_3` at 33 s, clear at 286 s after 256 s.
-- Kills: `beta_3` at 289 s.
+- `scripts/run_draft_battle.py --auto-draft --no-admirals --seed 5 --trace --time-limit 420`: Draft Battle (100 pts); winner `alpha`, `Alpha tactical advantage (127.1 vs 117.9)`; 420 trace frames, 7232 events.
+- Every trace frame carries `up` and `tur` for every ship. Hulls start unrolled (`up` = +Z); the first gun targets are named at the 30 s checkpoint (turrets snap from stow onto them in that frame: the free first designation) and the rolls begin there.
+- Roll to unmask: `up` leaves +Z on 8 of 9 ships; first on `beta_4` at 35 s (its `up` is 15 degrees off +Z by 65 s, a pure roll: the nose has not turned). Later `up` also swings when hulls turn or flip, so it is not the roll angle alone.
+- PD defence against a salvo: 8 torpedoes launched at 30-114 s; PD dwell on them (`pd_fired`, `target_type: "torpedo"`) from 82 s to 176 s, 8 seekers blinded (`pd_torpedo_disabled` at 98, 107, 118, 126, 138, 150, 163, 176 s), 4 impacts (99, 109, 119, 181 s).
+- Gun fight: 241 rounds (`shot_fired`) from 124 s to 419 s; `mount_masked` 218 events (20 gun entries, 86 PD entries, 4 spinal gimbal entries); `weapon_status` `masked` x18, `slewing` x1.
+- First masked battery: `alpha_1` `weapon_3` at 33 s, clear at 285 s after 255 s.
+- Kills: `beta_3` at 285 s.
 - A mount of a ship that dies while masked gets no exit event (its `tur` simply stops changing).
