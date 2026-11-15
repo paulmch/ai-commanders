@@ -147,8 +147,10 @@ def _mirror_breaks(sim):
         for key in sa:
             if not _close(sa[key], sb[key]):
                 out.append(f"{sid} {key}: {sa[key]} vs {_other(sid)} {sb[key]}")
-        if a.execution_mode != b.execution_mode:
-            out.append(f"{sid} mode {a.execution_mode} vs {_other(sid)} {b.execution_mode}")
+        # (a hulk that was dying before its first update has no mode yet)
+        mode_a, mode_b = getattr(a, "execution_mode", None), getattr(b, "execution_mode", None)
+        if mode_a != mode_b:
+            out.append(f"{sid} mode {mode_a} vs {_other(sid)} {mode_b}")
 
     def torpedoes(side):
         rows = [f for f in sim.torpedoes if f.source_ship_id.startswith(side)]
@@ -190,7 +192,7 @@ def _snapshot(sim):
         ships[sid] = (ks.position.x, ks.position.y, ks.position.z,
                       ks.velocity.x, ks.velocity.y, ks.velocity.z,
                       ks.forward.x, ks.forward.y, ks.forward.z,
-                      *_ship_scalars(s).values(), s.execution_mode)
+                      *_ship_scalars(s).values(), getattr(s, "execution_mode", None))
     torpedoes = sorted(
         (f.torpedo_id, f.torpedo.position.x, f.torpedo.position.y, f.torpedo.position.z,
          f.heat_absorbed_j, f.is_disabled) for f in sim.torpedoes)
@@ -514,3 +516,80 @@ class TestWholeMirrorBattleWithIdenticalRollsIsMirrored:
             "scenario went stale (no salvo landed or nobody died in "
             f"{WHOLE_BATTLE_S:.0f} s): lengthen WHOLE_BATTLE_S or change the "
             f"roster - this is not a symmetry failure. Saw {sorted(seen)}")
+
+
+# =============================================================================
+# F. Deaths and incapacitation inside the ship loop
+# =============================================================================
+
+def _chasers(first):
+    """Frigates (1) chased by the enemy's corvettes (2), plain INTERCEPT."""
+    sim = _build(["frigate", "corvette"], [(-120, 0, 0), (-126, 9, 0)], first=first, seed=11)
+    _order_both(sim, 2, lambda enemy: Maneuver(
+        ManeuverType.INTERCEPT, start_time=0.0, duration=30.0, throttle=1.0,
+        target_id=enemy(1)))
+    return sim
+
+
+class TestDeathsInsideTheShipLoopAreSeenByAllAtOnce:
+
+    @pytest.mark.parametrize("first", ["alpha", "beta"])
+    def test_reactor_meltdown_mid_loop(self, first):
+        # Both frigates start the step past the meltdown line and blow up
+        # while being updated. Their chasers must both still steer on them
+        # this step: is_destroyed used to flip at once, so the chaser updated
+        # after its target's meltdown coasted (target gone) while its mirror
+        # image, updated before its own target's meltdown, burned.
+        sim = _chasers(first)
+        for sid in ("alpha_1", "beta_1"):
+            sink = sim.ships[sid].thermal_system.heatsink
+            sink.current_heat_gj = 1.6 * sink.capacity_gj
+        sim.step()
+        assert sim.ships["alpha_1"].is_destroyed and sim.ships["beta_1"].is_destroyed
+        melted = [e.ship_id for e in sim.events
+                  if e.event_type == SimulationEventType.REACTOR_MELTDOWN]
+        assert sorted(melted) == ["alpha_1", "beta_1"]
+        a, b = sim.ships["alpha_2"], sim.ships["beta_2"]
+        assert a.applied_throttle == pytest.approx(b.applied_throttle, abs=1e-12)
+        assert a.applied_throttle > 0.0          # both saw a live target this step
+        assert not _mirror_breaks(sim)
+        sim.step()                               # ... and both coast from the next
+        assert a.applied_throttle == b.applied_throttle == 0.0
+        assert not _mirror_breaks(sim)
+
+    @pytest.mark.parametrize("first", ["alpha", "beta"])
+    def test_dying_hulk_detonating_mid_loop(self, first, monkeypatch):
+        # Same for a hulk whose fuse runs out inside the loop (the tumble and
+        # torch flicker are random: every roll stubbed to one value).
+        monkeypatch.setattr(random, "Random", _SameRolls)
+        sim = _chasers(first)
+        for sid in ("alpha_1", "beta_1"):
+            sim._start_death_spiral(sim.ships[sid], None)
+            sim.ships[sid].dying_time_remaining = 1.5
+        for _ in range(4):
+            sim.step()
+            assert not _mirror_breaks(sim), (sim.current_time, _mirror_breaks(sim)[:3])
+        assert sim.ships["alpha_1"].is_destroyed and sim.ships["beta_1"].is_destroyed
+
+    @pytest.mark.parametrize("first", ["beta", "interleaved"])
+    def test_incapacitated_crews_do_not_make_insertion_order_matter(self, first):
+        # Plume radiation: an incapacitated crew's ship drops its maneuver in
+        # _update_ship and is skipped by the weapons loop. Ships keeping range
+        # on it must fly the same whoever is updated first.
+        def fly(order):
+            sim = _build(["frigate", "corvette"], [(-250, 0, 0), (-256, 12, 0)], first=order)
+            for k in range(60):
+                if k % 30 == 0:
+                    _hold_range(sim, 1, 2, 300.0)
+                    _hold_range(sim, 2, 1, 300.0)
+                if k == 5:
+                    for sid in ("alpha_1", "beta_1"):
+                        sim.ships[sid].crew_incapacitated = True
+                sim.step()
+                assert not _mirror_breaks(sim), (sim.current_time, _mirror_breaks(sim)[:3])
+            assert sim.ships["alpha_1"].current_maneuver is None
+            return _snapshot(sim)
+        reference, got = fly("alpha"), fly(first)
+        for sid, row in reference[0].items():
+            assert all(x == y if isinstance(x, str) else _close(x, y, 1e-9)
+                       for x, y in zip(got[0][sid], row)), sid
