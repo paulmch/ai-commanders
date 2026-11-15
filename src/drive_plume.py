@@ -141,6 +141,18 @@ PLUME_CREW_IMPAIRED_CYCLE_FACTOR = 1.5
 # automatic PD keeps running) and counts as unable to deal damage.
 PLUME_CREW_INCAPACITATED_SV = 8.0
 
+# Extended radiators stand in the jet. A wash above what the radiators could
+# reject themselves (PLUME_RADIATOR_WASH_MIN_GJ_PER_S, the 780 MW array) tears
+# into every EXTENDED panel - battle_damage's reactor-blast mechanism,
+# thermal.apply_radiator_damage - with PLUME_RADIATOR_DAMAGE_GJ_PER_GJ of
+# damage per GJ of wash above that rate (a panel has ~5 GJ of health: gone in
+# one tick at 10 km of a full burn, in two at 20 km; 50 km does nothing).
+# Retracted panels are shielded by the hull. While a ship is washed above
+# that rate the heat ladder does not force its radiators out, and the 'auto'
+# radiator mode does not move them (CombatSimulation._update_radiator_automation).
+PLUME_RADIATOR_WASH_MIN_GJ_PER_S = 0.78
+PLUME_RADIATOR_DAMAGE_GJ_PER_GJ = 0.7
+
 # A sustained wash records `plume_wash` on entry, every this many seconds
 # while it lasts, and on exit (with the totals of the whole episode).
 PLUME_EVENT_INTERVAL_S = 5.0
@@ -611,10 +623,33 @@ def _state(sim: Any) -> dict:
                 'crews_impaired': 0, 'crews_incapacitated': 0,
                 'armor_ablation_cm': 0.0, 'fittings_hit': 0, 'fittings_destroyed': 0,
                 'torpedoes_blinded': 0, 'torpedoes_destroyed': 0,
+                'radiators_destroyed': 0,
             },
         }
         sim._plume_state = state
     return state
+
+
+def wash_rate_on(sim: Any, ship_id: str) -> float:
+    """Heat rate (GJ/s) the ship was washed with on the tick that just ended
+    (all exhausts summed); 0.0 when it was in nobody's jet. Read from the
+    hook's episode state, i.e. the same for every ship whatever the update
+    order."""
+    state = getattr(sim, "_plume_state", None)
+    if not state:
+        return 0.0
+    now = getattr(sim, "current_time", 0.0)
+    total = 0.0
+    for (_emitter, victim), episode in state['contacts'].items():
+        if victim == ship_id and abs(episode.get('end', -1.0) - now) < 1e-6:
+            total += episode['last'][2]
+    return total
+
+
+def radiators_in_jet(sim: Any, ship: Any) -> bool:
+    """True while the ship is washed harder than its radiators could reject:
+    extending them now would only feed them to the jet."""
+    return wash_rate_on(sim, ship.ship_id) > PLUME_RADIATOR_WASH_MIN_GJ_PER_S
 
 
 def plume_stats(sim: Any) -> dict:
@@ -657,8 +692,9 @@ def resolve_plume_wash(sim: "CombatSimulation", dt: float) -> None:
             remaining = None
             fittings: List[str] = []
             dose = 0.0
+            panels: List[dict] = []
         else:
-            heat_gj, ablation, facing, remaining, fittings, dose = _apply_to_ship(
+            heat_gj, ablation, facing, remaining, fittings, dose, panels = _apply_to_ship(
                 sim, victim, wash, dt)
         stats[f'{side}_heat_gj'] += heat_gj
         stats[f'{side}_dose_sv'] += dose
@@ -671,6 +707,7 @@ def resolve_plume_wash(sim: "CombatSimulation", dt: float) -> None:
                 'start': now, 'last_event': now, 'heat_gj': 0.0,
                 'armor_ablation_cm': 0.0, 'fittings': [], 'peak': 0.0,
                 'friendly': wash.friendly, 'dose_sv': 0.0, 'swept': False,
+                'radiators': {},
             }
             phase = 'enter'
         episode['heat_gj'] += heat_gj
@@ -678,6 +715,11 @@ def resolve_plume_wash(sim: "CombatSimulation", dt: float) -> None:
         episode['fittings'].extend(f for f in fittings if f not in episode['fittings'])
         episode['peak'] = max(episode['peak'], wash.peak_rate_gj_s)
         episode['dose_sv'] += dose
+        for panel in panels:
+            prior = episode['radiators'].get(panel['radiator_position'])
+            if prior is not None:
+                panel['capacity_lost_kw'] = round(panel['capacity_lost_kw'] + prior['capacity_lost_kw'], 1)
+            episode['radiators'][panel['radiator_position']] = panel
         episode['swept'] = episode['swept'] or wash.swept
         episode['last'] = (wash.distance_km, wash.off_axis_deg, wash.heat_rate_gj_s,
                            wash.throttle, facing, remaining)
@@ -744,13 +786,50 @@ def _apply_to_ship(sim: Any, victim: Any, wash: Wash, dt: float) -> tuple:
             owed = 0.0
         debt[victim.ship_id] = owed
 
+    # Extended radiator panels stand in the jet (retracted ones are shielded).
+    panels: List[dict] = []
+    burn_gj = (max(0.0, wash.heat_rate_gj_s - PLUME_RADIATOR_WASH_MIN_GJ_PER_S) * dt
+               * PLUME_RADIATOR_DAMAGE_GJ_PER_GJ)
+    if thermal is not None and burn_gj > 0.0:
+        for position in sorted(thermal.radiators.radiators, key=lambda p: p.value):
+            if not thermal.is_radiator_extended(position):
+                continue
+            panel = thermal.radiators.radiators[position]
+            if panel.health_percent <= 0.0:
+                continue
+            health_before = panel.health_percent
+            capacity_before = battle_damage._panel_capacity_kw(panel)
+            taken, destroyed, lost_kw = thermal.apply_radiator_damage(position, burn_gj)
+            capacity_lost = round(capacity_before - battle_damage._panel_capacity_kw(panel), 1)
+            panels.append({
+                'radiator_position': position.value,
+                'health_pct': round(panel.health_percent, 1),
+                'destroyed': destroyed,
+                'capacity_lost_kw': capacity_lost,
+            })
+            stats['radiators_destroyed'] += 1 if destroyed else 0
+            # One radiator_damaged per quarter of a panel lost (and when it
+            # goes), not one per tick of a weak wash.
+            if destroyed or int(health_before // 25.0) != int(panel.health_percent // 25.0):
+                sim._log_event(_event_types(sim).RADIATOR_DAMAGED, victim.ship_id, data={
+                    'radiator_position': position.value,
+                    'damage_gj': taken,
+                    'destroyed': destroyed,
+                    'dissipation_lost_kw': lost_kw,
+                    'capacity_lost_kw': capacity_lost,
+                    'health_pct': round(panel.health_percent, 1),
+                    'array_health_pct': round(thermal.radiators.health_percent, 1),
+                    'cause': 'plume_wash',
+                    'source_ship_id': wash.emitter_id,
+                })
+
     # Crew dose: the full wash rate, shielded by what armour is left on the
     # washed facing.
     dose = plume_dose_rate_sv_s(wash.heat_rate_gj_s,
                                 section.thickness_cm if section is not None else 0.0) * dt
     if dose > 0.0:
         _irradiate(sim, victim, dose, wash.emitter_id)
-    return heat_gj, ablation, facing, remaining, damaged, dose
+    return heat_gj, ablation, facing, remaining, damaged, dose, panels
 
 
 def _irradiate(sim: Any, victim: Any, dose_sv: float, source_ship_id: Optional[str]) -> None:
@@ -817,6 +896,7 @@ def _log(sim: Any, SimulationEventType: Any, key: tuple, episode: dict, phase: s
         'hit_location': facing.value if facing is not None else None,
         'swept': episode['swept'],
         'dose_sv': round(episode['dose_sv'], 3),
+        'radiators': [episode['radiators'][k] for k in sorted(episode['radiators'])],
     }
     if victim is not None and facing is not None:
         data['crew_dose_sv'] = round(getattr(victim, 'crew_dose_sv', 0.0), 3)

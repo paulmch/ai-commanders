@@ -635,7 +635,9 @@ def test_the_formation_throttle_is_what_the_ship_flies():
 # sweeps its torches across its neighbours when it turns, the drive
 # interlock holds those burns (`drive_interlock` events, slightly different
 # courses) and what wash remains is recorded as `plume_wash`.
-LEGACY_GOLDEN_SHA256 = "78a7da477fa1a7fbc990af2a13b3b5c92150dc5961da70c8e0c30bdbfbf9ec99"
+# (Re-pinned once more: `plume_wash` events gained the `radiators` list -
+# empty in this battle; same 1532 events, same courses.)
+LEGACY_GOLDEN_SHA256 = "6d1e62483d9657cd14a7df4b627b8070945d84720a39c6d750d0a86e1d466d76"
 
 
 def test_legacy_battle_event_stream_is_pinned(tmp_path):

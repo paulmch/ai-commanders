@@ -187,7 +187,9 @@ def test_sustained_wash_cripples_but_never_melts_the_reactor_by_itself():
     assert not tail.is_destroyed and not tail.is_dying
     ceiling = dp.PLUME_HEAT_CEILING_FRACTION
     assert ceiling < REACTOR_MELTDOWN_HEAT_FRACTION
-    assert 1.0 < tail.thermal_system.heat_fraction <= ceiling + 1e-6
+    # (The wash stops at the ceiling; with its radiators held in - they are
+    # not forced out into a jet - the ship's own idle heat creeps on top.)
+    assert 1.0 < tail.thermal_system.heat_fraction <= ceiling + 1e-3
     wrecked = [e for e in sim.events if e.event_type == SimulationEventType.MOUNT_DAMAGED
                and e.data["destroyed"]]
     assert wrecked, "40 s at 6 km wrecks the fittings on the washed facing"
@@ -847,18 +849,26 @@ def test_seeded_battle_legacy_column_cooks_its_follower(column_battles):
     assert first[-1]["timestamp"] == 69.0 and total["duration_s"] == 39.0
     assert total["heat_gj"] > 400.0 and total["armor_ablation_cm"] > 8.0
     assert 3.0 < total["dose_sv"] < 4.0 and total["crew_state"] == "impaired"
-    assert total["heat"] <= dp.PLUME_HEAT_CEILING_FRACTION + 1e-3      # hot, not melted
+    # Its captain put the radiators out at the 60 s checkpoint, into the jet:
+    # all four panels are gone, listed in the episode and recorded.
+    assert len(total["radiators"]) == 4 and all(p["destroyed"] for p in total["radiators"])
+    shredded = [e for e in rec["events"] if e["event_type"] == "radiator_damaged"]
+    assert [(e["timestamp"], e["ship_id"], e["data"]["cause"]) for e in shredded] == \
+        [(60.0, "alpha_2", "plume_wash")] * 4
     burned = [e for e in rec["events"] if e["event_type"] == "mount_damaged"
               and e["data"].get("cause") == "plume_wash"]
     assert len(burned) == 16 and {e["ship_id"] for e in burned} == {"alpha_2"}
     assert sum(1 for e in burned if e["data"]["destroyed"]) == 4       # spinal, turret, both PD
     crew = [e for e in rec["events"] if e["event_type"] == "crew_radiation"]
     assert [(e["timestamp"], e["ship_id"], e["data"]["state"]) for e in crew] == [(50.0, "alpha_2", "impaired")]
-    # The cruiser 14 km abeam is never washed; nobody dies of the wash.
+    # The cruiser 14 km abeam is never washed.
     assert not [e for e in _plume_events(rec) if e["ship_id"] == "alpha_3"]
-    assert not [e for e in rec["events"] if e["event_type"] == "ship_destroyed"]
-    # Later the destroyer, ahead and jinking, sweeps its jet over the battleship.
-    assert any(e["data"]["swept"] and e["ship_id"] == "alpha_1" for e in _plume_events(rec))
+    # The wash itself stops at the ceiling; the destroyer, at 149 % with no
+    # radiator left and its own drive still burning, melts down a second
+    # after it leaves the jet.
+    dead = [(e["timestamp"], e["ship_id"], e["data"].get("cause")) for e in rec["events"]
+            if e["event_type"] == "ship_destroyed"]
+    assert dead == [(70.0, "alpha_2", "reactor_overheat")]
 
 
 def test_seeded_battle_tactical_captains_keep_the_follower_out_of_the_jet(column_battles):
@@ -872,3 +882,97 @@ def test_seeded_battle_tactical_captains_keep_the_follower_out_of_the_jet(column
     assert not [e for e in rec["events"] if e["event_type"] == "crew_radiation"]
     assert not [e for e in rec["events"] if e["event_type"] == "mount_damaged"
                 and e["data"].get("cause") == "plume_wash"]
+
+
+# ---------------------------------------------------------------------------
+# Radiators in the jet
+# ---------------------------------------------------------------------------
+
+def _washed(gap_km, extended, seconds=3, tail_forward=(1, 0, 0)):
+    from src.thermal import RadiatorPosition  # noqa: F401 - documents the key type
+    sim = CombatSimulation(seed=5, time_step=1.0)
+    lead = _ship(sim, "lead", "alpha", (0, 0, 0))
+    tail = _ship(sim, "tail", "alpha", (-gap_km, 0, 0), "destroyer", tail_forward)
+    _ship(sim, "foe", "beta", (3000, 0, 0), "destroyer", (-1, 0, 0))
+    lead.applied_throttle = 1.0
+    if extended:
+        sim._set_radiators(tail, True, reason="test")
+    for _ in range(seconds):
+        dp.resolve_plume_wash(sim, 1.0)
+        sim.current_time += 1.0
+    return sim, tail
+
+
+def _panel_health(ship):
+    return {p.value: panel.health_percent for p, panel in ship.thermal_system.radiators.radiators.items()}
+
+
+def test_extended_radiators_in_a_strong_wash_are_destroyed_and_recorded():
+    sim, tail = _washed(10.0, extended=True, seconds=2)
+    assert all(h == 0.0 for h in _panel_health(tail).values())
+    burned = [e for e in sim.events if e.event_type == SimulationEventType.RADIATOR_DAMAGED]
+    assert len(burned) == len(_panel_health(tail)) and all(e.ship_id == "tail" for e in burned)
+    assert all(e.data["cause"] == "plume_wash" and e.data["source_ship_id"] == "lead"
+               and e.data["destroyed"] and e.data["health_pct"] == 0.0 for e in burned)
+    assert burned[0].timestamp == 0.0                         # gone on the first tick at 10 km
+    listed = _washes(sim)[-1].data["radiators"] if len(_washes(sim)) > 1 else _washes(sim)[0].data["radiators"]
+    assert _washes(sim)[0].data["radiators"] and all(p["destroyed"] for p in _washes(sim)[0].data["radiators"])
+    assert {p["radiator_position"] for p in listed} == set(_panel_health(tail))
+    assert sum(p["capacity_lost_kw"] for p in listed) == pytest.approx(780_000.0, rel=0.02)
+    assert dp.plume_stats(sim)["radiators_destroyed"] == len(_panel_health(tail))
+
+
+def test_retracted_radiators_are_untouched_and_a_weak_wash_does_nothing():
+    sim, tail = _washed(10.0, extended=False, seconds=3)
+    assert all(h == 100.0 for h in _panel_health(tail).values())
+    assert not [e for e in sim.events if e.event_type == SimulationEventType.RADIATOR_DAMAGED]
+    assert _washes(sim)[0].data["radiators"] == []
+    # 60 km astern: 0.55 GJ/s, less than the array rejects - extended panels live.
+    assert dp.plume_heat_rate_gj_s(FULL, 60.0, 0.0) < dp.PLUME_RADIATOR_WASH_MIN_GJ_PER_S
+    sim, tail = _washed(60.0, extended=True, seconds=30)
+    assert _washes(sim) and all(h == 100.0 for h in _panel_health(tail).values())
+    assert not [e for e in sim.events if e.event_type == SimulationEventType.RADIATOR_DAMAGED]
+    # 20 km: a panel lasts two ticks, not one.
+    sim, tail = _washed(20.0, extended=True, seconds=1)
+    assert all(0.0 < h < 100.0 for h in _panel_health(tail).values())
+    dp.resolve_plume_wash(sim, 1.0)
+    assert all(h == 0.0 for h in _panel_health(tail).values())
+
+
+def test_heat_ladder_does_not_force_radiators_out_into_a_jet():
+    sim = CombatSimulation(seed=5, time_step=1.0)
+    lead = _ship(sim, "lead", "alpha", (0, 0, 0))
+    tail = _ship(sim, "tail", "alpha", (-10, 0, 0), "destroyer")
+    _ship(sim, "foe", "beta", (3000, 0, 0), "destroyer", (-1, 0, 0))
+    _burn(lead)
+    sim.step()                                                   # the wash is now known
+    sink = tail.thermal_system.heatsink
+    sink.current_heat_gj = 1.2 * sink.capacity_gj               # past the 100 % forced-extension line
+    for _ in range(6):
+        sim.step()
+        lead.kinematic_state.position = Vector3D(0, 0, 0)
+        lead.kinematic_state.velocity = Vector3D(0, 0, 0)
+        assert tail.thermal_system.radiators_forced and dp.wash_rate_on(sim, "tail") > 10.0
+        assert tail.radiators_extended is False                  # held in: ~16 GJ/s of jet outside
+    assert all(h == 100.0 for h in _panel_health(tail).values())
+    # The lead stops burning: one tick later the ship is clear and the ladder acts.
+    lead.current_maneuver = None
+    sim.step()
+    sim.step()
+    assert dp.wash_rate_on(sim, "tail") == 0.0 and dp.radiators_in_jet(sim, tail) is False
+    sim.step()
+    assert tail.thermal_system.radiators_forced
+    assert tail.radiators_extended is True                       # clear of the jet: the ladder acts
+
+
+def test_forced_extension_is_suppressed_from_the_tick_after_the_wash_starts():
+    sim, tail = _washed(10.0, extended=False, seconds=1)
+    sink = tail.thermal_system.heatsink
+    sink.current_heat_gj = 1.2 * sink.capacity_gj
+    assert dp.radiators_in_jet(sim, tail) is True
+    sim._update_radiator_automation(tail)
+    assert tail.radiators_extended is False                    # held in: it is in the jet
+    sim.current_time += 5.0                                     # the wash state is stale: clear
+    assert dp.radiators_in_jet(sim, tail) is False
+    sim._update_radiator_automation(tail)
+    assert tail.radiators_extended is True

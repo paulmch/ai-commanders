@@ -139,7 +139,11 @@ ai-commanders/
   100 km - on axis at full burn 40 GJ/s at 5 km, 16 at 10 km, 4.7 at 20 km, 0.8
   at 50 km (Gaussian 3° core, scaled by the throttle actually produced); above
   4 GJ/s it also burns armour and fittings off the washed facing. Heat stops at
-  149% (never a kill by itself). A turning emitter sweeps its jet (axis sampled
+  149% (never a kill by itself). Above 0.78 GJ/s the wash also shreds EXTENDED
+  radiator panels (`radiator_damaged`, cause `plume_wash`; retracted ones are
+  safe) and the heat ladder does not force radiators out while the ship is in
+  such a jet (`drive_plume.radiators_in_jet`, gate in
+  `_update_radiator_automation`). A turning emitter sweeps its jet (axis sampled
   every 1.5° between ticks, so a sweep cannot tunnel past a ship). Crew
   radiation dose (`crew_dose_sv`, permanent): wash rate x 0.03 Sv/GJ x
   exp(-armour cm / 100) on the washed facing; 2 Sv = impaired (guns and tubes

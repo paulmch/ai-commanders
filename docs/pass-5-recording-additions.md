@@ -424,6 +424,7 @@ once has two concurrent episodes. A victim that is a dying hulk is tracked
 | `hit_location` | string or null | facing the victim shows the jet: `"nose"`, `"lateral"`, `"tail"` |
 | `fittings_hit` | [string] | fittings damaged by this episode so far, as `"<kind>:<slot>"` (`"gun:weapon_0"`, `"pd:pd_1"`, `"launcher:weapon_2"`); each damage step also has its own `mount_damaged` event with `cause: "plume_wash"` |
 | `swept` | bool | the jet swept across the ship on at least one tick of the episode (the emitter was turning) |
+| `radiators` | [object] | extended radiator panels the wash has damaged in this episode so far, the same shape as `blast_damage.radiators`: `radiator_position`, `health_pct`, `destroyed`, `capacity_lost_kw` (cumulative over the episode). Empty when the panels were retracted or the wash was weaker than 0.78 GJ/s |
 | `dose_sv` | float | crew radiation dose received in this episode so far (Sv) |
 | `crew_dose_sv` | float | the victim crew's total dose in the battle so far (permanent; absent for a hulk) |
 | `crew_state` | string | `"fit"`, `"impaired"` or `"incapacitated"` (absent for a hulk) |
@@ -452,8 +453,13 @@ Example (sustained, demo recording, t = 55 s):
 Example (exit with totals, demo recording, t = 69 s):
 
 ```json
-{"event_id": "e165", "sequence": 165, "timestamp": 69.0, "event_type": "plume_wash", "ship_id": "alpha_2", "data": {"source_ship_id": "alpha_1", "phase": "exit", "friendly": true, "distance_km": 3.69, "off_axis_deg": 6.72, "heat_rate_gj_s": 0.0, "peak_heat_rate_gj_s": 16.42, "emitter_throttle": 0.7, "duration_s": 39.0, "heat_gj": 463.7, "armor_ablation_cm": 9.99, "fittings_hit": ["gun:weapon_0", "gun:weapon_1", "pd:pd_0", "pd:pd_1"], "hit_location": "nose", "swept": false, "dose_sv": 3.326, "crew_dose_sv": 3.326, "crew_state": "impaired", "armor_remaining_cm": 141.21, "heat": 1.488, "target_id": null}}
+{"event_id": "e180", "sequence": 180, "timestamp": 69.0, "event_type": "plume_wash", "ship_id": "alpha_2", "data": {"source_ship_id": "alpha_1", "phase": "exit", "friendly": true, "distance_km": 3.69, "off_axis_deg": 6.72, "heat_rate_gj_s": 0.0, "peak_heat_rate_gj_s": 16.42, "emitter_throttle": 0.7, "duration_s": 39.0, "heat_gj": 453.3, "armor_ablation_cm": 9.99, "fittings_hit": ["gun:weapon_0", "gun:weapon_1", "pd:pd_0", "pd:pd_1"], "hit_location": "nose", "swept": false, "dose_sv": 3.326, "radiators": [{"radiator_position": "tail_dorsal", "health_pct": 0.0, "destroyed": true, "capacity_lost_kw": 195000.0}, {"radiator_position": "tail_port", "health_pct": 0.0, "destroyed": true, "capacity_lost_kw": 195000.0}, {"radiator_position": "tail_starboard", "health_pct": 0.0, "destroyed": true, "capacity_lost_kw": 195000.0}, {"radiator_position": "tail_ventral", "health_pct": 0.0, "destroyed": true, "capacity_lost_kw": 195000.0}], "crew_dose_sv": 3.326, "crew_state": "impaired", "armor_remaining_cm": 141.21, "heat": 1.5, "target_id": null}}
 ```
+
+(The entry and sustained examples above were taken before the `radiators`
+field existed; they now also carry `"radiators": []`. The `swept` example
+below is from the previous version of the demo recording, in which the
+destroyer survived; the current one has no swept episode.)
 
 Example (a weak episode that ended with the emitter jinking, `swept`, demo
 recording, t = 154 s):
@@ -467,6 +473,33 @@ same mount is destroyed by the fourth step at t = 50 s):
 
 ```json
 {"event_id": "e70", "sequence": 70, "timestamp": 35.0, "event_type": "mount_damaged", "ship_id": "alpha_2", "data": {"kind": "gun", "slot": "weapon_0", "index": 0, "weapon_name": "Spinal Coiler Mk3", "health_pct": 72.1, "health_lost_pct": 27.9, "destroyed": false, "cooldown_factor": 1.39, "cause": "plume_wash", "hit_location": "nose", "source_ship_id": "alpha_1", "target_id": null}}
+```
+
+### Radiators in the jet: `radiator_damaged` with `cause: "plume_wash"`
+
+Extended radiator panels stand in the jet. While the wash is above 0.78 GJ/s
+(what the 780 MW array could reject itself) every EXTENDED panel takes
+0.7 GJ of damage per GJ of wash above that rate, through the reactor blast's
+mechanism (`thermal.apply_radiator_damage`; a panel has 5 GJ of health): gone
+in one tick 10 km astern of a full burn, in two at 20 km, untouched at 50 km.
+Retracted panels are shielded by the hull. The existing `radiator_damaged`
+event is emitted with its usual fields plus `cause: "plume_wash"` and
+`source_ship_id` (the emitter) each time a panel loses another quarter of its
+health and when it is destroyed (not once per tick of a weak wash); the
+panels are also listed in the episode's `plume_wash.radiators`. Existing
+`radiator_damaged` events from gun hits carry no `cause`.
+
+While a ship is washed above that rate, the heat ladder's forced extension at
+100 % heat is suppressed and the `auto` radiator mode does not move the
+panels (state of the previous tick's wash); a commander's explicit
+`set_radiators` extend is obeyed, and the panels are then shredded. Once the
+ship is clear of the jet the ladder forces them out as before.
+
+Example (demo recording, t = 60 s: the legacy captain extends its radiators
+at the checkpoint, inside the jet; all four panels go on that tick):
+
+```json
+{"event_id": "e171", "sequence": 171, "timestamp": 60.0, "event_type": "radiator_damaged", "ship_id": "alpha_2", "data": {"radiator_position": "tail_dorsal", "damage_gj": 5.0, "destroyed": true, "dissipation_lost_kw": 195000.0, "capacity_lost_kw": 195000.0, "health_pct": 0.0, "array_health_pct": 75.0, "cause": "plume_wash", "source_ship_id": "alpha_1", "target_id": null}}
 ```
 
 ### `crew_radiation` - a crew's plume radiation dose crossed a threshold
@@ -611,22 +644,25 @@ uv run python scripts/generate_test_battle.py plume_wash --recording-dir /tmp/p5
 
 Alpha: battleship `alpha_1`, destroyer `alpha_2` 11 km astern of it and
 0.2 km off its exhaust axis, cruiser `alpha_3` 14 km abeam (never washed).
-Beta: a destroyer and a cruiser 400 km away. Nobody dies.
+Beta: a destroyer and a cruiser 400 km away.
 
 - t = 30-69 s: `alpha_2` flies up `alpha_1`'s exhaust at twice its
   acceleration (11 km -> 3.7 km, 13-16 GJ/s): `enter` at 30 s, `sustain`
-  every 5 s, `exit` at 69 s with 464 GJ of heat, 10 cm of nose armour and
-  3.3 Sv. Its heat climbs from 4 % to the 149 % ceiling (`heat_warning` 0.9 at
-  50 s, 1.0 at 51 s, 1.25 at 56 s).
+  every 5 s, `exit` at 69 s with 453 GJ of heat, 10 cm of nose armour and
+  3.3 Sv. Its heat climbs from 4 % past the wash's 149 % ceiling
+  (`heat_warning` 0.9 at 50 s, 1.0 at 51 s, 1.25 at 56 s); from 51 s its
+  radiators are NOT forced out (it is in the jet).
 - `mount_damaged` (`cause: "plume_wash"`) on its spinal mount, turret and
   both PD turrets at 35, 40, 45 s (72 %, 47 %, 20 % health) and at 50 s
   (all four destroyed).
 - t = 50 s: `crew_radiation`, `alpha_2` impaired (2.08 Sv).
-- t = 97-154 s: the roles reverse - `alpha_2`, now ahead, washes `alpha_1`
-  weakly from 7 km out to 34 km (0.1-0.6 GJ/s, off-axis, no armour or
-  fitting damage); from 154 s `alpha_2` jinks and its jet sweeps across
-  `alpha_1` in short `swept` episodes (enter 158 / exit 161, enter 162 /
-  exit 165).
+- t = 60 s: its captain extends the radiators at the checkpoint;
+  `radiator_damaged` x4 (`cause: "plume_wash"`), all panels destroyed.
+- t = 70 s: one second after leaving the jet, at 149 % with no radiator and
+  its drive still burning, `alpha_2` melts down (`ship_destroyed`,
+  `reactor_overheat`, followed by its `reactor_blast`). The earlier version
+  of this recording, in which it survived and later washed `alpha_1`, no
+  longer exists.
 
 ## Surrender and end reasons (`src/llm/battle_runner.py`)
 
