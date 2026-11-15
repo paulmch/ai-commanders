@@ -623,11 +623,11 @@ def test_the_formation_throttle_is_what_the_ship_flies():
 # fire-control fixture's heuristic battles were flown with it). A change to
 # the ENGINE moves this hash too - then re-pin it in the same commit; a
 # change that moves it without an engine change has altered legacy.
-# Re-pinned for drive plume wash (src/drive_plume.py): the 5 km line abreast
-# sweeps its torches across its neighbours when it turns - 43 `plume_wash`
-# events are the whole difference (with the hook off the stream still hashes
-# to the previous pin, 9500f81e...).
-LEGACY_GOLDEN_SHA256 = "2f0d8e6953e752537adef55a6e2d1eb6103fe4651e81fa0b6830e7a0e7b72dad"
+# Re-pinned for the drive plume (src/drive_plume.py): the 5 km line abreast
+# sweeps its torches across its neighbours when it turns, the drive
+# interlock holds those burns (`drive_interlock` events, slightly different
+# courses) and what wash remains is recorded as `plume_wash`.
+LEGACY_GOLDEN_SHA256 = "7cb90d560c10261804cb315fe5998a561a5d851857840037b1dc4ee6cc092a4d"
 
 
 def test_legacy_battle_event_stream_is_pinned(tmp_path):

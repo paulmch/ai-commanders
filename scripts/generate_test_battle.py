@@ -583,7 +583,8 @@ def hud_comms_battle(seed: int = 7, points: int = 100, max_ships: int = 6, dista
 
 
 def plume_wash_battle(seed: int = 5, recording_dir: Optional[str] = None,
-                      verbose: bool = False, doctrine: str = "legacy") -> Tuple[Any, Optional[str]]:
+                      verbose: bool = False, doctrine: str = "legacy",
+                      interlock: bool = False) -> Tuple[Any, Optional[str]]:
     """
     Drive plume wash demo (src/drive_plume.py): an alpha battleship burns at
     the enemy with a destroyer in line astern, 11 km back and 0.2 km off its
@@ -593,7 +594,30 @@ def plume_wash_battle(seed: int = 5, recording_dir: Optional[str] = None,
     (enter, sustain every 5 s, exit) with nose armour burned off,
     `mount_damaged` (cause "plume_wash") on its bow fittings and a
     `crew_radiation` event when its crew's dose passes the impaired line.
+
+    The engine's drive interlock would hold the battleship's throttle and
+    prevent all of it, so it is switched OFF for this recording
+    (interlock=False); `drive_interlock` is the same battle with it on.
     """
+    from src import drive_plume
+    was = drive_plume.PLUME_INTERLOCK_ENABLED
+    drive_plume.PLUME_INTERLOCK_ENABLED = bool(interlock)
+    try:
+        return _plume_column_battle(seed, recording_dir, verbose, doctrine)
+    finally:
+        drive_plume.PLUME_INTERLOCK_ENABLED = was
+
+
+def drive_interlock_battle(seed: int = 5, recording_dir: Optional[str] = None,
+                           verbose: bool = False, doctrine: str = "legacy") -> Tuple[Any, Optional[str]]:
+    """The plume_wash column battle with the drive interlock ON (the engine
+    default): the battleship's throttle is held while the destroyer is in its
+    jet (`drive_interlock` enter / exit events), nobody is cooked."""
+    return plume_wash_battle(seed, recording_dir, verbose, doctrine, interlock=True)
+
+
+def _plume_column_battle(seed: int, recording_dir: Optional[str], verbose: bool,
+                         doctrine: str) -> Tuple[Any, Optional[str]]:
     from src.llm.fleet_config import BattleFleetConfig
     from src.llm.heuristic_captain import HEURISTIC_MODEL
 
@@ -623,6 +647,7 @@ def plume_wash_battle(seed: int = 5, recording_dir: Optional[str] = None,
 FLEET_SCENARIOS = {
     "hud_comms": hud_comms_battle,
     "plume_wash": plume_wash_battle,
+    "drive_interlock": drive_interlock_battle,
 }
 
 

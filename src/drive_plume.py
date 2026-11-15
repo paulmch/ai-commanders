@@ -588,7 +588,13 @@ def interlock_status_line(sim: Any, ship: Any) -> Optional[str]:
 # =============================================================================
 
 def _event_types(sim: Any) -> Any:
-    return sys.modules[type(sim).__module__].SimulationEventType
+    """SimulationEventType of the module that defines this simulation (or,
+    for the prediction shadow, its CombatSimulation base)."""
+    for cls in type(sim).__mro__:
+        found = getattr(sys.modules.get(cls.__module__), "SimulationEventType", None)
+        if found is not None:
+            return found
+    raise AttributeError("SimulationEventType")
 
 
 def _state(sim: Any) -> dict:

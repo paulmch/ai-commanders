@@ -978,7 +978,8 @@ class TestDrivePlumeDoctrine:
         sim = CombatSimulation(time_step=1.0, decision_interval=1e9, seed=7)
         lead = _build(sim, 'lead', 'cruiser', 'alpha', fleet, 0, 0, 1)
         lateral = gap_km * math.tan(math.radians(off_axis_deg))
-        tail = _build(sim, 'tail', 'destroyer', 'alpha', fleet, -gap_km, 0, 1)
+        # An ENEMY astern: the drive interlock never eases for one.
+        tail = _build(sim, 'tail', 'destroyer', 'beta', fleet, -gap_km, 0, 1)
         tail.kinematic_state.position = Vector3D(-gap_km * 1000.0, lateral * 1000.0, 0)
         _build(sim, 'foe', 'destroyer', 'beta', fleet, 5000, 0, -1)
         lead.current_maneuver = Maneuver(maneuver_type=ManeuverType.BURN, start_time=0.0,
