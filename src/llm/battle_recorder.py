@@ -1142,13 +1142,31 @@ class BattleRecorder:
         timestamp: float,
         ship_id: str,
         captain_name: str,
+        faction: Optional[str] = None,
+        reason: Optional[str] = None,
+        hull_pct: Optional[float] = None,
+        could_deal_damage: Optional[bool] = None,
     ) -> None:
-        """Record a surrender."""
+        """Record a surrender (1v1 and fleet battles, once per ship).
+
+        data: captain_name always; faction, reason (null when the captain
+        gave none), hull_pct and could_deal_damage (the ship still had an
+        operational gun with ammunition or a tube with rounds when it struck
+        its colours) when the caller knows them.
+        """
+        data: Dict[str, Any] = {"captain_name": captain_name}
+        if faction is not None:
+            data["faction"] = faction
+            data["reason"] = reason
+        if hull_pct is not None:
+            data["hull_pct"] = round(float(hull_pct), 1)
+        if could_deal_damage is not None:
+            data["could_deal_damage"] = bool(could_deal_damage)
         self._record_event(BattleEvent(
             timestamp=timestamp,
             event_type=EventType.SURRENDER,
             ship_id=ship_id,
-            data={"captain_name": captain_name}
+            data=data,
         ))
 
     def record_draw_proposal(

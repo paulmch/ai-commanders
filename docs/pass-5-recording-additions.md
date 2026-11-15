@@ -549,3 +549,64 @@ Beta: a destroyer and a cruiser 400 km away. Nobody dies.
   fitting damage); from 154 s `alpha_2` jinks and its jet sweeps across
   `alpha_1` in short `swept` episodes (enter 158 / exit 161, enter 162 /
   exit 165).
+
+## Surrender and end reasons (`src/llm/battle_runner.py`)
+
+### `surrender` - a ship struck its colours
+
+- **Event:** `surrender` (the existing 1v1 event type, now also recorded in fleet
+  battles). Before, a fleet battle showed a surrender only as the `surrender` tool
+  call inside the captain's `captain_decision`; viewers should prefer this event and
+  fall back to the tool call for older recordings.
+- **When it is emitted:** once per ship, at the checkpoint where the surrender takes
+  effect (`timestamp` = that checkpoint, the same as the `captain_decision` holding
+  the tool call). Sources: a captain's `surrender` tool call (fleet and 1v1), and an
+  MCP commander's `surrender_fleet`, which records one event per ship still afloat
+  (destroyed and dying ships are not surrenders and get no event). Several ships
+  surrendering at one checkpoint follow each other in fleet order.
+- **`ship_id`:** the ship that surrendered.
+
+| field | type | meaning |
+|---|---|---|
+| `captain_name` | string | the captain (or, for an MCP fleet surrender, the MCP commander) |
+| `faction` | string | `"alpha"` / `"beta"` |
+| `reason` | string or null | the captain's stated reason; `null` when none was given (the LLM `surrender` tool takes no argument, MCP `surrender_fleet` neither; heuristic captains give one) |
+| `hull_pct` | float 0-100 | hull integrity when the ship surrendered |
+| `could_deal_damage` | bool | the ship still had an operational gun with ammunition or a torpedo tube with rounds (`battle_damage.ship_can_deal_damage`, read before the surrender) |
+
+A surrendered ship drifts, is untargetable and is out of the fight for every victory
+rule; it is not destroyed and gets no `ship_destroyed`.
+
+Example, from `uv run python scripts/run_draft_battle.py --auto-draft --no-admirals
+--seed 4 --budget 200 --time-limit 600` (tactical heuristic captains: a disarmed ship
+with no armed friend left surrenders; this battle ends at 150 s):
+
+```json
+{"event_id": "e3415", "sequence": 3415, "timestamp": 150.0, "event_type": "surrender", "ship_id": "beta_3",
+ "data": {"captain_name": "Captain Dart-1", "faction": "beta",
+          "reason": "all weapons out, no armed ship left to protect",
+          "hull_pct": 100.0, "could_deal_damage": false}}
+```
+
+(beta_6 and beta_8 follow at the same timestamp with the same fields.)
+
+### `result_reason` - how a fleet battle ended
+
+Header field `result_reason` (also `GET /live/recording` `live.result.reason`).
+Winner and outcome logic are unchanged; only the text now says what happened.
+`<Side>` is `Alpha` / `Beta`. A ship is counted *destroyed* when it was destroyed or
+was a dying hulk, otherwise *surrendered* when it surrendered.
+
+| reason | when |
+|---|---|
+| `<Side> fleet eliminated` | every ship of that fleet was destroyed |
+| `<Side> fleet surrendered (N ships struck their colours)` | no ship of that fleet was destroyed; all N surrendered (`1 ship struck its colours` for one) |
+| `<Side> fleet destroyed or surrendered (D destroyed, S surrendered)` | a mix: D destroyed, the remaining S surrendered |
+| `Mutual destruction/surrender: <alpha reason>; <beta reason>` | neither fleet has a ship left in the fight (draw); each half is one of the three above |
+| `<Side> fleet combat-ineffective (no weapon left that can deal damage)` | that fleet could deal damage at the start and no longer can (no operational gun with ammunition, no tube with rounds, nothing of its own in flight); the other side still can |
+| `Both fleets combat-ineffective - on points: <tactical reason>` | neither side can deal damage any more; decided on points |
+
+Unchanged: `Draw accepted - ...`, `<Side> tactical advantage (...)`, `Too close to
+call (...)`, and the 1v1 reasons. The seed-4 battle above ends `winner: "alpha"`,
+`result_reason: "Beta fleet destroyed or surrendered (5 destroyed, 3 surrendered)"`
+(before: `"Beta fleet eliminated"` with three beta corvettes afloat at 100 % hull).
