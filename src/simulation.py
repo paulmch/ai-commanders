@@ -1381,6 +1381,9 @@ class TorpedoInFlight:
     # an 8-escort screen. The latch makes the event - and the seeker-kill
     # metric built on it - count torpedoes, not turret-ticks.
     seeker_kill_logged: bool = False
+    # Seeker killed by a reactor blast (src/battle_damage.py), not by PD: a
+    # hit afterwards is not a PD seeker kill that still hit.
+    blast_blinded: bool = False
     # Terminal-presentation latch for the TARGET ship's evasion logic. Once
     # the target commits to presenting armor against this torpedo it must not
     # flip back to running: at the commit boundary the NEZ margins flap
@@ -1451,6 +1454,8 @@ class EngagementMetrics:
     # Torpedoes destroyed / seeker-blinded by a reactor blast (not PD's work).
     total_torpedo_blast_destroyed: int = 0
     total_torpedo_blast_blinded: int = 0
+    # Of total_torpedo_hits, how many a blast had blinded (never PD's).
+    total_torpedo_hits_after_blast_blind: int = 0
     total_damage_dealt: float = 0.0
     ships_destroyed: list[str] = field(default_factory=list)
     battle_duration: float = 0.0
@@ -1542,6 +1547,11 @@ class CombatSimulation:
         )
         self.current_time: float = 0.0
         self.last_decision_time: float = 0.0
+        # Console narration (FIRED / HIT / MODULE DESTROYED / MORTALLY
+        # WOUNDED ...). Private forecast shadows switch it off: their
+        # throw-away ships ('shooter', 'target') used to narrate into the
+        # battle log ~70 times per battle.
+        self.echo: bool = True
 
         # Ship tracking
         self.ships: dict[str, ShipCombatState] = {}
@@ -2133,7 +2143,7 @@ class CombatSimulation:
 
         if not ship.weapons_orders:
             if debug:
-                print(f"  [{ship.ship_id}] No weapons orders")
+                self._echo(f"  [{ship.ship_id}] No weapons orders")
             return
 
         for weapon_slot, order in ship.weapons_orders.items():
@@ -2246,8 +2256,8 @@ class CombatSimulation:
                     if ship.thermal_system and heat_gj > 0:
                         ship.thermal_system.add_heat("weapons", heat_gj)
 
-                print(f"  [{ship.ship_id}] FIRED {weapon_name} at {target_id}")
-                print(f"       Distance: {distance_km:.0f}km, ETA: {time_to_target:.1f}s, "
+                self._echo(f"  [{ship.ship_id}] FIRED {weapon_name} at {target_id}")
+                self._echo(f"       Distance: {distance_km:.0f}km, ETA: {time_to_target:.1f}s, "
                       f"v: {muzzle_v:.1f}km/s, P(hit): {solution.hit_probability:.1%}")
 
     # -------------------------------------------------------------------------
@@ -2670,6 +2680,14 @@ class CombatSimulation:
         for ship in self.ships.values():
             if not ship.is_destroyed:
                 self._update_ship(ship, dt)
+            else:
+                # A wreck keeps coasting on its last velocity (no thrust, no
+                # control). It used to freeze in space while its recorded
+                # velocity stayed at the last value. Everything that fights
+                # (targeting, PD, collisions, blasts, victory) skips
+                # is_destroyed ships, so only its position moves.
+                ks = ship.kinematic_state
+                ks.position = ks.position + ks.velocity * dt
 
         # Update projectiles and check hits
         self._update_projectiles(dt)
@@ -2682,13 +2700,11 @@ class CombatSimulation:
         battle_damage.resolve_pending_blasts(self)
 
         # Check for battle end conditions
+        # (No last-tick flush is needed: resolving a blast never kills, so it
+        # never queues another one; a chain death - a hulk whose fuse the
+        # blast burned down - happens on a later tick,
+        # and the battle does not end while a dying hulk is still pending.)
         self._check_battle_end()
-        if not self._running:
-            # Last tick: a chain detonation queued while resolving the blasts
-            # above would never get its tick - flush it so the recording
-            # still carries every blast.
-            while self._pending_blasts:
-                battle_damage.resolve_pending_blasts(self)
 
         # Advance time
         self.current_time += dt
@@ -3008,6 +3024,11 @@ class CombatSimulation:
         """
         ship.dying_time_remaining -= dt
         if ship.dying_time_remaining <= 0.0:
+            # Coast through this tick first: the blast resolves at the end of
+            # the tick (battle_damage.resolve_pending_blasts), after every
+            # other ship and torpedo has moved, so it must go off where the
+            # hulk is then - not v*dt behind it. No RNG draw here.
+            ship.kinematic_state = propagate_state(ship.kinematic_state, dt, 0.0, 0.0, 0.0)
             self._detonate_reactor(ship)
             return
 
@@ -4559,7 +4580,7 @@ class CombatSimulation:
                         'detection': 'coarse_tca',
                         'tca': tca
                     })
-                    print(f"  --- [{proj_flight.source_ship_id}] MISS {proj_flight.target_ship_id} "
+                    self._echo(f"  --- [{proj_flight.source_ship_id}] MISS {proj_flight.target_ship_id} "
                           f"(closest: {closest_km:.2f}km, flight: {flight_time:.1f}s, tca: {tca:.1f}s)")
                     projectiles_to_remove.append(proj_flight)
                     continue
@@ -4654,7 +4675,7 @@ class CombatSimulation:
                             'detection': 'geometric',
                             'micro_steps': micro_steps
                         })
-                        print(f"  --- [{proj_flight.source_ship_id}] MISS {proj_flight.target_ship_id} "
+                        self._echo(f"  --- [{proj_flight.source_ship_id}] MISS {proj_flight.target_ship_id} "
                               f"(closest: {closest_km:.2f}km, flight: {flight_time:.1f}s)")
                         projectiles_to_remove.append(proj_flight)
                         hit_detected = True  # Well, miss detected
@@ -4786,7 +4807,7 @@ class CombatSimulation:
                     'effective_hit_probability': effective_probability,
                     'roll': roll
                 })
-                print(f"  --- [{proj_flight.source_ship_id}] MISS {proj_flight.target_ship_id} "
+                self._echo(f"  --- [{proj_flight.source_ship_id}] MISS {proj_flight.target_ship_id} "
                       f"(dispersion, P={conversion:.0%}"
                       f"x{geometry_factor:.2f} @ {deflection_m:.0f}m deflection, "
                       f"roll={roll:.2f})")
@@ -5295,7 +5316,7 @@ class CombatSimulation:
 
         # Calculate flight time for display
         flight_time = self.current_time - proj_flight.launch_time
-        print(f"  >>> [{proj_flight.source_ship_id}] HIT {target.ship_id} "
+        self._echo(f"  >>> [{proj_flight.source_ship_id}] HIT {target.ship_id} "
               f"({hit_location.value}): {effective_ke_gj:.1f} GJ, flight: {flight_time:.1f}s")
 
         # Apply armor damage using Terra Invicta physics-based ablation
@@ -5470,7 +5491,7 @@ class CombatSimulation:
                         self._log_event(SimulationEventType.MODULE_DESTROYED, target.ship_id, data={
                             'module_name': module.name
                         })
-                        print(f"  !!! [{target.ship_id}] MODULE DESTROYED: {module.name}")
+                        self._echo(f"  !!! [{target.ship_id}] MODULE DESTROYED: {module.name}")
                         # Disable corresponding weapon if weapon module destroyed
                         self._disable_weapon_for_module(target, module.name)
                         battle_damage.resolve_magazine_cookoff(
@@ -6041,7 +6062,7 @@ class CombatSimulation:
                 'array_health_pct': round(
                     target.thermal_system.radiators.health_percent, 1),
             })
-            print(f"  !!! [{target.ship_id}] RADIATOR HIT: {rad_result.radiator_position} "
+            self._echo(f"  !!! [{target.ship_id}] RADIATOR HIT: {rad_result.radiator_position} "
                   f"({'DESTROYED' if rad_result.radiator_destroyed else 'damaged'})")
 
     def _resolve_torpedo_hit(
@@ -6081,7 +6102,10 @@ class CombatSimulation:
 
         self.metrics.total_torpedo_hits += 1
         self.metrics.total_damage_dealt += total_damage_gj
-        if torp_flight.is_disabled:
+        if torp_flight.blast_blinded:
+            # Blinded by a reactor blast, not by PD: kept out of PD's tally.
+            self.metrics.total_torpedo_hits_after_blast_blind += 1
+        elif torp_flight.is_disabled:
             # A blinded torpedo that still connected. Recorded so that PD's
             # seeker kills can never be read as interceptions: a blind only
             # counts for something if the target then moves out of the way.
@@ -6240,7 +6264,7 @@ class CombatSimulation:
                     self._log_event(SimulationEventType.MODULE_DESTROYED, target.ship_id, data={
                         'module_name': module.name
                     })
-                    print(f"  !!! [{target.ship_id}] MODULE DESTROYED: {module.name}")
+                    self._echo(f"  !!! [{target.ship_id}] MODULE DESTROYED: {module.name}")
                     # Disable corresponding weapon if weapon module destroyed
                     self._disable_weapon_for_module(target, module.name)
                     battle_damage.resolve_magazine_cookoff(
@@ -7259,7 +7283,7 @@ class CombatSimulation:
                 self._log_event(SimulationEventType.MODULE_DESTROYED, ship.ship_id, data={
                     'module_name': result.module_name
                 })
-                print(f"  !!! [{ship.ship_id}] MODULE DESTROYED: {result.module_name}")
+                self._echo(f"  !!! [{ship.ship_id}] MODULE DESTROYED: {result.module_name}")
                 self._disable_weapon_for_module(ship, result.module_name)
 
     def _disable_weapon_for_module(self, ship: ShipCombatState, module_name: str) -> None:
@@ -7336,7 +7360,7 @@ class CombatSimulation:
                     _disable_slot(pd_slots[idx])
                 elif idx < len(ship.point_defense):
                     ship.point_defense[idx].is_operational = False
-            print(f"  !!! [{ship.ship_id}] {module_name} DESTROYED - {weapon_slot} disabled")
+            self._echo(f"  !!! [{ship.ship_id}] {module_name} DESTROYED - {weapon_slot} disabled")
 
         # Also check PD lasers
         if weapon_slot and hasattr(ship, 'pd_lasers') and ship.pd_lasers:
@@ -7416,7 +7440,7 @@ class CombatSimulation:
             'hull_integrity': ship.hull_integrity,
             'detonation_in_s': ship.dying_time_remaining,
         })
-        print(f"  !!! [{ship.ship_id}] MORTALLY WOUNDED - reactor containment "
+        self._echo(f"  !!! [{ship.ship_id}] MORTALLY WOUNDED - reactor containment "
               f"failing, detonation in {ship.dying_time_remaining:.1f}s")
 
     def _detonate_reactor(self, ship: ShipCombatState,
@@ -7445,7 +7469,7 @@ class CombatSimulation:
         self._log_event(SimulationEventType.REACTOR_MELTDOWN, ship.ship_id, data={
             'heat': round(heat, 3),
         })
-        print(f"  !!! [{ship.ship_id}] REACTOR MELTDOWN at {heat * 100:.0f}% heat")
+        self._echo(f"  !!! [{ship.ship_id}] REACTOR MELTDOWN at {heat * 100:.0f}% heat")
         self._detonate_reactor(ship, cause='reactor_overheat')
 
     def _destroy_ship(
@@ -7544,6 +7568,11 @@ class CombatSimulation:
         """Remove an event callback."""
         if callback in self._event_callbacks:
             self._event_callbacks.remove(callback)
+
+    def _echo(self, *args: Any, **kwargs: Any) -> None:
+        """Console narration; silent when ``self.echo`` is off (shadow sims)."""
+        if getattr(self, 'echo', True):
+            print(*args, **kwargs)
 
     def _log_event(
         self,

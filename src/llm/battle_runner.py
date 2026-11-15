@@ -73,6 +73,28 @@ SHIP_CLASS_VALUES = {
 }
 
 
+# Time-limit tactical score of a SURVIVING ship that battle damage left
+# combat-ineffective (src/battle_damage.py): its hull-remaining term is
+# multiplied by these. A hull whose every gun mount and torpedo tube is
+# wrecked, or that cannot burn, is worth less than an intact one even at full
+# hull integrity. Magazines fired dry do not count: spending ammunition must
+# not cost score.
+DISARMED_SHIP_SCORE_FACTOR = 0.25
+ADRIFT_SHIP_SCORE_FACTOR = 0.5
+
+
+def surviving_ship_score_factor(ship) -> float:
+    """Multiplier on a surviving ship's hull-remaining score."""
+    from ..battle_damage import ship_disarmed_by_damage
+    factor = 1.0
+    if ship_disarmed_by_damage(ship):
+        factor *= DISARMED_SHIP_SCORE_FACTOR
+    engine = getattr(ship, "engine_effectiveness", 1.0)
+    if isinstance(engine, (int, float)) and engine <= 0.0:
+        factor *= ADRIFT_SHIP_SCORE_FACTOR
+    return factor
+
+
 def ship_class_value(ship_type: str) -> float:
     """Tactical-advantage value of a hull class (variants fall back to their base hull)."""
     key = (ship_type or "destroyer").lower()
@@ -2828,6 +2850,11 @@ class LLMBattleRunner:
         if not alpha_active or not beta_active:
             return True
 
+        # A fleet that can no longer deal damage (battle damage wrecked every
+        # gun and tube, nothing of its own still in flight) has lost the fight.
+        if self._combat_ineffective_outcome() is not None:
+            return True
+
         # Check for mutual Admiral draw
         if self._fleet_draw_agreed():
             return True
@@ -2842,6 +2869,43 @@ class LLMBattleRunner:
             return True
 
         return False
+
+    def _combat_ineffective_outcome(self) -> Optional[tuple]:
+        """
+        (outcome, winner, reason) once a fleet that could deal damage at the
+        start of the battle no longer can (src/battle_damage.side_can_deal_damage:
+        no operational gun with ammunition, no tube with rounds, no torpedo or
+        slug of its own in flight); None while the fight is still on.
+
+        The side that can still fight wins. If neither can, the battle ends on
+        points (the tactical-advantage verdict, which may itself be a draw).
+        A fleet that was unarmed from the start never triggers this, so a
+        config with deliberately unarmed hulls plays out as before.
+        """
+        if self.simulation is None or not self.alpha_ships or not self.beta_ships:
+            return None
+        from ..battle_damage import side_can_deal_damage
+        can = {
+            "alpha": side_can_deal_damage(self.simulation, self.alpha_ships.values()),
+            "beta": side_can_deal_damage(self.simulation, self.beta_ships.values()),
+        }
+        armed = getattr(self, "_fleet_armed_at_start", None)
+        if armed is None:
+            # Latched on the first look (before the first tick).
+            armed = self._fleet_armed_at_start = dict(can)
+        disarmed = [side for side in ("alpha", "beta") if armed[side] and not can[side]]
+        if not disarmed:
+            return None
+        if len(disarmed) == 1:
+            other = "beta" if disarmed[0] == "alpha" else "alpha"
+            if can[other]:
+                outcome = (BattleOutcome.ALPHA_VICTORY if other == "alpha"
+                           else BattleOutcome.BETA_VICTORY)
+                return (outcome, other,
+                        f"{disarmed[0].title()} fleet combat-ineffective "
+                        f"(no weapon left that can deal damage)")
+        outcome, winner, reason = self._evaluate_fleet_tactical_advantage()
+        return outcome, winner, f"Both fleets combat-ineffective - on points: {reason}"
 
     def _evaluate_fleet_result(self) -> BattleResult:
         """Evaluate final fleet battle result."""
@@ -2870,6 +2934,8 @@ class LLMBattleRunner:
             outcome = BattleOutcome.ALPHA_VICTORY
             winner = "alpha"
             reason = "Beta fleet eliminated"
+        elif (ineffective := self._combat_ineffective_outcome()) is not None:
+            outcome, winner, reason = ineffective
         elif (self.alpha_mcp or self.alpha_admiral) and (self.beta_mcp or self.beta_admiral):
             # Check for mutual draw
             if self._fleet_draw_agreed():
@@ -3322,7 +3388,8 @@ class LLMBattleRunner:
             else:
                 # Surviving ships contribute to score
                 hull_pct = ship.hull_integrity / 100.0
-                alpha_score += base_value * hull_pct  # Hull remaining
+                # Hull remaining, discounted for a disarmed / adrift hull
+                alpha_score += base_value * hull_pct * surviving_ship_score_factor(ship)
                 alpha_score += ship.damage_dealt_gj * 0.1  # Damage dealt
                 if ship.shots_fired > 0:
                     accuracy = ship.hits_scored / ship.shots_fired
@@ -3338,7 +3405,7 @@ class LLMBattleRunner:
                 alpha_score += base_value * 0.75
             else:
                 hull_pct = ship.hull_integrity / 100.0
-                beta_score += base_value * hull_pct
+                beta_score += base_value * hull_pct * surviving_ship_score_factor(ship)
                 beta_score += ship.damage_dealt_gj * 0.1
                 if ship.shots_fired > 0:
                     accuracy = ship.hits_scored / ship.shots_fired

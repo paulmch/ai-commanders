@@ -40,7 +40,9 @@ export { updateHullDetails } from './HullRigs.js';
  *                         DamageFX owns rotation.x (buckled wings)
  */
 
-const TEXEL = 1.0;    // plating tiles per scene unit
+const TEXEL = 0.85;   // plating tiles per scene unit
+/** Shoulder cut of a main hull section, as a share of its smaller side. */
+const SHOULDER = 0.2;
 /** Chamfer width against the old rounded-corner radius. */
 const CHAMFER = 0.8;
 /** Materials that take a per-part tone step / only the drive soot. */
@@ -131,7 +133,7 @@ export function buildShipMaterials(faction) {
     const paintT = getHullTextures(faction, 'paint');
     _sharedMats.set(key, {
       hull: new THREE.MeshStandardMaterial({
-        map: hullT.map, normalMap: hullT.normalMap, normalScale: new THREE.Vector2(1.35, 1.35),
+        map: hullT.map, normalMap: hullT.normalMap, normalScale: new THREE.Vector2(1.1, 1.1),
         roughnessMap: hullT.ormMap, metalnessMap: hullT.ormMap,
         roughness: 1, metalness: HULL_METALNESS, envMapIntensity: 1.0, vertexColors: true
       }),
@@ -144,7 +146,7 @@ export function buildShipMaterials(faction) {
       // Floodlit (a faint emissive copy of the albedo) so the livery still
       // names the side on a shadowed or backlit hull.
       paint: new THREE.MeshStandardMaterial({
-        map: paintT.map, normalMap: paintT.normalMap, normalScale: new THREE.Vector2(1.2, 1.2),
+        map: paintT.map, normalMap: paintT.normalMap, normalScale: new THREE.Vector2(1.0, 1.0),
         roughnessMap: paintT.ormMap, metalnessMap: paintT.ormMap,
         roughness: 1, metalness: 1, envMapIntensity: 0.85, vertexColors: true,
         emissive: 0xffffff, emissiveMap: paintT.map, emissiveIntensity: LIVERY_FLOOD
@@ -187,9 +189,11 @@ export function buildShipMaterials(faction) {
     }),
     // Bell liners: the emissive map carries the colour (white-hot throat
     // to dull red lip); SceneManager drives the intensity with thrust
-    bellHeat: new THREE.MeshStandardMaterial({
-      color: 0x0e0b0b, emissive: 0xffffff, emissiveMap: getBellHeatTexture(), emissiveIntensity: 0.0,
-      roughness: 0.85, metalness: 0.1, side: THREE.DoubleSide
+    // (Lambert on black: glow only - no specular hot-spot to turn the
+    // concave liner into a glossy ball)
+    bellHeat: new THREE.MeshLambertMaterial({
+      color: 0x000000, emissive: 0xffffff, emissiveMap: getBellHeatTexture(), emissiveIntensity: 0.0,
+      side: THREE.DoubleSide
     })
   };
   // Non-enumerable so code iterating the material set only sees materials
@@ -347,6 +351,50 @@ export function chamferBoxGeometry(w, h, d, t, rnd = Math.random, texel = TEXEL)
   return g;
 }
 
+/**
+ * Main-hull section: an octagonal frustum from z = 0 to z = len. Each end
+ * is a w x h rectangle with its four long edges cut at 45 degrees - `ct`
+ * across the two dorsal shoulders, `cb` across the ventral ones - so the
+ * section keeps flat top, bottom and side faces for mounts with sloped
+ * armour between them. (w0, h0, ct0, cb0) at z = 0, (w1, ...) at z = len.
+ * Non-indexed, flat normals; plated materials get their UVs from the
+ * hull-space projection in HullKit.add.
+ */
+export function octSectionGeometry(w0, h0, ct0, cb0, w1, h1, ct1, cb1, len) {
+  const ring = (w, h, ct, cb, z) => [
+    [w / 2, -h / 2 + cb], [w / 2, h / 2 - ct], [w / 2 - ct, h / 2], [-w / 2 + ct, h / 2],
+    [-w / 2, h / 2 - ct], [-w / 2, -h / 2 + cb], [-w / 2 + cb, -h / 2], [w / 2 - cb, -h / 2]
+  ].map(([x, y]) => new THREE.Vector3(x, y, z));
+  const A = ring(w0, h0, ct0, cb0, 0), B = ring(w1, h1, ct1, cb1, len);
+  const pos = [], uv = [];
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), n = new THREE.Vector3(), mid = new THREE.Vector3();
+  const tri = (p0, p1, p2, out) => {
+    a.subVectors(p1, p0); b.subVectors(p2, p0); n.crossVectors(a, b);
+    if (n.lengthSq() < 1e-14) return;
+    const P = n.dot(out) < 0 ? [p0, p2, p1] : [p0, p1, p2];
+    for (const p of P) { pos.push(p.x, p.y, p.z); uv.push(p.z, p.x + p.y); }
+  };
+  const out = new THREE.Vector3();
+  for (let i = 0; i < 8; i++) {
+    const j = (i + 1) % 8;
+    mid.copy(A[i]).add(A[j]).add(B[i]).add(B[j]).multiplyScalar(0.25);
+    out.set(mid.x, mid.y, 0);
+    tri(A[i], A[j], B[j], out);
+    tri(A[i], B[j], B[i], out);
+  }
+  const zc0 = new THREE.Vector3(0, 0, 0), zc1 = new THREE.Vector3(0, 0, len);
+  for (let i = 0; i < 8; i++) {
+    const j = (i + 1) % 8;
+    tri(zc0, A[i], A[j], out.set(0, 0, -1));
+    tri(zc1, B[i], B[j], out.set(0, 0, 1));
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.computeVertexNormals();
+  return g;
+}
+
 // ---------------------------------------------------------------------------
 // Kit
 // ---------------------------------------------------------------------------
@@ -411,11 +459,39 @@ export class HullKit {
     if (geom.index) geom = geom.toNonIndexed();
     geom.applyMatrix4(matrix);
     geom.computeBoundingBox();
+    if (TONED_MATS.has(mat)) this._projectUVs(geom);
     this._colour(mat, geom, tint);
     const c = new THREE.Vector3();
     geom.boundingBox.getCenter(c);
     this.parts.push({ geom, mat, center: c });
     return geom;
+  }
+
+  /**
+   * Plating UVs projected in hull space along each facet's dominant axis
+   * (u runs along the hull on every flank and deck face): one plate
+   * lattice for the whole ship, so neighbouring parts agree on slab size
+   * and their joints line up instead of every part tiling on its own.
+   */
+  _projectUVs(geom) {
+    const pos = geom.attributes.position;
+    const uv = new Float32Array(pos.count * 2);
+    const t = this.texel;
+    const P = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()], n = new THREE.Vector3();
+    for (let i = 0; i + 2 < pos.count; i += 3) {
+      for (let j = 0; j < 3; j++) P[j].fromBufferAttribute(pos, i + j);
+      n.crossVectors(P[1].clone().sub(P[0]), P[2].clone().sub(P[0]));
+      const ax = Math.abs(n.x), ay = Math.abs(n.y), az = Math.abs(n.z);
+      for (let j = 0; j < 3; j++) {
+        const p = P[j];
+        let u, v;
+        if (ax >= ay && ax >= az) { u = p.z; v = p.y + 0.37; }
+        else if (ay >= az) { u = p.z + 0.5; v = p.x + 0.13; }
+        else { u = p.x + 0.21; v = p.y + 0.37; }
+        uv[(i + j) * 2] = u * t; uv[(i + j) * 2 + 1] = v * t;
+      }
+    }
+    geom.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
   }
 
   /**
@@ -481,6 +557,57 @@ export class HullKit {
   endCap(mat, w, h, len, x, y, zEnd, dir, { tw = 0.62, th = 0.62, tint = null } = {}) {
     const g = taperBoxGeometry(w, h, w * tw, h * th, len, this.rnd, this.texel);
     return this.add(mat, g, this.xf(x, y, zEnd, 0, dir < 0 ? Math.PI : 0, 0), tint);
+  }
+
+  /** Shoulder cut of a main section (w x h). */
+  shoulder(w, h) { return Math.min(w, h) * SHOULDER; }
+
+  /**
+   * Main hull section centred at z: flat top / bottom / side faces of a
+   * w x h box with sloped shoulders (ct dorsal, cb ventral) between them.
+   */
+  section(mat, w, h, d, x, y, z, { ct = null, cb = null, tint = null } = {}) {
+    ct ??= this.shoulder(w, h);
+    cb ??= ct;
+    for (let i = 0; i < 12; i++) this.rnd();      // the box it replaces drew 12
+    return this.add(mat, octSectionGeometry(w, h, ct, cb, w, h, ct, cb, d), this.xf(x, y, z - d / 2), tint);
+  }
+
+  /** Tapering section from (w0 x h0) at z0 to (w1 x h1) `len` toward dir. */
+  taper(mat, w0, h0, w1, h1, len, x, y, z0, { c0 = null, c1 = null, cb0 = null, cb1 = null, dir = 1, tint = null } = {}) {
+    c0 ??= this.shoulder(w0, h0);
+    c1 ??= Math.min(c0 * Math.min(w1 / w0, h1 / h0), Math.min(w1, h1) * 0.45);
+    for (let i = 0; i < 12; i++) this.rnd();
+    const g = octSectionGeometry(w0, h0, c0, cb0 ?? c0, w1, h1, c1, cb1 ?? c1, len);
+    return this.add(mat, g, this.xf(x, y, z0, 0, dir < 0 ? Math.PI : 0, 0), tint);
+  }
+
+  /**
+   * Wedge bow on a shouldered section (w x h, shoulder c) from z0 over
+   * `len`: one sloped glacis narrowing to (w tw) x (h th), a raised
+   * applique plate over its middle and a livery collar at its root -
+   * sloped armour, not a stack of boxes. Returns the z of the tip face.
+   */
+  wedgeBow({ z0, len, w, h, c = null, tw = 0.5, th = 0.5, tip = null, rim = true }) {
+    c ??= this.shoulder(w, h);
+    const lerp = (a, b, u) => a + (b - a) * u;
+    const c1 = Math.max(c * Math.min(tw, th), Math.min(w * tw, h * th) * 0.18);
+    const at = (u, e = 1, off = 0) => [lerp(w, w * tw, u) * e + off, lerp(h, h * th, u) * e + off, lerp(c, c1, u) * e];
+    this.taper('hull', w, h, w * tw, h * th, len, 0, 0, z0, { c0: c, c1 });
+    const off = 0.03 * this.k;
+    const [aw0, ah0, ac0] = at(0.36, 1.02, off), [aw1, ah1, ac1] = at(0.8, 1.02, off);
+    this.taper('hull', aw0, ah0, aw1, ah1, len * 0.44, 0, 0, z0 + len * 0.36, { c0: ac0, c1: ac1 });
+    if (rim) {
+      const [rw0, rh0, rc0] = at(0, 1.015, off * 0.6), [rw1, rh1, rc1] = at(0.2, 1.015, off * 0.6);
+      this.taper('paint', rw0, rh0, rw1, rh1, len * 0.2, 0, 0, z0, { c0: rc0, c1: rc1 });
+    }
+    const zf = z0 + len;
+    if (tip === 'lens') {
+      const tr = Math.min(w * tw, h * th) * 0.5;
+      this.drum('dark', tr * 0.5, len * 0.05, zf + len * 0.01, { sides: 12 });
+      this.drum('glass', tr * 0.36, len * 0.05, zf + len * 0.025, { sides: 12 });
+    }
+    return zf;
   }
 
   /** Drum with its axis along Z. sides=8 gives the octagonal hull look. */
@@ -828,10 +955,11 @@ export class HullKit {
   }
 
   /** Deck windows around a rectangular section (w wide, h tall) at z. */
-  deckBand(w, h, z, { top = true, bottom = true, sides = true, s = this.winS } = {}) {
+  deckBand(w, h, z, { top = true, bottom = true, sides = true, s = this.winS, c = 0 } = {}) {
     const pitch = s * 3.4;
-    const nx = Math.max(1, Math.floor(w * 0.8 / pitch));
-    const ny = Math.max(1, Math.floor(h * 0.75 / pitch));
+    // (c: the section's shoulder cut - windows keep to the flat faces)
+    const nx = Math.max(1, Math.floor((w - 2 * c) * (c ? 0.9 : 0.8) / pitch));
+    const ny = Math.max(1, Math.floor((h - 2 * c) * (c ? 0.88 : 0.75) / pitch));
     for (let i = 0; i < nx; i++) {
       const x = (i - (nx - 1) / 2) * pitch;
       if (top) this._window(s * 1.4, s * 0.35, s, x, h / 2, z);
@@ -846,16 +974,25 @@ export class HullKit {
   }
 
   /** Thin band hugging a rectangular section (w x h) at z, in `mat`. */
-  frameBand(mat, w, h, z, t, { d = t } = {}) {
-    this.box(mat, w + t * 0.6, t, d, 0, h / 2, z, { bevel: 0 });
-    this.box(mat, w + t * 0.6, t, d, 0, -h / 2, z, { bevel: 0 });
-    this.box(mat, t, h + t * 0.6, d, w / 2, 0, z, { bevel: 0 });
-    this.box(mat, t, h + t * 0.6, d, -w / 2, 0, z, { bevel: 0 });
+  frameBand(mat, w, h, z, t, { d = t, c = 0 } = {}) {
+    const e = c ? t * 0.3 : t * 0.6;
+    this.box(mat, w - 2 * c + e, t, d, 0, h / 2, z, { bevel: 0 });
+    this.box(mat, w - 2 * c + e, t, d, 0, -h / 2, z, { bevel: 0 });
+    this.box(mat, t, h - 2 * c + e, d, w / 2, 0, z, { bevel: 0 });
+    this.box(mat, t, h - 2 * c + e, d, -w / 2, 0, z, { bevel: 0 });
+    if (!c) return;
+    // the four shoulders of a shouldered section
+    for (const sx of [-1, 1]) {
+      for (const sy of [-1, 1]) {
+        this.box(mat, c * Math.SQRT2 + e, t, d, sx * (w / 2 - c / 2), sy * (h / 2 - c / 2), z,
+          { bevel: 0, rot: [0, 0, -sx * sy * Math.PI / 4] });
+      }
+    }
   }
 
-  /** Thin lit accent band hugging a rectangular section (w x h) at z. */
-  opsBand(w, h, z, t) {
-    this.frameBand('accent', w, h, z, t);
+  /** Thin lit accent band hugging a section (w x h, shoulder c) at z. */
+  opsBand(w, h, z, t, c = 0) {
+    this.frameBand('accent', w, h, z, t, { c });
   }
 
   /** Lit ops-deck band: a thin accent ring with a window ring beside it. */
@@ -901,13 +1038,22 @@ export class HullKit {
    * plates standing just proud of the faces, stopping short of the
    * bevelled corners.
    */
-  paintBand(w, h, z, t, { top = true, bottom = true, sides = true } = {}) {
+  paintBand(w, h, z, t, { top = true, bottom = true, sides = true, c = 0 } = {}) {
     const e = Math.min(w, h) * 0.012 + 0.004;
-    if (top) this.box('paint', w * 0.84, e * 2, t, 0, h / 2, z, { bevel: 0.3, seg: 1 });
-    if (bottom) this.box('paint', w * 0.84, e * 2, t, 0, -h / 2, z, { bevel: 0.3, seg: 1 });
+    const tw = c ? (w - 2 * c) * 0.96 : w * 0.84, sh = c ? (h - 2 * c) * 0.96 : h * 0.8;
+    if (top) this.box('paint', tw, e * 2, t, 0, h / 2, z, { bevel: 0.3, seg: 1 });
+    if (bottom) this.box('paint', tw, e * 2, t, 0, -h / 2, z, { bevel: 0.3, seg: 1 });
     if (sides) {
-      this.box('paint', e * 2, h * 0.8, t, w / 2, 0, z, { bevel: 0.3, seg: 1 });
-      this.box('paint', e * 2, h * 0.8, t, -w / 2, 0, z, { bevel: 0.3, seg: 1 });
+      this.box('paint', e * 2, sh, t, w / 2, 0, z, { bevel: 0.3, seg: 1 });
+      this.box('paint', e * 2, sh, t, -w / 2, 0, z, { bevel: 0.3, seg: 1 });
+    }
+    if (c && top && bottom && sides) {
+      for (const sx of [-1, 1]) {
+        for (const sy of [-1, 1]) {
+          this.box('paint', c * Math.SQRT2 * 0.96, e * 2, t, sx * (w / 2 - c / 2), sy * (h / 2 - c / 2), z,
+            { bevel: 0.3, seg: 1, rot: [0, 0, -sx * sy * Math.PI / 4] });
+        }
+      }
     }
   }
 
@@ -1155,14 +1301,18 @@ export class HullKit {
       this.strobe(0, -rS * 1.02, zS, 0.55);
     } else if (d.shape === 'box') {
       const w = Math.max(d.w, ex * 2.1), h = Math.max(d.h, ey * 2.1);
+      const c = this.shoulder(w, h);
       this.drum('trim', Math.min(w, h) * 0.32, L * 0.16, -L * 0.355, { sides: 8 });
-      this.box('hull', w, h, L * 0.12, 0, 0, -L * 0.425, { bevel: 0.16 });
-      this.frameBand('trim', w * 1.01, h * 1.01, -L * 0.372, L * 0.012);
-      this.frameBand('trim', w * 1.01, h * 1.01, -L * 0.478, L * 0.012);
-      this.livery(-L * 0.425, L * 0.06, (zc, t) => this.paintBand(w, h, zc, t));
-      this.box('trim', w * 0.95, h * 0.95, L * 0.02, 0, 0, -L * 0.49, { bevel: 0.2 });
-      this.frameBand('accent', w * 0.955, h * 0.955, -L * 0.4985, Math.min(w, h) * 0.02, { d: L * 0.004 });
-      this.rcsStation(-L * 0.425, w * 0.5, h * 0.5, rcsS, { diag: true });
+      // Engine block: a shouldered module behind a sloped front, standing
+      // off the hull on its trunk - not the hull box carried on aft
+      this.section('hull', w, h, L * 0.087, 0, 0, -L * 0.4415);
+      this.taper('hull', w, h, w * 0.74, h * 0.74, L * 0.032, 0, 0, -L * 0.398);
+      this.frameBand('trim', w * 1.01, h * 1.01, -L * 0.403, L * 0.012, { c: c * 1.01 });
+      this.frameBand('trim', w * 1.01, h * 1.01, -L * 0.478, L * 0.012, { c: c * 1.01 });
+      this.livery(-L * 0.441, L * 0.055, (zc, t) => this.paintBand(w, h, zc, t, { c }));
+      this.section('trim', w * 0.95, h * 0.95, L * 0.02, 0, 0, -L * 0.49, { ct: c * 0.95 });
+      this.frameBand('accent', w * 0.955, h * 0.955, -L * 0.4985, Math.min(w, h) * 0.02, { d: L * 0.004, c: c * 0.955 });
+      this.rcsStation(-L * 0.44, w * 0.5 - c * 0.5, h * 0.5 - c * 0.5, rcsS, { diag: true });
       this.strobe(0, h * 0.53, -L * 0.47, 0.5);
       this.strobe(0, -h * 0.53, -L * 0.47, 0.55);
     } else {
@@ -1171,6 +1321,8 @@ export class HullKit {
       // Continuous pressure trunk overlaps both the aft hull and the skirt.
       this.drum('trim', r * 0.5, L * 0.16, -L * 0.355, { sides: 8 });
       this.drum('hull', r, L * 0.1, -L * 0.44, { rTop: r * 0.98, sides });
+      // sloped shoulder from the skirt in to the trunk
+      this.drum('hull', r * 0.98, L * 0.034, -L * 0.373, { rTop: r * 0.6, sides });
       this.rib('trim', r * 1.03, L * 0.012, -L * 0.396, { sides });
       this.rib('trim', r * 1.03, L * 0.012, -L * 0.484, { sides });
       this.livery(-L * 0.44, L * 0.05, (zc, t) => this.rib('paint', r * 1.015, t, zc, { sides }));
@@ -1224,15 +1376,22 @@ export class HullKit {
       // looking up a bell shows a white-hot core, never the plating
       // behind it. Its glow runs from v = 0 at the centre to the liner's
       // own v where they meet.
-      const liner = new THREE.LatheGeometry(contour(0.93), 20);
+      // The liner is its own, thick-walled contour: a narrow throat (0.2 of
+      // the mouth) at the plate face opening out to the lip, so the bell
+      // reads as a deep funnel with a small bright throat far inside.
+      const zI = -L * 0.5012, uI = (zT - zI) / bl;
+      const lpts = Array.from({ length: 11 }, (_, i) => {
+        const sl = i / 10;
+        return new THREE.Vector2(bellR * (0.2 + 0.73 * (1 - Math.pow(1 - sl, 1.6))), (uI + (1 - uI) * sl) * bl);
+      });
+      const liner = new THREE.LatheGeometry(lpts, 20);
       liner.rotateX(-Math.PI / 2);
       liner.translate(p.x, p.y, zT);
-      const zI = -L * 0.5012, uI = (zT - zI) / bl;
-      const plate = new THREE.CircleGeometry(bellR * 0.93 * flare(uI), 20);
+      const plate = new THREE.CircleGeometry(bellR * 0.2, 20);
       plate.rotateY(Math.PI);
       plate.translate(p.x, p.y, zI);
       const puv = plate.attributes.uv;
-      for (let i = 0; i < puv.count; i++) puv.setXY(i, 0.5, i === 0 ? 0 : uI);
+      for (let i = 0; i < puv.count; i++) puv.setXY(i, 0.5, 0);
       liners.push(liner, plate);
       // feed pipes from the skirt to the bell
       this.drum('barrel', bellR * 0.12, L * 0.05, -L * 0.465, { x: p.x * 0.9, y: p.y * 0.9, sides: 6 });
@@ -1413,6 +1572,9 @@ export class HullKit {
       const g = new THREE.BoxGeometry(s * 0.9, s * 0.1, s * 0.9);
       // mats.hull multiplies by vertex colour: hatches are plain plate
       g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 3).fill(1), 3));
+      // a hatch is a small piece of plate, not a whole tile of slabs
+      const huv = g.attributes.uv;
+      for (let i = 0; i < huv.count; i++) huv.setXY(i, huv.getX(i) * s * this.texel + 0.3, huv.getY(i) * s * this.texel + 0.3);
       body = new THREE.InstancedMesh(g, mats.hull, n);
       const lg = new THREE.BoxGeometry(s * 0.22, s * 0.04, s * 0.22);
       lg.translate(s * 0.28, s * 0.07, -s * 0.28);
@@ -1700,10 +1862,14 @@ function hullDestroyer(k) {
   const L = k.L, W = k.W;
   k.hasSpinal = true;
   const fw = W * 0.6, fh = W * 0.54, aw = W * 0.7, ah = W * 0.62;
-  k.box('hull', fw, fh, L * 0.32, 0, 0, L * 0.2, { bevel: 0.22 });
-  k.noseCap({ z0: L * 0.36, len: L * 0.14, w: fw, h: fh, tw: 0.84, th: 0.22, layers: 3, tip: null });
-  k.box('hull', aw, ah, L * 0.4, 0, 0, -L * 0.16, { bevel: 0.22 });
-  k.box('trim', aw * 1.03, ah * 1.03, L * 0.03, 0, 0, L * 0.04, { bevel: 0.2 }); // frame band
+  // Shouldered sections (flat faces for the mounts, sloped armour between);
+  // the aft hull keeps a squarer keel for the ventral PD and spinal rail
+  const cf = k.shoulder(fw, fh), ca = k.shoulder(aw, ah), cab = ca * 0.45;
+  k.section('hull', fw, fh, L * 0.32, 0, 0, L * 0.2);
+  k.wedgeBow({ z0: L * 0.36, len: L * 0.14, w: fw, h: fh, tw: 0.8, th: 0.2 });
+  k.section('hull', aw, ah, L * 0.4, 0, 0, -L * 0.16, { cb: cab });
+  k.taper('hull', aw, ah, fw, fh, L * 0.032, 0, 0, L * 0.04, { c0: ca, cb0: cab, c1: cf });
+  k.section('trim', aw * 1.03, ah * 1.03, L * 0.03, 0, 0, L * 0.04, { ct: ca * 1.03, cb: cab * 1.03 }); // frame band
   // Spinal coilgun: rail + breech housing, muzzle proud of the chisel
   // (Projectiles' SPINAL default: y -0.31 W, z 0.56 L)
   k.box('accent', W * 0.07, W * 0.04, L * 0.78, 0, -W * 0.31, L * 0.05, { bevel: 0 });
@@ -1719,11 +1885,11 @@ function hullDestroyer(k) {
     k.pipe('barrel', W * 0.02, L * 0.3, sx * W * 0.37, -W * 0.18, -L * 0.18, { clamps: 3 });
   }
   // deck rings: ops deck at the forward section, crew decks aft
-  k.opsBand(fw, fh, L * 0.33, W * 0.012);
-  k.deckBand(fw, fh, L * 0.29, { bottom: false });
-  k.deckBand(fw, fh, L * 0.08, { bottom: false });
-  k.deckBand(aw, ah, -L * 0.07, { bottom: false });
-  k.deckBand(aw, ah, -L * 0.26, { bottom: false });
+  k.opsBand(fw, fh, L * 0.33, W * 0.012, cf);
+  k.deckBand(fw, fh, L * 0.29, { bottom: false, c: cf });
+  k.deckBand(fw, fh, L * 0.085, { bottom: false, c: cf });
+  k.deckBand(aw, ah, -L * 0.07, { bottom: false, c: ca });
+  k.deckBand(aw, ah, -L * 0.26, { bottom: false, c: ca });
   // Sensors amidships, no tower
   k.sensorCluster(0.36 * k.k, -W * 0.14, ah / 2, -L * 0.04);
   k.mast(k.mastH, W * 0.2, ah / 2, -L * 0.12, 0.1);
@@ -1733,15 +1899,15 @@ function hullDestroyer(k) {
   k.pd(0, ah / 2, -L * 0.24);
   k.pd(W * 0.2, -ah / 2, -L * 0.22, Math.PI);
   k.spineStripe(ah / 2, -L * 0.35, -L * 0.15, W * 0.22);
-  k.greebles('+y', ah / 2, [W * 0.14, W * 0.3], [-L * 0.34, -L * 0.14], 5, W * 0.04, W * 0.08);
-  k.greebles('+y', ah / 2, [-W * 0.3, -W * 0.14], [-L * 0.34, -L * 0.14], 5, W * 0.04, W * 0.08);
-  k.greebles('+y', fh / 2, [-W * 0.25, -W * 0.08], [L * 0.05, L * 0.12], 3, W * 0.03, W * 0.06);
+  k.greebles('+y', ah / 2, [W * 0.12, W * 0.2], [-L * 0.34, -L * 0.14], 5, W * 0.04, W * 0.07);
+  k.greebles('+y', ah / 2, [-W * 0.2, -W * 0.12], [-L * 0.34, -L * 0.14], 5, W * 0.04, W * 0.07);
+  k.greebles('+y', fh / 2, [-W * 0.17, -W * 0.07], [L * 0.09, L * 0.13], 3, W * 0.03, W * 0.06);
   k.runningLights(W * 0.405, W * 0.1, -L * 0.1);
   k.markings2(W * 0.335, 0, L * 0.15, W * 0.08);
-  k.rcsStation(L * 0.3, fw * 0.49, fh * 0.49, k.rcsS, { diag: true });
+  k.rcsStation(L * 0.3, fw / 2 - cf / 2, fh / 2 - cf / 2, k.rcsS, { diag: true });
   k.strobe(0, 0, L * 0.505, 0);
-  k.formationLamp(W * 0.3, ah / 2 + 0.02, -L * 0.36);
-  k.formationLamp(-W * 0.3, ah / 2 + 0.02, -L * 0.36);
+  k.formationLamp(W * 0.2, ah / 2 + 0.02, -L * 0.35);
+  k.formationLamp(-W * 0.2, ah / 2 + 0.02, -L * 0.35);
   const rad = k.radiatorSize(2, { maxSpan: W * 1.1, maxLen: L * 0.3 });
   k.radiator(rad.span, rad.len, -W * 0.36, 0, -L * 0.36 + rad.len / 2 + L * 0.015, -Math.PI / 2);
   k.radiator(rad.span, rad.len, W * 0.36, 0, -L * 0.36 + rad.len / 2 + L * 0.015, Math.PI / 2);
@@ -1758,8 +1924,8 @@ function hullCruiser(k, opts = {}) {
   k.drum('trim', Rc, L * 0.16, L * 0.28);
   k.livery(L * 0.285, L * 0.075, (zc, t) => k.rib('paint', Rc * 1.06, t, zc));
   k.opsDeck(Rc, L * 0.215);
-  if (torpedo) k.noseCap({ z0: L * 0.36, len: L * 0.09, r: Rc, sides: 8, taper: 0.74, layers: 2 });
-  else k.noseCap({ z0: L * 0.36, len: L * 0.14, r: Rc, sides: 8, taper: 0.5, layers: 3 });
+  if (torpedo) k.noseCap({ z0: L * 0.36, len: L * 0.09, r: Rc, sides: 8, taper: 0.74, layers: 2, step: 0.96 });
+  else k.noseCap({ z0: L * 0.36, len: L * 0.14, r: Rc, sides: 8, taper: 0.42, layers: 3, step: 0.96 });
   k.drum('hull', R, L * 0.5, -L * 0.02);
   for (let i = 0; i < 5; i++) k.rib('trim', R * 1.035, L * 0.014, -L * 0.24 + i * L * 0.11);
   // Hull codes sit on the flank flats of one deck ring (no windows there)
@@ -1877,18 +2043,19 @@ function hullBattlecruiser(k) {
   const L = k.L, W = k.W;
   k.hasSpinal = true;
   const fw = W * 0.5, fh = W * 0.44, aw = W * 0.62, ah = W * 0.54;
-  k.box('hull', fw, fh, L * 0.38, 0, 0, L * 0.21, { bevel: 0.2 });
-  k.noseCap({ z0: L * 0.4, len: L * 0.15, w: fw, h: fh, tw: 0.24, th: 0.72, layers: 3, tip: null });
-  k.box('trim', fw * 1.04, fh * 1.04, L * 0.03, 0, 0, L * 0.03, { bevel: 0.2 });
+  const cf = k.shoulder(fw, fh), ca = k.shoulder(aw, ah);
+  k.section('hull', fw, fh, L * 0.38, 0, 0, L * 0.21);
+  k.wedgeBow({ z0: L * 0.4, len: L * 0.15, w: fw, h: fh, tw: 0.2, th: 0.7 });
+  k.section('trim', fw * 1.04, fh * 1.04, L * 0.03, 0, 0, L * 0.03, { ct: cf * 1.04 });
   k.truss('trim', W * 0.17, L * 0.18, -L * 0.07);
   k.pipe('barrel', W * 0.03, L * 0.19, W * 0.08, -W * 0.06, -L * 0.07, { clamps: 2 });
   k.pipe('barrel', W * 0.03, L * 0.19, -W * 0.08, W * 0.06, -L * 0.07, { clamps: 2 });
-  k.box('hull', aw, ah, L * 0.26, 0, 0, -L * 0.29, { bevel: 0.2 });
-  k.box('trim', aw * 1.03, ah * 1.03, L * 0.03, 0, 0, -L * 0.16, { bevel: 0.2 });
+  k.section('hull', aw, ah, L * 0.26, 0, 0, -L * 0.29);
+  k.section('trim', aw * 1.03, ah * 1.03, L * 0.03, 0, 0, -L * 0.16, { ct: ca * 1.03 });
   // Ops deck forward, crew decks along both sections
-  k.opsBand(fw, fh, L * 0.37, W * 0.012);
-  for (const z of [L * 0.33, L * 0.23, L * 0.11]) k.deckBand(fw, fh, z, { bottom: false });
-  for (const z of [-L * 0.22, -L * 0.36]) k.deckBand(aw, ah, z, { bottom: false });
+  k.opsBand(fw, fh, L * 0.37, W * 0.012, cf);
+  for (const z of [L * 0.33, L * 0.23, L * 0.11]) k.deckBand(fw, fh, z, { bottom: false, c: cf });
+  for (const z of [-L * 0.22, -L * 0.36]) k.deckBand(aw, ah, z, { bottom: false, c: ca });
   // Sensors on the forward hull
   k.sensorCluster(0.36 * k.k, 0, fh / 2, L * 0.27);
   k.mast(k.mastH * 1.1, W * 0.12, fh / 2, L * 0.17, 0);
@@ -1910,11 +2077,11 @@ function hullBattlecruiser(k) {
   k.pd(W * 0.12, ah / 2, -L * 0.26);
   k.pd(0, -ah / 2, -L * 0.26, Math.PI);
   k.spineStripe(ah / 2, -L * 0.41, -L * 0.17, W * 0.14, { x: -W * 0.14 });
-  k.greebles('+y', ah / 2, [W * 0.02, W * 0.26], [-L * 0.41, -L * 0.32], 5, W * 0.035, W * 0.07);
-  k.greebles('-y', -ah / 2, [-W * 0.2, W * 0.2], [-L * 0.42, -L * 0.32], 5, W * 0.035, W * 0.07);
+  k.greebles('+y', ah / 2, [W * 0.02, W * 0.17], [-L * 0.41, -L * 0.32], 5, W * 0.035, W * 0.06);
+  k.greebles('-y', -ah / 2, [-W * 0.16, W * 0.16], [-L * 0.42, -L * 0.32], 5, W * 0.035, W * 0.06);
   k.runningLights(fw / 2 + 0.01, W * 0.05, L * 0.37);
   k.markings2(W * 0.345, 0, -L * 0.3, W * 0.08);
-  k.rcsStation(L * 0.3, fw * 0.49, fh * 0.49, k.rcsS, { diag: true });
+  k.rcsStation(L * 0.3, fw / 2 - cf / 2, fh / 2 - cf / 2, k.rcsS, { diag: true });
   k.strobe(0, 0, L * 0.555, 0);
   k.formationLamp(0, W * 0.3, L * 0.02);
   k.formationLamp(0, W * 0.295 + 0.02, -L * 0.3);   // on the dorsal spine (top 0.295 W)
@@ -1922,8 +2089,8 @@ function hullBattlecruiser(k) {
   k.radiator(rad.span, rad.len, 0, W * 0.18, -L * 0.07, 0);
   k.radiator(rad.span, rad.len, 0, -W * 0.18, -L * 0.07, Math.PI);
   // The split hull as two faired pods on the waist truss, not two bricks
-  k.endCap('hull', fw, fh, L * 0.05, 0, 0, L * 0.02, -1, { tw: 0.7, th: 0.72 });
-  k.endCap('hull', aw, ah, L * 0.045, 0, 0, -L * 0.16, 1, { tw: 0.6, th: 0.62 });
+  k.taper('hull', fw, fh, fw * 0.7, fh * 0.72, L * 0.05, 0, 0, L * 0.02, { dir: -1 });
+  k.taper('hull', aw, ah, aw * 0.6, ah * 0.62, L * 0.045, 0, 0, -L * 0.16);
   k.drive = { shape: 'box', w: W * 0.9, h: W * 0.42 };
   k.reactorPos.set(0, 0, -L * 0.32);
 }
@@ -1933,20 +2100,21 @@ function hullBattleship(k) {
   const L = k.L, W = k.W;
   k.hasSpinal = true;
   const sw = W * 0.95, sh = W * 0.48;
-  k.box('hull', sw, sh, L * 0.64, 0, 0, -L * 0.04, { bevel: 0.18 });
-  k.noseCap({ z0: L * 0.28, len: L * 0.14, w: sw, h: sh, tw: 0.78, th: 0.24, layers: 3, tip: null });
+  const cs = k.shoulder(sw, sh);
+  k.section('hull', sw, sh, L * 0.64, 0, 0, -L * 0.04);
+  k.wedgeBow({ z0: L * 0.28, len: L * 0.14, w: sw, h: sh, tw: 0.66, th: 0.22 });
   // Layered applique armour slabs
   const top = W * 0.33;
-  k.armorBelt(W * 0.8, W * 0.08, L * 0.5, 0, W * 0.27, -L * 0.04, { face: '+y' });
-  k.armorBelt(W * 0.8, W * 0.08, L * 0.5, 0, -W * 0.27, -L * 0.06, { face: '-y' });
+  k.armorBelt(W * 0.74, W * 0.08, L * 0.5, 0, W * 0.27, -L * 0.04, { face: '+y' });
+  k.armorBelt(W * 0.74, W * 0.08, L * 0.5, 0, -W * 0.27, -L * 0.06, { face: '-y' });
   for (const sx of [-1, 1]) {
     k.armorBelt(W * 0.06, W * 0.36, L * 0.52, sx * W * 0.49, 0, -L * 0.05, { face: sx > 0 ? '+x' : '-x' });
     k.pipe('barrel', W * 0.02, L * 0.4, sx * W * 0.5, -W * 0.15, -L * 0.1, { clamps: 4 });
   }
   // Deck rings on the flanks (the armour belts leave a gap at each frame)
-  k.opsBand(sw, sh, L * 0.255, W * 0.012);
+  k.opsBand(sw, sh, L * 0.255, W * 0.012, cs);
   for (const z of [L * 0.22, L * 0.06, -L * 0.1, -L * 0.24]) {
-    k.deckBand(sw, sh, z, { top: false, bottom: false });
+    k.deckBand(sw, sh, z, { top: false, bottom: false, c: cs });
   }
   // Heavy spinal rail (SPINAL battleship: -0.335 W, 0.5 L)
   k.box('accent', W * 0.06, W * 0.04, L * 0.66, 0, -W * 0.335, L * 0.08, { bevel: 0 });
@@ -1971,14 +2139,14 @@ function hullBattleship(k) {
   k.pd(W * 0.52, 0, L * 0.12, -Math.PI / 2);
   k.spineStripe(top, -L * 0.285, -L * 0.08, W * 0.3);
   k.livery(L * 0.08, L * 0.05, (zc, t) => k.box('paint', W * 0.5, 0.012 * k.k, t, 0, top + 0.006 * k.k, zc, { bevel: 0.3, seg: 1 }));
-  k.greebles('-y', -top, [-W * 0.38, -W * 0.12], [-L * 0.32, -L * 0.1], 6, W * 0.03, W * 0.06);
-  k.greebles('-y', -top, [W * 0.12, W * 0.38], [-L * 0.32, -L * 0.28], 3, W * 0.03, W * 0.06);
+  k.greebles('-y', -top, [-W * 0.34, -W * 0.12], [-L * 0.3, -L * 0.1], 6, W * 0.03, W * 0.06);
+  k.greebles('-y', -top, [W * 0.12, W * 0.34], [-L * 0.3, -L * 0.27], 3, W * 0.03, W * 0.06);
   k.runningLights(W * 0.535, W * 0.1, L * 0.2);
   k.markings2(W * 0.52, W * 0.11, -L * 0.02, W * 0.07);
-  k.rcsStation(L * 0.24, W * 0.46, W * 0.23, k.rcsS, { diag: true });
+  k.rcsStation(L * 0.24, sw / 2 - cs / 2, sh / 2 - cs / 2, k.rcsS, { diag: true });
   k.strobe(0, 0, L * 0.425, 0);
-  k.formationLamp(W * 0.52, W * 0.19, L * 0.24);
-  k.formationLamp(-W * 0.52, W * 0.19, L * 0.24);
+  k.formationLamp(W * 0.5, W * 0.1, L * 0.24);
+  k.formationLamp(-W * 0.5, W * 0.1, L * 0.24);
   const rad = k.radiatorSize(4, { maxSpan: W * 0.4, maxLen: L * 0.2 });
   const rz = -L * 0.36 + rad.len / 2 + L * 0.01;
   for (const sx of [-1, 1]) {
@@ -2005,30 +2173,33 @@ function hullDreadnought(k, opts = {}) {
       // Armoured load paths tie the four sponsons into the pressure hull.
       k.box('trim', W * 0.24, W * 0.24, L * 0.57,
         sx * W * 0.23, sy * W * 0.23, -L * 0.07, { bevel: 0.15 });
-      k.box('hull', W * 0.32, W * 0.32, L * 0.52, px, py, -L * 0.08, { bevel: 0.2 });
-      k.box('trim', W * 0.34, W * 0.34, L * 0.03, px, py, -L * 0.2, { bevel: 0.2 });
-      k.box('trim', W * 0.34, W * 0.34, L * 0.03, px, py, L * 0.05, { bevel: 0.2 });
-      k.armorBelt(W * 0.34, W * 0.1, L * 0.3, px, py + sy * W * 0.16, -L * 0.04, { face: sy > 0 ? '+y' : '-y' });
+      k.section('hull', W * 0.32, W * 0.32, L * 0.52, px, py, -L * 0.08);
+      k.section('trim', W * 0.34, W * 0.34, L * 0.03, px, py, -L * 0.2, { ct: W * 0.068 });
+      k.section('trim', W * 0.34, W * 0.34, L * 0.03, px, py, L * 0.05, { ct: W * 0.068 });
+      k.armorBelt(W * 0.19, W * 0.1, L * 0.3, px, py + sy * W * 0.16, -L * 0.04, { face: sy > 0 ? '+y' : '-y' });
       k.pipe('barrel', W * 0.02, L * 0.4, px + sx * W * 0.17, py, -L * 0.1, { clamps: 4 });
       // Sponson decks on the outboard faces: many small windows, the
       // dreadnought's scale read
       for (const z of [L * 0.12, L * 0.0, -L * 0.13, -L * 0.27]) {
         for (let j = 0; j < 4; j++) {
-          const yy = py - sy * W * 0.105 + j * sy * W * 0.07;
+          const yy = py - sy * W * 0.081 + j * sy * W * 0.054;
           for (const dz of [-1, 1]) k._window(winS * 0.35, winS * 1.4, winS, px + sx * W * 0.161, yy, z + dz * winS * 2.2);
         }
       }
-      k.box('trim', W * 0.28, W * 0.28, L * 0.05, px, py, L * 0.2, { bevel: 0.4 });
+      k.section('trim', W * 0.28, W * 0.28, L * 0.05, px, py, L * 0.2, { ct: W * 0.075 });
     }
   }
   // Bow citadel narrowing to a stepped glacis, ops deck band around it
-  k.box('hull', W * 0.5, W * 0.5, L * 0.16, 0, 0, L * 0.42, { bevel: 0.25 });
-  k.box('hull', W * 0.64, W * 0.64, L * 0.14, 0, 0, L * 0.3, { bevel: 0.25 });
-  k.livery(L * 0.235, L * 0.04, (zc, t) => k.box('paint', W * 0.66, W * 0.66, t, 0, 0, zc, { bevel: 0.2 }));
-  k.opsBand(W * 0.5, W * 0.5, L * 0.47, W * 0.012);
-  k.deckBand(W * 0.5, W * 0.5, L * 0.44);
-  k.deckBand(W * 0.64, W * 0.64, L * 0.33);
-  k.noseCap({ z0: L * 0.5, len: L * 0.07, w: W * 0.5, h: W * 0.5, tw: 0.62, th: 0.62, layers: 3 });
+  // (shoulders kept shallow on the citadel: the ventral heavy battery and
+  // both bow RCS stations stand on its faces)
+  const cb5 = W * 0.075, cb6 = W * 0.02;
+  k.section('hull', W * 0.5, W * 0.5, L * 0.16, 0, 0, L * 0.42, { ct: cb5 });
+  k.section('hull', W * 0.64, W * 0.64, L * 0.14, 0, 0, L * 0.3, { ct: cb6 });
+  k.livery(L * 0.235, L * 0.04, (zc, t) => k.section('paint', W * 0.66, W * 0.66, t, 0, 0, zc, { ct: cb6 * 1.03 }));
+  k.opsBand(W * 0.5, W * 0.5, L * 0.47, W * 0.012, cb5);
+  k.deckBand(W * 0.5, W * 0.5, L * 0.44, { c: cb5 });
+  k.deckBand(W * 0.64, W * 0.64, L * 0.33, { c: cb6 });
+  k.wedgeBow({ z0: L * 0.5, len: L * 0.07, w: W * 0.5, h: W * 0.5, c: cb5, tw: 0.5, th: 0.5, tip: 'lens' });
   k.greebles('+y', W * 0.32, [-W * 0.26, -W * 0.1], [L * 0.24, L * 0.36], 3, W * 0.03, W * 0.05);
   if (!opts.siege) {
     // Spinal coiler along the keel, between the lower sponsons; the barrel
@@ -2078,8 +2249,8 @@ function hullDreadnought(k, opts = {}) {
   k.greebles('-y', -W * 0.3, [-W * 0.08, W * 0.08], [-L * 0.36, -L * 0.24], 4, W * 0.03, W * 0.05);
   k.runningLights(W * 0.505, W * 0.36, L * 0.2);
   k.markings2(W * 0.52, W * 0.43, -L * 0.1, W * 0.06);
-  k.rcsStation(L * 0.27, W * 0.31, W * 0.31, k.rcsS, { diag: true });
-  k.rcsStation(L * 0.38, W * 0.25, W * 0.25, k.rcsS, { diag: true });
+  k.rcsStation(L * 0.27, W * 0.32 - cb6 / 2, W * 0.32 - cb6 / 2, k.rcsS, { diag: true });
+  k.rcsStation(L * 0.38, W * 0.25 - cb5 / 2, W * 0.25 - cb5 / 2, k.rcsS, { diag: true });
   k.strobe(0, 0, L * 0.575, 0);
   for (const sx of [-1, 1]) for (const sy of [-1, 1]) k.formationLamp(sx * W * 0.36, sy * W * 0.36, L * 0.228);
   if (opts.siege) {
@@ -2100,14 +2271,15 @@ function hullDreadnought(k, opts = {}) {
   for (const sx of [-1, 1]) {
     for (const sy of [-1, 1]) {
       const a = Math.atan2(-sx, sy);   // local +Y -> (sx, sy) diagonal
-      k.radiator(rad.span, rad.len, sx * W * 0.52, sy * W * 0.52, -L * 0.33 + rad.len / 2 + L * 0.005, a);
+      // (on the sponson's outboard shoulder)
+      k.radiator(rad.span, rad.len, sx * W * 0.488, sy * W * 0.488, -L * 0.33 + rad.len / 2 + L * 0.005, a);
     }
   }
   // Faired sponson tails in livery: the flagship's colours from the chase
   // camera, and four armoured pods instead of four brick ends
   for (const sx of [-1, 1]) {
     for (const sy of [-1, 1]) {
-      k.endCap('paint', W * 0.32, W * 0.32, L * 0.05, sx * W * 0.36, sy * W * 0.36, -L * 0.34, -1, { tw: 0.58, th: 0.58 });
+      k.taper('paint', W * 0.32, W * 0.32, W * 0.19, W * 0.19, L * 0.05, sx * W * 0.36, sy * W * 0.36, -L * 0.34, { dir: -1 });
     }
   }
   k.drive = { shape: 'drum', r: W * 0.5 };

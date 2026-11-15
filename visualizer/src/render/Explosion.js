@@ -241,7 +241,7 @@ export function latestWreckEnd(deathInfo) {
 }
 const SHARD_FADE = [17, 22]; // small chunks fade out
 // Blasts born on a hull's skin: spall puffs are thrown along the surface normal
-const SURFACE_KINDS = new Set(['impact', 'pop', 'graze', 'pierce', 'kineticStrike', 'breach']);
+const SURFACE_KINDS = new Set(['impact', 'pop', 'graze', 'pierce', 'kineticStrike', 'breach', 'cookoff']);
 
 /** Blast presets (exported for tests: kinds and their durations). */
 export function blastKinds() { return KINDS; }
@@ -352,6 +352,18 @@ const KINDS = {
     streaks: 80, streakSpeed: [2, 8], streakLife: [0.5, 2], streakLen: 0.5, streakW: 0.02,
     puffs: 4, puffSize: [0.35, 0.7], puffSpeed: [0.3, 1.0], puffLife: 3.5,
     light: 6, lightLife: 0.7
+  },
+  // Magazine cook-off (recorded magazine_cookoff): stored rounds burning
+  // off through the flank - a hard flash, a jet of fire and burning debris
+  // thrown out along the hull normal, a longer-lived fireball than a mount
+  cookoff: {
+    duration: 5.5, flash: 3.2, flashFade: 0.16, screenFlash: 0.1, flashR: 2.4,
+    fireR: 1.0, fireGrow: 1.3, fireLife: 2.8, fireTurb: 0.8,
+    shellR: 0,
+    sparks: 760, sparkSpeed: [2, 14], sparkLife: [0.8, 3.6], sparkSize: 0.055,
+    streaks: 280, streakSpeed: [3, 13], streakLife: [0.6, 2.6], streakLen: 0.7, streakW: 0.024,
+    puffs: 8, puffSize: [0.5, 1.1], puffSpeed: [0.4, 1.5], puffLife: 4.5,
+    light: 11, lightLife: 0.9, cone: 0.6
   },
   // Hull fire pop on a dying ship
   pop: {

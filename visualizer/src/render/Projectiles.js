@@ -476,8 +476,11 @@ export class Projectiles {
     this.surfaceOffset(tr, torpedo, time, this.d);
     this.b.copy(target).add(this.d);
     this.beamRibbon(this.a, this.b, 0.85 * intensity, seed);
-    this.flashes.add(this.a, this.dir, 0.16, 0.38 * intensity);
+    // emitter glint at the lens, and the burn spot on the round: the laser's
+    // green over a white-hot contact point (the ablation sparks follow below)
+    this.flashes.add(this.a, this.dir, 0.2, 0.7 * intensity, 6, seed);
     this.flashes.add(this.b, this.dir, 0.2, 0.75 * intensity, 2, seed);
+    this.flashes.add(this.b, this.dir, 0.3, 0.6 * intensity, 6, seed);
     // Fixed birth cadence, sampled analytically; direct seeks retain spray.
     const cadence = 0.09, tick = Math.floor((time - seg.start) / cadence);
     this.dir.negate();

@@ -17,8 +17,8 @@ Three automatic mechanics, all resolved by the engine (no commander tools):
    it on nearby ships, dumps heat into their sinks, shreds extended radiators
    and exposed fittings, shortens the fuse of nearby dying hulks (chain
    reactions) and kills or blinds torpedoes flying through it. Friend and foe
-   alike; a blast never touches hull modules, so it cannot kill a healthy ship
-   on its own.
+   alike; a blast never touches hull modules and its heat pulse stops just
+   short of the meltdown line, so it cannot kill a healthy ship on its own.
 
 3. MAGAZINE COOK-OFF. A destroyed magazine module burns off part of the
    ship's remaining rounds (torpedoes on torpedo hulls, gun ammunition on gun
@@ -41,9 +41,11 @@ import sys
 try:
     from .combat import HitLocation
     from .modules import ModuleType
+    from .thermal import REACTOR_MELTDOWN_HEAT_FRACTION
 except ImportError:  # pragma: no cover - script-style import path
     from combat import HitLocation
     from modules import ModuleType
+    from thermal import REACTOR_MELTDOWN_HEAT_FRACTION
 
 if TYPE_CHECKING:  # pragma: no cover
     from .simulation import CombatSimulation, ShipCombatState
@@ -86,6 +88,14 @@ ENGINE_DAMAGE_PCT_PER_GJ = 15.0
 # fraction, capped at this factor (so a mount at 50% health or less fires at
 # half rate until it is wrecked).
 MOUNT_MAX_COOLDOWN_FACTOR = 2.0
+# A fitting left with less health than this is wrecked outright (0 %), so a
+# recorded health_pct of 0.0 always means destroyed.
+FITTING_DESTROYED_BELOW_PCT = 0.5
+
+
+def _remaining_health(before: float, loss: float) -> float:
+    after = max(0.0, before - loss)
+    return 0.0 if after < FITTING_DESTROYED_BELOW_PCT else after
 
 
 def mount_cooldown_factor(mount_health_pct: float) -> float:
@@ -173,7 +183,7 @@ def damage_fitting(
         return _damage_engine(sim, ship, state, health_loss_pct, cause,
                               source_ship_id, hit_location)
     before = state.mount_health
-    state.mount_health = max(0.0, before - health_loss_pct)
+    state.mount_health = _remaining_health(before, health_loss_pct)
     destroyed = state.mount_health <= 0.0
     if destroyed:
         state.is_operational = False
@@ -229,7 +239,7 @@ def damage_fitting(
         **extra,
     })
     if destroyed:
-        print(f"  !!! [{ship.ship_id}] {name} ({slot}) KNOCKED OUT ({cause})")
+        sim._echo(f"  !!! [{ship.ship_id}] {name} ({slot}) KNOCKED OUT ({cause})")
     return destroyed
 
 
@@ -245,7 +255,7 @@ def _damage_engine(
     """Surface damage to an engine module; thrust follows engine_effectiveness."""
     SimulationEventType = _event_types(sim)
     before = module.health_percent
-    module.health_percent = max(0.0, before - health_loss_pct)
+    module.health_percent = _remaining_health(before, health_loss_pct)
     destroyed = module.is_destroyed
     engines = ship._get_modules_by_type("engine")
     sim._log_event(SimulationEventType.MOUNT_DAMAGED, ship.ship_id, data={
@@ -267,7 +277,7 @@ def _damage_engine(
             'module_name': module.name,
             'cause': cause,
         })
-        print(f"  !!! [{ship.ship_id}] {module.name} WRECKED ({cause}) - "
+        sim._echo(f"  !!! [{ship.ship_id}] {module.name} WRECKED ({cause}) - "
               f"thrust {ship.engine_effectiveness * 100:.0f}%")
     return destroyed
 
@@ -340,6 +350,10 @@ REACTOR_BLAST_YIELD_GJ_PER_TON = 0.15
 REACTOR_BLAST_MAX_ARMOR_ABLATION_CM = 15.0
 # Heat dumped into the victim's sink at intensity 1.0 (GJ; sinks hold 320 GJ).
 REACTOR_BLAST_MAX_HEAT_GJ = 120.0
+# The pulse never takes a sink past this fraction of its rating - just under
+# REACTOR_MELTDOWN_HEAT_FRACTION - so a blast alone cannot cook a reactor off
+# (a ship that keeps heating itself afterwards still can).
+REACTOR_BLAST_HEAT_CEILING_FRACTION = REACTOR_MELTDOWN_HEAT_FRACTION - 0.01
 # Damage to each EXTENDED radiator panel at intensity 1.0 (GJ; a panel has
 # ~5 GJ of health). Retracted panels are shielded by the hull.
 REACTOR_BLAST_RADIATOR_DAMAGE_GJ = 6.0
@@ -435,6 +449,7 @@ def _resolve_blast(sim: "CombatSimulation", blast: dict) -> None:
             })
         elif d_km <= blind_km and not tf.is_disabled:
             tf.is_disabled = True
+            tf.blast_blinded = True
             # PD must not claim (or re-log) a seeker the blast killed.
             tf.seeker_kill_logged = True
             blinded_ids.append(tf.torpedo_id)
@@ -489,7 +504,12 @@ def _resolve_blast(sim: "CombatSimulation", blast: dict) -> None:
         thermal = ship.thermal_system
         if thermal is not None:
             heat_gj = intensity * REACTOR_BLAST_MAX_HEAT_GJ
-            thermal.add_heat('reactor_blast', heat_gj)
+            sink = thermal.heatsink
+            headroom_gj = (REACTOR_BLAST_HEAT_CEILING_FRACTION * sink.capacity_gj
+                           - sink.current_heat_gj)
+            heat_gj = max(0.0, min(heat_gj, headroom_gj))
+            if heat_gj > 0.0:
+                thermal.add_heat('reactor_blast', heat_gj)
             for position in sorted(thermal.radiators.radiators, key=lambda p: p.value):
                 if not thermal.is_radiator_extended(position):
                     continue
@@ -533,7 +553,7 @@ def _resolve_blast(sim: "CombatSimulation", blast: dict) -> None:
         'torpedoes_blinded': blinded_ids,
     })
     if ships_hit or destroyed_ids or blinded_ids:
-        print(f"  *** [{source_id}] REACTOR BLAST ({radius_km:.1f} km): "
+        sim._echo(f"  *** [{source_id}] REACTOR BLAST ({radius_km:.1f} km): "
               f"{len(ships_hit)} ships caught, {len(destroyed_ids)} torpedoes "
               f"destroyed, {len(blinded_ids)} blinded")
 
@@ -649,6 +669,87 @@ def resolve_magazine_cookoff(
         'modules_destroyed': wrecked,
         'source_ship_id': attacker_id,
     })
-    print(f"  !!! [{ship.ship_id}] MAGAZINE COOK-OFF ({module.name}): "
+    sim._echo(f"  !!! [{ship.ship_id}] MAGAZINE COOK-OFF ({module.name}): "
           f"{torpedoes_lost} torpedoes, {gun_rounds_lost} gun rounds lost, "
           f"{secondary_gj:.1f} GJ secondary")
+
+
+# =============================================================================
+# COMMANDER VIEWS
+# =============================================================================
+
+def damaged_fitting_lines(ship: "ShipCombatState") -> List[str]:
+    """One short status line per fitting that is damaged but still working
+    (wrecked ones already show as destroyed/LOST in every view), e.g.
+    'Coilgun Battery Mk3 [weapon_1] DAMAGED 46 %, cycle x2.0'."""
+    lines: List[str] = []
+    weapons = getattr(ship, "weapons", None)
+    for slot, ws in (weapons.items() if isinstance(weapons, dict) else ()):
+        health = getattr(ws, "mount_health", 100.0)
+        if (slot.startswith("pd") or not getattr(ws, "is_operational", True)
+                or not isinstance(health, (int, float)) or health >= 100.0):
+            continue
+        name = getattr(getattr(ws, "weapon", None), "name", None) or slot
+        if "torpedo" in name.lower():
+            name = "Torpedo Launcher"
+        lines.append(f"{name} [{slot}] DAMAGED {health:.0f} %, "
+                     f"cycle x{mount_cooldown_factor(health):.1f}")
+    turrets = getattr(ship, "point_defense", None)
+    for i, pd in enumerate(turrets if isinstance(turrets, (list, tuple)) else ()):
+        health = getattr(pd, "mount_health", 100.0)
+        if (not getattr(pd, "is_operational", True)
+                or not isinstance(health, (int, float)) or health >= 100.0):
+            continue
+        name = getattr(pd, "turret_name", None) or f"pd_{i}"
+        lines.append(f"PD Laser [{name}] DAMAGED {health:.0f} %, full output")
+    return lines
+
+
+# =============================================================================
+# COMBAT EFFECTIVENESS (victory rules)
+# =============================================================================
+
+def ship_can_deal_damage(ship: "ShipCombatState") -> bool:
+    """True while the ship itself can still hurt anyone: an operational gun
+    with ammunition, or a torpedo tube with rounds left. A destroyed, dying
+    or surrendered ship never can."""
+    if (getattr(ship, "is_destroyed", False) or getattr(ship, "is_dying", False)
+            or getattr(ship, "is_surrendered", False)):
+        return False
+    weapons = getattr(ship, "weapons", None)
+    for slot, ws in (weapons.items() if isinstance(weapons, dict) else ()):
+        if slot.startswith("pd") or not _is_gun(ws):
+            continue
+        ammo = getattr(ws, "ammo_remaining", 0)
+        if getattr(ws, "is_operational", True) and isinstance(ammo, (int, float)) and ammo > 0:
+            return True
+    launchers = getattr(ship, "ready_torpedo_launchers", None)
+    return any(isinstance(getattr(l, "current_magazine", 0), (int, float))
+               and l.current_magazine > 0
+               for l in (launchers if isinstance(launchers, (list, tuple)) else ()))
+
+
+def ship_disarmed_by_damage(ship: "ShipCombatState") -> bool:
+    """True when battle damage wrecked every gun mount and torpedo tube the
+    ship has. An intact ship that merely fired its magazines dry is NOT
+    disarmed by damage (spending ammunition must not cost score), and a hull
+    with no gun or tube at all is not either."""
+    weapons = getattr(ship, "weapons", None)
+    mounts = [ws for slot, ws in (weapons.items() if isinstance(weapons, dict) else ())
+              if not slot.startswith("pd") and (_is_gun(ws) or "torpedo" in
+              (getattr(getattr(ws, "weapon", None), "name", "") or "").lower())]
+    return bool(mounts) and not any(getattr(ws, "is_operational", True) is True
+                                    for ws in mounts)
+
+
+def side_can_deal_damage(sim: Any, ships: Any) -> bool:
+    """True while a fleet can still deal damage: one of its ships can, or a
+    round it already fired (torpedo or slug) is still in flight."""
+    ships = list(ships)
+    if any(ship_can_deal_damage(s) for s in ships):
+        return True
+    ids = {s.ship_id for s in ships}
+    if any(getattr(t, "source_ship_id", None) in ids for t in getattr(sim, "torpedoes", None) or []):
+        return True
+    return any(getattr(p, "source_ship_id", None) in ids
+               for p in getattr(sim, "projectiles", None) or [])

@@ -536,7 +536,8 @@ test('engine bells: a lathed bell on every plume seat, all liners one mesh, thro
     // the plume is seated at -0.53 L (SceneManager): inside the bell, ahead of its mouth
     const mouth = liner.boundingBox.min.z, throat = liner.boundingBox.max.z;
     assert.ok(mouth < -0.53 * k.L && mouth > -0.56 * k.L, `${type}: bell mouth at ${(mouth / k.L).toFixed(3)} L`);
-    assert.ok(throat > -0.5 * k.L && throat < -0.47 * k.L, `${type}: throat at ${(throat / k.L).toFixed(3)} L`);
+    // (the liner's throat is the injector plate, just proud of the thrust plate at -0.5 L)
+    assert.ok(throat > -0.503 * k.L && throat < -0.5 * k.L, `${type}: throat at ${(throat / k.L).toFixed(3)} L`);
     const pos = liner.attributes.position, uv = liner.attributes.uv;
     for (let i = 0; i < pos.count; i++) {
       // (the injector plate's core sits just proud of the thrust plate's aft face at -0.5 L)
@@ -554,7 +555,7 @@ test('engine bells: a lathed bell on every plume seat, all liners one mesh, thro
     }
     for (const e of cfg.positions) {
       const bell = k.parts.find(p => p.mat === 'barrel' && Math.hypot(p.center.x - e.x, p.center.y - e.y) < 1e-3 * k.W
-        && Math.abs(p.geom.boundingBox.min.z - mouth) < 0.004 * k.L && p.geom.boundingBox.max.z > throat - 0.004 * k.L);
+        && Math.abs(p.geom.boundingBox.min.z - mouth) < 0.004 * k.L && p.geom.boundingBox.max.z > -0.49 * k.L);
       assert.ok(bell, `${type}: no bell on the plume seat at ${e.x.toFixed(2)}, ${e.y.toFixed(2)}`);
     }
   }
