@@ -185,9 +185,10 @@ def test_score_matrix_is_antisymmetric_and_side_averaged(tourney, capsys):
 
 TORPEDO_HULLS = ("corvette", "cruiser_torpedo")
 # Points of gun hulls one LAUNCHED round destroyed in the tournament (massed
-# salvos of 3+ boats, 150 and 200 pts): 2.2 when rounds are left over, 4.6
-# against a battle line. The price of a round must sit inside that range.
-MEASURED_POINTS_DESTROYED_PER_ROUND = (2.2, 4.6)
+# salvos of 3+ boats, 150 and 200 pts): 2.2 when rounds are left over, 6.1 for
+# three boats against a battle line, 3-4 typically. A torpedo hull's all-in
+# price per stowed round must sit in the lower half of that range.
+MEASURED_POINTS_DESTROYED_PER_ROUND = (2.2, 6.1)
 
 
 def _rounds(hull, fleet_data):
@@ -200,7 +201,7 @@ def _rounds(hull, fleet_data):
 def test_a_torpedo_hull_costs_about_what_its_magazine_destroys(hull, fleet_data):
     lo, hi = MEASURED_POINTS_DESTROYED_PER_ROUND
     per_round = SHIP_POINT_COSTS[hull] / _rounds(hull, fleet_data)
-    assert lo <= per_round <= hi, f"{hull}: {per_round:.2f} pts per stowed round"
+    assert lo <= per_round <= (lo + hi) / 2, f"{hull}: {per_round:.2f} pts per stowed round"
 
 
 def test_torpedo_dial_moves_only_torpedo_hulls(tourney, fleet_data):

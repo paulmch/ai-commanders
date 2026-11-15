@@ -280,6 +280,314 @@ The single dial can only choose the least-bad plateau. The launch-rate term
 proposed above is now the gating change for balance that is robust across
 budgets.
 
+### 2026-11-15: pass-5 tournament (0.040 -> 0.102)
+
+Pass 5 changed the battlefield (fittings can be shot off, reactor blasts kill
+torpedoes) and the free commanders: the tactical heuristic captains mass and
+synchronise salvos and focus fire. The prices were re-measured with a new
+instrument, `scripts/draft_tournament.py`: a seeded round robin over seven
+fleet archetypes drafted to the same budget, every pairing fought in both side
+assignments, heuristic captains on both sides, no admirals, no LLM. 500 km
+start, 600 s limit, auto-draft's staggered wall for both fleets. Battles are
+cached by (engine source, rosters, seed), so re-scoring a price table only
+fights the pairings whose rosters it changed.
+
+```bash
+uv run python scripts/draft_tournament.py --budget 150,200 --seeds 2 --out t.jsonl
+uv run python scripts/draft_tournament.py --set TORPEDO_POINTS_PER_GJ=0.04 \
+    --budget 150 --seeds 2 --out t.jsonl               # any candidate price table
+uv run python scripts/draft_tournament.py --rows torpedo,swarm --seed-start 3 --seeds 2 --out t.jsonl
+uv run python scripts/draft_tournament.py --fleet three=corvette*3 \
+    --archetypes three,gunline,battleline --out t.jsonl   # explicit rosters
+```
+
+Archetypes: `torpedo`, `gunline`, `combined`, `flagship` are the four
+auto-draft doctrines (`auto_draft(doctrine=...)`); `battleline` (battleships,
+then destroyers), `escort` (two battleships behind a frigate PD screen) and
+`swarm` (corvettes to the hull cap) are explicit recipes.
+
+Cells are the row fleet's score, (W + D/2) / N, followed by how those battles
+ended: **A** one fleet annihilated, **T** time limit, decided on points.
+"Tonnage margin" is the share of the enemy's dry mass destroyed minus the
+share of the row fleet's own lost, averaged over its battles - it does not
+depend on any price.
+
+#### Before: 0.040 (corvette 18, cruiser_torpedo 65)
+
+**150 pts**, seeds 1-2 on the torpedo and swarm rows, seed 1 on the gun-v-gun cells:
+- **torpedo**: cruiser_torpedo, 4x corvette, frigate (144 pts)
+- **gunline**: 4x destroyer, 2x cruiser, 2x frigate (144 pts)
+- **combined**: 2x battleship, 2x destroyer, corvette (140 pts)
+- **flagship**: 2x dreadnought, 3x frigate, corvette (149 pts)
+- **battleline**: 3x battleship, destroyer (147 pts)
+- **escort**: 2x battleship, cruiser, 5x frigate (150 pts)
+- **swarm**: 8x corvette (144 pts)
+
+| row vs column | torp | gunl | comb | flag | bline | esc | swarm | field | tonnage margin |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| **torpedo** | - | 100% A | 100% A | 100% A | 100% A | 100% A | 0% A | 83% | +0.72 |
+| **gunline** | 0% A | - | 100% T | 100% T | 100% T | 25% T | 0% A | 39% | -0.29 |
+| **combined** | 0% A | 0% T | - | 50% T | 50% T | 0% T | 0% A | 12% | -0.52 |
+| **flagship** | 0% A | 0% T | 50% T | - | 0% T | 0% T | 0% A | 6% | -0.68 |
+| **battleline** | 0% A | 0% T | 50% T | 100% T | - | 0% T | 0% A | 19% | -0.52 |
+| **escort** | 0% A | 75% T | 100% T | 100% T | 100% T | - | 0% A | 50% | -0.39 |
+| **swarm** | 100% A | 100% A | 100% A | 100% A | 100% A | 100% A | - | 100% | +0.94 |
+
+n per cell: [2, 4], ended {'annihilation': 44, 'time limit': 22}, side check {'alpha': 34, 'beta': 32}, missing 18
+
+**200 pts**, seed 1:
+- **torpedo**: 2x cruiser_torpedo, 3x corvette, 2x frigate (198 pts)
+- **gunline**: 5x cruiser, 3x destroyer (199 pts)
+- **combined**: 2x battleship, 3x destroyer, 3x corvette (194 pts)
+- **flagship**: 2x dreadnought, 4x corvette, 2x frigate (196 pts)
+- **battleline**: 4x battleship, destroyer, frigate (197 pts)
+- **escort**: 4x battleship, 4x frigate (200 pts)
+- **swarm**: cruiser_torpedo, 7x corvette (191 pts)
+
+| row vs column | torp | gunl | comb | flag | bline | esc | swarm | field | tonnage margin |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| **torpedo** | - | 100% A | 100% A | 100% A | 100% A | 100% A | 0% A | 83% | +0.52 |
+| **gunline** | 0% A | - | 50% T | 50% T | 100% T | 50% T | 0% A | 42% | -0.30 |
+| **combined** | 0% A | 50% T | - | 100% T | 100% I | 100% T | 0% A | 58% | +0.04 |
+| **flagship** | 0% A | 50% T | 0% T | - | 100% IT | 100% T | 50% A | 50% | +0.24 |
+| **battleline** | 0% A | 0% T | 0% I | 0% IT | - | 50% T | 0% A | 8% | -0.65 |
+| **escort** | 0% A | 50% T | 0% T | 0% T | 50% T | - | 0% A | 17% | -0.53 |
+| **swarm** | 100% A | 100% A | 100% A | 50% A | 100% A | 100% A | - | 92% | +0.68 |
+
+n per cell: [2], ended {'annihilation': 22, 'time limit': 17, 'combat-ineffective': 3}, side check {'alpha': 18, 'beta': 24}, missing 0
+
+Cell sizes: at 150 pts four battles per cell on the torpedo and swarm rows
+(two seeds x two sides) and two on the gun-v-gun cells (seed 1; the 18
+seed-2 battles were not fought, a few cells have four); at 200 pts two per
+cell (seed 1). Almost every cell is the same both ways round and on every
+seed: these battles are close to deterministic, so a cell is 0% or 100%, not
+55%.
+
+#### Why (from the battle events)
+
+The torpedo fleets launch at the first checkpoint (t = 30 s, 500 km), their
+first rounds arrive at t = 97-104 s and the last gun hull dies at t = 140-175 s.
+Over the old-price battles of a pure torpedo fleet against a gun fleet (seeds
+1-2, 150 pts):
+
+| gun fleet (150 pts) | PD turrets | battles | rounds launched | hit | seeker blinded by PD | destroyed by PD | first hit | last kill | gun rounds fired | pts destroyed / lost |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| escort: 2 battleship + cruiser + 5 frigate | 18 | 4 | 64 | 31 (49%) | 12 (20%) | 0 | 101 s | 170 s | 0 | 150 / 0 |
+| gunline: 4 destroyer + 2 cruiser + 2 frigate | 16 | 4 | 64 | 32 (51%) | 12 (19%) | 0 | 99 s | 162 s | 0 | 144 / 0 |
+| battleline: 3 battleship + destroyer | 11 | 2 | 64 | 26 (41%) | 9 (14%) | 0 | 101 s | 173 s | 0 | 147 / 0 |
+
+(8 corvettes, or a torpedo cruiser + 4 corvettes + frigate, against the three
+gun fleets that carry no torpedo boat of their own. A hit delivers 26 GJ on
+average; a battleship dies to the first wave, one second after it lands.)
+
+- **The guns never fire.** Not one gun round was fired at a torpedo fleet in
+  those battles. Against the smaller corvette forces below, which cannot kill
+  everything, the battle runs to the time limit - still without a gun round,
+  the fleets 290-355 km apart at the end. A 150-pt gun fleet spends its whole
+  life under torpedo fire and none of it in gun range.
+- **Point defence blinds rounds but does not stop them.** PD never destroyed
+  a round in flight in any battle; it kills seekers. Against a thin salvo
+  (two boats) it blinds every round and nothing dies; against a massed one it
+  blinds a fraction, and rounds, blinded or not, still hit. An escort screen of 18
+  turrets blinded 12-15 of a 64-round strike and the fleet was annihilated.
+- **The salvo is a step function.** Corvettes against the 150-pt gun fleets,
+  points destroyed (old prices) and the verdict:
+
+  | corvettes | rounds | old price | escort (150) | combined (140) | flagship (149) | battleline (147) | gunline (144) | verdicts won |
+  |---:|---:|---:|---:|---:|---:|---:|---:|---:|
+  | 2 | 16 | 36 | 0 | 0 | 55 | 0 | 0 | 0 of 10 |
+  | 3 | 24 | 54 | 101 | 122 | 135 | 147 | 76 | 9 of 10 |
+  | 4 | 32 | 72 | 122 | 140 | 128 | 147 | 83 | 10 of 10 |
+  | 5 | 40 | 90 | 129 | 140 | 149 | 147 | 137 | 10 of 10 |
+  | 6 | 48 | 108 | 150 | 140 | 149 | 147 | 144 | 10 of 10 |
+  | 8 | 64 | 144 | 150 | 140 | 149 | 147 | 144 | 10 of 10 |
+
+  (points destroyed, mean of both side assignments; the fleet's size is in
+  the header.)
+
+  Two boats (6 rounds a wave) are blinded and beaten everywhere; three boats
+  (9 a wave) destroy half to all of a 150-pt fleet. The same step sits at
+  three boats against the 200-pt gun fleets. A round launched in a massed
+  salvo destroys 2.2-6.1 pts of gun hull - 2.2 when the enemy is dead before
+  the magazines are empty, 6.1 for three boats against a battle line, 3-4
+  typically, at 150 and at 200 pts alike. At 0.040 it cost 0.72 pts, 2.25
+  with its share of a corvette.
+- **A dry torpedo fleet is never caught and rarely ruled out.** Corvettes pull
+  3g; nothing but a frigate matches them. And the "fleet can no longer deal
+  damage" rule seldom fires for them: blinded and fuel-exhausted rounds stay
+  in the simulation as "in flight" (in the one battle inspected, 10 of 32 were
+  still there at 600 s with every magazine empty), so the battle runs to the
+  time limit and is scored on points - where killing a third of the enemy
+  without loss wins.
+
+#### The reprice
+
+Only the magazine term moved: 0.040 -> **0.102** pts per stowed GJ (0.72 ->
+1.84 per round). The rule, fixed before looking at any "after" result: a
+torpedo hull should cost about what its magazine destroys, at the low end of
+the measured range (gun fleets will close better once the captains' approach
+is fixed, and a torpedo cruiser is one hull to lose), inside a band where no
+price or roster flips.
+
+| Hull | old | new | rounds | pts per round, all-in |
+|------|----:|----:|-------:|----------------------:|
+| corvette | 18 | 27 | 8 | 3.4 |
+| cruiser_torpedo | 65 | 119 | 48 | 2.5 |
+
+All gun hulls keep their prices. 150 pts now buy five corvettes (40 rounds)
+instead of eight (64), or one torpedo cruiser and a corvette (56 rounds)
+instead of a torpedo cruiser and four corvettes (80). The band is
+0.0993-0.1060: inside it the corvette stays at 27 and the 150-pt torpedo
+doctrine stays "torpedo cruiser + corvette".
+
+#### After: 0.102 (corvette 27, cruiser_torpedo 119)
+
+Cells between two fleets whose rosters the reprice did not change (`gunline`,
+`battleline`, `escort` among themselves) are the same cached battles as in
+the "before" tables, not new evidence.
+
+**150 pts**, same seeds:
+- **torpedo**: cruiser_torpedo, corvette (146 pts)
+- **gunline**: 4x destroyer, 2x cruiser, 2x frigate (144 pts)
+- **combined**: 2x battleship, 2x destroyer, corvette (149 pts)
+- **flagship**: 2x dreadnought, frigate, corvette (144 pts)
+- **battleline**: 3x battleship, destroyer (147 pts)
+- **escort**: 2x battleship, cruiser, 5x frigate (150 pts)
+- **swarm**: 5x corvette, 2x frigate (149 pts)
+
+| row vs column | torp | gunl | comb | flag | bline | esc | swarm | field | tonnage margin |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| **torpedo** | - | 100% A | 50% A | 0% A | 100% A | 100% A | 0% A | 58% | +0.35 |
+| **gunline** | 0% A | - | 100% T | 100% T | 100% T | 25% T | 0% A | 39% | -0.29 |
+| **combined** | 50% A | 0% T | - | 100% T | 50% T | 0% T | 0% A | 31% | -0.20 |
+| **flagship** | 100% A | 0% T | 0% T | - | 0% T | 0% T | 0% A | 25% | -0.45 |
+| **battleline** | 0% A | 0% T | 50% T | 100% T | - | 0% T | 0% A | 19% | -0.51 |
+| **escort** | 0% A | 75% T | 100% T | 100% T | 100% T | - | 0% T | 50% | -0.30 |
+| **swarm** | 100% A | 100% A | 100% A | 100% A | 100% A | 100% T | - | 100% | +0.87 |
+
+n per cell: [2, 4], ended {'annihilation': 40, 'time limit': 26}, side check {'alpha': 31, 'beta': 31}, missing 18
+
+**200 pts**, seed 1:
+- **torpedo**: cruiser_torpedo, 2x corvette, 3x frigate (194 pts)
+- **gunline**: 5x cruiser, 3x destroyer (199 pts)
+- **combined**: 2x battleship, 3x destroyer, 2x corvette (194 pts)
+- **flagship**: 2x dreadnought, 4x frigate, 2x corvette (192 pts)
+- **battleline**: 4x battleship, destroyer, frigate (197 pts)
+- **escort**: 4x battleship, 4x frigate (200 pts)
+- **swarm**: 7x corvette, frigate (196 pts)
+
+| row vs column | torp | gunl | comb | flag | bline | esc | swarm | field | tonnage margin |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| **torpedo** | - | 100% A | 100% T | 100% T | 100% A | 100% A | 0% AT | 83% | +0.62 |
+| **gunline** | 0% A | - | 100% T | 100% T | 100% T | 50% T | 0% A | 58% | -0.12 |
+| **combined** | 0% T | 0% T | - | 100% T | 100% T | 0% T | 0% T | 33% | -0.12 |
+| **flagship** | 0% T | 0% T | 0% T | - | 0% T | 0% T | 0% T | 0% | -0.61 |
+| **battleline** | 0% A | 0% T | 0% T | 100% T | - | 50% T | 0% A | 25% | -0.36 |
+| **escort** | 0% A | 50% T | 100% T | 100% T | 50% T | - | 0% T | 50% | -0.19 |
+| **swarm** | 100% AT | 100% A | 100% T | 100% T | 100% A | 100% T | - | 100% | +0.79 |
+
+n per cell: [2], ended {'annihilation': 11, 'time limit': 31}, side check {'alpha': 21, 'beta': 21}, missing 0
+
+**Held-out seeds 3-4** (150 pts, torpedo and swarm rows; not looked at before the price was fixed):
+
+Before:
+
+| row vs column | torp | gunl | comb | flag | bline | esc | swarm | field | tonnage margin |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| **torpedo** | - | 100% A | 100% A | 100% A | 100% A | 100% A | 0% A | 83% | +0.71 |
+| **gunline** | 0% A | - | - | - | - | - | 0% AI | 0% | -0.98 |
+| **combined** | 0% A | - | - | - | - | - | 0% A | 0% | -0.93 |
+| **flagship** | 0% A | - | - | - | - | - | 0% A | 0% | -1.00 |
+| **battleline** | 0% A | - | - | - | - | - | 0% AI | 0% | -0.93 |
+| **escort** | 0% A | - | - | - | - | - | 0% AI | 0% | -0.99 |
+| **swarm** | 100% A | 100% AI | 100% A | 100% A | 100% AI | 100% AI | - | 100% | +0.91 |
+
+n per cell: [4], ended {'annihilation': 40, 'combat-ineffective': 4}, side check {'alpha': 22, 'beta': 22}, missing 0
+
+After:
+
+| row vs column | torp | gunl | comb | flag | bline | esc | swarm | field | tonnage margin |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| **torpedo** | - | 100% A | 38% A | 50% A | 100% A | 100% A | 0% A | 65% | +0.40 |
+| **gunline** | 0% A | - | - | - | - | - | 0% A | 0% | -1.00 |
+| **combined** | 62% A | - | - | - | - | - | 0% A | 31% | -0.45 |
+| **flagship** | 50% A | - | - | - | - | - | 0% A | 25% | -0.48 |
+| **battleline** | 0% A | - | - | - | - | - | 0% A | 0% | -1.00 |
+| **escort** | 0% A | - | - | - | - | - | 0% T | 0% | -0.88 |
+| **swarm** | 100% A | 100% A | 100% A | 100% A | 100% A | 100% T | - | 100% | +0.87 |
+
+n per cell: [4], ended {'annihilation': 40, 'time limit': 4}, side check {'alpha': 21, 'beta': 20}, missing 0
+
+#### What price did not fix, and cannot
+
+The reprice helped at one budget out of three. At 150 pts the torpedo
+doctrine fell from 83% of the field to 58% (65% on the held-out seeds) and now
+loses to or splits with the mixed fleets that carry a corvette of their own;
+150 pts no longer buy enough rounds to annihilate every gun fleet with rounds
+to spare; and the fleet two LLM admirals drafted in August (five torpedo
+cruisers at 150 pts) now costs 595. It does **not** meet the goal (no pairing
+above ~65%, no fleet above ~60% of the field), and no price can on this
+engine:
+
+- **The corvette swarm still wins every pairing**, at 100, 150 and 200 pts,
+  on the tuning and the held-out seeds. Against gun fleets three boats are
+  enough to win and two never are (measured at 150 and 200 pts), so the
+  verdict flips only when three no longer fit: above 50 pts per corvette at
+  150 pts and 66 at 200 - past a battleship's 43, and a different price at
+  every budget (by the same arithmetic 33 at 100 pts, not measured). A price
+  moves the round count smoothly; the result is a step.
+- **200 pts, the budget the price was not chosen on, did not improve.** The
+  torpedo doctrine still fields 64 rounds (83% before and after) and the
+  swarm 56 (92% -> 100%). What moved is the rest of the field: `combined`
+  fell from 58% to 33% and `flagship` from 50% to 0%, because auto-draft now
+  buys each of them two corvettes instead of three and four - below the
+  three-boat step, so 54 pts of dead weight - while `gunline` rose from 42% to
+  58%, `escort` from 17% to 50% and `battleline` from 8% to 25%. A corvette
+  is now worth buying in threes or not at all; the mixed auto-draft doctrines
+  have not been taught that.
+- **100 pts, the default budget, did not improve either** (seeds 1-2, torpedo
+  and swarm rows only). The old prices bought a torpedo cruiser + corvette +
+  2 frigates (83%) or five corvettes + frigate (100%); the new ones buy three
+  corvettes + 2 frigates under either doctrine, and that fleet wins all five
+  pairings, four by annihilation. A torpedo cruiser (119) can no longer be
+  drafted at 100 pts at all.
+- **Cells are 0% or 100%.** The same archetype wins both side assignments on
+  every seed in all but the torpedo-v-mixed cells, so "no pairing above 65%"
+  is not something a price table can deliver; only the field score and the
+  rock-paper-scissors shape are.
+- **Gun fleets are not level among themselves either**, and were not
+  repriced: at 150 pts every battle among the five fleets that are not
+  torpedo fleets ran to the time limit, where (old prices, seed 1, those
+  cells only) the frigate-screened `escort` took 100%, `gunline` 75%,
+  `battleline` 38%, `combined` 25% and the dreadnought `flagship` 12% - two
+  battles a cell, a lead, not a measurement. Time-limit verdicts
+  are scored with `SHIP_CLASS_VALUES` (`src/llm/battle_runner.py`), which
+  values a 7-pt frigate at 15 and a 55-pt dreadnought at 70.
+
+What has to change is mechanical, not a price (none of it is in this file's
+reach):
+
+1. Point defence does not protect. It never destroys a round, and a blinded
+   round still hits more often than not once the salvo is massed (18 turrets:
+   20% of a 64-round strike blinded, 49% of it hit).
+2. Gun ships never bring a torpedo boat to action: zero gun rounds in 600 s,
+   290-355 km apart at the end.
+3. A fleet with empty tubes stays "able to deal damage" while its duds drift
+   (one battle inspected: 10 of 32 rounds still in the simulation at 600 s,
+   magazines empty), so it is rarely ruled combat-ineffective - 10 of the
+   534 battles fought for this section ended that way - and
+   otherwise wins the time limit on points.
+4. A full salvo launched at 500 km at the first checkpoint arrives intact;
+   range costs a torpedo nothing.
+
+Until then treat the torpedo prices as a floor, and the **A** cells above as
+the robust part of the matrix: annihilation before the first gun round does
+not depend on the captains' approach or on the scoring. The **T** cells do.
+
+Re-run the tournament after any change to torpedo guidance, point defence,
+the captains' approach or the time-limit scoring; the engine-source hash in
+the cache key makes that automatic.
+
 ## Cheap AI captains (src/llm/heuristic_captain.py)
 
 Ships whose config model is the sentinel `"heuristic"` get a rule-based

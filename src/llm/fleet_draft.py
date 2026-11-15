@@ -72,9 +72,10 @@ GUN_POINTS_PER_GJ_PER_S = 8.0
 #   - 144 pts of corvettes (8 hulls, 64 rounds) annihilated every 150-pt gun
 #     fleet without loss; so did 108 pts (6 hulls), and 54 pts (3 hulls, 24
 #     rounds) still destroyed 76-147 pts of each;
-#   - a launched round destroyed 2.2-4.6 pts of gun hulls (3.1 on average when
-#     there was enough left to kill), at 150 and at 200 pts alike, while it
-#     cost 0.72 pts - 2.25 with its share of the corvette around it.
+#   - a launched round destroyed 2.2-6.1 pts of gun hulls (2.2 with rounds
+#     left over, 6.1 for three boats against a battle line, 3-4 typically), at
+#     150 and at 200 pts alike, while it cost 0.72 pts - 2.25 with its share
+#     of the corvette around it.
 # The magazine is therefore priced so that a torpedo hull costs about what
 # its rounds destroy, at the LOW end of that range (gun fleets are about to
 # close better, and a torpedo cruiser is one hull to lose): 8 rounds on a
