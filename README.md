@@ -141,6 +141,17 @@ uv run python scripts/run_live_draft_battle.py \
   --spend-limit 8
 ```
 
+For Claude models on the Anthropic API directly, add `ANTHROPIC_API_KEY=...` to `.env` and use bare Anthropic ids; `vendor/model` ids (including `anthropic/claude-sonnet-5`) keep going through OpenRouter, and the two sides may mix providers:
+
+```bash
+uv run python scripts/run_live_draft_battle.py \
+  --alpha-model claude-sonnet-5-5 \
+  --beta-model claude-sonnet-5 \
+  --points 150 --turns 40 --reasoning medium --spend-limit 20
+```
+
+`--reasoning` is sent as the effort setting on every request of both sides (adaptive thinking, no sampling parameters). Spend is computed from token usage with the dated price table in `src/llm/anthropic_client.py`; the system prompt is cached with a 1-hour breakpoint. A refused turn issues no orders, is recorded as a `model_refusal` event, and is never re-run on another model. The recording's `provenance.llm` names the provider, exact model id, effort and SDK/API version of each side. `--mock-llm` runs the same path offline.
+
 Open **[the live viewer](http://localhost:5173/?live=1&decisions=1)** before the draft finishes. It shows each sealed draft as it commits, with the admiral's reasoning and formation, then switches to the battle automatically.
 
 ![The live draft splash: both fleets committed, Claude Sonnet 5's eight corvettes beside DeepSeek's battleship line, with formation plots and each admiral's reasoning](docs/images/readme/draft-splash.png)
