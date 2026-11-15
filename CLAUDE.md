@@ -61,6 +61,8 @@ ai-commanders/
 │   ├── damage.py / modules.py / geometry.py / thermal.py / power.py
 │   ├── battle_damage.py    # damage consequences: surface fittings (mounts, PD,
 │   │                       # tubes, drive), reactor blast, magazine cook-off
+│   ├── drive_plume.py      # drive plume wash: heat/armour/fittings for ships in a
+│   │                       # burning torch's exhaust cone (no RNG, one snapshot per tick)
 │   ├── trajectory_prediction.py  # movement-only shadow sim -> per-frame sim_trace 'plan'
 │   └── llm/                # OpenRouter client, captain/admiral agents (+vision),
 │                           # draft mode + heuristic captains, prompts, tools,
@@ -120,6 +122,23 @@ ai-commanders/
   destroyed magazine burns half the rounds and blows non-critical neighbours.
   These rolls use `CombatSimulation._damage_rng` (seed-derived), never the
   battle RNG that decides hits
+- Drive plume wash (`src/drive_plume.py`, `tests/test_drive_plume.py`, recorded as
+  `plume_wash` per `docs/pass-5-recording-additions.md`): a burning torch (300 TW
+  jet, the same on every hull) washes any ship within 7.5° of dead astern out to
+  100 km - on axis at full burn 40 GJ/s at 5 km, 16 at 10 km, 4.7 at 20 km, 0.8
+  at 50 km (Gaussian 3° core, scaled by the throttle actually produced); above
+  4 GJ/s it also burns armour and fittings off the washed facing. Heat stops at
+  149% (never a kill by itself). A turning emitter sweeps its jet (axis sampled
+  every 1.5° between ticks, so a sweep cannot tunnel past a ship). Crew
+  radiation dose (`crew_dose_sv`, permanent): wash rate x 0.03 Sv/GJ x
+  exp(-armour cm / 100) on the washed facing; 2 Sv = impaired (guns and tubes
+  cycle x1.5), 8 Sv = incapacitated (`crew_incapacitated`: coasts, never fires,
+  cannot deal damage for the victory rule); `crew_radiation` events. No RNG,
+  order-independent, off in the torpedo forecast shadow
+  (`sim.plume_wash_enabled`). Torpedoes are affected only behind
+  `PLUME_AFFECTS_TORPEDOES` (off). Tactical heuristic captains ease the drive
+  for a friendly astern (`heuristic_tactics.plume_safe_throttle`); commanders
+  see PLUME WASH / PLUME RISK status lines
 - Two-stage kills: a non-reactor killing blow leaves an untargetable dying hulk
   (tumbling, torch sputtering) that detonates 0-30 s later; hits on the hulk
   shorten the fuse, a reactor hit detonates it at once (`test_dying_ships.py`)
@@ -259,6 +278,15 @@ torpedo-armed hulls; all others fight with coilguns.
   (harness + table) and regenerate the fixture; the doctrine P(hit) table is bound by
   `tests/test_prompt_structure.py`. Known residual: LLM fleets dodging a whole fleet's
   fire were hit even less than forecast (firecontrol.JINK_ACCEL_FRACTION).
+- Side symmetry: the engine must not care which fleet is alpha or was added
+  first. `CombatSimulation.step()` resolves weapons fire, point defence and
+  the ship updates (`_update_ships`: every ship steers on the start-of-step
+  state of the others, new states are staged and installed together) each from
+  one snapshot. `tests/test_side_symmetry.py` pins it exactly: mirrored
+  RNG-free (or flat-RNG) engagements stay mirror images and do not depend on
+  insertion order. Per-tick logic that reads another ship must never see a
+  ship already updated this tick (a mirrored HOLD_RANGE pair used to split
+  into CLOSE and HOLD that way, and mirror battles went to one side by roster).
 - After any armor or damage-model change, regenerate the combat tables in
   `docs/ships.md` with `uv run python scripts/calculate_shots_to_kill.py`.
 - Draft point costs are DERIVED from `data/fleet_ships.json`, not hand-typed

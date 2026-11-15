@@ -316,6 +316,10 @@ class HeuristicCaptain(LLMCaptain):
         else:
             args = self._tactical_maneuver(ship, ship_id, target, enemies, plan, my_role, threat)
             args["throttle"] = self._heat_throttle_cap(ship, heat, args["throttle"], threat)
+            # ...and do not cook a friendly astern with the torch (src/drive_plume.py).
+            aim = args.get("direction") if args.get("maneuver_type") == "HEADING" else None
+            args["throttle"] = tactics.plume_safe_throttle(
+                simulation, ship, args["throttle"], threat, aim)
             if args.get("maneuver_type") == "HEADING":
                 args.pop("maneuver_type")
                 calls.append(("set_heading", args))

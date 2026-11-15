@@ -28,6 +28,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .client import LLMCallError
 
+try:
+    from ..drive_plume import formation_plume_conflicts
+except ImportError:  # pragma: no cover - script-style import path
+    from drive_plume import formation_plume_conflicts
+
 # ---------------------------------------------------------------------------
 # Point costs
 # ---------------------------------------------------------------------------
@@ -479,10 +484,14 @@ def apply_formation(
         for cy in candidates:
             if abs(cy) <= clamp and all(
                 math.dist((x, cy, z), other.offset_km) >= MIN_SEPARATION_KM
+                # ...and out of each other's drive plume when the fleet
+                # burns straight ahead (src/drive_plume.py).
+                and not formation_plume_conflicts([(x, cy, z), other.offset_km])
                 for other in drafted[:i]
             ):
                 if (x, cy, z) != ship.offset_km:
-                    notes.append(f"nudged {ship.ship_name} to a separated slot inside the formation cube")
+                    notes.append(f"nudged {ship.ship_name} to a separated slot inside the formation cube"
+                                 " (clear of friendly drive plumes)")
                 ship.offset_km = (x, cy, z)
                 break
         else:

@@ -168,6 +168,9 @@ def fly_torpedo(
         # used to print MODULE DESTROYED / MORTALLY WOUNDED into the battle
         # log ~70 times per battle.
         shadow.echo = False
+        # ...and no drive-plume wash: the forecast's throw-away ships must
+        # not cook each other (src/drive_plume.py).
+        shadow.plume_wash_enabled = False
         sh = _clone(shooter, "shooter", "alpha", fleet_data)
         tg = _clone(target, "target", "beta", fleet_data)
     except Exception:  # noqa: BLE001 - advisory only, never fail a decision
