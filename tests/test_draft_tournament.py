@@ -246,3 +246,70 @@ def test_torpedo_price_sits_inside_its_plateau(tourney):
                 boats = [[h for h in tourney.draft_roster(archetype, budget, costs, 8)
                           if h in TORPEDO_HULLS] for costs in (near, here)]
                 assert boats[0] == boats[1], (factor, budget, archetype)
+
+
+# ---------------------------------------------------------------------------
+# Pass-5 round 2, mechanic 3: spent rounds do not keep a fleet "in the fight"
+# ---------------------------------------------------------------------------
+
+def _spent_sim():
+    from tests.test_fixes_pass5_hunt import _inject_torpedo, _torpedo_sim
+    data = json.loads((ROOT / "data" / "fleet_ships.json").read_text())
+    return _torpedo_sim(data), _inject_torpedo
+
+
+def _left_battle(sim):
+    from src.simulation import SimulationEventType
+    return [e for e in sim.events if e.event_type == SimulationEventType.PROJECTILE_MISS
+            and e.data.get("reason") == "left_battle"]
+
+
+def test_a_blinded_round_opening_past_the_cull_range_is_culled_as_a_miss():
+    from src.physics import Vector3D
+    sim, inject = _spent_sim()
+    far = sim.SPENT_TORPEDO_CULL_RANGE_M + 50_000.0
+    inject(sim, Vector3D(far, 0, 0), Vector3D(14_000.0, 0, 0), disabled=True)
+    sim.step()
+    assert not sim.torpedoes
+    assert len(_left_battle(sim)) == 1
+
+
+def test_a_blinded_round_still_inbound_or_still_close_is_kept():
+    from src.physics import Vector3D
+    sim, inject = _spent_sim()
+    far = sim.SPENT_TORPEDO_CULL_RANGE_M + 50_000.0
+    # inbound from far away: still closing on the target
+    inject(sim, Vector3D(far, 0, 0), Vector3D(-14_000.0, 0, 0), disabled=True)
+    sim.step()
+    assert len(sim.torpedoes) == 1 and not _left_battle(sim)
+    sim, inject = _spent_sim()
+    # opening, but only 100 km past the nearest hull
+    inject(sim, Vector3D(100_000.0, 0, 0), Vector3D(14_000.0, 0, 0), disabled=True)
+    sim.step()
+    assert len(sim.torpedoes) == 1 and not _left_battle(sim)
+
+
+def test_a_live_round_is_never_culled_as_spent():
+    from src.physics import Vector3D
+    sim, inject = _spent_sim()
+    far = sim.SPENT_TORPEDO_CULL_RANGE_M + 50_000.0
+    flight = inject(sim, Vector3D(far, 0, 0), Vector3D(14_000.0, 0, 0), disabled=False)
+    assert not sim._torpedo_is_spent(flight)     # fuel aboard, seeker alive, target alive
+    flight.torpedo.fuel_exhausted = True
+    assert sim._torpedo_is_spent(flight)         # dry tanks, opening, out of reach
+
+
+def test_a_fleet_whose_only_rounds_are_spent_can_no_longer_deal_damage():
+    """The combat-ineffective rule's "a round of its own still in flight" now
+    means a round that can still reach something."""
+    from src.battle_damage import side_can_deal_damage
+    from src.physics import Vector3D
+    sim, inject = _spent_sim()
+    atk = sim.get_ship("atk")
+    for ws in atk.weapons.values():          # guns dry: only the round is left
+        ws.ammo_remaining = 0
+    far = sim.SPENT_TORPEDO_CULL_RANGE_M + 50_000.0
+    inject(sim, Vector3D(far, 0, 0), Vector3D(14_000.0, 0, 0), disabled=True)
+    assert side_can_deal_damage(sim, [atk])
+    sim.step()
+    assert not side_can_deal_damage(sim, [atk])
