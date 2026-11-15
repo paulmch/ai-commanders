@@ -2132,6 +2132,12 @@ class CombatSimulation:
         thermal = ship.thermal_system
         if thermal is None:
             return
+        # In a drive plume stronger than the array could reject, extending
+        # would only feed the panels to the jet (src/drive_plume.py): the
+        # ladder does not force them out and 'auto' does not move them. State
+        # of the previous tick's wash, the same for every ship.
+        if drive_plume.radiators_in_jet(self, ship):
+            return
         if thermal.radiators_forced:
             self._set_radiators(ship, True, reason='heat_limit')
             return
