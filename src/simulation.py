@@ -6734,32 +6734,42 @@ class CombatSimulation:
             return targets
 
         # Assess all projectiles (slugs)
+        # This loop runs ships x slugs x allies every tick, and nearly every
+        # slug is rejected. Nothing moves while the list is built, so each
+        # ship's position/velocity is read once (they are property chains),
+        # and the range is only worked out for the slugs that are kept.
+        ship_pos = ship.position
+        ship_vel = ship.velocity
+        ship_faction = ship.faction
+        ally_states = [(ally, ally.position, ally.velocity) for ally in allied_ships]
+        on_collision_course = self._on_collision_course
         for proj_flight in self.projectiles:
             # Don't target own faction's projectiles
             source_ship = self.get_ship(proj_flight.source_ship_id)
-            if source_ship and source_ship.faction == ship.faction:
+            if source_ship and source_ship.faction == ship_faction:
                 continue
 
             proj = proj_flight.projectile
-            distance_m = proj.position.distance_to(ship.position)
-            distance_km = distance_m / 1000
+            proj_pos = proj.position
+            proj_vel = proj.velocity
 
             # Check collision course with self
-            on_collision_self = self._on_collision_course(
-                proj.position, proj.velocity, ship.position, ship.velocity
-            )
+            on_collision_self = on_collision_course(proj_pos, proj_vel, ship_pos, ship_vel)
 
             # Check collision course with allies
             threatens_ally = False
             allied_target = None
-            for ally in allied_ships:
-                if self._on_collision_course(proj.position, proj.velocity, ally.position, ally.velocity):
+            for ally, ally_pos, ally_vel in ally_states:
+                if on_collision_course(proj_pos, proj_vel, ally_pos, ally_vel):
                     threatens_ally = True
                     allied_target = ally
                     break
 
             if not (on_collision_self or threatens_ally):
                 continue
+
+            distance_m = proj_pos.distance_to(ship_pos)
+            distance_km = distance_m / 1000
 
             if on_collision_self:
                 priority = self.PD_PRIORITY_SLUG_INTERCEPT
