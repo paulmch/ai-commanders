@@ -703,3 +703,40 @@ def damaged_fitting_lines(ship: "ShipCombatState") -> List[str]:
         name = getattr(pd, "turret_name", None) or f"pd_{i}"
         lines.append(f"PD Laser [{name}] DAMAGED {health:.0f} %, full output")
     return lines
+
+
+# =============================================================================
+# COMBAT EFFECTIVENESS (victory rules)
+# =============================================================================
+
+def ship_can_deal_damage(ship: "ShipCombatState") -> bool:
+    """True while the ship itself can still hurt anyone: an operational gun
+    with ammunition, or a torpedo tube with rounds left. A destroyed, dying
+    or surrendered ship never can."""
+    if (getattr(ship, "is_destroyed", False) or getattr(ship, "is_dying", False)
+            or getattr(ship, "is_surrendered", False)):
+        return False
+    weapons = getattr(ship, "weapons", None)
+    for slot, ws in (weapons.items() if isinstance(weapons, dict) else ()):
+        if slot.startswith("pd") or not _is_gun(ws):
+            continue
+        ammo = getattr(ws, "ammo_remaining", 0)
+        if getattr(ws, "is_operational", True) and isinstance(ammo, (int, float)) and ammo > 0:
+            return True
+    launchers = getattr(ship, "ready_torpedo_launchers", None)
+    return any(isinstance(getattr(l, "current_magazine", 0), (int, float))
+               and l.current_magazine > 0
+               for l in (launchers if isinstance(launchers, (list, tuple)) else ()))
+
+
+def side_can_deal_damage(sim: Any, ships: Any) -> bool:
+    """True while a fleet can still deal damage: one of its ships can, or a
+    round it already fired (torpedo or slug) is still in flight."""
+    ships = list(ships)
+    if any(ship_can_deal_damage(s) for s in ships):
+        return True
+    ids = {s.ship_id for s in ships}
+    if any(getattr(t, "source_ship_id", None) in ids for t in getattr(sim, "torpedoes", None) or []):
+        return True
+    return any(getattr(p, "source_ship_id", None) in ids
+               for p in getattr(sim, "projectiles", None) or [])

@@ -343,3 +343,123 @@ def test_captain_admiral_and_mcp_views_show_degraded_fittings():
     blob = json.dumps(state.friendly_ships, default=str)
     assert gun_line in blob and tube_line in blob
     assert '"mount_health_pct": 46.0' in blob and '"cycle_factor": 2.0' in blob
+
+
+# ---------------------------------------------------------------------------
+# Finding 7: combat-ineffective fleets
+# ---------------------------------------------------------------------------
+
+def _fleet_runner(alpha_types, beta_types, **options):
+    from unittest.mock import Mock
+
+    from src.llm.battle_runner import BattleConfig, LLMBattleRunner, load_fleet_data
+    from src.llm.captain import LLMCaptainConfig
+    from src.llm.fleet_config import BattleFleetConfig
+
+    config = BattleFleetConfig.from_dict({
+        "alpha_fleet": {"ships": [{"ship_type": t, "model": "heuristic"} for t in alpha_types]},
+        "beta_fleet": {"ships": [{"ship_type": t, "model": "heuristic"} for t in beta_types]},
+        "record_battle": False, "personality_selection": False,
+        "seed": 5, **options,
+    })
+    runner = LLMBattleRunner(
+        BattleConfig.from_fleet_config(config, verbose=False),
+        LLMCaptainConfig("A", "A"), LLMCaptainConfig("B", "B"), Mock(), config,
+    )
+    runner.setup_fleet_battle(load_fleet_data("data/fleet_ships.json"))
+    return runner
+
+
+def _disarm(sim, ship):
+    """Every gun mount and torpedo tube wrecked (PD and drive untouched)."""
+    for fitting in bd._gun_fittings(ship, None) + bd._launcher_fittings(ship):
+        bd.damage_fitting(sim, ship, fitting, 100.0, "surface_hit", "x", HitLocation.LATERAL)
+
+
+def _set_adrift(sim, ship):
+    for module in ship._get_modules_by_type("engine"):
+        bd.damage_fitting(sim, ship, ("engine", module.name, module), 100.0,
+                          "surface_hit", "x", HitLocation.TAIL)
+
+
+def test_disarmed_and_adrift_survivors_score_less_at_the_time_limit():
+    from src.llm.battle_runner import (ADRIFT_SHIP_SCORE_FACTOR,
+                                       DISARMED_SHIP_SCORE_FACTOR,
+                                       surviving_ship_score_factor)
+
+    runner = _fleet_runner(["cruiser", "cruiser"], ["cruiser", "cruiser"])
+    sim = runner.simulation
+    a1, a2 = runner.alpha_ships["alpha_1"], runner.alpha_ships["alpha_2"]
+    assert surviving_ship_score_factor(a1) == 1.0
+    outcome, _, reason = runner._evaluate_fleet_tactical_advantage()
+    assert outcome.value == "draw", reason          # mirror fleets, untouched
+    _disarm(sim, a1)
+    _set_adrift(sim, a2)
+    assert a1.hull_integrity == 100.0               # the hulls look intact...
+    assert surviving_ship_score_factor(a1) == DISARMED_SHIP_SCORE_FACTOR
+    assert surviving_ship_score_factor(a2) == ADRIFT_SHIP_SCORE_FACTOR
+    outcome, winner, reason = runner._evaluate_fleet_tactical_advantage()
+    assert winner == "beta", reason                 # ...but alpha can barely fight
+
+
+def test_fleet_battle_ends_when_one_side_can_no_longer_deal_damage():
+    runner = _fleet_runner(["corvette", "frigate"], ["destroyer"])
+    sim = runner.simulation
+    assert not runner._is_fleet_battle_over()       # latches: both armed at start
+    for ship in runner.alpha_ships.values():
+        _disarm(sim, ship)
+    assert runner._is_fleet_battle_over()
+    result = runner._evaluate_fleet_result()
+    assert result.winner == "beta"
+    assert "Alpha fleet combat-ineffective" in result.reason
+
+
+def test_a_torpedo_still_in_flight_keeps_its_fleet_in_the_fight():
+    runner = _fleet_runner(["corvette"], ["destroyer"])
+    sim = runner.simulation
+    assert not runner._is_fleet_battle_over()
+    corvette = runner.alpha_ships["alpha_1"]
+    flight = _torpedo_flight(sim, Vector3D(1e5, 0, 0), Vector3D(0, 0, 0), "beta_1")
+    flight.source_ship_id = corvette.ship_id
+    _disarm(sim, corvette)
+    assert not runner._is_fleet_battle_over()
+    sim.torpedoes.remove(flight)
+    assert runner._is_fleet_battle_over()
+
+
+def test_both_fleets_combat_ineffective_ends_on_points():
+    runner = _fleet_runner(["frigate"], ["frigate"])
+    sim = runner.simulation
+    assert not runner._is_fleet_battle_over()
+    for ship in list(runner.alpha_ships.values()) + list(runner.beta_ships.values()):
+        _disarm(sim, ship)
+    assert runner._is_fleet_battle_over()
+    result = runner._evaluate_fleet_result()
+    assert result.reason.startswith("Both fleets combat-ineffective - on points")
+    assert result.outcome.value == "draw"            # mirror hulls, same points
+
+
+def test_a_fleet_unarmed_from_the_start_does_not_end_the_battle():
+    runner = _fleet_runner(["frigate"], ["frigate"])
+    sim = runner.simulation
+    for ship in runner.alpha_ships.values():        # unarmed before the first look
+        for ws in ship.weapons.values():
+            ws.ammo_remaining = 0
+    assert not runner._is_fleet_battle_over()
+    assert runner._fleet_armed_at_start == {"alpha": False, "beta": True}
+    sim.step()
+    assert not runner._is_fleet_battle_over()
+
+
+def test_one_v_one_victory_rules_are_unchanged():
+    from src.llm.victory import VictoryEvaluator
+    sim = CombatSimulation(seed=1, time_step=1.0)
+    ship = _ship(sim, "alpha", "alpha", Vector3D(0, 0, 0), ship_type="frigate")
+    assert VictoryEvaluator().is_ship_disabled(ship) is False
+    _disarm(sim, ship)
+    for pd in ship.point_defense:
+        pd.is_operational = False
+    for slot, ws in ship.weapons.items():
+        if slot.startswith("pd"):
+            ws.is_operational = False
+    assert VictoryEvaluator().is_ship_disabled(ship) is True
