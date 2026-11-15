@@ -585,7 +585,7 @@ export class Projectiles {
     this.flashes.add(this.a, this.dir, k * (0.18 + age * 2.6), 1.3 * f * f, 0, m.seed);
     // Coil discharge glow: a cold blue-white bloom round the muzzle, so gun
     // fire never reads as a (warm) hit on the firing ship's own hull
-    this.flashes.add(this.a, this.dir, k * (0.5 + age * 1.8), 1.5 * f * f, 5, m.seed);
+    this.flashes.add(this.a, this.dir, k * (0.36 + age * 1.6), 0.95 * f * f * f, 5, m.seed);
     // Forward jet: the plasma the slug drags out of the bore (class in aAge)
     this.b.copy(this.a).addScaledVector(this.dir, k * look.jet * (0.6 + age * 5));
     this.ribbons.add(this.a, this.b, k * 0.1, 1.4 * f * f, 0, m.seed, cls, cls);
