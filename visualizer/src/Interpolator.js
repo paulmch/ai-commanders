@@ -106,6 +106,8 @@ export class Interpolator {
         velocity: this.lerpVec3(state0.vel, state1.vel, alpha),
         forward: this.slerpVec3(state0.fwd, state1.fwd, alpha),
         thrust: this.lerp(state0.thrust || 0, state1.thrust || 0, alpha),
+        // throttle slope over this interval (1/s): drive ignition / shutdown
+        thrustRate: frame1.t - frame0.t > 0 ? ((state1.thrust || 0) - (state0.thrust || 0)) / (frame1.t - frame0.t) : 0,
         // --trace recordings: turn rate (world rad/s). The recorder stamps
         // each interval's rate on the frame that ends it; blending the two
         // keeps it continuous across frames (a jinking ship reverses it)

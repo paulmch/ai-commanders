@@ -107,3 +107,12 @@ test('interpolated ship state carries the recorded turn rate, or null on old rec
   const old = Interpolator.interpolateShips({ t: 0, ships: { a: ship() } }, { t: 1, ships: { a: ship() } }, 0.5);
   assert.equal(old.a.omega, null);
 });
+
+test('plume axes are parallel to the thrust axis: no cant on any bell', () => {
+  const src = readFileSync(new URL('../src/SceneManager.js', import.meta.url), 'utf8');
+  const i = src.indexOf('createTorch({ radius: plumeR');
+  assert.ok(i > 0);
+  const block = src.slice(i, src.indexOf('torches.push(torch)', i));
+  assert.ok(block.includes('torch.group.position.set('), 'bells are placed');
+  assert.ok(!/torch\.group\.(rotation|quaternion|lookAt)/.test(block), 'and never rotated off the drive axis');
+});

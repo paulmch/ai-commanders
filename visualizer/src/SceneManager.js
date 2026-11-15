@@ -310,10 +310,12 @@ export class SceneManager {
     for (let e = 0; e < engineConfig.count; e++) {
       const p = engineConfig.positions[e];
       const light = e === 0 ? this.tryPointLight(0x7fb0ff, 0, size.length * 5) : null;
-      const torch = createTorch({ radius: plumeR, length: plumeLength, light, tint: 'fusion', cluster: engineConfig.count });
+      const torch = createTorch({ radius: plumeR, length: plumeLength, light, tint: 'fusion', cluster: engineConfig.count,
+        phase: (e * 0.6180339887) % 1 });
       torch.group.position.set(p.x, p.y, -size.length * 0.53);
-      // Bells are canted a few degrees off the drive axis: the plumes fan out
-      torch.group.rotation.set(0.28 * p.y / size.width, -0.28 * p.x / size.width, 0);
+      // Every plume runs exactly down its bell's axis (the ship's thrust
+      // axis): a cluster is a bundle of parallel, collimated jets. The only
+      // deflection is the recorded turn sweep (render/Torch.js).
       group.add(torch.group);
       torches.push(torch);
     }
@@ -429,10 +431,11 @@ export class SceneManager {
       mats.accent.emissiveIntensity = (state.dying ? 0.19 : 0.5 + 0.5 * hull) * ACCENT_GLOW;
     }
 
-    // Torches follow a smoothed throttle
-    const targetThrust = state.thrust || 0;
-    ud.smoothThrust += (targetThrust - ud.smoothThrust) * (1 - Math.exp(-dt * 3.0));
-    const thrust = ud.smoothThrust;
+    // Torches follow the recorded throttle (already eased between trace
+    // frames), never a wall-clock filter: a scrub shows the same plume
+    const thrust = state.thrust || 0;
+    ud.smoothThrust = thrust;
+    const rate = state.dying ? 0 : (state.thrustRate || 0);
     // Plume sweep: the recorded turn rate in the hull frame (render/Torch.js)
     let turn = null;
     if (Array.isArray(state.omega) && !state.dying) {
@@ -443,14 +446,14 @@ export class SceneManager {
     const eng = this.damageFX?.engineAt?.(shipId, this.currentTime) || null;
     for (let i = 0; i < ud.torches.length; i++) {
       const dying = state.dying ? 0.7 : 0;
-      if (!eng) { ud.torches[i].update(thrust, this.elapsed, dying, this.currentTime, turn); continue; }
+      if (!eng) { ud.torches[i].update(thrust, this.elapsed, dying, this.currentTime, turn, rate); continue; }
       if (ud.driveSeed === undefined) {
         let h = 0;
         for (const c of shipId) h = (h * 31 + c.charCodeAt(0)) | 0;
         ud.driveSeed = Math.abs(h) % 100000;   // from the id: the same bells die on every load
       }
       const nz = damagedNozzle(eng.health, i, ud.torches.length, ud.driveSeed, _nozzle);
-      ud.torches[i].update(Math.min(1, thrust * nz.level), this.elapsed, Math.max(dying, nz.sputter), this.currentTime, turn);
+      ud.torches[i].update(Math.min(1, thrust * nz.level), this.elapsed, Math.max(dying, nz.sputter), this.currentTime, turn, rate);
     }
     if (mats) mats.bellHeat.emissiveIntensity = 0.3 + 2.8 * thrust;
     updateHullDetails(ship, state, this);   // hull rigs, doors, nav lamps (render/HullRigs.js)
