@@ -277,7 +277,11 @@ torpedo-armed hulls; all others fight with coilguns.
   frames each shot type as a pure function of (shot, battle time, positions), and
   `CameraController` applies it plus blast shake (`Director.shakeAt`, battle time).
   Never add wall-clock easing to a director pose: `tests/director.test.js` pins
-  seek-away-and-back equality. `main.js` zeroes `scene.shake` (the old wall-clock one).
+  seek-away-and-back equality. Shake is on the camera only for the draw (`main.js`
+  wraps `scene.render()` in `applyShake` / `removeShake`). Kill shots and shake are
+  keyed on `DamageTimeline.shipDetonationTime` (the frame the viewer blows the ship
+  up), the pull-back distance on `Explosion.blastExtent` - change a blast's curves
+  in `Blast.update` and that function together.
 - Ownership: in-flight weapons live in render/Projectiles.js (WeaponTimeline
   decides what exists at time t); persistent hit aftermath and deaths in
   DamageTimeline.js + render/DamageFX.js; hulls expose `userData.rcsMounts` /
