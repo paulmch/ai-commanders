@@ -38,7 +38,8 @@ Free battles fly `HeuristicCaptain` (`src/llm/heuristic_captain.py`). Its defaul
 fire; gun ships nose-first - closure cap, no braking under fire, coast through a
 controlled pass facing the nearest gun, HOLD_RANGE once closure is gone; torpedo boats
 hold a standoff and fire one-round-per-tube salvos sized to the target's PD; evade
-overlay vs torpedoes; crippled ships open range; plan announced on the FLEET NET);
+overlay vs torpedoes; crippled or disarmed ships open range, dead drives leave the
+formation, ships burn clear of dying hulks' blast radius; plan announced on the FLEET NET);
 `--doctrine legacy` (or `BattleConfig.heuristic_doctrine`) keeps the pass-4 captain the
 fire-control fixture's heuristic battles were flown with. `scripts/tactics_eval.py`
 runs/analyses seeded grids (kills, closest approach, rounds inside 150 km, hit rate).

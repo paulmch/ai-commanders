@@ -12,9 +12,10 @@ The doctrine, in four behaviours:
 1. Focus fire. The fleet picks ONE target - close to the fleet's centre,
    already damaged, thinly armoured or a soft torpedo boat - and keeps it
    until it is dying or dead, or a markedly better one appears
-   (FOCUS_SWITCH_MARGIN). Each gun ship joins it unless the focus is out of
-   its reach or a much better target is on top of it (gun_target): guns only
-   fire at their own ship's target, a focus out of reach would starve them.
+   (FOCUS_SWITCH_MARGIN); torpedo salvos go at it first and gun ships with
+   nothing in reach close on it. In reach, each gun ship weighs the same
+   priorities from its own position (gun_target): guns only fire at their
+   own ship's target, so a far focus would starve them.
 2. Range discipline by hull role, nose first. Gun ships sprint in while a
    stop short of the enemy's guns stays possible (a closure cap), then coast
    nose-on through a controlled pass facing the nearest enemy gun and
@@ -104,12 +105,16 @@ FOCUS_BREACH_BONUS = 0.5         # + when an armour facing is gone
 FOCUS_ARMOR_REF_CM = 150.0       # thinner nose armour = easier kill
 FOCUS_TORPEDO_BOAT_BONUS = 2.0   # soft, and its salvos kill our ships
 FOCUS_SWITCH_MARGIN = 1.6        # a new focus must beat the old one by this
-# Each gun ship weighs the same priorities from ITS position, over a shorter
-# range scale, with the fleet focus counted FOCUS_SHARE_BONUS times: it joins
-# the focus unless that is far beyond a ship already on top of it (a gun
-# only fires at its own target, and its nose armour faces that target).
+# Each gun ship weighs the same priorities (damage, breach, thin armour,
+# torpedo boat) from ITS position, over a shorter range scale, with the fleet
+# focus counted FOCUS_SHARE_BONUS times (a gun only fires at its own target).
+# Measured on the merged pass-5 engine, gun-fleet mirrors vs legacy: a 2.0
+# focus bonus won 0 of 4 (1 draw), 1.0 won 3 of 4 (1 draw) - in a gun brawl
+# the fleets already converge on the damaged, soft targets this way, and a
+# bonus only pulls fire off the ships that are shooting at you. The fleet
+# focus still steers ships with nothing in reach and the torpedo salvos.
 SHIP_RANGE_SCALE_KM = 80.0
-FOCUS_SHARE_BONUS = 2.0
+FOCUS_SHARE_BONUS = 1.0
 # "In reach": the doctrine's ~150 km beyond which gun fights at dodgers are
 # not planned (src/llm/prompts.py).
 GUN_REACH_KM = 150.0
