@@ -7224,8 +7224,12 @@ class CombatSimulation:
             change = wanted - rate
             rate += limit if change > limit else (-limit if change < -limit else change)
             travel = rate * dt
-            if (err - travel) * err <= 0.0 or (abs(err) <= limit * dt and abs(rate) <= limit):
-                arcs.roll = arcs.roll_goal          # arrived (within one tick of braking)
+            # Arrive only when the remaining rate can be braked within this
+            # tick; a hull whose goal has just moved close in front of it
+            # overshoots and comes back instead of stopping dead.
+            if abs(rate) <= 2.0 * limit and ((err - travel) * err <= 0.0
+                                             or abs(err) <= limit * dt):
+                arcs.roll = arcs.roll_goal
                 arcs.roll_rate = 0.0
             else:
                 arcs.roll += travel

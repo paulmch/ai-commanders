@@ -325,6 +325,28 @@ class TestRollToUnmask:
             sim.step()
         assert shooter.arcs.roll_goal == goal
 
+    def test_a_moved_goal_never_stops_or_reverses_a_roll_instantly(self):
+        """A hull rolling at speed whose goal jumps (behind it, or just in
+        front of it) brakes at the RCS roll acceleration: it overshoots and
+        comes back instead of stopping dead."""
+        sim = _sim(_table(), roll=True)
+        ship = _ship(sim, "a", "alpha", Vector3D(0, 0, 0), hull="destroyer")
+        sim.step()
+        accel, max_rate = sim._arcs_roll_params(ship)
+        arcs = ship.arcs
+        arcs.roll_goal = math.radians(170.0)
+        rates = [0.0]
+        for k in range(260):
+            if k == 40:
+                arcs.roll_goal = arcs.roll + arcs.roll_rate * 0.5      # just ahead
+            if k == 90:
+                arcs.roll_goal = arcs.roll - math.radians(40.0)        # behind
+            sim.step()
+            rates.append(arcs.roll_rate)
+        assert max(abs(r) for r in rates) <= max_rate + 1e-12
+        assert max(abs(b - a) for a, b in zip(rates, rates[1:])) <= 2.0 * accel * 1.0 + 1e-12
+        assert arcs.roll == arcs.roll_goal and arcs.roll_rate == 0.0     # and it settles
+
     def test_roll_never_changes_motion_or_the_navigation_frame(self):
         """Same scenario with and without the roll: positions, velocities,
         forward and the navigation up evasion steers by are bit-identical."""
