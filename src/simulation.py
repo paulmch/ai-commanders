@@ -2771,24 +2771,38 @@ class CombatSimulation:
         another ship's steering reads - kinematic state, the drive's applied
         throttle (_thrust_accel) and the standing maneuver (_keeps_range) - is
         therefore the same for every ship, whatever the insertion order.
-        (Not covered: a reactor meltdown inside this loop flips is_destroyed /
-        is_dying at once, as before.)
+
+        A death inside this loop is staged the same way: a reactor meltdown
+        (heat) or a dying hulk's fuse running out flips is_destroyed /
+        is_dying while the ship is being updated, and a ship updated later
+        used to see its target already gone (INTERCEPT / HOLD_RANGE / PADLOCK
+        coast at once) where one updated earlier still steered on it. The
+        death itself - event, kill credit, queued reactor blast - happens
+        when it happens; only what the OTHER ships see of it this step is
+        held back to the end of the loop. (crew_incapacitated needs no
+        staging: it is only ever set by the plume wash at the end of step(),
+        so the weapons loop and this one read the same value for everyone;
+        the coast it forces clears current_maneuver, which is staged.)
         """
         staged = []
         for ship in self.ships.values():
             seen_by_others = (ship.kinematic_state.copy(),
                               getattr(ship, 'applied_throttle', 0.0),
-                              ship.current_maneuver)
+                              ship.current_maneuver,
+                              ship.is_destroyed, ship.is_dying)
             self._advance_ship(ship, dt)
             staged.append((ship, ship.kinematic_state,
                            getattr(ship, 'applied_throttle', 0.0),
-                           ship.current_maneuver))
-            (ship.kinematic_state, ship.applied_throttle,
-             ship.current_maneuver) = seen_by_others
-        for ship, state, applied_throttle, maneuver in staged:
+                           ship.current_maneuver,
+                           ship.is_destroyed, ship.is_dying))
+            (ship.kinematic_state, ship.applied_throttle, ship.current_maneuver,
+             ship.is_destroyed, ship.is_dying) = seen_by_others
+        for ship, state, applied_throttle, maneuver, destroyed, dying in staged:
             ship.kinematic_state = state
             ship.applied_throttle = applied_throttle
             ship.current_maneuver = maneuver
+            ship.is_destroyed = destroyed
+            ship.is_dying = dying
 
     def _advance_ship(self, ship: ShipCombatState, dt: float) -> None:
         """One ship's step inside _update_ships: fly it, or coast the wreck."""
