@@ -74,7 +74,8 @@ test('mounts cannot fire through their own ship', () => {
       const az = Math.atan2(m.axis[1], m.axis[0]) * 180 / Math.PI, el = Math.asin(m.axis[2]) * 180 / Math.PI;
       assert.ok(!blockedAt(m, az, el - 0.01), `${type} ${m.slot}: open along its axis`);
       assert.ok(blockedAt(m, az + 180, -el + 0.01), `${type} ${m.slot}: blocked through the hull`);
-      assert.ok(m.open_fraction > 0.3 && m.open_fraction <= 0.56, `${type} ${m.slot}: open ${m.open_fraction}`);
+      // a gun depresses 10 deg below its mount plane: at most (1 + sin 10 deg) / 2 = 0.587 of the sphere
+      assert.ok(m.open_fraction > 0.3 && m.open_fraction <= 0.59, `${type} ${m.slot}: open ${m.open_fraction}`);
     }
   }
 });

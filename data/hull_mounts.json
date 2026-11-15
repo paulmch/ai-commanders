@@ -82,10 +82,10 @@
       0,
       1
      ],
-     "min_elevation_deg": -2,
-     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe000000000000000ffe000000000000000ffe000000000000000ffe000000000000000f7e000000000000000f7c00000000000000003000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-     "open_fraction": 0.4667,
-     "self_blocked_fraction": 0.0666
+     "min_elevation_deg": -10,
+     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff800000000000000fff000000000000000ffe000000000000000ffe000000000000000ffe000000000000000ffe000000000000000f7e000000000000000f7c00000000000000003000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.5385,
+     "self_blocked_fraction": 0.0824
     },
     {
      "slot": "pd_0",
@@ -164,10 +164,10 @@
       0,
       1
      ],
-     "min_elevation_deg": -2,
-     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000007c00000000000000007c00000000000000007c00000000000000003c00000000000000003000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-     "open_fraction": 0.4853,
-     "self_blocked_fraction": 0.0295
+     "min_elevation_deg": -10,
+     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc000001ff8000003ff8000000000000001ff00000000000000007c00000000000000007c00000000000000007c00000000000000003c00000000000000003000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.5528,
+     "self_blocked_fraction": 0.058
     },
     {
      "slot": "pd_0",
@@ -246,10 +246,10 @@
       1,
       0
      ],
-     "min_elevation_deg": -2,
-     "blocked": "001fff8000000000001fffffff80000000003fffffffc0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe000000000fffffffff000000000fffffffff000000000fffffffff000000000fffffffff800000000fffffffff800000001fffffffff800000001fffffffff800000001fffffffff800000001fffffffff800000001fffffffff800000001fffffffff800000000fffffffff000000000fffffffff000000000fffffffff0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000003fffffffc0000000001fffffff8000000000001fff800000000000",
-     "open_fraction": 0.5057,
-     "self_blocked_fraction": 0.0162
+     "min_elevation_deg": -10,
+     "blocked": "000000000000000000000000000000000000001fff80000000000001fffff8000000000007fffffe00000000000fffffff00000000000fffffff00000000001fffffff80000000001fffffff80000000001fffffffc0000000001fffffffc0000000003ffffffff0000000003ffffffff0000000007ffffffff000000000fffffffff800000000fffffffff800000001fffffffff800000001fffffffff800000001fffffffff800000001fffffffff800000001fffffffff800000001fffffffff8000000007ffffffff0000000003ffffffff0000000003ffffffff0000000001fffffffc0000000001fffffffc0000000001fffffff80000000001fffffff80000000000fffffff00000000000fffffff000000000007fffffe000000000001fffff80000000000001fff800000000000000000000000000000000000000000000000",
+     "open_fraction": 0.5484,
+     "self_blocked_fraction": 0.0628
     },
     {
      "slot": "weapon_2",
@@ -265,10 +265,10 @@
       -1,
       0
      ],
-     "min_elevation_deg": -2,
-     "blocked": "000000000001fff8000000000001fffffff80000000003fffffffc0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe000000000fffffffff000000000fffffffff000000000fffffffff000000001fffffffff800000001fffffffff800000001fffffffff800000001fffffffff800000001fffffffff800000001fffffffff800000001fffffffff000000001fffffffff000000000fffffffff000000000fffffffff000000000fffffffff0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000003fffffffc0000000001fffffff8000000000001fff800",
-     "open_fraction": 0.5057,
-     "self_blocked_fraction": 0.0162
+     "min_elevation_deg": -10,
+     "blocked": "000000000000000000000000000000000000000000000001fff80000000000001fffff8000000000007fffffe00000000000fffffff00000000000fffffff00000000001fffffff80000000001fffffff80000000003fffffff80000000003fffffff8000000000ffffffffc000000000ffffffffc000000000ffffffffe000000001fffffffff800000001fffffffff800000001fffffffff800000001fffffffff800000001fffffffff800000001fffffffff800000001fffffffff000000001fffffffff000000000ffffffffe000000000ffffffffc000000000ffffffffc0000000003fffffff80000000003fffffff80000000001fffffff80000000001fffffff80000000000fffffff00000000000fffffff000000000007fffffe000000000001fffff80000000000001fff800000000000000000000000000000000000000",
+     "open_fraction": 0.5484,
+     "self_blocked_fraction": 0.0628
     },
     {
      "slot": "pd_0",
@@ -347,10 +347,10 @@
       1,
       0
      ],
-     "min_elevation_deg": -2,
-     "blocked": "001fff8000000000001fffffff80000000003fffffffc0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe000000000fffffffff000000000fffffffff000000000fffffffff000000000fffffffff000000000fffffffff000000001fffffffff000000003fffffffff000000003fffffffff000000003fffffffff000000003fffffffff000000001fffffffff000000000fffffffff000000000fffffffff000000000fffffffff0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000003fffffffc0000000001fffffff8000000000001fff800000000000",
-     "open_fraction": 0.5081,
-     "self_blocked_fraction": 0.0117
+     "min_elevation_deg": -10,
+     "blocked": "000000000000000000000000000000000000001fff80000000000001fffff8000000000007fffffe00000000000fffffff00000000000fffffff00000000001fffffff80000000001fffffff80000000001fffffff80000000001fffffff80000000003fffffffc0000000003fffffffc0000000003fffffffc000000000ffffffffe000000000fffffffff000000001fffffffff000000003fffffffff000000003fffffffff000000003fffffffff000000003fffffffff0000000017fffffffe0000000003fffffffc0000000003fffffffc0000000003fffffffc0000000001fffffff80000000001fffffff80000000001fffffff80000000001fffffff80000000000fffffff00000000000fffffff000000000007fffffe000000000001fffff80000000000001fff800000000000000000000000000000000000000000000000",
+     "open_fraction": 0.5618,
+     "self_blocked_fraction": 0.0398
     },
     {
      "slot": "weapon_2",
@@ -366,10 +366,10 @@
       -1,
       0
      ],
-     "min_elevation_deg": -2,
-     "blocked": "000000000001fff8000000000001fffffff80000000003fffffffc0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe000000000fffffffff000000000fffffffff000000000fffffffff000000000fffffffff800000000fffffffffc00000000fffffffffc00000000fffffffffc00000000fffffffffc00000000fffffffff800000000fffffffff000000000fffffffff000000000fffffffff000000000fffffffff000000000fffffffff0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000003fffffffc0000000001fffffff8000000000001fff800",
-     "open_fraction": 0.5081,
-     "self_blocked_fraction": 0.0117
+     "min_elevation_deg": -10,
+     "blocked": "000000000000000000000000000000000000000000000001fff80000000000001fffff8000000000007fffffe00000000000fffffff00000000000fffffff00000000001fffffff80000000001fffffff80000000001fffffff80000000001fffffff80000000003fffffffc0000000003fffffffc0000000003fffffffc0000000007ffffffff800000000fffffffffc00000000fffffffffc00000000fffffffffc00000000fffffffffc00000000fffffffff800000000fffffffff0000000007fffffffe0000000003fffffffc0000000003fffffffc0000000003fffffffc0000000001fffffff80000000001fffffff80000000001fffffff80000000001fffffff80000000000fffffff00000000000fffffff000000000007fffffe000000000001fffff80000000000001fff800000000000000000000000000000000000000",
+     "open_fraction": 0.5618,
+     "self_blocked_fraction": 0.0398
     },
     {
      "slot": "pd_0",
@@ -448,10 +448,10 @@
       0,
       1
      ],
-     "min_elevation_deg": -2,
-     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0000000000000000ff0000000000000000ff0000000000000000f000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-     "open_fraction": 0.4856,
-     "self_blocked_fraction": 0.0288
+     "min_elevation_deg": -10,
+     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe000000000000007ffc000000000000003ff0000000000000000ff0000000000000000ff0000000000000000f000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.5568,
+     "self_blocked_fraction": 0.0512
     },
     {
      "slot": "weapon_2",
@@ -467,10 +467,10 @@
       0,
       -1
      ],
-     "min_elevation_deg": -2,
-     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffc000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-     "open_fraction": 0.4939,
-     "self_blocked_fraction": 0.0121
+     "min_elevation_deg": -10,
+     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffc000000000000000ffc00003f000000007fff8001ff00000000fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.5537,
+     "self_blocked_fraction": 0.0565
     },
     {
      "slot": "weapon_3",
@@ -486,10 +486,10 @@
       0,
       1
      ],
-     "min_elevation_deg": -2,
-     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff1e000000ff000000001e000000ff0000000000000000ff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-     "open_fraction": 0.4808,
-     "self_blocked_fraction": 0.0384
+     "min_elevation_deg": -10,
+     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe0000ffff00001fffe000000ff0000003f1e000000ff000000001e000000ff0000000000000000ff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.5333,
+     "self_blocked_fraction": 0.0912
     },
     {
      "slot": "weapon_4",
@@ -505,10 +505,10 @@
       0,
       -1
      ],
-     "min_elevation_deg": -2,
-     "blocked": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001fe0000000000000001fe0000000000000001fe00001ee00000000ffe0001ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-     "open_fraction": 0.4695,
-     "self_blocked_fraction": 0.061
+     "min_elevation_deg": -10,
+     "blocked": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001fe0000000000000001fe0000000000000001fe00001ee00000000ffe0001fff0000000fffffffffff8000001ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.5021,
+     "self_blocked_fraction": 0.1444
     },
     {
      "slot": "pd_0",
@@ -606,10 +606,10 @@
       0,
       1
      ],
-     "min_elevation_deg": -2,
-     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc00000000003ffffff800000000001fffff80000000000001fffc000000000000003fe00000000000000007000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-     "open_fraction": 0.4465,
-     "self_blocked_fraction": 0.107
+     "min_elevation_deg": -10,
+     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc00000000003ffffffc00000000003ffffffc00000000003ffffff800000000001fffff80000000000001fffc000000000000003fe00000000000000007000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.4996,
+     "self_blocked_fraction": 0.1487
     },
     {
      "slot": "weapon_2",
@@ -625,10 +625,10 @@
       0,
       -1
      ],
-     "min_elevation_deg": -2,
-     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000fffe00000000000001fffffc0000000001ffffffffe000000003fffffffffff0000007ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-     "open_fraction": 0.4217,
-     "self_blocked_fraction": 0.1565
+     "min_elevation_deg": -10,
+     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000fffe00000000000001fffffc0000000001ffffffffe000000003fffffffffff0000007fffffffffff0000007fffffffffff0000007ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.4519,
+     "self_blocked_fraction": 0.2299
     },
     {
      "slot": "weapon_3",
@@ -644,10 +644,10 @@
       1,
       0
      ],
-     "min_elevation_deg": -2,
-     "blocked": "001fff8000000000001fffffff80000000003fffffffc0000000007fffffffe0000000007fffffffe0000000007fffffffe000000000ffffffffe000000000ffffffffe000000000ffffffffe000000000ffffffffe000000000ffffffffe000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000000fffffffff000000000fffffffff0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000003fffffffc0000000001fffffff8000000000001fff800000000000",
-     "open_fraction": 0.5052,
-     "self_blocked_fraction": 0.0173
+     "min_elevation_deg": -10,
+     "blocked": "0007e000000000000003ffffff80000000000fffffff80000000001fffffff80000000003fffffff80000000007fffffff8000000000ffffffffc000000000ffffffffc000000000ffffffffc000000000ffffffffc000000000ffffffffc000000001ffffffffc000000001ffffffffc000000001ffffffffc000000001ffffffffc000000001ffffffffc000000001ffffffffc000000001ffffffffc000000001ffffffffc000000001ffffffffc000000001ffffffffc000000001ffffffffc0000000013fffffffc0000000003fffffffc0000000003fffffffc0000000001fffffff80000000001fffffff80000000001fffffff80000000001fffffff80000000000fffffff00000000000fffffff000000000007fffffe000000000001fffff80000000000001fff800000000000000000000000000000000000000000000000",
+     "open_fraction": 0.5488,
+     "self_blocked_fraction": 0.0621
     },
     {
      "slot": "weapon_4",
@@ -663,10 +663,10 @@
       -1,
       0
      ],
-     "min_elevation_deg": -2,
-     "blocked": "000000000001fff8000000000001fffffff80000000003fffffffc0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007ffffffff0000000007ffffffff0000000007ffffffff0000000007ffffffff8000000007ffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff000000000fffffffff000000000fffffffff000000000fffffffff0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000003fffffffc0000000001fffffff8000000000001fff800",
-     "open_fraction": 0.5052,
-     "self_blocked_fraction": 0.0173
+     "min_elevation_deg": -10,
+     "blocked": "00000000000007e0000000000001ffffffc00000000001fffffff00000000001fffffff80000000001fffffffc0000000001fffffffe0000000003ffffffff0000000003ffffffff0000000003ffffffff0000000003ffffffff8000000003ffffffff8000000003ffffffff8000000003ffffffff8000000003ffffffff8000000003ffffffff8000000003ffffffff8000000003ffffffff8000000003ffffffff8000000003ffffffff8000000003ffffffff8000000003ffffffff8000000003ffffffff0000000003fffffffc0000000003fffffffc0000000003fffffffc0000000001fffffff80000000001fffffff80000000001fffffff80000000001fffffff80000000000fffffff00000000000fffffff000000000007fffffe000000000001fffff80000000000001fff800000000000000000000000000000000000000",
+     "open_fraction": 0.5488,
+     "self_blocked_fraction": 0.0621
     },
     {
      "slot": "weapon_5",
@@ -682,10 +682,10 @@
       0,
       1
      ],
-     "min_elevation_deg": -2,
-     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000000000000000007000000000000000007000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-     "open_fraction": 0.4964,
-     "self_blocked_fraction": 0.0072
+     "min_elevation_deg": -10,
+     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000ffffff000fffe00000007e00000007000000000000000007000000000000000007000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.5471,
+     "self_blocked_fraction": 0.0677
     },
     {
      "slot": "weapon_6",
@@ -701,10 +701,10 @@
       0,
       -1
      ],
-     "min_elevation_deg": -2,
+     "min_elevation_deg": -10,
      "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
      "open_fraction": 0.5,
-     "self_blocked_fraction": 0
+     "self_blocked_fraction": 0.148
     },
     {
      "slot": "pd_0",
@@ -821,10 +821,10 @@
       0,
       1
      ],
-     "min_elevation_deg": -2,
-     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc000000001fbffffff8000000001f9fffff80000000001f81fffc00000000001f003fe000000000001f00070000000000000f00000000000000000f00000000000000000f0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-     "open_fraction": 0.4239,
-     "self_blocked_fraction": 0.1522
+     "min_elevation_deg": -10,
+     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc000000001fbffffffc000000001fbffffffc000000001fbffffff8000000001f9fffff80000000001f81fffc00000000001f003fe000000000001f00070000000000000f00000000000000000f00000000000000000f0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.4697,
+     "self_blocked_fraction": 0.1995
     },
     {
      "slot": "weapon_2",
@@ -840,10 +840,10 @@
       0,
       -1
      ],
-     "min_elevation_deg": -2,
-     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000fffe00000000000001fffffc0000000001ffffffffe000000003ffffffffff00000007ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-     "open_fraction": 0.4242,
-     "self_blocked_fraction": 0.1517
+     "min_elevation_deg": -10,
+     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000fffe00000000000001fffffc0000000001ffffffffe000000003ffffffffff00000007fffffffffff8000007fffffffffff8000007ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.4531,
+     "self_blocked_fraction": 0.2279
     },
     {
      "slot": "weapon_3",
@@ -859,10 +859,10 @@
       1,
       0
      ],
-     "min_elevation_deg": -2,
-     "blocked": "001fff8000000000001fffffff80000000003fffffffc0000000007fffffffe0000000007fffffffe0000000007fffffffe000000000ffffffffe000000000ffffffffe000000000ffffffffe000000000ffffffffe000000000ffffffffe000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000000fffffffff000000000fffffffff0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000003fffffffc0000000001fffffff8000000000001fff800000000000",
-     "open_fraction": 0.5052,
-     "self_blocked_fraction": 0.0173
+     "min_elevation_deg": -10,
+     "blocked": "0007e000000000000003ffffff80000000000fffffff80000000001fffffff80000000003fffffff80000000007fffffff8000000000ffffffffc000000000ffffffffc000000000ffffffffc000000000ffffffffc000000000ffffffffc000000001ffffffffc000000001ffffffffc000000001ffffffffe000000001ffffffffe000000001ffffffffe000000001ffffffffe000000001ffffffffe000000001ffffffffc000000001ffffffffc000000001ffffffffc000000001ffffffffc0000000013fffffffc0000000003fffffffc0000000003fffffffc0000000001fffffff80000000001fffffff80000000001fffffff80000000001fffffff80000000000fffffff00000000000fffffff000000000007fffffe000000000001fffff80000000000001fff800000000000000000000000000000000000000000000000",
+     "open_fraction": 0.5459,
+     "self_blocked_fraction": 0.0671
     },
     {
      "slot": "weapon_4",
@@ -878,10 +878,10 @@
       -1,
       0
      ],
-     "min_elevation_deg": -2,
-     "blocked": "000000000001fff8000000000001fffffff80000000003fffffffc0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007ffffffff0000000007ffffffff0000000007ffffffff0000000007ffffffff8000000007ffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff000000000fffffffff000000000fffffffff000000000fffffffff0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000003fffffffc0000000001fffffff8000000000001fff800",
-     "open_fraction": 0.5052,
-     "self_blocked_fraction": 0.0173
+     "min_elevation_deg": -10,
+     "blocked": "00000000000007e0000000000001ffffffc00000000001fffffff00000000001fffffff80000000001fffffffc0000000001fffffffe0000000003ffffffff0000000003ffffffff0000000003ffffffff0000000003ffffffff8000000003ffffffff8000000003ffffffff8000000003ffffffff8000000007ffffffff8000000007ffffffff8000000007ffffffff8000000007ffffffff8000000007ffffffff8000000003ffffffff8000000003ffffffff8000000003ffffffff8000000003ffffffff0000000003fffffffc0000000003fffffffc0000000003fffffffc0000000001fffffff80000000001fffffff80000000001fffffff80000000001fffffff80000000000fffffff00000000000fffffff000000000007fffffe000000000001fffff80000000000001fff800000000000000000000000000000000000000",
+     "open_fraction": 0.5459,
+     "self_blocked_fraction": 0.0671
     },
     {
      "slot": "weapon_5",
@@ -897,10 +897,10 @@
       0,
       1
      ],
-     "min_elevation_deg": -2,
-     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000000000000000007000000000000000007000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-     "open_fraction": 0.4964,
-     "self_blocked_fraction": 0.0072
+     "min_elevation_deg": -10,
+     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000ffffff000fffe00000007f00000007000000000000000007000000000000000007000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.5465,
+     "self_blocked_fraction": 0.0687
     },
     {
      "slot": "weapon_6",
@@ -916,10 +916,10 @@
       0,
       -1
      ],
-     "min_elevation_deg": -2,
+     "min_elevation_deg": -10,
      "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
      "open_fraction": 0.5,
-     "self_blocked_fraction": 0
+     "self_blocked_fraction": 0.148
     },
     {
      "slot": "pd_0",

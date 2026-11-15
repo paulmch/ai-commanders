@@ -642,7 +642,7 @@ def test_the_formation_throttle_is_what_the_ship_flies():
 # (Re-pinned for the round-2 PD placement: the destroyer and torpedo cruiser
 # PD masks in data/hull_mounts.json changed, so which turret bears on which
 # torpedo changed; no engine code changed.)
-LEGACY_GOLDEN_SHA256 = "a4c0ee130a536c942a140d48bb14f86defc3ec5abc23f493adfcb29ee5ed447b"
+LEGACY_GOLDEN_SHA256 = "eb441522072826589fb142b981b2138956f60ae05fb9f9c70d609afbdb8554b1"
 
 
 def test_legacy_battle_event_stream_is_pinned(tmp_path):
