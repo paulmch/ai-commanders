@@ -241,7 +241,7 @@ export function latestWreckEnd(deathInfo) {
 }
 const SHARD_FADE = [17, 22]; // small chunks fade out
 // Blasts born on a hull's skin: spall puffs are thrown along the surface normal
-const SURFACE_KINDS = new Set(['impact', 'pop', 'graze', 'pierce', 'kineticStrike', 'breach', 'cookoff']);
+const SURFACE_KINDS = new Set(['impact', 'pop', 'graze', 'pierce', 'kineticStrike', 'breach', 'cookoff', 'exitJet']);
 
 /** Blast presets (exported for tests: kinds and their durations). */
 export function blastKinds() { return KINDS; }
@@ -252,7 +252,8 @@ export function blastKinds() { return KINDS; }
 const KINDS = {
   // Fusion reactor breach - the ship-killer
   reactor: {
-    duration: 14, flash: 3.2, flashFade: 0.22, screenFlash: 0.65,
+    duration: 14, flash: 4.2, flashFade: 0.22, screenFlash: 0.7,
+    core: { size: 2.4, life: 0.17, level: 9 },
     fireR: 1.35, fireGrow: 1.2, fireLife: 6.5, fireTurb: 1.0,
     shellR: 18, shellLife: 2.4, shellW: 0.32,
     lobes: 6, ringR: 12, ringLife: 3.2,
@@ -289,12 +290,14 @@ const KINDS = {
   },
   // Coilgun slug on armour: spall cone, molten spray, glowing crater
   impact: {
-    duration: 3.0, flash: 2.6, flashFade: 0.12, screenFlash: 0.0,
+    duration: 3.0, flash: 3.8, flashFade: 0.085, screenFlash: 0.0, flashR: 1.5,
+    core: { size: 1.2, life: 0.1, level: 5.5 },
     fireR: 0, shellR: 0,
-    sparks: 380, sparkSpeed: [2, 12], sparkLife: [0.5, 2.6], sparkSize: 0.05,
-    streaks: 120, streakSpeed: [3, 10], streakLife: [0.4, 1.8], streakLen: 0.6, streakW: 0.03,
-    puffs: 3, puffSize: [0.5, 1.0], puffSpeed: [0.5, 1.5], puffLife: 2.2,
-    light: 5, lightLife: 0.5, crater: true, cone: 0.75
+    ringR: 2.3, ringLife: 0.42,
+    sparks: 440, sparkSpeed: [4, 22], sparkLife: [0.35, 1.9], sparkSize: 0.05,
+    streaks: 180, streakSpeed: [7, 24], streakLife: [0.25, 1.2], streakLen: 0.9, streakW: 0.022,
+    puffs: 2, puffSize: [0.4, 0.8], puffSpeed: [0.6, 1.6], puffLife: 1.6,
+    light: 6, lightLife: 0.35, crater: true, cone: 0.9
   },
   // Slug skidding off the plating far from the normal: a fan of sparks
   // along the surface and a shallow gouge, hardly any vapour
@@ -309,43 +312,64 @@ const KINDS = {
   // Slug through the armour: entry flash, a spall jet blown back out of
   // the hole and a brief fire inside it
   pierce: {
-    duration: 3.0, flash: 3.0, flashFade: 0.12, screenFlash: 0.0, flashR: 1.6,
-    fireR: 0.45, fireGrow: 2.0, fireLife: 1.0, fireTurb: 0.5,
+    duration: 3.0, flash: 4.2, flashFade: 0.1, screenFlash: 0.0, flashR: 1.7,
+    core: { size: 1.4, life: 0.12, level: 6 },
+    fireR: 0.5, fireGrow: 2.0, fireLife: 1.1, fireTurb: 0.5,
     shellR: 0,
-    sparks: 420, sparkSpeed: [2, 13], sparkLife: [0.5, 2.4], sparkSize: 0.05,
-    streaks: 150, streakSpeed: [3, 11], streakLife: [0.4, 1.6], streakLen: 0.6, streakW: 0.03,
+    ringR: 1.4, ringLife: 0.35,
+    sparks: 460, sparkSpeed: [5, 26], sparkLife: [0.4, 2.2], sparkSize: 0.05,
+    streaks: 220, streakSpeed: [9, 30], streakLife: [0.3, 1.4], streakLen: 1.3, streakW: 0.022,
     puffs: 3, puffSize: [0.4, 0.8], puffSpeed: [0.5, 1.4], puffLife: 2.2,
-    light: 5, lightLife: 0.5, crater: true, cone: 0.88
+    light: 6, lightLife: 0.45, crater: true, cone: 0.95
   },
   // Kinetic torpedo stopped by the armour. 250 kg at ~14 km/s dumps its
   // energy as a white flash, a plume of vaporised armour blown off the
   // plating and a spall cone - no fireball: there is no explosive.
   kineticStrike: {
-    duration: 3.2, flash: 3.4, flashFade: 0.12, screenFlash: 0.05, flashR: 1.9,
+    duration: 3.2, flash: 4.4, flashFade: 0.11, screenFlash: 0.06, flashR: 2.4,
+    core: { size: 2.0, life: 0.14, level: 7 },
     fireR: 0, shellR: 0,
-    sparks: 520, sparkSpeed: [1.5, 10], sparkLife: [0.4, 2.4], sparkSize: 0.05,
-    streaks: 190, streakSpeed: [2, 10], streakLife: [0.3, 1.6], streakLen: 0.6, streakW: 0.032,
-    puffs: 6, puffSize: [0.45, 1.0], puffSpeed: [0.6, 1.8], puffLife: 2.0,
-    light: 8, lightLife: 0.35, crater: true, cone: 0.78
+    ringR: 4.2, ringLife: 0.6,
+    sparks: 700, sparkSpeed: [3, 20], sparkLife: [0.4, 2.6], sparkSize: 0.05,
+    streaks: 300, streakSpeed: [5, 22], streakLife: [0.3, 1.7], streakLen: 1.0, streakW: 0.024,
+    puffs: 5, puffSize: [0.45, 1.0], puffSpeed: [0.6, 1.8], puffLife: 2.0,
+    light: 12, lightLife: 0.35, crater: true, cone: 0.85
   },
   // Kinetic torpedo through the armour: entry flash, a jet of spall and
   // vapour blown back out of the hole and a small fire inside it (the
   // venting that follows is DamageFX's)
   breach: {
-    duration: 4.0, flash: 3.4, flashFade: 0.13, screenFlash: 0.08, flashR: 2.2,
-    fireR: 0.6, fireGrow: 1.8, fireLife: 1.5, fireTurb: 0.6,
+    duration: 4.0, flash: 4.6, flashFade: 0.12, screenFlash: 0.09, flashR: 2.6,
+    core: { size: 2.2, life: 0.16, level: 7 },
+    fireR: 0.7, fireGrow: 1.8, fireLife: 1.6, fireTurb: 0.6,
     shellR: 0,
-    sparks: 520, sparkSpeed: [2, 12], sparkLife: [0.5, 2.6], sparkSize: 0.05,
-    streaks: 190, streakSpeed: [3, 12], streakLife: [0.4, 1.8], streakLen: 0.6, streakW: 0.035,
+    ringR: 3.2, ringLife: 0.55,
+    sparks: 700, sparkSpeed: [3, 20], sparkLife: [0.5, 2.8], sparkSize: 0.05,
+    streaks: 300, streakSpeed: [5, 22], streakLife: [0.4, 1.9], streakLen: 1.0, streakW: 0.024,
     puffs: 4, puffSize: [0.4, 0.9], puffSpeed: [0.5, 1.4], puffLife: 2.4,
-    light: 9, lightLife: 0.55, crater: true, cone: 0.88
+    light: 13, lightLife: 0.55, crater: true, cone: 0.93
+  },
+  // A penetrating torpedo coming out of the far side of a narrow hull: a
+  // tight, fast jet of plasma, spall and fire along its line of flight
+  exitJet: {
+    duration: 3.4, flash: 3.4, flashFade: 0.11, screenFlash: 0.0, flashR: 1.6,
+    core: { size: 1.3, life: 0.12, level: 6 },
+    fireR: 0.45, fireGrow: 2.4, fireLife: 0.9, fireTurb: 0.6,
+    shellR: 0,
+    sparks: 560, sparkSpeed: [6, 28], sparkLife: [0.4, 2.4], sparkSize: 0.05,
+    streaks: 280, streakSpeed: [10, 34], streakLife: [0.3, 1.5], streakLen: 1.4, streakW: 0.022,
+    puffs: 3, puffSize: [0.4, 0.9], puffSpeed: [0.8, 2.0], puffLife: 2.0,
+    light: 7, lightLife: 0.4, cone: 0.96
   },
   // Cook-off: munitions or a fuel cell going up on a chunk (death-spiral
   // secondaries, wrecked mounts). No shock shell: at this size the front
   // was a hard-edged glass bubble around the fireball, never a shock wave;
   // thin streaks like the reactor's, not white bars
   secondary: {
-    duration: 4.0, flash: 2.5, flashFade: 0.15, screenFlash: 0.0,
+    // (a small hard kernel instead of the default 5x glow disc, which
+    // saturated into a flat white bubble round the mount for its first frames)
+    duration: 4.0, flash: 2.2, flashFade: 0.13, screenFlash: 0.0, flashR: 2.0,
+    core: { size: 0.8, life: 0.09, level: 5 },
     fireR: 0.9, fireGrow: 1.0, fireLife: 2.2, fireTurb: 0.5,
     shellR: 0,
     sparks: 320, sparkSpeed: [2, 9], sparkLife: [0.6, 3], sparkSize: 0.05,
@@ -477,7 +501,9 @@ export class Blast {
       _ejectaGeom ||= new THREE.PlaneGeometry(2, 2);
       this.ejecta = new THREE.Mesh(_ejectaGeom, ejectaMaterial());
       this.ejecta.material.uniforms.uSeed.value = this.seed;
-      const axis = o.axis?.clone().normalize() || new THREE.Vector3(rnd() - 0.5, rnd() - 0.5, 1).normalize();
+      // on a hull the ring is the plasma front racing over the plating
+      const axis = o.axis?.clone().normalize() || (SURFACE_KINDS.has(o.kind) && o.dir ? o.dir.clone().normalize()
+        : new THREE.Vector3(rnd() - 0.5, rnd() - 0.5, 1).normalize());
       this.ejecta.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), axis);
       this.ejecta.renderOrder = 36;
       this.ejecta.frustumCulled = false;
@@ -633,8 +659,11 @@ export class Blast {
     this.streaks.material.uniforms.uIntensity.value = 1.4 * dim;
     if (this.crater) {
       const p = Math.min(1, age / this.duration);
-      this.crater.material.opacity = Math.pow(1 - p, 1.8);
-      this.crater.material.color.setRGB(2.4 * (1 - p * 0.6), 0.9 * (1 - p * 0.8), 0.3 * (1 - p));
+      // white-hot for the first instants, orange, then a dull red ember
+      // (the crater decal carries the heat on for many seconds after)
+      const hot = Math.exp(-age / 0.16);
+      this.crater.material.opacity = Math.pow(1 - p, 1.5);
+      this.crater.material.color.setRGB(2.4 * (1 - p * 0.55) + 1.2 * hot, 0.9 * (1 - p * 0.85) + 2.2 * hot, 0.3 * (1 - p) + 2.1 * hot);
     }
     if (this.light) {
       this.light.position.copy(this.group.position);
