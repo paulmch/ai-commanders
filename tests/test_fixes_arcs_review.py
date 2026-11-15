@@ -75,8 +75,8 @@ class TestRollGoalDoesNotHunt:
         """Seeds 103/104 (budget 200): the merged planner flipped some hulls'
         goal every 5 s between two attitudes ~90 degrees apart (27 and 35
         quick reversals) while the hull, needing 70-250 s per 90 degrees,
-        reached neither. No goal may now come back within 20 degrees of the
-        goal it replaced inside 30 s."""
+        reached neither. No goal may now leave for a different attitude (more
+        than 20 degrees away) and come back within 20 degrees inside 30 s."""
         goals = {}
         plan = CombatSimulation._arcs_plan_roll
 
@@ -94,6 +94,7 @@ class TestRollGoalDoesNotHunt:
         for sid, changes in goals.items():
             for (t0, a, b), (t1, b2, c) in zip(changes, changes[1:]):
                 if (t1 - t0 <= self.ABA_WINDOW_S
+                        and abs(math.degrees(b - a)) > self.SAME_GOAL_DEG
                         and abs(math.degrees(c - a)) <= self.SAME_GOAL_DEG):
                     hunts.append((sid, t0, math.degrees(a), math.degrees(b), t1, math.degrees(c)))
         assert not hunts, hunts
@@ -226,3 +227,63 @@ class TestPdSlewGate:
         sim.step()
         assert all(m.state == wa.ON_TARGET for m in pd)
         assert second.heat_absorbed_j > 0.0
+
+
+# =============================================================================
+# Finding 5: a battery whose target its own hull masks never engaged an
+# enemy it does bear on
+# =============================================================================
+
+class TestMaskedBatteryFallsBack:
+    """Destroyer fixture table: the dorsal battery bears only above the deck.
+    'low' (the primary) sits below the deck, 'high' above it, both in range."""
+
+    def _scene(self, order_target=None, command=WeaponsCommand.FIRE_IMMEDIATE):
+        sim = _sim(_table())
+        a = _ship(sim, "a", "alpha", Vector3D(0, 0, 0))
+        _ship(sim, "low", "beta", Vector3D(100_000, 0, -60_000), forward=Vector3D(-1, 0, 0))
+        _ship(sim, "high", "beta", Vector3D(100_000, 20_000, 60_000), forward=Vector3D(-1, 0, 0))
+        a.primary_target_id = "low"
+        a.weapons_orders = {"weapon_1": WeaponsOrder(command, "weapon_1", order_target,
+                                                     min_hit_probability=0.0)}
+        return sim, a
+
+    @staticmethod
+    def _shots(sim):
+        from collections import Counter
+        return Counter(e.target_id for e in sim.events
+                       if e.event_type == SimulationEventType.PROJECTILE_LAUNCHED
+                       and e.ship_id == "a" and e.data.get("weapon_slot") == "weapon_1")
+
+    def test_a_battery_following_the_primary_engages_what_it_bears_on(self):
+        sim, a = self._scene()
+        for _ in range(15):
+            sim.step()
+        shots = self._shots(sim)
+        assert shots["high"] > 0 and shots["low"] == 0, shots
+        assert a.weapons["weapon_1"].mount.fallback_id == "high"
+
+    def test_it_returns_to_the_primary_when_the_primary_unmasks(self):
+        sim, a = self._scene()
+        for _ in range(15):
+            sim.step()
+        sim.ships["low"].kinematic_state.position = Vector3D(100_000, -20_000, 60_000)
+        before = self._shots(sim)
+        for _ in range(25):
+            sim.step()
+        after = self._shots(sim)
+        assert after["low"] > before["low"], (before, after)
+        assert a.weapons["weapon_1"].mount.fallback_id is None
+
+    def test_a_named_single_target_order_stays_binding(self):
+        sim, a = self._scene(order_target="low")
+        for _ in range(15):
+            sim.step()
+        assert sum(self._shots(sim).values()) == 0
+        assert a.weapons["weapon_1"].mount.state == wa.MASKED
+
+    def test_free_fire_with_a_named_target_may_fall_back(self):
+        sim, a = self._scene(order_target="low", command=WeaponsCommand.FREE_FIRE)
+        for _ in range(15):
+            sim.step()
+        assert self._shots(sim)["high"] > 0

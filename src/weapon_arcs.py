@@ -278,7 +278,7 @@ class MountState:
 
     __slots__ = ("slot", "kind", "index", "mask", "rate", "ax", "ay", "az",
                  "trained", "state", "target_id", "wx", "wy", "wz", "has_want",
-                 "masked_since", "masked_reported", "stamp")
+                 "masked_since", "masked_reported", "stamp", "fallback_id")
 
     def __init__(self, mount: HullMount, rate_deg_s: float):
         self.slot = mount.slot
@@ -297,6 +297,7 @@ class MountState:
         self.masked_since = None
         self.masked_reported = False
         self.stamp = -1.0
+        self.fallback_id = None     # enemy engaged this tick while the target is masked
 
     def bears(self, bx: float, by: float, bz: float) -> bool:
         """True when the mount can fire in this body-frame direction."""

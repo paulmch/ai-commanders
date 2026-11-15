@@ -509,6 +509,13 @@ def test_a_disarmed_ship_under_fire_actually_opens_range(tmp_path, monkeypatch):
         _wreck_guns(self.simulation.get_ship("alpha_1"))
 
     monkeypatch.setattr(LLMBattleRunner, "setup_fleet_battle", setup)
+    # This pins the withdrawal, not the cruiser's gunnery: keep its batteries
+    # on its primary (the destroyer) even where their hull masks it - with the
+    # masked-battery fallback (src/simulation._arcs_fallback_target) they
+    # kill the frigate inside two minutes and the battle ends before the
+    # range can open.
+    from src.simulation import CombatSimulation
+    monkeypatch.setattr(CombatSimulation, "_arcs_fallback_allowed", staticmethod(lambda order: False))
     # A destroyer (2 g) disarmed at t=0 withdraws from a cruiser (1.5 g) that
     # can shoot but not catch it.
     # (An armed frigate keeps alpha in the fight, so it does not surrender.)

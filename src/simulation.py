@@ -2256,6 +2256,11 @@ class CombatSimulation:
 
             # Get target
             target_id = order.target_id or ship.primary_target_id
+            # Weapon arcs: a battery whose own hull masks its target engages
+            # the enemy it bears on instead (_arcs_train_guns, this tick).
+            fallback = getattr(weapon_state.mount, 'fallback_id', None) if self.weapon_arcs else None
+            if fallback is not None and weapon_state.mount.stamp == self.current_time:
+                target_id = fallback
             if not target_id:
                 self._weapon_status(ship, weapon_slot, 'no_target')
                 continue
@@ -6954,7 +6959,31 @@ class CombatSimulation:
             if mount.stamp == self.current_time and mount.target_id != target_id:
                 # retargeted for this tick by a fire_at (see _handle_fire_command)
                 continue
+            mount.fallback_id = None
+            if (mount.kind == 'gun' and self._arcs_fallback_allowed(order)
+                    and self._arcs_gun_masked_on(ship, ws, mount, target)):
+                alt = self._arcs_fallback_target(ship, ws, mount, target)
+                if alt is not None:
+                    mount.fallback_id = alt.ship_id
+                    target = alt
             self._arcs_train_gun(ship, ws, mount, target, dt)
+
+    @staticmethod
+    def _arcs_fallback_allowed(order) -> bool:
+        """
+        May a battery whose target its own hull masks engage another enemy?
+        Yes when the order leaves the target free: no order, an order without
+        its own target_id (the battery follows the ship's primary target) or
+        FREE_FIRE ("any valid target"). No for an order that names its own
+        target_id (a commander's single-target order stays binding) and for
+        HOLD_FIRE. The battery returns to the assigned target the tick the
+        mount bears on it again.
+        """
+        if order is None:
+            return True
+        if order.command == WeaponsCommand.HOLD_FIRE:
+            return False
+        return order.target_id is None or order.command == WeaponsCommand.FREE_FIRE
 
     def _arcs_train_gun(self, ship: ShipCombatState, weapon_state: 'WeaponState',
                         mount, target: ShipCombatState, dt: float) -> int:
@@ -6977,6 +7006,33 @@ class CombatSimulation:
         # the same tick (a fire_at at another ship, or the order target after
         # a fire_at) is checked against where the mount already points.
         moved = mount.stamp == now
+        fire_dir = self._arcs_gun_lead(ship, weapon_state, mount, target)
+        arcs = ship.arcs
+        mount.target_id = target_id
+        mount.stamp = now
+        if mount.kind == 'spinal':
+            if fire_dir is None:
+                mount.state = state = weapon_arcs.MASKED
+                mount.has_want = False
+            else:
+                mount.ax, mount.ay, mount.az = arcs.to_body(fire_dir.x, fire_dir.y, fire_dir.z)
+                mount.state = state = weapon_arcs.ON_TARGET
+            self._arcs_note_mask(ship, mount, state, 'gimbal')
+            return state
+        if fire_dir is None:
+            # No intercept solution: track the line of sight.
+            fire_dir = (target.position - ship.position).normalized()
+        bx, by, bz = arcs.to_body(fire_dir.x, fire_dir.y, fire_dir.z)
+        state = mount.check(bx, by, bz) if moved else mount.train(bx, by, bz, dt)
+        self._arcs_note_mask(ship, mount, state, 'hull')
+        return state
+
+    def _arcs_gun_lead(self, ship: ShipCombatState, weapon_state: 'WeaponState',
+                       mount, target: ShipCombatState):
+        """World lead direction of a gun mount on ``target`` (None: no
+        intercept), shared by same-calibre turret mounts within a tick."""
+        now = self.current_time
+        target_id = target.ship_id
         leads = self._arcs_lead_cache
         key = None
         fire_dir = False
@@ -6998,25 +7054,49 @@ class CombatSimulation:
             weapon_state.current_aim_direction = saved_aim
             if key is not None:
                 leads[key] = fire_dir
-        arcs = ship.arcs
-        mount.target_id = target_id
-        mount.stamp = now
-        if mount.kind == 'spinal':
-            if fire_dir is None:
-                mount.state = state = weapon_arcs.MASKED
-                mount.has_want = False
-            else:
-                mount.ax, mount.ay, mount.az = arcs.to_body(fire_dir.x, fire_dir.y, fire_dir.z)
-                mount.state = state = weapon_arcs.ON_TARGET
-            self._arcs_note_mask(ship, mount, state, 'gimbal')
-            return state
+        return fire_dir
+
+    def _arcs_gun_masked_on(self, ship: ShipCombatState, ws: 'WeaponState', mount,
+                            target: ShipCombatState) -> bool:
+        """True when the turret mount's own hull masks its lead on ``target``."""
+        fire_dir = self._arcs_gun_lead(ship, ws, mount, target)
         if fire_dir is None:
-            # No intercept solution: track the line of sight.
             fire_dir = (target.position - ship.position).normalized()
-        bx, by, bz = arcs.to_body(fire_dir.x, fire_dir.y, fire_dir.z)
-        state = mount.check(bx, by, bz) if moved else mount.train(bx, by, bz, dt)
-        self._arcs_note_mask(ship, mount, state, 'hull')
-        return state
+        return bool(mount.mask[weapon_arcs.cell_index(
+            *ship.arcs.to_body(fire_dir.x, fire_dir.y, fire_dir.z))])
+
+    def _arcs_fallback_target(self, ship: ShipCombatState, ws: 'WeaponState', mount,
+                              assigned: ShipCombatState) -> Optional[ShipCombatState]:
+        """
+        The enemy a turret battery engages while its own hull masks the
+        assigned target: of the live enemies in
+        weapon range and arc that the mount BEARS on, the one fire control
+        ranks first - highest P(hit) (gun_firing_solution, the number the
+        FireControlSystem ranks by), then nearest, then ship id. None when
+        nothing bears. Snapshot-only, no RNG.
+        """
+        best = None
+        best_key = None
+        own = ship.position
+        range_m = ws.weapon.range_km * 1000.0
+        for enemy in self.get_enemy_ships(ship.ship_id):
+            if enemy is assigned:
+                continue
+            rel = enemy.position - own
+            dist = rel.magnitude
+            if dist <= 0.0 or dist > range_m:
+                continue
+            if not ws.is_target_in_arc(ship.forward, rel.normalized()):
+                continue
+            if self._arcs_gun_masked_on(ship, ws, mount, enemy):
+                continue
+            solution = self.gun_firing_solution(ship, enemy, ws)
+            if not solution.can_fire:
+                continue
+            key = (-solution.hit_probability, dist, enemy.ship_id)
+            if best_key is None or key < best_key:
+                best, best_key = enemy, key
+        return best
 
     def _arcs_pd_cell(self, ship: ShipCombatState, arcs, target_info: dict) -> int:
         """Mask cell of the line of sight to a PD target (memoised per list)."""
