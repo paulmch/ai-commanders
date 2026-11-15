@@ -463,3 +463,38 @@ def test_one_v_one_victory_rules_are_unchanged():
         if slot.startswith("pd"):
             ws.is_operational = False
     assert VictoryEvaluator().is_ship_disabled(ship) is True
+
+
+# ---------------------------------------------------------------------------
+# Review mutation: the blast's fitting hit chance scales with intensity
+# ---------------------------------------------------------------------------
+
+class _FixedRolls:
+    def __init__(self, value):
+        self.value = value
+        self.draws = 0
+
+    def random(self):
+        self.draws += 1
+        return self.value
+
+
+@pytest.mark.parametrize("roll, hit", [(0.10, True), (0.30, False)])
+def test_blast_fitting_hit_chance_scales_with_intensity(roll, hit):
+    sim = CombatSimulation(seed=1, time_step=1.0)
+    dead = _ship(sim, "dead", "alpha", Vector3D(0, 0, 0))
+    radius_km = bd.reactor_blast_radius_km(bd._hull_mass_tons(dead))
+    # intensity 0.25 -> each fitting is caught with p = 0.25 x 0.6 = 0.15
+    victim = _ship(sim, "victim", "beta", Vector3D(0, radius_km * 500.0, 0))
+    sim._destroy_ship(dead, "x", cause="reactor_destroyed")
+    sim._damage_rng = _FixedRolls(roll)
+    bd.resolve_pending_blasts(sim)
+    blast = _events(sim, SimulationEventType.BLAST_DAMAGE)[0].data
+    assert blast["intensity"] == pytest.approx(0.25, abs=1e-3)
+    assert roll < bd.REACTOR_BLAST_FITTING_HIT_CHANCE        # caught without the scaling
+    mounts = [e for e in _events(sim, SimulationEventType.MOUNT_DAMAGED)
+              if e.data["cause"] == "reactor_blast"]
+    assert bool(mounts) is hit
+    if hit:   # every exposed fitting rolled and lost intensity x 80 % health
+        assert all(e.data["health_lost_pct"] == pytest.approx(20.0, abs=0.1) for e in mounts)
+        assert len(mounts) == len(bd._exposed_fittings(victim, None)) == 5
