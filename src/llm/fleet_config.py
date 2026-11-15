@@ -148,6 +148,24 @@ class FleetDefinition:
     mcp: Optional[MCPConfig] = None  # MCP control (replaces admiral if enabled)
 
 
+def parse_heuristic_doctrine(value: Any) -> Dict[str, str]:
+    """'legacy' / {'alpha': 'tactical', 'beta': 'legacy'} / None -> per-faction dict."""
+    from .heuristic_captain import DOCTRINES
+    if value in (None, "", {}):
+        return {}
+    if isinstance(value, str):
+        value = {"alpha": value, "beta": value}
+    if not isinstance(value, dict):
+        raise ValueError(f"heuristic_doctrine must be a string or a dict, got {value!r}")
+    out = {}
+    for faction, doctrine in value.items():
+        if faction not in ("alpha", "beta") or doctrine not in DOCTRINES:
+            raise ValueError(f"heuristic_doctrine: bad entry {faction!r}: {doctrine!r} "
+                             f"(factions alpha/beta, doctrines {DOCTRINES})")
+        out[faction] = doctrine
+    return out
+
+
 @dataclass
 class BattleFleetConfig:
     """Complete battle configuration with both fleets."""
@@ -169,6 +187,10 @@ class BattleFleetConfig:
     draft: Optional[DraftConfig] = None
     max_checkpoints: int = 40
     seed: Optional[int] = None
+    # Doctrine of the rule-based ("heuristic") captains per faction:
+    # "tactical" (default) or "legacy" (the pass-4 captain). JSON key
+    # "heuristic_doctrine": one string for both sides or {"alpha": .., "beta": ..}.
+    heuristic_doctrine: Dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         validate_battle_options(self)
@@ -229,6 +251,7 @@ class BattleFleetConfig:
             draft=draft,
             max_checkpoints=data.get("max_checkpoints", 40),
             seed=data.get("seed"),
+            heuristic_doctrine=parse_heuristic_doctrine(data.get("heuristic_doctrine")),
         )
 
     def get_all_ships(self) -> List[ShipConfig]:

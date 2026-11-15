@@ -548,11 +548,13 @@ class HudCommsRunner(LLMBattleRunner):
 
 def hud_comms_battle(seed: int = 7, points: int = 100, max_ships: int = 6, distance_km: float = 300.0,
                      max_checkpoints: int = 12, recording_dir: Optional[str] = None,
-                     verbose: bool = False) -> Tuple[Any, Optional[str]]:
+                     verbose: bool = False, doctrine: str = "legacy") -> Tuple[Any, Optional[str]]:
     """
     Run the HUD command-net fixture battle; returns (result, recording file).
-    Seed 7 at 300 km: 4 v 4, two beta ships crippled and destroyed (169 ->
-    187 s and 256 -> 280 s), so the kill feed's dying countdown shows too.
+    Seed 7 at 300 km, legacy doctrine (the default; the viewer is developed
+    against it): 4 v 4, two beta ships crippled and destroyed (164 -> 183 s
+    and 233 -> 260 s on the pass-5 damage engine), so the kill feed's dying
+    countdown shows too.
     """
     from src.llm.fleet_config import BattleFleetConfig
     from src.llm.fleet_draft import auto_draft, draft_to_fleet_definition
@@ -570,7 +572,8 @@ def hud_comms_battle(seed: int = 7, points: int = 100, max_ships: int = 6, dista
     config = BattleConfig(
         initial_distance_km=distance_km, time_limit_s=time_limit, max_checkpoints=max_checkpoints,
         verbose=verbose, personality_selection=False, record_battle=True, record_sim_trace=True,
-        record_predictions=True, recording_dir=recording_dir or "data/recordings", seed=seed)
+        record_predictions=True, recording_dir=recording_dir or "data/recordings", seed=seed,
+        heuristic_doctrine={"alpha": doctrine, "beta": doctrine})
     dummy = LLMCaptainConfig(name="-", ship_name="-", model=HEURISTIC_MODEL,
                              personality=CaptainPersonality.BALANCED)
     runner = HudCommsRunner(config=config, alpha_config=dummy, beta_config=dummy, client=None,
@@ -579,8 +582,47 @@ def hud_comms_battle(seed: int = 7, points: int = 100, max_ships: int = 6, dista
     return result, result.recording_file
 
 
+def plume_wash_battle(seed: int = 5, recording_dir: Optional[str] = None,
+                      verbose: bool = False, doctrine: str = "legacy") -> Tuple[Any, Optional[str]]:
+    """
+    Drive plume wash demo (src/drive_plume.py): an alpha battleship burns at
+    the enemy with a destroyer in line astern, 11 km back and 0.2 km off its
+    exhaust axis, and a cruiser safely abeam. Legacy captains (the default)
+    know nothing of the plume: the destroyer flies up the battleship's
+    exhaust at twice its acceleration - a sustained `plume_wash` episode
+    (enter, sustain every 5 s, exit) with nose armour burned off,
+    `mount_damaged` (cause "plume_wash") on its bow fittings and a
+    `crew_radiation` event when its crew's dose passes the impaired line.
+    """
+    from src.llm.fleet_config import BattleFleetConfig
+    from src.llm.heuristic_captain import HEURISTIC_MODEL
+
+    def ship(ship_type: str, x: float, y: float) -> Dict[str, Any]:
+        return {"ship_type": ship_type, "model": HEURISTIC_MODEL,
+                "position": {"x": x, "y": y, "z": 0.0}}
+
+    fleet_config = BattleFleetConfig.from_dict({
+        "battle_name": "Drive plume wash demo",
+        "alpha_fleet": {"ships": [ship("battleship", -200.0, 0.0), ship("destroyer", -211.0, 0.2),
+                                  ship("cruiser", -205.0, 14.0)]},
+        "beta_fleet": {"ships": [ship("destroyer", 200.0, -6.0), ship("cruiser", 200.0, 6.0)]},
+        "record_battle": True, "record_sim_trace": True, "personality_selection": False,
+        "seed": seed, "time_limit_s": 180.0, "initial_distance_km": 400.0,
+    })
+    config = BattleConfig.from_fleet_config(fleet_config, verbose=verbose)
+    config.heuristic_doctrine = {"alpha": doctrine, "beta": doctrine}
+    config.recording_dir = recording_dir or "data/recordings"
+    config.record_predictions = True
+    dummy = LLMCaptainConfig(name="-", ship_name="-", model=HEURISTIC_MODEL,
+                             personality=CaptainPersonality.BALANCED)
+    runner = LLMBattleRunner(config, dummy, dummy, None, fleet_config)
+    result = runner.run_battle(load_fleet_data())
+    return result, result.recording_file
+
+
 FLEET_SCENARIOS = {
     "hud_comms": hud_comms_battle,
+    "plume_wash": plume_wash_battle,
 }
 
 
@@ -617,13 +659,17 @@ def main() -> int:
     parser.add_argument("--no-predictions", action="store_true",
                         help="Skip the per-frame predicted path (sim_trace 'plan')")
     parser.add_argument("--seed", type=int, default=7, help="hud_comms: draft + combat seed")
+    parser.add_argument("--doctrine", choices=("legacy", "tactical"), default="legacy",
+                        help="hud_comms: heuristic captain doctrine (default legacy: the "
+                             "fixture the viewer is developed against)")
     parser.add_argument("--out", default=None,
                         help="hud_comms: also copy the recording here (e.g. "
                              "visualizer/public/recordings/p4_hud_comms_fixture.json)")
     args = parser.parse_args()
 
     if args.scenario in FLEET_SCENARIOS:
-        result, path = FLEET_SCENARIOS[args.scenario](seed=args.seed, recording_dir=args.recording_dir)
+        result, path = FLEET_SCENARIOS[args.scenario](seed=args.seed, recording_dir=args.recording_dir,
+                                                      doctrine=args.doctrine)
         print(f"\n=== {args.scenario} ===")
         print(f"Winner: {result.winner or 'Draw'} - {result.reason}")
         print(f"Duration: {result.duration_s:.0f}s, checkpoints: {result.checkpoints_used}")

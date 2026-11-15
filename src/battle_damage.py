@@ -716,6 +716,8 @@ def ship_can_deal_damage(ship: "ShipCombatState") -> bool:
     if (getattr(ship, "is_destroyed", False) or getattr(ship, "is_dying", False)
             or getattr(ship, "is_surrendered", False)):
         return False
+    if getattr(ship, "crew_incapacitated", False) is True:
+        return False        # radiation (src/drive_plume.py): nobody left to fight her
     weapons = getattr(ship, "weapons", None)
     for slot, ws in (weapons.items() if isinstance(weapons, dict) else ()):
         if slot.startswith("pd") or not _is_gun(ws):
@@ -734,6 +736,8 @@ def ship_disarmed_by_damage(ship: "ShipCombatState") -> bool:
     ship has. An intact ship that merely fired its magazines dry is NOT
     disarmed by damage (spending ammunition must not cost score), and a hull
     with no gun or tube at all is not either."""
+    if getattr(ship, "crew_incapacitated", False) is True:
+        return True         # an incapacitated crew (src/drive_plume.py) is as good as disarmed
     weapons = getattr(ship, "weapons", None)
     mounts = [ws for slot, ws in (weapons.items() if isinstance(weapons, dict) else ())
               if not slot.startswith("pd") and (_is_gun(ws) or "torpedo" in

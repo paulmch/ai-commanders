@@ -23,6 +23,7 @@
  * All text here is plain data; renderers must write it with textContent.
  */
 import { eventId } from './DecisionIndex.js';
+import { FittingFold } from './FittingsIndex.js';
 
 /** Class weights of the engine's time-limit verdict (battle_runner._evaluate_fleet_tactical_advantage). */
 export const SHIP_VALUES = {
@@ -95,6 +96,33 @@ export function normalizeStatus(status) {
 }
 
 const REPORT_TOOLS = new Set(['report_to_admiral', 'respond_to_orders']);
+
+/** {reason} when a captain_decision carries a `surrender` tool call, else null. */
+export function surrenderCall(decision) {
+  const call = (decision?.data?.tool_calls || []).find(c => c?.name === 'surrender');
+  return call ? { reason: String(call.arguments?.reason || '') } : null;
+}
+
+/**
+ * Fold surrenders in events[from..] into `out` [{t, shipId, name, faction, reason}]:
+ * a `surrender` event, or a captain's `surrender` tool call (all a fleet
+ * battle records). The first per ship counts.
+ */
+function addSurrenders(out, seen, events, from, ships) {
+  for (let i = from; i < events.length; i++) {
+    const e = events[i];
+    if (!e.ship_id || seen.has(e.ship_id)) continue;
+    let reason;
+    if (e.event_type === 'surrender') reason = String(e.data?.reason || '');
+    else if (e.event_type === 'captain_decision') {
+      const quit = surrenderCall(e);
+      if (!quit) continue;
+      reason = quit.reason;
+    } else continue;
+    seen.add(e.ship_id);
+    out.push({ t: e.timestamp, shipId: e.ship_id, name: nameOf(e.ship_id, ships), faction: factionOf(e.ship_id, ships), reason });
+  }
+}
 
 /** {status, text} from a captain_decision's report tool call or acknowledgment, else null. */
 export function legacyReport(decision) {
@@ -286,9 +314,11 @@ export function buildComms(events, ids, ships, checkpoints, { from = 0, to = eve
   // acknowledgment (new recordings carry both, at the same time), and the
   // latest decision per ship and time lets a row open its decision.
   const reported = new Set();
+  const surrendered = new Set();   // ships with a `surrender` event at this time (its row wins over the tool call's)
   const decisionAt = new Map();
   for (let i = from; i < to; i++) {
     const e = events[i];
+    if (e.event_type === 'surrender' && e.ship_id) surrendered.add(at(e));
     if (e.event_type === 'captain_report' && e.ship_id) reported.add(at(e));
     else if (e.event_type === 'captain_decision') decisionAt.set(at(e), ids[i]);
   }
@@ -344,6 +374,12 @@ export function buildComms(events, ids, ships, checkpoints, { from = 0, to = eve
       }
       case 'captain_decision': {
         const faction = d.faction || factionOf(ship, ships);
+        // Fleet battles record a surrender only as the captain's tool call
+        const quit = surrenderCall(e);
+        if (quit && !surrendered.has(at(e))) {
+          push(e, i, { id: `${ids[i]}:surrender`, kind: 'system', tag: 'SURRENDER', faction, from: d.ship_name || nameOf(ship, ships), fromId: ship, shipId: ship,
+            text: `${nameOf(ship, ships)} surrenders${quit.reason ? `: ${clip(quit.reason, 200)}` : '.'}`, decisionId: ids[i] });
+        }
         if (d.call_failed) {
           push(e, i, { id: `${ids[i]}:failed`, kind: 'error', tag: 'NO ORDERS', faction, from: d.ship_name || nameOf(ship, ships), fromId: ship, shipId: ship,
             text: 'Captain model call failed; the ship keeps its previous orders.', decisionId: ids[i] });
@@ -389,6 +425,15 @@ export function buildComms(events, ids, ships, checkpoints, { from = 0, to = eve
         });
         break;
       }
+      case 'admiral_directive_failed':
+        // A checkpoint whose directive call failed: captains fly on without a new fleet directive
+        push(e, i, { kind: 'error', tag: 'NO DIRECTIVE', faction: d.faction || null, from: d.admiral_name || 'Admiral', to: 'ALL SHIPS',
+          text: `No new fleet directive this checkpoint: the admiral's directive call failed${d.reason ? ` (${clip(d.reason, 300)})` : ''}. Captains keep their previous directive.` });
+        break;
+      case 'admiral_directive_retried':
+        push(e, i, { kind: 'system', tag: 'DIRECTIVE RETRIED', faction: d.faction || null, from: d.admiral_name || 'Admiral', to: 'ALL SHIPS',
+          text: `Fleet directive recovered on a retry${d.reason ? `: ${clip(d.reason, 300)}` : '.'}` });
+        break;
       case 'model_error':
         push(e, i, { kind: 'error', tag: 'MODEL ERROR', faction: d.faction || factionOf(ship, ships), from: ship ? nameOf(ship, ships) : `${d.faction || ''} admiral`.trim(),
           fromId: ship || null, shipId: ship || null, text: clip(d.error, 400) });
@@ -633,6 +678,14 @@ export function formatLogEvent(e, ships = {}) {
     }
     case 'magazine_cookoff': return { cls: 'destroyed', cat: 'fire', text: `COOK-OFF: ${n(e.ship_id)} ${d.module_name || 'magazine'} burns (${d.torpedoes_lost > 0 ? `${d.torpedoes_lost} torpedoes` : `${d.gun_rounds_lost || 0} rounds`} lost)` };
     case 'blast_damage': return { cls: 'hit', cat: 'kills', text: `BLAST: ${n(e.ship_id)} caught ${gj(d.distance_km)} km from ${n(d.source_ship_id)}'s reactor${d.armor_ablation_cm > 0 ? ` (-${gj(d.armor_ablation_cm)} cm ${d.hit_location || ''} armour)` : d.fuse_cut_s > 0 ? ` (fuse -${gj(d.fuse_cut_s)} s)` : ''}` };
+    case 'reactor_blast': {
+      const killed = d.torpedoes_destroyed?.length || 0, blinded = d.torpedoes_blinded?.length || 0;
+      if (!killed && !blinded) return null;   // ships it caught have their own BLAST rows
+      const parts = [];
+      if (killed) parts.push(`destroys ${killed} torpedo${killed === 1 ? '' : 'es'}`);
+      if (blinded) parts.push(`blinds ${blinded}`);
+      return { cls: 'pd', cat: 'kills', text: `BLAST: ${n(e.ship_id)}'s reactor ${parts.join(', ')} (${gj(d.radius_km)} km)` };
+    }
     case 'shot_fired': return { cls: 'shot', cat: 'fire', text: `FIRE: ${n(e.ship_id)} → ${n(d.target_id)}` };
     case 'torpedo_launched': return { cls: 'torpedo', cat: 'fire', text: `TORPEDO AWAY: ${n(e.ship_id)} → ${n(d.target_id)}` };
     case 'torpedo_impact': return { cls: 'destroyed', cat: 'fire', text: `TORPEDO IMPACT: ${n(d.target_id)} takes ${(Number(d.total_damage_gj) || 0).toFixed(0)} GJ (${d.hit_location || '?'})` };
@@ -652,7 +705,12 @@ export function formatLogEvent(e, ships = {}) {
       return { cls: 'kill', cat: 'kills', text: `CRIPPLED: ${n(e.ship_id)}${by}${fuse}` };
     }
     case 'ship_destroyed': return { cls: 'kill', cat: 'kills', text: `KILL: ${n(e.ship_id)} destroyed${d.cause ? ` (${readable(d.cause)})` : ''}${d.killer_id ? ` · ${n(d.killer_id)}` : ''}` };
+    case 'captain_decision': {
+      const quit = surrenderCall(e);
+      return quit ? { cls: 'system', cat: 'kills', text: `SURRENDER: ${n(e.ship_id)} strikes its colours${quit.reason ? ` (${clip(quit.reason, 120)})` : ''}` } : null;
+    }
     case 'maneuver': return { cls: 'info', cat: 'command', text: `${n(e.ship_id)}: ${d.maneuver_type}${d.throttle != null ? ` @ ${Math.round(d.throttle * 100)}%` : ''}` };
+    case 'admiral_directive_failed': return { cls: 'system', cat: 'command', text: `NO DIRECTIVE ${String(d.faction || '').toUpperCase()}: admiral's directive call failed${d.reason ? ` (${clip(d.reason, 120)})` : ''}` };
     case 'admiral_directive': return { cls: 'orders', cat: 'command', text: `ORDERS ${String(d.faction || '').toUpperCase()}: ${firstSentence(d.directive)}` };
     case 'captain_report': return { cls: d.status && normalizeStatus(d.status) !== 'ACK' ? 'deviate' : 'comms', cat: 'command', text: `${normalizeStatus(d.status)} ${d.ship_name || n(e.ship_id)}: ${clip(d.reason || d.intent || '', 140)}` };
     case 'captain_log': return { cls: 'comms', cat: 'command', text: `LOG ${n(e.ship_id)}: "${clip(d.note, 160)}"` };
@@ -897,6 +955,9 @@ class HudBuilder {
     this.spendTotals = { alpha: 0, beta: 0 };
     this.admiralCalls = [];
     this.end = { stopped: null, ended: null };
+    this.fitFold = new FittingFold();
+    this.surrenders = [];
+    this.surrenderSeen = new Set();
   }
 
   /** Is `delta` (the last `n` events of the loader) a clean append to what this builder indexed? */
@@ -924,6 +985,15 @@ class HudBuilder {
     addSpend(this.spend, this.spendTotals, events, from);
     addAdmiralCalls(this.admiralCalls, events, ids, from);
     addEnd(this.end, events, from);
+    addSurrenders(this.surrenders, this.surrenderSeen, events, from, ships);
+    // Fittings need the fleet specs: if they only arrive now, fold again from the first event
+    const hadLayouts = this.fitFold.hasLayouts;
+    this.fitFold.setLayouts(loader.sourceData, ships);
+    if (!hadLayouts && this.fitFold.hasLayouts && from > 0) {
+      this.fitFold = new FittingFold();
+      this.fitFold.setLayouts(loader.sourceData, ships);
+      this.fitFold.add(events, ids, 0, ships);
+    } else this.fitFold.add(events, ids, from, ships);
 
     // Command net: drop the open rows, re-derive them together with the new events
     this.comms.length = this.frozenRows;
@@ -971,7 +1041,11 @@ class HudBuilder {
       visions: visionsOf(this.admiralCalls, src.assets),
       result: resultOf(this.end, loader.metadata || {}),
       models,
-      duration: loader.duration || 0
+      duration: loader.duration || 0,
+      surrenders: this.surrenders,
+      // Pass-5 battle damage (FittingsIndex.js): per-ship fitting state over time,
+      // the notices derived from it, and a blast summary per death
+      ...this.fitFold.view(kills)
     };
   }
 }

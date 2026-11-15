@@ -47,6 +47,7 @@ from __future__ import annotations
 import math
 import threading
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
@@ -83,17 +84,17 @@ HOLD_CLOSING_KPS = 0.4
 # while it could still stop short of GUNS_HOT_KM (sprint_ok - a closure cap,
 # ~2 km/s), then coasts; inside it it coasts nose-on (PADLOCK: spinal and
 # nose armour on him) through a controlled pass - every burn inside the gun
-# envelope swings the nose off - and once the range is opening faster than
-# REENGAGE_OPENING_KPS past REENGAGE_RANGE_KM it burns back toward him, nose
-# first again. Measured on mirror fleets vs the legacy captain: braking to a
+# envelope swings the nose off - and whenever it is outside the hold band
+# with less than MIN_ADVANCE_KPS of closure (opening after a pass, or two
+# fleets at rest) it burns toward him, nose first again: round 1 left two
+# destroyers 220 km apart parked for a whole battle. Measured on mirror fleets vs the legacy captain: braking to a
 # pass speed outside the guns (flip, tail toward a charging enemy at
 # 200-300 km) lost 4 of 4 gun-heavy seeds; coasting in won 3 of 4.
 GUNS_HOT_KM = 200.0
 # A gun ship keeps facing the enemy gun it faces until another is this many
 # times closer.
 FACE_SWITCH_FACTOR = 1.5
-REENGAGE_OPENING_KPS = 0.3
-REENGAGE_RANGE_KM = 120.0
+MIN_ADVANCE_KPS = 0.5
 
 # Torpedo boats (no guns) hold this range to the nearest enemy gun ship:
 # outside the gun envelope that matters, inside the torpedoes' reach.
@@ -142,6 +143,7 @@ GUN_REACH_KM = 250.0
 # Self-preservation.
 CRIPPLED_HULL_PCT = 35.0          # below this hull integrity: open range
 RETREAT_RANGE_KM = 350.0          # ...to this range from the nearest gun ship
+WITHDRAW_ANGLE_DEG = 60.0         # withdrawal burn off the line to the gun
 
 # Battle damage (src/battle_damage.py). A hull whose drive makes less than
 # FORMATION_MIN_DRIVE_FRACTION of its thrust no longer sets the fleet's
@@ -152,6 +154,15 @@ RETREAT_RANGE_KM = 350.0          # ...to this range from the nearest gun ship
 FORMATION_MIN_DRIVE_FRACTION = 0.5
 DISARMED_TARGET_FACTOR = 0.3
 BLAST_AVOID_FACTOR = 1.5
+
+# Drive plume (src/drive_plume.py). A ship does not burn friendlies with its
+# own torch: with a friendly inside the avoidance cone astern (the module's
+# PLUME_AVOID_HALF_ANGLE_DEG / PLUME_AVOID_RANGE_KM) it eases the drive until
+# the wash on that friendly is at most this much - under the 0.78 GJ/s the
+# radiators reject - and coasts when even PLUME_MIN_THROTTLE would exceed it.
+# A torpedo dodge keeps its throttle (survival first).
+PLUME_SAFE_WASH_GJ_PER_S = 0.5
+PLUME_MIN_THROTTLE = 0.05
 
 STANDARD_G = 9.81
 
@@ -195,7 +206,10 @@ def has_torpedoes(ship: Any) -> bool:
 def role(ship: Any) -> str:
     """'gun' (a working coilgun), 'torpedo' (loaded tubes only) or 'unarmed'
     (every gun mount wrecked and no round left in a working tube: battle
-    damage, src/battle_damage.py, or an empty magazine)."""
+    damage, src/battle_damage.py, an empty magazine, or a crew incapacitated
+    by plume radiation, src/drive_plume.py)."""
+    if getattr(ship, "crew_incapacitated", False) is True:
+        return "unarmed"
     if has_guns(ship):
         return "gun"
     if has_torpedoes(ship):
@@ -203,11 +217,73 @@ def role(ship: Any) -> str:
     return "unarmed"
 
 
+def withdraw_direction(ship: Any, threat: Any) -> Any:
+    """
+    Burn direction for a withdrawal: away from ``threat`` but WITHDRAW_ANGLE_DEG
+    off the line, so his guns see the flank instead of the tail (30% of tail
+    hits strike the drive, src/battle_damage.py - a ship fleeing straight
+    away had its drive shot out within two minutes). The side is the one the
+    ship is already drifting to (deterministic tie-break: +z, then +y).
+    """
+    from ..physics import Vector3D
+    away = ship.position - threat.position
+    if away.magnitude < 1.0:
+        away = Vector3D(-1.0, 0.0, 0.0)
+    away = away.normalized()
+    rel_v = ship.velocity - threat.velocity
+    side = rel_v - away * rel_v.dot(away)
+    if side.magnitude < 1.0:
+        up = Vector3D(0.0, 0.0, 1.0) if abs(away.z) < 0.9 else Vector3D(0.0, 1.0, 0.0)
+        side = up - away * up.dot(away)
+    side = side.normalized()
+    a = math.radians(WITHDRAW_ANGLE_DEG)
+    return (away * math.cos(a) + side * math.sin(a)).normalized()
+
+
 def drive_fraction(ship: Any) -> float:
     try:
         return float(ship.get_effective_thrust_fraction())
     except Exception:
         return 1.0
+
+
+def plume_safe_throttle(simulation: Any, ship: Any, throttle: float, threat: bool = False,
+                        direction: Any = None) -> float:
+    """The ordered throttle, eased so this ship's exhaust does not cook a
+    friendly astern of it (see PLUME_SAFE_WASH_GJ_PER_S).
+
+    The cone is checked along the nose as it points now and, for a HEADING
+    order, along the ordered ``direction`` as well, now and over the coming
+    decision interval (drive_plume.exhaust_clearance_km: a friendly just
+    ahead that a full burn would overtake ends up dead astern at point-blank
+    range). The wash is taken on the exhaust axis whatever the friendly's
+    exact angle inside the avoidance cone (the nose moves while the order
+    lasts).
+    """
+    if threat or throttle <= 0.0:
+        return throttle
+    try:
+        from .. import drive_plume as plume
+    except ImportError:  # pragma: no cover - script-style import path
+        import drive_plume as plume
+    if isinstance(direction, dict):
+        direction = SimpleNamespace(x=float(direction.get("x", 0.0)), y=float(direction.get("y", 0.0)),
+                                    z=float(direction.get("z", 0.0)))
+    horizon_s = float(getattr(simulation, "decision_interval", 30.0) or 30.0)
+    nearest_km = plume.exhaust_clearance_km(simulation, ship, None, horizon_s)
+    if direction is not None:
+        ordered = plume.exhaust_clearance_km(simulation, ship, direction, horizon_s)
+        if ordered is not None and (nearest_km is None or ordered < nearest_km):
+            nearest_km = ordered
+    if nearest_km is None:
+        return throttle
+    full = plume.plume_heat_rate_gj_s(plume.emitter_jet_power_w(ship, 1.0), nearest_km, 0.0)
+    if full <= PLUME_SAFE_WASH_GJ_PER_S:
+        return throttle
+    cap = PLUME_SAFE_WASH_GJ_PER_S / full
+    if cap < PLUME_MIN_THROTTLE:
+        return 0.0
+    return round(min(throttle, cap), 2)
 
 
 def blast_threat(simulation: Any, ship: Any) -> Optional[Any]:
@@ -257,12 +333,13 @@ def gun_maneuver(range_km: float, closing_kps: float, engage_km: float, accel_ms
     """
     if (range_km <= engage_km * HOLD_BAND_FACTOR and abs(closing_kps) <= HOLD_CLOSING_KPS):
         return "HOLD_RANGE", {"range_km": engage_km}
+    if closing_kps < MIN_ADVANCE_KPS and range_km > engage_km * HOLD_BAND_FACTOR:
+        # Out of the hold band with (almost) no closure, or opening after a
+        # pass: close, nose first. Never sit still out there.
+        return "INTERCEPT", {}
     if range_km > GUNS_HOT_KM:
         if sprint_ok(range_km, GUNS_HOT_KM, closing_kps, accel_ms2, interval_s, max_closing_kps):
             return "INTERCEPT", {}
-        return "PADLOCK", {}
-    if closing_kps < -REENGAGE_OPENING_KPS and range_km > REENGAGE_RANGE_KM:
-        return "INTERCEPT", {}
     return "PADLOCK", {}
 
 
@@ -363,6 +440,11 @@ def gun_target(ship: Any, enemies: List[Any], focus_id: Optional[str]) -> Option
     live = [e for e in enemies if _alive(e)]
     if not live:
         return None
+    # A disarmed enemy out of reach cannot hurt us and is running: leave it
+    # while anything armed is left (chasing it stalled battles to the limit).
+    armed = [e for e in live if role(e) != "unarmed"]
+    if armed:
+        live = [e for e in live if role(e) != "unarmed" or _km(ship, e) <= GUN_REACH_KM]
     in_reach = [e for e in live if _km(ship, e) <= GUN_REACH_KM]
     if not in_reach:
         focus = next((e for e in live if e.ship_id == focus_id), None)
@@ -445,6 +527,13 @@ def _salvo_plan(simulation: Any, boats: List[Any], enemies: List[Any], focus: Op
     can saturate that one too, else joins the first (MAX_SALVOS_PER_CHECKPOINT).
     A gun ship already inside TORPEDO_PANIC_RANGE_KM of a boat gets that
     boat's rounds first.
+
+    Rounds that cannot saturate anything are launched anyway, on purpose:
+    a few single-tube boats can never assemble a saturating salvo, and
+    holding them for one (round 1) cost the battleship roster 4 of 4
+    mirror battles against legacy, which lands 5-6 such rounds a battle on
+    big hulls. The captain's launch check calls these TRICKLE (per launch
+    call, so the boats of one synchronized salvo each register one too).
     """
     from .fire_solutions import pd_cover, rounds_inbound, salvo_to_saturate
     from .prompts import pd_doctrine_numbers

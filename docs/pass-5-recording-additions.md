@@ -64,7 +64,7 @@ that fitting's state at t**; a fitting with no event is intact (100).
 | `thrust_fraction` | float 0-1 | `engine` only: the ship's available thrust after this event. It equals engine health / 100 while health is above 25%; at 25% or less the drive stops producing thrust altogether (0 = adrift), before it is formally destroyed |
 | `torpedoes_lost` | int | `launcher` only, only when `destroyed`: rounds lost with the tube |
 | `torpedoes_remaining` | int | `launcher` only: rounds left on the whole ship after this event |
-| `cause` | string | `"surface_hit"` or `"reactor_blast"` |
+| `cause` | string | `"surface_hit"`, `"reactor_blast"` or `"plume_wash"` (a fitting burned by another ship's drive plume, see "Plume lane"; `source_ship_id` is then the ship whose exhaust it is) |
 | `hit_location` | string or null | struck facing: `"nose"`, `"lateral"`, `"tail"` |
 | `source_ship_id` | string or null | shooter (surface hit) or the ship whose reactor detonated (blast) |
 
@@ -264,7 +264,7 @@ battle with `--trace` (no LLM), 420 s long. Not in the repository; regenerate
 it (fully offline, no API key, about half a minute) and copy it into place:
 
 ```bash
-uv run python scripts/run_draft_battle.py --auto-draft --no-admirals --trace --seed 4 --budget 200 --time-limit 420 --recording-dir /tmp/p5_demo
+uv run python scripts/run_draft_battle.py --auto-draft --no-admirals --trace --seed 4 --budget 200 --time-limit 420 --doctrine legacy --recording-dir /tmp/p5_demo
 cp "$(ls -t /tmp/p5_demo/battle_*[0-9].json | head -1)" visualizer/public/recordings/p5_damage_demo.json
 ```
 
@@ -348,3 +348,204 @@ envelope is shortened to the fields that matter.
   `hit_probability` is 0.
 - **Consumers:** `launched = impact + miss + intercepted + in_flight_at_end` now balances
   per side. Viewers that ignore the field are unaffected.
+
+## Plume lane (`src/drive_plume.py`)
+
+A ship that produces thrust projects a narrow exhaust cone astern (exactly
+opposite its nose vector; the engine never deflects the nozzle). Any other
+ship inside the cone - friend or foe - takes heat into its sink, its crew
+takes a radiation dose, and where the wash is strong it loses armour on the
+facing it shows the jet and has the fittings on that facing burned. No RNG;
+the wash never kills by itself (the heat stops at 149 % of the sink, just
+under the meltdown line).
+
+Demo recording: `visualizer/public/recordings/p5_plume_demo.json` (not
+committed; regenerate with the command under "Demo recording" below).
+
+Magnitudes are named constants in `src/drive_plume.py`; the numbers quoted
+here are the values at the time of writing. On the exhaust axis of a torch at
+full throttle (all hulls mount the same 58.56 MN / 300 TW drive; every column
+is proportional to the throttle actually produced):
+
+| distance astern | heat into the victim | armour loss on the washed facing | crew dose, unshielded | behind a destroyer's bow (151 cm) | behind a destroyer's flank (26 cm) |
+|---|---|---|---|---|---|
+| 2 km | 69 GJ/s | 1.95 cm/s | 2.07 Sv/s | 0.46 Sv/s | 1.60 Sv/s |
+| 5 km | 40 GJ/s | 1.08 cm/s | 1.20 Sv/s | 0.26 Sv/s | 0.93 Sv/s |
+| 10 km | 16 GJ/s | 0.36 cm/s | 0.48 Sv/s | 0.11 Sv/s | 0.37 Sv/s |
+| 20 km | 4.7 GJ/s | 0.02 cm/s | 0.14 Sv/s | 0.031 Sv/s | 0.11 Sv/s |
+| 30 km | 2.2 GJ/s | 0 | 0.065 Sv/s | 0.014 Sv/s | 0.050 Sv/s |
+| 50 km | 0.79 GJ/s | 0 | 0.024 Sv/s | 0.005 Sv/s | 0.018 Sv/s |
+| 100 km | 0.20 GJ/s | 0 | 0.006 Sv/s | 0.001 Sv/s | 0.005 Sv/s |
+
+Nothing at all beyond 100 km. Off the axis every column falls as
+`exp(-(angle / 3 deg)^2)` and is exactly zero beyond 7.5 deg. For drawing the
+cone: half-angle 3 deg (core) / 7.5 deg (edge), length 100 km, brightness
+proportional to the emitter's `thrust` frame field. For making the washed
+hull glow: `hit_location` is the facing, `peak_heat_rate_gj_s` its intensity.
+
+### `plume_wash` - a ship is in another ship's drive exhaust
+
+`ship_id` = the washed ship. One *episode* per (emitter, victim) pair, from
+the tick the victim enters the jet to the tick it is no longer washed:
+
+- `phase: "enter"` on the first washed tick (values of that tick);
+- `phase: "sustain"` every 5 s of battle time while the episode lasts;
+- `phase: "exit"` on the first tick without wash (the victim left the cone,
+  the emitter stopped burning, or one of them died), carrying the totals of
+  the whole episode. A battle that ends mid-episode has no `exit`; the last
+  `sustain` then holds the running totals.
+
+A one-tick crossing therefore always gives an `enter` and, one tick later, an
+`exit` (same facing, the peak rate of the crossing). A turning emitter sweeps
+its jet: within a tick the thrust axis is sampled every 1.5 deg between the
+previous and the present nose direction, so a fast sweep cannot step over a
+ship between two ticks; the victim takes the mean over the samples (its dwell
+share) and the episode is flagged `swept`.
+
+Emitted after the tick's `reactor_blast` events. A ship in two exhausts at
+once has two concurrent episodes. A victim that is a dying hulk is tracked
+(events are emitted) but takes nothing: its `heat_gj` / `armor_ablation_cm` /
+`dose_sv` stay 0, `hit_location` is `null` and the crew fields are absent.
+
+| field | type | meaning |
+|---|---|---|
+| `source_ship_id` | string | the ship whose exhaust it is (may be a dying hulk whose torch still sputters) |
+| `phase` | string | `"enter"`, `"sustain"`, `"exit"` (or `"torpedo_blinded"`, see below) |
+| `friendly` | bool | emitter and victim are of the same faction |
+| `distance_km` | float | emitter-to-victim distance on the last washed tick |
+| `off_axis_deg` | float | victim's angle off the exhaust axis on the last washed tick (0 = dead astern, at most 7.5; for a swept tick the closest the axis came) |
+| `heat_rate_gj_s` | float | heat rate of the wash on the last washed tick (mean over the tick); `0.0` on `exit` |
+| `peak_heat_rate_gj_s` | float | highest instantaneous rate of the episode so far |
+| `emitter_throttle` | float 0-1 | thrust fraction the emitter produced on the last washed tick (engine damage and dry tanks included) |
+| `duration_s` | float | length of the episode so far (washed ticks x tick length) |
+| `heat_gj` | float | heat added to the victim's sink over the episode so far (capped: the wash never takes a sink past 149 %) |
+| `armor_ablation_cm` | float | armour burned off over the episode so far |
+| `armor_remaining_cm` | float | thickness left on the washed facing (absent for a hulk) |
+| `hit_location` | string or null | facing the victim shows the jet: `"nose"`, `"lateral"`, `"tail"` |
+| `fittings_hit` | [string] | fittings damaged by this episode so far, as `"<kind>:<slot>"` (`"gun:weapon_0"`, `"pd:pd_1"`, `"launcher:weapon_2"`); each damage step also has its own `mount_damaged` event with `cause: "plume_wash"` |
+| `swept` | bool | the jet swept across the ship on at least one tick of the episode (the emitter was turning) |
+| `dose_sv` | float | crew radiation dose received in this episode so far (Sv) |
+| `crew_dose_sv` | float | the victim crew's total dose in the battle so far (permanent; absent for a hulk) |
+| `crew_state` | string | `"fit"`, `"impaired"` or `"incapacitated"` (absent for a hulk) |
+| `heat` | float | victim's heat fraction after the tick (absent for a hulk) |
+
+Fittings: only the part of the heat rate above 4 GJ/s (inside ~22 km of a
+full burn) damages them, 0.5 % health per GJ, applied in steps of at least
+25 % (so one `mount_damaged` per fitting every few seconds, not one per tick)
+to every working gun mount, torpedo tube and PD turret of the ship whatever
+the facing - the jet is far wider than a hull; only the spinal mount is
+facing-gated (reached when the victim shows its nose). `hit_location` on
+these `mount_damaged` events is the washed facing.
+
+Example (entry, demo recording, t = 30 s):
+
+```json
+{"event_id": "e69", "sequence": 69, "timestamp": 30.0, "event_type": "plume_wash", "ship_id": "alpha_2", "data": {"source_ship_id": "alpha_1", "phase": "enter", "friendly": true, "distance_km": 10.99, "off_axis_deg": 0.77, "heat_rate_gj_s": 12.83, "peak_heat_rate_gj_s": 12.83, "emitter_throttle": 1.0, "duration_s": 1.0, "heat_gj": 12.8, "armor_ablation_cm": 0.26, "fittings_hit": [], "hit_location": "nose", "swept": false, "dose_sv": 0.085, "crew_dose_sv": 0.085, "crew_state": "fit", "armor_remaining_cm": 150.94, "heat": 0.043, "target_id": null}}
+```
+
+Example (sustained, demo recording, t = 55 s):
+
+```json
+{"event_id": "e98", "sequence": 98, "timestamp": 55.0, "event_type": "plume_wash", "ship_id": "alpha_2", "data": {"source_ship_id": "alpha_1", "phase": "sustain", "friendly": true, "distance_km": 7.57, "off_axis_deg": 1.94, "heat_rate_gj_s": 16.01, "peak_heat_rate_gj_s": 16.42, "emitter_throttle": 1.0, "duration_s": 26.0, "heat_gj": 385.4, "armor_ablation_cm": 8.44, "fittings_hit": ["gun:weapon_0", "gun:weapon_1", "pd:pd_0", "pd:pd_1"], "hit_location": "nose", "swept": false, "dose_sv": 2.662, "crew_dose_sv": 2.662, "crew_state": "impaired", "armor_remaining_cm": 142.76, "heat": 1.256, "target_id": null}}
+```
+
+Example (exit with totals, demo recording, t = 69 s):
+
+```json
+{"event_id": "e165", "sequence": 165, "timestamp": 69.0, "event_type": "plume_wash", "ship_id": "alpha_2", "data": {"source_ship_id": "alpha_1", "phase": "exit", "friendly": true, "distance_km": 3.69, "off_axis_deg": 6.72, "heat_rate_gj_s": 0.0, "peak_heat_rate_gj_s": 16.42, "emitter_throttle": 0.7, "duration_s": 39.0, "heat_gj": 463.7, "armor_ablation_cm": 9.99, "fittings_hit": ["gun:weapon_0", "gun:weapon_1", "pd:pd_0", "pd:pd_1"], "hit_location": "nose", "swept": false, "dose_sv": 3.326, "crew_dose_sv": 3.326, "crew_state": "impaired", "armor_remaining_cm": 141.21, "heat": 1.488, "target_id": null}}
+```
+
+Example (a weak episode that ended with the emitter jinking, `swept`, demo
+recording, t = 154 s):
+
+```json
+{"event_id": "e1598", "sequence": 1598, "timestamp": 154.0, "event_type": "plume_wash", "ship_id": "alpha_1", "data": {"source_ship_id": "alpha_2", "phase": "exit", "friendly": true, "distance_km": 34.34, "off_axis_deg": 4.35, "heat_rate_gj_s": 0.0, "peak_heat_rate_gj_s": 0.6, "emitter_throttle": 0.4, "duration_s": 57.0, "heat_gj": 25.5, "armor_ablation_cm": 0.0, "fittings_hit": [], "hit_location": "nose", "swept": true, "dose_sv": 0.061, "crew_dose_sv": 0.061, "crew_state": "fit", "armor_remaining_cm": 252.84, "heat": 0.384, "target_id": null}}
+```
+
+Example (`mount_damaged` caused by the wash, demo recording, t = 35 s; the
+same mount is destroyed by the fourth step at t = 50 s):
+
+```json
+{"event_id": "e70", "sequence": 70, "timestamp": 35.0, "event_type": "mount_damaged", "ship_id": "alpha_2", "data": {"kind": "gun", "slot": "weapon_0", "index": 0, "weapon_name": "Spinal Coiler Mk3", "health_pct": 72.1, "health_lost_pct": 27.9, "destroyed": false, "cooldown_factor": 1.39, "cause": "plume_wash", "hit_location": "nose", "source_ship_id": "alpha_1", "target_id": null}}
+```
+
+### `crew_radiation` - a crew's plume radiation dose crossed a threshold
+
+`ship_id` = the irradiated ship. The dose accumulates while the ship is
+washed (dose rate = wash heat rate x 0.03 Sv/GJ x `exp(-armour_cm / 100)`,
+with the armour left on the washed facing; the full wash rate counts, also
+when the sink is already at its ceiling) and never decreases. Emitted once
+per ship per threshold, on the tick it is crossed, just before that tick's
+`plume_wash` event of the episode (if one is due):
+
+- `state: "impaired"` at 2 Sv: from now on every gun and torpedo tube of the
+  ship needs `cooldown_factor` (1.5) times its normal cooldown, on top of any
+  mount damage. PD is unaffected.
+- `state: "incapacitated"` at 8 Sv: the ship stops fighting and maneuvering
+  for the rest of the battle. It coasts (frames show `thrust: 0`, maneuver
+  none), fires nothing and launches nothing; automatic PD and radiators keep
+  working; it stays targetable and counts as unable to deal damage for the
+  victory rule and as combat-ineffective for the time-limit score.
+
+| field | type | meaning |
+|---|---|---|
+| `state` | string | `"impaired"` or `"incapacitated"` |
+| `dose_sv` | float | the crew's total dose after the tick |
+| `threshold_sv` | float | the threshold crossed (2.0 / 8.0) |
+| `cooldown_factor` | float or null | `impaired`: weapon cooldown multiplier (1.5); `null` for `incapacitated` |
+| `source_ship_id` | string | the ship whose exhaust delivered the dose that crossed the line |
+
+Example (demo recording, t = 50 s):
+
+```json
+{"event_id": "e92", "sequence": 92, "timestamp": 50.0, "event_type": "crew_radiation", "ship_id": "alpha_2", "data": {"state": "impaired", "dose_sv": 2.08, "threshold_sv": 2.0, "cooldown_factor": 1.5, "source_ship_id": "alpha_1", "target_id": null}}
+```
+
+The demo recording has no `incapacitated` event (same shape, `state:
+"incapacitated"`, `threshold_sv: 8.0`, `cooldown_factor: null`).
+
+### Torpedoes in the plume (switch OFF in pass 5)
+
+`drive_plume.PLUME_AFFECTS_TORPEDOES` is `False`: recordings made with the
+default engine contain none of the following. With the switch on, a torpedo
+flying in a burning ship's exhaust (never its own launching ship's)
+accumulates a dose (the ship-equivalent heat it flew through):
+
+- at 2 GJ its seeker dies: `plume_wash` with `phase: "torpedo_blinded"`,
+  `ship_id` = the emitter, `data.target_id` = the torpedo's target, and
+  `torpedo_id`, `torpedo_source_ship_id`, `distance_km`, `off_axis_deg`,
+  `dose_gj`. With `--trace` the torpedo's frame entry shows `disabled: true`
+  from the next frame;
+- at 10 GJ it is destroyed: `torpedo_intercepted` with `cause: "plume_wash"`,
+  `plume_ship_id` (the emitter), `distance_km`, `off_axis_deg` (same shape as
+  the reactor-blast variant above).
+
+### Demo recording
+
+`visualizer/public/recordings/p5_plume_demo.json` - a seeded battle from
+fixed start positions with per-tick frames and predicted paths (no LLM),
+180 s long, legacy heuristic captains (they know nothing of the plume).
+Regenerate it (offline, no API key, a few seconds):
+
+```bash
+uv run python scripts/generate_test_battle.py plume_wash --recording-dir /tmp/p5_plume --out visualizer/public/recordings/p5_plume_demo.json
+```
+
+Alpha: battleship `alpha_1`, destroyer `alpha_2` 11 km astern of it and
+0.2 km off its exhaust axis, cruiser `alpha_3` 14 km abeam (never washed).
+Beta: a destroyer and a cruiser 400 km away. Nobody dies.
+
+- t = 30-69 s: `alpha_2` flies up `alpha_1`'s exhaust at twice its
+  acceleration (11 km -> 3.7 km, 13-16 GJ/s): `enter` at 30 s, `sustain`
+  every 5 s, `exit` at 69 s with 464 GJ of heat, 10 cm of nose armour and
+  3.3 Sv. Its heat climbs from 4 % to the 149 % ceiling (`heat_warning` 0.9 at
+  50 s, 1.0 at 51 s, 1.25 at 56 s).
+- `mount_damaged` (`cause: "plume_wash"`) on its spinal mount, turret and
+  both PD turrets at 35, 40, 45 s (72 %, 47 %, 20 % health) and at 50 s
+  (all four destroyed).
+- t = 50 s: `crew_radiation`, `alpha_2` impaired (2.08 Sv).
+- t = 97-154 s: the roles reverse - `alpha_2`, now ahead, washes `alpha_1`
+  weakly from 7 km out to 34 km (0.1-0.6 GJ/s, off-axis, no armour or
+  fitting damage); from 154 s `alpha_2` jinks and its jet sweeps across
+  `alpha_1` in short `swept` episodes (enter 158 / exit 161, enter 162 /
+  exit 165).
