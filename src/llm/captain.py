@@ -2592,11 +2592,15 @@ class LLMCaptain:
                     "blinded": False,
                     "pd_turrets_needed": _pd_triage(
                         tf, t['distance_m'] / 1000, closing_ms),
-                    "own_pd_turrets": len(own_pd),
+                    # Turrets that BEAR on this round (weapon arcs: a turret
+                    # masked by its own hull is no defence against it).
+                    "own_pd_turrets": arcs_status.pd_turrets_bearing(
+                        simulation, ship, tf.torpedo.position)[0],
                     # Allied turrets whose envelope the round's path to us
                     # crosses: their dwell stacks with ours (CP-13).
                     "allied_pd_turrets": self._allied_pd_on_path(
-                        ship, tf.torpedo.position, all_friendlies, pd_range_km),
+                        ship, tf.torpedo.position, all_friendlies, pd_range_km,
+                        simulation),
                 })
 
         # Blinded wrecks: only those on a COLLISION course with this ship, from
@@ -2695,8 +2699,9 @@ class LLMCaptain:
 
     @staticmethod
     def _allied_pd_on_path(ship: Any, torp_pos: Any, friendlies: List[Any],
-                           pd_range_km: Optional[float]) -> int:
-        """Allied live PD turrets within PD range of the segment torpedo -> ship."""
+                           pd_range_km: Optional[float], simulation: Any = None) -> int:
+        """Allied live PD turrets within PD range of the segment torpedo -> ship
+        (with a simulation: those that bear on the torpedo, src/weapon_arcs.py)."""
         if pd_range_km is None:
             return 0
         a, b = torp_pos, ship.position
@@ -2706,8 +2711,11 @@ class LLMCaptain:
         for f in friendlies:
             if f.ship_id == ship.ship_id:
                 continue
-            n = sum(1 for pd in (getattr(f, 'point_defense', None) or [])
-                    if getattr(pd, 'is_operational', True))
+            if simulation is not None:
+                n = arcs_status.pd_turrets_bearing(simulation, f, torp_pos)[0]
+            else:
+                n = sum(1 for pd in (getattr(f, 'point_defense', None) or [])
+                        if getattr(pd, 'is_operational', True))
             if not n:
                 continue
             t = 0.0 if L2 <= 0 else max(0.0, min(1.0, (f.position - a).dot(ab) / L2))

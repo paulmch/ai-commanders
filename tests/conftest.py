@@ -1,5 +1,7 @@
 """Shared fixtures."""
 
+import os
+
 import pytest
 
 
@@ -17,4 +19,8 @@ def all_round_fire(monkeypatch):
     pinned by tests/test_weapon_arcs.py. Simulations built inside the test
     read the flag at construction.
     """
-    monkeypatch.setenv("AIC_WEAPON_ARCS", "0")
+    # AIC_ARCS_KEEP_HEAD_ON=1 turns this fixture into a no-op: it re-counts how
+    # many of the marked scenarios really fail under arcs on the current mount
+    # table (they were classified on the first placement).
+    if os.environ.get("AIC_ARCS_KEEP_HEAD_ON") != "1":
+        monkeypatch.setenv("AIC_WEAPON_ARCS", "0")

@@ -586,6 +586,7 @@ class TestThreatDisplayContract:
         assert "BLINDED torpedo" in text
         assert "KEEP MANEUVERING" in text
 
+    @pytest.mark.usefixtures("all_round_fire")  # exact head-on scenario; see tests/conftest.py
     def test_live_sim_populates_enrichment(self, fleet):
         """captain._build_tactical_status must fill the enriched keys from the
         engine's own threat evaluation, not leave the renderer starved."""

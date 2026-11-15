@@ -538,3 +538,31 @@ class TestTraceFields:
                 sim.step()
             states[arcs] = (sim.rng.getstate(), sim._damage_rng.getstate())
         assert states[True] == states[False]
+
+
+# =============================================================================
+# Fire control is untouched: what leaves still lands as forecast
+# =============================================================================
+
+def test_rounds_that_leave_under_arcs_still_deliver_the_forecast():
+    """The fire-control calibration harness runs without arcs (it measures
+    rounds that leave; a lone battleship can never fire all four batteries
+    at one target). This flies its four-cruiser engagement WITH arcs and
+    holds it to the same assertions as tests/test_fire_control_calibration.py:
+    the hits are what the recorded per-round P(hit) forecast, far from the
+    conversion number alone."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("fcc", "scripts/fire_control_calibration.py")
+    fcc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fcc)
+    rounds = fcc.harness_run(31, "padlock_dodge", "battleship", 160, fcc.load_fleet(),
+                             shooters=4, spread_deg=40.0, shooter_type="cruiser",
+                             weapon_arcs=True)
+    assert len(rounds) >= 40
+    hits = sum(r["outcome"] == "hit" for r in rounds)
+    expected = sum(r["p_shown"] for r in rounds)
+    sd = math.sqrt(sum(r["p_shown"] * (1 - r["p_shown"]) for r in rounds))
+    assert abs(hits - expected) <= 3 * sd + 2, (hits, expected, sd)
+    old = sum(r["p_conv"] for r in rounds)
+    old_sd = math.sqrt(sum(r["p_conv"] * (1 - r["p_conv"]) for r in rounds))
+    assert old - hits > 3 * old_sd + 2, (hits, old, old_sd)

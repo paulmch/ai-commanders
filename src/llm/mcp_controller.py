@@ -541,7 +541,11 @@ class MCPController:
             "damaged_fittings": _damaged_fitting_lines(ship),
             # Drive plume wash warnings (whose exhaust this ship is in, which
             # friendlies its own exhaust reaches), one line each
-            "plume_wash": _plume_status_lines(simulation, ship) + _arcs_status_lines(simulation, ship),
+            "plume_wash": _plume_status_lines(simulation, ship),
+            # Weapon arcs (src/llm/arcs_status.py): which gun mounts bear on
+            # the primary target, slew times, the roll that unmasks the rest,
+            # PD turrets bearing on the nearest hostile torpedo; one line each
+            "weapon_arcs": _arcs_status_lines(simulation, ship),
             # Crew radiation state: "fit" | "impaired" (weapons cycle slower) |
             # "incapacitated" (commands to this ship are rejected)
             "crew_state": _crew_state(ship),
