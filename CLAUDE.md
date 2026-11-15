@@ -37,7 +37,7 @@ Free battles fly `HeuristicCaptain` (`src/llm/heuristic_captain.py`). Its defaul
 "tactical" doctrine plans per fleet in `src/llm/heuristic_tactics.py` (reach-aware focus
 fire; gun ships nose-first - closure cap, no braking under fire, coast through a
 controlled pass facing the nearest gun, HOLD_RANGE once closure is gone; torpedo boats
-hold a standoff and fire one-round-per-tube salvos sized to the target's PD; evade
+hold a standoff and fire every launchable round, ranked by target size/agility/PD umbrella; evade
 overlay vs torpedoes; crippled or disarmed ships open range, dead drives leave the
 formation, ships burn clear of dying hulks' blast radius; plan announced on the FLEET NET);
 `--doctrine legacy` (or `BattleConfig.heuristic_doctrine`) keeps the pass-4 captain the

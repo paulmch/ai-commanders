@@ -163,13 +163,27 @@ def test_gun_policy_never_brakes_under_fire():
 def test_gun_ship_faces_the_nearest_gun_and_shoots_the_target():
     sim = CombatSimulation(seed=4, time_step=1.0)
     _ship(sim, "me", "destroyer", "alpha", (0, 0, 0), vel_kps=(1.0, 0, 0))
-    _ship(sim, "soft", "corvette", "beta", (110, 30, 0), fwd=(-1, 0, 0))
-    _ship(sim, "gun", "destroyer", "beta", (90, -30, 0), fwd=(-1, 0, 0))
+    slow = _ship(sim, "slow", "battleship", "beta", (110, 30, 0), fwd=(-1, 0, 0))
+    slow.armor.get_section("nose").thickness_cm = 0.0   # breached: the fleet's kill
+    _ship(sim, "gun", "frigate", "beta", (90, -30, 0), fwd=(-1, 0, 0))
     captain = _captain("destroyer")
     m = _maneuver(captain.decide("me", sim))
-    assert captain.primary_target_id == "soft"       # the fleet's focus (a torpedo boat)
+    assert captain.primary_target_id == "slow"
     assert m.maneuver_type == ManeuverType.PADLOCK and m.target_id == "gun"
     assert m.evade is None                           # no dodge: it would swing the nose
+
+
+def test_agile_hulls_are_worth_less_as_targets():
+    sim = CombatSimulation(seed=4, time_step=1.0)
+    boat = _ship(sim, "c", "corvette", "beta", (100, 0, 0))
+    big = _ship(sim, "b", "battleship", "beta", (100, 10, 0))
+    assert T.hittability(boat) < T.hittability(big)
+
+
+def test_capital_ships_close_slowly():
+    a = 1.0 * 9.81
+    assert T.gun_maneuver(500.0, 0.5, 60.0, a)[0] == "INTERCEPT"
+    assert T.gun_maneuver(500.0, 1.2, 60.0, a, 30.0, T.CAPITAL_MAX_CLOSING_KPS)[0] == "PADLOCK"
 
 
 def test_torpedo_boat_holds_its_standoff_from_the_nearest_gun():
@@ -209,51 +223,42 @@ def _salvo_sim(n_boats, target_type="destroyer", escorts=0, boat="cruiser_torped
     return sim
 
 
-def test_boats_launch_together_when_the_salvo_saturates_point_defence():
+def test_every_loaded_tube_with_a_shot_fires():
     sim = _salvo_sim(2)
     plan = T.compute_fleet_plan(sim, "alpha", None, FLEET)
     assert plan.torpedo_target_id == "tgt"
     salvo = plan.salvos[0]
-    # Sized to his point defence, not every tube on the ship.
-    assert sum(salvo.rounds.values()) == salvo.need > 0
-    assert salvo.available > salvo.need
+    capacity = sum(sim.torpedo_launch_capacity(b) for b in ("a0", "a1"))
+    assert salvo.saturating and sum(salvo.rounds.values()) == capacity > salvo.need > 0
     launched = 0
     for sid in ("a0", "a1"):
-        captain = _captain("cruiser_torpedo", name=sid)
-        cmds = captain.decide(sid, sim)
+        cmds = _captain("cruiser_torpedo", name=sid).decide(sid, sim)
         launched += sum(1 for c in cmds if isinstance(c, dict) and c.get("type") == "launch_torpedo")
-    assert launched == salvo.need
+    assert launched == capacity
 
 
-def test_two_boats_pool_their_tubes_for_a_salvo_neither_could_fire_alone():
-    sim = _salvo_sim(2, escorts=4)
-    plan = T.compute_fleet_plan(sim, "alpha", None, FLEET)
-    salvo = plan.salvos[0]
-    assert set(salvo.rounds) == {"a0", "a1"}
-    assert max(salvo.rounds.values()) < salvo.need <= sum(salvo.rounds.values())
-
-
-def test_a_lone_corvette_fires_one_best_effort_wave():
+def test_a_lone_corvette_still_fires_at_a_covered_group():
     # One tube cannot saturate a destroyer and four PD escorts; holding would
-    # gain nothing (reloads do not stack): one wave, flagged as such.
+    # gain nothing (reloads do not stack): it fires, flagged as short.
     sim = _salvo_sim(1, escorts=4, boat="corvette")
     plan = T.compute_fleet_plan(sim, "alpha", None, FLEET)
     assert len(plan.salvos) == 1 and not plan.salvos[0].saturating
-    assert plan.launches["a0"][1] == 1 < plan.salvos[0].need
+    assert sum(n for _, n in plan.launches["a0"]) == sim.torpedo_launch_capacity("a0") > 0
 
 
-def test_salvo_counts_only_rounds_that_leave_together():
-    sim = _salvo_sim(1)
-    boat = sim.get_ship("a0")
-    assert T.tubes_ready_now(sim, boat) == len(boat.ready_torpedo_launchers) == 4
-    boat.ready_torpedo_launchers[0].last_launch_time = sim.current_time   # reloading
-    assert T.tubes_ready_now(sim, boat) == 3
+def test_torpedoes_prefer_the_big_slow_hull_under_a_thin_umbrella():
+    sim = CombatSimulation(seed=7, time_step=1.0)
+    _ship(sim, "a0", "cruiser_torpedo", "alpha", (0, 0, 0))
+    _ship(sim, "boat", "corvette", "beta", (300, 0, 0), fwd=(-1, 0, 0))
+    _ship(sim, "bb", "battleship", "beta", (330, 400, 0), fwd=(-1, 0, 0))   # out of the boat's PD cover
+    plan = T.compute_fleet_plan(sim, "alpha", None, FLEET)
+    assert plan.salvos[0].target_id == "bb"
 
 
 def test_a_gun_ship_on_top_of_the_boats_gets_everything():
     sim = _salvo_sim(1, escorts=4, boat="corvette", rng_km=T.TORPEDO_PANIC_RANGE_KM - 20)
     plan = T.compute_fleet_plan(sim, "alpha", None, FLEET)
-    assert plan.launches["a0"][1] == plan.salvos[0].available > 0
+    assert sum(n for _, n in plan.launches["a0"]) == sim.torpedo_launch_capacity("a0")
 
 
 def test_out_of_reach_targets_are_not_launched_at():

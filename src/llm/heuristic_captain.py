@@ -18,8 +18,9 @@ Two doctrines:
   (src/llm/heuristic_tactics.py) - reach-aware focus fire, nose-first gun
   ships (closure cap, coast through a controlled pass facing the nearest
   enemy gun, re-close nose first; they still pass through each other, at
-  ~3-4 km/s instead of ~6), torpedo boats holding a standoff and firing
-  one-round-per-tube salvos sized to the target's point defence, the evade
+  ~3-4 km/s instead of ~6; capital ships close at <= 1 km/s), torpedo boats
+  holding a standoff and firing every launchable round at big, slow,
+  thinly covered targets, PD-saturating salvos first, the evade
   overlay against guided torpedoes, crippled ships opening range, a
   formation-matched approach, and the plan announced on the FLEET NET.
 - "legacy": the pass-4 captain (nearest target, INTERCEPT/BRAKE/PADLOCK,
@@ -254,16 +255,19 @@ class HeuristicCaptain(LLMCaptain):
         # massed salvo (every boat launches the same checkpoint) or nothing.
         if getattr(ship, "torpedo_launcher", None) is not None:
             max_salvo = self._max_torpedo_salvo(ship_id, simulation)
-            salvo, torp_target_id = 0, None
             if order and order.torpedo_salvo:
                 salvo = min(int(order.torpedo_salvo), max_salvo)
                 match = self._match_enemy(order.torpedo_target, enemies) if order.torpedo_target else None
-                torp_target_id = (match or target).ship_id
-            elif ship_id in plan.launches:
-                torp_target_id, rounds = plan.launches[ship_id]
-                salvo = min(rounds, max_salvo)
-            if salvo > 0:
-                calls.append(("launch_torpedo", {"count": salvo, "target_id": torp_target_id}))
+                if salvo > 0:
+                    calls.append(("launch_torpedo", {"count": salvo,
+                                                     "target_id": (match or target).ship_id}))
+            else:
+                for torp_target_id, rounds in plan.launches.get(ship_id, []):
+                    salvo = min(rounds, max_salvo)
+                    max_salvo -= salvo
+                    if salvo > 0:
+                        calls.append(("launch_torpedo", {"count": salvo,
+                                                         "target_id": torp_target_id}))
 
         calls.extend(self._fleet_net_signals(ship, ship_id, enemies, plan))
 
@@ -391,9 +395,11 @@ class HeuristicCaptain(LLMCaptain):
         r_km = tactics.engage_range_km(ship)
         dist_km, closing_kps = self._range_and_closing(ship, target)
         throttle = plan.formation_throttle.get(ship_id, 1.0) if dist_km > tactics.GUNS_HOT_KM else 1.0
+        cap = (tactics.CAPITAL_MAX_CLOSING_KPS if tactics.is_capital(ship)
+               else tactics.SPRINT_MAX_CLOSING_KPS)
         kind, extra = tactics.gun_maneuver(dist_km, closing_kps, r_km,
                                            tactics.max_accel_ms2(ship) * throttle,
-                                           self._decision_interval)
+                                           self._decision_interval, cap)
         if kind == "PADLOCK" and nearest_gun is not None and gun_km < dist_km:
             # Face the threat, shoot the focus: the nose (thickest armour,
             # spinal) tracks the nearest enemy gun while the turrets stay on
