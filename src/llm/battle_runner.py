@@ -915,20 +915,14 @@ class LLMBattleRunner:
             # Phase 4: Check surrender/draw
             if self.alpha_captain.has_surrendered:
                 self.communication.alpha_surrendered = True
-                if self.recorder:
-                    self.recorder.record_surrender(
-                        timestamp=self.simulation.current_time,
-                        ship_id="alpha",
-                        captain_name=self.alpha_config.name,
-                    )
+                self._record_ship_surrender(
+                    self.simulation.get_ship("alpha"), self.alpha_config.name,
+                    getattr(self.alpha_captain, 'surrender_reason', None))
             if self.beta_captain.has_surrendered:
                 self.communication.beta_surrendered = True
-                if self.recorder:
-                    self.recorder.record_surrender(
-                        timestamp=self.simulation.current_time,
-                        ship_id="beta",
-                        captain_name=self.beta_config.name,
-                    )
+                self._record_ship_surrender(
+                    self.simulation.get_ship("beta"), self.beta_config.name,
+                    getattr(self.beta_captain, 'surrender_reason', None))
             # Handle alpha draw proposals/retractions
             if self.alpha_captain.has_proposed_draw and not self._alpha_draw_notified:
                 # Queue message to notify beta captain
@@ -1504,21 +1498,15 @@ class LLMBattleRunner:
             # Check surrender/draw (including MCP)
             if self.alpha_mcp:
                 if self.alpha_mcp.has_surrendered:
-                    # Mark all alpha ships as surrendered
-                    for ship_id in self.alpha_ships:
-                        ship = self.simulation.get_ship(ship_id)
-                        if ship:
-                            ship.is_surrendered = True
+                    # Mark all alpha ships as surrendered (recorded per ship)
+                    self._surrender_fleet_ships(self.alpha_ships, self.alpha_mcp.name)
                     if self.config.verbose:
                         print(f"  [SURRENDER] {self.alpha_mcp.name} surrenders")
 
             if self.beta_mcp:
                 if self.beta_mcp.has_surrendered:
-                    # Mark all beta ships as surrendered
-                    for ship_id in self.beta_ships:
-                        ship = self.simulation.get_ship(ship_id)
-                        if ship:
-                            ship.is_surrendered = True
+                    # Mark all beta ships as surrendered (recorded per ship)
+                    self._surrender_fleet_ships(self.beta_ships, self.beta_mcp.name)
                     if self.config.verbose:
                         print(f"  [SURRENDER] {self.beta_mcp.name} surrenders")
 
@@ -2519,6 +2507,41 @@ class LLMBattleRunner:
                 answers_order_event_id=order_ids[0] if order_ids else None,
                 decision_event_id=getattr(decision, "event_id", None))
 
+    def _record_ship_surrender(self, ship: Any, captain_name: str,
+                               reason: Optional[str] = None) -> None:
+        """
+        Record a `surrender` event for a ship striking its colours, once per
+        ship. Call it BEFORE setting is_surrendered: could_deal_damage is
+        read from the ship's fittings (a surrendered ship never can). Ships
+        already destroyed or dying are not surrenders and are skipped.
+        """
+        if ship is None or ship.is_destroyed or getattr(ship, 'is_dying', False):
+            return
+        recorded = self.__dict__.setdefault('_surrenders_recorded', set())
+        if ship.ship_id in recorded or getattr(ship, 'is_surrendered', False):
+            return
+        recorded.add(ship.ship_id)
+        if not self.recorder:
+            return
+        from ..battle_damage import ship_can_deal_damage
+        self.recorder.record_surrender(
+            timestamp=self.simulation.current_time,
+            ship_id=ship.ship_id,
+            captain_name=captain_name,
+            faction=getattr(ship, 'faction', None),
+            reason=reason,
+            hull_pct=getattr(ship, 'hull_integrity', 0.0),
+            could_deal_damage=ship_can_deal_damage(ship),
+        )
+
+    def _surrender_fleet_ships(self, ships: Dict[str, Any], commander_name: str) -> None:
+        """An MCP commander surrendered its fleet: every ship strikes its colours."""
+        for ship_id in ships:
+            ship = self.simulation.get_ship(ship_id)
+            if ship:
+                self._record_ship_surrender(ship, commander_name, reason=None)
+                ship.is_surrendered = True
+
     def _check_fleet_surrender_draw(self) -> None:
         """Check and handle surrenders and draws in fleet mode."""
         # Check each captain for surrender
@@ -2526,6 +2549,8 @@ class LLMBattleRunner:
             if captain.has_surrendered:
                 ship = self.simulation.get_ship(ship_id)
                 if ship and not getattr(ship, 'is_surrendered', False):
+                    self._record_ship_surrender(
+                        ship, captain.name, getattr(captain, 'surrender_reason', None))
                     ship.is_surrendered = True
                     ship.current_maneuver = None  # Stop maneuvering
                     if self.config.verbose:

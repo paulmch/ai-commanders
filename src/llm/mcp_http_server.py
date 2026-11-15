@@ -838,10 +838,16 @@ def apply_mcp_fleet_control(runner: Any) -> bool:
         ("beta", runner.beta_mcp, runner.beta_ships),
     ):
         if controller and controller.has_surrendered:
-            for ship_id in ships:
-                ship = runner.simulation.get_ship(ship_id)
-                if ship:
-                    ship.is_surrendered = True
+            # Each ship strikes its colours; recorded once per ship by the
+            # battle runner (a bare runner stand-in just flags the ships).
+            surrender = getattr(runner, "_surrender_fleet_ships", None)
+            if callable(surrender):
+                surrender(ships, controller.name)
+            else:
+                for ship_id in ships:
+                    ship = runner.simulation.get_ship(ship_id)
+                    if ship:
+                        ship.is_surrendered = True
             if verbose:
                 print(f"  [SURRENDER] {controller.name} surrenders")
 
