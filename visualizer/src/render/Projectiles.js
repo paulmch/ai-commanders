@@ -14,7 +14,7 @@ import {
   RCS_LAYOUT, ENGINE, PULSE, JET_COUNT, attitudeAt, jetLevels, makePulses, pulsesAt, throttleAt
 } from './TorpedoRcs.js';
 import { hullQuat, validUp } from '../HullFrame.js';
-import { arcsFor, isBlocked, pdPlan, hullExit } from './TurretArcs.js';
+import { arcsFor, isBlocked, pdPlan, hullExit, shownPdMount } from './TurretArcs.js';
 import { GUN_DEPRESSION_DEG } from './MountLimits.js';
 const _fwdArr = [0, 0, 1], _quatArr = [0, 0, 0, 1];
 
@@ -536,18 +536,33 @@ export class Projectiles {
     const seed = seg.visualSeed;
     const torpedo = seg.targetType === 'torpedo';
     const tr = torpedo ? this.timeline.torpedoes.get(seg.targetId) : this.timeline.slugs.get(seg.targetId);
-    const mount = this.pdMount(seg, ship);
+    let mount = this.pdMount(seg, ship);
     if (mount) {
       // From the firing PD ball's lens (the ball itself slews onto the round).
       this.a.copy(mount.pos).applyQuaternion(ship.quaternion).add(ship.position);
       this.dir.subVectors(target, this.a).normalize();
       let reach = mount.reach;
-      if (seg.arcMasked) {
-        // Old recording, no PD mount has a clear line to this round: the
-        // beam is not drawn through the ship, it starts where the line
+      // A beam is never drawn through the ship. Checked every frame against
+      // the firing mount's arc (the line swings during a dwell). Recordings
+      // from the arcs engine never get here: it only fires when clear.
+      this.q.copy(ship.quaternion).invert();
+      this.s3.copy(this.dir).applyQuaternion(this.q);
+      if (mount.arc && isBlocked(mount.arc, this.s3)) {
+        // the round has moved behind the hull for this mount: the PD mount
+        // that has a clear line right now shows the beam (HullRigs trains
+        // that ball on it); with none, the beam starts where its line
         // leaves the hull's bounding ellipsoid
-        this.q.copy(ship.quaternion).invert();
-        reach = Math.max(reach, hullExit(mount.pos, this.s3.copy(this.dir).applyQuaternion(this.q), W, L));
+        const pds = arcsFor(ship.userData.shipType)?.pds;
+        const name = pds ? shownPdMount(seg.arcTurret ?? seg.turret, pds, this.s3) : null;
+        const alt = name ? this.pdMount(seg, ship, name) : null;
+        if (alt) {
+          mount = alt;
+          reach = alt.reach;
+          this.a.copy(alt.pos).applyQuaternion(ship.quaternion).add(ship.position);
+          this.dir.subVectors(target, this.a).normalize();
+        } else {
+          reach = Math.max(reach, hullExit(mount.pos, this.s3, W, L));
+        }
       }
       this.a.addScaledVector(this.dir, reach);
     } else {
@@ -607,16 +622,16 @@ export class Projectiles {
    * (hull `pdMounts` by name, else by turret index), or null for hulls
    * without PD mounts (then a seeded hull point is used). Cached per segment.
    */
-  pdMount(seg, ship) {
+  pdMount(seg, ship, name = null) {
     // which turret shows this dwell: the recorded one, or on recordings
     // older than the arcs engine a mount with a clear line (TurretArcs)
     pdPlan(this.manager);
-    if (seg.mountShip === ship) return seg.mount;
+    if (name === null && seg.mountShip === ship) return seg.mount;
     const ud = ship.userData;
     const list = ud.pdMounts;
     let mount = null;
     if (list?.length) {
-      const turret = seg.arcTurret ?? seg.turret;
+      const turret = name ?? seg.arcTurret ?? seg.turret;
       let i = list.findIndex(p => p.name === turret);
       if (i < 0) {
         const n = Number(String(turret ?? '').split('_').at(-1));
@@ -624,9 +639,10 @@ export class Projectiles {
       }
       if (i >= 0) {
         const rig = ud.pdTurrets?.find(r => r.name === list[i].name);
-        mount = { pos: list[i].pos, reach: 0.72 * (rig?.s ?? 0) };
+        mount = { pos: list[i].pos, reach: 0.72 * (rig?.s ?? 0), arc: arcsFor(ud.shipType)?.bySlot.get(list[i].name) || null };
       }
     }
+    if (name !== null) return mount;      // a momentary stand-in: not cached
     seg.mount = mount;
     seg.mountShip = ship;
     return mount;

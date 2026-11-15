@@ -74,7 +74,7 @@ export function arcsFor(shipType, data = HULL_MOUNTS) {
       axis: new THREE.Vector3(m.axis[1], m.axis[2], m.axis[0]),
       near: null
     }));
-    arcs = { mounts, bySlot: new Map(mounts.map(m => [m.slot, m])) };
+    arcs = { mounts, bySlot: new Map(mounts.map(m => [m.slot, m])), pds: mounts.filter(m => m.kind === 'pd') };
   }
   if (key) _arcs.set(key, arcs);
   return arcs;
@@ -178,7 +178,7 @@ export function turAim(tur, index, out) {
 export function hasTur(loader) {
   if (!loader) return false;
   const trace = loader.simTrace || [];
-  if (loader._turN === trace.length) return loader._hasTur;
+  if (loader._turTrace === trace && loader._turN === trace.length) return loader._hasTur;
   let has = false;
   for (let i = 0; i < trace.length && !has; i++) {
     const ships = trace[i].ships;
@@ -186,6 +186,7 @@ export function hasTur(loader) {
     for (const id in ships) { if (Array.isArray(ships[id].tur)) { has = true; break; } }
     if (Object.keys(ships).length) break;      // the first frame with ships decides
   }
+  loader._turTrace = trace;
   loader._turN = trace.length;
   loader._hasTur = has;
   return has;
@@ -233,6 +234,26 @@ export function assignPdSegments(segs, pds, dirOf) {
   return out;
 }
 
+/**
+ * The PD turret a dwell is shown from at one moment, given the hull-local
+ * direction `d` to its round right now: the planned turret (`planned`)
+ * while it has a clear line; when the round has moved behind the hull for
+ * it, the PD mount facing the round best that does have one; null when no
+ * mount can bear (the beam then starts outside the hull). Pure.
+ * Recordings with `tur` never need it: the engine only fires when clear.
+ */
+export function shownPdMount(planned, pds, d) {
+  const own = pds.find(m => m.slot === planned);
+  if (!own || !isBlocked(own, d)) return planned;
+  let best = null, bd = -2;
+  for (const m of pds) {
+    if (isBlocked(m, d)) continue;
+    const f = m.axis.dot(d);
+    if (f > bd) { bd = f; best = m; }
+  }
+  return best ? best.slot : null;
+}
+
 const _st = { pos: [0, 0, 0], vel: [0, 0, 0], fwd: [0, 0, 1], hull: 1, dying: false, destroyed: false };
 const _bx = [0, 0, 0], _by = [0, 0, 0];
 const _p = new THREE.Vector3();
@@ -252,7 +273,8 @@ export function pdPlan(manager) {
   const weapons = manager.weapons;
   const ready = !!weapons?.positionAt && !!weapons.timeline;
   const cached = loader._pdPlan;
-  if (cached && cached.n === segs.length && cached.ready === ready && cached.ships === manager.ships.size) return cached.byShip;
+  if (cached && cached.segs === segs && cached.n === segs.length && cached.ready === ready
+    && cached.ships === manager.ships.size) return cached.byShip;
   const engineArcs = hasTur(loader);
   const SCALE = manager.SCALE || 1;
   const trace = loader.simTrace || [];
@@ -293,7 +315,7 @@ export function pdPlan(manager) {
     for (const l of byTurret.values()) l.sort((a, b) => a.start - b.start);
     byShip.set(shipId, byTurret);
   }
-  loader._pdPlan = { n: segs.length, ready, ships: manager.ships.size, byShip };
+  loader._pdPlan = { segs, n: segs.length, ready, ships: manager.ships.size, byShip };
   return byShip;
 }
 

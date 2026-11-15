@@ -246,3 +246,66 @@ test('old recordings: a dwell whose line is blocked moves to a PD mount with a c
   assert.equal(hullExit(V(0, 5, 0), V(0, 1, 0), 2, 8), 0);
   assert.equal(packMask(new Uint8Array(AZ_CELLS * EL_CELLS).fill(1)).length, 648);
 });
+
+test('pdPlan stamps every dwell from the recording alone and honours the recorded roll', async () => {
+  const { pdPlan } = await import('../src/render/TurretArcs.js');
+  const ship = new THREE.Group();
+  ship.userData = { shipType: 'cruiser' };
+  const mk = (up) => {
+    const st = { pos: [0, 0, 0], vel: [0, 0, 0], fwd: [1, 0, 0], ...(up ? { up } : {}) };
+    const segs = [
+      { shipId: 'a', turret: 'pd_0', targetType: 'torpedo', targetId: 'above', start: 1, end: 3 },
+      { shipId: 'a', turret: 'pd_0', targetType: 'torpedo', targetId: 'below', start: 2, end: 4 }
+    ];
+    return {
+      SCALE: 0.001, ships: new Map([['a', ship]]),
+      loader: { simTrace: [{ t: 0, ships: { a: st } }, { t: 10, ships: { a: st } }], pdBeamSegments: segs },
+      // world +Z is "above" for a ship with up = +Z; world +Y for the old implicit roll
+      weapons: { timeline: {}, positionAt: (type, id, t, out) => out.set(0, 0, id === 'above' ? 50 : -50) }
+    };
+  };
+  // engine attitude recorded: up = +Z, so the round at world +Z is over the dorsal turret
+  const rolled = mk([0, 0, 1]);
+  const plan = pdPlan(rolled);
+  assert.deepEqual(rolled.loader.pdBeamSegments.map(s => s.arcTurret), ['pd_0', 'pd_1']);
+  assert.ok(rolled.loader.pdBeamSegments.every(s => s.arcMasked === false));
+  assert.deepEqual([...plan.get('a').keys()].sort(), ['pd_0', 'pd_1']);
+  assert.equal(pdPlan(rolled), plan, 'cached while the segment list is unchanged');
+  // old recording (no up): dorsal is world +Y, both rounds sit on the hull's beam, pd_0 keeps both
+  const old = mk(null);
+  pdPlan(old);
+  assert.deepEqual(old.loader.pdBeamSegments.map(s => s.arcTurret), ['pd_0', 'pd_0']);
+  // a new recording on the same loader object is re-planned (keyed on the list, not its length)
+  const again = mk([0, 0, 1]);
+  rolled.loader.pdBeamSegments = again.loader.pdBeamSegments;
+  assert.notEqual(pdPlan(rolled), plan);
+  // recordings with `tur` keep the engine's turret untouched
+  const eng = mk([0, 0, 1]);
+  eng.loader.simTrace[0].ships.a = { ...eng.loader.simTrace[0].ships.a, tur: [[0, 0, 0]] };
+  eng.loader.pdBeamSegments[1].turret = 'pd_0';
+  pdPlan(eng);
+  assert.deepEqual(eng.loader.pdBeamSegments.map(s => s.arcTurret), ['pd_0', 'pd_0']);
+});
+
+test('a dwell whose round moves behind the hull mid-dwell is shown from a mount that can bear', async () => {
+  const { shownPdMount } = await import('../src/render/TurretArcs.js');
+  const pds = arcsFor('cruiser').pds;
+  assert.deepEqual(pds.map(m => m.slot), ['pd_0', 'pd_1']);
+  const up = V(0, 1, 0), down = V(0, -1, 0);
+  assert.equal(shownPdMount('pd_0', pds, up), 'pd_0');          // clear: stays
+  assert.equal(shownPdMount('pd_0', pds, down), 'pd_1');        // under the keel: the ventral ball takes it
+  assert.equal(shownPdMount('pd_1', pds, up), 'pd_0');
+  // the corvette has nowhere to hand it: null (beam starts outside the hull)
+  assert.equal(shownPdMount('pd_0', arcsFor('corvette').pds, down), null);
+  // the stand-in ball trains on that round
+  const ship = fakeShip('cruiser');
+  const [pd0, pd1] = ship.userData.pdTurrets;
+  const round = V(50, -400, 120);
+  const scene = { currentTime: 5, ships: new Map([['alpha_1', ship]]), loader: null, weapons: { positionAt: (ty, id, t, out) => out.copy(round) } };
+  updateHullDetails(ship, { hull: 100 }, scene);
+  const out = new THREE.Vector2();
+  fallbackPdAim(scene, pd1, arcsFor('cruiser').bySlot.get('pd_1'), [], 5, out, { targetType: 'torpedo', targetId: 'x', start: 3, end: 6 });
+  const d = mountDir(Math.PI, out.x, out.y, V(0, 0, 0));
+  assert.ok(d.distanceTo(round.clone().sub(pd1.mount.position).normalize()) < 1e-6);
+  assert.ok(pd0);
+});

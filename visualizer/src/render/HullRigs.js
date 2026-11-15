@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { updateHullLights } from './HullLights.js';
 import { floodLevel, FLOOD_OPACITY, CODE_GLOW, LIVERY_FLOOD, GLASS_GLOW } from './HullMarkings.js';
 import { assignBarrels } from './WeaponTimeline.js';
-import { arcsFor, clampToArc, slewDir, slewProgress, mountAngles, mountDir, turAim, pdPlan } from './TurretArcs.js';
+import { arcsFor, clampToArc, slewDir, slewProgress, mountAngles, mountDir, turAim, pdPlan, shownPdMount } from './TurretArcs.js';
 import { GUN_DEPRESSION_DEG, PD_DEPRESSION_DEG } from './MountLimits.js';
 
 /**
@@ -296,9 +296,20 @@ export function fallbackGunAim(rig, arc, target, next, tNext, t, out) {
  * dwells sorted by start (TurretArcs.pdPlan). Pure in (t, recording).
  * Writes yaw/pitch to `out`; returns true when the mount is masked.
  */
-export function fallbackPdAim(scene, rig, arc, segs, t, out) {
+export function fallbackPdAim(scene, rig, arc, segs, t, out, standIn = null) {
   const rz = rig.mount.rotation.z;
   const rate = arc?.rate || 2;
+  if (standIn) {
+    // this ball shows another turret's dwell right now (its round went
+    // behind the hull for that turret): stay on the round
+    const pos = pdTargetPosition(scene, standIn, t);
+    if (pos) {
+      localDirTo(_m, rig.mount, pos, _dA);
+      const m = arc ? clampToArc(arc, _dA, _dA) : false;
+      mountAngles(rz, _dA, out);
+      return m;
+    }
+  }
   // search sweep, on battle time
   const D = mountDir(rz, rig.phase * 2 + 1.1 * Math.sin(t * 0.31 + rig.phase * 5),
     0.45 + 0.3 * Math.sin(t * 0.23 + rig.phase * 3), _dA);
@@ -422,6 +433,24 @@ export function updateHullDetails(ship, state, scene) {
   const pds = ud.pdTurrets;
   if (pds && pds.length) {
     const plan = dying || tur ? null : pdPlan(scene)?.get(ud.shipId);
+    // Old recordings: a lit dwell whose round is masked for its planned
+    // turret right now is shown from a mount with a clear line
+    // (Projectiles.beam uses the same rule): that ball stands in for it
+    let standIns = null;
+    if (plan && arcs?.pds.length > 1) {
+      for (const [name, list] of plan) {
+        const from = pds.find(p => p.name === name);
+        if (!from) continue;
+        for (let i = lastStarted(list, t); i >= 0 && list[i].start > t - 30; i--) {
+          const seg = list[i];
+          if (t > seg.end + PD_HOLD_S) continue;
+          const pos = pdTargetPosition(scene, seg, t);
+          if (!pos) continue;
+          const shown = shownPdMount(name, arcs.pds, localDirTo(_m, from.mount, pos, _dA));
+          if (shown && shown !== name) (standIns ||= new Map()).set(shown, seg);
+        }
+      }
+    }
     for (let r = 0; r < pds.length; r++) {
       const rig = pds[r];
       const arc = arcs?.bySlot.get(rig.name) || null;
@@ -432,7 +461,7 @@ export function updateHullDetails(ship, state, scene) {
       } else if (tur && arc && (st = turAim(tur, arc.index, _dA)) >= 0) {
         mountAngles(rz, _dA, _aim);
       } else {
-        st = fallbackPdAim(scene, rig, arc, plan?.get(rig.name), t, _aim) ? 3 : -1;
+        st = fallbackPdAim(scene, rig, arc, plan?.get(rig.name), t, _aim, standIns?.get(rig.name)) ? 3 : -1;
       }
       rig.arcState = st;
       rig.yawAngle = _aim.x;
