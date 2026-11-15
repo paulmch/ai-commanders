@@ -80,6 +80,11 @@ export class SceneManager {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    // Sun shadows (high tier): always "enabled" on the renderer - whether a
+    // shadow map is actually rendered is the sun light's castShadow, which
+    // Environment drives from the quality preset (off = zero cost).
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
 
     this.controls = new OrbitControls(this.camera, this.canvas);
     this.controls.enableDamping = true;
@@ -426,6 +431,21 @@ export class SceneManager {
     updateHullDetails(ship, state, this);   // hull rigs, doors, nav lamps (render/HullRigs.js)
   }
 
+  /**
+   * Hull self-shadowing: every lit (MeshStandard) hull mesh receives the
+   * sun shadow, the opaque ones cast it. Flagged by material type, not by
+   * name, and re-swept every few frames so parts other modules add later
+   * (rigs, radiators, breach geometry) join in without knowing about it.
+   * Plumes, sprites, beams and lamp instances are other material types and
+   * never cast. Flags are inert while the sun light casts no shadow (low).
+   */
+  _flagShadowMeshes() {
+    for (const ship of this.ships.values()) {
+      if (!ship.visible) continue;
+      ship.traverse(_flagShadow);
+    }
+  }
+
   // ===========================================================================
   // Predicted paths (live mode)
   // ===========================================================================
@@ -704,7 +724,8 @@ export class SceneManager {
     this.camera.userData.viewDist = viewingDistance; // Environment dust-mote scale
     this.rangeRingMaterial.opacity = 0.12 * THREE.MathUtils.smoothstep(viewingDistance, 45, 250);
     this.tacticalOverlay.visible = this.rangeRingMaterial.opacity > 0.002;
-    this.environment.update(this.camera, this.delta);
+    if (this.frameIndex % 20 === 0) this._flagShadowMeshes();
+    this.environment.update(this.camera, this.delta, this.controls.target, viewingDistance);
     this.postfx.update(this.delta);
 
     // Camera shake from nearby detonations, applied only for the draw
@@ -722,4 +743,13 @@ export class SceneManager {
     this.camera.position.copy(saved);
     this.frameIndex++;
   }
+}
+
+function _flagShadow(o) {
+  if (!o.isMesh || o.userData.shadowFlagged) return;
+  o.userData.shadowFlagged = true;
+  const m = Array.isArray(o.material) ? o.material[0] : o.material;
+  if (!m || !m.isMeshStandardMaterial) return;
+  o.receiveShadow = true;
+  o.castShadow = !m.transparent && m.blending === THREE.NormalBlending && m.depthWrite !== false;
 }
