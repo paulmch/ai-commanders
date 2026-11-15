@@ -1009,7 +1009,7 @@ evade dodge, 0 of 188 rounds at 100-300km landed where this model promised ~16.
   destroyer holding course at 200km: 36% at rest, 47% closing at 3 km/s, 28%
   crossing at 3 km/s, 20% opening at 3 km/s
 - A mount cannot fire through its own hull: a turret battery or PD laser sees about
-  51% of the sky, batteries train at 30 deg/s (heavy 15, PD 120), and the ship rolls
+  53% of the sky, batteries train at 30 deg/s (heavy 15, PD 120), and the ship rolls
   itself to unmask (~113 s per 90 deg on a cruiser) - count the mounts that BEAR
   (ARCS lines), not the mounts fitted.
 - TO WIN: Close range aggressively OR have overwhelming accuracy advantage

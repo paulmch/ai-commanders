@@ -10,8 +10,12 @@ export const CELL_DEG = 5;
 export const AZ_CELLS = 72;
 export const EL_CELLS = 36;
 
-/** A coilgun turret depresses this far below its mount plane, a PD ball this far. */
-export const GUN_DEPRESSION_DEG = 2;
+/** A coilgun turret depresses this far below its mount plane, a PD ball this far.
+ * Guns were 2 deg (a leftover viewer clamp): with dorsal held out of the battle plane every
+ * in-plane target sat on the seam between dorsal and ventral mounts, so a battleship brought
+ * 2 of 4 batteries to bear. At 10 deg both pairs overlap along the plane the ships fight in;
+ * the hull ray-cast still blocks every line that would cross the ship. */
+export const GUN_DEPRESSION_DEG = 10;
 export const PD_DEPRESSION_DEG = 5;
 
 /** Pivot height above the mount origin, in mount sizes `s`. */

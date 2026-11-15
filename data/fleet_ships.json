@@ -811,22 +811,22 @@
           "name": "PD Laser Turret",
           "slot": "pd_0",
           "mount_position": {
-            "x": 0.86,
+            "x": 0.66,
             "side": "dorsal"
           },
           "facing": "rear",
-          "notes": "Dorsal PD aft on a tall pedestal: upper hemisphere, over the battery to the bow"
+          "notes": "Dorsal PD on a tall mast on the aft hull: upper hemisphere, over the battery to the bow and over the engine block astern"
         },
         {
           "type": "pd_laser",
           "name": "PD Laser Turret",
           "slot": "pd_1",
           "mount_position": {
-            "x": 0.66,
+            "x": 0.7,
             "side": "ventral"
           },
           "facing": "rear",
-          "notes": "Ventral PD on a tall pedestal beside the spinal rail: lower hemisphere"
+          "notes": "Raised ventral PD beside the spinal rail: lower hemisphere"
         }
       ],
       "weapons_summary": {

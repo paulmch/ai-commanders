@@ -647,7 +647,10 @@ def test_the_formation_throttle_is_what_the_ship_flies():
 # courses) and what wash remains is recorded as `plume_wash`.
 # (Re-pinned once more: `plume_wash` events gained the `radiators` list -
 # empty in this battle; same 1532 events, same courses.)
-LEGACY_GOLDEN_SHA256 = "a7c93d4e3451744e674d75252ffa519dc4719d3ebb11e92002772a4fffad4f74"
+# (Re-pinned for the round-2 PD placement: the destroyer and torpedo cruiser
+# PD masks in data/hull_mounts.json changed, so which turret bears on which
+# torpedo changed; no engine code changed.)
+LEGACY_GOLDEN_SHA256 = "eb441522072826589fb142b981b2138956f60ae05fb9f9c70d609afbdb8554b1"
 
 
 def test_legacy_battle_event_stream_is_pinned(tmp_path):

@@ -47,8 +47,8 @@ export const SHIP_SILHOUETTES = {
     hardpoints: [
       { x: 80, y: 49.5, w: 56, h: 2, kind: 'spinal' },     // keel spinal
       { x: 84, y: 31, size: 4.5, kind: 'battery' },        // dorsal battery
-      { x: 35, y: 28.5, size: 3, kind: 'pd' },             // dorsal PD aft, tall pedestal
-      { x: 48, y: 52, size: 3, kind: 'pd' },               // ventral PD, tall pedestal
+      { x: 51, y: 27, size: 3, kind: 'pd' },               // dorsal PD on a tall mast, aft hull
+      { x: 47, y: 51, size: 3, kind: 'pd' },               // ventral PD, raised, off the keel line
     ],
     engineGlow: { x: 17, y: 40, width: 9, height: 14 }
   },
@@ -81,9 +81,9 @@ export const SHIP_SILHOUETTES = {
       { x: 59.5, y: 41.5, w: 24, h: 8, kind: 'launcher', far: true }, // starboard bank
       { x: 58, y: 40, w: 26, h: 9, kind: 'launcher' },     // port bank
       { x: 91, y: 27, size: 3, kind: 'pd' },               // shoulder PDs: diagonal pairs fore and aft
-      { x: 30, y: 50, size: 3, kind: 'pd' },
+      { x: 34, y: 51.5, size: 3, kind: 'pd' },             // aft pair on tall barbettes
       { x: 92.5, y: 52.5, size: 2.6, kind: 'pd', far: true },
-      { x: 31.5, y: 30, size: 2.6, kind: 'pd', far: true },
+      { x: 35.5, y: 28.5, size: 2.6, kind: 'pd', far: true },
     ],
     engineGlow: { x: 9, y: 40, width: 10, height: 20 }
   },

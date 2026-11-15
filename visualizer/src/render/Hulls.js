@@ -2007,10 +2007,13 @@ function hullDestroyer(k) {
   // weapon_1: dorsal battery behind the spinal mount (weapon_0)
   k.turret('coilgun', 0, fh / 2, L * 0.19);
   // PD aft: dorsal pd_0, ventral pd_1 (clear of the spinal rail)
-  // tall pedestals aft: the dorsal one looks over the battery, the ventral
-  // one (off the keel line, clear of the spinal rail) under the bow
-  k.pd(0, ah / 2, -L * 0.36, 0, { raise: 1.2 });
-  k.pd(W * 0.2, -ah / 2, -L * 0.16, Math.PI, { raise: 1.2 });
+  // dorsal mast on the aft hull, tall enough to look over the battery at
+  // the bow and over the engine block astern (and far enough aft to stay
+  // out of the battery's field); ventral pedestal off the keel line, clear
+  // of the spinal rail. Between them no cell of the nose or stern cone is
+  // left without a turret (ships meet torpedo salvos nose-on)
+  k.pd(0, ah / 2, -L * 0.16, 0, { raise: 1.8 });
+  k.pd(W * 0.2, -ah / 2, -L * 0.2, Math.PI, { raise: 0.9 });
   k.spineStripe(ah / 2, -L * 0.35, -L * 0.15, W * 0.22);
   k.greebles('+y', ah / 2, [W * 0.12, W * 0.2], [-L * 0.34, -L * 0.14], 5, W * 0.04, W * 0.07);
   k.greebles('+y', ah / 2, [-W * 0.2, -W * 0.12], [-L * 0.34, -L * 0.14], 5, W * 0.04, W * 0.07);
@@ -2162,10 +2165,12 @@ function hullTorpedoCruiser(k) {
   const pr = W * 0.48 * Math.SQRT1_2;
   // shoulder mounts between the cell banks, diagonal pairs fore and aft:
   // two turrets bear on every broadside, the bow and the stern
-  const pa = W * 0.2355;
+  // the aft pair stands on tall barbettes on the waist so it sees astern
+  // over the engine block (a torpedo boat running from a salvo shows its tail)
+  const pa = W * 0.245;
   k.pd(W * 0.3345, W * 0.3345, L * 0.36, -Math.PI / 4, { raise: 0.6 });
-  k.pd(-pa, pa, -L * 0.36, Math.PI / 4, { raise: 0.6 });
-  k.pd(pa, -pa, -L * 0.36, -Math.PI * 0.75, { raise: 0.6 });
+  k.pd(-pa, pa, -L * 0.32, Math.PI / 4, { raise: 1.8 });
+  k.pd(pa, -pa, -L * 0.32, -Math.PI * 0.75, { raise: 1.8 });
   k.pd(-W * 0.3345, -W * 0.3345, L * 0.36, Math.PI * 0.75, { raise: 0.6 });
 }
 
