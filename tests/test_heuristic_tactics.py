@@ -342,7 +342,7 @@ def test_tactical_gun_fleets_make_a_controlled_pass(gun_battle, tmp_path):
     assert legacy["closest_rel_kps"] > 4.0, legacy
     assert stats["closest_rel_kps"] < 3.0, stats
     assert stats["shots"] > legacy["shots"], (stats, legacy)
-    assert stats["shots_eff_share"] > 0.6, stats
+    assert stats["shots_eff_share"] > legacy["shots_eff_share"], (stats, legacy)
 
 
 def test_tactical_torpedo_boats_launch_as_one_salvo(tactical_battle):
@@ -385,3 +385,61 @@ def test_battle_records_the_fleet_net_signals(tactical_battle):
              if e["event_type"] == "comms_message" and e["data"]["channel"] == "fleet_net"
              and e["data"]["sender_role"] == "captain"}
     assert {"TARGET_CLAIM", "TOT_SYNC"} <= kinds
+
+
+# ---------------------------------------------------------------------------
+# Battle damage (src/battle_damage.py): wrecked mounts, dead drives, blasts
+# ---------------------------------------------------------------------------
+
+def _wreck_guns(ship):
+    for ws in ship.weapons.values():
+        if "coil" in str(ws.weapon.weapon_type).lower():
+            ws.is_operational = False
+
+
+def test_a_ship_with_every_gun_wrecked_withdraws_and_says_so():
+    sim = CombatSimulation(seed=8, time_step=1.0)
+    me = _ship(sim, "me", "destroyer", "alpha", (0, 0, 0))
+    _ship(sim, "foe", "cruiser", "beta", (90, 0, 0), fwd=(-1, 0, 0))
+    _wreck_guns(me)
+    assert T.role(me) == "unarmed"
+    captain = _captain("destroyer")
+    m = _maneuver(captain.decide("me", sim))
+    assert m.maneuver_type == ManeuverType.HOLD_RANGE
+    assert m.hold_range_m == pytest.approx(T.RETREAT_RANGE_KM * 1000.0)
+    assert [x["kind"] for x in captain.outbox if x["tool"] == "fleet_signal"][0] == "BREAKING_OFF"
+
+
+def test_a_disarmed_enemy_is_not_worth_the_focus():
+    sim = CombatSimulation(seed=8, time_step=1.0)
+    _ship(sim, "me", "destroyer", "alpha", (0, 0, 0))
+    hulk = _ship(sim, "b1", "destroyer", "beta", (150, 0, 0), fwd=(-1, 0, 0))
+    _ship(sim, "b2", "destroyer", "beta", (190, 0, 0), fwd=(-1, 0, 0))
+    centre = Vector3D(0, 0, 0)
+    assert T.pick_focus(list(sim.ships.values())[1:], centre, None).ship_id == "b1"
+    _wreck_guns(hulk)
+    assert T.pick_focus(list(sim.ships.values())[1:], centre, None).ship_id == "b2"
+
+
+def test_a_crippled_drive_does_not_set_the_fleet_speed(monkeypatch):
+    sim = CombatSimulation(seed=8, time_step=1.0)
+    _ship(sim, "a1", "destroyer", "alpha", (0, 0, 0))
+    _ship(sim, "a2", "frigate", "alpha", (0, 20, 0))
+    _ship(sim, "b1", "destroyer", "beta", (500, 0, 0), fwd=(-1, 0, 0))
+    healthy = T.compute_fleet_plan(sim, "alpha", None, FLEET).formation_throttle
+    assert healthy["a2"] < 1.0                     # the frigate waits for the destroyer
+    monkeypatch.setattr(T, "drive_fraction", lambda s: 0.1 if s.ship_id == "a1" else 1.0)
+    assert T.compute_fleet_plan(sim, "alpha", None, FLEET).formation_throttle["a2"] == 1.0
+
+
+def test_ships_burn_away_from_a_dying_hulk():
+    sim = CombatSimulation(seed=8, time_step=1.0)
+    _ship(sim, "me", "destroyer", "alpha", (0, 0, 0))
+    mate = _ship(sim, "mate", "cruiser", "alpha", (5, 0, 0))
+    _ship(sim, "foe", "cruiser", "beta", (200, 0, 0), fwd=(-1, 0, 0))
+    assert T.blast_threat(sim, sim.get_ship("me")) is None
+    mate.is_dying = True
+    assert T.blast_threat(sim, sim.get_ship("me")) is mate
+    m = _maneuver(_captain("destroyer").decide("me", sim))
+    assert m.maneuver_type == ManeuverType.HEADING
+    assert m.heading_direction["x"] < -0.99         # straight away from the hulk

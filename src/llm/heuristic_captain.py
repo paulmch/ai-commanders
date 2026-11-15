@@ -288,6 +288,12 @@ class HeuristicCaptain(LLMCaptain):
             calls.append(("set_maneuver", {
                 "maneuver_type": maneuver[0],
                 "throttle": self._heat_throttle_cap(ship, heat, maneuver[1], threat)}))
+        elif (hulk := tactics.blast_threat(simulation, ship)) is not None:
+            # A dying hulk's reactor is about to go: get out of the blast.
+            away = (ship.position - hulk.position).normalized()
+            calls.append(("set_heading", {
+                "direction": {"x": round(away.x, 4), "y": round(away.y, 4), "z": round(away.z, 4)},
+                "throttle": self._heat_throttle_cap(ship, heat, 1.0, threat)}))
         else:
             args = self._tactical_maneuver(ship, ship_id, target, enemies, plan, my_role, threat)
             args["throttle"] = self._heat_throttle_cap(ship, heat, args["throttle"], threat)
@@ -305,11 +311,13 @@ class HeuristicCaptain(LLMCaptain):
         announces that it is breaking off."""
         names = {e.ship_id: getattr(e, "name", e.ship_id) for e in enemies}
         out: List[Tuple[str, Dict[str, Any]]] = []
-        crippled = tactics.hull_pct(ship) < tactics.CRIPPLED_HULL_PCT
+        disarmed = tactics.role(ship) == "unarmed"
+        crippled = tactics.hull_pct(ship) < tactics.CRIPPLED_HULL_PCT or disarmed
         if crippled and not self._broke_off:
+            why = ("weapons out" if disarmed else f"hull at {tactics.hull_pct(ship):.0f}%")
             out.append(("fleet_signal", {
                 "kind": "BREAKING_OFF",
-                "text": f"Hull at {tactics.hull_pct(ship):.0f}% - breaking off, opening range."}))
+                "text": f"{why[0].upper() + why[1:]} - breaking off, opening range."}))
         self._broke_off = crippled
         if self.has_admiral:
             return out      # the admiral, not the flag ship, sets the fleet's targets
@@ -371,6 +379,10 @@ class HeuristicCaptain(LLMCaptain):
         if (tactics.hull_pct(ship) < tactics.CRIPPLED_HULL_PCT and nearest_gun is not None
                 and gun_km < tactics.RETREAT_RANGE_KM):
             # Crippled: open range from the nearest gun, guns still free.
+            evade = "full"
+            return order("HOLD_RANGE", nearest_gun, 1.0, range_km=tactics.RETREAT_RANGE_KM)
+        if my_role == "unarmed" and nearest_gun is not None:
+            # Nothing left to shoot with: withdraw out of his guns.
             evade = "full"
             return order("HOLD_RANGE", nearest_gun, 1.0, range_km=tactics.RETREAT_RANGE_KM)
         if my_role != "gun":

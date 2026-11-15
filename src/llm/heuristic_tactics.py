@@ -118,6 +118,16 @@ GUN_REACH_KM = 150.0
 CRIPPLED_HULL_PCT = 35.0          # below this hull integrity: open range
 RETREAT_RANGE_KM = 350.0          # ...to this range from the nearest gun ship
 
+# Battle damage (src/battle_damage.py). A hull whose drive makes less than
+# FORMATION_MIN_DRIVE_FRACTION of its thrust no longer sets the fleet's
+# approach speed (it would stall everyone); an enemy that has nothing left
+# to shoot with is worth DISARMED_TARGET_FACTOR of a fighting one; a ship
+# inside BLAST_AVOID_FACTOR x a dying hulk's reactor-blast radius burns away
+# from it before it detonates.
+FORMATION_MIN_DRIVE_FRACTION = 0.5
+DISARMED_TARGET_FACTOR = 0.3
+BLAST_AVOID_FACTOR = 1.5
+
 STANDARD_G = 9.81
 
 
@@ -158,12 +168,37 @@ def has_torpedoes(ship: Any) -> bool:
 
 
 def role(ship: Any) -> str:
-    """'gun' (any coilgun), 'torpedo' (launchers only) or 'unarmed'."""
+    """'gun' (a working coilgun), 'torpedo' (loaded tubes only) or 'unarmed'
+    (every gun mount wrecked and no round left in a working tube: battle
+    damage, src/battle_damage.py, or an empty magazine)."""
     if has_guns(ship):
         return "gun"
-    if getattr(ship, "torpedo_launcher", None) is not None or getattr(ship, "torpedo_launchers", None):
+    if has_torpedoes(ship):
         return "torpedo"
     return "unarmed"
+
+
+def drive_fraction(ship: Any) -> float:
+    try:
+        return float(ship.get_effective_thrust_fraction())
+    except Exception:
+        return 1.0
+
+
+def blast_threat(simulation: Any, ship: Any) -> Optional[Any]:
+    """The nearest dying hulk (either side) whose reactor blast would reach
+    this ship with margin (BLAST_AVOID_FACTOR x its blast radius), or None.
+    Hulks detonate 0-30 s after the killing blow."""
+    from ..battle_damage import _hull_mass_tons, reactor_blast_radius_km
+    worst = None
+    for other in getattr(simulation, "ships", {}).values():
+        if other is ship or not getattr(other, "is_dying", False) or other.is_destroyed:
+            continue
+        reach = BLAST_AVOID_FACTOR * reactor_blast_radius_km(_hull_mass_tons(other))
+        d = _km(ship, other)
+        if d < reach and (worst is None or d < worst[0]):
+            worst = (d, other)
+    return worst[1] if worst else None
 
 
 def engage_range_km(ship: Any) -> float:
@@ -256,7 +291,9 @@ def focus_priority(enemy: Any, centre: Any, range_scale_km: float = FOCUS_RANGE_
     if breached:
         damage += FOCUS_BREACH_BONUS
     softness = 1.0 / (1.0 + nose_cm / FOCUS_ARMOR_REF_CM)
-    bonus = FOCUS_TORPEDO_BOAT_BONUS if role(enemy) == "torpedo" else 1.0
+    kind = role(enemy)
+    bonus = (FOCUS_TORPEDO_BOAT_BONUS if kind == "torpedo" else
+             DISARMED_TARGET_FACTOR if kind == "unarmed" else 1.0)
     return proximity * damage * softness * bonus
 
 
@@ -456,7 +493,8 @@ def compute_fleet_plan(simulation: Any, faction: str, previous: Optional[FleetPl
     plan.torpedo_target_id = plan.salvos[0].target_id if plan.salvos else plan.focus_id
 
     gunships = [s for s in friends if role(s) == "gun"]
-    accels = [a for a in (max_accel_ms2(s) for s in gunships) if a > 0]
+    accels = [max_accel_ms2(s) for s in gunships
+              if drive_fraction(s) >= FORMATION_MIN_DRIVE_FRACTION and max_accel_ms2(s) > 0]
     if accels:
         slowest = min(accels)
         for s in gunships:
