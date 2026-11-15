@@ -289,7 +289,8 @@ function pullback(shot, t, world) {
   // The fireball and debris outgrow the nominal radius: fit it with room
   // to spare and keep drifting out for as long as the shot holds
   const far = Math.max(1.35 * near, fitDistance(reach, world.fov, world.aspect, world.widthShare, 1.75));
-  const D = lerp(near, far, easeOut((t - (first.t - 0.2)) / 2.4)) * (1 + 0.04 * Math.max(0, t - first.t));
+  // (u^1.5 inside the ease-out: the move starts from rest instead of at full speed)
+  const D = lerp(near, far, easeOut(clamp01((t - (first.t - 0.2)) / 2.6) ** 1.5)) * (1 + 0.04 * Math.max(0, t - first.t));
   // From the killer's side of the line of fire, off the battle plane
   const killer = first.killer ? world.pos(first.killer) : null;
   const k = directionTo(killer, firstAt, new THREE.Vector3(0, 0, 0));
