@@ -106,6 +106,11 @@ export class Interpolator {
         velocity: this.lerpVec3(state0.vel, state1.vel, alpha),
         forward: this.slerpVec3(state0.fwd, state1.fwd, alpha),
         thrust: this.lerp(state0.thrust || 0, state1.thrust || 0, alpha),
+        // --trace recordings: turn rate (world rad/s). The recorder stamps
+        // each interval's rate on the frame that ends it; blending the two
+        // keeps it continuous across frames (a jinking ship reverses it)
+        omega: Array.isArray(state1.omega)
+          ? (Array.isArray(state0.omega) ? this.lerpVec3(state0.omega, state1.omega, alpha) : state1.omega) : null,
         hull: this.lerp(state0.hull ?? 100, state1.hull ?? 100, alpha),
         maneuver: state0.maneuver || 'MAINTAIN',
         destroyed: current.destroyed,

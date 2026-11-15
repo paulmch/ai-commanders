@@ -6,6 +6,9 @@ import { PostFX } from './render/PostFX.js';
 import { buildHull, buildShipMaterials, ACCENT_GLOW } from './render/Hulls.js';
 import { updateHullDetails } from './render/Hulls.js';
 import { createTorch } from './render/Torch.js';
+
+const _plumeTurn = new THREE.Vector3();
+const _plumeQ = new THREE.Quaternion();
 import { Ribbon } from './render/Trails.js';
 import { Blast, ShipDestruction, WRECK_DRIFT_S } from './render/Explosion.js';
 import { DamageFX } from './render/DamageFX.js';
@@ -305,8 +308,10 @@ export class SceneManager {
     for (let e = 0; e < engineConfig.count; e++) {
       const p = engineConfig.positions[e];
       const light = e === 0 ? this.tryPointLight(0x7fb0ff, 0, size.length * 5) : null;
-      const torch = createTorch({ radius: plumeR, length: plumeLength, light, tint: 'fusion' });
+      const torch = createTorch({ radius: plumeR, length: plumeLength, light, tint: 'fusion', cluster: engineConfig.count });
       torch.group.position.set(p.x, p.y, -size.length * 0.53);
+      // Bells are canted a few degrees off the drive axis: the plumes fan out
+      torch.group.rotation.set(0.28 * p.y / size.width, -0.28 * p.x / size.width, 0);
       group.add(torch.group);
       torches.push(torch);
     }
@@ -426,7 +431,12 @@ export class SceneManager {
     const targetThrust = state.thrust || 0;
     ud.smoothThrust += (targetThrust - ud.smoothThrust) * (1 - Math.exp(-dt * 3.0));
     const thrust = ud.smoothThrust;
-    for (const t of ud.torches) t.update(thrust, this.elapsed, state.dying ? 0.7 : 0, this.currentTime);
+    // Plume sweep: the recorded turn rate in the hull frame (render/Torch.js)
+    let turn = null;
+    if (Array.isArray(state.omega) && !state.dying) {
+      turn = _plumeTurn.fromArray(state.omega).applyQuaternion(_plumeQ.copy(ship.quaternion).invert());
+    }
+    for (const t of ud.torches) t.update(thrust, this.elapsed, state.dying ? 0.7 : 0, this.currentTime, turn);
     if (mats) mats.bellHeat.emissiveIntensity = 0.3 + 2.8 * thrust;
     updateHullDetails(ship, state, this);   // hull rigs, doors, nav lamps (render/HullRigs.js)
   }

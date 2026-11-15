@@ -80,6 +80,20 @@ export function shotSlot(d) { return Number(d.weapon_slot?.split('_').at(-1)) ||
 export function shotSpinal(d) { return !!d.weapon_name?.toLowerCase().includes('spinal'); }
 
 /**
+ * Gun class of a shot_fired payload, by weapon name: 0 battery (and light
+ * battery), 1 heavy battery, 2 spinal coiler, 3 siege coiler. Recordings
+ * without a name read as a battery.
+ */
+export const GUN_CLASSES = ['battery', 'heavy', 'spinal', 'siege'];
+export function shotClass(d) {
+  const n = String(d?.weapon_name || d?.weapon_type || '').toLowerCase();
+  if (n.includes('siege')) return 3;
+  if (n.includes('spinal')) return 2;
+  if (n.includes('heavy')) return 1;
+  return 0;
+}
+
+/**
  * Spinal muzzle per hull: [fraction of hull width below the axis, of length
  * forward]. Fallback for hull kits that do not export their own muzzle
  * point (userData.spinalMuzzle); the entries match the kit's barrels.
@@ -219,7 +233,7 @@ export class WeaponTimeline {
         shots.get(e.ship_id).push(e);
         if (d.projectile_id) shotById.set(d.projectile_id, e);
         this.moments.push({ time: e.timestamp, kind: 'muzzle', ship: e.ship_id, data: d,
-          slot: shotSlot(d), spinal: shotSpinal(d), barrel: barrels.get(e) ?? 0,
+          slot: shotSlot(d), spinal: shotSpinal(d), cls: shotClass(d), barrel: barrels.get(e) ?? 0,
           track: this.slugs.get(d.projectile_id) || null,
           seed: seedFor(`${e.ship_id}|${e.timestamp}|${d.weapon_slot}`) });
       }
@@ -286,7 +300,7 @@ export class WeaponTimeline {
       const launch = shot ? shot.timestamp : first.t - 1;
       tr.source = first.state.source || shot?.ship_id || '';
       tr.shot = shot ? { slot: shot.data?.weapon_slot, index: shotSlot(shot.data || {}), spinal: shotSpinal(shot.data || {}),
-        barrel: barrels.get(shot) ?? 0 } : null;
+        cls: shotClass(shot.data || {}), barrel: barrels.get(shot) ?? 0 } : null;
       tr.start = Math.max(0, launch);
       // A disappearing round without a hit/intercept continues ballistically.
       // Rounds still present at the live edge must not be labelled as misses.
