@@ -655,3 +655,27 @@ def test_rounds_fired_on_the_order_change_tick_are_forecast_from_the_new_order()
     assert abs(hits - forecast) <= 3.0 * math.sqrt(max(forecast, hits, 1.0)) + 2.0, (hits, forecast)
     assert forecast < 0.1 * len(rounds)
     assert stale_next and max(stale_next) == 0.0             # next tick: the drive shows the order
+
+
+def test_attitude_stays_orthonormal_and_continuous_through_an_overshoot():
+    """The weapon-arc body frame (src/weapon_arcs.py) is built from forward /
+    up: a spin carried through an overshoot (thrust-vectoring rate, then an
+    RCS turn that cannot stop on the target) must keep them orthonormal and
+    move them no farther per tick than the spin rate allows, and the rate the
+    drive plume reads (angular_velocity_rad_s) is that rate."""
+    import math
+    from src.physics import Vector3D
+    sim, ship = _battleship_sim()
+    for _ in range(10):
+        sim._rotate_ship_toward(ship, Vector3D(0, 1, 0), 1.0, engines_on=True)
+    target = ship.forward.rotate_around_axis(Vector3D(0, 0, 1), math.radians(0.5))
+    prev_f, prev_u = ship.forward, ship.up
+    for _ in range(400):
+        rate_before = ship.angular_velocity_rad_s
+        sim._rotate_ship_toward(ship, target, 1.0, engines_on=False)
+        f, u = ship.forward, ship.up
+        assert abs(f.magnitude - 1.0) < 1e-9 and abs(u.magnitude - 1.0) < 1e-9
+        assert abs(f.dot(u)) < 1e-9
+        step = max(rate_before, ship.angular_velocity_rad_s) + 1e-6
+        assert prev_f.angle_to(f) <= step and prev_u.angle_to(u) <= step + 1e-6
+        prev_f, prev_u = f, u
