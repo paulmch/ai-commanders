@@ -586,12 +586,13 @@ def plume_wash_battle(seed: int = 5, recording_dir: Optional[str] = None,
                       verbose: bool = False, doctrine: str = "legacy") -> Tuple[Any, Optional[str]]:
     """
     Drive plume wash demo (src/drive_plume.py): an alpha battleship burns at
-    the enemy with a destroyer in line astern, 14 km back and 0.4 km off its
+    the enemy with a destroyer in line astern, 11 km back and 0.2 km off its
     exhaust axis, and a cruiser safely abeam. Legacy captains (the default)
     know nothing of the plume: the destroyer flies up the battleship's
     exhaust at twice its acceleration - a sustained `plume_wash` episode
-    (enter, sustain every 5 s, exit) with nose armour burned off and
-    `mount_damaged` (cause "plume_wash") on its bow fittings.
+    (enter, sustain every 5 s, exit) with nose armour burned off,
+    `mount_damaged` (cause "plume_wash") on its bow fittings and a
+    `crew_radiation` event when its crew's dose passes the impaired line.
     """
     from src.llm.fleet_config import BattleFleetConfig
     from src.llm.heuristic_captain import HEURISTIC_MODEL
@@ -602,7 +603,7 @@ def plume_wash_battle(seed: int = 5, recording_dir: Optional[str] = None,
 
     fleet_config = BattleFleetConfig.from_dict({
         "battle_name": "Drive plume wash demo",
-        "alpha_fleet": {"ships": [ship("battleship", -200.0, 0.0), ship("destroyer", -214.0, 0.4),
+        "alpha_fleet": {"ships": [ship("battleship", -200.0, 0.0), ship("destroyer", -211.0, 0.2),
                                   ship("cruiser", -205.0, 14.0)]},
         "beta_fleet": {"ships": [ship("destroyer", 200.0, -6.0), ship("cruiser", 200.0, 6.0)]},
         "record_battle": True, "record_sim_trace": True, "personality_selection": False,

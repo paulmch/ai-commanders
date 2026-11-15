@@ -410,7 +410,8 @@ def test_status_lines_for_the_washed_ship_and_the_emitter():
     sim.step()
     lead, tail = sim.ships["lead"], sim.ships["tail"]
     lead.name, tail.name = "TIS Sovereign", "TIS Dart"
-    (line,) = dp.plume_status_lines(sim, tail)
+    line, dose = dp.plume_status_lines(sim, tail)
+    assert dose.startswith("CREW DOSE 0.1 Sv from drive plumes (impaired at 2, incapacitated at 8)")
     assert line.startswith("PLUME WASH: in TIS Sovereign's exhaust (friendly), 12 km astern")
     rate = dp.compute_washes(sim)[0].heat_rate_gj_s
     assert line.endswith(f"+{rate:.1f} GJ/s")
@@ -560,3 +561,187 @@ def test_apply_formation_moves_a_follower_out_of_the_leaders_exhaust():
     assert offsets[0] == (0.0, 0.0, 0.0) and offsets[2] == (-10.0, 15.0, 0.0)
     assert offsets[1][0] == -20.0 and offsets[1][1] != 0.0
     assert any(ships[1].ship_name in n and "drive plumes" in n for n in notes)
+
+
+def test_plume_safe_throttle_sees_a_friendly_it_is_about_to_overtake():
+    """Seed-5 free battle, t = 510 s: a destroyer burned past a friendly
+    6 km ahead and washed it from 2-5 km (56 GJ in 4 s). The snapshot check
+    sees nobody astern; the extrapolation over the decision interval does."""
+    from src.llm import heuristic_tactics as T
+    sim = CombatSimulation(seed=5, time_step=1.0)
+    me = _ship(sim, "me", "alpha", (0, 0, 0), "destroyer")
+    ahead = _ship(sim, "ahead", "alpha", (6, 0.3, 0), "destroyer")      # coasting, just off the nose
+    _ship(sim, "foe", "beta", (900, 0, 0), "destroyer", (-1, 0, 0))
+    assert dp.friendlies_in_exhaust(sim, me) == []                       # nobody astern now
+    clearance = dp.exhaust_clearance_km(sim, me, None, 30.0)
+    assert clearance is not None and clearance < 6.0                     # ...but 2 g for 30 s gains 8.8 km
+    assert T.plume_safe_throttle(sim, me, 1.0) < 0.1
+    # A friendly it cannot reach in the interval, or one burning along with
+    # it, does not hold it back.
+    ahead.kinematic_state.position = Vector3D(25_000, 300, 0)
+    assert dp.exhaust_clearance_km(sim, me, None, 30.0) is None
+    assert T.plume_safe_throttle(sim, me, 1.0) == 1.0
+    ahead.kinematic_state.position = Vector3D(6_000, 300, 0)
+    ahead.applied_throttle = 1.0
+    assert T.plume_safe_throttle(sim, me, 1.0) == 1.0
+
+
+def test_compute_washes_agrees_with_cone_geometry():
+    sim = CombatSimulation(seed=1, time_step=1.0)
+    spots = [(0, 0, 0), (-10, 0.5, 0), (-40, -3, 1), (-10, 12, 0), (30, 0, 0), (-99, 0, 0), (-101, 0, 0)]
+    for i, pos in enumerate(spots):
+        s = _ship(sim, f"s{i}", "alpha" if i % 2 else "beta", pos, "destroyer")
+        s.applied_throttle = 1.0 if i in (0, 4) else 0.0
+    got = {(w.emitter_id, w.victim_id): w for w in dp.compute_washes(sim)}
+    want = {}
+    for e in (sim.ships["s0"], sim.ships["s4"]):
+        for v in sim.ships.values():
+            hit = None if v is e else dp.cone_geometry(e.position, e.forward, v.position)
+            if hit and dp.plume_heat_rate_gj_s(FULL, *hit) > 0.0:
+                want[(e.ship_id, v.ship_id)] = hit
+    assert set(got) == set(want) and len(got) >= 4
+    for key, (d_km, angle) in want.items():
+        assert got[key].distance_km == pytest.approx(d_km) and got[key].off_axis_deg == pytest.approx(angle)
+        assert got[key].heat_rate_gj_s == pytest.approx(dp.plume_heat_rate_gj_s(FULL, d_km, angle))
+
+
+# ---------------------------------------------------------------------------
+# A sweeping jet (owner's reference: a fleeing ship whipping its plume across
+# a pursuer) and the crew's radiation dose
+# ---------------------------------------------------------------------------
+
+def test_sweep_axes_fill_the_sector_between_two_ticks():
+    assert dp.sweep_axes(None, (1.0, 0.0, 0.0)) == [(1.0, 0.0, 0.0)]
+    assert dp.sweep_axes((1.0, 0.0, 0.0), (1.0, 0.0, 0.0)) == [(1.0, 0.0, 0.0)]
+    a = math.radians(30.0)
+    axes = dp.sweep_axes((1.0, 0.0, 0.0), (math.cos(a), math.sin(a), 0.0))
+    assert len(axes) == 20 and axes[-1] == pytest.approx((math.cos(a), math.sin(a), 0.0))
+    angles = [math.degrees(math.atan2(y, x)) for x, y, _ in axes]
+    assert angles == sorted(angles)
+    gaps = [b - a for a, b in zip([0.0] + angles, angles)]
+    assert max(gaps) < dp.PLUME_CORE_HALF_ANGLE_DEG       # no ship fits between two samples
+
+
+def test_a_fast_sweep_cannot_tunnel_past_a_ship():
+    """The emitter's nose jumps 30 deg in one tick; a ship 15 deg off the old
+    exhaust axis is inside neither the old nor the new cone, but the jet
+    crossed it: it takes the dwell-weighted heat and the event shows the
+    peak of the crossing and the facing that glows."""
+    sim = CombatSimulation(seed=5, time_step=1.0)
+    lead = _ship(sim, "lead", "alpha", (0, 0, 0), "corvette")
+    a = math.radians(15.0)
+    tail = _ship(sim, "tail", "beta", (-10 * math.cos(a), -10 * math.sin(a), 0), "destroyer", (1, 0, 0))
+    _ship(sim, "far", "beta", (3000, 0, 0), "destroyer", (-1, 0, 0))
+    lead.applied_throttle = 1.0
+    dp.resolve_plume_wash(sim, 1.0)                        # burning, nose +x: nobody washed
+    assert not _washes(sim)
+    b = math.radians(30.0)
+    lead.kinematic_state.forward = Vector3D(math.cos(b), math.sin(b), 0.0)
+    assert dp.compute_washes(sim) == []                    # the snapshot alone misses it
+    sim.current_time += 1.0
+    dp.resolve_plume_wash(sim, 1.0)
+    (event,) = _washes(sim)
+    assert event.ship_id == "tail" and event.data["phase"] == "enter" and event.data["swept"] is True
+    assert event.data["hit_location"] == "nose" and event.data["friendly"] is False
+    assert event.data["peak_heat_rate_gj_s"] == pytest.approx(16.0, rel=0.05)
+    # Dwell: the 7.5 deg cone covers a quarter of the 30 deg sweep at most.
+    assert 1.0 < event.data["heat_gj"] < 0.5 * event.data["peak_heat_rate_gj_s"]
+    assert tail.thermal_system.heatsink.current_heat_gj == pytest.approx(event.data["heat_gj"], abs=0.06)
+    assert event.data["dose_sv"] > 0.0 and tail.crew_dose_sv == pytest.approx(event.data["dose_sv"], abs=1e-3)
+    sim.current_time += 1.0
+    dp.resolve_plume_wash(sim, 1.0)                        # the jet has moved on
+    assert [e.data["phase"] for e in _washes(sim)] == ["enter", "exit"]
+
+
+def test_a_steady_burn_is_not_resampled():
+    sim = _line_astern()
+    for _ in range(3):
+        sim.step()
+    assert all(e.data["swept"] is False for e in _washes(sim))
+
+
+def test_dose_is_shielded_by_the_armour_on_the_washed_facing():
+    assert dp.dose_shielding(0.0) == 1.0
+    assert dp.dose_shielding(dp.PLUME_DOSE_SHIELD_EFOLD_CM) == pytest.approx(1.0 / math.e)
+    assert dp.plume_dose_rate_sv_s(16.0, 0.0) == pytest.approx(16.0 * dp.PLUME_DOSE_SV_PER_GJ)
+
+    def dose_after(seconds, tail_forward, hull="destroyer"):
+        sim = CombatSimulation(seed=5, time_step=1.0)
+        lead = _ship(sim, "lead", "alpha", (0, 0, 0))
+        tail = _ship(sim, "tail", "alpha", (-10, 0, 0), hull, tail_forward)
+        _ship(sim, "foe", "beta", (3000, 0, 0), "destroyer", (-1, 0, 0))
+        lead.applied_throttle = 1.0
+        for _ in range(seconds):
+            dp.resolve_plume_wash(sim, 1.0)
+            sim.current_time += 1.0
+        return tail, sim
+    bow_on, _ = dose_after(5, (1, 0, 0))
+    beam_on, _ = dose_after(5, (0, 1, 0))
+    battleship, _ = dose_after(5, (1, 0, 0), "battleship")
+    assert beam_on.crew_dose_sv > 3.0 * bow_on.crew_dose_sv > 0.0     # 26 cm flank vs 151 cm bow
+    assert battleship.crew_dose_sv < 0.5 * bow_on.crew_dose_sv        # a 262 cm belt protects its crew
+    nose = bow_on.armor.get_section(bd.HitLocation.NOSE).thickness_cm
+    assert bow_on.crew_dose_sv == pytest.approx(
+        5 * dp.plume_dose_rate_sv_s(16.0, nose), rel=0.02)
+
+
+def test_crew_dose_thresholds_impair_then_incapacitate():
+    sim = CombatSimulation(seed=5, time_step=1.0)
+    lead = _ship(sim, "lead", "alpha", (0, 0, 0))
+    tail = _ship(sim, "tail", "alpha", (-8, 0, 0), "destroyer", (0, 1, 0))      # beam-on
+    foe = _ship(sim, "foe", "beta", (3000, 0, 0), "destroyer", (-1, 0, 0))
+    _burn(lead)
+    _burn(tail)
+    gun = tail.weapons["weapon_1"]
+    base = gun._cooldown_after_shot(gun.weapon.salvo_size - 1)
+    crossings = []
+    for _ in range(60):
+        sim.step()
+        lead.kinematic_state.position = Vector3D(0, 0, 0)
+        lead.kinematic_state.velocity = Vector3D(0, 0, 0)
+        tail.kinematic_state.position = Vector3D(-8000, 0, 0)
+        tail.kinematic_state.velocity = Vector3D(0, 0, 0)
+        if tail.crew_incapacitated:
+            break
+    events = [e for e in sim.events if e.event_type == SimulationEventType.CREW_RADIATION]
+    assert [e.data["state"] for e in events] == ["impaired", "incapacitated"]
+    assert all(e.ship_id == "tail" and e.data["source_ship_id"] == "lead" for e in events)
+    assert events[0].data["threshold_sv"] == dp.PLUME_CREW_IMPAIRED_SV <= events[0].data["dose_sv"]
+    assert events[1].data["threshold_sv"] == dp.PLUME_CREW_INCAPACITATED_SV <= events[1].data["dose_sv"]
+    assert events[0].timestamp < events[1].timestamp
+    # Impaired: guns and tubes cycle slower (the damaged-mount mechanism).
+    assert gun._cooldown_after_shot(gun.weapon.salvo_size - 1) == pytest.approx(
+        base * dp.PLUME_CREW_IMPAIRED_CYCLE_FACTOR * bd.mount_cooldown_factor(gun.mount_health))
+    # Incapacitated: no maneuver, no fire, unable to deal damage; still a ship.
+    assert tail.crew_incapacitated and tail.current_maneuver is None and not tail.is_destroyed
+    assert bd.ship_can_deal_damage(tail) is False and bd.ship_disarmed_by_damage(tail) is True
+    assert bd.ship_can_deal_damage(lead) is True
+    _burn(tail)
+    speed = tail.velocity.magnitude
+    shots = sum(ws.shots_fired for ws in tail.weapons.values())
+    tail.kinematic_state.position = Vector3D(-8000, 50_000, 0)    # out of the jet
+    for _ in range(5):
+        sim.step()
+    assert tail.current_maneuver is None and tail.velocity.magnitude == pytest.approx(speed)
+    assert sum(ws.shots_fired for ws in tail.weapons.values()) == shots
+    assert sim._handle_torpedo_command(tail, {"target_id": "foe"}) is False
+    # The dose is permanent, in the wash events and in the status line.
+    assert tail.crew_dose_sv >= dp.PLUME_CREW_INCAPACITATED_SV
+    last = [e for e in _washes(sim) if e.ship_id == "tail"][-1].data
+    assert last["crew_state"] == "incapacitated" and last["crew_dose_sv"] >= 8.0
+    assert dp.plume_status_lines(sim, tail)[-1].startswith("CREW INCAPACITATED by plume radiation (")
+    stats = dp.plume_stats(sim)
+    assert (stats["crews_impaired"], stats["crews_incapacitated"]) == (1, 1)
+
+
+def test_impaired_status_line_and_incapacitated_role():
+    from src.llm import heuristic_tactics as T
+    sim = _line_astern()
+    tail = sim.ships["tail"]
+    assert dp.plume_status_lines(sim, tail) == [] and dp.crew_state(tail) == "fit"
+    dp._irradiate(sim, tail, 2.5, "lead")
+    assert dp.crew_state(tail) == "impaired" and T.role(tail) == "gun"
+    (line,) = dp.plume_status_lines(sim, tail)
+    assert line == "CREW IMPAIRED by plume radiation (2.5 Sv, incapacitated at 8): weapons cycle x1.5"
+    dp._irradiate(sim, tail, 6.0, "lead")
+    assert dp.crew_state(tail) == "incapacitated" and T.role(tail) == "unarmed"

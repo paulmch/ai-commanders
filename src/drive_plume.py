@@ -54,9 +54,15 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 try:
     from . import battle_damage
     from .combat import HitLocation
-except ImportError:  # pragma: no cover - script-style import path
-    import battle_damage
-    from combat import HitLocation
+except ImportError:  # script-style import path (src/ itself on sys.path)
+    try:
+        import battle_damage
+        from combat import HitLocation
+    except ImportError:
+        # `llm` imported as a top-level package (tests/test_mcp.py): the
+        # engine modules only load through the `src` package.
+        from src import battle_damage
+        from src.combat import HitLocation
 
 if TYPE_CHECKING:  # pragma: no cover
     from .simulation import CombatSimulation, ShipCombatState
@@ -104,6 +110,33 @@ PLUME_ARMOR_ABLATION_CM_PER_GJ = 0.03
 # a sustained wash does not record one mount_damaged per fitting per tick.
 PLUME_FITTING_DAMAGE_PCT_PER_GJ = 0.5
 PLUME_FITTING_DAMAGE_QUANTUM_PCT = 25.0
+
+# A turning ship sweeps its jet. Within one tick the thrust axis is sampled
+# every PLUME_SWEEP_STEP_DEG between the previous and the present nose
+# (half the core half-angle, at most PLUME_SWEEP_MAX_SAMPLES samples) and the
+# wash is the mean over the samples, so a fast sweep cannot step over a ship
+# between two ticks: it deposits its dwell-weighted share and is recorded
+# with the peak rate of the crossing.
+PLUME_SWEEP_STEP_DEG = 1.5
+PLUME_SWEEP_MAX_SAMPLES = 40
+
+# Crew radiation. The jet is intensely radioactive; time in it gives the
+# crew a dose that stays for the battle. Dose rate = wash rate (the full
+# rate, not the heat the sink still accepts) x PLUME_DOSE_SV_PER_GJ x
+# shielding, where the armour on the facing shown to the jet shields as
+# exp(-thickness / PLUME_DOSE_SHIELD_EFOLD_CM): a battleship's 262 cm bow
+# passes 7 %, a destroyer's 151 cm bow 22 %, a 26 cm flank 77 %, a frigate's
+# 12 cm flank 88 %.
+PLUME_DOSE_SV_PER_GJ = 0.03
+PLUME_DOSE_SHIELD_EFOLD_CM = 100.0
+# Impaired crew (acute radiation sickness): every gun and torpedo tube cycles
+# PLUME_CREW_IMPAIRED_CYCLE_FACTOR times slower (the mechanism damaged mounts
+# use; hit rolls, lead and evasion are untouched).
+PLUME_CREW_IMPAIRED_SV = 2.0
+PLUME_CREW_IMPAIRED_CYCLE_FACTOR = 1.5
+# Incapacitated crew: the ship stops fighting and maneuvering (it coasts;
+# automatic PD keeps running) and counts as unable to deal damage.
+PLUME_CREW_INCAPACITATED_SV = 8.0
 
 # A sustained wash records `plume_wash` on entry, every this many seconds
 # while it lasts, and on exit (with the totals of the whole episode).
@@ -171,6 +204,48 @@ def plume_ablation_range_km(jet_w: float = PLUME_REFERENCE_JET_POWER_W) -> float
     return math.sqrt(d2) if d2 > 0.0 else 0.0
 
 
+def dose_shielding(armor_cm: float) -> float:
+    """Fraction of the jet's radiation that passes this much armour (0..1)."""
+    return math.exp(-max(0.0, armor_cm) / PLUME_DOSE_SHIELD_EFOLD_CM)
+
+
+def plume_dose_rate_sv_s(heat_rate_gj_s: float, armor_cm: float) -> float:
+    """Crew dose rate (Sv/s) at a wash rate behind the given armour."""
+    return max(0.0, heat_rate_gj_s) * PLUME_DOSE_SV_PER_GJ * dose_shielding(armor_cm)
+
+
+def crew_state(ship: Any) -> str:
+    """'fit', 'impaired' or 'incapacitated' (plume radiation)."""
+    if getattr(ship, "crew_incapacitated", False) is True:
+        return "incapacitated"
+    if getattr(ship, "crew_impaired", False) is True:
+        return "impaired"
+    return "fit"
+
+
+def sweep_axes(previous: Optional[Tuple[float, float, float]],
+               current: Tuple[float, float, float]) -> List[Tuple[float, float, float]]:
+    """Thrust-axis samples for one tick: the present nose, preceded by the
+    intermediate directions back toward where it pointed a tick ago when the
+    ship turned more than PLUME_SWEEP_STEP_DEG while burning."""
+    if previous is None:
+        return [current]
+    dot = previous[0] * current[0] + previous[1] * current[1] + previous[2] * current[2]
+    angle = math.degrees(math.acos(max(-1.0, min(1.0, dot))))
+    if angle <= PLUME_SWEEP_STEP_DEG:
+        return [current]
+    n = min(PLUME_SWEEP_MAX_SAMPLES, int(math.ceil(angle / PLUME_SWEEP_STEP_DEG)))
+    out = []
+    for k in range(1, n + 1):
+        f = k / n
+        x = previous[0] + (current[0] - previous[0]) * f
+        y = previous[1] + (current[1] - previous[1]) * f
+        z = previous[2] + (current[2] - previous[2]) * f
+        mag = math.sqrt(x * x + y * y + z * z)
+        out.append((x / mag, y / mag, z / mag) if mag > 1e-9 else current)
+    return out
+
+
 def emitter_throttle(ship: Any) -> float:
     """Throttle the ship's torch actually produced on the last tick (0..1).
 
@@ -231,17 +306,24 @@ class Wash:
     victim_id: str
     distance_km: float
     off_axis_deg: float
-    heat_rate_gj_s: float
+    heat_rate_gj_s: float       # mean over the tick (a sweep dwells only part of it)
     throttle: float
     friendly: bool
+    peak_rate_gj_s: float = 0.0  # highest instantaneous rate within the tick
+    swept: bool = False          # the jet swept across the ship this tick
 
 
-def compute_washes(sim: Any, throttle_override: Optional[Dict[str, float]] = None) -> List[Wash]:
+def compute_washes(sim: Any, throttle_override: Optional[Dict[str, float]] = None,
+                   previous_axes: Optional[Dict[str, Tuple[float, float, float]]] = None,
+                   axes_out: Optional[Dict[str, Tuple[float, float, float]]] = None) -> List[Wash]:
     """Every wash in the current state, sorted by (victim, emitter).
 
     Pure geometry from one snapshot: nothing is mutated. ``throttle_override``
     maps ship_id -> throttle for what-if queries ("would my burn wash
     someone?"); other ships use what they actually produced last tick.
+    ``previous_axes`` (ship_id -> nose unit vector a tick ago, for ships that
+    were burning then) makes a turning emitter sweep its jet over the sector
+    in between (sweep_axes); ``axes_out`` receives this tick's emitter axes.
     """
     ships = [s for s in sim.ships.values() if not s.is_destroyed]
     emitters = []
@@ -254,20 +336,67 @@ def compute_washes(sim: Any, throttle_override: Optional[Dict[str, float]] = Non
     if not emitters:
         return []
     out: List[Wash] = []
+    # The per-pair test is inlined on plain floats (same rejection order as
+    # cone_geometry: range, half-space astern, cone angle): almost every
+    # pair leaves at the first or second comparison.
+    points = [(v, v.position) for v in ships]
+    points = [(v, p.x, p.y, p.z) for v, p in points]
+    limit2 = (PLUME_MAX_RANGE_KM * 1000.0) ** 2
     for e, power, throttle in emitters:
         e_pos = e.position
         e_fwd = e.forward
-        for v in ships:
-            if v is e:
+        ex, ey, ez = e_pos.x, e_pos.y, e_pos.z
+        fx, fy, fz = e_fwd.x, e_fwd.y, e_fwd.z
+        if axes_out is not None:
+            axes_out[e.ship_id] = (fx, fy, fz)
+        axes = None
+        if previous_axes:
+            axes = sweep_axes(previous_axes.get(e.ship_id), (fx, fy, fz))
+            if len(axes) == 1:
+                axes = None
+        for v, px, py, pz in points:
+            rx = px - ex
+            ry = py - ey
+            rz = pz - ez
+            d2 = rx * rx + ry * ry + rz * rz
+            if d2 > limit2 or d2 <= 0.0:
                 continue
-            hit = cone_geometry(e_pos, e_fwd, v.position)
-            if hit is None:
+            if axes is not None:
+                # Sweeping jet: mean rate over the sampled axes, geometry of
+                # the strongest sample.
+                d = math.sqrt(d2)
+                d_km = d / 1000.0
+                total = 0.0
+                best_rate = 0.0
+                best_angle = 0.0
+                for ax_x, ax_y, ax_z in axes:
+                    cos_angle = -(rx * ax_x + ry * ax_y + rz * ax_z) / d
+                    if cos_angle < _COS_MAX:
+                        continue
+                    angle = math.degrees(math.acos(min(1.0, cos_angle)))
+                    r = plume_heat_rate_gj_s(power, d_km, angle)
+                    total += r
+                    if r > best_rate:
+                        best_rate, best_angle = r, angle
+                mean = total / len(axes)
+                if best_rate > 0.0 and mean > 0.0:
+                    out.append(Wash(e.ship_id, v.ship_id, d_km, best_angle, mean, throttle,
+                                    e.faction == v.faction, best_rate, True))
                 continue
-            rate = plume_heat_rate_gj_s(power, hit[0], hit[1])
+            axial = -(rx * fx + ry * fy + rz * fz)
+            if axial <= 0.0:
+                continue
+            d = math.sqrt(d2)
+            cos_angle = axial / d
+            if cos_angle < _COS_MAX:
+                continue
+            d_km = d / 1000.0
+            angle = math.degrees(math.acos(min(1.0, cos_angle)))
+            rate = plume_heat_rate_gj_s(power, d_km, angle)
             if rate <= 0.0:
                 continue
-            out.append(Wash(e.ship_id, v.ship_id, hit[0], hit[1], rate, throttle,
-                            e.faction == v.faction))
+            out.append(Wash(e.ship_id, v.ship_id, d_km, angle, rate, throttle,
+                            e.faction == v.faction, rate, False))
     out.sort(key=lambda w: (w.victim_id, w.emitter_id))
     return out
 
@@ -290,6 +419,8 @@ def _state(sim: Any) -> dict:
             'stats': {
                 'friendly_ship_seconds': 0.0, 'enemy_ship_seconds': 0.0,
                 'friendly_heat_gj': 0.0, 'enemy_heat_gj': 0.0,
+                'friendly_dose_sv': 0.0, 'enemy_dose_sv': 0.0,
+                'crews_impaired': 0, 'crews_incapacitated': 0,
                 'armor_ablation_cm': 0.0, 'fittings_hit': 0, 'fittings_destroyed': 0,
                 'torpedoes_blinded': 0, 'torpedoes_destroyed': 0,
             },
@@ -308,7 +439,9 @@ def resolve_plume_wash(sim: "CombatSimulation", dt: float) -> None:
     after every ship, projectile and torpedo has moved."""
     if not getattr(sim, "plume_wash_enabled", True):
         return
-    washes = compute_washes(sim)
+    axes: Dict[str, Tuple[float, float, float]] = {}
+    washes = compute_washes(sim, None, getattr(sim, "_plume_axes", None), axes)
+    sim._plume_axes = axes       # this tick's burning emitters, for the next sweep
     state = getattr(sim, "_plume_state", None)
     if not washes and state is None:
         if PLUME_AFFECTS_TORPEDOES and sim.torpedoes:
@@ -335,10 +468,12 @@ def resolve_plume_wash(sim: "CombatSimulation", dt: float) -> None:
             facing = None
             remaining = None
             fittings: List[str] = []
+            dose = 0.0
         else:
-            heat_gj, ablation, facing, remaining, fittings = _apply_to_ship(
+            heat_gj, ablation, facing, remaining, fittings, dose = _apply_to_ship(
                 sim, victim, wash, dt)
         stats[f'{side}_heat_gj'] += heat_gj
+        stats[f'{side}_dose_sv'] += dose
         stats['armor_ablation_cm'] += ablation
 
         episode = contacts.get(key)
@@ -347,13 +482,15 @@ def resolve_plume_wash(sim: "CombatSimulation", dt: float) -> None:
             episode = contacts[key] = {
                 'start': now, 'last_event': now, 'heat_gj': 0.0,
                 'armor_ablation_cm': 0.0, 'fittings': [], 'peak': 0.0,
-                'friendly': wash.friendly,
+                'friendly': wash.friendly, 'dose_sv': 0.0, 'swept': False,
             }
             phase = 'enter'
         episode['heat_gj'] += heat_gj
         episode['armor_ablation_cm'] += ablation
         episode['fittings'].extend(f for f in fittings if f not in episode['fittings'])
-        episode['peak'] = max(episode['peak'], wash.heat_rate_gj_s)
+        episode['peak'] = max(episode['peak'], wash.peak_rate_gj_s)
+        episode['dose_sv'] += dose
+        episode['swept'] = episode['swept'] or wash.swept
         episode['last'] = (wash.distance_km, wash.off_axis_deg, wash.heat_rate_gj_s,
                            wash.throttle, facing, remaining)
         episode['end'] = now + dt
@@ -418,7 +555,58 @@ def _apply_to_ship(sim: Any, victim: Any, wash: Wash, dt: float) -> tuple:
                 stats['fittings_destroyed'] += 1 if destroyed else 0
             owed = 0.0
         debt[victim.ship_id] = owed
-    return heat_gj, ablation, facing, remaining, damaged
+
+    # Crew dose: the full wash rate, shielded by what armour is left on the
+    # washed facing.
+    dose = plume_dose_rate_sv_s(wash.heat_rate_gj_s,
+                                section.thickness_cm if section is not None else 0.0) * dt
+    if dose > 0.0:
+        _irradiate(sim, victim, dose, wash.emitter_id)
+    return heat_gj, ablation, facing, remaining, damaged, dose
+
+
+def _irradiate(sim: Any, victim: Any, dose_sv: float, source_ship_id: Optional[str]) -> None:
+    """Add crew dose and apply the threshold effects (each crossed once)."""
+    SimulationEventType = _event_types(sim)
+    stats = _state(sim)['stats']
+    victim.crew_dose_sv = getattr(victim, "crew_dose_sv", 0.0) + dose_sv
+    total = victim.crew_dose_sv
+    if total >= PLUME_CREW_IMPAIRED_SV and not getattr(victim, "crew_impaired", False):
+        victim.crew_impaired = True
+        stats['crews_impaired'] += 1
+        factor = PLUME_CREW_IMPAIRED_CYCLE_FACTOR
+        for slot, ws in victim.weapons.items():
+            if not slot.startswith("pd"):
+                ws.crew_cycle_factor = factor
+        for launcher in victim.ready_torpedo_launchers:
+            # Scale the intact cooldown too, so later tube damage
+            # (battle_damage.damage_fitting) multiplies on top of it.
+            intact = getattr(launcher, "_intact_cooldown_seconds", None)
+            if intact is not None:
+                launcher._intact_cooldown_seconds = intact * factor
+            launcher.cooldown_seconds = launcher.cooldown_seconds * factor
+        sim._log_event(SimulationEventType.CREW_RADIATION, victim.ship_id, data={
+            'state': 'impaired',
+            'dose_sv': round(total, 2),
+            'threshold_sv': PLUME_CREW_IMPAIRED_SV,
+            'cooldown_factor': factor,
+            'source_ship_id': source_ship_id,
+        })
+        sim._echo(f"  ~~~ [{victim.ship_id}] CREW IMPAIRED by plume radiation "
+                  f"({total:.1f} Sv): weapons cycle x{factor:.1f}")
+    if total >= PLUME_CREW_INCAPACITATED_SV and not getattr(victim, "crew_incapacitated", False):
+        victim.crew_incapacitated = True
+        victim.current_maneuver = None
+        stats['crews_incapacitated'] += 1
+        sim._log_event(SimulationEventType.CREW_RADIATION, victim.ship_id, data={
+            'state': 'incapacitated',
+            'dose_sv': round(total, 2),
+            'threshold_sv': PLUME_CREW_INCAPACITATED_SV,
+            'cooldown_factor': None,
+            'source_ship_id': source_ship_id,
+        })
+        sim._echo(f"  ~~~ [{victim.ship_id}] CREW INCAPACITATED by plume radiation "
+                  f"({total:.1f} Sv): the ship no longer fights or maneuvers")
 
 
 def _log(sim: Any, SimulationEventType: Any, key: tuple, episode: dict, phase: str,
@@ -439,7 +627,12 @@ def _log(sim: Any, SimulationEventType: Any, key: tuple, episode: dict, phase: s
         'armor_ablation_cm': round(episode['armor_ablation_cm'], 2),
         'fittings_hit': list(episode['fittings']),
         'hit_location': facing.value if facing is not None else None,
+        'swept': episode['swept'],
+        'dose_sv': round(episode['dose_sv'], 3),
     }
+    if victim is not None and facing is not None:
+        data['crew_dose_sv'] = round(getattr(victim, 'crew_dose_sv', 0.0), 3)
+        data['crew_state'] = crew_state(victim)
     if remaining is not None:
         data['armor_remaining_cm'] = round(remaining, 2)
     thermal = getattr(victim, 'thermal_system', None) if victim is not None else None
@@ -525,6 +718,21 @@ def plume_status_lines(sim: Any, ship: Any) -> List[str]:
     if getattr(ship, "is_destroyed", False) or getattr(ship, "is_dying", False):
         return []
     lines: List[str] = []
+    crew: List[str] = []         # the dose line goes after the wash warnings
+    dose = getattr(ship, "crew_dose_sv", 0.0)
+    if isinstance(dose, (int, float)) and dose >= 0.05:
+        state = crew_state(ship)
+        if state == "incapacitated":
+            crew.append(f"CREW INCAPACITATED by plume radiation ({dose:.1f} Sv): the ship no "
+                         f"longer fights or maneuvers")
+        elif state == "impaired":
+            crew.append(f"CREW IMPAIRED by plume radiation ({dose:.1f} Sv, incapacitated at "
+                         f"{PLUME_CREW_INCAPACITATED_SV:.0f}): weapons cycle "
+                         f"x{PLUME_CREW_IMPAIRED_CYCLE_FACTOR:.1f}")
+        else:
+            crew.append(f"CREW DOSE {dose:.1f} Sv from drive plumes (impaired at "
+                         f"{PLUME_CREW_IMPAIRED_SV:.0f}, incapacitated at "
+                         f"{PLUME_CREW_INCAPACITATED_SV:.0f})")
     try:
         actual = compute_washes(sim)
         for w in actual:
@@ -547,8 +755,8 @@ def plume_status_lines(sim: Any, ship: Any) -> List[str]:
                     f"astern inside your exhaust cone - a full burn on this heading puts "
                     f"+{w.heat_rate_gj_s:.1f} GJ/s on it")
     except Exception:  # noqa: BLE001 - advisory only, never fail a status build
-        return lines
-    return lines
+        return lines + crew
+    return lines + crew
 
 
 def friendlies_in_exhaust(sim: Any, ship: Any, forward: Any = None,
@@ -579,6 +787,58 @@ def friendlies_in_exhaust(sim: Any, ship: Any, forward: Any = None,
         out.append((other, d / 1000.0, math.degrees(math.acos(min(1.0, cos_angle)))))
     out.sort(key=lambda t: (t[1], t[0].ship_id))
     return out
+
+
+def exhaust_clearance_km(sim: Any, ship: Any, forward: Any = None, horizon_s: float = 30.0,
+                         step_s: float = 5.0,
+                         half_angle_deg: float = PLUME_AVOID_HALF_ANGLE_DEG,
+                         range_km: float = PLUME_AVOID_RANGE_KM) -> Optional[float]:
+    """Smallest distance (km) at which a friendly sits in this ship's
+    avoidance cone astern now or at any ``step_s`` sample over the next
+    ``horizon_s``, if the ship burns at full throttle along ``forward``
+    (default: its present nose). None when the exhaust stays clear.
+
+    Constant-acceleration extrapolation: this ship at full thrust along
+    ``forward``, every friendly on its present velocity plus the thrust it
+    produced last tick. It catches the case the snapshot misses: a friendly
+    just AHEAD that a full burn overtakes, leaving it dead astern at 2-5 km.
+    """
+    fwd = forward if forward is not None else ship.forward
+    mag = math.sqrt(fwd.x * fwd.x + fwd.y * fwd.y + fwd.z * fwd.z)
+    if mag <= 1e-9:
+        return None
+    fx, fy, fz = fwd.x / mag, fwd.y / mag, fwd.z / mag
+    ks = ship.kinematic_state
+    fraction = getattr(ship, "get_effective_thrust_fraction", None)
+    accel = ks.max_acceleration_ms2() * (fraction() if callable(fraction) else 1.0)
+    cos_limit = math.cos(math.radians(half_angle_deg))
+    limit_m = range_km * 1000.0
+    pos, vel = ship.position, ship.velocity
+    steps = max(0, int(round(horizon_s / step_s))) if step_s > 0 else 0
+    best: Optional[float] = None
+    for other in sim.ships.values():
+        if (other is ship or other.faction != ship.faction or other.is_destroyed
+                or getattr(other, "is_dying", False)):
+            continue
+        o_pos, o_vel, o_fwd = other.position, other.velocity, other.forward
+        o_acc = emitter_throttle(other) * other.kinematic_state.max_acceleration_ms2()
+        rx, ry, rz = o_pos.x - pos.x, o_pos.y - pos.y, o_pos.z - pos.z
+        vx, vy, vz = o_vel.x - vel.x, o_vel.y - vel.y, o_vel.z - vel.z
+        ax = o_acc * o_fwd.x - accel * fx
+        ay = o_acc * o_fwd.y - accel * fy
+        az = o_acc * o_fwd.z - accel * fz
+        for i in range(steps + 1):
+            t = i * step_s
+            h = 0.5 * t * t
+            x, y, z = rx + vx * t + ax * h, ry + vy * t + ay * h, rz + vz * t + az * h
+            d = math.sqrt(x * x + y * y + z * z)
+            if d <= 0.0 or d > limit_m:
+                continue
+            if -(x * fx + y * fy + z * fz) / d < cos_limit:
+                continue
+            if best is None or d / 1000.0 < best:
+                best = d / 1000.0
+    return best
 
 
 def formation_plume_conflicts(offsets_km: List[Tuple[float, float, float]],

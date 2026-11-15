@@ -1039,3 +1039,28 @@ class TestDrivePlumeDoctrine:
         assert dp.plume_armor_ablation_cm_s(dp.plume_heat_rate_gj_s(full, burn + 2.0, 0.0)) == 0.0
         assert ceiling == pytest.approx(dp.PLUME_HEAT_CEILING_FRACTION * 100.0, abs=0.5)
         assert ceiling < REACTOR_MELTDOWN_HEAT_FRACTION * 100.0
+
+    def test_crew_dose_numbers_are_the_engines(self, fleet):
+        import re
+        from src import drive_plume as dp
+        from src.llm.prompts import plume_doctrine_line
+        line = plume_doctrine_line()
+        rate = float(re.search(r"\(([\d.]+) Sv/s unshielded at 10 km", line).group(1))
+        impaired = float(re.search(r"at (\d+) Sv weapons cycle x([\d.]+) slower", line).group(1))
+        factor = float(re.search(r"at (\d+) Sv weapons cycle x([\d.]+) slower", line).group(2))
+        out = float(re.search(r"at (\d+) Sv the ship stops fighting", line).group(1))
+        assert (impaired, factor, out) == (dp.PLUME_CREW_IMPAIRED_SV,
+                                           dp.PLUME_CREW_IMPAIRED_CYCLE_FACTOR,
+                                           dp.PLUME_CREW_INCAPACITATED_SV)
+        # A ship 10 km astern of a full burn, measured in the engine: the
+        # quoted rate is the unshielded one; its armour cuts it.
+        sim = CombatSimulation(time_step=1.0, decision_interval=1e9, seed=7)
+        lead = _build(sim, 'lead', 'cruiser', 'alpha', fleet, 0, 0, 1)
+        tail = _build(sim, 'tail', 'frigate', 'alpha', fleet, -10, 0, 1)
+        tail.kinematic_state.forward = Vector3D(0, 1, 0)             # thin flank to the jet
+        _build(sim, 'foe', 'destroyer', 'beta', fleet, 5000, 0, -1)
+        lead.applied_throttle = 1.0
+        dp.resolve_plume_wash(sim, 1.0)
+        flank_cm = tail.armor.get_section(dp.HitLocation.LATERAL).thickness_cm
+        assert tail.crew_dose_sv == pytest.approx(rate * dp.dose_shielding(flank_cm), rel=0.03)
+        assert 0.8 * rate < tail.crew_dose_sv < rate

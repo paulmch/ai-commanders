@@ -206,7 +206,10 @@ def has_torpedoes(ship: Any) -> bool:
 def role(ship: Any) -> str:
     """'gun' (a working coilgun), 'torpedo' (loaded tubes only) or 'unarmed'
     (every gun mount wrecked and no round left in a working tube: battle
-    damage, src/battle_damage.py, or an empty magazine)."""
+    damage, src/battle_damage.py, an empty magazine, or a crew incapacitated
+    by plume radiation, src/drive_plume.py)."""
+    if getattr(ship, "crew_incapacitated", False) is True:
+        return "unarmed"
     if has_guns(ship):
         return "gun"
     if has_torpedoes(ship):
@@ -250,9 +253,12 @@ def plume_safe_throttle(simulation: Any, ship: Any, throttle: float, threat: boo
     friendly astern of it (see PLUME_SAFE_WASH_GJ_PER_S).
 
     The cone is checked along the nose as it points now and, for a HEADING
-    order, along the ordered ``direction`` as well. The wash is taken on the
-    exhaust axis whatever the friendly's exact angle inside the avoidance
-    cone (the nose moves during the 30 s the order lasts).
+    order, along the ordered ``direction`` as well, now and over the coming
+    decision interval (drive_plume.exhaust_clearance_km: a friendly just
+    ahead that a full burn would overtake ends up dead astern at point-blank
+    range). The wash is taken on the exhaust axis whatever the friendly's
+    exact angle inside the avoidance cone (the nose moves while the order
+    lasts).
     """
     if threat or throttle <= 0.0:
         return throttle
@@ -263,13 +269,12 @@ def plume_safe_throttle(simulation: Any, ship: Any, throttle: float, threat: boo
     if isinstance(direction, dict):
         direction = SimpleNamespace(x=float(direction.get("x", 0.0)), y=float(direction.get("y", 0.0)),
                                     z=float(direction.get("z", 0.0)))
-    nearest_km = None
-    for forward in (None, direction):
-        if forward is None and nearest_km is not None:
-            continue
-        hits = plume.friendlies_in_exhaust(simulation, ship, forward)
-        if hits and (nearest_km is None or hits[0][1] < nearest_km):
-            nearest_km = hits[0][1]
+    horizon_s = float(getattr(simulation, "decision_interval", 30.0) or 30.0)
+    nearest_km = plume.exhaust_clearance_km(simulation, ship, None, horizon_s)
+    if direction is not None:
+        ordered = plume.exhaust_clearance_km(simulation, ship, direction, horizon_s)
+        if ordered is not None and (nearest_km is None or ordered < nearest_km):
+            nearest_km = ordered
     if nearest_km is None:
         return throttle
     full = plume.plume_heat_rate_gj_s(plume.emitter_jet_power_w(ship, 1.0), nearest_km, 0.0)

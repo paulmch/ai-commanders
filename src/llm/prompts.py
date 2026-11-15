@@ -169,7 +169,11 @@ def plume_doctrine_line() -> str:
         f"50 km (scaled by throttle) - and inside ~{_plume.plume_ablation_range_km():.0f} km it also "
         f"burns armour and fittings off the facing shown to it. Wash heat stops at "
         f"{_plume.PLUME_HEAT_CEILING_FRACTION * 100:.0f}%: it cripples, and the next heat source "
-        f"melts the reactor.")
+        f"melts the reactor. The jet also irradiates the crew for good "
+        f"({_plume.plume_dose_rate_sv_s(rate(10.0), 0.0):.2f} Sv/s unshielded at 10 km, less behind "
+        f"thick armour on the facing shown): at {_plume.PLUME_CREW_IMPAIRED_SV:.0f} Sv weapons cycle "
+        f"x{_plume.PLUME_CREW_IMPAIRED_CYCLE_FACTOR:.1f} slower, at "
+        f"{_plume.PLUME_CREW_INCAPACITATED_SV:.0f} Sv the ship stops fighting and maneuvering.")
 
 
 def thermal_doctrine_block(nums: Dict[str, Any]) -> str:
