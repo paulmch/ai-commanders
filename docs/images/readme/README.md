@@ -42,9 +42,8 @@ filters/scrolling, and for `command-net.png` a 2× device-scale crop.
   doctrine)
 - Showcase s0 / s7: free heuristic draft battles recorded on the pass-4 engine
   with the commands below. The frames here are taken from those pass-4
-  recordings; the pass-5 engine changes seeded battles, so re-running the
-  commands today gives a different battle (use the archived recordings to
-  reproduce these exact frames):
+  recordings; later engine changes can alter seeded battles, so re-running
+  the commands today may give a different battle and different timestamps:
 
   ```bash
   uv run python scripts/run_draft_battle.py --auto-draft --no-admirals --trace \
