@@ -902,8 +902,8 @@ export class HullKit {
     const D = this.xf(x, y, z, 0, 0, angle);
     if (hp > 0) {
       // a stout column on a foot collar (few faces: PD mounts are small)
-      this.drum('trim', s * 0.46, s * 0.1, 0, { sides: 8, parent: this.xf(0, s * 0.05, 0, Math.PI / 2, 0, 0, D) });
-      this.drum('hull', s * 0.3, hp, 0, { sides: 8, parent: this.xf(0, hp / 2, 0, Math.PI / 2, 0, 0, D) });
+      this.drum('trim', s * 0.36, s * 0.1, 0, { sides: 8, parent: this.xf(0, s * 0.05, 0, Math.PI / 2, 0, 0, D) });
+      this.drum('hull', s * 0.2, hp, 0, { sides: 8, parent: this.xf(0, hp / 2, 0, Math.PI / 2, 0, 0, D) });
     }
     const P = this.xf(0, hp, 0, 0, 0, 0, D);
     this.drum('trim', s * 0.42, s * 0.1, 0, { sides: 12, parent: this.xf(0, s * 0.05, 0, Math.PI / 2, 0, 0, P) });

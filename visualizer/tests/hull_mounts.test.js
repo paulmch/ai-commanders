@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import * as THREE from 'three';
 import {
-  buildHullMounts, serialize, MOUNTS_PATH, viewerToBody, bodyToViewer, coverage
+  buildHullMounts, serialize, serializeModule, MOUNTS_PATH, VIEWER_MODULE_PATH, viewerToBody, bodyToViewer, coverage
 } from '../scripts/export_hull_mounts.mjs';
 import { cellIndex, packMask, unpackMask, AZ_CELLS, EL_CELLS } from '../src/render/MountLimits.js';
 
@@ -17,6 +17,9 @@ const blockedAt = (m, az, el) => unpackMask(m.blocked)[cellIndex(az, el)] === 1;
 test('data/hull_mounts.json is what the hull kit exports today (regenerate after moving a mount)', () => {
   assert.equal(serialize(fresh), COMMITTED,
     'stale: run `node visualizer/scripts/export_hull_mounts.mjs` and commit data/hull_mounts.json');
+  // the viewer's copy (render/hullMountsData.js) is written by the same run
+  assert.equal(serializeModule(fresh), readFileSync(VIEWER_MODULE_PATH, 'utf8'),
+    'stale: run `node visualizer/scripts/export_hull_mounts.mjs` and commit visualizer/src/render/hullMountsData.js');
 });
 
 test('the export does not depend on ship seed or faction', () => {
