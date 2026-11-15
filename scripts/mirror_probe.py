@@ -21,7 +21,10 @@ Probes (same seed, same fleets):
                  stream, per-round / per-torpedo / per-ship streams), so both
                  sides get identical rolls: the battle must then stay an
                  exact mirror image to the end, and ANY break is the engine
-                 or the captains treating the sides differently.
+                 or the captains treating the sides differently. Takes an
+                 optional value (--flat-rng 0.05): different values walk
+                 different branches (0.05: every hit, crit and fitting
+                 strike lands; 0.9: almost none).
 
     uv run python scripts/mirror_probe.py --seed 102 --budget 200
     uv run python scripts/mirror_probe.py --seed 102 --budget 200 --beta-first
@@ -52,8 +55,10 @@ from src.simulation import CombatSimulation
 class FlatRandom(random.Random):
     """Every draw returns the same value (see --flat-rng)."""
 
+    value = 0.31
+
     def random(self):
-        return 0.31
+        return self.value
 
     def getrandbits(self, k):
         return 0
@@ -143,8 +148,10 @@ def main() -> int:
                         help="Add beta's ships to the simulation before alpha's")
     parser.add_argument("--flip", action="store_true",
                         help="Rotate the battlefield 180 degrees about Z before the first step")
-    parser.add_argument("--flat-rng", action="store_true",
-                        help="Make every random draw return the same value")
+    parser.add_argument("--flat-rng", type=float, nargs="?", const=0.31, default=None,
+                        metavar="VALUE",
+                        help="Make every random draw return VALUE (default 0.31; low "
+                             "values make every hit, crit and fitting strike land)")
     parser.add_argument("--breaks", type=int, default=2,
                         help="Report the first N ticks that break the mirror (0 = result only)")
     parser.add_argument("--tol", type=float, default=1e-6,
@@ -156,7 +163,8 @@ def main() -> int:
               for f in ("alpha", "beta")}
     # After the draft: the roster is still the seed's.
     real_random = random.Random
-    if args.flat_rng:
+    if args.flat_rng is not None:
+        FlatRandom.value = args.flat_rng
         random.Random = FlatRandom
     fleet_config = BattleFleetConfig(
         battle_name=f"Mirror probe ({args.budget} pts)",
