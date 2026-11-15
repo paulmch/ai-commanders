@@ -430,10 +430,12 @@ once has two concurrent episodes. A victim that is a dying hulk is tracked
 | `heat` | float | victim's heat fraction after the tick (absent for a hulk) |
 
 Fittings: only the part of the heat rate above 4 GJ/s (inside ~22 km of a
-full burn) damages them, 0.5 % health per GJ, applied to every exposed
-fitting on the washed facing in steps of at least 25 % (so one
-`mount_damaged` per fitting every few seconds, not one per tick). The spinal
-mount is reached only when the victim shows its nose.
+full burn) damages them, 0.5 % health per GJ, applied in steps of at least
+25 % (so one `mount_damaged` per fitting every few seconds, not one per tick)
+to every working gun mount, torpedo tube and PD turret of the ship whatever
+the facing - the jet is far wider than a hull; only the spinal mount is
+facing-gated (reached when the victim shows its nose). `hit_location` on
+these `mount_damaged` events is the washed facing.
 
 Example (entry, demo recording, t = 30 s):
 

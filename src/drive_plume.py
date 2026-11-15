@@ -15,9 +15,11 @@ module makes the plume a real thing:
   includes engine damage and dry tanks) x thrust x exhaust velocity / 2. A
   dead, throttled-back or damaged drive washes less or nothing.
 * VICTIM. Any other ship - friend or foe - inside the cone takes heat into
-  its sink and, where the wash is strong, loses armour on the facing it shows
-  the jet and has the fittings on that facing burned (battle_damage's
-  fitting machinery, cause 'plume_wash').
+  its sink and its crew a radiation dose; where the wash is strong it also
+  loses armour on the facing it shows the jet and has its exposed fittings
+  burned (battle_damage's fitting machinery, cause 'plume_wash': every gun
+  mount, tube and PD turret - the jet is far wider than a hull - the spinal
+  mount only when the bow is shown).
 * TORPEDOES (PLUME_AFFECTS_TORPEDOES, off by default in pass 5): a torpedo
   flying up a burning ship's exhaust accumulates a dose; its seeker is
   blinded, then the round is destroyed.
@@ -105,7 +107,8 @@ PLUME_HEAT_CEILING_FRACTION = battle_damage.REACTOR_BLAST_HEAT_CEILING_FRACTION
 PLUME_ABLATION_THRESHOLD_GJ_PER_S = 4.0
 # Armour burned off the washed facing per GJ above the threshold (cm).
 PLUME_ARMOR_ABLATION_CM_PER_GJ = 0.03
-# Health lost by every exposed fitting on the washed facing per GJ above the
+# Health lost by every exposed fitting (battle_damage._exposed_fittings: all
+# gun mounts, tubes and PD turrets; the spinal only bow-on) per GJ above the
 # threshold (percent), applied in steps of PLUME_FITTING_DAMAGE_QUANTUM_PCT so
 # a sustained wash does not record one mount_damaged per fitting per tick.
 PLUME_FITTING_DAMAGE_PCT_PER_GJ = 0.5
@@ -152,6 +155,12 @@ PLUME_AFFECTS_TORPEDOES = False
 # the jet).
 PLUME_TORPEDO_BLIND_DOSE_GJ = 2.0
 PLUME_TORPEDO_KILL_DOSE_GJ = 10.0
+
+# Commander status: a PLUME RISK line (a friendly would be washed if this
+# ship burned at full throttle) is shown only when that wash would exceed
+# this rate - more than the radiators' 0.78 GJ/s, i.e. inside ~44 km on the
+# axis. An actual wash is always shown.
+PLUME_RISK_MIN_GJ_PER_S = 1.0
 
 # Rule-based captains (src/llm/heuristic_tactics.py) and formation placement
 # (src/llm/fleet_draft.py) keep friendlies out of the cone with this margin:
@@ -749,7 +758,8 @@ def plume_status_lines(sim: Any, ship: Any) -> List[str]:
                     f"PLUME WASH: your exhaust is washing friendly {_name(ships[w.victim_id])}, "
                     f"{w.distance_km:.0f} km astern, +{w.heat_rate_gj_s:.1f} GJ/s on it")
         for w in compute_washes(sim, {ship_id: 1.0}):
-            if w.emitter_id == ship_id and w.friendly and w.victim_id not in washing:
+            if (w.emitter_id == ship_id and w.friendly and w.victim_id not in washing
+                    and w.heat_rate_gj_s >= PLUME_RISK_MIN_GJ_PER_S):
                 lines.append(
                     f"PLUME RISK: friendly {_name(ships[w.victim_id])} is {w.distance_km:.0f} km "
                     f"astern inside your exhaust cone - a full burn on this heading puts "

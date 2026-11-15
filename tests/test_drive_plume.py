@@ -428,6 +428,11 @@ def test_status_warns_of_the_risk_before_the_burn_and_names_an_enemy_torch():
     assert dp.plume_status_lines(sim, tail) == []
     (risk,) = dp.plume_status_lines(sim, lead)
     assert risk.startswith("PLUME RISK: friendly tail is 12 km astern inside your exhaust cone")
+    # A friendly far astern (a wash under PLUME_RISK_MIN_GJ_PER_S) is not worth a line.
+    tail.kinematic_state.position = Vector3D(-80_000, 0, 0)
+    assert dp.plume_heat_rate_gj_s(FULL, 80.0, 0.0) < dp.PLUME_RISK_MIN_GJ_PER_S
+    assert dp.plume_status_lines(sim, lead) == []
+    tail.kinematic_state.position = Vector3D(-12_000, 0, 0)
     # An enemy that turns tail and burns 20 km ahead of the lead washes it.
     foe.kinematic_state.position = Vector3D(20_000, 0, 0)
     foe.kinematic_state.forward = Vector3D(1, 0, 0)
@@ -745,3 +750,102 @@ def test_impaired_status_line_and_incapacitated_role():
     assert line == "CREW IMPAIRED by plume radiation (2.5 Sv, incapacitated at 8): weapons cycle x1.5"
     dp._irradiate(sim, tail, 6.0, "lead")
     assert dp.crew_state(tail) == "incapacitated" and T.role(tail) == "unarmed"
+
+
+def test_impaired_torpedo_boat_cycles_slower_and_an_incapacitated_one_cannot_launch():
+    sim = CombatSimulation(seed=5, time_step=1.0)
+    boat = _ship(sim, "boat", "alpha", (0, 0, 0), "cruiser_torpedo")
+    _ship(sim, "foe", "beta", (400, 0, 0), "destroyer", (-1, 0, 0))
+    tubes = boat.ready_torpedo_launchers
+    assert len(tubes) == 4 and all(t.current_magazine > 0 for t in tubes)
+    base = [t.cooldown_seconds for t in tubes]
+    assert sim._handle_torpedo_command(boat, {"target_id": "foe"}) is True     # one tube now mid-cooldown
+    dp._irradiate(sim, boat, dp.PLUME_CREW_IMPAIRED_SV, "foe")
+    assert boat.crew_impaired and not boat.crew_incapacitated
+    assert [t.cooldown_seconds for t in tubes] == pytest.approx(
+        [b * dp.PLUME_CREW_IMPAIRED_CYCLE_FACTOR for b in base])
+    # Later tube damage multiplies on top of the crew factor, it does not undo it.
+    fitting = next(f for f in bd._launcher_fittings(boat))
+    bd.damage_fitting(sim, boat, fitting, 50.0, "surface_hit")
+    assert tubes[0].cooldown_seconds == pytest.approx(
+        base[0] * dp.PLUME_CREW_IMPAIRED_CYCLE_FACTOR * bd.mount_cooldown_factor(50.0))
+    assert sim._handle_torpedo_command(boat, {"target_id": "foe"}) is True     # impaired crews still fight
+    launched = len(sim.torpedoes)
+    dp._irradiate(sim, boat, dp.PLUME_CREW_INCAPACITATED_SV, "foe")
+    assert boat.crew_incapacitated and bd.ship_can_deal_damage(boat) is False
+    # Immediate path and the pending (reserved salvo) path: nothing leaves.
+    assert sim._handle_torpedo_command(boat, {"target_id": "foe"}) is False
+    sim.pending_torpedo_launches.append(("boat", {"target_id": "foe"}, sim.current_time + 30.0))
+    for _ in range(5):
+        sim.step()
+    assert len([t for t in sim.torpedoes if t.source_ship_id == "boat"]) <= launched
+    assert sum(1 for e in sim.events if e.event_type == SimulationEventType.TORPEDO_LAUNCHED
+               and e.ship_id == "boat") == 2
+    # Its rounds already in flight still count for the victory rule.
+    assert bd.side_can_deal_damage(sim, [boat]) is bool(
+        [t for t in sim.torpedoes if t.source_ship_id == "boat"])
+
+
+# ---------------------------------------------------------------------------
+# Seeded battle: the demo scenario (scripts/generate_test_battle.py plume_wash)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def column_battles(tmp_path_factory):
+    """The plume demo battle - a destroyer 11 km astern of a burning
+    battleship - flown by legacy captains (no plume avoidance) and by the
+    tactical ones."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "generate_test_battle", REPO / "scripts" / "generate_test_battle.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    out = {}
+    for doctrine in ("legacy", "tactical"):
+        _, path = module.plume_wash_battle(
+            recording_dir=str(tmp_path_factory.mktemp(doctrine)), doctrine=doctrine)
+        out[doctrine] = json.loads(Path(path).read_text())
+    return out
+
+
+def _plume_events(recording):
+    return [e for e in recording["events"] if e["event_type"] == "plume_wash"]
+
+
+def test_seeded_battle_legacy_column_cooks_its_follower(column_battles):
+    rec = column_battles["legacy"]
+    first = [e for e in _plume_events(rec)
+             if e["ship_id"] == "alpha_2" and e["data"]["source_ship_id"] == "alpha_1"]
+    phases = [e["data"]["phase"] for e in first]
+    assert phases[0] == "enter" and phases[-1] == "exit" and phases.count("sustain") >= 6
+    assert first[0]["timestamp"] == 30.0 and first[0]["data"]["hit_location"] == "nose"
+    assert first[0]["data"]["distance_km"] == pytest.approx(11.0, abs=0.1)
+    total = first[-1]["data"]
+    assert first[-1]["timestamp"] == 69.0 and total["duration_s"] == 39.0
+    assert total["heat_gj"] > 400.0 and total["armor_ablation_cm"] > 8.0
+    assert 3.0 < total["dose_sv"] < 4.0 and total["crew_state"] == "impaired"
+    assert total["heat"] <= dp.PLUME_HEAT_CEILING_FRACTION + 1e-3      # hot, not melted
+    burned = [e for e in rec["events"] if e["event_type"] == "mount_damaged"
+              and e["data"].get("cause") == "plume_wash"]
+    assert len(burned) == 16 and {e["ship_id"] for e in burned} == {"alpha_2"}
+    assert sum(1 for e in burned if e["data"]["destroyed"]) == 4       # spinal, turret, both PD
+    crew = [e for e in rec["events"] if e["event_type"] == "crew_radiation"]
+    assert [(e["timestamp"], e["ship_id"], e["data"]["state"]) for e in crew] == [(50.0, "alpha_2", "impaired")]
+    # The cruiser 14 km abeam is never washed; nobody dies of the wash.
+    assert not [e for e in _plume_events(rec) if e["ship_id"] == "alpha_3"]
+    assert not [e for e in rec["events"] if e["event_type"] == "ship_destroyed"]
+    # Later the destroyer, ahead and jinking, sweeps its jet over the battleship.
+    assert any(e["data"]["swept"] and e["ship_id"] == "alpha_1" for e in _plume_events(rec))
+
+
+def test_seeded_battle_tactical_captains_keep_the_follower_out_of_the_jet(column_battles):
+    legacy = sum(e["data"]["heat_gj"] for e in _plume_events(column_battles["legacy"])
+                 if e["data"]["phase"] == "exit" and e["data"]["friendly"])
+    rec = column_battles["tactical"]
+    tactical = [e["data"] for e in _plume_events(rec) if e["data"]["friendly"]]
+    assert legacy > 400.0
+    assert max([d["heat_gj"] for d in tactical] or [0.0]) < 0.05 * legacy
+    assert max([d.get("crew_dose_sv", 0.0) for d in tactical] or [0.0]) < 0.2
+    assert not [e for e in rec["events"] if e["event_type"] == "crew_radiation"]
+    assert not [e for e in rec["events"] if e["event_type"] == "mount_damaged"
+                and e["data"].get("cause") == "plume_wash"]
