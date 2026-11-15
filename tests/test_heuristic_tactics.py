@@ -41,6 +41,16 @@ def _captain(stype, doctrine=None, name="me"):
         doctrine=doctrine)
 
 
+def _assert_withdraws(m, foe_dir_x=1.0):
+    """A withdrawal inside the retreat range: a full burn away from the gun,
+    WITHDRAW_ANGLE_DEG off the line (flank, not tail, to his guns)."""
+    import math
+    assert m.maneuver_type == ManeuverType.HEADING and m.throttle == 1.0
+    h = m.heading_direction
+    cos_off = -h["x"] * foe_dir_x / math.sqrt(h["x"] ** 2 + h["y"] ** 2 + h["z"] ** 2)
+    assert cos_off == pytest.approx(math.cos(math.radians(T.WITHDRAW_ANGLE_DEG)), abs=0.02)
+
+
 def _maneuver(commands):
     found = [c for c in commands if isinstance(c, Maneuver)]
     assert found, commands
@@ -214,16 +224,14 @@ def test_torpedo_boat_holds_its_standoff_from_the_nearest_gun():
     assert m.hold_range_m == pytest.approx(T.TORPEDO_STANDOFF_KM * 1000.0)
 
 
-def test_crippled_ship_opens_range_with_full_evasion(monkeypatch):
+def test_crippled_ship_opens_range(monkeypatch):
     sim = CombatSimulation(seed=6, time_step=1.0)
     _ship(sim, "me", "destroyer", "alpha", (0, 0, 0))
     _ship(sim, "foe", "cruiser", "beta", (80, 0, 0), fwd=(-1, 0, 0))
     monkeypatch.setattr(T, "hull_pct", lambda s: T.CRIPPLED_HULL_PCT - 5.0 if s.ship_id == "me" else 100.0)
     m = _maneuver(_captain("destroyer").decide("me", sim))
-    assert m.maneuver_type == ManeuverType.HOLD_RANGE
-    assert m.target_id == "foe"
-    assert m.hold_range_m == pytest.approx(T.RETREAT_RANGE_KM * 1000.0)
-    assert m.evade == "full"
+    _assert_withdraws(m)
+    assert m.evade is None              # the overlay would replace the withdrawal
 
 
 # ---------------------------------------------------------------------------
@@ -314,15 +322,18 @@ MIXED = ("destroyer", "destroyer", "corvette", "corvette")
 GUNS = ("destroyer", "destroyer", "frigate")
 
 
-def _small_battle(tmp_path, doctrines, hulls=MIXED, seed=21, time_limit=240.0, distance_km=450.0):
+def _small_battle(tmp_path, doctrines, hulls=MIXED, seed=21, time_limit=240.0, distance_km=450.0,
+                  beta_hulls=None):
     import importlib.util
     from src.llm.battle_runner import BattleConfig, LLMBattleRunner, load_fleet_data
     from src.llm.fleet_config import BattleFleetConfig
 
     ships = [{"ship_type": t, "model": HEURISTIC_MODEL}
              for t in hulls]
+    beta_ships = ships if beta_hulls is None else [
+        {"ship_type": t, "model": HEURISTIC_MODEL} for t in beta_hulls]
     config = BattleFleetConfig.from_dict({
-        "alpha_fleet": {"ships": ships}, "beta_fleet": {"ships": ships},
+        "alpha_fleet": {"ships": ships}, "beta_fleet": {"ships": beta_ships},
         "record_battle": True, "record_sim_trace": True, "personality_selection": False,
         "seed": seed, "time_limit_s": time_limit, "initial_distance_km": distance_km,
     })
@@ -427,8 +438,7 @@ def test_a_ship_with_every_gun_wrecked_withdraws_and_says_so():
     assert T.role(me) == "unarmed"
     captain = _captain("destroyer")
     m = _maneuver(captain.decide("me", sim))
-    assert m.maneuver_type == ManeuverType.HOLD_RANGE
-    assert m.hold_range_m == pytest.approx(T.RETREAT_RANGE_KM * 1000.0)
+    _assert_withdraws(m)
     assert [x["kind"] for x in captain.outbox if x["tool"] == "fleet_signal"][0] == "BREAKING_OFF"
 
 
@@ -478,5 +488,34 @@ def test_a_crippled_ship_stays_withdrawn_at_any_range(monkeypatch, stype, foe, r
     _ship(sim, "foe", foe, "beta", (rng_km, 0, 0), fwd=(-1, 0, 0))
     monkeypatch.setattr(T, "hull_pct", lambda s: T.CRIPPLED_HULL_PCT - 5.0 if s.ship_id == "me" else 100.0)
     m = _maneuver(_captain(stype).decide("me", sim))
-    assert m.maneuver_type == ManeuverType.HOLD_RANGE and m.target_id == "foe"
-    assert m.hold_range_m >= max(T.RETREAT_RANGE_KM, rng_km) * 1000.0 - 1.0
+    if rng_km < T.RETREAT_RANGE_KM:
+        _assert_withdraws(m)
+    else:
+        assert m.maneuver_type == ManeuverType.HOLD_RANGE and m.target_id == "foe"
+        assert m.hold_range_m >= rng_km * 1000.0 - 1.0
+
+
+def test_a_disarmed_ship_under_fire_actually_opens_range(tmp_path, monkeypatch):
+    # Review round 3, finding 2: HOLD_RANGE 350 with evade 'full' was flown as
+    # the evasion overlay while he shot at us, and the range kept closing.
+    from src.llm.battle_runner import LLMBattleRunner
+    orig = LLMBattleRunner.setup_fleet_battle
+
+    def setup(self, fleet_data):
+        orig(self, fleet_data)
+        _wreck_guns(self.simulation.get_ship("alpha_1"))
+
+    monkeypatch.setattr(LLMBattleRunner, "setup_fleet_battle", setup)
+    # A destroyer (2 g) disarmed at t=0 withdraws from a cruiser (1.5 g) that
+    # can shoot but not catch it.
+    _, rec = _small_battle(tmp_path, TACTICAL, hulls=("destroyer",), beta_hulls=("cruiser",),
+                           time_limit=240.0, distance_km=150.0)
+    frames = rec["sim_trace"]
+    import math
+
+    def rng(frame):
+        s = frame["ships"]
+        return math.dist(s["alpha_1"]["pos"], s["beta_1"]["pos"]) / 1000.0
+    shots = [e for e in rec["events"] if e["event_type"] == "shot_fired" and e["ship_id"] == "beta_1"]
+    assert shots, "the withdrawing ship must be under fire for this test"
+    assert rng(frames[-1]) > rng(frames[30]) + 30.0, (rng(frames[30]), rng(frames[-1]))

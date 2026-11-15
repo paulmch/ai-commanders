@@ -302,7 +302,11 @@ class HeuristicCaptain(LLMCaptain):
         else:
             args = self._tactical_maneuver(ship, ship_id, target, enemies, plan, my_role, threat)
             args["throttle"] = self._heat_throttle_cap(ship, heat, args["throttle"], threat)
-            calls.append(("set_maneuver", args))
+            if args.get("maneuver_type") == "HEADING":
+                args.pop("maneuver_type")
+                calls.append(("set_heading", args))
+            else:
+                calls.append(("set_maneuver", args))
 
         want = self._radiator_wish(ship, ship_id, heat, threat, enemies, simulation)
         if want is not None and want != bool(getattr(ship, "radiators_extended", False)):
@@ -386,8 +390,18 @@ class HeuristicCaptain(LLMCaptain):
         if self._withdrawn and nearest_gun is not None:
             # Crippled or disarmed, for good: open range from the nearest gun
             # (guns still free) and never come back in - beyond the retreat
-            # range it holds the range it has.
-            evade = "full"
+            # range it holds the range it has. Inside it the ship flies a
+            # plain HEADING straight away from that gun at full burn: HOLD_RANGE
+            # (with or without the evade overlay) caps its opening speed at
+            # what it could stop at 350 km and the chaser kept closing.
+            if gun_km < tactics.RETREAT_RANGE_KM:
+                away = tactics.withdraw_direction(ship, nearest_gun)
+                args = {"maneuver_type": "HEADING", "throttle": 1.0,
+                        "direction": {"x": round(away.x, 4), "y": round(away.y, 4),
+                                      "z": round(away.z, 4)}}
+                if evade:
+                    args["evade"] = evade
+                return args
             return order("HOLD_RANGE", nearest_gun, 1.0,
                          range_km=round(max(tactics.RETREAT_RANGE_KM, gun_km), 1))
         if my_role != "gun":

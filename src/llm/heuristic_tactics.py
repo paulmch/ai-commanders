@@ -142,6 +142,7 @@ GUN_REACH_KM = 250.0
 # Self-preservation.
 CRIPPLED_HULL_PCT = 35.0          # below this hull integrity: open range
 RETREAT_RANGE_KM = 350.0          # ...to this range from the nearest gun ship
+WITHDRAW_ANGLE_DEG = 60.0         # withdrawal burn off the line to the gun
 
 # Battle damage (src/battle_damage.py). A hull whose drive makes less than
 # FORMATION_MIN_DRIVE_FRACTION of its thrust no longer sets the fleet's
@@ -201,6 +202,29 @@ def role(ship: Any) -> str:
     if has_torpedoes(ship):
         return "torpedo"
     return "unarmed"
+
+
+def withdraw_direction(ship: Any, threat: Any) -> Any:
+    """
+    Burn direction for a withdrawal: away from ``threat`` but WITHDRAW_ANGLE_DEG
+    off the line, so his guns see the flank instead of the tail (30% of tail
+    hits strike the drive, src/battle_damage.py - a ship fleeing straight
+    away had its drive shot out within two minutes). The side is the one the
+    ship is already drifting to (deterministic tie-break: +z, then +y).
+    """
+    from ..physics import Vector3D
+    away = ship.position - threat.position
+    if away.magnitude < 1.0:
+        away = Vector3D(-1.0, 0.0, 0.0)
+    away = away.normalized()
+    rel_v = ship.velocity - threat.velocity
+    side = rel_v - away * rel_v.dot(away)
+    if side.magnitude < 1.0:
+        up = Vector3D(0.0, 0.0, 1.0) if abs(away.z) < 0.9 else Vector3D(0.0, 1.0, 0.0)
+        side = up - away * up.dot(away)
+    side = side.normalized()
+    a = math.radians(WITHDRAW_ANGLE_DEG)
+    return (away * math.cos(a) + side * math.sin(a)).normalized()
 
 
 def drive_fraction(ship: Any) -> float:
