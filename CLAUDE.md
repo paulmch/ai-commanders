@@ -75,6 +75,7 @@ ai-commanders/
 ├── scripts/
 │   ├── run_llm_battle.py   # CLI for AI vs AI battles (--fleet-config, --admiral-vision)
 │   ├── run_draft_battle.py # draft mode: point-budget fleets + formations
+│   ├── draft_tournament.py # seeded round robin of fleet archetypes at equal points (price balance)
 │   ├── generate_test_battle.py  # scripted no-LLM recordings for the viewer
 │   ├── viewer_snapshot.py  # headless Playwright screenshots of the 3D viewer
 │   ├── mcp_battle.py       # CLI for MCP-controlled battles
@@ -267,3 +268,6 @@ torpedo-armed hulls; all others fight with coilguns.
   hull's armour or magazine and its price moves on its own; the cost table in
   `docs/draft_mode.md` then needs regenerating. Never re-add a hard-coded
   `SHIP_POINT_COSTS` literal - torpedo armament was nearly free that way.
+  After a change to torpedo guidance, point defence, the heuristic captains or
+  the time-limit scoring, re-run `scripts/draft_tournament.py` (cached by
+  engine source + rosters + seed) before touching `TORPEDO_POINTS_PER_GJ`.

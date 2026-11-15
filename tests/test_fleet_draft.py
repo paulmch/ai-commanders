@@ -259,7 +259,7 @@ class DraftStubClient:
             self.select_calls += 1
             if self.select_calls == 1:
                 return [ToolCall(id="s1", name="select_fleet", arguments={
-                    "ships": [{"ship_type": "dreadnought", "count": 5}],
+                    "ships": [{"ship_type": "dreadnought", "count": 7}],
                     "rationale": "MORE DAKKA"})]
             return [ToolCall(id="s2", name="select_fleet", arguments={
                 "ships": [{"ship_type": "cruiser_torpedo", "count": 2},
@@ -280,9 +280,13 @@ class DraftStubClient:
 
 def test_run_admiral_draft_with_retry(fleet_data):
     stub = DraftStubClient()
+    # Budget follows the (derived) prices: exactly the stub's second fleet,
+    # which the first (7 dreadnoughts) overshoots.
+    budget = 2 * SHIP_POINT_COSTS["cruiser_torpedo"] + 2 * SHIP_POINT_COSTS["destroyer"]
+    assert 7 * SHIP_POINT_COSTS["dreadnought"] > budget
     draft = run_admiral_draft(
         client=stub, model="stub-model", admiral_name="Admiral Stub",
-        faction="alpha", fleet_data=fleet_data, budget=200, max_ships=8,
+        faction="alpha", fleet_data=fleet_data, budget=budget, max_ships=8,
         verbose=False)
     assert stub.select_calls == 2  # retry loop engaged
     assert not draft.auto
