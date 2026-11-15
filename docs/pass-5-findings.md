@@ -125,9 +125,11 @@ bit-for-bit unchanged.
 
 On equal fleets the new doctrine beat the old one 48 wins, 1 draw, 3 losses over 52 battles,
 including seeds it was not tuned on, and the same totals held when re-measured after the
-side-symmetry fix. **After the torpedo reprice the battleship roster regressed** from 12 wins of
-12 to 5 wins, 2 draws, 5 losses, because auto-draft now buys that roster fewer corvettes and the
-doctrine had leaned on their torpedoes; the other rosters held (41 of 52 overall). In mirror
+side-symmetry fix. After the torpedo reprice the battleship roster briefly fell to 5 wins, 2 draws, 5 losses: its
+one or two remaining corvettes held their standoff in front of the slow battleships, outside the
+fleet's point defence, and died alone. Torpedo boats now keep station behind their own gun line;
+the final grid is 45 wins, 2 draws, 5 losses over 52 battles (battleship roster 9/2/1), with
+several battleship wins decided on points. In mirror
 self-play the torpedo-heavy rosters now mostly end in mutual surrender once both sides are dry. An independent review found eight defects in the first version (gun ships
 stalling at zero closure between 81 and 245 km, a withdrawal order that was not flown under fire,
 a disarmed ship fleeing until the time limit); all were addressed.
