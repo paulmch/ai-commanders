@@ -82,6 +82,12 @@ ai-commanders/
 │   ├── mcp_battle.py       # CLI for MCP-controlled battles
 │   ├── refine_commander.py # Post-battle lesson distillation + rematch gating
 │   ├── fire_control_calibration.py  # gun P(hit) vs engine outcomes (recordings + seeded harness)
+│   ├── perf_check.py       # engine speed + bit-equality: seeded battles and a calibration
+│   │                       # slice hashed against perf_check_golden.json, CPU time per case,
+│   │                       # --profile CASE. An optimisation must leave every hash identical;
+│   │                       # re-record (--record) only on a commit that changes behaviour, with
+│   │                       # the Python minor version the golden is compared under (3.11 and
+│   │                       # 3.12 give different low bits: use --golden PATH for another one)
 │   └── calculate_shots_to_kill.py  # Regenerates docs/ships.md combat tables
 ├── docs/ships.md           # Ship specs + simulated shots-to-kill tables
 └── visualizer/             # Three.js 3D battle replay viewer; src/render/ holds
