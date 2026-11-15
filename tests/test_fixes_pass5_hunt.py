@@ -534,3 +534,36 @@ def test_fast_hull_still_runs_and_turns_back_before_impact():
     run_until = min(t for t, m in modes if m == "PRESENT")
     assert run_until >= 15.0, modes            # a real run, not a twitch
     assert struck and set(struck) == {"nose"}, struck
+
+
+@pytest.mark.xfail(strict=False, reason=(
+    "_turn_time_to under-estimates a turn begun with a large SIDEWAYS spin "
+    "toward a far target: a cruiser / battleship spun out of the turn's plane "
+    "for 6 s and then ordered 120 deg round reaches the 10 deg burn cone in "
+    "38 / 52 s stepped against 21 / 29 s estimated (the sideways drift is "
+    "added as hypot(theta, w_perp^2 / 2a), which misses how the swing "
+    "carries on while it is braked). Not fixed: spins in the turn's plane "
+    "(toward / away) are within 0.9-1.3x; fixing it moves the fire-control "
+    "forecast (pending burn light time) and the fixture."))
+@pytest.mark.parametrize("hull", ["cruiser", "battleship"])
+def test_turn_time_after_a_sideways_spin_to_a_far_target(hull):
+    import math
+    from src.physics import Vector3D
+    from src.simulation import CombatSimulation, create_ship_from_fleet_data
+    with open("data/fleet_ships.json") as f:
+        data = json.load(f)
+    sim = CombatSimulation(time_step=1.0, decision_interval=1e9, seed=1)
+    ship = create_ship_from_fleet_data("s", hull, "alpha", data, Vector3D(0, 0, 0),
+                                       Vector3D(0, 0, 0), Vector3D(1, 0, 0))
+    sim.add_ship(ship)
+    for _ in range(6):
+        sim._rotate_ship_toward(ship, Vector3D(0, 0, 1), 1.0, engines_on=True)
+    target = Vector3D(math.cos(math.radians(120)), math.sin(math.radians(120)), 0)
+    predicted = sim._turn_time_to(ship, target, engines_on=True)
+    t = 0
+    while t < 600:
+        sim._rotate_ship_toward(ship, target, 1.0, engines_on=True)
+        t += 1
+        if ship.forward.angle_to(target) < 0.01 and ship.angular_velocity_rad_s < 1e-3:
+            break
+    assert 0.75 <= t / max(predicted, 1.0) <= 1.3, (t, predicted)
