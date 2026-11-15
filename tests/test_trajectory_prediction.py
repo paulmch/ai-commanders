@@ -214,7 +214,8 @@ class TestEvasionPrediction:
 
     def test_run_from_guided_torpedo_is_continued(self):
         # A frigate 900 km from the round: it can afford to run and turn back
-        # (a cruiser presents its nose instead).
+        # (a cruiser presents its nose instead; from the original 250 km the
+        # round lands in ~40 s, too soon for any hull to turn away and back).
         sim = make_duel(ManeuverType.EVASIVE, a_type="frigate", throttle=1.0)
         sim.ships["a"].point_defense = []
         run_to(sim, 2.0)

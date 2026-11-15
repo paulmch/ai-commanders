@@ -519,9 +519,9 @@ def _salvo(hull, seed=23, range_km=450):
 def test_slow_hull_presents_its_nose_instead_of_starting_a_flip_it_cannot_finish():
     """A battleship has ~70 s against a salvo launched 450 km out: a 180 deg
     flip to RUN and back takes ~110 s on thrust vectoring. It holds its
-    (thickest) nose on the salvo, every round strikes
-    the nose, and it survives - the old RUN tail-on took 3 tail hits and
-    died."""
+    (thickest) nose on the salvo and every round strikes the nose - the old
+    RUN tail-on took the salvo in the tail. (Six rounds still kill it: the
+    doctrine's sizing, test_doctrine_accuracy.TestTorpedoSizingDoctrine.)"""
     victim, modes, struck = _salvo("battleship")
     # (Just off the rail the rounds are not yet inside their no-escape zone,
     # so it may start to run for a few seconds - a few degrees of swing.)
@@ -529,7 +529,6 @@ def test_slow_hull_presents_its_nose_instead_of_starting_a_flip_it_cannot_finish
     assert present_at <= 10.0, modes
     assert all(m == "PRESENT" for t, m in modes if t >= present_at)
     assert len(struck) >= 4 and set(struck) == {"nose"}, struck
-    assert not victim.is_destroyed
 
 
 def test_fast_hull_still_runs_and_turns_back_before_impact():

@@ -503,13 +503,20 @@ class TestWallOfShips:
         return sim.metrics.total_torpedo_hits
 
     def test_leakage_decreases_with_escort_count(self, fleet_data):
+        """4-round salvo at an evading battleship, 1200 km out: 4 / 4 / 3 hit
+        behind 0 / 4 / 8 escorts. (With weapon arcs about half the turrets
+        bear on one direction, and a battleship that can only turn as fast as
+        its thrusters allow dodges a blinded round only with time: 4 escorts
+        blind 2 of the 4 but stop none; it takes 8. On the instant-flip engine
+        it was 4 / 3 / 2.)"""
         hits_alone = self._salvo_defense(fleet_data, 0)
         hits_screen = self._salvo_defense(fleet_data, 4)
         hits_wall = self._salvo_defense(fleet_data, 8)
         assert hits_alone > 0, (
             "torpedoes must still get through against a lone capital ship"
         )
-        assert hits_screen < hits_alone, "4 escorts must reduce leakage"
+        assert hits_screen <= hits_alone, "4 escorts must never leak more"
+        assert hits_wall < hits_alone, "an 8-escort wall must reduce leakage"
         assert hits_wall <= hits_screen, "more escorts must never leak more"
 
     @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py

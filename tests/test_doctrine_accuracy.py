@@ -664,10 +664,11 @@ class TestFormationDoctrine:
         """Admiral doctrine: escorts cut salvo leakage, and the effect needs
         mass (a big wall clearly beats none) AND time. Single seed of the
         measured (seeds 21-23) results: a salvo launched 1200 km out leaked
-        18/18 alone vs 6/18 with 8 escorts; launched 450 km out (~70 s) it
+        18/18 alone vs 12/18 with 8 escorts; launched 450 km out (~70 s) it
         leaked 18/18 even behind 8 - the battleship cannot turn away to run
-        and back in time, presents its nose and survives, and the rounds are
-        blinded too late to dodge."""
+        and back in time, presents its nose, and the rounds are blinded too
+        late to dodge. The wall keeps the hull alive: alone it died in 3 of 3
+        runs, behind 8 escorts in none."""
 
         def wall(n_escorts, range_km):
             sim = CombatSimulation(seed=23, time_step=0.5, decision_interval=1e9)
@@ -694,11 +695,16 @@ class TestFormationDoctrine:
                         hits += 1
                 if launched >= 6 and not sim.torpedoes:
                     break
-            return hits, victim.is_destroyed
+            for _ in range(80):              # a dying hulk's fuse runs out
+                if victim.is_destroyed or not victim.is_dying:
+                    break
+                sim.step()
+            return hits, victim.is_destroyed or victim.is_dying
 
-        (alone, _), (walled, _) = wall(0, 1200), wall(8, 1200)
+        (alone, alone_killed), (walled, _) = wall(0, 1200), wall(8, 1200)
         assert alone >= 5, f"lone battleship now stops salvos ({alone}/6 hit)"
-        assert walled <= 3 and walled < alone, (
+        assert alone_killed, "a lone battleship now survives a 6-round salvo"
+        assert walled <= 4 and walled < alone, (
             f"8-escort wall no longer reduces leakage ({walled}/6 vs {alone}/6) "
             "- the formation doctrine numbers are stale"
         )
@@ -706,6 +712,51 @@ class TestFormationDoctrine:
         assert short >= 5 and not short_killed, (
             f"a 450 km salvo behind 8 escorts now lands {short}/6 "
             f"(victim destroyed: {short_killed}) - the doctrine's short-salvo claim is stale")
+
+
+class TestTorpedoSizingDoctrine:
+    def test_salvo_sizing(self, fleet):
+        """Admiral doctrine SIZING: at moderate closure (~22 GJ/round) against
+        lone evading targets, 4 rounds kill a destroyer, 6 kill anything up to
+        a dreadnought, 1-2 only wound. Measured seeds 21-23 from 450 km: kills
+        2 rounds 0/3 on a destroyer, 4 rounds 3/3 on a destroyer and 0/3 on a
+        cruiser, battleship or dreadnought, 6 rounds 3/3 on each (a dying hulk
+        counts once its fuse runs out). Pinned on seed 23."""
+        from src.llm.prompts import ADMIRAL_TORPEDO_DOCTRINE
+        text = " ".join(ADMIRAL_TORPEDO_DOCTRINE.split())
+        assert ("~22 GJ/round, evading targets): 4 rounds kill a destroyer; 6 rounds kill "
+                "anything up to a dreadnought; 1-2 rounds wound only") in text
+
+        def salvo(hull, rounds):
+            sim = CombatSimulation(seed=23, time_step=0.5, decision_interval=1e9)
+            victim = _build(sim, 'victim', hull, 'alpha', fleet, 0, 0, 1)
+            _evade(victim)
+            _build(sim, 'att', 'cruiser_torpedo', 'beta', fleet, 450, 0, -1)
+            launched, gj = 0, []
+            for _ in range(3000):
+                if launched < rounds:
+                    if sim.inject_command('att', {'type': 'launch_torpedo',
+                                                  'target_id': 'victim'}):
+                        launched += 1
+                        continue
+                for ev in sim.step():
+                    if ev.event_type == SimulationEventType.TORPEDO_IMPACT:
+                        gj.append(ev.data.get('total_damage_gj') or 0.0)
+                if launched >= rounds and not sim.torpedoes:
+                    break
+            for _ in range(80):
+                if victim.is_destroyed or not victim.is_dying:
+                    break
+                sim.step()
+            return gj, victim.is_destroyed or victim.is_dying
+
+        gj, killed = salvo('destroyer', 2)
+        assert len(gj) == 2 and not killed
+        assert all(18.0 < g < 26.0 for g in gj), gj
+        assert salvo('destroyer', 4)[1]
+        assert not salvo('cruiser', 4)[1]
+        for hull in ('cruiser', 'battleship', 'dreadnought'):
+            assert salvo(hull, 6)[1], hull
 
 
 # =============================================================================

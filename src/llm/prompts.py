@@ -2766,8 +2766,8 @@ HOW POINT DEFENSE ACTUALLY WORKS:
   (~{pd_range_km:.0f} km laser range) of a torpedo's path adds dwell against it.
 - PD BLINDS torpedoes (seeker kill); the dead round then coasts in a straight line and
   hits only a hull whose path that line crosses - one flying straight at it. Measured
-  (6-round salvos launched 1200 km out): 18/18 blinded rounds hit a non-evading
-  battleship behind 8 escorts; the same attack on an evading one landed 6/18. So a ship
+  (6-round salvos launched 1200 km out): 17/18 blinded rounds hit a non-evading
+  battleship behind 8 escorts; the same attack on an evading one landed 12/18. So a ship
   with torpedoes INBOUND (see ORDNANCE) must be
   ordered to EVADE, or every PD kill is wasted; a dead round on nobody's line needs nothing.
 - DWELL IS SET BY THE TORPEDO'S CLOSING SPEED, NOT BY FLEET-TO-FLEET CLOSURE. Guidance
@@ -2785,12 +2785,14 @@ FORMATIONS FOR PD (what actually moves the numbers):
   rings at 15, 30 and 120 km measured identically. Place escorts anywhere inside
   laser range of the axis the torpedoes come down; don't micro-manage spacing.
 - Returns need mass AND time: vs a 6-round simultaneous salvo launched 1200 km out, an
-  evading battleship leaked 18/18 alone, 15/18 with 4 destroyer escorts, 6/18 with 8.
+  evading battleship leaked 18/18 alone, 18/18 with 4 destroyer escorts, 12/18 with 8.
   Launched 450 km out (~70 s of flight) it leaked 18/18 even behind 8: a 1g hull cannot
-  turn away to run and back in time, so it holds its nose armour on the salvo (and
-  survived it), and the escorts blind the rounds only in the last ~10 s - too late to
-  dodge. Fewer than ~4 escorts is symbolic against a real salvo - concentrate the fleet
-  or accept the hits.
+  turn away to run and back in time, so it holds its nose armour on the salvo, and the
+  escorts blind the rounds only in the last ~10 s - too late to dodge. The wall still
+  keeps the hull alive: alone the battleship died in 3 of 3 runs at either range,
+  behind 4 escorts in 1 of 3, behind 8 in none (the rounds it blinds still land, but
+  weaker). Fewer than ~8 escorts stops no round - concentrate the fleet or accept the
+  hits.
 - The wall only protects ships that EVADE inside it (see blinding, above).
 """
 
