@@ -3008,6 +3008,11 @@ class CombatSimulation:
         """
         ship.dying_time_remaining -= dt
         if ship.dying_time_remaining <= 0.0:
+            # Coast through this tick first: the blast resolves at the end of
+            # the tick (battle_damage.resolve_pending_blasts), after every
+            # other ship and torpedo has moved, so it must go off where the
+            # hulk is then - not v*dt behind it. No RNG draw here.
+            ship.kinematic_state = propagate_state(ship.kinematic_state, dt, 0.0, 0.0, 0.0)
             self._detonate_reactor(ship)
             return
 

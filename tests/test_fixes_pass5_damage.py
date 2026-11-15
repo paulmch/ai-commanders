@@ -95,3 +95,41 @@ def test_adrift_hull_does_not_inflate_range_control_burn_times():
         sim, [lead], h, engines_on=False)
     # a lone adrift hull: nothing to wait for
     assert rc._burn_start(sim, [wing], h) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Finding 2: the blast goes off where the dead ship is after this tick's move
+# ---------------------------------------------------------------------------
+
+def _co_moving_pair():
+    sim = CombatSimulation(seed=1, time_step=1.0)
+    v = Vector3D(5_000, 0, 0)
+    dead = _ship(sim, "hulk", "alpha", Vector3D(0, 0, 0), velocity=v)
+    near = _ship(sim, "near", "alpha", Vector3D(0, 5_000, 0), velocity=v)
+    _ship(sim, "enemy", "beta", Vector3D(9e8, 0, 0))
+    sim._running = True
+    sim.current_time = 0.001            # past the t=0 decision trigger
+    return sim, dead, near
+
+
+def test_fuse_expiry_blast_origin_moves_with_the_hulk():
+    sim, hulk, near = _co_moving_pair()
+    sim._start_death_spiral(hulk, "enemy")
+    hulk.dying_time_remaining = 0.5
+    hulk.dying_torch_on = False
+    sim.step()
+    blast = _events(sim, SimulationEventType.BLAST_DAMAGE)
+    assert hulk.is_destroyed and len(blast) == 1
+    assert blast[0].data["distance_km"] == pytest.approx(5.0, abs=0.01)
+    origin = _events(sim, SimulationEventType.REACTOR_BLAST)[0].data["position"]
+    assert origin[0] == pytest.approx(near.position.x, abs=1.0)
+
+
+def test_meltdown_blast_origin_moves_with_the_ship():
+    sim, hot, near = _co_moving_pair()
+    hot.thermal_system.heatsink.current_heat_gj = 1.6 * hot.thermal_system.heatsink.capacity_gj
+    sim.step()
+    assert hot.is_destroyed
+    blast = _events(sim, SimulationEventType.BLAST_DAMAGE)
+    assert len(blast) == 1
+    assert blast[0].data["distance_km"] == pytest.approx(5.0, abs=0.01)
