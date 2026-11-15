@@ -151,6 +151,7 @@ class HullTable:
             jink_accel_ms2=row.get("jink") or 0.0,
             pending_burn_ms2=row.get("pending") or 0.0,
             pending_burn_in_s=row.get("pending_in") or 0.0,
+            stale_burn_ms2=row.get("stale") or 0.0,
         )
 
     def predict(self, row: dict) -> float:
@@ -166,6 +167,7 @@ def _fc_features(fc: dict) -> dict:
     return {"a": fc.get("a"), "dodge": fc.get("dodge"),
             "jink": fc.get("jink", 0.0),
             "pending": fc.get("pend", 0.0), "pending_in": fc.get("pend_in", 0.0),
+            "stale": fc.get("stale", 0.0),
             "approx": False}
 
 
@@ -436,7 +438,7 @@ def print_table(table: List[dict]) -> None:
 
 
 FIXTURE_COLUMNS = ["source", "range_km", "tof_s", "target_type", "class", "dodge", "n",
-                   "jink", "pending", "pending_in", "p_conv", "hit"]
+                   "jink", "pending", "pending_in", "stale", "p_conv", "hit"]
 
 
 def write_fixture(rows: List[dict], out: str, free_keep: int, harness_keep: int,
@@ -486,7 +488,7 @@ def write_fixture(rows: List[dict], out: str, free_keep: int, harness_keep: int,
                   types.index(r["target_type"]), classes.index(maneuver_class(r)),
                   None if r.get("dodge") is None else round(r["dodge"], 2), int(r.get("n") or 1),
                   round(r.get("jink") or 0.0, 2), round(r.get("pending") or 0.0, 2),
-                  round(r.get("pending_in") or 0.0, 1),
+                  round(r.get("pending_in") or 0.0, 1), round(r.get("stale") or 0.0, 2),
                   round(r["p_conv"], 4), int(r["outcome"] == "hit")] for r in kept],
     }
     rows_out = data.pop("rows")

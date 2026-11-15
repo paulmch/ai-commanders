@@ -190,6 +190,10 @@ class TargetMotion:
             (ordered burn minus drive output, across the line of fire).
         pending_burn_in_s: When that burn lights (rest of the turn onto the
             heading, or a held formation start; 0 when already burning).
+        stale_burn_ms2: A new order was applied this tick and the drive (which
+            the lead extrapolates) still shows the last order's burn: the
+            part, across the line of fire, that the order in force has
+            already ended. Charged like a pending burn lit now.
     """
     accel_ms2: float
     dodges: bool = False
@@ -200,6 +204,7 @@ class TargetMotion:
     jink_accel_ms2: float = 0.0
     pending_burn_ms2: float = 0.0
     pending_burn_in_s: float = 0.0
+    stale_burn_ms2: float = 0.0
 
 
 def displacement_sigma_m(time_of_flight_s: float, motion: TargetMotion) -> float:
@@ -213,7 +218,7 @@ def displacement_sigma_m(time_of_flight_s: float, motion: TargetMotion) -> float
     t = max(0.0, float(time_of_flight_s))
     a = max(0.0, float(motion.accel_ms2))
     sigma_free = UNFORESEEN_ACCEL_FRACTION * a * t * t / 2.0
-    sigma_dodge = sigma_jink = sigma_pending = 0.0
+    sigma_dodge = sigma_jink = sigma_pending = sigma_stale = 0.0
     if motion.dodges:
         td = min(t, motion.dodge_horizon_s)
         if t >= motion.dodge_min_time_s:
@@ -228,7 +233,13 @@ def displacement_sigma_m(time_of_flight_s: float, motion: TargetMotion) -> float
         tp = t - max(0.0, float(motion.pending_burn_in_s))
         if tp > 0.0:
             sigma_pending = PENDING_BURN_FRACTION * pending * tp * tp / 2.0
-    return math.sqrt(sigma_free ** 2 + sigma_dodge ** 2 + sigma_jink ** 2 + sigma_pending ** 2)
+    stale = max(0.0, float(motion.stale_burn_ms2))
+    if stale > 0.0:
+        # The same kind of error as an unseen burn (a deterministic drive
+        # difference the lead does not extrapolate), lit from the shot.
+        sigma_stale = PENDING_BURN_FRACTION * stale * t * t / 2.0
+    return math.sqrt(sigma_free ** 2 + sigma_dodge ** 2 + sigma_jink ** 2 + sigma_pending ** 2
+                     + sigma_stale ** 2)
 
 
 def track_probability(

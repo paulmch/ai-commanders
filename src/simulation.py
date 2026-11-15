@@ -500,6 +500,7 @@ def fire_control_record(solution: FiringSolution) -> Optional[dict]:
         'jink': round(motion.jink_accel_ms2, 3),
         'pend': round(motion.pending_burn_ms2, 3),
         'pend_in': round(motion.pending_burn_in_s, 2),
+        'stale': round(motion.stale_burn_ms2, 3),
     }
 
 
@@ -1050,6 +1051,11 @@ class ShipCombatState:
     # Set by _rotate_ship_toward; a tick without an attitude command freezes
     # the attitude, so _update_ship must not bank the rate for the next turn.
     attitude_commanded: bool = False
+    # The maneuver the ship last FLEW (set after its step). On the tick a new
+    # order is applied, weapons fire before the ship moves: its drive still
+    # shows the last order's burn while current_maneuver is already the new
+    # one (CombatSimulation.target_motion reads the difference).
+    flown_maneuver: Optional['Maneuver'] = None
 
     # Power system
     power_system: Optional[PowerSystem] = None
@@ -2433,7 +2439,18 @@ class CombatSimulation:
         # Inside the cone the nose is still swinging the last few degrees
         # onto the heading, so the same difference (ordered burn minus the
         # drive's output) is the part of the burn the lead aims wrong.
-        pending, pending_in = 0.0, 0.0
+        #
+        # On the tick a new HEADING order is applied, weapons fire before the
+        # ship moves: its drive (and so the lead, which reads the drive)
+        # still shows the LAST order's burn. The order in force turns on a
+        # token throttle (or burns along the nose once inside the cone), so
+        # the burn it will fly is computed from the order, not read off the
+        # drive, and the part of the old burn the lead still extrapolates is
+        # charged as stale (pending_burn already lit: from now). Seen in seed
+        # 39 budget 100 at t=270: a cruiser leaving EVASIVE at 6.4 m/s^2 for a
+        # HEADING turn at 0.7 m/s^2; six rounds forecast at 0.72 all passed
+        # outside the gate.
+        pending, pending_in, stale = 0.0, 0.0, 0.0
         if (ks is not None and maneuver is not None
                 and maneuver.maneuver_type == ManeuverType.HEADING
                 and not maneuver.live_heading and maneuver.heading_direction
@@ -2447,11 +2464,22 @@ class CombatSimulation:
                 angle = target.forward.angle_to(direction)
                 hold = (maneuver.burn_start_time - self.current_time
                         if maneuver.burn_start_time is not None else 0.0)
+                drive = self._thrust_accel(target)
+                if maneuver is not getattr(target, 'flown_maneuver', maneuver):
+                    # The order in force, as the HEADING branch of _update_ship
+                    # flies it this tick.
+                    if angle > cone or hold > 1e-9:
+                        flown = (throttle * MANEUVER_TURN_THROTTLE
+                                 if angle > math.radians(2.0) else 0.0)
+                    else:
+                        flown = throttle
+                    drive = (ks.forward * (ks.thrust_n * flown / ks.mass_kg)
+                             if ks.mass_kg > 0 else Vector3D(0.0, 0.0, 0.0))
+                    stale = across(self._estimate_target_acceleration(target) - drive)
                 if angle > cone or hold > 1e-9:
                     pending_in = max(self._heading_burn_light_s(target, direction), hold)
                 if math.isfinite(pending_in):     # a hull that cannot turn never lights it
-                    pending = across(direction * (accel * min(1.0, throttle))
-                                     - self._thrust_accel(target))
+                    pending = across(direction * (accel * min(1.0, throttle)) - drive)
                 else:
                     pending_in = 0.0
 
@@ -2465,6 +2493,7 @@ class CombatSimulation:
             jink_accel_ms2=jink,
             pending_burn_ms2=pending,
             pending_burn_in_s=pending_in,
+            stale_burn_ms2=stale,
         )
 
     def gun_firing_solution(
@@ -2904,19 +2933,19 @@ class CombatSimulation:
                               ship.current_maneuver,
                               ship.is_destroyed, ship.is_dying,
                               ship.angular_velocity_rad_s, ship.angular_axis,
-                              copy.copy(ship.rotation_state))
+                              copy.copy(ship.rotation_state), ship.flown_maneuver)
             self._advance_ship(ship, dt)
             staged.append((ship, ship.kinematic_state,
                            getattr(ship, 'applied_throttle', 0.0),
                            ship.current_maneuver,
                            ship.is_destroyed, ship.is_dying,
                            ship.angular_velocity_rad_s, ship.angular_axis,
-                           ship.rotation_state))
+                           ship.rotation_state, ship.current_maneuver))
             (ship.kinematic_state, ship.applied_throttle, ship.current_maneuver,
              ship.is_destroyed, ship.is_dying, ship.angular_velocity_rad_s,
-             ship.angular_axis, ship.rotation_state) = seen_by_others
+             ship.angular_axis, ship.rotation_state, ship.flown_maneuver) = seen_by_others
         for (ship, state, applied_throttle, maneuver, destroyed, dying,
-             spin, spin_axis, rotation) in staged:
+             spin, spin_axis, rotation, flown) in staged:
             ship.kinematic_state = state
             ship.applied_throttle = applied_throttle
             ship.current_maneuver = maneuver
@@ -2925,6 +2954,7 @@ class CombatSimulation:
             ship.angular_velocity_rad_s = spin
             ship.angular_axis = spin_axis
             ship.rotation_state = rotation
+            ship.flown_maneuver = flown
 
     def _advance_ship(self, ship: ShipCombatState, dt: float) -> None:
         """One ship's step inside _update_ships: fly it, or coast the wreck."""

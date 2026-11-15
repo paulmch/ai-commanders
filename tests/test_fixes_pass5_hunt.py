@@ -574,3 +574,86 @@ def test_turn_time_after_a_sideways_spin_to_a_far_target(hull):
         if ship.forward.angle_to(target) < 0.01 and ship.angular_velocity_rad_s < 1e-3:
             break
     assert 0.75 <= t / max(predicted, 1.0) <= 1.3, (t, predicted)
+
+
+# ---------------------------------------------------------------------------
+# Order-change tick: weapons fire before ships move, so on the tick a new
+# HEADING order is applied the target's drive (which the lead reads) still
+# shows the LAST order's burn. The forecast used to take that burn as what
+# the target will fly. Traced in seed 39 budget 100 (pre-merge engine) at
+# t=270: a cruiser leaving a 6.4 m/s^2 burn for a HEADING turn on a token
+# throttle; six rounds forecast at 0.72 all passed outside the gate.
+# ---------------------------------------------------------------------------
+
+def _switch_tick_rounds(seed, first="burn"):
+    import contextlib
+    import io
+    import math
+    import random
+    from src.firecontrol import WeaponsCommand, WeaponsOrder
+    from src.physics import Vector3D
+    from src.simulation import (CombatSimulation, Maneuver, ManeuverType,
+                                SimulationEventType as ET, create_ship_from_fleet_data)
+    with open("data/fleet_ships.json") as f:
+        fleet = json.load(f)
+    rng = random.Random(seed)
+    sim = CombatSimulation(time_step=1.0, decision_interval=30.0, seed=seed,
+                           weapon_arcs_enabled=False)
+    tgt = create_ship_from_fleet_data("target", "cruiser_torpedo", "beta", fleet,
+                                      position=Vector3D(150e3, 0, 0), forward=Vector3D(-1, 0, 0))
+    sim.add_ship(tgt)
+    sh = create_ship_from_fleet_data("shooter", "battleship", "alpha", fleet,
+                                     position=Vector3D(0, 0, 0), forward=Vector3D(1, 0, 0))
+    sim.add_ship(sh)
+    sh.current_maneuver = Maneuver(ManeuverType.PADLOCK, 0, duration=1e9, target_id="target")
+    f0 = tgt.forward.rotate_around_axis(Vector3D(0, 0, 1), math.radians(rng.uniform(60, 120)))
+    tgt.current_maneuver = Maneuver(ManeuverType.HEADING, 0, duration=1e9, throttle=1.0,
+                                    heading_direction={"x": f0.x, "y": f0.y, "z": f0.z})
+    shots, out, stale_next = {}, {}, []
+    with contextlib.redirect_stdout(io.StringIO()):
+        while sim.current_time < 70.0:
+            if abs(sim.current_time - 30.0) < 1e-6:
+                ang = rng.uniform(60, 150) * rng.choice([-1, 1])
+                d = tgt.forward.rotate_around_axis(Vector3D(0, 0, 1), math.radians(ang))
+                tgt.current_maneuver = Maneuver(
+                    ManeuverType.HEADING, sim.current_time, duration=1e9, throttle=1.0,
+                    heading_direction={"x": d.x, "y": d.y, "z": d.z})
+                sh.weapons_orders = {s: WeaponsOrder(WeaponsCommand.FIRE_IMMEDIATE, s, "target",
+                                                     min_hit_probability=0.0)
+                                     for s in sh.weapons if not s.startswith("pd_")}
+            elif sim.current_time > 30.0:
+                sh.weapons_orders = {}
+                if sim.current_time < 32.0:
+                    stale_next.append(sim.target_motion(tgt, sh).stale_burn_ms2)
+            for ev in sim.step():
+                d = ev.data or {}
+                pid = d.get("projectile_id")
+                if ev.event_type == ET.PROJECTILE_LAUNCHED:
+                    shots[pid] = (d["hit_probability"], d["fc"]["stale"])
+                elif pid in shots and pid not in out:
+                    if ev.event_type == ET.PROJECTILE_IMPACT:
+                        out[pid] = 1
+                    elif ev.event_type == ET.PROJECTILE_MISS:
+                        out[pid] = 0
+    return [(shots[p][0], shots[p][1], out[p]) for p in shots if p in out], stale_next
+
+
+def test_rounds_fired_on_the_order_change_tick_are_forecast_from_the_new_order():
+    """A torpedo cruiser at full burn is ordered onto a heading 60-150 deg
+    away; a battleship fires every gun on that tick. Its lead still
+    extrapolates the full burn the new order has just ended: no round lands
+    (seeds 1-40: 0 of 200), where the forecast used to promise 127; it now
+    says ~1.5. The stale burn is charged only on that tick."""
+    import math
+    rounds, stale_next = [], []
+    for seed in range(1, 9):
+        r, s = _switch_tick_rounds(seed)
+        rounds += r
+        stale_next += s
+    assert len(rounds) >= 30
+    hits = sum(h for _, _, h in rounds)
+    forecast = sum(p for p, _, _ in rounds)
+    assert all(stale > 5.0 for _, stale, _ in rounds)       # ~13 m/s^2 of old burn
+    assert abs(hits - forecast) <= 3.0 * math.sqrt(max(forecast, hits, 1.0)) + 2.0, (hits, forecast)
+    assert forecast < 0.1 * len(rounds)
+    assert stale_next and max(stale_next) == 0.0             # next tick: the drive shows the order
