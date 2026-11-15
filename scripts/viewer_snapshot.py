@@ -197,6 +197,9 @@ def main() -> int:
     p.add_argument("--port", type=int, default=5173)
     p.add_argument("--gfx", choices=["low", "high", "auto"],
                    help="graphics quality (default: viewer auto-detect; software GL -> low)")
+    p.add_argument("--init-timeout", type=float, default=120.0,
+                   help="seconds to wait for the viewer to initialise (raise on a loaded "
+                        "machine: software GL bakes the sky and compiles shaders at load)")
     p.add_argument("--hide-ui", action="store_true", help="hide the HUD panels")
     p.add_argument("--out", required=True,
                    help="output PNG; use %%02d for --sequence frames")
@@ -225,7 +228,7 @@ def main() -> int:
             page.on("pageerror", lambda e: errors.append(str(e)))
             page.goto(page_url, wait_until="domcontentloaded")
             page.wait_for_function("window.visualizer && window.visualizer.isInitialized",
-                                   timeout=120_000)
+                                   timeout=int(args.init_timeout * 1000))
             # initializeBattle() auto-plays ~300 ms after isInitialized flips
             page.wait_for_timeout(700)
             page.evaluate("window.visualizer.timeController.pause()")
@@ -233,7 +236,7 @@ def main() -> int:
             # would otherwise skip every update
             page.evaluate("window.visualizer.slowFrameOk = true")
 
-            def wait_frames(n: int, timeout_s: float = 60.0) -> None:
+            def wait_frames(n: int, timeout_s: float = max(60.0, args.init_timeout / 2)) -> None:
                 start = page.evaluate("window.visualizer.scene.frameIndex")
                 t0 = time.time()
                 while page.evaluate("window.visualizer.scene.frameIndex") < start + n:

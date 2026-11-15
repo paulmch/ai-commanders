@@ -112,7 +112,7 @@ const GOD_FRAG = /* glsl */`
 // position follows from the projection scale. The radius is constant on
 // SCREEN (capped in world units), so plating reads at any zoom and distant
 // ships - smaller than the radius - sample only sky and get none. One
-// half-res pass: 10 spiral taps rotated per pixel, normals rebuilt from the
+// half-res pass: 12 spiral taps rotated per pixel, normals rebuilt from the
 // nearer depth neighbour on each axis; the composite blurs it with 5 taps
 // and keeps it off emitters.
 const AO_FRAG = /* glsl */`
@@ -124,7 +124,8 @@ const AO_FRAG = /* glsl */`
   uniform float uMaxWorld;  // km
   uniform float uAspect;
   varying vec2 vUv;
-  #define TAPS 10
+  #define TAPS 12
+  #define AO_GAIN 7.0
   float viewW(vec2 uv) { return exp2(texture2D(tDepth, uv).x * uLogBase) - 1.0; }
   vec3 viewPos(vec2 uv, float w) { return vec3((uv * 2.0 - 1.0) * uProj * w, -w); }
   void main() {
@@ -152,9 +153,9 @@ const AO_FRAG = /* glsl */`
       vec3 v = viewPos(q, viewW(q)) - P;
       float vv = dot(v, v);
       float fall = max(1.0 - vv / (rW * rW), 0.0);    // only geometry within the radius occludes
-      occ += fall * max(dot(v, n) / (sqrt(vv) + 1e-5) - 0.12, 0.0);
+      occ += fall * max(dot(v, n) / (sqrt(vv) + 1e-5) - 0.06, 0.0);
     }
-    float ao = clamp(1.0 - 3.2 * occ / float(TAPS), 0.0, 1.0);
+    float ao = clamp(1.0 - AO_GAIN * occ / float(TAPS), 0.0, 1.0);
     gl_FragColor = vec4(ao, ao, ao, 1.0);
   }`;
 
@@ -362,9 +363,9 @@ export const GRADE = 0.2;
 export const ADAPT_STRENGTH = 0.55;
 export const ADAPT_FLOOR = 0.3;
 export const ADAPT_MIN = 0.5;
-export const AO_STRENGTH = 0.85;   // how far full occlusion darkens (high tier)
-export const AO_RADIUS = 0.032;    // screen heights
-export const AO_MAX_WORLD = 2.5;   // km cap on the radius (extreme close-ups stay local)
+export const AO_STRENGTH = 0.95;   // how far full occlusion darkens (high tier)
+export const AO_RADIUS = 0.07;    // screen heights
+export const AO_MAX_WORLD = 4.0;   // km cap on the radius (extreme close-ups stay local)
 
 export class PostFX {
   constructor(renderer, scene, camera) {
