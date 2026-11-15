@@ -4838,6 +4838,20 @@ class CombatSimulation:
         time_elapsed = 0.0
         micro_steps = 0
 
+        # Steps during which the round cannot reach the hull's bounding
+        # sphere at all: in the target frame it closes by at most
+        # step_m = |rel_vel| * micro_dt per step, so from clear_m out it
+        # stays more than a sphere radius (plus ten steps and 10 m) outside
+        # the sphere for clear_steps steps, and the per-step hull test below
+        # is skipped for them. (Only the hull test: closest approach, the
+        # proximity hit and the miss test are still evaluated every step.)
+        clear_steps = 0
+        step_m = sqrt(vel_mag_sq) * micro_dt_max
+        clear_m = (sqrt((px - sx) ** 2 + (py - sy) ** 2 + (pz - sz) ** 2)
+                   - 2.0 * sqrt(sphere_sq) - 10.0 * step_m - 10.0)
+        if step_m > 0.0 and 0.0 < clear_m < 1e15:
+            clear_steps = int(clear_m / step_m)
+
         while time_remaining > 0 and micro_steps < max_micro_steps:
             # micro_dt = min(MICRO_DT, time_remaining)
             micro_dt = time_remaining if time_remaining < micro_dt_max else micro_dt_max
@@ -4858,12 +4872,13 @@ class CombatSimulation:
             rx = px - ax
             ry = py - ay
             rz = pz - az
-            lx = (nx - (bx - ax)) - px
-            ly = (ny - (by - ay)) - py
-            lz = (nz - (bz - az)) - pz
-            if not (rx * rx + ry * ry + rz * rz
-                    > 4.0 * (sphere_sq + (lx * lx + ly * ly + lz * lz))):
-                break
+            if micro_steps >= clear_steps:
+                lx = (nx - (bx - ax)) - px
+                ly = (ny - (by - ay)) - py
+                lz = (nz - (bz - az)) - pz
+                if not (rx * rx + ry * ry + rz * rz
+                        > 4.0 * (sphere_sq + (lx * lx + ly * ly + lz * lz))):
+                    break
 
             # new_dist = proj.distance_to(target_pos_at_micro_end)
             new_dist = sqrt((nx - bx) ** 2 + (ny - by) ** 2 + (nz - bz) ** 2)
