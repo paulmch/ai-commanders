@@ -83,6 +83,7 @@ class HeuristicCaptain(LLMCaptain):
         self.doctrine = doctrine
         self._decision_interval = 30.0
         self._broke_off = False
+        self._withdrawn = False
         self._face_id: Optional[str] = None
 
     def select_personality(self, distance_km: float, verbose: bool = False) -> Dict[str, Any]:
@@ -380,15 +381,15 @@ class HeuristicCaptain(LLMCaptain):
                 args["evade"] = evade
             return args
 
-        if (tactics.hull_pct(ship) < tactics.CRIPPLED_HULL_PCT and nearest_gun is not None
-                and gun_km < tactics.RETREAT_RANGE_KM):
-            # Crippled: open range from the nearest gun, guns still free.
+        if tactics.hull_pct(ship) < tactics.CRIPPLED_HULL_PCT or my_role == "unarmed":
+            self._withdrawn = True
+        if self._withdrawn and nearest_gun is not None:
+            # Crippled or disarmed, for good: open range from the nearest gun
+            # (guns still free) and never come back in - beyond the retreat
+            # range it holds the range it has.
             evade = "full"
-            return order("HOLD_RANGE", nearest_gun, 1.0, range_km=tactics.RETREAT_RANGE_KM)
-        if my_role == "unarmed" and nearest_gun is not None:
-            # Nothing left to shoot with: withdraw out of his guns.
-            evade = "full"
-            return order("HOLD_RANGE", nearest_gun, 1.0, range_km=tactics.RETREAT_RANGE_KM)
+            return order("HOLD_RANGE", nearest_gun, 1.0,
+                         range_km=round(max(tactics.RETREAT_RANGE_KM, gun_km), 1))
         if my_role != "gun":
             anchor = nearest_gun or min(enemies, key=lambda e: (km(e), e.ship_id))
             return order("HOLD_RANGE", anchor, 1.0, range_km=tactics.TORPEDO_STANDOFF_KM)

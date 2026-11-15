@@ -465,3 +465,18 @@ def test_ships_burn_away_from_a_dying_hulk():
     m = _maneuver(_captain("destroyer").decide("me", sim))
     assert m.maneuver_type == ManeuverType.HEADING
     assert m.heading_direction["x"] < -0.99         # straight away from the hulk
+
+
+@pytest.mark.parametrize("stype,foe", [("destroyer", "cruiser"), ("cruiser_torpedo", "battleship")])
+@pytest.mark.parametrize("rng_km", [290.0, 340.0, 351.0, 360.0, 400.0])
+def test_a_crippled_ship_stays_withdrawn_at_any_range(monkeypatch, stype, foe, rng_km):
+    # Review round 3, finding 4: beyond 350 km a crippled gun ship fell through
+    # to the attack branch and sprinted back in (a torpedo cruiser to its
+    # 300 km standoff), right after signalling BREAKING_OFF.
+    sim = CombatSimulation(seed=6, time_step=1.0)
+    _ship(sim, "me", stype, "alpha", (0, 0, 0))
+    _ship(sim, "foe", foe, "beta", (rng_km, 0, 0), fwd=(-1, 0, 0))
+    monkeypatch.setattr(T, "hull_pct", lambda s: T.CRIPPLED_HULL_PCT - 5.0 if s.ship_id == "me" else 100.0)
+    m = _maneuver(_captain(stype).decide("me", sim))
+    assert m.maneuver_type == ManeuverType.HOLD_RANGE and m.target_id == "foe"
+    assert m.hold_range_m >= max(T.RETREAT_RANGE_KM, rng_km) * 1000.0 - 1.0
