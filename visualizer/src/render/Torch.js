@@ -28,13 +28,16 @@ const vertexShader = /* glsl */`
   uniform float uLen;
   uniform float uR0;
   uniform float uW;
+  uniform vec2 uBend;
   varying vec3 vPos;
   varying vec3 vCam;
   varying float vInside;
   #include <common>
   #include <logdepthbuf_pars_vertex>
 
-  float boundR(float t) { return uW * uR0 * mix(3.8, 15.0, t); }
+  // Linear in t, so the bound stays a convex cone; the last term makes room
+  // for the swept centreline (uBend * s^2, at most its tip offset)
+  float boundR(float t) { return uW * uR0 * mix(3.8, 15.0, t) + t * length(uBend) * uLen * uLen; }
 
   void main() {
     // Unit cone (z 0 .. -1, radius 1) shaped here: a short collar forward of
@@ -66,6 +69,7 @@ const fragmentShader = /* glsl */`
   uniform float uDiamonds;
   uniform float uFlare;
   uniform float uSeed;
+  uniform vec2 uBend;    // centreline sweep: lateral offset = uBend * s^2
   uniform vec3 uI;       // core, sheath, halo side-on centreline radiance
   uniform vec3 uCore;
   uniform vec3 uSheath;
@@ -130,8 +134,10 @@ const fragmentShader = /* glsl */`
       float sinT = sqrt(dd);
       float tc = -dot(ro.xy, rd.xy) / dd;          // closest approach to the axis
       vec2 qc = ro.xy + rd.xy * tc;
-      float d2 = dot(qc, qc);
       float lam = uR0 * (4.0 + 3.0 * uThrust);     // shock cell length
+      // Down the axis (a chase camera sitting in the exhaust) the wide layers
+      // are the whole plume deep: keep them a haze, not a blue screen
+      float wide = mix(0.22, 1.0, smoothstep(0.05, 0.6, sinT));
       float dt = (t1 - t0) / float(uSeg);
       for (int i = 0; i < 4; i++) {
         if (i >= uSeg) break;
@@ -139,7 +145,14 @@ const fragmentShader = /* glsl */`
         float te = clamp(tc, a, b);                // nearest the axis in this sub-chord
         float s = sA + sD * te;
         float t = clamp(s / uLen, 0.0, 1.0);
-        vec2 q = ro.xy + rd.xy * te;
+        // Swept centreline: the part of the offset across the ray moves the
+        // closest approach sideways, the part along it slides it down the ray
+        vec2 bend = uBend * s * s;
+        float along = dot(bend, rd.xy) / dd;
+        vec2 qs = qc - (bend - rd.xy * along);
+        float d2 = dot(qs, qs);
+        float tcs = tc + along;
+        vec2 q = ro.xy + rd.xy * te - bend;
 
         // Turbulence: filaments streaming aft, laminar at the throat
         // (long in the flow direction, narrow across it), growing downstream
@@ -168,7 +181,7 @@ const fragmentShader = /* glsl */`
         float sc = uW * uR0 * (0.34 + 1.0 * t) * pinch;
         float ss = uW * uR0 * (0.85 + 5.2 * pow(t, 0.6));
         float sh = uW * uR0 * (1.7 + 8.6 * pow(t, 0.8));
-        float ga = a - tc, gb = b - tc;
+        float ga = a - tcs, gb = b - tcs;
 
         // White-hot only at the throat and in the knots; the core cools to
         // the sheath's blue within the first tenth of the plume
@@ -176,8 +189,8 @@ const fragmentShader = /* glsl */`
         vec3 cc = mix(uSheath * 1.25, uCore, heat);
         vec3 cs = mix(uSheath, uEdge, smoothstep(0.0, 0.55, t));
         col += cc * (uI.x * exp(-t * 5.5) * knot * coreTurb * env * column(sc, d2, sinT, ga, gb));
-        col += cs * (uI.y * exp(-t * 3.4) * pulse * sheathTurb * env * column(ss, d2, sinT, ga, gb));
-        col += uEdge * (uI.z * exp(-t * 2.4) * haloTurb * env * column(sh, d2, sinT, ga, gb));
+        col += cs * (uI.y * wide * exp(-t * 3.4) * pulse * sheathTurb * env * column(ss, d2, sinT, ga, gb));
+        col += uEdge * (uI.z * wide * exp(-t * 2.4) * haloTurb * env * column(sh, d2, sinT, ga, gb));
       }
     }
 
@@ -256,6 +269,27 @@ export function plumeShape(thrust) {
   };
 }
 
+/** Seconds the exhaust at the plume tip has been in flight, for the sweep. */
+export const SWEEP_AGE_S = 2.2;
+/** Largest tip offset of a swept plume, as a fraction of its length. */
+export const SWEEP_MAX = 0.32;
+const _sweep = { x: 0, y: 0 };
+
+/**
+ * Tip offset of the plume (fraction of its length, hull frame x/y) for a
+ * turn rate (wx, wy) rad/s in the hull frame (+Z = bow). Exhaust already
+ * emitted keeps flying straight while the stern swings away, so the far
+ * plume lags toward w x forward: a turning ship drags a curved tail.
+ * Pure: the recorded turn rate in, the offset out.
+ */
+export function plumeSweep(wx, wy, out = { x: 0, y: 0 }) {
+  let x = wy * SWEEP_AGE_S, y = -wx * SWEEP_AGE_S;
+  const m = Math.hypot(x, y);
+  if (m > SWEEP_MAX) { x *= SWEEP_MAX / m; y *= SWEEP_MAX / m; }
+  out.x = x; out.y = y;
+  return out;
+}
+
 /**
  * @param {Object} opts
  *   radius    - nozzle radius (scene units)
@@ -294,6 +328,7 @@ export function createTorch({ radius, length, light = null, tint = 'fusion', int
       uDiamonds: { value: fusion ? 1.0 : 0.35 },
       uFlare: { value: 0 },
       uSeed: { value: Math.random() },
+      uBend: { value: new THREE.Vector2() },
       uI: { value: new THREE.Vector3() },
       uCore: { value: new THREE.Color(...(fusion ? [1.0, 0.96, 1.0] : [1.0, 0.94, 0.82])) },
       uSheath: { value: new THREE.Color(...(fusion ? [0.15, 0.41, 1.0] : [1.0, 0.52, 0.18])) },
@@ -336,8 +371,11 @@ export function createTorch({ radius, length, light = null, tint = 'fusion', int
      * @param {number} sputterTime  battle seconds driving the sputter, so a
      *                              paused or scrubbed frame always shows the
      *                              same cough (falls back to `time`)
+     * @param {THREE.Vector3} turn  optional recorded turn rate in the hull
+     *                              frame (rad/s): the plume sweeps behind a
+     *                              turning stern
      */
-    update(thrust, time, sputter = 0, sputterTime = undefined) {
+    update(thrust, time, sputter = 0, sputterTime = undefined, turn = null) {
       state.thrust = thrust;
       if (thrust < 0.015) {
         group.visible = false;
@@ -353,7 +391,14 @@ export function createTorch({ radius, length, light = null, tint = 'fusion', int
       const shape = plumeShape(thrust);
       shared.uTime.value = time;
       u.uThrust.value = thrust;
-      u.uLen.value = reach * shape.length * breathe;
+      const len = reach * shape.length * breathe;
+      u.uLen.value = len;
+      if (turn) {
+        plumeSweep(turn.x, turn.y, _sweep);
+        u.uBend.value.set(_sweep.x / len, _sweep.y / len);
+      } else {
+        u.uBend.value.set(0, 0);
+      }
       u.uW.value = shape.width;
       u.uI.value.set(levels.core * shape.core * breathe, levels.sheath * shape.wide * breathe, levels.halo * shape.wide * breathe);
       u.uFlare.value = levels.flare * Math.min(1, thrust * 1.3) * breathe;

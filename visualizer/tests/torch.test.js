@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { TORCH_LEVELS, clusterLevels, plumeShape, torchCough } from '../src/render/Torch.js';
+import { TORCH_LEVELS, clusterLevels, plumeShape, torchCough, plumeSweep, SWEEP_AGE_S, SWEEP_MAX } from '../src/render/Torch.js';
+import { Interpolator } from '../src/Interpolator.js';
 
 test('plume shape follows the throttle: idle is short and dim, full burn long and hot', () => {
   let prev = plumeShape(0);
@@ -79,4 +80,30 @@ test('bigger guns throw bigger tracers and flashes; the pop is a pure envelope',
   let prev = 1;
   for (let a = 0.02; a < 0.3; a += 0.02) { const v = muzzlePop(a, 0.3); assert.ok(v < prev && v >= 0); prev = v; }
   assert.equal(muzzlePop(0.1, 0.3), muzzlePop(0.1, 0.3));
+});
+
+test('a turning ship drags its plume: sweep follows the recorded turn rate', () => {
+  assert.equal(Math.hypot(plumeSweep(0, 0).x, plumeSweep(0, 0).y), 0);
+  // yaw about +Y (bow swings to +X, stern to -X): the old exhaust lags on +X
+  const yaw = plumeSweep(0, 0.05);
+  assert.ok(yaw.x > 0 && yaw.y === 0);
+  assert.ok(Math.abs(yaw.x - 0.05 * SWEEP_AGE_S) < 1e-12);
+  // pitch about +X (bow swings to -Y): the tail lags on -Y
+  assert.ok(plumeSweep(0.05, 0).y < 0);
+  // a corvette's snap turn saturates instead of folding the plume over
+  const snap = plumeSweep(0.2, -0.3);
+  assert.ok(Math.abs(Math.hypot(snap.x, snap.y) - SWEEP_MAX) < 1e-12);
+  // reversing the turn mirrors the sweep (pure, no history)
+  const back = plumeSweep(-0.2, 0.3);
+  assert.ok(Math.abs(back.x + snap.x) < 1e-12 && Math.abs(back.y + snap.y) < 1e-12);
+});
+
+test('interpolated ship state carries the recorded turn rate, or null on old recordings', () => {
+  const ship = (extra) => ({ pos: [0, 0, 0], vel: [0, 0, 0], fwd: [0, 0, 1], thrust: 1, ...extra });
+  const traced = Interpolator.interpolateShips(
+    { t: 0, ships: { a: ship({ omega: [0, 0.01, 0] }) } },
+    { t: 1, ships: { a: ship({ omega: [0, 0.04, 0] }) } }, 0.5);
+  assert.ok(Math.abs(traced.a.omega[1] - 0.025) < 1e-12 && traced.a.omega[0] === 0, 'continuous across frames');
+  const old = Interpolator.interpolateShips({ t: 0, ships: { a: ship() } }, { t: 1, ships: { a: ship() } }, 0.5);
+  assert.equal(old.a.omega, null);
 });
