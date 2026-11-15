@@ -43,7 +43,7 @@ from src.recording_io import load_recording
 
 from src.llm.battle_runner import BattleConfig, LLMBattleRunner, load_fleet_data
 from src.llm.captain import LLMCaptainConfig
-from src.llm.client import CaptainClient
+from src.llm.providers import create_llm_client, fleet_config_models
 from src.llm.fleet_config import BattleFleetConfig
 from src.llm.notebook import (
     DEFAULT_NOTEBOOK_DIR,
@@ -113,8 +113,8 @@ def cmd_analyze(args: argparse.Namespace) -> int:
 
         print(f"\n=== Distilling {role} lessons for {model} ({side}, {outcome}) ===")
         digest = build_battle_digest(recording, side)
-        client = CaptainClient(
-            model=args.analyst_model or model,
+        client = create_llm_client(
+            args.analyst_model or model, [model],
             session_id=f"ai-commanders-refine-{uuid.uuid4().hex[:16]}",
         )
         lessons = distill_lessons(client, model, role, digest,
@@ -184,8 +184,8 @@ def _run_gate_battle(config_path: str, seed: int, max_checkpoints: int) -> str:
     fleet_config.use_notebooks = True
     client_model = (fleet_config.alpha_fleet.ships[0].model
                     if fleet_config.alpha_fleet.ships else "anthropic/claude-sonnet-5")
-    client = CaptainClient(
-        model=client_model,
+    client = create_llm_client(
+        client_model, fleet_config_models(fleet_config),
         session_id=f"ai-commanders-gate-{uuid.uuid4().hex[:16]}",
     )
     battle_config = BattleConfig(

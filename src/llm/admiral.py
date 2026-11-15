@@ -265,6 +265,10 @@ def _failure_text(meta: Dict[str, Any]) -> str:
         return "provider error (finish_reason=error)"
     if finish == "content_filter":
         return "blocked by the provider content filter"
+    if finish == "refusal":
+        category = (meta.get("stop_details") or {}).get("category")
+        return "refused by the model (stop_reason=refusal" + (
+            f", category {category})" if category else ")")
     return "no set_fleet_directive call"
 
 
@@ -957,6 +961,12 @@ Be authentic to how you would command a fleet as {model_name}."""
             return calls, None, None, None
 
         first = _failure_text(meta)
+        if meta.get("finish_reason") == "refusal":
+            # Not re-asked: the checkpoint has no directive and says why
+            # (admiral_directive_failed), and the battle goes on.
+            print(f"[ADMIRAL {self.config.name}] directive call refused by the model - "
+                  "no directive this checkpoint")
+            return [], first, None, None
         overrides: Dict[str, Any] = {}
         effort = getattr(self.client, "reasoning_effort", None)
         if meta.get("finish_reason") == "length":

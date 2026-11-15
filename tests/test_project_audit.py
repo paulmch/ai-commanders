@@ -238,7 +238,7 @@ def test_cli_preserves_fleet_options_and_applies_explicit_overrides(tmp_path, mo
     factory = Mock(return_value=runner)
     monkeypatch.setattr(cli, "LLMBattleRunner", factory)
     client = Mock(side_effect=AssertionError("heuristic battle must not need an API key"))
-    monkeypatch.setattr(cli, "CaptainClient", client)
+    monkeypatch.setattr(cli, "create_llm_client", client)
     assert cli.main() == 0
     config = factory.call_args.kwargs["config"]
     assert config.unlimited_mode and config.record_sim_trace
