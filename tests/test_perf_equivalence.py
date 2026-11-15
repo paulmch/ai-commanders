@@ -513,6 +513,24 @@ class TestPresentationTrialMemo:
         assert bits(after) == bits(reference_trial(section, ke))
         assert bits(first) == bits(sim._trial_hull_cache[next(iter(sim._trial_hull_cache))])
 
+    def test_section_state_is_plain_values(self):
+        """The memo key is the section's attribute VALUES. That is stale-proof
+        only while every attribute is an immutable scalar: a mutable object
+        hashed by identity would key fine and then change underneath the
+        memo. If armor sections ever grow such an attribute, key it by value
+        in _trial_energy_to_hull_gj (or drop the memo)."""
+        from enum import Enum
+        fleet = load_fleet()
+        checked = 0
+        for ship_type in fleet["ships"]:
+            ship = _hull(ship_type)
+            for section in ship.armor.sections.values():
+                for name, value in vars(section).items():
+                    assert value is None or isinstance(value, (bool, int, float, str, Enum)), (
+                        ship_type, name, type(value))
+                    checked += 1
+        assert checked > 50
+
     def test_real_damage_between_calls_is_seen(self):
         sim = CombatSimulation(seed=1)
         section = self._section(_hull("destroyer"))

@@ -195,11 +195,14 @@ def profile_case(name: str, top: int) -> None:
     import cProfile
     import pstats
 
-    prof = cProfile.Profile()
+    # CPU clock, not the default wall clock: on a loaded machine wall-clock
+    # profile seconds are inflated by however long the process was descheduled.
+    prof = cProfile.Profile(time.process_time)
     prof.enable()
     out = run_case(name)
     prof.disable()
-    print(f"{name}: {out['info']}; cpu {out['cpu_s']:.1f} s under cProfile")
+    print(f"{name}: {out['info']}; cpu {out['cpu_s']:.1f} s under cProfile "
+          f"(table seconds are CPU seconds including profiler overhead)")
     stats = pstats.Stats(prof)
     print("\n-- call counts, hot functions --")
     rows = []
