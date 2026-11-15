@@ -151,6 +151,10 @@ inside `radius_km` with intensity >= 0.01, emitted just before the
 | `fuse_cut_s` | float | only when the victim is a dying hulk: seconds the blast took off its detonation fuse (`intensity x 20 s`). Such an event carries only `source_ship_id`, `distance_km`, `intensity`, `fuse_cut_s`, `detonation_in_s` |
 | `detonation_in_s` | float | dying hulk only: fuse left after the cut (0 = it detonates next tick) |
 
+Blast armour loss has **no** `armor_damage` event: a consumer that keeps an
+armour ledger from events must also apply `blast_damage.armor_remaining_cm`
+to the `hit_location` facing (the frames' `armor` already include it).
+
 A blast never damages hull modules, so `hull` in the frames does not change.
 (An `engine` fitting hit does lower `hull` a little: the engine is one of the
 modules that percentage averages.)

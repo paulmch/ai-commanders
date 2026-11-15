@@ -778,3 +778,117 @@ def test_one_adrift_hull_does_not_zero_the_fleet_range_picture():
     # a lone adrift ship still reports honestly that it cannot accelerate
     alone = rc.analyze_range_control(sim, [sim.get_ship("alpha_1")])
     assert all(g.accel_g == 0.0 for g in alone)
+
+
+# ---------------------------------------------------------------------------
+# The hooks inside the engine's own hit resolvers (src/simulation.py)
+# ---------------------------------------------------------------------------
+
+def _slug(sim, target, velocity, mass_kg=10.0):
+    from src.projectile import KineticProjectile
+    from src.simulation import ProjectileInFlight
+
+    proj = KineticProjectile(mass_kg=mass_kg, velocity=velocity,
+                             position=target.position - velocity.normalized() * 100.0)
+    return ProjectileInFlight(projectile_id="p1", projectile=proj,
+                              source_ship_id="shooter", target_ship_id=target.ship_id,
+                              launch_time=sim.current_time)
+
+
+def _inbound_torpedo(sim, target, velocity):
+    torp = Torpedo(specs=TorpedoSpecs(), position=target.position - velocity.normalized() * 1000.0,
+                   velocity=velocity, target_id=target.ship_id)
+    torp.armed = True
+    flight = TorpedoInFlight(torpedo_id="t1", torpedo=torp, source_ship_id="shooter",
+                             launch_time=sim.current_time)
+    sim.torpedoes.append(flight)
+    return flight
+
+
+def test_projectile_hit_resolver_rolls_the_surface_fitting():
+    sim = CombatSimulation(seed=1, time_step=1.0)
+    _ship(sim, "shooter", "alpha", Vector3D(500_000, 0, 0))
+    target = _ship(sim, "victim", "beta", Vector3D(0, 0, 0))
+    sim._damage_rng = _Rolls(0.0, 0.0)
+
+    # a non-penetrating slug into the flank (nose along +X, slug along +Y)
+    sim._resolve_projectile_hit(_slug(sim, target, Vector3D(0, 8_000, 0)), target)
+
+    impact = _events(sim, SimulationEventType.PROJECTILE_IMPACT)[0]
+    assert impact.data["hit_location"] == "lateral" and not impact.data["penetrated"]
+    mounts = _events(sim, SimulationEventType.MOUNT_DAMAGED)
+    assert len(mounts) == 1
+    data = mounts[0].data
+    assert data["cause"] == "surface_hit" and data["source_ship_id"] == "shooter"
+    assert data["kind"] == "gun" and data["slot"] == "weapon_1"
+    assert data["health_lost_pct"] == pytest.approx(
+        impact.data["kinetic_energy_gj"] * bd.MOUNT_DAMAGE_PCT_PER_GJ, abs=0.1)
+    assert sim.events.index(mounts[0]) > sim.events.index(impact)
+
+
+def test_torpedo_hit_resolver_rolls_the_surface_fitting():
+    sim = CombatSimulation(seed=1, time_step=1.0)
+    _ship(sim, "shooter", "alpha", Vector3D(500_000, 0, 0))
+    target = _ship(sim, "victim", "beta", Vector3D(0, 0, 0), ship_type="battleship")
+    sim._damage_rng = _Rolls(0.0, 0.0)
+
+    sim._resolve_torpedo_hit(_inbound_torpedo(sim, target, Vector3D(0, 5_000, 0)), target)
+
+    impact = _events(sim, SimulationEventType.TORPEDO_IMPACT)[0]
+    mounts = _events(sim, SimulationEventType.MOUNT_DAMAGED)
+    assert len(mounts) == 1
+    assert mounts[0].ship_id == "victim"
+    assert mounts[0].data["cause"] == "surface_hit"
+    assert mounts[0].data["hit_location"] == impact.data["hit_location"] == "lateral"
+    assert mounts[0].data["source_ship_id"] == "shooter"
+    assert sim.events.index(mounts[0]) > sim.events.index(impact)
+
+
+@pytest.mark.parametrize("ordnance", ["slug", "torpedo"])
+def test_penetrating_hit_on_a_magazine_cooks_it_off(ordnance):
+    sim = CombatSimulation(seed=1, time_step=1.0)
+    _ship(sim, "shooter", "alpha", Vector3D(500_000, 0, 0))
+    target = _ship(sim, "victim", "beta", Vector3D(0, 0, 0), ship_type="destroyer")
+    target.armor.get_section(HitLocation.NOSE).thickness_cm = 0.0   # bow already open
+    sim._damage_rng = _Rolls()   # no surface fitting: the damage is internal
+    ammo_before = target.weapons["weapon_1"].ammo_remaining
+
+    # down the bow (nose along +X, ordnance travelling -X): the destroyer's
+    # magazine sits in the second layer behind the spinal mount
+    velocity = Vector3D(-15_000, 0, 0)
+    if ordnance == "slug":
+        sim._resolve_projectile_hit(_slug(sim, target, velocity, mass_kg=250.0), target)
+    else:
+        sim._resolve_torpedo_hit(_inbound_torpedo(sim, target, velocity), target)
+
+    destroyed = [e.data["module_name"] for e in _events(sim, SimulationEventType.MODULE_DESTROYED)]
+    assert "Main Magazine" in destroyed
+    cookoffs = _events(sim, SimulationEventType.MAGAZINE_COOKOFF)
+    assert len(cookoffs) == 1
+    assert cookoffs[0].ship_id == "victim"
+    assert cookoffs[0].data["module_name"] == "Main Magazine"
+    assert cookoffs[0].data["source_ship_id"] == "shooter"
+    assert cookoffs[0].data["gun_rounds_lost"] > 0
+    assert target.weapons["weapon_1"].ammo_remaining == ammo_before // 2
+    # every module_damaged written by the resolver now carries the health
+    assert all("health_pct" in e.data for e in _events(sim, SimulationEventType.MODULE_DAMAGED))
+
+
+def test_ship_death_inside_the_engine_tick_emits_its_blast():
+    sim = CombatSimulation(seed=1, time_step=1.0)
+    _ship(sim, "shooter", "alpha", Vector3D(500_000, 0, 0))
+    target = _ship(sim, "victim", "beta", Vector3D(0, 0, 0), ship_type="destroyer")
+    neighbour = _ship(sim, "neighbour", "beta", Vector3D(0, 4_000, 0), ship_type="destroyer")
+    sim._running = True
+    for module in target._get_modules_by_type("reactor"):
+        module.health_percent = 0.0
+    sim._check_ship_destroyed(target, "shooter")   # reactor kill, as a hit would do
+    assert target.is_destroyed
+
+    sim.step()
+
+    blasts = _events(sim, SimulationEventType.REACTOR_BLAST)
+    assert [e.ship_id for e in blasts] == ["victim"]
+    assert blasts[0].data["ships_hit"] == ["neighbour"]
+    assert [e.ship_id for e in _events(sim, SimulationEventType.BLAST_DAMAGE)] == ["neighbour"]
+    assert neighbour.thermal_system.heat_fraction > 0.0
