@@ -13,6 +13,10 @@ import { washAt } from '../DamageTimeline.js';
 import {
   RCS_LAYOUT, ENGINE, PULSE, JET_COUNT, attitudeAt, jetLevels, makePulses, pulsesAt, throttleAt
 } from './TorpedoRcs.js';
+import { hullQuat, validUp } from '../HullFrame.js';
+import { arcsFor, isBlocked, pdPlan, hullExit, shownPdMount } from './TurretArcs.js';
+import { GUN_DEPRESSION_DEG } from './MountLimits.js';
+const _fwdArr = [0, 0, 1], _quatArr = [0, 0, 0, 1];
 
 const Z = new THREE.Vector3(0, 0, 1);
 const Y = new THREE.Vector3(0, 1, 0);
@@ -228,15 +232,21 @@ export class Projectiles {
     const reach = size.length * 2;
     const w = 1 - THREE.MathUtils.smoothstep(p.distanceTo(this.e), 0, reach);
     if (w <= 0) return p;
-    this.hullQuaternion(this.liftSample.fwd, this.q2);
+    this.hullQuaternion(this.liftSample.fwd, this.q2, this.liftSample.up);
     return p.addScaledVector(this.u.copy(mz.pos).applyQuaternion(this.q2), w);
   }
 
   /** The recorded hull orientation (SceneManager.updateShip's lookAt). */
-  hullQuaternion(fwd, out) {
+  hullQuaternion(fwd, out, up = null) {
     this.s1.fromArray(fwd);
     if (this.s1.lengthSq() < 1e-10) return out.identity();
-    this.m4.lookAt(this.s1.normalize(), ORIGIN, Y);
+    this.s1.normalize();
+    if (validUp(up)) {
+      // the ship's recorded roll (HullFrame): same frame as SceneManager
+      const q = hullQuat(this.s1.toArray(_fwdArr), up, _quatArr);
+      return out.set(q[0], q[1], q[2], q[3]);
+    }
+    this.m4.lookAt(this.s1, ORIGIN, Y);
     return out.setFromRotationMatrix(this.m4);
   }
 
@@ -246,7 +256,7 @@ export class Projectiles {
     if (!first || !sampleTrack(track, tr.start, this.shipSample)) return null;
     // Barrel axis: the round's launch velocity relative to the shooter.
     this.aim.fromArray(first.state.vel || [0, 0, 1]).sub(this.s2.fromArray(this.shipSample.vel));
-    this.hullQuaternion(this.shipSample.fwd, this.q2).invert();
+    this.hullQuaternion(this.shipSample.fwd, this.q2, this.shipSample.up).invert();
     this.aim.applyQuaternion(this.q2);
     if (this.aim.lengthSq() < 1e-10) this.aim.copy(Z); else this.aim.normalize();
     const out = { pos: new THREE.Vector3(), dir: new THREE.Vector3() };
@@ -262,14 +272,23 @@ export class Projectiles {
     const ud = ship.userData;
     const W = ud.size.width, L = ud.size.length;
     const rigs = ud.gunTurrets?.length ? ud.gunTurrets : ud.turrets;
-    const rig = !shot.spinal && rigs?.length
+    let rig = !shot.spinal && rigs?.length
       ? rigs.find(r => r.slot && r.slot === shot.slot) || rigs[shot.index % rigs.length] : null;
     if (rig?.mount) {
+      // Recordings older than the arcs engine fired through the ship: a
+      // shot whose line is blocked for its own mount is shown from a
+      // battery that has a clear line (the engine never records one now)
+      const arcs = arcsFor(ud.shipType);
+      const own = arcs?.bySlot.get(rig.slot);
+      if (own && isBlocked(own, aim)) {
+        const alt = rigs.find(r => { const a = arcs.bySlot.get(r.slot); return r.mount && a && !isBlocked(a, aim); });
+        if (alt) rig = alt;
+      }
       const s = rig.s || 0.5, rz = rig.mount.rotation.z;
       // aim in the mount frame, clamped to the rig's elevation limits
       const v = this.s3.copy(aim).applyAxisAngle(Z, -rz);
       const yaw = Math.atan2(v.x, v.z);
-      const pitch = THREE.MathUtils.clamp(Math.atan2(v.y, Math.hypot(v.x, v.z)), -0.04, 1.45);
+      const pitch = THREE.MathUtils.clamp(Math.atan2(v.y, Math.hypot(v.x, v.z)), -GUN_DEPRESSION_DEG * Math.PI / 180, Math.PI / 2);
       out.dir.set(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch));
       // mount > yaw (0, .2s, 0) > pitch (0, .32s, .15s) > barrel tip 1.4s
       out.pos.set(0.15 * s * Math.sin(yaw), 0.52 * s, 0.15 * s * Math.cos(yaw)).addScaledVector(out.dir, 1.4 * s);
@@ -517,12 +536,35 @@ export class Projectiles {
     const seed = seg.visualSeed;
     const torpedo = seg.targetType === 'torpedo';
     const tr = torpedo ? this.timeline.torpedoes.get(seg.targetId) : this.timeline.slugs.get(seg.targetId);
-    const mount = this.pdMount(seg, ship);
+    let mount = this.pdMount(seg, ship);
     if (mount) {
       // From the firing PD ball's lens (the ball itself slews onto the round).
       this.a.copy(mount.pos).applyQuaternion(ship.quaternion).add(ship.position);
       this.dir.subVectors(target, this.a).normalize();
-      this.a.addScaledVector(this.dir, mount.reach);
+      let reach = mount.reach;
+      // A beam is never drawn through the ship. Checked every frame against
+      // the firing mount's arc (the line swings during a dwell). Recordings
+      // from the arcs engine never get here: it only fires when clear.
+      this.q.copy(ship.quaternion).invert();
+      this.s3.copy(this.dir).applyQuaternion(this.q);
+      if (mount.arc && isBlocked(mount.arc, this.s3)) {
+        // the round has moved behind the hull for this mount: the PD mount
+        // that has a clear line right now shows the beam (HullRigs trains
+        // that ball on it); with none, the beam starts where its line
+        // leaves the hull's bounding ellipsoid
+        const pds = arcsFor(ship.userData.shipType)?.pds;
+        const name = pds ? shownPdMount(seg.arcTurret ?? seg.turret, pds, this.s3) : null;
+        const alt = name ? this.pdMount(seg, ship, name) : null;
+        if (alt) {
+          mount = alt;
+          reach = alt.reach;
+          this.a.copy(alt.pos).applyQuaternion(ship.quaternion).add(ship.position);
+          this.dir.subVectors(target, this.a).normalize();
+        } else {
+          reach = Math.max(reach, hullExit(mount.pos, this.s3, W, L));
+        }
+      }
+      this.a.addScaledVector(this.dir, reach);
     } else {
       this.a.set((random(seg.mountSeed, 1) - 0.5) * W * 0.85, (random(seg.mountSeed, 2) - 0.5) * W * 0.85, (random(seg.mountSeed, 3) - 0.5) * L * 0.6);
       this.a.applyQuaternion(ship.quaternion).add(ship.position);
@@ -580,22 +622,27 @@ export class Projectiles {
    * (hull `pdMounts` by name, else by turret index), or null for hulls
    * without PD mounts (then a seeded hull point is used). Cached per segment.
    */
-  pdMount(seg, ship) {
-    if (seg.mountShip === ship) return seg.mount;
+  pdMount(seg, ship, name = null) {
+    // which turret shows this dwell: the recorded one, or on recordings
+    // older than the arcs engine a mount with a clear line (TurretArcs)
+    pdPlan(this.manager);
+    if (name === null && seg.mountShip === ship) return seg.mount;
     const ud = ship.userData;
     const list = ud.pdMounts;
     let mount = null;
     if (list?.length) {
-      let i = list.findIndex(p => p.name === seg.turret);
+      const turret = name ?? seg.arcTurret ?? seg.turret;
+      let i = list.findIndex(p => p.name === turret);
       if (i < 0) {
-        const n = Number(String(seg.turret ?? '').split('_').at(-1));
+        const n = Number(String(turret ?? '').split('_').at(-1));
         if (Number.isFinite(n) && n >= 0) i = n % list.length;
       }
       if (i >= 0) {
         const rig = ud.pdTurrets?.find(r => r.name === list[i].name);
-        mount = { pos: list[i].pos, reach: 0.72 * (rig?.s ?? 0) };
+        mount = { pos: list[i].pos, reach: 0.72 * (rig?.s ?? 0), arc: arcsFor(ud.shipType)?.bySlot.get(list[i].name) || null };
       }
     }
+    if (name !== null) return mount;      // a momentary stand-in: not cached
     seg.mount = mount;
     seg.mountShip = ship;
     return mount;
@@ -759,7 +806,7 @@ export class Projectiles {
       const target = this.timeline.ships.get(m.data.target_id);
       if (target && track && sampleTrack(target, m.time, this.shipSample) && sampleTrack(track, m.time, this.liftSample)) {
         this.aim.fromArray(this.shipSample.pos).sub(this.s2.fromArray(this.liftSample.pos));
-        this.hullQuaternion(this.liftSample.fwd, this.q2).invert();
+        this.hullQuaternion(this.liftSample.fwd, this.q2, this.liftSample.up).invert();
         this.aim.applyQuaternion(this.q2);
         if (this.aim.lengthSq() < 1e-10) this.aim.copy(Z); else this.aim.normalize();
       }

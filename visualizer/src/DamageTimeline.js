@@ -13,9 +13,12 @@
  * the ship's recorded kinematics at the moment of impact (for spall that
  * flies off in world space).
  *
- * Coordinates: world metres as recorded; ship-local frame matches the
- * viewer's Object3D.lookAt(fwd) with world-up +Y: +Z nose, +Y dorsal.
+ * Coordinates: world metres as recorded; ship-local frame is the hull
+ * frame of HullFrame.js: +Z nose, +Y dorsal (the recorded `up` when the
+ * trace has it, else the viewer's lookAt roll with world-up +Y).
  */
+
+import { hullBasis, lerpUp, validUp } from './HullFrame.js';
 
 // ---------------------------------------------------------------------------
 // Deterministic hashing
@@ -61,7 +64,8 @@ export function frameBracket(trace, t) {
 /**
  * Ship pose at battle time t from the recorded trace (lerped). Returns
  * null when the ship is absent. Writes into `out` when given.
- * {pos, vel, fwd (unit), hull (0..1), dying, destroyed}
+ * {pos, vel, fwd (unit), up (unit, or null on recordings without it),
+ * hull (0..1), dying, destroyed}
  */
 export function shipStateAt(trace, shipId, t, out = null) {
   const b = frameBracket(trace, t);
@@ -80,6 +84,7 @@ export function shipStateAt(trace, shipId, t, out = null) {
   }
   const fl = Math.hypot(o.fwd[0], o.fwd[1], o.fwd[2]) || 1;
   o.fwd[0] /= fl; o.fwd[1] /= fl; o.fwd[2] /= fl;
+  o.up = s0.up || s1.up ? lerpUp(s0.up, s1.up, a, o._up || (o._up = [0, 1, 0])) : null;
   const h0 = s0.hull ?? 100, h1 = s1.hull ?? h0;
   o.hull = Math.max(0, Math.min(1, (h0 + (h1 - h0) * a) / 100));
   // discrete flags switch at their frame, like the Interpolator
@@ -90,14 +95,16 @@ export function shipStateAt(trace, shipId, t, out = null) {
 }
 
 /**
- * Ship-local basis for a forward vector, identical to three.js
+ * Ship-local basis for a forward vector. With the recorded `up` it is the
+ * ship's real frame (HullFrame.hullBasis); without, identical to three.js
  * Object3D.lookAt for a non-camera object with up = +Y:
  * z = fwd, x = normalize(up x z), y = z x x.
  */
-export function localBasis(fwd, out = null) {
+export function localBasis(fwd, out = null, up = null) {
   const o = out || { x: [0, 0, 0], y: [0, 0, 0], z: [0, 0, 0] };
   const z = o.z, x = o.x, y = o.y;
   z[0] = fwd[0]; z[1] = fwd[1]; z[2] = fwd[2];
+  if (validUp(up)) { hullBasis(z, up, x, y); return o; }
   x[0] = z[2]; x[1] = 0; x[2] = -z[0];      // (0,1,0) x z
   let xl = Math.hypot(x[0], x[2]);
   if (xl < 1e-6) { x[0] = 1; x[2] = 0; xl = 1; }  // looking straight up/down
@@ -108,14 +115,14 @@ export function localBasis(fwd, out = null) {
   return o;
 }
 
-export function worldToLocalDir(fwd, d) {
-  const B = localBasis(fwd);
+export function worldToLocalDir(fwd, d, up = null) {
+  const B = localBasis(fwd, null, up);
   const dot = (u) => u[0] * d[0] + u[1] * d[1] + u[2] * d[2];
   return [dot(B.x), dot(B.y), dot(B.z)];
 }
 
-export function localToWorldDir(fwd, l) {
-  const B = localBasis(fwd);
+export function localToWorldDir(fwd, l, up = null) {
+  const B = localBasis(fwd, null, up);
   return [
     B.x[0] * l[0] + B.y[0] * l[1] + B.z[0] * l[2],
     B.x[1] * l[0] + B.y[1] * l[1] + B.z[1] * l[2],
@@ -428,12 +435,13 @@ export function buildDamageTimeline(rec, opts = {}) {
     if (st && fromWorld) {
       const d = [fromWorld[0] - st.pos[0], fromWorld[1] - st.pos[1], fromWorld[2] - st.pos[2]];
       const l = Math.hypot(d[0], d[1], d[2]);
-      if (l > 1e-3) approach = worldToLocalDir(st.fwd, [d[0] / l, d[1] / l, d[2] / l]);
+      if (l > 1e-3) approach = worldToLocalDir(st.fwd, [d[0] / l, d[1] / l, d[2] / l], st.up);
     } else if (m.section === 'tail') approach = [0, 0, -1];
     m.approach = approach;
     m.shipPos = st ? st.pos.slice() : null;
     m.shipVel = st ? st.vel.slice() : [0, 0, 0];
     m.shipFwd = st ? st.fwd.slice() : [0, 0, 1];
+    m.shipUp = st && st.up ? st.up.slice() : null;
     sd.marks.push(m);
     return m;
   };

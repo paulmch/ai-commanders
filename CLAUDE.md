@@ -322,6 +322,24 @@ hashed by the perf harness) is unchanged.
   keyed on `DamageTimeline.shipDetonationTime` (the frame the viewer blows the ship
   up), the pull-back distance on `Explosion.blastExtent` - change a blast's curves
   in `Blast.update` and that function together.
+- Weapon arcs: `data/hull_mounts.json` (per hull class, every mount's pivot, axis
+  and blocked-direction mask in the body frame: x forward, y port, z dorsal =
+  hull-kit Z, X, Y) is GENERATED from the hull kit by
+  `node visualizer/scripts/export_hull_mounts.mjs` (`--report` prints PD/gun
+  coverage per hull), together with the viewer's copy
+  `visualizer/src/render/hullMountsData.js`. Regenerate both after moving a
+  turret, PD mount or superstructure block, or changing a hull's weapons;
+  `visualizer/tests/hull_mounts.test.js` fails until you do. Seed-/faction-
+  dependent decoration (greebles, livery) is tagged `seeded` and is not an
+  occluder, so the file is keyed by class only.
+- Hull attitude: trace frames with `up` orient the hull by `fwd` + `up`
+  (`src/HullFrame.js`, slerped as a rotation); without it the old lookAt roll
+  (world-up +Y). Every consumer that rebuilds the hull frame from a trace sample
+  must go through `hullBasis` / `hullQuat`. Mounts are posed from the trace's
+  `tur` ([az, el, state] per mount, hull_mounts order) when present; otherwise
+  `render/HullRigs.js` aims from the event log, clamped to the masks and slewed
+  at the engine's class rates (`MountLimits.TRAVERSE_DEG_S` mirrors
+  `src/weapon_arcs.py`), as pure functions of battle time.
 - Ownership: in-flight weapons live in render/Projectiles.js (WeaponTimeline
   decides what exists at time t); persistent hit aftermath and deaths in
   DamageTimeline.js + render/DamageFX.js; hulls expose `userData.rcsMounts` /

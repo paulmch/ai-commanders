@@ -3,7 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { Environment, disposeTree } from './render/Environment.js';
 import { getGraphicsSettings } from './render/Quality.js';
 import { PostFX } from './render/PostFX.js';
-import { buildHull, buildShipMaterials, ACCENT_GLOW } from './render/Hulls.js';
+import { buildHull, buildShipMaterials, hullSize, ACCENT_GLOW } from './render/Hulls.js';
 import { updateHullDetails } from './render/Hulls.js';
 import { createTorch, damagedNozzle } from './render/Torch.js';
 
@@ -19,6 +19,8 @@ import { getGlowTexture } from './render/Textures.js';
 import { RcsSystem } from './render/Rcs.js';
 import { Projectiles } from './render/Projectiles.js';
 import { HeatFX } from './render/Heat.js';
+import { hullQuat, validUp } from './HullFrame.js';
+const _hfFwd = [0, 0, 1], _hfQuat = [0, 0, 0, 1];
 
 /**
  * Put the canvas's WebGL pixel-unpack state back to its defaults when a
@@ -283,19 +285,7 @@ export class SceneManager {
     const group = new THREE.Group();
     group.name = shipId;
 
-    const baseSizes = {
-      corvette: { length: 0.5, width: 0.13 },
-      frigate: { length: 0.72, width: 0.15 },
-      destroyer: { length: 1.0, width: 0.22 },
-      cruiser: { length: 1.3, width: 0.3 },
-      cruiser_torpedo: { length: 1.3, width: 0.3 },
-      battlecruiser: { length: 1.65, width: 0.3 },
-      battleship: { length: 2.0, width: 0.55 },
-      dreadnought: { length: 2.6, width: 0.7 },
-      dreadnought_siege: { length: 2.6, width: 0.7 }
-    };
-    const base = baseSizes[shipType] || baseSizes.destroyer;
-    const size = { length: base.length * 8, width: base.width * 8 };
+    const size = hullSize(shipType);
 
     const mats = buildShipMaterials(faction);
     const engineConfig = this.getEngineConfig(shipType, size);
@@ -400,7 +390,17 @@ export class SceneManager {
     ship.position.set(state.position[0] * this.SCALE, state.position[1] * this.SCALE, state.position[2] * this.SCALE);
     if (state.forward) {
       const f = new THREE.Vector3(state.forward[0], state.forward[1], state.forward[2]);
-      if (f.lengthSq() > 0) ship.lookAt(ship.position.clone().add(f.normalize()));
+      if (f.lengthSq() > 0) {
+        f.normalize();
+        if (validUp(state.up)) {
+          // the ship's recorded roll: nose along fwd, dorsal along up
+          const q = hullQuat(f.toArray(_hfFwd), state.up, _hfQuat);
+          ship.quaternion.set(q[0], q[1], q[2], q[3]);
+        } else {
+          // older recordings carry no roll: nose along fwd, world-up +Y
+          ship.lookAt(ship.position.clone().add(f));
+        }
+      }
     }
 
     const dt = this.delta || 0.016;
@@ -730,7 +730,13 @@ export class SceneManager {
     const driftVel = new THREE.Vector3(vel[0], vel[1], vel[2]).multiplyScalar(this.SCALE);
     if (death.position) position = new THREE.Vector3(...death.position).multiplyScalar(this.SCALE);
     if (shipGroup && death.forward) {
-      shipGroup.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(...death.forward).normalize());
+      const df = new THREE.Vector3(...death.forward).normalize();
+      if (validUp(death.up)) {
+        const q = hullQuat(df.toArray(_hfFwd), death.up, _hfQuat);
+        shipGroup.quaternion.set(q[0], q[1], q[2], q[3]);
+      } else {
+        shipGroup.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), df);
+      }
     }
 
     const eff = new ShipDestruction(this.fxCtx, {
