@@ -31,7 +31,7 @@ import { CombatLog } from './CombatLog.js';
 import { CommsFeed, commsToggle } from './CommsFeed.js';
 import { KillFeed } from './KillFeed.js';
 import { Registry } from './Registry.js';
-import { Scoreboard, ResultBanner, resultBannerDue } from './Scoreboard.js';
+import { Scoreboard, ResultBanner, resultBannerDue, endCause } from './Scoreboard.js';
 import { fittingsAt } from './FittingsIndex.js';
 import { FittingsCard } from './FittingsHud.js';
 import { TimelineMarkers } from './TimelineMarkers.js';
@@ -1315,7 +1315,10 @@ class BattleVisualizer {
   /** Verdict, kills, survivors and spend for the end card. */
   buildEndSummary() {
     const live = this.live;
-    const verdict = live.verdict || this.computeVerdict();
+    let verdict = live.verdict || this.computeVerdict();
+    // A battle that ended because a side could no longer deal damage says so in words (as the replay banner does)
+    const cause = endCause({ reason: verdict?.detail });
+    if (cause) verdict = { ...verdict, detail: `${cause.headline} · ${cause.detail}` };
     const spend = live.spend;
     const billing = live.provenance?.billing || (spend ? {
       reported_cost_usd: spend.reported_usd, spend_limit_usd: spend.limit_usd, calls: spend.calls,

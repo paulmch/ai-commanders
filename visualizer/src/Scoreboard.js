@@ -77,17 +77,17 @@ export function computeSides(states, torpedoes, ships, hud, t) {
 /**
  * Why the battle ended, when one side (or both) could no longer deal damage
  * (battle_runner._combat_ineffective_outcome): {side: 'alpha'|'beta'|'both',
- * headline} or null for every other ending.
+ * headline, detail} or null for every other ending.
  */
 export function endCause(result) {
   const reason = String(result?.reason || '');
   const one = /^(alpha|beta) fleet combat-ineffective/i.exec(reason);
   if (one) {
     const side = one[1].toLowerCase();
-    return { side, headline: `${side.toUpperCase()} FLEET CAN NO LONGER FIGHT · no gun or torpedo left that can deal damage` };
+    return { side, headline: `${side.toUpperCase()} FLEET CAN NO LONGER FIGHT`, detail: 'no gun or torpedo left that can deal damage' };
   }
   if (/^both fleets combat-ineffective/i.test(reason)) {
-    return { side: 'both', headline: 'NEITHER FLEET CAN STILL DEAL DAMAGE · decided on points' };
+    return { side: 'both', headline: 'NEITHER FLEET CAN STILL FIGHT', detail: reason.replace(/^.*?on points:\s*/i, 'on points: ') };
   }
   return null;
 }

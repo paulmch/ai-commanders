@@ -345,8 +345,9 @@ test('command net: a failed admiral directive is an issue row, a log line and a 
 
 test('battle end: a side that can no longer deal damage is named, with the fighting-power tally', () => {
   assert.deepEqual(endCause({ reason: 'Beta fleet combat-ineffective (no weapon left that can deal damage)' }),
-    { side: 'beta', headline: 'BETA FLEET CAN NO LONGER FIGHT · no gun or torpedo left that can deal damage' });
-  assert.equal(endCause({ reason: 'Both fleets combat-ineffective - on points: Alpha tactical advantage (60.0 vs 40.0)' }).side, 'both');
+    { side: 'beta', headline: 'BETA FLEET CAN NO LONGER FIGHT', detail: 'no gun or torpedo left that can deal damage' });
+  assert.deepEqual(endCause({ reason: 'Both fleets combat-ineffective - on points: Alpha tactical advantage (60.0 vs 40.0)' }),
+    { side: 'both', headline: 'NEITHER FLEET CAN STILL FIGHT', detail: 'on points: Alpha tactical advantage (60.0 vs 40.0)' });
   assert.equal(endCause({ reason: 'Beta fleet eliminated' }), null);
   assert.equal(endCause(null), null);
 
@@ -360,7 +361,7 @@ test('battle end: a side that can no longer deal damage is named, with the fight
   banner.update(true, hud.result, computeSides(states, [], ships, hud, 150), 150);
   assert.ok(!root.classList.contains('hidden'));
   const cause = root.querySelector('[data-cause]');
-  assert.deepEqual([cause.textContent, cause.hidden, cause.dataset.side], ['BETA FLEET CAN NO LONGER FIGHT · no gun or torpedo left that can deal damage', false, 'beta']);
+  assert.deepEqual([cause.textContent, cause.hidden, cause.dataset.side], ['BETA FLEET CAN NO LONGER FIGHT', false, 'beta']);
   assert.match(root.querySelector('[data-tally]').textContent, /ALPHA 2\/3 ships .* 1 armed · guns 0\/1 · tubes 5\/5.*BETA 2\/2 ships .* 1 armed · guns 4\/7/);
   // Any other ending keeps the banner as it was
   banner.update(true, { winner: 'alpha', reason: 'Beta fleet eliminated', known: true }, computeSides(states, [], ships, { ...hud, fittings: { active: false } }, 150), 150);
