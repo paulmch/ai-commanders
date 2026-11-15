@@ -3297,11 +3297,12 @@ class CombatSimulation:
     def _heading_burn_light_s(self, ship: ShipCombatState, direction: Vector3D) -> float:
         """
         Seconds until a HEADING turn onto ``direction`` brings the nose inside
-        HEADING_BURN_CONE_DEG, where the ordered burn lights: the bang-bang
-        turn (thrust vectoring) through the whole angle, from the turn rate
-        the ship already has toward it, minus the braking tail it flies
-        inside the cone. A from-rest turn to the cone edge overstates it for
-        a ship already swinging round (it reaches the cone at speed).
+        HEADING_BURN_CONE_DEG, where the ordered burn lights: the turn
+        (thrust vectoring) through the whole angle flown from the spin the
+        ship already has (_turn_time_to: toward, away or sideways), minus the
+        braking tail it flies inside the cone. A from-rest turn to the cone
+        edge overstates it for a ship already swinging round (it reaches the
+        cone at speed).
         """
         angle = ship.forward.angle_to(direction)
         cone = math.radians(HEADING_BURN_CONE_DEG)
@@ -3310,25 +3311,11 @@ class CombatSimulation:
         alpha, w_max = self._get_rotation_params(ship, True)
         if alpha <= 0.0 or w_max <= 0.0:
             return float('inf')
-        rs = getattr(ship, 'rotation_state', None)
-        w0 = 0.0
-        if rs is not None and rs.target_direction.distance_to(direction) <= 0.1:
-            w0 = min(abs(getattr(ship, 'angular_velocity_rad_s', 0.0) or 0.0), w_max)
-
-        def whole_turn(theta: float, w: float) -> float:
-            if w * w / (2.0 * alpha) >= theta:
-                return w / alpha                      # braking already
-            w_peak = math.sqrt(alpha * theta + w * w / 2.0)
-            if w_peak <= w_max:
-                return (2.0 * w_peak - w) / alpha
-            ramp = (w_max * w_max - w * w) / (2.0 * alpha) + w_max * w_max / (2.0 * alpha)
-            return (2.0 * w_max - w) / alpha + (theta - ramp) / w_max
-
         # The last `cone` of a bang-bang turn: braking from at most w_max.
         brake = w_max * w_max / (2.0 * alpha)
         tail = (math.sqrt(2.0 * cone / alpha) if brake >= cone
                 else (cone - brake) / w_max + w_max / alpha)
-        return max(0.0, whole_turn(angle, w0) - tail)
+        return max(0.0, self._turn_time_to(ship, direction, engines_on=True) - tail)
 
     def _turn_time_to(
         self,

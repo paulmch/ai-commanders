@@ -226,12 +226,14 @@ def test_live_engine_delivers_the_forecast(fcc, seed, cls, hull, range_km, shoot
     the conversion number alone promised. If evasion, the gate, the lead or
     the dispersion roll changes, this moves.
 
-    The fleet-fire case pools four consecutive seeds: a battleship's jinks
-    are committed (its turn rate is carried, not re-pointed every tick), so
-    the rounds of ONE engagement are correlated - over 28 seeds of that
-    engagement 708 rounds hit against 791 forecast (1.12x), yet 5 single
-    engagements fall outside 3 sigma of their own Poisson-binomial spread,
-    both ways (seed 31: 0 against 15; seed 29: 45 against 28)."""
+    The fleet-fire case pools four consecutive seeds: the rounds of ONE
+    engagement are correlated (one dodger's path), so single engagements are
+    over-dispersed against their own Poisson-binomial spread. Seeds 20-47 of
+    that engagement: 708 hits against 791 forecast (1.12x), yet 5 of 28
+    engagements fall outside 3 sigma, both ways (seed 31: 0 against 15; seed
+    29: 45 against 28); on the scalar-rotation engine 3 of 28 did (974
+    against 962) - committed jinks made it worse, the single-seed check was
+    always fragile."""
     fleet = fcc.load_fleet()
     rounds = []
     for s in range(seed, seed + engagements):
