@@ -551,3 +551,16 @@ def test_chasers_leave_a_disarmed_runner_for_an_armed_enemy():
     _ship(sim, "armed", "cruiser", "beta", (0, 420, 0), fwd=(0, -1, 0))
     _wreck_guns(runner)
     assert T.gun_target(me, [runner, sim.get_ship("armed")], "runner").ship_id == "armed"
+
+
+def test_the_duel_runner_honours_the_doctrine():
+    # Review round 3, finding 6: the 1v1 path built its captains without a faction.
+    from src.llm.battle_runner import BattleConfig, LLMBattleRunner
+    cfg = BattleConfig(verbose=False, personality_selection=False, record_battle=False,
+                       heuristic_doctrine={"alpha": DOCTRINE_LEGACY, "beta": DOCTRINE_TACTICAL})
+    runner = LLMBattleRunner(cfg, LLMCaptainConfig("A", "A", model=HEURISTIC_MODEL),
+                             LLMCaptainConfig("B", "B", model=HEURISTIC_MODEL), None)
+    from src.llm.battle_runner import load_fleet_data
+    runner.setup_battle(load_fleet_data())
+    assert (runner.alpha_captain.doctrine, runner.beta_captain.doctrine) == (
+        DOCTRINE_LEGACY, DOCTRINE_TACTICAL)

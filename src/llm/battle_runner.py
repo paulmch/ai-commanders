@@ -366,8 +366,8 @@ class LLMBattleRunner:
         self.beta_config.fleet_data = fleet_data
 
         # Create captains
-        self.alpha_captain = self._make_captain(self.alpha_config)
-        self.beta_captain = self._make_captain(self.beta_config)
+        self.alpha_captain = self._make_captain(self.alpha_config, "alpha")
+        self.beta_captain = self._make_captain(self.beta_config, "beta")
 
         # Create communication channel
         self.communication = CommunicationChannel(
