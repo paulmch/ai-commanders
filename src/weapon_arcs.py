@@ -94,9 +94,19 @@ ROLL_GUN_HYSTERESIS_FRACTION = 0.15
 # so the planner prefers attitudes that hold a target with margin.
 ROLL_MARGIN_DEG = 7.5
 ROLL_MARGIN_SAMPLES_RAD = (0.0, math.radians(ROLL_MARGIN_DEG), -math.radians(ROLL_MARGIN_DEG))
-# ...and a new goal must win at least this many of those samples of one
-# turret-on-torpedo pair over the standing goal before the ship re-rolls.
-ROLL_PD_HYSTERESIS_SAMPLES = 2
+# ...and a new goal must win at least one WHOLE turret-on-torpedo pair (all
+# of its samples) over the standing goal before the ship re-rolls. (Two
+# samples - less than one pair - let every small shift of an inbound salvo's
+# bearing flip the goal between two attitudes on alternate re-plans.)
+ROLL_PD_HYSTERESIS_SAMPLES = len(ROLL_MARGIN_SAMPLES_RAD)
+# A goal, once chosen, stands at least this long (battle time) before a
+# re-plan may replace it: a hull that needs 70-250 s per 90 degrees of roll
+# gains nothing from a goal that changes every 5 s.
+ROLL_GOAL_COMMIT_S = 15.0
+# A goal chosen for the guns alone (no PD gain) stands until the hull could
+# have rolled there (its planned roll time) - otherwise a slow hull abandons
+# a 135 degree roll after 15 s and 2 degrees and rolls back. A better PD
+# answer to an inbound torpedo may still replace it after ROLL_GOAL_COMMIT_S.
 # Inbound torpedoes this close (multiples of the PD envelope) drive the roll.
 ROLL_PD_HORIZON_ENVELOPES = 2.0
 
@@ -376,7 +386,8 @@ class ShipArcs:
     """
 
     __slots__ = ("hull", "mounts", "guns", "pd", "roll", "roll_rate", "roll_goal",
-                 "fx", "fy", "fz", "lx", "ly", "lz", "ux", "uy", "uz", "frame_time")
+                 "goal_since", "goal_eta", "fx", "fy", "fz", "lx", "ly", "lz", "ux", "uy", "uz",
+                 "frame_time")
 
     def __init__(self, hull: Optional[HullMounts], ship) -> None:
         self.hull = hull
@@ -386,6 +397,8 @@ class ShipArcs:
         self.roll = 0.0
         self.roll_rate = 0.0
         self.roll_goal = 0.0
+        self.goal_since = None      # battle time the standing goal was chosen
+        self.goal_eta = 0.0         # ...and the roll time it was planned with (s)
         self.fx, self.fy, self.fz = 1.0, 0.0, 0.0
         self.lx, self.ly, self.lz = 0.0, 1.0, 0.0
         self.ux, self.uy, self.uz = 0.0, 0.0, 1.0

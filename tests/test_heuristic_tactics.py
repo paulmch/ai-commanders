@@ -642,7 +642,11 @@ def test_the_formation_throttle_is_what_the_ship_flies():
 # (Re-pinned for the round-2 PD placement: the destroyer and torpedo cruiser
 # PD masks in data/hull_mounts.json changed, so which turret bears on which
 # torpedo changed; no engine code changed.)
-LEGACY_GOLDEN_SHA256 = "eb441522072826589fb142b981b2138956f60ae05fb9f9c70d609afbdb8554b1"
+# (Re-pinned for the roll planner fix (arcs review, finding 1): roll goals
+# need a whole turret-torpedo pair of PD gain, stand >= 15 s and are scored by
+# the roll reachable before impact, so hulls roll less and some mounts bear
+# at other ticks; no change to motion.)
+LEGACY_GOLDEN_SHA256 = "acbc1892baca6367b2755f4857a29a3674f614dd778d13ddba225ccd4d7cf342"
 
 
 def test_legacy_battle_event_stream_is_pinned(tmp_path):

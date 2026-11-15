@@ -784,6 +784,8 @@ angle. The trace records the result, so a consumer never needs the roll angle it
 | on-target tolerance | `AIM_TOLERANCE_DEG` | 0.5 deg |
 | roll authority | `ROLL_RCS_AUTHORITY_FACTOR` | 3.3 x the hull's RCS pitch acceleration and rate cap |
 | roll re-plan lattice | `ROLL_REPLAN_INTERVAL_S` | every 5 s of battle time |
+| roll goal commit | `ROLL_GOAL_COMMIT_S` | a goal stands >= 15 s; a gun-only change also waits out the standing goal's planned roll time |
+| roll PD hysteresis | `ROLL_PD_HYSTERESIS_SAMPLES` | one whole turret-on-torpedo pair (3 samples); an attitude earns nothing against a torpedo that impacts before the hull could roll there |
 | masked-report delay | `MOUNT_MASKED_REPORT_S` | 3 s |
 
 Why these rates: a PD director must hand over between the rounds of one salvo (a few

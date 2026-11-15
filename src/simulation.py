@@ -7069,9 +7069,10 @@ class CombatSimulation:
     def _arcs_roll_inputs(self, ship: ShipCombatState, arcs):
         """
         What the roll is chosen for: body-frame lines of sight to the hostile
-        live torpedoes near the ship (with the operational PD mounts), and the
-        wanted directions of the trainable gun mounts that have a target
-        (with their energy per round as weight).
+        live torpedoes near the ship, each with its time to impact at the
+        present closing speed (inf when it is not closing), with the
+        operational PD mounts; and the wanted directions of the trainable gun
+        mounts that have a target (with their energy per round as weight).
         """
         torps = []
         pd_mounts = [pd.mount for pd in ship.point_defense
@@ -7081,6 +7082,7 @@ class CombatSimulation:
                          * max(pd.laser.range_km for pd in ship.point_defense))
             own = ship.position
             ox, oy, oz = own.x, own.y, own.z
+            vel = ship.velocity
             faction = ship.faction
             for flight in self.torpedoes:
                 if flight.is_disabled:
@@ -7092,7 +7094,12 @@ class CombatSimulation:
                 dx, dy, dz = pos.x - ox, pos.y - oy, pos.z - oz
                 n = math.sqrt(dx * dx + dy * dy + dz * dz)
                 if 0.0 < n <= horizon_m:
-                    torps.append(arcs.to_body(dx / n, dy / n, dz / n))
+                    tv = flight.torpedo.velocity
+                    ux, uy, uz = dx / n, dy / n, dz / n
+                    closing = -(ux * (tv.x - vel.x) + uy * (tv.y - vel.y) + uz * (tv.z - vel.z))
+                    t_hit = n / closing if closing > 0.0 else math.inf
+                    bx, by, bz = arcs.to_body(ux, uy, uz)
+                    torps.append((bx, by, bz, t_hit))
         guns = []
         for slot, mount in arcs.guns.items():
             if mount.kind != 'gun' or not mount.has_want or mount.state == weapon_arcs.IDLE:
@@ -7104,20 +7111,25 @@ class CombatSimulation:
         return torps, pd_mounts, guns
 
     @staticmethod
-    def _arcs_roll_score(phi: float, torps, pd_mounts, guns) -> tuple[int, float]:
+    def _arcs_roll_score(phi: float, torps, pd_mounts, guns,
+                         reach_s: float = 0.0) -> tuple[int, float]:
         """
         (PD turret-on-torpedo pairs, gun energy bearing) after rolling phi
         more - summed over phi and phi +/- ROLL_MARGIN_DEG, so a roll that
         leaves a target on the very edge of an arc scores a third of one that
         holds it with margin (targets in the battle plane sit exactly on the
-        horizon of an unrolled dorsal or ventral mount).
+        horizon of an unrolled dorsal or ventral mount). A torpedo that
+        impacts before the hull can complete the roll (``reach_s``, seconds)
+        scores nothing for it: that attitude is no defence against it.
         """
         cell_index = weapon_arcs.cell_index
         pairs = 0
         energy = 0.0
         for offset in weapon_arcs.ROLL_MARGIN_SAMPLES_RAD:
             c, s = math.cos(phi + offset), math.sin(phi + offset)
-            for bx, by, bz in torps:
+            for bx, by, bz, t_hit in torps:
+                if t_hit < reach_s:
+                    continue
                 cell = cell_index(bx, by * c + bz * s, bz * c - by * s)
                 for mount in pd_mounts:
                     if not mount.mask[cell]:
@@ -7133,28 +7145,47 @@ class CombatSimulation:
         Choose the roll goal: the roll that puts the most PD turrets onto
         inbound torpedoes first, and with that settled the most gun energy
         onto the gun target. The smallest roll wins ties; the standing goal
-        is kept unless a candidate is better by an extra turret-torpedo pair
-        or by ROLL_GUN_HYSTERESIS_FRACTION of the hull's trainable gun energy.
+        is kept unless a candidate is better by one whole turret-torpedo pair
+        (ROLL_PD_HYSTERESIS_SAMPLES) or by ROLL_GUN_HYSTERESIS_FRACTION of the
+        hull's trainable gun energy, and it stands at least ROLL_GOAL_COMMIT_S
+        (a gun-only change also waits out the standing goal's planned roll
+        time, goal_eta).
+        Every attitude is scored by what it defends once the hull has rolled
+        there (weapon_arcs.roll_time_s from rest): a goal the hull cannot
+        reach before a torpedo impacts earns nothing against that torpedo, so
+        it never displaces one it can reach.
         """
+        now = self.current_time
+        held_s = math.inf if arcs.goal_since is None else now - arcs.goal_since
+        if held_s < weapon_arcs.ROLL_GOAL_COMMIT_S - 1e-9:
+            return
         torps, pd_mounts, guns = self._arcs_roll_inputs(ship, arcs)
         if not torps and not guns:
             return
         score = self._arcs_roll_score
+        accel, max_rate = self._arcs_roll_params(ship)
+        roll_time = weapon_arcs.roll_time_s
         standing_phi = arcs.roll_goal - arcs.roll
-        standing = score(standing_phi, torps, pd_mounts, guns)
+        standing = score(standing_phi, torps, pd_mounts, guns,
+                         roll_time(standing_phi, accel, max_rate) if torps else 0.0)
         step = math.radians(weapon_arcs.ROLL_CANDIDATE_STEP_DEG)
         n = int(round(math.pi / step))
         best_phi, best = 0.0, score(0.0, torps, pd_mounts, guns)
         for k in range(1, n + 1):
             for phi in ((k * step, -k * step) if k < n else (k * step,)):
-                cand = score(phi, torps, pd_mounts, guns)
+                cand = score(phi, torps, pd_mounts, guns,
+                             roll_time(phi, accel, max_rate) if torps else 0.0)
                 if cand[0] > best[0] or (cand[0] == best[0] and cand[1] > best[1] + 1e-9):
                     best_phi, best = phi, cand
         samples = len(weapon_arcs.ROLL_MARGIN_SAMPLES_RAD)
         margin = weapon_arcs.ROLL_GUN_HYSTERESIS_FRACTION * samples * sum(w for _, w in guns)
-        if (best[0] >= standing[0] + weapon_arcs.ROLL_PD_HYSTERESIS_SAMPLES
-                or (best[0] >= standing[0] and best[1] > standing[1] + margin + 1e-9)):
+        pd_gain = best[0] >= standing[0] + weapon_arcs.ROLL_PD_HYSTERESIS_SAMPLES
+        gun_gain = (best[0] >= standing[0] and best[1] > standing[1] + margin + 1e-9
+                    and held_s >= arcs.goal_eta - 1e-9)
+        if pd_gain or gun_gain:
             arcs.roll_goal = arcs.roll + best_phi
+            arcs.goal_since = now
+            arcs.goal_eta = roll_time(best_phi, accel, max_rate)
 
     def settle_arcs(self) -> None:
         """
@@ -7179,6 +7210,7 @@ class CombatSimulation:
                 self._arcs_plan_roll(ship, arcs)
                 arcs.roll = arcs.roll_goal
                 arcs.roll_rate = 0.0
+                arcs.goal_since = None      # settled: the first in-battle re-plan is free
             ks = ship.kinematic_state
             arcs.set_frame(ks.forward, ks.up, now)
             for mount in arcs.mounts:
