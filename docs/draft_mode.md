@@ -286,6 +286,11 @@ budgets.
 
 ### 2026-11-15: pass-5 tournament (0.040 -> 0.102)
 
+(Round 1. Measured before the captains' round-3 fixes were merged; the
+engine, the prices and the conclusions about verdicts were revised in
+[round 2](#2026-11-15-round-2-mechanics-then-0102---0080) below. The
+diagnosis of the salvo and of point defence stands.)
+
 Pass 5 changed the battlefield (fittings can be shot off, reactor blasts kill
 torpedoes) and the free commanders: the tactical heuristic captains mass and
 synchronise salvos and focus fire. The prices were re-measured with a new
@@ -591,6 +596,180 @@ not depend on the captains' approach or on the scoring. The **T** cells do.
 Re-run the tournament after any change to torpedo guidance, point defence,
 the captains' approach or the time-limit scoring; the engine-source hash in
 the cache key makes that automatic.
+
+### 2026-11-15, round 2: mechanics, then 0.102 -> 0.080
+
+Round 1 (above) was measured before the captains' round-3 fixes were merged:
+gun ships no longer stall at zero closure, a withdrawal is actually flown, and
+a disarmed ship that is alone surrenders. Round 2 re-ran the tournament on
+that engine, changed two of the mechanics round 1 had named, and re-set the
+dial under one new hard constraint.
+
+**What changed in the engine (this lane):**
+
+- **Spent rounds leave the battle** (`CombatSimulation._torpedo_is_spent`,
+  `SPENT_TORPEDO_CULL_RANGE_M` = 300 km, `src/simulation.py`). A round that
+  can no longer steer - seeker dead, tanks dry, or orphaned with an enemy
+  still alive - is culled with the existing `left_battle` miss event once it
+  is opening on every live hull beyond 300 km. It used to sit in
+  `sim.torpedoes` for an hour of flight, which kept a fleet with empty tubes
+  "able to deal damage".
+- **The time-limit verdict values a hull at its draft price**
+  (`ship_class_value`, `src/llm/battle_runner.py`). `SHIP_CLASS_VALUES`
+  (frigate 15 for 7 pts, dreadnought 70 for 55) is now only the fallback for
+  hulls the price table does not know. The tournament therefore keys a battle
+  by the prices of the hulls in it.
+
+**What did not change:** point defence and the cost of range. Both were
+probed and neither has a small fix (see "Still lopsided" below).
+
+**The constraint:** every hull must be draftable at the default 100-point
+budget. A torpedo cruiser at 119 was not. 0.080 is the dearest dial that keeps
+it at 100 (band 0.0797-0.0808); the corvette lands on 24.
+
+#### The slice after each step (150 pts, seed 1, both side assignments)
+
+Torpedo and swarm rows against the five gun fleets; score of the row fleet and the number of battles.
+
+| step | prices (CV / CT) | torpedo roster | torpedo score v gun fleets | swarm roster | swarm score v gun fleets |
+|---|---|---|---:|---|---:|
+| merged engine, before this round | 27 / 119 | CT + corvette | 20% of 10 | 5 corvettes + 2 frigates | 100% of 10 |
+| + spent rounds culled | 27 / 119 | CT + corvette | 20% of 10 | 5 corvettes + 2 frigates | 100% of 10 |
+| + verdict at draft price | 27 / 119 | CT + corvette | 20% of 10 | 5 corvettes + 2 frigates | 100% of 10 |
+| + dial 0.080 | 24 / 100 | CT + 2 corvettes | 40% of 20 | 6 corvettes | 0% of 20 |
+
+Neither mechanic moved a cell of this slice: 20 of its 22 battles end in
+annihilation or surrender, which neither a dud round nor the scoring touches.
+What decides it is something else, visible in explicit rosters fought on the
+same engine (two battles a cell):
+
+| torpedo fleet | gun hulls | score against the five gun fleets |
+|---|---:|---:|
+| 3 corvettes | 0 | 0% |
+| 4 corvettes | 0 | 0% |
+| 5 corvettes | 0 | 0% |
+| 6 corvettes | 0 | 0% |
+| torpedo cruiser + corvette | 0 | 20% |
+| torpedo cruiser + 2 corvettes | 0 | 40% |
+| 4 corvettes + 2 frigates | 2 | 80% |
+| 4 corvettes + 4 frigates | 4 | 90% |
+| 5 corvettes + 4 frigates | 4 | 100% |
+| torpedo cruiser + 4 frigates | 4 | 100% |
+| torpedo cruiser + corvette + 3 frigates | 3 | 100% |
+| torpedo cruiser + 7 frigates | 7 | 100% |
+
+A fleet of torpedo hulls alone now loses: once its tubes are empty it has no
+weapon left, and it surrenders (or is ruled combat-ineffective) with most of
+the enemy already dead. Give the same boats two frigates and the fleet stays
+in the fight and wins. In round 1, before the round-3 captains, three bare
+corvettes won 9 of 10. So the `torpedo` and `swarm` archetypes, whose recipes
+buy no gun hull at these prices, now UNDERSTATE torpedoes, and the tournament
+gained an eighth archetype that cannot: `screen`, one torpedo cruiser behind a
+frigate screen.
+
+#### Final matrix: 0.080 (corvette 24, cruiser_torpedo 100), 150 pts
+
+**Tuning seeds 1-2** on the torpedo, swarm and screen rows (four battles a cell), seed 1 on the gun-v-gun cells (two):
+- **torpedo**: cruiser_torpedo, 2x corvette (148 pts)
+- **gunline**: 4x destroyer, 2x cruiser, 2x frigate (144 pts)
+- **combined**: 2x battleship, 2x destroyer, corvette (146 pts)
+- **flagship**: 2x dreadnought, 2x frigate, corvette (148 pts)
+- **battleline**: 3x battleship, destroyer (147 pts)
+- **escort**: 2x battleship, cruiser, 5x frigate (150 pts)
+- **swarm**: 6x corvette (144 pts)
+- **screen**: cruiser_torpedo, 7x frigate (149 pts)
+
+| row vs column | torp | gunl | comb | flag | bline | esc | swarm | screen | field | tonnage margin |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| **torpedo** | - | 0% A | 0% A | 0% A | 100% AI | 100% A | 0% A | 0% A | 29% | -0.13 |
+| **gunline** | 100% A | - | 100% T | 100% I | 100% T | 25% T | 100% A | 0% AI | 72% | +0.15 |
+| **combined** | 100% A | 0% T | - | 100% T | 75% T | 25% T | 100% A | 0% A | 60% | +0.03 |
+| **flagship** | 100% A | 0% I | 0% T | - | 0% AT | 0% IT | 100% A | 0% A | 40% | -0.16 |
+| **battleline** | 0% AI | 0% T | 25% T | 100% AT | - | 0% T | 100% A | 0% A | 32% | -0.32 |
+| **escort** | 0% A | 75% T | 75% T | 100% IT | 100% T | - | 100% A | 0% A | 55% | -0.14 |
+| **swarm** | 100% A | 0% A | 0% A | 0% A | 0% A | 0% A | - | 0% A | 14% | -0.43 |
+| **screen** | 100% A | 100% AI | 100% A | 100% A | 100% A | 100% A | 100% A | - | 100% | +0.88 |
+
+n per cell: [2, 4], ended {'annihilation': 69, 'combat-ineffective': 7, 'time limit': 16}, side check {'beta': 43, 'alpha': 46}, missing 20
+
+**Held-out seeds 3-4** (torpedo, swarm and screen rows):
+
+| row vs column | torp | gunl | comb | flag | bline | esc | swarm | screen | field | tonnage margin |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| **torpedo** | - | 0% A | 25% A | 0% A | 100% A | 100% A | 0% A | 0% A | 32% | -0.09 |
+| **gunline** | 100% A | - | - | - | - | - | 100% A | 0% AIT | 67% | +0.02 |
+| **combined** | 75% A | - | - | - | - | - | 100% A | 0% A | 58% | +0.05 |
+| **flagship** | 100% A | - | - | - | - | - | 100% A | 0% A | 67% | +0.09 |
+| **battleline** | 0% A | - | - | - | - | - | 100% A | 0% A | 33% | -0.57 |
+| **escort** | 0% A | - | - | - | - | - | 100% A | 0% A | 33% | -0.41 |
+| **swarm** | 100% A | 0% A | 0% A | 0% A | 0% A | 0% A | - | 0% A | 14% | -0.44 |
+| **screen** | 100% A | 100% AIT | 100% A | 100% A | 100% A | 100% A | 100% A | - | 100% | +0.87 |
+
+n per cell: [4], ended {'annihilation': 70, 'time limit': 1, 'combat-ineffective': 1}, side check {'beta': 35, 'alpha': 35}, missing 0
+
+**Other budgets** (seed 1, torpedo / swarm / screen rows, two battles a cell; field score of the row fleet):
+
+| budget | torpedo | swarm | screen |
+|---:|---|---|---|
+| 100 | cruiser_torpedo: 50% | 4 corvette: 43% | cruiser_torpedo: 50% |
+| 200 | cruiser_torpedo + 3 corvette + 4 frigate: 100% | 8 corvette: 0% | cruiser_torpedo + 4 destroyer + 3 frigate: 86% |
+
+#### Still lopsided, and why
+
+The final table is **not balanced**, and the dial is not what keeps it so:
+
+- **`screen` wins every battle**: one torpedo cruiser and seven frigates
+  (149 pts) went 28-0-0 on the tuning seeds and 28-0-0 on the held-out ones,
+  almost all by annihilation. At the round-1 price (119) the same idea still
+  fits in 150 pts with four frigates and still won 10 of 10. No dial under
+  the 100-point constraint, or above it, changes that.
+- **It grows with the budget.** At 200 pts the torpedo doctrine itself
+  (torpedo cruiser + 3 corvettes + 4 frigates) takes 100% of its cells and
+  `screen` 86%; at the default 100 pts, where a torpedo cruiser is the whole
+  fleet, it takes 50% and four corvettes 43% (seed 1, two battles a cell).
+  The default budget is the one place the table is close to level.
+- **`torpedo` and `swarm` look weak for the wrong reason.** Their recipes buy
+  no gun hull at these prices, so they surrender with empty tubes. Any
+  drafter - human or LLM - who adds two frigates gets the fleet in the table
+  above. Read their rows as "torpedo hulls alone", not as "torpedoes".
+- **Cells are still 0% or 100%**, the same in both side assignments and on
+  held-out seeds.
+- **Gun fleets among themselves** (seed 1, two battles a cell) are in the
+  matrix above; the verdicts are now scored at draft prices.
+
+Why the two mechanics that would matter were not changed in this round:
+
+1. **Point defence.** It is not short of blinds; a blind is just not a
+   save. Against the `screen` fleet's 12-round waves the gunline's 16 turrets
+   blinded 33 of 48 rounds and the escort's 18 blinded 39 of 48 (one battle
+   each) - and 19 and 20 of those blinded rounds hit anyway, 70-77% of all
+   the hits those fleets took. Against five corvettes + two frigates 20 of
+   40 were blinded and 15 of the 20 hit, nine within 2 s of the blind and six
+   5-7 s after it. A blinded round flies straight and the target does too:
+   running from a torpedo is a constant burn along the threat line, which
+   moves the ship along the round's path, not off it. Lowering the
+   seeker-kill energy threefold in a probe changed nothing (18 blinded, 25
+   hits against 26). Destroying a blinded round by continued dwell is out of
+   reach of the energy budget: a turret delivers 17.8 MJ to a round crossing
+   the 250 km envelope at 14.5 km/s (21.5 MJ at the 12 km/s floor), the
+   structural kill is 1 GJ, and even at three times the 50 MJ seeker kill a
+   whole fleet's wave energy (285-320 MJ) would buy two kills instead of six
+   blinds. So "PD must protect" needs ships that burn ACROSS the line of a
+   round the moment it goes ballistic (the doctrine's own measurement: 18/18
+   blinded rounds hit a non-evading battleship, 6/18 an evading one). That is
+   the automatic evasion (RUN / PRESENT) and the captains, which this lane
+   may not touch.
+2. **Range.** A 500 km shot arrives at 13.8-15.6 km/s after 59-71 s; the
+   26 GJ per hit is exactly 1/2 x 250 kg x v^2, the game's own rule. Burning
+   all the way, a round keeps gaining speed out to 832 km (v^2 / 2a at 12 g
+   and 14 km/s), and steering against a 1.5 g target for 70 s costs about
+   1 km/s of the 14. Range is a bonus to a torpedo, not a cost. Changing that
+   means changing the round (delta-v, acceleration: weapon data) or adding a
+   seeker-range rule; neither is a named-constant change.
+
+Until one of those lands, torpedo hulls are under-priced at any price that
+keeps them draftable, and the honest reading of the cost table is: the gun
+hulls are priced against each other, the torpedo hulls are capped.
 
 ## Cheap AI captains (src/llm/heuristic_captain.py)
 
