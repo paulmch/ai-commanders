@@ -679,3 +679,106 @@ def test_attitude_stays_orthonormal_and_continuous_through_an_overshoot():
         step = max(rate_before, ship.angular_velocity_rad_s) + 1e-6
         assert prev_f.angle_to(f) <= step and prev_u.angle_to(u) <= step + 1e-6
         prev_f, prev_u = f, u
+
+
+# ---------------------------------------------------------------------------
+# PADLOCK and a held-burn HEADING settle (reviewer finding 1). Both steer on
+# thrust vectoring outside 2 deg and on RCS (21-63x less authority) inside;
+# handing over at a thrust-vectoring rate overshot past 2 deg on the far
+# side, relit the drive and hunted: a frigate under PADLOCK crossed the
+# boundary ~355 times in 900 s and gained 266 m/s in 300 s (pass-5: 10-15).
+# Reviewer repro: shots/review_rotation/scr/padlock.py, padlock2.py.
+# ---------------------------------------------------------------------------
+
+ALL_HULLS = ["corvette", "frigate", "destroyer", "cruiser", "cruiser_torpedo",
+             "battlecruiser", "battleship", "dreadnought"]
+
+
+def _settle_run(hull, deg, kind, tmax=900, range_km=500.0):
+    import contextlib
+    import io
+    import math
+    from src.physics import Vector3D
+    from src.simulation import CombatSimulation, Maneuver, ManeuverType, create_ship_from_fleet_data
+    with open("data/fleet_ships.json") as f:
+        data = json.load(f)
+    sim = CombatSimulation(time_step=1.0, decision_interval=1e9, seed=1)
+    ship = create_ship_from_fleet_data("s", hull, "alpha", data, Vector3D(0, 0, 0),
+                                       Vector3D(0, 0, 0), Vector3D(1, 0, 0))
+    sim.add_ship(ship)
+    d = Vector3D(math.cos(math.radians(deg)), math.sin(math.radians(deg)), 0)
+    sim.add_ship(create_ship_from_fleet_data("t", "cruiser", "beta", data, d * (range_km * 1e3),
+                                             Vector3D(0, 0, 0), Vector3D(-1, 0, 0)))
+    if kind == "PADLOCK":
+        ship.current_maneuver = Maneuver(ManeuverType.PADLOCK, 0, duration=1e9, target_id="t")
+    else:   # HEADING with a held (formation-synchronised) burn
+        m = Maneuver(ManeuverType.HEADING, 0, duration=1e9, throttle=1.0,
+                     heading_direction={"x": d.x, "y": d.y, "z": d.z})
+        m.burn_start_time = 1e8
+        ship.current_maneuver = m
+    hist = []
+    with contextlib.redirect_stdout(io.StringIO()):
+        for _ in range(tmax):
+            sim.step()
+            aim = ((sim.get_ship("t").position - ship.position).normalized()
+                   if kind == "PADLOCK" else d)
+            hist.append((math.degrees(ship.forward.angle_to(aim)), ship.applied_throttle,
+                         ship.velocity.magnitude))
+    first = next(i for i, x in enumerate(hist) if x[0] < 2.0)
+    crossings = sum(1 for a, b in zip(hist, hist[1:]) if (a[0] > 2.0) != (b[0] > 2.0))
+    lit_after = sum(1 for x in hist[first:] if x[1] > 0)
+    return dict(first=first, crossings=crossings, lit_after=lit_after,
+                max_after=max(x[0] for x in hist[first:]), speed_300=hist[299][2])
+
+
+@pytest.mark.parametrize("hull", ALL_HULLS)
+@pytest.mark.parametrize("deg", [30, 90, 170])
+def test_padlock_settles_on_every_hull(hull, deg):
+    r = _settle_run(hull, deg, "PADLOCK")
+    assert r["crossings"] == 1, r            # in once, never back out
+    assert r["max_after"] < 2.0, r
+    assert r["lit_after"] <= 8, r            # a few handover ticks, no hunting
+    assert r["speed_300"] < 25.0, r          # the token burn only while turning
+
+
+@pytest.mark.parametrize("hull", ALL_HULLS)
+@pytest.mark.parametrize("deg", [90, 170])
+def test_held_burn_heading_settles_on_every_hull(hull, deg):
+    r = _settle_run(hull, deg, "HEADHOLD")
+    assert r["crossings"] == 1, r
+    assert r["max_after"] < 2.0, r
+    assert r["lit_after"] <= 8, r
+    assert r["speed_300"] < 25.0, r
+
+
+def test_padlock_drift_in_300_s_is_the_turning_burn_only():
+    """padlock2.py: a hull at rest under PADLOCK on a target 300 km off
+    gains only what the 5% turning burn gives (was 42-267 m/s)."""
+    for hull in ("frigate", "cruiser", "battleship", "dreadnought"):
+        for deg in (30, 90):
+            r = _settle_run(hull, deg, "PADLOCK", tmax=300, range_km=300.0)
+            assert r["speed_300"] < 25.0, (hull, deg, r)
+            assert r["lit_after"] <= 8, (hull, deg, r)
+
+
+def test_an_uncommanded_tick_brakes_the_spin_on_rcs_instead_of_zeroing_it():
+    """Reviewer finding 2: a tick without an attitude command used to zero
+    a live spin for free. Now RCS brakes it at its own authority and the
+    nose keeps swinging meanwhile."""
+    import math
+    from src.physics import Vector3D
+    sim, ship = _battleship_sim()
+    for _ in range(10):
+        sim._rotate_ship_toward(ship, Vector3D(0, 1, 0), 1.0, engines_on=True)
+    w0 = ship.angular_velocity_rad_s
+    f0 = ship.forward
+    a_rcs, _ = sim._get_rotation_params(ship, False)
+    ship.current_maneuver = None            # nothing commands the attitude
+    sim._update_ship(ship, 1.0)
+    assert ship.angular_velocity_rad_s == pytest.approx(w0 - a_rcs, rel=1e-9)
+    assert f0.angle_to(ship.forward) == pytest.approx(w0 - a_rcs, rel=1e-6)
+    ticks = 1
+    while ship.angular_velocity_rad_s > 0.0 and ticks < 2000:
+        sim._update_ship(ship, 1.0)
+        ticks += 1
+    assert ticks == math.ceil(w0 / a_rcs - 1e-9)     # stops at RCS authority, not at once

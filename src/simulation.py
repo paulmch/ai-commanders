@@ -200,6 +200,18 @@ RUN_MIN_BURN_S = 10.0
 # WOBBLE's +-5 deg aim jitter near a flip.
 SPIN_AXIS_KEEP_DEG = 10.0
 
+# PADLOCK and a HEADING turning on a token throttle (turn first, or a held
+# formation burn) steer on thrust vectoring until the nose is within this
+# angle of the target and then idle the drive and finish on RCS, which has
+# 21-63x less authority. The turn is planned so the ship arrives here at a
+# rate RCS can stop in the remaining angle (CombatSimulation
+# ._rotate_ship_toward handover_rad), and thrust vectoring stays engaged
+# while the carried rate is more than RCS can stop (_attitude_needs_tv):
+# handing over at a thrust-vectoring rate overshot past this angle on the
+# far side, relit the drive and hunted (a frigate under PADLOCK crossed it
+# ~355 times in 900 s and gained 266 m/s in 300 s).
+ATTITUDE_TV_HANDOVER_DEG = 2.0
+
 # Aim this far INSIDE the chosen armor section's arc rather than at its
 # edge. Terminal jitter (bearing drift, residual angular rate) of a few
 # degrees must not flip the struck section from nose to lateral.
@@ -2476,7 +2488,8 @@ class CombatSimulation:
                     # flies it this tick.
                     if angle > cone or hold > 1e-9:
                         flown = (throttle * MANEUVER_TURN_THROTTLE
-                                 if angle > math.radians(2.0) else 0.0)
+                                 if self._attitude_needs_tv(target, angle, self.time_step)
+                                 else 0.0)
                     else:
                         flown = throttle
                     drive = (ks.forward * (ks.thrust_n * flown / ks.mass_kg)
@@ -3136,7 +3149,7 @@ class CombatSimulation:
                             # Check if significant rotation is needed
                             angle_to_heading = math.acos(max(-1.0, min(1.0,
                                 ship.kinematic_state.forward.dot(direction))))
-                            needs_rotation = angle_to_heading > math.radians(2.0)
+                            needs_rotation = self._attitude_needs_tv(ship, angle_to_heading, dt)
                             burn_held = (maneuver.burn_start_time is not None
                                          and self.current_time < maneuver.burn_start_time - 1e-9)
                             if throttle <= 0:
@@ -3151,8 +3164,9 @@ class CombatSimulation:
                                 # vectoring available), burn once nose-on.
                                 # The token scales with the ordered throttle so
                                 # formation-matched hulls drift equally.
-                                self._rotate_ship_toward(ship, direction, dt,
-                                    engines_on=needs_rotation)
+                                self._rotate_ship_toward(
+                                    ship, direction, dt, engines_on=needs_rotation,
+                                    handover_rad=math.radians(ATTITUDE_TV_HANDOVER_DEG))
                                 throttle = (throttle * MANEUVER_TURN_THROTTLE
                                             if needs_rotation else 0.0)
                             else:
@@ -3168,9 +3182,13 @@ class CombatSimulation:
                         # Check if we need to rotate
                         angle_to_target = math.acos(max(-1.0, min(1.0,
                             ship.kinematic_state.forward.dot(target_dir))))
-                        # Use thrust vectoring if significant rotation needed, else RCS
-                        needs_rotation = angle_to_target > math.radians(2.0)
-                        self._rotate_ship_toward(ship, target_dir, dt, engines_on=needs_rotation)
+                        # Thrust vectoring while turning (or still carrying a
+                        # rate RCS cannot stop), then RCS: see
+                        # ATTITUDE_TV_HANDOVER_DEG.
+                        needs_rotation = self._attitude_needs_tv(ship, angle_to_target, dt)
+                        self._rotate_ship_toward(
+                            ship, target_dir, dt, engines_on=needs_rotation,
+                            handover_rad=math.radians(ATTITUDE_TV_HANDOVER_DEG))
                         # Use small throttle for rotation (thrust vectoring), zero when aligned
                         throttle = 0.05 if needs_rotation else 0.0
                     else:
@@ -3180,15 +3198,12 @@ class CombatSimulation:
                 # PADLOCK for tracking target while coasting,
                 # EVASIVE for automatic threat-aware evasion
 
-        # No attitude command this tick: the attitude model holds the nose
-        # where it is, so the stored rate must go with it. Keeping it let the
-        # NEXT turn start at a rate the ship was no longer turning at - e.g. a
-        # thrust-vectoring spin-up (~15 deg/s) reused by an RCS-only ROTATE
-        # (0.12 deg/s^2), finishing 90 deg ~7x faster than RCS allows.
+        # No attitude command this tick: the ship's RCS brakes the spin it
+        # carries, at RCS authority, and the nose keeps swinging while it
+        # does. (It used to zero a live spin for free - a thrust-vectoring
+        # rate gone in one tick, up to ~200 ticks' worth of RCS authority.)
         if not ship.attitude_commanded:
-            ship.angular_velocity_rad_s = 0.0
-            ship.angular_axis = None
-            ship.rotation_state = None
+            self._brake_spin(ship, dt)
 
         # Drive interlock: never cook a friendly astern (src/drive_plume.py).
         if throttle > 0.0 or getattr(ship, 'drive_interlock', None) is not None:
@@ -3318,7 +3333,8 @@ class CombatSimulation:
         ship: ShipCombatState,
         target_dir: Vector3D,
         dt: float,
-        engines_on: bool = True
+        engines_on: bool = True,
+        handover_rad: Optional[float] = None,
     ) -> None:
         """
         Rotate ship to face a direction using bang-bang control.
@@ -3333,6 +3349,10 @@ class CombatSimulation:
             target_dir: Target direction to face
             dt: Time step in seconds
             engines_on: Whether main engines are firing (enables thrust vectoring)
+            handover_rad: With engines_on, the caller will idle the drive and
+                finish on RCS inside this angle of the target: brake on thrust
+                vectoring so the ship arrives there at a rate RCS can stop in
+                the rest of the turn (a two-stage stopping profile).
         """
         ship.attitude_commanded = True
         current_forward = ship.forward
@@ -3432,6 +3452,20 @@ class CombatSimulation:
             if angular_accel > 0.0:
                 w_cmd = angular_accel * (-0.5 * dt + math.sqrt(
                     0.25 * dt * dt + 2.0 * angle_to_target / angular_accel))
+                if (handover_rad is not None and engines_on
+                        and angle_to_target > handover_rad):
+                    # Two-stage stop: thrust vectoring down to the rate RCS
+                    # can stop from the handover angle, then RCS. Flying w
+                    # for a tick and braking to w_h covers about
+                    # (w^2 - w_h^2)/(2a) + w*dt/2 = angle - handover.
+                    a_rcs, _ = self._get_rotation_params(ship, False)
+                    if a_rcs > 0.0:
+                        w_h = a_rcs * (-0.5 * dt + math.sqrt(
+                            0.25 * dt * dt + 2.0 * handover_rad / a_rcs))
+                        w_cmd = angular_accel * (-0.5 * dt + math.sqrt(
+                            0.25 * dt * dt
+                            + 2.0 * (angle_to_target - handover_rad) / angular_accel
+                            + (w_h / angular_accel) ** 2))
             else:
                 w_cmd = current_omega
             w_cmd = min(w_cmd, max_angular_vel)
@@ -3472,6 +3506,48 @@ class CombatSimulation:
         ship.angular_velocity_rad_s = spin.magnitude
         ship.angular_axis = (spin * (1.0 / ship.angular_velocity_rad_s)
                              if ship.angular_velocity_rad_s > 1e-12 else None)
+
+    def _attitude_needs_tv(self, ship: ShipCombatState, angle_rad: float, dt: float) -> bool:
+        """
+        Whether a PADLOCK / token-throttle HEADING turn keeps thrust
+        vectoring (a token burn) engaged this tick: outside
+        ATTITUDE_TV_HANDOVER_DEG, or inside it while the carried rate is more
+        than RCS can stop in the remaining angle.
+        """
+        if angle_rad > math.radians(ATTITUDE_TV_HANDOVER_DEG):
+            return True
+        w = ship.angular_velocity_rad_s or 0.0
+        if w <= 0.0:
+            return False
+        a_rcs, _ = self._get_rotation_params(ship, False)
+        if a_rcs <= 0.0:
+            return True
+        w_stop = a_rcs * (-0.5 * dt + math.sqrt(0.25 * dt * dt + 2.0 * angle_rad / a_rcs))
+        return w > w_stop + a_rcs * dt
+
+    def _brake_spin(self, ship: ShipCombatState, dt: float) -> None:
+        """
+        A tick with no attitude command: RCS brakes the carried spin at its
+        own authority and the nose keeps swinging meanwhile (semi-implicit,
+        as _rotate_ship_toward travels).
+        """
+        w = ship.angular_velocity_rad_s or 0.0
+        axis = getattr(ship, 'angular_axis', None)
+        if w <= 0.0 or axis is None:
+            self._stop_rotation(ship)
+            return
+        a_rcs, _ = self._get_rotation_params(ship, False)
+        w_new = max(0.0, w - a_rcs * dt)
+        travel = w_new * dt
+        if travel > 0.0:
+            ks = ship.kinematic_state
+            ks.forward = ks.forward.rotate_around_axis(axis, travel).normalized()
+            ks.up = ks.up.rotate_around_axis(axis, travel).normalized()
+        if w_new <= 0.0:
+            self._stop_rotation(ship)
+        else:
+            ship.angular_velocity_rad_s = w_new
+            ship.rotation_state = None
 
     @staticmethod
     def _stop_rotation(ship: ShipCombatState) -> None:

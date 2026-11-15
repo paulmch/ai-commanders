@@ -940,18 +940,30 @@ class TestRangeControlDoctrine:
             assert "at 4.6 km/s closure a 3g corvette needs 156 s / 359 km (+18 s" in text
             assert "1g battleship 469 s / 1078 km (+55 s)" in text
 
-    def test_padlock_idles_the_drive_at_5_percent_only_while_turning(self, fleet):
+    @pytest.mark.parametrize("hull", ["corvette", "frigate", "destroyer", "cruiser",
+                                      "cruiser_torpedo", "battlecruiser", "battleship",
+                                      "dreadnought"])
+    def test_padlock_idles_the_drive_at_5_percent_only_while_turning(self, fleet, hull):
+        """Every hull: the 5% token burn while the nose swings round, then
+        the drive idles and STAYS idle (no hunting back across the
+        thrust-vectoring handover, ATTITUDE_TV_HANDOVER_DEG)."""
         assert "the drive idles at 5% only while turning" in " ".join(CAPTAIN_DOCTRINE.split())
         sim = CombatSimulation(seed=1, time_step=1.0)
-        me = _build(sim, "me", "corvette", "alpha", fleet, 0, 0, 1)
+        me = _build(sim, "me", hull, "alpha", fleet, 0, 0, 1)
         _build(sim, "foe", "corvette", "beta", fleet, 0, 0, -1)
         sim.ships["foe"].kinematic_state.position = Vector3D(0, 300_000, 0)
         me.current_maneuver = Maneuver(ManeuverType.PADLOCK, start_time=0.0, target_id="foe")
         sim._update_ship(me, 1.0)
         assert me.applied_throttle == pytest.approx(0.05)
-        for _ in range(40):
+        turn = 2 * round(sim._estimate_turn_time(me, math.pi / 2, engines_on=True)) + 10
+        for _ in range(turn):
             sim._update_ship(me, 1.0)
         assert me.applied_throttle == 0.0
+        lit = 0
+        for _ in range(300):
+            sim._update_ship(me, 1.0)
+            lit += me.applied_throttle > 0.0
+        assert lit == 0, f"{hull}: drive relit {lit} times while holding the padlock"
 
 
 # =============================================================================
