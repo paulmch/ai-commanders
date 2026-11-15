@@ -105,6 +105,9 @@ BOAT_BEHIND_LINE_KM = 20.0
 # would hang back out of torpedo reach (round 6: dreadnought roster 12/0/0
 # -> 6/6/0 with no cap; 400 km cost the battleship roster, 450 km kept both).
 BOAT_STATION_MAX_KM = 450.0
+# With no enemy gun ship left a boat closes to this range (standoff
+# INTERCEPT) to launch.
+BOAT_NO_GUNS_RANGE_KM = 150.0
 # A boat launches only at targets within this range (a longer flight gives
 # the target's PD and evasion more time).
 TORPEDO_LAUNCH_RANGE_KM = 600.0
@@ -462,14 +465,19 @@ def should_surrender(simulation: Any, ship: Any, enemies: List[Any]) -> bool:
       no armed ship AND no round of ours still in flight - round 4 surrendered
       six corvettes with 36 of their rounds still on the way), and
     - an enemy gun ship that can catch it (drive at least ours) is inside
-      SURRENDER_CATCH_RANGE_KM and closing. Otherwise it withdraws out of gun
-      reach (the battle ends on its own once a side cannot deal damage).
+      SURRENDER_CATCH_RANGE_KM and closing, or the enemy cannot deal damage
+      either (two dry fleets would otherwise drift to the time limit).
+      Otherwise it withdraws out of gun reach.
     """
     from ..battle_damage import side_can_deal_damage
     side = [s for s in getattr(simulation, "ships", {}).values()
             if s.faction == ship.faction and _alive(s)]
     if side_can_deal_damage(simulation, side):
         return False
+    foes = [s for s in getattr(simulation, "ships", {}).values()
+            if s.faction != ship.faction and _alive(s)]
+    if not side_can_deal_damage(simulation, foes):
+        return True     # nobody on either side can hurt anyone: end the stall
     mine = max_accel_ms2(ship)
     for e in enemies:
         if not has_guns(e) or _km(ship, e) > SURRENDER_CATCH_RANGE_KM:

@@ -779,3 +779,24 @@ def test_capital_hulls_padlock_instead_of_holding_an_aspect():
     assert T.gun_aspect_deg("battleship") > 0.0          # the data has a gain...
     m = _maneuver(_captain("battleship").decide("me", sim))
     assert m.maneuver_type == ManeuverType.PADLOCK      # ...a slow hull cannot hold it
+
+
+def test_boats_with_no_enemy_guns_left_close_to_launch():
+    sim = CombatSimulation(seed=14, time_step=1.0)
+    _ship(sim, "me", "corvette", "alpha", (0, 0, 0))
+    _ship(sim, "boat", "corvette", "beta", (400, 0, 0), fwd=(-1, 0, 0))
+    m = _maneuver(_captain("corvette").decide("me", sim))
+    assert m.maneuver_type == ManeuverType.INTERCEPT and m.target_id == "boat"
+    assert m.standoff_m == pytest.approx(T.BOAT_NO_GUNS_RANGE_KM * 1000.0)
+
+
+def test_two_dry_fleets_do_not_drift_to_the_time_limit():
+    sim = CombatSimulation(seed=15, time_step=1.0)
+    me = _ship(sim, "me", "corvette", "alpha", (0, 0, 0))
+    foe = _ship(sim, "foe", "corvette", "beta", (400, 0, 0), fwd=(-1, 0, 0))
+    for s in (me, foe):
+        for tube in s.ready_torpedo_launchers:
+            tube.current_magazine = 0
+    captain = _captain("corvette")
+    captain.decide("me", sim)
+    assert captain.has_surrendered

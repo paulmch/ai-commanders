@@ -439,6 +439,14 @@ class HeuristicCaptain(LLMCaptain):
                 return args
             return order("HOLD_RANGE", nearest_gun, 1.0,
                          range_km=round(max(tactics.RETREAT_RANGE_KM, gun_km), 1))
+        if my_role == "torpedo" and nearest_gun is None:
+            # No enemy gun left: nothing to stand off from. Close to a short
+            # launch range so rounds can reach - two boat fleets holding
+            # 300 km from each other never launched again (the launch check
+            # refuses rounds at an opening target) and sat to the time limit
+            # with loaded tubes.
+            prey = min(enemies, key=lambda e: (km(e), e.ship_id))
+            return order("INTERCEPT", prey, 1.0, standoff_km=tactics.BOAT_NO_GUNS_RANGE_KM)
         if my_role != "gun":
             anchor = nearest_gun or min(enemies, key=lambda e: (km(e), e.ship_id))
             return order("HOLD_RANGE", anchor, 1.0,
