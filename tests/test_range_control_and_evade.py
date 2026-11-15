@@ -436,13 +436,32 @@ class TestSurfaces:
 
 class TestHeuristicCaptainRangeControl:
 
-    def _captain(self, stype):
+    # The pass-4 ("legacy") doctrine's range control; the tactical doctrine's
+    # is pinned in tests/test_heuristic_tactics.py.
+    def _captain(self, stype, doctrine="legacy"):
         from src.llm.captain import LLMCaptainConfig
         from src.llm.heuristic_captain import HEURISTIC_MODEL, HeuristicCaptain
         from src.llm.prompts import CaptainPersonality
         return HeuristicCaptain(LLMCaptainConfig(
             name="H", ship_name="me", model=HEURISTIC_MODEL,
-            personality=CaptainPersonality.BALANCED, ship_type=stype, fleet_data=FLEET))
+            personality=CaptainPersonality.BALANCED, ship_type=stype, fleet_data=FLEET),
+            doctrine=doctrine)
+
+    def test_tactical_keep_range_order_holds_the_current_range(self):
+        sim, me, foe = _duel("destroyer", "cruiser", 400.0, 1.0)
+        captain = self._captain("destroyer", doctrine="tactical")
+        captain.receive_admiral_orders([self._order("Keep range at 400 km, do not chase.")])
+        moves = [c for c in captain.decide("me", sim) if isinstance(c, Maneuver)]
+        assert moves and moves[0].maneuver_type == ManeuverType.HOLD_RANGE
+        assert moves[0].target_id == "foe" and moves[0].hold_range_m is None   # latched by the engine
+
+    def test_tactical_keeps_an_applied_admiral_heading(self):
+        sim, me, foe = _duel("destroyer", "cruiser", 400.0, 1.0)
+        captain = self._captain("destroyer", doctrine="tactical")
+        captain.receive_admiral_orders([self._order("Formation burn.", {"x": -1, "y": 0, "z": 0})])
+        captain.decide("me", sim)
+        names = [tc.name for tc in captain.last_tool_calls]
+        assert "set_maneuver" not in names and "set_heading" not in names
 
     def _order(self, text, heading=None):
         from src.llm.admiral import AdmiralOrder

@@ -11,6 +11,21 @@ It emits decisions as the same ToolCalls a real captain would and executes
 them through LLMCaptain._execute_tool, so the command path, validation and
 recording are identical to a live LLM battle (the ScriptedCaptain pattern
 from scripts/generate_test_battle.py, but reactive instead of pre-planned).
+
+Two doctrines:
+
+- "tactical" (default): flies inside a shared fleet plan
+  (src/llm/heuristic_tactics.py) - reach-aware focus fire, nose-first gun
+  ships (closure cap, coast through a controlled pass facing the nearest
+  enemy gun, re-close nose first; they still pass through each other, at
+  ~3-4 km/s instead of ~6), torpedo boats holding a standoff and firing
+  one-round-per-tube salvos sized to the target's point defence, the evade
+  overlay against guided torpedoes, crippled ships opening range, a
+  formation-matched approach, and the plan announced on the FLEET NET.
+- "legacy": the pass-4 captain (nearest target, INTERCEPT/BRAKE/PADLOCK,
+  two-round torpedo probes). Kept bit-for-bit reachable: the fire-control
+  calibration fixture (tests/fixtures/fire_control_shots.json) holds rounds
+  from 32 seeded battles flown with it (run_draft_battle.py --doctrine legacy).
 """
 
 from __future__ import annotations
@@ -19,11 +34,18 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .captain import LLMCaptain, LLMCaptainConfig
 from .client import ToolCall
+from .communication import MAX_FLEET_SIGNALS_PER_DECISION
 from .maneuver_orders import admiral_order_moves_ship
+from . import heuristic_tactics as tactics
 
 # Sentinel model id that makes the battle runner build a HeuristicCaptain
 # instead of an LLM-backed captain.
 HEURISTIC_MODEL = "heuristic"
+
+DOCTRINE_TACTICAL = "tactical"
+DOCTRINE_LEGACY = "legacy"
+DOCTRINES = (DOCTRINE_TACTICAL, DOCTRINE_LEGACY)
+DEFAULT_DOCTRINE = DOCTRINE_TACTICAL
 
 # Ranges in km
 GUN_APPROACH_RANGE = 400.0
@@ -50,9 +72,17 @@ SAFE_ENEMY_RANGE_KM = 800.0   # beyond every gun's reach: panels are safe out
 class HeuristicCaptain(LLMCaptain):
     """Rule-based captain: admiral's orders first, sound doctrine second."""
 
-    def __init__(self, config: LLMCaptainConfig, client: Any = None):
+    def __init__(self, config: LLMCaptainConfig, client: Any = None,
+                 doctrine: Optional[str] = None):
         super().__init__(config, client=None)  # never calls an LLM
         self._last_target_id: Optional[str] = None
+        doctrine = doctrine or DEFAULT_DOCTRINE
+        if doctrine not in DOCTRINES:
+            raise ValueError(f"unknown heuristic doctrine {doctrine!r} (one of {DOCTRINES})")
+        self.doctrine = doctrine
+        self._decision_interval = 30.0
+        self._broke_off = False
+        self._face_id: Optional[str] = None
 
     def select_personality(self, distance_km: float, verbose: bool = False) -> Dict[str, Any]:
         return {}
@@ -80,8 +110,10 @@ class HeuristicCaptain(LLMCaptain):
         calls: List[Tuple[str, Dict[str, Any]]] = []
         if not enemies:
             calls.append(("set_maneuver", {"maneuver_type": "MAINTAIN"}))
-        else:
+        elif self.doctrine == DOCTRINE_LEGACY:
             calls = self._plan(ship, ship_id, enemies, simulation, checkpoint)
+        else:
+            calls = self._plan_tactical(ship, ship_id, enemies, simulation, checkpoint)
 
         tool_calls = [
             ToolCall(id=f"heuristic_{checkpoint}_{i}", name=name, arguments=args)
@@ -194,6 +226,187 @@ class HeuristicCaptain(LLMCaptain):
             calls.append(("set_radiators", {"extend": want}))
 
         return calls
+
+    # ------------------------------------------------------------------
+    # Tactical doctrine (src/llm/heuristic_tactics.py holds the fleet plan)
+    # ------------------------------------------------------------------
+
+    def _plan_tactical(self, ship, ship_id, enemies, simulation, checkpoint):
+        calls: List[Tuple[str, Dict[str, Any]]] = []
+        order = self.admiral_orders[0] if self.admiral_orders else None
+        order_text = (order.order_text if order else "").lower()
+        plan = tactics.fleet_plan(simulation, ship.faction, self.config.fleet_data)
+        my_role = tactics.role(ship)
+        self._decision_interval = float(getattr(simulation, "decision_interval", 30.0) or 30.0)
+
+        target = self._tactical_target(ship, enemies, order, plan, my_role)
+        calls.append(("set_primary_target", {"target_id": target.ship_id}))
+        if self.weapon_groups and target.ship_id != self._last_target_id:
+            calls.append(("set_weapons_order", {
+                "spinal_mode": "FIRE_WHEN_OPTIMAL",
+                "turret_mode": "FIRE_WHEN_OPTIMAL",
+                "spinal_min_probability": 0.25,
+                "turret_min_probability": 0.2,
+            }))
+        self._last_target_id = target.ship_id
+
+        # Torpedoes: the admiral's salvo order wins; otherwise the fleet's
+        # massed salvo (every boat launches the same checkpoint) or nothing.
+        if getattr(ship, "torpedo_launcher", None) is not None:
+            max_salvo = self._max_torpedo_salvo(ship_id, simulation)
+            salvo, torp_target_id = 0, None
+            if order and order.torpedo_salvo:
+                salvo = min(int(order.torpedo_salvo), max_salvo)
+                match = self._match_enemy(order.torpedo_target, enemies) if order.torpedo_target else None
+                torp_target_id = (match or target).ship_id
+            elif ship_id in plan.launches:
+                torp_target_id, rounds = plan.launches[ship_id]
+                salvo = min(rounds, max_salvo)
+            if salvo > 0:
+                calls.append(("launch_torpedo", {"count": salvo, "target_id": torp_target_id}))
+
+        calls.extend(self._fleet_net_signals(ship, ship_id, enemies, plan))
+
+        threat = self._torpedo_threat(ship, ship_id, simulation)
+        heat = getattr(ship, "heat_percent", 0.0) or 0.0
+        admiral_heading = bool(order and admiral_order_moves_ship(order))
+        keyword = self._admiral_maneuver(order_text)
+        overlay = admiral_heading and bool((getattr(order, "maneuver", None) or {}).get("evade"))
+        if admiral_heading and threat and not overlay:
+            calls.append(("set_maneuver", {"maneuver_type": "EVADE", "throttle": 1.0}))
+        elif admiral_heading:
+            pass  # the runner already flies it (and it holds the formation)
+        elif keyword is not None and keyword[0] == "HOLD_RANGE":
+            # "Keep range": hold the range we are at (the engine latches it).
+            args = {"maneuver_type": "HOLD_RANGE", "target_id": target.ship_id,
+                    "throttle": self._heat_throttle_cap(ship, heat, 1.0, threat)}
+            if threat:
+                args["evade"] = "full"
+            calls.append(("set_maneuver", args))
+        elif keyword is not None:
+            maneuver = ("EVADE", 1.0) if threat else keyword
+            calls.append(("set_maneuver", {
+                "maneuver_type": maneuver[0],
+                "throttle": self._heat_throttle_cap(ship, heat, maneuver[1], threat)}))
+        elif (hulk := tactics.blast_threat(simulation, ship)) is not None:
+            # A dying hulk's reactor is about to go: get out of the blast.
+            away = (ship.position - hulk.position).normalized()
+            calls.append(("set_heading", {
+                "direction": {"x": round(away.x, 4), "y": round(away.y, 4), "z": round(away.z, 4)},
+                "throttle": self._heat_throttle_cap(ship, heat, 1.0, threat)}))
+        else:
+            args = self._tactical_maneuver(ship, ship_id, target, enemies, plan, my_role, threat)
+            args["throttle"] = self._heat_throttle_cap(ship, heat, args["throttle"], threat)
+            calls.append(("set_maneuver", args))
+
+        want = self._radiator_wish(ship, ship_id, heat, threat, enemies, simulation)
+        if want is not None and want != bool(getattr(ship, "radiators_extended", False)):
+            calls.append(("set_radiators", {"extend": want}))
+        return calls
+
+    def _fleet_net_signals(self, ship, ship_id, enemies, plan) -> List[Tuple[str, Dict[str, Any]]]:
+        """The plan, said out loud on the FLEET NET (recorded comms_message
+        events the viewer's command net shows): the flag ship claims each
+        new focus target and calls every massed salvo; a crippled ship
+        announces that it is breaking off."""
+        names = {e.ship_id: getattr(e, "name", e.ship_id) for e in enemies}
+        out: List[Tuple[str, Dict[str, Any]]] = []
+        disarmed = tactics.role(ship) == "unarmed"
+        crippled = tactics.hull_pct(ship) < tactics.CRIPPLED_HULL_PCT or disarmed
+        if crippled and not self._broke_off:
+            why = ("weapons out" if disarmed else f"hull at {tactics.hull_pct(ship):.0f}%")
+            out.append(("fleet_signal", {
+                "kind": "BREAKING_OFF",
+                "text": f"{why[0].upper() + why[1:]} - breaking off, opening range."}))
+        self._broke_off = crippled
+        if self.has_admiral:
+            return out      # the admiral, not the flag ship, sets the fleet's targets
+        if ship_id == plan.flag_id and plan.focus_changed and plan.focus_id in names:
+            out.append(("fleet_signal", {
+                "kind": "TARGET_CLAIM", "target": names[plan.focus_id],
+                "text": f"Focus fire: all guns on {names[plan.focus_id]}."}))
+        if ship_id == plan.flag_id and plan.salvos:
+            first = plan.salvos[0]
+            if first.target_id in names:
+                rounds = sum(first.rounds.values())
+                note = (f"{first.need} saturate his point defence" if first.saturating else
+                        f"short of the {first.need} that would saturate his point defence")
+                out.append(("fleet_signal", {
+                    "kind": "TOT_SYNC", "target": names[first.target_id],
+                    "text": (f"Torpedo salvo: {rounds} rounds from {len(first.rounds)} "
+                             f"boat(s) on {names[first.target_id]}, launching together "
+                             f"({note}).")}))
+        return out[:MAX_FLEET_SIGNALS_PER_DECISION]
+
+    def _tactical_target(self, ship, enemies, order, plan, my_role) -> Any:
+        """Admiral's target > the boats' salvo target (torpedo boats) > the
+        fleet focus, weighed from this gun ship's position (gun_target)."""
+        if order:
+            for wanted in (order.torpedo_target, order.suggested_target):
+                match = self._match_enemy(wanted, enemies)
+                if match is not None:
+                    return match
+        nearest = min(enemies, key=lambda e: (ship.position.distance_to(e.position), e.ship_id))
+        if my_role == "torpedo" and plan.torpedo_target_id:
+            pick = next((e for e in enemies if e.ship_id == plan.torpedo_target_id), None)
+            if pick is not None:
+                return pick
+        focus = next((e for e in enemies if e.ship_id == plan.focus_id), None)
+        if my_role != "gun":
+            return focus or nearest
+        return tactics.gun_target(ship, enemies, plan.focus_id) or nearest
+
+    def _tactical_maneuver(self, ship, ship_id, target, enemies, plan, my_role,
+                           threat: bool) -> Dict[str, Any]:
+        """set_maneuver arguments for range discipline by hull role."""
+        def km(e) -> float:
+            return ship.position.distance_to(e.position) / 1000.0
+
+        gunned = [e for e in enemies if tactics.has_guns(e)]
+        nearest_gun = min(gunned, key=lambda e: (km(e), e.ship_id)) if gunned else None
+        gun_km = km(nearest_gun) if nearest_gun is not None else float("inf")
+        # Run from (or present to) guided torpedoes. No dodge against guns:
+        # the jink swings the nose off and shows the thin lateral armour.
+        evade = "full" if threat else None
+
+        def order(kind: str, ref, throttle: float, **extra) -> Dict[str, Any]:
+            args: Dict[str, Any] = {"maneuver_type": kind, "target_id": ref.ship_id,
+                                    "throttle": throttle, **extra}
+            if evade:
+                args["evade"] = evade
+            return args
+
+        if (tactics.hull_pct(ship) < tactics.CRIPPLED_HULL_PCT and nearest_gun is not None
+                and gun_km < tactics.RETREAT_RANGE_KM):
+            # Crippled: open range from the nearest gun, guns still free.
+            evade = "full"
+            return order("HOLD_RANGE", nearest_gun, 1.0, range_km=tactics.RETREAT_RANGE_KM)
+        if my_role == "unarmed" and nearest_gun is not None:
+            # Nothing left to shoot with: withdraw out of his guns.
+            evade = "full"
+            return order("HOLD_RANGE", nearest_gun, 1.0, range_km=tactics.RETREAT_RANGE_KM)
+        if my_role != "gun":
+            anchor = nearest_gun or min(enemies, key=lambda e: (km(e), e.ship_id))
+            return order("HOLD_RANGE", anchor, 1.0, range_km=tactics.TORPEDO_STANDOFF_KM)
+        r_km = tactics.engage_range_km(ship)
+        dist_km, closing_kps = self._range_and_closing(ship, target)
+        throttle = plan.formation_throttle.get(ship_id, 1.0) if dist_km > tactics.GUNS_HOT_KM else 1.0
+        kind, extra = tactics.gun_maneuver(dist_km, closing_kps, r_km,
+                                           tactics.max_accel_ms2(ship) * throttle,
+                                           self._decision_interval)
+        if kind == "PADLOCK" and nearest_gun is not None and gun_km < dist_km:
+            # Face the threat, shoot the focus: the nose (thickest armour,
+            # spinal) tracks the nearest enemy gun while the turrets stay on
+            # the fleet's target. Sticky (FACE_SWITCH_FACTOR): a slow-turning
+            # hull swinging between threats shows its side to all of them.
+            face = next((e for e in gunned if e.ship_id == self._face_id), None)
+            if face is None or km(face) > tactics.FACE_SWITCH_FACTOR * gun_km:
+                face = nearest_gun
+            self._face_id = face.ship_id
+            if km(face) < dist_km:
+                return order(kind, face, 1.0)
+        self._face_id = None
+        return order(kind, target, throttle if kind == "INTERCEPT" else 1.0, **extra)
 
     def _radiator_wish(self, ship, ship_id, heat, threat, enemies, simulation) -> Optional[bool]:
         """True = extend, False = retract, None = leave as is."""

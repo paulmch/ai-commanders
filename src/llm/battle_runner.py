@@ -107,6 +107,11 @@ class BattleConfig:
     # changes wall-clock, not semantics. Disable for strictly ordered output.
     parallel_llm: bool = True
 
+    # Doctrine of the rule-based captains (model "heuristic") per faction:
+    # "tactical" (default) or "legacy" (the pass-4 captain; see
+    # src/llm/heuristic_captain.py). A missing faction gets the default.
+    heuristic_doctrine: Dict[str, str] = field(default_factory=dict)
+
     # Personality selection - let LLMs choose their own personality before battle
     personality_selection: bool = True
 
@@ -420,7 +425,8 @@ class LLMBattleRunner:
             print(f"[NOTEBOOK] could not load notebook for {model}: {e}")
             return None
 
-    def _make_captain(self, captain_config: LLMCaptainConfig) -> LLMCaptain:
+    def _make_captain(self, captain_config: LLMCaptainConfig,
+                      faction: Optional[str] = None) -> LLMCaptain:
         """
         Build the right captain for a ship config.
 
@@ -429,7 +435,8 @@ class LLMBattleRunner:
         """
         from .heuristic_captain import HEURISTIC_MODEL, HeuristicCaptain
         if captain_config.model == HEURISTIC_MODEL:
-            return HeuristicCaptain(captain_config)
+            doctrine = (self.config.heuristic_doctrine or {}).get(faction) if faction else None
+            return HeuristicCaptain(captain_config, doctrine=doctrine)
         captain_config.notebook_text = self._notebook_text_for(
             captain_config.model, "captain")
         return LLMCaptain(captain_config, self.client)
@@ -516,7 +523,7 @@ class LLMBattleRunner:
                 fleet_data=fleet_data,
                 temperature=ship_config.temperature,
             )
-            captain = self._make_captain(captain_config)
+            captain = self._make_captain(captain_config, "alpha")
             captain.ship_id = ship_config.ship_id
             captain.faction = "alpha"
 
@@ -574,7 +581,7 @@ class LLMBattleRunner:
                 fleet_data=fleet_data,
                 temperature=ship_config.temperature,
             )
-            captain = self._make_captain(captain_config)
+            captain = self._make_captain(captain_config, "beta")
             captain.ship_id = ship_config.ship_id
             captain.faction = "beta"
 

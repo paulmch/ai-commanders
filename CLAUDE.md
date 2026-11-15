@@ -30,7 +30,19 @@ CI (`.github/workflows/tests.yml`) runs the same suite on Python 3.10-3.12 with
 uv run python scripts/run_llm_battle.py -v                                  # 1v1 duel
 uv run python scripts/run_llm_battle.py --fleet-config data/fleet_config_claude_vs_gemini.json -v
 uv run python scripts/mcp_battle.py --config data/fleet_config_mcp_example.json  # human via MCP
+uv run python scripts/run_draft_battle.py --auto-draft --no-admirals --trace --seed 3  # free battle
 ```
+
+Free battles fly `HeuristicCaptain` (`src/llm/heuristic_captain.py`). Its default
+"tactical" doctrine plans per fleet in `src/llm/heuristic_tactics.py` (reach-aware focus
+fire; gun ships nose-first - closure cap, no braking under fire, coast through a
+controlled pass facing the nearest gun, HOLD_RANGE once closure is gone; torpedo boats
+hold a standoff and fire one-round-per-tube salvos sized to the target's PD; evade
+overlay vs torpedoes; crippled or disarmed ships open range, dead drives leave the
+formation, ships burn clear of dying hulks' blast radius; plan announced on the FLEET NET);
+`--doctrine legacy` (or `BattleConfig.heuristic_doctrine`) keeps the pass-4 captain the
+fire-control fixture's heuristic battles were flown with. `scripts/tactics_eval.py`
+runs/analyses seeded grids (kills, closest approach, rounds inside 150 km, hit rate).
 
 ## Project Structure
 
