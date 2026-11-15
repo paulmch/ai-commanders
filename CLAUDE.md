@@ -252,6 +252,19 @@ endpoints for viewer development.
 The corvette (1 launcher) and torpedo cruiser (4 launchers, 12 rounds each) are the
 torpedo-armed hulls; all others fight with coilguns.
 
+## Recording Files
+
+New recordings are gzip (`battle_*.json.gz`: compact JSON, deterministic bytes:
+mtime 0, no file name); old plain `.json` recordings stay valid everywhere. All
+Python reads/writes go through `src/recording_io.py` (`load_recording` sniffs the
+gzip magic, `dump_recording` is atomic, `sidecar_path` gives `battle_x.draft.json`);
+never `json.load(open(recording))`. The viewer decodes through
+`visualizer/src/RecordingCodec.js` (magic-byte sniff + `DecompressionStream`).
+`BattleConfig.compress_recording` / `save_recording`; `--plain-json` on the battle
+scripts, `run_draft_battle.py --no-recording`; `scripts/compress_recordings.py`
+converts a folder (verify before delete). `BattleRecording.to_json` (plain text,
+hashed by the perf harness) is unchanged.
+
 ## Viewer Rendering Notes
 
 - All custom `ShaderMaterial`s must include `<common>` + the `logdepthbuf_*`

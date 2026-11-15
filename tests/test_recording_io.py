@@ -281,3 +281,9 @@ def test_run_draft_battle_formats_and_no_recording(tmp_path):
     assert r.returncode == 0, r.stderr[-2000:]
     assert "Winner:" in r.stdout and "Recording:" not in r.stdout
     assert not none_dir.exists() or not any(none_dir.iterdir())
+
+
+def test_viewer_scripts_pass_gzip_names_through():
+    pytest.importorskip("playwright")
+    snap = _script("viewer_snapshot")
+    assert "?recording=/recordings/p5_x.json.gz&" in snap.page_url_for(5187, "p5_x.json.gz")

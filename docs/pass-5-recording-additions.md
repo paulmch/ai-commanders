@@ -724,3 +724,30 @@ Unchanged: `Draw accepted - ...`, `<Side> tactical advantage (...)`, `Too close 
 call (...)`, and the 1v1 reasons. The seed-4 battle above ends `winner: "alpha"`,
 `result_reason: "Beta fleet destroyed or surrendered (5 destroyed, 3 surrendered)"`
 (before: `"Beta fleet eliminated"` with three beta corvettes afloat at 100 % hull).
+
+## File format
+
+New recordings are written gzip-compressed by default (lane `gzip`):
+`battle_<alpha>_vs_<beta>_<date>.json.gz`. The draft sidecar stays plain:
+`battle_<...>.draft.json` (named from the stem, not `<recording>.draft.json`).
+
+- **Inside the gzip:** the same recording object as before, as compact JSON
+  (`separators=(',', ':')`, no indent; `BattleRecording.to_compact_json()`). It
+  parses to exactly the object the plain `to_json()` text parses to. No field,
+  event or unit changed.
+- **Deterministic:** the gzip header has mtime 0, no FNAME/FCOMMENT/FEXTRA, and
+  the level is fixed (9): the same battle gives the same bytes on a given zlib
+  build (`tests/test_recording_io.py`).
+- **Plain JSON** (`--plain-json` on `run_draft_battle.py`, `run_llm_battle.py`,
+  `mcp_battle.py`, `generate_test_battle.py`; `BattleConfig.compress_recording =
+  False`) writes the indented `to_json()` text as before, byte for byte.
+- **Readers** decide by the first two bytes (`1f 8b` = gzip), not by the name:
+  Python `src/recording_io.load_recording`, viewer `RecordingCodec.js`. A dev
+  server may send `.json.gz` with `Content-Encoding: gzip` (Vite does: the browser
+  hands the viewer inflated text) or as raw bytes (the viewer inflates them with
+  `DecompressionStream('gzip')`); both load.
+- **Sizes** (committed recordings, plain indented -> gzip): 37.8 MB -> 1.0 MB,
+  15.8 MB -> 0.64 MB, 13.7 MB -> 0.68 MB; all of `data/recordings/` 263 MB ->
+  17 MB (`scripts/compress_recordings.py data/recordings --dry-run`). Recordings
+  that embed admiral-vision images compress less (31.8 MB -> 8.0 MB).
+- **`GET /live/recording`** is unchanged (an HTTP JSON payload, not a file).
