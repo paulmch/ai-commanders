@@ -149,15 +149,32 @@ def test_gun_policy_never_brakes_under_fire():
     a, R = 2.0 * 9.81, T.SPINAL_ENGAGE_RANGE_KM
     assert T.gun_maneuver(500.0, 0.0, R, a) == ("INTERCEPT", {})          # sprint
     assert T.gun_maneuver(400.0, 3.0, R, a) == ("PADLOCK", {})            # fast enough: coast
-    # Inside the guns: coast nose-on through the pass, closing or not...
-    for closing in (5.0, 1.0, -0.2):
+    # Inside the guns: coast nose-on through the pass while it is closing...
+    for closing in (5.0, 1.0):
         assert T.gun_maneuver(150.0, closing, R, a)[0] == "PADLOCK"
     for closing in (5.0, 1.0, -1.0):
         assert T.gun_maneuver(20.0, closing, R, a)[0] == "PADLOCK"
     # ...re-close nose first once the pass has opened the range...
-    assert T.gun_maneuver(T.REENGAGE_RANGE_KM + 10, -1.0, R, a) == ("INTERCEPT", {})
+    assert T.gun_maneuver(R * T.HOLD_BAND_FACTOR + 10, -1.0, R, a) == ("INTERCEPT", {})
     # ...and hold the engagement range once the closure is gone.
     assert T.gun_maneuver(R * 1.1, 0.1, R, a) == ("HOLD_RANGE", {"range_km": R})
+
+
+@pytest.mark.parametrize("range_km", [150.0, 190.0, 201.0, 220.0, 240.0, 300.0])
+@pytest.mark.parametrize("closing", [0.0, -0.2, 0.3])
+@pytest.mark.parametrize("accel_g", [1.0, 2.0])
+def test_gun_ship_never_stalls_outside_the_hold_band(range_km, closing, accel_g):
+    # Review round 3, finding 1: between ~81 and ~245 km with no closure every
+    # branch returned PADLOCK (engine off) and two destroyers sat at 220 km
+    # for the whole battle.
+    kind, _ = T.gun_maneuver(range_km, closing, T.SPINAL_ENGAGE_RANGE_KM, accel_g * 9.81)
+    assert kind == "INTERCEPT"
+
+
+def test_destroyers_started_inside_the_dead_zone_close(tmp_path):
+    stats, _ = _small_battle(tmp_path, TACTICAL, hulls=("destroyer",), time_limit=330.0,
+                             distance_km=220.0)
+    assert stats["closest_km"] < 150.0, stats
 
 
 def test_gun_ship_faces_the_nearest_gun_and_shoots_the_target():
@@ -297,7 +314,7 @@ MIXED = ("destroyer", "destroyer", "corvette", "corvette")
 GUNS = ("destroyer", "destroyer", "frigate")
 
 
-def _small_battle(tmp_path, doctrines, hulls=MIXED, seed=21, time_limit=240.0):
+def _small_battle(tmp_path, doctrines, hulls=MIXED, seed=21, time_limit=240.0, distance_km=450.0):
     import importlib.util
     from src.llm.battle_runner import BattleConfig, LLMBattleRunner, load_fleet_data
     from src.llm.fleet_config import BattleFleetConfig
@@ -307,7 +324,7 @@ def _small_battle(tmp_path, doctrines, hulls=MIXED, seed=21, time_limit=240.0):
     config = BattleFleetConfig.from_dict({
         "alpha_fleet": {"ships": ships}, "beta_fleet": {"ships": ships},
         "record_battle": True, "record_sim_trace": True, "personality_selection": False,
-        "seed": seed, "time_limit_s": time_limit, "initial_distance_km": 450.0,
+        "seed": seed, "time_limit_s": time_limit, "initial_distance_km": distance_km,
     })
     bc = BattleConfig.from_fleet_config(config, verbose=False)
     bc.heuristic_doctrine = dict(doctrines)

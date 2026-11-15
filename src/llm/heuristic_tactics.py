@@ -83,17 +83,17 @@ HOLD_CLOSING_KPS = 0.4
 # while it could still stop short of GUNS_HOT_KM (sprint_ok - a closure cap,
 # ~2 km/s), then coasts; inside it it coasts nose-on (PADLOCK: spinal and
 # nose armour on him) through a controlled pass - every burn inside the gun
-# envelope swings the nose off - and once the range is opening faster than
-# REENGAGE_OPENING_KPS past REENGAGE_RANGE_KM it burns back toward him, nose
-# first again. Measured on mirror fleets vs the legacy captain: braking to a
+# envelope swings the nose off - and whenever it is outside the hold band
+# with less than MIN_ADVANCE_KPS of closure (opening after a pass, or two
+# fleets at rest) it burns toward him, nose first again: round 1 left two
+# destroyers 220 km apart parked for a whole battle. Measured on mirror fleets vs the legacy captain: braking to a
 # pass speed outside the guns (flip, tail toward a charging enemy at
 # 200-300 km) lost 4 of 4 gun-heavy seeds; coasting in won 3 of 4.
 GUNS_HOT_KM = 200.0
 # A gun ship keeps facing the enemy gun it faces until another is this many
 # times closer.
 FACE_SWITCH_FACTOR = 1.5
-REENGAGE_OPENING_KPS = 0.3
-REENGAGE_RANGE_KM = 120.0
+MIN_ADVANCE_KPS = 0.5
 
 # Torpedo boats (no guns) hold this range to the nearest enemy gun ship:
 # outside the gun envelope that matters, inside the torpedoes' reach.
@@ -257,12 +257,13 @@ def gun_maneuver(range_km: float, closing_kps: float, engage_km: float, accel_ms
     """
     if (range_km <= engage_km * HOLD_BAND_FACTOR and abs(closing_kps) <= HOLD_CLOSING_KPS):
         return "HOLD_RANGE", {"range_km": engage_km}
+    if closing_kps < MIN_ADVANCE_KPS and range_km > engage_km * HOLD_BAND_FACTOR:
+        # Out of the hold band with (almost) no closure, or opening after a
+        # pass: close, nose first. Never sit still out there.
+        return "INTERCEPT", {}
     if range_km > GUNS_HOT_KM:
         if sprint_ok(range_km, GUNS_HOT_KM, closing_kps, accel_ms2, interval_s, max_closing_kps):
             return "INTERCEPT", {}
-        return "PADLOCK", {}
-    if closing_kps < -REENGAGE_OPENING_KPS and range_km > REENGAGE_RANGE_KM:
-        return "INTERCEPT", {}
     return "PADLOCK", {}
 
 
