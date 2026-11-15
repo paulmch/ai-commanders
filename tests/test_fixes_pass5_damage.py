@@ -267,3 +267,79 @@ def test_blast_resolution_never_queues_a_blast_and_the_last_tick_needs_no_flush(
     assert hulk.dying_time_remaining == 0.0 and not hulk.is_destroyed
     assert sim._pending_blasts == []                 # nothing new queued
     assert "while self._pending_blasts" not in inspect.getsource(CombatSimulation.step)
+
+
+# ---------------------------------------------------------------------------
+# Finding 6: commanders see degraded (not yet wrecked) fittings
+# ---------------------------------------------------------------------------
+
+def _degraded_fleet():
+    sim = CombatSimulation(time_step=1.0, decision_interval=30, seed=5)
+    cruiser = _ship(sim, "alpha_1", "alpha", Vector3D(0, 0, 0))
+    tubes = _ship(sim, "alpha_2", "alpha", Vector3D(0, 8_000, 0), ship_type="cruiser_torpedo")
+    _ship(sim, "beta_1", "beta", Vector3D(300_000, 0, 0), ship_type="destroyer",
+          forward=Vector3D(-1, 0, 0))
+    for ship in (cruiser, tubes):
+        ship.name = f"TIS {ship.ship_type}-{ship.ship_id[-1]}"
+    gun = ("gun", "weapon_1", cruiser.weapons["weapon_1"])
+    bd.damage_fitting(sim, cruiser, gun, 54.0, "surface_hit", "beta_1", HitLocation.LATERAL)
+    bd.damage_fitting(sim, cruiser, bd._pd_fittings(cruiser)[0], 30.0, "surface_hit",
+                      "beta_1", HitLocation.LATERAL)
+    bd.damage_fitting(sim, tubes, bd._launcher_fittings(tubes)[2], 60.0, "surface_hit",
+                      "beta_1", HitLocation.LATERAL)
+    return sim, cruiser, tubes
+
+
+def test_damaged_fitting_lines_name_health_and_cycle():
+    sim, cruiser, tubes = _degraded_fleet()
+    lines = bd.damaged_fitting_lines(cruiser)
+    assert lines == ["Coilgun Battery Mk3 [weapon_1] DAMAGED 46 %, cycle x2.0",
+                     f"PD Laser [{cruiser.point_defense[0].turret_name}] DAMAGED 70 %, full output"]
+    assert bd.damaged_fitting_lines(tubes) == [
+        "Torpedo Launcher [weapon_2] DAMAGED 40 %, cycle x2.0"]
+    # wrecked fittings are not 'damaged': they already show as destroyed/LOST
+    bd.damage_fitting(sim, cruiser, ("gun", "weapon_1", cruiser.weapons["weapon_1"]),
+                      100.0, "surface_hit", "beta_1", HitLocation.LATERAL)
+    assert not any("weapon_1" in line for line in bd.damaged_fitting_lines(cruiser))
+
+
+def test_captain_admiral_and_mcp_views_show_degraded_fittings():
+    import types
+
+    from src.llm.admiral import LLMAdmiral
+    from src.llm.captain import LLMCaptain, LLMCaptainConfig
+    from src.llm.mcp_controller import MCPController, MCPControllerConfig
+    from src.llm.prompts import format_admiral_turn_state, format_my_ship
+
+    sim, cruiser, tubes = _degraded_fleet()
+    gun_line = "Coilgun Battery Mk3 [weapon_1] DAMAGED 46 %, cycle x2.0"
+    tube_line = "Torpedo Launcher [weapon_2] DAMAGED 40 %, cycle x2.0"
+
+    # captain: status dict -> the weapons line of its own-ship block
+    config = LLMCaptainConfig(name="Captain", ship_name=cruiser.name, ship_type="cruiser",
+                              fleet_data=FLEET, model="heuristic")
+    captain = LLMCaptain(config, client=object())
+    captain.ship_id = cruiser.ship_id
+    status = captain._build_ship_status(cruiser)
+    assert gun_line in status["damaged_fittings"]
+    text = format_my_ship("Captain", cruiser.name, "cruiser", status, {}, FLEET)
+    assert gun_line in text
+
+    # admiral: fleet table
+    captains = [types.SimpleNamespace(
+        ship_id=s.ship_id, ship_name=s.name, name=f"Captain {s.ship_id}",
+        config=types.SimpleNamespace(ship_type=s.ship_type, name=f"Captain {s.ship_id}"))
+        for s in (cruiser, tubes)]
+    admiral = LLMAdmiral(types.SimpleNamespace(
+        name="Admiral alpha", model="x/y", personality=None, vision=False,
+        notebook_text=None, image_input=False), "alpha", client=None, fleet_data=FLEET)
+    snapshot = admiral._build_snapshot(sim, captains, full=True)
+    fleet_text = format_admiral_turn_state(snapshot, FLEET, phase="directive")
+    assert gun_line in fleet_text and tube_line in fleet_text
+
+    # MCP: per-weapon health and cycle factor, and the same lines
+    state = MCPController(MCPControllerConfig(faction="alpha"), FLEET).build_state_for_mcp(
+        sim, captains)
+    blob = json.dumps(state.friendly_ships, default=str)
+    assert gun_line in blob and tube_line in blob
+    assert '"mount_health_pct": 46.0' in blob and '"cycle_factor": 2.0' in blob

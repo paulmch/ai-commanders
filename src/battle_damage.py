@@ -672,3 +672,34 @@ def resolve_magazine_cookoff(
     print(f"  !!! [{ship.ship_id}] MAGAZINE COOK-OFF ({module.name}): "
           f"{torpedoes_lost} torpedoes, {gun_rounds_lost} gun rounds lost, "
           f"{secondary_gj:.1f} GJ secondary")
+
+
+# =============================================================================
+# COMMANDER VIEWS
+# =============================================================================
+
+def damaged_fitting_lines(ship: "ShipCombatState") -> List[str]:
+    """One short status line per fitting that is damaged but still working
+    (wrecked ones already show as destroyed/LOST in every view), e.g.
+    'Coilgun Battery Mk3 [weapon_1] DAMAGED 46 %, cycle x2.0'."""
+    lines: List[str] = []
+    weapons = getattr(ship, "weapons", None)
+    for slot, ws in (weapons.items() if isinstance(weapons, dict) else ()):
+        health = getattr(ws, "mount_health", 100.0)
+        if (slot.startswith("pd") or not getattr(ws, "is_operational", True)
+                or not isinstance(health, (int, float)) or health >= 100.0):
+            continue
+        name = getattr(getattr(ws, "weapon", None), "name", None) or slot
+        if "torpedo" in name.lower():
+            name = "Torpedo Launcher"
+        lines.append(f"{name} [{slot}] DAMAGED {health:.0f} %, "
+                     f"cycle x{mount_cooldown_factor(health):.1f}")
+    turrets = getattr(ship, "point_defense", None)
+    for i, pd in enumerate(turrets if isinstance(turrets, (list, tuple)) else ()):
+        health = getattr(pd, "mount_health", 100.0)
+        if (not getattr(pd, "is_operational", True)
+                or not isinstance(health, (int, float)) or health >= 100.0):
+            continue
+        name = getattr(pd, "turret_name", None) or f"pd_{i}"
+        lines.append(f"PD Laser [{name}] DAMAGED {health:.0f} %, full output")
+    return lines

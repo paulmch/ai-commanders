@@ -29,6 +29,15 @@ if TYPE_CHECKING:
     from .captain import LLMCaptain
 
 
+
+def _damaged_fitting_lines(ship):
+    """battle_damage.damaged_fitting_lines (works for both import styles)."""
+    try:
+        from ..battle_damage import damaged_fitting_lines
+    except ImportError:  # imported as a top-level module
+        from battle_damage import damaged_fitting_lines
+    return damaged_fitting_lines(ship)
+
 @dataclass
 class AdmiralOrder:
     """A single order from Admiral to a specific ship."""
@@ -316,6 +325,9 @@ class FriendlyShipSnapshot:
     magazine_capacity: int = 0
     launches_available: int = 0
     gun_range_km: float = 0.0
+    # Damaged-but-working fittings, one short line each
+    # (battle_damage.damaged_fitting_lines).
+    fittings_damaged: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -1466,6 +1478,7 @@ Be authentic to how you would command a fleet as {model_name}."""
             weapons_ready=weapons_ready,
             weapons_cooling=weapons_cooling,
             weapons_destroyed=weapons_destroyed,
+            fittings_damaged=_damaged_fitting_lines(ship),
             current_maneuver=maneuver_str,
             current_target=ship.primary_target_id if hasattr(ship, 'primary_target_id') else None,
             radiators_extended=ship.radiators_extended if hasattr(ship, 'radiators_extended') else False,
