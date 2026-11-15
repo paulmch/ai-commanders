@@ -77,6 +77,7 @@ ai-commanders/
 │   ├── run_draft_battle.py # draft mode: point-budget fleets + formations
 │   ├── generate_test_battle.py  # scripted no-LLM recordings for the viewer
 │   ├── viewer_snapshot.py  # headless Playwright screenshots of the 3D viewer
+│   ├── viewer_clip.py      # frame-stepped MP4/GIF clips (director or camera path, resumable)
 │   ├── mcp_battle.py       # CLI for MCP-controlled battles
 │   ├── refine_commander.py # Post-battle lesson distillation + rematch gating
 │   ├── fire_control_calibration.py  # gun P(hit) vs engine outcomes (recordings + seeded harness)
@@ -238,6 +239,12 @@ torpedo-armed hulls; all others fight with coilguns.
   recordings without them. Prediction must never draw from the battle RNG or
   change results - `tests/test_trajectory_prediction.py` pins seeded on/off
   equality.
+- Auto director: `src/Director.js` turns the recording into a shot list (pure,
+  no THREE; `lookahead: false` in live mode is causal), `src/DirectorCamera.js`
+  frames each shot type as a pure function of (shot, battle time, positions), and
+  `CameraController` applies it plus blast shake (`Director.shakeAt`, battle time).
+  Never add wall-clock easing to a director pose: `tests/director.test.js` pins
+  seek-away-and-back equality. `main.js` zeroes `scene.shake` (the old wall-clock one).
 - Ownership: in-flight weapons live in render/Projectiles.js (WeaponTimeline
   decides what exists at time t); persistent hit aftermath and deaths in
   DamageTimeline.js + render/DamageFX.js; hulls expose `userData.rcsMounts` /

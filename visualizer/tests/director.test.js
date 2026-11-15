@@ -479,3 +479,26 @@ test('controller shake: applied for the frame, never accumulates, identical afte
   poseAt(60);
   assert.ok(poseAt(100.3).distanceTo(a) < 1e-9);
 });
+
+test('controller in live mode reacts to events; when the battle ends it may look ahead', () => {
+  const events = battleEvents();
+  const { controller, states } = stage(POSITIONS);
+  const typeAt = t => { controller.update(states(t), { time: t }); return controller.directorState().type; };
+  controller.setDirectorRecording({ events: events.filter(e => e.timestamp <= 97), deathInfo: {}, live: true });
+  controller.setDirector(true);
+  assert.notEqual(typeAt(97), 'runin', 'no run-in to a kill that has not happened');
+  assert.ok(controller.highlights.every(h => h.t <= 97));
+  controller.setDirectorRecording({ events: events.filter(e => e.timestamp <= 101), deathInfo: {}, live: true });
+  assert.equal(typeAt(102.6), 'pullback', 'the blast is on screen once the shot before it has had its minimum');
+  controller.setDirectorRecording({ events, deathInfo: {}, live: false });
+  assert.equal(typeAt(97), 'runin');
+  assert.equal(typeAt(100.5), 'pullback');
+  // The legacy cut list still drives a controller that was never given a recording
+  const legacy = stage(POSITIONS);
+  legacy.scene.getShipPosition = id => new THREE.Vector3(...POSITIONS[id].slice(0, 3)).multiplyScalar(1 / 1000);
+  legacy.controller.setDirector(true);
+  legacy.controller.setDirectorCuts([{ kind: 'kill', t: 10, until: 18, subject: 'beta_1', others: [] }]);
+  legacy.controller.update(legacy.states(12), { time: 12, dt: 1 / 60 });
+  assert.equal(legacy.controller.directorState().shot, 'kill');
+  assert.equal(legacy.controller.directorState().type, null);
+});
