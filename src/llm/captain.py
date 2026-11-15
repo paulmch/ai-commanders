@@ -131,6 +131,15 @@ def _bare_name(name: str) -> str:
     return parts[1] if len(parts) == 2 and parts[0].isupper() and len(parts[0]) <= 4 else str(name)
 
 
+def _plume_status_lines(simulation, ship):
+    """drive_plume.plume_status_lines (works for both import styles)."""
+    try:
+        from ..drive_plume import plume_status_lines
+    except ImportError:  # imported as a top-level module
+        from drive_plume import plume_status_lines
+    return plume_status_lines(simulation, ship)
+
+
 @dataclass
 class LLMCaptainConfig:
     """Configuration for an LLM captain."""
@@ -487,6 +496,11 @@ class LLMCaptain:
         # Build status dicts
         self._solution_cache = {}
         ship_status = self._build_ship_status(ship)
+        # Drive plume wash (src/drive_plume.py): whose exhaust this ship sits
+        # in, which friendlies its own exhaust reaches.
+        plume = _plume_status_lines(simulation, ship)
+        if plume:
+            ship_status["plume_wash"] = plume
         self._add_launch_status(ship_status, ship, simulation)
         tactical_status = self._build_tactical_status(ship, enemy, simulation)
 

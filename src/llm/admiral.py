@@ -30,6 +30,15 @@ if TYPE_CHECKING:
 
 
 
+def _plume_status_lines(simulation, ship):
+    """drive_plume.plume_status_lines (works for both import styles)."""
+    try:
+        from ..drive_plume import plume_status_lines
+    except ImportError:
+        from drive_plume import plume_status_lines
+    return plume_status_lines(simulation, ship)
+
+
 def _damaged_fitting_lines(ship):
     """battle_damage.damaged_fitting_lines (works for both import styles)."""
     try:
@@ -328,6 +337,8 @@ class FriendlyShipSnapshot:
     # Damaged-but-working fittings, one short line each
     # (battle_damage.damaged_fitting_lines).
     fittings_damaged: List[str] = field(default_factory=list)
+    # Drive plume wash warnings (drive_plume.plume_status_lines).
+    plume_wash: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -1479,6 +1490,7 @@ Be authentic to how you would command a fleet as {model_name}."""
             weapons_cooling=weapons_cooling,
             weapons_destroyed=weapons_destroyed,
             fittings_damaged=_damaged_fitting_lines(ship),
+            plume_wash=_plume_status_lines(simulation, ship),
             current_maneuver=maneuver_str,
             current_target=ship.primary_target_id if hasattr(ship, 'primary_target_id') else None,
             radiators_extended=ship.radiators_extended if hasattr(ship, 'radiators_extended') else False,

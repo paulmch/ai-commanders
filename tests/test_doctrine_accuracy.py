@@ -960,3 +960,107 @@ class TestAdmiralIntelClaims:
         engine, ours = mode(0.8 * intel.WRECK_THREAT_MISS_M,
                             eta_s=BALLISTIC_THREAT_HORIZON_S + 15)
         assert engine == "WOBBLE" and not ours
+
+
+# =============================================================================
+# DRIVE PLUME (src/drive_plume.py): "a burning torch washes every ship ...
+# +40 GJ/s of heat at 5 km, +16 at 10 km, +4.7 at 20 km, +0.8 at 50 km ..."
+# =============================================================================
+
+class TestDrivePlumeDoctrine:
+    """The one plume sentence captains and admirals read is bound to the
+    engine: the quoted heat rates are what a ship astern of a full burn
+    actually takes in its sink, the cone edge and the ranges are the
+    module's constants."""
+
+    @staticmethod
+    def _measured_rate(fleet, gap_km, off_axis_deg=0.0):
+        sim = CombatSimulation(time_step=1.0, decision_interval=1e9, seed=7)
+        lead = _build(sim, 'lead', 'cruiser', 'alpha', fleet, 0, 0, 1)
+        lateral = gap_km * math.tan(math.radians(off_axis_deg))
+        tail = _build(sim, 'tail', 'destroyer', 'alpha', fleet, -gap_km, 0, 1)
+        tail.kinematic_state.position = Vector3D(-gap_km * 1000.0, lateral * 1000.0, 0)
+        _build(sim, 'foe', 'destroyer', 'beta', fleet, 5000, 0, -1)
+        lead.current_maneuver = Maneuver(maneuver_type=ManeuverType.BURN, start_time=0.0,
+                                         duration=1e9, throttle=1.0)
+        sim.step()
+        before = tail.thermal_system.heatsink.current_heat_gj
+        lead.kinematic_state.position = Vector3D(0, 0, 0)
+        sim.step()
+        own = CombatSimulation(time_step=1.0, decision_interval=1e9, seed=7)
+        alone = _build(own, 'tail', 'destroyer', 'alpha', fleet, -gap_km, 0, 1)
+        _build(own, 'foe', 'destroyer', 'beta', fleet, 5000, 0, -1)
+        own.step()
+        idle_before = alone.thermal_system.heatsink.current_heat_gj
+        own.step()
+        idle = alone.thermal_system.heatsink.current_heat_gj - idle_before
+        return tail.thermal_system.heatsink.current_heat_gj - before - idle
+
+    def test_sentence_is_in_both_doctrines(self, fleet):
+        from src.llm.prompts import build_admiral_static, plume_doctrine_line
+        line = plume_doctrine_line()
+        caps = build_ship_capabilities_from_fleet(
+            ship_name="TIS Dart", ship_type="destroyer", fleet_data=fleet,
+            hull_integrity=100, heat_percent=0, delta_v_remaining=500,
+            nose_armor=151, lateral_armor=26, tail_armor=30,
+            heatsink_capacity=320, radiators_extended=False)
+        assert line in caps
+        assert line in build_admiral_static("A", "alpha", fleet, None)
+
+    def test_quoted_heat_rates_are_what_the_engine_delivers(self, fleet):
+        import re
+        from src.llm.prompts import plume_doctrine_line
+        line = plume_doctrine_line()
+        quoted = {5.0: float(re.search(r"\+([\d.]+) GJ/s of heat at 5 km", line).group(1))}
+        for km in (10, 20, 50):
+            quoted[float(km)] = float(re.search(rf"\+([\d.]+) at {km} km", line).group(1))
+        for km, rate in quoted.items():
+            # One tick apart the lead has pulled ~7 m ahead: within rounding.
+            assert self._measured_rate(fleet, km) == pytest.approx(rate, rel=0.03, abs=0.06), km
+
+    def test_cone_edge_range_and_ceiling_are_the_engines(self, fleet):
+        import re
+        from src import drive_plume as dp
+        from src.llm.prompts import plume_doctrine_line
+        from src.thermal import REACTOR_MELTDOWN_HEAT_FRACTION
+        line = plume_doctrine_line()
+        edge = float(re.search(r"within ([\d.]+) deg of dead astern", line).group(1))
+        reach = float(re.search(r"out to (\d+) km", line).group(1))
+        burn = float(re.search(r"inside ~(\d+) km it also burns armour", line).group(1))
+        ceiling = float(re.search(r"stops at (\d+)%", line).group(1))
+        assert edge == dp.PLUME_MAX_HALF_ANGLE_DEG and reach == dp.PLUME_MAX_RANGE_KM
+        assert self._measured_rate(fleet, 10.0, edge - 0.5) > 0.0
+        assert self._measured_rate(fleet, 10.0, edge + 0.5) == pytest.approx(0.0, abs=1e-9)
+        assert self._measured_rate(fleet, reach + 2.0) == pytest.approx(0.0, abs=1e-9)
+        assert burn == pytest.approx(dp.plume_ablation_range_km(), abs=0.5)
+        # Armour burns just inside that range, not just outside it.
+        full = dp.PLUME_REFERENCE_JET_POWER_W
+        assert dp.plume_armor_ablation_cm_s(dp.plume_heat_rate_gj_s(full, burn - 2.0, 0.0)) > 0.0
+        assert dp.plume_armor_ablation_cm_s(dp.plume_heat_rate_gj_s(full, burn + 2.0, 0.0)) == 0.0
+        assert ceiling == pytest.approx(dp.PLUME_HEAT_CEILING_FRACTION * 100.0, abs=0.5)
+        assert ceiling < REACTOR_MELTDOWN_HEAT_FRACTION * 100.0
+
+    def test_crew_dose_numbers_are_the_engines(self, fleet):
+        import re
+        from src import drive_plume as dp
+        from src.llm.prompts import plume_doctrine_line
+        line = plume_doctrine_line()
+        rate = float(re.search(r"\(([\d.]+) Sv/s unshielded at 10 km", line).group(1))
+        impaired = float(re.search(r"at (\d+) Sv weapons cycle x([\d.]+) slower", line).group(1))
+        factor = float(re.search(r"at (\d+) Sv weapons cycle x([\d.]+) slower", line).group(2))
+        out = float(re.search(r"at (\d+) Sv the ship stops fighting", line).group(1))
+        assert (impaired, factor, out) == (dp.PLUME_CREW_IMPAIRED_SV,
+                                           dp.PLUME_CREW_IMPAIRED_CYCLE_FACTOR,
+                                           dp.PLUME_CREW_INCAPACITATED_SV)
+        # A ship 10 km astern of a full burn, measured in the engine: the
+        # quoted rate is the unshielded one; its armour cuts it.
+        sim = CombatSimulation(time_step=1.0, decision_interval=1e9, seed=7)
+        lead = _build(sim, 'lead', 'cruiser', 'alpha', fleet, 0, 0, 1)
+        tail = _build(sim, 'tail', 'frigate', 'alpha', fleet, -10, 0, 1)
+        tail.kinematic_state.forward = Vector3D(0, 1, 0)             # thin flank to the jet
+        _build(sim, 'foe', 'destroyer', 'beta', fleet, 5000, 0, -1)
+        lead.applied_throttle = 1.0
+        dp.resolve_plume_wash(sim, 1.0)
+        flank_cm = tail.armor.get_section(dp.HitLocation.LATERAL).thickness_cm
+        assert tail.crew_dose_sv == pytest.approx(rate * dp.dose_shielding(flank_cm), rel=0.03)
+        assert 0.8 * rate < tail.crew_dose_sv < rate

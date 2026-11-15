@@ -29,6 +29,15 @@ if TYPE_CHECKING:
 
 
 
+def _plume_status_lines(simulation, ship):
+    """drive_plume.plume_status_lines (works for both import styles)."""
+    try:
+        from ..drive_plume import plume_status_lines
+    except ImportError:
+        from drive_plume import plume_status_lines
+    return plume_status_lines(simulation, ship)
+
+
 def _damaged_fitting_lines(ship):
     """battle_damage.damaged_fitting_lines (works for both import styles)."""
     try:
@@ -506,6 +515,9 @@ class MCPController:
             "weapons_destroyed": weapons_destroyed,
             # Damaged-but-working fittings (guns, tubes, PD), one line each
             "damaged_fittings": _damaged_fitting_lines(ship),
+            # Drive plume wash warnings (whose exhaust this ship is in, which
+            # friendlies its own exhaust reaches), one line each
+            "plume_wash": _plume_status_lines(simulation, ship),
             # Modules
             "damaged_modules": damaged_modules,
             # Combat stats

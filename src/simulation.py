@@ -71,6 +71,7 @@ try:
     from .power import PowerSystem, WeaponCapacitor, Battery, Reactor
     from .maneuvers import max_arrival_speed_mps, required_decel_ms2
     from . import battle_damage
+    from . import drive_plume
 except ImportError:
     from replay_evidence import ExecutionEvidence, impact_evidence, OMIT_IF_NONE
     from battle_timing import MIN_DECISION_INTERVAL, MAX_DECISION_INTERVAL
@@ -117,6 +118,7 @@ except ImportError:
     from power import PowerSystem, WeaponCapacitor, Battery, Reactor
     from maneuvers import max_arrival_speed_mps, required_decel_ms2
     import battle_damage
+    import drive_plume
 
 
 # =============================================================================
@@ -399,6 +401,10 @@ class SimulationEventType(Enum):
     SIMULATION_STARTED = auto()
     SIMULATION_ENDED = auto()
 
+    # Drive plume wash (src/drive_plume.py): a ship in another ship's exhaust
+    PLUME_WASH = auto()
+    CREW_RADIATION = auto()      # a crew's plume radiation dose crossed a threshold
+
 
 # =============================================================================
 # SIMULATION EVENT
@@ -672,6 +678,8 @@ class WeaponState:
     mount_position: Optional[dict] = None
     slot_name: str = ""
     salvo_index: int = 0  # Index of the NEXT shot; holds across fire-control pauses.
+    # Cooldown multiplier of an irradiated (impaired) crew, src/drive_plume.py.
+    crew_cycle_factor: float = 1.0
     shots_fired: int = 0  # Lifetime count for cosmetic barrel alternation.
     # Mount health 0-100 (src/battle_damage.py): a damaged mount cycles slower
     # (mount_cooldown_factor), at 0 the weapon is knocked out.
@@ -701,7 +709,9 @@ class WeaponState:
         else:
             base = self.weapon.cooldown_s
         if self.mount_health < 100.0:
-            return base * battle_damage.mount_cooldown_factor(self.mount_health)
+            base = base * battle_damage.mount_cooldown_factor(self.mount_health)
+        if self.crew_cycle_factor != 1.0:
+            base = base * self.crew_cycle_factor
         return base
 
     def shots_in_window(self, duration_s: float) -> int:
@@ -997,6 +1007,14 @@ class ShipCombatState:
     dying_torch_on: bool = False
     dying_torch_throttle: float = 0.0  # flicker amplitude, rolled once at death
     dying_thrust: float = 0.0  # throttle actually applied this tick (recorded)
+
+    # Crew radiation dose from time spent in drive plumes (src/drive_plume.py),
+    # permanent for the battle. Impaired: weapons cycle slower. Incapacitated:
+    # the ship neither fights nor maneuvers (it coasts; automatic PD and the
+    # thermal automation keep running) and counts as unable to deal damage.
+    crew_dose_sv: float = 0.0
+    crew_impaired: bool = False
+    crew_incapacitated: bool = False
     dying_tumble_axis: Optional[Vector3D] = None
     dying_tumble_rate_rad_s: float = 0.0
 
@@ -1596,6 +1614,9 @@ class CombatSimulation:
         # per tick.
         self._damage_rng = random.Random(f"{seed}:battle_damage")
         self._pending_blasts: list[dict] = []
+        # Drive plume wash (src/drive_plume.py). Private forecast shadows
+        # switch it off; its episode state is created lazily on first contact.
+        self.plume_wash_enabled: bool = True
 
         # Decision callback
         self._decision_callback: Optional[Callable[[str, 'CombatSimulation'], list[Any]]] = None
@@ -1958,7 +1979,8 @@ class CombatSimulation:
         target = self.get_ship(target_id)
 
         if (not target or target.is_destroyed or target.is_dying
-                or target.is_surrendered or ship.is_surrendered):
+                or target.is_surrendered or ship.is_surrendered
+                or getattr(ship, 'crew_incapacitated', False)):
             return False
 
         # Pick the first launcher with a round chambered and off cooldown. With a
@@ -2666,7 +2688,8 @@ class CombatSimulation:
         for ship in self.ships.values():
             # A surrendered ship is out of the fight: its standing weapons
             # orders must not keep firing (see also the target check below).
-            if not ship.is_destroyed and not ship.is_dying and not ship.is_surrendered:
+            if (not ship.is_destroyed and not ship.is_dying and not ship.is_surrendered
+                    and not ship.crew_incapacitated):
                 self._process_weapons_orders(ship)
 
         # Point defense engages incoming torpedoes and projectiles. It runs on
@@ -2698,6 +2721,11 @@ class CombatSimulation:
         # Reactor detonations queued by this tick's deaths reach their
         # surroundings (ships, torpedoes); deaths they cause detonate next tick.
         battle_damage.resolve_pending_blasts(self)
+
+        # Drive plume wash: every ship in another ship's exhaust this tick,
+        # computed from one snapshot of the moved fleet and applied in id
+        # order (no RNG; never kills by itself - see src/drive_plume.py).
+        drive_plume.resolve_plume_wash(self, dt)
 
         # Check for battle end conditions
         # (No last-tick flush is needed: resolving a blast never kills, so it
@@ -2737,6 +2765,11 @@ class CombatSimulation:
         if ship.is_dying:
             self._update_dying_ship(ship, dt)
             return
+
+        # An incapacitated crew (radiation, src/drive_plume.py) flies nothing:
+        # whatever was ordered, the ship coasts.
+        if getattr(ship, 'crew_incapacitated', False):
+            ship.current_maneuver = None
 
         # Process current maneuver
         ship.execution_mode = 'COAST'
