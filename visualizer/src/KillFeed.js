@@ -38,7 +38,7 @@ export function noticesAt(notices, t, linger = 8, max = 3) {
   for (let i = upperBound(notices, t + 1e-6) - 1; i >= 0 && out.length < max; i--) {
     const n = notices[i];
     if (t - n.t > linger) break;
-    const key = `${n.shipId}:${n.kind}`;
+    const key = `${n.shipId}:${n.group || n.kind}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(n);
@@ -46,7 +46,7 @@ export function noticesAt(notices, t, linger = 8, max = 3) {
   return out;
 }
 
-const NOTICE_ICON = { cookoff: '✹', blast: '◎', disarmed: '⚠', adrift: '⚠', drive: '⚠' };
+const NOTICE_ICON = { cookoff: '✹', blast: '◎', disarmed: '⚠', adrift: '⚠', drive: '⚠', plume: '≋', 'plume-update': '≋', crew: '☢' };
 
 export function killLines(k, s) {
   const cls = k.type ? ` · ${getShipClassName(k.type)}` : '';

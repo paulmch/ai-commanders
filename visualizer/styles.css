@@ -2524,7 +2524,7 @@ body.decisions-open .live-delib {
 .result-banner {
   position: fixed; top: 26%; left: 50%; transform: translateX(-50%);
   z-index: 58; display: grid; justify-items: center; gap: 6px;
-  min-width: 360px; max-width: min(560px, calc(100vw - 32px)); padding: 16px 28px 14px;
+  min-width: 360px; max-width: min(680px, calc(100vw - 32px)); padding: 16px 28px 14px;
   background: rgba(6, 12, 20, 0.94); border: 1px solid var(--border-accent);
   box-shadow: 0 0 40px rgba(0, 0, 0, 0.6); text-align: center;
 }
@@ -2866,3 +2866,18 @@ body.decisions-open .live-delib {
 .fit-strip-lg .fit-tube { width: 9px; height: 12px; }
 .fit-strip-lg .fit-pd { width: 7px; height: 7px; }
 .fit-strip-lg .fit-drive { width: 10px; height: 12px; }
+
+/* Round 2: tally lines stay whole; crew radiation and drive-plume wash */
+.result-side { white-space: nowrap; }
+.result-tally { gap: 4px 18px; }
+.ship-list li.impaired .registry-status { color: #c9a0ff; letter-spacing: 0.04em; }
+.kill-toast.notice-crew { border-color: rgba(201, 160, 255, 0.5); }
+.kill-toast.notice-crew .kill-icon, .kill-toast.notice-crew .kill-status { color: #c9a0ff; }
+.kill-toast.notice-plume .kill-icon, .kill-toast.notice-plume .kill-status,
+.kill-toast.notice-plume-update .kill-icon, .kill-toast.notice-plume-update .kill-status { color: #9fe8ff; }
+.timeline-marker.marker-notice.flag-plume::before { background: #9fe8ff; clip-path: polygon(0 20%, 100% 50%, 0 80%); }
+.timeline-marker.marker-notice.flag-crew::before { inset: 1px; clip-path: none; border-radius: 50%; background: #c9a0ff; box-shadow: 0 0 5px #c9a0ff; }
+.fit-crew { display: grid; grid-template-columns: 48px 1fr; align-items: center; gap: 8px; font: 10px var(--font-mono); }
+.fit-crew[hidden] { display: none; }
+.fit-crew .fit-value { text-align: right; }
+.fit-flag[data-flag="impaired"], .fit-flag[data-flag="crew-out"] { background: #c9a0ff; }

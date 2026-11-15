@@ -19,7 +19,7 @@ import { node, defaultDoc } from './hudDom.js';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 /** Notice kinds that earn a timeline mark (a drive hit or a blast victim only shows in the feed / the kill's tooltip). */
-const TIMELINE_NOTICES = new Set(['disarmed', 'adrift', 'cookoff']);
+const TIMELINE_NOTICES = new Set(['disarmed', 'adrift', 'cookoff', 'plume', 'crew']);
 
 /** Marker descriptors (pure): {lane, kind, t, pct, label, title, faction, shipId, seekLead}. */
 export function timelineMarks(hud, duration, ships = {}) {

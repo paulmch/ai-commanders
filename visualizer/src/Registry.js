@@ -45,7 +45,7 @@ export function registryStatus(state, kill, t, fit = null) {
     return { text: s?.in != null ? `☢ ${Math.ceil(s.in)}s` : 'CRIT', level: 'dying' };
   }
   const flag = fittingsFlag(fit);
-  if (flag) return { text: flag, level: flag === 'NO AMMO' ? 'spent' : 'crippled' };
+  if (flag) return { text: flag, level: flag === 'NO AMMO' ? 'spent' : flag === 'IMPAIRED' ? 'impaired' : 'crippled' };
   const hull = Math.round(Math.max(0, Math.min(100, state?.hull ?? 100)));
   return { text: `${hull}%`, level: hull < 35 ? 'low' : 'ok' };
 }
@@ -143,6 +143,7 @@ export class Registry {
         row.li.classList.toggle('low', level === 'low');
         row.li.classList.toggle('crippled', level === 'crippled');
         row.li.classList.toggle('spent', level === 'spent');
+        row.li.classList.toggle('impaired', level === 'impaired');
       }
     }
   }

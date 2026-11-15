@@ -113,7 +113,7 @@ function addSurrenders(out, seen, events, from, ships) {
     const e = events[i];
     if (!e.ship_id || seen.has(e.ship_id)) continue;
     let reason;
-    if (e.event_type === 'surrender') reason = String(e.data?.reason || '');
+    if (e.event_type === 'surrender' || e.event_type === 'ship_surrendered') reason = String(e.data?.reason || '');
     else if (e.event_type === 'captain_decision') {
       const quit = surrenderCall(e);
       if (!quit) continue;
@@ -318,7 +318,7 @@ export function buildComms(events, ids, ships, checkpoints, { from = 0, to = eve
   const decisionAt = new Map();
   for (let i = from; i < to; i++) {
     const e = events[i];
-    if (e.event_type === 'surrender' && e.ship_id) surrendered.add(at(e));
+    if ((e.event_type === 'surrender' || e.event_type === 'ship_surrendered') && e.ship_id) surrendered.add(at(e));
     if (e.event_type === 'captain_report' && e.ship_id) reported.add(at(e));
     else if (e.event_type === 'captain_decision') decisionAt.set(at(e), ids[i]);
   }
@@ -441,8 +441,9 @@ export function buildComms(events, ids, ships, checkpoints, { from = 0, to = eve
       case 'battle_stopped':
         push(e, i, { kind: 'system', tag: 'STOPPED', from: 'Battle control', text: d.reason || 'Battle stopped' });
         break;
+      case 'ship_surrendered':   // fleet-battle surrender event (same row as the 1v1 `surrender`)
       case 'surrender':
-        push(e, i, { kind: 'system', tag: 'SURRENDER', faction: factionOf(ship, ships), from: d.captain_name || nameOf(ship, ships), fromId: ship, shipId: ship, text: `${nameOf(ship, ships)} surrenders.` });
+        push(e, i, { kind: 'system', tag: 'SURRENDER', faction: factionOf(ship, ships), from: d.captain_name || nameOf(ship, ships), fromId: ship, shipId: ship, text: `${nameOf(ship, ships)} surrenders${d.reason ? `: ${clip(d.reason, 200)}` : '.'}` });
         break;
       case 'draw_proposal':
         push(e, i, { kind: 'system', tag: 'DRAW OFFER', faction: factionOf(ship, ships), from: d.captain_name || nameOf(ship, ships), fromId: ship, shipId: ship, text: d.message || 'Proposes a draw.' });
@@ -686,6 +687,17 @@ export function formatLogEvent(e, ships = {}) {
       if (blinded) parts.push(`blinds ${blinded}`);
       return { cls: 'pd', cat: 'kills', text: `BLAST: ${n(e.ship_id)}'s reactor ${parts.join(', ')} (${gj(d.radius_km)} km)` };
     }
+    // Plume lane: a ship in another ship's drive exhaust, and what it does to the crew
+    case 'plume_wash': {
+      if (d.phase === 'torpedo_blinded') return { cls: 'pd', cat: 'pd', text: `EXHAUST: ${n(e.ship_id)}'s plume blinds a torpedo` };
+      if (d.phase === 'sustain' || d.hit_location == null) return null;
+      const who = `${n(e.ship_id)} ${d.phase === 'exit' ? 'clears' : 'enters'} ${n(d.source_ship_id)}'s drive plume${d.friendly ? ' (friendly)' : ''}`;
+      return { cls: 'hit', cat: 'fire', text: d.phase === 'exit'
+        ? `EXHAUST: ${who} after ${Math.round(d.duration_s || 0)} s (+${gj(d.heat_gj)} GJ${d.armor_ablation_cm > 0 ? `, -${gj(d.armor_ablation_cm)} cm ${d.hit_location} armour` : ''}${d.fittings_hit?.length ? `, ${d.fittings_hit.length} fittings burned` : ''})`
+        : `EXHAUST: ${who} at ${gj(d.distance_km)} km (${gj(d.heat_rate_gj_s)} GJ/s)` };
+    }
+    case 'crew_radiation': return { cls: d.state === 'incapacitated' ? 'destroyed' : 'hit', cat: 'fire',
+      text: `RADIATION: ${n(e.ship_id)} crew ${d.state === 'incapacitated' ? 'incapacitated - the ship stops fighting' : 'impaired - weapons cycle slower'} (${gj(d.dose_sv)} Sv${d.source_ship_id ? `, ${n(d.source_ship_id)}'s exhaust` : ''})` };
     case 'shot_fired': return { cls: 'shot', cat: 'fire', text: `FIRE: ${n(e.ship_id)} → ${n(d.target_id)}` };
     case 'torpedo_launched': return { cls: 'torpedo', cat: 'fire', text: `TORPEDO AWAY: ${n(e.ship_id)} → ${n(d.target_id)}` };
     case 'torpedo_impact': return { cls: 'destroyed', cat: 'fire', text: `TORPEDO IMPACT: ${n(d.target_id)} takes ${(Number(d.total_damage_gj) || 0).toFixed(0)} GJ (${d.hit_location || '?'})` };
@@ -705,9 +717,12 @@ export function formatLogEvent(e, ships = {}) {
       return { cls: 'kill', cat: 'kills', text: `CRIPPLED: ${n(e.ship_id)}${by}${fuse}` };
     }
     case 'ship_destroyed': return { cls: 'kill', cat: 'kills', text: `KILL: ${n(e.ship_id)} destroyed${d.cause ? ` (${readable(d.cause)})` : ''}${d.killer_id ? ` · ${n(d.killer_id)}` : ''}` };
+    case 'surrender':
+    case 'ship_surrendered':
     case 'captain_decision': {
-      const quit = surrenderCall(e);
-      return quit ? { cls: 'system', cat: 'kills', text: `SURRENDER: ${n(e.ship_id)} strikes its colours${quit.reason ? ` (${clip(quit.reason, 120)})` : ''}` } : null;
+      // The recorded event, or (fleet battles before it existed) the captain's tool call; addLogRows keeps one per ship
+      const quit = e.event_type === 'captain_decision' ? surrenderCall(e) : { reason: String(d.reason || '') };
+      return quit ? { cls: 'system', cat: 'kills', surrender: true, text: `SURRENDER: ${n(e.ship_id)} strikes its colours${quit.reason ? ` (${clip(quit.reason, 120)})` : ''}` } : null;
     }
     case 'maneuver': return { cls: 'info', cat: 'command', text: `${n(e.ship_id)}: ${d.maneuver_type}${d.throttle != null ? ` @ ${Math.round(d.throttle * 100)}%` : ''}` };
     case 'admiral_directive_failed': return { cls: 'system', cat: 'command', text: `NO DIRECTIVE ${String(d.faction || '').toUpperCase()}: admiral's directive call failed${d.reason ? ` (${clip(d.reason, 120)})` : ''}` };
@@ -731,7 +746,15 @@ function addLogRows(rows, attributed, events, ids, from, ships) {
     const e = events[i];
     if (DEATH_EVENTS.has(e.event_type)) attributed.add(e.ship_id);
     const f = formatLogEvent(e, ships);
-    if (f) rows.push({ id: ids[i], t: e.timestamp, ...f, shipId: e.ship_id || null });
+    if (!f) continue;
+    if (f.surrender) {
+      // One SURRENDER line per ship: the event and the tool call of the same surrender are one fact
+      const key = `surrender:${e.ship_id}`;
+      if (attributed.has(key)) continue;
+      attributed.add(key);
+    }
+    const { surrender, ...row } = f;
+    rows.push({ id: ids[i], t: e.timestamp, ...row, shipId: e.ship_id || null });
   }
 }
 
