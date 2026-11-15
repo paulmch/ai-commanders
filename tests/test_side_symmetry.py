@@ -595,3 +595,70 @@ class TestDeathsInsideTheShipLoopAreSeenByAllAtOnce:
         for sid, row in reference[0].items():
             assert all(x == y if isinstance(x, str) else _close(x, y, 1e-9)
                        for x, y in zip(got[0][sid], row)), sid
+
+
+# =============================================================================
+# G. Weapon arcs: rolled hulls and masked mounts are mirrored too
+# =============================================================================
+
+class TestWeaponArcsAreMirrored:
+    """Mounts, masks and the roll-to-unmask are decided from the start-of-tick
+    snapshot in each hull's own body frame, and the mirror is a rotation
+    (180 degrees about Z), so a mirrored fleet must show the same mount
+    states and the same roll - whoever was added first. Uses the real
+    data/hull_mounts.json as it is (no geometry assumed)."""
+
+    @pytest.mark.parametrize("first", ["alpha", "beta", "interleaved"])
+    def test_rolled_ships_with_masked_mounts_stay_mirror_images(self, first, monkeypatch):
+        from src import weapon_arcs
+        monkeypatch.setattr(random, "Random", _SameRolls)
+        sim = _build(["destroyer", "cruiser", "battleship", "cruiser_torpedo"],
+                     [(-60, 12, 3), (-55, -10, -4), (-70, 0, 1), (-90, 25, 0)], first=first)
+        assert sim.weapon_arcs and sim.roll_to_unmask
+        for n, target in ((1, 2), (2, 3), (3, 1)):
+            _order_both(sim, n, lambda enemy: {
+                "type": "weapons_orders", "default_target_id": enemy(target),
+                "orders": [WeaponsOrder(command=WeaponsCommand.FIRE_IMMEDIATE,
+                                        weapon_slot=slot, target_id=enemy(target))
+                           for slot in sim.ships[f"alpha_{n}"].weapons
+                           if not slot.startswith("pd")]})
+        # every hull starts rolled (the same roll on both sides)
+        for ship in sim.ships.values():
+            arcs = sim._arcs_for(ship)
+            arcs.roll = arcs.roll_goal = 0.6
+        seen_states = set()
+        rolled = False
+        for k in range(120):
+            if k % 30 == 0:
+                _order_both(sim, 1, lambda enemy: Maneuver(
+                    ManeuverType.HOLD_RANGE, start_time=sim.current_time, duration=30.0,
+                    throttle=1.0, target_id=enemy(2), hold_range_m=60_000.0))
+                _order_both(sim, 2, lambda enemy: Maneuver(
+                    ManeuverType.PADLOCK, start_time=sim.current_time, duration=30.0,
+                    target_id=enemy(1)))
+                _order_both(sim, 3, lambda enemy: Maneuver(
+                    ManeuverType.EVASIVE, start_time=sim.current_time, duration=30.0,
+                    throttle=1.0))
+            if k == 20:
+                # a salvo each way, so PD mounts train (and roll takes sides)
+                _order_both(sim, 4, lambda enemy: {"type": "launch_torpedo",
+                                                   "target_id": enemy(3), "count": 4})
+            sim.step()
+            breaks = _mirror_breaks(sim)
+            assert not breaks, (sim.current_time, breaks[:3])
+            for sid, a in sim.ships.items():
+                if a.faction != "alpha":
+                    continue
+                b = sim.ships[_other(sid)]
+                assert a.arcs.roll == pytest.approx(b.arcs.roll, abs=1e-9), (sim.current_time, sid)
+                assert a.arcs.roll_goal == pytest.approx(b.arcs.roll_goal, abs=1e-9)
+                states_a = [m.state for m in a.arcs.mounts]
+                assert states_a == [m.state for m in b.arcs.mounts], (sim.current_time, sid)
+                for ma, mb in zip(a.arcs.mounts, b.arcs.mounts):
+                    assert (ma.ax, ma.ay, ma.az) == pytest.approx((mb.ax, mb.ay, mb.az), abs=1e-6)
+                seen_states.update(states_a)
+                rolled = rolled or abs(a.arcs.roll - 0.6) > 0.02
+        # not vacuous: mounts were on target, slewing or masked, and hulls rolled
+        assert weapon_arcs.MASKED in seen_states and weapon_arcs.ON_TARGET in seen_states
+        assert rolled
+        assert sim.arcs_tally["released"] > 0

@@ -337,6 +337,7 @@ class TestPDDoctrineNumbers:
         # A corvette has one turret: it must be told plainly that it cannot.
         assert "CANNOT blind one" in text
 
+    @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py
     def test_one_and_two_turret_hulls_do_not_blind_a_normal_launch(self, fleet):
         """
         Doctrine: 'a 1- or 2-turret hull does NOT blind a normally launched
@@ -383,6 +384,7 @@ class TestPDDoctrineNumbers:
             f"at some checkpoint: {verdicts}"
         )
 
+    @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py
     def test_closed_form_matches_engine_kill_ranges(self, fleet):
         """The ~5 km/s rule must hold in the real engine, not just on paper:
         one turret kills a 4 km/s ballistic Trident and leaks a 12 km/s one."""
@@ -655,6 +657,7 @@ class TestThreatDisplayContract:
 # =============================================================================
 
 class TestFormationDoctrine:
+    @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py
     def test_escort_wall_reduces_leakage(self, fleet):
         """Admiral doctrine: escorts cut salvo leakage, and the effect needs
         mass (a big wall clearly beats none). Single seed of the measured

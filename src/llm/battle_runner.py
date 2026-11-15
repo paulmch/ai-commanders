@@ -3230,6 +3230,10 @@ class LLMBattleRunner:
                     "armor": armor_data,
                 }
                 ships[ship_id].update(_thermal_trace_fields(ship))
+                # Weapon arcs: hull 'up' (roll included) and per-mount 'tur'
+                arcs_fields = getattr(self.simulation, 'arcs_trace_fields', None)
+                if arcs_fields is not None:
+                    ships[ship_id].update(arcs_fields(ship))
 
         # Build projectile states
         projectiles = []

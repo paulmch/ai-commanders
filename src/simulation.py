@@ -72,6 +72,7 @@ try:
     from .maneuvers import max_arrival_speed_mps, required_decel_ms2
     from . import battle_damage
     from . import drive_plume
+    from . import weapon_arcs
 except ImportError:
     from replay_evidence import ExecutionEvidence, impact_evidence, OMIT_IF_NONE
     from battle_timing import MIN_DECISION_INTERVAL, MAX_DECISION_INTERVAL
@@ -119,6 +120,7 @@ except ImportError:
     from maneuvers import max_arrival_speed_mps, required_decel_ms2
     import battle_damage
     import drive_plume
+    import weapon_arcs
 
 
 # =============================================================================
@@ -405,6 +407,9 @@ class SimulationEventType(Enum):
     PLUME_WASH = auto()
     CREW_RADIATION = auto()      # a crew's plume radiation dose crossed a threshold
     DRIVE_INTERLOCK = auto()     # the drive interlock started / stopped limiting a throttle
+    # Weapon arcs (src/weapon_arcs.py): a mount with a target is masked by
+    # the ship's own hull (entry after MOUNT_MASKED_REPORT_S, and exit)
+    MOUNT_MASKED = auto()
 
 
 # =============================================================================
@@ -682,6 +687,8 @@ class WeaponState:
     # Cooldown multiplier of an irradiated (impaired) crew, src/drive_plume.py.
     crew_cycle_factor: float = 1.0
     shots_fired: int = 0  # Lifetime count for cosmetic barrel alternation.
+    # Mount state (src/weapon_arcs.MountState) once the ship's arcs are attached.
+    mount: Any = field(default=None, repr=False, compare=False)
     # Mount health 0-100 (src/battle_damage.py): a damaged mount cycles slower
     # (mount_cooldown_factor), at 0 the weapon is knocked out.
     mount_health: float = 100.0
@@ -911,6 +918,8 @@ class PDLaserState:
     burst_energy_j: float = 0.0
     # Turret health 0-100 (src/battle_damage.py); at 0 the turret is lost.
     mount_health: float = 100.0
+    # Mount state (src/weapon_arcs.MountState) once the ship's arcs are attached.
+    mount: Any = field(default=None, repr=False, compare=False)
 
     def can_fire(self) -> bool:
         """Check if PD laser can engage."""
@@ -1021,6 +1030,8 @@ class ShipCombatState:
     drive_interlock: Optional[dict] = None
     dying_tumble_axis: Optional[Vector3D] = None
     dying_tumble_rate_rad_s: float = 0.0
+    # Weapon arcs (src/weapon_arcs.ShipArcs): mounts, body frame, roll.
+    arcs: Any = field(default=None, repr=False, compare=False)
 
     # Attitude control (rotation)
     attitude_control: Optional[AttitudeControlSpecs] = None
@@ -1548,11 +1559,19 @@ class CombatSimulation:
         metrics: Engagement metrics.
     """
 
+    # Off for subclasses that skip __init__ (the movement-only prediction
+    # shadow): arcs never change motion.
+    weapon_arcs = False
+    roll_to_unmask = False
+    hull_mounts: dict = {}
+
     def __init__(
         self,
         time_step: float = DEFAULT_TIME_STEP,
         decision_interval: float = DEFAULT_DECISION_INTERVAL,
-        seed: Optional[int] = None
+        seed: Optional[int] = None,
+        weapon_arcs_enabled: Optional[bool] = None,
+        roll_to_unmask: Optional[bool] = None,
     ) -> None:
         """
         Initialize the combat simulation.
@@ -1621,6 +1640,18 @@ class CombatSimulation:
         # Drive plume wash (src/drive_plume.py). Private forecast shadows
         # switch it off; its episode state is created lazily on first contact.
         self.plume_wash_enabled: bool = True
+        # Weapon arcs and turret traverse (src/weapon_arcs.py): mounts fire
+        # only in directions their own hull leaves open, after slewing onto
+        # them; ships roll about the thrust axis to unmask. Hull classes
+        # without an entry in the mount table are ungated.
+        self.weapon_arcs = (weapon_arcs.weapon_arcs_default()
+                            if weapon_arcs_enabled is None else bool(weapon_arcs_enabled))
+        self.roll_to_unmask = (weapon_arcs.roll_to_unmask_default()
+                               if roll_to_unmask is None else bool(roll_to_unmask))
+        self.hull_mounts = weapon_arcs.load_hull_mounts()
+        # Ticks on which fire control released a round from a trainable gun
+        # mount, and how many of those the mount held back (masked / slewing).
+        self.arcs_tally = {'released': 0, 'masked': 0, 'slewing': 0}
 
         # Decision callback
         self._decision_callback: Optional[Callable[[str, 'CombatSimulation'], list[Any]]] = None
@@ -1907,6 +1938,15 @@ class CombatSimulation:
         if not weapon_state.is_target_in_arc(ship.forward, to_target):
             # Target not in arc - don't fire
             return False
+
+        # Weapon arcs: masked by the own hull, or still slewing onto the lead
+        mount = weapon_state.mount
+        if mount is not None and mount.kind == 'gun' and self.weapon_arcs:
+            if ship.arcs.frame_time != self.current_time:
+                ship.arcs.set_frame(ship.forward, ship.kinematic_state.up, self.current_time)
+            if self._arcs_train_gun(ship, weapon_state, mount, target,
+                                    self.time_step) != weapon_arcs.ON_TARGET:
+                return False
 
         # Commit ammo, capacitor and cooldown only after an achievable launch.
         # The accelerated lead can leave the gimbal even with the target in arc.
@@ -2265,6 +2305,21 @@ class CombatSimulation:
                                     target_id, hit_probability=solution.hit_probability,
                                     min_hit_probability=order.min_hit_probability, max_range_km=order.max_range_km)
             if should_fire:
+                # Weapon arcs: the round leaves only when the lead direction
+                # is clear of the ship's own hull and the mount has slewed
+                # onto it (trained this tick by _arcs_train_guns). Checked
+                # last, so the tally counts rounds that fire control had
+                # released and the mount held back.
+                mount = weapon_state.mount
+                if mount is not None and mount.kind == 'gun' and self.weapon_arcs:
+                    tally = self.arcs_tally
+                    tally['released'] += 1
+                    if self._arcs_train_gun(ship, weapon_state, mount, target,
+                                            self.time_step) != weapon_arcs.ON_TARGET:
+                        reason = 'masked' if mount.state == weapon_arcs.MASKED else 'slewing'
+                        tally[reason] += 1
+                        self._weapon_status(ship, weapon_slot, reason, target_id)
+                        continue
                 distance_km = (target.position - ship.position).magnitude / 1000
                 muzzle_v = weapon_state.weapon.muzzle_velocity_kps
                 time_to_target = solution.time_of_flight_s
@@ -2695,11 +2750,20 @@ class CombatSimulation:
         # solution consistent with how projectiles are propagated, and makes the
         # engagement symmetric between factions.
         self._process_pending_torpedo_launches()
+        arcs_on = self.weapon_arcs
+        if arcs_on:
+            if first_step:
+                self.settle_arcs()
+            # Body frame of every hull for this tick; mounts train on their
+            # targets from the same start-of-step snapshot fire control uses.
+            self._arcs_begin_tick()
         for ship in self.ships.values():
             # A surrendered ship is out of the fight: its standing weapons
             # orders must not keep firing (see also the target check below).
             if (not ship.is_destroyed and not ship.is_dying and not ship.is_surrendered
                     and not ship.crew_incapacitated):
+                if arcs_on:
+                    self._arcs_train_guns(ship, dt)
                 self._process_weapons_orders(ship)
 
         # Point defense engages incoming torpedoes and projectiles. It runs on
@@ -2708,6 +2772,11 @@ class CombatSimulation:
         # mixed two instants (error = ship speed x dt; a 30 km/s fleet saw a
         # torpedo 240 km out at 270 km, outside its 250 km envelope).
         self._update_point_defense(dt)
+
+        # Roll to unmask: each hull's roll about its thrust axis, decided
+        # from the same snapshot (never changes where the drive points).
+        if arcs_on and self.roll_to_unmask:
+            self._arcs_update_rolls(dt)
 
         # Update all ships (each one against the same start-of-step picture
         # of the others, see _update_ships)
@@ -6777,11 +6846,379 @@ class CombatSimulation:
             # Coordinate turret assignments to avoid overkill
             turret_assignments = self._coordinate_pd_turrets(ship, targets, dt)
 
-            # Execute engagements
+            # Execute engagements. With weapon arcs a turret dwells only once
+            # it has slewed onto a target its own hull leaves clear; a turret
+            # without an assignment pre-trains on the most urgent target it
+            # can bear on, so it is already on it at envelope entry.
+            arcs = ship.arcs if self.weapon_arcs else None
             for pd, target_info in turret_assignments:
+                mount = pd.mount if arcs is not None else None
                 if target_info is None:
+                    if mount is not None:
+                        self._arcs_pd_pretrain(ship, arcs, pd, mount, targets, dt)
                     continue
+                if mount is not None:
+                    bx, by, bz = self._arcs_pd_dir(ship, arcs, target_info)
+                    state = mount.train(bx, by, bz, dt)
+                    mount.target_id = target_info['target_id']
+                    self._arcs_note_mask(ship, mount, state, 'hull')
+                    if state != weapon_arcs.ON_TARGET:
+                        continue
                 self._pd_execute_engagement(ship, pd, target_info, dt)
+
+    # -------------------------------------------------------------------------
+    # Weapon arcs and turret traverse (src/weapon_arcs.py)
+    # -------------------------------------------------------------------------
+
+    def _arcs_for(self, ship: ShipCombatState):
+        """The ship's ShipArcs, attached on first use (hull class keyed)."""
+        arcs = ship.arcs
+        if arcs is None:
+            arcs = ship.arcs = weapon_arcs.ShipArcs(
+                self.hull_mounts.get(ship.ship_type), ship)
+        return arcs
+
+    def _arcs_begin_tick(self) -> None:
+        """Body frame of every live hull from the start-of-step attitude."""
+        now = self.current_time
+        for ship in self.ships.values():
+            if ship.is_destroyed:
+                continue
+            arcs = ship.arcs
+            if arcs is None:
+                arcs = self._arcs_for(ship)
+            ks = ship.kinematic_state
+            arcs.set_frame(ks.forward, ks.up, now)
+
+    def _arcs_note_mask(self, ship: ShipCombatState, mount, state: int, reason: str) -> None:
+        """
+        mount_masked bookkeeping: one event when a mount has been masked for
+        MOUNT_MASKED_REPORT_S with a target, one when it clears (with the
+        masked duration).
+        """
+        if state == weapon_arcs.MASKED:
+            now = self.current_time
+            if mount.masked_since is None:
+                mount.masked_since = now
+            elif (not mount.masked_reported
+                  and now - mount.masked_since >= weapon_arcs.MOUNT_MASKED_REPORT_S):
+                mount.masked_reported = True
+                self._log_event(SimulationEventType.MOUNT_MASKED, ship.ship_id, mount.target_id, {
+                    'slot': mount.slot, 'kind': mount.kind, 'masked': True,
+                    'reason': reason, 'since': mount.masked_since,
+                })
+        elif mount.masked_since is not None:
+            if mount.masked_reported:
+                self._log_event(SimulationEventType.MOUNT_MASKED, ship.ship_id, mount.target_id, {
+                    'slot': mount.slot, 'kind': mount.kind, 'masked': False,
+                    'duration_s': self.current_time - mount.masked_since,
+                })
+            mount.masked_since = None
+            mount.masked_reported = False
+
+    def _arcs_train_guns(self, ship: ShipCombatState, dt: float) -> None:
+        """
+        Train every gun mount of the ship on its target for this tick -
+        whether or not the gun is ready to fire, so a battery tracks through
+        its cooldown and pays a slew only when the target or the attitude
+        actually changes.
+        """
+        arcs = ship.arcs
+        if arcs is None or not arcs.guns:
+            return
+        weapons = ship.weapons
+        orders = ship.weapons_orders
+        primary = ship.primary_target_id
+        for slot, mount in arcs.guns.items():
+            ws = weapons.get(slot)
+            order = orders.get(slot)
+            target_id = (order.target_id if order is not None else None) or primary
+            target = self.get_ship(target_id) if target_id else None
+            if (ws is None or not ws.is_operational or target is None
+                    or target.is_destroyed or target.is_dying or target.is_surrendered):
+                self._arcs_note_mask(ship, mount, weapon_arcs.IDLE, 'hull')
+                mount.idle()
+                continue
+            self._arcs_train_gun(ship, ws, mount, target, dt)
+
+    def _arcs_train_gun(self, ship: ShipCombatState, weapon_state: 'WeaponState',
+                        mount, target: ShipCombatState, dt: float) -> int:
+        """
+        Slew one gun mount toward the lead direction on ``target`` and return
+        its state. The wanted direction is the very direction the round would
+        leave in (WeaponState.calculate_fire_direction with the engine's
+        target-acceleration estimate); nothing here changes it. Idempotent
+        within a tick for the same target.
+
+        Spinal mounts keep their analytic gimbal rule (pivot_range_deg): that
+        rule is the gate, the mount only mirrors it (ON_TARGET inside the
+        gimbal, MASKED outside) so recordings and commanders see one model.
+        """
+        now = self.current_time
+        target_id = target.ship_id
+        if mount.stamp == now and mount.target_id == target_id:
+            return mount.state
+        saved_aim = weapon_state.current_aim_direction
+        fire_dir = weapon_state.calculate_fire_direction(
+            ship_forward=ship.forward,
+            ship_velocity=ship.velocity,
+            target_position=target.position,
+            target_velocity=target.velocity,
+            shooter_position=ship.position,
+            target_acceleration=self._estimate_target_acceleration(target),
+        )
+        weapon_state.current_aim_direction = saved_aim
+        arcs = ship.arcs
+        mount.target_id = target_id
+        mount.stamp = now
+        if mount.kind == 'spinal':
+            if fire_dir is None:
+                mount.state = state = weapon_arcs.MASKED
+                mount.has_want = False
+            else:
+                mount.ax, mount.ay, mount.az = arcs.to_body(fire_dir.x, fire_dir.y, fire_dir.z)
+                mount.state = state = weapon_arcs.ON_TARGET
+            self._arcs_note_mask(ship, mount, state, 'gimbal')
+            return state
+        if fire_dir is None:
+            # No intercept solution: track the line of sight.
+            fire_dir = (target.position - ship.position).normalized()
+        bx, by, bz = arcs.to_body(fire_dir.x, fire_dir.y, fire_dir.z)
+        state = mount.train(bx, by, bz, dt)
+        self._arcs_note_mask(ship, mount, state, 'hull')
+        return state
+
+    def _arcs_pd_dir(self, ship: ShipCombatState, arcs, target_info: dict):
+        """Body-frame line of sight from the ship to a PD target (memoised)."""
+        body = target_info.get('_body')
+        if body is None:
+            obj = target_info['target']
+            pos = (obj.torpedo.position if target_info['target_type'] == 'torpedo'
+                   else obj.projectile.position)
+            own = ship.position
+            dx, dy, dz = pos.x - own.x, pos.y - own.y, pos.z - own.z
+            n = math.sqrt(dx * dx + dy * dy + dz * dz)
+            if n <= 0.0:
+                body = (1.0, 0.0, 0.0)
+            else:
+                body = arcs.to_body(dx / n, dy / n, dz / n)
+            target_info['_body'] = body
+        return body
+
+    def _arcs_pd_pretrain(self, ship: ShipCombatState, arcs, pd, mount,
+                          targets: list, dt: float) -> None:
+        """
+        A turret without an assignment this tick (cooling down, nothing in
+        its envelope) tracks the most urgent target it can bear on; with no
+        such target it tracks the most urgent one to the edge of its arc.
+        """
+        if not targets or not pd.is_operational:
+            self._arcs_note_mask(ship, mount, weapon_arcs.IDLE, 'hull')
+            mount.idle()
+            return
+        chosen = None
+        for info in targets:
+            body = self._arcs_pd_dir(ship, arcs, info)
+            if not mount.mask[weapon_arcs.cell_index(*body)]:
+                chosen = info
+                break
+        if chosen is None:
+            chosen = targets[0]
+            body = self._arcs_pd_dir(ship, arcs, chosen)
+        state = mount.train(body[0], body[1], body[2], dt)
+        mount.target_id = chosen['target_id']
+        # Only a masked target inside the envelope is worth reporting.
+        in_reach = pd.laser.is_in_range(chosen['distance_km'])
+        self._arcs_note_mask(
+            ship, mount, state if (in_reach or state != weapon_arcs.MASKED) else weapon_arcs.IDLE,
+            'hull')
+
+    def _arcs_roll_params(self, ship: ShipCombatState) -> tuple[float, float]:
+        """Roll acceleration and rate cap (rad/s^2, rad/s) from the RCS authority."""
+        accel, max_rate = self._get_rotation_params(ship, False)
+        k = weapon_arcs.ROLL_RCS_AUTHORITY_FACTOR
+        return accel * k, max_rate * k
+
+    def _arcs_roll_inputs(self, ship: ShipCombatState, arcs):
+        """
+        What the roll is chosen for: body-frame lines of sight to the hostile
+        live torpedoes near the ship (with the operational PD mounts), and the
+        wanted directions of the trainable gun mounts that have a target
+        (with their energy per round as weight).
+        """
+        torps = []
+        pd_mounts = [pd.mount for pd in ship.point_defense
+                     if pd.is_operational and pd.mount is not None]
+        if pd_mounts and self.torpedoes:
+            horizon_m = (weapon_arcs.ROLL_PD_HORIZON_ENVELOPES * 1000.0
+                         * max(pd.laser.range_km for pd in ship.point_defense))
+            own = ship.position
+            ox, oy, oz = own.x, own.y, own.z
+            faction = ship.faction
+            for flight in self.torpedoes:
+                if flight.is_disabled:
+                    continue
+                source = self.get_ship(flight.source_ship_id)
+                if source is not None and source.faction == faction:
+                    continue
+                pos = flight.torpedo.position
+                dx, dy, dz = pos.x - ox, pos.y - oy, pos.z - oz
+                n = math.sqrt(dx * dx + dy * dy + dz * dz)
+                if 0.0 < n <= horizon_m:
+                    torps.append(arcs.to_body(dx / n, dy / n, dz / n))
+        guns = []
+        for slot, mount in arcs.guns.items():
+            if mount.kind != 'gun' or not mount.has_want or mount.state == weapon_arcs.IDLE:
+                continue
+            ws = ship.weapons.get(slot)
+            if ws is None or not ws.is_operational or ws.ammo_remaining <= 0:
+                continue
+            guns.append((mount, ws.weapon.kinetic_energy_gj))
+        return torps, pd_mounts, guns
+
+    @staticmethod
+    def _arcs_roll_score(phi: float, torps, pd_mounts, guns) -> tuple[int, float]:
+        """
+        (PD turret-on-torpedo pairs, gun energy bearing) after rolling phi
+        more - summed over phi and phi +/- ROLL_MARGIN_DEG, so a roll that
+        leaves a target on the very edge of an arc scores a third of one that
+        holds it with margin (targets in the battle plane sit exactly on the
+        horizon of an unrolled dorsal or ventral mount).
+        """
+        cell_index = weapon_arcs.cell_index
+        pairs = 0
+        energy = 0.0
+        for offset in weapon_arcs.ROLL_MARGIN_SAMPLES_RAD:
+            c, s = math.cos(phi + offset), math.sin(phi + offset)
+            for bx, by, bz in torps:
+                cell = cell_index(bx, by * c + bz * s, bz * c - by * s)
+                for mount in pd_mounts:
+                    if not mount.mask[cell]:
+                        pairs += 1
+            for mount, weight in guns:
+                by, bz = mount.wy, mount.wz
+                if not mount.mask[cell_index(mount.wx, by * c + bz * s, bz * c - by * s)]:
+                    energy += weight
+        return pairs, energy
+
+    def _arcs_plan_roll(self, ship: ShipCombatState, arcs) -> None:
+        """
+        Choose the roll goal: the roll that puts the most PD turrets onto
+        inbound torpedoes first, and with that settled the most gun energy
+        onto the gun target. The smallest roll wins ties; the standing goal
+        is kept unless a candidate is better by an extra turret-torpedo pair
+        or by ROLL_GUN_HYSTERESIS_FRACTION of the hull's trainable gun energy.
+        """
+        torps, pd_mounts, guns = self._arcs_roll_inputs(ship, arcs)
+        if not torps and not guns:
+            return
+        score = self._arcs_roll_score
+        standing_phi = arcs.roll_goal - arcs.roll
+        standing = score(standing_phi, torps, pd_mounts, guns)
+        step = math.radians(weapon_arcs.ROLL_CANDIDATE_STEP_DEG)
+        n = int(round(math.pi / step))
+        best_phi, best = 0.0, score(0.0, torps, pd_mounts, guns)
+        for k in range(1, n + 1):
+            for phi in ((k * step, -k * step) if k < n else (k * step,)):
+                cand = score(phi, torps, pd_mounts, guns)
+                if cand[0] > best[0] or (cand[0] == best[0] and cand[1] > best[1] + 1e-9):
+                    best_phi, best = phi, cand
+        samples = len(weapon_arcs.ROLL_MARGIN_SAMPLES_RAD)
+        margin = weapon_arcs.ROLL_GUN_HYSTERESIS_FRACTION * samples * sum(w for _, w in guns)
+        if (best[0] >= standing[0] + weapon_arcs.ROLL_PD_HYSTERESIS_SAMPLES
+                or (best[0] >= standing[0] and best[1] > standing[1] + margin + 1e-9)):
+            arcs.roll_goal = arcs.roll + best_phi
+
+    def settle_arcs(self) -> None:
+        """
+        Initial condition of an engagement: every hull is already rolled for
+        its first targets and its mounts are trained on them, as after the
+        minutes of approach that precede a battle. step() does this once at
+        t = 0 (after the first decision point has named targets); a scripted
+        scenario that hands out targets later may call it itself. Never used
+        to move a mount or a hull during a battle.
+        """
+        if not self.weapon_arcs:
+            return
+        self._arcs_begin_tick()
+        now = self.current_time
+        for ship in self.ships.values():
+            arcs = ship.arcs
+            if (arcs is None or not arcs.mounts or ship.is_destroyed or ship.is_dying
+                    or ship.is_surrendered):
+                continue
+            self._arcs_train_guns(ship, 0.0)
+            if self.roll_to_unmask:
+                self._arcs_plan_roll(ship, arcs)
+                arcs.roll = arcs.roll_goal
+                arcs.roll_rate = 0.0
+            ks = ship.kinematic_state
+            arcs.set_frame(ks.forward, ks.up, now)
+            for mount in arcs.mounts:
+                # untrained again: the first designation in the settled
+                # attitude is the free one
+                mount.trained = False
+                mount.stamp = -1.0
+                mount.state = weapon_arcs.IDLE
+                mount.masked_since = None
+                mount.masked_reported = False
+
+    def _arcs_update_rolls(self, dt: float) -> None:
+        """
+        Roll to unmask. Each live hull re-plans its roll goal on the
+        ROLL_REPLAN_INTERVAL_S lattice and rolls toward it about its thrust
+        axis with a bang-bang controller on the RCS roll authority. Roll is
+        hull attitude only: it never changes forward, the navigation up
+        evasion steers by, or anything else that moves a ship.
+        """
+        now = self.current_time
+        replan = (now % weapon_arcs.ROLL_REPLAN_INTERVAL_S) < dt * 0.5
+        for ship in self.ships.values():
+            arcs = ship.arcs
+            if (arcs is None or not arcs.mounts or ship.is_destroyed or ship.is_dying
+                    or ship.is_surrendered or ship.crew_incapacitated):
+                continue
+            if replan:
+                self._arcs_plan_roll(ship, arcs)
+            err = arcs.roll_goal - arcs.roll
+            rate = arcs.roll_rate
+            if err == 0.0 and rate == 0.0:
+                continue
+            accel, max_rate = self._arcs_roll_params(ship)
+            # Rate profile that can always stop on the goal: the rate changes
+            # by at most a dt per tick and is held under the largest rate
+            # from which braking a dt per tick still stops within |err|
+            # (v^2 / 2a + v dt / 2 <= |err|, the discrete-time stopping distance).
+            half = 0.5 * accel * dt
+            wanted = min(max_rate, math.sqrt(half * half + 2.0 * accel * abs(err)) - half)
+            if err < 0.0:
+                wanted = -wanted
+            limit = accel * dt
+            change = wanted - rate
+            rate += limit if change > limit else (-limit if change < -limit else change)
+            travel = rate * dt
+            if (err - travel) * err <= 0.0 or (abs(err) <= limit * dt and abs(rate) <= limit):
+                arcs.roll = arcs.roll_goal          # arrived (within one tick of braking)
+                arcs.roll_rate = 0.0
+            else:
+                arcs.roll += travel
+                arcs.roll_rate = rate
+
+    def arcs_trace_fields(self, ship: ShipCombatState) -> dict:
+        """
+        Trace-frame fields of the weapon arcs: the hull's 'up' (unit vector,
+        body z in world coordinates, roll included) and 'tur', per mount in
+        hull_mounts order [az_deg, el_deg, state]. Empty when arcs are off.
+        """
+        arcs = ship.arcs
+        if not self.weapon_arcs or arcs is None:
+            return {}
+        ks = ship.kinematic_state
+        arcs.set_frame(ks.forward, ks.up, self.current_time)
+        out = {'up': [round(arcs.ux, 4), round(arcs.uy, 4), round(arcs.uz, 4)]}
+        if arcs.mounts:
+            out['tur'] = arcs.trace()
+        return out
 
     def _build_pd_target_list(self, ship: ShipCombatState) -> list[dict]:
         """
@@ -6829,9 +7266,14 @@ class CombatSimulation:
         # and the envelope of each operational turret. Constant while the
         # list is built (nothing moves or is damaged in here), so it is read
         # once instead of per torpedo x hull x turret.
+        # With weapon arcs a turret only counts if it BEARS on the torpedo
+        # (its own hull does not mask the line of sight).
+        arcs_on = self.weapon_arcs
         turret_cover = [
             (friendly.position,
-             [pd.laser.range_km for pd in friendly.point_defense if pd.is_operational])
+             [(pd.laser.range_km, pd.mount if arcs_on else None)
+              for pd in friendly.point_defense if pd.is_operational],
+             friendly.arcs if arcs_on else None)
             for friendly in [ship] + allied_ships
             if not (friendly.is_destroyed or friendly.is_dying or friendly.is_surrendered)
         ] if self.torpedoes else []
@@ -6913,10 +7355,21 @@ class CombatSimulation:
             # what makes "savable" a formation property, not a lone-hull one.
             friendly_turrets_in_range = 0
             torp_pos = torp.position
-            for friendly_pos, turret_ranges_km in turret_cover:
-                f_dist_km = torp_pos.distance_to(friendly_pos) / 1000
-                for turret_range_km in turret_ranges_km:
+            for friendly_pos, turrets, f_arcs in turret_cover:
+                f_dist_m = torp_pos.distance_to(friendly_pos)
+                f_dist_km = f_dist_m / 1000
+                body = None
+                for turret_range_km, f_mount in turrets:
                     if f_dist_km <= turret_range_km:
+                        if f_mount is not None and f_dist_m > 0.0:
+                            if body is None:
+                                inv = 1.0 / f_dist_m
+                                body = f_arcs.to_body(
+                                    (torp_pos.x - friendly_pos.x) * inv,
+                                    (torp_pos.y - friendly_pos.y) * inv,
+                                    (torp_pos.z - friendly_pos.z) * inv)
+                            if f_mount.mask[weapon_arcs.cell_index(*body)]:
+                                continue
                         friendly_turrets_in_range += 1
 
             savable = turrets_needed <= friendly_turrets_in_range
@@ -7062,6 +7515,22 @@ class CombatSimulation:
                 ship, target_info, dt
             )
 
+        # A turret reaches a target when it is inside its envelope and, with
+        # weapon arcs, the turret's own hull does not mask the line of sight.
+        arcs = ship.arcs if self.weapon_arcs else None
+        if arcs is not None and arcs.mounts:
+            pd_dir = self._arcs_pd_dir
+            cell_index = weapon_arcs.cell_index
+
+            def reaches(pd, info) -> bool:
+                if not pd.laser.is_in_range(info['distance_km']):
+                    return False
+                mount = pd.mount
+                return mount is None or not mount.mask[cell_index(*pd_dir(ship, arcs, info))]
+        else:
+            def reaches(pd, info) -> bool:
+                return pd.laser.is_in_range(info['distance_km'])
+
         # First pass: assign turrets to highest priority targets
         for target_info in targets:
             if len(assigned_turrets) >= len(available_turrets):
@@ -7072,7 +7541,7 @@ class CombatSimulation:
             # Check if any turret can reach this target
             reachable_indices = [
                 i for i, pd in enumerate(available_turrets)
-                if pd.laser.is_in_range(distance_km) and i not in assigned_turrets
+                if i not in assigned_turrets and reaches(pd, target_info)
             ]
 
             if not reachable_indices:
@@ -7103,12 +7572,12 @@ class CombatSimulation:
         torpedo_targets = [
             t for t in targets
             if t['target_type'] == 'torpedo'
-            and any(pd.laser.is_in_range(t['distance_km']) for pd in available_turrets)
+            and any(reaches(pd, t) for pd in available_turrets)
         ]
         pile_on = torpedo_targets or [
             t for t in targets
             if t['target_type'] == 'projectile'
-            and any(pd.laser.is_in_range(t['distance_km']) for pd in available_turrets)
+            and any(reaches(pd, t) for pd in available_turrets)
         ]
         if pile_on:
             cycle = 0
@@ -7118,7 +7587,7 @@ class CombatSimulation:
                 # Find the next pile-on target this turret can actually reach
                 for offset in range(len(pile_on)):
                     target_info = pile_on[(cycle + offset) % len(pile_on)]
-                    if pd.laser.is_in_range(target_info['distance_km']):
+                    if reaches(pd, target_info):
                         assignments.append((pd, target_info))
                         target_info['turrets_assigned'] += 1
                         assigned_turrets.add(i)

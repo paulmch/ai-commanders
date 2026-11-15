@@ -705,6 +705,7 @@ class TestPdTargetListTurretCover:
                 sim.step()
         return [t for t in sim.torpedoes if not t.is_disabled]
 
+    @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py
     def test_savability_follows_turret_and_hull_losses(self):
         sim, ships, shooter = self._setup()
         torps = self._launch(sim, shooter, "beta_0", 4)

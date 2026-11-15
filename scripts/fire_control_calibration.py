@@ -292,7 +292,13 @@ def harness_run(seed: int, cls: str, target_type: str, range_km: float, fleet: d
     spread over ``spread_deg`` of bearing, PADLOCKed on one target and
     firing FIRE_IMMEDIATE - returns one row per resolved round."""
     rng = random.Random(seed)
-    sim = CombatSimulation(time_step=1.0, decision_interval=30.0, seed=seed)
+    # A fire-control instrument: it measures what happens to a round that
+    # LEAVES, so it runs without weapon arcs (src/weapon_arcs.py), which only
+    # decide whether and when one leaves. With arcs no attitude lets its lone
+    # battleship fire all four batteries at one target (at most two bear), so
+    # the engagements would thin out below their statistical floor.
+    sim = CombatSimulation(time_step=1.0, decision_interval=30.0, seed=seed,
+                           weapon_arcs_enabled=False)
     target = create_ship_from_fleet_data(
         "target", target_type, "beta", fleet, position=Vector3D(range_km * 1000.0, 0, 0),
         velocity=_unit(rng) * rng.uniform(0, 1500),
