@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { getPuffTexture, getGlowTexture, getNoiseTexture } from './Textures.js';
 import { RCS_S, fitScale } from './Hulls.js';
+import { hullBasis, validUp } from '../HullFrame.js';
 
 /**
  * RCS attitude jets.
@@ -221,6 +222,7 @@ export function buildShipKinematics(trace, shipId, shipType) {
     n,
     t: new Float64Array(n),
     fwd: new Float32Array(3 * n),
+    up: null,                       // Float32Array(3n) when the trace records `up`
     dem: new Float32Array(3 * n),
     mode: new Int8Array(n),
     alive: new Uint8Array(n),
@@ -249,6 +251,10 @@ export function buildShipKinematics(trace, shipId, shipType) {
     const fw = s.fwd || [0, 0, 1];
     const l = Math.hypot(fw[0], fw[1], fw[2]) || 1;
     k.fwd[3 * i] = fw[0] / l; k.fwd[3 * i + 1] = fw[1] / l; k.fwd[3 * i + 2] = fw[2] / l;
+    if (validUp(s.up)) {
+      if (!k.up) k.up = new Float32Array(3 * n);
+      k.up[3 * i] = s.up[0]; k.up[3 * i + 1] = s.up[1]; k.up[3 * i + 2] = s.up[2];
+    }
     thrust[i] = s.thrust || 0;
     if (Array.isArray(s.alpha)) {
       recA[i] = 1;
@@ -407,6 +413,13 @@ export function sampleKinematics(k, t, out) {
   const fz = k.fwd[3 * i + 2] + (k.fwd[3 * j + 2] - k.fwd[3 * i + 2]) * f;
   const l = Math.hypot(fx, fy, fz) || 1;
   out.fwd[0] = fx / l; out.fwd[1] = fy / l; out.fwd[2] = fz / l;
+  // recorded roll: lerped (hullBasis squares it against the nose); a frame
+  // without it (ship absent) leaves a zero vector, i.e. the lookAt roll
+  if (k.up) {
+    const U = out._up || (out._up = [0, 0, 0]);
+    for (let c = 0; c < 3; c++) U[c] = k.up[3 * i + c] + (k.up[3 * j + c] - k.up[3 * i + c]) * f;
+    out.up = U;
+  } else out.up = null;
   return out;
 }
 
@@ -421,7 +434,8 @@ export function newSample() {
  * Body axes for a heading, exactly as Object3D.lookAt builds them for a
  * non-camera object with world +Y up: z = fwd, x = up x z, y = z x x.
  */
-export function lookAtBasis(fwd, x, y) {
+export function lookAtBasis(fwd, x, y, up = null) {
+  if (validUp(up) && hullBasis(fwd, up, x, y)) return;
   let zx = fwd[0], zy = fwd[1], zz = fwd[2];
   let xx = zz, xy = 0, xz = -zx;               // (0,1,0) x z
   if (xx * xx + xz * xz === 0) {
@@ -447,7 +461,7 @@ export function bodyDemand(sample, out) {
   out[0] = out[1] = 0;
   if (!sample.alive || sample.mode === MODE_NONE) return out;
   const X = _bx, Y = _by;
-  lookAtBasis(sample.fwd, X, Y);
+  lookAtBasis(sample.fwd, X, Y, sample.up);
   const a = sample.demand;
   const tx = a[0] * X[0] + a[1] * X[1] + a[2] * X[2];
   const ty = a[0] * Y[0] + a[1] * Y[1] + a[2] * Y[2];
@@ -469,7 +483,7 @@ export function bodySwing(sample, out) {
   out[0] = out[1] = 0;
   if (!sample.alive) return out;
   const X = _bx, Y = _by;
-  lookAtBasis(sample.fwd, X, Y);
+  lookAtBasis(sample.fwd, X, Y, sample.up);
   const w = sample.swing;
   out[0] = w[0] * X[0] + w[1] * X[1] + w[2] * X[2];
   out[1] = w[0] * Y[0] + w[1] * Y[1] + w[2] * Y[2];
@@ -1270,7 +1284,7 @@ export class RcsSystem {
   /** Recorded body orientation at time t (lookAt basis of the traced heading). */
   _traceQuat(planner, t, out) {
     const s = planner.sample(t, this._s);
-    lookAtBasis(s.fwd, this._bx, this._by);
+    lookAtBasis(s.fwd, this._bx, this._by, s.up);
     this._X.fromArray(this._bx);
     this._Y.fromArray(this._by);
     this._Z.fromArray(s.fwd);

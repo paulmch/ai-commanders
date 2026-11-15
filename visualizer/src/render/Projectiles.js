@@ -13,6 +13,8 @@ import { washAt } from '../DamageTimeline.js';
 import {
   RCS_LAYOUT, ENGINE, PULSE, JET_COUNT, attitudeAt, jetLevels, makePulses, pulsesAt, throttleAt
 } from './TorpedoRcs.js';
+import { hullQuat, validUp } from '../HullFrame.js';
+const _fwdArr = [0, 0, 1], _quatArr = [0, 0, 0, 1];
 
 const Z = new THREE.Vector3(0, 0, 1);
 const Y = new THREE.Vector3(0, 1, 0);
@@ -228,15 +230,21 @@ export class Projectiles {
     const reach = size.length * 2;
     const w = 1 - THREE.MathUtils.smoothstep(p.distanceTo(this.e), 0, reach);
     if (w <= 0) return p;
-    this.hullQuaternion(this.liftSample.fwd, this.q2);
+    this.hullQuaternion(this.liftSample.fwd, this.q2, this.liftSample.up);
     return p.addScaledVector(this.u.copy(mz.pos).applyQuaternion(this.q2), w);
   }
 
   /** The recorded hull orientation (SceneManager.updateShip's lookAt). */
-  hullQuaternion(fwd, out) {
+  hullQuaternion(fwd, out, up = null) {
     this.s1.fromArray(fwd);
     if (this.s1.lengthSq() < 1e-10) return out.identity();
-    this.m4.lookAt(this.s1.normalize(), ORIGIN, Y);
+    this.s1.normalize();
+    if (validUp(up)) {
+      // the ship's recorded roll (HullFrame): same frame as SceneManager
+      const q = hullQuat(this.s1.toArray(_fwdArr), up, _quatArr);
+      return out.set(q[0], q[1], q[2], q[3]);
+    }
+    this.m4.lookAt(this.s1, ORIGIN, Y);
     return out.setFromRotationMatrix(this.m4);
   }
 
@@ -246,7 +254,7 @@ export class Projectiles {
     if (!first || !sampleTrack(track, tr.start, this.shipSample)) return null;
     // Barrel axis: the round's launch velocity relative to the shooter.
     this.aim.fromArray(first.state.vel || [0, 0, 1]).sub(this.s2.fromArray(this.shipSample.vel));
-    this.hullQuaternion(this.shipSample.fwd, this.q2).invert();
+    this.hullQuaternion(this.shipSample.fwd, this.q2, this.shipSample.up).invert();
     this.aim.applyQuaternion(this.q2);
     if (this.aim.lengthSq() < 1e-10) this.aim.copy(Z); else this.aim.normalize();
     const out = { pos: new THREE.Vector3(), dir: new THREE.Vector3() };
@@ -759,7 +767,7 @@ export class Projectiles {
       const target = this.timeline.ships.get(m.data.target_id);
       if (target && track && sampleTrack(target, m.time, this.shipSample) && sampleTrack(track, m.time, this.liftSample)) {
         this.aim.fromArray(this.shipSample.pos).sub(this.s2.fromArray(this.liftSample.pos));
-        this.hullQuaternion(this.liftSample.fwd, this.q2).invert();
+        this.hullQuaternion(this.liftSample.fwd, this.q2, this.liftSample.up).invert();
         this.aim.applyQuaternion(this.q2);
         if (this.aim.lengthSq() < 1e-10) this.aim.copy(Z); else this.aim.normalize();
       }

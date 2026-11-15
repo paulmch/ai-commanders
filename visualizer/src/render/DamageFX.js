@@ -824,12 +824,12 @@ class ShipView {
     const fx = this.fx, trace = fx.timeline.trace;
     const a = shipStateAt(trace, this.id, w.t, fx._st);
     if (!a) return;
-    const ap = a.pos.slice(), af = a.fwd.slice();
+    const ap = a.pos.slice(), af = a.fwd.slice(), au = a.up ? a.up.slice() : null;
     const b = shipStateAt(trace, w.source, w.t, fx._st);
     if (!b) return;
     const dx = b.pos[0] - ap[0], dy = b.pos[1] - ap[1], dz = b.pos[2] - ap[2];
     const l = Math.hypot(dx, dy, dz) || 1;
-    const d = worldToLocalDir(af, [dx / l, dy / l, dz / l]);
+    const d = worldToLocalDir(af, [dx / l, dy / l, dz / l], au);
     if (!this.washGroup) {
       this.washMat = washMaterial();
       this.washMat.uniforms.uSeed.value = (this.seed % 977) / 977;
@@ -1112,7 +1112,7 @@ class ShipView {
       } else {
         res = this.emitters?.[0] || null;
       }
-      const B = localBasis(st.fwd, _basis);
+      const B = localBasis(st.fwd, _basis, st.up);
       const lp = res ? res.p : _v.set(0, 0, 0);
       const ln = res ? res.n : _v2.set(1, 0, 0);
       const SC = fx.SCALE;
@@ -1414,7 +1414,7 @@ class ShipView {
  * @param {THREE.Vector3} N  world surface normal
  */
 export function strikeSpallDir(m, N, out) {
-  const B = localBasis(m.shipFwd || [0, 0, 1], _basis);
+  const B = localBasis(m.shipFwd || [0, 0, 1], _basis, m.shipUp);
   const a = m.approach || [0, 0, 1];
   // incoming travel direction (world): away from the attacker
   _v2.set(
@@ -1580,7 +1580,7 @@ export class DamageFX {
   /** World position + normal of a mark at its impact time (scene units). */
   markWorld(m, res, outP, outN) {
     const SC = this.SCALE;
-    const B = localBasis(m.shipFwd, _basis);
+    const B = localBasis(m.shipFwd, _basis, m.shipUp);
     const p = res.p, n = res.n;
     const sp = m.shipPos || [0, 0, 0];
     outP.set(
@@ -1741,7 +1741,7 @@ export class DamageFX {
     const SC = this.SCALE;
     const st = shipStateAt(this.timeline.trace, v.id, t, this._st);
     if (!st) return;
-    const B = localBasis(st.fwd, _basis);
+    const B = localBasis(st.fwd, _basis, st.up);
     const P = new THREE.Vector3(), N = new THREE.Vector3();
     const toWorld = (l, out, w) => out.set(
       B.x[0] * l.x + B.y[0] * l.y + B.z[0] * l.z + w[0],
