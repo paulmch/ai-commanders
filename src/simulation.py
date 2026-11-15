@@ -404,6 +404,7 @@ class SimulationEventType(Enum):
     # Drive plume wash (src/drive_plume.py): a ship in another ship's exhaust
     PLUME_WASH = auto()
     CREW_RADIATION = auto()      # a crew's plume radiation dose crossed a threshold
+    DRIVE_INTERLOCK = auto()     # the drive interlock started / stopped limiting a throttle
 
 
 # =============================================================================
@@ -1015,6 +1016,9 @@ class ShipCombatState:
     crew_dose_sv: float = 0.0
     crew_impaired: bool = False
     crew_incapacitated: bool = False
+    # Set each tick by the drive interlock while it limits this ship's
+    # throttle (drive_plume.apply_interlock), else None.
+    drive_interlock: Optional[dict] = None
     dying_tumble_axis: Optional[Vector3D] = None
     dying_tumble_rate_rad_s: float = 0.0
 
@@ -2774,6 +2778,10 @@ class CombatSimulation:
         (Not covered: a reactor meltdown inside this loop flips is_destroyed /
         is_dying at once, as before.)
         """
+        # Drive interlock (src/drive_plume.py): every ship's throttle cap for
+        # this step, from the same start-of-step snapshot (pure, no RNG; the
+        # prediction shadow runs this very code and so predicts capped burns).
+        self._drive_interlock_caps = drive_plume.interlock_caps(self, dt)
         staged = []
         for ship in self.ships.values():
             seen_by_others = (ship.kinematic_state.copy(),
@@ -3016,6 +3024,10 @@ class CombatSimulation:
         if not ship.attitude_commanded:
             ship.angular_velocity_rad_s = 0.0
             ship.rotation_state = None
+
+        # Drive interlock: never cook a friendly astern (src/drive_plume.py).
+        if throttle > 0.0 or getattr(ship, 'drive_interlock', None) is not None:
+            throttle = drive_plume.apply_interlock(self, ship, throttle, dt)
 
         # Apply engine damage to effective thrust
         engine_eff = ship.get_effective_thrust_fraction()

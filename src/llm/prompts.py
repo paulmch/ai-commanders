@@ -3301,6 +3301,13 @@ def _format_now(snapshot: Any, last_failure: Optional[Tuple[float, str]],
             problems.append(f"hull {row.hull_integrity:.0f}%")
         if row.heat_percent >= heat_hold_pct:
             problems.append(f"heat {row.heat_percent:.0f}% (guns hold at {heat_hold_pct:.0f}%)")
+        crew = getattr(row, "crew_state", "fit")
+        dose = getattr(row, "crew_dose_sv", 0.0) or 0.0
+        if crew == "incapacitated":
+            problems.append(f"CREW INCAPACITATED by plume radiation ({dose:.1f} Sv) - CANNOT EXECUTE "
+                            f"ORDERS (coasting, not firing)")
+        elif crew == "impaired":
+            problems.append(f"crew IMPAIRED by plume radiation ({dose:.1f} Sv): weapons cycle slower")
         if problems:
             items.append(f"{_lbl(snapshot, row.ship_id, row.ship_name)}: {', '.join(problems)}")
     if last_failure:
@@ -3607,6 +3614,11 @@ def _format_threat_table(snapshot: Any) -> str:
             parts.append(f"hull {e.hull_integrity:.0f}%")
         if e.pd_total:
             parts.append(f"PD {e.pd_operational}/{e.pd_total}")
+        enemy_crew = getattr(e, "crew_state", "fit")
+        if enemy_crew == "incapacitated":
+            parts.append("NOT MANEUVERING, NOT FIRING (crew incapacitated by plume wash)")
+        elif enemy_crew == "impaired":
+            parts.append("crew impaired by plume wash (slower fire)")
         arms = e.armament or ""
         if e.launchers:
             left = max(0, e.magazine - e.torpedoes_launched)
