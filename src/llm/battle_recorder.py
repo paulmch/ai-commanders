@@ -145,8 +145,16 @@ def dumps_indented(obj: Any, indent: int = 2) -> str:
     append = out.append
     indents = ['\n' + ' ' * (indent * level) for level in range(64)]
 
+    float_repr = float.__repr__
+
     def write(o: Any, level: int) -> None:
-        if isinstance(o, str):
+        kind = type(o)
+        if kind is float:
+            # The common leaf by far (positions, velocities). repr() of a
+            # finite float never ends in a letter; 'nan'/'inf'/'-inf' do.
+            text = float_repr(o)
+            append(text if text[-1] not in 'fn' else _float_json(o))
+        elif isinstance(o, str):
             append(_encode_json_string(o))
         elif o is None:
             append('null')
