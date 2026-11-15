@@ -5,8 +5,10 @@ percentage, and what a ship's death does to everything around it.
 Three automatic mechanics, all resolved by the engine (no commander tools):
 
 1. SURFACE FITTINGS. Every hull hit - penetrating or not - can strike an
-   external fitting: a gun mount or a point-defence turret. A damaged gun mount
-   fires slower, a wrecked one stops firing; PD turrets are lost one at a time.
+   external fitting: a gun mount, a torpedo tube or a point-defence turret (a
+   hit on the stern: the drive). A damaged gun mount or tube cycles slower, a
+   wrecked one stops firing (a tube takes its rounds with it); PD turrets are
+   lost one at a time; a damaged drive loses thrust.
    The long armour-ablation phase of a gun duel therefore strips a ship's teeth
    and its torpedo defence before the armour ever opens.
 
@@ -61,21 +63,25 @@ def _event_types(sim: "CombatSimulation") -> Any:
 # The flanks and the stern carry the turrets; the bow shows a small
 # cross-section with only the spinal mount and the forward PD in it.
 SURFACE_FITTING_HIT_CHANCE = {
-    HitLocation.NOSE: 0.12,
-    HitLocation.LATERAL: 0.18,
-    HitLocation.TAIL: 0.18,
+    HitLocation.NOSE: 0.15,
+    HitLocation.LATERAL: 0.25,
+    HitLocation.TAIL: 0.25,
 }
-# Fitting health lost per GJ of impact energy (percent). A ~2.7 GJ coilgun hit
-# takes ~2/3 of a mount: the first hit degrades it, the second wrecks it. A
-# torpedo (~25 GJ) wrecks whatever it catches.
-MOUNT_DAMAGE_PCT_PER_GJ = 25.0
+# Fitting health lost per GJ of impact energy (percent). Coilgun hits land with
+# 0.5-3 GJ (median ~2 GJ in seeded fleet battles): a typical hit takes ~2/3 of
+# a gun mount or torpedo tube - the first degrades it, the second wrecks it -
+# and a spinal round or a torpedo (~25 GJ) wrecks whatever it catches.
+MOUNT_DAMAGE_PCT_PER_GJ = 35.0
+# PD turrets are optics behind a thin shutter: a full-energy slug (1.7 GJ or
+# more) blows one off the hull, a PD-ablated one only cracks it.
+PD_TURRET_DAMAGE_PCT_PER_GJ = 60.0
 # The drive bells are the one fitting a TAIL hit cannot miss for long: chance
 # that a hull hit on the stern strikes the engine assembly (rolled before the
 # turret chance, on the same draw), and engine-module health lost per GJ. A
-# ~2.7 GJ slug costs ~1/3 of the thrust, a torpedo up the tail leaves the ship
-# adrift - crippled, not dead (the engine is not a critical module).
+# typical ~2 GJ slug costs ~30% of the thrust, a torpedo up the tail leaves
+# the ship adrift - crippled, not dead (the engine is not a critical module).
 ENGINE_HIT_CHANCE_TAIL = 0.30
-ENGINE_DAMAGE_PCT_PER_GJ = 12.0
+ENGINE_DAMAGE_PCT_PER_GJ = 15.0
 # A damaged gun mount cycles slower: cooldowns are divided by its health
 # fraction, capped at this factor (so a mount at 50% health or less fires at
 # half rate until it is wrecked).
@@ -120,6 +126,32 @@ def _gun_fittings(ship: "ShipCombatState", hit_location: Optional[HitLocation]) 
     return out
 
 
+def _torpedo_twins(ship: "ShipCombatState") -> List[tuple]:
+    """(slot, WeaponState, launcher) per torpedo tube, in hull order.
+
+    The weapons dict lists one entry per launcher next to the guns; the Nth of
+    them stands for the Nth TorpedoLauncher. Its mount_health is the tube's.
+    """
+    twins = [(slot, ws) for slot, ws in ship.weapons.items()
+             if "torpedo" in (getattr(ws.weapon, "name", "") or "").lower()]
+    launchers = ship.ready_torpedo_launchers
+    return [(slot, ws, launchers[i]) for i, (slot, ws) in enumerate(twins)
+            if i < len(launchers)]
+
+
+def _launcher_fittings(ship: "ShipCombatState") -> List[tuple]:
+    return [("launcher", slot, ws) for slot, ws, _ in _torpedo_twins(ship)
+            if ws.is_operational]
+
+
+def _exposed_fittings(ship: "ShipCombatState",
+                      hit_location: Optional[HitLocation]) -> List[tuple]:
+    """Every fitting a hit on this facing (None = any) can strike, in a
+    stable order: gun mounts, torpedo tubes, PD turrets."""
+    return (_gun_fittings(ship, hit_location) + _launcher_fittings(ship)
+            + _pd_fittings(ship))
+
+
 def _pd_fittings(ship: "ShipCombatState") -> List[tuple]:
     return [("pd", i, pd) for i, pd in enumerate(ship.point_defense) if pd.is_operational]
 
@@ -153,7 +185,25 @@ def damage_fitting(
             if hasattr(state, "reset_target"):
                 state.reset_target()
 
-    if kind == "gun":
+    extra: dict = {}
+    if kind == "launcher":
+        slot = key
+        twins = _torpedo_twins(ship)
+        index = [t[0] for t in twins].index(key)
+        launcher = twins[index][2]
+        name = "Torpedo Launcher"
+        factor = mount_cooldown_factor(state.mount_health)
+        base = getattr(launcher, "_intact_cooldown_seconds", None)
+        if base is None:
+            base = launcher.cooldown_seconds
+            launcher._intact_cooldown_seconds = base
+        launcher.cooldown_seconds = base * factor
+        if destroyed:
+            # The rounds in a wrecked tube's feed are lost with it.
+            extra['torpedoes_lost'] = int(launcher.current_magazine)
+            launcher.current_magazine = 0
+        extra['torpedoes_remaining'] = ship.torpedoes_remaining
+    elif kind == "gun":
         slot = key
         index = list(ship.weapons.keys()).index(key)
         name = getattr(state.weapon, "name", key)
@@ -176,6 +226,7 @@ def damage_fitting(
         'cause': cause,
         'hit_location': hit_location.value if hit_location is not None else None,
         'source_ship_id': source_ship_id,
+        **extra,
     })
     if destroyed:
         print(f"  !!! [{ship.ship_id}] {name} ({slot}) KNOCKED OUT ({cause})")
@@ -255,13 +306,14 @@ def resolve_surface_hit(
         return
     if roll >= engine_chance + chance:
         return
-    fittings = _gun_fittings(target, hit_location) + _pd_fittings(target)
+    fittings = _exposed_fittings(target, hit_location)
     if not fittings:
         return
     fitting = fittings[min(len(fittings) - 1, int(pick * len(fittings)))]
+    per_gj = PD_TURRET_DAMAGE_PCT_PER_GJ if fitting[0] == "pd" else MOUNT_DAMAGE_PCT_PER_GJ
     damage_fitting(
         sim, target, fitting,
-        health_loss_pct=energy_gj * MOUNT_DAMAGE_PCT_PER_GJ,
+        health_loss_pct=energy_gj * per_gj,
         cause='surface_hit',
         source_ship_id=source_ship_id,
         hit_location=hit_location,
@@ -285,9 +337,9 @@ REACTOR_BLAST_YIELD_GJ_PER_TON = 0.15
 # Intensity at distance d is (1 - d / radius)^2: 1.0 at the hull, 0.44 at a
 # third of the radius, 0.11 at two thirds, 0 at the edge.
 # Armour on the facing toward the blast is ablated by intensity x this (cm).
-REACTOR_BLAST_MAX_ARMOR_ABLATION_CM = 12.0
+REACTOR_BLAST_MAX_ARMOR_ABLATION_CM = 15.0
 # Heat dumped into the victim's sink at intensity 1.0 (GJ; sinks hold 320 GJ).
-REACTOR_BLAST_MAX_HEAT_GJ = 80.0
+REACTOR_BLAST_MAX_HEAT_GJ = 120.0
 # Damage to each EXTENDED radiator panel at intensity 1.0 (GJ; a panel has
 # ~5 GJ of health). Retracted panels are shielded by the hull.
 REACTOR_BLAST_RADIATOR_DAMAGE_GJ = 6.0
@@ -458,7 +510,7 @@ def _resolve_blast(sim: "CombatSimulation", blast: dict) -> None:
         sim._log_event(SimulationEventType.BLAST_DAMAGE, ship.ship_id, data=data)
 
         # Exposed fittings (each recorded as its own mount_damaged event).
-        for fitting in _gun_fittings(ship, None) + _pd_fittings(ship):
+        for fitting in _exposed_fittings(ship, None):
             if rng.random() < intensity * REACTOR_BLAST_FITTING_HIT_CHANCE:
                 damage_fitting(
                     sim, ship, fitting,

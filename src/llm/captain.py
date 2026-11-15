@@ -1503,8 +1503,8 @@ class LLMCaptain:
                     tally = []
                     if hits:
                         tally.append(f"{len(hits)} hit {sum(r['gj'] for r in hits):.0f} GJ")
-                    for outcome in ("destroyed by PD", "blinded", "fuel out", "retargeted",
-                                    "in flight"):
+                    for outcome in ("destroyed by PD", "destroyed by blast", "blinded",
+                                    "fuel out", "retargeted", "in flight"):
                         n = sum(1 for r in rounds if r["outcome"] == outcome)
                         if n:
                             tally.append(f"{n} {outcome}")

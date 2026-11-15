@@ -104,14 +104,15 @@ def test_surface_hit_degrades_then_knocks_out_a_gun_mount():
     # turrets (the spinal mount is out of reach) -> pick 0.0 = weapon_1
     assert [f[1] for f in bd._gun_fittings(ship, HitLocation.LATERAL)] == ["weapon_1", "weapon_2"]
 
+    hit_gj = 60.0 / bd.MOUNT_DAMAGE_PCT_PER_GJ   # a hit worth 60% of a mount
     sim._damage_rng = _Rolls(0.0, 0.0)
-    bd.resolve_surface_hit(sim, ship, HitLocation.LATERAL, 2.4, "shooter")
+    bd.resolve_surface_hit(sim, ship, HitLocation.LATERAL, hit_gj, "shooter")
     gun = ship.weapons["weapon_1"]
-    assert gun.mount_health == pytest.approx(100.0 - 2.4 * bd.MOUNT_DAMAGE_PCT_PER_GJ)
+    assert gun.mount_health == pytest.approx(40.0)
     assert gun.is_operational
 
     sim._damage_rng = _Rolls(0.0, 0.0)
-    bd.resolve_surface_hit(sim, ship, HitLocation.LATERAL, 2.4, "shooter")
+    bd.resolve_surface_hit(sim, ship, HitLocation.LATERAL, hit_gj, "shooter")
     assert gun.mount_health == 0.0
     assert not gun.is_operational
     assert not gun.can_fire()
@@ -139,14 +140,45 @@ def test_pd_turrets_are_lost_one_at_a_time():
     assert len(ship.point_defense) == 4
     assert bd._gun_fittings(ship, None) == []  # launchers are not gun mounts
 
-    # 5 GJ wrecks whatever it catches; pick 0.6 of 4 turrets -> index 2
-    sim._damage_rng = _Rolls(0.0, 0.6)
-    bd.resolve_surface_hit(sim, ship, HitLocation.LATERAL, 5.0, "shooter")
+    # fittings: 4 tubes then 4 turrets; pick 0.8 of 8 -> turret index 2
+    sim._damage_rng = _Rolls(0.0, 0.8)
+    bd.resolve_surface_hit(sim, ship, HitLocation.LATERAL,
+                           100.0 / bd.PD_TURRET_DAMAGE_PCT_PER_GJ, "shooter")
     assert [pd.is_operational for pd in ship.point_defense] == [True, True, False, True]
     assert not ship.weapons["pd_2"].is_operational
     event = _events(sim, SimulationEventType.MOUNT_DAMAGED)[0].data
     assert event["kind"] == "pd" and event["index"] == 2 and event["destroyed"]
     assert event["slot"] == ship.point_defense[2].turret_name
+
+
+def test_torpedo_tube_degrades_then_is_lost_with_its_rounds():
+    sim = CombatSimulation(seed=1, time_step=1.0)
+    ship = _ship(sim, "victim", "beta", Vector3D(0, 0, 0), ship_type="cruiser_torpedo")
+    launchers = ship.ready_torpedo_launchers
+    intact_cooldown = launchers[1].cooldown_seconds
+    assert [f[1] for f in bd._launcher_fittings(ship)] == [
+        "weapon_0", "weapon_1", "weapon_2", "weapon_3"]
+
+    # pick 0.2 of 8 fittings -> tube index 1; the hit takes half its health
+    half_gj = 50.0 / bd.MOUNT_DAMAGE_PCT_PER_GJ
+    sim._damage_rng = _Rolls(0.0, 0.2)
+    bd.resolve_surface_hit(sim, ship, HitLocation.LATERAL, half_gj, "shooter")
+    assert launchers[1].cooldown_seconds == pytest.approx(2.0 * intact_cooldown)
+    assert launchers[1].current_magazine == 12
+    assert launchers[0].cooldown_seconds == intact_cooldown
+
+    sim._damage_rng = _Rolls(0.0, 0.2)
+    bd.resolve_surface_hit(sim, ship, HitLocation.LATERAL, half_gj, "shooter")
+    assert launchers[1].current_magazine == 0
+    assert not launchers[1].can_launch(sim.current_time + 1e6)
+    assert ship.torpedoes_remaining == 36
+    assert not ship.weapons["weapon_1"].is_operational
+    events = _events(sim, SimulationEventType.MOUNT_DAMAGED)
+    assert [e.data["kind"] for e in events] == ["launcher", "launcher"]
+    assert events[0].data["cooldown_factor"] == pytest.approx(2.0)
+    assert events[1].data["destroyed"] and events[1].data["torpedoes_lost"] == 12
+    assert events[1].data["torpedoes_remaining"] == 36
+    assert events[1].data["index"] == 1 and events[1].data["slot"] == "weapon_1"
 
 
 def test_spinal_mount_is_only_reachable_through_the_bow():
@@ -188,7 +220,7 @@ def test_surface_hits_never_draw_from_the_battle_rng_and_are_seed_deterministic(
                 for e in _events(sim, SimulationEventType.MOUNT_DAMAGED)]
 
     first = run(7)
-    assert first, "60 hits at 12-48% must strike at least one fitting"
+    assert first, "60 hits at 15-55% must strike at least one fitting"
     assert run(7) == first
     assert run(8) != first
 
@@ -536,3 +568,77 @@ def test_radiator_damaged_reports_rated_capacity_lost_even_when_retracted():
         panel.max_dissipation_kw * (100.0 - panel.health_percent) / 100.0, abs=0.1)
     assert data["array_health_pct"] == pytest.approx(
         ship.thermal_system.radiators.health_percent, abs=0.1)
+
+
+# ---------------------------------------------------------------------------
+# What reaches the recording and the captains
+# ---------------------------------------------------------------------------
+
+def test_new_events_reach_the_recording_with_every_field():
+    from src.llm.battle_recorder import BattleRecorder
+    from src.llm.battle_runner import BattleConfig, LLMBattleRunner
+    from src.llm.captain import LLMCaptainConfig
+
+    sim = CombatSimulation(seed=1, time_step=1.0)
+    dead = _ship(sim, "dead", "alpha", Vector3D(0, 0, 0), ship_type="cruiser_torpedo")
+    near = _ship(sim, "near", "beta", Vector3D(0, 2_000, 0))
+    _torpedo(sim, "t_kill", Vector3D(0, 1_000, 0), target_id="near")
+    config = LLMCaptainConfig(name="Test", ship_name="Test")
+    recorder = BattleRecorder()
+    recorder.start_recording(BattleConfig(), config, config, dead, near)
+    runner = LLMBattleRunner(BattleConfig(), config, config, client=None)
+    runner.recorder = recorder
+    sim.add_event_callback(runner._handle_simulation_event)
+
+    sim._damage_rng = _Rolls(0.0, 0.0, 0.0)
+    bd.resolve_surface_hit(sim, near, HitLocation.LATERAL, 1.0, "dead")
+    magazine = dead.module_layout.get_modules_by_type(ModuleType.MAGAZINE)[0]
+    magazine.health_percent = 0.0
+    bd.resolve_magazine_cookoff(sim, dead, magazine, "near")
+    _detonate(sim, dead)
+    bd.resolve_pending_blasts(sim)
+
+    by_type = {}
+    for event in recorder.events:
+        by_type.setdefault(event.event_type, []).append(event)
+    for name in ("mount_damaged", "magazine_cookoff", "blast_damage",
+                 "reactor_blast", "torpedo_intercepted"):
+        assert name in by_type, f"{name} missing from the recording"
+
+    mount = by_type["mount_damaged"][0]
+    assert mount.ship_id == "near"
+    assert {"kind", "slot", "index", "weapon_name", "health_pct", "health_lost_pct",
+            "destroyed", "cooldown_factor", "cause", "hit_location",
+            "source_ship_id"} <= set(mount.data)
+    blast = by_type["reactor_blast"][0]
+    assert blast.ship_id == "dead"
+    assert {"ship_type", "cause", "position", "radius_km", "torpedo_kill_radius_km",
+            "torpedo_blind_radius_km", "yield_gj", "ships_hit",
+            "torpedoes_destroyed", "torpedoes_blinded"} <= set(blast.data)
+    assert blast.data["ships_hit"] == ["near"]
+    assert blast.data["torpedoes_destroyed"] == ["t_kill"]
+    gone = by_type["torpedo_intercepted"][0]
+    assert gone.data["cause"] == "reactor_blast" and gone.data["blast_ship_id"] == "dead"
+    assert gone.data["torpedo_id"] == "t_kill"
+    cook = by_type["magazine_cookoff"][0]
+    assert cook.data["torpedoes_lost"] == 24
+    # the recording must stay JSON-serialisable
+    json.dumps([e.data for e in recorder.events])
+
+
+def test_launching_captain_sees_its_round_destroyed_by_the_blast():
+    from src.llm.captain import LLMCaptain, LLMCaptainConfig
+
+    sim = CombatSimulation(seed=1, time_step=1.0)
+    dead = _ship(sim, "dead", "alpha", Vector3D(0, 0, 0))
+    _ship(sim, "shooter", "beta", Vector3D(500_000, 0, 0), ship_type="cruiser_torpedo")
+    flight = _torpedo(sim, "t1", Vector3D(0, 1_000, 0), target_id="dead")
+    sim._log_event(SimulationEventType.TORPEDO_LAUNCHED, "shooter", "dead",
+                   {"torpedo_id": flight.torpedo_id})
+    _detonate(sim, dead)
+    bd.resolve_pending_blasts(sim)
+
+    captain = LLMCaptain(LLMCaptainConfig(name="Test", ship_name="Test"), client=None)
+    captain.ship_id = "shooter"
+    outcomes = captain._launch_outcomes(sim)
+    assert outcomes["t1"]["outcome"] == "destroyed by blast"
