@@ -225,6 +225,11 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cases", default=",".join(CASES), help="comma list (default: all)")
     ap.add_argument("--record", action="store_true", help="write the golden file")
+    ap.add_argument("--golden", default=str(GOLDEN_PATH),
+                    help="golden file to compare with / record to (default: next to this "
+                         "script). Seeded battles are bit-identical only under one Python "
+                         "minor version (3.12 sums floats differently from 3.11): compare "
+                         "with a golden recorded by the same interpreter")
     ap.add_argument("--jobs", type=int, default=4, help="parallel case processes (default 4)")
     ap.add_argument("--profile", metavar="CASE", help="cProfile one case and print the tables")
     ap.add_argument("--top", type=int, default=35)
@@ -263,14 +268,15 @@ def main() -> int:
             continue
         results[n] = json.loads(line[len("PERF_CHECK_RESULT "):])
 
-    golden = json.loads(GOLDEN_PATH.read_text()) if GOLDEN_PATH.exists() else {}
+    golden_path = Path(args.golden)
+    golden = json.loads(golden_path.read_text()) if golden_path.exists() else {}
     if args.record:
         for n, r in results.items():
             if r is not None:
                 golden[n] = {"hashes": r["hashes"], "cpu_s": round(r["cpu_s"], 2),
                              "info": r["info"]}
-        GOLDEN_PATH.write_text(json.dumps(golden, indent=2, sort_keys=True) + "\n")
-        print(f"golden written: {GOLDEN_PATH}")
+        golden_path.write_text(json.dumps(golden, indent=2, sort_keys=True) + "\n")
+        print(f"golden written: {golden_path}")
 
     ok = True
     total = total_ref = 0.0

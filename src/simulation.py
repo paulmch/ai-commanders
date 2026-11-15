@@ -3397,23 +3397,43 @@ class CombatSimulation:
         """
         threats = []
 
+        # Scalar form of the Vector3D expressions, operation for operation
+        # (every evading ship - and every ghost of one in the prediction
+        # shadow, every shadow step - scans all rounds here, and most are
+        # rejected): the ship's state is read once, and the relative
+        # position/velocity vectors are only built for threats that are kept.
+        ship_pos = ship.position
+        ship_vel = ship.velocity
+        spx, spy, spz = ship_pos.x, ship_pos.y, ship_pos.z
+        svx, svy, svz = ship_vel.x, ship_vel.y, ship_vel.z
+        sqrt = math.sqrt
+
         def _add_threat(pos: Vector3D, vel: Vector3D, ke_gj: float) -> None:
-            rel_pos = pos - ship.position
-            rel_vel = vel - ship.velocity
-            rel_speed = rel_vel.magnitude
+            vx = vel.x - svx
+            vy = vel.y - svy
+            vz = vel.z - svz
+            rel_speed = sqrt(vx**2 + vy**2 + vz**2)
 
             if rel_speed < 100:  # Effectively stationary relative to us
                 return
 
+            rx = pos.x - spx
+            ry = pos.y - spy
+            rz = pos.z - spz
+
             # Time to closest approach (TCA)
             # TCA = -dot(rel_pos, rel_vel) / dot(rel_vel, rel_vel)
-            tca = -rel_pos.dot(rel_vel) / (rel_vel.dot(rel_vel))
+            tca = -(rx * vx + ry * vy + rz * vz) / (vx * vx + vy * vy + vz * vz)
             if tca < 0 or tca > BALLISTIC_THREAT_HORIZON_S:
                 return
 
             # Miss distance at closest approach
-            closest_point = rel_pos + rel_vel * tca
-            miss_dist = closest_point.magnitude
+            cx = rx + vx * tca
+            cy = ry + vy * tca
+            cz = rz + vz * tca
+            miss_dist = sqrt(cx**2 + cy**2 + cz**2)
+            rel_vel = Vector3D(vx, vy, vz)
+            rel_pos = Vector3D(rx, ry, rz)
 
             # Urgency score: (1/TCA) * KE * (1/miss_dist)
             # Faster closing, higher energy, closer miss = higher urgency
@@ -3437,8 +3457,10 @@ class CombatSimulation:
             # world-frame kinetic_energy_gj swung 1.2 GJ -> 27-55 GJ with a
             # 40 km/s fleet drift, skewing urgency and the TANK armour trial.
             mass_kg = max(0.1, proj.mass_kg - getattr(proj, '_pd_ablation', 0.0))
-            rel_speed = (proj.velocity - ship.velocity).magnitude
-            _add_threat(proj.position, proj.velocity,
+            proj_vel = proj.velocity
+            rel_speed = sqrt((proj_vel.x - svx)**2 + (proj_vel.y - svy)**2
+                             + (proj_vel.z - svz)**2)
+            _add_threat(proj.position, proj_vel,
                         0.5 * mass_kg * rel_speed ** 2 / 1e9)
 
         # Seeker-killed torpedoes: ballistic multi-tonne masses. Evade them
@@ -3777,10 +3799,18 @@ class CombatSimulation:
         ship: ShipCombatState,
         forward: Vector3D,
         terminal_threats: list,
+        threat_cache: Optional[dict] = None,
     ) -> tuple[float, float, float]:
         """
         Score an attitude against the terminal torpedoes. Lower is better,
         compared lexicographically:
+
+        ``threat_cache`` (optional, a dict owned by ONE caller for ONE set of
+        candidate attitudes - see _calculate_presentation_direction) holds
+        what does not depend on the attitude: each threat's impact vector
+        (key: threat index) and the hull energy of each (threat, struck
+        section) trial (key: (index, location)). The ship's armor and the
+        threats must not change while it is in use; it is never stored.
 
         1. Hull-delivered energy (GJ): for each threat, determine which armor
            section its impact vector would strike at this attitude (same
@@ -3806,15 +3836,19 @@ class CombatSimulation:
         total_gj = 0.0
         weighted_thickness = 0.0
         center_distance = 0.0
-        for t in terminal_threats:
+        for index, t in enumerate(terminal_threats):
             # Impact vector = direction the torpedo travels at impact. A
             # closing torpedo arrives roughly along the reversed bearing; use
             # its actual relative velocity whenever it is closing.
-            rel_vel = t['rel_vel']
-            if rel_vel.magnitude > 1e-6 and rel_vel.dot(t['bearing']) < 0:
-                impact_vector = rel_vel.normalized()
-            else:
-                impact_vector = t['bearing'] * -1
+            impact_vector = threat_cache.get(index) if threat_cache is not None else None
+            if impact_vector is None:
+                rel_vel = t['rel_vel']
+                if rel_vel.magnitude > 1e-6 and rel_vel.dot(t['bearing']) < 0:
+                    impact_vector = rel_vel.normalized()
+                else:
+                    impact_vector = t['bearing'] * -1
+                if threat_cache is not None:
+                    threat_cache[index] = impact_vector
 
             location = geometry.calculate_hit_location(impact_vector, forward)
 
@@ -3843,7 +3877,15 @@ class CombatSimulation:
             # Simulate the impact on a copy of the section (same parameters
             # as the kinetic phase of _resolve_torpedo_hit); the trial is
             # memoised by value, see _trial_energy_to_hull_gj.
-            total_gj += self._trial_energy_to_hull_gj(section, t['ke_gj'])
+            if threat_cache is None:
+                total_gj += self._trial_energy_to_hull_gj(section, t['ke_gj'])
+            else:
+                trial_key = (index, location)
+                to_hull_gj = threat_cache.get(trial_key)
+                if to_hull_gj is None:
+                    to_hull_gj = threat_cache[trial_key] = self._trial_energy_to_hull_gj(
+                        section, t['ke_gj'])
+                total_gj += to_hull_gj
 
         # Round the leading components so float noise cannot defeat the
         # tie-breaks (1e-3 GJ / 0.1 energy-weighted-cm resolution).
@@ -3970,6 +4012,10 @@ class CombatSimulation:
         # with a fresh budget, so the command converges as time permits.
         best_dir = ship.forward
         best_score: Optional[tuple] = None
+        # Per-threat work that is the same for every candidate (impact
+        # vectors, armor trials): local to this call - nothing touches the
+        # armor or the threats while the candidates are scored.
+        threat_cache: dict = {}
         for cand in candidates:
             angle = ship.forward.angle_to(cand)
             if angle <= theta_max or angle <= 1e-6:
@@ -3981,7 +4027,7 @@ class CombatSimulation:
                     axis = ship.up
                 achieved = ship.forward.rotate_around_axis(
                     axis.normalized(), theta_max).normalized()
-            score = self._presentation_score(ship, achieved, terminal_threats)
+            score = self._presentation_score(ship, achieved, terminal_threats, threat_cache)
             if best_score is None or score < best_score:
                 best_score = score
                 best_dir = achieved

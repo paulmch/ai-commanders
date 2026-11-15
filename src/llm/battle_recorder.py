@@ -109,6 +109,110 @@ def _interval_s(config: Any) -> Optional[float]:
     return None
 
 
+def _float_json(value: float) -> str:
+    """A float as json.dumps writes it (allow_nan=True)."""
+    if value != value:
+        return 'NaN'
+    if value == _INFINITY:
+        return 'Infinity'
+    if value == -_INFINITY:
+        return '-Infinity'
+    return float.__repr__(value)
+
+
+_INFINITY = float('inf')
+_encode_json_string = json.encoder.encode_basestring_ascii
+
+
+def dumps_indented(obj: Any, indent: int = 2) -> str:
+    """
+    ``json.dumps(obj, indent=indent, default=_dataclass_as_json_object)``,
+    byte for byte, for a positive int ``indent`` - written as one plain
+    recursion that appends to a list.
+
+    The standard library has no C encoder for indented output: it falls back
+    to a chain of Python generators that hands every scalar up through every
+    nesting level, which made saving a traced fleet recording (14 MB, 5
+    million nodes) a noticeable share of the battle. Same rules as the
+    stdlib encoder: ensure_ascii strings, repr floats with NaN/Infinity, dict
+    keys of str/int/float/bool/None, insertion order, "[]"/"{}" when empty,
+    dataclass instances as objects of their fields. Anything else raises
+    TypeError; BattleRecording.to_json then lets json.dumps produce the
+    result (or the proper error). tests/test_perf_equivalence.py pins the
+    byte equality.
+    """
+    out: List[str] = []
+    append = out.append
+    indents = ['\n' + ' ' * (indent * level) for level in range(64)]
+
+    float_repr = float.__repr__
+
+    def write(o: Any, level: int) -> None:
+        kind = type(o)
+        if kind is float:
+            # The common leaf by far (positions, velocities). repr() of a
+            # finite float never ends in a letter; 'nan'/'inf'/'-inf' do.
+            text = float_repr(o)
+            append(text if text[-1] not in 'fn' else _float_json(o))
+        elif isinstance(o, str):
+            append(_encode_json_string(o))
+        elif o is None:
+            append('null')
+        elif o is True:
+            append('true')
+        elif o is False:
+            append('false')
+        elif isinstance(o, int):
+            append(int.__repr__(o))
+        elif isinstance(o, float):
+            append(_float_json(o))
+        elif isinstance(o, (list, tuple)):
+            if not o:
+                append('[]')
+                return
+            inner = indents[level + 1]
+            separator = '[' + inner
+            for item in o:
+                append(separator)
+                write(item, level + 1)
+                separator = ',' + inner
+            append(indents[level])
+            append(']')
+        elif isinstance(o, dict):
+            if not o:
+                append('{}')
+                return
+            inner = indents[level + 1]
+            separator = '{' + inner
+            for key, value in o.items():
+                append(separator)
+                if isinstance(key, str):
+                    append(_encode_json_string(key))
+                elif key is True:
+                    append('"true"')
+                elif key is False:
+                    append('"false"')
+                elif key is None:
+                    append('"null"')
+                elif isinstance(key, int):
+                    append('"' + int.__repr__(key) + '"')
+                elif isinstance(key, float):
+                    append('"' + _float_json(key) + '"')
+                else:
+                    raise TypeError(f'keys must be str, int, float, bool or None, '
+                                    f'not {key.__class__.__name__}')
+                append(': ')
+                write(value, level + 1)
+                separator = ',' + inner
+            append(indents[level])
+            append('}')
+        else:
+            write(_dataclass_as_json_object(o), level)
+
+    write(obj, 0)
+    return ''.join(out)
+
+
 def _dataclass_as_json_object(obj: Any) -> Dict[str, Any]:
     """json ``default`` hook: a dataclass instance as a dict of its fields, in
     field order - what ``dataclasses.asdict`` turns it into, one level at a
@@ -200,8 +304,13 @@ class BattleRecording:
         # tenth of the battle's CPU time) only for the copy to be serialised
         # and dropped. Serialising the fields directly gives the same text,
         # byte for byte (tests/test_perf_equivalence.py).
-        return json.dumps({f.name: getattr(self, f.name) for f in fields(self)},
-                          indent=indent, default=_dataclass_as_json_object)
+        record = {f.name: getattr(self, f.name) for f in fields(self)}
+        if type(indent) is int and indent > 0:
+            try:
+                return dumps_indented(record, indent)
+            except (TypeError, IndexError, RecursionError):
+                pass    # something exotic: the stdlib encoder decides
+        return json.dumps(record, indent=indent, default=_dataclass_as_json_object)
 
 
 class BattleRecorder:

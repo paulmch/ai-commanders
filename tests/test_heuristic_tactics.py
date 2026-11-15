@@ -666,3 +666,20 @@ def test_mirror_draft_needs_auto_draft():
     r = subprocess.run([_sys.executable, "scripts/run_draft_battle.py", "--mirror-draft", "--quiet"],
                        capture_output=True, text=True, cwd=Path(__file__).parent.parent, timeout=120)
     assert r.returncode != 0 and "--mirror-draft needs --auto-draft" in r.stderr
+
+
+def test_a_lead_with_a_friend_in_its_jet_side_slips_instead_of_idling():
+    # Round 4: the plume cap (src/drive_plume.py) idled lead cruisers for whole
+    # checkpoints (INTERCEPT at throttle 0) because a follower sat astern.
+    sim = CombatSimulation(seed=10, time_step=1.0)
+    _ship(sim, "lead", "cruiser", "alpha", (0, 0, 0))
+    _ship(sim, "tail", "destroyer", "alpha", (-3, 0, 0))
+    _ship(sim, "foe", "cruiser", "beta", (400, 0, 0), fwd=(-1, 0, 0))
+    idle = T.plume_safe_throttle(sim, sim.get_ship("lead"), 1.0)
+    assert idle < T.PLUME_SLIP_TRIGGER_SHARE            # straight ahead would cook the follower
+    m = _maneuver(_captain("cruiser", name="lead").decide("lead", sim))
+    assert m.throttle >= T.PLUME_SLIP_MIN_SHARE * T.fleet_plan(sim, "alpha").formation_throttle.get("lead", 1.0)
+    if m.maneuver_type == ManeuverType.HEADING:
+        import math
+        h = m.heading_direction
+        assert h["x"] / math.sqrt(h["x"] ** 2 + h["y"] ** 2 + h["z"] ** 2) >= math.cos(math.radians(46))
