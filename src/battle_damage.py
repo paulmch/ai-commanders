@@ -449,6 +449,7 @@ def _resolve_blast(sim: "CombatSimulation", blast: dict) -> None:
             })
         elif d_km <= blind_km and not tf.is_disabled:
             tf.is_disabled = True
+            tf.blast_blinded = True
             # PD must not claim (or re-log) a seeker the blast killed.
             tf.seeker_kill_logged = True
             blinded_ids.append(tf.torpedo_id)

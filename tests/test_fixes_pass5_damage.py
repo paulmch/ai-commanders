@@ -196,3 +196,52 @@ def test_a_fitting_left_under_half_a_percent_is_destroyed(kind, loss):
     assert (health == 0.0) == data["destroyed"]
     if kind != "engine":
         assert state.is_operational is (not data["destroyed"])
+
+
+# ---------------------------------------------------------------------------
+# Finding 4: a blast-blinded torpedo that hits is not a PD seeker kill
+# ---------------------------------------------------------------------------
+
+def _torpedo_flight(sim, position, velocity, target_id, torpedo_id="t1"):
+    from src.simulation import TorpedoInFlight
+    from src.torpedo import Torpedo, TorpedoSpecs
+
+    torp = Torpedo(specs=TorpedoSpecs(), position=position, velocity=velocity,
+                   target_id=target_id)
+    torp.armed = True
+    flight = TorpedoInFlight(torpedo_id=torpedo_id, torpedo=torp,
+                             source_ship_id="shooter", launch_time=sim.current_time)
+    sim.torpedoes.append(flight)
+    return flight
+
+
+def test_blast_blinded_torpedo_hit_stays_out_of_the_pd_tally():
+    sim = CombatSimulation(seed=1, time_step=1.0)
+    _ship(sim, "shooter", "alpha", Vector3D(500_000, 0, 0))
+    target = _ship(sim, "victim", "beta", Vector3D(0, 0, 0), ship_type="battleship")
+    dead = _ship(sim, "dead", "beta", Vector3D(0, -5_000, 0))
+    # 6 km from the cruiser's blast: inside the blind ring, outside the kill ring
+    flight = _torpedo_flight(sim, Vector3D(0, 1_000, 0), Vector3D(0, 5_000, 0), "victim")
+    sim._destroy_ship(dead, "shooter", cause="reactor_destroyed")
+    bd.resolve_pending_blasts(sim)
+    assert flight.is_disabled and flight.blast_blinded
+    assert sim.metrics.total_torpedo_blast_blinded == 1
+
+    sim._resolve_torpedo_hit(flight, target)
+    m = sim.metrics
+    assert m.total_torpedo_hits == 1
+    assert m.total_torpedo_hits_after_blast_blind == 1
+    assert m.total_torpedo_seeker_killed == 0
+    assert m.total_torpedo_hits_after_seeker_kill == 0   # PD's tally is untouched
+    assert "(0 of those still hit)" in m.torpedo_outcome_summary()
+
+
+def test_pd_blinded_torpedo_hit_still_counts_as_a_seeker_kill_that_hit():
+    sim = CombatSimulation(seed=1, time_step=1.0)
+    _ship(sim, "shooter", "alpha", Vector3D(500_000, 0, 0))
+    target = _ship(sim, "victim", "beta", Vector3D(0, 0, 0), ship_type="battleship")
+    flight = _torpedo_flight(sim, Vector3D(0, -1_000, 0), Vector3D(0, 5_000, 0), "victim")
+    flight.is_disabled = True            # PD's work
+    sim._resolve_torpedo_hit(flight, target)
+    assert sim.metrics.total_torpedo_hits_after_seeker_kill == 1
+    assert sim.metrics.total_torpedo_hits_after_blast_blind == 0
