@@ -85,6 +85,30 @@ Each of the nine hull classes has its own design, drawn to scale in faction live
 
 *Seconds later that battleship's reactor goes up. Destruction is part of the recording: the camera can move, but the event stays tied to battle time.*
 
+**Damage is specific.** A hit can knock out an individual gun mount, torpedo tube, point-defense turret or the drive, and the ship registry shows one pip per fitting so you can see a battleship that still has most of its hull but none of its guns. Every death is a reactor blast with a shell drawn out to its real radius; ships inside it lose armour and fittings, torpedoes inside it die or go blind, and a destroyed magazine cooks off.
+
+![The replay HUD with fitting pips in the ship registry, a kill toast naming the blast radius and the ship it caught, and a DISARMED notice](docs/images/readme/fittings-hud.png)
+
+*One pip per gun, tube and point-defense turret; the kill toast says what the reactor blast caught.*
+
+![An orange reactor fireball inside a translucent blast shell, with escort ships beside it](docs/images/readme/blast-shell.jpg)
+
+*The shell marks the blast radius the engine used, so you can see which ships and torpedoes were inside it.*
+
+**The drive is a hazard.** A torch carries about 300 TW of jet power. A ship in another ship's exhaust takes heat, then armour and fitting damage, and its crew accumulates a radiation dose; the washed plating glows. An interlock throttles a drive that would wash an allied ship, and commanders see plume and crew warnings in their status.
+
+![A dreadnought in three-quarter view with slab armour plating, wedge bow and parallel drive jets, point-defense lasers firing](docs/images/readme/dreadnought.png)
+
+*The dreadnought: slab armour on a cruciform core, lathed engine bells, every jet along the thrust axis.*
+
+![A torpedo salvo striking a battleship, with point-defense lasers and impact fountains](docs/images/readme/torpedo-strike.png)
+
+*A synchronised torpedo salvo lands on a battleship.*
+
+**The automatic director** (**A**) films a replay from a shot list built out of the recording, and `scripts/viewer_clip.py` renders any time range to MP4 or GIF:
+
+![A six-second clip: the camera runs in on a battleship, then pulls back as its reactor detonates](docs/images/pass5/director-kill.gif)
+
 ## Run a live battle
 
 For simulation and model calls, install **Python 3.10+** and **uv**. From the repository root:
@@ -218,7 +242,7 @@ flowchart LR
 
 **Captains** receive their own state, threats, fire solutions, admiral orders with engine checks, fleet traffic, and execution feedback. Their tools match their hull's equipment. They choose targets, maneuvers, firing policies, torpedo launches, radiator state, and communications. They report to their admiral, signal each other, and keep a private log for later turns.
 
-**The simulation** advances between decisions. Coasting preserves momentum; turning and acceleration take time. Ballistic rounds inherit their launcher's velocity. Guided torpedoes have finite fuel, can lose their seekers to point defense, and can retarget reachable enemies when their original target dies. Armor is divided into nose, lateral, and tail facings, with penetration damaging internal modules.
+**The simulation** advances between decisions. Coasting preserves momentum; turning and acceleration take time. Ballistic rounds inherit their launcher's velocity. Guided torpedoes have finite fuel, can lose their seekers to point defense, and can retarget reachable enemies when their original target dies. Armor is divided into nose, lateral, and tail facings, with penetration damaging internal modules. Hits can also wreck external fittings one at a time, a ship's death is a reactor blast that reaches its neighbours, and a ship flying through another's drive exhaust takes heat, damage and crew radiation. Both fleets are advanced from the same start-of-tick snapshot, so neither side gains from being processed first; mirror-symmetry tests guard it.
 
 It is a tactical game simulation: ordinary steps are one second, and gun hit resolution includes a probabilistic dispersion model. A fixed seed reproduces combat randomness for identical commands; it does not make live model responses deterministic. [Physics and targeting audit](docs/project-audit-2026-09-06.md)
 

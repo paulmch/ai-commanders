@@ -96,9 +96,12 @@ ai-commanders/
                             # the PBR hull kit (Hulls + HullLights/Markings/Rigs),
                             # Projectiles (in-flight weapons), DamageFX, Rcs,
                             # Tracks, Environment/SkyTextures, PostFX/Bloom/Quality,
-                            # HullWear, TargetingLines; src/ holds the spectator
-                            # HUD (HudIndex, Scoreboard, KillFeed, CommsFeed,
-                            # TimelineMarkers, Registry) and live mode
+                            # HullWear, TargetingLines, Torch (volumetric plumes),
+                            # GunLooks, BlastShell, sunShadow; src/ holds the
+                            # spectator HUD (HudIndex, Scoreboard, KillFeed,
+                            # CommsFeed, TimelineMarkers, Registry, FittingsIndex
+                            # + FittingsHud: per-ship fitting/crew state), the
+                            # auto director (Director, DirectorCamera) and live mode
                             # (LiveSession, LiveCards, DraftSplash,
                             # OffscreenIndicators, ViewInsets)
 ```
@@ -244,8 +247,13 @@ torpedo-armed hulls; all others fight with coilguns.
   shader fails to compile or depth-tests wrongly).
 - `IcosahedronGeometry(r, detail)` subdivides linearly (20*(d+1)^2 faces) -
   use detail 12-28 for smooth blast spheres, not 3-5.
-- `RoundedBoxGeometry` is non-indexed; the hull kit converts every part with
-  `toNonIndexed()` before merging.
+- The hull kit (render/Hulls.js) builds parts from `chamferBoxGeometry` and
+  `octSectionGeometry` (shouldered sections, wedge bows), all non-indexed and
+  merged per material. Plated materials (`hull`, `trim`, `paint`, `dark`,
+  `barrel`) use vertex colours and one hull-space UV lattice: geometry added
+  outside `HullKit.add` needs a `color` attribute and UVs at `kit.texel` scale
+  or it renders black. `mats.bellHeat` is a MeshLambertMaterial; drive only its
+  `emissiveIntensity`.
 - Effects animate on battle time (spawnTime vs currentTime) so timeline
   scrubbing is deterministic; wall-clock only drives texture turbulence.
 - Verify visually with `uv run python scripts/viewer_snapshot.py` (see
