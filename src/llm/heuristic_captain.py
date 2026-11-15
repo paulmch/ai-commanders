@@ -439,6 +439,14 @@ class HeuristicCaptain(LLMCaptain):
                 return args
             return order("HOLD_RANGE", nearest_gun, 1.0,
                          range_km=round(max(tactics.RETREAT_RANGE_KM, gun_km), 1))
+        if my_role == "torpedo" and nearest_gun is None:
+            # No enemy gun left: nothing to stand off from. Close to a short
+            # launch range so rounds can reach - two boat fleets holding
+            # 300 km from each other never launched again (the launch check
+            # refuses rounds at an opening target) and sat to the time limit
+            # with loaded tubes.
+            prey = min(enemies, key=lambda e: (km(e), e.ship_id))
+            return order("INTERCEPT", prey, 1.0, standoff_km=tactics.BOAT_NO_GUNS_RANGE_KM)
         if my_role != "gun":
             anchor = nearest_gun or min(enemies, key=lambda e: (km(e), e.ship_id))
             return order("HOLD_RANGE", anchor, 1.0,
@@ -461,9 +469,33 @@ class HeuristicCaptain(LLMCaptain):
                 face = nearest_gun
             self._face_id = face.ship_id
             if km(face) < dist_km:
-                return order(kind, face, 1.0)
-        self._face_id = None
+                return self._aspect_or_padlock(ship, face, order)
+        else:
+            self._face_id = None
+        if kind == "PADLOCK":
+            return self._aspect_or_padlock(ship, target, order)
         return order(kind, target, throttle if kind == "INTERCEPT" else 1.0, **extra)
+
+    def _aspect_or_padlock(self, ship, face, order) -> Dict[str, Any]:
+        """Coast with the nose at the hull's gun aspect to ``face`` (weapon
+        arcs: heuristic_tactics.gun_aspect_deg) - an attitude-only HEADING -
+        or PADLOCK it nose-on when the aspect is 0 or the range is too short
+        for a fixed attitude to keep it inside the nose-armour arc."""
+        aspect = tactics.gun_aspect_deg(getattr(ship, "ship_type", ""))
+        rng_km = ship.position.distance_to(face.position) / 1000.0
+        if aspect <= 0.0 or rng_km < tactics.ASPECT_MIN_RANGE_KM or tactics.is_capital(ship):
+            # Capital hulls PADLOCK: a fixed 30 s attitude drifts off the
+            # target and a slow hull (and its slow roll) never re-settles -
+            # measured on the pass-5 masks, battleships fired ~5 % fewer
+            # rounds at their aspect than PADLOCKed nose-on.
+            return order("PADLOCK", face, 1.0)
+        d = tactics.aspect_direction(ship, face, aspect)
+        args = {"maneuver_type": "HEADING", "throttle": 0.0,
+                "direction": {"x": round(d.x, 4), "y": round(d.y, 4), "z": round(d.z, 4)}}
+        evade = order("PADLOCK", face, 1.0).get("evade")
+        if evade:
+            args["evade"] = evade
+        return args
 
     def _radiator_wish(self, ship, ship_id, heat, threat, enemies, simulation) -> Optional[bool]:
         """True = extend, False = retract, None = leave as is."""

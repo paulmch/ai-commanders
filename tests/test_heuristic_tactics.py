@@ -196,7 +196,14 @@ def test_gun_ship_faces_the_nearest_gun_and_shoots_the_target():
     captain = _captain("destroyer")
     m = _maneuver(captain.decide("me", sim))
     assert captain.primary_target_id == "slow"
-    assert m.maneuver_type == ManeuverType.PADLOCK and m.target_id == "gun"
+    # The nose faces the nearest gun at the hull's gun aspect (weapon arcs).
+    import math
+    assert m.maneuver_type == ManeuverType.HEADING and m.throttle == 0.0
+    to_gun = (sim.get_ship("gun").position - sim.get_ship("me").position).normalized()
+    h = m.heading_direction
+    cos_off = (h["x"] * to_gun.x + h["y"] * to_gun.y + h["z"] * to_gun.z) / math.sqrt(
+        h["x"] ** 2 + h["y"] ** 2 + h["z"] ** 2)
+    assert math.degrees(math.acos(min(1.0, cos_off))) == pytest.approx(T.gun_aspect_deg("destroyer"), abs=0.5)
     assert m.evade is None                           # no dodge: it would swing the nose
 
 
@@ -377,7 +384,8 @@ def test_tactical_gun_fleets_make_a_controlled_pass(gun_battle, tmp_path):
     assert legacy["closest_rel_kps"] > 4.0, legacy
     assert stats["closest_rel_kps"] < 3.0, stats
     assert stats["shots"] > legacy["shots"], (stats, legacy)
-    assert stats["shots_eff_share"] > legacy["shots_eff_share"], (stats, legacy)
+    # (Weapon arcs: at its gun aspect a tactical fleet also lands rounds from
+    # beyond 150 km, so the share inside it is no longer above legacy's.)
 
 
 def test_tactical_torpedo_boats_launch_as_one_salvo(tactical_battle):
@@ -729,3 +737,66 @@ def test_a_torpedo_boat_keeps_station_behind_its_gun_line():
     want_km = max(T.TORPEDO_STANDOFF_KM, min(line_km + T.BOAT_BEHIND_LINE_KM, T.BOAT_STATION_MAX_KM))
     assert want_km > T.TORPEDO_STANDOFF_KM
     assert m.hold_range_m == pytest.approx(want_km * 1000.0, abs=100.0)
+
+
+def test_gun_aspect_brings_more_batteries_to_bear_than_nose_on():
+    # Round 7 (weapon arcs): nose-on a battleship bears its spinal and 2 of 4
+    # batteries; the data-derived aspect keeps the target inside the nose
+    # armour arc and bears more.
+    import math
+    from src.weapon_arcs import cell_index, load_hull_mounts
+    from src.geometry import NOSE_HIT_ANGLE_THRESHOLD
+    for hull in ("battleship", "cruiser", "destroyer"):
+        a = T.gun_aspect_deg(hull)
+        assert 0.0 < a <= T.ASPECT_MAX_DEG < NOSE_HIT_ANGLE_THRESHOLD
+    hm = load_hull_mounts()["battleship"]
+    guns = [m for m in hm.mounts if m.kind in ("gun", "spinal")]
+
+    def bearing(th_deg):
+        th = math.radians(th_deg)
+        return max(sum(1 for m in guns if not m.mask[cell_index(
+            math.cos(th), math.sin(th) * math.cos(math.radians(p)), math.sin(th) * math.sin(math.radians(p)))])
+            for p in range(0, 360, 15))
+    assert bearing(T.gun_aspect_deg("battleship")) > bearing(0.0)
+
+
+def test_a_coasting_gun_ship_holds_its_aspect_not_nose_on():
+    import math
+    sim = CombatSimulation(seed=12, time_step=1.0)
+    me = _ship(sim, "me", "cruiser", "alpha", (0, 0, 0), vel_kps=(1.0, 0, 0))
+    _ship(sim, "foe", "cruiser", "beta", (120, 0, 0), fwd=(-1, 0, 0))
+    m = _maneuver(_captain("cruiser").decide("me", sim))
+    assert m.maneuver_type == ManeuverType.HEADING and m.throttle == 0.0     # attitude only
+    h = m.heading_direction
+    off = math.degrees(math.acos(h["x"] / math.sqrt(h["x"] ** 2 + h["y"] ** 2 + h["z"] ** 2)))
+    assert off == pytest.approx(T.gun_aspect_deg("cruiser"), abs=0.5)
+
+
+def test_capital_hulls_padlock_instead_of_holding_an_aspect():
+    sim = CombatSimulation(seed=12, time_step=1.0)
+    _ship(sim, "me", "battleship", "alpha", (0, 0, 0), vel_kps=(1.0, 0, 0))
+    _ship(sim, "foe", "battleship", "beta", (120, 0, 0), fwd=(-1, 0, 0))
+    assert T.gun_aspect_deg("battleship") > 0.0          # the data has a gain...
+    m = _maneuver(_captain("battleship").decide("me", sim))
+    assert m.maneuver_type == ManeuverType.PADLOCK      # ...a slow hull cannot hold it
+
+
+def test_boats_with_no_enemy_guns_left_close_to_launch():
+    sim = CombatSimulation(seed=14, time_step=1.0)
+    _ship(sim, "me", "corvette", "alpha", (0, 0, 0))
+    _ship(sim, "boat", "corvette", "beta", (400, 0, 0), fwd=(-1, 0, 0))
+    m = _maneuver(_captain("corvette").decide("me", sim))
+    assert m.maneuver_type == ManeuverType.INTERCEPT and m.target_id == "boat"
+    assert m.standoff_m == pytest.approx(T.BOAT_NO_GUNS_RANGE_KM * 1000.0)
+
+
+def test_two_dry_fleets_do_not_drift_to_the_time_limit():
+    sim = CombatSimulation(seed=15, time_step=1.0)
+    me = _ship(sim, "me", "corvette", "alpha", (0, 0, 0))
+    foe = _ship(sim, "foe", "corvette", "beta", (400, 0, 0), fwd=(-1, 0, 0))
+    for s in (me, foe):
+        for tube in s.ready_torpedo_launchers:
+            tube.current_magazine = 0
+    captain = _captain("corvette")
+    captain.decide("me", sim)
+    assert captain.has_surrendered
