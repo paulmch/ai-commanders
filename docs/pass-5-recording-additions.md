@@ -748,6 +748,7 @@ New recordings are written gzip-compressed by default (lane `gzip`):
   `DecompressionStream('gzip')`); both load.
 - **Sizes** (committed recordings, plain indented -> gzip): 37.8 MB -> 1.0 MB,
   15.8 MB -> 0.64 MB, 13.7 MB -> 0.68 MB; all of `data/recordings/` 263 MB ->
-  17 MB (`scripts/compress_recordings.py data/recordings --dry-run`). Recordings
-  that embed admiral-vision images compress less (31.8 MB -> 8.0 MB).
+  17 MB (`scripts/compress_recordings.py data/recordings --dry-run`). The ratio
+  varies: one LLM recording with 10 MB of replay-audit `assets` (model prompts
+  and responses) went 31.8 MB -> 8.0 MB.
 - **`GET /live/recording`** is unchanged (an HTTP JSON payload, not a file).

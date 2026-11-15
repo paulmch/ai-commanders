@@ -163,9 +163,6 @@ class BattleConfig:
     # 20-37x smaller) or plain indented JSON (battle_*.json). Every reader
     # takes both (src/recording_io.py).
     compress_recording: bool = True
-    # With record_battle: keep the recording in memory (result, live server)
-    # but write no file. For outcome-only sweeps.
-    save_recording: bool = True
 
     # Detailed sim trace - records every step (position, velocity for all objects)
     # WARNING: Generates large files (~1MB per 10 minutes of battle)
@@ -3119,11 +3116,10 @@ class LLMBattleRunner:
                 compress=self.config.compress_recording,
             )
             filepath = Path(self.config.recording_dir) / filename
-            if self.config.save_recording:
-                self.recording_file = self.recorder.save(
-                    str(filepath), compress=self.config.compress_recording)
+            self.recording_file = self.recorder.save(
+                str(filepath), compress=self.config.compress_recording)
 
-            if self.config.verbose and self.recording_file:
+            if self.config.verbose:
                 print(f"Recording saved to: {self.recording_file}")
 
         # Collect per-ship stats
@@ -3636,11 +3632,10 @@ class LLMBattleRunner:
                 compress=self.config.compress_recording,
             )
             filepath = Path(self.config.recording_dir) / filename
-            if self.config.save_recording:
-                self.recording_file = self.recorder.save(
-                    str(filepath), compress=self.config.compress_recording)
+            self.recording_file = self.recorder.save(
+                str(filepath), compress=self.config.compress_recording)
 
-            if self.config.verbose and self.recording_file:
+            if self.config.verbose:
                 print(f"Recording saved to: {self.recording_file}")
 
         if self.config.verbose:

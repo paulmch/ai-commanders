@@ -260,7 +260,7 @@ Python reads/writes go through `src/recording_io.py` (`load_recording` sniffs th
 gzip magic, `dump_recording` is atomic, `sidecar_path` gives `battle_x.draft.json`);
 never `json.load(open(recording))`. The viewer decodes through
 `visualizer/src/RecordingCodec.js` (magic-byte sniff + `DecompressionStream`).
-`BattleConfig.compress_recording` / `save_recording`; `--plain-json` on the battle
+`BattleConfig.compress_recording`; `--plain-json` on the battle
 scripts, `run_draft_battle.py --no-recording`; `scripts/compress_recordings.py`
 converts a folder (verify before delete). `BattleRecording.to_json` (plain text,
 hashed by the perf harness) is unchanged.

@@ -129,8 +129,9 @@ def analyze(path: str) -> Dict[str, Any]:
 def run_one(seed: int, budget: int, alpha: str, beta: str, mirror: bool, out_dir: str,
             time_limit: float, extra: List[str], keep_recordings: bool = False) -> Dict[str, Any]:
     """One battle -> its analysed row. The row is cached in <tag>/metrics.json;
-    the recording itself (needed only for the analysis) is deleted afterwards
-    unless keep_recordings - a grid of traced fleet battles is gigabytes."""
+    the recording this call wrote (needed only for the analysis) is deleted
+    afterwards unless keep_recordings - a grid of traced fleet battles is
+    gigabytes. A recording already in the tag dir is analysed and kept."""
     tag = f"s{seed}_b{budget}_{alpha}-{beta}{'_m' if mirror else ''}"
     rec_dir = Path(out_dir) / tag
     rec_dir.mkdir(parents=True, exist_ok=True)
@@ -138,7 +139,8 @@ def run_one(seed: int, budget: int, alpha: str, beta: str, mirror: bool, out_dir
     if metrics.exists():
         return json.loads(metrics.read_text())
     existing = [str(p) for p in iter_recordings(rec_dir, "battle_*")]
-    if not existing:
+    ran = not existing
+    if ran:
         cmd = ["uv", "run", "python", str(ROOT / "scripts" / "run_draft_battle.py"),
                "--auto-draft", "--no-admirals", "--trace", "--quiet",
                "--seed", str(seed), "--budget", str(budget), "--time-limit", str(time_limit),
@@ -154,7 +156,7 @@ def run_one(seed: int, budget: int, alpha: str, beta: str, mirror: bool, out_dir
     res = analyze(existing[-1])
     res.update(tag=tag, seed=seed, budget=budget, alpha=alpha, beta=beta)
     metrics.write_text(json.dumps(res, indent=1))
-    if not keep_recordings:
+    if ran and not keep_recordings:   # never delete recordings this call did not write
         for p in existing:
             Path(p).unlink(missing_ok=True)
             sidecar_path(p).unlink(missing_ok=True)

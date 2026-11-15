@@ -232,6 +232,13 @@ def test_tactics_eval_caches_rows_and_drops_recordings(tmp_path, gz_fixture, mon
     assert len(calls) == 1
     kept = ev.run_one(2, 100, "legacy", "legacy", False, str(tmp_path), 60.0, [], keep_recordings=True)
     assert list(rio.iter_recordings(tmp_path / kept["tag"], "battle_*"))
+    # A recording already in an old --out folder is analysed but never deleted.
+    old_dir = tmp_path / "s3_b100_legacy-legacy"
+    old_dir.mkdir()
+    (old_dir / "battle_old.json.gz").write_bytes(gz.read_bytes())
+    ev.run_one(3, 100, "legacy", "legacy", False, str(tmp_path), 60.0, [])
+    assert (old_dir / "battle_old.json.gz").exists() and (old_dir / "metrics.json").exists()
+    assert len(calls) == 2
 
 
 def test_fake_live_server_loads_both(gz_fixture):
