@@ -152,6 +152,56 @@ was the 1 ms projectile micro-step loop, which built about 30 temporary vectors 
 `scripts/perf_check.py` re-runs the golden set and must be re-recorded after any change that
 alters battles.
 
+### Weapon arcs, turret traverse and point-defence placement
+
+A screenshot showed a point-defence laser firing through the ship's own spinal gun. Until then
+every trainable weapon could fire in any direction at once, and the engine and the viewer did not
+even share a roll: the trace recorded only the nose direction.
+
+- **Masks from the real hull.** `visualizer/scripts/export_hull_mounts.mjs` ray-casts each mount's
+  5-degree direction grid against the ship's own static geometry and writes the committed
+  `data/hull_mounts.json`, keyed by hull class. Engine and viewer both read it; a node test fails
+  when the hull kit changes and the file is stale.
+- **Engine** (`src/weapon_arcs.py`). A battery or point-defence turret fires only when its line is
+  in an open cell and the mount has slewed onto it (PD 120, light 45, battery 30, heavy 15 degrees
+  per second). Hull roll is a separate, rate-limited angle about the thrust axis that the ship
+  uses to unmask weapons (90 degrees takes 30 s on a corvette, 253 s on a dreadnought) and never
+  changes motion. A masked battery whose order leaves the target free engages an enemy it does
+  bear on. The hit roll and the lead are untouched. Trace frames carry `up` and per-mount `tur`.
+- **Commanders** read how many mounts bear, slew time, what unmasks the rest, and the hull's
+  blind cones on the thrust axis, which no roll can clear.
+- **Point defence re-placed** on barbettes and shoulders, counts unchanged. Before, no turret bore
+  on an incoming torpedo 76-85 % of the time; after, 2-6 %. The destroyer's dead-ahead hole and
+  the torpedo cruiser's dead-astern hole are closed.
+- **Gun depression 2 to 10 degrees.** The old limit was a leftover viewer clamp that put every
+  in-plane target on the seam between dorsal and ventral mounts.
+- **Viewer.** Hulls sit at the recorded roll, turrets traverse, and beams leave the real muzzle.
+  In old recordings a beam whose line is blocked is shown from a mount with a clear line.
+
+**Cost, measured on six seeded 150-point battles (final code).** In the three gun battles, fleets
+fire about 9 % fewer rounds per second with arcs than without (0.89 against 0.98); before the
+depression change and the fallback it was 19 %. About 57 % of ready gun-ticks are still held
+masked. Effective point defence against one direction is roughly half the turret count, and
+torpedoes blinded per launch against a screened torpedo fleet fell from 0.52 to 0.20 on the first
+measurement, so arcs deepen the torpedo problem described under Balance. The rule-based captains
+still beat the old ones 45 wins, 3 draws, 4 losses with arcs on; flying an off-nose aspect to
+bear more guns gained only about 4 % rounds. An independent review confirmed the geometry on
+40,000 random samples and found eight defects (a hunting roll goal, a double slew, masked guns
+that never retargeted, a free turret snap), all fixed.
+
+Not applied: the cruiser and battlecruiser carry one port and one starboard battery that can never
+both bear in the battle plane. Arcs are on by default; `AIC_WEAPON_ARCS=0` switches them off.
+Nine older point-defence tests still run with all-round fire, and the hit-probability calibration
+harness runs with arcs off.
+
+### Recording files
+
+New recordings are written as `.json.gz` (compact JSON, deterministic gzip header): 15-37 times
+smaller (37.8 MB to 1.02 MB for the largest committed battle). Every tool and the viewer read both
+formats through one reader. `run_draft_battle.py --no-recording` writes nothing, for sweeps that
+only need outcomes. The committed `data/recordings` folder would shrink from 263 MB to 17 MB with
+`scripts/compress_recordings.py`; that conversion has not been run.
+
 ## Viewer
 
 - **Lighting.** A sun shadow map fitted to the hulls on screen (high tier), a higher key-to-fill
@@ -175,7 +225,8 @@ alters battles.
   battle time; `[` and `]` jump between highlights; `scripts/viewer_clip.py` renders a time range
   to MP4 or GIF.
 
-Viewer tests rose from 276 to 356; the Python suite from about 2,430 to 2,829.
+Viewer tests rose from 276 to 386; the Python suite from about 2,430 to 2,934, green on Python
+3.11 and 3.12.
 
 ## Balance: prices cannot fix the torpedo problem
 
