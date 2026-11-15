@@ -1363,7 +1363,7 @@ class LLMCaptain:
         if not ship_id or not events:
             return {}
         rank = {"in flight": 0, "retargeted": 1, "fuel out": 2, "blinded": 3,
-                "destroyed by PD": 4, "hit": 5}
+                "destroyed by PD": 4, "destroyed by blast": 4, "hit": 5}
         out: Dict[str, Dict[str, Any]] = {}
         for ev in events:
             kind = getattr(getattr(ev, "event_type", None), "name", "")
@@ -1379,6 +1379,8 @@ class LLMCaptain:
             if rec is None:
                 continue
             outcome = {"TORPEDO_IMPACT": "hit", "PD_TORPEDO_DESTROYED": "destroyed by PD",
+                       # a reactor blast caught it (src/battle_damage.py)
+                       "TORPEDO_INTERCEPTED": "destroyed by blast",
                        "PD_TORPEDO_DISABLED": "blinded", "TORPEDO_FUEL_EXHAUSTED": "fuel out",
                        "TORPEDO_RETARGETED": "retargeted"}.get(kind)
             if outcome is None:
@@ -1501,8 +1503,8 @@ class LLMCaptain:
                     tally = []
                     if hits:
                         tally.append(f"{len(hits)} hit {sum(r['gj'] for r in hits):.0f} GJ")
-                    for outcome in ("destroyed by PD", "blinded", "fuel out", "retargeted",
-                                    "in flight"):
+                    for outcome in ("destroyed by PD", "destroyed by blast", "blinded",
+                                    "fuel out", "retargeted", "in flight"):
                         n = sum(1 for r in rounds if r["outcome"] == outcome)
                         if n:
                             tally.append(f"{n} {outcome}")
