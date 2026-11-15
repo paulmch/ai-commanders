@@ -5,6 +5,9 @@ import { blastCloseDim } from './CloseRange.js';
 import { buildDebrisChunks } from './Hulls.js';
 import { createTorch } from './Torch.js';
 import { breakHull } from './DamageFX.js';
+import { WRECK_DRIFT_S, wreckDriftS } from '../DamageTimeline.js';
+
+export { WRECK_DRIFT_S };
 import { sectionCrackGlow } from './HullWear.js';
 
 /**
@@ -224,8 +227,6 @@ function easeOut(t, k = 3) { return 1 - Math.exp(-t * k); }
 const _dq = new THREE.Quaternion();
 const _dv = new THREE.Vector3();
 const WRECK_LIFE = 40;       // big hull sections and the debris cloud linger
-/** Dark coast before the reactor lets go (non-reactor kill, no sim death spiral). */
-export const WRECK_DRIFT_S = 5.0;
 
 /**
  * Battle time at which the latest destruction sequence in `deathInfo`
@@ -234,8 +235,7 @@ export const WRECK_DRIFT_S = 5.0;
 export function latestWreckEnd(deathInfo) {
   let end = -Infinity;
   for (const d of Object.values(deathInfo || {})) {
-    const drift = d.reactorCause || d.wasDying ? 0 : WRECK_DRIFT_S;
-    end = Math.max(end, (d.time ?? 0) + drift + WRECK_LIFE);
+    end = Math.max(end, (d.time ?? 0) + wreckDriftS(d) + WRECK_LIFE);
   }
   return end;
 }
@@ -245,6 +245,51 @@ const SURFACE_KINDS = new Set(['impact', 'pop', 'graze', 'pierce', 'kineticStrik
 
 /** Blast presets (exported for tests: kinds and their durations). */
 export function blastKinds() { return KINDS; }
+
+/**
+ * Radius (same unit as `scale`) a blast of this kind still visibly draws
+ * `age` seconds after it spawns: the fireball and its lobes, the shock
+ * shell and the ejecta ring, each counted only while it is above `floor`
+ * of its peak brightness (the same curves Blast.update animates - keep the
+ * two in step). Sparks and streaks are points, not counted. For anything
+ * that frames a blast (the director's pull-back).
+ */
+export function blastExtent(kind, scale, age, floor = 0.25) {
+  const K = KINDS[kind];
+  if (!K || !(age >= 0) || age > K.duration) return 0;
+  const s = scale;
+  let r = 0;
+  if (K.fireR > 0 && age < K.fireLife) {
+    const p = age / K.fireLife;
+    if (Math.min(1, age / 0.12) * Math.pow(1 - p, 0.6) >= floor) {
+      r = s * K.fireR * (0.25 + easeOut(age * K.fireGrow, 1.6)) * (1 + p * 0.6);
+    }
+    // lobes: the latest (delay 0.46) and largest (size 0.8) bound them all
+    const t = age - 0.08;
+    const lp = Math.min(1, Math.max(0, t) / (K.fireLife * 0.8));
+    if (K.lobes && t > 0 && Math.pow(1 - lp, 0.8) >= floor) {
+      const reach = s * K.fireR * easeOut(t, 1.2);
+      r = Math.max(r, reach * (0.65 + lp * 0.8) + reach * 0.8 * (1 + lp * 0.4));
+    }
+  }
+  if (K.shellR > 0 && age < K.shellLife) {
+    const p = age / K.shellLife;
+    if (Math.pow(1 - p, 3.5) >= floor) r = Math.max(r, s * K.shellR * (0.05 + easeOut(p * 3.2, 1.8)));
+  }
+  if (K.ringR > 0 && age < K.ringLife) {
+    const p = age / K.ringLife;
+    // (the ring's front sits at 0.77 of its quad, plus noise: ejectaMaterial)
+    if (Math.pow(1 - p, 2) >= floor) r = Math.max(r, 0.8 * s * K.ringR * (0.025 + easeOut(p, 2.1)));
+  }
+  return r;
+}
+
+/** Largest blastExtent between two ages (sampled every 0.25 s). */
+export function blastExtentOver(kind, scale, fromAge, toAge, floor = 0.25) {
+  let r = 0;
+  for (let a = Math.max(0, fromAge); a <= toAge + 1e-9; a += 0.25) r = Math.max(r, blastExtent(kind, scale, a, floor));
+  return r;
+}
 
 // ---------------------------------------------------------------------------
 // Blast

@@ -381,10 +381,7 @@ export function buildDamageTimeline(rec, opts = {}) {
   // event and the viewer blows it up there, so the blast (and everything
   // it does to others) is dated at that frame, not at the event tick.
   const tmpB = { pos: [0, 0, 0], vel: [0, 0, 0], fwd: [0, 0, 1], hull: 1, dying: false, destroyed: false };
-  const blastTime = (shipId, t) => {
-    const dt = ships.get(shipId)?.deathTime;
-    return dt !== null && dt !== undefined && dt >= t && dt - t <= 1.5 ? dt : t;
-  };
+  const blastTime = (shipId, t) => blastFrameTime(ships.get(shipId)?.deathTime, t);
   const blasts = reactorBlasts.map((e) => {
     const d = e.data || {};
     // Centre and drift: where the trace has the wreck on the frame the
@@ -623,6 +620,37 @@ export function washAt(sd, now, out = {}) {
 
 /** Seconds a reactor blast's front takes to reach its blast radius. */
 export const BLAST_EXPAND_S = 1.1;
+
+/**
+ * Battle time a reactor blast recorded at event tick `eventT` is drawn: the
+ * trace flags the ship destroyed on the frame AFTER its ship_destroyed
+ * event and the viewer blows it up there (`deathTime` = that frame's time).
+ * Falls back to the event tick when the trace has no such frame yet.
+ */
+export function blastFrameTime(deathTime, eventT) {
+  return deathTime !== null && deathTime !== undefined && deathTime >= eventT && deathTime - eventT <= 1.5
+    ? deathTime : eventT;
+}
+
+/** Dark coast before the reactor lets go (non-reactor kill, no sim death spiral). */
+export const WRECK_DRIFT_S = 5.0;
+/** Seconds the wreck in `death` (BattleLoader.buildDeathInfo entry) coasts before it detonates. */
+export function wreckDriftS(death) {
+  return death && (death.reactorCause || death.wasDying) ? 0 : WRECK_DRIFT_S;
+}
+
+/**
+ * Battle time the viewer detonates a ship - the one rule the blast shell,
+ * the destruction effect, the camera shake and the director's kill shots
+ * share. `death` is the ship's buildDeathInfo entry (or null before the
+ * trace has its destroyed frame), `eventT` its ship_destroyed /
+ * reactor_blast tick (null for old recordings without the events).
+ */
+export function shipDetonationTime(death, eventT = null) {
+  const frame = death && Number.isFinite(death.time) ? death.time : null;
+  if (eventT === null || eventT === undefined) return frame === null ? null : frame + wreckDriftS(death);
+  return blastFrameTime(frame, eventT) + (frame === null ? 0 : wreckDriftS(death));
+}
 /** Radius of the front `age` seconds after the detonation (cubic ease-out, = radius from BLAST_EXPAND_S on). */
 export function blastFront(age, radius, expand = BLAST_EXPAND_S) {
   const p = Math.min(1, Math.max(0, age / expand));

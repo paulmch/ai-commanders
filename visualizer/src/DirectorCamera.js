@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { impactPulse, PULLBACK_PRE_S } from './Director.js';
+import { impactPulse, PULLBACK_PRE_S, PULLBACK_POST_S } from './Director.js';
 
 // ------------------------------------------------------- director framing
 // Camera poses for the director's shot vocabulary. Every pose is a pure
@@ -16,6 +16,11 @@ const FLEET_ELEVATION = THREE.MathUtils.degToRad(25);
 const Y = new THREE.Vector3(0, 1, 0);
 const Z = new THREE.Vector3(0, 0, 1);
 const WIDE_SIDE = new THREE.Vector3(0, 0.3, 1).normalize();
+/** Ages (s after the detonation) between which a pull-back has to contain the blast's transient ring. */
+const RING_FROM_S = 1.0;
+const RING_TO_S = 1.6;
+/** The pull-out starts this long before the detonation (replay knows it is coming). */
+const PULL_LEAD_S = 0.6;
 
 const clamp01 = u => Math.min(1, Math.max(0, u));
 const ease = u => { const c = clamp01(u); return c * c * (3 - 2 * c); };
@@ -265,32 +270,55 @@ function orbit(shot, t, world) {
 function pullback(shot, t, world) {
   const kills = shot.kills?.length ? shot.kills : [{ id: shot.subject, t: shot.t, radiusKm: 15, position: null }];
   const first = kills[0];
-  const at = k => (k.position ? scaled(k.position, world.scale * 1) : world.pos(k.id));
+  // Where the blast is: the wreck's position when it blew, coasting on
+  // with it (the shell, fireball and debris do the same)
+  const at = k => {
+    if (!k.position) return world.pos(k.id);
+    const p = scaled(k.position, world.scale);
+    if (k.velocity) p.addScaledVector(scaled(k.velocity, world.scale), Math.max(0, t - (k.posT ?? k.t)));
+    return p;
+  };
   const firstAt = at(first);
   if (!firstAt) return null;
   const L = world.length(first.id);
+  // What the camera has to fit, asked of the effect rather than guessed
+  // (world.blastExtent -> Explosion.blastExtent): never less than the
+  // recorded blast radius (the lethal shell). Two answers: the transient
+  // ejecta ring while it is still bright when the camera arrives, and the
+  // fireball that lasts for the rest of the shot.
+  const ring = k => Math.max(k.radiusKm, world.blastExtent?.(k.id, RING_FROM_S, RING_TO_S) || 0);
+  const body = k => Math.max(k.radiusKm, world.blastExtent?.(k.id, RING_TO_S + 0.4, PULLBACK_POST_S) || 0);
   // Frame what has gone off so far (a chain widens as it goes)
-  let centre = firstAt.clone();
-  let reach = first.radiusKm;
-  let widen = 0;
-  for (const k of kills.slice(1)) {
-    const p = at(k);
-    if (!p) continue;
-    const u = ease((t - (k.t - PULLBACK_PRE_S)) / 1.5);
-    if (u <= 0) continue;
-    const mid = firstAt.clone().add(p).multiplyScalar(0.5);
-    const span = firstAt.distanceTo(p) / 2 + Math.max(first.radiusKm, k.radiusKm);
-    if (span * u > widen) { widen = span * u; centre = firstAt.clone().lerp(mid, u); reach = lerp(first.radiusKm, span, u); }
-  }
+  const framing = extent => {
+    let centre = firstAt.clone();
+    let reach = extent(first);
+    let widen = 0;
+    for (const k of kills.slice(1)) {
+      const p = at(k);
+      if (!p) continue;
+      const u = ease((t - (k.t - PULLBACK_PRE_S)) / 1.5);
+      if (u <= 0) continue;
+      const mid = firstAt.clone().add(p).multiplyScalar(0.5);
+      const span = firstAt.distanceTo(p) / 2 + Math.max(extent(first), extent(k));
+      if (span * u > widen) { widen = span * u; centre = firstAt.clone().lerp(mid, u); reach = lerp(extent(first), span, u); }
+    }
+    return { centre, reach };
+  };
+  const lasting = framing(body);
+  const centre = lasting.centre;
   // Until it blows the ship is still under way: stay on the hull itself
   const live = world.pos(first.id);
   if (live && t < first.t) centre.lerp(live, 1 - ease((t - (first.t - PULLBACK_PRE_S)) / PULLBACK_PRE_S));
   const near = Math.max(2.4 * L, 1.3 * first.radiusKm);
-  // The fireball and debris outgrow the nominal radius: fit it with room
-  // to spare and keep drifting out for as long as the shot holds
-  const far = Math.max(1.35 * near, fitDistance(reach, world.fov, world.aspect, world.widthShare, 1.75));
-  // (u^1.5 inside the ease-out: the move starts from rest instead of at full speed)
-  const D = lerp(near, far, easeOut(clamp01((t - (first.t - 0.2)) / 2.6) ** 1.5)) * (1 + 0.04 * Math.max(0, t - first.t));
+  const fit = reach => Math.max(1.35 * near, fitDistance(reach, world.fov, world.aspect, world.widthShare, 1.15));
+  // Out with the blast: the move starts from rest just before the flash
+  // and has the ring in frame while it is still bright, then eases back
+  // in on the fireball as the ring dies. The shock front of the first
+  // half second outruns any camera: it sweeps past.
+  const age = t - first.t;
+  const out = ease((age + PULL_LEAD_S) / (PULL_LEAD_S + RING_FROM_S + 0.3));
+  const settle = ease((age - RING_TO_S) / 2.5);
+  const D = lerp(lerp(near, fit(framing(ring).reach), out), fit(lasting.reach), settle);
   // From the killer's side of the line of fire, off the battle plane
   const killer = first.killer ? world.pos(first.killer) : null;
   const k = directionTo(killer, firstAt, new THREE.Vector3(0, 0, 0));

@@ -12,7 +12,8 @@ const _nozzle = { level: 1, sputter: 0 };
 const _plumeTurn = new THREE.Vector3();
 const _plumeQ = new THREE.Quaternion();
 import { Ribbon } from './render/Trails.js';
-import { Blast, ShipDestruction, WRECK_DRIFT_S } from './render/Explosion.js';
+import { Blast, ShipDestruction, blastExtentOver } from './render/Explosion.js';
+import { wreckDriftS } from './DamageTimeline.js';
 import { DamageFX } from './render/DamageFX.js';
 import { getGlowTexture } from './render/Textures.js';
 import { RcsSystem } from './render/Rcs.js';
@@ -57,7 +58,6 @@ export class SceneManager {
     this.currentTime = 0;
     this.delta = 0;
     this.elapsed = 0;
-    this.shake = 0;
     this.frameIndex = 0;
 
     this.init();
@@ -530,12 +530,6 @@ export class SceneManager {
     const blast = new Blast(this.fxCtx, o);
     blast.category = o.category || 'hit';
     this.blasts.push(blast);
-    if (blast.fresh && (o.kind === 'reactor' || o.kind === 'warhead' || o.kind === 'meltdown')) {
-      const d = this.camera.position.distanceTo(o.position);
-      const big = o.kind !== 'warhead';
-      const reach = o.scale * (big ? (o.kind === 'meltdown' ? 55 : 45) : 18);
-      this.shake = Math.min(1.2, this.shake + Math.min(1, (reach / Math.max(d, 1)) ** 1.5) * (big ? 1 : 0.4));
-    }
     return blast;
   }
 
@@ -703,12 +697,27 @@ export class SceneManager {
   // ===========================================================================
   // Ship destruction
   // ===========================================================================
-  createDestructionEffect(position, shipType, currentTime, shipId = null) {
+  /** Blast scale of a hull type's death (Explosion.js units). */
+  destructionScale(shipType) {
     const scaleFactors = {
       corvette: 0.6, frigate: 0.8, destroyer: 1.0, cruiser: 1.3, cruiser_torpedo: 1.3,
       battlecruiser: 1.6, battleship: 2.0, dreadnought: 2.5, dreadnought_siege: 2.5
     };
-    const scale = (scaleFactors[shipType] || 1.0) * 6;
+    return (scaleFactors[shipType] || 1.0) * 6;
+  }
+
+  /**
+   * Largest radius (scene units) this ship's death blast visibly draws
+   * between two ages after its detonation - what a camera has to fit.
+   */
+  deathBlastExtent(shipId, fromAge = 0, toAge = 6) {
+    const type = this.ships.get(shipId)?.userData?.shipType;
+    const kind = (this.deathInfo || {})[shipId]?.meltdown ? 'meltdown' : 'reactor';
+    return blastExtentOver(kind, this.destructionScale(type), fromAge, toAge);
+  }
+
+  createDestructionEffect(position, shipType, currentTime, shipId = null) {
+    const scale = this.destructionScale(shipType);
     const death = (this.deathInfo || {})[shipId] || {};
     const shipGroup = shipId ? this.ships.get(shipId) : null;
     // The sim's own death spiral (dying flag) already drifted the hulk; an
@@ -716,7 +725,7 @@ export class SceneManager {
     // for a few seconds before the reactor lets go.
     const simDrifted = death.wasDying || shipGroup?.userData.wasDying;
     const spawnTime = death.time ?? currentTime;
-    const driftDuration = (death.reactorCause || simDrifted) ? 0 : WRECK_DRIFT_S;
+    const driftDuration = simDrifted ? 0 : wreckDriftS(death);
     const vel = death.velocity || [0, 0, 0];
     const driftVel = new THREE.Vector3(vel[0], vel[1], vel[2]).multiplyScalar(this.SCALE);
     if (death.position) position = new THREE.Vector3(...death.position).multiplyScalar(this.SCALE);
@@ -777,19 +786,9 @@ export class SceneManager {
       this._shadowSubjects, subjectCount);
     this.postfx.update(this.delta);
 
-    // Camera shake from nearby detonations, applied only for the draw
-    const saved = this.camera.position.clone();
-    if (this.shake > 0.001) {
-      const dist = this.camera.position.distanceTo(this.controls.target);
-      const amp = this.shake * dist * 0.006;
-      const t = this.elapsed;
-      this.camera.position.x += Math.sin(t * 37.1) * amp;
-      this.camera.position.y += Math.sin(t * 43.7 + 1.3) * amp * 0.8;
-      this.camera.position.z += Math.sin(t * 29.3 + 2.1) * amp * 0.6;
-      this.shake *= Math.exp(-this.delta * 3.2);
-    }
+    // (Blast shake is CameraController.applyShake / removeShake, wrapped
+    // round this call by main.js: battle time, deterministic under scrubbing)
     this.postfx.render();
-    this.camera.position.copy(saved);
     this.frameIndex++;
   }
 }
