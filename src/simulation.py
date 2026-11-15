@@ -1547,6 +1547,11 @@ class CombatSimulation:
         )
         self.current_time: float = 0.0
         self.last_decision_time: float = 0.0
+        # Console narration (FIRED / HIT / MODULE DESTROYED / MORTALLY
+        # WOUNDED ...). Private forecast shadows switch it off: their
+        # throw-away ships ('shooter', 'target') used to narrate into the
+        # battle log ~70 times per battle.
+        self.echo: bool = True
 
         # Ship tracking
         self.ships: dict[str, ShipCombatState] = {}
@@ -2138,7 +2143,7 @@ class CombatSimulation:
 
         if not ship.weapons_orders:
             if debug:
-                print(f"  [{ship.ship_id}] No weapons orders")
+                self._echo(f"  [{ship.ship_id}] No weapons orders")
             return
 
         for weapon_slot, order in ship.weapons_orders.items():
@@ -2251,8 +2256,8 @@ class CombatSimulation:
                     if ship.thermal_system and heat_gj > 0:
                         ship.thermal_system.add_heat("weapons", heat_gj)
 
-                print(f"  [{ship.ship_id}] FIRED {weapon_name} at {target_id}")
-                print(f"       Distance: {distance_km:.0f}km, ETA: {time_to_target:.1f}s, "
+                self._echo(f"  [{ship.ship_id}] FIRED {weapon_name} at {target_id}")
+                self._echo(f"       Distance: {distance_km:.0f}km, ETA: {time_to_target:.1f}s, "
                       f"v: {muzzle_v:.1f}km/s, P(hit): {solution.hit_probability:.1%}")
 
     # -------------------------------------------------------------------------
@@ -2675,6 +2680,14 @@ class CombatSimulation:
         for ship in self.ships.values():
             if not ship.is_destroyed:
                 self._update_ship(ship, dt)
+            else:
+                # A wreck keeps coasting on its last velocity (no thrust, no
+                # control). It used to freeze in space while its recorded
+                # velocity stayed at the last value. Everything that fights
+                # (targeting, PD, collisions, blasts, victory) skips
+                # is_destroyed ships, so only its position moves.
+                ks = ship.kinematic_state
+                ks.position = ks.position + ks.velocity * dt
 
         # Update projectiles and check hits
         self._update_projectiles(dt)
@@ -3017,6 +3030,9 @@ class CombatSimulation:
             # hulk is then - not v*dt behind it. No RNG draw here.
             ship.kinematic_state = propagate_state(ship.kinematic_state, dt, 0.0, 0.0, 0.0)
             self._detonate_reactor(ship)
+            # The wreck still coasts through this tick (see step()).
+            ks = ship.kinematic_state
+            ks.position = ks.position + ks.velocity * dt
             return
 
         # Torch flicker
@@ -4567,7 +4583,7 @@ class CombatSimulation:
                         'detection': 'coarse_tca',
                         'tca': tca
                     })
-                    print(f"  --- [{proj_flight.source_ship_id}] MISS {proj_flight.target_ship_id} "
+                    self._echo(f"  --- [{proj_flight.source_ship_id}] MISS {proj_flight.target_ship_id} "
                           f"(closest: {closest_km:.2f}km, flight: {flight_time:.1f}s, tca: {tca:.1f}s)")
                     projectiles_to_remove.append(proj_flight)
                     continue
@@ -4662,7 +4678,7 @@ class CombatSimulation:
                             'detection': 'geometric',
                             'micro_steps': micro_steps
                         })
-                        print(f"  --- [{proj_flight.source_ship_id}] MISS {proj_flight.target_ship_id} "
+                        self._echo(f"  --- [{proj_flight.source_ship_id}] MISS {proj_flight.target_ship_id} "
                               f"(closest: {closest_km:.2f}km, flight: {flight_time:.1f}s)")
                         projectiles_to_remove.append(proj_flight)
                         hit_detected = True  # Well, miss detected
@@ -4794,7 +4810,7 @@ class CombatSimulation:
                     'effective_hit_probability': effective_probability,
                     'roll': roll
                 })
-                print(f"  --- [{proj_flight.source_ship_id}] MISS {proj_flight.target_ship_id} "
+                self._echo(f"  --- [{proj_flight.source_ship_id}] MISS {proj_flight.target_ship_id} "
                       f"(dispersion, P={conversion:.0%}"
                       f"x{geometry_factor:.2f} @ {deflection_m:.0f}m deflection, "
                       f"roll={roll:.2f})")
@@ -5303,7 +5319,7 @@ class CombatSimulation:
 
         # Calculate flight time for display
         flight_time = self.current_time - proj_flight.launch_time
-        print(f"  >>> [{proj_flight.source_ship_id}] HIT {target.ship_id} "
+        self._echo(f"  >>> [{proj_flight.source_ship_id}] HIT {target.ship_id} "
               f"({hit_location.value}): {effective_ke_gj:.1f} GJ, flight: {flight_time:.1f}s")
 
         # Apply armor damage using Terra Invicta physics-based ablation
@@ -5478,7 +5494,7 @@ class CombatSimulation:
                         self._log_event(SimulationEventType.MODULE_DESTROYED, target.ship_id, data={
                             'module_name': module.name
                         })
-                        print(f"  !!! [{target.ship_id}] MODULE DESTROYED: {module.name}")
+                        self._echo(f"  !!! [{target.ship_id}] MODULE DESTROYED: {module.name}")
                         # Disable corresponding weapon if weapon module destroyed
                         self._disable_weapon_for_module(target, module.name)
                         battle_damage.resolve_magazine_cookoff(
@@ -6049,7 +6065,7 @@ class CombatSimulation:
                 'array_health_pct': round(
                     target.thermal_system.radiators.health_percent, 1),
             })
-            print(f"  !!! [{target.ship_id}] RADIATOR HIT: {rad_result.radiator_position} "
+            self._echo(f"  !!! [{target.ship_id}] RADIATOR HIT: {rad_result.radiator_position} "
                   f"({'DESTROYED' if rad_result.radiator_destroyed else 'damaged'})")
 
     def _resolve_torpedo_hit(
@@ -6251,7 +6267,7 @@ class CombatSimulation:
                     self._log_event(SimulationEventType.MODULE_DESTROYED, target.ship_id, data={
                         'module_name': module.name
                     })
-                    print(f"  !!! [{target.ship_id}] MODULE DESTROYED: {module.name}")
+                    self._echo(f"  !!! [{target.ship_id}] MODULE DESTROYED: {module.name}")
                     # Disable corresponding weapon if weapon module destroyed
                     self._disable_weapon_for_module(target, module.name)
                     battle_damage.resolve_magazine_cookoff(
@@ -7270,7 +7286,7 @@ class CombatSimulation:
                 self._log_event(SimulationEventType.MODULE_DESTROYED, ship.ship_id, data={
                     'module_name': result.module_name
                 })
-                print(f"  !!! [{ship.ship_id}] MODULE DESTROYED: {result.module_name}")
+                self._echo(f"  !!! [{ship.ship_id}] MODULE DESTROYED: {result.module_name}")
                 self._disable_weapon_for_module(ship, result.module_name)
 
     def _disable_weapon_for_module(self, ship: ShipCombatState, module_name: str) -> None:
@@ -7347,7 +7363,7 @@ class CombatSimulation:
                     _disable_slot(pd_slots[idx])
                 elif idx < len(ship.point_defense):
                     ship.point_defense[idx].is_operational = False
-            print(f"  !!! [{ship.ship_id}] {module_name} DESTROYED - {weapon_slot} disabled")
+            self._echo(f"  !!! [{ship.ship_id}] {module_name} DESTROYED - {weapon_slot} disabled")
 
         # Also check PD lasers
         if weapon_slot and hasattr(ship, 'pd_lasers') and ship.pd_lasers:
@@ -7427,7 +7443,7 @@ class CombatSimulation:
             'hull_integrity': ship.hull_integrity,
             'detonation_in_s': ship.dying_time_remaining,
         })
-        print(f"  !!! [{ship.ship_id}] MORTALLY WOUNDED - reactor containment "
+        self._echo(f"  !!! [{ship.ship_id}] MORTALLY WOUNDED - reactor containment "
               f"failing, detonation in {ship.dying_time_remaining:.1f}s")
 
     def _detonate_reactor(self, ship: ShipCombatState,
@@ -7456,7 +7472,7 @@ class CombatSimulation:
         self._log_event(SimulationEventType.REACTOR_MELTDOWN, ship.ship_id, data={
             'heat': round(heat, 3),
         })
-        print(f"  !!! [{ship.ship_id}] REACTOR MELTDOWN at {heat * 100:.0f}% heat")
+        self._echo(f"  !!! [{ship.ship_id}] REACTOR MELTDOWN at {heat * 100:.0f}% heat")
         self._detonate_reactor(ship, cause='reactor_overheat')
 
     def _destroy_ship(
@@ -7555,6 +7571,11 @@ class CombatSimulation:
         """Remove an event callback."""
         if callback in self._event_callbacks:
             self._event_callbacks.remove(callback)
+
+    def _echo(self, *args: Any, **kwargs: Any) -> None:
+        """Console narration; silent when ``self.echo`` is off (shadow sims)."""
+        if getattr(self, 'echo', True):
+            print(*args, **kwargs)
 
     def _log_event(
         self,

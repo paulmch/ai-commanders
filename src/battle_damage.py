@@ -239,7 +239,7 @@ def damage_fitting(
         **extra,
     })
     if destroyed:
-        print(f"  !!! [{ship.ship_id}] {name} ({slot}) KNOCKED OUT ({cause})")
+        sim._echo(f"  !!! [{ship.ship_id}] {name} ({slot}) KNOCKED OUT ({cause})")
     return destroyed
 
 
@@ -277,7 +277,7 @@ def _damage_engine(
             'module_name': module.name,
             'cause': cause,
         })
-        print(f"  !!! [{ship.ship_id}] {module.name} WRECKED ({cause}) - "
+        sim._echo(f"  !!! [{ship.ship_id}] {module.name} WRECKED ({cause}) - "
               f"thrust {ship.engine_effectiveness * 100:.0f}%")
     return destroyed
 
@@ -553,7 +553,7 @@ def _resolve_blast(sim: "CombatSimulation", blast: dict) -> None:
         'torpedoes_blinded': blinded_ids,
     })
     if ships_hit or destroyed_ids or blinded_ids:
-        print(f"  *** [{source_id}] REACTOR BLAST ({radius_km:.1f} km): "
+        sim._echo(f"  *** [{source_id}] REACTOR BLAST ({radius_km:.1f} km): "
               f"{len(ships_hit)} ships caught, {len(destroyed_ids)} torpedoes "
               f"destroyed, {len(blinded_ids)} blinded")
 
@@ -669,7 +669,7 @@ def resolve_magazine_cookoff(
         'modules_destroyed': wrecked,
         'source_ship_id': attacker_id,
     })
-    print(f"  !!! [{ship.ship_id}] MAGAZINE COOK-OFF ({module.name}): "
+    sim._echo(f"  !!! [{ship.ship_id}] MAGAZINE COOK-OFF ({module.name}): "
           f"{torpedoes_lost} torpedoes, {gun_rounds_lost} gun rounds lost, "
           f"{secondary_gj:.1f} GJ secondary")
 
