@@ -1941,7 +1941,14 @@ class CombatSimulation:
             # Target not in arc - don't fire
             return False
 
-        # Weapon arcs: masked by the own hull, or still slewing onto the lead
+        # Weapon arcs: masked by the own hull, or still slewing onto the lead.
+        # A fire_at RETARGETS the mount for this tick: it slews toward this
+        # target (its one slew of the tick - the standing order's target is
+        # not trained again until the next tick) and fires only if that slew
+        # brings it on. A fire_at at a ship far from where the mount points
+        # therefore needs repeating on the following ticks, like the per-tick
+        # fire_at of firecontrol.FireControlSystem; a one-shot fire_at does
+        # not fire a mount that is still swinging.
         mount = weapon_state.mount
         if mount is not None and mount.kind == 'gun' and self.weapon_arcs:
             if ship.arcs.frame_time != self.current_time:
@@ -6944,6 +6951,9 @@ class CombatSimulation:
                 self._arcs_note_mask(ship, mount, weapon_arcs.IDLE, 'hull')
                 mount.idle()
                 continue
+            if mount.stamp == self.current_time and mount.target_id != target_id:
+                # retargeted for this tick by a fire_at (see _handle_fire_command)
+                continue
             self._arcs_train_gun(ship, ws, mount, target, dt)
 
     def _arcs_train_gun(self, ship: ShipCombatState, weapon_state: 'WeaponState',
@@ -6963,6 +6973,10 @@ class CombatSimulation:
         target_id = target.ship_id
         if mount.stamp == now and mount.target_id == target_id:
             return mount.state
+        # A mount slews at most once per tick: a second, different target in
+        # the same tick (a fire_at at another ship, or the order target after
+        # a fire_at) is checked against where the mount already points.
+        moved = mount.stamp == now
         leads = self._arcs_lead_cache
         key = None
         fire_dir = False
@@ -7000,7 +7014,7 @@ class CombatSimulation:
             # No intercept solution: track the line of sight.
             fire_dir = (target.position - ship.position).normalized()
         bx, by, bz = arcs.to_body(fire_dir.x, fire_dir.y, fire_dir.z)
-        state = mount.train(bx, by, bz, dt)
+        state = mount.check(bx, by, bz) if moved else mount.train(bx, by, bz, dt)
         self._arcs_note_mask(ship, mount, state, 'hull')
         return state
 

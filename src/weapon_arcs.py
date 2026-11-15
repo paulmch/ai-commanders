@@ -302,6 +302,21 @@ class MountState:
         """True when the mount can fire in this body-frame direction."""
         return not self.mask[cell_index(bx, by, bz)]
 
+    def check(self, wx: float, wy: float, wz: float) -> int:
+        """
+        State toward a wanted direction WITHOUT moving the mount: for a
+        second designation inside a tick in which the mount has already
+        slewed (it moves at most once per tick).
+        """
+        self.wx, self.wy, self.wz = wx, wy, wz
+        self.has_want = True
+        if self.mask[cell_index(wx, wy, wz)]:
+            self.state = MASKED
+        else:
+            dot = self.ax * wx + self.ay * wy + self.az * wz
+            self.state = ON_TARGET if dot >= _COS_AIM_TOL else SLEWING
+        return self.state
+
     def idle(self) -> None:
         self.state = IDLE
         self.target_id = None
@@ -360,6 +375,7 @@ class MountState:
 
 
 _AIM_TOL = math.radians(AIM_TOLERANCE_DEG)
+_COS_AIM_TOL = math.cos(_AIM_TOL)
 
 
 def _toward(ax, ay, az, wx, wy, wz, theta, step):

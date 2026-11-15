@@ -144,3 +144,52 @@ class TestRollGoalDoesNotHunt:
         for _ in range(6):
             sim.step()
         assert shooter.arcs.roll_goal == goal
+
+
+# =============================================================================
+# Finding 3: a fire_at slewed the mount twice in one tick and never fired
+# =============================================================================
+
+class TestFireAtRetargetsTheMountForTheTick:
+
+    def _scene(self):
+        sim = _sim(_table(**ALL_OPEN))
+        a = _ship(sim, "a", "alpha", Vector3D(0, 0, 0))
+        _ship(sim, "b", "beta", Vector3D(150_000, 0, 0), forward=Vector3D(-1, 0, 0))   # dead ahead
+        _ship(sim, "c", "beta", Vector3D(0, 150_000, 0), forward=Vector3D(0, -1, 0))   # 90 deg to port
+        a.weapons_orders = {"weapon_1": WeaponsOrder(WeaponsCommand.HOLD_FIRE, "weapon_1", "b",
+                                                     min_hit_probability=0.0)}
+        sim.step()                      # t=0: trained on b (the standing order)
+        return sim, a, a.weapons["weapon_1"].mount
+
+    @staticmethod
+    def _aim(m):
+        return (m.ax, m.ay, m.az)
+
+    @staticmethod
+    def _angle(p, q):
+        return math.degrees(math.acos(max(-1.0, min(1.0, sum(x * y for x, y in zip(p, q))))))
+
+    def test_a_mount_slews_at_most_once_per_tick(self):
+        sim, a, m = self._scene()
+        rate = math.degrees(m.rate)
+        for _ in range(3):
+            before = self._aim(m)
+            sim._arcs_begin_tick()
+            sim._handle_fire_command(a, {"weapon_slot": "weapon_1", "target_id": "c"})
+            mid = self._aim(m)
+            sim.step()
+            moved = self._angle(before, mid) + self._angle(mid, self._aim(m))
+            assert moved <= rate * sim.time_step + wa.AIM_TOLERANCE_DEG + 1e-6, moved
+
+    def test_a_repeated_fire_at_swings_the_mount_over_and_fires(self):
+        sim, a, m = self._scene()
+        fired_at = None
+        for _ in range(6):
+            sim._arcs_begin_tick()
+            if sim._handle_fire_command(a, {"weapon_slot": "weapon_1", "target_id": "c"}):
+                fired_at = sim.current_time
+                break
+            sim.step()
+        # 90 degrees at 30 deg/s: on in the third tick
+        assert fired_at is not None and fired_at <= 4.0, fired_at
