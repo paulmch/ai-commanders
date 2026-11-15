@@ -742,3 +742,236 @@ class TestPdTargetListTurretCover:
         check()
         ships[1].is_surrendered = True
         check()
+
+
+# ---------------------------------------------------------------------------
+# Round 2: indenting JSON writer, per-call threat cache in PRESENT scoring
+# ---------------------------------------------------------------------------
+
+class TestDumpsIndented:
+    """battle_recorder.dumps_indented == json.dumps(indent=n), byte for byte."""
+
+    def _samples(self):
+        from dataclasses import dataclass, field
+        from enum import IntEnum
+
+        class Level(IntEnum):
+            LOW = 1
+            HIGH = 7
+
+        class MyFloat(float):
+            pass
+
+        @dataclass
+        class Leaf:
+            name: str
+            values: tuple = (1, 2.5)
+
+        @dataclass
+        class Node:
+            leaf: Leaf
+            more: dict = field(default_factory=dict)
+
+        rng = random.Random(13)
+
+        def tree(depth):
+            kind = rng.randrange(9 if depth < 5 else 6)
+            if kind == 0:
+                return rng.choice([None, True, False])
+            if kind == 1:
+                return rng.randrange(-10**12, 10**12)
+            if kind == 2:
+                return rng.choice([0.0, -0.0, 1e-300, 1.5e300, 0.1 + 0.2, float("nan"),
+                                   float("inf"), float("-inf"), rng.uniform(-1e7, 1e7)])
+            if kind in (3, 4, 5):
+                return rng.choice(["", "plain", "quote\" back\\slash", "tab\tnl\n\x00\x1f",
+                                   "é中\U0001f680", "</script>", "alpha_1"])
+            if kind == 6:
+                return [tree(depth + 1) for _ in range(rng.randrange(4))]
+            if kind == 7:
+                return tuple(tree(depth + 1) for _ in range(rng.randrange(3)))
+            keys = ["k", "ü", 3, -4, 2.5, True, False, None, "", float("inf"), Level.HIGH]
+            return {rng.choice(keys): tree(depth + 1) for _ in range(rng.randrange(4))}
+
+        yield from ([], {}, [[]], [{}], {"a": []}, {"a": {}}, "s", 1, 2.5, None, True,
+                    [1], {"a": 1}, [[], {}, [[]]], Level.LOW, MyFloat(1.25), [Level.HIGH],
+                    Node(Leaf("x"), {"n": Leaf("y", ())}), [Leaf("z")], {1: 2, 1.5: 3})
+        for _ in range(400):
+            yield tree(0)
+
+    @pytest.mark.parametrize("indent", [1, 2, 4])
+    def test_byte_identical_to_stdlib(self, indent):
+        from src.llm.battle_recorder import _dataclass_as_json_object, dumps_indented
+        n = 0
+        for obj in self._samples():
+            want = json.dumps(obj, indent=indent, default=_dataclass_as_json_object)
+            assert dumps_indented(obj, indent) == want
+            n += 1
+        assert n > 400
+
+    def test_real_recorder_output(self):
+        """A recording built through BattleRecorder serialises to the stdlib text."""
+        from dataclasses import fields
+        from src.llm.battle_recorder import (
+            BattleEvent, BattleRecording, _dataclass_as_json_object)
+        rec = TestRecordingToJsonWithoutDeepCopy()._recording()
+        rec.events += [BattleEvent(float(i), "pd_fired", f"beta_{i}",
+                                   {"range_km": i * 13.37, "hit": i % 2 == 0, "ids": [i, None]},
+                                   event_id=f"e{i}", sequence=i).to_dict() for i in range(50)]
+        rec.sim_trace += [{"t": i, "ships": {}, "torpedoes": [], "plan": None} for i in range(3)]
+        shallow = {f.name: getattr(rec, f.name) for f in fields(rec)}
+        assert rec.to_json() == json.dumps(shallow, indent=2, default=_dataclass_as_json_object)
+        assert json.loads(rec.to_json())["events"][5]["event_type"] == "pd_fired"
+
+    def test_what_it_cannot_write_goes_to_the_stdlib(self):
+        from src.llm.battle_recorder import BattleRecording, dumps_indented
+        with pytest.raises(TypeError):
+            dumps_indented({"bad": object()}, 2)
+        with pytest.raises(TypeError):
+            dumps_indented({(1, 2): "tuple key"}, 2)
+        rec = BattleRecording()
+        deep = current = []
+        for _ in range(100):                       # deeper than the writer's indent table
+            current.append([])
+            current = current[0]
+        rec.events = [{"deep": deep}]
+        assert rec.to_json() == json.dumps(
+            {f: getattr(rec, f) for f in rec.__dataclass_fields__}, indent=2)
+        rec.events = [{"bad": {1, 2}}]
+        with pytest.raises(TypeError):
+            rec.to_json()
+
+
+class TestPresentationThreatCache:
+    """_calculate_presentation_direction shares per-threat work (impact
+    vectors, armor trials) between candidate attitudes through a dict that
+    lives for that one call."""
+
+    def _threats(self, rng, n):
+        threats = []
+        for i in range(n):
+            bearing = rand_vec(rng, 1.0).normalized()
+            rel_vel = bearing * -rng.uniform(4e3, 1.5e4) + rand_vec(rng, 800.0)
+            if i % 4 == 3:
+                rel_vel = bearing * 500.0             # opening: reversed-bearing branch
+            threats.append({"bearing": bearing, "ke_gj": rng.uniform(5.0, 120.0),
+                            "rel_vel": rel_vel, "t_go": rng.uniform(2.0, 12.0)})
+        return threats
+
+    def _uncached(self):
+        sim = CombatSimulation(seed=1)
+        score = sim._presentation_score
+        sim._presentation_score = lambda ship, forward, threats, threat_cache=None: score(
+            ship, forward, threats)
+        return sim
+
+    def test_scores_match_uncached_scoring(self):
+        sim = CombatSimulation(seed=1)
+        ship = _hull("cruiser", forward=Vector3D(0.3, -0.8, 0.52).normalized())
+        rng = random.Random(14)
+        threats = self._threats(rng, 7)
+        cache = {}
+        for _ in range(60):
+            forward = rand_vec(rng, 1.0).normalized()
+            assert sim._presentation_score(ship, forward, threats, cache) == \
+                sim._presentation_score(ship, forward, threats)
+        assert any(isinstance(k, tuple) for k in cache) and 0 in cache
+
+    @pytest.mark.parametrize("ship_type", ["corvette", "cruiser", "battleship"])
+    def test_direction_unchanged_and_cache_does_not_outlive_the_call(self, ship_type):
+        """Armor shot up BETWEEN calls must be seen by the next call (the
+        cache is per call, not per ship or per tick)."""
+        sim, plain = CombatSimulation(seed=1), self._uncached()
+        rng = random.Random(15)
+        ship = _hull(ship_type, forward=rand_vec(rng, 1.0).normalized())
+        sim.add_ship(ship)
+        chosen = set()
+        for round_ in range(6):
+            threats = self._threats(rng, 2 + round_)
+            got = sim._calculate_presentation_direction(ship, threats)
+            want = plain._calculate_presentation_direction(ship, threats)
+            assert vbits(got) == vbits(want)
+            chosen.add((round(got.x, 3), round(got.y, 3), round(got.z, 3)))
+            # same threats again after real damage: a stale trial would show here
+            for name in ("nose", "lateral", "tail"):
+                ship.armor.get_section(name).apply_energy_damage(
+                    energy_gj=90.0 * (round_ + 1), flat_chipping=0.3, impact_area_m2=0.1)
+            got = sim._calculate_presentation_direction(ship, threats)
+            want = plain._calculate_presentation_direction(ship, threats)
+            assert vbits(got) == vbits(want)
+        assert len(chosen) > 2
+
+
+class TestBallisticThreatsScalar:
+    """_gather_ballistic_threats in scalars == the Vector3D form it replaced."""
+
+    @staticmethod
+    def _reference(sim, ship):
+        from src.simulation import BALLISTIC_THREAT_HORIZON_S
+        threats = []
+
+        def add(pos, vel, ke_gj):
+            rel_pos = pos - ship.position
+            rel_vel = vel - ship.velocity
+            if rel_vel.magnitude < 100:
+                return
+            tca = -rel_pos.dot(rel_vel) / (rel_vel.dot(rel_vel))
+            if tca < 0 or tca > BALLISTIC_THREAT_HORIZON_S:
+                return
+            miss_dist = (rel_pos + rel_vel * tca).magnitude
+            urgency = (1.0 / max(tca, 0.5)) * ke_gj * (1.0 / max(miss_dist, 100))
+            threats.append({'tca': tca, 'miss_dist': miss_dist, 'urgency': urgency,
+                            'rel_vel': rel_vel, 'rel_pos': rel_pos, 'ke_gj': ke_gj})
+
+        for flight in sim.projectiles:
+            if flight.target_ship_id != ship.ship_id:
+                continue
+            proj = flight.projectile
+            mass_kg = max(0.1, proj.mass_kg - getattr(proj, '_pd_ablation', 0.0))
+            rel_speed = (proj.velocity - ship.velocity).magnitude
+            add(proj.position, proj.velocity, 0.5 * mass_kg * rel_speed ** 2 / 1e9)
+        for flight in sim.torpedoes:
+            if not flight.is_disabled:
+                continue
+            torp = flight.torpedo
+            rel_speed = (torp.velocity - ship.velocity).magnitude
+            add(torp.position, torp.velocity,
+                0.5 * torp.specs.penetrator_mass_kg * rel_speed ** 2 / 1e9)
+        return threats
+
+    @staticmethod
+    def _flat(threats):
+        return [[bits(t['tca']), bits(t['miss_dist']), bits(t['urgency']), bits(t['ke_gj']),
+                 vbits(t['rel_vel']), vbits(t['rel_pos'])] for t in threats]
+
+    def test_bit_identical_and_follows_ship_state(self):
+        from src.projectile import KineticProjectile
+        from src.simulation import ProjectileInFlight
+
+        sim = CombatSimulation(seed=1)
+        ship = _hull("destroyer")
+        ship.ship_id = "target"
+        sim.ships["target"] = ship
+        ship.kinematic_state.velocity = Vector3D(900.0, -300.0, 150.0)
+        rng = random.Random(16)
+        for i in range(400):
+            offset = rand_vec(rng, 1.0).normalized() * rng.uniform(2e3, 4e5)
+            closing = rng.choice([8e3, 8e3, 50.0, -6e3])           # in, in, slow, away
+            vel = ship.velocity + offset.normalized() * -closing + rand_vec(rng, 300.0)
+            proj = KineticProjectile(position=ship.position + offset, velocity=vel,
+                                     mass_kg=rng.choice([5.0, 20.0, 45.0]))
+            if i % 5 == 0:
+                proj._pd_ablation = rng.uniform(0.0, 6.0)
+            sim.projectiles.append(ProjectileInFlight(
+                f"p{i}", proj, "shooter", "target" if i % 7 else "someone_else"))
+
+        got = sim._gather_ballistic_threats(ship)
+        assert 50 < len(got) < 350                # kept and rejected rounds both occur
+        assert self._flat(got) == self._flat(self._reference(sim, ship))
+
+        # The ship burns and moves: the next call reads the new state.
+        ship.kinematic_state.velocity = ship.velocity + Vector3D(-400.0, 250.0, 90.0)
+        ship.kinematic_state.position = ship.position + Vector3D(1500.0, -900.0, 300.0)
+        after = sim._gather_ballistic_threats(ship)
+        assert self._flat(after) == self._flat(self._reference(sim, ship))
+        assert self._flat(after) != self._flat(got)
