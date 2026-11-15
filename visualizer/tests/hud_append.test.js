@@ -145,8 +145,8 @@ test('appends extend the index in place instead of rebuilding it', () => {
   for (const key of ['ids', 'comms', 'deliveries', 'spend']) assert.equal(live.hud[key], before[key], `${key} extended in place`);
   // The incremental state lives off the loader and off the hud (plain, comparable data)
   assert.ok(!Object.keys(live).some(k => /builder/i.test(k)));
-  assert.deepEqual(Object.keys(live.hud).sort(), ['checkpoints', 'comms', 'costs', 'deliveries', 'duration', 'hitBins', 'ids', 'kills', 'log',
-    'models', 'result', 'salvos', 'spend', 'visions'].sort());
+  assert.deepEqual(Object.keys(live.hud).sort(), ['blasts', 'checkpoints', 'comms', 'costs', 'deliveries', 'duration', 'fittings', 'hitBins', 'ids', 'kills', 'log',
+    'models', 'notices', 'result', 'salvos', 'spend', 'visions'].sort());
   // The fixture's traps all resolved the way a full parse resolves them
   const hud = live.hud;
   assert.deepEqual(hud.checkpoints.map(c => [c.t, c.n]), [[30, 1], [60, 2], [90, 3], [110, 4]]);

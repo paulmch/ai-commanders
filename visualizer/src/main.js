@@ -32,6 +32,8 @@ import { CommsFeed, commsToggle } from './CommsFeed.js';
 import { KillFeed } from './KillFeed.js';
 import { Registry } from './Registry.js';
 import { Scoreboard, ResultBanner, resultBannerDue } from './Scoreboard.js';
+import { fittingsAt } from './FittingsIndex.js';
+import { FittingsCard } from './FittingsHud.js';
 import { TimelineMarkers } from './TimelineMarkers.js';
 import { showLightbox } from './hudDom.js';
 import { freeViewFrame, viewInsets } from './ViewInsets.js';
@@ -1418,8 +1420,8 @@ class BattleVisualizer {
     const t = this.timeController.currentTime;
     const hud = this.loader.hud;
     const sides = this.scoreboard.update(this.currentState.ships, this.currentState.torpedoes, this.loader.ships, hud, t);
-    this.registry.update(this.currentState.ships, t, hud.kills);
-    this.killFeed.update(hud.kills, t);
+    this.registry.update(this.currentState.ships, t, hud.kills, hud.fittings);
+    this.killFeed.update(hud.kills, t, hud);
     // A dying ship is a confirmed kill counting down to its reactor
     // detonation; the banner waits for the end of a replayed recording (a
     // live battle's verdict is the live end card's, never both).
@@ -1564,6 +1566,8 @@ class BattleVisualizer {
     if (this.selectedShipId && this.loader) {
       this.updateArmorDisplay(this.selectedShipId);
       this.updateModuleDisplay(this.selectedShipId);
+      this.fitCard.update(fittingsAt(this.loader.hud?.fittings, this.selectedShipId, this.timeController?.currentTime || 0),
+        !!(state.dying || state.destroyed));
     }
   }
 
@@ -1803,6 +1807,7 @@ class BattleVisualizer {
     this.scoreboard = new Scoreboard({ root: $('scoreboard') });
     this.resultBanner = new ResultBanner({ root: $('resultBanner') });
     this.killFeed = new KillFeed({ root: $('killFeed'), onSeek: kill => this.hudSeek(kill.t - 5, kill.shipId) });
+    this.fitCard = new FittingsCard({ root: $('fitCard') });
     this.timelineMarkers = new TimelineMarkers({ events: $('timelineMarkers'), checkpoints: $('timelineCheckpoints'),
       onSeek: (t, shipId) => this.hudSeek(t, shipId) });
     this.commsFeed = new CommsFeed({

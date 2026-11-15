@@ -23,6 +23,7 @@
  * All text here is plain data; renderers must write it with textContent.
  */
 import { eventId } from './DecisionIndex.js';
+import { FittingFold } from './FittingsIndex.js';
 
 /** Class weights of the engine's time-limit verdict (battle_runner._evaluate_fleet_tactical_advantage). */
 export const SHIP_VALUES = {
@@ -389,6 +390,15 @@ export function buildComms(events, ids, ships, checkpoints, { from = 0, to = eve
         });
         break;
       }
+      case 'admiral_directive_failed':
+        // A checkpoint whose directive call failed: captains fly on without a new fleet directive
+        push(e, i, { kind: 'error', tag: 'NO DIRECTIVE', faction: d.faction || null, from: d.admiral_name || 'Admiral', to: 'ALL SHIPS',
+          text: `No new fleet directive this checkpoint: the admiral's directive call failed${d.reason ? ` (${clip(d.reason, 300)})` : ''}. Captains keep their previous directive.` });
+        break;
+      case 'admiral_directive_retried':
+        push(e, i, { kind: 'system', tag: 'DIRECTIVE RETRIED', faction: d.faction || null, from: d.admiral_name || 'Admiral', to: 'ALL SHIPS',
+          text: `Fleet directive recovered on a retry${d.reason ? `: ${clip(d.reason, 300)}` : '.'}` });
+        break;
       case 'model_error':
         push(e, i, { kind: 'error', tag: 'MODEL ERROR', faction: d.faction || factionOf(ship, ships), from: ship ? nameOf(ship, ships) : `${d.faction || ''} admiral`.trim(),
           fromId: ship || null, shipId: ship || null, text: clip(d.error, 400) });
@@ -633,6 +643,14 @@ export function formatLogEvent(e, ships = {}) {
     }
     case 'magazine_cookoff': return { cls: 'destroyed', cat: 'fire', text: `COOK-OFF: ${n(e.ship_id)} ${d.module_name || 'magazine'} burns (${d.torpedoes_lost > 0 ? `${d.torpedoes_lost} torpedoes` : `${d.gun_rounds_lost || 0} rounds`} lost)` };
     case 'blast_damage': return { cls: 'hit', cat: 'kills', text: `BLAST: ${n(e.ship_id)} caught ${gj(d.distance_km)} km from ${n(d.source_ship_id)}'s reactor${d.armor_ablation_cm > 0 ? ` (-${gj(d.armor_ablation_cm)} cm ${d.hit_location || ''} armour)` : d.fuse_cut_s > 0 ? ` (fuse -${gj(d.fuse_cut_s)} s)` : ''}` };
+    case 'reactor_blast': {
+      const killed = d.torpedoes_destroyed?.length || 0, blinded = d.torpedoes_blinded?.length || 0;
+      if (!killed && !blinded) return null;   // ships it caught have their own BLAST rows
+      const parts = [];
+      if (killed) parts.push(`destroys ${killed} torpedo${killed === 1 ? '' : 'es'}`);
+      if (blinded) parts.push(`blinds ${blinded}`);
+      return { cls: 'pd', cat: 'kills', text: `BLAST: ${n(e.ship_id)}'s reactor ${parts.join(', ')} (${gj(d.radius_km)} km)` };
+    }
     case 'shot_fired': return { cls: 'shot', cat: 'fire', text: `FIRE: ${n(e.ship_id)} → ${n(d.target_id)}` };
     case 'torpedo_launched': return { cls: 'torpedo', cat: 'fire', text: `TORPEDO AWAY: ${n(e.ship_id)} → ${n(d.target_id)}` };
     case 'torpedo_impact': return { cls: 'destroyed', cat: 'fire', text: `TORPEDO IMPACT: ${n(d.target_id)} takes ${(Number(d.total_damage_gj) || 0).toFixed(0)} GJ (${d.hit_location || '?'})` };
@@ -653,6 +671,7 @@ export function formatLogEvent(e, ships = {}) {
     }
     case 'ship_destroyed': return { cls: 'kill', cat: 'kills', text: `KILL: ${n(e.ship_id)} destroyed${d.cause ? ` (${readable(d.cause)})` : ''}${d.killer_id ? ` · ${n(d.killer_id)}` : ''}` };
     case 'maneuver': return { cls: 'info', cat: 'command', text: `${n(e.ship_id)}: ${d.maneuver_type}${d.throttle != null ? ` @ ${Math.round(d.throttle * 100)}%` : ''}` };
+    case 'admiral_directive_failed': return { cls: 'system', cat: 'command', text: `NO DIRECTIVE ${String(d.faction || '').toUpperCase()}: admiral's directive call failed${d.reason ? ` (${clip(d.reason, 120)})` : ''}` };
     case 'admiral_directive': return { cls: 'orders', cat: 'command', text: `ORDERS ${String(d.faction || '').toUpperCase()}: ${firstSentence(d.directive)}` };
     case 'captain_report': return { cls: d.status && normalizeStatus(d.status) !== 'ACK' ? 'deviate' : 'comms', cat: 'command', text: `${normalizeStatus(d.status)} ${d.ship_name || n(e.ship_id)}: ${clip(d.reason || d.intent || '', 140)}` };
     case 'captain_log': return { cls: 'comms', cat: 'command', text: `LOG ${n(e.ship_id)}: "${clip(d.note, 160)}"` };
@@ -897,6 +916,7 @@ class HudBuilder {
     this.spendTotals = { alpha: 0, beta: 0 };
     this.admiralCalls = [];
     this.end = { stopped: null, ended: null };
+    this.fitFold = new FittingFold();
   }
 
   /** Is `delta` (the last `n` events of the loader) a clean append to what this builder indexed? */
@@ -924,6 +944,8 @@ class HudBuilder {
     addSpend(this.spend, this.spendTotals, events, from);
     addAdmiralCalls(this.admiralCalls, events, ids, from);
     addEnd(this.end, events, from);
+    this.fitFold.setLayouts(loader.sourceData, ships);
+    this.fitFold.add(events, ids, from, ships);
 
     // Command net: drop the open rows, re-derive them together with the new events
     this.comms.length = this.frozenRows;
@@ -971,7 +993,10 @@ class HudBuilder {
       visions: visionsOf(this.admiralCalls, src.assets),
       result: resultOf(this.end, loader.metadata || {}),
       models,
-      duration: loader.duration || 0
+      duration: loader.duration || 0,
+      // Pass-5 battle damage (FittingsIndex.js): per-ship fitting state over time,
+      // the notices derived from it, and a blast summary per death
+      ...this.fitFold.view(kills)
     };
   }
 }
