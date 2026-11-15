@@ -157,15 +157,15 @@ class TestTraverse:
         table = _table(dorsal_gun=blocked)
         return wa.MountState(table["destroyer"].by_slot["weapon_1"], rate)
 
-    def test_first_designation_is_free_then_the_mount_slews_at_its_rate(self):
+    def test_settled_mount_then_slews_at_its_rate(self):
         m = self._mount(rate=30.0)
-        assert m.train(1.0, 0.0, 0.0, 1.0) == wa.ON_TARGET          # trained before battle
+        assert m.train(1.0, 0.0, 0.0, 0.0) == wa.ON_TARGET          # settled before battle (dt 0)
         # swing 90 degrees to port at 30 deg/s: slewing for two ticks, on in the third
         states = [m.train(0.0, 1.0, 0.0, 1.0) for _ in range(3)]
         assert states == [wa.SLEWING, wa.SLEWING, wa.ON_TARGET]
         # along the great circle: stays in the x-y plane on the way
         m2 = self._mount(rate=30.0)
-        m2.train(1.0, 0.0, 0.0, 1.0)
+        m2.train(1.0, 0.0, 0.0, 0.0)
         m2.train(0.0, 1.0, 0.0, 1.0)
         az, el = wa.az_el_deg(m2.ax, m2.ay, m2.az)
         assert az == pytest.approx(30.0, abs=1e-6) and el == pytest.approx(0.0, abs=1e-6)
@@ -173,7 +173,7 @@ class TestTraverse:
     def test_masked_target_trains_to_the_edge_and_waits(self):
         # open only on the port side (az > 0)
         m = self._mount(rate=30.0, blocked=lambda az, el: az < 0)
-        assert m.train(0.0, 1.0, 0.0, 1.0) == wa.ON_TARGET
+        assert m.train(0.0, 1.0, 0.0, 0.0) == wa.ON_TARGET           # settled
         # target swings to the starboard quarter: masked
         want = (math.cos(math.radians(-40)), math.sin(math.radians(-40)), 0.0)
         for _ in range(6):

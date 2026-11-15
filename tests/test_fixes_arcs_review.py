@@ -287,3 +287,44 @@ class TestMaskedBatteryFallsBack:
         for _ in range(15):
             sim.step()
         assert self._shots(sim)["high"] > 0
+
+
+# =============================================================================
+# Finding 6: settle was a no-op in runner battles (t = 0 names no targets),
+# and every mount's first designation - at t = 30 s or later - was a free
+# instant swing through any angle
+# =============================================================================
+
+class TestNoFreeSnapInBattle:
+
+    def test_a_first_designation_after_the_start_slews(self):
+        """Settled at t = 0 with no gun target; the first target named during
+        the battle lies 90 degrees from the stowed battery: it slews."""
+        sim = _sim(_table(**ALL_OPEN))
+        a = _ship(sim, "a", "alpha", Vector3D(0, 0, 0))
+        _ship(sim, "b", "beta", Vector3D(150_000, 0, 0), forward=Vector3D(-1, 0, 0))
+        sim.step()                               # t=0: nothing named
+        _fire_at(a, "b")                         # named mid-battle (not at a checkpoint)
+        sim.step()
+        m = a.weapons["weapon_1"].mount
+        assert m.state == wa.SLEWING            # stowed dorsal (el 90) -> the nose: 3 s at 30 deg/s
+        states = []
+        for _ in range(3):
+            sim.step()
+            states.append(m.state)
+        assert states[-1] == wa.ON_TARGET
+
+    def test_runner_battles_settle_at_the_first_checkpoint_that_names_targets(self, monkeypatch):
+        """In a runner battle the t = 0 decision names no targets; the first
+        30 s checkpoint does, before anything has fired: that is where the
+        engagement settles (rolled and trained), once."""
+        calls = []
+        settle = CombatSimulation.settle_arcs
+
+        def logged(self):
+            calls.append(self.current_time)
+            settle(self)
+
+        monkeypatch.setattr(CombatSimulation, "settle_arcs", logged)
+        _draft_battle(104, time_limit=90.0)
+        assert calls == [30.0], calls

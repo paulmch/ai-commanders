@@ -1565,6 +1565,7 @@ class CombatSimulation:
     roll_to_unmask = False
     hull_mounts: dict = {}
     _arcs_lead_cache: dict = {}
+    _arcs_settled = False
 
     def __init__(
         self,
@@ -2748,8 +2749,10 @@ class CombatSimulation:
         # False, so captains previously issued no commands for the entire
         # first decision interval and ships drifted uncommanded).
         first_step = self.current_time == 0.0 and self.last_decision_time == 0.0
+        decided = False
         if first_step or (self.current_time - self.last_decision_time >= self.decision_interval):
             self._trigger_decision_points()
+            decided = True
             self.last_decision_time = self.current_time
 
         # Resolve weapons fire for every ship BEFORE any ship moves.
@@ -2766,7 +2769,7 @@ class CombatSimulation:
         self._process_pending_torpedo_launches()
         arcs_on = self.weapon_arcs
         if arcs_on:
-            if first_step:
+            if decided and not self._arcs_settled and self._arcs_ready_to_settle():
                 self.settle_arcs()
             # Body frame of every hull for this tick; mounts train on their
             # targets from the same start-of-step snapshot fire control uses.
@@ -7285,13 +7288,17 @@ class CombatSimulation:
         """
         Initial condition of an engagement: every hull is already rolled for
         its first targets and its mounts are trained on them, as after the
-        minutes of approach that precede a battle. step() does this once at
-        t = 0 (after the first decision point has named targets); a scripted
+        minutes of approach that precede a battle. step() does this once, at
+        the first decision point that names targets (t = 0 in a scripted
+        scenario; the first 30 s checkpoint in a runner battle, whose t = 0
+        decision names none) while nothing has been fired yet; a scripted
         scenario that hands out targets later may call it itself. Never used
-        to move a mount or a hull during a battle.
+        to move a mount or a hull once the shooting has started: after it,
+        every designation - a mount's first included - slews at its rate.
         """
         if not self.weapon_arcs:
             return
+        self._arcs_settled = True
         self._arcs_begin_tick()
         now = self.current_time
         for ship in self.ships.values():
@@ -7307,14 +7314,36 @@ class CombatSimulation:
                 arcs.goal_since = None      # settled: the first in-battle re-plan is free
             ks = ship.kinematic_state
             arcs.set_frame(ks.forward, ks.up, now)
+            # train again in the settled (rolled) attitude
             for mount in arcs.mounts:
-                # untrained again: the first designation in the settled
-                # attitude is the free one
                 mount.trained = False
+                mount.stamp = -1.0
+            self._arcs_train_guns(ship, 0.0)
+            for mount in arcs.mounts:
                 mount.stamp = -1.0
                 mount.state = weapon_arcs.IDLE
                 mount.masked_since = None
                 mount.masked_reported = False
+
+    def _arcs_ready_to_settle(self) -> bool:
+        """
+        Some live hull has a target and no gun round has left yet. (Torpedoes
+        do not count: a torpedo boat's t = 0 launch is minutes from anyone,
+        and the guns are what the settled attitude is for.)
+        """
+        if self.projectiles:
+            return False
+        named = False
+        for ship in self.ships.values():
+            if any(ws.shots_fired for ws in ship.weapons.values()
+                   if ws.mount is not None and ws.mount.kind in ('gun', 'spinal')):
+                return False
+            if ship.is_destroyed or ship.is_dying or ship.is_surrendered:
+                continue
+            if ship.primary_target_id or any(
+                    o.target_id for o in ship.weapons_orders.values()):
+                named = True
+        return named
 
     def _arcs_update_rolls(self, dt: float) -> None:
         """

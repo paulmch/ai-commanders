@@ -327,9 +327,10 @@ class MountState:
         """
         Slew toward the wanted body-frame direction for ``dt`` seconds along
         the great circle and return the new state. A mount whose target is
-        masked trains to the edge of its arc and waits there. The very first
-        designation is free (mounts are trained on the enemy while the fleets
-        are still far outside gun range).
+        masked trains to the edge of its arc and waits there. ``dt == 0``
+        (CombatSimulation.settle_arcs, before the shooting starts) puts a
+        mount that has never been trained straight onto an open target, as
+        after the approach; every other designation slews at the rate.
         """
         self.wx, self.wy, self.wz = wx, wy, wz
         self.has_want = True
@@ -337,7 +338,7 @@ class MountState:
         want_blocked = mask[cell_index(wx, wy, wz)]
         if not self.trained:
             self.trained = True
-            if not want_blocked:
+            if not want_blocked and dt == 0.0:
                 self.ax, self.ay, self.az = wx, wy, wz
                 self.state = ON_TARGET
                 return ON_TARGET
