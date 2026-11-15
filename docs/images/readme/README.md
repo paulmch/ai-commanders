@@ -26,6 +26,7 @@ filters/scrolling, and for `command-net.png` a 2× device-scale crop.
 | `blast-shell.jpg` | Pass-5 damage demo | 152.6s | Reactor blast of `beta_5` (destroyer, killed at 150 s) 2.6 s on: fireball inside the blast shell drawn to the recorded 13 km radius, two escorts beside it, PD lasers still working; 6 hull lengths, azimuth 30°, elevation 18°; HUD hidden |
 | `fittings-hud.png` | Pass-5 damage demo | 180s | OCS Falchion-1 (`beta_2`) selected one second after the frigate TIS Ward-1's reactor blast caught it: kill toast with the blast radius, CAUGHT IN BLAST and DISARMED toasts, fitting pips in the ship registry, FITTINGS block (guns, PD with one damaged turret, drive) in the telemetry card; 5 hull lengths, azimuth 30°, elevation 18° |
 | `dreadnought.png` | Showcase s0 | 96.5s | `alpha_1`, the pass-5 dreadnought, three-quarter view from the sunlit side at full thrust; 3 hull lengths, azimuth −10°, elevation 35°, 20° lens; HUD hidden |
+| `plume-wash.png` | Pass-5 plume demo (`p5_plume_demo.json`, scripted `plume_wash` battle) | 55s | The destroyer `alpha_2` caught in the exhaust of the battleship ahead of it (BB-01, foreground), its bow plating glowing in the plume wash; 2.4 hull lengths from `alpha_2`, azimuth 35°, elevation 18°; HUD hidden |
 | `torpedo-strike.png` | Pass-5 tactics showcase | 100.5s | Synchronized torpedo salvo landing on the battleship `beta_1` half a second before its reactor goes; 2.6 hull lengths, azimuth 35°, elevation 18°; HUD hidden |
 | `live-deliberation.png` | Claude Sonnet 5 vs DeepSeek V4.1 Flash, replayed through the live endpoints | CP5 (150s) | `?live=1&decisions=1`: live bar, COMMAND DELIBERATION card (both sides' progress, spend), alpha admiral's salvo directive, the salvo one second from impact |
 | `draft-splash.png` | Same, live endpoints | T+4s | Draft splash after both sealed picks: rosters, formations and each admiral's reasoning |
@@ -38,6 +39,8 @@ filters/scrolling, and for `command-net.png` a 2× device-scale crop.
 - Pass-5 damage demo: `p5_damage_demo.json`, a seeded heuristic fleet battle
   (regeneration command in
   [`docs/pass-5-recording-additions.md`](../../pass-5-recording-additions.md))
+- Pass-5 plume demo: `p5_plume_demo.json` (`scripts/generate_test_battle.py plume_wash`,
+  see [`docs/pass-5-recording-additions.md`](../../pass-5-recording-additions.md))
 - Pass-5 tactics showcase: `p5_tactics_s4.json` (heuristic captains, `tactical`
   doctrine)
 - Showcase s0 / s7: free heuristic draft battles recorded on the pass-4 engine
@@ -116,6 +119,10 @@ $SNAP --recording p5_damage_demo.json --query "ship=beta_2" --time 180 --focus b
 $SNAP --recording showcase_s0_200pt.json --time 96.5 --focus alpha_1 --dist 3.0 --az -10 --el 35 --hide-ui \
   --eval "(() => { $TRACKS_OFF; const c = window.visualizer.scene.camera; c.fov = 20; c.updateProjectionMatrix(); })()" \
   --out dreadnought.png
+
+# plume-wash.png
+$SNAP --recording p5_plume_demo.json --time 55 --focus alpha_2 --dist 2.4 --az 35 --el 18 \
+  --hide-ui --eval "$TRACKS_OFF" --out plume-wash.png
 
 # torpedo-strike.png
 $SNAP --recording p5_tactics_s4.json --time 100.5 --focus beta_1 --dist 2.6 --az 35 --el 18 \
