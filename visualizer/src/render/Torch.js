@@ -131,7 +131,7 @@ const fragmentShader = /* glsl */`
       float tc = -dot(ro.xy, rd.xy) / dd;          // closest approach to the axis
       vec2 qc = ro.xy + rd.xy * tc;
       float d2 = dot(qc, qc);
-      float lam = uR0 * (3.2 + 2.2 * uThrust);     // shock cell length
+      float lam = uR0 * (4.0 + 3.0 * uThrust);     // shock cell length
       float dt = (t1 - t0) / float(uSeg);
       for (int i = 0; i < 4; i++) {
         if (i >= uSeg) break;
@@ -146,7 +146,7 @@ const fragmentShader = /* glsl */`
         float v = s / (uR0 * 44.0);
         float n1 = textureLod(uNoise, vec2(q.x / (uR0 * 7.0) + uSeed, v - uTime * 0.4), 0.0).r;
         float n2 = textureLod(uNoise, vec2(q.y / (uR0 * 5.0) + uSeed * 1.7 + 0.37, v * 2.1 - uTime * 0.7), 0.0).g;
-        float fil = clamp(n1 * n2 * 4.0, 0.0, 2.2);
+        float fil = clamp(n1 * n2 * 4.0, 0.0, 1.8);
         float rough = smoothstep(0.0, 0.22, t);
         float coreTurb = mix(1.0, 0.7 + 0.3 * fil, rough);
         float sheathTurb = mix(1.0, 0.22 + 0.78 * fil, rough);
@@ -154,9 +154,11 @@ const fragmentShader = /* glsl */`
 
         // Shock diamonds: the core necks down and flares at each cell
         float ph = 6.28318 * s / lam - 2.0;
-        float cell = exp(-t * 5.0) * uDiamonds;
+        // (each cell weaker and blurrier than the last: three or four read,
+        // then turbulence has eaten the pattern)
+        float cell = exp(-s / (lam * 1.7)) * uDiamonds;
         float pinch = 1.0 - 0.4 * cos(ph) * cell;
-        float knot = 1.0 + 3.6 * pow(0.5 + 0.5 * cos(ph), 4.0) * cell;
+        float knot = 1.0 + 3.6 * pow(0.5 + 0.5 * cos(ph), mix(2.0, 5.0, cell)) * cell;
         // Pressure pulses running down the sheath (slow: no strobing)
         float pulse = 1.0 + 0.14 * sin(6.28318 * (s / (uR0 * 24.0) - uTime * 0.8 + uSeed));
 
@@ -227,7 +229,7 @@ export function torchCough(t) {
  * Only the throat, the diamonds and the first stretch of core cross the
  * bloom threshold - the body of the plume stays a visible blue gradient.
  */
-export const TORCH_LEVELS = { core: 1.5, sheath: 0.78, halo: 0.11, flare: 1.3 };
+export const TORCH_LEVELS = { core: 1.5, sheath: 0.68, halo: 0.11, flare: 1.2 };
 
 /**
  * Per-nozzle level scale for a drive of `cluster` bells: cores overlap by
@@ -294,7 +296,7 @@ export function createTorch({ radius, length, light = null, tint = 'fusion', int
       uSeed: { value: Math.random() },
       uI: { value: new THREE.Vector3() },
       uCore: { value: new THREE.Color(...(fusion ? [1.0, 0.96, 1.0] : [1.0, 0.94, 0.82])) },
-      uSheath: { value: new THREE.Color(...(fusion ? [0.2, 0.46, 1.0] : [1.0, 0.52, 0.18])) },
+      uSheath: { value: new THREE.Color(...(fusion ? [0.15, 0.41, 1.0] : [1.0, 0.52, 0.18])) },
       uEdge: { value: new THREE.Color(...(fusion ? [0.36, 0.18, 0.95] : [0.8, 0.24, 0.1])) }
     },
     vertexShader,

@@ -8,6 +8,7 @@ import {
   missOpacity, beamPulse, torpedoPower, ION_LIFE, IMPACT_LIFE, OWNED_MOMENTS, TWIN_BARREL_X,
   spinalMuzzleInto, dudSkims
 } from './WeaponTimeline.js';
+import { SLUG_LOOK, MUZZLE_LOOK, muzzlePop, POP_LIGHTS } from './GunLooks.js';
 import {
   RCS_LAYOUT, ENGINE, PULSE, JET_COUNT, attitudeAt, jetLevels, makePulses, pulsesAt, throttleAt
 } from './TorpedoRcs.js';
@@ -59,6 +60,9 @@ export class Projectiles {
     this.jetLv = new Float32Array(JET_COUNT);
     this.timeline = null;
     this.time = 0;
+    // Muzzle light pops: the strongest flashes of the frame borrow a pool
+    // light each (picked from battle time alone, released when none fire)
+    this.pops = Array.from({ length: POP_LIGHTS }, () => ({ w: 0, pos: new THREE.Vector3(), reach: 0, light: null }));
   }
 
   prepare(loader) {
@@ -107,7 +111,9 @@ export class Projectiles {
       const mid = (lo + hi) >>> 1;
       if (moments[mid].time < time - 4) lo = mid + 1; else hi = mid;
     }
+    for (let i = 0; i < this.pops.length; i++) this.pops[i].w = 0;
     for (let i = lo; i < moments.length && moments[i].time <= time; i++) this.moment(moments[i], time);
+    this.popLights();
     this.engagements.draw(time);
     this.ribbons.end(); this.flashes.end(); this.markers.end(); this.bodies.end();
   }
@@ -158,10 +164,14 @@ export class Projectiles {
     const speed = this.vel.length();
     const fade = missOpacity(time - tr.missAt);
     if (tr.visible) {
-      const len = tracerLength(speed, this.pixelAt(this.a), time - tr.start);
+      // The look follows the gun that fired it (battery / heavy / spinal /
+      // siege); rounds without a recorded shot read as battery fire.
+      const cls = tr.shot?.cls ?? 0, look = SLUG_LOOK[cls] || SLUG_LOOK[0];
+      const px = this.pixelAt(this.a);
+      const len = Math.min(speed * Math.max(0, time - tr.start), tracerLength(speed, px, time - tr.start) * look.length);
       this.b.copy(this.a).addScaledVector(this.dir, -len);
-      this.ribbons.add(this.a, this.b, 0.045, fade, 0, tr.fseed ?? tr.seed);
-      this.flashes.add(this.a, this.dir, Math.max(0.085, this.pixelAt(this.a) * 1.5), 0.7 * fade);
+      this.ribbons.add(this.a, this.b, look.width, fade * look.gain, 0, tr.fseed ?? tr.seed, cls, cls);
+      this.flashes.add(this.a, this.dir, Math.max(look.head, px * look.headPx), 0.7 * fade * look.gain);
     }
     this.trail(tr, time, sampleTime, ION_LIFE, 12, fade, false, TRAIL_CAP_PX.slug);
   }
@@ -569,11 +579,65 @@ export class Projectiles {
     // Sized to the hull: the ring that fits a dreadnought turret would
     // swallow a frigate's whole beam.
     const hullK = THREE.MathUtils.clamp((ship.userData.size?.width || 5.6) / 5.6, 0.4, 1);
-    const k = (m.spinal ? 1.4 : 1.0) * hullK, f = 1 - age / MUZZLE_LIFE;
+    const cls = m.cls ?? (m.spinal ? 2 : 0), look = MUZZLE_LOOK[cls] || MUZZLE_LOOK[0];
+    const k = look.size * hullK, f = 1 - age / MUZZLE_LIFE;
     this.flashes.add(this.a, this.dir, k * (0.28 + age * 1.2), 2.2 * f * f * f, 1, m.seed);
     this.flashes.add(this.a, this.dir, k * (0.18 + age * 2.6), 1.3 * f * f, 0, m.seed);
-    this.b.copy(this.a).addScaledVector(this.dir, k * (0.6 + age * 5));
-    this.ribbons.add(this.a, this.b, k * 0.1, 1.4 * f * f, 0, m.seed);
+    // Forward jet: the plasma the slug drags out of the bore (class in aAge)
+    this.b.copy(this.a).addScaledVector(this.dir, k * look.jet * (0.6 + age * 5));
+    this.ribbons.add(this.a, this.b, k * 0.1, 1.4 * f * f, 0, m.seed, cls, cls);
+    // Sabot / coil-plasma spray thrown forward in a cone; rides the muzzle
+    this.axis.set(0, 0, 0);
+    this.sparks(this.a, this.dir, this.axis, age, MUZZLE_LIFE, k * look.spray, m.seed + 0.31, look.sparks, 0.85, 3.4);
+    if (look.rings > 1) {
+      // Big guns: a second discharge ring blown down the line of fire
+      this.b.copy(this.a).addScaledVector(this.dir, k * (0.5 + age * 7));
+      this.flashes.add(this.b, this.dir, k * (0.12 + age * 3.4), 0.9 * f * f, 0, m.seed + 0.17);
+    }
+    if (look.rings > 2) {
+      this.b.copy(this.a).addScaledVector(this.dir, k * (1.0 + age * 12));
+      this.flashes.add(this.b, this.dir, k * (0.08 + age * 2.4), 0.7 * f * f, 0, m.seed + 0.43);
+    }
+    this.offerPop(this.a, muzzlePop(age, MUZZLE_LIFE) * look.light, look.reach * hullK);
+  }
+
+  /** Offer a muzzle flash for one of the frame's light pops (strongest win). */
+  offerPop(pos, w, reach) {
+    if (w <= 0.02 || !this.manager.tryPointLight) return;
+    // Lights fall off by the inverse square: only flashes near the camera's
+    // subject are worth one of the two pool lights
+    if (pos.distanceTo(this.focus) > Math.max(60, this.viewDist * 1.5)) return;
+    let slot = null;
+    for (let i = 0; i < this.pops.length; i++) {
+      const p = this.pops[i];
+      if (w > p.w && (!slot || p.w < slot.w)) slot = p;
+    }
+    if (!slot) return;
+    slot.w = w; slot.reach = reach; slot.pos.copy(pos);
+  }
+
+  /** Drive the pool lights behind the frame's strongest muzzle flashes. */
+  popLights() {
+    const mgr = this.manager;
+    for (let i = 0; i < this.pops.length; i++) {
+      const p = this.pops[i];
+      if (p.w <= 0) {
+        if (p.light) { mgr.freePointLight(p.light); p.light = null; }
+        continue;
+      }
+      if (!p.light) p.light = mgr.tryPointLight?.(0xbfe2ff, 0, p.reach, 2) || null;
+      if (!p.light) continue;
+      p.light.position.copy(p.pos);
+      p.light.distance = p.reach;
+      p.light.intensity = p.w;
+    }
+  }
+
+  releasePops() {
+    for (const p of this.pops || []) {
+      if (p.light) this.manager.freePointLight?.(p.light);
+      p.light = null; p.w = 0;
+    }
   }
 
   /** Hull-local muzzle for a shot_fired moment (cached on the moment). */
@@ -761,6 +825,7 @@ export class Projectiles {
   }
 
   clear() {
+    this.releasePops();
     this.trace = null; this.timeline = null;
     this.events = null; this.slugs = null; this.torpedoes = null; this.beams = null;
     this.ribbons.begin(0); this.ribbons.end();

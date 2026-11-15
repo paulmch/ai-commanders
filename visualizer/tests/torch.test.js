@@ -43,3 +43,40 @@ test('torch shader keeps the renderer contracts', () => {
   assert.equal(torchCough(12.34), torchCough(12.34));
   assert.ok(!/uBattle|currentTime/.test(src));
 });
+
+// ---------------------------------------------------------------------------
+// Gun classes: tracer / muzzle looks and the light pop
+// ---------------------------------------------------------------------------
+import { shotClass, GUN_CLASSES } from '../src/render/WeaponTimeline.js';
+import { SLUG_LOOK, MUZZLE_LOOK, muzzlePop, POP_LIGHTS } from '../src/render/GunLooks.js';
+
+test('gun class comes from the weapon name and defaults to battery', () => {
+  assert.equal(shotClass({ weapon_name: 'Coilgun Battery Mk3' }), 0);
+  assert.equal(shotClass({ weapon_name: 'Light Coilgun Battery Mk3' }), 0);
+  assert.equal(shotClass({ weapon_name: 'Heavy Coilgun Battery Mk3' }), 1);
+  assert.equal(shotClass({ weapon_name: 'Spinal Coiler Mk3' }), 2);
+  assert.equal(shotClass({ weapon_name: 'Heavy Siege Coiler Mk3' }), 3);
+  assert.equal(shotClass({}), 0);
+  assert.equal(shotClass(undefined), 0);
+  assert.equal(GUN_CLASSES.length, 4);
+});
+
+test('bigger guns throw bigger tracers and flashes; the pop is a pure envelope', () => {
+  assert.equal(SLUG_LOOK.length, 4);
+  assert.equal(MUZZLE_LOOK.length, 4);
+  for (let c = 1; c < 4; c++) {
+    for (const k of ['width', 'length', 'gain', 'head', 'headPx']) assert.ok(SLUG_LOOK[c][k] > SLUG_LOOK[c - 1][k], `slug ${k}`);
+    for (const k of ['size', 'jet', 'sparks', 'spray', 'light', 'reach']) assert.ok(MUZZLE_LOOK[c][k] > MUZZLE_LOOK[c - 1][k], `muzzle ${k}`);
+    assert.ok(MUZZLE_LOOK[c].rings >= MUZZLE_LOOK[c - 1].rings);
+  }
+  // battery fire keeps the pass-4 tracer width and level
+  assert.equal(SLUG_LOOK[0].width, 0.045);
+  assert.equal(SLUG_LOOK[0].gain, 1);
+  assert.ok(POP_LIGHTS <= 2, 'pops leave half of the 4-light reserve to detonations');
+  assert.equal(muzzlePop(0, 0.3), 1);
+  assert.equal(muzzlePop(0.3, 0.3), 0);
+  assert.equal(muzzlePop(-1, 0.3), 0);
+  let prev = 1;
+  for (let a = 0.02; a < 0.3; a += 0.02) { const v = muzzlePop(a, 0.3); assert.ok(v < prev && v >= 0); prev = v; }
+  assert.equal(muzzlePop(0.1, 0.3), muzzlePop(0.1, 0.3));
+});

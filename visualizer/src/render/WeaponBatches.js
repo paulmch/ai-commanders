@@ -49,7 +49,11 @@ const ribbonVertex = /* glsl */`
     bool jet = kind > 6.5 && !engage;
     // Half-width floor >= 1 px: a narrower strip rasterises as beads.
     float floorPx = kind < 0.5 ? 1.1 : kind < 1.5 ? 1.0 : kind < 2.5 ? 0.6 : plume ? 1.2 : engage ? 0.75 : jet ? 0.7 : 1.0;
-    float capPx = plume ? 64.0 : engage ? 0.75 : jet ? 16.0 : kind > 5.5 ? 24.0 : kind > 1.5 && kind < 2.5 ? 2.2 : 3.0;
+    // Slug tracers (kind 0) carry their gun class in aAge: heavier rounds
+    // are allowed a fatter streak (battery 3 px .. siege 7.5 px half-width)
+    bool slug = kind < 0.5;
+    float capPx = plume ? 64.0 : engage ? 0.75 : jet ? 16.0 : kind > 5.5 ? 24.0 : kind > 1.5 && kind < 2.5 ? 2.2
+      : slug ? 3.0 + 1.5 * aAge.x : 3.0;
     float width = max(pixel * floorPx, min(aStyle.x, pixel * capPx));
     // Thin effects retain a controlled subpixel contribution at fleet scale.
     float minCover = kind < 0.5 ? 0.5 : kind < 1.5 ? 0.07 : kind < 2.5 ? 0.35 : engage ? 1.0 : jet ? 0.1 : kind > 5.5 ? 0.12 : 0.3;
@@ -59,8 +63,10 @@ const ribbonVertex = /* glsl */`
     vPx = width / pixel;
     // Plumes flare out of the nozzle, then neck down slightly toward the tip.
     // RCS jets are tight at the nozzle and fan out as the gas expands.
+    // A slug is a hot bead drawing a thinning streak behind it.
     float taper = plume ? mix(0.3, 1.0, smoothstep(0.0, 0.3, uv.x)) * (1.0 - 0.35 * uv.x)
-      : jet ? mix(0.3, 1.0, sqrt(uv.x)) : 1.0;
+      : jet ? mix(0.3, 1.0, sqrt(uv.x))
+      : slug && vPx > 1.6 ? mix(1.0, 0.4, smoothstep(0.08, 1.0, uv.x)) : 1.0;
     p.xy += vec2(-d.y, d.x) * position.y * 2.0 * width * taper;
     gl_Position = projectionMatrix * vec4(p, 1.0);
     vUv = uv;
@@ -97,7 +103,21 @@ const ribbonFragment = /* glsl */`
       vec3 edge = side < 0.5 ? mix(vec3(1.6,0.36,0.055), vec3(0.06,0.6,0.85), smoothstep(0.2,1.0,x))
         : side < 1.5 ? mix(vec3(0.25,0.95,1.9), vec3(0.04,0.4,1.1), smoothstep(0.2,1.0,x))
         : mix(vec3(1.9,0.62,0.08), vec3(1.1,0.2,0.03), smoothstep(0.2,1.0,x));
-      color = (vec3(3.4,3.05,2.65)*core + edge*halo*0.75) * pow(1.0-x,0.45) * ends;
+      // Hypervelocity slug: a white-hot head a few widths long, then a
+      // streak that cools and thins out behind it. vAge is the gun class
+      // (0 battery, 1 heavy, 2 spinal, 3 siege): bigger guns throw a hotter,
+      // longer bead; spinal and siege rounds drag a beaded ionisation sheath.
+      float cls = vAge;
+      float head = exp(-x * (11.0 - 2.0 * cls));
+      float tail = pow(1.0 - x, 0.7);
+      vec3 hot = mix(vec3(3.4,3.05,2.65), vec3(3.2,3.3,3.6), smoothstep(1.5, 2.5, cls));
+      color = hot * core * (0.3 * tail + (1.15 + 0.3 * cls) * head)
+        + edge * halo * (0.7 + 0.25 * cls) * (0.55 * tail + 0.6 * head);
+      if (cls > 1.5) {
+        float beads = pow(0.5 + 0.5 * sin(x * 34.0 + seed * 40.0), 6.0);
+        color += edge * halo * beads * tail * 0.9;
+      }
+      color *= ends;
     } else if (kind < 1.5) {
       // Slug wake: ionised track cooling from straw-white to the side's tint
       float cooling = pow(max(0.0,1.0-vAge),1.6);
