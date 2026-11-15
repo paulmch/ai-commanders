@@ -1381,6 +1381,9 @@ class TorpedoInFlight:
     # an 8-escort screen. The latch makes the event - and the seeker-kill
     # metric built on it - count torpedoes, not turret-ticks.
     seeker_kill_logged: bool = False
+    # Seeker killed by a reactor blast (src/battle_damage.py), not by PD: a
+    # hit afterwards is not a PD seeker kill that still hit.
+    blast_blinded: bool = False
     # Terminal-presentation latch for the TARGET ship's evasion logic. Once
     # the target commits to presenting armor against this torpedo it must not
     # flip back to running: at the commit boundary the NEZ margins flap
@@ -1451,6 +1454,8 @@ class EngagementMetrics:
     # Torpedoes destroyed / seeker-blinded by a reactor blast (not PD's work).
     total_torpedo_blast_destroyed: int = 0
     total_torpedo_blast_blinded: int = 0
+    # Of total_torpedo_hits, how many a blast had blinded (never PD's).
+    total_torpedo_hits_after_blast_blind: int = 0
     total_damage_dealt: float = 0.0
     ships_destroyed: list[str] = field(default_factory=list)
     battle_duration: float = 0.0
@@ -2682,13 +2687,11 @@ class CombatSimulation:
         battle_damage.resolve_pending_blasts(self)
 
         # Check for battle end conditions
+        # (No last-tick flush is needed: resolving a blast never kills, so it
+        # never queues another one; a chain death - a hulk whose fuse the
+        # blast burned down - happens on a later tick,
+        # and the battle does not end while a dying hulk is still pending.)
         self._check_battle_end()
-        if not self._running:
-            # Last tick: a chain detonation queued while resolving the blasts
-            # above would never get its tick - flush it so the recording
-            # still carries every blast.
-            while self._pending_blasts:
-                battle_damage.resolve_pending_blasts(self)
 
         # Advance time
         self.current_time += dt
@@ -3008,6 +3011,11 @@ class CombatSimulation:
         """
         ship.dying_time_remaining -= dt
         if ship.dying_time_remaining <= 0.0:
+            # Coast through this tick first: the blast resolves at the end of
+            # the tick (battle_damage.resolve_pending_blasts), after every
+            # other ship and torpedo has moved, so it must go off where the
+            # hulk is then - not v*dt behind it. No RNG draw here.
+            ship.kinematic_state = propagate_state(ship.kinematic_state, dt, 0.0, 0.0, 0.0)
             self._detonate_reactor(ship)
             return
 
@@ -6081,7 +6089,10 @@ class CombatSimulation:
 
         self.metrics.total_torpedo_hits += 1
         self.metrics.total_damage_dealt += total_damage_gj
-        if torp_flight.is_disabled:
+        if torp_flight.blast_blinded:
+            # Blinded by a reactor blast, not by PD: kept out of PD's tally.
+            self.metrics.total_torpedo_hits_after_blast_blind += 1
+        elif torp_flight.is_disabled:
             # A blinded torpedo that still connected. Recorded so that PD's
             # seeker kills can never be read as interceptions: a blind only
             # counts for something if the target then moves out of the way.

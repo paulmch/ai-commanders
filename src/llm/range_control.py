@@ -133,8 +133,22 @@ def _current_accel(ship: Any) -> Vector3D:
 current_accel = _current_accel
 
 
+def _can_burn(ships: Sequence[Any]) -> List[Any]:
+    """The hulls that can still produce thrust (battle damage can leave a
+    drive dead): an adrift hull never burns, so it must not set when - or
+    how fast - the others turn and light up."""
+    return [s for s in ships if ship_accel_ms2(s) > 0]
+
+
 def _turn_time(sim: Any, ships: Sequence[Any], direction: Vector3D, engines_on: bool) -> float:
-    """Longest bang-bang turn (from rest) any of ``ships`` needs to face ``direction``."""
+    """Longest bang-bang turn (from rest) any of ``ships`` needs to face ``direction``.
+
+    With ``engines_on`` (a thrust-vectored turn) adrift hulls are left out:
+    they cannot vector a torch they do not have; their attitude turn is the
+    RCS one (``engines_on=False``), which still counts every hull.
+    """
+    if engines_on:
+        ships = _can_burn(ships)
     worst = 0.0
     for ship in ships:
         angle = ship.forward.angle_to(direction)
@@ -153,7 +167,9 @@ def _burn_start(sim: Any, ships: Sequence[Any], direction: Vector3D) -> float:
     from ..simulation import HEADING_BURN_CONE_DEG
     cone = math.radians(HEADING_BURN_CONE_DEG)
     worst = 0.0
-    for ship in ships:
+    # An adrift hull (dead drive) never lights up: waiting for it to come
+    # nose-on would hold everyone else's burn for its whole RCS turn.
+    for ship in _can_burn(ships):
         angle = ship.forward.angle_to(direction)
         if angle <= cone:
             continue

@@ -21,9 +21,11 @@ General rules that apply to every event below:
 ## Damage lane (`src/battle_damage.py`)
 
 Demo recording containing every event type below:
-`visualizer/public/recordings/p5_damage_demo.json` (see "Demo recording" at
-the end of this section for timestamps, and "Variants not in the demo
-recording" for the four field shapes it does not contain).
+`visualizer/public/recordings/p5_damage_demo.json`. It is **not committed**
+(`visualizer/public/recordings/` is gitignored): regenerate it with the
+command under "Demo recording" at the end of this section, which also lists
+its timestamps; "Variants not in the demo recording" covers the four field
+shapes it does not contain.
 
 Magnitudes are named constants in `src/battle_damage.py`; the numbers quoted
 here are the values at the time of writing.
@@ -57,7 +59,7 @@ that fitting's state at t**; a fitting with no event is intact (100).
 | `weapon_name` | string | display name (`"Coilgun Battery Mk3"`, `"PD Laser"`, `"Torpedo Launcher"`, engine module name) |
 | `health_pct` | float 0-100 | fitting health after this event |
 | `health_lost_pct` | float | health removed by this event |
-| `destroyed` | bool | `true` when `health_pct` reached 0: the gun/tube/turret never fires again, a destroyed engine gives no thrust |
+| `destroyed` | bool | `true` exactly when `health_pct` is 0 (a fitting left under 0.5 % is destroyed): the gun/tube/turret never fires again, a destroyed engine gives no thrust |
 | `cooldown_factor` | float or null | `gun`/`launcher`, while not destroyed: the mount now needs this many times its normal cooldown between shots (1.0-2.0 = `min(2, 100/health_pct)`). Always `1.0` for a damaged `pd` turret (it keeps its full output until it is destroyed). `null` for `engine` and for every destroyed fitting |
 | `thrust_fraction` | float 0-1 | `engine` only: the ship's available thrust after this event. It equals engine health / 100 while health is above 25%; at 25% or less the drive stops producing thrust altogether (0 = adrift), before it is formally destroyed |
 | `torpedoes_lost` | int | `launcher` only, only when `destroyed`: rounds lost with the tube |
@@ -145,7 +147,7 @@ inside `radius_km` with intensity >= 0.01, emitted just before the
 | `hit_location` | string | armour facing toward the blast: `"nose"`, `"lateral"`, `"tail"` (absent for a dying hulk) |
 | `armor_ablation_cm` | float | armour burned off that facing (`intensity x 15 cm`, capped at what was left) |
 | `armor_remaining_cm` | float | thickness left on that facing |
-| `heat_gj` | float | heat dumped into the victim's sink (`intensity x 120 GJ`) |
+| `heat_gj` | float | heat dumped into the victim's sink (`intensity x 120 GJ`, capped so the sink never passes 149 % of its rating: a blast alone never causes a reactor meltdown; 0 when the victim was already that hot) |
 | `heat` | float | victim's heat fraction after the pulse (same scale as frame `heat`) |
 | `radiators` | [object] | one entry per **extended** panel, all of which are damaged: `radiator_position` (`tail_port`/`tail_starboard`/`tail_dorsal`/`tail_ventral`), `health_pct`, `destroyed`, `capacity_lost_kw`. Empty when the panels were retracted (shielded) |
 | `fuse_cut_s` | float | only when the victim is a dying hulk: seconds the blast took off its detonation fuse (`intensity x 20 s`). Such an event carries only `source_ship_id`, `distance_km`, `intensity`, `fuse_cut_s`, `detonation_in_s` |
@@ -258,11 +260,18 @@ Example (demo recording, t = 169 s):
 ### Demo recording
 
 `visualizer/public/recordings/p5_damage_demo.json` - a seeded heuristic fleet
-battle with `--trace` (no LLM), 420 s long, generated with:
+battle with `--trace` (no LLM), 420 s long. Not in the repository; regenerate
+it (fully offline, no API key, about half a minute) and copy it into place:
 
 ```bash
-uv run python scripts/run_draft_battle.py --auto-draft --no-admirals --trace --seed 4 --budget 200 --time-limit 420
+uv run python scripts/run_draft_battle.py --auto-draft --no-admirals --trace --seed 4 --budget 200 --time-limit 420 --recording-dir /tmp/p5_demo
+cp "$(ls -t /tmp/p5_demo/battle_*[0-9].json | head -1)" visualizer/public/recordings/p5_damage_demo.json
 ```
+
+The rosters, deaths and counts below were taken from the first version of
+this lane. Later engine changes (the review fixes: fuse-expiry blast origin,
+blast heat cap, the combat-ineffective battle end) can move timestamps and
+counts in a regenerated file; the event shapes are unchanged.
 
 Alpha: alpha_1 cruiser_torpedo, alpha_2 corvette, alpha_3 corvette, alpha_4 frigate, alpha_5 cruiser_torpedo, alpha_6 corvette, alpha_7 frigate.
 Beta: beta_1 battleship, beta_2 destroyer, beta_3 corvette, beta_4 battleship, beta_5 destroyer, beta_6 corvette, beta_7 destroyer, beta_8 corvette.
