@@ -246,6 +246,7 @@ class HeuristicCaptain(LLMCaptain):
             # in flight, and an enemy that can catch us is closing: strike.
             return [("surrender", {"reason": "all weapons out, no rounds in flight, cannot get away"})]
         self._decision_interval = float(getattr(simulation, "decision_interval", 30.0) or 30.0)
+        self._sim = simulation
 
         target = self._tactical_target(ship, enemies, order, plan, my_role)
         calls.append(("set_primary_target", {"target_id": target.ship_id}))
@@ -440,7 +441,8 @@ class HeuristicCaptain(LLMCaptain):
                          range_km=round(max(tactics.RETREAT_RANGE_KM, gun_km), 1))
         if my_role != "gun":
             anchor = nearest_gun or min(enemies, key=lambda e: (km(e), e.ship_id))
-            return order("HOLD_RANGE", anchor, 1.0, range_km=tactics.TORPEDO_STANDOFF_KM)
+            return order("HOLD_RANGE", anchor, 1.0,
+                         range_km=tactics.boat_station_km(self._sim, ship, anchor))
         r_km = tactics.engage_range_km(ship)
         dist_km, closing_kps = self._range_and_closing(ship, target)
         throttle = plan.formation_throttle.get(ship_id, 1.0) if dist_km > tactics.GUNS_HOT_KM else 1.0

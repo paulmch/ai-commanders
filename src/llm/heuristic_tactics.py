@@ -99,6 +99,12 @@ MIN_ADVANCE_KPS = 0.5
 # Torpedo boats (no guns) hold this range to the nearest enemy gun ship:
 # outside the gun envelope that matters, inside the torpedoes' reach.
 TORPEDO_STANDOFF_KM = 300.0
+# ...and never ahead of the own gun line (boat_station_km).
+BOAT_BEHIND_LINE_KM = 20.0
+# ...but no further out than this: behind a slow dreadnought line a boat
+# would hang back out of torpedo reach (round 6: dreadnought roster 12/0/0
+# -> 6/6/0 with no cap; 400 km cost the battleship roster, 450 km kept both).
+BOAT_STATION_MAX_KM = 450.0
 # A boat launches only at targets within this range (a longer flight gives
 # the target's PD and evasion more time).
 TORPEDO_LAUNCH_RANGE_KM = 600.0
@@ -341,6 +347,25 @@ def plume_clear_heading(simulation: Any, ship: Any, direction: Any, throttle: fl
             if t >= PLUME_SLIP_MIN_SHARE * throttle:
                 return v, t
     return d, base
+
+
+def boat_station_km(simulation: Any, boat: Any, anchor: Any) -> float:
+    """
+    Range a torpedo boat holds to ``anchor`` (the nearest enemy gun):
+    TORPEDO_STANDOFF_KM, but never ahead of its own gun line - at least
+    BOAT_BEHIND_LINE_KM further from him than our nearest gun ship (up to
+    BOAT_STATION_MAX_KM), so the boat stays under the fleet's PD umbrella. Round 5 (after the torpedo
+    reprice left one or two corvettes per battleship fleet): a lone corvette
+    holding 300 km sat out in front of its battleships, was the nearest
+    target for every legacy probe and died alone at ~100 s, deciding the
+    battle on points.
+    """
+    guns = [s for s in getattr(simulation, "ships", {}).values()
+            if s.faction == boat.faction and s is not boat and _alive(s) and role(s) == "gun"]
+    if not guns:
+        return TORPEDO_STANDOFF_KM
+    line = min(_km(g, anchor) for g in guns)
+    return round(max(TORPEDO_STANDOFF_KM, min(line + BOAT_BEHIND_LINE_KM, BOAT_STATION_MAX_KM)), 1)
 
 
 def should_surrender(simulation: Any, ship: Any, enemies: List[Any]) -> bool:

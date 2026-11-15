@@ -707,3 +707,18 @@ def test_a_dry_torpedo_fleet_does_not_surrender_with_its_salvo_in_flight(tmp_pat
         frame = frames.get(round(e["timestamp"])) or frames[max(k for k in frames if k <= e["timestamp"])]
         in_flight = [t for t in frame.get("torpedoes", []) if str(t.get("id", "")).startswith("torp_alpha")]
         assert not in_flight, (e["timestamp"], len(in_flight))
+
+
+def test_a_torpedo_boat_keeps_station_behind_its_gun_line():
+    # Round 6: a lone corvette holding 300 km sat in front of its own
+    # battleships, outside their PD umbrella, and died alone to legacy probes.
+    sim = CombatSimulation(seed=11, time_step=1.0)
+    _ship(sim, "boat", "corvette", "alpha", (0, 0, 0))
+    _ship(sim, "bb", "battleship", "alpha", (-150, 20, 0))
+    _ship(sim, "foe", "destroyer", "beta", (300, 0, 0), fwd=(-1, 0, 0))
+    m = _maneuver(_captain("corvette", name="boat").decide("boat", sim))
+    assert m.maneuver_type == ManeuverType.HOLD_RANGE and m.target_id == "foe"
+    line_km = sim.get_ship("bb").position.distance_to(sim.get_ship("foe").position) / 1000.0
+    want_km = max(T.TORPEDO_STANDOFF_KM, min(line_km + T.BOAT_BEHIND_LINE_KM, T.BOAT_STATION_MAX_KM))
+    assert want_km > T.TORPEDO_STANDOFF_KM
+    assert m.hold_range_m == pytest.approx(want_km * 1000.0, abs=100.0)
