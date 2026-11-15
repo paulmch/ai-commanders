@@ -3385,23 +3385,43 @@ class CombatSimulation:
         """
         threats = []
 
+        # Scalar form of the Vector3D expressions, operation for operation
+        # (every evading ship - and every ghost of one in the prediction
+        # shadow, every shadow step - scans all rounds here, and most are
+        # rejected): the ship's state is read once, and the relative
+        # position/velocity vectors are only built for threats that are kept.
+        ship_pos = ship.position
+        ship_vel = ship.velocity
+        spx, spy, spz = ship_pos.x, ship_pos.y, ship_pos.z
+        svx, svy, svz = ship_vel.x, ship_vel.y, ship_vel.z
+        sqrt = math.sqrt
+
         def _add_threat(pos: Vector3D, vel: Vector3D, ke_gj: float) -> None:
-            rel_pos = pos - ship.position
-            rel_vel = vel - ship.velocity
-            rel_speed = rel_vel.magnitude
+            vx = vel.x - svx
+            vy = vel.y - svy
+            vz = vel.z - svz
+            rel_speed = sqrt(vx**2 + vy**2 + vz**2)
 
             if rel_speed < 100:  # Effectively stationary relative to us
                 return
 
+            rx = pos.x - spx
+            ry = pos.y - spy
+            rz = pos.z - spz
+
             # Time to closest approach (TCA)
             # TCA = -dot(rel_pos, rel_vel) / dot(rel_vel, rel_vel)
-            tca = -rel_pos.dot(rel_vel) / (rel_vel.dot(rel_vel))
+            tca = -(rx * vx + ry * vy + rz * vz) / (vx * vx + vy * vy + vz * vz)
             if tca < 0 or tca > BALLISTIC_THREAT_HORIZON_S:
                 return
 
             # Miss distance at closest approach
-            closest_point = rel_pos + rel_vel * tca
-            miss_dist = closest_point.magnitude
+            cx = rx + vx * tca
+            cy = ry + vy * tca
+            cz = rz + vz * tca
+            miss_dist = sqrt(cx**2 + cy**2 + cz**2)
+            rel_vel = Vector3D(vx, vy, vz)
+            rel_pos = Vector3D(rx, ry, rz)
 
             # Urgency score: (1/TCA) * KE * (1/miss_dist)
             # Faster closing, higher energy, closer miss = higher urgency
@@ -3425,8 +3445,10 @@ class CombatSimulation:
             # world-frame kinetic_energy_gj swung 1.2 GJ -> 27-55 GJ with a
             # 40 km/s fleet drift, skewing urgency and the TANK armour trial.
             mass_kg = max(0.1, proj.mass_kg - getattr(proj, '_pd_ablation', 0.0))
-            rel_speed = (proj.velocity - ship.velocity).magnitude
-            _add_threat(proj.position, proj.velocity,
+            proj_vel = proj.velocity
+            rel_speed = sqrt((proj_vel.x - svx)**2 + (proj_vel.y - svy)**2
+                             + (proj_vel.z - svz)**2)
+            _add_threat(proj.position, proj_vel,
                         0.5 * mass_kg * rel_speed ** 2 / 1e9)
 
         # Seeker-killed torpedoes: ballistic multi-tonne masses. Evade them

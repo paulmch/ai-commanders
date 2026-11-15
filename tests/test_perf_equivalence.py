@@ -900,3 +900,78 @@ class TestPresentationThreatCache:
             want = plain._calculate_presentation_direction(ship, threats)
             assert vbits(got) == vbits(want)
         assert len(chosen) > 2
+
+
+class TestBallisticThreatsScalar:
+    """_gather_ballistic_threats in scalars == the Vector3D form it replaced."""
+
+    @staticmethod
+    def _reference(sim, ship):
+        from src.simulation import BALLISTIC_THREAT_HORIZON_S
+        threats = []
+
+        def add(pos, vel, ke_gj):
+            rel_pos = pos - ship.position
+            rel_vel = vel - ship.velocity
+            if rel_vel.magnitude < 100:
+                return
+            tca = -rel_pos.dot(rel_vel) / (rel_vel.dot(rel_vel))
+            if tca < 0 or tca > BALLISTIC_THREAT_HORIZON_S:
+                return
+            miss_dist = (rel_pos + rel_vel * tca).magnitude
+            urgency = (1.0 / max(tca, 0.5)) * ke_gj * (1.0 / max(miss_dist, 100))
+            threats.append({'tca': tca, 'miss_dist': miss_dist, 'urgency': urgency,
+                            'rel_vel': rel_vel, 'rel_pos': rel_pos, 'ke_gj': ke_gj})
+
+        for flight in sim.projectiles:
+            if flight.target_ship_id != ship.ship_id:
+                continue
+            proj = flight.projectile
+            mass_kg = max(0.1, proj.mass_kg - getattr(proj, '_pd_ablation', 0.0))
+            rel_speed = (proj.velocity - ship.velocity).magnitude
+            add(proj.position, proj.velocity, 0.5 * mass_kg * rel_speed ** 2 / 1e9)
+        for flight in sim.torpedoes:
+            if not flight.is_disabled:
+                continue
+            torp = flight.torpedo
+            rel_speed = (torp.velocity - ship.velocity).magnitude
+            add(torp.position, torp.velocity,
+                0.5 * torp.specs.penetrator_mass_kg * rel_speed ** 2 / 1e9)
+        return threats
+
+    @staticmethod
+    def _flat(threats):
+        return [[bits(t['tca']), bits(t['miss_dist']), bits(t['urgency']), bits(t['ke_gj']),
+                 vbits(t['rel_vel']), vbits(t['rel_pos'])] for t in threats]
+
+    def test_bit_identical_and_follows_ship_state(self):
+        from src.projectile import KineticProjectile
+        from src.simulation import ProjectileInFlight
+
+        sim = CombatSimulation(seed=1)
+        ship = _hull("destroyer")
+        ship.ship_id = "target"
+        sim.ships["target"] = ship
+        ship.kinematic_state.velocity = Vector3D(900.0, -300.0, 150.0)
+        rng = random.Random(16)
+        for i in range(400):
+            offset = rand_vec(rng, 1.0).normalized() * rng.uniform(2e3, 4e5)
+            closing = rng.choice([8e3, 8e3, 50.0, -6e3])           # in, in, slow, away
+            vel = ship.velocity + offset.normalized() * -closing + rand_vec(rng, 300.0)
+            proj = KineticProjectile(position=ship.position + offset, velocity=vel,
+                                     mass_kg=rng.choice([5.0, 20.0, 45.0]))
+            if i % 5 == 0:
+                proj._pd_ablation = rng.uniform(0.0, 6.0)
+            sim.projectiles.append(ProjectileInFlight(
+                f"p{i}", proj, "shooter", "target" if i % 7 else "someone_else"))
+
+        got = sim._gather_ballistic_threats(ship)
+        assert 50 < len(got) < 350                # kept and rejected rounds both occur
+        assert self._flat(got) == self._flat(self._reference(sim, ship))
+
+        # The ship burns and moves: the next call reads the new state.
+        ship.kinematic_state.velocity = ship.velocity + Vector3D(-400.0, 250.0, 90.0)
+        ship.kinematic_state.position = ship.position + Vector3D(1500.0, -900.0, 300.0)
+        after = sim._gather_ballistic_threats(ship)
+        assert self._flat(after) == self._flat(self._reference(sim, ship))
+        assert self._flat(after) != self._flat(got)
