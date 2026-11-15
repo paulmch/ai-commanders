@@ -4918,34 +4918,64 @@ class CombatSimulation:
             sign to detect past-closest-approach projectiles (the old version
             clamped to 0.0, which made those checks dead code).
         """
+        # Scalar form of the Vector3D expressions (rel_pos = proj_pos -
+        # target_pos, rel_vel = proj_vel - target_vel, dot products,
+        # magnitudes), operation for operation, so the results are
+        # bit-identical: this runs once per projectile micro-step (millions of
+        # calls per battle) and the temporaries dominated its cost.
         # Relative position and velocity
-        rel_pos = proj_pos - target_pos
-        rel_vel = proj_vel - target_vel
+        rx = proj_pos.x - target_pos.x
+        ry = proj_pos.y - target_pos.y
+        rz = proj_pos.z - target_pos.z
+        vx = proj_vel.x - target_vel.x
+        vy = proj_vel.y - target_vel.y
+        vz = proj_vel.z - target_vel.z
 
-        vel_mag_sq = rel_vel.dot(rel_vel)
+        vel_mag_sq = vx * vx + vy * vy + vz * vz
 
         if vel_mag_sq < 1e-10:
             # No relative motion - current distance is closest
-            return 0.0, rel_pos.magnitude
+            return 0.0, math.sqrt(rx**2 + ry**2 + rz**2)
 
         # TCA = -dot(r, v) / |v|^2
-        tca = -rel_pos.dot(rel_vel) / vel_mag_sq
+        tca = -(rx * vx + ry * vy + rz * vz) / vel_mag_sq
 
         if tca < 0:
             # Already past closest approach - receding from here on
-            return tca, rel_pos.magnitude
+            return tca, math.sqrt(rx**2 + ry**2 + rz**2)
 
         # Calculate closest approach distance
-        closest_pos = rel_pos + rel_vel * tca
-        closest_dist = closest_pos.magnitude
+        cx = rx + vx * tca
+        cy = ry + vy * tca
+        cz = rz + vz * tca
 
-        return tca, closest_dist
+        return tca, math.sqrt(cx**2 + cy**2 + cz**2)
 
     def _check_moving_cylinder_intersection(
         self, start: Vector3D, end: Vector3D, ship: ShipCombatState,
         target_start: Vector3D, target_end: Vector3D, tolerance: float,
     ) -> tuple[bool, Optional[Vector3D], Optional[Vector3D]]:
         """Sweep in the translating target frame, then restore world coordinates."""
+        # Cheap rejection before any vector is built: the hull cylinder lies
+        # inside the sphere of radius sqrt(half_length^2 + radius^2) around
+        # the target, and a segment that starts further out than that sphere
+        # plus its own length cannot reach it. The test is conservative by a
+        # wide margin (factor 2 on squared distance, i.e. the segment stays
+        # 40% of (sphere + length) clear), so rounding can never turn a
+        # segment the full check would call a hit into a rejection; anything
+        # near - or any NaN - falls through to the exact check below.
+        geom = ship.geometry
+        if geom is not None:
+            sx = start.x - target_start.x
+            sy = start.y - target_start.y
+            sz = start.z - target_start.z
+            lx = (end.x - (target_end.x - target_start.x)) - start.x
+            ly = (end.y - (target_end.y - target_start.y)) - start.y
+            lz = (end.z - (target_end.z - target_start.z)) - start.z
+            reach_sq = ((geom.length_m / 2.0) ** 2 + (geom.radius_m + tolerance) ** 2
+                        + (lx * lx + ly * ly + lz * lz))
+            if sx * sx + sy * sy + sz * sz > 4.0 * reach_sq:
+                return False, None, None
         displacement = target_end - target_start
         hit, _, fraction = self._check_line_cylinder_intersection_at_pos(
             start, end - displacement, ship, target_start, tolerance)
