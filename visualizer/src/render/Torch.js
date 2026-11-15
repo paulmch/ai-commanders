@@ -264,10 +264,13 @@ export function plumeShape(thrust) {
   return {
     length: 0.14 + 0.86 * th,
     width: 0.72 + 0.28 * th,
-    core: (0.2 + 0.8 * th) * (0.3 + 0.7 * th),
-    wide: 0.25 + 0.75 * th
+    core: 0.22 + 0.78 * th,
+    wide: 0.28 + 0.72 * th
   };
 }
+
+/** Extra core/sheath level of a dying drive at full sputter (x 1 + this). */
+export const DYING_GASP = 1.6;
 
 /** Seconds the exhaust at the plume tip has been in flight, for the sweep. */
 export const SWEEP_AGE_S = 2.2;
@@ -385,8 +388,12 @@ export function createTorch({ radius, length, light = null, tint = 'fusion', int
       group.visible = true;
       // Slow breathing only - anything above ~1.5 Hz aliases into strobing
       let breathe = 0.965 + 0.025 * Math.sin(time * 4.3 + phase) + 0.012 * Math.sin(time * 7.1 + phase * 1.7);
+      // A failing drive burns rough and over-rich between its dropouts, so a
+      // hulk limping at a few percent throttle still shows its torch coughing
+      let gasp = 1;
       if (sputter > 0) {
         breathe *= 1 - sputter * 0.75 * torchCough(sputterTime ?? time);
+        gasp = 1 + DYING_GASP * sputter;
       }
       const shape = plumeShape(thrust);
       shared.uTime.value = time;
@@ -400,8 +407,8 @@ export function createTorch({ radius, length, light = null, tint = 'fusion', int
         u.uBend.value.set(0, 0);
       }
       u.uW.value = shape.width;
-      u.uI.value.set(levels.core * shape.core * breathe, levels.sheath * shape.wide * breathe, levels.halo * shape.wide * breathe);
-      u.uFlare.value = levels.flare * Math.min(1, thrust * 1.3) * breathe;
+      u.uI.value.set(levels.core * shape.core * breathe * gasp, levels.sheath * shape.wide * breathe * gasp, levels.halo * shape.wide * breathe);
+      u.uFlare.value = levels.flare * Math.min(1, thrust * 1.3 * gasp * gasp) * breathe;
       if (light) {
         group.getWorldPosition(_wp);
         _wd.set(0, 0, -1).transformDirection(group.matrixWorld);

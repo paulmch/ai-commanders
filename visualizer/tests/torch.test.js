@@ -7,7 +7,7 @@ import { Interpolator } from '../src/Interpolator.js';
 test('plume shape follows the throttle: idle is short and dim, full burn long and hot', () => {
   let prev = plumeShape(0);
   assert.ok(prev.length > 0.05 && prev.length < 0.25);
-  assert.ok(prev.core < 0.1, 'an idle torch has no white core');
+  assert.ok(prev.core < 0.3 && prev.wide < 0.3, 'an idle torch is a dim flicker');
   for (let th = 0.05; th <= 1.0001; th += 0.05) {
     const s = plumeShape(th);
     for (const k of ['length', 'width', 'core', 'wide']) assert.ok(s[k] > prev[k], `${k} grows with throttle`);
