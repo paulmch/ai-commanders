@@ -240,12 +240,11 @@ class HeuristicCaptain(LLMCaptain):
         order_text = (order.order_text if order else "").lower()
         plan = tactics.fleet_plan(simulation, ship.faction, self.config.fleet_data)
         my_role = tactics.role(ship)
-        if my_role == "unarmed" and not self.has_admiral and not any(
-                tactics.role(f) != "unarmed" for f in simulation.get_friendly_ships(ship_id)
-                if f.ship_id != ship_id and tactics._alive(f)):
-            # Nothing to shoot with and no armed ship of ours left to screen
-            # or protect: strike, instead of fleeing to the time limit.
-            return [("surrender", {"reason": "all weapons out, no armed ship left to protect"})]
+        if (my_role == "unarmed" and not self.has_admiral
+                and tactics.should_surrender(simulation, ship, enemies)):
+            # Nothing to shoot with, no armed ship and no round of ours left
+            # in flight, and an enemy that can catch us is closing: strike.
+            return [("surrender", {"reason": "all weapons out, no rounds in flight, cannot get away"})]
         self._decision_interval = float(getattr(simulation, "decision_interval", 30.0) or 30.0)
 
         target = self._tactical_target(ship, enemies, order, plan, my_role)

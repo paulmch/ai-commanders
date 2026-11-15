@@ -144,6 +144,7 @@ GUN_REACH_KM = 250.0
 CRIPPLED_HULL_PCT = 35.0          # below this hull integrity: open range
 RETREAT_RANGE_KM = 350.0          # ...to this range from the nearest gun ship
 WITHDRAW_ANGLE_DEG = 60.0         # withdrawal burn off the line to the gun
+SURRENDER_CATCH_RANGE_KM = 250.0  # a catching, closing gun ship this near: strike
 
 # Battle damage (src/battle_damage.py). A hull whose drive makes less than
 # FORMATION_MIN_DRIVE_FRACTION of its thrust no longer sets the fleet's
@@ -340,6 +341,33 @@ def plume_clear_heading(simulation: Any, ship: Any, direction: Any, throttle: fl
             if t >= PLUME_SLIP_MIN_SHARE * throttle:
                 return v, t
     return d, base
+
+
+def should_surrender(simulation: Any, ship: Any, enemies: List[Any]) -> bool:
+    """
+    A disarmed ship strikes only when its whole side is out of the fight and
+    it cannot get away:
+    - the side can no longer deal damage (battle_damage.side_can_deal_damage:
+      no armed ship AND no round of ours still in flight - round 4 surrendered
+      six corvettes with 36 of their rounds still on the way), and
+    - an enemy gun ship that can catch it (drive at least ours) is inside
+      SURRENDER_CATCH_RANGE_KM and closing. Otherwise it withdraws out of gun
+      reach (the battle ends on its own once a side cannot deal damage).
+    """
+    from ..battle_damage import side_can_deal_damage
+    side = [s for s in getattr(simulation, "ships", {}).values()
+            if s.faction == ship.faction and _alive(s)]
+    if side_can_deal_damage(simulation, side):
+        return False
+    mine = max_accel_ms2(ship)
+    for e in enemies:
+        if not has_guns(e) or _km(ship, e) > SURRENDER_CATCH_RANGE_KM:
+            continue
+        rel = e.position - ship.position
+        closing = -(e.velocity - ship.velocity).dot(rel.normalized()) if rel.magnitude > 0 else 0.0
+        if closing > 0.0 and max_accel_ms2(e) >= mine:
+            return True
+    return False
 
 
 def blast_threat(simulation: Any, ship: Any) -> Optional[Any]:
