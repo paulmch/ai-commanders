@@ -12,7 +12,7 @@ tests/fixtures/fire_control_shots.json holds resolved gun rounds
   state). Their rounds at HEADING / BURN targets are left out: those were
   fired before such targets were led by their drive's output.
 - 32 seeded heuristic battles on the current engine (fresh_s<seed>_b<budget>:
-  scripts/run_draft_battle.py --auto-draft --no-admirals --seed S --budget B,
+  scripts/run_draft_battle.py --auto-draft --no-admirals --doctrine legacy --seed S --budget B,
   seeds 11 and 31-61, budgets 100-200), whose shots record the forecast's
   inputs ('fc').
 - 1 in 20 rounds of the seeded live-engine harness (fire_control_calibration

@@ -28,6 +28,15 @@ if TYPE_CHECKING:
     from .captain import LLMCaptain
 
 
+
+def _damaged_fitting_lines(ship):
+    """battle_damage.damaged_fitting_lines (works for both import styles)."""
+    try:
+        from ..battle_damage import damaged_fitting_lines
+    except ImportError:  # imported as a top-level module
+        from battle_damage import damaged_fitting_lines
+    return damaged_fitting_lines(ship)
+
 def _thermal_outlook(ship: Any) -> Optional[Dict[str, Any]]:
     """Heat outlook (rates, time to 100% / meltdown, radiator health) for MCP clients."""
     thermal = getattr(ship, 'thermal_system', None)
@@ -396,6 +405,14 @@ class MCPController:
                     "ready": weapon.cooldown_remaining <= 0,
                     "cooldown_remaining": weapon.cooldown_remaining,
                 }
+                health = getattr(weapon, 'mount_health', 100.0)
+                if isinstance(health, (int, float)) and health < 100.0:
+                    try:
+                        from ..battle_damage import mount_cooldown_factor
+                    except ImportError:  # imported as a top-level module
+                        from battle_damage import mount_cooldown_factor
+                    weapon_info["mount_health_pct"] = round(health, 1)
+                    weapon_info["cycle_factor"] = round(mount_cooldown_factor(health), 2)
                 weapons_detailed[slot] = weapon_info
 
                 if hasattr(weapon, 'is_operational') and not weapon.is_operational:
@@ -487,6 +504,8 @@ class MCPController:
             "weapons_ready": weapons_ready,
             "weapons_cooling": weapons_cooling,
             "weapons_destroyed": weapons_destroyed,
+            # Damaged-but-working fittings (guns, tubes, PD), one line each
+            "damaged_fittings": _damaged_fitting_lines(ship),
             # Modules
             "damaged_modules": damaged_modules,
             # Combat stats

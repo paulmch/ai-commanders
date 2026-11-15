@@ -36,7 +36,7 @@ from src.llm.fleet_draft import (
     draft_to_fleet_definition,
     run_admiral_draft,
 )
-from src.llm.heuristic_captain import HEURISTIC_MODEL
+from src.llm.heuristic_captain import DEFAULT_DOCTRINE, DOCTRINES, HEURISTIC_MODEL
 from src.llm.prompts import CaptainPersonality
 
 
@@ -60,6 +60,17 @@ def main() -> int:
                              "its fleet directly)")
     parser.add_argument("--beta-captain-model", default=None,
                         help="Override captain model for beta ships only")
+    parser.add_argument("--doctrine", choices=DOCTRINES, default=DEFAULT_DOCTRINE,
+                        help="Doctrine of the rule-based captains: 'tactical' (focus fire, "
+                             "range discipline, massed torpedo salvos) or 'legacy' (the "
+                             f"pass-4 captain). Default {DEFAULT_DOCTRINE}")
+    parser.add_argument("--alpha-doctrine", choices=DOCTRINES, default=None,
+                        help="Override --doctrine for alpha's rule-based captains")
+    parser.add_argument("--beta-doctrine", choices=DOCTRINES, default=None,
+                        help="Override --doctrine for beta's rule-based captains")
+    parser.add_argument("--mirror-draft", action="store_true",
+                        help="With --auto-draft: both sides get the same fleet "
+                             "(beta drafts with alpha's seed)")
     parser.add_argument("--distance", type=float, default=500.0,
                         help="Initial fleet separation in km (default 500)")
     parser.add_argument("--time-limit", type=float, default=900.0,
@@ -109,7 +120,7 @@ def main() -> int:
     for faction, model in (("alpha", args.alpha_admiral), ("beta", args.beta_admiral)):
         admiral_name = f"Admiral {_get_short_model_name(model)}"
         if args.auto_draft:
-            seed = (args.seed or 0) + (0 if faction == "alpha" else 1)
+            seed = (args.seed or 0) + (0 if faction == "alpha" or args.mirror_draft else 1)
             drafts[faction] = auto_draft(
                 faction, budget=args.budget, max_ships=args.max_ships, seed=seed)
             if verbose:
@@ -173,6 +184,8 @@ def main() -> int:
         record_predictions=not args.no_predictions,
         recording_dir=args.recording_dir,
         seed=args.seed,
+        heuristic_doctrine={"alpha": args.alpha_doctrine or args.doctrine,
+                            "beta": args.beta_doctrine or args.doctrine},
     )
 
     # The 1v1 captain configs are unused in fleet mode but required by the
@@ -200,6 +213,8 @@ def main() -> int:
             "budget": args.budget,
             "alpha_captain_model": alpha_captains,
             "beta_captain_model": beta_captains,
+            "alpha_doctrine": args.alpha_doctrine or args.doctrine,
+            "beta_doctrine": args.beta_doctrine or args.doctrine,
             "alpha": draft_summary_dict(drafts["alpha"]),
             "beta": draft_summary_dict(drafts["beta"]),
         }, indent=2))

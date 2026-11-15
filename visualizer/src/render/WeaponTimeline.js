@@ -222,6 +222,17 @@ export class WeaponTimeline {
     const shots = new Map();
     const shotById = new Map();
     const barrels = assignBarrels(events);
+    // The frame on which the trace (and so the viewer) shows `shipId` blow
+    // up after its ship_destroyed tick `t`: the tick itself when unknown
+    const blastTime = (shipId, t) => {
+      for (let i = 0; i < trace.length; i++) {
+        const f = trace[i];
+        if (f.t < t) continue;
+        if (f.t - t > 1.5) break;
+        if (f.ships?.[shipId]?.destroyed) return f.t;
+      }
+      return t;
+    };
     for (const e of events) {
       const d = e.data || {};
       if ((e.event_type === 'shot_fired' || e.event_type === 'torpedo_launched') && e.ship_id && d.target_id) {
@@ -237,8 +248,27 @@ export class WeaponTimeline {
           track: this.slugs.get(d.projectile_id) || null,
           seed: seedFor(`${e.ship_id}|${e.timestamp}|${d.weapon_slot}`) });
       }
+      if (e.event_type === 'reactor_blast') {
+        // Pass 5: a detonation burns out the seeker of every torpedo inside
+        // its blind radius - the same arc as a PD seeker kill, and the
+        // round flies on dark (the ones it destroys get torpedo_intercepted)
+        // (dated at the frame the viewer shows the detonation, see blastTime)
+        const at = blastTime(e.ship_id, e.timestamp) + 0.3;
+        for (const id of d.torpedoes_blinded || []) {
+          const blind = this.torpedoes.get(id);
+          if (!blind) continue;
+          blind.disabledAt = Math.min(blind.disabledAt, at);
+          this.moments.push({ time: at, kind: 'seeker', track: blind, seed: blind.seed });
+        }
+      }
       const tr = this.torpedoes.get(d.torpedo_id) || this.slugs.get(d.projectile_id);
       if (!tr) continue;
+      if (e.event_type === 'torpedo_intercepted' && d.cause === 'reactor_blast' && d.blast_ship_id) {
+        // killed by a detonation: it pops as the blast goes off, not a tick early
+        tr.end = Math.max(e.timestamp, blastTime(d.blast_ship_id, e.timestamp) + 0.12);
+        this.moments.push({ time: tr.end, kind: 'pop', track: tr, seed: tr.seed });
+        continue;
+      }
       if (e.event_type === 'torpedo_launched') {
         tr.start = e.timestamp;
         this.moments.push({ time: e.timestamp, kind: 'ignition', track: tr, seed: tr.seed });

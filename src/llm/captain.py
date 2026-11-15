@@ -1984,6 +1984,15 @@ class LLMCaptain:
                 1 for pd in pd_list if getattr(pd, 'is_operational', True)
             )
 
+        # Damaged-but-working fittings (battle damage: slower cycle, PD at risk)
+        try:
+            from ..battle_damage import damaged_fitting_lines
+        except ImportError:  # imported as a top-level module
+            from battle_damage import damaged_fitting_lines
+        damaged = damaged_fitting_lines(ship)
+        if damaged:
+            status["damaged_fittings"] = damaged
+
         # Module damage status
         module_status = {}
         if ship.module_layout:

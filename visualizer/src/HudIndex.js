@@ -618,6 +618,21 @@ export function formatLogEvent(e, ships = {}) {
     case 'miss': return { cls: 'shot', cat: 'fire', text: `MISS: ${n(e.ship_id)} shot goes wide` };
     case 'module_destroyed': return { cls: 'destroyed', cat: 'fire', text: `DESTROYED: ${n(e.ship_id)} lost ${d.module_name}` };
     case 'module_damaged': return { cls: 'hit', cat: 'fire', text: `DAMAGE: ${n(e.ship_id)} ${d.module_name} (${gj(d.damage_gj)} GJ)` };
+    // Pass-5 damage events (docs/pass-5-recording-additions.md)
+    case 'mount_damaged': {
+      const blast = d.cause === 'reactor_blast' ? ' · reactor blast' : '';
+      if (d.kind === 'engine') {
+        return { cls: d.destroyed ? 'destroyed' : 'hit', cat: 'fire', text: d.destroyed || !(d.thrust_fraction > 0)
+          ? `DRIVE OUT: ${n(e.ship_id)} is adrift${blast}`
+          : `DRIVE HIT: ${n(e.ship_id)} down to ${Math.round(d.thrust_fraction * 100)}% thrust${blast}` };
+      }
+      const what = d.kind === 'pd' ? `PD turret ${d.slot || ''}`.trim() : d.kind === 'launcher' ? 'torpedo tube' : (d.weapon_name || 'gun mount');
+      return { cls: d.destroyed ? 'destroyed' : 'hit', cat: 'fire', text: d.destroyed
+        ? `MOUNT DESTROYED: ${n(e.ship_id)} lost ${what}${blast}`
+        : `MOUNT HIT: ${n(e.ship_id)} ${what} at ${Math.round(Number(d.health_pct) || 0)}%${blast}` };
+    }
+    case 'magazine_cookoff': return { cls: 'destroyed', cat: 'fire', text: `COOK-OFF: ${n(e.ship_id)} ${d.module_name || 'magazine'} burns (${d.torpedoes_lost > 0 ? `${d.torpedoes_lost} torpedoes` : `${d.gun_rounds_lost || 0} rounds`} lost)` };
+    case 'blast_damage': return { cls: 'hit', cat: 'kills', text: `BLAST: ${n(e.ship_id)} caught ${gj(d.distance_km)} km from ${n(d.source_ship_id)}'s reactor${d.armor_ablation_cm > 0 ? ` (-${gj(d.armor_ablation_cm)} cm ${d.hit_location || ''} armour)` : d.fuse_cut_s > 0 ? ` (fuse -${gj(d.fuse_cut_s)} s)` : ''}` };
     case 'shot_fired': return { cls: 'shot', cat: 'fire', text: `FIRE: ${n(e.ship_id)} → ${n(d.target_id)}` };
     case 'torpedo_launched': return { cls: 'torpedo', cat: 'fire', text: `TORPEDO AWAY: ${n(e.ship_id)} → ${n(d.target_id)}` };
     case 'torpedo_impact': return { cls: 'destroyed', cat: 'fire', text: `TORPEDO IMPACT: ${n(d.target_id)} takes ${(Number(d.total_damage_gj) || 0).toFixed(0)} GJ (${d.hit_location || '?'})` };

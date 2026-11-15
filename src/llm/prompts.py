@@ -1970,6 +1970,7 @@ def _weapons_line(ship_status: Dict[str, Any], has_guns: bool,
     if total:
         op = ship_status.get("pd_turrets_operational", total)
         parts.append(f"PD {op}/{total} turrets{' - DEGRADED' if op < total else ''} (automatic)")
+    parts.extend(ship_status.get("damaged_fittings") or [])
     return "  weapons: " + " | ".join(parts) if parts else ""
 
 
@@ -3807,6 +3808,7 @@ def _format_fleet(snapshot: Any, phase: str) -> str:
             bits.append(f"torp {r.torpedoes_remaining} ({r.launches_available} now)")
         if r.weapons_destroyed:
             bits.append(f"LOST {', '.join(r.weapons_destroyed)}")
+        bits.extend(getattr(r, "fittings_damaged", None) or [])
         if r.delta_v_remaining < 300:
             bits.append(f"dv {r.delta_v_remaining:.0f} km/s")
         doing = r.current_maneuver
@@ -4161,7 +4163,8 @@ def build_admiral_ship_order_messages(
             status.append(f"  torpedoes: {row.torpedoes_remaining} left, "
                           f"{view.get('launches_available', row.launches_available)} launchable before the next checkpoint")
         status.append(f"  weapons: {row.weapons_summary}"
-                      + (f" | LOST: {', '.join(row.weapons_destroyed)}" if row.weapons_destroyed else ""))
+                      + (f" | LOST: {', '.join(row.weapons_destroyed)}" if row.weapons_destroyed else "")
+                      + "".join(f" | {d}" for d in (getattr(row, "fittings_damaged", None) or [])))
         doing = row.current_maneuver + (f" -> {_lbl(snapshot, row.current_target)}" if row.current_target else "")
         status.append(f"  now flying: {doing}"
                       + (f" | aimed at by {', '.join(row.targeted_by)}" if row.targeted_by else ""))
