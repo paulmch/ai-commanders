@@ -84,7 +84,12 @@ export class FittingsCard {
     const head = node(d, 'div', null, 'fit-head');
     head.append(node(d, 'span', 'FITTINGS', 'section-label'), this.flag);
     this.rows = { guns: row('GUNS', 'guns'), tubes: row('TUBES', 'tubes'), pd: row('PD', 'pd'), drive: row('DRIVE', 'drive') };
-    this.root.replaceChildren(head, ...Object.values(this.rows).map(r => r.el));
+    // Crew radiation (drive-plume wash): only shown once the crew has taken a dose
+    this.crew = node(d, 'div', null, 'fit-crew');
+    this.crewValue = node(d, 'span', null, 'fit-value');
+    this.crew.append(node(d, 'span', 'CREW', 'fit-label'), this.crewValue);
+    this.crew.hidden = true;
+    this.root.replaceChildren(head, ...Object.values(this.rows).map(r => r.el), this.crew);
   }
 
   /**
@@ -114,6 +119,12 @@ export class FittingsCard {
     drive.strip.set(st);
     setText(drive.value, st.adrift ? 'NO THRUST' : `${Math.round(st.thrust * 100)}% THRUST`);
     drive.value.dataset.level = st.adrift ? 'out' : st.thrust < 0.995 ? 'hurt' : 'ok';
+    const dosed = st.dose > 0.005 || (st.crew && st.crew !== 'fit');
+    this.crew.hidden = !dosed;
+    if (dosed) {
+      setText(this.crewValue, `${String(st.crew || 'fit').toUpperCase()} · ${st.dose.toFixed(1)} Sv`);
+      this.crewValue.dataset.level = st.crew === 'incapacitated' ? 'out' : st.crew === 'impaired' ? 'hurt' : 'ok';
+    }
     const flag = down ? '' : fittingsFlag(st);
     setText(this.flag, flag);
     this.flag.hidden = !flag;

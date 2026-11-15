@@ -16,6 +16,9 @@
  *   magazine_cookoff    rounds burned, rounds left
  *   torpedo_launched    one round less
  *   blast_damage / reactor_blast   who a reactor blast caught, and what it cost
+ *   module_damaged      an engine module's health -> thrust (engine_effectiveness)
+ *   plume_wash / crew_radiation    a ship in another ship's drive exhaust, its
+ *                       crew's radiation dose and state (Plume lane)
  *
  * The fold keeps, per ship, a short time-sorted list of immutable state
  * summaries; fittingsAt() binary-searches it, so a HUD surface can cache on
@@ -41,7 +44,16 @@ import { SHIP_MODULES } from './shipModules.js';
  */
 export const TUBE_MAGAZINE = { corvette: 8, cruiser_torpedo: 12 };
 
-const PASS5_EVENTS = new Set(['mount_damaged', 'reactor_blast', 'blast_damage', 'magazine_cookoff']);
+const PASS5_EVENTS = new Set(['mount_damaged', 'reactor_blast', 'blast_damage', 'magazine_cookoff', 'plume_wash', 'crew_radiation']);
+
+/** Weakest drive-plume episode worth a toast / mark: peak heat rate in GJ/s (about 30 km astern of a full burn). */
+export const PLUME_NOTICE_GJ_S = 2;
+
+/** Module table of a hull, variants on their base hull as the engine builds them (cruiser_torpedo -> cruiser); undefined when unknown. */
+export const modulesFor = type => {
+  const t = String(type || '').toLowerCase();
+  return SHIP_MODULES[t] || SHIP_MODULES[t.split('_')[0]] || undefined;
+};
 
 /** Explicit module -> slot map of the engine (destroyer layout), tried first. */
 const MODULE_SLOT = {
@@ -103,7 +115,7 @@ export function fittingLayouts(sourceData = {}, ships = {}) {
 export function slotsForModule(type, lay, moduleName) {
   const none = { slots: [], engine: false };
   if (!lay || !moduleName) return none;
-  const modules = SHIP_MODULES[String(type || '').toLowerCase()];
+  const modules = modulesFor(type);
   const mod = modules?.find(m => m.name === moduleName);
   if (mod?.type === 'engine' || (!modules && /engine assembly/i.test(moduleName))) return { slots: [], engine: true };
   const nonPd = [...lay.guns, ...lay.tubes].sort(slotOrder);
@@ -176,7 +188,8 @@ export class FittingFold {
     this.layouts = fittingLayouts(sourceData, ships);
     for (const [id, lay] of Object.entries(this.layouts)) {
       const mag = TUBE_MAGAZINE[String(lay.type).toLowerCase()];
-      const cur = { fit: new Map(), thrust: 1, rounds: lay.tubes.length && mag ? mag * lay.tubes.length : null };
+      const cur = { fit: new Map(), thrust: 1, rounds: lay.tubes.length && mag ? mag * lay.tubes.length : null,
+        engines: new Map(), crew: 'fit', dose: 0 };
       this.live.set(id, cur);
       this.states[id] = [this._summary(id, -Infinity)];
     }
@@ -190,11 +203,14 @@ export class FittingFold {
     const tubesUp = tubes.length - count(tubes, 'destroyed');
     const dry = tubes.length > 0 && tubesUp > 0 && cur.rounds === 0;
     const hadWeapons = guns.length + tubes.length > 0;
+    const out = cur.crew === 'incapacitated';
     return {
       t, guns, tubes, pd, thrust: cur.thrust, rounds: cur.rounds,
       gunsUp, tubesUp, pdUp: pd.length - count(pd, 'destroyed'),
-      // Able to deal damage: a working gun, or a working tube that is not known to be empty
-      armed: gunsUp > 0 || (tubesUp > 0 && !dry),
+      // Crew radiation (drive-plume wash): 'fit' | 'impaired' (weapons cycle slower) | 'incapacitated' (stops fighting), total dose in Sv
+      crew: cur.crew, dose: cur.dose,
+      // Able to deal damage: a working gun, or a working tube that is not known to be empty - and a crew to work it
+      armed: !out && (gunsUp > 0 || (tubesUp > 0 && !dry)),
       disarmed: hadWeapons && gunsUp === 0 && tubesUp === 0,
       dry: hadWeapons && gunsUp === 0 && dry,
       adrift: !(cur.thrust > 0)
@@ -238,7 +254,8 @@ export class FittingFold {
         }
         if (cur) {
           if (d.kind === 'engine') {
-            cur.thrust = d.destroyed ? 0 : Math.max(0, Math.min(1, Number(d.thrust_fraction) || 0));
+            if (d.slot) cur.engines.set(d.slot, d.destroyed ? 0 : Number(d.health_pct) || 0);
+            cur.thrust = d.destroyed ? 0 : Number.isFinite(d.thrust_fraction) ? Math.max(0, Math.min(1, d.thrust_fraction)) : this._thrust(lay, cur);
             changed = true;
           } else if (d.slot) {
             const hp = Number(d.health_pct);
@@ -251,10 +268,37 @@ export class FittingFold {
       } else if (type === 'module_destroyed') {
         if (cur) {
           const hit = slotsForModule(lay.type, lay, d.module_name);
-          if (hit.engine && cur.thrust > 0) { cur.thrust = 0; changed = true; }
+          if (hit.engine) {
+            cur.engines.set(d.module_name, 0);
+            const thrust = this._thrust(lay, cur);
+            if (thrust !== cur.thrust) { cur.thrust = thrust; changed = true; }
+          }
           for (const slot of hit.slots) {
             if (cur.fit.get(slot) !== 'destroyed') { cur.fit.set(slot, 'destroyed'); changed = true; what = lay.pd.includes(slot) ? 'PD turret' : lay.tubes.includes(slot) ? 'torpedo tube' : 'gun'; }
           }
+        }
+      } else if (type === 'module_damaged') {
+        // Penetration damage to an engine module short of destruction (pass-5 recordings carry health_pct)
+        if (cur && !d.destroyed && Number.isFinite(d.health_pct) && slotsForModule(lay.type, lay, d.module_name).engine) {
+          cur.engines.set(d.module_name, d.health_pct);
+          const thrust = this._thrust(lay, cur);
+          if (thrust !== cur.thrust) { cur.thrust = thrust; changed = true; what = 'engine'; }
+        }
+      } else if (type === 'plume_wash') {
+        if (ship && d.phase !== 'torpedo_blinded') this._plume(e, ids[i], ship, ships);
+        if (cur && Number.isFinite(d.crew_dose_sv) && d.crew_dose_sv !== cur.dose) { cur.dose = d.crew_dose_sv; changed = true; }
+      } else if (type === 'crew_radiation') {
+        if (cur && (d.state === 'impaired' || d.state === 'incapacitated')) {
+          cur.crew = d.state;
+          if (Number.isFinite(d.dose_sv)) cur.dose = d.dose_sv;
+          changed = true;
+        }
+        if (ship) {
+          const dose = Number.isFinite(d.dose_sv) ? `${d.dose_sv.toFixed(1)} Sv` : 'radiation';
+          const from = d.source_ship_id ? ` in ${name(d.source_ship_id)}'s exhaust` : '';
+          this._notice(e, ids[i], 'crew', ship, ships, d.state === 'incapacitated' ? 'CREW INCAPACITATED' : 'CREW IMPAIRED',
+            d.state === 'incapacitated' ? `${dose}${from} · the ship stops fighting and coasts`
+              : `${dose}${from} · guns and tubes cycle ${Number(d.cooldown_factor) > 1 ? `${d.cooldown_factor}x` : ''} slower`.replace('  ', ' '));
         }
       } else if (type === 'magazine_cookoff') {
         if (cur && lay.tubes.length && Number.isFinite(d.torpedoes_remaining)) { cur.rounds = d.torpedoes_remaining; changed = true; }
@@ -283,16 +327,48 @@ export class FittingFold {
       if (!changed || !cur) continue;
       const after = this._commit(ship, e.timestamp);
       const by = d.source_ship_id ? ` by ${name(d.source_ship_id)}` : '';
-      const blast = d.cause === 'reactor_blast' ? ` in ${name(d.source_ship_id)}'s reactor blast` : by;
+      const blast = d.cause === 'reactor_blast' ? ` in ${name(d.source_ship_id)}'s reactor blast`
+        : d.cause === 'plume_wash' ? ` in ${name(d.source_ship_id)}'s exhaust` : by;
       if (before.thrust > 0 && after.adrift) {
         this._notice(e, ids[i], 'adrift', ship, ships, 'ADRIFT', `drive destroyed${blast}`);
-      } else if (type === 'mount_damaged' && d.kind === 'engine' && after.thrust < before.thrust) {
+      } else if ((what === 'engine' || (type === 'mount_damaged' && d.kind === 'engine')) && after.thrust < before.thrust) {
         this._notice(e, ids[i], 'drive', ship, ships, `DRIVE HIT · ${Math.round(after.thrust * 100)}% THRUST`, `drive damaged${blast}`);
       }
       if (!before.disarmed && after.disarmed) {
         this._notice(e, ids[i], 'disarmed', ship, ships, 'DISARMED', `last ${what || 'weapon'} knocked out${blast}`);
       }
     }
+  }
+
+  /**
+   * Thrust fraction from the engine modules' health, as the engine computes
+   * it (CombatSimulation.engine_effectiveness): the mean of health / 100,
+   * and nothing at all unless one engine module is above 25 %.
+   */
+  _thrust(lay, cur) {
+    const names = (modulesFor(lay.type) || []).filter(m => m.type === 'engine').map(m => m.name);
+    const all = names.length ? names : [...cur.engines.keys()];
+    if (!all.length) return cur.thrust;
+    const hp = all.map(n => Math.max(0, Math.min(100, cur.engines.get(n) ?? 100)));
+    if (!hp.some(h => h > 25)) return 0;
+    return Math.round(hp.reduce((a, b) => a + b, 0) / hp.length * 10) / 1000;
+  }
+
+  /** Notices for a drive-plume episode (plume_wash enter / sustain / exit): strong ones only, never for a hulk. */
+  _plume(e, id, ship, ships) {
+    const d = e.data || {};
+    if (!(Number(d.peak_heat_rate_gj_s) >= PLUME_NOTICE_GJ_S) || d.hit_location == null) return;
+    const src = (d.source_ship_id && (ships[d.source_ship_id]?.name || d.source_ship_id)) || 'a ship';
+    const who = `of ${src}${d.friendly ? ' (friendly)' : ''}`;
+    const cost = [`+${(Number(d.heat_gj) || 0).toFixed(0)} GJ`];
+    if (d.armor_ablation_cm >= 0.05) cost.push(`−${Number(d.armor_ablation_cm).toFixed(1)} cm ${d.hit_location} armour`);
+    if (d.fittings_hit?.length) cost.push(`${plural(d.fittings_hit.length, 'fitting')} burned`);
+    if (d.dose_sv >= 0.05) cost.push(`${Number(d.dose_sv).toFixed(1)} Sv`);
+    const enter = d.phase === 'enter';
+    const status = enter ? 'IN EXHAUST' : d.phase === 'exit' ? `OUT OF EXHAUST · ${Math.round(d.duration_s || 0)} s` : `IN EXHAUST · ${Math.round(d.duration_s || 0)} s`;
+    this._notice(e, id, enter ? 'plume' : 'plume-update', ship, ships, status,
+      `${who} · ${enter ? `${(Number(d.distance_km) || 0).toFixed(1)} km astern · ` : ''}${cost.join(', ')}`);
+    this.notices[this.notices.length - 1].group = 'plume';
   }
 
   _victim(source, victim) {
@@ -385,15 +461,18 @@ export function fittingsText(st) {
   if (st.tubes.length) parts.push(`Tubes ${st.tubesUp}/${st.tubes.length}${dmg(st.tubes)}${st.rounds != null ? `, ${plural(st.rounds, 'torpedo')}` : ''}`);
   if (st.pd.length) parts.push(`PD ${st.pdUp}/${st.pd.length}${dmg(st.pd)}`);
   parts.push(st.adrift ? 'Drive OUT' : `Drive ${Math.round(st.thrust * 100)}%`);
+  if (st.crew && st.crew !== 'fit') parts.push(`Crew ${st.crew} (${st.dose.toFixed(1)} Sv)`);
   return parts.join(' · ');
 }
 
-/** The flag a spectator should see first: DISARMED / ADRIFT / NO AMMO (or '' when the ship is fine). */
+/** The flag a spectator should see first: CREW OUT / DISARMED / ADRIFT / NO AMMO / IMPAIRED (or '' when the ship is fine). */
 export function fittingsFlag(st) {
   if (!st) return '';
+  if (st.crew === 'incapacitated') return 'CREW OUT';
   if (st.disarmed) return 'DISARMED';
   if (st.adrift) return 'ADRIFT';
   if (st.dry) return 'NO AMMO';
+  if (st.crew === 'impaired') return 'IMPAIRED';
   return '';
 }
 

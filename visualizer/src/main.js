@@ -1317,8 +1317,9 @@ class BattleVisualizer {
     const live = this.live;
     let verdict = live.verdict || this.computeVerdict();
     // A battle that ended because a side could no longer deal damage says so in words (as the replay banner does)
-    const cause = endCause({ reason: verdict?.detail });
-    if (cause) verdict = { ...verdict, detail: `${cause.headline} · ${cause.detail}` };
+    // (same wording as the replay banner, including a fleet whose last ships surrendered or cannot fight)
+    const cause = endCause({ winner: verdict?.kind === 'victory' ? verdict.faction : null, reason: verdict?.detail }, this.lastSides);
+    if (cause) verdict = { ...verdict, detail: `${cause.headline} · ${cause.detail}${cause.inferred && verdict.detail ? ` (${verdict.detail})` : ''}` };
     const spend = live.spend;
     const billing = live.provenance?.billing || (spend ? {
       reported_cost_usd: spend.reported_usd, spend_limit_usd: spend.limit_usd, calls: spend.calls,
@@ -1423,6 +1424,7 @@ class BattleVisualizer {
     const t = this.timeController.currentTime;
     const hud = this.loader.hud;
     const sides = this.scoreboard.update(this.currentState.ships, this.currentState.torpedoes, this.loader.ships, hud, t);
+    this.lastSides = sides;
     this.registry.update(this.currentState.ships, t, hud.kills, hud.fittings);
     this.killFeed.update(hud.kills, t, hud);
     // A dying ship is a confirmed kill counting down to its reactor
