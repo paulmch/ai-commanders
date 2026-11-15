@@ -642,3 +642,139 @@ def test_launching_captain_sees_its_round_destroyed_by_the_blast():
     captain.ship_id = "shooter"
     outcomes = captain._launch_outcomes(sim)
     assert outcomes["t1"]["outcome"] == "destroyed by blast"
+
+
+# ---------------------------------------------------------------------------
+# Crippled ships live for minutes now: every commander-facing view must cope
+# ---------------------------------------------------------------------------
+
+def _cripple(sim, ship, strip=False):
+    """Drive dead, every PD turret gone, every other gun/tube wrecked (the
+    rest degraded, or wrecked too with strip=True)."""
+    for module in ship._get_modules_by_type("engine"):
+        bd.damage_fitting(sim, ship, ("engine", module.name, module), 80.0,
+                          "surface_hit", "x", HitLocation.TAIL)
+    for fitting in bd._pd_fittings(ship):
+        bd.damage_fitting(sim, ship, fitting, 100.0, "surface_hit", "x", HitLocation.LATERAL)
+    for i, fitting in enumerate(bd._gun_fittings(ship, None) + bd._launcher_fittings(ship)):
+        loss = 100.0 if (strip or i % 2 == 0) else 60.0
+        bd.damage_fitting(sim, ship, fitting, loss, "surface_hit", "x", HitLocation.LATERAL)
+
+
+def _crippled_fleets(strip):
+    sim = CombatSimulation(time_step=1.0, decision_interval=30, seed=5)
+    layout = [("alpha_1", "cruiser", (0, 0, 0)), ("alpha_2", "cruiser_torpedo", (0, 8, 0)),
+              ("alpha_3", "corvette", (0, -8, 0)), ("alpha_4", "battleship", (0, 16, 0)),
+              ("beta_1", "destroyer", (300, 0, 0)), ("beta_2", "cruiser_torpedo", (300, 10, 0)),
+              ("beta_3", "frigate", (300, -10, 0))]
+    for sid, hull, pos_km in layout:
+        faction = sid.split("_")[0]
+        sign = 1 if faction == "alpha" else -1
+        ship = create_ship_from_fleet_data(
+            sid, hull, faction, FLEET,
+            position=Vector3D(*(c * 1000.0 for c in pos_km)),
+            velocity=Vector3D(sign * 1000.0, 0, 0), forward=Vector3D(sign, 0, 0))
+        ship.name = f"{'TIS' if faction == 'alpha' else 'OCS'} {hull}-{sid[-1]}"
+        sim.add_ship(ship)
+    for sid in ("alpha_1", "alpha_2", "alpha_3", "beta_1", "beta_2"):
+        _cripple(sim, sim.get_ship(sid), strip=strip)
+    return sim
+
+
+@pytest.mark.parametrize("strip", [False, True])
+def test_crippled_ships_go_through_every_commander_view(strip):
+    """Adrift, PD-less, (partly) disarmed hulls used to die within seconds;
+    now they are in play for minutes, so every state builder a captain, an
+    admiral or an MCP client reads must render them (fully offline)."""
+    import types
+
+    import httpx
+
+    from src.llm import range_control as rc
+    from src.llm.admiral import LLMAdmiral
+    from src.llm.captain import LLMCaptain, LLMCaptainConfig
+    from src.llm.client import CaptainClient
+    from src.llm.heuristic_captain import HeuristicCaptain
+    from src.llm.mcp_controller import MCPController, MCPControllerConfig
+    from src.llm.mock_openrouter import mock_transport
+    from src.llm.prompts import build_admiral_messages, format_admiral_turn_state
+    from src.llm.victory import VictoryEvaluator
+
+    sim = _crippled_fleets(strip)
+    own = [s for s in sim.ships.values() if s.faction == "alpha"]
+    assert sim.get_ship("alpha_1").engine_effectiveness == 0.0
+
+    for ship in own:
+        transport = mock_transport({}, 100, 8, 1)
+        client = CaptainClient(model="anthropic/claude-sonnet-5",
+                               api_key="mock-no-network", temperature=None)
+        client._client = httpx.Client(transport=httpx.MockTransport(transport.handle_request))
+        config = LLMCaptainConfig(name=f"Captain {ship.ship_id}", ship_name=ship.name,
+                                  ship_type=ship.ship_type, fleet_data=FLEET,
+                                  model="anthropic/claude-sonnet-5")
+        captain = LLMCaptain(config, client=client)
+        captain.ship_id = ship.ship_id
+        status = captain._build_ship_status(ship)
+        if ship.ship_id != "alpha_4":
+            assert status["pd_turrets_operational"] == 0
+        for enemy in sim.get_enemy_ships(ship.ship_id):
+            captain._build_enemy_info(ship, enemy, sim)
+        captain.decide(ship.ship_id, sim)          # full prompt build + mock reply
+        assert rc.captain_range_control(sim, ship)
+        heuristic = HeuristicCaptain(LLMCaptainConfig(
+            name="H", ship_name=ship.name, ship_type=ship.ship_type,
+            fleet_data=FLEET, model="heuristic"))
+        heuristic.ship_id = ship.ship_id
+        heuristic.decide(ship.ship_id, sim)
+
+    # Fleet picture: the adrift hulls are left out of the pace, like the
+    # formation throttle match already did - they do not pin the fleet at 0 g.
+    throttles = rc.formation_throttles(own, 1.0)
+    assert throttles == {"alpha_1": 0.0, "alpha_2": 0.0, "alpha_3": 0.0, "alpha_4": 1.0}
+    battleship_g = rc.ship_accel_ms2(sim.get_ship("alpha_4")) / rc.G_STANDARD
+    assert f"slowest hull {battleship_g:.2f}g sets the pace" in rc.formation_line(own)
+    assert rc.admiral_range_control(sim, own)
+    assert rc.mcp_range_control(sim, own)
+    orders = rc.formation_heading_maneuvers(sim, own, {"x": 0, "y": 1, "z": 0}, 1.0)
+    assert orders["alpha_4"].throttle == 1.0 and orders["alpha_1"].throttle == 0.0
+
+    captains = [types.SimpleNamespace(
+        ship_id=s.ship_id, ship_name=s.name, name=f"Captain {s.ship_id}",
+        config=types.SimpleNamespace(ship_type=s.ship_type, name=f"Captain {s.ship_id}"))
+        for s in own]
+    admiral = LLMAdmiral(types.SimpleNamespace(
+        name="Admiral alpha", model="x/y", personality=None, vision=False,
+        notebook_text=None, image_input=False), "alpha", client=None, fleet_data=FLEET)
+    snapshot = admiral._build_snapshot(sim, captains, full=True)
+    text = format_admiral_turn_state(snapshot, FLEET, phase="directive")
+    assert "PD 0/2 DEGRADED" in text and "LOST weapon_0" in text
+    assert build_admiral_messages(
+        admiral_name="A", faction="alpha", snapshot_t_minus_15=None,
+        snapshot_t_zero=snapshot, personality=None, fleet_data=FLEET,
+        enemy_has_admiral=True, phase="directive", battle_classes=admiral._battle_classes)
+
+    assert MCPController(MCPControllerConfig(faction="alpha"), FLEET).build_state_for_mcp(
+        sim, captains)
+
+    disabled = {s.ship_id: VictoryEvaluator().is_ship_disabled(s) for s in sim.ships.values()}
+    assert disabled["alpha_3"] is True       # corvette: tube and PD gone
+    assert disabled["alpha_4"] is False
+    assert disabled["alpha_1"] is strip      # a cruiser with one gun left still fights
+
+    for _ in range(40):                      # and the engine flies them
+        sim.step()
+
+
+def test_one_adrift_hull_does_not_zero_the_fleet_range_picture():
+    from src.llm import range_control as rc
+
+    sim = _crippled_fleets(strip=False)
+    own = [s for s in sim.ships.values() if s.faction == "alpha"]
+    groups = rc.analyze_range_control(sim, own)
+    assert groups
+    # the fleet's pace is the battleship's (the one hull that can burn), not 0 g
+    battleship_g = rc.ship_accel_ms2(sim.get_ship("alpha_4")) / rc.G_STANDARD
+    assert all(g.accel_g == pytest.approx(battleship_g) for g in groups)
+    # a lone adrift ship still reports honestly that it cannot accelerate
+    alone = rc.analyze_range_control(sim, [sim.get_ship("alpha_1")])
+    assert all(g.accel_g == 0.0 for g in alone)

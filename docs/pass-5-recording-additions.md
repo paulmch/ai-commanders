@@ -20,9 +20,10 @@ General rules that apply to every event below:
 
 ## Damage lane (`src/battle_damage.py`)
 
-Demo recording exercising every event below:
+Demo recording containing every event type below:
 `visualizer/public/recordings/p5_damage_demo.json` (see "Demo recording" at
-the end of this section for timestamps).
+the end of this section for timestamps, and "Variants not in the demo
+recording" for the four field shapes it does not contain).
 
 Magnitudes are named constants in `src/battle_damage.py`; the numbers quoted
 here are the values at the time of writing.
@@ -57,7 +58,7 @@ that fitting's state at t**; a fitting with no event is intact (100).
 | `health_pct` | float 0-100 | fitting health after this event |
 | `health_lost_pct` | float | health removed by this event |
 | `destroyed` | bool | `true` when `health_pct` reached 0: the gun/tube/turret never fires again, a destroyed engine gives no thrust |
-| `cooldown_factor` | float or null | `gun`/`launcher` only, while not destroyed: the mount now needs this many times its normal cooldown between shots (1.0-2.0 = `min(2, 100/health_pct)`). `null` for `pd`/`engine` and for destroyed fittings |
+| `cooldown_factor` | float or null | `gun`/`launcher`, while not destroyed: the mount now needs this many times its normal cooldown between shots (1.0-2.0 = `min(2, 100/health_pct)`). Always `1.0` for a damaged `pd` turret (it keeps its full output until it is destroyed). `null` for `engine` and for every destroyed fitting |
 | `thrust_fraction` | float 0-1 | `engine` only: the ship's available thrust after this event. It equals engine health / 100 while health is above 25%; at 25% or less the drive stops producing thrust altogether (0 = adrift), before it is formally destroyed |
 | `torpedoes_lost` | int | `launcher` only, only when `destroyed`: rounds lost with the tube |
 | `torpedoes_remaining` | int | `launcher` only: rounds left on the whole ship after this event |
@@ -277,3 +278,43 @@ Ship deaths (each followed by a `reactor_blast`): 109 s beta_7 (reactor_detonati
 | `radiator_damaged` (new fields) | 5 | 169 s beta_2 tail_port; 176 s alpha_4 tail_port; 187 s beta_2 tail_port; 277 s alpha_5 tail_starboard; 295 s alpha_5 tail_starboard |
 | `module_damaged` with `health_pct` | 128 | first at 100 s beta_7 |
 
+### Variants not in the demo recording
+
+The demo recording does not contain these four shapes. Shapes 1 and 2 did not
+occur in any of the 20 seeded 200-point heuristic battles run for this lane;
+shape 3 occurs in other seeds (seed 11 at the same settings) and shape 4 was
+observed in earlier tuning runs. The JSON below is real engine output through
+the recorder, but from a **scripted setup** (ships placed and damaged by hand,
+as `tests/test_battle_damage.py` does), not from a recording file; the
+envelope is shortened to the fields that matter.
+
+1. `blast_damage` on a **dying hulk** - a different, shorter field set (no
+   armour, heat or radiator fields):
+
+```json
+{"timestamp": 120.0, "event_type": "blast_damage", "ship_id": "alpha_2", "data": {"source_ship_id": "alpha_1", "distance_km": 3.0, "intensity": 0.591, "fuse_cut_s": 11.8, "detonation_in_s": 10.2, "target_id": null}}
+```
+
+2. `blast_damage` with a non-empty `radiators` list (the victim had its
+   panels extended):
+
+```json
+{"timestamp": 120.0, "event_type": "blast_damage", "ship_id": "beta_1", "data": {"source_ship_id": "alpha_1", "distance_km": 4.0, "intensity": 0.479, "hit_location": "lateral", "armor_ablation_cm": 7.19, "armor_remaining_cm": 34.11, "heat": 0.18, "heat_gj": 57.5, "radiators": [{"radiator_position": "tail_dorsal", "health_pct": 42.5, "destroyed": false, "capacity_lost_kw": 112088.8}, {"radiator_position": "tail_port", "health_pct": 42.5, "destroyed": false, "capacity_lost_kw": 112088.8}, {"radiator_position": "tail_starboard", "health_pct": 42.5, "destroyed": false, "capacity_lost_kw": 112088.8}, {"radiator_position": "tail_ventral", "health_pct": 42.5, "destroyed": false, "capacity_lost_kw": 112088.8}], "target_id": null}}
+```
+
+3. A **destroyed drive**: `mount_damaged` (`kind: "engine"`, `destroyed: true`,
+   `thrust_fraction: 0`) immediately followed by a `module_destroyed` with
+   `cause: "surface_hit"`. (The demo has two engine hits on alpha_1 that leave
+   it at 62% and then 53% thrust.)
+
+```json
+{"timestamp": 130.0, "event_type": "mount_damaged", "ship_id": "beta_1", "data": {"kind": "engine", "slot": "Main Engine Assembly", "index": 0, "weapon_name": "Main Engine Assembly", "health_pct": 0.0, "health_lost_pct": 100.0, "destroyed": true, "cooldown_factor": null, "thrust_fraction": 0.0, "cause": "surface_hit", "hit_location": "tail", "source_ship_id": "alpha_3", "target_id": null}}
+{"timestamp": 130.0, "event_type": "module_destroyed", "ship_id": "beta_1", "data": {"module_name": "Main Engine Assembly", "cause": "surface_hit", "target_id": null}}
+```
+
+4. `magazine_cookoff` on a **torpedo hull** (`torpedoes_lost` > 0; the two
+   cook-offs in the demo are gun magazines):
+
+```json
+{"timestamp": 130.0, "event_type": "magazine_cookoff", "ship_id": "beta_2", "data": {"module_name": "Main Magazine", "torpedoes_lost": 24, "torpedoes_remaining": 24, "gun_rounds_lost": 0, "secondary_gj": 6.0, "modules_damaged": ["Forward Hull Section", "Primary Sensor Array", "Targeting Sensors", "Bridge Armored Bulkhead Port", "Bridge Armored Bulkhead Starboard"], "modules_destroyed": ["Forward Hull Section", "Primary Sensor Array"], "source_ship_id": "alpha_3", "target_id": null}}
+```
