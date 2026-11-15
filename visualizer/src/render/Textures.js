@@ -897,13 +897,14 @@ export function getHullTextures(faction, variant = 'hull') {
 let _bellHeatTex = null;
 /**
  * Engine bell liner glow along the bell (v = 0 throat, v = 1 lip): white-hot
- * injector, orange wall, dull red lip. 1 x 64 sRGB, clamped.
+ * injector, orange throat, a dark wall cooling to a barely red lip - at idle
+ * the bell is a dark interior round a hot core. 1 x 64 sRGB, clamped.
  */
 export function getBellHeatTexture() {
   if (_bellHeatTex) return _bellHeatTex;
   const n = 64;
   const data = new Uint8Array(n * 4);
-  const stops = [[0, [255, 240, 214]], [0.18, [255, 176, 92]], [0.5, [226, 92, 30]], [1, [96, 22, 8]]];
+  const stops = [[0, [255, 240, 214]], [0.16, [255, 170, 84]], [0.42, [176, 60, 18]], [1, [44, 9, 4]]];
   for (let j = 0; j < n; j++) {
     const v = j / (n - 1);
     let k = 0;

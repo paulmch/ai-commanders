@@ -539,8 +539,18 @@ test('engine bells: a lathed bell on every plume seat, all liners one mesh, thro
     assert.ok(throat > -0.5 * k.L && throat < -0.47 * k.L, `${type}: throat at ${(throat / k.L).toFixed(3)} L`);
     const pos = liner.attributes.position, uv = liner.attributes.uv;
     for (let i = 0; i < pos.count; i++) {
-      if (uv.getY(i) < 0.02) assert.ok(pos.getZ(i) > throat - 0.005 * k.L, `${type}: v=0 (white-hot) must be the throat`);
+      // (the injector plate's core sits just proud of the thrust plate's aft face at -0.5 L)
+      if (uv.getY(i) < 0.02) assert.ok(pos.getZ(i) > -0.503 * k.L, `${type}: v=0 (white-hot) must be the throat`);
       if (uv.getY(i) > 0.98) assert.ok(pos.getZ(i) < mouth + 0.002 * k.L, `${type}: v=1 (dull red) must be the lip`);
+    }
+    // looking up a bell must show the injector, not the thrust plate: a liner
+    // disc stands aft of every plate/collar face inside the bell footprint
+    const rc = new THREE.Raycaster();
+    for (const e of cfg.positions) {
+      rc.set(new THREE.Vector3(e.x, e.y, -0.6 * k.L), new THREE.Vector3(0, 0, 1));
+      const hitHull = rc.intersectObjects(solids(k), false)[0];
+      const hitLiner = rc.intersectObject(new THREE.Mesh(liner, _rayMat), false)[0];
+      assert.ok(hitLiner && (!hitHull || hitLiner.distance < hitHull.distance), `${type}: thrust plate shows inside the bell`);
     }
     for (const e of cfg.positions) {
       const bell = k.parts.find(p => p.mat === 'barrel' && Math.hypot(p.center.x - e.x, p.center.y - e.y) < 1e-3 * k.W

@@ -1213,22 +1213,75 @@ export class HullKit {
           new THREE.Vector3(p.x + c * bellR * flare(0.3) * 1.04, p.y + sn * bellR * flare(0.3) * 1.04, zT - bl * 0.3));
       }
       if (d.shape === 'torch') {
-        // magnetic nozzle: coil rings standing off the bell
-        this.drum('trim', bellR * 1.2, L * 0.006, -L * 0.53, { x: p.x, y: p.y, sides: 18, open: true });
-        this.drum('accent', bellR * 1.12, L * 0.003, -L * 0.536, { x: p.x, y: p.y, sides: 18, open: true });
+        // magnetic nozzle: coil rings hugging the bell (the pair of bells
+        // sits lip to lip, so a wider ring would cut into its neighbour)
+        this.drum('trim', bellR * 1.05, L * 0.006, -L * 0.53, { x: p.x, y: p.y, sides: 18, open: true });
+        this.drum('accent', bellR * 1.03, L * 0.003, -L * 0.536, { x: p.x, y: p.y, sides: 18, open: true });
       }
-      // inner heat liner + injector plate (v = 0 at the throat)
+      // inner heat liner (v = 0 at the throat) + injector plate. The
+      // throat is sunk into the thrust plate, so the injector disc sits
+      // just proud of the plate's aft face (-0.5 L on every drive shape):
+      // looking up a bell shows a white-hot core, never the plating
+      // behind it. Its glow runs from v = 0 at the centre to the liner's
+      // own v where they meet.
       const liner = new THREE.LatheGeometry(contour(0.93), 20);
       liner.rotateX(-Math.PI / 2);
       liner.translate(p.x, p.y, zT);
-      const plate = new THREE.CircleGeometry(bellR * 0.93 * flare(0), 20);
+      const zI = -L * 0.5012, uI = (zT - zI) / bl;
+      const plate = new THREE.CircleGeometry(bellR * 0.93 * flare(uI), 20);
       plate.rotateY(Math.PI);
-      plate.translate(p.x, p.y, zT - bl * 0.01);
+      plate.translate(p.x, p.y, zI);
       const puv = plate.attributes.uv;
-      for (let i = 0; i < puv.count; i++) puv.setXY(i, 0.5, 0);
+      for (let i = 0; i < puv.count; i++) puv.setXY(i, 0.5, i === 0 ? 0 : uI);
       liners.push(liner, plate);
       // feed pipes from the skirt to the bell
       this.drum('barrel', bellR * 0.12, L * 0.05, -L * 0.465, { x: p.x * 0.9, y: p.y * 0.9, sides: 6 });
+    }
+    // Thrust structure between the bells: a coolant manifold linking
+    // neighbouring throats just proud of the thrust plate, a pump pod on
+    // each bell, and - where the bells ring an empty centre - the reactor's
+    // exhaust plug. What the chase camera looks at is machinery, not a
+    // blank plate with cones on it.
+    const seats = engineConfig.positions;
+    let dMin = Infinity;
+    for (let i = 0; i < seats.length; i++) {
+      for (let j = i + 1; j < seats.length; j++) dMin = Math.min(dMin, Math.hypot(seats[i].x - seats[j].x, seats[i].y - seats[j].y));
+    }
+    const zM = zT - bl * 0.36, wall = bellR * flare(0.36) * 0.96;
+    for (let i = 0; i < seats.length; i++) {
+      for (let j = i + 1; j < seats.length; j++) {
+        const dx = seats[j].x - seats[i].x, dy = seats[j].y - seats[i].y, dist = Math.hypot(dx, dy);
+        if (dist > dMin * 1.25 || dist <= wall * 2.05) continue;
+        const ux = dx / dist, uy = dy / dist;
+        this.rod('barrel', bellR * 0.11,
+          new THREE.Vector3(seats[i].x + ux * wall, seats[i].y + uy * wall, zM),
+          new THREE.Vector3(seats[j].x - ux * wall, seats[j].y - uy * wall, zM), { sides: 8, tint: BELL_LIP_TINT });
+        this.sphere('trim', bellR * 0.17, seats[i].x + dx / 2, seats[i].y + dy / 2, zM, { ws: 8, hs: 6 });
+      }
+    }
+    let cx = 0, cy = 0;
+    for (const p of seats) { cx += p.x / seats.length; cy += p.y / seats.length; }
+    const rMin = Math.min(...seats.map(p => Math.hypot(p.x - cx, p.y - cy)));
+    for (const p of seats) {
+      // pump pod hard against each bell's outer wall: inboard on a ring
+      // of bells, dorsal on rows and pairs (no inboard room there)
+      const r = Math.hypot(p.x - cx, p.y - cy) || 1;
+      const perp = rMin > bellR * 2.1 ? [-(p.x - cx) / r, -(p.y - cy) / r] : [0, 1];
+      const px = p.x + perp[0] * bellR * 0.98, py = p.y + perp[1] * bellR * 0.98;
+      this.drum('trim', bellR * 0.2, L * 0.022, -L * 0.502, { x: px, y: py, sides: 10 });
+      this.drum('barrel', bellR * 0.12, L * 0.008, -L * 0.515, { x: px, y: py, sides: 10 });
+    }
+    if (seats.length >= 5 && rMin > bellR * 2.1) {
+      const rc = (rMin - bellR) * 0.78;
+      this.drum('trim', rc, L * 0.016, -L * 0.502, { x: cx, y: cy, sides: 12 });
+      this.drum('accent', rc * 0.66, L * 0.004, -L * 0.511, { x: cx, y: cy, sides: 12 });
+      const plug = new THREE.ConeGeometry(rc * 0.62, L * 0.04, 16);
+      plug.rotateX(-Math.PI / 2);                 // apex aft
+      this.add('barrel', plug, this.xf(cx, cy, -L * 0.53), BELL_TINT);
+      for (const u of [0.35, 0.7]) {
+        this.add('barrel', new THREE.TorusGeometry(rc * 0.62 * (1 - u) * 1.04, rc * 0.03, 4, 16),
+          this.xf(cx, cy, -L * 0.51 - L * 0.04 * u), BELL_LIP_TINT);
+      }
     }
     const linerMesh = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(liners, false), null);
     for (const g of liners) g.dispose();
