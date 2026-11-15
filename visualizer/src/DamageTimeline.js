@@ -579,7 +579,7 @@ export const WASH_SWEEP_S = 4;
  */
 export function washHeat(rate) {
   if (!(rate > 0)) return 0;
-  return Math.min(1.6, 0.25 + 0.75 * Math.sqrt(rate / 16));
+  return Math.min(1.6, 0.14 + 0.86 * Math.sqrt(rate / 16));
 }
 
 /**

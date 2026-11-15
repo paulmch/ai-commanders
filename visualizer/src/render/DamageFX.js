@@ -420,7 +420,7 @@ function debrisMaterial(uNow) {
 
 /** Additive glow on torn hull edges: same geometry, drawn over the section. */
 /** Peak radiance scale of the plume-wash glow (heat ramp x this; scene HDR). */
-export const WASH_GLOW = 0.85;
+export const WASH_GLOW = 1.25;
 
 /**
  * Plume-wash glow: drawn over the hull with the hull's own geometry. The
@@ -462,12 +462,14 @@ function washMaterial() {
         // hottest where the jet axis (through the hull centre) meets the plating
         vec3 off = vLocal - uDir * dot(vLocal, uDir);
         float r = length(off) / uSpan;
-        float spot = exp(-r * r * 1.2);
+        float spot = exp(-r * r * 1.5);
+        // plating heats unevenly: slab-sized patches and a finer grain
         float n1 = texture2D(uNoise, vLocal.xy * 0.33 + vec2(vLocal.z * 0.19, uSeed)).r;
         float n2 = texture2D(uNoise, vLocal.zy * 0.9 + vec2(uSeed * 1.7, 0.3)).g;
-        float h = uHeat * pow(facing, 0.7) * (0.3 + 0.7 * spot) * (0.7 + 0.45 * n1 + 0.2 * n2);
-        if (h < 0.03) discard;
-        gl_FragColor = vec4(heatRamp(h) * smoothstep(0.03, 0.14, h) * uGain, 1.0);
+        float h = uHeat * pow(facing, 1.3) * (0.22 + 0.78 * spot) * (0.5 + 0.75 * n1 + 0.3 * n2);
+        if (h < 0.04) discard;
+        // a dull-red plate barely shows in sunlight; the glow takes over as it climbs
+        gl_FragColor = vec4(heatRamp(h) * smoothstep(0.04, 0.4, h) * uGain, 1.0);
       }`,
     depthFunc: THREE.LessEqualDepth,
     ...ADDITIVE

@@ -330,7 +330,7 @@ test('plume wash: the facing heats on entry, follows the recorded rate, cools af
   // pure: same answer whenever asked, in any order
   assert.deepEqual(washAt(sd, 7), washAt(sd, 7));
   // heat scale: a faint wash is dull red, the demo's 16 GJ/s yellow-white, point blank white
-  assert.ok(washHeat(0) === 0 && washHeat(0.2) < 0.4 && washHeat(16) === 1 && washHeat(69) > 1.4 && washHeat(1e6) <= 1.6);
+  assert.ok(washHeat(0) === 0 && washHeat(0.2) < 0.3 && washHeat(2) > 0.4 && washHeat(16) === 1 && washHeat(69) > 1.4 && washHeat(1e6) <= 1.6);
   // fittings burned by the wash use the ordinary dead-mount path
   rec.events.push({ timestamp: 5, event_type: 'mount_damaged', ship_id: 'a', data: { kind: 'pd', slot: 'pd_0', index: 0, health_pct: 0, destroyed: true, cause: 'plume_wash', hit_location: 'nose', source_ship_id: 'b' } });
   const w = buildDamageTimeline(rec).ships.get('a').wrecks;
