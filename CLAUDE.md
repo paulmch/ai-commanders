@@ -34,9 +34,11 @@ uv run python scripts/run_draft_battle.py --auto-draft --no-admirals --trace --s
 ```
 
 Free battles fly `HeuristicCaptain` (`src/llm/heuristic_captain.py`). Its default
-"tactical" doctrine plans per fleet in `src/llm/heuristic_tactics.py` (focus fire,
-standoff INTERCEPT then HOLD_RANGE by hull role, torpedo salvos sized to the target's
-PD, evade overlay, crippled ships open range, plan announced on the FLEET NET);
+"tactical" doctrine plans per fleet in `src/llm/heuristic_tactics.py` (reach-aware focus
+fire; gun ships nose-first - closure cap, no braking under fire, coast through a
+controlled pass facing the nearest gun, HOLD_RANGE once closure is gone; torpedo boats
+hold a standoff and fire one-round-per-tube salvos sized to the target's PD; evade
+overlay vs torpedoes; crippled ships open range; plan announced on the FLEET NET);
 `--doctrine legacy` (or `BattleConfig.heuristic_doctrine`) keeps the pass-4 captain the
 fire-control fixture's heuristic battles were flown with. `scripts/tactics_eval.py`
 runs/analyses seeded grids (kills, closest approach, rounds inside 150 km, hit rate).
