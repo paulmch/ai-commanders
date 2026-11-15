@@ -1,24 +1,32 @@
 # README screenshots
 
-Captured from the Three.js viewer on October 25, 2026 with headless Chromium
-(Playwright, SwiftShader WebGL) at 1600 × 900 with `--gfx high`. These are
+Captured from the Three.js viewer on November 15, 2026 (pass-5 viewer: sun
+shadows, image-based fill, ambient occlusion, new hulls and effects) with
+headless Chromium (Playwright, SwiftShader WebGL) at 1600 × 900 with
+`--gfx high`. The two live-mode images (`live-deliberation.png`,
+`draft-splash.png`) are still the October 25, 2026 captures. These are
 application screenshots: ship states, ordnance, damage, HUD text and commander
 messages come from the recorded battles. Nothing is painted in or retouched;
-the only post-processing is lossless PNG optimisation (and JPEG quality 95,
-4:4:4, for `reactor-breach.jpg`, whose particle field does not fit a PNG under
-1.5 MB). Framing choices are camera placement, lens (field of view), panel
+the only post-processing is lossless PNG re-compression (Pillow,
+`optimize=True`) and, for the images whose particle fields or star fields do
+not fit a PNG under about 1.5 MB (`reactor-breach.jpg` and any other `.jpg`
+below), JPEG quality 95, 4:4:4. Framing choices are camera placement, lens (field of view), panel
 filters/scrolling, and for `command-net.png` a 2× device-scale crop.
 
 | File | Recording | Battle time | View |
 | --- | --- | ---: | --- |
-| `hero.png` | Showcase s0 (200 pt, dreadnoughts vs torpedo swarm) | 96.5s | `alpha_1` (dreadnought) at full thrust, PD beams on inbound torpedoes; 4.6 hull lengths, azimuth −36°, elevation 9°, 20° lens; HUD hidden |
+| `hero.png` | Showcase s0 (200 pt, dreadnoughts vs torpedo swarm) | 96.5s | `alpha_1` (dreadnought) at full thrust, PD lasers on inbound torpedoes; 4.6 hull lengths, azimuth −36°, elevation 9°, 20° lens; HUD hidden |
 | `hull-lineup.png` | `rcs_showroom.json` as an empty stage (any recording works: the hulls are spawned far from its ships) | 5s | Showroom: every hull class spawned with the viewer's `createShip`, alpha column facing beta; top to bottom siege dreadnought, dreadnought, battleship, battlecruiser, torpedo cruiser, cruiser, destroyer, frigate, corvette; 12° lens; HUD hidden |
 | `fleet-battle.png` | Claude Sonnet 5 vs DeepSeek V4.1 Flash, 150 pt | 151s | Fleet view one second after the first kill; scoreboard, kill toast, command net, registry, timeline lanes; track legend collapsed |
 | `torpedo-salvo.png` | Showcase s7 (200 pt, battleships vs torpedo swarm) | 203.3s | Two battleships' PD fans on an inbound torpedo, kinetic strike on `alpha_1`; explicit camera; HUD hidden |
-| `reactor-breach.jpg` | Showcase s7 | 205.7s | `alpha_1` battleship reactor breach 1.7 s after the kill, the sister ship's plume crossing the fireball; 5.5 hull lengths, azimuth −20°, elevation 20°; HUD hidden |
+| `reactor-breach.jpg` | Showcase s7 | 205.7s | `alpha_1` battleship reactor breach 1.7 s after the kill, shock ring and debris, the sister ship's plume at the fireball's left edge; 5.5 hull lengths, azimuth −20°, elevation 20°; HUD hidden |
 | `dying-hulk.png` | Showcase s7 | 114s | `alpha_7` destroyer as a dying hulk (killed at 110 s, reactor goes at 118 s): molten cracks, venting, sputtering torch; 1.35 hull lengths, azimuth 20°, elevation 15°; HUD hidden |
 | `command-net.png` | DeepSeek V4.1 Flash mirror, 150 pt (pass-4 engine) | 216s | OCS Lancer-2 and its captain's DEVIATE report to the admiral (merge-floor reasoning, compliance chip), both admirals' standing directives; REPORTS filter; 1200 × 660 viewport at device scale 2, cropped to the right 800 × 450 CSS px |
 | `intent-consequence.png` | Qwen–GPT-OSS | 184.8s | `alpha_2` decision `e152` pinned; camera on the crippled `beta_1` (reactor in 14 s), 2 hull lengths, azimuth 35°, elevation 18°; Decisions panel scrolled to ship execution and observed consequences |
+| `blast-shell.jpg` | Pass-5 damage demo | 152.6s | Reactor blast of `beta_5` (destroyer, killed at 150 s) 2.6 s on: fireball inside the blast shell drawn to the recorded 13 km radius, two escorts beside it, PD lasers still working; 6 hull lengths, azimuth 30°, elevation 18°; HUD hidden |
+| `fittings-hud.png` | Pass-5 damage demo | 180s | OCS Falchion-1 (`beta_2`) selected one second after the frigate TIS Ward-1's reactor blast caught it: kill toast with the blast radius, CAUGHT IN BLAST and DISARMED toasts, fitting pips in the ship registry, FITTINGS block (guns, PD with one damaged turret, drive) in the telemetry card; 5 hull lengths, azimuth 30°, elevation 18° |
+| `dreadnought.png` | Showcase s0 | 96.5s | `alpha_1`, the pass-5 dreadnought, three-quarter view from the sunlit side at full thrust; 3 hull lengths, azimuth −10°, elevation 35°, 20° lens; HUD hidden |
+| `torpedo-strike.png` | Pass-5 tactics showcase | 100.5s | Synchronized torpedo salvo landing on the battleship `beta_1` half a second before its reactor goes; 2.6 hull lengths, azimuth 35°, elevation 18°; HUD hidden |
 | `live-deliberation.png` | Claude Sonnet 5 vs DeepSeek V4.1 Flash, replayed through the live endpoints | CP5 (150s) | `?live=1&decisions=1`: live bar, COMMAND DELIBERATION card (both sides' progress, spend), alpha admiral's salvo directive, the salvo one second from impact |
 | `draft-splash.png` | Same, live endpoints | T+4s | Draft splash after both sealed picks: rosters, formations and each admiral's reasoning |
 
@@ -27,8 +35,16 @@ filters/scrolling, and for `command-net.png` a 2× device-scale crop.
 - Claude Sonnet 5 vs DeepSeek V4.1 Flash: `sonnet5_vs_dsv41flash_150pt_20260926.json` (live run of September 26, 2026)
 - DeepSeek V4.1 Flash mirror: `p4_new_flash_mirror_150pt.json` (pass-4 engine with captain reports)
 - [Qwen–GPT-OSS](../../../data/recordings/intent_qwen_gptoss.json)
-- Showcase s0 / s7: free heuristic draft battles on the pass-4 engine, regenerated
-  deterministically (identical trace and events run to run):
+- Pass-5 damage demo: `p5_damage_demo.json`, a seeded heuristic fleet battle
+  (regeneration command in
+  [`docs/pass-5-recording-additions.md`](../../pass-5-recording-additions.md))
+- Pass-5 tactics showcase: `p5_tactics_s4.json` (heuristic captains, `tactical`
+  doctrine)
+- Showcase s0 / s7: free heuristic draft battles recorded on the pass-4 engine
+  with the commands below. The frames here are taken from those pass-4
+  recordings; the pass-5 engine changes seeded battles, so re-running the
+  commands today gives a different battle (use the archived recordings to
+  reproduce these exact frames):
 
   ```bash
   uv run python scripts/run_draft_battle.py --auto-draft --no-admirals --trace \
@@ -43,7 +59,8 @@ Stage recordings in `visualizer/public/recordings/` as described in the
 ## Capture commands
 
 Each replay image is one `scripts/viewer_snapshot.py` command (add `--port` if
-your dev server is not on 5173). `capture-helpers.js` holds the JavaScript the
+your dev server is not on 5173, and `--init-timeout 420` on a loaded machine:
+software GL bakes the sky and compiles every shader at load). `capture-helpers.js` holds the JavaScript the
 commands pass through `--eval`: it only calls the viewer's own API
 (`window.visualizer`).
 
@@ -87,6 +104,23 @@ uv run python scripts/viewer_snapshot.py --gfx high --recording p4_new_flash_mir
 $SNAP --recording intent_qwen_gptoss.json --query "ship=alpha_2&decisions=1&decision=e152&t=184.8" \
   --time 184.8 --focus beta_1 --dist 2 --az 35 --el 18 \
   --eval "$(cat $H); window.visualizer.deselectShip(); readmeDecisionTo('03')" --out intent-consequence.png
+
+# blast-shell.jpg (captured as PNG, then JPEG q95 4:4:4)
+$SNAP --recording p5_damage_demo.json --time 152.6 --focus beta_5 --dist 6 --az 30 --el 18 \
+  --hide-ui --eval "$TRACKS_OFF" --out blast-shell.png
+
+# fittings-hud.png
+$SNAP --recording p5_damage_demo.json --query "ship=beta_2" --time 180 --focus beta_2 --dist 5 --az 30 --el 18 \
+  --out fittings-hud.png
+
+# dreadnought.png
+$SNAP --recording showcase_s0_200pt.json --time 96.5 --focus alpha_1 --dist 3.0 --az -10 --el 35 --hide-ui \
+  --eval "(() => { $TRACKS_OFF; const c = window.visualizer.scene.camera; c.fov = 20; c.updateProjectionMatrix(); })()" \
+  --out dreadnought.png
+
+# torpedo-strike.png
+$SNAP --recording p5_tactics_s4.json --time 100.5 --focus beta_1 --dist 2.6 --az 35 --el 18 \
+  --hide-ui --eval "$TRACKS_OFF" --out torpedo-strike.png
 ```
 
 The live images replay the Sonnet–DeepSeek recording through the live
