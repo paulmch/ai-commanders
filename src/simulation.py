@@ -2687,13 +2687,11 @@ class CombatSimulation:
         battle_damage.resolve_pending_blasts(self)
 
         # Check for battle end conditions
+        # (No last-tick flush is needed: resolving a blast never kills, so it
+        # never queues another one; a chain death - a hulk whose fuse the
+        # blast burned down - happens on a later tick,
+        # and the battle does not end while a dying hulk is still pending.)
         self._check_battle_end()
-        if not self._running:
-            # Last tick: a chain detonation queued while resolving the blasts
-            # above would never get its tick - flush it so the recording
-            # still carries every blast.
-            while self._pending_blasts:
-                battle_damage.resolve_pending_blasts(self)
 
         # Advance time
         self.current_time += dt

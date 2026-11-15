@@ -245,3 +245,25 @@ def test_pd_blinded_torpedo_hit_still_counts_as_a_seeker_kill_that_hit():
     sim._resolve_torpedo_hit(flight, target)
     assert sim.metrics.total_torpedo_hits_after_seeker_kill == 1
     assert sim.metrics.total_torpedo_hits_after_blast_blind == 0
+
+
+# ---------------------------------------------------------------------------
+# Finding 9: resolving blasts never queues another one in the same tick
+# (why step() needs no last-tick flush: chain deaths happen on a later tick)
+# ---------------------------------------------------------------------------
+
+def test_blast_resolution_never_queues_a_blast_and_the_last_tick_needs_no_flush():
+    import inspect
+
+    sim = CombatSimulation(seed=1, time_step=1.0)
+    dead = _ship(sim, "dead", "alpha", Vector3D(0, 0, 0))
+    hulk = _ship(sim, "hulk", "alpha", Vector3D(0, 500, 0))
+    hot = _ship(sim, "hot", "beta", Vector3D(0, -500, 0))
+    sim._start_death_spiral(hulk, "x")
+    hulk.dying_time_remaining = 1.0                  # the blast burns it to 0
+    hot.thermal_system.heatsink.current_heat_gj = 1.49 * hot.thermal_system.heatsink.capacity_gj
+    sim._destroy_ship(dead, "x", cause="reactor_destroyed")
+    bd.resolve_pending_blasts(sim)
+    assert hulk.dying_time_remaining == 0.0 and not hulk.is_destroyed
+    assert sim._pending_blasts == []                 # nothing new queued
+    assert "while self._pending_blasts" not in inspect.getsource(CombatSimulation.step)
