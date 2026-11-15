@@ -904,3 +904,70 @@ no LLM):
 - First masked battery: `alpha_1` `weapon_3` at 33 s, clear at 285 s after 255 s.
 - Kills: `beta_3` at 285 s.
 - (Recorded before the arcs review fixes: there a mount of a ship that died while masked got no exit event and its `tur` simply stopped changing; now the exit is emitted with `cause` and the ship's mounts go to state 0. The turrets also snapped onto their first targets at 30 s; now the engagement is settled at that checkpoint and later first designations slew.)
+
+## Anthropic lane (`src/llm/anthropic_client.py`, `src/llm/providers.py`)
+
+Battles may now run bare Anthropic model ids (`claude-sonnet-5-5`, ...) on the
+Anthropic API directly, next to OpenRouter ids. Nothing in the simulation
+changed; the additions are in the replay-audit events and the provenance. All
+are optional for consumers: OpenRouter recordings and older recordings lack them.
+
+### New fields on `model_call`
+
+Written by `src/llm/replay_audit.AuditedClient` for every model call (as before).
+On calls served by the Anthropic API:
+
+- `provider`: `"anthropic"` (absent on OpenRouter calls).
+- `stop_reason`: the API's raw `stop_reason` (`tool_use`, `end_turn`,
+  `max_tokens`, `refusal`, ...). `finish_reason` keeps the OpenRouter vocabulary
+  the callers use: `tool_calls`, `stop`, `length` (from `max_tokens`), `refusal`.
+- `model`: the model the API says served the call (`response.model`).
+- `request`: the request settings without messages/tools: `model`, `max_tokens`,
+  `thinking` (`{"type": "adaptive"}`), `output_config` (`{"effort": ...}`),
+  `tool_choice`, plus `provider`, `cache_ttl` (`"1h"`) and `api_version`
+  (the `anthropic-version` header, e.g. `"2026-10-21"`). Never headers or keys.
+- `usage`: OpenRouter-shaped (`prompt_tokens` = uncached + cache writes + cache
+  reads, `completion_tokens`, `prompt_tokens_details.cached_tokens` /
+  `.cache_write_tokens`, `cost` in USD computed from the price table) plus
+  `usage.anthropic` with the API's own fields: `input_tokens`,
+  `output_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`,
+  `cache_creation.ephemeral_5m_input_tokens` / `.ephemeral_1h_input_tokens`,
+  `thinking_tokens`.
+
+### `model_refusal` - a model declined a call
+
+Emitted right after the `model_call` whose `finish_reason` is `refusal`
+(HTTP 200, `stop_reason: "refusal"`). The commander issues no orders from that
+call and it is not re-asked: a captain loses the turn (its `captain_decision`
+has `call_failed: true`, its lost-turn note says the model refused), an admiral's
+checkpoint has no directive (`admiral_directive_failed`, `reason` starts
+`refused by the model`). The battle goes on.
+
+| field | type | meaning |
+|---|---|---|
+| `actor` | `"captain"` / `"admiral"` | who was refused |
+| `faction` | `"alpha"` / `"beta"` | side |
+| `model` | string | model that refused |
+| `category` | string or null | `stop_details.category` (`cyber`, `bio`, `general_harms`, ...) |
+| `explanation` | string or null | `stop_details.explanation` |
+| `call_event_id` | string | the `model_call` event it belongs to |
+
+`ship_id` is the captain's ship (null for an admiral).
+
+### `provenance.llm` - who served each side
+
+Set when the battle has an LLM client: `{"alpha": [entry, ...], "beta": [...]}`,
+one entry per distinct LLM model id the side's admiral and captains use.
+Anthropic entry: `provider` (`"anthropic"`), `model` (exact id), `effort`,
+`reasoning_effort_setting`, `thinking`, `max_tokens`, `tool_choice`, `cache_ttl`,
+`fallbacks` (always `false` in battles: a refused turn is never re-run on another
+model), `sdk` (`"anthropic-python 2.8.0"`), `api_version`, `prices_as_of`.
+OpenRouter entry: `provider` (`"openrouter"`), `model`, `reasoning_effort`,
+`temperature`, `max_tokens`, `cache_ttl`.
+
+### `provenance.billing` (live draft battles) gains
+
+`refusals`, `refusals_by_side`, `computed_cost_usd` (sum of per-call `usage.cost`),
+`cache` (one-line cache summary), `prompt_tokens`, `cached_tokens`,
+`cache_write_tokens`. For Anthropic models `pricing[model]` is the price-table
+entry (USD per million tokens, `as_of`).

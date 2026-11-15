@@ -13,7 +13,18 @@ uv sync --locked --all-extras   # --all-extras pulls in the mcp extra (mcp, aioh
 
 # LLM battles need an OpenRouter key (MCP-controlled fleets don't)
 echo "OPENROUTER_API_KEY=sk-or-v1-your-key-here" > .env
+# Bare Anthropic ids (claude-sonnet-5-5 ...) use the Anthropic API directly
+echo "ANTHROPIC_API_KEY=sk-ant-your-key-here" >> .env
 ```
+
+Provider is picked from the model id (`src/llm/providers.py` `create_llm_client`):
+a bare Anthropic id (`claude-sonnet-5-5`, `claude-sonnet-5`, `claude-haiku-5-5`,
+`claude-opus-5-5`, `claude-fable-5-2`) goes to the Anthropic Messages API through
+the official SDK (`src/llm/anthropic_client.py`: adaptive thinking, explicit
+`output_config.effort`, tool_choice auto, 1h cache breakpoint on the system prompt,
+cost from the dated `ANTHROPIC_MODELS` price table, refusals recorded and never
+re-asked, server-side fallbacks off); a `vendor/model` id goes to OpenRouter. Sides
+may mix providers. Tests use `src/llm/mock_anthropic.py` (no network, no key).
 
 ## Running Tests
 
@@ -31,6 +42,9 @@ uv run python scripts/run_llm_battle.py -v                                  # 1v
 uv run python scripts/run_llm_battle.py --fleet-config data/fleet_config_claude_vs_gemini.json -v
 uv run python scripts/mcp_battle.py --config data/fleet_config_mcp_example.json  # human via MCP
 uv run python scripts/run_draft_battle.py --auto-draft --no-admirals --trace --seed 3  # free battle
+# Anthropic API, both sides drafted and flown by the model, $ cap (--mock-llm: offline)
+uv run python scripts/run_live_draft_battle.py --alpha-model claude-sonnet-5-5 \
+    --beta-model claude-sonnet-5 --points 150 --turns 20 --reasoning medium --spend-limit 30
 ```
 
 Free battles fly `HeuristicCaptain` (`src/llm/heuristic_captain.py`). Its default

@@ -1,7 +1,6 @@
 """Record commander inputs once, retaining references from each model call."""
 import time
 
-from .client import CaptainClient
 from src.replay_evidence import json_value
 
 
@@ -31,10 +30,24 @@ class AuditedClient:
             tools_ref=self.recorder.asset(payload.get('tools', [])),
             output={'content': message.get('content'), 'tool_calls': message.get('tool_calls', [])},
             finish_reason=choices[0].get('finish_reason'),
+            **({'provider': response['provider']} if response.get('provider') else {}),
+            **({'stop_reason': response['stop_reason']} if response.get('stop_reason') else {}),
             # Wall seconds from the agent's call to this response (spectator
             # pacing only; never read by the simulation).
             **({'latency_s': round(time.monotonic() - started, 2)} if started is not None else {}))
         self.last_call_event_id = event.event_id
+        if choices[0].get('finish_reason') == 'refusal':
+            # A refused turn issues no orders; the log says so, per side.
+            details = response.get('stop_details') or {}
+            self.recorder.record(
+                self.simulation.current_time, 'model_refusal', self.ship_id,
+                actor=self.actor, faction=self.faction,
+                model=response.get('model', payload.get('model')),
+                category=details.get('category'), explanation=details.get('explanation'),
+                call_event_id=event.event_id)
+            stats = getattr(self.client, 'stats', None)
+            if stats is not None and hasattr(stats, 'record_refusal_side'):
+                stats.record_refusal_side(self.faction)
 
     def _call(self, method, *args, **kwargs):
         # Live spectators see in-flight calls (who the checkpoint waits for)
@@ -98,7 +111,19 @@ def attach_audit(runner):
         admiral = getattr(runner, faction + '_admiral', None)
         if admiral:
             entries.append((admiral, 'admiral', faction, None))
+    from .anthropic_client import AnthropicClient
+    from .client import CaptainClient
+    from .providers import LLMRouter, llm_provenance
+    real_clients = (CaptainClient, AnthropicClient, LLMRouter)
+    side_models = {}
+    for agent, actor, faction, sid in entries:
+        model = getattr(getattr(agent, 'config', None), 'model', None)
+        side_models.setdefault(faction, []).append(model)
+    if isinstance(runner.client, real_clients) and any(side_models.values()):
+        # Which provider and exact model id served each side, at which effort
+        # (a January bug had one model silently playing both sides).
+        runner.recorder.recording.provenance['llm'] = llm_provenance(runner.client, side_models)
     for agent, actor, faction, sid in entries:
         client = getattr(agent, 'client', None)
-        if isinstance(client, CaptainClient):
+        if isinstance(client, real_clients):
             agent.client = AuditedClient(client, runner.recorder, runner.simulation, actor, faction, sid)

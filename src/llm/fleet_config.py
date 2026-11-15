@@ -320,8 +320,13 @@ def _get_short_model_name(model: str) -> str:
         return name.split("-")[0].title()
 
     # First version-looking token (4, 4.5, 4.20, 5.6). Ignore date stamps.
+    undated = re.sub(r"-20\d{6}", "", lowered)
+    if "claude" in undated:
+        # Anthropic API ids spell the version with a hyphen (claude-sonnet-5-5):
+        # "Sonnet5.5" must not collapse into claude-sonnet-5's "Sonnet5".
+        undated = re.sub(r"(?<=\d)-(\d{1,2})(?!\d)", r".\1", undated)
     version = ""
-    for token in re.findall(r"\d+(?:\.\d+)?", re.sub(r"-20\d{6}", "", lowered)):
+    for token in re.findall(r"\d+(?:\.\d+)?", undated):
         version = token
         break
 
