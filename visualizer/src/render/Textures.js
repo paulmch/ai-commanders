@@ -351,8 +351,9 @@ export const FACTION_PLATE = {
  *     the odd hatch / vent / stencil label for scale
  *   - weathering: bright worn metal on plate edges (metallic, smooth, so
  *     edges glint under the key light), dirt hugging the seams, streaks
- * Painted plate is a dielectric (metalness ~0.08); only worn edges, chips
- * and bare replacement plates are metal.
+ * Painted plate is a dielectric (metalness ~0.08); worn edges, chips and
+ * bare replacement plates are part metal (0.3-0.5) with a bright albedo -
+ * fully metallic texels mirror the black sky and render dark, not worn.
  */
 function plateTextures(faction, variant) {
   const isPaint = variant === 'paint';
@@ -366,7 +367,7 @@ function plateTextures(faction, variant) {
   const primer = faction === 'alpha' ? [52, 58, 66] : [66, 58, 54];
   const bareMetal = [176, 178, 184];
 
-  const plates = subdividePanels(size, rnd, px(170), px(520));
+  const plates = subdividePanels(size, rnd, px(120), px(380));
   const grime = makeFbm(size, 3, 4, rnd, 0.55);
   const micro = makeFbm(size, 48, 2, rnd, 0.5);
 
@@ -376,7 +377,7 @@ function plateTextures(faction, variant) {
   const actx = albedo.getContext('2d');
   // seam channels: shadowed plate colour, not black - black seams turn the
   // big hulls into a tile grid at fleet distance
-  actx.fillStyle = rgb(base, isPaint ? 0.34 : 0.4);
+  actx.fillStyle = rgb(base, isPaint ? 0.42 : 0.5);
   actx.fillRect(0, 0, size, size);
 
   const height = new Float32Array(size * size).fill(0.12);
@@ -400,9 +401,11 @@ function plateTextures(faction, variant) {
     let pMetal = 0.08;
     const pHeight = 0.52 + rnd() * 0.3;
     if (kind < 0.05) {                 // bare replacement plate
+      // (part metal only: a full-metal plate mirrors the black sky and
+      // renders as a dark hole in the armour)
       col = bareMetal.map(c => c * 0.8 * tone);
-      pRough = 0.34 + rnd() * 0.1;
-      pMetal = 0.9;
+      pRough = 0.36 + rnd() * 0.1;
+      pMetal = 0.3;
     } else if (kind < 0.11) {          // muted livery plate
       col = accent.map((c, i) => c * 0.16 + base[i] * 0.84);
       pRough = 0.42;
@@ -433,7 +436,7 @@ function plateTextures(faction, variant) {
     const cuts = { x: [], y: [] };
     if (iw > px(90)) for (let c = 0, n = 1 + Math.floor(rnd() * 2.4); c < n; c++) cuts.x.push(ix + Math.round((0.2 + 0.6 * rnd()) * iw));
     if (ih > px(90)) for (let c = 0, n = 1 + Math.floor(rnd() * 2.4); c < n; c++) cuts.y.push(iy + Math.round((0.2 + 0.6 * rnd()) * ih));
-    actx.fillStyle = 'rgba(0,0,0,0.34)';
+    actx.fillStyle = 'rgba(0,0,0,0.24)';
     const lw = px(1.4);
     for (const cx of cuts.x) {
       actx.fillRect(cx, y0 + bev, lw, h - bev * 2);
@@ -451,10 +454,10 @@ function plateTextures(faction, variant) {
     const feat = rnd();
     const fx = ix + iw * (0.25 + 0.5 * rnd()), fy = iy + ih * (0.25 + 0.5 * rnd());
     if (iw > px(60) && ih > px(60)) {
-      if (feat < 0.16) {                // vent slats
+      if (feat < 0.09) {                // vent slats
         const n = 3 + Math.floor(rnd() * 4), pitch = px(7), sw = Math.min(iw * 0.4, px(46));
         for (let i = 0; i < n; i++) {
-          actx.fillStyle = 'rgba(0,0,0,0.6)';
+          actx.fillStyle = 'rgba(0,0,0,0.42)';
           actx.fillRect(fx - sw / 2, fy + (i - n / 2) * pitch, sw, px(3));
           actx.fillStyle = 'rgba(255,255,255,0.10)';
           actx.fillRect(fx - sw / 2, fy + (i - n / 2) * pitch + px(3), sw, px(1));
@@ -481,9 +484,9 @@ function plateTextures(faction, variant) {
         }
       } else if (feat < 0.4) {          // rectangular access panel, bolted
         const aw = Math.min(iw * 0.4, px(80)), ah = Math.min(ih * 0.4, px(56));
-        actx.fillStyle = 'rgba(0,0,0,0.5)';
+        actx.fillStyle = 'rgba(0,0,0,0.4)';
         actx.fillRect(fx - aw / 2, fy - ah / 2, aw, ah);
-        actx.fillStyle = rgb(col, 0.93);
+        actx.fillStyle = rgb(col, 0.95);
         actx.fillRect(fx - aw / 2 + px(2), fy - ah / 2 + px(2), aw - px(4), ah - px(4));
         fillRect(height, fx - aw / 2, fy - ah / 2, aw, ah, pHeight - 0.25);
         fillRect(height, fx - aw / 2 + px(2), fy - ah / 2 + px(2), aw - px(4), ah - px(4), pHeight + 0.06);
@@ -543,10 +546,10 @@ function plateTextures(faction, variant) {
           const rx = vert ? ex : ex + pos, ry = vert ? ey + pos : ey;
           const rw = vert ? t : r0, rh = vert ? r0 : t;
           if (isPaint) { actx.fillStyle = rgba(primer, 0.85); actx.fillRect(rx - 1, ry - 1, rw + 2, rh + 2); }
-          actx.fillStyle = rgba(bareMetal, isPaint ? 0.8 : 0.62);
+          actx.fillStyle = rgba(bareMetal, isPaint ? 0.85 : 0.75);
           actx.fillRect(rx, ry, rw, rh);
-          fillRect(metal, rx, ry, rw, rh, 0.92);
-          fillRect(rough, rx, ry, rw, rh, 0.3);
+          fillRect(metal, rx, ry, rw, rh, 0.5);
+          fillRect(rough, rx, ry, rw, rh, 0.32);
         }
         pos += run + px(4 + rnd() * 40);
       }
@@ -562,14 +565,14 @@ function plateTextures(faction, variant) {
         const r = (1.6 + rnd() * 3.6) * Math.max(0.7, S);
         chipFlake(actx, cx, cy, r, rnd, primer, 0.8);
         chipFlake(actx, cx, cy, r * 0.55, rnd, bareMetal, 0.8);
-        fillRect(metal, cx - r * 0.5, cy - r * 0.5, r, r, 0.9);
+        fillRect(metal, cx - r * 0.5, cy - r * 0.5, r, r, 0.5);
         fillRect(rough, cx - r * 0.5, cy - r * 0.5, r, r, 0.34);
       }
     }
   }
 
   // Dirt hugging the seams (soft, three widths), over every plate edge
-  for (const [lw, a] of [[px(22), 0.04], [px(13), 0.05], [px(7), 0.07]]) {
+  for (const [lw, a] of [[px(22), 0.03], [px(13), 0.04], [px(7), 0.05]]) {
     actx.strokeStyle = `rgba(0,0,0,${a})`;
     actx.lineWidth = lw;
     for (const p of plates) actx.strokeRect(p.x, p.y, p.w, p.h);
@@ -645,7 +648,7 @@ export function getHullTextures(faction, variant = 'hull') {
 
   const panels = isPaint
     ? subdividePanels(size, rnd, 64, 300)
-    : subdividePanels(size, rnd, isTrim ? 20 : 56, isTrim ? 72 : 260);
+    : subdividePanels(size, rnd, isTrim ? 34 : 56, isTrim ? 130 : 260);
   const grime = makeFbm(size, 4, 5, rnd, 0.6);
   const micro = makeFbm(size, 32, 3, rnd, 0.5);
 
@@ -670,7 +673,7 @@ export function getHullTextures(faction, variant = 'hull') {
   for (const p of panels) {
     // Gentle per-plate tone steps: strong ones read as a checkerboard at
     // mid range. Plates differ more in roughness (sheen) than in colour.
-    const tone = 1 + (rnd() - 0.5) * (isTrim ? 0.26 : isPaint ? 0.1 : 0.1);
+    const tone = 1 + (rnd() - 0.5) * (isTrim ? 0.16 : isPaint ? 0.1 : 0.1);
     const kind = isPaint ? 1 : rnd();
     let col = base.map(c => c * tone);
     let pRough = (isTrim ? 0.68 : isPaint ? 0.5 : 0.52) + (rnd() - 0.5) * (isTrim ? 0.2 : 0.14);
@@ -852,7 +855,7 @@ export function getHullTextures(faction, variant = 'hull') {
   }
 
   // Seam lines on top (dark), then grime + micro-noise modulation
-  actx.strokeStyle = isTrim ? 'rgba(0,0,0,0.75)' : 'rgba(0,0,0,0.6)';
+  actx.strokeStyle = isTrim ? 'rgba(0,0,0,0.5)' : 'rgba(0,0,0,0.6)';
   actx.lineWidth = 2;
   for (const p of panels) actx.strokeRect(p.x + 1, p.y + 1, p.w - 2, p.h - 2);
 

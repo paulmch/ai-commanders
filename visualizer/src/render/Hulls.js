@@ -66,7 +66,7 @@ const SHADOW_MATS = new Set(['hull', 'trim', 'paint', 'dark', 'barrel', 'hazard'
 /** Mount size `s` (scene units) per weapon kind, before fitScale. */
 export const WEAPON_SIZE = { coilgun: 0.62, heavy: 0.86, pd: 0.42 };
 /** Deck window height; spacing and count follow from it. */
-export const WINDOW_S = 0.05;
+export const WINDOW_S = 0.038;
 /** RCS thruster block size. */
 export const RCS_S = 0.15;
 /** Sensor mast height. */
@@ -109,9 +109,9 @@ function factionAccent(faction) {
 
 /**
  * Scales on the textures' metalness (1 = the maps as painted). The plate
- * maps paint armour as a dielectric coat (~0.08) with metallic worn edges,
- * chips and bare replacement plates, so the hull keeps its diffuse colour
- * in shadow and only the wear glints. Trim (bare structure) is part metal,
+ * maps paint armour as a dielectric coat (~0.08) with part-metal worn
+ * edges, chips and bare replacement plates, so the hull keeps its diffuse
+ * colour in shadow and only the wear glints. Trim (bare structure) is part metal,
  * not a mirror: fully metallic structure mostly reflects black sky, so
  * recesses and joints would read as empty space against the starfield.
  *
@@ -131,7 +131,7 @@ export function buildShipMaterials(faction) {
     const paintT = getHullTextures(faction, 'paint');
     _sharedMats.set(key, {
       hull: new THREE.MeshStandardMaterial({
-        map: hullT.map, normalMap: hullT.normalMap, normalScale: new THREE.Vector2(0.9, 0.9),
+        map: hullT.map, normalMap: hullT.normalMap, normalScale: new THREE.Vector2(1.35, 1.35),
         roughnessMap: hullT.ormMap, metalnessMap: hullT.ormMap,
         roughness: 1, metalness: HULL_METALNESS, envMapIntensity: 1.0, vertexColors: true
       }),
@@ -144,7 +144,7 @@ export function buildShipMaterials(faction) {
       // Floodlit (a faint emissive copy of the albedo) so the livery still
       // names the side on a shadowed or backlit hull.
       paint: new THREE.MeshStandardMaterial({
-        map: paintT.map, normalMap: paintT.normalMap, normalScale: new THREE.Vector2(0.8, 0.8),
+        map: paintT.map, normalMap: paintT.normalMap, normalScale: new THREE.Vector2(1.2, 1.2),
         roughnessMap: paintT.ormMap, metalnessMap: paintT.ormMap,
         roughness: 1, metalness: 1, envMapIntensity: 0.85, vertexColors: true,
         emissive: 0xffffff, emissiveMap: paintT.map, emissiveIntensity: LIVERY_FLOOD

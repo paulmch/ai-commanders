@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import * as THREE from 'three';
 import {
-  assembleHull, HULL_CLASSES, HULL_MATERIAL_KEYS, WEAPON_SIZE, RAD_AREA, WINDOW_S, fitScale, HullKit
+  assembleHull, HULL_CLASSES, HULL_MATERIAL_KEYS, WEAPON_SIZE, RAD_AREA, WINDOW_S, fitScale, HullKit,
+  chamferBoxGeometry
 } from '../src/render/Hulls.js';
 import { SceneManager } from '../src/SceneManager.js';
 import { Projectiles } from '../src/render/Projectiles.js';
@@ -480,4 +481,105 @@ test('HUD silhouettes: far-side mounts draw as ghosts, PD mounts as dots', () =>
     }
   }
   assert.equal(hardpointLook({ kind: 'battery' }, 4, 4), 'rx="1"');
+});
+
+// ---------------------------------------------------------------------------
+// Pass 5: armour shape language, vertex tones, engine bells
+// ---------------------------------------------------------------------------
+
+test('chamfered armour box: exact bounds, 44 outward flat facets, 12 UV draws like the old box', () => {
+  let draws = 0;
+  const g = chamferBoxGeometry(2, 1, 3, 0.1, () => { draws++; return 0.25; }, 1);
+  assert.equal(draws, 12, 'layout RNG stream: 12 draws per box');
+  g.computeBoundingBox();
+  assert.deepEqual(g.boundingBox.min.toArray().map(v => +v.toFixed(6)), [-1, -0.5, -1.5]);
+  assert.deepEqual(g.boundingBox.max.toArray().map(v => +v.toFixed(6)), [1, 0.5, 1.5]);
+  const pos = g.attributes.position;
+  assert.equal(pos.count, 44 * 3);
+  assert.ok(g.attributes.uv && g.attributes.normal && !g.index, 'non-indexed with uv + normals');
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), n = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i += 3) {
+    a.fromBufferAttribute(pos, i); b.fromBufferAttribute(pos, i + 1); c.fromBufferAttribute(pos, i + 2);
+    n.crossVectors(b.clone().sub(a), c.clone().sub(a));
+    assert.ok(n.length() > 1e-9, `degenerate facet ${i / 3}`);
+    assert.ok(n.dot(a.add(b).add(c)) > 0, `facet ${i / 3} faces inward`);
+  }
+  assert.equal(chamferBoxGeometry(1, 1, 1, 0).attributes.position.count, 12 * 3, 'no chamfer: a plain box');
+});
+
+test('every part carries vertex colours (parts always merge) and the stern is sooted', () => {
+  for (const type of HULL_CLASSES) {
+    const k = kitFor(type);
+    let fore = 0, nf = 0, aft = 0, na = 0;
+    for (const p of [...k.parts, ...k.radiators.flatMap(r => r.kit.parts), ...k.doors.flatMap(d => d.kit.parts)]) {
+      const col = p.geom.attributes.color, pos = p.geom.attributes.position;
+      assert.ok(col && col.itemSize === 3 && col.count === pos.count, `${type}: ${p.mat} part without colours`);
+      for (let i = 0; i < col.count; i++) {
+        const v = col.getX(i) + col.getY(i) + col.getZ(i);
+        assert.ok(Number.isFinite(v) && v > 0 && v < 7.5, `${type}: colour ${v}`);
+        if (p.mat !== 'hull') continue;
+        if (pos.getZ(i) > 0) { fore += v; nf++; } else if (pos.getZ(i) < -0.44 * k.L) { aft += v; na++; }
+      }
+    }
+    assert.ok(nf && na, `${type}: plating fore and aft`);
+    assert.ok(aft / na < 0.8 * fore / nf, `${type}: drive soot (${(aft / na).toFixed(2)} vs ${(fore / nf).toFixed(2)})`);
+  }
+});
+
+test('engine bells: a lathed bell on every plume seat, all liners one mesh, throat hot end forward', () => {
+  for (const type of HULL_CLASSES) {
+    const k = kitFor(type);
+    const cfg = SceneManager.prototype.getEngineConfig.call(null, type, sizeOf(type));
+    assert.equal(k.bellHeat.length, 1, `${type}: liners merged into one draw`);
+    const liner = k.bellHeat[0].geometry;
+    liner.computeBoundingBox();
+    // the plume is seated at -0.53 L (SceneManager): inside the bell, ahead of its mouth
+    const mouth = liner.boundingBox.min.z, throat = liner.boundingBox.max.z;
+    assert.ok(mouth < -0.53 * k.L && mouth > -0.56 * k.L, `${type}: bell mouth at ${(mouth / k.L).toFixed(3)} L`);
+    assert.ok(throat > -0.5 * k.L && throat < -0.47 * k.L, `${type}: throat at ${(throat / k.L).toFixed(3)} L`);
+    const pos = liner.attributes.position, uv = liner.attributes.uv;
+    for (let i = 0; i < pos.count; i++) {
+      if (uv.getY(i) < 0.02) assert.ok(pos.getZ(i) > throat - 0.005 * k.L, `${type}: v=0 (white-hot) must be the throat`);
+      if (uv.getY(i) > 0.98) assert.ok(pos.getZ(i) < mouth + 0.002 * k.L, `${type}: v=1 (dull red) must be the lip`);
+    }
+    for (const e of cfg.positions) {
+      const bell = k.parts.find(p => p.mat === 'barrel' && Math.hypot(p.center.x - e.x, p.center.y - e.y) < 1e-3 * k.W
+        && Math.abs(p.geom.boundingBox.min.z - mouth) < 0.004 * k.L && p.geom.boundingBox.max.z > throat - 0.004 * k.L);
+      assert.ok(bell, `${type}: no bell on the plume seat at ${e.x.toFixed(2)}, ${e.y.toFixed(2)}`);
+    }
+  }
+});
+
+test('armour belts are laid as separate plates with open joints, stepped across the belt', () => {
+  const k = new HullKit({ length: 8, width: 1.76 }, 3);
+  k.armorBelt(0.1, 0.6, 2.4, 0.5, 0, 0, { face: '+x' });
+  const plates = k.parts.filter(p => p.mat === 'hull').sort((p, q) => p.center.z - q.center.z);
+  assert.ok(plates.length >= 3, `${plates.length} plates`);
+  for (let i = 1; i < plates.length; i++) {
+    const joint = plates[i].geom.boundingBox.min.z - plates[i - 1].geom.boundingBox.max.z;
+    assert.ok(joint > 0.005 && joint < 0.08, `joint ${joint.toFixed(3)}`);
+  }
+  assert.ok(plates[0].geom.boundingBox.min.z >= -1.2 - 1e-6 && plates.at(-1).geom.boundingBox.max.z <= 1.2 + 1e-6);
+  const tall = plates.map(p => p.geom.boundingBox.max.y - p.geom.boundingBox.min.y);
+  assert.ok(Math.max(...tall) > Math.min(...tall) * 1.08, 'alternate plates are cut shorter');
+  // the outer face stays one plane: hull codes sit on it
+  for (const p of plates) assert.ok(Math.abs(p.geom.boundingBox.max.x - 0.55) < 1e-6);
+});
+
+test('hull triangle budget: flat chamfers keep the static hull lighter than the rounded kit was', () => {
+  const tris = (type) => kitFor(type).parts.reduce((s, p) => s + p.geom.attributes.position.count / 3, 0);
+  // pass-4 kit (rounded boxes): corvette ~10.1k, destroyer ~14.2k, dreadnought ~29.2k
+  assert.ok(tris('corvette') < 9000, `corvette ${tris('corvette')}`);
+  assert.ok(tris('destroyer') < 12000, `destroyer ${tris('destroyer')}`);
+  assert.ok(tris('dreadnought') < 25000, `dreadnought ${tris('dreadnought')}`);
+});
+
+test('class identity: the corvette wears a livery keel blade below its hull and a bow sensor lance', () => {
+  const k = kitFor('corvette');
+  const hullMinY = Math.min(...k.parts.filter(p => p.mat === 'hull').map(p => p.geom.boundingBox.min.y));
+  const blade = k.parts.find(p => p.mat === 'paint' && p.geom.boundingBox.min.y < hullMinY - 0.2 * k.W);
+  assert.ok(blade, 'keel blade');
+  assert.ok(blade.geom.boundingBox.max.z < 0 && blade.geom.boundingBox.min.z > -0.4 * k.L, 'blade sits aft, clear of the bells');
+  assert.ok(k.parts.some(p => p.mat === 'barrel' && p.geom.boundingBox.max.z > 0.49 * k.L
+    && p.geom.boundingBox.max.z - p.geom.boundingBox.min.z > 0.3 * k.L), 'sensor lance');
 });
