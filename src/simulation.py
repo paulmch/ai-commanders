@@ -2670,6 +2670,14 @@ class CombatSimulation:
         for ship in self.ships.values():
             if not ship.is_destroyed:
                 self._update_ship(ship, dt)
+            else:
+                # A wreck keeps coasting on its last velocity (no thrust, no
+                # control). It used to freeze in space while its recorded
+                # velocity stayed at the last value. Everything that fights
+                # (targeting, PD, collisions, blasts, victory) skips
+                # is_destroyed ships, so only its position moves.
+                ks = ship.kinematic_state
+                ks.position = ks.position + ks.velocity * dt
 
         # Update projectiles and check hits
         self._update_projectiles(dt)
@@ -3009,6 +3017,9 @@ class CombatSimulation:
         ship.dying_time_remaining -= dt
         if ship.dying_time_remaining <= 0.0:
             self._detonate_reactor(ship)
+            # The wreck still coasts through this tick (see step()).
+            ks = ship.kinematic_state
+            ks.position = ks.position + ks.velocity * dt
             return
 
         # Torch flicker

@@ -275,12 +275,10 @@ def test_rcs_turn_cannot_reverse_a_thrust_vectored_spin_in_one_tick():
     assert signed_rate >= rate_before - 2.0 * rcs_alpha
 
 
-@pytest.mark.xfail(strict=False, reason=(
-    "A destroyed ship is never stepped again (CombatSimulation.step skips "
-    "_update_ship for is_destroyed), so its wreck freezes in space while its "
-    "recorded velocity stays at the last value: in seed 1 budget 150 beta_5 "
-    "detonated at t=132 moving 1.25 km/s and its trace position never "
-    "changes again. Death path - owned by the damage lane."))
+# A destroyed ship used to freeze in space (step() skipped it) while its
+# recorded velocity stayed at the last value: seed 1 budget 150 beta_5
+# detonated at t=132 moving 1.25 km/s and its trace never moved again. The
+# wreck now coasts; nothing that fights may treat it as alive.
 def test_destroyed_wreck_keeps_drifting():
     from src.physics import Vector3D
     sim, ship = _battleship_sim()
@@ -289,6 +287,42 @@ def test_destroyed_wreck_keeps_drifting():
     x0 = ship.position.x
     sim.step()
     assert ship.position.x == pytest.approx(x0 + 1000.0, abs=1.0)
+    sim.step()
+    assert ship.position.x == pytest.approx(x0 + 2000.0, abs=1.0)
+
+
+def test_hulk_keeps_moving_on_its_detonation_tick():
+    from src.physics import Vector3D
+    sim, ship = _battleship_sim()
+    ship.kinematic_state.velocity = Vector3D(1000.0, 0, 0)
+    sim._start_death_spiral(ship, None)
+    ship.dying_time_remaining = 0.5
+    ship.dying_torch_on = False
+    x0 = ship.position.x
+    sim.step()
+    assert ship.is_destroyed
+    assert ship.position.x == pytest.approx(x0 + 1000.0, abs=1.0)
+
+
+def test_drifting_wreck_stays_out_of_the_fight():
+    from src.physics import Vector3D
+    from src.simulation import SimulationEventType
+    with open("data/fleet_ships.json") as f:
+        data = json.load(f)
+    sim = _torpedo_sim(data)
+    wreck = sim.get_ship("tgt")
+    wreck.is_destroyed = True
+    wreck.kinematic_state.velocity = Vector3D(-2000.0, 0, 0)
+    # A ballistic round on a collision course with the drifting wreck.
+    flight = _inject_torpedo(sim, Vector3D(-20_000.0, 0, 0), Vector3D(2000.0, 0, 0), disabled=True)
+    for _ in range(8):
+        sim.step()
+    assert wreck.position.x < -10_000.0          # it moved through the round's path
+    assert flight in sim.torpedoes                # ...and was not struck
+    assert sim.get_enemy_ships("atk") == []
+    assert not any(e.event_type in (SimulationEventType.TORPEDO_IMPACT,
+                                    SimulationEventType.SHIP_DESTROYED)
+                   for e in sim.events)
 
 
 # ---------------------------------------------------------------------------
@@ -337,3 +371,4 @@ def test_left_battle_torpedo_does_not_enter_captain_shot_history(fleet):
         data={"projectile_id": "torp_x", "type": "torpedo", "reason": "left_battle",
               "closest_approach_km": 9000.0, "hit_probability": 0.0}))
     assert len(captain.shot_history) == before
+
