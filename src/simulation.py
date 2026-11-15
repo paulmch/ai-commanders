@@ -1554,6 +1554,9 @@ class CombatSimulation:
         # battles non-reproducible (marginal rolls flipped run to run).
         self._torpedo_seq = 0
         self._projectile_seq = 0
+        # projectile_id -> firing weapon slot, so a round's impact / miss
+        # events name the gun that fired it (see _log_event).
+        self._projectile_slots: dict[str, str] = {}
         self.combat_resolver = CombatResolver(rng=self.rng)
         self.damage_propagator = DamagePropagator()
 
@@ -2552,6 +2555,7 @@ class CombatSimulation:
             event_data['fc'] = fire_control
         if weapon_slot is not None:
             event_data['weapon_slot'] = weapon_slot
+            self._projectile_slots[proj_id] = weapon_slot
 
         self._log_event(SimulationEventType.PROJECTILE_LAUNCHED, shooter.ship_id, target.ship_id, event_data)
 
@@ -7478,6 +7482,16 @@ class CombatSimulation:
         data: Optional[dict] = None
     ) -> SimulationEvent:
         """Log a simulation event and notify callbacks."""
+        # A gun round's impact / miss names the slot that fired it. Those
+        # events carried no slot (or 'unknown'), so every recorded hit and
+        # miss, every captain's shot history ("You fired unknown") and every
+        # DAMAGE TAKEN line lost the weapon.
+        if (event_type in (SimulationEventType.PROJECTILE_IMPACT,
+                           SimulationEventType.PROJECTILE_MISS)
+                and data and data.get('weapon_slot') in (None, 'unknown')):
+            slot = self._projectile_slots.get(data.get('projectile_id'))
+            if slot is not None:
+                data = {**data, 'weapon_slot': slot}
         event = SimulationEvent(
             event_type=event_type,
             timestamp=self.current_time,

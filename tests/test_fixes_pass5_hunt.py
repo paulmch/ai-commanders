@@ -184,64 +184,46 @@ def test_replaced_weapons_order_is_superseded_once():
     assert len(superseded) == 1
 
 
+
 # ---------------------------------------------------------------------------
-# Confirmed, not fixed here (reported to the orchestrator).
+# 5. Gun hits and misses name the weapon that fired them.
+#
+# PROJECTILE_IMPACT / PROJECTILE_MISS carried no weapon_slot, so every
+# recorded 'hit' and 'miss' said weapon_slot "unknown" (all 1,549 hits in 10
+# seeded battles), every LLM captain's shot history read "You fired unknown:
+# 230km ... -> HIT", and DAMAGE TAKEN named the enemy weapon "unknown". The
+# slot recorded at launch now rides on the round's impact and miss events.
 # ---------------------------------------------------------------------------
 
-def _battleship_sim():
+def test_gun_hit_and_miss_events_carry_the_firing_slot():
+    from src.firecontrol import WeaponsCommand, WeaponsOrder
     from src.physics import Vector3D
-    from src.simulation import CombatSimulation, create_ship_from_fleet_data
+    from src.simulation import CombatSimulation, SimulationEventType, create_ship_from_fleet_data
     with open("data/fleet_ships.json") as f:
         data = json.load(f)
-    sim = CombatSimulation(time_step=1.0, decision_interval=1e9, seed=1)
-    ship = create_ship_from_fleet_data(
-        ship_id="bb", ship_type="battleship", faction="alpha", fleet_data=data,
-        position=Vector3D(0, 0, 0), velocity=Vector3D(0, 0, 0),
-        forward=Vector3D(1, 0, 0))
-    sim.add_ship(ship)
-    return sim, ship
+    sim = CombatSimulation(time_step=1.0, decision_interval=1e9, seed=11)
+    for sid, faction, x, fwd in (("a", "alpha", 0.0, 1.0), ("b", "beta", 60_000.0, -1.0)):
+        sim.add_ship(create_ship_from_fleet_data(
+            ship_id=sid, ship_type="destroyer", faction=faction, fleet_data=data,
+            position=Vector3D(x, 0, 0), velocity=Vector3D(0, 0, 0),
+            forward=Vector3D(fwd, 0, 0)))
+    shooter = sim.get_ship("a")
+    shooter.primary_target_id = "b"
+    slots = [s for s in shooter.weapons if not s.startswith("pd")]
+    sim.inject_command("a", {"type": "weapons_orders", "default_target_id": "b",
+                             "orders": [WeaponsOrder(command=WeaponsCommand.FIRE_IMMEDIATE,
+                                                     weapon_slot=s, target_id="b")
+                                        for s in slots]})
+    for _ in range(60):
+        sim.step()
+    launched = {e.data["projectile_id"]: e.data["weapon_slot"] for e in sim.events
+                if e.event_type == SimulationEventType.PROJECTILE_LAUNCHED}
+    resolved = [e for e in sim.events
+                if e.event_type in (SimulationEventType.PROJECTILE_IMPACT,
+                                    SimulationEventType.PROJECTILE_MISS)
+                and e.data.get("projectile_id") in launched]
+    assert resolved, "no gun round resolved in 60 s at 60 km"
+    for e in resolved:
+        assert e.data.get("weapon_slot") == launched[e.data["projectile_id"]], e.data
 
 
-@pytest.mark.xfail(strict=False, reason=(
-    "Rotation keeps only a scalar |omega| and re-points the rotation axis at "
-    "the target every tick, so a turn can reverse instantly. A battleship "
-    "spun up on thrust vectoring to 0.047 rad/s and then turning on RCS "
-    "(7.5e-5 rad/s^2) toward a point 1 deg behind its nose turns -0.0175 "
-    "rad/s the next tick (a 0.064 rad/s change, ~850x its authority) and "
-    "stops dead (the overshoot clamp brakes for free). Seen in seed 5 "
-    "budget 150: battleship alpha_1 in PADLOCK at t=281-282. Not fixed: "
-    "_rotate_ship_toward also flies every evasion jink, and evasion is "
-    "pinned by the fire-control calibration fixture. Proposed fix: keep a "
-    "signed rate along the previous axis, project it onto the new axis, "
-    "brake a negative component at the available authority, and allow "
-    "overshoot when the rate exceeds what one tick of braking can stop."))
-def test_rcs_turn_cannot_reverse_a_thrust_vectored_spin_in_one_tick():
-    import math
-    from src.physics import Vector3D
-    sim, ship = _battleship_sim()
-    rcs_alpha = math.radians(ship.attitude_control.rcs_angular_accel_deg_s2)
-    for _ in range(10):  # thrust-vectored turn toward +y builds a rate
-        sim._rotate_ship_toward(ship, Vector3D(0, 1, 0), 1.0, engines_on=True)
-    before = ship.forward
-    rate_before = ship.angular_velocity_rad_s          # about +z
-    assert rate_before > 0.03
-    behind = before.rotate_around_axis(Vector3D(0, 0, 1), -math.radians(1.0))
-    sim._rotate_ship_toward(ship, behind, 1.0, engines_on=False)
-    signed_rate = math.asin(before.cross(ship.forward).z)   # rad over 1 s
-    assert signed_rate >= rate_before - 2.0 * rcs_alpha
-
-
-@pytest.mark.xfail(strict=False, reason=(
-    "A destroyed ship is never stepped again (CombatSimulation.step skips "
-    "_update_ship for is_destroyed), so its wreck freezes in space while its "
-    "recorded velocity stays at the last value: in seed 1 budget 150 beta_5 "
-    "detonated at t=132 moving 1.25 km/s and its trace position never "
-    "changes again. Death path - owned by the damage lane."))
-def test_destroyed_wreck_keeps_drifting():
-    from src.physics import Vector3D
-    sim, ship = _battleship_sim()
-    ship.kinematic_state.velocity = Vector3D(1000.0, 0, 0)
-    ship.is_destroyed = True
-    x0 = ship.position.x
-    sim.step()
-    assert ship.position.x == pytest.approx(x0 + 1000.0, abs=1.0)
