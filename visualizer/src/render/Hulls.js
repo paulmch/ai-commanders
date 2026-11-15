@@ -1040,6 +1040,33 @@ export class HullKit {
     }
   }
 
+  /**
+   * Docking port on a flat hull face ('+x' | '-x' | '+y' | '-y'): hazard
+   * apron, clamp ring, collar and hatch with two guide lamps. One physical
+   * size on every hull (a shuttle-sized door: the scale of the plating
+   * around it is the point).
+   */
+  dockingPort(x, y, z, face = '+x') {
+    const d = 0.26 * this.k;
+    const ang = { '+y': 0, '-y': Math.PI, '+x': -Math.PI / 2, '-x': Math.PI / 2 }[face] ?? 0;
+    const P = this.xf(x, y, z, 0, 0, ang);         // local +Y is outward
+    const ring = (mat, r, h, yy, sides = 16) =>
+      this.drum(mat, r, h, 0, { sides, parent: this.xf(0, yy, 0, Math.PI / 2, 0, 0, P) });
+    this.box('hazard', d * 1.5, d * 0.03, d * 1.5, 0, d * 0.012, 0, { bevel: 0, parent: P });
+    ring('trim', d * 0.62, d * 0.1, d * 0.05);
+    ring('barrel', d * 0.5, d * 0.16, d * 0.09);
+    ring('dark', d * 0.37, d * 0.03, d * 0.165, 12);
+    for (let i = 0; i < 4; i++) {
+      const a = i / 4 * Math.PI * 2 + Math.PI / 4;
+      this.box('trim', d * 0.12, d * 0.1, d * 0.2, Math.cos(a) * d * 0.6, d * 0.07, Math.sin(a) * d * 0.6,
+        { bevel: 0.3, seg: 1, rot: [0, -a, 0], parent: P });
+    }
+    for (const sz of [-1, 1]) {
+      const p = new THREE.Vector3(0, d * 0.06, sz * d * 0.9).applyMatrix4(P);
+      this.lamp(p.x, p.y, p.z, { color: 0x7dffb0, size: this.lampS * 0.7, level: 1.1 });
+    }
+  }
+
   /** A nav lamp, drawn by HullLights. color 'faction' = the livery accent. */
   lamp(x, y, z, { color = 0xffffff, kind = 'steady', size = null, period = 1.6, phase = null, level = 1 } = {}) {
     this.lamps.push({
@@ -2191,6 +2218,7 @@ function hullBattleship(k) {
   k.pd(W * 0.52, 0, L * 0.12, -Math.PI / 2);
   k.spineStripe(top, -L * 0.285, -L * 0.08, W * 0.3);
   for (const sx of [-1, 1]) k.catwalk(sx * W * 0.3, top, L * 0.0, L * 0.2, { side: sx });
+  k.dockingPort(-W * 0.24, -top, L * 0.13, '-y');
   k.livery(L * 0.08, L * 0.05, (zc, t) => k.box('paint', W * 0.5, 0.012 * k.k, t, 0, top + 0.006 * k.k, zc, { bevel: 0.3, seg: 1 }));
   k.greebles('-y', -top, [-W * 0.34, -W * 0.12], [-L * 0.3, -L * 0.1], 6, W * 0.03, W * 0.06);
   k.greebles('-y', -top, [W * 0.12, W * 0.34], [-L * 0.3, -L * 0.27], 3, W * 0.03, W * 0.06);
@@ -2295,6 +2323,8 @@ function hullDreadnought(k, opts = {}) {
   }
   k.mast(k.mastH * 1.4, W * 0.1, W * 0.54, -L * 0.26, 0);
   for (const sx of [-1, 1]) {
+    k.dockingPort(sx * W * 0.54, 0, L * 0.12, sx > 0 ? '+x' : '-x');
+    k.dockingPort(sx * W * 0.54, 0, -L * 0.29, sx > 0 ? '+x' : '-x');
     k.catwalk(sx * W * 0.185, W * 0.54, L * 0.02, L * 0.19, { side: sx });
     k.catwalk(sx * W * 0.185, W * 0.54, -L * 0.34, -L * 0.215, { side: sx });
   }

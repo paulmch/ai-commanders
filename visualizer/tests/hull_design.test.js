@@ -713,3 +713,21 @@ test('catwalks: grating, two rails and posts at one physical size, inside their 
   const hOf = (kit) => Math.max(...kit.parts.map(p => p.geom.boundingBox.max.y)) - Math.min(...kit.parts.map(p => p.geom.boundingBox.min.y));
   assert.ok(Math.abs(hOf(k) / k.k - hOf(small) / small.k - 2 / k.k) < 1e-6 || Math.abs((hOf(k) - 2 + 2) / k.k - hOf(small) / small.k) < 1, 'rail height follows fitScale only');
 });
+
+test('docking ports: one collar size on every hull, standing on its face with two guide lamps', () => {
+  const span = (L) => {
+    const k = new HullKit({ length: L, width: L * 0.25 }, 4);
+    k.dockingPort(1, 0, 0, '+x');
+    assert.equal(k.lamps.length, 2);
+    assert.ok(k.lamps.every(l => l.pos.x > 1), 'lamps proud of the face');
+    const collar = k.parts.filter(p => p.mat === 'barrel');
+    assert.equal(collar.length, 1);
+    for (const p of k.parts) assert.ok(p.geom.boundingBox.min.x > 1 - 0.02 * k.k && p.geom.boundingBox.max.x < 1 + 0.2 * k.k, `${p.mat} off the face`);
+    const b = collar[0].geom.boundingBox;
+    return (b.max.z - b.min.z) / k.k;
+  };
+  assert.ok(Math.abs(span(8) - span(20.8)) < 1e-6, 'collar follows fitScale only');
+  for (const type of ['dreadnought', 'battleship']) {
+    assert.ok(kitFor(type).parts.some(p => p.mat === 'hazard'), `${type}: docking port`);
+  }
+});
