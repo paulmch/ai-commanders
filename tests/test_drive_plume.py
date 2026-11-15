@@ -546,9 +546,20 @@ def test_tactical_captain_eases_its_burn_and_legacy_does_not():
     from src.llm import heuristic_tactics as T
     from src.llm.heuristic_captain import DOCTRINE_LEGACY, DOCTRINE_TACTICAL
     tactical = _decide(DOCTRINE_TACTICAL)
-    assert tactical is not None and 0.0 < tactical.throttle < 1.0
+    assert tactical is not None and tactical.throttle > 0.0
     full = dp.plume_heat_rate_gj_s(FULL, 30.0, 0.0)
-    assert tactical.throttle * full <= T.PLUME_SAFE_WASH_GJ_PER_S + 0.02
+    if tactical.maneuver_type == ManeuverType.HEADING:
+        # Side-slipped (heuristic_tactics.plume_clear_heading): full burn on a
+        # heading whose exhaust line clears the friendly astern.
+        import math
+        h = tactical.heading_direction
+        n = math.sqrt(h["x"] ** 2 + h["y"] ** 2 + h["z"] ** 2)
+        assert h["x"] / n >= math.cos(math.radians(46))            # still toward the enemy
+        off_deg = math.degrees(math.acos(max(-1.0, min(1.0, h["x"] / n))))
+        assert off_deg > dp.PLUME_AVOID_HALF_ANGLE_DEG              # jet off the friendly
+    else:
+        assert tactical.throttle < 1.0
+        assert tactical.throttle * full <= T.PLUME_SAFE_WASH_GJ_PER_S + 0.02
     assert _decide(DOCTRINE_TACTICAL, gap_km=dp.PLUME_AVOID_RANGE_KM + 20).throttle == 1.0
     assert _decide(DOCTRINE_LEGACY).throttle == 1.0             # the pass-4 captain, bit for bit
 

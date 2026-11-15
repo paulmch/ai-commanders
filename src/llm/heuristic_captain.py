@@ -31,6 +31,7 @@ Two doctrines:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 from .captain import LLMCaptain, LLMCaptainConfig
@@ -318,8 +319,24 @@ class HeuristicCaptain(LLMCaptain):
             args["throttle"] = self._heat_throttle_cap(ship, heat, args["throttle"], threat)
             # ...and do not cook a friendly astern with the torch (src/drive_plume.py).
             aim = args.get("direction") if args.get("maneuver_type") == "HEADING" else None
+            ordered = args["throttle"]
             args["throttle"] = tactics.plume_safe_throttle(
                 simulation, ship, args["throttle"], threat, aim)
+            burn = None
+            if args["throttle"] < tactics.PLUME_SLIP_TRIGGER_SHARE * ordered:
+                # A friendly sits in the jet: side-slip the burn instead of idling.
+                if aim is not None:
+                    burn = SimpleNamespace(**aim)
+                elif args.get("maneuver_type") == "INTERCEPT" and args.get("target_id"):
+                    ref = simulation.get_ship(args["target_id"])
+                    burn = (ref.position - ship.position) if ref is not None else None
+            if burn is not None:
+                slipped, t = tactics.plume_clear_heading(simulation, ship, burn, ordered, threat)
+                if t > args["throttle"]:
+                    args = {"maneuver_type": "HEADING", "throttle": t,
+                            "direction": {"x": round(slipped.x, 4), "y": round(slipped.y, 4),
+                                          "z": round(slipped.z, 4)},
+                            **({"evade": args["evade"]} if args.get("evade") else {})}
             if args.get("maneuver_type") == "HEADING":
                 args.pop("maneuver_type")
                 calls.append(("set_heading", args))

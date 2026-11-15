@@ -286,6 +286,62 @@ def plume_safe_throttle(simulation: Any, ship: Any, throttle: float, threat: boo
     return round(min(throttle, cap), 2)
 
 
+# When a friendly in the jet would make plume_safe_throttle idle (or nearly
+# idle) a burn, the burn is side-slipped instead: the first heading up to
+# PLUME_SLIP_MAX_DEG off the wanted one whose exhaust clears every friendly
+# at PLUME_SLIP_MIN_SHARE of the ordered throttle or better. Round 3's grid
+# had lead cruisers ordered INTERCEPT at throttle 0 for a whole checkpoint,
+# and withdrawals capped to 0, because a follower sat astern.
+PLUME_SLIP_ANGLES_DEG = (15.0, 30.0, 45.0)
+PLUME_SLIP_MIN_SHARE = 0.9
+PLUME_SLIP_TRIGGER_SHARE = 0.5
+
+
+def plume_clear_heading(simulation: Any, ship: Any, direction: Any, throttle: float,
+                        threat: bool = False) -> Tuple[Any, float]:
+    """(direction, throttle) for a burn along ``direction`` that does not
+    cook a friendly astern: the direction itself if the plume cap leaves it
+    at least PLUME_SLIP_TRIGGER_SHARE of ``throttle``, else the first
+    side-slipped heading (PLUME_SLIP_ANGLES_DEG, fixed order of sides) that
+    keeps PLUME_SLIP_MIN_SHARE, else the direction at its capped throttle."""
+    from ..physics import Vector3D
+    d = Vector3D(direction.x, direction.y, direction.z)
+    if d.magnitude <= 1e-9 or throttle <= 0.0:
+        return d, throttle
+    d = d.normalized()
+
+    from .. import drive_plume as plume
+    horizon_s = float(getattr(simulation, "decision_interval", 30.0) or 30.0)
+
+    def cap(v) -> float:
+        # Along the ordered line only: a HEADING order turns first and burns
+        # once the nose is on it (the present nose is what we leave).
+        if threat:
+            return throttle
+        km = plume.exhaust_clearance_km(simulation, ship, v, horizon_s)
+        if km is None:
+            return throttle
+        full = plume.plume_heat_rate_gj_s(plume.emitter_jet_power_w(ship, 1.0), km, 0.0)
+        if full <= PLUME_SAFE_WASH_GJ_PER_S:
+            return throttle
+        c = PLUME_SAFE_WASH_GJ_PER_S / full
+        return 0.0 if c < PLUME_MIN_THROTTLE else round(min(throttle, c), 2)
+    base = plume_safe_throttle(simulation, ship, throttle, threat, {"x": d.x, "y": d.y, "z": d.z})
+    if base >= PLUME_SLIP_TRIGGER_SHARE * throttle:
+        return d, base
+    ref = Vector3D(0.0, 0.0, 1.0) if abs(d.z) < 0.9 else Vector3D(0.0, 1.0, 0.0)
+    u = (ref - d * ref.dot(d)).normalized()
+    w = Vector3D(d.y * u.z - d.z * u.y, d.z * u.x - d.x * u.z, d.x * u.y - d.y * u.x)
+    for angle in PLUME_SLIP_ANGLES_DEG:
+        a = math.radians(angle)
+        for side in (w, w * -1.0, u, u * -1.0):
+            v = (d * math.cos(a) + side * math.sin(a)).normalized()
+            t = cap(v)
+            if t >= PLUME_SLIP_MIN_SHARE * throttle:
+                return v, t
+    return d, base
+
+
 def blast_threat(simulation: Any, ship: Any) -> Optional[Any]:
     """The nearest dying hulk (either side) whose reactor blast would reach
     this ship with margin (BLAST_AVOID_FACTOR x its blast radius), or None.
