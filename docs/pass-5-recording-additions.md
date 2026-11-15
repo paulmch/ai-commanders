@@ -322,3 +322,20 @@ envelope is shortened to the fields that matter.
 ```json
 {"timestamp": 130.0, "event_type": "magazine_cookoff", "ship_id": "beta_2", "data": {"module_name": "Main Magazine", "torpedoes_lost": 24, "torpedoes_remaining": 24, "gun_rounds_lost": 0, "secondary_gj": 6.0, "modules_damaged": ["Forward Hull Section", "Primary Sensor Array", "Targeting Sensors", "Bridge Armored Bulkhead Port", "Bridge Armored Bulkhead Starboard"], "modules_destroyed": ["Forward Hull Section", "Primary Sensor Array"], "source_ship_id": "alpha_3", "target_id": null}}
 ```
+
+## Hunt lane
+
+### `torpedo_miss.reason`
+
+- **Event:** `torpedo_miss` (existing event type).
+- **New field:** `reason`, a string, present only when set. Its one value so far is
+  `"left_battle"`.
+- **When it is emitted:** the engine culls a torpedo once it is more than 10,000 km from
+  its target or has flown for more than an hour. Before pass 5 the cull removed the round
+  without any event. A long battle could lose a tenth of its torpedoes this way: in seed
+  8, budget 200, 900 s, 9 of 78 rounds disappeared, all of them seeker-killed and coasting
+  away. A culled round now records a `torpedo_miss` with `reason: "left_battle"`. Its
+  `closest_approach_km` (km) is the closest the round came to its target, and its
+  `hit_probability` is 0.
+- **Consumers:** `launched = impact + miss + intercepted + in_flight_at_end` now balances
+  per side. Viewers that ignore the field are unaffected.

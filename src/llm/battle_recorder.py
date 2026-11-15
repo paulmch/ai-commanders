@@ -751,18 +751,26 @@ class BattleRecorder:
         torpedo_id: str,
         closest_approach_km: float = 0.0,
         hit_probability: float = 0.0,
+        reason: Optional[str] = None,
     ) -> None:
-        """Record a torpedo running past its target without connecting."""
+        """Record a torpedo running past its target without connecting.
+
+        reason 'left_battle': the round was culled at the battle edge (10,000
+        km from its target or an hour of flight) instead of passing it.
+        """
+        data = {
+            "torpedo_id": torpedo_id,
+            "target_id": target_id,
+            "closest_approach_km": closest_approach_km,
+            "hit_probability": hit_probability,
+        }
+        if reason:
+            data["reason"] = reason
         self._record_event(BattleEvent(
             timestamp=timestamp,
             event_type=EventType.TORPEDO_MISS,
             ship_id=shooter_id,
-            data={
-                "torpedo_id": torpedo_id,
-                "target_id": target_id,
-                "closest_approach_km": closest_approach_km,
-                "hit_probability": hit_probability,
-            }
+            data=data,
         ))
 
     def record_torpedo_intercepted(

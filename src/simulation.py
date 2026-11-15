@@ -1575,6 +1575,9 @@ class CombatSimulation:
         # battles non-reproducible (marginal rolls flipped run to run).
         self._torpedo_seq = 0
         self._projectile_seq = 0
+        # projectile_id -> firing weapon slot, so a round's impact / miss
+        # events name the gun that fired it (see _log_event).
+        self._projectile_slots: dict[str, str] = {}
         self.combat_resolver = CombatResolver(rng=self.rng)
         self.damage_propagator = DamagePropagator()
         # Battle-damage consequences (src/battle_damage.py) roll on their own
@@ -1703,9 +1706,17 @@ class CombatSimulation:
                     orders = command.get('orders', [command.get('order')])
                     keys = ['weapon:' + slot for slot, order in ship.weapons_orders.items()
                             if order in orders]
+            # One 'superseded' per replaced command, once it governs nothing:
+            # a weapons order binds one key per slot, so a 3-gun ship used to
+            # log the same command superseded three times.
+            replaced = []
             for key in keys:
                 previous = self.evidence.bind(ship_id, key, cid)
-                if previous and previous != cid:
+                if previous and previous != cid and previous not in replaced:
+                    replaced.append(previous)
+            still_bound = set(self.evidence.active.get(ship_id, {}).values())
+            for previous in replaced:
+                if previous not in still_bound:
                     self._command_status(ship_id, previous, 'superseded')
         return success
 
@@ -2571,6 +2582,7 @@ class CombatSimulation:
             event_data['fc'] = fire_control
         if weapon_slot is not None:
             event_data['weapon_slot'] = weapon_slot
+            self._projectile_slots[proj_id] = weapon_slot
 
         self._log_event(SimulationEventType.PROJECTILE_LAUNCHED, shooter.ship_id, target.ship_id, event_data)
 
@@ -5729,6 +5741,7 @@ class CombatSimulation:
 
                 flight_time = self.current_time - torp_flight.launch_time
                 if flight_time > 3600 or current_dist > 10_000_000:
+                    self._log_torpedo_left_battle(torp_flight, current_dist)
                     torpedoes_to_remove.append(torp_flight)
                 continue
 
@@ -5955,7 +5968,9 @@ class CombatSimulation:
 
             # Check if torpedo is too far or timed out
             flight_time = self.current_time - torp_flight.launch_time
-            if flight_time > 3600 or current_dist > 10_000_000:  # 1 hour or 10,000 km
+            if ((flight_time > 3600 or current_dist > 10_000_000)  # 1 hour or 10,000 km
+                    and torp_flight not in torpedoes_to_remove):
+                self._log_torpedo_left_battle(torp_flight, current_dist)
                 torpedoes_to_remove.append(torp_flight)
 
         # Remove finished torpedoes and accumulate delta-v stats
@@ -5965,6 +5980,24 @@ class CombatSimulation:
                 self.metrics.torpedo_main_engine_dv_kps += torp.main_engine_dv_used_kps
                 self.metrics.torpedo_rcs_dv_kps += torp.rcs_dv_used_kps
                 self.torpedoes.remove(torp)
+
+    def _log_torpedo_left_battle(self, torp_flight: 'TorpedoInFlight',
+                                 current_dist_m: float) -> None:
+        """
+        A round culled at the battle edge (10,000 km from its target, or an
+        hour of flight) is a miss. The cull used to drop it with no event, so
+        seeker-killed rounds coasting away vanished from the recording and
+        the torpedo ledger could not balance.
+        """
+        closest_m = min(torp_flight.min_distance_to_target, current_dist_m)
+        self._log_event(SimulationEventType.PROJECTILE_MISS,
+                        torp_flight.source_ship_id, torp_flight.torpedo.target_id, {
+            'projectile_id': torp_flight.torpedo_id,
+            'closest_approach_km': closest_m / 1000.0,
+            'hit_probability': 0.0,
+            'type': 'torpedo',
+            'reason': 'left_battle',
+        })
 
     @impact_evidence
     def _resolve_radiator_hit(
@@ -7520,6 +7553,16 @@ class CombatSimulation:
         data: Optional[dict] = None
     ) -> SimulationEvent:
         """Log a simulation event and notify callbacks."""
+        # A gun round's impact / miss names the slot that fired it. Those
+        # events carried no slot (or 'unknown'), so every recorded hit and
+        # miss, every captain's shot history ("You fired unknown") and every
+        # DAMAGE TAKEN line lost the weapon.
+        if (event_type in (SimulationEventType.PROJECTILE_IMPACT,
+                           SimulationEventType.PROJECTILE_MISS)
+                and data and data.get('weapon_slot') in (None, 'unknown')):
+            slot = self._projectile_slots.get(data.get('projectile_id'))
+            if slot is not None:
+                data = {**data, 'weapon_slot': slot}
         event = SimulationEvent(
             event_type=event_type,
             timestamp=self.current_time,
