@@ -131,9 +131,10 @@ def test_every_pairing_is_fought_in_both_side_assignments(tourney):
         assert first["beta_roster"] == second["alpha_roster"] == fleets[150][b]
 
 
-def test_cache_key_follows_rosters_not_prices(tourney):
-    """A reprice that leaves two rosters alone must reuse their battles; one
-    that changes a roster must not."""
+def test_cache_key_follows_rosters_and_their_hull_prices(tourney):
+    """A reprice that leaves two rosters and their hulls' prices alone must
+    reuse their battles; one that changes a roster (or reprices a hull in
+    it: the time-limit verdict reads prices) must not."""
     args = _args(tourney, archetypes=["gunline", "battleline", "torpedo"])
     base = tourney.price_table({})
     dear = tourney.price_table({"TORPEDO_POINTS_PER_GJ": 2 * fleet_draft.TORPEDO_POINTS_PER_GJ})
@@ -313,3 +314,40 @@ def test_a_fleet_whose_only_rounds_are_spent_can_no_longer_deal_damage():
     assert side_can_deal_damage(sim, [atk])
     sim.step()
     assert not side_can_deal_damage(sim, [atk])
+
+
+# ---------------------------------------------------------------------------
+# Pass-5 round 2, mechanic 4: the time-limit verdict values hulls at draft price
+# ---------------------------------------------------------------------------
+
+def test_time_limit_verdict_values_a_hull_at_its_draft_price():
+    from src.llm.battle_runner import SHIP_CLASS_VALUES, ship_class_value
+    for hull, cost in SHIP_POINT_COSTS.items():
+        assert ship_class_value(hull) == cost
+    # the old table's distortion is gone: value per draft point is 1 for all
+    assert ship_class_value("frigate") / SHIP_POINT_COSTS["frigate"] == \
+        ship_class_value("dreadnought") / SHIP_POINT_COSTS["dreadnought"]
+    # documented fallback for hulls the price table does not know
+    assert ship_class_value("battleship_refit") == SHIP_CLASS_VALUES["battleship"]
+    assert ship_class_value("unknown hull") == SHIP_CLASS_VALUES["destroyer"]
+    assert ship_class_value(None) == SHIP_POINT_COSTS["destroyer"]
+
+
+def test_verdict_follows_a_reprice(tourney):
+    """The class value is read at verdict time, so a repriced hull is scored
+    at its new price (and the tournament keys such battles separately)."""
+    from src.llm.battle_runner import ship_class_value
+    saved = dict(SHIP_POINT_COSTS)
+    try:
+        SHIP_POINT_COSTS["corvette"] = saved["corvette"] + 5
+        assert ship_class_value("corvette") == saved["corvette"] + 5
+    finally:
+        SHIP_POINT_COSTS.clear()
+        SHIP_POINT_COSTS.update(saved)
+    args = _args(tourney, archetypes=["gunline", "battleline"])
+    dear = dict(saved, destroyer=saved["destroyer"] + 1)     # a hull both field
+    same = {c["key"] for c in tourney.plan(args, "src", saved)[0]}
+    assert {c["key"] for c in tourney.plan(args, "src", dict(saved))[0]} == same
+    if tourney.draft_roster("gunline", 150, dear, 8) == tourney.draft_roster("gunline", 150, saved, 8) \
+            and tourney.draft_roster("battleline", 150, dear, 8) == tourney.draft_roster("battleline", 150, saved, 8):
+        assert {c["key"] for c in tourney.plan(args, "src", dear)[0]}.isdisjoint(same)

@@ -52,8 +52,15 @@ def test_every_hull_type_has_a_tactical_class_value():
         hulls = json.load(f)["ships"]
     for ship_type in hulls:
         assert ship_type in SHIP_CLASS_VALUES, ship_type
-    assert ship_class_value("cruiser_torpedo") == ship_class_value("cruiser")
-    assert ship_class_value("dreadnought_siege") == ship_class_value("dreadnought")
+    # Pass 5 (balance): a hull the draft prices is valued at that price, so a
+    # variant is no longer worth exactly its base hull; the table is the
+    # fallback for hulls the price table does not know.
+    from src.llm.fleet_draft import SHIP_POINT_COSTS
+    for ship_type in hulls:
+        assert ship_class_value(ship_type) == SHIP_POINT_COSTS[ship_type]
+    assert ship_class_value("cruiser_refit") == SHIP_CLASS_VALUES["cruiser"]
+    assert ship_class_value("dreadnought_x") == SHIP_CLASS_VALUES["dreadnought"]
+    assert ship_class_value("monitor") == SHIP_CLASS_VALUES["destroyer"]
 
 
 def test_losing_a_siege_dreadnought_costs_as_much_as_a_dreadnought(fleet):

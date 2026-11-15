@@ -15,10 +15,12 @@ no admirals, no LLM. Every pairing is fought in both side assignments
     escort      two battleships behind a frigate PD screen
     swarm       corvettes to the hull cap
 
-The price table only decides WHICH roster an archetype fields; no battle code
-reads a price. So a battle is fully determined by (engine source, rosters,
+The price table decides WHICH roster an archetype fields and what a hull is
+worth in a time-limit verdict; nothing else in a battle reads a price. So a
+battle is determined by (engine source, rosters, the prices of their hulls,
 seed, battle settings) and is cached under that key in --out: re-scoring a
-candidate price table costs only the battles whose rosters it changed.
+candidate price table costs only the battles whose rosters or hull prices it
+changed.
 
     # the current prices at 150 pts, one seed, both sides (42 battles)
     uv run python scripts/draft_tournament.py --budget 150 --seeds 1 --out t.jsonl
@@ -284,9 +286,14 @@ def run_battle(task: Dict[str, Any]) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def battle_key(src: str, alpha: Sequence[str], beta: Sequence[str], seed: int,
-               args: argparse.Namespace) -> str:
+               args: argparse.Namespace, costs: Optional[Dict[str, int]] = None) -> str:
+    # The time-limit verdict values hulls at their draft price
+    # (battle_runner.ship_class_value), so the prices of the hulls IN the
+    # battle are part of its identity; a reprice still reuses every battle
+    # between fleets whose hulls it did not touch.
+    prices = sorted((h, costs[h]) for h in set(alpha) | set(beta)) if costs else []
     raw = json.dumps([src, list(alpha), list(beta), seed, args.distance,
-                      args.time_limit, args.max_checkpoints])
+                      args.time_limit, args.max_checkpoints, prices])
     return hashlib.sha1(raw.encode()).hexdigest()[:16]
 
 
@@ -306,7 +313,7 @@ def plan(args: argparse.Namespace, src: str, costs: Dict[str, int]):
                     for a_side in ("alpha", "beta"):
                         alpha, beta = ((rosters[a], rosters[b]) if a_side == "alpha"
                                        else (rosters[b], rosters[a]))
-                        key = battle_key(src, alpha, beta, seed, args)
+                        key = battle_key(src, alpha, beta, seed, args, costs)
                         cells.append(dict(budget=budget, a=a, b=b, seed=seed,
                                           a_side=a_side, key=key))
                         tasks.setdefault(key, dict(
@@ -501,6 +508,12 @@ def main() -> int:
         if a not in ARCHETYPES:
             ap.error(f"unknown archetype {a!r} (one of {', '.join(ARCHETYPES)})")
     costs = price_table(overrides)
+    # The battles must be scored at the candidate prices too (the workers
+    # fork from this process): make the overrides the live table.
+    for name, value in overrides.items():
+        setattr(fd, name, value)
+    fd.SHIP_POINT_COSTS.clear()
+    fd.SHIP_POINT_COSTS.update(costs)
     src = source_id(ROOT)
     print(f"engine source {src}   prices {overrides or '(checked in)'}")
     print("  " + ", ".join(f"{h} {c}" for h, c in sorted(costs.items(), key=lambda kv: kv[1])))

@@ -96,8 +96,27 @@ def surviving_ship_score_factor(ship) -> float:
 
 
 def ship_class_value(ship_type: str) -> float:
-    """Tactical-advantage value of a hull class (variants fall back to their base hull)."""
+    """
+    Tactical-advantage value of a hull: its DRAFT PRICE (balance, pass 5).
+
+    The time-limit verdict used to weigh hulls with SHIP_CLASS_VALUES alone,
+    a hand-typed table unrelated to what a hull costs: a 7-point frigate
+    scored 15 and a 55-point dreadnought 70, so at equal points a frigate
+    screen out-scored a battle line by surviving. The verdict now reads the
+    derived draft price (fleet_draft.SHIP_POINT_COSTS, from
+    data/fleet_ships.json), so the draft and the scoreboard agree on what a
+    hull is worth. SHIP_CLASS_VALUES stays as the fallback for a hull the
+    price table does not know: its own entry, else its base hull's
+    ("cruiser_x" -> cruiser), else the destroyer's.
+    """
     key = (ship_type or "destroyer").lower()
+    try:
+        from .fleet_draft import SHIP_POINT_COSTS
+        price = SHIP_POINT_COSTS.get(key)
+    except Exception:           # pricing unavailable: the table decides
+        price = None
+    if price:
+        return float(price)
     if key in SHIP_CLASS_VALUES:
         return SHIP_CLASS_VALUES[key]
     return SHIP_CLASS_VALUES.get(key.split("_")[0], SHIP_CLASS_VALUES["destroyer"])
