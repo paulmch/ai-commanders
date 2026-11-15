@@ -21,9 +21,11 @@ General rules that apply to every event below:
 ## Damage lane (`src/battle_damage.py`)
 
 Demo recording containing every event type below:
-`visualizer/public/recordings/p5_damage_demo.json` (see "Demo recording" at
-the end of this section for timestamps, and "Variants not in the demo
-recording" for the four field shapes it does not contain).
+`visualizer/public/recordings/p5_damage_demo.json`. It is **not committed**
+(`visualizer/public/recordings/` is gitignored): regenerate it with the
+command under "Demo recording" at the end of this section, which also lists
+its timestamps; "Variants not in the demo recording" covers the four field
+shapes it does not contain.
 
 Magnitudes are named constants in `src/battle_damage.py`; the numbers quoted
 here are the values at the time of writing.
@@ -258,11 +260,18 @@ Example (demo recording, t = 169 s):
 ### Demo recording
 
 `visualizer/public/recordings/p5_damage_demo.json` - a seeded heuristic fleet
-battle with `--trace` (no LLM), 420 s long, generated with:
+battle with `--trace` (no LLM), 420 s long. Not in the repository; regenerate
+it (fully offline, no API key, about half a minute) and copy it into place:
 
 ```bash
-uv run python scripts/run_draft_battle.py --auto-draft --no-admirals --trace --seed 4 --budget 200 --time-limit 420
+uv run python scripts/run_draft_battle.py --auto-draft --no-admirals --trace --seed 4 --budget 200 --time-limit 420 --recording-dir /tmp/p5_demo
+cp "$(ls -t /tmp/p5_demo/battle_*[0-9].json | head -1)" visualizer/public/recordings/p5_damage_demo.json
 ```
+
+The rosters, deaths and counts below were taken from the first version of
+this lane. Later engine changes (the review fixes: fuse-expiry blast origin,
+blast heat cap, the combat-ineffective battle end) can move timestamps and
+counts in a regenerated file; the event shapes are unchanged.
 
 Alpha: alpha_1 cruiser_torpedo, alpha_2 corvette, alpha_3 corvette, alpha_4 frigate, alpha_5 cruiser_torpedo, alpha_6 corvette, alpha_7 frigate.
 Beta: beta_1 battleship, beta_2 destroyer, beta_3 corvette, beta_4 battleship, beta_5 destroyer, beta_6 corvette, beta_7 destroyer, beta_8 corvette.
