@@ -13,7 +13,7 @@ sys.path.insert(0, str(ROOT))
 from src.recording_io import load_recording
 from src.llm.battle_runner import BattleConfig, LLMBattleRunner, load_fleet_data
 from src.llm.captain import LLMCaptainConfig
-from src.llm.client import CaptainClient
+from src.llm.providers import create_llm_client
 from src.llm.fleet_config import BattleFleetConfig
 from src.llm.replay_commentary import annotate_recording
 from src.llm.spending import RequestBudget
@@ -36,8 +36,8 @@ def main():
             raise ValueError(f'Model unavailable or lacks tool support: {model}')
     pricing = {model: catalog[model]['pricing'] for model in models}
     budget = RequestBudget(args.budget, pricing)
-    client = CaptainClient(model=models[0], temperature=0.5, max_tokens=8192,
-                           session_id='intent-replay-trials-20260906')
+    client = create_llm_client(models[0], models, temperature=0.5, max_tokens=8192,
+                               session_id='intent-replay-trials-20260906')
     client.budget = budget
     report = {'budget_usd': args.budget, 'pricing': pricing, 'trials': []}
     data = load_fleet_data()

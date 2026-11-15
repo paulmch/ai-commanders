@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.llm.fleet_config import BattleFleetConfig
 from src.llm.battle_runner import LLMBattleRunner, BattleConfig
 from src.llm.captain import LLMCaptainConfig
-from src.llm.client import CaptainClient
+from src.llm.providers import create_llm_client, fleet_config_models
 
 
 def start_mcp_server(faction: str, http_url: str = None):
@@ -116,8 +116,9 @@ async def run_mcp_battle(
         for fleet in (fleet_config.alpha_fleet, fleet_config.beta_fleet)
         if not (fleet.mcp and fleet.mcp.enabled)
     )
-    client = CaptainClient(
-        model="anthropic/claude-sonnet-5",
+    llm_ids = fleet_config_models(fleet_config)
+    client = create_llm_client(
+        llm_ids[0] if llm_ids else "anthropic/claude-sonnet-5", llm_ids,
         session_id=f"ai-commanders-mcp-{uuid.uuid4().hex[:16]}",
     ) if needs_llm else None
 

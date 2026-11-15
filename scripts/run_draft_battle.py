@@ -102,6 +102,8 @@ def main() -> int:
     parser.add_argument("--notebooks", action="store_true",
                         help="Inject accepted commander-notebook lessons "
                              "(data/notebooks) into each model's prompts")
+    parser.add_argument("--reasoning-effort", default=None,
+                        help="Reasoning effort for LLM calls (low/medium/high/xhigh/max). On bare Anthropic ids it is sent as output_config.effort on every request (default medium there); on OpenRouter ids as reasoning.effort (default: unset)")
     parser.add_argument("--quiet", "-q", action="store_true", help="Quiet mode")
     args = parser.parse_args()
     if args.mirror_draft and not args.auto_draft:
@@ -116,10 +118,16 @@ def main() -> int:
                  or any(model != HEURISTIC_MODEL for model in (alpha_captains, beta_captains)))
     client = None
     if needs_llm:
-        from src.llm.client import CaptainClient
-        client = CaptainClient(
-            model=args.alpha_admiral,
+        from src.llm.providers import create_llm_client
+        # A bare Anthropic id (claude-sonnet-5-5) goes to the Anthropic API, a
+        # vendor/model id to OpenRouter; each side may use either.
+        admirals_used = not (args.auto_draft and args.no_admirals)
+        used = ([args.alpha_admiral, args.beta_admiral] if admirals_used else []) + [
+            alpha_captains, beta_captains]
+        client = create_llm_client(
+            next(m for m in used if m != HEURISTIC_MODEL), used,
             session_id=f"ai-commanders-draft-{uuid.uuid4().hex[:16]}",
+            reasoning_effort=args.reasoning_effort,
         )
 
     # ------------------------------------------------------------------

@@ -47,7 +47,11 @@ MAX_FOLLOWUP_ROUNDS = 2
 # finish_reason values that mean the reply was cut off or broke, not that the
 # model chose to say nothing (CP-09: 'length' at max_tokens spent entirely on
 # reasoning, 'error' mid-generation - both used to be recorded as "none").
-FAILED_FINISH_REASONS = frozenset({"error", "length"})
+FAILED_FINISH_REASONS = frozenset({"error", "length", "refusal"})
+# A refused call (Anthropic stop_reason "refusal") is not re-asked: the turn is
+# lost and recorded as such - re-running it, on this or another model, would
+# put a different decision in this model's column.
+NO_RETRY_FINISH_REASONS = frozenset({"refusal"})
 # Torpedo fire solutions per decision: the nearest contacts get a flown
 # solution (each ~5-50 ms of shadow engine), the rest are out of reach anyway.
 MAX_TORPEDO_SOLUTIONS = 6
@@ -583,6 +587,8 @@ class LLMCaptain:
 
         # Call LLM with tools (use captain's configured model)
         tool_calls, failure = self._call_model(messages, tools)
+        if failure is not None and getattr(self, "last_finish", None) in NO_RETRY_FINISH_REASONS:
+            return self._lose_turn(ship, simulation, failure)
         if failure is not None:
             # One retry, with a nudge: a truncated reply usually spent its
             # whole budget reasoning, an errored one may simply recover.
@@ -657,6 +663,11 @@ class LLMCaptain:
         calls = list(calls or [])
         finish = getattr(self.client, "last_finish_reason", None)
         finish = finish() if callable(finish) else None
+        self.last_finish = finish if isinstance(finish, str) else None
+        if finish == "refusal":
+            # Never act on a refused turn, even on a tool call it carried.
+            print(f"[CAPTAIN {self.config.name}] the model refused this turn - no orders")
+            return [], "the model refused this turn (stop_reason=refusal)"
         if not calls and isinstance(finish, str) and finish in FAILED_FINISH_REASONS:
             what = ("cut off at the output limit" if finish == "length"
                     else "the provider returned an error")

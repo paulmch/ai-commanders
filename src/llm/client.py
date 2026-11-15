@@ -102,6 +102,12 @@ class CallStats:
     cache_hits: int = 0
     cache_writes: int = 0
     cache_cold: int = 0
+    # Refusals (Anthropic stop_reason "refusal", HTTP 200): counted per model
+    # and, through the replay audit, per side - a refused turn issues no
+    # orders and is never silently re-run on another model.
+    refusals: int = 0
+    refusals_by_model: Dict[str, int] = field(default_factory=dict)
+    refusals_by_side: Dict[str, int] = field(default_factory=dict)
     errors: List[str] = field(default_factory=list)
     _lock: threading.Lock = field(
         default_factory=threading.Lock, repr=False, compare=False
@@ -139,6 +145,15 @@ class CallStats:
     def record_malformed(self) -> None:
         with self._lock:
             self.malformed_arguments += 1
+
+    def record_refusal(self, model: str) -> None:
+        with self._lock:
+            self.refusals += 1
+            self.refusals_by_model[model] = self.refusals_by_model.get(model, 0) + 1
+
+    def record_refusal_side(self, side: str) -> None:
+        with self._lock:
+            self.refusals_by_side[side] = self.refusals_by_side.get(side, 0) + 1
 
     def record_usage(self, usage: Dict[str, Any]) -> None:
         """Record cache effectiveness from an OpenRouter usage block."""
@@ -388,6 +403,19 @@ class CaptainClient:
             "Content-Type": "application/json",
             "HTTP-Referer": "https://github.com/ai-commanders",
             "X-Title": "AI Commanders",
+        }
+
+    provider = "openrouter"
+
+    def provenance(self, model: Optional[str] = None) -> Dict[str, Any]:
+        """What serves `model` through this client (battle provenance)."""
+        return {
+            "provider": "openrouter",
+            "model": _strip_prefix(model or self.model),
+            "reasoning_effort": self.reasoning_effort,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+            "cache_ttl": cache_ttl_for(_strip_prefix(model or self.model)),
         }
 
     def last_call_meta(self) -> Dict[str, Any]:

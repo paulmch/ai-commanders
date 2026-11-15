@@ -752,6 +752,15 @@ Considerations:
 Call set_formation with a placement for each ship."""
 
 
+def _refused(client: Any) -> bool:
+    """True if the client's last reply on this thread was a refusal (never re-asked)."""
+    finish = getattr(client, "last_finish_reason", None)
+    try:
+        return callable(finish) and finish() == "refusal"
+    except Exception:  # noqa: BLE001 - test doubles
+        return False
+
+
 def run_admiral_draft(
     client: Any,
     model: str,
@@ -798,6 +807,9 @@ def run_admiral_draft(
                 tool_choice = "auto"
                 continue
             print(f"[DRAFT {faction}] selection call failed: {e}")
+            break
+        if _refused(client):
+            print(f"[DRAFT {faction}] selection refused by the model (stop_reason=refusal)")
             break
         select = next((c for c in calls if c.name == "select_fleet"), None)
         if select is None:
@@ -849,6 +861,9 @@ def run_admiral_draft(
                 tool_choice = "auto"
                 continue
             print(f"[DRAFT {faction}] formation call failed: {e}")
+            break
+        if _refused(client):
+            print(f"[DRAFT {faction}] formation refused by the model (stop_reason=refusal)")
             break
         form = next((c for c in calls if c.name == "set_formation"), None)
         if form is not None:

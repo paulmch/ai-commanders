@@ -125,12 +125,20 @@ class RequestBudget:
                     + image_tokens * image_rate
                     + payload['max_tokens'] * output_rate
                     + float(pricing.get('request', 0))) * RESERVE_FACTOR
+        return self.reserve_usd(reserved, images=len(images))
+
+    def reserve_usd(self, reserved, images=0):
+        """Reserve a precomputed upper bound (providers that price requests
+        themselves, e.g. the Anthropic client's token-priced bound)."""
+        reserved = float(reserved)
+        if not math.isfinite(reserved) or reserved < 0:
+            raise ValueError('Invalid reservation')
         with self._lock:
             if self.committed_usd + reserved > self.limit_usd:
                 self.exhausted = True
                 raise RuntimeError('Battle API budget exhausted before request')
             self.committed_usd += reserved
-            self.images_reserved += len(images)
+            self.images_reserved += images
         return reserved
 
     def settle(self, reserved, cost):
