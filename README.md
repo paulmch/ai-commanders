@@ -147,10 +147,10 @@ For Claude models on the Anthropic API directly, add `ANTHROPIC_API_KEY=...` to 
 uv run python scripts/run_live_draft_battle.py \
   --alpha-model claude-sonnet-5-5 \
   --beta-model claude-sonnet-5 \
-  --points 150 --turns 40 --reasoning medium --spend-limit 20
+  --points 150 --turns 20 --reasoning medium --spend-limit 25
 ```
 
-`--reasoning` is sent as the effort setting on every request of both sides (adaptive thinking, no sampling parameters). Spend is computed from token usage with the dated price table in `src/llm/anthropic_client.py`; the system prompt is cached with a 1-hour breakpoint. A refused turn issues no orders, is recorded as a `model_refusal` event, and is never re-run on another model. The recording's `provenance.llm` names the provider, exact model id, effort and SDK/API version of each side. `--mock-llm` runs the same path offline.
+`--reasoning` is sent as the effort setting on every request of both sides (adaptive thinking, no sampling parameters). Spend is computed from token usage with the dated price table in `src/llm/anthropic_client.py`; the system prompt is cached with a 1-hour breakpoint. A refused turn issues no orders, is recorded as a `model_refusal` event, and is never re-run on another model. The recording's `provenance.llm` names the provider, exact model id, effort and SDK/API version of each side. `--mock-llm` runs the same path offline. Each request first reserves an upper bound on its cost (every prompt byte at the 1-hour cache-write rate plus the full output limit, about $0.35 for a Sonnet captain call), so set `--spend-limit` to the expected spend plus the reservations of one checkpoint's parallel calls (about $6 for 16 Sonnet captains).
 
 Open **[the live viewer](http://localhost:5173/?live=1&decisions=1)** before the draft finishes. It shows each sealed draft as it commits, with the admiral's reasoning and formation, then switches to the battle automatically.
 

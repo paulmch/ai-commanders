@@ -647,6 +647,7 @@ class LLMCaptain:
         A reply that ends with finish_reason 'error' or 'length' and carries no
         tool call is a FAILURE, not a decision to do nothing.
         """
+        self.last_finish = None   # never carry a refusal over to a later call error
         try:
             # Per-captain temperature was parsed from fleet config and stored, but
             # never sent - every captain silently sampled at the shared client's

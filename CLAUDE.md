@@ -44,7 +44,7 @@ uv run python scripts/mcp_battle.py --config data/fleet_config_mcp_example.json 
 uv run python scripts/run_draft_battle.py --auto-draft --no-admirals --trace --seed 3  # free battle
 # Anthropic API, both sides drafted and flown by the model, $ cap (--mock-llm: offline)
 uv run python scripts/run_live_draft_battle.py --alpha-model claude-sonnet-5-5 \
-    --beta-model claude-sonnet-5 --points 150 --turns 40 --reasoning medium --spend-limit 20
+    --beta-model claude-sonnet-5 --points 150 --turns 20 --reasoning medium --spend-limit 25
 ```
 
 Free battles fly `HeuristicCaptain` (`src/llm/heuristic_captain.py`). Its default
