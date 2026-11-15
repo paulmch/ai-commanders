@@ -39,8 +39,13 @@ Examples:
         --workers 14 --out harness.jsonl
     uv run python scripts/fire_control_calibration.py table shots.jsonl
     uv run python scripts/fire_control_calibration.py table harness.jsonl --by source
-    uv run python scripts/fire_control_calibration.py fixture shots.jsonl harness.jsonl \\
-        --out tests/fixtures/fire_control_shots.json
+    # current-engine calibration set: heuristic battles (both doctrines) and
+    # every harness round; older recordings go to the historical file
+    uv run python scripts/fire_control_calibration.py fixture battles.jsonl harness.jsonl \\
+        --harness-keep 1 --out tests/fixtures/fire_control_shots.json
+    uv run python scripts/fire_control_calibration.py fixture shots.jsonl \\
+        --pre-lead-fix <recording names> --label "HISTORICAL: ..." \\
+        --out tests/fixtures/fire_control_shots_historical.json
 
 The conversion roll is the engine's own; observed hit rates in these
 datasets are valid calibration targets only while that roll stays the legacy

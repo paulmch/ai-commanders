@@ -866,9 +866,8 @@ def test_seeded_battle_legacy_column_cooks_its_follower(column_battles):
     assert not [e for e in _plume_events(rec) if e["ship_id"] == "alpha_3"]
     # The wash itself stops at the ceiling; the destroyer, at 149 % with no
     # radiator left and its own drive still burning, melts down on the tick
-    # it leaves the jet. (Rotation that carries its spin: the column's turn
-    # puts the follower in the jet a second sooner - impaired at 49 s, dead
-    # at 69 s, was 50 and 70.)
+    # it leaves the jet. (Re-pinned for rotation that carries its spin:
+    # impaired at 49 s and dead at 69 s, was 50 and 70; same 30-69 s episode.)
     dead = [(e["timestamp"], e["ship_id"], e["data"].get("cause")) for e in rec["events"]
             if e["event_type"] == "ship_destroyed"]
     assert dead == [(69.0, "alpha_2", "reactor_overheat")]

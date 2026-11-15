@@ -119,9 +119,9 @@ UNFORESEEN_ACCEL_FRACTION = 0.018
 # its angular momentum: a jinking hull can no longer reverse a swing in one
 # tick, so it commits to each jink and strays farther from the lead. Per
 # maneuver class, shooter count and 100 km bucket (30+ hits) the forecast is
-# 0.86-1.28x of what landed (fit on the merged engine, 50k rounds), except
-# EVASIVE alone at 200-299 km (0.60x: all 50 of its hits are on dreadnoughts,
-# in four engagements).
+# 0.74-1.29x of what landed (merged engine, 45k harness rounds, with the
+# bounded dodge burn below), except EVASIVE alone at 200-299 km (0.60x: all 50
+# of its hits are on dreadnoughts, in four engagements).
 DODGE_ACCEL_FRACTION = 0.13
 EVASIVE_DODGE_ACCEL_FRACTION = 0.07
 

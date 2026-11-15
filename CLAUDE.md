@@ -54,8 +54,8 @@ controlled pass facing the nearest gun, HOLD_RANGE once closure is gone; torpedo
 hold a standoff and fire every launchable round, ranked by target size/agility/PD umbrella; evade
 overlay vs torpedoes; crippled or disarmed ships open range, dead drives leave the
 formation, ships burn clear of dying hulks' blast radius; plan announced on the FLEET NET);
-`--doctrine legacy` (or `BattleConfig.heuristic_doctrine`) keeps the pass-4 captain the
-fire-control fixture's heuristic battles were flown with. `scripts/tactics_eval.py`
+`--doctrine legacy` (or `BattleConfig.heuristic_doctrine`) keeps the pass-4 captain (the
+fire-control fixture's heuristic battles are flown with both doctrines). `scripts/tactics_eval.py`
 runs/analyses seeded grids (kills, closest approach, rounds inside 150 km, hit rate).
 
 ## Project Structure
@@ -391,11 +391,17 @@ hashed by the perf harness) is unchanged.
   `tests/test_fire_control_calibration.py`, per target maneuver class (EVASIVE, evade
   overlay, HEADING turning / burning, INTERCEPT, PADLOCK) x 100 km so errors cannot
   cancel. The dispersion roll consumes only the conversion part; shot_fired records the
-  forecast's inputs (`fc`: dodge, missed jink burn, pending HEADING burn). If the gate,
-  the roll, evasion/dodging or the lead changes, re-run `scripts/fire_control_calibration.py`
-  (harness + table) and regenerate the fixture; the doctrine P(hit) table is bound by
-  `tests/test_prompt_structure.py`. Known residual: LLM fleets dodging a whole fleet's
-  fire were hit even less than forecast (firecontrol.JINK_ACCEL_FRACTION).
+  forecast's inputs (`fc`: dodge, missed jink burn, pending HEADING burn, the stale
+  burn of an order applied that tick). If the gate, the roll, evasion/dodging or the lead
+  changes, re-run `scripts/fire_control_calibration.py` (harness + table) and regenerate
+  the fixture: 32 `--doctrine legacy` + 32 `--doctrine tactical` heuristic battles and
+  every harness round (`fixture ... --harness-keep 1`) into
+  `tests/fixtures/fire_control_shots.json`; battles recorded on older engines go to the
+  separate historical file (`--label HISTORICAL ...`), which only the flash-mirror
+  residual pin reads. Buckets still outside 1.5x are named in the test's `RESIDUALS`.
+  The doctrine P(hit) table is bound by `tests/test_prompt_structure.py`. Known residual:
+  LLM fleets dodging a whole fleet's fire were hit even less than forecast
+  (firecontrol.JINK_ACCEL_FRACTION).
 - Side symmetry: the engine must not care which fleet is alpha or was added
   first. `CombatSimulation.step()` resolves weapons fire, point defence and
   the ship updates (`_update_ships`: every ship steers on the start-of-step

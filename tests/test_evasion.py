@@ -358,9 +358,10 @@ class TestDisabledTorpedoImpacts:
 # =============================================================================
 
 def _run_guided_engagement(fleet_data, seed, maneuver_type,
-                           attacker_pos, target_forward=Vector3D(1, 0, 0)):
+                           attacker_pos, target_forward=Vector3D(1, 0, 0),
+                           target_type="destroyer"):
     sim = make_sim(seed)
-    ship = make_ship(fleet_data, forward=target_forward)
+    ship = make_ship(fleet_data, ship_type=target_type, forward=target_forward)
     atk = make_ship(fleet_data, ship_id="atk", ship_type="corvette",
                     faction="beta", position=attacker_pos,
                     forward=(Vector3D(0, 0, 0) - attacker_pos).normalized())
@@ -392,20 +393,21 @@ class TestGuidedEngagementOutcomes:
     def test_running_reduces_closing_speed_and_damage(self, fleet_data):
         """The point of RUN: against the same torpedo, an EVASIVE target must
         be struck at a LOWER relative speed (and so take less kinetic damage)
-        than a passive one, and not meaningfully earlier. Launched 1200 km out, so the
-        destroyer has time to turn away, run and turn back (from 400 km it
-        cannot, and presents its nose instead)."""
+        than a passive one, and no earlier. The target is a corvette: from
+        400 km the round lands in ~65 s, time for a 3 g hull to turn away,
+        run and turn back (a destroyer cannot, and presents its nose).
+        """
         evasive = _run_guided_engagement(
-            fleet_data, 42, ManeuverType.EVASIVE, Vector3D(1_200_000, 0, 0))
+            fleet_data, 42, ManeuverType.EVASIVE, Vector3D(400_000, 0, 0),
+            target_type="corvette")
         passive = _run_guided_engagement(
-            fleet_data, 42, ManeuverType.MAINTAIN, Vector3D(1_200_000, 0, 0))
+            fleet_data, 42, ManeuverType.MAINTAIN, Vector3D(400_000, 0, 0),
+            target_type="corvette")
         # Inside the NEZ the torpedo still hits - evasion is not magic
         assert evasive['hit'] and passive['hit']
         assert evasive['impact_speed_kps'] < passive['impact_speed_kps']
         assert evasive['damage_gj'] < passive['damage_gj']
-        # Arrival barely moves (guidance holds its closure floor whatever the
-        # target does); the turn back onto the nose may cost a second.
-        assert evasive['resolved_t'] >= passive['resolved_t'] - 2.0
+        assert evasive['resolved_t'] >= passive['resolved_t']
 
     def test_presentation_shifts_flank_shot_to_thick_facing(self, fleet_data):
         """Torpedo from the flank: the passive ship takes a LATERAL hit; the

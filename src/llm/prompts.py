@@ -2788,11 +2788,10 @@ FORMATIONS FOR PD (what actually moves the numbers):
   evading battleship leaked 18/18 alone, 18/18 with 4 destroyer escorts, 12/18 with 8.
   Launched 450 km out (~70 s of flight) it leaked 18/18 even behind 8: a 1g hull cannot
   turn away to run and back in time, so it holds its nose armour on the salvo, and the
-  escorts blind the rounds only in the last ~10 s - too late to dodge. The wall still
-  keeps the hull alive: alone the battleship died in 3 of 3 runs at either range,
-  behind 4 escorts in 1 of 3, behind 8 in none (the rounds it blinds still land, but
-  weaker). Fewer than ~8 escorts stops no round - concentrate the fleet or accept the
-  hits.
+  escorts blind the rounds only in the last ~10 s - too late to dodge. Survival
+  still follows the wall: alone the battleship died in 3 of 3 runs at either range,
+  behind 4 escorts in 1 of 3, behind 8 in none. 4 escorts stopped no round -
+  concentrate the fleet or accept the hits.
 - The wall only protects ships that EVADE inside it (see blinding, above).
 """
 
