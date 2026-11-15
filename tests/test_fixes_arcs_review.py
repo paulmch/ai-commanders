@@ -380,3 +380,108 @@ class TestMountsStandDownWhenTheShipIsOut:
             sim.step()
         assert a.weapons["weapon_1"].mount.state == wa.IDLE
         assert any(m.state == wa.ON_TARGET for m in a.arcs.pd)
+
+
+# =============================================================================
+# Finding 8: arcs-on counterparts of the head-on scenarios that pin numbers
+# commanders are given (the originals keep all-round fire)
+# =============================================================================
+
+def _bearing_on(sim, ship, point):
+    """Operational PD turrets of ``ship`` whose own-hull mask leaves the line
+    of sight to ``point`` open - computed here from the mask table, not
+    through src/llm/arcs_status."""
+    arcs = sim._arcs_for(ship)
+    arcs.set_frame(ship.forward, ship.kinematic_state.up, sim.current_time)
+    d = (point - ship.position).normalized()
+    cell = wa.cell_index(*arcs.to_body(d.x, d.y, d.z))
+    return sum(1 for pd in ship.point_defense
+               if pd.is_operational and (pd.mount is None or not pd.mount.mask[cell]))
+
+
+@pytest.fixture
+def fleet():
+    import json
+    with open("data/fleet_ships.json") as f:
+        return json.load(f)
+
+
+class TestCommanderNumbersUnderArcs:
+
+    def test_salvo_sizing_counts_the_turrets_that_bear(self, fleet):
+        """Counterpart of test_captain_fire_solutions'
+        test_salvo_sizing_uses_the_bound_pd_numbers (all-round fire: 2 + 3)."""
+        from src.llm.fire_solutions import salvo_to_saturate, torpedo_solution
+        from src.llm.prompts import pd_doctrine_numbers
+        from tests.test_captain_fire_solutions import _duel, _ship as _fs_ship
+        per = pd_doctrine_numbers(fleet)["turrets_to_blind_at_floor"]
+        sim, sh, tg = _duel(fleet, 400.0, 0.0)
+        esc = _fs_ship(sim, fleet, "beta_2", "battleship", "beta", 0.0, y_km=100.0)
+        _fs_ship(sim, fleet, "beta_3", "battleship", "beta", 0.0, y_km=900.0)
+        sol = torpedo_solution(sim, sh, tg, fleet)
+        own, escorts = _bearing_on(sim, tg, sh.position), _bearing_on(sim, esc, sh.position)
+        assert (sol.pd_target, sol.pd_escorts) == (own, escorts)
+        assert own + escorts < 2 + 3              # fewer than fitted bear on one direction
+        assert sol.salvo_to_saturate == salvo_to_saturate(own + escorts, per)
+
+    def test_threat_display_shows_the_own_turrets_that_bear(self, fleet):
+        """Counterpart of test_doctrine_accuracy's
+        test_live_sim_populates_enrichment (all-round fire: 2 of 2)."""
+        from unittest.mock import Mock
+        from src.llm.captain import LLMCaptain, LLMCaptainConfig
+        from tests.test_doctrine_accuracy import _build
+        sim = CombatSimulation(time_step=0.5, decision_interval=1e9, seed=42)
+        target = _build(sim, 'tg', 'destroyer', 'alpha', fleet, 0, 6.0, 1)
+        _build(sim, 'sh', 'cruiser_torpedo', 'beta', fleet, 400, -6.0, -1)
+        assert sim.inject_command('sh', {'type': 'launch_torpedo', 'target_id': 'tg'})
+        for _ in range(20):
+            sim.step()
+        captain = LLMCaptain(LLMCaptainConfig(name="C", ship_name="tg", ship_type="destroyer",
+                                              fleet_data=fleet), client=Mock())
+        threats = captain._build_tactical_status(target, None, sim)["torpedo_threats"]
+        assert threats
+        want = _bearing_on(sim, target, sim.torpedoes[0].torpedo.position)
+        assert threats[0]["own_pd_turrets"] == want
+        assert captain._build_ship_status(target)["pd_turrets_total"] == 2   # fitted stays fitted
+
+    def test_the_salvo_plan_sizes_against_the_turrets_that_bear(self):
+        """Counterpart of test_heuristic_tactics'
+        test_a_lone_corvette_still_fires_at_a_covered_group: against the
+        turrets that bear, one corvette's tubes saturate the group."""
+        from src.llm import heuristic_tactics as T
+        from src.llm.fire_solutions import pd_cover, salvo_to_saturate
+        from src.llm.prompts import pd_doctrine_numbers
+        from tests.test_heuristic_tactics import FLEET, _salvo_sim
+        sim = _salvo_sim(1, escorts=4, boat="corvette")
+        plan = T.compute_fleet_plan(sim, "alpha", None, FLEET)
+        pd = pd_doctrine_numbers(FLEET)
+        boat, tgt = sim.get_ship("a0"), sim.get_ship("tgt")
+        own, escorts, _ = pd_cover(sim, tgt, pd["range_km"], threat_from=boat.position)
+        independent = sum(_bearing_on(sim, s, boat.position) for s in sim.ships.values()
+                          if s.faction == "beta"
+                          and (s.position - tgt.position).magnitude <= pd["range_km"] * 1000.0)
+        assert own + escorts == independent
+        need = salvo_to_saturate(own + escorts, pd["turrets_to_blind_at_floor"]) + T.SALVO_MARGIN_ROUNDS
+        assert len(plan.salvos) == 1 and plan.salvos[0].need == need
+        assert plan.salvos[0].saturating is (plan.salvos[0].available >= need)
+
+    @pytest.mark.parametrize("hull", ["battleship", "dreadnought"])
+    def test_three_fitted_turrets_are_not_three_that_bear(self, fleet, hull):
+        """Counterpart of test_one_and_two_turret_hulls_do_not_blind_a_normal_launch
+        (all-round fire: 3 turrets blind a 500 km launch). The doctrine counts
+        turrets that BEAR: head-on, at most two of a battleship's three or a
+        dreadnought's four bear on the round at the end, and it is not blinded."""
+        from tests.test_doctrine_accuracy import _torpedo_run
+        counts = []
+        blinded, fitted = _torpedo_run(
+            fleet, hull, 500.0, seed=11,
+            sample=lambda sim, target, tf: counts.append(
+                _bearing_on(sim, target, tf.torpedo.position)))
+        assert fitted >= 3 and counts
+        assert max(counts[-10:]) < 3
+        assert blinded is False
+        if hull == "battleship":
+            # the figure the PD doctrine quotes
+            from src.llm import prompts
+            assert max(counts[-10:]) == 2 and fitted == 3
+            assert "head-on, 2 of a battleship's 3" in " ".join(prompts.CAPTAIN_DOCTRINE.split())

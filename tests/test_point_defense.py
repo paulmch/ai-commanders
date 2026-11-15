@@ -219,7 +219,6 @@ class TestPDTorpedoEngagement:
         if torp_flight in sim.torpedoes:
             assert torp_flight.heat_absorbed_j > 0, "Torpedo should have absorbed heat"
 
-    @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py
     def test_pd_destroys_torpedo_at_close_range(self):
         """Test PD destroys torpedo at close range with sustained fire."""
         sim = CombatSimulation(time_step=1.0, seed=42)
@@ -780,7 +779,6 @@ class TestSmartPDTargeting:
         pd_events = [e for e in sim.events if e.event_type == SimulationEventType.PD_ENGAGED]
         assert len(pd_events) > 0, "Defender PD should engage threats to allies"
 
-    @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py
     def test_torpedo_priority_over_slug(self):
         """Test torpedoes have higher priority than slugs (50+ GJ vs ~5 GJ damage)."""
         sim = CombatSimulation(time_step=1.0, seed=42)

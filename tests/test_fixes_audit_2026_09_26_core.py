@@ -443,7 +443,6 @@ class TestPointDefenseIsGalileanInvariant:
         for h in heat[1:]:
             assert h == pytest.approx(heat[0], rel=1e-6)
 
-    @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py
     def test_dwell_energy_over_an_approach_is_frame_invariant(self):
         totals = []
         for drift in (0.0, 30000.0, -30000.0):
@@ -486,7 +485,6 @@ class TestPointDefenseIsGalileanInvariant:
 class TestSurrenderedShipRunsNoPointDefense:
     """A surrendered ship kept its PD turrets firing (for itself and allies)."""
 
-    @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py
     def test_no_pd_from_surrendered_ship(self):
         sim = CombatSimulation(time_step=1.0, seed=1)
         for sid, faction, pos in (("A", "alpha", Vector3D(0, 0, 0)),

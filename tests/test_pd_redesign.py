@@ -160,7 +160,6 @@ class TestDwellModel:
         for faster, slower in zip(energies[1:], energies[:-1]):
             assert faster < slower
 
-    @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py
     def test_continuous_delivery_is_dt_invariant(self, fleet_data):
         """Average delivered power must not depend on the integrator step."""
         def heat_with_dt(dt):
@@ -338,7 +337,6 @@ class TestPrioritisation:
             torpedo_id="torp", torpedo=torp, source_ship_id="e"))
         return sim
 
-    @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py
     def test_torpedoes_outrank_slugs(self, fleet_data):
         sim = self._dual_threat_sim(fleet_data)
         for _ in range(5):
@@ -350,7 +348,6 @@ class TestPrioritisation:
             "PD burned dwell on a slug while a torpedo was in the envelope"
         )
 
-    @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py
     def test_slugs_engaged_when_no_torpedo_in_envelope(self, fleet_data):
         sim = CombatSimulation(seed=5, time_step=1.0)
         d = _pd_ship(sim, "d", "alpha", Vector3D(0, 0, 0), 2, fleet_data)
@@ -416,12 +413,10 @@ class TestBalance:
         assert not disabled
         assert heat < TORPEDO_ELECTRONICS_THRESHOLD_J
 
-    @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py
     def test_low_closure_is_killable_by_one_turret(self, fleet_data):
         disabled, _ = _run_ballistic_intercept(fleet_data, 1, 4.0)
         assert disabled, "a slow 4 km/s approach must die to even one turret"
 
-    @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py
     def test_four_turrets_stop_12kps_but_not_26kps(self, fleet_data):
         disabled_12, _ = _run_ballistic_intercept(fleet_data, 4, 12.0)
         disabled_26, _ = _run_ballistic_intercept(fleet_data, 4, 26.0)
@@ -503,7 +498,6 @@ class TestWallOfShips:
                 break
         return sim.metrics.total_torpedo_hits
 
-    @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py
     def test_leakage_decreases_with_escort_count(self, fleet_data):
         hits_alone = self._salvo_defense(fleet_data, 0)
         hits_screen = self._salvo_defense(fleet_data, 4)
@@ -581,7 +575,6 @@ class TestAblationRecoil:
                 break
         return proj, pf
 
-    @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py
     def test_own_hull_dwell_decelerates_and_lightens_the_slug(self, fleet_data):
         """Head-on geometry: recoil is nearly pure deceleration, and ablation
         removes mass - impact KE must drop on both counts."""
@@ -612,7 +605,6 @@ class TestAblationRecoil:
         assert proj.velocity.magnitude > 5700.0
         assert getattr(proj, "_pd_ablation", 0.0) < 4.0
 
-    @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py
     def test_escort_dwell_deflects_the_slug_laterally(self, fleet_data):
         """Oblique geometry: an escort's beam pushes the round off the line
         to the consort - CPA to the victim must open up."""

@@ -340,10 +340,13 @@ class TestPDDoctrineNumbers:
     @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py
     def test_one_and_two_turret_hulls_do_not_blind_a_normal_launch(self, fleet):
         """
-        Doctrine: 'a 1- or 2-turret hull does NOT blind a normally launched
-        round (<=46 MJ of the 50 MJ needed); 3+ turrets do.'
+        Doctrine: '1-2 turrets do NOT blind a normally launched round (<=46 MJ
+        of the 50 MJ needed); 3+ turrets that BEAR on one round do.'
 
-        Measured end-to-end on the engine at a 500 km launch.
+        Measured end-to-end on the engine at a 500 km launch, with all-round
+        fire so every fitted turret bears (the per-turret claim); that the
+        count is of turrets that BEAR is pinned under arcs by
+        tests/test_fixes_arcs_review.py::TestCommanderNumbersUnderArcs.
         """
         blinded_by_turrets = {}
         for target_type in ('corvette', 'destroyer', 'battleship'):
@@ -384,7 +387,6 @@ class TestPDDoctrineNumbers:
             f"at some checkpoint: {verdicts}"
         )
 
-    @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py
     def test_closed_form_matches_engine_kill_ranges(self, fleet):
         """The ~5 km/s rule must hold in the real engine, not just on paper:
         one turret kills a 4 km/s ballistic Trident and leaks a 12 km/s one."""
@@ -658,7 +660,6 @@ class TestThreatDisplayContract:
 # =============================================================================
 
 class TestFormationDoctrine:
-    @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py
     def test_escort_wall_reduces_leakage(self, fleet):
         """Admiral doctrine: escorts cut salvo leakage, and the effect needs
         mass (a big wall clearly beats none). Single seed of the measured

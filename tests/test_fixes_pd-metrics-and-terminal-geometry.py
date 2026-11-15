@@ -145,7 +145,6 @@ class TestPointDefenseBooksWhatItActuallyDid:
         # Nothing was actually taken off the board here.
         assert sim.metrics.total_torpedo_neutralized == 0
 
-    @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py
     def test_evasion_is_what_converts_a_blind_into_a_save(self, fleet_data):
         """The blind only buys something if the target then moves."""
         still = _quiet(_salvo_against_screen, fleet_data, n_escorts=8, evading=False)
@@ -475,7 +474,6 @@ class TestAblationRecoilIsCausallyLive:
     decided purely by the launch-time probability.
     """
 
-    @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py
     def test_an_escort_deflects_the_round_measurably(self, fleet_data):
         bare, _ = _quiet(_slug_engagement, fleet_data, 0, seed=0)
         escorted, _ = _quiet(_slug_engagement, fleet_data, 1, seed=0)
