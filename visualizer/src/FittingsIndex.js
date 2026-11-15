@@ -34,9 +34,10 @@ import { SHIP_MODULES } from './shipModules.js';
 
 /**
  * Torpedo rounds per tube, by hull (data/fleet_ships.json magazines). Only
- * used for the "rounds left" readout and the EMPTY state; every recorded
+ * used for the "rounds left" readout and the NO AMMO state; every recorded
  * `torpedoes_remaining` re-syncs the count, and an unknown hull simply has
- * no count (null) until an event states one.
+ * no count (null) until an event states one. Bound to the fleet data by
+ * tests/hud_fittings.test.js.
  */
 export const TUBE_MAGAZINE = { corvette: 8, cruiser_torpedo: 12 };
 
@@ -167,9 +168,11 @@ export class FittingFold {
     this.pending = new Map();  // detonating shipId -> Map victimId -> partial victim record
   }
 
+  get hasLayouts() { return Object.keys(this.layouts).length > 0; }
+
   /** (Re)read the layouts; called until the recording's fleet specs are there. */
   setLayouts(sourceData, ships) {
-    if (Object.keys(this.layouts).length) return;
+    if (this.hasLayouts) return;
     this.layouts = fittingLayouts(sourceData, ships);
     for (const [id, lay] of Object.entries(this.layouts)) {
       const mag = TUBE_MAGAZINE[String(lay.type).toLowerCase()];
@@ -383,12 +386,12 @@ export function fittingsText(st) {
   return parts.join(' · ');
 }
 
-/** The flag a spectator should see first: DISARMED / EMPTY / ADRIFT (or '' when the ship is fine). */
+/** The flag a spectator should see first: DISARMED / ADRIFT / NO AMMO (or '' when the ship is fine). */
 export function fittingsFlag(st) {
   if (!st) return '';
   if (st.disarmed) return 'DISARMED';
   if (st.adrift) return 'ADRIFT';
-  if (st.dry) return 'EMPTY';
+  if (st.dry) return 'NO AMMO';
   return '';
 }
 

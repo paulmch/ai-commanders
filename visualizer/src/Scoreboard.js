@@ -77,9 +77,11 @@ export function computeSides(states, torpedoes, ships, hud, t) {
 /**
  * Why the battle ended, when one side (or both) could no longer deal damage
  * (battle_runner._combat_ineffective_outcome): {side: 'alpha'|'beta'|'both',
- * headline, detail} or null for every other ending.
+ * headline, detail} or null for every other ending. With `sides`
+ * (computeSides at the end) it also recognises the case from the fitting
+ * data when the recorded reason is silent (`inferred`).
  */
-export function endCause(result) {
+export function endCause(result, sides = null) {
   const reason = String(result?.reason || '');
   const one = /^(alpha|beta) fleet combat-ineffective/i.exec(reason);
   if (one) {
@@ -88,6 +90,14 @@ export function endCause(result) {
   }
   if (/^both fleets combat-ineffective/i.test(reason)) {
     return { side: 'both', headline: 'NEITHER FLEET CAN STILL FIGHT', detail: reason.replace(/^.*?on points:\s*/i, 'on points: ') };
+  }
+  // The recorded reason does not say it, but the fitting data does: the beaten
+  // fleet still has ships afloat and none of them can deal damage
+  const loser = result?.winner === 'alpha' ? 'beta' : result?.winner === 'beta' ? 'alpha' : null;
+  const s = loser ? sides?.[loser] : null;
+  if (s?.fit && s.alive > 0 && s.armed === 0) {
+    return { side: loser, inferred: true, headline: `${loser.toUpperCase()} FLEET CAN NO LONGER FIGHT`,
+      detail: `${s.alive} ship${s.alive === 1 ? '' : 's'} afloat, none armed` };
   }
   return null;
 }
@@ -274,10 +284,10 @@ export class ResultBanner {
     setText(r.querySelector('[data-title]'), resultTitle(result));
     setText(r.querySelector('[data-reason]'), cleanReason(result.reason));
     // A battle that ended because a side could no longer deal damage says so in words
-    const cause = endCause(result);
+    const cause = endCause(result, sides);
     const causeEl = r.querySelector('[data-cause]');
     if (causeEl) {
-      setText(causeEl, cause?.headline || '');
+      setText(causeEl, cause ? (cause.inferred ? `${cause.headline} · ${cause.detail}` : cause.headline) : '');
       causeEl.hidden = !cause;
       causeEl.dataset.side = cause?.side || '';
     }

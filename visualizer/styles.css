@@ -2850,7 +2850,7 @@ body.decisions-open .live-delib {
 .fit-head .section-label { margin: 0; }
 .fit-flag { padding: 1px 7px; font: 700 10px var(--font-mono); letter-spacing: 0.12em; color: #0a0e14; background: #ffd23e; }
 .fit-flag[hidden] { display: none; }
-.fit-flag[data-flag="empty"] { background: #8aa3b1; }
+.fit-flag[data-flag="no-ammo"] { background: #8aa3b1; }
 .fit-row { display: grid; grid-template-columns: 48px 1fr auto; align-items: center; gap: 8px; font: 10px var(--font-mono); }
 .fit-row[hidden] { display: none; }
 .fit-label { color: var(--text-secondary); letter-spacing: 0.1em; }

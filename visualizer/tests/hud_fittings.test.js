@@ -8,6 +8,9 @@ import { computeSides, endCause, armsText, Scoreboard, ResultBanner } from '../s
 import { noticesAt, KillFeed } from '../src/KillFeed.js';
 import { timelineMarks } from '../src/TimelineMarkers.js';
 import { Registry, registryStatus } from '../src/Registry.js';
+import { existsSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { TUBE_MAGAZINE, FittingFold } from '../src/FittingsIndex.js';
 
 // Pass-5 battle damage in the spectator HUD (docs/pass-5-recording-additions.md):
 // fitting state at time t, blast victims, fighting-power counts, the notices a
@@ -132,7 +135,7 @@ test('torpedo rounds: launches count down from the hull magazine, a recorded cou
   assert.equal(at('alpha_2', 43).rounds, 4);
   assert.equal(at('alpha_2', 46).armed, true);
   assert.deepEqual([at('alpha_2', 47).rounds, at('alpha_2', 47).dry, at('alpha_2', 47).armed], [0, true, false]);
-  assert.equal(fittingsFlag(at('alpha_2', 47)), 'EMPTY');
+  assert.equal(fittingsFlag(at('alpha_2', 47)), 'NO AMMO');
   assert.deepEqual(pipsOf(at('alpha_2', 47)).map(p => `${p.kind}:${p.s}`), ['tube:empty', 'pd:ok', 'drive:ok']);
   assert.equal(at('alpha_1', 50).rounds, 47);
   assert.equal(at('alpha_1', 80).rounds, 40, 'mount_damaged.torpedoes_remaining wins over the running count');
@@ -247,7 +250,7 @@ test('registry rows: pips appear with the first fitting data, the status flags a
   assert.deepEqual(pips('beta_2'), ['gun:destroyed', 'gun:destroyed', 'pd:ok', 'pd:ok', 'drive:ok']);
   assert.deepEqual(pips('alpha_1'), ['tube:ok', 'tube:damaged', 'tube:ok', 'tube:ok', 'pd:ok', 'pd:ok', 'pd:ok', 'pd:ok', 'drive:damaged']);
   const status = id => row(id).querySelector('.registry-status').textContent;
-  assert.deepEqual([status('beta_1'), status('beta_2'), status('alpha_2'), status('alpha_1')], ['80%', 'DISARMED', 'EMPTY', '90%']);
+  assert.deepEqual([status('beta_1'), status('beta_2'), status('alpha_2'), status('alpha_1')], ['80%', 'DISARMED', 'NO AMMO', '90%']);
   assert.ok(row('beta_2').classList.contains('crippled') && row('alpha_2').classList.contains('spent') && !row('beta_1').classList.contains('crippled'));
   assert.match(row('beta_2').querySelector('.fit-strip').title, /Guns 0\/2 · PD 2\/2 · Drive 100%/);
   // Scrub back: same nodes, earlier state; forward to the drive kill
@@ -363,6 +366,14 @@ test('battle end: a side that can no longer deal damage is named, with the fight
   const cause = root.querySelector('[data-cause]');
   assert.deepEqual([cause.textContent, cause.hidden, cause.dataset.side], ['BETA FLEET CAN NO LONGER FIGHT', false, 'beta']);
   assert.match(root.querySelector('[data-tally]').textContent, /ALPHA 2\/3 ships .* 1 armed · guns 0\/1 · tubes 5\/5.*BETA 2\/2 ships .* 1 armed · guns 4\/7/);
+  // The recorded reason is silent, but the beaten fleet's last ships are afloat and unarmed (fitting data)
+  const stranded = { alpha_1: { hull: 90 }, alpha_2: { hull: 100 }, alpha_3: { hull: 100 }, beta_1: { destroyed: true }, beta_2: { hull: 70 } };
+  const eliminated = { winner: 'alpha', reason: 'Beta fleet eliminated', known: true };
+  assert.deepEqual(endCause(eliminated, computeSides(stranded, [], ships, hud, 150)),
+    { side: 'beta', inferred: true, headline: 'BETA FLEET CAN NO LONGER FIGHT', detail: '1 ship afloat, none armed' });
+  banner.update(true, eliminated, computeSides(stranded, [], ships, hud, 150), 150);
+  assert.equal(cause.textContent, 'BETA FLEET CAN NO LONGER FIGHT · 1 ship afloat, none armed');
+  assert.equal(endCause(eliminated, computeSides({ ...stranded, beta_2: { destroyed: true } }, [], ships, hud, 150)), null, 'a fleet with nothing afloat was eliminated');
   // Any other ending keeps the banner as it was
   banner.update(true, { winner: 'alpha', reason: 'Beta fleet eliminated', known: true }, computeSides(states, [], ships, { ...hud, fittings: { active: false } }, 150), 150);
   assert.equal(cause.hidden, true);
@@ -394,4 +405,34 @@ test('live append: fittings, notices and blasts match a full build at every poll
   // Before the first damage event the live HUD has no fitting data; it switches on when one arrives
   const early = buildHudIndex(loaderOf(all.slice(0, 10)));
   assert.equal(early.fittings.active, false);
+});
+
+test('torpedo rounds per tube are the fleet data\'s magazines (data/fleet_ships.json)', { skip: !existsSync(fileURLToPath(new URL('../../data/fleet_ships.json', import.meta.url))) }, () => {
+  const data = JSON.parse(readFileSync(fileURLToPath(new URL('../../data/fleet_ships.json', import.meta.url)), 'utf8'));
+  const fallback = data.weapon_types.torpedo_launcher.magazine;
+  const fromData = {};
+  for (const [type, spec] of Object.entries(data.ships)) {
+    const tubes = (spec.weapons || []).filter(x => x.type === 'torpedo_launcher');
+    if (!tubes.length) continue;
+    const mags = new Set(tubes.map(x => x.magazine ?? fallback));
+    assert.equal(mags.size, 1, `${type}: every tube holds the same number of rounds`);
+    fromData[type] = [...mags][0];
+  }
+  assert.deepEqual(TUBE_MAGAZINE, fromData, 'FittingsIndex.TUBE_MAGAZINE drifted from the fleet data');
+});
+
+test('fleet specs that arrive after the first events refold the fittings from the start', () => {
+  const all = events();
+  const loader = loaderOf([], {});
+  buildHudIndex(loader);
+  loader.events.push(...all.slice(0, 12));
+  let hud = appendHudIndex(loader, { events: all.slice(0, 12), frames: [] });
+  assert.equal(hud.fittings.active, false, 'no specs yet');
+  loader.sourceData = sourceData();
+  loader.events.push(...all.slice(12));
+  hud = appendHudIndex(loader, { events: all.slice(12), frames: [] });
+  const full = hudOf(all);
+  assert.deepStrictEqual(hud.fittings, full.fittings);
+  assert.deepStrictEqual(hud.notices, full.notices);
+  assert.ok(new FittingFold().hasLayouts === false);
 });

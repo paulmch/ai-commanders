@@ -944,8 +944,14 @@ class HudBuilder {
     addSpend(this.spend, this.spendTotals, events, from);
     addAdmiralCalls(this.admiralCalls, events, ids, from);
     addEnd(this.end, events, from);
+    // Fittings need the fleet specs: if they only arrive now, fold again from the first event
+    const hadLayouts = this.fitFold.hasLayouts;
     this.fitFold.setLayouts(loader.sourceData, ships);
-    this.fitFold.add(events, ids, from, ships);
+    if (!hadLayouts && this.fitFold.hasLayouts && from > 0) {
+      this.fitFold = new FittingFold();
+      this.fitFold.setLayouts(loader.sourceData, ships);
+      this.fitFold.add(events, ids, 0, ships);
+    } else this.fitFold.add(events, ids, from, ships);
 
     // Command net: drop the open rows, re-derive them together with the new events
     this.comms.length = this.frozenRows;

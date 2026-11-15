@@ -7,7 +7,7 @@
  * the HeatHud heat bar, a pip per fitting (guns, tubes, PD, drive: pass-5
  * recordings only, created on first use) and a status that counts a dying
  * hulk down to its reactor detonation or flags a ship DISARMED / ADRIFT /
- * EMPTY. Per-frame updates write only values that changed.
+ * NO AMMO. Per-frame updates write only values that changed.
  */
 import { killStateAt } from './HudIndex.js';
 import { getShipClassName, SHIP_SILHOUETTES } from './shipSilhouettes.js';
@@ -45,7 +45,7 @@ export function registryStatus(state, kill, t, fit = null) {
     return { text: s?.in != null ? `☢ ${Math.ceil(s.in)}s` : 'CRIT', level: 'dying' };
   }
   const flag = fittingsFlag(fit);
-  if (flag) return { text: flag, level: flag === 'EMPTY' ? 'spent' : 'crippled' };
+  if (flag) return { text: flag, level: flag === 'NO AMMO' ? 'spent' : 'crippled' };
   const hull = Math.round(Math.max(0, Math.min(100, state?.hull ?? 100)));
   return { text: `${hull}%`, level: hull < 35 ? 'low' : 'ok' };
 }

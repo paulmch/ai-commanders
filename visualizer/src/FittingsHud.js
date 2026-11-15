@@ -60,7 +60,7 @@ export function pipStrip(doc, cls = 'fit-strip', only = null) {
 /**
  * FITTINGS block of the ship telemetry card: one labelled row per fitting
  * group with its pips and count, the drive's thrust, torpedo rounds and the
- * DISARMED / ADRIFT / EMPTY flag. Hidden for recordings without fitting data.
+ * DISARMED / ADRIFT / NO AMMO flag. Hidden for recordings without fitting data.
  */
 export class FittingsCard {
   /** @param {Object} o - {root: #fitCard (hidden by default)} */
@@ -117,6 +117,6 @@ export class FittingsCard {
     const flag = down ? '' : fittingsFlag(st);
     setText(this.flag, flag);
     this.flag.hidden = !flag;
-    this.flag.dataset.flag = flag.toLowerCase();
+    this.flag.dataset.flag = flag.toLowerCase().replace(' ', '-');
   }
 }

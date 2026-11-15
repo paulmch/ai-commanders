@@ -1523,6 +1523,7 @@ class BattleVisualizer {
       if (this.elements.targetValue) {
         this.elements.targetValue.textContent = '-';
       }
+      this.fitCard.update(null);
       return;
     }
 
