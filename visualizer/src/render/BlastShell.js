@@ -64,6 +64,7 @@ const fragmentShader = /* glsl */`
   uniform float uLevel;
   uniform float uCoolK;
   uniform float uSeed;
+  uniform float uFill;
   varying vec3 vNormal;
   varying vec3 vView;
   varying vec3 vLocal;
@@ -78,11 +79,16 @@ const fragmentShader = /* glsl */`
     // slow ripples over the skin so it reads as a surface, not a HUD ring
     float a = vLocal.y * 17.0 + sin(vLocal.x * 7.0 + uSeed * 9.0) * 2.2 + sin(vLocal.z * 5.0 - uSeed * 4.0) * 1.7;
     float rip = 0.7 + 0.3 * sin(a);
-    vec3 col = mix(uHot, uCool, uCoolK) * (rim * rip * 0.45 + limb * 1.0 + 0.012);
+    // uFill 0: a limb-bright skin (the blast front); 1: a soft centre-bright
+    // cloud (the remnant)
+    float skin = rim * rip * 0.45 + limb * 1.0 + 0.012;
+    float cloud = pow(ndv, 2.6) * (0.55 + 0.45 * rip);
+    vec3 col = mix(uHot, uCool, uCoolK) * mix(skin, cloud, uFill);
     gl_FragColor = vec4(col * uLevel, 1.0);
   }
 `;
 
+const ZERO = [0, 0, 0];
 let _geom = null;
 function shellGeometry() { return _geom || (_geom = new THREE.IcosahedronGeometry(1, 16)); }
 
@@ -93,7 +99,8 @@ function shellMaterial(hot, cool) {
       uCool: { value: new THREE.Color(...cool) },
       uLevel: { value: 0 },
       uCoolK: { value: 0 },
-      uSeed: { value: 0 }
+      uSeed: { value: 0 },
+      uFill: { value: 0 }
     },
     vertexShader, fragmentShader,
     transparent: true, depthWrite: false, side: THREE.DoubleSide,
@@ -102,7 +109,28 @@ function shellMaterial(hot, cool) {
 }
 
 /** Blasts drawn at once (newest first); each uses an outer and a kill mesh. */
-export const SHELL_SLOTS = 4;
+export const SHELL_SLOTS = 6;
+
+/** The dim ember cloud a detonation leaves behind. */
+export const REMNANT_LIFE_S = 32;
+export const REMNANT_LEVEL = 0.26;
+
+/**
+ * Remnant glow `age` seconds after the detonation: a soft cloud a fraction
+ * of the blast radius across that swells a little, cools from orange to
+ * deep red and is gone by REMNANT_LIFE_S. It only appears once the fireball
+ * is burning down. Pure in time.
+ */
+export function blastRemnantAt(age, radius, out = {}) {
+  out.r = 0; out.level = 0; out.cool = 0;
+  if (!(age >= 0) || age >= REMNANT_LIFE_S || !(radius > 0)) return out;
+  out.r = radius * (0.2 + 0.24 * (1 - Math.exp(-age / 9)));
+  const rise = Math.min(1, Math.max(0, (age - 0.8) / 2.2));
+  const tail = 1 - Math.min(1, Math.max(0, (age - (REMNANT_LIFE_S - 6)) / 6));
+  out.level = rise * rise * (3 - 2 * rise) * Math.exp(-age / 14) * tail;
+  out.cool = 1 - Math.exp(-age / 7);
+  return out;
+}
 
 export class BlastShells {
   constructor(scene) {
@@ -113,11 +141,13 @@ export class BlastShells {
     for (let i = 0; i < SHELL_SLOTS; i++) {
       const outer = new THREE.Mesh(shellGeometry(), shellMaterial([1.45, 1.25, 1.0], [1.3, 0.38, 0.08]));
       const kill = new THREE.Mesh(shellGeometry(), shellMaterial([1.5, 1.45, 1.5], [1.5, 0.28, 0.12]));
-      for (const m of [outer, kill]) {
+      const remnant = new THREE.Mesh(shellGeometry(), shellMaterial([1.0, 0.42, 0.14], [0.42, 0.05, 0.025]));
+      remnant.material.uniforms.uFill.value = 1;
+      for (const m of [outer, kill, remnant]) {
         m.visible = false; m.frustumCulled = false; m.renderOrder = 35;
         this.group.add(m);
       }
-      this.slots.push({ outer, kill });
+      this.slots.push({ outer, kill, remnant });
     }
     scene.add(this.group);
     this._range = { lo: 0, hi: 0 };
@@ -138,23 +168,30 @@ export class BlastShells {
    * @param {number} scale  metres -> scene units (radii are km = scene units)
    */
   update(blasts, now, scale) {
-    const r = blastsAt(blasts, now, SHELL_LIFE_S, this._range);
+    const r = blastsAt(blasts, now, Math.max(SHELL_LIFE_S, REMNANT_LIFE_S), this._range);
     let slot = 0;
     for (let i = r.hi - 1; i >= r.lo && slot < SHELL_SLOTS; i--, slot++) {
       const b = blasts[i], S = this.slots[slot], age = now - b.t;
+      this._age = age;
       const o = blastShellAt(age, b.radius, this._s);
       this._place(S.outer, b, o, scale, SHELL_LEVEL);
       const k = blastShellAt(age, b.kill, this._s, KILL_EXPAND_S, KILL_LIFE_S);
       this._place(S.kill, b, k, scale, KILL_LEVEL);
+      this._place(S.remnant, b, blastRemnantAt(age, b.radius, this._s), scale, REMNANT_LEVEL);
     }
     this.active = slot;
-    for (; slot < SHELL_SLOTS; slot++) { this.slots[slot].outer.visible = false; this.slots[slot].kill.visible = false; }
+    for (; slot < SHELL_SLOTS; slot++) {
+      const S = this.slots[slot];
+      S.outer.visible = false; S.kill.visible = false; S.remnant.visible = false;
+    }
   }
 
   _place(mesh, b, s, scale, level) {
     mesh.visible = s.level > 0.004;
     if (!mesh.visible) return;
-    mesh.position.set(b.pos[0] * scale, b.pos[1] * scale, b.pos[2] * scale);
+    // coasts with the wreck (b.vel), like the fireball and the debris
+    const age = this._age, v = b.vel || ZERO;
+    mesh.position.set((b.pos[0] + v[0] * age) * scale, (b.pos[1] + v[1] * age) * scale, (b.pos[2] + v[2] * age) * scale);
     mesh.scale.setScalar(s.r);
     const u = mesh.material.uniforms;
     u.uLevel.value = s.level * level;
@@ -164,7 +201,7 @@ export class BlastShells {
 
   dispose() {
     this.scene.remove(this.group);
-    for (const S of this.slots) { S.outer.material.dispose(); S.kill.material.dispose(); }
+    for (const S of this.slots) { S.outer.material.dispose(); S.kill.material.dispose(); S.remnant.material.dispose(); }
     this.slots = [];
   }
 }

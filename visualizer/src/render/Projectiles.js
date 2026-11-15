@@ -19,6 +19,14 @@ const ORIGIN = new THREE.Vector3();
 const X = new THREE.Vector3(1, 0, 0);
 const SCALE = 0.001;
 const MUZZLE_LIFE = 0.3;
+/** Seconds of exhaust wake behind a burning torpedo. */
+const TORPEDO_WAKE_S = 2.2;
+/** A seeker-dead torpedo's end-over-end tumble rate (rad/s, eased in). */
+const TUMBLE_RATE = 1.3;
+/** The terminal-burn light-off flash lasts this long. */
+const TERMINAL_KICK_S = 0.55;
+/** PD ablation glow reaches full strength after this much dwell. */
+const DWELL_GLOW_S = 1.5;
 // Longest on-screen wake (px); only bites in close-ups (see trail())
 const TRAIL_CAP_PX = { slug: 140, torpedo: 200 };
 // Close-ups: a PD beam longer than this on screen keeps only its two ends
@@ -319,7 +327,7 @@ export class Projectiles {
 
   torpedo(tr, time) {
     tr.visible = time >= tr.start && time < tr.end;
-    if (time < tr.start || time > tr.end + 1.3) return;
+    if (time < tr.start || time > tr.end + TORPEDO_WAKE_S) return;
     if (tr.impact && !tr.surfaced && time >= tr.samples.at(-1).t - 0.5) this.surfaceImpact(tr);
     const st = Math.min(time, tr.end);
     this.timeline.sample(tr, st, this.sample);
@@ -344,6 +352,14 @@ export class Projectiles {
       // Absolute orientation, including seeker-disabled roll; never integrate dt.
       const roll = disabled ? (time - Math.min(time, tr.disabledAt)) * 1.1 + tr.seed * 6.28 : tr.seed * 6.28;
       this.bodyQ.setFromUnitVectors(Z, this.dir).multiply(this.rollQ.setFromAxisAngle(Z, roll));
+      if (disabled && tr.disabledAt <= time) {
+        // Seeker dead: no attitude control either - the round goes dark and
+        // tumbles end over end (absolute angle from the kill time, eased in)
+        const dead = time - tr.disabledAt;
+        const tumble = TUMBLE_RATE * dead * dead / (dead + 1.2);
+        this.bodyQ.multiply(this.rollQ.setFromAxisAngle(X, tumble));
+        this.dir.copy(Z).applyQuaternion(this.bodyQ);
+      }
       this.ex.copy(X).applyQuaternion(this.bodyQ);
       this.ey.copy(Y).applyQuaternion(this.bodyQ);
       // Thrusters are hardware-sized: they read up close and are gone by
@@ -358,6 +374,16 @@ export class Projectiles {
       this.bodies.add(this.a, this.bodyQ, gx, gy);
       if (power > 0) {
         const terminal = power > 0.9;
+        // Terminal burn light-off: the moment guidance dumps the remaining
+        // delta-v is an event - a hard flash and a ring thrown off the bell
+        if (tr.terminalAt === undefined) tr.terminalAt = this.terminalStart(tr);
+        const kick = time - tr.terminalAt;
+        if (kick >= 0 && kick < TERMINAL_KICK_S) {
+          const kf = 1 - kick / TERMINAL_KICK_S;
+          this.b.copy(this.a).addScaledVector(this.dir, ENGINE.pivot - ENGINE.bell);
+          this.flashes.add(this.b, this.dir, 0.7 + kick * 1.2, 2.4 * kf * kf * kf, 1, tr.seed);
+          this.flashes.add(this.b, this.dir, 0.3 + kick * 5.5, 1.5 * kf * kf, 0, tr.seed);
+        }
         const thr = th.tele ? (throttleAt(th, st) ?? 1) : 1;
         // A 5% trim burn is a flicker, not a 9 km lance.
         const size = 0.25 + 0.75 * Math.pow(Math.min(1, thr), 0.7);
@@ -370,7 +396,9 @@ export class Projectiles {
         this.c.copy(this.b).addScaledVector(this.bellAxis, (terminal ? 9 : 3.6) * breathe * size);
         this.ribbons.add(this.b, this.c, (terminal ? 0.5 : 0.24) * size, (terminal ? 1.15 : 0.8) * (0.6 + 0.4 * size), 3, tr.seed);
         // Nozzle glow: reads end-on and at ranges where the plume is a line.
-        this.flashes.add(this.b, this.bellAxis, (terminal ? 0.6 : 0.28) * size, (terminal ? 1.2 : 0.6) * size, 1);
+        // (never under ~3 px: the flare is what marks a live round at fleet range)
+        const flarePx = this.pixelAt(this.b) * (terminal ? 3.6 : 2.6);
+        this.flashes.add(this.b, this.bellAxis, Math.max((terminal ? 0.6 : 0.28) * size, flarePx), (terminal ? 1.3 : 0.7) * Math.max(size, 0.6), 1);
       }
       if (vis > 0.01) this.rcsJets(tr, time, vis);
       // Small seeker glint keeps an unpowered body readable at mid range.
@@ -384,7 +412,33 @@ export class Projectiles {
         this.markers.add(this.a, this.vel.lengthSq() > 1 ? this.vel : this.dir, mark, tr.faction, disabled ? 5 : 7);
       }
     }
-    this.trail(tr, time, Math.min(time, tr.end), 1.3, 14, 1, true, TRAIL_CAP_PX.torpedo);
+    this.trail(tr, time, Math.min(time, tr.end), TORPEDO_WAKE_S, 18, 1, true, TRAIL_CAP_PX.torpedo);
+  }
+
+  /**
+   * Battle time a torpedo's terminal burn lights (first recorded sample at
+   * terminal power), Infinity when it never does. From the recording alone,
+   * cached on the track.
+   */
+  terminalStart(tr) {
+    const probe = this.termProbe || (this.termProbe = makeSample());
+    for (let i = 0; i < tr.samples.length; i++) {
+      const t = tr.samples[i].t;
+      if (t >= tr.end) break;
+      this.timeline.sample(tr, t, probe);
+      const s = probe.state;
+      if (!s || s.disabled || t >= tr.disabledAt) continue;
+      let range = Infinity, closure = 0;
+      const target = this.timeline.ships.get(s.target);
+      if (target && sampleTrack(target, t, this.shipSample)) {
+        this.t1.fromArray(this.shipSample.pos).sub(this.t2.fromArray(probe.pos));
+        range = this.t1.length();
+        this.t2.fromArray(probe.vel).sub(this.s3.fromArray(this.shipSample.vel));
+        closure = range > 0 ? this.t2.dot(this.t1) / range : 0;
+      }
+      if (torpedoPower(s, probe.next, probe.dt, range, closure, false) > 0.9) return t;
+    }
+    return Infinity;
   }
 
   /**
@@ -479,8 +533,11 @@ export class Projectiles {
     // emitter glint at the lens, and the burn spot on the round: the laser's
     // green over a white-hot contact point (the ablation sparks follow below)
     this.flashes.add(this.a, this.dir, 0.2, 0.7 * intensity, 6, seed);
-    this.flashes.add(this.b, this.dir, 0.2, 0.75 * intensity, 2, seed);
-    this.flashes.add(this.b, this.dir, 0.3, 0.6 * intensity, 6, seed);
+    // Ablation glow builds over the dwell: the skin goes from a spark to a
+    // white-hot patch before the round lets go
+    const dwell = THREE.MathUtils.clamp((time - seg.start) / Math.max(DWELL_GLOW_S, seg.end - seg.start), 0, 1);
+    this.flashes.add(this.b, this.dir, 0.2 * (1 + 0.9 * dwell), 0.75 * intensity * (0.55 + 0.95 * dwell), 2, seed);
+    this.flashes.add(this.b, this.dir, 0.3 * (1 + 0.5 * dwell), 0.6 * intensity, 6, seed);
     // Fixed birth cadence, sampled analytically; direct seeks retain spray.
     const cadence = 0.09, tick = Math.floor((time - seg.start) / cadence);
     this.dir.negate();
@@ -745,9 +802,13 @@ export class Projectiles {
     let scale = k === 'hit' ? Math.min(2.1, 0.5 + Math.pow(Math.max(1, m.energy || 1), 0.3) * 0.3) : 0.9;
     const flash = Math.exp(-age * 9) * life;
     if (k !== 'hit') {
-      this.flashes.add(this.a, this.dir, scale * (0.55 + age * 2.5), flash * 2.2, 2, m.seed);
-      this.flashes.add(this.a, this.dir, scale * 0.3, 2.5 * Math.exp(-age * 30), 1, m.seed);
-      this.sparks(this.a, this.dir, this.axis, age, IMPACT_LIFE, scale, m.seed, 28, 1);
+      // Interception: a small sharp pop - a white pinpoint, a thin ring
+      // snapping outward and a few fast fragments - nothing like the warm,
+      // sustained strike of a round on armour
+      this.flashes.add(this.a, this.dir, scale * (0.35 + age * 1.6), flash * 1.6, 2, m.seed);
+      this.flashes.add(this.a, this.dir, scale * 0.28, 3.0 * Math.exp(-age * 34), 1, m.seed);
+      this.flashes.add(this.a, this.dir, scale * (0.2 + age * 6.5), 1.5 * life * life * life, 0, m.seed);
+      this.sparks(this.a, this.dir, this.axis, age, IMPACT_LIFE, scale * 1.5, m.seed, 16, 1);
       return;
     }
     // Hull hit: sized to the struck hull (a stopped penetrator must not

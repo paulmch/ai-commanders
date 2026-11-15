@@ -11,6 +11,11 @@ import { spinalMuzzleInto } from './WeaponTimeline.js';
 import { BlastShells } from './BlastShell.js';
 import { engineStateAt } from '../DamageTimeline.js';
 
+/** A penetrating torpedo exits only through less hull than this many beams. */
+export const EXIT_MAX_BEAMS = 1.6;
+/** Seconds between a torpedo's entry flash and its exit jet. */
+export const EXIT_JET_DELAY_S = 0.06;
+
 /** A destroyed mount keeps spitting sparks this long, thinning out. */
 export const MOUNT_VENT_S = 26;
 const MOUNT_VENT_STEP = 1.15;
@@ -703,6 +708,16 @@ class ShipView {
   /** Surface point + normal (ship-local) for a mark; cached on the mark. */
   resolve(m) {
     if (m._res && m._resGroup === this.group) return m._res;
+    if (m.fitting && m.ordnanceId) {
+      // a hit that struck an external fitting lands on that mount
+      if (!this.wrecks && this.sd.wrecks?.length) this._assignWrecks();
+      const e = this.wrecks?.find(x => x.ordnanceId === m.ordnanceId && x.local);
+      if (e) {
+        m._res = { p: e.local.clone(), n: e.normal.clone() };
+        m._resGroup = this.group;
+        return m._res;
+      }
+    }
     const bb = this.bbox;
     const ca = Math.cos(m.aim.azimuth), sa = Math.sin(m.aim.azimuth);
     const hx = Math.max(Math.abs(bb.min.x), bb.max.x), hy = Math.max(Math.abs(bb.min.y), bb.max.y);
@@ -735,6 +750,21 @@ class ShipView {
     m._res = hit;
     m._resGroup = this.group;
     return hit;
+  }
+
+  /**
+   * Where a round that entered at `res` (hull-local point + outward
+   * normal) comes out of the far side, going straight through: {p, n}
+   * with n pointing out of the exit, or null when the hull is too deep
+   * along that line for a penetrator to get through (EXIT_MAX_BEAMS).
+   */
+  exitPoint(res) {
+    const o = new THREE.Vector3().copy(res.p).addScaledVector(res.n, -(this.L + this.W) * 2);
+    const hit = this._cast(o, res.n.clone());
+    if (!hit) return null;
+    const depth = hit.p.distanceTo(res.p);
+    if (depth < this.W * 0.2 || depth > this.W * EXIT_MAX_BEAMS) return null;
+    return { p: hit.p, n: res.n.clone().negate() };
   }
 
   /** Resolve (and write instance data for) every mark up to time t. */
@@ -1096,7 +1126,7 @@ class ShipView {
     list.forEach((w, i) => {
       const e = { t: w.t, kind: w.kind, destroyed: !!w.destroyed, rig: null, panel: -1, local: null, normal: null, size: 0,
         slump: (hash01(this.seed, 1200 + i) - 0.5) * 2.2, uid: `${this.id}#w${i}`,
-        hitOnly: !!w.hit, mount: !!w.mount, seed: (this.seed + 7919 * (i + 1)) >>> 0 };
+        hitOnly: !!w.hit, mount: !!w.mount, seed: (this.seed + 7919 * (i + 1)) >>> 0, ordnanceId: w.ordnanceId || null };
       if (w.kind === 'pd') {
         // PD dome by turret name (pd_N), else by index: scorch on the ball
         const pds = ud.pdTurrets || [], mounts = ud.pdMounts || [];
@@ -1565,6 +1595,18 @@ export class DamageFX {
         position: P, dir: strikeSpallDir(m, N, new THREE.Vector3()), kind: m.strike, category: 'damage',
         spawnTime: m.t, scale: impactScale(m, v.W), baseVel
       });
+      // A torpedo that goes through a narrow hull comes out the far side
+      if (m.strike === 'breach') {
+        const ex = v.exitPoint(res);
+        if (ex) {
+          const XP = new THREE.Vector3(), XN = new THREE.Vector3();
+          this.markWorld(m, ex, XP, XN);
+          this.sm._spawnBlast({
+            position: XP.addScaledVector(XN, v.W * 0.02), dir: XN, kind: 'exitJet', category: 'damage',
+            spawnTime: m.t + EXIT_JET_DELAY_S, scale: impactScale(m, v.W) * 0.85, baseVel
+          });
+        }
+      }
     }
     // Mount cook-offs: a destroyed battery / spinal mount goes up once
     for (const v of this.views.values()) {

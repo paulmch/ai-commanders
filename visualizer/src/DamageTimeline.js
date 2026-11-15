@@ -368,11 +368,17 @@ export function buildDamageTimeline(rec, opts = {}) {
   };
   const blasts = reactorBlasts.map((e) => {
     const d = e.data || {};
-    const st = Array.isArray(d.position) ? null : shipStateAt(trace, e.ship_id, e.timestamp, tmpB);
+    // Centre and drift: where the trace has the wreck on the frame the
+    // viewer blows it up, coasting on with the wreck's velocity (the engine
+    // keeps wrecks coasting), so shell, fireball and debris stay together.
+    // Falls back to the event's position when the trace has no such frame.
+    const tv = blastTime(e.ship_id, e.timestamp);
+    const st = shipStateAt(trace, e.ship_id, tv, tmpB);
     const radius = d.radius_km || 0;
     return {
-      t: blastTime(e.ship_id, e.timestamp), eventT: e.timestamp, shipId: e.ship_id,
-      pos: Array.isArray(d.position) ? d.position.slice() : st ? st.pos.slice() : null,
+      t: tv, eventT: e.timestamp, shipId: e.ship_id,
+      pos: st ? st.pos.slice() : Array.isArray(d.position) ? d.position.slice() : null,
+      vel: st ? st.vel.slice() : [0, 0, 0],
       radius, kill: d.torpedo_kill_radius_km ?? radius * 0.25, blind: d.torpedo_blind_radius_km ?? radius * 0.6,
       yield: d.yield_gj || 0, ships: d.ships_hit || [], destroyed: d.torpedoes_destroyed || [],
       blinded: d.torpedoes_blinded || [], seed: hashString(`${e.ship_id}|blast|${e.timestamp}`)
@@ -530,7 +536,11 @@ export function buildDamageTimeline(rec, opts = {}) {
     let moved = false;
     for (const w of sd.wrecks) {
       const m = w.ordnanceId ? byOrdnance.get(w.ordnanceId) : null;
-      if (m && m.shipId === sd.id && m.t !== w.t) { w.t = m.t; moved = true; }
+      if (!m || m.shipId !== sd.id) continue;
+      // the round struck this fitting: its flash, crater and spall sit on
+      // the mount, not on a seeded patch of plating
+      m.fitting = w.kind;
+      if (m.t !== w.t) { w.t = m.t; moved = true; }
     }
     if (moved) sd.wrecks.sort((a, b) => a.t - b.t);
   }
