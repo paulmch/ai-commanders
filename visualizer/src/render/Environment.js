@@ -113,6 +113,7 @@ export class Environment {
     this.scene.remove(this.group);
     if (this.scene.environment === this.envRT?.texture) this.scene.environment = null;
     delete this.scene.userData.sun;
+    this.sunLight.dispose();   // the shadow map render target
     this.skyRT?.dispose();
     this.envRT?.dispose();
     this.noiseVol?.dispose();
