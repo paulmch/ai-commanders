@@ -1,0 +1,1157 @@
+{
+ "schema": 1,
+ "generated_by": "visualizer/scripts/export_hull_mounts.mjs (do not edit; regenerate after any hull-kit or fleet_ships.json change)",
+ "frame": "x forward, y port, z dorsal; metres from the hull centre; angles in degrees",
+ "viewer_frame": "body (x, y, z) = hull-kit (Z nose, X port, Y dorsal) * metres_per_scene_unit; azimuth = atan2(y, x), elevation = asin(z)",
+ "grid": {
+  "az_step_deg": 5,
+  "el_step_deg": 5,
+  "az_cells": 72,
+  "el_cells": 36,
+  "order": "row-major by elevation cell from -90 up, then azimuth cell from -180 up",
+  "cell": "az_cell = floor((az + 180) / 5) mod 72, el_cell = clamp(floor((el + 90) / 5), 0, 35); k = el_cell * 72 + az_cell",
+  "bits": "cell k is bit (7 - k % 8) of byte k // 8 of bytes.fromhex(blocked) (MSB first), 648 hex digits; 1 = blocked"
+ },
+ "notes": {
+  "mounts": "listed in data/fleet_ships.json weapons order; the per-frame `tur` trace field uses this order",
+  "pos": "pivot: gun = yaw axis at trunnion height, pd = ball centre, spinal = muzzle, launcher = magazine bank centre",
+  "axis": "mount normal (the yaw axis; elevation of a turret is measured from the plane normal to it); spinal: boresight",
+  "blocked": "own static geometry sampled at cell centre + corners and grown by one cell, OR outside the mechanical limits (turret depression below min_elevation_deg under the mount plane; spinal outside gimbal_deg of the nose); launchers are all-open",
+  "open_fraction": "solid-angle weighted share of the sphere left open",
+  "self_blocked_fraction": "share of the mechanically reachable directions lost to the ship's own geometry (incl. margin)"
+ },
+ "hulls": {
+  "corvette": {
+   "length_m": 65,
+   "metres_per_scene_unit": 16.25,
+   "mounts": [
+    {
+     "slot": "weapon_0",
+     "kind": "launcher",
+     "type": "torpedo_launcher",
+     "pos": [
+      11.05,
+      0,
+      0
+     ],
+     "axis": [
+      1,
+      0,
+      0
+     ],
+     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 1,
+     "self_blocked_fraction": 0
+    },
+    {
+     "slot": "pd_0",
+     "kind": "pd",
+     "type": "pd_laser",
+     "pos": [
+      -13,
+      0,
+      7.7
+     ],
+     "axis": [
+      0,
+      0,
+      1
+     ],
+     "min_elevation_deg": -5,
+     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff8000003ffc000001fc0000000ffc0000003000000007f80000000000000000f80000000000000000f80000000000000001f80000000000000001fc0000000000000003fc0000000000000003fc0000000000000003fc0000000000000003f80000000000000003f80000000000000003f00000000000000001e00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.484,
+     "self_blocked_fraction": 0.1096
+    }
+   ]
+  },
+  "frigate": {
+   "length_m": 100,
+   "metres_per_scene_unit": 17.3611,
+   "mounts": [
+    {
+     "slot": "weapon_0",
+     "kind": "gun",
+     "type": "coilgun_mk3",
+     "pos": [
+      35,
+      0,
+      11.93
+     ],
+     "axis": [
+      0,
+      0,
+      1
+     ],
+     "min_elevation_deg": -2,
+     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe000000000000000ffe000000000000000ffe000000000000000ffe000000000000000f7e000000000000000f7c00000000000000003000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.4667,
+     "self_blocked_fraction": 0.0666
+    },
+    {
+     "slot": "pd_0",
+     "kind": "pd",
+     "type": "pd_laser",
+     "pos": [
+      -20,
+      0,
+      8.94
+     ],
+     "axis": [
+      0,
+      0,
+      1
+     ],
+     "min_elevation_deg": -5,
+     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff8000001ff8000001ff00000007e0000000f00000000ff0000000000000000ff0000000000000000ff0000000000000000ff0000000000000000ff00000000000000007e00000000000000007e00000000000000007e00000000000000007e00000000000000007e00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.4868,
+     "self_blocked_fraction": 0.1045
+    },
+    {
+     "slot": "pd_1",
+     "kind": "pd",
+     "type": "pd_laser",
+     "pos": [
+      -20,
+      0,
+      -8.94
+     ],
+     "axis": [
+      0,
+      0,
+      -1
+     ],
+     "min_elevation_deg": -5,
+     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007e00000000000000007e00000000000000007e00000000000000007e00000000000000007e00000000000000007e00000000000000007e00000000000000007e00000000000000007e00000000f00000007e0000000ff8000001ff8000001fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.4947,
+     "self_blocked_fraction": 0.0899
+    }
+   ]
+  },
+  "destroyer": {
+   "length_m": 125,
+   "metres_per_scene_unit": 15.625,
+   "mounts": [
+    {
+     "slot": "weapon_0",
+     "kind": "spinal",
+     "type": "spinal_coiler_mk3",
+     "pos": [
+      70,
+      0,
+      -8.52
+     ],
+     "axis": [
+      1,
+      0,
+      0
+     ],
+     "gimbal_deg": 30,
+     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc3ffffffffffffffff00fffffffffffffffe007ffffffffffffffe007ffffffffffffffc003ffffffffffffffc003ffffffffffffffc003ffffffffffffffc003ffffffffffffffe007ffffffffffffffe007fffffffffffffff00ffffffffffffffffc3ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.0656,
+     "self_blocked_fraction": 0
+    },
+    {
+     "slot": "weapon_1",
+     "kind": "gun",
+     "type": "coilgun_mk3",
+     "pos": [
+      23.75,
+      0,
+      12.46
+     ],
+     "axis": [
+      0,
+      0,
+      1
+     ],
+     "min_elevation_deg": -2,
+     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000007c00000000000000007000000000000000007000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.491,
+     "self_blocked_fraction": 0.018
+    },
+    {
+     "slot": "pd_0",
+     "kind": "pd",
+     "type": "pd_laser",
+     "pos": [
+      -30,
+      0,
+      10.49
+     ],
+     "axis": [
+      0,
+      0,
+      1
+     ],
+     "min_elevation_deg": -5,
+     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000ffff00000fffc000001ffc000003f00000001ffc0000000000000007fc00000000000000007c00000000000000007c00000000000000007c00000000000000007c0000000000000000780000000000000000780000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.4837,
+     "self_blocked_fraction": 0.1101
+    },
+    {
+     "slot": "pd_1",
+     "kind": "pd",
+     "type": "pd_laser",
+     "pos": [
+      -27.5,
+      5.5,
+      -10.49
+     ],
+     "axis": [
+      0,
+      0,
+      -1
+     ],
+     "min_elevation_deg": -5,
+     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffff001ffe00000007ffffffffff0000000fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.4982,
+     "self_blocked_fraction": 0.0835
+    }
+   ]
+  },
+  "cruiser": {
+   "length_m": 175,
+   "metres_per_scene_unit": 16.8269,
+   "mounts": [
+    {
+     "slot": "weapon_0",
+     "kind": "spinal",
+     "type": "spinal_coiler_mk3",
+     "pos": [
+      87.5,
+      0,
+      -16.96
+     ],
+     "axis": [
+      1,
+      0,
+      0
+     ],
+     "gimbal_deg": 30,
+     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc3ffffffffffffffff00fffffffffffffffe007ffffffffffffffe007ffffffffffffffc003ffffffffffffffc003ffffffffffffffc003ffffffffffffffc003ffffffffffffffe007ffffffffffffffe007fffffffffffffff00ffffffffffffffffc3ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.0656,
+     "self_blocked_fraction": 0
+    },
+    {
+     "slot": "weapon_1",
+     "kind": "gun",
+     "type": "coilgun_mk3",
+     "pos": [
+      26.25,
+      22.21,
+      0
+     ],
+     "axis": [
+      0,
+      1,
+      0
+     ],
+     "min_elevation_deg": -2,
+     "blocked": "001fff8000000000001fffffff80000000003fffffffc0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe000000000fffffffff000000000fffffffff000000000fffffffff000000000fffffffff800000000fffffffff800000001fffffffff800000001fffffffff800000001fffffffff800000001fffffffff800000001fffffffff800000001fffffffff800000000fffffffff000000000fffffffff000000000fffffffff0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000003fffffffc0000000001fffffff8000000000001fff800000000000",
+     "open_fraction": 0.5057,
+     "self_blocked_fraction": 0.0162
+    },
+    {
+     "slot": "weapon_2",
+     "kind": "gun",
+     "type": "coilgun_mk3",
+     "pos": [
+      26.25,
+      -22.21,
+      0
+     ],
+     "axis": [
+      0,
+      -1,
+      0
+     ],
+     "min_elevation_deg": -2,
+     "blocked": "000000000001fff8000000000001fffffff80000000003fffffffc0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe000000000fffffffff000000000fffffffff000000000fffffffff000000001fffffffff800000001fffffffff800000001fffffffff800000001fffffffff800000001fffffffff800000001fffffffff800000001fffffffff000000001fffffffff000000000fffffffff000000000fffffffff000000000fffffffff0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000003fffffffc0000000001fffffff8000000000001fff800",
+     "open_fraction": 0.5057,
+     "self_blocked_fraction": 0.0162
+    },
+    {
+     "slot": "pd_0",
+     "kind": "pd",
+     "type": "pd_laser",
+     "pos": [
+      -28,
+      0,
+      18.68
+     ],
+     "axis": [
+      0,
+      0,
+      1
+     ],
+     "min_elevation_deg": -5,
+     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000ffff00000fff0000001ff8000000f000000007fc00000000000000007c00000000000000007c00000000000000007c00000000000000007c0000000000000000780000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.4945,
+     "self_blocked_fraction": 0.0902
+    },
+    {
+     "slot": "pd_1",
+     "kind": "pd",
+     "type": "pd_laser",
+     "pos": [
+      -28,
+      0,
+      -18.68
+     ],
+     "axis": [
+      0,
+      0,
+      -1
+     ],
+     "min_elevation_deg": -5,
+     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007e00000000fc000003ffc000003ffff000ffffff000fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.4964,
+     "self_blocked_fraction": 0.0868
+    }
+   ]
+  },
+  "battlecruiser": {
+   "length_m": 175,
+   "metres_per_scene_unit": 13.2576,
+   "mounts": [
+    {
+     "slot": "weapon_0",
+     "kind": "spinal",
+     "type": "spinal_coiler_mk3",
+     "pos": [
+      98,
+      0,
+      -7.8
+     ],
+     "axis": [
+      1,
+      0,
+      0
+     ],
+     "gimbal_deg": 30,
+     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc3ffffffffffffffff00fffffffffffffffe007ffffffffffffffe007ffffffffffffffc003ffffffffffffffc003ffffffffffffffc003ffffffffffffffc003ffffffffffffffe007ffffffffffffffe007fffffffffffffff00ffffffffffffffffc3ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.0656,
+     "self_blocked_fraction": 0
+    },
+    {
+     "slot": "weapon_1",
+     "kind": "gun",
+     "type": "coilgun_mk3",
+     "pos": [
+      28,
+      13.91,
+      0
+     ],
+     "axis": [
+      0,
+      1,
+      0
+     ],
+     "min_elevation_deg": -2,
+     "blocked": "001fff8000000000001fffffff80000000003fffffffc0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe000000000fffffffff000000000fffffffff000000000fffffffff000000000fffffffff000000000fffffffff000000001fffffffff000000003fffffffff000000003fffffffff000000003fffffffff000000003fffffffff000000001fffffffff000000000fffffffff000000000fffffffff000000000fffffffff0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000003fffffffc0000000001fffffff8000000000001fff800000000000",
+     "open_fraction": 0.5081,
+     "self_blocked_fraction": 0.0117
+    },
+    {
+     "slot": "weapon_2",
+     "kind": "gun",
+     "type": "coilgun_mk3",
+     "pos": [
+      28,
+      -13.91,
+      0
+     ],
+     "axis": [
+      0,
+      -1,
+      0
+     ],
+     "min_elevation_deg": -2,
+     "blocked": "000000000001fff8000000000001fffffff80000000003fffffffc0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe000000000fffffffff000000000fffffffff000000000fffffffff000000000fffffffff800000000fffffffffc00000000fffffffffc00000000fffffffffc00000000fffffffffc00000000fffffffff800000000fffffffff000000000fffffffff000000000fffffffff000000000fffffffff000000000fffffffff0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000003fffffffc0000000001fffffff8000000000001fff800",
+     "open_fraction": 0.5081,
+     "self_blocked_fraction": 0.0117
+    },
+    {
+     "slot": "pd_0",
+     "kind": "pd",
+     "type": "pd_laser",
+     "pos": [
+      -45.5,
+      3.82,
+      10.48
+     ],
+     "axis": [
+      0,
+      0,
+      1
+     ],
+     "min_elevation_deg": -5,
+     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0fffff0000003ffe00000fff0000000f000000003c00000000000000003c00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.4995,
+     "self_blocked_fraction": 0.0811
+    },
+    {
+     "slot": "pd_1",
+     "kind": "pd",
+     "type": "pd_laser",
+     "pos": [
+      -45.5,
+      0,
+      -10.48
+     ],
+     "axis": [
+      0,
+      0,
+      -1
+     ],
+     "min_elevation_deg": -5,
+     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000f8000003ffc000001fff80001ffff80001ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.5085,
+     "self_blocked_fraction": 0.0646
+    }
+   ]
+  },
+  "battleship": {
+   "length_m": 200,
+   "metres_per_scene_unit": 12.5,
+   "mounts": [
+    {
+     "slot": "weapon_0",
+     "kind": "spinal",
+     "type": "spinal_coiler_mk3",
+     "pos": [
+      100,
+      0,
+      -18.43
+     ],
+     "axis": [
+      1,
+      0,
+      0
+     ],
+     "gimbal_deg": 30,
+     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc3ffffffffffffffff00fffffffffffffffe007ffffffffffffffe007ffffffffffffffc003ffffffffffffffc003ffffffffffffffc003ffffffffffffffc003ffffffffffffffe007ffffffffffffffe007fffffffffffffff00ffffffffffffffffc3ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.0656,
+     "self_blocked_fraction": 0
+    },
+    {
+     "slot": "weapon_1",
+     "kind": "gun",
+     "type": "heavy_coilgun_mk3",
+     "pos": [
+      34,
+      0,
+      28.12
+     ],
+     "axis": [
+      0,
+      0,
+      1
+     ],
+     "min_elevation_deg": -2,
+     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0000000000000000ff0000000000000000ff0000000000000000f000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.4856,
+     "self_blocked_fraction": 0.0288
+    },
+    {
+     "slot": "weapon_2",
+     "kind": "gun",
+     "type": "heavy_coilgun_mk3",
+     "pos": [
+      34,
+      13.75,
+      -28.12
+     ],
+     "axis": [
+      0,
+      0,
+      -1
+     ],
+     "min_elevation_deg": -2,
+     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffc000000000000003ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.4927,
+     "self_blocked_fraction": 0.0145
+    },
+    {
+     "slot": "weapon_3",
+     "kind": "gun",
+     "type": "heavy_coilgun_mk3",
+     "pos": [
+      -4,
+      0,
+      28.12
+     ],
+     "axis": [
+      0,
+      0,
+      1
+     ],
+     "min_elevation_deg": -2,
+     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff1e000000ff000000001e000000ff0000000000000000ff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.4808,
+     "self_blocked_fraction": 0.0384
+    },
+    {
+     "slot": "weapon_4",
+     "kind": "gun",
+     "type": "coilgun_mk3",
+     "pos": [
+      -4,
+      -13.75,
+      -22.94
+     ],
+     "axis": [
+      0,
+      0,
+      -1
+     ],
+     "min_elevation_deg": -2,
+     "blocked": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001fe0000000000000001fe0000000000000001fe000000e00000000ffe0003ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.4713,
+     "self_blocked_fraction": 0.0574
+    },
+    {
+     "slot": "pd_0",
+     "kind": "pd",
+     "type": "pd_laser",
+     "pos": [
+      -40,
+      0,
+      20.02
+     ],
+     "axis": [
+      0,
+      0,
+      1
+     ],
+     "min_elevation_deg": -5,
+     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0ffffffffffffffff00000f07fff87803c000000f03dff80003c000000f001ff80003e000000f001ff80003e000000f001ff80003e000000f0003c00001e000000f0000000001e000000f0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.3878,
+     "self_blocked_fraction": 0.2865
+    },
+    {
+     "slot": "pd_1",
+     "kind": "pd",
+     "type": "pd_laser",
+     "pos": [
+      -40,
+      13.75,
+      -20.02
+     ],
+     "axis": [
+      0,
+      0,
+      -1
+     ],
+     "min_elevation_deg": -5,
+     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007e000000000000007f7e0000000007fffffffe00000000ffffffffff8000001ffffffffffff80001ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.4515,
+     "self_blocked_fraction": 0.1694
+    },
+    {
+     "slot": "pd_2",
+     "kind": "pd",
+     "type": "pd_laser",
+     "pos": [
+      24,
+      30.47,
+      0
+     ],
+     "axis": [
+      0,
+      1,
+      0
+     ],
+     "min_elevation_deg": -5,
+     "blocked": "00000000000000000000fffff0000000000007fffffe00000000001fffffff80000000001fffffff80000000003fffffffc0000000003fffffffe0000000007fffffffe0000000007ffffffff000000000fffffffff000000000fffffffff000000000fffffffff000000000fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000003fffffffff000000003fffffffff000000003fffffffff000000003fffffffff000000003fffffffff000000003fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000000fffffffff000000000fffffffff0000000007ffffffff0000000007fffffffe0000000003fffffffe0000000003fffffffc0000000001fffffff80000000001fffffff800000000007fffffe000000000000fffff00000000000000000000000000000",
+     "open_fraction": 0.508,
+     "self_blocked_fraction": 0.0612
+    }
+   ]
+  },
+  "dreadnought": {
+   "length_m": 275,
+   "metres_per_scene_unit": 13.2212,
+   "mounts": [
+    {
+     "slot": "weapon_0",
+     "kind": "spinal",
+     "type": "spinal_coiler_mk3",
+     "pos": [
+      154,
+      0,
+      -22.95
+     ],
+     "axis": [
+      1,
+      0,
+      0
+     ],
+     "gimbal_deg": 30,
+     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc3ffffffffffffffff00fffffffffffffffe007ffffffffffffffe007ffffffffffffffc003ffffffffffffffc003ffffffffffffffc003ffffffffffffffc003ffffffffffffffe007ffffffffffffffe007fffffffffffffff00ffffffffffffffffc3ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.0656,
+     "self_blocked_fraction": 0
+    },
+    {
+     "slot": "weapon_1",
+     "kind": "gun",
+     "type": "heavy_coilgun_mk3",
+     "pos": [
+      82.5,
+      0,
+      34.78
+     ],
+     "axis": [
+      0,
+      0,
+      1
+     ],
+     "min_elevation_deg": -2,
+     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc00000000003ffffff800000000001fffff80000000000001fffc000000000000003fe00000000000000007000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.4465,
+     "self_blocked_fraction": 0.107
+    },
+    {
+     "slot": "weapon_2",
+     "kind": "gun",
+     "type": "heavy_coilgun_mk3",
+     "pos": [
+      82.5,
+      14.81,
+      -34.78
+     ],
+     "axis": [
+      0,
+      0,
+      -1
+     ],
+     "min_elevation_deg": -2,
+     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000fffe00000000000001fffffc0000000000ffffffffe000000003fffffffffff0000007ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.4223,
+     "self_blocked_fraction": 0.1553
+    },
+    {
+     "slot": "weapon_3",
+     "kind": "gun",
+     "type": "heavy_coilgun_mk3",
+     "pos": [
+      27.5,
+      49.59,
+      26.65
+     ],
+     "axis": [
+      0,
+      1,
+      0
+     ],
+     "min_elevation_deg": -2,
+     "blocked": "001fff8000000000001fffffff80000000003fffffffc0000000007fffffffe0000000007fffffffe0000000007fffffffe000000000ffffffffe000000000ffffffffe000000000ffffffffe000000000ffffffffe000000001ffffffffe000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000000fffffffff000000000fffffffff000000000fffffffff0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000003fffffffc0000000001fffffff8000000000001fff800000000000",
+     "open_fraction": 0.5053,
+     "self_blocked_fraction": 0.017
+    },
+    {
+     "slot": "weapon_4",
+     "kind": "gun",
+     "type": "heavy_coilgun_mk3",
+     "pos": [
+      27.5,
+      -49.59,
+      26.65
+     ],
+     "axis": [
+      0,
+      -1,
+      0
+     ],
+     "min_elevation_deg": -2,
+     "blocked": "000000000001fff8000000000001fffffff80000000003fffffffc0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007ffffffff0000000007ffffffff0000000007ffffffff8000000007ffffffff8000000007ffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff000000000fffffffff000000000fffffffff000000000fffffffff000000000fffffffff0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000003fffffffc0000000001fffffff8000000000001fff800",
+     "open_fraction": 0.5053,
+     "self_blocked_fraction": 0.017
+    },
+    {
+     "slot": "weapon_5",
+     "kind": "gun",
+     "type": "heavy_coilgun_mk3",
+     "pos": [
+      -11,
+      0,
+      55.51
+     ],
+     "axis": [
+      0,
+      0,
+      1
+     ],
+     "min_elevation_deg": -2,
+     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000000000000000007000000000000000007000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.4964,
+     "self_blocked_fraction": 0.0072
+    },
+    {
+     "slot": "weapon_6",
+     "kind": "gun",
+     "type": "coilgun_mk3",
+     "pos": [
+      -11,
+      0,
+      -49.75
+     ],
+     "axis": [
+      0,
+      0,
+      -1
+     ],
+     "min_elevation_deg": -2,
+     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c00000000000000003ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.4976,
+     "self_blocked_fraction": 0.0048
+    },
+    {
+     "slot": "pd_0",
+     "kind": "pd",
+     "type": "pd_laser",
+     "pos": [
+      -44,
+      0,
+      46.51
+     ],
+     "axis": [
+      0,
+      0,
+      1
+     ],
+     "min_elevation_deg": -5,
+     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe007ffffffffffe01f00000001ff8000001e00000001ff8000001e00000001ff8000001e00000001ff8000001e00000001ff8000001e00000001ff8000000000000000ff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.4182,
+     "self_blocked_fraction": 0.2306
+    },
+    {
+     "slot": "pd_1",
+     "kind": "pd",
+     "type": "pd_laser",
+     "pos": [
+      -44,
+      0,
+      -46.51
+     ],
+     "axis": [
+      0,
+      0,
+      -1
+     ],
+     "min_elevation_deg": -5,
+     "blocked": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ff0000000000000000ff0000000000000000ff000000000007ffffffffffe000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.458,
+     "self_blocked_fraction": 0.1574
+    },
+    {
+     "slot": "pd_2",
+     "kind": "pd",
+     "type": "pd_laser",
+     "pos": [
+      -8.25,
+      46.51,
+      0
+     ],
+     "axis": [
+      0,
+      1,
+      0
+     ],
+     "min_elevation_deg": -5,
+     "blocked": "003fffc0000000000007fffffe00000000001fffffff80000000003fffffffc0000000003fffffffc0000000007fffffffc0000000007fffffffe000000000ffffffffe000000000ffffffffe000000000fffffffff000000000fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001ffffffffff00000001ffffffffff00000001ffffffffff80000001ffffffffff80000001ffffffffff80000001ffffffffff80000000ffffffffff80000000ffffffffff800000007fffffffff000000007fffffffc0000000003fffffffc0000000003fffffffc0000000001fffffff800000000007fffffe0000000000003fffc00000000000",
+     "open_fraction": 0.4824,
+     "self_blocked_fraction": 0.1085
+    },
+    {
+     "slot": "pd_3",
+     "kind": "pd",
+     "type": "pd_laser",
+     "pos": [
+      -8.25,
+      -46.51,
+      0
+     ],
+     "axis": [
+      0,
+      -1,
+      0
+     ],
+     "min_elevation_deg": -5,
+     "blocked": "000000000003fffc0000000000007fffffe00000000001fffffff80000000003fffffffc0000000003fffffffc0000000003fffffffe0000000007fffffffe0000000007ffffffff0000000007ffffffff000000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff80000000ffffffffff80000000ffffffffff80000001ffffffffff80000001ffffffffff80000001ffffffffff00000001ffffffffff00000001ffffffffff00000001ffffffffff00000000fffffffffe0000000003fffffffe0000000003fffffffc0000000003fffffffc0000000001fffffff800000000007fffffe0000000000003fffc00",
+     "open_fraction": 0.4824,
+     "self_blocked_fraction": 0.1085
+    }
+   ]
+  },
+  "dreadnought_siege": {
+   "length_m": 275,
+   "metres_per_scene_unit": 13.2212,
+   "mounts": [
+    {
+     "slot": "weapon_0",
+     "kind": "spinal",
+     "type": "heavy_siege_coiler_mk3",
+     "pos": [
+      220,
+      0,
+      -14.81
+     ],
+     "axis": [
+      1,
+      0,
+      0
+     ],
+     "gimbal_deg": 20,
+     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc3ffffffffffffffff81ffffffffffffffff00ffffffffffffffff00ffffffffffffffff00ffffffffffffffff00ffffffffffffffff81ffffffffffffffffc3ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.031,
+     "self_blocked_fraction": 0
+    },
+    {
+     "slot": "weapon_1",
+     "kind": "gun",
+     "type": "heavy_coilgun_mk3",
+     "pos": [
+      82.5,
+      0,
+      34.78
+     ],
+     "axis": [
+      0,
+      0,
+      1
+     ],
+     "min_elevation_deg": -2,
+     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc000000001fbffffff8000000001f9fffff80000000001f81fffc00000000001f003fe000000000001f00070000000000000f00000000000000000f00000000000000000f0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.4239,
+     "self_blocked_fraction": 0.1522
+    },
+    {
+     "slot": "weapon_2",
+     "kind": "gun",
+     "type": "heavy_coilgun_mk3",
+     "pos": [
+      82.5,
+      14.81,
+      -34.78
+     ],
+     "axis": [
+      0,
+      0,
+      -1
+     ],
+     "min_elevation_deg": -2,
+     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000fffe00000000000001fffffc0000000000ffffffffe000000003ffffffffff00000007ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.4248,
+     "self_blocked_fraction": 0.1505
+    },
+    {
+     "slot": "weapon_3",
+     "kind": "gun",
+     "type": "heavy_coilgun_mk3",
+     "pos": [
+      27.5,
+      49.59,
+      26.65
+     ],
+     "axis": [
+      0,
+      1,
+      0
+     ],
+     "min_elevation_deg": -2,
+     "blocked": "001fff8000000000001fffffff80000000003fffffffc0000000007fffffffe0000000007fffffffe0000000007fffffffe000000000ffffffffe000000000ffffffffe000000000ffffffffe000000000ffffffffe000000001ffffffffe000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000000fffffffff000000000fffffffff000000000fffffffff0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000003fffffffc0000000001fffffff8000000000001fff800000000000",
+     "open_fraction": 0.5053,
+     "self_blocked_fraction": 0.017
+    },
+    {
+     "slot": "weapon_4",
+     "kind": "gun",
+     "type": "heavy_coilgun_mk3",
+     "pos": [
+      27.5,
+      -49.59,
+      26.65
+     ],
+     "axis": [
+      0,
+      -1,
+      0
+     ],
+     "min_elevation_deg": -2,
+     "blocked": "000000000001fff8000000000001fffffff80000000003fffffffc0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007ffffffff0000000007ffffffff0000000007ffffffff8000000007ffffffff8000000007ffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff000000000fffffffff000000000fffffffff000000000fffffffff000000000fffffffff0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000003fffffffc0000000001fffffff8000000000001fff800",
+     "open_fraction": 0.5053,
+     "self_blocked_fraction": 0.017
+    },
+    {
+     "slot": "weapon_5",
+     "kind": "gun",
+     "type": "heavy_coilgun_mk3",
+     "pos": [
+      -11,
+      0,
+      55.51
+     ],
+     "axis": [
+      0,
+      0,
+      1
+     ],
+     "min_elevation_deg": -2,
+     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000000000000000007000000000000000007000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.4964,
+     "self_blocked_fraction": 0.0072
+    },
+    {
+     "slot": "weapon_6",
+     "kind": "gun",
+     "type": "coilgun_mk3",
+     "pos": [
+      -11,
+      0,
+      -49.75
+     ],
+     "axis": [
+      0,
+      0,
+      -1
+     ],
+     "min_elevation_deg": -2,
+     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c00000000000000003ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.4976,
+     "self_blocked_fraction": 0.0048
+    },
+    {
+     "slot": "pd_0",
+     "kind": "pd",
+     "type": "pd_laser",
+     "pos": [
+      -44,
+      0,
+      46.51
+     ],
+     "axis": [
+      0,
+      0,
+      1
+     ],
+     "min_elevation_deg": -5,
+     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe007ffffffffffe01f00000001ff8000001e00000001ff8000001e00000001ff8000001e00000001ff8000001e00000001ff8000001e00000001ff8000000000000000ff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.4182,
+     "self_blocked_fraction": 0.2306
+    },
+    {
+     "slot": "pd_1",
+     "kind": "pd",
+     "type": "pd_laser",
+     "pos": [
+      -44,
+      0,
+      -46.51
+     ],
+     "axis": [
+      0,
+      0,
+      -1
+     ],
+     "min_elevation_deg": -5,
+     "blocked": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ff0000000000000000ff0000000000000000ff000000000007ffffffffffe000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.458,
+     "self_blocked_fraction": 0.1574
+    },
+    {
+     "slot": "pd_2",
+     "kind": "pd",
+     "type": "pd_laser",
+     "pos": [
+      -8.25,
+      46.51,
+      0
+     ],
+     "axis": [
+      0,
+      1,
+      0
+     ],
+     "min_elevation_deg": -5,
+     "blocked": "003fffc0000000000007fffffe00000000001fffffff80000000003fffffffc0000000003fffffffc0000000007fffffffc0000000007fffffffe000000000ffffffffe000000000ffffffffe000000000fffffffff000000000fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001ffffffffff00000001ffffffffff00000001ffffffffff80000001ffffffffff80000001ffffffffff80000001ffffffffff80000000ffffffffff80000000ffffffffff800000007fffffffff000000007fffffffc0000000003fffffffc0000000003fffffffc0000000001fffffff800000000007fffffe0000000000003fffc00000000000",
+     "open_fraction": 0.4824,
+     "self_blocked_fraction": 0.1085
+    },
+    {
+     "slot": "pd_3",
+     "kind": "pd",
+     "type": "pd_laser",
+     "pos": [
+      -8.25,
+      -46.51,
+      0
+     ],
+     "axis": [
+      0,
+      -1,
+      0
+     ],
+     "min_elevation_deg": -5,
+     "blocked": "000000000003fffc0000000000007fffffe00000000001fffffff80000000003fffffffc0000000003fffffffc0000000003fffffffe0000000007fffffffe0000000007ffffffff0000000007ffffffff000000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff80000000ffffffffff80000000ffffffffff80000001ffffffffff80000001ffffffffff80000001ffffffffff00000001ffffffffff00000001ffffffffff00000001ffffffffff00000000fffffffffe0000000003fffffffe0000000003fffffffc0000000003fffffffc0000000001fffffff800000000007fffffe0000000000003fffc00",
+     "open_fraction": 0.4824,
+     "self_blocked_fraction": 0.1085
+    }
+   ]
+  },
+  "cruiser_torpedo": {
+   "length_m": 175,
+   "metres_per_scene_unit": 16.8269,
+   "mounts": [
+    {
+     "slot": "weapon_0",
+     "kind": "launcher",
+     "type": "torpedo_launcher",
+     "pos": [
+      7,
+      0,
+      24.91
+     ],
+     "axis": [
+      0,
+      0,
+      1
+     ],
+     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 1,
+     "self_blocked_fraction": 0
+    },
+    {
+     "slot": "weapon_1",
+     "kind": "launcher",
+     "type": "torpedo_launcher",
+     "pos": [
+      7,
+      0,
+      -24.91
+     ],
+     "axis": [
+      0,
+      0,
+      -1
+     ],
+     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 1,
+     "self_blocked_fraction": 0
+    },
+    {
+     "slot": "weapon_2",
+     "kind": "launcher",
+     "type": "torpedo_launcher",
+     "pos": [
+      -12.25,
+      24.91,
+      0
+     ],
+     "axis": [
+      0,
+      1,
+      0
+     ],
+     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 1,
+     "self_blocked_fraction": 0
+    },
+    {
+     "slot": "weapon_3",
+     "kind": "launcher",
+     "type": "torpedo_launcher",
+     "pos": [
+      -12.25,
+      -24.91,
+      0
+     ],
+     "axis": [
+      0,
+      -1,
+      0
+     ],
+     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 1,
+     "self_blocked_fraction": 0
+    },
+    {
+     "slot": "pd_0",
+     "kind": "pd",
+     "type": "pd_laser",
+     "pos": [
+      52.5,
+      15.31,
+      15.31
+     ],
+     "axis": [
+      0,
+      0.7071,
+      0.7071
+     ],
+     "min_elevation_deg": -5,
+     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff801ffffffffffffffc0003fffffffffffff00000ffffffffffffc000003fffffffffff8000001fffffffffff0000001ffffffffffe0000001ffffffffffc0000001ffffffffff80000001ffffffffff00000001fffffffffe00000000fffffffffc000000001ffffffff8000000001ffffffff0000000001fffffffe0000000001fffffff000000000003fbfffc000000000000007fe000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.499,
+     "self_blocked_fraction": 0.0813
+    },
+    {
+     "slot": "pd_1",
+     "kind": "pd",
+     "type": "pd_laser",
+     "pos": [
+      52.5,
+      -15.31,
+      15.31
+     ],
+     "axis": [
+      0,
+      -0.7071,
+      0.7071
+     ],
+     "min_elevation_deg": -5,
+     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff801ffffffffffffffc0003fffffffffffff00000ffffffffffffc000003fffffffffff8000001fffffffffff8000000fffffffffff80000007ffffffffff80000003ffffffffff80000001ffffffffff80000000ffffffffff000000007ffffffff8000000003ffffffff8000000001ffffffff8000000000ffffffff80000000007fffffff00000000000fffffff000000000003fffdfc0000000000007fe000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.499,
+     "self_blocked_fraction": 0.0813
+    },
+    {
+     "slot": "pd_2",
+     "kind": "pd",
+     "type": "pd_laser",
+     "pos": [
+      52.5,
+      15.31,
+      -15.31
+     ],
+     "axis": [
+      0,
+      0.7071,
+      -0.7071
+     ],
+     "min_elevation_deg": -5,
+     "blocked": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007fe0000000000003fbfffc00000000000fffffff00000000000fffffffe0000000001ffffffff0000000001ffffffff8000000001ffffffffc000000001ffffffffe00000000ffffffffff00000001ffffffffff80000001ffffffffffc0000001ffffffffffe0000001fffffffffff0000001fffffffffff8000001fffffffffffc000003ffffffffffff00000fffffffffffffc0003ffffffffffffff801fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.499,
+     "self_blocked_fraction": 0.0813
+    },
+    {
+     "slot": "pd_3",
+     "kind": "pd",
+     "type": "pd_laser",
+     "pos": [
+      52.5,
+      -15.31,
+      -15.31
+     ],
+     "axis": [
+      0,
+      -0.7071,
+      -0.7071
+     ],
+     "min_elevation_deg": -5,
+     "blocked": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007fe000000000000003fffdfc00000000000fffffff80000000007fffffff8000000000ffffffff8000000001ffffffff8000000003fffffffff000000007fffffffff80000000ffffffffff80000001ffffffffff80000003ffffffffff80000007ffffffffff8000000fffffffffff8000001fffffffffffc000003ffffffffffff00000fffffffffffffc0003ffffffffffffff801ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.499,
+     "self_blocked_fraction": 0.0813
+    }
+   ]
+  }
+ }
+}

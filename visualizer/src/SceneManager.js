@@ -3,7 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { Environment, disposeTree } from './render/Environment.js';
 import { getGraphicsSettings } from './render/Quality.js';
 import { PostFX } from './render/PostFX.js';
-import { buildHull, buildShipMaterials, ACCENT_GLOW } from './render/Hulls.js';
+import { buildHull, buildShipMaterials, hullSize, ACCENT_GLOW } from './render/Hulls.js';
 import { updateHullDetails } from './render/Hulls.js';
 import { createTorch, damagedNozzle } from './render/Torch.js';
 
@@ -283,19 +283,7 @@ export class SceneManager {
     const group = new THREE.Group();
     group.name = shipId;
 
-    const baseSizes = {
-      corvette: { length: 0.5, width: 0.13 },
-      frigate: { length: 0.72, width: 0.15 },
-      destroyer: { length: 1.0, width: 0.22 },
-      cruiser: { length: 1.3, width: 0.3 },
-      cruiser_torpedo: { length: 1.3, width: 0.3 },
-      battlecruiser: { length: 1.65, width: 0.3 },
-      battleship: { length: 2.0, width: 0.55 },
-      dreadnought: { length: 2.6, width: 0.7 },
-      dreadnought_siege: { length: 2.6, width: 0.7 }
-    };
-    const base = baseSizes[shipType] || baseSizes.destroyer;
-    const size = { length: base.length * 8, width: base.width * 8 };
+    const size = hullSize(shipType);
 
     const mats = buildShipMaterials(faction);
     const engineConfig = this.getEngineConfig(shipType, size);
