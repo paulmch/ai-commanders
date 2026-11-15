@@ -9,23 +9,30 @@ it does not depend on the order (or thread) in which the captains decide.
 
 The doctrine, in four behaviours:
 
-1. Focus fire. The fleet picks ONE gun target - the enemy that is close to
-   the fleet's centre, already damaged, thinly armoured or a soft torpedo
-   boat - and keeps it until it is dying or dead, or a markedly better
-   target appears (FOCUS_SWITCH_MARGIN). Every gun ship shoots it unless an
-   enemy is right on top of that ship.
-2. Range discipline by hull role. Gun ships close to their engagement range
-   (INTERCEPT with standoff_km + a slow arrival) and then HOLD_RANGE there
-   instead of merging; torpedo boats hold a standoff outside the enemy's
-   effective gun range.
-3. Massed torpedo salvos. Torpedo boats hold their rounds until the fleet
-   can put enough into the air at once to saturate the target's point
-   defence (its own turrets plus escorts within PD range), then every boat
-   launches at the same checkpoint, so the rounds arrive together.
-4. Self-preservation and formation. The evade overlay dodges rounds when
-   enemy guns are in reach (and runs from torpedoes); a crippled ship opens
-   range; on the approach every gun ship matches the slowest gun hull's
-   acceleration so the fleet arrives together under mutual PD cover.
+1. Focus fire. The fleet picks ONE target - close to the fleet's centre,
+   already damaged, thinly armoured or a soft torpedo boat - and keeps it
+   until it is dying or dead, or a markedly better one appears
+   (FOCUS_SWITCH_MARGIN). Each gun ship joins it unless the focus is out of
+   its reach or a much better target is on top of it (gun_target): guns only
+   fire at their own ship's target, a focus out of reach would starve them.
+2. Range discipline by hull role, nose first. Gun ships sprint in while a
+   stop short of the enemy's guns stays possible (a closure cap), then coast
+   nose-on through a controlled pass facing the nearest enemy gun, re-close
+   nose first once the range opens, and HOLD_RANGE at their engagement range
+   once the closure is gone; they never brake or open range under fire (that
+   shows the thin tail). Torpedo boats HOLD_RANGE at a standoff outside the
+   gun envelope.
+3. Massed torpedo salvos. Each salvo is sized to saturate its target's point
+   defence (its own turrets plus escorts within PD range) and drawn from the
+   loaded tubes of the boats nearest to it, one round per tube, all launched
+   in the same instant so they arrive together (a tube's second round would
+   follow a reload later, alone); a target the boats cannot saturate gets
+   nothing (rounds held).
+4. Self-preservation and formation. The evade overlay runs from (or presents
+   armour to) guided torpedoes; a crippled ship opens range; on the approach
+   every gun ship matches the slowest gun hull's acceleration so the fleet
+   arrives together under mutual PD cover. The flag ship announces focus and
+   salvos on the FLEET NET (fleet_signal TARGET_CLAIM / TOT_SYNC).
 
 Pure functions of the simulation state, no RNG.
 """
@@ -40,35 +47,44 @@ from typing import Any, Dict, List, Optional, Tuple
 # Named thresholds
 # ---------------------------------------------------------------------------
 
-# Engagement ranges (km), from the doctrine's per-round P(hit) table vs a
-# dodging destroyer (src/llm/prompts.py): spinal 82% / turret 73% at 50 km,
-# 55% / 26% at 100 km - and a dodger the rest of the fleet keeps jinking
-# (what focus fire does to it) 74% / 37% at 50 km but 21% / 3% at 100 km.
-# Focus fire is fought where the jinking target is still hit: a spinal hull
-# holds at 60 km, a turret-only hull closes to 45 km.
+# Engagement (hold) ranges (km), from the doctrine's per-round P(hit) table
+# vs a dodging destroyer (src/llm/prompts.py): spinal 82% / turret 73% at
+# 50 km, 55% / 26% at 100 km - and a dodger the rest of the fleet keeps
+# jinking (what focus fire does to it) 74% / 37% at 50 km but 21% / 3% at
+# 100 km. A spinal hull holds at 60 km, a turret-only hull at 45 km.
 SPINAL_ENGAGE_RANGE_KM = 60.0
 TURRET_ENGAGE_RANGE_KM = 45.0
-# INTERCEPT arrival closing speed (km/s) at the engagement range: slow
-# enough to hold the range once there, fast enough not to dawdle.
-ARRIVAL_CLOSING_KPS = 0.6
-# Sprint: while the ship could still stop short of its engagement range
-# after another full decision interval of burning (solo, at
-# SPRINT_BRAKE_FRACTION of its drive, after a SPRINT_FLIP_S flip), it flies
-# plain INTERCEPT, up to SPRINT_MAX_CLOSING_KPS; then the standoff INTERCEPT
-# plans the brake. Both fleets range keeping on each other otherwise crawl in
-# at ~1.5 km/s (the engine plans each stop around the other's charge).
+# Sprint: while the ship could still stop short of GUNS_HOT_KM after another
+# full decision interval of burning (solo, at SPRINT_BRAKE_FRACTION of its
+# drive, after a SPRINT_FLIP_S flip), it flies plain INTERCEPT, up to
+# SPRINT_MAX_CLOSING_KPS; past that it coasts.
 SPRINT_MAX_CLOSING_KPS = 4.0
 SPRINT_BRAKE_FRACTION = 0.7
 SPRINT_FLIP_S = 40.0
-# Inside engagement range x this the approach is over: HOLD_RANGE.
+# Inside engagement range x this, with the closure nearly gone, HOLD_RANGE.
 HOLD_BAND_FACTOR = 1.35
+HOLD_CLOSING_KPS = 0.4
+# Nose first. Nose armour is ~5x the lateral/tail armour, and a ship braking
+# against the closure (or opening range) turns its tail to the enemy. So a gun
+# ship never brakes into a fight: beyond GUNS_HOT_KM it builds closure only
+# while it could still stop short of GUNS_HOT_KM (sprint_ok - a closure cap,
+# ~2 km/s), then coasts; inside it it coasts nose-on (PADLOCK: spinal and
+# nose armour on him) through a controlled pass - every burn inside the gun
+# envelope swings the nose off - and once the range is opening faster than
+# REENGAGE_OPENING_KPS past REENGAGE_RANGE_KM it burns back toward him, nose
+# first again. Measured on mirror fleets vs the legacy captain: braking to a
+# pass speed outside the guns (flip, tail toward a charging enemy at
+# 200-300 km) lost 4 of 4 gun-heavy seeds; coasting in won 3 of 4.
+GUNS_HOT_KM = 200.0
+REENGAGE_OPENING_KPS = 0.3
+REENGAGE_RANGE_KM = 120.0
 
 # Torpedo boats (no guns) hold this range to the nearest enemy gun ship:
 # outside the gun envelope that matters, inside the torpedoes' reach.
 TORPEDO_STANDOFF_KM = 300.0
 # A boat launches only at targets within this range (a longer flight gives
 # the target's PD and evasion more time).
-TORPEDO_LAUNCH_RANGE_KM = 480.0
+TORPEDO_LAUNCH_RANGE_KM = 600.0
 # ...and fires whatever it has at a gun ship that got this close anyway.
 TORPEDO_PANIC_RANGE_KM = 170.0
 # Extra rounds on top of the computed saturating salvo (seeker losses).
@@ -77,21 +93,25 @@ SALVO_MARGIN_ROUNDS = 1
 MAX_SALVOS_PER_CHECKPOINT = 2
 
 # Focus selection.
-FOCUS_RANGE_SCALE_KM = 200.0     # proximity weight halves at this range
+FOCUS_RANGE_SCALE_KM = 100.0     # proximity weight halves at this range
 FOCUS_DAMAGE_WEIGHT = 1.5        # x(1 + w * hull lost)
 FOCUS_BREACH_BONUS = 0.5         # + when an armour facing is gone
 FOCUS_ARMOR_REF_CM = 150.0       # thinner nose armour = easier kill
-FOCUS_TORPEDO_BOAT_BONUS = 1.3   # soft, and its salvos kill our ships
+FOCUS_TORPEDO_BOAT_BONUS = 2.0   # soft, and its salvos kill our ships
 FOCUS_SWITCH_MARGIN = 1.6        # a new focus must beat the old one by this
-# A gun ship shoots the enemy nearest to it instead of the focus when that
-# enemy is inside its engagement range and the focus is this many times
-# further away.
-SELF_DEFENSE_FACTOR = 2.5
+# Each gun ship weighs the same priorities from ITS position, over a shorter
+# range scale, with the fleet focus counted FOCUS_SHARE_BONUS times: it joins
+# the focus unless that is far beyond a ship already on top of it (a gun
+# only fires at its own target, and its nose armour faces that target).
+SHIP_RANGE_SCALE_KM = 80.0
+FOCUS_SHARE_BONUS = 2.0
+# "In reach": the doctrine's ~150 km beyond which gun fights at dodgers are
+# not planned (src/llm/prompts.py).
+GUN_REACH_KM = 150.0
 
 # Self-preservation.
 CRIPPLED_HULL_PCT = 35.0          # below this hull integrity: open range
 RETREAT_RANGE_KM = 350.0          # ...to this range from the nearest gun ship
-GUN_THREAT_RANGE_KM = 260.0       # enemy guns this close: evade overlay 'dodge'
 
 STANDARD_G = 9.81
 
@@ -160,6 +180,25 @@ def sprint_ok(range_km: float, engage_km: float, closing_kps: float, accel_ms2: 
     return (range_km - engage_km) * 1000.0 - travel > stop
 
 
+def gun_maneuver(range_km: float, closing_kps: float, engage_km: float, accel_ms2: float,
+                 interval_s: float = 30.0) -> Tuple[str, Dict[str, float]]:
+    """
+    (maneuver type, set_maneuver extras) for a gun ship vs its target: sprint
+    while a stop short of his guns stays possible, coast nose-on through the
+    pass, re-close nose first, hold range once the closure is gone (see
+    GUNS_HOT_KM).
+    """
+    if (range_km <= engage_km * HOLD_BAND_FACTOR and abs(closing_kps) <= HOLD_CLOSING_KPS):
+        return "HOLD_RANGE", {"range_km": engage_km}
+    if range_km > GUNS_HOT_KM:
+        if sprint_ok(range_km, GUNS_HOT_KM, closing_kps, accel_ms2, interval_s):
+            return "INTERCEPT", {}
+        return "PADLOCK", {}
+    if closing_kps < -REENGAGE_OPENING_KPS and range_km > REENGAGE_RANGE_KM:
+        return "INTERCEPT", {}
+    return "PADLOCK", {}
+
+
 def max_accel_ms2(ship: Any) -> float:
     try:
         return (ship.kinematic_state.max_acceleration_ms2()
@@ -198,14 +237,14 @@ def _km(a: Any, b: Any) -> float:
 # Focus target
 # ---------------------------------------------------------------------------
 
-def focus_priority(enemy: Any, centre: Any) -> float:
+def focus_priority(enemy: Any, centre: Any, range_scale_km: float = FOCUS_RANGE_SCALE_KM) -> float:
     """
     How much the fleet wants this enemy dead right now: close to the fleet's
     centre, already damaged or breached, thinly armoured, a torpedo boat.
     ``centre`` is a position (Vector3D).
     """
     d_km = (enemy.position - centre).magnitude / 1000.0
-    proximity = 1.0 / (1.0 + d_km / FOCUS_RANGE_SCALE_KM)
+    proximity = 1.0 / (1.0 + d_km / range_scale_km)
     nose_cm, breached = _armor_cm(enemy)
     damage = 1.0 + FOCUS_DAMAGE_WEIGHT * (1.0 - hull_pct(enemy) / 100.0)
     if breached:
@@ -232,6 +271,27 @@ def pick_focus(enemies: List[Any], centre: Any, previous_id: Optional[str]) -> O
     return best
 
 
+def gun_target(ship: Any, enemies: List[Any], focus_id: Optional[str]) -> Optional[Any]:
+    """
+    A gun ship's own target. Guns fire only at their ship's target, so a
+    focus out of this ship's reach (GUN_REACH_KM) must not starve its guns:
+    among the enemies in reach it takes the focus unless a much better one is
+    on top of it (SHIP_RANGE_SCALE_KM, FOCUS_SHARE_BONUS); with none in reach
+    it closes on the focus.
+    """
+    live = [e for e in enemies if _alive(e)]
+    if not live:
+        return None
+    in_reach = [e for e in live if _km(ship, e) <= GUN_REACH_KM]
+    if not in_reach:
+        focus = next((e for e in live if e.ship_id == focus_id), None)
+        return focus or min(live, key=lambda e: (_km(ship, e), e.ship_id))
+    return max(in_reach, key=lambda e: (
+        focus_priority(e, ship.position, SHIP_RANGE_SCALE_KM)
+        * (FOCUS_SHARE_BONUS if e.ship_id == focus_id else 1.0), e.ship_id == focus_id,
+        e.ship_id))
+
+
 # ---------------------------------------------------------------------------
 # Fleet plan
 # ---------------------------------------------------------------------------
@@ -242,6 +302,7 @@ class Salvo:
     rounds: Dict[str, int]       # boat id -> rounds this checkpoint
     need: int                    # rounds that saturate his point defence
     available: int               # rounds the boats in reach could launch
+    saturating: bool = True      # False: a best-effort wave (see _salvo_plan)
 
 
 @dataclass
@@ -274,17 +335,30 @@ def _centre(ships: List[Any]) -> Any:
     return pos * (1.0 / len(ships))
 
 
+def tubes_ready_now(simulation: Any, boat: Any) -> int:
+    """Rounds this boat can put in the air in the same instant: loaded tubes
+    off cooldown (a tube's next round leaves a reload later and would arrive
+    alone), within the launch capacity the engine still has unreserved."""
+    now = float(getattr(simulation, "current_time", 0.0))
+    ready = sum(1 for tube in getattr(boat, "ready_torpedo_launchers", []) or []
+                if getattr(tube, "current_magazine", 0) > 0
+                and tube.last_launch_time + tube.cooldown_seconds <= now + 1e-6)
+    return min(ready, int(simulation.torpedo_launch_capacity(boat.ship_id)))
+
+
 def _salvo_plan(simulation: Any, boats: List[Any], enemies: List[Any], focus: Optional[Any],
                 fleet_data: Optional[Dict[str, Any]]) -> List[Salvo]:
     """
-    This checkpoint's salvos. Each is sized to the target's point defence
+    This checkpoint's salvos: rounds that leave the tubes together
+    (tubes_ready_now), so they arrive together. Each is sized to the target's point defence
     (salvo_to_saturate over its own turrets plus escorts within PD range,
     + SALVO_MARGIN_ROUNDS, less friendly rounds already inbound) and drawn
     from the boats nearest to it; capacity left over may take another target
     (at most MAX_SALVOS_PER_CHECKPOINT). Targets: the gun focus first, then
-    the cheapest to saturate. A target the boats cannot saturate gets
-    nothing (the rounds are held) unless it is a gun ship already inside
-    TORPEDO_PANIC_RANGE_KM of a boat: that one gets everything in reach.
+    the cheapest to saturate. A target the boats cannot saturate is skipped
+    unless it is a gun ship already inside TORPEDO_PANIC_RANGE_KM of a boat
+    (it gets everything in reach); when no salvo saturates anything, one
+    best-effort wave goes at the target closest to saturation.
     """
     from .fire_solutions import pd_cover, rounds_inbound, salvo_to_saturate
     from .prompts import pd_doctrine_numbers
@@ -292,7 +366,7 @@ def _salvo_plan(simulation: Any, boats: List[Any], enemies: List[Any], focus: Op
     if not boats or not enemies:
         return []
     pd = pd_doctrine_numbers(fleet_data)
-    left = {b.ship_id: int(simulation.torpedo_launch_capacity(b.ship_id)) for b in boats}
+    left = {b.ship_id: tubes_ready_now(simulation, b) for b in boats}
 
     def need_for(enemy) -> int:
         own, escorts, _ = pd_cover(simulation, enemy, pd["range_km"])
@@ -330,6 +404,25 @@ def _salvo_plan(simulation: Any, boats: List[Any], enemies: List[Any], focus: Op
             want -= n
         salvos.append(Salvo(target_id=enemy.ship_id, rounds=rounds, need=need,
                             available=available))
+    if not salvos:
+        # Nothing can be saturated: holding gains nothing (a tube holds one
+        # round, reloads do not stack), so every ready tube in reach fires
+        # one synchronized wave at the target closest to saturation.
+        best = None
+        for enemy in candidates:
+            shooters = [b for b in boats if left[b.ship_id] > 0
+                        and _km(b, enemy) <= TORPEDO_LAUNCH_RANGE_KM]
+            available = sum(left[b.ship_id] for b in shooters)
+            need = needs[enemy.ship_id]
+            if available <= 0 or need == 0:
+                continue
+            if best is None or need - available < best[0]:
+                best = (need - available, enemy, shooters, need, available)
+        if best is not None:
+            _, enemy, shooters, need, available = best
+            salvos.append(Salvo(target_id=enemy.ship_id,
+                                rounds={b.ship_id: left[b.ship_id] for b in shooters},
+                                need=need, available=available, saturating=False))
     return salvos
 
 

@@ -145,26 +145,31 @@ def test_fleet_plan_is_shared_and_order_independent():
 # Range discipline by role
 # ---------------------------------------------------------------------------
 
-def test_gun_ship_sprints_far_out_then_closes_to_a_standoff_and_holds():
+def test_gun_policy_never_brakes_under_fire():
+    a, R = 2.0 * 9.81, T.SPINAL_ENGAGE_RANGE_KM
+    assert T.gun_maneuver(500.0, 0.0, R, a) == ("INTERCEPT", {})          # sprint
+    assert T.gun_maneuver(400.0, 3.0, R, a) == ("PADLOCK", {})            # fast enough: coast
+    # Inside the guns: coast nose-on through the pass, closing or not...
+    for closing in (5.0, 1.0, -0.2):
+        assert T.gun_maneuver(150.0, closing, R, a)[0] == "PADLOCK"
+    for closing in (5.0, 1.0, -1.0):
+        assert T.gun_maneuver(20.0, closing, R, a)[0] == "PADLOCK"
+    # ...re-close nose first once the pass has opened the range...
+    assert T.gun_maneuver(T.REENGAGE_RANGE_KM + 10, -1.0, R, a) == ("INTERCEPT", {})
+    # ...and hold the engagement range once the closure is gone.
+    assert T.gun_maneuver(R * 1.1, 0.1, R, a) == ("HOLD_RANGE", {"range_km": R})
+
+
+def test_gun_ship_faces_the_nearest_gun_and_shoots_the_target():
     sim = CombatSimulation(seed=4, time_step=1.0)
-    me = _ship(sim, "me", "destroyer", "alpha", (0, 0, 0))
-    foe = _ship(sim, "foe", "destroyer", "beta", (500, 0, 0), fwd=(-1, 0, 0))
-    m = _maneuver(_captain("destroyer").decide("me", sim))
-    assert m.maneuver_type == ManeuverType.INTERCEPT and m.standoff_m is None   # sprint
-
-    me.kinematic_state.velocity = Vector3D(2500.0, 0, 0)  # closing fast at 200 km
-    foe.kinematic_state.position = Vector3D(200_000.0, 0, 0)
-    m = _maneuver(_captain("destroyer").decide("me", sim))
-    assert m.maneuver_type == ManeuverType.INTERCEPT
-    assert m.standoff_m == pytest.approx(T.SPINAL_ENGAGE_RANGE_KM * 1000.0)
-    assert m.arrival_closing_mps == pytest.approx(T.ARRIVAL_CLOSING_KPS * 1000.0)
-    assert m.evade == "dodge"                      # his guns are in reach
-
-    me.kinematic_state.velocity = Vector3D(0, 0, 0)
-    foe.kinematic_state.position = Vector3D(65_000.0, 0, 0)
-    m = _maneuver(_captain("destroyer").decide("me", sim))
-    assert m.maneuver_type == ManeuverType.HOLD_RANGE
-    assert m.hold_range_m == pytest.approx(T.SPINAL_ENGAGE_RANGE_KM * 1000.0)
+    _ship(sim, "me", "destroyer", "alpha", (0, 0, 0), vel_kps=(1.0, 0, 0))
+    _ship(sim, "soft", "corvette", "beta", (110, 30, 0), fwd=(-1, 0, 0))
+    _ship(sim, "gun", "destroyer", "beta", (90, -30, 0), fwd=(-1, 0, 0))
+    captain = _captain("destroyer")
+    m = _maneuver(captain.decide("me", sim))
+    assert captain.primary_target_id == "soft"       # the fleet's focus (a torpedo boat)
+    assert m.maneuver_type == ManeuverType.PADLOCK and m.target_id == "gun"
+    assert m.evade is None                           # no dodge: it would swing the nose
 
 
 def test_torpedo_boat_holds_its_standoff_from_the_nearest_gun():
@@ -221,20 +226,28 @@ def test_boats_launch_together_when_the_salvo_saturates_point_defence():
 
 
 def test_two_boats_pool_their_tubes_for_a_salvo_neither_could_fire_alone():
-    sim = _salvo_sim(2, boat="corvette", escorts=3)
+    sim = _salvo_sim(2, escorts=4)
     plan = T.compute_fleet_plan(sim, "alpha", None, FLEET)
     salvo = plan.salvos[0]
     assert set(salvo.rounds) == {"a0", "a1"}
     assert max(salvo.rounds.values()) < salvo.need <= sum(salvo.rounds.values())
 
 
-def test_a_lone_corvette_holds_its_rounds_against_a_covered_group():
-    # One tube cannot saturate a destroyer and four PD escorts: hold.
+def test_a_lone_corvette_fires_one_best_effort_wave():
+    # One tube cannot saturate a destroyer and four PD escorts; holding would
+    # gain nothing (reloads do not stack): one wave, flagged as such.
     sim = _salvo_sim(1, escorts=4, boat="corvette")
     plan = T.compute_fleet_plan(sim, "alpha", None, FLEET)
-    assert plan.salvos == [] and plan.launches == {}
-    cmds = _captain("corvette", name="a0").decide("a0", sim)
-    assert not any(isinstance(c, dict) and c.get("type") == "launch_torpedo" for c in cmds)
+    assert len(plan.salvos) == 1 and not plan.salvos[0].saturating
+    assert plan.launches["a0"][1] == 1 < plan.salvos[0].need
+
+
+def test_salvo_counts_only_rounds_that_leave_together():
+    sim = _salvo_sim(1)
+    boat = sim.get_ship("a0")
+    assert T.tubes_ready_now(sim, boat) == len(boat.ready_torpedo_launchers) == 4
+    boat.ready_torpedo_launchers[0].last_launch_time = sim.current_time   # reloading
+    assert T.tubes_ready_now(sim, boat) == 3
 
 
 def test_a_gun_ship_on_top_of_the_boats_gets_everything():
@@ -320,12 +333,16 @@ def gun_battle(tmp_path_factory):
     return _small_battle(tmp_path_factory.mktemp("guns"), TACTICAL, hulls=GUNS, time_limit=330.0)
 
 
-def test_tactical_fleets_hold_range_instead_of_merging(gun_battle):
+def test_tactical_gun_fleets_make_a_controlled_pass(gun_battle, tmp_path):
     stats, _ = gun_battle
-    assert stats["closest_km"] > 15.0, stats          # legacy fleets pass within ~1 km
-    if stats["closest_km"] < 100.0:
-        assert stats["closest_rel_kps"] < 3.0, stats   # ...at ~6 km/s
-    assert stats["shots"] > 0 and stats["shots_eff_share"] > 0.8, stats
+    legacy, _ = _small_battle(tmp_path, {"alpha": DOCTRINE_LEGACY, "beta": DOCTRINE_LEGACY},
+                              hulls=GUNS, time_limit=330.0)
+    # Legacy fleets charge through each other at ~6 km/s; tactical ones
+    # cap the closure and coast through nose-on.
+    assert legacy["closest_rel_kps"] > 4.0, legacy
+    assert stats["closest_rel_kps"] < 3.0, stats
+    assert stats["shots"] > legacy["shots"], (stats, legacy)
+    assert stats["shots_eff_share"] > 0.6, stats
 
 
 def test_tactical_torpedo_boats_launch_as_one_salvo(tactical_battle):

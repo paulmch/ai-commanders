@@ -317,17 +317,18 @@ class HeuristicCaptain(LLMCaptain):
             first = plan.salvos[0]
             if first.target_id in names:
                 rounds = sum(first.rounds.values())
+                note = (f"{first.need} saturate his point defence" if first.saturating else
+                        f"short of the {first.need} that would saturate his point defence")
                 out.append(("fleet_signal", {
                     "kind": "TOT_SYNC", "target": names[first.target_id],
-                    "text": (f"Massed torpedo salvo: {rounds} rounds from {len(first.rounds)} "
-                             f"boat(s) on {names[first.target_id]} "
-                             f"({first.need} saturate his point defence).")}))
+                    "text": (f"Torpedo salvo: {rounds} rounds from {len(first.rounds)} "
+                             f"boat(s) on {names[first.target_id]}, launching together "
+                             f"({note}).")}))
         return out[:MAX_FLEET_SIGNALS_PER_DECISION]
 
     def _tactical_target(self, ship, enemies, order, plan, my_role) -> Any:
-        """Admiral's target > fleet focus (gun ships) > nearest. A gun ship
-        defends itself against an enemy inside its own engagement range
-        when the focus is far beyond it (SELF_DEFENSE_FACTOR)."""
+        """Admiral's target > the boats' salvo target (torpedo boats) > the
+        fleet focus, weighed from this gun ship's position (gun_target)."""
         if order:
             for wanted in (order.torpedo_target, order.suggested_target):
                 match = self._match_enemy(wanted, enemies)
@@ -339,14 +340,9 @@ class HeuristicCaptain(LLMCaptain):
             if pick is not None:
                 return pick
         focus = next((e for e in enemies if e.ship_id == plan.focus_id), None)
-        if focus is None or my_role != "gun":
+        if my_role != "gun":
             return focus or nearest
-        r_km = tactics.engage_range_km(ship)
-        near_km = ship.position.distance_to(nearest.position) / 1000.0
-        focus_km = ship.position.distance_to(focus.position) / 1000.0
-        if near_km <= r_km and focus_km > tactics.SELF_DEFENSE_FACTOR * near_km:
-            return nearest
-        return focus
+        return tactics.gun_target(ship, enemies, plan.focus_id) or nearest
 
     def _tactical_maneuver(self, ship, ship_id, target, enemies, plan, my_role,
                            threat: bool) -> Dict[str, Any]:
@@ -357,7 +353,9 @@ class HeuristicCaptain(LLMCaptain):
         gunned = [e for e in enemies if tactics.has_guns(e)]
         nearest_gun = min(gunned, key=lambda e: (km(e), e.ship_id)) if gunned else None
         gun_km = km(nearest_gun) if nearest_gun is not None else float("inf")
-        evade = "full" if threat else ("dodge" if gun_km <= tactics.GUN_THREAT_RANGE_KM else None)
+        # Run from (or present to) guided torpedoes. No dodge against guns:
+        # the jink swings the nose off and shows the thin lateral armour.
+        evade = "full" if threat else None
 
         def order(kind: str, ref, throttle: float, **extra) -> Dict[str, Any]:
             args: Dict[str, Any] = {"maneuver_type": kind, "target_id": ref.ship_id,
@@ -376,15 +374,16 @@ class HeuristicCaptain(LLMCaptain):
             return order("HOLD_RANGE", anchor, 1.0, range_km=tactics.TORPEDO_STANDOFF_KM)
         r_km = tactics.engage_range_km(ship)
         dist_km, closing_kps = self._range_and_closing(ship, target)
-        if dist_km > r_km * tactics.HOLD_BAND_FACTOR:
-            throttle = plan.formation_throttle.get(ship_id, 1.0)
-            interval = self._decision_interval
-            if tactics.sprint_ok(dist_km, r_km, closing_kps,
-                                 tactics.max_accel_ms2(ship) * throttle, interval):
-                return order("INTERCEPT", target, throttle)
-            return order("INTERCEPT", target, throttle,
-                         standoff_km=r_km, arrival_closing_kps=tactics.ARRIVAL_CLOSING_KPS)
-        return order("HOLD_RANGE", target, 1.0, range_km=r_km)
+        throttle = plan.formation_throttle.get(ship_id, 1.0) if dist_km > tactics.GUNS_HOT_KM else 1.0
+        kind, extra = tactics.gun_maneuver(dist_km, closing_kps, r_km,
+                                           tactics.max_accel_ms2(ship) * throttle,
+                                           self._decision_interval)
+        if kind == "PADLOCK" and nearest_gun is not None and gun_km < dist_km:
+            # Face the threat, shoot the focus: the nose (thickest armour,
+            # spinal) tracks the nearest enemy gun while the turrets stay on
+            # the fleet's target.
+            return order(kind, nearest_gun, 1.0)
+        return order(kind, target, throttle if kind == "INTERCEPT" else 1.0, **extra)
 
     def _radiator_wish(self, ship, ship_id, heat, threat, enemies, simulation) -> Optional[bool]:
         """True = extend, False = retract, None = leave as is."""
