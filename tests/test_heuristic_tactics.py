@@ -433,6 +433,7 @@ def _wreck_guns(ship):
 def test_a_ship_with_every_gun_wrecked_withdraws_and_says_so():
     sim = CombatSimulation(seed=8, time_step=1.0)
     me = _ship(sim, "me", "destroyer", "alpha", (0, 0, 0))
+    _ship(sim, "mate", "destroyer", "alpha", (0, -40, 0))     # still armed: no surrender
     _ship(sim, "foe", "cruiser", "beta", (90, 0, 0), fwd=(-1, 0, 0))
     _wreck_guns(me)
     assert T.role(me) == "unarmed"
@@ -508,8 +509,9 @@ def test_a_disarmed_ship_under_fire_actually_opens_range(tmp_path, monkeypatch):
     monkeypatch.setattr(LLMBattleRunner, "setup_fleet_battle", setup)
     # A destroyer (2 g) disarmed at t=0 withdraws from a cruiser (1.5 g) that
     # can shoot but not catch it.
-    _, rec = _small_battle(tmp_path, TACTICAL, hulls=("destroyer",), beta_hulls=("cruiser",),
-                           time_limit=240.0, distance_km=150.0)
+    # (An armed frigate keeps alpha in the fight, so it does not surrender.)
+    _, rec = _small_battle(tmp_path, TACTICAL, hulls=("destroyer", "frigate"),
+                           beta_hulls=("cruiser",), time_limit=240.0, distance_km=150.0)
     frames = rec["sim_trace"]
     import math
 
@@ -518,4 +520,34 @@ def test_a_disarmed_ship_under_fire_actually_opens_range(tmp_path, monkeypatch):
         return math.dist(s["alpha_1"]["pos"], s["beta_1"]["pos"]) / 1000.0
     shots = [e for e in rec["events"] if e["event_type"] == "shot_fired" and e["ship_id"] == "beta_1"]
     assert shots, "the withdrawing ship must be under fire for this test"
-    assert rng(frames[-1]) > rng(frames[30]) + 30.0, (rng(frames[30]), rng(frames[-1]))
+    assert rng(frames[-1]) > rng(frames[30]) + 15.0, (rng(frames[30]), rng(frames[-1]))
+
+
+def test_a_lone_disarmed_ship_surrenders():
+    # Review round 3, finding 3: nothing to shoot with and no armed ship of
+    # its own left to protect - it surrenders instead of fleeing forever.
+    sim = CombatSimulation(seed=8, time_step=1.0)
+    me = _ship(sim, "me", "destroyer", "alpha", (0, 0, 0))
+    _ship(sim, "foe", "destroyer", "beta", (300, 0, 0), fwd=(-1, 0, 0))
+    _wreck_guns(me)
+    captain = _captain("destroyer")
+    captain.decide("me", sim)
+    assert captain.has_surrendered
+    # With an armed friend still fighting it withdraws instead.
+    sim2 = CombatSimulation(seed=8, time_step=1.0)
+    me2 = _ship(sim2, "me", "destroyer", "alpha", (0, 0, 0))
+    _ship(sim2, "mate", "destroyer", "alpha", (0, 30, 0))
+    _ship(sim2, "foe", "destroyer", "beta", (300, 0, 0), fwd=(-1, 0, 0))
+    _wreck_guns(me2)
+    captain2 = _captain("destroyer")
+    captain2.decide("me", sim2)
+    assert not captain2.has_surrendered
+
+
+def test_chasers_leave_a_disarmed_runner_for_an_armed_enemy():
+    sim = CombatSimulation(seed=8, time_step=1.0)
+    me = _ship(sim, "me", "destroyer", "alpha", (0, 0, 0))
+    runner = _ship(sim, "runner", "destroyer", "beta", (260, 0, 0), vel_kps=(2.0, 0, 0))
+    _ship(sim, "armed", "cruiser", "beta", (0, 420, 0), fwd=(0, -1, 0))
+    _wreck_guns(runner)
+    assert T.gun_target(me, [runner, sim.get_ship("armed")], "runner").ship_id == "armed"

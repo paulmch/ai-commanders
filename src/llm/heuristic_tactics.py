@@ -388,6 +388,11 @@ def gun_target(ship: Any, enemies: List[Any], focus_id: Optional[str]) -> Option
     live = [e for e in enemies if _alive(e)]
     if not live:
         return None
+    # A disarmed enemy out of reach cannot hurt us and is running: leave it
+    # while anything armed is left (chasing it stalled battles to the limit).
+    armed = [e for e in live if role(e) != "unarmed"]
+    if armed:
+        live = [e for e in live if role(e) != "unarmed" or _km(ship, e) <= GUN_REACH_KM]
     in_reach = [e for e in live if _km(ship, e) <= GUN_REACH_KM]
     if not in_reach:
         focus = next((e for e in live if e.ship_id == focus_id), None)
