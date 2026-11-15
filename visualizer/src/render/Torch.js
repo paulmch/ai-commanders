@@ -175,12 +175,12 @@ const fragmentShader = /* glsl */`
         float haloTurb = mix(1.0, 0.4 + 1.2 * n1, rough);
 
         // Shock diamonds: the core necks down and flares at each cell
-        float ph = 6.28318 * s / lam - 2.0 - 4.4 * uPhase;
+        float ph = 6.28318 * s / lam - 2.0 - 6.28318 * uPhase;
         // (each cell weaker and blurrier than the last: three or four read,
         // then turbulence has eaten the pattern)
-        float cell = exp(-s / (lam * 1.7)) * uDiamonds;
+        float cell = exp(-s / (lam * 1.25)) * uDiamonds;
         float pinch = 1.0 - 0.4 * cos(ph) * cell;
-        float knot = 1.0 + 3.6 * pow(0.5 + 0.5 * cos(ph), mix(2.0, 5.0, cell)) * cell;
+        float knot = 1.0 + 2.4 * pow(0.5 + 0.5 * cos(ph), mix(1.3, 3.0, cell)) * cell;
         // Pressure pulses running down the sheath (slow: no strobing)
         float pulse = 1.0 + 0.14 * sin(6.28318 * (s / (uR0 * 24.0) - uTime * 0.8 + uSeed));
 
