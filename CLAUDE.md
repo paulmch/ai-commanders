@@ -61,6 +61,8 @@ ai-commanders/
 │   ├── damage.py / modules.py / geometry.py / thermal.py / power.py
 │   ├── battle_damage.py    # damage consequences: surface fittings (mounts, PD,
 │   │                       # tubes, drive), reactor blast, magazine cook-off
+│   ├── drive_plume.py      # drive plume wash: heat/armour/fittings for ships in a
+│   │                       # burning torch's exhaust cone (no RNG, one snapshot per tick)
 │   ├── trajectory_prediction.py  # movement-only shadow sim -> per-frame sim_trace 'plan'
 │   └── llm/                # OpenRouter client, captain/admiral agents (+vision),
 │                           # draft mode + heuristic captains, prompts, tools,
@@ -120,6 +122,17 @@ ai-commanders/
   destroyed magazine burns half the rounds and blows non-critical neighbours.
   These rolls use `CombatSimulation._damage_rng` (seed-derived), never the
   battle RNG that decides hits
+- Drive plume wash (`src/drive_plume.py`, `tests/test_drive_plume.py`, recorded as
+  `plume_wash` per `docs/pass-5-recording-additions.md`): a burning torch (300 TW
+  jet, the same on every hull) washes any ship within 7.5° of dead astern out to
+  100 km - on axis at full burn 40 GJ/s at 5 km, 16 at 10 km, 4.7 at 20 km, 0.8
+  at 50 km (Gaussian 3° core, scaled by the throttle actually produced); above
+  4 GJ/s it also burns armour and fittings off the washed facing. Heat stops at
+  149% (never a kill by itself). No RNG, order-independent, off in the torpedo
+  forecast shadow (`sim.plume_wash_enabled`). Torpedoes are affected only behind
+  `PLUME_AFFECTS_TORPEDOES` (off). Tactical heuristic captains ease the drive
+  for a friendly astern (`heuristic_tactics.plume_safe_throttle`); commanders
+  see PLUME WASH / PLUME RISK status lines
 - Two-stage kills: a non-reactor killing blow leaves an untargetable dying hulk
   (tumbling, torch sputtering) that detonates 0-30 s later; hits on the hulk
   shorten the fuse, a reactor hit detonates it at once (`test_dying_ships.py`)

@@ -21,6 +21,7 @@ try:
     from ..torpedo import MIN_CLOSING_SPEED_KPS
     from .. import thermal as _thermal
     from .. import combat as _combat
+    from .. import drive_plume as _plume
     from ..power import KINETIC_WEAPON_EFFICIENCY
 except ImportError:  # pragma: no cover - script-style imports
     from pointdefense import (
@@ -32,6 +33,7 @@ except ImportError:  # pragma: no cover - script-style imports
     from torpedo import MIN_CLOSING_SPEED_KPS
     import thermal as _thermal
     import combat as _combat
+    import drive_plume as _plume
     from power import KINETIC_WEAPON_EFFICIENCY
 
 
@@ -153,6 +155,23 @@ def thermal_doctrine_numbers(
     }
 
 
+def plume_doctrine_line() -> str:
+    """The one doctrine sentence on drive plume wash (captains and admirals).
+    Every number is computed from src/drive_plume.py
+    (tests/test_doctrine_accuracy.py binds the wording to the engine)."""
+    def rate(km: float) -> float:
+        return _plume.plume_heat_rate_gj_s(_plume.PLUME_REFERENCE_JET_POWER_W, km, 0.0)
+    return (
+        f"DRIVE PLUME: a burning torch washes every ship, friend or foe, within "
+        f"{_plume.PLUME_MAX_HALF_ANGLE_DEG:g} deg of dead astern of it, out to "
+        f"{_plume.PLUME_MAX_RANGE_KM:.0f} km - on the axis of a full burn +{rate(5.0):.0f} GJ/s of "
+        f"heat at 5 km, +{rate(10.0):.0f} at 10 km, +{rate(20.0):.1f} at 20 km, +{rate(50.0):.1f} at "
+        f"50 km (scaled by throttle) - and inside ~{_plume.plume_ablation_range_km():.0f} km it also "
+        f"burns armour and fittings off the facing shown to it. Wash heat stops at "
+        f"{_plume.PLUME_HEAT_CEILING_FRACTION * 100:.0f}%: it cripples, and the next heat source "
+        f"melts the reactor.")
+
+
 def thermal_doctrine_block(nums: Dict[str, Any]) -> str:
     """The captain's THERMAL doctrine block (static per hull, cacheable)."""
     shots = ", ".join(f"{name} {gj:.2f} GJ" for name, gj in nums["per_shot_gj"].items())
@@ -178,6 +197,7 @@ def thermal_doctrine_block(nums: Dict[str, Any]) -> str:
         f"- set_radiators(mode=\"auto\") hands them to the ship: extend at your chosen heat % "
         f"(default {nums['auto_default_pct']:.0f}%), retract while a torpedo is inbound. To cool "
         f"down: ease the burn below full, extend, or hold fire.",
+        "- " + plume_doctrine_line(),
     ]
     return "\n".join(lines)
 
@@ -2015,6 +2035,7 @@ def format_my_ship(
         f"{ship_status.get('nose_armor', 0.0):.0f} / lateral {ship_status.get('lateral_armor', 0.0):.0f}"
         f" / tail {ship_status.get('tail_armor', 0.0):.0f} cm | delta-v {dv:.0f}/{dv_total:.0f} km/s")
     lines.extend(_heat_lines(ship_status))
+    lines.extend("  " + w for w in (ship_status.get("plume_wash") or []))
     weapons = _weapons_line(ship_status, ship_has_guns(ship_type, fleet_data),
                             (tactical_status.get("current_config") or {}).get("weapon_orders"))
     if weapons:
@@ -2700,6 +2721,7 @@ HEAT AND RESOURCES:
   ~{heat_fill_min:.0f} min and gunfire/PD heat comes on top. YOUR FLEET shows heat and time to
   100% for every ship that is warming; tell hot ships to ease the burn, extend radiators or
   hold fire (set_radiators mode="auto" lets a captain's ship manage its radiators itself).
+- {plume_line}
 - {resources_line}
 
 ADDITIONAL NOTES:
@@ -3172,6 +3194,7 @@ For EACH ship in your fleet, you MUST call issue_order with:
         heat_drive_mw=heat["drive_full_mw"],
         heat_fill_min=heat["full_burn_fill_min"],
         pd_heat_mw=heat["pd_heat_mw"],
+        plume_line=plume_doctrine_line(),
         resources_line=_resources_line({"own_tubes": use_tubes}, fleet_data, own_classes),
         decision_interval_s=decision_interval_s,
         enemy_admiral_note=enemy_admiral_note,
@@ -3809,6 +3832,7 @@ def _format_fleet(snapshot: Any, phase: str) -> str:
         if r.weapons_destroyed:
             bits.append(f"LOST {', '.join(r.weapons_destroyed)}")
         bits.extend(getattr(r, "fittings_damaged", None) or [])
+        bits.extend(getattr(r, "plume_wash", None) or [])
         if r.delta_v_remaining < 300:
             bits.append(f"dv {r.delta_v_remaining:.0f} km/s")
         doing = r.current_maneuver
@@ -4165,6 +4189,7 @@ def build_admiral_ship_order_messages(
         status.append(f"  weapons: {row.weapons_summary}"
                       + (f" | LOST: {', '.join(row.weapons_destroyed)}" if row.weapons_destroyed else "")
                       + "".join(f" | {d}" for d in (getattr(row, "fittings_damaged", None) or [])))
+        status.extend(f"  {w}" for w in (getattr(row, "plume_wash", None) or []))
         doing = row.current_maneuver + (f" -> {_lbl(snapshot, row.current_target)}" if row.current_target else "")
         status.append(f"  now flying: {doing}"
                       + (f" | aimed at by {', '.join(row.targeted_by)}" if row.targeted_by else ""))

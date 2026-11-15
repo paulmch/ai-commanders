@@ -71,6 +71,7 @@ try:
     from .power import PowerSystem, WeaponCapacitor, Battery, Reactor
     from .maneuvers import max_arrival_speed_mps, required_decel_ms2
     from . import battle_damage
+    from . import drive_plume
 except ImportError:
     from replay_evidence import ExecutionEvidence, impact_evidence, OMIT_IF_NONE
     from battle_timing import MIN_DECISION_INTERVAL, MAX_DECISION_INTERVAL
@@ -117,6 +118,7 @@ except ImportError:
     from power import PowerSystem, WeaponCapacitor, Battery, Reactor
     from maneuvers import max_arrival_speed_mps, required_decel_ms2
     import battle_damage
+    import drive_plume
 
 
 # =============================================================================
@@ -398,6 +400,9 @@ class SimulationEventType(Enum):
     # Battle flow events
     SIMULATION_STARTED = auto()
     SIMULATION_ENDED = auto()
+
+    # Drive plume wash (src/drive_plume.py): a ship in another ship's exhaust
+    PLUME_WASH = auto()
 
 
 # =============================================================================
@@ -1596,6 +1601,9 @@ class CombatSimulation:
         # per tick.
         self._damage_rng = random.Random(f"{seed}:battle_damage")
         self._pending_blasts: list[dict] = []
+        # Drive plume wash (src/drive_plume.py). Private forecast shadows
+        # switch it off; its episode state is created lazily on first contact.
+        self.plume_wash_enabled: bool = True
 
         # Decision callback
         self._decision_callback: Optional[Callable[[str, 'CombatSimulation'], list[Any]]] = None
@@ -2698,6 +2706,11 @@ class CombatSimulation:
         # Reactor detonations queued by this tick's deaths reach their
         # surroundings (ships, torpedoes); deaths they cause detonate next tick.
         battle_damage.resolve_pending_blasts(self)
+
+        # Drive plume wash: every ship in another ship's exhaust this tick,
+        # computed from one snapshot of the moved fleet and applied in id
+        # order (no RNG; never kills by itself - see src/drive_plume.py).
+        drive_plume.resolve_plume_wash(self, dt)
 
         # Check for battle end conditions
         # (No last-tick flush is needed: resolving a blast never kills, so it

@@ -47,6 +47,7 @@ from __future__ import annotations
 import math
 import threading
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
@@ -154,6 +155,15 @@ FORMATION_MIN_DRIVE_FRACTION = 0.5
 DISARMED_TARGET_FACTOR = 0.3
 BLAST_AVOID_FACTOR = 1.5
 
+# Drive plume (src/drive_plume.py). A ship does not burn friendlies with its
+# own torch: with a friendly inside the avoidance cone astern (the module's
+# PLUME_AVOID_HALF_ANGLE_DEG / PLUME_AVOID_RANGE_KM) it eases the drive until
+# the wash on that friendly is at most this much - under the 0.78 GJ/s the
+# radiators reject - and coasts when even PLUME_MIN_THROTTLE would exceed it.
+# A torpedo dodge keeps its throttle (survival first).
+PLUME_SAFE_WASH_GJ_PER_S = 0.5
+PLUME_MIN_THROTTLE = 0.05
+
 STANDARD_G = 9.81
 
 
@@ -232,6 +242,43 @@ def drive_fraction(ship: Any) -> float:
         return float(ship.get_effective_thrust_fraction())
     except Exception:
         return 1.0
+
+
+def plume_safe_throttle(simulation: Any, ship: Any, throttle: float, threat: bool = False,
+                        direction: Any = None) -> float:
+    """The ordered throttle, eased so this ship's exhaust does not cook a
+    friendly astern of it (see PLUME_SAFE_WASH_GJ_PER_S).
+
+    The cone is checked along the nose as it points now and, for a HEADING
+    order, along the ordered ``direction`` as well. The wash is taken on the
+    exhaust axis whatever the friendly's exact angle inside the avoidance
+    cone (the nose moves during the 30 s the order lasts).
+    """
+    if threat or throttle <= 0.0:
+        return throttle
+    try:
+        from .. import drive_plume as plume
+    except ImportError:  # pragma: no cover - script-style import path
+        import drive_plume as plume
+    if isinstance(direction, dict):
+        direction = SimpleNamespace(x=float(direction.get("x", 0.0)), y=float(direction.get("y", 0.0)),
+                                    z=float(direction.get("z", 0.0)))
+    nearest_km = None
+    for forward in (None, direction):
+        if forward is None and nearest_km is not None:
+            continue
+        hits = plume.friendlies_in_exhaust(simulation, ship, forward)
+        if hits and (nearest_km is None or hits[0][1] < nearest_km):
+            nearest_km = hits[0][1]
+    if nearest_km is None:
+        return throttle
+    full = plume.plume_heat_rate_gj_s(plume.emitter_jet_power_w(ship, 1.0), nearest_km, 0.0)
+    if full <= PLUME_SAFE_WASH_GJ_PER_S:
+        return throttle
+    cap = PLUME_SAFE_WASH_GJ_PER_S / full
+    if cap < PLUME_MIN_THROTTLE:
+        return 0.0
+    return round(min(throttle, cap), 2)
 
 
 def blast_threat(simulation: Any, ship: Any) -> Optional[Any]:
