@@ -82,6 +82,27 @@ const GOD_FRAG = /* glsl */`
     gl_FragColor = vec4(v, v, v, 1.0);
   }`;
 
+// Anamorphic streak: a wide horizontal blur of the quarter-res bloom level
+// (already thresholded - only true emitters streak). One cheap pass into a
+// quarter-res target; the composite just adds it, tinted.
+const STREAK_FRAG = /* glsl */`
+  uniform sampler2D tSrc;
+  uniform float uTexel;     // 1 / source width
+  varying vec2 vUv;
+  #define TAPS 28
+  void main() {
+    vec3 acc = texture2D(tSrc, vUv).rgb;
+    float wsum = 1.0;
+    for (int i = 1; i <= TAPS; i++) {
+      float fi = float(i);
+      float w = exp(-fi * 0.115);
+      vec2 o = vec2(fi * 2.0 * uTexel, 0.0);
+      acc += (texture2D(tSrc, vUv + o).rgb + texture2D(tSrc, vUv - o).rgb) * w;
+      wsum += 2.0 * w;
+    }
+    gl_FragColor = vec4(acc / wsum, 1.0);
+  }`;
+
 const COMPOSITE_FRAG = /* glsl */`
   uniform sampler2D tScene;
   uniform sampler2D tBloom;
@@ -101,6 +122,9 @@ const COMPOSITE_FRAG = /* glsl */`
   uniform float uSunOnScreen;
   uniform vec3 uSunColor;
   uniform float uFlareStrength;
+  uniform sampler2D tStreak;
+  uniform vec3 uStreakTint;
+  uniform float uGrade;
   varying vec2 vUv;
 
   float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
@@ -193,6 +217,9 @@ const COMPOSITE_FRAG = /* glsl */`
     #endif
 
     col += texture2D(tBloom, uv).rgb * uBloomStrength;
+    #ifdef USE_STREAK
+      col += texture2D(tStreak, uv).rgb * uStreakTint;
+    #endif
     #ifdef USE_GODRAYS
       col += texture2D(tGod, uv).r * uGodStrength * uSunColor;
     #endif
@@ -207,6 +234,13 @@ const COMPOSITE_FRAG = /* glsl */`
     #endif
     col = linearToOutputTexel(vec4(col, 1.0)).rgb;
 
+    // Print-style grade (display space): a gentle S-curve for contrast and
+    // a split tone - cool shadows, warm highlights
+    vec3 curved = col * col * (3.0 - 2.0 * col);
+    col = mix(col, curved, uGrade);
+    float gl = dot(col, vec3(0.2126, 0.7152, 0.0722));
+    col *= mix(vec3(1.0), mix(vec3(0.93, 0.985, 1.07), vec3(1.035, 1.0, 0.95), smoothstep(0.02, 0.65, gl)), uGrade * 3.0);
+
     // Detonation flash: a global bleach toward warm white
     col = mix(col, uFlashColor, clamp(uFlash, 0.0, 1.0));
     // Vignette
@@ -216,6 +250,13 @@ const COMPOSITE_FRAG = /* glsl */`
     col += g * (0.25 + 0.75 * dot(col, vec3(0.333)));
     gl_FragColor = vec4(col, 1.0);
   }`;
+
+// Render-global look constants (lane `light` owns these; see the header of
+// SceneManager's renderer setup for tone mapping / exposure).
+export const BLOOM_THRESHOLD = 1.35;
+export const BLOOM_STRENGTH = 0.22;
+export const STREAK_STRENGTH = 0.13;
+export const GRADE = 0.2;
 
 export class PostFX {
   constructor(renderer, scene, camera) {
@@ -232,13 +273,18 @@ export class PostFX {
     this.sceneRT = this._makeSceneTarget();
 
     // Only true emitters bloom - torches, blasts, beams, the sun
-    this.bloom = new BloomChain({ mips: preset.bloomMips, threshold: 1.35, knee: 0.45, scatter: 0.62, karis: 0.15 });
+    this.bloom = new BloomChain({ mips: preset.bloomMips, threshold: BLOOM_THRESHOLD, knee: 0.45, scatter: 0.62, karis: 0.15 });
     this.bloom.setSize(this.width, this.height);
-    this.BLOOM_BASE = 0.22;
+    this.BLOOM_BASE = BLOOM_STRENGTH;
 
     const lin = { type: THREE.HalfFloatType, depthBuffer: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter };
     this.visRT = new THREE.WebGLRenderTarget(1, 1, lin);
     this.godRT = new THREE.WebGLRenderTarget(Math.max(1, this.width >> 1), Math.max(1, this.height >> 1), lin);
+    this.streakRT = new THREE.WebGLRenderTarget(Math.max(1, this.width >> 2), Math.max(1, this.height >> 2), lin);
+    this.streakMat = new THREE.ShaderMaterial({
+      uniforms: { tSrc: { value: null }, uTexel: { value: 1 / Math.max(1, this.width >> 2) } },
+      vertexShader: VERT, fragmentShader: STREAK_FRAG, depthTest: false, depthWrite: false
+    });
 
     this.visMat = new THREE.ShaderMaterial({
       uniforms: {
@@ -273,7 +319,10 @@ export class PostFX {
         uSunUv: { value: new THREE.Vector2(-1, -1) },
         uSunOnScreen: { value: 0 },
         uSunColor: { value: new THREE.Color(1.0, 0.92, 0.8) },
-        uFlareStrength: { value: 1.0 }
+        uFlareStrength: { value: 1.0 },
+        tStreak: { value: this.streakRT.texture },
+        uStreakTint: { value: new THREE.Color(0.42, 0.62, 1.0).multiplyScalar(STREAK_STRENGTH) },
+        uGrade: { value: GRADE }
       },
       vertexShader: VERT,
       fragmentShader: COMPOSITE_FRAG,
@@ -295,6 +344,8 @@ export class PostFX {
     this.sceneRT.dispose();
     this.visRT.dispose();
     this.godRT.dispose();
+    this.streakRT.dispose();
+    this.streakMat.dispose();
     this.bloom.dispose();
     this.visMat.dispose();
     this.godMat.dispose();
@@ -318,6 +369,7 @@ export class PostFX {
     if (p.fxaa) defs.USE_FXAA = '';
     else if (p.aberration) defs.USE_CA = '';
     if (p.godRays) defs.USE_GODRAYS = '';
+    if (p.streak) defs.USE_STREAK = '';
     this.compositeMat.defines = defs;
     this.compositeMat.needsUpdate = true;
   }
@@ -371,6 +423,7 @@ export class PostFX {
     this.sceneRT = this._makeSceneTarget();
     this.bloom.setSize(this.width, this.height);
     this.godRT.setSize(Math.max(1, this.width >> 1), Math.max(1, this.height >> 1));
+    this.streakRT.setSize(Math.max(1, this.width >> 2), Math.max(1, this.height >> 2));
     const u = this.compositeMat.uniforms;
     u.uTexel.value.set(1 / this.width, 1 / this.height);
     u.uAspect.value = this.width / this.height;
@@ -389,6 +442,17 @@ export class PostFX {
 
     const bloomTex = this.bloom.render(r, sceneTex, this.width, this.height);
     const u = this.compositeMat.uniforms;
+
+    if (this.gfx.preset.streak) {
+      const src = this.bloom.level(1) || this.bloom.level(0);
+      if (src) {
+        this.streakMat.uniforms.tSrc.value = src.texture;
+        this.streakMat.uniforms.uTexel.value = 1 / src.width;
+        this.quad.material = this.streakMat;
+        r.setRenderTarget(this.streakRT);
+        this.quad.render(r);
+      }
+    }
 
     if (this.sun.onScreen > 0.001) {
       const vu = this.visMat.uniforms;

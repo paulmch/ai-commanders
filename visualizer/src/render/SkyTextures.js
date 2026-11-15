@@ -69,7 +69,7 @@ export function makeStarCatalogue(count, { seed = 2024, bandNormal = [0, 1, 0] }
     const lat = v.dot(bn);
     // ~40% isotropic, the rest concentrated toward the band
     if (rnd() > 0.4 + 0.6 * Math.exp(-lat * lat * 14)) continue;
-    const m = Math.pow(rnd(), 16);                 // 0 faint .. 1 brightest (heavy tail)
+    const m = Math.pow(rnd(), 12);                 // 0 faint .. 1 brightest (heavy tail)
     const hot = rnd();
     let T;
     if (m > 0.2 && hot < 0.35) T = 3200 + rnd() * 1500;        // bright K/M giants
@@ -91,7 +91,7 @@ export function makeStarCatalogue(count, { seed = 2024, bandNormal = [0, 1, 0] }
     const c = kelvinToRGB(st.T);
     // most stars barely visible, a few hundred clear, a couple dozen bright
     const top = i < SPIKED ? 1.6 : 1;
-    const bright = (0.03 + 2.2 * st.m) * top;
+    const bright = (0.055 + 2.4 * st.m) * top;
     // keep colour visible but not cartoonish: 70% black-body, 30% white
     for (let k = 0; k < 3; k++) color[i * 3 + k] = (c[k] * 0.7 + 0.3) * bright;
     size[i] = 2.4 + 3.0 * Math.sqrt(st.m);
@@ -210,36 +210,63 @@ export function getGasGiantTexture() {
   return _giant;
 }
 
+/**
+ * Radial ring profile (u = 0 inner edge .. 1 outer edge): optical depth
+ * (alpha) and colour as a pure function, so tests can read it without a
+ * canvas. Modelled on a Saturn-like system: a thin grey inner ring, a dense
+ * bright main ring, a wide dark division, an outer ring with a narrow gap,
+ * and a faint shepherded strand outside it - all broken into hundreds of
+ * ringlets by four octaves of 1D noise.
+ */
+const RING_INNER = [158, 146, 136], RING_MAIN = [232, 210, 178], RING_OUTER = [206, 198, 186];
+
+export function makeRingProfile(w = 2048, seed = 77) {
+  const rnd = mulberry32(seed);
+  const octs = [48, 150, 460, 1300].map((cells) => valueNoise1D(rnd, cells));
+  const slow = valueNoise1D(rnd, 9);
+  const gaps = [];
+  for (let i = 0; i < 26; i++) gaps.push({ c: 0.03 + rnd() * 0.9, w: 0.0012 + rnd() * 0.0035, d: 0.35 + rnd() * 0.6 });
+  const out = new Uint8ClampedArray(w * 4);
+  const box = (u, a, b, e) => smooth(a - e, a + e, u) * (1 - smooth(b - e, b + e, u));
+  for (let x = 0; x < w; x++) {
+    const u = (x + 0.5) / w;
+    const inner = box(u, 0.02, 0.215, 0.012);     // thin, dusty
+    const main = box(u, 0.235, 0.565, 0.006);     // dense and bright
+    const division = box(u, 0.58, 0.655, 0.004);
+    const outer = box(u, 0.668, 0.925, 0.005);
+    const strand = Math.exp(-Math.pow((u - 0.972) / 0.0045, 2));
+    const fine = octs[0](u) * 0.4 + octs[1](u) * 0.3 + octs[2](u) * 0.2 + octs[3](u) * 0.1;
+    let a = inner * (0.1 + 0.26 * u / 0.215) * (0.45 + 1.1 * fine)
+          + main * (0.62 + 0.3 * slow(u)) * (0.62 + 0.62 * fine)
+          + division * 0.07 * (0.3 + 1.6 * octs[1](u))
+          + outer * (0.44 + 0.2 * slow(u + 0.37)) * (0.6 + 0.7 * fine)
+          + strand * 0.3;
+    for (const g of gaps) a *= 1 - g.d * Math.exp(-Math.pow((u - g.c) / g.w, 2));
+    a *= 1 - 0.95 * Math.exp(-Math.pow((u - 0.868) / 0.0035, 2));   // narrow outer gap
+    a = clamp01(a);
+    // colour: grey-brown inner ring, warm cream main ring, cooler outer
+    const tone = 0.74 + 0.36 * fine;
+    const base = u < 0.4 ? RING_INNER : RING_OUTER;
+    for (let k = 0; k < 3; k++) out[x * 4 + k] = (base[k] + (RING_MAIN[k] - base[k]) * main) * tone;
+    out[x * 4 + 3] = a * 255;
+  }
+  return out;
+}
+
 /** Radial ring density (u = 0 inner edge .. 1 outer edge), sRGB colour + alpha. */
 export function makeRingTexture() {
-  const w = 1024;
+  const w = 2048;
+  const profile = makeRingProfile(w);
   const canvas = document.createElement('canvas');
   canvas.width = w; canvas.height = 4;
   const ctx = canvas.getContext('2d');
   const img = ctx.createImageData(w, 4);
-  const rnd = mulberry32(77);
-  const bands = [];
-  for (let i = 0; i < 70; i++) bands.push({ c: rnd(), w: 0.002 + rnd() * 0.02, a: (rnd() - 0.45) * 0.7 });
-  const gapC = 0.62; // a Cassini-like division
-  for (let x = 0; x < w; x++) {
-    const u = x / w;
-    let a = 0.35 + 0.4 * Math.sin(u * Math.PI * 0.9 + 0.2);
-    for (const b of bands) a += b.a * Math.exp(-Math.pow((u - b.c) / b.w, 2));
-    a *= 1 - 0.92 * Math.exp(-Math.pow((u - gapC) / 0.018, 2));
-    a *= smooth(0, 0.04, u) * smooth(1, 0.93, u);
-    a = clamp01(a);
-    const tone = 0.82 + 0.18 * Math.sin(u * 31 + 1.0);
-    const warm = 1 - u * 0.25;
-    for (let y = 0; y < 4; y++) {
-      const i = (y * w + x) * 4;
-      img.data[i] = 212 * tone; img.data[i + 1] = 192 * tone * (0.94 + 0.06 * warm); img.data[i + 2] = 166 * tone * warm;
-      img.data[i + 3] = a * 255;
-    }
-  }
+  for (let y = 0; y < 4; y++) img.data.set(profile, y * w * 4);
   ctx.putImageData(img, 0, 0);
   const t = new THREE.CanvasTexture(canvas);
   t.colorSpace = THREE.SRGBColorSpace;
   t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+  t.anisotropy = 8;
   return t;
 }
 
