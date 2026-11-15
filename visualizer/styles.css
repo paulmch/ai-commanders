@@ -2813,6 +2813,10 @@ body.decisions-open .live-delib {
 .score-pip[data-state="unarmed"] { background: transparent; box-shadow: inset 0 0 0 1px #ffd23e; }
 .score-pip[data-state="unarmed"] b { opacity: 0.3; }
 @media (max-width: 1500px) { .score-arms { display: none; } }
+/* Fighting power outranks spend and points for room in the strip */
+@media (max-width: 1760px) {
+  .score-side:has(.score-arms:not(:empty)) .score-spend, .score-side:has(.score-arms:not(:empty)) .score-points { display: none; }
+}
 
 /* Kill feed: blast line on a kill, amber notice toasts between kills */
 .kill-blast { color: #ffb067; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

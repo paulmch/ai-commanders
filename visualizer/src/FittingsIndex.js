@@ -316,6 +316,8 @@ export class FittingFold {
     };
     this.blasts[ship] = blast;
     for (const v of victims) {
+      // A graze (under a centimetre of armour, nothing else) stays on the kill toast's blast line only
+      if (!(v.armorCm >= 1 || v.mounts.length || v.radiators || v.fuseCutS != null)) continue;
       const cost = [];
       if (v.fuseCutS != null) cost.push(`fuse cut ${v.fuseCutS.toFixed(0)} s`);
       if (v.armorCm > 0) cost.push(`−${v.armorCm.toFixed(1)} cm ${v.location || ''} armour`.replace('  ', ' '));

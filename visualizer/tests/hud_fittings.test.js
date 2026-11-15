@@ -374,6 +374,8 @@ test('battle end: a side that can no longer deal damage is named, with the fight
   banner.update(true, eliminated, computeSides(stranded, [], ships, hud, 150), 150);
   assert.equal(cause.textContent, 'BETA FLEET CAN NO LONGER FIGHT · 1 ship afloat, none armed');
   assert.equal(endCause(eliminated, computeSides({ ...stranded, beta_2: { destroyed: true } }, [], ships, hud, 150)), null, 'a fleet with nothing afloat was eliminated');
+  // ... and a time-limit verdict is never relabelled, whatever the fitting data says
+  assert.equal(endCause({ winner: 'alpha', reason: 'Alpha tactical advantage (60.0 vs 40.0)' }, computeSides(stranded, [], ships, hud, 150)), null);
   // Any other ending keeps the banner as it was
   banner.update(true, { winner: 'alpha', reason: 'Beta fleet eliminated', known: true }, computeSides(states, [], ships, { ...hud, fittings: { active: false } }, 150), 150);
   assert.equal(cause.hidden, true);
@@ -435,4 +437,50 @@ test('fleet specs that arrive after the first events refold the fittings from th
   assert.deepStrictEqual(hud.fittings, full.fittings);
   assert.deepStrictEqual(hud.notices, full.notices);
   assert.ok(new FittingFold().hasLayouts === false);
+});
+
+test('surrenders recorded only as a captain tool call reach the command net, the log, the tally and the end cause', () => {
+  const evs = events().filter(e => e.event_type !== 'battle_end');
+  let seq = 1000;
+  const ev = (t, type, ship_id, data = {}) => evs.push({ event_id: `s${++seq}`, sequence: seq, timestamp: t, event_type: type, ship_id, data });
+  const quit = { tool_calls: [{ id: 'h1', name: 'surrender', arguments: { reason: 'all weapons out, no armed ship left to protect' } }] };
+  ev(140, 'captain_decision', 'beta_2', quit);
+  ev(145, 'ship_destroyed', 'beta_1', { cause: 'reactor_destroyed', killer_id: 'alpha_1' });
+  ev(145, 'reactor_blast', 'beta_1', { radius_km: 18.4, ships_hit: [], torpedoes_destroyed: [], torpedoes_blinded: [] });
+  ev(150, 'captain_decision', 'beta_2', quit);   // repeated: the first counts
+  ev(150, 'battle_end', null, { winner: 'alpha', reason: 'Beta fleet eliminated' });
+  const hud = hudOf(evs);
+  assert.deepEqual(hud.surrenders, [{ t: 140, shipId: 'beta_2', name: 'OCS Falchion-1', faction: 'beta', reason: 'all weapons out, no armed ship left to protect' }]);
+  const rows = hud.comms.filter(r => r.tag === 'SURRENDER');
+  assert.deepEqual(rows.map(r => [r.t, r.kind, r.faction, r.shipId]), [[140, 'system', 'beta', 'beta_2'], [150, 'system', 'beta', 'beta_2']]);
+  assert.match(rows[0].text, /OCS Falchion-1 surrenders: all weapons out/);
+  assert.ok(hud.log.some(r => /^SURRENDER: OCS Falchion-1 strikes its colours \(all weapons out/.test(r.text)));
+  const states = { alpha_1: { hull: 90 }, alpha_2: { hull: 100 }, alpha_3: { destroyed: true }, beta_1: { destroyed: true }, beta_2: { hull: 70 } };
+  assert.equal(computeSides(states, [], ships, hud, 139).beta.surrendered, 0);
+  const sides = computeSides(states, [], ships, hud, 150);
+  assert.deepEqual([sides.beta.alive, sides.beta.surrendered, sides.beta.armed], [1, 1, 0]);
+  assert.deepEqual(endCause(hud.result, sides), { side: 'beta', inferred: true, headline: 'BETA FLEET SURRENDERED',
+    detail: '1 ship struck its colours, none able to deal damage' });
+  // A recorded `surrender` event wins over the tool call at the same time (one row)
+  const both = [...evs];
+  both.splice(both.findIndex(e => e.timestamp === 140 && e.event_type === 'captain_decision'), 0,
+    { event_id: 'sx', sequence: 999, timestamp: 140, event_type: 'surrender', ship_id: 'beta_2', data: { captain_name: 'Captain B' } });
+  assert.equal(hudOf(both).comms.filter(r => r.tag === 'SURRENDER' && r.t === 140).length, 1);
+  assert.equal(hudOf(both).surrenders.length, 1);
+  // Live: the same list whatever the poll boundaries
+  const loader = loaderOf([]);
+  buildHudIndex(loader);
+  let live;
+  for (const e of evs) { loader.events.push(e); live = appendHudIndex(loader, { events: [e], frames: [] }); }
+  assert.deepStrictEqual(live.surrenders, hud.surrenders);
+  assert.deepStrictEqual(live.comms, hud.comms);
+});
+
+test('a blast that only grazes a ship stays on the kill toast: no victim notice', () => {
+  const evs = events();
+  const graze = evs.find(e => e.event_type === 'blast_damage');
+  graze.data.armor_ablation_cm = 0.2;
+  const hud = hudOf(evs.filter(e => !(e.event_type === 'mount_damaged' && e.data.cause === 'reactor_blast')));
+  assert.ok(!hud.notices.some(n => n.kind === 'blast'));
+  assert.equal(blastLine(hud.blasts.alpha_3), 'BLAST 11 km · caught OCS Falchion-1 · 1 torpedo killed, 2 blinded');
 });
