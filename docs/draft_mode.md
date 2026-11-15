@@ -621,7 +621,8 @@ dial under one new hard constraint.
   by the prices of the hulls in it.
 
 **What did not change:** point defence and the cost of range. Both were
-probed and neither has a small fix (see "Still lopsided" below).
+probed; point defence has a one-constant lever that was measured but not
+applied, range has none (see "Still lopsided" below).
 
 **The constraint:** every hull must be draftable at the default 100-point
 budget. A torpedo cruiser at 119 was not. 0.080 is the dearest dial that keeps
@@ -658,10 +659,12 @@ same engine (two battles a cell):
 | torpedo cruiser + corvette + 3 frigates | 3 | 100% |
 | torpedo cruiser + 7 frigates | 7 | 100% |
 
-A fleet of torpedo hulls alone now loses: once its tubes are empty it has no
-weapon left, and it surrenders (or is ruled combat-ineffective) with most of
-the enemy already dead. Give the same boats two frigates and the fleet stays
-in the fight and wins. In round 1, before the round-3 captains, three bare
+A fleet of torpedo hulls alone now loses: at the checkpoint after its tubes
+are empty every captain finds "all weapons out, no armed ship left to
+protect" and surrenders - while the salvo is still in flight (six corvettes
+v the gunline: 36 of 48 rounds in the air at the surrender, t = 120 s). Give
+the same boats two frigates and the fleet stays in the fight, the rounds
+land, and it wins. In round 1, before the round-3 captains, three bare
 corvettes won 9 of 10. So the `torpedo` and `swarm` archetypes, whose recipes
 buy no gun hull at these prices, now UNDERSTATE torpedoes, and the tournament
 gained an eighth archetype that cannot: `screen`, one torpedo cruiser behind a
@@ -729,9 +732,14 @@ The final table is **not balanced**, and the dial is not what keeps it so:
   fleet, it takes 50% and four corvettes 43% (seed 1, two battles a cell).
   The default budget is the one place the table is close to level.
 - **`torpedo` and `swarm` look weak for the wrong reason.** Their recipes buy
-  no gun hull at these prices, so they surrender with empty tubes. Any
-  drafter - human or LLM - who adds two frigates gets the fleet in the table
-  above. Read their rows as "torpedo hulls alone", not as "torpedoes".
+  no gun hull at these prices, and a fleet of torpedo hulls alone strikes its
+  colours the checkpoint after its tubes are empty - with its salvo still in
+  the air. Six corvettes v the gunline: all 48 rounds launched by t = 90 s,
+  the fleet surrendered at t = 120 s ("all weapons out, no armed ship left to
+  protect", `src/llm/heuristic_captain.py`) with 36 of them still in flight
+  and two cruisers dead; no corvette was hit. Any drafter - human or LLM -
+  who adds two frigates gets the fleet in the table above. Read these rows
+  as "torpedo hulls alone, under that surrender rule", not as "torpedoes".
 - **Cells are still 0% or 100%**, the same in both side assignments and on
   held-out seeds.
 - **Gun fleets among themselves** (seed 1, two battles a cell) are in the
@@ -739,26 +747,42 @@ The final table is **not balanced**, and the dial is not what keeps it so:
 
 Why the two mechanics that would matter were not changed in this round:
 
-1. **Point defence.** It is not short of blinds; a blind is just not a
-   save. Against the `screen` fleet's 12-round waves the gunline's 16 turrets
-   blinded 33 of 48 rounds and the escort's 18 blinded 39 of 48 (one battle
-   each) - and 19 and 20 of those blinded rounds hit anyway, 70-77% of all
-   the hits those fleets took. Against five corvettes + two frigates 20 of
-   40 were blinded and 15 of the 20 hit, nine within 2 s of the blind and six
-   5-7 s after it. A blinded round flies straight and the target does too:
-   running from a torpedo is a constant burn along the threat line, which
-   moves the ship along the round's path, not off it. Lowering the
-   seeker-kill energy threefold in a probe changed nothing (18 blinded, 25
-   hits against 26). Destroying a blinded round by continued dwell is out of
-   reach of the energy budget: a turret delivers 17.8 MJ to a round crossing
-   the 250 km envelope at 14.5 km/s (21.5 MJ at the 12 km/s floor), the
-   structural kill is 1 GJ, and even at three times the 50 MJ seeker kill a
-   whole fleet's wave energy (285-320 MJ) would buy two kills instead of six
-   blinds. So "PD must protect" needs ships that burn ACROSS the line of a
-   round the moment it goes ballistic (the doctrine's own measurement: 18/18
-   blinded rounds hit a non-evading battleship, 6/18 an evading one). That is
-   the automatic evasion (RUN / PRESENT) and the captains, which this lane
-   may not touch.
+1. **Point defence.** With the 50 MJ seeker kill a blind comes too late to
+   be a save. Against the `screen` fleet's 12-round waves the gunline's 16
+   turrets blinded 33 of 48 rounds and the escort's 18 blinded 39 of 48 (one
+   battle each) - and 19 and 20 of those blinded rounds hit anyway, 70-77% of
+   all the hits those fleets took. Against five corvettes + two frigates 20
+   of 40 were blinded and 15 of the 20 hit, nine within 2 s of the blind and
+   six 5-7 s after it: a round blinded that close flies straight into a hull
+   that has no time to leave its line. (Why hulls with 5-7 s do not leave it
+   was not traced; the automatic evasion against a guided round is a steady
+   burn, which is a guess at the cause, not a finding.)
+
+   **The lever is the seeker-kill energy** (`TORPEDO_ELECTRONICS_THRESHOLD_J`,
+   `src/pointdefense.py`). Probed by overriding it per round, one battle per
+   cell, five corvettes + two frigates (150 pts) attacking:
+
+   | seeker kill | v gunline (16 turrets): blinded / hit of 40, hulls lost, winner | v battleline (11 turrets): blinded / hit of 40, hulls lost, winner |
+   |---:|---|---|
+   | 50 MJ (now) | 20 / 26, 6 of 8, torpedo fleet | 11 / 23, 4 of 4, torpedo fleet |
+   | 33 MJ | 39 / 17, 3 of 8, **gunline** | 13 / 22, 4 of 4, torpedo fleet |
+   | 25 MJ | 40 / 6, 1 of 8, **gunline** | 26 / 23, 4 of 4, torpedo fleet |
+   | 17 MJ | 40 / 2, 0 of 8, **gunline** | 36 / 24, 4 of 4, torpedo fleet |
+
+   At 25 MJ ("one turret blinds ~10 km/s of closure", two turrets per round
+   at the floor instead of three) every round is blinded 6-12 s out and a
+   turret-rich fleet of nimble hulls survives the strike and wins, while a
+   battle line - few turrets, 1 g - is still hit by the blinded rounds and
+   dies. That is a counter that exists and a rock-paper-scissors shape, from
+   one named constant. It was NOT changed here: the 50 MJ figure and its
+   consequences ("~5 km/s per turret", "3 turrets per round", "<=46 of the
+   50 MJ needed") are written into the captain and admiral doctrine and
+   pinned by `tests/test_doctrine_accuracy.py` and the PD suites, and a
+   re-pin of that size did not fit what was left of the round. It is the
+   first thing to do next, followed by a re-fit of the dial.
+   A structural kill by continued dwell stays out of reach either way: a
+   turret delivers 17.8 MJ to a round crossing the 250 km envelope at
+   14.5 km/s (21.5 MJ at the 12 km/s floor) and the kill is 1 GJ.
 2. **Range.** A 500 km shot arrives at 13.8-15.6 km/s after 59-71 s; the
    26 GJ per hit is exactly 1/2 x 250 kg x v^2, the game's own rule. Burning
    all the way, a round keeps gaining speed out to 832 km (v^2 / 2a at 12 g
