@@ -3765,10 +3765,18 @@ class CombatSimulation:
         ship: ShipCombatState,
         forward: Vector3D,
         terminal_threats: list,
+        threat_cache: Optional[dict] = None,
     ) -> tuple[float, float, float]:
         """
         Score an attitude against the terminal torpedoes. Lower is better,
         compared lexicographically:
+
+        ``threat_cache`` (optional, a dict owned by ONE caller for ONE set of
+        candidate attitudes - see _calculate_presentation_direction) holds
+        what does not depend on the attitude: each threat's impact vector
+        (key: threat index) and the hull energy of each (threat, struck
+        section) trial (key: (index, location)). The ship's armor and the
+        threats must not change while it is in use; it is never stored.
 
         1. Hull-delivered energy (GJ): for each threat, determine which armor
            section its impact vector would strike at this attitude (same
@@ -3794,15 +3802,19 @@ class CombatSimulation:
         total_gj = 0.0
         weighted_thickness = 0.0
         center_distance = 0.0
-        for t in terminal_threats:
+        for index, t in enumerate(terminal_threats):
             # Impact vector = direction the torpedo travels at impact. A
             # closing torpedo arrives roughly along the reversed bearing; use
             # its actual relative velocity whenever it is closing.
-            rel_vel = t['rel_vel']
-            if rel_vel.magnitude > 1e-6 and rel_vel.dot(t['bearing']) < 0:
-                impact_vector = rel_vel.normalized()
-            else:
-                impact_vector = t['bearing'] * -1
+            impact_vector = threat_cache.get(index) if threat_cache is not None else None
+            if impact_vector is None:
+                rel_vel = t['rel_vel']
+                if rel_vel.magnitude > 1e-6 and rel_vel.dot(t['bearing']) < 0:
+                    impact_vector = rel_vel.normalized()
+                else:
+                    impact_vector = t['bearing'] * -1
+                if threat_cache is not None:
+                    threat_cache[index] = impact_vector
 
             location = geometry.calculate_hit_location(impact_vector, forward)
 
@@ -3831,7 +3843,15 @@ class CombatSimulation:
             # Simulate the impact on a copy of the section (same parameters
             # as the kinetic phase of _resolve_torpedo_hit); the trial is
             # memoised by value, see _trial_energy_to_hull_gj.
-            total_gj += self._trial_energy_to_hull_gj(section, t['ke_gj'])
+            if threat_cache is None:
+                total_gj += self._trial_energy_to_hull_gj(section, t['ke_gj'])
+            else:
+                trial_key = (index, location)
+                to_hull_gj = threat_cache.get(trial_key)
+                if to_hull_gj is None:
+                    to_hull_gj = threat_cache[trial_key] = self._trial_energy_to_hull_gj(
+                        section, t['ke_gj'])
+                total_gj += to_hull_gj
 
         # Round the leading components so float noise cannot defeat the
         # tie-breaks (1e-3 GJ / 0.1 energy-weighted-cm resolution).
@@ -3958,6 +3978,10 @@ class CombatSimulation:
         # with a fresh budget, so the command converges as time permits.
         best_dir = ship.forward
         best_score: Optional[tuple] = None
+        # Per-threat work that is the same for every candidate (impact
+        # vectors, armor trials): local to this call - nothing touches the
+        # armor or the threats while the candidates are scored.
+        threat_cache: dict = {}
         for cand in candidates:
             angle = ship.forward.angle_to(cand)
             if angle <= theta_max or angle <= 1e-6:
@@ -3969,7 +3993,7 @@ class CombatSimulation:
                     axis = ship.up
                 achieved = ship.forward.rotate_around_axis(
                     axis.normalized(), theta_max).normalized()
-            score = self._presentation_score(ship, achieved, terminal_threats)
+            score = self._presentation_score(ship, achieved, terminal_threats, threat_cache)
             if best_score is None or score < best_score:
                 best_score = score
                 best_dir = achieved
