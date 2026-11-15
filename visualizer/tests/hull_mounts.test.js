@@ -31,8 +31,9 @@ test('frame mapping: body (x, y, z) = hull-kit (Z nose, X port, Y dorsal)', () =
   assert.ok(port.pos[1] > 5 && stbd.pos[1] < -5);
   assert.deepEqual(port.axis, [0, 1, 0]);
   // dorsal and ventral PD, aft of midships; spinal muzzle at the nose
+  // dorsal PD on the bow, ventral PD aft; spinal muzzle at the nose
   assert.ok(mount('cruiser', 'pd_0').pos[2] > 5 && mount('cruiser', 'pd_1').pos[2] < -5);
-  assert.ok(mount('cruiser', 'pd_0').pos[0] < 0);
+  assert.ok(mount('cruiser', 'pd_0').pos[0] > 20 && mount('cruiser', 'pd_1').pos[0] < -20);
   const sp = mount('cruiser', 'weapon_0');
   assert.equal(sp.kind, 'spinal');
   assert.ok(sp.pos[0] > DATA.hulls.cruiser.length_m * 0.45);
@@ -70,7 +71,7 @@ test('mounts cannot fire through their own ship', () => {
       const az = Math.atan2(m.axis[1], m.axis[0]) * 180 / Math.PI, el = Math.asin(m.axis[2]) * 180 / Math.PI;
       assert.ok(!blockedAt(m, az, el - 0.01), `${type} ${m.slot}: open along its axis`);
       assert.ok(blockedAt(m, az + 180, -el + 0.01), `${type} ${m.slot}: blocked through the hull`);
-      assert.ok(m.open_fraction > 0.3 && m.open_fraction <= 0.52, `${type} ${m.slot}: open ${m.open_fraction}`);
+      assert.ok(m.open_fraction > 0.3 && m.open_fraction <= 0.56, `${type} ${m.slot}: open ${m.open_fraction}`);
     }
   }
 });

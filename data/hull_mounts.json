@@ -48,9 +48,9 @@
      "kind": "pd",
      "type": "pd_laser",
      "pos": [
-      -13,
+      7.8,
       0,
-      7.7
+      16.08
      ],
      "axis": [
       0,
@@ -58,9 +58,9 @@
       1
      ],
      "min_elevation_deg": -5,
-     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff8000003ffc000001fc0000000ffc0000003000000007f80000000000000000f80000000000000000f80000000000000001f80000000000000001fc0000000000000003fc0000000000000003fc0000000000000003fc0000000000000003f80000000000000003f80000000000000003f00000000000000001e00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-     "open_fraction": 0.484,
-     "self_blocked_fraction": 0.1096
+     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc00000000000000007000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.5406,
+     "self_blocked_fraction": 0.0056
     }
    ]
   },
@@ -92,9 +92,9 @@
      "kind": "pd",
      "type": "pd_laser",
      "pos": [
-      -20,
+      -32,
       0,
-      8.94
+      12.98
      ],
      "axis": [
       0,
@@ -102,18 +102,18 @@
       1
      ],
      "min_elevation_deg": -5,
-     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff8000001ff8000001ff00000007e0000000f00000000ff0000000000000000ff0000000000000000ff0000000000000000ff0000000000000000ff00000000000000007e00000000000000007e00000000000000007e00000000000000007e00000000000000007e00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-     "open_fraction": 0.4868,
-     "self_blocked_fraction": 0.1045
+     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000000007e00000000000000007e00000000000000007e00000000000000007e00000000000000007e00000000000000007e00000000000000007e00000000000000003c00000000000000001c00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.5156,
+     "self_blocked_fraction": 0.0514
     },
     {
      "slot": "pd_1",
      "kind": "pd",
      "type": "pd_laser",
      "pos": [
-      -20,
+      32,
       0,
-      -8.94
+      -11.88
      ],
      "axis": [
       0,
@@ -121,9 +121,9 @@
       -1
      ],
      "min_elevation_deg": -5,
-     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007e00000000000000007e00000000000000007e00000000000000007e00000000000000007e00000000000000007e00000000000000007e00000000000000007e00000000000000007e00000000f00000007e0000000ff8000001ff8000001fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-     "open_fraction": 0.4947,
-     "self_blocked_fraction": 0.0899
+     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c00000000000000003c00000000000000003c00000000000000003c00000000000000003c00000000000000003f0000000000000000fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.527,
+     "self_blocked_fraction": 0.0305
     }
    ]
   },
@@ -165,18 +165,18 @@
       1
      ],
      "min_elevation_deg": -2,
-     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000007c00000000000000007000000000000000007000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-     "open_fraction": 0.491,
-     "self_blocked_fraction": 0.018
+     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000007c00000000000000007c00000000000000007000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.4898,
+     "self_blocked_fraction": 0.0204
     },
     {
      "slot": "pd_0",
      "kind": "pd",
      "type": "pd_laser",
      "pos": [
-      -30,
+      -45,
       0,
-      10.49
+      18.37
      ],
      "axis": [
       0,
@@ -184,18 +184,18 @@
       1
      ],
      "min_elevation_deg": -5,
-     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000ffff00000fffc000001ffc000003f00000001ffc0000000000000007fc00000000000000007c00000000000000007c00000000000000007c00000000000000007c0000000000000000780000000000000000780000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-     "open_fraction": 0.4837,
-     "self_blocked_fraction": 0.1101
+     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000000007f00000000000000007f00000000000000000f00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.5327,
+     "self_blocked_fraction": 0.02
     },
     {
      "slot": "pd_1",
      "kind": "pd",
      "type": "pd_laser",
      "pos": [
-      -27.5,
+      -20,
       5.5,
-      -10.49
+      -18.37
      ],
      "axis": [
       0,
@@ -203,9 +203,9 @@
       -1
      ],
      "min_elevation_deg": -5,
-     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffff001ffe00000007ffffffffff0000000fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-     "open_fraction": 0.4982,
-     "self_blocked_fraction": 0.0835
+     "blocked": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000fc00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.5399,
+     "self_blocked_fraction": 0.0067
     }
    ]
   },
@@ -275,9 +275,9 @@
      "kind": "pd",
      "type": "pd_laser",
      "pos": [
-      -28,
+      63,
       0,
-      18.68
+      25.89
      ],
      "axis": [
       0,
@@ -285,18 +285,18 @@
       1
      ],
      "min_elevation_deg": -5,
-     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000ffff00000fff0000001ff8000000f000000007fc00000000000000007c00000000000000007c00000000000000007c00000000000000007c0000000000000000780000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-     "open_fraction": 0.4945,
-     "self_blocked_fraction": 0.0902
+     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe00000000000000007e00000000000000007000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.5363,
+     "self_blocked_fraction": 0.0134
     },
     {
      "slot": "pd_1",
      "kind": "pd",
      "type": "pd_laser",
      "pos": [
-      -28,
+      -49,
       0,
-      -18.68
+      -24.96
      ],
      "axis": [
       0,
@@ -304,9 +304,9 @@
       -1
      ],
      "min_elevation_deg": -5,
-     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007e00000000fc000003ffc000003ffff000ffffff000fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-     "open_fraction": 0.4964,
-     "self_blocked_fraction": 0.0868
+     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007e0000000000000000ff00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.5351,
+     "self_blocked_fraction": 0.0156
     }
    ]
   },
@@ -376,9 +376,9 @@
      "kind": "pd",
      "type": "pd_laser",
      "pos": [
-      -45.5,
-      3.82,
-      10.48
+      63,
+      0,
+      12.68
      ],
      "axis": [
       0,
@@ -386,18 +386,18 @@
       1
      ],
      "min_elevation_deg": -5,
-     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0fffff0000003ffe00000fff0000000f000000003c00000000000000003c00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-     "open_fraction": 0.4995,
-     "self_blocked_fraction": 0.0811
+     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe000000000000007fe0000000000000000f000000000000000007000000000000000007000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.5273,
+     "self_blocked_fraction": 0.03
     },
     {
      "slot": "pd_1",
      "kind": "pd",
      "type": "pd_laser",
      "pos": [
-      -45.5,
+      -49,
       0,
-      -10.48
+      -14.43
      ],
      "axis": [
       0,
@@ -405,9 +405,9 @@
       -1
      ],
      "min_elevation_deg": -5,
-     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000f8000003ffc000001fff80001ffff80001ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-     "open_fraction": 0.5085,
-     "self_blocked_fraction": 0.0646
+     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003c0000000000000000ff00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.5363,
+     "self_blocked_fraction": 0.0134
     }
    ]
   },
@@ -468,9 +468,9 @@
       -1
      ],
      "min_elevation_deg": -2,
-     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffc000000000000003ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-     "open_fraction": 0.4927,
-     "self_blocked_fraction": 0.0145
+     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffc000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.4939,
+     "self_blocked_fraction": 0.0121
     },
     {
      "slot": "weapon_3",
@@ -506,37 +506,37 @@
       -1
      ],
      "min_elevation_deg": -2,
-     "blocked": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001fe0000000000000001fe0000000000000001fe000000e00000000ffe0003ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-     "open_fraction": 0.4713,
-     "self_blocked_fraction": 0.0574
+     "blocked": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001fe0000000000000001fe0000000000000001fe00001ee00000000ffe0001ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.4695,
+     "self_blocked_fraction": 0.061
     },
     {
      "slot": "pd_0",
      "kind": "pd",
      "type": "pd_laser",
      "pos": [
-      -40,
-      0,
-      20.02
+      40,
+      26.43,
+      15.27
      ],
      "axis": [
       0,
-      0,
-      1
+      0.866,
+      0.5
      ],
      "min_elevation_deg": -5,
-     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0ffffffffffffffff00000f07fff87803c000000f03dff80003c000000f001ff80003e000000f001ff80003e000000f001ff80003e000000f0003c00001e000000f0000000001e000000f0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-     "open_fraction": 0.3878,
-     "self_blocked_fraction": 0.2865
+     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff8000fffffffffffffe00001ffffffffffffc00000ffffffffffff8000007fffffffffff0000003ffffffffffe0000001ffffffffffc0000000ffffffffffc0000000ffffffffffc00000007fffffffff800000007fffffffff000000003ffffffffe000000003ffffffffe000000003ffffffffc000000001ffffffff80000000001fffffff80000000001fffffff00000000001ffffffe000000000003fffffc000000000001fffff8000000000000fffff00000000000003fffc000000000000007fe000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.5166,
+     "self_blocked_fraction": 0.0473
     },
     {
      "slot": "pd_1",
      "kind": "pd",
      "type": "pd_laser",
      "pos": [
-      -40,
-      13.75,
-      -20.02
+      -56,
+      0,
+      -25.31
      ],
      "axis": [
       0,
@@ -544,28 +544,28 @@
       -1
      ],
      "min_elevation_deg": -5,
-     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007e000000000000007f7e0000000007fffffffe00000000ffffffffff8000001ffffffffffff80001ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-     "open_fraction": 0.4515,
-     "self_blocked_fraction": 0.1694
+     "blocked": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003ff0000000000000003ff0000000000000007ffe0000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.523,
+     "self_blocked_fraction": 0.0378
     },
     {
      "slot": "pd_2",
      "kind": "pd",
      "type": "pd_laser",
      "pos": [
-      24,
-      30.47,
-      0
+      40,
+      -26.43,
+      15.27
      ],
      "axis": [
       0,
-      1,
-      0
+      -0.866,
+      0.5
      ],
      "min_elevation_deg": -5,
-     "blocked": "00000000000000000000fffff0000000000007fffffe00000000001fffffff80000000001fffffff80000000003fffffffc0000000003fffffffe0000000007fffffffe0000000007ffffffff000000000fffffffff000000000fffffffff000000000fffffffff000000000fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000003fffffffff000000003fffffffff000000003fffffffff000000003fffffffff000000003fffffffff000000003fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000000fffffffff000000000fffffffff0000000007ffffffff0000000007fffffffe0000000003fffffffe0000000003fffffffc0000000001fffffff80000000001fffffff800000000007fffffe000000000000fffff00000000000000000000000000000",
-     "open_fraction": 0.508,
-     "self_blocked_fraction": 0.0612
+     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0001fffffffffffff800007ffffffffffff000003fffffffffffe000001fffffffffffc000000fffffffffff80000007ffffffffff00000003ffffffffff00000003fffffffffe00000003fffffffffe00000001fffffffffc00000000fffffffffc000000007ffffffffc000000007ffffffff8000000003ffffffff0000000001ffffffff0000000001fffffff80000000000fffffff800000000007ffffff800000000003fffffc000000000001fffff8000000000000fffff00000000000003fffc000000000000007fe000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.5166,
+     "self_blocked_fraction": 0.0473
     }
    ]
   },
@@ -626,9 +626,9 @@
       -1
      ],
      "min_elevation_deg": -2,
-     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000fffe00000000000001fffffc0000000000ffffffffe000000003fffffffffff0000007ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-     "open_fraction": 0.4223,
-     "self_blocked_fraction": 0.1553
+     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000fffe00000000000001fffffc0000000001ffffffffe000000003fffffffffff0000007ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.4217,
+     "self_blocked_fraction": 0.1565
     },
     {
      "slot": "weapon_3",
@@ -645,9 +645,9 @@
       0
      ],
      "min_elevation_deg": -2,
-     "blocked": "001fff8000000000001fffffff80000000003fffffffc0000000007fffffffe0000000007fffffffe0000000007fffffffe000000000ffffffffe000000000ffffffffe000000000ffffffffe000000000ffffffffe000000001ffffffffe000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000000fffffffff000000000fffffffff000000000fffffffff0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000003fffffffc0000000001fffffff8000000000001fff800000000000",
-     "open_fraction": 0.5053,
-     "self_blocked_fraction": 0.017
+     "blocked": "001fff8000000000001fffffff80000000003fffffffc0000000007fffffffe0000000007fffffffe0000000007fffffffe000000000ffffffffe000000000ffffffffe000000000ffffffffe000000000ffffffffe000000000ffffffffe000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000000fffffffff000000000fffffffff0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000003fffffffc0000000001fffffff8000000000001fff800000000000",
+     "open_fraction": 0.5052,
+     "self_blocked_fraction": 0.0173
     },
     {
      "slot": "weapon_4",
@@ -664,9 +664,9 @@
       0
      ],
      "min_elevation_deg": -2,
-     "blocked": "000000000001fff8000000000001fffffff80000000003fffffffc0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007ffffffff0000000007ffffffff0000000007ffffffff8000000007ffffffff8000000007ffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff000000000fffffffff000000000fffffffff000000000fffffffff000000000fffffffff0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000003fffffffc0000000001fffffff8000000000001fff800",
-     "open_fraction": 0.5053,
-     "self_blocked_fraction": 0.017
+     "blocked": "000000000001fff8000000000001fffffff80000000003fffffffc0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007ffffffff0000000007ffffffff0000000007ffffffff0000000007ffffffff8000000007ffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff000000000fffffffff000000000fffffffff000000000fffffffff0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000003fffffffc0000000001fffffff8000000000001fff800",
+     "open_fraction": 0.5052,
+     "self_blocked_fraction": 0.0173
     },
     {
      "slot": "weapon_5",
@@ -702,85 +702,85 @@
       -1
      ],
      "min_elevation_deg": -2,
-     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c00000000000000003ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-     "open_fraction": 0.4976,
-     "self_blocked_fraction": 0.0048
+     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.5,
+     "self_blocked_fraction": 0
     },
     {
      "slot": "pd_0",
      "kind": "pd",
      "type": "pd_laser",
      "pos": [
-      -44,
-      0,
-      46.51
+      -55,
+      41.12,
+      41.12
      ],
      "axis": [
       0,
-      0,
-      1
+      0.7071,
+      0.7071
      ],
      "min_elevation_deg": -5,
-     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe007ffffffffffe01f00000001ff8000001e00000001ff8000001e00000001ff8000001e00000001ff8000001e00000001ff8000001e00000001ff8000000000000000ff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-     "open_fraction": 0.4182,
-     "self_blocked_fraction": 0.2306
+     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff801ffffffffffffffc0003fffffffffffff00000ffffffffffffc000003fffffffffff0000000fffffffffff00000007ffffffffff00000003ffffffffff00000001ffffffffff00000001ffffffffff00000001fffffffffe000000011ffffffff0000000000fffffffc00000000007ffffff000000000001fffffe000000000000fffffc0000000000003fffc000000000000007fe000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.5218,
+     "self_blocked_fraction": 0.0393
     },
     {
      "slot": "pd_1",
      "kind": "pd",
      "type": "pd_laser",
      "pos": [
-      -44,
-      0,
-      -46.51
+      44,
+      -40.55,
+      -40.55
      ],
      "axis": [
       0,
-      0,
-      -1
+      -0.7071,
+      -0.7071
      ],
      "min_elevation_deg": -5,
-     "blocked": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ff0000000000000000ff0000000000000000ff000000000007ffffffffffe000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-     "open_fraction": 0.458,
-     "self_blocked_fraction": 0.1574
+     "blocked": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007fe000000000000003fffc0000000000000fffff0000000000001fffff8000000000007ffffff80000000000fffffffe8000000001ffffffff8000000003ffffffffc000000007ffffffffc00000000fffffffffc00000001fffffffffc00000003fffffffffe00000007ffffffffff0000000fffffffffffc000003ffffffffffff00000fffffffffffffc0003ffffffffffffff801ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.5324,
+     "self_blocked_fraction": 0.0198
     },
     {
      "slot": "pd_2",
      "kind": "pd",
      "type": "pd_laser",
      "pos": [
-      -8.25,
-      46.51,
-      0
+      44,
+      40.55,
+      -40.55
      ],
      "axis": [
       0,
-      1,
-      0
+      0.7071,
+      -0.7071
      ],
      "min_elevation_deg": -5,
-     "blocked": "003fffc0000000000007fffffe00000000001fffffff80000000003fffffffc0000000003fffffffc0000000007fffffffc0000000007fffffffe000000000ffffffffe000000000ffffffffe000000000fffffffff000000000fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001ffffffffff00000001ffffffffff00000001ffffffffff80000001ffffffffff80000001ffffffffff80000001ffffffffff80000000ffffffffff80000000ffffffffff800000007fffffffff000000007fffffffc0000000003fffffffc0000000003fffffffc0000000001fffffff800000000007fffffe0000000000003fffc00000000000",
-     "open_fraction": 0.4824,
-     "self_blocked_fraction": 0.1085
+     "blocked": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007fe000000000000003fffc0000000000000fffff0000000000001fffff800000000001ffffffe00000000007fffffff0000000000ffffffff8000000001ffffffffc000000001ffffffffe000000003fffffffff000000003fffffffff800000003fffffffffc00000003fffffffffe00000007ffffffffff0000000fffffffffffc000003ffffffffffff00000fffffffffffffc0003ffffffffffffff801fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.5324,
+     "self_blocked_fraction": 0.0198
     },
     {
      "slot": "pd_3",
      "kind": "pd",
      "type": "pd_laser",
      "pos": [
-      -8.25,
-      -46.51,
-      0
+      -55,
+      -41.12,
+      41.12
      ],
      "axis": [
       0,
-      -1,
-      0
+      -0.7071,
+      0.7071
      ],
      "min_elevation_deg": -5,
-     "blocked": "000000000003fffc0000000000007fffffe00000000001fffffff80000000003fffffffc0000000003fffffffc0000000003fffffffe0000000007fffffffe0000000007ffffffff0000000007ffffffff000000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff80000000ffffffffff80000000ffffffffff80000001ffffffffff80000001ffffffffff80000001ffffffffff00000001ffffffffff00000001ffffffffff00000001ffffffffff00000000fffffffffe0000000003fffffffe0000000003fffffffc0000000003fffffffc0000000001fffffff800000000007fffffe0000000000003fffc00",
-     "open_fraction": 0.4824,
-     "self_blocked_fraction": 0.1085
+     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff801ffffffffffffffc0003fffffffffffff00000ffffffffffffc000003fffffffffff0000000ffffffffffe0000000ffffffffffc0000000ffffffffff80000000ffffffffff80000000ffffffffff80000000ffffffffff800000007fffffffff000000000ffffffff80000000003fffffff00000000000ffffffe000000000007fffff8000000000003fffff00000000000003fffc000000000000007fe000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.5218,
+     "self_blocked_fraction": 0.0393
     }
    ]
   },
@@ -841,9 +841,9 @@
       -1
      ],
      "min_elevation_deg": -2,
-     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000fffe00000000000001fffffc0000000000ffffffffe000000003ffffffffff00000007ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-     "open_fraction": 0.4248,
-     "self_blocked_fraction": 0.1505
+     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000fffe00000000000001fffffc0000000001ffffffffe000000003ffffffffff00000007ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.4242,
+     "self_blocked_fraction": 0.1517
     },
     {
      "slot": "weapon_3",
@@ -860,9 +860,9 @@
       0
      ],
      "min_elevation_deg": -2,
-     "blocked": "001fff8000000000001fffffff80000000003fffffffc0000000007fffffffe0000000007fffffffe0000000007fffffffe000000000ffffffffe000000000ffffffffe000000000ffffffffe000000000ffffffffe000000001ffffffffe000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000000fffffffff000000000fffffffff000000000fffffffff0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000003fffffffc0000000001fffffff8000000000001fff800000000000",
-     "open_fraction": 0.5053,
-     "self_blocked_fraction": 0.017
+     "blocked": "001fff8000000000001fffffff80000000003fffffffc0000000007fffffffe0000000007fffffffe0000000007fffffffe000000000ffffffffe000000000ffffffffe000000000ffffffffe000000000ffffffffe000000000ffffffffe000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000000fffffffff000000000fffffffff0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000003fffffffc0000000001fffffff8000000000001fff800000000000",
+     "open_fraction": 0.5052,
+     "self_blocked_fraction": 0.0173
     },
     {
      "slot": "weapon_4",
@@ -879,9 +879,9 @@
       0
      ],
      "min_elevation_deg": -2,
-     "blocked": "000000000001fff8000000000001fffffff80000000003fffffffc0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007ffffffff0000000007ffffffff0000000007ffffffff8000000007ffffffff8000000007ffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff000000000fffffffff000000000fffffffff000000000fffffffff000000000fffffffff0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000003fffffffc0000000001fffffff8000000000001fff800",
-     "open_fraction": 0.5053,
-     "self_blocked_fraction": 0.017
+     "blocked": "000000000001fff8000000000001fffffff80000000003fffffffc0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007ffffffff0000000007ffffffff0000000007ffffffff0000000007ffffffff8000000007ffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff000000000fffffffff000000000fffffffff000000000fffffffff0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000007fffffffe0000000003fffffffc0000000001fffffff8000000000001fff800",
+     "open_fraction": 0.5052,
+     "self_blocked_fraction": 0.0173
     },
     {
      "slot": "weapon_5",
@@ -917,85 +917,85 @@
       -1
      ],
      "min_elevation_deg": -2,
-     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c00000000000000003ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-     "open_fraction": 0.4976,
-     "self_blocked_fraction": 0.0048
+     "blocked": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.5,
+     "self_blocked_fraction": 0
     },
     {
      "slot": "pd_0",
      "kind": "pd",
      "type": "pd_laser",
      "pos": [
-      -44,
-      0,
-      46.51
+      -55,
+      41.12,
+      41.12
      ],
      "axis": [
       0,
-      0,
-      1
+      0.7071,
+      0.7071
      ],
      "min_elevation_deg": -5,
-     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe007ffffffffffe01f00000001ff8000001e00000001ff8000001e00000001ff8000001e00000001ff8000001e00000001ff8000001e00000001ff8000000000000000ff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-     "open_fraction": 0.4182,
-     "self_blocked_fraction": 0.2306
+     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff801ffffffffffffffc0003fffffffffffff00000ffffffffffffc000003fffffffffff0000000fffffffffff00000007ffffffffff00000003ffffffffff00000001ffffffffff00000001ffffffffff00000001fffffffffe000000011ffffffff0000000000fffffffc00000000007ffffff000000000001fffffe000000000000fffffc0000000000003fffc000000000000007fe000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.5218,
+     "self_blocked_fraction": 0.0393
     },
     {
      "slot": "pd_1",
      "kind": "pd",
      "type": "pd_laser",
      "pos": [
-      -44,
-      0,
-      -46.51
+      44,
+      -40.55,
+      -40.55
      ],
      "axis": [
       0,
-      0,
-      -1
+      -0.7071,
+      -0.7071
      ],
      "min_elevation_deg": -5,
-     "blocked": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ff0000000000000000ff0000000000000000ff000000000007ffffffffffe000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-     "open_fraction": 0.458,
-     "self_blocked_fraction": 0.1574
+     "blocked": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007fe000000000000003fffc0000000000000fffff0000000000001fffff8000000000007ffffff80000000000fffffffe8000000001ffffffff8000000003ffffffffc000000007ffffffffc00000000fffffffffc00000001fffffffffc00000003fffffffffe00000007ffffffffff0000000fffffffffffc000003ffffffffffff00000fffffffffffffc0003ffffffffffffff801ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.5324,
+     "self_blocked_fraction": 0.0198
     },
     {
      "slot": "pd_2",
      "kind": "pd",
      "type": "pd_laser",
      "pos": [
-      -8.25,
-      46.51,
-      0
+      44,
+      40.55,
+      -40.55
      ],
      "axis": [
       0,
-      1,
-      0
+      0.7071,
+      -0.7071
      ],
      "min_elevation_deg": -5,
-     "blocked": "003fffc0000000000007fffffe00000000001fffffff80000000003fffffffc0000000003fffffffc0000000007fffffffc0000000007fffffffe000000000ffffffffe000000000ffffffffe000000000fffffffff000000000fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001fffffffff000000001ffffffffff00000001ffffffffff00000001ffffffffff80000001ffffffffff80000001ffffffffff80000001ffffffffff80000000ffffffffff80000000ffffffffff800000007fffffffff000000007fffffffc0000000003fffffffc0000000003fffffffc0000000001fffffff800000000007fffffe0000000000003fffc00000000000",
-     "open_fraction": 0.4824,
-     "self_blocked_fraction": 0.1085
+     "blocked": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007fe000000000000003fffc0000000000000fffff0000000000001fffff800000000001ffffffe00000000007fffffff0000000000ffffffff8000000001ffffffffc000000001ffffffffe000000003fffffffff000000003fffffffff800000003fffffffffc00000003fffffffffe00000007ffffffffff0000000fffffffffffc000003ffffffffffff00000fffffffffffffc0003ffffffffffffff801fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.5324,
+     "self_blocked_fraction": 0.0198
     },
     {
      "slot": "pd_3",
      "kind": "pd",
      "type": "pd_laser",
      "pos": [
-      -8.25,
-      -46.51,
-      0
+      -55,
+      -41.12,
+      41.12
      ],
      "axis": [
       0,
-      -1,
-      0
+      -0.7071,
+      0.7071
      ],
      "min_elevation_deg": -5,
-     "blocked": "000000000003fffc0000000000007fffffe00000000001fffffff80000000003fffffffc0000000003fffffffc0000000003fffffffe0000000007fffffffe0000000007ffffffff0000000007ffffffff000000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff800000000fffffffff80000000ffffffffff80000000ffffffffff80000001ffffffffff80000001ffffffffff80000001ffffffffff00000001ffffffffff00000001ffffffffff00000001ffffffffff00000000fffffffffe0000000003fffffffe0000000003fffffffc0000000003fffffffc0000000001fffffff800000000007fffffe0000000000003fffc00",
-     "open_fraction": 0.4824,
-     "self_blocked_fraction": 0.1085
+     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff801ffffffffffffffc0003fffffffffffff00000ffffffffffffc000003fffffffffff0000000ffffffffffe0000000ffffffffffc0000000ffffffffff80000000ffffffffff80000000ffffffffff80000000ffffffffff800000007fffffffff000000000ffffffff80000000003fffffff00000000000ffffffe000000000007fffff8000000000003fffff00000000000003fffc000000000000007fe000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.5218,
+     "self_blocked_fraction": 0.0393
     }
    ]
   },
@@ -1080,9 +1080,9 @@
      "kind": "pd",
      "type": "pd_laser",
      "pos": [
-      52.5,
-      15.31,
-      15.31
+      63,
+      18.31,
+      18.31
      ],
      "axis": [
       0,
@@ -1090,18 +1090,18 @@
       0.7071
      ],
      "min_elevation_deg": -5,
-     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff801ffffffffffffffc0003fffffffffffff00000ffffffffffffc000003fffffffffff8000001fffffffffff0000001ffffffffffe0000001ffffffffffc0000001ffffffffff80000001ffffffffff00000001fffffffffe00000000fffffffffc000000001ffffffff8000000001ffffffff0000000001fffffffe0000000001fffffff000000000003fbfffc000000000000007fe000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-     "open_fraction": 0.499,
-     "self_blocked_fraction": 0.0813
+     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff801ffffffffffffffc0003fffffffffffff00000ffffffffffffc000003fffffffffff0000000ffffffffffe00000007fffffffffc00000007fffffffff800000007fffffffff000000007ffffffffe000000007ffffffffc000000003ffffffff8000000001ffffffff00000000007ffffffe000000000001fffff8000000000000fffff00000000000003fffc000000000000007fe000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.5277,
+     "self_blocked_fraction": 0.0285
     },
     {
      "slot": "pd_1",
      "kind": "pd",
      "type": "pd_laser",
      "pos": [
-      52.5,
-      -15.31,
-      15.31
+      -63,
+      -14.31,
+      14.31
      ],
      "axis": [
       0,
@@ -1109,18 +1109,18 @@
       0.7071
      ],
      "min_elevation_deg": -5,
-     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff801ffffffffffffffc0003fffffffffffff00000ffffffffffffc000003fffffffffff8000001fffffffffff8000000fffffffffff80000007ffffffffff80000003ffffffffff80000001ffffffffff80000000ffffffffff000000007ffffffff8000000003ffffffff8000000001ffffffff8000000000ffffffff80000000007fffffff00000000000fffffff000000000003fffdfc0000000000007fe000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-     "open_fraction": 0.499,
-     "self_blocked_fraction": 0.0813
+     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff801ffffffffffffffc0003fffffffffffff00000ffffffffffffc000007fffffffffff0000007fffffffffff0000007ffffffffffe0000007ffffffffffe0000007ffffffffffe0000007ffffffffffc0000003ffffffffff80000001ffffffffff000000001fffffffff000000001ffffffffe000000001ffffffff000000000001fffff8000000000000fffff00000000000003fffc000000000000007fe000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "open_fraction": 0.4989,
+     "self_blocked_fraction": 0.0814
     },
     {
      "slot": "pd_2",
      "kind": "pd",
      "type": "pd_laser",
      "pos": [
-      52.5,
-      15.31,
-      -15.31
+      -63,
+      14.31,
+      -14.31
      ],
      "axis": [
       0,
@@ -1128,18 +1128,18 @@
       -0.7071
      ],
      "min_elevation_deg": -5,
-     "blocked": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007fe0000000000003fbfffc00000000000fffffff00000000000fffffffe0000000001ffffffff0000000001ffffffff8000000001ffffffffc000000001ffffffffe00000000ffffffffff00000001ffffffffff80000001ffffffffffc0000001ffffffffffe0000001fffffffffff0000001fffffffffff8000001fffffffffffc000003ffffffffffff00000fffffffffffffc0003ffffffffffffff801fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-     "open_fraction": 0.499,
-     "self_blocked_fraction": 0.0813
+     "blocked": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007fe000000000000003fffc0000000000000fffff0000000000001fffff800000000000ffffffff8000000007ffffffff800000000fffffffff800000000ffffffffff80000001ffffffffffc0000003ffffffffffe0000007ffffffffffe0000007ffffffffffe0000007ffffffffffe000000fffffffffffe000000fffffffffffe000003ffffffffffff00000fffffffffffffc0003ffffffffffffff801fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.4989,
+     "self_blocked_fraction": 0.0814
     },
     {
      "slot": "pd_3",
      "kind": "pd",
      "type": "pd_laser",
      "pos": [
-      52.5,
-      -15.31,
-      -15.31
+      63,
+      -18.31,
+      -18.31
      ],
      "axis": [
       0,
@@ -1147,9 +1147,9 @@
       -0.7071
      ],
      "min_elevation_deg": -5,
-     "blocked": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007fe000000000000003fffdfc00000000000fffffff80000000007fffffff8000000000ffffffff8000000001ffffffff8000000003fffffffff000000007fffffffff80000000ffffffffff80000001ffffffffff80000003ffffffffff80000007ffffffffff8000000fffffffffff8000001fffffffffffc000003ffffffffffff00000fffffffffffffc0003ffffffffffffff801ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-     "open_fraction": 0.499,
-     "self_blocked_fraction": 0.0813
+     "blocked": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007fe000000000000003fffc0000000000000fffff0000000000001fffff8000000000007ffffffe0000000000ffffffff8000000001ffffffffc000000003ffffffffe000000007ffffffffe00000000fffffffffe00000001fffffffffe00000003fffffffffe00000007ffffffffff0000000fffffffffffc000003ffffffffffff00000fffffffffffffc0003ffffffffffffff801ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "open_fraction": 0.5277,
+     "self_blocked_fraction": 0.0285
     }
    ]
   }

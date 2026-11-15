@@ -77,7 +77,7 @@ function housing(rig, kind) {
   return g;
 }
 
-function buildOccluders(kit) {
+export function buildOccluders(kit) {
   const occ = [];
   const ownerOf = new Map();
   kit.turretRigs.forEach((r, i) => { for (let j = r.base[0]; j < r.base[1]; j++) ownerOf.set(j, `gun${i}`); });
@@ -91,7 +91,7 @@ function buildOccluders(kit) {
 
 const EPS = 1e-7;
 /** Does the ray (o, unit d) hit any occluder not owned by `owner`? */
-function rayBlocked(occ, ox, oy, oz, dx, dy, dz, owner) {
+export function rayBlocked(occ, ox, oy, oz, dx, dy, dz, owner) {
   for (const b of occ) {
     if (owner && b.owner === owner) continue;
     // bounding sphere reject
@@ -127,7 +127,7 @@ function rayBlocked(occ, ox, oy, oz, dx, dy, dz, owner) {
  * Returns {mask, selfBlocked}: selfBlocked = share of the mechanically
  * reachable sphere lost to the ship's own geometry (with the margin).
  */
-function mountMask(occ, pivot, owner, mech) {
+export function mountMask(occ, pivot, owner, mech) {
   const hit = (az, el) => {
     const b = bodyDir(az, el);
     return rayBlocked(occ, pivot.x, pivot.y, pivot.z, b[1], b[2], b[0], owner);
