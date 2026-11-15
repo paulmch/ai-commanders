@@ -37,6 +37,11 @@ from src.simulation import (
 
 FLEET = json.loads((Path(__file__).parent.parent / "data" / "fleet_ships.json").read_text())
 
+# The whole-battle guard: a 150-point seed whose auto-draft is a torpedo
+# roster (first salvos land at ~100 s), run until the first kills are in.
+WHOLE_BATTLE_SEED = 101
+WHOLE_BATTLE_S = 150.0
+
 # Mirrored positions are compared in metres at ranges of ~1e5 m; a mirror
 # image differs from its original only by the sign of x and y, so anything
 # beyond rounding noise is a real asymmetry.
@@ -425,3 +430,76 @@ class TestGunDuelWithIdenticalRollsIsMirrored:
         assert tables["alpha"] == tables["beta"]
         seen = {k[1] for k in tables["alpha"]}
         assert {"PROJECTILE_LAUNCHED", "PROJECTILE_IMPACT"} <= seen   # hits landed
+
+
+# =============================================================================
+# E. A whole draft battle: runner + rule-based captains + engine
+# =============================================================================
+
+class TestWholeMirrorBattleWithIdenticalRollsIsMirrored:
+
+    def test_heuristic_draft_battle_stays_a_mirror_image(self, monkeypatch):
+        # The battle the side-bias sweeps run (identical auto-drafted fleets,
+        # identical rule-based captains), with every roll stubbed to one
+        # value: checkpoint order, command application, torpedo salvos, PD,
+        # kills, reactor blasts and retargeting must then treat both sides
+        # alike, tick for tick.
+        from src.llm.battle_runner import BattleConfig, LLMBattleRunner, load_fleet_data
+        from src.llm.captain import LLMCaptainConfig
+        from src.llm.fleet_config import BattleFleetConfig
+        from src.llm.fleet_draft import auto_draft, draft_to_fleet_definition
+        from src.llm.heuristic_captain import HEURISTIC_MODEL
+        from src.llm.prompts import CaptainPersonality
+
+        fleet_data = load_fleet_data()
+        drafts = {side: auto_draft(side, budget=150, max_ships=8, seed=WHOLE_BATTLE_SEED)
+                  for side in ("alpha", "beta")}
+        assert ([s.ship_type for s in drafts["alpha"].ships]
+                == [s.ship_type for s in drafts["beta"].ships])
+        # After the draft, so the roster is the seed's.
+        monkeypatch.setattr(random, "Random", _SameRolls)
+
+        fleets = {side: draft_to_fleet_definition(
+            drafts[side], 500.0, captain_model=HEURISTIC_MODEL, admiral_config=None)
+            for side in ("alpha", "beta")}
+        runner = LLMBattleRunner(
+            config=BattleConfig(
+                initial_distance_km=500.0, time_limit_s=WHOLE_BATTLE_S, verbose=False,
+                personality_selection=False, record_battle=False, record_sim_trace=False,
+                record_predictions=False, seed=WHOLE_BATTLE_SEED),
+            alpha_config=LLMCaptainConfig(name="-", ship_name="-", model=HEURISTIC_MODEL,
+                                          personality=CaptainPersonality.BALANCED),
+            beta_config=LLMCaptainConfig(name="-", ship_name="-", model=HEURISTIC_MODEL,
+                                         personality=CaptainPersonality.BALANCED),
+            client=None,
+            fleet_config=BattleFleetConfig(
+                battle_name="mirror", alpha_fleet=fleets["alpha"], beta_fleet=fleets["beta"],
+                time_limit_s=WHOLE_BATTLE_S, initial_distance_km=500.0,
+                record_battle=False, record_sim_trace=False,
+                personality_selection=False, use_notebooks=False))
+
+        broken = []
+        step = CombatSimulation.step
+
+        def checked_step(sim):
+            events = step(sim)
+            sim.echo = False
+            if sim is runner.simulation and not broken:
+                breaks = _mirror_breaks(sim)
+                if breaks:
+                    broken.append((sim.current_time, breaks[:4]))
+            return events
+
+        monkeypatch.setattr(CombatSimulation, "step", checked_step)
+        result = runner.run_battle(fleet_data)
+
+        assert not broken, broken
+        assert result.winner is None, result.reason
+        sim = runner.simulation
+        tables = _event_counts(sim, {
+            SimulationEventType.TORPEDO_LAUNCHED, SimulationEventType.TORPEDO_IMPACT,
+            SimulationEventType.SHIP_DESTROYED, SimulationEventType.PD_TORPEDO_DISABLED})
+        assert tables["alpha"] == tables["beta"]
+        seen = {k[1] for k in tables["alpha"]}
+        # Not vacuous: salvos landed and ships died - on both sides alike.
+        assert {"TORPEDO_LAUNCHED", "TORPEDO_IMPACT", "SHIP_DESTROYED"} <= seen
