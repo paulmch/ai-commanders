@@ -238,6 +238,20 @@ torpedo-armed hulls; all others fight with coilguns.
   recordings without them. Prediction must never draw from the battle RNG or
   change results - `tests/test_trajectory_prediction.py` pins seeded on/off
   equality.
+- Render globals (lighting, shadows, IBL, post) live in render/Environment.js,
+  render/PostFX.js, render/Bloom.js, render/sunShadow.js and render/Quality.js;
+  effects and hull materials are tuned against them, so change them in one
+  place and re-shoot the reference frames. High tier only: sun shadow map
+  (box fitted each frame to the hulls on screen, `chooseShadowFocus`; hull
+  meshes are flagged cast/receive by material type in
+  `SceneManager._flagShadowMeshes`, so any opaque MeshStandardMaterial hull
+  part casts), screen-space AO (reads the LOGARITHMIC depth texture:
+  w = exp2(d * log2(far + 1)) - 1; held off emitters by luminance), the
+  anamorphic streak. Both tiers: the print grade and exposure adaptation
+  (metered from the coarsest bloom level, stateless so scrubbing stays
+  deterministic). Shadow-side fill is image-based (PMREM: cool anti-sun lobe,
+  planet bounce, floor - `ENV_FILL`/`ENV_BOUNCE`/`ENV_AMBIENT`), never drawn
+  on the visible sky.
 - Ownership: in-flight weapons live in render/Projectiles.js (WeaponTimeline
   decides what exists at time t); persistent hit aftermath and deaths in
   DamageTimeline.js + render/DamageFX.js; hulls expose `userData.rcsMounts` /

@@ -161,7 +161,9 @@ export class Environment {
 
     // Rim: a cool light from beyond the subject, re-aimed every frame so
     // silhouettes separate from black space from any camera angle
-    this.rimLight = new THREE.DirectionalLight(0x8fb2ff, 1.25);
+    // (0.85: the image-based fill now carries the shadow side; a hard
+    // grazing kicker over-read the plating normal map as a brick sheen)
+    this.rimLight = new THREE.DirectionalLight(0x8fb2ff, 0.85);
     this.group.add(this.rimLight);
     this.group.add(this.rimLight.target);
   }
