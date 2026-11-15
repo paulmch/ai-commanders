@@ -123,32 +123,32 @@ export default {
       0,
       1
      ],
-     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000007c00000000000000007c00000000000000007000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000007c00000000000000007c00000000000000007c00000000000000003c00000000000000003000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
     },
     {
      "slot": "pd_0",
      "kind": "pd",
      "type": "pd_laser",
      "pos": [
-      -45,
+      -20,
       0,
-      18.37
+      22.31
      ],
      "axis": [
       0,
       0,
       1
      ],
-     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000000007f00000000000000007f00000000000000000f00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+     "blocked": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000000007e3c000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
     },
     {
      "slot": "pd_1",
      "kind": "pd",
      "type": "pd_laser",
      "pos": [
-      -20,
+      -25,
       5.5,
-      -18.37
+      -16.4
      ],
      "axis": [
       0,
@@ -906,32 +906,32 @@ export default {
      "kind": "pd",
      "type": "pd_laser",
      "pos": [
-      -63,
-      -14.31,
-      14.31
+      -56,
+      -21.1,
+      21.1
      ],
      "axis": [
       0,
       -0.7071,
       0.7071
      ],
-     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff801ffffffffffffffc0003fffffffffffff00000ffffffffffffc000007fffffffffff0000007fffffffffff0000007ffffffffffe0000007ffffffffffe0000007ffffffffffe0000007ffffffffffc0000003ffffffffff80000001ffffffffff000000001fffffffff000000001ffffffffe000000001ffffffff000000000001fffff8000000000000fffff00000000000003fffc000000000000007fe000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+     "blocked": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff801ffffffffffffffc0003fffffffffffff00000ffffffffffffc000003fffffffffff0000000ffffffffffe0000000ffffffffffc00000007fffffffff800000007fffffffff000000003fffffffff000000003ffffffffe000000001ffffffffc000000001ffffffff80000000003fffffff000000000007fffffe000000000001fffff8000000000000fffff00000000000003fffc000000000000007fe000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
     },
     {
      "slot": "pd_2",
      "kind": "pd",
      "type": "pd_laser",
      "pos": [
-      -63,
-      14.31,
-      -14.31
+      -56,
+      21.1,
+      -21.1
      ],
      "axis": [
       0,
       0.7071,
       -0.7071
      ],
-     "blocked": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007fe000000000000003fffc0000000000000fffff0000000000001fffff800000000000ffffffff8000000007ffffffff800000000fffffffff800000000ffffffffff80000001ffffffffffc0000003ffffffffffe0000007ffffffffffe0000007ffffffffffe0000007ffffffffffe000000fffffffffffe000000fffffffffffe000003ffffffffffff00000fffffffffffffc0003ffffffffffffff801fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+     "blocked": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007fe000000000000003fffc0000000000000fffff0000000000001fffff8000000000007fffffe00000000000fffffffc0000000001ffffffff8000000003ffffffff8000000007ffffffffc00000000fffffffffc00000000fffffffffe00000001fffffffffe00000003ffffffffff00000007ffffffffff0000000fffffffffffc000003ffffffffffff00000fffffffffffffc0003ffffffffffffff801fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
     },
     {
      "slot": "pd_3",
