@@ -335,9 +335,295 @@ export const FACTION_PAINT = {
  * or 'paint' (faction livery plates: big panels, chipped at the edges).
  * Returns { map, normalMap, ormMap } textures, all tileable.
  */
+/** Hull plating base colours (sRGB 0-255): cool naval grey vs warm sand. */
+export const FACTION_PLATE = {
+  alpha: [124, 134, 150],
+  beta: [146, 128, 110]
+};
+
+/**
+ * Armour plate set ('hull' painted armour, 'paint' faction livery): detail
+ * at three scales instead of one noisy mosaic.
+ *   - big armour plates with wide, bevelled seam channels (the normal map
+ *     shows each plate as a raised slab) and a gentle plate-to-plate tone
+ *     and sheen step
+ *   - inside each plate: fine sub-panel lines, bolt rows along the edges,
+ *     the odd hatch / vent / stencil label for scale
+ *   - weathering: bright worn metal on plate edges (metallic, smooth, so
+ *     edges glint under the key light), dirt hugging the seams, streaks
+ * Painted plate is a dielectric (metalness ~0.08); only worn edges, chips
+ * and bare replacement plates are metal.
+ */
+function plateTextures(faction, variant) {
+  const isPaint = variant === 'paint';
+  const size = isPaint ? 512 : 1024;
+  const S = size / 1024;
+  const px = (v) => Math.max(1, Math.round(v * S));
+  const rnd = mulberry32((faction === 'alpha' ? 4242 : 7777) + (isPaint ? 31 : 0));
+  const livery = FACTION_PAINT[faction] || FACTION_PAINT.alpha;
+  const base = isPaint ? livery.map(c => c * 0.92) : (FACTION_PLATE[faction] || FACTION_PLATE.alpha);
+  const accent = faction === 'alpha' ? [40, 200, 255] : [255, 130, 50];
+  const primer = faction === 'alpha' ? [52, 58, 66] : [66, 58, 54];
+  const bareMetal = [176, 178, 184];
+
+  const plates = subdividePanels(size, rnd, px(150), px(400));
+  const grime = makeFbm(size, 3, 4, rnd, 0.55);
+  const micro = makeFbm(size, 48, 2, rnd, 0.5);
+
+  const albedo = canvasOf(size);
+  const actx = albedo.getContext('2d');
+  actx.fillStyle = 'rgb(16,18,22)';              // seam channels
+  actx.fillRect(0, 0, size, size);
+
+  const height = new Float32Array(size * size).fill(0.12);
+  const rough = new Float32Array(size * size).fill(0.8);
+  const metal = new Float32Array(size * size).fill(0.5);
+  const fillRect = (field, x, y, w, h, v) => {
+    x = Math.round(x); y = Math.round(y); w = Math.round(w); h = Math.round(h);
+    for (let yy = y; yy < y + h; yy++) {
+      const row = ((yy % size) + size) % size;
+      for (let xx = x; xx < x + w; xx++) field[row * size + (((xx % size) + size) % size)] = v;
+    }
+  };
+  const rgb = (c, k = 1) => `rgb(${Math.min(255, c[0] * k) | 0},${Math.min(255, c[1] * k) | 0},${Math.min(255, c[2] * k) | 0})`;
+  const rgba = (c, a) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a})`;
+
+  const gap = px(3);      // half seam channel
+  const bev = px(4);      // bevel ramp width
+  for (const p of plates) {
+    const tone = 1 + (rnd() - 0.5) * (isPaint ? 0.1 : 0.15);
+    const kind = isPaint ? 1 : rnd();
+    let col = base.map(c => c * tone);
+    let pRough = (isPaint ? 0.46 : 0.5) + (rnd() - 0.5) * 0.2;
+    let pMetal = 0.08;
+    const pHeight = 0.52 + rnd() * 0.3;
+    if (kind < 0.05) {                 // bare replacement plate
+      col = bareMetal.map(c => c * 0.8 * tone);
+      pRough = 0.34 + rnd() * 0.1;
+      pMetal = 0.9;
+    } else if (kind < 0.11) {          // muted livery plate
+      col = accent.map((c, i) => c * 0.26 + base[i] * 0.74);
+      pRough = 0.42;
+    } else if (kind < 0.24) {          // darker composite plate
+      col = col.map(c => c * 0.8);
+      pRough = 0.66 + rnd() * 0.12;
+    }
+    const x0 = p.x + gap, y0 = p.y + gap, w = p.w - gap * 2, h = p.h - gap * 2;
+    actx.fillStyle = rgb(col);
+    actx.fillRect(x0, y0, w, h);
+    // bevelled slab: ramp up from the seam over `bev` texels
+    for (let i = 0; i <= bev; i++) {
+      fillRect(height, x0 + i, y0 + i, w - i * 2, h - i * 2, 0.12 + (pHeight - 0.12) * ((i + 1) / (bev + 1)));
+    }
+    fillRect(rough, x0, y0, w, h, pRough);
+    fillRect(metal, x0, y0, w, h, pMetal);
+    // lit / shadowed lips (albedo cue for the bevel at range)
+    actx.fillStyle = 'rgba(255,255,255,0.10)';
+    actx.fillRect(x0, y0, w, px(2));
+    actx.fillRect(x0, y0, px(2), h);
+    actx.fillStyle = 'rgba(0,0,0,0.16)';
+    actx.fillRect(x0, y0 + h - px(2), w, px(2));
+    actx.fillRect(x0 + w - px(2), y0, px(2), h);
+
+    // --- sub-panel lines: a loose grid inside the plate ------------------
+    const m = gap + bev + px(4);
+    const ix = p.x + m, iy = p.y + m, iw = p.w - m * 2, ih = p.h - m * 2;
+    const cuts = { x: [], y: [] };
+    if (iw > px(90)) for (let c = 0, n = 1 + Math.floor(rnd() * 2.4); c < n; c++) cuts.x.push(ix + Math.round((0.2 + 0.6 * rnd()) * iw));
+    if (ih > px(90)) for (let c = 0, n = 1 + Math.floor(rnd() * 2.4); c < n; c++) cuts.y.push(iy + Math.round((0.2 + 0.6 * rnd()) * ih));
+    actx.fillStyle = 'rgba(0,0,0,0.34)';
+    const lw = px(1.4);
+    for (const cx of cuts.x) {
+      actx.fillRect(cx, y0 + bev, lw, h - bev * 2);
+      fillRect(height, cx, y0 + bev, lw, h - bev * 2, pHeight - 0.1);
+    }
+    for (const cy of cuts.y) {
+      // a cross line may stop at one of the vertical cuts: an L-shaped panel
+      const stop = cuts.x.length && rnd() < 0.5 ? cuts.x[0] : null;
+      const xa = stop && rnd() < 0.5 ? stop : x0 + bev, xb = stop && xa !== stop ? stop : x0 + w - bev;
+      actx.fillRect(xa, cy, xb - xa, lw);
+      fillRect(height, xa, cy, xb - xa, lw, pHeight - 0.1);
+    }
+
+    // --- one feature per plate, for scale --------------------------------
+    const feat = rnd();
+    const fx = ix + iw * (0.25 + 0.5 * rnd()), fy = iy + ih * (0.25 + 0.5 * rnd());
+    if (iw > px(60) && ih > px(60)) {
+      if (feat < 0.16) {                // vent slats
+        const n = 3 + Math.floor(rnd() * 4), pitch = px(7), sw = Math.min(iw * 0.4, px(46));
+        for (let i = 0; i < n; i++) {
+          actx.fillStyle = 'rgba(0,0,0,0.6)';
+          actx.fillRect(fx - sw / 2, fy + (i - n / 2) * pitch, sw, px(3));
+          actx.fillStyle = 'rgba(255,255,255,0.10)';
+          actx.fillRect(fx - sw / 2, fy + (i - n / 2) * pitch + px(3), sw, px(1));
+          fillRect(height, fx - sw / 2, fy + (i - n / 2) * pitch, sw, px(3), pHeight - 0.3);
+        }
+      } else if (feat < 0.28) {         // round hatch with a bolt circle
+        const r = Math.min(iw, ih, px(110)) * 0.24;
+        actx.strokeStyle = 'rgba(0,0,0,0.55)';
+        actx.lineWidth = px(2);
+        actx.beginPath(); actx.arc(fx, fy, r, 0, Math.PI * 2); actx.stroke();
+        actx.fillStyle = rgb(col, 0.9);
+        actx.beginPath(); actx.arc(fx, fy, r - px(2), 0, Math.PI * 2); actx.fill();
+        for (let yy = Math.floor(fy - r); yy <= fy + r; yy++) {
+          for (let xx = Math.floor(fx - r); xx <= fx + r; xx++) {
+            const d = Math.hypot(xx - fx, yy - fy);
+            if (d < r - px(2)) fillRect(height, xx, yy, 1, 1, pHeight + 0.1);
+            else if (d < r) fillRect(height, xx, yy, 1, 1, pHeight - 0.28);
+          }
+        }
+        actx.fillStyle = 'rgba(0,0,0,0.45)';
+        for (let b = 0; b < 8; b++) {
+          const a = b / 8 * Math.PI * 2;
+          actx.beginPath(); actx.arc(fx + Math.cos(a) * r * 0.78, fy + Math.sin(a) * r * 0.78, px(1.5), 0, Math.PI * 2); actx.fill();
+        }
+      } else if (feat < 0.4) {          // rectangular access panel, bolted
+        const aw = Math.min(iw * 0.4, px(80)), ah = Math.min(ih * 0.4, px(56));
+        actx.fillStyle = 'rgba(0,0,0,0.5)';
+        actx.fillRect(fx - aw / 2, fy - ah / 2, aw, ah);
+        actx.fillStyle = rgb(col, 0.93);
+        actx.fillRect(fx - aw / 2 + px(2), fy - ah / 2 + px(2), aw - px(4), ah - px(4));
+        fillRect(height, fx - aw / 2, fy - ah / 2, aw, ah, pHeight - 0.25);
+        fillRect(height, fx - aw / 2 + px(2), fy - ah / 2 + px(2), aw - px(4), ah - px(4), pHeight + 0.06);
+        fillRect(rough, fx - aw / 2 + px(2), fy - ah / 2 + px(2), aw - px(4), ah - px(4), pRough - 0.1);
+      } else if (!isPaint && feat < 0.46) {   // hazard chevron strip
+        const sw = Math.min(iw * 0.5, px(90)), sh = px(11);
+        actx.save();
+        actx.beginPath(); actx.rect(fx - sw / 2, fy - sh / 2, sw, sh); actx.clip();
+        actx.fillStyle = 'rgba(214,176,44,0.9)';
+        actx.fillRect(fx - sw / 2, fy - sh / 2, sw, sh);
+        actx.fillStyle = 'rgba(20,20,20,0.9)';
+        for (let x = fx - sw / 2 - sh; x < fx + sw / 2 + sh; x += sh * 1.4) {
+          actx.beginPath();
+          actx.moveTo(x, fy + sh / 2); actx.lineTo(x + sh * 0.7, fy + sh / 2);
+          actx.lineTo(x + sh * 1.4, fy - sh / 2); actx.lineTo(x + sh * 0.7, fy - sh / 2);
+          actx.closePath(); actx.fill();
+        }
+        actx.restore();
+      } else if (feat < 0.62) {         // stencil label: a few short pale bars
+        const lines = 2 + Math.floor(rnd() * 2);
+        actx.fillStyle = isPaint ? 'rgba(235,238,242,0.6)' : 'rgba(225,230,236,0.5)';
+        for (let l = 0; l < lines; l++) {
+          let xx = fx - px(24);
+          const words = 2 + Math.floor(rnd() * 3);
+          for (let wd = 0; wd < words; wd++) {
+            const ww = px(5 + rnd() * 14);
+            actx.fillRect(xx, fy + l * px(6), ww, px(3));
+            xx += ww + px(3);
+          }
+        }
+      }
+    }
+
+    // --- bolt rows along the plate edges ---------------------------------
+    if (rnd() < 0.8) {
+      const bi = gap + bev + px(5), step = px(24), rr = Math.max(1, 1.6 * S);
+      actx.fillStyle = 'rgba(0,0,0,0.42)';
+      const dot = (bx, by) => {
+        actx.beginPath(); actx.arc(bx, by, rr, 0, Math.PI * 2); actx.fill();
+        fillRect(height, bx - 1, by - 1, Math.max(2, px(2)), Math.max(2, px(2)), pHeight + 0.2);
+      };
+      for (let x = p.x + bi; x <= p.x + p.w - bi; x += step) { dot(x, p.y + bi); dot(x, p.y + p.h - bi); }
+      for (let y = p.y + bi + step; y <= p.y + p.h - bi - step; y += step) { dot(p.x + bi, y); dot(p.x + p.w - bi, y); }
+    }
+
+    // --- edge wear: broken runs of bright metal on the bevel -------------
+    const wearP = isPaint ? 0.5 : 0.42;
+    const edges = [
+      [x0, y0, w, 0], [x0, y0 + h - px(3), w, 0], [x0, y0, h, 1], [x0 + w - px(3), y0, h, 1]
+    ];
+    for (const [ex, ey, len, vert] of edges) {
+      let pos = 0;
+      while (pos < len) {
+        const run = px(6 + rnd() * 46);
+        if (rnd() < wearP) {
+          const r0 = Math.min(run, len - pos), t = px(2 + rnd() * 2.5);
+          const rx = vert ? ex : ex + pos, ry = vert ? ey + pos : ey;
+          const rw = vert ? t : r0, rh = vert ? r0 : t;
+          if (isPaint) { actx.fillStyle = rgba(primer, 0.85); actx.fillRect(rx - 1, ry - 1, rw + 2, rh + 2); }
+          actx.fillStyle = rgba(bareMetal, isPaint ? 0.8 : 0.62);
+          actx.fillRect(rx, ry, rw, rh);
+          fillRect(metal, rx, ry, rw, rh, 0.92);
+          fillRect(rough, rx, ry, rw, rh, 0.3);
+        }
+        pos += run + px(4 + rnd() * 40);
+      }
+    }
+    // chipped corners (livery chips harder than plain plate)
+    const clusters = rnd() < (isPaint ? 0.85 : 0.45) ? 1 + Math.floor(rnd() * 3) : 0;
+    for (let c = 0; c < clusters; c++) {
+      const ex = rnd() < 0.5 ? x0 + px(6) : x0 + w - px(6);
+      const ey = rnd() < 0.5 ? y0 + px(6) : y0 + h - px(6);
+      const flakes = 3 + Math.floor(rnd() * 5);
+      for (let i = 0; i < flakes; i++) {
+        const cx = ex + (rnd() - 0.5) * px(30), cy = ey + (rnd() - 0.5) * px(18);
+        const r = (1.6 + rnd() * 3.6) * Math.max(0.7, S);
+        chipFlake(actx, cx, cy, r, rnd, primer, 0.8);
+        chipFlake(actx, cx, cy, r * 0.55, rnd, bareMetal, 0.8);
+        fillRect(metal, cx - r * 0.5, cy - r * 0.5, r, r, 0.9);
+        fillRect(rough, cx - r * 0.5, cy - r * 0.5, r, r, 0.34);
+      }
+    }
+  }
+
+  // Dirt hugging the seams (soft, three widths), over every plate edge
+  for (const [lw, a] of [[px(22), 0.05], [px(13), 0.07], [px(7), 0.1]]) {
+    actx.strokeStyle = `rgba(0,0,0,${a})`;
+    actx.lineWidth = lw;
+    for (const p of plates) actx.strokeRect(p.x, p.y, p.w, p.h);
+  }
+  // Streaks: grime drawn out from seams (dark) and a few pale dust runs
+  const nStreak = isPaint ? 14 : 56;
+  for (let i = 0; i < nStreak; i++) {
+    const p = plates[Math.floor(rnd() * plates.length)];
+    const sx = p.x + rnd() * p.w, sy = p.y + gap, sw = px(3 + rnd() * 9), len = px(50 + rnd() * 190);
+    const pale = rnd() < 0.2;
+    for (const oy of [0, -size]) {
+      const g = actx.createLinearGradient(0, sy + oy, 0, sy + oy + len);
+      g.addColorStop(0, pale ? 'rgba(220,220,215,0.10)' : 'rgba(8,7,6,0.26)');
+      g.addColorStop(1, pale ? 'rgba(220,220,215,0)' : 'rgba(8,7,6,0)');
+      actx.fillStyle = g;
+      actx.fillRect(sx, sy + oy, sw, len);
+    }
+  }
+
+  const img = actx.getImageData(0, 0, size, size);
+  for (let i = 0; i < size * size; i++) {
+    const g = grime[i], m = micro[i];
+    const mod = (0.9 + 0.2 * g) * (0.965 + 0.07 * m);
+    img.data[i * 4] = Math.min(255, img.data[i * 4] * mod);
+    img.data[i * 4 + 1] = Math.min(255, img.data[i * 4 + 1] * mod);
+    img.data[i * 4 + 2] = Math.min(255, img.data[i * 4 + 2] * mod);
+    rough[i] = Math.min(1, Math.max(0.2, rough[i] + (g - 0.5) * 0.3 + (m - 0.5) * 0.06));
+    height[i] += (m - 0.5) * 0.035;
+  }
+  actx.putImageData(img, 0, 0);
+
+  const orm = canvasOf(size);
+  const octx = orm.getContext('2d');
+  const oimg = octx.createImageData(size, size);
+  for (let i = 0; i < size * size; i++) {
+    oimg.data[i * 4] = 255;
+    oimg.data[i * 4 + 1] = Math.max(0, Math.min(255, rough[i] * 255));
+    oimg.data[i * 4 + 2] = Math.max(0, Math.min(255, metal[i] * 255));
+    oimg.data[i * 4 + 3] = 255;
+  }
+  octx.putImageData(oimg, 0, 0);
+  return {
+    map: texOf(albedo, { srgb: true }),
+    normalMap: texOf(heightToNormalCanvas(height, size, isPaint ? 2.4 : 3.0)),
+    ormMap: texOf(orm)
+  };
+}
+
 export function getHullTextures(faction, variant = 'hull') {
   const key = `${faction}:${variant}`;
   if (_hullSets.has(key)) return _hullSets.get(key);
+  if (variant !== 'trim') {
+    const set = plateTextures(faction, variant);
+    _hullSets.set(key, set);
+    return set;
+  }
 
   const size = variant === 'hull' ? 1024 : 512;
   const rnd = mulberry32(faction === 'alpha' ? 4242 : 7777 + (variant === 'trim' ? 99 : 0));
@@ -601,6 +887,33 @@ export function getHullTextures(faction, variant = 'hull') {
   };
   _hullSets.set(key, set);
   return set;
+}
+
+let _bellHeatTex = null;
+/**
+ * Engine bell liner glow along the bell (v = 0 throat, v = 1 lip): white-hot
+ * injector, orange wall, dull red lip. 1 x 64 sRGB, clamped.
+ */
+export function getBellHeatTexture() {
+  if (_bellHeatTex) return _bellHeatTex;
+  const n = 64;
+  const data = new Uint8Array(n * 4);
+  const stops = [[0, [255, 240, 214]], [0.18, [255, 176, 92]], [0.5, [226, 92, 30]], [1, [96, 22, 8]]];
+  for (let j = 0; j < n; j++) {
+    const v = j / (n - 1);
+    let k = 0;
+    while (k < stops.length - 2 && v > stops[k + 1][0]) k++;
+    const [v0, c0] = stops[k], [v1, c1] = stops[k + 1];
+    const u = Math.min(1, Math.max(0, (v - v0) / (v1 - v0)));
+    for (let c = 0; c < 3; c++) data[j * 4 + c] = c0[c] + (c1[c] - c0[c]) * u;
+    data[j * 4 + 3] = 255;
+  }
+  const tex = new THREE.DataTexture(data, 1, n, THREE.RGBAFormat);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.magFilter = tex.minFilter = THREE.LinearFilter;
+  tex.needsUpdate = true;
+  _bellHeatTex = tex;
+  return tex;
 }
 
 let _accentTex = null;
