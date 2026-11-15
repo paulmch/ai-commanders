@@ -363,17 +363,34 @@ class PredictionSimulation(CombatSimulation):
 
 def _chase(h: float, s: float, aim: float, dt: float,
            angular_accel: float, max_angular_vel: float) -> Tuple[float, float]:
-    """One tick of _rotate_ship_toward in one axis: (heading, rate) -> new."""
+    """
+    One tick of CombatSimulation._rotate_ship_toward in one axis:
+    (heading, SIGNED rate) -> new. The rate is carried and only the tick's
+    authority (angular_accel * dt) changes it: a rate the wrong way is
+    braked first; toward the aim the discrete bang-bang planner picks the
+    fastest rate per-tick braking still stops from; the nose lands on the
+    aim only when the rate left is within one tick's authority, a faster
+    swing overshoots and comes back.
+    """
     err = aim - h
     angle = abs(err)
-    if angle < _ANGLE_TOLERANCE and s < _VELOCITY_TOLERANCE:
+    authority = angular_accel * dt
+    if angle < _ANGLE_TOLERANCE and abs(s) <= max(authority, 1e-9):
         return h, 0.0
-    if angle <= s * s / (2.0 * angular_accel) + _ANGLE_TOLERANCE:
-        s = max(0.0, s - angular_accel * dt)
-    elif s < max_angular_vel:
-        s = min(s + angular_accel * dt, max_angular_vel)
-    rot = min(s * dt, angle)
-    return (h + rot if err > 0 else h - rot), s
+    sgn = 1.0 if err > 0 else -1.0
+    w = s * sgn                         # rate toward the aim
+    if w < 0.0:
+        w = w + authority
+    else:
+        w_cmd = angular_accel * (-0.5 * dt + math.sqrt(0.25 * dt * dt + 2.0 * angle / angular_accel))
+        w_cmd = min(w_cmd, max_angular_vel)
+        lo = max(0.0, w - authority)
+        hi = min(max(w, max_angular_vel), w + authority)
+        w = max(lo, min(hi, w_cmd))
+    travel = w * dt
+    if w > 0.0 and travel > angle and w <= authority + 1e-12:
+        travel = angle
+    return h + sgn * travel, w * sgn
 
 
 @functools.lru_cache(maxsize=1024)
@@ -441,8 +458,8 @@ def wobble_sigma_m(
     One-axis model of what the simulation does each tick while wobbling: the
     aim is the nominal direction rotated by N(0, 5 deg) about the ship's up
     axis; the nose chases it with the same bang-bang controller as
-    CombatSimulation._rotate_ship_toward (scalar rate magnitude, direction
-    re-evaluated every tick, brake when inside the stopping angle); the
+    CombatSimulation._rotate_ship_toward (a carried, signed rate changed by
+    at most one tick's authority, overshoot allowed - _chase); the
     thrust acceleration a_k then pushes sideways by a_k*sin(heading error),
     integrated with the same semi-implicit Euler as propagate_state. On
     non-wobbling ticks the aim is nominal (the error decays back to zero).
