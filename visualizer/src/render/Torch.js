@@ -1,31 +1,56 @@
 import * as THREE from 'three';
-import { getNoiseTexture, getGlowTexture } from './Textures.js';
+import { getNoiseTexture } from './Textures.js';
+import { getGraphicsSettings } from './Quality.js';
 
 /**
- * Fusion torch exhaust. A tapered tube rendered double-sided additive with a
- * view-dependent thickness term, so it reads as a volume of plasma rather
- * than a painted cone: scrolling turbulence, shock diamonds near the
- * nozzle, a white-hot core fading through blue to violet at the edge.
+ * Fusion torch exhaust as a real volume. Each plume is ONE draw: a convex
+ * bounding cone whose fragments integrate an analytic emission field along
+ * the view ray, in the torch's own frame (nozzle at the origin, exhaust
+ * down -Z).
  *
- * Local frame: nozzle at the origin, exhaust streaming down -Z. Callers
- * scale the group's Z to the plume length each frame.
+ * The field is three nested Gaussian tubes - a white-hot core that pinches
+ * into shock diamonds, a blue sheath that fans out as the exhaust expands
+ * into vacuum, a wide violet halo - plus a hot ball at the throat. A ray
+ * through a Gaussian tube has a closed-form line integral (erf), so there
+ * is no ray-march and no banding: the ray's chord through the plume is cut
+ * into a few sub-chords only so the axial profile (decay, diamonds,
+ * turbulence) is sampled along it. Side-on the sub-chord holding the ray's
+ * closest approach to the axis carries the whole integral, sampled exactly
+ * there; end-on every sub-chord contributes and the plume becomes the
+ * bright disc it should be. The column is normalised so a layer's
+ * intensity is its side-on centreline radiance in scene HDR units.
+ *
+ * Wall-clock time only scrolls the turbulence; length, width, colour and
+ * the dying-drive cough are functions of the throttle and of battle time.
  */
 
 const vertexShader = /* glsl */`
-  varying vec2 vUv;
-  varying vec3 vNormal;
-  varying vec3 vViewDir;
-  varying vec3 vAxis;
+  uniform float uLen;
+  uniform float uR0;
+  uniform float uW;
+  varying vec3 vPos;
+  varying vec3 vCam;
+  varying float vInside;
   #include <common>
   #include <logdepthbuf_pars_vertex>
+
+  float boundR(float t) { return uW * uR0 * mix(3.8, 15.0, t); }
+
   void main() {
-    vUv = uv;
-    vec4 wp = modelMatrix * vec4(position, 1.0);
-    // normalMatrix handles the non-uniform Z scale of the plume
-    vNormal = normalize(normalMatrix * normal);
-    vViewDir = normalize((viewMatrix * wp).xyz);
-    vAxis = normalize((viewMatrix * modelMatrix * vec4(0.0, 0.0, -1.0, 0.0)).xyz);
-    gl_Position = projectionMatrix * viewMatrix * wp;
+    // Unit cone (z 0 .. -1, radius 1) shaped here: a short collar forward of
+    // the nozzle plane for the throat glow, then out to the plume tip
+    float t = clamp(-position.z, 0.0, 1.0);
+    float fwd = uR0 * 2.6;
+    vec3 lp = vec3(position.xy * boundR(t), mix(fwd, -uLen, t));
+    vPos = lp;
+    vCam = (inverse(modelMatrix) * vec4(cameraPosition, 1.0)).xyz;
+    // Camera inside the cone: the front faces are behind it, so the back
+    // faces carry the plume instead (see the fragment shader)
+    float tc = clamp((fwd - vCam.z) / (fwd + uLen), 0.0, 1.0);
+    float margin = 0.6 + 0.3 * uR0;
+    vInside = (vCam.z < fwd + margin && vCam.z > -uLen - margin
+      && length(vCam.xy) < boundR(tc) + margin) ? 1.0 : 0.0;
+    gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(lp, 1.0);
     #include <logdepthbuf_vertex>
   }
 `;
@@ -33,94 +58,154 @@ const vertexShader = /* glsl */`
 const fragmentShader = /* glsl */`
   uniform sampler2D uNoise;
   uniform float uTime;
+  uniform int uSeg;
+  uniform float uLen;
+  uniform float uR0;
+  uniform float uW;
   uniform float uThrust;
-  uniform float uIntensity;
   uniform float uDiamonds;
+  uniform float uFlare;
+  uniform float uSeed;
+  uniform vec3 uI;       // core, sheath, halo side-on centreline radiance
   uniform vec3 uCore;
+  uniform vec3 uSheath;
   uniform vec3 uEdge;
-  varying vec2 vUv;
-  varying vec3 vNormal;
-  varying vec3 vViewDir;
-  varying vec3 vAxis;
+  varying vec3 vPos;
+  varying vec3 vCam;
+  varying float vInside;
+  #include <common>
   #include <logdepthbuf_pars_fragment>
+
+  // Abramowitz-Stegun 7.1.27, |error| < 5e-4, no exp
+  float erfa(float x) {
+    float a = abs(x);
+    float d = 1.0 + a * (0.278393 + a * (0.230389 + a * (0.000972 + a * 0.078108)));
+    d *= d; d *= d;
+    return sign(x) * (1.0 - 1.0 / d);
+  }
+
+  // Normalised column through a Gaussian tube of width sig over the ray
+  // span [ga, gb] (measured from the closest approach): 1 on the centreline
+  // of a side-on view, path/(sig*sqrt(pi)) looking straight down the axis
+  float column(float sig, float d2, float sinT, float ga, float gb) {
+    float k = sinT / sig;
+    // Exact column, then eased toward the side-on value: an oblique view of
+    // a long plume is deeper, but must not whiten the whole body
+    return exp(-d2 / (sig * sig)) * 0.5 * (erfa(gb * k) - erfa(ga * k)) / sinT * sqrt(max(sinT, 0.2));
+  }
+
   void main() {
+    // Convex cone: exactly one face per pixel - front faces from outside,
+    // back faces once the camera is inside the plume
+    if (gl_FrontFacing == (vInside > 0.5)) discard;
     #include <logdepthbuf_fragment>
-    float t = vUv.y;                       // 0 nozzle .. 1 tip
-    // Turbulence scrolls toward the tip; two octaves at different speeds
-    // Scroll slowly: faster than ~1 tile/s aliases into strobing at 60 Hz
-    float n1 = texture2D(uNoise, vec2(vUv.x * 2.0, t * 2.5 - uTime * 0.55)).r;
-    float n2 = texture2D(uNoise, vec2(vUv.x * 5.0 + 0.37, t * 6.0 - uTime * 0.9)).g;
-    float turb = 0.72 + 0.56 * (n1 * 0.65 + n2 * 0.35);
+    #if defined( USE_LOGDEPTHBUF ) && defined( USE_LOGDEPTHBUF_EXT )
+      // Inside the plume the gas starts at the lens: nothing can occlude it
+      if (vInside > 0.5) gl_FragDepthEXT = 0.0;
+    #endif
 
-    // Axial profile: hottest just outside the nozzle, exponential decay,
-    // pinched to nothing at the tip
-    float axial = exp(-t * 3.0) * (1.0 - smoothstep(0.75, 1.0, t)) * smoothstep(0.0, 0.05, t);
+    vec3 ro = vCam;
+    vec3 rd = normalize(vPos - vCam);
+    vec3 col = vec3(0.0);
 
-    // Shock diamonds: standing wave pattern that fades down the plume
-    float wave = abs(sin(t * 3.14159 * (7.0 + 3.0 * uThrust) + 0.6));
-    float diamonds = 1.0 + uDiamonds * pow(wave, 10.0) * exp(-t * 5.0);
+    // Throat: a white-hot ball sitting in the nozzle exit. Its skirt falls
+    // on the bells around it, which is the heat glow on the engine block.
+    float sf = uR0 * (0.55 + 0.25 * uThrust);
+    vec3 fc = ro - vec3(0.0, 0.0, -0.25 * uR0);
+    float fd2 = dot(fc, fc) - pow(dot(fc, rd), 2.0);
+    col += mix(uCore, uSheath, 0.3) * uFlare * (exp(-fd2 / (sf * sf)) + 0.16 * exp(-fd2 / (sf * sf * 9.0)));
 
-    // A tube seen edge-on is thin: weight by |n.v| so the silhouette fades
-    // Soft silhouette: fade hard toward grazing angles so the plume reads
-    // as a glowing volume, not a lit tube with edges
-    float ndv = abs(dot(normalize(vNormal), normalize(vViewDir)));
-    float thick = pow(ndv, 1.8);
-    // Looking down the axis a ray crosses the whole tube: damp the
-    // per-fragment contribution so an end-on plume is a bright disc, not
-    // a full-screen wash
-    float endOn = abs(dot(normalize(vViewDir), vAxis));
-    float sinView = sqrt(max(0.0, 1.0 - endOn * endOn));
-    thick *= mix(0.04, 1.0, pow(sinView, 1.5));
+    // Chord of the ray through the slab 0 <= s <= uLen (s = distance aft)
+    float sA = -ro.z, sD = -rd.z;
+    float t0 = 0.0, t1 = -1.0;
+    if (abs(sD) > 1e-5) {
+      float ta = -sA / sD, tb = (uLen - sA) / sD;
+      t0 = max(min(ta, tb), 0.0);
+      t1 = max(ta, tb);
+    } else if (sA > 0.0 && sA < uLen) {
+      t1 = 40.0 * uLen;
+    }
+    if (t1 > t0) {
+      float dd = max(dot(rd.xy, rd.xy), 1e-6);
+      float sinT = sqrt(dd);
+      float tc = -dot(ro.xy, rd.xy) / dd;          // closest approach to the axis
+      vec2 qc = ro.xy + rd.xy * tc;
+      float d2 = dot(qc, qc);
+      float lam = uR0 * (3.2 + 2.2 * uThrust);     // shock cell length
+      float dt = (t1 - t0) / float(uSeg);
+      for (int i = 0; i < 4; i++) {
+        if (i >= uSeg) break;
+        float a = t0 + dt * float(i), b = a + dt;
+        float te = clamp(tc, a, b);                // nearest the axis in this sub-chord
+        float s = sA + sD * te;
+        float t = clamp(s / uLen, 0.0, 1.0);
+        vec2 q = ro.xy + rd.xy * te;
 
-    float a = axial * turb * thick * diamonds;
-    vec3 col = mix(uEdge, uCore, clamp(a * 1.8, 0.0, 1.0) * (0.45 + 0.55 * uThrust));
-    gl_FragColor = vec4(col * a * uIntensity, 1.0);
+        // Turbulence: filaments streaming aft, laminar at the throat
+        // (long in the flow direction, narrow across it), growing downstream
+        float v = s / (uR0 * 44.0);
+        float n1 = textureLod(uNoise, vec2(q.x / (uR0 * 7.0) + uSeed, v - uTime * 0.4), 0.0).r;
+        float n2 = textureLod(uNoise, vec2(q.y / (uR0 * 5.0) + uSeed * 1.7 + 0.37, v * 2.1 - uTime * 0.7), 0.0).g;
+        float fil = clamp(n1 * n2 * 4.0, 0.0, 2.2);
+        float rough = smoothstep(0.0, 0.22, t);
+        float coreTurb = mix(1.0, 0.7 + 0.3 * fil, rough);
+        float sheathTurb = mix(1.0, 0.22 + 0.78 * fil, rough);
+        float haloTurb = mix(1.0, 0.4 + 1.2 * n1, rough);
+
+        // Shock diamonds: the core necks down and flares at each cell
+        float ph = 6.28318 * s / lam - 2.0;
+        float cell = exp(-t * 5.0) * uDiamonds;
+        float pinch = 1.0 - 0.4 * cos(ph) * cell;
+        float knot = 1.0 + 3.6 * pow(0.5 + 0.5 * cos(ph), 4.0) * cell;
+        // Pressure pulses running down the sheath (slow: no strobing)
+        float pulse = 1.0 + 0.14 * sin(6.28318 * (s / (uR0 * 24.0) - uTime * 0.8 + uSeed));
+
+        float rise = smoothstep(0.0, uR0 * 0.7, s);
+        float tip = 1.0 - smoothstep(0.35, 1.0, t);
+        float env = rise * tip;
+        float sc = uW * uR0 * (0.34 + 1.0 * t) * pinch;
+        float ss = uW * uR0 * (0.85 + 5.2 * pow(t, 0.6));
+        float sh = uW * uR0 * (1.7 + 8.6 * pow(t, 0.8));
+        float ga = a - tc, gb = b - tc;
+
+        // White-hot only at the throat and in the knots; the core cools to
+        // the sheath's blue within the first tenth of the plume
+        float heat = clamp(exp(-t * 9.0) * (0.4 + 0.3 * knot), 0.0, 1.0);
+        vec3 cc = mix(uSheath * 1.25, uCore, heat);
+        vec3 cs = mix(uSheath, uEdge, smoothstep(0.0, 0.55, t));
+        col += cc * (uI.x * exp(-t * 5.5) * knot * coreTurb * env * column(sc, d2, sinT, ga, gb));
+        col += cs * (uI.y * exp(-t * 3.4) * pulse * sheathTurb * env * column(ss, d2, sinT, ga, gb));
+        col += uEdge * (uI.z * exp(-t * 2.4) * haloTurb * env * column(sh, d2, sinT, ga, gb));
+      }
+    }
+
+    // Looking down the axis the column is the whole plume deep: roll the
+    // radiance off smoothly so an end-on torch is a hot disc, not a wash
+    float lum = max(col.r, max(col.g, col.b));
+    const float CAP = 5.0;
+    col *= CAP * (1.0 - exp(-lum / CAP)) / max(lum, 1e-4);
+    gl_FragColor = vec4(col, 1.0);
   }
 `;
 
-/**
- * Flame profile: the exhaust leaves the nozzle at rNozzle, flares to rMax
- * just behind the bell and tapers to a point. A straight tube projects as
- * a hard-edged rectangle (a bright square when the ship is distant);
- * the lathe profile gives a soft cigar silhouette instead.
- */
-function tubeGeometry(rNozzle, rMax, radial = 28, along = 28) {
-  const pts = [];
-  const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
-  for (let i = 0; i <= along; i++) {
-    const t = i / along;
-    const flare = rNozzle + (rMax - rNozzle) * smooth(0, 0.3, t);
-    const taper = Math.pow(1 - smooth(0.3, 1.0, t), 0.75);
-    const r = Math.max(rMax * 0.01, flare * taper);
-    pts.push(new THREE.Vector2(r, t));
-  }
-  const g = new THREE.LatheGeometry(pts, radial);
-  g.rotateX(-Math.PI / 2);   // nozzle at z=0, tip at z=-1
+let _coneGeom = null;
+/** Unit bounding cone, z 0 .. -1, capped; the vertex shader shapes it. */
+function coneGeometry() {
+  if (_coneGeom) return _coneGeom;
+  const g = new THREE.CylinderGeometry(1, 1, 1, 20, 6, false);
+  g.rotateX(Math.PI / 2);
+  g.translate(0, 0, -0.5);
+  _coneGeom = g;
   return g;
 }
 
-function torchMaterial(core, edge, intensity, diamonds) {
-  return new THREE.ShaderMaterial({
-    uniforms: {
-      uNoise: { value: getNoiseTexture() },
-      uTime: { value: 0 },
-      uThrust: { value: 0 },
-      uIntensity: { value: intensity },
-      uDiamonds: { value: diamonds },
-      uCore: { value: new THREE.Color(...core) },
-      uEdge: { value: new THREE.Color(...edge) }
-    },
-    vertexShader,
-    fragmentShader,
-    transparent: true,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-    blending: THREE.CustomBlending,
-    blendSrc: THREE.OneFactor,
-    blendDst: THREE.OneFactor,
-    blendEquation: THREE.AddEquation
-  });
-}
+// Shared by every torch: turbulence clock, noise, sub-chord count (tier)
+const shared = {
+  uNoise: { value: null },
+  uTime: { value: 0 },
+  uSeg: { value: 4 }
+};
+const SEGMENTS = { low: 2, high: 4 };
 
 const coughHash = (k) => { const x = Math.sin(k * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
 
@@ -137,53 +222,111 @@ export function torchCough(t) {
 }
 
 /**
- * @param {Object} opts
- *   radius   - nozzle radius (scene units)
- *   length   - full plume length at 100% thrust
- *   light    - optional THREE.PointLight (budgeted by the caller)
- *   tint     - 'fusion' (white/blue) | 'chemical' (white/orange, torpedoes)
+ * Side-on centreline radiance of the three layers and the throat ball at
+ * full throttle for ONE nozzle (scene HDR units; bloom threshold ~1.35).
+ * Only the throat, the diamonds and the first stretch of core cross the
+ * bloom threshold - the body of the plume stays a visible blue gradient.
  */
-export function createTorch({ radius, length, light = null, tint = 'fusion', intensity = 1 }) {
+export const TORCH_LEVELS = { core: 1.5, sheath: 0.78, halo: 0.11, flare: 1.3 };
+
+/**
+ * Per-nozzle level scale for a drive of `cluster` bells: cores overlap by
+ * about sqrt(n) along a typical view ray, the wide sheath and halo of every
+ * bell overlap everywhere, so the cluster as a whole keeps the look of one
+ * plume instead of summing to white.
+ */
+export function clusterLevels(cluster = 1) {
+  const n = Math.max(1, cluster);
+  return { core: 1 / Math.sqrt(n), wide: 1 / Math.pow(n, 0.85) };
+}
+
+/**
+ * Plume shape at a (smoothed) throttle 0..1: an idle torch is a short dim
+ * violet flicker, full burn a long white-cored spike.
+ */
+export function plumeShape(thrust) {
+  const th = Math.pow(Math.max(0, Math.min(1, thrust)), 0.85);
+  return {
+    length: 0.14 + 0.86 * th,
+    width: 0.72 + 0.28 * th,
+    core: (0.2 + 0.8 * th) * (0.3 + 0.7 * th),
+    wide: 0.25 + 0.75 * th
+  };
+}
+
+/**
+ * @param {Object} opts
+ *   radius    - nozzle radius (scene units)
+ *   length    - nominal plume length at 100% thrust
+ *   light     - optional THREE.PointLight (budgeted by the caller)
+ *   tint      - 'fusion' (white/blue) | 'chemical' (white/orange, vents)
+ *   intensity - overall level scale
+ *   cluster   - number of bells in the drive this nozzle belongs to
+ */
+export function createTorch({ radius, length, light = null, tint = 'fusion', intensity = 1, cluster = 1 }) {
   const group = new THREE.Group();
   const fusion = tint === 'fusion';
   const I = intensity;
-  const coreCol = fusion ? [1.0, 0.97, 1.0] : [1.0, 0.95, 0.85];
-  const sheathCol = fusion ? [0.35, 0.55, 1.0] : [1.0, 0.55, 0.2];
-  const edgeCol = fusion ? [0.25, 0.2, 0.9] : [0.8, 0.25, 0.1];
+  const k = clusterLevels(cluster);
+  // The bright stretch is the first third of this; the rest is the halo
+  // thinning out. Shorter than the pass-4 neon tubes so the falloff and the
+  // tip land inside a hull-framing shot.
+  const reach = length * (fusion ? 0.75 : 1.0);
+  const levels = {
+    core: TORCH_LEVELS.core * I * k.core,
+    sheath: TORCH_LEVELS.sheath * I * k.wide,
+    halo: TORCH_LEVELS.halo * I * k.wide,
+    flare: TORCH_LEVELS.flare * Math.min(1, I) * k.core
+  };
 
-  // Slim saturated core, blue sheath kept below white, faint violet halo:
-  // a gradient across the plume, never a flat-topped white bar
-  const core = new THREE.Mesh(tubeGeometry(radius * 0.38, radius * 0.6),
-    torchMaterial(coreCol, sheathCol, 3.0 * I, fusion ? 1.2 : 0.3));
-  const sheath = new THREE.Mesh(tubeGeometry(radius * 0.85, radius * 1.5),
-    torchMaterial(sheathCol, edgeCol, 0.55, 0.4));
-  const outer = new THREE.Mesh(tubeGeometry(radius * 1.3, radius * 2.3, 20, 16),
-    torchMaterial(edgeCol, [0, 0, 0], 0.08, 0.0));
-  for (const m of [core, sheath, outer]) {
-    m.frustumCulled = false;
-    m.renderOrder = 20;
-    group.add(m);
-  }
-
-  // Nozzle glow: an HDR disc at the throat
-  const nozzle = new THREE.Sprite(new THREE.SpriteMaterial({
-    map: getGlowTexture(),
-    color: new THREE.Color(fusion ? 0.8 : 1.0, fusion ? 0.9 : 0.75, 1.0),
-    transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false
-  }));
-  nozzle.scale.setScalar(radius * 2.4);
-  nozzle.renderOrder = 21;
-  group.add(nozzle);
+  shared.uNoise.value = getNoiseTexture();
+  const material = new THREE.ShaderMaterial({
+    uniforms: {
+      uNoise: shared.uNoise,
+      uTime: shared.uTime,
+      uSeg: shared.uSeg,
+      uLen: { value: reach },
+      uR0: { value: radius },
+      uW: { value: 1 },
+      uThrust: { value: 0 },
+      uDiamonds: { value: fusion ? 1.0 : 0.35 },
+      uFlare: { value: 0 },
+      uSeed: { value: Math.random() },
+      uI: { value: new THREE.Vector3() },
+      uCore: { value: new THREE.Color(...(fusion ? [1.0, 0.96, 1.0] : [1.0, 0.94, 0.82])) },
+      uSheath: { value: new THREE.Color(...(fusion ? [0.2, 0.46, 1.0] : [1.0, 0.52, 0.18])) },
+      uEdge: { value: new THREE.Color(...(fusion ? [0.36, 0.18, 0.95] : [0.8, 0.24, 0.1])) }
+    },
+    vertexShader,
+    fragmentShader,
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    blending: THREE.CustomBlending,
+    blendSrc: THREE.OneFactor,
+    blendDst: THREE.OneFactor,
+    blendEquation: THREE.AddEquation
+  });
+  const plume = new THREE.Mesh(coneGeometry(), material);
+  plume.frustumCulled = false;
+  plume.renderOrder = 20;
+  // Sub-chord count follows the graphics tier (read-only use of Quality.js)
+  plume.onBeforeRender = (renderer) => {
+    const seg = SEGMENTS[getGraphicsSettings(renderer).level] || SEGMENTS.high;
+    if (shared.uSeg.value !== seg) shared.uSeg.value = seg;
+  };
+  group.add(plume);
 
   const _wp = new THREE.Vector3();
   const _wd = new THREE.Vector3();
-
+  const u = material.uniforms;
   const phase = Math.random() * Math.PI * 2;
   const state = { thrust: 0 };
 
   return {
     group,
     light,
+    levels,
     /**
      * @param {number} thrust       0..1 (already smoothed by the caller)
      * @param {number} time         wall-clock seconds for turbulence
@@ -205,34 +348,22 @@ export function createTorch({ radius, length, light = null, tint = 'fusion', int
       if (sputter > 0) {
         breathe *= 1 - sputter * 0.75 * torchCough(sputterTime ?? time);
       }
-      // Throttle response: an idle torch is a short violet flicker, full
-      // burn a long white spike
-      const th = Math.pow(thrust, 0.85);
-      const len = length * (0.1 + 0.9 * th) * breathe;
-      const width = 0.55 + 0.5 * th;
-      group.scale.set(width, width, len);
-      const inten = (0.2 + 0.8 * th) * breathe;
+      const shape = plumeShape(thrust);
+      shared.uTime.value = time;
+      u.uThrust.value = thrust;
+      u.uLen.value = reach * shape.length * breathe;
+      u.uW.value = shape.width;
+      u.uI.value.set(levels.core * shape.core * breathe, levels.sheath * shape.wide * breathe, levels.halo * shape.wide * breathe);
+      u.uFlare.value = levels.flare * Math.min(1, thrust * 1.3) * breathe;
       if (light) {
         group.getWorldPosition(_wp);
         _wd.set(0, 0, -1).transformDirection(group.matrixWorld);
         light.position.copy(_wp).addScaledVector(_wd, radius * 3);
+        light.intensity = (0.15 + 0.85 * shape.wide) * 8 * I * breathe;
       }
-      for (const m of [core, sheath, outer]) {
-        m.material.uniforms.uTime.value = time;
-        m.material.uniforms.uThrust.value = thrust;
-      }
-      core.material.uniforms.uIntensity.value = 3.0 * I * inten;
-      sheath.material.uniforms.uIntensity.value = 0.55 * I * inten;
-      outer.material.uniforms.uIntensity.value = 0.08 * I * inten;
-      nozzle.material.opacity = Math.min(1, thrust * 0.9) * breathe * 0.5 * Math.min(1, I);
-      if (light) light.intensity = (0.15 + 0.85 * th) * 8 * I * breathe;
     },
     dispose() {
-      for (const m of [core, sheath, outer]) {
-        m.geometry.dispose();
-        m.material.dispose();
-      }
-      nozzle.material.dispose();
+      material.dispose();   // the cone geometry and the noise are shared
     }
   };
 }

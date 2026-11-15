@@ -300,8 +300,10 @@ export class SceneManager {
     for (let e = 0; e < engineConfig.count; e++) {
       const p = engineConfig.positions[e];
       const light = e === 0 ? this.tryPointLight(0x7fb0ff, 0, size.length * 5) : null;
-      const torch = createTorch({ radius: plumeR, length: plumeLength, light, tint: 'fusion' });
+      const torch = createTorch({ radius: plumeR, length: plumeLength, light, tint: 'fusion', cluster: engineConfig.count });
       torch.group.position.set(p.x, p.y, -size.length * 0.53);
+      // Bells are canted a few degrees off the drive axis: the plumes fan out
+      torch.group.rotation.set(0.28 * p.y / size.width, -0.28 * p.x / size.width, 0);
       group.add(torch.group);
       torches.push(torch);
     }
