@@ -268,7 +268,9 @@ def run_battle(task: Dict[str, Any]) -> Dict[str, Any]:
             initial_distance_km=dist, time_limit_s=task["time_limit_s"],
             max_checkpoints=task["max_checkpoints"], verbose=False,
             personality_selection=False, record_battle=False,
-            record_sim_trace=False, record_predictions=False, seed=task["seed"]))
+            record_sim_trace=False, record_predictions=False, seed=task["seed"],
+            heuristic_doctrine={"alpha": task.get("doctrine", "legacy"),
+                                "beta": task.get("doctrine", "legacy")}))
         dummy = E["LLMCaptainConfig"](
             name="-", ship_name="-", model=E["HEURISTIC_MODEL"],
             personality=E["CaptainPersonality"].BALANCED)
@@ -353,6 +355,7 @@ def plan(args: argparse.Namespace, eng: str):
                                 distance_km=args.distance,
                                 time_limit_s=args.time_limit,
                                 max_checkpoints=args.max_checkpoints,
+                                doctrine=getattr(args, "doctrine", "legacy"),
                                 battle_timeout=args.battle_timeout)
     return cells, tasks, fleets
 
@@ -524,6 +527,9 @@ def main() -> int:
                     help="Formation shape for both fleets; 'cycle' rotates "
                          "through all shapes by seed (default)")
     ap.add_argument("--max-ships", type=int, default=8)
+    ap.add_argument("--doctrine", choices=("legacy", "tactical"), default="legacy",
+                    help="Heuristic captain doctrine (default legacy: the doctrine the "
+                         "published torpedo-cost calibration was measured with)")
     ap.add_argument("--distance", type=float, default=500.0)
     ap.add_argument("--time-limit", type=float, default=900.0)
     ap.add_argument("--max-checkpoints", type=int, default=25)

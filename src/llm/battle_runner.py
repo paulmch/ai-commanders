@@ -169,7 +169,7 @@ class BattleConfig:
         values = {name: getattr(fleet, name) for name in (
             "initial_distance_km", "time_limit_s", "decision_interval_s", "unlimited_mode",
             "record_battle", "record_sim_trace", "personality_selection", "use_notebooks",
-            "max_checkpoints", "seed",
+            "max_checkpoints", "seed", "heuristic_doctrine",
         )}
         values.update(overrides)
         return cls(**values)

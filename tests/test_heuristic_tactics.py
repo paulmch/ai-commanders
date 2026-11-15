@@ -564,3 +564,34 @@ def test_the_duel_runner_honours_the_doctrine():
     runner.setup_battle(load_fleet_data())
     assert (runner.alpha_captain.doctrine, runner.beta_captain.doctrine) == (
         DOCTRINE_LEGACY, DOCTRINE_TACTICAL)
+
+
+def test_fleet_configs_carry_the_heuristic_doctrine():
+    # Review round 3, finding 7: --fleet-config / MCP battles had no way to
+    # pick the doctrine.
+    from src.llm.battle_runner import BattleConfig
+    from src.llm.fleet_config import BattleFleetConfig
+    ships = [{"ship_type": "destroyer", "model": HEURISTIC_MODEL}]
+    both = BattleFleetConfig.from_dict({"alpha_fleet": {"ships": ships}, "beta_fleet": {"ships": ships},
+                                        "heuristic_doctrine": "legacy"})
+    assert BattleConfig.from_fleet_config(both).heuristic_doctrine == {
+        "alpha": DOCTRINE_LEGACY, "beta": DOCTRINE_LEGACY}
+    split = BattleFleetConfig.from_dict({"alpha_fleet": {"ships": ships}, "beta_fleet": {"ships": ships},
+                                         "heuristic_doctrine": {"beta": "legacy"}})
+    assert BattleConfig.from_fleet_config(split).heuristic_doctrine == {"beta": DOCTRINE_LEGACY}
+    with pytest.raises(ValueError):
+        BattleFleetConfig.from_dict({"alpha_fleet": {"ships": ships}, "beta_fleet": {"ships": ships},
+                                     "heuristic_doctrine": "berserk"})
+
+
+def test_fixture_and_calibration_scripts_default_to_legacy():
+    import importlib.util
+    import inspect
+    root = Path(__file__).parent.parent / "scripts"
+    spec = importlib.util.spec_from_file_location("gtb", root / "generate_test_battle.py")
+    gtb = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gtb)
+    assert inspect.signature(gtb.hud_comms_battle).parameters["doctrine"].default == DOCTRINE_LEGACY
+    text = (root / "calibrate_torpedo_cost.py").read_text()
+    assert '"--doctrine", choices=("legacy", "tactical"), default="legacy"' in text
+    assert 'heuristic_doctrine={"alpha": task.get("doctrine", "legacy")' in text
