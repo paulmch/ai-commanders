@@ -442,7 +442,7 @@ FIXTURE_COLUMNS = ["source", "range_km", "tof_s", "target_type", "class", "dodge
 
 
 def write_fixture(rows: List[dict], out: str, free_keep: int, harness_keep: int,
-                  pre_lead_fix: Iterable[str] = ()) -> None:
+                  pre_lead_fix: Iterable[str] = (), label: str = "") -> None:
     """Every battle shot except the plentiful INTERCEPT / PADLOCK ones
     closer than 300 km, of which an evenly spaced 1 in free_keep per source,
     class and 100 km bucket; harness rounds 1 in harness_keep.
@@ -472,7 +472,7 @@ def write_fixture(rows: List[dict], out: str, free_keep: int, harness_keep: int,
     types = sorted({r["target_type"] for r in kept})
     classes = sorted({maneuver_class(r) for r in kept})
     data = {
-        "about": ("Shots for tests/test_fire_control_calibration.py, written by "
+        "about": ((label + " ") if label else "") + ("Shots for tests/test_fire_control_calibration.py, written by "
                   "scripts/fire_control_calibration.py fixture. class is the target's maneuver "
                   "class at fire time; n is how many ships had fired at it in the last 30 s "
                   "(harness: the shooter count); dodge (its evasion throttle, null = does not "
@@ -524,6 +524,8 @@ def main() -> None:
     fx.add_argument("--harness-keep", type=int, default=20)
     fx.add_argument("--pre-lead-fix", default="",
                     help="comma list of sources recorded before the HEADING lead fix")
+    fx.add_argument("--label", default="",
+                    help="prefix for the fixture's 'about' text (e.g. HISTORICAL ...)")
     args = ap.parse_args()
 
     if args.cmd == "recordings":
@@ -559,7 +561,7 @@ def main() -> None:
         print_table(calibration_table(read_rows(args.paths), HullTable(), args.by))
     elif args.cmd == "fixture":
         write_fixture(read_rows(args.paths), args.out, args.free_keep, args.harness_keep,
-                      [s for s in args.pre_lead_fix.split(",") if s])
+                      [s for s in args.pre_lead_fix.split(",") if s], args.label)
 
 
 if __name__ == "__main__":

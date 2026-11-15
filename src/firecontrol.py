@@ -119,11 +119,23 @@ UNFORESEEN_ACCEL_FRACTION = 0.018
 # its angular momentum: a jinking hull can no longer reverse a swing in one
 # tick, so it commits to each jink and strays farther from the lead. Per
 # maneuver class, shooter count and 100 km bucket (30+ hits) the forecast is
-# 0.70-1.24x of what landed, except EVASIVE alone at 200-299 km (0.59x) and
-# dodge under fleet fire at 400-499 km (0.37x; 300-399 km 0.70x): the dodge
-# term grows with min(T, 60 s)^2 and over-charges the longest flights.
+# 0.86-1.28x of what landed (fit on the merged engine, 50k rounds), except
+# EVASIVE alone at 200-299 km (0.60x: all 50 of its hits are on dreadnoughts,
+# in four engagements).
 DODGE_ACCEL_FRACTION = 0.13
 EVASIVE_DODGE_ACCEL_FRACTION = 0.07
+
+# The evade overlay's dodge (and a jink in progress) is a burn of bounded
+# length: it stops once the round's predicted miss clears, so beyond
+# DODGE_BURN_S of the round's time to go its displacement grows linearly,
+# a * tau * (T - tau / 2), not as a * T^2 / 2. With the T^2 form the forecast
+# was 0.55x / 0.39x of what landed under fleet fire at 300-399 / 400-499 km
+# and 0.64x on a lone shooter at 200-299 km. Fitted (maximum likelihood) on
+# the even harness seeds, validated on the odd ones: held-out log-likelihood
+# +21 against the T^2 form (a cap on the displacement and a soft saturation
+# were no better than T^2). The EVASIVE maneuver keeps the T^2 form: it
+# weaves continuously, and bounding it fitted worse.
+DODGE_BURN_S = 20.0
 
 # A dodger whose evasion is flying it RIGHT NOW (mid-jink) is already burning
 # across the line of fire, and its lead does not extrapolate that burn (a
@@ -221,13 +233,18 @@ def displacement_sigma_m(time_of_flight_s: float, motion: TargetMotion) -> float
     sigma_dodge = sigma_jink = sigma_pending = sigma_stale = 0.0
     if motion.dodges:
         td = min(t, motion.dodge_horizon_s)
+        # time-squared while the burn lasts, linear after it ends
+        if motion.evasive or td <= DODGE_BURN_S:
+            burn_t2 = td * td / 2.0
+        else:
+            burn_t2 = DODGE_BURN_S * (td - DODGE_BURN_S / 2.0)
         if t >= motion.dodge_min_time_s:
             k = EVASIVE_DODGE_ACCEL_FRACTION if motion.evasive else DODGE_ACCEL_FRACTION
             throttle = max(0.0, min(1.0, motion.dodge_throttle))
-            sigma_dodge = k * a * throttle * td * td / 2.0
+            sigma_dodge = k * a * throttle * burn_t2
         jink = max(0.0, float(motion.jink_accel_ms2))
         if jink > 0.0 and not motion.evasive:
-            sigma_jink = JINK_ACCEL_FRACTION * jink * td * td / 2.0
+            sigma_jink = JINK_ACCEL_FRACTION * jink * burn_t2
     pending = max(0.0, float(motion.pending_burn_ms2))
     if pending > 0.0:
         tp = t - max(0.0, float(motion.pending_burn_in_s))
