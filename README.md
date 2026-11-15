@@ -97,6 +97,10 @@ Each of the nine hull classes has its own design, drawn to scale in faction live
 
 **The drive is a hazard.** A torch carries about 300 TW of jet power. A ship in another ship's exhaust takes heat, then armour and fitting damage, and its crew accumulates a radiation dose; the washed plating glows. An interlock throttles a drive that would wash an allied ship, and commanders see plume and crew warnings in their status.
 
+![A battleship under full burn seen from ahead, with a destroyer inside its exhaust, the destroyer's plating glowing](docs/images/readme/plume-wash.png)
+
+*A destroyer caught in a battleship's exhaust: the washed plating glows, fittings burn off and the crew takes a radiation dose.*
+
 ![A dreadnought in three-quarter view with slab armour plating, wedge bow and parallel drive jets, point-defense lasers firing](docs/images/readme/dreadnought.png)
 
 *The dreadnought: slab armour on a cruciform core, lathed engine bells, every jet along the thrust axis.*
