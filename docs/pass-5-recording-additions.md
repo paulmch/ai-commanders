@@ -145,7 +145,7 @@ inside `radius_km` with intensity >= 0.01, emitted just before the
 | `hit_location` | string | armour facing toward the blast: `"nose"`, `"lateral"`, `"tail"` (absent for a dying hulk) |
 | `armor_ablation_cm` | float | armour burned off that facing (`intensity x 15 cm`, capped at what was left) |
 | `armor_remaining_cm` | float | thickness left on that facing |
-| `heat_gj` | float | heat dumped into the victim's sink (`intensity x 120 GJ`) |
+| `heat_gj` | float | heat dumped into the victim's sink (`intensity x 120 GJ`, capped so the sink never passes 149 % of its rating: a blast alone never causes a reactor meltdown; 0 when the victim was already that hot) |
 | `heat` | float | victim's heat fraction after the pulse (same scale as frame `heat`) |
 | `radiators` | [object] | one entry per **extended** panel, all of which are damaged: `radiator_position` (`tail_port`/`tail_starboard`/`tail_dorsal`/`tail_ventral`), `health_pct`, `destroyed`, `capacity_lost_kw`. Empty when the panels were retracted (shielded) |
 | `fuse_cut_s` | float | only when the victim is a dying hulk: seconds the blast took off its detonation fuse (`intensity x 20 s`). Such an event carries only `source_ship_id`, `distance_km`, `intensity`, `fuse_cut_s`, `detonation_in_s` |

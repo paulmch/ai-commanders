@@ -133,3 +133,36 @@ def test_meltdown_blast_origin_moves_with_the_ship():
     blast = _events(sim, SimulationEventType.BLAST_DAMAGE)
     assert len(blast) == 1
     assert blast[0].data["distance_km"] == pytest.approx(5.0, abs=0.01)
+
+
+# ---------------------------------------------------------------------------
+# Finding 3: a blast's heat pulse alone never melts a reactor down
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("heat0", [0.0, 1.0, 1.2, 1.45, 1.495])
+def test_blast_heat_stops_just_short_of_the_meltdown_line(heat0):
+    from src.thermal import REACTOR_MELTDOWN_HEAT_FRACTION
+
+    sim = CombatSimulation(seed=1, time_step=1.0)
+    dead = [_ship(sim, f"dead{k}", "alpha", Vector3D(0, -1_500 * k, 0)) for k in range(2)]
+    victim = _ship(sim, "victim", "alpha", Vector3D(0, 1_000, 0))
+    _ship(sim, "enemy", "beta", Vector3D(9e8, 0, 0))
+    sink = victim.thermal_system.heatsink
+    sink.current_heat_gj = heat0 * sink.capacity_gj
+    sim._running = True
+    sim.current_time = 0.001
+    for ship in dead:                   # two close blasts in the same tick
+        sim._destroy_ship(ship, "enemy", cause="reactor_destroyed")
+    bd.resolve_pending_blasts(sim)
+
+    assert victim.thermal_system.heat_fraction < REACTOR_MELTDOWN_HEAT_FRACTION
+    events = _events(sim, SimulationEventType.BLAST_DAMAGE)
+    assert len(events) == 2
+    if heat0 == 0.0:                     # the uncapped pulse when there is room
+        assert events[0].data["heat_gj"] == pytest.approx(
+            events[0].data["intensity"] * bd.REACTOR_BLAST_MAX_HEAT_GJ, abs=0.1)
+    assert all(e.data["heat_gj"] >= 0.0 for e in events)
+    # the next tick: no meltdown, the ship lives on
+    sim.step()
+    assert not victim.is_destroyed
+    assert not _events(sim, SimulationEventType.REACTOR_MELTDOWN)

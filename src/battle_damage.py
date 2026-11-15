@@ -17,8 +17,8 @@ Three automatic mechanics, all resolved by the engine (no commander tools):
    it on nearby ships, dumps heat into their sinks, shreds extended radiators
    and exposed fittings, shortens the fuse of nearby dying hulks (chain
    reactions) and kills or blinds torpedoes flying through it. Friend and foe
-   alike; a blast never touches hull modules, so it cannot kill a healthy ship
-   on its own.
+   alike; a blast never touches hull modules and its heat pulse stops just
+   short of the meltdown line, so it cannot kill a healthy ship on its own.
 
 3. MAGAZINE COOK-OFF. A destroyed magazine module burns off part of the
    ship's remaining rounds (torpedoes on torpedo hulls, gun ammunition on gun
@@ -41,9 +41,11 @@ import sys
 try:
     from .combat import HitLocation
     from .modules import ModuleType
+    from .thermal import REACTOR_MELTDOWN_HEAT_FRACTION
 except ImportError:  # pragma: no cover - script-style import path
     from combat import HitLocation
     from modules import ModuleType
+    from thermal import REACTOR_MELTDOWN_HEAT_FRACTION
 
 if TYPE_CHECKING:  # pragma: no cover
     from .simulation import CombatSimulation, ShipCombatState
@@ -340,6 +342,10 @@ REACTOR_BLAST_YIELD_GJ_PER_TON = 0.15
 REACTOR_BLAST_MAX_ARMOR_ABLATION_CM = 15.0
 # Heat dumped into the victim's sink at intensity 1.0 (GJ; sinks hold 320 GJ).
 REACTOR_BLAST_MAX_HEAT_GJ = 120.0
+# The pulse never takes a sink past this fraction of its rating - just under
+# REACTOR_MELTDOWN_HEAT_FRACTION - so a blast alone cannot cook a reactor off
+# (a ship that keeps heating itself afterwards still can).
+REACTOR_BLAST_HEAT_CEILING_FRACTION = REACTOR_MELTDOWN_HEAT_FRACTION - 0.01
 # Damage to each EXTENDED radiator panel at intensity 1.0 (GJ; a panel has
 # ~5 GJ of health). Retracted panels are shielded by the hull.
 REACTOR_BLAST_RADIATOR_DAMAGE_GJ = 6.0
@@ -489,7 +495,12 @@ def _resolve_blast(sim: "CombatSimulation", blast: dict) -> None:
         thermal = ship.thermal_system
         if thermal is not None:
             heat_gj = intensity * REACTOR_BLAST_MAX_HEAT_GJ
-            thermal.add_heat('reactor_blast', heat_gj)
+            sink = thermal.heatsink
+            headroom_gj = (REACTOR_BLAST_HEAT_CEILING_FRACTION * sink.capacity_gj
+                           - sink.current_heat_gj)
+            heat_gj = max(0.0, min(heat_gj, headroom_gj))
+            if heat_gj > 0.0:
+                thermal.add_heat('reactor_blast', heat_gj)
             for position in sorted(thermal.radiators.radiators, key=lambda p: p.value):
                 if not thermal.is_radiator_extended(position):
                     continue
