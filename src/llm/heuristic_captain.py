@@ -83,6 +83,7 @@ class HeuristicCaptain(LLMCaptain):
         self.doctrine = doctrine
         self._decision_interval = 30.0
         self._broke_off = False
+        self._withdrawn = False
         self._face_id: Optional[str] = None
 
     def select_personality(self, distance_km: float, verbose: bool = False) -> Dict[str, Any]:
@@ -238,6 +239,12 @@ class HeuristicCaptain(LLMCaptain):
         order_text = (order.order_text if order else "").lower()
         plan = tactics.fleet_plan(simulation, ship.faction, self.config.fleet_data)
         my_role = tactics.role(ship)
+        if my_role == "unarmed" and not self.has_admiral and not any(
+                tactics.role(f) != "unarmed" for f in simulation.get_friendly_ships(ship_id)
+                if f.ship_id != ship_id and tactics._alive(f)):
+            # Nothing to shoot with and no armed ship of ours left to screen
+            # or protect: strike, instead of fleeing to the time limit.
+            return [("surrender", {"reason": "all weapons out, no armed ship left to protect"})]
         self._decision_interval = float(getattr(simulation, "decision_interval", 30.0) or 30.0)
 
         target = self._tactical_target(ship, enemies, order, plan, my_role)
@@ -269,7 +276,10 @@ class HeuristicCaptain(LLMCaptain):
                         calls.append(("launch_torpedo", {"count": salvo,
                                                          "target_id": torp_target_id}))
 
-        calls.extend(self._fleet_net_signals(ship, ship_id, enemies, plan))
+        if any(tactics._alive(f) for f in simulation.get_friendly_ships(ship_id)
+               if f.ship_id != ship_id):
+            # (The last ship of a fleet has nobody to signal to.)
+            calls.extend(self._fleet_net_signals(ship, ship_id, enemies, plan))
 
         threat = self._torpedo_threat(ship, ship_id, simulation)
         heat = getattr(ship, "heat_percent", 0.0) or 0.0
@@ -294,14 +304,23 @@ class HeuristicCaptain(LLMCaptain):
                 "throttle": self._heat_throttle_cap(ship, heat, maneuver[1], threat)}))
         elif (hulk := tactics.blast_threat(simulation, ship)) is not None:
             # A dying hulk's reactor is about to go: get out of the blast.
-            away = (ship.position - hulk.position).normalized()
+            away = ship.position - hulk.position
+            if away.magnitude < 1.0:
+                # Sitting on the hulk: burn away from the nearest enemy instead.
+                near = min(enemies, key=lambda e: (ship.position.distance_to(e.position), e.ship_id))
+                away = ship.position - near.position
+            away = away.normalized()
             calls.append(("set_heading", {
                 "direction": {"x": round(away.x, 4), "y": round(away.y, 4), "z": round(away.z, 4)},
                 "throttle": self._heat_throttle_cap(ship, heat, 1.0, threat)}))
         else:
             args = self._tactical_maneuver(ship, ship_id, target, enemies, plan, my_role, threat)
             args["throttle"] = self._heat_throttle_cap(ship, heat, args["throttle"], threat)
-            calls.append(("set_maneuver", args))
+            if args.get("maneuver_type") == "HEADING":
+                args.pop("maneuver_type")
+                calls.append(("set_heading", args))
+            else:
+                calls.append(("set_maneuver", args))
 
         want = self._radiator_wish(ship, ship_id, heat, threat, enemies, simulation)
         if want is not None and want != bool(getattr(ship, "radiators_extended", False)):
@@ -380,15 +399,25 @@ class HeuristicCaptain(LLMCaptain):
                 args["evade"] = evade
             return args
 
-        if (tactics.hull_pct(ship) < tactics.CRIPPLED_HULL_PCT and nearest_gun is not None
-                and gun_km < tactics.RETREAT_RANGE_KM):
-            # Crippled: open range from the nearest gun, guns still free.
-            evade = "full"
-            return order("HOLD_RANGE", nearest_gun, 1.0, range_km=tactics.RETREAT_RANGE_KM)
-        if my_role == "unarmed" and nearest_gun is not None:
-            # Nothing left to shoot with: withdraw out of his guns.
-            evade = "full"
-            return order("HOLD_RANGE", nearest_gun, 1.0, range_km=tactics.RETREAT_RANGE_KM)
+        if tactics.hull_pct(ship) < tactics.CRIPPLED_HULL_PCT or my_role == "unarmed":
+            self._withdrawn = True
+        if self._withdrawn and nearest_gun is not None:
+            # Crippled or disarmed, for good: open range from the nearest gun
+            # (guns still free) and never come back in - beyond the retreat
+            # range it holds the range it has. Inside it the ship flies a
+            # plain HEADING straight away from that gun at full burn: HOLD_RANGE
+            # (with or without the evade overlay) caps its opening speed at
+            # what it could stop at 350 km and the chaser kept closing.
+            if gun_km < tactics.RETREAT_RANGE_KM:
+                away = tactics.withdraw_direction(ship, nearest_gun)
+                args = {"maneuver_type": "HEADING", "throttle": 1.0,
+                        "direction": {"x": round(away.x, 4), "y": round(away.y, 4),
+                                      "z": round(away.z, 4)}}
+                if evade:
+                    args["evade"] = evade
+                return args
+            return order("HOLD_RANGE", nearest_gun, 1.0,
+                         range_km=round(max(tactics.RETREAT_RANGE_KM, gun_km), 1))
         if my_role != "gun":
             anchor = nearest_gun or min(enemies, key=lambda e: (km(e), e.ship_id))
             return order("HOLD_RANGE", anchor, 1.0, range_km=tactics.TORPEDO_STANDOFF_KM)

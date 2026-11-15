@@ -548,11 +548,13 @@ class HudCommsRunner(LLMBattleRunner):
 
 def hud_comms_battle(seed: int = 7, points: int = 100, max_ships: int = 6, distance_km: float = 300.0,
                      max_checkpoints: int = 12, recording_dir: Optional[str] = None,
-                     verbose: bool = False) -> Tuple[Any, Optional[str]]:
+                     verbose: bool = False, doctrine: str = "legacy") -> Tuple[Any, Optional[str]]:
     """
     Run the HUD command-net fixture battle; returns (result, recording file).
-    Seed 7 at 300 km: 4 v 4, two beta ships crippled and destroyed (169 ->
-    187 s and 256 -> 280 s), so the kill feed's dying countdown shows too.
+    Seed 7 at 300 km, legacy doctrine (the default; the viewer is developed
+    against it): 4 v 4, two beta ships crippled and destroyed (164 -> 183 s
+    and 233 -> 260 s on the pass-5 damage engine), so the kill feed's dying
+    countdown shows too.
     """
     from src.llm.fleet_config import BattleFleetConfig
     from src.llm.fleet_draft import auto_draft, draft_to_fleet_definition
@@ -570,7 +572,8 @@ def hud_comms_battle(seed: int = 7, points: int = 100, max_ships: int = 6, dista
     config = BattleConfig(
         initial_distance_km=distance_km, time_limit_s=time_limit, max_checkpoints=max_checkpoints,
         verbose=verbose, personality_selection=False, record_battle=True, record_sim_trace=True,
-        record_predictions=True, recording_dir=recording_dir or "data/recordings", seed=seed)
+        record_predictions=True, recording_dir=recording_dir or "data/recordings", seed=seed,
+        heuristic_doctrine={"alpha": doctrine, "beta": doctrine})
     dummy = LLMCaptainConfig(name="-", ship_name="-", model=HEURISTIC_MODEL,
                              personality=CaptainPersonality.BALANCED)
     runner = HudCommsRunner(config=config, alpha_config=dummy, beta_config=dummy, client=None,
@@ -617,13 +620,17 @@ def main() -> int:
     parser.add_argument("--no-predictions", action="store_true",
                         help="Skip the per-frame predicted path (sim_trace 'plan')")
     parser.add_argument("--seed", type=int, default=7, help="hud_comms: draft + combat seed")
+    parser.add_argument("--doctrine", choices=("legacy", "tactical"), default="legacy",
+                        help="hud_comms: heuristic captain doctrine (default legacy: the "
+                             "fixture the viewer is developed against)")
     parser.add_argument("--out", default=None,
                         help="hud_comms: also copy the recording here (e.g. "
                              "visualizer/public/recordings/p4_hud_comms_fixture.json)")
     args = parser.parse_args()
 
     if args.scenario in FLEET_SCENARIOS:
-        result, path = FLEET_SCENARIOS[args.scenario](seed=args.seed, recording_dir=args.recording_dir)
+        result, path = FLEET_SCENARIOS[args.scenario](seed=args.seed, recording_dir=args.recording_dir,
+                                                      doctrine=args.doctrine)
         print(f"\n=== {args.scenario} ===")
         print(f"Winner: {result.winner or 'Draw'} - {result.reason}")
         print(f"Duration: {result.duration_s:.0f}s, checkpoints: {result.checkpoints_used}")

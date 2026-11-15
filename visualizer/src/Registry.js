@@ -4,12 +4,16 @@
  * Fleets of more than 8 hulls switch to compact single-line rows (and
  * denser ones past 16) so both fleets fit at 1280x720; lost ships sink to
  * the bottom of their fleet (CSS order, no DOM moves). Each row shows hull,
- * the HeatHud heat bar, and a status that counts a dying hulk down to its
- * reactor detonation. Per-frame updates write only values that changed.
+ * the HeatHud heat bar, a pip per fitting (guns, tubes, PD, drive: pass-5
+ * recordings only, created on first use) and a status that counts a dying
+ * hulk down to its reactor detonation or flags a ship DISARMED / ADRIFT /
+ * NO AMMO. Per-frame updates write only values that changed.
  */
 import { killStateAt } from './HudIndex.js';
 import { getShipClassName, SHIP_SILHOUETTES } from './shipSilhouettes.js';
 import { node, setText, defaultDoc } from './hudDom.js';
+import { fittingsAt, fittingsFlag } from './FittingsIndex.js';
+import { pipStrip } from './FittingsHud.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -28,13 +32,20 @@ export function registryDensity(count, available = Infinity) {
   return 'dense';
 }
 
-/** Registry status text for a ship at t. */
-export function registryStatus(state, kill, t) {
+/**
+ * Registry status text for a ship at t. A living ship that can no longer
+ * fight or move says so instead of its hull % (`fit` = its fitting state,
+ * FittingsIndex.fittingsAt; null on recordings without fitting data): the
+ * hull bar still shows the hull.
+ */
+export function registryStatus(state, kill, t, fit = null) {
   if (state?.destroyed) return { text: 'LOST', level: 'lost' };
   if (state?.dying) {
     const s = kill ? killStateAt(kill, t) : null;
     return { text: s?.in != null ? `☢ ${Math.ceil(s.in)}s` : 'CRIT', level: 'dying' };
   }
+  const flag = fittingsFlag(fit);
+  if (flag) return { text: flag, level: flag === 'NO AMMO' ? 'spent' : 'crippled' };
   const hull = Math.round(Math.max(0, Math.min(100, state?.hull ?? 100)));
   return { text: `${hull}%`, level: hull < 35 ? 'low' : 'ok' };
 }
@@ -96,7 +107,7 @@ export class Registry {
         if (e.code === 'Enter' || e.code === 'Space') { e.preventDefault(); e.stopPropagation(); this.onSelect?.(shipId); }
       });
       (info.faction === 'alpha' ? this.lists.alpha : this.lists.beta)?.appendChild(li);
-      this.rows.set(shipId, { li, bar, status, hull: -1, text: '', cls: '' });
+      this.rows.set(shipId, { li, bar, status, hull: -1, text: '', cls: '', fit: undefined, strip: null });
     }
     this.relayout();
   }
@@ -105,12 +116,23 @@ export class Registry {
    * @param {Object} states - interpolated ship states
    * @param {number} t
    * @param {Object[]} kills - loader.hud.kills (dying countdowns)
+   * @param {Object} [fittings] - loader.hud.fittings (pips and flags; inactive on older recordings)
    */
-  update(states, t, kills = []) {
+  update(states, t, kills = [], fittings = null) {
     for (const [id, row] of this.rows) {
       const state = states?.[id];
       const kill = state?.dying ? kills.find(k => k.shipId === id) : null;
-      const { text, level } = registryStatus(state, kill, t);
+      const fit = fittingsAt(fittings, id, t);
+      if (row.fit !== fit) {
+        row.fit = fit;
+        if (fit && !row.strip) {
+          // First fitting data for this ship (a live battle's first damage event): add the strip once
+          row.strip = pipStrip(this.doc, 'fit-strip registry-fit');
+          row.li.insertBefore(row.strip.el, row.status);
+        }
+        row.strip?.set(fit);
+      }
+      const { text, level } = registryStatus(state, kill, t, fit);
       const hull = state?.destroyed ? 0 : Math.round(Math.max(0, Math.min(100, state?.hull ?? 100)));
       if (row.hull !== hull) { row.hull = hull; row.bar.style.width = `${hull}%`; }
       if (row.text !== text) { row.text = text; setText(row.status, text); }
@@ -119,6 +141,8 @@ export class Registry {
         row.li.classList.toggle('destroyed', level === 'lost');
         row.li.classList.toggle('dying', level === 'dying');
         row.li.classList.toggle('low', level === 'low');
+        row.li.classList.toggle('crippled', level === 'crippled');
+        row.li.classList.toggle('spent', level === 'spent');
       }
     }
   }

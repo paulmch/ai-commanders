@@ -3,12 +3,16 @@
  * commanding model, ships fighting / total with one hull pip per ship,
  * fleet hull %, torpedoes in flight, kills and model spend, plus a balance
  * bar of class-weighted remaining strength (the hull term of the engine's
- * time-limit verdict). Also owns the end-of-battle result banner.
+ * time-limit verdict). On pass-5 recordings (hud.fittings) it also shows
+ * fighting power: ships still able to deal damage, and the gun mounts and
+ * torpedo tubes still working on the ships still fighting. Also owns the
+ * end-of-battle result banner.
  *
  * computeSides() is pure; the DOM classes only write when a value changed.
  */
 import { shipValue, spendAt, killStateAt, shortModel, clockText } from './HudIndex.js';
 import { node, setText, defaultDoc } from './hudDom.js';
+import { fittingsAt } from './FittingsIndex.js';
 
 const SIDES = ['alpha', 'beta'];
 
@@ -21,7 +25,14 @@ const SIDES = ['alpha', 'beta'];
  */
 export function computeSides(states, torpedoes, ships, hud, t) {
   const sides = {};
-  for (const f of SIDES) sides[f] = { alive: 0, total: 0, dying: 0, lost: 0, hull: 0, hullPct: 0, strength: 0, maxStrength: 0, torps: 0, kills: 0, points: 0, spend: 0, pips: [] };
+  const fittings = hud?.fittings?.active ? hud.fittings : null;
+  const gaveUp = hud?.surrenders?.length ? new Set(hud.surrenders.filter(x => x.t <= t + 1e-6).map(x => x.shipId)) : null;
+  for (const f of SIDES) {
+    sides[f] = { alive: 0, total: 0, dying: 0, lost: 0, hull: 0, hullPct: 0, strength: 0, maxStrength: 0, torps: 0, kills: 0, points: 0, spend: 0, pips: [],
+      // Fighting power (fit = the recording carries fitting data): ships able to deal
+      // damage, working guns / tubes on ships still fighting vs fitted at the start
+      fit: !!fittings, armed: 0, surrendered: 0, guns: 0, gunsMax: fittings?.totals[f]?.guns || 0, tubes: 0, tubesMax: fittings?.totals[f]?.tubes || 0 };
+  }
   for (const [id, info] of Object.entries(ships || {})) {
     const s = sides[info.faction];
     if (!s) continue;
@@ -31,10 +42,18 @@ export function computeSides(states, torpedoes, ships, hud, t) {
     const value = shipValue(info.type);
     s.total++;
     s.maxStrength += value;
-    if (state === 'alive') { s.alive++; s.hull += hull; s.strength += value * hull / 100; }
-    else if (state === 'dying') s.dying++;
+    let armed = state === 'alive';
+    if (state === 'alive') {
+      s.alive++; s.hull += hull; s.strength += value * hull / 100;
+      const fit = fittings ? fittingsAt(fittings, id, t) : null;
+      if (fit) { armed = fit.armed; s.guns += fit.gunsUp; s.tubes += fit.tubesUp; }
+      // A ship that struck its colours is afloat but out of the fight
+      if (gaveUp?.has(id)) { s.surrendered++; armed = false; }
+      if (armed) s.armed++;
+    } else if (state === 'dying') s.dying++;
     else s.lost++;
-    s.pips.push({ id, hull: state === 'alive' ? hull : 0, state });
+    // A living ship with nothing left to shoot shows as a hollow pip
+    s.pips.push({ id, hull: state === 'alive' ? hull : 0, state: fittings && state === 'alive' && !armed ? 'unarmed' : state });
   }
   for (const torp of torpedoes || []) {
     const f = ships?.[torp.source]?.faction || (String(torp.source || '').startsWith('alpha') ? 'alpha' : 'beta');
@@ -57,6 +76,43 @@ export function computeSides(states, torpedoes, ships, hud, t) {
   sides.share = a + b > 0 ? a / (a + b) : 0.5;
   return sides;
 }
+
+/**
+ * Why the battle ended, when one side (or both) could no longer deal damage
+ * (battle_runner._combat_ineffective_outcome): {side: 'alpha'|'beta'|'both',
+ * headline, detail} or null for every other ending. With `sides`
+ * (computeSides at the end) it also recognises the case from the fitting
+ * data when the recorded reason is silent (`inferred`).
+ */
+export function endCause(result, sides = null) {
+  const reason = String(result?.reason || '');
+  const one = /^(alpha|beta) fleet combat-ineffective/i.exec(reason);
+  if (one) {
+    const side = one[1].toLowerCase();
+    return { side, headline: `${side.toUpperCase()} FLEET CAN NO LONGER FIGHT`, detail: 'no gun or torpedo left that can deal damage' };
+  }
+  if (/^both fleets combat-ineffective/i.test(reason)) {
+    return { side: 'both', headline: 'NEITHER FLEET CAN STILL FIGHT', detail: reason.replace(/^.*?on points:\s*/i, 'on points: ') };
+  }
+  // "<Side> fleet eliminated" also covers a fleet whose last ships surrendered
+  // (the engine counts them out) - typically because none could still deal
+  // damage. The recording shows which: say so. Never relabels any other verdict.
+  if (!/eliminated|surrender/i.test(reason)) return null;
+  const loser = result?.winner === 'alpha' ? 'beta' : result?.winner === 'beta' ? 'alpha' : null;
+  const s = loser ? sides?.[loser] : null;
+  if (s && s.alive > 0 && s.surrendered === s.alive) {
+    return { side: loser, inferred: true, headline: `${loser.toUpperCase()} FLEET SURRENDERED`,
+      detail: `${s.alive} ship${s.alive === 1 ? '' : 's'} struck ${s.alive === 1 ? 'its' : 'their'} colours${s.fit && s.armed === 0 ? ', none able to deal damage' : ''}` };
+  }
+  if (s?.fit && s.alive > 0 && s.armed === 0) {
+    return { side: loser, inferred: true, headline: `${loser.toUpperCase()} FLEET CAN NO LONGER FIGHT`,
+      detail: `${s.alive} ship${s.alive === 1 ? '' : 's'} afloat, none armed` };
+  }
+  return null;
+}
+
+/** "GUNS 7/11" style readout of working / fitted, '' when the side never had any. */
+export const armsText = (label, up, max) => (max > 0 ? `${label} ${up}/${max}` : '');
 
 export function resultTitle(result) {
   if (!result) return '';
@@ -84,7 +140,8 @@ export class Scoreboard {
       this.sideEls[f] = {
         model: el.querySelector('[data-model]'), alive: el.querySelector('[data-alive]'), total: el.querySelector('[data-total]'),
         pips: el.querySelector('[data-pips]'), hull: el.querySelector('[data-hull]'), torps: el.querySelector('[data-torps]'),
-        kills: el.querySelector('[data-kills]'), points: el.querySelector('[data-points]'), spend: el.querySelector('[data-spend]'), pipEls: []
+        kills: el.querySelector('[data-kills]'), points: el.querySelector('[data-points]'), spend: el.querySelector('[data-spend]'), pipEls: [],
+        armed: el.querySelector('[data-armed]'), guns: el.querySelector('[data-guns]'), tubes: el.querySelector('[data-tubes]')
       };
     }
     this.balance = root?.querySelector('[data-balance]');
@@ -130,6 +187,7 @@ export class Scoreboard {
       setText(els.kills, '☠ 0');
       setText(els.points, '');
       setText(els.spend, '');
+      for (const k of ['armed', 'guns', 'tubes']) setText(els[k], '');
     }
     if (this.balance) {
       this.balance.style.width = '50%';
@@ -149,6 +207,16 @@ export class Scoreboard {
       setText(els.kills, `☠ ${s.kills}`);
       setText(els.points, s.points > 0 ? `${s.points} pts` : '');
       setText(els.spend, s.spend > 0 ? `$${s.spend.toFixed(2)}` : '');
+      // Fighting power: only on recordings with fitting data, and "armed" only once it differs from the ships afloat
+      setText(els.armed, s.fit && s.armed < s.alive ? `${s.armed} ARMED` : '');
+      const arms = [['guns', armsText('GUNS', s.guns, s.gunsMax)], ['tubes', armsText('TUBES', s.tubes, s.tubesMax)]];
+      for (const [k, text] of arms) {
+        const el = els[k];
+        if (!el) continue;
+        setText(el, s.fit ? text : '');
+        const level = s[k] === 0 ? 'out' : s[k] < s[`${k}Max`] ? 'hurt' : 'ok';
+        if (el.dataset.level !== level) el.dataset.level = level;
+      }
       s.pips.forEach((p, i) => {
         const pe = els.pipEls[i];
         if (!pe) return;
@@ -207,7 +275,9 @@ export class ResultBanner {
   update(over, result, sides, duration) {
     const show = over && !this.dismissed && !!result?.known;
     if (show) {
-      const key = `${resultTitle(result)}|${result.reason}|${sides?.alpha.alive}|${sides?.beta.alive}|${sides?.alpha.kills}|${sides?.beta.kills}`;
+      const key = `${resultTitle(result)}|${result.reason}|${sides?.alpha.alive}|${sides?.beta.alive}|${sides?.alpha.kills}|${sides?.beta.kills}` +
+        `|${sides?.alpha.armed}|${sides?.beta.armed}|${sides?.alpha.guns}|${sides?.beta.guns}|${sides?.alpha.tubes}|${sides?.beta.tubes}` +
+        `|${sides?.alpha.surrendered}|${sides?.beta.surrendered}`;
       if (key !== this.key) {
         this.key = key;
         this._render(result, sides, duration);
@@ -223,13 +293,22 @@ export class ResultBanner {
     setText(r.querySelector('[data-kicker]'), `${result.stopped ? 'BATTLE HALTED' : 'BATTLE COMPLETE'} · T+${clockText(duration)}`);
     setText(r.querySelector('[data-title]'), resultTitle(result));
     setText(r.querySelector('[data-reason]'), cleanReason(result.reason));
+    // A battle that ended because a side could no longer deal damage says so in words
+    const cause = endCause(result, sides);
+    const causeEl = r.querySelector('[data-cause]');
+    if (causeEl) {
+      setText(causeEl, cause ? (cause.inferred ? `${cause.headline} · ${cause.detail}` : cause.headline) : '');
+      causeEl.hidden = !cause;
+      causeEl.dataset.side = cause?.side || '';
+    }
     const tally = r.querySelector('[data-tally]');
     if (tally && sides) {
       const part = f => {
         const s = sides[f];
         const el = node(this.doc, 'span', null, `result-side ${f}`);
         el.append(node(this.doc, 'b', f.toUpperCase()), node(this.doc, 'span',
-          ` ${s.alive}/${s.total} ships · ${s.kills} kill${s.kills === 1 ? '' : 's'}${s.points ? ` (${s.points} pts)` : ''} · hull ${s.hullPct}%`));
+          ` ${s.alive}/${s.total} ships${s.surrendered ? ` (${s.surrendered} surrendered)` : ''} · ${s.kills} kill${s.kills === 1 ? '' : 's'}${s.points ? ` (${s.points} pts)` : ''} · hull ${s.hullPct}%` +
+          (s.fit ? ` · ${s.armed} armed${s.gunsMax ? ` · guns ${s.guns}/${s.gunsMax}` : ''}${s.tubesMax ? ` · tubes ${s.tubes}/${s.tubesMax}` : ''}` : '')));
         return el;
       };
       tally.replaceChildren(part('alpha'), part('beta'));
