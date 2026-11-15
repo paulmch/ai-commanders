@@ -14,6 +14,7 @@ import json
 import hashlib
 import threading
 from src.replay_evidence import json_value
+from src import recording_io
 from dataclasses import dataclass, field, asdict, fields, is_dataclass
 from datetime import datetime
 from pathlib import Path
@@ -314,6 +315,13 @@ class BattleRecording:
             except (TypeError, IndexError, RecursionError):
                 pass    # something exotic: the stdlib encoder decides
         return json.dumps(record, indent=indent, default=_dataclass_as_json_object)
+
+    def to_compact_json(self) -> str:
+        """The recording as compact JSON (no indent, ',' / ':' separators):
+        what goes inside a ``.json.gz`` recording. Parses to the same object
+        as ``to_json()``; the C encoder makes it ~3x faster to write."""
+        record = {f.name: getattr(self, f.name) for f in fields(self)}
+        return json.dumps(record, separators=(',', ':'), default=_dataclass_as_json_object)
 
 
 class BattleRecorder:
@@ -1612,15 +1620,16 @@ class BattleRecorder:
 
         self._is_recording = False
 
-    def save(self, filepath: str) -> str:
-        """Save recording to JSON file."""
-        path = Path(filepath)
-        path.parent.mkdir(parents=True, exist_ok=True)
-
-        with open(path, 'w') as f:
-            f.write(self.recording.to_json())
-
-        return str(path)
+    def save(self, filepath: str, compress: Optional[bool] = None) -> str:
+        """
+        Save the recording. ``compress`` True writes gzip (compact JSON inside,
+        deterministic bytes; src/recording_io.py), False the plain indented
+        ``to_json()`` text; None decides by the ``.gz`` extension.
+        """
+        if compress is None:
+            compress = recording_io.is_gzip_path(filepath)
+        text = self.recording.to_compact_json() if compress else self.recording.to_json()
+        return recording_io.dump_recording(text, filepath, compress=compress)
 
     def get_recording(self) -> BattleRecording:
         """Get the current recording."""
@@ -1631,8 +1640,10 @@ def create_battle_filename(
     alpha_model: str,
     beta_model: str,
     timestamp: Optional[datetime] = None,
+    compress: bool = False,
 ) -> str:
-    """Generate a filename for a battle recording."""
+    """Generate a filename for a battle recording (``.json``, or ``.json.gz``
+    with ``compress``)."""
     if timestamp is None:
         timestamp = datetime.now()
 
@@ -1649,4 +1660,4 @@ def create_battle_filename(
     beta_clean = clean_name(beta_model)
     date_str = timestamp.strftime("%Y%m%d_%H%M%S")
 
-    return f"battle_{alpha_clean}_vs_{beta_clean}_{date_str}.json"
+    return f"battle_{alpha_clean}_vs_{beta_clean}_{date_str}" + recording_io.recording_suffix(compress)

@@ -48,6 +48,8 @@ Open **[the Sonnet 5 vs DeepSeek torpedo swarm](http://localhost:5173/?recording
 
 *Claude Sonnet 5's eight-corvette torpedo swarm lands its first kill on DeepSeek V4.1 Flash's battle line, while the command net shows the synchronized salvo orders behind it.*
 
+**Recording files.** New battles are saved as gzip-compressed JSON (`battle_*.json.gz`, typically 15-37x smaller than the plain indented `.json` recordings above); pass `--plain-json` to the battle scripts for the old format, and `scripts/run_draft_battle.py --no-recording` for outcome-only sweeps. The viewer (URL, file selector, saved live replay) and every script read both formats, so `.json.gz` files can be copied into `visualizer/public/recordings/` and opened as `?recording=/recordings/<name>.json.gz`. `uv run python scripts/compress_recordings.py <dir> --dry-run` shows what gzipping an existing folder would save; without `--dry-run` it writes verified `.json.gz` copies (`--delete-originals` removes each original once its copy loads back identical).
+
 ### Viewer controls
 
 | Control | Action |

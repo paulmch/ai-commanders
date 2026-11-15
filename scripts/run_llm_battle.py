@@ -135,6 +135,9 @@ Examples:
     )
     parser.add_argument("--decision-interval", type=float, default=None,
                         help="Seconds between decisions, 20-60 (default: 30)")
+    parser.add_argument("--plain-json", action="store_true",
+                        help="Write the recording as plain indented JSON (battle_*.json) "
+                             "instead of the default gzip (battle_*.json.gz)")
     parser.add_argument("--seed", type=int, default=None,
                         help="Seed combat randomness for reproducible scripted battles")
 
@@ -266,6 +269,8 @@ Examples:
             config_overrides["personality_selection"] = False
         if args.notebooks:
             config_overrides["use_notebooks"] = True
+        if args.plain_json:
+            config_overrides["compress_recording"] = False
         if fleet_config:
             battle_config = BattleConfig.from_fleet_config(fleet_config, **config_overrides)
         else:

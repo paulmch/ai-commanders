@@ -87,6 +87,25 @@ class ScriptedCaptain(LLMCaptain):
         return commands
 
 
+# New recordings are gzip (battle_*.json.gz) unless --plain-json.
+COMPRESS_RECORDINGS = True
+
+
+def copy_recording(src: str, dst: str) -> str:
+    """Copy a recording, transcoded to the destination's format (.json plain,
+    .json.gz gzip): a byte copy of a gzip file to a .json name would leave a
+    misnamed file (readers sniff it, but a human or the README would not)."""
+    from src.recording_io import is_gzip_path, load_recording_text, read_recording_bytes, dump_recording
+    if is_gzip_path(src) == is_gzip_path(dst):
+        import shutil
+        shutil.copyfile(src, dst)
+        return dst
+    if is_gzip_path(dst):
+        return dump_recording(read_recording_bytes(src), dst)
+    import json
+    return dump_recording(json.loads(load_recording_text(src)), dst, compress=False)
+
+
 class ScriptedBattleRunner(LLMBattleRunner):
     """Battle runner that swaps in scripted captains after normal setup."""
 
@@ -576,6 +595,7 @@ def hud_comms_battle(seed: int = 7, points: int = 100, max_ships: int = 6, dista
         heuristic_doctrine={"alpha": doctrine, "beta": doctrine})
     dummy = LLMCaptainConfig(name="-", ship_name="-", model=HEURISTIC_MODEL,
                              personality=CaptainPersonality.BALANCED)
+    config.compress_recording = COMPRESS_RECORDINGS
     runner = HudCommsRunner(config=config, alpha_config=dummy, beta_config=dummy, client=None,
                             fleet_config=fleet_config)
     result = runner.run_battle(load_fleet_data())
@@ -639,6 +659,7 @@ def _plume_column_battle(seed: int, recording_dir: Optional[str], verbose: bool,
     config.record_predictions = True
     dummy = LLMCaptainConfig(name="-", ship_name="-", model=HEURISTIC_MODEL,
                              personality=CaptainPersonality.BALANCED)
+    config.compress_recording = COMPRESS_RECORDINGS
     runner = LLMBattleRunner(config, dummy, dummy, None, fleet_config)
     result = runner.run_battle(load_fleet_data())
     return result, result.recording_file
@@ -659,6 +680,7 @@ def run_scenario(name: str, recording_dir: Optional[str] = None,
     config.record_predictions = predictions
     fleet_data = load_fleet_data()
 
+    config.compress_recording = COMPRESS_RECORDINGS
     runner = ScriptedBattleRunner(
         config=config,
         alpha_config=alpha_cfg,
@@ -689,8 +711,14 @@ def main() -> int:
                              "fixture the viewer is developed against)")
     parser.add_argument("--out", default=None,
                         help="hud_comms: also copy the recording here (e.g. "
-                             "visualizer/public/recordings/p4_hud_comms_fixture.json)")
+                             "visualizer/public/recordings/p4_hud_comms_fixture.json); "
+                             "written plain or gzip by the --out extension")
+    parser.add_argument("--plain-json", action="store_true",
+                        help="Write recordings as plain indented JSON (battle_*.json) "
+                             "instead of the default gzip (battle_*.json.gz)")
     args = parser.parse_args()
+    global COMPRESS_RECORDINGS
+    COMPRESS_RECORDINGS = not args.plain_json
 
     if args.scenario in FLEET_SCENARIOS:
         result, path = FLEET_SCENARIOS[args.scenario](seed=args.seed, recording_dir=args.recording_dir,
@@ -700,8 +728,7 @@ def main() -> int:
         print(f"Duration: {result.duration_s:.0f}s, checkpoints: {result.checkpoints_used}")
         print(f"Recording: {path}")
         if args.out and path:
-            import shutil
-            shutil.copyfile(path, args.out)
+            copy_recording(path, args.out)
             print(f"Copied to {args.out}")
         return 0
 
