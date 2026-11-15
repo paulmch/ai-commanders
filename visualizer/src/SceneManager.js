@@ -313,8 +313,9 @@ export class SceneManager {
       const torch = createTorch({ radius: plumeR, length: plumeLength, light, tint: 'fusion', cluster: engineConfig.count,
         phase: (e * 0.6180339887) % 1 });
       torch.group.position.set(p.x, p.y, -size.length * 0.53);
-      // Bells are canted a few degrees off the drive axis: the plumes fan out
-      torch.group.rotation.set(0.28 * p.y / size.width, -0.28 * p.x / size.width, 0);
+      // Every plume runs exactly down its bell's axis (the ship's thrust
+      // axis): a cluster is a bundle of parallel, collimated jets. The only
+      // deflection is the recorded turn sweep (render/Torch.js).
       group.add(torch.group);
       torches.push(torch);
     }
