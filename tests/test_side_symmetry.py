@@ -37,8 +37,11 @@ from src.simulation import (
 
 FLEET = json.loads((Path(__file__).parent.parent / "data" / "fleet_ships.json").read_text())
 
-# The whole-battle guard: a 150-point seed whose auto-draft is a torpedo
-# roster (first salvos land at ~100 s), run until the first kills are in.
+# The whole-battle guard: an explicit torpedo roster (not an auto-draft, whose
+# picks move with the draft costs) whose first salvos land at ~100 s, run
+# until the first kills are in.
+WHOLE_BATTLE_ROSTER = ["cruiser_torpedo", "corvette", "corvette", "corvette",
+                       "corvette", "frigate"]
 WHOLE_BATTLE_SEED = 101
 WHOLE_BATTLE_S = 150.0
 
@@ -447,16 +450,21 @@ class TestWholeMirrorBattleWithIdenticalRollsIsMirrored:
         from src.llm.battle_runner import BattleConfig, LLMBattleRunner, load_fleet_data
         from src.llm.captain import LLMCaptainConfig
         from src.llm.fleet_config import BattleFleetConfig
-        from src.llm.fleet_draft import auto_draft, draft_to_fleet_definition
+        from src.llm.fleet_draft import (
+            FleetDraft, default_formation_offsets, draft_to_fleet_definition,
+            name_drafted_ships)
         from src.llm.heuristic_captain import HEURISTIC_MODEL
         from src.llm.prompts import CaptainPersonality
 
         fleet_data = load_fleet_data()
-        drafts = {side: auto_draft(side, budget=150, max_ships=8, seed=WHOLE_BATTLE_SEED)
-                  for side in ("alpha", "beta")}
-        assert ([s.ship_type for s in drafts["alpha"].ships]
-                == [s.ship_type for s in drafts["beta"].ships])
-        # After the draft, so the roster is the seed's.
+        drafts = {}
+        for side in ("alpha", "beta"):
+            draft = FleetDraft(faction=side, budget=0, auto=True)
+            draft.ships = name_drafted_ships(WHOLE_BATTLE_ROSTER, side)
+            for ship, offset in zip(draft.ships,
+                                    default_formation_offsets(len(draft.ships))):
+                ship.offset_km = offset
+            drafts[side] = draft
         monkeypatch.setattr(random, "Random", _SameRolls)
 
         fleets = {side: draft_to_fleet_definition(
@@ -502,4 +510,7 @@ class TestWholeMirrorBattleWithIdenticalRollsIsMirrored:
         assert tables["alpha"] == tables["beta"]
         seen = {k[1] for k in tables["alpha"]}
         # Not vacuous: salvos landed and ships died - on both sides alike.
-        assert {"TORPEDO_LAUNCHED", "TORPEDO_IMPACT", "SHIP_DESTROYED"} <= seen
+        assert {"TORPEDO_LAUNCHED", "TORPEDO_IMPACT", "SHIP_DESTROYED"} <= seen, (
+            "scenario went stale (no salvo landed or nobody died in "
+            f"{WHOLE_BATTLE_S:.0f} s): lengthen WHOLE_BATTLE_S or change the "
+            f"roster - this is not a symmetry failure. Saw {sorted(seen)}")
