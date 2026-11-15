@@ -377,7 +377,9 @@ function plateTextures(faction, variant) {
   actx.fillStyle = rgb(base, 0.78);               // slab joints: a soft line
   actx.fillRect(0, 0, size, size);
 
-  const height = new Float32Array(size * size).fill(0.15);
+  // Relief is kept shallow: under a glancing sun a deep joint channel or
+  // surface grain reads as brickwork (the pass-5 battleship bow)
+  const height = new Float32Array(size * size).fill(0.32);
   const rough = new Float32Array(size * size).fill(0.7);
   const metal = new Float32Array(size * size).fill(0.25);
   const fillRect = (field, x, y, w, h, v) => {
@@ -401,12 +403,12 @@ function plateTextures(faction, variant) {
     const tone = 1 + (rnd() - 0.5) * 0.07;
     const col = base.map(c => c * tone);
     const pRough = (isPaint ? 0.46 : 0.5) + (rnd() - 0.5) * 0.1;
-    const pHeight = 0.6 + rnd() * 0.15;
+    const pHeight = 0.56 + rnd() * 0.05;
     const x0 = p.x + gap, y0 = p.y + gap, w = p.w - gap * 2, h = p.h - gap * 2;
     actx.fillStyle = rgb(col);
     actx.fillRect(x0, y0, w, h);
     for (let i = 0; i <= bev; i++) {
-      fillRect(height, x0 + i, y0 + i, w - i * 2, h - i * 2, 0.15 + (pHeight - 0.15) * ((i + 1) / (bev + 1)));
+      fillRect(height, x0 + i, y0 + i, w - i * 2, h - i * 2, 0.32 + (pHeight - 0.32) * ((i + 1) / (bev + 1)));
     }
     fillRect(rough, x0, y0, w, h, pRough);
     fillRect(metal, x0, y0, w, h, 0.08);
@@ -506,7 +508,7 @@ function plateTextures(faction, variant) {
     actx.fillStyle = 'rgba(0,0,0,0.26)';
     const dot = (bx, by) => {
       actx.beginPath(); actx.arc(bx, by, rr, 0, Math.PI * 2); actx.fill();
-      fillRect(height, bx - 1, by - 1, 2, 2, pHeight + 0.15);
+      fillRect(height, bx - 1, by - 1, 2, 2, pHeight + 0.07);
     };
     for (let x = p.x + bi; x <= p.x + p.w - bi; x += step) { dot(x, p.y + bi); dot(x, p.y + p.h - bi); }
     for (let y = p.y + bi + step; y <= p.y + p.h - bi - step; y += step) { dot(p.x + bi, y); dot(p.x + p.w - bi, y); }
@@ -566,7 +568,7 @@ function plateTextures(faction, variant) {
     img.data[i * 4 + 1] = Math.min(255, img.data[i * 4 + 1] * mod);
     img.data[i * 4 + 2] = Math.min(255, img.data[i * 4 + 2] * mod);
     rough[i] = Math.min(1, Math.max(0.2, rough[i] + (g - 0.5) * 0.26 + (m - 0.5) * 0.05));
-    height[i] += (m - 0.5) * 0.025;
+    height[i] += (m - 0.5) * 0.006;
   }
   actx.putImageData(img, 0, 0);
 
@@ -582,7 +584,7 @@ function plateTextures(faction, variant) {
   octx.putImageData(oimg, 0, 0);
   return {
     map: texOf(albedo, { srgb: true }),
-    normalMap: texOf(heightToNormalCanvas(height, size, isPaint ? 2.6 : 3.2)),
+    normalMap: texOf(heightToNormalCanvas(height, size, isPaint ? 2.4 : 2.6)),
     ormMap: texOf(orm)
   };
 }

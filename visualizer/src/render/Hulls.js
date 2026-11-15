@@ -133,7 +133,7 @@ export function buildShipMaterials(faction) {
     const paintT = getHullTextures(faction, 'paint');
     _sharedMats.set(key, {
       hull: new THREE.MeshStandardMaterial({
-        map: hullT.map, normalMap: hullT.normalMap, normalScale: new THREE.Vector2(1.1, 1.1),
+        map: hullT.map, normalMap: hullT.normalMap, normalScale: new THREE.Vector2(0.8, 0.8),
         roughnessMap: hullT.ormMap, metalnessMap: hullT.ormMap,
         roughness: 1, metalness: HULL_METALNESS, envMapIntensity: 1.0, vertexColors: true
       }),
@@ -146,7 +146,7 @@ export function buildShipMaterials(faction) {
       // Floodlit (a faint emissive copy of the albedo) so the livery still
       // names the side on a shadowed or backlit hull.
       paint: new THREE.MeshStandardMaterial({
-        map: paintT.map, normalMap: paintT.normalMap, normalScale: new THREE.Vector2(1.0, 1.0),
+        map: paintT.map, normalMap: paintT.normalMap, normalScale: new THREE.Vector2(0.75, 0.75),
         roughnessMap: paintT.ormMap, metalnessMap: paintT.ormMap,
         roughness: 1, metalness: 1, envMapIntensity: 0.85, vertexColors: true,
         emissive: 0xffffff, emissiveMap: paintT.map, emissiveIntensity: LIVERY_FLOOD
@@ -356,16 +356,18 @@ export function chamferBoxGeometry(w, h, d, t, rnd = Math.random, texel = TEXEL)
  * is a w x h rectangle with its four long edges cut at 45 degrees - `ct`
  * across the two dorsal shoulders, `cb` across the ventral ones - so the
  * section keeps flat top, bottom and side faces for mounts with sloped
- * armour between them. (w0, h0, ct0, cb0) at z = 0, (w1, ...) at z = len.
+ * armour between them. (w0, h0, ct0, cb0) at z = 0, (w1, ...) at z = len,
+ * the far end shifted by `dy` (a spine sloping down to a lower deck).
  * Non-indexed, flat normals; plated materials get their UVs from the
  * hull-space projection in HullKit.add.
  */
-export function octSectionGeometry(w0, h0, ct0, cb0, w1, h1, ct1, cb1, len) {
+export function octSectionGeometry(w0, h0, ct0, cb0, w1, h1, ct1, cb1, len, dy = 0) {
   const ring = (w, h, ct, cb, z) => [
     [w / 2, -h / 2 + cb], [w / 2, h / 2 - ct], [w / 2 - ct, h / 2], [-w / 2 + ct, h / 2],
     [-w / 2, h / 2 - ct], [-w / 2, -h / 2 + cb], [-w / 2 + cb, -h / 2], [w / 2 - cb, -h / 2]
   ].map(([x, y]) => new THREE.Vector3(x, y, z));
   const A = ring(w0, h0, ct0, cb0, 0), B = ring(w1, h1, ct1, cb1, len);
+  for (const p of B) p.y += dy;                  // far end raised / dropped by dy
   const pos = [], uv = [];
   const a = new THREE.Vector3(), b = new THREE.Vector3(), n = new THREE.Vector3(), mid = new THREE.Vector3();
   const tri = (p0, p1, p2, out) => {
@@ -566,20 +568,21 @@ export class HullKit {
    * Main hull section centred at z: flat top / bottom / side faces of a
    * w x h box with sloped shoulders (ct dorsal, cb ventral) between them.
    */
-  section(mat, w, h, d, x, y, z, { ct = null, cb = null, tint = null } = {}) {
+  section(mat, w, h, d, x, y, z, { ct = null, cb = null, tint = null, parent = null } = {}) {
     ct ??= this.shoulder(w, h);
     cb ??= ct;
     for (let i = 0; i < 12; i++) this.rnd();      // the box it replaces drew 12
-    return this.add(mat, octSectionGeometry(w, h, ct, cb, w, h, ct, cb, d), this.xf(x, y, z - d / 2), tint);
+    return this.add(mat, octSectionGeometry(w, h, ct, cb, w, h, ct, cb, d), this.xf(x, y, z - d / 2, 0, 0, 0, parent), tint);
   }
 
   /** Tapering section from (w0 x h0) at z0 to (w1 x h1) `len` toward dir. */
-  taper(mat, w0, h0, w1, h1, len, x, y, z0, { c0 = null, c1 = null, cb0 = null, cb1 = null, dir = 1, tint = null } = {}) {
+  taper(mat, w0, h0, w1, h1, len, x, y, z0,
+    { c0 = null, c1 = null, cb0 = null, cb1 = null, dir = 1, dy = 0, tint = null, parent = null } = {}) {
     c0 ??= this.shoulder(w0, h0);
     c1 ??= Math.min(c0 * Math.min(w1 / w0, h1 / h0), Math.min(w1, h1) * 0.45);
     for (let i = 0; i < 12; i++) this.rnd();
-    const g = octSectionGeometry(w0, h0, c0, cb0 ?? c0, w1, h1, c1, cb1 ?? c1, len);
-    return this.add(mat, g, this.xf(x, y, z0, 0, dir < 0 ? Math.PI : 0, 0), tint);
+    const g = octSectionGeometry(w0, h0, c0, cb0 ?? c0, w1, h1, c1, cb1 ?? c1, len, dy);
+    return this.add(mat, g, this.xf(x, y, z0, 0, dir < 0 ? Math.PI : 0, 0, parent), tint);
   }
 
   /**
@@ -602,10 +605,16 @@ export class HullKit {
       this.taper('paint', rw0, rh0, rw1, rh1, len * 0.2, 0, 0, z0, { c0: rc0, c1: rc1 });
     }
     const zf = z0 + len;
+    const tr = Math.min(w * tw, h * th) * 0.5;
     if (tip === 'lens') {
-      const tr = Math.min(w * tw, h * th) * 0.5;
-      this.drum('dark', tr * 0.5, len * 0.05, zf + len * 0.01, { sides: 12 });
-      this.drum('glass', tr * 0.36, len * 0.05, zf + len * 0.025, { sides: 12 });
+      const tl = Math.min(len * 0.05, tr * 0.3);
+      this.drum('dark', tr * 0.5, tl, zf + tl * 0.2, { sides: 12 });
+      this.drum('glass', tr * 0.36, tl, zf + tl * 0.5, { sides: 12 });
+    } else if (tip === 'dome') {
+      const g = new THREE.SphereGeometry(tr * 0.85, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2);
+      g.rotateX(Math.PI / 2);
+      this.add('glass', g, this.xf(0, 0, zf - tr * 0.1));
+      this.drum('dark', tr * 0.92, len * 0.06, zf - len * 0.01, { sides: 16 });
     }
     return zf;
   }
@@ -2165,14 +2174,31 @@ function hullDreadnought(k, opts = {}) {
   const L = k.L, W = k.W;
   k.hasSpinal = true;   // weapon_0 is the spinal (or siege) coiler
   const winS = k.winS;
+  // One armoured hull, not four boxes on a drum: a cruciform core - dorsal
+  // spine, keel and two flank strakes - runs the length of the citadel
+  // and carries the PD galleries; the four sponsons sit in its quadrants
+  // as shoulder pods. Fore, the arms slope down onto the bow citadel; aft,
+  // onto the drive skirt. The keel runs on under the bow as a ram that
+  // houses the spinal coiler.
   k.drum('hull', W * 0.3, L * 0.78, -L * 0.03);
-  for (let i = 0; i < 6; i++) k.rib('trim', W * 0.315, L * 0.014, -L * 0.36 + i * L * 0.13);
+  for (const a of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
+    const P = k.xf(0, 0, 0, 0, 0, a);
+    k.section('hull', W * 0.44, W * 0.36, L * 0.56, 0, W * 0.36, -L * 0.08, { ct: W * 0.07, cb: 0, parent: P });
+    k.taper('hull', W * 0.44, W * 0.36, W * 0.36, W * 0.14, L * 0.055, 0, W * 0.36, L * 0.2,
+      { c0: W * 0.07, cb0: 0, c1: W * 0.04, cb1: 0, dy: -W * 0.11, parent: P });
+    k.taper('hull', W * 0.44, W * 0.36, W * 0.34, W * 0.2, L * 0.05, 0, W * 0.36, -L * 0.36,
+      { c0: W * 0.07, cb0: 0, c1: W * 0.05, cb1: 0, dy: W * 0.02, dir: -1, parent: P });
+    // frame collars across the arm (the hull's ring frames)
+    for (const fz of [-L * 0.24, L * 0.06]) {
+      k.section('trim', W * 0.455, W * 0.375, L * 0.014, 0, W * 0.36, fz, { ct: W * 0.073, cb: 0, parent: P });
+    }
+  }
+  // Keel ram under the bow citadel: the spinal coiler's housing
+  k.taper('hull', W * 0.18, W * 0.3, W * 0.165, W * 0.16, L * 0.23, 0, -W * 0.4, L * 0.2,
+    { c0: 0, cb0: W * 0.05, c1: 0, cb1: W * 0.04, dy: W * 0.07 });
   for (const sx of [-1, 1]) {
     for (const sy of [-1, 1]) {
       const px = sx * W * 0.36, py = sy * W * 0.36;
-      // Armoured load paths tie the four sponsons into the pressure hull.
-      k.box('trim', W * 0.24, W * 0.24, L * 0.57,
-        sx * W * 0.23, sy * W * 0.23, -L * 0.07, { bevel: 0.15 });
       k.section('hull', W * 0.32, W * 0.32, L * 0.52, px, py, -L * 0.08);
       k.section('trim', W * 0.34, W * 0.34, L * 0.03, px, py, -L * 0.2, { ct: W * 0.068 });
       k.section('trim', W * 0.34, W * 0.34, L * 0.03, px, py, L * 0.05, { ct: W * 0.068 });
@@ -2186,21 +2212,22 @@ function hullDreadnought(k, opts = {}) {
           for (const dz of [-1, 1]) k._window(winS * 0.35, winS * 1.4, winS, px + sx * W * 0.161, yy, z + dz * winS * 2.2);
         }
       }
-      k.section('trim', W * 0.28, W * 0.28, L * 0.05, px, py, L * 0.2, { ct: W * 0.075 });
+      // sponson noses faired down onto the citadel shoulder
+      k.taper('hull', W * 0.32, W * 0.32, W * 0.24, W * 0.24, L * 0.05, px, py, L * 0.18, { c1: W * 0.06 });
     }
   }
-  // Bow citadel narrowing to a stepped glacis, ops deck band around it
-  // (shoulders kept shallow on the citadel: the ventral heavy battery and
-  // both bow RCS stations stand on its faces)
+  // Bow: the citadel steps in once, then one long glacis to the sensor
+  // lens (shoulders kept shallow on the citadel: the ventral heavy battery
+  // and both bow RCS stations stand on its faces)
   const cb5 = W * 0.075, cb6 = W * 0.02;
-  k.section('hull', W * 0.5, W * 0.5, L * 0.16, 0, 0, L * 0.42, { ct: cb5 });
+  k.section('hull', W * 0.5, W * 0.5, L * 0.1, 0, 0, L * 0.39, { ct: cb5 });
   k.section('hull', W * 0.64, W * 0.64, L * 0.14, 0, 0, L * 0.3, { ct: cb6 });
   k.livery(L * 0.235, L * 0.04, (zc, t) => k.section('paint', W * 0.66, W * 0.66, t, 0, 0, zc, { ct: cb6 * 1.03 }));
-  k.opsBand(W * 0.5, W * 0.5, L * 0.47, W * 0.012, cb5);
-  k.deckBand(W * 0.5, W * 0.5, L * 0.44, { c: cb5 });
+  k.opsBand(W * 0.5, W * 0.5, L * 0.43, W * 0.012, cb5);
+  k.deckBand(W * 0.5, W * 0.5, L * 0.405, { c: cb5 });
   k.deckBand(W * 0.64, W * 0.64, L * 0.33, { c: cb6 });
-  k.wedgeBow({ z0: L * 0.5, len: L * 0.07, w: W * 0.5, h: W * 0.5, c: cb5, tw: 0.5, th: 0.5, tip: 'lens' });
-  k.greebles('+y', W * 0.32, [-W * 0.26, -W * 0.1], [L * 0.24, L * 0.36], 3, W * 0.03, W * 0.05);
+  k.wedgeBow({ z0: L * 0.44, len: L * 0.13, w: W * 0.5, h: W * 0.5, c: cb5, tw: 0.4, th: 0.4, tip: 'lens' });
+  k.greebles('+y', W * 0.32, [-W * 0.26, -W * 0.1], [L * 0.27, L * 0.36], 3, W * 0.03, W * 0.05);
   if (!opts.siege) {
     // Spinal coiler along the keel, between the lower sponsons; the barrel
     // runs out under the glacis to the bow line. Its muzzle is the shared
@@ -2219,10 +2246,10 @@ function hullDreadnought(k, opts = {}) {
     k.spinalMuzzle = new THREE.Vector3(0, ky, L * 0.56);
   }
   // Sensor farms along the keel line instead of towers
-  for (const [tz, sz] of [[L * 0.12, 0.6], [-L * 0.33, 0.5]]) {
-    k.sensorCluster(sz * k.k, 0, W * 0.3, tz);
+  for (const [tz, sz] of [[L * 0.12, 0.6], [-L * 0.3, 0.5]]) {
+    k.sensorCluster(sz * k.k, 0, W * 0.54, tz);
   }
-  k.mast(k.mastH * 1.4, W * 0.1, W * 0.3, -L * 0.28, 0);
+  k.mast(k.mastH * 1.4, W * 0.1, W * 0.54, -L * 0.26, 0);
   // Batteries where fleet_ships mounts them: weapon_1 heavy dorsal fwd,
   // weapon_2 heavy ventral fwd (beside the keel spinal), weapon_3 heavy
   // port, weapon_4 heavy starboard, weapon_5 heavy mid dorsal, weapon_6
@@ -2233,7 +2260,7 @@ function hullDreadnought(k, opts = {}) {
   k.turret('heavy', -W * 0.52, W * 0.36, L * 0.1, Math.PI / 2);
   // PD galleries bridge the valleys between the armoured sponsons.
   for (const a of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
-    k.box('hull', W * 0.52, W * 0.12, L * 0.2, 0, W * 0.54, -L * 0.1,
+    k.box('hull', W * 0.4, W * 0.12, L * 0.2, 0, W * 0.54, -L * 0.1,
       { bevel: 0.25, parent: k.xf(0, 0, 0, 0, 0, a) });
   }
   k.turret('heavy', 0, W * 0.6, -L * 0.04);
@@ -2244,15 +2271,15 @@ function hullDreadnought(k, opts = {}) {
   k.pd(W * 0.6, 0, -L * 0.03, -Math.PI / 2);
   k.pd(-W * 0.6, 0, -L * 0.03, Math.PI / 2);
   k.livery(-L * 0.1, L * 0.05, (zc, t) => {
-    for (const a of [Math.PI / 2, -Math.PI / 2]) k.box('paint', W * 0.53, W * 0.125, t, 0, W * 0.54, zc, { bevel: 0.25, parent: k.xf(0, 0, 0, 0, 0, a) });
+    for (const a of [Math.PI / 2, -Math.PI / 2]) k.box('paint', W * 0.41, W * 0.125, t, 0, W * 0.54, zc, { bevel: 0.25, parent: k.xf(0, 0, 0, 0, 0, a) });
   });
-  k.greebles('-y', -W * 0.3, [-W * 0.08, W * 0.08], [-L * 0.36, -L * 0.24], 4, W * 0.03, W * 0.05);
+  k.greebles('-y', -W * 0.54, [-W * 0.1, W * 0.1], [-L * 0.34, -L * 0.23], 4, W * 0.03, W * 0.05);
   k.runningLights(W * 0.505, W * 0.36, L * 0.2);
   k.markings2(W * 0.52, W * 0.43, -L * 0.1, W * 0.06);
   k.rcsStation(L * 0.27, W * 0.32 - cb6 / 2, W * 0.32 - cb6 / 2, k.rcsS, { diag: true });
   k.rcsStation(L * 0.38, W * 0.25 - cb5 / 2, W * 0.25 - cb5 / 2, k.rcsS, { diag: true });
-  k.strobe(0, 0, L * 0.575, 0);
-  for (const sx of [-1, 1]) for (const sy of [-1, 1]) k.formationLamp(sx * W * 0.36, sy * W * 0.36, L * 0.228);
+  k.strobe(0, 0, L * 0.582, 0);
+  for (const sx of [-1, 1]) for (const sy of [-1, 1]) k.formationLamp(sx * W * 0.36, sy * W * 0.36, L * 0.2335);
   if (opts.siege) {
     // Siege coiler: one long barrel through the glacis (SPINAL dreadnought_siege: -0.2 W, 0.8 L)
     k.drum('barrel', W * 0.07, L * 0.6, L * 0.5, { y: -W * 0.2, sides: 12, rTop: W * 0.06 });
