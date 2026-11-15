@@ -269,6 +269,9 @@ def main() -> int:
     p.add_argument("--port", type=int, default=5173)
     p.add_argument("--gfx", choices=["low", "high", "auto"],
                    help="graphics quality (default: viewer auto-detect; software GL -> low)")
+    p.add_argument("--init-timeout", type=float, default=120.0,
+                   help="seconds to wait for the viewer to initialise (raise on a loaded "
+                        "machine: software GL bakes the sky and compiles shaders at load)")
     p.add_argument("--hide-ui", action="store_true", help="hide the HUD panels")
     p.add_argument("--out", required=True,
                    help="output PNG; use %%02d for --sequence frames")
@@ -277,8 +280,6 @@ def main() -> int:
     p.add_argument("--scale", type=float, default=1.0,
                    help="device scale factor: output pixels = CSS size x scale (crisp HUD text)")
     p.add_argument("--clip", help="x,y,w,h region in CSS pixels to keep (default: whole viewport)")
-    p.add_argument("--init-timeout", type=float, default=120.0,
-                   help="seconds to wait for the viewer to load the recording (raise on a loaded machine)")
     p.add_argument("--director", action="store_true",
                    help="keep the viewer's auto director flying the camera when no --focus/"
                         "--camera is given (its shot at time t is a function of t)")
