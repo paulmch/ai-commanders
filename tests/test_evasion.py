@@ -95,8 +95,10 @@ class TestModeSelection:
         sim = make_sim()
         ship = make_ship(fleet_data)
         sim.add_ship(ship)
-        # Guided torpedo 300 km up the +X axis, closing at 2 km/s
-        inject_torpedo(sim, Vector3D(300_000, 0, 0), Vector3D(-2000, 0, 0))
+        # Guided torpedo 900 km up the +X axis, closing at 2 km/s: it arrives
+        # in ~110 s, time to turn away, run and turn back (from 300 km it
+        # arrives in ~50 s and a destroyer presents its nose instead).
+        inject_torpedo(sim, Vector3D(900_000, 0, 0), Vector3D(-2000, 0, 0))
 
         direction, mode, throttle = sim._calculate_evasion(ship, 1.0)
 
@@ -105,7 +107,13 @@ class TestModeSelection:
         away = Vector3D(-1, 0, 0)  # directly away from the torpedo
         # Single threat: run direction is the exact anti-bearing, not a jink
         assert direction.dot(away) > 0.99
-        assert throttle == 1.0  # full burn - the point is to buy time
+        # Still nose-on to the threat: turn on a token burn first (full thrust
+        # while swinging through the threat-facing half would push it TOWARD
+        # the round), then the full burn that buys the time.
+        assert throttle < 0.1
+        ship.kinematic_state.forward = Vector3D(-0.5, 0.866, 0).normalized()
+        _, mode, throttle = sim._calculate_evasion(ship, 1.0)
+        assert mode == 'RUN' and throttle == 1.0
 
     def test_unguided_torpedo_produces_lateral_jink(self, fleet_data):
         """A seeker-killed torpedo is ballistic: the response is the lateral
@@ -139,8 +147,8 @@ class TestModeSelection:
         sim = make_sim()
         ship = make_ship(fleet_data)
         sim.add_ship(ship)
-        # Guided torpedo far out (t_go ~150 s)
-        inject_torpedo(sim, Vector3D(300_000, 0, 0), Vector3D(-2000, 0, 0))
+        # Guided torpedo far out (earliest arrival ~110 s: RUN is affordable)
+        inject_torpedo(sim, Vector3D(900_000, 0, 0), Vector3D(-2000, 0, 0))
         # Slug dead-on, TCA 20 s
         slug = KineticProjectile(
             position=Vector3D(0, 160_000, 0),
@@ -350,9 +358,10 @@ class TestDisabledTorpedoImpacts:
 # =============================================================================
 
 def _run_guided_engagement(fleet_data, seed, maneuver_type,
-                           attacker_pos, target_forward=Vector3D(1, 0, 0)):
+                           attacker_pos, target_forward=Vector3D(1, 0, 0),
+                           target_type="destroyer"):
     sim = make_sim(seed)
-    ship = make_ship(fleet_data, forward=target_forward)
+    ship = make_ship(fleet_data, ship_type=target_type, forward=target_forward)
     atk = make_ship(fleet_data, ship_id="atk", ship_type="corvette",
                     faction="beta", position=attacker_pos,
                     forward=(Vector3D(0, 0, 0) - attacker_pos).normalized())
@@ -384,11 +393,16 @@ class TestGuidedEngagementOutcomes:
     def test_running_reduces_closing_speed_and_damage(self, fleet_data):
         """The point of RUN: against the same torpedo, an EVASIVE target must
         be struck at a LOWER relative speed (and so take less kinetic damage)
-        than a passive one, and no earlier."""
+        than a passive one, and no earlier. The target is a corvette: from
+        400 km the round lands in ~65 s, time for a 3 g hull to turn away,
+        run and turn back (a destroyer cannot, and presents its nose).
+        """
         evasive = _run_guided_engagement(
-            fleet_data, 42, ManeuverType.EVASIVE, Vector3D(400_000, 0, 0))
+            fleet_data, 42, ManeuverType.EVASIVE, Vector3D(400_000, 0, 0),
+            target_type="corvette")
         passive = _run_guided_engagement(
-            fleet_data, 42, ManeuverType.MAINTAIN, Vector3D(400_000, 0, 0))
+            fleet_data, 42, ManeuverType.MAINTAIN, Vector3D(400_000, 0, 0),
+            target_type="corvette")
         # Inside the NEZ the torpedo still hits - evasion is not magic
         assert evasive['hit'] and passive['hit']
         assert evasive['impact_speed_kps'] < passive['impact_speed_kps']

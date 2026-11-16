@@ -111,14 +111,44 @@ UNFORESEEN_ACCEL_FRACTION = 0.018
 #       a burn along the nose, which tracks part of every jink, and between
 #       threats it weaves around its course anyway: rounds lose less to the
 #       dodge itself (the conversion roll charges EVASIVE x0.6 on top).
+# The fraction depends on whether the dodger is already REACTING at the
+# shot (its evasion flying EVADE / TANK / BRACE / RUN / PRESENT -
+# TargetMotion.reacting) or calm (flying its base maneuver, or EVASIVE's
+# WOBBLE). A round fired at a calm dodger provokes its own dodge: when it
+# enters the threat horizon the ship swings until THAT round's predicted
+# miss clears, so the dodge is aimed at it; a ship already busy with other
+# rounds moves for them, and this one finds it less deliberately out of the
+# way. Live engine, harness rounds at 100-299 km: calm dodgers under fleet
+# fire were hit 2.4-11x less than the single-fraction model forecast,
+# reacting ones mostly about as forecast (0.57-1.19x; PADLOCK + dodge under
+# fleet fire at 200-299 km 4.9x, see RESIDUALS).
 # Calibrated together with JINK_ACCEL_FRACTION (maximum likelihood) on the
-# live engine: 85k rounds from 1, 2, 4 and 8 shooters at frigates..
-# dreadnoughts flying PADLOCK + dodge, HOLD_RANGE + dodge and EVASIVE,
-# 40-400 km (scripts/fire_control_calibration.py harness); per maneuver class,
-# shooter count and 100 km bucket (30+ hits) the forecast is 0.65-1.17x of
-# what landed.
-DODGE_ACCEL_FRACTION = 0.10
-EVASIVE_DODGE_ACCEL_FRACTION = 0.06
+# even seeds of the live-engine harness (42k rounds from 1, 2, 4 and 8
+# shooters at frigates..dreadnoughts flying PADLOCK + dodge, HOLD_RANGE +
+# dodge and EVASIVE, 40-400 km; scripts/fire_control_calibration.py
+# harness), validated on the odd ones: held-out log-likelihood +348 against
+# one fraction per maneuver (PADLOCK dodgers +198, HOLD_RANGE +98, EVASIVE
+# +52), and positive (+93 to +297) on six more splits by seed, shooter
+# count, base maneuver and hull. Buckets still outside 1.5x are named in
+# tests/test_fire_control_calibration.py RESIDUALS.
+DODGE_ACCEL_FRACTION = 0.11            # overlay, reacting at the shot
+DODGE_CALM_ACCEL_FRACTION = 0.23       # overlay, calm at the shot
+EVASIVE_DODGE_ACCEL_FRACTION = 0.06    # EVASIVE, reacting
+EVASIVE_CALM_ACCEL_FRACTION = 0.14     # EVASIVE, weaving (WOBBLE)
+
+# The evade overlay's dodge (and a jink in progress) is a burn of bounded
+# length: it stops once the round's predicted miss clears, so beyond
+# DODGE_BURN_S of the round's time to go its displacement grows linearly,
+# a * tau * (T - tau / 2), not as a * T^2 / 2. With the calm / reacting
+# fractions above, held-out log-likelihood against the T^2 form: +11 (even /
+# odd seeds), +0 (seed mod 3), +7 (4-8 shooters -> 1-2), -28 (1-2 shooters ->
+# 4-8), +10 (PADLOCK -> HOLD_RANGE dodgers), +4 (HOLD_RANGE -> PADLOCK), +10
+# (light -> heavy hulls): it holds across base maneuvers but not from one
+# shooter to a fleet. Kept because without it the PADLOCK and HOLD_RANGE
+# dodgers beyond 300 km are forecast 2-6x too low (0.16-0.54x) where with it
+# they are inside tolerance. A cap on the displacement and a soft saturation
+# were no better than T^2. The EVASIVE maneuver keeps the T^2 form.
+DODGE_BURN_S = 20.0
 
 # A dodger whose evasion is flying it RIGHT NOW (mid-jink) is already burning
 # across the line of fire, and its lead does not extrapolate that burn (a
@@ -139,7 +169,7 @@ EVASIVE_DODGE_ACCEL_FRACTION = 0.06
 # checkpoint) the dodgers moved 2-4x farther across the line of fire during a
 # flight (median 0.45 of a*T^2/2, vs 0.10-0.24 in seeded engine runs of the
 # same shape), and 0 of 188 rounds at 100-300 km landed where this model
-# forecasts ~16. Seeded fleet-vs-fleet runs with fixed orders do not
+# forecasts ~7. Seeded fleet-vs-fleet runs with fixed orders do not
 # reproduce it (there the forecast is 0.74-0.96x of what landed), so nothing
 # visible at fire time predicts it; the doctrine tells commanders instead
 # (prompts.GUN_PHYSICS_REFERENCE), and tests/test_fire_control_calibration.py
@@ -185,6 +215,13 @@ class TargetMotion:
             (ordered burn minus drive output, across the line of fire).
         pending_burn_in_s: When that burn lights (rest of the turn onto the
             heading, or a held formation start; 0 when already burning).
+        stale_burn_ms2: A new order was applied this tick and the drive (which
+            the lead extrapolates) still shows the last order's burn: the
+            part, across the line of fire, that the order in force has
+            already ended. Charged like a pending burn lit now.
+        reacting: A dodger whose evasion is reacting to a threat at the shot
+            (EVADE / TANK / BRACE / RUN / PRESENT) rather than flying its
+            base maneuver (or EVASIVE's WOBBLE).
     """
     accel_ms2: float
     dodges: bool = False
@@ -195,6 +232,8 @@ class TargetMotion:
     jink_accel_ms2: float = 0.0
     pending_burn_ms2: float = 0.0
     pending_burn_in_s: float = 0.0
+    stale_burn_ms2: float = 0.0
+    reacting: bool = False
 
 
 def displacement_sigma_m(time_of_flight_s: float, motion: TargetMotion) -> float:
@@ -208,22 +247,37 @@ def displacement_sigma_m(time_of_flight_s: float, motion: TargetMotion) -> float
     t = max(0.0, float(time_of_flight_s))
     a = max(0.0, float(motion.accel_ms2))
     sigma_free = UNFORESEEN_ACCEL_FRACTION * a * t * t / 2.0
-    sigma_dodge = sigma_jink = sigma_pending = 0.0
+    sigma_dodge = sigma_jink = sigma_pending = sigma_stale = 0.0
     if motion.dodges:
         td = min(t, motion.dodge_horizon_s)
+        # time-squared while the burn lasts, linear after it ends
+        if motion.evasive or td <= DODGE_BURN_S:
+            burn_t2 = td * td / 2.0
+        else:
+            burn_t2 = DODGE_BURN_S * (td - DODGE_BURN_S / 2.0)
         if t >= motion.dodge_min_time_s:
-            k = EVASIVE_DODGE_ACCEL_FRACTION if motion.evasive else DODGE_ACCEL_FRACTION
+            if motion.evasive:
+                k = (EVASIVE_DODGE_ACCEL_FRACTION if motion.reacting
+                     else EVASIVE_CALM_ACCEL_FRACTION)
+            else:
+                k = DODGE_ACCEL_FRACTION if motion.reacting else DODGE_CALM_ACCEL_FRACTION
             throttle = max(0.0, min(1.0, motion.dodge_throttle))
-            sigma_dodge = k * a * throttle * td * td / 2.0
+            sigma_dodge = k * a * throttle * burn_t2
         jink = max(0.0, float(motion.jink_accel_ms2))
         if jink > 0.0 and not motion.evasive:
-            sigma_jink = JINK_ACCEL_FRACTION * jink * td * td / 2.0
+            sigma_jink = JINK_ACCEL_FRACTION * jink * burn_t2
     pending = max(0.0, float(motion.pending_burn_ms2))
     if pending > 0.0:
         tp = t - max(0.0, float(motion.pending_burn_in_s))
         if tp > 0.0:
             sigma_pending = PENDING_BURN_FRACTION * pending * tp * tp / 2.0
-    return math.sqrt(sigma_free ** 2 + sigma_dodge ** 2 + sigma_jink ** 2 + sigma_pending ** 2)
+    stale = max(0.0, float(motion.stale_burn_ms2))
+    if stale > 0.0:
+        # The same kind of error as an unseen burn (a deterministic drive
+        # difference the lead does not extrapolate), lit from the shot.
+        sigma_stale = PENDING_BURN_FRACTION * stale * t * t / 2.0
+    return math.sqrt(sigma_free ** 2 + sigma_dodge ** 2 + sigma_jink ** 2 + sigma_pending ** 2
+                     + sigma_stale ** 2)
 
 
 def track_probability(

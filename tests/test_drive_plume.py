@@ -861,15 +861,16 @@ def test_seeded_battle_legacy_column_cooks_its_follower(column_battles):
     assert len(burned) == 16 and {e["ship_id"] for e in burned} == {"alpha_2"}
     assert sum(1 for e in burned if e["data"]["destroyed"]) == 4       # spinal, turret, both PD
     crew = [e for e in rec["events"] if e["event_type"] == "crew_radiation"]
-    assert [(e["timestamp"], e["ship_id"], e["data"]["state"]) for e in crew] == [(50.0, "alpha_2", "impaired")]
+    assert [(e["timestamp"], e["ship_id"], e["data"]["state"]) for e in crew] == [(49.0, "alpha_2", "impaired")]
     # The cruiser 14 km abeam is never washed.
     assert not [e for e in _plume_events(rec) if e["ship_id"] == "alpha_3"]
     # The wash itself stops at the ceiling; the destroyer, at 149 % with no
-    # radiator left and its own drive still burning, melts down a second
-    # after it leaves the jet.
+    # radiator left and its own drive still burning, melts down on the tick
+    # it leaves the jet. (Re-pinned for rotation that carries its spin:
+    # impaired at 49 s and dead at 69 s, was 50 and 70; same 30-69 s episode.)
     dead = [(e["timestamp"], e["ship_id"], e["data"].get("cause")) for e in rec["events"]
             if e["event_type"] == "ship_destroyed"]
-    assert dead == [(70.0, "alpha_2", "reactor_overheat")]
+    assert dead == [(69.0, "alpha_2", "reactor_overheat")]
 
 
 def test_seeded_battle_tactical_captains_keep_the_follower_out_of_the_jet(column_battles):

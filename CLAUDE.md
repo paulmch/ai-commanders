@@ -54,8 +54,8 @@ controlled pass facing the nearest gun, HOLD_RANGE once closure is gone; torpedo
 hold a standoff and fire every launchable round, ranked by target size/agility/PD umbrella; evade
 overlay vs torpedoes; crippled or disarmed ships open range, dead drives leave the
 formation, ships burn clear of dying hulks' blast radius; plan announced on the FLEET NET);
-`--doctrine legacy` (or `BattleConfig.heuristic_doctrine`) keeps the pass-4 captain the
-fire-control fixture's heuristic battles were flown with. `scripts/tactics_eval.py`
+`--doctrine legacy` (or `BattleConfig.heuristic_doctrine`) keeps the pass-4 captain (the
+fire-control fixture's heuristic battles are flown with both doctrines). `scripts/tactics_eval.py`
 runs/analyses seeded grids (kills, closest approach, rounds inside 150 km, hit rate).
 
 ## Project Structure
@@ -228,8 +228,14 @@ Cross-battle: scripts/refine_commander.py distills notebook lessons from
 recordings, rematch-gates them, and battles opt in via use_notebooks/--notebooks.
 3. **Rule-based layer**: executes between checkpoints - fire control modes,
    automatic point defense, threat-aware evasion (jink vs guns, RUN from guided
-   torpedoes, PRESENT thickest armor when a hit is unavoidable; with no threat
-   EVADE weaves around the ship's CURRENT course and never chases)
+   torpedoes - only when the hull can turn away and back before impact, turn
+   times flown from its current spin (`CombatSimulation._turn_time_to`) - PRESENT
+   thickest armor when a hit is unavoidable; with no threat EVADE weaves around
+   the ship's CURRENT course and never chases). Rotation carries its angular
+   momentum: only the available authority changes a spin (a tick with no
+   attitude command brakes it on RCS). PADLOCK and token-throttle HEADING turns
+   hand over from thrust vectoring to RCS inside `ATTITUDE_TV_HANDOVER_DEG` at a
+   rate RCS can stop (`tests/test_fixes_pass5_hunt.py` settle tests, every hull)
 
 Range control (anti-merge): HEADING turns first, then burns (throttle 0 =
 attitude only, RCS, velocity untouched). `src/llm/range_control.py` gives
@@ -388,11 +394,20 @@ hashed by the perf harness) is unchanged.
   `tests/test_fire_control_calibration.py`, per target maneuver class (EVASIVE, evade
   overlay, HEADING turning / burning, INTERCEPT, PADLOCK) x 100 km so errors cannot
   cancel. The dispersion roll consumes only the conversion part; shot_fired records the
-  forecast's inputs (`fc`: dodge, missed jink burn, pending HEADING burn). If the gate,
-  the roll, evasion/dodging or the lead changes, re-run `scripts/fire_control_calibration.py`
-  (harness + table) and regenerate the fixture; the doctrine P(hit) table is bound by
-  `tests/test_prompt_structure.py`. Known residual: LLM fleets dodging a whole fleet's
-  fire were hit even less than forecast (firecontrol.JINK_ACCEL_FRACTION).
+  forecast's inputs (`fc`: dodge, missed jink burn, pending HEADING burn, the stale
+  burn of an order applied that tick). If the gate, the roll, evasion/dodging or the lead
+  changes, re-run `scripts/fire_control_calibration.py` (harness + table) and regenerate
+  the fixture: 32 `--doctrine legacy` + 32 `--doctrine tactical` heuristic battles and
+  every harness round (`fixture ... --harness-keep 1`) into
+  `tests/fixtures/fire_control_shots.json`; battles recorded on older engines go to the
+  separate historical file (`--label HISTORICAL ...`), which only the flash-mirror
+  residual pin reads. Dodgers are bucketed by base maneuver (dodge:PADLOCK,
+  dodge:HOLD_RANGE) and modelled by their state at the shot (calm vs reacting,
+  `firecontrol.DODGE_CALM_ACCEL_FRACTION`). Buckets still outside 1.5x are named in the
+  test's `RESIDUALS`.
+  The doctrine P(hit) table is bound by `tests/test_prompt_structure.py`. Known residual:
+  LLM fleets dodging a whole fleet's fire were hit even less than forecast
+  (firecontrol.JINK_ACCEL_FRACTION).
 - Side symmetry: the engine must not care which fleet is alpha or was added
   first. `CombatSimulation.step()` resolves weapons fire, point defence and
   the ship updates (`_update_ships`: every ship steers on the start-of-step

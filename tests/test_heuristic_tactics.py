@@ -665,7 +665,15 @@ def test_the_formation_throttle_is_what_the_ship_flies():
 # need a whole turret-torpedo pair of PD gain, stand >= 15 s and are scored by
 # the roll reachable before impact, so hulls roll less and some mounts bear
 # at other ticks; no change to motion.)
-LEGACY_GOLDEN_SHA256 = "acbc1892baca6367b2755f4857a29a3674f614dd778d13ddba225ccd4d7cf342"
+# (Re-pinned for rotation that carries its angular momentum (wt5/hunt-rotation):
+# turns are authority-limited, RUN only when the hull can turn away and back,
+# and the fire-control forecast charges an order's stale drive burn; the
+# legacy captain itself is unchanged.)
+# (Re-pinned for round 5 of the rotation work: PADLOCK / held-burn HEADING
+# hand over to RCS at a rate RCS can stop, uncommanded ticks brake the spin
+# on RCS, the presentation search is merged/closed-form, and the forecast
+# splits calm and reacting dodgers; legacy captain unchanged.)
+LEGACY_GOLDEN_SHA256 = "57d05a77bb84a0aa0cf3482839ee306c3d29004e3f2cebb84cdf1c8db9d12575"
 
 
 def test_legacy_battle_event_stream_is_pinned(tmp_path):

@@ -662,10 +662,15 @@ class TestThreatDisplayContract:
 class TestFormationDoctrine:
     def test_escort_wall_reduces_leakage(self, fleet):
         """Admiral doctrine: escorts cut salvo leakage, and the effect needs
-        mass (a big wall clearly beats none). Single seed of the measured
-        17/18 alone vs 6/18 with 8 escorts result."""
+        mass (a big wall clearly beats none) AND time. Single seed of the
+        measured (seeds 21-23) results: a salvo launched 1200 km out leaked
+        18/18 alone vs 12/18 with 8 escorts; launched 450 km out (~70 s) it
+        leaked 18/18 even behind 8 - the battleship cannot turn away to run
+        and back in time, presents its nose, and the rounds are blinded too
+        late to dodge. The wall keeps the hull alive: alone it died in 3 of 3
+        runs, behind 8 escorts in none."""
 
-        def wall(n_escorts):
+        def wall(n_escorts, range_km):
             sim = CombatSimulation(seed=23, time_step=0.5, decision_interval=1e9)
             victim = _build(sim, 'victim', 'battleship', 'alpha', fleet, 0, 0, 1)
             _evade(victim)
@@ -677,9 +682,9 @@ class TestFormationDoctrine:
                                       30_000 * math.sin(ang), 0),
                     forward=Vector3D(1, 0, 0))
                 sim.add_ship(esc)
-            _build(sim, 'att', 'cruiser_torpedo', 'beta', fleet, 450, 0, -1)
+            _build(sim, 'att', 'cruiser_torpedo', 'beta', fleet, range_km, 0, -1)
             launched, hits = 0, 0
-            for _ in range(1600):
+            for _ in range(6000):
                 if launched < 6:
                     if sim.inject_command('att', {'type': 'launch_torpedo',
                                                   'target_id': 'victim'}):
@@ -690,14 +695,68 @@ class TestFormationDoctrine:
                         hits += 1
                 if launched >= 6 and not sim.torpedoes:
                     break
-            return hits
+            for _ in range(80):              # a dying hulk's fuse runs out
+                if victim.is_destroyed or not victim.is_dying:
+                    break
+                sim.step()
+            return hits, victim.is_destroyed or victim.is_dying
 
-        alone, walled = wall(0), wall(8)
+        (alone, alone_killed), (walled, _) = wall(0, 1200), wall(8, 1200)
         assert alone >= 5, f"lone battleship now stops salvos ({alone}/6 hit)"
-        assert walled < alone, (
+        assert alone_killed, "a lone battleship now survives a 6-round salvo"
+        assert walled <= 4 and walled < alone, (
             f"8-escort wall no longer reduces leakage ({walled}/6 vs {alone}/6) "
             "- the formation doctrine numbers are stale"
         )
+        short, short_killed = wall(8, 450)
+        assert short >= 5 and not short_killed, (
+            f"a 450 km salvo behind 8 escorts now lands {short}/6 "
+            f"(victim destroyed: {short_killed}) - the doctrine's short-salvo claim is stale")
+
+
+class TestTorpedoSizingDoctrine:
+    def test_salvo_sizing(self, fleet):
+        """Admiral doctrine SIZING: at moderate closure (~22 GJ/round) against
+        lone evading targets, 4 rounds kill a destroyer, 6 kill anything up to
+        a dreadnought, 1-2 only wound. Measured seeds 21-23 from 450 km: kills
+        2 rounds 0/3 on a destroyer, 4 rounds 3/3 on a destroyer and 0/3 on a
+        cruiser, battleship or dreadnought, 6 rounds 3/3 on each (a dying hulk
+        counts once its fuse runs out). Pinned on seed 23."""
+        from src.llm.prompts import ADMIRAL_TORPEDO_DOCTRINE
+        text = " ".join(ADMIRAL_TORPEDO_DOCTRINE.split())
+        assert ("~22 GJ/round, evading targets): 4 rounds kill a destroyer; 6 rounds kill "
+                "anything up to a dreadnought; 1-2 rounds wound only") in text
+
+        def salvo(hull, rounds):
+            sim = CombatSimulation(seed=23, time_step=0.5, decision_interval=1e9)
+            victim = _build(sim, 'victim', hull, 'alpha', fleet, 0, 0, 1)
+            _evade(victim)
+            _build(sim, 'att', 'cruiser_torpedo', 'beta', fleet, 450, 0, -1)
+            launched, gj = 0, []
+            for _ in range(3000):
+                if launched < rounds:
+                    if sim.inject_command('att', {'type': 'launch_torpedo',
+                                                  'target_id': 'victim'}):
+                        launched += 1
+                        continue
+                for ev in sim.step():
+                    if ev.event_type == SimulationEventType.TORPEDO_IMPACT:
+                        gj.append(ev.data.get('total_damage_gj') or 0.0)
+                if launched >= rounds and not sim.torpedoes:
+                    break
+            for _ in range(80):
+                if victim.is_destroyed or not victim.is_dying:
+                    break
+                sim.step()
+            return gj, victim.is_destroyed or victim.is_dying
+
+        gj, killed = salvo('destroyer', 2)
+        assert len(gj) == 2 and not killed
+        assert all(18.0 < g < 26.0 for g in gj), gj
+        assert salvo('destroyer', 4)[1]
+        assert not salvo('cruiser', 4)[1]
+        for hull in ('cruiser', 'battleship', 'dreadnought'):
+            assert salvo(hull, 6)[1], hull
 
 
 # =============================================================================
@@ -881,18 +940,30 @@ class TestRangeControlDoctrine:
             assert "at 4.6 km/s closure a 3g corvette needs 156 s / 359 km (+18 s" in text
             assert "1g battleship 469 s / 1078 km (+55 s)" in text
 
-    def test_padlock_idles_the_drive_at_5_percent_only_while_turning(self, fleet):
+    @pytest.mark.parametrize("hull", ["corvette", "frigate", "destroyer", "cruiser",
+                                      "cruiser_torpedo", "battlecruiser", "battleship",
+                                      "dreadnought"])
+    def test_padlock_idles_the_drive_at_5_percent_only_while_turning(self, fleet, hull):
+        """Every hull: the 5% token burn while the nose swings round, then
+        the drive idles and STAYS idle (no hunting back across the
+        thrust-vectoring handover, ATTITUDE_TV_HANDOVER_DEG)."""
         assert "the drive idles at 5% only while turning" in " ".join(CAPTAIN_DOCTRINE.split())
         sim = CombatSimulation(seed=1, time_step=1.0)
-        me = _build(sim, "me", "corvette", "alpha", fleet, 0, 0, 1)
+        me = _build(sim, "me", hull, "alpha", fleet, 0, 0, 1)
         _build(sim, "foe", "corvette", "beta", fleet, 0, 0, -1)
         sim.ships["foe"].kinematic_state.position = Vector3D(0, 300_000, 0)
         me.current_maneuver = Maneuver(ManeuverType.PADLOCK, start_time=0.0, target_id="foe")
         sim._update_ship(me, 1.0)
         assert me.applied_throttle == pytest.approx(0.05)
-        for _ in range(40):
+        turn = 2 * round(sim._estimate_turn_time(me, math.pi / 2, engines_on=True)) + 10
+        for _ in range(turn):
             sim._update_ship(me, 1.0)
         assert me.applied_throttle == 0.0
+        lit = 0
+        for _ in range(300):
+            sim._update_ship(me, 1.0)
+            lit += me.applied_throttle > 0.0
+        assert lit == 0, f"{hull}: drive relit {lit} times while holding the padlock"
 
 
 # =============================================================================
