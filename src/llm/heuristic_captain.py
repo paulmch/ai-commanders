@@ -39,6 +39,7 @@ from .client import ToolCall
 from .communication import MAX_FLEET_SIGNALS_PER_DECISION
 from .maneuver_orders import admiral_order_moves_ship
 from . import heuristic_tactics as tactics
+from . import heuristic_flank as flank
 
 # Sentinel model id that makes the battle runner build a HeuristicCaptain
 # instead of an LLM-backed captain.
@@ -46,7 +47,10 @@ HEURISTIC_MODEL = "heuristic"
 
 DOCTRINE_TACTICAL = "tactical"
 DOCTRINE_LEGACY = "legacy"
-DOCTRINES = (DOCTRINE_TACTICAL, DOCTRINE_LEGACY)
+# Experimental variants (src/llm/heuristic_flank.py): the static wall and
+# pincer / envelopment / two-axis torpedo strikes. Never the default.
+from .heuristic_flank import FLANK_DOCTRINES  # noqa: E402
+DOCTRINES = (DOCTRINE_TACTICAL, DOCTRINE_LEGACY) + tuple(FLANK_DOCTRINES)
 DEFAULT_DOCTRINE = DOCTRINE_TACTICAL
 
 # Ranges in km
@@ -447,6 +451,10 @@ class HeuristicCaptain(LLMCaptain):
             # with loaded tubes.
             prey = min(enemies, key=lambda e: (km(e), e.ship_id))
             return order("INTERCEPT", prey, 1.0, standoff_km=tactics.BOAT_NO_GUNS_RANGE_KM)
+        flank = self._flank_maneuver(ship, ship_id, target, enemies, plan, my_role,
+                                     nearest_gun, evade)
+        if flank is not None:
+            return flank
         if my_role != "gun":
             anchor = nearest_gun or min(enemies, key=lambda e: (km(e), e.ship_id))
             return order("HOLD_RANGE", anchor, 1.0,
@@ -496,6 +504,60 @@ class HeuristicCaptain(LLMCaptain):
         if evade:
             args["evade"] = evade
         return args
+
+    def _flank_maneuver(self, ship, ship_id, target, enemies, plan, my_role, nearest_gun,
+                        evade) -> Optional[Dict[str, Any]]:
+        """Maneuver for the experimental flank doctrines (heuristic_flank),
+        or None to fly the tactical doctrine's."""
+        spec = flank.FLANK_DOCTRINES.get(self.doctrine)
+        if spec is None:
+            return None
+        st = flank.flank_state(self._sim, ship.faction, spec)
+        group = st.groups.get(ship_id, "hold")
+
+        def with_evade(args, overlay=None):
+            ov = evade or overlay
+            if ov:
+                args["evade"] = ov
+            return args
+
+        if my_role == "torpedo":
+            if spec.kind != "split" or nearest_gun is None:
+                return None
+            boats = sorted(sid for sid, g in st.groups.items() if g == "boat")
+            key = "boat_a" if boats.index(ship_id) % 2 == 0 else "boat_b"
+            station = st.stations.get(key)
+            if station is None:
+                return None
+            return with_evade({"maneuver_type": "HEADING", "throttle": 1.0,
+                               "toward_point": flank.point_km(station)})
+        if my_role != "gun" or spec.kind == "split":
+            return None
+        gunned = [e for e in enemies if tactics.has_guns(e)] or enemies
+        near = min(gunned, key=lambda e: (ship.position.distance_to(e.position), e.ship_id))
+        if group == "hold":
+            engage = flank.WALL_ENGAGE_KM
+            if spec.kind == "pincer" and not st.attack_started:
+                engage = flank.HOLD_WAIT_KM
+            dist_km, closing = self._range_and_closing(ship, near)
+            kind = flank.wall_maneuver(dist_km, closing, engage)
+            throttle = plan.formation_throttle.get(ship_id, 1.0) if kind == "INTERCEPT" else 1.0
+            return with_evade({"maneuver_type": kind, "target_id": near.ship_id, "throttle": throttle})
+        station = st.stations.get(group)
+        if station is None:
+            return None
+        if not st.attack_started:
+            # Positioning: fly to the station with the evade overlay on.
+            return with_evade({"maneuver_type": "HEADING", "throttle": 1.0,
+                               "toward_point": flank.point_km(station)}, "dodge")
+        # Committed attack run to our own engagement range.
+        r_km = tactics.engage_range_km(ship)
+        dist_km, _ = self._range_and_closing(ship, target)
+        if dist_km > r_km * tactics.HOLD_BAND_FACTOR:
+            return with_evade({"maneuver_type": "INTERCEPT", "target_id": target.ship_id,
+                               "throttle": 1.0, "standoff_km": r_km,
+                               "arrival_closing_kps": 0.6})
+        return with_evade({"maneuver_type": "PADLOCK", "target_id": target.ship_id, "throttle": 1.0})
 
     def _radiator_wish(self, ship, ship_id, heat, threat, enemies, simulation) -> Optional[bool]:
         """True = extend, False = retract, None = leave as is."""
