@@ -232,7 +232,10 @@ recordings, rematch-gates them, and battles opt in via use_notebooks/--notebooks
    times flown from its current spin (`CombatSimulation._turn_time_to`) - PRESENT
    thickest armor when a hit is unavoidable; with no threat EVADE weaves around
    the ship's CURRENT course and never chases). Rotation carries its angular
-   momentum: only the available authority changes a spin
+   momentum: only the available authority changes a spin (a tick with no
+   attitude command brakes it on RCS). PADLOCK and token-throttle HEADING turns
+   hand over from thrust vectoring to RCS inside `ATTITUDE_TV_HANDOVER_DEG` at a
+   rate RCS can stop (`tests/test_fixes_pass5_hunt.py` settle tests, every hull)
 
 Range control (anti-merge): HEADING turns first, then burns (throttle 0 =
 attitude only, RCS, velocity untouched). `src/llm/range_control.py` gives
@@ -398,7 +401,10 @@ hashed by the perf harness) is unchanged.
   every harness round (`fixture ... --harness-keep 1`) into
   `tests/fixtures/fire_control_shots.json`; battles recorded on older engines go to the
   separate historical file (`--label HISTORICAL ...`), which only the flash-mirror
-  residual pin reads. Buckets still outside 1.5x are named in the test's `RESIDUALS`.
+  residual pin reads. Dodgers are bucketed by base maneuver (dodge:PADLOCK,
+  dodge:HOLD_RANGE) and modelled by their state at the shot (calm vs reacting,
+  `firecontrol.DODGE_CALM_ACCEL_FRACTION`). Buckets still outside 1.5x are named in the
+  test's `RESIDUALS`.
   The doctrine P(hit) table is bound by `tests/test_prompt_structure.py`. Known residual:
   LLM fleets dodging a whole fleet's fire were hit even less than forecast
   (firecontrol.JINK_ACCEL_FRACTION).
