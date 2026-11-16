@@ -63,27 +63,30 @@ FLASH_MIRROR = "p4_new_flash_mirror_150pt"
 # (test_known_residuals_stay_where_they_are): (label, class, 100 km band) ->
 # allowed forecast/observed range.
 RESIDUALS = {
-    # A lone shooter at EVASIVE targets 200-299 km: every one of its hits is on
-    # a dreadnought, in four engagements; the forecast is 0.65x.
+    # A lone shooter at EVASIVE targets 200-299 km: its hits are on
+    # dreadnoughts, in a few engagements; the forecast is 0.63x.
     ("harness", "EVASIVE:alone", 2): (0.5, 0.8),
     # Dodgers under a whole fleet's fire (2-8 shooters), even after the calm /
     # reacting split (firecontrol.DODGE_CALM_ACCEL_FRACTION): at 200-299 km
-    # PADLOCK + dodge targets are hit 3.1x less than forecast and EVASIVE ones
-    # 1.7x less; at 400-499 km both 1.5x more. The 200-299 km gap is carried
-    # by whole engagements (13 of 17 with a forecast of 2+ hits got under
-    # half), nothing visible at the shot separates them, and the doctrine
-    # tells commanders (prompts.GUN_PHYSICS_REFERENCE).
-    ("harness", "dodge:PADLOCK:fleet", 2): (2.6, 3.7),
-    ("harness", "EVASIVE:fleet", 2): (1.45, 2.0),
-    ("harness", "dodge:PADLOCK:fleet", 4): (0.45, 0.85),
+    # PADLOCK + dodge targets are hit 2.8x less than forecast and EVASIVE ones
+    # 1.8x less; EVASIVE at 400-499 km 1.5x more. Whole engagements carry it
+    # (test_the_fleet_fire_residual_is_carried_by_whole_engagements); the
+    # doctrine tells commanders (prompts.GUN_PHYSICS_REFERENCE).
+    ("harness", "dodge:PADLOCK:fleet", 2): (2.3, 3.4),
+    ("harness", "EVASIVE:fleet", 2): (1.45, 2.1),
     ("harness", "EVASIVE:fleet", 4): (0.45, 0.85),
-    # Battle rounds at long range on targets that do not burn: coasting PADLOCK
-    # targets at 400-499 km (0.65x) and attitude-only HEADING targets at
-    # 300-399 km (0.66x) are hit more than forecast - the unforeseen-maneuver
-    # term, fitted on order changes at shorter range, over-charges the longest
-    # flights; neither a cap nor a power law on it fitted better held out.
+    # 5 hits where 1.4 were forecast: a lone shooter at a PADLOCK dodger 300-399
+    # km (the dodge term over-charges the longest flights of a calm dodger).
+    ("harness", "dodge:PADLOCK:alone", 3): (0.15, 0.45),
+    # Battle rounds at long range: coasting PADLOCK targets at 400-499 km (0.67x)
+    # and attitude-only HEADING targets at 300-399 km (0.62x) are hit more than
+    # forecast - the unforeseen-maneuver term, fitted on order changes at
+    # shorter range, over-charges the longest flights (neither a cap nor a
+    # power law on it fitted better held out); HEADING burners at 300-399 km
+    # less (1.66x, 5 hits of 32 rounds).
     ("battle", "PADLOCK", 4): (0.5, 0.8),
-    ("battle", "HEADING:attitude", 3): (0.5, 0.85),
+    ("battle", "HEADING:attitude", 3): (0.5, 0.8),
+    ("battle", "HEADING:burn", 3): (1.3, 2.1),
 }
 
 
@@ -233,11 +236,13 @@ def test_doctrine_states_the_residual(historical):
         assert claim in " ".join(doctrine.split())
     # ... and the seeded fleet-fire residuals (RESIDUALS) they can expect.
     lo, hi = RESIDUALS[("harness", "dodge:PADLOCK:fleet", 2)]
-    assert lo <= 3.0 <= hi
+    assert lo <= 2.8 <= hi
     lo, hi = RESIDUALS[("harness", "EVASIVE:fleet", 2)]
-    assert lo <= 1.7 <= hi
-    assert "3x less than shown" in " ".join(GUN_PHYSICS_REFERENCE.split())
-    assert "hit 3x less than shown (EVADE maneuver 1.7x less)" in " ".join(ADMIRAL_GUN_DOCTRINE.split())
+    assert lo <= 1.8 <= hi
+    assert "nearly 3x less than shown (an EVADE-maneuver target 1.8x less)" in " ".join(
+        GUN_PHYSICS_REFERENCE.split())
+    assert "hit nearly 3x less than shown (EVADE maneuver 1.8x less)" in " ".join(
+        ADMIRAL_GUN_DOCTRINE.split())
 
 
 def test_mid_jink_dodgers_are_harder_and_the_forecast_says_so(shots):
@@ -320,3 +325,28 @@ def test_live_engine_delivers_the_forecast(fcc, seed, cls, hull, range_km, shoot
         old = sum(r["p_conv"] for r in rounds)
         old_sd = math.sqrt(sum(r["p_conv"] * (1 - r["p_conv"]) for r in rounds))
         assert old - hits > 3 * old_sd + 2, (hits, old, old_sd)
+
+
+
+def test_the_fleet_fire_residual_is_carried_by_whole_engagements(shots):
+    """Reviewer repro by_seed.py: PADLOCK + dodge targets under fleet fire at
+    200-399 km, grouped by engagement (seed, hull, shooter count): of the 12
+    engagements forecast 2+ hits, 10 got under half and none over double
+    (51 hits vs 92 forecast; cluster-robust z -2.1). Rounds of one engagement
+    share one dodger's path, so the residual is per engagement, not per
+    round - which is why RESIDUALS holds it rather than a per-round term."""
+    g = collections.defaultdict(lambda: [0, 0.0])
+    for r in shots:
+        if (r["harness"] and r["class"] == "dodge:PADLOCK" and r["n"] >= 2
+                and 200 <= r["range_km"] < 400):
+            k = (r["seed"], r["target_type"], r["n"])
+            g[k][0] += r["hit"]
+            g[k][1] += r["new"]
+    big = [v for v in g.values() if v[1] >= 2.0]
+    assert len(g) >= 30 and len(big) >= 8
+    under = sum(1 for h, f in big if h < 0.5 * f)
+    over = sum(1 for h, f in big if h > 2.0 * f)
+    assert under >= 0.6 * len(big) and over <= 1, (len(big), under, over)
+    d = [h - f for h, f in g.values()]
+    z = sum(d) / math.sqrt(sum(x * x for x in d))
+    assert z < -1.5, z
