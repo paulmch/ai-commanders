@@ -450,7 +450,17 @@ def print_table(table: List[dict]) -> None:
 
 
 FIXTURE_COLUMNS = ["source", "range_km", "tof_s", "target_type", "class", "dodge", "n",
-                   "jink", "pending", "pending_in", "stale", "react", "p_conv", "hit"]
+                   "jink", "pending", "pending_in", "stale", "react", "seed", "p_conv", "hit"]
+
+
+def _row_seed(row: dict) -> Optional[int]:
+    """The engagement's seed: the harness records it, battle sources carry it
+    in their name (fresh_<doctrine>_s<seed>_b<budget>)."""
+    if row.get("seed") is not None:
+        return int(row["seed"])
+    import re
+    m = re.search(r"_s(\d+)_b\d+", row.get("source") or "")
+    return int(m.group(1)) if m else None
 
 
 def write_fixture(rows: List[dict], out: str, free_keep: int, harness_keep: int,
@@ -501,7 +511,7 @@ def write_fixture(rows: List[dict], out: str, free_keep: int, harness_keep: int,
                   None if r.get("dodge") is None else round(r["dodge"], 2), int(r.get("n") or 1),
                   round(r.get("jink") or 0.0, 2), round(r.get("pending") or 0.0, 2),
                   round(r.get("pending_in") or 0.0, 1), round(r.get("stale") or 0.0, 2),
-                  int(bool(r.get("react"))),
+                  int(bool(r.get("react"))), _row_seed(r),
                   round(r["p_conv"], 4), int(r["outcome"] == "hit")] for r in kept],
     }
     rows_out = data.pop("rows")
