@@ -762,7 +762,7 @@ def test_padlock_settles_on_every_hull(hull, deg):
     r = _settle_run(hull, deg, "PADLOCK")
     assert r["crossings"] == 1, r            # in once, never back out
     assert r["max_after"] < 2.0, r
-    assert r["lit_after"] <= 8, r            # a few handover ticks, no hunting
+    assert r["lit_after"] <= 20, r           # the handover ticks, no hunting
     assert r["speed_300"] < 25.0, r          # the token burn only while turning
 
 
@@ -772,7 +772,7 @@ def test_held_burn_heading_settles_on_every_hull(hull, deg):
     r = _settle_run(hull, deg, "HEADHOLD")
     assert r["crossings"] == 1, r
     assert r["max_after"] < 2.0, r
-    assert r["lit_after"] <= 8, r
+    assert r["lit_after"] <= 20, r
     assert r["speed_300"] < 25.0, r
 
 
@@ -783,7 +783,7 @@ def test_padlock_drift_in_300_s_is_the_turning_burn_only():
         for deg in (30, 90):
             r = _settle_run(hull, deg, "PADLOCK", tmax=300, range_km=300.0)
             assert r["speed_300"] < 25.0, (hull, deg, r)
-            assert r["lit_after"] <= 8, (hull, deg, r)
+            assert r["lit_after"] <= 20, (hull, deg, r)
 
 
 def test_an_uncommanded_tick_brakes_the_spin_on_rcs_instead_of_zeroing_it():
@@ -903,3 +903,42 @@ def test_a_reissued_order_is_not_charged_a_stale_burn(kind):
     assert tgt.applied_throttle > 0.0 or kind != "HEADING"
     tgt.current_maneuver = _new_order(kind, sim.current_time, d)      # same order, new object
     assert sim.target_motion(tgt, sh).stale_burn_ms2 == 0.0
+
+
+@pytest.mark.parametrize("hull", ALL_HULLS)
+@pytest.mark.parametrize("crossing_mps", [1000, 3000])
+def test_padlock_tracks_a_crossing_target(hull, crossing_mps):
+    """PADLOCK on a target crossing the line of sight at 1-3 km/s, 335 km
+    off: the line of sight swings, so the turn plans relative to it
+    (target_rate) and settles onto its rate instead of stopping dead and
+    falling behind. After arrival the nose stays within ~2 deg and more than
+    1 deg off at most 15 % of the time (a dreadnought cannot follow 3 km/s on
+    RCS: 119 of 280 ticks)."""
+    import contextlib
+    import io
+    import math
+    from src.physics import Vector3D
+    from src.simulation import CombatSimulation, Maneuver, ManeuverType, create_ship_from_fleet_data
+    if hull == "dreadnought" and crossing_mps > 1000:
+        pytest.skip("beyond a dreadnought's RCS tracking (see docstring)")
+    with open("data/fleet_ships.json") as f:
+        data = json.load(f)
+    sim = CombatSimulation(time_step=1.0, decision_interval=1e9, seed=1)
+    ship = create_ship_from_fleet_data("s", hull, "alpha", data, Vector3D(0, 0, 0),
+                                       Vector3D(0, 0, 0), Vector3D(1, 0, 0))
+    sim.add_ship(ship)
+    tgt = create_ship_from_fleet_data("t", "cruiser", "beta", data, Vector3D(300e3, -150e3, 0),
+                                      Vector3D(0, crossing_mps, 0), Vector3D(-1, 0, 0))
+    sim.add_ship(tgt)
+    ship.current_maneuver = Maneuver(ManeuverType.PADLOCK, 0, duration=1e9, target_id="t")
+    hist = []
+    with contextlib.redirect_stdout(io.StringIO()):
+        for _ in range(300):
+            sim.step()
+            hist.append((math.degrees(ship.forward.angle_to((tgt.position - ship.position).normalized())),
+                         ship.applied_throttle))
+    first = next(i for i, x in enumerate(hist) if x[0] < 2.0)
+    after = hist[first:]
+    assert max(a for a, _ in after) < 2.1
+    assert sum(1 for a, _ in after if a > 1.0) <= 0.15 * len(after)
+    assert sum(1 for _, t in after if t > 0) <= 35

@@ -3227,10 +3227,16 @@ class CombatSimulation:
                         # Thrust vectoring while turning (or still carrying a
                         # rate RCS cannot stop), then RCS: see
                         # ATTITUDE_TV_HANDOVER_DEG.
-                        needs_rotation = self._attitude_needs_tv(ship, angle_to_target, dt)
+                        rel = target.position - ship.position
+                        r2 = rel.dot(rel)
+                        los_rate = (rel.cross(target.velocity - ship.velocity) * (1.0 / r2)
+                                    if r2 > 1.0 else Vector3D(0.0, 0.0, 0.0))
+                        needs_rotation = self._attitude_needs_tv(ship, angle_to_target, dt,
+                                                                 target_rate=los_rate)
                         self._rotate_ship_toward(
                             ship, target_dir, dt, engines_on=needs_rotation,
-                            handover_rad=math.radians(ATTITUDE_TV_HANDOVER_DEG))
+                            handover_rad=math.radians(ATTITUDE_TV_HANDOVER_DEG),
+                            target_rate=los_rate)
                         # Use small throttle for rotation (thrust vectoring), zero when aligned
                         throttle = 0.05 if needs_rotation else 0.0
                     else:
@@ -3377,6 +3383,7 @@ class CombatSimulation:
         dt: float,
         engines_on: bool = True,
         handover_rad: Optional[float] = None,
+        target_rate: Optional[Vector3D] = None,
     ) -> None:
         """
         Rotate ship to face a direction using bang-bang control.
@@ -3395,6 +3402,11 @@ class CombatSimulation:
                 finish on RCS inside this angle of the target: brake on thrust
                 vectoring so the ship arrives there at a rate RCS can stop in
                 the rest of the turn (a two-stage stopping profile).
+            target_rate: The aim direction's own angular velocity (rad/s,
+                world frame) - a PADLOCK target's line of sight swings as the
+                ships move. The turn then plans relative to the moving aim
+                and arrives MATCHING its rate (tracking it) instead of
+                stopping dead and falling behind.
         """
         ship.attitude_commanded = True
         current_forward = ship.forward
@@ -3462,6 +3474,12 @@ class CombatSimulation:
                 phase="accelerate"
             )
 
+        if target_rate is not None:
+            self._track_turn(ship, target_normalized, rotation_axis, angle_to_target,
+                             target_rate, dt, engines_on, handover_rad,
+                             angular_accel, max_angular_vel, authority, w_mag, axis_prev)
+            return
+
         # Split the carried spin: w_par about the new axis (negative = still
         # turning AWAY from the target), w_perp sideways. The sideways part is
         # braked first, out of the same per-tick authority.
@@ -3494,20 +3512,9 @@ class CombatSimulation:
             if angular_accel > 0.0:
                 w_cmd = angular_accel * (-0.5 * dt + math.sqrt(
                     0.25 * dt * dt + 2.0 * angle_to_target / angular_accel))
-                if (handover_rad is not None and engines_on
-                        and angle_to_target > handover_rad):
-                    # Two-stage stop: thrust vectoring down to the rate RCS
-                    # can stop from the handover angle, then RCS. Flying w
-                    # for a tick and braking to w_h covers about
-                    # (w^2 - w_h^2)/(2a) + w*dt/2 = angle - handover.
-                    a_rcs, _ = self._get_rotation_params(ship, False)
-                    if a_rcs > 0.0:
-                        w_h = a_rcs * (-0.5 * dt + math.sqrt(
-                            0.25 * dt * dt + 2.0 * handover_rad / a_rcs))
-                        w_cmd = angular_accel * (-0.5 * dt + math.sqrt(
-                            0.25 * dt * dt
-                            + 2.0 * (angle_to_target - handover_rad) / angular_accel
-                            + (w_h / angular_accel) ** 2))
+                if handover_rad is not None and engines_on:
+                    w_cmd = min(w_cmd, self._handover_rate(
+                        ship, angle_to_target, handover_rad, angular_accel, dt))
             else:
                 w_cmd = current_omega
             w_cmd = min(w_cmd, max_angular_vel)
@@ -3553,7 +3560,79 @@ class CombatSimulation:
         ship.angular_axis = (spin * (1.0 / ship.angular_velocity_rad_s)
                              if ship.angular_velocity_rad_s > 1e-12 else None)
 
-    def _attitude_needs_tv(self, ship: ShipCombatState, angle_rad: float, dt: float) -> bool:
+    def _track_turn(self, ship: ShipCombatState, target: Vector3D, rotation_axis: Vector3D,
+                    angle: float, target_rate: Vector3D, dt: float, engines_on: bool,
+                    handover_rad: Optional[float], angular_accel: float,
+                    max_angular_vel: float, authority: float, w_mag: float,
+                    axis_prev: Optional[Vector3D]) -> None:
+        """
+        _rotate_ship_toward toward an aim that is itself turning at
+        ``target_rate``: the wanted spin is the aim's rate (across the nose)
+        plus the bang-bang closing rate for the remaining angle (two-stage
+        when handing over to RCS); the carried spin moves toward it by at
+        most one tick's authority (as a vector), and the nose turns by the
+        new spin. On target it settles onto the aim's rate - tracking it.
+        """
+        fwd = ship.forward
+        tr = target_rate - fwd * target_rate.dot(fwd)
+        w_vec = axis_prev * w_mag if (axis_prev is not None and w_mag > 0.0) else Vector3D(0.0, 0.0, 0.0)
+        if angle < 0.01:
+            w_close = 0.0
+        else:
+            w_close = angular_accel * (-0.5 * dt + math.sqrt(
+                0.25 * dt * dt + 2.0 * angle / angular_accel)) if angular_accel > 0.0 else 0.0
+            if handover_rad is not None and engines_on and angular_accel > 0.0:
+                w_close = min(w_close, self._handover_rate(
+                    ship, angle, handover_rad, angular_accel, dt))
+            w_close = min(w_close, max_angular_vel)
+        desired = tr + rotation_axis * w_close
+        delta = desired - w_vec
+        dm = delta.magnitude
+        if dm > authority and dm > 0.0:
+            delta = delta * (authority / dm)
+        spin = w_vec + delta
+        # Do not swing past the aim on this tick when the closing rate is
+        # within one tick's authority: land on it (moving with it).
+        closing = (spin - tr).dot(rotation_axis)
+        if angle > 0.0 and closing * dt > angle and dm <= authority + 1e-12:
+            rotation_vec = rotation_axis * angle + tr * dt
+        else:
+            rotation_vec = spin * dt
+        amount = rotation_vec.magnitude
+        if amount > 0.0:
+            axis = rotation_vec * (1.0 / amount)
+            ks = ship.kinematic_state
+            ks.forward = ks.forward.rotate_around_axis(axis, amount).normalized()
+            ks.up = ks.up.rotate_around_axis(axis, amount).normalized()
+        if ship.rotation_state is not None:
+            ship.rotation_state.phase = "track"
+        ship.angular_velocity_rad_s = spin.magnitude
+        ship.angular_axis = spin * (1.0 / spin.magnitude) if spin.magnitude > 1e-12 else None
+
+    def _handover_rate(self, ship: ShipCombatState, angle: float, handover_rad: float,
+                       angular_accel: float, dt: float) -> float:
+        """
+        The fastest closing rate a turn that hands over to RCS inside
+        ``handover_rad`` may carry at ``angle`` from its aim: inside the
+        handover angle the rate RCS can stop in what is left (thrust
+        vectoring, still on because the rate was too high, brakes down to it
+        instead of speeding up again); outside it, thrust vectoring braking
+        down to that rate at the handover angle (a two-stage stop: flying w
+        for a tick and braking to w_h covers about (w^2 - w_h^2)/(2a) + w*dt/2
+        = angle - handover).
+        """
+        a_rcs, _ = self._get_rotation_params(ship, False)
+        if a_rcs <= 0.0:
+            return float('inf')
+        if angle <= handover_rad:
+            return a_rcs * (-0.5 * dt + math.sqrt(0.25 * dt * dt + 2.0 * angle / a_rcs))
+        w_h = a_rcs * (-0.5 * dt + math.sqrt(0.25 * dt * dt + 2.0 * handover_rad / a_rcs))
+        return angular_accel * (-0.5 * dt + math.sqrt(
+            0.25 * dt * dt + 2.0 * (angle - handover_rad) / angular_accel
+            + (w_h / angular_accel) ** 2))
+
+    def _attitude_needs_tv(self, ship: ShipCombatState, angle_rad: float, dt: float,
+                           target_rate: Optional[Vector3D] = None) -> bool:
         """
         Whether a PADLOCK / token-throttle HEADING turn keeps thrust
         vectoring (a token burn) engaged this tick: outside
@@ -3563,6 +3642,12 @@ class CombatSimulation:
         if angle_rad > math.radians(ATTITUDE_TV_HANDOVER_DEG):
             return True
         w = ship.angular_velocity_rad_s or 0.0
+        if target_rate is not None:
+            # relative to the aim's own swing
+            axis = getattr(ship, 'angular_axis', None)
+            spin = axis * w if (axis is not None and w > 0.0) else Vector3D(0.0, 0.0, 0.0)
+            fwd = ship.forward
+            w = (spin - (target_rate - fwd * target_rate.dot(fwd))).magnitude
         if w <= 0.0:
             return False
         a_rcs, _ = self._get_rotation_params(ship, False)
