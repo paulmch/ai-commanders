@@ -111,30 +111,37 @@ UNFORESEEN_ACCEL_FRACTION = 0.018
 #       a burn along the nose, which tracks part of every jink, and between
 #       threats it weaves around its course anyway: rounds lose less to the
 #       dodge itself (the conversion roll charges EVASIVE x0.6 on top).
+# The fraction depends on whether the dodger is already REACTING at the
+# shot (its evasion flying EVADE / TANK / BRACE / RUN / PRESENT -
+# TargetMotion.reacting) or calm (flying its base maneuver, or EVASIVE's
+# WOBBLE). A round fired at a calm dodger provokes its own dodge: when it
+# enters the threat horizon the ship swings until THAT round's predicted
+# miss clears, so the dodge is aimed at it; a ship already busy with other
+# rounds moves for them, and this one finds it less deliberately out of the
+# way. Live engine, harness rounds at 100-299 km: calm dodgers under fleet
+# fire were hit 2.4-11x less than the single-fraction model forecast,
+# reacting ones about as forecast (0.57-1.19x).
 # Calibrated together with JINK_ACCEL_FRACTION (maximum likelihood) on the
-# live engine: 41k rounds from 1, 2, 4 and 8 shooters at frigates..
-# dreadnoughts flying PADLOCK + dodge, HOLD_RANGE + dodge and EVASIVE,
-# 40-400 km (scripts/fire_control_calibration.py harness). Refitted
-# (0.10 -> 0.13, 0.06 -> 0.07; JINK unchanged) when rotation started carrying
-# its angular momentum: a jinking hull can no longer reverse a swing in one
-# tick, so it commits to each jink and strays farther from the lead. Per
-# maneuver class, shooter count and 100 km bucket (30+ hits) the forecast is
-# 0.74-1.29x of what landed (merged engine, 45k harness rounds, with the
-# bounded dodge burn below), except EVASIVE alone at 200-299 km (0.60x: all 50
-# of its hits are on dreadnoughts, in four engagements).
-DODGE_ACCEL_FRACTION = 0.13
-EVASIVE_DODGE_ACCEL_FRACTION = 0.07
+# even seeds of the live-engine harness (42k rounds from 1, 2, 4 and 8
+# shooters at frigates..dreadnoughts flying PADLOCK + dodge, HOLD_RANGE +
+# dodge and EVASIVE, 40-400 km; scripts/fire_control_calibration.py
+# harness), validated on the odd ones: held-out log-likelihood +348 against
+# one fraction per maneuver (PADLOCK dodgers +198, HOLD_RANGE +98, EVASIVE
+# +52). Buckets still outside 1.5x are named in
+# tests/test_fire_control_calibration.py RESIDUALS.
+DODGE_ACCEL_FRACTION = 0.11            # overlay, reacting at the shot
+DODGE_CALM_ACCEL_FRACTION = 0.23       # overlay, calm at the shot
+EVASIVE_DODGE_ACCEL_FRACTION = 0.06    # EVASIVE, reacting
+EVASIVE_CALM_ACCEL_FRACTION = 0.14     # EVASIVE, weaving (WOBBLE)
 
 # The evade overlay's dodge (and a jink in progress) is a burn of bounded
 # length: it stops once the round's predicted miss clears, so beyond
 # DODGE_BURN_S of the round's time to go its displacement grows linearly,
-# a * tau * (T - tau / 2), not as a * T^2 / 2. With the T^2 form the forecast
-# was 0.55x / 0.39x of what landed under fleet fire at 300-399 / 400-499 km
-# and 0.64x on a lone shooter at 200-299 km. Fitted (maximum likelihood) on
-# the even harness seeds, validated on the odd ones: held-out log-likelihood
-# +21 against the T^2 form (a cap on the displacement and a soft saturation
-# were no better than T^2). The EVASIVE maneuver keeps the T^2 form: it
-# weaves continuously, and bounding it fitted worse.
+# a * tau * (T - tau / 2), not as a * T^2 / 2. With the calm / reacting
+# fractions above, held-out log-likelihood +7 against the T^2 form (PADLOCK
+# dodgers +3, HOLD_RANGE +4: weak, but the same sign on both bases; a cap on
+# the displacement and a soft saturation were no better than T^2). The
+# EVASIVE maneuver keeps the T^2 form: it weaves continuously.
 DODGE_BURN_S = 20.0
 
 # A dodger whose evasion is flying it RIGHT NOW (mid-jink) is already burning
@@ -206,6 +213,9 @@ class TargetMotion:
             the lead extrapolates) still shows the last order's burn: the
             part, across the line of fire, that the order in force has
             already ended. Charged like a pending burn lit now.
+        reacting: A dodger whose evasion is reacting to a threat at the shot
+            (EVADE / TANK / BRACE / RUN / PRESENT) rather than flying its
+            base maneuver (or EVASIVE's WOBBLE).
     """
     accel_ms2: float
     dodges: bool = False
@@ -217,6 +227,7 @@ class TargetMotion:
     pending_burn_ms2: float = 0.0
     pending_burn_in_s: float = 0.0
     stale_burn_ms2: float = 0.0
+    reacting: bool = False
 
 
 def displacement_sigma_m(time_of_flight_s: float, motion: TargetMotion) -> float:
@@ -239,7 +250,11 @@ def displacement_sigma_m(time_of_flight_s: float, motion: TargetMotion) -> float
         else:
             burn_t2 = DODGE_BURN_S * (td - DODGE_BURN_S / 2.0)
         if t >= motion.dodge_min_time_s:
-            k = EVASIVE_DODGE_ACCEL_FRACTION if motion.evasive else DODGE_ACCEL_FRACTION
+            if motion.evasive:
+                k = (EVASIVE_DODGE_ACCEL_FRACTION if motion.reacting
+                     else EVASIVE_CALM_ACCEL_FRACTION)
+            else:
+                k = DODGE_ACCEL_FRACTION if motion.reacting else DODGE_CALM_ACCEL_FRACTION
             throttle = max(0.0, min(1.0, motion.dodge_throttle))
             sigma_dodge = k * a * throttle * burn_t2
         jink = max(0.0, float(motion.jink_accel_ms2))

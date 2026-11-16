@@ -528,6 +528,7 @@ def fire_control_record(solution: FiringSolution) -> Optional[dict]:
         'pend': round(motion.pending_burn_ms2, 3),
         'pend_in': round(motion.pending_burn_in_s, 2),
         'stale': round(motion.stale_burn_ms2, 3),
+        'react': motion.reacting,
     }
 
 
@@ -2542,6 +2543,8 @@ class CombatSimulation:
             pending_burn_ms2=pending,
             pending_burn_in_s=pending_in,
             stale_burn_ms2=stale,
+            reacting=bool(dodges and getattr(target, 'execution_mode', None)
+                          in ('EVADE', 'TANK', 'BRACE', 'RUN', 'PRESENT')),
         )
 
     def gun_firing_solution(
