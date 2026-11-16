@@ -152,6 +152,49 @@ was the 1 ms projectile micro-step loop, which built about 30 temporary vectors 
 `scripts/perf_check.py` re-runs the golden set and must be re-recorded after any change that
 alters battles.
 
+### Rotation with real angular momentum
+
+The engine kept only a scalar spin rate and re-pointed the rotation axis every tick, so a ship
+could stop or reverse a spin instantly: a battleship was measured reversing at about 850 times
+its thruster authority. Merged on November 16 after an independent review:
+
+- **Spin is a vector.** Its change per tick is limited by the authority available (thrust
+  vectoring or RCS); a spin too fast to stop overshoots and comes back; a tick with no attitude
+  command brakes at RCS authority instead of zeroing. Ninety-degree turns from rest match the
+  hull table within a tick on thrust vectoring and 1.5 % on RCS.
+- **Two-stage stop.** The first version made ships under PADLOCK hunt across the 2-degree
+  handover from thrust vectoring to RCS (a frigate crossed it about 355 times in 900 s and gained
+  266 m/s holding a "no thrust" order). The turn is now planned so RCS can finish it; the
+  reviewer's repro shows one crossing on every hull.
+- **Evasion respects turn time.** RUN and PRESENT choose an attitude the hull can reach before
+  the torpedo arrives. Capital ships now run for 4-20 s where they used to run 26-48 s; for a
+  lone battleship or cruiser against a six-round salvo, hits, energy taken and deaths are
+  unchanged.
+- **Forecast inputs.** The aim forecast charges a burn the lead still extrapolates after a new
+  order (in the regression case it promised 127 hits of 200 where none landed) and distinguishes
+  a dodger that is already reacting from one that is calm when the round is fired.
+- **Calibration set rebuilt on the new engine**, bucketed by base maneuver, every harness round
+  kept. The eight LLM battles flown on the old physics moved to a historical file read by one pin.
+
+**What it costs.**
+- Eight calibration buckets are outside the 1.5x tolerance and pinned on their own two-sided
+  bounds (`RESIDUALS` in `tests/test_fire_control_calibration.py`). The largest: a target dodging
+  on PADLOCK under fire from several ships at 200-299 km is hit 2.8 times less than forecast
+  (25 hits in 2,072 rounds). The doctrine now tells commanders so.
+- Against maneuvering targets the nose of a ship on PADLOCK is more than one degree off about
+  half the time (it was 19-28 %), because the line of sight often accelerates faster than RCS can
+  follow. Spinal aim is honestly worse.
+- The doctrine hit table moved, e.g. a dodging frigate 35 % to 19 % at 100 km. Gun hit rates per
+  fleet are unchanged within two points; battle-line and gun-line fleets fire fewer rounds and
+  score fewer kills (battle line 14 to 8 over 56 tournament battles).
+- The rule-based captains' margin over the old ones fell from 8-0 to 6-2 on eight mirror
+  battles; they have not been re-tuned for the new turning.
+- About 8 % more CPU on the benchmark set.
+- Two cases remain `xfail` with numbers: a burn begun from a coast, and a plain INTERCEPT re-aimed
+  mid-flight, both of which burn while the nose swings.
+
+The four Sonnet battles below were flown before this merge, on engine `7b8a7e4`.
+
 ### Weapon arcs, turret traverse and point-defence placement
 
 A screenshot showed a point-defence laser firing through the ship's own spinal gun. Until then
@@ -225,7 +268,7 @@ only need outcomes. The committed `data/recordings` folder would shrink from 263
   battle time; `[` and `]` jump between highlights; `scripts/viewer_clip.py` renders a time range
   to MP4 or GIF.
 
-Viewer tests rose from 276 to 386; the Python suite from about 2,430 to 2,934, green on Python
+Viewer tests rose from 276 to 386; the Python suite from about 2,430 to 3,107, green on Python
 3.11 and 3.12.
 
 ## Balance: prices cannot fix the torpedo problem
@@ -286,11 +329,6 @@ wash stayed under the interlock's 0.5 GJ/s limit. The recordings are in
 
 ## Open
 
-- **Rotation physics is parked** on branch `wt5/hunt-rotation`: honest angular momentum (ships can
-  currently reverse a spin far faster than their thrusters allow), evasion that only starts a flip
-  the hull can finish, and a refitted hit-probability model. Two calibration tests are still red:
-  stale old-physics recordings in the fixture, and an ordering issue in how the aim forecast reads
-  a target's orders on the checkpoint tick.
 - **First orders arrive at T+30 s.** Every hull idles for the first interval. Moving the first
   checkpoint to T+0 fails nine tests that pin the schedule and adds a paid round to LLM battles.
 - **Plume.** An impaired crew's "slower response" is not built (only slower weapon cycling). The
