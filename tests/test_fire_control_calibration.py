@@ -63,18 +63,27 @@ FLASH_MIRROR = "p4_new_flash_mirror_150pt"
 # (test_known_residuals_stay_where_they_are): (label, class, 100 km band) ->
 # allowed forecast/observed range.
 RESIDUALS = {
-    # A lone shooter at EVASIVE targets 200-299 km: every one of its 50 hits is
-    # on a dreadnought, in four engagements (17, 15, 12 and 6 hits); the
-    # forecast says ~30 (0.60x). No other hull lands one there.
-    ("harness", "EVASIVE:alone", 2): (0.45, 0.75),
-    # Battle rounds at 400-499 km err in opposite directions by class: INTERCEPT
-    # targets are hit less than forecast (1.53x: the lead takes plain INTERCEPT
-    # as a burn along the nose for the whole flight), coasting PADLOCK targets
-    # more (0.65x: the unforeseen-maneuver term, fitted on order changes at
-    # shorter range, over-charges the longest flights). Neither a cap nor a
-    # power law on that term fitted the battles better than T^2 held out.
-    ("battle", "INTERCEPT", 4): (1.3, 1.8),
+    # A lone shooter at EVASIVE targets 200-299 km: every one of its hits is on
+    # a dreadnought, in four engagements; the forecast is 0.65x.
+    ("harness", "EVASIVE:alone", 2): (0.5, 0.8),
+    # Dodgers under a whole fleet's fire (2-8 shooters), even after the calm /
+    # reacting split (firecontrol.DODGE_CALM_ACCEL_FRACTION): at 200-299 km
+    # PADLOCK + dodge targets are hit 3.1x less than forecast and EVASIVE ones
+    # 1.7x less; at 400-499 km both 1.5x more. The 200-299 km gap is carried
+    # by whole engagements (13 of 17 with a forecast of 2+ hits got under
+    # half), nothing visible at the shot separates them, and the doctrine
+    # tells commanders (prompts.GUN_PHYSICS_REFERENCE).
+    ("harness", "dodge:PADLOCK:fleet", 2): (2.6, 3.7),
+    ("harness", "EVASIVE:fleet", 2): (1.45, 2.0),
+    ("harness", "dodge:PADLOCK:fleet", 4): (0.45, 0.85),
+    ("harness", "EVASIVE:fleet", 4): (0.45, 0.85),
+    # Battle rounds at long range on targets that do not burn: coasting PADLOCK
+    # targets at 400-499 km (0.65x) and attitude-only HEADING targets at
+    # 300-399 km (0.66x) are hit more than forecast - the unforeseen-maneuver
+    # term, fitted on order changes at shorter range, over-charges the longest
+    # flights; neither a cap nor a power law on it fitted better held out.
     ("battle", "PADLOCK", 4): (0.5, 0.8),
+    ("battle", "HEADING:attitude", 3): (0.5, 0.85),
 }
 
 
@@ -194,7 +203,7 @@ def test_the_flash_mirror_dodgers_are_the_known_residual(historical):
     PADLOCK / HOLD_RANGE + evade 'dodge' under a whole fleet's fire. Not one
     of its 188 rounds at 100-300 km landed. The conversion number alone
     promised ~96 hits there and the single-shooter dodge model ~30; the
-    forecast now says ~13. The rest is the residual named at
+    forecast now says ~7. The rest is the residual named at
     firecontrol.JINK_ACCEL_FRACTION: those LLM-flown dodgers moved 2-4x
     farther during a flight than seeded engine dodgers under the same fire,
     which nothing visible at fire time predicts - the doctrine tells
@@ -206,7 +215,7 @@ def test_the_flash_mirror_dodgers_are_the_known_residual(historical):
     n, hits, new, old = _summary(mid)
     assert (n, hits) == (188, 0)
     assert old > 80
-    assert 8 < new < 20, new
+    assert 5 < new < 15, new
     near = [r for r in mirror if r["range_km"] < 100]
     n, hits, new, _ = _summary(near)
     assert hits >= 5 and 1.0 < new / hits < 2.0, (n, hits, new)
@@ -222,22 +231,34 @@ def test_doctrine_states_the_residual(historical):
     claim = f"{hits} of {n} rounds at 100-300km landed where this model promised ~{new:.0f}"
     for doctrine in (GUN_PHYSICS_REFERENCE, ADMIRAL_GUN_DOCTRINE):
         assert claim in " ".join(doctrine.split())
+    # ... and the seeded fleet-fire residuals (RESIDUALS) they can expect.
+    lo, hi = RESIDUALS[("harness", "dodge:PADLOCK:fleet", 2)]
+    assert lo <= 3.0 <= hi
+    lo, hi = RESIDUALS[("harness", "EVASIVE:fleet", 2)]
+    assert lo <= 1.7 <= hi
+    assert "3x less than shown" in " ".join(GUN_PHYSICS_REFERENCE.split())
+    assert "hit 3x less than shown (EVADE maneuver 1.7x less)" in " ".join(ADMIRAL_GUN_DOCTRINE.split())
 
 
 def test_mid_jink_dodgers_are_harder_and_the_forecast_says_so(shots):
-    """Rounds that find a dodger already jinking (its drive burning across
-    the line of fire, which its lead ignores) land less often than rounds at
-    a dodger between jinks - fleet fire keeps a dodger jinking - and the
-    forecast follows (JINK_ACCEL_FRACTION)."""
-    def rate(jinking):
+    """PADLOCK + dodge targets at 100-300 km, by their state at the shot:
+    a dodger caught mid-jink (its drive burning across the line of fire,
+    which its lead ignores - JINK_ACCEL_FRACTION) is hit less often than one
+    reacting but not burning across (TANK, BRACE ...), and a CALM one -
+    flying its base maneuver, so this round provokes a dodge aimed at it
+    (DODGE_CALM_ACCEL_FRACTION) - least of all; the forecast follows the
+    same order (0.035 < 0.10 < 0.29 landed; 0.07 < 0.11 < 0.37 forecast)."""
+    def rate(sel):
         g = [r for r in shots if r["harness"] and r["class"] == "dodge:PADLOCK"
-             and (r["jink"] > 0.5) == jinking and 100 <= r["range_km"] < 300]
+             and sel(r) and 100 <= r["range_km"] < 300]
         n, hits, new, _ = _summary(g)
         assert n >= 500
         return hits / n, new / n
-    (obs_j, new_j), (obs_c, new_c) = rate(True), rate(False)
-    assert obs_j < obs_c
-    assert new_j < new_c
+    calm = rate(lambda r: not r["react"])
+    jinking = rate(lambda r: r["jink"] > 0.5)
+    reacting = rate(lambda r: r["react"] and r["jink"] <= 0.5)
+    assert calm[0] < jinking[0] < reacting[0]
+    assert calm[1] < jinking[1] < reacting[1]
 
 
 def test_the_old_number_was_the_problem(shots):

@@ -847,3 +847,30 @@ def test_every_order_that_ends_a_burn_is_forecast_on_its_first_tick(to):
 def test_a_burn_while_turning_is_forecast_on_its_first_tick(first, to):
     n, hits, forecast, sd = _switch_check(to, seeds=range(1, 25), first=first)
     assert abs(hits - forecast) <= 3.0 * sd + 2.0, (to, n, hits, forecast)
+
+
+def test_reachable_attitude_is_as_far_as_the_turn_reaches_and_no_farther():
+    """_reachable_attitude, the reachability check behind armour
+    presentation: at rest it is the closed-form bang-bang reach, and from a
+    spin the attitude it returns can be reached in the time while one 10%
+    farther cannot (so halving the check, or the time, is caught here)."""
+    import math
+    from src.physics import Vector3D
+    sim, ship = _battleship_sim()
+    alpha, w_max = sim._get_rotation_params(ship, True)
+    target = Vector3D(-1, 0.001, 0).normalized()
+    for t in (10.0, 20.0, 40.0):
+        got = sim._reachable_attitude(ship, target, t)
+        reach = alpha * t * t / 4 if t <= 2 * w_max / alpha else w_max * (t - w_max / alpha)
+        assert ship.forward.angle_to(got) == pytest.approx(min(reach, math.pi), rel=1e-6)
+        assert sim._turn_time_to(ship, got) == pytest.approx(t, rel=1e-3)
+    for _ in range(8):                      # spin up, then ask again
+        sim._rotate_ship_toward(ship, Vector3D(0, 1, 0), 1.0, engines_on=True)
+    target = ship.forward.rotate_around_axis(Vector3D(0, 0, 1), math.radians(150))
+    t = 25.0
+    got = sim._reachable_attitude(ship, target, t)
+    ang = ship.forward.angle_to(got)
+    axis = ship.forward.cross(target).normalized()
+    farther = ship.forward.rotate_around_axis(axis, ang * 1.1)
+    assert sim._turn_time_to(ship, got) <= t
+    assert sim._turn_time_to(ship, farther) > t

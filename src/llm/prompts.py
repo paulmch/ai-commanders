@@ -994,16 +994,19 @@ PROJECTILE PHYSICS (for your calculations):
 HIT PROBABILITY PER ROUND vs a destroyer (spinal 9.9 km/s / turret 6.0 km/s):
                    50km    100km   150km   200km   300km   400km
 - holding course:  82/79%  64/57%  48/37%  36/20%  18/4%   7/1%
-- evade dodge:     82/70%  50/19%  20/4%   7/1%    1/0%    0/0%
+- evade dodge:     82/57%  34/7%   9/1%    2/0%    0/0%    0/0%
 - dodge, mid-jink: 74/36%  20/3%   4/1%    1/0%    0/0%    0/0%
-- EVADE maneuver:  49/46%  35/22%  21/6%   10/2%   2/0%    0/0%
-"Mid-jink" is a dodger caught already burning off another round - what your other
-ships' fire does to it. Agile hulls escape sooner (a dodging frigate: spinal 35% at
-100km, 10% at 150km), heavy ones later (a dodging battleship: 24% at 200km, 6% at
-300km). The P(hit) on your ENEMIES lines is this model for the live geometry - fire
+- EVADE maneuver:  49/41%  29/10%  11/2%   4/0%    1/0%    0/0%
+"Evade dodge" is a dodger not yet reacting when you fire: your round makes it jink,
+aimed at that very round. "Mid-jink" is one caught already burning off another round
+- what your other ships' fire does to it. Agile hulls escape sooner (a dodging
+frigate: spinal 19% at 100km, 4% at 150km), heavy ones later (a dodging battleship:
+11% at 200km, 2% at 300km). The P(hit) on your ENEMIES lines is this model for the live geometry - fire
 on it, and close range before you shoot at a dodger. Under a whole fleet's fire
 dodgers do even better than shown: in a recorded fleet battle where every ship flew
-evade dodge, 0 of 188 rounds at 100-300km landed where this model promised ~13.
+evade dodge, 0 of 188 rounds at 100-300km landed where this model promised ~7, and in
+seeded runs a PADLOCK + dodge target under fire from 2-8 ships at 200-300km was hit
+3x less than shown (an EVADE-maneuver target 1.7x less).
 - Closing speed RAISES hit chance (shorter flight, less time to dodge); crossing
   (lateral) speed lowers it, and an opening range lowers it most. Spinal vs a
   destroyer holding course at 200km: 36% at rest, 47% closing at 3 km/s, 28%
@@ -2856,11 +2859,12 @@ GUNNERY:
 - Spinal weapons need nose-on alignment (<30 deg to target); turrets fire over a 180 deg arc.
 - Range is accuracy: a round hits only if its target is still near the aim point when it
   arrives, and a ship flying EVADE or evade dodge/full jinks off rounds it sees coming.
-  Per-round P(hit) vs a dodging destroyer: spinal 50% at 100 km, 7% at 200 km, 1% at
+  Per-round P(hit) vs a dodging destroyer: spinal 34% at 100 km, 2% at 200 km, 0% at
   300 km - and a dodger your fleet already keeps jinking is far harder (20% at 100 km).
   Massed fire does not fix that: in a recorded fleet battle where every ship flew evade
-  dodge, 0 of 188 rounds at 100-300km landed where this model promised ~13. Do not plan
-  gun fights at dodgers beyond ~150 km.
+  dodge, 0 of 188 rounds at 100-300km landed where this model promised ~7; in seeded
+  runs a dodger under fire from 2-8 ships at 200-300 km was hit 3x less than shown
+  (EVADE maneuver 1.7x less). Do not plan gun fights at dodgers beyond ~150 km.
 - Cross-section matters less: broadside is ~1.5x the hit chance of nose-on at 200 km
   (~1.2x at 100 km). Keep enemies in FRONT of your ships; if one flanks, reorient the
   affected ships (PADLOCK toward it).

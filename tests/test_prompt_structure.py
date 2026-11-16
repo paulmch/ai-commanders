@@ -116,9 +116,9 @@ class TestPromptMatchesSimulation:
         ranges = (50, 100, 150, 200, 300, 400)
         table = {
             "holding course": ((82, 79), (64, 57), (48, 37), (36, 20), (18, 4), (7, 1)),
-            "evade dodge": ((82, 70), (50, 19), (20, 4), (7, 1), (1, 0), (0, 0)),
+            "evade dodge": ((82, 57), (34, 7), (9, 1), (2, 0), (0, 0), (0, 0)),
             "dodge, mid-jink": ((74, 36), (20, 3), (4, 1), (1, 0), (0, 0), (0, 0)),
-            "EVADE maneuver": ((49, 46), (35, 22), (21, 6), (10, 2), (2, 0), (0, 0)),
+            "EVADE maneuver": ((49, 41), (29, 10), (11, 2), (4, 0), (1, 0), (0, 0)),
         }
         for mode, cells in table.items():
             row = f"- {mode}: " + " ".join(f"{s}/{t}%" for s, t in cells)
@@ -131,10 +131,10 @@ class TestPromptMatchesSimulation:
                         f"{muzzle} km/s) but the gate computes {actual:.1f}%. Update "
                         f"GUN_PHYSICS_REFERENCE or the fire-control model.")
         examples = (
-            ("frigate", 100, 35, "a dodging frigate: spinal 35% at 100km"),
-            ("frigate", 150, 10, "10% at 150km"),
-            ("battleship", 200, 24, "a dodging battleship: 24% at 200km"),
-            ("battleship", 300, 6, "6% at 300km"),
+            ("frigate", 100, 19, "a dodging frigate: spinal 19% at 100km"),
+            ("frigate", 150, 4, "4% at 150km"),
+            ("battleship", 200, 11, "a dodging battleship: 11% at 200km"),
+            ("battleship", 300, 2, "2% at 300km"),
         )
         for hull, range_km, claimed, text in examples:
             assert text in doctrine
@@ -143,8 +143,8 @@ class TestPromptMatchesSimulation:
         assert "x0.6" in doctrine  # EVADE's conversion penalty (firecontrol)
 
         admiral = flat(ADMIRAL_GUN_DOCTRINE)
-        assert "spinal 50% at 100 km, 7% at 200 km, 1% at 300 km" in admiral
-        for range_km, claimed in ((100, 50), (200, 7), (300, 1)):
+        assert "spinal 34% at 100 km, 2% at 200 km, 0% at 300 km" in admiral
+        for range_km, claimed in ((100, 34), (200, 2), (300, 0)):
             actual = _doctrine_p_hit("destroyer", "evade dodge", range_km, 9.9) * 100
             assert abs(actual - claimed) <= 1.0, (range_km, actual)
         assert "far harder (20% at 100 km)" in admiral

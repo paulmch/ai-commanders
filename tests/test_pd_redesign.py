@@ -467,8 +467,8 @@ class TestBalance:
 
 class TestWallOfShips:
 
-    def _salvo_defense(self, fleet_data, n_escorts, salvo=4):
-        sim = CombatSimulation(seed=23, time_step=0.5)
+    def _salvo_defense(self, fleet_data, n_escorts, salvo=4, seed=23):
+        sim = CombatSimulation(seed=seed, time_step=0.5)
         victim = create_ship_from_fleet_data(
             "victim", "battleship", "alpha", fleet_data,
             position=Vector3D(0, 0, 0), forward=Vector3D(1, 0, 0))
@@ -503,21 +503,20 @@ class TestWallOfShips:
         return sim.metrics.total_torpedo_hits
 
     def test_leakage_decreases_with_escort_count(self, fleet_data):
-        """4-round salvo at an evading battleship, 1200 km out: 4 / 4 / 3 hit
-        behind 0 / 4 / 8 escorts. (With weapon arcs about half the turrets
-        bear on one direction, and a battleship that can only turn as fast as
-        its thrusters allow dodges a blinded round only with time: 4 escorts
-        blind 2 of the 4 but stop none; it takes 8. On the instant-flip engine
-        it was 4 / 3 / 2.)"""
-        hits_alone = self._salvo_defense(fleet_data, 0)
-        hits_screen = self._salvo_defense(fleet_data, 4)
-        hits_wall = self._salvo_defense(fleet_data, 8)
-        assert hits_alone > 0, (
-            "torpedoes must still get through against a lone capital ship"
-        )
-        assert hits_screen <= hits_alone, "4 escorts must never leak more"
-        assert hits_wall < hits_alone, "an 8-escort wall must reduce leakage"
-        assert hits_wall <= hits_screen, "more escorts must never leak more"
+        """4-round salvo at an evading battleship, 1200 km out. Measured on
+        seeds 21-32: 4 / 4 / 3 hits behind 0 / 4 / 8 escorts on EVERY seed
+        (at 350 km 4 / 4 / 4). With weapon arcs about half the turrets bear
+        on one direction, and a battleship that can turn only as fast as its
+        thrusters allow dodges a blinded round only with time: 4 escorts
+        blind rounds but stop none; it takes 8. (Instant-flip engine:
+        4 / 3 / 2.) Pinned on three of those seeds."""
+        for seed in (21, 25, 29):
+            hits_alone = self._salvo_defense(fleet_data, 0, seed=seed)
+            hits_screen = self._salvo_defense(fleet_data, 4, seed=seed)
+            hits_wall = self._salvo_defense(fleet_data, 8, seed=seed)
+            assert hits_alone == 4, "torpedoes must still get through against a lone capital ship"
+            assert hits_screen == hits_alone, "4 escorts now stop no round of this salvo"
+            assert hits_wall < hits_alone, "an 8-escort wall must reduce leakage"
 
     @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py
     def test_multiple_hulls_concentrate_on_one_torpedo(self, fleet_data):

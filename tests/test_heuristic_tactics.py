@@ -669,7 +669,11 @@ def test_the_formation_throttle_is_what_the_ship_flies():
 # turns are authority-limited, RUN only when the hull can turn away and back,
 # and the fire-control forecast charges an order's stale drive burn; the
 # legacy captain itself is unchanged.)
-LEGACY_GOLDEN_SHA256 = "544ddfb9ce1d084e5242c780199dd391544b41e6f11e56eec0b6480c776ae68e"
+# (Re-pinned for round 5 of the rotation work: PADLOCK / held-burn HEADING
+# hand over to RCS at a rate RCS can stop, uncommanded ticks brake the spin
+# on RCS, the presentation search is merged/closed-form, and the forecast
+# splits calm and reacting dodgers; legacy captain unchanged.)
+LEGACY_GOLDEN_SHA256 = "57d05a77bb84a0aa0cf3482839ee306c3d29004e3f2cebb84cdf1c8db9d12575"
 
 
 def test_legacy_battle_event_stream_is_pinned(tmp_path):

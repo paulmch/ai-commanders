@@ -163,7 +163,7 @@ DODGE_BURN_S = 20.0
 # checkpoint) the dodgers moved 2-4x farther across the line of fire during a
 # flight (median 0.45 of a*T^2/2, vs 0.10-0.24 in seeded engine runs of the
 # same shape), and 0 of 188 rounds at 100-300 km landed where this model
-# forecasts ~13. Seeded fleet-vs-fleet runs with fixed orders do not
+# forecasts ~7. Seeded fleet-vs-fleet runs with fixed orders do not
 # reproduce it (there the forecast is 0.74-0.96x of what landed), so nothing
 # visible at fire time predicts it; the doctrine tells commanders instead
 # (prompts.GUN_PHYSICS_REFERENCE), and tests/test_fire_control_calibration.py
