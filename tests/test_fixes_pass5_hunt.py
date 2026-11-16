@@ -874,3 +874,32 @@ def test_reachable_attitude_is_as_far_as_the_turn_reaches_and_no_farther():
     farther = ship.forward.rotate_around_axis(axis, ang * 1.1)
     assert sim._turn_time_to(ship, got) <= t
     assert sim._turn_time_to(ship, farther) > t
+
+
+@pytest.mark.parametrize("kind", ["HEADING", "HOLD_RANGE", "STANDOFF"])
+def test_a_reissued_order_is_not_charged_a_stale_burn(kind):
+    """Every checkpoint re-sends the standing order as a new Maneuver: a
+    burning target whose order is re-issued unchanged (or re-ordered onto
+    the heading its nose is already on) has no stale burn - only a change of
+    order that ends or turns the burn does."""
+    import contextlib
+    import io
+    from src.physics import Vector3D
+    from src.simulation import CombatSimulation, create_ship_from_fleet_data
+    with open("data/fleet_ships.json") as f:
+        fleet = json.load(f)
+    sim = CombatSimulation(time_step=1.0, decision_interval=30.0, seed=1, weapon_arcs_enabled=False)
+    tgt = create_ship_from_fleet_data("target", "cruiser_torpedo", "beta", fleet,
+                                      position=Vector3D(400e3, 0, 0), forward=Vector3D(0, 1, 0))
+    sh = create_ship_from_fleet_data("shooter", "battleship", "alpha", fleet,
+                                     position=Vector3D(0, 0, 0), forward=Vector3D(1, 0, 0))
+    sim.add_ship(tgt)
+    sim.add_ship(sh)
+    d = Vector3D(0, 1, 0)              # across the line of fire
+    tgt.current_maneuver = _new_order(kind, 0.0, d)
+    with contextlib.redirect_stdout(io.StringIO()):
+        for _ in range(40):
+            sim.step()
+    assert tgt.applied_throttle > 0.0 or kind != "HEADING"
+    tgt.current_maneuver = _new_order(kind, sim.current_time, d)      # same order, new object
+    assert sim.target_motion(tgt, sh).stale_burn_ms2 == 0.0

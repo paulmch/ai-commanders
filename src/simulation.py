@@ -2479,6 +2479,7 @@ class CombatSimulation:
         # HEADING turn at 0.7 m/s^2; six rounds forecast at 0.72 all passed
         # outside the gate.
         pending, pending_in, stale = 0.0, 0.0, 0.0
+        heading_handled = False
         if (ks is not None and maneuver is not None
                 and maneuver.maneuver_type == ManeuverType.HEADING
                 and not maneuver.live_heading and maneuver.heading_direction
@@ -2487,6 +2488,7 @@ class CombatSimulation:
             hd = maneuver.heading_direction
             direction = Vector3D(hd.get('x', 0.0), hd.get('y', 0.0), hd.get('z', 0.0))
             if direction.magnitude > 0.0:
+                heading_handled = True
                 direction = direction.normalized()
                 cone = math.radians(HEADING_BURN_CONE_DEG)
                 angle = target.forward.angle_to(direction)
@@ -2520,13 +2522,21 @@ class CombatSimulation:
         # HEADING start from a coast (they turn first), so the whole old burn
         # is stale. Orders whose lead reads the ORDER (PADLOCK, MAINTAIN,
         # plain INTERCEPT, EVASIVE) are led from the new order at once.
-        if (stale == 0.0 and ks is not None and maneuver is not None
-                and maneuver is not getattr(target, 'flown_maneuver', maneuver)
+        # A re-issued order of the same kind on the same target (every
+        # checkpoint re-sends one) changes no burn: nothing is stale.
+        flown = getattr(target, 'flown_maneuver', maneuver)
+        if (not heading_handled and ks is not None and maneuver is not None
+                and maneuver is not flown
+                and not (flown is not None
+                         and flown.maneuver_type == maneuver.maneuver_type
+                         and flown.target_id == maneuver.target_id
+                         and flown.direction == maneuver.direction
+                         and flown.heading_direction == maneuver.heading_direction)
                 and not (dodges and getattr(target, 'execution_mode', None) in EVASION_OVERLAY_MODES)):
             mt = maneuver.maneuver_type
             reads_drive = (mt in (ManeuverType.HEADING, ManeuverType.BURN, ManeuverType.HOLD_RANGE)
                            or (mt == ManeuverType.INTERCEPT and maneuver.range_keeping))
-            if reads_drive and not (mt == ManeuverType.HEADING and pending_in > 0.0):
+            if reads_drive:
                 expected = Vector3D(0.0, 0.0, 0.0)
                 if mt == ManeuverType.BURN and maneuver.direction and ks.mass_kg > 0:
                     expected = ks.forward * (ks.thrust_n * max(0.0, min(1.0, throttle)) / ks.mass_kg)
