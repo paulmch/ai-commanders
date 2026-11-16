@@ -126,21 +126,29 @@ UNFORESEEN_ACCEL_FRACTION = 0.018
 # even seeds of the live-engine harness (42k rounds from 1, 2, 4 and 8
 # shooters at frigates..dreadnoughts flying PADLOCK + dodge, HOLD_RANGE +
 # dodge and EVASIVE, 40-400 km; scripts/fire_control_calibration.py
-# harness), validated on the odd ones: held-out log-likelihood +345 against
-# one fraction per maneuver (PADLOCK dodgers +194, HOLD_RANGE +98, EVASIVE
+# harness), validated on the odd ones: held-out log-likelihood +348 against
+# one fraction per maneuver (PADLOCK dodgers +198, HOLD_RANGE +98, EVASIVE
 # +52), and positive (+93 to +297) on six more splits by seed, shooter
 # count, base maneuver and hull. Buckets still outside 1.5x are named in
 # tests/test_fire_control_calibration.py RESIDUALS.
-DODGE_ACCEL_FRACTION = 0.10            # overlay, reacting at the shot
+DODGE_ACCEL_FRACTION = 0.11            # overlay, reacting at the shot
 DODGE_CALM_ACCEL_FRACTION = 0.23       # overlay, calm at the shot
 EVASIVE_DODGE_ACCEL_FRACTION = 0.06    # EVASIVE, reacting
 EVASIVE_CALM_ACCEL_FRACTION = 0.14     # EVASIVE, weaving (WOBBLE)
 
-# (A bounded-burn shape for the overlay's dodge - displacement linear in T
-# beyond 20 s - was tried and dropped: held-out log-likelihood +11, +0, -28,
-# +7, +10, +4, +10 on seven splits by seed, shooter count, base maneuver and
-# hull, not the same sign on all of them. The calm / reacting split is +93 to
-# +297 on every one.)
+# The evade overlay's dodge (and a jink in progress) is a burn of bounded
+# length: it stops once the round's predicted miss clears, so beyond
+# DODGE_BURN_S of the round's time to go its displacement grows linearly,
+# a * tau * (T - tau / 2), not as a * T^2 / 2. With the calm / reacting
+# fractions above, held-out log-likelihood against the T^2 form: +11 (even /
+# odd seeds), +0 (seed mod 3), +7 (4-8 shooters -> 1-2), -28 (1-2 shooters ->
+# 4-8), +10 (PADLOCK -> HOLD_RANGE dodgers), +4 (HOLD_RANGE -> PADLOCK), +10
+# (light -> heavy hulls): it holds across base maneuvers but not from one
+# shooter to a fleet. Kept because without it the PADLOCK and HOLD_RANGE
+# dodgers beyond 300 km are forecast 2-6x too low (0.16-0.54x) where with it
+# they are inside tolerance. A cap on the displacement and a soft saturation
+# were no better than T^2. The EVASIVE maneuver keeps the T^2 form.
+DODGE_BURN_S = 20.0
 
 # A dodger whose evasion is flying it RIGHT NOW (mid-jink) is already burning
 # across the line of fire, and its lead does not extrapolate that burn (a
@@ -242,7 +250,11 @@ def displacement_sigma_m(time_of_flight_s: float, motion: TargetMotion) -> float
     sigma_dodge = sigma_jink = sigma_pending = sigma_stale = 0.0
     if motion.dodges:
         td = min(t, motion.dodge_horizon_s)
-        burn_t2 = td * td / 2.0
+        # time-squared while the burn lasts, linear after it ends
+        if motion.evasive or td <= DODGE_BURN_S:
+            burn_t2 = td * td / 2.0
+        else:
+            burn_t2 = DODGE_BURN_S * (td - DODGE_BURN_S / 2.0)
         if t >= motion.dodge_min_time_s:
             if motion.evasive:
                 k = (EVASIVE_DODGE_ACCEL_FRACTION if motion.reacting
