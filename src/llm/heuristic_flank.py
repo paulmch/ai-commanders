@@ -52,6 +52,10 @@ POSITION_RANGE_KM = 250.0
 CUT_CORNER_RANGE_KM = 110.0
 STATION_TOL_KM = 35.0
 STATION_TOL_DEG = 12.0
+# On station: within this band of the station range (km below, above).
+STATION_RANGE_BAND_KM = (60.0, 100.0)
+# The attack run starts once this share of the live flankers is on station.
+ATTACK_QUORUM = 0.75
 # The heavy (holding) group waits at this range from the nearest enemy gun
 # until the flank attack starts, or FLANK_TIMEOUT_S has passed.
 HOLD_WAIT_KM = 230.0
@@ -192,13 +196,17 @@ def flank_state(simulation: Any, faction: str, spec: FlankSpec) -> FlankState:
         if not st.attack_started and spec.kind in ("pincer", "envelop"):
             flankers = [s for s in friends if st.groups.get(s.ship_id, "").startswith("flank")]
             on = [on_station(s, st.stations[st.groups[s.ship_id]], ce, spec) for s in flankers]
-            if (flankers and all(on)) or not flankers or now >= FLANK_TIMEOUT_S:
+            if ((flankers and sum(on) >= ATTACK_QUORUM * len(flankers))
+                    or not flankers or now >= FLANK_TIMEOUT_S):
                 st.attack_started = True
                 st.attack_t = now
         return st
 
 
 def on_station(ship: Any, station: Any, enemy_centre: Any, spec: FlankSpec) -> bool:
+    """On the station's BEARING from the enemy (+-STATION_TOL_DEG) at about
+    its range (STATION_RANGE_BAND_KM): the station moves with the enemy, so
+    a point tolerance alone was met in round 1 only by the timeout."""
     if (ship.position - station).magnitude / 1000.0 <= STATION_TOL_KM:
         return True
     want = (station - enemy_centre).normalized()
@@ -207,7 +215,8 @@ def on_station(ship: Any, station: Any, enemy_centre: Any, spec: FlankSpec) -> b
     if rng <= 0:
         return False
     ang = math.degrees(math.acos(max(-1.0, min(1.0, want.dot(have.normalized())))))
-    return ang <= STATION_TOL_DEG and abs(rng - spec.station_km) <= STATION_TOL_KM
+    lo, hi = STATION_RANGE_BAND_KM
+    return ang <= STATION_TOL_DEG and spec.station_km - lo <= rng <= spec.station_km + hi
 
 
 def point_km(v: Any) -> Dict[str, float]:

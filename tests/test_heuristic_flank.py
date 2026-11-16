@@ -123,3 +123,21 @@ def test_split_boats_take_two_bearings():
     sep = math.degrees(math.acos(a.normalized().dot(b.normalized())))
     assert sep == pytest.approx(2 * F.SPLIT_HALF_DEG, abs=1.0)
     assert m1.maneuver_type == ManeuverType.HEADING and m2.maneuver_type == ManeuverType.HEADING
+
+
+def test_the_attack_starts_on_a_quorum_on_the_station_bearing():
+    # Round-1 flankers reached their bearing (~210-270 s) but the point check
+    # against a moving station was met only by the 330 s timeout.
+    sim = CombatSimulation(seed=5, time_step=1.0)
+    _ship(sim, "a_bb", "battleship", "alpha", (0, 0, 0))
+    for i in range(4):
+        _ship(sim, f"a_f{i}", "frigate", "alpha", (0, 10 * (i + 1), 0))
+    _ship(sim, "b_bb", "battleship", "beta", (500, 0, 0), fwd=(-1, 0, 0))
+    spec = F.FLANK_DOCTRINES["pincer70"]
+    st = F.flank_state(sim, "alpha", spec)
+    enemy = sim.get_ship("b_bb").position
+    bearing = (st.stations["flank_a"] - enemy).normalized()
+    for i in range(3):          # 3 of 4 on the bearing, 40 km short of the station range
+        sim.get_ship(f"a_f{i}").kinematic_state.position = enemy + bearing * ((F.POSITION_RANGE_KM - 40.0) * 1000.0)
+    sim.current_time += 30.0
+    assert F.flank_state(sim, "alpha", spec).attack_started
