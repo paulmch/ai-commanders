@@ -687,7 +687,9 @@ def radiator_command_from_args(args: Dict[str, Any]) -> Dict[str, Any]:
     Shared by LLM captains, heuristic captains and MCP so all get the same rules.
     """
     args = args or {}
-    mode = str(args.get("mode") or "manual").strip().lower()
+    # Quotes tolerated: mode '"auto"' used to fall through to a manual RETRACT.
+    quotes = "\"'`“”‘’"
+    mode = str(args.get("mode") or "manual").strip().strip(quotes).strip().lower()
     if mode == "auto":
         pct = args.get("auto_extend_pct")
         try:
@@ -698,7 +700,8 @@ def radiator_command_from_args(args: Dict[str, Any]) -> Dict[str, Any]:
                 "auto_extend_pct": max(0.0, min(100.0, pct))}
     extend = args.get("extend", False)
     if isinstance(extend, str):
-        extend = extend.strip().lower() in ("true", "1", "yes", "extend", "extended")
+        extend = extend.strip().strip(quotes).strip().lower() in (
+            "true", "1", "yes", "extend", "extended")
     return {"type": "set_radiators", "extend": bool(extend)}
 
 

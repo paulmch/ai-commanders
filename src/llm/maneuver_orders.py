@@ -78,13 +78,32 @@ def parse_number(value: Any, name: str) -> Optional[float]:
     return number
 
 
+# Quote characters a model wraps around an enum value ('"dodge"', "'full'",
+# smart quotes): stripped before matching.
+_ENUM_QUOTES = "\"'`“”‘’"
+
+
+def enum_token(value: Any) -> str:
+    """
+    An enum-like tool argument as a bare token: surrounding whitespace and
+    quotes stripped (repeatedly - '"\\'dodge\\'"'), inner whitespace collapsed.
+    Case is left to the caller. A model that double-encodes an enum (sends the
+    JSON string '"dodge"' for dodge) used to lose the whole call over it.
+    """
+    text = " ".join(str(value).split())
+    while len(text) >= 1 and (text[0] in _ENUM_QUOTES or text[-1] in _ENUM_QUOTES):
+        text = text.strip(_ENUM_QUOTES).strip()
+    return text
+
+
 def parse_evade(value: Any) -> Optional[str]:
-    """'full' | 'dodge' | None from a tool argument (true means 'full')."""
+    """'full' | 'dodge' | None from a tool argument (true means 'full');
+    quotes, case and whitespace are tolerated ('"Dodge "' is dodge)."""
     if value is None or value is False:
         return None
     if value is True:
         return "full"
-    text = str(value).strip().lower()
+    text = enum_token(value).lower()
     if text in ("", "none", "off", "no", "false", "0"):
         return None
     if text in ("full", "true", "yes", "on", "evade", "1"):

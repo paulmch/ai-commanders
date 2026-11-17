@@ -167,8 +167,10 @@ class TestSetManeuver:
         sim, captain = _sim(), _captain()
         m = _call(captain, sim, "set_maneuver", maneuver_type="INTERCEPT", evade="dodge")
         assert m.evade == "dodge"
-        assert _call(captain, sim, "set_maneuver", maneuver_type="INTERCEPT",
-                     evade="sideways") is None
+        # An unreadable evade no longer drops the call (cmdcap C10): the
+        # maneuver flies without the overlay and the error names the field.
+        m = _call(captain, sim, "set_maneuver", maneuver_type="INTERCEPT", evade="sideways")
+        assert m.maneuver_type == ManeuverType.INTERCEPT and m.evade is None
         assert "evade must be" in captain.pending_tool_errors[-1]
         assert _call(captain, sim, "set_maneuver", maneuver_type="INTERCEPT",
                      standoff_km=-5) is None

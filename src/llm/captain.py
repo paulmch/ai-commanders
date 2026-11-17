@@ -1722,6 +1722,46 @@ class LLMCaptain:
         print(f"[CAPTAIN {self.name}] note: {message}")
         self.pending_tool_notes.append(message)
 
+    def _throttle_arg(self, args: Dict[str, Any], tool: str) -> Any:
+        """
+        The throttle of a set_maneuver / set_heading call. A number passes
+        through unchanged (bit-identical maneuvers); a string ("0.5", "50%")
+        is parsed; an unreadable one flies the tool's default 1.0 and the
+        error names the field - it never discards the call.
+        """
+        value = args.get("throttle", 1.0)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return value
+        if value is None:
+            return 1.0
+        from .maneuver_orders import enum_token
+        text = enum_token(value)
+        try:
+            number = float(text.rstrip("%").strip())
+            if text.endswith("%") or number > 1.0:
+                number /= 100.0
+            if not math.isfinite(number):
+                raise ValueError(text)
+            return max(0.0, min(1.0, number))
+        except (TypeError, ValueError):
+            self._record_tool_error(f"{tool}: throttle {value!r} is not a number 0-1 - flown at "
+                                    "the default 1.0 (full); reissue with a number")
+            return 1.0
+
+    def _without_bad_evade(self, args: Dict[str, Any], tool: str, what: str) -> Dict[str, Any]:
+        """``args`` minus an unreadable ``evade`` (with a tool error naming it):
+        the rest of the call is applied, without the overlay."""
+        from .maneuver_orders import ManeuverArgError, parse_evade
+        if args.get("evade") in (None, ""):
+            return args
+        try:
+            parse_evade(args.get("evade"))
+            return args
+        except ManeuverArgError as e:
+            self._record_tool_error(f"{tool}: {e} - the {what} WAS applied, without evasion; "
+                                    "reissue evade as full or dodge to add it")
+            return {k: v for k, v in args.items() if k != "evade"}
+
     def _torpedo_feasible(self, simulation: Any, ship_id: str, target_id: str,
                           count: int, args: Dict[str, Any]) -> bool:
         """
@@ -1742,7 +1782,8 @@ class LLMCaptain:
         if sol is None:
             return True
         ref = ship_ref(getattr(target, 'name', target_id), target_id)
-        override = str(args.get("override_check", "")).lower() in ("true", "1", "yes")
+        from .maneuver_orders import enum_token
+        override = enum_token(args.get("override_check", "")).lower() in ("true", "1", "yes")
         if sol.verdict == "UNREACHABLE" and sol.closing_kps < 0 and not override:
             self._record_tool_error(
                 f"launch_torpedo x{count} -> {ref}: REFUSED, {sol.summary()}. "
@@ -2898,14 +2939,15 @@ class LLMCaptain:
         if name == "set_maneuver":
             from ..simulation import Maneuver, ManeuverType
             from .maneuver_orders import (
-                ManeuverArgError, maneuver_extras, resolve_ship, ship_choices)
+                ManeuverArgError, enum_token, maneuver_extras, resolve_ship, ship_choices)
             try:
-                # Map LLM-friendly names to actual enum values
-                maneuver_name = args["maneuver_type"]
+                # Map LLM-friendly names to actual enum values ('"padlock"'
+                # and ' Evade' included: quotes, case, whitespace tolerated).
+                maneuver_name = enum_token(args["maneuver_type"]).upper().replace(" ", "_")
                 if maneuver_name == "EVADE":
                     maneuver_name = "EVASIVE"  # LLM uses EVADE, enum uses EVASIVE
                 maneuver_type = ManeuverType[maneuver_name]
-                throttle = args.get("throttle", 1.0)
+                throttle = self._throttle_arg(args, "set_maneuver")
             except (KeyError, ValueError) as e:
                 self._record_tool_error(
                     f"set_maneuver: invalid maneuver_type {args.get('maneuver_type')!r} ({e}). "
@@ -2938,12 +2980,15 @@ class LLMCaptain:
             # Optional parameters (standoff, arrival speed, hold range, evade):
             # none given -> exactly the maneuver this tool always built.
             extras: Dict[str, Any] = {}
+            # An unreadable evade must not cost the maneuver: fly it without
+            # the overlay and say so (a '"dodge"' once dropped whole calls).
+            margs = self._without_bad_evade(args, "set_maneuver", maneuver_type.name)
             if maneuver_type == ManeuverType.HOLD_RANGE or any(
-                    args.get(k) not in (None, "") for k in
+                    margs.get(k) not in (None, "") for k in
                     ("standoff_km", "arrival_closing_kps", "range_km", "evade")):
                 try:
                     extras, notes = maneuver_extras(simulation, ship_id, maneuver_type,
-                                                    args, target_id)
+                                                    margs, target_id)
                 except ManeuverArgError as e:
                     self._record_tool_error(f"set_maneuver: {e}")
                     return None
@@ -2994,12 +3039,13 @@ class LLMCaptain:
             from .maneuver_orders import (
                 ManeuverArgError, heading_target, parse_evade, position_like_direction_note,
                 usable_direction)
-            throttle = args.get("throttle", 1.0)
+            throttle = self._throttle_arg(args, "set_heading")
             extras: Dict[str, Any] = {}
+            hargs = self._without_bad_evade(args, "set_heading", "heading")
             try:
-                live, notes = heading_target(simulation, ship_id, args)
-                if args.get("evade") not in (None, ""):
-                    evade = parse_evade(args.get("evade"))
+                live, notes = heading_target(simulation, ship_id, hargs)
+                if hargs.get("evade") not in (None, ""):
+                    evade = parse_evade(hargs.get("evade"))
                     if evade is not None:
                         extras["evade"] = evade
             except ManeuverArgError as e:
@@ -3056,23 +3102,45 @@ class LLMCaptain:
             def _arg_for(group: str, suffix: str):
                 direct = args.get(f"{group}_{suffix}")
                 if direct is not None:
-                    return direct
+                    return direct, f"{group}_{suffix}"
                 alias = "spinal" if group == "spinal" else "turret"
-                return args.get(f"{alias}_{suffix}")
+                return args.get(f"{alias}_{suffix}"), f"{alias}_{suffix}"
+
+            from .maneuver_orders import enum_token
+
+            def _number(value: Any, field: str, default: float) -> float:
+                if value is None or (isinstance(value, (int, float)) and not isinstance(value, bool)):
+                    return default if value is None else value
+                try:
+                    return float(enum_token(value).rstrip("%").strip())
+                except (TypeError, ValueError):
+                    self._record_tool_error(f"set_weapons_order: {field} {value!r} is not a "
+                                            f"number - used the default {default:g}")
+                    return default
 
             # Process each weapon group dynamically
+            modes_given = False
             for group_name, slots in self.weapon_groups.items():
-                mode = _arg_for(group_name, "mode")
+                mode, field = _arg_for(group_name, "mode")
                 if mode:
+                    modes_given = True
+                    # Quotes / case / spaces tolerated; an unknown mode used to
+                    # become FIRE_WHEN_OPTIMAL silently ('"HOLD_FIRE"' fired).
+                    token = enum_token(mode).upper().replace(" ", "_")
                     try:
-                        command = WeaponsCommand[mode]
+                        command = WeaponsCommand[token]
                     except KeyError:
-                        command = WeaponsCommand.FIRE_WHEN_OPTIMAL
+                        self._record_tool_error(
+                            f"set_weapons_order: {field} {mode!r} is not one of "
+                            f"{', '.join(c.name for c in WeaponsCommand)} - {group_name} keep "
+                            f"their previous order; the rest of the call was applied")
+                        continue
+                    mode = command.name
 
-                    min_prob = _arg_for(group_name, "min_probability")
-                    min_prob = 0.3 if min_prob is None else min_prob
-                    max_range = _arg_for(group_name, "max_range_km")
-                    max_range = 500.0 if max_range is None else max_range
+                    min_prob, field = _arg_for(group_name, "min_probability")
+                    min_prob = _number(min_prob, field, 0.3)
+                    max_range, field = _arg_for(group_name, "max_range_km")
+                    max_range = _number(max_range, field, 500.0)
 
                     # Create order for each weapon in this group
                     for slot in slots:
@@ -3088,7 +3156,9 @@ class LLMCaptain:
                     self.current_weapon_orders[group_name] = mode
 
             # If no specific modes set, default all groups to FIRE_WHEN_OPTIMAL
-            if not orders and self.weapon_groups:
+            # (not when the modes given were all unreadable: those groups keep
+            # their orders, and the error says so).
+            if not orders and self.weapon_groups and not modes_given:
                 for group_name, slots in self.weapon_groups.items():
                     for slot in slots:
                         orders.append(WeaponsOrder(
