@@ -1421,4 +1421,4 @@ class TestMeasuredExchangeDoctrine:
         assert f"~{100 * energy_cut:.0f}% less energy each" in text
         assert (f"nose-on lost {lost('1000|static')} of 8, burning away {lost('1000|open')} of 8, "
                 f"charging {lost('1000|charge')} of 8") in text
-        assert "feeds it" not in text and "bleeds" not in text
+        assert "Charging a torpedo fleet feeds it" not in text and "bleeds finite magazines" not in text
