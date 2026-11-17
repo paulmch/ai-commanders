@@ -988,12 +988,15 @@ def class_armament(ship_type: str, fleet_data: Optional[Dict[str, Any]]) -> Dict
 # Facing: what face a ship shows a point, and what a heading does to it
 # =============================================================================
 
-# Hit-location cones of the engine (src/geometry.py): a round arriving within
-# 30 deg of the nose hits the nose, beyond 150 deg the tail.
-try:
-    from ..geometry import NOSE_HIT_ANGLE_THRESHOLD, TAIL_HIT_ANGLE_THRESHOLD
-except ImportError:  # pragma: no cover - script-style imports
-    from geometry import NOSE_HIT_ANGLE_THRESHOLD, TAIL_HIT_ANGLE_THRESHOLD
+def _hit_cones() -> Tuple[float, float]:
+    """The engine's hit-location cones (src/geometry.py): a round arriving
+    within 30 deg of the nose hits the nose, beyond 150 deg the tail.
+    Imported lazily: geometry.py only imports as part of the src package."""
+    try:
+        from ..geometry import NOSE_HIT_ANGLE_THRESHOLD, TAIL_HIT_ANGLE_THRESHOLD
+    except ImportError:  # pragma: no cover - script-style imports
+        from geometry import NOSE_HIT_ANGLE_THRESHOLD, TAIL_HIT_ANGLE_THRESHOLD
+    return NOSE_HIT_ANGLE_THRESHOLD, TAIL_HIT_ANGLE_THRESHOLD
 
 # Below this applied throttle the torch is PADLOCK's token burn (5% while
 # turning), not a burn - the admiral's plot used to call that "burning".
@@ -1005,9 +1008,10 @@ _FACE_SECTION = {"NOSE": "nose", "SIDE": "lateral", "TAIL": "tail"}
 
 def face_of(angle_deg: float) -> str:
     """NOSE / SIDE / TAIL for an angle off the nose (the engine's hit cones)."""
-    if angle_deg < NOSE_HIT_ANGLE_THRESHOLD:
+    nose, tail = _hit_cones()
+    if angle_deg < nose:
         return "NOSE"
-    if angle_deg > TAIL_HIT_ANGLE_THRESHOLD:
+    if angle_deg > tail:
         return "TAIL"
     return "SIDE"
 
@@ -1199,7 +1203,11 @@ def battle_clock(time_limit_s: Optional[float], max_checkpoints: Optional[int],
     if not candidates:
         return None
     checkpoints = int(min(candidates))
-    end = checkpoints * interval_s + (interval_s if last_orders_fly else 0.0)
+    if by_time is not None and (max_checkpoints is None or by_time < max_checkpoints):
+        # The time limit binds: the last checkpoint's orders fly until it.
+        end = limit
+    else:
+        end = checkpoints * interval_s + (interval_s if last_orders_fly else 0.0)
     return {"checkpoints": checkpoints, "end_s": min(limit, end), "interval_s": float(interval_s)}
 
 
