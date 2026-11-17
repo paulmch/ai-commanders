@@ -1597,7 +1597,12 @@ def _scripted_torpedo_duel(max_t=200.0, seed=7,
         fleet = _json.load(f)
 
     cfg = BattleConfig(
-        initial_distance_km=500.0, verbose=False, personality_selection=False,
+        # 700 km (was 500): far enough that an evading corvette can afford to
+        # turn away and RUN - and so outlast a round's delta-v - and still
+        # turn back before impact. From 500 km the rounds land in ~60 s, too
+        # soon for the round trip: the corvettes present their noses and no
+        # round runs dry.
+        initial_distance_km=700.0, verbose=False, personality_selection=False,
         record_battle=True, alpha_ship_type="corvette",
         beta_ship_type="corvette", seed=seed,
     )

@@ -127,7 +127,7 @@ export class ContactOverlay {
       if (!ship?.visible || !state || state.destroyed) continue;
       this.view.copy(ship.position).applyMatrix4(camera.matrixWorldInverse);
       const depth = -this.view.z;
-      const pixels = ship.userData.size.length * height / (2 * depth * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
+      const pixels = (ship.userData.drawn || ship.userData.size).length * height / (2 * depth * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
       if (depth <= camera.near || pixels > 90) continue;
       this.point.copy(ship.position).project(camera);
       if (Math.abs(this.point.x) > 0.98 || Math.abs(this.point.y) > 0.96 || this.point.z > 1) continue;

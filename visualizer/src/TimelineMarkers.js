@@ -4,17 +4,22 @@
  * Checkpoint lane above the track: one tick per decision checkpoint (CP n),
  * labelled when there is room. Event lane below it: a mirrored hit-density
  * sparkline (alpha up, beta down, 5 s bins), torpedo salvos as faction
- * chevrons with their round count, and kills as raised faction-coloured
- * crosses. Every marker is a button: a click seeks a few seconds before the
+ * chevrons with their round count, kills as raised faction-coloured
+ * crosses (ringed when the reactor blast caught a ship or torpedoes), and
+ * small amber marks where a ship was disarmed, went adrift or cooked off. Every marker is a button: a click seeks a few seconds before the
  * moment and frames the ship involved.
  *
  * Rebuilt from loader.hud only on load and on each live append; nothing
  * here runs per frame.
  */
 import { clockText, complianceAt } from './HudIndex.js';
+import { blastLine } from './FittingsIndex.js';
 import { node, defaultDoc } from './hudDom.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/** Notice kinds that earn a timeline mark (a drive hit or a blast victim only shows in the feed / the kill's tooltip). */
+const TIMELINE_NOTICES = new Set(['disarmed', 'adrift', 'cookoff', 'plume', 'crew']);
 
 /** Marker descriptors (pure): {lane, kind, t, pct, label, title, faction, shipId, seekLead}. */
 export function timelineMarks(hud, duration, ships = {}) {
@@ -28,8 +33,9 @@ export function timelineMarks(hud, duration, ships = {}) {
   // copy once delivered) shows the ship off its orders flags it too.
   const traffic = new Map();
   for (const r of hud.comms || []) {
-    const c = traffic.get(r.cp) || { orders: 0, acks: 0, deviations: 0, drift: 0, messages: 0 };
-    if (r.kind === 'order' || r.kind === 'directive') c.orders++;
+    const c = traffic.get(r.cp) || { orders: 0, acks: 0, deviations: 0, drift: 0, messages: 0, failed: 0 };
+    if (r.kind === 'error' && r.tag === 'NO DIRECTIVE') c.failed++;
+    else if (r.kind === 'order' || r.kind === 'directive') c.orders++;
     else if (r.status === 'DEVIATE' || r.status === 'UNABLE') c.deviations++;
     else if (r.kind === 'report' && r.status) {
       c.acks++;
@@ -40,10 +46,11 @@ export function timelineMarks(hud, duration, ships = {}) {
   for (const cp of cps) {
     const c = traffic.get(cp.n);
     const counts = c ? ` · ${c.orders} orders · ${c.acks} ACK${c.drift ? ` (${c.drift} off orders)` : ''}` +
-      `${c.deviations ? ` · ${c.deviations} DEVIATE/UNABLE` : ''}${c.messages ? ` · ${c.messages} messages` : ''}` : '';
+      `${c.deviations ? ` · ${c.deviations} DEVIATE/UNABLE` : ''}${c.messages ? ` · ${c.messages} messages` : ''}` +
+      `${c.failed ? ' · admiral directive FAILED' : ''}` : '';
     out.push({ lane: 'cp', kind: 'checkpoint', t: cp.t, pct: pct(cp.t), label: cp.n % labelEvery === 0 || cp.n === 1 ? String(cp.n) : '',
       title: `CP${cp.n} · ${clockText(cp.t)}${counts || ' · orders issued'}`, faction: null, shipId: null, seekLead: 0,
-      flag: c?.deviations || c?.drift ? 'deviation' : null });
+      flag: c?.deviations || c?.drift || c?.failed ? 'deviation' : null });
   }
   for (const s of hud.salvos || []) {
     const targets = s.targets.map(([name, n]) => `${name}${n > 1 ? ' ×' + n : ''}`).join(', ');
@@ -53,8 +60,16 @@ export function timelineMarks(hud, duration, ships = {}) {
   }
   for (const k of hud.kills || []) {
     const by = k.weapon === 'meltdown' ? 'reactor meltdown' : k.killerName ? `${k.inferred ? 'probably by ' : 'by '}${k.killerName}${k.weapon ? ' (' + k.weapon + ')' : ''}` : 'destroyed';
+    // What the reactor blast did (pass-5 recordings): ships caught, torpedoes killed / blinded
+    const blast = blastLine(hud.blasts?.[k.shipId]);
     out.push({ lane: 'event', kind: 'kill', t: k.t, pct: pct(k.t), label: '',
-      title: `${clockText(k.t)} ${k.name} knocked out — ${by}`, faction: k.faction, shipId: k.shipId, seekLead: 5 });
+      title: `${clockText(k.t)} ${k.name} knocked out — ${by}${blast ? ` · ${blast}` : ''}`, faction: k.faction, shipId: k.shipId, seekLead: 5,
+      flag: blast ? 'blast' : null });
+  }
+  for (const n of hud.notices || []) {
+    if (!TIMELINE_NOTICES.has(n.kind)) continue;
+    out.push({ lane: 'event', kind: 'notice', t: n.t, pct: pct(n.t), label: '',
+      title: `${clockText(n.t)} ${n.name} ${n.status} — ${n.detail}`, faction: n.faction, shipId: n.shipId, seekLead: 3, flag: n.kind });
   }
   return out;
 }

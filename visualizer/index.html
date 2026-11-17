@@ -42,6 +42,9 @@
             <span class="score-model" data-model></span>
             <span class="score-ships" title="Ships fighting / fleet size"><b data-alive>0</b>/<span data-total>0</span></span>
             <span class="score-pips" data-pips aria-hidden="true"></span>
+            <span class="score-stat score-armed" data-armed title="Ships still able to deal damage (a working gun, or a working torpedo tube with rounds)"></span>
+            <span class="score-stat score-arms" data-guns title="Coilgun mounts still working on ships in the fight / fitted at the start"></span>
+            <span class="score-stat score-arms" data-tubes title="Torpedo tubes still working on ships in the fight / fitted at the start"></span>
             <span class="score-stat score-hull" data-hull title="Fleet hull (lost and dying ships count as 0%)">100%</span>
             <span class="score-stat score-torps" data-torps title="Torpedoes in flight"></span>
             <span class="score-stat score-kills" data-kills title="Enemy ships knocked out">&#9760; 0</span>
@@ -57,6 +60,9 @@
             <span class="score-model" data-model></span>
             <span class="score-ships" title="Ships fighting / fleet size"><b data-alive>0</b>/<span data-total>0</span></span>
             <span class="score-pips" data-pips aria-hidden="true"></span>
+            <span class="score-stat score-armed" data-armed title="Ships still able to deal damage (a working gun, or a working torpedo tube with rounds)"></span>
+            <span class="score-stat score-arms" data-guns title="Coilgun mounts still working on ships in the fight / fitted at the start"></span>
+            <span class="score-stat score-arms" data-tubes title="Torpedo tubes still working on ships in the fight / fitted at the start"></span>
             <span class="score-stat score-hull" data-hull title="Fleet hull (lost and dying ships count as 0%)">100%</span>
             <span class="score-stat score-torps" data-torps title="Torpedoes in flight"></span>
             <span class="score-stat score-kills" data-kills title="Enemy ships knocked out">&#9760; 0</span>
@@ -95,6 +101,7 @@
       <button class="result-close" data-close aria-label="Dismiss result">&times;</button>
       <span class="result-kicker" data-kicker></span>
       <strong class="result-title" data-title></strong>
+      <span class="result-cause" data-cause hidden></span>
       <span class="result-reason" data-reason></span>
       <div class="result-tally" data-tally></div>
     </div>
@@ -104,6 +111,7 @@
       <button id="commsBtn" aria-pressed="false" aria-controls="commsFeed" title="Command net: directives, orders, reports and messages (N)">NET <kbd>N</kbd></button>
       <button id="decisionsBtn" aria-expanded="false" aria-controls="decisionPanel" title="Explore decisions and consequences (D)">DECISIONS <kbd>D</kbd></button>
       <button id="contactsBtn" class="active" aria-pressed="true" title="Toggle contact labels (C)">CONTACTS <kbd>C</kbd></button>
+      <button id="scaleBtn" class="active" title="Hull scale: auto = real size up close, readable at distance; true = always real size; cinematic = fixed exaggeration (S cycles)">SCALE AUTO <kbd>S</kbd></button>
     </div>
     <aside id="decisionPanel" class="panel hidden" aria-label="Intent and consequence">
       <div class="panel-header"><span class="panel-title">INTENT → CONSEQUENCE</span><button data-close aria-label="Close decisions">×</button></div>
@@ -212,6 +220,9 @@
             <span class="data-value mono" id="velocityValue">0.0 km/s</span>
           </div>
         </div>
+
+        <!-- Fittings (src/FittingsHud.js): gun mounts, torpedo tubes, PD turrets, drive; pass-5 recordings only -->
+        <div class="fit-card hidden" id="fitCard" aria-label="Fittings"></div>
 
         <!-- Armor Schematic -->
         <div class="armor-section">
@@ -413,7 +424,7 @@
           <p>Select a recording to replay</p>
         </div>
         <div class="selector-options">
-          <input type="file" id="fileInput" accept=".json" hidden>
+          <input type="file" id="fileInput" accept=".json,.gz,application/json,application/gzip" hidden>
           <button class="selector-btn primary" id="selectFileBtn">
             <span class="btn-icon">📁</span>
             SELECT RECORDING FILE

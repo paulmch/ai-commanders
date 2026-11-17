@@ -1,16 +1,22 @@
 import * as THREE from 'three';
 import { Ribbon } from './Trails.js';
-import { trailLifeCap, focusFade, closeUpK } from './CloseRange.js';
+import { trailLifeCap, focusFade } from './CloseRange.js';
 import { WeaponRibbons, WeaponFlashes, WeaponMarkers, TorpedoBodies, factionSeed } from './WeaponBatches.js';
 import { TargetingLines } from './TargetingLines.js';
 import {
   WeaponTimeline, makeSample, sampleTrack, seedFor, tracerLength,
   missOpacity, beamPulse, torpedoPower, ION_LIFE, IMPACT_LIFE, OWNED_MOMENTS, TWIN_BARREL_X,
-  spinalMuzzleInto, dudSkims
+  spinalMuzzleInto, dudSkims, TERMINAL_BEND_S
 } from './WeaponTimeline.js';
+import { SLUG_LOOK, MUZZLE_LOOK, muzzlePop, POP_LIGHTS } from './GunLooks.js';
+import { washAt } from '../DamageTimeline.js';
 import {
   RCS_LAYOUT, ENGINE, PULSE, JET_COUNT, attitudeAt, jetLevels, makePulses, pulsesAt, throttleAt
 } from './TorpedoRcs.js';
+import { hullQuat, validUp } from '../HullFrame.js';
+import { arcsFor, isBlocked, pdPlan, hullExit, shownPdMount } from './TurretArcs.js';
+import { GUN_DEPRESSION_DEG } from './MountLimits.js';
+const _fwdArr = [0, 0, 1], _quatArr = [0, 0, 0, 1];
 
 const Z = new THREE.Vector3(0, 0, 1);
 const Y = new THREE.Vector3(0, 1, 0);
@@ -18,10 +24,16 @@ const ORIGIN = new THREE.Vector3();
 const X = new THREE.Vector3(1, 0, 0);
 const SCALE = 0.001;
 const MUZZLE_LIFE = 0.3;
+/** Seconds of exhaust wake behind a burning torpedo. */
+const TORPEDO_WAKE_S = 2.2;
+/** A seeker-dead torpedo's end-over-end tumble rate (rad/s, eased in). */
+const TUMBLE_RATE = 1.3;
+/** The terminal-burn light-off flash lasts this long. */
+const TERMINAL_KICK_S = 0.55;
+/** PD ablation glow reaches full strength after this much dwell. */
+const DWELL_GLOW_S = 1.5;
 // Longest on-screen wake (px); only bites in close-ups (see trail())
 const TRAIL_CAP_PX = { slug: 140, torpedo: 200 };
-// Close-ups: a PD beam longer than this on screen keeps only its two ends
-const BEAM_END_PX = 260;
 const random = (seed, n) => { const x = Math.sin(seed * 127.1 + n * 311.7) * 43758.5453; return x - Math.floor(x); };
 
 /**
@@ -59,6 +71,9 @@ export class Projectiles {
     this.jetLv = new Float32Array(JET_COUNT);
     this.timeline = null;
     this.time = 0;
+    // Muzzle light pops: the strongest flashes of the frame borrow a pool
+    // light each (picked from battle time alone, released when none fire)
+    this.pops = Array.from({ length: POP_LIGHTS }, () => ({ w: 0, pos: new THREE.Vector3(), reach: 0, light: null }));
   }
 
   prepare(loader) {
@@ -107,7 +122,10 @@ export class Projectiles {
       const mid = (lo + hi) >>> 1;
       if (moments[mid].time < time - 4) lo = mid + 1; else hi = mid;
     }
+    for (let i = 0; i < this.pops.length; i++) this.pops[i].w = 0;
     for (let i = lo; i < moments.length && moments[i].time <= time; i++) this.moment(moments[i], time);
+    this.popLights();
+    this.plumeWash(time);
     this.engagements.draw(time);
     this.ribbons.end(); this.flashes.end(); this.markers.end(); this.bodies.end();
   }
@@ -120,11 +138,37 @@ export class Projectiles {
    * on every path that samples the final sub-second (deterministic).
    */
   surfaceImpact(tr) {
-    if (tr.surfaced || !tr.impact) return;
+    if (!tr.impact) return;
+    // The crater sits on the hull as it is DRAWN this frame (render/Scale.js:
+    // its draw scale follows the camera in the auto mode), so the point is
+    // re-read whenever that scale changes, never baked
+    const k = tr.surfShip ? this.manager.kOf?.(tr.surfShip) ?? 1 : 1;
+    if (tr.surfaced && (!tr.surfShip || k === tr.surfK)) return;
     tr.surfaced = true;
-    const fx = this.manager.damageFX;
-    if (fx?.surfaceFor?.(tr.id, this.s1, this.s2)) tr.impact = [this.s1.x / SCALE, this.s1.y / SCALE, this.s1.z / SCALE];
+    const m = this.manager.damageFX?.surfaceFor?.(tr.id, this.s1, this.s2);
+    if (!m) return;
+    tr.surfShip = m.shipId;
+    tr.surfK = this.manager.kOf?.(m.shipId) ?? 1;
+    tr.impact = [this.s1.x / SCALE, this.s1.y / SCALE, this.s1.z / SCALE];
   }
+
+  /**
+   * A missing round is drawn clear of its target's hull AS DRAWN: tell its
+   * pass how many times real size that hull is this frame (auto scale,
+   * magnified regime; WeaponTimeline.passPush caps what it does with it).
+   */
+  passScale(tr) {
+    const ps = tr.pass;
+    if (!ps) return;
+    const ud = this.manager.ships.get(ps.target)?.userData;
+    const real = ud?.trueLengthKm > 0 && ud.size?.length > 0 ? ud.trueLengthKm / ud.size.length : 0;
+    ps.m = real > 0 && ud.k > 0 ? ud.k / real : 1;
+  }
+
+  /** Draw scale (scene km per kit unit) of a ship group; 1 on the cinematic scale. */
+  shipK(ship) { return ship?.userData.k ?? 1; }
+  /** Draw scale of a free-flying round or flash at world point p. */
+  freeK(p) { return this.manager.kAt ? this.manager.kAt(p) : 1; }
 
   pixelAt(p) { return this.manager.camera.position.distanceTo(p) * Ribbon.pixelWorld.value; }
   point(out, sample) { return out.fromArray(sample.pos).multiplyScalar(SCALE); }
@@ -147,7 +191,8 @@ export class Projectiles {
   slug(tr, time) {
     tr.visible = time >= tr.start && time < tr.end;
     if (time < tr.start || time > tr.end + ION_LIFE) return;
-    if (tr.impact && !tr.surfaced && time >= tr.samples.at(-1).t - 0.5) this.surfaceImpact(tr);
+    if (tr.impact && time >= tr.end - TERMINAL_BEND_S - 0.5) this.surfaceImpact(tr);
+    else if (tr.pass) this.passScale(tr);
     const sampleTime = Math.min(time, tr.end);
     this.timeline.sample(tr, sampleTime, this.sample);
     this.point(this.a, this.sample);
@@ -158,10 +203,15 @@ export class Projectiles {
     const speed = this.vel.length();
     const fade = missOpacity(time - tr.missAt);
     if (tr.visible) {
-      const len = tracerLength(speed, this.pixelAt(this.a), time - tr.start);
+      // The look follows the gun that fired it (battery / heavy / spinal /
+      // siege); rounds without a recorded shot read as battery fire.
+      const cls = tr.shot?.cls ?? 0, look = SLUG_LOOK[cls] || SLUG_LOOK[0];
+      const px = this.pixelAt(this.a);
+      const fk = this.freeK(this.a);   // the glow's size is kit units; its length is the real shutter streak
+      const len = Math.min(speed * Math.max(0, time - tr.start), tracerLength(speed, px, time - tr.start) * look.length);
       this.b.copy(this.a).addScaledVector(this.dir, -len);
-      this.ribbons.add(this.a, this.b, 0.045, fade, 0, tr.fseed ?? tr.seed);
-      this.flashes.add(this.a, this.dir, Math.max(0.085, this.pixelAt(this.a) * 1.5), 0.7 * fade);
+      this.ribbons.add(this.a, this.b, look.width * fk, fade * look.gain, 0, tr.fseed ?? tr.seed, cls, cls);
+      this.flashes.add(this.a, this.dir, Math.max(look.head * fk, px * look.headPx), 0.7 * fade * look.gain);
     }
     this.trail(tr, time, sampleTime, ION_LIFE, 12, fade, false, TRAIL_CAP_PX.slug);
   }
@@ -176,16 +226,16 @@ export class Projectiles {
     if (t - tr.start > 40) return p;
     const ship = this.manager.ships.get(tr.source);
     const track = this.timeline.ships.get(tr.source);
-    const size = ship?.userData.size;
+    const size = ship?.userData.drawn || ship?.userData.size;   // the hull as drawn (scene km)
     if (!size || !track || !sampleTrack(track, t, this.liftSample)) return p;
     this.e.fromArray(this.liftSample.pos).multiplyScalar(SCALE);
     this.u.subVectors(p, this.e);
     const dist = this.u.length();
     this.axis.fromArray(this.liftSample.fwd);
     if (this.axis.lengthSq() < 1e-10) this.axis.copy(Z); else this.axis.normalize();
-    if (dist > 1e-4) this.u.divideScalar(dist); else this.u.copy(this.axis);
+    if (dist > 1e-7) this.u.divideScalar(dist); else this.u.copy(this.axis);
     const c = this.u.dot(this.axis);
-    const R = 1 / Math.sqrt((c / (size.length * 0.5)) ** 2 + (1 - c * c) / (size.width * 0.5) ** 2) + 0.15;
+    const R = 1 / Math.sqrt((c / (size.length * 0.5)) ** 2 + (1 - c * c) / (size.width * 0.5) ** 2) + 0.15 * this.shipK(ship);
     if (dist >= 2 * R) return p;
     return p.copy(this.e).addScaledVector(this.u, dist + R * (1 - THREE.MathUtils.smoothstep(dist, 0, 2 * R)));
   }
@@ -200,7 +250,7 @@ export class Projectiles {
     if (!tr.shot || t - tr.start > 30) return p;
     const ship = this.manager.ships.get(tr.source);
     const track = this.timeline.ships.get(tr.source);
-    const size = ship?.userData.size;
+    const size = ship?.userData.drawn || ship?.userData.size;   // the hull as drawn (scene km)
     if (!size || !track || !sampleTrack(track, t, this.liftSample)) return p;
     const mz = tr.muzzle || (tr.muzzle = this.slugMuzzle(tr, ship, track));
     if (!mz) return p;
@@ -208,15 +258,22 @@ export class Projectiles {
     const reach = size.length * 2;
     const w = 1 - THREE.MathUtils.smoothstep(p.distanceTo(this.e), 0, reach);
     if (w <= 0) return p;
-    this.hullQuaternion(this.liftSample.fwd, this.q2);
-    return p.addScaledVector(this.u.copy(mz.pos).applyQuaternion(this.q2), w);
+    this.hullQuaternion(this.liftSample.fwd, this.q2, this.liftSample.up);
+    // (the muzzle is a hull-kit point: at the hull's draw scale)
+    return p.addScaledVector(this.u.copy(mz.pos).applyQuaternion(this.q2), w * this.shipK(ship));
   }
 
   /** The recorded hull orientation (SceneManager.updateShip's lookAt). */
-  hullQuaternion(fwd, out) {
+  hullQuaternion(fwd, out, up = null) {
     this.s1.fromArray(fwd);
     if (this.s1.lengthSq() < 1e-10) return out.identity();
-    this.m4.lookAt(this.s1.normalize(), ORIGIN, Y);
+    this.s1.normalize();
+    if (validUp(up)) {
+      // the ship's recorded roll (HullFrame): same frame as SceneManager
+      const q = hullQuat(this.s1.toArray(_fwdArr), up, _quatArr);
+      return out.set(q[0], q[1], q[2], q[3]);
+    }
+    this.m4.lookAt(this.s1, ORIGIN, Y);
     return out.setFromRotationMatrix(this.m4);
   }
 
@@ -226,7 +283,7 @@ export class Projectiles {
     if (!first || !sampleTrack(track, tr.start, this.shipSample)) return null;
     // Barrel axis: the round's launch velocity relative to the shooter.
     this.aim.fromArray(first.state.vel || [0, 0, 1]).sub(this.s2.fromArray(this.shipSample.vel));
-    this.hullQuaternion(this.shipSample.fwd, this.q2).invert();
+    this.hullQuaternion(this.shipSample.fwd, this.q2, this.shipSample.up).invert();
     this.aim.applyQuaternion(this.q2);
     if (this.aim.lengthSq() < 1e-10) this.aim.copy(Z); else this.aim.normalize();
     const out = { pos: new THREE.Vector3(), dir: new THREE.Vector3() };
@@ -242,14 +299,23 @@ export class Projectiles {
     const ud = ship.userData;
     const W = ud.size.width, L = ud.size.length;
     const rigs = ud.gunTurrets?.length ? ud.gunTurrets : ud.turrets;
-    const rig = !shot.spinal && rigs?.length
+    let rig = !shot.spinal && rigs?.length
       ? rigs.find(r => r.slot && r.slot === shot.slot) || rigs[shot.index % rigs.length] : null;
     if (rig?.mount) {
+      // Recordings older than the arcs engine fired through the ship: a
+      // shot whose line is blocked for its own mount is shown from a
+      // battery that has a clear line (the engine never records one now)
+      const arcs = arcsFor(ud.shipType);
+      const own = arcs?.bySlot.get(rig.slot);
+      if (own && isBlocked(own, aim)) {
+        const alt = rigs.find(r => { const a = arcs.bySlot.get(r.slot); return r.mount && a && !isBlocked(a, aim); });
+        if (alt) rig = alt;
+      }
       const s = rig.s || 0.5, rz = rig.mount.rotation.z;
       // aim in the mount frame, clamped to the rig's elevation limits
       const v = this.s3.copy(aim).applyAxisAngle(Z, -rz);
       const yaw = Math.atan2(v.x, v.z);
-      const pitch = THREE.MathUtils.clamp(Math.atan2(v.y, Math.hypot(v.x, v.z)), -0.04, 1.45);
+      const pitch = THREE.MathUtils.clamp(Math.atan2(v.y, Math.hypot(v.x, v.z)), -GUN_DEPRESSION_DEG * Math.PI / 180, Math.PI / 2);
       out.dir.set(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch));
       // mount > yaw (0, .2s, 0) > pitch (0, .32s, .15s) > barrel tip 1.4s
       out.pos.set(0.15 * s * Math.sin(yaw), 0.52 * s, 0.15 * s * Math.cos(yaw)).addScaledVector(out.dir, 1.4 * s);
@@ -291,6 +357,7 @@ export class Projectiles {
     }
     const oldest = Math.max(tr.start, time - life);
     if (newest <= oldest) return;
+    const tk = this.freeK(this.c);   // wake width: kit units at the head's draw scale
     let prev = newest;
     for (let i = 1; i <= segments; i++) {
       const t = newest + (oldest - newest) * i / segments;
@@ -300,7 +367,7 @@ export class Projectiles {
       const nx = this.history.next;
       const powered = !poweredOnly || (t < tr.disabledAt && !this.history.state.disabled
         && (nx.thr !== undefined ? nx.thr > 0 : (this.history.state.dv_remaining - nx.dv_remaining) > 0.002));
-      if (powered) this.ribbons.add(this.c, this.d, poweredOnly ? 0.12 : 0.03,
+      if (powered) this.ribbons.add(this.c, this.d, (poweredOnly ? 0.12 : 0.03) * tk,
         intensity * (poweredOnly ? 0.7 : 0.45), poweredOnly ? 6 : 1, tr.fseed ?? tr.seed, (time - prev) / life, (time - t) / life);
       this.c.copy(this.d);
       prev = t;
@@ -309,8 +376,9 @@ export class Projectiles {
 
   torpedo(tr, time) {
     tr.visible = time >= tr.start && time < tr.end;
-    if (time < tr.start || time > tr.end + 1.3) return;
-    if (tr.impact && !tr.surfaced && time >= tr.samples.at(-1).t - 0.5) this.surfaceImpact(tr);
+    if (time < tr.start || time > tr.end + TORPEDO_WAKE_S) return;
+    if (tr.impact && time >= tr.end - TERMINAL_BEND_S - 0.5) this.surfaceImpact(tr);
+    else if (tr.pass) this.passScale(tr);
     const st = Math.min(time, tr.end);
     this.timeline.sample(tr, st, this.sample);
     this.point(this.a, this.sample);
@@ -334,20 +402,41 @@ export class Projectiles {
       // Absolute orientation, including seeker-disabled roll; never integrate dt.
       const roll = disabled ? (time - Math.min(time, tr.disabledAt)) * 1.1 + tr.seed * 6.28 : tr.seed * 6.28;
       this.bodyQ.setFromUnitVectors(Z, this.dir).multiply(this.rollQ.setFromAxisAngle(Z, roll));
+      if (disabled && tr.disabledAt <= time) {
+        // Seeker dead: no attitude control either - the round goes dark and
+        // tumbles end over end (absolute angle from the kill time, eased in)
+        const dead = time - tr.disabledAt;
+        const tumble = TUMBLE_RATE * dead * dead / (dead + 1.2);
+        this.bodyQ.multiply(this.rollQ.setFromAxisAngle(X, tumble));
+        this.dir.copy(Z).applyQuaternion(this.bodyQ);
+      }
       this.ex.copy(X).applyQuaternion(this.bodyQ);
       this.ey.copy(Y).applyQuaternion(this.bodyQ);
       // Thrusters are hardware-sized: they read up close and are gone by
       // the time the whole body is a few pixels (the faction diamond's range).
-      const bodyPx = 1.8 / this.pixelAt(this.a);
+      // The round is modelled in kit units like the hulls: tk scene km per
+      // kit unit here (render/Scale.js: a nominal hull's scale at this point)
+      const tk = this.freeK(this.a);
+      const bodyPx = 1.8 * tk / this.pixelAt(this.a);
       const vis = disabled ? 0 : THREE.MathUtils.smoothstep(bodyPx, 5, 16);
       pulsesAt(th, st, tr.seed * PULSE.period, this.pulses, this.gimbal);
       // Gimbal: the bell exit swings toward the side the nose is pushed.
       const g = power > 0 ? this.gimbal.angle : 0;
       const gx = g * (this.gimbal.x * this.ex.x + this.gimbal.y * this.ex.y + this.gimbal.z * this.ex.z);
       const gy = g * (this.gimbal.x * this.ey.x + this.gimbal.y * this.ey.y + this.gimbal.z * this.ey.z);
-      this.bodies.add(this.a, this.bodyQ, gx, gy);
+      this.bodies.add(this.a, this.bodyQ, gx, gy, tk);
       if (power > 0) {
         const terminal = power > 0.9;
+        // Terminal burn light-off: the moment guidance dumps the remaining
+        // delta-v is an event - a hard flash and a ring thrown off the bell
+        if (tr.terminalAt === undefined) tr.terminalAt = this.terminalStart(tr);
+        const kick = time - tr.terminalAt;
+        if (kick >= 0 && kick < TERMINAL_KICK_S) {
+          const kf = 1 - kick / TERMINAL_KICK_S;
+          this.b.copy(this.a).addScaledVector(this.dir, (ENGINE.pivot - ENGINE.bell) * tk);
+          this.flashes.add(this.b, this.dir, (0.7 + kick * 1.2) * tk, 2.4 * kf * kf * kf, 1, tr.seed);
+          this.flashes.add(this.b, this.dir, (0.3 + kick * 5.5) * tk, 1.5 * kf * kf, 0, tr.seed);
+        }
         const thr = th.tele ? (throttleAt(th, st) ?? 1) : 1;
         // A 5% trim burn is a flicker, not a 9 km lance.
         const size = 0.25 + 0.75 * Math.pow(Math.min(1, thr), 0.7);
@@ -356,16 +445,18 @@ export class Projectiles {
         const ga = Math.hypot(gx, gy);
         this.bellAxis.copy(this.dir).multiplyScalar(-Math.cos(ga));
         if (ga > 1e-6) this.bellAxis.addScaledVector(this.ex, Math.sin(ga) * gx / ga).addScaledVector(this.ey, Math.sin(ga) * gy / ga);
-        this.b.copy(this.a).addScaledVector(this.dir, ENGINE.pivot).addScaledVector(this.bellAxis, ENGINE.bell);
-        this.c.copy(this.b).addScaledVector(this.bellAxis, (terminal ? 9 : 3.6) * breathe * size);
-        this.ribbons.add(this.b, this.c, (terminal ? 0.5 : 0.24) * size, (terminal ? 1.15 : 0.8) * (0.6 + 0.4 * size), 3, tr.seed);
+        this.b.copy(this.a).addScaledVector(this.dir, ENGINE.pivot * tk).addScaledVector(this.bellAxis, ENGINE.bell * tk);
+        this.c.copy(this.b).addScaledVector(this.bellAxis, (terminal ? 9 : 3.6) * breathe * size * tk);
+        this.ribbons.add(this.b, this.c, (terminal ? 0.5 : 0.24) * size * tk, (terminal ? 1.15 : 0.8) * (0.6 + 0.4 * size), 3, tr.seed);
         // Nozzle glow: reads end-on and at ranges where the plume is a line.
-        this.flashes.add(this.b, this.bellAxis, (terminal ? 0.6 : 0.28) * size, (terminal ? 1.2 : 0.6) * size, 1);
+        // (never under ~3 px: the flare is what marks a live round at fleet range)
+        const flarePx = this.pixelAt(this.b) * (terminal ? 3.6 : 2.6);
+        this.flashes.add(this.b, this.bellAxis, Math.max((terminal ? 0.6 : 0.28) * size * tk, flarePx), (terminal ? 1.3 : 0.7) * Math.max(size, 0.6), 1);
       }
-      if (vis > 0.01) this.rcsJets(tr, time, vis);
+      if (vis > 0.01) this.rcsJets(tr, time, vis, tk);
       // Small seeker glint keeps an unpowered body readable at mid range.
-      this.b.copy(this.a).addScaledVector(this.dir, 1.02);
-      this.flashes.add(this.b, this.dir, 0.045, disabled ? 0.06 : 0.18, 1);
+      this.b.copy(this.a).addScaledVector(this.dir, 1.02 * tk);
+      this.flashes.add(this.b, this.dir, 0.045 * tk, disabled ? 0.06 : 0.18, 1);
       // Faction arrowhead at fleet range pointing along the round's travel
       // (not the Tracks checkpoint diamond), gone once the body resolves.
       const mark = (1 - THREE.MathUtils.smoothstep(bodyPx, 8, 24)) * (disabled ? 0.4 : 0.9);
@@ -374,7 +465,33 @@ export class Projectiles {
         this.markers.add(this.a, this.vel.lengthSq() > 1 ? this.vel : this.dir, mark, tr.faction, disabled ? 5 : 7);
       }
     }
-    this.trail(tr, time, Math.min(time, tr.end), 1.3, 14, 1, true, TRAIL_CAP_PX.torpedo);
+    this.trail(tr, time, Math.min(time, tr.end), TORPEDO_WAKE_S, 18, 1, true, TRAIL_CAP_PX.torpedo);
+  }
+
+  /**
+   * Battle time a torpedo's terminal burn lights (first recorded sample at
+   * terminal power), Infinity when it never does. From the recording alone,
+   * cached on the track.
+   */
+  terminalStart(tr) {
+    const probe = this.termProbe || (this.termProbe = makeSample());
+    for (let i = 0; i < tr.samples.length; i++) {
+      const t = tr.samples[i].t;
+      if (t >= tr.end) break;
+      this.timeline.sample(tr, t, probe);
+      const s = probe.state;
+      if (!s || s.disabled || t >= tr.disabledAt) continue;
+      let range = Infinity, closure = 0;
+      const target = this.timeline.ships.get(s.target);
+      if (target && sampleTrack(target, t, this.shipSample)) {
+        this.t1.fromArray(this.shipSample.pos).sub(this.t2.fromArray(probe.pos));
+        range = this.t1.length();
+        this.t2.fromArray(probe.vel).sub(this.s3.fromArray(this.shipSample.vel));
+        closure = range > 0 ? this.t2.dot(this.t1) / range : 0;
+      }
+      if (torpedoPower(s, probe.next, probe.dt, range, closure, false) > 0.9) return t;
+    }
+    return Infinity;
   }
 
   /**
@@ -384,7 +501,7 @@ export class Projectiles {
    * glow, and each pulse leaves an expanding puff that drifts off along
    * the nozzle axis for PULSE.puffLife after it closes.
    */
-  rcsJets(tr, time, vis) {
+  rcsJets(tr, time, vis, tk = 1) {
     const list = this.pulses, lv = this.jetLv;
     for (let p = 0; p < list.count; p++) {
       const pulse = list[p];
@@ -400,18 +517,18 @@ export class Projectiles {
         if (level < 0.05) continue;
         const phi = RCS_LAYOUT.phase + (k & 3) * Math.PI / 2;
         this.jetD.copy(this.ex).multiplyScalar(Math.cos(phi)).addScaledVector(this.ey, Math.sin(phi));
-        this.jetP.copy(this.a).addScaledVector(this.dir, RCS_LAYOUT.rings[k >> 2]).addScaledVector(this.jetD, RCS_LAYOUT.radius);
+        this.jetP.copy(this.a).addScaledVector(this.dir, RCS_LAYOUT.rings[k >> 2] * tk).addScaledVector(this.jetD, RCS_LAYOUT.radius * tk);
         const seed = tr.seed + k * 0.013;
         if (firing) {
           const flicker = 0.88 + 0.12 * Math.sin(time * 97 + k * 1.7 + tr.seed * 13);
-          this.jetQ.copy(this.jetP).addScaledVector(this.jetD, 0.13 + 0.15 * level);
-          this.ribbons.add(this.jetP, this.jetQ, 0.034, 1.6 * level * vis * open * flicker, 7, seed);
-          this.flashes.add(this.jetP, this.jetD, 0.035 + 0.02 * level, 1.0 * level * vis * open, 5, seed);
+          this.jetQ.copy(this.jetP).addScaledVector(this.jetD, (0.13 + 0.15 * level) * tk);
+          this.ribbons.add(this.jetP, this.jetQ, 0.034 * tk, 1.6 * level * vis * open * flicker, 7, seed);
+          this.flashes.add(this.jetP, this.jetD, (0.035 + 0.02 * level) * tk, 1.0 * level * vis * open, 5, seed);
         }
         // Exhaust puff: gas coasting off the nozzle, spreading thin.
-        const travel = 0.06 + 0.75 * (1 - Math.exp(-4 * age)) / 4;
+        const travel = (0.06 + 0.75 * (1 - Math.exp(-4 * age)) / 4) * tk;
         this.jetQ.copy(this.jetP).addScaledVector(this.jetD, travel);
-        const radius = 0.03 + 0.075 * (1 - Math.exp(-6 * age));
+        const radius = (0.03 + 0.075 * (1 - Math.exp(-6 * age))) * tk;
         this.flashes.add(this.jetQ, this.jetD, radius, 0.3 * level * vis * fade * Math.min(1, age / 0.03), 5, seed);
       }
     }
@@ -429,7 +546,7 @@ export class Projectiles {
     if (!this.timeline || (type !== 'torpedo' && type !== 'slug' && type !== 'projectile')) return undefined;
     const tr = type === 'torpedo' ? this.timeline.torpedoes.get(id) : this.timeline.slugs.get(id);
     if (!tr || time < tr.start || time >= tr.end) return null;
-    if (tr.impact && !tr.surfaced && time >= tr.samples.at(-1).t - 0.5) this.surfaceImpact(tr);
+    if (tr.impact && time >= tr.end - TERMINAL_BEND_S - 0.5) this.surfaceImpact(tr);
     this.timeline.sample(tr, time, this.probe);
     this.point(out, this.probe);
     return tr.lift ? this.lift(tr, time, out) : this.muzzleLift(tr, time, out);
@@ -447,27 +564,58 @@ export class Projectiles {
     const ship = this.manager.ships.get(seg.shipId);
     const target = this.position(seg.targetType, seg.targetId);
     if (!ship?.visible || !target) return;
-    const W = ship.userData.size?.width || 2, L = ship.userData.size?.length || 8;
+    const W = ship.userData.size?.width || 2, L = ship.userData.size?.length || 8;   // kit units
+    const hk = this.shipK(ship);   // the hull's draw scale: mounts are kit-unit points on it
     const seed = seg.visualSeed;
     const torpedo = seg.targetType === 'torpedo';
     const tr = torpedo ? this.timeline.torpedoes.get(seg.targetId) : this.timeline.slugs.get(seg.targetId);
-    const mount = this.pdMount(seg, ship);
+    let mount = this.pdMount(seg, ship);
     if (mount) {
       // From the firing PD ball's lens (the ball itself slews onto the round).
-      this.a.copy(mount.pos).applyQuaternion(ship.quaternion).add(ship.position);
+      this.a.copy(mount.pos).multiplyScalar(hk).applyQuaternion(ship.quaternion).add(ship.position);
       this.dir.subVectors(target, this.a).normalize();
-      this.a.addScaledVector(this.dir, mount.reach);
+      let reach = mount.reach;
+      // A beam is never drawn through the ship. Checked every frame against
+      // the firing mount's arc (the line swings during a dwell). Recordings
+      // from the arcs engine never get here: it only fires when clear.
+      this.q.copy(ship.quaternion).invert();
+      this.s3.copy(this.dir).applyQuaternion(this.q);
+      if (mount.arc && isBlocked(mount.arc, this.s3)) {
+        // the round has moved behind the hull for this mount: the PD mount
+        // that has a clear line right now shows the beam (HullRigs trains
+        // that ball on it); with none, the beam starts where its line
+        // leaves the hull's bounding ellipsoid
+        const pds = arcsFor(ship.userData.shipType)?.pds;
+        const name = pds ? shownPdMount(seg.arcTurret ?? seg.turret, pds, this.s3) : null;
+        const alt = name ? this.pdMount(seg, ship, name) : null;
+        if (alt) {
+          mount = alt;
+          reach = alt.reach;
+          this.a.copy(alt.pos).multiplyScalar(hk).applyQuaternion(ship.quaternion).add(ship.position);
+          this.dir.subVectors(target, this.a).normalize();
+        } else {
+          reach = Math.max(reach, hullExit(mount.pos, this.s3, W, L));
+        }
+      }
+      this.a.addScaledVector(this.dir, reach * hk);
     } else {
       this.a.set((random(seg.mountSeed, 1) - 0.5) * W * 0.85, (random(seg.mountSeed, 2) - 0.5) * W * 0.85, (random(seg.mountSeed, 3) - 0.5) * L * 0.6);
-      this.a.applyQuaternion(ship.quaternion).add(ship.position);
+      this.a.multiplyScalar(hk).applyQuaternion(ship.quaternion).add(ship.position);
     }
     this.dir.subVectors(target, this.a).normalize();
     // Burn spot on the facing surface of the round, not hidden at its centre.
-    this.surfaceOffset(tr, torpedo, time, this.d);
+    const rk = this.freeK(target);   // the round's own draw scale
+    this.surfaceOffset(tr, torpedo, time, this.d).multiplyScalar(rk);
     this.b.copy(target).add(this.d);
-    this.beamRibbon(this.a, this.b, 0.85 * intensity, seed);
-    this.flashes.add(this.a, this.dir, 0.16, 0.38 * intensity);
-    this.flashes.add(this.b, this.dir, 0.2, 0.75 * intensity, 2, seed);
+    this.beamRibbon(this.a, this.b, 0.85 * intensity, seed, hk);
+    // emitter glint at the lens, and the burn spot on the round: the laser's
+    // green over a white-hot contact point (the ablation sparks follow below)
+    this.flashes.add(this.a, this.dir, 0.2 * hk, 0.7 * intensity, 6, seed);
+    // Ablation glow builds over the dwell: the skin goes from a spark to a
+    // white-hot patch before the round lets go
+    const dwell = THREE.MathUtils.clamp((time - seg.start) / Math.max(DWELL_GLOW_S, seg.end - seg.start), 0, 1);
+    this.flashes.add(this.b, this.dir, 0.2 * (1 + 0.9 * dwell) * rk, 0.75 * intensity * (0.55 + 0.95 * dwell), 2, seed);
+    this.flashes.add(this.b, this.dir, 0.3 * (1 + 0.5 * dwell) * rk, 0.6 * intensity, 6, seed);
     // Fixed birth cadence, sampled analytically; direct seeks retain spray.
     const cadence = 0.09, tick = Math.floor((time - seg.start) / cadence);
     this.dir.negate();
@@ -477,30 +625,20 @@ export class Projectiles {
       this.timeline.sample(tr, time - age, this.history);
       this.point(this.c, this.history).add(this.d);
       this.vel.fromArray(this.history.vel).multiplyScalar(SCALE);
-      this.sparks(this.c, this.dir, this.vel, age, 0.28, 0.4, seed + (tick - j) * 0.013, 4, intensity);
+      this.sparks(this.c, this.dir, this.vel, age, 0.28, 0.4 * rk, seed + (tick - j) * 0.013, 4, intensity);
     }
   }
 
   /**
-   * A PD beam a -> b. In a close-up a beam to a round 100 km out is a
-   * laser line straight across the frame: beams far from the focus fade,
-   * and one longer than 2 x BEAM_END_PX on screen keeps only its ends
-   * (turret and burn spot), each fading out toward the cut. Fleet range
-   * draws every beam whole, as before.
+   * A PD beam a -> b, always drawn whole: one ribbon from the emitter lens
+   * to the burn spot at every camera distance. In a close-up, beams whose
+   * emitter is far from the focus fade (focusFade); the focused ship's own
+   * beams stay at full strength along their whole run.
    */
-  beamRibbon(a, b, intensity, seed) {
-    const k = closeUpK(this.viewDist);
-    if (k <= 0) { this.ribbons.add(a, b, 0.075, intensity, 2, seed); return; }
+  beamRibbon(a, b, intensity, seed, k = 1) {
     intensity *= focusFade(a.distanceTo(this.focus), this.viewDist);
     if (intensity < 0.01) return;
-    const len = a.distanceTo(b);
-    const endA = BEAM_END_PX * this.pixelAt(a), endB = BEAM_END_PX * this.pixelAt(b);
-    if (len <= (endA + endB) * 1.15) { this.ribbons.add(a, b, 0.075, intensity, 2, seed); return; }
-    this.t1.subVectors(b, a).divideScalar(len);
-    this.t2.copy(a).addScaledVector(this.t1, endA);
-    this.ribbons.add(a, this.t2, 0.075, intensity, 2, seed, 0, 1);
-    this.t2.copy(b).addScaledVector(this.t1, -endB);
-    this.ribbons.add(this.t2, b, 0.075, intensity, 2, seed, 1, 0);
+    this.ribbons.add(a, b, 0.075 * k, intensity, 2, seed);
   }
 
   /**
@@ -508,22 +646,27 @@ export class Projectiles {
    * (hull `pdMounts` by name, else by turret index), or null for hulls
    * without PD mounts (then a seeded hull point is used). Cached per segment.
    */
-  pdMount(seg, ship) {
-    if (seg.mountShip === ship) return seg.mount;
+  pdMount(seg, ship, name = null) {
+    // which turret shows this dwell: the recorded one, or on recordings
+    // older than the arcs engine a mount with a clear line (TurretArcs)
+    pdPlan(this.manager);
+    if (name === null && seg.mountShip === ship) return seg.mount;
     const ud = ship.userData;
     const list = ud.pdMounts;
     let mount = null;
     if (list?.length) {
-      let i = list.findIndex(p => p.name === seg.turret);
+      const turret = name ?? seg.arcTurret ?? seg.turret;
+      let i = list.findIndex(p => p.name === turret);
       if (i < 0) {
-        const n = Number(String(seg.turret ?? '').split('_').at(-1));
+        const n = Number(String(turret ?? '').split('_').at(-1));
         if (Number.isFinite(n) && n >= 0) i = n % list.length;
       }
       if (i >= 0) {
         const rig = ud.pdTurrets?.find(r => r.name === list[i].name);
-        mount = { pos: list[i].pos, reach: 0.72 * (rig?.s ?? 0) };
+        mount = { pos: list[i].pos, reach: 0.72 * (rig?.s ?? 0), arc: arcsFor(ud.shipType)?.bySlot.get(list[i].name) || null };
       }
     }
+    if (name !== null) return mount;      // a momentary stand-in: not cached
     seg.mount = mount;
     seg.mountShip = ship;
     return mount;
@@ -554,7 +697,7 @@ export class Projectiles {
       this.dir.copy(Z).applyQuaternion(this.q);
     } else {
       const mz = this.shotMuzzle(m, ship);
-      this.a.copy(mz.pos).applyQuaternion(ship.quaternion).add(ship.position);
+      this.a.copy(mz.pos).multiplyScalar(this.shipK(ship)).applyQuaternion(ship.quaternion).add(ship.position);
       this.dir.copy(mz.dir).applyQuaternion(ship.quaternion);
       // The firing turret holds the shot's bearing through the flash; its
       // angles come from the recording, never from the rig's own slew.
@@ -569,11 +712,112 @@ export class Projectiles {
     // Sized to the hull: the ring that fits a dreadnought turret would
     // swallow a frigate's whole beam.
     const hullK = THREE.MathUtils.clamp((ship.userData.size?.width || 5.6) / 5.6, 0.4, 1);
-    const k = (m.spinal ? 1.4 : 1.0) * hullK, f = 1 - age / MUZZLE_LIFE;
+    const cls = m.cls ?? (m.spinal ? 2 : 0), look = MUZZLE_LOOK[cls] || MUZZLE_LOOK[0];
+    const hk = this.shipK(ship);   // kit units -> scene km at the hull's draw scale
+    const k = look.size * hullK * hk, f = 1 - age / MUZZLE_LIFE;
     this.flashes.add(this.a, this.dir, k * (0.28 + age * 1.2), 2.2 * f * f * f, 1, m.seed);
     this.flashes.add(this.a, this.dir, k * (0.18 + age * 2.6), 1.3 * f * f, 0, m.seed);
-    this.b.copy(this.a).addScaledVector(this.dir, k * (0.6 + age * 5));
-    this.ribbons.add(this.a, this.b, k * 0.1, 1.4 * f * f, 0, m.seed);
+    // Coil discharge glow: a cold blue-white bloom round the muzzle, so gun
+    // fire never reads as a (warm) hit on the firing ship's own hull
+    this.flashes.add(this.a, this.dir, k * (0.36 + age * 1.6), 0.95 * f * f * f, 5, m.seed);
+    // Forward jet: the plasma the slug drags out of the bore (class in aAge)
+    this.b.copy(this.a).addScaledVector(this.dir, k * look.jet * (0.6 + age * 5));
+    this.ribbons.add(this.a, this.b, k * 0.1, 1.4 * f * f, 0, m.seed, cls, cls);
+    // Sabot / coil-plasma spray thrown forward in a cone; rides the muzzle
+    this.axis.set(0, 0, 0);
+    this.sparks(this.a, this.dir, this.axis, age, MUZZLE_LIFE, k * look.spray, m.seed + 0.31, look.sparks, 0.85, 3.4);
+    if (look.rings > 1) {
+      // Big guns: a second discharge ring blown down the line of fire
+      this.b.copy(this.a).addScaledVector(this.dir, k * (0.5 + age * 7));
+      this.flashes.add(this.b, this.dir, k * (0.12 + age * 3.4), 0.9 * f * f, 0, m.seed + 0.17);
+    }
+    if (look.rings > 2) {
+      this.b.copy(this.a).addScaledVector(this.dir, k * (1.0 + age * 12));
+      this.flashes.add(this.b, this.dir, k * (0.08 + age * 2.4), 0.7 * f * f, 0, m.seed + 0.43);
+    }
+    this.offerPop(this.a, muzzlePop(age, MUZZLE_LIFE) * look.light, look.reach * hullK, hk);
+  }
+
+  /**
+   * Drive plume wash (recorded plume_wash) where the jet meets the victim:
+   * a bright impingement glow on the plating that faces the emitter and a
+   * spray of ablated material streaming on downstream past the hull, both
+   * scaled by the recorded heat rate. Seeded births on a fixed cadence, so
+   * a paused or scrubbed frame shows the same spray.
+   */
+  plumeWash(time) {
+    const ships = this.manager.damageFX?.timeline?.ships;
+    if (!ships) return;
+    for (const [id, sd] of ships) {
+      if (!sd.washes || !sd.washes.length) continue;
+      const w = washAt(sd, time, this.wash || (this.wash = {}));
+      if (!(w.rate > 0)) continue;
+      const vic = this.manager.ships.get(id), em = this.manager.ships.get(w.jet);
+      const size = vic?.userData.drawn || vic?.userData.size;   // the washed hull as drawn (scene km)
+      if (!vic?.visible || !em?.visible || !size) continue;
+      this.t1.subVectors(em.position, vic.position);
+      const dist = this.t1.length();
+      if (dist < 1e-6) continue;
+      this.t1.divideScalar(dist);                       // toward the emitter
+      this.axis.set(0, 0, 1).applyQuaternion(vic.quaternion);
+      const c = this.t1.dot(this.axis);
+      const R = 1 / Math.sqrt((c / (size.length * 0.5)) ** 2 + (1 - c * c) / (size.width * 0.5) ** 2);
+      this.a.copy(vic.position).addScaledVector(this.t1, R * 0.92);
+      const k = Math.min(1.6, Math.sqrt(w.rate / 16));
+      const seed = seedFor(id);
+      const flick = 0.88 + 0.12 * Math.sin(time * 23 + seed * 40);
+      // stagnation glow: hot gas piling up against the plating
+      this.flashes.add(this.a, this.t1, size.width * (0.55 + 0.4 * k), 0.75 * k * w.heat * flick, 5, seed);
+      this.flashes.add(this.a, this.t1, size.width * 0.3, 1.1 * k * w.heat * flick, 1, seed);
+      // ablated plating carried on down the jet, past the hull
+      this.t2.copy(this.t1).negate();
+      this.s1.set(0, 0, 0);
+      const cadence = 0.11, tick = Math.floor(time / cadence);
+      for (let j = 0; j < 7; j++) {
+        const age = time - (tick - j) * cadence;
+        this.sparks(this.a, this.t2, this.s1, age, 0.75, size.width * 2.2 * (0.5 + 0.5 * k), seed + (tick - j) * 0.0137, 5, 0.85 * Math.min(1, k), 2.4);
+      }
+    }
+  }
+
+  /** Offer a muzzle flash for one of the frame's light pops (strongest win). */
+  offerPop(pos, w, reach, k = 1) {
+    if (w <= 0.02 || !this.manager.tryPointLight) return;
+    // Lights fall off by the inverse square: only flashes near the camera's
+    // subject are worth one of the two pool lights
+    if (pos.distanceTo(this.focus) > Math.max(60 * k, this.viewDist * 1.5)) return;
+    let slot = null;
+    for (let i = 0; i < this.pops.length; i++) {
+      const p = this.pops[i];
+      if (w > p.w && (!slot || p.w < slot.w)) slot = p;
+    }
+    if (!slot) return;
+    // (reach and - inverse square - intensity at the hull's draw scale k)
+    slot.w = w; slot.reach = reach * k; slot.k2 = k * k; slot.pos.copy(pos);
+  }
+
+  /** Drive the pool lights behind the frame's strongest muzzle flashes. */
+  popLights() {
+    const mgr = this.manager;
+    for (let i = 0; i < this.pops.length; i++) {
+      const p = this.pops[i];
+      if (p.w <= 0) {
+        if (p.light) { mgr.freePointLight(p.light); p.light = null; }
+        continue;
+      }
+      if (!p.light) p.light = mgr.tryPointLight?.(0xbfe2ff, 0, p.reach, 2) || null;
+      if (!p.light) continue;
+      p.light.position.copy(p.pos);
+      p.light.distance = p.reach;
+      p.light.intensity = p.w * (p.k2 ?? 1);
+    }
+  }
+
+  releasePops() {
+    for (const p of this.pops || []) {
+      if (p.light) this.manager.freePointLight?.(p.light);
+      p.light = null; p.w = 0;
+    }
   }
 
   /** Hull-local muzzle for a shot_fired moment (cached on the moment). */
@@ -588,7 +832,7 @@ export class Projectiles {
       const target = this.timeline.ships.get(m.data.target_id);
       if (target && track && sampleTrack(target, m.time, this.shipSample) && sampleTrack(track, m.time, this.liftSample)) {
         this.aim.fromArray(this.shipSample.pos).sub(this.s2.fromArray(this.liftSample.pos));
-        this.hullQuaternion(this.liftSample.fwd, this.q2).invert();
+        this.hullQuaternion(this.liftSample.fwd, this.q2, this.liftSample.up).invert();
         this.aim.applyQuaternion(this.q2);
         if (this.aim.lengthSq() < 1e-10) this.aim.copy(Z); else this.aim.normalize();
       }
@@ -612,7 +856,7 @@ export class Projectiles {
     }
     if (age >= IMPACT_LIFE) return;
     if (m.kind === 'muzzle') { this.muzzle(m, age); return; }
-    if (m.kind === 'hit' && m.track.impact && !m.track.surfaced) this.surfaceImpact(m.track);
+    if (m.kind === 'hit' && m.track.impact) this.surfaceImpact(m.track);
     this.timeline.sample(m.track, m.time, this.sample);
     this.point(this.a, this.sample);
     if (m.track.lift) this.lift(m.track, m.time, this.a); else this.muzzleLift(m.track, m.time, this.a);
@@ -635,13 +879,14 @@ export class Projectiles {
         if (this.c.lengthSq() > 1) this.dir.copy(this.c).normalize();
         this.vel.fromArray(this.shipSample.vel).multiplyScalar(SCALE);
         if (!mark) {
-          // Recorded hits use physical hull dimensions, while viewer hulls
-          // are exaggerated. Project onto the displayed target's incoming surface.
+          // No mark for this round: project onto the incoming surface of
+          // the target as it is drawn (an ellipsoid of its drawn size).
           this.point(this.b, this.shipSample);
           this.axis.fromArray(this.shipSample.fwd).normalize();
           const axial = Math.abs(this.dir.dot(this.axis));
-          const radius = 1 / Math.sqrt((axial / (target.userData.size.length * 0.5)) ** 2
-            + (1 - axial * axial) / (target.userData.size.width * 0.5) ** 2);
+          const drawn = target.userData.drawn || target.userData.size;
+          const radius = 1 / Math.sqrt((axial / (drawn.length * 0.5)) ** 2
+            + (1 - axial * axial) / (drawn.width * 0.5) ** 2);
           this.a.copy(this.b).addScaledVector(this.dir, -radius);
         }
       }
@@ -651,39 +896,47 @@ export class Projectiles {
     // Advect the flash with the struck hull / intercepted round.
     this.a.addScaledVector(this.vel, age);
     const k = m.kind, life = 1 - age / IMPACT_LIFE;
+    // Sizes below are kit units: drawn at the struck hull's scale for a
+    // hit, else at the round's own (render/Scale.js)
+    const struck = k === 'hit' ? this.manager.ships.get(m.target) : null;
+    const mk = struck ? this.shipK(struck) : this.freeK(this.a);
     this.axis.set(0, 0, 0); // centre already advected; sparks get no base velocity
     if (k === 'ignition' || k === 'burnout') {
       // Motor light-off / flame-out at the nozzle: a short stuttering flare.
       if (k === 'ignition') {
         // Launch: at the (lifted) tube exit so the hull does not hide it.
-        this.flashes.add(this.a, this.dir, 0.5 + age * 2, 1.6 * Math.exp(-age * 6) * life, 1, m.seed);
-        this.flashes.add(this.a, this.dir, 0.3 + age * 3, 0.9 * life * life, 0, m.seed);
+        this.flashes.add(this.a, this.dir, (0.5 + age * 2) * mk, 1.6 * Math.exp(-age * 6) * life, 1, m.seed);
+        this.flashes.add(this.a, this.dir, (0.3 + age * 3) * mk, 0.9 * life * life, 0, m.seed);
         return;
       }
-      this.a.addScaledVector(this.dir, ENGINE.pivot - ENGINE.bell);
+      this.a.addScaledVector(this.dir, (ENGINE.pivot - ENGINE.bell) * mk);
       const stutter = 0.55 + 0.45 * Math.sin(age * 70 + m.seed * 9);
-      this.flashes.add(this.a, this.dir, 0.3 + age * 1.6, 1.3 * Math.exp(-age * 7) * life * stutter, 1, m.seed);
+      this.flashes.add(this.a, this.dir, (0.3 + age * 1.6) * mk, 1.3 * Math.exp(-age * 7) * life * stutter, 1, m.seed);
       return;
     }
     if (k === 'seeker') {
       // Seeker burned out by PD: an electrical arc ring around the body.
-      this.flashes.add(this.a, this.dir, 0.35 + age * 2.2, 1.6 * life * life, 0, m.seed);
-      this.flashes.add(this.a, this.dir, 0.3, 1.4 * Math.exp(-age * 12) * life, 1, m.seed);
-      this.sparks(this.a, this.dir, this.axis, age, IMPACT_LIFE, 0.5, m.seed, 14, 1);
+      this.flashes.add(this.a, this.dir, (0.35 + age * 2.2) * mk, 1.6 * life * life, 0, m.seed);
+      this.flashes.add(this.a, this.dir, 0.3 * mk, 1.4 * Math.exp(-age * 12) * life, 1, m.seed);
+      this.sparks(this.a, this.dir, this.axis, age, IMPACT_LIFE, 0.5 * mk, m.seed, 14, 1);
       return;
     }
-    let scale = k === 'hit' ? Math.min(2.1, 0.5 + Math.pow(Math.max(1, m.energy || 1), 0.3) * 0.3) : 0.9;
+    let scale = (k === 'hit' ? Math.min(2.1, 0.5 + Math.pow(Math.max(1, m.energy || 1), 0.3) * 0.3) : 0.9) * mk;
     const flash = Math.exp(-age * 9) * life;
     if (k !== 'hit') {
-      this.flashes.add(this.a, this.dir, scale * (0.55 + age * 2.5), flash * 2.2, 2, m.seed);
-      this.flashes.add(this.a, this.dir, scale * 0.3, 2.5 * Math.exp(-age * 30), 1, m.seed);
-      this.sparks(this.a, this.dir, this.axis, age, IMPACT_LIFE, scale, m.seed, 28, 1);
+      // Interception: a small sharp pop - a white pinpoint, a thin ring
+      // snapping outward and a few fast fragments - nothing like the warm,
+      // sustained strike of a round on armour
+      this.flashes.add(this.a, this.dir, scale * (0.35 + age * 1.6), flash * 1.6, 2, m.seed);
+      this.flashes.add(this.a, this.dir, scale * 0.28, 3.0 * Math.exp(-age * 34), 1, m.seed);
+      this.flashes.add(this.a, this.dir, scale * (0.2 + age * 6.5), 1.5 * life * life * life, 0, m.seed);
+      this.sparks(this.a, this.dir, this.axis, age, IMPACT_LIFE, scale * 1.5, m.seed, 16, 1);
       return;
     }
     // Hull hit: sized to the struck hull (a stopped penetrator must not
     // swallow a corvette), but never under a few pixels so a hit still
     // reads as a star at fleet range.
-    const W = this.manager.ships.get(m.target)?.userData.size?.width ?? 2;
+    const W = (struck?.userData.drawn || struck?.userData.size)?.width ?? 2 * mk;
     scale = Math.min(scale, W * (m.track.lift ? 0.7 : 0.55));
     const px = this.pixelAt(this.a);
     this.flashes.add(this.a, this.dir, Math.max(scale * (0.55 + age * 2.5), px * 4.5 * life), flash * 2.2, 2, m.seed);
@@ -712,7 +965,9 @@ export class Projectiles {
     const target = this.manager.ships.get(m.target);
     const tt = this.timeline.ships.get(m.target);
     if (!target?.userData.size || !tt || !sampleTrack(tt, m.time, this.shipSample)) return;
-    const L = target.userData.size.length, W = target.userData.size.width;
+    // the hull as drawn (scene km): a pass inside it skims its plating
+    const drawn = target.userData.drawn || target.userData.size;
+    const L = drawn.length, W = drawn.width;
     this.point(this.b, this.shipSample);
     this.travel.fromArray(this.sample.vel).sub(this.d.fromArray(this.shipSample.vel));
     if (this.travel.lengthSq() < 1) this.travel.copy(this.dir); else this.travel.normalize();
@@ -761,6 +1016,7 @@ export class Projectiles {
   }
 
   clear() {
+    this.releasePops();
     this.trace = null; this.timeline = null;
     this.events = null; this.slugs = null; this.torpedoes = null; this.beams = null;
     this.ribbons.begin(0); this.ribbons.end();

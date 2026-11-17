@@ -25,14 +25,18 @@ Examples:
 
     # a 2x close crop of the HUD (CSS-pixel clip at device scale 2 -> 1600x900),
     # with extra viewer URL parameters
-    uv run python scripts/viewer_snapshot.py --recording intent_qwen_gptoss.json \
+    uv run python scripts/viewer_snapshot.py --recording intent_qwen_gptoss.json.gz \
         --time 184.8 --query "decisions=1&decision=e152" --width 1200 --height 660 \
         --scale 2 --clip 392,117,800,450 --out /tmp/panel.png
 
+Hull scale: the viewer draws hulls at their real size up close (scale=auto,
+the default; --query scale=true|cinematic for the other modes, see the
+README). --dist counts REAL hull lengths in auto and true, so a close-up is
+a few hundred metres from the ship; --camera/--target are km either way.
+
 Without --focus/--camera the shot keeps the viewer's default camera. The
-viewer's auto director (which eases the camera in wall time, so its framing
-depends on how many frames rendered while loading) stays off unless
---director is given.
+viewer's auto director stays off unless --director is given (its shots are
+a function of battle time, so a --director frame is reproducible).
 
 The viewer exposes window.visualizer; camera framing is done with
 page.evaluate so hidden ships (destroyed hulks) are framed from their
@@ -77,7 +81,10 @@ FRAME_JS = """
   if (focus) {
     const ship = s.ships.get(focus);
     if (ship) {
-      L = ship.userData.size?.length || 8;
+      // hull length the shot is framed in: the real length in the auto and
+      // true scale modes, the kit length in cinematic (static per mode, so
+      // --dist does not depend on where the camera was before)
+      L = s.framingLength?.(focus) || ship.userData.size?.length || 8;
       center = ship.position.clone();
       if (!ship.visible) {
         const eff = (s.destructionEffects || []).find(e => e.shipId === focus);
@@ -172,14 +179,89 @@ def parse_clip(s: str | None):
     return {"x": x, "y": y, "width": w, "height": h}
 
 
+class ViewerSession:
+    """A headless viewer page on a recording, paused and ready to seek.
+
+    Shared by this script and scripts/viewer_clip.py so both drive Chrome
+    the same way (flags, load wait, stalled-tab opt-out, paused stepping).
+    """
+
+    def __init__(self, pw, page_url: str, width: int, height: int, scale: float = 1.0,
+                 init_timeout_s: float = 120.0):
+        self.browser = pw.chromium.launch(headless=True, args=CHROME_ARGS)
+        self.page = self.browser.new_page(viewport={"width": width, "height": height},
+                                          device_scale_factor=scale)
+        self.errors: list[str] = []
+        self.page.on("console", lambda m: self.errors.append(m.text)
+                     if m.type in ("error", "warning") else None)
+        self.page.on("pageerror", lambda e: self.errors.append(str(e)))
+        self.page.goto(page_url, wait_until="domcontentloaded")
+        try:
+            self.page.wait_for_function("window.visualizer && window.visualizer.isInitialized",
+                                        timeout=init_timeout_s * 1000)
+        except Exception:
+            self.print_errors()   # a page error, or just a loaded machine
+            self.browser.close()
+            raise
+        # initializeBattle() auto-plays ~300 ms after isInitialized flips
+        self.page.wait_for_timeout(700)
+        self.pause()
+        # llvmpipe frames can take >1 s; the viewer's stalled-tab guard
+        # would otherwise skip every update
+        self.page.evaluate("window.visualizer.slowFrameOk = true")
+
+    def pause(self) -> None:
+        self.page.evaluate("window.visualizer.timeController.pause()")
+
+    def wait_frames(self, n: int, timeout_s: float = 180.0) -> None:
+        page = self.page
+        start = page.evaluate("window.visualizer.scene.frameIndex")
+        t0 = time.time()
+        while page.evaluate("window.visualizer.scene.frameIndex") < start + n:
+            if time.time() - t0 > timeout_s:
+                raise RuntimeError("renderer stalled")
+            page.wait_for_timeout(50)
+
+    def hide_ui(self) -> None:
+        self.page.add_style_tag(content="#app > *:not(canvas){display:none !important}")
+
+    def seek(self, t: float) -> None:
+        # Re-pause first: under load the viewer's auto-play timer can fire
+        # after the pause in __init__, and the sequence would then run on
+        # the wall clock instead of stepping
+        self.page.evaluate(
+            "t => { const tc = window.visualizer.timeController; tc.pause(); tc.seek(t); }", t)
+        self.wait_frames(1)
+
+    def clean_seek(self, t: float) -> None:
+        """Jump a little before the target so the first visible frame has
+        interpolated state, then land on it."""
+        self.seek(max(0.0, t - 0.05))
+        self.seek(t)
+
+    def battle_time(self) -> float:
+        return self.page.evaluate("window.visualizer.timeController.currentTime")
+
+    def print_errors(self) -> None:
+        if self.errors:
+            print("--- console errors/warnings ---")
+            for e in self.errors[:20]:
+                print(e[:300])
+
+    def close(self) -> None:
+        self.browser.close()
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--recording", required=True,
-                   help="file name under visualizer/public/recordings/ (or a full URL)")
+                   help="file name under visualizer/public/recordings/, .json or .json.gz (or a full URL)")
     p.add_argument("--time", type=float, default=0.0, help="seek time in seconds")
     p.add_argument("--focus", help="ship id to frame")
-    p.add_argument("--dist", type=float, default=3.0, help="camera distance in hull lengths")
+    p.add_argument("--dist", type=float, default=3.0,
+                   help="camera distance in hull lengths (the real 65-275 m hull in the default "
+                        "scale mode; pass --query scale=cinematic for the old oversize hulls)")
     p.add_argument("--az", type=float, default=35.0, help="camera azimuth deg")
     p.add_argument("--el", type=float, default=18.0, help="camera elevation deg")
     p.add_argument("--camera", help="x,y,z camera position (km) - overrides --focus")
@@ -197,6 +279,9 @@ def main() -> int:
     p.add_argument("--port", type=int, default=5173)
     p.add_argument("--gfx", choices=["low", "high", "auto"],
                    help="graphics quality (default: viewer auto-detect; software GL -> low)")
+    p.add_argument("--init-timeout", type=float, default=120.0,
+                   help="seconds to wait for the viewer to initialise (raise on a loaded "
+                        "machine: software GL bakes the sky and compiles shaders at load)")
     p.add_argument("--hide-ui", action="store_true", help="hide the HUD panels")
     p.add_argument("--out", required=True,
                    help="output PNG; use %%02d for --sequence frames")
@@ -207,7 +292,7 @@ def main() -> int:
     p.add_argument("--clip", help="x,y,w,h region in CSS pixels to keep (default: whole viewport)")
     p.add_argument("--director", action="store_true",
                    help="keep the viewer's auto director flying the camera when no --focus/"
-                        "--camera is given (framing then depends on load timing)")
+                        "--camera is given (its shot at time t is a function of t)")
     args = p.parse_args()
 
     clip = parse_clip(args.clip)
@@ -216,42 +301,19 @@ def main() -> int:
 
     try:
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True, args=CHROME_ARGS)
-            page = browser.new_page(viewport={"width": args.width, "height": args.height},
-                                    device_scale_factor=args.scale)
-            errors: list[str] = []
-            page.on("console", lambda m: errors.append(m.text)
-                    if m.type in ("error", "warning") else None)
-            page.on("pageerror", lambda e: errors.append(str(e)))
-            page.goto(page_url, wait_until="domcontentloaded")
-            page.wait_for_function("window.visualizer && window.visualizer.isInitialized",
-                                   timeout=120_000)
-            # initializeBattle() auto-plays ~300 ms after isInitialized flips
-            page.wait_for_timeout(700)
-            page.evaluate("window.visualizer.timeController.pause()")
-            # llvmpipe frames can take >1 s; the viewer's stalled-tab guard
-            # would otherwise skip every update
-            page.evaluate("window.visualizer.slowFrameOk = true")
-
-            def wait_frames(n: int, timeout_s: float = 60.0) -> None:
-                start = page.evaluate("window.visualizer.scene.frameIndex")
-                t0 = time.time()
-                while page.evaluate("window.visualizer.scene.frameIndex") < start + n:
-                    if time.time() - t0 > timeout_s:
-                        raise RuntimeError("renderer stalled")
-                    page.wait_for_timeout(50)
+            session = ViewerSession(pw, page_url, args.width, args.height, args.scale,
+                                    init_timeout_s=args.init_timeout)
+            page = session.page
+            wait_frames = session.wait_frames
+            seek = session.seek
             if args.hide_ui:
-                page.add_style_tag(content="#app > *:not(canvas){display:none !important}")
+                session.hide_ui()
 
             frame_opts = {
                 "focus": args.focus, "dist": args.dist, "az": args.az, "el": args.el,
                 "camera": parse_vec(args.camera), "target": parse_vec(args.target),
                 "director": args.director,
             }
-
-            def seek(t: float) -> None:
-                page.evaluate("t => window.visualizer.timeController.seek(t)", t)
-                wait_frames(1)
 
             def shoot(path: str) -> None:
                 page.evaluate(FRAME_JS, frame_opts)
@@ -263,10 +325,7 @@ def main() -> int:
                 page.screenshot(path=path, timeout=180_000, clip=clip)  # llvmpipe under load
                 print("wrote", path)
 
-            # A clean seek: jump a little before the target so the first
-            # visible frame has interpolated state, then land on it.
-            seek(max(0.0, args.time - 0.05))
-            seek(args.time)
+            session.clean_seek(args.time)
 
             if args.sequence <= 0:
                 shoot(args.out)
@@ -287,14 +346,11 @@ def main() -> int:
                         page.evaluate(FRAME_JS, frame_opts)
                     wait_frames(2)
                     path = args.out % i if "%" in args.out else args.out
-                    bt = page.evaluate("window.visualizer.timeController.currentTime")
+                    bt = session.battle_time()
                     page.screenshot(path=path, timeout=180_000, clip=clip)  # llvmpipe under load
                     print(f"wrote {path}  battle t={bt:.1f}")
-            if errors:
-                print("--- console errors/warnings ---")
-                for e in errors[:20]:
-                    print(e[:300])
-            browser.close()
+            session.print_errors()
+            session.close()
     finally:
         if vite:
             stop_vite(vite)

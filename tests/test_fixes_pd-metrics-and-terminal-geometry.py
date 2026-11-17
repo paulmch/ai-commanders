@@ -65,7 +65,8 @@ def _quiet(fn, *args, **kwargs):
 # 1. Point defense must book blinds, and must not call them interceptions
 # =============================================================================
 
-def _salvo_against_screen(fleet_data, n_escorts, salvo=6, evading=False, seed=23):
+def _salvo_against_screen(fleet_data, n_escorts, salvo=6, evading=False, seed=23,
+                          range_km=350):
     """Torpedo cruiser salvos a battleship sitting behind n destroyer escorts."""
     sim = CombatSimulation(seed=seed, time_step=0.5)
     victim = create_ship_from_fleet_data(
@@ -83,10 +84,10 @@ def _salvo_against_screen(fleet_data, n_escorts, salvo=6, evading=False, seed=23
             forward=Vector3D(1, 0, 0)))
     sim.add_ship(create_ship_from_fleet_data(
         "att", "cruiser_torpedo", "beta", fleet_data,
-        position=Vector3D(350_000, 0, 0), forward=Vector3D(-1, 0, 0)))
+        position=Vector3D(range_km * 1000.0, 0, 0), forward=Vector3D(-1, 0, 0)))
 
     launched, steps = 0, 0
-    while steps < 1200:
+    while steps < 4000:
         if launched < salvo and sim.inject_command(
                 "att", {"type": "launch_torpedo", "target_id": "victim"}):
             launched += 1
@@ -146,9 +147,14 @@ class TestPointDefenseBooksWhatItActuallyDid:
         assert sim.metrics.total_torpedo_neutralized == 0
 
     def test_evasion_is_what_converts_a_blind_into_a_save(self, fleet_data):
-        """The blind only buys something if the target then moves."""
-        still = _quiet(_salvo_against_screen, fleet_data, n_escorts=8, evading=False)
-        moving = _quiet(_salvo_against_screen, fleet_data, n_escorts=8, evading=True)
+        """The blind only buys something if the target then moves. Launched
+        1200 km out: the evading battleship has time to run (buying the wall
+        dwell) and turn back; from 350 km it cannot, holds its nose on the
+        salvo and the rounds are blinded too late to dodge."""
+        still = _quiet(_salvo_against_screen, fleet_data, n_escorts=8, evading=False,
+                       range_km=1200)
+        moving = _quiet(_salvo_against_screen, fleet_data, n_escorts=8, evading=True,
+                        range_km=1200)
 
         assert still.metrics.total_torpedo_seeker_killed > 0
         assert moving.metrics.total_torpedo_seeker_killed > 0
@@ -504,6 +510,7 @@ class TestAblationRecoilIsCausallyLive:
             f"{bare}/{n} unescorted vs {escorted}/{n} escorted"
         )
 
+    @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py
     def test_a_symmetric_screen_cancels_its_own_push(self, fleet_data):
         """
         Four escorts on a ring push the round from opposite sides. The physics

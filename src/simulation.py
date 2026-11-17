@@ -70,6 +70,9 @@ try:
     )
     from .power import PowerSystem, WeaponCapacitor, Battery, Reactor
     from .maneuvers import max_arrival_speed_mps, required_decel_ms2
+    from . import battle_damage
+    from . import drive_plume
+    from . import weapon_arcs
 except ImportError:
     from replay_evidence import ExecutionEvidence, impact_evidence, OMIT_IF_NONE
     from battle_timing import MIN_DECISION_INTERVAL, MAX_DECISION_INTERVAL
@@ -115,6 +118,9 @@ except ImportError:
     )
     from power import PowerSystem, WeaponCapacitor, Battery, Reactor
     from maneuvers import max_arrival_speed_mps, required_decel_ms2
+    import battle_damage
+    import drive_plume
+    import weapon_arcs
 
 
 # =============================================================================
@@ -179,6 +185,41 @@ TERMINAL_TURN_MARGIN_CONTESTED = 1.2
 # km/s-scale closures (<2% more dwell), while a late mode flip can swing the
 # threat bearing out of the armor cone right at impact (observed in testing).
 PRESENT_HOLD_WINDOW_S = 10.0
+
+# RUN is only started when the hull can turn away, burn at least this long,
+# and still turn back to its armour presentation before impact (see
+# CombatSimulation._run_round_trip_too_late). Below it the burn buys almost
+# no closure (10 s at 1 g is 0.1 km/s against km/s-scale closures) while the
+# turn out and back costs the facing: a battleship that flipped tail-on to
+# RUN from a salvo 70 s out could not flip back and took it in the tail.
+RUN_MIN_BURN_S = 10.0
+
+# Far from its target (more than 90 deg) a spinning ship keeps its spin's own
+# axis rather than the exact great circle, as long as the swing about it
+# passes within this angle of the target (_rotate_ship_toward). Covers
+# WOBBLE's +-5 deg aim jitter near a flip.
+SPIN_AXIS_KEEP_DEG = 10.0
+
+# PADLOCK and a HEADING turning on a token throttle (turn first, or a held
+# formation burn) steer on thrust vectoring until the nose is within this
+# angle of the target and then idle the drive and finish on RCS, which has
+# 21-63x less authority. The turn is planned so the ship arrives here at a
+# rate RCS can stop in the remaining angle (CombatSimulation
+# ._rotate_ship_toward handover_rad), and thrust vectoring stays engaged
+# while the carried rate is more than RCS can stop (_attitude_needs_tv):
+# handing over at a thrust-vectoring rate overshot past this angle on the
+# far side, relit the drive and hunted (a frigate under PADLOCK crossed it
+# ~355 times in 900 s and gained 266 m/s in 300 s).
+ATTITUDE_TV_HANDOVER_DEG = 2.0
+
+# Armour presentation (CombatSimulation._calculate_presentation_direction):
+# candidate facings closer than PRESENT_CANDIDATE_MERGE_DEG to one already
+# scored are skipped (a salvo's rounds arrive along nearly one bearing and
+# gave dozens of near-identical candidates), and the reachable attitude of a
+# spinning ship is found by bisection to 1 / 2^REACH_BISECTION_STEPS of the
+# turn (at rest it is closed-form).
+PRESENT_CANDIDATE_MERGE_DEG = 2.0
+REACH_BISECTION_STEPS = 8
 
 # Aim this far INSIDE the chosen armor section's arc rather than at its
 # edge. Terminal jitter (bearing drift, residual angular rate) of a few
@@ -382,6 +423,13 @@ class SimulationEventType(Enum):
     PD_SLUG_DAMAGED = auto()
     PD_SLUG_DESTROYED = auto()
 
+    # Battle-damage consequences (src/battle_damage.py; recorded under the
+    # lower-cased name, see docs/pass-5-recording-additions.md)
+    MOUNT_DAMAGED = auto()       # a gun mount / PD turret degraded or knocked out
+    REACTOR_BLAST = auto()       # a dead ship's reactor detonation and what it caught
+    BLAST_DAMAGE = auto()        # one ship caught in a reactor blast
+    MAGAZINE_COOKOFF = auto()    # a destroyed magazine burned rounds / blew neighbours
+
     # Control events
     DECISION_POINT_REACHED = auto()
     COMMAND_ISSUED = auto()
@@ -389,6 +437,14 @@ class SimulationEventType(Enum):
     # Battle flow events
     SIMULATION_STARTED = auto()
     SIMULATION_ENDED = auto()
+
+    # Drive plume wash (src/drive_plume.py): a ship in another ship's exhaust
+    PLUME_WASH = auto()
+    CREW_RADIATION = auto()      # a crew's plume radiation dose crossed a threshold
+    DRIVE_INTERLOCK = auto()     # the drive interlock started / stopped limiting a throttle
+    # Weapon arcs (src/weapon_arcs.py): a mount with a target is masked by
+    # the ship's own hull (entry after MOUNT_MASKED_REPORT_S, and exit)
+    MOUNT_MASKED = auto()
 
 
 # =============================================================================
@@ -471,6 +527,8 @@ def fire_control_record(solution: FiringSolution) -> Optional[dict]:
         'jink': round(motion.jink_accel_ms2, 3),
         'pend': round(motion.pending_burn_ms2, 3),
         'pend_in': round(motion.pending_burn_in_s, 2),
+        'stale': round(motion.stale_burn_ms2, 3),
+        'react': motion.reacting,
     }
 
 
@@ -663,7 +721,14 @@ class WeaponState:
     mount_position: Optional[dict] = None
     slot_name: str = ""
     salvo_index: int = 0  # Index of the NEXT shot; holds across fire-control pauses.
+    # Cooldown multiplier of an irradiated (impaired) crew, src/drive_plume.py.
+    crew_cycle_factor: float = 1.0
     shots_fired: int = 0  # Lifetime count for cosmetic barrel alternation.
+    # Mount state (src/weapon_arcs.MountState) once the ship's arcs are attached.
+    mount: Any = field(default=None, repr=False, compare=False)
+    # Mount health 0-100 (src/battle_damage.py): a damaged mount cycles slower
+    # (mount_cooldown_factor), at 0 the weapon is knocked out.
+    mount_health: float = 100.0
 
     def can_fire(self) -> bool:
         """Check if weapon can fire."""
@@ -685,8 +750,14 @@ class WeaponState:
 
     def _cooldown_after_shot(self, salvo_index: int) -> float:
         if salvo_index + 1 < self.weapon.salvo_size:
-            return self.weapon.intra_salvo_cooldown_s
-        return self.weapon.cooldown_s
+            base = self.weapon.intra_salvo_cooldown_s
+        else:
+            base = self.weapon.cooldown_s
+        if self.mount_health < 100.0:
+            base = base * battle_damage.mount_cooldown_factor(self.mount_health)
+        if self.crew_cycle_factor != 1.0:
+            base = base * self.crew_cycle_factor
+        return base
 
     def shots_in_window(self, duration_s: float) -> int:
         """Timing/ammo ceiling before the next checkpoint, excluding its endpoint.
@@ -882,6 +953,10 @@ class PDLaserState:
     heat_delivered_j: float = 0.0
     turret_name: str = "PD-1"
     burst_energy_j: float = 0.0
+    # Turret health 0-100 (src/battle_damage.py); at 0 the turret is lost.
+    mount_health: float = 100.0
+    # Mount state (src/weapon_arcs.MountState) once the ship's arcs are attached.
+    mount: Any = field(default=None, repr=False, compare=False)
 
     def can_fire(self) -> bool:
         """Check if PD laser can engage."""
@@ -979,16 +1054,36 @@ class ShipCombatState:
     dying_torch_on: bool = False
     dying_torch_throttle: float = 0.0  # flicker amplitude, rolled once at death
     dying_thrust: float = 0.0  # throttle actually applied this tick (recorded)
+
+    # Crew radiation dose from time spent in drive plumes (src/drive_plume.py),
+    # permanent for the battle. Impaired: weapons cycle slower. Incapacitated:
+    # the ship neither fights nor maneuvers (it coasts; automatic PD and the
+    # thermal automation keep running) and counts as unable to deal damage.
+    crew_dose_sv: float = 0.0
+    crew_impaired: bool = False
+    crew_incapacitated: bool = False
+    # Set each tick by the drive interlock while it limits this ship's
+    # throttle (drive_plume.apply_interlock), else None.
+    drive_interlock: Optional[dict] = None
     dying_tumble_axis: Optional[Vector3D] = None
     dying_tumble_rate_rad_s: float = 0.0
+    # Weapon arcs (src/weapon_arcs.ShipArcs): mounts, body frame, roll.
+    arcs: Any = field(default=None, repr=False, compare=False)
 
     # Attitude control (rotation)
     attitude_control: Optional[AttitudeControlSpecs] = None
     rotation_state: Optional[RotationState] = None
-    angular_velocity_rad_s: float = 0.0  # Current angular velocity
+    angular_velocity_rad_s: float = 0.0  # Current angular velocity (magnitude)
+    # Unit axis the ship spins about (right-hand rule); None at rest.
+    angular_axis: Optional[Vector3D] = None
     # Set by _rotate_ship_toward; a tick without an attitude command freezes
     # the attitude, so _update_ship must not bank the rate for the next turn.
     attitude_commanded: bool = False
+    # The maneuver the ship last FLEW (set after its step). On the tick a new
+    # order is applied, weapons fire before the ship moves: its drive still
+    # shows the last order's burn while current_maneuver is already the new
+    # one (CombatSimulation.target_motion reads the difference).
+    flown_maneuver: Optional['Maneuver'] = None
 
     # Power system
     power_system: Optional[PowerSystem] = None
@@ -1363,6 +1458,9 @@ class TorpedoInFlight:
     # an 8-escort screen. The latch makes the event - and the seeker-kill
     # metric built on it - count torpedoes, not turret-ticks.
     seeker_kill_logged: bool = False
+    # Seeker killed by a reactor blast (src/battle_damage.py), not by PD: a
+    # hit afterwards is not a PD seeker kill that still hit.
+    blast_blinded: bool = False
     # Terminal-presentation latch for the TARGET ship's evasion logic. Once
     # the target commits to presenting armor against this torpedo it must not
     # flip back to running: at the commit boundary the NEZ margins flap
@@ -1430,6 +1528,11 @@ class EngagementMetrics:
     total_torpedo_intercepted: int = 0
     total_torpedo_seeker_killed: int = 0
     total_torpedo_hits_after_seeker_kill: int = 0
+    # Torpedoes destroyed / seeker-blinded by a reactor blast (not PD's work).
+    total_torpedo_blast_destroyed: int = 0
+    total_torpedo_blast_blinded: int = 0
+    # Of total_torpedo_hits, how many a blast had blinded (never PD's).
+    total_torpedo_hits_after_blast_blind: int = 0
     total_damage_dealt: float = 0.0
     ships_destroyed: list[str] = field(default_factory=list)
     battle_duration: float = 0.0
@@ -1500,11 +1603,21 @@ class CombatSimulation:
         metrics: Engagement metrics.
     """
 
+    # Off for subclasses that skip __init__ (the movement-only prediction
+    # shadow): arcs never change motion.
+    weapon_arcs = False
+    roll_to_unmask = False
+    hull_mounts: dict = {}
+    _arcs_lead_cache: dict = {}
+    _arcs_settled = False
+
     def __init__(
         self,
         time_step: float = DEFAULT_TIME_STEP,
         decision_interval: float = DEFAULT_DECISION_INTERVAL,
-        seed: Optional[int] = None
+        seed: Optional[int] = None,
+        weapon_arcs_enabled: Optional[bool] = None,
+        roll_to_unmask: Optional[bool] = None,
     ) -> None:
         """
         Initialize the combat simulation.
@@ -1521,6 +1634,11 @@ class CombatSimulation:
         )
         self.current_time: float = 0.0
         self.last_decision_time: float = 0.0
+        # Console narration (FIRED / HIT / MODULE DESTROYED / MORTALLY
+        # WOUNDED ...). Private forecast shadows switch it off: their
+        # throw-away ships ('shooter', 'target') used to narrate into the
+        # battle log ~70 times per battle.
+        self.echo: bool = True
 
         # Ship tracking
         self.ships: dict[str, ShipCombatState] = {}
@@ -1554,8 +1672,33 @@ class CombatSimulation:
         # battles non-reproducible (marginal rolls flipped run to run).
         self._torpedo_seq = 0
         self._projectile_seq = 0
+        # projectile_id -> firing weapon slot, so a round's impact / miss
+        # events name the gun that fired it (see _log_event).
+        self._projectile_slots: dict[str, str] = {}
         self.combat_resolver = CombatResolver(rng=self.rng)
         self.damage_propagator = DamagePropagator()
+        # Battle-damage consequences (src/battle_damage.py) roll on their own
+        # stream derived from the battle seed, so they never shift the main
+        # RNG that decides hits; reactor blasts queue here and resolve once
+        # per tick.
+        self._damage_rng = random.Random(f"{seed}:battle_damage")
+        self._pending_blasts: list[dict] = []
+        # Drive plume wash (src/drive_plume.py). Private forecast shadows
+        # switch it off; its episode state is created lazily on first contact.
+        self.plume_wash_enabled: bool = True
+        # Weapon arcs and turret traverse (src/weapon_arcs.py): mounts fire
+        # only in directions their own hull leaves open, after slewing onto
+        # them; ships roll about the thrust axis to unmask. Hull classes
+        # without an entry in the mount table are ungated.
+        self.weapon_arcs = (weapon_arcs.weapon_arcs_default()
+                            if weapon_arcs_enabled is None else bool(weapon_arcs_enabled))
+        self.roll_to_unmask = (weapon_arcs.roll_to_unmask_default()
+                               if roll_to_unmask is None else bool(roll_to_unmask))
+        self.hull_mounts = weapon_arcs.load_hull_mounts()
+        # Ticks on which fire control released a round from a trainable gun
+        # mount, and how many of those the mount held back (masked / slewing).
+        self.arcs_tally = {'released': 0, 'masked': 0, 'slewing': 0}
+        self._arcs_lead_cache: dict = {}
 
         # Decision callback
         self._decision_callback: Optional[Callable[[str, 'CombatSimulation'], list[Any]]] = None
@@ -1676,9 +1819,17 @@ class CombatSimulation:
                     orders = command.get('orders', [command.get('order')])
                     keys = ['weapon:' + slot for slot, order in ship.weapons_orders.items()
                             if order in orders]
+            # One 'superseded' per replaced command, once it governs nothing:
+            # a weapons order binds one key per slot, so a 3-gun ship used to
+            # log the same command superseded three times.
+            replaced = []
             for key in keys:
                 previous = self.evidence.bind(ship_id, key, cid)
-                if previous and previous != cid:
+                if previous and previous != cid and previous not in replaced:
+                    replaced.append(previous)
+            still_bound = set(self.evidence.active.get(ship_id, {}).values())
+            for previous in replaced:
+                if previous not in still_bound:
                     self._command_status(ship_id, previous, 'superseded')
         return success
 
@@ -1835,6 +1986,22 @@ class CombatSimulation:
             # Target not in arc - don't fire
             return False
 
+        # Weapon arcs: masked by the own hull, or still slewing onto the lead.
+        # A fire_at RETARGETS the mount for this tick: it slews toward this
+        # target (its one slew of the tick - the standing order's target is
+        # not trained again until the next tick) and fires only if that slew
+        # brings it on. A fire_at at a ship far from where the mount points
+        # therefore needs repeating on the following ticks, like the per-tick
+        # fire_at of firecontrol.FireControlSystem; a one-shot fire_at does
+        # not fire a mount that is still swinging.
+        mount = weapon_state.mount
+        if mount is not None and mount.kind == 'gun' and self.weapon_arcs:
+            if ship.arcs.frame_time != self.current_time:
+                ship.arcs.set_frame(ship.forward, ship.kinematic_state.up, self.current_time)
+            if self._arcs_train_gun(ship, weapon_state, mount, target,
+                                    self.time_step) != weapon_arcs.ON_TARGET:
+                return False
+
         # Commit ammo, capacitor and cooldown only after an achievable launch.
         # The accelerated lead can leave the gimbal even with the target in arc.
         if self._launch_projectile(ship, target, weapon_state):
@@ -1910,7 +2077,8 @@ class CombatSimulation:
         target = self.get_ship(target_id)
 
         if (not target or target.is_destroyed or target.is_dying
-                or target.is_surrendered or ship.is_surrendered):
+                or target.is_surrendered or ship.is_surrendered
+                or getattr(ship, 'crew_incapacitated', False)):
             return False
 
         # Pick the first launcher with a round chambered and off cooldown. With a
@@ -2058,6 +2226,12 @@ class CombatSimulation:
         thermal = ship.thermal_system
         if thermal is None:
             return
+        # In a drive plume stronger than the array could reject, extending
+        # would only feed the panels to the jet (src/drive_plume.py): the
+        # ladder does not force them out and 'auto' does not move them. State
+        # of the previous tick's wash, the same for every ship.
+        if drive_plume.radiators_in_jet(self, ship):
+            return
         if thermal.radiators_forced:
             self._set_radiators(ship, True, reason='heat_limit')
             return
@@ -2095,7 +2269,7 @@ class CombatSimulation:
 
         if not ship.weapons_orders:
             if debug:
-                print(f"  [{ship.ship_id}] No weapons orders")
+                self._echo(f"  [{ship.ship_id}] No weapons orders")
             return
 
         for weapon_slot, order in ship.weapons_orders.items():
@@ -2127,6 +2301,11 @@ class CombatSimulation:
 
             # Get target
             target_id = order.target_id or ship.primary_target_id
+            # Weapon arcs: a battery whose own hull masks its target engages
+            # the enemy it bears on instead (_arcs_train_guns, this tick).
+            fallback = getattr(weapon_state.mount, 'fallback_id', None) if self.weapon_arcs else None
+            if fallback is not None and weapon_state.mount.stamp == self.current_time:
+                target_id = fallback
             if not target_id:
                 self._weapon_status(ship, weapon_slot, 'no_target')
                 continue
@@ -2185,6 +2364,21 @@ class CombatSimulation:
                                     target_id, hit_probability=solution.hit_probability,
                                     min_hit_probability=order.min_hit_probability, max_range_km=order.max_range_km)
             if should_fire:
+                # Weapon arcs: the round leaves only when the lead direction
+                # is clear of the ship's own hull and the mount has slewed
+                # onto it (trained this tick by _arcs_train_guns). Checked
+                # last, so the tally counts rounds that fire control had
+                # released and the mount held back.
+                mount = weapon_state.mount
+                if mount is not None and mount.kind == 'gun' and self.weapon_arcs:
+                    tally = self.arcs_tally
+                    tally['released'] += 1
+                    if self._arcs_train_gun(ship, weapon_state, mount, target,
+                                            self.time_step) != weapon_arcs.ON_TARGET:
+                        reason = 'masked' if mount.state == weapon_arcs.MASKED else 'slewing'
+                        tally[reason] += 1
+                        self._weapon_status(ship, weapon_slot, reason, target_id)
+                        continue
                 distance_km = (target.position - ship.position).magnitude / 1000
                 muzzle_v = weapon_state.weapon.muzzle_velocity_kps
                 time_to_target = solution.time_of_flight_s
@@ -2208,8 +2402,8 @@ class CombatSimulation:
                     if ship.thermal_system and heat_gj > 0:
                         ship.thermal_system.add_heat("weapons", heat_gj)
 
-                print(f"  [{ship.ship_id}] FIRED {weapon_name} at {target_id}")
-                print(f"       Distance: {distance_km:.0f}km, ETA: {time_to_target:.1f}s, "
+                self._echo(f"  [{ship.ship_id}] FIRED {weapon_name} at {target_id}")
+                self._echo(f"       Distance: {distance_km:.0f}km, ETA: {time_to_target:.1f}s, "
                       f"v: {muzzle_v:.1f}km/s, P(hit): {solution.hit_probability:.1%}")
 
     # -------------------------------------------------------------------------
@@ -2273,7 +2467,19 @@ class CombatSimulation:
         # Inside the cone the nose is still swinging the last few degrees
         # onto the heading, so the same difference (ordered burn minus the
         # drive's output) is the part of the burn the lead aims wrong.
-        pending, pending_in = 0.0, 0.0
+        #
+        # On the tick a new HEADING order is applied, weapons fire before the
+        # ship moves: its drive (and so the lead, which reads the drive)
+        # still shows the LAST order's burn. The order in force turns on a
+        # token throttle (or burns along the nose once inside the cone), so
+        # the burn it will fly is computed from the order, not read off the
+        # drive, and the part of the old burn the lead still extrapolates is
+        # charged as stale (pending_burn already lit: from now). Seen in seed
+        # 39 budget 100 at t=270: a cruiser leaving EVASIVE at 6.4 m/s^2 for a
+        # HEADING turn at 0.7 m/s^2; six rounds forecast at 0.72 all passed
+        # outside the gate.
+        pending, pending_in, stale = 0.0, 0.0, 0.0
+        heading_handled = False
         if (ks is not None and maneuver is not None
                 and maneuver.maneuver_type == ManeuverType.HEADING
                 and not maneuver.live_heading and maneuver.heading_direction
@@ -2282,18 +2488,59 @@ class CombatSimulation:
             hd = maneuver.heading_direction
             direction = Vector3D(hd.get('x', 0.0), hd.get('y', 0.0), hd.get('z', 0.0))
             if direction.magnitude > 0.0:
+                heading_handled = True
                 direction = direction.normalized()
                 cone = math.radians(HEADING_BURN_CONE_DEG)
                 angle = target.forward.angle_to(direction)
                 hold = (maneuver.burn_start_time - self.current_time
                         if maneuver.burn_start_time is not None else 0.0)
+                drive = self._thrust_accel(target)
+                if maneuver is not getattr(target, 'flown_maneuver', maneuver):
+                    # The order in force, as the HEADING branch of _update_ship
+                    # flies it this tick.
+                    if angle > cone or hold > 1e-9:
+                        flown = (throttle * MANEUVER_TURN_THROTTLE
+                                 if self._attitude_needs_tv(target, angle, self.time_step)
+                                 else 0.0)
+                    else:
+                        flown = throttle
+                    drive = (ks.forward * (ks.thrust_n * flown / ks.mass_kg)
+                             if ks.mass_kg > 0 else Vector3D(0.0, 0.0, 0.0))
+                    stale = across(self._estimate_target_acceleration(target) - drive)
                 if angle > cone or hold > 1e-9:
                     pending_in = max(self._heading_burn_light_s(target, direction), hold)
                 if math.isfinite(pending_in):     # a hull that cannot turn never lights it
-                    pending = across(direction * (accel * min(1.0, throttle))
-                                     - self._thrust_accel(target))
+                    pending = across(direction * (accel * min(1.0, throttle)) - drive)
                 else:
                     pending_in = 0.0
+
+        # Any other fresh order whose lead reads the drive (HEADING without a
+        # pending turn-then-burn - attitude only, toward a point or ship -
+        # BURN, HOLD_RANGE, a range-keeping INTERCEPT): on its first tick the
+        # drive still shows the last order's burn. BURN burns along the nose
+        # from the first tick; the range-keeping orders and attitude-only
+        # HEADING start from a coast (they turn first), so the whole old burn
+        # is stale. Orders whose lead reads the ORDER (PADLOCK, MAINTAIN,
+        # plain INTERCEPT, EVASIVE) are led from the new order at once.
+        # A re-issued order of the same kind on the same target (every
+        # checkpoint re-sends one) changes no burn: nothing is stale.
+        flown = getattr(target, 'flown_maneuver', maneuver)
+        if (not heading_handled and ks is not None and maneuver is not None
+                and maneuver is not flown
+                and not (flown is not None
+                         and flown.maneuver_type == maneuver.maneuver_type
+                         and flown.target_id == maneuver.target_id
+                         and flown.direction == maneuver.direction
+                         and flown.heading_direction == maneuver.heading_direction)
+                and not (dodges and getattr(target, 'execution_mode', None) in EVASION_OVERLAY_MODES)):
+            mt = maneuver.maneuver_type
+            reads_drive = (mt in (ManeuverType.HEADING, ManeuverType.BURN, ManeuverType.HOLD_RANGE)
+                           or (mt == ManeuverType.INTERCEPT and maneuver.range_keeping))
+            if reads_drive:
+                expected = Vector3D(0.0, 0.0, 0.0)
+                if mt == ManeuverType.BURN and maneuver.direction and ks.mass_kg > 0:
+                    expected = ks.forward * (ks.thrust_n * max(0.0, min(1.0, throttle)) / ks.mass_kg)
+                stale = across(self._estimate_target_acceleration(target) - expected)
 
         return TargetMotion(
             accel_ms2=accel,
@@ -2305,6 +2552,9 @@ class CombatSimulation:
             jink_accel_ms2=jink,
             pending_burn_ms2=pending,
             pending_burn_in_s=pending_in,
+            stale_burn_ms2=stale,
+            reacting=bool(dodges and getattr(target, 'execution_mode', None)
+                          in ('EVADE', 'TANK', 'BRACE', 'RUN', 'PRESENT')),
         )
 
     def gun_firing_solution(
@@ -2544,6 +2794,7 @@ class CombatSimulation:
             event_data['fc'] = fire_control
         if weapon_slot is not None:
             event_data['weapon_slot'] = weapon_slot
+            self._projectile_slots[proj_id] = weapon_slot
 
         self._log_event(SimulationEventType.PROJECTILE_LAUNCHED, shooter.ship_id, target.ship_id, event_data)
 
@@ -2598,8 +2849,10 @@ class CombatSimulation:
         # False, so captains previously issued no commands for the entire
         # first decision interval and ships drifted uncommanded).
         first_step = self.current_time == 0.0 and self.last_decision_time == 0.0
+        decided = False
         if first_step or (self.current_time - self.last_decision_time >= self.decision_interval):
             self._trigger_decision_points()
+            decided = True
             self.last_decision_time = self.current_time
 
         # Resolve weapons fire for every ship BEFORE any ship moves.
@@ -2614,10 +2867,20 @@ class CombatSimulation:
         # solution consistent with how projectiles are propagated, and makes the
         # engagement symmetric between factions.
         self._process_pending_torpedo_launches()
+        arcs_on = self.weapon_arcs
+        if arcs_on:
+            if decided and not self._arcs_settled and self._arcs_ready_to_settle():
+                self.settle_arcs()
+            # Body frame of every hull for this tick; mounts train on their
+            # targets from the same start-of-step snapshot fire control uses.
+            self._arcs_begin_tick()
         for ship in self.ships.values():
             # A surrendered ship is out of the fight: its standing weapons
             # orders must not keep firing (see also the target check below).
-            if not ship.is_destroyed and not ship.is_dying and not ship.is_surrendered:
+            if (not ship.is_destroyed and not ship.is_dying and not ship.is_surrendered
+                    and not ship.crew_incapacitated):
+                if arcs_on:
+                    self._arcs_train_guns(ship, dt)
                 self._process_weapons_orders(ship)
 
         # Point defense engages incoming torpedoes and projectiles. It runs on
@@ -2627,10 +2890,14 @@ class CombatSimulation:
         # torpedo 240 km out at 270 km, outside its 250 km envelope).
         self._update_point_defense(dt)
 
-        # Update all ships
-        for ship in self.ships.values():
-            if not ship.is_destroyed:
-                self._update_ship(ship, dt)
+        # Roll to unmask: each hull's roll about its thrust axis, decided
+        # from the same snapshot (never changes where the drive points).
+        if arcs_on and self.roll_to_unmask:
+            self._arcs_update_rolls(dt)
+
+        # Update all ships (each one against the same start-of-step picture
+        # of the others, see _update_ships)
+        self._update_ships(dt)
 
         # Update projectiles and check hits
         self._update_projectiles(dt)
@@ -2638,7 +2905,20 @@ class CombatSimulation:
         # Update torpedoes and check hits
         self._update_torpedoes(dt)
 
+        # Reactor detonations queued by this tick's deaths reach their
+        # surroundings (ships, torpedoes); deaths they cause detonate next tick.
+        battle_damage.resolve_pending_blasts(self)
+
+        # Drive plume wash: every ship in another ship's exhaust this tick,
+        # computed from one snapshot of the moved fleet and applied in id
+        # order (no RNG; never kills by itself - see src/drive_plume.py).
+        drive_plume.resolve_plume_wash(self, dt)
+
         # Check for battle end conditions
+        # (No last-tick flush is needed: resolving a blast never kills, so it
+        # never queues another one; a chain death - a hulk whose fuse the
+        # blast burned down - happens on a later tick,
+        # and the battle does not end while a dying hulk is still pending.)
         self._check_battle_end()
 
         # Advance time
@@ -2664,6 +2944,92 @@ class CombatSimulation:
     # Ship Update
     # -------------------------------------------------------------------------
 
+    def _update_ships(self, dt: float) -> None:
+        """
+        Advance every ship one step, each against the SAME start-of-step
+        snapshot of all the others.
+
+        Ships used to be updated in place, one after another in dict order,
+        so a ship updated later steered on the already-moved position,
+        velocity and drive burn of every ship updated before it, while the
+        first ones saw everybody at the start of the step. Dict order is
+        alpha first, and the difference is not small: two mirrored fleets
+        ordered to HOLD_RANGE on each other did not fly mirrored courses -
+        alpha, seeing beta's drives still cold, went to CLOSE at full throttle;
+        beta, updated next, saw alpha already charging, planned around that
+        burn and sat in HOLD at 5%. Mirror battles were then decided by which
+        fleet had been added to the simulation first (same seed, insertion
+        order swapped: the winner swapped with it).
+
+        Here each ship's new state is staged and its start-of-step state put
+        back until every ship has been updated, exactly as weapons fire and
+        point defence already resolve from one snapshot (see step()). What
+        another ship's steering reads - kinematic state, the drive's applied
+        throttle (_thrust_accel) and the standing maneuver (_keeps_range) - is
+        therefore the same for every ship, whatever the insertion order.
+
+        A death inside this loop is staged the same way: a reactor meltdown
+        (heat) or a dying hulk's fuse running out flips is_destroyed /
+        is_dying while the ship is being updated, and a ship updated later
+        used to see its target already gone (INTERCEPT / HOLD_RANGE / PADLOCK
+        coast at once) where one updated earlier still steered on it. The
+        death itself - event, kill credit, queued reactor blast - happens
+        when it happens; only what the OTHER ships see of it this step is
+        held back to the end of the loop. (crew_incapacitated needs no
+        staging: it is only ever set by the plume wash at the end of step(),
+        so the weapons loop and this one read the same value for everyone;
+        the coast it forces clears current_maneuver, which is staged.)
+        """
+        # Drive interlock (src/drive_plume.py): every ship's throttle cap for
+        # this step, from the same start-of-step snapshot (pure, no RNG; the
+        # prediction shadow runs this very code and so predicts capped burns).
+        self._drive_interlock_caps = drive_plume.interlock_caps(self, dt)
+        # The spin (angular_velocity_rad_s about angular_axis, and the turn's
+        # rotation_state) is staged with the attitude it drives: another
+        # ship's fire-control forecast reads it (_heading_burn_light_s).
+        staged = []
+        for ship in self.ships.values():
+            seen_by_others = (ship.kinematic_state.copy(),
+                              getattr(ship, 'applied_throttle', 0.0),
+                              ship.current_maneuver,
+                              ship.is_destroyed, ship.is_dying,
+                              ship.angular_velocity_rad_s, ship.angular_axis,
+                              copy.copy(ship.rotation_state), ship.flown_maneuver)
+            self._advance_ship(ship, dt)
+            staged.append((ship, ship.kinematic_state,
+                           getattr(ship, 'applied_throttle', 0.0),
+                           ship.current_maneuver,
+                           ship.is_destroyed, ship.is_dying,
+                           ship.angular_velocity_rad_s, ship.angular_axis,
+                           ship.rotation_state, ship.current_maneuver))
+            (ship.kinematic_state, ship.applied_throttle, ship.current_maneuver,
+             ship.is_destroyed, ship.is_dying, ship.angular_velocity_rad_s,
+             ship.angular_axis, ship.rotation_state, ship.flown_maneuver) = seen_by_others
+        for (ship, state, applied_throttle, maneuver, destroyed, dying,
+             spin, spin_axis, rotation, flown) in staged:
+            ship.kinematic_state = state
+            ship.applied_throttle = applied_throttle
+            ship.current_maneuver = maneuver
+            ship.is_destroyed = destroyed
+            ship.is_dying = dying
+            ship.angular_velocity_rad_s = spin
+            ship.angular_axis = spin_axis
+            ship.rotation_state = rotation
+            ship.flown_maneuver = flown
+
+    def _advance_ship(self, ship: ShipCombatState, dt: float) -> None:
+        """One ship's step inside _update_ships: fly it, or coast the wreck."""
+        if not ship.is_destroyed:
+            self._update_ship(ship, dt)
+        else:
+            # A wreck keeps coasting on its last velocity (no thrust, no
+            # control). It used to freeze in space while its recorded
+            # velocity stayed at the last value. Everything that fights
+            # (targeting, PD, collisions, blasts, victory) skips
+            # is_destroyed ships, so only its position moves.
+            ks = ship.kinematic_state
+            ks.position = ks.position + ks.velocity * dt
+
     def _update_ship(self, ship: ShipCombatState, dt: float) -> None:
         """Update a single ship for one time step."""
         # A dying ship is a physics object on a fuse, not a combatant: no
@@ -2672,6 +3038,11 @@ class CombatSimulation:
         if ship.is_dying:
             self._update_dying_ship(ship, dt)
             return
+
+        # An incapacitated crew (radiation, src/drive_plume.py) flies nothing:
+        # whatever was ordered, the ship coasts.
+        if getattr(ship, 'crew_incapacitated', False):
+            ship.current_maneuver = None
 
         # Process current maneuver
         ship.execution_mode = 'COAST'
@@ -2820,7 +3191,7 @@ class CombatSimulation:
                             # Check if significant rotation is needed
                             angle_to_heading = math.acos(max(-1.0, min(1.0,
                                 ship.kinematic_state.forward.dot(direction))))
-                            needs_rotation = angle_to_heading > math.radians(2.0)
+                            needs_rotation = self._attitude_needs_tv(ship, angle_to_heading, dt)
                             burn_held = (maneuver.burn_start_time is not None
                                          and self.current_time < maneuver.burn_start_time - 1e-9)
                             if throttle <= 0:
@@ -2835,8 +3206,9 @@ class CombatSimulation:
                                 # vectoring available), burn once nose-on.
                                 # The token scales with the ordered throttle so
                                 # formation-matched hulls drift equally.
-                                self._rotate_ship_toward(ship, direction, dt,
-                                    engines_on=needs_rotation)
+                                self._rotate_ship_toward(
+                                    ship, direction, dt, engines_on=needs_rotation,
+                                    handover_rad=math.radians(ATTITUDE_TV_HANDOVER_DEG))
                                 throttle = (throttle * MANEUVER_TURN_THROTTLE
                                             if needs_rotation else 0.0)
                             else:
@@ -2852,9 +3224,19 @@ class CombatSimulation:
                         # Check if we need to rotate
                         angle_to_target = math.acos(max(-1.0, min(1.0,
                             ship.kinematic_state.forward.dot(target_dir))))
-                        # Use thrust vectoring if significant rotation needed, else RCS
-                        needs_rotation = angle_to_target > math.radians(2.0)
-                        self._rotate_ship_toward(ship, target_dir, dt, engines_on=needs_rotation)
+                        # Thrust vectoring while turning (or still carrying a
+                        # rate RCS cannot stop), then RCS: see
+                        # ATTITUDE_TV_HANDOVER_DEG.
+                        rel = target.position - ship.position
+                        r2 = rel.dot(rel)
+                        los_rate = (rel.cross(target.velocity - ship.velocity) * (1.0 / r2)
+                                    if r2 > 1.0 else Vector3D(0.0, 0.0, 0.0))
+                        needs_rotation = self._attitude_needs_tv(ship, angle_to_target, dt,
+                                                                 target_rate=los_rate)
+                        self._rotate_ship_toward(
+                            ship, target_dir, dt, engines_on=needs_rotation,
+                            handover_rad=math.radians(ATTITUDE_TV_HANDOVER_DEG),
+                            target_rate=los_rate)
                         # Use small throttle for rotation (thrust vectoring), zero when aligned
                         throttle = 0.05 if needs_rotation else 0.0
                     else:
@@ -2864,14 +3246,16 @@ class CombatSimulation:
                 # PADLOCK for tracking target while coasting,
                 # EVASIVE for automatic threat-aware evasion
 
-        # No attitude command this tick: the attitude model holds the nose
-        # where it is, so the stored rate must go with it. Keeping it let the
-        # NEXT turn start at a rate the ship was no longer turning at - e.g. a
-        # thrust-vectoring spin-up (~15 deg/s) reused by an RCS-only ROTATE
-        # (0.12 deg/s^2), finishing 90 deg ~7x faster than RCS allows.
+        # No attitude command this tick: the ship's RCS brakes the spin it
+        # carries, at RCS authority, and the nose keeps swinging while it
+        # does. (It used to zero a live spin for free - a thrust-vectoring
+        # rate gone in one tick, up to ~200 ticks' worth of RCS authority.)
         if not ship.attitude_commanded:
-            ship.angular_velocity_rad_s = 0.0
-            ship.rotation_state = None
+            self._brake_spin(ship, dt)
+
+        # Drive interlock: never cook a friendly astern (src/drive_plume.py).
+        if throttle > 0.0 or getattr(ship, 'drive_interlock', None) is not None:
+            throttle = drive_plume.apply_interlock(self, ship, throttle, dt)
 
         # Apply engine damage to effective thrust
         engine_eff = ship.get_effective_thrust_fraction()
@@ -2959,6 +3343,11 @@ class CombatSimulation:
         """
         ship.dying_time_remaining -= dt
         if ship.dying_time_remaining <= 0.0:
+            # Coast through this tick first: the blast resolves at the end of
+            # the tick (battle_damage.resolve_pending_blasts), after every
+            # other ship and torpedo has moved, so it must go off where the
+            # hulk is then - not v*dt behind it. No RNG draw here.
+            ship.kinematic_state = propagate_state(ship.kinematic_state, dt, 0.0, 0.0, 0.0)
             self._detonate_reactor(ship)
             return
 
@@ -2992,7 +3381,9 @@ class CombatSimulation:
         ship: ShipCombatState,
         target_dir: Vector3D,
         dt: float,
-        engines_on: bool = True
+        engines_on: bool = True,
+        handover_rad: Optional[float] = None,
+        target_rate: Optional[Vector3D] = None,
     ) -> None:
         """
         Rotate ship to face a direction using bang-bang control.
@@ -3007,6 +3398,15 @@ class CombatSimulation:
             target_dir: Target direction to face
             dt: Time step in seconds
             engines_on: Whether main engines are firing (enables thrust vectoring)
+            handover_rad: With engines_on, the caller will idle the drive and
+                finish on RCS inside this angle of the target: brake on thrust
+                vectoring so the ship arrives there at a rate RCS can stop in
+                the rest of the turn (a two-stage stopping profile).
+            target_rate: The aim direction's own angular velocity (rad/s,
+                world frame) - a PADLOCK target's line of sight swings as the
+                ships move. The turn then plans relative to the moving aim
+                and arrives MATCHING its rate (tracking it) instead of
+                stopping dead and falling behind.
         """
         ship.attitude_commanded = True
         current_forward = ship.forward
@@ -3015,28 +3415,51 @@ class CombatSimulation:
 
         # Tolerance for "close enough"
         ANGLE_TOLERANCE = 0.01  # ~0.6 degrees
-        VELOCITY_TOLERANCE = 0.01  # rad/s
-
-        # Check if rotation is complete
-        if angle_to_target < ANGLE_TOLERANCE and abs(ship.angular_velocity_rad_s) < VELOCITY_TOLERANCE:
-            ship.angular_velocity_rad_s = 0.0
-            ship.rotation_state = None
-            return
 
         # Get attitude control specs (use defaults if not set)
         # Engine damage reduces thrust vectoring but RCS still works
         angular_accel, max_angular_vel = self._get_rotation_params(ship, engines_on)
+        authority = angular_accel * dt          # rate change available this tick
+
+        # The ship's spin is a vector: |rate| about angular_axis. It used to be
+        # a bare magnitude re-pointed at the target every tick, so a turn could
+        # reverse - or stop dead at the target - instantly at any rate (a
+        # battleship spun up on thrust vectoring reversed on RCS at ~850x its
+        # authority). Now the spin is carried honestly: only `authority` per
+        # tick can change it.
+        w_mag = ship.angular_velocity_rad_s
+        axis_prev = getattr(ship, 'angular_axis', None)
+
+        # Done: on target, and slow enough to stop within this tick.
+        if angle_to_target < ANGLE_TOLERANCE and w_mag <= max(authority, 1e-9):
+            self._stop_rotation(ship)
+            return
 
         # Calculate rotation axis
         rotation_axis = current_forward.cross(target_normalized)
         if rotation_axis.magnitude < 1e-6:
-            # Vectors are nearly parallel
-            if angle_to_target < ANGLE_TOLERANCE:
-                # Already facing target
-                ship.angular_velocity_rad_s = 0.0
-                return
-            # Use up as rotation axis for 180-degree flip
-            rotation_axis = ship.up
+            if angle_to_target < ANGLE_TOLERANCE and axis_prev is not None:
+                # On target but still spinning: the spin carries on.
+                rotation_axis = axis_prev
+            else:
+                # Use up as rotation axis for 180-degree flip
+                rotation_axis = ship.up
+        elif (axis_prev is not None and w_mag > 0.0
+              and angle_to_target > math.pi / 2
+              and axis_prev.dot(rotation_axis) > 0.0):
+            # Far from the target any axis across the nose gets there: keep
+            # the spin's own axis (made perpendicular to the nose) instead of
+            # the exact great circle. Near a flip the great-circle axis swings
+            # wildly with a slightly jittered aim (WOBBLE's +-5 deg), and
+            # chasing it braked the spin to nothing. Only while the swing
+            # about that axis still passes the target (within
+            # SPIN_AXIS_KEEP_DEG): a spin across the turn - a cruiser
+            # rolled out of the plane and ordered 120 deg round - used to be
+            # kept too and flew a long detour past the target.
+            along = axis_prev - current_forward * axis_prev.dot(current_forward)
+            if (along.magnitude > 1e-6 and abs(target_normalized.dot(along.normalized()))
+                    < math.sin(math.radians(SPIN_AXIS_KEEP_DEG))):
+                rotation_axis = along
         rotation_axis = rotation_axis.normalized()
 
         # Check if we need to initialize or update rotation state
@@ -3051,56 +3474,217 @@ class CombatSimulation:
                 phase="accelerate"
             )
 
-        # Bang-bang control logic
-        # To stop from velocity ω with deceleration α: need angle = ω²/(2α)
-        current_omega = abs(ship.angular_velocity_rad_s)
-        stopping_angle = (current_omega ** 2) / (2 * angular_accel) if angular_accel > 0 else 0
+        if target_rate is not None:
+            self._track_turn(ship, target_normalized, rotation_axis, angle_to_target,
+                             target_rate, dt, engines_on, handover_rad,
+                             angular_accel, max_angular_vel, authority, w_mag, axis_prev)
+            return
 
-        # Determine phase: accelerate or decelerate
-        if angle_to_target <= stopping_angle + ANGLE_TOLERANCE:
-            # Need to brake NOW to stop at target
-            phase = "decelerate"
-        elif current_omega >= max_angular_vel:
-            # At max velocity, coast or brake slightly
-            phase = "coast"
+        # Split the carried spin: w_par about the new axis (negative = still
+        # turning AWAY from the target), w_perp sideways. The sideways part is
+        # braked first, out of the same per-tick authority.
+        if w_mag > 0.0 and axis_prev is not None:
+            w_vec = axis_prev * w_mag
+            w_par = w_vec.dot(rotation_axis)
+            w_perp = w_vec - rotation_axis * w_par
         else:
-            # Still accelerating
-            phase = "accelerate"
+            w_par = w_mag
+            w_perp = Vector3D(0.0, 0.0, 0.0)
+        budget = authority
+        perp = w_perp.magnitude
+        if perp > 1e-12:
+            cut = min(perp, budget)
+            w_perp = w_perp * ((perp - cut) / perp)
+            budget -= cut
+        else:
+            w_perp = Vector3D(0.0, 0.0, 0.0)
 
+        if w_par < 0.0:
+            # Turning the wrong way: brake (it may cross zero this tick).
+            phase = "decelerate"
+            w_par = w_par + budget
+        else:
+            # Discrete bang-bang: the fastest rate this tick from which the
+            # per-tick braking still stops on the target. Flying w for one
+            # tick and then braking by `authority` per tick covers about
+            # w^2/(2a) + w*dt/2, so w_cmd solves that = angle.
+            current_omega = w_par
+            if angular_accel > 0.0:
+                w_cmd = angular_accel * (-0.5 * dt + math.sqrt(
+                    0.25 * dt * dt + 2.0 * angle_to_target / angular_accel))
+                if handover_rad is not None and engines_on:
+                    w_cmd = min(w_cmd, self._handover_rate(
+                        ship, angle_to_target, handover_rad, angular_accel, dt))
+            else:
+                w_cmd = current_omega
+            w_cmd = min(w_cmd, max_angular_vel)
+            lo = max(0.0, current_omega - budget)
+            hi = min(max(current_omega, max_angular_vel), current_omega + budget)
+            w_par = max(lo, min(hi, w_cmd))
+            if w_par > current_omega + 1e-12:
+                phase = "accelerate"
+            elif w_par < current_omega - 1e-12:
+                phase = "decelerate"
+            else:
+                phase = "coast"
         ship.rotation_state.phase = phase
 
-        # Apply torque based on phase
-        if phase == "accelerate":
-            # Accelerate rotation
-            new_omega = current_omega + angular_accel * dt
-            new_omega = min(new_omega, max_angular_vel)
-            ship.angular_velocity_rad_s = new_omega
-        elif phase == "decelerate":
-            # Decelerate rotation (braking)
-            new_omega = current_omega - angular_accel * dt
-            new_omega = max(0.0, new_omega)
-            ship.angular_velocity_rad_s = new_omega
-        else:  # coast
-            # Maintain current velocity (maybe slight adjustment)
-            pass
-
-        # Apply rotation for this time step
-        rotation_amount = ship.angular_velocity_rad_s * dt
-
-        # Don't overshoot
-        rotation_amount = min(rotation_amount, angle_to_target)
+        # Travel this tick. Landing exactly on the target is allowed when the
+        # remaining rate could be stopped within one tick (normal bang-bang
+        # arrival); a faster spin overshoots and has to come back. On that
+        # arrival tick the nose's actual rate (travel / dt) can differ from the
+        # stored rate by up to one tick's authority, so the attitude's rate
+        # changes by up to ~2x one tick's authority between the ticks either
+        # side of it (never more).
+        travel = w_par * dt
+        if w_par > 0.0 and travel > angle_to_target and w_par <= authority + 1e-12:
+            travel = angle_to_target
+        rotation_vec = rotation_axis * travel + w_perp * dt
+        rotation_amount = rotation_vec.magnitude
 
         if rotation_amount > 0:
+            axis = rotation_vec * (1.0 / rotation_amount)
             # Update forward and up vectors
             new_forward = ship.kinematic_state.forward.rotate_around_axis(
-                rotation_axis, rotation_amount
+                axis, rotation_amount
             )
             new_up = ship.kinematic_state.up.rotate_around_axis(
-                rotation_axis, rotation_amount
+                axis, rotation_amount
             )
 
             ship.kinematic_state.forward = new_forward.normalized()
             ship.kinematic_state.up = new_up.normalized()
+
+        spin = rotation_axis * w_par + w_perp
+        ship.angular_velocity_rad_s = spin.magnitude
+        ship.angular_axis = (spin * (1.0 / ship.angular_velocity_rad_s)
+                             if ship.angular_velocity_rad_s > 1e-12 else None)
+
+    def _track_turn(self, ship: ShipCombatState, target: Vector3D, rotation_axis: Vector3D,
+                    angle: float, target_rate: Vector3D, dt: float, engines_on: bool,
+                    handover_rad: Optional[float], angular_accel: float,
+                    max_angular_vel: float, authority: float, w_mag: float,
+                    axis_prev: Optional[Vector3D]) -> None:
+        """
+        _rotate_ship_toward toward an aim that is itself turning at
+        ``target_rate``: the wanted spin is the aim's rate (across the nose)
+        plus the bang-bang closing rate for the remaining angle (two-stage
+        when handing over to RCS); the carried spin moves toward it by at
+        most one tick's authority (as a vector), and the nose turns by the
+        new spin. On target it settles onto the aim's rate - tracking it.
+        """
+        fwd = ship.forward
+        tr = target_rate - fwd * target_rate.dot(fwd)
+        w_vec = axis_prev * w_mag if (axis_prev is not None and w_mag > 0.0) else Vector3D(0.0, 0.0, 0.0)
+        if angle < 0.01:
+            w_close = 0.0
+        else:
+            w_close = angular_accel * (-0.5 * dt + math.sqrt(
+                0.25 * dt * dt + 2.0 * angle / angular_accel)) if angular_accel > 0.0 else 0.0
+            if handover_rad is not None and engines_on and angular_accel > 0.0:
+                w_close = min(w_close, self._handover_rate(
+                    ship, angle, handover_rad, angular_accel, dt))
+            w_close = min(w_close, max_angular_vel)
+        desired = tr + rotation_axis * w_close
+        delta = desired - w_vec
+        dm = delta.magnitude
+        if dm > authority and dm > 0.0:
+            delta = delta * (authority / dm)
+        spin = w_vec + delta
+        # Do not swing past the aim on this tick when the closing rate is
+        # within one tick's authority: land on it (moving with it).
+        closing = (spin - tr).dot(rotation_axis)
+        if angle > 0.0 and closing * dt > angle and dm <= authority + 1e-12:
+            rotation_vec = rotation_axis * angle + tr * dt
+        else:
+            rotation_vec = spin * dt
+        amount = rotation_vec.magnitude
+        if amount > 0.0:
+            axis = rotation_vec * (1.0 / amount)
+            ks = ship.kinematic_state
+            ks.forward = ks.forward.rotate_around_axis(axis, amount).normalized()
+            ks.up = ks.up.rotate_around_axis(axis, amount).normalized()
+        if ship.rotation_state is not None:
+            ship.rotation_state.phase = "track"
+        ship.angular_velocity_rad_s = spin.magnitude
+        ship.angular_axis = spin * (1.0 / spin.magnitude) if spin.magnitude > 1e-12 else None
+
+    def _handover_rate(self, ship: ShipCombatState, angle: float, handover_rad: float,
+                       angular_accel: float, dt: float) -> float:
+        """
+        The fastest closing rate a turn that hands over to RCS inside
+        ``handover_rad`` may carry at ``angle`` from its aim: inside the
+        handover angle the rate RCS can stop in what is left (thrust
+        vectoring, still on because the rate was too high, brakes down to it
+        instead of speeding up again); outside it, thrust vectoring braking
+        down to that rate at the handover angle (a two-stage stop: flying w
+        for a tick and braking to w_h covers about (w^2 - w_h^2)/(2a) + w*dt/2
+        = angle - handover).
+        """
+        a_rcs, _ = self._get_rotation_params(ship, False)
+        if a_rcs <= 0.0:
+            return float('inf')
+        if angle <= handover_rad:
+            return a_rcs * (-0.5 * dt + math.sqrt(0.25 * dt * dt + 2.0 * angle / a_rcs))
+        w_h = a_rcs * (-0.5 * dt + math.sqrt(0.25 * dt * dt + 2.0 * handover_rad / a_rcs))
+        return angular_accel * (-0.5 * dt + math.sqrt(
+            0.25 * dt * dt + 2.0 * (angle - handover_rad) / angular_accel
+            + (w_h / angular_accel) ** 2))
+
+    def _attitude_needs_tv(self, ship: ShipCombatState, angle_rad: float, dt: float,
+                           target_rate: Optional[Vector3D] = None) -> bool:
+        """
+        Whether a PADLOCK / token-throttle HEADING turn keeps thrust
+        vectoring (a token burn) engaged this tick: outside
+        ATTITUDE_TV_HANDOVER_DEG, or inside it while the carried rate is more
+        than RCS can stop in the remaining angle.
+        """
+        if angle_rad > math.radians(ATTITUDE_TV_HANDOVER_DEG):
+            return True
+        w = ship.angular_velocity_rad_s or 0.0
+        if target_rate is not None:
+            # relative to the aim's own swing
+            axis = getattr(ship, 'angular_axis', None)
+            spin = axis * w if (axis is not None and w > 0.0) else Vector3D(0.0, 0.0, 0.0)
+            fwd = ship.forward
+            w = (spin - (target_rate - fwd * target_rate.dot(fwd))).magnitude
+        if w <= 0.0:
+            return False
+        a_rcs, _ = self._get_rotation_params(ship, False)
+        if a_rcs <= 0.0:
+            return True
+        w_stop = a_rcs * (-0.5 * dt + math.sqrt(0.25 * dt * dt + 2.0 * angle_rad / a_rcs))
+        return w > w_stop + a_rcs * dt
+
+    def _brake_spin(self, ship: ShipCombatState, dt: float) -> None:
+        """
+        A tick with no attitude command: RCS brakes the carried spin at its
+        own authority and the nose keeps swinging meanwhile (semi-implicit,
+        as _rotate_ship_toward travels).
+        """
+        w = ship.angular_velocity_rad_s or 0.0
+        axis = getattr(ship, 'angular_axis', None)
+        if w <= 0.0 or axis is None:
+            self._stop_rotation(ship)
+            return
+        a_rcs, _ = self._get_rotation_params(ship, False)
+        w_new = max(0.0, w - a_rcs * dt)
+        travel = w_new * dt
+        if travel > 0.0:
+            ks = ship.kinematic_state
+            ks.forward = ks.forward.rotate_around_axis(axis, travel).normalized()
+            ks.up = ks.up.rotate_around_axis(axis, travel).normalized()
+        if w_new <= 0.0:
+            self._stop_rotation(ship)
+        else:
+            ship.angular_velocity_rad_s = w_new
+            ship.rotation_state = None
+
+    @staticmethod
+    def _stop_rotation(ship: ShipCombatState) -> None:
+        ship.angular_velocity_rad_s = 0.0
+        ship.angular_axis = None
+        ship.rotation_state = None
 
     def _get_rotation_params(
         self,
@@ -3170,11 +3754,12 @@ class CombatSimulation:
     def _heading_burn_light_s(self, ship: ShipCombatState, direction: Vector3D) -> float:
         """
         Seconds until a HEADING turn onto ``direction`` brings the nose inside
-        HEADING_BURN_CONE_DEG, where the ordered burn lights: the bang-bang
-        turn (thrust vectoring) through the whole angle, from the turn rate
-        the ship already has toward it, minus the braking tail it flies
-        inside the cone. A from-rest turn to the cone edge overstates it for
-        a ship already swinging round (it reaches the cone at speed).
+        HEADING_BURN_CONE_DEG, where the ordered burn lights: the turn
+        (thrust vectoring) through the whole angle flown from the spin the
+        ship already has (_turn_time_to: toward, away or sideways), minus the
+        braking tail it flies inside the cone. A from-rest turn to the cone
+        edge overstates it for a ship already swinging round (it reaches the
+        cone at speed).
         """
         angle = ship.forward.angle_to(direction)
         cone = math.radians(HEADING_BURN_CONE_DEG)
@@ -3183,25 +3768,178 @@ class CombatSimulation:
         alpha, w_max = self._get_rotation_params(ship, True)
         if alpha <= 0.0 or w_max <= 0.0:
             return float('inf')
-        rs = getattr(ship, 'rotation_state', None)
-        w0 = 0.0
-        if rs is not None and rs.target_direction.distance_to(direction) <= 0.1:
-            w0 = min(abs(getattr(ship, 'angular_velocity_rad_s', 0.0) or 0.0), w_max)
-
-        def whole_turn(theta: float, w: float) -> float:
-            if w * w / (2.0 * alpha) >= theta:
-                return w / alpha                      # braking already
-            w_peak = math.sqrt(alpha * theta + w * w / 2.0)
-            if w_peak <= w_max:
-                return (2.0 * w_peak - w) / alpha
-            ramp = (w_max * w_max - w * w) / (2.0 * alpha) + w_max * w_max / (2.0 * alpha)
-            return (2.0 * w_max - w) / alpha + (theta - ramp) / w_max
-
         # The last `cone` of a bang-bang turn: braking from at most w_max.
         brake = w_max * w_max / (2.0 * alpha)
         tail = (math.sqrt(2.0 * cone / alpha) if brake >= cone
                 else (cone - brake) / w_max + w_max / alpha)
-        return max(0.0, whole_turn(angle, w0) - tail)
+        return max(0.0, self._turn_time_to(ship, direction, engines_on=True,
+                                           params=(alpha, w_max)) - tail)
+
+    def _turn_time_to(
+        self,
+        ship: ShipCombatState,
+        direction: Vector3D,
+        engines_on: bool = True,
+        forward: Optional[Vector3D] = None,
+        spin: Optional[Vector3D] = None,
+        _depth: int = 0,
+        params: Optional[tuple] = None,
+    ) -> float:
+        """
+        Time to bring the nose onto ``direction`` from the current attitude
+        AND the current spin, as _rotate_ship_toward flies it: the spin
+        across the turn's axis is braked first, a spin the wrong way is
+        braked (the extra swing it carries is added to the turn), a spin
+        the right way is kept, and one too fast to stop on the target
+        overshoots and comes back. _estimate_turn_time is the from-rest
+        special case. ``forward`` / ``spin`` (rad/s vector) override the
+        ship's own (spin None = the ship's, a zero vector = at rest).
+        Used with engines_on=True only: an RCS turn begun from a spin far
+        above the RCS rate limit (a thrust-vectoring rate) is overestimated
+        (811 s estimated for 627 s flown in the reviewer's case) - nothing
+        asks that.
+        """
+        # params: (angular accel, max rate) for engines_on, when the caller
+        # already has them (_get_rotation_params reads the engine modules).
+        alpha, w_max = params if params is not None else self._get_rotation_params(ship, engines_on)
+        if alpha <= 0.0:
+            return float('inf')
+        fwd = forward if forward is not None else ship.forward
+        if spin is None:
+            axis_prev = getattr(ship, 'angular_axis', None)
+            w = ship.angular_velocity_rad_s or 0.0
+            spin = axis_prev * w if (axis_prev is not None and w > 0.0) else Vector3D.zero()
+        target = direction.normalized()
+        theta = fwd.angle_to(target)
+        w_mag = spin.magnitude
+
+        def from_rest(angle: float) -> float:
+            if angle <= 1e-6:
+                return 0.0
+            theta_crit = w_max * w_max / alpha
+            if angle <= theta_crit:
+                return 2.0 * math.sqrt(angle / alpha)
+            return angle / w_max + w_max / alpha
+
+        if w_mag <= 1e-9:
+            return from_rest(theta)
+        axis = fwd.cross(target)
+        if axis.magnitude < 1e-6:
+            axis = spin * (1.0 / w_mag) if theta < 0.01 else ship.up
+        axis = axis.normalized()
+        w_par = spin.dot(axis)
+        w_perp = (spin - axis * w_par).magnitude
+        if theta > math.pi / 2 and w_par > 0.0:
+            # The integrator keeps the spin's own axis this far off target
+            # while the swing about it passes the target (SPIN_AXIS_KEEP_DEG).
+            spin_axis = spin * (1.0 / w_mag)
+            along = spin_axis - fwd * spin_axis.dot(fwd)
+            if (along.magnitude > 1e-6 and abs(target.dot(along.normalized()))
+                    < math.sin(math.radians(SPIN_AXIS_KEEP_DEG))):
+                w_par, w_perp = w_mag, 0.0
+        t = 0.0
+        if w_perp > 1e-9:
+            if _depth < 3:
+                # The sideways spin is braked first (it takes the whole
+                # authority); meanwhile it swings the nose w_perp^2 / 2a off
+                # the turn's plane and the in-plane spin carries on
+                # unchanged. Then the turn is flown from where that leaves
+                # the nose (the great circle from there is a new one).
+                t_p = w_perp / alpha
+                perp_vec = spin - axis * w_par
+                rv = perp_vec * (0.5 * t_p) + axis * (w_par * t_p)
+                ang = rv.magnitude
+                fwd2 = (fwd.rotate_around_axis(rv * (1.0 / ang), ang).normalized()
+                        if ang > 1e-12 else fwd)
+                return t_p + self._turn_time_to(ship, direction, engines_on,
+                                                forward=fwd2, spin=axis * w_par,
+                                                _depth=_depth + 1, params=(alpha, w_max))
+            t = w_perp / alpha
+            theta = math.hypot(theta, w_perp * w_perp / (2.0 * alpha))
+        if w_par < 0.0:
+            swing = w_par * w_par / (2.0 * alpha)
+            if theta + swing < math.pi:
+                # Brake the wrong-way spin, then turn back through the swing.
+                return t + (-w_par) / alpha + from_rest(theta + swing)
+            # The swing carries the nose past 180 deg off target, where the
+            # turn's axis flips: the ship carries on round the long way.
+            theta, w_par = 2.0 * math.pi - theta, -w_par
+        w0 = w_par
+        brake = w0 * w0 / (2.0 * alpha)
+        if brake >= theta:
+            # Too fast to stop on the target: brake, then come back.
+            past = math.fmod(brake - theta, 2.0 * math.pi)
+            return t + w0 / alpha + from_rest(min(past, 2.0 * math.pi - past))
+        w_peak = math.sqrt(alpha * theta + w0 * w0 / 2.0)
+        if w_peak <= w_max:
+            return t + (2.0 * w_peak - w0) / alpha
+        ramp = (w_max * w_max - w0 * w0) / (2.0 * alpha) + w_max * w_max / (2.0 * alpha)
+        return t + (2.0 * w_max - w0) / alpha + (theta - ramp) / w_max
+
+    def _reachable_attitude(
+        self,
+        ship: ShipCombatState,
+        direction: Vector3D,
+        time_s: float,
+        engines_on: bool = True,
+        params: Optional[tuple] = None,
+        cache: Optional[dict] = None,
+    ) -> Vector3D:
+        """
+        Where the nose can actually be after ``time_s`` when turning toward
+        ``direction``: the direction itself when _turn_time_to fits in the
+        time, else the farthest point along the great circle toward it that
+        does. A spinning ship that cannot even stop in time ends where its
+        spin carries it (the stopping attitude). ``params`` / ``cache`` let a
+        caller scoring many candidates for one ship and tick share the
+        rotation parameters and the candidate-independent turn back.
+        """
+        if params is None:
+            params = self._get_rotation_params(ship, engines_on)
+        if self._turn_time_to(ship, direction, engines_on, params=params) <= time_s:
+            return direction.normalized()
+        fwd = ship.forward
+        angle = fwd.angle_to(direction)
+        axis = fwd.cross(direction)
+        if axis.magnitude < 1e-6:
+            axis = ship.up
+        axis = axis.normalized()
+
+        def partial(f: float) -> Vector3D:
+            return fwd.rotate_around_axis(axis, angle * f).normalized()
+
+        w_now = ship.angular_velocity_rad_s or 0.0
+        if w_now <= 1e-9:
+            # At rest the from-rest bang-bang reach is closed-form (the
+            # inverse of _turn_time_to's from_rest).
+            alpha, w_max = params
+            if alpha <= 0.0 or angle <= 1e-9:
+                return fwd
+            if w_max > 0.0 and time_s > 2.0 * w_max / alpha:
+                reach = w_max * (time_s - w_max / alpha)
+            else:
+                reach = alpha * time_s * time_s / 4.0
+            return partial(min(1.0, max(0.0, reach / angle)))
+        back = cache.get('back') if cache is not None else None
+        if back is None:
+            back = self._turn_time_to(ship, fwd, engines_on, params=params)
+            if cache is not None:
+                cache['back'] = back
+        if back > time_s:
+            w = ship.angular_velocity_rad_s or 0.0
+            axis_prev = getattr(ship, 'angular_axis', None)
+            alpha = params[0]
+            if axis_prev is None or w <= 0.0 or alpha <= 0.0:
+                return fwd
+            return fwd.rotate_around_axis(axis_prev, w * w / (2.0 * alpha)).normalized()
+        lo, hi = 0.0, 1.0
+        for _ in range(REACH_BISECTION_STEPS):
+            mid = 0.5 * (lo + hi)
+            if self._turn_time_to(ship, partial(mid), engines_on, params=params) <= time_s:
+                lo = mid
+            else:
+                hi = mid
+        return partial(lo)
 
     def _max_turn_angle(
         self,
@@ -3236,23 +3974,43 @@ class CombatSimulation:
         """
         threats = []
 
+        # Scalar form of the Vector3D expressions, operation for operation
+        # (every evading ship - and every ghost of one in the prediction
+        # shadow, every shadow step - scans all rounds here, and most are
+        # rejected): the ship's state is read once, and the relative
+        # position/velocity vectors are only built for threats that are kept.
+        ship_pos = ship.position
+        ship_vel = ship.velocity
+        spx, spy, spz = ship_pos.x, ship_pos.y, ship_pos.z
+        svx, svy, svz = ship_vel.x, ship_vel.y, ship_vel.z
+        sqrt = math.sqrt
+
         def _add_threat(pos: Vector3D, vel: Vector3D, ke_gj: float) -> None:
-            rel_pos = pos - ship.position
-            rel_vel = vel - ship.velocity
-            rel_speed = rel_vel.magnitude
+            vx = vel.x - svx
+            vy = vel.y - svy
+            vz = vel.z - svz
+            rel_speed = sqrt(vx**2 + vy**2 + vz**2)
 
             if rel_speed < 100:  # Effectively stationary relative to us
                 return
 
+            rx = pos.x - spx
+            ry = pos.y - spy
+            rz = pos.z - spz
+
             # Time to closest approach (TCA)
             # TCA = -dot(rel_pos, rel_vel) / dot(rel_vel, rel_vel)
-            tca = -rel_pos.dot(rel_vel) / (rel_vel.dot(rel_vel))
+            tca = -(rx * vx + ry * vy + rz * vz) / (vx * vx + vy * vy + vz * vz)
             if tca < 0 or tca > BALLISTIC_THREAT_HORIZON_S:
                 return
 
             # Miss distance at closest approach
-            closest_point = rel_pos + rel_vel * tca
-            miss_dist = closest_point.magnitude
+            cx = rx + vx * tca
+            cy = ry + vy * tca
+            cz = rz + vz * tca
+            miss_dist = sqrt(cx**2 + cy**2 + cz**2)
+            rel_vel = Vector3D(vx, vy, vz)
+            rel_pos = Vector3D(rx, ry, rz)
 
             # Urgency score: (1/TCA) * KE * (1/miss_dist)
             # Faster closing, higher energy, closer miss = higher urgency
@@ -3276,8 +4034,10 @@ class CombatSimulation:
             # world-frame kinetic_energy_gj swung 1.2 GJ -> 27-55 GJ with a
             # 40 km/s fleet drift, skewing urgency and the TANK armour trial.
             mass_kg = max(0.1, proj.mass_kg - getattr(proj, '_pd_ablation', 0.0))
-            rel_speed = (proj.velocity - ship.velocity).magnitude
-            _add_threat(proj.position, proj.velocity,
+            proj_vel = proj.velocity
+            rel_speed = sqrt((proj_vel.x - svx)**2 + (proj_vel.y - svy)**2
+                             + (proj_vel.z - svz)**2)
+            _add_threat(proj.position, proj_vel,
                         0.5 * mass_kg * rel_speed ** 2 / 1e9)
 
         # Seeker-killed torpedoes: ballistic multi-tonne masses. Evade them
@@ -3312,6 +4072,7 @@ class CombatSimulation:
         """
         threats = []
         guidance = TorpedoGuidance()
+        rotation_params = None          # _get_rotation_params(ship, True), on first use
         # Evaluate the NEZ against OUR real lateral acceleration, not the
         # fleet-wide 3 g assumption the torpedo itself uses: the ship knows
         # its own performance (and its current engine damage).
@@ -3372,8 +4133,11 @@ class CombatSimulation:
             # seconds. The NEZ picks the pad: inside (escape provably
             # impossible) commit early; outside keep running longer. See the
             # constant block for the full rationale.
-            turn_needed_rad = self._presentation_angle_needed(ship, bearing)
-            turn_time_s = self._estimate_turn_time(ship, turn_needed_rad, engines_on=True)
+            # The turn time is flown from the spin the ship HAS (a ship
+            # still swinging away into RUN has to stop that first).
+            if rotation_params is None:
+                rotation_params = self._get_rotation_params(ship, True)
+            turn_time_s = self._presentation_turn_time(ship, bearing, params=rotation_params)
             pad = TERMINAL_TURN_MARGIN_NEZ if nez.inside else TERMINAL_TURN_MARGIN_CONTESTED
             terminal = t_go <= pad * turn_time_s + PRESENT_HOLD_WINDOW_S
             # Latch the commit (see TorpedoInFlight.terminal_latched). Only
@@ -3383,6 +4147,24 @@ class CombatSimulation:
                 terminal = True
             elif terminal and latch_commit:
                 torp_flight.terminal_latched = True
+
+            # Earliest arrival: the torpedo burns its remaining delta-v
+            # straight into closure. A torpedo just off the rail (not yet
+            # closing, t_go infinite) still arrives within this - the RUN
+            # round-trip check must not read "never" as "plenty of time".
+            accel = torp.specs.acceleration_at_mass(torp.current_mass_kg)
+            v0 = max(0.0, closing_speed)
+            dv = torp.remaining_delta_v_kps * 1000.0
+            if accel > 0.0 and dv > 0.0:
+                t_burn = dv / accel
+                d_burn = v0 * t_burn + 0.5 * accel * t_burn * t_burn
+                if d_burn >= distance_m:
+                    t_go_est = (-v0 + math.sqrt(v0 * v0 + 2.0 * accel * distance_m)) / accel
+                else:
+                    t_go_est = t_burn + (distance_m - d_burn) / (v0 + dv)
+            else:
+                t_go_est = t_go
+            t_go_est = min(t_go, t_go_est)
 
             urgency = (ke_gj / max(t_go, 0.5) if t_go != float('inf')
                        else ke_gj / GUIDED_TORPEDO_REACT_TIME_S)
@@ -3394,9 +4176,11 @@ class CombatSimulation:
                 'rel_vel': rel_vel,
                 'distance_m': distance_m,
                 't_go': t_go,
+                't_go_est': t_go_est,
                 'ke_gj': ke_gj,
                 'nez': nez,
                 'terminal': terminal,
+                'pad': pad,
                 'urgency': urgency,
             })
 
@@ -3478,7 +4262,22 @@ class CombatSimulation:
         # ---- 3. Guided torpedoes inbound: run to buy PD time ----
         if guided and allow_run:
             run_dir = self._calculate_run_direction(ship, guided)
-            return run_dir, 'RUN', 1.0
+            late = self._run_round_trip_too_late(ship, guided, run_dir)
+            if not late:
+                # Burn only once the nose points away: thrust while it still
+                # swings through the threat-facing half pushes the ship TOWARD
+                # the round (the token throttle keeps thrust vectoring lit).
+                if ship.forward.dot(run_dir) > 0.0:
+                    return run_dir, 'RUN', 1.0
+                return run_dir, 'RUN', MANEUVER_TURN_THROTTLE
+            # Running means turning away and then all the way back before
+            # impact; a hull that cannot finish that round trip presents
+            # its armour now instead of starting a flip it cannot complete.
+            if dt > 0:
+                for t in late:
+                    t['torp_flight'].terminal_latched = True
+            present_dir = self._calculate_presentation_direction(ship, late)
+            return present_dir, 'PRESENT', PRESENT_THROTTLE_MOD
 
         # ---- 4. Ballistic-only handling (original behaviour) ----
         if not dangerous_ballistic:
@@ -3535,6 +4334,45 @@ class CombatSimulation:
 
         return None
 
+    def _run_round_trip_too_late(
+        self,
+        ship: ShipCombatState,
+        guided_threats: list,
+        run_dir: Vector3D,
+    ) -> list:
+        """
+        The guided threats a RUN onto ``run_dir`` cannot pay for: turning
+        onto the run heading (from the current spin), at least
+        RUN_MIN_BURN_S of burn, then the padded turn back to the armour
+        presentation (from rest on the run heading) and the hold window must
+        all fit inside the threat's time to go (earliest arrival: t_go_est) -
+        the same budget the terminal trigger will ask for once the ship is
+        running. Only threats inside their no-escape zone count: outside it
+        running can make the round miss outright. Empty when running is
+        worth it (or the ship is already on the run heading: then the
+        terminal trigger alone decides).
+        """
+        params = self._get_rotation_params(ship, True)
+        out_s = self._turn_time_to(ship, run_dir, engines_on=True, params=params)
+        if out_s <= 1e-6:
+            return []
+        late = []
+        for t in guided_threats:
+            t_go = t.get('t_go_est', t['t_go'])
+            if t_go == float('inf'):
+                continue
+            nez = t.get('nez')
+            if nez is not None and not nez.inside:
+                # Outside the no-escape zone running can make the round miss
+                # outright (it runs out of delta-v): no turn back is owed.
+                continue
+            back_s = self._presentation_turn_time(
+                ship, t['bearing'], forward=run_dir, spin=Vector3D.zero(), params=params)
+            budget = out_s + RUN_MIN_BURN_S + t['pad'] * back_s + PRESENT_HOLD_WINDOW_S
+            if t_go <= budget:
+                late.append(t)
+        return late
+
     def _calculate_run_direction(
         self,
         ship: ShipCombatState,
@@ -3568,10 +4406,50 @@ class CombatSimulation:
             sections[loc] = section.thickness_cm if section else 0.0
         return sections
 
+    def _presentation_turn_time(
+        self,
+        ship: ShipCombatState,
+        bearing: Vector3D,
+        forward: Optional[Vector3D] = None,
+        spin: Optional[Vector3D] = None,
+        params: Optional[tuple] = None,
+    ) -> float:
+        """
+        Time to bring ``bearing`` inside the (margined) arc of the thickest
+        armour section, from attitude ``forward`` (default: the ship's) and
+        the ship's current spin (``spin`` overrides, see _turn_time_to): the
+        great-circle turn of _presentation_angle_needed, flown from the spin
+        the ship actually has. A ship already inside the arc but spinning
+        out of it needs the time to stop and come back.
+        """
+        fwd = forward if forward is not None else ship.forward
+        needed = self._presentation_angle_needed(ship, bearing, forward=fwd)
+        thickness = self._armor_thicknesses(ship)
+        toward = bearing
+        if thickness is not None:
+            nose = thickness[HitLocation.NOSE]
+            lateral = thickness[HitLocation.LATERAL]
+            tail = thickness[HitLocation.TAIL]
+            if not (nose >= lateral and nose >= tail):
+                if tail >= lateral:
+                    toward = bearing * -1
+                elif fwd.angle_to(bearing) < math.pi / 2:
+                    toward = bearing * -1
+        if needed <= 1e-6:
+            facing = fwd
+        else:
+            axis = fwd.cross(toward)
+            if axis.magnitude < 1e-6:
+                axis = ship.up
+            facing = fwd.rotate_around_axis(axis.normalized(), needed).normalized()
+        return self._turn_time_to(ship, facing, engines_on=True, forward=fwd, spin=spin,
+                                  params=params)
+
     def _presentation_angle_needed(
         self,
         ship: ShipCombatState,
         bearing: Vector3D,
+        forward: Optional[Vector3D] = None,
     ) -> float:
         """
         Rotation (rad) required to bring `bearing` inside the arc of the
@@ -3585,7 +4463,8 @@ class CombatSimulation:
         when the bearing is already inside the (margined) thickest arc.
         """
         thickness = self._armor_thicknesses(ship)
-        angle = ship.forward.angle_to(bearing)  # 0 = threat dead ahead
+        fwd = forward if forward is not None else ship.forward
+        angle = fwd.angle_to(bearing)  # 0 = threat dead ahead
         margin = math.radians(PRESENT_ARC_MARGIN_DEG)
         nose_arc = math.radians(NOSE_HIT_ANGLE_THRESHOLD) - margin
         tail_arc = math.radians(TAIL_HIT_ANGLE_THRESHOLD) + margin
@@ -3616,10 +4495,18 @@ class CombatSimulation:
         ship: ShipCombatState,
         forward: Vector3D,
         terminal_threats: list,
+        threat_cache: Optional[dict] = None,
     ) -> tuple[float, float, float]:
         """
         Score an attitude against the terminal torpedoes. Lower is better,
         compared lexicographically:
+
+        ``threat_cache`` (optional, a dict owned by ONE caller for ONE set of
+        candidate attitudes - see _calculate_presentation_direction) holds
+        what does not depend on the attitude: each threat's impact vector
+        (key: threat index) and the hull energy of each (threat, struck
+        section) trial (key: (index, location)). The ship's armor and the
+        threats must not change while it is in use; it is never stored.
 
         1. Hull-delivered energy (GJ): for each threat, determine which armor
            section its impact vector would strike at this attitude (same
@@ -3645,15 +4532,19 @@ class CombatSimulation:
         total_gj = 0.0
         weighted_thickness = 0.0
         center_distance = 0.0
-        for t in terminal_threats:
+        for index, t in enumerate(terminal_threats):
             # Impact vector = direction the torpedo travels at impact. A
             # closing torpedo arrives roughly along the reversed bearing; use
             # its actual relative velocity whenever it is closing.
-            rel_vel = t['rel_vel']
-            if rel_vel.magnitude > 1e-6 and rel_vel.dot(t['bearing']) < 0:
-                impact_vector = rel_vel.normalized()
-            else:
-                impact_vector = t['bearing'] * -1
+            impact_vector = threat_cache.get(index) if threat_cache is not None else None
+            if impact_vector is None:
+                rel_vel = t['rel_vel']
+                if rel_vel.magnitude > 1e-6 and rel_vel.dot(t['bearing']) < 0:
+                    impact_vector = rel_vel.normalized()
+                else:
+                    impact_vector = t['bearing'] * -1
+                if threat_cache is not None:
+                    threat_cache[index] = impact_vector
 
             location = geometry.calculate_hit_location(impact_vector, forward)
 
@@ -3680,18 +4571,69 @@ class CombatSimulation:
             weighted_thickness += t['ke_gj'] * section.thickness_cm
 
             # Simulate the impact on a copy of the section (same parameters
-            # as the kinetic phase of _resolve_torpedo_hit).
-            trial = copy.deepcopy(section)
-            _, to_hull_gj, _ = trial.apply_energy_damage(
-                energy_gj=t['ke_gj'],
-                flat_chipping=0.3,
-                impact_area_m2=0.1,
-            )
-            total_gj += to_hull_gj
+            # as the kinetic phase of _resolve_torpedo_hit); the trial is
+            # memoised by value, see _trial_energy_to_hull_gj.
+            if threat_cache is None:
+                total_gj += self._trial_energy_to_hull_gj(section, t['ke_gj'])
+            else:
+                trial_key = (index, location)
+                to_hull_gj = threat_cache.get(trial_key)
+                if to_hull_gj is None:
+                    to_hull_gj = threat_cache[trial_key] = self._trial_energy_to_hull_gj(
+                        section, t['ke_gj'])
+                total_gj += to_hull_gj
 
         # Round the leading components so float noise cannot defeat the
         # tie-breaks (1e-3 GJ / 0.1 energy-weighted-cm resolution).
         return (round(total_gj, 3), round(-weighted_thickness, 1), center_distance)
+
+    #: Entries kept by _trial_energy_to_hull_gj before the memo is dropped.
+    _TRIAL_HULL_CACHE_MAX = 4096
+
+    def _trial_energy_to_hull_gj(self, section: Any, ke_gj: float) -> float:
+        """
+        Energy (GJ) that reaches the hull if a torpedo carrying ``ke_gj``
+        struck ``section`` as it stands now: the impact is trialled on a copy
+        (same parameters as the kinetic phase of _resolve_torpedo_hit), the
+        section itself is not touched.
+
+        _presentation_score asks this for every candidate attitude x every
+        terminal torpedo, but the answer depends only on which section is
+        struck and with how much energy - a ship weighing 50 attitudes
+        against 8 torpedoes repeats the same 24 trials 400 times, every tick,
+        and again in every prediction shadow. So the trial is memoised.
+
+        The memo is keyed by VALUE: the section's class and every one of its
+        attributes (thickness, chipping, material constants, ...) plus the
+        energy. Nothing has to invalidate it - armor that is ablated, chipped
+        or replaced simply produces a different key - and a stale entry can
+        never be returned (tests/test_perf_equivalence.py mutates each
+        input). It lives on the simulation instance (the prediction shadow
+        gets its own) and is dropped when it grows past
+        _TRIAL_HULL_CACHE_MAX entries. A section that cannot be keyed (no
+        instance dict, unhashable attribute) is trialled directly.
+        """
+        cache = self.__dict__.get('_trial_hull_cache')
+        if cache is None:
+            cache = self.__dict__['_trial_hull_cache'] = {}
+        try:
+            key = (type(section), ke_gj, tuple(vars(section).items()))
+            cached = cache.get(key)
+        except TypeError:
+            key = cached = None
+        if cached is not None:
+            return cached
+        trial = copy.deepcopy(section)
+        _, to_hull_gj, _ = trial.apply_energy_damage(
+            energy_gj=ke_gj,
+            flat_chipping=0.3,
+            impact_area_m2=0.1,
+        )
+        if key is not None:
+            if len(cache) >= self._TRIAL_HULL_CACHE_MAX:
+                cache.clear()
+            cache[key] = to_hull_gj
+        return to_hull_gj
 
     def _expected_presentation_damage_gj(
         self,
@@ -3727,12 +4669,19 @@ class CombatSimulation:
             (t['t_go'] for t in terminal_threats if t['t_go'] != float('inf')),
             default=GUIDED_TORPEDO_REACT_TIME_S,
         )
-        theta_max = self._max_turn_angle(ship, t_go_min, engines_on=True)
 
         # ---- Build candidate nose directions ----
-        candidates: list[Vector3D] = [ship.forward]  # do-nothing baseline
+        candidates: list[Vector3D] = [ship.forward]  # stop-turning baseline
+        # A salvo's rounds come down nearly one bearing: build the candidates
+        # from bearings PRESENT_CANDIDATE_MERGE_DEG apart (the pairwise plane
+        # normals of near-identical bearings are numerical noise).
+        merge_cos = math.cos(math.radians(PRESENT_CANDIDATE_MERGE_DEG))
+        bearings: list = []
         for t in terminal_threats:
             b = t['bearing']
+            if not any(b.dot(k) > merge_cos for k in bearings):
+                bearings.append(b)
+        for b in bearings:
             candidates.append(b)          # nose-on
             candidates.append(b * -1)     # tail-on
             side = b.cross(ship.up)
@@ -3741,7 +4690,7 @@ class CombatSimulation:
             if side.magnitude > 1e-6:
                 candidates.append(side.normalized())  # beam-on
 
-        if len(terminal_threats) >= 2:
+        if len(bearings) >= 2:
             mean = Vector3D.zero()
             for t in terminal_threats:
                 mean = mean + t['bearing'] * t['ke_gj']
@@ -3749,10 +4698,9 @@ class CombatSimulation:
                 mean = mean.normalized()
                 candidates.append(mean)
                 candidates.append(mean * -1)
-            for i in range(len(terminal_threats)):
-                for j in range(i + 1, len(terminal_threats)):
-                    normal = terminal_threats[i]['bearing'].cross(
-                        terminal_threats[j]['bearing'])
+            for i in range(len(bearings)):
+                for j in range(i + 1, len(bearings)):
+                    normal = bearings[i].cross(bearings[j])
                     if normal.magnitude > 1e-6:
                         candidates.append(normal.normalized())
 
@@ -3764,20 +4712,27 @@ class CombatSimulation:
         # later ticks (observed: a lateral-thickest hull overshooting the
         # broadside band toward a thin tail-on facing). Each tick recomputes
         # with a fresh budget, so the command converges as time permits.
+        # Reachability is the real turn from the current attitude AND spin
+        # (_reachable_attitude / _turn_time_to): a ship still swinging away
+        # cannot stop dead, and a far facing it cannot finish is scored where
+        # the turn would actually leave the nose at impact.
         best_dir = ship.forward
         best_score: Optional[tuple] = None
+        # Per-threat work that is the same for every candidate (impact
+        # vectors, armor trials): local to this call - nothing touches the
+        # armor or the threats while the candidates are scored.
+        threat_cache: dict = {}
+        rotation_params = self._get_rotation_params(ship, True)
+        reach_cache: dict = {}
+        merge_cos = math.cos(math.radians(PRESENT_CANDIDATE_MERGE_DEG))
+        kept: list = []
         for cand in candidates:
-            angle = ship.forward.angle_to(cand)
-            if angle <= theta_max or angle <= 1e-6:
-                achieved = cand
-            else:
-                axis = ship.forward.cross(cand)
-                if axis.magnitude < 1e-6:
-                    # 180 deg flip: any axis perpendicular to forward works
-                    axis = ship.up
-                achieved = ship.forward.rotate_around_axis(
-                    axis.normalized(), theta_max).normalized()
-            score = self._presentation_score(ship, achieved, terminal_threats)
+            if any(cand.dot(k) > merge_cos for k in kept):
+                continue
+            kept.append(cand)
+            achieved = self._reachable_attitude(ship, cand, t_go_min, engines_on=True,
+                                                params=rotation_params, cache=reach_cache)
+            score = self._presentation_score(ship, achieved, terminal_threats, threat_cache)
             if best_score is None or score < best_score:
                 best_score = score
                 best_dir = achieved
@@ -4510,7 +5465,7 @@ class CombatSimulation:
                         'detection': 'coarse_tca',
                         'tca': tca
                     })
-                    print(f"  --- [{proj_flight.source_ship_id}] MISS {proj_flight.target_ship_id} "
+                    self._echo(f"  --- [{proj_flight.source_ship_id}] MISS {proj_flight.target_ship_id} "
                           f"(closest: {closest_km:.2f}km, flight: {flight_time:.1f}s, tca: {tca:.1f}s)")
                     projectiles_to_remove.append(proj_flight)
                     continue
@@ -4523,6 +5478,14 @@ class CombatSimulation:
                 time_elapsed = 0.0  # Time elapsed since start of this timestep
                 micro_steps = 0
                 hit_detected = False
+
+                # Leading micro-steps in which nothing can happen (no hit, no
+                # proximity hit, no miss) run in scalar arithmetic; the loop
+                # below takes over at the first step that needs a decision.
+                time_remaining, time_elapsed, micro_steps, current_dist = (
+                    self._coast_micro_steps(
+                        proj_flight, target_ship, target_pos_at_step_start,
+                        time_remaining, current_dist, MICRO_DT, MAX_MICRO_STEPS))
 
                 while time_remaining > 0 and micro_steps < MAX_MICRO_STEPS:
                     micro_dt = min(MICRO_DT, time_remaining)
@@ -4605,7 +5568,7 @@ class CombatSimulation:
                             'detection': 'geometric',
                             'micro_steps': micro_steps
                         })
-                        print(f"  --- [{proj_flight.source_ship_id}] MISS {proj_flight.target_ship_id} "
+                        self._echo(f"  --- [{proj_flight.source_ship_id}] MISS {proj_flight.target_ship_id} "
                               f"(closest: {closest_km:.2f}km, flight: {flight_time:.1f}s)")
                         projectiles_to_remove.append(proj_flight)
                         hit_detected = True  # Well, miss detected
@@ -4639,6 +5602,164 @@ class CombatSimulation:
         for proj in projectiles_to_remove:
             if proj in self.projectiles:
                 self.projectiles.remove(proj)
+
+    def _coast_micro_steps(
+        self,
+        proj_flight: ProjectileInFlight,
+        target_ship: ShipCombatState,
+        target_start: Vector3D,
+        time_remaining: float,
+        current_dist: float,
+        micro_dt_max: float,
+        max_micro_steps: int,
+    ) -> tuple[float, float, int, float]:
+        """
+        Fast path of the terminal micro-step loop in ``_update_projectiles``.
+
+        A round spends its last ~4 s of flight in 1 ms micro-steps, and in
+        nearly all of them it is simply still on its way: no hull hit, no
+        proximity hit, no miss. This runs exactly those leading uneventful
+        micro-steps in scalar arithmetic (no Vector3D temporaries, no calls)
+        and stops BEFORE the first step in which anything could be decided,
+        leaving that step and the rest to the loop in ``_update_projectiles``.
+
+        It performs the loop's floating-point operations one for one, in the
+        same order (position accumulated as ``p + v * micro_dt``, target as
+        ``start + v_target * time_elapsed``, the closest-approach formula of
+        ``_calculate_time_to_closest_approach``, ``**2`` in the magnitudes),
+        so position, ``min_distance_to_target``, the step counter and the
+        carried distance are bit-identical to running the full loop - pinned
+        by ``tests/test_perf_equivalence.py`` and ``scripts/perf_check.py``.
+        If you change the micro-step loop, change this to match (or make it
+        return its inputs unchanged: the loop is then the whole truth again).
+
+        A step is left to the full loop when any of these holds:
+        - the swept segment is not clearly outside the hull's bounding sphere
+          (same conservative test as ``_check_moving_cylinder_intersection``);
+        - closest approach falls inside the step and within the proximity
+          radius (the loop's proximity-hit test, evaluated exactly);
+        - the loop's miss test is true (evaluated exactly).
+
+        Nothing is cached: every input is read from the live objects on each
+        call, and the target does not change while one round is being
+        stepped.
+
+        Returns ``(time_remaining, time_elapsed, micro_steps, current_dist)``
+        after the steps taken; ``proj.position`` and
+        ``proj_flight.min_distance_to_target`` are updated in place.
+        """
+        proj = proj_flight.projectile
+        geom = target_ship.geometry
+        pos = proj.position
+        vel = proj.velocity
+        tvel = target_ship.velocity
+        if (geom is None or type(proj) is not KineticProjectile
+                or type(pos) is not Vector3D or type(vel) is not Vector3D
+                or type(tvel) is not Vector3D or type(target_start) is not Vector3D):
+            return time_remaining, 0.0, 0, current_dist
+
+        px, py, pz = pos.x, pos.y, pos.z
+        vx, vy, vz = vel.x, vel.y, vel.z
+        tvx, tvy, tvz = tvel.x, tvel.y, tvel.z
+        sx, sy, sz = target_start.x, target_start.y, target_start.z
+
+        # _calculate_time_to_closest_approach: rel_vel and its square are the
+        # same every micro-step (both velocities are constant in the loop).
+        rvx = vx - tvx
+        rvy = vy - tvy
+        rvz = vz - tvz
+        vel_mag_sq = rvx * rvx + rvy * rvy + rvz * rvz
+        if not vel_mag_sq >= 1e-10:
+            # No relative motion (or NaN): the loop's own special case.
+            return time_remaining, 0.0, 0, current_dist
+
+        proximity_m = geom.radius_m + HIT_TOLERANCE_M
+        sphere_sq = (geom.length_m / 2.0) ** 2 + (geom.radius_m + HIT_TOLERANCE_M) ** 2
+        min_dist = proj_flight.min_distance_to_target
+        sqrt = math.sqrt
+        time_elapsed = 0.0
+        micro_steps = 0
+
+        # Steps during which the round cannot reach the hull's bounding
+        # sphere at all: in the target frame it closes by at most
+        # step_m = |rel_vel| * micro_dt per step, so from clear_m out it
+        # stays more than a sphere radius (plus ten steps and 10 m) outside
+        # the sphere for clear_steps steps, and the per-step hull test below
+        # is skipped for them. (Only the hull test: closest approach, the
+        # proximity hit and the miss test are still evaluated every step.)
+        clear_steps = 0
+        step_m = sqrt(vel_mag_sq) * micro_dt_max
+        clear_m = (sqrt((px - sx) ** 2 + (py - sy) ** 2 + (pz - sz) ** 2)
+                   - 2.0 * sqrt(sphere_sq) - 10.0 * step_m - 10.0)
+        if step_m > 0.0 and 0.0 < clear_m < 1e15:
+            clear_steps = int(clear_m / step_m)
+
+        while time_remaining > 0 and micro_steps < max_micro_steps:
+            # micro_dt = min(MICRO_DT, time_remaining)
+            micro_dt = time_remaining if time_remaining < micro_dt_max else micro_dt_max
+
+            # Target at the start of the micro-step, round and target at its end
+            ax = sx + tvx * time_elapsed
+            ay = sy + tvy * time_elapsed
+            az = sz + tvz * time_elapsed
+            nx = px + vx * micro_dt
+            ny = py + vy * micro_dt
+            nz = pz + vz * micro_dt
+            elapsed_end = time_elapsed + micro_dt
+            bx = sx + tvx * elapsed_end
+            by = sy + tvy * elapsed_end
+            bz = sz + tvz * elapsed_end
+
+            # Hull hit possible? (segment in the target frame vs bounding sphere)
+            rx = px - ax
+            ry = py - ay
+            rz = pz - az
+            if micro_steps >= clear_steps:
+                lx = (nx - (bx - ax)) - px
+                ly = (ny - (by - ay)) - py
+                lz = (nz - (bz - az)) - pz
+                if not (rx * rx + ry * ry + rz * rz
+                        > 4.0 * (sphere_sq + (lx * lx + ly * ly + lz * lz))):
+                    break
+
+            # new_dist = proj.distance_to(target_pos_at_micro_end)
+            new_dist = sqrt((nx - bx) ** 2 + (ny - by) ** 2 + (nz - bz) ** 2)
+
+            # micro_tca, micro_closest = _calculate_time_to_closest_approach(
+            #     prev_position, proj.velocity, target_pos_at_micro_start, target velocity)
+            tca = -(rx * rvx + ry * rvy + rz * rvz) / vel_mag_sq
+            if tca < 0:
+                closest = sqrt(rx ** 2 + ry ** 2 + rz ** 2)
+            else:
+                cx = rx + rvx * tca
+                cy = ry + rvy * tca
+                cz = rz + rvz * tca
+                closest = sqrt(cx ** 2 + cy ** 2 + cz ** 2)
+
+            # Proximity hit: the loop resolves it
+            if 0 <= tca <= micro_dt and closest <= proximity_m:
+                break
+
+            # closest_this_step = min(new_dist, micro_closest); min-distance tracking
+            closest_this_step = closest if closest < new_dist else new_dist
+            new_min = closest_this_step if closest_this_step < min_dist else min_dist
+
+            # Miss: the loop logs it
+            if new_dist > current_dist and current_dist < new_min + 100:
+                break
+
+            # Uneventful step: commit it
+            px, py, pz = nx, ny, nz
+            time_elapsed = elapsed_end
+            min_dist = new_min
+            current_dist = new_dist
+            time_remaining -= micro_dt
+            micro_steps += 1
+
+        if micro_steps:
+            proj.position = Vector3D(px, py, pz)
+            proj_flight.min_distance_to_target = min_dist
+        return time_remaining, time_elapsed, micro_steps, current_dist
 
     def _resolve_projectile_hit_geometric(
         self,
@@ -4737,7 +5858,7 @@ class CombatSimulation:
                     'effective_hit_probability': effective_probability,
                     'roll': roll
                 })
-                print(f"  --- [{proj_flight.source_ship_id}] MISS {proj_flight.target_ship_id} "
+                self._echo(f"  --- [{proj_flight.source_ship_id}] MISS {proj_flight.target_ship_id} "
                       f"(dispersion, P={conversion:.0%}"
                       f"x{geometry_factor:.2f} @ {deflection_m:.0f}m deflection, "
                       f"roll={roll:.2f})")
@@ -4848,34 +5969,64 @@ class CombatSimulation:
             sign to detect past-closest-approach projectiles (the old version
             clamped to 0.0, which made those checks dead code).
         """
+        # Scalar form of the Vector3D expressions (rel_pos = proj_pos -
+        # target_pos, rel_vel = proj_vel - target_vel, dot products,
+        # magnitudes), operation for operation, so the results are
+        # bit-identical: this runs once per projectile micro-step (millions of
+        # calls per battle) and the temporaries dominated its cost.
         # Relative position and velocity
-        rel_pos = proj_pos - target_pos
-        rel_vel = proj_vel - target_vel
+        rx = proj_pos.x - target_pos.x
+        ry = proj_pos.y - target_pos.y
+        rz = proj_pos.z - target_pos.z
+        vx = proj_vel.x - target_vel.x
+        vy = proj_vel.y - target_vel.y
+        vz = proj_vel.z - target_vel.z
 
-        vel_mag_sq = rel_vel.dot(rel_vel)
+        vel_mag_sq = vx * vx + vy * vy + vz * vz
 
         if vel_mag_sq < 1e-10:
             # No relative motion - current distance is closest
-            return 0.0, rel_pos.magnitude
+            return 0.0, math.sqrt(rx**2 + ry**2 + rz**2)
 
         # TCA = -dot(r, v) / |v|^2
-        tca = -rel_pos.dot(rel_vel) / vel_mag_sq
+        tca = -(rx * vx + ry * vy + rz * vz) / vel_mag_sq
 
         if tca < 0:
             # Already past closest approach - receding from here on
-            return tca, rel_pos.magnitude
+            return tca, math.sqrt(rx**2 + ry**2 + rz**2)
 
         # Calculate closest approach distance
-        closest_pos = rel_pos + rel_vel * tca
-        closest_dist = closest_pos.magnitude
+        cx = rx + vx * tca
+        cy = ry + vy * tca
+        cz = rz + vz * tca
 
-        return tca, closest_dist
+        return tca, math.sqrt(cx**2 + cy**2 + cz**2)
 
     def _check_moving_cylinder_intersection(
         self, start: Vector3D, end: Vector3D, ship: ShipCombatState,
         target_start: Vector3D, target_end: Vector3D, tolerance: float,
     ) -> tuple[bool, Optional[Vector3D], Optional[Vector3D]]:
         """Sweep in the translating target frame, then restore world coordinates."""
+        # Cheap rejection before any vector is built: the hull cylinder lies
+        # inside the sphere of radius sqrt(half_length^2 + radius^2) around
+        # the target, and a segment that starts further out than that sphere
+        # plus its own length cannot reach it. The test is conservative by a
+        # wide margin (factor 2 on squared distance, i.e. the segment stays
+        # 40% of (sphere + length) clear), so rounding can never turn a
+        # segment the full check would call a hit into a rejection; anything
+        # near - or any NaN - falls through to the exact check below.
+        geom = ship.geometry
+        if geom is not None:
+            sx = start.x - target_start.x
+            sy = start.y - target_start.y
+            sz = start.z - target_start.z
+            lx = (end.x - (target_end.x - target_start.x)) - start.x
+            ly = (end.y - (target_end.y - target_start.y)) - start.y
+            lz = (end.z - (target_end.z - target_start.z)) - start.z
+            reach_sq = ((geom.length_m / 2.0) ** 2 + (geom.radius_m + tolerance) ** 2
+                        + (lx * lx + ly * ly + lz * lz))
+            if sx * sx + sy * sy + sz * sz > 4.0 * reach_sq:
+                return False, None, None
         displacement = target_end - target_start
         hit, _, fraction = self._check_line_cylinder_intersection_at_pos(
             start, end - displacement, ship, target_start, tolerance)
@@ -5246,7 +6397,7 @@ class CombatSimulation:
 
         # Calculate flight time for display
         flight_time = self.current_time - proj_flight.launch_time
-        print(f"  >>> [{proj_flight.source_ship_id}] HIT {target.ship_id} "
+        self._echo(f"  >>> [{proj_flight.source_ship_id}] HIT {target.ship_id} "
               f"({hit_location.value}): {effective_ke_gj:.1f} GJ, flight: {flight_time:.1f}s")
 
         # Apply armor damage using Terra Invicta physics-based ablation
@@ -5364,6 +6515,11 @@ class CombatSimulation:
         if proj_flight.weapon is not None:
             self._resolve_radiator_hit(target, proj_flight.weapon, hit_location)
 
+        # External fittings (gun mounts, PD turrets) can be struck by any
+        # hull hit, penetrating or not.
+        battle_damage.resolve_surface_hit(
+            self, target, hit_location, effective_ke_gj, proj_flight.source_ship_id)
+
         if penetrated:
             # 'remaining_energy_gj' mirrors the torpedo path's key name so both
             # penetration events have one shape for downstream consumers;
@@ -5409,15 +6565,18 @@ class CombatSimulation:
                     self._log_event(SimulationEventType.MODULE_DAMAGED, target.ship_id, data={
                         'module_name': module.name,
                         'damage_gj': energy_applied,
-                        'destroyed': was_destroyed
+                        'destroyed': was_destroyed,
+                        'health_pct': round(module.health_percent, 1),
                     })
                     if was_destroyed:
                         self._log_event(SimulationEventType.MODULE_DESTROYED, target.ship_id, data={
                             'module_name': module.name
                         })
-                        print(f"  !!! [{target.ship_id}] MODULE DESTROYED: {module.name}")
+                        self._echo(f"  !!! [{target.ship_id}] MODULE DESTROYED: {module.name}")
                         # Disable corresponding weapon if weapon module destroyed
                         self._disable_weapon_for_module(target, module.name)
+                        battle_damage.resolve_magazine_cookoff(
+                            self, target, module, proj_flight.source_ship_id)
 
         # A hit on an already-dying hulk vents more of the failing reactor
         # containment: the detonation comes forward in proportion to the
@@ -5683,7 +6842,11 @@ class CombatSimulation:
                     continue
 
                 flight_time = self.current_time - torp_flight.launch_time
-                if flight_time > 3600 or current_dist > 10_000_000:
+                # (balance, pass 5) a SPENT round - see _torpedo_is_spent -
+                # is culled here as a miss instead of drifting for an hour.
+                if (flight_time > 3600 or current_dist > 10_000_000
+                        or self._torpedo_is_spent(torp_flight)):
+                    self._log_torpedo_left_battle(torp_flight, current_dist)
                     torpedoes_to_remove.append(torp_flight)
                 continue
 
@@ -5910,7 +7073,11 @@ class CombatSimulation:
 
             # Check if torpedo is too far or timed out
             flight_time = self.current_time - torp_flight.launch_time
-            if flight_time > 3600 or current_dist > 10_000_000:  # 1 hour or 10,000 km
+            # (balance, pass 5) ... or spent: tanks dry and opening on every hull.
+            if ((flight_time > 3600 or current_dist > 10_000_000  # 1 hour or 10,000 km
+                 or (torp.fuel_exhausted and self._torpedo_is_spent(torp_flight)))
+                    and torp_flight not in torpedoes_to_remove):
+                self._log_torpedo_left_battle(torp_flight, current_dist)
                 torpedoes_to_remove.append(torp_flight)
 
         # Remove finished torpedoes and accumulate delta-v stats
@@ -5920,6 +7087,62 @@ class CombatSimulation:
                 self.metrics.torpedo_main_engine_dv_kps += torp.main_engine_dv_used_kps
                 self.metrics.torpedo_rcs_dv_kps += torp.rcs_dv_used_kps
                 self.torpedoes.remove(torp)
+
+    # A round that can no longer steer (seeker killed, target gone with no
+    # replacement, or tanks dry) is SPENT once it is opening on every live
+    # hull and farther than this from all of them: beyond the 250 km PD
+    # envelope, receding at km/s, it will never touch anything again. Spent
+    # rounds used to stay in self.torpedoes for an hour of flight, and "a
+    # round of its own still in flight" (battle_damage.side_can_deal_damage)
+    # kept a fleet with empty tubes "able to deal damage": in one inspected
+    # battle 10 of 32 rounds were still listed at 600 s with every magazine
+    # empty, and only 10 of 534 tournament battles were ever ruled
+    # combat-ineffective. Culled with the existing left_battle miss event.
+    SPENT_TORPEDO_CULL_RANGE_M = 300_000.0
+
+    def _torpedo_is_spent(self, torp_flight: 'TorpedoInFlight') -> bool:
+        """True for an unguided round that is opening on every live hull
+        beyond SPENT_TORPEDO_CULL_RANGE_M (see the constant)."""
+        torp = torp_flight.torpedo
+        orphan = self.get_ship(torp.target_id)
+        if not (torp_flight.is_disabled or torp.fuel_exhausted
+                or orphan is None or orphan.is_destroyed):
+            return False
+        # With no enemy hull left alive there is nothing to rule a round out
+        # against (and the battle is over): an orphan keeps coasting as before.
+        source = self.get_ship(torp_flight.source_ship_id)
+        if source is not None and not any(
+                not s.is_destroyed and s.faction != source.faction
+                for s in self.ships.values()):
+            return False
+        for ship in self.ships.values():
+            if ship.is_destroyed:
+                continue
+            rel_pos = ship.position - torp.position
+            if rel_pos.magnitude <= self.SPENT_TORPEDO_CULL_RANGE_M:
+                return False
+            # Closing: the hull's bearing and the relative velocity agree
+            if rel_pos.dot(torp.velocity - ship.velocity) > 0.0:
+                return False
+        return True
+
+    def _log_torpedo_left_battle(self, torp_flight: 'TorpedoInFlight',
+                                 current_dist_m: float) -> None:
+        """
+        A round culled at the battle edge (10,000 km from its target, or an
+        hour of flight) is a miss. The cull used to drop it with no event, so
+        seeker-killed rounds coasting away vanished from the recording and
+        the torpedo ledger could not balance.
+        """
+        closest_m = min(torp_flight.min_distance_to_target, current_dist_m)
+        self._log_event(SimulationEventType.PROJECTILE_MISS,
+                        torp_flight.source_ship_id, torp_flight.torpedo.target_id, {
+            'projectile_id': torp_flight.torpedo_id,
+            'closest_approach_km': closest_m / 1000.0,
+            'hit_probability': 0.0,
+            'type': 'torpedo',
+            'reason': 'left_battle',
+        })
 
     @impact_evidence
     def _resolve_radiator_hit(
@@ -5939,13 +7162,31 @@ class CombatSimulation:
         except Exception:
             rad_result = None  # thermal system without radiator API
         if rad_result is not None and rad_result.hit:
+            # dissipation_lost_kw is the LIVE rejection lost (0 for a retracted
+            # panel); capacity_lost_kw is the rated rejection the panel can
+            # never give again, whatever its state when it was hit.
+            try:
+                panel = target.thermal_system.radiators.radiators.get(
+                    RadiatorPosition(rad_result.radiator_position))
+            except Exception:
+                panel = None
+            health_pct = panel.health_percent if panel is not None else 0.0
+            # DropletRadiator.damage: 20% health per GJ.
+            capacity_lost_kw = (
+                panel.max_dissipation_kw * rad_result.damage_taken_gj * 20.0 / 100.0
+                if panel is not None else 0.0
+            )
             self._log_event(SimulationEventType.RADIATOR_DAMAGED, target.ship_id, data={
                 'radiator_position': rad_result.radiator_position,
                 'damage_gj': rad_result.damage_taken_gj,
                 'destroyed': rad_result.radiator_destroyed,
-                'dissipation_lost_kw': rad_result.dissipation_lost_kw
+                'dissipation_lost_kw': rad_result.dissipation_lost_kw,
+                'capacity_lost_kw': round(capacity_lost_kw, 1),
+                'health_pct': round(health_pct, 1),
+                'array_health_pct': round(
+                    target.thermal_system.radiators.health_percent, 1),
             })
-            print(f"  !!! [{target.ship_id}] RADIATOR HIT: {rad_result.radiator_position} "
+            self._echo(f"  !!! [{target.ship_id}] RADIATOR HIT: {rad_result.radiator_position} "
                   f"({'DESTROYED' if rad_result.radiator_destroyed else 'damaged'})")
 
     def _resolve_torpedo_hit(
@@ -5985,7 +7226,10 @@ class CombatSimulation:
 
         self.metrics.total_torpedo_hits += 1
         self.metrics.total_damage_dealt += total_damage_gj
-        if torp_flight.is_disabled:
+        if torp_flight.blast_blinded:
+            # Blinded by a reactor blast, not by PD: kept out of PD's tally.
+            self.metrics.total_torpedo_hits_after_blast_blind += 1
+        elif torp_flight.is_disabled:
             # A blinded torpedo that still connected. Recorded so that PD's
             # seeker kills can never be read as interceptions: a blind only
             # counts for something if the target then moves out of the way.
@@ -6023,6 +7267,8 @@ class CombatSimulation:
         # Torpedo impacts roll for radiator damage like any other hit (same
         # model: combat.radiator_hit_chance). They used to be exempt.
         self._resolve_radiator_hit(target, None, hit_location, energy_gj=total_damage_gj)
+        battle_damage.resolve_surface_hit(
+            self, target, hit_location, total_damage_gj, torp_flight.source_ship_id)
 
         # Apply armor damage using physics-based ablation
         penetrated = False
@@ -6135,15 +7381,18 @@ class CombatSimulation:
                 self._log_event(SimulationEventType.MODULE_DAMAGED, target.ship_id, data={
                     'module_name': module.name,
                     'damage_gj': energy_applied,
-                    'destroyed': was_destroyed
+                    'destroyed': was_destroyed,
+                    'health_pct': round(module.health_percent, 1),
                 })
                 if was_destroyed:
                     self._log_event(SimulationEventType.MODULE_DESTROYED, target.ship_id, data={
                         'module_name': module.name
                     })
-                    print(f"  !!! [{target.ship_id}] MODULE DESTROYED: {module.name}")
+                    self._echo(f"  !!! [{target.ship_id}] MODULE DESTROYED: {module.name}")
                     # Disable corresponding weapon if weapon module destroyed
                     self._disable_weapon_for_module(target, module.name)
+                    battle_damage.resolve_magazine_cookoff(
+                        self, target, module, torp_flight.source_ship_id)
 
         # A torpedo landing on an already-dying hulk vents more of the
         # failing reactor containment: bring the detonation forward in
@@ -6213,11 +7462,575 @@ class CombatSimulation:
             # Coordinate turret assignments to avoid overkill
             turret_assignments = self._coordinate_pd_turrets(ship, targets, dt)
 
-            # Execute engagements
+            # Execute engagements. With weapon arcs a turret dwells only once
+            # it has slewed onto a target its own hull leaves clear; a turret
+            # without an assignment pre-trains on the most urgent target it
+            # can bear on, so it is already on it at envelope entry.
+            arcs = ship.arcs if self.weapon_arcs else None
             for pd, target_info in turret_assignments:
+                mount = pd.mount if arcs is not None else None
                 if target_info is None:
+                    if mount is not None:
+                        self._arcs_pd_pretrain(ship, arcs, pd, mount, targets, dt)
                     continue
+                if mount is not None:
+                    bx, by, bz = self._arcs_pd_dir(ship, arcs, target_info)
+                    state = mount.train(bx, by, bz, dt)
+                    mount.target_id = target_info['target_id']
+                    self._arcs_note_mask(ship, mount, state, 'hull')
+                    if state != weapon_arcs.ON_TARGET:
+                        continue
                 self._pd_execute_engagement(ship, pd, target_info, dt)
+
+    # -------------------------------------------------------------------------
+    # Weapon arcs and turret traverse (src/weapon_arcs.py)
+    # -------------------------------------------------------------------------
+
+    def _arcs_for(self, ship: ShipCombatState):
+        """The ship's ShipArcs, attached on first use (hull class keyed)."""
+        arcs = ship.arcs
+        if arcs is None:
+            arcs = ship.arcs = weapon_arcs.ShipArcs(
+                self.hull_mounts.get(ship.ship_type), ship)
+        return arcs
+
+    def _arcs_begin_tick(self) -> None:
+        """
+        Body frame of every live hull from the start-of-step attitude. A hull
+        that is out of the fight stands its mounts down (idle, any reported
+        mask closed with its cause): a destroyed, dying or surrendered ship
+        all of them, a crew-incapacitated one its guns (its PD is automatic
+        and keeps working).
+        """
+        now = self.current_time
+        for ship in self.ships.values():
+            arcs = ship.arcs
+            if ship.is_destroyed or ship.is_dying or ship.is_surrendered:
+                if arcs is not None and arcs.mounts and not arcs.stood_down:
+                    arcs.stood_down = True
+                    cause = ('destroyed' if ship.is_destroyed else
+                             'dying' if ship.is_dying else 'surrendered')
+                    self._arcs_stand_down(ship, arcs.mounts, cause)
+                if ship.is_destroyed:
+                    continue
+            elif ship.crew_incapacitated and arcs is not None and arcs.guns:
+                self._arcs_stand_down(ship, arcs.guns.values(), 'crew_incapacitated')
+            if arcs is None:
+                arcs = self._arcs_for(ship)
+            ks = ship.kinematic_state
+            arcs.set_frame(ks.forward, ks.up, now)
+
+    def _arcs_stand_down(self, ship: ShipCombatState, mounts, cause: str) -> None:
+        """Idle the mounts; a mask that was reported gets its exit event."""
+        for mount in mounts:
+            if mount.masked_reported:
+                self._log_event(SimulationEventType.MOUNT_MASKED, ship.ship_id, mount.target_id, {
+                    'slot': mount.slot, 'kind': mount.kind, 'masked': False,
+                    'duration_s': self.current_time - mount.masked_since, 'cause': cause,
+                })
+            mount.masked_since = None
+            mount.masked_reported = False
+            mount.fallback_id = None
+            mount.idle()
+
+    def _arcs_note_mask(self, ship: ShipCombatState, mount, state: int, reason: str) -> None:
+        """
+        mount_masked bookkeeping: one event when a mount has been masked for
+        MOUNT_MASKED_REPORT_S with a target, one when it clears (with the
+        masked duration).
+        """
+        if state == weapon_arcs.MASKED:
+            now = self.current_time
+            if mount.masked_since is None:
+                mount.masked_since = now
+            elif (not mount.masked_reported
+                  and now - mount.masked_since >= weapon_arcs.MOUNT_MASKED_REPORT_S):
+                mount.masked_reported = True
+                self._log_event(SimulationEventType.MOUNT_MASKED, ship.ship_id, mount.target_id, {
+                    'slot': mount.slot, 'kind': mount.kind, 'masked': True,
+                    'reason': reason, 'since': mount.masked_since,
+                })
+        elif mount.masked_since is not None:
+            if mount.masked_reported:
+                self._log_event(SimulationEventType.MOUNT_MASKED, ship.ship_id, mount.target_id, {
+                    'slot': mount.slot, 'kind': mount.kind, 'masked': False,
+                    'duration_s': self.current_time - mount.masked_since,
+                })
+            mount.masked_since = None
+            mount.masked_reported = False
+
+    def _arcs_train_guns(self, ship: ShipCombatState, dt: float) -> None:
+        """
+        Train every gun mount of the ship on its target for this tick -
+        whether or not the gun is ready to fire, so a battery tracks through
+        its cooldown and pays a slew only when the target or the attitude
+        actually changes.
+        """
+        arcs = ship.arcs
+        if arcs is None or not arcs.guns:
+            return
+        weapons = ship.weapons
+        orders = ship.weapons_orders
+        primary = ship.primary_target_id
+        # Turret mounts with the same target and muzzle velocity share one
+        # lead direction (it depends on nothing else), computed once a tick.
+        self._arcs_lead_cache = leads = {'ship': ship.ship_id, 'time': self.current_time}
+        for slot, mount in arcs.guns.items():
+            ws = weapons.get(slot)
+            order = orders.get(slot)
+            target_id = (order.target_id if order is not None else None) or primary
+            target = self.get_ship(target_id) if target_id else None
+            if (ws is None or not ws.is_operational or target is None
+                    or target.is_destroyed or target.is_dying or target.is_surrendered):
+                self._arcs_note_mask(ship, mount, weapon_arcs.IDLE, 'hull')
+                mount.idle()
+                continue
+            if mount.stamp == self.current_time and mount.target_id != target_id:
+                # retargeted for this tick by a fire_at (see _handle_fire_command)
+                continue
+            mount.fallback_id = None
+            if (mount.kind == 'gun' and self._arcs_fallback_allowed(order)
+                    and self._arcs_gun_masked_on(ship, ws, mount, target)):
+                alt = self._arcs_fallback_target(ship, ws, mount, target)
+                if alt is not None:
+                    mount.fallback_id = alt.ship_id
+                    target = alt
+            self._arcs_train_gun(ship, ws, mount, target, dt)
+
+    @staticmethod
+    def _arcs_fallback_allowed(order) -> bool:
+        """
+        May a battery whose target its own hull masks engage another enemy?
+        Yes when the order leaves the target free: no order, an order without
+        its own target_id (the battery follows the ship's primary target) or
+        FREE_FIRE ("any valid target"). No for an order that names its own
+        target_id (a commander's single-target order stays binding) and for
+        HOLD_FIRE. The battery returns to the assigned target the tick the
+        mount bears on it again.
+        """
+        if order is None:
+            return True
+        if order.command == WeaponsCommand.HOLD_FIRE:
+            return False
+        return order.target_id is None or order.command == WeaponsCommand.FREE_FIRE
+
+    def _arcs_train_gun(self, ship: ShipCombatState, weapon_state: 'WeaponState',
+                        mount, target: ShipCombatState, dt: float) -> int:
+        """
+        Slew one gun mount toward the lead direction on ``target`` and return
+        its state. The wanted direction is the very direction the round would
+        leave in (WeaponState.calculate_fire_direction with the engine's
+        target-acceleration estimate); nothing here changes it. Idempotent
+        within a tick for the same target.
+
+        Spinal mounts keep their analytic gimbal rule (pivot_range_deg): that
+        rule is the gate, the mount only mirrors it (ON_TARGET inside the
+        gimbal, MASKED outside) so recordings and commanders see one model.
+        """
+        now = self.current_time
+        target_id = target.ship_id
+        if mount.stamp == now and mount.target_id == target_id:
+            return mount.state
+        # A mount slews at most once per tick: a second, different target in
+        # the same tick (a fire_at at another ship, or the order target after
+        # a fire_at) is checked against where the mount already points.
+        moved = mount.stamp == now
+        fire_dir = self._arcs_gun_lead(ship, weapon_state, mount, target)
+        arcs = ship.arcs
+        mount.target_id = target_id
+        mount.stamp = now
+        if mount.kind == 'spinal':
+            if fire_dir is None:
+                mount.state = state = weapon_arcs.MASKED
+                mount.has_want = False
+            else:
+                mount.ax, mount.ay, mount.az = arcs.to_body(fire_dir.x, fire_dir.y, fire_dir.z)
+                mount.state = state = weapon_arcs.ON_TARGET
+            self._arcs_note_mask(ship, mount, state, 'gimbal')
+            return state
+        if fire_dir is None:
+            # No intercept solution: track the line of sight.
+            fire_dir = (target.position - ship.position).normalized()
+        bx, by, bz = arcs.to_body(fire_dir.x, fire_dir.y, fire_dir.z)
+        state = mount.check(bx, by, bz) if moved else mount.train(bx, by, bz, dt)
+        self._arcs_note_mask(ship, mount, state, 'hull')
+        return state
+
+    def _arcs_gun_lead(self, ship: ShipCombatState, weapon_state: 'WeaponState',
+                       mount, target: ShipCombatState):
+        """World lead direction of a gun mount on ``target`` (None: no
+        intercept), shared by same-calibre turret mounts within a tick."""
+        now = self.current_time
+        target_id = target.ship_id
+        leads = self._arcs_lead_cache
+        key = None
+        fire_dir = False
+        if (mount.kind == 'gun' and leads.get('ship') == ship.ship_id
+                and leads.get('time') == now):
+            key = (target_id, weapon_state.weapon.muzzle_velocity_kps,
+                   weapon_state.weapon.pivot_range_deg)
+            fire_dir = leads.get(key, False)
+        if fire_dir is False:
+            saved_aim = weapon_state.current_aim_direction
+            fire_dir = weapon_state.calculate_fire_direction(
+                ship_forward=ship.forward,
+                ship_velocity=ship.velocity,
+                target_position=target.position,
+                target_velocity=target.velocity,
+                shooter_position=ship.position,
+                target_acceleration=self._estimate_target_acceleration(target),
+            )
+            weapon_state.current_aim_direction = saved_aim
+            if key is not None:
+                leads[key] = fire_dir
+        return fire_dir
+
+    def _arcs_gun_masked_on(self, ship: ShipCombatState, ws: 'WeaponState', mount,
+                            target: ShipCombatState) -> bool:
+        """True when the turret mount's own hull masks its lead on ``target``."""
+        fire_dir = self._arcs_gun_lead(ship, ws, mount, target)
+        if fire_dir is None:
+            fire_dir = (target.position - ship.position).normalized()
+        return bool(mount.mask[weapon_arcs.cell_index(
+            *ship.arcs.to_body(fire_dir.x, fire_dir.y, fire_dir.z))])
+
+    def _arcs_fallback_target(self, ship: ShipCombatState, ws: 'WeaponState', mount,
+                              assigned: ShipCombatState) -> Optional[ShipCombatState]:
+        """
+        The enemy a turret battery engages while its own hull masks the
+        assigned target: of the live enemies in
+        weapon range and arc that the mount BEARS on, the one fire control
+        ranks first - highest P(hit) (gun_firing_solution, the number the
+        FireControlSystem ranks by), then nearest, then ship id. None when
+        nothing bears. Snapshot-only, no RNG.
+        """
+        best = None
+        best_key = None
+        own = ship.position
+        range_m = ws.weapon.range_km * 1000.0
+        for enemy in self.get_enemy_ships(ship.ship_id):
+            if enemy is assigned:
+                continue
+            rel = enemy.position - own
+            dist = rel.magnitude
+            if dist <= 0.0 or dist > range_m:
+                continue
+            if not ws.is_target_in_arc(ship.forward, rel.normalized()):
+                continue
+            if self._arcs_gun_masked_on(ship, ws, mount, enemy):
+                continue
+            solution = self.gun_firing_solution(ship, enemy, ws)
+            if not solution.can_fire:
+                continue
+            key = (-solution.hit_probability, dist, enemy.ship_id)
+            if best_key is None or key < best_key:
+                best, best_key = enemy, key
+        return best
+
+    def _arcs_pd_cell(self, ship: ShipCombatState, arcs, target_info: dict) -> int:
+        """Mask cell of the line of sight to a PD target (memoised per list)."""
+        cell = target_info.get('_cell')
+        if cell is None:
+            cell = target_info['_cell'] = weapon_arcs.cell_index(
+                *self._arcs_pd_dir(ship, arcs, target_info))
+        return cell
+
+    def _arcs_pd_dir(self, ship: ShipCombatState, arcs, target_info: dict):
+        """Body-frame line of sight from the ship to a PD target (memoised)."""
+        body = target_info.get('_body')
+        if body is None:
+            obj = target_info['target']
+            pos = (obj.torpedo.position if target_info['target_type'] == 'torpedo'
+                   else obj.projectile.position)
+            own = ship.position
+            dx, dy, dz = pos.x - own.x, pos.y - own.y, pos.z - own.z
+            n = math.sqrt(dx * dx + dy * dy + dz * dz)
+            if n <= 0.0:
+                body = (1.0, 0.0, 0.0)
+            else:
+                body = arcs.to_body(dx / n, dy / n, dz / n)
+            target_info['_body'] = body
+        return body
+
+    def _arcs_pd_pretrain(self, ship: ShipCombatState, arcs, pd, mount,
+                          targets: list, dt: float) -> None:
+        """
+        A turret without an assignment this tick (cooling down, nothing in
+        its envelope) tracks the most urgent target it can bear on; with no
+        such target it tracks the most urgent one to the edge of its arc.
+        """
+        if not targets or not pd.is_operational:
+            self._arcs_note_mask(ship, mount, weapon_arcs.IDLE, 'hull')
+            mount.idle()
+            return
+        chosen = None
+        mask = mount.mask
+        for info in targets:
+            cell = info.get('_cell')
+            if cell is None:
+                cell = self._arcs_pd_cell(ship, arcs, info)
+            if not mask[cell]:
+                chosen = info
+                break
+        if chosen is None:
+            chosen = targets[0]
+        body = self._arcs_pd_dir(ship, arcs, chosen)
+        state = mount.train(body[0], body[1], body[2], dt)
+        mount.target_id = chosen['target_id']
+        # Only a masked target inside the envelope is worth reporting.
+        in_reach = pd.laser.is_in_range(chosen['distance_km'])
+        self._arcs_note_mask(
+            ship, mount, state if (in_reach or state != weapon_arcs.MASKED) else weapon_arcs.IDLE,
+            'hull')
+
+    def _arcs_roll_params(self, ship: ShipCombatState) -> tuple[float, float]:
+        """Roll acceleration and rate cap (rad/s^2, rad/s) from the RCS authority."""
+        accel, max_rate = self._get_rotation_params(ship, False)
+        k = weapon_arcs.ROLL_RCS_AUTHORITY_FACTOR
+        return accel * k, max_rate * k
+
+    def _arcs_roll_inputs(self, ship: ShipCombatState, arcs):
+        """
+        What the roll is chosen for: body-frame lines of sight to the hostile
+        live torpedoes near the ship, each with its time to impact at the
+        present closing speed (inf when it is not closing), with the
+        operational PD mounts; and the wanted directions of the trainable gun
+        mounts that have a target (with their energy per round as weight).
+        """
+        torps = []
+        pd_mounts = [pd.mount for pd in ship.point_defense
+                     if pd.is_operational and pd.mount is not None]
+        if pd_mounts and self.torpedoes:
+            horizon_m = (weapon_arcs.ROLL_PD_HORIZON_ENVELOPES * 1000.0
+                         * max(pd.laser.range_km for pd in ship.point_defense))
+            own = ship.position
+            ox, oy, oz = own.x, own.y, own.z
+            vel = ship.velocity
+            faction = ship.faction
+            for flight in self.torpedoes:
+                if flight.is_disabled:
+                    continue
+                source = self.get_ship(flight.source_ship_id)
+                if source is not None and source.faction == faction:
+                    continue
+                pos = flight.torpedo.position
+                dx, dy, dz = pos.x - ox, pos.y - oy, pos.z - oz
+                n = math.sqrt(dx * dx + dy * dy + dz * dz)
+                if 0.0 < n <= horizon_m:
+                    tv = flight.torpedo.velocity
+                    ux, uy, uz = dx / n, dy / n, dz / n
+                    closing = -(ux * (tv.x - vel.x) + uy * (tv.y - vel.y) + uz * (tv.z - vel.z))
+                    t_hit = n / closing if closing > 0.0 else math.inf
+                    bx, by, bz = arcs.to_body(ux, uy, uz)
+                    torps.append((bx, by, bz, t_hit))
+        guns = []
+        for slot, mount in arcs.guns.items():
+            if mount.kind != 'gun' or not mount.has_want or mount.state == weapon_arcs.IDLE:
+                continue
+            ws = ship.weapons.get(slot)
+            if ws is None or not ws.is_operational or ws.ammo_remaining <= 0:
+                continue
+            guns.append((mount, ws.weapon.kinetic_energy_gj))
+        return torps, pd_mounts, guns
+
+    @staticmethod
+    def _arcs_roll_score(phi: float, torps, pd_mounts, guns,
+                         reach_s: float = 0.0) -> tuple[int, float]:
+        """
+        (PD turret-on-torpedo pairs, gun energy bearing) after rolling phi
+        more - summed over phi and phi +/- ROLL_MARGIN_DEG, so a roll that
+        leaves a target on the very edge of an arc scores a third of one that
+        holds it with margin (targets in the battle plane sit exactly on the
+        horizon of an unrolled dorsal or ventral mount). A torpedo that
+        impacts before the hull can complete the roll (``reach_s``, seconds)
+        scores nothing for it: that attitude is no defence against it.
+        """
+        cell_index = weapon_arcs.cell_index
+        pairs = 0
+        energy = 0.0
+        for offset in weapon_arcs.ROLL_MARGIN_SAMPLES_RAD:
+            c, s = math.cos(phi + offset), math.sin(phi + offset)
+            for bx, by, bz, t_hit in torps:
+                if t_hit < reach_s:
+                    continue
+                cell = cell_index(bx, by * c + bz * s, bz * c - by * s)
+                for mount in pd_mounts:
+                    if not mount.mask[cell]:
+                        pairs += 1
+            for mount, weight in guns:
+                by, bz = mount.wy, mount.wz
+                if not mount.mask[cell_index(mount.wx, by * c + bz * s, bz * c - by * s)]:
+                    energy += weight
+        return pairs, energy
+
+    def _arcs_plan_roll(self, ship: ShipCombatState, arcs) -> None:
+        """
+        Choose the roll goal: the roll that puts the most PD turrets onto
+        inbound torpedoes first, and with that settled the most gun energy
+        onto the gun target. The smallest roll wins ties; the standing goal
+        is kept unless a candidate is better by one whole turret-torpedo pair
+        (ROLL_PD_HYSTERESIS_SAMPLES) or by ROLL_GUN_HYSTERESIS_FRACTION of the
+        hull's trainable gun energy, and it stands at least ROLL_GOAL_COMMIT_S
+        (a gun-only change also waits out the standing goal's planned roll
+        time, goal_eta).
+        Every attitude is scored by what it defends once the hull has rolled
+        there (weapon_arcs.roll_time_s from rest): a goal the hull cannot
+        reach before a torpedo impacts earns nothing against that torpedo, so
+        it never displaces one it can reach.
+        """
+        now = self.current_time
+        held_s = math.inf if arcs.goal_since is None else now - arcs.goal_since
+        if held_s < weapon_arcs.ROLL_GOAL_COMMIT_S - 1e-9:
+            return
+        torps, pd_mounts, guns = self._arcs_roll_inputs(ship, arcs)
+        if not torps and not guns:
+            return
+        score = self._arcs_roll_score
+        accel, max_rate = self._arcs_roll_params(ship)
+        roll_time = weapon_arcs.roll_time_s
+        standing_phi = arcs.roll_goal - arcs.roll
+        standing = score(standing_phi, torps, pd_mounts, guns,
+                         roll_time(standing_phi, accel, max_rate) if torps else 0.0)
+        step = math.radians(weapon_arcs.ROLL_CANDIDATE_STEP_DEG)
+        n = int(round(math.pi / step))
+        best_phi, best = 0.0, score(0.0, torps, pd_mounts, guns)
+        for k in range(1, n + 1):
+            for phi in ((k * step, -k * step) if k < n else (k * step,)):
+                cand = score(phi, torps, pd_mounts, guns,
+                             roll_time(phi, accel, max_rate) if torps else 0.0)
+                if cand[0] > best[0] or (cand[0] == best[0] and cand[1] > best[1] + 1e-9):
+                    best_phi, best = phi, cand
+        samples = len(weapon_arcs.ROLL_MARGIN_SAMPLES_RAD)
+        margin = weapon_arcs.ROLL_GUN_HYSTERESIS_FRACTION * samples * sum(w for _, w in guns)
+        pd_gain = best[0] >= standing[0] + weapon_arcs.ROLL_PD_HYSTERESIS_SAMPLES
+        gun_gain = (best[0] >= standing[0] and best[1] > standing[1] + margin + 1e-9
+                    and held_s >= arcs.goal_eta - 1e-9)
+        if pd_gain or gun_gain:
+            arcs.roll_goal = arcs.roll + best_phi
+            arcs.goal_since = now
+            arcs.goal_eta = roll_time(best_phi, accel, max_rate)
+
+    def settle_arcs(self) -> None:
+        """
+        Initial condition of an engagement: every hull is already rolled for
+        its first targets and its mounts are trained on them, as after the
+        minutes of approach that precede a battle. step() does this once, at
+        the first decision point that names targets (t = 0 in a scripted
+        scenario; the first 30 s checkpoint in a runner battle, whose t = 0
+        decision names none) while nothing has been fired yet; a scripted
+        scenario that hands out targets later may call it itself. Never used
+        to move a mount or a hull once the shooting has started: after it,
+        every designation - a mount's first included - slews at its rate.
+        """
+        if not self.weapon_arcs:
+            return
+        self._arcs_settled = True
+        self._arcs_begin_tick()
+        now = self.current_time
+        for ship in self.ships.values():
+            arcs = ship.arcs
+            if (arcs is None or not arcs.mounts or ship.is_destroyed or ship.is_dying
+                    or ship.is_surrendered):
+                continue
+            self._arcs_train_guns(ship, 0.0)
+            if self.roll_to_unmask:
+                self._arcs_plan_roll(ship, arcs)
+                arcs.roll = arcs.roll_goal
+                arcs.roll_rate = 0.0
+                arcs.goal_since = None      # settled: the first in-battle re-plan is free
+            ks = ship.kinematic_state
+            arcs.set_frame(ks.forward, ks.up, now)
+            # train again in the settled (rolled) attitude
+            for mount in arcs.mounts:
+                mount.trained = False
+                mount.stamp = -1.0
+            self._arcs_train_guns(ship, 0.0)
+            for mount in arcs.mounts:
+                mount.stamp = -1.0
+                mount.state = weapon_arcs.IDLE
+                mount.masked_since = None
+                mount.masked_reported = False
+
+    def _arcs_ready_to_settle(self) -> bool:
+        """
+        Some live hull has a target and no gun round has left yet. (Torpedoes
+        do not count: a torpedo boat's t = 0 launch is minutes from anyone,
+        and the guns are what the settled attitude is for.)
+        """
+        if self.projectiles:
+            return False
+        named = False
+        for ship in self.ships.values():
+            if any(ws.shots_fired for ws in ship.weapons.values()
+                   if ws.mount is not None and ws.mount.kind in ('gun', 'spinal')):
+                return False
+            if ship.is_destroyed or ship.is_dying or ship.is_surrendered:
+                continue
+            if ship.primary_target_id or any(
+                    o.target_id for o in ship.weapons_orders.values()):
+                named = True
+        return named
+
+    def _arcs_update_rolls(self, dt: float) -> None:
+        """
+        Roll to unmask. Each live hull re-plans its roll goal on the
+        ROLL_REPLAN_INTERVAL_S lattice and rolls toward it about its thrust
+        axis with a bang-bang controller on the RCS roll authority. Roll is
+        hull attitude only: it never changes forward, the navigation up
+        evasion steers by, or anything else that moves a ship.
+        """
+        now = self.current_time
+        replan = (now % weapon_arcs.ROLL_REPLAN_INTERVAL_S) < dt * 0.5
+        for ship in self.ships.values():
+            arcs = ship.arcs
+            if (arcs is None or not arcs.mounts or ship.is_destroyed or ship.is_dying
+                    or ship.is_surrendered or ship.crew_incapacitated):
+                continue
+            if replan:
+                self._arcs_plan_roll(ship, arcs)
+            err = arcs.roll_goal - arcs.roll
+            rate = arcs.roll_rate
+            if err == 0.0 and rate == 0.0:
+                continue
+            accel, max_rate = self._arcs_roll_params(ship)
+            # Rate profile that can always stop on the goal: the rate changes
+            # by at most a dt per tick and is held under the largest rate
+            # from which braking a dt per tick still stops within |err|
+            # (v^2 / 2a + v dt / 2 <= |err|, the discrete-time stopping distance).
+            half = 0.5 * accel * dt
+            wanted = min(max_rate, math.sqrt(half * half + 2.0 * accel * abs(err)) - half)
+            if err < 0.0:
+                wanted = -wanted
+            limit = accel * dt
+            change = wanted - rate
+            rate += limit if change > limit else (-limit if change < -limit else change)
+            travel = rate * dt
+            # Arrive only when the remaining rate can be braked within this
+            # tick; a hull whose goal has just moved close in front of it
+            # overshoots and comes back instead of stopping dead.
+            if abs(rate) <= 2.0 * limit and ((err - travel) * err <= 0.0
+                                             or abs(err) <= limit * dt):
+                arcs.roll = arcs.roll_goal
+                arcs.roll_rate = 0.0
+            else:
+                arcs.roll += travel
+                arcs.roll_rate = rate
+
+    def arcs_trace_fields(self, ship: ShipCombatState) -> dict:
+        """
+        Trace-frame fields of the weapon arcs: the hull's 'up' (unit vector,
+        body z in world coordinates, roll included) and 'tur', per mount in
+        hull_mounts order [az_deg, el_deg, state]. Empty when arcs are off.
+        """
+        arcs = ship.arcs
+        if not self.weapon_arcs or arcs is None:
+            return {}
+        ks = ship.kinematic_state
+        arcs.set_frame(ks.forward, ks.up, self.current_time)
+        out = {'up': [round(arcs.ux, 4), round(arcs.uy, 4), round(arcs.uz, 4)]}
+        if arcs.mounts:
+            out['tur'] = arcs.trace()
+        return out
 
     def _build_pd_target_list(self, ship: ShipCombatState) -> list[dict]:
         """
@@ -6260,6 +8073,22 @@ class CombatSimulation:
             (pd.laser.range_km for pd in ship.point_defense if pd.is_operational),
             default=0.0,
         )
+
+        # Turret cover of every friendly hull that can still shoot: position
+        # and the envelope of each operational turret. Constant while the
+        # list is built (nothing moves or is damaged in here), so it is read
+        # once instead of per torpedo x hull x turret.
+        # With weapon arcs a turret only counts if it BEARS on the torpedo
+        # (its own hull does not mask the line of sight).
+        arcs_on = self.weapon_arcs
+        turret_cover = [
+            (friendly.position,
+             [(pd.laser.range_km, pd.mount if arcs_on else None)
+              for pd in friendly.point_defense if pd.is_operational],
+             friendly.arcs if arcs_on else None)
+            for friendly in [ship] + allied_ships
+            if not (friendly.is_destroyed or friendly.is_dying or friendly.is_surrendered)
+        ] if self.torpedoes else []
 
         # Assess all torpedoes
         for torp_flight in self.torpedoes:
@@ -6337,14 +8166,23 @@ class CombatSimulation:
             # Fleet-wide turrets that can still reach this torpedo. This is
             # what makes "savable" a formation property, not a lone-hull one.
             friendly_turrets_in_range = 0
-            for friendly in [ship] + allied_ships:
-                if friendly.is_destroyed or friendly.is_dying or friendly.is_surrendered:
-                    continue
-                f_dist_km = torp.position.distance_to(friendly.position) / 1000
-                friendly_turrets_in_range += sum(
-                    1 for pd in friendly.point_defense
-                    if pd.is_operational and f_dist_km <= pd.laser.range_km
-                )
+            torp_pos = torp.position
+            for friendly_pos, turrets, f_arcs in turret_cover:
+                f_dist_m = torp_pos.distance_to(friendly_pos)
+                f_dist_km = f_dist_m / 1000
+                body = None
+                for turret_range_km, f_mount in turrets:
+                    if f_dist_km <= turret_range_km:
+                        if f_mount is not None and f_dist_m > 0.0:
+                            if body is None:
+                                inv = 1.0 / f_dist_m
+                                body = f_arcs.to_body(
+                                    (torp_pos.x - friendly_pos.x) * inv,
+                                    (torp_pos.y - friendly_pos.y) * inv,
+                                    (torp_pos.z - friendly_pos.z) * inv)
+                            if f_mount.mask[weapon_arcs.cell_index(*body)]:
+                                continue
+                        friendly_turrets_in_range += 1
 
             savable = turrets_needed <= friendly_turrets_in_range
 
@@ -6385,32 +8223,42 @@ class CombatSimulation:
             return targets
 
         # Assess all projectiles (slugs)
+        # This loop runs ships x slugs x allies every tick, and nearly every
+        # slug is rejected. Nothing moves while the list is built, so each
+        # ship's position/velocity is read once (they are property chains),
+        # and the range is only worked out for the slugs that are kept.
+        ship_pos = ship.position
+        ship_vel = ship.velocity
+        ship_faction = ship.faction
+        ally_states = [(ally, ally.position, ally.velocity) for ally in allied_ships]
+        on_collision_course = self._on_collision_course
         for proj_flight in self.projectiles:
             # Don't target own faction's projectiles
             source_ship = self.get_ship(proj_flight.source_ship_id)
-            if source_ship and source_ship.faction == ship.faction:
+            if source_ship and source_ship.faction == ship_faction:
                 continue
 
             proj = proj_flight.projectile
-            distance_m = proj.position.distance_to(ship.position)
-            distance_km = distance_m / 1000
+            proj_pos = proj.position
+            proj_vel = proj.velocity
 
             # Check collision course with self
-            on_collision_self = self._on_collision_course(
-                proj.position, proj.velocity, ship.position, ship.velocity
-            )
+            on_collision_self = on_collision_course(proj_pos, proj_vel, ship_pos, ship_vel)
 
             # Check collision course with allies
             threatens_ally = False
             allied_target = None
-            for ally in allied_ships:
-                if self._on_collision_course(proj.position, proj.velocity, ally.position, ally.velocity):
+            for ally, ally_pos, ally_vel in ally_states:
+                if on_collision_course(proj_pos, proj_vel, ally_pos, ally_vel):
                     threatens_ally = True
                     allied_target = ally
                     break
 
             if not (on_collision_self or threatens_ally):
                 continue
+
+            distance_m = proj_pos.distance_to(ship_pos)
+            distance_km = distance_m / 1000
 
             if on_collision_self:
                 priority = self.PD_PRIORITY_SLUG_INTERCEPT
@@ -6479,6 +8327,26 @@ class CombatSimulation:
                 ship, target_info, dt
             )
 
+        # A turret reaches a target when it is inside its envelope and, with
+        # weapon arcs, the turret's own hull does not mask the line of sight.
+        arcs = ship.arcs if self.weapon_arcs else None
+        if arcs is not None and arcs.mounts:
+            pd_cell = self._arcs_pd_cell
+
+            def reaches(pd, info) -> bool:
+                if not pd.laser.is_in_range(info['distance_km']):
+                    return False
+                mount = pd.mount
+                if mount is None:
+                    return True
+                cell = info.get('_cell')
+                if cell is None:
+                    cell = pd_cell(ship, arcs, info)
+                return not mount.mask[cell]
+        else:
+            def reaches(pd, info) -> bool:
+                return pd.laser.is_in_range(info['distance_km'])
+
         # First pass: assign turrets to highest priority targets
         for target_info in targets:
             if len(assigned_turrets) >= len(available_turrets):
@@ -6489,7 +8357,7 @@ class CombatSimulation:
             # Check if any turret can reach this target
             reachable_indices = [
                 i for i, pd in enumerate(available_turrets)
-                if pd.laser.is_in_range(distance_km) and i not in assigned_turrets
+                if i not in assigned_turrets and reaches(pd, target_info)
             ]
 
             if not reachable_indices:
@@ -6520,12 +8388,12 @@ class CombatSimulation:
         torpedo_targets = [
             t for t in targets
             if t['target_type'] == 'torpedo'
-            and any(pd.laser.is_in_range(t['distance_km']) for pd in available_turrets)
+            and any(reaches(pd, t) for pd in available_turrets)
         ]
         pile_on = torpedo_targets or [
             t for t in targets
             if t['target_type'] == 'projectile'
-            and any(pd.laser.is_in_range(t['distance_km']) for pd in available_turrets)
+            and any(reaches(pd, t) for pd in available_turrets)
         ]
         if pile_on:
             cycle = 0
@@ -6535,7 +8403,7 @@ class CombatSimulation:
                 # Find the next pile-on target this turret can actually reach
                 for offset in range(len(pile_on)):
                     target_info = pile_on[(cycle + offset) % len(pile_on)]
-                    if pd.laser.is_in_range(target_info['distance_km']):
+                    if reaches(pd, target_info):
                         assignments.append((pd, target_info))
                         target_info['turrets_assigned'] += 1
                         assigned_turrets.add(i)
@@ -6900,15 +8768,24 @@ class CombatSimulation:
         threat_range_m: float = 500_000
     ) -> bool:
         """Check if a threat is approaching a ship (in the ship's frame)."""
-        distance = threat_pos.distance_to(ship_pos)
+        # Scalar form (PD calls this per ship x threat x ally every tick);
+        # the same operations as distance_to / the relative velocity /
+        # _is_closing, in the same order.
+        tx = ship_pos.x - threat_pos.x
+        ty = ship_pos.y - threat_pos.y
+        tz = ship_pos.z - threat_pos.z
+        distance = math.sqrt((threat_pos.x - ship_pos.x)**2 + (threat_pos.y - ship_pos.y)**2
+                             + (threat_pos.z - ship_pos.z)**2)
         if distance > threat_range_m:
             return False
         # Closing is a RELATIVE-velocity question. Testing the threat's world
         # velocity made escort PD frame-dependent: with a common 30 km/s
         # fleet drift an escort stopped listing a torpedo bearing down on
         # its neighbour at all.
-        rel_vel = threat_vel - ship_vel if ship_vel is not None else threat_vel
-        return self._is_closing(threat_pos, rel_vel, ship_pos)
+        if ship_vel is not None:
+            return ((threat_vel.x - ship_vel.x) * tx + (threat_vel.y - ship_vel.y) * ty
+                    + (threat_vel.z - ship_vel.z) * tz) > 0
+        return (threat_vel.x * tx + threat_vel.y * ty + threat_vel.z * tz) > 0
 
     def _on_collision_course(
         self,
@@ -6924,27 +8801,34 @@ class CombatSimulation:
         Uses closest point of approach (CPA) calculation.
         The 5km threshold accounts for hit probability at close range.
         """
+        # Scalar form of the Vector3D expressions, operation for operation
+        # (PD calls this per ship x slug x ally every tick).
         # Relative position and velocity
-        rel_pos = obj_pos - target_pos
-        rel_vel = obj_vel - target_vel
+        rx = obj_pos.x - target_pos.x
+        ry = obj_pos.y - target_pos.y
+        rz = obj_pos.z - target_pos.z
+        vx = obj_vel.x - target_vel.x
+        vy = obj_vel.y - target_vel.y
+        vz = obj_vel.z - target_vel.z
 
-        rel_speed_sq = rel_vel.dot(rel_vel)
+        rel_speed_sq = vx * vx + vy * vy + vz * vz
         if rel_speed_sq < 1e-10:
             # Not moving relative to each other
-            return rel_pos.magnitude < miss_threshold_m
+            return math.sqrt(rx**2 + ry**2 + rz**2) < miss_threshold_m
 
         # Time to closest point of approach
-        t_cpa = -rel_pos.dot(rel_vel) / rel_speed_sq
+        t_cpa = -(rx * vx + ry * vy + rz * vz) / rel_speed_sq
 
         if t_cpa < 0:
             # CPA is in the past, object moving away
             return False
 
         # Position at CPA
-        cpa_pos = rel_pos + rel_vel * t_cpa
-        miss_distance = cpa_pos.magnitude
+        cx = rx + vx * t_cpa
+        cy = ry + vy * t_cpa
+        cz = rz + vz * t_cpa
 
-        return miss_distance < miss_threshold_m
+        return math.sqrt(cx**2 + cy**2 + cz**2) < miss_threshold_m
 
     def _calculate_closing_speed(
         self,
@@ -6954,15 +8838,20 @@ class CombatSimulation:
         target_vel: Vector3D
     ) -> float:
         """Calculate closing speed between object and target."""
-        rel_pos = target_pos - obj_pos
-        rel_vel = obj_vel - target_vel
-        distance = rel_pos.magnitude
+        # Scalar form of: rel_pos = target_pos - obj_pos; rel_vel = obj_vel -
+        # target_vel; rel_vel.dot(rel_pos.normalized()) - same operations.
+        rx = target_pos.x - obj_pos.x
+        ry = target_pos.y - obj_pos.y
+        rz = target_pos.z - obj_pos.z
+        distance = math.sqrt(rx**2 + ry**2 + rz**2)
 
         if distance < 1.0:
             return 0.0
 
         # Closing speed is component of relative velocity toward target
-        return rel_vel.dot(rel_pos.normalized())
+        return ((obj_vel.x - target_vel.x) * (rx / distance)
+                + (obj_vel.y - target_vel.y) * (ry / distance)
+                + (obj_vel.z - target_vel.z) * (rz / distance))
 
     def _is_closing(self, pos: Vector3D, vel: Vector3D, target_pos: Vector3D) -> bool:
         """Check if object is closing on target."""
@@ -7158,7 +9047,7 @@ class CombatSimulation:
                 self._log_event(SimulationEventType.MODULE_DESTROYED, ship.ship_id, data={
                     'module_name': result.module_name
                 })
-                print(f"  !!! [{ship.ship_id}] MODULE DESTROYED: {result.module_name}")
+                self._echo(f"  !!! [{ship.ship_id}] MODULE DESTROYED: {result.module_name}")
                 self._disable_weapon_for_module(ship, result.module_name)
 
     def _disable_weapon_for_module(self, ship: ShipCombatState, module_name: str) -> None:
@@ -7235,7 +9124,7 @@ class CombatSimulation:
                     _disable_slot(pd_slots[idx])
                 elif idx < len(ship.point_defense):
                     ship.point_defense[idx].is_operational = False
-            print(f"  !!! [{ship.ship_id}] {module_name} DESTROYED - {weapon_slot} disabled")
+            self._echo(f"  !!! [{ship.ship_id}] {module_name} DESTROYED - {weapon_slot} disabled")
 
         # Also check PD lasers
         if weapon_slot and hasattr(ship, 'pd_lasers') and ship.pd_lasers:
@@ -7315,7 +9204,7 @@ class CombatSimulation:
             'hull_integrity': ship.hull_integrity,
             'detonation_in_s': ship.dying_time_remaining,
         })
-        print(f"  !!! [{ship.ship_id}] MORTALLY WOUNDED - reactor containment "
+        self._echo(f"  !!! [{ship.ship_id}] MORTALLY WOUNDED - reactor containment "
               f"failing, detonation in {ship.dying_time_remaining:.1f}s")
 
     def _detonate_reactor(self, ship: ShipCombatState,
@@ -7344,7 +9233,7 @@ class CombatSimulation:
         self._log_event(SimulationEventType.REACTOR_MELTDOWN, ship.ship_id, data={
             'heat': round(heat, 3),
         })
-        print(f"  !!! [{ship.ship_id}] REACTOR MELTDOWN at {heat * 100:.0f}% heat")
+        self._echo(f"  !!! [{ship.ship_id}] REACTOR MELTDOWN at {heat * 100:.0f}% heat")
         self._detonate_reactor(ship, cause='reactor_overheat')
 
     def _destroy_ship(
@@ -7367,6 +9256,9 @@ class CombatSimulation:
             'hull_integrity': ship.hull_integrity,
             'cause': cause,
         })
+        # The reactor has gone up: its blast reaches the surroundings at the
+        # end of this tick (battle_damage.resolve_pending_blasts).
+        battle_damage.queue_reactor_blast(self, ship, cause)
 
     # -------------------------------------------------------------------------
     # Decision Points
@@ -7441,6 +9333,11 @@ class CombatSimulation:
         if callback in self._event_callbacks:
             self._event_callbacks.remove(callback)
 
+    def _echo(self, *args: Any, **kwargs: Any) -> None:
+        """Console narration; silent when ``self.echo`` is off (shadow sims)."""
+        if getattr(self, 'echo', True):
+            print(*args, **kwargs)
+
     def _log_event(
         self,
         event_type: SimulationEventType,
@@ -7449,6 +9346,16 @@ class CombatSimulation:
         data: Optional[dict] = None
     ) -> SimulationEvent:
         """Log a simulation event and notify callbacks."""
+        # A gun round's impact / miss names the slot that fired it. Those
+        # events carried no slot (or 'unknown'), so every recorded hit and
+        # miss, every captain's shot history ("You fired unknown") and every
+        # DAMAGE TAKEN line lost the weapon.
+        if (event_type in (SimulationEventType.PROJECTILE_IMPACT,
+                           SimulationEventType.PROJECTILE_MISS)
+                and data and data.get('weapon_slot') in (None, 'unknown')):
+            slot = self._projectile_slots.get(data.get('projectile_id'))
+            if slot is not None:
+                data = {**data, 'weapon_slot': slot}
         event = SimulationEvent(
             event_type=event_type,
             timestamp=self.current_time,

@@ -13,9 +13,12 @@
  * the ship's recorded kinematics at the moment of impact (for spall that
  * flies off in world space).
  *
- * Coordinates: world metres as recorded; ship-local frame matches the
- * viewer's Object3D.lookAt(fwd) with world-up +Y: +Z nose, +Y dorsal.
+ * Coordinates: world metres as recorded; ship-local frame is the hull
+ * frame of HullFrame.js: +Z nose, +Y dorsal (the recorded `up` when the
+ * trace has it, else the viewer's lookAt roll with world-up +Y).
  */
+
+import { hullBasis, lerpUp, validUp } from './HullFrame.js';
 
 // ---------------------------------------------------------------------------
 // Deterministic hashing
@@ -61,7 +64,8 @@ export function frameBracket(trace, t) {
 /**
  * Ship pose at battle time t from the recorded trace (lerped). Returns
  * null when the ship is absent. Writes into `out` when given.
- * {pos, vel, fwd (unit), hull (0..1), dying, destroyed}
+ * {pos, vel, fwd (unit), up (unit, or null on recordings without it),
+ * hull (0..1), dying, destroyed}
  */
 export function shipStateAt(trace, shipId, t, out = null) {
   const b = frameBracket(trace, t);
@@ -80,6 +84,7 @@ export function shipStateAt(trace, shipId, t, out = null) {
   }
   const fl = Math.hypot(o.fwd[0], o.fwd[1], o.fwd[2]) || 1;
   o.fwd[0] /= fl; o.fwd[1] /= fl; o.fwd[2] /= fl;
+  o.up = s0.up || s1.up ? lerpUp(s0.up, s1.up, a, o._up || (o._up = [0, 1, 0])) : null;
   const h0 = s0.hull ?? 100, h1 = s1.hull ?? h0;
   o.hull = Math.max(0, Math.min(1, (h0 + (h1 - h0) * a) / 100));
   // discrete flags switch at their frame, like the Interpolator
@@ -90,14 +95,16 @@ export function shipStateAt(trace, shipId, t, out = null) {
 }
 
 /**
- * Ship-local basis for a forward vector, identical to three.js
+ * Ship-local basis for a forward vector. With the recorded `up` it is the
+ * ship's real frame (HullFrame.hullBasis); without, identical to three.js
  * Object3D.lookAt for a non-camera object with up = +Y:
  * z = fwd, x = normalize(up x z), y = z x x.
  */
-export function localBasis(fwd, out = null) {
+export function localBasis(fwd, out = null, up = null) {
   const o = out || { x: [0, 0, 0], y: [0, 0, 0], z: [0, 0, 0] };
   const z = o.z, x = o.x, y = o.y;
   z[0] = fwd[0]; z[1] = fwd[1]; z[2] = fwd[2];
+  if (validUp(up)) { hullBasis(z, up, x, y); return o; }
   x[0] = z[2]; x[1] = 0; x[2] = -z[0];      // (0,1,0) x z
   let xl = Math.hypot(x[0], x[2]);
   if (xl < 1e-6) { x[0] = 1; x[2] = 0; xl = 1; }  // looking straight up/down
@@ -108,14 +115,14 @@ export function localBasis(fwd, out = null) {
   return o;
 }
 
-export function worldToLocalDir(fwd, d) {
-  const B = localBasis(fwd);
+export function worldToLocalDir(fwd, d, up = null) {
+  const B = localBasis(fwd, null, up);
   const dot = (u) => u[0] * d[0] + u[1] * d[1] + u[2] * d[2];
   return [dot(B.x), dot(B.y), dot(B.z)];
 }
 
-export function localToWorldDir(fwd, l) {
-  const B = localBasis(fwd);
+export function localToWorldDir(fwd, l, up = null) {
+  const B = localBasis(fwd, null, up);
   return [
     B.x[0] * l[0] + B.y[0] * l[1] + B.z[0] * l[2],
     B.x[1] * l[0] + B.y[1] * l[1] + B.z[1] * l[2],
@@ -279,7 +286,8 @@ export function buildDamageTimeline(rec, opts = {}) {
     if (!ships.has(id)) {
       ships.set(id, {
         id, seed: hashString(id), marks: [], dyingStart: null, deathTime: null,
-        modules: [], firstT: null, armor0: null, dyingEvent: null, wrecks: []
+        modules: [], firstT: null, armor0: null, dyingEvent: null, wrecks: [],
+        engine: [], blastHits: [], cookoffs: [], washes: []
       });
     }
     return ships.get(id);
@@ -311,6 +319,7 @@ export function buildDamageTimeline(rec, opts = {}) {
   const penTicks = [];          // legacy penetration events: {ship, t}
   const warheads = new Map();   // torpedo id -> launch warhead_gj
   const wreckEvents = [];
+  const blastEvents = [], reactorBlasts = [], cookoffEvents = [];
   const gunShots = new Map();   // ship -> Map(slot -> [t]) (non-spinal guns)
   for (const e of events) {
     const d = e.data || {};
@@ -338,8 +347,85 @@ export function buildDamageTimeline(rec, opts = {}) {
       ensure(e.ship_id).modules.push({ t: e.timestamp, name: d.module_name || '' });
     }
     if (type === 'module_destroyed' || type === 'radiator_damaged') wreckEvents.push(e);
+    // Pass-5 damage events (docs/pass-5-recording-additions.md); all optional
+    if (type === 'mount_damaged') {
+      if (d.kind === 'engine') {
+        ensure(e.ship_id).engine.push({
+          t: e.timestamp, health: d.health_pct ?? (d.destroyed ? 0 : 50),
+          thrust: d.thrust_fraction ?? (d.destroyed ? 0 : 1), destroyed: !!d.destroyed
+        });
+      } else wreckEvents.push(e);
+    } else if (type === 'blast_damage') {
+      blastEvents.push(e);
+      if (d.radiators?.length) wreckEvents.push(e);
+    } else if (type === 'reactor_blast') {
+      reactorBlasts.push(e);
+    } else if (type === 'magazine_cookoff') {
+      cookoffEvents.push(e);
+    } else if (type === 'plume_wash') {
+      // Drive plume wash (pass 5, plume lane): one episode per (emitter,
+      // victim) from `enter` through `sustain` samples to `exit`
+      if (d.phase === 'enter' || d.phase === 'sustain' || d.phase === 'exit') {
+        const sd = ensure(e.ship_id);
+        const src = d.source_ship_id || '';
+        let ep = null;
+        for (let i = sd.washes.length - 1; i >= 0 && !ep; i--) if (sd.washes[i].source === src && sd.washes[i].t1 === null) ep = sd.washes[i];
+        if (d.phase === 'enter' || !ep) {
+          ep = { source: src, t0: e.timestamp, t1: null, samples: [], peak: 0, section: 'lateral', swept: false };
+          sd.washes.push(ep);
+        }
+        const rate = d.phase === 'exit' ? 0 : Math.max(0, Number(d.heat_rate_gj_s) || 0);
+        if (d.phase !== 'exit') ep.samples.push({ t: e.timestamp, rate });
+        ep.peak = Math.max(ep.peak, Number(d.peak_heat_rate_gj_s) || 0, rate);
+        if (d.hit_location) ep.section = normSection(d.hit_location);
+        ep.swept = ep.swept || !!d.swept;
+        if (d.phase === 'exit') ep.t1 = e.timestamp;
+      }
+    }
+  }
+  // Reactor blasts (pass 5): the detonation's reach, for the shock shell.
+  // The trace flags a ship destroyed on the frame AFTER its ship_destroyed
+  // event and the viewer blows it up there, so the blast (and everything
+  // it does to others) is dated at that frame, not at the event tick.
+  const tmpB = { pos: [0, 0, 0], vel: [0, 0, 0], fwd: [0, 0, 1], hull: 1, dying: false, destroyed: false };
+  const blastTime = (shipId, t) => blastFrameTime(ships.get(shipId)?.deathTime, t);
+  const blasts = reactorBlasts.map((e) => {
+    const d = e.data || {};
+    // Centre and drift: where the trace has the wreck on the frame the
+    // viewer blows it up, coasting on with the wreck's velocity (the engine
+    // keeps wrecks coasting), so shell, fireball and debris stay together.
+    // Falls back to the event's position when the trace has no such frame.
+    const tv = blastTime(e.ship_id, e.timestamp);
+    const st = shipStateAt(trace, e.ship_id, tv, tmpB);
+    const radius = d.radius_km || 0;
+    return {
+      t: tv, eventT: e.timestamp, shipId: e.ship_id,
+      pos: st ? st.pos.slice() : Array.isArray(d.position) ? d.position.slice() : null,
+      vel: st ? st.vel.slice() : [0, 0, 0],
+      radius, kill: d.torpedo_kill_radius_km ?? radius * 0.25, blind: d.torpedo_blind_radius_km ?? radius * 0.6,
+      yield: d.yield_gj || 0, ships: d.ships_hit || [], destroyed: d.torpedoes_destroyed || [],
+      blinded: d.torpedoes_blinded || [], seed: hashString(`${e.ship_id}|blast|${e.timestamp}`)
+    };
+  }).filter(b => b.pos && b.radius > 0).sort((a, b) => a.t - b.t);
+  /** Battle time the front of `sourceId`'s blast (event tick `t`) reaches `distanceKm`. */
+  const washTime = (sourceId, t, distanceKm) => {
+    const b = blasts.find(x => x.shipId === sourceId && Math.abs(x.eventT - t) < 1e-6);
+    return b ? b.t + blastArrival(distanceKm ?? 0, b.radius) : blastTime(sourceId, t);
+  };
+  // What a blast does to fittings and panels happens when its front arrives
+  for (let i = 0; i < wreckEvents.length; i++) {
+    const e = wreckEvents[i], d = e.data || {};
+    if (e.event_type === 'blast_damage') {
+      wreckEvents[i] = { ...e, timestamp: washTime(d.source_ship_id, e.timestamp, d.distance_km) };
+    } else if (e.event_type === 'mount_damaged' && d.cause === 'reactor_blast') {
+      const hit = blastEvents.find(x => x.ship_id === e.ship_id && Math.abs(x.timestamp - e.timestamp) < 1e-6 &&
+        x.data?.source_ship_id === d.source_ship_id);
+      wreckEvents[i] = { ...e, timestamp: washTime(d.source_ship_id, e.timestamp, hit?.data?.distance_km) };
+    }
   }
   for (const [id, list] of buildWrecks(wreckEvents, gunShots)) ensure(id).wrecks = list;
+
+  for (const sd of ships.values()) sd.engine.sort((a, b) => a.t - b.t);
 
   const tmp = { pos: [0, 0, 0], vel: [0, 0, 0], fwd: [0, 0, 1], hull: 1, dying: false, destroyed: false };
   const addMark = (shipId, m, fromWorld) => {
@@ -349,12 +435,13 @@ export function buildDamageTimeline(rec, opts = {}) {
     if (st && fromWorld) {
       const d = [fromWorld[0] - st.pos[0], fromWorld[1] - st.pos[1], fromWorld[2] - st.pos[2]];
       const l = Math.hypot(d[0], d[1], d[2]);
-      if (l > 1e-3) approach = worldToLocalDir(st.fwd, [d[0] / l, d[1] / l, d[2] / l]);
+      if (l > 1e-3) approach = worldToLocalDir(st.fwd, [d[0] / l, d[1] / l, d[2] / l], st.up);
     } else if (m.section === 'tail') approach = [0, 0, -1];
     m.approach = approach;
     m.shipPos = st ? st.pos.slice() : null;
     m.shipVel = st ? st.vel.slice() : [0, 0, 0];
     m.shipFwd = st ? st.fwd.slice() : [0, 0, 1];
+    m.shipUp = st && st.up ? st.up.slice() : null;
     sd.marks.push(m);
     return m;
   };
@@ -390,6 +477,38 @@ export function buildDamageTimeline(rec, opts = {}) {
         speed: d.impact_speed_kps || 0, ordnanceId: d.torpedo_id || null
       }, torpLast.get(d.torpedo_id) || null);
     }
+  }
+
+  // A ship caught in a blast: the facing toward the detonation is washed -
+  // a field of scorch marks that glow and cool like craters, no spall
+  for (const e of blastEvents) {
+    const d = e.data || {};
+    const intensity = clamp01(d.intensity ?? 0.3);
+    const src = blasts.find(b => b.shipId === d.source_ship_id && Math.abs(b.eventT - e.timestamp) < 1e-6);
+    const from = src ? src.pos : (shipStateAt(trace, d.source_ship_id, e.timestamp, tmp)?.pos.slice() ?? null);
+    const sd = ensure(e.ship_id);
+    const arrive = washTime(d.source_ship_id, e.timestamp, d.distance_km);
+    sd.blastHits.push({ t: arrive, eventT: e.timestamp, source: d.source_ship_id || null, intensity, distance: d.distance_km ?? null,
+      section: d.hit_location ? normSection(d.hit_location) : 'lateral', radiators: (d.radiators || []).length });
+    const n = blastScorchCount(intensity);
+    for (let i = 0; i < n; i++) {
+      addMark(e.ship_id, {
+        t: arrive + BLAST_WASH_S * (i / n), eventT: e.timestamp, kind: 'scorch',
+        section: d.hit_location ? normSection(d.hit_location) : 'lateral',
+        energy: 1 + 9 * intensity, penetrated: false, critical: false, intensity
+      }, from);
+    }
+  }
+
+  // Magazine cook-off: a secondary explosion venting fire from the flank
+  for (const e of cookoffEvents) {
+    const d = e.data || {};
+    const gj = d.secondary_gj ?? 1.5;
+    ensure(e.ship_id).cookoffs.push({ t: e.timestamp, gj, torpedoes: d.torpedoes_lost || 0, name: d.module_name || 'magazine' });
+    addMark(e.ship_id, {
+      t: e.timestamp + COOKOFF_DELAY_S, eventT: e.timestamp, kind: 'cookoff', section: 'lateral',
+      energy: 8 + 4 * gj, penetrated: true, critical: false, forceVent: 'fire'
+    }, null);
   }
 
   // Death spiral: breaches open and secondaries walk along the hull
@@ -435,7 +554,155 @@ export function buildDamageTimeline(rec, opts = {}) {
     });
   }
   all.sort((a, b) => a.t - b.t);
-  return { trace, ships, marks: all, byOrdnance };
+  // A fitting struck by a round is hit when that round is seen to land (a
+  // slug's visual impact can differ from its hit event's tick)
+  for (const sd of ships.values()) {
+    let moved = false;
+    for (const w of sd.wrecks) {
+      const m = w.ordnanceId ? byOrdnance.get(w.ordnanceId) : null;
+      if (!m || m.shipId !== sd.id) continue;
+      // the round struck this fitting: its flash, crater and spall sit on
+      // the mount, not on a seeded patch of plating
+      m.fitting = w.kind;
+      if (m.t !== w.t) { w.t = m.t; moved = true; }
+    }
+    if (moved) sd.wrecks.sort((a, b) => a.t - b.t);
+  }
+  return { trace, ships, marks: all, byOrdnance, blasts };
+}
+
+/** Seconds the washed plating takes to come up to heat / to cool again. */
+export const WASH_RISE_S = 0.8;
+export const WASH_COOL_S = 3.5;
+/** Episodes this short that were flagged `swept` flare at their peak rate. */
+export const WASH_SWEEP_S = 4;
+
+/**
+ * Plating heat (the crater heat-ramp scale: ~0.3 dull red, ~0.6 orange,
+ * 1 yellow-white, 1.5 white) for a plume wash of `rate` GJ/s: 0.2 GJ/s is a
+ * dull red, the demo's 13-16 GJ/s yellow-white, a point-blank 40+ white.
+ */
+export function washHeat(rate) {
+  if (!(rate > 0)) return 0;
+  return Math.min(1.6, 0.14 + 0.86 * Math.sqrt(rate / 16));
+}
+
+/**
+ * Plume wash on a ship at battle time `now`, from its recorded episodes
+ * (sd.washes): the hottest one decides. While washed the heat follows the
+ * recorded rate (eased between the 5 s samples) and builds over WASH_RISE_S
+ * from the entry; after the exit it cools over WASH_COOL_S. A pure function
+ * of the events at or before `now`.
+ *   -> out {heat, source, section, t (battle time of the jet geometry that
+ *           heated the plating: now, or that episode's exit); rate (GJ/s) and
+ *           jet (emitter id) of the jet on the hull right now, 0 / null when
+ *           the ship is only cooling}
+ */
+export function washAt(sd, now, out = {}) {
+  out.heat = 0; out.rate = 0; out.source = null; out.section = null; out.t = now; out.jet = null;
+  const list = sd?.washes;
+  if (!list || !list.length) return out;
+  for (const w of list) {
+    if (now < w.t0 || !w.samples.length) continue;
+    const end = w.t1 === null ? Infinity : w.t1;
+    const tt = Math.min(now, end);
+    // recorded rate at tt: eased between samples, held after the last one
+    const S = w.samples;
+    let rate = S[S.length - 1].rate;
+    for (let i = 0; i < S.length; i++) {
+      if (tt <= S[i].t) {
+        rate = i === 0 ? S[0].rate : S[i - 1].rate + (S[i].rate - S[i - 1].rate) * ((tt - S[i - 1].t) / Math.max(1e-6, S[i].t - S[i - 1].t));
+        break;
+      }
+    }
+    if (w.swept && end - w.t0 <= WASH_SWEEP_S) rate = Math.max(rate, w.peak);   // a brief crossing flares
+    let heat = washHeat(rate) * (1 - Math.exp(-(tt - w.t0 + 0.35) / WASH_RISE_S));
+    if (now > end) heat *= Math.exp(-(now - end) / WASH_COOL_S);
+    // the jet that is on the hull right now (strongest), for the impingement
+    if (now <= end && rate > out.rate) { out.rate = rate; out.jet = w.source; }
+    if (heat > out.heat) { out.heat = heat; out.source = w.source; out.section = w.section; out.t = tt; }
+  }
+  if (out.heat < 0.01) { out.heat = 0; out.rate = 0; out.jet = null; }
+  return out;
+}
+
+/** Seconds a reactor blast's front takes to reach its blast radius. */
+export const BLAST_EXPAND_S = 1.1;
+
+/**
+ * Battle time a reactor blast recorded at event tick `eventT` is drawn: the
+ * trace flags the ship destroyed on the frame AFTER its ship_destroyed
+ * event and the viewer blows it up there (`deathTime` = that frame's time).
+ * Falls back to the event tick when the trace has no such frame yet.
+ */
+export function blastFrameTime(deathTime, eventT) {
+  return deathTime !== null && deathTime !== undefined && deathTime >= eventT && deathTime - eventT <= 1.5
+    ? deathTime : eventT;
+}
+
+/** Dark coast before the reactor lets go (non-reactor kill, no sim death spiral). */
+export const WRECK_DRIFT_S = 5.0;
+/** Seconds the wreck in `death` (BattleLoader.buildDeathInfo entry) coasts before it detonates. */
+export function wreckDriftS(death) {
+  return death && (death.reactorCause || death.wasDying) ? 0 : WRECK_DRIFT_S;
+}
+
+/**
+ * Battle time the viewer detonates a ship - the one rule the blast shell,
+ * the destruction effect, the camera shake and the director's kill shots
+ * share. `death` is the ship's buildDeathInfo entry (or null before the
+ * trace has its destroyed frame), `eventT` its ship_destroyed /
+ * reactor_blast tick (null for old recordings without the events).
+ */
+export function shipDetonationTime(death, eventT = null) {
+  const frame = death && Number.isFinite(death.time) ? death.time : null;
+  if (eventT === null || eventT === undefined) return frame === null ? null : frame + wreckDriftS(death);
+  return blastFrameTime(frame, eventT) + (frame === null ? 0 : wreckDriftS(death));
+}
+/** Radius of the front `age` seconds after the detonation (cubic ease-out, = radius from BLAST_EXPAND_S on). */
+export function blastFront(age, radius, expand = BLAST_EXPAND_S) {
+  const p = Math.min(1, Math.max(0, age / expand));
+  return radius * (0.04 + 0.96 * (1 - (1 - p) * (1 - p) * (1 - p)));
+}
+/** Seconds after the detonation at which the front reaches `distance` (inverse of blastFront). */
+export function blastArrival(distance, radius, expand = BLAST_EXPAND_S) {
+  if (!(radius > 0)) return 0;
+  const f = Math.min(1, Math.max(0, (distance / radius - 0.04) / 0.96));
+  return expand * (1 - Math.cbrt(1 - f));
+}
+
+/** Seconds a blast's wash takes to walk across the victim's facing side. */
+export const BLAST_WASH_S = 0.35;
+/** A magazine goes up a beat after the hit that killed it. */
+export const COOKOFF_DELAY_S = 0.25;
+/** Scorch marks a blast of `intensity` 0..1 leaves on the facing side. */
+export function blastScorchCount(intensity) {
+  return 3 + Math.round(9 * clamp01(intensity));
+}
+
+/**
+ * Drive state of a ship at battle time `now` from its `mount_damaged`
+ * (kind engine) events: the latest one at or before `now`, or null while
+ * the drive is intact / on recordings without the event.
+ *   -> {t, health 0-100, thrust 0-1, destroyed}
+ */
+export function engineStateAt(sd, now) {
+  const list = sd?.engine;
+  if (!list || !list.length) return null;
+  let cur = null;
+  for (let i = 0; i < list.length && list[i].t <= now; i++) cur = list[i];
+  return cur;
+}
+
+/** Reactor blasts (timeline.blasts) alive at `now`: index range [lo, hi). */
+export function blastsAt(blasts, now, life, out = { lo: 0, hi: 0 }) {
+  let lo = 0, hi = 0;
+  const n = blasts?.length || 0;
+  while (lo < n && blasts[lo].t <= now - life) lo++;
+  hi = lo;
+  while (hi < n && blasts[hi].t <= now) hi++;
+  out.lo = lo; out.hi = hi;
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -473,6 +740,30 @@ export function buildWrecks(events, gunShots = new Map()) {
       push(ship, { t: e.timestamp, kind: 'radiator', side: radiatorSide(d.radiator_position),
         end: (d.radiator_position || '').toLowerCase().startsWith('nose') ? 'nose' : 'tail',
         destroyed: !!d.destroyed, name: d.radiator_position || 'radiator' });
+      continue;
+    }
+    if (e.event_type === 'blast_damage') {
+      // panels that were extended when the blast washed over the ship
+      for (const r of d.radiators || []) {
+        push(ship, { t: e.timestamp, kind: 'radiator', side: radiatorSide(r.radiator_position),
+          end: (r.radiator_position || '').toLowerCase().startsWith('nose') ? 'nose' : 'tail',
+          destroyed: !!r.destroyed, name: r.radiator_position || 'radiator' });
+      }
+      continue;
+    }
+    if (e.event_type === 'mount_damaged') {
+      // An external fitting struck (pass 5): the event names the mount, so
+      // nothing is inferred. `hit` = damaged but still working: it sparks,
+      // the mount stays; destroyed = dead for the rest of the battle.
+      if (d.kind !== 'gun' && d.kind !== 'pd' && d.kind !== 'launcher') continue;
+      const spinal = d.kind === 'gun' && (d.weapon_name || '').toLowerCase().includes('spinal');
+      if (d.kind === 'gun' && d.destroyed && d.slot) {
+        if (!taken.has(ship)) taken.set(ship, new Set());
+        taken.get(ship).add(d.slot);
+      }
+      push(ship, { t: e.timestamp, kind: spinal ? 'spinal' : d.kind, slot: d.slot ?? null, index: d.index ?? 0,
+        destroyed: !!d.destroyed, hit: !d.destroyed, mount: true, health: d.health_pct ?? (d.destroyed ? 0 : 50),
+        cause: d.cause || null, ordnanceId: d.ordnance_id || null, name: d.weapon_name || d.kind });
       continue;
     }
     if (e.event_type !== 'module_destroyed') continue;
@@ -577,6 +868,7 @@ function finishMark(m, sd) {
   const r = (k) => hash01(m.seed, k);
   const E = Math.max(0.05, m.energy);
   const base = m.kind === 'torpedo' ? 1.05 : m.kind === 'secondary' ? 0.95 : m.kind === 'breach' ? 0.9 :
+    m.kind === 'cookoff' ? 1.15 : m.kind === 'scorch' ? 0.35 + 0.5 * (m.intensity || 0) :
     m.kind === 'pop' ? 0.45 : 0.3;
   m.severity = Math.min(1.8, base + 0.2 * Math.log2(1 + E) * (m.kind === 'slug' ? 1 : 0.5) + (m.penetrated ? 0.25 : 0));
 
@@ -587,7 +879,7 @@ function finishMark(m, sd) {
   const [ax, ay, az] = m.approach;
   const lat = Math.hypot(ax, ay);
   let azimuth = lat > 0.02 ? Math.atan2(ay, ax) : r(1) * Math.PI * 2;
-  const jitter = m.kind === 'slug' || m.kind === 'torpedo' ? 0.7 : Math.PI;
+  const jitter = m.kind === 'slug' || m.kind === 'torpedo' ? 0.7 : m.kind === 'scorch' ? 1.0 : Math.PI;
   azimuth += (r(2) - 0.5) * 2 * jitter;
   m.aim = { end: 0, azimuth, radial: 1, axial: 0 };
   if (m.section === 'nose') {
@@ -615,9 +907,10 @@ function finishMark(m, sd) {
   }
   m.ventSize = m.vent ? Math.min(1, 0.45 + 0.08 * E + (m.kind === 'breach' ? 0.35 : 0)) : 0;
   m.debris = m.kind === 'torpedo' ? 22 : m.kind === 'secondary' ? 12 : m.kind === 'breach' ? 10 :
+    m.kind === 'cookoff' ? 26 : m.kind === 'scorch' ? 0 :
     m.kind === 'pop' ? 4 : Math.min(10, 3 + Math.round(E * 0.8));
   if (m.penetrated) m.debris = Math.min(32, m.debris + 5);
-  m.blast = m.kind === 'pop' || m.kind === 'secondary' ? m.kind : null;
+  m.blast = m.kind === 'pop' || m.kind === 'secondary' || m.kind === 'cookoff' ? m.kind : null;
   m.strike = impactPreset(m);
 }
 
@@ -653,7 +946,7 @@ export function damageStateAt(timeline, shipId, now, out = null) {
   for (let i = 0; i < n; i++) {
     const m = sd.marks[i];
     if (m.penetrated) out.breaches++;
-    if (m.section === 'lateral' && m.kind !== 'pop') out.lateralHits++;
+    if (m.section === 'lateral' && m.kind !== 'pop' && m.kind !== 'scorch') out.lateralHits++;
   }
   const loss = 1 - hull;
   out.smoke = dying ? 1 : clamp01((0.55 - hull) / 0.35 + 0.06 * out.breaches);

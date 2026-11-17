@@ -259,7 +259,7 @@ class DraftStubClient:
             self.select_calls += 1
             if self.select_calls == 1:
                 return [ToolCall(id="s1", name="select_fleet", arguments={
-                    "ships": [{"ship_type": "dreadnought", "count": 5}],
+                    "ships": [{"ship_type": "dreadnought", "count": 7}],
                     "rationale": "MORE DAKKA"})]
             return [ToolCall(id="s2", name="select_fleet", arguments={
                 "ships": [{"ship_type": "cruiser_torpedo", "count": 2},
@@ -280,9 +280,13 @@ class DraftStubClient:
 
 def test_run_admiral_draft_with_retry(fleet_data):
     stub = DraftStubClient()
+    # Budget follows the (derived) prices: exactly the stub's second fleet,
+    # which the first (7 dreadnoughts) overshoots.
+    budget = 2 * SHIP_POINT_COSTS["cruiser_torpedo"] + 2 * SHIP_POINT_COSTS["destroyer"]
+    assert 7 * SHIP_POINT_COSTS["dreadnought"] > budget
     draft = run_admiral_draft(
         client=stub, model="stub-model", admiral_name="Admiral Stub",
-        faction="alpha", fleet_data=fleet_data, budget=200, max_ships=8,
+        faction="alpha", fleet_data=fleet_data, budget=budget, max_ships=8,
         verbose=False)
     assert stub.select_calls == 2  # retry loop engaged
     assert not draft.auto
@@ -358,10 +362,10 @@ def test_heuristic_draft_battle_end_to_end(tmp_path):
 
     # Recording written to the temp dir, not the repo - and it must show the
     # fleets actually engaging (ordnance in the air).
-    import json
-    recordings = list(tmp_path.glob("*.json"))
+    from src.recording_io import iter_recordings, load_recording
+    recordings = list(iter_recordings(tmp_path))
     assert recordings, "no recording written"
-    recording = json.loads(recordings[0].read_text())
+    recording = load_recording(recordings[0])
     event_types = {e["event_type"] for e in recording.get("events", [])}
     assert event_types & {"shot_fired", "torpedo_launched"}, \
         f"no ordnance events in {event_types}"

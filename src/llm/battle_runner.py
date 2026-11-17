@@ -55,6 +55,72 @@ def _thermal_trace_fields(ship: Any) -> Dict[str, Any]:
     }
 
 
+
+# Time-limit "tactical advantage" value of each hull class. Every hull in
+# data/fleet_ships.json needs an entry: a missing one (the torpedo cruiser and
+# the siege dreadnought were) silently scored as a destroyer, so losing a siege
+# dreadnought cost its fleet 30 points instead of 105.
+SHIP_CLASS_VALUES = {
+    "corvette": 10,
+    "frigate": 15,
+    "destroyer": 20,
+    "cruiser": 30,
+    "cruiser_torpedo": 30,
+    "battlecruiser": 40,
+    "battleship": 50,
+    "dreadnought": 70,
+    "dreadnought_siege": 70,
+}
+
+
+# Time-limit tactical score of a SURVIVING ship that battle damage left
+# combat-ineffective (src/battle_damage.py): its hull-remaining term is
+# multiplied by these. A hull whose every gun mount and torpedo tube is
+# wrecked, or that cannot burn, is worth less than an intact one even at full
+# hull integrity. Magazines fired dry do not count: spending ammunition must
+# not cost score.
+DISARMED_SHIP_SCORE_FACTOR = 0.25
+ADRIFT_SHIP_SCORE_FACTOR = 0.5
+
+
+def surviving_ship_score_factor(ship) -> float:
+    """Multiplier on a surviving ship's hull-remaining score."""
+    from ..battle_damage import ship_disarmed_by_damage
+    factor = 1.0
+    if ship_disarmed_by_damage(ship):
+        factor *= DISARMED_SHIP_SCORE_FACTOR
+    engine = getattr(ship, "engine_effectiveness", 1.0)
+    if isinstance(engine, (int, float)) and engine <= 0.0:
+        factor *= ADRIFT_SHIP_SCORE_FACTOR
+    return factor
+
+
+def ship_class_value(ship_type: str) -> float:
+    """
+    Tactical-advantage value of a hull: its DRAFT PRICE (balance, pass 5).
+
+    The time-limit verdict used to weigh hulls with SHIP_CLASS_VALUES alone,
+    a hand-typed table unrelated to what a hull costs: a 7-point frigate
+    scored 15 and a 55-point dreadnought 70, so at equal points a frigate
+    screen out-scored a battle line by surviving. The verdict now reads the
+    derived draft price (fleet_draft.SHIP_POINT_COSTS, from
+    data/fleet_ships.json), so the draft and the scoreboard agree on what a
+    hull is worth. SHIP_CLASS_VALUES stays as the fallback for a hull the
+    price table does not know: its own entry, else its base hull's
+    ("cruiser_x" -> cruiser), else the destroyer's.
+    """
+    key = (ship_type or "destroyer").lower()
+    try:
+        from .fleet_draft import SHIP_POINT_COSTS
+        price = SHIP_POINT_COSTS.get(key)
+    except Exception:           # pricing unavailable: the table decides
+        price = None
+    if price:
+        return float(price)
+    if key in SHIP_CLASS_VALUES:
+        return SHIP_CLASS_VALUES[key]
+    return SHIP_CLASS_VALUES.get(key.split("_")[0], SHIP_CLASS_VALUES["destroyer"])
+
 @dataclass
 class BattleConfig:
     """Configuration for an LLM battle."""
@@ -82,12 +148,21 @@ class BattleConfig:
     # changes wall-clock, not semantics. Disable for strictly ordered output.
     parallel_llm: bool = True
 
+    # Doctrine of the rule-based captains (model "heuristic") per faction:
+    # "tactical" (default) or "legacy" (the pass-4 captain; see
+    # src/llm/heuristic_captain.py). A missing faction gets the default.
+    heuristic_doctrine: Dict[str, str] = field(default_factory=dict)
+
     # Personality selection - let LLMs choose their own personality before battle
     personality_selection: bool = True
 
     # Recording
     record_battle: bool = True
     recording_dir: str = "data/recordings"
+    # Recording file format: gzip-compressed compact JSON (battle_*.json.gz,
+    # 20-37x smaller) or plain indented JSON (battle_*.json). Every reader
+    # takes both (src/recording_io.py).
+    compress_recording: bool = True
 
     # Detailed sim trace - records every step (position, velocity for all objects)
     # WARNING: Generates large files (~1MB per 10 minutes of battle)
@@ -117,7 +192,7 @@ class BattleConfig:
         values = {name: getattr(fleet, name) for name in (
             "initial_distance_km", "time_limit_s", "decision_interval_s", "unlimited_mode",
             "record_battle", "record_sim_trace", "personality_selection", "use_notebooks",
-            "max_checkpoints", "seed",
+            "max_checkpoints", "seed", "heuristic_doctrine",
         )}
         values.update(overrides)
         return cls(**values)
@@ -314,8 +389,8 @@ class LLMBattleRunner:
         self.beta_config.fleet_data = fleet_data
 
         # Create captains
-        self.alpha_captain = self._make_captain(self.alpha_config)
-        self.beta_captain = self._make_captain(self.beta_config)
+        self.alpha_captain = self._make_captain(self.alpha_config, "alpha")
+        self.beta_captain = self._make_captain(self.beta_config, "beta")
 
         # Create communication channel
         self.communication = CommunicationChannel(
@@ -395,7 +470,8 @@ class LLMBattleRunner:
             print(f"[NOTEBOOK] could not load notebook for {model}: {e}")
             return None
 
-    def _make_captain(self, captain_config: LLMCaptainConfig) -> LLMCaptain:
+    def _make_captain(self, captain_config: LLMCaptainConfig,
+                      faction: Optional[str] = None) -> LLMCaptain:
         """
         Build the right captain for a ship config.
 
@@ -404,7 +480,8 @@ class LLMBattleRunner:
         """
         from .heuristic_captain import HEURISTIC_MODEL, HeuristicCaptain
         if captain_config.model == HEURISTIC_MODEL:
-            return HeuristicCaptain(captain_config)
+            doctrine = (self.config.heuristic_doctrine or {}).get(faction) if faction else None
+            return HeuristicCaptain(captain_config, doctrine=doctrine)
         captain_config.notebook_text = self._notebook_text_for(
             captain_config.model, "captain")
         return LLMCaptain(captain_config, self.client)
@@ -491,7 +568,7 @@ class LLMBattleRunner:
                 fleet_data=fleet_data,
                 temperature=ship_config.temperature,
             )
-            captain = self._make_captain(captain_config)
+            captain = self._make_captain(captain_config, "alpha")
             captain.ship_id = ship_config.ship_id
             captain.faction = "alpha"
 
@@ -549,7 +626,7 @@ class LLMBattleRunner:
                 fleet_data=fleet_data,
                 temperature=ship_config.temperature,
             )
-            captain = self._make_captain(captain_config)
+            captain = self._make_captain(captain_config, "beta")
             captain.ship_id = ship_config.ship_id
             captain.faction = "beta"
 
@@ -861,20 +938,14 @@ class LLMBattleRunner:
             # Phase 4: Check surrender/draw
             if self.alpha_captain.has_surrendered:
                 self.communication.alpha_surrendered = True
-                if self.recorder:
-                    self.recorder.record_surrender(
-                        timestamp=self.simulation.current_time,
-                        ship_id="alpha",
-                        captain_name=self.alpha_config.name,
-                    )
+                self._record_ship_surrender(
+                    self.simulation.get_ship("alpha"), self.alpha_config.name,
+                    getattr(self.alpha_captain, 'surrender_reason', None))
             if self.beta_captain.has_surrendered:
                 self.communication.beta_surrendered = True
-                if self.recorder:
-                    self.recorder.record_surrender(
-                        timestamp=self.simulation.current_time,
-                        ship_id="beta",
-                        captain_name=self.beta_config.name,
-                    )
+                self._record_ship_surrender(
+                    self.simulation.get_ship("beta"), self.beta_config.name,
+                    getattr(self.beta_captain, 'surrender_reason', None))
             # Handle alpha draw proposals/retractions
             if self.alpha_captain.has_proposed_draw and not self._alpha_draw_notified:
                 # Queue message to notify beta captain
@@ -1450,21 +1521,15 @@ class LLMBattleRunner:
             # Check surrender/draw (including MCP)
             if self.alpha_mcp:
                 if self.alpha_mcp.has_surrendered:
-                    # Mark all alpha ships as surrendered
-                    for ship_id in self.alpha_ships:
-                        ship = self.simulation.get_ship(ship_id)
-                        if ship:
-                            ship.is_surrendered = True
+                    # Mark all alpha ships as surrendered (recorded per ship)
+                    self._surrender_fleet_ships(self.alpha_ships, self.alpha_mcp.name)
                     if self.config.verbose:
                         print(f"  [SURRENDER] {self.alpha_mcp.name} surrenders")
 
             if self.beta_mcp:
                 if self.beta_mcp.has_surrendered:
-                    # Mark all beta ships as surrendered
-                    for ship_id in self.beta_ships:
-                        ship = self.simulation.get_ship(ship_id)
-                        if ship:
-                            ship.is_surrendered = True
+                    # Mark all beta ships as surrendered (recorded per ship)
+                    self._surrender_fleet_ships(self.beta_ships, self.beta_mcp.name)
                     if self.config.verbose:
                         print(f"  [SURRENDER] {self.beta_mcp.name} surrenders")
 
@@ -1617,6 +1682,13 @@ class LLMBattleRunner:
         one captain's wall-clock instead of the fleet's sum. Order delivery
         and reporting stay sequential in fleet order.
         """
+        # A crew incapacitated by plume radiation (src/drive_plume.py) decides
+        # nothing: no captain call, no order applied. An admiral order to it
+        # comes back as an UNABLE report whose compliance says "not executable".
+        crew_out = [entry for entry in captain_entries
+                    if getattr(self.simulation.get_ship(entry[0]), 'crew_incapacitated', False) is True]
+        if crew_out:
+            captain_entries = [entry for entry in captain_entries if entry not in crew_out]
         self._apply_admiral_headings(captain_entries, admiral_orders)
         self._deliver_fleet_messages(captain_entries)
         for ship_id, captain, faction in captain_entries:
@@ -1663,6 +1735,14 @@ class LLMBattleRunner:
                       f"{self._get_ship_status_line(ship_id, commands)}")
             self._finish_captain_turn(ship_id, captain, faction, commands,
                                       admiral_orders.get(ship_id), record=record)
+        for ship_id, captain, faction in crew_out:
+            all_commands[ship_id] = []
+            report = self._build_captain_report(ship_id, captain, faction, [],
+                                                admiral_orders.get(ship_id))
+            if report and self.recorder:
+                self.recorder.record_captain_report(
+                    self.simulation.current_time, ship_id, report,
+                    answers_order_event_id=None, decision_event_id=None)
         return all_commands
 
     def _apply_admiral_headings(
@@ -2379,7 +2459,7 @@ class LLMBattleRunner:
         """
         from .fleet_comms import (
             commanded_target, committed_rounds, compliance, executed_maneuver,
-            fold_admiral_signals, primary_order,
+            fold_admiral_signals, mark_not_executable, primary_order,
         )
         channel = self.fleet_communication
         if not channel or self._llm_admiral(faction) is None:
@@ -2389,7 +2469,13 @@ class LLMBattleRunner:
             return None
         now = self.simulation.current_time
         explicit = getattr(captain, "order_response", None)
-        if explicit:
+        crew_out = getattr(ship, "crew_incapacitated", False) is True
+        if crew_out:
+            fields = {"status": "UNABLE", "reason": "crew incapacitated by plume radiation "
+                      f"({getattr(ship, 'crew_dose_sv', 0.0):.1f} Sv): the ship cannot execute orders - "
+                      "it coasts and does not fire", "intent": "", "contact": None, "request": None}
+            implicit = True
+        elif explicit:
             fields = {k: explicit.get(k) for k in ("status", "reason", "intent", "contact", "request")}
             implicit = False
         elif getattr(captain, "last_call_failed", False):
@@ -2415,6 +2501,9 @@ class LLMBattleRunner:
             "filed_t": now,
             "implicit": implicit,
         }
+        if crew_out:
+            mark_not_executable(report["compliance"])
+        self._note_drive_interlock(report, ship)
         fold_admiral_signals(report, self._admiral_signals.pop(ship_id, []))
         if getattr(captain, "discussions", None):
             report["discussion"] = [{"question": d["question"], "answer": d["answer"]}
@@ -2423,6 +2512,21 @@ class LLMBattleRunner:
             "report": report, "order": order, "executed": executed, "target_id": target_id,
             "cursor": len(self.simulation.events)})
         return report
+
+    def _note_drive_interlock(self, report: Dict[str, Any], ship: Any) -> None:
+        """While the engine's drive interlock holds the ship's throttle
+        (src/drive_plume.py), say so in its report: the reduced burn is the
+        interlock's doing, not a deviation from the order."""
+        try:
+            from ..drive_plume import interlock_status_line
+        except ImportError:  # pragma: no cover - script-style import path
+            from drive_plume import interlock_status_line
+        line = interlock_status_line(self.simulation, ship) if ship is not None else None
+        if not line:
+            return
+        report["drive_interlock"] = line
+        if isinstance(report.get("compliance"), dict):
+            report["compliance"]["interlock"] = line
 
     def _finalize_report(self, entry: Dict[str, Any]) -> Dict[str, Any]:
         """A filed report as its admiral reads it: compliance over the whole interval."""
@@ -2434,6 +2538,10 @@ class LLMBattleRunner:
                            if e.ship_id == ship_id and e.event_type.name == "TORPEDO_LAUNCHED")
             report["compliance"] = compliance(entry["order"], self.fleet_communication,
                                               entry["executed"], entry["target_id"], launched, final=True)
+            if (entry["report"].get("compliance") or {}).get("executable") is False:
+                from .fleet_comms import mark_not_executable
+                mark_not_executable(report["compliance"])
+        self._note_drive_interlock(report, self.simulation.get_ship(ship_id))
         report["ship_lost"] = not ship_alive(self.simulation.get_ship(ship_id))
         report["delivered_t"] = self.simulation.current_time
         return report
@@ -2465,6 +2573,41 @@ class LLMBattleRunner:
                 answers_order_event_id=order_ids[0] if order_ids else None,
                 decision_event_id=getattr(decision, "event_id", None))
 
+    def _record_ship_surrender(self, ship: Any, captain_name: str,
+                               reason: Optional[str] = None) -> None:
+        """
+        Record a `surrender` event for a ship striking its colours, once per
+        ship. Call it BEFORE setting is_surrendered: could_deal_damage is
+        read from the ship's fittings (a surrendered ship never can). Ships
+        already destroyed or dying are not surrenders and are skipped.
+        """
+        if ship is None or ship.is_destroyed or getattr(ship, 'is_dying', False):
+            return
+        recorded = self.__dict__.setdefault('_surrenders_recorded', set())
+        if ship.ship_id in recorded or getattr(ship, 'is_surrendered', False):
+            return
+        recorded.add(ship.ship_id)
+        if not self.recorder:
+            return
+        from ..battle_damage import ship_can_deal_damage
+        self.recorder.record_surrender(
+            timestamp=self.simulation.current_time,
+            ship_id=ship.ship_id,
+            captain_name=captain_name,
+            faction=getattr(ship, 'faction', None),
+            reason=reason,
+            hull_pct=getattr(ship, 'hull_integrity', 0.0),
+            could_deal_damage=ship_can_deal_damage(ship),
+        )
+
+    def _surrender_fleet_ships(self, ships: Dict[str, Any], commander_name: str) -> None:
+        """An MCP commander surrendered its fleet: every ship strikes its colours."""
+        for ship_id in ships:
+            ship = self.simulation.get_ship(ship_id)
+            if ship:
+                self._record_ship_surrender(ship, commander_name, reason=None)
+                ship.is_surrendered = True
+
     def _check_fleet_surrender_draw(self) -> None:
         """Check and handle surrenders and draws in fleet mode."""
         # Check each captain for surrender
@@ -2472,6 +2615,8 @@ class LLMBattleRunner:
             if captain.has_surrendered:
                 ship = self.simulation.get_ship(ship_id)
                 if ship and not getattr(ship, 'is_surrendered', False):
+                    self._record_ship_surrender(
+                        ship, captain.name, getattr(captain, 'surrender_reason', None))
                     ship.is_surrendered = True
                     ship.current_maneuver = None  # Stop maneuvering
                     if self.config.verbose:
@@ -2796,6 +2941,11 @@ class LLMBattleRunner:
         if not alpha_active or not beta_active:
             return True
 
+        # A fleet that can no longer deal damage (battle damage wrecked every
+        # gun and tube, nothing of its own still in flight) has lost the fight.
+        if self._combat_ineffective_outcome() is not None:
+            return True
+
         # Check for mutual Admiral draw
         if self._fleet_draw_agreed():
             return True
@@ -2810,6 +2960,67 @@ class LLMBattleRunner:
             return True
 
         return False
+
+    def _combat_ineffective_outcome(self) -> Optional[tuple]:
+        """
+        (outcome, winner, reason) once a fleet that could deal damage at the
+        start of the battle no longer can (src/battle_damage.side_can_deal_damage:
+        no operational gun with ammunition, no tube with rounds, no torpedo or
+        slug of its own in flight); None while the fight is still on.
+
+        The side that can still fight wins. If neither can, the battle ends on
+        points (the tactical-advantage verdict, which may itself be a draw).
+        A fleet that was unarmed from the start never triggers this, so a
+        config with deliberately unarmed hulls plays out as before.
+        """
+        if self.simulation is None or not self.alpha_ships or not self.beta_ships:
+            return None
+        from ..battle_damage import side_can_deal_damage
+        can = {
+            "alpha": side_can_deal_damage(self.simulation, self.alpha_ships.values()),
+            "beta": side_can_deal_damage(self.simulation, self.beta_ships.values()),
+        }
+        armed = getattr(self, "_fleet_armed_at_start", None)
+        if armed is None:
+            # Latched on the first look (before the first tick).
+            armed = self._fleet_armed_at_start = dict(can)
+        disarmed = [side for side in ("alpha", "beta") if armed[side] and not can[side]]
+        if not disarmed:
+            return None
+        if len(disarmed) == 1:
+            other = "beta" if disarmed[0] == "alpha" else "alpha"
+            if can[other]:
+                outcome = (BattleOutcome.ALPHA_VICTORY if other == "alpha"
+                           else BattleOutcome.BETA_VICTORY)
+                return (outcome, other,
+                        f"{disarmed[0].title()} fleet combat-ineffective "
+                        f"(no weapon left that can deal damage)")
+        outcome, winner, reason = self._evaluate_fleet_tactical_advantage()
+        return outcome, winner, f"Both fleets combat-ineffective - on points: {reason}"
+
+    def _fleet_loss_reason(self, faction: str) -> str:
+        """
+        How a fleet with no ship left in the fight was lost (result reason):
+        "<Side> fleet eliminated" when every ship was destroyed (a dying
+        hulk counts as destroyed), "<Side> fleet surrendered (N ships struck
+        their colours)" when none was destroyed, and "<Side> fleet destroyed
+        or surrendered (D destroyed, S surrendered)" for a mix.
+        """
+        ships = (self.alpha_ships if faction == "alpha" else self.beta_ships).values()
+        # Destroyed first: an MCP fleet surrender flags dead ships too.
+        destroyed = sum(1 for s in ships if s.is_destroyed or getattr(s, 'is_dying', False))
+        surrendered = sum(1 for s in ships
+                          if not (s.is_destroyed or getattr(s, 'is_dying', False))
+                          and getattr(s, 'is_surrendered', False))
+        side = faction.title()
+        if surrendered == 0:
+            return f"{side} fleet eliminated"
+        if destroyed == 0:
+            plural = "ship" if surrendered == 1 else "ships"
+            return (f"{side} fleet surrendered ({surrendered} {plural} struck "
+                    f"{'its' if surrendered == 1 else 'their'} colours)")
+        return (f"{side} fleet destroyed or surrendered "
+                f"({destroyed} destroyed, {surrendered} surrendered)")
 
     def _evaluate_fleet_result(self) -> BattleResult:
         """Evaluate final fleet battle result."""
@@ -2829,15 +3040,18 @@ class LLMBattleRunner:
         if alpha_active == 0 and beta_active == 0:
             outcome = BattleOutcome.DRAW
             winner = None
-            reason = "Mutual destruction/surrender"
+            reason = (f"Mutual destruction/surrender: {self._fleet_loss_reason('alpha')}; "
+                      f"{self._fleet_loss_reason('beta')}")
         elif alpha_active == 0:
             outcome = BattleOutcome.BETA_VICTORY
             winner = "beta"
-            reason = "Alpha fleet eliminated"
+            reason = self._fleet_loss_reason("alpha")
         elif beta_active == 0:
             outcome = BattleOutcome.ALPHA_VICTORY
             winner = "alpha"
-            reason = "Beta fleet eliminated"
+            reason = self._fleet_loss_reason("beta")
+        elif (ineffective := self._combat_ineffective_outcome()) is not None:
+            outcome, winner, reason = ineffective
         elif (self.alpha_mcp or self.alpha_admiral) and (self.beta_mcp or self.beta_admiral):
             # Check for mutual draw
             if self._fleet_draw_agreed():
@@ -2899,9 +3113,11 @@ class LLMBattleRunner:
             filename = create_battle_filename(
                 self.recorder.recording.alpha_model,
                 self.recorder.recording.beta_model,
+                compress=self.config.compress_recording,
             )
             filepath = Path(self.config.recording_dir) / filename
-            self.recording_file = self.recorder.save(str(filepath))
+            self.recording_file = self.recorder.save(
+                str(filepath), compress=self.config.compress_recording)
 
             if self.config.verbose:
                 print(f"Recording saved to: {self.recording_file}")
@@ -3020,6 +3236,10 @@ class LLMBattleRunner:
                     "armor": armor_data,
                 }
                 ships[ship_id].update(_thermal_trace_fields(ship))
+                # Weapon arcs: hull 'up' (roll included) and per-mount 'tur'
+                arcs_fields = getattr(self.simulation, 'arcs_trace_fields', None)
+                if arcs_fields is not None:
+                    ships[ship_id].update(arcs_fields(ship))
 
         # Build projectile states
         projectiles = []
@@ -3195,6 +3415,14 @@ class LLMBattleRunner:
         # Damage dealt (1 point per GJ)
         points += ship.damage_dealt_gj
 
+        # A lost ship keeps the damage it dealt, nothing else. Fleet draws sum
+        # this over every hull, and a destroyed ship still carries its last
+        # hull integrity and delta-v: a fleet that had lost half its ships
+        # could win an agreed draw "on points".
+        if (ship.is_destroyed or getattr(ship, 'is_dying', False)
+                or getattr(ship, 'is_surrendered', False)):
+            return points
+
         # Hull integrity bonus (up to 50 points)
         points += ship.hull_integrity * 0.5  # 100% hull = 50 points
 
@@ -3269,20 +3497,9 @@ class LLMBattleRunner:
         beta_score = 0.0
 
         # Score for surviving ships (ship value based on class)
-        ship_values = {
-            "corvette": 10,
-            "frigate": 15,
-            "destroyer": 20,
-            "cruiser": 30,
-            "battlecruiser": 40,
-            "battleship": 50,
-            "dreadnought": 70,
-        }
-
         # Alpha fleet scoring
         for ship in self.alpha_ships.values():
-            ship_type = getattr(ship, 'ship_type', 'destroyer').lower()
-            base_value = ship_values.get(ship_type, 20)
+            base_value = ship_class_value(getattr(ship, 'ship_type', 'destroyer'))
 
             if ship.is_destroyed or getattr(ship, 'is_dying', False):
                 # Destroyed ships count against you. A dying ship is a
@@ -3293,7 +3510,8 @@ class LLMBattleRunner:
             else:
                 # Surviving ships contribute to score
                 hull_pct = ship.hull_integrity / 100.0
-                alpha_score += base_value * hull_pct  # Hull remaining
+                # Hull remaining, discounted for a disarmed / adrift hull
+                alpha_score += base_value * hull_pct * surviving_ship_score_factor(ship)
                 alpha_score += ship.damage_dealt_gj * 0.1  # Damage dealt
                 if ship.shots_fired > 0:
                     accuracy = ship.hits_scored / ship.shots_fired
@@ -3301,8 +3519,7 @@ class LLMBattleRunner:
 
         # Beta fleet scoring
         for ship in self.beta_ships.values():
-            ship_type = getattr(ship, 'ship_type', 'destroyer').lower()
-            base_value = ship_values.get(ship_type, 20)
+            base_value = ship_class_value(getattr(ship, 'ship_type', 'destroyer'))
 
             if ship.is_destroyed or getattr(ship, 'is_dying', False):
                 alpha_score += base_value * 1.5
@@ -3310,7 +3527,7 @@ class LLMBattleRunner:
                 alpha_score += base_value * 0.75
             else:
                 hull_pct = ship.hull_integrity / 100.0
-                beta_score += base_value * hull_pct
+                beta_score += base_value * hull_pct * surviving_ship_score_factor(ship)
                 beta_score += ship.damage_dealt_gj * 0.1
                 if ship.shots_fired > 0:
                     accuracy = ship.hits_scored / ship.shots_fired
@@ -3416,9 +3633,11 @@ class LLMBattleRunner:
             filename = create_battle_filename(
                 self.alpha_config.model,
                 self.beta_config.model,
+                compress=self.config.compress_recording,
             )
             filepath = Path(self.config.recording_dir) / filename
-            self.recording_file = self.recorder.save(str(filepath))
+            self.recording_file = self.recorder.save(
+                str(filepath), compress=self.config.compress_recording)
 
             if self.config.verbose:
                 print(f"Recording saved to: {self.recording_file}")
@@ -3633,6 +3852,7 @@ class LLMBattleRunner:
                     torpedo_id=data.get("projectile_id", "unknown"),
                     closest_approach_km=data.get("closest_approach_km", 0),
                     hit_probability=data.get("hit_probability", 0),
+                    reason=data.get("reason"),
                 )
             else:
                 self.recorder.record_miss(
@@ -3951,7 +4171,10 @@ class LLMBattleRunner:
                     source_ship=source_name,
                 )
 
-        elif event.event_type == SimulationEventType.PROJECTILE_MISS:
+        elif (event.event_type == SimulationEventType.PROJECTILE_MISS
+              # A round culled 10,000 km out is bookkeeping, not a shot the
+              # captain can learn from (it would land in the >300 km bracket).
+              and data.get("reason") != "left_battle"):
             self._record_captain_shot(
                 source_id=data.get("source_ship_id") or event.ship_id,
                 target_id=event.target_id,

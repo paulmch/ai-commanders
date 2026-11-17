@@ -1,0 +1,200 @@
+=== BATTLE p5_sonnet55_vs_sonnet5_a | claude-sonnet-5-5 vs claude-sonnet-5 | spend $0.00/$24.00 ===
+150 pts/side, max 8 ships, 20 turns of 30s. Reasoning medium. Admiral vision ON: tactical plot to both admirals each checkpoint.
+Costs: CO=corvette:24 FF=frigate:7 DD=destroyer:18 CA=cruiser:29 BC=battlecruiser:25 BB=battleship:43 DN=dreadnought:55 DS=dreadnought_siege:56 CT=cruiser_torpedo:100
+=== DRAFT ALPHA | claude-sonnet-5-5 | 150/150 pts | spend $0.02/$24.00 (+$0.16 held) ===
+Ships (8): Lancer-1 BC 25 | Lancer-2 BC 25 | Lancer-3 BC 25 | Lancer-4 BC 25 | Falchion-1 DD 18 | Falchion-2 DD 18 | Ward-1 FF 7 | Ward-2 FF 7
+Formation: Compact PD screen - Keep all ships within ~100 km for overlapping PD; battlecruisers forward, frigates close behind for torpedo...
+Concept: Balanced, cost-efficient gun fleet with 8 hulls (150 pts): battlecruisers and destroyers carry spinal coilers, and frigates add PD screen...
+=== DRAFT BETA | claude-sonnet-5 | 148/150 pts | spend $0.07/$24.00 ===
+Ships (6): Colossus DN 55 | Lancer-1 BC 25 | Lancer-2 BC 25 | Falchion-1 DD 18 | Falchion-2 DD 18 | Ward FF 7
+Formation: Spearhead Screen - Destroyers form a forward screen on either flank to intercept torpedoes and dilute enemy spinal targeting w...
+Concept: A layered gunline: one dreadnought as the armored anchor with massive coilgun broadside and heavy PD, two battlecruisers for fast flankin...
+=== CP 1 | t=30s | spend $1.46/$24.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 100% | Lancer-1 BC hull 100% arm 30/30cm heat 0% | Lancer-2 BC hull 100% arm 30/30cm heat 0% | Lancer-3 BC hull 100% arm 30/30cm heat 0% | Lancer-4 BC hull 100% arm 30/30cm heat 0% | Falchion-1 DD hull 100% arm 26/26cm heat 0% | Falchion-2 DD hull 100% arm 26/26cm heat 0% | Ward-1 FF hull 100% arm 12/12cm heat 0% | Ward-2 FF hull 100% arm 12/12cm heat 0%
+BETA claude-sonnet-5: 6/6 alive, hull 100% | Colossus DN hull 100% arm 43/43cm heat 0% | Lancer-1 BC hull 100% arm 30/30cm heat 0% | Lancer-2 BC hull 100% arm 30/30cm heat 0% | Falchion-1 DD hull 100% arm 26/26cm heat 0% | Falchion-2 DD hull 100% arm 26/26cm heat 0% | Ward FF hull 100% arm 12/12cm heat 0%
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold position as a tight formation, noses toward enemy (+X). Coast and shoot: PADLOCK on OCS Falchion-1, then focus fire on nearest enemy...
+B admiral: Advance as one tight formation directly at Group A to close the range from 463km toward ~200km, where our spinal accuracy and overlapping...
+Prompt cache: 0 hit / 34 write / 0 cold calls, 0.0k read + 292.4k written of 372.0k prompt tokens (0% read)
+=== CP 2 | t=60s | spend $1.80/$24.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 100% | Lancer-1 BC hull 100% arm 30/30cm heat 0% | Lancer-2 BC hull 100% arm 30/30cm heat 0% | Lancer-3 BC hull 100% arm 30/30cm heat 0% | Lancer-4 BC hull 100% arm 30/30cm heat 0% | Falchion-1 DD hull 100% arm 26/26cm heat 0% | Falchion-2 DD hull 100% arm 26/26cm heat 0% | Ward-1 FF hull 100% arm 12/12cm heat 0% | Ward-2 FF hull 100% arm 12/12cm heat 0%
+BETA claude-sonnet-5: 6/6 alive, hull 100% | Colossus DN hull 100% arm 43/43cm heat 7% | Lancer-1 BC hull 100% arm 30/30cm heat 7% | Lancer-2 BC hull 100% arm 30/30cm heat 6% | Falchion-1 DD hull 100% arm 26/26cm heat 7% | Falchion-2 DD hull 100% arm 26/26cm heat 6% | Ward FF hull 100% arm 12/12cm heat 8%
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold formation, noses on enemy (PADLOCK), coast and shoot as they close under ~250 km. Focus fire OCS Falchion-1 then Falchion-2 (nearest...
+B admiral: We are outnumbered 8 vs 6 - fight at range, do not merge. Hold formation tight, turn noses onto TIS Falchion-1 [alpha_5] (coast & shoot:...
+Prompt cache: 30 hit / 34 write / 0 cold calls, 283.7k read + 292.4k written of 751.2k prompt tokens (38% read)
+=== CP 3 | t=90s | spend $2.14/$24.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 100% | Lancer-1 BC hull 100% arm 30/30cm heat 0% | Lancer-2 BC hull 100% arm 30/30cm heat 0% | Lancer-3 BC hull 100% arm 30/30cm heat 0% | Lancer-4 BC hull 100% arm 30/30cm heat 0% | Falchion-1 DD hull 100% arm 26/26cm heat 0% | Falchion-2 DD hull 100% arm 26/26cm heat 0% | Ward-1 FF hull 100% arm 12/12cm heat 0% | Ward-2 FF hull 100% arm 12/12cm heat 0%
+BETA claude-sonnet-5: 6/6 alive, hull 100% | Colossus DN hull 100% arm 43/43cm heat 7% | Lancer-1 BC hull 100% arm 30/30cm heat 7% | Lancer-2 BC hull 100% arm 30/30cm heat 6% | Falchion-1 DD hull 100% arm 26/26cm heat 7% | Falchion-2 DD hull 100% arm 26/26cm heat 6% | Ward FF hull 100% arm 12/12cm heat 8%
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold position, noses on enemy (PADLOCK). Focus fire on nearest closing destroyer OCS Falchion-1, then OCS Falchion-2, fire when optimal u...
+B admiral: We are outnumbered 6v8 - fight smart, not reckless. Close formation toward GROUP A to bring range down from 441km toward ~200-250km where...
+Prompt cache: 60 hit / 34 write / 0 cold calls, 567.4k read + 292.4k written of 1131.9k prompt tokens (50% read)
+=== CP 4 | t=120s | spend $2.49/$24.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 100% | Lancer-1 BC hull 100% arm 30/30cm heat 0% | Lancer-2 BC hull 100% arm 30/30cm heat 0% | Lancer-3 BC hull 100% arm 30/30cm heat 0% | Lancer-4 BC hull 100% arm 30/30cm heat 0% | Falchion-1 DD hull 100% arm 26/26cm heat 0% | Falchion-2 DD hull 100% arm 26/26cm heat 0% | Ward-1 FF hull 100% arm 12/12cm heat 0% | Ward-2 FF hull 100% arm 12/12cm heat 0%
+BETA claude-sonnet-5: 6/6 alive, hull 100% | Colossus DN hull 100% arm 43/43cm heat 15% | Lancer-1 BC hull 100% arm 30/30cm heat 15% | Lancer-2 BC hull 100% arm 30/30cm heat 14% | Falchion-1 DD hull 100% arm 26/26cm heat 7% | Falchion-2 DD hull 100% arm 26/26cm heat 8% | Ward FF hull 100% arm 12/12cm heat 8%
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 2 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold position, noses on enemy (PADLOCK). Focus fire on nearest enemy destroyer OCS Falchion-1, then OCS Falchion-2, when within ~250 km;...
+B admiral: Continue closing as a tight formation toward GROUP A, maintaining overlapping PD coverage. Focus fire target: TIS Falchion-1 (alpha_5), t...
+Prompt cache: 90 hit / 34 write / 0 cold calls, 851.0k read + 292.4k written of 1517.4k prompt tokens (56% read)
+=== CP 5 | t=150s | spend $2.82/$24.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 100% | Lancer-1 BC hull 100% arm 30/30cm heat 1% | Lancer-2 BC hull 100% arm 30/30cm heat 1% | Lancer-3 BC hull 100% arm 30/30cm heat 1% | Lancer-4 BC hull 100% arm 30/30cm heat 1% | Falchion-1 DD hull 100% arm 26/26cm heat 3% | Falchion-2 DD hull 100% arm 26/26cm heat 1% | Ward-1 FF hull 100% arm 12/12cm heat 0% | Ward-2 FF hull 100% arm 12/12cm heat 1%
+BETA claude-sonnet-5: 6/6 alive, hull 100% | Colossus DN hull 100% arm 43/43cm heat 19% | Lancer-1 BC hull 100% arm 30/30cm heat 21% | Lancer-2 BC hull 100% arm 30/30cm heat 20% | Falchion-1 DD hull 100% arm 26/26cm heat 8% | Falchion-2 DD hull 100% arm 26/26cm heat 12% | Ward FF hull 100% arm 12/12cm heat 8%
+Hits: none
+Kills: none
+Fire: A 3 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold position, noses on enemy (PADLOCK). Enemy closes slowly at ~0.9 km/s. Fire spinals and coilguns when targets are under ~200 km and h...
+B admiral: Continue Phase 1: close formation toward TIS Falchion-1 (alpha_5) and the enemy cluster, tightening from ~400km toward 200-250km effectiv...
+Prompt cache: 120 hit / 34 write / 0 cold calls, 1134.7k read + 292.4k written of 1903.5k prompt tokens (60% read)
+=== CP 6 | t=180s | spend $3.15/$24.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 100% | Lancer-1 BC hull 100% arm 30/30cm heat 1% | Lancer-2 BC hull 100% arm 30/30cm heat 1% | Lancer-3 BC hull 100% arm 30/30cm heat 1% | Lancer-4 BC hull 100% arm 30/30cm heat 1% | Falchion-1 DD hull 100% arm 26/26cm heat 3% | Falchion-2 DD hull 100% arm 26/26cm heat 1% | Ward-1 FF hull 100% arm 12/12cm heat 1% | Ward-2 FF hull 100% arm 12/12cm heat 1%
+BETA claude-sonnet-5: 6/6 alive, hull 100% | Colossus DN hull 100% arm 43/43cm heat 26% | Lancer-1 BC hull 100% arm 30/30cm heat 24% | Lancer-2 BC hull 100% arm 30/30cm heat 25% | Falchion-1 DD hull 100% arm 26/26cm heat 11% | Falchion-2 DD hull 100% arm 26/26cm heat 12% | Ward FF hull 100% arm 12/12cm heat 8%
+Hits: A:Falchion-1>B:Falchion-1 spinal x1
+Kills: none
+Fire: A 0 slugs/1 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold position, noses on enemy (PADLOCK), coast and shoot as they close. Focus fire nearest enemy OCS Falchion-1, then Falchion-2. Fire wh...
+B admiral: Continue closing as a tight formation toward TIS Falchion-1 (DD) - range is 370km, still outside effective accuracy, so hold fire and kee...
+Prompt cache: 150 hit / 34 write / 0 cold calls, 1418.4k read + 292.4k written of 2288.5k prompt tokens (62% read)
+=== CP 7 | t=210s | spend $3.48/$24.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 100% | Lancer-1 BC hull 100% arm 30/30cm heat 1% | Lancer-2 BC hull 100% arm 30/30cm heat 1% | Lancer-3 BC hull 100% arm 30/30cm heat 1% | Lancer-4 BC hull 100% arm 30/30cm heat 1% | Falchion-1 DD hull 100% arm 26/26cm heat 5% | Falchion-2 DD hull 100% arm 26/26cm heat 1% | Ward-1 FF hull 100% arm 12/12cm heat 1% | Ward-2 FF hull 100% arm 12/12cm heat 1%
+BETA claude-sonnet-5: 6/6 alive, hull 100% | Colossus DN hull 100% arm 43/43cm heat 28% | Lancer-1 BC hull 100% arm 30/30cm heat 27% | Lancer-2 BC hull 100% arm 30/30cm heat 27% | Falchion-1 DD hull 100% arm 26/26cm heat 11% | Falchion-2 DD hull 100% arm 26/26cm heat 12% | Ward FF hull 100% arm 12/12cm heat 8%
+Hits: none
+Kills: none
+Fire: A 4 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold position, noses on enemy (PADLOCK). Fire when probability is good (under ~200 km). Focus fire on OCS Falchion-1, then OCS Falchion-2...
+B admiral: Enemy is 339km out, closing slowly (~1 km/s) - no merge pressure yet. Several of our ships have weapons masked because we're not nose-on...
+Prompt cache: 180 hit / 34 write / 0 cold calls, 1702.1k read + 292.4k written of 2674.9k prompt tokens (64% read)
+=== CP 8 | t=240s | spend $3.83/$24.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 100% | Lancer-1 BC hull 100% arm 30/30cm heat 1% | Lancer-2 BC hull 100% arm 30/30cm heat 1% | Lancer-3 BC hull 100% arm 30/30cm heat 1% | Lancer-4 BC hull 100% arm 30/30cm heat 1% | Falchion-1 DD hull 100% arm 26/26cm heat 5% | Falchion-2 DD hull 100% arm 26/26cm heat 1% | Ward-1 FF hull 100% arm 12/12cm heat 1% | Ward-2 FF hull 100% arm 12/12cm heat 1%
+BETA claude-sonnet-5: 6/6 alive, hull 100% | Colossus DN hull 100% arm 43/43cm heat 30% | Lancer-1 BC hull 100% arm 30/30cm heat 28% | Lancer-2 BC hull 100% arm 30/30cm heat 27% | Falchion-1 DD hull 100% arm 26/26cm heat 14% | Falchion-2 DD hull 100% arm 26/26cm heat 13% | Ward FF hull 100% arm 12/12cm heat 9%
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold position, noses on enemy (PADLOCK). Enemy closing ~1 km/s at ~270 km. Fire spinals and coilguns at the nearest destroyers (OCS Falch...
+B admiral: Enemy group closing at ~1 km/s with projected closest approach of 0.2 km in 203s if we coast - that's a full merge against 8 ships, which...
+Prompt cache: 210 hit / 34 write / 0 cold calls, 1985.7k read + 292.4k written of 3062.4k prompt tokens (65% read)
+=== CP 9 | t=270s | spend $4.21/$24.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 100% | Lancer-1 BC hull 100% arm 30/30cm heat 1% | Lancer-2 BC hull 100% arm 30/30cm heat 1% | Lancer-3 BC hull 100% arm 30/30cm heat 2% | Lancer-4 BC hull 100% arm 30/30cm heat 1% | Falchion-1 DD hull 100% arm 26/26cm heat 5% | Falchion-2 DD hull 100% arm 26/26cm heat 1% | Ward-1 FF hull 100% arm 12/12cm heat 1% | Ward-2 FF hull 100% arm 12/12cm heat 1%
+BETA claude-sonnet-5: 6/6 alive, hull 100% | Colossus DN hull 100% arm 43/43cm heat 30% | Lancer-1 BC hull 100% arm 30/30cm heat 30% | Lancer-2 BC hull 100% arm 30/30cm heat 28% | Falchion-1 DD hull 100% arm 26/26cm heat 17% | Falchion-2 DD hull 100% arm 26/26cm heat 15% | Ward FF hull 100% arm 12/12cm heat 12%
+Hits: B:Falchion-1>A:Falchion-1 spinal x1
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 1 slugs/1 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold position, noses on enemy (PADLOCK). Enemy closing slowly at ~1 km/s. Fire spinals and coilguns at nearest DDs and BCs when under 200...
+B admiral: Phase 2 of close-in plan: all ships INTERCEPT TIS Falchion-1 with a 200km standoff - this turns our noses onto the enemy formation (clear...
+Prompt cache: 240 hit / 34 write / 0 cold calls, 2269.4k read + 292.4k written of 3450.8k prompt tokens (66% read)
+=== CP 10 | t=300s | spend $4.57/$24.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 100% | Lancer-1 BC hull 100% arm 30/30cm heat 2% | Lancer-2 BC hull 100% arm 30/30cm heat 2% | Lancer-3 BC hull 100% arm 30/30cm heat 2% | Lancer-4 BC hull 100% arm 30/30cm heat 2% | Falchion-1 DD hull 100% arm 26/26cm heat 7% | Falchion-2 DD hull 100% arm 26/26cm heat 2% | Ward-1 FF hull 100% arm 12/12cm heat 1% | Ward-2 FF hull 100% arm 12/12cm heat 1%
+BETA claude-sonnet-5: 6/6 alive, hull 100% | Colossus DN hull 100% arm 43/43cm heat 32% | Lancer-1 BC hull 100% arm 30/30cm heat 38% | Lancer-2 BC hull 100% arm 30/30cm heat 36% | Falchion-1 DD hull 100% arm 26/26cm heat 19% | Falchion-2 DD hull 100% arm 26/26cm heat 16% | Ward FF hull 100% arm 12/12cm heat 15%
+Hits: none
+Kills: none
+Fire: A 14 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 5 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold position, noses on enemy (PADLOCK). Enemy closes slowly at ~0.8 km/s. Fire spinals and coilguns at nearest enemy (OCS Falchion-1 fir...
+B admiral: Enemy fleet 252km and closing slowly; we are outnumbered 6v8 so avoid a full merge. Shift to PASS WIDE heading (-0.10,-0.99,+0.05) as a f...
+Prompt cache: 270 hit / 34 write / 0 cold calls, 2553.1k read + 292.4k written of 3841.9k prompt tokens (66% read)
+=== CP 11 | t=330s | spend $4.93/$24.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 100% | Lancer-1 BC hull 100% arm 30/30cm heat 4% | Lancer-2 BC hull 100% arm 30/30cm heat 6% | Lancer-3 BC hull 100% arm 30/30cm heat 3% | Lancer-4 BC hull 100% arm 30/30cm heat 3% | Falchion-1 DD hull 100% arm 26/26cm heat 10% | Falchion-2 DD hull 100% arm 26/26cm heat 2% | Ward-1 FF hull 100% arm 12/12cm heat 2% | Ward-2 FF hull 100% arm 12/12cm heat 2%
+BETA claude-sonnet-5: 6/6 alive, hull 100% | Colossus DN hull 100% arm 43/43cm heat 36% | Lancer-1 BC hull 100% arm 30/30cm heat 40% | Lancer-2 BC hull 100% arm 22/30cm heat 40% | Falchion-1 DD hull 100% arm 26/26cm heat 22% | Falchion-2 DD hull 100% arm 26/26cm heat 21% | Ward FF hull 100% arm 12/12cm heat 21%
+Hits: B:Lancer-2>A:Lancer-2 gun x1 | A:Lancer-2>B:Lancer-2 gun x1 | A:Lancer-2>B:Lancer-2 spinal x1
+Kills: none
+Fire: A 10 slugs/2 hit, 0 torps/0 impact, PD downed 0 torps ; B 1 slugs/1 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold position, noses on enemy (PADLOCK). Focus fire on nearest closing enemy: OCS Falchion-1 first, then OCS Lancer-2. Fire only at good...
+B admiral: Hold current range band (~220-230km, no further closing) - we are outnumbered, avoid merge. All ships: orient NOSE-ON toward TIS Falchion...
+Prompt cache: 300 hit / 34 write / 0 cold calls, 2836.8k read + 292.4k written of 4233.7k prompt tokens (67% read)
+=== CP 12 | t=360s | spend $5.27/$24.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 100% | Lancer-1 BC hull 100% arm 30/30cm heat 5% | Lancer-2 BC hull 100% arm 30/30cm heat 8% | Lancer-3 BC hull 100% arm 30/30cm heat 4% | Lancer-4 BC hull 100% arm 30/30cm heat 5% | Falchion-1 DD hull 100% arm 26/26cm heat 16% | Falchion-2 DD hull 100% arm 26/26cm heat 4% | Ward-1 FF hull 100% arm 12/12cm heat 2% | Ward-2 FF hull 100% arm 12/12cm heat 2%
+BETA claude-sonnet-5: 6/6 alive, hull 100% | Colossus DN hull 100% arm 43/43cm heat 37% | Lancer-1 BC hull 100% arm 30/30cm heat 42% | Lancer-2 BC hull 100% arm 22/30cm heat 45% | Falchion-1 DD hull 100% arm 26/26cm heat 28% | Falchion-2 DD hull 100% arm 26/26cm heat 22% | Ward FF hull 100% arm 12/12cm heat 21%
+Hits: none
+Kills: none
+Fire: A 14 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 3 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold position, noses on enemy (PADLOCK). Enemy closing at ~1 km/s, range ~150-200 km. Focus fire on OCS Falchion-1, the nearest destroyer...
+B admiral: Hold range ~200km, no merge. All ships PADLOCK on TIS Falchion-1 [alpha_5] (coast & shoot, nose-on, throttle 0) to unmask spinal/turret a...
+Prompt cache: 330 hit / 34 write / 0 cold calls, 3120.4k read + 292.4k written of 4623.8k prompt tokens (67% read)
+=== CP 13 | t=390s | spend $5.62/$24.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 100% | Lancer-1 BC hull 100% arm 30/30cm heat 8% | Lancer-2 BC hull 100% arm 29/30cm heat 9% | Lancer-3 BC hull 100% arm 30/30cm heat 6% | Lancer-4 BC hull 100% arm 30/30cm heat 6% | Falchion-1 DD hull 98% arm 26/26cm heat 19% | Falchion-2 DD hull 100% arm 26/26cm heat 6% | Ward-1 FF hull 100% arm 12/12cm heat 3% | Ward-2 FF hull 100% arm 12/12cm heat 3%
+BETA claude-sonnet-5: 6/6 alive, hull 100% | Colossus DN hull 100% arm 43/43cm heat 39% | Lancer-1 BC hull 100% arm 30/30cm heat 44% | Lancer-2 BC hull 100% arm 22/30cm heat 51% | Falchion-1 DD hull 100% arm 26/26cm heat 33% | Falchion-2 DD hull 100% arm 26/26cm heat 24% | Ward FF hull 100% arm 12/12cm heat 22%
+Hits: B:Falchion-1>A:Falchion-1 spinal x2 | B:Falchion-1>A:Falchion-1 gun x2 | B:Lancer-2>A:Falchion-1 spinal x2 | B:Lancer-1>A:Falchion-1 gun x2 | B:Lancer-1>A:Falchion-1 spinal x1 | +2 more
+Kills: none
+Fire: A 20 slugs/1 hit, 0 torps/0 impact, PD downed 0 torps ; B 25 slugs/10 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Enemy closing at ~1 km/s, range ~120-170 km. Hold formation, noses on enemy (PADLOCK OCS Falchion-1, nearest DD). Focus fire OCS Falchion...
+B admiral: Hold current range (no merge, slow closure only). All ships PADLOCK on TIS Falchion-1 [alpha_5] - concentrate all fire to finish it off q...
+Prompt cache: 360 hit / 34 write / 0 cold calls, 3404.1k read + 292.4k written of 5017.5k prompt tokens (68% read)
+=== CP 14 | t=420s | spend $5.99/$24.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 100% | Lancer-1 BC hull 100% arm 30/30cm heat 11% | Lancer-2 BC hull 100% arm 29/30cm heat 15% | Lancer-3 BC hull 100% arm 29/30cm heat 8% | Lancer-4 BC hull 100% arm 30/30cm heat 9% | Falchion-1 DD hull 97% arm 18/26cm heat 21% [tank] | Falchion-2 DD hull 100% arm 26/26cm heat 8% | Ward-1 FF hull 100% arm 12/12cm heat 4% | Ward-2 FF hull 100% arm 12/12cm heat 3%
+BETA claude-sonnet-5: 6/6 alive, hull 100% | Colossus DN hull 100% arm 43/43cm heat 42% | Lancer-1 BC hull 100% arm 30/30cm heat 48% | Lancer-2 BC hull 100% arm 22/30cm heat 56% | Falchion-1 DD hull 100% arm 26/26cm heat 37% | Falchion-2 DD hull 100% arm 26/26cm heat 26% | Ward FF hull 100% arm 12/12cm heat 22%
+Hits: B:Lancer-1>A:Falchion-1 gun x4 | B:Lancer-2>A:Falchion-1 gun x3 | B:Falchion-1>A:Falchion-1 gun x2 | B:Lancer-2>A:Lancer-1 gun x2 | A:Lancer-2>B:Falchion-1 spinal x2 | +15 more
+Kills: none
+Fire: A 28 slugs/11 hit, 0 torps/0 impact, PD downed 0 torps ; B 23 slugs/19 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold formation, noses on enemy, PADLOCK and focus fire on OCS Falchion-1 (nearest DD), then OCS Lancer-2. Keep PD overlapping. Falchion-1...
+B admiral: MERGE WARNING: We coast into 7km of the enemy's full 8-ship fleet in 25s - unacceptable at 6v8. ALL SHIPS: turn and burn on the OPEN RANG...
+Prompt cache: 390 hit / 34 write / 0 cold calls, 3687.8k read + 292.4k written of 5413.1k prompt tokens (68% read)
+=== CP 15 | t=450s | spend $6.36/$24.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 100% | Lancer-1 BC hull 100% arm 30/30cm heat 15% | Lancer-2 BC hull 100% arm 29/30cm heat 17% | Lancer-3 BC hull 100% arm 29/30cm heat 11% | Lancer-4 BC hull 100% arm 30/30cm heat 11% | Falchion-1 DD hull 97% arm 12/26cm heat 23% [brace] | Falchion-2 DD hull 100% arm 26/26cm heat 10% | Ward-1 FF hull 100% arm 12/12cm heat 5% | Ward-2 FF hull 100% arm 12/12cm heat 4%
+BETA claude-sonnet-5: 6/6 alive, hull 100% | Colossus DN hull 100% arm 43/43cm heat 45% | Lancer-1 BC hull 100% arm 29/30cm heat 50% | Lancer-2 BC hull 100% arm 22/30cm heat 58% | Falchion-1 DD hull 97% arm 26/26cm heat 38% | Falchion-2 DD hull 100% arm 26/26cm heat 29% | Ward FF hull 100% arm 12/12cm heat 26%
+Hits: A:Lancer-2>B:Lancer-2 gun x4 | A:Ward-1>B:Falchion-1 gun x2 | A:Lancer-3>B:Falchion-1 spinal x2 | A:Falchion-2>B:Lancer-2 spinal x2 | A:Lancer-4>B:Falchion-1 spinal x2 | +17 more
+Kills: none
+Fire: A 34 slugs/24 hit, 0 torps/0 impact, PD downed 0 torps ; B 24 slugs/8 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold formation, noses on enemy, keep PADLOCK fire. Focus fire OCS Lancer-2 (nearest, 50 km) then OCS Falchion-1. TIS Falchion-1 (damaged,...
+B admiral: MERGE ALERT: Break off now. Whole fleet burns OPEN RANGE heading (+0.85,-0.53,0) at full throttle (scaled per hull) for this checkpoint a...
+Prompt cache: 420 hit / 34 write / 0 cold calls, 3971.5k read + 292.4k written of 5811.8k prompt tokens (68% read)
+=== CP 16 | t=480s | spend $6.76/$24.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 99% | Lancer-1 BC hull 100% arm 30/30cm heat 17% | Lancer-2 BC hull 100% arm 29/30cm heat 20% | Lancer-3 BC hull 100% arm 29/30cm heat 14% | Lancer-4 BC hull 100% arm 25/30cm heat 14% | Falchion-1 DD hull 92% arm 0/26cm heat 24% [brace] | Falchion-2 DD hull 100% arm 26/26cm heat 12% | Ward-1 FF hull 100% arm 12/12cm heat 6% | Ward-2 FF hull 100% arm 12/12cm heat 5%
+BETA claude-sonnet-5: 6/6 alive, hull 99% | Colossus DN hull 100% arm 41/43cm heat 49% | Lancer-1 BC hull 99% arm 29/30cm heat 55% | Lancer-2 BC hull 100% arm 9/30cm heat 61% | Falchion-1 DD hull 97% arm 25/26cm heat 40% | Falchion-2 DD hull 100% arm 26/26cm heat 37% | Ward FF hull 100% arm 12/12cm heat 34%
+Hits: B:Colossus>A:Falchion-1 gun x6 | B:Lancer-1>A:Falchion-1 gun x3 | B:Falchion-2>A:Falchion-1 gun x3 | A:Ward-2>B:Falchion-1 gun x2 | A:Lancer-1>B:Lancer-2 gun x2 | +20 more
+Kills: none
+Fire: A 33 slugs/23 hit, 0 torps/0 impact, PD downed 0 torps ; B 19 slugs/18 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold position, keep formation tight for overlapping PD. Focus fire OCS Lancer-2 (13 km, closest, undamaged). Then OCS Falchion-1, then ot...
+B admiral: Main enemy group (7 hulls) sits ~90-150km, nearly stalled, all concentrating fire on OCS Lancer-2 - continue OPEN RANGE heading as format...
+Prompt cache: 450 hit / 34 write / 0 cold calls, 4255.1k read + 292.4k written of 6211.7k prompt tokens (69% read)
+=== CP 17 | t=510s | spend $7.12/$24.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 98% | Lancer-1 BC hull 100% arm 29/30cm heat 18% | Lancer-2 BC hull 100% arm 29/30cm heat 23% | Lancer-3 BC hull 100% arm 29/30cm heat 15% | Lancer-4 BC hull 100% arm 25/30cm heat 16% | Falchion-1 DD hull 86% arm 0/26cm heat 25% [brace] | Falchion-2 DD hull 100% arm 26/26cm heat 14% | Ward-1 FF hull 100% arm 12/12cm heat 7% | Ward-2 FF hull 100% arm 12/12cm heat 6%
+BETA claude-sonnet-5: 6/6 alive, hull 96% | Colossus DN hull 100% arm 41/43cm heat 54% | Lancer-1 BC hull 99% arm 27/30cm heat 57% | Lancer-2 BC hull 79% arm 0/30cm heat 62% | Falchion-1 DD hull 97% arm 25/26cm heat 48% | Falchion-2 DD hull 100% arm 26/26cm heat 39% | Ward FF hull 100% arm 12/12cm heat 41%
+Hits: A:Lancer-4>B:Lancer-2 gun x5 | A:Ward-2>B:Lancer-2 gun x3 | A:Falchion-2>B:Lancer-2 gun x2 | A:Lancer-2>B:Lancer-2 spinal x2 | A:Lancer-2>B:Lancer-2 gun x2 | +15 more
+Kills: none
+Fire: A 34 slugs/27 hit, 0 torps/0 impact, PD downed 0 torps ; B 20 slugs/8 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Focus fire OCS Lancer-2 (79%, closest, 51 km) until dead, then OCS Lancer-1. Keep noses on enemy (PADLOCK), hold formation for PD cover....
+B admiral: Continue breaking contact: all ships fly OPEN RANGE heading (+0.44,-0.90,-0.01) at full throttle to extend separation from Group A's 7-sh...
+Prompt cache: 480 hit / 34 write / 0 cold calls, 4538.8k read + 292.4k written of 6608.9k prompt tokens (69% read)
+=== CP 18 | t=540s | spend $7.51/$24.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 98% | Lancer-1 BC hull 100% arm 28/30cm heat 20% | Lancer-2 BC hull 100% arm 29/30cm heat 26% | Lancer-3 BC hull 100% arm 29/30cm heat 17% | Lancer-4 BC hull 100% arm 25/30cm heat 19% | Falchion-1 DD hull 83% arm 0/26cm heat 25% [brace] | Falchion-2 DD hull 100% arm 26/26cm heat 15% | Ward-1 FF hull 100% arm 12/12cm heat 7% | Ward-2 FF hull 100% arm 12/12cm heat 6%
+BETA claude-sonnet-5: 6/6 alive, hull 93% | Colossus DN hull 99% arm 41/43cm heat 62% | Lancer-1 BC hull 99% arm 25/30cm heat 60% | Lancer-2 BC hull 63% arm 0/30cm heat 63% | Falchion-1 DD hull 97% arm 25/26cm heat 50% | Falchion-2 DD hull 100% arm 26/26cm heat 45% | Ward FF hull 100% arm 12/12cm heat 49%
+Hits: A:Lancer-1>B:Lancer-2 gun x2 | A:Lancer-4>B:Lancer-2 gun x2 | B:Colossus>A:Falchion-1 gun x2 | A:Ward-2>B:Lancer-2 gun x2 | A:Lancer-3>B:Lancer-2 spinal x2 | +12 more
+Kills: none
+Fire: A 30 slugs/21 hit, 0 torps/0 impact, PD downed 0 torps ; B 18 slugs/4 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold position, coast with noses on enemy (PADLOCK). Focus fire OCS Lancer-2 (63%, PD 0/2) until dead, then OCS Lancer-1. Falchion-1 (dama...
+B admiral: Lancer-2 is dying (63% hull, PD down, targeted by 7 enemy hulls) - priority is to break that focus fire. Fleet executes OPEN RANGE headin...
+Prompt cache: 510 hit / 34 write / 0 cold calls, 4822.5k read + 292.4k written of 7008.2k prompt tokens (69% read)
+=== CP 19 | t=570s | spend $7.92/$24.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 98% | Lancer-1 BC hull 100% arm 28/30cm heat 22% | Lancer-2 BC hull 100% arm 29/30cm heat 28% | Lancer-3 BC hull 100% arm 29/30cm heat 20% | Lancer-4 BC hull 100% arm 25/30cm heat 20% | Falchion-1 DD hull 82% arm 0/26cm heat 26% [wobble] | Falchion-2 DD hull 100% arm 26/26cm heat 17% | Ward-1 FF hull 100% arm 12/12cm heat 8% | Ward-2 FF hull 100% arm 12/12cm heat 7%
+BETA claude-sonnet-5: 6/6 alive, hull 90% | Colossus DN hull 99% arm 36/50cm heat 65% rad | Lancer-1 BC hull 99% arm 25/30cm heat 65% rad | Lancer-2 BC hull 44% arm 0/30cm heat 64% | Falchion-1 DD hull 97% arm 25/26cm heat 54% | Falchion-2 DD hull 100% arm 26/26cm heat 51% rad | Ward FF hull 100% arm 12/12cm heat 56%
+Hits: B:Colossus>A:Lancer-3 gun x2 | A:Lancer-3>B:Lancer-2 spinal x2 | A:Lancer-3>B:Lancer-2 gun x2 | A:Lancer-4>B:Colossus gun x2 | A:Lancer-2>B:Lancer-2 spinal x1 | +11 more
+Kills: none
+Fire: A 28 slugs/16 hit, 0 torps/0 impact, PD downed 0 torps ; B 13 slugs/4 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold position, coast with noses on enemy (PADLOCK). Focus fire on crippled OCS Lancer-2 (44%, PD down) until dead, then OCS Colossus/near...
+B admiral: Group A (7 enemy ships) is opening range already at 138km - continue this fleet-wide OPEN RANGE burn to break their focus fire on OCS Lan...
+Prompt cache: 540 hit / 34 write / 0 cold calls, 5106.2k read + 292.4k written of 7413.4k prompt tokens (69% read)
+=== CP 20 | t=600s | spend $8.31/$24.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 98% | Lancer-1 BC hull 100% arm 28/30cm heat 23% | Lancer-2 BC hull 100% arm 27/30cm heat 29% | Lancer-3 BC hull 100% arm 28/30cm heat 21% | Lancer-4 BC hull 100% arm 25/30cm heat 21% | Falchion-1 DD hull 82% arm 0/26cm heat 26% | Falchion-2 DD hull 100% arm 26/26cm heat 18% | Ward-1 FF hull 100% arm 12/12cm heat 9% | Ward-2 FF hull 100% arm 12/12cm heat 7%
+BETA claude-sonnet-5: 5/6 alive, hull 83% | Colossus DN hull 99% arm 35/50cm heat 60% rad | Lancer-1 BC hull 99% arm 25/30cm heat 62% rad | Lancer-2 BC DEAD@582s | Falchion-1 DD hull 97% arm 25/26cm heat 58% | Falchion-2 DD hull 100% arm 26/26cm heat 47% rad | Ward FF hull 100% arm 12/12cm heat 56%
+Hits: A:Lancer-4>B:Lancer-2 spinal x1 | A:Falchion-2>B:Lancer-2 spinal x1 | A:Ward-1>B:Lancer-2 gun x1 | A:Lancer-3>B:Lancer-2 gun x1 | B:Colossus>A:Lancer-1 gun x1 | +4 more
+Kills: B:Lancer-2 crippled by A:Lancer-4 (detonates in 12s) @570s ; B:Lancer-2 by A:Lancer-4 (reactor_detonation) @582s
+Fire: A 3 slugs/6 hit, 0 torps/0 impact, PD downed 0 torps ; B 6 slugs/3 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Targets: OCS Lancer-1 and OCS Colossus (nearest, ~70-130 km) are the priority. Keep the formation tight for overlapping PD. All guns FIRE...
+B admiral: Group A is opening on its own (203km+, keep coasting away - do not re-engage them yet). Isolated TIS Falchion-1 DD (82% hull, 0/2 PD - ca...
+Prompt cache: 568 hit / 34 write / 0 cold calls, 5370.8k read + 292.4k written of 7787.2k prompt tokens (69% read)
+=== RESULT | t=630s | after CP 20 | spend $8.31/$24.00 ===
+Winner: ALPHA - Alpha tactical advantage (238.0 vs 153.9)
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 98% | Lancer-1 BC hull 100% arm 26/30cm heat 24% | Lancer-2 BC hull 100% arm 25/30cm heat 31% | Lancer-3 BC hull 100% arm 28/30cm heat 22% | Lancer-4 BC hull 100% arm 25/30cm heat 23% | Falchion-1 DD hull 82% arm 0/26cm heat 28% | Falchion-2 DD hull 100% arm 26/26cm heat 20% | Ward-1 FF hull 100% arm 12/12cm heat 9% | Ward-2 FF hull 100% arm 12/12cm heat 8%
+BETA claude-sonnet-5: 5/6 alive, hull 83% | Colossus DN hull 99% arm 23/43cm heat 57% rad | Lancer-1 BC hull 99% arm 25/30cm heat 56% rad | Lancer-2 BC DEAD@582s | Falchion-1 DD hull 97% arm 25/26cm heat 60% | Falchion-2 DD hull 100% arm 26/26cm heat 41% rad | Ward FF hull 100% arm 12/12cm heat 56%
+Final interval - Hits: A:Lancer-1>B:Colossus gun x2 | A:Lancer-4>B:Colossus gun x2 | B:Colossus>A:Lancer-2 gun x1 | A:Lancer-2>B:Colossus gun x1 | A:Lancer-3>B:Colossus gun x1 | +4 more
+Final interval - Kills: none
+Final interval - Fire: A 25 slugs/9 hit, 0 torps/0 impact, PD downed 0 torps ; B 5 slugs/2 hit, 0 torps/0 impact, PD downed 0 torps
+Spend: $8.3120 reported, $8.3120 committed of $24.00 limit, 602 model calls
+Recording: /home/plmch/aic-wt/p5/damage/visualizer/public/recordings/p5_sonnet55_vs_sonnet5_a.json

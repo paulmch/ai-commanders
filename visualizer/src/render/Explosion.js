@@ -5,6 +5,9 @@ import { blastCloseDim } from './CloseRange.js';
 import { buildDebrisChunks } from './Hulls.js';
 import { createTorch } from './Torch.js';
 import { breakHull } from './DamageFX.js';
+import { WRECK_DRIFT_S, wreckDriftS } from '../DamageTimeline.js';
+
+export { WRECK_DRIFT_S };
 import { sectionCrackGlow } from './HullWear.js';
 
 /**
@@ -104,7 +107,7 @@ function fireballMaterial() {
         // hotter in the middle of the disc, mottled by the noise
         float heat = uHeat * (0.15 + 1.0 * noise) * (0.4 + 0.6 * ndv);
         heat = clamp(heat, 0.0, 1.0);
-        float edge = 1.0 - pow(1.0 - ndv, 3.5);
+        float edge = 1.0 - pow(max(1.0 - ndv, 0.0), 3.5);   // ndv can round past 1: pow(<0) is NaN on GPUs
         float a = smoothstep(0.03, 0.35, heat) * edge * uAlpha * (0.3 + 0.7 * noise);
         vec3 col = ramp(heat) * (0.35 + 0.9 * heat);
         gl_FragColor = vec4(col * a * uIntensity, 1.0);
@@ -163,7 +166,7 @@ function shellMaterial() {
       void main() {
         #include <logdepthbuf_fragment>
         float ndv = abs(dot(normalize(vNormal), normalize(vView)));
-        float rim = pow(1.0 - ndv, uRimPow);
+        float rim = pow(max(1.0 - ndv, 0.0), uRimPow);
         float n = tri(uNoise, vLocal * 2.5 + uSeed, vLocal).g;
         float n2 = tri(uNoise, vLocal * 6.5 - uSeed * 1.3, vLocal).b;
         // torn into filaments: patches of the front simply are not there
@@ -197,14 +200,15 @@ function ejectaMaterial() {
       uniform float uAge, uIntensity, uSeed;
       varying vec2 vUv;
       #include <logdepthbuf_pars_fragment>
+      float sq(float x) { return x * x; }
       void main() {
         #include <logdepthbuf_fragment>
         vec2 p = vUv * 2.0 - 1.0;
         float r = length(p);
         float n = texture2D(uNoise, p * 1.8 + uSeed).g;
         float front = 0.77 + (n - 0.5) * 0.04;
-        float rim = exp(-pow((r - front) / 0.018, 2.0));
-        float wake = exp(-pow((r - front + 0.08) / 0.085, 2.0)) * 0.22;
+        float rim = exp(-sq((r - front) / 0.018));          // x * x: pow(<0, 2.0) is NaN on some GPUs
+        float wake = exp(-sq((r - front + 0.08) / 0.085)) * 0.22;
         float arcs = smoothstep(0.18, 0.68, n);
         vec3 color = mix(vec3(0.65, 1.25, 2.4), vec3(1.4, 0.35, 0.08), uAge);
         gl_FragColor = vec4(color * (rim + wake) * arcs * uIntensity, 1.0);
@@ -223,9 +227,8 @@ function easeOut(t, k = 3) { return 1 - Math.exp(-t * k); }
 
 const _dq = new THREE.Quaternion();
 const _dv = new THREE.Vector3();
+const _dc = new THREE.Vector3();
 const WRECK_LIFE = 40;       // big hull sections and the debris cloud linger
-/** Dark coast before the reactor lets go (non-reactor kill, no sim death spiral). */
-export const WRECK_DRIFT_S = 5.0;
 
 /**
  * Battle time at which the latest destruction sequence in `deathInfo`
@@ -234,17 +237,61 @@ export const WRECK_DRIFT_S = 5.0;
 export function latestWreckEnd(deathInfo) {
   let end = -Infinity;
   for (const d of Object.values(deathInfo || {})) {
-    const drift = d.reactorCause || d.wasDying ? 0 : WRECK_DRIFT_S;
-    end = Math.max(end, (d.time ?? 0) + drift + WRECK_LIFE);
+    end = Math.max(end, (d.time ?? 0) + wreckDriftS(d) + WRECK_LIFE);
   }
   return end;
 }
 const SHARD_FADE = [17, 22]; // small chunks fade out
 // Blasts born on a hull's skin: spall puffs are thrown along the surface normal
-const SURFACE_KINDS = new Set(['impact', 'pop', 'graze', 'pierce', 'kineticStrike', 'breach']);
+const SURFACE_KINDS = new Set(['impact', 'pop', 'graze', 'pierce', 'kineticStrike', 'breach', 'cookoff', 'exitJet']);
 
 /** Blast presets (exported for tests: kinds and their durations). */
 export function blastKinds() { return KINDS; }
+
+/**
+ * Radius (same unit as `scale`) a blast of this kind still visibly draws
+ * `age` seconds after it spawns: the fireball and its lobes, the shock
+ * shell and the ejecta ring, each counted only while it is above `floor`
+ * of its peak brightness (the same curves Blast.update animates - keep the
+ * two in step). Sparks and streaks are points, not counted. For anything
+ * that frames a blast (the director's pull-back).
+ */
+export function blastExtent(kind, scale, age, floor = 0.25) {
+  const K = KINDS[kind];
+  if (!K || !(age >= 0) || age > K.duration) return 0;
+  const s = scale;
+  let r = 0;
+  if (K.fireR > 0 && age < K.fireLife) {
+    const p = age / K.fireLife;
+    if (Math.min(1, age / 0.12) * Math.pow(1 - p, 0.6) >= floor) {
+      r = s * K.fireR * (0.25 + easeOut(age * K.fireGrow, 1.6)) * (1 + p * 0.6);
+    }
+    // lobes: the latest (delay 0.46) and largest (size 0.8) bound them all
+    const t = age - 0.08;
+    const lp = Math.min(1, Math.max(0, t) / (K.fireLife * 0.8));
+    if (K.lobes && t > 0 && Math.pow(1 - lp, 0.8) >= floor) {
+      const reach = s * K.fireR * easeOut(t, 1.2);
+      r = Math.max(r, reach * (0.65 + lp * 0.8) + reach * 0.8 * (1 + lp * 0.4));
+    }
+  }
+  if (K.shellR > 0 && age < K.shellLife) {
+    const p = age / K.shellLife;
+    if (Math.pow(1 - p, 3.5) >= floor) r = Math.max(r, s * K.shellR * (0.05 + easeOut(p * 3.2, 1.8)));
+  }
+  if (K.ringR > 0 && age < K.ringLife) {
+    const p = age / K.ringLife;
+    // (the ring's front sits at 0.77 of its quad, plus noise: ejectaMaterial)
+    if (Math.pow(1 - p, 2) >= floor) r = Math.max(r, 0.8 * s * K.ringR * (0.025 + easeOut(p, 2.1)));
+  }
+  return r;
+}
+
+/** Largest blastExtent between two ages (sampled every 0.25 s). */
+export function blastExtentOver(kind, scale, fromAge, toAge, floor = 0.25) {
+  let r = 0;
+  for (let a = Math.max(0, fromAge); a <= toAge + 1e-9; a += 0.25) r = Math.max(r, blastExtent(kind, scale, a, floor));
+  return r;
+}
 
 // ---------------------------------------------------------------------------
 // Blast
@@ -252,7 +299,8 @@ export function blastKinds() { return KINDS; }
 const KINDS = {
   // Fusion reactor breach - the ship-killer
   reactor: {
-    duration: 14, flash: 3.2, flashFade: 0.22, screenFlash: 0.65,
+    duration: 14, flash: 4.2, flashFade: 0.22, screenFlash: 0.7,
+    core: { size: 2.4, life: 0.17, level: 9 },
     fireR: 1.35, fireGrow: 1.2, fireLife: 6.5, fireTurb: 1.0,
     shellR: 18, shellLife: 2.4, shellW: 0.32,
     lobes: 6, ringR: 12, ringLife: 3.2,
@@ -289,12 +337,14 @@ const KINDS = {
   },
   // Coilgun slug on armour: spall cone, molten spray, glowing crater
   impact: {
-    duration: 3.0, flash: 2.6, flashFade: 0.12, screenFlash: 0.0,
+    duration: 3.0, flash: 3.8, flashFade: 0.085, screenFlash: 0.0, flashR: 1.5,
+    core: { size: 1.2, life: 0.1, level: 5.5 },
     fireR: 0, shellR: 0,
-    sparks: 380, sparkSpeed: [2, 12], sparkLife: [0.5, 2.6], sparkSize: 0.05,
-    streaks: 120, streakSpeed: [3, 10], streakLife: [0.4, 1.8], streakLen: 0.6, streakW: 0.03,
-    puffs: 3, puffSize: [0.5, 1.0], puffSpeed: [0.5, 1.5], puffLife: 2.2,
-    light: 5, lightLife: 0.5, crater: true, cone: 0.75
+    ringR: 2.3, ringLife: 0.42,
+    sparks: 440, sparkSpeed: [4, 22], sparkLife: [0.35, 1.9], sparkSize: 0.05,
+    streaks: 180, streakSpeed: [7, 24], streakLife: [0.25, 1.2], streakLen: 0.9, streakW: 0.022,
+    puffs: 2, puffSize: [0.4, 0.8], puffSpeed: [0.6, 1.6], puffLife: 1.6,
+    light: 6, lightLife: 0.35, crater: true, cone: 0.9
   },
   // Slug skidding off the plating far from the normal: a fan of sparks
   // along the surface and a shallow gouge, hardly any vapour
@@ -309,49 +359,82 @@ const KINDS = {
   // Slug through the armour: entry flash, a spall jet blown back out of
   // the hole and a brief fire inside it
   pierce: {
-    duration: 3.0, flash: 3.0, flashFade: 0.12, screenFlash: 0.0, flashR: 1.6,
-    fireR: 0.45, fireGrow: 2.0, fireLife: 1.0, fireTurb: 0.5,
+    duration: 3.0, flash: 4.2, flashFade: 0.1, screenFlash: 0.0, flashR: 1.7,
+    core: { size: 1.4, life: 0.12, level: 6 },
+    fireR: 0.5, fireGrow: 2.0, fireLife: 1.1, fireTurb: 0.5,
     shellR: 0,
-    sparks: 420, sparkSpeed: [2, 13], sparkLife: [0.5, 2.4], sparkSize: 0.05,
-    streaks: 150, streakSpeed: [3, 11], streakLife: [0.4, 1.6], streakLen: 0.6, streakW: 0.03,
+    ringR: 1.4, ringLife: 0.35,
+    sparks: 460, sparkSpeed: [5, 26], sparkLife: [0.4, 2.2], sparkSize: 0.05,
+    streaks: 220, streakSpeed: [9, 30], streakLife: [0.3, 1.4], streakLen: 1.3, streakW: 0.022,
     puffs: 3, puffSize: [0.4, 0.8], puffSpeed: [0.5, 1.4], puffLife: 2.2,
-    light: 5, lightLife: 0.5, crater: true, cone: 0.88
+    light: 6, lightLife: 0.45, crater: true, cone: 0.95
   },
   // Kinetic torpedo stopped by the armour. 250 kg at ~14 km/s dumps its
   // energy as a white flash, a plume of vaporised armour blown off the
   // plating and a spall cone - no fireball: there is no explosive.
   kineticStrike: {
-    duration: 3.2, flash: 3.4, flashFade: 0.12, screenFlash: 0.05, flashR: 1.9,
+    duration: 3.2, flash: 4.4, flashFade: 0.11, screenFlash: 0.06, flashR: 2.4,
+    core: { size: 2.0, life: 0.14, level: 7 },
     fireR: 0, shellR: 0,
-    sparks: 520, sparkSpeed: [1.5, 10], sparkLife: [0.4, 2.4], sparkSize: 0.05,
-    streaks: 190, streakSpeed: [2, 10], streakLife: [0.3, 1.6], streakLen: 0.6, streakW: 0.032,
-    puffs: 6, puffSize: [0.45, 1.0], puffSpeed: [0.6, 1.8], puffLife: 2.0,
-    light: 8, lightLife: 0.35, crater: true, cone: 0.78
+    ringR: 4.2, ringLife: 0.6,
+    sparks: 700, sparkSpeed: [3, 20], sparkLife: [0.4, 2.6], sparkSize: 0.05,
+    streaks: 300, streakSpeed: [5, 22], streakLife: [0.3, 1.7], streakLen: 1.0, streakW: 0.024,
+    puffs: 5, puffSize: [0.45, 1.0], puffSpeed: [0.6, 1.8], puffLife: 2.0,
+    light: 12, lightLife: 0.35, crater: true, cone: 0.85
   },
   // Kinetic torpedo through the armour: entry flash, a jet of spall and
   // vapour blown back out of the hole and a small fire inside it (the
   // venting that follows is DamageFX's)
   breach: {
-    duration: 4.0, flash: 3.4, flashFade: 0.13, screenFlash: 0.08, flashR: 2.2,
-    fireR: 0.6, fireGrow: 1.8, fireLife: 1.5, fireTurb: 0.6,
+    duration: 4.0, flash: 4.6, flashFade: 0.12, screenFlash: 0.09, flashR: 2.6,
+    core: { size: 2.2, life: 0.16, level: 7 },
+    fireR: 0.7, fireGrow: 1.8, fireLife: 1.6, fireTurb: 0.6,
     shellR: 0,
-    sparks: 520, sparkSpeed: [2, 12], sparkLife: [0.5, 2.6], sparkSize: 0.05,
-    streaks: 190, streakSpeed: [3, 12], streakLife: [0.4, 1.8], streakLen: 0.6, streakW: 0.035,
+    ringR: 3.2, ringLife: 0.55,
+    sparks: 700, sparkSpeed: [3, 20], sparkLife: [0.5, 2.8], sparkSize: 0.05,
+    streaks: 300, streakSpeed: [5, 22], streakLife: [0.4, 1.9], streakLen: 1.0, streakW: 0.024,
     puffs: 4, puffSize: [0.4, 0.9], puffSpeed: [0.5, 1.4], puffLife: 2.4,
-    light: 9, lightLife: 0.55, crater: true, cone: 0.88
+    light: 13, lightLife: 0.55, crater: true, cone: 0.93
+  },
+  // A penetrating torpedo coming out of the far side of a narrow hull: a
+  // tight, fast jet of plasma, spall and fire along its line of flight
+  exitJet: {
+    duration: 3.4, flash: 3.4, flashFade: 0.11, screenFlash: 0.0, flashR: 1.6,
+    core: { size: 1.3, life: 0.12, level: 6 },
+    fireR: 0.45, fireGrow: 2.4, fireLife: 0.9, fireTurb: 0.6,
+    shellR: 0,
+    sparks: 560, sparkSpeed: [6, 28], sparkLife: [0.4, 2.4], sparkSize: 0.05,
+    streaks: 280, streakSpeed: [10, 34], streakLife: [0.3, 1.5], streakLen: 1.4, streakW: 0.022,
+    puffs: 3, puffSize: [0.4, 0.9], puffSpeed: [0.8, 2.0], puffLife: 2.0,
+    light: 7, lightLife: 0.4, cone: 0.96
   },
   // Cook-off: munitions or a fuel cell going up on a chunk (death-spiral
   // secondaries, wrecked mounts). No shock shell: at this size the front
   // was a hard-edged glass bubble around the fireball, never a shock wave;
   // thin streaks like the reactor's, not white bars
   secondary: {
-    duration: 4.0, flash: 2.5, flashFade: 0.15, screenFlash: 0.0,
+    // (a small hard kernel instead of the default 5x glow disc, which
+    // saturated into a flat white bubble round the mount for its first frames)
+    duration: 4.0, flash: 2.2, flashFade: 0.13, screenFlash: 0.0, flashR: 2.0,
+    core: { size: 0.8, life: 0.09, level: 5 },
     fireR: 0.9, fireGrow: 1.0, fireLife: 2.2, fireTurb: 0.5,
     shellR: 0,
     sparks: 320, sparkSpeed: [2, 9], sparkLife: [0.6, 3], sparkSize: 0.05,
     streaks: 80, streakSpeed: [2, 8], streakLife: [0.5, 2], streakLen: 0.5, streakW: 0.02,
     puffs: 4, puffSize: [0.35, 0.7], puffSpeed: [0.3, 1.0], puffLife: 3.5,
     light: 6, lightLife: 0.7
+  },
+  // Magazine cook-off (recorded magazine_cookoff): stored rounds burning
+  // off through the flank - a hard flash, a jet of fire and burning debris
+  // thrown out along the hull normal, a longer-lived fireball than a mount
+  cookoff: {
+    duration: 5.5, flash: 3.2, flashFade: 0.16, screenFlash: 0.1, flashR: 2.4,
+    fireR: 1.0, fireGrow: 1.3, fireLife: 2.8, fireTurb: 0.8,
+    shellR: 0,
+    sparks: 760, sparkSpeed: [2, 14], sparkLife: [0.8, 3.6], sparkSize: 0.055,
+    streaks: 280, streakSpeed: [3, 13], streakLife: [0.6, 2.6], streakLen: 0.7, streakW: 0.024,
+    puffs: 8, puffSize: [0.5, 1.1], puffSpeed: [0.4, 1.5], puffLife: 4.5,
+    light: 11, lightLife: 0.9, cone: 0.6
   },
   // Hull fire pop on a dying ship
   pop: {
@@ -379,10 +462,28 @@ export class Blast {
    * @param {Object} o    { position (Vector3), scale, spawnTime, kind,
    *                        dir (Vector3, optional spall direction),
    *                        baseVel (Vector3, optional inherited velocity) }
+   *
+   * Draw scale (render/Scale.js). `scale` and the KINDS table are in kit
+   * units; the blast is drawn at k scene km per kit unit, re-read every
+   * update (never baked: in auto mode k follows the camera):
+   *   o.shipId   the hull it belongs to: k = ctx.kOf(shipId)
+   *   o.real     already at real size (the reactor blast): k = 1
+   *   neither    a free effect: k = ctx.kAt(its position)
+   * With o.anchor (Vector3: the hull centre at spawn time, real position)
+   * `position` is read as anchor + a kit-unit offset, and the offset is
+   * drawn at the hull's k too. o.kitVel (Vector3) is a velocity in kit
+   * units/s on top of baseVel (wreck chunks).
    */
   constructor(ctx, o) {
     this.ctx = ctx;
     this.kind = o.kind;
+    const hullK = o.shipId && ctx.kOf ? () => ctx.kOf(o.shipId) : null;
+    this.sizeK = o.real ? null : hullK || (ctx.kAt ? () => ctx.kAt(this.group.position) : null);
+    this.posK = o.anchor ? hullK : null;
+    this.anchor = o.anchor ? o.anchor.clone() : null;
+    this.offset = o.anchor ? o.position.clone().sub(o.anchor) : null;
+    this.kitVel = o.kitVel ? o.kitVel.clone() : null;
+    this.k = 1;
     const K = KINDS[o.kind] || KINDS.secondary;
     this.K = K;
     this.scale = o.scale;
@@ -398,6 +499,7 @@ export class Blast {
     this.baseVel = o.baseVel ? o.baseVel.clone() : new THREE.Vector3();
     this.origin = o.position.clone();
     ctx.scene.add(this.group);
+    this._place(0);
 
     const glow = getGlowTexture();
 
@@ -465,7 +567,9 @@ export class Blast {
       _ejectaGeom ||= new THREE.PlaneGeometry(2, 2);
       this.ejecta = new THREE.Mesh(_ejectaGeom, ejectaMaterial());
       this.ejecta.material.uniforms.uSeed.value = this.seed;
-      const axis = o.axis?.clone().normalize() || new THREE.Vector3(rnd() - 0.5, rnd() - 0.5, 1).normalize();
+      // on a hull the ring is the plasma front racing over the plating
+      const axis = o.axis?.clone().normalize() || (SURFACE_KINDS.has(o.kind) && o.dir ? o.dir.clone().normalize()
+        : new THREE.Vector3(rnd() - 0.5, rnd() - 0.5, 1).normalize());
       this.ejecta.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), axis);
       this.ejecta.renderOrder = 36;
       this.ejecta.frustumCulled = false;
@@ -519,8 +623,8 @@ export class Blast {
     const spawnAge = ctx.now ? ctx.now() - o.spawnTime : 0;
     this.fresh = spawnAge < 0.5;
     if (K.screenFlash > 0 && ctx.postfx && this.fresh) {
-      const d = ctx.camera.position.distanceTo(o.position);
-      const near = s * 40;
+      const d = ctx.camera.position.distanceTo(this.group.position);
+      const near = s * 40 * this.k;
       const amt = K.screenFlash * Math.min(1, (near / Math.max(d, 1)) ** 1.2);
       ctx.postfx.triggerFlash(amt);
     }
@@ -534,7 +638,7 @@ export class Blast {
     if (age < 0) { this.group.visible = false; return true; }
     if (age > this.duration) return false;
     this.group.visible = true;
-    this.group.position.copy(this.origin).addScaledVector(this.baseVel, age);
+    const k = this._place(age);
 
     // Flash: instant, then fast exponential decay. Up close the sprite
     // would fill the frame with one flat HDR disc, so its footprint is
@@ -543,7 +647,7 @@ export class Blast {
     const f = Math.exp(-age / K.flashFade);
     this.flash.material.opacity = Math.min(1, f * 1.2);
     const camPos = this.ctx.camera?.position;
-    const cap = camPos ? camPos.distanceTo(this.group.position) * 0.4 : Infinity;
+    const cap = camPos ? camPos.distanceTo(this.group.position) * 0.4 / k : Infinity;
     this.flash.scale.setScalar(Math.min(cap, this.flashScale * (1 + age * 1.5)));
 
     let fireRadius = 0;
@@ -616,19 +720,36 @@ export class Blast {
     this.puffs.setAge(age);
     // The additive spark/streak burst piles into a white blowout when the
     // camera sits a few blast radii away; fleet range is unchanged
-    const dim = camPos ? blastCloseDim(camPos.distanceTo(this.group.position), s) : 1;
+    const dim = camPos ? blastCloseDim(camPos.distanceTo(this.group.position), s * k) : 1;
     this.sparks.material.uniforms.uIntensity.value = 1.3 * dim;
     this.streaks.material.uniforms.uIntensity.value = 1.4 * dim;
     if (this.crater) {
       const p = Math.min(1, age / this.duration);
-      this.crater.material.opacity = Math.pow(1 - p, 1.8);
-      this.crater.material.color.setRGB(2.4 * (1 - p * 0.6), 0.9 * (1 - p * 0.8), 0.3 * (1 - p));
+      // white-hot for the first instants, orange, then a dull red ember
+      // (the crater decal carries the heat on for many seconds after)
+      const hot = Math.exp(-age / 0.16);
+      this.crater.material.opacity = Math.pow(1 - p, 1.5);
+      this.crater.material.color.setRGB(2.4 * (1 - p * 0.55) + 1.2 * hot, 0.9 * (1 - p * 0.85) + 2.2 * hot, 0.3 * (1 - p) + 2.1 * hot);
     }
     if (this.light) {
+      // inverse-square: the same light on a hull drawn k times the size
       this.light.position.copy(this.group.position);
-      this.light.intensity = K.light * s * s * Math.exp(-age / K.lightLife);
+      this.light.distance = s * 60 * k;
+      this.light.intensity = K.light * s * s * k * k * Math.exp(-age / K.lightLife);
     }
     return true;
+  }
+
+  /** Position and draw scale for `age` (see the constructor); returns k. */
+  _place(age) {
+    const pk = this.posK ? this.posK() : 1;
+    if (this.anchor) this.origin.copy(this.anchor).addScaledVector(this.offset, pk);
+    this.group.position.copy(this.origin).addScaledVector(this.baseVel, age);
+    if (this.kitVel) this.group.position.addScaledVector(this.kitVel, age * pk);
+    const k = this.sizeK ? this.sizeK() : 1;
+    this.k = k;
+    this.group.scale.setScalar(k);
+    return k;
   }
 
   dispose() {
@@ -656,7 +777,14 @@ export class ShipDestruction {
    * @param {Object} ctx  { scene, tryLight, freeLight, postfx, camera, spawnBlast(o) }
    * @param {Object} o    { shipGroup, shipId, position (Vector3 scene units),
    *                        driftVel (Vector3 scene units/s), driftDuration,
-   *                        scale, spawnTime }
+   *                        scale, blastScale, spawnTime }
+   *
+   * `scale` sizes everything that belongs to the hull (pops, chunk kicks,
+   * embers) in kit units; all of it is drawn at the hull's live draw scale
+   * (render/Scale.js: the wreck pieces sit in groups anchored on the
+   * wreck's real, coasting centre and scaled by k each frame). `blastScale`
+   * sizes the reactor blast itself, which is real (SceneManager fits it to
+   * the engine's blast radius) and is not scaled with the hull.
    */
   constructor(ctx, o) {
     this.ctx = ctx;
@@ -666,6 +794,7 @@ export class ShipDestruction {
     this.driftVel = o.driftVel.clone();
     this.driftDuration = o.driftDuration;
     this.scale = o.scale;
+    this.blastScale = o.blastScale ?? o.scale;
     this.spawnTime = o.spawnTime;
     this.meltdown = !!o.meltdown;   // overheat: detonates as the 'meltdown' blast
     this.totalDuration = this.driftDuration + WRECK_LIFE;
@@ -732,19 +861,21 @@ export class ShipDestruction {
     const rnd = this.rnd;
     // Detonation point: the reactor, on the drifted, tumbled hulk
     const origin = this.basePos.clone().addScaledVector(this.driftVel, this.driftDuration);
-    let reactorWorld = origin.clone();
+    // the reactor, as a kit-unit offset from the hull centre (world axes)
+    const reactorOff = new THREE.Vector3();
     if (g) {
       this.tumble.setFromAxisAngle(this.tumbleAxis, this.tumbleRate * this.driftDuration);
       g.quaternion.copy(this.initialOrientation).multiply(this.tumble);
-      const reactor = g.userData.reactorPos || new THREE.Vector3();
-      reactorWorld = reactor.clone().applyQuaternion(g.quaternion).add(origin);
+      reactorOff.copy(g.userData.reactorPos || reactorOff).applyQuaternion(g.quaternion);
     }
-    this.blastPos = reactorWorld;
-    this.blastOrigin = reactorWorld.clone();
+    this.wreckOrigin = origin;
+    this.reactorOff = reactorOff;
+    this.blastPos = origin.clone().addScaledVector(reactorOff, this._k());
     for (const v of this.vents) { v.torch.group.visible = false; }
 
     this.ctx.spawnBlast({
-      position: reactorWorld, scale: this.scale, spawnTime: now, kind: this.meltdown ? 'meltdown' : 'reactor',
+      position: origin.clone().add(reactorOff), anchor: origin, shipId: this.shipId, real: true,
+      scale: this.blastScale, spawnTime: now, kind: this.meltdown ? 'meltdown' : 'reactor',
       baseVel: this.driftVel,
       axis: new THREE.Vector3(0, 0, 1).applyQuaternion(g?.quaternion || new THREE.Quaternion())
     });
@@ -764,11 +895,12 @@ export class ShipDestruction {
       if (broken) {
         const axis = new THREE.Vector3(0, 0, 1).applyQuaternion(g.quaternion);
         for (const sec of broken.sections) {
-          const worldCenter = sec.center.clone().applyQuaternion(g.quaternion).add(origin);
+          // (pieces live in chunkGroup: kit units from the wreck centre)
+          const worldCenter = sec.center.clone().applyQuaternion(g.quaternion);
           const away = sec.center.z >= reactorLocal.z ? 1 : -1;
           const kick = this.scale * (0.04 + 0.05 * rnd());
           const lateral = new THREE.Vector3(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).normalize().multiplyScalar(kick * 0.7);
-          const vel = this.driftVel.clone().addScaledVector(axis, away * kick * (sec.cutHi > 1e5 ? 1.4 : 0.6)).add(lateral);
+          const vel = new THREE.Vector3().addScaledVector(axis, away * kick * (sec.cutHi > 1e5 ? 1.4 : 0.6)).add(lateral);
           const spinAxis = new THREE.Vector3(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).normalize();
           sec.mesh.position.copy(worldCenter);
           sec.mesh.quaternion.copy(g.quaternion);
@@ -791,13 +923,13 @@ export class ShipDestruction {
         this._buildCloud(fx, g, origin, reactorLocal, now, rnd);
       }
       for (const c of chunks) {
-        const worldCenter = c.center.clone().applyQuaternion(g.quaternion).add(origin);
+        const worldCenter = c.center.clone().applyQuaternion(g.quaternion);
         const radial = c.center.clone().sub(reactorLocal);
         const dist = Math.max(radial.length(), L * 0.05);
         radial.normalize().applyQuaternion(g.quaternion);
         // closer to the reactor = harder kick; smaller pieces fly faster
         const kick = this.scale * (0.12 + 0.5 / (1 + dist / (L * 0.25))) * (0.7 + rnd() * 0.6) / Math.max(0.6, c.size / (L * 0.08));
-        const vel = this.driftVel.clone()
+        const vel = new THREE.Vector3()
           .addScaledVector(radial, kick)
           .add(new THREE.Vector3(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).multiplyScalar(kick * 0.35));
         const spinAxis = new THREE.Vector3(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).normalize();
@@ -838,13 +970,13 @@ export class ShipDestruction {
       // born inside the hull, clustered around the reactor
       const local = new THREE.Vector3((rnd() - 0.5) * W * 0.8, (rnd() - 0.5) * W * 0.8,
         reactorLocal.z + (rnd() - 0.35) * L * (0.25 + 0.6 * rnd()));
-      p.copy(local).applyQuaternion(g.quaternion).add(origin);
+      p.copy(local).applyQuaternion(g.quaternion);   // kit units from the wreck centre
       dir.copy(local).sub(reactorLocal);
       if (dir.lengthSq() < 1e-6) dir.set(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5);
       dir.normalize().add(new THREE.Vector3(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).multiplyScalar(0.8)).normalize()
         .applyQuaternion(g.quaternion);
       const speed = this.scale * (0.05 + 0.6 * Math.pow(rnd(), 2.2));
-      v.copy(this.driftVel).addScaledVector(dir, speed);
+      v.copy(dir).multiplyScalar(speed);
       axis.set(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).normalize();
       const size = L * (0.005 + 0.022 * Math.pow(rnd(), 2.5));
       const flat = rnd() < 0.45;
@@ -861,8 +993,6 @@ export class ShipDestruction {
     });
     this.emberGroup = new THREE.Group();
     this.emberGroup.add(this.embers.object);
-    this.emberOrigin = origin.clone().add(reactorLocal.clone().applyQuaternion(g.quaternion));
-    this.emberGroup.position.copy(this.emberOrigin);
     this.ctx.scene.add(this.emberGroup);
   }
 
@@ -901,17 +1031,30 @@ export class ShipDestruction {
         if (age - pop.t < KINDS[pop.kind || 'pop'].duration && g) {
           const orientation = this.initialOrientation.clone().multiply(
             this.tumble.setFromAxisAngle(this.tumbleAxis, this.tumbleRate * pop.t));
-          const world = pop.local.clone().applyQuaternion(orientation).add(this.basePos).addScaledVector(this.driftVel, pop.t);
+          const anchor = this.basePos.clone().addScaledVector(this.driftVel, pop.t);
+          const world = pop.local.clone().applyQuaternion(orientation).add(anchor);
           const dir = pop.local.clone().setZ(0).normalize().applyQuaternion(orientation);
           const kind = pop.kind || 'pop';
-          this.ctx.spawnBlast({ position: world, scale: this.scale * (kind === 'secondary' ? 0.22 : 0.35), spawnTime: this.spawnTime + pop.t, kind, dir, baseVel: this.driftVel });
+          this.ctx.spawnBlast({ position: world, anchor, shipId: this.shipId, scale: this.scale * (kind === 'secondary' ? 0.22 : 0.35), spawnTime: this.spawnTime + pop.t, kind, dir, baseVel: this.driftVel });
         }
       }
       return true;
     }
 
     if (!this.ignited) this._ignite();
-    this.blastPos.copy(this.blastOrigin).addScaledVector(this.driftVel, blastAge);
+    // The wreck's real centre coasts on; everything that was part of the
+    // hull is drawn round it at the hull's draw scale for this frame
+    const k = this._k();
+    const centre = _dc.copy(this.wreckOrigin).addScaledVector(this.driftVel, blastAge);
+    this.blastPos.copy(centre).addScaledVector(this.reactorOff, k);
+    if (this.chunkGroup) {
+      this.chunkGroup.position.copy(centre);
+      this.chunkGroup.scale.setScalar(k);
+    }
+    if (this.cloud) {
+      this.cloud.mesh.position.copy(centre);
+      this.cloud.mesh.scale.setScalar(k);
+    }
 
     // Chunks: ballistic, tumbling, cooling from orange-hot to dark
     const fade = blastAge > SHARD_FADE[0] ? Math.max(0, 1 - (blastAge - SHARD_FADE[0]) / (SHARD_FADE[1] - SHARD_FADE[0])) : 1;
@@ -952,7 +1095,8 @@ export class ShipDestruction {
       }
     }
     if (this.embers) {
-      this.emberGroup.position.copy(this.emberOrigin).addScaledVector(this.driftVel, blastAge);
+      this.emberGroup.position.copy(this.blastPos);
+      this.emberGroup.scale.setScalar(k);
       this.embers.setAge(blastAge);
     }
     for (const s of this.secondaries) {
@@ -960,16 +1104,24 @@ export class ShipDestruction {
       s.fired = true;
       const kind = s.kind || 'secondary';
       if (blastAge - s.t < KINDS[kind].duration) {
+        // on its chunk: a kit-unit offset from the wreck centre at that time
+        const anchor = this.wreckOrigin.clone().addScaledVector(this.driftVel, s.t);
         const pos = s.chunk.p0.clone().addScaledVector(s.chunk.vel, s.t);
         if (s.offset) {
           q.setFromAxisAngle(s.chunk.spinAxis, s.chunk.spinRate * s.t);
           _dv.copy(s.offset).applyQuaternion(q).applyQuaternion(s.chunk.q0);
           pos.add(_dv);
         }
-        this.ctx.spawnBlast({ position: pos, scale: s.scale, spawnTime: this.spawnTime + this.driftDuration + s.t, kind, baseVel: s.chunk.vel });
+        this.ctx.spawnBlast({ position: pos.add(anchor), anchor, shipId: this.shipId, scale: s.scale,
+          spawnTime: this.spawnTime + this.driftDuration + s.t, kind, baseVel: this.driftVel, kitVel: s.chunk.vel });
       }
     }
     return true;
+  }
+
+  /** Draw scale of the hull this wreck was (scene km per kit unit, live). */
+  _k() {
+    return this.shipGroup?.userData.k ?? this.ctx.kOf?.(this.shipId) ?? 1;
   }
 
   /** World position of the wreck centre (camera framing, beams). */

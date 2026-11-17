@@ -133,8 +133,22 @@ def _current_accel(ship: Any) -> Vector3D:
 current_accel = _current_accel
 
 
+def _can_burn(ships: Sequence[Any]) -> List[Any]:
+    """The hulls that can still produce thrust (battle damage can leave a
+    drive dead): an adrift hull never burns, so it must not set when - or
+    how fast - the others turn and light up."""
+    return [s for s in ships if ship_accel_ms2(s) > 0]
+
+
 def _turn_time(sim: Any, ships: Sequence[Any], direction: Vector3D, engines_on: bool) -> float:
-    """Longest bang-bang turn (from rest) any of ``ships`` needs to face ``direction``."""
+    """Longest bang-bang turn (from rest) any of ``ships`` needs to face ``direction``.
+
+    With ``engines_on`` (a thrust-vectored turn) adrift hulls are left out:
+    they cannot vector a torch they do not have; their attitude turn is the
+    RCS one (``engines_on=False``), which still counts every hull.
+    """
+    if engines_on:
+        ships = _can_burn(ships)
     worst = 0.0
     for ship in ships:
         angle = ship.forward.angle_to(direction)
@@ -153,7 +167,9 @@ def _burn_start(sim: Any, ships: Sequence[Any], direction: Vector3D) -> float:
     from ..simulation import HEADING_BURN_CONE_DEG
     cone = math.radians(HEADING_BURN_CONE_DEG)
     worst = 0.0
-    for ship in ships:
+    # An adrift hull (dead drive) never lights up: waiting for it to come
+    # nose-on would hold everyone else's burn for its whole RCS turn.
+    for ship in _can_burn(ships):
         angle = ship.forward.angle_to(direction)
         if angle <= cone:
             continue
@@ -537,7 +553,11 @@ def analyze_range_control(
 
     own_pos = _mean([s.position for s in own])
     own_vel = _mean([s.velocity for s in own])
-    accel = min(ship_accel_ms2(s) for s in own)
+    # A hull with a dead drive (battle damage) is left behind, exactly as
+    # formation_throttles leaves it out of the match: the fleet picture is
+    # the slowest hull that can still burn. All adrift -> 0 (nothing to fly).
+    burning = [a for a in (ship_accel_ms2(s) for s in own) if a > 0]
+    accel = min(burning) if burning else 0.0
 
     infos: List[GroupRangeInfo] = []
     for members in group_enemies(own_pos, enemies):
@@ -1053,7 +1073,8 @@ def formation_line(live: Sequence[Any], mcp: bool = False) -> str:
     if len(live) <= 1:
         return ""
     thr = formation_throttles(live, 1.0)
-    slowest = min(live, key=ship_accel_ms2)
+    # Same rule as formation_throttles: a hull with no thrust does not set the pace.
+    slowest = min([s for s in live if ship_accel_ms2(s) > 0] or live, key=ship_accel_ms2)
     parts = ", ".join(f"{getattr(s, 'name', None) or s.ship_id} {thr[s.ship_id] * 100:.0f}%"
                       for s in live)
     return (

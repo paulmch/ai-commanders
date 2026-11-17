@@ -20,7 +20,9 @@ from src.llm.battle_recorder import BattleRecorder
 from src.llm.battle_runner import BattleConfig, LLMBattleRunner, load_fleet_data
 from src.llm.battle_ticker import BattleTicker
 from src.llm.captain import LLMCaptainConfig
-from src.llm.client import CaptainClient
+from src.llm.anthropic_client import ANTHROPIC_MODELS, ANTHROPIC_PRICES_AS_OF, EFFORT_LEVELS
+from src.llm.mock_anthropic import mock_anthropic_transport
+from src.llm.providers import create_llm_client, provider_for_model
 from src.llm.fleet_config import AdmiralConfig, BattleFleetConfig
 from src.llm import fleet_draft
 from src.llm.fleet_draft import auto_draft, draft_summary_dict, draft_to_fleet_definition, run_admiral_draft
@@ -180,10 +182,33 @@ class LiveDraftRunner(LLMBattleRunner):
         return result
 
 
+def anthropic_pricing(model, args):
+    """Price-table entry for a bare Anthropic id (served by the Anthropic API,
+    not in the OpenRouter catalog); unknown ids and efforts raise."""
+    provider_for_model(model)   # unknown claude-* ids raise here
+    if args.reasoning not in EFFORT_LEVELS:
+        raise ValueError(f'Anthropic models take --reasoning {"/".join(EFFORT_LEVELS)}: {model}')
+    # Every model in the table accepts tools and image input.
+    return {**{k: v for k, v in ANTHROPIC_MODELS[model].items() if k != 'long'},
+            'unit': 'USD per million tokens', 'as_of': ANTHROPIC_PRICES_AS_OF, 'provider': 'anthropic'}
+
+
+def record_stop(runner, error):
+    """A stopped battle (spend ceiling, failed draft) is a recorded outcome:
+    result_reason, a battle_stopped event and the partial replay on disk."""
+    if runner and runner.recorder:
+        runner.recorder.recording.result_reason = error
+        runner.recorder.record(runner.simulation.current_time, 'battle_stopped', reason=error)
+        runner.save_progress()
+
+
 def validate_catalog(catalog, args):
     """Refuse models the free catalog does not show fit for this battle; return pricing."""
     pricing = {}
     for model in (args.alpha_model, args.beta_model):
+        if provider_for_model(model) == 'anthropic':
+            pricing[model] = anthropic_pricing(model, args)
+            continue
         entry = catalog.get(model)
         if not entry or 'tools' not in entry.get('supported_parameters', []):
             raise ValueError(f'Model unavailable or lacks tools: {model}')
@@ -199,19 +224,34 @@ def validate_catalog(catalog, args):
 def make_client(args):
     if args.offline:
         return None, None
-    # Free metadata call: availability, tools, reasoning efforts, modalities, prices.
-    response = httpx.get('https://openrouter.ai/api/v1/models', timeout=30)
-    response.raise_for_status()
-    pricing = validate_catalog({m['id']: m for m in response.json()['data']}, args)
+    models = (args.alpha_model, args.beta_model)
+    catalog = {}
+    if any(provider_for_model(m) == 'openrouter' for m in models):
+        # Free metadata call: availability, tools, reasoning efforts, modalities, prices.
+        response = httpx.get('https://openrouter.ai/api/v1/models', timeout=30)
+        response.raise_for_status()
+        catalog = {m['id']: m for m in response.json()['data']}
+    pricing = validate_catalog(catalog, args)
     budget = RequestBudget(args.spend_limit, pricing)
-    client = CaptainClient(model=args.alpha_model, temperature=None, max_tokens=8192,
-                           reasoning_effort=args.reasoning, timeout=180,
-                           session_id=f'ai-commanders-{args.name}',
-                           api_key='mock-no-network' if args.mock_llm else None)
+    anthropic_options = None
+    if args.mock_llm:
+        import anthropic
+        anthropic_options = {'api_key': 'mock-no-network', 'http_client': anthropic.DefaultHttpxClient(
+            transport=mock_anthropic_transport(args.points, args.max_ships, args.seed))}
+    # A bare Anthropic id is served by the Anthropic API, a vendor/model id by
+    # OpenRouter; the sides may differ. Fails here without ANTHROPIC_API_KEY.
+    client = create_llm_client(
+        args.alpha_model, models, temperature=None, max_tokens=8192,
+        reasoning_effort=args.reasoning, timeout=180, session_id=f'ai-commanders-{args.name}',
+        anthropic_options=anthropic_options,
+        openrouter_options={'api_key': 'mock-no-network'} if args.mock_llm else None)
     if args.mock_llm:
         # Every completion is answered in-process; nothing leaves the machine.
-        client._client = httpx.Client(transport=mock_transport(
-            pricing, args.points, args.max_ships, args.seed))
+        routed = getattr(client, 'clients', None)
+        for sub in (routed.values() if routed is not None else [client]):
+            if getattr(sub, 'provider', None) == 'openrouter':
+                sub._client = httpx.Client(transport=mock_transport(
+                    pricing, args.points, args.max_ships, args.seed))
     client.budget = budget
     return client, budget
 
@@ -289,6 +329,13 @@ async def run(args):
             'retries': client.stats.retries if client else 0,
             'truncated': client.stats.truncated if client else 0,
             'malformed_arguments': client.stats.malformed_arguments if client else 0,
+            'refusals': client.stats.refusals if client else 0,
+            'refusals_by_side': dict(client.stats.refusals_by_side) if client else {},
+            'computed_cost_usd': round(client.stats.cost_usd, 6) if client else 0,
+            'cache': client.stats.cache_summary() if client else None,
+            'prompt_tokens': client.stats.prompt_tokens if client else 0,
+            'cached_tokens': client.stats.cached_tokens if client else 0,
+            'cache_write_tokens': client.stats.cache_write_tokens if client else 0,
             'winner': result.winner if result else None,
             'result_reason': result.reason if result else None,
             'recording': str(output),
@@ -364,10 +411,7 @@ async def run(args):
         state.error = f'{type(exc).__name__}: {exc}'
         state.stage = 'Battle stopped'
         print(state.error, flush=True)
-        if runner and runner.recorder:
-            runner.recorder.recording.result_reason = state.error
-            runner.recorder.record(runner.simulation.current_time, 'battle_stopped', reason=state.error)
-            runner.save_progress()
+        record_stop(runner, state.error)
     finally:
         finished = True
         state.active = False

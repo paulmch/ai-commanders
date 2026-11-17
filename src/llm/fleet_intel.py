@@ -320,14 +320,18 @@ def pd_range_m(fleet_data: Optional[Dict[str, Any]]) -> float:
     return float(spec.get("range_km", 250.0)) * 1000.0
 
 
-def pd_cover(sim: Any, target: Any, radius_m: float) -> int:
-    """Operational PD turrets of the target's side within ``radius_m`` of it."""
+def pd_cover(sim: Any, target: Any, radius_m: float, threat_from: Any = None) -> int:
+    """Operational PD turrets of the target's side within ``radius_m`` of it.
+    With ``threat_from`` (where the rounds come from) only turrets that BEAR
+    on that point are counted (weapon arcs, src/weapon_arcs.py)."""
+    from .arcs_status import pd_turrets_bearing
     total = 0
     for ship in getattr(sim, "ships", {}).values():
         if ship.faction != target.faction or not is_live(ship):
             continue
         if (ship.position - target.position).magnitude <= radius_m:
-            total += pd_turrets(ship)[0]
+            total += (pd_turrets_bearing(sim, ship, threat_from)[0]
+                      if threat_from is not None else pd_turrets(ship)[0])
     return total
 
 
@@ -465,7 +469,8 @@ def torpedo_solution(
     sol.energy_gj = (0.5 * pen * run["impact_mps"] ** 2 / 1e9
                      + float(getattr(specs, "warhead_yield_gj", 0.0) or 0.0))
     if sim is not None:
-        sol.pd_cover = pd_cover(sim, target, envelope)
+        # turrets that bear on a round coming from the launch point (weapon arcs)
+        sol.pd_cover = pd_cover(sim, target, envelope, threat_from=launch_pos)
         sol.soak = sol.pd_cover // turrets_to_blind(fleet_data, sol.cross_kps)
     receding = sol.closing_kps < -RECEDING_KPS
     if sol.energy_gj < NO_ENERGY_GJ:

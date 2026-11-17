@@ -2524,7 +2524,7 @@ body.decisions-open .live-delib {
 .result-banner {
   position: fixed; top: 26%; left: 50%; transform: translateX(-50%);
   z-index: 58; display: grid; justify-items: center; gap: 6px;
-  min-width: 360px; max-width: min(560px, calc(100vw - 32px)); padding: 16px 28px 14px;
+  min-width: 360px; max-width: min(680px, calc(100vw - 32px)); padding: 16px 28px 14px;
   background: rgba(6, 12, 20, 0.94); border: 1px solid var(--border-accent);
   box-shadow: 0 0 40px rgba(0, 0, 0, 0.6); text-align: center;
 }
@@ -2783,3 +2783,101 @@ body.decisions-open .live-delib {
 .timeline-marker:hover, .timeline-marker:focus-visible { filter: brightness(1.6); outline: none; }
 @media (max-width: 1400px) { .tracks-label { display: none; } }
 @media (max-width: 1200px) { .speed-label { display: none; } .controls-container { gap: 10px; } }
+
+/* ==================== Pass 5: fittings, fighting power, blast notices ==================== */
+/* Fitting pips (src/FittingsHud.js): one per gun mount (bar), torpedo tube (wedge), PD turret (dot) and the
+   drive (chevron). State colours are faction-neutral on purpose: beta's orange sits too close to amber. */
+.fit-strip { display: inline-flex; align-items: center; gap: 1px; flex: 0 0 auto; height: 10px; }
+.fit-strip[hidden] { display: none; }
+.fit { display: block; flex: 0 0 auto; background: #cfe6f2; opacity: 0.92; }
+.fit-gun { width: 3px; height: 9px; }
+.fit-tube { width: 5px; height: 8px; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.fit-pd { width: 4px; height: 4px; border-radius: 50%; }
+.fit-drive { width: 6px; height: 8px; clip-path: polygon(0 0, 40% 0, 100% 50%, 40% 100%, 0 100%, 60% 50%); }
+.fit-gun + .fit-tube, .fit-gun + .fit-pd, .fit-tube + .fit-pd, .fit + .fit-drive { margin-left: 3px; }
+.fit[data-s="damaged"] { background: #ffd23e; opacity: 1; }
+.fit[data-s="destroyed"] { background: #ff2d55; opacity: 0.8; }
+.fit[data-s="empty"] { background: #5d7887; opacity: 0.9; }
+.registry-fit { align-self: center; }
+.ship-list li.dying .registry-fit { opacity: 0.5; }
+.ship-list li.destroyed .registry-fit { opacity: 0.28; }
+.ship-list li.crippled .registry-status { color: #ffd23e; font-weight: 700; letter-spacing: 0.04em; }
+.ship-list li.spent .registry-status { color: var(--text-secondary); letter-spacing: 0.04em; }
+#shipRegistry:not(.compact) .registry-fit { align-self: flex-start; margin-top: 5px; }
+
+/* Scoreboard: ships still armed, working guns / tubes */
+.score-armed { color: #ffd23e; font-size: 10px; letter-spacing: 0.06em; }
+.score-arms { color: var(--text-secondary); font-size: 10px; letter-spacing: 0.04em; }
+.score-arms[data-level="hurt"] { color: #ffd23e; }
+.score-arms[data-level="out"] { color: #ff2d55; }
+.score-pip[data-state="unarmed"] { background: transparent; box-shadow: inset 0 0 0 1px #ffd23e; }
+.score-pip[data-state="unarmed"] b { opacity: 0.3; }
+@media (max-width: 1500px) { .score-arms { display: none; } }
+/* Fighting power outranks spend and points for room in the strip */
+@media (max-width: 1760px) {
+  .score-side:has(.score-arms:not(:empty)) .score-spend, .score-side:has(.score-arms:not(:empty)) .score-points { display: none; }
+}
+
+/* Kill feed: blast line on a kill, amber notice toasts between kills */
+.kill-blast { color: #ffb067; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kill-toast.notice { padding: 3px 12px 4px; border-color: rgba(255, 210, 62, 0.4); background: rgba(12, 11, 8, 0.88); }
+.kill-toast.notice.alpha { border-left-color: var(--alpha-primary); }
+.kill-toast.notice.beta { border-left-color: var(--beta-primary); }
+.kill-toast.notice:hover, .kill-toast.notice:focus-visible { border-color: #ffd23e; }
+.kill-toast.notice .kill-icon, .kill-toast.notice .kill-status { color: #ffd23e; }
+.kill-toast.notice .kill-status { margin-left: auto; padding-left: 10px; font-weight: 700; letter-spacing: 0.08em; }
+.kill-toast.notice .kill-victim { font-size: 13px; }
+.kill-toast.notice .kill-bottom { display: block; }
+.kill-toast.notice-cookoff .kill-icon, .kill-toast.notice-cookoff .kill-status { color: #ff7a2e; }
+.kill-toast.notice-blast .kill-icon, .kill-toast.notice-blast .kill-status { color: #ffb067; }
+
+/* Timeline: disarmed / adrift diamonds, cook-off dots, a ring on kills whose blast caught something */
+.timeline-marker.marker-notice { top: 4px; width: 8px; height: 8px; transform: translateX(-4px); z-index: 2; }
+.timeline-marker.marker-notice::before {
+  content: ''; position: absolute; inset: 0; background: #ffd23e;
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+}
+.timeline-marker.marker-notice.flag-cookoff::before { inset: 1px; clip-path: none; border-radius: 50%; background: #ff7a2e; box-shadow: 0 0 5px #ff7a2e; }
+.timeline-marker.marker-kill.flag-blast::after {
+  content: ''; position: absolute; left: 0; top: 0; width: 12px; height: 12px;
+  border: 1px solid rgba(255, 176, 103, 0.85); border-radius: 50%;
+}
+
+/* Result banner: the battle ended because a side could no longer deal damage */
+.result-cause { font: 700 12px var(--font-display); letter-spacing: 0.14em; color: #ffd23e; }
+.result-cause[hidden] { display: none; }
+
+/* Ship telemetry: FITTINGS block */
+.fit-card { display: grid; gap: 5px; margin: 12px 0; }
+.fit-card.hidden { display: none; }
+.fit-head { display: flex; align-items: center; justify-content: space-between; }
+.fit-head .section-label { margin: 0; }
+.fit-flag { padding: 1px 7px; font: 700 10px var(--font-mono); letter-spacing: 0.12em; color: #0a0e14; background: #ffd23e; }
+.fit-flag[hidden] { display: none; }
+.fit-flag[data-flag="no-ammo"] { background: #8aa3b1; }
+.fit-row { display: grid; grid-template-columns: 48px 1fr auto; align-items: center; gap: 8px; font: 10px var(--font-mono); }
+.fit-row[hidden] { display: none; }
+.fit-label { color: var(--text-secondary); letter-spacing: 0.1em; }
+.fit-value { color: var(--text-primary); letter-spacing: 0.04em; }
+.fit-value[data-level="hurt"] { color: #ffd23e; }
+.fit-value[data-level="out"] { color: #ff2d55; }
+.fit-strip-lg { gap: 3px; height: 14px; }
+.fit-strip-lg .fit-gun { width: 5px; height: 13px; }
+.fit-strip-lg .fit-tube { width: 9px; height: 12px; }
+.fit-strip-lg .fit-pd { width: 7px; height: 7px; }
+.fit-strip-lg .fit-drive { width: 10px; height: 12px; }
+
+/* Round 2: tally lines stay whole; crew radiation and drive-plume wash */
+.result-side { white-space: nowrap; }
+.result-tally { gap: 4px 18px; }
+.ship-list li.impaired .registry-status { color: #c9a0ff; letter-spacing: 0.04em; }
+.kill-toast.notice-crew { border-color: rgba(201, 160, 255, 0.5); }
+.kill-toast.notice-crew .kill-icon, .kill-toast.notice-crew .kill-status { color: #c9a0ff; }
+.kill-toast.notice-plume .kill-icon, .kill-toast.notice-plume .kill-status,
+.kill-toast.notice-plume-update .kill-icon, .kill-toast.notice-plume-update .kill-status { color: #9fe8ff; }
+.timeline-marker.marker-notice.flag-plume::before { background: #9fe8ff; clip-path: polygon(0 20%, 100% 50%, 0 80%); }
+.timeline-marker.marker-notice.flag-crew::before { inset: 1px; clip-path: none; border-radius: 50%; background: #c9a0ff; box-shadow: 0 0 5px #c9a0ff; }
+.fit-crew { display: grid; grid-template-columns: 48px 1fr; align-items: center; gap: 8px; font: 10px var(--font-mono); }
+.fit-crew[hidden] { display: none; }
+.fit-crew .fit-value { text-align: right; }
+.fit-flag[data-flag="impaired"], .fit-flag[data-flag="crew-out"] { background: #c9a0ff; }

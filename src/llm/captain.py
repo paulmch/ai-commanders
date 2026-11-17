@@ -13,6 +13,7 @@ from typing import List, Dict, Any, Optional, Tuple
 
 from .client import DEFAULT_MODEL, CaptainClient, LLMCallError, ToolCall
 from .tools import get_captain_tools, get_captain_tools_for_ship, get_weapon_groups_for_ship, PERSONALITY_SELECTION_TOOLS, RESPOND_TO_ORDERS_TOOL, radiator_command_from_args
+from . import arcs_status
 from .prompts import (
     build_captain_prompt,
     build_captain_messages,
@@ -46,7 +47,11 @@ MAX_FOLLOWUP_ROUNDS = 2
 # finish_reason values that mean the reply was cut off or broke, not that the
 # model chose to say nothing (CP-09: 'length' at max_tokens spent entirely on
 # reasoning, 'error' mid-generation - both used to be recorded as "none").
-FAILED_FINISH_REASONS = frozenset({"error", "length"})
+FAILED_FINISH_REASONS = frozenset({"error", "length", "refusal"})
+# A refused call (Anthropic stop_reason "refusal") is not re-asked: the turn is
+# lost and recorded as such - re-running it, on this or another model, would
+# put a different decision in this model's column.
+NO_RETRY_FINISH_REASONS = frozenset({"refusal"})
 # Torpedo fire solutions per decision: the nearest contacts get a flown
 # solution (each ~5-50 ms of shadow engine), the rest are out of reach anyway.
 MAX_TORPEDO_SOLUTIONS = 6
@@ -131,6 +136,24 @@ def _bare_name(name: str) -> str:
     return parts[1] if len(parts) == 2 and parts[0].isupper() and len(parts[0]) <= 4 else str(name)
 
 
+def _crew_state(ship):
+    """drive_plume.crew_state (works for both import styles)."""
+    try:
+        from ..drive_plume import crew_state
+    except ImportError:  # imported as a top-level module
+        from drive_plume import crew_state
+    return crew_state(ship)
+
+
+def _plume_status_lines(simulation, ship):
+    """drive_plume.plume_status_lines (works for both import styles)."""
+    try:
+        from ..drive_plume import plume_status_lines
+    except ImportError:  # imported as a top-level module
+        from drive_plume import plume_status_lines
+    return plume_status_lines(simulation, ship)
+
+
 @dataclass
 class LLMCaptainConfig:
     """Configuration for an LLM captain."""
@@ -199,6 +222,7 @@ class LLMCaptain:
         self.received_messages: List[CaptainMessage] = []
         self.message_history: List[Dict[str, Any]] = []  # Full conversation log
         self.has_surrendered = False
+        self.surrender_reason: Optional[str] = None
         self.has_proposed_draw = False
         self.has_retracted_draw = False
 
@@ -487,6 +511,11 @@ class LLMCaptain:
         # Build status dicts
         self._solution_cache = {}
         ship_status = self._build_ship_status(ship)
+        # Drive plume wash (src/drive_plume.py): whose exhaust this ship sits
+        # in, which friendlies its own exhaust reaches.
+        plume = _plume_status_lines(simulation, ship) + arcs_status.arcs_status_lines(simulation, ship)
+        if plume:
+            ship_status["plume_wash"] = plume
         self._add_launch_status(ship_status, ship, simulation)
         tactical_status = self._build_tactical_status(ship, enemy, simulation)
 
@@ -558,6 +587,8 @@ class LLMCaptain:
 
         # Call LLM with tools (use captain's configured model)
         tool_calls, failure = self._call_model(messages, tools)
+        if failure is not None and getattr(self, "last_finish", None) in NO_RETRY_FINISH_REASONS:
+            return self._lose_turn(ship, simulation, failure)
         if failure is not None:
             # One retry, with a nudge: a truncated reply usually spent its
             # whole budget reasoning, an errored one may simply recover.
@@ -616,6 +647,7 @@ class LLMCaptain:
         A reply that ends with finish_reason 'error' or 'length' and carries no
         tool call is a FAILURE, not a decision to do nothing.
         """
+        self.last_finish = None   # never carry a refusal over to a later call error
         try:
             # Per-captain temperature was parsed from fleet config and stored, but
             # never sent - every captain silently sampled at the shared client's
@@ -632,6 +664,11 @@ class LLMCaptain:
         calls = list(calls or [])
         finish = getattr(self.client, "last_finish_reason", None)
         finish = finish() if callable(finish) else None
+        self.last_finish = finish if isinstance(finish, str) else None
+        if finish == "refusal":
+            # Never act on a refused turn, even on a tool call it carried.
+            print(f"[CAPTAIN {self.config.name}] the model refused this turn - no orders")
+            return [], "the model refused this turn (stop_reason=refusal)"
         if not calls and isinstance(finish, str) and finish in FAILED_FINISH_REASONS:
             what = ("cut off at the output limit" if finish == "length"
                     else "the provider returned an error")
@@ -1363,7 +1400,7 @@ class LLMCaptain:
         if not ship_id or not events:
             return {}
         rank = {"in flight": 0, "retargeted": 1, "fuel out": 2, "blinded": 3,
-                "destroyed by PD": 4, "hit": 5}
+                "destroyed by PD": 4, "destroyed by blast": 4, "hit": 5}
         out: Dict[str, Dict[str, Any]] = {}
         for ev in events:
             kind = getattr(getattr(ev, "event_type", None), "name", "")
@@ -1379,6 +1416,8 @@ class LLMCaptain:
             if rec is None:
                 continue
             outcome = {"TORPEDO_IMPACT": "hit", "PD_TORPEDO_DESTROYED": "destroyed by PD",
+                       # a reactor blast caught it (src/battle_damage.py)
+                       "TORPEDO_INTERCEPTED": "destroyed by blast",
                        "PD_TORPEDO_DISABLED": "blinded", "TORPEDO_FUEL_EXHAUSTED": "fuel out",
                        "TORPEDO_RETARGETED": "retargeted"}.get(kind)
             if outcome is None:
@@ -1501,8 +1540,8 @@ class LLMCaptain:
                     tally = []
                     if hits:
                         tally.append(f"{len(hits)} hit {sum(r['gj'] for r in hits):.0f} GJ")
-                    for outcome in ("destroyed by PD", "blinded", "fuel out", "retargeted",
-                                    "in flight"):
+                    for outcome in ("destroyed by PD", "destroyed by blast", "blinded",
+                                    "fuel out", "retargeted", "in flight"):
                         n = sum(1 for r in rounds if r["outcome"] == outcome)
                         if n:
                             tally.append(f"{n} {outcome}")
@@ -1982,6 +2021,15 @@ class LLMCaptain:
                 1 for pd in pd_list if getattr(pd, 'is_operational', True)
             )
 
+        # Damaged-but-working fittings (battle damage: slower cycle, PD at risk)
+        try:
+            from ..battle_damage import damaged_fitting_lines
+        except ImportError:  # imported as a top-level module
+            from battle_damage import damaged_fitting_lines
+        damaged = damaged_fitting_lines(ship)
+        if damaged:
+            status["damaged_fittings"] = damaged
+
         # Module damage status
         module_status = {}
         if ship.module_layout:
@@ -2175,9 +2223,11 @@ class LLMCaptain:
             solution = simulation.gun_firing_solution(ship, enemy, ws)
             probability = solution.hit_probability if solution.can_fire else 0.0
             in_arc = ws.is_target_in_arc(ship.forward, rel_pos.normalized())
-            shots = ws.shots_in_window(window_s) if in_arc and solution.can_fire else 0
+            # Weapon arcs: a mount masked by the ship's own hull fires nothing
+            bears = arcs_status.mount_bears(simulation, ship, slot, enemy)
+            shots = ws.shots_in_window(window_s) if in_arc and bears and solution.can_fire else 0
             forecasts.append({
-                "weapon_slot": slot, "weapon_name": ws.weapon.name,
+                "weapon_slot": slot, "weapon_name": ws.weapon.name, "bears": bears,
                 "hit_probability": probability, "shots": shots,
                 "window_s": window_s, "expected_hits": probability * shots,
                 # Expected damage per shot (P(hit) x round energy): the number
@@ -2186,6 +2236,9 @@ class LLMCaptain:
                     getattr(ws.weapon, "kinetic_energy_gj", 0.0) or 0.0),
             })
         info["weapon_hit_forecasts"] = forecasts
+        gun_arcs = arcs_status.gun_arcs_text(simulation, ship, enemy)
+        if gun_arcs:
+            info["gun_arcs"] = gun_arcs
 
         # World-frame unit vector to him (paste-able into set_heading), his
         # live point defense and magazine, and his remaining gun output.
@@ -2219,6 +2272,12 @@ class LLMCaptain:
 
         # Enemy condition
         info["hull_percent"] = enemy.hull_integrity
+        # Crew state as seen from outside (plume radiation, src/drive_plume.py):
+        # reported like hull and PD - an incapacitated enemy neither maneuvers
+        # nor fires and must not read as an intact threat.
+        enemy_crew = _crew_state(enemy)
+        if enemy_crew != "fit":
+            info["crew_state"] = enemy_crew
 
         # Armor status
         if enemy.armor:
@@ -2545,11 +2604,15 @@ class LLMCaptain:
                     "blinded": False,
                     "pd_turrets_needed": _pd_triage(
                         tf, t['distance_m'] / 1000, closing_ms),
-                    "own_pd_turrets": len(own_pd),
+                    # Turrets that BEAR on this round (weapon arcs: a turret
+                    # masked by its own hull is no defence against it).
+                    "own_pd_turrets": arcs_status.pd_turrets_bearing(
+                        simulation, ship, tf.torpedo.position)[0],
                     # Allied turrets whose envelope the round's path to us
                     # crosses: their dwell stacks with ours (CP-13).
                     "allied_pd_turrets": self._allied_pd_on_path(
-                        ship, tf.torpedo.position, all_friendlies, pd_range_km),
+                        ship, tf.torpedo.position, all_friendlies, pd_range_km,
+                        simulation),
                 })
 
         # Blinded wrecks: only those on a COLLISION course with this ship, from
@@ -2648,8 +2711,9 @@ class LLMCaptain:
 
     @staticmethod
     def _allied_pd_on_path(ship: Any, torp_pos: Any, friendlies: List[Any],
-                           pd_range_km: Optional[float]) -> int:
-        """Allied live PD turrets within PD range of the segment torpedo -> ship."""
+                           pd_range_km: Optional[float], simulation: Any = None) -> int:
+        """Allied live PD turrets within PD range of the segment torpedo -> ship
+        (with a simulation: those that bear on the torpedo, src/weapon_arcs.py)."""
         if pd_range_km is None:
             return 0
         a, b = torp_pos, ship.position
@@ -2659,8 +2723,11 @@ class LLMCaptain:
         for f in friendlies:
             if f.ship_id == ship.ship_id:
                 continue
-            n = sum(1 for pd in (getattr(f, 'point_defense', None) or [])
-                    if getattr(pd, 'is_operational', True))
+            if simulation is not None:
+                n = arcs_status.pd_turrets_bearing(simulation, f, torp_pos)[0]
+            else:
+                n = sum(1 for pd in (getattr(f, 'point_defense', None) or [])
+                        if getattr(pd, 'is_operational', True))
             if not n:
                 continue
             t = 0.0 if L2 <= 0 else max(0.0, min(1.0, (f.position - a).dot(ab) / L2))
@@ -3176,6 +3243,8 @@ class LLMCaptain:
 
         elif name == "surrender":
             self.has_surrendered = True
+            reason = (args or {}).get("reason") if isinstance(args, dict) else None
+            self.surrender_reason = str(reason) if reason else None
             return None
 
         elif name == "propose_draw":

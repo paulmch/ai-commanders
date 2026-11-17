@@ -1,0 +1,352 @@
+"""
+The draft-balance instrument (scripts/draft_tournament.py) and the price
+derivation it tunes (src/llm/fleet_draft.py). No battle is fought here: the
+tournament's planning, caching and scoring are pure functions of rosters.
+"""
+
+import argparse
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+from src.llm import fleet_draft
+from src.llm.fleet_draft import (
+    AUTO_DRAFT_DOCTRINES, DEFAULT_MAX_SHIPS, SHIP_POINT_COSTS, auto_draft,
+    build_ship_point_costs, ship_point_cost,
+)
+
+ROOT = Path(__file__).parent.parent
+
+
+@pytest.fixture(scope="module")
+def tourney():
+    sys.path.insert(0, str(ROOT / "scripts"))
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "draft_tournament", ROOT / "scripts" / "draft_tournament.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        mod.calib.load_engine(ROOT)
+    finally:
+        sys.path.remove(str(ROOT / "scripts"))
+    return mod
+
+
+@pytest.fixture(scope="module")
+def fleet_data():
+    return json.loads((ROOT / "data" / "fleet_ships.json").read_text())
+
+
+def _args(tourney, **kw):
+    base = dict(archetypes=list(tourney.ARCHETYPES), rows=None, budget=[150],
+                seeds=1, seed_start=1, max_ships=8, distance=500.0,
+                time_limit=600.0, max_checkpoints=20, battle_timeout=60)
+    base.update(kw)
+    return argparse.Namespace(**base)
+
+
+# ---------------------------------------------------------------------------
+# auto_draft: named doctrines
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("seed", range(8))
+def test_named_doctrine_is_the_seeded_doctrine(seed):
+    """auto_draft(doctrine=name) drafts exactly what the seed that picks that
+    doctrine drafts - naming a doctrine must not change the fleet."""
+    import random
+    names = list(AUTO_DRAFT_DOCTRINES)
+    name = names[random.Random(seed).randrange(len(names))]
+    seeded = auto_draft("alpha", 150, DEFAULT_MAX_SHIPS, seed=seed)
+    named = auto_draft("alpha", 150, DEFAULT_MAX_SHIPS, seed=0, doctrine=name)
+    assert [s.ship_type for s in seeded.ships] == [s.ship_type for s in named.ships]
+    assert seeded.points_spent == named.points_spent
+
+
+def test_unknown_doctrine_is_rejected():
+    with pytest.raises(ValueError, match="unknown auto-draft doctrine"):
+        auto_draft("alpha", 150, doctrine="deathball")
+
+
+@pytest.mark.parametrize("budget", [100, 150, 200, 250])
+@pytest.mark.parametrize("doctrine", list(AUTO_DRAFT_DOCTRINES))
+def test_auto_draft_doctrines_fill_the_budget(doctrine, budget):
+    """Every doctrine fields a legal fleet that leaves no hull of its own
+    unbought: what is left is less than its cheapest hull, or the cap binds."""
+    draft = auto_draft("alpha", budget, DEFAULT_MAX_SHIPS, doctrine=doctrine)
+    types = [s.ship_type for s in draft.ships]
+    assert types and len(types) <= DEFAULT_MAX_SHIPS
+    assert draft.points_spent == sum(SHIP_POINT_COSTS[t] for t in types) <= budget
+    left = budget - draft.points_spent
+    cheapest = min(SHIP_POINT_COSTS[h] for h in AUTO_DRAFT_DOCTRINES[doctrine])
+    assert left < cheapest or len(types) == DEFAULT_MAX_SHIPS, (types, left)
+    # ... and never less than 85% of the budget
+    assert draft.points_spent >= 0.85 * budget, (types, draft.points_spent)
+
+
+# ---------------------------------------------------------------------------
+# Tournament archetypes, plan and cache
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("budget", [150, 200])
+def test_archetypes_are_legal_and_spend_the_budget(tourney, budget):
+    costs = tourney.price_table({})
+    assert costs == SHIP_POINT_COSTS
+    rosters = {a: tourney.draft_roster(a, budget, costs, 8) for a in tourney.ARCHETYPES}
+    for name, roster in rosters.items():
+        spent = sum(costs[h] for h in roster)
+        assert 0 < len(roster) <= 8, name
+        assert 0.85 * budget <= spent <= budget, (name, roster, spent)
+    # Seven DIFFERENT fleet concepts
+    assert len({tuple(sorted(r)) for r in rosters.values()}) == len(rosters)
+
+
+def test_price_overrides_move_rosters_and_are_restored(tourney):
+    before = dict(SHIP_POINT_COSTS)
+    dear = tourney.price_table({"TORPEDO_POINTS_PER_GJ": 2 * fleet_draft.TORPEDO_POINTS_PER_GJ})
+    assert dear["cruiser_torpedo"] > before["cruiser_torpedo"]
+    assert dear["destroyer"] == before["destroyer"]
+    assert build_ship_point_costs() == before == SHIP_POINT_COSTS
+    cheap_roster = tourney.draft_roster("torpedo", 150, before, 8)
+    dear_roster = tourney.draft_roster("torpedo", 150, dear, 8)
+    assert sum(dear[h] for h in dear_roster) <= 150
+    assert cheap_roster != dear_roster
+    assert SHIP_POINT_COSTS == before          # auto_draft's table was restored
+
+
+def test_every_pairing_is_fought_in_both_side_assignments(tourney):
+    args = _args(tourney, seeds=2)
+    cells, tasks, fleets = tourney.plan(args, "src", tourney.price_table({}))
+    n = len(tourney.ARCHETYPES)
+    assert len(cells) == n * (n - 1) // 2 * 2 * 2
+    by_pair = {}
+    for c in cells:
+        by_pair.setdefault((c["a"], c["b"], c["seed"]), []).append(c)
+    for (a, b, _seed), pair in by_pair.items():
+        assert sorted(c["a_side"] for c in pair) == ["alpha", "beta"]
+        first, second = (tasks[c["key"]] for c in sorted(pair, key=lambda c: c["a_side"]))
+        assert first["alpha_roster"] == second["beta_roster"] == fleets[150][a]
+        assert first["beta_roster"] == second["alpha_roster"] == fleets[150][b]
+
+
+def test_cache_key_follows_rosters_and_their_hull_prices(tourney):
+    """A reprice that leaves two rosters and their hulls' prices alone must
+    reuse their battles; one that changes a roster (or reprices a hull in
+    it: the time-limit verdict reads prices) must not."""
+    args = _args(tourney, archetypes=["gunline", "battleline", "torpedo"])
+    base = tourney.price_table({})
+    dear = tourney.price_table({"TORPEDO_POINTS_PER_GJ": 2 * fleet_draft.TORPEDO_POINTS_PER_GJ})
+    key = {}
+    for label, costs in (("base", base), ("dear", dear)):
+        cells, _tasks, _fleets = tourney.plan(args, "src", costs)
+        key[label] = {(c["a"], c["b"], c["a_side"]): c["key"] for c in cells}
+    assert key["base"][("gunline", "battleline", "alpha")] == key["dear"][("gunline", "battleline", "alpha")]
+    assert key["base"][("gunline", "torpedo", "alpha")] != key["dear"][("gunline", "torpedo", "alpha")]
+    other_engine, _, _ = tourney.plan(args, "other-src", base)
+    assert {c["key"] for c in other_engine}.isdisjoint(key["base"].values())
+
+
+def test_source_id_ignores_the_price_module(tourney, tmp_path):
+    (tmp_path / "src" / "llm").mkdir(parents=True)
+    (tmp_path / "data").mkdir()
+    (tmp_path / "src" / "simulation.py").write_text("x = 1\n")
+    (tmp_path / "src" / "llm" / "fleet_draft.py").write_text("PRICE = 1\n")
+    (tmp_path / "data" / "fleet_ships.json").write_text("{}")
+    first = tourney.source_id(tmp_path)
+    (tmp_path / "src" / "llm" / "fleet_draft.py").write_text("PRICE = 2\n")
+    assert tourney.source_id(tmp_path) == first
+    (tmp_path / "src" / "simulation.py").write_text("x = 2\n")
+    assert tourney.source_id(tmp_path) != first
+
+
+def test_score_matrix_is_antisymmetric_and_side_averaged(tourney, capsys):
+    args = _args(tourney, archetypes=["gunline", "torpedo"])
+    costs = tourney.price_table({})
+    cells, tasks, fleets = tourney.plan(args, "src", costs)
+    results = {}
+    for c in cells:
+        # alpha always wins: a pure side bias must average out to 50%
+        results[c["key"]] = dict(tasks[c["key"]], winner="alpha", reason="Alpha tactical advantage (1 vs 0)",
+                                 alpha_lost=[], beta_lost=list(tasks[c["key"]]["beta_roster"][:1]),
+                                 events={})
+    report = tourney.summarize(cells, results, fleets, costs, args)
+    capsys.readouterr()
+    b = report["budgets"][150]
+    assert b["score"]["gunline"]["torpedo"] == b["score"]["torpedo"]["gunline"] == 0.5
+    assert b["field"] == {"gunline": 0.5, "torpedo": 0.5}
+    assert b["side_wins"] == {"alpha": 2}
+    assert b["margin"]["gunline"]["torpedo"] == pytest.approx(-b["margin"]["torpedo"]["gunline"])
+
+
+# ---------------------------------------------------------------------------
+# The 2026-11-15 torpedo reprice (docs/draft_mode.md, pass-5 tournament)
+# ---------------------------------------------------------------------------
+
+TORPEDO_HULLS = ("corvette", "cruiser_torpedo")
+# Points of gun hulls one LAUNCHED round destroyed in the round-1 tournament
+# (massed salvos of 3+ boats, 150 and 200 pts): 2.2 when rounds are left over,
+# 6.1 for three boats against a battle line, 3-4 typically.
+MEASURED_POINTS_DESTROYED_PER_ROUND = (2.2, 6.1)
+
+
+def _rounds(hull, fleet_data):
+    default = fleet_data["weapon_types"]["torpedo_launcher"].get("magazine", 16)
+    return sum(w.get("magazine", default) for w in fleet_data["ships"][hull]["weapons"]
+               if w.get("type") == "torpedo_launcher")
+
+
+def test_every_hull_is_draftable_at_the_default_budget():
+    """The hard constraint of round 2: no price above DEFAULT_POINT_BUDGET
+    (a 119-pt torpedo cruiser could not be bought in a default draft)."""
+    from src.llm.fleet_draft import DEFAULT_POINT_BUDGET, validate_selection
+    assert DEFAULT_POINT_BUDGET == 100
+    for hull, cost in SHIP_POINT_COSTS.items():
+        assert cost <= DEFAULT_POINT_BUDGET, hull
+        picked, spent, error = validate_selection(
+            [{"ship_type": hull, "count": 1}], DEFAULT_POINT_BUDGET, DEFAULT_MAX_SHIPS)
+        assert error is None and picked == [hull] and spent == cost
+
+
+def test_torpedo_dial_is_the_dearest_that_keeps_the_torpedo_cruiser_draftable(tourney):
+    """The magazine is still under-priced against what it destroys, so the
+    dial sits at the top of what the default-budget constraint allows: one
+    more point of torpedo cruiser would break it."""
+    from src.llm.fleet_draft import DEFAULT_POINT_BUDGET
+    assert SHIP_POINT_COSTS["cruiser_torpedo"] == DEFAULT_POINT_BUDGET
+    dial = fleet_draft.TORPEDO_POINTS_PER_GJ
+    dearer = tourney.price_table({"TORPEDO_POINTS_PER_GJ": dial * 1.02})
+    assert dearer["cruiser_torpedo"] > DEFAULT_POINT_BUDGET
+    # ... and a small data edit the other way moves neither price
+    cheaper = tourney.price_table({"TORPEDO_POINTS_PER_GJ": dial * 0.997})
+    assert cheaper["cruiser_torpedo"] == SHIP_POINT_COSTS["cruiser_torpedo"]
+    assert cheaper["corvette"] == dearer["corvette"] == SHIP_POINT_COSTS["corvette"]
+
+
+def test_a_corvette_costs_about_what_its_magazine_destroys(fleet_data):
+    lo, hi = MEASURED_POINTS_DESTROYED_PER_ROUND
+    per_round = SHIP_POINT_COSTS["corvette"] / _rounds("corvette", fleet_data)
+    assert lo <= per_round <= (lo + hi) / 2, f"{per_round:.2f} pts per stowed round"
+    # The torpedo cruiser is capped by the default budget instead, below the range
+    assert SHIP_POINT_COSTS["cruiser_torpedo"] / _rounds("cruiser_torpedo", fleet_data) < lo
+
+
+def test_torpedo_dial_moves_only_torpedo_hulls(tourney, fleet_data):
+    old = tourney.price_table({"TORPEDO_POINTS_PER_GJ": 0.040})
+    for hull, cost in SHIP_POINT_COSTS.items():
+        if hull in TORPEDO_HULLS:
+            assert cost > old[hull]
+        else:
+            assert cost == old[hull], hull
+    assert old["corvette"] == 18 and old["cruiser_torpedo"] == 65   # the pre-pass-5 table
+
+
+def test_torpedo_doctrine_opens_with_its_torpedo_cruiser():
+    for budget in (100, 150, 200):
+        types = [s.ship_type for s in auto_draft("alpha", budget, 8, doctrine="torpedo").ships]
+        assert types[0] == "cruiser_torpedo", (budget, types)
+
+
+# ---------------------------------------------------------------------------
+# Pass-5 round 2, mechanic 3: spent rounds do not keep a fleet "in the fight"
+# ---------------------------------------------------------------------------
+
+def _spent_sim():
+    from tests.test_fixes_pass5_hunt import _inject_torpedo, _torpedo_sim
+    data = json.loads((ROOT / "data" / "fleet_ships.json").read_text())
+    return _torpedo_sim(data), _inject_torpedo
+
+
+def _left_battle(sim):
+    from src.simulation import SimulationEventType
+    return [e for e in sim.events if e.event_type == SimulationEventType.PROJECTILE_MISS
+            and e.data.get("reason") == "left_battle"]
+
+
+def test_a_blinded_round_opening_past_the_cull_range_is_culled_as_a_miss():
+    from src.physics import Vector3D
+    sim, inject = _spent_sim()
+    far = sim.SPENT_TORPEDO_CULL_RANGE_M + 50_000.0
+    inject(sim, Vector3D(far, 0, 0), Vector3D(14_000.0, 0, 0), disabled=True)
+    sim.step()
+    assert not sim.torpedoes
+    assert len(_left_battle(sim)) == 1
+
+
+def test_a_blinded_round_still_inbound_or_still_close_is_kept():
+    from src.physics import Vector3D
+    sim, inject = _spent_sim()
+    far = sim.SPENT_TORPEDO_CULL_RANGE_M + 50_000.0
+    # inbound from far away: still closing on the target
+    inject(sim, Vector3D(far, 0, 0), Vector3D(-14_000.0, 0, 0), disabled=True)
+    sim.step()
+    assert len(sim.torpedoes) == 1 and not _left_battle(sim)
+    sim, inject = _spent_sim()
+    # opening, but only 100 km past the nearest hull
+    inject(sim, Vector3D(100_000.0, 0, 0), Vector3D(14_000.0, 0, 0), disabled=True)
+    sim.step()
+    assert len(sim.torpedoes) == 1 and not _left_battle(sim)
+
+
+def test_a_live_round_is_never_culled_as_spent():
+    from src.physics import Vector3D
+    sim, inject = _spent_sim()
+    far = sim.SPENT_TORPEDO_CULL_RANGE_M + 50_000.0
+    flight = inject(sim, Vector3D(far, 0, 0), Vector3D(14_000.0, 0, 0), disabled=False)
+    assert not sim._torpedo_is_spent(flight)     # fuel aboard, seeker alive, target alive
+    flight.torpedo.fuel_exhausted = True
+    assert sim._torpedo_is_spent(flight)         # dry tanks, opening, out of reach
+
+
+def test_a_fleet_whose_only_rounds_are_spent_can_no_longer_deal_damage():
+    """The combat-ineffective rule's "a round of its own still in flight" now
+    means a round that can still reach something."""
+    from src.battle_damage import side_can_deal_damage
+    from src.physics import Vector3D
+    sim, inject = _spent_sim()
+    atk = sim.get_ship("atk")
+    for ws in atk.weapons.values():          # guns dry: only the round is left
+        ws.ammo_remaining = 0
+    far = sim.SPENT_TORPEDO_CULL_RANGE_M + 50_000.0
+    inject(sim, Vector3D(far, 0, 0), Vector3D(14_000.0, 0, 0), disabled=True)
+    assert side_can_deal_damage(sim, [atk])
+    sim.step()
+    assert not side_can_deal_damage(sim, [atk])
+
+
+# ---------------------------------------------------------------------------
+# Pass-5 round 2, mechanic 4: the time-limit verdict values hulls at draft price
+# ---------------------------------------------------------------------------
+
+def test_time_limit_verdict_values_a_hull_at_its_draft_price():
+    from src.llm.battle_runner import SHIP_CLASS_VALUES, ship_class_value
+    for hull, cost in SHIP_POINT_COSTS.items():
+        assert ship_class_value(hull) == cost
+    # the old table's distortion is gone: value per draft point is 1 for all
+    assert ship_class_value("frigate") / SHIP_POINT_COSTS["frigate"] == \
+        ship_class_value("dreadnought") / SHIP_POINT_COSTS["dreadnought"]
+    # documented fallback for hulls the price table does not know
+    assert ship_class_value("battleship_refit") == SHIP_CLASS_VALUES["battleship"]
+    assert ship_class_value("unknown hull") == SHIP_CLASS_VALUES["destroyer"]
+    assert ship_class_value(None) == SHIP_POINT_COSTS["destroyer"]
+
+
+def test_verdict_follows_a_reprice(tourney):
+    """The class value is read at verdict time, so a repriced hull is scored
+    at its new price (and the tournament keys such battles separately)."""
+    from src.llm.battle_runner import ship_class_value
+    saved = dict(SHIP_POINT_COSTS)
+    try:
+        SHIP_POINT_COSTS["corvette"] = saved["corvette"] + 5
+        assert ship_class_value("corvette") == saved["corvette"] + 5
+    finally:
+        SHIP_POINT_COSTS.clear()
+        SHIP_POINT_COSTS.update(saved)
+    args = _args(tourney, archetypes=["gunline", "battleline"])
+    dear = dict(saved, destroyer=saved["destroyer"] + 1)     # a hull both field
+    same = {c["key"] for c in tourney.plan(args, "src", saved)[0]}
+    assert {c["key"] for c in tourney.plan(args, "src", dict(saved))[0]} == same
+    if tourney.draft_roster("gunline", 150, dear, 8) == tourney.draft_roster("gunline", 150, saved, 8) \
+            and tourney.draft_roster("battleline", 150, dear, 8) == tourney.draft_roster("battleline", 150, saved, 8):
+        assert {c["key"] for c in tourney.plan(args, "src", dear)[0]}.isdisjoint(same)

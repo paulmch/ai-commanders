@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.llm.fleet_config import BattleFleetConfig
 from src.llm.battle_runner import LLMBattleRunner, BattleConfig
 from src.llm.captain import LLMCaptainConfig
-from src.llm.client import CaptainClient
+from src.llm.providers import create_llm_client, fleet_config_models
 
 
 def start_mcp_server(faction: str, http_url: str = None):
@@ -78,6 +78,7 @@ async def run_mcp_battle(
     draft: bool = False,
     draft_budget: int = None,
     draft_max_ships: int = None,
+    plain_json: bool = False,
 ):
     """Run a battle with MCP configuration using HTTP API."""
     print(f"Loading config from {config_path}...")
@@ -103,6 +104,7 @@ async def run_mcp_battle(
     battle_config = BattleConfig.from_fleet_config(
         fleet_config,
         verbose=verbose,
+        compress_recording=not plain_json,
     )
 
     # Create client for non-MCP fleets (if any)
@@ -114,8 +116,9 @@ async def run_mcp_battle(
         for fleet in (fleet_config.alpha_fleet, fleet_config.beta_fleet)
         if not (fleet.mcp and fleet.mcp.enabled)
     )
-    client = CaptainClient(
-        model="anthropic/claude-sonnet-5",
+    llm_ids = fleet_config_models(fleet_config)
+    client = create_llm_client(
+        llm_ids[0] if llm_ids else "anthropic/claude-sonnet-5", llm_ids,
         session_id=f"ai-commanders-mcp-{uuid.uuid4().hex[:16]}",
     ) if needs_llm else None
 
@@ -247,6 +250,13 @@ def main():
         help="Draft max hulls override (default: config value or 8)",
     )
 
+    parser.add_argument(
+        "--plain-json",
+        action="store_true",
+        help="Write the recording as plain indented JSON (battle_*.json) "
+             "instead of the default gzip (battle_*.json.gz)",
+    )
+
     args = parser.parse_args()
 
     if args.start_server:
@@ -262,6 +272,7 @@ def main():
             draft=args.draft,
             draft_budget=args.draft_budget,
             draft_max_ships=args.draft_max_ships,
+            plain_json=args.plain_json,
         ))
     else:
         parser.print_help()

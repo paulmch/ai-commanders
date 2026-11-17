@@ -28,7 +28,8 @@ const VERT = /* glsl */`
   void main() {
     vec4 mv = modelViewMatrix * vec4(position, 1.0);
     gl_Position = projectionMatrix * mv;
-    float px = aSize / (max(-mv.z, 1e-4) * uPixelWorld);
+    // aSize is in hull-kit units: the lamp scales with the hull's draw scale
+    float px = aSize * length(modelMatrix[0].xyz) / (max(-mv.z, 1e-6) * uPixelWorld);
     float size = clamp(px, uMinPx, uMaxPx);
     // Below the minimum footprint keep the lamp as a faint twinkle
     // instead of a full-strength dot: energy falls with apparent size.

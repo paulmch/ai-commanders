@@ -1,6 +1,8 @@
 // Recording-only weapon math. Units here are metres / seconds; the renderer
 // converts to kilometres. No clock, random generator, or frame history.
 import { buildTorpedoThrusters } from './TorpedoRcs.js';
+import { lerpUp } from '../HullFrame.js';
+import { REAL_LENGTH_M } from '../TrackDisplay.js';
 
 export const ION_LIFE = 1;
 export const MISS_LIFE = 6;
@@ -29,6 +31,154 @@ export const DUD_P = 0.5;
 export function dudSkims(m, radiusKm) {
   if (Number.isFinite(m.closestKm)) return m.closestKm < radiusKm;
   return (m.probability ?? 0) >= DUD_P;
+}
+
+// ---------------------------------------------------------------------------
+// Drawn flight paths against the drawn hull
+//
+// The engine does not decide a gun hit on the hull's surface. A round that
+// passes within HIT_TOLERANCE_M = 500 m of the hull (src/firecontrol.py:
+// the dispersion envelope) rolls against its conversion probability; a
+// success is a `hit` whose recorded impact_position is where the round
+// entered that 500 m gate, a failure is a `miss` even when the recorded
+// straight line runs through the hull. Recorded positions are therefore
+// true, but neither the hit point nor the miss line respects the hull:
+// measured on a 524-round gun fight, hit points lie a median 55 m (up to
+// about 1.1 km) from the target's axis and 4 in 10 dispersion misses cross
+// the real hull. With hulls drawn at real size that would show rounds
+// stopping in empty space and passing through ships, so the DRAWN path
+// converges on what happened: over its last TERMINAL_BEND_S seconds a hit
+// eases onto its crater on the drawn hull, and a miss whose line would
+// cross the real hull eases aside to clear it. A slug covers 6-11 km a
+// second, so the bend is under a degree or two. Pure functions of the
+// recording (and, for hits, of the hull's current draw scale).
+// ---------------------------------------------------------------------------
+/** Seconds of flight over which a drawn path converges on its drawn end. */
+export const TERMINAL_BEND_S = 3;
+/** Engine hull radius per hull length (src/geometry.py RADIUS_TO_LENGTH_RATIO). */
+export const HULL_RADIUS_PER_LENGTH = 1 / 8;
+/** A missing slug is drawn at least this many hull radii (+ MISS_CLEAR_M) from the axis. */
+export const MISS_CLEAR_RADII = 2.2;
+/** A missing torpedo skims the plating (its dud sparks sit there): radii from the axis. */
+export const SKIM_CLEAR_RADII = 1.15;
+export const MISS_CLEAR_M = 4;
+/**
+ * In the auto scale mode a distant hull is drawn larger than life, and the
+ * clearance grows with it (Projectiles sets `pass.m`, the hull's
+ * magnification) - up to this many metres: beyond it the push would start
+ * to show as a swerve, and the hull is an icon a few dozen pixels long.
+ * (So on the cinematic scale, ~60x, misses still cross the oversize hulls.)
+ */
+export const MISS_CLEAR_MAX_M = 600;
+
+const smooth01 = (u) => (u <= 0 ? 0 : u >= 1 ? 1 : u * u * (3 - 2 * u));
+
+/**
+ * Closest pass of round `tr` to ship track `ship` between t0 and t1, both
+ * tracks linear between samples (the round ballistic past its last one):
+ * {t, rel: [3] round - ship (m), dir: [3] unit relative travel, axis: [3]
+ * ship nose at t}, or null.
+ */
+export function closestPass(tr, ship, t0, t1) {
+  if (!(t1 > t0) || !tr.samples.length || !ship.samples.length) return null;
+  const times = [t0, t1];
+  for (const smp of ship.samples) if (smp.t > t0 && smp.t < t1) times.push(smp.t);
+  for (const smp of tr.samples) if (smp.t > t0 && smp.t < t1) times.push(smp.t);
+  times.sort((a, b) => a - b);
+  const A = makeSample(), B = makeSample();
+  const rel = (t, out) => {
+    sampleTrack(tr, t, A); sampleTrack(ship, t, B);
+    out[0] = A.pos[0] - B.pos[0]; out[1] = A.pos[1] - B.pos[1]; out[2] = A.pos[2] - B.pos[2];
+    return out;
+  };
+  let best = null;
+  let pa = rel(times[0], [0, 0, 0]);
+  for (let i = 1; i < times.length; i++) {
+    const ta = times[i - 1], tb = times[i];
+    const pb = rel(tb, [0, 0, 0]);
+    if (tb - ta > 1e-9) {
+      const d = [pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]];
+      const dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+      const u = dd > 0 ? Math.max(0, Math.min(1, -(pa[0] * d[0] + pa[1] * d[1] + pa[2] * d[2]) / dd)) : 0;
+      const r = [pa[0] + d[0] * u, pa[1] + d[1] * u, pa[2] + d[2] * u];
+      const dist = Math.hypot(r[0], r[1], r[2]);
+      if (!best || dist < best.dist) {
+        const dl = Math.sqrt(dd);
+        best = { t: ta + (tb - ta) * u, dist, rel: r, dir: dl > 0 ? [d[0] / dl, d[1] / dl, d[2] / dl] : [0, 0, 1] };
+      }
+    }
+    pa = pb;
+  }
+  if (!best) return null;
+  sampleTrack(ship, best.t, B);
+  const fl = Math.hypot(B.fwd[0], B.fwd[1], B.fwd[2]) || 1;
+  best.axis = [B.fwd[0] / fl, B.fwd[1] / fl, B.fwd[2] / fl];
+  return best;
+}
+
+/**
+ * How a straight pass (closestPass) clears a hull: the engine's capsule -
+ * the axis segment of `lengthM` along `pass.axis`, centred on the ship
+ * (src/simulation.py _projectile_miss_margin_m). Returns {separation (m,
+ * flight line to axis segment), normal: [3] unit, from the axis toward the
+ * line}; a line through the axis gets a normal square to both, its side
+ * picked by `seed` (0..1).
+ */
+export function passClearance(pass, lengthM, seed = 0) {
+  const r = pass.rel, d = pass.dir, a = pass.axis, h = lengthM / 2;
+  const dot = (x, y) => x[0] * y[0] + x[1] * y[1] + x[2] * y[2];
+  const da = dot(d, a), denom = 1 - da * da;
+  let sAx;
+  if (denom < 1e-12) sAx = Math.max(-h, Math.min(h, dot(r, a)));
+  else sAx = Math.max(-h, Math.min(h, (dot(r, a) - dot(r, d) * da) / denom));
+  const to = [r[0] - a[0] * sAx, r[1] - a[1] * sAx, r[2] - a[2] * sAx];
+  const t = -dot(to, d);
+  const sep = [to[0] + d[0] * t, to[1] + d[1] * t, to[2] + d[2] * t];
+  const q = Math.hypot(sep[0], sep[1], sep[2]);
+  if (q > 1e-6) return { separation: q, normal: [sep[0] / q, sep[1] / q, sep[2] / q] };
+  // dead through the axis: step aside square to the flight line and the axis
+  let n = [d[1] * a[2] - d[2] * a[1], d[2] * a[0] - d[0] * a[2], d[0] * a[1] - d[1] * a[0]];
+  let nl = Math.hypot(n[0], n[1], n[2]);
+  if (nl < 1e-6) { n = Math.abs(d[1]) < 0.9 ? [-d[2], 0, d[0]] : [0, d[2], -d[1]]; nl = Math.hypot(n[0], n[1], n[2]) || 1; }
+  const sign = seed < 0.5 ? 1 : -1;
+  return { separation: 0, normal: [sign * n[0] / nl, sign * n[1] / nl, sign * n[2] / nl] };
+}
+
+/**
+ * The sideways ease that draws a missing round clear of its target's hull,
+ * or null when its recorded line is nowhere near it: {t0, t1, separation,
+ * need, normal, m, d: [3] metres}. The drawn position is the recorded one
+ * + d * smoothstep((t - t0) / (t1 - t0)), held after t1 (the round flies
+ * on parallel). `need` is the clearance from the axis for the real hull
+ * and `d` the push for it (zero when the line already clears the real
+ * hull); `m` (1) is the hull's magnification, set by the renderer - see
+ * passPush.
+ * @param {number} clearRadii - MISS_CLEAR_RADII (slug) or SKIM_CLEAR_RADII (torpedo)
+ */
+export function missClearance(tr, ship, lengthM, t0, t1, clearRadii = MISS_CLEAR_RADII) {
+  const pass = closestPass(tr, ship, t0, t1);
+  if (!pass) return null;
+  const need = clearRadii * lengthM * HULL_RADIUS_PER_LENGTH + MISS_CLEAR_M;
+  // (nothing within reach of the largest clearance: skip the exact test)
+  if (pass.dist > MISS_CLEAR_MAX_M + lengthM / 2) return null;
+  const c = passClearance(pass, lengthM, tr.seed);
+  if (c.separation >= MISS_CLEAR_MAX_M) return null;
+  const push = Math.max(0, need - c.separation);
+  return {
+    t0: Math.max(tr.start, pass.t - TERMINAL_BEND_S), t1: pass.t, separation: c.separation,
+    need, normal: c.normal, m: 1,
+    d: [c.normal[0] * push, c.normal[1] * push, c.normal[2] * push]
+  };
+}
+
+/**
+ * Metres a missing round is pushed aside for a hull drawn `m` times its
+ * real size: enough to clear need x m, capped at MISS_CLEAR_MAX_M (never
+ * less than the real hull needs).
+ */
+export function passPush(pass, m = 1) {
+  const need = Math.max(pass.need, Math.min(MISS_CLEAR_MAX_M, pass.need * (m > 1 ? m : 1)));
+  return Math.max(0, need - pass.separation);
 }
 
 export function seedFor(id) {
@@ -78,6 +228,20 @@ export function torpedoPower(a, b, dt, range, closure, disabled = false) {
 /** Numeric weapon slot ("weapon_2" -> 2) and spinal flag of a shot_fired payload. */
 export function shotSlot(d) { return Number(d.weapon_slot?.split('_').at(-1)) || 0; }
 export function shotSpinal(d) { return !!d.weapon_name?.toLowerCase().includes('spinal'); }
+
+/**
+ * Gun class of a shot_fired payload, by weapon name: 0 battery (and light
+ * battery), 1 heavy battery, 2 spinal coiler, 3 siege coiler. Recordings
+ * without a name read as a battery.
+ */
+export const GUN_CLASSES = ['battery', 'heavy', 'spinal', 'siege'];
+export function shotClass(d) {
+  const n = String(d?.weapon_name || d?.weapon_type || '').toLowerCase();
+  if (n.includes('siege')) return 3;
+  if (n.includes('spinal')) return 2;
+  if (n.includes('heavy')) return 1;
+  return 0;
+}
 
 /**
  * Spinal muzzle per hull: [fraction of hull width below the axis, of length
@@ -145,7 +309,7 @@ export function sampleIndex(samples, time) {
 }
 
 export function makeSample() {
-  return { pos: [0, 0, 0], vel: [0, 0, 0], fwd: [0, 0, 1], state: null, next: null, dt: 0 };
+  return { pos: [0, 0, 0], vel: [0, 0, 0], fwd: [0, 0, 1], up: null, _up: [0, 1, 0], state: null, next: null, dt: 0 };
 }
 
 /** Writes into caller-owned storage; backward seeks follow the same path. */
@@ -165,6 +329,8 @@ export function sampleTrack(track, time, out) {
     out.fwd[k] = (a.state.fwd?.[k] ?? (k === 2 ? 1 : 0)) * (1 - f)
       + (b.state.fwd?.[k] ?? (k === 2 ? 1 : 0)) * f;
   }
+  // recorded roll (ships of recordings with `up`); null keeps the lookAt roll
+  out.up = a.state.up || b.state.up ? lerpUp(a.state.up, b.state.up, f, out._up || (out._up = [0, 1, 0])) : null;
   out.state = a.state;
   out.next = b.state;
   out.dt = dt;
@@ -208,6 +374,17 @@ export class WeaponTimeline {
     const shots = new Map();
     const shotById = new Map();
     const barrels = assignBarrels(events);
+    // The frame on which the trace (and so the viewer) shows `shipId` blow
+    // up after its ship_destroyed tick `t`: the tick itself when unknown
+    const blastTime = (shipId, t) => {
+      for (let i = 0; i < trace.length; i++) {
+        const f = trace[i];
+        if (f.t < t) continue;
+        if (f.t - t > 1.5) break;
+        if (f.ships?.[shipId]?.destroyed) return f.t;
+      }
+      return t;
+    };
     for (const e of events) {
       const d = e.data || {};
       if ((e.event_type === 'shot_fired' || e.event_type === 'torpedo_launched') && e.ship_id && d.target_id) {
@@ -219,12 +396,31 @@ export class WeaponTimeline {
         shots.get(e.ship_id).push(e);
         if (d.projectile_id) shotById.set(d.projectile_id, e);
         this.moments.push({ time: e.timestamp, kind: 'muzzle', ship: e.ship_id, data: d,
-          slot: shotSlot(d), spinal: shotSpinal(d), barrel: barrels.get(e) ?? 0,
+          slot: shotSlot(d), spinal: shotSpinal(d), cls: shotClass(d), barrel: barrels.get(e) ?? 0,
           track: this.slugs.get(d.projectile_id) || null,
           seed: seedFor(`${e.ship_id}|${e.timestamp}|${d.weapon_slot}`) });
       }
+      if (e.event_type === 'reactor_blast') {
+        // Pass 5: a detonation burns out the seeker of every torpedo inside
+        // its blind radius - the same arc as a PD seeker kill, and the
+        // round flies on dark (the ones it destroys get torpedo_intercepted)
+        // (dated at the frame the viewer shows the detonation, see blastTime)
+        const at = blastTime(e.ship_id, e.timestamp) + 0.3;
+        for (const id of d.torpedoes_blinded || []) {
+          const blind = this.torpedoes.get(id);
+          if (!blind) continue;
+          blind.disabledAt = Math.min(blind.disabledAt, at);
+          this.moments.push({ time: at, kind: 'seeker', track: blind, seed: blind.seed });
+        }
+      }
       const tr = this.torpedoes.get(d.torpedo_id) || this.slugs.get(d.projectile_id);
       if (!tr) continue;
+      if (e.event_type === 'torpedo_intercepted' && d.cause === 'reactor_blast' && d.blast_ship_id) {
+        // killed by a detonation: it pops as the blast goes off, not a tick early
+        tr.end = Math.max(e.timestamp, blastTime(d.blast_ship_id, e.timestamp) + 0.12);
+        this.moments.push({ time: tr.end, kind: 'pop', track: tr, seed: tr.seed });
+        continue;
+      }
       if (e.event_type === 'torpedo_launched') {
         tr.start = e.timestamp;
         this.moments.push({ time: e.timestamp, kind: 'ignition', track: tr, seed: tr.seed });
@@ -286,7 +482,7 @@ export class WeaponTimeline {
       const launch = shot ? shot.timestamp : first.t - 1;
       tr.source = first.state.source || shot?.ship_id || '';
       tr.shot = shot ? { slot: shot.data?.weapon_slot, index: shotSlot(shot.data || {}), spinal: shotSpinal(shot.data || {}),
-        barrel: barrels.get(shot) ?? 0 } : null;
+        cls: shotClass(shot.data || {}), barrel: barrels.get(shot) ?? 0 } : null;
       tr.start = Math.max(0, launch);
       // A disappearing round without a hit/intercept continues ballistically.
       // Rounds still present at the live edge must not be labelled as misses.
@@ -299,6 +495,22 @@ export class WeaponTimeline {
       if (tr.end === Infinity && tr.samples.at(-1).t < this.end) tr.end = tr.samples.at(-1).t + 1;
       tr.thrusters = buildTorpedoThrusters(tr.samples);
     }
+    // Rounds that did not hit: draw the ones whose recorded line crosses
+    // their target's real hull clear of it (see missClearance)
+    const lengthOf = (id) => REAL_LENGTH_M[loader.ships?.[id]?.type] ?? REAL_LENGTH_M.destroyer;
+    const clear = (tr, radii) => {
+      if (tr.impact || !(tr.end < Infinity)) return;
+      const last = tr.samples.at(-1);
+      const target = last?.state?.target;
+      const ship = target ? this.ships.get(target) : null;
+      if (!ship) return;
+      // (a round still chasing a target that has already blown up has no hull to clear)
+      if (ship.samples[sampleIndex(ship.samples, last.t)]?.state?.destroyed) return;
+      tr.pass = missClearance(tr, ship, lengthOf(target), Math.max(tr.start, last.t - 2), tr.end, radii);
+      if (tr.pass) tr.pass.target = target;
+    };
+    for (const tr of this.slugs.values()) clear(tr, MISS_CLEAR_RADII);
+    for (const tr of this.torpedoes.values()) clear(tr, SKIM_CLEAR_RADII);
     this.moments.sort((a, b) => a.time - b.time);
   }
 
@@ -349,16 +561,41 @@ export class WeaponTimeline {
     return list[lo];
   }
 
+  /**
+   * A round's DRAWN state at `time`: the recorded track (ballistic past
+   * its last sample), eased over its last TERMINAL_BEND_S seconds onto
+   * `tr.impact` - the crater on the drawn hull for a hit (Projectiles
+   * keeps it current) - or aside by `tr.pass` for a miss that would cross
+   * the hull. At tr.end a hit is exactly on tr.impact.
+   */
   sample(tr, time, out) {
     sampleTrack(tr, time, out);
-    const last = tr.samples.at(-1);
-    if (tr.impact && time > last.t && tr.end > last.t) {
-      const f = Math.min(1, (time - last.t) / (tr.end - last.t));
-      for (let k = 0; k < 3; k++) {
-        out.pos[k] = last.state.pos[k] + (tr.impact[k] - last.state.pos[k]) * f;
-        out.vel[k] = (tr.impact[k] - last.state.pos[k]) / (tr.end - last.t);
+    if (tr.impact && tr.end < Infinity) {
+      let end = tr.ballEnd;
+      if (!end) {
+        // where the recorded track itself would be at the impact time
+        const b = this._ball || (this._ball = makeSample());
+        sampleTrack(tr, tr.end, b);
+        end = tr.ballEnd = b.pos.slice();
+        sampleTrack(tr, time, out);
       }
+      this.ease(out, time, Math.max(tr.start, tr.end - TERMINAL_BEND_S), tr.end,
+        tr.impact[0] - end[0], tr.impact[1] - end[1], tr.impact[2] - end[2]);
+    } else if (tr.pass) {
+      const ps = tr.pass, push = ps.m > 1 ? passPush(ps, ps.m) : -1;
+      if (push < 0) this.ease(out, time, ps.t0, ps.t1, ps.d[0], ps.d[1], ps.d[2]);
+      else this.ease(out, time, ps.t0, ps.t1, ps.normal[0] * push, ps.normal[1] * push, ps.normal[2] * push);
     }
     return out;
+  }
+
+  /** out.pos += d * smoothstep((time - t0) / (t1 - t0)), with the matching velocity. */
+  ease(out, time, t0, t1, dx, dy, dz) {
+    const span = t1 - t0;
+    if (time <= t0) return;
+    const u = span > 1e-9 ? Math.min(1, (time - t0) / span) : 1;
+    const w = smooth01(u), dw = u < 1 && span > 1e-9 ? 6 * u * (1 - u) / span : 0;
+    out.pos[0] += dx * w; out.pos[1] += dy * w; out.pos[2] += dz * w;
+    out.vel[0] += dx * dw; out.vel[1] += dy * dw; out.vel[2] += dz * dw;
   }
 }

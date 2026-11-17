@@ -39,8 +39,13 @@ Examples:
         --workers 14 --out harness.jsonl
     uv run python scripts/fire_control_calibration.py table shots.jsonl
     uv run python scripts/fire_control_calibration.py table harness.jsonl --by source
-    uv run python scripts/fire_control_calibration.py fixture shots.jsonl harness.jsonl \\
-        --out tests/fixtures/fire_control_shots.json
+    # current-engine calibration set: heuristic battles (both doctrines) and
+    # every harness round; older recordings go to the historical file
+    uv run python scripts/fire_control_calibration.py fixture battles.jsonl harness.jsonl \\
+        --harness-keep 1 --out tests/fixtures/fire_control_shots.json
+    uv run python scripts/fire_control_calibration.py fixture shots.jsonl \\
+        --pre-lead-fix <recording names> --label "HISTORICAL: ..." \\
+        --out tests/fixtures/fire_control_shots_historical.json
 
 The conversion roll is the engine's own; observed hit rates in these
 datasets are valid calibration targets only while that roll stays the legacy
@@ -62,6 +67,8 @@ from typing import Dict, Iterable, List, Optional
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+
+from src.recording_io import load_recording, recording_stem  # noqa: E402
 
 from src.firecontrol import (  # noqa: E402
     HIT_TOLERANCE_M, TargetMotion, WeaponsCommand, WeaponsOrder,
@@ -97,7 +104,8 @@ def load_fleet() -> dict:
 def maneuver_class(row: dict) -> str:
     """
     The target's maneuver class at fire time, the calibration test's buckets:
-    EVASIVE; 'dodge' (any other maneuver with the evade overlay); HEADING
+    EVASIVE; 'dodge:<base maneuver>' (any other maneuver with the evade
+    overlay, e.g. dodge:PADLOCK, dodge:HOLD_RANGE); HEADING
     split into 'HEADING:turn' (its ordered burn not lit yet: turning onto
     the heading or a held start), 'HEADING:burn' and 'HEADING:attitude'
     (throttle 0); else the maneuver type (INTERCEPT, PADLOCK, HOLD_RANGE ...).
@@ -106,7 +114,9 @@ def maneuver_class(row: dict) -> str:
     if mt == "EVASIVE":
         return "EVASIVE"
     if row.get("dodge") is not None:
-        return "dodge"
+        # by base maneuver: a PADLOCK dodger is led as if it coasts, a
+        # HOLD_RANGE one from its drive - their errors must not cancel
+        return f"dodge:{mt}"
     if mt == "HEADING":
         if not (row.get("throttle") or 0.0) > 0.0:
             return "HEADING:attitude"
@@ -147,8 +157,13 @@ class HullTable:
             dodge_horizon_s=BALLISTIC_THREAT_HORIZON_S,
             dodge_min_time_s=EVASION_TURN_ALLOWANCE_S + EVASION_MIN_JINK_S,
             jink_accel_ms2=row.get("jink") or 0.0,
+            # older recordings carry no 'react': a reconstructed jink means
+            # the evasion was flying
+            reacting=(bool(row.get("react")) if row.get("react") is not None
+                      else (row.get("jink") or 0.0) > 0.0),
             pending_burn_ms2=row.get("pending") or 0.0,
             pending_burn_in_s=row.get("pending_in") or 0.0,
+            stale_burn_ms2=row.get("stale") or 0.0,
         )
 
     def predict(self, row: dict) -> float:
@@ -164,6 +179,7 @@ def _fc_features(fc: dict) -> dict:
     return {"a": fc.get("a"), "dodge": fc.get("dodge"),
             "jink": fc.get("jink", 0.0),
             "pending": fc.get("pend", 0.0), "pending_in": fc.get("pend_in", 0.0),
+            "stale": fc.get("stale", 0.0), "react": fc.get("react"),
             "approx": False}
 
 
@@ -184,9 +200,8 @@ def _lead_fraction(mtype: str, throttle: float, applied: float) -> float:
 
 def rows_from_recording(path: str, hulls: Optional[HullTable] = None) -> List[dict]:
     hulls = hulls or HullTable()
-    with open(path) as f:
-        rec = json.load(f)
-    name = Path(path).stem
+    rec = load_recording(path)
+    name = recording_stem(path)
     ship_types = {}
     for side in ("alpha", "beta"):
         for ship in (rec.get(f"{side}_fleet") or {}).get("ships", []):
@@ -287,12 +302,20 @@ def _unit(rng: random.Random) -> Vector3D:
 
 def harness_run(seed: int, cls: str, target_type: str, range_km: float, fleet: dict,
                 shooters: int = 1, spread_deg: float = 40.0,
-                shooter_type: str = "battleship") -> List[dict]:
+                shooter_type: str = "battleship", weapon_arcs: bool = False) -> List[dict]:
     """One controlled engagement - ``shooters`` ships of ``shooter_type``
     spread over ``spread_deg`` of bearing, PADLOCKed on one target and
     firing FIRE_IMMEDIATE - returns one row per resolved round."""
     rng = random.Random(seed)
-    sim = CombatSimulation(time_step=1.0, decision_interval=30.0, seed=seed)
+    # A fire-control instrument: it measures what happens to a round that
+    # LEAVES, so it runs without weapon arcs (src/weapon_arcs.py), which only
+    # decide whether and when one leaves. With arcs no attitude lets its lone
+    # battleship fire all four batteries at one target (at most two bear), so
+    # the engagements would thin out below their statistical floor.
+    # (weapon_arcs=True flies the same engagement with arcs, for the test
+    # that the forecast still holds for the rounds that do leave.)
+    sim = CombatSimulation(time_step=1.0, decision_interval=30.0, seed=seed,
+                           weapon_arcs_enabled=weapon_arcs)
     target = create_ship_from_fleet_data(
         "target", target_type, "beta", fleet, position=Vector3D(range_km * 1000.0, 0, 0),
         velocity=_unit(rng) * rng.uniform(0, 1500),
@@ -427,11 +450,21 @@ def print_table(table: List[dict]) -> None:
 
 
 FIXTURE_COLUMNS = ["source", "range_km", "tof_s", "target_type", "class", "dodge", "n",
-                   "jink", "pending", "pending_in", "p_conv", "hit"]
+                   "jink", "pending", "pending_in", "stale", "react", "seed", "p_conv", "hit"]
+
+
+def _row_seed(row: dict) -> Optional[int]:
+    """The engagement's seed: the harness records it, battle sources carry it
+    in their name (fresh_<doctrine>_s<seed>_b<budget>)."""
+    if row.get("seed") is not None:
+        return int(row["seed"])
+    import re
+    m = re.search(r"_s(\d+)_b\d+", row.get("source") or "")
+    return int(m.group(1)) if m else None
 
 
 def write_fixture(rows: List[dict], out: str, free_keep: int, harness_keep: int,
-                  pre_lead_fix: Iterable[str] = ()) -> None:
+                  pre_lead_fix: Iterable[str] = (), label: str = "") -> None:
     """Every battle shot except the plentiful INTERCEPT / PADLOCK ones
     closer than 300 km, of which an evenly spaced 1 in free_keep per source,
     class and 100 km bucket; harness rounds 1 in harness_keep.
@@ -461,7 +494,7 @@ def write_fixture(rows: List[dict], out: str, free_keep: int, harness_keep: int,
     types = sorted({r["target_type"] for r in kept})
     classes = sorted({maneuver_class(r) for r in kept})
     data = {
-        "about": ("Shots for tests/test_fire_control_calibration.py, written by "
+        "about": ((label + " ") if label else "") + ("Shots for tests/test_fire_control_calibration.py, written by "
                   "scripts/fire_control_calibration.py fixture. class is the target's maneuver "
                   "class at fire time; n is how many ships had fired at it in the last 30 s "
                   "(harness: the shooter count); dodge (its evasion throttle, null = does not "
@@ -477,7 +510,8 @@ def write_fixture(rows: List[dict], out: str, free_keep: int, harness_keep: int,
                   types.index(r["target_type"]), classes.index(maneuver_class(r)),
                   None if r.get("dodge") is None else round(r["dodge"], 2), int(r.get("n") or 1),
                   round(r.get("jink") or 0.0, 2), round(r.get("pending") or 0.0, 2),
-                  round(r.get("pending_in") or 0.0, 1),
+                  round(r.get("pending_in") or 0.0, 1), round(r.get("stale") or 0.0, 2),
+                  int(bool(r.get("react"))), _row_seed(r),
                   round(r["p_conv"], 4), int(r["outcome"] == "hit")] for r in kept],
     }
     rows_out = data.pop("rows")
@@ -513,6 +547,8 @@ def main() -> None:
     fx.add_argument("--harness-keep", type=int, default=20)
     fx.add_argument("--pre-lead-fix", default="",
                     help="comma list of sources recorded before the HEADING lead fix")
+    fx.add_argument("--label", default="",
+                    help="prefix for the fixture's 'about' text (e.g. HISTORICAL ...)")
     args = ap.parse_args()
 
     if args.cmd == "recordings":
@@ -548,7 +584,7 @@ def main() -> None:
         print_table(calibration_table(read_rows(args.paths), HullTable(), args.by))
     elif args.cmd == "fixture":
         write_fixture(read_rows(args.paths), args.out, args.free_keep, args.harness_keep,
-                      [s for s in args.pre_lead_fix.split(",") if s])
+                      [s for s in args.pre_lead_fix.split(",") if s], args.label)
 
 
 if __name__ == "__main__":

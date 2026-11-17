@@ -16,7 +16,7 @@ from pathlib import Path
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.llm.client import CaptainClient
+from src.llm.providers import create_llm_client
 from src.llm.captain import LLMCaptainConfig
 from src.llm.prompts import CaptainPersonality
 from src.llm.battle_runner import LLMBattleRunner, BattleConfig, load_fleet_data
@@ -135,6 +135,9 @@ Examples:
     )
     parser.add_argument("--decision-interval", type=float, default=None,
                         help="Seconds between decisions, 20-60 (default: 30)")
+    parser.add_argument("--plain-json", action="store_true",
+                        help="Write the recording as plain indented JSON (battle_*.json) "
+                             "instead of the default gzip (battle_*.json.gz)")
     parser.add_argument("--seed", type=int, default=None,
                         help="Seed combat randomness for reproducible scripted battles")
 
@@ -143,6 +146,12 @@ Examples:
         "--fleet-config",
         type=str,
         help="Path to JSON fleet configuration file (enables fleet mode with Admirals)",
+    )
+
+    parser.add_argument(
+        "--reasoning-effort",
+        default=None,
+        help="Reasoning effort for LLM calls (low/medium/high/xhigh/max). On bare Anthropic ids it is sent as output_config.effort on every request (default medium there); on OpenRouter ids as reasoning.effort (default: unset)",
     )
 
     # Battle modes
@@ -266,6 +275,8 @@ Examples:
             config_overrides["personality_selection"] = False
         if args.notebooks:
             config_overrides["use_notebooks"] = True
+        if args.plain_json:
+            config_overrides["compress_recording"] = False
         if fleet_config:
             battle_config = BattleConfig.from_fleet_config(fleet_config, **config_overrides)
         else:
@@ -294,7 +305,8 @@ Examples:
         models = ([s.model for s in fleet_config.get_all_ships()] +
                   [f.admiral.model for f in (fleet_config.alpha_fleet, fleet_config.beta_fleet)
                    if f.admiral and f.admiral.enabled]) if fleet_config else [args.alpha_model, args.beta_model]
-        client = (CaptainClient(model=client_model, session_id=session_id)
+        client = (create_llm_client(client_model, models, session_id=session_id,
+                                    reasoning_effort=args.reasoning_effort)
                   if any(model != "heuristic" for model in models) else None)
 
         if args.unlimited and not args.quiet:

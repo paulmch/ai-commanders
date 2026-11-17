@@ -36,8 +36,9 @@ from src.llm.fleet_draft import (
     draft_to_fleet_definition,
     run_admiral_draft,
 )
-from src.llm.heuristic_captain import HEURISTIC_MODEL
+from src.llm.heuristic_captain import DEFAULT_DOCTRINE, DOCTRINES, HEURISTIC_MODEL
 from src.llm.prompts import CaptainPersonality
+from src.recording_io import sidecar_path
 
 
 def main() -> int:
@@ -60,6 +61,17 @@ def main() -> int:
                              "its fleet directly)")
     parser.add_argument("--beta-captain-model", default=None,
                         help="Override captain model for beta ships only")
+    parser.add_argument("--doctrine", choices=DOCTRINES, default=DEFAULT_DOCTRINE,
+                        help="Doctrine of the rule-based captains: 'tactical' (focus fire, "
+                             "range discipline, massed torpedo salvos) or 'legacy' (the "
+                             f"pass-4 captain). Default {DEFAULT_DOCTRINE}")
+    parser.add_argument("--alpha-doctrine", choices=DOCTRINES, default=None,
+                        help="Override --doctrine for alpha's rule-based captains")
+    parser.add_argument("--beta-doctrine", choices=DOCTRINES, default=None,
+                        help="Override --doctrine for beta's rule-based captains")
+    parser.add_argument("--mirror-draft", action="store_true",
+                        help="With --auto-draft: both sides get the same fleet "
+                             "(beta drafts with alpha's seed)")
     parser.add_argument("--distance", type=float, default=500.0,
                         help="Initial fleet separation in km (default 500)")
     parser.add_argument("--time-limit", type=float, default=900.0,
@@ -75,6 +87,12 @@ def main() -> int:
                              "to the next checkpoint (sim_trace 'plan')")
     parser.add_argument("--recording-dir", default="data/recordings",
                         help="Where to save the recording (default data/recordings)")
+    parser.add_argument("--plain-json", action="store_true",
+                        help="Write the recording as plain indented JSON (battle_*.json) "
+                             "instead of the default gzip (battle_*.json.gz)")
+    parser.add_argument("--no-recording", action="store_true",
+                        help="Write no recording or draft sidecar (outcome-only sweeps: "
+                             "the result line and exit code are all you get)")
     parser.add_argument("--auto-draft", action="store_true",
                         help="Skip the LLM draft; both sides get deterministic auto-fleets")
     parser.add_argument("--no-admirals", action="store_true",
@@ -84,8 +102,12 @@ def main() -> int:
     parser.add_argument("--notebooks", action="store_true",
                         help="Inject accepted commander-notebook lessons "
                              "(data/notebooks) into each model's prompts")
+    parser.add_argument("--reasoning-effort", default=None,
+                        help="Reasoning effort for LLM calls (low/medium/high/xhigh/max). On bare Anthropic ids it is sent as output_config.effort on every request (default medium there); on OpenRouter ids as reasoning.effort (default: unset)")
     parser.add_argument("--quiet", "-q", action="store_true", help="Quiet mode")
     args = parser.parse_args()
+    if args.mirror_draft and not args.auto_draft:
+        parser.error("--mirror-draft needs --auto-draft (it gives both sides the same auto-draft)")
 
     verbose = not args.quiet
     fleet_data = load_fleet_data()
@@ -96,10 +118,16 @@ def main() -> int:
                  or any(model != HEURISTIC_MODEL for model in (alpha_captains, beta_captains)))
     client = None
     if needs_llm:
-        from src.llm.client import CaptainClient
-        client = CaptainClient(
-            model=args.alpha_admiral,
+        from src.llm.providers import create_llm_client
+        # A bare Anthropic id (claude-sonnet-5-5) goes to the Anthropic API, a
+        # vendor/model id to OpenRouter; each side may use either.
+        admirals_used = not (args.auto_draft and args.no_admirals)
+        used = ([args.alpha_admiral, args.beta_admiral] if admirals_used else []) + [
+            alpha_captains, beta_captains]
+        client = create_llm_client(
+            next(m for m in used if m != HEURISTIC_MODEL), used,
             session_id=f"ai-commanders-draft-{uuid.uuid4().hex[:16]}",
+            reasoning_effort=args.reasoning_effort,
         )
 
     # ------------------------------------------------------------------
@@ -109,7 +137,7 @@ def main() -> int:
     for faction, model in (("alpha", args.alpha_admiral), ("beta", args.beta_admiral)):
         admiral_name = f"Admiral {_get_short_model_name(model)}"
         if args.auto_draft:
-            seed = (args.seed or 0) + (0 if faction == "alpha" else 1)
+            seed = (args.seed or 0) + (0 if faction == "alpha" or args.mirror_draft else 1)
             drafts[faction] = auto_draft(
                 faction, budget=args.budget, max_ships=args.max_ships, seed=seed)
             if verbose:
@@ -168,11 +196,14 @@ def main() -> int:
         max_checkpoints=args.max_checkpoints,
         verbose=verbose,
         personality_selection=False,
-        record_battle=True,
-        record_sim_trace=args.trace,
+        record_battle=not args.no_recording,
+        record_sim_trace=args.trace and not args.no_recording,
         record_predictions=not args.no_predictions,
         recording_dir=args.recording_dir,
+        compress_recording=not args.plain_json,
         seed=args.seed,
+        heuristic_doctrine={"alpha": args.alpha_doctrine or args.doctrine,
+                            "beta": args.beta_doctrine or args.doctrine},
     )
 
     # The 1v1 captain configs are unused in fleet mode but required by the
@@ -195,11 +226,13 @@ def main() -> int:
     print(f"Duration: {result.duration_s:.0f}s, checkpoints: {result.checkpoints_used}")
     if result.recording_file:
         print(f"Recording: {result.recording_file}")
-        sidecar = Path(result.recording_file).with_suffix(".draft.json")
+        sidecar = sidecar_path(result.recording_file)
         sidecar.write_text(json.dumps({
             "budget": args.budget,
             "alpha_captain_model": alpha_captains,
             "beta_captain_model": beta_captains,
+            "alpha_doctrine": args.alpha_doctrine or args.doctrine,
+            "beta_doctrine": args.beta_doctrine or args.doctrine,
             "alpha": draft_summary_dict(drafts["alpha"]),
             "beta": draft_summary_dict(drafts["beta"]),
         }, indent=2))

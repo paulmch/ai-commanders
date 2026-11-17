@@ -68,7 +68,8 @@ def _torpedo(position, velocity, target_id, *, armed=True, fuel_exhausted=False)
 class TestNoStaleAngularVelocity:
     """
     A turn interrupted by a maneuver that does not command attitude (MAINTAIN,
-    BRACE, ...) froze the attitude but kept the stored angular rate. The next
+    BRACE, ...) froze the attitude but kept the stored angular rate (since
+    then the spin is carried and braked on RCS instead, so the rate is real). The next
     turn then started at that rate: a corvette that had spun up to its 14.8
     deg/s thrust-vectoring limit, coasted, and was then ordered to ROTATE
     (RCS only, 0.12 deg/s^2) finished 90 deg in ~7 s instead of ~50 s.
@@ -100,11 +101,16 @@ class TestNoStaleAngularVelocity:
             heading_direction={"x": -1.0, "y": 0.001, "z": 0.0}))
         _steps(sim, 6)  # spin up on thrust vectoring
         sim.inject_command("a", Maneuver(ManeuverType.MAINTAIN, start_time=sim.current_time))
-        frozen = Vector3D(ship.forward.x, ship.forward.y, ship.forward.z)
+        w0 = ship.angular_velocity_rad_s
+        a_rcs, _ = sim._get_rotation_params(ship, False)
+        before = Vector3D(ship.forward.x, ship.forward.y, ship.forward.z)
         _steps(sim, 20)
-        # MAINTAIN holds attitude (unchanged behaviour) ...
-        assert ship.forward.angle_to(frozen) < 1e-9
-        # ... so it must not bank the rate it is no longer turning at.
+        # MAINTAIN commands no attitude: the spin is carried and braked at
+        # RCS authority only (it used to be zeroed for free) ...
+        assert ship.angular_velocity_rad_s == pytest.approx(max(0.0, w0 - 20 * a_rcs), abs=1e-9)
+        assert ship.forward.angle_to(before) > 0.0
+        # ... until RCS has stopped it.
+        _steps(sim, 200)
         assert ship.angular_velocity_rad_s == 0.0
 
         target = ship.forward.cross(Vector3D(0, 0, 1)).normalized()
@@ -555,16 +561,30 @@ class TestManeuversIgnoreDeadTargets:
         assert ship.velocity.magnitude == 0.0
 
     def test_wobble_falls_back_to_a_live_enemy(self):
-        sim = CombatSimulation(time_step=1.0, seed=1)
-        ship = _ship(sim, "a", "corvette", "alpha", Vector3D(0, 0, 0), Vector3D(0, 1, 0))
-        dead = _ship(sim, "b", "destroyer", "beta", Vector3D(0, 300e3, 0))
-        _ship(sim, "c", "destroyer", "beta", Vector3D(0, -300e3, 0))
-        dead.is_destroyed = True
-        sim.inject_command("a", Maneuver(ManeuverType.EVASIVE, start_time=0.0,
-                                         throttle=1.0, target_id="b"))
-        _steps(sim, 30)
-        # heading for the live enemy at -y, not the wreck at +y
-        assert ship.velocity.y < 0.0
+        """A ship at rest lays its WOBBLE weave across the line to the
+        nearest LIVE enemy (it never chases anyone): with the wreck 200 km
+        along x and the live enemy 300 km along -y, the jinks go across y,
+        mostly along x. (This used to assert the ship flew toward the live
+        enemy; WOBBLE has not chased anyone since it learned to hold its
+        course, and that sign was only the turning transient of a flip.)
+        Control: with the wreck alive (nearest) the weave is laid across x."""
+        def weave(wreck_dead):
+            sim = CombatSimulation(time_step=1.0, seed=1)
+            ship = _ship(sim, "a", "corvette", "alpha", Vector3D(0, 0, 0), Vector3D(0, 1, 0))
+            wreck = _ship(sim, "b", "destroyer", "beta", Vector3D(200e3, 0, 0))
+            _ship(sim, "c", "destroyer", "beta", Vector3D(0, -300e3, 0))
+            wreck.is_destroyed = wreck_dead
+            sim.inject_command("a", Maneuver(ManeuverType.EVASIVE, start_time=0.0,
+                                             throttle=1.0, target_id="b"))
+            vx = vy = 0.0
+            for _ in range(40):
+                _steps(sim, 1)
+                vx, vy = max(vx, abs(ship.velocity.x)), max(vy, abs(ship.velocity.y))
+            return vx, vy
+        vx, vy = weave(True)
+        assert vx > vy, (vx, vy)
+        vx, vy = weave(False)
+        assert vx < vy, (vx, vy)
 
 
 # ---------------------------------------------------------------------------

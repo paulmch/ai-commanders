@@ -254,7 +254,7 @@ def test_mcp_only_cli_does_not_construct_api_client(tmp_path, monkeypatch):
     path = tmp_path / "mcp.json"
     path.write_text(json.dumps(config))
     client = Mock(side_effect=AssertionError("Offline MCP battle must not need an API key"))
-    monkeypatch.setattr(cli, "CaptainClient", client)
+    monkeypatch.setattr(cli, "create_llm_client", client)
 
     async def local_battle(*args, **kwargs):
         return SimpleNamespace(outcome=BattleOutcome.DRAW, winner=None, reason="stub",
@@ -267,9 +267,9 @@ def test_mcp_only_cli_does_not_construct_api_client(tmp_path, monkeypatch):
 
 def test_draft_cli_captain_override_initializes_client(monkeypatch):
     import scripts.run_draft_battle as cli
-    import src.llm.client as client_module
+    import src.llm.providers as providers
     client = Mock()
-    monkeypatch.setattr(client_module, "CaptainClient", client)
+    monkeypatch.setattr(providers, "create_llm_client", client)
     runner = Mock()
     runner.return_value.run_battle.return_value = SimpleNamespace(
         winner=None, reason="stub", duration_s=0, checkpoints_used=0, recording_file=None)

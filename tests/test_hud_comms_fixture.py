@@ -11,6 +11,8 @@ import json
 from contextlib import redirect_stdout
 from pathlib import Path
 
+from src.recording_io import load_recording
+
 ROOT = Path(__file__).resolve().parents[1]
 
 COMMS_MESSAGE_KEYS = {"msg_id", "channel", "kind", "sender_id", "sender_role", "sender_name", "faction",
@@ -41,7 +43,7 @@ def _run(tmp_path, runner_cls=None, checkpoints=4):
         gen.HudCommsRunner = runner_cls(gen)
     with redirect_stdout(io.StringIO()):
         _, path = gen.hud_comms_battle(max_checkpoints=checkpoints, recording_dir=str(tmp_path))
-    return json.loads(Path(path).read_text())
+    return load_recording(path)
 
 
 def _data(event):

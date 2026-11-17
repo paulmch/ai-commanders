@@ -335,9 +335,268 @@ export const FACTION_PAINT = {
  * or 'paint' (faction livery plates: big panels, chipped at the edges).
  * Returns { map, normalMap, ormMap } textures, all tileable.
  */
+/** Hull plating base colours (sRGB 0-255): cool naval grey vs warm sand. */
+export const FACTION_PLATE = {
+  alpha: [106, 115, 130],
+  beta: [126, 110, 94]
+};
+
+/**
+ * Armour plate set ('hull' painted armour, 'paint' faction livery), built
+ * as a hierarchy rather than one grid of tiles:
+ *   1. four big armour slabs per tile. Their joints are RELIEF - a wide
+ *      bevelled channel in the normal map - with only a thin, low-contrast
+ *      line in the albedo, so a hull reads as a few slabs under the key
+ *      light and as clean plate at fleet distance
+ *   2. panel lines inside each slab at clearly lower contrast
+ *   3. fine detail that only resolves close up: bolt rows, small hatches,
+ *      vents, stencil labels, worn edges, chips, faint streaks
+ * The kit projects these UVs in hull space (HullKit._projectUVs) at one
+ * scale per ship, larger on larger hulls. Painted plate is a dielectric
+ * (metalness ~0.08); wear is part metal (fully metallic texels mirror the
+ * black sky and render dark).
+ */
+function plateTextures(faction, variant) {
+  const isPaint = variant === 'paint';
+  const size = isPaint ? 512 : 1024;
+  const S = size / 1024;
+  const px = (v) => Math.max(1, Math.round(v * S));
+  const rnd = mulberry32((faction === 'alpha' ? 4242 : 7777) + (isPaint ? 31 : 0));
+  const livery = FACTION_PAINT[faction] || FACTION_PAINT.alpha;
+  const base = isPaint ? livery.map(c => c * 0.86) : (FACTION_PLATE[faction] || FACTION_PLATE.alpha);
+  const accent = faction === 'alpha' ? [40, 200, 255] : [255, 130, 50];
+  const primer = faction === 'alpha' ? [52, 58, 66] : [66, 58, 54];
+  const bareMetal = [176, 178, 184];
+  const rgb = (c, k = 1) => `rgb(${Math.min(255, c[0] * k) | 0},${Math.min(255, c[1] * k) | 0},${Math.min(255, c[2] * k) | 0})`;
+  const rgba = (c, a) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a})`;
+
+  const grime = makeFbm(size, 3, 4, rnd, 0.55);
+  const micro = makeFbm(size, 48, 2, rnd, 0.5);
+  const albedo = canvasOf(size);
+  const actx = albedo.getContext('2d');
+  actx.fillStyle = rgb(base, 0.78);               // slab joints: a soft line
+  actx.fillRect(0, 0, size, size);
+
+  // Relief is kept shallow: under a glancing sun a deep joint channel or
+  // surface grain reads as brickwork (the pass-5 battleship bow)
+  const height = new Float32Array(size * size).fill(0.32);
+  const rough = new Float32Array(size * size).fill(0.7);
+  const metal = new Float32Array(size * size).fill(0.25);
+  const fillRect = (field, x, y, w, h, v) => {
+    x = Math.round(x); y = Math.round(y); w = Math.round(w); h = Math.round(h);
+    for (let yy = y; yy < y + h; yy++) {
+      const row = ((yy % size) + size) % size;
+      for (let xx = x; xx < x + w; xx++) field[row * size + (((xx % size) + size) % size)] = v;
+    }
+  };
+
+  // 1. slabs: two unequal courses, each cut once (u runs along the hull)
+  const snap = (v) => Math.round(v / 8) * 8;
+  const course = snap(size * (0.42 + 0.16 * rnd()));
+  const slabs = [];
+  for (const [y, h] of [[0, course], [course, size - course]]) {
+    const cut = snap(size * (0.34 + 0.32 * rnd()));
+    slabs.push({ x: 0, y, w: cut, h }, { x: cut, y, w: size - cut, h });
+  }
+  const gap = px(1.5), bev = px(7);
+  for (const p of slabs) {
+    const tone = 1 + (rnd() - 0.5) * 0.07;
+    const col = base.map(c => c * tone);
+    const pRough = (isPaint ? 0.46 : 0.5) + (rnd() - 0.5) * 0.1;
+    const pHeight = 0.56 + rnd() * 0.05;
+    const x0 = p.x + gap, y0 = p.y + gap, w = p.w - gap * 2, h = p.h - gap * 2;
+    actx.fillStyle = rgb(col);
+    actx.fillRect(x0, y0, w, h);
+    for (let i = 0; i <= bev; i++) {
+      fillRect(height, x0 + i, y0 + i, w - i * 2, h - i * 2, 0.32 + (pHeight - 0.32) * ((i + 1) / (bev + 1)));
+    }
+    fillRect(rough, x0, y0, w, h, pRough);
+    fillRect(metal, x0, y0, w, h, 0.08);
+
+    // 2. panels inside the slab: quiet lines, a little tone per panel
+    const m = gap + bev + px(3);
+    const ix = p.x + m, iy = p.y + m, iw = p.w - m * 2, ih = p.h - m * 2;
+    const xs = [ix], ys = [iy];
+    for (let c = 1, n = 2 + Math.floor(rnd() * 2); c < n; c++) xs.push(ix + Math.round(iw * (c + (rnd() - 0.5) * 0.4) / n));
+    for (let c = 1, n = 1 + Math.floor(rnd() * 2); c < n; c++) ys.push(iy + Math.round(ih * (c + (rnd() - 0.5) * 0.3) / n));
+    xs.push(ix + iw); ys.push(iy + ih);
+    const lw = px(1.3);
+    for (let a = 0; a < xs.length - 1; a++) {
+      for (let b = 0; b < ys.length - 1; b++) {
+        const cx0 = xs[a], cy0 = ys[b], cw = xs[a + 1] - xs[a], ch = ys[b + 1] - ys[b];
+        const kind = rnd();
+        let ccol = col, cRough = pRough;
+        if (!isPaint && kind < 0.06) { ccol = col.map((c, i) => c * 0.95 + bareMetal[i] * 0.06); cRough = pRough - 0.03; fillRect(metal, cx0, cy0, cw, ch, 0.15); }
+        else if (!isPaint && kind < 0.11) ccol = accent.map((c, i) => c * 0.035 + col[i] * 0.965);
+        else if (kind < 0.24) { ccol = col.map(c => c * 0.96); cRough = pRough + 0.02; }
+        else if (kind < 0.36) ccol = col.map(c => c * 1.03);
+        if (ccol !== col) {
+          actx.fillStyle = rgb(ccol);
+          actx.fillRect(cx0, cy0, cw, ch);
+          fillRect(rough, cx0, cy0, cw, ch, cRough);
+        }
+        // 3. one small feature on some panels
+        const feat = rnd();
+        const fx = cx0 + cw * (0.3 + 0.4 * rnd()), fy = cy0 + ch * (0.3 + 0.4 * rnd());
+        if (cw < px(70) || ch < px(70)) continue;
+        if (feat < 0.1) {                 // vent slats
+          const n = 3 + Math.floor(rnd() * 3), pitch = px(6), sw = Math.min(cw * 0.3, px(34));
+          for (let i = 0; i < n; i++) {
+            actx.fillStyle = 'rgba(0,0,0,0.38)';
+            actx.fillRect(fx - sw / 2, fy + (i - n / 2) * pitch, sw, px(2.5));
+            fillRect(height, fx - sw / 2, fy + (i - n / 2) * pitch, sw, px(2.5), pHeight - 0.25);
+          }
+        } else if (feat < 0.2) {          // small round hatch
+          const r = Math.min(cw, ch, px(90)) * 0.2;
+          actx.strokeStyle = 'rgba(0,0,0,0.36)';
+          actx.lineWidth = px(1.6);
+          actx.beginPath(); actx.arc(fx, fy, r, 0, Math.PI * 2); actx.stroke();
+          for (let yy = Math.floor(fy - r); yy <= fy + r; yy++) {
+            for (let xx = Math.floor(fx - r); xx <= fx + r; xx++) {
+              const d = Math.hypot(xx - fx, yy - fy);
+              if (d < r - px(2)) fillRect(height, xx, yy, 1, 1, pHeight + 0.07);
+              else if (d < r) fillRect(height, xx, yy, 1, 1, pHeight - 0.2);
+            }
+          }
+          actx.fillStyle = 'rgba(0,0,0,0.3)';
+          for (let b2 = 0; b2 < 6; b2++) {
+            const an = b2 / 6 * Math.PI * 2;
+            actx.beginPath(); actx.arc(fx + Math.cos(an) * r * 0.74, fy + Math.sin(an) * r * 0.74, px(1.3), 0, Math.PI * 2); actx.fill();
+          }
+        } else if (feat < 0.3) {          // bolted access panel
+          const aw = Math.min(cw * 0.34, px(64)), ah = Math.min(ch * 0.34, px(44));
+          actx.strokeStyle = 'rgba(0,0,0,0.3)';
+          actx.lineWidth = px(1.4);
+          actx.strokeRect(fx - aw / 2, fy - ah / 2, aw, ah);
+          fillRect(height, fx - aw / 2, fy - ah / 2, aw, ah, pHeight - 0.16);
+          fillRect(height, fx - aw / 2 + px(2), fy - ah / 2 + px(2), aw - px(4), ah - px(4), pHeight + 0.05);
+        } else if (!isPaint && feat < 0.33) {   // hazard chevrons (rare)
+          const sw = Math.min(cw * 0.36, px(60)), sh = px(8);
+          actx.save();
+          actx.beginPath(); actx.rect(fx - sw / 2, fy - sh / 2, sw, sh); actx.clip();
+          actx.fillStyle = 'rgba(206,170,48,0.8)';
+          actx.fillRect(fx - sw / 2, fy - sh / 2, sw, sh);
+          actx.fillStyle = 'rgba(20,20,20,0.85)';
+          for (let x = fx - sw / 2 - sh; x < fx + sw / 2 + sh; x += sh * 1.4) {
+            actx.beginPath();
+            actx.moveTo(x, fy + sh / 2); actx.lineTo(x + sh * 0.7, fy + sh / 2);
+            actx.lineTo(x + sh * 1.4, fy - sh / 2); actx.lineTo(x + sh * 0.7, fy - sh / 2);
+            actx.closePath(); actx.fill();
+          }
+          actx.restore();
+        } else if (feat < 0.5) {          // stencil label
+          actx.fillStyle = isPaint ? 'rgba(235,238,242,0.5)' : 'rgba(225,230,236,0.4)';
+          for (let l = 0, lines = 1 + Math.floor(rnd() * 2); l < lines; l++) {
+            let xx = fx - px(18);
+            for (let wd = 0, words = 2 + Math.floor(rnd() * 2); wd < words; wd++) {
+              const ww = px(4 + rnd() * 11);
+              actx.fillRect(xx, fy + l * px(5), ww, px(2.4));
+              xx += ww + px(3);
+            }
+          }
+        }
+      }
+    }
+    // (panel lines are albedo only: relief at panel scale turns a face lit
+    // at a glancing angle into brickwork)
+    actx.fillStyle = 'rgba(0,0,0,0.11)';
+    for (const cx of xs.slice(1, -1)) { actx.fillRect(cx, iy, lw, ih); fillRect(height, cx, iy, lw, ih, pHeight - 0.01); }
+    for (const cy of ys.slice(1, -1)) { actx.fillRect(ix, cy, iw, lw); fillRect(height, ix, cy, iw, lw, pHeight - 0.01); }
+
+    // bolt rows along the slab edges (fine)
+    const bi = gap + bev + px(4), step = px(28), rr = Math.max(0.9, 1.3 * S);
+    actx.fillStyle = 'rgba(0,0,0,0.26)';
+    const dot = (bx, by) => {
+      actx.beginPath(); actx.arc(bx, by, rr, 0, Math.PI * 2); actx.fill();
+      fillRect(height, bx - 1, by - 1, 2, 2, pHeight + 0.07);
+    };
+    for (let x = p.x + bi; x <= p.x + p.w - bi; x += step) { dot(x, p.y + bi); dot(x, p.y + p.h - bi); }
+    for (let y = p.y + bi + step; y <= p.y + p.h - bi - step; y += step) { dot(p.x + bi, y); dot(p.x + p.w - bi, y); }
+
+    // worn slab edges: broken thin runs of brighter metal on the bevel
+    const edges = [[x0, y0 + px(1), w, 0], [x0, y0 + h - px(3), w, 0], [x0 + px(1), y0, h, 1], [x0 + w - px(3), y0, h, 1]];
+    for (const [ex, ey, len, vert] of edges) {
+      let pos = 0;
+      while (pos < len) {
+        const run = px(8 + rnd() * 60);
+        if (rnd() < (isPaint ? 0.42 : 0.3)) {
+          const r0 = Math.min(run, len - pos), t = px(1.5 + rnd() * 1.5);
+          const rx = vert ? ex : ex + pos, ry = vert ? ey + pos : ey;
+          const rw = vert ? t : r0, rh = vert ? r0 : t;
+          if (isPaint) { actx.fillStyle = rgba(primer, 0.7); actx.fillRect(rx - 1, ry - 1, rw + 2, rh + 2); }
+          actx.fillStyle = rgba(bareMetal, isPaint ? 0.7 : 0.5);
+          actx.fillRect(rx, ry, rw, rh);
+          fillRect(metal, rx, ry, rw, rh, 0.5);
+          fillRect(rough, rx, ry, rw, rh, 0.32);
+        }
+        pos += run + px(10 + rnd() * 70);
+      }
+    }
+    for (let c = 0, clusters = rnd() < (isPaint ? 0.8 : 0.4) ? 1 + Math.floor(rnd() * 2) : 0; c < clusters; c++) {
+      const ex = rnd() < 0.5 ? x0 + px(8) : x0 + w - px(8);
+      const ey = rnd() < 0.5 ? y0 + px(8) : y0 + h - px(8);
+      for (let i = 0, flakes = 3 + Math.floor(rnd() * 4); i < flakes; i++) {
+        const cx = ex + (rnd() - 0.5) * px(30), cy = ey + (rnd() - 0.5) * px(18);
+        const r = (1.4 + rnd() * 3) * Math.max(0.7, S);
+        chipFlake(actx, cx, cy, r, rnd, primer, 0.7);
+        chipFlake(actx, cx, cy, r * 0.55, rnd, bareMetal, 0.7);
+        fillRect(metal, cx - r * 0.5, cy - r * 0.5, r, r, 0.5);
+        fillRect(rough, cx - r * 0.5, cy - r * 0.5, r, r, 0.34);
+      }
+    }
+  }
+
+  // faint streaks drawn out from the slab joints
+  for (let i = 0, n = isPaint ? 8 : 20; i < n; i++) {
+    const p = slabs[Math.floor(rnd() * slabs.length)];
+    const sx = p.x + rnd() * p.w, sy = p.y + gap, sw = px(3 + rnd() * 9), len = px(60 + rnd() * 200);
+    const pale = rnd() < 0.25;
+    for (const oy of [0, -size]) {
+      const g = actx.createLinearGradient(0, sy + oy, 0, sy + oy + len);
+      g.addColorStop(0, pale ? 'rgba(220,220,215,0.07)' : 'rgba(8,7,6,0.13)');
+      g.addColorStop(1, pale ? 'rgba(220,220,215,0)' : 'rgba(8,7,6,0)');
+      actx.fillStyle = g;
+      actx.fillRect(sx, sy + oy, sw, len);
+    }
+  }
+
+  const img = actx.getImageData(0, 0, size, size);
+  for (let i = 0; i < size * size; i++) {
+    const g = grime[i], m = micro[i];
+    const mod = (0.94 + 0.12 * g) * (0.975 + 0.05 * m);
+    img.data[i * 4] = Math.min(255, img.data[i * 4] * mod);
+    img.data[i * 4 + 1] = Math.min(255, img.data[i * 4 + 1] * mod);
+    img.data[i * 4 + 2] = Math.min(255, img.data[i * 4 + 2] * mod);
+    rough[i] = Math.min(1, Math.max(0.2, rough[i] + (g - 0.5) * 0.26 + (m - 0.5) * 0.05));
+    height[i] += (m - 0.5) * 0.006;
+  }
+  actx.putImageData(img, 0, 0);
+
+  const orm = canvasOf(size);
+  const octx = orm.getContext('2d');
+  const oimg = octx.createImageData(size, size);
+  for (let i = 0; i < size * size; i++) {
+    oimg.data[i * 4] = 255;
+    oimg.data[i * 4 + 1] = Math.max(0, Math.min(255, rough[i] * 255));
+    oimg.data[i * 4 + 2] = Math.max(0, Math.min(255, metal[i] * 255));
+    oimg.data[i * 4 + 3] = 255;
+  }
+  octx.putImageData(oimg, 0, 0);
+  return {
+    map: texOf(albedo, { srgb: true }),
+    normalMap: texOf(heightToNormalCanvas(height, size, isPaint ? 2.4 : 2.6)),
+    ormMap: texOf(orm)
+  };
+}
+
 export function getHullTextures(faction, variant = 'hull') {
   const key = `${faction}:${variant}`;
   if (_hullSets.has(key)) return _hullSets.get(key);
+  if (variant !== 'trim') {
+    const set = plateTextures(faction, variant);
+    _hullSets.set(key, set);
+    return set;
+  }
 
   const size = variant === 'hull' ? 1024 : 512;
   const rnd = mulberry32(faction === 'alpha' ? 4242 : 7777 + (variant === 'trim' ? 99 : 0));
@@ -349,15 +608,15 @@ export function getHullTextures(faction, variant = 'hull') {
   const paint = FACTION_PAINT[faction] || FACTION_PAINT.alpha;
   const base = isPaint ? paint.map(c => c * 0.82)
     : faction === 'alpha'
-      ? (isTrim ? [40, 45, 52] : [98, 107, 120])
-      : (isTrim ? [46, 42, 40] : [114, 104, 97]);
+      ? (isTrim ? [58, 64, 74] : [98, 107, 120])
+      : (isTrim ? [66, 60, 55] : [114, 104, 97]);
   const accent = faction === 'alpha' ? [40, 200, 255] : [255, 130, 50];
   // primer showing through chipped livery: dark, desaturated
   const primer = faction === 'alpha' ? [52, 58, 66] : [66, 58, 54];
 
   const panels = isPaint
     ? subdividePanels(size, rnd, 64, 300)
-    : subdividePanels(size, rnd, isTrim ? 20 : 56, isTrim ? 72 : 260);
+    : subdividePanels(size, rnd, isTrim ? 56 : 56, isTrim ? 200 : 260);
   const grime = makeFbm(size, 4, 5, rnd, 0.6);
   const micro = makeFbm(size, 32, 3, rnd, 0.5);
 
@@ -382,7 +641,7 @@ export function getHullTextures(faction, variant = 'hull') {
   for (const p of panels) {
     // Gentle per-plate tone steps: strong ones read as a checkerboard at
     // mid range. Plates differ more in roughness (sheen) than in colour.
-    const tone = 1 + (rnd() - 0.5) * (isTrim ? 0.26 : isPaint ? 0.1 : 0.1);
+    const tone = 1 + (rnd() - 0.5) * (isTrim ? 0.16 : isPaint ? 0.1 : 0.1);
     const kind = isPaint ? 1 : rnd();
     let col = base.map(c => c * tone);
     let pRough = (isTrim ? 0.68 : isPaint ? 0.5 : 0.52) + (rnd() - 0.5) * (isTrim ? 0.2 : 0.14);
@@ -564,7 +823,7 @@ export function getHullTextures(faction, variant = 'hull') {
   }
 
   // Seam lines on top (dark), then grime + micro-noise modulation
-  actx.strokeStyle = isTrim ? 'rgba(0,0,0,0.75)' : 'rgba(0,0,0,0.6)';
+  actx.strokeStyle = isTrim ? 'rgba(0,0,0,0.3)' : 'rgba(0,0,0,0.6)';
   actx.lineWidth = 2;
   for (const p of panels) actx.strokeRect(p.x + 1, p.y + 1, p.w - 2, p.h - 2);
 
@@ -601,6 +860,45 @@ export function getHullTextures(faction, variant = 'hull') {
   };
   _hullSets.set(key, set);
   return set;
+}
+
+let _bellHeatTex = null;
+/**
+ * Engine bell liner glow (u around the bell, v = 0 throat .. 1 lip). The
+ * heat falls off fast with distance from the throat - white-hot injector,
+ * orange for the first fifth, then a dark wall cooling to a black lip - so
+ * a bell reads as a deep funnel, not a lit ball. Dark cooling-channel
+ * ridges ring the wall and 20 petal seams run down it. 80 x 128 sRGB.
+ */
+export function getBellHeatTexture() {
+  if (_bellHeatTex) return _bellHeatTex;
+  const w = 80, n = 128;
+  const data = new Uint8Array(w * n * 4);
+  // (steep enough that the outer half stays dark at full thrust too, when
+  // SceneManager drives the intensity ten times higher than at idle)
+  const stops = [[0, [255, 238, 205]], [0.05, [255, 184, 96]], [0.15, [200, 72, 22]], [0.32, [84, 18, 6]],
+    [0.55, [20, 5, 3]], [1, [3, 1, 1]]];
+  for (let j = 0; j < n; j++) {
+    const v = j / (n - 1);
+    let k = 0;
+    while (k < stops.length - 2 && v > stops[k + 1][0]) k++;
+    const [v0, c0] = stops[k], [v1, c1] = stops[k + 1];
+    const u = Math.min(1, Math.max(0, (v - v0) / (v1 - v0)));
+    const ridge = j > 8 && j % 13 < 2 ? 0.45 : j % 13 === 2 ? 1.12 : 1;
+    for (let i = 0; i < w; i++) {
+      const seam = j > 6 && i % 4 === 0 ? 0.6 : 1;
+      const o = (j * w + i) * 4;
+      for (let c = 0; c < 3; c++) data[o + c] = Math.min(255, (c0[c] + (c1[c] - c0[c]) * u) * ridge * seam);
+      data[o + 3] = 255;
+    }
+  }
+  const tex = new THREE.DataTexture(data, w, n, THREE.RGBAFormat);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.magFilter = tex.minFilter = THREE.LinearFilter;
+  tex.needsUpdate = true;
+  _bellHeatTex = tex;
+  return tex;
 }
 
 let _accentTex = null;

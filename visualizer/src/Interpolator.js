@@ -1,3 +1,4 @@
+import { validUp, interpAttitude } from './HullFrame.js';
 /**
  * Interpolator - Smoothly interpolates between 1Hz simulation frames
  */
@@ -94,18 +95,40 @@ export class Interpolator {
       if (current.destroyed) {
         result[shipId] = {
           ...current, position: current.pos, velocity: current.vel,
-          forward: current.fwd, interpolated: true
+          forward: current.fwd, up: validUp(current.up), interpolated: true
         };
         continue;
       }
 
+      // Attitude: with a recorded `up` on both frames the hull frames are
+      // slerped as rotations (nose and roll together); without it only the
+      // nose is known and the viewer keeps its implicit roll
+      let forward, up = null;
+      if (validUp(state0.up) && validUp(state1.up) && state0.fwd && state1.fwd) {
+        forward = [0, 0, 1]; up = [0, 1, 0];
+        interpAttitude(state0.fwd, state0.up, state1.fwd, state1.up, alpha, forward, up);
+      } else {
+        forward = this.slerpVec3(state0.fwd, state1.fwd, alpha);
+      }
       result[shipId] = {
         position: frame1.t - frame0.t > 0 && state0.vel && state1.vel
           ? this.hermiteVec3(state0.pos, state0.vel, state1.pos, state1.vel, frame1.t - frame0.t, alpha)
           : this.lerpVec3(state0.pos, state1.pos, alpha),
         velocity: this.lerpVec3(state0.vel, state1.vel, alpha),
-        forward: this.slerpVec3(state0.fwd, state1.fwd, alpha),
+        forward,
+        up,
+        // recorded turret aims (weapon-arcs engine): both frames' lists and
+        // the blend, slerped per mount by render/TurretArcs.turAim
+        tur: Array.isArray(state0.tur) || Array.isArray(state1.tur)
+          ? { a: state0.tur || state1.tur, b: state1.tur || state0.tur, f: alpha } : null,
         thrust: this.lerp(state0.thrust || 0, state1.thrust || 0, alpha),
+        // throttle slope over this interval (1/s): drive ignition / shutdown
+        thrustRate: frame1.t - frame0.t > 0 ? ((state1.thrust || 0) - (state0.thrust || 0)) / (frame1.t - frame0.t) : 0,
+        // --trace recordings: turn rate (world rad/s). The recorder stamps
+        // each interval's rate on the frame that ends it; blending the two
+        // keeps it continuous across frames (a jinking ship reverses it)
+        omega: Array.isArray(state1.omega)
+          ? (Array.isArray(state0.omega) ? this.lerpVec3(state0.omega, state1.omega, alpha) : state1.omega) : null,
         hull: this.lerp(state0.hull ?? 100, state1.hull ?? 100, alpha),
         maneuver: state0.maneuver || 'MAINTAIN',
         destroyed: current.destroyed,

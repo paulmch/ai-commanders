@@ -29,6 +29,42 @@ if TYPE_CHECKING:
     from .captain import LLMCaptain
 
 
+
+def _crew_state(ship):
+    """drive_plume.crew_state (works for both import styles)."""
+    try:
+        from ..drive_plume import crew_state
+    except ImportError:
+        from drive_plume import crew_state
+    return crew_state(ship)
+
+
+def _arcs_status_lines(simulation, ship):
+    """Weapon-arc state lines (src/llm/arcs_status.py): what bears, what unmasks."""
+    from .arcs_status import arcs_status_lines
+    try:
+        return arcs_status_lines(simulation, ship)
+    except Exception:  # noqa: BLE001 - advisory only
+        return []
+
+
+def _plume_status_lines(simulation, ship):
+    """drive_plume.plume_status_lines (works for both import styles)."""
+    try:
+        from ..drive_plume import plume_status_lines
+    except ImportError:
+        from drive_plume import plume_status_lines
+    return plume_status_lines(simulation, ship)
+
+
+def _damaged_fitting_lines(ship):
+    """battle_damage.damaged_fitting_lines (works for both import styles)."""
+    try:
+        from ..battle_damage import damaged_fitting_lines
+    except ImportError:  # imported as a top-level module
+        from battle_damage import damaged_fitting_lines
+    return damaged_fitting_lines(ship)
+
 @dataclass
 class AdmiralOrder:
     """A single order from Admiral to a specific ship."""
@@ -229,6 +265,10 @@ def _failure_text(meta: Dict[str, Any]) -> str:
         return "provider error (finish_reason=error)"
     if finish == "content_filter":
         return "blocked by the provider content filter"
+    if finish == "refusal":
+        category = (meta.get("stop_details") or {}).get("category")
+        return "refused by the model (stop_reason=refusal" + (
+            f", category {category})" if category else ")")
     return "no set_fleet_directive call"
 
 
@@ -316,6 +356,15 @@ class FriendlyShipSnapshot:
     magazine_capacity: int = 0
     launches_available: int = 0
     gun_range_km: float = 0.0
+    # Damaged-but-working fittings, one short line each
+    # (battle_damage.damaged_fitting_lines).
+    fittings_damaged: List[str] = field(default_factory=list)
+    # Drive plume wash warnings (drive_plume.plume_status_lines).
+    plume_wash: List[str] = field(default_factory=list)
+    # Crew radiation state (drive_plume.crew_state) and dose; an
+    # incapacitated crew cannot execute orders.
+    crew_state: str = "fit"
+    crew_dose_sv: float = 0.0
 
 
 @dataclass
@@ -345,6 +394,9 @@ class EnemyShipSnapshot:
     accel_g: float = 0.0
     pd_operational: int = 0
     pd_total: int = 0
+    # Observed from outside, like hull and PD: "fit", "impaired" (it took a
+    # heavy plume wash) or "incapacitated" (it no longer maneuvers or fires).
+    crew_state: str = "fit"
     armament: str = ""
     launchers: int = 0
     magazine: int = 0
@@ -710,7 +762,11 @@ Be authentic to how you would command a fleet as {model_name}."""
             ship_id = getattr(captain, 'ship_id', None)
             if ship_id:
                 ship = simulation.get_ship(ship_id)
-                if ship and not ship.is_destroyed:
+                # A crew incapacitated by plume radiation cannot execute
+                # anything: it stays in the fleet picture (marked), but no
+                # per-ship order call is spent on it.
+                if (ship and not ship.is_destroyed
+                        and getattr(ship, 'crew_incapacitated', False) is not True):
                     active_ships.append({
                         'ship_id': ship_id,
                         'ship_name': captain.ship_name,
@@ -905,6 +961,12 @@ Be authentic to how you would command a fleet as {model_name}."""
             return calls, None, None, None
 
         first = _failure_text(meta)
+        if meta.get("finish_reason") == "refusal":
+            # Not re-asked: the checkpoint has no directive and says why
+            # (admiral_directive_failed), and the battle goes on.
+            print(f"[ADMIRAL {self.config.name}] directive call refused by the model - "
+                  "no directive this checkpoint")
+            return [], first, None, None
         overrides: Dict[str, Any] = {}
         effort = getattr(self.client, "reasoning_effort", None)
         if meta.get("finish_reason") == "length":
@@ -1466,6 +1528,10 @@ Be authentic to how you would command a fleet as {model_name}."""
             weapons_ready=weapons_ready,
             weapons_cooling=weapons_cooling,
             weapons_destroyed=weapons_destroyed,
+            fittings_damaged=_damaged_fitting_lines(ship),
+            plume_wash=_plume_status_lines(simulation, ship) + _arcs_status_lines(simulation, ship),
+            crew_state=_crew_state(ship),
+            crew_dose_sv=float(getattr(ship, "crew_dose_sv", 0.0) or 0.0),
             current_maneuver=maneuver_str,
             current_target=ship.primary_target_id if hasattr(ship, 'primary_target_id') else None,
             radiators_extended=ship.radiators_extended if hasattr(ship, 'radiators_extended') else False,
@@ -1523,6 +1589,7 @@ Be authentic to how you would command a fleet as {model_name}."""
             accel_g=intel.max_accel_ms2(ship) / 9.80665,
             pd_operational=pd_op,
             pd_total=pd_total,
+            crew_state=_crew_state(ship),
             armament=armament["summary"],
             launchers=armament["launchers"],
             magazine=armament["magazine"],

@@ -19,6 +19,29 @@ export function factionSeed(seed, faction) {
   return s + (faction === 'alpha' ? 2 : faction === 'beta' ? 4 : 0);
 }
 
+/** Near-plane margin of the ribbon clip (ribbonVertex: zc = -RIBBON_NEAR_K * near). */
+export const RIBBON_NEAR_K = 1.02;
+
+/**
+ * JS mirror of ribbonVertex's clip and widening direction, for tests:
+ * view-space ends `from`/`to` ({x,y,z}, camera looking down -z) and the
+ * camera near distance. Null when the whole segment is behind the near
+ * plane, else the visible run [u0, u1] of 0..1, its clipped ends a/b and
+ * the unit on-screen direction {x, y} the strip is widened across.
+ */
+export function ribbonClip(from, to, near) {
+  const zc = -RIBBON_NEAR_K * near;
+  if (from.z > zc && to.z > zc) return null;
+  const u0 = from.z > zc ? (zc - from.z) / (to.z - from.z) : 0;
+  const u1 = to.z > zc ? (zc - from.z) / (to.z - from.z) : 1;
+  const at = (u) => ({ x: from.x + (to.x - from.x) * u, y: from.y + (to.y - from.y) * u, z: from.z + (to.z - from.z) * u });
+  const a = at(u0), b = at(u1);
+  let dx = b.x / -b.z - a.x / -a.z, dy = b.y / -b.z - a.y / -a.z;
+  const len = Math.hypot(dx, dy);
+  if (len > 1e-7) { dx /= len; dy /= len; } else { dx = 1; dy = 0; }
+  return { u0, u1, a, b, dir: { x: dx, y: dy } };
+}
+
 // One draw for all streaks, curved trail segments, motor plumes, PD ribbons
 // and torpedo RCS jets. Kinds: 0 slug tracer, 1 slug wake, 2 PD beam,
 // 3 motor plume, 4 spark, 5 retarget dash, 6 torpedo wake, 7 RCS jet,
@@ -39,17 +62,39 @@ const ribbonVertex = /* glsl */`
   void main() {
     vec3 from = (viewMatrix * vec4(aFrom, 1.0)).xyz;
     vec3 to = (viewMatrix * vec4(aTo, 1.0)).xyz;
-    vec3 p = mix(from, to, uv.x);
-    vec2 d = to.xy - from.xy;
-    d = length(d) > 0.00001 ? normalize(d) : vec2(1.0, 0.0);
+    // Clip the segment to just in front of the near plane, in view space
+    // (ribbonClip below mirrors this). A ribbon with an end behind the
+    // camera - a beam passing beside it, its turret behind it - otherwise
+    // interpolates the near end's pixel-floor width into a wedge hundreds
+    // of pixels wide. [u0, u1] is the visible part of the 0..1 run.
+    float zc = -${RIBBON_NEAR_K.toFixed(2)} * projectionMatrix[3][2] / (projectionMatrix[2][2] - 1.0);
+    if (from.z > zc && to.z > zc) {
+      gl_Position = vec4(2.0, 2.0, 2.0, 1.0);   // wholly behind: degenerate, off screen
+      return;
+    }
+    float u0 = from.z > zc ? (zc - from.z) / (to.z - from.z) : 0.0;
+    float u1 = to.z > zc ? (zc - from.z) / (to.z - from.z) : 1.0;
+    vec3 a = mix(from, to, u0), b = mix(from, to, u1);
+    float u = mix(u0, u1, uv.x);
+    vec3 p = mix(a, b, uv.x);
+    // Widen across the line as it runs ON SCREEN (the perspective-divided
+    // ends), not across its view-space xy: for a line receding in depth the
+    // two differ, and the strip thinned to a sub-pixel sliver that beads.
+    vec2 d = b.xy / -b.z - a.xy / -a.z;
+    d = length(d) > 1e-7 ? normalize(d) : vec2(1.0, 0.0);
     float pixel = uPixelWorld * max(0.01, -p.z);
     float kind = aStyle.z;
     bool plume = kind > 2.5 && kind < 3.5;
     bool engage = kind > 7.5;
     bool jet = kind > 6.5 && !engage;
     // Half-width floor >= 1 px: a narrower strip rasterises as beads.
-    float floorPx = kind < 0.5 ? 1.1 : kind < 1.5 ? 1.0 : kind < 2.5 ? 0.6 : plume ? 1.2 : engage ? 0.75 : jet ? 0.7 : 1.0;
-    float capPx = plume ? 64.0 : engage ? 0.75 : jet ? 16.0 : kind > 5.5 ? 24.0 : kind > 1.5 && kind < 2.5 ? 2.2 : 3.0;
+    // Slug tracers (kind 0) carry their gun class in aAge: heavier rounds
+    // keep a fatter streak at the pixel floor (battery 1.1 px .. siege
+    // 2.15 px half-width) and are allowed a fatter one up close (3 .. 7.5 px)
+    bool slug = kind < 0.5;
+    float floorPx = slug ? 1.1 + 0.35 * aAge.x : kind < 1.5 ? 1.0 : kind < 2.5 ? 0.6 : plume ? 1.2 : engage ? 0.75 : jet ? 0.7 : 1.0;
+    float capPx = plume ? 64.0 : engage ? 0.75 : jet ? 16.0 : kind > 5.5 ? 24.0 : kind > 1.5 && kind < 2.5 ? 2.2
+      : slug ? 3.0 + 1.5 * aAge.x : 3.0;
     float width = max(pixel * floorPx, min(aStyle.x, pixel * capPx));
     // Thin effects retain a controlled subpixel contribution at fleet scale.
     float minCover = kind < 0.5 ? 0.5 : kind < 1.5 ? 0.07 : kind < 2.5 ? 0.35 : engage ? 1.0 : jet ? 0.1 : kind > 5.5 ? 0.12 : 0.3;
@@ -59,13 +104,15 @@ const ribbonVertex = /* glsl */`
     vPx = width / pixel;
     // Plumes flare out of the nozzle, then neck down slightly toward the tip.
     // RCS jets are tight at the nozzle and fan out as the gas expands.
-    float taper = plume ? mix(0.3, 1.0, smoothstep(0.0, 0.3, uv.x)) * (1.0 - 0.35 * uv.x)
-      : jet ? mix(0.3, 1.0, sqrt(uv.x)) : 1.0;
+    // A slug is a hot bead drawing a thinning streak behind it.
+    float taper = plume ? mix(0.3, 1.0, smoothstep(0.0, 0.3, u)) * (1.0 - 0.35 * u)
+      : jet ? mix(0.3, 1.0, sqrt(u))
+      : slug && vPx > 1.6 ? mix(1.0, 0.4, smoothstep(0.08, 1.0, u)) : 1.0;
     p.xy += vec2(-d.y, d.x) * position.y * 2.0 * width * taper;
     gl_Position = projectionMatrix * vec4(p, 1.0);
-    vUv = uv;
+    vUv = vec2(u, uv.y);
     vStyle = aStyle;
-    vAge = mix(aAge.x, aAge.y, uv.x);
+    vAge = mix(aAge.x, aAge.y, u);
     #include <logdepthbuf_vertex>
   }
 `;
@@ -97,7 +144,21 @@ const ribbonFragment = /* glsl */`
       vec3 edge = side < 0.5 ? mix(vec3(1.6,0.36,0.055), vec3(0.06,0.6,0.85), smoothstep(0.2,1.0,x))
         : side < 1.5 ? mix(vec3(0.25,0.95,1.9), vec3(0.04,0.4,1.1), smoothstep(0.2,1.0,x))
         : mix(vec3(1.9,0.62,0.08), vec3(1.1,0.2,0.03), smoothstep(0.2,1.0,x));
-      color = (vec3(3.4,3.05,2.65)*core + edge*halo*0.75) * pow(1.0-x,0.45) * ends;
+      // Hypervelocity slug: a white-hot head a few widths long, then a
+      // streak that cools and thins out behind it. vAge is the gun class
+      // (0 battery, 1 heavy, 2 spinal, 3 siege): bigger guns throw a hotter,
+      // longer bead; spinal and siege rounds drag a beaded ionisation sheath.
+      float cls = vAge;
+      float head = exp(-x * (11.0 - 2.0 * cls));
+      float tail = pow(max(1.0 - x, 0.0), 0.7);
+      vec3 hot = mix(vec3(3.4,3.05,2.65), vec3(3.2,3.3,3.6), smoothstep(1.5, 2.5, cls));
+      color = hot * core * (0.3 * tail + (1.15 + 0.3 * cls) * head)
+        + edge * halo * (0.7 + 0.25 * cls) * (0.55 * tail + 0.6 * head);
+      if (cls > 1.5) {
+        float beads = pow(0.5 + 0.5 * sin(x * 34.0 + seed * 40.0), 6.0);
+        color += edge * halo * beads * tail * 0.9;
+      }
+      color *= ends;
     } else if (kind < 1.5) {
       // Slug wake: ionised track cooling from straw-white to the side's tint
       float cooling = pow(max(0.0,1.0-vAge),1.6);
@@ -108,11 +169,15 @@ const ribbonFragment = /* glsl */`
     } else if (kind < 2.5) {
       // PD beam: warm white, chopped into energy packets marching out to
       // the round, so a beam never reads as a slug tracer
-      float packets = 0.42+0.58*smoothstep(0.25,0.55,fract(x*26.0-uTime*7.0+seed*17.0));
+      // (pass 5: a continuous-dwell laser, not a dashed rope) - a thin hot
+      // core in a soft green glow, unbroken from turret to round, with a
+      // fast shallow flicker on battle time. Green separates it from the
+      // white/blue/amber coilgun tracers and from both faction colours.
+      float flick = 0.86 + 0.14 * sin(uTime*47.0 + seed*91.0) * sin(uTime*13.0 + seed*37.0);
+      float thin = exp(-y*y*min(70.0, aa*2.5));
       // Several turrets share a line of fire: keep pixel-floor beams slim.
       float slim = mix(0.6, 1.0, smoothstep(0.7, 2.0, vPx));
-      // aAge fades a close-up's split beam ends out toward the cut (0 = full)
-      color = (vec3(1.1,0.77,0.5)*core + vec3(0.5,0.13,0.035)*halo*0.3)*packets*slim*(1.0-vAge);
+      color = (vec3(1.5,2.9,1.5)*thin + vec3(0.2,1.25,0.3)*core*0.55 + vec3(0.05,0.55,0.12)*halo*0.45)*flick*slim;
     } else if (kind < 3.5) {
       // Motor plume: broad white-hot core out of the nozzle with shock
       // cells, wrapped in a longer orange sheath that fades to the tip.
@@ -201,8 +266,13 @@ const flashFragment = /* glsl */`
     if (vStyle.z < 0.5) {
       float angle = atan(p.y,p.x);
       float arc = pow(0.5+0.5*sin(angle*7.0+vStyle.w*73.0),3.0);
-      float ring = exp(-pow((r-0.67)*24.0,2.0))*(0.3+0.7*arc);
+      float rq = (r-0.67)*24.0;   // a product: pow(<0, 2.0) is NaN on some GPUs
+      float ring = exp(-rq*rq)*(0.3+0.7*arc);
       col = vec3(2.6,3.2,3.6)*exp(-r*r*45.0) + vec3(0.16,1.15,1.9)*ring + vec3(0.06,0.3,0.6)*halo*0.5;
+    } else if (vStyle.z > 5.5) {
+      // PD laser glint (emitter lens, burn spot): white kernel, green skirt
+      col = vec3(2.0,2.6,2.0)*exp(-r*r*14.0)
+        + vec3(0.15,1.1,0.25)*exp(-r*r*3.4)*(1.0-smoothstep(0.55,1.0,r))*0.8;
     } else if (vStyle.z > 4.5) {
       // RCS nozzle glow / exhaust puff: white kernel in a cold blue skirt
       col = vec3(1.9,2.1,2.5)*exp(-r*r*10.0)
@@ -477,6 +547,7 @@ export class TorpedoBodies {
     this.pivot = new THREE.Vector3(0, 0, ENGINE.pivot);
     this.tilt = new THREE.Quaternion();
     this.v = new THREE.Vector3();
+    this.s = new THREE.Vector3(1, 1, 1);
   }
 
   instanced(geometry, material, capacity, prev = null) {
@@ -498,15 +569,17 @@ export class TorpedoBodies {
   /**
    * One torpedo: body pose (position + orientation quaternion, +Z nose) and
    * the gimbal deflection as body-local x/y components of the bell tilt
-   * (radians; the bell exit swings toward that side).
+   * (radians; the bell exit swings toward that side). `scale` is the draw
+   * scale (scene km per kit unit, render/Scale.js): the body is modelled
+   * in kit units like the hulls.
    */
-  add(position, quaternion, tiltX = 0, tiltY = 0) {
+  add(position, quaternion, tiltX = 0, tiltY = 0, scale = 1) {
     if (this.mesh.count === this.capacity) {
       this.capacity *= 2;
       this.mesh = this.instanced(this.geometry, this.material, this.capacity, this.mesh);
       this.bell = this.instanced(this.bellGeometry, this.bellMaterial, this.capacity, this.bell);
     }
-    this.pose.compose(position, quaternion, UNIT);
+    this.pose.compose(position, quaternion, scale === 1 ? UNIT : this.s.setScalar(scale));
     const i = this.mesh.count++;
     this.mesh.setMatrixAt(i, this.pose);
     const angle = Math.hypot(tiltX, tiltY);

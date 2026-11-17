@@ -5,10 +5,12 @@ import { DecisionPanel } from './DecisionPanel.js';
  */
 
 import { BattleLoader } from './BattleLoader.js';
+import { fetchRecording, readRecordingFile } from './RecordingCodec.js';
 import { Interpolator } from './Interpolator.js';
 import { SceneManager } from './SceneManager.js';
 import { TimeController } from './TimeController.js';
-import { CameraController, buildDirectorCuts } from './CameraController.js';
+import { CameraController } from './CameraController.js';
+import { stepHighlight } from './Director.js';
 import { ContactOverlay } from './ContactOverlay.js';
 import {
   LOST_AFTER_FAILURES, backoffDelay, checkpointNumber, classifyVerdict, defaultMaxLag,
@@ -31,10 +33,19 @@ import { CombatLog } from './CombatLog.js';
 import { CommsFeed, commsToggle } from './CommsFeed.js';
 import { KillFeed } from './KillFeed.js';
 import { Registry } from './Registry.js';
-import { Scoreboard, ResultBanner, resultBannerDue } from './Scoreboard.js';
+import { Scoreboard, ResultBanner, resultBannerDue, endCause } from './Scoreboard.js';
+import { fittingsAt } from './FittingsIndex.js';
+import { FittingsCard } from './FittingsHud.js';
 import { TimelineMarkers } from './TimelineMarkers.js';
 import { showLightbox } from './hudDom.js';
 import { freeViewFrame, viewInsets } from './ViewInsets.js';
+
+const SCALE_LABELS = { auto: 'AUTO', true: 'TRUE', cinematic: 'CINE' };
+const SCALE_TITLES = {
+  auto: 'Hull scale AUTO: real size up close, a readable floor at distance',
+  true: 'Hull scale TRUE: always the real 65-275 m hull; contact markers at distance',
+  cinematic: 'Hull scale CINEMATIC: hulls drawn about 60x oversize at every range'
+};
 
 class BattleVisualizer {
   constructor() {
@@ -192,6 +203,7 @@ class BattleVisualizer {
   setupEventListeners() {
     document.getElementById('fleetViewBtn').addEventListener('click', () => this.showFleetView());
     document.getElementById('contactsBtn').addEventListener('click', () => this.toggleContacts());
+    document.getElementById('scaleBtn')?.addEventListener('click', () => this.cycleScaleMode());
     // File selection
     this.elements.selectFileBtn.addEventListener('click', () => {
       this.elements.fileInput.click();
@@ -317,6 +329,13 @@ class BattleVisualizer {
         this.toggleDirector();
       } else if (e.code === 'KeyN' && this.isInitialized) {
         this.toggleComms();
+      } else if (e.code === 'KeyS' && !e.shiftKey && !e.repeat && this.scene) {
+        this.cycleScaleMode();
+      } else if ((e.code === 'BracketRight' || e.code === 'BracketLeft') && this.isInitialized) {
+        // ] / [ : next / previous highlight (Director.highlightList)
+        const t = stepHighlight(this.cameraController.highlights, this.timeController.currentTime,
+          e.code === 'BracketRight' ? 1 : -1);
+        if (t !== null) { this.setLiveFollow(false); this.timeController.seek(t); }
       }
     });
 
@@ -339,8 +358,7 @@ class BattleVisualizer {
     this.setLoadingStatus('Reading file...');
 
     try {
-      const text = await file.text();
-      const data = JSON.parse(text);
+      const data = await readRecordingFile(file);   // .json or .json.gz
       await this.initializeBattle(data, file.name);
     } catch (error) {
       console.error('Failed to load file:', error);
@@ -361,11 +379,8 @@ class BattleVisualizer {
     this.setLoadingStatus('Fetching recording...');
 
     try {
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
+      const data = await fetchRecording(url);   // .json or .json.gz
       this.setLoadingStatus('Parsing data...');
-      const data = await response.json();
       await this.initializeBattle(data, url.split('/').pop());
     } catch (error) {
       console.error('Failed to load URL:', error);
@@ -396,6 +411,7 @@ class BattleVisualizer {
     this.tracks = new Tracks(this.scene, new TrajectoryPredictor(this.loader));
     this.tracks.hud = this.trackHud;
     this.scene.loader = this.loader;   // hull rigs read targets, shots, launches, PD dwell
+    this.syncScaleButton();
     this.setLoadingProgress(60);
 
     // Initialize time controller. The extra seconds are an epilogue: a ship
@@ -432,7 +448,8 @@ class BattleVisualizer {
     // Death causes + final vectors drive the two-stage destruction sequence
     this.scene.deathInfo = this.loader.buildDeathInfo();
     this.scene.damageFX?.setRecording(this.loader);
-    this.cameraController.setDirectorCuts(buildDirectorCuts(this.loader.events, this.scene.deathInfo));
+    this.cameraController.setDirectorRecording({ events: this.loader.events, deathInfo: this.scene.deathInfo,
+      simTrace: this.loader.simTrace, live: !!liveRunning });
     this.cameraController.setDirector(directorOn);
     this.setLoadingProgress(100);
 
@@ -535,6 +552,27 @@ class BattleVisualizer {
           state.radiatorsExtended = this.loader.getRadiatorStateAt(shipId, currentPlaybackTime);
           this.scene.updateShip(shipId, state);
         }
+
+        // Camera next: with the ships at this frame's positions, and before
+        // anything that is placed on a hull. In the auto scale mode a hull's
+        // draw size follows the camera (render/Scale.js), so the camera is
+        // settled first and every effect of the frame - mounts, impacts,
+        // jets, wrecks - sees the one scale the hull is drawn at, also on
+        // the frame of a director cut.
+        if (this.needsFleetFraming) {
+          this.cameraController.focusFleet(this.currentState.ships, this.directorFrame(true));
+          this.needsFleetFraming = false;
+        }
+        if (this.pendingEvidenceFocus) {
+          this.cameraController.focusOnShip(this.pendingEvidenceFocus, this.currentState.ships);
+          this.cameraController.setMode('orbit', this.pendingEvidenceFocus);
+          this.pendingEvidenceFocus = null;
+        }
+        this.cameraController.update(this.currentState.ships,
+          { time: currentPlaybackTime, dt: deltaTime, torpedoes: this.currentState.torpedoes, ...this.directorFrame() });
+
+        this.scene.syncCamera();
+
         // RCS attitude jets, fired from the recorded rotation around this time
         this.scene.rcs.update(this.scene.ships, this.loader.simTrace, currentPlaybackTime);
 
@@ -587,19 +625,6 @@ class BattleVisualizer {
           currentPlaybackTime > this.loader.duration + 0.5 ? 'off' : trackMode,
           this.selectedShipId || this.cameraController.targetShipId);
 
-        // Update camera
-        if (this.needsFleetFraming) {
-          this.cameraController.focusFleet(this.currentState.ships, this.directorFrame(true));
-          this.needsFleetFraming = false;
-        }
-        if (this.pendingEvidenceFocus) {
-          this.cameraController.focusOnShip(this.pendingEvidenceFocus, this.currentState.ships);
-          this.cameraController.setMode('orbit', this.pendingEvidenceFocus);
-          this.pendingEvidenceFocus = null;
-        }
-        this.cameraController.update(this.currentState.ships,
-          { time: currentPlaybackTime, dt: deltaTime, torpedoes: this.currentState.torpedoes, ...this.directorFrame() });
-
         // Update selected ship telemetry
         if (this.selectedShipId && this.currentState.ships[this.selectedShipId]) {
           this.updateShipTelemetry(this.currentState.ships[this.selectedShipId]);
@@ -613,8 +638,13 @@ class BattleVisualizer {
         this.processEvents();
       }
 
-      // Render
+      // Render, with the blast shake on the camera for this draw only
+      // (battle time, Director.shakeAt): nothing that places the camera
+      // between frames ever sees the offset
+      const shaking = this.isInitialized && this.currentState;
+      if (shaking) this.cameraController.applyShake(this.currentState.ships, this.timeController.currentTime);
       this.scene.render();
+      if (shaking) this.cameraController.removeShake();
       if (this.isInitialized) {
         this.contacts.update(this.scene, this.currentState?.ships, this.selectedShipId);
         this.offscreen?.update(this.scene, this.currentState?.ships, this.loader.ships, this.selectedShipId);
@@ -910,7 +940,8 @@ class BattleVisualizer {
     if (combat) {
       this.scene.deathInfo = loader.buildDeathInfo();
       this.scene.damageFX?.setRecording(loader);
-      this.cameraController.setDirectorCuts(buildDirectorCuts(loader.events, this.scene.deathInfo));
+      this.cameraController.setDirectorRecording({ events: loader.events, deathInfo: this.scene.deathInfo,
+        simTrace: loader.simTrace, live: !this.live?.ended });
     }
     this.updateLiveTimeline();
     this.updateBattleInfo();
@@ -983,6 +1014,9 @@ class BattleVisualizer {
     }
     if (this.live !== live) return;
     live.ended = true;
+    // The battle is a replay now: the director may look ahead
+    this.cameraController?.setDirectorRecording({ events: this.loader.events, deathInfo: this.scene.deathInfo,
+      simTrace: this.loader.simTrace, live: false });
     live.lost = false;
     live.recapOpen = false;
     this.connectionCard.hide();
@@ -1024,9 +1058,7 @@ class BattleVisualizer {
     live.replayLoading = true;
     this.updateLiveHud();
     try {
-      const response = await fetch(live.replayUrl, { cache: 'no-store' });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json();
+      const data = await fetchRecording(live.replayUrl, { cache: 'no-store' });
       if (this.live !== live) return;
       const savedId = data.provenance?.battle_id;
       if (savedId && live.battleId && savedId !== live.battleId) {
@@ -1313,7 +1345,11 @@ class BattleVisualizer {
   /** Verdict, kills, survivors and spend for the end card. */
   buildEndSummary() {
     const live = this.live;
-    const verdict = live.verdict || this.computeVerdict();
+    let verdict = live.verdict || this.computeVerdict();
+    // A battle that ended because a side could no longer deal damage says so in words (as the replay banner does)
+    // (same wording as the replay banner, including a fleet whose last ships surrendered or cannot fight)
+    const cause = endCause({ winner: verdict?.kind === 'victory' ? verdict.faction : null, reason: verdict?.detail }, this.lastSides);
+    if (cause) verdict = { ...verdict, detail: `${cause.headline} · ${cause.detail}${cause.note ? `, ${cause.note}` : ''}${cause.inferred && verdict.detail ? ` (${verdict.detail})` : ''}` };
     const spend = live.spend;
     const billing = live.provenance?.billing || (spend ? {
       reported_cost_usd: spend.reported_usd, spend_limit_usd: spend.limit_usd, calls: spend.calls,
@@ -1418,8 +1454,9 @@ class BattleVisualizer {
     const t = this.timeController.currentTime;
     const hud = this.loader.hud;
     const sides = this.scoreboard.update(this.currentState.ships, this.currentState.torpedoes, this.loader.ships, hud, t);
-    this.registry.update(this.currentState.ships, t, hud.kills);
-    this.killFeed.update(hud.kills, t);
+    this.lastSides = sides;
+    this.registry.update(this.currentState.ships, t, hud.kills, hud.fittings);
+    this.killFeed.update(hud.kills, t, hud);
     // A dying ship is a confirmed kill counting down to its reactor
     // detonation; the banner waits for the end of a replayed recording (a
     // live battle's verdict is the live end card's, never both).
@@ -1480,6 +1517,32 @@ class BattleVisualizer {
     this.cameraController.focusFleet(this.currentState?.ships, this.directorFrame(true));
   }
 
+  /**
+   * Hull scale: auto (real size up close, a readable floor at distance),
+   * true (always real size) or cinematic (the fixed ~60x exaggeration).
+   * S cycles; ?scale= sets it for one page load (render/Scale.js).
+   */
+  cycleScaleMode() {
+    if (!this.scene) return;
+    const before = this.scene.scaleMode;
+    const mode = this.scene.cycleScaleMode();
+    // a fleet framing depends on the mode's floors: frame it again
+    const cam = this.cameraController;
+    if (cam?.fleetFramed && !cam.director.enabled && (before === 'cinematic') !== (mode === 'cinematic')) {
+      cam.focusFleet(this.currentState?.ships, this.directorFrame(true));
+    }
+    this.syncScaleButton();
+  }
+
+  syncScaleButton() {
+    const button = document.getElementById('scaleBtn');
+    if (!button || !this.scene) return;
+    const mode = this.scene.scaleMode;
+    button.innerHTML = `SCALE ${SCALE_LABELS[mode] || mode.toUpperCase()} <kbd>S</kbd>`;
+    button.classList.toggle('active', mode !== 'cinematic');
+    button.title = `${SCALE_TITLES[mode] || ''} (S cycles auto / true / cinematic)`;
+  }
+
   toggleContacts() {
     this.contacts.enabled = !this.contacts.enabled;
     const button = document.getElementById('contactsBtn');
@@ -1518,6 +1581,7 @@ class BattleVisualizer {
       if (this.elements.targetValue) {
         this.elements.targetValue.textContent = '-';
       }
+      this.fitCard.update(null);
       return;
     }
 
@@ -1564,6 +1628,8 @@ class BattleVisualizer {
     if (this.selectedShipId && this.loader) {
       this.updateArmorDisplay(this.selectedShipId);
       this.updateModuleDisplay(this.selectedShipId);
+      this.fitCard.update(fittingsAt(this.loader.hud?.fittings, this.selectedShipId, this.timeController?.currentTime || 0),
+        !!(state.dying || state.destroyed));
     }
   }
 
@@ -1803,6 +1869,7 @@ class BattleVisualizer {
     this.scoreboard = new Scoreboard({ root: $('scoreboard') });
     this.resultBanner = new ResultBanner({ root: $('resultBanner') });
     this.killFeed = new KillFeed({ root: $('killFeed'), onSeek: kill => this.hudSeek(kill.t - 5, kill.shipId) });
+    this.fitCard = new FittingsCard({ root: $('fitCard') });
     this.timelineMarkers = new TimelineMarkers({ events: $('timelineMarkers'), checkpoints: $('timelineCheckpoints'),
       onSeek: (t, shipId) => this.hudSeek(t, shipId) });
     this.commsFeed = new CommsFeed({
