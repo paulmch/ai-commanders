@@ -196,7 +196,9 @@ function wide(shot, t, world) {
   if (!cast.length) cast = world.ids.filter(id => world.deathTime(id) > shot.t0);
   if (!cast.length) cast = world.ids;
   const points = [];
-  let longest = 8;
+  // (floors tuned on the kit-size hulls, in the scale mode's units)
+  const unit = world.unit ?? 1;
+  let longest = 8 * unit;
   for (const id of cast) {
     const p = world.pos(id);
     if (!p) continue;
@@ -207,7 +209,7 @@ function wide(shot, t, world) {
   // other, and the camera would swing with it)
   const frame = frameGroups(points, {
     fov: world.fov, aspect: world.aspect, fallbackDir: WIDE_SIDE, widthShare: world.widthShare,
-    minRadius: shot.cast?.length ? 3 * longest : 25
+    minRadius: shot.cast?.length ? 3 * longest : 25 * unit
   });
   if (!frame) return null;
   // A slow push-in over the first seconds of the shot
@@ -309,7 +311,12 @@ function pullback(shot, t, world) {
   // Until it blows the ship is still under way: stay on the hull itself
   const live = world.pos(first.id);
   if (live && t < first.t) centre.lerp(live, 1 - ease((t - (first.t - PULLBACK_PRE_S)) / PULLBACK_PRE_S));
-  const near = Math.max(2.4 * L, 1.3 * first.radiusKm);
+  // Where the shot starts. On the cinematic scale a hull is about as long
+  // as its blast is wide, so one distance is both a close-up and outside
+  // the shell. At real size the hull is a hundredth of the blast: start
+  // on the hull (the hulk reads, molten and tumbling) and let the move
+  // out, which begins before the flash, carry the camera clear of it.
+  const near = world.realScale ? 2.4 * L : Math.max(2.4 * L, 1.3 * first.radiusKm);
   const fit = reach => Math.max(1.35 * near, fitDistance(reach, world.fov, world.aspect, world.widthShare, 1.15));
   // Out with the blast: the move starts from rest just before the flash
   // and has the ring in frame while it is still bright, then eases back
@@ -365,8 +372,13 @@ const FRAMERS = { wide, shoulder, runin, orbit, pullback, chase, flyby };
  * @param {Object} shot - from Director.buildShotList
  * @param {number} t - battle seconds
  * @param {Object} world - {ids, pos(id), fwd(id), thrust(id), length(id),
- *   deathTime(id), faction(id), fov, aspect, widthShare, shift, scale}
- *   (positions in scene units; scale = scene units per recording metre)
+ *   deathTime(id), faction(id), fov, aspect, widthShare, shift, scale,
+ *   unit, realScale}
+ *   (positions in scene units; scale = scene units per recording metre;
+ *   length(id) is the hull's FRAMING length - its real length in the auto
+ *   and true scale modes, the kit length in cinematic - `unit` the scene
+ *   km per kit unit for the kit-tuned floors and `realScale` whether hulls
+ *   are drawn at real size up close: render/Scale.js)
  * @returns {{position: THREE.Vector3, target: THREE.Vector3}|null} null
  *   when the shot's subject cannot be placed (the caller falls back wide)
  */

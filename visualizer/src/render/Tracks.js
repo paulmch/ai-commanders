@@ -646,12 +646,12 @@ export class Tracks {
     const target = this.sm.controls?.target;
     if (!target || !this.sm.ships) return null;
     const viewDist = this.sm.camera.position.distanceTo(target);
-    if (viewDist > IMPLICIT_FOCUS_MAX) return null;
+    if (viewDist > IMPLICIT_FOCUS_MAX * (this.sm.scaleUnit?.() ?? 1)) return null;
     let best = null, bd = Infinity;
     for (const [id, ship] of this.sm.ships) {
       if (!ship.visible) continue;
       const d = ship.position.distanceTo(target);
-      const L = ship.userData.size?.length || 8;
+      const L = ship.userData.drawn?.length ?? ship.userData.size?.length ?? 8;
       if (d < bd && d < L + 0.35 * viewDist) { bd = d; best = id; }
     }
     return best;
@@ -666,7 +666,9 @@ export class Tracks {
     const scope = this.hud?.scope || 'all';
     // Near-camera fade scale: the orbit distance in a close-up, capped so
     // fleet-range views (where nothing passes the lens) keep every track
-    const nearFade = Math.min(viewDist, NEAR_FADE_MAX);
+    // (thresholds tuned on the kit-size hulls: in the scale mode's unit)
+    const unit = this.sm.scaleUnit?.() ?? 1;
+    const nearFade = Math.min(viewDist, NEAR_FADE_MAX * unit);
     let anyStale = false, focusCp = null, kMin = Infinity, kMax = 0;
     for (const tr of tracks.values()) {
       const id = tr.shipId;
@@ -681,12 +683,13 @@ export class Tracks {
       }
       const isFocus = id === this.focusId;
       const ship = this.sm.ships?.get(id);
-      const L = ship?.userData.size?.length || 8;
+      // the length the hull is DRAWN at this frame (render/Scale.js)
+      const L = ship?.userData.drawn?.length ?? ship?.userData.size?.length ?? 8;
       // rings and drift are drawn at the hull's own exaggeration, soft-capped
       const k = hullExaggeration(ship?.userData.shipType, L);
       const rMax = (GLYPH_RMAX_HULLS * L) / S;
       kMin = Math.min(kMin, k); kMax = Math.max(kMax, k);
-      trackEmphasis(isFocus, viewDist, emph);
+      trackEmphasis(isFocus, viewDist / unit, emph);
       const pu = v.pred.material.uniforms;
       pu.uIntensity.value = PRED_INTENSITY * emph.intensity;
       pu.uLinePx.value = PRED_LINE_PX * emph.width;
@@ -821,7 +824,9 @@ export class Tracks {
       return;
     }
     if (!v.ghost) v.buildGhost(this.root, ship);
-    const L = v.ghostLength;
+    // the ghost is the hull's kit geometry: drawn at the hull's draw scale
+    const hk = ship.userData.k ?? 1;
+    const L = v.ghostLength * hk;
     const dist = cam.position.distanceTo(cp);
     const px = L / Math.max(1e-6, pw * dist);
     const viewPx = 2 * Math.tan(THREE.MathUtils.degToRad(cam.fov || 55) / 2) / Math.max(1e-9, pw);
@@ -847,10 +852,10 @@ export class Tracks {
     } else {
       v.ghost.quaternion.copy(ship.quaternion);
     }
-    v.ghost.scale.setScalar(look.scale);
+    v.ghost.scale.setScalar(look.scale * hk);
     // Never over the focused hull: fade a ghost in front of it as their
     // silhouettes close in
-    const gap = this._ghostCoverGap(v.ghost, L * look.scale, (ship.userData.size?.width || L * 0.2) * look.scale, cam, pw);
+    const gap = this._ghostCoverGap(v.ghost, L * look.scale, (ship.userData.drawn?.width ?? ship.userData.size?.width ?? L * 0.2) * look.scale, cam, pw);
     if (gap !== Infinity) look = ghostLook(px, viewPx, gap, this._ghostLook);
     opacity *= look.opacity;
     if (opacity < 0.01) {
@@ -870,7 +875,8 @@ export class Tracks {
   _ghostCoverGap(ghost, len, beam, cam, pw) {
     const focus = this.focusId ? this.sm.ships?.get(this.focusId) : null;
     if (!focus || !focus.visible) return Infinity;
-    const fL = focus.userData.size?.length || 8, fW = focus.userData.size?.width || fL * 0.2;
+    const fL = focus.userData.drawn?.length ?? focus.userData.size?.length ?? 8;
+    const fW = focus.userData.drawn?.width ?? focus.userData.size?.width ?? fL * 0.2;
     const V = cam.matrixWorldInverse;
     const P = this._proj || (this._proj = {
       c: new THREE.Vector3(), fwd: new THREE.Vector3(), g0: [0, 0], g1: [0, 0], f0: [0, 0], f1: [0, 0]

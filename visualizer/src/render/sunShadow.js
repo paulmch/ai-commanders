@@ -12,16 +12,20 @@ import * as THREE from 'three';
  * camera orbits, pans or eases in.
  */
 
-export const SHADOW_MIN_RADIUS = 4;      // km: closest zoom on a corvette
-export const SHADOW_MAX_RADIUS = 4096;
-export const SHADOW_DEPTH_MARGIN = 60;   // casters up-sun of the box (> 2 hull lengths)
+// The three lengths below were tuned on the kit-size hulls (4-21 km long).
+// Every function takes `unit`, the scene km per kit unit of the scale mode
+// (1 cinematic, 0.016 with real-size hulls: render/Scale.js), so the box
+// can close in on a 65 m corvette and its near plane stays off the hull.
+export const SHADOW_MIN_RADIUS = 4;      // kit units: closest zoom on a corvette
+export const SHADOW_MAX_RADIUS = 4096;   // km
+export const SHADOW_DEPTH_MARGIN = 60;   // kit units: casters up-sun of the box (> 2 hull lengths)
+export const SHADOW_NEAR = 0.5;          // kit units
 
 /** Half-extent (km) of the shadow box for a camera `viewDist` from its focus. */
-export function shadowBoxRadius(viewDist, fovDeg, aspect) {
+export function shadowBoxRadius(viewDist, fovDeg, aspect, unit = 1) {
   const fovT = Math.tan(THREE.MathUtils.degToRad(fovDeg) * 0.5);
-  const raw = Math.max(viewDist, 1e-3) * fovT * Math.max(aspect, 1) * 1.08;
-  const r = THREE.MathUtils.clamp(raw, SHADOW_MIN_RADIUS, SHADOW_MAX_RADIUS);
-  return Math.pow(2, Math.ceil(Math.log2(r) * 4 - 1e-9) / 4);
+  const raw = Math.max(viewDist, 1e-3 * unit) * fovT * Math.max(aspect, 1) * 1.08;
+  return quantiseShadowRadius(raw, unit);
 }
 
 /**
@@ -41,16 +45,20 @@ export function shadowBasis(sunDir) {
  * camera and bias need. Biases scale with the world size of a texel, so
  * the same settings hold from a corvette close-up to the fleet view.
  */
-export function fitSunShadow(focus, basis, radius, mapSize, outTarget, outPosition) {
+export function fitSunShadow(focus, basis, radius, mapSize, outTarget, outPosition, unit = 1) {
   const texel = (2 * radius) / mapSize;
   const sx = Math.round(focus.dot(basis.x) / texel) * texel;
   const sy = Math.round(focus.dot(basis.y) / texel) * texel;
   const sz = focus.dot(basis.z);
-  const depth = radius + SHADOW_DEPTH_MARGIN;
+  // With real-size hulls the auto scale can draw a distant hull about as
+  // long as the box is wide: the margin then grows with the box, so its
+  // casters stay inside. (The cinematic fit, unit 1, is unchanged.)
+  const margin = unit === 1 ? SHADOW_DEPTH_MARGIN : Math.max(SHADOW_DEPTH_MARGIN * unit, 2 * radius);
+  const depth = radius + margin;
   outTarget.set(0, 0, 0)
     .addScaledVector(basis.x, sx).addScaledVector(basis.y, sy).addScaledVector(basis.z, sz);
   outPosition.copy(outTarget).addScaledVector(basis.z, depth);
-  const near = 0.5, far = 2 * depth;
+  const near = SHADOW_NEAR * unit, far = 2 * depth;
   return { texel, near, far, normalBias: texel * 1.2, bias: -texel * 0.6 / (far - near) };
 }
 
@@ -69,8 +77,8 @@ export function fitSunShadow(focus, basis, radius, mapSize, outTarget, outPositi
  * `subjects` is an array of { pos: Vector3, r: km }; `n` how many are live.
  * Writes the centre into `outCenter` and returns the (unquantised) radius.
  */
-export function chooseShadowFocus(camera, target, viewDist, subjects, n, outCenter) {
-  const viewR = Math.max(viewDist, 1e-3) * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5)
+export function chooseShadowFocus(camera, target, viewDist, subjects, n, outCenter, unit = 1) {
+  const viewR = Math.max(viewDist, 1e-3 * unit) * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5)
     * Math.max(camera.aspect, 1) * 1.08;
   outCenter.copy(target);
   if (!n) return viewR;
@@ -83,7 +91,7 @@ export function chooseShadowFocus(camera, target, viewDist, subjects, n, outCent
     const depth = -(dx * e[8] + dy * e[9] + dz * e[10]);
     const sx = dx * e[0] + dy * e[1] + dz * e[2], sy = dx * e[4] + dy * e[5] + dz * e[6];
     s.a = 0;
-    if (depth <= 0.01) continue;
+    if (depth <= 0.01 * unit) continue;
     if (Math.abs(sx) > depth * tanX + s.r || Math.abs(sy) > depth * tanY + s.r) continue;
     s.a = s.r / depth;
     if (s.a > bestA) { bestA = s.a; best = i; }
@@ -109,7 +117,7 @@ export function chooseShadowFocus(camera, target, viewDist, subjects, n, outCent
 }
 
 /** Quarter-octave quantisation of a box radius (see shadowBoxRadius). */
-export function quantiseShadowRadius(r) {
-  const c = THREE.MathUtils.clamp(r, SHADOW_MIN_RADIUS, SHADOW_MAX_RADIUS);
+export function quantiseShadowRadius(r, unit = 1) {
+  const c = THREE.MathUtils.clamp(r, SHADOW_MIN_RADIUS * unit, SHADOW_MAX_RADIUS);
   return Math.pow(2, Math.ceil(Math.log2(c) * 4 - 1e-9) / 4);
 }

@@ -6,11 +6,13 @@ import { Projectiles } from '../src/render/Projectiles.js';
 import { ribbonClip, RIBBON_NEAR_K, WeaponRibbons } from '../src/render/WeaponBatches.js';
 import {
   WeaponTimeline, makeSample, sampleTrack, tracerLength, missOpacity,
-  beamPulse, seedFor, torpedoPower, MISS_LIFE
+  beamPulse, seedFor, torpedoPower, MISS_LIFE, TERMINAL_BEND_S
 } from '../src/render/WeaponTimeline.js';
 
 const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-6, `${a} != ${b}`);
 const near_ = near;
+/** Share of a round's terminal correction applied `dt` seconds before its end (WeaponTimeline.sample). */
+const bend = (dt) => { const u = Math.min(1, Math.max(0, 1 - dt / TERMINAL_BEND_S)); return u * u * (3 - 2 * u); };
 const ship = { pos: [50000, 0, 0], vel: [100, 0, 0], fwd: [-1, 0, 0] };
 const slug = (id, x) => ({ id, pos: [x, 0, 0], vel: [10000, 0, 0], source: 'alpha', target: 'beta' });
 const torp = (x, dv) => ({ ...slug('torp', x), dv_remaining: dv, disabled: false });
@@ -78,7 +80,11 @@ test('torpedoes preserve launch/disable/outcome times and bridge to the impact',
   const timeline = new WeaponTimeline(recording()), tr = timeline.torpedoes.get('torp');
   assert.equal(tr.start, 0); assert.equal(tr.disabledAt, 2.4); assert.equal(tr.end, 4);
   const out = makeSample();
-  timeline.sample(tr, 3.5, out); near(out.pos[0], 40000);
+  // The recorded track ends 10 km short of the impact (ballistic end
+  // 40000 at t = 4): the drawn path eases that gap in over its last
+  // TERMINAL_BEND_S seconds and is exactly on the impact at the end
+  timeline.sample(tr, 3.5, out); near(out.pos[0], 35000 + 10000 * bend(0.5));
+  timeline.sample(tr, 0.9, out); near(out.pos[0], 9000);
   timeline.sample(tr, 4, out); near(out.pos[0], 50000);
   assert.equal(timeline.moments.filter(m => m.kind === 'seeker').length, 1);
 });
@@ -148,7 +154,7 @@ test('all weapon buffers match on direct seek, playback, backward seek and pause
     assert.equal(fx.ribbons.geometry.attributes.aFrom.array, buffers);
     assert.equal(fx.manager.scene.children.filter(c => c.isLight).length, 0);
     fx.update(loader, 2.43);
-    assert.equal(fx.position('torpedo', 'torp')?.x, 24.3);
+    near(fx.position('torpedo', 'torp')?.x, 24.3 + 10 * bend(4 - 2.43));
     fx.clear();
     assert.equal(fx.ribbons.mesh.visible, false);
     assert.equal(fx.position('torpedo', 'torp'), null);

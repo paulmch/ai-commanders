@@ -198,11 +198,13 @@ export class Environment {
     if (!light.castShadow || !focus) return;
     const sh = light.shadow;
     camera.updateMatrixWorld();
+    // scene km per kit unit of the scale mode (SceneManager sets it)
+    const unit = this.scaleUnit || 1;
     const R = quantiseShadowRadius(
-      chooseShadowFocus(camera, focus, viewDist, subjects || _noSubjects, subjectCount || 0, _shCenter));
-    const fit = fitSunShadow(_shCenter, this._shBasis, R, sh.mapSize.x, light.target.position, light.position);
+      chooseShadowFocus(camera, focus, viewDist, subjects || _noSubjects, subjectCount || 0, _shCenter, unit), unit);
+    const fit = fitSunShadow(_shCenter, this._shBasis, R, sh.mapSize.x, light.target.position, light.position, unit);
     const cam = sh.camera;
-    if (cam.right !== R) {
+    if (cam.right !== R || cam.far !== fit.far || cam.near !== fit.near) {
       cam.left = -R; cam.right = R; cam.top = R; cam.bottom = -R;
       cam.near = fit.near; cam.far = fit.far;
       cam.updateProjectionMatrix();

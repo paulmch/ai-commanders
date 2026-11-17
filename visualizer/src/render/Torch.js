@@ -429,6 +429,7 @@ export function createTorch({ radius, length, light = null, tint = 'fusion', int
 
   const _wp = new THREE.Vector3();
   const _wd = new THREE.Vector3();
+  const lightReach = light ? light.distance : 0;   // kit units, as borrowed
   const u = material.uniforms;
   const phase = Math.random() * Math.PI * 2;
   const state = { thrust: 0 };
@@ -490,10 +491,17 @@ export function createTorch({ radius, length, light = null, tint = 'fusion', int
         levels.halo * shape.wide * breathe * (1 + 0.6 * tr.fade));
       u.uFlare.value = levels.flare * Math.min(1, thrust * 1.3 * gasp * gasp) * breathe * (1 + IGNITION_FLARE * tr.surge);
       if (light) {
+        // A pool light lives in world space: carry the hull's draw scale
+        // (render/Scale.js) into its offset, reach and - inverse-square -
+        // its intensity, so the stern is lit the same at any hull size
+        group.updateWorldMatrix(true, false);
+        const e = group.matrixWorld.elements;
+        const k = Math.hypot(e[8], e[9], e[10]);
         group.getWorldPosition(_wp);
         _wd.set(0, 0, -1).transformDirection(group.matrixWorld);
-        light.position.copy(_wp).addScaledVector(_wd, radius * 3);
-        light.intensity = (0.15 + 0.85 * shape.wide) * 8 * I * breathe;
+        light.position.copy(_wp).addScaledVector(_wd, radius * 3 * k);
+        if (lightReach > 0) light.distance = lightReach * k;
+        light.intensity = (0.15 + 0.85 * shape.wide) * 8 * I * breathe * k * k;
       }
     },
     dispose() {

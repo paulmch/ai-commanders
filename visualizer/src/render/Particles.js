@@ -43,6 +43,11 @@ function randomDirection(rnd, out) {
  *   distance scale), drag, spread (initial volume radius), dir (optional
  *   bias direction), cone (0..1 how tightly to follow dir), hot, cool colors
  */
+/** Widest a streak is drawn, as a view angle (radians): see StreakBurst's vertex shader. */
+export const STREAK_MAX_RAD = 0.008;
+/** Largest spark sprite (px, before the device pixel ratio): a spark passing the lens is a glint, not a disc. */
+export const SPARK_MAX_PX = 40;
+
 export class SparkBurst {
   constructor(o) {
     const count = o.count;
@@ -113,7 +118,10 @@ export class SparkBurst {
           // colour cools with normalised age; a few stay hot longer
           float cool = smoothstep(0.0, 0.55 + aSeed * 0.4, f);
           vColor = mix(mix(uHot, uWarm, smoothstep(0.0, 0.5, cool)), uCool, smoothstep(0.45, 1.0, cool));
-          gl_PointSize = max(1.0, uSize * (0.55 + aSeed * 0.9) * (1.0 - 0.45 * f) * uPixelRatio * (400.0 / max(1.0, -mv.z)));
+          // (sizes are in the object's own units: a burst under a scaled
+          // group - a hull's draw scale, render/Scale.js - scales with it)
+          float objScale = length(modelMatrix[0].xyz);
+          gl_PointSize = clamp(uSize * objScale * (0.55 + aSeed * 0.9) * (1.0 - 0.45 * f) * (400.0 / max(1e-4, -mv.z)), 1.0, ${SPARK_MAX_PX.toFixed(1)}) * uPixelRatio;
           #include <logdepthbuf_vertex>
         }`,
       fragmentShader: /* glsl */`
@@ -234,7 +242,13 @@ export class StreakBurst {
           float len = uLen * (0.45 + aSeed * 0.9) * (0.25 + 0.75 * speedK);
           len = min(len, 2.0 * length(travel));
           float wid = uWidth * (0.6 + aSeed * 0.7);
-          pv.xy += d * position.x * len + perp * position.y * wid;
+          float objScale = length(modelMatrix[0].xyz);   // the burst's draw scale
+          // A streak is a line of light, not a slab: its width is capped at
+          // STREAK_MAX_RAD of view angle (about 5 px on a 720p frame). At
+          // real size a camera can sit INSIDE a reactor blast, where the
+          // nearest streaks (tens of metres wide) filled the frame with bars.
+          wid = min(wid * objScale, ${STREAK_MAX_RAD.toFixed(4)} * max(1e-5, -pv.z)) / objScale;
+          pv.xy += (d * position.x * len + perp * position.y * wid) * objScale;
           gl_Position = projectionMatrix * pv;
           vUv = uv;
           float fade = uAge < 0.0 ? 0.0 : pow(1.0 - f, 1.4) * smoothstep(0.0, 0.06, age);
