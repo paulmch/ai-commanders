@@ -585,17 +585,23 @@ class TestEvasionOverlay:
     def test_full_runs_and_presents_dodge_never_runs(self):
         _, _, plain_modes, plain = _flank_torpedo_run(None)
         _, _, full_modes, full = _flank_torpedo_run("full")
-        _, me, dodge_modes, dodge = _flank_torpedo_run("dodge")
+        steps = []
+        _, me, dodge_modes, dodge = _flank_torpedo_run("dodge", applied=steps)
         assert not set(plain_modes) & {"RUN", "PRESENT"}
         assert "RUN" in full_modes and "PRESENT" in full_modes
         assert "RUN" not in dodge_modes and "PRESENT" in dodge_modes
         # Before the terminal phase the dodge ship keeps flying its heading.
         assert dodge_modes[0] == "HEADING"
-        # The flank shot hits the passive ship's side; presenting turns the
-        # thick nose onto it.
+        # The flank shot hits the passive ship's side. On a burning order the
+        # overlay keeps the burn and presents only inside the swing cone
+        # around the burn line (simulation module docstring): a torpedo from
+        # abeam cannot be put on the nose from there, so it strikes the side
+        # either way (the older overlay cut the drive to a 5 % token and
+        # turned the nose onto it).
         assert plain and plain[0].data["hit_location"] == "lateral"
-        assert dodge and dodge[0].data["hit_location"] == "nose"
-        assert full and full[0].data["hit_location"] == "nose"
+        assert full and full[0].data["hit_location"] == "lateral"
+        assert dodge and dodge[0].data["hit_location"] == "lateral"
+        assert all(thr == pytest.approx(0.5) for mode, thr in steps if mode == "PRESENT")
 
     def test_overlay_on_a_throttle_0_order_dodges_at_full_power(self):
         # "Coast and shoot, evade dodge": an attitude-only HEADING (the fleet

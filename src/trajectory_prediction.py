@@ -287,6 +287,13 @@ class PredictionSimulation(CombatSimulation):
         # most of a traced torpedo battle's CPU).
         return ship.forward
 
+    def _swing_armour_aim(self, ship: Any, line: Any, cone: float, mode: str) -> Any:  # type: ignore[override]
+        # Motion only: an armour swing on a burning order stays inside the
+        # cone around the burn line (at least cos(cone) of the push along
+        # it); the shadow skips scoring the cone's facings and flies it as a
+        # swing with nothing to gain (the dodge, or the line).
+        return None
+
     def _advance_ship(self, ship: Any, dt: float) -> None:  # type: ignore[override]
         if ship.is_destroyed:
             return
@@ -644,6 +651,13 @@ def predict_plans(
             alpha, omega_max = sim._get_rotation_params(sim.ships[sid], engines_on=True)
             sigma_w = wobble_sigma_m(dts, accels[sid], wobble, alpha, omega_max)
         a_max = sim.ships[sid].kinematic_state.max_acceleration_ms2()
+        burn = getattr(sim.ships[sid], "evade_burn", None)
+        if burn is not None:
+            # The evade overlay on a burning order swings the burn inside its
+            # cone instead of jinking across at full thrust: its sideways
+            # authority is a_max x sin(cone). (Scaled, not refitted: the
+            # REACTIVE_SIGMA_K table was calibrated on the full jink.)
+            a_max *= burn[1]
         sigma_r, mode = reactive_sigma_m(dts, modes[sid], mode_now[sid], a_max)
         if diagnostics is not None:
             diagnostics[sid] = {
@@ -704,6 +718,9 @@ class TraceEnricher:
       evade  None | "wobble" | "evade" | "tank" | "brace" | "run" | "present"
              - active mode of an EVASIVE maneuver, or of another maneuver's
              evasion overlay (Maneuver.evade) while it has the helm.
+      swing  1 when that overlay rides on a burning order and keeps the
+             burn, swinging the thrust axis inside the cone around the burn
+             line (simulation module docstring); omitted otherwise.
       tgt    ship id the maneuver steers relative to (INTERCEPT / PADLOCK /
              HOLD_RANGE target, HEADING toward_ship, or an explicitly
              assigned one), else None. A wobbling EVASIVE holds its own
@@ -795,6 +812,8 @@ class TraceEnricher:
             entry["alpha"] = _vec(alpha, 5)
             entry["turn"] = turn
             entry["evade"] = evade
+            if evade is not None and getattr(ship, "evade_swing", False):
+                entry["swing"] = 1
             entry["tgt"] = tgt
             plan = plans.get(sid)
             if plan is not None:

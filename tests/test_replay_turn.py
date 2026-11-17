@@ -125,7 +125,11 @@ def test_replay_cap_refuses_requests_beyond_it_and_the_ledger_records_the_run(re
     from src.llm.spending import SpendLedger
     calls = [c for c in rt.load_calls([recording]) if c["role"] == "captain"]
     one = rt.estimate(rt.build_jobs(calls[:1], [rt.parse_variant("claude-opus-5-5:low")], 1)[0])
-    limit = one["reservation_bound_usd"] * 1.5      # room for one request in flight, not all
+    # Room for one request in flight, not all: after the first one lands its
+    # cost (about the estimate) plus the next reservation is over the cap.
+    # (It was 1.5 x the reservation, which let every request through once the
+    # captain doctrine grew a little and the reservation with it.)
+    limit = one["reservation_bound_usd"] + 0.5 * one["expected_usd"]
     ledger = tmp_path / "ledger.jsonl"
     code = rt.main([str(recording), "--mock", "--role", "captain", "--variant", "claude-opus-5-5:low",
                     "-n", "3", "--workers", "1", "--spend-limit", f"{limit:.6f}",

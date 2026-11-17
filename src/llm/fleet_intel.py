@@ -1295,14 +1295,16 @@ def helm_summary(sim: Any, ship_ids: Iterable[str], since_t: float,
     [since_t, until_t]: the share of the window the drive produced thrust
     (applied throttle >= BURNING_MIN_THROTTLE), the share in which the
     maneuver REQUESTED thrust but none was produced (held: evasion, a dead
-    drive, a turn, the interlock), the share spent in each helm mode, and
-    the last engine fraction (0 = drive dead).
+    drive, a turn, the interlock), the share spent in each helm mode (and,
+    under "swing", the share of those in which the evade overlay swung a
+    burning order instead of holding it - the drive stayed on the order),
+    and the last engine fraction (0 = drive dead).
     """
     ids = set(ship_ids)
     span = max(1e-6, until_t - since_t)
     state: Dict[str, Tuple[float, Dict[str, Any]]] = {}
     acc: Dict[str, Dict[str, Any]] = {sid: {"burn": 0.0, "held": 0.0, "modes": Counter(),
-                                            "engine": None} for sid in ids}
+                                            "swing": Counter(), "engine": None} for sid in ids}
 
     def close(sid: str, t_end: float) -> None:
         start, data = state[sid]
@@ -1315,6 +1317,8 @@ def helm_summary(sim: Any, ship_ids: Iterable[str], since_t: float,
         elif float(data.get("requested_throttle") or 0.0) >= BURNING_MIN_THROTTLE:
             acc[sid]["held"] += dt      # the order asked for thrust, none came out
         acc[sid]["modes"][str(data.get("mode") or "?").upper()] += dt
+        if data.get("swing") and not data.get("off_line"):
+            acc[sid]["swing"][str(data.get("mode") or "?").upper()] += dt
 
     for event in getattr(sim, "events", None) or []:
         sid = getattr(event, "ship_id", None)
@@ -1335,6 +1339,7 @@ def helm_summary(sim: Any, ship_ids: Iterable[str], since_t: float,
         a = acc[sid]
         out[sid] = {"burn_frac": a["burn"] / span, "held_frac": a["held"] / span,
                     "modes": {m: v / span for m, v in a["modes"].items()},
+                    "swing": {m: v / span for m, v in a["swing"].items()},
                     "engine_fraction": a["engine"]}
     return out
 

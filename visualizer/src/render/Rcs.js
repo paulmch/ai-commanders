@@ -65,7 +65,10 @@ export const MODE_RCS = 2;
 /**
  * Evasion state per frame: DODGE = the ship is jinking its course (EVADE,
  * WOBBLE, RUN), FACE = it is swinging armour onto a threat (PRESENT, TANK).
- * BRACE does nothing and counts as neither.
+ * BRACE holds still and counts as neither - except on a burning order
+ * (trace `swing`), where the overlay keeps the burn and swings the thrust
+ * axis inside a cone around the burn line: a BRACE there swings armour (or
+ * keeps dodging) like TANK.
  */
 export const JINK_NONE = 0;
 export const JINK_DODGE = 1;
@@ -202,7 +205,10 @@ export function smoothingWindow(aref) {
  * than both) an EVASIVE maneuver order.
  */
 export function jinkOf(s) {
-  if ('evade' in s) return JINK_OF[s.evade] || JINK_NONE;
+  if ('evade' in s) {
+    if (s.swing && s.evade === 'brace') return JINK_FACE;
+    return JINK_OF[s.evade] || JINK_NONE;
+  }
   if (s.execution_mode) return JINK_OF[String(s.execution_mode).toLowerCase()] || JINK_NONE;
   return s.maneuver === 'EVASIVE' ? JINK_DODGE : JINK_NONE;
 }

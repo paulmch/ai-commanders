@@ -1083,3 +1083,34 @@ spend-ledger line with `status: "interrupted"`. The ledger counts a closed run a
 
 A quiet turn is skipped only when no datalink KILL or LOSS line reached the captain this
 checkpoint either (launches, target switches and other datalink lines still do not count).
+
+## Evade-burn lane (`evadeburn`: the evade overlay on a burning order)
+
+Owner's rule (src/simulation.py module docstring): an evade overlay riding on
+an order that burns keeps the burn the whole time and evades by swinging the
+thrust axis inside `EVADE_BURN_CONE_DEG` (20 deg) of the burn line. Nothing
+new is emitted; two existing records gain a field. Recordings without them
+read as before (no swing).
+
+### `execution_state.swing`
+
+| field | type | meaning |
+|---|---|---|
+| `swing` | bool, only when true | the evade overlay has the helm (`mode` EVADE / TANK / BRACE / PRESENT) and is swinging the order's burn instead of holding it: `applied_throttle` is the throttle the order burns this tick (x engine fraction; `requested_throttle` for a fixed heading, the range keeper's own demand for HOLD_RANGE / standoff), the swing is aimed inside the cone of the burn line (the nose can overshoot it by a few degrees on carried spin; see `off_line`). Absent: the older overlay (an engine-off order or the EVADE maneuver - BRACE drive off, TANK half), or no evasion. |
+
+| `off_line` | bool, only when true (with `swing`) | the nose is still more than the cone plus 10 deg off the burn line (the order's first turn under fire, or turning back after a RUN): the drive burns at the order's throttle while thrust vectoring turns the ship, but not along the line yet |
+
+The transition key now includes both, so a change from a held BRACE to a
+swung BRACE at the same throttles is a new `execution_state` event.
+
+### Trace frame field `swing` (per ship, `--trace` recordings)
+
+`swing: 1` next to `evade` on frames where the overlay swings a burn (omitted
+otherwise). The viewer (`render/Rcs.js` `jinkOf`) shows a swung BRACE as an
+armour swing (`JINK_FACE`) instead of a ship holding still.
+
+### `shot_fired.fc.swing`
+
+The fire-control forecast's input for a target swinging a burn: its sideways
+acceleration `burn x sin(cone)` (m/s^2), present only when > 0
+(`TargetMotion.swing_ms2`, priced by `firecontrol.SWING_*_FRACTION`).

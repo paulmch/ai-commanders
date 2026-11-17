@@ -438,6 +438,41 @@ class TestGunDuelWithIdenticalRollsIsMirrored:
         seen = {k[1] for k in tables["alpha"]}
         assert {"PROJECTILE_LAUNCHED", "PROJECTILE_IMPACT"} <= seen   # hits landed
 
+    @pytest.mark.parametrize("first", ["alpha", "beta"])
+    def test_mirrored_burns_swung_by_the_evade_overlay_stay_mirrored(self, monkeypatch, first):
+        # Ship 1 of each side burns across the line of sight with the evade
+        # overlay while ship 2 of the other side shoots it: the burn swing
+        # (simulation module docstring) reads threats, the hull's turn
+        # authority and its own keyed jink stream - nothing of the other
+        # side's update this tick, nothing that depends on the side.
+        monkeypatch.setattr(random, "Random", _SameRolls)
+        sim = _build(["destroyer", "cruiser"], [(-60, 8, 0), (-55, -8, 2)], first=first)
+        for n, target in ((2, 1),):
+            _order_both(sim, n, lambda enemy: {
+                "type": "weapons_orders", "default_target_id": enemy(target),
+                "orders": [WeaponsOrder(command=WeaponsCommand.FIRE_IMMEDIATE,
+                                        weapon_slot=slot, target_id=enemy(target))
+                           for slot in sim.ships[f"alpha_{n}"].weapons
+                           if not slot.startswith("pd")]})
+        swung = set()
+        for k in range(90):
+            if k % 30 == 0:
+                for side, sign in (("alpha", 1.0), ("beta", -1.0)):
+                    assert sim.inject_command(f"{side}_1", Maneuver(
+                        ManeuverType.HEADING, start_time=sim.current_time, duration=30.0,
+                        throttle=1.0, heading_direction={"x": 0.0, "y": sign, "z": 0.0},
+                        evade="dodge"))
+                _order_both(sim, 2, lambda enemy: Maneuver(
+                    ManeuverType.PADLOCK, start_time=sim.current_time, duration=30.0,
+                    target_id=enemy(1)))
+            sim.step()
+            breaks = _mirror_breaks(sim)
+            assert not breaks, (sim.current_time, breaks[:3])
+            if sim.ships["alpha_1"].evade_swing:
+                swung.add(sim.ships["alpha_1"].execution_mode)
+            assert sim.ships["alpha_1"].evade_swing == sim.ships["beta_1"].evade_swing
+        assert "EVADE" in swung                     # the swing flew
+
 
 # =============================================================================
 # E. A whole draft battle: runner + rule-based captains + engine

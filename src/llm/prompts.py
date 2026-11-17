@@ -643,8 +643,9 @@ DEFENSE - ARMOR IS ASPECT-DEPENDENT:
   nose it strikes NOSE armor, beyond that it strikes LATERAL, and from behind
   (past {tail_cone_deg:.0f}° off the nose) it strikes TAIL.
 - Turning the nose past {nose_cone_deg:.0f}° off the threat presents thinner plating. Evasion
-  turns the hull too: TANK and PRESENT turn the best remaining armor onto the threat; a jink
-  (EVADE) or a RUN can show the flank or the tail.
+  turns the hull too: TANK and PRESENT turn the best remaining armor onto the threat - on a
+  burning order only within 20° of the burn line, so a threat from abeam or astern still
+  strikes the flank or the tail; a jink (EVADE) or a RUN can show the flank or the tail.
 - The dangerous moment is the BREAK-AWAY turn after an attack run - that is when
   you swing your flank through the enemy's guns.
 
@@ -669,8 +670,9 @@ DEFENSE - ARMOR IS ASPECT-DEPENDENT:
   nose it strikes NOSE armor, beyond that it strikes LATERAL, and from behind
   (past {tail_cone_deg:.0f}° off the nose) it strikes TAIL.
 - Turning the nose past {nose_cone_deg:.0f}° off the threat presents thinner plating. Evasion
-  turns the hull too: TANK and PRESENT turn the best remaining armor onto the threat; a jink
-  (EVADE) or a RUN can show the flank or the tail.
+  turns the hull too: TANK and PRESENT turn the best remaining armor onto the threat - on a
+  burning order only within 20° of the burn line, so a threat from abeam or astern still
+  strikes the flank or the tail; a jink (EVADE) or a RUN can show the flank or the tail.
 - The dangerous moment is the BREAK-AWAY turn after an attack run - that is when
   you swing your flank through the enemy's guns.
 
@@ -1001,9 +1003,14 @@ HIT PROBABILITY PER ROUND vs a destroyer (spinal 9.9 km/s / turret 6.0 km/s):
 - evade dodge:     82/57%  34/7%   9/1%    2/0%    0/0%    0/0%
 - dodge, mid-jink: 74/36%  20/3%   4/1%    1/0%    0/0%    0/0%
 - EVADE maneuver:  49/41%  29/10%  11/2%   4/0%    1/0%    0/0%
+- burn + dodge:    82/78%  63/54%  47/30%  33/13%  13/2%   4/1%
+- burn, swinging:  82/77%  61/44%  40/15%  22/5%   5/1%    1/0%
 "Evade dodge" is a dodger not yet reacting when you fire: your round makes it jink,
 aimed at that very round. "Mid-jink" is one caught already burning off another round
-- what your other ships' fire does to it. Agile hulls escape sooner (a dodging
+- what your other ships' fire does to it. Those two coast (PADLOCK + evade dodge). A
+ship burning nose-on at you with evade keeps its burn and only swings it within 20° of
+its line ("burn + dodge" between rounds, "swinging" caught mid-swing): it is far easier
+to hit than a coasting dodger. Agile hulls escape sooner (a dodging
 frigate: spinal 19% at 100km, 4% at 150km), heavy ones later (a dodging battleship:
 11% at 200km, 2% at 300km). The P(hit) on your ENEMIES lines is this model for the live geometry - fire
 on it, and close range before you shoot at a dodger. Under a whole fleet's fire
@@ -1057,8 +1064,8 @@ OPTION C - EVADE AND SHOOT:
   EVADE constantly - random thrust makes you unpredictable (holds your course)
   Pros: Very hard to hit, fires continuously
   Cons: Burns fuel faster, harder to line up spinal shots, does not control range; under
-  fire the same evasion holds the drive (BRACE: off, TANK: half) - also as the evade
-  field on a burn order
+  fire the same evasion holds the drive (BRACE: off, TANK: half). As the evade field on
+  a burn order it keeps your burn instead and swings it within 20° of your line
 
 OPTION D - HOLD RANGE / KITE:
   cancel closure at your chosen range, then alternate coast-and-shoot with short
@@ -1113,12 +1120,19 @@ MANEUVERS:
 - EVADE: threat-aware defense. Versus gun rounds it jinks (hard to hit). Versus guided
   torpedoes it automatically RUNS (burns away from the round to cut closure and buy your
   PD dwell time) and in the final seconds automatically PRESENTS your thickest armor to
-  the impact. Only EVADE (or the evade field on another maneuver) does this - without it
-  a maneuver takes torpedoes, including blinded ones, without reacting. Evasion owns the
-  drive while it reacts: BRACE turns it off (a round inbound, no time to jink), TANK
-  burns at half throttle while turning armor onto the round - a burn order with evade
-  flies only part of its window under fire (ENGINE FEEDBACK's helm line says how much).
-  As a maneuver EVADE replaces your heading; the evade field rides on it.
+  the impact (the evade field on a burning order: only inside its swing cone, below).
+  Only EVADE (or the evade field on another maneuver) does this - without it
+  a maneuver takes torpedoes, including blinded ones, without reacting. On an order that
+  burns (a heading, INTERCEPT, the burns of HOLD_RANGE / standoff) the evade field keeps
+  your throttle the whole time and swings the burn within 20° of your line - ~94%
+  of the push stays on it: it dodges across inbound rounds and, when one cannot be
+  dodged, swings the best armor it can reach inside that cone onto it (a round from abeam
+  or astern still strikes the flank or the tail). RUN (evade full, a guided torpedo)
+  leaves the line to burn away from it, never below your throttle. On an order that does
+  not burn (PADLOCK, MAINTAIN, throttle 0) and as the EVADE maneuver, evasion owns the
+  drive while it reacts: BRACE turns it off (a round inbound, no time to jink), TANK burns
+  at half throttle while turning armor onto the round. ENGINE FEEDBACK's helm line says
+  what was flown. As a maneuver EVADE replaces your heading; the evade field rides on it.
   With no threat it weaves around your CURRENT course: it never chases, but it
   never brakes either - EVADE does not stop a merge.
 - BRAKE: burn against your own (world-frame) velocity - not against the enemy's
@@ -2851,10 +2865,21 @@ MANEUVERS (tell captains which to use):
 - EVADE: Threat-aware defense - jinks vs guns, RUNS/PRESENTS vs torpedoes. With no threat
   it weaves around the ship's CURRENT course: it never chases and never brakes, so an
   EVADE order does not stop a merge. The evade overlay (evade full/dodge on another
-  order) works the same way: while rounds are inbound IT flies the drive - jinks, TANK
-  (half throttle) or BRACE (drive off) - so a burn ordered "with evade" under fire burns
-  only a small part of the time; without the overlay the ship flies the burn and takes
-  the hits it was going to take.
+  order) on an order that BURNS keeps the burn the whole time: while rounds are inbound
+  it swings the thrust within 20° of the ordered line (~94% of the push stays on
+  it), dodging, and turns armour onto a round it cannot dodge only inside that cone - a
+  round from abeam or astern still strikes the flank or tail; RUN (full, vs a guided
+  torpedo) leaves the line to burn away. Measured (seeded, 12 runs each): a destroyer
+  burning across the line of fire of 3 gun ships 120-200 km off (nose already on its
+  heading) burned on its order 100% of the time under fire and took 10% of the rounds
+  fired at it, 38% without the overlay; a dreadnought (a narrower, slower swing) 45%
+  against 50%. A destroyer burning straight away from 2 gun ships 150 km off took its
+  hits mostly on the tail and flank and was lost in 8 of 12 runs with the overlay, 12 of
+  12 without. A destroyer cancelling 2 km/s of closure with its nose still on the enemy
+  burns through its 180° turn with the overlay: closing at 1.5 km/s after 60 s, 1.7
+  without it. On an order that does not burn
+  (PADLOCK, MAINTAIN, throttle 0) the overlay flies the drive: jinks at full throttle,
+  TANK (half throttle) or BRACE (drive off).
 - BRAKE: burn against the ship's own (world-frame) velocity
 - MAINTAIN: engine OFF - coast at current velocity, no thrust, no rotation
 - PADLOCK: engine off, the nose tracks the target (spinal on him) - coast and shoot
@@ -2931,7 +2956,8 @@ HOW POINT DEFENSE ACTUALLY WORKS:
   battleship behind 8 escorts; the same attack on an evading one landed 12/18. A ship
   with torpedoes INBOUND (see ORDNANCE) that does not EVADE is still hit by the rounds
   PD blinded; one that EVADEs dodges dead rounds and turns its nose (thickest armor)
-  onto live ones. A dead round on nobody's line needs nothing.
+  onto live ones - with the evade field on a burning order, only as far as its swing cone
+  (20° off the burn line) allows. A dead round on nobody's line needs nothing.
 - DWELL IS SET BY THE TORPEDO'S CLOSING SPEED, NOT BY FLEET-TO-FLEET CLOSURE. Guidance
   holds a fuelled round at >={pd_closure_floor_kps:.0f} km/s however slowly the fleets
   approach, so it crosses the envelope in ~{pd_envelope_crossing_s:.0f}s and eats only
@@ -2962,7 +2988,8 @@ TORPEDO DEFENCE, MEASURED (seeded runs on this engine: a 4 battlecruiser + 2 des
 from the first checkpoint; per battle, 3 seeds each):
 - start 500 km: nose-on PADLOCK - 72% of rounds hit (all on the nose, ~14.0 km/s, ~24 GJ
   each), 6 of 8 hulls lost; burning straight away - 37% hit (all on the TAIL, ~12.8 km/s,
-  ~20 GJ), 5 of 8 lost; the same burn with evade full - 66% hit, 6 of 8 lost; charging
+  ~20 GJ), 5 of 8 lost; the same burn with evade full - 36% hit, 5 of 8 lost (also all
+  on the tail: the overlay keeps the burn and turns no nose round); charging
   (INTERCEPT) - 73% hit (~14.6 km/s, ~27 GJ), 8 of 8 lost. First loss ~100 s in each.
 - start 1000 km: nose-on - 73% hit, 8 of 8 lost (first at ~290 s); burning away - 26%
   hit, 4 of 8 lost (first at ~310 s); charging - 38% hit, 3 of 8 lost. The wall killed
@@ -3067,10 +3094,10 @@ GUN_EXCHANGE_BUDGET = 150
 GUN_EXCHANGE_BANDS = (
     ("0-50", 69, 0.22, 16),
     ("50-100", 61, 0.25, 23),
-    ("100-150", 49, 0.30, 19),
-    ("150-200", 43, 0.44, 21),
-    ("200-300", 36, 0.28, 15),
-    ("300+", 25, 0.30, 7),
+    ("100-150", 50, 0.31, 20),
+    ("150-200", 43, 0.43, 20),
+    ("200-300", 36, 0.29, 15),
+    ("300+", 25, 0.29, 7),
 )
 GUN_EXCHANGE_INSIDE_150_PCT = 58
 # Spinal Coiler Mk3 hits to kill a fresh hull on one facing
@@ -3087,9 +3114,9 @@ FACING_SPINAL_HITS_TO_KILL = (
 # to 37% (tactical) penetration, above its flank's 21%, and is left out.
 FACING_MEASURED = (
     ("battlecruiser", 15, 0.16, 44, 0.46),
-    ("destroyer", 8, 0.06, 35, 0.43),
-    ("frigate", 25, 0.39, 57, 0.71),
-    ("dreadnought", 27, 0.24, 34, 0.24),
+    ("destroyer", 8, 0.065, 35, 0.43),
+    ("frigate", 25, 0.39, 56, 0.70),
+    ("dreadnought", 27, 0.24, 36, 0.25),
 )
 # The pass example in RANGE CONTROL and the CROSSFIRE example geometry.
 MERGE_EXAMPLE_KPS = 5.0

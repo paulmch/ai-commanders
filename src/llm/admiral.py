@@ -1774,8 +1774,12 @@ Be authentic to how you would command a fleet as {model_name}."""
             elif replaced:
                 why = f"its captain replaced your order (flew {flew})"
             else:
-                modes = {m: f for m, f in (h.get("modes") or {}).items()
+                # Seconds the overlay swung a burning order kept the drive on
+                # it (simulation module docstring): not a hold.
+                swing = h.get("swing") or {}
+                modes = {m: f - swing.get(m, 0.0) for m, f in (h.get("modes") or {}).items()
                          if m in intel.EVASION_MODES and m != "WOBBLE"}
+                modes = {m: f for m, f in modes.items() if f > 1e-9}
                 if modes and sum(modes.values()) >= 0.4:
                     top = max(modes, key=modes.get)
                     why = (f"evasion held the drive ({top} {100 * sum(modes.values()):.0f}% of the "

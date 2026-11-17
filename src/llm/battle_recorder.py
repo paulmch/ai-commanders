@@ -97,7 +97,7 @@ class EventType(str, Enum):
 
 
 # Optional per-ship sim_trace fields passed through verbatim when present.
-_TRACE_OPTIONAL_SHIP_KEYS = ("acc", "omega", "alpha", "turn", "evade", "tgt", "plan",
+_TRACE_OPTIONAL_SHIP_KEYS = ("acc", "omega", "alpha", "turn", "evade", "swing", "tgt", "plan",
                              # heat telemetry (battle_runner._thermal_trace_fields)
                              "heat", "rad", "heat_rate", "rad_out",
                              # weapon arcs (CombatSimulation.arcs_trace_fields):

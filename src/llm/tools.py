@@ -129,13 +129,18 @@ CAPTAIN_TOOLS_BASE = [
                             "'full' = exactly EVADE under threat (RUNS from guided torpedoes - "
                             "buys PD time, costs closure). 'dodge' = keeps your course against "
                             "a guided torpedo until its final seconds, then presents your "
-                            "thickest armor; still jinks slugs and blinded torpedoes. Evasion "
+                            "thickest armor (on a burning maneuver: the best armour it can "
+                            "show within 20 deg of your line); still jinks slugs and blinded "
+                            "torpedoes. Evasion "
                             "burns at your throttle - full throttle when the maneuver itself "
-                            "does not burn (MAINTAIN, PADLOCK, throttle 0). While it has the "
-                            "helm it may also hold an ordered burn: BRACE turns the drive off "
-                            "(a round inbound, no time to jink), TANK burns at half throttle "
-                            "while turning armour onto it - your ENGINE FEEDBACK helm line "
-                            "says how many seconds. Omit for no evasion."
+                            "does not burn (MAINTAIN, PADLOCK, throttle 0). On a maneuver that "
+                            "burns it keeps your throttle and swings the burn within 20 deg of "
+                            "your line (dodging, or armour onto a round it cannot dodge, inside "
+                            "that cone only); RUN leaves the line, never below your throttle. On "
+                            "one that does not burn, BRACE turns the drive off (a round inbound, "
+                            "no time to jink) and TANK burns at half throttle while turning "
+                            "armour onto it - your ENGINE FEEDBACK helm line says what was "
+                            "flown. Omit for no evasion."
                         )
                     }
                 },
@@ -361,8 +366,9 @@ CAPTAIN_TOOLS_BASE = [
                             "'full' = EVADE while a threat is inbound, 'dodge' = same but "
                             "never runs from a guided torpedo. Back on the heading when clear. "
                             "At throttle 0 (coast and shoot) the dodge still burns, at full "
-                            "throttle. Under fire it can also hold your burn (BRACE: drive "
-                            "off; TANK: half throttle) - see the helm line of ENGINE FEEDBACK."
+                            "throttle (BRACE: drive off; TANK: half throttle). On a burning "
+                            "heading it keeps your throttle and swings the burn within 20 deg "
+                            "of the heading to dodge - see the helm line of ENGINE FEEDBACK."
                         )
                     }
                 },

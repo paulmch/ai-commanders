@@ -119,6 +119,8 @@ class TestPromptMatchesSimulation:
             "evade dodge": ((82, 57), (34, 7), (9, 1), (2, 0), (0, 0), (0, 0)),
             "dodge, mid-jink": ((74, 36), (20, 3), (4, 1), (1, 0), (0, 0), (0, 0)),
             "EVADE maneuver": ((49, 41), (29, 10), (11, 2), (4, 0), (1, 0), (0, 0)),
+            "burn + dodge": ((82, 78), (63, 54), (47, 30), (33, 13), (13, 2), (4, 1)),
+            "burn, swinging": ((82, 77), (61, 44), (40, 15), (22, 5), (5, 1), (1, 0)),
         }
         for mode, cells in table.items():
             row = f"- {mode}: " + " ".join(f"{s}/{t}%" for s, t in cells)
@@ -224,6 +226,19 @@ def _doctrine_p_hit(hull, mode, range_km, muzzle_kps, broadside=False, velocity=
         target.applied_throttle = 1.0
     elif mode == "EVADE maneuver":
         target.current_maneuver = Maneuver(ManeuverType.EVASIVE, 0.0)
+    elif mode in ("burn + dodge", "burn, swinging"):
+        # Burning nose-on at full throttle with the evade overlay: it keeps the
+        # burn and swings it (simulation module docstring), between rounds or
+        # mid-swing.
+        import math
+        target.current_maneuver = Maneuver(ManeuverType.HEADING, 0.0, throttle=1.0,
+                                           heading_direction={"x": -1, "y": 0, "z": 0},
+                                           evade="dodge")
+        target.flown_maneuver = target.current_maneuver
+        target.applied_throttle = 1.0
+        target.execution_mode = "EVADE" if mode == "burn, swinging" else "HEADING"
+        target.evade_burn = (1.0, math.sin(sim._evade_burn_swing(target)[0]),
+                             Vector3D(-1, 0, 0))
     weapon = next(w for w in shooter.weapons.values()
                   if abs(w.weapon.muzzle_velocity_kps - muzzle_kps) < 1e-9)
     return sim.gun_firing_solution(shooter, target, weapon).hit_probability

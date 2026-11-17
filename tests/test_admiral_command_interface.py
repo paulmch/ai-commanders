@@ -593,6 +593,36 @@ class TestEscalation:
         assert "evasion held the drive (BRACE" in lines[2][0]
         assert "for 3 checkpoints running" in lines[3][0]
 
+    def test_a_burn_the_evade_overlay_swings_is_flown_not_held(self):
+        """The overlay on a burning order keeps the burn (execution_state
+        swing: true): nothing to escalate, and helm_summary books those
+        seconds as swing, not as a hold."""
+        sim = CombatSimulation(seed=1)
+        ship(sim, "alpha_1", "destroyer", "alpha", (0, 0, 0))
+        ship(sim, "beta_1", "destroyer", "beta", (600, 0, 0), fwd=(-1, 0, 0))
+        admiral = make_admiral("alpha")
+        caps = own_caps(sim, "alpha")
+        lines = []
+        for cp in (1, 2, 3):
+            t0 = sim.current_time
+            order = AdmiralOrder("alpha_1", "TIS alpha_1", "Burn away.", heading={"x": -1, "y": 0, "z": 0},
+                                 throttle=1.0)
+            admiral.order_history.append(AdmiralDecision(timestamp=t0, fleet_orders=[order]))
+            admiral._last_decision_t = t0
+            sim.events.append(SimulationEvent(SimulationEventType.EXECUTION_STATE, t0 + 1.0, "alpha_1",
+                                              None, {"mode": "BRACE", "applied_throttle": 1.0,
+                                                     "requested_throttle": 1.0,
+                                                     "engine_fraction": 1.0, "swing": True}))
+            sim.current_time = t0 + 30.0
+            admiral.captain_reports = [{"ship_id": "alpha_1", "ship_name": "TIS alpha_1", "status": "ACK",
+                                        "compliance": {"executed_maneuver": "HEADING", "followed": True,
+                                                       "deviations": []}}]
+            lines.append(admiral._build_snapshot(sim, caps, full=True).noncompliance)
+        assert lines == [[], [], []]
+        from src.llm import fleet_intel
+        h = fleet_intel.helm_summary(sim, ["alpha_1"], 60.0, 90.0)["alpha_1"]
+        assert h["held_frac"] == 0.0 and h["swing"]["BRACE"] == pytest.approx(h["modes"]["BRACE"])
+
     def test_dead_drive_is_the_reason_and_marked_in_your_fleet(self):
         snaps = dict(self._setup(engine=0.0))
         assert "drive dead (0 g)" in snaps[2].noncompliance[0]

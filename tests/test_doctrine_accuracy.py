@@ -1259,7 +1259,7 @@ class TestMeasuredExchangeDoctrine:
     def test_the_table_is_rendered(self, fleet):
         text = _admiral_static(fleet)
         assert "range at firing (km)  0-50    50-100  100-150 150-200 200-300 300+" in text
-        assert "hit rate              69%     61%     49%     43%     36%     25%" in text
+        assert "hit rate              69%     61%     50%     43%     36%     25%" in text
         assert "58% of all hull damage landed inside 150 km, 42% beyond." in text
 
     def test_facing_battle_numbers_are_the_seeded_runs(self, facts):
@@ -1437,9 +1437,13 @@ class TestMeasuredExchangeDoctrine:
 
 class TestEvasionDriveClaims:
     """
-    cmdcap: the captain doctrine, the evade field descriptions and the helm
-    feedback say BRACE turns the drive OFF and TANK burns at HALF throttle -
-    the throttle modifiers simulation._calculate_evasion returns.
+    cmdcap / evadeburn: what the doctrine, the evade field descriptions and
+    the helm feedback say evasion does with the drive. On an order that does
+    not burn BRACE turns the drive OFF and TANK burns at HALF throttle (the
+    throttle modifiers simulation._calculate_evasion returns); on an order
+    that burns the overlay keeps the burn and swings it inside
+    EVADE_BURN_CONE_DEG (the simulation module docstring), and the doctrine's
+    measured lines are scripts/evade_burn_measure.py on this engine.
     """
 
     def _ship(self):
@@ -1472,17 +1476,79 @@ class TestEvasionDriveClaims:
         from src.llm.prompts import build_captain_doctrine
         doc = " ".join(build_captain_doctrine(ship_type="destroyer").split())
         assert "BRACE turns it off" in doc and "TANK burns at half throttle" in doc
+        assert "On an order that does not burn (PADLOCK, MAINTAIN, throttle 0)" in doc
 
-    def test_admiral_doctrine_and_issue_order_state_the_overlay_takes_the_drive(self, fleet=None):
-        """cmdadm: what the evade overlay does to an ordered burn under fire,
-        in the admiral's doctrine and the issue_order evade field (the BRACE /
-        TANK throttles themselves are pinned above)."""
+    def test_the_cone_and_the_push_quoted_are_the_engine(self):
+        from src.llm.admiral_tools import ADMIRAL_TOOLS
+        from src.llm.execution_feedback import helm_window_text  # noqa: F401 (quotes the constant)
+        from src.llm.prompts import ADMIRAL_DOCTRINE_CORE, build_captain_doctrine
+        from src.llm.tools import CAPTAIN_TOOLS_BASE
+        from src.simulation import EVADE_BURN_CONE_DEG
+        cone = f"{EVADE_BURN_CONE_DEG:.0f}"
+        push = f"~{100 * math.cos(math.radians(EVADE_BURN_CONE_DEG)):.0f}%"
+        captain = " ".join(build_captain_doctrine(ship_type="destroyer").split())
+        admiral = " ".join(ADMIRAL_DOCTRINE_CORE.split())
+        assert f"swings the burn within {cone}° of your line - {push} of the push stays on it" in captain
+        assert f"swings the thrust within {cone}° of the ordered line ({push} of the push" in admiral
+        evade = next(t for t in ADMIRAL_TOOLS if t["function"]["name"] == "issue_order")[
+            "function"]["parameters"]["properties"]["evade"]["description"]
+        assert f"within {cone} deg of the ordered line ({push} of the push stays on it)" in evade
+        for tool in ("set_maneuver", "set_heading"):
+            desc = next(t for t in CAPTAIN_TOOLS_BASE if t["function"]["name"] == tool)[
+                "function"]["parameters"]["properties"]["evade"]["description"]
+            assert f"within {cone} deg of" in desc, tool
+
+    def test_admiral_doctrine_and_issue_order_state_what_the_overlay_does(self):
+        """What the evade overlay does to an ordered burn under fire, in the
+        admiral's doctrine and the issue_order evade field (the BRACE / TANK
+        throttles of an engine-off order are pinned above)."""
         from src.llm.admiral_tools import ADMIRAL_TOOLS
         from src.llm.prompts import ADMIRAL_DOCTRINE_CORE
         doc = " ".join(ADMIRAL_DOCTRINE_CORE.split())
-        assert "while rounds are inbound IT flies the drive" in doc
+        assert "on an order that BURNS keeps the burn the whole time" in doc
         assert "TANK (half throttle) or BRACE (drive off)" in doc
+        assert "burns only a small part of the time" not in doc
         evade = next(t for t in ADMIRAL_TOOLS if t["function"]["name"] == "issue_order")[
             "function"]["parameters"]["properties"]["evade"]["description"]
+        assert "keeps the order's throttle the whole time" in evade
         assert "TANKs (half throttle) or BRACEs (drive off)" in evade
-        assert "burns only a small part of the time" in evade
+        assert "burns only a small part of the time" not in evade
+
+    def test_the_measured_overlay_lines_are_this_engine(self):
+        """The admiral doctrine's measured sentence: scripts/evade_burn_measure.py
+        (FIRE_IMMEDIATE shooters, so the forecast does not enter) re-run."""
+        import importlib.util
+        import re
+        from src.llm.prompts import ADMIRAL_DOCTRINE_CORE
+        spec = importlib.util.spec_from_file_location("ebm", "scripts/evade_burn_measure.py")
+        ebm = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ebm)
+        doc = " ".join(ADMIRAL_DOCTRINE_CORE.split())
+        m = re.search(r"a destroyer burning across the line of fire of 3 gun ships 120-200 km "
+                      r"off \(nose already on its heading\) burned on its order (\d+)% of the "
+                      r"time under fire and took (\d+)% of the rounds fired at it, (\d+)% "
+                      r"without the overlay; a dreadnought \(a narrower, slower swing\) (\d+)% "
+                      r"against (\d+)%\. A destroyer burning straight away from 2 gun ships "
+                      r"150 km off took its hits mostly on the tail and flank and was lost in "
+                      r"(\d+) of 12 runs with the overlay, (\d+) of 12 without\. A destroyer "
+                      r"cancelling 2 km/s of closure with its nose still on the enemy burns "
+                      r"through its 180° turn with the overlay: closing at ([\d.]+) km/s after "
+                      r"60 s, ([\d.]+) without it", doc)
+        assert m, "the measured overlay sentence changed shape"
+        quoted = [float(g) for g in m.groups()]
+        todo = (ebm.jobs(["cross"], ["destroyer", "dreadnought"], evades=(None, "dodge"))
+                + ebm.jobs(["escape", "flip"], ["destroyer"], evades=(None, "dodge")))
+        got = {(s["scen"], s["hull"], s["evade"]): s
+               for s in ebm.summarise([ebm.run(j) for j in todo])}
+        dd = got[("cross", "destroyer", "dodge")]
+        assert quoted[0] == pytest.approx(dd["on_order"], abs=1.0)
+        assert quoted[1] == pytest.approx(dd["hit_pct"], abs=1.0)
+        assert quoted[2] == pytest.approx(got[("cross", "destroyer", "None")]["hit_pct"], abs=1.0)
+        assert quoted[3] == pytest.approx(got[("cross", "dreadnought", "dodge")]["hit_pct"], abs=1.0)
+        assert quoted[4] == pytest.approx(got[("cross", "dreadnought", "None")]["hit_pct"], abs=1.0)
+        assert quoted[5] == got[("escape", "destroyer", "dodge")]["dead"]
+        assert quoted[6] == got[("escape", "destroyer", "None")]["dead"]
+        assert quoted[7] == pytest.approx(got[("flip", "destroyer", "dodge")]["close60"], abs=0.05)
+        assert quoted[8] == pytest.approx(got[("flip", "destroyer", "None")]["close60"], abs=0.05)
+        loc = got[("escape", "destroyer", "dodge")]["loc"]
+        assert loc.get("tail", 0) + loc.get("lateral", 0) > 2 * loc.get("nose", 0)

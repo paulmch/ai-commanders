@@ -1,6 +1,6 @@
 {
  "about": "Seeded heuristic battles behind the admiral doctrine GUN EXCHANGE / FACING / TORPEDO DEFENCE tables (src/llm/prompts.py), bound by tests/test_doctrine_accuracy.py::TestMeasuredExchangeDoctrine. Regenerate with the commands below and update the doctrine numbers when an engine change moves them.",
- "engine_commit": "a426b1b",
+ "engine_commit": "ae7d7f1",
  "commands": [
   "OMP_NUM_THREADS=1 uv run python scripts/admiral_doctrine_facts.py guns --seeds 1 2 3 4 5 6 7 8 --jobs 10 --out OUT",
   "OMP_NUM_THREADS=1 uv run python scripts/admiral_doctrine_facts.py torpedo --seeds 1 2 3 --distances 500 1000 --attackers torpedo_boats torpedo --jobs 12 --out OUT",
@@ -34,46 +34,46 @@
   "time_limit_s": 600,
   "bands": {
    "0-50": {
-    "shots": 10256.0,
-    "hits": 7110.0,
-    "pen": 1548.0,
-    "hull_gj": 1573.016,
-    "ke_gj": 12423.607
+    "shots": 10329.0,
+    "hits": 7171.0,
+    "pen": 1563.0,
+    "hull_gj": 1578.502,
+    "ke_gj": 12470.216
    },
    "50-100": {
-    "shots": 14558.0,
-    "hits": 8928.0,
-    "pen": 2381.0,
-    "hull_gj": 2253.719,
-    "ke_gj": 17076.449
+    "shots": 14634.0,
+    "hits": 8987.0,
+    "pen": 2424.0,
+    "hull_gj": 2290.024,
+    "ke_gj": 17146.129
    },
    "100-150": {
-    "shots": 12945.0,
-    "hits": 6405.0,
-    "pen": 1745.0,
-    "hull_gj": 1948.574,
-    "ke_gj": 15216.249
+    "shots": 12738.0,
+    "hits": 6339.0,
+    "pen": 1764.0,
+    "hull_gj": 1986.337,
+    "ke_gj": 15197.88
    },
    "150-200": {
-    "shots": 10826.0,
-    "hits": 4651.0,
-    "pen": 1548.0,
-    "hull_gj": 2057.55,
-    "ke_gj": 13489.363
+    "shots": 10809.0,
+    "hits": 4650.0,
+    "pen": 1508.0,
+    "hull_gj": 2016.214,
+    "ke_gj": 13491.19
    },
    "200-300": {
-    "shots": 14379.0,
-    "hits": 5165.0,
-    "pen": 1256.0,
-    "hull_gj": 1453.501,
-    "ke_gj": 16382.793
+    "shots": 14243.0,
+    "hits": 5127.0,
+    "pen": 1282.0,
+    "hull_gj": 1473.721,
+    "ke_gj": 16295.4
    },
    "300+": {
-    "shots": 9577.0,
-    "hits": 2395.0,
-    "pen": 554.0,
-    "hull_gj": 709.525,
-    "ke_gj": 9208.707
+    "shots": 9627.0,
+    "hits": 2392.0,
+    "pen": 546.0,
+    "hull_gj": 682.333,
+    "ke_gj": 9181.004
    }
   },
   "facing": {
@@ -99,42 +99,42 @@
    },
    "ALL": {
     "nose": {
-     "hits": 20874.0,
-     "pen": 4078.0,
-     "hull_gj": 4435.919,
-     "ke_gj": 52389.764
+     "hits": 20832.0,
+     "pen": 4072.0,
+     "hull_gj": 4426.348,
+     "ke_gj": 52278.739
     },
     "lateral": {
-     "hits": 11701.0,
-     "pen": 4486.0,
-     "hull_gj": 4845.054,
-     "ke_gj": 25715.848
+     "hits": 11743.0,
+     "pen": 4547.0,
+     "hull_gj": 4885.871,
+     "ke_gj": 25799.912
     },
     "tail": {
-     "hits": 2079.0,
+     "hits": 2091.0,
      "pen": 468.0,
      "hull_gj": 714.912,
-     "ke_gj": 5691.555
+     "ke_gj": 5703.169
     }
    },
    "frigate": {
     "nose": {
-     "hits": 3777.0,
+     "hits": 3740.0,
      "pen": 927.0,
-     "hull_gj": 1458.869,
-     "ke_gj": 12827.308
+     "hull_gj": 1458.767,
+     "ke_gj": 12732.758
     },
     "lateral": {
-     "hits": 2426.0,
-     "pen": 1378.0,
-     "hull_gj": 1732.823,
-     "ke_gj": 6587.954
+     "hits": 2500.0,
+     "pen": 1409.0,
+     "hull_gj": 1745.888,
+     "ke_gj": 6645.599
     },
     "tail": {
-     "hits": 492.0,
+     "hits": 504.0,
      "pen": 215.0,
      "hull_gj": 402.213,
-     "ke_gj": 1779.014
+     "ke_gj": 1790.627
     }
    },
    "destroyer": {
@@ -179,16 +179,16 @@
    },
    "dreadnought": {
     "nose": {
-     "hits": 3816.0,
-     "pen": 1019.0,
-     "hull_gj": 904.198,
-     "ke_gj": 8814.323
+     "hits": 3811.0,
+     "pen": 1013.0,
+     "hull_gj": 894.729,
+     "ke_gj": 8797.847
     },
     "lateral": {
-     "hits": 2042.0,
-     "pen": 696.0,
-     "hull_gj": 483.619,
-     "ke_gj": 3599.692
+     "hits": 2010.0,
+     "pen": 726.0,
+     "hull_gj": 511.371,
+     "ke_gj": 3626.112
     },
     "tail": {
      "hits": 235.0,
@@ -424,42 +424,42 @@
     },
     "ALL": {
      "nose": {
-      "hits": 14595.0,
-      "pen": 3378.0,
-      "hull_gj": 3261.659,
-      "ke_gj": 35093.644
+      "hits": 14553.0,
+      "pen": 3372.0,
+      "hull_gj": 3252.089,
+      "ke_gj": 34982.619
      },
      "lateral": {
-      "hits": 6058.0,
-      "pen": 2357.0,
-      "hull_gj": 2101.332,
-      "ke_gj": 11430.553
+      "hits": 6100.0,
+      "pen": 2418.0,
+      "hull_gj": 2142.15,
+      "ke_gj": 11514.617
      },
      "tail": {
-      "hits": 687.0,
+      "hits": 699.0,
       "pen": 145.0,
       "hull_gj": 162.002,
-      "ke_gj": 1522.239
+      "ke_gj": 1533.852
      }
     },
     "frigate": {
      "nose": {
-      "hits": 2235.0,
+      "hits": 2198.0,
       "pen": 390.0,
-      "hull_gj": 402.524,
-      "ke_gj": 5466.104
+      "hull_gj": 402.422,
+      "ke_gj": 5371.554
      },
      "lateral": {
-      "hits": 1247.0,
-      "pen": 509.0,
-      "hull_gj": 393.734,
-      "ke_gj": 2070.093
+      "hits": 1321.0,
+      "pen": 540.0,
+      "hull_gj": 406.799,
+      "ke_gj": 2127.738
      },
      "tail": {
-      "hits": 112.0,
+      "hits": 124.0,
       "pen": 20.0,
       "hull_gj": 23.826,
-      "ke_gj": 203.473
+      "ke_gj": 215.086
      }
     },
     "destroyer": {
@@ -484,16 +484,16 @@
     },
     "dreadnought": {
      "nose": {
-      "hits": 2752.0,
-      "pen": 991.0,
-      "hull_gj": 891.697,
-      "ke_gj": 6588.861
+      "hits": 2747.0,
+      "pen": 985.0,
+      "hull_gj": 882.229,
+      "ke_gj": 6572.386
      },
      "lateral": {
-      "hits": 873.0,
-      "pen": 399.0,
-      "hull_gj": 252.119,
-      "ke_gj": 1544.863
+      "hits": 841.0,
+      "pen": 429.0,
+      "hull_gj": 279.871,
+      "ke_gj": 1571.283
      },
      "tail": {
       "hits": 115.0,
@@ -604,19 +604,18 @@
    },
    "torpedo|500|open_full": {
     "battles": 3,
-    "launched": 192,
-    "impacts": 96,
-    "impact_gj": 2168.8786904889844,
-    "impact_kps_median": 13.393673148093496,
+    "launched": 168,
+    "impacts": 52,
+    "impact_gj": 1024.3214131160573,
+    "impact_kps_median": 12.603323347054452,
     "wall_lost": 18,
     "wall_total": 24,
     "boats_lost": 0,
     "boats_total": 9,
-    "wall_wins": 3,
+    "wall_wins": 0,
     "median_first_loss_s": 102.0,
     "impact_loc": {
-     "nose": 88,
-     "lateral": 8
+     "tail": 52
     }
    },
    "torpedo|500|charge": {
@@ -689,18 +688,17 @@
    "torpedo|1000|open_full": {
     "battles": 3,
     "launched": 48,
-    "impacts": 42,
-    "impact_gj": 1211.8645599112322,
-    "impact_kps_median": 15.12354142712485,
-    "wall_lost": 9,
+    "impacts": 26,
+    "impact_gj": 723.4441783294291,
+    "impact_kps_median": 15.00403055464199,
+    "wall_lost": 12,
     "wall_total": 24,
     "boats_lost": 0,
     "boats_total": 9,
     "wall_wins": 0,
-    "median_first_loss_s": 312.0,
+    "median_first_loss_s": 305.0,
     "impact_loc": {
-     "nose": 36,
-     "lateral": 6
+     "tail": 26
     }
    },
    "torpedo|1000|charge": {
@@ -772,19 +770,17 @@
    "torpedo_boats|500|open_full": {
     "battles": 3,
     "launched": 120,
-    "impacts": 79,
-    "impact_gj": 1821.259186258419,
-    "impact_kps_median": 13.759725759086065,
-    "wall_lost": 17,
+    "impacts": 43,
+    "impact_gj": 876.9978685152389,
+    "impact_kps_median": 12.844660689100682,
+    "wall_lost": 15,
     "wall_total": 24,
     "boats_lost": 0,
     "boats_total": 24,
     "wall_wins": 0,
     "median_first_loss_s": 103.0,
     "impact_loc": {
-     "nose": 64,
-     "lateral": 9,
-     "tail": 6
+     "tail": 43
     }
    },
    "torpedo_boats|500|charge": {
@@ -856,19 +852,18 @@
    },
    "torpedo_boats|1000|open_full": {
     "battles": 3,
-    "launched": 104,
-    "impacts": 48,
-    "impact_gj": 1287.2352340032173,
-    "impact_kps_median": 14.725747205283994,
+    "launched": 75,
+    "impacts": 24,
+    "impact_gj": 571.931937715335,
+    "impact_kps_median": 14.049731387935052,
     "wall_lost": 12,
     "wall_total": 24,
     "boats_lost": 0,
     "boats_total": 24,
     "wall_wins": 0,
-    "median_first_loss_s": 308.0,
+    "median_first_loss_s": 338.0,
     "impact_loc": {
-     "nose": 43,
-     "lateral": 5
+     "tail": 24
     }
    },
    "torpedo_boats|1000|charge": {
