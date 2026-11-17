@@ -209,9 +209,12 @@ def test_captain_merge_text_is_two_sided_like_the_admirals():
 
 
 def test_engine_order_check_does_not_call_a_merge_seconds_of_fire():
+    import json as _json
     import inspect
     from src.llm import captain
+    from src.llm.tools import CAPTAIN_TOOLS_BASE
     assert "seconds of fire" not in inspect.getsource(captain)
+    assert "seconds of" not in _json.dumps(CAPTAIN_TOOLS_BASE)      # the INTERCEPT tool text too
 
 
 # ---------------------------------------------------------------------------

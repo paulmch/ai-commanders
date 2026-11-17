@@ -46,8 +46,8 @@ CAPTAIN_TOOLS_BASE = [
                         "description": (
                             "INTERCEPT: burn toward the target on a collision course. Plain "
                             "INTERCEPT NEVER BRAKES: it keeps building closure and passes "
-                            "THROUGH the target at full closing speed (a merge - seconds of "
-                            "fire, then flying apart). Give standoff_km and it closes, flips, "
+                            "THROUGH the target at full closing speed (a merge: a pass at a few "
+                            "km). Give standoff_km and it closes, flips, "
                             "brakes and holds that range instead. "
                             "HOLD_RANGE: keep range_km (default: the range when first ordered - "
                             "renewing the order keeps it) to the target - closes or opens to it, "
