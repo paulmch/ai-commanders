@@ -183,8 +183,26 @@ class BattleConfig:
     seed: Optional[int] = None
     use_notebooks: bool = False
 
+    # --- Experiment plumbing: everything below is OFF by default ---------
+    # Effort per side and role (src/llm/call_policy.py):
+    # {"alpha": {"draft"|"directive"|"order"|"captain"|"trigger": level}, ...}.
+    # "trigger" is the captain effort on turns with a trigger (torpedoes
+    # inbound, merge warning, damage taken, order kind changed, first turn);
+    # "captain" the effort of the other captain turns. A role without a
+    # setting runs at the client's battle-wide effort: the request is
+    # byte-identical to a battle without this field.
+    effort_policy: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    # Quiet-turn policy: an LLM captain whose turn has no trigger (see
+    # call_policy.captain_triggers), no new FLEET NET traffic and an applied
+    # admiral order identical to last checkpoint's is NOT called; its ship
+    # keeps flying its current maneuver (renewed for the window) and a
+    # captain_turn_skipped event records why. Saves calls, has risk: off.
+    quiet_turns: bool = False
+
     def __post_init__(self) -> None:
         validate_battle_options(self)
+        from .call_policy import validate_effort_policy
+        self.effort_policy = validate_effort_policy(self.effort_policy)
 
     @classmethod
     def from_fleet_config(cls, fleet: BattleFleetConfig, **overrides) -> 'BattleConfig':
@@ -194,6 +212,11 @@ class BattleConfig:
             "record_battle", "record_sim_trace", "personality_selection", "use_notebooks",
             "max_checkpoints", "seed", "heuristic_doctrine",
         )}
+        # Per-fleet "effort" blocks of the fleet JSON (experiment plumbing).
+        efforts = {side: dict(getattr(f, "effort", None) or {}) for side, f in (
+            ("alpha", fleet.alpha_fleet), ("beta", fleet.beta_fleet))}
+        if any(efforts.values()):
+            values["effort_policy"] = {k: v for k, v in efforts.items() if v}
         values.update(overrides)
         return cls(**values)
 
@@ -417,6 +440,7 @@ class LLMBattleRunner:
         # Register the event callback unconditionally: it also feeds captain
         # combat feedback (shots fired, damage taken), which must not depend on
         # whether the battle happens to be recorded.
+        self._install_call_policy()
         from .replay_audit import attach_audit
         attach_audit(self)
         self.simulation.add_event_callback(self._handle_simulation_event)
@@ -785,6 +809,7 @@ class LLMBattleRunner:
             )
 
         # Register the event callback unconditionally - see setup_battle().
+        self._install_call_policy()
         from .replay_audit import attach_audit
         attach_audit(self)
         self.simulation.add_event_callback(self._handle_simulation_event)
@@ -812,6 +837,154 @@ class LLMBattleRunner:
             elif self.beta_admiral:
                 print(f"  Admiral: {self.beta_admiral.name}")
             print(f"{'='*60}\n")
+
+    def check_budget(self) -> bool:
+        """
+        True once the battle's spend cap (client.budget, a RequestBudget) has
+        refused a request: the battle stops at this checkpoint, records a
+        battle_stopped event, and its result is a no-verdict DRAW whose reason
+        says so (the partial recording is saved as usual). A battle without a
+        budget never stops here. LiveDraftRunner overrides this to raise.
+        """
+        if getattr(self, "stop_reason", None):
+            return True
+        budget = getattr(self.client, "budget", None) if self.client is not None else None
+        if budget is None or not getattr(budget, "exhausted", False):
+            return False
+        self.stop_reason = (
+            f"Spending ceiling reached: battle stopped at checkpoint {self.checkpoint_count} "
+            f"(${budget.reported_usd:.4f} reported, ${budget.committed_usd:.4f} committed "
+            f"of ${budget.limit_usd:.2f}); partial recording saved")
+        print(f"[SPEND CAP] {self.stop_reason}", flush=True)
+        if self.recorder and self.simulation is not None:
+            self.recorder.record(self.simulation.current_time, 'battle_stopped', reason=self.stop_reason)
+        return True
+
+    # ------------------------------------------------------------------
+    # Experiment plumbing: per-role effort, captain triggers, quiet turns
+    # (src/llm/call_policy.py). Nothing here runs unless a BattleConfig
+    # experiment field is set; the default battle never wraps a client.
+    # ------------------------------------------------------------------
+
+    def _install_call_policy(self) -> None:
+        """Wrap each LLM agent's client in a PolicyClient when an effort policy is set."""
+        self._policy_clients: Dict[str, Any] = {}
+        self._turn_state: Dict[str, Dict[str, Any]] = {}
+        from .call_policy import EffortPolicy, PolicyClient
+        policy = EffortPolicy(self.config.effort_policy)
+        if not policy:
+            return
+        for faction in ("alpha", "beta"):
+            captains = dict(getattr(self, f"{faction}_captains", {}) or {})
+            duel = getattr(self, f"{faction}_captain", None)
+            if not captains and duel is not None:
+                captains = {faction: duel}
+            for ship_id, captain in captains.items():
+                inner = getattr(captain, "client", None)
+                if inner is None or getattr(captain, "is_heuristic", False):
+                    continue
+                if type(captain).__name__ == "HeuristicCaptain":
+                    continue
+                captain.client = PolicyClient(inner, faction, "captain", policy)
+                self._policy_clients[ship_id] = captain.client
+            admiral = getattr(self, f"{faction}_admiral", None)
+            if admiral is not None and getattr(admiral, "client", None) is not None:
+                admiral.client = PolicyClient(admiral.client, faction, "admiral", policy)
+
+    def _captain_turn_facts(self, ship_id: str, captain: Any,
+                            orders: Optional[List[Any]]) -> Any:
+        """TurnFacts for one captain from data the runner already holds."""
+        from .call_policy import TurnFacts, order_kind, order_signature
+        sim = self.simulation
+        ship = sim.get_ship(ship_id)
+        state = self._turn_state.setdefault(ship_id, {})
+        torpedoes = 0
+        gather = getattr(sim, "_gather_guided_torpedo_threats", None)
+        if ship is not None and callable(gather):
+            try:
+                torpedoes = len(gather(ship, latch_commit=False) or [])
+            except (TypeError, AttributeError):
+                torpedoes = 0
+        merge = False
+        if ship is not None:
+            try:
+                from .range_control import analyze_range_control
+                merge = any(getattr(i, "warning", None)
+                            for i in analyze_range_control(sim, [ship], detail=False))
+            except Exception:  # noqa: BLE001 - advisory only
+                merge = False
+        from .maneuver_orders import admiral_order_moves_ship
+        kind = order_kind(orders)
+        signature = order_signature(orders)
+        inbox = [m for m in (getattr(captain, "inbox", None) or [])
+                 if isinstance(m, dict) and m.get("sender_role") != "engine"]
+        facts = TurnFacts(
+            first_turn="kind" not in state,
+            torpedoes_inbound=torpedoes,
+            merge_warning=merge,
+            damage_taken=bool(getattr(captain, "recent_hits", None)),
+            order_moves_ship=any(admiral_order_moves_ship(o) for o in orders or []),
+            order_kind=kind,
+            previous_order_kind=state.get("kind"),
+            order_changed=signature != state.get("signature"),
+            new_messages=len(inbox),
+        )
+        state["kind"], state["signature"] = kind, signature
+        return facts
+
+    def _plan_captain_turns(self, captain_entries: List[Tuple[str, Any, str]],
+                            admiral_orders: Dict[str, List[Any]]) -> Dict[str, str]:
+        """
+        One TurnFacts per LLM captain this checkpoint: sets each wrapped
+        captain's effort (trigger effort) and, with quiet_turns, returns the
+        captains to skip {ship_id: reason}.
+        """
+        from .call_policy import captain_triggers, quiet_turn_reason
+        skip: Dict[str, str] = {}
+        if not hasattr(self, "_turn_state"):
+            self._turn_state = {}
+        for ship_id, captain, faction in captain_entries:
+            client = getattr(self, "_policy_clients", {}).get(ship_id)
+            llm = type(captain).__name__ != "HeuristicCaptain" and getattr(captain, "client", None)
+            if client is None and not (self.config.quiet_turns and llm):
+                continue
+            facts = self._captain_turn_facts(ship_id, captain, admiral_orders.get(ship_id))
+            if client is not None:
+                client.turn_effort = client.policy.captain_turn(faction, captain_triggers(facts))
+            if self.config.quiet_turns and llm:
+                reason = quiet_turn_reason(facts)
+                if reason:
+                    skip[ship_id] = reason
+        return skip
+
+    def _skip_captain_turn(self, ship_id: str, captain: Any, faction: str, reason: str) -> List[Any]:
+        """
+        A quiet turn: no model call. The ship keeps flying its current
+        maneuver, renewed for the next window exactly as a lost turn renews it
+        (a maneuver applied this checkpoint, e.g. an admiral heading, flies
+        on unrenewed). Recorded as captain_turn_skipped.
+        """
+        from .maneuver_orders import maneuver_label, renewed_maneuver
+        sim = self.simulation
+        ship = sim.get_ship(ship_id)
+        now = sim.current_time
+        interval = float(getattr(sim, "decision_interval", 30.0) or 30.0)
+        current = getattr(ship, "current_maneuver", None) if ship is not None else None
+        commands: List[Any] = []
+        kept = None
+        if current is not None and hasattr(current, "start_time"):
+            if current.start_time < now - 1e-6:
+                renewed = renewed_maneuver(ship, now, interval)
+                if renewed is not None:
+                    commands.append(renewed)
+            kept = maneuver_label(current.maneuver_type, getattr(current, "throttle", None))
+        if self.config.verbose:
+            print(f"  [{captain.ship_name}] quiet turn skipped ({reason}); keeps {kept or 'coasting'}")
+        if self.recorder:
+            self.recorder.record(now, 'captain_turn_skipped', ship_id, faction=faction,
+                                 captain_name=getattr(captain, "name", None), reason=reason,
+                                 kept_maneuver=kept, renewed=bool(commands))
+        return commands
 
     def _advance_to_checkpoint(self, deadline: float, fleet_mode: bool = False):
         """Step to a checkpoint exactly, including fractional intervals and limits."""
@@ -927,6 +1100,8 @@ class LLMBattleRunner:
 
             # Refresh who-is-hunting-whom before anyone decides.
             self._refresh_targeting_awareness()
+            if self.check_budget():
+                break
 
             # Phase 1: Deliver pending messages
             alpha_msgs = self.communication.deliver_messages("alpha")
@@ -1035,6 +1210,8 @@ class LLMBattleRunner:
 
             # Log decision
             self._log_decision(alpha_commands, beta_commands)
+            if self.check_budget():
+                break
 
             # Damage taken from here on belongs to the NEXT checkpoint's report
             self._clear_captain_hit_logs()
@@ -1148,6 +1325,8 @@ class LLMBattleRunner:
 
             # Refresh who-is-hunting-whom before anyone decides.
             self._refresh_targeting_awareness()
+            if self.check_budget():
+                break
 
             # Phase 1: Admiral decisions (both sides)
             admiral_orders = {}  # ship_id -> list of AdmiralOrder
@@ -1245,6 +1424,8 @@ class LLMBattleRunner:
 
             # Log decision
             self._log_fleet_decision(all_commands)
+            if self.check_budget():
+                break
 
             # Damage taken from here on belongs to the NEXT checkpoint's report
             self._clear_captain_hit_logs()
@@ -1372,6 +1553,8 @@ class LLMBattleRunner:
 
             # Refresh who-is-hunting-whom before anyone decides.
             self._refresh_targeting_awareness()
+            if self.check_budget():
+                break
 
             # Advance chat turn
             if self.mcp_chat:
@@ -1581,6 +1764,8 @@ class LLMBattleRunner:
 
             # Log decision
             self._log_fleet_decision(all_commands)
+            if self.check_budget():
+                break
 
             # Check limits
             if not self.config.unlimited_mode:
@@ -1712,8 +1897,18 @@ class LLMBattleRunner:
             captain_entries = [entry for entry in captain_entries if entry not in crew_out]
         self._apply_admiral_headings(captain_entries, admiral_orders)
         self._deliver_fleet_messages(captain_entries)
+        # Experiment plumbing (cmdrun): per-turn captain effort and the
+        # quiet-turn policy. A no-op unless BattleConfig.effort_policy or
+        # .quiet_turns is set.
+        skipped: Dict[str, str] = {}
+        if getattr(self, "_policy_clients", None) or self.config.quiet_turns:
+            skipped = self._plan_captain_turns(captain_entries, admiral_orders)
         for ship_id, captain, faction in captain_entries:
             captain.clear_admiral_context()
+            captain.fleet_channel = self.fleet_communication
+            # Every fleet-mate's orders this checkpoint (ORDERED TARGETS line).
+            captain.fleet_orders = {sid: admiral_orders[sid] for sid, _, f in captain_entries
+                                    if f == faction and sid in admiral_orders}
             if ship_id in admiral_orders:
                 orders = admiral_orders[ship_id]
                 admiral = self.alpha_admiral if faction == "alpha" else self.beta_admiral
@@ -1729,6 +1924,9 @@ class LLMBattleRunner:
                     directive = ""
                 captain.receive_admiral_orders(orders, directive)
 
+        quiet = [entry for entry in captain_entries if entry[0] in skipped]
+        if quiet:
+            captain_entries = [entry for entry in captain_entries if entry[0] not in skipped]
         if self.config.verbose:
             for _, captain, _ in captain_entries:
                 print(f"  [{captain.ship_name}] {captain.name} deciding...")
@@ -1756,6 +1954,8 @@ class LLMBattleRunner:
                       f"{self._get_ship_status_line(ship_id, commands)}")
             self._finish_captain_turn(ship_id, captain, faction, commands,
                                       admiral_orders.get(ship_id), record=record)
+        for ship_id, captain, faction in quiet:
+            all_commands[ship_id] = self._skip_captain_turn(ship_id, captain, faction, skipped[ship_id])
         for ship_id, captain, faction in crew_out:
             all_commands[ship_id] = []
             report = self._build_captain_report(ship_id, captain, faction, [],
@@ -2516,6 +2716,19 @@ class LLMBattleRunner:
         else:
             fields = {"status": "ACK", "reason": "", "intent": "", "contact": None, "request": None}
             implicit = True
+        # `reason` on the captain's action calls (tools.with_reason_fields):
+        # filed as the report's reason - a DEVIATE when the engine finds the
+        # ship off its order (set below), else read as the captain's intent.
+        reasons = "; ".join(getattr(captain, "call_reasons", None) or [])
+        if reasons and not crew_out:
+            from .communication import REPORT_REASON_CHARS, clip
+            if explicit:
+                if not fields.get("reason"):
+                    fields["reason"] = clip(reasons, REPORT_REASON_CHARS)
+            elif not getattr(captain, "last_call_failed", False):
+                fields = {"status": "ACK", "reason": "", "intent": clip(reasons, REPORT_REASON_CHARS),
+                          "contact": None, "request": None}
+                implicit = False
         order = primary_order(orders)
         executed = executed_maneuver(ship, commands, now)
         target_id = commanded_target(ship, commands)
@@ -2534,6 +2747,16 @@ class LLMBattleRunner:
         }
         if crew_out:
             mark_not_executable(report["compliance"])
+        elif (reasons and not explicit and report["status"] == "ACK"
+              and isinstance(report["compliance"], dict) and not report["compliance"]["followed"]):
+            report["status"], report["reason"], report["intent"] = "DEVIATE", report["intent"], ""
+        # Next checkpoint the captain is shown the verdict the admiral reads
+        # when it is NOT as ordered (captain._format_verdict), recomputed then
+        # with the rounds that actually left the tubes.
+        captain.verdict_basis = {"t": now, "order": order, "executed": executed,
+                                 "target_id": target_id, "cursor": len(self.simulation.events),
+                                 "status": report["status"], "reason": report.get("reason") or "",
+                                 "implicit": implicit, "channel": channel}
         self._note_drive_interlock(report, ship)
         fold_admiral_signals(report, self._admiral_signals.pop(ship_id, []))
         if getattr(captain, "discussions", None):
@@ -3107,6 +3330,9 @@ class LLMBattleRunner:
         else:
             # Time limit - evaluate by tactical advantage
             outcome, winner, reason = self._evaluate_fleet_tactical_advantage()
+        if getattr(self, "stop_reason", None):
+            # Stopped by the spend cap: a partial battle, no verdict.
+            outcome, winner, reason = BattleOutcome.DRAW, None, self.stop_reason
 
         if self.config.verbose:
             print(f"\n{'='*60}")
@@ -3608,6 +3834,9 @@ class LLMBattleRunner:
                 mutual_draw=False,  # Already handled above
                 at_time_limit=at_limit,
             )
+        if getattr(self, "stop_reason", None):
+            # Stopped by the spend cap: a partial battle, no verdict.
+            outcome, winner, reason = BattleOutcome.DRAW, None, self.stop_reason
 
         # End recording and save
         if self.recorder:

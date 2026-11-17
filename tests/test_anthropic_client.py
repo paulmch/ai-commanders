@@ -363,35 +363,41 @@ def test_key_never_reaches_repr_or_provenance():
 # Battles on the mock: caching across checkpoints, refusals, the cap, provenance
 # ---------------------------------------------------------------------------
 
-def _battle(tmp_path, alpha, beta, respond=None, record=None, limit=None, turns=3):
+def _battle(tmp_path, alpha, beta, respond=None, record=None, limit=None, turns=3,
+            config=None, captain_models=None, admirals=True, anthropic_extra=None,
+            transport_options=None, ships=("frigate", "corvette")):
     from scripts.run_live_draft_battle import LiveDraftRunner, LiveDraftState
     from src.llm.battle_runner import BattleConfig, load_fleet_data
     from src.llm.captain import LLMCaptainConfig
     from src.llm.fleet_config import AdmiralConfig, BattleFleetConfig
     from src.llm.fleet_draft import FleetDraft, draft_to_fleet_definition, name_drafted_ships
 
-    client = create_llm_client(alpha, [beta], temperature=None, max_tokens=8192,
+    captain_models = captain_models or {}
+    extra_models = [m for m in captain_models.values() if m != "heuristic"]
+    client = create_llm_client(alpha, [beta, *extra_models], temperature=None, max_tokens=8192,
                                reasoning_effort="medium", anthropic_options={
-                                   "api_key": FAKE_KEY, "max_retries": 0,
+                                   "api_key": FAKE_KEY, "max_retries": 0, **(anthropic_extra or {}),
                                    "http_client": anthropic.DefaultHttpxClient(
-                                       transport=mock_anthropic_transport(record=record, respond=respond))})
+                                       transport=mock_anthropic_transport(
+                                           record=record, respond=respond, **(transport_options or {})))})
     if limit is not None:
         client.budget = RequestBudget(limit, {})
     state = LiveDraftState()
     state.drafts = {f: FleetDraft(faction=f, budget=20, points_spent=14,
-                                  ships=name_drafted_ships(["frigate", "corvette"], f))
+                                  ships=name_drafted_ships(list(ships), f))
                     for f in ("alpha", "beta")}
     models = {"alpha": alpha, "beta": beta}
     fleets = {f: draft_to_fleet_definition(
-        state.drafts[f], 500, captain_model=models[f], temperature=None,
+        state.drafts[f], 500, captain_model=captain_models.get(f, models[f]), temperature=None,
         admiral_config=AdmiralConfig(model=models[f], name=f"Admiral {f}", temperature=None,
-                                     vision=False)) for f in models}
+                                     vision=False) if admirals else None) for f in models}
     fc = BattleFleetConfig(
         battle_name="mock", alpha_fleet=fleets["alpha"], beta_fleet=fleets["beta"],
         initial_distance_km=500, decision_interval_s=30, time_limit_s=(turns + 1) * 30,
         max_checkpoints=turns, seed=7, personality_selection=False, record_battle=True,
         record_sim_trace=False, use_notebooks=False)
-    runner = LiveDraftRunner(BattleConfig.from_fleet_config(fc, recording_dir=str(tmp_path), verbose=False),
+    runner = LiveDraftRunner(BattleConfig.from_fleet_config(fc, recording_dir=str(tmp_path), verbose=False,
+                                                            **(config or {})),
                              LLMCaptainConfig("A", "A"), LLMCaptainConfig("B", "B"), client, fc)
     output = tmp_path / "live.json"
     runner.configure_live(SimpleNamespace(set_battle_status=lambda *a: None), state, {}, output, 0)
@@ -477,3 +483,37 @@ def test_spend_cap_stops_an_anthropic_battle_with_the_recorded_abort(tmp_path):
     stopped = [e for e in recording["events"] if e["event_type"] == "battle_stopped"]
     assert stopped and "Spending ceiling" in stopped[0]["data"]["reason"]
     assert "Spending ceiling" in recording["result_reason"]
+
+
+# ---------------------------------------------------------------------------
+# Thinking summaries (thinking_display="summarized"): requested, recorded,
+# never fed back
+# ---------------------------------------------------------------------------
+
+def test_thinking_summary_is_requested_only_when_asked_and_returned_for_the_audit():
+    record = []
+    plain = make_client(record=record)
+    plain.decide_with_tools([SYSTEM, {"role": "user", "content": "go"}], [tool("act")])
+    assert record[-1]["thinking"] == {"type": "adaptive"}
+    seen = []
+    summ = make_client(record=record, thinking_display="summarized")
+    with summ.audit_scope(lambda payload, data: seen.append(data)):
+        summ.decide_with_tools([SYSTEM, {"role": "user", "content": "go"}], [tool("act")])
+    assert record[-1]["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert seen[-1]["thinking_summary"].startswith("Mock summary")
+    assert summ.provenance()["thinking_display"] == "summarized"
+    with pytest.raises(ValueError):
+        make_client(thinking_display="verbose")
+
+
+def test_thinking_summaries_are_recorded_per_call_and_never_reach_a_prompt(tmp_path):
+    record = []
+    runner, client, output, data = _battle(tmp_path, "claude-sonnet-5-5", "claude-haiku-5-5",
+                                           record=record, turns=3,
+                                           anthropic_extra={"thinking_display": "summarized"})
+    runner.run_battle(data)
+    calls = _calls(json.loads(output.read_text()))
+    assert calls and all(c["data"]["thinking_summary"].startswith("Mock summary") for c in calls)
+    assert all(r["thinking"] == {"type": "adaptive", "display": "summarized"} for r in record)
+    assert not any("Mock summary" in json.dumps(r["messages"]) or "Mock summary" in json.dumps(r["system"])
+                   for r in record)

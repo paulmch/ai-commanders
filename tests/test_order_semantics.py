@@ -164,9 +164,12 @@ class TestEngineOffRendering:
         text = _helm_text({"mode": "PADLOCK", "requested_throttle": 1.0, "applied_throttle": 0.0})
         assert text == "PADLOCK, coasting (engine off, nose on target)"
         assert "turning onto the burn line" not in text
+        # The catch-all "(turning onto the burn line, or fuel/engine limited)"
+        # is gone: the helm window line names the real cause (cmdcap C1,
+        # tests/test_fixes_cmdcap.py TestHelmWindow).
         assert _helm_text({"mode": "HEADING", "requested_throttle": 1.0,
-                           "applied_throttle": 0.1}).endswith("(turning onto the burn line, "
-                                                             "or fuel/engine limited)")
+                           "applied_throttle": 0.1}) == \
+            "HEADING, requested 100% throttle, applied 10%"
         # A throttle-0 order is flying, not "no maneuver"; its evade overlay
         # burns at full throttle while it has the helm.
         assert _helm_text({"mode": "HEADING", "requested_throttle": 0.0,
@@ -515,7 +518,7 @@ def test_evade_alone_under_a_throttle_0_fleet_heading_still_dodges():
     assert a1.evade == "dodge" and a1.heading_direction == {"x": 1.0, "y": 0.0, "z": 0.0}
     assert a2.maneuver_type == ManeuverType.HEADING and a2.throttle == 0.0
     assert a2.evade == "full" and a2.heading_direction == {"x": 0.0, "y": -1.0, "z": 0.0}
-    assert ("...with evade dodge: evasion flies the ship (at full throttle: the heading "
+    assert ("...with evade dodge (part of this order): evasion flies the ship (at full throttle: the heading "
             "itself does not burn) only while a torpedo or slug is inbound") in turns[1]["alpha_1"]
     # What the runner flies dodges: the flank shot lands on the nose armor
     # ('dodge' presents it on a token burn, 'full' RUNs at full throttle).

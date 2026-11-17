@@ -59,7 +59,10 @@ CAPTAIN_TOOLS_BASE = [
                             "final seconds auto-PRESENTS your thickest armor. Dodges blinded "
                             "torpedoes - use it (or evade on another maneuver) under torpedo "
                             "fire. With no threat it weaves around your CURRENT course: never "
-                            "chases, never brakes. "
+                            "chases, never brakes. As a maneuver EVADE REPLACES whatever you "
+                            "fly, an admiral's HEADING included; the `evade` field (here or on "
+                            "set_heading) rides on a maneuver instead - an order 'with evade' "
+                            "already carries it. "
                             "BRAKE: Flip and burn against your own velocity (world frame, not "
                             "relative to the enemy - HOLD_RANGE matches an enemy). "
                             "MAINTAIN: Coast at current velocity - no thrust, no tracking. "
@@ -128,7 +131,11 @@ CAPTAIN_TOOLS_BASE = [
                             "a guided torpedo until its final seconds, then presents your "
                             "thickest armor; still jinks slugs and blinded torpedoes. Evasion "
                             "burns at your throttle - full throttle when the maneuver itself "
-                            "does not burn (MAINTAIN, PADLOCK, throttle 0). Omit for no evasion."
+                            "does not burn (MAINTAIN, PADLOCK, throttle 0). While it has the "
+                            "helm it may also hold an ordered burn: BRACE turns the drive off "
+                            "(a round inbound, no time to jink), TANK burns at half throttle "
+                            "while turning armour onto it - your ENGINE FEEDBACK helm line "
+                            "says how many seconds. Omit for no evasion."
                         )
                     }
                 },
@@ -143,7 +150,7 @@ CAPTAIN_TOOLS_BASE = [
             "description": (
                 "Set fire control orders for spinal and turret weapons independently. "
                 "SPINAL: 9.9 km/s projectile, 4.3 GJ damage, 900km range, but ONLY fires if target within 30° of nose. "
-                "TURRET: 6.0 km/s projectile, 0.7 GJ damage, 500km range, can fire at targets in full front hemisphere (180°)."
+                "TURRET: 6.0 km/s projectile, 0.7 GJ damage, 500km range, fires where its own hull leaves it clear (ARCS lines)."
             ),
             "parameters": {
                 "type": "object",
@@ -163,7 +170,7 @@ CAPTAIN_TOOLS_BASE = [
                         "type": "string",
                         "enum": ["FIRE_IMMEDIATE", "FIRE_WHEN_OPTIMAL", "FIRE_AT_RANGE", "HOLD_FIRE"],
                         "description": (
-                            "Turret coilgun mode (lower damage, but 180° firing arc): "
+                            "Turret coilgun mode (lower damage, fires where its own hull leaves it clear): "
                             "FIRE_IMMEDIATE: Fire as soon as ready. "
                             "FIRE_WHEN_OPTIMAL: Fire when hit probability >= threshold. "
                             "FIRE_AT_RANGE: Fire when target within range. "
@@ -354,7 +361,8 @@ CAPTAIN_TOOLS_BASE = [
                             "'full' = EVADE while a threat is inbound, 'dodge' = same but "
                             "never runs from a guided torpedo. Back on the heading when clear. "
                             "At throttle 0 (coast and shoot) the dodge still burns, at full "
-                            "throttle."
+                            "throttle. Under fire it can also hold your burn (BRACE: drive "
+                            "off; TANK: half throttle) - see the helm line of ENGINE FEEDBACK."
                         )
                     }
                 },
@@ -627,7 +635,8 @@ FLEET_SIGNAL_TOOL = {
                 },
                 "target": {"type": "string", "description": "Enemy ship the signal is about."},
                 "eta_s": {"type": "number", "minimum": 0,
-                          "description": "TOT_SYNC: seconds until your rounds arrive."},
+                          "description": "TOT_SYNC: seconds from now until your rounds arrive "
+                                         "(peers read it as an absolute time, T+...)."},
                 "text": {"type": "string", "description": f"Max {SIGNAL_TEXT_CHARS} chars."},
             },
             "required": ["kind", "text"],
@@ -678,6 +687,31 @@ RESPOND_TO_ORDERS_TOOL = {
 }
 
 
+# Captains under an admiral: an optional `reason` on the action tools, filed as
+# the reason on the captain's report (no report_to_admiral call needed). The
+# comms audit counted 44 deviations the admiral read with no reason at all.
+ACTION_REASON_TOOLS = ("set_maneuver", "set_heading", "set_primary_target", "launch_torpedo")
+ACTION_REASON_PROPERTY = {
+    "type": "string",
+    "description": (
+        f"Optional, max {REPORT_REASON_CHARS} chars: why, when this call departs from your "
+        "Admiral's order. Filed as the reason on your report to the Admiral."
+    ),
+}
+
+
+def with_reason_fields(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """``tools`` with the optional ``reason`` field on the action tools (copies)."""
+    out = []
+    for tool in tools:
+        if tool["function"]["name"] in ACTION_REASON_TOOLS:
+            tool = deepcopy(tool)
+            tool["function"]["parameters"].setdefault("properties", {})["reason"] = dict(
+                ACTION_REASON_PROPERTY)
+        out.append(tool)
+    return out
+
+
 def radiator_command_from_args(args: Dict[str, Any]) -> Dict[str, Any]:
     """
     Normalise set_radiators tool arguments into the engine command.
@@ -687,7 +721,9 @@ def radiator_command_from_args(args: Dict[str, Any]) -> Dict[str, Any]:
     Shared by LLM captains, heuristic captains and MCP so all get the same rules.
     """
     args = args or {}
-    mode = str(args.get("mode") or "manual").strip().lower()
+    # Quotes tolerated: mode '"auto"' used to fall through to a manual RETRACT.
+    quotes = "\"'`“”‘’"
+    mode = str(args.get("mode") or "manual").strip().strip(quotes).strip().lower()
     if mode == "auto":
         pct = args.get("auto_extend_pct")
         try:
@@ -698,7 +734,8 @@ def radiator_command_from_args(args: Dict[str, Any]) -> Dict[str, Any]:
                 "auto_extend_pct": max(0.0, min(100.0, pct))}
     extend = args.get("extend", False)
     if isinstance(extend, str):
-        extend = extend.strip().lower() in ("true", "1", "yes", "extend", "extended")
+        extend = extend.strip().strip(quotes).strip().lower() in (
+            "true", "1", "yes", "extend", "extended")
     return {"type": "set_radiators", "extend": bool(extend)}
 
 
@@ -812,7 +849,7 @@ def build_weapon_tool_for_ship(ship_type: str, fleet_data: Dict[str, Any]) -> Di
         properties["heavy_coilguns_mode"] = {
             "type": "string",
             "enum": ["FIRE_IMMEDIATE", "FIRE_WHEN_OPTIMAL", "FIRE_AT_RANGE", "HOLD_FIRE"],
-            "description": f"Heavy coilguns x{count} ({vel} km/s, {dmg:.1f} GJ each, {rng}km range, turreted 180° arc)"
+            "description": f"Heavy coilguns x{count} ({vel} km/s, {dmg:.1f} GJ each, {rng}km range, turreted: fires where its own hull leaves it clear)"
         }
         properties["heavy_coilguns_min_probability"] = {
             "type": "number", "minimum": 0.1, "maximum": 0.9,
@@ -835,7 +872,7 @@ def build_weapon_tool_for_ship(ship_type: str, fleet_data: Dict[str, Any]) -> Di
         properties["coilguns_mode"] = {
             "type": "string",
             "enum": ["FIRE_IMMEDIATE", "FIRE_WHEN_OPTIMAL", "FIRE_AT_RANGE", "HOLD_FIRE"],
-            "description": f"Coilguns x{count} ({vel} km/s, {dmg:.2f} GJ each, {rng}km range, turreted 180° arc)"
+            "description": f"Coilguns x{count} ({vel} km/s, {dmg:.2f} GJ each, {rng}km range, turreted: fires where its own hull leaves it clear)"
         }
         properties["coilguns_min_probability"] = {
             "type": "number", "minimum": 0.1, "maximum": 0.9,

@@ -474,11 +474,14 @@ def _flank_axes(los: Vector3D) -> Tuple[Vector3D, Vector3D]:
 
 
 def _nose_aspect(heading: Vector3D, los: Vector3D, ships: Sequence[Any], detail: bool,
-                 duration_s: Optional[float] = None) -> str:
+                 duration_s: Optional[float] = None, sim: Any = None) -> str:
     """
     Which face the enemy sees while the nose points along ``heading`` (the
     drive thrusts along the nose, so a burn dictates the attitude), for how
-    long, and whether the guns can bear meanwhile.
+    long, and which guns can bear meanwhile - from the hulls' real weapon
+    arcs (data/hull_mounts.json, the masks the engine fires through), not
+    an analytic turret cone: the old 90-degree cone contradicted the ARCS
+    lines ("guns masked" and "turrets bear" on the same vector).
     """
     angle = math.degrees(heading.angle_to(los))
     if angle < NOSE_HIT_ANGLE_THRESHOLD:
@@ -493,19 +496,98 @@ def _nose_aspect(heading: Vector3D, los: Vector3D, ships: Sequence[Any], detail:
         armor = getattr(ships[0], "armor", None)
         sec = armor.get_section(section) if armor else None
         if sec is not None:
-            face += f" ({section} armor {sec.thickness_cm:.0f} cm exposed)"
-    guns = _gun_arcs(ships)
+            face += f" ({section} {sec.thickness_cm:.0f} cm)"
+    guns = guns_bearing(sim, ships, angle)
     if guns is None:
         return face
-    has_spinal, has_turret = guns
+    return f"{face}, {guns}"
+
+
+# (id(hull mounts), slot) -> per whole degree off the nose 0..180: does the
+# mount bear there at SOME roll (the hull rolls itself to unmask; roll turns a
+# direction about the thrust axis, so the angle off the nose is all that
+# matters). Geometry of data/hull_mounts.json only.
+_ROLL_BEAR_CACHE: Dict[Tuple[int, str], List[bool]] = {}
+_ROLL_STEP_DEG = 5
+
+
+def _bears_at_some_roll(hull: Any, mount: Any) -> List[bool]:
+    key = (id(hull), mount.slot)
+    table = _ROLL_BEAR_CACHE.get(key)
+    if table is not None:
+        return table
+    try:
+        from .. import weapon_arcs
+    except ImportError:  # pragma: no cover - script-style imports
+        import weapon_arcs
+    table = []
+    for deg in range(181):
+        a = math.radians(deg)
+        ca, sa = math.cos(a), math.sin(a)
+        table.append(any(
+            not mount.mask[weapon_arcs.cell_index(ca, sa * math.cos(math.radians(p)),
+                                                  sa * math.sin(math.radians(p)))]
+            for p in range(0, 360, _ROLL_STEP_DEG)))
+    _ROLL_BEAR_CACHE[key] = table
+    return table
+
+
+def gun_bearing_counts(sim: Any, ships: Sequence[Any], angle_deg: float
+                       ) -> Optional[Dict[str, int]]:
+    """
+    Operational gun mounts of ``ships`` that can bear on a target
+    ``angle_deg`` off the nose: a spinal inside its gimbal
+    (pivot_range_deg), a turret battery where its own hull leaves it clear at
+    some roll (the engine's masks; every turret when weapon arcs are off).
+    Pure: reads the static masks, never a ship's arcs state. None when the
+    ships carry no guns.
+    """
+    counts = {"spinal": 0, "spinal_total": 0, "turret": 0, "turret_total": 0}
+    deg = max(0, min(180, int(round(angle_deg))))
+    arcs_on = bool(getattr(sim, "weapon_arcs", False)) if sim is not None else False
+    table_by_class = getattr(sim, "hull_mounts", None) if arcs_on else None
+    for ship in ships:
+        hull = (table_by_class.get(getattr(ship, "ship_type", None))
+                if isinstance(table_by_class, dict) else None)
+        for slot, ws in (getattr(ship, "weapons", None) or {}).items():
+            if str(slot).startswith("pd"):
+                continue
+            weapon = getattr(ws, "weapon", None)
+            if weapon is None or getattr(weapon, "is_missile", False):
+                continue
+            if not getattr(ws, "is_operational", True):
+                continue
+            if getattr(weapon, "is_turreted", True):
+                counts["turret_total"] += 1
+                mount = hull.by_slot.get(slot) if hull is not None else None
+                if mount is None or _bears_at_some_roll(hull, mount)[deg]:
+                    counts["turret"] += 1
+            else:
+                counts["spinal_total"] += 1
+                if angle_deg <= float(getattr(weapon, "pivot_range_deg", SPINAL_ARC_DEG)):
+                    counts["spinal"] += 1
+    if not (counts["spinal_total"] or counts["turret_total"]):
+        return None
+    return counts
+
+
+def guns_bearing(sim: Any, ships: Sequence[Any], angle_deg: float) -> Optional[str]:
+    """'spinal + 3 of 3 batteries can bear' / '1 of 2 batteries can bear' /
+    'no gun bears' (gun_bearing_counts: at some roll); None for gunless ships."""
+    c = gun_bearing_counts(sim, ships, angle_deg)
+    if c is None:
+        return None
+    multi = len(ships) > 1
     bears = []
-    if has_spinal and angle <= SPINAL_ARC_DEG:
-        bears.append("spinal")
-    if has_turret and angle <= TURRET_ARC_DEG:
-        bears.append("turrets")
-    if bears:
-        return f"{face}, {' + '.join(bears)} bear"
-    return f"{face}, guns masked"
+    if c["spinal"]:
+        bears.append(f"{c['spinal']} of {c['spinal_total']} spinals" if multi else "spinal")
+    if c["turret"]:
+        bears.append(f"{c['turret']} of {c['turret_total']} "
+                     f"batter{'y' if c['turret_total'] == 1 else 'ies'}")
+    if not bears:
+        return "no gun bears"
+    # At SOME roll: the ARCS lines say what bears at the present roll.
+    return " + ".join(bears) + " can bear"
 
 
 def _gun_arcs(ships: Sequence[Any]) -> Optional[Tuple[bool, bool]]:
@@ -658,7 +740,7 @@ def _analyze_group(sim, own, own_pos, own_vel, accel, members, interval_s, detai
         cancel_opt = HeadingOption(
             key="cancel", label=cancel_label, heading=h, throttle=throttle,
             turn_s=t_f, burn_s=burn, effect=f"{when}: {effect}",
-            aspect=_nose_aspect(h, los, own, detail, end),
+            aspect=_nose_aspect(h, los, own, detail, end, sim),
             cpa_km=m_min / 1000.0, cpa_t_s=m_t,
             end_range_km=hold_km, rel_speed_end_kps=ve.magnitude / 1000.0)
         info.options.append(cancel_opt)
@@ -700,7 +782,7 @@ def _analyze_group(sim, own, own_pos, own_vel, accel, members, interval_s, detai
         key="open", label="open range", heading=away, throttle=1.0, turn_s=t_f,
         burn_s=burn,
         effect=f"{_span(end, interval_s)}: then {pe.magnitude / 1000.0:.0f} km, {rate} km/s",
-        aspect=_nose_aspect(away, los, own, detail, end),
+        aspect=_nose_aspect(away, los, own, detail, end, sim),
         cpa_km=m_min / 1000.0, cpa_t_s=m_t, end_range_km=pe.magnitude / 1000.0))
 
     # ---- re-engage: after a pass, turn the opening into a gentle closure --
@@ -740,7 +822,7 @@ def _analyze_group(sim, own, own_pos, own_vel, accel, members, interval_s, detai
             burn_s=burn,
             effect=(f"{_span(t_f + burn, interval_s)}: closest approach ~{m_min / 1000.0:.0f} km "
                     f"in {m_t:.0f} s (coasting: {info.cpa_km:.1f} km)"),
-            aspect=_nose_aspect(wide, los, own, detail, t_f + burn),
+            aspect=_nose_aspect(wide, los, own, detail, t_f + burn, sim),
             cpa_km=m_min / 1000.0, cpa_t_s=m_t))
 
     # ---- flank left / right: one checkpoint's burn across his line -------
@@ -756,7 +838,7 @@ def _analyze_group(sim, own, own_pos, own_vel, accel, members, interval_s, detai
             burn_s=burn,
             effect=(f"{_span(end, interval_s)}: {side_km:.0f} km off your coasting line, "
                     f"closest approach {m_min / 1000.0:.0f} km"),
-            aspect=_nose_aspect(axis, los, own, detail, end),
+            aspect=_nose_aspect(axis, los, own, detail, end, sim),
             cpa_km=m_min / 1000.0, cpa_t_s=m_t))
 
     # ---- coast & shoot: attitude only, nose back on them -----------------
@@ -767,18 +849,24 @@ def _analyze_group(sim, own, own_pos, own_vel, accel, members, interval_s, detai
     rcs = _turn_time(sim, own, los, engines_on=False)
     turn_text = ("nose already on him" if rcs < 1.0 else
                  f"RCS turn ~{rcs:.0f} s, no drift; PADLOCK ~{tv:.0f} s (token burn, few m/s)")
+    # What coasting does to the range, like every burn option states its
+    # effect: this was the only option line with no stated cost (audit C6).
+    coast = (f"coasting: closest approach {base_m / 1000.0:.1f} km in {base_t:.0f} s"
+             if base_t > 0.5 else "coasting: range not closing")
     if _gun_arcs(own) is None:
         window = ("closing: torpedoes launched now keep their solution" if closing >= 0 else
                   "range OPENING: launches now chase a receding target - re-engage first")
         info.options.append(HeadingOption(
             key="face", label="coast & launch", heading=los, throttle=0.0,
-            turn_s=rcs, burn_s=0.0, effect=f"{turn_text}; {window}",
-            aspect=_nose_aspect(los, los, own, detail).replace(" exposed)", ")")))
+            turn_s=rcs, burn_s=0.0, effect=f"{turn_text}; {coast}; {window}",
+            aspect=_nose_aspect(los, los, own, detail, None, sim),
+            cpa_km=base_m / 1000.0, cpa_t_s=base_t))
     else:
         info.options.append(HeadingOption(
             key="face", label="coast & shoot", heading=los, throttle=0.0,
-            turn_s=rcs, burn_s=0.0, effect=turn_text,
-            aspect=_nose_aspect(los, los, own, detail).replace(" exposed)", ")")))
+            turn_s=rcs, burn_s=0.0, effect=f"{turn_text}; {coast}",
+            aspect=_nose_aspect(los, los, own, detail, None, sim),
+            cpa_km=base_m / 1000.0, cpa_t_s=base_t))
 
     # ---- merge warning ----------------------------------------------------
     if closing > 0 and info.cpa_km < MERGE_KM and base_t < CPA_HORIZON_S:
@@ -876,7 +964,7 @@ def _reengage_option(sim, own, p, v, e_acc, los, accel, interval_s, detail, eval
         effect += f" while you keep matching his {e_acc_mag / G_STANDARD:.1f}g burn"
     return HeadingOption(
         key="reengage", label="re-engage", heading=h, throttle=throttle, turn_s=t_f,
-        burn_s=burn, effect=effect, aspect=_nose_aspect(h, los, own, detail, end),
+        burn_s=burn, effect=effect, aspect=_nose_aspect(h, los, own, detail, end, sim),
         end_range_km=pe.magnitude / 1000.0, rel_speed_end_kps=ve.magnitude / 1000.0)
 
 
@@ -947,14 +1035,41 @@ def _span(seconds: float, interval_s: float) -> str:
 # Rendering
 # ---------------------------------------------------------------------------
 
-def _option_line(opt: HeadingOption, target_name: str, verb: str = "set_heading") -> str:
+def _option_line(opt: HeadingOption, target_name: str, verb: str = "set_heading",
+                 label: Optional[str] = None) -> str:
+    label = label or opt.label
     if opt.key == "face":
-        return (f"  {opt.label:<14} {verb}{opt.heading_str()} throttle 0 or PADLOCK "
+        return (f"  {label:<14} {verb}{opt.heading_str()} throttle 0 or PADLOCK "
                 f"{target_name}: {opt.effect} | {opt.aspect}")
     if opt.throttle <= 0:
-        return f"  {opt.label:<14} {opt.effect}"
-    return (f"  {opt.label:<14} {verb}{opt.heading_str()} @{opt.throttle * 100:.0f}% "
+        return f"  {label:<14} {opt.effect}"
+    return (f"  {label:<14} {verb}{opt.heading_str()} @{opt.throttle * 100:.0f}% "
             f"{opt.effect} | {opt.aspect}")
+
+
+# Burn options whose headings are this close are one option ("pass wide"
+# equalled "flank left" in 293 recorded captain turns).
+MERGE_OPTION_DEG = 10.0
+
+
+def merged_options(options: Sequence[HeadingOption]) -> List[Tuple[HeadingOption, str]]:
+    """
+    (option, label) to render: a burn option whose heading lies within
+    MERGE_OPTION_DEG of an earlier listed burn option is folded into it, the
+    label naming both ("pass wide = flank right"). Render time only: the
+    options themselves (MCP / to_dict, option(key)) are untouched.
+    """
+    out: List[List[Any]] = []
+    for opt in options:
+        if opt.throttle > 0 and opt.key != "face":
+            twin = next((row for row in out if row[0].throttle > 0 and row[0].key != "face"
+                         and math.degrees(row[0].heading.angle_to(opt.heading)) < MERGE_OPTION_DEG),
+                        None)
+            if twin is not None:
+                twin[1] += f" = {opt.label}"
+                continue
+        out.append([opt, opt.label])
+    return [(opt, label) for opt, label in out]
 
 
 def _group_header(info: GroupRangeInfo) -> str:
@@ -1006,9 +1121,8 @@ def _key_options(info: GroupRangeInfo, n: int) -> List[HeadingOption]:
     return [o for o in info.options if o.key in keys]
 
 
-# "(tail armor 47 cm exposed)" on a burn option: a captain's MY SHIP already
-# lists its armor per face; the coast & shoot line keeps its "(nose armor".
-_EXPOSED_ARMOR = re.compile(r" \(\w+ armor \d+ cm exposed\)")
+# "(tail 47 cm)" on a burn option, for readers that have the armor elsewhere.
+_EXPOSED_ARMOR = re.compile(r" \((?:nose|lateral|tail) \d+ cm\)")
 
 
 def format_range_control(
@@ -1046,19 +1160,44 @@ def format_range_control(
         options = info.options
         if i > 0 and secondary_options is not None:
             options = _key_options(info, secondary_options)
-        for opt in options:
-            line = _option_line(opt, target, verb)
+        for opt, label in merged_options(options):
+            line = _option_line(opt, target, verb, label)
             lines.append(line if armor_on_burns else _EXPOSED_ARMOR.sub("", line))
     return "\n".join(lines)
 
 
-def format_captain_range_control(infos: Sequence[GroupRangeInfo]) -> str:
+def format_captain_range_control(infos: Sequence[GroupRangeInfo], compact: bool = False) -> str:
     """A captain's RANGE CONTROL: every heading for the most urgent group,
-    the key ones for the next (CAPTAIN_SECONDARY_OPTIONS), no armor numbers
-    on burns (MY SHIP lists them)."""
-    return format_range_control(infos, who="Your",
-                                secondary_options=CAPTAIN_SECONDARY_OPTIONS,
-                                armor_on_burns=False)
+    the key ones for the next (CAPTAIN_SECONDARY_OPTIONS). Every option line
+    carries the same fields - effect on range, the face (and its armor)
+    shown, which guns bear (audit C4/C6).
+
+    ``compact`` (an admiral maneuver is flying and no merge, conflict or
+    torpedo trigger is present - captain._compact_turn): each group keeps its
+    status line, the options shrink to one line of labelled vectors. The
+    audit found 145 of 152 captain set_heading calls re-pasting the
+    admiral's heading and ~760 tokens per turn spent on this block."""
+    if not compact:
+        return format_range_control(infos, who="Your",
+                                    secondary_options=CAPTAIN_SECONDARY_OPTIONS,
+                                    armor_on_burns=True)
+    if not infos:
+        return ""
+    lines = ["=== RANGE CONTROL (compact while your Admiral's maneuver flies and nothing "
+             "triggers; set_heading vectors) ==="]
+    for i, info in enumerate(infos):
+        lines.append(_group_header(info))
+        lines.append(_group_status(info, "Your"))
+        if info.warning:
+            lines.append(f"  !! {info.warning}")
+        if not _detailed(i, info, FULL_DETAIL_GROUPS):
+            continue
+        options = info.options if i == 0 else _key_options(info, CAPTAIN_SECONDARY_OPTIONS)
+        vectors = [f"{label} {opt.heading_str()}" for opt, label in merged_options(options)
+                   if opt.throttle > 0 or opt.key == "face"]
+        if vectors:
+            lines.append("  " + " | ".join(vectors))
+    return "\n".join(lines)
 
 
 def format_heading_options(

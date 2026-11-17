@@ -19,6 +19,7 @@ call and no key.
 import itertools
 import json
 import threading
+import time
 from typing import Any, Callable, Dict, List, Optional
 
 import httpx2
@@ -59,12 +60,23 @@ def mock_anthropic_transport(
     *,
     record: Optional[List[Dict[str, Any]]] = None,
     respond: Optional[Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]] = None,
+    latency_s: float = 0.0,
+    thinking_tokens: int = 20,
 ) -> httpx2.MockTransport:
     """
     record: every request body is appended here (tests inspect them).
     respond(body) -> a full response dict (or an httpx2.Response) to return
         instead of the scripted one, or None for the default - tests use it
         for refusals, max_tokens stops and error statuses.
+    latency_s: > 0 makes every request take that long AND emulates the real
+        cache's concurrency rule: an entry becomes readable only once the
+        request writing it has answered, so requests on the same prefix that
+        overlap the first one write it again (each pays the write). At 0
+        (the default) a prefix is readable the moment it is first seen.
+    thinking_tokens: thinking tokens billed per reply (inside output_tokens).
+        The default 20 keeps replies tiny; a realistic value (the audits'
+        Sonnet 5 median was ~300-800) makes mock spend comparable to a real
+        battle's for cap and cost-report tests.
     """
     seen: set = set()
     lock = threading.Lock()
@@ -92,28 +104,44 @@ def mock_anthropic_transport(
                     read = prefix_tokens
                 else:
                     written = prefix_tokens
+                    if latency_s <= 0:
+                        seen.add(prefix)
+        if latency_s > 0:
+            time.sleep(latency_s)
+            if written:
+                with lock:
                     seen.add(prefix)
         ttl_1h = any((b.get("cache_control") or {}).get("ttl") == "1h"
                      for b in body.get("system") or [] if isinstance(b, dict))
 
-        calls = _mock_calls(_openai_view(body), points, max_ships, seed) if body.get("tools") else []
+        prewarm = body.get("max_tokens") == 0
+        calls = (_mock_calls(_openai_view(body), points, max_ships, seed)
+                 if body.get("tools") and not prewarm else [])
         with lock:
             serial = next(ids)
+        # Thinking text only when a summary is asked for (display "summarized");
+        # the default ("omitted") returns the block with an empty string.
+        summary = ((body.get("thinking") or {}).get("display") == "summarized")
         content: List[Dict[str, Any]] = [
-            {"type": "thinking", "thinking": "", "signature": f"mock-signature-{serial}"}]
+            {"type": "thinking", "signature": f"mock-signature-{serial}",
+             "thinking": (f"Mock summary {serial}: weighing range, closure and the threats."
+                          if summary else "")}]
         for n, (name, args) in enumerate(calls):
             content.append({"type": "tool_use", "id": f"toolu_mock_{serial}_{n}",
                             "name": name, "input": args})
         if not calls:
             content.append({"type": "text", "text": "Acknowledged."})
-        output = 40 + 30 * len(calls)
+        output = 20 + thinking_tokens + 30 * len(calls)
+        if prewarm:
+            # A cache pre-warm: prefill only, nothing generated or billed out.
+            content, output = [], 0
         return httpx2.Response(200, headers={"request-id": f"req_mock_{serial}"}, json={
             "id": f"msg_mock_{serial}",
             "type": "message",
             "role": "assistant",
             "model": body.get("model"),
             "content": content,
-            "stop_reason": "tool_use" if calls else "end_turn",
+            "stop_reason": "max_tokens" if prewarm else ("tool_use" if calls else "end_turn"),
             "stop_sequence": None,
             "stop_details": None,
             "usage": {
@@ -123,7 +151,7 @@ def mock_anthropic_transport(
                 "cache_read_input_tokens": read,
                 "cache_creation": {"ephemeral_5m_input_tokens": 0 if ttl_1h else written,
                                    "ephemeral_1h_input_tokens": written if ttl_1h else 0},
-                "output_tokens_details": {"thinking_tokens": 20},
+                "output_tokens_details": {"thinking_tokens": 0 if prewarm else thinking_tokens},
             },
         })
 

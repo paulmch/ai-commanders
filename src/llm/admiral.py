@@ -30,6 +30,21 @@ if TYPE_CHECKING:
 
 
 
+# --- cmdrun experiment hunk: intent-only admiral (AdmiralConfig.intent_only) ---
+# Prompt text owned by the admiral/captain lanes once reviewed; added here only
+# for the experiment mode (never shown in a default battle).
+INTENT_ONLY_NOTE = (
+    "INTENT-ONLY COMMAND this battle: there is no per-ship order phase. Your captains "
+    "choose their own maneuvers and targets from your directive and battle plan. You may "
+    "still order a coordinated torpedo salvo: issue_order(ship_name=<ship>, "
+    "torpedo_salvo=N, torpedo_target=<enemy>), one call per launching ship; any other "
+    "issue_order content is ignored.")
+INTENT_ONLY_CAPTAIN_ORDER = (
+    "[INTENT-ONLY] No per-ship order: choose your own maneuver and target under the "
+    "fleet directive.")
+# --- end cmdrun hunk ---
+
+
 def _crew_state(ship):
     """drive_plume.crew_state (works for both import styles)."""
     try:
@@ -846,6 +861,14 @@ Be authentic to how you would command a fleet as {model_name}."""
                      "Set your fleet directive (overall strategy). "
                      "You will issue individual ship orders next.\n\n"
                      + messages[1]["content"])
+        # --- cmdrun experiment hunk: intent-only admiral (off by default) ---
+        intent_only = bool(getattr(self.config, "intent_only", False))
+        if intent_only:
+            user_text = (f"ADMIRAL CHECKPOINT {self.decision_count + 1}. "
+                         "Set your fleet directive (overall strategy). " + INTENT_ONLY_NOTE
+                         + "\n\n" + messages[1]["content"])
+        salvo_orders: Dict[str, Dict[str, Any]] = {}
+        # --- end cmdrun hunk ---
 
         # Attach the tactical plot as an image content part when available.
         # OpenRouter forwards multi-part user content to multimodal models;
@@ -893,6 +916,11 @@ Be authentic to how you would command a fleet as {model_name}."""
                     self.standing_plan = plan
                     self.standing_plan_time = simulation.current_time
                     decision.battle_plan_update = plan
+            elif name == "issue_order" and intent_only:
+                # cmdrun experiment hunk: intent-only keeps salvo orders only.
+                if args.get("torpedo_salvo"):
+                    ref = self._plain_ref(args.get("ship_name")) or args.get("ship_name")
+                    salvo_orders[str(ref or "").strip().lower()] = args
             elif name == "issue_order":
                 # The only order this call accepts: ONE fleet-wide formation
                 # heading (ship_name "all ships"). Per-ship orders come next.
@@ -934,6 +962,16 @@ Be authentic to how you would command a fleet as {model_name}."""
                 salvo_plan=decision.salvo_plan,
             )
 
+        if intent_only:
+            # cmdrun experiment hunk: no per-ship order calls; every ship gets
+            # the directive (and any salvo it was ordered), nothing else.
+            decision.fleet_orders.extend(
+                self._intent_only_order(ship_info, salvo_orders) for ship_info in active_ships)
+            self.decision_count += 1
+            self.order_history.append(decision)
+            self._received_enemy_messages.clear()
+            return decision
+
         if self.parallel_ship_orders and len(active_ships) > 1:
             with ThreadPoolExecutor(
                 max_workers=min(8, len(active_ships)),
@@ -955,6 +993,25 @@ Be authentic to how you would command a fleet as {model_name}."""
 
         self.last_decision = decision
         return decision
+
+    def _intent_only_order(self, ship_info: dict,
+                           salvo_orders: Dict[str, Dict[str, Any]]) -> "AdmiralOrder":
+        """cmdrun experiment hunk: the order an intent-only admiral's ship receives."""
+        name = str(ship_info.get("ship_name") or "").strip().lower()
+        sid = str(ship_info.get("ship_id") or "").strip().lower()
+        salvo = next((v for k, v in salvo_orders.items()
+                      if k and (k in (name, sid) or name.endswith(" " + k))), None)
+        order = AdmiralOrder(
+            target_ship_id=ship_info['ship_id'],
+            target_ship_name=ship_info['ship_name'],
+            order_text=INTENT_ONLY_CAPTAIN_ORDER,
+            priority="NORMAL",
+            suggested_target=None,
+            torpedo_salvo=salvo.get("torpedo_salvo") if salvo else None,
+            torpedo_target=self._plain_ref(
+                (salvo.get("torpedo_target") or salvo.get("suggested_target")) if salvo else None),
+        )
+        return order
 
     def _publish_directive(self, decision: AdmiralDecision, now: float) -> None:
         """Apply the last_directive contract for this checkpoint."""

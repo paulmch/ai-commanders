@@ -30,7 +30,11 @@ from src.llm.live_status import PendingCalls, draft_live_entry
 from src.llm.mcp_http_server import MCPHttpServer
 from src.llm.mock_openrouter import mock_transport
 from src.llm.replay_audit import AuditedClient
-from src.llm.spending import RequestBudget
+from src.llm.spending import RequestBudget, SpendLedger
+
+DEFAULT_LEDGER = ROOT / 'data/recordings/spend_ledger.jsonl'
+from src.llm.call_policy import EffortPolicy, PolicyClient, parse_effort_specs
+from src.llm.cost_report import cost_report, format_cost_report
 
 
 def write_json(path, value):
@@ -194,6 +198,37 @@ def anthropic_pricing(model, args):
             'unit': 'USD per million tokens', 'as_of': ANTHROPIC_PRICES_AS_OF, 'provider': 'anthropic'}
 
 
+def ledger_tokens(client):
+    stats = getattr(client, 'stats', None)
+    if stats is None:
+        return {}
+    return {'prompt': stats.prompt_tokens, 'cache_read': stats.cached_tokens,
+            'cache_write': stats.cache_write_tokens}
+
+
+def fixed_rosters(args, admiral_for):
+    """The fleet config of an earlier run with this run's models, modes and turn count."""
+    path = Path(args.rosters)
+    if path.is_dir():
+        path = path / 'fleet_config.json'
+    fc = BattleFleetConfig.from_json(str(path))
+    for faction in ('alpha', 'beta'):
+        fleet = getattr(fc, f'{faction}_fleet')
+        captain = 'heuristic' if args.offline else side_models(args)[faction]['captain']
+        for ship in fleet.ships:
+            ship.model = captain
+            ship.temperature = None
+        fleet.admiral = admiral_for(faction)
+    fc.battle_name = f'fixed rosters ({path.parent.name}): {args.alpha_model} vs {args.beta_model}'
+    fc.max_checkpoints = args.turns
+    fc.time_limit_s = (args.turns + 1) * 30
+    fc.personality_selection = False
+    fc.record_battle = True
+    fc.record_sim_trace = True
+    fc.use_notebooks = False
+    return fc
+
+
 def record_stop(runner, error):
     """A stopped battle (spend ceiling, failed draft) is a recorded outcome:
     result_reason, a battle_stopped event and the partial replay on disk."""
@@ -203,10 +238,28 @@ def record_stop(runner, error):
         runner.save_progress()
 
 
+def side_models(args):
+    """{'alpha': {'admiral': id, 'captain': id}, 'beta': {...}}: the admiral (and
+    draft) model and the captain model of each side (captains default to it)."""
+    return {f: {'admiral': getattr(args, f'{f}_model'),
+                'captain': getattr(args, f'{f}_captain_model', None) or getattr(args, f'{f}_model')}
+            for f in ('alpha', 'beta')}
+
+
+def all_models(args):
+    """Every LLM model id this battle may call, first-seen order ('heuristic' captains excluded)."""
+    from src.llm.providers import llm_models
+    return llm_models(m for roles in side_models(args).values() for m in roles.values())
+
+
+def sides_of(value):
+    return () if not value else ('alpha', 'beta') if value == 'both' else (value,)
+
+
 def validate_catalog(catalog, args):
     """Refuse models the free catalog does not show fit for this battle; return pricing."""
     pricing = {}
-    for model in (args.alpha_model, args.beta_model):
+    for model in all_models(args):
         if provider_for_model(model) == 'anthropic':
             pricing[model] = anthropic_pricing(model, args)
             continue
@@ -225,7 +278,7 @@ def validate_catalog(catalog, args):
 def make_client(args):
     if args.offline:
         return None, None
-    models = (args.alpha_model, args.beta_model)
+    models = tuple(all_models(args))
     catalog = {}
     if any(provider_for_model(m) == 'openrouter' for m in models):
         # Free metadata call: availability, tools, reasoning efforts, modalities, prices.
@@ -239,6 +292,10 @@ def make_client(args):
         import anthropic
         anthropic_options = {'api_key': 'mock-no-network', 'http_client': anthropic.DefaultHttpxClient(
             transport=mock_anthropic_transport(args.points, args.max_ships, args.seed))}
+    if args.thinking_summary:
+        anthropic_options = {**(anthropic_options or {}), 'thinking_display': 'summarized'}
+    if args.cache_warmup:
+        anthropic_options = {**(anthropic_options or {}), 'cache_warmup': True}
     # A bare Anthropic id is served by the Anthropic API, a vendor/model id by
     # OpenRouter; the sides may differ. Fails here without ANTHROPIC_API_KEY.
     client = create_llm_client(
@@ -263,6 +320,13 @@ async def run(args):
     if output.exists() or report_dir.exists():
         raise FileExistsError(f'Choose a new --name; {args.name} already exists')
     client, budget = make_client(args)
+    # Paid runs reserve their cap in the cumulative ledger before the first
+    # request (--ledger-cap refuses the run here); mock runs only when a
+    # ledger is named explicitly, and they never count.
+    ledger = ledger_run = None
+    if not args.offline and (not args.mock_llm or args.ledger):
+        ledger = SpendLedger(args.ledger or DEFAULT_LEDGER)
+        ledger.check(args.spend_limit, args.ledger_cap)     # refuse before any pre-flight work
     report_dir.mkdir(parents=True, exist_ok=True)
     mode = 'offline' if args.offline else 'mock' if args.mock_llm else ''
     ticker = BattleTicker(
@@ -303,6 +367,12 @@ async def run(args):
         }
     server.spend_provider = spend
     await server.start()
+    if ledger is not None:
+        # Reserve the cap only now (after the port is bound): the first paid
+        # request is the draft, inside the battle task below.
+        ledger_run = ledger.open_run(script='run_live_draft_battle', name=args.name,
+                                     models=all_models(args), cap_usd=args.spend_limit,
+                                     ledger_cap_usd=args.ledger_cap, mock=args.mock_llm)
     print(f'WATCH: http://localhost:5173/?live=1&decisions=1', flush=True)
     draft_recorders = {}
     runner = None
@@ -314,6 +384,8 @@ async def run(args):
         return {
             'name': args.name, 'models': models, 'points_per_side': args.points,
             'max_ships': args.max_ships, 'turns': args.turns, 'reasoning': args.reasoning,
+            'role_models': side_models(args),
+            'effort_policy': parse_effort_specs(args.effort),
             'mode': mode or 'paid', 'admiral_vision': bool(args.admiral_vision and not args.offline),
             'images_sent': budget.images_reserved if budget else 0,
             'point_costs': dict(fleet_draft.SHIP_POINT_COSTS),
@@ -340,7 +412,18 @@ async def run(args):
             'winner': result.winner if result else None,
             'result_reason': result.reason if result else None,
             'recording': str(output),
+            'experiment': {'no_admiral': args.no_admiral, 'intent_only': args.intent_only,
+                           'quiet_turns': args.quiet_turns, 'cache_warmup': args.cache_warmup,
+                           'rosters': args.rosters, 'thinking_summary': args.thinking_summary},
+            'cost_report': battle_cost_report(),
         }
+
+    def battle_cost_report():
+        if runner and runner.recorder:
+            events = list(runner.recorder.events)
+        else:
+            events = [e for r in list(draft_recorders.values()) for e in list(r.events)]
+        return cost_report(events)
 
     def draft(faction):
         model = models[faction]
@@ -352,7 +435,9 @@ async def run(args):
             selection = auto_draft(faction, args.points, args.max_ships,
                                    seed=args.seed + (faction == 'beta'))
         else:
-            audited = AuditedClient(client, recorder, SimpleNamespace(current_time=0), 'admiral', faction)
+            policy = EffortPolicy(parse_effort_specs(args.effort))
+            drafter = PolicyClient(client, faction, 'admiral', policy) if policy else client
+            audited = AuditedClient(drafter, recorder, SimpleNamespace(current_time=0), 'admiral', faction)
             try:
                 selection = run_admiral_draft(
                     audited, model, f'Admiral {model.split("/")[-1]}', faction, fleet_data,
@@ -367,39 +452,53 @@ async def run(args):
         ticker.draft(faction, draft_summary_dict(selection))
         return selection
 
+    def admiral_for(faction):
+        model = models[faction]
+        if args.offline or faction in sides_of(args.no_admiral):
+            return None
+        return AdmiralConfig(
+            model=model, name=f'Admiral {model.split("/")[-1]}', temperature=None,
+            # Catalog-verified in make_client; overrides the family allowlist.
+            vision=args.admiral_vision, image_input=True if args.admiral_vision else None,
+            intent_only=faction in sides_of(args.intent_only))
+
     def battle():
         nonlocal runner, result
-        # Independent sealed drafts; neither model receives the other's choices.
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            selections = dict(zip(models, pool.map(draft, models)))
-        fleets = {}
-        for faction, model in models.items():
-            fleets[faction] = draft_to_fleet_definition(
-                selections[faction], 500, captain_model='heuristic' if args.offline else model,
-                admiral_config=None if args.offline else AdmiralConfig(
-                    model=model, name=f'Admiral {model.split("/")[-1]}', temperature=None,
-                    # Catalog-verified in make_client; overrides the family allowlist.
-                    vision=args.admiral_vision, image_input=True if args.admiral_vision else None),
-                temperature=None)
-        # First decision follows a 30s opening coast. Forty decisions then
-        # each receive 30s of execution: a maximum 1,230s recorded battle.
-        fc = BattleFleetConfig(
-            battle_name=f'{args.points}-point draft: {args.alpha_model} vs {args.beta_model}',
-            alpha_fleet=fleets['alpha'], beta_fleet=fleets['beta'], initial_distance_km=500,
-            decision_interval_s=30, time_limit_s=(args.turns + 1) * 30,
-            max_checkpoints=args.turns, seed=args.seed, personality_selection=False,
-            record_battle=True, record_sim_trace=True, use_notebooks=False)
+        if args.rosters:
+            fc = fixed_rosters(args, admiral_for)
+            selections = {}
+        else:
+            # Independent sealed drafts; neither model receives the other's choices.
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                selections = dict(zip(models, pool.map(draft, models)))
+            fleets = {}
+            for faction, model in models.items():
+                fleets[faction] = draft_to_fleet_definition(
+                    selections[faction], 500,
+                    captain_model='heuristic' if args.offline else side_models(args)[faction]['captain'],
+                    admiral_config=admiral_for(faction), temperature=None)
+            # First decision follows a 30s opening coast. Forty decisions then
+            # each receive 30s of execution: a maximum 1,230s recorded battle.
+            fc = BattleFleetConfig(
+                battle_name=f'{args.points}-point draft: {args.alpha_model} vs {args.beta_model}',
+                alpha_fleet=fleets['alpha'], beta_fleet=fleets['beta'], initial_distance_km=500,
+                decision_interval_s=30, time_limit_s=(args.turns + 1) * 30,
+                max_checkpoints=args.turns, seed=args.seed, personality_selection=False,
+                record_battle=True, record_sim_trace=True, use_notebooks=False)
         write_json(report_dir / 'fleet_config.json', asdict(fc))
         runner = LiveDraftRunner(
-            BattleConfig.from_fleet_config(fc, recording_dir=str(report_dir), verbose=not args.quiet),
+            BattleConfig.from_fleet_config(fc, recording_dir=str(report_dir), verbose=not args.quiet,
+                                           effort_policy=parse_effort_specs(args.effort),
+                                           quiet_turns=args.quiet_turns),
             LLMCaptainConfig('Alpha', 'Alpha'), LLMCaptainConfig('Beta', 'Beta'), client, fc)
         runner.configure_live(server, state, draft_recorders, output, args.sim_step_delay,
                               ticker=ticker, vision_dir=report_dir / 'vision',
                               pending_calls=pending)
         server.set_live_source(runner)
         result = runner.run_battle(fleet_data)
-        write_json(output.with_suffix('.draft.json'), {
-            'budget': args.points, **{f: draft_summary_dict(d) for f, d in selections.items()}})
+        if selections:
+            write_json(output.with_suffix('.draft.json'), {
+                'budget': args.points, **{f: draft_summary_dict(d) for f, d in selections.items()}})
 
     task = asyncio.create_task(asyncio.to_thread(battle))
     try:
@@ -420,10 +519,16 @@ async def run(args):
         if runner and runner.recorder:
             runner.recorder.recording.provenance['billing'] = report()
             runner.save_progress()
+        if ledger_run is not None:
+            ledger.close_run(ledger_run, calls=client.stats.calls if client else 0,
+                             tokens=ledger_tokens(client), usd=budget.reported_usd if budget else 0.0,
+                             committed_usd=budget.committed_usd if budget else None,
+                             status='error' if state.error else 'done')
         # Only now: a viewer seeing "ended" must already find the verdict,
         # the stop reason and the billing block in the recording
         server.set_battle_status('ended', runner.checkpoint_count if runner else 0)
         print(json.dumps(report()), flush=True)
+        print(format_cost_report(battle_cost_report()), flush=True)
         try:
             ticker.result(runner, result.winner if result else None,
                           (result.reason if result else None) or state.error,
@@ -448,7 +553,45 @@ def main():
     parser.add_argument('--max-ships', type=int, default=8)
     parser.add_argument('--turns', type=int, default=40)
     parser.add_argument('--spend-limit', type=float, default=8)
-    parser.add_argument('--reasoning', default='high')
+    parser.add_argument('--reasoning', default='high',
+                        help='Battle-wide effort: every call not covered by --effort')
+    parser.add_argument('--effort', action='append', default=[], metavar='[SIDE.]ROLE=LEVEL',
+                        help='Effort for one role (draft, directive, order, captain, trigger) on one '
+                             'side (alpha, beta; omitted = both), repeatable, later wins. "trigger" '
+                             'is the captain effort on turns with torpedoes inbound, a merge warning, '
+                             'damage taken, a changed order kind or the first turn; "captain" the '
+                             'other turns. Example: --effort directive=high --effort alpha.trigger=high')
+    parser.add_argument('--alpha-captain-model', default=None,
+                        help='Captain model of alpha (default: --alpha-model, which also drafts '
+                             'and commands as admiral)')
+    parser.add_argument('--beta-captain-model', default=None, help='Captain model of beta')
+    parser.add_argument('--ledger', default=None,
+                        help=f'Cumulative spend ledger (JSONL). Paid runs append to it (default '
+                             f'{DEFAULT_LEDGER.relative_to(ROOT)}); a mock run only when named here')
+    parser.add_argument('--ledger-cap', type=float, default=None,
+                        help='Refuse to start when the ledger total (closed runs at their spend, '
+                             'open runs at their cap) plus this run\'s --spend-limit would exceed it')
+    sides = ('alpha', 'beta', 'both')
+    parser.add_argument('--no-admiral', choices=sides, default=None,
+                        help='Experiment: that side drafts with its model but fights without an '
+                             'admiral (LLM captains on their own)')
+    parser.add_argument('--intent-only', choices=sides, default=None,
+                        help='Experiment: that side\'s admiral sets directive and plan (and may '
+                             'order torpedo salvos) but issues no per-ship orders')
+    parser.add_argument('--quiet-turns', action='store_true',
+                        help='Experiment: skip a captain call on a turn with no trigger, no new '
+                             'FLEET NET traffic and an unchanged applied order')
+    parser.add_argument('--cache-warmup', action='store_true',
+                        help='Experiment (Anthropic ids): one max_tokens=0 pre-warm per cold cached '
+                             'prefix before a parallel fan-out reads it')
+    parser.add_argument('--rosters', default=None,
+                        help='Fixed fleets: skip the draft and fly the fleet_config.json of an earlier '
+                             'run (a file or its report folder) with this run\'s models; its seed, '
+                             'rosters, names and positions are kept')
+    parser.add_argument('--thinking-summary', action='store_true',
+                        help='Anthropic ids: request thinking display "summarized" on every call and '
+                             'record the summary per model_call (thinking_summary; audit only, never '
+                             'fed back). Billed the same as the default omitted display')
     parser.add_argument('--seed', type=int, default=20260906)
     parser.add_argument('--port', type=int, default=8765)
     parser.add_argument('--sim-step-delay', type=float, default=0.04)
@@ -464,6 +607,10 @@ def main():
                         help='Runner verbose logging off; stdout carries the ticker blocks')
     parser.add_argument('--no-linger', action='store_true', help='Close HTTP server after the battle')
     args = parser.parse_args()
+    try:
+        parse_effort_specs(args.effort)
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.offline and args.mock_llm:
         parser.error('--offline and --mock-llm are exclusive')
     if args.admiral_vision and not args.offline:

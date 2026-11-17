@@ -199,11 +199,13 @@ def gun_arcs_text(sim: Any, ship: Any, target: Any) -> Optional[str]:
     return "; ".join(parts)
 
 
-def arcs_status_lines(sim: Any, ship: Any) -> List[str]:
+def arcs_status_lines(sim: Any, ship: Any, with_blind_cones: bool = True) -> List[str]:
     """
     Own-ship weapon-arc state for a status block: guns against the primary
     target, PD against the nearest hostile live torpedo. Empty when arcs are
-    off or there is nothing to say.
+    off or there is nothing to say. ``with_blind_cones=False`` leaves out the
+    per-class blind-cone line (the captain has it in its cached doctrine,
+    blind_cone_doctrine).
     """
     lines: List[str] = []
     arcs = _arcs(sim, ship)
@@ -241,7 +243,7 @@ def arcs_status_lines(sim: Any, ship: Any) -> List[str]:
     blind = [f"{kind} within {cones[f'{kind}_{end}']:.0f} deg of the {end}"
              for kind in ("pd", "gun") for end in ("nose", "stern")
              if cones.get(f"{kind}_{end}", 0.0) >= 1.0]
-    if blind:
+    if blind and with_blind_cones:
         lines.append("ARCS blind cones (no mount of that kind bears at any roll; only a turn "
                      "uncovers them): " + ", ".join(b.replace("pd ", "PD ").replace("gun ", "guns ")
                                                     for b in blind))
@@ -278,3 +280,38 @@ def arcs_doctrine_numbers(fleet_data: Optional[Dict[str, Any]]) -> Dict[str, flo
         "pd_deg_s": weapon_arcs.PD_TRAVERSE_DEG_S,
         "cruiser_roll_90_s": roll_90_s,
     }
+
+
+def blind_cone_doctrine(ship_type: Optional[str]) -> str:
+    """
+    The static weapon-arc facts of one hull class for the captain's cached
+    doctrine (the per-turn "ARCS blind cones" line moved here). Worded so it
+    cannot read as "guns are stern-arc only" (the admiral audit found that
+    misreading 7 times): the cones are where NO mount bears.
+    """
+    hull = weapon_arcs.load_hull_mounts().get(ship_type or "")
+    if hull is None:
+        return ""
+    cones = blind_cones(hull)
+    has_guns = any(m.kind == "gun" for m in hull.mounts)
+    has_spinal = any(m.kind == "spinal" for m in hull.mounts)
+    lines = ["WEAPON ARCS (your hull class): every mount fires only where your own hull leaves "
+             "it clear, and the ship rolls itself to unmask them (automatic)."]
+    for kind, label in (("gun", "gun battery"), ("pd", "PD turret")):
+        if kind == "gun" and not has_guns:
+            continue
+        where = [f"within {cones[f'{kind}_{end}']:.0f} deg of {'dead ahead' if end == 'nose' else 'dead astern'}"
+                 for end in ("nose", "stern") if cones.get(f"{kind}_{end}", 0.0) >= 1.0]
+        if where:
+            spinal = (" (your spinal fires dead ahead)" if kind == "gun" and has_spinal
+                      and cones.get("gun_nose", 0.0) >= 1.0 else "")
+            lines.append(f"- No {label} can fire at a target {' or '.join(where)}, at any roll - "
+                         f"only turning the ship opens that cone{spinal}; in every other "
+                         f"direction at least one {label} bears at some roll.")
+        else:
+            lines.append(f"- Your {label.replace('battery', 'batterie')}s have no blind cone: in "
+                         f"every direction at least one bears at some roll.")
+    lines.append("- What bears NOW (and the roll that unmasks the rest): the ARCS lines"
+                 + ("; per RANGE CONTROL heading: \"N of M batteries can bear\" = at SOME roll "
+                    "(rolling takes time)." if has_guns else "."))
+    return "\n".join(lines) + "\n"
