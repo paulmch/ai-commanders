@@ -175,3 +175,46 @@ def test_cost_report_reads_old_recordings_without_role_fields():
     assert rows[("alpha", "order")]["cache_read"] == 100 and rows[("alpha", "order")]["thinking_share"] == 1.0
     assert rows[("beta", "captain")]["input"] == 20 and rows[("beta", "captain")]["cache_write"] == 10
     assert report["total"]["usd"] == pytest.approx(0.75)
+
+
+# ---------------------------------------------------------------------------
+# (a) fixed fleets: a saved fleet_config.json re-flown with other models
+# ---------------------------------------------------------------------------
+
+def test_saved_fleet_config_keeps_rosters_names_positions_and_seed_under_new_models(tmp_path):
+    from dataclasses import asdict
+    from types import SimpleNamespace
+    from scripts.run_live_draft_battle import fixed_rosters
+    from scripts.run_llm_battle import apply_model_overrides
+    from src.llm.fleet_config import AdmiralConfig, BattleFleetConfig
+    from src.llm.fleet_draft import FleetDraft, draft_to_fleet_definition, name_drafted_ships
+    fleets = {f: draft_to_fleet_definition(
+        FleetDraft(faction=f, budget=40, points_spent=30,
+                   ships=name_drafted_ships(["destroyer", "frigate", "frigate"], f)),
+        500, captain_model="claude-sonnet-5", temperature=None,
+        admiral_config=AdmiralConfig(model="claude-sonnet-5", name="Admiral S5", temperature=None))
+        for f in ("alpha", "beta")}
+    fc = BattleFleetConfig(battle_name="saved", alpha_fleet=fleets["alpha"], beta_fleet=fleets["beta"],
+                           seed=1234, max_checkpoints=20, personality_selection=False)
+    path = tmp_path / "fleet_config.json"
+    path.write_text(json.dumps(asdict(fc)))                     # what run_live_draft_battle writes
+    args = SimpleNamespace(rosters=str(tmp_path), offline=False, turns=5,
+                           alpha_model="claude-opus-5-5", beta_model="claude-sonnet-5-5",
+                           alpha_captain_model="claude-haiku-5-5", beta_captain_model=None)
+    again = fixed_rosters(args, lambda f: AdmiralConfig(model=getattr(args, f"{f}_model"), name="A"))
+    for side in ("alpha", "beta"):
+        old, new = getattr(fc, f"{side}_fleet"), getattr(again, f"{side}_fleet")
+        assert [(s.ship_id, s.ship_type, s.ship_name, s.captain_name, s.position) for s in new.ships] == \
+               [(s.ship_id, s.ship_type, s.ship_name, s.captain_name, s.position) for s in old.ships]
+    assert again.seed == 1234 and again.max_checkpoints == 5
+    assert {s.model for s in again.alpha_fleet.ships} == {"claude-haiku-5-5"}
+    assert {s.model for s in again.beta_fleet.ships} == {"claude-sonnet-5-5"}
+    assert again.alpha_fleet.admiral.model == "claude-opus-5-5"
+    # run_llm_battle's overrides on the same file: names survive the model swap too.
+    loaded = BattleFleetConfig.from_json(str(path))
+    apply_model_overrides(loaded, SimpleNamespace(
+        no_admiral="beta", intent_only="alpha", alpha_captain_model="heuristic",
+        beta_captain_model=None, alpha_admiral_model="claude-opus-5-5", beta_admiral_model=None))
+    assert [s.ship_name for s in loaded.alpha_fleet.ships] == [s.ship_name for s in fc.alpha_fleet.ships]
+    assert loaded.beta_fleet.admiral is None and loaded.alpha_fleet.admiral.intent_only
+    assert {s.model for s in loaded.alpha_fleet.ships} == {"heuristic"}

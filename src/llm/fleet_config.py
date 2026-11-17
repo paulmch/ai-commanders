@@ -392,14 +392,15 @@ def _parse_fleet(data: Dict[str, Any], faction: str) -> FleetDefinition:
 
             # Parse optional position override
             position = None
-            if "position" in ship_data:
+            # A saved config (asdict of a drafted battle) writes null for unset.
+            if ship_data.get("position"):
                 pos = ship_data["position"]
                 # Omitted axes inherit formation defaults in setup_fleet_battle.
                 position = {axis: float(pos[axis]) for axis in ("x", "y", "z") if axis in pos}
 
             # Parse optional velocity override
             velocity = None
-            if "velocity" in ship_data:
+            if ship_data.get("velocity"):
                 vel = ship_data["velocity"]
                 velocity = {
                     "x": float(vel.get("x", 0)),
