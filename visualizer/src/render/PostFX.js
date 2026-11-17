@@ -69,6 +69,7 @@ const VIS_FRAG = /* glsl */`
       vec2 q = uSunUv + vec2(cos(a), sin(a)) * r * uRadius;
       float inside = step(0.0, q.x) * step(q.x, 1.0) * step(0.0, q.y) * step(q.y, 1.0);
       vec3 c = texture2D(tScene, q).rgb;
+      c = all(lessThan(abs(c), vec3(1.0e30))) ? c : vec3(0.0);   // a NaN texel must not blank the whole flare
       acc += inside * clamp(dot(c, vec3(0.2126, 0.7152, 0.0722)) / uRef, 0.0, 1.0);
     }
     gl_FragColor = vec4(acc / 16.0, 0.0, 0.0, 1.0);
@@ -139,7 +140,8 @@ const AO_FRAG = /* glsl */`
     vec3 Pd = viewPos(vUv - dy, viewW(vUv - dy)), Pu = viewPos(vUv + dy, viewW(vUv + dy));
     vec3 ex = abs(Pr.z - P.z) < abs(P.z - Pl.z) ? Pr - P : P - Pl;
     vec3 ey = abs(Pu.z - P.z) < abs(P.z - Pd.z) ? Pu - P : P - Pd;
-    vec3 n = normalize(cross(ex, ey));
+    vec3 nc = cross(ex, ey);                       // zero for a degenerate depth patch: no normalize(0)
+    vec3 n = nc * inversesqrt(max(dot(nc, nc), 1e-30));
     float rW = uRadius * 2.0 * uProj.y * w0;          // world size of the screen radius here
     float shrink = min(1.0, uMaxWorld / max(rW, 1e-6));
     rW *= shrink;
@@ -270,9 +272,8 @@ const COMPOSITE_FRAG = /* glsl */`
     // chromatic halo ring around the optical centre, strongest toward the sun
     float hr = length(p);
     float facing = pow(max(0.0, dot(normalize(p + 1e-5), normalize(s + 1e-5))), 3.0);
-    vec3 halo = vec3(exp(-pow((hr - 0.47) / 0.012, 2.0)),
-                     exp(-pow((hr - 0.455) / 0.012, 2.0)),
-                     exp(-pow((hr - 0.44) / 0.012, 2.0)));
+    vec3 hq = (vec3(hr) - vec3(0.47, 0.455, 0.44)) / 0.012;   // squared as a product: pow(<0, 2.0) is NaN on some GPUs
+    vec3 halo = exp(-hq * hq);
     acc += halo * facing * 0.028;
     return acc * vis * uFlareStrength;
   }

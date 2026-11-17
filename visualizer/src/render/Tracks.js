@@ -432,7 +432,7 @@ const ghostFragment = /* glsl */`
   void main() {
     #include <logdepthbuf_fragment>
     float f = 1.0 - abs(dot(normalize(vN), normalize(vV)));
-    gl_FragColor = vec4(uColor * (0.012 + 0.24 * pow(f, 2.4)) * uOpacity, 1.0);
+    gl_FragColor = vec4(uColor * (0.012 + 0.24 * pow(max(f, 0.0), 2.4)) * uOpacity, 1.0);
   }
 `;
 

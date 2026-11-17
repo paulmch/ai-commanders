@@ -634,9 +634,9 @@ export class Environment {
           // Rayleigh haze: a blue-white veil that thickens toward the limb
           // on the day side, and a thin forward-scattered arc that wraps a
           // little past the terminator
-          float rimF = pow(1.0 - mu, 3.0);
+          float rimF = pow(max(1.0 - mu, 0.0), 3.0);   // mu can round past 1
           col += uAtmo * rimF * smoothstep(-0.18, 0.5, ndl) * 0.55;
-          col += uAtmo * pow(1.0 - mu, 6.0) * smoothstep(-0.4, 0.05, ndl)
+          col += uAtmo * pow(max(1.0 - mu, 0.0), 6.0) * smoothstep(-0.4, 0.05, ndl)
                * pow(max(dot(-v, uSunDir), 0.0), 3.0) * 1.6;
           gl_FragColor = vec4(col, 1.0);
         }`

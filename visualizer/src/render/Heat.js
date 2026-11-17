@@ -346,7 +346,7 @@ function heatOverlayMaterial() {
         float n2 = texture2D(uNoise, q * 2.7 + vec2(uTime * 0.09, -uTime * 0.41)).g;
         float shimmer = 0.15 + 1.7 * smoothstep(0.35, 0.8, n1 * 0.65 + n2 * 0.35);
         float ndv = abs(dot(normalize(vN), normalize(vV)));
-        float rim = pow(1.0 - ndv, 2.0);
+        float rim = (1.0 - ndv) * (1.0 - ndv);   // not pow(): ndv can round past 1
         vec3 col = mix(vec3(1.0, 0.36, 0.09), vec3(1.0, 0.14, 0.03), uWarn);
         float a = uLevel * w * (0.35 + 1.1 * rim) * shimmer;
         gl_FragColor = vec4(col * a, 1.0);
