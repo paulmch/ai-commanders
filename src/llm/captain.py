@@ -156,6 +156,30 @@ def _plume_status_lines(simulation, ship):
     return plume_status_lines(simulation, ship)
 
 
+def pd_turrets_needed(rep_laser: Any, torp_flight: Any, dist_km: float,
+                      closing_ms: float) -> Optional[int]:
+    """
+    Turrets needed to seeker-kill a torpedo before impact (one PD laser as the
+    representative). A fuelled round is floored at the guidance closure
+    MIN_CLOSING_SPEED_KPS (see the THREATS TO ME triage): flooring scored 30
+    of 31 live checkpoints where the instantaneous speed scored 24.
+    """
+    from ..torpedo import MIN_CLOSING_SPEED_KPS
+    if rep_laser is None or closing_ms <= 0:
+        return None
+    try:
+        torp = getattr(torp_flight, 'torpedo', None)
+        fuelled = not getattr(torp, 'fuel_exhausted', True)
+        effective_ms = (max(closing_ms, MIN_CLOSING_SPEED_KPS * 1000.0) if fuelled else closing_ms)
+        e = rep_laser.energy_before_impact_j(dist_km, effective_ms)
+        heat_to_kill = max(0.0, torp_flight.ELECTRONICS_THRESHOLD_J - torp_flight.heat_absorbed_j)
+        if e <= 0:
+            return 99
+        return max(1, math.ceil(heat_to_kill / e))
+    except (AttributeError, TypeError):
+        return None
+
+
 # The kinetic phase of a torpedo hit (simulation._resolve_torpedo_hit), bound
 # to the engine by tests/test_fixes_cmdcap.py TestTorpedoArmor.
 TORPEDO_KINETIC_IMPACT_AREA_M2 = 0.1
@@ -343,6 +367,9 @@ class LLMCaptain:
         # runner's FleetCommunicationChannel (target matching for it).
         self.verdict_basis: Optional[Dict[str, Any]] = None
         self.fleet_channel: Any = None
+        # This checkpoint's admiral orders for every ship of the fleet (ship
+        # id -> orders), set by the runner: the ORDERED TARGETS line.
+        self.fleet_orders: Dict[str, List[Any]] = {}
 
         # Fleet comms. outbox: messages composed this checkpoint (fleet_signal,
         # send_message), drained and routed by the runner after the decision.
@@ -563,6 +590,14 @@ class LLMCaptain:
             ship_status["plume_wash"] = plume
         self._add_launch_status(ship_status, ship, simulation)
         tactical_status = self._build_tactical_status(ship, enemy, simulation)
+        if self.has_admiral:
+            try:
+                line = self._ordered_targets_line(simulation, ship,
+                                                  tactical_status.get("friendlies") or [])
+            except Exception:  # noqa: BLE001 - advisory only
+                line = None
+            if line:
+                tactical_status["ordered_targets"] = line
 
         # Update battle tracking
         distance_km = tactical_status.get("distance_km", 1000)
@@ -1205,7 +1240,8 @@ class LLMCaptain:
                 side="friendly" if friendly else "enemy", received_at=now)
         self.received_messages.clear()
         self._legacy_comms = (now, legacy)
-        return items + legacy
+        from .fleet_comms import compress_datalink
+        return compress_datalink(items) + legacy
 
     def _add_launch_status(self, status: Dict[str, Any], ship: Any, simulation: Any) -> None:
         """Tube readiness and launches possible before the next decision."""
@@ -2910,38 +2946,11 @@ class LLMCaptain:
         rep_laser = own_pd[0].laser if own_pd else None
 
         def _pd_triage(torp_flight, dist_km, closing_ms):
-            """
-            Turrets needed to seeker-kill this torpedo before impact.
+            # Turrets needed to seeker-kill this round (pd_turrets_needed: a
+            # fuelled round floored at the guidance closure - the instantaneous
+            # speed gave false "your PD can blind it" verdicts).
+            return pd_turrets_needed(rep_laser, torp_flight, dist_km, closing_ms)
 
-            The closed form assumes a CONSTANT closing speed, but a torpedo that
-            still has delta-v is accelerating: 30 s after launch it is only doing
-            ~4 km/s and will cross the PD envelope at the guidance closure floor
-            of MIN_CLOSING_SPEED_KPS. Feeding it the instantaneous speed made the
-            verdict optimistic exactly at the checkpoint where the captain
-            decides - measured over 31 checkpoints of live engagements, the
-            instantaneous form was right 24/31 times and EVERY error was a false
-            "your PD can blind it" at the first checkpoint after launch. Flooring
-            a fuelled round at the guidance floor scores 30/31, and its one error
-            is conservative.
-            """
-            if rep_laser is None or closing_ms <= 0:
-                return None
-            try:
-                torp = getattr(torp_flight, 'torpedo', None)
-                fuelled = not getattr(torp, 'fuel_exhausted', True)
-                effective_ms = (max(closing_ms, MIN_CLOSING_SPEED_KPS * 1000.0)
-                                if fuelled else closing_ms)
-                e = rep_laser.energy_before_impact_j(dist_km, effective_ms)
-                heat_to_kill = max(
-                    0.0,
-                    torp_flight.ELECTRONICS_THRESHOLD_J
-                    - torp_flight.heat_absorbed_j,
-                )
-                if e <= 0:
-                    return 99
-                return max(1, math.ceil(heat_to_kill / e))
-            except (AttributeError, TypeError):
-                return None
 
         gathered = None
         if hasattr(simulation, '_gather_guided_torpedo_threats'):
@@ -3151,6 +3160,7 @@ class LLMCaptain:
         if isinstance(pd_list, (list, tuple)) and pd_list:
             info["pd_total"] = len(pd_list)
             info["pd_operational"] = sum(1 for pd in pd_list if getattr(pd, 'is_operational', True))
+        self._add_friendly_torpedo_threat(info, f, simulation)
         if _has_launchers(f):
             remaining = getattr(f, 'torpedoes_remaining', None)
             if isinstance(remaining, (int, float)):
@@ -3172,6 +3182,92 @@ class LLMCaptain:
                 if etas:
                     info["first_impact_s"] = min(etas)
         return info
+
+    def _add_friendly_torpedo_threat(self, info: Dict[str, Any], f: Any, simulation: Any) -> None:
+        """
+        Live hostile torpedoes homing on friendly ``f`` (comms audit M5: a
+        request for cover reaches the fleet a checkpoint late, the engine
+        knows now): how many, the first impact, and whether the PD around it
+        - its own turrets plus allies within PD range - can blind them all.
+        """
+        from .fleet_comms import torpedo_eta
+        live = [tf for tf in getattr(simulation, 'torpedoes', None) or []
+                if not getattr(tf, 'is_disabled', False)
+                and getattr(getattr(tf, 'torpedo', None), 'target_id', None) == f.ship_id]
+        if not live:
+            return
+        info["torps_inbound"] = len(live)
+        etas = [e for e in (torpedo_eta(tf, f) for tf in live) if e is not None]
+        if etas:
+            info["torps_first_s"] = min(etas)
+        lasers = [pd for pd in (getattr(f, 'point_defense', None) or [])
+                  if getattr(pd, 'is_operational', True)]
+        pd_range_km = (pd_doctrine_numbers(self.config.fleet_data)["range_km"]
+                       if self.config.fleet_data else None)
+        rep = getattr(lasers[0], 'laser', None) if lasers else None
+        if rep is None or pd_range_km is None:
+            return
+        needs = []
+        for tf in live:
+            off = f.position - tf.torpedo.position
+            dist = off.magnitude
+            closing = (tf.torpedo.velocity - f.velocity).dot(off.normalized()) if dist > 0 else 0.0
+            n = pd_turrets_needed(rep, tf, dist / 1000.0, closing)
+            if n is not None:
+                needs.append(n)
+        if not needs:
+            return
+        turrets = len(lasers)
+        for ally in (simulation.get_friendly_ships(f.ship_id)
+                     if hasattr(simulation, 'get_friendly_ships') else []):
+            if ally.ship_id == f.ship_id or (ally.position - f.position).magnitude > pd_range_km * 1000.0:
+                continue
+            turrets += sum(1 for pd in (getattr(ally, 'point_defense', None) or [])
+                           if getattr(pd, 'is_operational', True))
+        per_round = max(1, min(needs))
+        info["torps_pd"] = {"turrets": turrets, "per_round": per_round,
+                            "can_blind": min(len(live), turrets // per_round)}
+
+    def _ordered_targets_line(self, simulation: Any, ship: Any,
+                              friendlies: List[Dict[str, Any]]) -> Optional[str]:
+        """
+        Who the admiral ordered onto which target this checkpoint (comms
+        audit M2: 12 of 25 target deviations joined the fleet's majority
+        target - captains never saw the split). Shown only when the orders
+        split the fleet or some ship is ordered off the target it engages
+        now (FRIENDLIES shows the current ones).
+        """
+        from .fleet_comms import primary_order
+        orders = getattr(self, "fleet_orders", None) or {}
+        if not orders:
+            return None
+        enemies = simulation.get_enemy_ships(ship.ship_id)
+        current = {f["ship_id"]: f.get("target_id") for f in friendlies}
+        current[ship.ship_id] = self.primary_target_id
+        names = {f["ship_id"]: f.get("name") or f["ship_id"] for f in friendlies}
+        names[ship.ship_id] = "you"
+        by_target: Dict[str, List[str]] = {}
+        differs = False
+        for sid, ship_orders in orders.items():
+            if sid not in current:
+                continue
+            order = primary_order(ship_orders)
+            raw = getattr(order, "torpedo_target", None) or getattr(order, "suggested_target", None)
+            if not raw:
+                continue
+            target, _ = self._resolve_ship(raw, enemies)
+            if target is None:
+                continue
+            now_on = current.get(sid)
+            differs = differs or (now_on is not None and now_on != target.ship_id)
+            label = ship_ref(getattr(target, "name", target.ship_id), target.ship_id)
+            by_target.setdefault(label, []).append(names[sid])
+        # One target for the whole fleet that everyone already engages: nothing
+        # the FRIENDLIES grouping does not show.
+        if not by_target or not (differs or len(by_target) > 1):
+            return None
+        return "  ORDERED TARGETS (this checkpoint): " + "; ".join(
+            f"{t} <- {', '.join(sorted(s, key=lambda n: n != 'you'))}" for t, s in by_target.items())
 
     def _add_torpedo_solutions(self, status: Dict[str, Any], ship: Any,
                                enemies: List[Any], simulation: Any) -> None:

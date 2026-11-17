@@ -598,6 +598,50 @@ class EngineDatalink:
         return out
 
 
+def compress_datalink(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    A captain's view of this checkpoint's engine datalink (comms audit M6):
+    target-switch notices dropped (FRIENDLIES and the ORDERED TARGETS line
+    show who engages whom), launches merged into one line per target with
+    the FIRST impact ("68-442 s" ranges read as if the last round mattered).
+    Render-side only: the recorded comms_message events are unchanged.
+    """
+    out: List[Dict[str, Any]] = []
+    launches: Dict[Any, Dict[str, Any]] = {}
+    for item in items:
+        if item.get("sender_role") != ROLE_ENGINE:
+            out.append(item)
+            continue
+        kind = item.get("kind")
+        if kind == SIGNAL_TARGET:
+            continue
+        st = item.get("structured") or {}
+        if kind != SIGNAL_LAUNCH or not st.get("target_id") or "rounds" not in st:
+            out.append(item)        # not a launch, or one without its fields: as sent
+            continue
+        key = st.get("target_id") or item.get("msg_id")
+        group = launches.get(key)
+        if group is None:
+            group = launches[key] = {"item": dict(item), "subjects": [], "rounds": 0,
+                                     "in_flight": 0, "eta": None,
+                                     "target": st.get("target_name") or "?"}
+            out.append(group["item"])
+        group["subjects"].append(st.get("subject_name") or "?")
+        group["rounds"] += int(st.get("rounds") or 0)
+        group["in_flight"] += int(st.get("in_flight") or 0)
+        eta = st.get("eta_s_min")
+        if isinstance(eta, (int, float)):
+            group["eta"] = eta if group["eta"] is None else min(group["eta"], eta)
+    for group in launches.values():
+        n = group["rounds"]
+        text = (f"{', '.join(dict.fromkeys(group['subjects']))} launched {n} "
+                f"torpedo{'es' if n != 1 else ''} at {group['target']}")
+        text += (f", {group['in_flight']} in flight, first impact in ~{group['eta']:.0f} s"
+                 if group["eta"] is not None else ", none still in flight")
+        group["item"]["text"] = text
+    return out
+
+
 def budget_inbox(messages: List[CommsMessage]) -> List[CommsMessage]:
     """
     At most INBOX_MAX_ITEMS for one captain, most useful first.

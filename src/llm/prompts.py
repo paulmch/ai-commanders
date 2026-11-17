@@ -2517,6 +2517,18 @@ def _friendly_line(f: Dict[str, Any], doing: bool = True, compact: bool = False)
                 line += f" (first lands ~{f['first_impact_s']:.0f} s)"
     if f.get("pd_total") and f.get("pd_operational", f["pd_total"]) < f["pd_total"]:
         line += f" | PD {f['pd_operational']}/{f['pd_total']}"
+    if f.get("torps_inbound"):
+        # Engine-known threat to a fleet-mate (a cover request would arrive a
+        # checkpoint late).
+        n = f["torps_inbound"]
+        line += f" | !! {n} torpedo{'es' if n != 1 else ''} inbound"
+        if f.get("torps_first_s") is not None:
+            line += f", first impact ~{f['torps_first_s']:.0f} s"
+        pd = f.get("torps_pd")
+        if pd:
+            line += (f", its PD umbrella ({pd['turrets']} turrets, ~{pd['per_round']} per round) "
+                     + ("can blind all" if pd["can_blind"] >= n else
+                        f"is SATURATED: blinds at most {pd['can_blind']}"))
     if round(float(f.get("hull_percent", 100) or 0)) < 100:
         line += f" | hull {f['hull_percent']:.0f}%"
     return line
@@ -2526,6 +2538,7 @@ def format_friendlies(
     friendlies: List[Dict[str, Any]],
     umbrella: Optional[Dict[str, Any]] = None,
     compact: bool = False,
+    ordered_targets: Optional[str] = None,
 ) -> str:
     """
     FRIENDLIES: who is where, doing what, at whom - and the PD over you.
@@ -2543,6 +2556,8 @@ def format_friendlies(
                 f" - yours {umbrella.get('own', 0)} + {len(allies)} "
                 f"{'ship' if len(allies) == 1 else 'ships'}; ")
     lines = [f"FRIENDLIES ({head}hull 100% and PD intact unless shown):"]
+    if ordered_targets:
+        lines.append(ordered_targets)
     groups: Dict[Optional[str], List[Dict[str, Any]]] = {}
     for f in friendlies:
         groups.setdefault(_friendly_doing(f), []).append(f)
@@ -2680,7 +2695,8 @@ def build_captain_turn(
                                           decision_interval_s=decision_interval_s,
                                           compact_turn=compact))
     sections.append(format_friendlies(tactical_status.get("friendlies", []),
-                                      tactical_status.get("pd_umbrella"), compact=compact))
+                                      tactical_status.get("pd_umbrella"), compact=compact,
+                                      ordered_targets=tactical_status.get("ordered_targets")))
     if range_control:
         sections.append(range_control)
     if orders:

@@ -672,3 +672,61 @@ class TestBlindConeDoctrine:
         assert "stern-arc" not in text
         doc = build_captain_doctrine(ship_type="destroyer", fleet_data=FLEET)
         assert text in doc
+
+
+# =============================================================================
+# M2 / M5 / M6: what peers and the engine know
+# =============================================================================
+
+from src.llm.fleet_comms import SIGNAL_LAUNCH, SIGNAL_TARGET, compress_datalink  # noqa: E402
+from src.llm.prompts import format_friendlies  # noqa: E402
+
+
+class TestPeerKnowledge:
+
+    def test_ordered_targets_line_shows_a_split(self, tmp_path):
+        def order(ship):
+            return {"order_text": "Engage.", "priority": "NORMAL",
+                    "suggested_target": "beta_1" if "Dart" in ship else "beta_2"}
+        stub = Stub(captain=lambda ctx: [], order=order)
+        runner = make_runner(stub, tmp_path, beta=(("destroyer", "stub/lancer"),
+                                                    ("destroyer", "stub/lancer")), checkpoints=1)
+        texts = {}
+
+        def captain(ctx):
+            texts[ctx.model] = ctx.messages[-1]["content"]
+            return []
+        stub.captain = captain
+        runner.run_fleet_battle(FLEET)
+        line = next(l for l in texts["stub/dart"].splitlines() if "ORDERED TARGETS" in l)
+        assert "<- you" in line and line.count("<-") == 2, line
+
+    def test_a_friendly_under_torpedo_attack_says_so(self):
+        from tests.test_fixes_pass5_damage import _torpedo_flight
+        sim, cap = _sim(), _captain()
+        mate = sim.get_ship("alpha_2")
+        for i in range(3):
+            _torpedo_flight(sim, mate.position + Vector3D(60_000.0, 0, 0),
+                            Vector3D(-8_000.0, 0, 0), "alpha_2", torpedo_id=f"t{i}")
+        info = cap._friendly_info(sim.get_ship("alpha_1"), mate, sim, [])
+        assert info["torps_inbound"] == 3 and info["torps_first_s"] == pytest.approx(7.5, abs=0.5)
+        assert info["torps_pd"]["per_round"] >= 1
+        line = format_friendlies([info])
+        assert "!! 3 torpedoes inbound, first impact ~8 s" in line
+        assert "its PD umbrella (" in line
+
+    def test_datalink_is_compressed_for_the_captain(self):
+        def eng(kind, text, **st):
+            return {"sender_role": "engine", "kind": kind, "text": text, "structured": st,
+                    "channel": "fleet_net", "sent_t": 90.0}
+        items = [eng(SIGNAL_TARGET, "TIS A switched to OCS X"),
+                 eng(SIGNAL_LAUNCH, "a", subject_name="TIS Dart-1", target_id="b1",
+                     target_name="OCS X", rounds=2, in_flight=2, eta_s_min=68.0, eta_s_max=442.0),
+                 eng(SIGNAL_LAUNCH, "b", subject_name="TIS Dart-2", target_id="b1",
+                     target_name="OCS X", rounds=1, in_flight=1, eta_s_min=60.0, eta_s_max=60.0),
+                 {"sender_role": "captain", "kind": "FREE", "text": "hello"}]
+        out = compress_datalink(items)
+        assert [i["text"] for i in out] == [
+            "TIS Dart-1, TIS Dart-2 launched 3 torpedoes at OCS X, 3 in flight, first impact in ~60 s",
+            "hello"]
+        assert items[1]["text"] == "a"                     # the recorded items are untouched

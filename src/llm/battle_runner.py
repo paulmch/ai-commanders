@@ -1694,6 +1694,9 @@ class LLMBattleRunner:
         for ship_id, captain, faction in captain_entries:
             captain.clear_admiral_context()
             captain.fleet_channel = self.fleet_communication
+            # Every fleet-mate's orders this checkpoint (ORDERED TARGETS line).
+            captain.fleet_orders = {sid: admiral_orders[sid] for sid, _, f in captain_entries
+                                    if f == faction and sid in admiral_orders}
             if ship_id in admiral_orders:
                 orders = admiral_orders[ship_id]
                 admiral = self.alpha_admiral if faction == "alpha" else self.beta_admiral
