@@ -270,7 +270,28 @@ paths name the `.json.gz` files.
   battle time; `[` and `]` jump between highlights; `scripts/viewer_clip.py` renders a time range
   to MP4 or GIF.
 
-Viewer tests rose from 276 to 386; the Python suite from about 2,430 to 3,107, green on Python
+- **True size.** Hulls were drawn about 60 times too large, so rounds passed through them and ships
+  a few km apart overlapped. They are now drawn at their real 65-250 m when the camera is near
+  (`render/Scale.js`; key S, `?scale=auto|true|cinematic`). In the default `auto` mode a distant
+  hull is magnified only as far as needed to stay a readable silhouette, converging to exactly
+  real size inside about 10 hull lengths; `cinematic` is the old fixed enlargement. The engine does
+  not decide gun hits on the hull itself: it gates at 500 m around it and rolls a probability, and
+  the recorded impact point is where the round entered that gate (median 49-101 m from the hull
+  axis, up to 2.7 km; a quarter of the misses cross the real hull). The viewer therefore eases a
+  round over its last 3 s onto the crater on the drawn hull, and a miss aside; recorded positions
+  are not changed. At real size the torch flame is under 1.5 km long, so the exhaust cone that
+  washes ships astern is drawn as a faint beam out to 60 km (`render/DriveJet.js`, `?jets=0`).
+- **Point-defence beams** were cut into two 260 px stubs whenever a beam was longer than 520 px in
+  a close-up; they are drawn whole. Ribbons are clipped in front of the near plane and widened
+  across their on-screen direction.
+- **Black squares on real GPUs.** GLSL `pow(x, y)` is undefined for a negative x: software GL
+  returns a number, real GPUs return NaN, and an expired smoke puff was drawn as a black quad.
+  Every shader in the viewer is now free of such calls, scene colour is guarded where it enters
+  the bloom chain, and `tests/gpu_nan.test.js` checks every `pow`, `sqrt`, `log` and `normalize`
+  in the shader sources. The fix was verified by emulating GPU behaviour on software GL, not on a
+  GPU.
+
+Viewer tests rose from 276 to 410; the Python suite from about 2,430 to 3,107, green on Python
 3.11 and 3.12.
 
 ## Balance: prices cannot fix the torpedo problem
@@ -342,6 +363,9 @@ wash stayed under the interlock's 0.5 GJ/s limit. The recordings are in
 - **Ambient occlusion** is on for the high tier (hull pixels about 9 % darker in recesses on a
   shadow-side close-up); its frame cost is unmeasured.
 - **Director.** Live mode, the highlight keys and surrender shots have unit tests only.
+- **True size.** Not checked on a real GPU, in motion or in live mode. The far drive jet saturates
+  when seen along its axis, track uncertainty rings follow the hull magnification, and
+  `torpedo-salvo.png` and the hull line-up in the README are still cinematic-scale frames.
 - **Not seen in a frame:** several torpedo effects, blast scorch on a victim, a dead tube.
 - **Generated artifacts.** The fire-control fixture was not regenerated and its tests still pass;
   its heuristic battles must be regenerated with `--doctrine legacy`. Showcase recordings from
