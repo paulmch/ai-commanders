@@ -59,6 +59,10 @@ class AdmiralConfig:
     # Accepted commander-notebook lessons (src/llm/notebook.py), injected by
     # the runner when the battle opts in via use_notebooks.
     notebook_text: Optional[str] = None
+    # Experiment switch (owner decision pending, off by default): one line in
+    # the admiral's turn with both sides' time-limit verdict score as it
+    # would stand now (fleet_intel.score_line).
+    show_score: bool = False
 
 
 @dataclass

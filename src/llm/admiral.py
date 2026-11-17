@@ -371,6 +371,8 @@ class FriendlyShipSnapshot:
     # incapacitated crew cannot execute orders.
     crew_state: str = "fit"
     crew_dose_sv: float = 0.0
+    # Engine output fraction (battle damage): 0 = drive dead, cannot burn.
+    drive_fraction: float = 1.0
 
 
 @dataclass
@@ -414,6 +416,9 @@ class EnemyShipSnapshot:
     our_rounds_inbound: int = 0   # our guided rounds homing on it now
     group: str = ""
     gun_range_km: float = 0.0
+    # The face it shows our fleet centre (fleet_intel.observed_facing):
+    # NOSE / SIDE / TAIL, that facing's armour, burning / turning.
+    facing: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -512,6 +517,17 @@ class AdmiralSnapshot:
     enemy_torpedoes_seen: int = 0
     engine_notes: List[str] = field(default_factory=list)
     kill_rounds: Dict[str, int] = field(default_factory=dict)
+    # Battle clock (fleet_intel.battle_clock) and, behind AdmiralConfig.show_score,
+    # the time-limit verdict line (fleet_intel.score_line).
+    clock: Optional[Dict[str, Any]] = None
+    score_line: str = ""
+    # Draw exchange lines for this turn (our open offer, its answer).
+    draw_lines: List[str] = field(default_factory=list)
+    # Per own ship under live torpedo attack: fleet_intel.torpedo_defence.
+    torpedo_defence: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    # Ships that have not flown their ordered maneuver for 2+ checkpoints
+    # running, with what they flew and the engine's reason (NOW block).
+    noncompliance: List[str] = field(default_factory=list)
 
 
 class LLMAdmiral:
@@ -557,6 +573,17 @@ class LLMAdmiral:
         self.order_history: List[AdmiralDecision] = []
         self.has_proposed_draw = False
         self.has_accepted_draw = False
+        # Draw exchange (settle_draw_offers): when our open offer was made, and
+        # what we must be told at the next checkpoint (a rejection, an accept
+        # with nothing to accept).
+        self.draw_offer_t: Optional[float] = None
+        self.draw_notices: List[str] = []
+        # This checkpoint's decision (settle_draw_offers reads both sides').
+        self.last_decision: Optional[AdmiralDecision] = None
+
+        # When the battle ends (fleet_intel.battle_clock), set by the runner;
+        # None (unlimited mode, hand-built admirals) shows no clock.
+        self.battle_clock: Optional[Dict[str, Any]] = None
 
         # Standing battle plan: the admiral's self-authored memory. Everything
         # else the admiral sees is rebuilt from the simulation each checkpoint;
@@ -835,6 +862,7 @@ Be authentic to how you would command a fleet as {model_name}."""
             decision.call_failed = True
             decision.directive_failure = f"call error: {call_error}"
             self._publish_directive(decision, now)
+            self.last_decision = decision
             return decision
 
         # Extract directive and any draw/message actions
@@ -860,6 +888,8 @@ Be authentic to how you would command a fleet as {model_name}."""
                 self._pending_enemy_message = args.get("message", "")
                 decision.message_to_enemy_admiral = self._pending_enemy_message
             elif name == "propose_fleet_draw":
+                if not self.has_proposed_draw:
+                    self.draw_offer_t = now
                 self.has_proposed_draw = True
                 decision.proposed_draw = True
             elif name == "accept_fleet_draw":
@@ -905,7 +935,9 @@ Be authentic to how you would command a fleet as {model_name}."""
 
         # Clear received messages after processing
         self._received_enemy_messages.clear()
+        self.draw_notices.clear()   # shown in this checkpoint's turn
 
+        self.last_decision = decision
         return decision
 
     def _publish_directive(self, decision: AdmiralDecision, now: float) -> None:
@@ -1111,6 +1143,7 @@ Be authentic to how you would command a fleet as {model_name}."""
                 "closing_kps": intel._closing(rel, enemy.velocity - ship.velocity) / 1000.0,
                 "bearing": intel.direction_str(rel),
                 "solution": None,
+                "facing": intel.observed_facing(enemy, ship.position),
             }
             if specs is not None:
                 row["solution"] = intel.torpedo_solution(
@@ -1123,6 +1156,7 @@ Be authentic to how you would command a fleet as {model_name}."""
         try:
             infos = analyze_range_control(simulation, [ship], detail=True)
             rc_text = format_range_control(infos, who="Ship", max_detail=1)
+            rc_text = intel.replace_option_rows(rc_text, simulation, infos[:1], [ship])
         except Exception:  # noqa: BLE001 - advisory only
             rc_text = ""
         return {"enemies": rows, "inbound": inbound, "range_control": rc_text,
@@ -1300,6 +1334,16 @@ Be authentic to how you would command a fleet as {model_name}."""
         interval = float(getattr(simulation, "decision_interval", 30.0) or 30.0)
         snap.checkpoint = self.decision_count + 1
         snap.decision_interval_s = interval
+        snap.clock = getattr(self, "battle_clock", None)
+        snap.draw_lines = list(getattr(self, "draw_notices", None) or [])
+        if self.has_proposed_draw and self.draw_offer_t is not None:
+            snap.draw_lines.append(f"Your draw proposal (T+{self.draw_offer_t:.0f}s) is open: "
+                                   "no answer from the enemy admiral yet.")
+        if getattr(self.config, "show_score", False):
+            try:
+                snap.score_line = intel.score_line(simulation, self.faction)
+            except Exception:  # noqa: BLE001 - advisory only
+                snap.score_line = ""
         for sid, ship in getattr(simulation, "ships", {}).items():
             snap.labels[sid] = intel.ship_label(ship)
             snap.ship_types[sid] = getattr(ship, "ship_type", "") or ""
@@ -1321,7 +1365,14 @@ Be authentic to how you would command a fleet as {model_name}."""
             infos = []
         snap.range_groups = infos
         formation = formation_line(live_own)
-        snap.headings = "\n".join(x for x in (format_heading_options(infos), formation) if x)
+        try:
+            # Uniform rows: range effect, the face you show, the face HE shows
+            # you afterwards (fleet_intel.heading_option_rows).
+            options = intel.admiral_headings_block(simulation, infos, live_own)
+        except Exception as e:  # noqa: BLE001 - advisory only
+            print(f"[ADMIRAL {self.config.name}] heading rows failed: {e}")
+            options = format_heading_options(infos)
+        snap.headings = "\n".join(x for x in (options, formation) if x)
         snap.range_control = "\n".join(
             x for x in (format_range_control(infos, who="Fleet"), formation) if x)
         group_of = {sid: info.label for info in infos for sid in info.ship_ids}
@@ -1359,6 +1410,11 @@ Be authentic to how you would command a fleet as {model_name}."""
         specs = (intel.torpedo_specs_for(simulation, self.fleet_data, launcher_ships)
                  if launcher_ships else None)
         snap.rounds = intel.gather_rounds(simulation, self.faction, specs)
+        try:
+            snap.torpedo_defence = intel.torpedo_defence(simulation, self.faction, self.fleet_data,
+                                                         snap.rounds)
+        except Exception as e:  # noqa: BLE001 - advisory only
+            print(f"[ADMIRAL {self.config.name}] torpedo defence forecast failed: {e}")
 
         # Since the last checkpoint (ADM-06).
         since = self._last_decision_t if self._last_decision_t is not None else now - interval
@@ -1406,6 +1462,7 @@ Be authentic to how you would command a fleet as {model_name}."""
                 rel = enemy.position - own_pos
                 row.range_km = rel.magnitude / 1000.0
                 row.closing_kps = intel._closing(rel, enemy.velocity - own_vel) / 1000.0
+                row.facing = intel.observed_facing(enemy, own_pos)
             if live_own:
                 nearest = min(live_own, key=lambda s: (s.position - enemy.position).magnitude)
                 row.nearest_own_id = nearest.ship_id
@@ -1427,6 +1484,81 @@ Be authentic to how you would command a fleet as {model_name}."""
         snap.engine_notes = intel.engine_notes(
             simulation, [s.ship_id for s in own_ships], since,
             label_of=lambda sid: snap.labels.get(sid, sid))
+        try:
+            snap.noncompliance = self._track_noncompliance(simulation, own_ships, since, now, snap)
+        except Exception as e:  # noqa: BLE001 - advisory only
+            print(f"[ADMIRAL {self.config.name}] non-compliance check failed: {e}")
+
+    # An ordered burn the drive produced for less than this share of the
+    # window was not flown.
+    NONCOMPLIANCE_MIN_BURN = 0.25
+    NONCOMPLIANCE_STREAK = 2
+
+    def _track_noncompliance(self, simulation: Any, own_ships: List[Any], since: float,
+                             now: float, snap: "AdmiralSnapshot") -> List[str]:
+        """
+        Escalation for the NOW block (audit A10): a ship that has not flown
+        its ordered maneuver for NONCOMPLIANCE_STREAK checkpoints running -
+        its captain replaced the order (compliance deviation), or an ordered
+        burn never burned - with what it flew instead and the engine's reason
+        (drive dead, evasion held the drive). The admiral re-issued the same
+        HEADING seven times to a ship that could not fly it.
+        """
+        streaks = self.__dict__.setdefault("_noncompliance", {})
+        last = self.order_history[-1] if self.order_history else None
+        if last is None or self._last_decision_t is None:
+            return []
+        orders = {o.target_ship_id: o for o in last.fleet_orders}
+        reports = {r.get("ship_id") or self._ship_name_to_id.get(r.get("ship_name")): r
+                   for r in self._captain_reports()}
+        live = {s.ship_id: s for s in own_ships if intel.is_live(s)}
+        helm = intel.helm_summary(simulation, list(live), since, now)
+        lines = []
+        for sid, ship in live.items():
+            order = orders.get(sid)
+            spec = getattr(order, "maneuver", None) or {}
+            kind = spec.get("maneuver_type") or ("HEADING" if getattr(order, "heading", None) else None)
+            if order is None or kind is None:
+                streaks.pop(sid, None)
+                continue
+            thr = getattr(order, "applied_throttle", None)
+            thr = getattr(order, "throttle", None) if thr is None else thr
+            thr = 1.0 if thr is None else float(thr)
+            wants_burn = (kind in ("INTERCEPT", "HOLD_RANGE", "BRAKE")
+                          or (kind == "HEADING" and thr > 0) or (kind == "EVADE"))
+            h = helm.get(sid) or {}
+            comp = ((reports.get(sid) or {}).get("compliance") or {})
+            replaced = any(str(d).startswith("maneuver:") for d in comp.get("deviations") or [])
+            flew = comp.get("executed_maneuver") or (ship.current_maneuver.maneuver_type.name
+                                                     if getattr(ship, "current_maneuver", None) else "?")
+            burned = float(h.get("burn_frac") or 0.0)
+            engine = h.get("engine_fraction")
+            engine = float(getattr(ship, "engine_effectiveness", 1.0)) if engine is None else float(engine)
+            if not (replaced or (wants_burn and burned < self.NONCOMPLIANCE_MIN_BURN)):
+                streaks.pop(sid, None)
+                continue
+            if engine <= 0.0:
+                why = "drive dead (0 g): it cannot burn, only turn on RCS"
+            elif replaced:
+                why = f"its captain replaced your order (flew {flew})"
+            else:
+                modes = {m: f for m, f in (h.get("modes") or {}).items() if m in intel.EVASION_MODES}
+                if modes and sum(modes.values()) >= 0.4:
+                    top = max(modes, key=modes.get)
+                    why = (f"evasion held the drive ({top} {100 * sum(modes.values()):.0f}% of the "
+                           f"window: {intel.EVASION_MODES[top]})")
+                else:
+                    why = "the drive stayed idle (turning onto the burn line, or interlock)"
+            ordered = kind + (f" @{thr * 100:.0f}%" if wants_burn and kind == "HEADING" else "")
+            entry = streaks.setdefault(sid, {"n": 0, "ordered": ordered})
+            entry["n"] += 1
+            entry["ordered"] = ordered
+            if entry["n"] >= self.NONCOMPLIANCE_STREAK:
+                lines.append(
+                    f"{snap.labels.get(sid, sid)}: has not flown your {ordered} for {entry['n']} "
+                    f"checkpoints running - flew {flew}, drive burning {100 * burned:.0f}% of the "
+                    f"last window; reason: {why}")
+        return lines
 
     def _build_friendly_snapshot(
         self,
@@ -1517,6 +1649,9 @@ Be authentic to how you would command a fleet as {model_name}."""
             plume_wash=_plume_status_lines(simulation, ship) + _arcs_status_lines(simulation, ship),
             crew_state=_crew_state(ship),
             crew_dose_sv=float(getattr(ship, "crew_dose_sv", 0.0) or 0.0),
+            drive_fraction=float(getattr(ship, "engine_effectiveness", 1.0)
+                                 if isinstance(getattr(ship, "engine_effectiveness", 1.0), (int, float))
+                                 else 1.0),
             current_maneuver=maneuver_str,
             current_target=ship.primary_target_id if hasattr(ship, 'primary_target_id') else None,
             radiators_extended=ship.radiators_extended if hasattr(ship, 'radiators_extended') else False,
@@ -1709,3 +1844,52 @@ Be authentic to how you would command a fleet as {model_name}."""
                 decision.rejected_draw = True
 
         return decision
+
+
+def settle_draw_offers(alpha: Optional["LLMAdmiral"], beta: Optional["LLMAdmiral"],
+                       now: float) -> List[Tuple[str, str, str]]:
+    """
+    Settle this checkpoint's draw traffic between two LLM admirals and say
+    what to record, as (sender faction, kind, text) diplomacy messages.
+
+    - propose: recorded once per offer (DRAW_PROPOSAL); the offer stays open.
+    - accept with the other side's offer open: DRAW_ACCEPT (the runner's
+      _fleet_draw_agreed then ends the battle). Accept with nothing open is
+      dropped and the acceptor told - a stale accept must not turn a later
+      proposal into an instant draw nobody saw.
+    - reject with an offer open: DRAW_REJECT, the offer is CLEARED and the
+      proposer told at its next checkpoint (it used to stay open forever and
+      the proposer never heard).
+    Only decisions taken at ``now`` count.
+    """
+    out: List[Tuple[str, str, str]] = []
+    if alpha is None or beta is None:
+        return out
+    pairs = (("alpha", alpha, beta), ("beta", beta, alpha))
+    decided = {}
+    for faction, me, _ in pairs:
+        d = getattr(me, "last_decision", None)
+        decided[faction] = d if d is not None and abs(getattr(d, "timestamp", -1.0) - now) < 1e-6 else None
+    for faction, me, other in pairs:
+        d = decided[faction]
+        if d is None:
+            continue
+        if d.proposed_draw and me.draw_offer_t is not None and abs(me.draw_offer_t - now) < 1e-6:
+            out.append((faction, "DRAW_PROPOSAL", f"{me.name} proposes a fleet draw."))
+        if d.accepted_draw:
+            if other.has_proposed_draw:
+                out.append((faction, "DRAW_ACCEPT", f"{me.name} accepts the fleet draw."))
+            else:
+                me.has_accepted_draw = False
+                me.draw_notices.append(f"T+{now:.0f}s: you accepted a draw, but no enemy offer "
+                                       "was open - nothing happened.")
+        if d.rejected_draw and other.has_proposed_draw:
+            offered = other.draw_offer_t
+            out.append((faction, "DRAW_REJECT", f"{me.name} rejects the fleet draw."))
+            other.has_proposed_draw = False
+            other.draw_offer_t = None
+            other.draw_notices.append(
+                f"T+{now:.0f}s: the enemy admiral REJECTED your draw proposal"
+                + (f" of T+{offered:.0f}s" if offered is not None else "")
+                + ". The offer is closed; propose again to re-open it.")
+    return out

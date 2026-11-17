@@ -3507,12 +3507,14 @@ def _format_now(snapshot: Any, last_failure: Optional[Tuple[float, str]],
             problems.append(f"crew IMPAIRED by plume radiation ({dose:.1f} Sv): weapons cycle slower")
         if problems:
             items.append(f"{_lbl(snapshot, row.ship_id, row.ship_name)}: {', '.join(problems)}")
+    items.extend(getattr(snapshot, "noncompliance", None) or [])
     if last_failure:
         t, why = last_failure
         items.append(f"Your fleet directive at T+{t:.0f}s FAILED ({why}): captains were told "
                      "there was no new directive. Answer with tool calls first, analysis short.")
     if not items:
-        items.append("nothing urgent: no merge warning, no torpedo inbound on your hulls")
+        items.append("nothing urgent: no merge warning, no torpedo inbound on your hulls, "
+                     "every ship flying its orders")
     return "!! NOW (act on these first)\n" + "\n".join(f"- {i}" for i in items)
 
 
@@ -3805,6 +3807,9 @@ def _format_threat_table(snapshot: Any) -> str:
                  + (f" {e.accel_g:.1f}g" if e.accel_g else "")]
         if e.range_km is not None:
             parts.append(f"{e.range_km:.0f} km {e.closing_kps:+.1f} km/s")
+        face = _facing_text(getattr(e, "facing", None))
+        if face:
+            parts.append(f"shows you {face}")
         if e.nearest_own_id:
             parts.append(f"nearest {_lbl(snapshot, e.nearest_own_id)} "
                          f"{e.distance_from_closest_friendly_km:.0f} km")
@@ -3836,6 +3841,14 @@ def _format_threat_table(snapshot: Any) -> str:
             parts.append(text)
         lines.append(" | ".join(parts))
     return "\n".join(lines)
+
+
+def _facing_text(facing: Optional[Dict[str, Any]]) -> str:
+    try:
+        from .fleet_intel import facing_text
+    except ImportError:  # pragma: no cover
+        from llm.fleet_intel import facing_text
+    return facing_text(facing)
 
 
 def _sources(snapshot: Any, rs: List[Any]) -> str:
@@ -3887,6 +3900,19 @@ def _inbound_lines(snapshot: Any, inbound: List[Any], indent: str) -> List[str]:
     return lines
 
 
+def _torpedo_defence_lines(snapshot: Any, only: Optional[str] = None) -> List[str]:
+    """fleet_intel.torpedo_defence rendered, one line per targeted ship."""
+    data = getattr(snapshot, "torpedo_defence", None) or {}
+    if not data:
+        return []
+    try:
+        from .fleet_intel import torpedo_defence_line
+    except ImportError:  # pragma: no cover
+        from llm.fleet_intel import torpedo_defence_line
+    return [torpedo_defence_line(_lbl(snapshot, sid), d) for sid, d in data.items()
+            if only is None or sid == only]
+
+
 def _format_ordnance(snapshot: Any) -> str:
     rounds = list(getattr(snapshot, "rounds", None) or [])
     if not rounds and getattr(snapshot, "digest", None) is None:
@@ -3894,6 +3920,10 @@ def _format_ordnance(snapshot: Any) -> str:
     lines = ["=== ORDNANCE IN FLIGHT ===", "INBOUND ON YOU (can hit your hulls):"]
     inbound = _inbound_rounds(snapshot)
     lines.extend(_inbound_lines(snapshot, inbound, "  "))
+    defence = _torpedo_defence_lines(snapshot)
+    if defence:
+        lines.append("TORPEDO DEFENCE (per targeted ship; the engine's pursuit forecast):")
+        lines.extend(f"  {line}" for line in defence)
     if inbound:
         ships = sorted({r.threat_id for r in inbound}, key=lambda s: (len(s), s))
         lines.append("  EVADE makes the engine dodge (slugs, dead rounds), RUN or PRESENT armor "
@@ -4043,6 +4073,11 @@ def _format_fleet(snapshot: Any, phase: str) -> str:
     must = " <- MUST issue_order for this ship!" if phase != "directive" else ""
     for r in rows:
         bits = [f"hull {r.hull_integrity:.0f}%"]
+        drive = getattr(r, "drive_fraction", 1.0)
+        if isinstance(drive, (int, float)) and drive <= 0.0:
+            bits.append("DRIVE DEAD (0 g): cannot burn, RCS turns only")
+        elif isinstance(drive, (int, float)) and drive < 0.995:
+            bits.append(f"drive {drive * 100:.0f}% thrust")
         heat = _heat_compact(r)
         if heat:
             bits.append(heat.strip())
@@ -4071,7 +4106,8 @@ def _format_headings(snapshot: Any) -> str:
     text = _text_attr(snapshot, "headings")
     if text:
         return ("=== HEADINGS (world frame, fleet centre: issue_order heading=; the drive "
-                "thrusts along the NOSE) ===\n" + text)
+                "thrusts along the NOSE; you: the face you show him meanwhile; him: the face "
+                "he shows you, now->after, if he holds his attitude) ===\n" + text)
     # Hand-built snapshots may carry only the legacy full range-control block.
     return _text_attr(snapshot, "range_control")
 
@@ -4119,8 +4155,21 @@ def format_admiral_turn_state(
     if snapshot is not None:
         cp = getattr(snapshot, "checkpoint", 0) or 0
         interval = getattr(snapshot, "decision_interval_s", decision_interval_s) or decision_interval_s
-        header = (f"T+{snapshot.timestamp:.0f}s" + (f", checkpoint {cp}" if cp else "")
-                  + f" - these orders run until T+{snapshot.timestamp + interval:.0f}s")
+        clock = getattr(snapshot, "clock", None)
+        try:
+            from .fleet_intel import clock_text
+        except ImportError:  # pragma: no cover
+            from llm.fleet_intel import clock_text
+        until = snapshot.timestamp + interval
+        if clock:
+            until = min(until, clock["end_s"])
+        header = (f"T+{snapshot.timestamp:.0f}s"
+                  + (clock_text(snapshot.timestamp, cp, clock) if clock else
+                     (f", checkpoint {cp}" if cp else ""))
+                  + (f" - these orders run until T+{until:.0f}s" if until > snapshot.timestamp
+                     else " - the battle ends now: these orders are not flown"))
+        if getattr(snapshot, "score_line", ""):
+            header += "\n" + snapshot.score_line
     else:
         header = "(no live data)"
     blocks = []
@@ -4144,7 +4193,12 @@ def format_admiral_turn_state(
         comms.extend(f"  \"{msg}\"" for msg in received_messages)
     if enemy_proposed_draw:
         comms.append("*** ENEMY HAS PROPOSED A DRAW ***")
-        comms.append("Use accept_fleet_draw to accept or reject_fleet_draw to refuse.")
+        comms.append("Use accept_fleet_draw to accept or reject_fleet_draw to refuse "
+                     "(a rejection closes the offer and the enemy admiral is told).")
+    draw_lines = getattr(snapshot, "draw_lines", None) or [] if snapshot is not None else []
+    if draw_lines:
+        comms.append("=== DRAW ===")
+        comms.extend(draw_lines)
     blocks.append("\n".join(comms))
     body = "\n\n".join(b for b in blocks if b)
     return ADMIRAL_TURN_STATE.format(header=header, body=body)
@@ -4393,9 +4447,15 @@ def build_admiral_ship_order_messages(
 
     label = _lbl(snapshot, ship_id, ship_name) if ship_id else ship_name
     if row is not None:
+        drive = getattr(row, "drive_fraction", 1.0)
+        drive_text = (", DRIVE DEAD (0 g): cannot burn, RCS turns only"
+                      if isinstance(drive, (int, float)) and drive <= 0.0 else
+                      f", drive {drive * 100:.0f}% thrust" if isinstance(drive, (int, float)) and drive < 0.995
+                      else "")
         status = [f"SHIP STATUS - {label} ({ship_type.replace('_', ' ').title()}), captain {captain_name}:",
                   f"  hull {row.hull_integrity:.0f}%{_heat_compact(row)}, dv {row.delta_v_remaining:.0f} km/s, "
-                  f"{row.velocity_kps:.1f} km/s, PD {row.pd_turrets_operational}/{row.pd_turrets_total}"]
+                  f"{row.velocity_kps:.1f} km/s, PD {row.pd_turrets_operational}/{row.pd_turrets_total}"
+                  + drive_text]
         if row.launchers or row.torpedoes_remaining:
             status.append(f"  torpedoes: {row.torpedoes_remaining} left, "
                           f"{view.get('launches_available', row.launches_available)} launchable before the next checkpoint")
@@ -4422,7 +4482,9 @@ def build_admiral_ship_order_messages(
 
     inbound = view.get("inbound") or []
     if inbound:
-        parts.append("INBOUND ON THIS SHIP:\n" + "\n".join(_inbound_lines(snapshot, inbound, "  ")))
+        defence = _torpedo_defence_lines(snapshot, only=ship_id)
+        parts.append("INBOUND ON THIS SHIP:\n" + "\n".join(_inbound_lines(snapshot, inbound, "  ")
+                                                           + [f"  {d}" for d in defence]))
     elif view:
         parts.append("INBOUND ON THIS SHIP: nothing")
 
@@ -4432,6 +4494,9 @@ def build_admiral_ship_order_messages(
         for e in rows[:8]:
             text = (f"  {_lbl(snapshot, e['id'])} {_type_abbr(snapshot, e['id'])}: {e['range_km']:.0f} km "
                     f"{e['closing_kps']:+.1f} km/s, bearing {e['bearing']}")
+            face = _facing_text(e.get("facing"))
+            if face:
+                text += f", shows it {face}"
             if e.get("solution") is not None:
                 text += f" | torpedo {_solution_text(e['solution'])}"
             lines.append(text)

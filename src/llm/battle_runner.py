@@ -486,6 +486,22 @@ class LLMBattleRunner:
             captain_config.model, "captain")
         return LLMCaptain(captain_config, self.client)
 
+    # True when the runner flies the last checkpoint's orders for one more
+    # decision interval (LiveDraftRunner); the base runner stops right after
+    # the last checkpoint's decisions. Only the admirals' clock reads it.
+    FLIES_LAST_ORDERS = False
+
+    def _admiral_battle_clock(self) -> Optional[Dict[str, Any]]:
+        """When this battle ends, as the fleet loop flies it (fleet_intel.battle_clock)."""
+        from .fleet_intel import battle_clock
+        fc = self.fleet_config
+        return battle_clock(
+            fc.time_limit_s if fc else self.config.time_limit_s,
+            self.config.max_checkpoints,
+            fc.decision_interval_s if fc else 30.0,
+            unlimited=self.config.unlimited_mode,
+            last_orders_fly=self.FLIES_LAST_ORDERS)
+
     def setup_fleet_battle(self, fleet_data: Dict[str, Any]) -> None:
         """
         Initialize simulation with fleet configuration (multi-ship, Admirals).
@@ -687,6 +703,11 @@ class LLMBattleRunner:
             self.beta_admiral.parallel_ship_orders = self.config.parallel_llm
             self.beta_admiral.config.notebook_text = self._notebook_text_for(
                 self.beta_admiral.config.model, "admiral")
+
+        # The admirals' clock: "checkpoint N of M, battle ends at T+..." (cmdadm).
+        for admiral in (self.alpha_admiral, self.beta_admiral):
+            if admiral is not None:
+                admiral.battle_clock = self._admiral_battle_clock()
 
         # Admiral vision: allocate the trail/event history only if some
         # admiral will actually consume rendered frames.
@@ -2143,6 +2164,15 @@ class LLMBattleRunner:
                 print(f"  [MSG] Admiral {self.beta_admiral.name} -> "
                       f"Admiral {self.alpha_admiral.name}: \"{beta_msg}\"")
 
+        # Draw offers as a real exchange: propose / accept / reject recorded,
+        # a rejection clears the offer and the proposer is told (cmdadm).
+        from .admiral import settle_draw_offers
+        for faction, kind, text in settle_draw_offers(
+                self.alpha_admiral, self.beta_admiral, self.simulation.current_time):
+            sender = self.alpha_admiral if faction == "alpha" else self.beta_admiral
+            self._record_diplomacy(f"{faction}_admiral", ROLE_ADMIRAL, sender.name, faction,
+                                   "beta" if faction == "alpha" else "alpha", text, kind=kind)
+
     def _bridge_mcp_messages(self) -> None:
         """
         MCP commander <-> LLM admiral (and MCP <-> MCP) diplomacy, recorded.
@@ -2268,7 +2298,8 @@ class LLMBattleRunner:
                                                  checkpoint=self.checkpoint_count, **extra)
 
     def _record_diplomacy(self, sender_id: str, role: str, sender_name: str, faction: str,
-                          other: str, text: str, delivered_now: bool = False) -> None:
+                          other: str, text: str, delivered_now: bool = False,
+                          kind: str = "DIPLOMACY") -> None:
         """Admiral <-> admiral traffic (LLM or MCP) as a comms_message."""
         from .communication import CHANNEL_DIPLOMACY, CommsMessage
         if not self.fleet_communication:
@@ -2279,7 +2310,7 @@ class LLMBattleRunner:
             else admiral_id(other)
         message = self.fleet_communication.log(CommsMessage(
             msg_id=self.fleet_communication.next_msg_id(self.checkpoint_count, sender_id),
-            channel=CHANNEL_DIPLOMACY, kind="DIPLOMACY", sender_id=sender_id, sender_role=role,
+            channel=CHANNEL_DIPLOMACY, kind=kind, sender_id=sender_id, sender_role=role,
             sender_name=sender_name, faction=faction, recipient_spec="ENEMY ADMIRAL",
             recipient_ids=[recipient], text=text, checkpoint=self.checkpoint_count,
             sent_t=now, deliver_at_t=now if delivered_now else now + interval))
@@ -3492,46 +3523,11 @@ class LLMBattleRunner:
         Returns:
             Tuple of (outcome, winner, reason)
         """
-        # Calculate fleet scores
-        alpha_score = 0.0
-        beta_score = 0.0
-
-        # Score for surviving ships (ship value based on class)
-        # Alpha fleet scoring
-        for ship in self.alpha_ships.values():
-            base_value = ship_class_value(getattr(ship, 'ship_type', 'destroyer'))
-
-            if ship.is_destroyed or getattr(ship, 'is_dying', False):
-                # Destroyed ships count against you. A dying ship is a
-                # confirmed kill whose reactor just hasn't gone up yet.
-                beta_score += base_value * 1.5  # Enemy gets points for kills
-            elif getattr(ship, 'is_surrendered', False):
-                beta_score += base_value * 0.75  # Partial credit for surrenders
-            else:
-                # Surviving ships contribute to score
-                hull_pct = ship.hull_integrity / 100.0
-                # Hull remaining, discounted for a disarmed / adrift hull
-                alpha_score += base_value * hull_pct * surviving_ship_score_factor(ship)
-                alpha_score += ship.damage_dealt_gj * 0.1  # Damage dealt
-                if ship.shots_fired > 0:
-                    accuracy = ship.hits_scored / ship.shots_fired
-                    alpha_score += accuracy * 10  # Accuracy bonus
-
-        # Beta fleet scoring
-        for ship in self.beta_ships.values():
-            base_value = ship_class_value(getattr(ship, 'ship_type', 'destroyer'))
-
-            if ship.is_destroyed or getattr(ship, 'is_dying', False):
-                alpha_score += base_value * 1.5
-            elif getattr(ship, 'is_surrendered', False):
-                alpha_score += base_value * 0.75
-            else:
-                hull_pct = ship.hull_integrity / 100.0
-                beta_score += base_value * hull_pct * surviving_ship_score_factor(ship)
-                beta_score += ship.damage_dealt_gj * 0.1
-                if ship.shots_fired > 0:
-                    accuracy = ship.hits_scored / ship.shots_fired
-                    beta_score += accuracy * 10
+        # Calculate fleet scores (fleet_intel.time_limit_scores: the same
+        # additions in the same order, reusable by the admiral's score line)
+        from .fleet_intel import time_limit_scores
+        alpha_score, beta_score = time_limit_scores(self.alpha_ships.values(),
+                                                    self.beta_ships.values())
 
         # Print breakdown if verbose
         if self.config.verbose:

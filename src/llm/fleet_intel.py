@@ -346,6 +346,7 @@ def solve_pursuit(
     pd_envelope_m: float = 250_000.0,
     floor_mps: float = MIN_CLOSING_SPEED_KPS * 1000.0,
     horizon_s: float = SOLUTION_HORIZON_S,
+    target_delay_s: float = 0.0,
 ) -> Dict[str, Any]:
     """
     Fly a 1-D pursuit along the line of sight, worst case for the torpedo:
@@ -370,6 +371,7 @@ def solve_pursuit(
 
     Returns hit (bool), tof_s, impact_mps, cross_mps (mean closure while
     inside the PD envelope - what PD dwell depends on), short_m.
+    ``target_delay_s``: the target starts running only then (it turns first).
     """
     ve = max(1.0, float(specs.exhaust_velocity_kps) * 1000.0)
     m = float(mass_kg if mass_kg is not None else specs.mass_kg)
@@ -399,7 +401,8 @@ def solve_pursuit(
             c += burn
             dv -= burn
             m *= math.exp(-burn / ve)
-        c -= target_accel_ms2 * dt
+        if t >= target_delay_s:
+            c -= target_accel_ms2 * dt
         d -= c * dt
         t += dt
         if d <= pd_envelope_m:
@@ -572,6 +575,20 @@ def gather_rounds(sim: Any, faction: str, specs: Any = None) -> List[RoundInfo]:
             dist = rel_pos.magnitude
             closing = _closing(rel_pos, rel_vel)
             eta = dist / closing if closing > 1.0 else None
+            # The round keeps burning (closure floor, terminal burn): its ETA
+            # is the guidance law's flight time against a target that holds
+            # course (solve_pursuit), not range / closing now - which read
+            # "ETA 84 s" for a salvo that landed in 40.
+            try:
+                fly = solve_pursuit(dist, closing, 0.0, 0.0, torp.specs,
+                                    mass_kg=torp.current_mass_kg,
+                                    dv_left_mps=info.dv_left_kps * 1000.0)
+                if not fly.get("hit"):
+                    fly = None
+                else:
+                    eta = fly["tof_s"]
+            except Exception:  # noqa: BLE001 - advisory only
+                fly = None
             info.range_km, info.closing_kps, info.eta_s = dist / 1000.0, closing / 1000.0, eta
             # Projected impact: current relative speed plus the closure the
             # remaining burn can still add (the engine's threat estimate).
@@ -581,6 +598,8 @@ def gather_rounds(sim: Any, faction: str, specs: Any = None) -> List[RoundInfo]:
             else:
                 gain = info.dv_left_kps * 1000.0
             speed = rel_vel.magnitude + max(0.0, gain)
+            if fly is not None:
+                speed = fly["impact_mps"]   # the same forecast as the ETA
             info.energy_gj = (0.5 * torp.specs.penetrator_mass_kg * speed ** 2 / 1e9
                               + torp.specs.warhead_yield_gj)
             info.threat_id = target.ship_id
@@ -963,3 +982,457 @@ def class_armament(ship_type: str, fleet_data: Optional[Dict[str, Any]]) -> Dict
         parts.append(f"{n} {name}{plural}")
     return {"summary": " + ".join(parts) if parts else "unarmed", "launchers": launchers,
             "magazine": magazine, "pd": pd, "gun_range_km": gun_range}
+
+
+# =============================================================================
+# Facing: what face a ship shows a point, and what a heading does to it
+# =============================================================================
+
+# Hit-location cones of the engine (src/geometry.py): a round arriving within
+# 30 deg of the nose hits the nose, beyond 150 deg the tail.
+try:
+    from ..geometry import NOSE_HIT_ANGLE_THRESHOLD, TAIL_HIT_ANGLE_THRESHOLD
+except ImportError:  # pragma: no cover - script-style imports
+    from geometry import NOSE_HIT_ANGLE_THRESHOLD, TAIL_HIT_ANGLE_THRESHOLD
+
+# Below this applied throttle the torch is PADLOCK's token burn (5% while
+# turning), not a burn - the admiral's plot used to call that "burning".
+BURNING_MIN_THROTTLE = 0.1
+# Spin above this counts as turning (a thrust-vectored turn runs 4-15 deg/s).
+TURNING_MIN_DEG_S = 0.5
+_FACE_SECTION = {"NOSE": "nose", "SIDE": "lateral", "TAIL": "tail"}
+
+
+def face_of(angle_deg: float) -> str:
+    """NOSE / SIDE / TAIL for an angle off the nose (the engine's hit cones)."""
+    if angle_deg < NOSE_HIT_ANGLE_THRESHOLD:
+        return "NOSE"
+    if angle_deg > TAIL_HIT_ANGLE_THRESHOLD:
+        return "TAIL"
+    return "SIDE"
+
+
+def is_burning(ship: Any) -> bool:
+    """The drive is producing thrust (not PADLOCK's token burn)."""
+    return float(getattr(ship, "applied_throttle", 0.0) or 0.0) >= BURNING_MIN_THROTTLE \
+        and ship_accel_g(ship) > 0.0
+
+
+def ship_accel_g(ship: Any) -> float:
+    ks = getattr(ship, "kinematic_state", None)
+    if ks is None or not getattr(ks, "mass_kg", 0):
+        return 0.0
+    return float(getattr(ks, "thrust_n", 0.0)) / ks.mass_kg / G_STANDARD
+
+
+def observed_facing(ship: Any, toward: Vector3D) -> Optional[Dict[str, Any]]:
+    """
+    The face ``ship`` shows a point (an observer): NOSE / SIDE / TAIL by the
+    engine's hit cones, that facing's live armour, and whether it is burning
+    or turning - all observable from outside (attitude, torch, spin), never
+    its commanded maneuver. None without attitude data.
+    """
+    fwd = getattr(ship, "forward", None)
+    if fwd is None or fwd.magnitude < 1e-9:
+        return None
+    los = toward - ship.position
+    if los.magnitude < 1.0:
+        return None
+    angle = math.degrees(fwd.angle_to(los))
+    face = face_of(angle)
+    armor_cm = None
+    armor = getattr(ship, "armor", None)
+    if armor is not None:
+        try:
+            from ..combat import HitLocation
+        except ImportError:  # pragma: no cover
+            from combat import HitLocation
+        sec = armor.get_section(HitLocation(_FACE_SECTION[face]))
+        if sec is not None:
+            armor_cm = float(sec.thickness_cm)
+    spin = math.degrees(float(getattr(ship, "angular_velocity_rad_s", 0.0) or 0.0))
+    return {"face": face, "angle_deg": angle, "armor_cm": armor_cm,
+            "burning": is_burning(ship), "turning": spin >= TURNING_MIN_DEG_S}
+
+
+def facing_text(f: Optional[Dict[str, Any]]) -> str:
+    """'SIDE 30cm, burning' - the ~5-token form for threat rows."""
+    if not f:
+        return ""
+    text = f["face"] + (f" {f['armor_cm']:.0f}cm" if f.get("armor_cm") is not None else "")
+    motion = [w for w, on in (("burning", f.get("burning")), ("turning", f.get("turning"))) if on]
+    return text + ", " + ("+".join(motion) if motion else "coasting")
+
+
+def _median(values: List[float]) -> float:
+    values = sorted(values)
+    return values[len(values) // 2] if values else 0.0
+
+
+def heading_option_rows(sim: Any, info: Any, own: Sequence[Any], enemies: Sequence[Any],
+                        verb: str = "heading") -> List[str]:
+    """
+    One row per HEADINGS option of a range-control group, every row with the
+    same fields: what the move does to range, the face YOU show him while it
+    flies (and whether spinals bear), and the face HE shows you when it is done
+    if he holds his attitude, with the time he needs to re-point at you. The
+    old rows priced only your own exposure (audit A3/A4).
+    """
+    if not own or not enemies or not getattr(info, "options", None):
+        return []
+    own_pos, own_vel = centre(own)
+    en_pos, _ = centre(enemies)
+    los = en_pos - own_pos
+    if los.magnitude < 1.0:
+        return []
+    accel = float(getattr(info, "accel_g", 0.0) or 0.0) * G_STANDARD
+    target = info.names[0] if getattr(info, "names", None) else "target"
+    spinal = any(not getattr(getattr(ws, "weapon", None), "is_turreted", True)
+                 and not getattr(getattr(ws, "weapon", None), "is_missile", False)
+                 for s in own for slot, ws in (getattr(s, "weapons", None) or {}).items()
+                 if not str(slot).startswith("pd") and getattr(ws, "weapon", None) is not None)
+    rows = []
+    now = _median([math.degrees(e.forward.angle_to(own_pos - e.position)) for e in enemies])
+    for opt in info.options:
+        h = opt.heading
+        thr = float(opt.throttle or 0.0)
+        burn = float(opt.burn_s or 0.0) if thr > 0 else 0.0
+        t_end = float(opt.turn_s or 0.0) + burn
+        if opt.key == "face":
+            t_end = min(t_end, 60.0)
+        moved = own_pos + own_vel * t_end
+        if burn > 0:
+            moved = moved + h * (0.5 * accel * thr * burn * burn)
+        after = []
+        for e in enemies:
+            e_end = e.position + e.velocity * t_end
+            after.append((math.degrees(e.forward.angle_to(moved - e_end)), e, moved - e_end))
+        after.sort(key=lambda x: x[0])
+        angle_after, rep, los_after = after[len(after) // 2]
+        you_angle = math.degrees(h.angle_to(los))
+        you = f"you: {face_of(you_angle)}" + (f" ~{t_end:.0f} s" if burn > 0 else "")
+        if spinal:
+            you += ", spinals bear" if you_angle < 30.0 else ", spinals masked"
+        him = f"him: {face_of(now)} {now:.0f}->{face_of(angle_after)} {angle_after:.0f} deg"
+        if face_of(angle_after) != "NOSE":
+            try:
+                turn = sim._turn_time_to(rep, los_after, True)
+                if math.isfinite(turn):
+                    him += f" (re-points in ~{turn:.0f} s)"
+            except Exception:  # noqa: BLE001 - advisory only
+                pass
+        if opt.key == "face":
+            cpa = (f"no range change: if both coast closest {info.cpa_km:.1f} km in {info.cpa_t_s:.0f} s"
+                   if getattr(info, "cpa_t_s", 0.0) > 0.5 else "no range change")
+            rows.append(f"  {opt.label:<14} {verb}{opt.heading_str()} throttle 0 or PADLOCK {target}: "
+                        f"{opt.effect}; {cpa} | {you} | {him}")
+        elif thr <= 0:
+            rows.append(f"  {opt.label:<14} {opt.effect}")
+        else:
+            rows.append(f"  {opt.label:<14} {verb}{opt.heading_str()} @{thr * 100:.0f}% {opt.effect} "
+                        f"| {you} | {him}")
+    return rows
+
+
+def admiral_headings_block(sim: Any, infos: Sequence[Any], own: Sequence[Any],
+                           max_groups: int = 2) -> str:
+    """The HEADINGS body for the admiral's directive (fleet centre): group
+    title + uniform rows (heading_option_rows) for the nearest groups."""
+    lines = []
+    for info in list(infos)[:max_groups]:
+        enemies = [s for s in (sim.get_ship(sid) for sid in info.ship_ids) if s is not None and is_live(s)]
+        rows = heading_option_rows(sim, info, own, enemies)
+        if not rows:
+            continue
+        lines.append(f"{info.label} ({info.names[0] if info.names else '?'}"
+                     f"{' +' + str(len(info.names) - 1) if len(info.names) > 1 else ''}):")
+        lines.extend(rows)
+    return "\n".join(lines)
+
+
+def replace_option_rows(text: str, sim: Any, infos: Sequence[Any], own: Sequence[Any]) -> str:
+    """A range-control block (range_control.format_range_control) with each
+    group's option rows replaced by heading_option_rows - the per-ship order
+    keeps its group header, status and warning lines."""
+    if not text:
+        return text
+    labels = {info.label: info for info in infos}
+    prefixes = tuple({f"  {o.label:<14}" for info in infos for o in info.options})
+    out: List[str] = []
+    pending: List[str] = []
+    for line in text.splitlines():
+        head = line.split(":", 1)[0]
+        if head in labels and not line.startswith(" "):
+            out.extend(pending)
+            info = labels[head]
+            enemies = [s for s in (sim.get_ship(sid) for sid in info.ship_ids)
+                       if s is not None and is_live(s)]
+            pending = heading_option_rows(sim, info, own, enemies)
+            out.append(line)
+            continue
+        if prefixes and line.startswith(prefixes):
+            continue
+        out.append(line)
+    out.extend(pending)
+    return "\n".join(out)
+
+
+# =============================================================================
+# The clock and the time-limit verdict
+# =============================================================================
+
+def battle_clock(time_limit_s: Optional[float], max_checkpoints: Optional[int],
+                 interval_s: float, unlimited: bool = False,
+                 last_orders_fly: bool = False) -> Optional[Dict[str, Any]]:
+    """
+    When the battle ends and how many checkpoints it has, as the runner flies
+    it: checkpoints fall every ``interval_s`` from T+interval while the time
+    limit has not been reached, at most ``max_checkpoints``; the runner stops
+    after the last checkpoint's decisions unless ``last_orders_fly`` (the live
+    draft runner gives them one more window). None in unlimited mode.
+    """
+    if unlimited or not interval_s or interval_s <= 0:
+        return None
+    limit = float(time_limit_s) if time_limit_s else float("inf")
+    by_time = max(0, math.ceil(limit / interval_s) - 1) if math.isfinite(limit) else None
+    candidates = [c for c in (max_checkpoints, by_time) if c is not None]
+    if not candidates:
+        return None
+    checkpoints = int(min(candidates))
+    end = checkpoints * interval_s + (interval_s if last_orders_fly else 0.0)
+    return {"checkpoints": checkpoints, "end_s": min(limit, end), "interval_s": float(interval_s)}
+
+
+def clock_text(now_s: float, checkpoint: int, clock: Optional[Dict[str, Any]]) -> str:
+    """', checkpoint 7 of 20, battle ends at T+630s' ('' without a clock)."""
+    if not clock or not checkpoint:
+        return ""
+    return (f", checkpoint {checkpoint} of {clock['checkpoints']}, battle ends at "
+            f"T+{clock['end_s']:.0f}s")
+
+
+def time_limit_scores(alpha_ships: Iterable[Any], beta_ships: Iterable[Any]) -> Tuple[float, float]:
+    """
+    The fleet time-limit verdict's two scores (pure): each surviving hull
+    scores its draft value x hull fraction x the disarmed/adrift factor, plus
+    0.1 per GJ it dealt, plus 10 x its hit rate; each lost hull gives the
+    other side 1.5 x its value, a surrendered one 0.75 x. The additions run
+    in exactly the order battle_runner._evaluate_fleet_tactical_advantage
+    always used, so the floats - and the recorded reason string - are
+    unchanged.
+    """
+    try:
+        from .battle_runner import ship_class_value, surviving_ship_score_factor
+    except ImportError:  # pragma: no cover - script-style imports
+        from llm.battle_runner import ship_class_value, surviving_ship_score_factor
+    alpha_score = 0.0
+    beta_score = 0.0
+    for ship in alpha_ships:
+        base_value = ship_class_value(getattr(ship, 'ship_type', 'destroyer'))
+        if ship.is_destroyed or getattr(ship, 'is_dying', False):
+            beta_score += base_value * 1.5
+        elif getattr(ship, 'is_surrendered', False):
+            beta_score += base_value * 0.75
+        else:
+            hull_pct = ship.hull_integrity / 100.0
+            alpha_score += base_value * hull_pct * surviving_ship_score_factor(ship)
+            alpha_score += ship.damage_dealt_gj * 0.1
+            if ship.shots_fired > 0:
+                accuracy = ship.hits_scored / ship.shots_fired
+                alpha_score += accuracy * 10
+    for ship in beta_ships:
+        base_value = ship_class_value(getattr(ship, 'ship_type', 'destroyer'))
+        if ship.is_destroyed or getattr(ship, 'is_dying', False):
+            alpha_score += base_value * 1.5
+        elif getattr(ship, 'is_surrendered', False):
+            alpha_score += base_value * 0.75
+        else:
+            hull_pct = ship.hull_integrity / 100.0
+            beta_score += base_value * hull_pct * surviving_ship_score_factor(ship)
+            beta_score += ship.damage_dealt_gj * 0.1
+            if ship.shots_fired > 0:
+                accuracy = ship.hits_scored / ship.shots_fired
+                beta_score += accuracy * 10
+    return alpha_score, beta_score
+
+
+def score_line(sim: Any, faction: str) -> str:
+    """'SCORE IF THE BATTLE ENDED NOW (time-limit verdict): you 212 / them 148'
+    - shown only when AdmiralConfig.show_score is on (off by default)."""
+    ships = list((getattr(sim, "ships", None) or {}).values())
+    alpha = [s for s in ships if getattr(s, "faction", None) == "alpha"]
+    beta = [s for s in ships if getattr(s, "faction", None) == "beta"]
+    a, b = time_limit_scores(alpha, beta)
+    you, them = (a, b) if faction == "alpha" else (b, a)
+    return f"SCORE IF THE BATTLE ENDED NOW (time-limit verdict): you {you:.0f} / them {them:.0f}"
+
+
+# =============================================================================
+# What a ship actually flew over a window (non-compliance escalation)
+# =============================================================================
+
+def helm_summary(sim: Any, ship_ids: Iterable[str], since_t: float,
+                 until_t: float) -> Dict[str, Dict[str, Any]]:
+    """
+    Per ship, from the engine's EXECUTION_STATE transitions over
+    [since_t, until_t]: the share of the window the drive produced thrust
+    (applied throttle >= BURNING_MIN_THROTTLE), the share spent in each helm
+    mode, and the last engine fraction (0 = drive dead).
+    """
+    ids = set(ship_ids)
+    span = max(1e-6, until_t - since_t)
+    state: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+    acc: Dict[str, Dict[str, Any]] = {sid: {"burn": 0.0, "modes": Counter(), "engine": None}
+                                      for sid in ids}
+
+    def close(sid: str, t_end: float) -> None:
+        start, data = state[sid]
+        dt = max(0.0, min(t_end, until_t) - max(start, since_t))
+        if dt <= 0:
+            return
+        if float(data.get("applied_throttle") or 0.0) >= BURNING_MIN_THROTTLE:
+            acc[sid]["burn"] += dt
+        acc[sid]["modes"][str(data.get("mode") or "?").upper()] += dt
+
+    for event in getattr(sim, "events", None) or []:
+        sid = getattr(event, "ship_id", None)
+        if sid not in ids or _event_name(event) != "EXECUTION_STATE":
+            continue
+        t = float(getattr(event, "timestamp", 0.0) or 0.0)
+        if t > until_t:
+            break
+        if sid in state:
+            close(sid, t)
+        data = getattr(event, "data", None) or {}
+        state[sid] = (t, data)
+        acc[sid]["engine"] = data.get("engine_fraction")
+    out = {}
+    for sid in ids:
+        if sid in state:
+            close(sid, until_t)
+        a = acc[sid]
+        out[sid] = {"burn_frac": a["burn"] / span,
+                    "modes": {m: v / span for m, v in a["modes"].items()},
+                    "engine_fraction": a["engine"]}
+    return out
+
+
+
+# =============================================================================
+# Torpedo defence: per targeted ship, what arrives and what running changes
+# =============================================================================
+
+TORPEDO_DEFENCE_MAX_SHIPS = 4
+
+
+def torpedo_defence(sim: Any, faction: str, fleet_data: Optional[Dict[str, Any]],
+                    rounds: Sequence[RoundInfo]) -> Dict[str, Dict[str, Any]]:
+    """
+    Per own ship with live enemy torpedoes homing on it (empty when none):
+    rounds inbound, first impact, PD turrets that BEAR on the rounds
+    (pd_cover with weapon arcs) and how many of them those turrets can blind
+    at the rounds' crossing speed (turrets_to_blind), the leakers, and the
+    engine's pursuit forecast (solve_pursuit, the guidance throttle law) for
+    holding course versus burning straight away from the rounds after the
+    turn: impact speed / energy, first impact, rounds that run dry.
+    """
+    out: Dict[str, Dict[str, Any]] = {}
+    guided: Dict[str, List[RoundInfo]] = {}
+    for r in rounds:
+        if r.kind == "torpedo" and r.side == "theirs" and r.state == "guided" and r.threat_id:
+            guided.setdefault(r.threat_id, []).append(r)
+    if not guided:
+        return out
+    flights = {tf.torpedo_id: tf for tf in getattr(sim, "torpedoes", None) or []}
+    envelope = pd_range_m(fleet_data)
+    order = sorted(guided, key=lambda sid: min(r.eta_s or 1e9 for r in guided[sid]))
+    for sid in order[:TORPEDO_DEFENCE_MAX_SHIPS]:
+        ship = sim.get_ship(sid)
+        if ship is None or not is_live(ship) or ship.faction != faction:
+            continue
+        torps = [flights[r.round_id] for r in guided[sid] if r.round_id in flights]
+        if not torps:
+            continue
+        n = len(torps)
+        cx = sum(t.torpedo.position.x for t in torps) / n
+        cy = sum(t.torpedo.position.y for t in torps) / n
+        cz = sum(t.torpedo.position.z for t in torps) / n
+        source = Vector3D(cx, cy, cz)
+        away = ship.position - source
+        heading = away.normalized() if away.magnitude > 1.0 else ship.forward
+        try:
+            turn_s = float(sim._turn_time_to(ship, heading, True))
+        except Exception:  # noqa: BLE001 - advisory only
+            turn_s = 0.0
+        if not math.isfinite(turn_s):
+            turn_s = 0.0
+        accel = max_accel_ms2(ship)
+        hold, run = [], []
+        for tf in torps:
+            torp = tf.torpedo
+            rel_pos = ship.position - torp.position
+            rel_vel = ship.velocity - torp.velocity
+            rng = rel_pos.magnitude
+            closing = _closing(rel_pos, rel_vel) if rng > 1.0 else 0.0
+            dv = float(getattr(torp, "remaining_delta_v_kps", 0.0) or 0.0) * 1000.0
+            kw = dict(mass_kg=torp.current_mass_kg, dv_left_mps=dv, pd_envelope_m=envelope)
+            hold.append(solve_pursuit(rng, closing, 0.0, 0.0, torp.specs, **kw))
+            run.append(solve_pursuit(rng, closing, 0.0, accel, torp.specs,
+                                     target_delay_s=turn_s, **kw))
+        pen = float(getattr(torps[0].torpedo.specs, "penetrator_mass_kg", 250.0))
+
+        def summary(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+            hits = [x for x in results if x.get("hit")]
+            if not hits:
+                return {"hits": 0, "dry": len(results)}
+            speeds = sorted(x["impact_mps"] for x in hits)
+            mid = speeds[len(speeds) // 2]
+            cross = sorted(x["cross_mps"] for x in hits)[len(hits) // 2]
+            return {"hits": len(hits), "dry": len(results) - len(hits),
+                    "first_s": min(x["tof_s"] for x in hits), "impact_kps": mid / 1000.0,
+                    "energy_gj": 0.5 * pen * mid ** 2 / 1e9, "cross_kps": cross / 1000.0}
+
+        h, rn = summary(hold), summary(run)
+        cover = pd_cover(sim, ship, envelope, threat_from=source)
+        per_round = turrets_to_blind(fleet_data, h.get("cross_kps") or MIN_CLOSING_SPEED_KPS)
+        blind = min(n, cover // max(1, per_round))
+        etas = [r.eta_s for r in guided[sid] if r.eta_s is not None]
+        tail = None
+        armor = getattr(ship, "armor", None)
+        if armor is not None:
+            try:
+                from ..combat import HitLocation
+            except ImportError:  # pragma: no cover
+                from combat import HitLocation
+            sec = armor.get_section(HitLocation.TAIL)
+            tail = float(sec.thickness_cm) if sec is not None else None
+        out[sid] = {"rounds": n, "first_eta_s": min(etas) if etas else None,
+                    "turrets_bearing": cover, "turrets_per_round": per_round,
+                    "can_blind": blind, "leakers": n - blind, "hold": h, "run": rn,
+                    "run_heading": heading, "turn_s": turn_s, "tail_cm": tail}
+    return out
+
+
+def torpedo_defence_line(label: str, d: Dict[str, Any]) -> str:
+    """One line per targeted ship (the admiral's ORDNANCE block / order call)."""
+    first = (d.get("hold") or {}).get("first_s", d.get("first_eta_s"))
+    text = (f"{label}: {d['rounds']} round{'s' if d['rounds'] != 1 else ''}, first impact "
+            + (f"~{first:.0f} s" if first is not None else "not closing")
+            + f"; {d['turrets_bearing']} PD turrets bear (~{d['turrets_per_round']} per round) -> "
+            f"blind ~{d['can_blind']}, ~{d['leakers']} arrive live")
+    h, rn = d["hold"], d["run"]
+    if h.get("hits"):
+        text += f". Holding: impact ~{h['impact_kps']:.1f} km/s (~{h['energy_gj']:.0f} GJ)"
+    hd = d["run_heading"]
+    run = (f". Burning away heading({hd.x:+.2f},{hd.y:+.2f},{hd.z:+.2f}) @100% (turn ~{d['turn_s']:.0f} s, "
+           f"then TAIL" + (f" {d['tail_cm']:.0f} cm" if d.get("tail_cm") is not None else "")
+           + " to the rounds): ")
+    if rn.get("hits"):
+        bought = (rn["first_s"] - h["first_s"]) if h.get("hits") else None
+        run += (f"impact ~{rn['impact_kps']:.1f} km/s (~{rn['energy_gj']:.0f} GJ), first impact "
+                f"~{rn['first_s']:.0f} s" + (f" ({bought:+.0f} s)" if bought is not None else ""))
+        if rn.get("dry"):
+            run += f", {rn['dry']} run dry"
+    else:
+        run += "every round runs dry before it reaches you"
+    return text + run

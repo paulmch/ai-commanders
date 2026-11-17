@@ -94,6 +94,7 @@ class SpectatorServer(MCPHttpServer):
 
 
 class LiveDraftRunner(LLMBattleRunner):
+    FLIES_LAST_ORDERS = True  # _evaluate_fleet_result flies the last orders (admiral clock)
     ticker = None
 
     def configure_live(self, server, state, draft_recorders, output, step_delay=0.04,
