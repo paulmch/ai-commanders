@@ -3407,7 +3407,9 @@ targets. Keep it under ~150 words and answer with tool calls, not a long analysi
 
 Torpedo salvos are the one per-ship instruction: set_fleet_directive salvo_plan (ship,
 rounds, target), or issue_order(ship_name=..., torpedo_salvo=N, torpedo_target=...) per
-launching ship. Any other issue_order content is ignored.
+launching ship. Any other issue_order content is ignored: the doctrine below also
+describes per-ship and "all ships" headings, maneuvers and throttles - none of them is
+flown in this battle.
 
 Ships are shown as: NAME [ID] (e.g., "OCS Gemini-1 [beta_1]")
 You can use EITHER the name OR the ID when naming ships or targets.

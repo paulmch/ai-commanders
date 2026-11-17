@@ -361,3 +361,15 @@ def test_order_check_is_asked_once_per_checkpoint_across_a_discussion_redecide(t
     checks = [k for k, text in stub.texts.items()
               if k[0] == "stub/dd" and k[1] == 1 and "=== ORDER CHECK" in text]
     assert len(checks) == 1, sorted(stub.texts)
+
+
+def test_intent_only_issue_order_schema_offers_only_what_that_mode_flies():
+    """Intent-only drops every issue_order field but the salvo, yet the schema still
+    offered heading / maneuver / throttle / evade with their 'applied at once' texts."""
+    from src.llm.admiral_tools import get_admiral_tools
+    tool = next(t["function"] for t in get_admiral_tools(intent_only=True)
+                if t["function"]["name"] == "issue_order")
+    assert set(tool["parameters"]["properties"]) == {"ship_name", "torpedo_salvo", "torpedo_target"}
+    assert tool["parameters"]["required"] == ["ship_name"]
+    full = next(t["function"] for t in get_admiral_tools() if t["function"]["name"] == "issue_order")
+    assert "heading" in full["parameters"]["properties"]          # default tools untouched
