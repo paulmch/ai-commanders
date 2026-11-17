@@ -30,9 +30,11 @@ The request rules (no sampling parameters, adaptive thinking, an explicit
 ceiling) come from the claude-api skill's model tables; see ANTHROPIC_MODELS.
 """
 
+import hashlib
 import json
 import os
 import threading
+import time
 from collections import OrderedDict
 from contextlib import contextmanager
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -464,6 +466,7 @@ class AnthropicClient:
         http_client: Any = None,
         stats: Optional[CallStats] = None,
         thinking_display: Optional[str] = None,
+        cache_warmup: bool = False,
     ):
         """
         Args:
@@ -493,6 +496,16 @@ class AnthropicClient:
                 request asks for the readable thinking summary, which is
                 returned as `thinking_summary` (audit only, never fed back
                 into a prompt). Billed the same as omitted thinking.
+            cache_warmup: experiment mode, off by default. A cache entry is
+                readable only once the request writing it has started to
+                answer, so N concurrent requests on one cold prefix (a
+                checkpoint's parallel captains or per-ship orders) each pay
+                the write. With cache_warmup the first request on a cold
+                prefix first sends one `max_tokens: 0` pre-warm (same tools,
+                system, thinking, effort and tool_choice; prefill only, no
+                output billed) and the others on that prefix wait for it, then
+                all read. Adds at most one prefill to the first fan-out of a
+                prefix; a prefix seen within its TTL is not gated again.
         """
         model_spec(model)   # unknown ids fail here, at construction
         if thinking_display is not None and thinking_display not in THINKING_DISPLAYS:
@@ -515,6 +528,10 @@ class AnthropicClient:
         self.cache_ttl = cache_ttl
         self.enable_fallbacks = enable_fallbacks
         self.thinking_display = thinking_display
+        self.cache_warmup = cache_warmup
+        self._warm_lock = threading.Lock()
+        self._warm_seen: Dict[str, float] = {}             # prefix -> last write/read (monotonic)
+        self._warming: Dict[str, threading.Event] = {}     # prefix -> pre-warm in flight
         self.max_retries = max_retries
         self.stats = stats if stats is not None else CallStats()
         self.budget = None
@@ -563,6 +580,7 @@ class AnthropicClient:
             "max_tokens": self.max_tokens,
             "tool_choice": "auto",
             "cache_ttl": self.cache_ttl,
+            **({"cache_warmup": True} if self.cache_warmup else {}),
             "fallbacks": self.enable_fallbacks,
             "sdk": f"anthropic-python {anthropic.__version__}",
             "api_version": self._api_version(),
@@ -640,6 +658,82 @@ class AnthropicClient:
                 **request, betas=["server-side-fallback-2026-07-01"], fallbacks="default")
         return self._sdk.messages.create(**request)
 
+    # -- cache warm-up (experiment mode) ------------------------------------
+
+    _WARM_KEYS = ("model", "tools", "system", "thinking", "output_config", "tool_choice")
+
+    def _prefix_key(self, request: Dict[str, Any]) -> Optional[str]:
+        """The cached prefix a request writes/reads (None: no breakpoint)."""
+        system = request.get("system") or []
+        if not any(isinstance(b, dict) and b.get("cache_control") for b in system):
+            return None
+        return hashlib.sha256(json.dumps({k: request.get(k) for k in self._WARM_KEYS},
+                                         sort_keys=True, default=str).encode()).hexdigest()
+
+    def _fresh_window_s(self) -> float:
+        # Trust a prefix seen within its TTL minus a margin (the entry's life
+        # counts from the start of the request that wrote or read it).
+        return 3600.0 - 300.0 if self.cache_ttl == "1h" else 300.0 - 60.0
+
+    def _note_prefix(self, request: Dict[str, Any]) -> None:
+        key = self._prefix_key(request) if self.cache_warmup else None
+        if key is not None:
+            with self._warm_lock:
+                self._warm_seen[key] = time.monotonic()
+
+    def _ensure_warm(self, request: Dict[str, Any]) -> None:
+        """Pre-warm a cold prefix once; concurrent callers on it wait for that."""
+        key = self._prefix_key(request)
+        if key is None:
+            return
+        with self._warm_lock:
+            seen = self._warm_seen.get(key)
+            if seen is not None and time.monotonic() - seen < self._fresh_window_s():
+                return
+            event = self._warming.get(key)
+            leader = event is None
+            if leader:
+                event = threading.Event()
+                self._warming[key] = event
+        if not leader:
+            event.wait(timeout=180.0)
+            return
+        try:
+            self._audit_local.warmup = self._send_warmup(request)
+        finally:
+            with self._warm_lock:
+                self._warm_seen[key] = time.monotonic()
+                self._warming.pop(key, None)
+            event.set()
+
+    def _send_warmup(self, request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """One `max_tokens: 0` request on this prefix -> {usage, cost} or None."""
+        warm = {k: request[k] for k in self._WARM_KEYS if k in request}
+        warm["max_tokens"] = 0
+        warm["messages"] = [{"role": "user", "content": "warmup"}]
+        model = warm["model"]
+        reserved = None
+        if self.budget is not None:
+            amount, _ = reservation_usd(model, {"system": warm.get("system"), "tools": warm.get("tools")}, 0)
+            try:
+                reserved = self.budget.reserve_usd(amount)
+            except RuntimeError:
+                return None      # the real call will meet the cap and say so
+        self.stats.record_call()
+        try:
+            response = self._create(warm)
+        except anthropic.AnthropicError as e:
+            # A failed pre-warm costs at most its reservation; the real
+            # request goes ahead and writes the cache itself.
+            print(f"[LLM CACHE] pre-warm failed for {model}: {type(e).__name__}", flush=True)
+            return None
+        cost = cost_usd(model, response.usage, self.cache_ttl)
+        if self.budget is not None:
+            self.budget.settle(reserved, cost)
+        native = usage_dict(response.usage)
+        self.stats.record_usage(openai_usage(native, cost))
+        return {"usage": native, "cost": cost}
+
     def _send(self, request: Dict[str, Any], what: str,
               openai_payload: Dict[str, Any]) -> Tuple[Any, float]:
         """
@@ -650,6 +744,9 @@ class AnthropicClient:
                 the spend cap refuses the reservation.
         """
         model = request["model"]
+        self._audit_local.warmup = None
+        if self.cache_warmup:
+            self._ensure_warm(request)
         reserved = None
         if self.budget is not None:
             amount, images = reservation_usd(model, openai_payload, request["max_tokens"])
@@ -695,6 +792,7 @@ class AnthropicClient:
             raise self._fail(what, e, retryable=False) from e
         if self.budget is not None:
             self.budget.settle(reserved, total_cost)
+        self._note_prefix(request)
         return response, total_cost
 
     def _fail(self, what: str, error: Exception, retryable: bool,
@@ -796,6 +894,12 @@ class AnthropicClient:
         }
         if thinking_summary:
             data["thinking_summary"] = thinking_summary
+        warmup = getattr(self._audit_local, "warmup", None)
+        if warmup:
+            # The pre-warm this call triggered (cache_warmup): billed on its
+            # own, recorded with the call that needed it.
+            data["cache_warmup"] = warmup
+            self._audit_local.warmup = None
         observer = getattr(self._audit_local, "observer", None)
         if observer:
             observer(self._audit_payload(request, openai_payload), data)

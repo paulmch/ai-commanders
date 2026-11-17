@@ -192,6 +192,12 @@ class BattleConfig:
     # setting runs at the client's battle-wide effort: the request is
     # byte-identical to a battle without this field.
     effort_policy: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    # Quiet-turn policy: an LLM captain whose turn has no trigger (see
+    # call_policy.captain_triggers), no new FLEET NET traffic and an applied
+    # admiral order identical to last checkpoint's is NOT called; its ship
+    # keeps flying its current maneuver (renewed for the window) and a
+    # captain_turn_skipped event records why. Saves calls, has risk: off.
+    quiet_turns: bool = False
 
     def __post_init__(self) -> None:
         validate_battle_options(self)
@@ -906,15 +912,58 @@ class LLMBattleRunner:
         return facts
 
     def _plan_captain_turns(self, captain_entries: List[Tuple[str, Any, str]],
-                            admiral_orders: Dict[str, List[Any]]) -> None:
-        """Set each wrapped captain's effort for this turn (trigger effort)."""
-        from .call_policy import captain_triggers
+                            admiral_orders: Dict[str, List[Any]]) -> Dict[str, str]:
+        """
+        One TurnFacts per LLM captain this checkpoint: sets each wrapped
+        captain's effort (trigger effort) and, with quiet_turns, returns the
+        captains to skip {ship_id: reason}.
+        """
+        from .call_policy import captain_triggers, quiet_turn_reason
+        skip: Dict[str, str] = {}
+        if not hasattr(self, "_turn_state"):
+            self._turn_state = {}
         for ship_id, captain, faction in captain_entries:
-            client = self._policy_clients.get(ship_id)
-            if client is None:
+            client = getattr(self, "_policy_clients", {}).get(ship_id)
+            llm = type(captain).__name__ != "HeuristicCaptain" and getattr(captain, "client", None)
+            if client is None and not (self.config.quiet_turns and llm):
                 continue
             facts = self._captain_turn_facts(ship_id, captain, admiral_orders.get(ship_id))
-            client.turn_effort = client.policy.captain_turn(faction, captain_triggers(facts))
+            if client is not None:
+                client.turn_effort = client.policy.captain_turn(faction, captain_triggers(facts))
+            if self.config.quiet_turns and llm:
+                reason = quiet_turn_reason(facts)
+                if reason:
+                    skip[ship_id] = reason
+        return skip
+
+    def _skip_captain_turn(self, ship_id: str, captain: Any, faction: str, reason: str) -> List[Any]:
+        """
+        A quiet turn: no model call. The ship keeps flying its current
+        maneuver, renewed for the next window exactly as a lost turn renews it
+        (a maneuver applied this checkpoint, e.g. an admiral heading, flies
+        on unrenewed). Recorded as captain_turn_skipped.
+        """
+        from .maneuver_orders import maneuver_label, renewed_maneuver
+        sim = self.simulation
+        ship = sim.get_ship(ship_id)
+        now = sim.current_time
+        interval = float(getattr(sim, "decision_interval", 30.0) or 30.0)
+        current = getattr(ship, "current_maneuver", None) if ship is not None else None
+        commands: List[Any] = []
+        kept = None
+        if current is not None and hasattr(current, "start_time"):
+            if current.start_time < now - 1e-6:
+                renewed = renewed_maneuver(ship, now, interval)
+                if renewed is not None:
+                    commands.append(renewed)
+            kept = maneuver_label(current.maneuver_type, getattr(current, "throttle", None))
+        if self.config.verbose:
+            print(f"  [{captain.ship_name}] quiet turn skipped ({reason}); keeps {kept or 'coasting'}")
+        if self.recorder:
+            self.recorder.record(now, 'captain_turn_skipped', ship_id, faction=faction,
+                                 captain_name=getattr(captain, "name", None), reason=reason,
+                                 kept_maneuver=kept, renewed=bool(commands))
+        return commands
 
     def _advance_to_checkpoint(self, deadline: float, fleet_mode: bool = False):
         """Step to a checkpoint exactly, including fractional intervals and limits."""
@@ -1827,10 +1876,12 @@ class LLMBattleRunner:
             captain_entries = [entry for entry in captain_entries if entry not in crew_out]
         self._apply_admiral_headings(captain_entries, admiral_orders)
         self._deliver_fleet_messages(captain_entries)
-        # Experiment plumbing (cmdrun): per-turn captain effort. A no-op
-        # unless BattleConfig.effort_policy is set.
-        if getattr(self, "_policy_clients", None):
-            self._plan_captain_turns(captain_entries, admiral_orders)
+        # Experiment plumbing (cmdrun): per-turn captain effort and the
+        # quiet-turn policy. A no-op unless BattleConfig.effort_policy or
+        # .quiet_turns is set.
+        skipped: Dict[str, str] = {}
+        if getattr(self, "_policy_clients", None) or self.config.quiet_turns:
+            skipped = self._plan_captain_turns(captain_entries, admiral_orders)
         for ship_id, captain, faction in captain_entries:
             captain.clear_admiral_context()
             if ship_id in admiral_orders:
@@ -1848,6 +1899,9 @@ class LLMBattleRunner:
                     directive = ""
                 captain.receive_admiral_orders(orders, directive)
 
+        quiet = [entry for entry in captain_entries if entry[0] in skipped]
+        if quiet:
+            captain_entries = [entry for entry in captain_entries if entry[0] not in skipped]
         if self.config.verbose:
             for _, captain, _ in captain_entries:
                 print(f"  [{captain.ship_name}] {captain.name} deciding...")
@@ -1875,6 +1929,8 @@ class LLMBattleRunner:
                       f"{self._get_ship_status_line(ship_id, commands)}")
             self._finish_captain_turn(ship_id, captain, faction, commands,
                                       admiral_orders.get(ship_id), record=record)
+        for ship_id, captain, faction in quiet:
+            all_commands[ship_id] = self._skip_captain_turn(ship_id, captain, faction, skipped[ship_id])
         for ship_id, captain, faction in crew_out:
             all_commands[ship_id] = []
             report = self._build_captain_report(ship_id, captain, faction, [],

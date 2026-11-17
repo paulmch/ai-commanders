@@ -70,8 +70,20 @@ def fleet_models(fleet_config) -> list:
              if f.admiral and f.admiral.enabled])
 
 
+def _sides(value):
+    return () if not value else ("alpha", "beta") if value == "both" else (value,)
+
+
 def apply_model_overrides(fleet_config, args) -> None:
-    """--{side}-admiral-model / --{side}-captain-model rewrite a loaded fleet config."""
+    """--{side}-admiral-model / --{side}-captain-model / --no-admiral / --intent-only
+    rewrite a loaded fleet config."""
+    for side in _sides(getattr(args, "no_admiral", None)):
+        getattr(fleet_config, f"{side}_fleet").admiral = None
+    for side in _sides(getattr(args, "intent_only", None)):
+        admiral = getattr(fleet_config, f"{side}_fleet").admiral
+        if admiral is None:
+            raise ValueError(f"--intent-only {side}: that fleet has no admiral")
+        admiral.intent_only = True
     for side in ("alpha", "beta"):
         fleet = getattr(fleet_config, f"{side}_fleet")
         captain = getattr(args, f"{side}_captain_model", None)
@@ -249,6 +261,20 @@ Examples:
              "(src/llm/mock_anthropic.py); no key, no network, no cost",
     )
     parser.add_argument("--mock-thinking-tokens", type=int, default=20, help=argparse.SUPPRESS)
+    sides = ("alpha", "beta", "both")
+    parser.add_argument("--no-admiral", choices=sides, default=None,
+                        help="Experiment: drop that side's admiral; its LLM captains fly on their own")
+    parser.add_argument("--intent-only", choices=sides, default=None,
+                        help="Experiment: that side's admiral issues the directive and battle plan "
+                             "(and may order torpedo salvos) but no per-ship orders; captains decide")
+    parser.add_argument("--quiet-turns", action="store_true",
+                        help="Experiment: skip a captain call when its turn has no trigger, no new "
+                             "FLEET NET traffic and an unchanged applied order (captain_turn_skipped)")
+    parser.add_argument("--cache-warmup", action="store_true",
+                        help="Experiment (Anthropic ids): pre-warm each cold cached prefix with one "
+                             "max_tokens=0 call before a parallel fan-out reads it")
+    parser.add_argument("--status-file", default=None,
+                        help="Write the end-of-battle status (cost report per role and side) here")
     parser.add_argument(
         "--thinking-summary", action="store_true",
         help="Anthropic ids: request thinking display 'summarized' and record the summary per "
@@ -382,6 +408,10 @@ Examples:
             config_overrides["compress_recording"] = False
         if args.recording_dir:
             config_overrides["recording_dir"] = args.recording_dir
+        if args.quiet_turns:
+            config_overrides["quiet_turns"] = True
+        if not fleet_config and (args.no_admiral or args.intent_only):
+            raise ValueError("--no-admiral / --intent-only need --fleet-config")
         if args.effort:
             policy = parse_effort_specs(args.effort)
             if fleet_config:
@@ -418,6 +448,8 @@ Examples:
         anthropic_options = {}
         if args.thinking_summary:
             anthropic_options["thinking_display"] = "summarized"
+        if args.cache_warmup:
+            anthropic_options["cache_warmup"] = True
         llm_ids = llm_models(models)
         if args.mock_llm:
             not_anthropic = [m for m in llm_ids if provider_for_model(m) != "anthropic"]
@@ -474,6 +506,23 @@ Examples:
                                          "cache_write": stats.cache_write_tokens},
                                  usd=budget.reported_usd if budget else stats.cost_usd,
                                  committed_usd=budget.committed_usd if budget else None, status=status)
+
+        # Cost per role and side (model_call events), stdout + --status-file.
+        if runner.recorder is not None and client is not None:
+            from src.llm.cost_report import cost_report, format_cost_report
+            report = cost_report(runner.recorder.events)
+            print(format_cost_report(report))
+            if args.status_file:
+                import json as _json
+                status = {"result": {"winner": result.winner, "reason": result.reason,
+                                     "checkpoints": result.checkpoints_used},
+                          "recording": runner.recording_file, "stopped": getattr(runner, "stop_reason", None),
+                          "spend": {"reported_usd": budget.reported_usd if budget else client.stats.cost_usd,
+                                    "committed_usd": budget.committed_usd if budget else None,
+                                    "limit_usd": args.spend_limit, "calls": client.stats.calls},
+                          "effort_policy": battle_config.effort_policy, "cost_report": report}
+                Path(args.status_file).parent.mkdir(parents=True, exist_ok=True)
+                Path(args.status_file).write_text(_json.dumps(status, indent=1, default=str))
 
         # Print final result if quiet mode
         if args.quiet:

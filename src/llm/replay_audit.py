@@ -36,6 +36,9 @@ class AuditedClient:
             extra['effort'] = effort
         if annotation.get('effort_reason'):
             extra['effort_reason'] = annotation['effort_reason']
+        if response.get('cache_warmup'):
+            # The cache pre-warm this call waited for (cache_warmup mode).
+            extra['cache_warmup'] = response['cache_warmup']
         if response.get('thinking_summary'):
             # Summarized thinking (AnthropicClient thinking_display): for audits
             # only - never read back into any prompt.

@@ -365,7 +365,7 @@ def test_key_never_reaches_repr_or_provenance():
 
 def _battle(tmp_path, alpha, beta, respond=None, record=None, limit=None, turns=3,
             config=None, captain_models=None, admirals=True, anthropic_extra=None,
-            transport_options=None):
+            transport_options=None, ships=("frigate", "corvette")):
     from scripts.run_live_draft_battle import LiveDraftRunner, LiveDraftState
     from src.llm.battle_runner import BattleConfig, load_fleet_data
     from src.llm.captain import LLMCaptainConfig
@@ -384,7 +384,7 @@ def _battle(tmp_path, alpha, beta, respond=None, record=None, limit=None, turns=
         client.budget = RequestBudget(limit, {})
     state = LiveDraftState()
     state.drafts = {f: FleetDraft(faction=f, budget=20, points_spent=14,
-                                  ships=name_drafted_ships(["frigate", "corvette"], f))
+                                  ships=name_drafted_ships(list(ships), f))
                     for f in ("alpha", "beta")}
     models = {"alpha": alpha, "beta": beta}
     fleets = {f: draft_to_fleet_definition(

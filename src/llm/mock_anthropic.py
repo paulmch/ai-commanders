@@ -114,7 +114,9 @@ def mock_anthropic_transport(
         ttl_1h = any((b.get("cache_control") or {}).get("ttl") == "1h"
                      for b in body.get("system") or [] if isinstance(b, dict))
 
-        calls = _mock_calls(_openai_view(body), points, max_ships, seed) if body.get("tools") else []
+        prewarm = body.get("max_tokens") == 0
+        calls = (_mock_calls(_openai_view(body), points, max_ships, seed)
+                 if body.get("tools") and not prewarm else [])
         with lock:
             serial = next(ids)
         # Thinking text only when a summary is asked for (display "summarized");
@@ -130,13 +132,16 @@ def mock_anthropic_transport(
         if not calls:
             content.append({"type": "text", "text": "Acknowledged."})
         output = 20 + thinking_tokens + 30 * len(calls)
+        if prewarm:
+            # A cache pre-warm: prefill only, nothing generated or billed out.
+            content, output = [], 0
         return httpx2.Response(200, headers={"request-id": f"req_mock_{serial}"}, json={
             "id": f"msg_mock_{serial}",
             "type": "message",
             "role": "assistant",
             "model": body.get("model"),
             "content": content,
-            "stop_reason": "tool_use" if calls else "end_turn",
+            "stop_reason": "max_tokens" if prewarm else ("tool_use" if calls else "end_turn"),
             "stop_sequence": None,
             "stop_details": None,
             "usage": {
@@ -146,7 +151,7 @@ def mock_anthropic_transport(
                 "cache_read_input_tokens": read,
                 "cache_creation": {"ephemeral_5m_input_tokens": 0 if ttl_1h else written,
                                    "ephemeral_1h_input_tokens": written if ttl_1h else 0},
-                "output_tokens_details": {"thinking_tokens": thinking_tokens},
+                "output_tokens_details": {"thinking_tokens": 0 if prewarm else thinking_tokens},
             },
         })
 
