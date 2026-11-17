@@ -192,6 +192,13 @@ Examples:
                             help=f"Fleet mode: replace every {side} captain's model (e.g. 'heuristic' "
                                  "for rule-based captains under an LLM admiral)")
 
+    parser.add_argument(
+        "--thinking-summary", action="store_true",
+        help="Anthropic ids: request thinking display 'summarized' and record the summary per "
+             "model_call (thinking_summary; audit only, never fed back). Billed the same as the "
+             "default omitted display",
+    )
+
     # Battle modes
     parser.add_argument(
         "--unlimited",
@@ -349,8 +356,12 @@ Examples:
         # to one provider endpoint and its warm cache.
         session_id = f"ai-commanders-{uuid.uuid4().hex[:16]}"
         models = fleet_models(fleet_config) if fleet_config else [args.alpha_model, args.beta_model]
+        anthropic_options = {}
+        if args.thinking_summary:
+            anthropic_options["thinking_display"] = "summarized"
         client = (create_llm_client(client_model, models, session_id=session_id,
-                                    reasoning_effort=args.reasoning_effort)
+                                    reasoning_effort=args.reasoning_effort,
+                                    anthropic_options=anthropic_options or None)
                   if any(model != "heuristic" for model in models) else None)
 
         if args.unlimited and not args.quiet:

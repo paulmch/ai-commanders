@@ -444,6 +444,8 @@ def make_client(variants, args):
         from src.llm.mock_anthropic import mock_anthropic_transport
         options.update(api_key="mock-no-network", http_client=anthropic.DefaultHttpxClient(
             transport=mock_anthropic_transport(seed=args.seed, latency_s=args.mock_latency)))
+    if args.thinking_summary:
+        options["thinking_display"] = "summarized"
     client = create_llm_client(models[0], models, temperature=None, max_tokens=16000,
                                reasoning_effort=None, timeout=300, anthropic_options=options)
     return client
@@ -554,6 +556,9 @@ def parse_args(argv=None):
     var.add_argument("--effort", choices=EFFORT_LEVELS, help="single variant: effort (default: recorded)")
     var.add_argument("--patch", help="single variant: patch file")
     var.add_argument("-n", "--replicates", type=int, default=1)
+    var.add_argument("--thinking-summary", action="store_true",
+                     help="request thinking display 'summarized' and store the summary per reply "
+                          "(billed the same as the default omitted display)")
     run = p.add_argument_group("running")
     run.add_argument("--workers", type=int, default=4, help="concurrent requests (default 4)")
     run.add_argument("--spend-limit", type=float, help="hard dollar cap for this run (required when paid)")

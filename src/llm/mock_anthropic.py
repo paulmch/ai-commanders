@@ -112,8 +112,13 @@ def mock_anthropic_transport(
         calls = _mock_calls(_openai_view(body), points, max_ships, seed) if body.get("tools") else []
         with lock:
             serial = next(ids)
+        # Thinking text only when a summary is asked for (display "summarized");
+        # the default ("omitted") returns the block with an empty string.
+        summary = ((body.get("thinking") or {}).get("display") == "summarized")
         content: List[Dict[str, Any]] = [
-            {"type": "thinking", "thinking": "", "signature": f"mock-signature-{serial}"}]
+            {"type": "thinking", "signature": f"mock-signature-{serial}",
+             "thinking": (f"Mock summary {serial}: weighing range, closure and the threats."
+                          if summary else "")}]
         for n, (name, args) in enumerate(calls):
             content.append({"type": "tool_use", "id": f"toolu_mock_{serial}_{n}",
                             "name": name, "input": args})

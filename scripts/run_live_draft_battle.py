@@ -257,6 +257,8 @@ def make_client(args):
         import anthropic
         anthropic_options = {'api_key': 'mock-no-network', 'http_client': anthropic.DefaultHttpxClient(
             transport=mock_anthropic_transport(args.points, args.max_ships, args.seed))}
+    if args.thinking_summary:
+        anthropic_options = {**(anthropic_options or {}), 'thinking_display': 'summarized'}
     # A bare Anthropic id is served by the Anthropic API, a vendor/model id by
     # OpenRouter; the sides may differ. Fails here without ANTHROPIC_API_KEY.
     client = create_llm_client(
@@ -484,6 +486,10 @@ def main():
                         help='Captain model of alpha (default: --alpha-model, which also drafts '
                              'and commands as admiral)')
     parser.add_argument('--beta-captain-model', default=None, help='Captain model of beta')
+    parser.add_argument('--thinking-summary', action='store_true',
+                        help='Anthropic ids: request thinking display "summarized" on every call and '
+                             'record the summary per model_call (thinking_summary; audit only, never '
+                             'fed back). Billed the same as the default omitted display')
     parser.add_argument('--seed', type=int, default=20260906)
     parser.add_argument('--port', type=int, default=8765)
     parser.add_argument('--sim-step-delay', type=float, default=0.04)

@@ -108,6 +108,15 @@ MAX_NONSTREAMING_TOKENS = 16000
 # 1.25x and pays for itself on its first re-read.
 DEFAULT_CACHE_TTL = "1h"
 
+# Thinking display values this client can request (claude-api skill, thinking
+# & effort table): the default on every model in ANTHROPIC_MODELS is
+# "omitted" (thinking blocks come back with empty text); "summarized" returns
+# a readable summary. `display` changes visibility only - thinking happens and
+# is billed the same under every setting - but it is part of the thinking
+# config, so it is set per battle (never per call: that would split the
+# cached prefix).
+THINKING_DISPLAYS = ("omitted", "summarized")
+
 # Stored assistant turns (for tool-round continuations), per client.
 _NATIVE_TURN_LIMIT = 256
 
@@ -454,6 +463,7 @@ class AnthropicClient:
         max_retries: int = 2,
         http_client: Any = None,
         stats: Optional[CallStats] = None,
+        thinking_display: Optional[str] = None,
     ):
         """
         Args:
@@ -478,8 +488,16 @@ class AnthropicClient:
                 exponential backoff). This client adds no retry loop on top.
             http_client: an `anthropic.DefaultHttpxClient` (tests inject one
                 with a mock transport).
+            thinking_display: None (default: the request carries no display
+                field, the API omits thinking text) or "summarized": every
+                request asks for the readable thinking summary, which is
+                returned as `thinking_summary` (audit only, never fed back
+                into a prompt). Billed the same as omitted thinking.
         """
         model_spec(model)   # unknown ids fail here, at construction
+        if thinking_display is not None and thinking_display not in THINKING_DISPLAYS:
+            raise ValueError(f"thinking_display must be one of {THINKING_DISPLAYS}, "
+                             f"got {thinking_display!r}")
         if enable_fallbacks and ANTHROPIC_MODELS[model].get("no_fallbacks"):
             raise ValueError(f"{model} has no server-side refusal fallback")
         key = api_key or os.getenv("ANTHROPIC_API_KEY")
@@ -496,6 +514,7 @@ class AnthropicClient:
         self.effort = anthropic_effort(reasoning_effort)
         self.cache_ttl = cache_ttl
         self.enable_fallbacks = enable_fallbacks
+        self.thinking_display = thinking_display
         self.max_retries = max_retries
         self.stats = stats if stats is not None else CallStats()
         self.budget = None
@@ -540,6 +559,7 @@ class AnthropicClient:
             "effort": self.effort,
             "reasoning_effort_setting": self.reasoning_effort,
             "thinking": "adaptive",
+            **({"thinking_display": self.thinking_display} if self.thinking_display else {}),
             "max_tokens": self.max_tokens,
             "tool_choice": "auto",
             "cache_ttl": self.cache_ttl,
@@ -595,7 +615,8 @@ class AnthropicClient:
             "messages": converted,
             # Adaptive thinking is accepted by every model in the table (Sonnet
             # 5.5 / Opus 5.5 / Fable 5.2 reject "disabled"); depth is effort.
-            "thinking": {"type": "adaptive"},
+            "thinking": ({"type": "adaptive", "display": self.thinking_display}
+                         if self.thinking_display else {"type": "adaptive"}),
             "output_config": {"effort": effort},
         }
         if system:
@@ -700,6 +721,11 @@ class AnthropicClient:
         blocks = list(response.content or [])
         tool_blocks = [b for b in blocks if getattr(b, "type", None) == "tool_use"]
         text = "".join(getattr(b, "text", "") for b in blocks if getattr(b, "type", None) == "text")
+        # Summarized thinking (only with thinking_display="summarized"; empty
+        # under the default "omitted"): kept for the recording's audit only.
+        thinking_summary = "\n\n".join(
+            t for t in (getattr(b, "thinking", "") or "" for b in blocks
+                        if getattr(b, "type", None) == "thinking") if t.strip()) or None
         stop_details = None
         if stop == "refusal":
             # A refusal can cut a tool_use off mid-input: never act on that turn.
@@ -742,6 +768,7 @@ class AnthropicClient:
             "max_tokens": request["max_tokens"],
             "content_chars": len(text),
             "effort": request["output_config"]["effort"],
+            "thinking_summary_chars": len(thinking_summary or ""),
         }
         if self.log_cache:
             read, written = native["cache_read_input_tokens"], native["cache_creation_input_tokens"]
@@ -767,6 +794,8 @@ class AnthropicClient:
             "stop_details": stop_details,
             "usage": usage,
         }
+        if thinking_summary:
+            data["thinking_summary"] = thinking_summary
         observer = getattr(self._audit_local, "observer", None)
         if observer:
             observer(self._audit_payload(request, openai_payload), data)

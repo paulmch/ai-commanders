@@ -483,3 +483,37 @@ def test_spend_cap_stops_an_anthropic_battle_with_the_recorded_abort(tmp_path):
     stopped = [e for e in recording["events"] if e["event_type"] == "battle_stopped"]
     assert stopped and "Spending ceiling" in stopped[0]["data"]["reason"]
     assert "Spending ceiling" in recording["result_reason"]
+
+
+# ---------------------------------------------------------------------------
+# Thinking summaries (thinking_display="summarized"): requested, recorded,
+# never fed back
+# ---------------------------------------------------------------------------
+
+def test_thinking_summary_is_requested_only_when_asked_and_returned_for_the_audit():
+    record = []
+    plain = make_client(record=record)
+    plain.decide_with_tools([SYSTEM, {"role": "user", "content": "go"}], [tool("act")])
+    assert record[-1]["thinking"] == {"type": "adaptive"}
+    seen = []
+    summ = make_client(record=record, thinking_display="summarized")
+    with summ.audit_scope(lambda payload, data: seen.append(data)):
+        summ.decide_with_tools([SYSTEM, {"role": "user", "content": "go"}], [tool("act")])
+    assert record[-1]["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert seen[-1]["thinking_summary"].startswith("Mock summary")
+    assert summ.provenance()["thinking_display"] == "summarized"
+    with pytest.raises(ValueError):
+        make_client(thinking_display="verbose")
+
+
+def test_thinking_summaries_are_recorded_per_call_and_never_reach_a_prompt(tmp_path):
+    record = []
+    runner, client, output, data = _battle(tmp_path, "claude-sonnet-5-5", "claude-haiku-5-5",
+                                           record=record, turns=3,
+                                           anthropic_extra={"thinking_display": "summarized"})
+    runner.run_battle(data)
+    calls = _calls(json.loads(output.read_text()))
+    assert calls and all(c["data"]["thinking_summary"].startswith("Mock summary") for c in calls)
+    assert all(r["thinking"] == {"type": "adaptive", "display": "summarized"} for r in record)
+    assert not any("Mock summary" in json.dumps(r["messages"]) or "Mock summary" in json.dumps(r["system"])
+                   for r in record)
