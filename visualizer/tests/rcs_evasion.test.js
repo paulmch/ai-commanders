@@ -18,6 +18,10 @@ test('evasion state: recorder field, then execution mode, then the EVASIVE order
   assert.equal(jinkOf({ evade: 'present' }), JINK_FACE);
   assert.equal(jinkOf({ evade: 'tank' }), JINK_FACE);
   assert.equal(jinkOf({ evade: 'brace' }), JINK_NONE);
+  // the evade overlay on a burning order keeps the burn and swings it: a
+  // BRACE there turns the hull (armour inside the swing cone)
+  assert.equal(jinkOf({ evade: 'brace', swing: 1 }), JINK_FACE);
+  assert.equal(jinkOf({ evade: 'evade', swing: 1 }), JINK_DODGE);
   // the recorder writes evade: null outside evasion; it wins over the mode
   assert.equal(jinkOf({ evade: null, execution_mode: 'PADLOCK', maneuver: 'EVASIVE' }), JINK_NONE);
   // recordings with execution modes but no evade field

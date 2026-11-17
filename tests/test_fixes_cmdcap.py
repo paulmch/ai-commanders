@@ -184,9 +184,29 @@ HEADING = dict(maneuver_type="HEADING", throttle=1.0, evade="full",
 
 class TestHelmWindow:
 
+    def test_a_swung_burn_counts_as_burned_and_is_named(self):
+        # The evade overlay on a burning order keeps the burn and swings it
+        # (execution_state swing: true): those seconds are on the order.
+        swing = dict(requested_throttle=1.0, applied_throttle=1.0, engine_fraction=1.0,
+                     fuel_fraction=1.0, swing=True)
+        events = [_ev("MANEUVER_STARTED", 30.0, **HEADING),
+                  _state(30.0, "HEADING", 1.0, 1.0),
+                  _ev("EXECUTION_STATE", 40.0, mode="EVADE", **swing),
+                  _ev("EXECUTION_STATE", 52.0, mode="BRACE", **swing),
+                  _ev("PROJECTILE_LAUNCHED", 41.0, ship="foe", target="me")]
+        w = helm_window(_helm_sim(events), "me", 30.0, 60.0)
+        assert w["burned_s"] == pytest.approx(30.0) and not w["modes"]
+        assert w["swing"] == {"EVADE": pytest.approx(12.0), "BRACE": pytest.approx(8.0)}
+        text = helm_window_text(_helm_sim(events), "me", 30.0, 60.0)
+        assert text == ("helm T+30-60 (HEADING @100%, evade full): burned 30 of 30 s on your "
+                        "order; evasion swung the burn within 20° of your line 20 s: EVADE 12 s "
+                        "dodging, BRACE 8 s armour (fire from OCS Foe [foe])")
+
     def test_evasion_holding_the_burn_is_named_with_the_threat(self):
         # Recorded (d alpha_1 T+240): "BRACE, requested 100% throttle, applied
-        # 0% (turning onto the burn line, or fuel/engine limited)".
+        # 0% (turning onto the burn line, or fuel/engine limited)". (Recorded
+        # before the evade overlay kept a burning order's burn; the window
+        # line still reads such recordings - and a hold without 'swing'.)
         events = [_ev("MANEUVER_STARTED", 30.0, **HEADING),
                   _state(30.0, "HEADING", 1.0, 0.05),     # 4 s turning
                   _state(34.0, "HEADING", 1.0, 1.0),      # 8 s burning

@@ -1061,3 +1061,32 @@ output, thinking, usd, thinking_calls, thinking_share}], "by_side": {...},
 "total": {...}}`; role `warmup` rows are the cache pre-warms. Live draft
 `status.json` also gains `role_models` (`{side: {admiral, captain}}`),
 `effort_policy` and `experiment` (the mode flags).
+
+## Evade-burn lane (`evadeburn`: the evade overlay on a burning order)
+
+Owner's rule (src/simulation.py module docstring): an evade overlay riding on
+an order that burns keeps the burn the whole time and evades by swinging the
+thrust axis inside `EVADE_BURN_CONE_DEG` (20 deg) of the burn line. Nothing
+new is emitted; two existing records gain a field. Recordings without them
+read as before (no swing).
+
+### `execution_state.swing`
+
+| field | type | meaning |
+|---|---|---|
+| `swing` | bool, only when true | the evade overlay has the helm (`mode` EVADE / TANK / BRACE / PRESENT) and is swinging the order's burn instead of holding it: `applied_throttle` is the order's (`requested_throttle` x engine fraction), the nose within the cone of the burn line. Absent: the older overlay (an engine-off order or the EVADE maneuver - BRACE drive off, TANK half), or no evasion. |
+
+The transition key now includes it, so a change from a held BRACE to a swung
+BRACE at the same throttles is a new `execution_state` event.
+
+### Trace frame field `swing` (per ship, `--trace` recordings)
+
+`swing: 1` next to `evade` on frames where the overlay swings a burn (omitted
+otherwise). The viewer (`render/Rcs.js` `jinkOf`) shows a swung BRACE as an
+armour swing (`JINK_FACE`) instead of a ship holding still.
+
+### `shot_fired.fc.swing`
+
+The fire-control forecast's input for a target swinging a burn: its sideways
+acceleration `burn x sin(cone)` (m/s^2), present only when > 0
+(`TargetMotion.swing_ms2`, priced by `firecontrol.SWING_*_FRACTION`).

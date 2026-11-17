@@ -251,8 +251,15 @@ A per-ship heading/maneuver REPLACES it for that ship (MAINTAIN/PADLOCK = engine
 off; given with a heading - PADLOCK only at throttle > 0 - the ship flies that
 HEADING instead); `evade` alone rides on it - or, with no fleet order, on the
 ship's current maneuver (`src/llm/maneuver_orders.py`, `tests/test_order_semantics.py`).
-The evade overlay burns at the order's throttle, at full throttle under a
-throttle-0 / engine-off order (`CombatSimulation._evasion_overlay`).
+The evade overlay on an order that burns (`_order_burn`: the order itself flies
+>= `EVADE_BURN_MIN_THROTTLE` this tick) keeps the order's throttle and swings the
+thrust axis inside `EVADE_BURN_CONE_DEG` (20 deg) of the burn line - dodging, or
+armour onto an undodgeable round inside the cone; cone and swing cycle per hull
+from thrust-vectoring authority (`_evade_burn_swing`); RUN never below the
+order's throttle (rule in the `src/simulation.py` module docstring,
+`tests/test_evade_burn.py`, `scripts/evade_burn_measure.py`). On a throttle-0 /
+engine-off order (and the EVADE maneuver) it flies the drive as before: full
+throttle, TANK half, BRACE off (`CombatSimulation._evasion_overlay`).
 Plain INTERCEPT never brakes (it merges); the anti-merge forms
 (`src/llm/maneuver_orders.py`; the same fields on captain set_maneuver /
 set_heading, admiral issue_order and MCP set_maneuver): INTERCEPT with
@@ -423,16 +430,17 @@ hashed by the perf harness) is unchanged.
   overlay, HEADING turning / burning, INTERCEPT, PADLOCK) x 100 km so errors cannot
   cancel. The dispersion roll consumes only the conversion part; shot_fired records the
   forecast's inputs (`fc`: dodge, missed jink burn, pending HEADING burn, the stale
-  burn of an order applied that tick). If the gate, the roll, evasion/dodging or the lead
+  burn of an order applied that tick, the swing of a burn). If the gate, the roll, evasion/dodging or the lead
   changes, re-run `scripts/fire_control_calibration.py` (harness + table) and regenerate
   the fixture: 32 `--doctrine legacy` + 32 `--doctrine tactical` heuristic battles and
   every harness round (`fixture ... --harness-keep 1`) into
   `tests/fixtures/fire_control_shots.json`; battles recorded on older engines go to the
   separate historical file (`--label HISTORICAL ...`), which only the flash-mirror
   residual pin reads. Dodgers are bucketed by base maneuver (dodge:PADLOCK,
-  dodge:HOLD_RANGE) and modelled by their state at the shot (calm vs reacting,
-  `firecontrol.DODGE_CALM_ACCEL_FRACTION`). Buckets still outside 1.5x are named in the
-  test's `RESIDUALS`.
+  dodge:HOLD_RANGE, dodge:HEADING) and modelled by their state at the shot (calm vs
+  reacting, `firecontrol.DODGE_CALM_ACCEL_FRACTION`); one swinging a burn (the overlay
+  on a burning order, fc `swing`) by `firecontrol.SWING_*_FRACTION`. Buckets still
+  outside 1.5x are named in the test's `RESIDUALS`.
   The doctrine P(hit) table is bound by `tests/test_prompt_structure.py`. Known residual:
   LLM fleets dodging a whole fleet's fire were hit even less than forecast
   (firecontrol.JINK_ACCEL_FRACTION).

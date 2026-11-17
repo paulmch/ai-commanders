@@ -643,8 +643,9 @@ DEFENSE - ARMOR IS ASPECT-DEPENDENT:
   nose it strikes NOSE armor, beyond that it strikes LATERAL, and from behind
   (past {tail_cone_deg:.0f}° off the nose) it strikes TAIL.
 - Turning the nose past {nose_cone_deg:.0f}° off the threat presents thinner plating. Evasion
-  turns the hull too: TANK and PRESENT turn the best remaining armor onto the threat; a jink
-  (EVADE) or a RUN can show the flank or the tail.
+  turns the hull too: TANK and PRESENT turn the best remaining armor onto the threat - on a
+  burning order only within 20° of the burn line, so a threat from abeam or astern still
+  strikes the flank or the tail; a jink (EVADE) or a RUN can show the flank or the tail.
 - The dangerous moment is the BREAK-AWAY turn after an attack run - that is when
   you swing your flank through the enemy's guns.
 
@@ -669,8 +670,9 @@ DEFENSE - ARMOR IS ASPECT-DEPENDENT:
   nose it strikes NOSE armor, beyond that it strikes LATERAL, and from behind
   (past {tail_cone_deg:.0f}° off the nose) it strikes TAIL.
 - Turning the nose past {nose_cone_deg:.0f}° off the threat presents thinner plating. Evasion
-  turns the hull too: TANK and PRESENT turn the best remaining armor onto the threat; a jink
-  (EVADE) or a RUN can show the flank or the tail.
+  turns the hull too: TANK and PRESENT turn the best remaining armor onto the threat - on a
+  burning order only within 20° of the burn line, so a threat from abeam or astern still
+  strikes the flank or the tail; a jink (EVADE) or a RUN can show the flank or the tail.
 - The dangerous moment is the BREAK-AWAY turn after an attack run - that is when
   you swing your flank through the enemy's guns.
 
@@ -1057,8 +1059,8 @@ OPTION C - EVADE AND SHOOT:
   EVADE constantly - random thrust makes you unpredictable (holds your course)
   Pros: Very hard to hit, fires continuously
   Cons: Burns fuel faster, harder to line up spinal shots, does not control range; under
-  fire the same evasion holds the drive (BRACE: off, TANK: half) - also as the evade
-  field on a burn order
+  fire the same evasion holds the drive (BRACE: off, TANK: half). As the evade field on
+  a burn order it keeps your burn instead and swings it within 20° of your line
 
 OPTION D - HOLD RANGE / KITE:
   cancel closure at your chosen range, then alternate coast-and-shoot with short
@@ -1114,11 +1116,17 @@ MANEUVERS:
   torpedoes it automatically RUNS (burns away from the round to cut closure and buy your
   PD dwell time) and in the final seconds automatically PRESENTS your thickest armor to
   the impact. Only EVADE (or the evade field on another maneuver) does this - without it
-  a maneuver takes torpedoes, including blinded ones, without reacting. Evasion owns the
-  drive while it reacts: BRACE turns it off (a round inbound, no time to jink), TANK
-  burns at half throttle while turning armor onto the round - a burn order with evade
-  flies only part of its window under fire (ENGINE FEEDBACK's helm line says how much).
-  As a maneuver EVADE replaces your heading; the evade field rides on it.
+  a maneuver takes torpedoes, including blinded ones, without reacting. On an order that
+  burns (a heading, INTERCEPT, the burns of HOLD_RANGE / standoff) the evade field keeps
+  your throttle the whole time and swings the burn within 20° of your line - ~94%
+  of the push stays on it: it dodges across inbound rounds and, when one cannot be
+  dodged, swings the best armor it can reach inside that cone onto it (a round from abeam
+  or astern still strikes the flank or the tail). RUN (evade full, a guided torpedo)
+  leaves the line to burn away from it, never below your throttle. On an order that does
+  not burn (PADLOCK, MAINTAIN, throttle 0) and as the EVADE maneuver, evasion owns the
+  drive while it reacts: BRACE turns it off (a round inbound, no time to jink), TANK burns
+  at half throttle while turning armor onto the round. ENGINE FEEDBACK's helm line says
+  what was flown. As a maneuver EVADE replaces your heading; the evade field rides on it.
   With no threat it weaves around your CURRENT course: it never chases, but it
   never brakes either - EVADE does not stop a merge.
 - BRAKE: burn against your own (world-frame) velocity - not against the enemy's
@@ -2835,10 +2843,18 @@ MANEUVERS (tell captains which to use):
 - EVADE: Threat-aware defense - jinks vs guns, RUNS/PRESENTS vs torpedoes. With no threat
   it weaves around the ship's CURRENT course: it never chases and never brakes, so an
   EVADE order does not stop a merge. The evade overlay (evade full/dodge on another
-  order) works the same way: while rounds are inbound IT flies the drive - jinks, TANK
-  (half throttle) or BRACE (drive off) - so a burn ordered "with evade" under fire burns
-  only a small part of the time; without the overlay the ship flies the burn and takes
-  the hits it was going to take.
+  order) on an order that BURNS keeps the burn the whole time: while rounds are inbound
+  it swings the thrust within 20° of the ordered line (~94% of the push stays on
+  it), dodging, and turns armour onto a round it cannot dodge only inside that cone - a
+  round from abeam or astern still strikes the flank or tail; RUN (full, vs a guided
+  torpedo) leaves the line to burn away. Measured (seeded, 12 runs each): a destroyer
+  burning across the line of fire of 3 gun ships 120-200 km off burned on its order
+  100% of the time under fire and took 10% of the rounds fired at it, 38% without the
+  overlay; a dreadnought (a narrower, slower swing) 45% against 50%. A destroyer burning
+  straight away from 2 gun ships 150 km off showed them its tail either way and was lost
+  in 7 of 12 runs with the overlay, 12 of 12 without. On an order that does not burn
+  (PADLOCK, MAINTAIN, throttle 0) the overlay flies the drive: jinks at full throttle,
+  TANK (half throttle) or BRACE (drive off).
 - BRAKE: burn against the ship's own (world-frame) velocity
 - MAINTAIN: engine OFF - coast at current velocity, no thrust, no rotation
 - PADLOCK: engine off, the nose tracks the target (spinal on him) - coast and shoot

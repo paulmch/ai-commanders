@@ -711,6 +711,9 @@ class TraceEnricher:
       evade  None | "wobble" | "evade" | "tank" | "brace" | "run" | "present"
              - active mode of an EVASIVE maneuver, or of another maneuver's
              evasion overlay (Maneuver.evade) while it has the helm.
+      swing  1 when that overlay rides on a burning order and keeps the
+             burn, swinging the thrust axis inside the cone around the burn
+             line (simulation module docstring); omitted otherwise.
       tgt    ship id the maneuver steers relative to (INTERCEPT / PADLOCK /
              HOLD_RANGE target, HEADING toward_ship, or an explicitly
              assigned one), else None. A wobbling EVASIVE holds its own
@@ -802,6 +805,8 @@ class TraceEnricher:
             entry["alpha"] = _vec(alpha, 5)
             entry["turn"] = turn
             entry["evade"] = evade
+            if evade is not None and getattr(ship, "evade_swing", False):
+                entry["swing"] = 1
             entry["tgt"] = tgt
             plan = plans.get(sid)
             if plan is not None:
