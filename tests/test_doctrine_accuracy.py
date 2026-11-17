@@ -1197,3 +1197,42 @@ class TestWeaponArcsDoctrine:
             sim.step()
             ticks += 1
         assert ticks == pytest.approx(self._numbers()["cruiser_roll_90_s"], abs=3.0)
+
+
+class TestEvasionDriveClaims:
+    """
+    cmdcap: the captain doctrine, the evade field descriptions and the helm
+    feedback say BRACE turns the drive OFF and TANK burns at HALF throttle -
+    the throttle modifiers simulation._calculate_evasion returns.
+    """
+
+    def _ship(self):
+        import json
+        from src.simulation import CombatSimulation, create_ship_from_fleet_data
+        with open("data/fleet_ships.json") as f:
+            fleet = json.load(f)
+        sim = CombatSimulation(time_step=1.0, seed=1)
+        ship = create_ship_from_fleet_data("a", "destroyer", "alpha", fleet,
+                                           position=Vector3D(0, 0, 0), forward=Vector3D(1, 0, 0))
+        sim.add_ship(ship)
+        return sim, ship
+
+    def test_tank_is_half_throttle(self):
+        from src.simulation import EVASION_MIN_JINK_S, EVASION_TURN_ALLOWANCE_S
+        sim, ship = self._ship()
+        urgent = {"tca": min(EVASION_TURN_ALLOWANCE_S + EVASION_MIN_JINK_S, 6.0) - 0.5,
+                  "miss_dist": 0.0, "rel_vel": Vector3D(-5000.0, 0.0, 0.0)}
+        _, mode, throttle = sim._ballistic_evasion_decision(ship, [urgent], urgent, 50.0)
+        assert mode == "TANK" and throttle == 0.5
+
+    def test_brace_is_drive_off(self):
+        sim, ship = self._ship()
+        urgent = {"tca": 1.0, "miss_dist": 0.0, "rel_vel": Vector3D(-5000.0, 0.0, 0.0)}
+        assert sim._ballistic_evasion_decision(ship, [urgent], urgent, 50.0) is None   # -> BRACE
+        from src.llm.execution_feedback import _EVASION_TAG
+        assert _EVASION_TAG["BRACE"] == "drive off" and _EVASION_TAG["TANK"] == "half throttle"
+
+    def test_doctrine_states_them(self):
+        from src.llm.prompts import build_captain_doctrine
+        doc = " ".join(build_captain_doctrine(ship_type="destroyer").split())
+        assert "BRACE turns it off" in doc and "TANK burns at half throttle" in doc
