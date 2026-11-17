@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import * as THREE from 'three';
 import { buildDamageTimeline, damageStateAt } from '../src/DamageTimeline.js';
 import { DamageFX } from '../src/render/DamageFX.js';
@@ -99,46 +99,214 @@ test('the smoke ring keeps no expired puff, and its buffers do not depend on the
 });
 
 // --------------------------------------------------------------------------
-// Every GLSL pow() in the hull damage effects has a base that cannot go
-// negative. A new pow() must be reviewed and listed here with its reason.
+// GLSL lint over every viewer source that carries shader code (template
+// literals under src/ that read as GLSL). Undefined on a negative argument:
+// pow() base, sqrt / inversesqrt / log / log2; normalize() of a zero
+// vector is NaN. An argument passes when a guard spans all of it
+// (max/clamp/abs/exp/...), when it is 0.5 + 0.5 * sin|cos(...), dot(v, v),
+// or a literal; anything else must be listed below with the reason it
+// cannot go negative. normalize() cannot be decided from the text: every
+// site is listed with its category, so a new one gets reviewed.
 // --------------------------------------------------------------------------
-const NON_NEGATIVE = new Map([
-  ['1.0 - t', 'vent: t = cone position.y, 0..1'],
-  ['vEdge', 'vent: abs(dot(...))'],
-  ['1.0 - fl', 'smoke: fl = clamp(f, 0.0, 1.0)'],
-  ['facing', 'plume wash: facing < 0.03 is discarded first'],
-  ['loss', 'hull wear: lossOf() clamps to 0..1'],
-  ['ndv', 'blast shell: abs(dot(...))']
-]);
+const REVIEWED = new Map(Object.entries({
+  // pow() bases
+  'render/BlastShell.js|pow|ndv': 'abs(dot(...))',
+  'render/DamageFX.js|pow|vEdge': 'vent: abs(dot(...))',
+  'render/DamageFX.js|pow|1.0 - fl': 'smoke: fl = clamp(f, 0.0, 1.0)',
+  'render/DamageFX.js|pow|facing': 'plume wash: facing < 0.03 is discarded first',
+  'render/Environment.js|pow|h.y': 'hash33() is fract(): 0..1',
+  'render/Environment.js|pow|clouds': 'fbm() clamps to 0..1',
+  'render/Environment.js|pow|thick * 0.5': 'thick = 0.07 + 0.12 * exp(...)',
+  'render/Environment.js|pow|fa': 'max(0.0, dot(...))',
+  'render/Environment.js|pow|fb': 'max(0.0, dot(...))',
+  'render/Environment.js|pow|ci': 'fbm() clamps to 0..1',
+  'render/Environment.js|pow|mu': 'sqrt(max(...)) / max(dot(...), 0.0)',
+  'render/HullWear.js|pow|loss': 'lossOf() clamps to 0..1',
+  'render/Particles.js|pow|1.0 - f': 'f = clamp(age / aLife, 0.0, 1.0)',
+  'render/PostFX.js|pow|abs(sin(ang * 3.0 + 0.35)) * w': 'w = r / 0.0028, r = length(...)',
+  'render/PostFX.js|pow|abs(sin(ang * 3.0 + 0.35 + 0.5236)) * w * 1.4': 'w = r / 0.0028, r = length(...)',
+  'render/Rcs.js|pow|ndv': 'abs(dot(...))',
+  'render/Torch.js|pow|t': 't = clamp(s / uLen, 0.0, 1.0)',
+  // sqrt / inversesqrt / log2 arguments
+  'render/DamageFX.js|sqrt|s': 'vent strength: product of non-negatives, zeroed below 0.035',
+  'render/DamageFX.js|inversesqrt|c2': 'c2 = dot(c, c) > 1e-30 (smaller is discarded)',
+  'render/PostFX.js|sqrt|(fi + 0.5) / 16.0': 'loop index fi >= 0',
+  'render/PostFX.js|sqrt|(fi + 0.5) / float(TAPS)': 'loop index fi >= 0',
+  'render/PostFX.js|sqrt|vv': 'vv = dot(v, v)',
+  'render/Torch.js|sqrt|dd': 'dd = max(dot(rd.xy, rd.xy), 1e-6)',
+  'render/Tracks.js|log2|uDashPx * fw / uDashBase': 'fw = max(fwidth(...), 1e-6); only under uDashBase > 0',
+  'render/WeaponBatches.js|sqrt|u': 'u = mix(u0, u1, uv.x), clip parameters in 0..1'
+}));
 
-function powBases(src) {
+// normalize(): zero only in the listed degenerate case (flagged, not fixed)
+const NORMALIZE = new Map(Object.entries({
+  'render/BlastShell.js|normalMatrix * normal': 'normal attribute',
+  'render/BlastShell.js|position': 'sphere vertex, never the centre',
+  'render/BlastShell.js|vNormal': 'interpolated normal (zero only between opposite vertex normals)',
+  'render/BlastShell.js|vView': 'view vector (zero only at the camera)',
+  'render/DamageFX.js|-mv.xyz': 'view vector (zero only at the camera)',
+  'render/DamageFX.js|aNorm * 1.15 + rnd': 'spark direction: zero only if the random kick exactly cancels the normal',
+  'render/DamageFX.js|mat3(modelViewMatrix) * mat3(instanceMatrix) * normal': 'normal attribute (vent cone)',
+  'render/Environment.js|cameraPosition - vWorld': 'view vector (zero only at the camera)',
+  'render/Environment.js|closest - uCenter': 'planet: ray closest point vs centre (zero only through the exact centre)',
+  'render/Environment.js|d + w * 0.07': 'unit direction plus a small warp',
+  'render/Environment.js|mat3(modelMatrix) * normal': 'normal attribute',
+  'render/Environment.js|vDir': 'interpolated sky direction',
+  'render/Environment.js|vNormal': 'interpolated normal (sphere)',
+  'render/Environment.js|vWorld - cameraPosition': 'view vector (zero only at the camera)',
+  'render/Explosion.js|normalMatrix * normal': 'normal attribute',
+  'render/Explosion.js|position': 'sphere vertex, never the centre',
+  'render/Explosion.js|vLocal': 'interpolated sphere position',
+  'render/Explosion.js|vNormal': 'interpolated normal (sphere)',
+  'render/Explosion.js|vView': 'view vector (zero only at the camera)',
+  'render/Heat.js|normalMatrix * normal': 'normal attribute',
+  'render/Heat.js|vN': 'interpolated normal (zero only between opposite vertex normals)',
+  'render/Heat.js|vV': 'view vector (zero only at the camera)',
+  'render/HullWear.js|vWearNor': 'interpolated normal (flat-shaded hull parts)',
+  'render/PostFX.js|p + 1e-5': 'flare: screen offset from the optical centre (zero on one exact texel)',
+  'render/PostFX.js|s + 1e-5': 'flare: sun offset from the optical centre (zero on one exact texel)',
+  'render/Rcs.js|mat3(viewMatrix) * (mat3(m) * vec3(0.0, 0.0, 1.0))': 'rotated unit axis',
+  'render/Rcs.js|mat3(viewMatrix) * (nm * normal)': 'normal attribute',
+  'render/Rcs.js|mv.xyz': 'view vector (zero only at the camera)',
+  'render/Rcs.js|vNormal': 'interpolated normal (zero only between opposite vertex normals)',
+  'render/Rcs.js|vViewDir': 'view vector (zero only at the camera)',
+  'render/Torch.js|vPos - vCam': 'view ray (zero only at the camera)',
+  'render/Tracks.js|aTangent': 'zero for coincident samples: NaN side vector falls back (length test)',
+  'render/Tracks.js|cameraPosition - wp': 'view vector (zero only at the camera)',
+  'render/Tracks.js|normalMatrix * normal': 'normal attribute',
+  'render/Tracks.js|vN': 'interpolated normal (zero only between opposite vertex normals)',
+  'render/Tracks.js|vV': 'view vector (zero only at the camera)',
+  'render/Trails.js|aTangent': 'zero for coincident samples: NaN side vector falls back (length test)',
+  'render/Trails.js|cameraPosition - wp': 'view vector (zero only at the camera)',
+  'render/WeaponBatches.js|aAxis': 'flash axis: a normalised firing direction',
+  'render/WeaponBatches.js|d': 'ribbon: only when length(d) > 1e-7 (ternary)',
+  'render/WeaponBatches.js|ax.xy': 'torpedo marker: only when length(ax.xy) > 1e-6 (ternary)',
+  'render/WeaponBatches.js|cross(n, abs(n.y) < 0.9 ? vec3(0.0,1.0,0.0) : vec3(1.0,0.0,0.0))': 'unit n crossed with an axis it is not parallel to'
+}));
+
+const SRC = new URL('../src/', import.meta.url);
+function sourceFiles(dir = SRC, rel = '') {
   const out = [];
-  const re = /(^|[^A-Za-z0-9_.])pow\(/g;
-  let m;
-  while ((m = re.exec(src))) {
-    let i = m.index + m[0].length, depth = 0, base = '';
-    for (; i < src.length; i++) {
-      const c = src[i];
-      if (c === '(') depth++;
-      else if (c === ')') depth--;
-      else if (c === ',' && depth === 0) break;
-      base += c;
-    }
-    out.push(base.trim());
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (e.isDirectory()) out.push(...sourceFiles(new URL(`${e.name}/`, dir), `${rel}${e.name}/`));
+    else if (e.name.endsWith('.js')) out.push({ url: new URL(e.name, dir), name: `${rel}${e.name}` });
   }
   return out;
 }
 
-test('damage shaders never take pow() of a base that can go negative (NaN on GPUs)', () => {
-  // DamageFX/HullWear: hull damage; Explosion/BlastShell: the blasts spawned at every hit
-  for (const file of ['../src/render/DamageFX.js', '../src/render/HullWear.js', '../src/render/Explosion.js', '../src/render/BlastShell.js']) {
-    const src = readFileSync(new URL(file, import.meta.url), 'utf8').replace(/Math\.pow\(/g, 'Math_pow(').replace(/\/\/[^\n]*/g, '');
-    const bases = powBases(src);
-    assert.ok(bases.length > 0 || file.includes('HullWear'), file);
-    for (const b of bases) {
-      const guarded = /^(max|clamp|abs)\(/.test(b) || NON_NEGATIVE.has(b);
-      assert.ok(guarded, `${file}: pow(${b}, ...) - can the base go negative? Use dmgSq() for squares, clamp the base, or list it in NON_NEGATIVE with the reason`);
+/** Template-literal bodies (${...} blanked) with their offsets; JS comments and strings skipped. */
+function templates(src) {
+  const out = [];
+  for (let i = 0; i < src.length;) {
+    const c = src[i];
+    if (c === '/' && src[i + 1] === '/') { while (i < src.length && src[i] !== '\n') i++; continue; }
+    if (c === '/' && src[i + 1] === '*') { i = src.indexOf('*/', i + 2) + 2; continue; }
+    if (c === "'" || c === '"') { i++; while (i < src.length && src[i] !== c) { if (src[i] === '\\') i++; i++; } i++; continue; }
+    if (c !== '`') { i++; continue; }
+    let j = i + 1, body = '';
+    const start = j;
+    while (j < src.length && src[j] !== '`') {
+      if (src[j] === '\\') { body += '  '; j += 2; continue; }
+      if (src[j] === '$' && src[j + 1] === '{') {
+        let d = 1, k = j + 2;
+        while (d && k < src.length) { if (src[k] === '{') d++; else if (src[k] === '}') d--; k++; }
+        body += ' '.repeat(k - j); j = k; continue;
+      }
+      body += src[j++];
+    }
+    out.push({ body, start });
+    i = j + 1;
+  }
+  return out;
+}
+
+/** Every pow/sqrt/inversesqrt/log/log2/normalize call in GLSL: {fn, arg (first), line}. */
+export function glslCalls(src) {
+  const calls = [];
+  for (const t of templates(src)) {
+    if (!/\b(gl_|uniform |varying |vec[234]\b)/.test(t.body)) continue;
+    const body = t.body.replace(/\/\/[^\n]*/g, (m) => ' '.repeat(m.length));
+    const re = /(^|[^A-Za-z0-9_.])(pow|sqrt|inversesqrt|log|log2|normalize)\(/g;
+    let m;
+    while ((m = re.exec(body))) {
+      let k = m.index + m[0].length, d = 0, arg = '';
+      for (; k < body.length; k++) {
+        const ch = body[k];
+        if (ch === '(') d++;
+        else if (ch === ')') { if (!d) break; d--; } else if (ch === ',' && !d && m[2] === 'pow') break;
+        arg += ch;
+      }
+      const line = src.slice(0, t.start + m.index).split('\n').length;
+      calls.push({ fn: m[2], arg: arg.replace(/\s+/g, ' ').trim(), line });
     }
   }
-  assert.deepEqual(powBases('float x = pow(1.0 - f, 1.4) + pow(max(a, 0.0), 2.0);'), ['1.0 - f', 'max(a, 0.0)']);
+  return calls;
+}
+
+/** True when a guard function spans the whole expression: max(...), abs(...) etc. */
+function wrapped(arg, names) {
+  const m = /^([A-Za-z_][A-Za-z0-9_]*)\(/.exec(arg);
+  if (!m || !names.includes(m[1])) return false;
+  let d = 0;
+  for (let i = m[0].length - 1; i < arg.length; i++) {
+    if (arg[i] === '(') d++;
+    else if (arg[i] === ')' && --d === 0) return i === arg.length - 1;
+  }
+  return false;
+}
+const NONNEG = ['max', 'clamp', 'abs', 'exp', 'exp2', 'sqrt', 'length', 'fract', 'smoothstep', 'step', 'dot2'];
+export function provablyNonNegative(arg) {
+  if (/^\d+(\.\d*)?$/.test(arg)) return true;                                   // literal
+  if (wrapped(arg, NONNEG)) return true;
+  if (/^0\.5\s*\+\s*0\.5\s*\*\s*(sin|cos)\(/.test(arg) && wrapped(arg.replace(/^0\.5\s*\+\s*0\.5\s*\*\s*/, ''), ['sin', 'cos'])) return true;
+  const dv = /^dot\((.+), (.+)\)$/.exec(arg);                                  // dot(v, v)
+  return !!(dv && dv[1] === dv[2]);
+}
+
+test('viewer GLSL: no pow/sqrt/log of a value that can go negative, every normalize() reviewed', () => {
+  const problems = [], seen = new Set(), seenN = new Set();
+  let files = 0;
+  for (const f of sourceFiles()) {
+    const calls = glslCalls(readFileSync(f.url, 'utf8'));
+    if (calls.length) files++;
+    for (const c of calls) {
+      if (c.fn === 'normalize') {
+        const key = `${f.name}|${c.arg}`;
+        seenN.add(key);
+        if (!NORMALIZE.has(key)) problems.push(`${f.name}:${c.line} normalize(${c.arg}): can it be zero? Guard it or list it in NORMALIZE`);
+        continue;
+      }
+      const key = `${f.name}|${c.fn}|${c.arg}`;
+      if (provablyNonNegative(c.arg)) continue;
+      seen.add(key);
+      if (!REVIEWED.has(key)) problems.push(`${f.name}:${c.line} ${c.fn}(${c.arg}${c.fn === 'pow' ? ', ...' : ''}): can it go negative? Clamp it, write squares as x * x, or list it in REVIEWED`);
+    }
+  }
+  assert.deepEqual(problems, []);
+  assert.ok(files >= 12, `scanned ${files} files with GLSL math`);
+  // stale entries would hide a later site with the same text
+  for (const k of REVIEWED.keys()) assert.ok(seen.has(k), `REVIEWED entry no longer in the code: ${k}`);
+  for (const k of NORMALIZE.keys()) assert.ok(seenN.has(k), `NORMALIZE entry no longer in the code: ${k}`);
+});
+
+test('the GLSL lint parses calls and guards the way it claims', () => {
+  const src = 'const s = /* glsl */`\n  uniform float u;\n  void main() { float x = pow(1.0 - f, 1.4) + pow(max(a, 0.0), 2.0) + sqrt(dot(v, v)) + log2(abs(q) - 1.0); vec3 n = normalize(cross(a, b)); }`;';
+  const calls = glslCalls(src);
+  assert.deepEqual(calls.map(c => [c.fn, c.arg]), [['pow', '1.0 - f'], ['pow', 'max(a, 0.0)'], ['sqrt', 'dot(v, v)'], ['log2', 'abs(q) - 1.0'], ['normalize', 'cross(a, b)']]);
+  assert.deepEqual(calls.map(c => provablyNonNegative(c.arg)), [false, true, true, false, false]);
+  assert.equal(provablyNonNegative('0.5 + 0.5 * sin(x * 3.0)'), true);
+  assert.equal(provablyNonNegative('0.5 + 0.5 * sin(x) - 1.0'), false);
+  assert.equal(provablyNonNegative('max(a, 0.0) - 1.0'), false);
+  // JS outside template literals is not GLSL
+  assert.deepEqual(glslCalls('const n = normalize(v); const k = `<div>${normalize(x)}</div>`;'), []);
+});
+
+test('NaN/Inf guard where the scene colour enters the bloom chain and the flare meter', () => {
+  const guard = 'all(lessThan(abs(c), vec3(1.0e30))) ? c : vec3(0.0)';
+  const bloom = readFileSync(new URL('../src/render/Bloom.js', import.meta.url), 'utf8');
+  const tap = /vec3 tap\(vec2 o\) \{[^}]*\}/.exec(bloom.slice(bloom.indexOf('DOWN_FRAG')))?.[0] || '';
+  assert.ok(tap.includes('texture2D(tSrc') && tap.includes(guard), 'every downsample tap (prefilter = scene input) is guarded');
+  const post = readFileSync(new URL('../src/render/PostFX.js', import.meta.url), 'utf8');
+  const vis = post.slice(post.indexOf('const VIS_FRAG'), post.indexOf('const GOD_FRAG'));
+  assert.ok(vis.includes(`c = ${guard}`), 'sun visibility taps of the scene are guarded');
 });

@@ -150,7 +150,7 @@ const ribbonFragment = /* glsl */`
       // longer bead; spinal and siege rounds drag a beaded ionisation sheath.
       float cls = vAge;
       float head = exp(-x * (11.0 - 2.0 * cls));
-      float tail = pow(1.0 - x, 0.7);
+      float tail = pow(max(1.0 - x, 0.0), 0.7);
       vec3 hot = mix(vec3(3.4,3.05,2.65), vec3(3.2,3.3,3.6), smoothstep(1.5, 2.5, cls));
       color = hot * core * (0.3 * tail + (1.15 + 0.3 * cls) * head)
         + edge * halo * (0.7 + 0.25 * cls) * (0.55 * tail + 0.6 * head);
@@ -266,7 +266,8 @@ const flashFragment = /* glsl */`
     if (vStyle.z < 0.5) {
       float angle = atan(p.y,p.x);
       float arc = pow(0.5+0.5*sin(angle*7.0+vStyle.w*73.0),3.0);
-      float ring = exp(-pow((r-0.67)*24.0,2.0))*(0.3+0.7*arc);
+      float rq = (r-0.67)*24.0;   // a product: pow(<0, 2.0) is NaN on some GPUs
+      float ring = exp(-rq*rq)*(0.3+0.7*arc);
       col = vec3(2.6,3.2,3.6)*exp(-r*r*45.0) + vec3(0.16,1.15,1.9)*ring + vec3(0.06,0.3,0.6)*halo*0.5;
     } else if (vStyle.z > 5.5) {
       // PD laser glint (emitter lens, burn spot): white kernel, green skirt
