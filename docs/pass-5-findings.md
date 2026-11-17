@@ -282,6 +282,16 @@ turns on thrust vectoring.
 | destroyer cancelling 2 km/s closure on 2 gun ships: closest approach | 15 km | 50 km | 52 km |
 | same on 1 destroyer: closest approach / closing at 60 s | 47 km / 1.5 km/s | 71 km / 1.0 km/s | 69 km / 1.0 km/s |
 
+- Helm measurement of the original report (stub battles, a ship ordered HEADING @100 % across
+  the line of fire, its nose starting off the heading): it burned on its order 94 % of its
+  time under fire with the overlay, up from 2 %. Without the overlay the figure is 81 %.
+- Torpedo wall (admiral doctrine fixture, 500 km): burning straight away with evade full,
+  66 % -> 36 % of rounds hit, now all on the tail as without the overlay (37 %). The older
+  overlay turned the nose onto the rounds.
+- `scripts/tactics_eval.py`, 24 mirror battles of tactical vs legacy captains: tactical
+  wins 17 of 24 before and after. Kills went from 83 to 82, and torpedo hits from 376 to
+  354.
+
 **What it costs.**
 - The older overlay saved ships that turned away from guns by turning the nose (5-6 times
   the tail's armour) back onto them and halving or stopping the burn. The new overlay keeps
