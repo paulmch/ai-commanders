@@ -474,10 +474,7 @@ Examples:
         ledger = ledger_run = None
         if client is not None and (not args.mock_llm or args.ledger):
             ledger = SpendLedger(args.ledger or DEFAULT_LEDGER)
-            ledger_run = ledger.open_run(
-                script="run_llm_battle", name=Path(args.fleet_config or "duel").stem, models=llm_ids,
-                cap_usd=args.spend_limit if args.spend_limit is not None else 0.0,
-                ledger_cap_usd=args.ledger_cap, mock=args.mock_llm)
+            ledger.check(args.spend_limit or 0.0, args.ledger_cap)
 
         if args.unlimited and not args.quiet:
             print("UNLIMITED MODE: Battle will continue until destruction, surrender, or mutual draw")
@@ -494,12 +491,18 @@ Examples:
             fleet_config=fleet_config,
         )
 
+        if ledger is not None:
+            # Reserved only now, right before the first request.
+            ledger_run = ledger.open_run(
+                script="run_llm_battle", name=Path(args.fleet_config or "duel").stem, models=llm_ids,
+                cap_usd=args.spend_limit if args.spend_limit is not None else 0.0,
+                ledger_cap_usd=args.ledger_cap, mock=args.mock_llm)
         status = "error"
         try:
             result = runner.run_battle(fleet_data)
             status = "stopped" if getattr(runner, "stop_reason", None) else "done"
         finally:
-            if ledger is not None:
+            if ledger_run is not None:
                 stats = client.stats
                 ledger.close_run(ledger_run, calls=stats.calls,
                                  tokens={"prompt": stats.prompt_tokens, "cache_read": stats.cached_tokens,

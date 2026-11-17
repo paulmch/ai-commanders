@@ -137,3 +137,20 @@ def test_replay_cap_refuses_requests_beyond_it_and_the_ledger_records_the_run(re
     close = [json.loads(x) for x in open(ledger)][-1]
     assert close["status"] == "stopped" and close["script"] == "replay_turn" and close["mode"] == "mock"
     assert SpendLedger(ledger).total_usd() == 0.0     # mock runs never count
+
+
+def test_selection_file_round_trip_and_two_battles_in_one_folder_keep_distinct_keys(recording, tmp_path):
+    import shutil
+    sel = tmp_path / "sel.json"
+    assert rt.main([str(recording), "--role", "order", "--checkpoint", "2", "--dry-run",
+                    "--variant", "claude-sonnet-5-5:low", "--save-selection", str(sel)]) == 0
+    keys = json.loads(sel.read_text())
+    args = rt.parse_args([str(recording), "--select", str(sel), "--variant", "claude-sonnet-5-5:low"])
+    picked = rt.select_calls(rt.load_calls([recording]), args)
+    assert keys and [rt.call_key(c) for c in picked] == keys
+    folder = tmp_path / "two"
+    folder.mkdir()
+    shutil.copy(recording, folder / "battle_a.json")
+    shutil.copy(recording, folder / "battle_b.json")
+    calls = rt.load_calls(rt.recording_files(folder))
+    assert len({rt.call_key(c) for c in calls}) == len(calls)

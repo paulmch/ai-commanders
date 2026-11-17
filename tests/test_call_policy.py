@@ -187,3 +187,64 @@ def test_admiral_over_cheaper_captains_on_one_side(tmp_path):
     assert roles[("alpha", "directive")] == roles[("alpha", "order")] == "claude-opus-5-5"
     assert roles[("alpha", "captain")] == "claude-haiku-5-5"
     assert roles[("beta", "captain")] == "claude-sonnet-5"
+
+
+def test_merge_and_damage_triggers_fire_in_a_real_gun_fight_and_match_the_captains_warning(tmp_path):
+    """The runner's trigger data is not silently empty: a closing gun fight on the
+    mock produces merge and damage triggers, and the cheap detail=False range
+    picture warns exactly when the captain's own (detail=True) one does."""
+    from collections import Counter
+    from src.llm.range_control import analyze_range_control
+    policy = {s: {"trigger": "high"} for s in ("alpha", "beta")}
+    runner, client, output, data = _battle(tmp_path, "claude-sonnet-5-5", "claude-sonnet-5-5", turns=12,
+                                           ships=("destroyer", "destroyer"),
+                                           config={"effort_policy": policy})
+    original = runner._captain_turn_facts
+    checked = []
+
+    def facts(ship_id, captain, orders):
+        ship = runner.simulation.get_ship(ship_id)
+        cheap = any(i.warning for i in analyze_range_control(runner.simulation, [ship], detail=False))
+        full = any(i.warning for i in analyze_range_control(runner.simulation, [ship], detail=True))
+        checked.append((cheap, full))
+        return original(ship_id, captain, orders)
+
+    runner._captain_turn_facts = facts
+    runner.run_battle(data)
+    reasons = Counter()
+    for e in json.loads(output.read_text())["events"]:
+        if e["event_type"] == "model_call" and e["data"]["role"] == "captain":
+            reason = e["data"]["effort_reason"]
+            for r in reason.replace("trigger:", "").split(","):
+                reasons[r] += 1
+            assert e["data"]["effort"] == ("high" if reason.startswith("trigger:") else "medium")
+    assert reasons["merge"] > 0 and reasons["damage"] > 0 and reasons["default"] > 0
+    assert checked and all(cheap == full for cheap, full in checked)
+    assert any(full for _, full in checked)
+
+
+def test_fleet_json_effort_blocks_and_cli_effort_merge(tmp_path):
+    from scripts import run_llm_battle
+    from src.llm.fleet_config import BattleFleetConfig
+    from src.recording_io import load_recording
+    config = {
+        "battle_name": "effort json", "time_limit_s": 90, "decision_interval_s": 30,
+        "initial_distance_km": 500, "max_checkpoints": 2, "seed": 3, "personality_selection": False,
+        "alpha_fleet": {"admiral": "claude-sonnet-5-5", "effort": {"directive": "high", "captain": "low"},
+                        "ships": [{"ship_type": "frigate", "model": "claude-haiku-5-5"}]},
+        "beta_fleet": {"admiral": "claude-sonnet-5", "ships": [{"ship_type": "frigate", "model": "claude-sonnet-5"}]},
+    }
+    path = tmp_path / "fleet.json"
+    path.write_text(json.dumps(config))
+    from src.llm.battle_runner import BattleConfig
+    assert BattleConfig.from_fleet_config(BattleFleetConfig.from_json(str(path))).effort_policy == {
+        "alpha": {"directive": "high", "captain": "low"}}
+    code = run_llm_battle.main(["--fleet-config", str(path), "--mock-llm", "--quiet",
+                                "--recording-dir", str(tmp_path / "rec"),
+                                "--effort", "alpha.order=xhigh", "--effort", "beta.captain=high"])
+    assert code == 0
+    recording = load_recording(next((tmp_path / "rec").glob("battle_*")))
+    seen = {(e["data"]["faction"], e["data"]["role"], e["data"]["effort"])
+            for e in recording["events"] if e["event_type"] == "model_call"}
+    assert {("alpha", "directive", "high"), ("alpha", "captain", "low"), ("alpha", "order", "xhigh"),
+            ("beta", "captain", "high"), ("beta", "directive", "medium")} <= seen

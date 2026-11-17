@@ -105,12 +105,19 @@ def _content_text(content: Any) -> str:
 def load_calls(paths: List[Path]) -> List[Dict[str, Any]]:
     """Every recorded model_call as a self-contained source-call dict."""
     calls: List[Dict[str, Any]] = []
+    per_folder = Counter(p.parent for p in paths if p.name.startswith("battle_"))
     for path in paths:
         recording = load_recording(path)
         assets = recording.get("assets") or {}
         interval = float(recording.get("decision_interval_s")
                          or (recording.get("provenance") or {}).get("decision_interval_s") or 30.0)
-        name = path.parent.name if path.name.startswith(("battle_", "alpha_", "beta_")) else path.stem
+        if path.name.startswith("battle_") and per_folder[path.parent] > 1:
+            # Two battles in one folder: keep their call keys apart.
+            name = f"{path.parent.name}/{path.name.split('.')[0]}"
+        elif path.name.startswith(("battle_", "alpha_", "beta_")):
+            name = path.parent.name
+        else:
+            name = path.stem
         for event in recording.get("events") or []:
             if event.get("event_type") != "model_call":
                 continue
@@ -637,11 +644,15 @@ def main(argv=None) -> int:
     ledger = run_id = None
     if paid or args.ledger:
         ledger = SpendLedger(args.ledger or ROOT / "data/recordings/spend_ledger.jsonl")
+        ledger.check(limit, args.ledger_cap)
+    # Pre-flight (keys, model ids) before the ledger reserves anything: a run
+    # that cannot start must not leave an open reservation behind.
+    client = make_client(variants, args)
+    client.budget = RequestBudget(limit, {})
+    if ledger is not None:
         run_id = ledger.open_run(script="replay_turn", name=out.name,
                                  models=sorted({v["model"] for v in variants}), cap_usd=limit,
                                  ledger_cap_usd=args.ledger_cap, mock=not paid)
-    client = make_client(variants, args)
-    client.budget = RequestBudget(limit, {})
     rows: List[Dict[str, Any]] = []
     try:
         rows = run_jobs(client, jobs, args.workers)

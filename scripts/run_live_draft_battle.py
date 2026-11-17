@@ -322,12 +322,10 @@ async def run(args):
     # Paid runs reserve their cap in the cumulative ledger before the first
     # request (--ledger-cap refuses the run here); mock runs only when a
     # ledger is named explicitly, and they never count.
-    ledger = None
+    ledger = ledger_run = None
     if not args.offline and (not args.mock_llm or args.ledger):
         ledger = SpendLedger(args.ledger or DEFAULT_LEDGER)
-        ledger_run = ledger.open_run(script='run_live_draft_battle', name=args.name,
-                                     models=all_models(args), cap_usd=args.spend_limit,
-                                     ledger_cap_usd=args.ledger_cap, mock=args.mock_llm)
+        ledger.check(args.spend_limit, args.ledger_cap)     # refuse before any pre-flight work
     report_dir.mkdir(parents=True, exist_ok=True)
     mode = 'offline' if args.offline else 'mock' if args.mock_llm else ''
     ticker = BattleTicker(
@@ -368,6 +366,12 @@ async def run(args):
         }
     server.spend_provider = spend
     await server.start()
+    if ledger is not None:
+        # Reserve the cap only now (after the port is bound): the first paid
+        # request is the draft, inside the battle task below.
+        ledger_run = ledger.open_run(script='run_live_draft_battle', name=args.name,
+                                     models=all_models(args), cap_usd=args.spend_limit,
+                                     ledger_cap_usd=args.ledger_cap, mock=args.mock_llm)
     print(f'WATCH: http://localhost:5173/?live=1&decisions=1', flush=True)
     draft_recorders = {}
     runner = None
@@ -514,7 +518,7 @@ async def run(args):
         if runner and runner.recorder:
             runner.recorder.recording.provenance['billing'] = report()
             runner.save_progress()
-        if ledger is not None:
+        if ledger_run is not None:
             ledger.close_run(ledger_run, calls=client.stats.calls if client else 0,
                              tokens=ledger_tokens(client), usd=budget.reported_usd if budget else 0.0,
                              committed_usd=budget.committed_usd if budget else None,

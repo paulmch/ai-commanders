@@ -235,6 +235,19 @@ class SpendLedger:
         with open(self.path, 'a') as handle:
             handle.write(json.dumps(entry, sort_keys=True) + '\n')
 
+    def check(self, cap_usd, ledger_cap_usd=None):
+        """Raise LedgerCapExceeded if this cap would pass ledger_cap_usd (writes nothing).
+        Scripts call it before any pre-flight work, then open_run (which checks again,
+        atomically) right before the first request."""
+        if ledger_cap_usd is None:
+            return
+        total = self.total_usd()
+        if total + float(cap_usd) > float(ledger_cap_usd):
+            raise LedgerCapExceeded(
+                f'Ledger {self.path}: ${total:.2f} spent or reserved + this run\'s cap '
+                f'${float(cap_usd):.2f} = ${total + float(cap_usd):.2f} > --ledger-cap '
+                f'${float(ledger_cap_usd):.2f}; not starting')
+
     def open_run(self, *, script, name, models, cap_usd, ledger_cap_usd=None, mock=False):
         """Reserve this run's cap; raises LedgerCapExceeded (nothing written) past ledger_cap_usd."""
         import time
