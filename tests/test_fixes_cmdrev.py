@@ -449,3 +449,36 @@ def test_a_launch_at_another_hull_than_the_ordered_salvo_is_a_deviation(tmp_path
     devs = report["compliance"]["deviations"]
     assert any(d.startswith("salvo: ordered at") for d in devs), devs
     assert report["status"] == "DEVIATE"
+
+
+@pytest.mark.parametrize("mode,flagged", [("ARRIVE", False), ("HOLD", False), ("BRACE", True)])
+def test_hold_range_idle_in_its_own_arrive_or_hold_phase_is_not_escalated(mode, flagged):
+    """p5w5_b3: HOLD_RANGE Darts coasting in to an ordered 470 km (ARRIVE, drive idle,
+    requested_throttle 1.0 as the engine logs it) read 'has not flown your HOLD_RANGE
+    for 2 checkpoints running ... the drive stayed idle while flying ARRIVE'; the admiral
+    then dropped HOLD_RANGE for the battle. A hold by evasion is still reported."""
+    from src.llm.admiral import AdmiralDecision, AdmiralOrder
+    from src.simulation import CombatSimulation, SimulationEvent, SimulationEventType
+    from tests.test_admiral_command_interface import make_admiral, own_caps, ship
+    sim = CombatSimulation(seed=1)
+    ship(sim, "alpha_1", "corvette", "alpha", (0, 0, 0))
+    ship(sim, "beta_1", "destroyer", "beta", (480, 0, 0), fwd=(-1, 0, 0))
+    admiral = make_admiral("alpha")
+    caps = own_caps(sim, "alpha")
+    lines = []
+    for cp in (1, 2, 3):
+        t0 = sim.current_time
+        order = AdmiralOrder("alpha_1", "TIS alpha_1", "Hold 470 km.",
+                             maneuver={"maneuver_type": "HOLD_RANGE", "target": "beta_1", "range_km": 470.0,
+                                       "evade": "dodge", "throttle": 1.0})
+        admiral.order_history.append(AdmiralDecision(timestamp=t0, fleet_orders=[order]))
+        admiral._last_decision_t = t0
+        sim.events.append(SimulationEvent(SimulationEventType.EXECUTION_STATE, t0 + 1.0, "alpha_1", None,
+                                          {"mode": mode, "applied_throttle": 0.0, "requested_throttle": 1.0,
+                                           "engine_fraction": 1.0}))
+        sim.current_time = t0 + 30.0
+        admiral.captain_reports = [{"ship_id": "alpha_1", "ship_name": "TIS alpha_1", "status": "ACK",
+                                    "compliance": {"executed_maneuver": "HOLD_RANGE", "followed": True,
+                                                   "deviations": []}}]
+        lines.append(admiral._build_snapshot(sim, caps, full=True).noncompliance)
+    assert bool(lines[2]) is flagged, lines
