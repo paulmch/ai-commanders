@@ -19,6 +19,7 @@ call and no key.
 import itertools
 import json
 import threading
+import time
 from typing import Any, Callable, Dict, List, Optional
 
 import httpx2
@@ -59,12 +60,18 @@ def mock_anthropic_transport(
     *,
     record: Optional[List[Dict[str, Any]]] = None,
     respond: Optional[Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]] = None,
+    latency_s: float = 0.0,
 ) -> httpx2.MockTransport:
     """
     record: every request body is appended here (tests inspect them).
     respond(body) -> a full response dict (or an httpx2.Response) to return
         instead of the scripted one, or None for the default - tests use it
         for refusals, max_tokens stops and error statuses.
+    latency_s: > 0 makes every request take that long AND emulates the real
+        cache's concurrency rule: an entry becomes readable only once the
+        request writing it has answered, so requests on the same prefix that
+        overlap the first one write it again (each pays the write). At 0
+        (the default) a prefix is readable the moment it is first seen.
     """
     seen: set = set()
     lock = threading.Lock()
@@ -92,6 +99,12 @@ def mock_anthropic_transport(
                     read = prefix_tokens
                 else:
                     written = prefix_tokens
+                    if latency_s <= 0:
+                        seen.add(prefix)
+        if latency_s > 0:
+            time.sleep(latency_s)
+            if written:
+                with lock:
                     seen.add(prefix)
         ttl_1h = any((b.get("cache_control") or {}).get("ttl") == "1h"
                      for b in body.get("system") or [] if isinstance(b, dict))
