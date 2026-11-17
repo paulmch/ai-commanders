@@ -1141,17 +1141,19 @@ MANEUVERS:
 - There are no brakes, only burns. Stopping a closure takes v^2/(2a) of room plus the
   flip: at 4.6 km/s closure a 3g corvette needs 156 s / 359 km (+18 s to flip), a 1g
   battleship 469 s / 1078 km (+55 s). By the time the enemy "looks close" the merge is
-  locked in: a pass at a few km, seconds of fire, then flying apart.
-- INTERCEPT only for the first approach or finishing a cripple. For EVERYTHING that
-  involves range - approach angle, holding range, kiting, avoiding a merge, flanking -
-  use set_heading with a vector from RANGE CONTROL in your tactical data:
+  locked in: neither ship can stop before you pass each other. The pass cuts both ways:
+  falling range raises his hit odds (GUNS ON YOU) as it raises yours.
+- Plain INTERCEPT closes and passes through (it never brakes). Range - approach angle,
+  holding range, kiting, avoiding or taking a merge, flanking - is set with set_heading
+  and a vector from RANGE CONTROL in your tactical data:
     cancel closure    burn against the relative velocity - range holds where it stops
     open range        burn straight away from the enemy group
     pass wide         burn across the line of sight - a merge becomes a wide pass
     flank left/right  move across his line of fire
   Each line gives the burn time, the effect, and which way your NOSE points meanwhile.
   Renew the same heading each checkpoint until the stated burn time is used up.
-- "!! MERGE IN ..." means act THIS checkpoint; if braking is too late, pass wide.
+- "!! MERGE IN ..." = the closest approach if both ships coast, and how long braking can
+  still wait; once braking is too late only a lateral burn (pass wide, flank) moves the pass.
 {rhythm_note}
 
 {tactics_block}
@@ -2666,6 +2668,7 @@ def build_captain_turn(
     tool_errors: Optional[str] = None,
     tool_names: Optional[Iterable[str]] = None,
     compact: bool = False,
+    battle_clock: Optional[Tuple[int, Dict[str, Any]]] = None,
     **_ignored: Any,
 ) -> str:
     """
@@ -2682,10 +2685,23 @@ def build_captain_turn(
     sections = []
     header = [f"{CAPTAIN_TURN_MARKER}{sim_time:.0f}s) ==="]
     who = strip_captain_title(captain_name)
+    following = f"next decision T+{sim_time + decision_interval_s:.0f}."
+    clock_line = None
+    if battle_clock and battle_clock[1] and battle_clock[0]:
+        # fleet_intel.battle_clock, as the admiral's header states it.
+        cp, clock = battle_clock
+        end = float(clock["end_s"])
+        if cp >= clock["checkpoints"]:
+            following = (f"no later decision: the battle ends at T+{end:.0f}." if end > sim_time + 1e-6
+                         else "the battle ends now: these orders are not flown.")
+        clock_line = (f"BATTLE CLOCK: checkpoint {cp} of {clock['checkpoints']}, "
+                      f"battle ends at T+{end:.0f}s.")
     header.append(
         f"You are Captain {who}, commanding {ship_name}."
         + (f" Decision {decision_number}: your" if decision_number else " Your")
-        + f" orders lock for {decision_interval_s:g} s; next decision T+{sim_time + decision_interval_s:.0f}.")
+        + f" orders lock for {decision_interval_s:g} s; {following}")
+    if clock_line:
+        header.append(clock_line)
     sections.append("\n".join(header))
     if lost_turn:
         sections.append(lost_turn)

@@ -122,6 +122,9 @@ def attach_audit(runner):
         'fleet_data_sha256': hashlib.sha256((root / 'data/fleet_ships.json').read_bytes()).hexdigest(),
         'config': json_value(runner.config), 'attribution': 'execution_dependencies',
     }
+    if getattr(runner.config, 'label', None):
+        # --label: which experiment this run belongs to (never shown to a model).
+        runner.recorder.recording.provenance['label'] = runner.config.label
     entries = []
     for faction in ('alpha', 'beta'):
         captains = getattr(runner, faction + '_captains', {}) or {}

@@ -198,6 +198,9 @@ class BattleConfig:
     # keeps flying its current maneuver (renewed for the window) and a
     # captain_turn_skipped event records why. Saves calls, has risk: off.
     quiet_turns: bool = False
+    # Free-text note naming the experiment a run belongs to (--label); stored
+    # in the recording's provenance. Never shown to a model.
+    label: Optional[str] = None
 
     def __post_init__(self) -> None:
         validate_battle_options(self)
@@ -916,8 +919,13 @@ class LLMBattleRunner:
         from .maneuver_orders import admiral_order_moves_ship
         kind = order_kind(orders)
         signature = order_signature(orders)
+        # New traffic: peers and the admiral, plus the datalink's kills and
+        # losses (a dead primary target, a fleet-mate lost); launches, target
+        # switches and the like on the datalink do not count.
+        from .fleet_comms import SIGNAL_KILL, SIGNAL_LOSS
         inbox = [m for m in (getattr(captain, "inbox", None) or [])
-                 if isinstance(m, dict) and m.get("sender_role") != "engine"]
+                 if isinstance(m, dict) and (m.get("sender_role") != "engine"
+                                             or m.get("kind") in (SIGNAL_KILL, SIGNAL_LOSS))]
         facts = TurnFacts(
             first_turn="kind" not in state,
             torpedoes_inbound=torpedoes,
@@ -1903,8 +1911,11 @@ class LLMBattleRunner:
         skipped: Dict[str, str] = {}
         if getattr(self, "_policy_clients", None) or self.config.quiet_turns:
             skipped = self._plan_captain_turns(captain_entries, admiral_orders)
+        clock = self._admiral_battle_clock()
         for ship_id, captain, faction in captain_entries:
             captain.clear_admiral_context()
+            # The battle clock line of the captain's turn (fleet_intel.battle_clock).
+            captain.battle_clock = (self.checkpoint_count, clock) if clock else None
             captain.fleet_channel = self.fleet_communication
             # Every fleet-mate's orders this checkpoint (ORDERED TARGETS line).
             captain.fleet_orders = {sid: admiral_orders[sid] for sid, _, f in captain_entries

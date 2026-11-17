@@ -378,7 +378,8 @@ async def run(args):
         # request is the draft, inside the battle task below.
         ledger_run = ledger.open_run(script='run_live_draft_battle', name=args.name,
                                      models=all_models(args), cap_usd=args.spend_limit,
-                                     ledger_cap_usd=args.ledger_cap, mock=args.mock_llm)
+                                     ledger_cap_usd=args.ledger_cap, mock=args.mock_llm,
+                                     label=args.label)
     print(f'WATCH: http://localhost:5173/?live=1&decisions=1', flush=True)
     draft_recorders = {}
     runner = None
@@ -388,7 +389,7 @@ async def run(args):
 
     def report():
         return {
-            'name': args.name, 'models': models, 'points_per_side': args.points,
+            'name': args.name, 'label': args.label, 'models': models, 'points_per_side': args.points,
             'max_ships': args.max_ships, 'turns': args.turns, 'reasoning': args.reasoning,
             'role_models': side_models(args),
             'effort_policy': parse_effort_specs(args.effort),
@@ -420,7 +421,8 @@ async def run(args):
             'recording': str(output),
             'experiment': {'no_admiral': args.no_admiral, 'intent_only': args.intent_only,
                            'quiet_turns': args.quiet_turns, 'cache_warmup': args.cache_warmup,
-                           'rosters': args.rosters, 'thinking_summary': args.thinking_summary},
+                           'rosters': args.rosters, 'thinking_summary': args.thinking_summary,
+                           'show_score': args.show_score},
             'cost_report': battle_cost_report(),
         }
 
@@ -466,7 +468,8 @@ async def run(args):
             model=model, name=f'Admiral {model.split("/")[-1]}', temperature=None,
             # Catalog-verified in make_client; overrides the family allowlist.
             vision=args.admiral_vision, image_input=True if args.admiral_vision else None,
-            intent_only=faction in sides_of(args.intent_only))
+            intent_only=faction in sides_of(args.intent_only),
+            show_score=faction in sides_of(args.show_score))
 
     def battle():
         nonlocal runner, result
@@ -495,7 +498,7 @@ async def run(args):
         runner = LiveDraftRunner(
             BattleConfig.from_fleet_config(fc, recording_dir=str(report_dir), verbose=not args.quiet,
                                            effort_policy=parse_effort_specs(args.effort),
-                                           quiet_turns=args.quiet_turns),
+                                           quiet_turns=args.quiet_turns, label=args.label),
             LLMCaptainConfig('Alpha', 'Alpha'), LLMCaptainConfig('Beta', 'Beta'), client, fc)
         runner.configure_live(server, state, draft_recorders, output, args.sim_step_delay,
                               ticker=ticker, vision_dir=report_dir / 'vision',
@@ -606,6 +609,13 @@ def main():
     parser.add_argument('--intent-only', choices=sides, default=None,
                         help='Experiment: that side\'s admiral sets directive and plan (and may '
                              'order torpedo salvos) but issues no per-ship orders')
+    parser.add_argument('--show-score', choices=sides, default=None,
+                        help='That side\'s admiral sees the time-limit verdict as it stands each '
+                             'checkpoint (AdmiralConfig.show_score; off by default)')
+    parser.add_argument('--label', default=None,
+                        help='Free-text note naming the experiment this run belongs to: stored in '
+                             'status.json, the recording provenance and the ledger lines (never '
+                             'shown to a model)')
     parser.add_argument('--quiet-turns', action='store_true',
                         help='Experiment: skip a captain call on a turn with no trigger, no new '
                              'FLEET NET traffic and an unchanged applied order')
@@ -641,6 +651,8 @@ def main():
         parser.error(str(exc))
     if args.offline and args.mock_llm:
         parser.error('--offline and --mock-llm are exclusive')
+    if args.show_score and (args.offline or set(sides_of(args.show_score)) & set(sides_of(args.no_admiral))):
+        parser.error('--show-score needs an LLM admiral on that side (not --offline / --no-admiral)')
     if args.admiral_vision and not args.offline:
         try:
             import matplotlib  # noqa: F401 - the tactical plot renderer

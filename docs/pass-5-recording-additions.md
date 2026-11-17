@@ -1061,3 +1061,25 @@ output, thinking, usd, thinking_calls, thinking_share}], "by_side": {...},
 "total": {...}}`; role `warmup` rows are the cache pre-warms. Live draft
 `status.json` also gains `role_models` (`{side: {admiral, captain}}`),
 `effort_policy` and `experiment` (the mode flags).
+
+## Command-interface review (`cmdrev`)
+
+### `provenance.label` and `provenance.config.label`
+
+`--label TEXT` on `scripts/run_live_draft_battle.py` and `scripts/run_llm_battle.py`
+(`BattleConfig.label`): a free-text note naming the experiment the run belongs to.
+Stored as `provenance.label` (absent without `--label`), in `provenance.config`, in
+`status.json` / `--status-file` (`label`) and on both spend-ledger lines (`label`). Never
+part of a prompt.
+
+### `battle_stopped` / `result_reason` after Ctrl-C (live draft)
+
+One SIGINT now closes the request budget (no new model call), lets the calls in flight
+settle, records `battle_stopped` with `reason` `Interrupted (Ctrl-C): ...` and closes the
+spend-ledger line with `status: "interrupted"`. The ledger counts a closed run at
+`max(usd, committed_usd)`.
+
+### `captain_turn_skipped`: kills and losses count as new traffic
+
+A quiet turn is skipped only when no datalink KILL or LOSS line reached the captain this
+checkpoint either (launches, target switches and other datalink lines still do not count).

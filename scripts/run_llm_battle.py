@@ -79,6 +79,11 @@ def apply_model_overrides(fleet_config, args) -> None:
     rewrite a loaded fleet config."""
     for side in _sides(getattr(args, "no_admiral", None)):
         getattr(fleet_config, f"{side}_fleet").admiral = None
+    for side in _sides(getattr(args, "show_score", None)):
+        admiral = getattr(fleet_config, f"{side}_fleet").admiral
+        if admiral is None:
+            raise ValueError(f"--show-score {side}: that fleet has no admiral")
+        admiral.show_score = True
     for side in _sides(getattr(args, "intent_only", None)):
         admiral = getattr(fleet_config, f"{side}_fleet").admiral
         if admiral is None:
@@ -267,6 +272,12 @@ Examples:
     parser.add_argument("--intent-only", choices=sides, default=None,
                         help="Experiment: that side's admiral issues the directive and battle plan "
                              "(and may order torpedo salvos) but no per-ship orders; captains decide")
+    parser.add_argument("--show-score", choices=sides, default=None,
+                        help="Fleet mode: that side's admiral sees the time-limit verdict as it "
+                             "stands each checkpoint (AdmiralConfig.show_score; off by default)")
+    parser.add_argument("--label", default=None,
+                        help="Free-text note naming the experiment this run belongs to: stored in the "
+                             "--status-file, the recording provenance and the ledger lines")
     parser.add_argument("--quiet-turns", action="store_true",
                         help="Experiment: skip a captain call when its turn has no trigger, no new "
                              "FLEET NET traffic and an unchanged applied order (captain_turn_skipped)")
@@ -410,6 +421,10 @@ Examples:
             config_overrides["recording_dir"] = args.recording_dir
         if args.quiet_turns:
             config_overrides["quiet_turns"] = True
+        if args.label:
+            config_overrides["label"] = args.label
+        if not fleet_config and args.show_score:
+            raise ValueError("--show-score needs --fleet-config (fleet battles have admirals)")
         if not fleet_config and (args.no_admiral or args.intent_only):
             raise ValueError("--no-admiral / --intent-only need --fleet-config")
         if args.effort:
@@ -475,6 +490,11 @@ Examples:
         if client is not None and (not args.mock_llm or args.ledger):
             ledger = SpendLedger(args.ledger or DEFAULT_LEDGER)
             ledger.check(args.spend_limit or 0.0, args.ledger_cap)
+            if args.spend_limit is None and not args.mock_llm:
+                # Nothing caps this run, and its open ledger line reserves $0: a run
+                # that dies without closing it counts as nothing in the ledger.
+                print("WARNING: no --spend-limit: this paid battle has NO dollar cap and its ledger "
+                      "line reserves $0 until it closes", file=sys.stderr, flush=True)
 
         if args.unlimited and not args.quiet:
             print("UNLIMITED MODE: Battle will continue until destruction, surrender, or mutual draw")
@@ -496,7 +516,7 @@ Examples:
             ledger_run = ledger.open_run(
                 script="run_llm_battle", name=Path(args.fleet_config or "duel").stem, models=llm_ids,
                 cap_usd=args.spend_limit if args.spend_limit is not None else 0.0,
-                ledger_cap_usd=args.ledger_cap, mock=args.mock_llm)
+                ledger_cap_usd=args.ledger_cap, mock=args.mock_llm, label=args.label)
         status = "error"
         try:
             result = runner.run_battle(fleet_data)
@@ -524,7 +544,7 @@ Examples:
             print(format_cost_report(report))
             if args.status_file:
                 import json as _json
-                status = {"result": {"winner": result.winner, "reason": result.reason,
+                status = {"label": args.label, "result": {"winner": result.winner, "reason": result.reason,
                                      "checkpoints": result.checkpoints_used},
                           "recording": runner.recording_file, "stopped": getattr(runner, "stop_reason", None),
                           "spend": {"reported_usd": budget.reported_usd if budget else client.stats.cost_usd,
