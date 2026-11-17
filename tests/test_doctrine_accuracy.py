@@ -1259,7 +1259,7 @@ class TestMeasuredExchangeDoctrine:
     def test_the_table_is_rendered(self, fleet):
         text = _admiral_static(fleet)
         assert "range at firing (km)  0-50    50-100  100-150 150-200 200-300 300+" in text
-        assert "hit rate              69%     61%     49%     43%     36%     25%" in text
+        assert "hit rate              69%     61%     50%     43%     36%     25%" in text
         assert "58% of all hull damage landed inside 150 km, 42% beyond." in text
 
     def test_facing_battle_numbers_are_the_seeded_runs(self, facts):

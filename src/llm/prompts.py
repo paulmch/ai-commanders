@@ -2965,7 +2965,8 @@ TORPEDO DEFENCE, MEASURED (seeded runs on this engine: a 4 battlecruiser + 2 des
 from the first checkpoint; per battle, 3 seeds each):
 - start 500 km: nose-on PADLOCK - 72% of rounds hit (all on the nose, ~14.0 km/s, ~24 GJ
   each), 6 of 8 hulls lost; burning straight away - 37% hit (all on the TAIL, ~12.8 km/s,
-  ~20 GJ), 5 of 8 lost; the same burn with evade full - 66% hit, 6 of 8 lost; charging
+  ~20 GJ), 5 of 8 lost; the same burn with evade full - 36% hit, 5 of 8 lost (also all
+  on the tail: the overlay keeps the burn and turns no nose round); charging
   (INTERCEPT) - 73% hit (~14.6 km/s, ~27 GJ), 8 of 8 lost. First loss ~100 s in each.
 - start 1000 km: nose-on - 73% hit, 8 of 8 lost (first at ~290 s); burning away - 26%
   hit, 4 of 8 lost (first at ~310 s); charging - 38% hit, 3 of 8 lost. The wall killed
@@ -3070,10 +3071,10 @@ GUN_EXCHANGE_BUDGET = 150
 GUN_EXCHANGE_BANDS = (
     ("0-50", 69, 0.22, 16),
     ("50-100", 61, 0.25, 23),
-    ("100-150", 49, 0.30, 19),
-    ("150-200", 43, 0.44, 21),
-    ("200-300", 36, 0.28, 15),
-    ("300+", 25, 0.30, 7),
+    ("100-150", 50, 0.31, 20),
+    ("150-200", 43, 0.43, 20),
+    ("200-300", 36, 0.29, 15),
+    ("300+", 25, 0.29, 7),
 )
 GUN_EXCHANGE_INSIDE_150_PCT = 58
 # Spinal Coiler Mk3 hits to kill a fresh hull on one facing
@@ -3090,9 +3091,9 @@ FACING_SPINAL_HITS_TO_KILL = (
 # to 37% (tactical) penetration, above its flank's 21%, and is left out.
 FACING_MEASURED = (
     ("battlecruiser", 15, 0.16, 44, 0.46),
-    ("destroyer", 8, 0.06, 35, 0.43),
-    ("frigate", 25, 0.39, 57, 0.71),
-    ("dreadnought", 27, 0.24, 34, 0.24),
+    ("destroyer", 8, 0.065, 35, 0.43),
+    ("frigate", 25, 0.39, 56, 0.70),
+    ("dreadnought", 27, 0.24, 36, 0.25),
 )
 # The pass example in RANGE CONTROL and the CROSSFIRE example geometry.
 MERGE_EXAMPLE_KPS = 5.0
