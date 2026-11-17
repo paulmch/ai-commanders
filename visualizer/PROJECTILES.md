@@ -127,4 +127,4 @@ throttle, only while it fires). `TorpedoRcs.js` turns that into:
 `/home/plmch/aic-wt/_shots/projectiles/` (`before_*` = untouched viewer,
 `a4_*`/`final_*` = this module; side-by-sides in `cmp/`). Torpedo thruster
 close-ups: `/home/plmch/aic-wt/_shots/torp-rcs/` (`before_*` / `after_*`,
-iterations in `iter/`), from `showcase_torpedo_fleet.json`.
+iterations in `iter/`), from `showcase_torpedo_fleet.json.gz`.

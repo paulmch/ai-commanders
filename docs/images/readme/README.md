@@ -33,9 +33,9 @@ filters/scrolling, and for `command-net.png` a 2× device-scale crop.
 
 ## Recordings
 
-- Claude Sonnet 5 vs DeepSeek V4.1 Flash: `sonnet5_vs_dsv41flash_150pt_20260926.json` (live run of September 26, 2026)
+- Claude Sonnet 5 vs DeepSeek V4.1 Flash: `sonnet5_vs_dsv41flash_150pt_20260926.json.gz` (live run of September 26, 2026)
 - DeepSeek V4.1 Flash mirror: `p4_new_flash_mirror_150pt.json` (pass-4 engine with captain reports)
-- [Qwen–GPT-OSS](../../../data/recordings/intent_qwen_gptoss.json)
+- [Qwen–GPT-OSS](../../../data/recordings/intent_qwen_gptoss.json.gz)
 - Pass-5 damage demo: `p5_damage_demo.json`, a seeded heuristic fleet battle
   (regeneration command in
   [`docs/pass-5-recording-additions.md`](../../pass-5-recording-additions.md))
@@ -81,7 +81,7 @@ $SNAP --recording showcase_s0_200pt.json --time 96.5 --focus alpha_1 --dist 4.6 
 $SNAP --recording rcs_showroom.json --time 5 --hide-ui --eval "$(cat $H); readmeLineup()" --out hull-lineup.png
 
 # fleet-battle.png
-$SNAP --recording sonnet5_vs_dsv41flash_150pt_20260926.json --time 151 \
+$SNAP --recording sonnet5_vs_dsv41flash_150pt_20260926.json.gz --time 151 \
   --eval "window.visualizer.showFleetView(); window.visualizer.trackHud.setLegend(false)" --out fleet-battle.png
 
 # torpedo-salvo.png
@@ -103,7 +103,7 @@ uv run python scripts/viewer_snapshot.py --gfx high --recording p4_new_flash_mir
 
 # intent-consequence.png (the ship is deselected after load so its off-screen
 # marker does not stack on the fleet marker)
-$SNAP --recording intent_qwen_gptoss.json --query "ship=alpha_2&decisions=1&decision=e152&t=184.8" \
+$SNAP --recording intent_qwen_gptoss.json.gz --query "ship=alpha_2&decisions=1&decision=e152&t=184.8" \
   --time 184.8 --focus beta_1 --dist 2 --az 35 --el 18 \
   --eval "$(cat $H); window.visualizer.deselectShip(); readmeDecisionTo('03')" --out intent-consequence.png
 
@@ -135,7 +135,7 @@ commits at 60 %, beta at 90 %; each checkpoint held 14 s for deliberation):
 
 ```bash
 uv run python scripts/fake_live_server.py \
-  visualizer/public/recordings/sonnet5_vs_dsv41flash_150pt_20260926.json \
+  visualizer/public/recordings/sonnet5_vs_dsv41flash_150pt_20260926.json.gz \
   --port 8825 --speed 6 --draft-seconds 40 --pause-seconds 14
 ```
 

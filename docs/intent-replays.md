@@ -122,12 +122,12 @@ The repository includes these completed examples:
 
 | Battle | Recording | Result | Reported model cost |
 | --- | --- | --- | --- |
-| GLM 5.3 Flash vs GPT-5.6 Luna; independently drafted 200-point fleets | [Replay](../data/recordings/glm_luna_200pt_live_20260906/battle_glm_5_3_flash_vs_gpt_5_6_luna_20260906_140449.json), [drafts](../data/recordings/glm_luna_200pt_live_20260906/battle_glm_5_3_flash_vs_gpt_5_6_luna_20260906_140449.draft.json) | GLM won; Beta eliminated at 233s, after 7 turns | $0.1946 |
-| Qwen 3.8 Flash vs GPT-OSS 120B | [Replay](../data/recordings/intent_qwen_gptoss.json) | Qwen won on tactical score at 300s | $0.0691 |
-| DeepSeek V3.2 vs GPT-4.1 mini | [Replay](../data/recordings/intent_deepseek_mini.json) | GPT-4.1 mini won on tactical score at 360s | $0.1406 |
+| GLM 5.3 Flash vs GPT-5.6 Luna; independently drafted 200-point fleets | [Replay](../data/recordings/glm_luna_200pt_live_20260906/battle_glm_5_3_flash_vs_gpt_5_6_luna_20260906_140449.json.gz), [drafts](../data/recordings/glm_luna_200pt_live_20260906/battle_glm_5_3_flash_vs_gpt_5_6_luna_20260906_140449.draft.json) | GLM won; Beta eliminated at 233s, after 7 turns | $0.1946 |
+| Qwen 3.8 Flash vs GPT-OSS 120B | [Replay](../data/recordings/intent_qwen_gptoss.json.gz) | Qwen won on tactical score at 300s | $0.0691 |
+| DeepSeek V3.2 vs GPT-4.1 mini | [Replay](../data/recordings/intent_deepseek_mini.json.gz) | GPT-4.1 mini won on tactical score at 360s | $0.1406 |
 
 These are single recorded matches, not a model ranking. The earlier trial costs
-include optional commentary calls. A [heuristic recording](../data/recordings/intent_heuristic.json)
+include optional commentary calls. A [heuristic recording](../data/recordings/intent_heuristic.json.gz)
 also demonstrates the execution evidence without paid models.
 
 Load any of these files through the viewer's file selector. To restore the
@@ -135,9 +135,9 @@ convenient local replay URLs after cloning:
 
 ```bash
 mkdir -p visualizer/public/recordings
-cp data/recordings/intent_*.json visualizer/public/recordings/
-cp data/recordings/glm_luna_200pt_live_20260906/battle_glm_5_3_flash_vs_gpt_5_6_luna_20260906_140449.json \
-  visualizer/public/recordings/glm_luna_200pt_live_20260906.json
+cp data/recordings/intent_*.json.gz visualizer/public/recordings/
+cp data/recordings/glm_luna_200pt_live_20260906/battle_glm_5_3_flash_vs_gpt_5_6_luna_20260906_140449.json.gz \
+  visualizer/public/recordings/glm_luna_200pt_live_20260906.json.gz
 ```
 
 ```bash
@@ -160,8 +160,8 @@ The text-only budget estimator rejects image/audio inputs.
 
 | Replay | Battle length | Recorded decisions | Reported cost, including commentary |
 | --- | --- | --- | --- |
-| `intent_qwen_gptoss.json` | 300 s | 33 | $0.0691 |
-| `intent_deepseek_mini.json` | 360 s | 64 | $0.1406 |
+| `intent_qwen_gptoss.json.gz` | 300 s | 33 | $0.0691 |
+| `intent_deepseek_mini.json.gz` | 360 s | 64 | $0.1406 |
 
 Total reported spend was **$0.2097**; conservative committed spend was **$0.2607**.
 There were 242 recorded commander calls, six optional commentary calls and five
@@ -174,7 +174,7 @@ The Qwen corvette decision `e152` at 120 s is a useful example: its torpedoes
 impact at 175 s and 184 s after the ship's maneuver expires. Open it with:
 
 ```text
-http://localhost:5173/?recording=/recordings/intent_qwen_gptoss.json&decisions=1&ship=alpha_2&decision=e152&t=184
+http://localhost:5173/?recording=/recordings/intent_qwen_gptoss.json.gz&decisions=1&ship=alpha_2&decision=e152&t=184
 ```
 
 Validation: **1,690 Python tests**, **15 viewer tests**, production viewer build,

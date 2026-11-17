@@ -31,24 +31,24 @@ git clone https://github.com/paulmch/ai-commanders.git
 cd ai-commanders
 
 mkdir -p visualizer/public/recordings
-cp data/recordings/intent_*.json data/recordings/showcase_torpedo_fleet.json visualizer/public/recordings/
-cp data/recordings/glm_luna_200pt_live_20260906/battle_glm_5_3_flash_vs_gpt_5_6_luna_20260906_140449.json \
-  visualizer/public/recordings/glm_luna_200pt_live_20260906.json
-cp data/recordings/sonnet5_vs_dsv41flash_150pt_20260926/battle_sonnet5_vs_dsv41flash_150pt_20260926.json \
-  visualizer/public/recordings/sonnet5_vs_dsv41flash_150pt_20260926.json
+cp data/recordings/intent_*.json.gz data/recordings/showcase_torpedo_fleet.json.gz visualizer/public/recordings/
+cp data/recordings/glm_luna_200pt_live_20260906/battle_glm_5_3_flash_vs_gpt_5_6_luna_20260906_140449.json.gz \
+  visualizer/public/recordings/glm_luna_200pt_live_20260906.json.gz
+cp data/recordings/sonnet5_vs_dsv41flash_150pt_20260926/battle_sonnet5_vs_dsv41flash_150pt_20260926.json.gz \
+  visualizer/public/recordings/sonnet5_vs_dsv41flash_150pt_20260926.json.gz
 
 cd visualizer
 npm ci
 npm run dev
 ```
 
-Open **[the Sonnet 5 vs DeepSeek torpedo swarm](http://localhost:5173/?recording=/recordings/sonnet5_vs_dsv41flash_150pt_20260926.json)**, **[the GLM–Luna replay](http://localhost:5173/?recording=/recordings/glm_luna_200pt_live_20260906.json)**, or **[the torpedo-fleet showcase](http://localhost:5173/?recording=/recordings/showcase_torpedo_fleet.json)** (a seeded heuristic battle recorded with per-frame trajectory predictions). Or open [localhost:5173](http://localhost:5173) and choose any recording JSON from `data/recordings/` with the file selector.
+Open **[the Sonnet 5 vs DeepSeek torpedo swarm](http://localhost:5173/?recording=/recordings/sonnet5_vs_dsv41flash_150pt_20260926.json.gz)**, **[the GLM–Luna replay](http://localhost:5173/?recording=/recordings/glm_luna_200pt_live_20260906.json.gz)**, or **[the torpedo-fleet showcase](http://localhost:5173/?recording=/recordings/showcase_torpedo_fleet.json.gz)** (a seeded heuristic battle recorded with per-frame trajectory predictions). Or open [localhost:5173](http://localhost:5173) and choose any recording JSON from `data/recordings/` with the file selector.
 
 ![The replay HUD during Claude Sonnet 5's torpedo swarm: the scoreboard, a kill toast for OCS Falchion-1, torpedoes streaming at DeepSeek's battle line, and the command net with the salvo orders](docs/images/readme/fleet-battle.png)
 
 *Claude Sonnet 5's eight-corvette torpedo swarm lands its first kill on DeepSeek V4.1 Flash's battle line, while the command net shows the synchronized salvo orders behind it.*
 
-**Recording files.** New battles are saved as gzip-compressed JSON (`battle_*.json.gz`, typically 15-37x smaller than the plain indented `.json` recordings above); pass `--plain-json` to the battle scripts for the old format, and `scripts/run_draft_battle.py --no-recording` for outcome-only sweeps. The viewer (URL, file selector, saved live replay) and every script read both formats, so `.json.gz` files can be copied into `visualizer/public/recordings/` and opened as `?recording=/recordings/<name>.json.gz`. `uv run python scripts/compress_recordings.py <dir> --dry-run` shows what gzipping an existing folder would save; without `--dry-run` it writes verified `.json.gz` copies (`--delete-originals` removes each original once its copy loads back identical).
+**Recording files.** Battles are saved as gzip-compressed JSON (`battle_*.json.gz`, typically 15-37x smaller than plain indented `.json`), and the sample recordings in `data/recordings/` are stored that way too; pass `--plain-json` to the battle scripts for the old format, and `scripts/run_draft_battle.py --no-recording` for outcome-only sweeps. The viewer (URL, file selector, saved live replay) and every script read both formats, so `.json.gz` files can be copied into `visualizer/public/recordings/` and opened as `?recording=/recordings/<name>.json.gz`. `uv run python scripts/compress_recordings.py <dir> --dry-run` shows what gzipping an existing folder would save; without `--dry-run` it writes verified `.json.gz` copies (`--delete-originals` removes each original once its copy loads back identical).
 
 ### Viewer controls
 
@@ -206,7 +206,7 @@ The **Decisions** panel connects those steps:
 
 Summaries use recorded events and only reveal evidence available at the current playhead. Optional model commentary is labeled **Model interpretation**; cited event IDs are validated. Legacy recordings still show the orders and context they contain. Captains and admirals receive execution feedback in their next prompts, so the same evidence also helps them adjust during a battle.
 
-After staging the sample recordings, [open that corvette decision](http://localhost:5173/?recording=/recordings/intent_qwen_gptoss.json&decisions=1&ship=alpha_2&decision=e152&t=184).
+After staging the sample recordings, [open that corvette decision](http://localhost:5173/?recording=/recordings/intent_qwen_gptoss.json.gz&decisions=1&ship=alpha_2&decision=e152&t=184).
 
 ## Command and communication
 
@@ -230,11 +230,11 @@ These are individual matches with specific fleets and settings, not a model lead
 
 | Match | What happened | Reported cost | Recording |
 | --- | --- | ---: | --- |
-| **Claude Sonnet 5 vs DeepSeek V4.1 Flash** | Independent 150-point drafts: Sonnet's eight torpedo corvettes against DeepSeek's battleship line. Synchronized salvos killed a destroyer at 150 seconds; the $6 ceiling stopped the battle at checkpoint 12 with Sonnet 8/8 and DeepSeek 5/6 (September 26) | $4.67 | [Replay](data/recordings/sonnet5_vs_dsv41flash_150pt_20260926/battle_sonnet5_vs_dsv41flash_150pt_20260926.json) · [Status](data/recordings/sonnet5_vs_dsv41flash_150pt_20260926/status.json) |
-| **GLM 5.3 Flash vs GPT-5.6 Luna** | Independent 200-point drafts; GLM eliminated Luna's fleet at 233 seconds, after seven turns | **$0.1946** | [Replay](data/recordings/glm_luna_200pt_live_20260906/battle_glm_5_3_flash_vs_gpt_5_6_luna_20260906_140449.json) · [Drafts](data/recordings/glm_luna_200pt_live_20260906/battle_glm_5_3_flash_vs_gpt_5_6_luna_20260906_140449.draft.json) |
-| **Qwen 3.8 Flash vs GPT-OSS 120B** | Two ships per side; Qwen won on tactical score at 300 seconds | $0.0691 | [Replay](data/recordings/intent_qwen_gptoss.json) |
-| **DeepSeek V3.2 vs GPT-4.1 mini** | Three ships per side; GPT-4.1 mini won on tactical score at 360 seconds | $0.1406 | [Replay](data/recordings/intent_deepseek_mini.json) |
-| **Heuristic vs heuristic** | Free mixed-fleet example of the execution evidence | $0 | [Replay](data/recordings/intent_heuristic.json) |
+| **Claude Sonnet 5 vs DeepSeek V4.1 Flash** | Independent 150-point drafts: Sonnet's eight torpedo corvettes against DeepSeek's battleship line. Synchronized salvos killed a destroyer at 150 seconds; the $6 ceiling stopped the battle at checkpoint 12 with Sonnet 8/8 and DeepSeek 5/6 (September 26) | $4.67 | [Replay](data/recordings/sonnet5_vs_dsv41flash_150pt_20260926/battle_sonnet5_vs_dsv41flash_150pt_20260926.json.gz) · [Status](data/recordings/sonnet5_vs_dsv41flash_150pt_20260926/status.json) |
+| **GLM 5.3 Flash vs GPT-5.6 Luna** | Independent 200-point drafts; GLM eliminated Luna's fleet at 233 seconds, after seven turns | **$0.1946** | [Replay](data/recordings/glm_luna_200pt_live_20260906/battle_glm_5_3_flash_vs_gpt_5_6_luna_20260906_140449.json.gz) · [Drafts](data/recordings/glm_luna_200pt_live_20260906/battle_glm_5_3_flash_vs_gpt_5_6_luna_20260906_140449.draft.json) |
+| **Qwen 3.8 Flash vs GPT-OSS 120B** | Two ships per side; Qwen won on tactical score at 300 seconds | $0.0691 | [Replay](data/recordings/intent_qwen_gptoss.json.gz) |
+| **DeepSeek V3.2 vs GPT-4.1 mini** | Three ships per side; GPT-4.1 mini won on tactical score at 360 seconds | $0.1406 | [Replay](data/recordings/intent_deepseek_mini.json.gz) |
+| **Heuristic vs heuristic** | Free mixed-fleet example of the execution evidence | $0 | [Replay](data/recordings/intent_heuristic.json.gz) |
 
 GLM bought **two torpedo cruisers, two battlecruisers, and two corvettes** for 198 points. Luna spent all 200 points on **two cruisers and six battlecruisers**. Their formations and chosen doctrines are preserved alongside the replay.
 
@@ -350,7 +350,7 @@ For screenshots, install Playwright's browser once, stage a recording as above, 
 ```bash
 uv run playwright install chromium
 uv run python scripts/viewer_snapshot.py \
-  --recording glm_luna_200pt_live_20260906.json \
+  --recording glm_luna_200pt_live_20260906.json.gz \
   --time 100 --focus alpha_1 --dist 2.2 --gfx high --out /tmp/cruiser.png
 ```
 

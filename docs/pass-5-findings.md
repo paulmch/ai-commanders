@@ -242,8 +242,10 @@ harness runs with arcs off.
 New recordings are written as `.json.gz` (compact JSON, deterministic gzip header): 15-37 times
 smaller (37.8 MB to 1.02 MB for the largest committed battle). Every tool and the viewer read both
 formats through one reader. `run_draft_battle.py --no-recording` writes nothing, for sweeps that
-only need outcomes. The committed `data/recordings` folder would shrink from 263 MB to 17 MB with
-`scripts/compress_recordings.py`; that conversion has not been run.
+only need outcomes. The committed `data/recordings` folder was converted with
+`scripts/compress_recordings.py` (31 recordings, 263 MB to 17 MB, each copy loaded back and compared
+before its original was deleted); the README, the capture commands and the notebooks' `source_battle`
+paths name the `.json.gz` files.
 
 ## Viewer
 

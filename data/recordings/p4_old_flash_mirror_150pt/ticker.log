@@ -1,0 +1,140 @@
+=== BATTLE p4_old_flash_mirror_150pt | deepseek-v4.1-flash vs deepseek-v4.1-flash | spend $0.00/$1.00 ===
+150 pts/side, max 8 ships, 15 turns of 30s. Reasoning low. Admiral vision ON: tactical plot to both admirals each checkpoint.
+Costs: CO=corvette:18 FF=frigate:7 DD=destroyer:18 CA=cruiser:29 BC=battlecruiser:25 BB=battleship:43 DN=dreadnought:55 DS=dreadnought_siege:56 CT=cruiser_torpedo:65
+=== DRAFT BETA | deepseek-v4.1-flash | 144/150 pts | spend $0.02/$1.00 (+$0.01 held) ===
+Ships (8): Bastion-1 CA 29 | Bastion-2 CA 29 | Bastion-3 CA 29 | Bastion-4 CA 29 | Ward-1 FF 7 | Ward-2 FF 7 | Ward-3 FF 7 | Ward-4 FF 7
+Formation: Layered PD Wall - Cruisers are placed 90 km forward as the vanguard so they absorb the first exchange and present a broad spi...
+Concept: A balanced 8-ship gun line: four armored cruisers provide spinal coilers and turret firepower, while four frigates thicken point defense...
+=== DRAFT ALPHA | deepseek-v4.1-flash | 150/150 pts | spend $0.02/$1.00 ===
+Ships (6): Sovereign-1 BB 43 | Sovereign-2 BB 43 | Lancer-1 BC 25 | Lancer-2 BC 25 | Ward-1 FF 7 | Ward-2 FF 7
+Formation: Layered PD Box - Battleships form the forward vanguard and absorb the first exchange. Battlecruisers sit 60 km behind in a s...
+Concept: A gun-line core: two battleships and two battlecruisers carry four spinal coilers plus heavy batteries, with two frigates adding PD to an...
+=== CP 1 | t=30s | spend $0.06/$1.00 ===
+ALPHA deepseek-v4.1-flash: 6/6 alive, hull 100% | Sovereign-1 BB hull 100% arm 45/45cm heat 0% | Sovereign-2 BB hull 100% arm 45/45cm heat 0% | Lancer-1 BC hull 100% arm 30/30cm heat 0% | Lancer-2 BC hull 100% arm 30/30cm heat 0% | Ward-1 FF hull 100% arm 12/12cm heat 0% | Ward-2 FF hull 100% arm 12/12cm heat 0%
+BETA deepseek-v4.1-flash: 8/8 alive, hull 100% | Bastion-1 CA hull 100% arm 41/41cm heat 0% | Bastion-2 CA hull 100% arm 41/41cm heat 0% | Bastion-3 CA hull 100% arm 41/41cm heat 0% | Bastion-4 CA hull 100% arm 41/41cm heat 0% | Ward-1 FF hull 100% arm 12/12cm heat 0% | Ward-2 FF hull 100% arm 12/12cm heat 0% | Ward-3 FF hull 100% arm 12/12cm heat 0% | Ward-4 FF hull 100% arm 12/12cm heat 0%
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: (no new directive)
+B admiral: Establish Formation and Prepare for Controlled Formation Pass on the entire Alpha Fleet. Maintain tight spacing and maximum PD coverage.
+=== CP 2 | t=60s | spend $0.10/$1.00 (+$0.04 held) ===
+ALPHA deepseek-v4.1-flash: 6/6 alive, hull 100% | Sovereign-1 BB hull 100% arm 45/45cm heat 0% | Sovereign-2 BB hull 100% arm 45/45cm heat 0% | Lancer-1 BC hull 100% arm 30/30cm heat 2% | Lancer-2 BC hull 100% arm 30/30cm heat 2% | Ward-1 FF hull 100% arm 12/12cm heat 0% | Ward-2 FF hull 100% arm 12/12cm heat 0%
+BETA deepseek-v4.1-flash: 8/8 alive, hull 100% | Bastion-1 CA hull 100% arm 41/41cm heat 2% | Bastion-2 CA hull 100% arm 41/41cm heat 2% | Bastion-3 CA hull 100% arm 41/41cm heat 2% | Bastion-4 CA hull 100% arm 41/41cm heat 2% | Ward-1 FF hull 100% arm 12/12cm heat 2% | Ward-2 FF hull 100% arm 12/12cm heat 2% | Ward-3 FF hull 100% arm 12/12cm heat 5% | Ward-4 FF hull 100% arm 12/12cm heat 2%
+Hits: none
+Kills: none
+Fire: A 18 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: (no new directive)
+B admiral: (no new directive)
+=== CP 3 | t=90s | spend $0.14/$1.00 (+$0.05 held) ===
+ALPHA deepseek-v4.1-flash: 6/6 alive, hull 100% | Sovereign-1 BB hull 100% arm 45/45cm heat 3% | Sovereign-2 BB hull 100% arm 45/45cm heat 0% | Lancer-1 BC hull 100% arm 30/30cm heat 3% | Lancer-2 BC hull 100% arm 30/30cm heat 4% | Ward-1 FF hull 100% arm 12/12cm heat 2% | Ward-2 FF hull 100% arm 12/12cm heat 0%
+BETA deepseek-v4.1-flash: 8/8 alive, hull 100% | Bastion-1 CA hull 100% arm 41/41cm heat 3% | Bastion-2 CA hull 100% arm 41/41cm heat 3% | Bastion-3 CA hull 100% arm 41/41cm heat 3% | Bastion-4 CA hull 100% arm 41/41cm heat 3% | Ward-1 FF hull 100% arm 12/12cm heat 5% | Ward-2 FF hull 100% arm 12/12cm heat 5% | Ward-3 FF hull 100% arm 12/12cm heat 7% | Ward-4 FF hull 100% arm 12/12cm heat 2%
+Hits: none
+Kills: none
+Fire: A 10 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Controlled Formation Pass. Maintain tight formation while converging on the OCS Bastion cruiser cluster (X=169). Consolidate fire on the...
+B admiral: (no new directive)
+=== CP 4 | t=120s | spend $0.19/$1.00 (+$0.13 held) ===
+ALPHA deepseek-v4.1-flash: 6/6 alive, hull 100% | Sovereign-1 BB hull 100% arm 45/45cm heat 5% | Sovereign-2 BB hull 100% arm 45/45cm heat 9% | Lancer-1 BC hull 100% arm 30/30cm heat 5% | Lancer-2 BC hull 100% arm 30/30cm heat 11% | Ward-1 FF hull 100% arm 12/12cm heat 4% | Ward-2 FF hull 100% arm 12/12cm heat 2%
+BETA deepseek-v4.1-flash: 8/8 alive, hull 100% | Bastion-1 CA hull 100% arm 41/41cm heat 4% | Bastion-2 CA hull 100% arm 41/41cm heat 4% | Bastion-3 CA hull 100% arm 41/41cm heat 5% | Bastion-4 CA hull 100% arm 41/41cm heat 5% | Ward-1 FF hull 100% arm 12/12cm heat 9% | Ward-2 FF hull 100% arm 12/12cm heat 8% | Ward-3 FF hull 100% arm 12/12cm heat 10% | Ward-4 FF hull 100% arm 12/12cm heat 5%
+Hits: none
+Kills: none
+Fire: A 43 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 7 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: (no new directive)
+B admiral: Initiate Phase 2: Controlled Approach. Accelerate as a coordinated formation toward the enemy center mass (Sovereign class) to prepare fo...
+=== CP 5 | t=150s | spend $0.24/$1.00 (+$0.13 held) ===
+ALPHA deepseek-v4.1-flash: 6/6 alive, hull 100% | Sovereign-1 BB hull 100% arm 45/45cm heat 9% | Sovereign-2 BB hull 100% arm 45/45cm heat 11% | Lancer-1 BC hull 100% arm 30/30cm heat 6% | Lancer-2 BC hull 100% arm 30/30cm heat 13% | Ward-1 FF hull 100% arm 12/12cm heat 5% | Ward-2 FF hull 100% arm 12/12cm heat 3%
+BETA deepseek-v4.1-flash: 8/8 alive, hull 100% | Bastion-1 CA hull 100% arm 41/41cm heat 5% | Bastion-2 CA hull 100% arm 38/41cm heat 4% | Bastion-3 CA hull 100% arm 41/41cm heat 7% | Bastion-4 CA hull 100% arm 41/41cm heat 5% | Ward-1 FF hull 100% arm 12/12cm heat 13% | Ward-2 FF hull 100% arm 12/12cm heat 10% | Ward-3 FF hull 100% arm 12/12cm heat 13% | Ward-4 FF hull 100% arm 12/12cm heat 8%
+Hits: A:Lancer-2>B:Bastion-2 gun x2 | B:Bastion-3>A:Sovereign-1 spinal x1 | A:Lancer-1>B:Bastion-1 gun x1 | B:Bastion-3>A:Sovereign-1 gun x1 | A:Sovereign-1>B:Bastion-3 spinal x1
+Kills: none
+Fire: A 26 slugs/4 hit, 0 torps/0 impact, PD downed 0 torps ; B 12 slugs/2 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Execute Controlled Formation Pass towards OCS Bastion group. Maintain formation integrity and increasing pressure until critical range is...
+B admiral: Initiate Phase 2: Accelerated Approach. Maintain formation as a cohesive unit. Focus all firepower on the enemy Sovereign Battleships (al...
+=== CP 6 | t=180s | spend $0.29/$1.00 (+$0.14 held) ===
+ALPHA deepseek-v4.1-flash: 6/6 alive, hull 100% | Sovereign-1 BB hull 100% arm 45/45cm heat 16% | Sovereign-2 BB hull 100% arm 45/45cm heat 14% | Lancer-1 BC hull 100% arm 30/30cm heat 8% | Lancer-2 BC hull 100% arm 30/30cm heat 13% | Ward-1 FF hull 100% arm 12/12cm heat 8% | Ward-2 FF hull 100% arm 12/12cm heat 6%
+BETA deepseek-v4.1-flash: 8/8 alive, hull 100% | Bastion-1 CA hull 100% arm 41/41cm heat 8% | Bastion-2 CA hull 100% arm 38/41cm heat 7% | Bastion-3 CA hull 100% arm 41/41cm heat 17% | Bastion-4 CA hull 100% arm 41/41cm heat 6% | Ward-1 FF hull 100% arm 12/12cm heat 15% | Ward-2 FF hull 100% arm 12/12cm heat 13% | Ward-3 FF hull 100% arm 12/12cm heat 17% | Ward-4 FF hull 100% arm 12/12cm heat 10%
+Hits: B:Bastion-3>A:Sovereign-1 gun x2 | A:Sovereign-1>B:Bastion-3 gun x2 | B:Bastion-1>A:Sovereign-2 gun x2 | A:Lancer-2>B:Bastion-3 spinal x1 | A:Sovereign-2>B:Bastion-3 spinal x1 | +1 more
+Kills: none
+Fire: A 32 slugs/5 hit, 0 torps/0 impact, PD downed 0 torps ; B 17 slugs/4 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: (no new directive)
+B admiral: "Execute a controlled formation pass (Option B). Maintain coordinated distance while moving to engage the enemy capital ships. Focus fire...
+=== CP 7 | t=210s | spend $0.33/$1.00 (+$0.17 held) ===
+ALPHA deepseek-v4.1-flash: 6/6 alive, hull 100% | Sovereign-1 BB hull 100% arm 40/45cm heat 20% | Sovereign-2 BB hull 100% arm 45/45cm heat 17% | Lancer-1 BC hull 100% arm 30/30cm heat 9% | Lancer-2 BC hull 100% arm 30/30cm heat 16% | Ward-1 FF hull 100% arm 12/12cm heat 10% | Ward-2 FF hull 100% arm 12/12cm heat 8%
+BETA deepseek-v4.1-flash: 8/8 alive, hull 100% | Bastion-1 CA hull 100% arm 41/41cm heat 10% | Bastion-2 CA hull 100% arm 38/41cm heat 9% | Bastion-3 CA hull 100% arm 39/41cm heat 18% | Bastion-4 CA hull 100% arm 41/41cm heat 7% | Ward-1 FF hull 100% arm 12/12cm heat 16% | Ward-2 FF hull 100% arm 12/12cm heat 15% | Ward-3 FF hull 100% arm 12/12cm heat 20% | Ward-4 FF hull 100% arm 12/12cm heat 12%
+Hits: B:Bastion-1>A:Sovereign-2 spinal x3 | A:Sovereign-1>B:Bastion-3 gun x3 | B:Bastion-1>A:Sovereign-2 gun x2 | A:Sovereign-1>B:Bastion-3 spinal x1 | A:Lancer-1>B:Bastion-1 gun x1 | +1 more
+Kills: none
+Fire: A 34 slugs/5 hit, 0 torps/0 impact, PD downed 0 torps ; B 19 slugs/6 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Maintain disciplined formation and controlled closure toward the enemy center mass (X=170km). Preserve tactical readiness, prioritize ove...
+B admiral: "Hold range and cancel closure. Establish tactical envelope for controlled formation pass
+=== CP 8 | t=240s | spend $0.38/$1.00 (+$0.17 held) ===
+ALPHA deepseek-v4.1-flash: 6/6 alive, hull 100% | Sovereign-1 BB hull 100% arm 40/45cm heat 29% | Sovereign-2 BB hull 100% arm 43/45cm heat 21% | Lancer-1 BC hull 100% arm 30/30cm heat 12% | Lancer-2 BC hull 100% arm 30/30cm heat 17% | Ward-1 FF hull 100% arm 12/12cm heat 11% | Ward-2 FF hull 100% arm 12/12cm heat 9%
+BETA deepseek-v4.1-flash: 8/8 alive, hull 100% | Bastion-1 CA hull 100% arm 41/41cm heat 16% | Bastion-2 CA hull 100% arm 37/41cm heat 10% | Bastion-3 CA hull 100% arm 30/41cm heat 23% | Bastion-4 CA hull 100% arm 41/41cm heat 11% | Ward-1 FF hull 100% arm 12/12cm heat 18% | Ward-2 FF hull 100% arm 12/12cm heat 18% | Ward-3 FF hull 100% arm 12/12cm heat 23% | Ward-4 FF hull 100% arm 12/12cm heat 15%
+Hits: A:Sovereign-1>B:Bastion-3 gun x3 | B:Bastion-1>A:Sovereign-2 gun x2 | A:Lancer-2>B:Bastion-3 spinal x1 | B:Bastion-4>A:Sovereign-2 spinal x1 | A:Lancer-1>B:Bastion-2 gun x1
+Kills: none
+Fire: A 32 slugs/5 hit, 0 torps/0 impact, PD downed 0 torps ; B 4 slugs/3 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: "Initiate Formation PADLOCK on the OCS Bastion central cluster (beta_1-4). Maintain tight formation for maximum overlapping point defense
+B admiral: (no new directive)
+=== CP 9 | t=270s | spend $0.43/$1.00 (+$0.22 held) ===
+ALPHA deepseek-v4.1-flash: 6/6 alive, hull 100% | Sovereign-1 BB hull 100% arm 40/45cm heat 31% | Sovereign-2 BB hull 100% arm 43/45cm heat 25% | Lancer-1 BC hull 100% arm 30/30cm heat 13% | Lancer-2 BC hull 100% arm 30/30cm heat 18% | Ward-1 FF hull 100% arm 12/12cm heat 11% | Ward-2 FF hull 100% arm 12/12cm heat 10%
+BETA deepseek-v4.1-flash: 8/8 alive, hull 100% | Bastion-1 CA hull 100% arm 41/41cm heat 17% | Bastion-2 CA hull 100% arm 37/41cm heat 11% | Bastion-3 CA hull 100% arm 26/41cm heat 28% | Bastion-4 CA hull 100% arm 41/41cm heat 11% | Ward-1 FF hull 100% arm 12/12cm heat 21% | Ward-2 FF hull 100% arm 12/12cm heat 21% | Ward-3 FF hull 100% arm 12/12cm heat 23% | Ward-4 FF hull 100% arm 12/12cm heat 19%
+Hits: B:Bastion-2>A:Sovereign-2 gun x1 | B:Bastion-1>A:Sovereign-2 gun x1 | A:Sovereign-2>B:Bastion-3 spinal x1
+Kills: none
+Fire: A 32 slugs/1 hit, 0 torps/0 impact, PD downed 0 torps ; B 1 slugs/2 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Maintain formation integrity while converging on the OCS Bastion group (beta_1-4). Transition immediately to a controlled PADLOCK posture...
+B admiral: Transition into the 'Approach' phase. Maintain tight formation while slowly closing range on TIS Sovereign-2, focusing on maintaining a b...
+=== CP 10 | t=300s | spend $0.47/$1.00 (+$0.22 held) ===
+ALPHA deepseek-v4.1-flash: 6/6 alive, hull 100% | Sovereign-1 BB hull 100% arm 40/45cm heat 33% | Sovereign-2 BB hull 100% arm 43/45cm heat 26% | Lancer-1 BC hull 100% arm 30/30cm heat 15% | Lancer-2 BC hull 100% arm 30/30cm heat 20% | Ward-1 FF hull 100% arm 12/12cm heat 13% | Ward-2 FF hull 100% arm 12/12cm heat 12%
+BETA deepseek-v4.1-flash: 8/8 alive, hull 100% | Bastion-1 CA hull 100% arm 41/41cm heat 18% | Bastion-2 CA hull 100% arm 37/41cm heat 17% | Bastion-3 CA hull 100% arm 11/41cm heat 30% | Bastion-4 CA hull 100% arm 41/41cm heat 13% | Ward-1 FF hull 100% arm 12/12cm heat 23% | Ward-2 FF hull 100% arm 12/12cm heat 24% | Ward-3 FF hull 100% arm 12/12cm heat 27% | Ward-4 FF hull 100% arm 12/12cm heat 22%
+Hits: A:Sovereign-1>B:Bastion-3 gun x7 | A:Sovereign-2>B:Bastion-3 gun x2
+Kills: none
+Fire: A 30 slugs/9 hit, 0 torps/0 impact, PD downed 0 torps ; B 1 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: "Initiate Phase 2: Transition to a formation PADLOCK firing sequence. Maintain tight formation velocity and engage the OCS Bastion group
+B admiral: (no new directive)
+=== CP 11 | t=330s | spend $0.53/$1.00 (+$0.22 held) ===
+ALPHA deepseek-v4.1-flash: 6/6 alive, hull 100% | Sovereign-1 BB hull 100% arm 40/45cm heat 36% | Sovereign-2 BB hull 100% arm 43/45cm heat 28% | Lancer-1 BC hull 100% arm 30/30cm heat 17% | Lancer-2 BC hull 100% arm 30/30cm heat 22% | Ward-1 FF hull 100% arm 12/12cm heat 14% | Ward-2 FF hull 100% arm 12/12cm heat 12%
+BETA deepseek-v4.1-flash: 8/8 alive, hull 100% | Bastion-1 CA hull 100% arm 41/41cm heat 19% | Bastion-2 CA hull 100% arm 37/41cm heat 20% | Bastion-3 CA hull 100% arm 10/41cm heat 32% rad | Bastion-4 CA hull 100% arm 41/41cm heat 18% | Ward-1 FF hull 100% arm 12/12cm heat 23% | Ward-2 FF hull 100% arm 12/12cm heat 27% | Ward-3 FF hull 100% arm 12/12cm heat 30% | Ward-4 FF hull 100% arm 12/12cm heat 25%
+Hits: A:Lancer-2>B:Bastion-3 gun x1
+Kills: none
+Fire: A 33 slugs/1 hit, 0 torps/0 impact, PD downed 0 torps ; B 8 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: (no new directive)
+B admiral: Advance into controlled formation passing range toward the enemy center mass. Our primary objective is the destruction of the heavy capit...
+=== CP 12 | t=360s | spend $0.57/$1.00 (+$0.22 held) ===
+ALPHA deepseek-v4.1-flash: 6/6 alive, hull 100% | Sovereign-1 BB hull 100% arm 40/45cm heat 40% | Sovereign-2 BB hull 100% arm 43/45cm heat 31% | Lancer-1 BC hull 100% arm 30/30cm heat 20% | Lancer-2 BC hull 100% arm 30/30cm heat 22% | Ward-1 FF hull 100% arm 12/12cm heat 16% | Ward-2 FF hull 100% arm 12/12cm heat 14%
+BETA deepseek-v4.1-flash: 8/8 alive, hull 100% | Bastion-1 CA hull 100% arm 41/41cm heat 19% | Bastion-2 CA hull 100% arm 37/41cm heat 21% | Bastion-3 CA hull 99% arm 1/41cm heat 28% rad | Bastion-4 CA hull 100% arm 41/41cm heat 19% rad | Ward-1 FF hull 100% arm 12/12cm heat 25% | Ward-2 FF hull 100% arm 12/12cm heat 29% | Ward-3 FF hull 100% arm 12/12cm heat 30% | Ward-4 FF hull 100% arm 12/12cm heat 28%
+Hits: B:Bastion-2>A:Sovereign-2 gun x2 | A:Sovereign-2>B:Bastion-3 gun x2 | A:Sovereign-1>B:Bastion-3 spinal x1 | A:Sovereign-2>B:Bastion-3 spinal x1
+Kills: none
+Fire: A 29 slugs/4 hit, 0 torps/0 impact, PD downed 0 torps ; B 19 slugs/2 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Phase 1: Controlled Formation Pass. We maintain tactical cohesion, closing range slowly and uniformly towards the OCS Bastion cluster (be...
+B admiral: "Execute Controlled Formation Pass (Option B). Maintain tight tactical formation and execute the synchronized 'cancel closure' maneuver t...
+=== CP 13 | t=390s | spend $0.61/$1.00 (+$0.22 held) ===
+ALPHA deepseek-v4.1-flash: 6/6 alive, hull 100% | Sovereign-1 BB hull 100% arm 40/45cm heat 42% | Sovereign-2 BB hull 100% arm 43/45cm heat 35% | Lancer-1 BC hull 100% arm 30/30cm heat 21% | Lancer-2 BC hull 100% arm 30/30cm heat 23% | Ward-1 FF hull 100% arm 12/12cm heat 18% | Ward-2 FF hull 100% arm 12/12cm heat 16%
+BETA deepseek-v4.1-flash: 8/8 alive, hull 98% | Bastion-1 CA hull 100% arm 41/41cm heat 23% | Bastion-2 CA hull 100% arm 37/41cm heat 26% | Bastion-3 CA hull 82% arm 0/41cm heat 27% rad | Bastion-4 CA hull 100% arm 41/41cm heat 16% rad | Ward-1 FF hull 100% arm 12/12cm heat 28% | Ward-2 FF hull 100% arm 12/12cm heat 31% | Ward-3 FF hull 100% arm 12/12cm heat 34% | Ward-4 FF hull 100% arm 12/12cm heat 32%
+Hits: A:Sovereign-1>B:Bastion-3 gun x6 | B:Bastion-2>A:Sovereign-2 gun x4 | B:Bastion-3>A:Sovereign-1 gun x3 | A:Sovereign-2>B:Bastion-3 gun x3 | B:Bastion-4>A:Sovereign-2 gun x3 | +3 more
+Kills: none
+Fire: A 21 slugs/13 hit, 0 torps/0 impact, PD downed 0 torps ; B 8 slugs/10 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: (no new directive)
+B admiral: Execute Controlled Formation Pass. We will open range slightly to establish a safe tactical envelope, maintaining 360-degree Point Defens...
+=== CP 14 | t=420s | spend $0.67/$1.00 (+$0.22 held) ===
+ALPHA deepseek-v4.1-flash: 6/6 alive, hull 100% | Sovereign-1 BB hull 100% arm 40/45cm heat 46% | Sovereign-2 BB hull 100% arm 43/45cm heat 38% | Lancer-1 BC hull 100% arm 30/30cm heat 21% | Lancer-2 BC hull 100% arm 30/30cm heat 23% | Ward-1 FF hull 100% arm 12/12cm heat 20% | Ward-2 FF hull 100% arm 12/12cm heat 17%
+BETA deepseek-v4.1-flash: 8/8 alive, hull 97% | Bastion-1 CA hull 100% arm 41/41cm heat 24% | Bastion-2 CA hull 100% arm 37/41cm heat 28% | Bastion-3 CA hull 77% arm 0/41cm heat 25% rad | Bastion-4 CA hull 100% arm 41/41cm heat 11% rad | Ward-1 FF hull 100% arm 12/12cm heat 30% | Ward-2 FF hull 100% arm 12/12cm heat 33% | Ward-3 FF hull 100% arm 12/12cm heat 36% | Ward-4 FF hull 100% arm 12/12cm heat 33%
+Hits: B:Bastion-3>A:Sovereign-1 gun x3 | A:Sovereign-2>B:Bastion-3 spinal x1 | A:Sovereign-1>B:Bastion-3 spinal x1
+Kills: none
+Fire: A 31 slugs/2 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/3 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Execute Controlled Formation Pass: Maintain tight formation and close range toward the OCS Bastion Cruiser group. Initiate formation PADL...
+B admiral: (no new directive)
+=== CP 15 | t=450s | spend $0.71/$1.00 (+$0.22 held) ===
+ALPHA deepseek-v4.1-flash: 6/6 alive, hull 100% | Sovereign-1 BB hull 100% arm 40/45cm heat 48% | Sovereign-2 BB hull 100% arm 43/45cm heat 41% | Lancer-1 BC hull 100% arm 30/30cm heat 22% | Lancer-2 BC hull 100% arm 30/30cm heat 26% | Ward-1 FF hull 100% arm 12/12cm heat 22% | Ward-2 FF hull 100% arm 12/12cm heat 17%
+BETA deepseek-v4.1-flash: 8/8 alive, hull 96% | Bastion-1 CA hull 100% arm 41/41cm heat 31% | Bastion-2 CA hull 100% arm 37/41cm heat 34% | Bastion-3 CA hull 71% arm 0/41cm heat 22% rad | Bastion-4 CA hull 100% arm 41/41cm heat 7% rad | Ward-1 FF hull 100% arm 12/12cm heat 34% | Ward-2 FF hull 100% arm 12/12cm heat 37% | Ward-3 FF hull 100% arm 12/12cm heat 40% | Ward-4 FF hull 100% arm 12/12cm heat 37%
+Hits: A:Sovereign-1>B:Bastion-3 spinal x2 | A:Sovereign-2>B:Bastion-2 gun x2 | A:Sovereign-1>B:Bastion-3 gun x1 | A:Ward-2>B:Bastion-2 gun x1
+Kills: none
+Fire: A 41 slugs/6 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: EXECUTE CONTROLLED FORMATION PASS towards the enemy center mass (OCS Bastion group). Maintain formation cohesion while closing optimal en...
+B admiral: (no new directive)
+=== RESULT | t=450s | after CP 15 | spend $0.71/$1.00 (+$0.22 held) ===
+Winner: NONE - RuntimeError: Spending ceiling reached; battle stopped and partial replay saved
+ALPHA deepseek-v4.1-flash: 6/6 alive, hull 100% | Sovereign-1 BB hull 100% arm 40/45cm heat 48% | Sovereign-2 BB hull 100% arm 43/45cm heat 41% | Lancer-1 BC hull 100% arm 30/30cm heat 22% | Lancer-2 BC hull 100% arm 30/30cm heat 26% | Ward-1 FF hull 100% arm 12/12cm heat 22% | Ward-2 FF hull 100% arm 12/12cm heat 17%
+BETA deepseek-v4.1-flash: 8/8 alive, hull 96% | Bastion-1 CA hull 100% arm 41/41cm heat 31% | Bastion-2 CA hull 100% arm 37/41cm heat 34% | Bastion-3 CA hull 71% arm 0/41cm heat 22% rad | Bastion-4 CA hull 100% arm 41/41cm heat 7% rad | Ward-1 FF hull 100% arm 12/12cm heat 34% | Ward-2 FF hull 100% arm 12/12cm heat 37% | Ward-3 FF hull 100% arm 12/12cm heat 40% | Ward-4 FF hull 100% arm 12/12cm heat 37%
+Final interval - Hits: none
+Final interval - Kills: none
+Final interval - Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+Spend: $0.7069 reported, $0.9235 committed of $1.00 limit, 470 model calls
+Recording: /home/plmch/ai-commanders/visualizer/public/recordings/p4_old_flash_mirror_150pt.json
