@@ -202,6 +202,19 @@ class TestHelmWindow:
                         "order; evasion swung the burn within 20° of your line 20 s: EVADE 12 s "
                         "dodging, BRACE 8 s armour (fire from OCS Foe [foe])")
 
+    def test_burning_while_still_turning_onto_the_line_is_not_the_orders_burn(self):
+        swing = dict(requested_throttle=1.0, applied_throttle=1.0, engine_fraction=1.0,
+                     fuel_fraction=1.0, swing=True)
+        events = [_ev("MANEUVER_STARTED", 30.0, **HEADING),
+                  _ev("EXECUTION_STATE", 30.0, mode="TANK", off_line=True, **swing),
+                  _ev("EXECUTION_STATE", 45.0, mode="EVADE", **swing),
+                  _ev("PROJECTILE_LAUNCHED", 31.0, ship="foe", target="me")]
+        w = helm_window(_helm_sim(events), "me", 30.0, 60.0)
+        assert w["swing_turn_s"] == pytest.approx(15.0) and w["burned_s"] == pytest.approx(15.0)
+        text = helm_window_text(_helm_sim(events), "me", 30.0, 60.0)
+        assert "burned 15 of 30 s on your order" in text
+        assert "turning onto the burn line at your throttle under fire 15 s" in text
+
     def test_evasion_holding_the_burn_is_named_with_the_threat(self):
         # Recorded (d alpha_1 T+240): "BRACE, requested 100% throttle, applied
         # 0% (turning onto the burn line, or fuel/engine limited)". (Recorded

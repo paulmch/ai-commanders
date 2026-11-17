@@ -169,6 +169,11 @@ class TestEveryBurningOrder:
         assert len(flown) >= 5, name
         for t, ordered, out, swing in flown:
             assert out >= ordered - 1e-12, (name, t, ordered, out)
+        if name == "heading_90_off":
+            # the first turn under fire burns, and is recorded as off the line
+            states = [e.data for e in sim.events
+                      if e.event_type == SimulationEventType.EXECUTION_STATE and e.ship_id == "me"]
+            assert any(d.get("swing") and d.get("off_line") for d in states)
         if name == "formation":
             # held until its start: an engine-off order for the overlay
             assert min(t for t, *_ in flown) >= 25.0

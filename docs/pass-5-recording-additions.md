@@ -1074,10 +1074,12 @@ read as before (no swing).
 
 | field | type | meaning |
 |---|---|---|
-| `swing` | bool, only when true | the evade overlay has the helm (`mode` EVADE / TANK / BRACE / PRESENT) and is swinging the order's burn instead of holding it: `applied_throttle` is the order's (`requested_throttle` x engine fraction), the nose within the cone of the burn line. Absent: the older overlay (an engine-off order or the EVADE maneuver - BRACE drive off, TANK half), or no evasion. |
+| `swing` | bool, only when true | the evade overlay has the helm (`mode` EVADE / TANK / BRACE / PRESENT) and is swinging the order's burn instead of holding it: `applied_throttle` is the throttle the order burns this tick (x engine fraction; `requested_throttle` for a fixed heading, the range keeper's own demand for HOLD_RANGE / standoff), the swing is aimed inside the cone of the burn line (the nose can overshoot it by a few degrees on carried spin; see `off_line`). Absent: the older overlay (an engine-off order or the EVADE maneuver - BRACE drive off, TANK half), or no evasion. |
 
-The transition key now includes it, so a change from a held BRACE to a swung
-BRACE at the same throttles is a new `execution_state` event.
+| `off_line` | bool, only when true (with `swing`) | the nose is still more than the cone plus 10 deg off the burn line (the order's first turn under fire, or turning back after a RUN): the drive burns at the order's throttle while thrust vectoring turns the ship, but not along the line yet |
+
+The transition key now includes both, so a change from a held BRACE to a
+swung BRACE at the same throttles is a new `execution_state` event.
 
 ### Trace frame field `swing` (per ship, `--trace` recordings)
 

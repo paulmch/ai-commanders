@@ -32,6 +32,16 @@ Evade overlay on a burning order (Maneuver.evade, owner's rule, 2026-11):
   burn line still strikes the nose armour. Held at the cone edge the burn
   keeps cos(20) = 94 % of its push along the line; the sideways 34 % is the
   dodge.
+- The aim stays inside the cone; the nose itself overshoots it on carried
+  spin (measured up to ~28 deg: scripts/evade_burn_measure.py max_off_deg).
+- Threats: a burning ship's evasion takes the miss of each round at its
+  closest approach with the ship's own burn (1/2 a t^2) added
+  (_gather_ballistic_threats own_accel) - a round led onto a burning ship
+  used to read as a miss until its last seconds.
+- Range keepers are a hybrid: their burns (CLOSE / OPEN / ARRIVE, HOLD
+  corrections at or above EVADE_BURN_MIN_THROTTLE) are swung; below the
+  threshold (coasting or trimming on the range) the order is engine-off for
+  the overlay and it jinks at full throttle as before.
 - The swing is flown on thrust vectoring at the hull's real turn authority
   (_get_rotation_params, engine damage included): a new aim at most every
   max(EVADE_BURN_CYCLE_MIN_S, the time to swing from one edge of the cone to
@@ -45,9 +55,11 @@ Evade overlay on a burning order (Maneuver.evade, owner's rule, 2026-11):
   (seed, ship, cycle; never the battle RNG).
 - TANK / BRACE (a round that cannot be dodged) and PRESENT (a terminal
   torpedo): the aim is the cone point - the burn line or one of
-  EVADE_BURN_ARMOUR_AZIMUTHS points on the cone edge - whose attitude,
-  reachable before impact, puts the best armour on the threat
-  (_presentation_score). Hull roll does not enter: the armour sections are
+  EVADE_BURN_ARMOUR_AZIMUTHS points on the cone edge, or the attitude the
+  hull already has - whose attitude, reachable before impact, puts the best
+  armour on the threat (_presentation_score: energy, then thickness). When
+  none beats the burn line the swing keeps dodging the rounds that can
+  still be dodged (else it flies the line). Hull roll does not enter: the armour sections are
   bands around the thrust axis. What it gives up against the older overlay:
   a threat more than ~50 deg off the burn line can no longer be put on the
   nose armour, so it strikes the lateral or tail belt (a fifth to a sixth of
@@ -1169,6 +1181,10 @@ class ShipCombatState:
     # execution_state as 'swing').
     evade_burn: Optional[tuple] = None
     evade_swing: bool = False
+    # ... and on such a step the nose was still outside the cone plus
+    # HEADING_BURN_CONE_DEG (the order's first turn, or back after a RUN):
+    # burning at the order's throttle, but not along its line yet.
+    evade_off_line: bool = False
 
     # Power system
     power_system: Optional[PowerSystem] = None
@@ -3158,6 +3174,7 @@ class CombatSimulation:
         ship.attitude_commanded = False
         ship.evade_burn = None
         ship.evade_swing = False
+        ship.evade_off_line = False
 
         if ship.current_maneuver:
             maneuver = ship.current_maneuver
@@ -3216,7 +3233,7 @@ class CombatSimulation:
         if ship.execution_mode == 'COAST' and ship.current_maneuver:
             ship.execution_mode = ship.current_maneuver.maneuver_type.name
         execution = (ship.execution_mode, round(ship.applied_throttle, 2), round(requested, 2),
-                     ship.evade_swing)
+                     ship.evade_swing, ship.evade_off_line)
         key = (ship.ship_id, 'execution')
         if self.evidence.transitions.get(key) != execution:
             self.evidence.transitions[key] = execution
@@ -3227,6 +3244,9 @@ class CombatSimulation:
                 # The evade overlay is swinging the order's burn (module
                 # docstring): the drive is on the order, the mode says why.
                 data['swing'] = True
+                if ship.evade_off_line:
+                    # ... still turning onto its line (outside the cone)
+                    data['off_line'] = True
             self._log_event(SimulationEventType.EXECUTION_STATE, ship.ship_id, data=data)
 
         # Update kinematic state with reduced thrust if engines damaged
@@ -5439,6 +5459,8 @@ class CombatSimulation:
                 aim = (self._swing_dodge_aim(ship, line, cone, cycle, dodgeable_only=True)
                        or line)
         ship.evade_swing = True
+        ship.evade_off_line = (ship.forward.angle_to(line)
+                               > cone + math.radians(HEADING_BURN_CONE_DEG))
         # The order's throttle whatever the nose does: also off the line (the
         # order's own first turn under fire, or turning back after a RUN) the
         # drive burns while thrust vectoring turns the ship.

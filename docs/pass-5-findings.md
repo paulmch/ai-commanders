@@ -282,9 +282,21 @@ turns on thrust vectoring.
 | destroyer cancelling 2 km/s closure on 2 gun ships: closest approach | 15 km | 50 km | 52 km |
 | same on 1 destroyer: closest approach / closing at 60 s | 47 km / 1.5 km/s | 71 km / 1.0 km/s | 69 km / 1.0 km/s |
 
+| first turn under fire, HOLD_RANGE (12 seeds) | before | after | no overlay |
+|---|---|---|---|
+| destroyer cancelling 2 km/s closure, nose still on the enemy (180 deg turn): closing at 60 s | 2.0 km/s | 1.5 km/s | 1.7 km/s |
+| same: sideways speed at 60 s / rounds that hit / lost | 0.27 km/s / 32 % / 0 | 0.15 / 52 % / 3 | 0.02 / 61 % / 7 |
+| destroyer HOLD_RANGE opening 150 -> 300 km under fire: km gained after 120 s | 19 | 74 | 67 |
+| same: rounds that hit; ticks under fire swung / on the older overlay | 6 %; - / 64 % | 29 %; 30 % / 54 % | 32 % |
+
+  The nose is aimed inside the cone but overshoots it on carried spin: up to 28 degrees
+  measured. The overlay costs CPU: an overlay-heavy scenario (12 ships x 150 s under fire)
+  took 14.9 s against 12.6 s, because the order is flown twice per tick and the threat scan
+  runs again. The perf benchmark battles barely use the overlay; their CPU did not change.
 - Helm measurement of the original report (stub battles, a ship ordered HEADING @100 % across
-  the line of fire, its nose starting off the heading): it burned on its order 94 % of its
-  time under fire with the overlay, up from 2 %. Without the overlay the figure is 81 %.
+  the line of fire, its nose starting off the heading): it burned on its order 87 % of its
+  time under fire with the overlay, up from 2 %, and another 7 % at full throttle while
+  still turning onto the line. Without the overlay the figure is 81 %.
 - Torpedo wall (admiral doctrine fixture, 500 km): burning straight away with evade full,
   66 % -> 36 % of rounds hit, now all on the tail as without the overlay (37 %). The older
   overlay turned the nose onto the rounds.

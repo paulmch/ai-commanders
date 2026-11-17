@@ -1298,7 +1298,7 @@ def helm_summary(sim: Any, ship_ids: Iterable[str], since_t: float,
         elif float(data.get("requested_throttle") or 0.0) >= BURNING_MIN_THROTTLE:
             acc[sid]["held"] += dt      # the order asked for thrust, none came out
         acc[sid]["modes"][str(data.get("mode") or "?").upper()] += dt
-        if data.get("swing"):
+        if data.get("swing") and not data.get("off_line"):
             acc[sid]["swing"][str(data.get("mode") or "?").upper()] += dt
 
     for event in getattr(sim, "events", None) or []:

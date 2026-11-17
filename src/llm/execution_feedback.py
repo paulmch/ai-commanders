@@ -145,10 +145,12 @@ def helm_window(simulation: Any, ship_id: str, since: float, now: float,
     Returns {order: {type, throttle, evade}, window_s, burned_s, modes:
     {mode: s}, swing: {mode: s}, dead_s, damaged: engine fraction or None,
     fuel_s, interlock_s, turning_s, shooters: [names], torpedo_sources:
-    [names], turn_left_s}. ``modes`` are the seconds evasion held the order
-    (an engine-off order, or RUN); ``swing`` the seconds the evade overlay
-    swung a burning order's thrust axis - burned on the order, and counted
-    in burned_s too.
+    [names], turn_left_s, swing_turn_s}. ``modes`` are the seconds evasion
+    held the order (an engine-off order, or RUN); ``swing`` the seconds the
+    evade overlay swung a burning order's thrust axis - burned on the order,
+    and counted in burned_s too; ``swing_turn_s`` the seconds it burned at
+    the order's throttle with the nose still turning onto the line (not
+    counted as burned).
     """
     if now - since < 1.0:
         return None
@@ -189,7 +191,8 @@ def helm_window(simulation: Any, ship_id: str, since: float, now: float,
     kind = str(order.get("maneuver_type") or "?")
     out: Dict[str, Any] = {
         "order": {"type": kind, "throttle": order.get("throttle"), "evade": order.get("evade")},
-        "window_s": now - since, "burned_s": 0.0, "modes": {}, "swing": {}, "dead_s": 0.0,
+        "window_s": now - since, "burned_s": 0.0, "modes": {}, "swing": {}, "swing_turn_s": 0.0,
+        "dead_s": 0.0,
         "damaged": None,
         "fuel_s": 0.0, "interlock_s": 0.0, "turning_s": 0.0, "turn_left_s": None,
         "shooters": [n for n, _ in sorted(shooters.items(), key=lambda kv: -kv[1])],
@@ -224,6 +227,11 @@ def helm_window(simulation: Any, ship_id: str, since: float, now: float,
         swung = bool(data.get("swing")) and mode in _SWING_TAG
         if mode in _EVASION_DRIVE and not swung:
             out["modes"][mode] = out["modes"].get(mode, 0.0) + dur
+            continue
+        if swung and data.get("off_line"):
+            # Burning at the order's throttle while still turning onto its
+            # line: not yet the order's burn.
+            out["swing_turn_s"] += dur
             continue
         if swung:
             out["swing"][mode] = out["swing"].get(mode, 0.0) + dur
@@ -280,7 +288,7 @@ def helm_window_text(simulation: Any, ship_id: str, since: float, now: float,
     thr = order.get("throttle")
     burns = kind not in _ENGINE_OFF and kind != "EVASIVE" and isinstance(thr, (int, float)) and thr > 0
     evading = sum(w["modes"].values())
-    swinging = sum(w["swing"].values())
+    swinging = sum(w["swing"].values()) + w["swing_turn_s"]
     if (not evading and swinging < 0.5
             and not (burns and w["burned_s"] < HELM_SHORTFALL_FRACTION * window)):
         return None
@@ -310,6 +318,9 @@ def helm_window_text(simulation: Any, ship_id: str, since: float, now: float,
         threat = f" (fire from {names(w['shooters'])})" if w["shooters"] else ""
         parts.append(f"evasion swung the burn within {EVADE_BURN_CONE_DEG:.0f}° of your line "
                      f"{swinging:.0f} s: " + ", ".join(swung) + threat)
+    if w["swing_turn_s"] >= 0.5:
+        parts.append(f"turning onto the burn line at your throttle under fire "
+                     f"{w['swing_turn_s']:.0f} s (evade keeps the drive lit)")
     if w["turning_s"] >= 0.5:
         text = f"turning onto the burn line {w['turning_s']:.0f} s"
         if w["turn_left_s"] is not None and w["turn_left_s"] >= 0.5:

@@ -1530,11 +1530,14 @@ class TestEvasionDriveClaims:
                       r"without the overlay; a dreadnought \(a narrower, slower swing\) (\d+)% "
                       r"against (\d+)%\. A destroyer burning straight away from 2 gun ships "
                       r"150 km off took its hits mostly on the tail and flank and was lost in "
-                      r"(\d+) of 12 runs with the overlay, (\d+) of 12 without", doc)
+                      r"(\d+) of 12 runs with the overlay, (\d+) of 12 without\. A destroyer "
+                      r"cancelling 2 km/s of closure with its nose still on the enemy burns "
+                      r"through its 180° turn with the overlay: closing at ([\d.]+) km/s after "
+                      r"60 s, ([\d.]+) without it", doc)
         assert m, "the measured overlay sentence changed shape"
-        quoted = [int(g) for g in m.groups()]
+        quoted = [float(g) for g in m.groups()]
         todo = (ebm.jobs(["cross"], ["destroyer", "dreadnought"], evades=(None, "dodge"))
-                + ebm.jobs(["escape"], ["destroyer"], evades=(None, "dodge")))
+                + ebm.jobs(["escape", "flip"], ["destroyer"], evades=(None, "dodge")))
         got = {(s["scen"], s["hull"], s["evade"]): s
                for s in ebm.summarise([ebm.run(j) for j in todo])}
         dd = got[("cross", "destroyer", "dodge")]
@@ -1545,5 +1548,7 @@ class TestEvasionDriveClaims:
         assert quoted[4] == pytest.approx(got[("cross", "dreadnought", "None")]["hit_pct"], abs=1.0)
         assert quoted[5] == got[("escape", "destroyer", "dodge")]["dead"]
         assert quoted[6] == got[("escape", "destroyer", "None")]["dead"]
+        assert quoted[7] == pytest.approx(got[("flip", "destroyer", "dodge")]["close60"], abs=0.05)
+        assert quoted[8] == pytest.approx(got[("flip", "destroyer", "None")]["close60"], abs=0.05)
         loc = got[("escape", "destroyer", "dodge")]["loc"]
         assert loc.get("tail", 0) + loc.get("lateral", 0) > 2 * loc.get("nose", 0)

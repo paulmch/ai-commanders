@@ -1003,9 +1003,14 @@ HIT PROBABILITY PER ROUND vs a destroyer (spinal 9.9 km/s / turret 6.0 km/s):
 - evade dodge:     82/57%  34/7%   9/1%    2/0%    0/0%    0/0%
 - dodge, mid-jink: 74/36%  20/3%   4/1%    1/0%    0/0%    0/0%
 - EVADE maneuver:  49/41%  29/10%  11/2%   4/0%    1/0%    0/0%
+- burn + dodge:    82/78%  63/54%  47/30%  33/13%  13/2%   4/1%
+- burn, swinging:  82/77%  61/44%  40/15%  22/5%   5/1%    1/0%
 "Evade dodge" is a dodger not yet reacting when you fire: your round makes it jink,
 aimed at that very round. "Mid-jink" is one caught already burning off another round
-- what your other ships' fire does to it. Agile hulls escape sooner (a dodging
+- what your other ships' fire does to it. Those two coast (PADLOCK + evade dodge). A
+ship burning nose-on at you with evade keeps its burn and only swings it within 20° of
+its line ("burn + dodge" between rounds, "swinging" caught mid-swing): it is far easier
+to hit than a coasting dodger. Agile hulls escape sooner (a dodging
 frigate: spinal 19% at 100km, 4% at 150km), heavy ones later (a dodging battleship:
 11% at 200km, 2% at 300km). The P(hit) on your ENEMIES lines is this model for the live geometry - fire
 on it, and close range before you shoot at a dodger. Under a whole fleet's fire
@@ -2854,7 +2859,9 @@ MANEUVERS (tell captains which to use):
   fired at it, 38% without the overlay; a dreadnought (a narrower, slower swing) 45%
   against 50%. A destroyer burning straight away from 2 gun ships 150 km off took its
   hits mostly on the tail and flank and was lost in 8 of 12 runs with the overlay, 12 of
-  12 without. On an order that does not burn
+  12 without. A destroyer cancelling 2 km/s of closure with its nose still on the enemy
+  burns through its 180° turn with the overlay: closing at 1.5 km/s after 60 s, 1.7
+  without it. On an order that does not burn
   (PADLOCK, MAINTAIN, throttle 0) the overlay flies the drive: jinks at full throttle,
   TANK (half throttle) or BRACE (drive off).
 - BRAKE: burn against the ship's own (world-frame) velocity

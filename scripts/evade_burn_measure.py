@@ -15,6 +15,10 @@ Scenarios (seeded, no LLM; every gun FIRE_IMMEDIATE at the target):
            (PADLOCK), HEADING @100% against the closure (cancel it), 200 s
   escape1, merge1: the same against one destroyer (a fight the target can survive,
            so its closest approach is not cut short by its death)
+  flip   : merge, but the nose still points along the closure (180 deg off the
+           cancel line): the order's first turn is flown under fire
+  hold   : HOLD_RANGE 300 km on a battlecruiser + destroyer 150 km off (opening, then
+           holding; range keeping trims below EVADE_BURN_MIN_THROTTLE are engine-off)
 Each with the overlay off, 'dodge' and 'full'.
 
     OMP_NUM_THREADS=1 uv run python scripts/evade_burn_measure.py --out /tmp/eb.json
@@ -24,7 +28,10 @@ Columns: on_order = share of the ticks under fire (a gun round inbound) with
 the drive at >= half the order's throttle and the nose within 30 deg of the
 burn line; along = mean of applied throttle x cos(nose to line) over those
 ticks; d60/d120/d240 = km moved along the line; close60/close120 = closing
-speed (km/s) on the nearest shooter at 60 / 120 s (rows alive then); min_range /
+speed (km/s) on the nearest shooter at 60 / 120 s (rows alive then); side60 =
+speed across the line at 60 s (km/s); swing_pct / old_overlay_pct = ticks under fire
+with the burn swung / with the older overlay flying; max_off_deg = largest nose
+angle off the line on a swung tick; min_range /
 range_end = km to
 the nearest shooter; hit_pct = hits / rounds fired at the target; pen =
 penetrating hits; loc = hits by facing; dead = runs the target died in.
@@ -44,14 +51,14 @@ sys.path.insert(0, str(ROOT))
 
 from src.firecontrol import WeaponsCommand, WeaponsOrder  # noqa: E402
 from src.physics import Vector3D  # noqa: E402
-from src.simulation import (CombatSimulation, Maneuver, ManeuverType,  # noqa: E402
-                            SimulationEventType, create_ship_from_fleet_data)
+from src.simulation import (EVASION_OVERLAY_MODES, CombatSimulation, Maneuver,  # noqa: E402
+                            ManeuverType, SimulationEventType, create_ship_from_fleet_data)
 
 FLEET = json.loads((ROOT / "data" / "fleet_ships.json").read_text())
 SEEDS = list(range(1, 13))
 EVADES = (None, "dodge", "full")
 CROSS_HULLS = ("corvette", "destroyer", "battlecruiser", "dreadnought")
-SCENARIOS = ("cross", "escape", "merge", "escape1", "merge1")
+SCENARIOS = ("cross", "escape", "merge", "escape1", "merge1", "flip", "hold")
 RUN_HULLS = ("destroyer", "battlecruiser")
 
 
@@ -80,10 +87,18 @@ def run(job):
         centre = Vector3D(150e3, 0, 0)
         dur = 240.0
         shooter_mode = "INTERCEPT"
-    else:  # merge, merge1
+    elif scen == "hold":
         d = Vector3D(-1, 0, 0)
         tgt = create_ship_from_fleet_data("target", hull, "alpha", FLEET, position=Vector3D(0, 0, 0),
-                                          velocity=Vector3D(2000.0, 0, 0), forward=d)
+                                          velocity=Vector3D(0, 0, 0), forward=d)
+        centre = Vector3D(150e3, 0, 0)
+        dur = 200.0
+        shooter_mode = "PADLOCK"
+    else:  # merge, merge1, flip (nose still on the closure: 180 deg off the line)
+        d = Vector3D(-1, 0, 0)
+        tgt = create_ship_from_fleet_data("target", hull, "alpha", FLEET, position=Vector3D(0, 0, 0),
+                                          velocity=Vector3D(2000.0, 0, 0),
+                                          forward=d * -1.0 if scen == "flip" else d)
         centre = Vector3D(200e3, 0, 0)
         dur = 200.0
         shooter_mode = "PADLOCK"
@@ -104,14 +119,24 @@ def run(job):
                                       target_id="target")
         fire_orders(s, "target")
         shooters.append(s)
-    tgt.current_maneuver = Maneuver(ManeuverType.HEADING, 0, duration=1e9, throttle=1.0,
-                                    heading_direction={"x": d.x, "y": d.y, "z": d.z}, evade=evade)
+    if scen == "hold":
+        # open to 300 km and hold there (range keeping: CLOSE/OPEN burns swing,
+        # HOLD trims are engine-off for the overlay)
+        tgt.current_maneuver = Maneuver(ManeuverType.HOLD_RANGE, 0, duration=1e9, throttle=1.0,
+                                        target_id="shooter0", hold_range_m=300e3, evade=evade)
+    else:
+        tgt.current_maneuver = Maneuver(ManeuverType.HEADING, 0, duration=1e9, throttle=1.0,
+                                        heading_direction={"x": d.x, "y": d.y, "z": d.z},
+                                        evade=evade)
     p0 = tgt.position
     a_full = tgt.kinematic_state.max_acceleration_ms2()
     under = burn_half = burn_full = on_order = 0
     along = 0.0
     disp = {}
     closing = {}
+    side = {}
+    swing_ticks = old_ticks = 0
+    max_off = 0.0
     min_range = float("inf")
     hits = []
     shots = 0
@@ -134,10 +159,17 @@ def run(job):
                 burn_full += app >= 0.99
                 along += app * tgt.forward.dot(d)
                 on_order += app >= 0.5 and tgt.forward.dot(d) >= math.cos(math.radians(30))
+                if getattr(tgt, "evade_swing", False):
+                    swing_ticks += 1
+                    max_off = max(max_off, math.degrees(tgt.forward.angle_to(d)))
+                elif tgt.execution_mode in EVASION_OVERLAY_MODES:
+                    old_ticks += 1
             t = round(sim.current_time)
             if t in (60, 120, 240):
                 disp[t] = (tgt.position - p0).dot(d) / 1000.0
             if t in (60, 120):
+                v = tgt.velocity
+                side[t] = (v - d * v.dot(d)).magnitude / 1000.0
                 near = min(shooters, key=lambda s: (tgt.position - s.position).magnitude)
                 rel = near.position - tgt.position
                 closing[t] = (tgt.velocity - near.velocity).dot(rel.normalized()) / 1000.0
@@ -147,7 +179,8 @@ def run(job):
             died = sim.current_time
     rng_end = min((tgt.position - s.position).magnitude for s in shooters) / 1000.0
     return dict(scen=scen, hull=hull, evade=evade, seed=seed, under=under, burn_half=burn_half,
-                burn_full=burn_full, on_order=on_order, closing=closing, along=along, disp=disp, min_range=min_range, range_end=rng_end,
+                burn_full=burn_full, on_order=on_order, closing=closing, side=side,
+                swing_ticks=swing_ticks, old_ticks=old_ticks, max_off=max_off, along=along, disp=disp, min_range=min_range, range_end=rng_end,
                 hits=hits, shots=shots, died=died, a=a_full)
 
 
@@ -194,6 +227,10 @@ def summarise(rows):
                     d60=round(mean_disp(60), 1), d120=round(mean_disp(120), 1),
                     close60=_mean([r["closing"].get(60, r["closing"].get("60")) for r in g]),
                     close120=_mean([r["closing"].get(120, r["closing"].get("120")) for r in g]),
+                    side60=_mean([r["side"].get(60, r["side"].get("60")) for r in g]),
+                    swing_pct=round(100 * sum(r["swing_ticks"] for r in g) / max(1, under), 1),
+                    old_overlay_pct=round(100 * sum(r["old_ticks"] for r in g) / max(1, under), 1),
+                    max_off_deg=round(max(r["max_off"] for r in g), 1),
                     d240=round(mean_disp(240), 1),
                     min_range=round(sum(r["min_range"] for r in g) / len(g), 1),
                     min_range_lo=round(min(r["min_range"] for r in g), 1),
