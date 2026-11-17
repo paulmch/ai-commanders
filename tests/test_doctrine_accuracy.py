@@ -894,7 +894,14 @@ class TestHeatDoctrine:
         assert (f">= {REACTOR_MELTDOWN_HEAT_FRACTION * 100:.0f}% REACTOR MELTDOWN"
                 in text)
         assert f"~{nums['pd_heat_mw']:.0f} MW hull heat per firing turret" in text
-        assert "100% in" in text and "retracted" in text  # fleet-table outlook
+        # A cold ship (here +0.4 MW: 100% in days) gets no heat line (audit A7)...
+        fleet_table = text.split("=== YOUR FLEET")[1]
+        assert "100% in" not in fleet_table
+        # ...a ship that reaches 100% within the outlook window does.
+        snap.friendly_ships[0].thermal = dict(snap.friendly_ships[0].thermal,
+                                              time_to_100_retracted_s=300.0, net_rate_mw=250.0)
+        text = build_admiral_prompt("A", "alpha", snap, snap, None, fleet)
+        assert "100% in 5.0 min retracted" in text.split("=== YOUR FLEET")[1]
 
 
 class TestRangeControlDoctrine:
@@ -1197,3 +1204,221 @@ class TestWeaponArcsDoctrine:
             sim.step()
             ticks += 1
         assert ticks == pytest.approx(self._numbers()["cruiser_roll_90_s"], abs=3.0)
+
+
+# =============================================================================
+# Admiral GUN EXCHANGE / FACING / CROSSFIRE / TORPEDO DEFENCE, MEASURED
+# (src/llm/prompts.py; seeded runs: scripts/admiral_doctrine_facts.py,
+# summarised in tests/fixtures/admiral_doctrine_facts.json)
+# =============================================================================
+
+FACTS_FIXTURE = "tests/fixtures/admiral_doctrine_facts.json"
+
+
+def _admiral_static(fleet, ours=("battlecruiser", "destroyer", "frigate"),
+                    theirs=("corvette", "frigate"), phase="directive"):
+    from src.llm.prompts import build_admiral_static
+    return build_admiral_static("A", "alpha", fleet, None, phase=phase,
+                                battle_classes={"ours": list(ours), "theirs": list(theirs)})
+
+
+class TestMeasuredExchangeDoctrine:
+    """Every number in the measured blocks comes from the fixture (seeded
+    battles) or from the engine itself; the fixture is checked against the
+    current engine by re-running three of its battles."""
+
+    @pytest.fixture(scope="class")
+    def facts(self):
+        with open(FACTS_FIXTURE) as f:
+            return json.load(f)
+
+    def test_the_one_sided_sentences_are_gone(self, fleet):
+        """A3: 'nothing meaningful happens' after a merge, 'turrets fire over a
+        180 deg arc', 'massing turrets is the ONLY lever', '(recommended)'."""
+        for phase in ("directive", "full"):
+            text = " ".join(_admiral_static(fleet, phase=phase).split())
+            for gone in ("nothing meaningful happens", "180 deg arc", "ONLY lever",
+                         "(recommended)", "your most important lever", "Keep enemies in FRONT"):
+                assert gone not in text, (phase, gone)
+
+    def test_gun_exchange_table_is_the_seeded_runs(self, facts):
+        from src.llm.prompts import (GUN_EXCHANGE_BANDS, GUN_EXCHANGE_BATTLES,
+                                     GUN_EXCHANGE_INSIDE_150_PCT)
+        bands = facts["guns"]["bands"]
+        total = sum(b["hull_gj"] for b in bands.values())
+        assert GUN_EXCHANGE_BATTLES == facts["guns"]["battles"]
+        assert [b[0] for b in GUN_EXCHANGE_BANDS] == list(bands)
+        for name, hit_pct, gj, share in GUN_EXCHANGE_BANDS:
+            b = bands[name]
+            assert hit_pct == pytest.approx(100 * b["hits"] / b["shots"], abs=0.6), name
+            assert gj == pytest.approx(b["hull_gj"] / b["hits"], abs=0.006), name
+            assert share == pytest.approx(100 * b["hull_gj"] / total, abs=0.6), name
+        inside = sum(bands[k]["hull_gj"] for k in ("0-50", "50-100", "100-150"))
+        assert GUN_EXCHANGE_INSIDE_150_PCT == pytest.approx(100 * inside / total, abs=0.6)
+
+    def test_the_table_is_rendered(self, fleet):
+        text = _admiral_static(fleet)
+        assert "range at firing (km)  0-50    50-100  100-150 150-200 200-300 300+" in text
+        assert "hit rate              69%     61%     49%     43%     36%     25%" in text
+        assert "58% of all hull damage landed inside 150 km, 42% beyond." in text
+
+    def test_facing_battle_numbers_are_the_seeded_runs(self, facts):
+        from src.llm.prompts import FACING_MEASURED
+        facing = facts["guns"]["facing"]
+        for cls, npen, ngj, fpen, fgj in FACING_MEASURED:
+            nose, flank = facing[cls]["nose"], facing[cls]["lateral"]
+            assert npen == pytest.approx(100 * nose["pen"] / nose["hits"], abs=0.6), cls
+            assert ngj == pytest.approx(nose["hull_gj"] / nose["hits"], abs=0.006), cls
+            assert fpen == pytest.approx(100 * flank["pen"] / flank["hits"], abs=0.6), cls
+            assert fgj == pytest.approx(flank["hull_gj"] / flank["hits"], abs=0.006), cls
+
+    def test_hits_to_kill_are_the_engine_damage_model(self, fleet):
+        import importlib.util
+        from src.combat import HitLocation, create_weapon_from_fleet_data
+        from src.llm.prompts import FACING_SPINAL_HITS_TO_KILL
+        spec = importlib.util.spec_from_file_location(
+            "calculate_shots_to_kill", "scripts/calculate_shots_to_kill.py")
+        stk = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(stk)
+        weapon = create_weapon_from_fleet_data(fleet, "spinal_coiler_mk3")
+        for cls, *quoted in FACING_SPINAL_HITS_TO_KILL:
+            got = [stk.simulate_shots_to_kill(weapon, cls, loc, fleet).shots_to_kill
+                   for loc in (HitLocation.NOSE, HitLocation.LATERAL, HitLocation.TAIL)]
+            assert got == quoted, cls
+
+    def test_crossfire_numbers_are_the_engine(self, fleet):
+        from src.llm.prompts import CROSSFIRE_EXAMPLE_DEG, crossfire_doctrine_numbers
+        n = crossfire_doctrine_numbers(fleet)
+        half = math.radians(CROSSFIRE_EXAMPLE_DEG / 2)
+        # Two groups each `lateral` off the line are 35 deg apart seen from him.
+        assert math.degrees(2 * math.atan(n["lateral_km"] / 250.0)) == pytest.approx(
+            CROSSFIRE_EXAMPLE_DEG, abs=0.01)
+        assert n["lateral_km"] == pytest.approx(250.0 * math.tan(half))
+        # Burn half way, flip, brake: d = 2 * (a/2) (t/2)^2.
+        for g, t in n["move_s"].items():
+            a = g * 9.80665
+            assert 2 * 0.5 * a * (t / 2) ** 2 == pytest.approx(n["lateral_km"] * 1000.0, rel=1e-6)
+        sim = CombatSimulation(seed=0)
+        target = Vector3D(math.cos(math.radians(CROSSFIRE_EXAMPLE_DEG)),
+                          math.sin(math.radians(CROSSFIRE_EXAMPLE_DEG)), 0.0)
+        for cls, quoted in n["turn_s"].items():
+            ship = create_ship_from_fleet_data("a", cls, "alpha", fleet,
+                                               position=Vector3D(0, 0, 0), forward=Vector3D(1, 0, 0))
+            assert quoted == pytest.approx(sim._turn_time_to(ship, target, True), abs=0.6), cls
+        text = " ".join(_admiral_static(fleet).split())
+        assert "each group moves ~79 km sideways" in text
+        assert "~104 s at 3g, ~146 s at 1.5g, ~179 s at 1g" in text
+
+    def test_torpedo_defence_text_is_the_seeded_runs(self, fleet, facts):
+        cells = facts["torpedo"]["cells"]
+
+        def cell(dist, mode):
+            return cells[f"torpedo_boats|{dist}|{mode}"]
+
+        def hit(c):
+            return 100 * c["impacts"] / c["launched"]
+
+        def lost(c):
+            return c["wall_lost"] / c["battles"]
+
+        text = " ".join(_admiral_static(fleet).split())
+        import re
+        quoted = {
+            ("500", "static"): r"start 500 km: nose-on PADLOCK - (\d+)% of rounds hit .*?(\d) of 8 hulls lost",
+            ("500", "open"): r"burning straight away - (\d+)% hit \(all on the TAIL.*?(\d) of 8 lost",
+            ("500", "open_full"): r"with evade full - (\d+)% hit, (\d) of 8 lost",
+            ("500", "charge"): r"charging \(INTERCEPT\) - (\d+)% hit .*?(\d) of 8 lost",
+            ("1000", "static"): r"start 1000 km: nose-on - (\d+)% hit, (\d) of 8 lost",
+            ("1000", "open"): r"burning away - (\d+)% hit, (\d) of 8 lost \(first at",
+            ("1000", "charge"): r"charging - (\d+)% hit, (\d) of 8 lost\.",
+        }
+        for (dist, mode), pattern in quoted.items():
+            m = re.search(pattern, text)
+            assert m, (dist, mode)
+            c = cell(dist, mode)
+            assert int(m.group(1)) == pytest.approx(hit(c), abs=1.0), (dist, mode)
+            assert int(m.group(2)) == pytest.approx(lost(c), abs=0.5), (dist, mode)
+        static, away = cell("500", "static"), cell("500", "open")
+        assert static["impact_loc"] == {"nose": static["impacts"]}
+        assert away["impact_loc"] == {"tail": away["impacts"]}
+        assert f"~{static['impact_kps_median']:.1f} km/s" in text
+        assert f"~{away['impact_kps_median']:.1f} km/s" in text
+        assert f"{cell('1000', 'charge')['boats_lost'] / 3:.1f} boats per battle charging" in text
+
+    def test_the_fixture_is_this_engine(self, facts):
+        """Re-run three of the fixture's battles: an engine change that moves
+        them means regenerating the fixture and the doctrine numbers (commands
+        in the fixture)."""
+        import importlib.util
+        import tempfile
+        spec = importlib.util.spec_from_file_location(
+            "admiral_doctrine_facts", "scripts/admiral_doctrine_facts.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        args = type("Args", (), dict(seeds=[1], out=tempfile.mkdtemp(), time_limit=600.0,
+                                     distances=[500.0], attackers=["torpedo_boats"]))
+        jobs = {j["tag"]: j for j in mod.gun_jobs(args) + mod.torpedo_jobs(args)}
+        for tag, ref in facts["reruns"].items():
+            got = mod.run_battle(jobs[tag])
+            assert "error" not in got, got.get("trace")
+            if "torpedo" in ref:
+                assert got["torpedo"]["launched"] == ref["torpedo"]["launched"], tag
+                assert got["torpedo"]["impacts"] == pytest.approx(ref["torpedo"]["impacts"], abs=2), tag
+                assert len(got["dead"]) == pytest.approx(len(ref["dead"]), abs=1), tag
+            else:
+                for band, b in ref["bands"].items():
+                    if b["shots"] >= 50:
+                        g = got["bands"][band]
+                        assert 100 * g["hits"] / g["shots"] == pytest.approx(
+                            100 * b["hits"] / b["shots"], abs=10.0), (tag, band)
+
+    def test_battery_blind_cones_are_the_only_blind_directions(self):
+        """FORCES says 'batteries blind within N deg of dead astern (fire
+        everywhere else)': outside the cone some roll brings a battery to bear."""
+        from src import weapon_arcs
+        from src.llm.arcs_status import blind_cones
+        for cls, hull in weapon_arcs.load_hull_mounts().items():
+            cones = blind_cones(hull)
+            for kind in ("gun", "pd"):
+                masks = [m.mask for m in hull.mounts if m.kind == kind]
+                if not masks:
+                    continue
+                for step in range(0, 181, 2):
+                    off = math.radians(step)
+                    if step <= cones[f"{kind}_nose"] or 180 - step <= cones[f"{kind}_stern"]:
+                        continue
+                    bears = any(
+                        any(not mk[weapon_arcs.cell_index(math.cos(off), math.sin(off) * math.cos(p),
+                                                          math.sin(off) * math.sin(p))] for mk in masks)
+                        for p in (math.radians(k) for k in range(0, 360, 2)))
+                    assert bears, (cls, kind, step)
+
+    def test_forces_states_blind_cones_once_per_class(self, fleet):
+        text = _admiral_static(fleet)
+        assert "Frigate (FF):" in text
+        line = next(x for x in text.splitlines() if x.startswith("- Frigate (FF)"))
+        assert "batteries blind within 15 deg of dead astern (fire everywhere else)" in line
+
+    def test_draft_counterplay_is_the_seeded_runs(self, facts):
+        """fleet_draft's TORPEDO COUNTERPLAY used to say 'charging feeds it ...
+        burning AWAY cuts impact energy, stretches flight time ... bleeds
+        magazines dry' - now the same seeded numbers as the battle doctrine."""
+        from src.llm.fleet_draft import _selection_prompt
+        text = " ".join(_selection_prompt("A", "alpha", 150, 8, "", 500.0).split())
+        cells = facts["torpedo"]["cells"]
+        c = {k.split("|", 1)[1]: v for k, v in cells.items() if k.startswith("torpedo_boats|")}
+
+        def hit(key):
+            return round(100 * c[key]["impacts"] / c[key]["launched"])
+
+        def lost(key):
+            return round(c[key]["wall_lost"] / c[key]["battles"])
+        assert (f"From 500 km a nose-on wall took {hit('500|static')}% of the rounds (on the nose) "
+                f"and lost {lost('500|static')} of 8 hulls") in text
+        assert f"burning straight away it took {hit('500|open')}%" in text
+        energy_cut = 1 - (c["500|open"]["impact_gj"] / c["500|open"]["impacts"]) / (
+            c["500|static"]["impact_gj"] / c["500|static"]["impacts"])
+        assert f"~{100 * energy_cut:.0f}% less energy each" in text
+        assert (f"nose-on lost {lost('1000|static')} of 8, burning away {lost('1000|open')} of 8, "
+                f"charging {lost('1000|charge')} of 8") in text
+        assert "feeds it" not in text and "bleeds" not in text

@@ -151,7 +151,6 @@ def main():
         enemy_has_admiral=True,
         enemy_proposed_draw=False,
         received_messages=None,
-        communications_log=None,
     )
 
     print("=" * 80)

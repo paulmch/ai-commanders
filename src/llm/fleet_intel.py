@@ -896,7 +896,25 @@ def engine_notes(sim: Any, ship_ids: Iterable[str], since_t: float,
         for text, n in (problems.get(sid) or Counter()).items():
             parts.append(text + (f" x{n}" if n > 1 else ""))
         if parts:
-            lines.append(f"{name_of(sid)}: " + "; ".join(parts))
+            lines.append((sid, parts))
+    # Ships whose only note is the same gun hold share one line ("guns held:
+    # probability_gate" repeated for 8 ships was 8 lines - audit A7).
+    shared: Dict[str, List[str]] = {}
+    for sid, parts in lines:
+        if len(parts) == 1 and parts[0].startswith("guns held: "):
+            shared.setdefault(parts[0], []).append(sid)
+    out = []
+    done = set()
+    for sid, parts in lines:
+        key = parts[0] if len(parts) == 1 else None
+        if key in shared and len(shared[key]) > 1:
+            if key not in done:
+                done.add(key)
+                out.append(f"{key} ({len(shared[key])} ships): "
+                           + ", ".join(name_of(s) for s in shared[key]))
+            continue
+        out.append(f"{name_of(sid)}: " + "; ".join(parts))
+    lines = out
     if len(lines) > limit:
         lines = lines[:limit] + [f"(+{len(lines) - limit} more ships)"]
     return lines

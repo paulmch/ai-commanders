@@ -716,11 +716,15 @@ TORPEDO FLIGHT PROFILE (what a defender exploits):
   110 km, by which point the round is usually committed) - PD thins
   salvos, it does not save a ship that let the geometry close.
 
-TORPEDO COUNTERPLAY:
-- Charging a torpedo fleet feeds it - closure IS its warhead. Burning AWAY
-  cuts impact energy, stretches flight time so PD gets full dwell to blind
-  seekers, and bleeds finite magazines dry. An emptied torpedo hull mounts
-  no guns: it dies to whatever can catch it afterward.
+TORPEDO COUNTERPLAY (seeded runs: a 4 battlecruiser + 2 destroyer + 2 frigate
+gun wall against 5 corvettes + 3 frigates, 40 rounds):
+- From 500 km a nose-on wall took 72% of the rounds (on the nose) and lost 6
+  of 8 hulls; burning straight away it took 37% (on the thin tail, ~14% less
+  energy each) and lost 5 of 8; charging it took 73% and lost all 8. From
+  1000 km: nose-on lost 8 of 8, burning away 4 of 8, charging 3 of 8 (and
+  killed 1.3 boats). Burning away leaves more rounds blinded or dry; what
+  still hits lands on the tail. An emptied torpedo hull mounts no guns: it
+  dies to whatever can catch it afterward.
 - A fleet only kites as fast as its slowest hull. Mixing 3g screens with
   <=1g capitals means choosing between abandoning the capitals or eating
   the waves at capital speed - commit to one doctrine, not half of each.

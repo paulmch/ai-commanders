@@ -21,7 +21,6 @@ from typing import Dict, Any, List, Optional, Tuple, TYPE_CHECKING
 from .client import LLMCallError
 from .fleet_config import AdmiralConfig
 from .admiral_tools import get_admiral_tools
-from .communication import CaptainMessage
 from . import fleet_intel as intel
 
 if TYPE_CHECKING:
@@ -39,13 +38,20 @@ def _crew_state(ship):
     return crew_state(ship)
 
 
+# Arcs lines the admiral does not need per ship: the class blind cones are in
+# the cached FORCES block (a per-ship "guns within 15 deg of the stern" was
+# read as "guns are stern-arc only" - audit A7), and the roll is automatic.
+_ADMIRAL_ARCS_SKIP = ("ARCS blind cones", "ARCS roll:")
+
+
 def _arcs_status_lines(simulation, ship):
     """Weapon-arc state lines (src/llm/arcs_status.py): what bears, what unmasks."""
     from .arcs_status import arcs_status_lines
     try:
-        return arcs_status_lines(simulation, ship)
+        lines = arcs_status_lines(simulation, ship)
     except Exception:  # noqa: BLE001 - advisory only
         return []
+    return [line for line in lines if not line.startswith(_ADMIRAL_ARCS_SKIP)]
 
 
 def _plume_status_lines(simulation, ship):
@@ -575,9 +581,6 @@ class LLMAdmiral:
         # Received messages from enemy Admiral
         self._received_enemy_messages: List[str] = []
 
-        # All communications log (for oversight of captain messages)
-        self._communications_log: List[CaptainMessage] = []
-
         # Captain reports filed at the previous checkpoint (report_to_admiral,
         # implicit ACKs, ADMIRAL-addressed fleet signals and discussion Q&A),
         # each with an engine compliance line - captain_report dicts set by
@@ -787,7 +790,6 @@ Be authentic to how you would command a fleet as {model_name}."""
             enemy_has_admiral=enemy_admiral is not None,
             enemy_proposed_draw=enemy_admiral.has_proposed_draw if enemy_admiral else False,
             received_messages=self._received_enemy_messages,
-            communications_log=self._communications_log,
             phase="directive",  # Signal that we only want the directive
             standing_plan=self.standing_plan,
             standing_plan_time=self.standing_plan_time,
@@ -796,6 +798,7 @@ Be authentic to how you would command a fleet as {model_name}."""
             captain_reports=self._captain_reports(),
             last_directive_failure=self._last_failure,
             battle_classes=self._battle_classes,
+            vision=self.wants_vision,
         )
 
         user_text = (f"ADMIRAL CHECKPOINT {self.decision_count + 1}. "
@@ -807,21 +810,11 @@ Be authentic to how you would command a fleet as {model_name}."""
         # OpenRouter forwards multi-part user content to multimodal models;
         # gating on wants_vision keeps text-only models on plain strings.
         if battle_image_png and self.wants_vision:
+            # The plot's legend is in the cached system prompt
+            # (prompts.ADMIRAL_VISION_LEGEND); the turn carries only the image.
             from .admiral_view import png_to_data_url
             user_content: Any = [
-                {"type": "text", "text": user_text + (
-                    "\n\nA tactical plot of the battlefield is attached: "
-                    "left panel top-down (X/Y in km), right panel 3D "
-                    "perspective. Cyan = alpha fleet, orange = beta fleet. "
-                    "Diamonds are torpedoes (grey = dead seeker), yellow "
-                    "dots are coilgun slugs, red lines are active PD beams, "
-                    "faint trails show torpedo paths over the last 25s, "
-                    "arrows show velocity, the dashed ring is your PD "
-                    "envelope around your fleet centre and X marks the "
-                    "closest approach of the nearest enemy group if both "
-                    "sides coast. Use it to judge geometry: bearings, "
-                    "formation shape, converging torpedo streams, who is "
-                    "closing and who is kiting.")},
+                {"type": "text", "text": user_text + "\n\nTactical plot attached (legend: TACTICAL PLOT)."},
                 {"type": "image_url", "image_url": {"url": png_to_data_url(battle_image_png)}},
             ]
         else:
@@ -1224,14 +1217,6 @@ Be authentic to how you would command a fleet as {model_name}."""
         msg = self._pending_enemy_message
         self._pending_enemy_message = None
         return msg
-
-    def add_to_communications_log(self, message: CaptainMessage) -> None:
-        """Add a message to the communications log (Admiral sees all)."""
-        self._communications_log.append(message)
-
-    def clear_communications_log(self) -> None:
-        """Clear the communications log for new checkpoint."""
-        self._communications_log.clear()
 
     def _build_snapshot(
         self,
