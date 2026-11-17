@@ -1478,6 +1478,27 @@ class LLMCaptain:
                         check["conflict"] = ("Your order and RANGE CONTROL conflict (merge): choose "
                                              "and explain - DEVIATE is allowed.")
                 check["engine"] = engine
+        elif (not check.get("engine") and isinstance(spec, dict) and not isinstance(heading, dict)
+              and str(spec.get("maneuver_type") or "").upper() in ("PADLOCK", "MAINTAIN")):
+            # The engine-off orders get the same check as a burn (audit C6:
+            # PADLOCK was 73-95% of one model's orders and the only kind with
+            # none): their closest approach is RANGE CONTROL's coast line.
+            kind = str(spec.get("maneuver_type")).upper()
+            coast = [i for i in range_infos if getattr(i, "cpa_t_s", 0.0) > 0.5]
+            if range_infos:
+                if coast:
+                    near = min(coast, key=lambda i: i.cpa_km)
+                    who = near.cpa_ship or (near.names[0] if near.names else near.label)
+                    engine = (f"{kind} coasts (engine off) -> closest approach {near.cpa_km:.1f} km "
+                              f"to {who} in {near.cpa_t_s:.0f} s")
+                    if near.cpa_km < MERGE_KM:
+                        engine += " = a MERGE (seconds of fire, then flying apart)"
+                        if any(getattr(i, "warning", None) for i in range_infos):
+                            check["conflict"] = ("Your order and RANGE CONTROL conflict (merge): "
+                                                 "choose and explain - DEVIATE is allowed.")
+                else:
+                    engine = f"{kind} coasts (engine off) -> range to every enemy group is not closing"
+                check["engine"] = engine
 
         # Absolute positions quoted in the text: resolve to a direction from here.
         own_km = ship.position * (1.0 / 1000.0)

@@ -557,3 +557,36 @@ class TestTorpedoBlock:
         assert nose.thickness_cm == pytest.approx(trial.thickness_cm, abs=1e-6)
         n = rounds_to_breach(target.armor.get_section("lateral"), gj)
         assert n is not None and n >= 1
+
+
+# =============================================================================
+# C4/C6: PADLOCK / MAINTAIN orders get the ENGINE ORDER CHECK
+# =============================================================================
+
+class TestEngineOffOrderCheck:
+
+    @pytest.mark.parametrize("kind", ["PADLOCK", "MAINTAIN"])
+    def test_engine_off_order_states_the_coast_closest_approach(self, kind):
+        from src.llm.range_control import analyze_range_control
+        sim, cap = _sim(), _captain()
+        me = sim.get_ship("alpha_1")
+        me.kinematic_state.velocity = Vector3D(2000.0, 0.0, 0.0)   # closing at 2 km/s
+        infos = analyze_range_control(sim, [me])
+        order = AdmiralOrder(target_ship_id="alpha_1", target_ship_name="TIS Falchion-1",
+                             order_text="Nose on.", maneuver={"maneuver_type": kind,
+                                                              "throttle": 1.0})
+        engine = cap._order_check(order, sim, me, infos)["engine"]
+        near = min(infos, key=lambda i: i.cpa_km)
+        assert engine.startswith(f"{kind} coasts (engine off) -> closest approach "
+                                 f"{near.cpa_km:.1f} km")
+        assert "MERGE" in engine            # 2 km/s straight at a ship 200 km out
+
+    def test_engine_off_order_when_nothing_closes(self):
+        from src.llm.range_control import analyze_range_control
+        sim, cap = _sim(), _captain()
+        me = sim.get_ship("alpha_1")
+        me.kinematic_state.velocity = Vector3D(-1000.0, 0.0, 0.0)  # opening
+        order = AdmiralOrder(target_ship_id="alpha_1", target_ship_name="TIS Falchion-1",
+                             order_text="Nose on.", maneuver={"maneuver_type": "PADLOCK"})
+        engine = cap._order_check(order, sim, me, analyze_range_control(sim, [me]))["engine"]
+        assert engine == "PADLOCK coasts (engine off) -> range to every enemy group is not closing"
