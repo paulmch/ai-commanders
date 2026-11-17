@@ -62,6 +62,14 @@ export const MISS_CLEAR_RADII = 2.2;
 /** A missing torpedo skims the plating (its dud sparks sit there): radii from the axis. */
 export const SKIM_CLEAR_RADII = 1.15;
 export const MISS_CLEAR_M = 4;
+/**
+ * In the auto scale mode a distant hull is drawn larger than life, and the
+ * clearance grows with it (Projectiles sets `pass.m`, the hull's
+ * magnification) - up to this many metres: beyond it the push would start
+ * to show as a swerve, and the hull is an icon a few dozen pixels long.
+ * (So on the cinematic scale, ~60x, misses still cross the oversize hulls.)
+ */
+export const MISS_CLEAR_MAX_M = 600;
 
 const smooth01 = (u) => (u <= 0 ? 0 : u >= 1 ? 1 : u * u * (3 - 2 * u));
 
@@ -137,25 +145,40 @@ export function passClearance(pass, lengthM, seed = 0) {
 }
 
 /**
- * The sideways ease that draws a missing round clear of its target's real
- * hull, or null when its recorded line already clears it: {t0, t1, d: [3]
- * metres}. The drawn position is the recorded one + d * smoothstep((t -
- * t0) / (t1 - t0)), held after t1 (the round flies on parallel).
+ * The sideways ease that draws a missing round clear of its target's hull,
+ * or null when its recorded line is nowhere near it: {t0, t1, separation,
+ * need, normal, m, d: [3] metres}. The drawn position is the recorded one
+ * + d * smoothstep((t - t0) / (t1 - t0)), held after t1 (the round flies
+ * on parallel). `need` is the clearance from the axis for the real hull
+ * and `d` the push for it (zero when the line already clears the real
+ * hull); `m` (1) is the hull's magnification, set by the renderer - see
+ * passPush.
  * @param {number} clearRadii - MISS_CLEAR_RADII (slug) or SKIM_CLEAR_RADII (torpedo)
  */
 export function missClearance(tr, ship, lengthM, t0, t1, clearRadii = MISS_CLEAR_RADII) {
   const pass = closestPass(tr, ship, t0, t1);
   if (!pass) return null;
   const need = clearRadii * lengthM * HULL_RADIUS_PER_LENGTH + MISS_CLEAR_M;
-  // (nothing within reach of the capsule: skip the exact test)
-  if (pass.dist > need + lengthM / 2) return null;
+  // (nothing within reach of the largest clearance: skip the exact test)
+  if (pass.dist > MISS_CLEAR_MAX_M + lengthM / 2) return null;
   const c = passClearance(pass, lengthM, tr.seed);
-  if (c.separation >= need) return null;
-  const push = need - c.separation;
+  if (c.separation >= MISS_CLEAR_MAX_M) return null;
+  const push = Math.max(0, need - c.separation);
   return {
     t0: Math.max(tr.start, pass.t - TERMINAL_BEND_S), t1: pass.t, separation: c.separation,
+    need, normal: c.normal, m: 1,
     d: [c.normal[0] * push, c.normal[1] * push, c.normal[2] * push]
   };
+}
+
+/**
+ * Metres a missing round is pushed aside for a hull drawn `m` times its
+ * real size: enough to clear need x m, capped at MISS_CLEAR_MAX_M (never
+ * less than the real hull needs).
+ */
+export function passPush(pass, m = 1) {
+  const need = Math.max(pass.need, Math.min(MISS_CLEAR_MAX_M, pass.need * (m > 1 ? m : 1)));
+  return Math.max(0, need - pass.separation);
 }
 
 export function seedFor(id) {
@@ -484,6 +507,7 @@ export class WeaponTimeline {
       // (a round still chasing a target that has already blown up has no hull to clear)
       if (ship.samples[sampleIndex(ship.samples, last.t)]?.state?.destroyed) return;
       tr.pass = missClearance(tr, ship, lengthOf(target), Math.max(tr.start, last.t - 2), tr.end, radii);
+      if (tr.pass) tr.pass.target = target;
     };
     for (const tr of this.slugs.values()) clear(tr, MISS_CLEAR_RADII);
     for (const tr of this.torpedoes.values()) clear(tr, SKIM_CLEAR_RADII);
@@ -558,7 +582,9 @@ export class WeaponTimeline {
       this.ease(out, time, Math.max(tr.start, tr.end - TERMINAL_BEND_S), tr.end,
         tr.impact[0] - end[0], tr.impact[1] - end[1], tr.impact[2] - end[2]);
     } else if (tr.pass) {
-      this.ease(out, time, tr.pass.t0, tr.pass.t1, tr.pass.d[0], tr.pass.d[1], tr.pass.d[2]);
+      const ps = tr.pass, push = ps.m > 1 ? passPush(ps, ps.m) : -1;
+      if (push < 0) this.ease(out, time, ps.t0, ps.t1, ps.d[0], ps.d[1], ps.d[2]);
+      else this.ease(out, time, ps.t0, ps.t1, ps.normal[0] * push, ps.normal[1] * push, ps.normal[2] * push);
     }
     return out;
   }

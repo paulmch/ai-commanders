@@ -322,10 +322,11 @@ hashed by the perf harness) is unchanged.
   now. Rules: (1) anything in world space that belongs to a hull multiplies kit-unit
   sizes/offsets by that hull's k (`sm.kOf(id)`, `Projectiles.shipK`), free rounds and
   flares by `sm.kAt(point)`; (2) never bake a scaled value - re-read k every frame or
-  re-bake when it changes (Blast `anchor`/`shipId`, spall, smoke ring, `surfaceImpact`);
+  re-bake when it changes (Blast `anchor`/`shipId`, `surfaceImpact`; spall and the smoke
+  ring at `Scale.bakeScale(k)`, 2% steps);
   (3) real things stay real: positions, trajectories, the blast shell, the reactor blast
   (`Blast real`, sized by `reactorBlastScale` to 0.55 of the engine radius), the far drive
-  jet (`render/DriveJet.js`, the engine's 3/7.5 degree cone); (4) camera framing uses
+  jet (`render/DriveJet.js`, the engine's 3/7.5 degree cone, real modes only, `?jets=0` off); (4) camera framing uses
   `sm.framingLength(id)` (static per mode), never the drawn size; constants tuned on the
   kit-size hulls (shadow box floor, AO reach, close-up ramps, framing floors) are
   multiplied by `sm.scaleUnit()`; (5) a pool light on a hull scales reach by k and

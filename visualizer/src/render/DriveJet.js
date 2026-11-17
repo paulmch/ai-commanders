@@ -93,7 +93,7 @@ const fragmentShader = /* glsl */`
     float w = vJet.y + z * ${TAN_CORE.toFixed(6)};
     float r2 = dot(p.xy, p.xy);
     float u = z / 8.0;
-    float axial = pow(1.0 + u * u, -0.55);                       // jetBrightness(z)
+    float axial = pow(max(1.0 + u * u, 1.0), -0.55);             // jetBrightness(z)
     // in over the first km (the torch's own flame is drawn there), out to nothing at the drawn reach
     float fade = smoothstep(0.0, ${JET_FADE_IN_KM.toFixed(1)}, z) * (1.0 - smoothstep(0.6 * vJet.z, vJet.z, z));
     return axial * fade * exp(-r2 / (w * w)) / (w + ${W_SOFT.toFixed(3)});
@@ -101,7 +101,8 @@ const fragmentShader = /* glsl */`
   void main() {
     #include <logdepthbuf_fragment>
     vec3 ro = vCam;
-    vec3 rd = normalize(vPos - vCam);
+    vec3 toFrag = vPos - vCam;
+    vec3 rd = toFrag / max(length(toFrag), 1e-9);   // (never normalize(0): NaN on real GPUs)
     // The chord of the view ray inside the bounding cone |p.xy| <= R0 + TB z,
     // 0 <= z <= reach (z = -p.z), found analytically: the mesh only says
     // which pixels to shade. (Taking the mesh's own back face as the exit
@@ -127,7 +128,7 @@ const fragmentShader = /* glsl */`
     } else if (disc <= 0.0) {
       if (qa > 0.0) discard;          // misses the cone (qa < 0: inside it all the way)
     } else {
-      float sq = sqrt(disc);
+      float sq = sqrt(max(disc, 0.0));
       float r1 = (-qb - sq) / qa, r2 = (-qb + sq) / qa;
       if (qa > 0.0) {                 // inside between the roots
         tIn = max(tIn, r1); tOut = min(tOut, r2);

@@ -156,3 +156,20 @@ export function freeScale(mode, dist, fovDeg) {
 export function framingLength(mode, shipType) {
   return mode === 'cinematic' ? kitLength(shipType) : trueLengthM(shipType) / 1000;
 }
+
+/**
+ * The draw scale a world-space buffer is BAKED at (spall, the smoke ring):
+ * k snapped to steps of BAKE_STEP (2%). Such buffers are rewritten when the
+ * baked scale changes, so snapping keeps a moving camera in the magnified
+ * regime from rewriting them every frame - and, being a function of k
+ * alone, keeps them a pure function of battle time and camera. In the true
+ * regime k is constant and nothing is rewritten at all. The baked offsets
+ * differ from the hull's own scale by under 1%, on hulls that are a few
+ * dozen pixels long.
+ */
+export const BAKE_STEP = 1.02;
+export function bakeScale(k) {
+  if (!(k > 0) || k === 1) return k > 0 ? k : 1;
+  const n = Math.round(Math.log(k) / Math.log(BAKE_STEP));
+  return Math.pow(BAKE_STEP, n);
+}

@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import {
   SCALE_MODES, DEFAULT_SCALE_MODE, FLOOR_SHARE, TRUE_AT, FREE_TRUE_K, FREE_REF_M,
   trueLengthM, kitLength, trueK, normalizeScaleMode, nextScaleMode, floorShare, screenShare, shownShare,
-  magnification, magnificationAt, trueRegimeDistance, shipScale, freeScale, framingLength
+  magnification, magnificationAt, trueRegimeDistance, shipScale, freeScale, framingLength, bakeScale, BAKE_STEP
 } from '../src/render/Scale.js';
 import { REAL_LENGTH_M } from '../src/TrackDisplay.js';
 import { HULL_CLASSES, assembleHull, hullSize, buildHull, buildShipMaterials } from '../src/render/Hulls.js';
@@ -18,7 +18,7 @@ import { DamageFX } from '../src/render/DamageFX.js';
 import { Blast, ShipDestruction, blastExtentOver } from '../src/render/Explosion.js';
 import {
   WeaponTimeline, makeSample, sampleTrack, closestPass, passClearance, missClearance,
-  TERMINAL_BEND_S, HULL_RADIUS_PER_LENGTH, MISS_CLEAR_RADII, MISS_CLEAR_M
+  TERMINAL_BEND_S, HULL_RADIUS_PER_LENGTH, MISS_CLEAR_RADII, MISS_CLEAR_M, MISS_CLEAR_MAX_M, passPush
 } from '../src/render/WeaponTimeline.js';
 import { buildShotList, PULLBACK_PRE_S, PULLBACK_POST_S } from '../src/Director.js';
 import { shotPose, fitDistance } from '../src/DirectorCamera.js';
@@ -300,9 +300,21 @@ test('a miss whose recorded line crosses the hull is drawn clear of it; wide mis
     const recorded = passClearance(pass, L).separation;
     assert.ok(Math.abs(recorded - r.recorded_separation_m) < 1.5, `${r.id}: ${recorded} vs ${r.recorded_separation_m}`);
     if (recorded >= need) {
-      assert.equal(tr.pass, null, `${r.id} already clears the hull`);
+      // already clear of the real hull: no push (a pass inside MISS_CLEAR_MAX_M
+      // is kept, with a zero push, for the auto scale's magnified hulls)
+      if (recorded >= MISS_CLEAR_MAX_M) assert.equal(tr.pass, null, `${r.id} is nowhere near the hull`);
+      else assert.deepEqual(tr.pass.d, [0, 0, 0]);
       timeline.sample(tr, pass.t, out); sampleTrack(tr, pass.t, raw);
       assert.deepEqual(out.pos, raw.pos);
+      if (tr.pass) {
+        // drawn three times life size (auto, at distance) the same round clears three times as far, capped
+        tr.pass.m = 3;
+        timeline.sample(tr, pass.t, out);
+        const d3 = axisDistance(hullFrame(loader.simTrace, r.target, pass.t, out.pos), L);
+        assert.ok(d3 >= Math.min(MISS_CLEAR_MAX_M, 3 * need) - 0.5 || d3 >= recorded - 0.5, `${r.id}: ${d3} m at 3x`);
+        assert.ok(d3 >= recorded - 1e-6, 'a push never brings the round closer');
+        tr.pass.m = 1;
+      }
       untouched++;
       continue;
     }
@@ -322,6 +334,14 @@ test('a miss whose recorded line crosses the hull is drawn clear of it; wide mis
     // held after the pass: the round flies on parallel to its recorded line
     timeline.sample(tr, pass.t + 2, out); sampleTrack(tr, pass.t + 2, raw);
     for (let k = 0; k < 3; k++) near(out.pos[k] - raw.pos[k], tr.pass.d[k], 1e-6);
+    // a hull drawn 4x (auto scale, at distance) is cleared by 4x as much; 80x (cinematic) hits the cap
+    assert.equal(passPush(tr.pass, 1), Math.hypot(...tr.pass.d));
+    near(passPush(tr.pass, 4), Math.min(MISS_CLEAR_MAX_M, 4 * need) - recorded, 1e-9);
+    near(passPush(tr.pass, 80), MISS_CLEAR_MAX_M - recorded, 1e-9);
+    tr.pass.m = 4;
+    timeline.sample(tr, pass.t, out);
+    assert.ok(axisDistance(hullFrame(loader.simTrace, r.target, pass.t, out.pos), L) >= Math.min(MISS_CLEAR_MAX_M, 4 * need) - 0.5);
+    tr.pass.m = 1;
   }
   assert.ok(pushed >= 3 && untouched >= 2, `${pushed} pushed, ${untouched} untouched`);
   // a line dead through the axis still gets a definite, seeded side
@@ -403,6 +423,32 @@ test('a wreck rides its real centre at the hull\'s draw scale; its reactor blast
   near(eff.chunkGroup.scale.x, 0.3);
   near(eff.position.x, 50 + 2 * 4 + 0, 0.3 * 2.5);   // the drawn reactor, within the magnified hull
   eff.dispose();
+});
+
+test('point lights fall off by the inverse square down to a metre (three\'s 100 m clamp is patched)', () => {
+  // SceneManager lowers the clamp at import; if three renames the chunk text this fails loudly
+  const chunk = THREE.ShaderChunk.lights_pars_begin;
+  assert.ok(!chunk.includes('max( pow( lightDistance, decayExponent ), 0.01 )'), 'three\'s 0.1-unit falloff clamp is still in place');
+  assert.ok(chunk.includes('max( pow( lightDistance, decayExponent ), 0.000001 )'));
+});
+
+test('baked buffers follow the draw scale in 2% steps: pure in k, and still in the true regime', () => {
+  assert.equal(bakeScale(1), 1);                       // cinematic: exactly 1
+  for (const type of HULL_CLASSES) {
+    const k = trueK(type);
+    assert.equal(bakeScale(k), bakeScale(k));           // a function of k alone
+    assert.ok(Math.abs(bakeScale(k) / k - 1) <= (BAKE_STEP - 1) / 2 + 1e-12);
+    // inside the true regime k does not move, so nothing is ever re-baked
+    assert.equal(bakeScale(shipScale('auto', type, 0.3, FOV)), bakeScale(shipScale('auto', type, 1.2, FOV)));
+  }
+  // a slow dolly in the magnified regime re-bakes only when a 2% step is crossed
+  let steps = 0, prev = null;
+  for (let d = 40; d <= 44; d += 0.01) {
+    const b = bakeScale(shipScale('auto', 'frigate', d, FOV));
+    if (b !== prev) steps++;
+    prev = b;
+  }
+  assert.ok(steps <= 6, `${steps} re-bakes over a 10% dolly in 400 frames`);
 });
 
 test('constants tuned on the kit-size hulls follow the scale unit', () => {

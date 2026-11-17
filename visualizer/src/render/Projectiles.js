@@ -152,6 +152,19 @@ export class Projectiles {
     tr.impact = [this.s1.x / SCALE, this.s1.y / SCALE, this.s1.z / SCALE];
   }
 
+  /**
+   * A missing round is drawn clear of its target's hull AS DRAWN: tell its
+   * pass how many times real size that hull is this frame (auto scale,
+   * magnified regime; WeaponTimeline.passPush caps what it does with it).
+   */
+  passScale(tr) {
+    const ps = tr.pass;
+    if (!ps) return;
+    const ud = this.manager.ships.get(ps.target)?.userData;
+    const real = ud?.trueLengthKm > 0 && ud.size?.length > 0 ? ud.trueLengthKm / ud.size.length : 0;
+    ps.m = real > 0 && ud.k > 0 ? ud.k / real : 1;
+  }
+
   /** Draw scale (scene km per kit unit) of a ship group; 1 on the cinematic scale. */
   shipK(ship) { return ship?.userData.k ?? 1; }
   /** Draw scale of a free-flying round or flash at world point p. */
@@ -179,6 +192,7 @@ export class Projectiles {
     tr.visible = time >= tr.start && time < tr.end;
     if (time < tr.start || time > tr.end + ION_LIFE) return;
     if (tr.impact && time >= tr.end - TERMINAL_BEND_S - 0.5) this.surfaceImpact(tr);
+    else if (tr.pass) this.passScale(tr);
     const sampleTime = Math.min(time, tr.end);
     this.timeline.sample(tr, sampleTime, this.sample);
     this.point(this.a, this.sample);
@@ -364,6 +378,7 @@ export class Projectiles {
     tr.visible = time >= tr.start && time < tr.end;
     if (time < tr.start || time > tr.end + TORPEDO_WAKE_S) return;
     if (tr.impact && time >= tr.end - TERMINAL_BEND_S - 0.5) this.surfaceImpact(tr);
+    else if (tr.pass) this.passScale(tr);
     const st = Math.min(time, tr.end);
     this.timeline.sample(tr, st, this.sample);
     this.point(this.a, this.sample);

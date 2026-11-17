@@ -7,6 +7,7 @@ import {
 import { getNoiseTexture, getPuffTexture, getGlowTexture, getStarTexture, mulberry32 } from './Textures.js';
 import { buildDebrisChunks } from './Hulls.js';
 import { HullWear, createWearMaterial } from './HullWear.js';
+import { bakeScale } from './Scale.js';
 import { spinalMuzzleInto } from './WeaponTimeline.js';
 import { BlastShells } from './BlastShell.js';
 import { engineStateAt } from '../DamageTimeline.js';
@@ -1112,7 +1113,7 @@ class ShipView {
     // moves (auto mode: the camera) every slot is written again: the
     // buffers stay a pure function of `now` and the scale, never of when
     // a puff happened to be emitted.
-    const hk = this.group.userData.k ?? 1;
+    const hk = bakeScale(this.group.userData.k ?? 1);   // (snapped: see Scale.bakeScale)
     if (hk !== this.smokeHullK) {
       this.smokeHullK = hk;
       for (let slot = 0; slot < SMOKE_CAP; slot++) {
@@ -1666,7 +1667,7 @@ export class DamageFX {
     const P = new THREE.Vector3(), N = new THREE.Vector3();
     // Spall is world-space but belongs to the hull: placed, thrown and
     // sized at the hull's draw scale, and written again when that changes
-    const hk = this.sm.kOf?.(m.shipId) ?? 1;
+    const hk = bakeScale(this.sm.kOf?.(m.shipId) ?? 1);   // (snapped: see Scale.bakeScale)
     m._spallK = hk;
     this.markWorld(m, res, P, N, hk);
     const SC = this.SCALE;
@@ -1707,7 +1708,7 @@ export class DamageFX {
     // free blocks whose mark is outside its flight window
     for (let b = 0; b < SPALL_BLOCKS; b++) {
       const m = this.spallOwner[b];
-      if (m && (m.t > now || now - m.t > SPALL_LIFE || (this.sm.kOf?.(m.shipId) ?? 1) !== m._spallK)) this._freeSpall(b);
+      if (m && (m.t > now || now - m.t > SPALL_LIFE || bakeScale(this.sm.kOf?.(m.shipId) ?? 1) !== m._spallK)) this._freeSpall(b);
     }
     // allocate for marks in flight
     let lo = marksUpTo(marks, now - SPALL_LIFE);

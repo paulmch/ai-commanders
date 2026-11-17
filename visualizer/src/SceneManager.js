@@ -190,6 +190,7 @@ export class SceneManager {
 
     this.weapons = new Projectiles(this);
     this.driveJets = new DriveJets(this.scene);   // the exhaust jets at real size (render/DriveJet.js)
+    this.driveJetsOn = new URLSearchParams(globalThis.location?.search || '').get('jets') !== '0';   // ?jets=0 hides them
     this._updatePixelWorld();
     this.warmUp();
     this._onResize = () => this.onResize();
@@ -344,7 +345,7 @@ export class SceneManager {
     this.controls.update();
     this._cameraSynced = true;
     this.updateScale();
-    this.driveJets.update(this.ships, this.scaleMode !== 'cinematic');
+    this.driveJets.update(this.ships, this.driveJetsOn && this.scaleMode !== 'cinematic');
   }
 
   /**
