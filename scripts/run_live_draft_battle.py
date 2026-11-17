@@ -30,7 +30,9 @@ from src.llm.live_status import PendingCalls, draft_live_entry
 from src.llm.mcp_http_server import MCPHttpServer
 from src.llm.mock_openrouter import mock_transport
 from src.llm.replay_audit import AuditedClient
-from src.llm.spending import RequestBudget
+from src.llm.spending import RequestBudget, SpendLedger
+
+DEFAULT_LEDGER = ROOT / 'data/recordings/spend_ledger.jsonl'
 from src.llm.call_policy import EffortPolicy, PolicyClient, parse_effort_specs
 
 
@@ -194,6 +196,14 @@ def anthropic_pricing(model, args):
             'unit': 'USD per million tokens', 'as_of': ANTHROPIC_PRICES_AS_OF, 'provider': 'anthropic'}
 
 
+def ledger_tokens(client):
+    stats = getattr(client, 'stats', None)
+    if stats is None:
+        return {}
+    return {'prompt': stats.prompt_tokens, 'cache_read': stats.cached_tokens,
+            'cache_write': stats.cache_write_tokens}
+
+
 def record_stop(runner, error):
     """A stopped battle (spend ceiling, failed draft) is a recorded outcome:
     result_reason, a battle_stopped event and the partial replay on disk."""
@@ -283,6 +293,15 @@ async def run(args):
     if output.exists() or report_dir.exists():
         raise FileExistsError(f'Choose a new --name; {args.name} already exists')
     client, budget = make_client(args)
+    # Paid runs reserve their cap in the cumulative ledger before the first
+    # request (--ledger-cap refuses the run here); mock runs only when a
+    # ledger is named explicitly, and they never count.
+    ledger = None
+    if not args.offline and (not args.mock_llm or args.ledger):
+        ledger = SpendLedger(args.ledger or DEFAULT_LEDGER)
+        ledger_run = ledger.open_run(script='run_live_draft_battle', name=args.name,
+                                     models=all_models(args), cap_usd=args.spend_limit,
+                                     ledger_cap_usd=args.ledger_cap, mock=args.mock_llm)
     report_dir.mkdir(parents=True, exist_ok=True)
     mode = 'offline' if args.offline else 'mock' if args.mock_llm else ''
     ticker = BattleTicker(
@@ -446,6 +465,11 @@ async def run(args):
         if runner and runner.recorder:
             runner.recorder.recording.provenance['billing'] = report()
             runner.save_progress()
+        if ledger is not None:
+            ledger.close_run(ledger_run, calls=client.stats.calls if client else 0,
+                             tokens=ledger_tokens(client), usd=budget.reported_usd if budget else 0.0,
+                             committed_usd=budget.committed_usd if budget else None,
+                             status='error' if state.error else 'done')
         # Only now: a viewer seeing "ended" must already find the verdict,
         # the stop reason and the billing block in the recording
         server.set_battle_status('ended', runner.checkpoint_count if runner else 0)
@@ -486,6 +510,12 @@ def main():
                         help='Captain model of alpha (default: --alpha-model, which also drafts '
                              'and commands as admiral)')
     parser.add_argument('--beta-captain-model', default=None, help='Captain model of beta')
+    parser.add_argument('--ledger', default=None,
+                        help=f'Cumulative spend ledger (JSONL). Paid runs append to it (default '
+                             f'{DEFAULT_LEDGER.relative_to(ROOT)}); a mock run only when named here')
+    parser.add_argument('--ledger-cap', type=float, default=None,
+                        help='Refuse to start when the ledger total (closed runs at their spend, '
+                             'open runs at their cap) plus this run\'s --spend-limit would exceed it')
     parser.add_argument('--thinking-summary', action='store_true',
                         help='Anthropic ids: request thinking display "summarized" on every call and '
                              'record the summary per model_call (thinking_summary; audit only, never '

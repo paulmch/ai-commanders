@@ -61,6 +61,7 @@ def mock_anthropic_transport(
     record: Optional[List[Dict[str, Any]]] = None,
     respond: Optional[Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]] = None,
     latency_s: float = 0.0,
+    thinking_tokens: int = 20,
 ) -> httpx2.MockTransport:
     """
     record: every request body is appended here (tests inspect them).
@@ -72,6 +73,10 @@ def mock_anthropic_transport(
         request writing it has answered, so requests on the same prefix that
         overlap the first one write it again (each pays the write). At 0
         (the default) a prefix is readable the moment it is first seen.
+    thinking_tokens: thinking tokens billed per reply (inside output_tokens).
+        The default 20 keeps replies tiny; a realistic value (the audits'
+        Sonnet 5 median was ~300-800) makes mock spend comparable to a real
+        battle's for cap and cost-report tests.
     """
     seen: set = set()
     lock = threading.Lock()
@@ -124,7 +129,7 @@ def mock_anthropic_transport(
                             "name": name, "input": args})
         if not calls:
             content.append({"type": "text", "text": "Acknowledged."})
-        output = 40 + 30 * len(calls)
+        output = 20 + thinking_tokens + 30 * len(calls)
         return httpx2.Response(200, headers={"request-id": f"req_mock_{serial}"}, json={
             "id": f"msg_mock_{serial}",
             "type": "message",
@@ -141,7 +146,7 @@ def mock_anthropic_transport(
                 "cache_read_input_tokens": read,
                 "cache_creation": {"ephemeral_5m_input_tokens": 0 if ttl_1h else written,
                                    "ephemeral_1h_input_tokens": written if ttl_1h else 0},
-                "output_tokens_details": {"thinking_tokens": 20},
+                "output_tokens_details": {"thinking_tokens": thinking_tokens},
             },
         })
 

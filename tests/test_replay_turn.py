@@ -119,3 +119,21 @@ def test_action_signature_ignores_free_text_and_argument_order():
     b = [{"name": "set_maneuver", "args": {"throttle": 0.4, "maneuver_type": "PADLOCK", "reason": "other"}}]
     assert rt.action_signature(a) == rt.action_signature(b)
     assert rt.action_signature([]) == "(no tool call)"
+
+
+def test_replay_cap_refuses_requests_beyond_it_and_the_ledger_records_the_run(recording, tmp_path):
+    from src.llm.spending import SpendLedger
+    calls = [c for c in rt.load_calls([recording]) if c["role"] == "captain"]
+    one = rt.estimate(rt.build_jobs(calls[:1], [rt.parse_variant("claude-opus-5-5:low")], 1)[0])
+    limit = one["reservation_bound_usd"] * 1.5      # room for one request in flight, not all
+    ledger = tmp_path / "ledger.jsonl"
+    code = rt.main([str(recording), "--mock", "--role", "captain", "--variant", "claude-opus-5-5:low",
+                    "-n", "3", "--workers", "1", "--spend-limit", f"{limit:.6f}",
+                    "--ledger", str(ledger), "--out", str(tmp_path / "cap")])
+    rows = [json.loads(x) for x in open(tmp_path / "cap.jsonl")]
+    assert code == 3
+    assert any(r["error"] and "budget exhausted" in r["error"] for r in rows)
+    assert sum(r["cost"] or 0 for r in rows) <= limit
+    close = [json.loads(x) for x in open(ledger)][-1]
+    assert close["status"] == "stopped" and close["script"] == "replay_turn" and close["mode"] == "mock"
+    assert SpendLedger(ledger).total_usd() == 0.0     # mock runs never count

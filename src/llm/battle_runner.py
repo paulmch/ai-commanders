@@ -811,6 +811,28 @@ class LLMBattleRunner:
                 print(f"  Admiral: {self.beta_admiral.name}")
             print(f"{'='*60}\n")
 
+    def check_budget(self) -> bool:
+        """
+        True once the battle's spend cap (client.budget, a RequestBudget) has
+        refused a request: the battle stops at this checkpoint, records a
+        battle_stopped event, and its result is a no-verdict DRAW whose reason
+        says so (the partial recording is saved as usual). A battle without a
+        budget never stops here. LiveDraftRunner overrides this to raise.
+        """
+        if getattr(self, "stop_reason", None):
+            return True
+        budget = getattr(self.client, "budget", None) if self.client is not None else None
+        if budget is None or not getattr(budget, "exhausted", False):
+            return False
+        self.stop_reason = (
+            f"Spending ceiling reached: battle stopped at checkpoint {self.checkpoint_count} "
+            f"(${budget.reported_usd:.4f} reported, ${budget.committed_usd:.4f} committed "
+            f"of ${budget.limit_usd:.2f}); partial recording saved")
+        print(f"[SPEND CAP] {self.stop_reason}", flush=True)
+        if self.recorder and self.simulation is not None:
+            self.recorder.record(self.simulation.current_time, 'battle_stopped', reason=self.stop_reason)
+        return True
+
     # ------------------------------------------------------------------
     # Experiment plumbing: per-role effort, captain triggers, quiet turns
     # (src/llm/call_policy.py). Nothing here runs unless a BattleConfig
@@ -1008,6 +1030,8 @@ class LLMBattleRunner:
 
             # Refresh who-is-hunting-whom before anyone decides.
             self._refresh_targeting_awareness()
+            if self.check_budget():
+                break
 
             # Phase 1: Deliver pending messages
             alpha_msgs = self.communication.deliver_messages("alpha")
@@ -1116,6 +1140,8 @@ class LLMBattleRunner:
 
             # Log decision
             self._log_decision(alpha_commands, beta_commands)
+            if self.check_budget():
+                break
 
             # Damage taken from here on belongs to the NEXT checkpoint's report
             self._clear_captain_hit_logs()
@@ -1229,6 +1255,8 @@ class LLMBattleRunner:
 
             # Refresh who-is-hunting-whom before anyone decides.
             self._refresh_targeting_awareness()
+            if self.check_budget():
+                break
 
             # Phase 1: Admiral decisions (both sides)
             admiral_orders = {}  # ship_id -> list of AdmiralOrder
@@ -1326,6 +1354,8 @@ class LLMBattleRunner:
 
             # Log decision
             self._log_fleet_decision(all_commands)
+            if self.check_budget():
+                break
 
             # Damage taken from here on belongs to the NEXT checkpoint's report
             self._clear_captain_hit_logs()
@@ -1453,6 +1483,8 @@ class LLMBattleRunner:
 
             # Refresh who-is-hunting-whom before anyone decides.
             self._refresh_targeting_awareness()
+            if self.check_budget():
+                break
 
             # Advance chat turn
             if self.mcp_chat:
@@ -1662,6 +1694,8 @@ class LLMBattleRunner:
 
             # Log decision
             self._log_fleet_decision(all_commands)
+            if self.check_budget():
+                break
 
             # Check limits
             if not self.config.unlimited_mode:
@@ -3182,6 +3216,9 @@ class LLMBattleRunner:
         else:
             # Time limit - evaluate by tactical advantage
             outcome, winner, reason = self._evaluate_fleet_tactical_advantage()
+        if getattr(self, "stop_reason", None):
+            # Stopped by the spend cap: a partial battle, no verdict.
+            outcome, winner, reason = BattleOutcome.DRAW, None, self.stop_reason
 
         if self.config.verbose:
             print(f"\n{'='*60}")
@@ -3718,6 +3755,9 @@ class LLMBattleRunner:
                 mutual_draw=False,  # Already handled above
                 at_time_limit=at_limit,
             )
+        if getattr(self, "stop_reason", None):
+            # Stopped by the spend cap: a partial battle, no verdict.
+            outcome, winner, reason = BattleOutcome.DRAW, None, self.stop_reason
 
         # End recording and save
         if self.recorder:

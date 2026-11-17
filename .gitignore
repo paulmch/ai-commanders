@@ -52,3 +52,7 @@ node_modules/
 
 # Dev-server staging copies of recordings (duplicates of data/recordings)
 visualizer/public/recordings/
+
+# Cumulative spend ledger of paid runs (src/llm/spending.py SpendLedger)
+data/recordings/spend_ledger.jsonl
+data/recordings/spend_ledger.jsonl.lock

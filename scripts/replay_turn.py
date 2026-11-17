@@ -562,6 +562,11 @@ def parse_args(argv=None):
     run = p.add_argument_group("running")
     run.add_argument("--workers", type=int, default=4, help="concurrent requests (default 4)")
     run.add_argument("--spend-limit", type=float, help="hard dollar cap for this run (required when paid)")
+    run.add_argument("--ledger", default=None,
+                     help="cumulative spend ledger (JSONL); paid runs append to it (default "
+                          "data/recordings/spend_ledger.jsonl), mock runs only when named here")
+    run.add_argument("--ledger-cap", type=float,
+                     help="refuse to start when ledger total + this run's cap would exceed it")
     run.add_argument("--out", help="output prefix (default data/recordings/replays/replay_<UTC stamp>)")
     run.add_argument("--mock", action="store_true", help="offline: the mock Anthropic client answers")
     run.add_argument("--mock-latency", type=float, default=0.0, help=argparse.SUPPRESS)
@@ -621,7 +626,7 @@ def main(argv=None) -> int:
             print(f"  variant {variant['label']}: {len(prefixes)} distinct cached prefixes")
         return 0
 
-    from src.llm.spending import RequestBudget
+    from src.llm.spending import RequestBudget, SpendLedger
     paid = not args.mock
     if paid and not args.spend_limit:
         raise SystemExit("A paid replay needs --spend-limit USD (a hard cap)")
@@ -629,6 +634,12 @@ def main(argv=None) -> int:
     out = Path(args.out) if args.out else ROOT / "data/recordings/replays" / (
         "replay_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S"))
     out.parent.mkdir(parents=True, exist_ok=True)
+    ledger = run_id = None
+    if paid or args.ledger:
+        ledger = SpendLedger(args.ledger or ROOT / "data/recordings/spend_ledger.jsonl")
+        run_id = ledger.open_run(script="replay_turn", name=out.name,
+                                 models=sorted({v["model"] for v in variants}), cap_usd=limit,
+                                 ledger_cap_usd=args.ledger_cap, mock=not paid)
     client = make_client(variants, args)
     client.budget = RequestBudget(limit, {})
     rows: List[Dict[str, Any]] = []
@@ -640,6 +651,10 @@ def main(argv=None) -> int:
                 f.write(json.dumps(row) + "\n")
         Path(f"{out}.md").write_text(comparison_table(calls, variants, rows))
         spent = client.budget.reported_usd
+        if ledger is not None:
+            ledger.close_run(run_id, calls=len(rows), tokens=_token_total(rows), usd=spent,
+                             committed_usd=client.budget.committed_usd,
+                             status="stopped" if client.budget.exhausted else "done")
     errors = sum(1 for r in rows if r.get("error"))
     print(f"\n{len(rows)} replies ({errors} errors), ${spent:.4f} spent of the ${limit:.2f} cap"
           + (" (EXHAUSTED)" if client.budget.exhausted else ""))

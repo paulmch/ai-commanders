@@ -16,7 +16,10 @@ from pathlib import Path
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.llm.providers import create_llm_client
+from src.llm.providers import create_llm_client, llm_models, provider_for_model
+from src.llm.spending import RequestBudget, SpendLedger
+
+DEFAULT_LEDGER = Path(__file__).resolve().parent.parent / "data/recordings/spend_ledger.jsonl"
 from src.llm.captain import LLMCaptainConfig
 from src.llm.prompts import CaptainPersonality
 from src.llm.battle_runner import LLMBattleRunner, BattleConfig, load_fleet_data
@@ -34,6 +37,30 @@ def _available_ship_types() -> list:
     except Exception:
         return ["corvette", "frigate", "destroyer", "cruiser",
                 "battlecruiser", "battleship", "dreadnought"]
+
+
+def openrouter_pricing(models) -> dict:
+    """
+    OpenRouter catalog prices for the vendor/model ids among `models` (a free
+    metadata call; RequestBudget.reserve needs them). Bare Anthropic ids are
+    priced by the client's own table and need nothing here.
+    """
+    wanted = [m for m in models if provider_for_model(m) == "openrouter"]
+    if not wanted:
+        return {}
+    import httpx
+    response = httpx.get("https://openrouter.ai/api/v1/models", timeout=30)
+    response.raise_for_status()
+    catalog = {m["id"]: m for m in response.json()["data"]}
+    from src.llm.client import _strip_prefix
+    pricing = {}
+    for model in wanted:
+        entry = catalog.get(_strip_prefix(model)) or catalog.get(model)
+        if not entry:
+            raise ValueError(f"--spend-limit: {model} is not in the OpenRouter catalog (cannot be priced)")
+        pricing[model] = entry["pricing"]
+        pricing[_strip_prefix(model)] = entry["pricing"]
+    return pricing
 
 
 def fleet_models(fleet_config) -> list:
@@ -59,7 +86,7 @@ def apply_model_overrides(fleet_config, args) -> None:
             fleet.admiral.name = f"Admiral {_get_short_model_name(admiral)}"
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Run an LLM-controlled space battle",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -193,6 +220,36 @@ Examples:
                                  "for rule-based captains under an LLM admiral)")
 
     parser.add_argument(
+        "--spend-limit", type=float, default=None,
+        help="Hard dollar cap (RequestBudget): every request reserves an upper bound on its cost "
+             "first; once a reservation is refused the battle stops at that checkpoint "
+             "(battle_stopped event, no-verdict result, partial recording saved)",
+    )
+    parser.add_argument(
+        "--ledger", default=None,
+        help="Cumulative spend ledger (JSONL); paid runs append to it "
+             "(default data/recordings/spend_ledger.jsonl), mock runs only when named here",
+    )
+    parser.add_argument(
+        "--ledger-cap", type=float, default=None,
+        help="Refuse to start when the ledger total plus this run's --spend-limit would exceed it",
+    )
+    parser.add_argument(
+        "--max-tokens", type=int, default=None,
+        help="Per-call output ceiling (default: the client's; Anthropic ids clamp at 16000). "
+             "Lower values shrink each in-flight call's cap reservation",
+    )
+    parser.add_argument(
+        "--recording-dir", default=None,
+        help="Where the recording is written (default data/recordings)",
+    )
+    parser.add_argument(
+        "--mock-llm", action="store_true",
+        help="Offline: every Anthropic-id call is answered by the in-process mock "
+             "(src/llm/mock_anthropic.py); no key, no network, no cost",
+    )
+    parser.add_argument("--mock-thinking-tokens", type=int, default=20, help=argparse.SUPPRESS)
+    parser.add_argument(
         "--thinking-summary", action="store_true",
         help="Anthropic ids: request thinking display 'summarized' and record the summary per "
              "model_call (thinking_summary; audit only, never fed back). Billed the same as the "
@@ -246,7 +303,7 @@ Examples:
         help="Quiet mode (only show result)",
     )
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # Map personality strings to enums
     personality_map = {
@@ -323,6 +380,8 @@ Examples:
             config_overrides["use_notebooks"] = True
         if args.plain_json:
             config_overrides["compress_recording"] = False
+        if args.recording_dir:
+            config_overrides["recording_dir"] = args.recording_dir
         if args.effort:
             policy = parse_effort_specs(args.effort)
             if fleet_config:
@@ -359,10 +418,34 @@ Examples:
         anthropic_options = {}
         if args.thinking_summary:
             anthropic_options["thinking_display"] = "summarized"
+        llm_ids = llm_models(models)
+        if args.mock_llm:
+            not_anthropic = [m for m in llm_ids if provider_for_model(m) != "anthropic"]
+            if not_anthropic:
+                raise ValueError(f"--mock-llm answers bare Anthropic ids only, not {not_anthropic}")
+            import anthropic
+            from src.llm.mock_anthropic import mock_anthropic_transport
+            anthropic_options.update(api_key="mock-no-network", http_client=anthropic.DefaultHttpxClient(
+                transport=mock_anthropic_transport(seed=args.seed or 0,
+                                                   thinking_tokens=args.mock_thinking_tokens)))
+        if args.ledger_cap is not None and args.spend_limit is None:
+            raise ValueError("--ledger-cap needs --spend-limit (the run's cap is what it reserves)")
+        client_kwargs = {"max_tokens": args.max_tokens} if args.max_tokens else {}
         client = (create_llm_client(client_model, models, session_id=session_id,
                                     reasoning_effort=args.reasoning_effort,
-                                    anthropic_options=anthropic_options or None)
-                  if any(model != "heuristic" for model in models) else None)
+                                    anthropic_options=anthropic_options or None, **client_kwargs)
+                  if llm_ids else None)
+        budget = None
+        if args.spend_limit is not None and client is not None:
+            budget = RequestBudget(args.spend_limit, openrouter_pricing(llm_ids))
+            client.budget = budget
+        ledger = ledger_run = None
+        if client is not None and (not args.mock_llm or args.ledger):
+            ledger = SpendLedger(args.ledger or DEFAULT_LEDGER)
+            ledger_run = ledger.open_run(
+                script="run_llm_battle", name=Path(args.fleet_config or "duel").stem, models=llm_ids,
+                cap_usd=args.spend_limit if args.spend_limit is not None else 0.0,
+                ledger_cap_usd=args.ledger_cap, mock=args.mock_llm)
 
         if args.unlimited and not args.quiet:
             print("UNLIMITED MODE: Battle will continue until destruction, surrender, or mutual draw")
@@ -379,7 +462,18 @@ Examples:
             fleet_config=fleet_config,
         )
 
-        result = runner.run_battle(fleet_data)
+        status = "error"
+        try:
+            result = runner.run_battle(fleet_data)
+            status = "stopped" if getattr(runner, "stop_reason", None) else "done"
+        finally:
+            if ledger is not None:
+                stats = client.stats
+                ledger.close_run(ledger_run, calls=stats.calls,
+                                 tokens={"prompt": stats.prompt_tokens, "cache_read": stats.cached_tokens,
+                                         "cache_write": stats.cache_write_tokens},
+                                 usd=budget.reported_usd if budget else stats.cost_usd,
+                                 committed_usd=budget.committed_usd if budget else None, status=status)
 
         # Print final result if quiet mode
         if args.quiet:
