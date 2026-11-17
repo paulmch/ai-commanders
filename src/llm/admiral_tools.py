@@ -17,10 +17,14 @@ ADMIRAL_TOOLS = [
         "function": {
             "name": "issue_order",
             "description": (
-                "REQUIRED: Issue a specific order to one of your ship captains. "
-                "You MUST call this tool once for EACH ship in your fleet! "
-                "The captain will see your exact words and should follow them. "
-                "Be specific about target, maneuver, and weapon orders."
+                "Issue a specific order to one of your ship captains. Two kinds of field: "
+                "the STRUCTURED fields are what the engine applies at once and what the "
+                "compliance check compares - maneuver / heading / throttle / evade fly, "
+                "suggested_target is THE target (one ship), torpedo_salvo + torpedo_target "
+                "are the launch. order_text is read by the captain only and flies nothing: "
+                "make it say the same as the fields. A ship has one target per checkpoint - "
+                "a 'then shift to X' in the text is a second target the engine never applies "
+                "(the captain may follow either)."
             ),
             "parameters": {
                 "type": "object",
@@ -32,9 +36,9 @@ ADMIRAL_TOOLS = [
                     "order_text": {
                         "type": "string",
                         "description": (
-                            "Your order to the captain. Be specific about maneuvers, "
-                            "targets, weapon usage, and priorities. The captain will "
-                            "interpret this and execute using their available tools."
+                            "Your words to the captain (it reads them; the engine does not). "
+                            "Name the same maneuver and the same single target as the "
+                            "structured fields; add weapon use and priorities."
                         )
                     },
                     "priority": {
@@ -48,7 +52,8 @@ ADMIRAL_TOOLS = [
                     },
                     "suggested_target": {
                         "type": "string",
-                        "description": "Optional: enemy ship name to focus on"
+                        "description": ("The ONE enemy ship (name or id) this ship engages: the "
+                                        "captain's TARGET line and the compliance check use it.")
                     },
                     "torpedo_salvo": {
                         "type": "integer",
@@ -222,10 +227,9 @@ ADMIRAL_TOOLS = [
         "function": {
             "name": "set_fleet_directive",
             "description": (
-                "Set the overall fleet strategy visible to all captains. "
-                "IMPORTANT: This alone is NOT enough! You MUST ALSO call issue_order for each ship. "
-                "Use set_fleet_directive ONLY to set the overall strategy, then call issue_order "
-                "for each ship with specific orders."
+                "Set the overall fleet strategy visible to all captains (and, for torpedo "
+                "fleets, this checkpoint's salvo_plan). Per-ship orders are requested one "
+                "ship at a time after this call."
             ),
             "parameters": {
                 "type": "object",
@@ -239,6 +243,27 @@ ADMIRAL_TOOLS = [
                             "'Defensive formation, conserve delta-v', "
                             "'TIS Haiku-2 draw fire while others flank'"
                         )
+                    },
+                    "salvo_plan": {
+                        "type": "array",
+                        "description": (
+                            "Optional, torpedo fleets: THIS checkpoint's salvo, allocated across "
+                            "your ships here, once - the per-ship order calls that follow run in "
+                            "parallel and cannot see each other's torpedo_salvo (a '7-round strike' "
+                            "became 3+3+3 = 9 that way). Each per-ship order is shown this "
+                            "allocation and launches it unless that order sets its own "
+                            "torpedo_salvo. Rounds a ship cannot launch this checkpoint (YOUR "
+                            "FLEET: 'N now') are not launched."
+                        ),
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "ship_name": {"type": "string"},
+                                "rounds": {"type": "integer", "minimum": 0, "maximum": 12},
+                                "target": {"type": "string"},
+                            },
+                            "required": ["ship_name", "rounds"],
+                        },
                     }
                 },
                 "required": ["directive"]

@@ -220,6 +220,9 @@ class FleetDraft:
     selection_rationale: str = ""
     formation_rationale: str = ""
     auto: bool = False  # True if the fallback drafted (LLM failed/absent)
+    # Set when the model's last invalid fleet was trimmed to validity
+    # (trim_selection): {"submitted": [...], "dropped": [...], "kept": [...]}.
+    trimmed: Optional[Dict[str, Any]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -304,6 +307,67 @@ def build_catalog_text(fleet_data: Dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 # Draft tools
 # ---------------------------------------------------------------------------
+
+def select_fleet_tool(budget: Optional[int] = None, max_ships: Optional[int] = None) -> Dict[str, Any]:
+    """
+    The select_fleet tool. The price sum comes FIRST in the schema
+    (`budget_check`), before `ships`: Sonnet 5.5 wrote `ships` first and
+    added up afterwards ("58+50+36+14 = 158 is too high, so verify cost") -
+    6 of its 10 submissions were invalid and one battle never started. With
+    a budget and cap the limits are stated in the description and bounded in
+    the schema where JSON schema can (hull names, per-line count <= cap; the
+    SUM of counts cannot be expressed there).
+    """
+    limits = (f"Limits: total cost <= {budget} points AND at most {max_ships} hulls "
+              f"(the sum of all counts). " if budget is not None and max_ships is not None else
+              "Total cost must not exceed your point budget. ")
+    count: Dict[str, Any] = {"type": "integer", "minimum": 1}
+    if max_ships is not None:
+        count["maximum"] = int(max_ships)
+    hull: Dict[str, Any] = {"type": "string"}
+    if SHIP_POINT_COSTS:
+        hull["enum"] = list(SHIP_POINT_COSTS)
+    return {
+        "type": "function",
+        "function": {
+            "name": "select_fleet",
+            "description": (
+                "Buy your fleet from the catalog. " + limits
+                + "Unspent points are wasted. You must buy at least one ship. Fill "
+                "budget_check first, then ships with exactly the hulls you added up."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "budget_check": {
+                        "type": "string",
+                        "description": (
+                            "Write this FIRST: every hull line with count x price, the "
+                            "point total and the hull count against the limits, e.g. "
+                            "'2 battleship 2x43=86 + 3 destroyer 3x18=54 = 140 of "
+                            f"{budget if budget is not None else 150} points; 5 of "
+                            f"{max_ships if max_ships is not None else 8} hulls'"),
+                    },
+                    "ships": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "properties": {"ship_type": hull, "count": count},
+                            "required": ["ship_type", "count"],
+                        },
+                        "description": "Hull classes and how many of each to buy (as in budget_check)",
+                    },
+                    "rationale": {
+                        "type": "string",
+                        "description": "One or two sentences on the fleet concept",
+                    },
+                },
+                "required": ["budget_check", "ships"],
+            },
+        },
+    }
+
 
 SELECT_FLEET_TOOL = {
     "type": "function",
@@ -419,15 +483,50 @@ def validate_selection(
         spent += SHIP_POINT_COSTS[stype] * count
         n_ships += count
 
+    lines = " + ".join(f"{count}x {stype} ({count}x{SHIP_POINT_COSTS[stype]}="
+                       f"{count * SHIP_POINT_COSTS[stype]})" for stype, count in entries)
+    echo = f" You submitted: {lines} = {spent} points, {n_ships} hulls."
+    problems = []
     if spent > budget:
-        return None, 0, (
-            f"Over budget: that fleet costs {spent} points but you only have "
-            f"{budget}. Drop or downgrade ships.")
+        problems.append(f"Over budget: that fleet costs {spent} points but you only have "
+                        f"{budget} ({spent - budget} over). Drop or downgrade ships.")
     if n_ships > max_ships:
-        return None, 0, (
-            f"Too many hulls: {n_ships} ships, the cap is {max_ships}.")
+        problems.append(f"Too many hulls: {n_ships} ships, the cap is {max_ships} "
+                        f"({n_ships - max_ships} too many).")
+    if problems:
+        return None, 0, " ".join(problems) + echo
     flat = [stype for stype, count in entries for _ in range(count)]
     return flat, spent, None
+
+
+def trim_selection(ships_arg: Any, budget: int, max_ships: int
+                   ) -> Tuple[Optional[List[str]], int, List[str]]:
+    """
+    The last fleet a model submitted, trimmed to validity: unknown hulls and
+    malformed lines are dropped, then the CHEAPEST hulls one by one until the
+    fleet fits both the point budget and the hull cap. Returns (flat ship
+    types, points, dropped hull types); (None, 0, dropped) when nothing is
+    left. Deterministic: ties drop the later line first.
+    """
+    dropped: List[str] = []
+    picked: List[str] = []
+    for entry in ships_arg if isinstance(ships_arg, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        stype = str(entry.get("ship_type", "")).strip().lower()
+        count = entry.get("count", 1)
+        if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+            continue
+        if stype not in SHIP_POINT_COSTS:
+            dropped.extend([stype or "?"] * min(count, max_ships + 1))
+            continue
+        picked.extend([stype] * min(count, 10 * max(1, max_ships)))
+    while picked and (sum(SHIP_POINT_COSTS[t] for t in picked) > budget or len(picked) > max_ships):
+        i = min(range(len(picked)), key=lambda k: (SHIP_POINT_COSTS[picked[k]], -k))
+        dropped.append(picked.pop(i))
+    if not picked:
+        return None, 0, dropped
+    return picked, sum(SHIP_POINT_COSTS[t] for t in picked), dropped
 
 
 def name_drafted_ships(ship_types: List[str], faction: str) -> List[DraftedShip]:
@@ -756,6 +855,30 @@ Considerations:
 Call set_formation with a placement for each ship."""
 
 
+def _retry_turn(calls: List[Any], select: Any, error: str) -> List[Dict[str, Any]]:
+    """
+    The rejected attempt as a real exchange: the model's own tool call(s)
+    as the assistant turn, the validator's error as the select_fleet
+    tool_result (every other call answered too, as the API requires). A
+    reply without any tool call gets a plain user nudge instead. The old
+    retry rewrote the attempt as "(previous attempt rejected: ...)", hiding
+    the fleet the model had actually submitted.
+    """
+    tool_calls = [c for c in calls or [] if getattr(c, "id", None)]
+    if select is None or not tool_calls:
+        return [{"role": "user", "content": f"INVALID: {error} Try again with select_fleet."}]
+    turn: List[Dict[str, Any]] = [{
+        "role": "assistant", "content": None,
+        "tool_calls": [{"id": c.id, "type": "function",
+                        "function": {"name": c.name, "arguments": json.dumps(c.arguments or {})}}
+                       for c in tool_calls]}]
+    for c in tool_calls:
+        turn.append({"role": "tool", "tool_call_id": c.id,
+                     "content": (f"REJECTED: {error} Call select_fleet again with a fleet inside "
+                                 "both limits." if c is select else "ignored: only select_fleet counts here")})
+    return turn
+
+
 def _refused(client: Any) -> bool:
     """True if the client's last reply on this thread was a refusal (never re-asked)."""
     finish = getattr(client, "last_finish_reason", None)
@@ -778,15 +901,26 @@ def run_admiral_draft(
     seed: Optional[int] = None,
     captain_model: Optional[str] = None,
     allow_auto_fallback: bool = True,
+    allow_trim: bool = True,
 ) -> FleetDraft:
     """
     Run the two-phase LLM draft for one side.
 
-    Any unrecoverable failure (API errors, three invalid selections) falls
-    back to auto_draft so the battle always starts.
+    An invalid selection is answered as a real tool exchange: the model's
+    select_fleet call stays in the conversation and the validator's error
+    (the rejected fleet with each line's cost, the total, the cap and the
+    excess) comes back as its tool_result, so the next attempt can see what
+    it submitted. After the last attempt the model's last fleet is trimmed
+    to validity (allow_trim: cheapest hulls dropped until it fits; recorded
+    as a draft_auto_trimmed event when the client carries a recorder) -
+    the model's own hulls, so this runs whatever allow_auto_fallback says.
+    With nothing to trim (API failure, no select_fleet call, only unknown
+    hulls) the side falls back to auto_draft, or with
+    allow_auto_fallback=False the battle does not start.
     """
     catalog = build_catalog_text(fleet_data)
     draft = FleetDraft(faction=faction, budget=budget)
+    tool = select_fleet_tool(budget, max_ships)
 
     # --- Phase 1: selection, with validation feedback loop ---
     messages: List[Dict[str, Any]] = [
@@ -796,6 +930,8 @@ def run_admiral_draft(
         {"role": "user", "content": "Buy your fleet now with select_fleet."},
     ]
     flat: Optional[List[str]] = None
+    last_ships: Any = None
+    last_rationale = ""
     # Some provider endpoints reject a forced tool call (DeepSeek's own API,
     # Claude with thinking on Bedrock). A rejected "required" is asked again
     # once with "auto"; the prompts already insist on the tool.
@@ -803,7 +939,7 @@ def run_admiral_draft(
     for attempt in range(3):
         try:
             calls = client.decide_with_tools(
-                messages, [SELECT_FLEET_TOOL], model=model,
+                messages, [tool], model=model,
                 tool_choice=tool_choice)
         except LLMCallError as e:
             if tool_choice == "required" and not e.retryable:
@@ -819,18 +955,35 @@ def run_admiral_draft(
         if select is None:
             error = "You made no select_fleet call. You MUST call select_fleet."
         else:
-            flat, spent, error = validate_selection(
-                select.arguments.get("ships"), budget, max_ships)
+            last_ships = select.arguments.get("ships")
+            last_rationale = (select.arguments.get("rationale") or "").strip()
+            flat, spent, error = validate_selection(last_ships, budget, max_ships)
         if flat is not None:
             draft.points_spent = spent
-            draft.selection_rationale = (select.arguments.get("rationale") or "").strip()
+            draft.selection_rationale = last_rationale
             break
         if verbose:
             print(f"[DRAFT {faction}] invalid selection (attempt {attempt + 1}): {error}")
-        messages.append({"role": "assistant", "content":
-                         f"(previous attempt rejected: {error})"})
-        messages.append({"role": "user", "content":
-                         f"INVALID: {error} Try again with select_fleet."})
+        messages.extend(_retry_turn(calls, select, error))
+
+    if flat is None and allow_trim and last_ships is not None:
+        kept, spent, dropped = trim_selection(last_ships, budget, max_ships)
+        if kept is not None:
+            flat = kept
+            draft.points_spent = spent
+            draft.selection_rationale = last_rationale
+            draft.trimmed = {"submitted": last_ships, "dropped": dropped, "kept": list(kept),
+                             "points": spent, "budget": budget, "max_ships": max_ships}
+            print(f"[DRAFT {faction}] no valid fleet after the retries: trimmed the last one "
+                  f"to {spent}/{budget} pts, {len(kept)}/{max_ships} hulls (dropped: "
+                  f"{', '.join(dropped) or 'nothing'})")
+            recorder = getattr(client, "recorder", None)
+            if recorder is not None and callable(getattr(recorder, "record", None)):
+                try:
+                    recorder.record(0.0, "draft_auto_trimmed", None, faction=faction,
+                                    **draft.trimmed)
+                except Exception as e:  # noqa: BLE001 - the record must not stop the draft
+                    print(f"[DRAFT {faction}] could not record draft_auto_trimmed: {e}")
 
     if flat is None:
         if not allow_auto_fallback:
@@ -934,6 +1087,7 @@ def draft_summary_dict(draft: FleetDraft) -> Dict[str, Any]:
         "budget": draft.budget,
         "points_spent": draft.points_spent,
         "auto_draft": draft.auto,
+        **({"auto_trimmed": draft.trimmed} if draft.trimmed else {}),
         "formation_name": draft.formation_name,
         "selection_rationale": draft.selection_rationale,
         "formation_rationale": draft.formation_rationale,

@@ -14,6 +14,7 @@ The Admiral:
 """
 
 import inspect
+import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional, Tuple, TYPE_CHECKING
@@ -104,6 +105,12 @@ class AdmiralOrder:
     # replaced, e.g. "HEADING (+1.00,+0.02,+0.00) @50%" - shown to the
     # captain so a per-ship MAINTAIN under a fleet burn reads as what it is.
     replaces_fleet_order: Optional[str] = None
+    # Enemy ships the order prose names besides its structured target(s)
+    # (fleet_intel.order_text_target_note), shown to the captain as such.
+    text_also_names: List[str] = field(default_factory=list)
+    # The directive's salvo allocation this order carries ("directive") or
+    # replaced ("order"); None without one.
+    salvo_source: Optional[str] = None
 
 
 @dataclass
@@ -128,6 +135,10 @@ class AdmiralDecision:
     directive_failure: Optional[str] = None
     # The first attempt failed this way but the retry delivered a directive.
     directive_recovered: Optional[str] = None
+    # set_fleet_directive salvo_plan: ship id -> (rounds, target ref). The
+    # per-ship order calls run in parallel and cannot see each other, so the
+    # fleet's salvo is allocated here, once, and each order call is shown it.
+    salvo_plan: Dict[str, Tuple[int, Optional[str]]] = field(default_factory=dict)
 
 
 def _heading_arg(value: Any) -> Optional[Dict[str, float]]:
@@ -523,6 +534,9 @@ class AdmiralSnapshot:
     score_line: str = ""
     # Draw exchange lines for this turn (our open offer, its answer).
     draw_lines: List[str] = field(default_factory=list)
+    # NOW-block text per group label for a merge alarm that repeats unchanged
+    # (LLMAdmiral._damp_merge_alarms); groups not in it show info.warning.
+    merge_alarms: Dict[str, str] = field(default_factory=dict)
     # Per own ship under live torpedo attack: fleet_intel.torpedo_defence.
     torpedo_defence: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     # Ships that have not flown their ordered maneuver for 2+ checkpoints
@@ -872,6 +886,7 @@ Be authentic to how you would command a fleet as {model_name}."""
 
             if name == "set_fleet_directive":
                 decision.fleet_directive = (args.get("directive") or "").strip()
+                decision.salvo_plan = self._salvo_plan(args.get("salvo_plan"))
             elif name == "set_battle_plan":
                 plan = args.get("plan", "").strip()
                 if plan:
@@ -916,6 +931,7 @@ Be authentic to how you would command a fleet as {model_name}."""
                 simulation=simulation,
                 fleet_heading=decision.fleet_heading,
                 directive_failure=decision.directive_failure,
+                salvo_plan=decision.salvo_plan,
             )
 
         if self.parallel_ship_orders and len(active_ships) > 1:
@@ -1027,6 +1043,7 @@ Be authentic to how you would command a fleet as {model_name}."""
         simulation: Any,
         fleet_heading: Optional[AdmiralOrder] = None,
         directive_failure: Optional[str] = None,
+        salvo_plan: Optional[Dict[str, Tuple[int, Optional[str]]]] = None,
     ) -> Optional[AdmiralOrder]:
         """
         Issue a specific order to a single ship.
@@ -1075,6 +1092,7 @@ Be authentic to how you would command a fleet as {model_name}."""
             directive_failure=directive_failure,
             previous_directive=previous,
             faction=self.faction,
+            salvo_plan=self._salvo_plan_view(salvo_plan, ship_info['ship_id']),
         )
         messages[1]["content"] = (
             f"Issue tactical order to {ship_info['ship_name']}. You MUST call issue_order "
@@ -1090,21 +1108,44 @@ Be authentic to how you would command a fleet as {model_name}."""
             print(f"[ADMIRAL {self.config.name}] ship-order call failed: {e}")
             return None
 
-        # Extract order
-        for call in tool_calls:
-            if call.name == "issue_order":
-                args = call.arguments
-                order = AdmiralOrder(
-                    target_ship_id=ship_info['ship_id'],
-                    target_ship_name=ship_info['ship_name'],
-                    order_text=args.get("order_text", "Continue as directed."),
-                    priority=args.get("priority", "NORMAL"),
-                    suggested_target=self._plain_ref(args.get("suggested_target")),
-                    torpedo_salvo=args.get("torpedo_salvo"),
-                    torpedo_target=self._plain_ref(args.get("torpedo_target")),
-                )
-                _attach_heading(order, args, fleet_heading)
-                return order
+        call = next((c for c in tool_calls if c.name == "issue_order"), None)
+        note = self._order_text_note(call.arguments, simulation) if call is not None else None
+        if note and getattr(call, "id", None):
+            # The prose names a ship other than the structured target: say so
+            # in the tool result and let the admiral correct it (one follow-up,
+            # only on a mismatch).
+            follow = list(messages) + [
+                {"role": "assistant", "content": None, "tool_calls": [
+                    {"id": call.id, "type": "function", "function": {
+                        "name": "issue_order", "arguments": json.dumps(call.arguments or {})}}]},
+                {"role": "tool", "tool_call_id": call.id, "content": f"Order recorded. NOTE: {note}"},
+                {"role": "user", "content": (
+                    f"Issue tactical order to {ship_info['ship_name']}. You MUST call issue_order "
+                    "again only to change it - a reply without a call keeps the order above.")}]
+            try:
+                again = self.client.decide_with_tools(follow, order_tool, model=self.config.model)
+            except LLMCallError as e:
+                print(f"[ADMIRAL {self.config.name}] order follow-up failed: {e}")
+                again = []
+            second = next((c for c in again or [] if c.name == "issue_order"), None)
+            if second is not None:
+                call = second
+        if call is not None:
+            args = call.arguments
+            order = AdmiralOrder(
+                target_ship_id=ship_info['ship_id'],
+                target_ship_name=ship_info['ship_name'],
+                order_text=args.get("order_text", "Continue as directed."),
+                priority=args.get("priority", "NORMAL"),
+                suggested_target=self._plain_ref(args.get("suggested_target")),
+                torpedo_salvo=args.get("torpedo_salvo"),
+                torpedo_target=self._plain_ref(args.get("torpedo_target")),
+            )
+            self._apply_salvo_plan(order, args, salvo_plan)
+            _attach_heading(order, args, fleet_heading)
+            if self._order_text_note(args, simulation):
+                order.text_also_names = self._prose_only_targets(args, simulation)
+            return order
 
         # If no order was issued, create a default order
         basis = (f"fleet directive: {fleet_directive[:100]}..." if fleet_directive
@@ -1116,8 +1157,79 @@ Be authentic to how you would command a fleet as {model_name}."""
             priority="NORMAL",
             suggested_target=None,
         )
+        self._apply_salvo_plan(order, {}, salvo_plan)
         _attach_heading(order, {}, fleet_heading)
         return order
+
+    # -- salvo allocation and order consistency --------------------------------
+
+    def _salvo_plan(self, raw: Any) -> Dict[str, Tuple[int, Optional[str]]]:
+        """set_fleet_directive salvo_plan -> {own ship id: (rounds, target)}."""
+        plan: Dict[str, Tuple[int, Optional[str]]] = {}
+        for entry in raw if isinstance(raw, list) else []:
+            if not isinstance(entry, dict):
+                continue
+            sid = intel.resolve_ship_ref(entry.get("ship_name"), self._ship_names) \
+                or self._ship_name_to_id.get(str(entry.get("ship_name") or ""))
+            if not sid or not str(sid).startswith(self.faction):
+                continue
+            try:
+                rounds = max(0, int(entry.get("rounds", 0)))
+            except (TypeError, ValueError):
+                continue
+            plan[sid] = (rounds, self._plain_ref(entry.get("target")) if entry.get("target") else None)
+        return plan
+
+    def _salvo_plan_view(self, plan: Optional[Dict[str, Tuple[int, Optional[str]]]],
+                         ship_id: str) -> Optional[Dict[str, Any]]:
+        if not plan:
+            return None
+        mine = plan.get(ship_id)
+        targets: Dict[str, int] = {}
+        for rounds, target in plan.values():
+            if rounds:
+                targets[target or "?"] = targets.get(target or "?", 0) + rounds
+        return {"mine": mine, "total": sum(r for r, _ in plan.values()), "by_target": targets,
+                "ships": len([1 for r, _ in plan.values() if r])}
+
+    def _apply_salvo_plan(self, order: AdmiralOrder, args: Dict[str, Any],
+                          plan: Optional[Dict[str, Tuple[int, Optional[str]]]]) -> None:
+        """The directive's allocation flies unless this order sets its own salvo."""
+        mine = (plan or {}).get(order.target_ship_id)
+        if mine is None:
+            return
+        if args.get("torpedo_salvo") is None:
+            order.torpedo_salvo, alloc_target = mine
+            if order.torpedo_target is None and alloc_target:
+                order.torpedo_target = alloc_target
+            order.salvo_source = "directive"
+        else:
+            order.salvo_source = "order"
+
+    def _enemy_and_own_ids(self, simulation: Any) -> Tuple[List[str], List[str]]:
+        ships = list((getattr(simulation, "ships", None) or {}).values())
+        own = [s.ship_id for s in ships if getattr(s, "faction", None) == self.faction]
+        enemy = [s.ship_id for s in ships if getattr(s, "faction", None) != self.faction
+                 and intel.is_live(s)]
+        for s in ships:
+            self._ship_names.setdefault(s.ship_id, intel.ship_name(s))
+        return own, enemy
+
+    def _order_text_note(self, args: Dict[str, Any], simulation: Any) -> Optional[str]:
+        try:
+            own, enemy = self._enemy_and_own_ids(simulation)
+            return intel.order_text_target_note(args or {}, self._ship_names, own, enemy)
+        except Exception:  # noqa: BLE001 - advisory only
+            return None
+
+    def _prose_only_targets(self, args: Dict[str, Any], simulation: Any) -> List[str]:
+        own, enemy = self._enemy_and_own_ids(simulation)
+        short_own = [self._ship_names.get(s, "").split(" ", 1)[1] for s in own
+                     if " " in self._ship_names.get(s, "")]
+        structured = {intel.resolve_ship_ref(args.get(k), self._ship_names)
+                      for k in ("suggested_target", "maneuver_target", "torpedo_target") if args.get(k)}
+        named = intel.ships_named_in_text(args.get("order_text") or "", self._ship_names, enemy, short_own)
+        return [intel.label(self._ship_names.get(s), s) for s in named if s not in structured]
 
     def _ship_view(self, simulation: Any, ship_id: str, snapshot: 'AdmiralSnapshot') -> Dict[str, Any]:
         """
@@ -1364,6 +1476,7 @@ Be authentic to how you would command a fleet as {model_name}."""
             print(f"[ADMIRAL {self.config.name}] range control failed: {e}")
             infos = []
         snap.range_groups = infos
+        snap.merge_alarms = self._damp_merge_alarms(infos, now)
         formation = formation_line(live_own)
         try:
             # Uniform rows: range effect, the face you show, the face HE shows
@@ -1488,6 +1601,43 @@ Be authentic to how you would command a fleet as {model_name}."""
             snap.noncompliance = self._track_noncompliance(simulation, own_ships, since, now, snap)
         except Exception as e:  # noqa: BLE001 - advisory only
             print(f"[ADMIRAL {self.config.name}] non-compliance check failed: {e}")
+
+    @staticmethod
+    def _alarm_kind(warning: str) -> str:
+        if "out-accelerates" in warning:
+            return "he out-accelerates you"
+        if "too late" in warning:
+            return "too late to brake"
+        return "brake now or pass"
+
+    def _damp_merge_alarms(self, infos: List[Any], now: float) -> Dict[str, str]:
+        """
+        A merge alarm repeated unchanged (same group, same kind) at
+        consecutive checkpoints is shown once in full, then as one short line
+        with its count - one side got the same alarm eight checkpoints running
+        (audit A9). The full numbers stay in GEOMETRY.
+        """
+        seen = self.__dict__.setdefault("_merge_alarm_seen", {})
+        interval = None
+        out: Dict[str, str] = {}
+        current = {}
+        for info in infos:
+            if not info.warning:
+                continue
+            kind = self._alarm_kind(info.warning)
+            prev = seen.get(info.label)
+            last_t = self._last_decision_t
+            if prev and prev["kind"] == kind and last_t is not None and abs(prev["t"] - last_t) < 1e-6:
+                entry = {"kind": kind, "t": now, "first": prev["first"], "n": prev["n"] + 1}
+                out[info.label] = (f"merge alarm unchanged since T+{entry['first']:.0f}s ({kind}; "
+                                   f"{entry['n']} checkpoints running): closest {info.cpa_km:.1f} km "
+                                   f"in {info.cpa_t_s:.0f} s - numbers in GEOMETRY")
+            else:
+                entry = {"kind": kind, "t": now, "first": now, "n": 1}
+            current[info.label] = entry
+        seen.clear()
+        seen.update(current)
+        return out
 
     # An ordered burn the drive produced for less than this share of the
     # window was not flown.

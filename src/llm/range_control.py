@@ -794,6 +794,14 @@ def _analyze_group(sim, own, own_pos, own_vel, accel, members, interval_s, detai
             info.warning = (
                 f"MERGE IN {base_t:.0f} s at {at}: he out-accelerates you toward you - "
                 f"braking cannot stop it; pass wide or flank NOW.")
+        elif slack_s <= 0 and decel < OUTACCEL_DECEL_FRACTION * accel:
+            # cmdadm (audit A9): his burn toward you eats most of your braking,
+            # so "need 23503 km" was arithmetic, not information. Still "too
+            # late" (the heuristic captain keys its pass-wide choice on it).
+            info.warning = (
+                f"MERGE IN {base_t:.0f} s at {at}, too late to brake: he out-accelerates you "
+                f"({his_push / G_STANDARD:.1f}g toward you against your {accel / G_STANDARD:.1f}g) - "
+                f"you cannot hold this range; pass wide or burn laterally NOW.")
         elif slack_s <= 0:
             info.warning = (
                 f"MERGE IN {base_t:.0f} s at {at}, too late to brake "
@@ -805,6 +813,12 @@ def _analyze_group(sim, own, own_pos, own_vel, accel, members, interval_s, detai
                 f"within {slack_s:.0f} s (need {need_km:.0f} km incl. flip, have "
                 f"{info.range_km:.0f} km). Cancel closure now, or pass wide.")
     return info
+
+
+# cmdadm: below this share of your own acceleration left for braking (after
+# his burn toward you) the merge alarm says he out-accelerates you instead of
+# quoting a stopping distance thousands of km long.
+OUTACCEL_DECEL_FRACTION = 0.25
 
 
 def _reengage_option(sim, own, p, v, e_acc, los, accel, interval_s, detail, evaluate):

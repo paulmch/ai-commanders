@@ -3024,9 +3024,10 @@ ADMIRAL_SHIP_ORDER_DOCTRINE = """You are {admiral_name}, Admiral of the {faction
 
 THIS CALL: ONE order for ONE ship (named in the request) - call issue_order for it with:
 - ship_name: the ship named in the request
-- order_text: specific tactical instructions - maneuver, throttle, target, weapon use
+- order_text: your words to the captain (it reads them; the engine applies only the fields)
 - priority: CRITICAL, HIGH, NORMAL, or LOW
-- suggested_target: (optional) recommended enemy ship (name or id)
+- suggested_target: THE one enemy ship it engages (name or id) - the captain's TARGET line
+  and the compliance check use this field, not the text
 - heading + throttle: (optional) a WORLD-frame {{x,y,z}} from RANGE CONTROL, applied to the
   ship at once (throttle 0 = attitude only: nose onto the heading, no burn)
 - maneuver / evade: (optional) a maneuver REPLACES the fleet order for this ship; give
@@ -3037,13 +3038,14 @@ THIS CALL: ONE order for ONE ship (named in the request) - call issue_order for 
 
 Your order should:
 1. Be consistent with your fleet directive and standing plan
-2. Say the maneuver in the text AND in the structured fields - the fields are what flies
-3. Specify target assignment
-4. Include any special weapon instructions
+2. Say the maneuver and the ONE target in the text AND in the structured fields - the fields
+   are what flies and what compliance is judged on; a second target in the text never flies
+3. Include any special weapon instructions (throttle only for a burn: PADLOCK and MAINTAIN
+   coast)
 
 *** RANGE IS CONTROLLED WITH HEADINGS ***
-- INTERCEPT only for the first approach or finishing a cripple - it builds closure that
-  ends in a merge. To hold range, kite, pass wide or flank: a HEADING from RANGE CONTROL.
+- INTERCEPT builds closure and never brakes: it ends in a pass (standoff_km holds a range).
+  To hold range, open it, pass wide or flank: a HEADING from RANGE CONTROL.
 - PADLOCK = nose on target, engine off: the coast-and-shoot phase between burns.
 - EVASIVE holds the current course (dodges fire, never brakes, never chases).
 - Everything in the request is measured from THIS ship (ranges, closures, torpedo
@@ -3365,6 +3367,13 @@ For EACH ship in your fleet, you MUST call issue_order with:
                      .get("torpedo_launcher", {}).get("cooldown_s", 12))
     magazine_line = _magazine_line(own_classes, fleet_data) or (
         "8 rounds per corvette tube, 12 per torpedo-cruiser tube")
+    if directive_only and use_tubes:
+        mission_block = mission_block.replace(
+            "Make the directive concrete\nenough that the per-ship orders follow from it.",
+            "Make the directive concrete\nenough that the per-ship orders follow from it. "
+            "Torpedo salvos: allocate this checkpoint's\nrounds here (set_fleet_directive "
+            "salvo_plan: ship, rounds, target) - the per-ship calls run in\nparallel and "
+            "cannot see each other's torpedo_salvo.")
     pd_doctrine = ADMIRAL_PD_DOCTRINE.format(**pd_values) if use_pd else ""
     torpedo_doctrine = ADMIRAL_TORPEDO_DOCTRINE.format(
         magazine_line=magazine_line, reload_s=reload_s,
@@ -3466,9 +3475,10 @@ def _inbound_rounds(snapshot: Any) -> List[Any]:
 def _format_now(snapshot: Any, last_failure: Optional[Tuple[float, str]],
                 heat_hold_pct: float) -> str:
     items = []
+    damped = getattr(snapshot, "merge_alarms", None) or {}
     for info in getattr(snapshot, "range_groups", None) or []:
         if info.warning:
-            items.append(f"{info.label}: {info.warning}")
+            items.append(f"{info.label}: {damped.get(info.label, info.warning)}")
     # Torpedoes (guided, or dead on a hull's line) are the ordnance an
     # admiral acts on this checkpoint; gun rounds are listed under ORDNANCE.
     by_ship: Dict[str, List[Any]] = {}
@@ -4389,6 +4399,7 @@ def build_admiral_ship_order_messages(
     directive_failure: Optional[str] = None,
     previous_directive: Optional[Tuple[float, str]] = None,
     faction: str = "",
+    salvo_plan: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, str]]:
     """
     The per-ship order request as [system, user].
@@ -4445,6 +4456,17 @@ def build_admiral_ship_order_messages(
             f"{ship_name} flies it unless you give it its own heading or maneuver now (that "
             f"REPLACES it). To keep it and dodge: evade alone.")
 
+    if salvo_plan:
+        mine = salvo_plan.get("mine")
+        spread = ", ".join(f"{n} at {t}" for t, n in (salvo_plan.get("by_target") or {}).items())
+        line = (f"SALVO ALLOCATION (your directive call, this checkpoint): fleet {salvo_plan.get('total', 0)} "
+                f"rounds from {salvo_plan.get('ships', 0)} ship(s) ({spread or 'none'}). ")
+        if mine and mine[0]:
+            line += (f"{ship_name}: {mine[0]} round(s)" + (f" at {mine[1]}" if mine[1] else "")
+                     + " - launched unless this order sets its own torpedo_salvo.")
+        else:
+            line += f"{ship_name}: none allocated (torpedo_salvo here adds rounds to that total)."
+        parts.append(line)
     label = _lbl(snapshot, ship_id, ship_name) if ship_id else ship_name
     if row is not None:
         drive = getattr(row, "drive_fraction", 1.0)
@@ -4621,6 +4643,12 @@ def format_admiral_orders_for_captain(
                 lines.append(f"      >>> TARGET: {check['target']}")
             elif order.suggested_target:
                 lines.append(f"      >>> TARGET: {order.suggested_target}")
+            also = getattr(order, "text_also_names", None)
+            if isinstance(also, list) and also:
+                # cmdadm: the structured target is the one the engine and the
+                # compliance check apply; the prose named others too.
+                lines.append(f"      >>> The order text also names {', '.join(also)}: the TARGET "
+                             "above is the ordered one (engine + compliance check).")
             # Coordinated salvo: several ships launching together is how a fleet
             # overwhelms point defense, so state it explicitly rather than
             # leaving it buried in the order prose - and check it can connect.

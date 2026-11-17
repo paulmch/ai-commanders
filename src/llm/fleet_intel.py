@@ -1436,3 +1436,70 @@ def torpedo_defence_line(label: str, d: Dict[str, Any]) -> str:
     else:
         run += "every round runs dry before it reaches you"
     return text + run
+
+
+# =============================================================================
+# Order consistency: ships the prose names vs the structured target
+# =============================================================================
+
+def ships_named_in_text(text: str, names: Dict[str, str], candidates: Iterable[str],
+                        ambiguous: Iterable[str] = ()) -> List[str]:
+    """
+    Ids of ``candidates`` (ship ids) that ``text`` names: by id, by full name,
+    or by the name without its fleet prefix ('Lancer-1' for 'OCS Lancer-1')
+    unless that short name is in ``ambiguous`` (e.g. an own ship's short name:
+    both fleets field 'Lancer-1'). Word-bounded, case-insensitive, in order of
+    first mention.
+    """
+    low = str(text or "").lower()
+    skip = {a.lower() for a in ambiguous}
+    hits = []
+    for sid in candidates:
+        name = str(names.get(sid) or "")
+        forms = [sid.lower()]
+        if name:
+            forms.append(name.lower())
+            short = name.split(" ", 1)[1].lower() if " " in name else ""
+            if short and short not in skip:
+                forms.append(short)
+        best = None
+        for form in forms:
+            m = re.search(r"(?<![\w-])" + re.escape(form) + r"(?![\w-])", low)
+            if m and (best is None or m.start() < best):
+                best = m.start()
+        if best is not None:
+            hits.append((best, sid))
+    return [sid for _, sid in sorted(hits)]
+
+
+def order_text_target_note(args: Dict[str, Any], names: Dict[str, str], own_ids: Iterable[str],
+                           enemy_ids: Iterable[str]) -> Optional[str]:
+    """
+    The warning for an issue_order whose prose names an enemy ship other
+    than its structured target(s) (suggested_target / maneuver_target /
+    torpedo_target): the engine and the compliance check apply the fields,
+    the captain reads both - 11 of 25 recorded 'target deviations' were
+    captains following the prose. None when they agree.
+    """
+    own = list(own_ids)
+    short_own = [str(names.get(s, "")).split(" ", 1)[1] for s in own if " " in str(names.get(s, ""))]
+    structured = []
+    for key in ("suggested_target", "maneuver_target", "torpedo_target"):
+        sid = resolve_ship_ref(args.get(key), names) if args.get(key) else None
+        if sid:
+            structured.append(sid)
+    named = ships_named_in_text(args.get("order_text") or "", names, list(enemy_ids), short_own)
+    extra = [sid for sid in named if sid not in structured]
+    if not extra:
+        return None
+    lbl = lambda sid: label(names.get(sid), sid)  # noqa: E731
+    if structured:
+        applied = lbl(structured[0])
+        return (f"order_text names {', '.join(lbl(s) for s in extra)} but the structured target is "
+                f"{applied}: the engine and the compliance check apply {applied}; the captain reads "
+                "both. If the text is what you mean, issue the order again with that target in "
+                "suggested_target; otherwise say nothing.")
+    return (f"order_text names {', '.join(lbl(s) for s in extra)} but the order has no structured "
+            "target (suggested_target): the engine and the compliance check apply none, the captain "
+            "picks from the text. Issue it again with suggested_target to make it the target; "
+            "otherwise say nothing.")
