@@ -1129,8 +1129,9 @@ MANEUVERS:
   throttle 0 = ATTITUDE ONLY: the nose turns on RCS and you coast with zero change of
   velocity (e.g. nose on a fixed bearing) - RCS turns are slow, see your turn times.
   NOTE ON FRAMES: set_heading takes a WORLD-frame direction vector (x, y, z world axes),
-  NOT a ship-relative one and NOT a position. Every ship in your turn carries
-  "dir_to (x,y,z)": the world unit vector from you to it - paste it as the direction.
+  NOT a ship-relative one and NOT a position. Ships in your turn carry "dir_to (x,y,z)"
+  (a compact turn keeps it on the full ENEMIES lines only): the world unit vector from
+  you to it - paste it as the direction, or name the ship in toward_ship.
   A POSITION (e.g. an admiral's "(260,0,0) km") is not a direction: subtract YOUR world
   position (MY SHIP) first - your ORDERS block resolves such points for you.
   Ahead/starboard/above words are relative to YOUR NOSE (MY SHIP gives the nose vector).
