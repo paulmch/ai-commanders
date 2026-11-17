@@ -501,7 +501,14 @@ Examples:
         try:
             result = runner.run_battle(fleet_data)
             status = "stopped" if getattr(runner, "stop_reason", None) else "done"
+        except KeyboardInterrupt:
+            status = "interrupted"
+            raise
         finally:
+            if status in ("error", "interrupted") and budget is not None:
+                # No new request from a worker thread that outlives the
+                # interrupt; calls in flight count at their reservation.
+                budget.stop(status)
             if ledger_run is not None:
                 stats = client.stats
                 ledger.close_run(ledger_run, calls=stats.calls,

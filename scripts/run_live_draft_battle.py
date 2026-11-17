@@ -33,6 +33,9 @@ from src.llm.replay_audit import AuditedClient
 from src.llm.spending import RequestBudget, SpendLedger
 
 DEFAULT_LEDGER = ROOT / 'data/recordings/spend_ledger.jsonl'
+# After Ctrl-C: how long the battle thread gets to finish the calls in flight
+# (the client's 180 s request timeout plus a margin) before the ledger closes.
+STOP_WAIT_S = 240
 from src.llm.call_policy import EffortPolicy, PolicyClient, parse_effort_specs
 from src.llm.cost_report import cost_report, format_cost_report
 
@@ -161,7 +164,10 @@ class LiveDraftRunner(LLMBattleRunner):
         self.check_budget()
 
     def check_budget(self):
-        if self.client and self.client.budget and self.client.budget.exhausted:
+        budget = self.client.budget if self.client else None
+        if budget and getattr(budget, 'stopped', None):
+            raise RuntimeError(f'Battle interrupted ({budget.stopped}); no further model calls')
+        if budget and budget.exhausted:
             raise RuntimeError('Spending ceiling reached; battle stopped and partial replay saved')
 
     def save_progress(self):
@@ -501,6 +507,7 @@ async def run(args):
                 'budget': args.points, **{f: draft_summary_dict(d) for f, d in selections.items()}})
 
     task = asyncio.create_task(asyncio.to_thread(battle))
+    interrupted = False
     try:
         while not task.done():
             write_json(report_dir / 'status.json', report())
@@ -512,18 +519,39 @@ async def run(args):
         state.stage = 'Battle stopped'
         print(state.error, flush=True)
         record_stop(runner, state.error)
+    except BaseException:
+        # Ctrl-C: asyncio cancels this coroutine, but the battle runs in a
+        # worker thread that nothing cancels - it would go on buying calls
+        # (and asyncio.run waits for it). Close the budget so no new request
+        # is sent, let the calls in flight settle, then record the stop.
+        interrupted = True
+        state.error = 'Interrupted (Ctrl-C): no new model calls after the interrupt'
+        state.stage = 'Battle stopped'
+        print(state.error, flush=True)
+        if budget is not None:
+            budget.stop('Ctrl-C')
+        await asyncio.wait({task}, timeout=STOP_WAIT_S)
+        if task.done() and not task.cancelled():
+            task.exception()    # the thread's own "Battle interrupted" stop: retrieved, expected
+        raise
     finally:
         finished = True
         state.active = False
-        write_json(report_dir / 'status.json', report())
-        if runner and runner.recorder:
-            runner.recorder.recording.provenance['billing'] = report()
-            runner.save_progress()
         if ledger_run is not None:
+            # First, before anything below can fail: an unclosed ledger line
+            # counts the whole cap, a closed one what was spent or committed.
             ledger.close_run(ledger_run, calls=client.stats.calls if client else 0,
                              tokens=ledger_tokens(client), usd=budget.reported_usd if budget else 0.0,
                              committed_usd=budget.committed_usd if budget else None,
-                             status='error' if state.error else 'done')
+                             status='interrupted' if interrupted else 'error' if state.error else 'done')
+        write_json(report_dir / 'status.json', report())
+        if task.done():
+            # (A battle thread still running would race the recorder.)
+            if interrupted:
+                record_stop(runner, state.error)
+            if runner and runner.recorder:
+                runner.recorder.recording.provenance['billing'] = report()
+                runner.save_progress()
         # Only now: a viewer seeing "ended" must already find the verdict,
         # the stop reason and the billing block in the recording
         server.set_battle_status('ended', runner.checkpoint_count if runner else 0)

@@ -507,7 +507,7 @@ def send(client, job: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def run_jobs(client, jobs, workers) -> List[Dict[str, Any]]:
+def run_jobs(client, jobs, workers, rows=None) -> List[Dict[str, Any]]:
     """
     Two waves: the first job of every distinct cached prefix, then the rest.
     Concurrent requests on one prefix would each write the cache (an entry is
@@ -518,7 +518,8 @@ def run_jobs(client, jobs, workers) -> List[Dict[str, Any]]:
     for job in jobs:
         (rest if job["prefix"] in seen else first).append(job)
         seen.add(job["prefix"])
-    rows: List[Dict[str, Any]] = []
+    # `rows` may be the caller's list, so replies already paid for survive an interrupt.
+    rows = rows if rows is not None else []
     lock = threading.Lock()
 
     def go(job):
@@ -531,9 +532,20 @@ def run_jobs(client, jobs, workers) -> List[Dict[str, Any]]:
               f"#{row['replicate']} ${row['cost'] or 0:.4f} {row['latency_s']}s  {tag}", flush=True)
         return row
 
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+    pool = ThreadPoolExecutor(max_workers=max(1, workers))
+    try:
         list(pool.map(go, first))
         list(pool.map(go, rest))
+    except BaseException:
+        # Ctrl-C (or a failure): pool.map has queued every job, and a plain
+        # shutdown would run them all - paid - before raising. Close the
+        # budget and drop what has not started; the calls in flight settle.
+        budget = getattr(client, "budget", None)
+        if budget is not None and hasattr(budget, "stop"):
+            budget.stop("interrupted")
+        pool.shutdown(wait=True, cancel_futures=True)
+        raise
+    pool.shutdown(wait=True)
     rows.sort(key=lambda r: (r["source"]["key"], r["variant"]["label"], r["replicate"]))
     return rows
 
@@ -654,8 +666,12 @@ def main(argv=None) -> int:
                                  models=sorted({v["model"] for v in variants}), cap_usd=limit,
                                  ledger_cap_usd=args.ledger_cap, mock=not paid)
     rows: List[Dict[str, Any]] = []
+    status = "done"
     try:
-        rows = run_jobs(client, jobs, args.workers)
+        run_jobs(client, jobs, args.workers, rows)
+    except BaseException:
+        status = "interrupted"
+        raise
     finally:
         with open(f"{out}.jsonl", "w") as f:
             for row in rows:
@@ -665,7 +681,8 @@ def main(argv=None) -> int:
         if ledger is not None:
             ledger.close_run(run_id, calls=len(rows), tokens=_token_total(rows), usd=spent,
                              committed_usd=client.budget.committed_usd,
-                             status="stopped" if client.budget.exhausted else "done")
+                             status=status if status != "done" else
+                             "stopped" if client.budget.exhausted else "done")
     errors = sum(1 for r in rows if r.get("error"))
     print(f"\n{len(rows)} replies ({errors} errors), ${spent:.4f} spent of the ${limit:.2f} cap"
           + (" (EXHAUSTED)" if client.budget.exhausted else ""))
