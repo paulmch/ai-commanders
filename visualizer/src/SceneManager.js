@@ -37,6 +37,7 @@ import {
   shipScale, freeScale, framingLength, normalizeScaleMode, nextScaleMode, trueLengthM, DEFAULT_SCALE_MODE, FREE_TRUE_K
 } from './render/Scale.js';
 import { setCloseRangeUnit } from './render/CloseRange.js';
+import { DriveJets } from './render/DriveJet.js';
 const _hfFwd = [0, 0, 1], _hfQuat = [0, 0, 0, 1];
 
 /**
@@ -188,6 +189,7 @@ export class SceneManager {
     this.heat = new HeatFX(this);           // radiators + hull heat (render/Heat.js)
 
     this.weapons = new Projectiles(this);
+    this.driveJets = new DriveJets(this.scene);   // the exhaust jets at real size (render/DriveJet.js)
     this._updatePixelWorld();
     this.warmUp();
     this._onResize = () => this.onResize();
@@ -211,6 +213,7 @@ export class SceneManager {
     this._clearBlasts('damage');
     this.tracks?.dispose();
     this.weapons.dispose();
+    this.driveJets.dispose();
     this.rcs.dispose();
     this.heat.dispose();
     this.damageFX.dispose();
@@ -341,6 +344,7 @@ export class SceneManager {
     this.controls.update();
     this._cameraSynced = true;
     this.updateScale();
+    this.driveJets.update(this.ships, this.scaleMode !== 'cinematic');
   }
 
   /**
@@ -612,6 +616,7 @@ export class SceneManager {
     // frames), never a wall-clock filter: a scrub shows the same plume
     const thrust = state.thrust || 0;
     ud.smoothThrust = thrust;
+    ud.dyingNow = !!state.dying;   // (this frame's state: a hulk's sputtering torch throws no jet)
     const rate = state.dying ? 0 : (state.thrustRate || 0);
     // Plume sweep: the recorded turn rate in the hull frame (render/Torch.js)
     let turn = null;

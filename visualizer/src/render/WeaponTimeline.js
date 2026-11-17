@@ -481,6 +481,8 @@ export class WeaponTimeline {
       const target = last?.state?.target;
       const ship = target ? this.ships.get(target) : null;
       if (!ship) return;
+      // (a round still chasing a target that has already blown up has no hull to clear)
+      if (ship.samples[sampleIndex(ship.samples, last.t)]?.state?.destroyed) return;
       tr.pass = missClearance(tr, ship, lengthOf(target), Math.max(tr.start, last.t - 2), tr.end, radii);
     };
     for (const tr of this.slugs.values()) clear(tr, MISS_CLEAR_RADII);
