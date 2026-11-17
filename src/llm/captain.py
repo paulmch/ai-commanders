@@ -916,13 +916,15 @@ class LLMCaptain:
         only when the captain's own call replaced an order that was already
         flying, and the target. Empty when nothing departs.
         """
-        from .fleet_comms import commanded_target, compliance, executed_maneuver, primary_order
+        from .fleet_comms import (commanded_target, compliance, executed_maneuver, launch_targets,
+                                  primary_order)
         order = primary_order(self.admiral_orders)
         if order is None or getattr(self, "fleet_channel", None) is None:
             return []
         try:
             comp = compliance(order, self.fleet_channel, executed_maneuver(ship, commands, now),
-                              commanded_target(ship, commands), 0, final=False)
+                              commanded_target(ship, commands), 0, final=False,
+                              launch_target_ids=launch_targets(commands))
         except Exception:  # noqa: BLE001 - advisory only
             return []
         replaced = self._admiral_heading_applied() and any(
@@ -1077,7 +1079,7 @@ class LLMCaptain:
                        if e.ship_id == sid and e.event_type.name == "TORPEDO_LAUNCHED")
         try:
             comp = compliance(b["order"], b["channel"], b["executed"], b["target_id"], launched,
-                              final=True)
+                              final=True, launch_target_ids=b.get("launch_targets"))
         except Exception:  # noqa: BLE001 - advisory only
             return None
         if not comp or comp.get("followed", True):

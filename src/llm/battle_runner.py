@@ -2743,6 +2743,8 @@ class LLMBattleRunner:
         order = primary_order(orders)
         executed = executed_maneuver(ship, commands, now)
         target_id = commanded_target(ship, commands)
+        from .fleet_comms import launch_targets
+        launch_ids = launch_targets(commands)
         report = {
             "report_id": f"r{self.checkpoint_count}-{ship_id}",
             "faction": faction,
@@ -2751,7 +2753,8 @@ class LLMBattleRunner:
             "ship_name": captain.ship_name,
             **fields,
             "compliance": compliance(order, channel, executed, target_id,
-                                     committed_rounds(commands), final=False),
+                                     committed_rounds(commands), final=False,
+                                     launch_target_ids=launch_ids),
             "ship_id": ship_id,
             "filed_t": now,
             "implicit": implicit,
@@ -2766,7 +2769,7 @@ class LLMBattleRunner:
         # with the rounds that actually left the tubes.
         captain.verdict_basis = {"t": now, "order": order, "executed": executed,
                                  "target_id": target_id, "cursor": len(self.simulation.events),
-                                 "status": report["status"], "reason": report.get("reason") or "",
+                                 "launch_targets": launch_ids, "status": report["status"], "reason": report.get("reason") or "",
                                  "implicit": implicit, "channel": channel}
         self._note_drive_interlock(report, ship)
         fold_admiral_signals(report, self._admiral_signals.pop(ship_id, []))
@@ -2775,7 +2778,7 @@ class LLMBattleRunner:
                                     for d in captain.discussions]
         self._filed_reports.setdefault(faction, []).append({
             "report": report, "order": order, "executed": executed, "target_id": target_id,
-            "cursor": len(self.simulation.events)})
+            "launch_targets": launch_ids, "cursor": len(self.simulation.events)})
         return report
 
     def _note_drive_interlock(self, report: Dict[str, Any], ship: Any) -> None:
@@ -2802,7 +2805,8 @@ class LLMBattleRunner:
             launched = sum(1 for e in self.simulation.events[entry["cursor"]:]
                            if e.ship_id == ship_id and e.event_type.name == "TORPEDO_LAUNCHED")
             report["compliance"] = compliance(entry["order"], self.fleet_communication,
-                                              entry["executed"], entry["target_id"], launched, final=True)
+                                              entry["executed"], entry["target_id"], launched, final=True,
+                                              launch_target_ids=entry.get("launch_targets"))
             if (entry["report"].get("compliance") or {}).get("executable") is False:
                 from .fleet_comms import mark_not_executable
                 mark_not_executable(report["compliance"])
