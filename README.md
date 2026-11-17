@@ -72,7 +72,7 @@ Open **[the Sonnet 5 vs DeepSeek torpedo swarm](http://localhost:5173/?recording
 | **FOLLOW** button | Return to following the live battle |
 | **REALTIME** / **FLEETS** buttons | Live pacing behind the newest frame, and reopening the draft splash |
 
-**Ships are their real size.** Hulls are 65 to 275 m long and fight at tens to hundreds of kilometres. In the default **auto** scale a ship near the camera is drawn at exactly its real size, and everything that touches it is at real scale and in the right place: coilgun slugs and torpedoes arrive at the hull and stop there, a miss passes beside it, point-defense beams leave the turret that fired, a reactor blast is the engine's 10 to 20 km against a 100 m hull, and a torch's exhaust is a faint cone reaching tens of kilometres astern. A hull too far away to see is enlarged only as far as needed to stay a small readable silhouette (about 2 to 4% of the view height, growing smoothly from real size with no jump), with the contact brackets and labels on top. **S** cycles to **true** (always real size; at distance only the markers remain) and **cinematic** (every hull about 60 times oversize at every range, the look of earlier versions).
+**Ships are their real size.** Hulls are 65 to 275 m long and fight at tens to hundreds of kilometres. In the default **auto** scale a ship near the camera is drawn at exactly its real size, and everything that touches it is at real scale and in the right place: coilgun slugs and torpedoes arrive at the hull and stop there, a miss passes beside it, point-defense beams leave the turret that fired, a reactor blast is the engine's 10 to 20 km against a 100 m hull, and a torch's exhaust is a faint cone reaching tens of kilometres astern. A hull too far away to see is enlarged only as far as needed to stay a small readable silhouette (about 2 to 4% of the view height, growing smoothly from real size with no jump), with the contact brackets and labels on top. **S** cycles to **true** (always real size; at distance only the markers remain) and **cinematic** (every hull about 60 times oversize at every range, the look of earlier versions). Screenshots on this page captioned *cinematic scale* were captured in that mode; the others use the default.
 
 Each of the nine hull classes has its own design, drawn to scale in faction livery with its real armament: spinal coilers, battery turrets and point-defense mounts at one physical size on every hull, torpedo banks whose cells empty as rounds launch, radiators that telescope out and glow with the heat they reject, and RCS thrusters that fire as a ship turns or jinks. Coilgun slugs leave the barrel that fired them. Kinetic torpedo strikes flash and throw spall instead of exploding like warheads. Hits leave cooling craters, scorched plating and venting breaches, and killed ships become burning hulks before their reactors go. Everything, including destruction, reconstructs correctly when you scrub backward.
 
@@ -84,27 +84,43 @@ Each of the nine hull classes has its own design, drawn to scale in faction live
 
 ![Two battleships under thrust with fans of point-defense laser beams converging on an incoming torpedo's burn trail, while a penetrator strikes one hull](docs/images/readme/torpedo-salvo.png)
 
-*Point-defense lasers dwell on an inbound torpedo while another round strikes the hull.*
+*Point-defense lasers dwell on an inbound torpedo while another round strikes the hull (cinematic scale: the two battleships are about 20 km apart).*
 
 ![A battleship's reactor breach: an orange fireball inside an expanding shock shell, debris streaks, and a sister ship's engine plume crossing the blast](docs/images/readme/reactor-breach.jpg)
 
-*Seconds later that battleship's reactor goes up. Destruction is part of the recording: the camera can move, but the event stays tied to battle time.*
+*Seconds later that battleship's reactor goes up (cinematic scale). Destruction is part of the recording: the camera can move, but the event stays tied to battle time.*
 
 **Damage is specific.** A hit can knock out an individual gun mount, torpedo tube, point-defense turret or the drive, and the ship registry shows one pip per fitting so you can see a battleship that still has most of its hull but none of its guns. Every death is a reactor blast with a shell drawn out to its real radius; ships inside it lose armour and fittings, torpedoes inside it die or go blind, and a destroyed magazine cooks off.
 
+![The bow of a blue-grey battlecruiser seen from ahead: dark slug holes punched through the nose plating, red-rimmed glowing craters, a white-hot fresh impact throwing sparks, and cones of gas venting from two breaches](docs/images/readme/damage-bow.png)
+
+*Claude Sonnet 5's battlecruiser after more than thirty coilgun hits on the bow, moments before its magazine goes: slug holes, craters still glowing, a fresh impact, and atmosphere venting from the breaches. Its spinal gun, both batteries and both point-defense turrets are already wrecked.*
+
+![A battleship from above the bow: scorched deck plating, a smoking heavy battery turret, an electrical arc and two gas jets from glowing breaches in the nose](docs/images/readme/damage-mounts.jpg)
+
+*A battleship 27 seconds after its forward magazine burned: scorched deck, one heavy battery wrecked and smoking, the bow venting.*
+
+![A fireball swallowing the bow of a battleship, with a cone of burning debris thrown ahead of it](docs/images/readme/damage-cookoff.png)
+
+*That forward magazine cooking off.*
+
+![A battleship covered in glowing orange cracks, venting gas from a dozen breaches, a secondary explosion behind its turrets and a guttering blue torch](docs/images/readme/damage-hulk.png)
+
+*The same ship as a dying hulk, a few seconds before its reactor lets go: molten cracks spreading from the wounds, secondary explosions, a sputtering torch.*
+
 ![The replay HUD with fitting pips in the ship registry, a kill toast naming the blast radius and the ship it caught, and a DISARMED notice](docs/images/readme/fittings-hud.png)
 
-*One pip per gun, tube and point-defense turret; the kill toast says what the reactor blast caught.*
+*One pip per gun, tube and point-defense turret; the kill toast says what the reactor blast caught (cinematic scale).*
 
 ![An orange reactor fireball inside a translucent blast shell, with escort ships beside it](docs/images/readme/blast-shell.jpg)
 
-*The shell marks the blast radius the engine used, so you can see which ships and torpedoes were inside it.*
+*The shell marks the blast radius the engine used, so you can see which ships and torpedoes were inside it (cinematic scale: the escorts are drawn about 60 times their size against the 13 km shell).*
 
 **The drive is a hazard.** A torch carries about 300 TW of jet power. A ship in another ship's exhaust takes heat, then armour and fitting damage, and its crew accumulates a radiation dose; the washed plating glows. An interlock throttles a drive that would wash an allied ship, and commanders see plume and crew warnings in their status.
 
-![A battleship under full burn seen from ahead, with a destroyer inside its exhaust, the destroyer's plating glowing](docs/images/readme/plume-wash.png)
+![The stern of a battleship at lower left with its blue torch lit; a faint cone of exhaust runs from it to a small glowing destroyer in the distance](docs/images/readme/plume-wash.png)
 
-*A destroyer caught in a battleship's exhaust: the washed plating glows, fittings burn off and the crew takes a radiation dose.*
+*A destroyer six kilometres astern of a battleship, inside its exhaust jet: at real size the torch's flame is under a kilometre long, and the jet that does the damage is the faint cone beyond it. The washed destroyer glows.*
 
 ![A dreadnought in three-quarter view with slab armour plating, wedge bow and parallel drive jets, point-defense lasers firing](docs/images/readme/dreadnought.png)
 
@@ -112,7 +128,7 @@ Each of the nine hull classes has its own design, drawn to scale in faction live
 
 ![A torpedo salvo striking a battleship, with point-defense lasers and impact fountains](docs/images/readme/torpedo-strike.png)
 
-*A synchronised torpedo salvo lands on a battleship.*
+*A synchronised torpedo salvo lands on a battleship (cinematic scale).*
 
 **The automatic director** (**A**) films a replay from a shot list built out of the recording, and `scripts/viewer_clip.py` renders any time range to MP4 or GIF:
 
