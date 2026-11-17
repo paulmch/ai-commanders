@@ -887,9 +887,10 @@ def _analyze_group(sim, own, own_pos, own_vel, accel, members, interval_s, detai
             # so "need 23503 km" was arithmetic, not information. Still "too
             # late" (the heuristic captain keys its pass-wide choice on it).
             info.warning = (
-                f"MERGE IN {base_t:.0f} s at {at}, too late to brake: he out-accelerates you "
-                f"({his_push / G_STANDARD:.1f}g toward you against your {accel / G_STANDARD:.1f}g) - "
-                f"you cannot hold this range (a lateral burn moves the pass).")
+                f"MERGE IN {base_t:.0f} s at {at}, too late to brake: his burn toward you "
+                f"({his_push / G_STANDARD:.1f}g) leaves {decel / G_STANDARD:.1f}g of your "
+                f"{accel / G_STANDARD:.1f}g to brake - you cannot hold this range (a lateral "
+                f"burn moves the pass).")
         elif slack_s <= 0:
             info.warning = (
                 f"MERGE IN {base_t:.0f} s at {at}, too late to brake "
