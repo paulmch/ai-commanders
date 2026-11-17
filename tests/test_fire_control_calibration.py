@@ -14,10 +14,11 @@ flown on the CURRENT engine, from two kinds of source:
   Their INTERCEPT / PADLOCK rounds closer than 300 km are kept 1 in 4.
 - Every round of the seeded live-engine harness (fire_control_calibration
   harness --runs 30 --shooters 1,2,4,8, classes padlock_dodge, hold_dodge,
-  evasive, burn; the burn class only while the target is still turning onto
-  its HEADING): 1, 2, 4 or 8 shooters against dodging (PADLOCK / HOLD_RANGE +
-  evade 'dodge'), EVASIVE and HEADING-turning frigates..dreadnoughts,
-  40-400 km. All of them, not 1 in 20: thinned to 1 in 20 the 200-499 km
+  evasive, burn, heading_dodge; the burn class only while the target is still
+  turning onto its HEADING): 1, 2, 4 or 8 shooters against dodging (PADLOCK /
+  HOLD_RANGE / a HEADING burn + evade 'dodge'; on a burning order the overlay
+  keeps the burn and swings it - the 'swing' column, firecontrol.SWING_*),
+  EVASIVE and HEADING-turning frigates..dreadnoughts, 40-400 km. All of them, not 1 in 20: thinned to 1 in 20 the 200-499 km
   buckets held 5-10 hits, where a 1.5x ratio is noise both ways.
 
 tests/fixtures/fire_control_shots_historical.json is a separate, HISTORICAL
@@ -272,10 +273,19 @@ def test_the_old_number_was_the_problem(shots):
     mirror that showed it; on the current engine the harness and battles
     say the same)."""
     far = [r for r in shots if (r["class"].startswith("dodge") or r["class"] == "EVASIVE")
-           and r["range_km"] >= 200]
+           and r["range_km"] >= 200 and not r.get("swing")]
     n, hits, new, old = _summary(far)
     assert n > 5000
     assert old / n > 0.2 and old > 8 * hits
+    assert new < 2 * hits + 15
+    # A dodger whose evade overlay keeps an ordered burn and only swings it
+    # (simulation module docstring) moves less: ~14% of these rounds land,
+    # still under half of what the conversion number promised.
+    swung = [r for r in shots if r["class"].startswith("dodge") and r["range_km"] >= 200
+             and r.get("swing")]
+    n, hits, new, old = _summary(swung)
+    assert n > 5000
+    assert old / n > 0.2 and old > 2.5 * hits
     assert new < 2 * hits + 15
 
 
