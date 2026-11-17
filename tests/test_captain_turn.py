@@ -603,7 +603,12 @@ class TestOrdersBlock:
                                                  reply_tool="report_to_admiral")
         assert "YOU MUST" not in text and "failing your Admiral" not in text
         assert "set_weapons_order" not in text
-        assert "IS your acknowledgment" in text and "report_to_admiral" in text
+        # The reply protocol lives in the cached doctrine (cmdcap C5: ~70
+        # tokens a turn); the turn says only what is already flying.
+        assert "IS your acknowledgment" not in text and "REPLY:" not in text
+        doctrine = build_captain_doctrine(ship_type="destroyer", fleet_data=FLEET,
+                                          tool_names=["report_to_admiral"], has_admiral=True)
+        assert "Acting on your orders with tools IS the acknowledgment" in doctrine
 
 
 # =============================================================================

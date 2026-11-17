@@ -1101,7 +1101,7 @@ tactical picture open every turn.
 {simulation_disclaimer}
 
 {ship_capabilities}
-{class_reference}
+{arcs_note}{class_reference}
 {projectile_reference}
 {armor_breach_reference}
 === CONTROLS ===
@@ -1211,7 +1211,7 @@ your ship actually did with your last orders, and any call that was rejected).
   when damaged.{gun_legend}
 - FRIENDLIES: grouped by maneuver and target; hull 100% and PD intact unless shown.
 - RANGE CONTROL: every heading for the most urgent group, the {range_secondary} key ones for
-  the next (armor per face: MY SHIP).
+  the next; each line: effect on range | face and its armor | guns that bear.{compact_note}
 - ENGINE FEEDBACK: weapon policies persist; maneuvers and queued launches expire at the next
   checkpoint.
 
@@ -1222,8 +1222,9 @@ your ship actually did with your last orders, and any call that was rejected).
   When a maneuver expires, thrust stops; you coast with your existing momentum.
   MAINTAIN is a deliberate coast - call it when coasting IS the plan.
   Exception: a HEADING or MANEUVER ORDER from your admiral is already applied to your
-  ship - calling set_maneuver/set_heading REPLACES it (and breaks formation). Only
-  override it for a reason (e.g. EVADE an inbound torpedo).
+  ship - calling set_maneuver/set_heading REPLACES it (and breaks formation; set_maneuver
+  EVADE replaces a heading too - its evade already rides on it). Overriding is your call;
+  the Admiral reads "NOT as ordered" - say why (reason= on the call, or report_to_admiral).
 {execute_weapon_notes}Describing an action does not execute it. Use the corresponding tool.
 
 TIMING: You make ONE decision now. It is LOCKED for {decision_interval_s:g} seconds until next checkpoint.
@@ -1763,6 +1764,18 @@ def _captain_secondary_options() -> int:
     return CAPTAIN_SECONDARY_OPTIONS
 
 
+def _arcs_note(ship_type: Optional[str]) -> str:
+    """The hull class's static weapon-arc facts (arcs_status.blind_cone_doctrine)."""
+    try:
+        from .arcs_status import blind_cone_doctrine
+    except ImportError:  # pragma: no cover - script-style imports
+        from llm.arcs_status import blind_cone_doctrine
+    try:
+        return blind_cone_doctrine(ship_type)
+    except Exception:  # noqa: BLE001 - doctrine text only
+        return ""
+
+
 def _end_battle_line(names: set) -> str:
     """The OTHER line for the battle-ending tools this captain is offered
     (propose_draw was listed to captains under an admiral, who lack it)."""
@@ -1869,6 +1882,7 @@ def build_captain_doctrine(
         simulation_disclaimer=SIMULATION_DISCLAIMER,
         ship_capabilities=ship_capabilities,
         class_reference=class_reference_block(fleet_data),
+        arcs_note=_arcs_note(ship_type),
         projectile_reference=GUN_PHYSICS_REFERENCE if has_guns else "",
         armor_breach_reference=ARMOR_BREACH_REFERENCE,
         tactics_block=GUN_TACTICS_BLOCK if has_guns else TORPEDO_TACTICS_BLOCK,
@@ -1888,6 +1902,11 @@ def build_captain_doctrine(
         end_battle=_end_battle_line(names),
         full_others=FULL_SOLUTION_CONTACTS - 1,
         range_secondary=_captain_secondary_options(),
+        compact_note=("\n- COMPACT TURN: while your Admiral's maneuver flies and there is no merge warning,"
+                      "\n  order conflict, deviation or torpedo inbound, RANGE CONTROL lists vectors only,"
+                      "\n  ENEMIES give full solutions for your primary and one other, FRIENDLIES no"
+                      "\n  bearings. Any of those triggers brings the full blocks back."
+                      if has_admiral else ""),
         compact_solution=" / ".join(
             (["best P(hit) of a gun that bears"] if has_guns else [])
             + (["torpedo verdict"] if has_torps else []))
@@ -2323,6 +2342,8 @@ def _group_forecasts(forecasts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 # compact line for every other contact. An 8v8 turn used to print a two-line
 # solution block for all 8 enemies (pass-4 follow-up: captain prompt size).
 FULL_SOLUTION_CONTACTS = 3
+# ...in a compact turn (captain._compact_turn): the primary + the best other.
+COMPACT_SOLUTION_CONTACTS = 2
 _TORPEDO_VERDICT_RANK = {"REACHABLE": 0, "ESCAPABLE": 1, "OVERKILL": 2, "TOO CLOSE": 3,
                          "UNREACHABLE": 4}
 
@@ -2339,11 +2360,12 @@ def _expected_gj(e: Dict[str, Any]) -> float:
 
 
 def _full_solution_indices(enemies: List[Dict[str, Any]], has_guns: bool,
-                           has_torpedoes: bool) -> set:
+                           has_torpedoes: bool, limit: int = 0) -> set:
     """Which contacts get the full fire solution: the primary + the best others.
     With no primary target the nearest enemy stands in: it is the one the guns
     and INTERCEPT default to."""
-    if len(enemies) <= FULL_SOLUTION_CONTACTS:
+    limit = limit or FULL_SOLUTION_CONTACTS
+    if len(enemies) <= limit:
         return set(range(len(enemies)))
     chosen = [i for i, e in enumerate(enemies) if e.get("is_primary_target")][:1]
     if not chosen:
@@ -2358,7 +2380,7 @@ def _full_solution_indices(enemies: List[Dict[str, Any]], has_guns: bool,
         return (torp, -_expected_gj(e) if has_guns else 0.0, i)
 
     for i in sorted((i for i in range(len(enemies)) if i not in chosen), key=rank):
-        if len(chosen) >= FULL_SOLUTION_CONTACTS:
+        if len(chosen) >= limit:
             break
         chosen.append(i)
     return set(chosen)
@@ -2370,6 +2392,7 @@ def format_enemy_contacts(
     has_guns: bool = True,
     has_torpedoes: bool = False,
     decision_interval_s: float = 30.0,
+    compact_turn: bool = False,
 ) -> str:
     """
     ENEMIES: one line of live state per contact, then the fire solution that
@@ -2384,7 +2407,10 @@ def format_enemy_contacts(
     if not enemies:
         return "ENEMIES: none detected"
     weapon_types = (fleet_data or {}).get("weapon_types", {})
-    full = _full_solution_indices(enemies, has_guns, has_torpedoes)
+    # compact (captain._compact_turn): full solutions for the primary target
+    # and the best other only, no dir_to on the one-line contacts.
+    full = _full_solution_indices(enemies, has_guns, has_torpedoes,
+                                  COMPACT_SOLUTION_CONTACTS if compact_turn else FULL_SOLUTION_CONTACTS)
     lines = [f"ENEMIES ({len(enemies)}):"]
     for i, e in enumerate(enemies):
         compact = i not in full
@@ -2396,7 +2422,7 @@ def format_enemy_contacts(
         head = "  [PRIMARY] " if e.get("is_primary_target") else "  "
         line = (f"{head}{ship_ref(e.get('name'), sid)} {cls} | {e.get('distance_km', 0):.0f} km, "
                 f"{_rate(e.get('closing_rate', 0.0))}")
-        if e.get("dir_to"):
+        if e.get("dir_to") and not (compact_turn and i not in full):
             line += f" | dir_to {_vec(e['dir_to'])}"
         angle = e.get("angle_deg")
         if angle is not None:
@@ -2464,12 +2490,14 @@ def _friendly_doing(f: Dict[str, Any]) -> Optional[str]:
     return text
 
 
-def _friendly_line(f: Dict[str, Any], doing: bool = True) -> str:
+def _friendly_line(f: Dict[str, Any], doing: bool = True, compact: bool = False) -> str:
     line = ship_ref(f.get("name"), f.get("ship_id"))
     if f.get("ship_type"):
         line += f" {class_label(f['ship_type'])}"
     line += f" | {f.get('distance_km', 0):.0f} km"
-    if f.get("dir_to"):
+    if compact:
+        pass        # no bearing / relative speed: no tool of a compact turn uses them
+    elif f.get("dir_to"):
         line += f" dir_to {_vec(f['dir_to'])}"
     elif f.get("relative_bearing_km"):
         b = f["relative_bearing_km"]
@@ -2477,7 +2505,7 @@ def _friendly_line(f: Dict[str, Any], doing: bool = True) -> str:
                  f"{abs(b.get('starboard', 0)):.0f} km {'starboard' if b.get('starboard', 0) >= 0 else 'port'})")
     elif f.get("relative_position"):
         line += f" (world frame {_vec(f['relative_position'], '+.0f')} km)"
-    if f.get("rel_speed_kps") is not None:
+    if f.get("rel_speed_kps") is not None and not compact:
         line += f" | rel {f['rel_speed_kps']:.2f} km/s"
     if doing and "maneuver" in f:
         line += f" | {_friendly_doing(f)}"
@@ -2497,6 +2525,7 @@ def _friendly_line(f: Dict[str, Any], doing: bool = True) -> str:
 def format_friendlies(
     friendlies: List[Dict[str, Any]],
     umbrella: Optional[Dict[str, Any]] = None,
+    compact: bool = False,
 ) -> str:
     """
     FRIENDLIES: who is where, doing what, at whom - and the PD over you.
@@ -2520,9 +2549,9 @@ def format_friendlies(
     for doing, members in groups.items():
         if doing is not None and len(members) > 1:
             lines.append(f"  {len(members)} ships {doing}:")
-            lines.extend("    " + _friendly_line(f, doing=False) for f in members)
+            lines.extend("    " + _friendly_line(f, doing=False, compact=compact) for f in members)
         else:
-            lines.extend("  " + _friendly_line(f) for f in members)
+            lines.extend("  " + _friendly_line(f, compact=compact) for f in members)
     return "\n".join(lines)
 
 
@@ -2619,6 +2648,7 @@ def build_captain_turn(
     execution_feedback: Optional[str] = None,
     tool_errors: Optional[str] = None,
     tool_names: Optional[Iterable[str]] = None,
+    compact: bool = False,
     **_ignored: Any,
 ) -> str:
     """
@@ -2647,9 +2677,10 @@ def build_captain_turn(
     sections.append(format_threats_to_me(tactical_status, merge_warnings, decision_interval_s))
     sections.append(format_enemy_contacts(tactical_status.get("enemies", []), fleet_data,
                                           has_guns=has_guns, has_torpedoes=has_torps,
-                                          decision_interval_s=decision_interval_s))
+                                          decision_interval_s=decision_interval_s,
+                                          compact_turn=compact))
     sections.append(format_friendlies(tactical_status.get("friendlies", []),
-                                      tactical_status.get("pd_umbrella")))
+                                      tactical_status.get("pd_umbrella"), compact=compact))
     if range_control:
         sections.append(range_control)
     if orders:
@@ -4534,14 +4565,12 @@ def format_admiral_orders_for_captain(
                      "discuss_with_admiral (\"Admiral, I received no orders. What are my "
                      "instructions?\"); otherwise use your best judgment.")
 
-    # The protocol (silence = ACK, when to DEVIATE) is in the cached doctrine.
-    reply = (f"  REPLY: acting IS your acknowledgment; {reply_tool} only to DEVIATE/UNABLE "
-             f"(say why) or with a request/contact.")
+    # The protocol (acting is the acknowledgment, when to report) is in the
+    # cached doctrine; only what is flying now is said here.
     if applied:
-        reply += (f" Your {'/'.join(dict.fromkeys(applied))} is already flying: no maneuver call "
-                  "needed unless you deviate (calling one replaces it) - still set your target "
-                  "and weapons/launches.")
-    lines.append(reply)
+        lines.append(f"  Your {'/'.join(dict.fromkeys(applied))} is already flying: no maneuver call "
+                     "needed unless you deviate (calling one replaces it) - still set your target "
+                     "and weapons/launches.")
     return "\n".join(lines)
 
 

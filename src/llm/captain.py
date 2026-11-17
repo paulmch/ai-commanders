@@ -556,7 +556,9 @@ class LLMCaptain:
         ship_status = self._build_ship_status(ship)
         # Drive plume wash (src/drive_plume.py): whose exhaust this ship sits
         # in, which friendlies its own exhaust reaches.
-        plume = _plume_status_lines(simulation, ship) + arcs_status.arcs_status_lines(simulation, ship)
+        # The per-class blind-cone line is in the cached doctrine (_arcs_note).
+        plume = _plume_status_lines(simulation, ship) + arcs_status.arcs_status_lines(
+            simulation, ship, with_blind_cones=False)
         if plume:
             ship_status["plume_wash"] = plume
         self._add_launch_status(ship_status, ship, simulation)
@@ -591,6 +593,16 @@ class LLMCaptain:
             orders_text = self._format_orders(simulation, ship, tactical_status, range_infos,
                                               tool_names)
 
+        # C5: a compact turn while the admiral's maneuver flies and nothing
+        # triggers (merge, conflict, torpedoes, a deviation verdict).
+        compact = self._compact_turn(range_infos, orders_text, tactical_status)
+        if compact:
+            try:
+                from .range_control import format_captain_range_control
+                range_text = format_captain_range_control(range_infos, compact=True)
+            except Exception:  # noqa: BLE001 - advisory only
+                compact = False
+
         from .execution_feedback import execution_feedback
         feedback = execution_feedback(simulation, [ship_id])
 
@@ -622,6 +634,7 @@ class LLMCaptain:
             tool_errors=self._format_tool_errors() or None,
             tool_names=tool_names,
             has_admiral=self.has_admiral,
+            compact=compact,
         )
         # Split into a stable system prompt and a volatile user turn so the
         # provider can serve the doctrine from cache across checkpoints.
@@ -1089,6 +1102,30 @@ class LLMCaptain:
                     f"T+{lost['time']:.0f}-{lost['until']:.0f}")
         return (f"!! YOUR LAST ORDERS WERE LOST (T+{lost['time']:.0f}: {lost['reason']}): {what}. "
                 "Nothing else was aimed or launched. Re-issue your orders now.")
+
+    # ORDERS-block markers that make a turn need the full blocks.
+    _FULL_TURN_MARKERS = ("!! ", "NOT FLYABLE", "LAST CHECKPOINT", "NOT APPLIED")
+
+    def _compact_turn(self, range_infos: List[Any], orders_text: Optional[str],
+                      tactical_status: Dict[str, Any]) -> bool:
+        """
+        True when the turn may be compact (audit C5): an admiral maneuver is
+        already flying and nothing triggers - no merge warning, no order
+        conflict / unflyable order / deviation verdict, no torpedo (live or
+        blinded) inbound. Captains without an admiral, and MCP clients
+        (they never come here), always get the full blocks.
+        """
+        if not self.has_admiral or not self._admiral_heading_applied():
+            return False
+        if any(getattr(o, "maneuver_error", None) for o in self.admiral_orders or []):
+            return False
+        if any(getattr(i, "warning", None) for i in range_infos or []):
+            return False
+        if any(m in (orders_text or "") for m in self._FULL_TURN_MARKERS):
+            return False
+        if tactical_status.get("torpedo_threats"):
+            return False
+        return True
 
     def _tool_names(self, tools: List[Dict[str, Any]]) -> List[str]:
         """Names of the offered tools, sticky across the battle (cache-stable doctrine)."""

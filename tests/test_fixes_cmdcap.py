@@ -590,3 +590,85 @@ class TestEngineOffOrderCheck:
                              order_text="Nose on.", maneuver={"maneuver_type": "PADLOCK"})
         engine = cap._order_check(order, sim, me, analyze_range_control(sim, [me]))["engine"]
         assert engine == "PADLOCK coasts (engine off) -> range to every enemy group is not closing"
+
+
+# =============================================================================
+# C5: a smaller turn when the admiral's maneuver flies and nothing triggers
+# =============================================================================
+
+from src.llm.arcs_status import blind_cone_doctrine, blind_cones  # noqa: E402
+from src.llm.range_control import _bears_at_some_roll  # noqa: E402
+from src.weapon_arcs import load_hull_mounts  # noqa: E402
+
+PADLOCK_ORDER = {"order_text": "Nose on the nearest, fire when optimal.", "priority": "NORMAL",
+                 "maneuver": "PADLOCK", "evade": "dodge"}
+
+
+class TestCompactTurn:
+
+    def _texts(self, tmp_path, order, admirals=True, distance=600.0):
+        stub = Stub(captain=lambda ctx: [("set_primary_target", {"target_id": "beta_1"})],
+                    order=lambda ship: dict(order))
+        runner = make_runner(stub, tmp_path, alpha=(("destroyer", "stub/dd"), ("frigate", "stub/ff")),
+                             beta=(("destroyer", "stub/foe"),), checkpoints=2,
+                             distance_km=distance, admirals=admirals)
+        texts = {}
+        inner = stub.captain
+
+        def wrapped(ctx):
+            texts[(ctx.model, ctx.cp)] = ctx.messages[-1]["content"]
+            return inner(ctx)
+        stub.captain = wrapped
+        runner.run_fleet_battle(FLEET)
+        return texts
+
+    def test_admiral_maneuver_flying_and_nothing_triggering_is_compact(self, tmp_path):
+        text = self._texts(tmp_path, PADLOCK_ORDER)[("stub/dd", 2)]
+        assert "=== RANGE CONTROL (compact" in text
+        assert "set_heading(" not in text                     # vectors only
+        friendlies = text[text.index("FRIENDLIES"):text.index("=== RANGE CONTROL")]
+        assert "dir_to" not in friendlies and "rel " not in friendlies
+        assert "REPLY:" not in text and "ARCS blind cones" not in text
+
+    def test_no_admiral_gets_the_full_blocks(self, tmp_path):
+        text = self._texts(tmp_path, PADLOCK_ORDER, admirals=False)[("stub/dd", 2)]
+        assert "compact" not in text and "set_heading(" in text
+        assert "dir_to" in text[text.index("FRIENDLIES"):]
+
+    def test_a_trigger_brings_the_full_blocks_back(self):
+        cap = _captain()
+        cap.has_admiral = True
+        cap.admiral_orders = [AdmiralOrder(target_ship_id="alpha_1", target_ship_name="x",
+                                           order_text="x", maneuver={"maneuver_type": "PADLOCK"})]
+        calm = SimpleNamespace(warning=None)
+        assert cap._compact_turn([calm], "ORDERS", {}) is True
+        assert cap._compact_turn([SimpleNamespace(warning="MERGE IN 30 s")], "ORDERS", {}) is False
+        assert cap._compact_turn([calm], "ORDERS\n      !! Your order and RANGE CONTROL conflict", {}) is False
+        assert cap._compact_turn([calm], "  LAST CHECKPOINT (T+30) your Admiral read NOT", {}) is False
+        assert cap._compact_turn([calm], "ORDERS", {"torpedo_threats": [{"blinded": True}]}) is False
+        cap.admiral_orders = [AdmiralOrder(target_ship_id="alpha_1", target_ship_name="x",
+                                           order_text="Close in.")]            # prose only
+        assert cap._compact_turn([calm], "ORDERS", {}) is False
+
+
+class TestBlindConeDoctrine:
+
+    @pytest.mark.parametrize("hull", sorted(load_hull_mounts()))
+    def test_outside_the_stated_cones_some_mount_bears(self, hull):
+        mounts = load_hull_mounts()[hull]
+        cones = blind_cones(mounts)
+        for kind in ("gun", "pd"):
+            ms = [m for m in mounts.mounts if m.kind == kind]
+            for deg in range(181):
+                inside = deg <= cones.get(f"{kind}_nose", 0.0) or 180 - deg <= cones.get(f"{kind}_stern", 0.0)
+                if ms and not inside:
+                    assert any(_bears_at_some_roll(mounts, m)[deg] for m in ms), (hull, kind, deg)
+
+    def test_destroyer_doctrine_states_its_stern_cone(self):
+        cones = blind_cones(load_hull_mounts()["destroyer"])
+        text = blind_cone_doctrine("destroyer")
+        assert (f"No gun battery can fire at a target within {cones['gun_stern']:.0f} deg of dead "
+                "astern, at any roll") in text
+        assert "stern-arc" not in text
+        doc = build_captain_doctrine(ship_type="destroyer", fleet_data=FLEET)
+        assert text in doc

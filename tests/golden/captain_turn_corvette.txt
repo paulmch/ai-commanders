@@ -39,7 +39,6 @@ ORDERS FROM YOUR ADMIRAL (T+180):
       >>> ENGINE ORDER CHECK: INTERCEPT@80% held for 2 checkpoints -> closest approach 1.2 km to OCS Falchion-1 [beta_5] in 24 s, passing at 4.7 km/s = a MERGE (seconds of fire, then flying apart)
       >>> POSITION IN ORDER: (90,55,10) km is a POSITION: from you dir_to (+0.99,+0.40,+0.06), 125 km - set_heading takes that direction, not the position
       !! Your order and RANGE CONTROL conflict (merge): choose and explain - DEVIATE is allowed.
-  REPLY: acting IS your acknowledgment; report_to_admiral only to DEVIATE/UNABLE (say why) or with a request/contact.
 
 FLEET NET (your fleet, your admiral and engine signals):
   T+150 TIS Dart-1 [alpha_1] -> fleet: "Taking Falchion-1 with 2 rounds at T+180, cover me."

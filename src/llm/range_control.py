@@ -1151,14 +1151,38 @@ def format_range_control(
     return "\n".join(lines)
 
 
-def format_captain_range_control(infos: Sequence[GroupRangeInfo]) -> str:
+def format_captain_range_control(infos: Sequence[GroupRangeInfo], compact: bool = False) -> str:
     """A captain's RANGE CONTROL: every heading for the most urgent group,
     the key ones for the next (CAPTAIN_SECONDARY_OPTIONS). Every option line
     carries the same fields - effect on range, the face (and its armor)
-    shown, which guns bear (audit C4/C6)."""
-    return format_range_control(infos, who="Your",
-                                secondary_options=CAPTAIN_SECONDARY_OPTIONS,
-                                armor_on_burns=True)
+    shown, which guns bear (audit C4/C6).
+
+    ``compact`` (an admiral maneuver is flying and no merge, conflict or
+    torpedo trigger is present - captain._compact_turn): each group keeps its
+    status line, the options shrink to one line of labelled vectors. The
+    audit found 145 of 152 captain set_heading calls re-pasting the
+    admiral's heading and ~760 tokens per turn spent on this block."""
+    if not compact:
+        return format_range_control(infos, who="Your",
+                                    secondary_options=CAPTAIN_SECONDARY_OPTIONS,
+                                    armor_on_burns=True)
+    if not infos:
+        return ""
+    lines = ["=== RANGE CONTROL (compact while your Admiral's maneuver flies and nothing "
+             "triggers; set_heading vectors) ==="]
+    for i, info in enumerate(infos):
+        lines.append(_group_header(info))
+        lines.append(_group_status(info, "Your"))
+        if info.warning:
+            lines.append(f"  !! {info.warning}")
+        if not _detailed(i, info, FULL_DETAIL_GROUPS):
+            continue
+        options = info.options if i == 0 else _key_options(info, CAPTAIN_SECONDARY_OPTIONS)
+        vectors = [f"{label} {opt.heading_str()}" for opt, label in merged_options(options)
+                   if opt.throttle > 0 or opt.key == "face"]
+        if vectors:
+            lines.append("  " + " | ".join(vectors))
+    return "\n".join(lines)
 
 
 def format_heading_options(
