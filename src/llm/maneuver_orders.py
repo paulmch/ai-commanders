@@ -154,7 +154,7 @@ def resolve_ship(simulation: Any, own_ship_id: str, ref: Any) -> Optional[Any]:
     """
     if ref is None:
         return None
-    wanted = str(ref).strip().lower()
+    wanted = enum_token(ref).lower()          # '"OCS Lancer-2"' resolves too
     if not wanted:
         return None
     pools = [list(simulation.get_enemy_ships(own_ship_id)),
@@ -668,7 +668,7 @@ def admiral_maneuver_spec(args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
       order too (simulation._evasion_overlay), so an attitude-only HEADING
       with evade still dodges.
     """
-    kind = str(args.get("maneuver") or "").strip().upper()
+    kind = enum_token(args.get("maneuver") or "").upper().replace(" ", "_")
     if kind == "EVASIVE":
         kind = "EVADE"
     if kind and kind not in ADMIRAL_MANEUVERS:

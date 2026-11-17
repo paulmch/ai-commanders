@@ -1074,7 +1074,8 @@ KEY PHYSICS TO REMEMBER:
   unless you cancel closure in time (RANGE CONTROL)
 - Spinal weapons ONLY fire if nose within 30° of target - PADLOCK holds the nose on him
 - Turrets fire where their own hull leaves them clear, at any maneuver; the ARCS lines
-  and RANGE CONTROL's "N of M batteries bear" count the mounts that bear"""
+  count the mounts that bear now, RANGE CONTROL's "N of M batteries can bear" those
+  that bear at some roll"""
 
 # Torpedo-only hulls (corvette, torpedo cruiser): no gun content at all.
 TORPEDO_TACTICS_BLOCK = """=== TORPEDO BOAT TACTICS (you mount no guns) ===

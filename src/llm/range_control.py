@@ -572,8 +572,8 @@ def gun_bearing_counts(sim: Any, ships: Sequence[Any], angle_deg: float
 
 
 def guns_bearing(sim: Any, ships: Sequence[Any], angle_deg: float) -> Optional[str]:
-    """'spinal + 3 of 3 batteries bear' / '1 of 2 batteries bear' / 'no gun
-    bears' (gun_bearing_counts); None for gunless ships."""
+    """'spinal + 3 of 3 batteries can bear' / '1 of 2 batteries can bear' /
+    'no gun bears' (gun_bearing_counts: at some roll); None for gunless ships."""
     c = gun_bearing_counts(sim, ships, angle_deg)
     if c is None:
         return None
@@ -586,7 +586,8 @@ def guns_bearing(sim: Any, ships: Sequence[Any], angle_deg: float) -> Optional[s
                      f"batter{'y' if c['turret_total'] == 1 else 'ies'}")
     if not bears:
         return "no gun bears"
-    return " + ".join(bears) + " bear"
+    # At SOME roll: the ARCS lines say what bears at the present roll.
+    return " + ".join(bears) + " can bear"
 
 
 def _gun_arcs(ships: Sequence[Any]) -> Optional[Tuple[bool, bool]]:

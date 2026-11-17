@@ -994,6 +994,22 @@ class LLMCaptain:
         def is_maneuver(cmd: Any) -> bool:
             return hasattr(cmd, "maneuver_type") and hasattr(cmd, "throttle")
 
+        # The follow-up is a fresh request: a model repeats its whole turn.
+        # Calls identical to ones already executed are dropped (action tools
+        # included - a repeated launch_torpedo fired twice), and launches are
+        # never taken from this round (they were decided in the first reply).
+        done = {(tc.name, json.dumps(tc.arguments, sort_keys=True, default=str))
+                for tc in executed}
+        fresh = []
+        for tc in calls:
+            if (tc.name, json.dumps(tc.arguments, sort_keys=True, default=str)) in done:
+                continue
+            if tc.name == "launch_torpedo":
+                self._record_tool_note("ORDER CHECK reply: launch_torpedo ignored - launches "
+                                       "come from your first reply only")
+                continue
+            fresh.append(tc)
+        calls = fresh
         ack = any(tc.name in ("report_to_admiral", "respond_to_orders")
                   and normalize_report(tc.arguments or {},
                                        legacy=(tc.name == "respond_to_orders"))[0]["status"] == "ACK"
@@ -1010,9 +1026,15 @@ class LLMCaptain:
                     commands.append({"type": "set_target", "target_id": ordered})
             self._record_tool_note("ORDER CHECK: ACK - your departing call was withdrawn; your "
                                    "Admiral's order stands")
-        elif any(tc.name in ("set_maneuver", "set_heading") for tc in calls):
-            commands[:] = [c for c in commands if not is_maneuver(c)]
-            state["maneuver_issued"] = False
+        else:
+            if any(tc.name in ("set_maneuver", "set_heading") for tc in calls):
+                commands[:] = [c for c in commands if not is_maneuver(c)]
+                state["maneuver_issued"] = False
+            if any(tc.name == "set_primary_target" for tc in calls):
+                # A new target in the reply replaces the first one (the engine
+                # applies the last set_target, the compliance check the first).
+                commands[:] = [c for c in commands
+                               if not (isinstance(c, dict) and c.get("type") == "set_target")]
         self._execute_round(calls, simulation, ship_id, commands, executed, state)
 
     def _ordered_target(self, simulation: Any, ship_id: str) -> Optional[str]:
@@ -1276,7 +1298,8 @@ class LLMCaptain:
         Lancer-1" / "OCS Lancer-1"), so a first-substring-wins match picked
         whichever ship happened to be listed first.
         """
-        text = str(ref or "").strip()
+        from .maneuver_orders import enum_token
+        text = enum_token(ref or "")     # quotes around a name / id tolerated
         if not text:
             return None, []
         low = text.lower()
@@ -3645,6 +3668,12 @@ class LLMCaptain:
             # Explicit target_id from the schema wins over the legacy target_name.
             requested_id = args.get("target_id")
             if requested_id:
+                from .maneuver_orders import enum_token
+                requested_id = enum_token(requested_id)
+                # A name in target_id ("OCS Lancer-2") resolves like target_name.
+                named, _ = self._resolve_ship(requested_id, enemies)
+                if named is not None:
+                    requested_id = named.ship_id
                 if any(e.ship_id == requested_id for e in enemies):
                     target_id = requested_id
                 else:

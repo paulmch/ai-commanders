@@ -312,5 +312,6 @@ def blind_cone_doctrine(ship_type: Optional[str]) -> str:
             lines.append(f"- Your {label.replace('battery', 'batterie')}s have no blind cone: in "
                          f"every direction at least one bears at some roll.")
     lines.append("- What bears NOW (and the roll that unmasks the rest): the ARCS lines"
-                 + ("; per RANGE CONTROL heading: its \"N of M batteries bear\"." if has_guns else "."))
+                 + ("; per RANGE CONTROL heading: \"N of M batteries can bear\" = at SOME roll "
+                    "(rolling takes time)." if has_guns else "."))
     return "\n".join(lines) + "\n"

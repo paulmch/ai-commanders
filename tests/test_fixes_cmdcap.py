@@ -768,3 +768,58 @@ class TestFactionNames:
         names = [s.ship_name for s in auto_draft("beta", 100, 8, seed=3).ships]
         assert all(any(n.split(" ", 1)[1].startswith(nick) for nick in CLASS_NICKNAMES.values())
                    for n in names)
+
+
+# =============================================================================
+# Review follow-ups: the ORDER CHECK reply never doubles a launch; quoted
+# ship refs and admiral maneuver enums
+# =============================================================================
+
+class TestOrderCheckReply:
+
+    def test_a_repeated_turn_does_not_launch_twice(self, tmp_path):
+        def order(ship):
+            return {"order_text": "Launch on the destroyer.", "priority": "NORMAL",
+                    "suggested_target": "beta_1"}
+
+        def captain(ctx):
+            if ctx.model != "stub/dart" or ctx.cp != 1:
+                return []
+            # Off the ordered target, with a launch - twice (a model repeating its turn).
+            return [("set_primary_target", {"target_id": "beta_2"}),
+                    ("launch_torpedo", {"count": 1, "target_id": "beta_2"})]
+        stub = Stub(captain=captain, order=order)
+        runner = make_runner(stub, tmp_path, beta=(("destroyer", "stub/lancer"),
+                                                    ("destroyer", "stub/lancer")),
+                             checkpoints=1, distance_km=400.0)
+        runner.run_fleet_battle(FLEET)
+        assert stub.turns[("stub/dart", 1)] == 2               # the ORDER CHECK was asked
+        captain = runner.alpha_captains["alpha_1"]
+        executed = [tc.name for tc in captain.last_tool_calls]      # requested calls are recorded
+        assert executed.count("launch_torpedo") == 1, executed
+
+    def test_reply_round_drops_repeats_and_launches(self):
+        sim, cap = _sim("corvette"), _captain("corvette")
+        cap.config.has_torpedoes = True
+        first = [ToolCall(id="1", name="set_primary_target", arguments={"target_id": "beta_2"}),
+                 ToolCall(id="2", name="launch_torpedo", arguments={"count": 1, "target_id": "beta_2"})]
+        commands, executed, state = [], [], {"maneuver_issued": False}
+        cap._execute_round(first, sim, "alpha_1", commands, executed, state)
+        n = len(commands)
+        cap._apply_order_check_reply(list(first), ["target: ordered x, engaging y"], sim,
+                                     "alpha_1", commands, executed, state)
+        assert len(commands) == n                      # nothing doubled
+        assert sum(1 for c in commands if c.get("type") == "launch_torpedo") == 1
+
+    def test_quoted_ship_refs_resolve(self):
+        sim, cap = _sim("corvette"), _captain("corvette")
+        cap.config.has_torpedoes = True
+        cmd = _call(cap, sim, "set_primary_target", target_id='"OCS Lancer-1"')
+        assert cmd == {"type": "set_target", "target_id": "beta_2"}
+        m = _call(cap, sim, "set_maneuver", maneuver_type="PADLOCK", target_id="'beta_2'")
+        assert m.target_id == "beta_2"
+
+    def test_admiral_maneuver_enum_tolerates_quotes(self):
+        from src.llm.maneuver_orders import admiral_maneuver_spec
+        spec = admiral_maneuver_spec({"maneuver": '"PADLOCK"', "evade": '"dodge"'})
+        assert spec["maneuver_type"] == "PADLOCK" and spec["evade"] == "dodge"
