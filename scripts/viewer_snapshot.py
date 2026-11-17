@@ -25,7 +25,7 @@ Examples:
 
     # a 2x close crop of the HUD (CSS-pixel clip at device scale 2 -> 1600x900),
     # with extra viewer URL parameters
-    uv run python scripts/viewer_snapshot.py --recording intent_qwen_gptoss.json \
+    uv run python scripts/viewer_snapshot.py --recording intent_qwen_gptoss.json.gz \
         --time 184.8 --query "decisions=1&decision=e152" --width 1200 --height 660 \
         --scale 2 --clip 392,117,800,450 --out /tmp/panel.png
 

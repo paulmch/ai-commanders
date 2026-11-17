@@ -1,0 +1,11 @@
+=== BATTLE p5_sonnet5_vs_sonnet55_b | claude-sonnet-5 vs claude-sonnet-5-5 | spend $0.00/$24.00 ===
+150 pts/side, max 8 ships, 20 turns of 30s. Reasoning medium. Admiral vision ON: tactical plot to both admirals each checkpoint.
+Costs: CO=corvette:24 FF=frigate:7 DD=destroyer:18 CA=cruiser:29 BC=battlecruiser:25 BB=battleship:43 DN=dreadnought:55 DS=dreadnought_siege:56 CT=cruiser_torpedo:100
+=== DRAFT ALPHA | claude-sonnet-5 | 144/150 pts | spend $0.07/$24.00 ===
+Ships (8): Falchion-1 DD 18 | Falchion-2 DD 18 | Falchion-3 DD 18 | Falchion-4 DD 18 | Falchion-5 DD 18 | Falchion-6 DD 18 | Falchion-7 DD 18 | Falchion-8 DD 18
+Formation: Dispersed Sphere Screen - All 8 destroyers form a dispersed spherical shell around the fleet anchor, roughly 70-90km apart from neare...
+Concept: Uniform 2g destroyer wall: 8 hulls keep the whole fleet at matched speed (no mixed-doctrine kiting problem), maximize hull count for PD c...
+=== RESULT | spend $0.07/$24.00 ===
+Winner: NONE - RuntimeError: beta admiral did not submit a valid fleet; battle not started
+Spend: $0.0651 reported, $0.0651 committed of $24.00 limit, 5 model calls
+Recording: /home/plmch/aic-wt/p5/damage/visualizer/public/recordings/p5_sonnet5_vs_sonnet55_b.json

@@ -29,7 +29,14 @@ const DOWN_FRAG = /* glsl */`
   uniform float uKaris;       // 0 = plain average, 1 = full Karis weighting
   varying vec2 vUv;
 
-  vec3 tap(vec2 o) { return texture2D(tSrc, vUv + o * uTexel).rgb; }
+  // NaN/Inf guard where the HDR scene enters the chain (and, through the
+  // coarsest level, the exposure meter): one bad fragment would otherwise
+  // be averaged into every tap's footprint, level after level, and come
+  // back as a black block. One vector compare + select per tap, no branch.
+  vec3 tap(vec2 o) {
+    vec3 c = texture2D(tSrc, vUv + o * uTexel).rgb;
+    return all(lessThan(abs(c), vec3(1.0e30))) ? c : vec3(0.0);
+  }
   float lum(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
   vec3 soft(vec3 c) {
     float br = max(c.r, max(c.g, c.b));

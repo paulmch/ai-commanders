@@ -26,7 +26,7 @@
   "trials": [
     {
       "name": "intent_qwen_gptoss",
-      "recording": "data/recordings/intent_qwen_gptoss.json",
+      "recording": "data/recordings/intent_qwen_gptoss.json.gz",
       "winner": "alpha",
       "duration_s": 300.0,
       "cost_usd": 0.069059243,
@@ -72,7 +72,7 @@
     },
     {
       "name": "intent_deepseek_mini",
-      "recording": "data/recordings/intent_deepseek_mini.json",
+      "recording": "data/recordings/intent_deepseek_mini.json.gz",
       "winner": "beta",
       "duration_s": 360.0,
       "cost_usd": 0.1406125829999998,

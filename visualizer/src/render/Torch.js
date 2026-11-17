@@ -123,7 +123,8 @@ const fragmentShader = /* glsl */`
     // on the bells around it, which is the heat glow on the engine block.
     float sf = uR0 * (0.4 + 0.16 * uThrust);
     vec3 fc = ro - vec3(0.0, 0.0, -0.25 * uR0);
-    float fd2 = dot(fc, fc) - pow(dot(fc, rd), 2.0);
+    float fcd = dot(fc, rd);                     // a product: pow(<0, 2.0) is NaN on some GPUs
+    float fd2 = dot(fc, fc) - fcd * fcd;
     col += mix(uCore, uSheath, 0.3) * uFlare * (exp(-fd2 / (sf * sf)) + 0.1 * exp(-fd2 / (sf * sf * 7.0)));
 
     // Chord of the ray through the slab 0 <= s <= uLen (s = distance aft)

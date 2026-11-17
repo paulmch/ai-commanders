@@ -251,7 +251,7 @@ function ventMaterial(uNow, uTime) {
         float t = vAlong;
         vec4 n = texture2D(uNoise, vec2(vUv.x * 2.0 + vSeed, t * 0.8 - uTime * 1.1 + vSeed * 3.0));
         vec4 n2 = texture2D(uNoise, vec2(vUv.x * 3.0 - vSeed, t * 1.6 - uTime * 1.9));
-        float body = pow(1.0 - t, 2.2) * smoothstep(0.0, 0.04, t);
+        float body = pow(max(1.0 - t, 0.0), 2.2) * smoothstep(0.0, 0.04, t);
         float edge = pow(vEdge, 2.6);
         // filaments: the jet tears into streaks as it expands
         float wisps = smoothstep(0.25, 0.75, n.r * 0.65 + n2.g * 0.6 - t * 0.25) * 1.6 + 0.1;

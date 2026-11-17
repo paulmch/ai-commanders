@@ -6,7 +6,7 @@
       "role": "admiral",
       "text": "After a saturating TOT is away, immediately queue the next focus so the follow-up arrives while enemy PD is still busy; staying magazine-dry until impact wastes that window and cedes a cycle.",
       "status": "accepted",
-      "source_battle": "data/recordings/battle_grok_4_6_vs_claude_sonnet_5_20260813_124304.json",
+      "source_battle": "data/recordings/battle_grok_4_6_vs_claude_sonnet_5_20260813_124304.json.gz",
       "source_outcome": "won vs anthropic/claude-sonnet-5",
       "created_at": "2026-08-13T12:44:18",
       "validation": {
@@ -21,7 +21,7 @@
       "role": "admiral",
       "text": "Once a lethal wave is already inbound on the last enemies, cease fire and spend the checkpoint on evade plus PD overlap; extra late salvos do not save hulls already painted.",
       "status": "accepted",
-      "source_battle": "data/recordings/battle_grok_4_6_vs_claude_sonnet_5_20260813_124304.json",
+      "source_battle": "data/recordings/battle_grok_4_6_vs_claude_sonnet_5_20260813_124304.json.gz",
       "source_outcome": "won vs anthropic/claude-sonnet-5",
       "created_at": "2026-08-13T12:44:18",
       "validation": {
@@ -36,7 +36,7 @@
       "role": "admiral",
       "text": "After one saturating TOT is assigned per enemy capital, retarget the next volley onto closing escorts immediately; a stacked second capital volley wastes the window before their gun line enters range.",
       "status": "accepted",
-      "source_battle": "data/recordings/battle_grok_4_6_vs_claude_sonnet_5_20260813_125403.json",
+      "source_battle": "data/recordings/battle_grok_4_6_vs_claude_sonnet_5_20260813_125403.json.gz",
       "source_outcome": "won vs anthropic/claude-sonnet-5",
       "created_at": "2026-08-13T12:55:34",
       "validation": {
@@ -51,7 +51,7 @@
       "role": "admiral",
       "text": "Do not add rounds to a hull that already has a lethal inbound wave; split leftover tubes across other live threats that cycle so the magazine covers the full remaining order of battle.",
       "status": "accepted",
-      "source_battle": "data/recordings/battle_grok_4_6_vs_claude_sonnet_5_20260813_125403.json",
+      "source_battle": "data/recordings/battle_grok_4_6_vs_claude_sonnet_5_20260813_125403.json.gz",
       "source_outcome": "won vs anthropic/claude-sonnet-5",
       "created_at": "2026-08-13T12:55:34",
       "validation": {

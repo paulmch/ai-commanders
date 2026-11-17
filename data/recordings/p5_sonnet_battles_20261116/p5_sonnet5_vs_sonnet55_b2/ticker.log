@@ -1,0 +1,200 @@
+=== BATTLE p5_sonnet5_vs_sonnet55_b2 | claude-sonnet-5 vs claude-sonnet-5-5 | spend $0.00/$24.00 ===
+150 pts/side, max 8 ships, 20 turns of 30s. Reasoning medium. Admiral vision ON: tactical plot to both admirals each checkpoint.
+Costs: CO=corvette:24 FF=frigate:7 DD=destroyer:18 CA=cruiser:29 BC=battlecruiser:25 BB=battleship:43 DN=dreadnought:55 DS=dreadnought_siege:56 CT=cruiser_torpedo:100
+=== DRAFT BETA | claude-sonnet-5-5 | 150/150 pts | spend $0.01/$24.00 (+$0.16 held) ===
+Ships (8): Lancer-1 BC 25 | Lancer-2 BC 25 | Lancer-3 BC 25 | Lancer-4 BC 25 | Falchion-1 DD 18 | Falchion-2 DD 18 | Ward-1 FF 7 | Ward-2 FF 7
+Formation: Screened wedge - Compact enough (all within ~120 km) for overlapping PD, with battlecruisers forward, destroyers and PD frig...
+Concept: Balanced fleet of 8 hulls: battlecruisers and destroyers with spinal coilers for firepower, frigates as cheap PD escorts. Cost 100+36+14=...
+=== DRAFT ALPHA | claude-sonnet-5 | 141/150 pts | spend $0.04/$24.00 ===
+Ships (8): Dart-1 CO 24 | Dart-2 CO 24 | Dart-3 CO 24 | Dart-4 CO 24 | Dart-5 CO 24 | Ward-1 FF 7 | Ward-2 FF 7 | Ward-3 FF 7
+Formation: Vanguard Arc / Refused Frigates - Corvettes form a wide forward arc (staggered in x/y/z) to complicate enemy spinal-weapon targeting while st...
+Concept: An all-fast (3g) doctrine built around torpedo saturation: corvettes deliver 8-torpedo salvos each while staying faster than any capital...
+=== CP 1 | t=30s | spend $0.95/$24.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 0% | Dart-2 CO hull 100% arm 36/36cm heat 0% | Dart-3 CO hull 100% arm 36/36cm heat 0% | Dart-4 CO hull 100% arm 36/36cm heat 0% | Dart-5 CO hull 100% arm 36/36cm heat 0% | Ward-1 FF hull 100% arm 12/12cm heat 0% | Ward-2 FF hull 100% arm 12/12cm heat 0% | Ward-3 FF hull 100% arm 12/12cm heat 0%
+BETA claude-sonnet-5-5: 8/8 alive, hull 100% | Lancer-1 BC hull 100% arm 30/30cm heat 0% | Lancer-2 BC hull 100% arm 30/30cm heat 0% | Lancer-3 BC hull 100% arm 30/30cm heat 0% | Lancer-4 BC hull 100% arm 30/30cm heat 0% | Falchion-1 DD hull 100% arm 26/26cm heat 0% | Falchion-2 DD hull 100% arm 26/26cm heat 0% | Ward-1 FF hull 100% arm 12/12cm heat 0% | Ward-2 FF hull 100% arm 12/12cm heat 0%
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 5 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold current range (478km) - do NOT close into their spinal gun envelope further; enemy has no torpedoes, our only real threat is their g...
+B admiral: Hold formation and coast toward enemy as one group. Kill the Dart corvettes (torpedo boats) first, nearest first, with focused spinal fir...
+Prompt cache: 14 hit / 25 write / 0 cold calls, 176.5k read + 151.2k written of 424.9k prompt tokens (42% read)
+=== CP 2 | t=60s | spend $1.35/$24.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 0% | Dart-2 CO hull 100% arm 36/36cm heat 0% | Dart-3 CO hull 100% arm 36/36cm heat 0% | Dart-4 CO hull 100% arm 36/36cm heat 0% | Dart-5 CO hull 100% arm 36/36cm heat 0% | Ward-1 FF hull 100% arm 12/12cm heat 0% | Ward-2 FF hull 100% arm 12/12cm heat 0% | Ward-3 FF hull 100% arm 12/12cm heat 0%
+BETA claude-sonnet-5-5: 8/8 alive, hull 100% | Lancer-1 BC hull 100% arm 30/30cm heat 2% [heading] | Lancer-2 BC hull 100% arm 30/30cm heat 2% | Lancer-3 BC hull 100% arm 30/30cm heat 2% | Lancer-4 BC hull 100% arm 30/30cm heat 2% | Falchion-1 DD hull 100% arm 26/26cm heat 2% | Falchion-2 DD hull 100% arm 26/26cm heat 2% | Ward-1 FF hull 100% arm 12/12cm heat 2% | Ward-2 FF hull 100% arm 12/12cm heat 2%
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 10 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold range - burn cancel-closure heading to stop their slow advance while first torpedo wave (15 rounds, enough to kill OCS Lancer-1) clo...
+B admiral: Hold formation tight for overlapping PD. Lancer-1 EVADE (torpedoes inbound on it); others stay close to it to stack PD. Keep nose toward...
+Prompt cache: 48 hit / 25 write / 0 cold calls, 492.1k read + 151.2k written of 860.1k prompt tokens (57% read)
+=== CP 3 | t=90s | spend $1.74/$24.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 3% | Dart-2 CO hull 100% arm 36/36cm heat 3% | Dart-3 CO hull 100% arm 36/36cm heat 4% | Dart-4 CO hull 100% arm 36/36cm heat 0% | Dart-5 CO hull 100% arm 36/36cm heat 3% | Ward-1 FF hull 100% arm 12/12cm heat 0% | Ward-2 FF hull 100% arm 12/12cm heat 0% | Ward-3 FF hull 100% arm 12/12cm heat 0%
+BETA claude-sonnet-5-5: 8/8 alive, hull 100% | Lancer-1 BC hull 100% arm 30/30cm heat 5% [present] | Lancer-2 BC hull 100% arm 30/30cm heat 3% | Lancer-3 BC hull 100% arm 30/30cm heat 3% | Lancer-4 BC hull 100% arm 30/30cm heat 3% | Falchion-1 DD hull 100% arm 26/26cm heat 2% | Falchion-2 DD hull 100% arm 26/26cm heat 3% | Ward-1 FF hull 100% arm 12/12cm heat 3% | Ward-2 FF hull 100% arm 12/12cm heat 3%
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 13 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 2 torps
+A admiral: Enemy has NO torpedoes - our 23 inbound torpedoes already guarantee kills on Lancer-1 and Lancer-2, no more rounds needed there. Fleet op...
+B admiral: Torpedoes inbound on Lancer-1 and Lancer-2: both EVADE inside the fleet PD wall. All other ships stay tight, keep PD on the torpedo corri...
+Prompt cache: 82 hit / 25 write / 0 cold calls, 807.7k read + 151.2k written of 1298.5k prompt tokens (62% read)
+=== CP 4 | t=120s | spend $2.12/$24.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 10% | Dart-2 CO hull 100% arm 36/36cm heat 11% | Dart-3 CO hull 100% arm 36/36cm heat 11% | Dart-4 CO hull 100% arm 36/36cm heat 4% | Dart-5 CO hull 100% arm 36/36cm heat 10% | Ward-1 FF hull 100% arm 12/12cm heat 3% | Ward-2 FF hull 100% arm 12/12cm heat 3% | Ward-3 FF hull 100% arm 12/12cm heat 3%
+BETA claude-sonnet-5-5: 7/8 alive, hull 88% | Lancer-1 BC DEAD@103s | Lancer-2 BC hull 100% arm 30/30cm heat 6% [present] | Lancer-3 BC hull 100% arm 30/30cm heat 4% [present] | Lancer-4 BC hull 100% arm 30/30cm heat 3% | Falchion-1 DD hull 100% arm 26/26cm heat 3% | Falchion-2 DD hull 100% arm 26/26cm heat 3% | Ward-1 FF hull 100% arm 12/12cm heat 3% | Ward-2 FF hull 100% arm 12/12cm heat 3%
+Hits: A:Dart-1>B:Lancer-1 torp x1 | A:Dart-2>B:Lancer-1 torp x1 | A:Dart-4>B:Lancer-1 torp x1 | A:Dart-5>B:Lancer-1 torp x1 | A:Dart-3>B:Lancer-1 torp x1 | +1 more
+Kills: B:Lancer-1 crippled by A:Dart-5 (detonates in 7s) @96s ; B:Lancer-1 by A:Dart-5 (reactor_destroyed) @103s
+Fire: A 0 slugs/0 hit, 6 torps/6 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 6 torps
+A admiral: Enemy is slowly opening range after losing Lancer-1. We already have 19 torpedoes in flight killing Lancer-2 and Falchion-1 - hold remain...
+B admiral: Enemy corvettes are kiting away at 3g and firing torpedoes; we cannot catch them. Stay tight for overlapping PD, all ships with torpedoes...
+Prompt cache: 114 hit / 25 write / 0 cold calls, 1104.4k read + 151.2k written of 1710.0k prompt tokens (65% read)
+=== CP 5 | t=150s | spend $2.44/$24.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 14% | Dart-2 CO hull 100% arm 36/36cm heat 15% | Dart-3 CO hull 100% arm 36/36cm heat 15% | Dart-4 CO hull 100% arm 36/36cm heat 8% | Dart-5 CO hull 100% arm 36/36cm heat 14% | Ward-1 FF hull 100% arm 12/12cm heat 6% | Ward-2 FF hull 100% arm 12/12cm heat 6% | Ward-3 FF hull 100% arm 12/12cm heat 6%
+BETA claude-sonnet-5-5: 4/8 alive, hull 57% | Lancer-1 BC DEAD@103s | Lancer-2 BC DEAD@131s | Lancer-3 BC hull 100% arm 30/30cm heat 6% | Lancer-4 BC hull 100% arm 30/30cm heat 4% | Falchion-1 DD hull 100% arm 26/26cm heat 4% [present] | Falchion-2 DD hull 100% arm 26/26cm heat 4% | Ward-1 FF DEAD@121s | Ward-2 FF hull 56% arm 0/71cm heat 4% DYING
+Hits: A:Dart-2>B:Ward-1 torp x1 | A:Dart-4>B:Ward-1 torp x1 | A:Dart-5>B:Lancer-3 torp x1 | A:Dart-3>B:Lancer-2 torp x1 | A:Dart-2>B:Lancer-2 torp x1 | +5 more
+Kills: B:Ward-1 crippled by A:Dart-2 (detonates in 11s) @120s ; B:Ward-1 by A:Dart-2 (reactor_destroyed) @121s ; B:Lancer-2 crippled by A:Dart-5 (detonates in 21s) @130s ; B:Lancer-2 by A:Dart-5 (reactor_destroyed) @131s ; B:Ward-2 crippled by A:Dart-4 (detonates in 6s) @146s
+Fire: A 0 slugs/0 hit, 0 torps/10 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 3 torps
+A admiral: Enemy group is slowly opening range; re-engage as a formation to close back to effective gun/torpedo range. All ships burn the re-engage...
+B admiral: Enemy corvettes are nearly out of torpedoes (~6 left). Re-engage: whole fleet burns west toward the Darts in formation, nose to enemy so...
+Prompt cache: 140 hit / 25 write / 0 cold calls, 1345.3k read + 151.2k written of 2043.2k prompt tokens (66% read)
+=== CP 6 | t=180s | spend $2.71/$24.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 22% | Dart-2 CO hull 100% arm 36/36cm heat 22% | Dart-3 CO hull 100% arm 36/36cm heat 23% | Dart-4 CO hull 100% arm 36/36cm heat 15% | Dart-5 CO hull 100% arm 36/36cm heat 21% | Ward-1 FF hull 100% arm 12/12cm heat 13% | Ward-2 FF hull 100% arm 12/12cm heat 13% | Ward-3 FF hull 100% arm 12/12cm heat 13%
+BETA claude-sonnet-5-5: 3/8 alive, hull 38% | Lancer-1 BC DEAD@103s | Lancer-2 BC DEAD@131s | Lancer-3 BC hull 100% arm 30/30cm heat 8% | Lancer-4 BC hull 100% arm 30/30cm heat 12% | Falchion-1 DD DEAD@171s | Falchion-2 DD hull 100% arm 26/26cm heat 11% | Ward-1 FF DEAD@121s | Ward-2 FF DEAD@152s
+Hits: A:Dart-2>B:Falchion-1 torp x2 | A:Dart-4>B:Falchion-1 torp x2 | A:Dart-5>B:Falchion-1 torp x1
+Kills: B:Ward-2 by A:Dart-4 (reactor_detonation) @152s ; B:Falchion-1 crippled by A:Dart-2 (detonates in 0s) @170s ; B:Falchion-1 by A:Dart-2 (reactor_detonation) @171s
+Fire: A 0 slugs/0 hit, 2 torps/5 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 1 torps
+A admiral: Enemy down to 3 ships: Falchion-2 (DD), Lancer-3 & Lancer-4 (BC). All closing slowly near 490km, their spinals already in range. FINAL TO...
+B admiral: Enemy corvettes are nearly out of torpedoes (~6 left fleet-wide). Hold formation tight for overlapping PD, keep noses toward the enemy, a...
+Prompt cache: 164 hit / 25 write / 0 cold calls, 1567.2k read + 151.2k written of 2343.2k prompt tokens (67% read)
+=== CP 7 | t=210s | spend $2.96/$24.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 22% | Dart-2 CO hull 100% arm 36/36cm heat 22% | Dart-3 CO hull 100% arm 36/36cm heat 23% | Dart-4 CO hull 100% arm 36/36cm heat 15% | Dart-5 CO hull 100% arm 36/36cm heat 21% | Ward-1 FF hull 100% arm 12/12cm heat 13% | Ward-2 FF hull 100% arm 12/12cm heat 13% | Ward-3 FF hull 100% arm 12/12cm heat 13%
+BETA claude-sonnet-5-5: 3/8 alive, hull 38% | Lancer-1 BC DEAD@103s | Lancer-2 BC DEAD@131s | Lancer-3 BC hull 100% arm 30/30cm heat 8% | Lancer-4 BC hull 100% arm 30/30cm heat 12% | Falchion-1 DD DEAD@171s | Falchion-2 DD hull 100% arm 26/26cm heat 11% | Ward-1 FF DEAD@121s | Ward-2 FF DEAD@152s
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 4 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: 6 torpedoes are inbound on OCS Falchion-2 and will kill it (GOOD verdict, ~66s ETA). No more torpedoes available this checkpoint - rely o...
+B admiral: Hold formation, noses west (PADLOCK Dart-4/Dart-3), fire spinals and coilguns at closing Darts. Falchion-2 EVADE vs inbound torpedoes whi...
+Prompt cache: 188 hit / 25 write / 0 cold calls, 1789.2k read + 151.2k written of 2640.8k prompt tokens (68% read)
+=== CP 8 | t=240s | spend $3.22/$24.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 22% | Dart-2 CO hull 100% arm 36/36cm heat 22% | Dart-3 CO hull 100% arm 36/36cm heat 23% | Dart-4 CO hull 100% arm 36/36cm heat 15% | Dart-5 CO hull 100% arm 36/36cm heat 21% | Ward-1 FF hull 100% arm 12/12cm heat 13% | Ward-2 FF hull 100% arm 12/12cm heat 13% | Ward-3 FF hull 100% arm 12/12cm heat 13%
+BETA claude-sonnet-5-5: 3/8 alive, hull 38% | Lancer-1 BC DEAD@103s | Lancer-2 BC DEAD@131s | Lancer-3 BC hull 100% arm 30/30cm heat 8% | Lancer-4 BC hull 100% arm 30/30cm heat 12% | Falchion-1 DD DEAD@171s | Falchion-2 DD hull 100% arm 26/26cm heat 14% [present] | Ward-1 FF DEAD@121s | Ward-2 FF DEAD@152s
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: 6 torpedoes are about to finish OCS Falchion-2 (DD) - no further torpedoes in reserve, corvettes have no guns left so they hold formation...
+B admiral: Falchion-2 EVADE the 6 inbound torpedoes. Lancer-3 and Lancer-4 stay close to Falchion-2 for overlapping PD, noses west, PADLOCK Dart-4 a...
+Prompt cache: 212 hit / 25 write / 0 cold calls, 2011.1k read + 151.2k written of 2937.9k prompt tokens (68% read)
+=== CP 9 | t=270s | spend $3.45/$24.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 22% | Dart-2 CO hull 100% arm 36/36cm heat 22% | Dart-3 CO hull 100% arm 36/36cm heat 23% | Dart-4 CO hull 100% arm 36/36cm heat 15% | Dart-5 CO hull 100% arm 36/36cm heat 21% | Ward-1 FF hull 100% arm 12/12cm heat 17% | Ward-2 FF hull 100% arm 12/12cm heat 16% | Ward-3 FF hull 100% arm 12/12cm heat 17%
+BETA claude-sonnet-5-5: 2/8 alive, hull 25% | Lancer-1 BC DEAD@103s | Lancer-2 BC DEAD@131s | Lancer-3 BC hull 100% arm 30/30cm heat 9% | Lancer-4 BC hull 100% arm 30/30cm heat 12% | Falchion-1 DD DEAD@171s | Falchion-2 DD DEAD@265s | Ward-1 FF DEAD@121s | Ward-2 FF DEAD@152s
+Hits: A:Dart-3>B:Falchion-2 torp x2 | A:Dart-1>B:Falchion-2 torp x2
+Kills: B:Falchion-2 crippled by A:Dart-1 (detonates in 9s) @256s ; B:Falchion-2 by A:Dart-1 (reactor_detonation) @265s
+Fire: A 0 slugs/0 hit, 0 torps/4 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Falchion-2 destroyed, Phase 2 complete. Phase 3: focus all firepower on OCS Lancer-4 (closer BC, already aiming at us). Frigates Ward-1/2...
+B admiral: Enemy torpedoes are spent. Lancer-3 and Lancer-4 stay together, noses west, PADLOCK on the nearest corvette (Dart-4 first). Fire spinals...
+Prompt cache: 234 hit / 25 write / 0 cold calls, 2214.1k read + 151.2k written of 3204.9k prompt tokens (69% read)
+=== CP 10 | t=300s | spend $3.72/$24.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 22% | Dart-2 CO hull 100% arm 36/36cm heat 22% | Dart-3 CO hull 100% arm 36/36cm heat 23% | Dart-4 CO hull 100% arm 36/36cm heat 15% | Dart-5 CO hull 100% arm 36/36cm heat 21% | Ward-1 FF hull 100% arm 12/12cm heat 17% | Ward-2 FF hull 100% arm 12/12cm heat 17% | Ward-3 FF hull 100% arm 12/12cm heat 17%
+BETA claude-sonnet-5-5: 2/8 alive, hull 25% | Lancer-1 BC DEAD@103s | Lancer-2 BC DEAD@131s | Lancer-3 BC hull 100% arm 30/30cm heat 9% | Lancer-4 BC hull 100% arm 30/30cm heat 12% | Falchion-1 DD DEAD@171s | Falchion-2 DD DEAD@265s | Ward-1 FF DEAD@121s | Ward-2 FF DEAD@152s
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Torpedoes expended - victory relies on coilguns now vs 2 BCs (Lancer-3, Lancer-4). Fleet turns to FLANK LEFT heading to bring broadside t...
+B admiral: Enemy torpedoes are spent. Hold formation with noses west (PADLOCK). Focus fire on the closing OCS-side target TIS Dart-4 first, then the...
+Prompt cache: 256 hit / 25 write / 0 cold calls, 2417.2k read + 151.2k written of 3475.0k prompt tokens (70% read)
+=== CP 11 | t=330s | spend $3.96/$24.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 22% | Dart-2 CO hull 100% arm 36/36cm heat 27% | Dart-3 CO hull 100% arm 36/36cm heat 28% | Dart-4 CO hull 100% arm 36/36cm heat 20% | Dart-5 CO hull 100% arm 36/36cm heat 27% | Ward-1 FF hull 100% arm 12/12cm heat 22% | Ward-2 FF hull 100% arm 12/12cm heat 22% | Ward-3 FF hull 100% arm 12/12cm heat 22%
+BETA claude-sonnet-5-5: 2/8 alive, hull 25% | Lancer-1 BC DEAD@103s | Lancer-2 BC DEAD@131s | Lancer-3 BC hull 100% arm 30/30cm heat 9% | Lancer-4 BC hull 100% arm 30/30cm heat 12% | Falchion-1 DD DEAD@171s | Falchion-2 DD DEAD@265s | Ward-1 FF DEAD@121s | Ward-2 FF DEAD@152s
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Torpedoes expended, Falchion-2 destroyed in earlier phase - only OCS Lancer-3 and OCS Lancer-4 (battlecruisers) remain. Both already in m...
+B admiral: Enemy torpedoes are spent. Hold formation, noses west, PADLOCK Dart-4 (closest corvette) and fire when optimal. Keep both BCs together fo...
+Prompt cache: 278 hit / 25 write / 0 cold calls, 2620.2k read + 151.2k written of 3743.8k prompt tokens (70% read)
+=== CP 12 | t=360s | spend $4.19/$24.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 22% | Dart-2 CO hull 100% arm 36/36cm heat 28% | Dart-3 CO hull 100% arm 36/36cm heat 28% | Dart-4 CO hull 100% arm 36/36cm heat 21% | Dart-5 CO hull 100% arm 36/36cm heat 27% | Ward-1 FF hull 100% arm 12/12cm heat 22% | Ward-2 FF hull 100% arm 12/12cm heat 22% | Ward-3 FF hull 100% arm 12/12cm heat 22%
+BETA claude-sonnet-5-5: 2/8 alive, hull 25% | Lancer-1 BC DEAD@103s | Lancer-2 BC DEAD@131s | Lancer-3 BC hull 100% arm 30/30cm heat 9% | Lancer-4 BC hull 100% arm 30/30cm heat 13% | Falchion-1 DD DEAD@171s | Falchion-2 DD DEAD@265s | Ward-1 FF DEAD@121s | Ward-2 FF DEAD@152s
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 2 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold range on the two remaining BCs (Lancer-3, Lancer-4) - no merge. All ships focus fire OCS Lancer-4 until destroyed, then shift to Lan...
+B admiral: Enemy torpedoes are spent. Hold formation, noses west (PADLOCK), and fire at Dart-4 as it closes. Corvettes are weak in gunnery and out o...
+Prompt cache: 300 hit / 25 write / 0 cold calls, 2823.2k read + 151.2k written of 4010.4k prompt tokens (70% read)
+=== CP 13 | t=390s | spend $4.42/$24.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 22% | Dart-2 CO hull 100% arm 36/36cm heat 28% | Dart-3 CO hull 100% arm 36/36cm heat 28% | Dart-4 CO hull 100% arm 36/36cm heat 21% | Dart-5 CO hull 100% arm 36/36cm heat 27% | Ward-1 FF hull 100% arm 12/12cm heat 23% | Ward-2 FF hull 100% arm 12/12cm heat 22% | Ward-3 FF hull 100% arm 12/12cm heat 23%
+BETA claude-sonnet-5-5: 2/8 alive, hull 25% | Lancer-1 BC DEAD@103s | Lancer-2 BC DEAD@131s | Lancer-3 BC hull 100% arm 30/30cm heat 11% | Lancer-4 BC hull 100% arm 30/30cm heat 15% | Falchion-1 DD DEAD@171s | Falchion-2 DD DEAD@265s | Ward-1 FF DEAD@121s | Ward-2 FF DEAD@152s
+Hits: none
+Kills: none
+Fire: A 6 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 10 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Continue Phase 3: all ships PADLOCK on OCS Lancer-4 (nose-on for armor + turret bearing), sustained coilgun fire until it dies, then auto...
+B admiral: Hold formation, coast with noses west (PADLOCK) and fire at the closest Dart (Dart-4 first, 170 km and closing). Enemy torpedoes are spen...
+Prompt cache: 322 hit / 25 write / 0 cold calls, 3026.2k read + 151.2k written of 4278.2k prompt tokens (71% read)
+=== CP 14 | t=420s | spend $4.68/$24.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 22% | Dart-2 CO hull 100% arm 36/36cm heat 28% | Dart-3 CO hull 100% arm 36/36cm heat 28% | Dart-4 CO hull 100% arm 36/36cm heat 23% | Dart-5 CO hull 100% arm 36/36cm heat 27% | Ward-1 FF hull 100% arm 12/12cm heat 23% | Ward-2 FF hull 100% arm 12/12cm heat 23% | Ward-3 FF hull 100% arm 12/12cm heat 23%
+BETA claude-sonnet-5-5: 2/8 alive, hull 25% | Lancer-1 BC DEAD@103s | Lancer-2 BC DEAD@131s | Lancer-3 BC hull 100% arm 30/30cm heat 12% | Lancer-4 BC hull 100% arm 30/30cm heat 16% | Falchion-1 DD DEAD@171s | Falchion-2 DD DEAD@265s | Ward-1 FF DEAD@121s | Ward-2 FF DEAD@152s
+Hits: B:Lancer-4>A:Dart-4 spinal x1
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 1 slugs/1 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Enemy reduced to 2 Battlecruisers (Lancer-3, Lancer-4), no torpedoes left on either side. We hold range at ~290-320km, already in mutual...
+B admiral: Hold formation, noses west, PADLOCK and fire at TIS Dart-4 (isolated, closing) then other closing Darts. Enemy torpedoes are spent, so on...
+Prompt cache: 344 hit / 25 write / 0 cold calls, 3229.2k read + 151.2k written of 4547.9k prompt tokens (71% read)
+=== CP 15 | t=450s | spend $4.91/$24.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 22% | Dart-2 CO hull 100% arm 36/36cm heat 28% | Dart-3 CO hull 100% arm 36/36cm heat 28% | Dart-4 CO hull 100% arm 36/36cm heat 25% | Dart-5 CO hull 100% arm 36/36cm heat 27% | Ward-1 FF hull 100% arm 12/12cm heat 23% | Ward-2 FF hull 100% arm 12/12cm heat 23% | Ward-3 FF hull 100% arm 12/12cm heat 23%
+BETA claude-sonnet-5-5: 2/8 alive, hull 25% | Lancer-1 BC DEAD@103s | Lancer-2 BC DEAD@131s | Lancer-3 BC hull 100% arm 30/30cm heat 13% | Lancer-4 BC hull 100% arm 30/30cm heat 16% | Falchion-1 DD DEAD@171s | Falchion-2 DD DEAD@265s | Ward-1 FF DEAD@121s | Ward-2 FF DEAD@152s
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 1 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: All ships continue to PADLOCK on OCS Lancer-4 to present nose armor and bring coilguns/spinals to bear - focus fire until it dies, then r...
+B admiral: Enemy torpedoes are spent. Lancer-3 and Lancer-4 stay together, noses west (PADLOCK). Focus fire on TIS Dart-4, the closest corvette, wit...
+Prompt cache: 366 hit / 25 write / 0 cold calls, 3432.3k read + 151.2k written of 4815.8k prompt tokens (71% read)
+=== CP 16 | t=480s | spend $5.13/$24.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 22% | Dart-2 CO hull 100% arm 36/36cm heat 28% | Dart-3 CO hull 100% arm 36/36cm heat 28% | Dart-4 CO hull 100% arm 36/36cm heat 28% | Dart-5 CO hull 100% arm 36/36cm heat 27% | Ward-1 FF hull 100% arm 12/12cm heat 24% | Ward-2 FF hull 100% arm 12/12cm heat 23% | Ward-3 FF hull 100% arm 12/12cm heat 23%
+BETA claude-sonnet-5-5: 2/8 alive, hull 25% | Lancer-1 BC DEAD@103s | Lancer-2 BC DEAD@131s | Lancer-3 BC hull 100% arm 30/30cm heat 15% | Lancer-4 BC hull 100% arm 30/30cm heat 16% | Falchion-1 DD DEAD@171s | Falchion-2 DD DEAD@265s | Ward-1 FF DEAD@121s | Ward-2 FF DEAD@152s
+Hits: B:Lancer-3>A:Dart-4 spinal x2
+Kills: none
+Fire: A 7 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 3 slugs/2 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Both enemy battlecruisers (Lancer-3, Lancer-4) are in mutual gun range, closing slowly at ~0.7 km/s. We are out of torpedoes - this is no...
+B admiral: Enemy torpedoes are spent. Hold formation and keep noses toward the enemy (PADLOCK). Focus fire on TIS Dart-4 while it is in range, then...
+Prompt cache: 388 hit / 25 write / 0 cold calls, 3635.3k read + 151.2k written of 5084.7k prompt tokens (71% read)
+=== CP 17 | t=510s | spend $5.37/$24.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 22% | Dart-2 CO hull 100% arm 36/36cm heat 28% | Dart-3 CO hull 100% arm 36/36cm heat 28% | Dart-4 CO hull 100% arm 36/36cm heat 30% | Dart-5 CO hull 100% arm 36/36cm heat 27% | Ward-1 FF hull 100% arm 12/12cm heat 24% | Ward-2 FF hull 100% arm 12/12cm heat 24% | Ward-3 FF hull 100% arm 12/12cm heat 24%
+BETA claude-sonnet-5-5: 2/8 alive, hull 25% | Lancer-1 BC DEAD@103s | Lancer-2 BC DEAD@131s | Lancer-3 BC hull 100% arm 30/30cm heat 16% | Lancer-4 BC hull 100% arm 29/30cm heat 18% | Falchion-1 DD DEAD@171s | Falchion-2 DD DEAD@265s | Ward-1 FF DEAD@121s | Ward-2 FF DEAD@152s
+Hits: B:Lancer-3>A:Dart-4 spinal x1 | A:Ward-2>B:Lancer-4 gun x1
+Kills: none
+Fire: A 0 slugs/1 hit, 0 torps/0 impact, PD downed 0 torps ; B 4 slugs/1 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Focus fire on OCS Lancer-4. Frigates (Ward-1/2/3): your coilgun only bears near your stern - fly the OPEN RANGE heading (-0.93,+0.37,+0.0...
+B admiral: Enemy torpedoes are spent. Hold formation, close on the enemy group (Group B) and fight with all guns. Focus fire on the nearest Dart cor...
+Prompt cache: 410 hit / 25 write / 0 cold calls, 3838.3k read + 151.2k written of 5355.0k prompt tokens (72% read)
+=== CP 18 | t=540s | spend $5.61/$24.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 22% | Dart-2 CO hull 100% arm 36/36cm heat 28% | Dart-3 CO hull 100% arm 36/36cm heat 29% | Dart-4 CO hull 100% arm 36/36cm heat 30% | Dart-5 CO hull 100% arm 36/36cm heat 28% | Ward-1 FF hull 100% arm 12/12cm heat 28% | Ward-2 FF hull 100% arm 12/12cm heat 26% | Ward-3 FF hull 100% arm 12/12cm heat 27%
+BETA claude-sonnet-5-5: 2/8 alive, hull 25% | Lancer-1 BC DEAD@103s | Lancer-2 BC DEAD@131s | Lancer-3 BC hull 100% arm 30/30cm heat 18% | Lancer-4 BC hull 100% arm 29/30cm heat 19% | Falchion-1 DD DEAD@171s | Falchion-2 DD DEAD@265s | Ward-1 FF DEAD@121s | Ward-2 FF DEAD@152s
+Hits: B:Lancer-3>A:Dart-4 spinal x1 | B:Lancer-4>A:Ward-2 gun x1
+Kills: none
+Fire: A 5 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 3 slugs/2 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold range on Group A - do not merge with these BCs. Fleet: cancel closure heading (-0.95,-0.30,-0.00) at full throttle to kill closing v...
+B admiral: Enemy torpedoes are spent. Both Lancers hold range 150-250 km, keep noses toward the enemy (PADLOCK), and fire spinals and coilguns at th...
+Prompt cache: 432 hit / 25 write / 0 cold calls, 4041.3k read + 151.2k written of 5627.1k prompt tokens (72% read)
+=== CP 19 | t=570s | spend $5.84/$24.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 22% | Dart-2 CO hull 100% arm 36/36cm heat 28% | Dart-3 CO hull 100% arm 36/36cm heat 29% | Dart-4 CO hull 100% arm 36/36cm heat 30% [padlock] | Dart-5 CO hull 100% arm 36/36cm heat 28% | Ward-1 FF hull 100% arm 12/12cm heat 28% | Ward-2 FF hull 100% arm 12/12cm heat 32% | Ward-3 FF hull 100% arm 12/12cm heat 27%
+BETA claude-sonnet-5-5: 2/8 alive, hull 25% | Lancer-1 BC DEAD@103s | Lancer-2 BC DEAD@131s | Lancer-3 BC hull 100% arm 30/30cm heat 18% | Lancer-4 BC hull 100% arm 29/30cm heat 21% | Falchion-1 DD DEAD@171s | Falchion-2 DD DEAD@265s | Ward-1 FF DEAD@121s | Ward-2 FF DEAD@152s
+Hits: A:Ward-2>B:Lancer-4 gun x1 | B:Lancer-3>A:Dart-4 spinal x1
+Kills: none
+Fire: A 0 slugs/1 hit, 0 torps/0 impact, PD downed 0 torps ; B 2 slugs/1 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold position, no closing. All ships PADLOCK on OCS Lancer-4 (focus fire, nose-on armor, brings turrets to bear) until it dies, then shif...
+B admiral: Enemy torpedoes are spent. Hold formation, keep noses toward the enemy (PADLOCK), and fire spinals and coilguns at the nearest closing ta...
+Prompt cache: 454 hit / 25 write / 0 cold calls, 4244.3k read + 151.2k written of 5895.9k prompt tokens (72% read)
+=== CP 20 | t=600s | spend $6.06/$24.00 ===
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 22% | Dart-2 CO hull 100% arm 36/36cm heat 28% | Dart-3 CO hull 100% arm 36/36cm heat 29% | Dart-4 CO hull 100% arm 36/36cm heat 33% | Dart-5 CO hull 100% arm 36/36cm heat 28% | Ward-1 FF hull 100% arm 12/12cm heat 29% | Ward-2 FF hull 100% arm 12/12cm heat 32% | Ward-3 FF hull 100% arm 12/12cm heat 28%
+BETA claude-sonnet-5-5: 2/8 alive, hull 25% | Lancer-1 BC DEAD@103s | Lancer-2 BC DEAD@131s | Lancer-3 BC hull 100% arm 30/30cm heat 19% | Lancer-4 BC hull 100% arm 29/30cm heat 21% | Falchion-1 DD DEAD@171s | Falchion-2 DD DEAD@265s | Ward-1 FF DEAD@121s | Ward-2 FF DEAD@152s
+Hits: A:Ward-2>B:Lancer-4 gun x1
+Kills: none
+Fire: A 4 slugs/1 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: All ships PADLOCK on OCS Lancer-4, nose-on, focus fire until it dies, then shift to OCS Lancer-3. No closing maneuvers - hold current ran...
+B admiral: Enemy torpedoes are spent; only frigate guns threaten. Both Lancers close on Group A (Ward frigates first, nearest first) as a pair, nose...
+Prompt cache: 476 hit / 25 write / 0 cold calls, 4447.4k read + 151.2k written of 6164.6k prompt tokens (72% read)
+=== RESULT | t=630s | after CP 20 | spend $6.06/$24.00 ===
+Winner: ALPHA - Alpha tactical advantage (368.8 vs 58.6)
+ALPHA claude-sonnet-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 26% | Dart-2 CO hull 100% arm 36/36cm heat 28% | Dart-3 CO hull 100% arm 36/36cm heat 29% | Dart-4 CO hull 100% arm 36/36cm heat 34% | Dart-5 CO hull 100% arm 36/36cm heat 28% | Ward-1 FF hull 100% arm 12/12cm heat 29% | Ward-2 FF hull 100% arm 12/12cm heat 32% | Ward-3 FF hull 100% arm 12/12cm heat 28%
+BETA claude-sonnet-5-5: 2/8 alive, hull 25% | Lancer-1 BC DEAD@103s | Lancer-2 BC DEAD@131s | Lancer-3 BC hull 100% arm 30/30cm heat 20% | Lancer-4 BC hull 100% arm 29/30cm heat 24% | Falchion-1 DD DEAD@171s | Falchion-2 DD DEAD@265s | Ward-1 FF DEAD@121s | Ward-2 FF DEAD@152s
+Final interval - Hits: A:Ward-1>B:Lancer-4 gun x2 | B:Lancer-4>A:Ward-2 spinal x1
+Final interval - Kills: none
+Final interval - Fire: A 0 slugs/2 hit, 0 torps/0 impact, PD downed 0 torps ; B 3 slugs/1 hit, 0 torps/0 impact, PD downed 0 torps
+Spend: $6.0611 reported, $6.0611 committed of $24.00 limit, 501 model calls
+Recording: /home/plmch/aic-wt/p5/damage/visualizer/public/recordings/p5_sonnet5_vs_sonnet55_b2.json

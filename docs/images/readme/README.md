@@ -51,9 +51,11 @@ below carry `--query scale=cinematic` so they still reproduce.
 
 What was re-shot and why. `hero.png` and `dreadnought.png` are close-ups of
 one hull framed in hull lengths: the same commands at the new default give
-the same picture (the only visible difference is that point-defense beams are
-now drawn whole), so they were re-shot and their commands reproduce them
-as written. `plume-wash.png` was re-shot with a new camera: the old frame put
+the same framing of the same hull, so they were re-shot and their commands
+reproduce them as written. What differs from the old frames: point-defense
+beams are drawn whole, the second dreadnought that sat behind `alpha_1` in
+`hero.png` (oversize, 60 km away) is now far too small to see, and a faint
+exhaust-jet haze continues the torch plumes. `plume-wash.png` was re-shot with a new camera: the old frame put
 a destroyer inside the flame of an oversize battleship, which is not what the
 default view shows any more (at real size the destroyer is 6 km astern, in the
 faint exhaust jet). `torpedo-salvo.png` was kept as a cinematic-scale image:
@@ -65,13 +67,14 @@ where oversize hulls are visible against real-size blasts as cinematic.
 
 ## Recordings
 
-- Claude Sonnet 5 vs DeepSeek V4.1 Flash: `sonnet5_vs_dsv41flash_150pt_20260926.json` (live run of September 26, 2026)
+- Claude Sonnet 5 vs DeepSeek V4.1 Flash: `sonnet5_vs_dsv41flash_150pt_20260926.json.gz` (live run of September 26, 2026)
 - DeepSeek V4.1 Flash mirror: `p4_new_flash_mirror_150pt.json` (pass-4 engine with captain reports)
-- [Qwen–GPT-OSS](../../../data/recordings/intent_qwen_gptoss.json)
-- Sonnet 5.5 vs Sonnet 5, battles c and d: `p5_sonnet55_vs_sonnet5_c.json` and
-  `p5_sonnet5_vs_sonnet55_d.json`, two of the four LLM fleet battles of November 16,
-  2026 described in [`docs/pass-5-findings.md`](../../pass-5-findings.md) (kept in
-  `data/recordings/p5_sonnet_battles_20261116/`, not committed: 65 MB)
+- [Qwen–GPT-OSS](../../../data/recordings/intent_qwen_gptoss.json.gz)
+- Sonnet 5.5 vs Sonnet 5, battles [c](../../../data/recordings/p5_sonnet_battles_20261116/p5_sonnet55_vs_sonnet5_c/battle_claude_sonnet_5_5_vs_claude_sonnet_5_20261116_001820.json.gz)
+  and [d](../../../data/recordings/p5_sonnet_battles_20261116/p5_sonnet5_vs_sonnet55_d/battle_claude_sonnet_5_vs_claude_sonnet_5_5_20261116_003206.json.gz):
+  two of the four LLM fleet battles of November 16, 2026 described in
+  [`docs/pass-5-findings.md`](../../pass-5-findings.md), staged for the commands below as
+  `p5_sonnet55_vs_sonnet5_c.json` and `p5_sonnet5_vs_sonnet55_d.json` (plain or `.json.gz`)
 - Pass-5 damage demo: `p5_damage_demo.json`, a seeded heuristic fleet battle
   (regeneration command in
   [`docs/pass-5-recording-additions.md`](../../pass-5-recording-additions.md))
@@ -118,7 +121,7 @@ $SNAP --recording showcase_s0_200pt.json --time 96.5 --focus alpha_1 --dist 4.6 
 $SNAP $CINE --recording rcs_showroom.json --time 5 --hide-ui --eval "$(cat $H); readmeLineup()" --out hull-lineup.png
 
 # fleet-battle.png
-$SNAP $CINE --recording sonnet5_vs_dsv41flash_150pt_20260926.json --time 151 \
+$SNAP $CINE --recording sonnet5_vs_dsv41flash_150pt_20260926.json.gz --time 151 \
   --eval "window.visualizer.showFleetView(); window.visualizer.trackHud.setLegend(false)" --out fleet-battle.png
 
 # torpedo-salvo.png
@@ -140,7 +143,7 @@ uv run python scripts/viewer_snapshot.py --gfx high $CINE --recording p4_new_fla
 
 # intent-consequence.png (the ship is deselected after load so its off-screen
 # marker does not stack on the fleet marker)
-$SNAP --recording intent_qwen_gptoss.json --query "ship=alpha_2&decisions=1&decision=e152&t=184.8&scale=cinematic" \
+$SNAP --recording intent_qwen_gptoss.json.gz --query "ship=alpha_2&decisions=1&decision=e152&t=184.8&scale=cinematic" \
   --time 184.8 --focus beta_1 --dist 2 --az 35 --el 18 \
   --eval "$(cat $H); window.visualizer.deselectShip(); readmeDecisionTo('03')" --out intent-consequence.png
 
@@ -188,7 +191,7 @@ commits at 60 %, beta at 90 %; each checkpoint held 14 s for deliberation):
 
 ```bash
 uv run python scripts/fake_live_server.py \
-  visualizer/public/recordings/sonnet5_vs_dsv41flash_150pt_20260926.json \
+  visualizer/public/recordings/sonnet5_vs_dsv41flash_150pt_20260926.json.gz \
   --port 8825 --speed 6 --draft-seconds 40 --pause-seconds 14
 ```
 
