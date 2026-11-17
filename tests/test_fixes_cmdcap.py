@@ -290,3 +290,116 @@ class TestDeadDrive:
                                                                 "throttle": 1.0})
         assert "NOT FLYABLE" not in (cap._order_check(padlock, sim, sim.get_ship("alpha_1"), [])
                                      .get("engine") or "")
+
+
+# =============================================================================
+# M1: the captain sees the verdict its admiral reads; a departure is put back
+# to it once, neutrally; `reason` on action calls is filed; the EVADE trap
+# =============================================================================
+
+from tests.test_fleet_comms import Stub, events, make_runner  # noqa: E402
+from src.llm.tools import ACTION_REASON_TOOLS, CAPTAIN_TOOLS_BASE  # noqa: E402
+
+HEADING_ORDER = {"order_text": "Burn on the open-range heading and evade inbound fire.",
+                 "priority": "HIGH", "heading": {"x": -1.0, "y": 0.0, "z": 0.0}, "throttle": 1.0,
+                 "evade": "full"}
+
+
+def _loop_runner(tmp_path, captain, checkpoints=3):
+    stub = Stub(captain=captain, order=lambda ship: dict(HEADING_ORDER))
+    runner = make_runner(stub, tmp_path, alpha=(("destroyer", "stub/dd"),),
+                         beta=(("destroyer", "stub/foe"),), checkpoints=checkpoints,
+                         distance_km=400.0)
+    stub.texts = {}
+
+    def wrapped(ctx):
+        stub.texts[(ctx.model, ctx.cp, ctx.turn)] = ctx.messages[-1]["content"]
+        return captain(ctx)
+    stub.captain = wrapped
+    return stub, runner
+
+
+def _reports(runner):
+    return {e.timestamp: e.data for e in events(runner, "captain_report") if e.ship_id == "alpha_1"}
+
+
+class TestComplianceLoop:
+
+    def test_evade_over_a_heading_order_is_put_back_and_shown_next_turn(self, tmp_path):
+        def captain(ctx):
+            if ctx.model != "stub/dd":
+                return []
+            if ctx.cp == 1 and ctx.turn == 1:
+                return [("set_maneuver", {"maneuver_type": "EVADE"})]
+            return [("set_primary_target", {"target_id": "beta_1"})]
+        stub, runner = _loop_runner(tmp_path, captain)
+        runner.run_fleet_battle(FLEET)
+        # Same checkpoint: one ORDER CHECK, neutral, naming the trap.
+        check = stub.texts[("stub/dd", 1, 2)]
+        assert "=== ORDER CHECK (same checkpoint, T+30) ===" in check
+        assert "set_maneuver EVADE@100% REPLACES it" in check
+        assert "the order's evade already rides on it" in check
+        assert "Deviating can be right" in check
+        assert ("stub/dd", 1, 3) not in stub.texts          # asked once
+        # Next checkpoint: the verdict the admiral read, once.
+        assert ("LAST CHECKPOINT (T+30) your Admiral read NOT as ordered: maneuver: ordered "
+                "HEADING, flew EVADE (your set_maneuver EVADE@100% replaced it); no reason "
+                "filed.") in stub.texts[("stub/dd", 2, 1)]
+        # It complied at T+60: no verdict line at T+90, no follow-up at T+60.
+        assert "LAST CHECKPOINT" not in stub.texts[("stub/dd", 3, 1)]
+        assert ("stub/dd", 2, 2) not in stub.texts
+
+    def test_ack_in_the_order_check_withdraws_the_departing_call(self, tmp_path):
+        def captain(ctx):
+            if ctx.model != "stub/dd":
+                return []
+            if ctx.cp == 1 and ctx.turn == 1:
+                return [("set_maneuver", {"maneuver_type": "EVADE"})]
+            if ctx.cp == 1:
+                return [("report_to_admiral", {"status": "ACK"})]
+            return []
+        _, runner = _loop_runner(tmp_path, captain, checkpoints=2)
+        runner.run_fleet_battle(FLEET)
+        comp = _reports(runner)[30.0]["compliance"]
+        assert comp["executed_maneuver"] == "HEADING" and comp["followed"]
+
+    def test_a_reason_on_the_call_is_filed_and_skips_the_check(self, tmp_path):
+        def captain(ctx):
+            if ctx.model != "stub/dd":
+                return []
+            if ctx.cp == 1:
+                return [("set_maneuver", {"maneuver_type": "EVADE",
+                                          "reason": "slugs inbound; EVADE until clear"})]
+            return []
+        stub, runner = _loop_runner(tmp_path, captain, checkpoints=2)
+        runner.run_fleet_battle(FLEET)
+        assert ("stub/dd", 1, 2) not in stub.texts
+        report = _reports(runner)[30.0]
+        assert report["status"] == "DEVIATE"
+        assert report["reason"] == "set_maneuver: slugs inbound; EVADE until clear"
+        assert ("you filed DEVIATE: set_maneuver: slugs inbound"
+                in stub.texts[("stub/dd", 2, 1)])
+
+    def test_complying_turns_get_no_check_and_no_verdict(self, tmp_path):
+        def captain(ctx):
+            return [("set_primary_target", {"target_id": "beta_1"})] if ctx.model == "stub/dd" else []
+        stub, runner = _loop_runner(tmp_path, captain)
+        runner.run_fleet_battle(FLEET)
+        assert all(turn == 1 for (model, _, turn) in stub.texts if model == "stub/dd")
+        assert not any("LAST CHECKPOINT" in t for t in stub.texts.values())
+
+    def test_reason_field_and_evade_wording_in_the_tools(self):
+        cap = _captain()
+        cap.has_admiral = True
+        tools = {t["function"]["name"]: t["function"] for t in cap.get_tools_for_context()}
+        for name in ACTION_REASON_TOOLS:
+            if name in tools:
+                assert "reason" in tools[name]["parameters"]["properties"]
+        cap.has_admiral = False
+        tools = {t["function"]["name"]: t["function"] for t in cap.get_tools_for_context()}
+        assert "reason" not in tools["set_maneuver"]["parameters"]["properties"]
+        # The base schema is not mutated.
+        base = next(t for t in CAPTAIN_TOOLS_BASE if t["function"]["name"] == "set_maneuver")
+        assert "reason" not in base["function"]["parameters"]["properties"]
+        text = tools["set_maneuver"]["parameters"]["properties"]["maneuver_type"]["description"]
+        assert "EVADE REPLACES whatever you fly" in text

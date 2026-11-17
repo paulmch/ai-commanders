@@ -27,9 +27,11 @@ from .prompts import (
 )
 from .communication import (
     CaptainMessage, MessageType, MAX_DISCUSSION_EXCHANGES, MAX_ENEMY_MESSAGES_PER_DECISION,
-    MAX_FLEET_SIGNALS_PER_DECISION, SIGNAL_TEXT_CHARS, clip, normalize_report, normalize_signal,
+    MAX_FLEET_SIGNALS_PER_DECISION, REPORT_REASON_CHARS, SIGNAL_TEXT_CHARS, clip, normalize_report,
+    normalize_signal,
 )
-from .tools import FLEET_SIGNAL_TOOL, REPORT_TO_ADMIRAL_TOOL
+from .tools import (
+    ACTION_REASON_TOOLS, FLEET_SIGNAL_TOOL, REPORT_TO_ADMIRAL_TOOL, with_reason_fields)
 from .admiral_tools import DISCUSS_WITH_ADMIRAL_TOOL
 from .maneuver_orders import maneuver_label
 
@@ -265,6 +267,8 @@ class LLMCaptain:
         self.last_failure_reason: Optional[str] = None
         # Follow-up rounds already spent per checkpoint time (R1).
         self._followups_used: Dict[float, int] = {}
+        # Sim times at which the ORDER CHECK follow-up was already asked.
+        self._order_checks_used: Dict[float, int] = {}
         self.last_followup_rounds = 0
         # Shadow-engine fire solutions, memoised per decision.
         self._solution_cache: Dict[Any, Any] = {}
@@ -302,6 +306,15 @@ class LLMCaptain:
         # request, tool}. The runner files it after the decision; the Admiral
         # reads it at the next checkpoint (admiral.captain_reports).
         self.order_response: Optional[Dict[str, Any]] = None
+        # `reason` given on this checkpoint's action calls (with_reason_fields):
+        # filed as the report's reason when no report_to_admiral was made.
+        self.call_reasons: List[str] = []
+        # Set by the runner when it files this ship's report: what the engine's
+        # compliance verdict is computed from, shown back next checkpoint
+        # when it says NOT as ordered (comms audit M1). fleet_channel: the
+        # runner's FleetCommunicationChannel (target matching for it).
+        self.verdict_basis: Optional[Dict[str, Any]] = None
+        self.fleet_channel: Any = None
 
         # Fleet comms. outbox: messages composed this checkpoint (fleet_signal,
         # send_message), drained and routed by the runner after the decision.
@@ -445,6 +458,7 @@ class LLMCaptain:
                 t for t in tools
                 if t["function"]["name"] not in ("propose_draw", "retract_draw")
             ]
+            tools = with_reason_fields(tools)
             tools.append(DISCUSS_WITH_ADMIRAL_TOOL)
             tools.append(REPORT_TO_ADMIRAL_TOOL)
         if self.fleet_peer_names:
@@ -459,6 +473,7 @@ class LLMCaptain:
         self.orders_delivered = False
         self.discussion_exchanges = 0
         self.order_response = None
+        self.call_reasons = []
         self.discussions = []
 
     def decide(
@@ -619,6 +634,24 @@ class LLMCaptain:
                 break
             requested.extend(calls)
             self._execute_round(calls, simulation, ship_id, commands, executed, state)
+
+        # Comms audit M1: a call that departs from the admiral's order (a
+        # maneuver replacing one already flying, another target) with no
+        # reason is put back to the captain once, neutrally: say why, keep
+        # the order, or change the call.
+        self._order_checks_used = {t: n for t, n in self._order_checks_used.items() if t >= now}
+        devs = self._needs_order_check(executed, ship, commands, now) if enemies else []
+        if devs:
+            self._order_checks_used[now] = 1
+            self.last_followup_rounds += 1
+            notice = self._deviation_followup_notice(devs, executed, now, interval)
+            calls, failure = self._call_model(self._with_notice(messages, notice), tools)
+            if failure is None:
+                requested.extend(calls)
+                self._apply_order_check_reply(calls, devs, simulation, ship_id, commands,
+                                              executed, state)
+            else:
+                print(f"[CAPTAIN {self.config.name}] order-check follow-up failed: {failure}")
 
         # Track decision
         self.decision_count += 1
@@ -787,6 +820,185 @@ class LLMCaptain:
         lines.append(f"Issue your orders now as tool calls: {', '.join(actions)}. "
                      "Do not repeat the report or the note.")
         return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Compliance: the verdict the admiral reads, shown to the captain
+    # ------------------------------------------------------------------
+
+    def _order_deviations(self, ship: Any, commands: List[Any], now: float) -> List[str]:
+        """
+        This decision's departures from the admiral's order, as the engine's
+        compliance check will file them for the admiral ("maneuver: ordered
+        HEADING, flew EVADE", "target: ordered A, engaging B") - the maneuver
+        only when the captain's own call replaced an order that was already
+        flying, and the target. Empty when nothing departs.
+        """
+        from .fleet_comms import commanded_target, compliance, executed_maneuver, primary_order
+        order = primary_order(self.admiral_orders)
+        if order is None or getattr(self, "fleet_channel", None) is None:
+            return []
+        try:
+            comp = compliance(order, self.fleet_channel, executed_maneuver(ship, commands, now),
+                              commanded_target(ship, commands), 0, final=False)
+        except Exception:  # noqa: BLE001 - advisory only
+            return []
+        replaced = self._admiral_heading_applied() and any(
+            hasattr(c, "maneuver_type") and hasattr(c, "throttle") for c in commands)
+        return [dev for dev in (comp or {}).get("deviations") or []
+                if dev.startswith("target:") or (dev.startswith("maneuver:") and replaced)]
+
+    def _order_text_for(self, order: Any) -> str:
+        """'HEADING (+0.99,+0.15,+0.07) @100% with evade full' for an order's motion."""
+        from .maneuver_orders import describe_maneuver_spec
+        heading = getattr(order, "heading", None)
+        spec = getattr(order, "maneuver", None)
+        if isinstance(heading, dict):
+            thr = getattr(order, "applied_throttle", None)
+            thr = getattr(order, "throttle", None) if thr is None else thr
+            thr = 1.0 if thr is None else float(thr)
+            text = (f"HEADING ({heading.get('x', 0):+.2f},{heading.get('y', 0):+.2f},"
+                    f"{heading.get('z', 0):+.2f}) @{thr * 100:.0f}%")
+            if isinstance(spec, dict) and spec.get("evade"):
+                text += f" with evade {spec['evade']}"
+            return text
+        return describe_maneuver_spec(spec) if isinstance(spec, dict) else "maneuver order"
+
+    def _needs_order_check(self, executed: List[ToolCall], ship: Any, commands: List[Any],
+                           now: float) -> List[str]:
+        """Deviations worth an ORDER CHECK follow-up: none when the captain
+        already said why (a DEVIATE / UNABLE report, a `reason`, a question to
+        the admiral) or the check was already asked this checkpoint."""
+        if not self.has_admiral or self._order_checks_used.get(now):
+            return []
+        names = {tc.name for tc in executed}
+        report = self.order_response or {}
+        if (report.get("status") in ("DEVIATE", "UNABLE") or self.call_reasons
+                or "discuss_with_admiral" in names or self.has_surrendered):
+            return []
+        return self._order_deviations(ship, commands, now)
+
+    def _deviation_followup_notice(self, devs: List[str], executed: List[ToolCall],
+                                   now: float, interval: float) -> str:
+        """The same-checkpoint ORDER CHECK: what departs, stated neutrally,
+        and how to say why or to keep the order."""
+        from .fleet_comms import primary_order
+        order = primary_order(self.admiral_orders)
+        lines = [f"=== ORDER CHECK (same checkpoint, T+{now:.0f}) ===",
+                 f"This decision departs from your Admiral's order; at T+{now + interval:.0f} the "
+                 "Admiral reads NOT as ordered, with no reason:"]
+        call = next((tc for tc in executed if tc.name in ("set_maneuver", "set_heading")), None)
+        for dev in devs:
+            if dev.startswith("maneuver:") and call is not None:
+                part = self._history_part(call.name, call.arguments, str)
+                line = (f"- maneuver: your Admiral's {self._order_text_for(order)} was already "
+                        f"flying; your {call.name} {part} REPLACES it.")
+                spec = getattr(order, "maneuver", None)
+                kind = str(call.arguments.get("maneuver_type", "")).upper()
+                if isinstance(spec, dict) and spec.get("evade") and "EVADE" in kind:
+                    line += (" EVADE as a maneuver weaves around your CURRENT course; the "
+                             "order's evade already rides on it.")
+                lines.append(line)
+            else:
+                lines.append(f"- {dev}.")
+        lines.append(
+            "Deviating can be right. To deviate, say why: report_to_admiral DEVIATE (or reason= "
+            "on the call). To keep the order instead: report_to_admiral status ACK - your "
+            "departing call is withdrawn and the order stands. A new set_maneuver / set_heading "
+            "now replaces your first one. Your other calls stand either way.")
+        return "\n".join(lines)
+
+    def _apply_order_check_reply(self, calls: List[ToolCall], devs: List[str], simulation: Any,
+                                 ship_id: str, commands: List[Any], executed: List[ToolCall],
+                                 state: Dict[str, Any]) -> None:
+        """
+        Execute the ORDER CHECK reply. An explicit ACK withdraws the departing
+        maneuver / target command (the admiral's order stands); a new maneuver
+        call replaces the first one; everything else executes as usual.
+        """
+        def is_maneuver(cmd: Any) -> bool:
+            return hasattr(cmd, "maneuver_type") and hasattr(cmd, "throttle")
+
+        ack = any(tc.name in ("report_to_admiral", "respond_to_orders")
+                  and normalize_report(tc.arguments or {},
+                                       legacy=(tc.name == "respond_to_orders"))[0]["status"] == "ACK"
+                  for tc in calls)
+        if ack:
+            if any(d.startswith("maneuver:") for d in devs):
+                commands[:] = [c for c in commands if not is_maneuver(c)]
+            if any(d.startswith("target:") for d in devs):
+                commands[:] = [c for c in commands
+                               if not (isinstance(c, dict) and c.get("type") == "set_target")]
+                ordered = self._ordered_target(simulation, ship_id)
+                if ordered is not None:
+                    self.primary_target_id = ordered
+                    commands.append({"type": "set_target", "target_id": ordered})
+            self._record_tool_note("ORDER CHECK: ACK - your departing call was withdrawn; your "
+                                   "Admiral's order stands")
+        elif any(tc.name in ("set_maneuver", "set_heading") for tc in calls):
+            commands[:] = [c for c in commands if not is_maneuver(c)]
+            state["maneuver_issued"] = False
+        self._execute_round(calls, simulation, ship_id, commands, executed, state)
+
+    def _ordered_target(self, simulation: Any, ship_id: str) -> Optional[str]:
+        """Ship id of the admiral's ordered target, when it resolves to one live enemy."""
+        from .fleet_comms import primary_order
+        order = primary_order(self.admiral_orders)
+        raw = getattr(order, "torpedo_target", None) or getattr(order, "suggested_target", None)
+        if not raw:
+            return None
+        enemy, _ = self._resolve_ship(raw, simulation.get_enemy_ships(ship_id))
+        return enemy.ship_id if enemy is not None else None
+
+    def _format_verdict(self, simulation: Any) -> Optional[str]:
+        """
+        One ORDERS line when - and only when - the engine's compliance verdict
+        on this ship's last checkpoint was NOT as ordered (the line its admiral
+        read): what was ordered, what was flown, which of the captain's own
+        calls did it, and whether a reason was filed.
+        """
+        b = getattr(self, "verdict_basis", None)
+        now = float(getattr(simulation, "current_time", 0.0))
+        interval = float(getattr(simulation, "decision_interval", 30.0) or 30.0)
+        if not b or b.get("order") is None or not (0 < now - b["t"] <= 1.5 * interval):
+            return None
+        from .fleet_comms import compliance
+        events = list(getattr(simulation, "events", []) or [])
+        sid = getattr(self, "ship_id", None)
+        launched = sum(1 for e in events[b["cursor"]:]
+                       if e.ship_id == sid and e.event_type.name == "TORPEDO_LAUNCHED")
+        try:
+            comp = compliance(b["order"], b["channel"], b["executed"], b["target_id"], launched,
+                              final=True)
+        except Exception:  # noqa: BLE001 - advisory only
+            return None
+        if not comp or comp.get("followed", True):
+            return None
+        entry = next((d for d in reversed(self.decision_history)
+                      if abs(d.get("time", -1.0) - b["t"]) < 1e-6), None)
+        calls = (entry or {}).get("tool_calls") or []
+
+        def resolve(ref: Any) -> str:
+            ship = simulation.get_ship(str(ref)) if hasattr(simulation, "get_ship") else None
+            return ship_ref(getattr(ship, "name", ref), str(ref)) if ship is not None else str(ref)
+
+        parts = []
+        for dev in comp.get("deviations") or []:
+            if dev.startswith("maneuver:"):
+                call = next((c for c in calls if c["name"] in ("set_maneuver", "set_heading")), None)
+                dev += (f" (your {call['name']} "
+                        f"{self._history_part(call['name'], call['args'], resolve)} replaced it)"
+                        if call else " (no maneuver call of yours)")
+            elif dev.startswith("target:"):
+                call = next((c for c in calls if c["name"] == "set_primary_target"), None)
+                dev += (" (your set_primary_target "
+                        f"{resolve(call['args'].get('target_id') or call['args'].get('target_name', '?'))})"
+                        if call else " (no set_primary_target of yours named the ordered one)")
+            parts.append(dev)
+        status = b.get("status") or "ACK"
+        why = (f"you filed {status}: {b.get('reason')}" if status != "ACK" and b.get("reason")
+               else "no reason filed")
+        return (f"  LAST CHECKPOINT (T+{b['t']:.0f}) your Admiral read NOT as ordered: "
+                + "; ".join(parts) + f"; {why}.")
 
     def _renewed_maneuver(self, ship: Any, now: float, interval: float) -> Optional[Any]:
         """The ship's current maneuver re-issued for the next window, if any."""
@@ -1305,11 +1517,20 @@ class LLMCaptain:
                 print(f"[CAPTAIN {self.config.name}] order check failed: {e}")
                 checks.append({})
         reply = "report_to_admiral" if "report_to_admiral" in tool_names else "respond_to_orders"
-        return format_admiral_orders_for_captain(
+        text = format_admiral_orders_for_captain(
             orders, directive, now=now, checks=checks, reply_tool=reply,
             previous_directive=previous_directive,
             previous_orders=None if orders else previous_orders,
         )
+        try:
+            verdict = self._format_verdict(simulation)
+        except Exception as e:  # noqa: BLE001 - advisory only
+            print(f"[CAPTAIN {self.config.name}] verdict line failed: {e}")
+            verdict = None
+        if verdict:
+            head, _, rest = text.partition("\n")
+            text = f"{head}\n{verdict}" + (f"\n{rest}" if rest else "")
+        return text
 
     def revert_last_decision(self) -> None:
         """
@@ -2954,6 +3175,14 @@ class LLMCaptain:
         """
         name = tool_call.name
         args = tool_call.arguments
+        if not isinstance(args, dict):
+            args = {}
+        if name in ACTION_REASON_TOOLS and self.has_admiral and args.get("reason"):
+            # Filed as the reason on this checkpoint's report (battle_runner
+            # _build_captain_report) when no report_to_admiral was made.
+            reason = clip(args.get("reason"), REPORT_REASON_CHARS)
+            if reason:
+                self.call_reasons.append(f"{name}: {reason}")
 
         if name == "set_maneuver":
             from ..simulation import Maneuver, ManeuverType
@@ -3468,9 +3697,11 @@ class LLMCaptain:
         detaches the superseded pass's comms here and hands them back to
         `restore_comms_pass`, which keeps whatever the re-run did not replace.
         """
-        taken = {"outbox": self.outbox, "report": self.order_response}
+        taken = {"outbox": self.outbox, "report": self.order_response,
+                 "reasons": list(getattr(self, "call_reasons", []) or [])}
         self.outbox = []
         self.order_response = None
+        self.call_reasons = []
         return taken
 
     def restore_comms_pass(self, earlier: Dict[str, Any]) -> None:
@@ -3479,6 +3710,8 @@ class LLMCaptain:
             self.outbox = list(earlier.get("outbox") or [])
         if self.order_response is None:
             self.order_response = earlier.get("report")
+        if not getattr(self, "call_reasons", None):
+            self.call_reasons = list(earlier.get("reasons") or [])
 
     def receive_inbox(self, items: List[Dict[str, Any]], delivered_t: float) -> None:
         """

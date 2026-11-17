@@ -1103,8 +1103,11 @@ def admiral_maneuver_lines(order: Any) -> List[str]:
             thr = getattr(order, "throttle", None)
             power = (" (at full throttle: the heading itself does not burn)"
                      if thr is not None and float(thr) <= 0 else "")
-            return [f"      >>> ...with evade {spec['evade']}: evasion flies the ship{power} "
-                    f"only while a torpedo or slug is inbound, then the heading resumes."]
+            # "Heading ... with evade" was turned into set_maneuver EVADE ten
+            # times in the recorded battles - which REPLACES the heading.
+            return [f"      >>> ...with evade {spec['evade']} (part of this order): evasion flies "
+                    f"the ship{power} only while a torpedo or slug is inbound, then the heading "
+                    f"resumes. set_maneuver EVADE would replace the heading instead."]
         return []
     what = getattr(order, "maneuver_applied", None) or describe_maneuver_spec(spec)
     replaced = getattr(order, "replaces_fleet_order", None)

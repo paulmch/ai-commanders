@@ -518,7 +518,7 @@ def test_evade_alone_under_a_throttle_0_fleet_heading_still_dodges():
     assert a1.evade == "dodge" and a1.heading_direction == {"x": 1.0, "y": 0.0, "z": 0.0}
     assert a2.maneuver_type == ManeuverType.HEADING and a2.throttle == 0.0
     assert a2.evade == "full" and a2.heading_direction == {"x": 0.0, "y": -1.0, "z": 0.0}
-    assert ("...with evade dodge: evasion flies the ship (at full throttle: the heading "
+    assert ("...with evade dodge (part of this order): evasion flies the ship (at full throttle: the heading "
             "itself does not burn) only while a torpedo or slug is inbound") in turns[1]["alpha_1"]
     # What the runner flies dodges: the flank shot lands on the nose armor
     # ('dodge' presents it on a token burn, 'full' RUNs at full throttle).

@@ -59,7 +59,10 @@ CAPTAIN_TOOLS_BASE = [
                             "final seconds auto-PRESENTS your thickest armor. Dodges blinded "
                             "torpedoes - use it (or evade on another maneuver) under torpedo "
                             "fire. With no threat it weaves around your CURRENT course: never "
-                            "chases, never brakes. "
+                            "chases, never brakes. As a maneuver EVADE REPLACES whatever you "
+                            "fly, an admiral's HEADING included; the `evade` field (here or on "
+                            "set_heading) rides on a maneuver instead - an order 'with evade' "
+                            "already carries it. "
                             "BRAKE: Flip and burn against your own velocity (world frame, not "
                             "relative to the enemy - HOLD_RANGE matches an enemy). "
                             "MAINTAIN: Coast at current velocity - no thrust, no tracking. "
@@ -128,7 +131,11 @@ CAPTAIN_TOOLS_BASE = [
                             "a guided torpedo until its final seconds, then presents your "
                             "thickest armor; still jinks slugs and blinded torpedoes. Evasion "
                             "burns at your throttle - full throttle when the maneuver itself "
-                            "does not burn (MAINTAIN, PADLOCK, throttle 0). Omit for no evasion."
+                            "does not burn (MAINTAIN, PADLOCK, throttle 0). While it has the "
+                            "helm it may also hold an ordered burn: BRACE turns the drive off "
+                            "(a round inbound, no time to jink), TANK burns at half throttle "
+                            "while turning armour onto it - your ENGINE FEEDBACK helm line "
+                            "says how many seconds. Omit for no evasion."
                         )
                     }
                 },
@@ -354,7 +361,8 @@ CAPTAIN_TOOLS_BASE = [
                             "'full' = EVADE while a threat is inbound, 'dodge' = same but "
                             "never runs from a guided torpedo. Back on the heading when clear. "
                             "At throttle 0 (coast and shoot) the dodge still burns, at full "
-                            "throttle."
+                            "throttle. Under fire it can also hold your burn (BRACE: drive "
+                            "off; TANK: half throttle) - see the helm line of ENGINE FEEDBACK."
                         )
                     }
                 },
@@ -676,6 +684,31 @@ RESPOND_TO_ORDERS_TOOL = {
         }
     }
 }
+
+
+# Captains under an admiral: an optional `reason` on the action tools, filed as
+# the reason on the captain's report (no report_to_admiral call needed). The
+# comms audit counted 44 deviations the admiral read with no reason at all.
+ACTION_REASON_TOOLS = ("set_maneuver", "set_heading", "set_primary_target", "launch_torpedo")
+ACTION_REASON_PROPERTY = {
+    "type": "string",
+    "description": (
+        f"Optional, max {REPORT_REASON_CHARS} chars: why, when this call departs from your "
+        "Admiral's order. Filed as the reason on your report to the Admiral."
+    ),
+}
+
+
+def with_reason_fields(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """``tools`` with the optional ``reason`` field on the action tools (copies)."""
+    out = []
+    for tool in tools:
+        if tool["function"]["name"] in ACTION_REASON_TOOLS:
+            tool = deepcopy(tool)
+            tool["function"]["parameters"].setdefault("properties", {})["reason"] = dict(
+                ACTION_REASON_PROPERTY)
+        out.append(tool)
+    return out
 
 
 def radiator_command_from_args(args: Dict[str, Any]) -> Dict[str, Any]:
