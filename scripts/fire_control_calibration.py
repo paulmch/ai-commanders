@@ -26,7 +26,8 @@ against what the engine does, in two ways, and writes the test fixture:
   harness      Controlled engagements on the live engine: 1-8 shooters
                (battleship / cruiser / destroyer) firing FIRE_IMMEDIATE at one
                target that coasts, PADLOCKs, burns on a HEADING, flies
-               EVASIVE, or PADLOCK / HOLD_RANGE with evade='dodge';
+               EVASIVE, or PADLOCK / HOLD_RANGE / a HEADING burn with
+               evade='dodge';
                frigate..dreadnought, 40-400 km. Seeded and deterministic.
   table        Calibration table: observed hit rate vs the recorded (old) and
                the current model's P(hit), per maneuver class x 100 km bucket.
@@ -82,7 +83,8 @@ from src.simulation import (  # noqa: E402
 )
 
 FLEET_PATH = ROOT / "data" / "fleet_ships.json"
-HARNESS_CLASSES = ("coast", "padlock", "burn", "evasive", "padlock_dodge", "hold_dodge")
+HARNESS_CLASSES = ("coast", "padlock", "burn", "evasive", "padlock_dodge", "hold_dodge",
+                   "heading_dodge")
 HARNESS_HULLS = ("frigate", "destroyer", "cruiser", "battleship", "dreadnought")
 HARNESS_RANGES_KM = (40, 80, 120, 160, 220, 300, 400)
 HARNESS_SHOOTER_TYPES = ("battleship", "cruiser", "destroyer")
@@ -164,6 +166,7 @@ class HullTable:
             pending_burn_ms2=row.get("pending") or 0.0,
             pending_burn_in_s=row.get("pending_in") or 0.0,
             stale_burn_ms2=row.get("stale") or 0.0,
+            swing_ms2=row.get("swing") or 0.0,
         )
 
     def predict(self, row: dict) -> float:
@@ -180,7 +183,7 @@ def _fc_features(fc: dict) -> dict:
             "jink": fc.get("jink", 0.0),
             "pending": fc.get("pend", 0.0), "pending_in": fc.get("pend_in", 0.0),
             "stale": fc.get("stale", 0.0), "react": fc.get("react"),
-            "approx": False}
+            "swing": fc.get("swing", 0.0), "approx": False}
 
 
 def _lead_fraction(mtype: str, throttle: float, applied: float) -> float:
@@ -338,10 +341,13 @@ def harness_run(seed: int, cls: str, target_type: str, range_km: float, fleet: d
             for slot in shooter.weapons if not slot.startswith("pd_")}
     if cls == "coast":
         m = Maneuver(ManeuverType.MAINTAIN, 0, duration=1e9, throttle=0.0)
-    elif cls == "burn":
+    elif cls in ("burn", "heading_dodge"):
+        # heading_dodge: the evade overlay on a burning order (it swings the
+        # burn inside its cone, src/simulation.py module docstring)
         d = _unit(rng)
         m = Maneuver(ManeuverType.HEADING, 0, duration=1e9, throttle=rng.choice([0.3, 1.0]),
-                     heading_direction={"x": d.x, "y": d.y, "z": d.z})
+                     heading_direction={"x": d.x, "y": d.y, "z": d.z},
+                     evade="dodge" if cls == "heading_dodge" else None)
     elif cls == "evasive":
         m = Maneuver(ManeuverType.EVASIVE, 0, duration=1e9, throttle=1.0)
     else:
@@ -450,7 +456,8 @@ def print_table(table: List[dict]) -> None:
 
 
 FIXTURE_COLUMNS = ["source", "range_km", "tof_s", "target_type", "class", "dodge", "n",
-                   "jink", "pending", "pending_in", "stale", "react", "seed", "p_conv", "hit"]
+                   "jink", "pending", "pending_in", "stale", "react", "swing", "seed", "p_conv",
+                   "hit"]
 
 
 def _row_seed(row: dict) -> Optional[int]:
@@ -500,7 +507,8 @@ def write_fixture(rows: List[dict], out: str, free_keep: int, harness_keep: int,
                   "(harness: the shooter count); dodge (its evasion throttle, null = does not "
                   "dodge), jink (missed jink burn, m/s^2 across the line of fire) "
                   "and pending / pending_in (unlit HEADING burn, m/s^2, s) are the forecast's "
-                  "TargetMotion inputs; p_conv is the engine's conversion (dispersion-roll) "
+                  "TargetMotion inputs, swing the evade overlay's sideways swing of a burn "
+                  "(m/s^2); p_conv is the engine's conversion (dispersion-roll) "
                   "probability; hit is the engine outcome."),
         "columns": FIXTURE_COLUMNS,
         "sources": sources,
@@ -511,7 +519,7 @@ def write_fixture(rows: List[dict], out: str, free_keep: int, harness_keep: int,
                   None if r.get("dodge") is None else round(r["dodge"], 2), int(r.get("n") or 1),
                   round(r.get("jink") or 0.0, 2), round(r.get("pending") or 0.0, 2),
                   round(r.get("pending_in") or 0.0, 1), round(r.get("stale") or 0.0, 2),
-                  int(bool(r.get("react"))), _row_seed(r),
+                  int(bool(r.get("react"))), round(r.get("swing") or 0.0, 3), _row_seed(r),
                   round(r["p_conv"], 4), int(r["outcome"] == "hit")] for r in kept],
     }
     rows_out = data.pop("rows")

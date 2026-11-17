@@ -287,6 +287,13 @@ class PredictionSimulation(CombatSimulation):
         # most of a traced torpedo battle's CPU).
         return ship.forward
 
+    def _swing_armour_aim(self, ship: Any, line: Any, cone: float, mode: str) -> Any:  # type: ignore[override]
+        # Motion only: an armour swing on a burning order stays inside the
+        # cone around the burn line (at least cos(cone) of the push along
+        # it); the shadow skips scoring the cone's facings and flies it as a
+        # swing with nothing to gain (the dodge, or the line).
+        return None
+
     def _advance_ship(self, ship: Any, dt: float) -> None:  # type: ignore[override]
         if ship.is_destroyed:
             return

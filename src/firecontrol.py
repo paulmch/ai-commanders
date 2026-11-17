@@ -176,6 +176,26 @@ DODGE_BURN_S = 20.0
 # pins it.
 JINK_ACCEL_FRACTION = 0.39
 
+# The evade overlay on a burning order (src/simulation.py module docstring)
+# does not jink across the line of fire at full thrust: it keeps the order's
+# burn and swings the thrust axis inside a cone around the burn line, so the
+# acceleration it can put across the line of fire is the burn's times
+# sin(cone) (TargetMotion.swing_ms2), and its lead - which reads the drive -
+# extrapolates whatever swing it is flying at the shot. A round fired at it
+# finds it moved by SWING_*_FRACTION * swing_ms2 * min(T, horizon)^2 / 2,
+# by whether its evasion was already swinging at the shot (reacting) or it
+# was flying the burn line (calm). Fitted (maximum likelihood, grid) on the
+# 17k harness rounds whose target was swinging a burn - HEADING + evade
+# 'dodge' (class heading_dodge) and HOLD_RANGE + dodge while its range
+# keeping burns - frigate..dreadnought, 40-400 km, 1-8 shooters
+# (scripts/fire_control_calibration.py harness), on the even seeds: held-out
+# log-likelihood on the odd ones -3857 (the bounded DODGE_BURN_S shape: -3850
+# held out, 12 worse in sample; kept T^2, the swing does not end). Forecast
+# 6,401 hits for 6,181 landed; every dodge:HEADING / dodge:HOLD_RANGE bucket
+# within 0.62-1.25x.
+SWING_ACCEL_FRACTION = 0.18            # swinging at the shot
+SWING_CALM_ACCEL_FRACTION = 0.10       # flying the burn line at the shot
+
 # A HEADING target still turning onto its ordered heading (or holding a
 # synchronised burn start) burns at the ordered throttle once inside
 # HEADING_BURN_CONE_DEG, and its lead (the drive's actual output: a token
@@ -222,6 +242,9 @@ class TargetMotion:
         reacting: A dodger whose evasion is reacting to a threat at the shot
             (EVADE / TANK / BRACE / RUN / PRESENT) rather than flying its
             base maneuver (or EVASIVE's WOBBLE).
+        swing_ms2: The evade overlay rides on an order that burns: it dodges
+            by swinging that burn inside its cone, at most this sideways
+            acceleration (burn x sin(cone), m/s^2; 0 otherwise).
     """
     accel_ms2: float
     dodges: bool = False
@@ -234,6 +257,7 @@ class TargetMotion:
     pending_burn_in_s: float = 0.0
     stale_burn_ms2: float = 0.0
     reacting: bool = False
+    swing_ms2: float = 0.0
 
 
 def displacement_sigma_m(time_of_flight_s: float, motion: TargetMotion) -> float:
@@ -255,7 +279,12 @@ def displacement_sigma_m(time_of_flight_s: float, motion: TargetMotion) -> float
             burn_t2 = td * td / 2.0
         else:
             burn_t2 = DODGE_BURN_S * (td - DODGE_BURN_S / 2.0)
-        if t >= motion.dodge_min_time_s:
+        swing = max(0.0, float(motion.swing_ms2))
+        if t >= motion.dodge_min_time_s and swing > 0.0 and not motion.evasive:
+            # A burn swung inside its cone (SWING_*_FRACTION).
+            k = SWING_ACCEL_FRACTION if motion.reacting else SWING_CALM_ACCEL_FRACTION
+            sigma_dodge = k * swing * td * td / 2.0
+        elif t >= motion.dodge_min_time_s:
             if motion.evasive:
                 k = (EVASIVE_DODGE_ACCEL_FRACTION if motion.reacting
                      else EVASIVE_CALM_ACCEL_FRACTION)

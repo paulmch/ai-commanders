@@ -10,6 +10,55 @@ This module implements the core combat simulation loop that:
 - Supports "decision points" where an LLM would act
 
 The simulation produces a comprehensive event log for analysis and replay.
+
+Evade overlay on a burning order (Maneuver.evade, owner's rule, 2026-11):
+"with evade the engine burns the whole time using thrust vectoring to turn".
+
+- Scope: the overlay rides on an order that BURNS this tick - what the order
+  itself would fly (CombatSimulation._fly_maneuver, asked without moving the
+  ship) is a burn of at least EVADE_BURN_MIN_THROTTLE along a burn line:
+  HEADING (once its formation start has come), BURN, BRAKE, plain INTERCEPT,
+  and the burns of range keeping (HOLD_RANGE, standoff INTERCEPT,
+  toward_point / toward_ship). An engine-off order (PADLOCK, MAINTAIN,
+  throttle 0, a held formation burn, a range keeper coasting or trimming
+  below the threshold) and the EVASIVE maneuver keep the older overlay: the
+  helm goes to EVADE / TANK / BRACE / RUN / PRESENT at full throttle, half,
+  none, run, token.
+- On a burning order the drive keeps the order's throttle for the tick
+  (never less: the drive interlock, a damaged or dead drive, fuel and the
+  heat ladder still apply after it) and evasion steers the THRUST AXIS inside
+  a cone of half-angle EVADE_BURN_CONE_DEG around the burn line - 20 deg, the
+  nose arc (30 deg) less PRESENT_ARC_MARGIN_DEG, so a round coming down the
+  burn line still strikes the nose armour. Held at the cone edge the burn
+  keeps cos(20) = 94 % of its push along the line; the sideways 34 % is the
+  dodge.
+- The swing is flown on thrust vectoring at the hull's real turn authority
+  (_get_rotation_params, engine damage included): a new aim at most every
+  max(EVADE_BURN_CYCLE_MIN_S, the time to swing from one edge of the cone to
+  the other from rest); a hull that cannot cross the full cone inside
+  EVADE_BURN_CYCLE_MAX_S swings a narrower cone that it can
+  (_evade_burn_swing; only the dreadnought class today).
+- EVADE (a dodgeable round inbound): the aim leaves the line across the
+  rounds' approach (perpendicular to both the burn line and their relative
+  velocity, urgency-weighted), side and a +-15 deg scatter drawn per swing
+  cycle from the same keyed throwaway RNG the jink always used
+  (seed, ship, cycle; never the battle RNG).
+- TANK / BRACE (a round that cannot be dodged) and PRESENT (a terminal
+  torpedo): the aim is the cone point - the burn line or one of
+  EVADE_BURN_ARMOUR_AZIMUTHS points on the cone edge - whose attitude,
+  reachable before impact, puts the best armour on the threat
+  (_presentation_score). Hull roll does not enter: the armour sections are
+  bands around the thrust axis. What it gives up against the older overlay:
+  a threat more than ~50 deg off the burn line can no longer be put on the
+  nose armour, so it strikes the lateral or tail belt (a fifth to a sixth of
+  the nose's thickness).
+- RUN ('full', a guided torpedo inbound) still leaves the line to burn away
+  from it, but never below the order's throttle, also while it turns.
+- Outside the cone (the order's own first turn onto its line, or turning
+  back after a RUN) the order's turn-first rule sets the throttle.
+- Recorded: execution_state carries 'swing': true while the overlay flies
+  this way; the fire-control forecast prices such a target by its swing
+  (TargetMotion.swing_ms2, firecontrol.SWING_*).
 """
 
 from __future__ import annotations
@@ -247,6 +296,27 @@ BALLISTIC_THREAT_HORIZON_S = 60.0
 # evasion would not fly.
 EVASION_TURN_ALLOWANCE_S = 5.0
 EVASION_MIN_JINK_S = 2.0
+
+# Evade overlay on a burning order (see the module docstring): the drive keeps
+# the order's throttle and evasion swings the thrust axis inside this cone
+# around the burn line. The nose arc less the presentation margin: a round
+# down the burn line still strikes the nose armour at the cone edge. Along-
+# track share at the edge cos(20) = 0.94, sideways sin(20) = 0.34.
+EVADE_BURN_CONE_DEG = NOSE_HIT_ANGLE_THRESHOLD - PRESENT_ARC_MARGIN_DEG
+# A new swing aim at most every max(MIN, edge-to-edge swing time from rest on
+# thrust vectoring): MIN is the jink cycle evasion always used. A hull that
+# cannot cross the whole cone within MAX swings the widest cone it can cross
+# in MAX (a slower swing no longer changes within a round's flight).
+EVADE_BURN_CYCLE_MIN_S = 8.0
+EVADE_BURN_CYCLE_MAX_S = 30.0
+# What the order flies this tick must be at least this throttle to count as a
+# burn; below it (range-keeping trims, a coast) the order is engine-off for
+# the overlay. Formation-matched burns go down to ~0.25 (a corvette matched
+# to a dreadnought).
+EVADE_BURN_MIN_THROTTLE = 0.1
+# Armour swing (TANK / BRACE / PRESENT on a burning order): the burn line plus
+# this many points on the cone edge are scored.
+EVADE_BURN_ARMOUR_AZIMUTHS = 8
 
 # Commander threat display (status only, never steers the ship): a
 # seeker-killed torpedo counts as a threat to a ship only when its straight-
@@ -513,7 +583,8 @@ def fire_control_record(solution: FiringSolution) -> Optional[dict]:
     as 'fc' (scripts/fire_control_calibration.py re-evaluates the model from
     them): track probability and displacement sigma, plus the TargetMotion -
     acceleration, dodge throttle (None = does not dodge), whether it flies
-    EVASIVE, missed jink burn and pending HEADING burn.
+    EVASIVE, missed jink burn, pending HEADING burn and - for the evade
+    overlay on a burning order - the swing's sideways acceleration.
     """
     motion = solution.target_motion
     if motion is None:
@@ -529,6 +600,7 @@ def fire_control_record(solution: FiringSolution) -> Optional[dict]:
         'pend_in': round(motion.pending_burn_in_s, 2),
         'stale': round(motion.stale_burn_ms2, 3),
         'react': motion.reacting,
+        **({'swing': round(motion.swing_ms2, 3)} if motion.swing_ms2 > 0.0 else {}),
     }
 
 
@@ -1084,6 +1156,13 @@ class ShipCombatState:
     # shows the last order's burn while current_maneuver is already the new
     # one (CombatSimulation.target_motion reads the difference).
     flown_maneuver: Optional['Maneuver'] = None
+    # Evade overlay on a burning order (module docstring): set by the ship's
+    # step - (throttle of the order's burn, sin of the swing cone) while its
+    # order burns with the overlay on, else None (the fire-control forecast's
+    # TargetMotion.swing_ms2); evade_swing is True on a step the overlay flew
+    # the swing (recorded on execution_state as 'swing').
+    evade_burn: Optional[tuple] = None
+    evade_swing: bool = False
 
     # Power system
     power_system: Optional[PowerSystem] = None
@@ -1608,6 +1687,13 @@ class CombatSimulation:
     weapon_arcs = False
     roll_to_unmask = False
     hull_mounts: dict = {}
+    # Per-step scratch of the ship being updated (never read across ships):
+    # the burn line and throttle the standing order noted this step
+    # (_fly_maneuver), and the evade overlay asking the order what it would
+    # fly without letting it steer (_order_burn: _rotate_ship_toward returns
+    # at once while this is set).
+    _burn_note: Optional[tuple] = None
+    _attitude_capture: bool = False
     _arcs_lead_cache: dict = {}
     _arcs_settled = False
 
@@ -2459,6 +2545,15 @@ class CombatSimulation:
             jink = across(self._thrust_accel(target)
                           - self._estimate_target_acceleration(target))
 
+        # The evade overlay on a burning order (module docstring) dodges by
+        # swinging the burn inside its cone: the sideways acceleration it can
+        # put across the line of fire is the burn times sin(cone). Read off
+        # the order's burn as the target last flew it (evade_burn).
+        swing = 0.0
+        burn = getattr(target, 'evade_burn', None)
+        if dodges and not evasive and burn is not None:
+            swing = accel * burn[0] * burn[1]
+
         # The HEADING burn the lead does not see yet. The lead extrapolates
         # the drive's output now; a HEADING order turns first (token throttle
         # until inside HEADING_BURN_CONE_DEG, or held until a formation's
@@ -2555,6 +2650,7 @@ class CombatSimulation:
             stale_burn_ms2=stale,
             reacting=bool(dodges and getattr(target, 'execution_mode', None)
                           in ('EVADE', 'TANK', 'BRACE', 'RUN', 'PRESENT')),
+            swing_ms2=swing,
         )
 
     def gun_firing_solution(
@@ -3050,6 +3146,8 @@ class CombatSimulation:
         gimbal_pitch = 0.0
         gimbal_yaw = 0.0
         ship.attitude_commanded = False
+        ship.evade_burn = None
+        ship.evade_swing = False
 
         if ship.current_maneuver:
             maneuver = ship.current_maneuver
@@ -3066,13 +3164,19 @@ class CombatSimulation:
                 # inbound, threat-aware evasion flies the ship; otherwise the
                 # base maneuver below does.
                 overlay_throttle = None
-                if maneuver.evade and maneuver.maneuver_type != ManeuverType.EVASIVE:
+                overlay = bool(maneuver.evade) and maneuver.maneuver_type != ManeuverType.EVASIVE
+                self._burn_note = None
+                if overlay:
                     overlay_throttle = self._evasion_overlay(ship, maneuver, throttle, dt)
 
                 if overlay_throttle is not None:
                     throttle = overlay_throttle
                 else:
                     throttle = self._fly_maneuver(ship, maneuver, throttle, dt)
+                note = self._burn_note
+                if overlay and note is not None and note[1] >= EVADE_BURN_MIN_THROTTLE:
+                    # Burning with the overlay on: what the forecast prices.
+                    ship.evade_burn = (note[1], math.sin(self._evade_burn_swing(ship)[0]))
 
         # No attitude command this tick: the ship's RCS brakes the spin it
         # carries, at RCS authority, and the nose keeps swinging while it
@@ -3100,14 +3204,19 @@ class CombatSimulation:
         ship.applied_throttle = max(0.0, min(1.0, effective_throttle)) * fuel_fraction
         if ship.execution_mode == 'COAST' and ship.current_maneuver:
             ship.execution_mode = ship.current_maneuver.maneuver_type.name
-        execution = (ship.execution_mode, round(ship.applied_throttle, 2), round(requested, 2))
+        execution = (ship.execution_mode, round(ship.applied_throttle, 2), round(requested, 2),
+                     ship.evade_swing)
         key = (ship.ship_id, 'execution')
         if self.evidence.transitions.get(key) != execution:
             self.evidence.transitions[key] = execution
-            self._log_event(SimulationEventType.EXECUTION_STATE, ship.ship_id, data={
-                'mode': ship.execution_mode, 'requested_throttle': requested,
-                'applied_throttle': ship.applied_throttle, 'engine_fraction': engine_eff,
-                'fuel_fraction': fuel_fraction})
+            data = {'mode': ship.execution_mode, 'requested_throttle': requested,
+                    'applied_throttle': ship.applied_throttle, 'engine_fraction': engine_eff,
+                    'fuel_fraction': fuel_fraction}
+            if ship.evade_swing:
+                # The evade overlay is swinging the order's burn (module
+                # docstring): the drive is on the order, the mode says why.
+                data['swing'] = True
+            self._log_event(SimulationEventType.EXECUTION_STATE, ship.ship_id, data=data)
 
         # Update kinematic state with reduced thrust if engines damaged
         ship.kinematic_state = propagate_state(
@@ -3168,6 +3277,8 @@ class CombatSimulation:
         """
         if maneuver.maneuver_type == ManeuverType.BURN and maneuver.direction:
             # Rotate to burn direction (engines on if throttle > 0)
+            if throttle > 0:
+                self._burn_note = (maneuver.direction.normalized(), throttle)
             self._rotate_ship_toward(ship, maneuver.direction, dt, engines_on=(throttle > 0))
 
         elif maneuver.maneuver_type == ManeuverType.ROTATE and maneuver.direction:
@@ -3217,6 +3328,8 @@ class CombatSimulation:
                     throttle = self._fly_range_keeping(ship, target, maneuver, throttle, dt)
                 else:
                     intercept_dir = self._calculate_intercept_direction(ship, target)
+                    if throttle > 0:
+                        self._burn_note = (intercept_dir.normalized(), throttle)
                     self._rotate_ship_toward(ship, intercept_dir, dt, engines_on=(throttle > 0))
             else:
                 # Target gone: coast (as PADLOCK does) instead of
@@ -3246,6 +3359,8 @@ class CombatSimulation:
                 # Full thrust above 100 m/s, linear taper below
                 if speed < 100.0:
                     throttle = throttle * (speed / 100.0)
+                if throttle > 0:
+                    self._burn_note = (retrograde_dir, throttle)
             else:
                 # Velocity near zero - stop
                 throttle = 0.0
@@ -3287,6 +3402,10 @@ class CombatSimulation:
                     needs_rotation = self._attitude_needs_tv(ship, angle_to_heading, dt)
                     burn_held = (maneuver.burn_start_time is not None
                                  and self.current_time < maneuver.burn_start_time - 1e-9)
+                    if throttle > 0 and not burn_held:
+                        # The order's burn line (the evade overlay swings
+                        # around it): turning or not, this is where it burns.
+                        self._burn_note = (direction, throttle)
                     if throttle <= 0:
                         # Attitude only: point the nose (e.g. spinal
                         # on the enemy) on RCS and coast - no burn,
@@ -3419,6 +3538,10 @@ class CombatSimulation:
                 and arrives MATCHING its rate (tracking it) instead of
                 stopping dead and falling behind.
         """
+        if self._attitude_capture:
+            # The evade overlay is asking the order where it would steer
+            # (_order_burn): note, do not turn.
+            return
         ship.attitude_commanded = True
         current_forward = ship.forward
         target_normalized = target_dir.normalized()
@@ -3975,13 +4098,20 @@ class CombatSimulation:
     # Threat gathering
     # -------------------------------------------------------------------------
 
-    def _gather_ballistic_threats(self, ship: ShipCombatState) -> list[dict]:
+    def _gather_ballistic_threats(self, ship: ShipCombatState,
+                                  own_accel: Optional[Vector3D] = None) -> list[dict]:
         """
         Collect BALLISTIC threats: kinetic rounds targeting this ship, plus
         seeker-killed (is_disabled) torpedoes coasting on fixed trajectories.
 
         A disabled torpedo cannot steer, so it behaves exactly like a slug:
         closest-approach extrapolation is valid and lateral evasion works.
+
+        ``own_accel``: the ship will keep burning this (the evade overlay on a
+        burning order): the miss is taken at the round's closest approach
+        with the burn's 1/2 a t^2 added to the ship's track. A round led onto
+        a burning ship passes kilometres off its straight-line track and was
+        read as a miss until its last seconds.
         """
         threats = []
 
@@ -4019,6 +4149,11 @@ class CombatSimulation:
             cx = rx + vx * tca
             cy = ry + vy * tca
             cz = rz + vz * tca
+            if own_accel is not None:
+                half = 0.5 * tca * tca
+                cx -= own_accel.x * half
+                cy -= own_accel.y * half
+                cz -= own_accel.z * half
             miss_dist = sqrt(cx**2 + cy**2 + cz**2)
             rel_vel = Vector3D(vx, vy, vz)
             rel_pos = Vector3D(rx, ry, rz)
@@ -4203,6 +4338,7 @@ class CombatSimulation:
         ship: ShipCombatState,
         dt: float,
         allow_run: bool = True,
+        own_accel: Optional[Vector3D] = None,
     ) -> tuple[Optional[Vector3D], str, float]:
         """
         Calculate threat-aware evasion maneuver.
@@ -4241,9 +4377,13 @@ class CombatSimulation:
         """
         ship_radius_m = 50.0  # Approximate ship cross-section
 
-        ballistic = self._gather_ballistic_threats(ship)
+        ballistic = self._gather_ballistic_threats(ship, own_accel)
         # dt == 0 marks a read-only status query - do not latch commits
         guided = self._gather_guided_torpedo_threats(ship, latch_commit=(dt > 0))
+        # The evade overlay on a burning order steers by the same threats
+        # (_swing_dodge_aim / _swing_armour_aim), read straight after this.
+        # (ballistic is sorted in place below.)
+        self._evasion_threats = (ballistic, guided)
 
         # ---- 1. Terminal guided torpedoes: present the thickest armor ----
         terminal = [t for t in guided if t['terminal']]
@@ -5135,21 +5275,279 @@ class CombatSimulation:
         is actually inbound. Returns the throttle when evasion took the helm,
         None when nothing threatens and the base maneuver should fly.
         'dodge' never RUNs from a guided torpedo (see _calculate_evasion).
-        Evasion burns at the order's throttle, or at full throttle when the
-        order itself does not burn (throttle 0: an attitude-only HEADING, a
-        coasting PADLOCK / MAINTAIN) - a dodge at throttle 0 cannot move the
-        ship, and "coast and shoot, evade dodge" did order the dodge.
+
+        On an order that burns this tick (_order_burn) evasion swings the
+        burn instead of replacing it (_swing_burn, module docstring). On an
+        engine-off order it flies the ship as it always did: at the order's
+        throttle, or at full throttle when the order itself does not burn
+        (throttle 0: an attitude-only HEADING, a coasting PADLOCK / MAINTAIN)
+        - a dodge at throttle 0 cannot move the ship, and "coast and shoot,
+        evade dodge" did order the dodge - halved for TANK, off for BRACE.
         """
+        burn = self._order_burn(ship, maneuver, throttle, dt)
+        own_accel = None
+        if burn is not None:
+            # The ship keeps this burn: rounds led onto it are threats.
+            ks = ship.kinematic_state
+            own_accel = burn[0] * (ks.max_acceleration_ms2()
+                                   * ship.get_effective_thrust_fraction() * burn[1])
         evade_dir, mode, throttle_mod = self._calculate_evasion(
-            ship, dt, allow_run=(maneuver.evade != 'dodge'))
+            ship, dt, allow_run=(maneuver.evade != 'dodge'), own_accel=own_accel)
         if mode not in EVASION_OVERLAY_MODES:
-            return None
+            return self._swing_back(ship, maneuver, burn, dt)
+        if burn is not None:
+            return self._swing_burn(ship, maneuver, burn, evade_dir, mode, throttle_mod,
+                                    throttle, dt)
         ship.execution_mode = mode
         throttle = (throttle if throttle > 0 else 1.0) * throttle_mod
         if mode in ('EVADE', 'TANK', 'RUN', 'PRESENT') and evade_dir:
             self._rotate_ship_toward(ship, evade_dir, dt, engines_on=(throttle > 0))
         # BRACE: no thrust, just take the hit
         return throttle
+
+    def _order_burn(self, ship: ShipCombatState, maneuver: Maneuver, throttle: float,
+                    dt: float) -> Optional[tuple]:
+        """
+        What the standing order would burn this tick, asked without letting it
+        steer: (burn line, throttle of that burn, the throttle it would fly
+        right now - its turn-first token while the nose is off the line -, the
+        order flown on a copy) or None when it does not burn at least
+        EVADE_BURN_MIN_THROTTLE (an engine-off order, a coast, a trim).
+
+        The order flies on a shallow copy, so its runtime latches (range-
+        keeping phase, the HOLD_RANGE range, a live heading) advance only if
+        the swing then flies it (_swing_burn adopts them); an engine-off
+        order is left exactly as the older overlay left it. No RNG is drawn.
+        """
+        flown = copy.copy(maneuver)
+        mode_before = getattr(ship, 'execution_mode', None)
+        self._burn_note = None
+        self._attitude_capture = True
+        try:
+            now = self._fly_maneuver(ship, flown, throttle, dt)
+        finally:
+            self._attitude_capture = False
+        flown_mode = getattr(ship, 'execution_mode', None)
+        ship.execution_mode = mode_before
+        note = self._burn_note
+        if note is None or note[1] < EVADE_BURN_MIN_THROTTLE:
+            return None
+        return note[0], note[1], now, flown, flown_mode
+
+    def _swing_back(self, ship: ShipCombatState, maneuver: Maneuver, burn: Optional[tuple],
+                    dt: float) -> Optional[float]:
+        """
+        No threat for the overlay: the order flies - except that a burning
+        order whose nose a swing left off its burn line keeps its burn while
+        it swings back, instead of idling the drive at the order's own
+        turn-first gate (HEADING_BURN_CONE_DEG). Inside that gate, or farther
+        off than the swing cone plus the gate (the order's own turn, a turn
+        back after a RUN), returns None and the order flies itself.
+        """
+        if burn is None:
+            return None
+        line, burn_throttle, _, flown, flown_mode = burn
+        off = ship.forward.angle_to(line)
+        gate = math.radians(HEADING_BURN_CONE_DEG)
+        if off <= gate or off > self._evade_burn_swing(ship)[0] + gate:
+            return None
+        maneuver.__dict__.update(flown.__dict__)
+        ship.execution_mode = flown_mode
+        self._rotate_ship_toward(ship, line, dt, engines_on=True)
+        return burn_throttle
+
+    def _evade_burn_swing(self, ship: ShipCombatState) -> tuple:
+        """
+        (cone half-angle rad, swing cycle s) this hull flies around a burn
+        line: EVADE_BURN_CONE_DEG and a new aim every max(EVADE_BURN_CYCLE_MIN_S,
+        the edge-to-edge swing time from rest on thrust vectoring); a hull
+        that cannot cross that cone within EVADE_BURN_CYCLE_MAX_S gets the
+        widest cone it can cross in that time. From _get_rotation_params, so
+        a damaged drive (less thrust vectoring) swings a narrower, slower cone.
+        """
+        params = self._get_rotation_params(ship, True)
+        cache = self.__dict__.setdefault('_swing_cache', {})
+        hit = cache.get(params)
+        if hit is not None:
+            return hit
+        full = math.radians(EVADE_BURN_CONE_DEG)
+        swing_s = self._estimate_turn_time(ship, 2.0 * full, engines_on=True)
+        if swing_s <= EVADE_BURN_CYCLE_MAX_S:
+            out = (full, max(EVADE_BURN_CYCLE_MIN_S, swing_s))
+        else:
+            lo, hi = 0.0, full
+            for _ in range(40):
+                mid = 0.5 * (lo + hi)
+                if self._estimate_turn_time(ship, 2.0 * mid, engines_on=True) <= EVADE_BURN_CYCLE_MAX_S:
+                    lo = mid
+                else:
+                    hi = mid
+            out = (lo, EVADE_BURN_CYCLE_MAX_S)
+        if len(cache) > 256:
+            cache.clear()
+        cache[params] = out
+        return out
+
+    def _swing_burn(self, ship: ShipCombatState, maneuver: Maneuver, burn: tuple,
+                    evade_dir: Optional[Vector3D], mode: str, throttle_mod: float,
+                    order_throttle: float, dt: float) -> float:
+        """
+        The evade overlay on a burning order (module docstring): keep the
+        order's burn and steer its thrust axis inside the swing cone - away
+        from the rounds' approach for EVADE, onto the best armour reachable
+        for TANK / BRACE / PRESENT. RUN still burns away from a guided
+        torpedo, never below the order's throttle. Returns the throttle.
+        """
+        line, burn_throttle, throttle_now, flown, _ = burn
+        # The order's own latches advance as it flies (range-keeping phase).
+        maneuver.__dict__.update(flown.__dict__)
+        ship.execution_mode = mode
+        if mode == 'RUN':
+            run = (order_throttle if order_throttle > 0 else 1.0) * throttle_mod
+            throttle = max(run, burn_throttle)
+            if evade_dir:
+                self._rotate_ship_toward(ship, evade_dir, dt, engines_on=throttle > 0)
+            return throttle
+        cone, cycle = self._evade_burn_swing(ship)
+        if mode == 'EVADE':
+            aim = self._swing_dodge_aim(ship, line, cone, cycle)
+        else:
+            aim = self._swing_armour_aim(ship, line, cone, mode)
+            if aim is None:
+                # No facing in the cone shows the threat better armour than
+                # the line: keep dodging the rounds that can still be dodged
+                # (the older overlay held the whole ship for the one that
+                # could not), else fly the line.
+                aim = (self._swing_dodge_aim(ship, line, cone, cycle, dodgeable_only=True)
+                       or line)
+        ship.evade_swing = True
+        if ship.forward.angle_to(line) <= cone + math.radians(HEADING_BURN_CONE_DEG):
+            # Inside the cone, plus the order's own burn gate.
+            throttle = burn_throttle
+        else:
+            # Off the line: the order's own turn (turn first, then burn).
+            throttle = throttle_now
+        self._rotate_ship_toward(ship, aim, dt, engines_on=throttle > 0)
+        return throttle
+
+    @staticmethod
+    def _perpendicular(line: Vector3D, *refs: Vector3D) -> Vector3D:
+        """A unit vector perpendicular to ``line``, along the first ref that
+        is not (nearly) parallel to it."""
+        for ref in refs + (Vector3D(0.0, 0.0, 1.0), Vector3D(0.0, 1.0, 0.0)):
+            v = ref - line * ref.dot(line)
+            if v.magnitude > 1e-3:
+                return v.normalized()
+        return Vector3D(1.0, 0.0, 0.0)
+
+    def _swing_dodge_aim(self, ship: ShipCombatState, line: Vector3D, cone: float,
+                         cycle: float, dodgeable_only: bool = False) -> Optional[Vector3D]:
+        """
+        EVADE on a burning order: the point on the swing cone across the
+        inbound rounds - perpendicular to the burn line and to their relative
+        velocity (the only sideways motion that moves the ship off their
+        line), weighted by urgency like _calculate_evasion_direction - with
+        the side and a +-15 deg scatter about the burn line drawn per swing
+        cycle from the same keyed throwaway RNG (seed, ship, cycle) and in the
+        same order as that jink. Never the battle RNG. ``dodgeable_only``:
+        only rounds on a collision course that still leave time to swing
+        (EVASION_TURN_ALLOWANCE_S + EVASION_MIN_JINK_S), None when there are
+        none.
+        """
+        ballistic = (getattr(self, '_evasion_threats', None) or ([], []))[0]
+        if dodgeable_only:
+            ballistic = [t for t in ballistic if t['miss_dist'] <= 500.0
+                         and t['tca'] >= EVASION_TURN_ALLOWANCE_S + EVASION_MIN_JINK_S]
+            if not ballistic:
+                return None
+        side = Vector3D.zero()
+        ref = None
+        for threat in ballistic[:5]:
+            perp = line.cross(threat['rel_vel'])
+            if perp.magnitude < 1e-6:
+                continue
+            perp = perp.normalized()
+            if ref is None:
+                ref = perp
+            elif perp.dot(ref) < 0.0:
+                perp = perp * -1.0
+            side = side + perp * threat['urgency']
+        if side.magnitude > 1e-9:
+            side = side.normalized()
+        else:
+            side = self._perpendicular(line, ship.up, ship.forward)
+        cycle_number = int(self.current_time / cycle)
+        ship_key = zlib.crc32(ship.ship_id.encode('utf-8'))
+        jink_rng = random.Random(
+            (self._initial_seed * 1_000_003) ^ (ship_key * 65_537) ^ cycle_number
+        )
+        noise_angle = jink_rng.gauss(0, math.radians(15))
+        if jink_rng.random() < 0.5:
+            side = side * -1
+        if abs(noise_angle) > 0.01:
+            side = side.rotate_around_axis(line, noise_angle)
+        return (line * math.cos(cone) + side * math.sin(cone)).normalized()
+
+    def _swing_armour_aim(self, ship: ShipCombatState, line: Vector3D, cone: float,
+                          mode: str) -> Optional[Vector3D]:
+        """
+        TANK / BRACE / PRESENT on a burning order: of the attitudes on the
+        swing cone (the burn line, the current one if inside it, and
+        EVADE_BURN_ARMOUR_AZIMUTHS points on the edge), the one that - as far
+        as the hull can turn before impact (_reachable_attitude) - lets the
+        least energy through the armour it shows the threat
+        (_presentation_score: energy, then thickness). Ties keep the earlier
+        candidate - the burn line first, then the current attitude. None
+        when no facing beats the burn line (nothing to gain by swinging).
+        """
+        ballistic, guided = getattr(self, '_evasion_threats', None) or ([], [])
+        if mode == 'PRESENT':
+            threats = [t for t in guided if t.get('terminal')] or list(guided)
+            t_avail = min((t['t_go'] for t in threats if t['t_go'] != float('inf')),
+                          default=GUIDED_TORPEDO_REACT_TIME_S)
+        else:
+            dangerous = [t for t in ballistic if t['miss_dist'] <= 500.0] or list(ballistic)
+            threats = [{'rel_vel': t['rel_vel'],
+                        'bearing': (t['rel_pos'].normalized() if t['rel_pos'].magnitude > 1e-9
+                                    else t['rel_vel'].normalized() * -1),
+                        'ke_gj': t['ke_gj']} for t in dangerous[:5]]
+            t_avail = min((t['tca'] for t in dangerous[:5]), default=EVASION_TURN_ALLOWANCE_S)
+        if not threats:
+            return None
+        # World-fixed azimuths: the candidates must not turn with the hull.
+        u1 = self._perpendicular(line, Vector3D(0.0, 0.0, 1.0), Vector3D(0.0, 1.0, 0.0))
+        u2 = line.cross(u1).normalized()
+        candidates = [line]
+        if ship.forward.angle_to(line) <= cone + 1e-3:
+            candidates.append(ship.forward)
+        c, s = math.cos(cone), math.sin(cone)
+        for k in range(EVADE_BURN_ARMOUR_AZIMUTHS):
+            phi = 2.0 * math.pi * k / EVADE_BURN_ARMOUR_AZIMUTHS
+            candidates.append((line * c + (u1 * math.cos(phi) + u2 * math.sin(phi)) * s).normalized())
+        params = self._get_rotation_params(ship, True)
+        reach_cache: dict = {}
+        threat_cache: dict = {}
+        best, best_score = line, None
+        for cand in candidates:
+            achieved = self._reachable_attitude(ship, cand, t_avail, engines_on=True,
+                                                params=params, cache=reach_cache)
+            # Energy through the armour, then the thickness shown; not the
+            # arc-centring tie-break (_presentation_score's third term): the
+            # cone keeps a burn-line threat PRESENT_ARC_MARGIN_DEG inside the
+            # nose arc, and a swing for centring alone costs push.
+            score = self._presentation_score(ship, achieved, threats, threat_cache)[:2]
+            if best_score is None:
+                line_score = score
+            if best_score is None or score < best_score:
+                best, best_score = achieved, score
+        if best_score == line_score:
+            return None
+        # A spinning hull's reachable attitude can lie past the cone (where
+        # its spin carries it): never aim outside the cone.
+        if best.angle_to(line) > cone:
+            best = (line * math.cos(cone)
+                    + self._perpendicular(line, best) * math.sin(cone)).normalized()
+        return best
 
     @staticmethod
     def _thrust_accel(ship: ShipCombatState) -> Vector3D:
@@ -5167,6 +5565,8 @@ class CombatSimulation:
         HEADING_BURN_CONE_DEG turn on a token throttle (thrust vectoring),
         inside it burn at ``throttle``. Returns the throttle to apply.
         """
+        if throttle > 0:
+            self._burn_note = (direction, throttle)
         angle = ship.forward.angle_to(direction)
         if angle > math.radians(HEADING_BURN_CONE_DEG):
             self._rotate_ship_toward(ship, direction, dt, engines_on=True)
