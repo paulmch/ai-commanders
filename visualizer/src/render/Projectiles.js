@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { Ribbon } from './Trails.js';
-import { trailLifeCap, focusFade, closeUpK } from './CloseRange.js';
+import { trailLifeCap, focusFade } from './CloseRange.js';
 import { WeaponRibbons, WeaponFlashes, WeaponMarkers, TorpedoBodies, factionSeed } from './WeaponBatches.js';
 import { TargetingLines } from './TargetingLines.js';
 import {
@@ -34,8 +34,6 @@ const TERMINAL_KICK_S = 0.55;
 const DWELL_GLOW_S = 1.5;
 // Longest on-screen wake (px); only bites in close-ups (see trail())
 const TRAIL_CAP_PX = { slug: 140, torpedo: 200 };
-// Close-ups: a PD beam longer than this on screen keeps only its two ends
-const BEAM_END_PX = 260;
 const random = (seed, n) => { const x = Math.sin(seed * 127.1 + n * 311.7) * 43758.5453; return x - Math.floor(x); };
 
 /**
@@ -596,25 +594,15 @@ export class Projectiles {
   }
 
   /**
-   * A PD beam a -> b. In a close-up a beam to a round 100 km out is a
-   * laser line straight across the frame: beams far from the focus fade,
-   * and one longer than 2 x BEAM_END_PX on screen keeps only its ends
-   * (turret and burn spot), each fading out toward the cut. Fleet range
-   * draws every beam whole, as before.
+   * A PD beam a -> b, always drawn whole: one ribbon from the emitter lens
+   * to the burn spot at every camera distance. In a close-up, beams whose
+   * emitter is far from the focus fade (focusFade); the focused ship's own
+   * beams stay at full strength along their whole run.
    */
   beamRibbon(a, b, intensity, seed) {
-    const k = closeUpK(this.viewDist);
-    if (k <= 0) { this.ribbons.add(a, b, 0.075, intensity, 2, seed); return; }
     intensity *= focusFade(a.distanceTo(this.focus), this.viewDist);
     if (intensity < 0.01) return;
-    const len = a.distanceTo(b);
-    const endA = BEAM_END_PX * this.pixelAt(a), endB = BEAM_END_PX * this.pixelAt(b);
-    if (len <= (endA + endB) * 1.15) { this.ribbons.add(a, b, 0.075, intensity, 2, seed); return; }
-    this.t1.subVectors(b, a).divideScalar(len);
-    this.t2.copy(a).addScaledVector(this.t1, endA);
-    this.ribbons.add(a, this.t2, 0.075, intensity, 2, seed, 0, 1);
-    this.t2.copy(b).addScaledVector(this.t1, -endB);
-    this.ribbons.add(this.t2, b, 0.075, intensity, 2, seed, 1, 0);
+    this.ribbons.add(a, b, 0.075, intensity, 2, seed);
   }
 
   /**

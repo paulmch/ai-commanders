@@ -85,6 +85,10 @@ const HEAT_GLSL = /* glsl */`
     return (age < 0.0 || age > 24.0 * k) ? 0.0 : h;
   }
   float dmgHash(float n) { return fract(sin(n * 12.9898 + 4.1414) * 43758.5453); }
+  // x * x: never pow(x, 2.0) on a base that can go negative - GLSL leaves
+  // pow(x < 0, y) undefined: NaN on desktop GPUs (|x|^y on SwiftShader), and
+  // one NaN pixel in the HDR target is smeared into black squares by bloom
+  float dmgSq(float x) { return x * x; }
 `;
 
 const VENT_TYPE = { atmo: 0, fuel: 1, coolant: 2, fire: 3 };
@@ -174,14 +178,14 @@ function craterMaterial(uNow) {
         float heat = craterHeatF(vAge, vInfo.y);
         float spread = 0.3 + 0.45 * clamp(heat, 0.0, 1.2);
         float core = 1.0 - smoothstep(0.0, spread, rr);
-        float lip = exp(-pow((rr - 0.38) / 0.1, 2.0)) * smoothstep(0.25, 0.7, m.r + 0.25 * m.g);
+        float lip = exp(-dmgSq((rr - 0.38) / 0.1)) * smoothstep(0.25, 0.7, m.r + 0.25 * m.g);
         // the breach rim glows in torn segments, never a clean HUD-like ring
-        float rim = breached * exp(-pow((rr - 0.22) / 0.06, 2.0)) * smoothstep(0.3, 0.62, m.g * 0.8 + n.b * 0.5);
+        float rim = breached * exp(-dmgSq((rr - 0.22) / 0.06)) * smoothstep(0.3, 0.62, m.g * 0.8 + n.b * 0.5);
         float mask = max(core * (0.55 + 0.7 * m.r) * (1.0 - hole * 0.85), max(lip * (0.5 + 0.9 * m.r), rim * 1.3));
         float h = heat * mask;
         vec3 glow = heatRamp(h) * smoothstep(0.015, 0.1, h);
         // gouged bare metal round the bowl catches a little light
-        float gouge = exp(-pow((rr - 0.5) / 0.12, 2.0)) * (0.4 + 0.6 * m.g) * (1.0 - hole);
+        float gouge = exp(-dmgSq((rr - 0.5) / 0.12)) * (0.4 + 0.6 * m.g) * (1.0 - hole);
         glow += vec3(0.05, 0.05, 0.055) * gouge;
         gl_FragColor = vec4(glow, a * (1.0 - 0.5 * gouge));
       }`,
@@ -353,9 +357,15 @@ function smokeMaterial(uNow) {
         vKind = ember;
         vSeed = aS2.x;
         vAge = age;
-        float live = (age < 0.0 || f > 1.0) ? 0.0 : 1.0;
-        vA = live * aS2.z * (ember > 0.5 ? exp(-age / 0.9) : smoothstep(0.0, 0.06, f) * pow(1.0 - f, 1.4));
-        if (vA <= 0.002) gl_Position = vec4(0.0, 0.0, -2.0, 1.0);
+        // A puff past its life (f > 1) must be hidden by the live test, not
+        // by its alpha: pow(1 - f, 1.4) of the negative base is NaN on GPUs,
+        // 0 * NaN is NaN, NaN <= 0.002 is false, and the billboard was drawn
+        // as a NaN square that bloom grew into black blocks (SwiftShader
+        // returns |x|^y and hid it). The base is clamped as well.
+        bool live = age >= 0.0 && f <= 1.0;
+        float fl = clamp(f, 0.0, 1.0);
+        vA = aS2.z * (ember > 0.5 ? exp(-max(age, 0.0) / 0.9) : smoothstep(0.0, 0.06, fl) * pow(1.0 - fl, 1.4));
+        if (!live || vA <= 0.002) { vA = 0.0; gl_Position = vec4(0.0, 0.0, -2.0, 1.0); }
         #include <logdepthbuf_vertex>
       }`,
     fragmentShader: /* glsl */`
@@ -456,7 +466,13 @@ function washMaterial() {
       ${HEAT_GLSL}
       void main() {
         #include <logdepthbuf_fragment>
-        vec3 n = normalize(cross(dFdx(vLocal), dFdy(vLocal)));
+        // face normal from screen-space derivatives; an edge-on facet gives a
+        // zero cross product, and normalize(0) is NaN (an additive NaN pixel
+        // turns black and bloom grows it into a square): skip those
+        vec3 c = cross(dFdx(vLocal), dFdy(vLocal));
+        float c2 = dot(c, c);
+        if (!(c2 > 1e-30)) discard;
+        vec3 n = c * inversesqrt(c2);
         float facing = dot(n, uDir);              // 1 = square to the jet
         if (facing < 0.03) discard;
         // hottest where the jet axis (through the hull centre) meets the plating
@@ -619,6 +635,13 @@ export function rewindStart(marks, ventMarks, t, resolved, craterCap, ventCap) {
     if (k > 0) start = Math.min(start, ventMarks[Math.max(0, k - ventCap)].index);
   }
   return Math.min(resolved, start);
+}
+
+/** Empty smoke ring slot: t0 far in the future (hidden), no stale data. */
+function clearSmokeSlot(S0, S1, S2, slot) {
+  const o = slot * 4;
+  for (let j = 0; j < 4; j++) { S0[o + j] = 0; S1[o + j] = 0; S2[o + j] = 0; }
+  S0[o + 3] = 1e9;
 }
 
 // ---------------------------------------------------------------------------
@@ -1083,13 +1106,25 @@ class ShipView {
     const g = this.smoke.geometry;
     const S0 = g.attributes.aS0.array, S1 = g.attributes.aS1.array, S2 = g.attributes.aS2.array;
     let dirty = false;
+    // The window holds fewer puffs than the ring has slots: a slot whose
+    // puff has left the window (older than SMOKE_LIFE, or ahead of a
+    // backward seek) is cleared, so the buffers are a pure function of
+    // `now` whatever the seek path, and no expired puff is left for the
+    // shader to cull.
+    for (let slot = 0; slot < SMOKE_CAP; slot++) {
+      const k = this.smokeK[slot];
+      if (Number.isNaN(k) || (k >= kLo && k <= kHi)) continue;
+      this.smokeK[slot] = NaN;
+      clearSmokeSlot(S0, S1, S2, slot);
+      dirty = true;
+    }
     for (let k = kLo; k <= kHi; k++) {
       const slot = k % SMOKE_CAP;
       if (this.smokeK[slot] === k) continue;
       this.smokeK[slot] = k;
       dirty = true;
       const o = slot * 4;
-      S0[o + 3] = 1e9;               // hidden unless emitted below
+      clearSmokeSlot(S0, S1, S2, slot);   // hidden unless emitted below
       const tk = k * SMOKE_DT;
       const ds = damageStateAt(fx.timeline, this.id, tk, fx._ds);
       if (ds.destroyed || ds.smoke <= 0) continue;

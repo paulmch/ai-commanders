@@ -19,6 +19,29 @@ export function factionSeed(seed, faction) {
   return s + (faction === 'alpha' ? 2 : faction === 'beta' ? 4 : 0);
 }
 
+/** Near-plane margin of the ribbon clip (ribbonVertex: zc = -RIBBON_NEAR_K * near). */
+export const RIBBON_NEAR_K = 1.02;
+
+/**
+ * JS mirror of ribbonVertex's clip and widening direction, for tests:
+ * view-space ends `from`/`to` ({x,y,z}, camera looking down -z) and the
+ * camera near distance. Null when the whole segment is behind the near
+ * plane, else the visible run [u0, u1] of 0..1, its clipped ends a/b and
+ * the unit on-screen direction {x, y} the strip is widened across.
+ */
+export function ribbonClip(from, to, near) {
+  const zc = -RIBBON_NEAR_K * near;
+  if (from.z > zc && to.z > zc) return null;
+  const u0 = from.z > zc ? (zc - from.z) / (to.z - from.z) : 0;
+  const u1 = to.z > zc ? (zc - from.z) / (to.z - from.z) : 1;
+  const at = (u) => ({ x: from.x + (to.x - from.x) * u, y: from.y + (to.y - from.y) * u, z: from.z + (to.z - from.z) * u });
+  const a = at(u0), b = at(u1);
+  let dx = b.x / -b.z - a.x / -a.z, dy = b.y / -b.z - a.y / -a.z;
+  const len = Math.hypot(dx, dy);
+  if (len > 1e-7) { dx /= len; dy /= len; } else { dx = 1; dy = 0; }
+  return { u0, u1, a, b, dir: { x: dx, y: dy } };
+}
+
 // One draw for all streaks, curved trail segments, motor plumes, PD ribbons
 // and torpedo RCS jets. Kinds: 0 slug tracer, 1 slug wake, 2 PD beam,
 // 3 motor plume, 4 spark, 5 retarget dash, 6 torpedo wake, 7 RCS jet,
@@ -39,9 +62,26 @@ const ribbonVertex = /* glsl */`
   void main() {
     vec3 from = (viewMatrix * vec4(aFrom, 1.0)).xyz;
     vec3 to = (viewMatrix * vec4(aTo, 1.0)).xyz;
-    vec3 p = mix(from, to, uv.x);
-    vec2 d = to.xy - from.xy;
-    d = length(d) > 0.00001 ? normalize(d) : vec2(1.0, 0.0);
+    // Clip the segment to just in front of the near plane, in view space
+    // (ribbonClip below mirrors this). A ribbon with an end behind the
+    // camera - a beam passing beside it, its turret behind it - otherwise
+    // interpolates the near end's pixel-floor width into a wedge hundreds
+    // of pixels wide. [u0, u1] is the visible part of the 0..1 run.
+    float zc = -${RIBBON_NEAR_K.toFixed(2)} * projectionMatrix[3][2] / (projectionMatrix[2][2] - 1.0);
+    if (from.z > zc && to.z > zc) {
+      gl_Position = vec4(2.0, 2.0, 2.0, 1.0);   // wholly behind: degenerate, off screen
+      return;
+    }
+    float u0 = from.z > zc ? (zc - from.z) / (to.z - from.z) : 0.0;
+    float u1 = to.z > zc ? (zc - from.z) / (to.z - from.z) : 1.0;
+    vec3 a = mix(from, to, u0), b = mix(from, to, u1);
+    float u = mix(u0, u1, uv.x);
+    vec3 p = mix(a, b, uv.x);
+    // Widen across the line as it runs ON SCREEN (the perspective-divided
+    // ends), not across its view-space xy: for a line receding in depth the
+    // two differ, and the strip thinned to a sub-pixel sliver that beads.
+    vec2 d = b.xy / -b.z - a.xy / -a.z;
+    d = length(d) > 1e-7 ? normalize(d) : vec2(1.0, 0.0);
     float pixel = uPixelWorld * max(0.01, -p.z);
     float kind = aStyle.z;
     bool plume = kind > 2.5 && kind < 3.5;
@@ -65,14 +105,14 @@ const ribbonVertex = /* glsl */`
     // Plumes flare out of the nozzle, then neck down slightly toward the tip.
     // RCS jets are tight at the nozzle and fan out as the gas expands.
     // A slug is a hot bead drawing a thinning streak behind it.
-    float taper = plume ? mix(0.3, 1.0, smoothstep(0.0, 0.3, uv.x)) * (1.0 - 0.35 * uv.x)
-      : jet ? mix(0.3, 1.0, sqrt(uv.x))
-      : slug && vPx > 1.6 ? mix(1.0, 0.4, smoothstep(0.08, 1.0, uv.x)) : 1.0;
+    float taper = plume ? mix(0.3, 1.0, smoothstep(0.0, 0.3, u)) * (1.0 - 0.35 * u)
+      : jet ? mix(0.3, 1.0, sqrt(u))
+      : slug && vPx > 1.6 ? mix(1.0, 0.4, smoothstep(0.08, 1.0, u)) : 1.0;
     p.xy += vec2(-d.y, d.x) * position.y * 2.0 * width * taper;
     gl_Position = projectionMatrix * vec4(p, 1.0);
-    vUv = uv;
+    vUv = vec2(u, uv.y);
     vStyle = aStyle;
-    vAge = mix(aAge.x, aAge.y, uv.x);
+    vAge = mix(aAge.x, aAge.y, u);
     #include <logdepthbuf_vertex>
   }
 `;
@@ -137,8 +177,7 @@ const ribbonFragment = /* glsl */`
       float thin = exp(-y*y*min(70.0, aa*2.5));
       // Several turrets share a line of fire: keep pixel-floor beams slim.
       float slim = mix(0.6, 1.0, smoothstep(0.7, 2.0, vPx));
-      // aAge fades a close-up's split beam ends out toward the cut (0 = full)
-      color = (vec3(1.5,2.9,1.5)*thin + vec3(0.2,1.25,0.3)*core*0.55 + vec3(0.05,0.55,0.12)*halo*0.45)*flick*slim*(1.0-vAge);
+      color = (vec3(1.5,2.9,1.5)*thin + vec3(0.2,1.25,0.3)*core*0.55 + vec3(0.05,0.55,0.12)*halo*0.45)*flick*slim;
     } else if (kind < 3.5) {
       // Motor plume: broad white-hot core out of the nozzle with shock
       // cells, wrapped in a longer orange sheath that fades to the tip.
