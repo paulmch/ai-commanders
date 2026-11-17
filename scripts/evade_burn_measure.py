@@ -13,6 +13,8 @@ Scenarios (seeded, no LLM; every gun FIRE_IMMEDIATE at the target):
            INTERCEPTing from 150 km, 240 s
   merge  : target closing at 2 km/s on a battlecruiser + a destroyer 200 km away
            (PADLOCK), HEADING @100% against the closure (cancel it), 200 s
+  escape1, merge1: the same against one destroyer (a fight the target can survive,
+           so its closest approach is not cut short by its death)
 Each with the overlay off, 'dodge' and 'full'.
 
     OMP_NUM_THREADS=1 uv run python scripts/evade_burn_measure.py --out /tmp/eb.json
@@ -21,7 +23,9 @@ Each with the overlay off, 'dodge' and 'full'.
 Columns: on_order = share of the ticks under fire (a gun round inbound) with
 the drive at >= half the order's throttle and the nose within 30 deg of the
 burn line; along = mean of applied throttle x cos(nose to line) over those
-ticks; d60/d120/d240 = km moved along the line; min_range / range_end = km to
+ticks; d60/d120/d240 = km moved along the line; close60/close120 = closing
+speed (km/s) on the nearest shooter at 60 / 120 s (rows alive then); min_range /
+range_end = km to
 the nearest shooter; hit_pct = hits / rounds fired at the target; pen =
 penetrating hits; loc = hits by facing; dead = runs the target died in.
 """
@@ -47,6 +51,7 @@ FLEET = json.loads((ROOT / "data" / "fleet_ships.json").read_text())
 SEEDS = list(range(1, 13))
 EVADES = (None, "dodge", "full")
 CROSS_HULLS = ("corvette", "destroyer", "battlecruiser", "dreadnought")
+SCENARIOS = ("cross", "escape", "merge", "escape1", "merge1")
 RUN_HULLS = ("destroyer", "battlecruiser")
 
 
@@ -68,14 +73,14 @@ def run(job):
         centre = Vector3D(rng_km * 1000.0, 0, 0)
         dur = 150.0
         shooter_mode = "PADLOCK"
-    elif scen == "escape":
+    elif scen in ("escape", "escape1"):
         d = Vector3D(-1, 0, 0)
         tgt = create_ship_from_fleet_data("target", hull, "alpha", FLEET, position=Vector3D(0, 0, 0),
                                           velocity=Vector3D(0, 0, 0), forward=d)
         centre = Vector3D(150e3, 0, 0)
         dur = 240.0
         shooter_mode = "INTERCEPT"
-    else:  # merge
+    else:  # merge, merge1
         d = Vector3D(-1, 0, 0)
         tgt = create_ship_from_fleet_data("target", hull, "alpha", FLEET, position=Vector3D(0, 0, 0),
                                           velocity=Vector3D(2000.0, 0, 0), forward=d)
@@ -84,7 +89,8 @@ def run(job):
         shooter_mode = "PADLOCK"
     sim.add_ship(tgt)
     shooters = []
-    roster = ("battlecruiser", "destroyer", "destroyer") if scen == "cross" else ("battlecruiser", "destroyer")
+    roster = {"cross": ("battlecruiser", "destroyer", "destroyer"), "escape1": ("destroyer",),
+              "merge1": ("destroyer",)}.get(scen, ("battlecruiser", "destroyer"))
     for i, st in enumerate(roster):
         ang = math.radians((i - 1) * rng.uniform(5, 20))
         off = Vector3D(math.cos(ang), math.sin(ang), rng.uniform(-0.05, 0.05)) * centre.magnitude
@@ -105,6 +111,7 @@ def run(job):
     under = burn_half = burn_full = on_order = 0
     along = 0.0
     disp = {}
+    closing = {}
     min_range = float("inf")
     hits = []
     shots = 0
@@ -130,13 +137,17 @@ def run(job):
             t = round(sim.current_time)
             if t in (60, 120, 240):
                 disp[t] = (tgt.position - p0).dot(d) / 1000.0
+            if t in (60, 120):
+                near = min(shooters, key=lambda s: (tgt.position - s.position).magnitude)
+                rel = near.position - tgt.position
+                closing[t] = (tgt.velocity - near.velocity).dot(rel.normalized()) / 1000.0
             r = min((tgt.position - s.position).magnitude for s in shooters) / 1000.0
             min_range = min(min_range, r)
         if tgt.is_destroyed or tgt.is_dying:
             died = sim.current_time
     rng_end = min((tgt.position - s.position).magnitude for s in shooters) / 1000.0
     return dict(scen=scen, hull=hull, evade=evade, seed=seed, under=under, burn_half=burn_half,
-                burn_full=burn_full, on_order=on_order, along=along, disp=disp, min_range=min_range, range_end=rng_end,
+                burn_full=burn_full, on_order=on_order, closing=closing, along=along, disp=disp, min_range=min_range, range_end=rng_end,
                 hits=hits, shots=shots, died=died, a=a_full)
 
 
@@ -148,6 +159,11 @@ def jobs(scens, hulls=None, seeds=SEEDS, evades=EVADES):
                 for seed in seeds:
                     out.append((scen, hull, evade, seed))
     return out
+
+
+def _mean(values):
+    values = [v for v in values if v is not None]
+    return round(sum(values) / len(values), 2) if values else None
 
 
 def summarise(rows):
@@ -176,6 +192,8 @@ def summarise(rows):
                     on_order=round(100 * sum(r["on_order"] for r in g) / max(1, under), 1),
                     along=round(100 * sum(r["along"] for r in g) / max(1, under), 1),
                     d60=round(mean_disp(60), 1), d120=round(mean_disp(120), 1),
+                    close60=_mean([r["closing"].get(60, r["closing"].get("60")) for r in g]),
+                    close120=_mean([r["closing"].get(120, r["closing"].get("120")) for r in g]),
                     d240=round(mean_disp(240), 1),
                     min_range=round(sum(r["min_range"] for r in g) / len(g), 1),
                     min_range_lo=round(min(r["min_range"] for r in g), 1),
@@ -196,7 +214,7 @@ def _seeds(text):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--scenarios", default="cross,escape,merge")
+    ap.add_argument("--scenarios", default=",".join(SCENARIOS))
     ap.add_argument("--hulls", default=None, help="comma list (default: per scenario)")
     ap.add_argument("--seeds", default="1-12")
     ap.add_argument("--jobs", type=int, default=4)

@@ -128,6 +128,52 @@ class TestTheDriveKeepsTheOrder:
         assert len(on_order) < 0.5 * len(under)
 
 
+def _orders():
+    """Burning orders the overlay can ride on (name, maneuver, setup)."""
+    def heading(**kw):
+        return Maneuver(ManeuverType.HEADING, 0, duration=1e9, throttle=1.0,
+                        heading_direction={"x": 0.0, "y": 1.0, "z": 0.0}, evade="dodge", **kw)
+    return [
+        ("intercept", Maneuver(ManeuverType.INTERCEPT, 0, duration=1e9, throttle=1.0,
+                               target_id="s0", evade="dodge"), None),
+        ("standoff", Maneuver(ManeuverType.INTERCEPT, 0, duration=1e9, throttle=1.0,
+                              target_id="s0", standoff_m=40_000.0, evade="dodge"), None),
+        ("hold_range_open", Maneuver(ManeuverType.HOLD_RANGE, 0, duration=1e9, throttle=1.0,
+                                     target_id="s0", hold_range_m=320_000.0, evade="dodge"), None),
+        ("formation", heading(burn_start_time=25.0), None),
+        ("brake", Maneuver(ManeuverType.BRAKE, 0, duration=1e9, throttle=1.0, evade="dodge"),
+         lambda me: setattr(me.kinematic_state, "velocity", Vector3D(0.0, -4000.0, 0.0))),
+        ("heading_90_off", heading(),
+         lambda me: setattr(me.kinematic_state, "forward", Vector3D(1.0, 0.0, 0.0))),
+    ]
+
+
+class TestEveryBurningOrder:
+
+    @pytest.mark.parametrize("name, maneuver, setup", _orders(), ids=[o[0] for o in _orders()])
+    def test_evasion_never_flies_below_what_the_order_burns(self, monkeypatch, name, maneuver,
+                                                            setup):
+        sim, me = _under_fire(maneuver=maneuver)
+        if setup:
+            setup(me)
+        flown = []
+        original = CombatSimulation._swing_burn
+
+        def wrapped(self, ship, maneuver_, burn, *args, **kwargs):
+            out = original(self, ship, maneuver_, burn, *args, **kwargs)
+            flown.append((self.current_time, burn[1], out, ship.evade_swing))
+            return out
+
+        monkeypatch.setattr(CombatSimulation, "_swing_burn", wrapped)
+        _fly(sim, me, 100)
+        assert len(flown) >= 5, name
+        for t, ordered, out, swing in flown:
+            assert out >= ordered - 1e-12, (name, t, ordered, out)
+        if name == "formation":
+            # held until its start: an engine-off order for the overlay
+            assert min(t for t, *_ in flown) >= 25.0
+
+
 class TestEachHullCanFlyItsSwing:
 
     def test_cone_and_cycle_come_from_the_hull(self):

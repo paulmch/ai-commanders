@@ -237,6 +237,64 @@ both bear in the battle plane. Arcs are on by default; `AIC_WEAPON_ARCS=0` switc
 Nine older point-defence tests still run with all-round fire, and the hit-probability calibration
 harness runs with arcs off.
 
+### Evade on a burning order keeps the burn
+
+Measured on the engine before this change: a ship ordered to burn with the evade overlay
+spent 2 % of its time under fire burning on its order (BRACE cut the drive, TANK halved it,
+EVADE jinked off the line); without the overlay it was 81 %. Ships told to open range "with
+evade" mostly did not move. The owner's rule: with evade the engine burns the whole time and
+turns on thrust vectoring.
+
+- **The rule** (`src/simulation.py` module docstring). When the order itself burns this tick
+  (asked through `_fly_maneuver` without letting it steer: HEADING, BURN, BRAKE, plain
+  INTERCEPT, the burns of range keeping), the drive keeps the order's throttle and evasion
+  steers the thrust axis inside 20 degrees of the burn line (`EVADE_BURN_CONE_DEG`, the nose arc
+  less the presentation margin): 94 % of the push stays on the line at the cone edge. EVADE
+  swings across the rounds' approach (side and scatter from the same keyed jink stream);
+  TANK / BRACE / PRESENT take the cone point with the best armour reachable before impact, or
+  keep dodging when no point is better. Cone and cycle come from each hull's thrust-vectoring
+  authority: 8 s for a corvette, 24 s for a battleship, and 16 degrees / 30 s for a
+  dreadnought. Engine-off orders and the EVADE maneuver are unchanged (calibration harness rows
+  for PADLOCK + dodge and EVASIVE are identical).
+- **Threat model.** A round led onto a burning ship used to be read as a miss until its last
+  seconds, because the closest approach was taken on the ship's straight-line track. The ship's
+  own burn now enters the miss.
+- **Measured** (`scripts/evade_burn_measure.py`, 12 seeds per row, before -> after):
+
+| ship burning across 3 gun ships 120-200 km off | on order under fire | rounds that hit | penetrations |
+|---|---|---|---|
+| corvette, no overlay | 100 % | 22 % | 52 |
+| corvette, dodge | 48 -> 100 % | 4.7 -> 4.4 % | 1 -> 2 |
+| destroyer, no overlay | 100 % | 38 % | 231 |
+| destroyer, dodge | 50 -> 100 % | 10.2 -> 10.1 % | 25 -> 32 |
+| battlecruiser, dodge (none: 43 %) | 44 -> 99 % | 18 -> 22 % | 50 -> 124 |
+| dreadnought, dodge (none: 50 %) | 37 -> 100 % | 35 -> 45 % | 101 -> 268 |
+
+  Distance along the ordered line after 120 s: corvette 115 -> 210 km, destroyer 89 -> 139,
+  battlecruiser 62 -> 103, dreadnought 32 -> 52 (without the overlay 214 / 142 / 107 / 53).
+
+| burning away or cancelling closure | before (old overlay) | after | no overlay |
+|---|---|---|---|
+| destroyer escaping 2 gun ships from 150 km: lost | 0 of 12 | 8 of 12 | 12 of 12 |
+| same, km gained along the line after 120 s | 10 | 77 | 96 |
+| battlecruiser escaping: lost | 3 of 12 | 10 of 12 | 12 of 12 |
+| destroyer escaping 1 destroyer: penetrating hits | 30 | 99 | 108 |
+| destroyer cancelling 2 km/s closure on 2 gun ships: closest approach | 15 km | 50 km | 52 km |
+| same on 1 destroyer: closest approach / closing at 60 s | 47 km / 1.5 km/s | 71 km / 1.0 km/s | 69 km / 1.0 km/s |
+
+**What it costs.**
+- The older overlay saved ships that turned away from guns by turning the nose (5-6 times
+  the tail's armour) back onto them and halving or stopping the burn. The new overlay keeps
+  the burn and shows the guns the tail, and 30 % of tail hits strike the drive. Escaping
+  ships now die almost as often as without the overlay. This is the main open question for
+  the owner.
+- Heavy hulls dodge less. A dreadnought's swing is narrower and slower; its hit rate went
+  from 35 % to 45 % against 50 % without the overlay.
+- Calibration. Harness HOLD_RANGE + dodge targets now swing their correction burns and jink
+  at full throttle between them (the order counts as engine-off below
+  `EVADE_BURN_MIN_THROTTLE`). Neither dodge model fits that mixture, so two of its long-range
+  buckets are named in `RESIDUALS`.
+
 ### Recording files
 
 New recordings are written as `.json.gz` (compact JSON, deterministic gzip header): 15-37 times

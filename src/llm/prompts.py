@@ -1115,7 +1115,8 @@ MANEUVERS:
 - EVADE: threat-aware defense. Versus gun rounds it jinks (hard to hit). Versus guided
   torpedoes it automatically RUNS (burns away from the round to cut closure and buy your
   PD dwell time) and in the final seconds automatically PRESENTS your thickest armor to
-  the impact. Only EVADE (or the evade field on another maneuver) does this - without it
+  the impact (the evade field on a burning order: only inside its swing cone, below).
+  Only EVADE (or the evade field on another maneuver) does this - without it
   a maneuver takes torpedoes, including blinded ones, without reacting. On an order that
   burns (a heading, INTERCEPT, the burns of HOLD_RANGE / standoff) the evade field keeps
   your throttle the whole time and swings the burn within 20° of your line - ~94%
@@ -2848,11 +2849,12 @@ MANEUVERS (tell captains which to use):
   it), dodging, and turns armour onto a round it cannot dodge only inside that cone - a
   round from abeam or astern still strikes the flank or tail; RUN (full, vs a guided
   torpedo) leaves the line to burn away. Measured (seeded, 12 runs each): a destroyer
-  burning across the line of fire of 3 gun ships 120-200 km off burned on its order
-  100% of the time under fire and took 10% of the rounds fired at it, 38% without the
-  overlay; a dreadnought (a narrower, slower swing) 45% against 50%. A destroyer burning
-  straight away from 2 gun ships 150 km off showed them its tail either way and was lost
-  in 7 of 12 runs with the overlay, 12 of 12 without. On an order that does not burn
+  burning across the line of fire of 3 gun ships 120-200 km off (nose already on its
+  heading) burned on its order 100% of the time under fire and took 10% of the rounds
+  fired at it, 38% without the overlay; a dreadnought (a narrower, slower swing) 45%
+  against 50%. A destroyer burning straight away from 2 gun ships 150 km off took its
+  hits mostly on the tail and flank and was lost in 8 of 12 runs with the overlay, 12 of
+  12 without. On an order that does not burn
   (PADLOCK, MAINTAIN, throttle 0) the overlay flies the drive: jinks at full throttle,
   TANK (half throttle) or BRACE (drive off).
 - BRAKE: burn against the ship's own (world-frame) velocity
@@ -2931,7 +2933,8 @@ HOW POINT DEFENSE ACTUALLY WORKS:
   battleship behind 8 escorts; the same attack on an evading one landed 12/18. A ship
   with torpedoes INBOUND (see ORDNANCE) that does not EVADE is still hit by the rounds
   PD blinded; one that EVADEs dodges dead rounds and turns its nose (thickest armor)
-  onto live ones. A dead round on nobody's line needs nothing.
+  onto live ones - with the evade field on a burning order, only as far as its swing cone
+  (20° off the burn line) allows. A dead round on nobody's line needs nothing.
 - DWELL IS SET BY THE TORPEDO'S CLOSING SPEED, NOT BY FLEET-TO-FLEET CLOSURE. Guidance
   holds a fuelled round at >={pd_closure_floor_kps:.0f} km/s however slowly the fleets
   approach, so it crosses the envelope in ~{pd_envelope_crossing_s:.0f}s and eats only

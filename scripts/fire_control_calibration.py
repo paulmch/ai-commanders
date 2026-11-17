@@ -26,8 +26,8 @@ against what the engine does, in two ways, and writes the test fixture:
   harness      Controlled engagements on the live engine: 1-8 shooters
                (battleship / cruiser / destroyer) firing FIRE_IMMEDIATE at one
                target that coasts, PADLOCKs, burns on a HEADING, flies
-               EVASIVE, or PADLOCK / HOLD_RANGE / a HEADING burn with
-               evade='dodge';
+               EVASIVE, or PADLOCK / HOLD_RANGE / a HEADING burn / an
+               INTERCEPT with evade='dodge';
                frigate..dreadnought, 40-400 km. Seeded and deterministic.
   table        Calibration table: observed hit rate vs the recorded (old) and
                the current model's P(hit), per maneuver class x 100 km bucket.
@@ -84,7 +84,7 @@ from src.simulation import (  # noqa: E402
 
 FLEET_PATH = ROOT / "data" / "fleet_ships.json"
 HARNESS_CLASSES = ("coast", "padlock", "burn", "evasive", "padlock_dodge", "hold_dodge",
-                   "heading_dodge")
+                   "heading_dodge", "intercept_dodge")
 HARNESS_HULLS = ("frigate", "destroyer", "cruiser", "battleship", "dreadnought")
 HARNESS_RANGES_KM = (40, 80, 120, 160, 220, 300, 400)
 HARNESS_SHOOTER_TYPES = ("battleship", "cruiser", "destroyer")
@@ -350,6 +350,10 @@ def harness_run(seed: int, cls: str, target_type: str, range_km: float, fleet: d
                      evade="dodge" if cls == "heading_dodge" else None)
     elif cls == "evasive":
         m = Maneuver(ManeuverType.EVASIVE, 0, duration=1e9, throttle=1.0)
+    elif cls == "intercept_dodge":
+        # a plain INTERCEPT at the shooter (it burns all the way) + dodge
+        m = Maneuver(ManeuverType.INTERCEPT, 0, duration=1e9, throttle=rng.choice([0.3, 1.0]),
+                     target_id="shooter", evade="dodge")
     else:
         kind = ManeuverType.HOLD_RANGE if cls == "hold_dodge" else ManeuverType.PADLOCK
         m = Maneuver(kind, 0, duration=1e9, throttle=1.0, target_id="shooter",

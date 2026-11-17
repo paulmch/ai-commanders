@@ -1525,12 +1525,12 @@ class TestEvasionDriveClaims:
         spec.loader.exec_module(ebm)
         doc = " ".join(ADMIRAL_DOCTRINE_CORE.split())
         m = re.search(r"a destroyer burning across the line of fire of 3 gun ships 120-200 km "
-                      r"off burned on its order (\d+)% of the time under fire and took (\d+)% "
-                      r"of the rounds fired at it, (\d+)% without the overlay; a dreadnought "
-                      r"\(a narrower, slower swing\) (\d+)% against (\d+)%\. A destroyer burning "
-                      r"straight away from 2 gun ships 150 km off showed them its tail either "
-                      r"way and was lost in (\d+) of 12 runs with the overlay, (\d+) of 12 without",
-                      doc)
+                      r"off \(nose already on its heading\) burned on its order (\d+)% of the "
+                      r"time under fire and took (\d+)% of the rounds fired at it, (\d+)% "
+                      r"without the overlay; a dreadnought \(a narrower, slower swing\) (\d+)% "
+                      r"against (\d+)%\. A destroyer burning straight away from 2 gun ships "
+                      r"150 km off took its hits mostly on the tail and flank and was lost in "
+                      r"(\d+) of 12 runs with the overlay, (\d+) of 12 without", doc)
         assert m, "the measured overlay sentence changed shape"
         quoted = [int(g) for g in m.groups()]
         todo = (ebm.jobs(["cross"], ["destroyer", "dreadnought"], evades=(None, "dodge"))
@@ -1545,4 +1545,5 @@ class TestEvasionDriveClaims:
         assert quoted[4] == pytest.approx(got[("cross", "dreadnought", "None")]["hit_pct"], abs=1.0)
         assert quoted[5] == got[("escape", "destroyer", "dodge")]["dead"]
         assert quoted[6] == got[("escape", "destroyer", "None")]["dead"]
-        assert got[("escape", "destroyer", "dodge")]["loc"].get("tail", 0) > 0
+        loc = got[("escape", "destroyer", "dodge")]["loc"]
+        assert loc.get("tail", 0) + loc.get("lateral", 0) > 2 * loc.get("nose", 0)

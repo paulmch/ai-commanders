@@ -651,6 +651,13 @@ def predict_plans(
             alpha, omega_max = sim._get_rotation_params(sim.ships[sid], engines_on=True)
             sigma_w = wobble_sigma_m(dts, accels[sid], wobble, alpha, omega_max)
         a_max = sim.ships[sid].kinematic_state.max_acceleration_ms2()
+        burn = getattr(sim.ships[sid], "evade_burn", None)
+        if burn is not None:
+            # The evade overlay on a burning order swings the burn inside its
+            # cone instead of jinking across at full thrust: its sideways
+            # authority is a_max x sin(cone). (Scaled, not refitted: the
+            # REACTIVE_SIGMA_K table was calibrated on the full jink.)
+            a_max *= burn[1]
         sigma_r, mode = reactive_sigma_m(dts, modes[sid], mode_now[sid], a_max)
         if diagnostics is not None:
             diagnostics[sid] = {

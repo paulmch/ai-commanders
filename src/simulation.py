@@ -54,8 +54,13 @@ Evade overlay on a burning order (Maneuver.evade, owner's rule, 2026-11):
   the nose's thickness).
 - RUN ('full', a guided torpedo inbound) still leaves the line to burn away
   from it, but never below the order's throttle, also while it turns.
-- Outside the cone (the order's own first turn onto its line, or turning
-  back after a RUN) the order's turn-first rule sets the throttle.
+- While evasion has the helm the drive keeps the order's throttle also with
+  the nose outside the cone (the order's first turn onto its line under
+  fire, or after a RUN): thrust vectoring turns it toward the cone while it
+  burns. An armour pick may then hold the attitude the hull already has.
+  Once no threat is left the order flies itself; a nose a swing left within
+  the cone plus HEADING_BURN_CONE_DEG swings back at the order's throttle,
+  one farther off turns back by the order's own turn-first rule.
 - Recorded: execution_state carries 'swing': true while the overlay flies
   this way; the fire-control forecast prices such a target by its swing
   (TargetMotion.swing_ms2, firecontrol.SWING_*).
@@ -1157,10 +1162,11 @@ class ShipCombatState:
     # one (CombatSimulation.target_motion reads the difference).
     flown_maneuver: Optional['Maneuver'] = None
     # Evade overlay on a burning order (module docstring): set by the ship's
-    # step - (throttle of the order's burn, sin of the swing cone) while its
-    # order burns with the overlay on, else None (the fire-control forecast's
-    # TargetMotion.swing_ms2); evade_swing is True on a step the overlay flew
-    # the swing (recorded on execution_state as 'swing').
+    # step - (throttle of the order's burn, sin of the swing cone, burn line)
+    # while its order burns with the overlay on, else None (the fire-control
+    # forecast's TargetMotion.swing_ms2, the status display's threat model);
+    # evade_swing is True on a step the overlay flew the swing (recorded on
+    # execution_state as 'swing').
     evade_burn: Optional[tuple] = None
     evade_swing: bool = False
 
@@ -2551,7 +2557,11 @@ class CombatSimulation:
         # the order's burn as the target last flew it (evade_burn).
         swing = 0.0
         burn = getattr(target, 'evade_burn', None)
-        if dodges and not evasive and burn is not None:
+        holding = maneuver is not None and getattr(maneuver, '_range_phase', None) == 'HOLD'
+        if dodges and not evasive and burn is not None and not holding:
+            # (A range keeper HOLDing its range burns only to correct it: between
+            # those burns its overlay jinks at full throttle as on an engine-off
+            # order, so it is priced as that dodger.)
             swing = accel * burn[0] * burn[1]
 
         # The HEADING burn the lead does not see yet. The lead extrapolates
@@ -3176,7 +3186,8 @@ class CombatSimulation:
                 note = self._burn_note
                 if overlay and note is not None and note[1] >= EVADE_BURN_MIN_THROTTLE:
                     # Burning with the overlay on: what the forecast prices.
-                    ship.evade_burn = (note[1], math.sin(self._evade_burn_swing(ship)[0]))
+                    ship.evade_burn = (note[1], math.sin(self._evade_burn_swing(ship)[0]),
+                                       note[0])
 
         # No attitude command this tick: the ship's RCS brakes the spin it
         # carries, at RCS authority, and the nose keeps swinging while it
@@ -5063,7 +5074,14 @@ class CombatSimulation:
 
     def _get_evasion_status(self, ship: ShipCombatState) -> dict:
         """Get current evasion status for tactical display."""
-        evade_dir, mode, throttle = self._calculate_evasion(ship, 0.0)
+        # A ship whose evade overlay rides on a burn reads threats with its
+        # burn added, as its evasion does (_evasion_overlay).
+        own_accel = None
+        burn = getattr(ship, 'evade_burn', None)
+        if burn is not None and len(burn) > 2:
+            own_accel = burn[2] * (ship.kinematic_state.max_acceleration_ms2()
+                                   * ship.get_effective_thrust_fraction() * burn[0])
+        evade_dir, mode, throttle = self._calculate_evasion(ship, 0.0, own_accel=own_accel)
 
         # Threats on a collision course with THIS ship: projectiles aimed at
         # it, guided torpedoes homing on it, and seeker-killed wrecks whose
@@ -5421,14 +5439,11 @@ class CombatSimulation:
                 aim = (self._swing_dodge_aim(ship, line, cone, cycle, dodgeable_only=True)
                        or line)
         ship.evade_swing = True
-        if ship.forward.angle_to(line) <= cone + math.radians(HEADING_BURN_CONE_DEG):
-            # Inside the cone, plus the order's own burn gate.
-            throttle = burn_throttle
-        else:
-            # Off the line: the order's own turn (turn first, then burn).
-            throttle = throttle_now
-        self._rotate_ship_toward(ship, aim, dt, engines_on=throttle > 0)
-        return throttle
+        # The order's throttle whatever the nose does: also off the line (the
+        # order's own first turn under fire, or turning back after a RUN) the
+        # drive burns while thrust vectoring turns the ship.
+        self._rotate_ship_toward(ship, aim, dt, engines_on=burn_throttle > 0)
+        return burn_throttle
 
     @staticmethod
     def _perpendicular(line: Vector3D, *refs: Vector3D) -> Vector3D:
@@ -5492,7 +5507,7 @@ class CombatSimulation:
                           mode: str) -> Optional[Vector3D]:
         """
         TANK / BRACE / PRESENT on a burning order: of the attitudes on the
-        swing cone (the burn line, the current one if inside it, and
+        swing cone (the burn line, the current one - even off the cone - and
         EVADE_BURN_ARMOUR_AZIMUTHS points on the edge), the one that - as far
         as the hull can turn before impact (_reachable_attitude) - lets the
         least energy through the armour it shows the threat
@@ -5517,9 +5532,9 @@ class CombatSimulation:
         # World-fixed azimuths: the candidates must not turn with the hull.
         u1 = self._perpendicular(line, Vector3D(0.0, 0.0, 1.0), Vector3D(0.0, 1.0, 0.0))
         u2 = line.cross(u1).normalized()
-        candidates = [line]
-        if ship.forward.angle_to(line) <= cone + 1e-3:
-            candidates.append(ship.forward)
+        # The current attitude is a candidate even off the cone (after a RUN
+        # the hull may already show its best face: it keeps it).
+        candidates = [line, ship.forward]
         c, s = math.cos(cone), math.sin(cone)
         for k in range(EVADE_BURN_ARMOUR_AZIMUTHS):
             phi = 2.0 * math.pi * k / EVADE_BURN_ARMOUR_AZIMUTHS
@@ -5527,8 +5542,8 @@ class CombatSimulation:
         params = self._get_rotation_params(ship, True)
         reach_cache: dict = {}
         threat_cache: dict = {}
-        best, best_score = line, None
-        for cand in candidates:
+        best, best_score, best_index = line, None, 0
+        for index, cand in enumerate(candidates):
             achieved = self._reachable_attitude(ship, cand, t_avail, engines_on=True,
                                                 params=params, cache=reach_cache)
             # Energy through the armour, then the thickness shown; not the
@@ -5539,12 +5554,13 @@ class CombatSimulation:
             if best_score is None:
                 line_score = score
             if best_score is None or score < best_score:
-                best, best_score = achieved, score
+                best, best_score, best_index = achieved, score, index
         if best_score == line_score:
             return None
         # A spinning hull's reachable attitude can lie past the cone (where
-        # its spin carries it): never aim outside the cone.
-        if best.angle_to(line) > cone:
+        # its spin carries it): never aim a swing outside the cone (holding
+        # the current attitude off it is the one exception).
+        if best_index != 1 and best.angle_to(line) > cone:
             best = (line * math.cos(cone)
                     + self._perpendicular(line, best) * math.sin(cone)).normalized()
         return best

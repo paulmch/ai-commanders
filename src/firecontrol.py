@@ -182,20 +182,24 @@ JINK_ACCEL_FRACTION = 0.39
 # acceleration it can put across the line of fire is the burn's times
 # sin(cone) (TargetMotion.swing_ms2), and its lead - which reads the drive -
 # extrapolates whatever swing it is flying at the shot. A round fired at it
-# finds it moved by SWING_*_FRACTION * swing_ms2 * tau * (T - tau / 2) with
-# tau = DODGE_BURN_S (the overlay dodge's bounded-burn shape: a swing aimed at
-# one round ends when that round's miss clears), by whether its evasion was
-# already swinging at the shot (reacting) or it was flying the burn line
-# (calm). Fitted (maximum likelihood, grid) on the 17k harness rounds whose
-# target was swinging a burn - HEADING + evade 'dodge' (class heading_dodge)
-# and HOLD_RANGE + dodge while its range keeping burns - frigate..dreadnought,
-# 40-400 km, 1-8 shooters (scripts/fire_control_calibration.py harness), on
-# the even seeds; held-out log-likelihood on the odd ones -3850 (the T^2 form
-# -3857, and 0.66x for a lone shooter at a HOLD_RANGE dodger 300-399 km where
-# this shape gives 0.81x). Forecast 6,410 hits for 6,181 landed; every
-# dodge:HEADING / dodge:HOLD_RANGE harness bucket within 0.71-1.28x.
-SWING_ACCEL_FRACTION = 0.20            # swinging at the shot
-SWING_CALM_ACCEL_FRACTION = 0.12       # flying the burn line at the shot
+# finds it moved by SWING_*_FRACTION * swing_ms2 * min(T, horizon)^2 / 2, by
+# whether its evasion was already swinging at the shot (reacting) or it was
+# flying the burn line (calm). Fitted (maximum likelihood, grid) on the 18k
+# harness rounds at targets swinging a fixed-line burn - HEADING + evade
+# 'dodge' (class heading_dodge) and a plain INTERCEPT + dodge
+# (intercept_dodge), frigate..dreadnought, 40-400 km, 1-8 shooters
+# (scripts/fire_control_calibration.py harness), on the even seeds: held-out
+# log-likelihood on the odd ones -4272 (the overlay dodge's bounded
+# DODGE_BURN_S shape: -4288, and it forecast 1.5-1.7x the hits landed under
+# fleet fire at 400-499 km); every dodge:HEADING / dodge:INTERCEPT bucket
+# within tolerance. A range keeper (HOLD_RANGE ...) swings its correction
+# burns but jinks at full throttle between them (below
+# EVADE_BURN_MIN_THROTTLE its order counts as engine-off): it is priced with
+# this swing in its CLOSE / OPEN / ARRIVE phases and as an engine-off dodger
+# while it HOLDs (CombatSimulation.target_motion); two of its long-range
+# buckets are named in RESIDUALS.
+SWING_ACCEL_FRACTION = 0.15            # swinging at the shot
+SWING_CALM_ACCEL_FRACTION = 0.06       # flying the burn line at the shot
 
 # A HEADING target still turning onto its ordered heading (or holding a
 # synchronised burn start) burns at the ordered throttle once inside
@@ -284,7 +288,7 @@ def displacement_sigma_m(time_of_flight_s: float, motion: TargetMotion) -> float
         if t >= motion.dodge_min_time_s and swing > 0.0 and not motion.evasive:
             # A burn swung inside its cone (SWING_*_FRACTION).
             k = SWING_ACCEL_FRACTION if motion.reacting else SWING_CALM_ACCEL_FRACTION
-            sigma_dodge = k * swing * burn_t2
+            sigma_dodge = k * swing * td * td / 2.0
         elif t >= motion.dodge_min_time_s:
             if motion.evasive:
                 k = (EVASIVE_DODGE_ACCEL_FRACTION if motion.reacting
