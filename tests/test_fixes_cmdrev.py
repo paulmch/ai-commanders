@@ -376,3 +376,21 @@ def test_intent_only_issue_order_schema_offers_only_what_that_mode_flies():
     assert tool["parameters"]["required"] == ["ship_name"]
     full = next(t["function"] for t in get_admiral_tools() if t["function"]["name"] == "issue_order")
     assert "heading" in full["parameters"]["properties"]          # default tools untouched
+
+
+def test_score_line_states_the_verdict_with_the_runners_draw_margin(tmp_path):
+    """--show-score gave the two scores but not the draw margin the runner applies
+    (max 5 points, 5% of the higher): 151 vs 145 reads as a win and is a draw."""
+    from types import SimpleNamespace
+    from src.llm import fleet_intel
+    from src.llm.battle_runner import LLMBattleRunner
+    for a, b in ((151.0, 151.0), (151.0, 145.0), (151.0, 140.0), (120.0, 151.0)):
+        fleet_intel.time_limit_scores, real = (lambda *_: (a, b)), fleet_intel.time_limit_scores
+        try:
+            line = fleet_intel.score_line(SimpleNamespace(ships={}), "alpha")
+            outcome = LLMBattleRunner._evaluate_fleet_tactical_advantage(
+                SimpleNamespace(alpha_ships={}, beta_ships={}, config=SimpleNamespace(verbose=False)))
+        finally:
+            fleet_intel.time_limit_scores = real
+        expected = {"DRAW": "a DRAW", "ALPHA_VICTORY": "you win", "BETA_VICTORY": "he wins"}
+        assert expected[outcome[0].name] in line, (a, b, line, outcome)

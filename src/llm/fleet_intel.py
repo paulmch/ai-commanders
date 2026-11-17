@@ -1269,7 +1269,19 @@ def score_line(sim: Any, faction: str) -> str:
     beta = [s for s in ships if getattr(s, "faction", None) == "beta"]
     a, b = time_limit_scores(alpha, beta)
     you, them = (a, b) if faction == "alpha" else (b, a)
-    return f"SCORE IF THE BATTLE ENDED NOW (time-limit verdict): you {you:.0f} / them {them:.0f}"
+    # The verdict the runner draws from these scores (battle_runner
+    # _evaluate_fleet_tactical_advantage): closer than max(5, 5% of the
+    # higher) is a draw - without it "you 151 / them 145" reads as a win.
+    margin = max(TIME_LIMIT_DRAW_MIN_POINTS, max(you, them) * TIME_LIMIT_DRAW_FRACTION)
+    verdict = ("a DRAW (closer than the margin, " f"{margin:.0f})" if abs(you - them) < margin
+               else "you win" if you > them else "he wins")
+    return (f"SCORE IF THE BATTLE ENDED NOW (time-limit verdict): you {you:.0f} / them {them:.0f}"
+            f" = {verdict}")
+
+
+# The time-limit verdict's draw margin: max(5 points, 5% of the higher score).
+TIME_LIMIT_DRAW_MIN_POINTS = 5.0
+TIME_LIMIT_DRAW_FRACTION = 0.05
 
 
 # =============================================================================
