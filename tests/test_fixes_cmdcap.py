@@ -730,3 +730,41 @@ class TestPeerKnowledge:
             "TIS Dart-1, TIS Dart-2 launched 3 torpedoes at OCS X, 3 in flight, first impact in ~60 s",
             "hello"]
         assert items[1]["text"] == "a"                     # the recorded items are untouched
+
+
+# =============================================================================
+# M3: each faction drafts its own ship names (commander drafts)
+# =============================================================================
+
+from src.llm.fleet_draft import (  # noqa: E402
+    BETA_CLASS_NICKNAMES, CLASS_NICKNAMES, auto_draft, name_drafted_ships)
+
+
+class TestFactionNames:
+
+    def test_pools_share_no_name(self):
+        assert not set(CLASS_NICKNAMES.values()) & set(BETA_CLASS_NICKNAMES.values())
+        assert set(BETA_CLASS_NICKNAMES) == set(CLASS_NICKNAMES)
+
+    def test_commander_drafts_get_their_own_names(self):
+        roster = ["destroyer", "destroyer", "battlecruiser"]
+        alpha = [s.ship_name for s in name_drafted_ships(roster, "alpha", faction_pool=True)]
+        beta = [s.ship_name for s in name_drafted_ships(roster, "beta", faction_pool=True)]
+        assert alpha == ["TIS Falchion-1", "TIS Falchion-2", "TIS Lancer"]
+        assert beta == ["OCS Saber-1", "OCS Saber-2", "OCS Halberd"]
+
+    def test_llm_beta_draft_uses_the_beta_pool(self):
+        from tests.test_fleet_draft import DraftStubClient
+        from src.llm.fleet_draft import SHIP_POINT_COSTS, run_admiral_draft
+        budget = 2 * SHIP_POINT_COSTS["cruiser_torpedo"] + 2 * SHIP_POINT_COSTS["destroyer"]
+        draft = run_admiral_draft(client=DraftStubClient(), model="stub-model",
+                                  admiral_name="Admiral Stub", faction="beta", fleet_data=FLEET,
+                                  budget=budget, max_ships=8, verbose=False)
+        assert [s.ship_name for s in draft.ships][:3] == ["OCS Marlin-1", "OCS Marlin-2", "OCS Saber-1"]
+
+    def test_seeded_auto_drafts_keep_the_shared_pool(self):
+        # perf_check / tournaments / heuristic battles: names are in their
+        # hashed event streams, which must not move.
+        names = [s.ship_name for s in auto_draft("beta", 100, 8, seed=3).ships]
+        assert all(any(n.split(" ", 1)[1].startswith(nick) for nick in CLASS_NICKNAMES.values())
+                   for n in names)
