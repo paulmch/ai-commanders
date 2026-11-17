@@ -2025,9 +2025,21 @@ def format_my_ship(
     sim_time = tactical_status.get("sim_time", 0.0)
     turn = own.get("turn_90_s") or get_ship_turn_time_90deg(ship_type or "destroyer")
     head = f"MY SHIP: {ship_ref(ship_name, own.get('ship_id'))} - {class_label(ship_type)}"
-    if own.get("accel_g"):
-        head += f", {own['accel_g']:.1f}g"
-    head += f", 90° turn ~{turn:.0f} s"
+    accel = own.get("accel_g")
+    engine = own.get("engine_fraction")
+    if isinstance(accel, (int, float)) and (accel <= 0.005 or (
+            isinstance(engine, (int, float)) and engine <= 0.0)):
+        # A 0 g drive used to vanish from the line (`if accel_g:`): captains
+        # re-issued burns to a dead drive for checkpoints on end.
+        head += ", DRIVE DEAD (0 g): cannot burn; RCS turns only"
+        if isinstance(own.get("turn_90_rcs_s"), (int, float)):
+            head += f" (90° ~{own['turn_90_rcs_s']:.0f} s)"
+    else:
+        if accel:
+            head += f", {accel:.1f}g"
+            if isinstance(engine, (int, float)) and engine < 0.995:
+                head += f" (drive damaged: {engine * 100:.0f}% thrust)"
+        head += f", 90° turn ~{turn:.0f} s"
     lines = [head]
     state = []
     if own.get("position_km"):

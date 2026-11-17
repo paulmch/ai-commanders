@@ -1210,6 +1210,21 @@ class LLMCaptain:
             if thr is not None and aim is not None and thr > 0:
                 motion = (f"INTERCEPT@{thr * 100:.0f}% held for 2 checkpoints",
                           aim.position - ship.position, thr, 2 * interval)
+        # A burn ordered to a dead drive cannot be flown (c beta_5 was ordered
+        # five burns running on a 0 g drive and re-issued every one).
+        try:
+            dead = float(ship.get_effective_thrust_fraction()) <= 0.0
+        except (AttributeError, TypeError, ValueError):
+            dead = False
+        if dead:
+            kind = str((spec or {}).get("maneuver_type") or "").upper() if isinstance(spec, dict) else ""
+            burns = (motion is not None and motion[2] > 0) or (
+                isinstance(heading, dict) and (thr is None or float(thr) > 0)) or (
+                kind not in ("", "PADLOCK", "MAINTAIN", "OVERLAY") and (thr is None or float(thr) > 0))
+            if burns:
+                check["engine"] = ("NOT FLYABLE: your drive is DEAD (0 g) - no burn happens; the "
+                                   "ship coasts on its present velocity (RCS turns only)")
+                motion = None
         if motion and enemies:
             label, vec, thr, burn = motion
             res = self._cpa_under_burn(simulation, ship, enemies, vec, thr, burn)
@@ -2400,14 +2415,18 @@ class LLMCaptain:
                 "speed_kps": vel.magnitude / 1000,
             }
             try:
+                own["engine_fraction"] = float(ship.get_effective_thrust_fraction())
                 own["accel_g"] = (ship.kinematic_state.max_acceleration_ms2()
-                                  * ship.get_effective_thrust_fraction() / 9.80665)
-            except (AttributeError, TypeError):
+                                  * own["engine_fraction"] / 9.80665)
+            except (AttributeError, TypeError, ValueError):
                 pass
             if hasattr(simulation, "_estimate_turn_time"):
                 try:
                     own["turn_90_s"] = simulation._estimate_turn_time(
                         ship, math.pi / 2, engines_on=True)
+                    if own.get("engine_fraction", 1.0) <= 0.0:
+                        own["turn_90_rcs_s"] = simulation._estimate_turn_time(
+                            ship, math.pi / 2, engines_on=False)
                 except (AttributeError, TypeError, ValueError):
                     pass
             status["own"] = own

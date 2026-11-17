@@ -150,3 +150,143 @@ class TestQuotedEnums:
         # Sibling: mode '"auto"' fell through to a manual RETRACT.
         assert radiator_command_from_args({"mode": '"auto"'})["mode"] == "auto"
         assert radiator_command_from_args({"extend": '"true"'})["extend"] is True
+
+
+# =============================================================================
+# C1: the helm feedback names the real cause of a short burn
+# =============================================================================
+
+from types import SimpleNamespace  # noqa: E402
+
+from src.llm.execution_feedback import execution_feedback, helm_window, helm_window_text  # noqa: E402
+
+
+def _ev(kind, t, ship="me", target=None, **data):
+    return SimpleNamespace(event_type=SimpleNamespace(name=kind), timestamp=t, ship_id=ship,
+                           target_id=target, data=data)
+
+
+def _state(t, mode, req, app, engine=1.0, fuel=1.0):
+    return _ev("EXECUTION_STATE", t, mode=mode, requested_throttle=req, applied_throttle=app,
+               engine_fraction=engine, fuel_fraction=fuel)
+
+
+def _helm_sim(events):
+    ships = {"me": SimpleNamespace(name="TIS Me", ship_id="me", is_destroyed=False),
+             "foe": SimpleNamespace(name="OCS Foe", ship_id="foe", is_destroyed=False)}
+    return SimpleNamespace(events=events, current_time=60.0, decision_interval=30.0,
+                           get_ship=ships.get)
+
+
+HEADING = dict(maneuver_type="HEADING", throttle=1.0, evade="full",
+               heading_direction={"x": 1, "y": 0, "z": 0})
+
+
+class TestHelmWindow:
+
+    def test_evasion_holding_the_burn_is_named_with_the_threat(self):
+        # Recorded (d alpha_1 T+240): "BRACE, requested 100% throttle, applied
+        # 0% (turning onto the burn line, or fuel/engine limited)".
+        events = [_ev("MANEUVER_STARTED", 30.0, **HEADING),
+                  _state(30.0, "HEADING", 1.0, 0.05),     # 4 s turning
+                  _state(34.0, "HEADING", 1.0, 1.0),      # 8 s burning
+                  _state(42.0, "BRACE", 1.0, 0.0),        # 12 s braced
+                  _state(54.0, "EVADE", 1.0, 1.0),        # 6 s jinking
+                  _ev("PROJECTILE_LAUNCHED", 40.0, ship="foe", target="me")]
+        text = helm_window_text(_helm_sim(events), "me", 30.0, 60.0)
+        assert text.startswith("helm T+30-60 (HEADING @100%, evade full): burned 8 of 30 s")
+        assert "evasion held the burn 18 s: BRACE 12 s drive off, EVADE 6 s jinking" in text
+        assert "fire from OCS Foe [foe]" in text
+        assert "turning onto the burn line 4 s" in text
+        assert "fuel/engine limited" not in text
+
+    def test_a_dead_drive_is_named(self):
+        events = [_ev("MANEUVER_STARTED", 30.0, **dict(HEADING, evade=None)),
+                  _state(30.0, "HEADING", 1.0, 0.0, engine=0.0)]
+        text = helm_window_text(_helm_sim(events), "me", 30.0, 60.0)
+        assert "burned 0 of 30 s" in text and "DRIVE DEAD 30 s" in text
+
+    def test_the_interlock_is_named(self):
+        events = [_ev("MANEUVER_STARTED", 30.0, **dict(HEADING, evade=None)),
+                  _state(30.0, "HEADING", 1.0, 1.0),
+                  _ev("DRIVE_INTERLOCK", 40.0, phase="enter"),
+                  _state(40.0, "HEADING", 1.0, 0.2),
+                  _ev("DRIVE_INTERLOCK", 55.0, phase="exit"),
+                  _state(55.0, "HEADING", 1.0, 1.0)]
+        w = helm_window(_helm_sim(events), "me", 30.0, 60.0)
+        assert w["interlock_s"] == pytest.approx(15.0) and w["burned_s"] == pytest.approx(15.0)
+        assert "drive interlock 15 s" in helm_window_text(_helm_sim(events), "me", 30.0, 60.0)
+
+    def test_a_full_burn_needs_no_window_line(self):
+        events = [_ev("MANEUVER_STARTED", 30.0, **dict(HEADING, evade=None)),
+                  _state(30.0, "HEADING", 1.0, 1.0)]
+        assert helm_window_text(_helm_sim(events), "me", 30.0, 60.0) is None
+
+    def test_engine_off_order_with_the_overlay_says_evasion_flew_it(self):
+        events = [_ev("MANEUVER_STARTED", 30.0, maneuver_type="PADLOCK", throttle=1.0,
+                      evade="dodge"),
+                  _state(30.0, "PADLOCK", 1.0, 0.0), _state(50.0, "TANK", 1.0, 0.5)]
+        text = helm_window_text(_helm_sim(events), "me", 30.0, 60.0)
+        assert text == "helm T+30-60 (PADLOCK, evade dodge): evasion flew the ship 10 s: TANK 10 s half throttle"
+
+    def test_new_orders_applied_now_are_not_last_windows(self):
+        events = [_ev("MANEUVER_STARTED", 30.0, **dict(HEADING, evade=None)),
+                  _state(30.0, "HEADING", 1.0, 0.0, engine=0.0),
+                  _ev("MANEUVER_STARTED", 60.0, maneuver_type="PADLOCK", throttle=1.0)]
+        assert "HEADING @100%" in helm_window_text(_helm_sim(events), "me", 30.0, 60.0)
+
+    def test_window_line_replaces_the_catch_all_in_engine_feedback(self):
+        events = [_ev("MANEUVER_STARTED", 30.0, **HEADING), _state(30.0, "BRACE", 1.0, 0.0)]
+        sim = _helm_sim(events)
+        text = execution_feedback(sim, ["me"])
+        assert "BRACE 30 s drive off" in text and "fuel/engine limited" not in text
+
+
+# =============================================================================
+# C2: a dead (or damaged) drive is stated, and a burn order to it is unflyable
+# =============================================================================
+
+from src.llm.admiral import AdmiralOrder  # noqa: E402
+from src.llm.prompts import format_my_ship  # noqa: E402
+
+
+def _kill_drive(ship, health=5.0):
+    for module in ship._get_modules_by_type("engine"):
+        module.health_percent = health
+
+
+class TestDeadDrive:
+
+    def test_my_ship_says_drive_dead_instead_of_dropping_the_g(self):
+        # Recorded (c beta_5 T+390): "Frigate, 90 deg turn ~83 s" - no g at all.
+        text = format_my_ship("Ward-2", "TIS Ward-2", "frigate", {},
+                              {"own": {"ship_id": "beta_5", "accel_g": 0.0, "engine_fraction": 0.0,
+                                       "turn_90_rcs_s": 83.0}}, FLEET)
+        assert "DRIVE DEAD (0 g): cannot burn; RCS turns only (90° ~83 s)" in text.splitlines()[0]
+
+    def test_my_ship_says_a_damaged_drive(self):
+        text = format_my_ship("Ward-2", "TIS Ward-2", "frigate", {},
+                              {"own": {"ship_id": "beta_5", "accel_g": 1.8,
+                                       "engine_fraction": 0.6}}, FLEET)
+        assert "1.8g (drive damaged: 60% thrust)" in text.splitlines()[0]
+
+    def test_live_ship_status_carries_the_dead_drive(self):
+        sim, cap = _sim(), _captain()
+        _kill_drive(sim.get_ship("alpha_1"))
+        status = cap._build_tactical_status(sim.get_ship("alpha_1"), sim.get_ship("beta_1"), sim)
+        assert status["own"]["engine_fraction"] == 0.0 and status["own"]["accel_g"] == 0.0
+        assert status["own"]["turn_90_rcs_s"] > 0
+
+    def test_order_check_marks_a_burn_order_unflyable(self):
+        sim, cap = _sim(), _captain()
+        _kill_drive(sim.get_ship("alpha_1"))
+        order = AdmiralOrder(target_ship_id="alpha_1", target_ship_name="TIS Falchion-1",
+                             order_text="Burn away.", heading={"x": -1, "y": 0, "z": 0},
+                             throttle=1.0)
+        check = cap._order_check(order, sim, sim.get_ship("alpha_1"), [])
+        assert check["engine"].startswith("NOT FLYABLE: your drive is DEAD (0 g)")
+        padlock = AdmiralOrder(target_ship_id="alpha_1", target_ship_name="TIS Falchion-1",
+                               order_text="Nose on.", maneuver={"maneuver_type": "PADLOCK",
+                                                                "throttle": 1.0})
+        assert "NOT FLYABLE" not in (cap._order_check(padlock, sim, sim.get_ship("alpha_1"), [])
+                                     .get("engine") or "")

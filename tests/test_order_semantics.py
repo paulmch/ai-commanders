@@ -164,9 +164,12 @@ class TestEngineOffRendering:
         text = _helm_text({"mode": "PADLOCK", "requested_throttle": 1.0, "applied_throttle": 0.0})
         assert text == "PADLOCK, coasting (engine off, nose on target)"
         assert "turning onto the burn line" not in text
+        # The catch-all "(turning onto the burn line, or fuel/engine limited)"
+        # is gone: the helm window line names the real cause (cmdcap C1,
+        # tests/test_fixes_cmdcap.py TestHelmWindow).
         assert _helm_text({"mode": "HEADING", "requested_throttle": 1.0,
-                           "applied_throttle": 0.1}).endswith("(turning onto the burn line, "
-                                                             "or fuel/engine limited)")
+                           "applied_throttle": 0.1}) == \
+            "HEADING, requested 100% throttle, applied 10%"
         # A throttle-0 order is flying, not "no maneuver"; its evade overlay
         # burns at full throttle while it has the helm.
         assert _helm_text({"mode": "HEADING", "requested_throttle": 0.0,
