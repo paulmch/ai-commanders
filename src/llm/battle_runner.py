@@ -1884,6 +1884,10 @@ class LLMBattleRunner:
             skipped = self._plan_captain_turns(captain_entries, admiral_orders)
         for ship_id, captain, faction in captain_entries:
             captain.clear_admiral_context()
+            captain.fleet_channel = self.fleet_communication
+            # Every fleet-mate's orders this checkpoint (ORDERED TARGETS line).
+            captain.fleet_orders = {sid: admiral_orders[sid] for sid, _, f in captain_entries
+                                    if f == faction and sid in admiral_orders}
             if ship_id in admiral_orders:
                 orders = admiral_orders[ship_id]
                 admiral = self.alpha_admiral if faction == "alpha" else self.beta_admiral
@@ -2681,6 +2685,19 @@ class LLMBattleRunner:
         else:
             fields = {"status": "ACK", "reason": "", "intent": "", "contact": None, "request": None}
             implicit = True
+        # `reason` on the captain's action calls (tools.with_reason_fields):
+        # filed as the report's reason - a DEVIATE when the engine finds the
+        # ship off its order (set below), else read as the captain's intent.
+        reasons = "; ".join(getattr(captain, "call_reasons", None) or [])
+        if reasons and not crew_out:
+            from .communication import REPORT_REASON_CHARS, clip
+            if explicit:
+                if not fields.get("reason"):
+                    fields["reason"] = clip(reasons, REPORT_REASON_CHARS)
+            elif not getattr(captain, "last_call_failed", False):
+                fields = {"status": "ACK", "reason": "", "intent": clip(reasons, REPORT_REASON_CHARS),
+                          "contact": None, "request": None}
+                implicit = False
         order = primary_order(orders)
         executed = executed_maneuver(ship, commands, now)
         target_id = commanded_target(ship, commands)
@@ -2699,6 +2716,16 @@ class LLMBattleRunner:
         }
         if crew_out:
             mark_not_executable(report["compliance"])
+        elif (reasons and not explicit and report["status"] == "ACK"
+              and isinstance(report["compliance"], dict) and not report["compliance"]["followed"]):
+            report["status"], report["reason"], report["intent"] = "DEVIATE", report["intent"], ""
+        # Next checkpoint the captain is shown the verdict the admiral reads
+        # when it is NOT as ordered (captain._format_verdict), recomputed then
+        # with the rounds that actually left the tubes.
+        captain.verdict_basis = {"t": now, "order": order, "executed": executed,
+                                 "target_id": target_id, "cursor": len(self.simulation.events),
+                                 "status": report["status"], "reason": report.get("reason") or "",
+                                 "implicit": implicit, "channel": channel}
         self._note_drive_interlock(report, ship)
         fold_admiral_signals(report, self._admiral_signals.pop(ship_id, []))
         if getattr(captain, "discussions", None):

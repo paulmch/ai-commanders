@@ -78,13 +78,32 @@ def parse_number(value: Any, name: str) -> Optional[float]:
     return number
 
 
+# Quote characters a model wraps around an enum value ('"dodge"', "'full'",
+# smart quotes): stripped before matching.
+_ENUM_QUOTES = "\"'`“”‘’"
+
+
+def enum_token(value: Any) -> str:
+    """
+    An enum-like tool argument as a bare token: surrounding whitespace and
+    quotes stripped (repeatedly - '"\\'dodge\\'"'), inner whitespace collapsed.
+    Case is left to the caller. A model that double-encodes an enum (sends the
+    JSON string '"dodge"' for dodge) used to lose the whole call over it.
+    """
+    text = " ".join(str(value).split())
+    while len(text) >= 1 and (text[0] in _ENUM_QUOTES or text[-1] in _ENUM_QUOTES):
+        text = text.strip(_ENUM_QUOTES).strip()
+    return text
+
+
 def parse_evade(value: Any) -> Optional[str]:
-    """'full' | 'dodge' | None from a tool argument (true means 'full')."""
+    """'full' | 'dodge' | None from a tool argument (true means 'full');
+    quotes, case and whitespace are tolerated ('"Dodge "' is dodge)."""
     if value is None or value is False:
         return None
     if value is True:
         return "full"
-    text = str(value).strip().lower()
+    text = enum_token(value).lower()
     if text in ("", "none", "off", "no", "false", "0"):
         return None
     if text in ("full", "true", "yes", "on", "evade", "1"):
@@ -135,7 +154,7 @@ def resolve_ship(simulation: Any, own_ship_id: str, ref: Any) -> Optional[Any]:
     """
     if ref is None:
         return None
-    wanted = str(ref).strip().lower()
+    wanted = enum_token(ref).lower()          # '"OCS Lancer-2"' resolves too
     if not wanted:
         return None
     pools = [list(simulation.get_enemy_ships(own_ship_id)),
@@ -649,7 +668,7 @@ def admiral_maneuver_spec(args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
       order too (simulation._evasion_overlay), so an attitude-only HEADING
       with evade still dodges.
     """
-    kind = str(args.get("maneuver") or "").strip().upper()
+    kind = enum_token(args.get("maneuver") or "").upper().replace(" ", "_")
     if kind == "EVASIVE":
         kind = "EVADE"
     if kind and kind not in ADMIRAL_MANEUVERS:
@@ -1084,8 +1103,11 @@ def admiral_maneuver_lines(order: Any) -> List[str]:
             thr = getattr(order, "throttle", None)
             power = (" (at full throttle: the heading itself does not burn)"
                      if thr is not None and float(thr) <= 0 else "")
-            return [f"      >>> ...with evade {spec['evade']}: evasion flies the ship{power} "
-                    f"only while a torpedo or slug is inbound, then the heading resumes."]
+            # "Heading ... with evade" was turned into set_maneuver EVADE ten
+            # times in the recorded battles - which REPLACES the heading.
+            return [f"      >>> ...with evade {spec['evade']} (part of this order): evasion flies "
+                    f"the ship{power} only while a torpedo or slug is inbound, then the heading "
+                    f"resumes. set_maneuver EVADE would replace the heading instead."]
         return []
     what = getattr(order, "maneuver_applied", None) or describe_maneuver_spec(spec)
     replaced = getattr(order, "replaces_fleet_order", None)

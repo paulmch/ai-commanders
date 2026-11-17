@@ -430,13 +430,36 @@ def validate_selection(
     return flat, spent, None
 
 
-def name_drafted_ships(ship_types: List[str], faction: str) -> List[DraftedShip]:
-    """Assign ids and readable names ("TIS Falchion-2") to drafted hulls."""
+# Beta's own names (lane cmdcap, comms audit M3): both fleets drew from one
+# pool, so "TIS Lancer-1" faced "OCS Lancer-1" and a "the name also matches
+# your own" warning rode on up to 264 of 279 captain turns of a battle. Used
+# for commander (LLM admiral) drafts only: the seeded auto-draft battles
+# (perf_check, tournaments, heuristic runs) keep the shared pool, so their
+# event streams are unchanged; recordings, fixtures and configs keep the
+# names they carry, and the collision handling stays for those.
+BETA_CLASS_NICKNAMES: Dict[str, str] = {
+    "corvette": "Stiletto",
+    "frigate": "Picket",
+    "destroyer": "Saber",
+    "battlecruiser": "Halberd",
+    "cruiser": "Rampart",
+    "cruiser_torpedo": "Marlin",
+    "battleship": "Monarch",
+    "dreadnought": "Leviathan",
+    "dreadnought_siege": "Sledge",
+}
+
+
+def name_drafted_ships(ship_types: List[str], faction: str,
+                       faction_pool: bool = False) -> List[DraftedShip]:
+    """Assign ids and readable names ("TIS Falchion-2") to drafted hulls;
+    faction_pool: beta draws BETA_CLASS_NICKNAMES ("OCS Saber-2")."""
     prefix = "TIS" if faction == "alpha" else "OCS"
+    pool = BETA_CLASS_NICKNAMES if faction_pool and faction != "alpha" else CLASS_NICKNAMES
     counters: Dict[str, int] = {}
     drafted = []
     for i, stype in enumerate(ship_types):
-        nickname = CLASS_NICKNAMES.get(stype, stype.title())
+        nickname = pool.get(stype) or CLASS_NICKNAMES.get(stype, stype.title())
         counters[nickname] = counters.get(nickname, 0) + 1
         n = counters[nickname]
         # Only number when a class repeats, matching fleet naming elsewhere
@@ -835,7 +858,7 @@ def run_admiral_draft(
         auto = auto_draft(faction, budget, max_ships, seed=seed)
         return auto
 
-    draft.ships = name_drafted_ships(flat, faction)
+    draft.ships = name_drafted_ships(flat, faction, faction_pool=True)
     if verbose:
         roster = ", ".join(s.ship_name for s in draft.ships)
         print(f"[DRAFT {faction}] {admiral_name} spends "
