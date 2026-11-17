@@ -107,7 +107,8 @@ const NON_NEGATIVE = new Map([
   ['vEdge', 'vent: abs(dot(...))'],
   ['1.0 - fl', 'smoke: fl = clamp(f, 0.0, 1.0)'],
   ['facing', 'plume wash: facing < 0.03 is discarded first'],
-  ['loss', 'hull wear: lossOf() clamps to 0..1']
+  ['loss', 'hull wear: lossOf() clamps to 0..1'],
+  ['ndv', 'blast shell: abs(dot(...))']
 ]);
 
 function powBases(src) {
@@ -129,7 +130,8 @@ function powBases(src) {
 }
 
 test('damage shaders never take pow() of a base that can go negative (NaN on GPUs)', () => {
-  for (const file of ['../src/render/DamageFX.js', '../src/render/HullWear.js']) {
+  // DamageFX/HullWear: hull damage; Explosion/BlastShell: the blasts spawned at every hit
+  for (const file of ['../src/render/DamageFX.js', '../src/render/HullWear.js', '../src/render/Explosion.js', '../src/render/BlastShell.js']) {
     const src = readFileSync(new URL(file, import.meta.url), 'utf8').replace(/Math\.pow\(/g, 'Math_pow(').replace(/\/\/[^\n]*/g, '');
     const bases = powBases(src);
     assert.ok(bases.length > 0 || file.includes('HullWear'), file);

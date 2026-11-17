@@ -107,7 +107,7 @@ function fireballMaterial() {
         // hotter in the middle of the disc, mottled by the noise
         float heat = uHeat * (0.15 + 1.0 * noise) * (0.4 + 0.6 * ndv);
         heat = clamp(heat, 0.0, 1.0);
-        float edge = 1.0 - pow(1.0 - ndv, 3.5);
+        float edge = 1.0 - pow(max(1.0 - ndv, 0.0), 3.5);   // ndv can round past 1: pow(<0) is NaN on GPUs
         float a = smoothstep(0.03, 0.35, heat) * edge * uAlpha * (0.3 + 0.7 * noise);
         vec3 col = ramp(heat) * (0.35 + 0.9 * heat);
         gl_FragColor = vec4(col * a * uIntensity, 1.0);
@@ -166,7 +166,7 @@ function shellMaterial() {
       void main() {
         #include <logdepthbuf_fragment>
         float ndv = abs(dot(normalize(vNormal), normalize(vView)));
-        float rim = pow(1.0 - ndv, uRimPow);
+        float rim = pow(max(1.0 - ndv, 0.0), uRimPow);
         float n = tri(uNoise, vLocal * 2.5 + uSeed, vLocal).g;
         float n2 = tri(uNoise, vLocal * 6.5 - uSeed * 1.3, vLocal).b;
         // torn into filaments: patches of the front simply are not there
@@ -200,14 +200,15 @@ function ejectaMaterial() {
       uniform float uAge, uIntensity, uSeed;
       varying vec2 vUv;
       #include <logdepthbuf_pars_fragment>
+      float sq(float x) { return x * x; }
       void main() {
         #include <logdepthbuf_fragment>
         vec2 p = vUv * 2.0 - 1.0;
         float r = length(p);
         float n = texture2D(uNoise, p * 1.8 + uSeed).g;
         float front = 0.77 + (n - 0.5) * 0.04;
-        float rim = exp(-pow((r - front) / 0.018, 2.0));
-        float wake = exp(-pow((r - front + 0.08) / 0.085, 2.0)) * 0.22;
+        float rim = exp(-sq((r - front) / 0.018));          // x * x: pow(<0, 2.0) is NaN on some GPUs
+        float wake = exp(-sq((r - front + 0.08) / 0.085)) * 0.22;
         float arcs = smoothstep(0.18, 0.68, n);
         vec3 color = mix(vec3(0.65, 1.25, 2.4), vec3(1.4, 0.35, 0.08), uAge);
         gl_FragColor = vec4(color * (rim + wake) * arcs * uIntensity, 1.0);
