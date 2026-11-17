@@ -146,6 +146,10 @@ class FleetDefinition:
     faction: str  # "alpha" or "beta"
     admiral: Optional[AdmiralConfig] = None
     mcp: Optional[MCPConfig] = None  # MCP control (replaces admiral if enabled)
+    # Experiment plumbing (src/llm/call_policy.py): effort per role for this
+    # side, {"draft"|"directive"|"order"|"captain"|"trigger": level}. Empty =
+    # every call at the battle-wide effort (unchanged requests).
+    effort: Dict[str, str] = field(default_factory=dict)
 
 
 def parse_heuristic_doctrine(value: Any) -> Dict[str, str]:
@@ -430,11 +434,16 @@ def _parse_fleet(data: Dict[str, Any], faction: str) -> FleetDefinition:
         )
         ships.append(ship)
 
+    effort = data.get("effort") or {}
+    if effort:
+        from .call_policy import validate_effort_policy
+        effort = validate_effort_policy({faction: effort})[faction]
     return FleetDefinition(
         ships=ships,
         faction=faction,
         admiral=admiral,
         mcp=mcp,
+        effort=effort,
     )
 
 

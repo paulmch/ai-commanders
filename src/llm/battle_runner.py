@@ -183,8 +183,20 @@ class BattleConfig:
     seed: Optional[int] = None
     use_notebooks: bool = False
 
+    # --- Experiment plumbing: everything below is OFF by default ---------
+    # Effort per side and role (src/llm/call_policy.py):
+    # {"alpha": {"draft"|"directive"|"order"|"captain"|"trigger": level}, ...}.
+    # "trigger" is the captain effort on turns with a trigger (torpedoes
+    # inbound, merge warning, damage taken, order kind changed, first turn);
+    # "captain" the effort of the other captain turns. A role without a
+    # setting runs at the client's battle-wide effort: the request is
+    # byte-identical to a battle without this field.
+    effort_policy: Dict[str, Dict[str, str]] = field(default_factory=dict)
+
     def __post_init__(self) -> None:
         validate_battle_options(self)
+        from .call_policy import validate_effort_policy
+        self.effort_policy = validate_effort_policy(self.effort_policy)
 
     @classmethod
     def from_fleet_config(cls, fleet: BattleFleetConfig, **overrides) -> 'BattleConfig':
@@ -194,6 +206,11 @@ class BattleConfig:
             "record_battle", "record_sim_trace", "personality_selection", "use_notebooks",
             "max_checkpoints", "seed", "heuristic_doctrine",
         )}
+        # Per-fleet "effort" blocks of the fleet JSON (experiment plumbing).
+        efforts = {side: dict(getattr(f, "effort", None) or {}) for side, f in (
+            ("alpha", fleet.alpha_fleet), ("beta", fleet.beta_fleet))}
+        if any(efforts.values()):
+            values["effort_policy"] = {k: v for k, v in efforts.items() if v}
         values.update(overrides)
         return cls(**values)
 
@@ -417,6 +434,7 @@ class LLMBattleRunner:
         # Register the event callback unconditionally: it also feeds captain
         # combat feedback (shots fired, damage taken), which must not depend on
         # whether the battle happens to be recorded.
+        self._install_call_policy()
         from .replay_audit import attach_audit
         attach_audit(self)
         self.simulation.add_event_callback(self._handle_simulation_event)
@@ -764,6 +782,7 @@ class LLMBattleRunner:
             )
 
         # Register the event callback unconditionally - see setup_battle().
+        self._install_call_policy()
         from .replay_audit import attach_audit
         attach_audit(self)
         self.simulation.add_event_callback(self._handle_simulation_event)
@@ -791,6 +810,89 @@ class LLMBattleRunner:
             elif self.beta_admiral:
                 print(f"  Admiral: {self.beta_admiral.name}")
             print(f"{'='*60}\n")
+
+    # ------------------------------------------------------------------
+    # Experiment plumbing: per-role effort, captain triggers, quiet turns
+    # (src/llm/call_policy.py). Nothing here runs unless a BattleConfig
+    # experiment field is set; the default battle never wraps a client.
+    # ------------------------------------------------------------------
+
+    def _install_call_policy(self) -> None:
+        """Wrap each LLM agent's client in a PolicyClient when an effort policy is set."""
+        self._policy_clients: Dict[str, Any] = {}
+        self._turn_state: Dict[str, Dict[str, Any]] = {}
+        from .call_policy import EffortPolicy, PolicyClient
+        policy = EffortPolicy(self.config.effort_policy)
+        if not policy:
+            return
+        for faction in ("alpha", "beta"):
+            captains = dict(getattr(self, f"{faction}_captains", {}) or {})
+            duel = getattr(self, f"{faction}_captain", None)
+            if not captains and duel is not None:
+                captains = {faction: duel}
+            for ship_id, captain in captains.items():
+                inner = getattr(captain, "client", None)
+                if inner is None or getattr(captain, "is_heuristic", False):
+                    continue
+                if type(captain).__name__ == "HeuristicCaptain":
+                    continue
+                captain.client = PolicyClient(inner, faction, "captain", policy)
+                self._policy_clients[ship_id] = captain.client
+            admiral = getattr(self, f"{faction}_admiral", None)
+            if admiral is not None and getattr(admiral, "client", None) is not None:
+                admiral.client = PolicyClient(admiral.client, faction, "admiral", policy)
+
+    def _captain_turn_facts(self, ship_id: str, captain: Any,
+                            orders: Optional[List[Any]]) -> Any:
+        """TurnFacts for one captain from data the runner already holds."""
+        from .call_policy import TurnFacts, order_kind, order_signature
+        sim = self.simulation
+        ship = sim.get_ship(ship_id)
+        state = self._turn_state.setdefault(ship_id, {})
+        torpedoes = 0
+        gather = getattr(sim, "_gather_guided_torpedo_threats", None)
+        if ship is not None and callable(gather):
+            try:
+                torpedoes = len(gather(ship, latch_commit=False) or [])
+            except (TypeError, AttributeError):
+                torpedoes = 0
+        merge = False
+        if ship is not None:
+            try:
+                from .range_control import analyze_range_control
+                merge = any(getattr(i, "warning", None)
+                            for i in analyze_range_control(sim, [ship], detail=False))
+            except Exception:  # noqa: BLE001 - advisory only
+                merge = False
+        from .maneuver_orders import admiral_order_moves_ship
+        kind = order_kind(orders)
+        signature = order_signature(orders)
+        inbox = [m for m in (getattr(captain, "inbox", None) or [])
+                 if isinstance(m, dict) and m.get("sender_role") != "engine"]
+        facts = TurnFacts(
+            first_turn="kind" not in state,
+            torpedoes_inbound=torpedoes,
+            merge_warning=merge,
+            damage_taken=bool(getattr(captain, "recent_hits", None)),
+            order_moves_ship=any(admiral_order_moves_ship(o) for o in orders or []),
+            order_kind=kind,
+            previous_order_kind=state.get("kind"),
+            order_changed=signature != state.get("signature"),
+            new_messages=len(inbox),
+        )
+        state["kind"], state["signature"] = kind, signature
+        return facts
+
+    def _plan_captain_turns(self, captain_entries: List[Tuple[str, Any, str]],
+                            admiral_orders: Dict[str, List[Any]]) -> None:
+        """Set each wrapped captain's effort for this turn (trigger effort)."""
+        from .call_policy import captain_triggers
+        for ship_id, captain, faction in captain_entries:
+            client = self._policy_clients.get(ship_id)
+            if client is None:
+                continue
+            facts = self._captain_turn_facts(ship_id, captain, admiral_orders.get(ship_id))
+            client.turn_effort = client.policy.captain_turn(faction, captain_triggers(facts))
 
     def _advance_to_checkpoint(self, deadline: float, fleet_mode: bool = False):
         """Step to a checkpoint exactly, including fractional intervals and limits."""
@@ -1691,6 +1793,10 @@ class LLMBattleRunner:
             captain_entries = [entry for entry in captain_entries if entry not in crew_out]
         self._apply_admiral_headings(captain_entries, admiral_orders)
         self._deliver_fleet_messages(captain_entries)
+        # Experiment plumbing (cmdrun): per-turn captain effort. A no-op
+        # unless BattleConfig.effort_policy is set.
+        if getattr(self, "_policy_clients", None):
+            self._plan_captain_turns(captain_entries, admiral_orders)
         for ship_id, captain, faction in captain_entries:
             captain.clear_admiral_context()
             if ship_id in admiral_orders:

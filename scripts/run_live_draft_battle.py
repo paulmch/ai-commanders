@@ -31,6 +31,7 @@ from src.llm.mcp_http_server import MCPHttpServer
 from src.llm.mock_openrouter import mock_transport
 from src.llm.replay_audit import AuditedClient
 from src.llm.spending import RequestBudget
+from src.llm.call_policy import EffortPolicy, PolicyClient, parse_effort_specs
 
 
 def write_json(path, value):
@@ -202,10 +203,28 @@ def record_stop(runner, error):
         runner.save_progress()
 
 
+def side_models(args):
+    """{'alpha': {'admiral': id, 'captain': id}, 'beta': {...}}: the admiral (and
+    draft) model and the captain model of each side (captains default to it)."""
+    return {f: {'admiral': getattr(args, f'{f}_model'),
+                'captain': getattr(args, f'{f}_captain_model', None) or getattr(args, f'{f}_model')}
+            for f in ('alpha', 'beta')}
+
+
+def all_models(args):
+    """Every LLM model id this battle may call, first-seen order."""
+    out = []
+    for roles in side_models(args).values():
+        for model in roles.values():
+            if model not in out:
+                out.append(model)
+    return out
+
+
 def validate_catalog(catalog, args):
     """Refuse models the free catalog does not show fit for this battle; return pricing."""
     pricing = {}
-    for model in (args.alpha_model, args.beta_model):
+    for model in all_models(args):
         if provider_for_model(model) == 'anthropic':
             pricing[model] = anthropic_pricing(model, args)
             continue
@@ -224,7 +243,7 @@ def validate_catalog(catalog, args):
 def make_client(args):
     if args.offline:
         return None, None
-    models = (args.alpha_model, args.beta_model)
+    models = tuple(all_models(args))
     catalog = {}
     if any(provider_for_model(m) == 'openrouter' for m in models):
         # Free metadata call: availability, tools, reasoning efforts, modalities, prices.
@@ -313,6 +332,8 @@ async def run(args):
         return {
             'name': args.name, 'models': models, 'points_per_side': args.points,
             'max_ships': args.max_ships, 'turns': args.turns, 'reasoning': args.reasoning,
+            'role_models': side_models(args),
+            'effort_policy': parse_effort_specs(args.effort),
             'mode': mode or 'paid', 'admiral_vision': bool(args.admiral_vision and not args.offline),
             'images_sent': budget.images_reserved if budget else 0,
             'point_costs': dict(fleet_draft.SHIP_POINT_COSTS),
@@ -351,7 +372,9 @@ async def run(args):
             selection = auto_draft(faction, args.points, args.max_ships,
                                    seed=args.seed + (faction == 'beta'))
         else:
-            audited = AuditedClient(client, recorder, SimpleNamespace(current_time=0), 'admiral', faction)
+            policy = EffortPolicy(parse_effort_specs(args.effort))
+            drafter = PolicyClient(client, faction, 'admiral', policy) if policy else client
+            audited = AuditedClient(drafter, recorder, SimpleNamespace(current_time=0), 'admiral', faction)
             try:
                 selection = run_admiral_draft(
                     audited, model, f'Admiral {model.split("/")[-1]}', faction, fleet_data,
@@ -374,7 +397,8 @@ async def run(args):
         fleets = {}
         for faction, model in models.items():
             fleets[faction] = draft_to_fleet_definition(
-                selections[faction], 500, captain_model='heuristic' if args.offline else model,
+                selections[faction], 500,
+                captain_model='heuristic' if args.offline else side_models(args)[faction]['captain'],
                 admiral_config=None if args.offline else AdmiralConfig(
                     model=model, name=f'Admiral {model.split("/")[-1]}', temperature=None,
                     # Catalog-verified in make_client; overrides the family allowlist.
@@ -390,7 +414,8 @@ async def run(args):
             record_battle=True, record_sim_trace=True, use_notebooks=False)
         write_json(report_dir / 'fleet_config.json', asdict(fc))
         runner = LiveDraftRunner(
-            BattleConfig.from_fleet_config(fc, recording_dir=str(report_dir), verbose=not args.quiet),
+            BattleConfig.from_fleet_config(fc, recording_dir=str(report_dir), verbose=not args.quiet,
+                                           effort_policy=parse_effort_specs(args.effort)),
             LLMCaptainConfig('Alpha', 'Alpha'), LLMCaptainConfig('Beta', 'Beta'), client, fc)
         runner.configure_live(server, state, draft_recorders, output, args.sim_step_delay,
                               ticker=ticker, vision_dir=report_dir / 'vision',
@@ -447,7 +472,18 @@ def main():
     parser.add_argument('--max-ships', type=int, default=8)
     parser.add_argument('--turns', type=int, default=40)
     parser.add_argument('--spend-limit', type=float, default=8)
-    parser.add_argument('--reasoning', default='high')
+    parser.add_argument('--reasoning', default='high',
+                        help='Battle-wide effort: every call not covered by --effort')
+    parser.add_argument('--effort', action='append', default=[], metavar='[SIDE.]ROLE=LEVEL',
+                        help='Effort for one role (draft, directive, order, captain, trigger) on one '
+                             'side (alpha, beta; omitted = both), repeatable, later wins. "trigger" '
+                             'is the captain effort on turns with torpedoes inbound, a merge warning, '
+                             'damage taken, a changed order kind or the first turn; "captain" the '
+                             'other turns. Example: --effort directive=high --effort alpha.trigger=high')
+    parser.add_argument('--alpha-captain-model', default=None,
+                        help='Captain model of alpha (default: --alpha-model, which also drafts '
+                             'and commands as admiral)')
+    parser.add_argument('--beta-captain-model', default=None, help='Captain model of beta')
     parser.add_argument('--seed', type=int, default=20260906)
     parser.add_argument('--port', type=int, default=8765)
     parser.add_argument('--sim-step-delay', type=float, default=0.04)
@@ -463,6 +499,10 @@ def main():
                         help='Runner verbose logging off; stdout carries the ticker blocks')
     parser.add_argument('--no-linger', action='store_true', help='Close HTTP server after the battle')
     args = parser.parse_args()
+    try:
+        parse_effort_specs(args.effort)
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.offline and args.mock_llm:
         parser.error('--offline and --mock-llm are exclusive')
     if args.admiral_vision and not args.offline:

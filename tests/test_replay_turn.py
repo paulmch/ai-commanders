@@ -10,6 +10,7 @@ from src.llm.call_policy import call_role
 def test_call_role_classifies_every_recorded_call_shape():
     assert call_role("admiral", "draft", ["select_fleet"]) == "draft"
     assert call_role("admiral", None, ["select_fleet"]) == "draft"
+    assert call_role("admiral", None, ["set_formation"]) == "draft"
     assert call_role("admiral", None, ["issue_order", "set_fleet_directive", "set_battle_plan"]) == "directive"
     assert call_role("admiral", None, ["issue_order"]) == "order"
     assert call_role("captain", None, ["set_maneuver", "set_heading"]) == "captain"
