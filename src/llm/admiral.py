@@ -1124,7 +1124,7 @@ Be authentic to how you would command a fleet as {model_name}."""
                     "again only to change it - a reply without a call keeps the order above.")}]
             try:
                 again = self.client.decide_with_tools(follow, order_tool, model=self.config.model)
-            except LLMCallError as e:
+            except Exception as e:  # noqa: BLE001 - optional: keep the first order
                 print(f"[ADMIRAL {self.config.name}] order follow-up failed: {e}")
                 again = []
             second = next((c for c in again or [] if c.name == "issue_order"), None)
