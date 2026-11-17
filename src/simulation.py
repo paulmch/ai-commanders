@@ -3069,182 +3069,10 @@ class CombatSimulation:
                 if maneuver.evade and maneuver.maneuver_type != ManeuverType.EVASIVE:
                     overlay_throttle = self._evasion_overlay(ship, maneuver, throttle, dt)
 
-                # Apply maneuver-specific logic
                 if overlay_throttle is not None:
                     throttle = overlay_throttle
-
-                elif maneuver.maneuver_type == ManeuverType.BURN and maneuver.direction:
-                    # Rotate to burn direction (engines on if throttle > 0)
-                    self._rotate_ship_toward(ship, maneuver.direction, dt, engines_on=(throttle > 0))
-
-                elif maneuver.maneuver_type == ManeuverType.ROTATE and maneuver.direction:
-                    # Rotate to a new heading without thrusting (RCS only).
-                    # Previously ROTATE had no branch at all: the ship never
-                    # rotated and simply thrusted forward at maneuver.throttle.
-                    self._rotate_ship_toward(ship, maneuver.direction, dt, engines_on=False)
-                    throttle = 0.0
-
-                elif maneuver.maneuver_type == ManeuverType.EVASIVE:
-                    # Threat-aware evasion: analyze incoming threats and maneuver accordingly
-                    # Modes: WOBBLE (no threats), EVADE (lateral jink vs ballistic),
-                    # RUN (open range vs guided torpedo to buy PD time),
-                    # PRESENT (terminal: thickest armor onto torpedo bearing),
-                    # TANK (best armor vs ballistic), BRACE (no time)
-                    evade_dir, mode, throttle_mod = self._calculate_evasion(ship, dt)
-                    ship.execution_mode = mode
-                    throttle = throttle * throttle_mod
-
-                    if mode in ('EVADE', 'TANK', 'RUN', 'PRESENT') and evade_dir:
-                        # EVADE: turn toward jink direction and thrust.
-                        # RUN: turn away from the torpedo and burn to cut closure.
-                        # PRESENT: rotate chosen armor facing onto the threat
-                        #   (token throttle keeps thrust vectoring available;
-                        #   see PRESENT_THROTTLE_MOD).
-                        # TANK: turn best armor toward the ballistic threat.
-                        self._rotate_ship_toward(ship, evade_dir, dt, engines_on=(throttle > 0))
-                    elif mode == 'WOBBLE':
-                        # No actionable threat: jink around the CURRENT course.
-                        # This used to intercept the nearest enemy with a
-                        # wobble, so a defensive order ("hold the wall, do not
-                        # chase") chased - and every fleet merged.
-                        jink_dir, throttle = self._wobble_hold_course(ship, maneuver, throttle)
-                        if jink_dir is not None:
-                            # Small random wobble (±5°) on the aim, as before
-                            wobble = self.rng.gauss(0, math.radians(5))
-                            jink_dir = jink_dir.rotate_around_axis(ship.up, wobble)
-                            self._rotate_ship_toward(ship, jink_dir, dt, engines_on=(throttle > 0))
-                    # BRACE mode: no thrust, just take the hit
-
-                elif maneuver.maneuver_type == ManeuverType.INTERCEPT and maneuver.target_id:
-                    target = self.get_ship(maneuver.target_id)
-                    if target and not target.is_destroyed and not target.is_dying:
-                        if maneuver.range_keeping and throttle > 0:
-                            # Standoff / arrival speed given: close, flip,
-                            # brake and hold instead of burning to the end.
-                            throttle = self._fly_range_keeping(ship, target, maneuver, throttle, dt)
-                        else:
-                            intercept_dir = self._calculate_intercept_direction(ship, target)
-                            self._rotate_ship_toward(ship, intercept_dir, dt, engines_on=(throttle > 0))
-                    else:
-                        # Target gone: coast (as PADLOCK does) instead of
-                        # burning at the wreck until the next checkpoint.
-                        throttle = 0.0
-
-                elif maneuver.maneuver_type == ManeuverType.HOLD_RANGE:
-                    target = self.get_ship(maneuver.target_id) if maneuver.target_id else None
-                    if (target and not target.is_destroyed and not target.is_dying
-                            and throttle > 0):
-                        throttle = self._fly_range_keeping(ship, target, maneuver, throttle, dt)
-                    else:
-                        # No target (or no throttle): nothing to keep the
-                        # range to - coast.
-                        throttle = 0.0
-
-                elif maneuver.maneuver_type == ManeuverType.BRAKE:
-                    # Thrust retrograde (opposite to velocity) to slow down
-                    velocity = ship.velocity
-                    speed = velocity.magnitude
-
-                    if speed > 1.0:  # Only brake if moving (>1 m/s)
-                        retrograde_dir = velocity.normalized() * -1  # Opposite to velocity
-                        self._rotate_ship_toward(ship, retrograde_dir, dt, engines_on=(throttle > 0))
-
-                        # Taper thrust as velocity approaches zero to avoid oscillation
-                        # Full thrust above 100 m/s, linear taper below
-                        if speed < 100.0:
-                            throttle = throttle * (speed / 100.0)
-                    else:
-                        # Velocity near zero - stop
-                        throttle = 0.0
-
-                elif maneuver.maneuver_type == ManeuverType.MAINTAIN:
-                    # Coast - maintain current course, no thrust.
-                    # Must zero the throttle: Maneuver.throttle defaults to
-                    # 1.0, so without this a MAINTAIN order burned forward at
-                    # full power instead of coasting.
-                    throttle = 0.0
-
-                elif maneuver.maneuver_type == ManeuverType.HEADING:
-                    # Fly in a specific 3D direction - or to a point / ship
-                    # (toward_point, toward_ship): range keeping flies there
-                    # and stops; throttle 0 just turns the nose onto the
-                    # CURRENT bearing.
-                    heading = maneuver.heading_direction
-                    if maneuver.live_heading:
-                        aim = self._heading_aim(maneuver)
-                        heading = self._live_heading(ship, maneuver, aim)
-                        if aim is None:
-                            # The ship is gone (or the point unusable): coast.
-                            throttle = 0.0
-                        elif throttle > 0:
-                            throttle = self._keep_range(
-                                ship, maneuver, *aim, throttle=throttle, dt=dt)
-                            heading = None      # steered by _keep_range
-                    if heading:
-                        direction = Vector3D(
-                            heading.get('x', 0),
-                            heading.get('y', 0),
-                            heading.get('z', 0)
-                        )
-                        if direction.magnitude > 0:
-                            direction = direction.normalized()
-                            # Check if significant rotation is needed
-                            angle_to_heading = math.acos(max(-1.0, min(1.0,
-                                ship.kinematic_state.forward.dot(direction))))
-                            needs_rotation = self._attitude_needs_tv(ship, angle_to_heading, dt)
-                            burn_held = (maneuver.burn_start_time is not None
-                                         and self.current_time < maneuver.burn_start_time - 1e-9)
-                            if throttle <= 0:
-                                # Attitude only: point the nose (e.g. spinal
-                                # on the enemy) on RCS and coast - no burn,
-                                # no change of velocity.
-                                self._rotate_ship_toward(ship, direction, dt, engines_on=False)
-                                throttle = 0.0
-                            elif (angle_to_heading > math.radians(HEADING_BURN_CONE_DEG)
-                                  or burn_held):
-                                # Turn first (token throttle keeps thrust
-                                # vectoring available), burn once nose-on.
-                                # The token scales with the ordered throttle so
-                                # formation-matched hulls drift equally.
-                                self._rotate_ship_toward(
-                                    ship, direction, dt, engines_on=needs_rotation,
-                                    handover_rad=math.radians(ATTITUDE_TV_HANDOVER_DEG))
-                                throttle = (throttle * MANEUVER_TURN_THROTTLE
-                                            if needs_rotation else 0.0)
-                            else:
-                                self._rotate_ship_toward(ship, direction, dt, engines_on=True)
-
-                elif maneuver.maneuver_type == ManeuverType.PADLOCK and maneuver.target_id:
-                    # Padlock - track target with nose, minimal thrust for rotation
-                    # Ship uses thrust vectoring to rotate quickly while minimizing linear acceleration
-                    # Perfect for firing spinal weapons during a planned pass
-                    target = self.get_ship(maneuver.target_id)
-                    if target and not target.is_destroyed and not target.is_dying:
-                        target_dir = (target.position - ship.position).normalized()
-                        # Check if we need to rotate
-                        angle_to_target = math.acos(max(-1.0, min(1.0,
-                            ship.kinematic_state.forward.dot(target_dir))))
-                        # Thrust vectoring while turning (or still carrying a
-                        # rate RCS cannot stop), then RCS: see
-                        # ATTITUDE_TV_HANDOVER_DEG.
-                        rel = target.position - ship.position
-                        r2 = rel.dot(rel)
-                        los_rate = (rel.cross(target.velocity - ship.velocity) * (1.0 / r2)
-                                    if r2 > 1.0 else Vector3D(0.0, 0.0, 0.0))
-                        needs_rotation = self._attitude_needs_tv(ship, angle_to_target, dt,
-                                                                 target_rate=los_rate)
-                        self._rotate_ship_toward(
-                            ship, target_dir, dt, engines_on=needs_rotation,
-                            handover_rad=math.radians(ATTITUDE_TV_HANDOVER_DEG),
-                            target_rate=los_rate)
-                        # Use small throttle for rotation (thrust vectoring), zero when aligned
-                        throttle = 0.05 if needs_rotation else 0.0
-                    else:
-                        throttle = 0.0
-
-                # Note: Use HEADING for manual directional flight,
-                # PADLOCK for tracking target while coasting,
-                # EVASIVE for automatic threat-aware evasion
+                else:
+                    throttle = self._fly_maneuver(ship, maneuver, throttle, dt)
 
         # No attitude command this tick: the ship's RCS brakes the spin it
         # carries, at RCS authority, and the nose keeps swinging while it
@@ -3328,6 +3156,189 @@ class CombatSimulation:
         # Update weapon cooldowns
         for weapon_state in ship.weapons.values():
             weapon_state.update(dt)
+
+    def _fly_maneuver(self, ship: ShipCombatState, maneuver: Maneuver,
+                      throttle: float, dt: float) -> float:
+        """
+        Fly the standing maneuver itself for one tick: steer the ship (or
+        let it coast) and return the throttle to apply. ``throttle`` is the
+        order's throttle; branches that throttle on their own (turn first,
+        range keeping, BRAKE taper, PADLOCK token) return what they fly.
+        The evade overlay, when it has the helm, flies instead of this.
+        """
+        if maneuver.maneuver_type == ManeuverType.BURN and maneuver.direction:
+            # Rotate to burn direction (engines on if throttle > 0)
+            self._rotate_ship_toward(ship, maneuver.direction, dt, engines_on=(throttle > 0))
+
+        elif maneuver.maneuver_type == ManeuverType.ROTATE and maneuver.direction:
+            # Rotate to a new heading without thrusting (RCS only).
+            # Previously ROTATE had no branch at all: the ship never
+            # rotated and simply thrusted forward at maneuver.throttle.
+            self._rotate_ship_toward(ship, maneuver.direction, dt, engines_on=False)
+            throttle = 0.0
+
+        elif maneuver.maneuver_type == ManeuverType.EVASIVE:
+            # Threat-aware evasion: analyze incoming threats and maneuver accordingly
+            # Modes: WOBBLE (no threats), EVADE (lateral jink vs ballistic),
+            # RUN (open range vs guided torpedo to buy PD time),
+            # PRESENT (terminal: thickest armor onto torpedo bearing),
+            # TANK (best armor vs ballistic), BRACE (no time)
+            evade_dir, mode, throttle_mod = self._calculate_evasion(ship, dt)
+            ship.execution_mode = mode
+            throttle = throttle * throttle_mod
+
+            if mode in ('EVADE', 'TANK', 'RUN', 'PRESENT') and evade_dir:
+                # EVADE: turn toward jink direction and thrust.
+                # RUN: turn away from the torpedo and burn to cut closure.
+                # PRESENT: rotate chosen armor facing onto the threat
+                #   (token throttle keeps thrust vectoring available;
+                #   see PRESENT_THROTTLE_MOD).
+                # TANK: turn best armor toward the ballistic threat.
+                self._rotate_ship_toward(ship, evade_dir, dt, engines_on=(throttle > 0))
+            elif mode == 'WOBBLE':
+                # No actionable threat: jink around the CURRENT course.
+                # This used to intercept the nearest enemy with a
+                # wobble, so a defensive order ("hold the wall, do not
+                # chase") chased - and every fleet merged.
+                jink_dir, throttle = self._wobble_hold_course(ship, maneuver, throttle)
+                if jink_dir is not None:
+                    # Small random wobble (±5°) on the aim, as before
+                    wobble = self.rng.gauss(0, math.radians(5))
+                    jink_dir = jink_dir.rotate_around_axis(ship.up, wobble)
+                    self._rotate_ship_toward(ship, jink_dir, dt, engines_on=(throttle > 0))
+            # BRACE mode: no thrust, just take the hit
+
+        elif maneuver.maneuver_type == ManeuverType.INTERCEPT and maneuver.target_id:
+            target = self.get_ship(maneuver.target_id)
+            if target and not target.is_destroyed and not target.is_dying:
+                if maneuver.range_keeping and throttle > 0:
+                    # Standoff / arrival speed given: close, flip,
+                    # brake and hold instead of burning to the end.
+                    throttle = self._fly_range_keeping(ship, target, maneuver, throttle, dt)
+                else:
+                    intercept_dir = self._calculate_intercept_direction(ship, target)
+                    self._rotate_ship_toward(ship, intercept_dir, dt, engines_on=(throttle > 0))
+            else:
+                # Target gone: coast (as PADLOCK does) instead of
+                # burning at the wreck until the next checkpoint.
+                throttle = 0.0
+
+        elif maneuver.maneuver_type == ManeuverType.HOLD_RANGE:
+            target = self.get_ship(maneuver.target_id) if maneuver.target_id else None
+            if (target and not target.is_destroyed and not target.is_dying
+                    and throttle > 0):
+                throttle = self._fly_range_keeping(ship, target, maneuver, throttle, dt)
+            else:
+                # No target (or no throttle): nothing to keep the
+                # range to - coast.
+                throttle = 0.0
+
+        elif maneuver.maneuver_type == ManeuverType.BRAKE:
+            # Thrust retrograde (opposite to velocity) to slow down
+            velocity = ship.velocity
+            speed = velocity.magnitude
+
+            if speed > 1.0:  # Only brake if moving (>1 m/s)
+                retrograde_dir = velocity.normalized() * -1  # Opposite to velocity
+                self._rotate_ship_toward(ship, retrograde_dir, dt, engines_on=(throttle > 0))
+
+                # Taper thrust as velocity approaches zero to avoid oscillation
+                # Full thrust above 100 m/s, linear taper below
+                if speed < 100.0:
+                    throttle = throttle * (speed / 100.0)
+            else:
+                # Velocity near zero - stop
+                throttle = 0.0
+
+        elif maneuver.maneuver_type == ManeuverType.MAINTAIN:
+            # Coast - maintain current course, no thrust.
+            # Must zero the throttle: Maneuver.throttle defaults to
+            # 1.0, so without this a MAINTAIN order burned forward at
+            # full power instead of coasting.
+            throttle = 0.0
+
+        elif maneuver.maneuver_type == ManeuverType.HEADING:
+            # Fly in a specific 3D direction - or to a point / ship
+            # (toward_point, toward_ship): range keeping flies there
+            # and stops; throttle 0 just turns the nose onto the
+            # CURRENT bearing.
+            heading = maneuver.heading_direction
+            if maneuver.live_heading:
+                aim = self._heading_aim(maneuver)
+                heading = self._live_heading(ship, maneuver, aim)
+                if aim is None:
+                    # The ship is gone (or the point unusable): coast.
+                    throttle = 0.0
+                elif throttle > 0:
+                    throttle = self._keep_range(
+                        ship, maneuver, *aim, throttle=throttle, dt=dt)
+                    heading = None      # steered by _keep_range
+            if heading:
+                direction = Vector3D(
+                    heading.get('x', 0),
+                    heading.get('y', 0),
+                    heading.get('z', 0)
+                )
+                if direction.magnitude > 0:
+                    direction = direction.normalized()
+                    # Check if significant rotation is needed
+                    angle_to_heading = math.acos(max(-1.0, min(1.0,
+                        ship.kinematic_state.forward.dot(direction))))
+                    needs_rotation = self._attitude_needs_tv(ship, angle_to_heading, dt)
+                    burn_held = (maneuver.burn_start_time is not None
+                                 and self.current_time < maneuver.burn_start_time - 1e-9)
+                    if throttle <= 0:
+                        # Attitude only: point the nose (e.g. spinal
+                        # on the enemy) on RCS and coast - no burn,
+                        # no change of velocity.
+                        self._rotate_ship_toward(ship, direction, dt, engines_on=False)
+                        throttle = 0.0
+                    elif (angle_to_heading > math.radians(HEADING_BURN_CONE_DEG)
+                          or burn_held):
+                        # Turn first (token throttle keeps thrust
+                        # vectoring available), burn once nose-on.
+                        # The token scales with the ordered throttle so
+                        # formation-matched hulls drift equally.
+                        self._rotate_ship_toward(
+                            ship, direction, dt, engines_on=needs_rotation,
+                            handover_rad=math.radians(ATTITUDE_TV_HANDOVER_DEG))
+                        throttle = (throttle * MANEUVER_TURN_THROTTLE
+                                    if needs_rotation else 0.0)
+                    else:
+                        self._rotate_ship_toward(ship, direction, dt, engines_on=True)
+
+        elif maneuver.maneuver_type == ManeuverType.PADLOCK and maneuver.target_id:
+            # Padlock - track target with nose, minimal thrust for rotation
+            # Ship uses thrust vectoring to rotate quickly while minimizing linear acceleration
+            # Perfect for firing spinal weapons during a planned pass
+            target = self.get_ship(maneuver.target_id)
+            if target and not target.is_destroyed and not target.is_dying:
+                target_dir = (target.position - ship.position).normalized()
+                # Check if we need to rotate
+                angle_to_target = math.acos(max(-1.0, min(1.0,
+                    ship.kinematic_state.forward.dot(target_dir))))
+                # Thrust vectoring while turning (or still carrying a
+                # rate RCS cannot stop), then RCS: see
+                # ATTITUDE_TV_HANDOVER_DEG.
+                rel = target.position - ship.position
+                r2 = rel.dot(rel)
+                los_rate = (rel.cross(target.velocity - ship.velocity) * (1.0 / r2)
+                            if r2 > 1.0 else Vector3D(0.0, 0.0, 0.0))
+                needs_rotation = self._attitude_needs_tv(ship, angle_to_target, dt,
+                                                         target_rate=los_rate)
+                self._rotate_ship_toward(
+                    ship, target_dir, dt, engines_on=needs_rotation,
+                    handover_rad=math.radians(ATTITUDE_TV_HANDOVER_DEG),
+                    target_rate=los_rate)
+                # Use small throttle for rotation (thrust vectoring), zero when aligned
+                throttle = 0.05 if needs_rotation else 0.0
+            else:
+                throttle = 0.0
+
+        # Note: Use HEADING for manual directional flight,
+        # PADLOCK for tracking target while coasting,
+        # EVASIVE for automatic threat-aware evasion
+        return throttle
 
     def _update_dying_ship(self, ship: ShipCombatState, dt: float) -> None:
         """
