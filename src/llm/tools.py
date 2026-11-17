@@ -150,7 +150,7 @@ CAPTAIN_TOOLS_BASE = [
             "description": (
                 "Set fire control orders for spinal and turret weapons independently. "
                 "SPINAL: 9.9 km/s projectile, 4.3 GJ damage, 900km range, but ONLY fires if target within 30° of nose. "
-                "TURRET: 6.0 km/s projectile, 0.7 GJ damage, 500km range, can fire at targets in full front hemisphere (180°)."
+                "TURRET: 6.0 km/s projectile, 0.7 GJ damage, 500km range, fires where its own hull leaves it clear (ARCS lines)."
             ),
             "parameters": {
                 "type": "object",
@@ -170,7 +170,7 @@ CAPTAIN_TOOLS_BASE = [
                         "type": "string",
                         "enum": ["FIRE_IMMEDIATE", "FIRE_WHEN_OPTIMAL", "FIRE_AT_RANGE", "HOLD_FIRE"],
                         "description": (
-                            "Turret coilgun mode (lower damage, but 180° firing arc): "
+                            "Turret coilgun mode (lower damage, fires where its own hull leaves it clear): "
                             "FIRE_IMMEDIATE: Fire as soon as ready. "
                             "FIRE_WHEN_OPTIMAL: Fire when hit probability >= threshold. "
                             "FIRE_AT_RANGE: Fire when target within range. "
@@ -635,7 +635,8 @@ FLEET_SIGNAL_TOOL = {
                 },
                 "target": {"type": "string", "description": "Enemy ship the signal is about."},
                 "eta_s": {"type": "number", "minimum": 0,
-                          "description": "TOT_SYNC: seconds until your rounds arrive."},
+                          "description": "TOT_SYNC: seconds from now until your rounds arrive "
+                                         "(peers read it as an absolute time, T+...)."},
                 "text": {"type": "string", "description": f"Max {SIGNAL_TEXT_CHARS} chars."},
             },
             "required": ["kind", "text"],
@@ -848,7 +849,7 @@ def build_weapon_tool_for_ship(ship_type: str, fleet_data: Dict[str, Any]) -> Di
         properties["heavy_coilguns_mode"] = {
             "type": "string",
             "enum": ["FIRE_IMMEDIATE", "FIRE_WHEN_OPTIMAL", "FIRE_AT_RANGE", "HOLD_FIRE"],
-            "description": f"Heavy coilguns x{count} ({vel} km/s, {dmg:.1f} GJ each, {rng}km range, turreted 180° arc)"
+            "description": f"Heavy coilguns x{count} ({vel} km/s, {dmg:.1f} GJ each, {rng}km range, turreted: fires where its own hull leaves it clear)"
         }
         properties["heavy_coilguns_min_probability"] = {
             "type": "number", "minimum": 0.1, "maximum": 0.9,
@@ -871,7 +872,7 @@ def build_weapon_tool_for_ship(ship_type: str, fleet_data: Dict[str, Any]) -> Di
         properties["coilguns_mode"] = {
             "type": "string",
             "enum": ["FIRE_IMMEDIATE", "FIRE_WHEN_OPTIMAL", "FIRE_AT_RANGE", "HOLD_FIRE"],
-            "description": f"Coilguns x{count} ({vel} km/s, {dmg:.2f} GJ each, {rng}km range, turreted 180° arc)"
+            "description": f"Coilguns x{count} ({vel} km/s, {dmg:.2f} GJ each, {rng}km range, turreted: fires where its own hull leaves it clear)"
         }
         properties["coilguns_min_probability"] = {
             "type": "number", "minimum": 0.1, "maximum": 0.9,

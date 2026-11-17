@@ -156,6 +156,34 @@ def _plume_status_lines(simulation, ship):
     return plume_status_lines(simulation, ship)
 
 
+# The kinetic phase of a torpedo hit (simulation._resolve_torpedo_hit), bound
+# to the engine by tests/test_fixes_cmdcap.py TestTorpedoArmor.
+TORPEDO_KINETIC_IMPACT_AREA_M2 = 0.1
+TORPEDO_KINETIC_FLAT_CHIPPING = 0.3
+ROUNDS_TO_BREACH_CAP = 20
+
+
+def rounds_to_breach(section: Any, gj: float, cap: int = ROUNDS_TO_BREACH_CAP) -> Optional[int]:
+    """
+    Rounds of ``gj`` kinetic energy that ablate ``section`` to 0 cm, trialled
+    on a copy with the engine's own armor model (no RNG: the chip-through
+    critical roll is left out, so a breach can come sooner). 0 when already
+    breached, None when it holds more than ``cap``.
+    """
+    import copy
+    if getattr(section, "thickness_cm", 0.0) <= 0.0:
+        return 0
+    if gj <= 0:
+        return None
+    trial = copy.deepcopy(section)
+    for n in range(1, cap + 1):
+        trial.apply_energy_damage(energy_gj=gj, flat_chipping=TORPEDO_KINETIC_FLAT_CHIPPING,
+                                  impact_area_m2=TORPEDO_KINETIC_IMPACT_AREA_M2)
+        if trial.thickness_cm <= 0.0:
+            return n
+    return None
+
+
 @dataclass
 class LLMCaptainConfig:
     """Configuration for an LLM captain."""
@@ -2955,6 +2983,18 @@ class LLMCaptain:
                 torpedo_threats.append(threat)
         torpedo_threats.sort(key=lambda t: t["eta_seconds"])
         status["torpedo_threats"] = torpedo_threats
+        # What each facing absorbs of rounds like the first live one (C7).
+        live = [t for t in torpedo_threats if not t.get("blinded") and t.get("est_impact_gj")]
+        armor = getattr(ship, "armor", None)
+        if live and armor is not None and hasattr(armor, "get_section"):
+            gj = float(live[0]["est_impact_gj"])
+            faces = []
+            for face in ("nose", "lateral", "tail"):
+                sec = armor.get_section(face)
+                if sec is not None:
+                    faces.append((face, float(sec.thickness_cm), rounds_to_breach(sec, gj)))
+            if faces and gj > 0:
+                status["torpedo_armor"] = {"gj": gj, "faces": faces}
 
         # Add current configuration to status
         current_maneuver_info = None

@@ -291,7 +291,10 @@ def fold_admiral_signals(report: Dict[str, Any], signals: List[Dict[str, Any]]) 
         text = str(sig.get("text") or "")
         head = kind + (f" {sig['target']}" if sig.get("target") else "")
         if sig.get("eta_s") is not None:
-            head += f" ETA {sig['eta_s']:.0f}s"
+            # Read at the next checkpoint: an absolute time, not a stale "in N s".
+            filed = report.get("filed_t")
+            head += (f" lands ~T+{float(filed) + float(sig['eta_s']):.0f}"
+                     if isinstance(filed, (int, float)) else f" ETA {sig['eta_s']:.0f}s")
         if kind == "BREAKING_OFF":
             if report.get("status", "ACK") == "ACK":
                 report["status"] = "DEVIATE"

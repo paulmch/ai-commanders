@@ -66,7 +66,7 @@ GROUP A (OCS Sovereign +4):
   pass wide      heading(+0.04,+0.67,-0.74) @100% ~45 s (2 checkpoints, renew it): closest approach ~2 km in 27 s (coasting: 1.4 km) | BROADSIDE to enemy ~45 s
   flank left     heading(+0.07,+1.00,-0.00) @100% ~40 s (2 checkpoints, renew it): 13 km off your coasting line, closest approach 2 km | BROADSIDE to enemy ~40 s
   flank right    heading(-0.07,-1.00,+0.00) @100% ~41 s (2 checkpoints, renew it): 13 km off your coasting line, closest approach 1 km | BROADSIDE to enemy ~41 s
-  coast & launch heading(+1.00,-0.07,-0.01) throttle 0 or PADLOCK OCS Sovereign: RCS turn ~27 s, no drift; PADLOCK ~6 s (token burn, few m/s); closing: torpedoes launched now keep their solution | NOSE to enemy
+  coast & launch heading(+1.00,-0.07,-0.01) throttle 0 or PADLOCK OCS Sovereign: RCS turn ~27 s, no drift; PADLOCK ~6 s (token burn, few m/s); coasting: closest approach 1.4 km in 45 s; closing: torpedoes launched now keep their solution | NOSE to enemy
 FORMATION: headings above are for the fleet centre (slowest hull 3.00g sets the pace, slowest turn sets the flip). Same heading with equal acceleration keeps the formation: throttles for 100% of the slowest hull = TIS Dart-1 100%, TIS Dart-2 100%, TIS Dart-3 100%, TIS Dart-4 100%, TIS Dart-5 100%, TIS Dart-6 100%, TIS Dart-7 100%, TIS Dart-8 100%. Easiest: ONE issue_order with ship_name="all ships", heading and throttle - each hull's throttle is scaled and the burn starts together.
 
 === YOUR STANDING BATTLE PLAN (set by you at T+30s) ===

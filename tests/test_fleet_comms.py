@@ -661,7 +661,7 @@ class TestAdmiralReadsReports:
         assert dart["reason"] == "[BREAKING_OFF] Breaking off after this pass - PD down to 1 turret."
         assert harpoon["status"] == "ACK"
         assert harpoon["request"] == {"kind": "TOT_SYNC",
-                                      "text": "OCS Lancer ETA 45s - Two rounds on Lancer, launch to match."}
+                                      "text": "OCS Lancer lands ~T+75 - Two rounds on Lancer, launch to match."}
         assert harpoon["intent"] == "[FREE] Lancer's PD favours its port side."
         assert [s["kind"] for s in harpoon["signals"]] == ["TOT_SYNC", "FREE"]
         assert not self.bare_ack(dart) and not self.bare_ack(harpoon)

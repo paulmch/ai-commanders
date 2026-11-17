@@ -403,3 +403,157 @@ class TestComplianceLoop:
         assert "reason" not in base["function"]["parameters"]["properties"]
         text = tools["set_maneuver"]["parameters"]["properties"]["maneuver_type"]["description"]
         assert "EVADE REPLACES whatever you fly" in text
+
+
+# =============================================================================
+# C7/C8/M7: contradictions and wrong lines
+# =============================================================================
+
+import math  # noqa: E402
+from src.llm import arcs_status  # noqa: E402
+from src.llm.captain import rounds_to_breach  # noqa: E402
+from src.llm.prompts import (  # noqa: E402
+    _comms_line, build_captain_doctrine, format_threats_to_me)
+from src.llm.range_control import (  # noqa: E402
+    HeadingOption, guns_bearing, merged_options)
+
+
+class TestRealArcs:
+
+    def _frame(self, sim, ship, forward, roll_deg):
+        """Point ``ship`` along ``forward`` and roll it about that axis."""
+        f = forward.normalized()
+        up0 = Vector3D(0, 0, 1) if abs(f.z) < 0.9 else Vector3D(0, 1, 0)
+        side = f.cross(up0).normalized()
+        up = up0 - f * f.dot(up0)
+        up = up.normalized()
+        r = math.radians(roll_deg)
+        up = up * math.cos(r) + side * math.sin(r)
+        ship.kinematic_state.forward = f
+        ship.kinematic_state.up = up
+        arcs = sim._arcs_for(ship)
+        arcs.roll = 0.0
+        arcs.set_frame(f, up, sim.current_time)
+
+    @pytest.mark.parametrize("angle", [0, 45, 90, 120, 150, 170, 178])
+    def test_batteries_that_bear_match_the_engine_masks_at_some_roll(self, angle):
+        # The old analytic cone said "guns masked" past 90 deg while the ARCS
+        # lines said the turrets bore (128 contradicting vector pairs).
+        sim = _sim()
+        me, target = sim.get_ship("alpha_1"), sim.get_ship("beta_1")
+        los = (target.position - me.position).normalized()
+        perp = Vector3D(0, 0, 1)
+        a = math.radians(angle)
+        nose = los * math.cos(a) + perp * math.sin(a)
+        claim = guns_bearing(sim, [me], angle)
+        best = 0
+        for roll in range(0, 360, 5):
+            self._frame(sim, me, nose, roll)
+            report = arcs_status.gun_report(sim, me, target)
+            best = max(best, sum(1 for r in report["mounts"] if r["bears"] and r["kind"] == "gun"))
+        if best:
+            assert "batter" in claim, (angle, claim)
+            assert f"{best} of" in claim, (angle, claim, best)
+        else:
+            assert "batter" not in claim, (angle, claim)
+
+    def test_merged_options_fold_near_identical_vectors(self):
+        def opt(key, label, x, y):
+            return HeadingOption(key=key, label=label, heading=Vector3D(x, y, 0).normalized(),
+                                 throttle=1.0, turn_s=1.0, burn_s=30.0, effect="e")
+        rows = merged_options([opt("wide", "pass wide", -0.08, 0.99), opt("left", "flank left", 0.08, -1),
+                               opt("right", "flank right", -0.08, 1.0)])
+        assert [label for _, label in rows] == ["pass wide = flank right", "flank left"]
+
+    def test_coast_and_shoot_states_its_range_cost_and_every_line_its_armor(self):
+        sim, cap = _sim(), _captain()
+        from src.llm.range_control import analyze_range_control, format_captain_range_control
+        text = format_captain_range_control(analyze_range_control(sim, [sim.get_ship("alpha_1")]))
+        face = next(l for l in text.splitlines() if "coast & shoot" in l)
+        assert "coasting: closest approach" in face or "coasting: range not closing" in face
+        for line in text.splitlines():
+            if "set_heading(" in line:
+                assert " cm)" in line and ("bear" in line), line
+        assert "guns masked" not in text and "turrets bear" not in text
+
+
+class TestDoctrineLines:
+
+    def _doc(self, ship_type, names, admiral=True):
+        return build_captain_doctrine(ship_type=ship_type, fleet_data=FLEET, tool_names=names,
+                                      has_admiral=admiral)
+
+    def test_no_turret_180_claims_and_no_selling(self):
+        names = ["set_maneuver", "set_heading", "set_weapons_order", "set_primary_target",
+                 "report_to_admiral", "surrender"]
+        doc = self._doc("destroyer", names)
+        for phrase in ("180°", "180 deg", "(recommended", "worth far more", "single biggest",
+                       "BEST during", "keep this toward the threat", "spinal_mode / turret_mode"):
+            assert phrase not in doc, phrase
+        assert "- spinal_mode / coilguns_mode: FIRE_IMMEDIATE" in doc
+        bc = self._doc("battlecruiser", names)
+        assert "spinal_mode / coilguns_mode" in bc or "heavy_coilguns_mode" in bc
+
+    def test_propose_draw_only_when_offered(self):
+        doc = self._doc("corvette", ["set_maneuver", "launch_torpedo", "surrender",
+                                     "report_to_admiral"])
+        assert "propose_draw" not in doc and "- surrender: strike your colours" in doc
+        solo = self._doc("corvette", ["set_maneuver", "surrender", "propose_draw"], admiral=False)
+        assert "- surrender / propose_draw:" in solo
+
+    def test_gunless_heat_line_has_no_guns_rung(self):
+        status = {"thermal": {"heat_percent": 70.0, "heat_gj": 224, "capacity_gj": 320,
+                              "net_rate_mw": 10.0, "radiators_extended": False,
+                              "radiator_available_mw": 780, "radiator_rating_mw": 780}}
+        corvette = format_my_ship("Dart", "TIS Dart", "corvette", status, {}, FLEET)
+        destroyer = format_my_ship("F", "TIS F", "destroyer", status, {}, FLEET)
+        assert "guns hold" not in corvette and "radiators forced" in corvette
+        assert "guns hold" in destroyer
+
+    def test_tot_sync_eta_is_rebased_to_an_absolute_time(self):
+        line = _comms_line({"sender_name": "TIS Dart-2", "sender_id": "alpha_2",
+                            "channel": "fleet_net", "sent_t": 60.0, "text": "my rounds land in 45 s",
+                            "structured": {"eta_s": 45}})
+        assert "[rounds land ~T+105]" in line
+
+
+class TestTorpedoBlock:
+
+    def _torp(self, need, own=1, allied=2):
+        return {"distance_km": 200, "closing_kps": 5.0, "eta_seconds": 40, "source": "X",
+                "est_impact_gj": 25.0, "nez_inside": True, "blinded": False,
+                "pd_turrets_needed": need, "own_pd_turrets": own, "allied_pd_turrets": allied}
+
+    def test_saturated_rounds_carry_one_verdict(self):
+        # Recorded (b2 beta_1 T+60): "your PD umbrella can blind it" on every
+        # round, then "SATURATION: ... PD blinds at most 4, 11 arrive".
+        text = format_threats_to_me({"torpedo_threats": [self._torp(3) for _ in range(5)]})
+        assert "can blind it" not in text and "CANNOT stop it" not in text
+        assert "SATURATION: 5 live rounds vs 3 turrets bearing (~3 per round): PD blinds at most 1, 4 arrive" in text
+        assert "EVADE now" not in text
+
+    def test_unsaturated_pair_says_so(self):
+        text = format_threats_to_me({"torpedo_threats": [self._torp(1), self._torp(1)]})
+        assert "enough turrets to blind every one" in text and "SATURATION" not in text
+
+    def test_rounds_to_breach_is_the_engine_hit(self):
+        from tests.test_fixes_pass5_damage import _ship as _dmg_ship, _torpedo_flight
+        sim = CombatSimulation(seed=1, time_step=1.0)
+        _dmg_ship(sim, "shooter", "alpha", Vector3D(500_000, 0, 0))
+        target = _dmg_ship(sim, "victim", "beta", Vector3D(0, 0, 0), ship_type="destroyer")
+        nose = target.armor.get_section("nose")
+        before = nose.thickness_cm
+        # Straight onto the nose at 12 km/s.
+        flight = _torpedo_flight(sim, target.forward * 1000.0,
+                                 target.forward * -12_000.0, "victim")
+        gj = 0.5 * flight.torpedo.specs.penetrator_mass_kg * 12_000.0 ** 2 / 1e9
+        import copy
+        trial = copy.deepcopy(nose)
+        trial.thickness_cm = before
+        sim._resolve_torpedo_hit(flight, target)
+        from src.llm.captain import TORPEDO_KINETIC_FLAT_CHIPPING, TORPEDO_KINETIC_IMPACT_AREA_M2
+        trial.apply_energy_damage(energy_gj=gj, flat_chipping=TORPEDO_KINETIC_FLAT_CHIPPING,
+                                  impact_area_m2=TORPEDO_KINETIC_IMPACT_AREA_M2)
+        assert nose.thickness_cm == pytest.approx(trial.thickness_cm, abs=1e-6)
+        n = rounds_to_breach(target.armor.get_section("lateral"), gj)
+        assert n is not None and n >= 1
