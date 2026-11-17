@@ -584,6 +584,8 @@ def parse_args(argv=None):
     run.add_argument("--ledger", default=None,
                      help="cumulative spend ledger (JSONL); paid runs append to it (default "
                           "data/recordings/spend_ledger.jsonl), mock runs only when named here")
+    run.add_argument("--label", default=None,
+                     help="free-text note naming the experiment, stored on both ledger lines")
     run.add_argument("--ledger-cap", type=float,
                      help="refuse to start when ledger total + this run's cap would exceed it")
     run.add_argument("--out", help="output prefix (default data/recordings/replays/replay_<UTC stamp>)")
@@ -664,7 +666,7 @@ def main(argv=None) -> int:
     if ledger is not None:
         run_id = ledger.open_run(script="replay_turn", name=out.name,
                                  models=sorted({v["model"] for v in variants}), cap_usd=limit,
-                                 ledger_cap_usd=args.ledger_cap, mock=not paid)
+                                 ledger_cap_usd=args.ledger_cap, mock=not paid, label=args.label)
     rows: List[Dict[str, Any]] = []
     status = "done"
     try:

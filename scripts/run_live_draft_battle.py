@@ -600,8 +600,9 @@ def main():
                         help=f'Cumulative spend ledger (JSONL). Paid runs append to it (default '
                              f'{DEFAULT_LEDGER.relative_to(ROOT)}); a mock run only when named here')
     parser.add_argument('--ledger-cap', type=float, default=None,
-                        help='Refuse to start when the ledger total (closed runs at their spend, '
-                             'open runs at their cap) plus this run\'s --spend-limit would exceed it')
+                        help='Refuse to start when the ledger total (closed runs at their spend or, '
+                             'if larger, what they still had committed - failed or timed-out calls '
+                             'keep their reservation; open runs at their cap) plus this run\'s --spend-limit would exceed it')
     sides = ('alpha', 'beta', 'both')
     parser.add_argument('--no-admiral', choices=sides, default=None,
                         help='Experiment: that side drafts with its model but fights without an '
