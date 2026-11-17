@@ -1077,112 +1077,98 @@ def _median(values: List[float]) -> float:
     return values[len(values) // 2] if values else 0.0
 
 
+def him_after_text(sim: Any, info: Any, own: Sequence[Any], enemies: Sequence[Any],
+                   opt: Any) -> str:
+    """
+    'him: NOSE 11->SIDE 84 deg (re-points in ~20 s)': the face the enemy group
+    (median member) shows your centre now, and once this option has flown
+    (its turn + burn; the coast option over at most 60 s) if he holds his
+    attitude and course, with the time his ship needs to re-point at you.
+    The option rows priced only your own exposure (audit A3/A4).
+    """
+    own_pos, own_vel = centre(own)
+    accel = float(getattr(info, "accel_g", 0.0) or 0.0) * G_STANDARD
+    h = opt.heading
+    thr = float(opt.throttle or 0.0)
+    burn = float(opt.burn_s or 0.0) if thr > 0 else 0.0
+    t_end = float(opt.turn_s or 0.0) + burn
+    if opt.key == "face":
+        t_end = min(t_end, 60.0)
+    moved = own_pos + own_vel * t_end
+    if burn > 0:
+        moved = moved + h * (0.5 * accel * thr * burn * burn)
+    now = _median([math.degrees(e.forward.angle_to(own_pos - e.position)) for e in enemies])
+    after = []
+    for e in enemies:
+        e_end = e.position + e.velocity * t_end
+        after.append((math.degrees(e.forward.angle_to(moved - e_end)), e, moved - e_end))
+    after.sort(key=lambda x: x[0])
+    angle_after, rep, los_after = after[len(after) // 2]
+    text = f"him: {face_of(now)} {now:.0f}->{face_of(angle_after)} {angle_after:.0f} deg"
+    if face_of(angle_after) != "NOSE":
+        try:
+            turn = sim._turn_time_to(rep, los_after, True)
+            if math.isfinite(turn):
+                text += f" (re-points in ~{turn:.0f} s)"
+        except Exception:  # noqa: BLE001 - advisory only
+            pass
+    return text
+
+
 def heading_option_rows(sim: Any, info: Any, own: Sequence[Any], enemies: Sequence[Any],
                         verb: str = "heading") -> List[str]:
-    """
-    One row per HEADINGS option of a range-control group, every row with the
-    same fields: what the move does to range, the face YOU show him while it
-    flies (and whether spinals bear), and the face HE shows you when it is done
-    if he holds his attitude, with the time he needs to re-point at you. The
-    old rows priced only your own exposure (audit A3/A4).
-    """
-    if not own or not enemies or not getattr(info, "options", None):
-        return []
-    own_pos, own_vel = centre(own)
-    en_pos, _ = centre(enemies)
-    los = en_pos - own_pos
-    if los.magnitude < 1.0:
-        return []
-    accel = float(getattr(info, "accel_g", 0.0) or 0.0) * G_STANDARD
-    target = info.names[0] if getattr(info, "names", None) else "target"
-    spinal = any(not getattr(getattr(ws, "weapon", None), "is_turreted", True)
-                 and not getattr(getattr(ws, "weapon", None), "is_missile", False)
-                 for s in own for slot, ws in (getattr(s, "weapons", None) or {}).items()
-                 if not str(slot).startswith("pd") and getattr(ws, "weapon", None) is not None)
-    rows = []
-    now = _median([math.degrees(e.forward.angle_to(own_pos - e.position)) for e in enemies])
-    for opt in info.options:
-        h = opt.heading
-        thr = float(opt.throttle or 0.0)
-        burn = float(opt.burn_s or 0.0) if thr > 0 else 0.0
-        t_end = float(opt.turn_s or 0.0) + burn
-        if opt.key == "face":
-            t_end = min(t_end, 60.0)
-        moved = own_pos + own_vel * t_end
-        if burn > 0:
-            moved = moved + h * (0.5 * accel * thr * burn * burn)
-        after = []
-        for e in enemies:
-            e_end = e.position + e.velocity * t_end
-            after.append((math.degrees(e.forward.angle_to(moved - e_end)), e, moved - e_end))
-        after.sort(key=lambda x: x[0])
-        angle_after, rep, los_after = after[len(after) // 2]
-        you_angle = math.degrees(h.angle_to(los))
-        you = f"you: {face_of(you_angle)}" + (f" ~{t_end:.0f} s" if burn > 0 else "")
-        if spinal:
-            you += ", spinals bear" if you_angle < 30.0 else ", spinals masked"
-        him = f"him: {face_of(now)} {now:.0f}->{face_of(angle_after)} {angle_after:.0f} deg"
-        if face_of(angle_after) != "NOSE":
-            try:
-                turn = sim._turn_time_to(rep, los_after, True)
-                if math.isfinite(turn):
-                    him += f" (re-points in ~{turn:.0f} s)"
-            except Exception:  # noqa: BLE001 - advisory only
-                pass
-        if opt.key == "face":
-            cpa = (f"no range change: if both coast closest {info.cpa_km:.1f} km in {info.cpa_t_s:.0f} s"
-                   if getattr(info, "cpa_t_s", 0.0) > 0.5 else "no range change")
-            rows.append(f"  {opt.label:<14} {verb}{opt.heading_str()} throttle 0 or PADLOCK {target}: "
-                        f"{opt.effect}; {cpa} | {you} | {him}")
-        elif thr <= 0:
-            rows.append(f"  {opt.label:<14} {opt.effect}")
-        else:
-            rows.append(f"  {opt.label:<14} {verb}{opt.heading_str()} @{thr * 100:.0f}% {opt.effect} "
-                        f"| {you} | {him}")
-    return rows
+    """Range-control option rows (range_control's own rendering: range effect,
+    the face you show and what bears) with the face HE shows you appended."""
+    from .range_control import format_heading_options
+    text = format_heading_options([info], max_detail=99, verb=verb)
+    return [line for line in annotate_option_rows(text, sim, [info], own).splitlines()
+            if line.startswith("  ")]
 
 
-def admiral_headings_block(sim: Any, infos: Sequence[Any], own: Sequence[Any],
-                           max_groups: int = 2) -> str:
-    """The HEADINGS body for the admiral's directive (fleet centre): group
-    title + uniform rows (heading_option_rows) for the nearest groups."""
-    lines = []
-    for info in list(infos)[:max_groups]:
-        enemies = [s for s in (sim.get_ship(sid) for sid in info.ship_ids) if s is not None and is_live(s)]
-        rows = heading_option_rows(sim, info, own, enemies)
-        if not rows:
-            continue
-        lines.append(f"{info.label} ({info.names[0] if info.names else '?'}"
-                     f"{' +' + str(len(info.names) - 1) if len(info.names) > 1 else ''}):")
-        lines.extend(rows)
-    return "\n".join(lines)
+def annotate_option_rows(text: str, sim: Any, infos: Sequence[Any], own: Sequence[Any]) -> str:
+    """Append ' | him: ...' (him_after_text) to every option row of a
+    range-control text block, matching rows to options by their heading
+    vector within the current group (merged rows such as
+    'cancel closure = open range' keep range_control's wording)."""
+    if not text or not own:
+        return text
+    labels = {info.label: info for info in infos}
+    current = infos[0] if len(infos) == 1 else None
+    enemies: List[Any] = []
+    out: List[str] = []
+
+    def members(info: Any) -> List[Any]:
+        return [x for x in (sim.get_ship(sid) for sid in info.ship_ids) if x is not None and is_live(x)]
+    if current is not None:
+        enemies = members(current)
+    for line in text.splitlines():
+        head = line.split(" ", 1)[0].rstrip(":") if not line.startswith(" ") else None
+        if head is not None:
+            key = next((k for k in labels if line.startswith(k + " ") or line.startswith(k + ":")), None)
+            if key is not None:
+                current = labels[key]
+                enemies = members(current)
+        if current is not None and enemies and line.startswith("  ") and "heading(" in line:
+            opt = next((o for o in current.options if f"heading{o.heading_str()}" in line), None)
+            if opt is not None:
+                try:
+                    line += " | " + him_after_text(sim, current, own, enemies, opt)
+                except Exception:  # noqa: BLE001 - advisory only
+                    pass
+        out.append(line)
+    return "\n".join(out)
+
+
+def admiral_headings_block(sim: Any, infos: Sequence[Any], own: Sequence[Any]) -> str:
+    """The HEADINGS body for the admiral's directive (fleet centre):
+    range_control.format_heading_options with the face he shows you added."""
+    from .range_control import format_heading_options
+    return annotate_option_rows(format_heading_options(infos), sim, infos, own)
 
 
 def replace_option_rows(text: str, sim: Any, infos: Sequence[Any], own: Sequence[Any]) -> str:
-    """A range-control block (range_control.format_range_control) with each
-    group's option rows replaced by heading_option_rows - the per-ship order
-    keeps its group header, status and warning lines."""
-    if not text:
-        return text
-    labels = {info.label: info for info in infos}
-    prefixes = tuple({f"  {o.label:<14}" for info in infos for o in info.options})
-    out: List[str] = []
-    pending: List[str] = []
-    for line in text.splitlines():
-        head = line.split(":", 1)[0]
-        if head in labels and not line.startswith(" "):
-            out.extend(pending)
-            info = labels[head]
-            enemies = [s for s in (sim.get_ship(sid) for sid in info.ship_ids)
-                       if s is not None and is_live(s)]
-            pending = heading_option_rows(sim, info, own, enemies)
-            out.append(line)
-            continue
-        if prefixes and line.startswith(prefixes):
-            continue
-        out.append(line)
-    out.extend(pending)
-    return "\n".join(out)
+    """The per-ship order's range-control block with the face he shows you added."""
+    return annotate_option_rows(text, sim, infos, own)
 
 
 # =============================================================================

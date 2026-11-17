@@ -59,14 +59,14 @@ TIS Dart-6 [alpha_6] CO | hull 100% torp 8 (3 now) | MAINTAIN
 TIS Dart-7 [alpha_7] CO | hull 100% torp 8 (3 now) | MAINTAIN
 TIS Dart-8 [alpha_8] CO | hull 100% torp 8 (3 now) | MAINTAIN
 
-=== HEADINGS (world frame, fleet centre: issue_order heading=; the drive thrusts along the NOSE; you: the face you show him meanwhile; him: the face he shows you, now->after, if he holds his attitude) ===
+=== HEADINGS (world frame, fleet centre: issue_order heading=; the drive thrusts along the NOSE; him: the face he shows you now->after the move, if he holds his attitude) ===
 GROUP A (OCS Sovereign +4):
-  cancel closure heading(-0.93,+0.36,+0.07) @100% ~179 s (6 checkpoints, renew it): rel. speed ~0 after 179 s, range then holds ~236 km while you keep matching his 0.9g burn (passes 1 km first) | you: TAIL ~179 s | him: SIDE 61->SIDE 99 deg (re-points in ~21 s)
-  open range     heading(-1.00,+0.07,+0.01) @100% ~45 s (2 checkpoints, renew it): then 15 km, opening 3.03 km/s | you: TAIL ~45 s | him: SIDE 61->SIDE 121 deg (re-points in ~24 s)
-  pass wide      heading(+0.04,+0.67,-0.74) @100% ~45 s (2 checkpoints, renew it): closest approach ~2 km in 27 s (coasting: 1.4 km) | you: SIDE ~45 s | him: SIDE 61->SIDE 111 deg (re-points in ~41 s)
-  flank left     heading(+0.07,+1.00,-0.00) @100% ~40 s (2 checkpoints, renew it): 13 km off your coasting line, closest approach 2 km | you: SIDE ~40 s | him: SIDE 61->SIDE 64 deg (re-points in ~17 s)
-  flank right    heading(-0.07,-1.00,+0.00) @100% ~41 s (2 checkpoints, renew it): 13 km off your coasting line, closest approach 1 km | you: SIDE ~41 s | him: SIDE 61->SIDE 95 deg (re-points in ~29 s)
-  coast & launch heading(+1.00,-0.07,-0.01) throttle 0 or PADLOCK OCS Sovereign: RCS turn ~27 s, no drift; PADLOCK ~6 s (token burn, few m/s); coasting: closest approach 1.4 km in 45 s; closing: torpedoes launched now keep their solution; no range change: if both coast closest 1.4 km in 45 s | you: NOSE | him: SIDE 61->SIDE 60 deg (re-points in ~17 s)
+  cancel closure heading(-0.93,+0.36,+0.07) @100% ~179 s (6 checkpoints, renew it): rel. speed ~0 after 179 s, range then holds ~236 km while you keep matching his 0.9g burn (passes 1 km first) | TAIL to enemy ~179 s | him: SIDE 61->SIDE 99 deg (re-points in ~21 s)
+  open range     heading(-1.00,+0.07,+0.01) @100% ~45 s (2 checkpoints, renew it): then 15 km, opening 3.03 km/s | TAIL to enemy ~45 s | him: SIDE 61->SIDE 121 deg (re-points in ~24 s)
+  pass wide      heading(+0.04,+0.67,-0.74) @100% ~45 s (2 checkpoints, renew it): closest approach ~2 km in 27 s (coasting: 1.4 km) | BROADSIDE to enemy ~45 s | him: SIDE 61->SIDE 111 deg (re-points in ~41 s)
+  flank left     heading(+0.07,+1.00,-0.00) @100% ~40 s (2 checkpoints, renew it): 13 km off your coasting line, closest approach 2 km | BROADSIDE to enemy ~40 s | him: SIDE 61->SIDE 64 deg (re-points in ~17 s)
+  flank right    heading(-0.07,-1.00,+0.00) @100% ~41 s (2 checkpoints, renew it): 13 km off your coasting line, closest approach 1 km | BROADSIDE to enemy ~41 s | him: SIDE 61->SIDE 95 deg (re-points in ~29 s)
+  coast & launch heading(+1.00,-0.07,-0.01) throttle 0 or PADLOCK OCS Sovereign: RCS turn ~27 s, no drift; PADLOCK ~6 s (token burn, few m/s); coasting: closest approach 1.4 km in 45 s; closing: torpedoes launched now keep their solution | NOSE to enemy | him: SIDE 61->SIDE 60 deg (re-points in ~17 s)
 FORMATION: headings above are for the fleet centre (slowest hull 3.00g sets the pace, slowest turn sets the flip). Same heading with equal acceleration keeps the formation: throttles for 100% of the slowest hull = TIS Dart-1 100%, TIS Dart-2 100%, TIS Dart-3 100%, TIS Dart-4 100%, TIS Dart-5 100%, TIS Dart-6 100%, TIS Dart-7 100%, TIS Dart-8 100%. Easiest: ONE issue_order with ship_name="all ships", heading and throttle - each hull's throttle is scaled and the burn starts together.
 
 === YOUR STANDING BATTLE PLAN (set by you at T+30s) ===

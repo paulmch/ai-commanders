@@ -96,20 +96,18 @@ class TestEnemyFacing:
                             turn_s=0.0, burn_s=60.0, effect="~60 s")
         info = types.SimpleNamespace(options=[opt], accel_g=1.0, names=["OCS beta_1"],
                                      cpa_km=0.0, cpa_t_s=0.0)
-        row = intel.heading_option_rows(sim, info, [me], [him])[0]
+        text = intel.him_after_text(sim, info, [me], [him], opt)
         lateral_km = 0.5 * 9.80665 * 60.0 ** 2 / 1000.0
         expect = math.degrees(math.atan(lateral_km / 200.0))
-        assert f"him: NOSE 0->NOSE {expect:.0f} deg" in row
-        assert "you: SIDE ~60 s" in row
+        assert text == f"him: NOSE 0->NOSE {expect:.0f} deg"
 
     def test_every_heading_row_states_both_faces(self):
         _, _, snap, msgs = __import__("tests.test_admiral_intel", fromlist=["battle_a_turn"]).battle_a_turn("beta", t=180)
         rows = [l for l in snap.headings.splitlines() if l.startswith("  ")]
         assert rows
         for row in rows:
-            assert "| you: " in row and "| him: " in row and "->" in row, row
-        coast = next(r for r in rows if "throttle 0 or PADLOCK" in r)
-        assert "no range change" in coast   # the one row that used to have no downside
+            # range_control's own fields (the face you show, what bears) + his face after
+            assert " to enemy" in row and "| him: " in row and "->" in row, row
 
 
 # =============================================================================

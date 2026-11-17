@@ -2859,8 +2859,8 @@ MANEUVERS (tell captains which to use):
 - Range is set with HEADING burns (approach angle, holding range, opening range,
   passing wide, flanking); INTERCEPT closes and passes through. HEADINGS in the fleet
   situation lists ready-made world-frame headings per enemy group, each with the burn
-  time, the effect on range, the face YOU show him while burning, and the face HE shows
-  you afterwards if he holds his attitude. Renew a burn each checkpoint until its stated
+  time, the effect on range, the face YOU show him while burning (and what bears), and
+  the face HE shows you afterwards if he holds his attitude. Renew a burn each checkpoint until its stated
   time is used up. "!! MERGE IN ..." = the closest approach if both fleets coast.
 - FORMATION: one heading for the whole fleet = issue_order(ship_name="all ships",
   heading=..., throttle=...) on the directive call. Each hull's throttle is scaled to the
@@ -4287,8 +4287,8 @@ def _format_headings(snapshot: Any) -> str:
     text = _text_attr(snapshot, "headings")
     if text:
         return ("=== HEADINGS (world frame, fleet centre: issue_order heading=; the drive "
-                "thrusts along the NOSE; you: the face you show him meanwhile; him: the face "
-                "he shows you, now->after, if he holds his attitude) ===\n" + text)
+                "thrusts along the NOSE; him: the face he shows you now->after the move, if "
+                "he holds his attitude) ===\n" + text)
     # Hand-built snapshots may carry only the legacy full range-control block.
     return _text_attr(snapshot, "range_control")
 
