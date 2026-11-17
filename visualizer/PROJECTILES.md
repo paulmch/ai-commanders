@@ -41,9 +41,16 @@ this module only.
 
 - Ribbons keep their bright core >= ~1.5 px wide (`vPx` in the shader), so
   thin tracers and PD beams no longer bead at range.
-- Viewer hulls are ~8x oversize; `Projectiles.lift()` pushes a fresh torpedo
-  out of its launcher's displayed hull (fading to zero by 2x hull radius) so
-  launches are visible instead of hidden inside the mesh for ~10 s.
+- Draw scale (`render/Scale.js`): hulls are drawn at `userData.k` scene km per
+  kit unit - real size up close in the default `auto` mode, ~60x oversize in
+  `cinematic`. Every size in this module is authored in kit units and
+  multiplied by the scale of what it belongs to: `shipK(ship)` for anything on
+  a hull (muzzles, PD lenses, flashes, impact sparks), `freeK(point)` for a
+  round in flight (torpedo body, plume, RCS, tracer glow). Never bake a
+  scaled value: in `auto` the scale follows the camera.
+- `Projectiles.lift()` pushes a fresh torpedo out of its launcher's hull as
+  drawn (fading to zero by 2x hull radius), so on the cinematic scale launches
+  are not hidden inside the oversize mesh for ~10 s.
 - Muzzles: a hull kit may expose `ship.userData.weaponMounts[weapon_slot]`
   (Object3D); otherwise the turret rig in `userData.gunTurrets` whose `slot`
   matches the shot's `weapon_slot` (barrel tip computed from the rig's fixed
@@ -56,13 +63,19 @@ this module only.
 - PD beams start at the lens of the firing ball (`userData.pdMounts` by
   turret name, else by index; seeded hull point on hulls without mounts).
 - Hit flashes sit on the crater `damageFX.surfaceFor(roundId)` resolves (the
-  same spot as the persistent blast, spall and scar); a round's last
-  sub-second flies into it (`surfaceImpact`, lazy). Without DamageFX they fall
+  same spot as the persistent blast, spall and scar). The engine gates a gun
+  hit at 500 m from the hull (dispersion envelope) and records where the
+  round entered that gate, so recorded impact points are up to ~1 km off the
+  hull and a rolled miss can run straight through it. The drawn path
+  therefore eases, over its last `TERMINAL_BEND_S` = 3 s, onto the crater
+  (`surfaceImpact` keeps `tr.impact` on the hull as drawn; `WeaponTimeline.sample`)
+  or, for a miss whose line crosses the real hull, aside to clear it
+  (`missClearance`): under 1.5 degrees of bend. Without DamageFX they fall
   back to the face met in the target's frame (relative velocity), so fleet
   drift cannot push a head-on hit to the flank. Hit flashes keep a ~4 px
   floor so a hit still reads at fleet range.
 - Duds: the engine rolls a torpedo's P(hit) at closest approach, so a failed
-  roll at 100 m still passed deep inside the ~8x drawn hull. Every miss within
+  roll at 100 m can still pass inside the hull as drawn. Every miss within
   `DUD_REACH_KM` is a dud candidate; `dud()` shows the ones whose recorded
   closest approach lies inside the displayed hull's radius toward the round
   (`dudSkims`; P(hit) >= `DUD_P` when no closest approach is recorded) as a

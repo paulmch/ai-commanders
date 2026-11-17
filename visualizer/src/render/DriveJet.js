@@ -16,10 +16,11 @@ import * as THREE from 'three';
  *
  * One instanced draw for the whole fleet. Each instance is a bounding cone
  * in scene km (never scaled with the hull: the jet is real); the fragment
- * shader finds, for its view ray, the point of closest approach to the jet
- * axis and shades a Gaussian beam there - analytic, no ray march, no noise
- * (the same frame at the same battle time, always). Drawn in the auto and
- * true scale modes only.
+ * shader integrates a Gaussian beam along its view ray through that cone
+ * (24 steps, a fixed per-pixel offset, no noise and no clock: the same
+ * frame at the same battle time, always), so it is right from the side,
+ * looking down the jet and from inside it. Drawn in the auto and true
+ * scale modes only.
  */
 
 /** Half-angle of the jet's Gaussian core and its edge (src/drive_plume.py). */
@@ -28,7 +29,7 @@ export const JET_MAX_DEG = 7.5;
 /** Drawn length (km): the engine's jet reaches 100 km; past ~60 it heats by under 0.5 GJ/s. */
 export const JET_REACH_KM = 60;
 /** Peak radiance of the jet at full throttle (scene-linear, additive): a haze, far under the torch. */
-export const JET_LEVEL = 0.15;
+export const JET_LEVEL = 0.18;
 
 /**
  * Brightness of the jet `zKm` down its axis, 0..1: the square root of the
@@ -45,9 +46,15 @@ const D2R = Math.PI / 180;
 const TAN_CORE = Math.tan(JET_CORE_DEG * D2R);
 /** The bounding cone is a little wider than the jet's edge so the Gaussian tail is not cut. */
 const BOUND_TAN = Math.tan((JET_MAX_DEG + 2) * D2R);
+/** Softening of the beam width (km) in the emission: no needle of light at the nozzle. */
+const W_SOFT = 0.25;
+/** The jet fades in over this length (km) behind the stern: the torch's flame is the picture there. */
+const JET_FADE_IN_KM = 0.6;
+/** Brightness looking down the jet saturates at this many times the across-the-beam value. */
+const SAT = 1.3;
 
 const vertexShader = /* glsl */`
-  attribute vec4 aJet;      // throttle, nozzle radius (km), reach (km), fade-in length (km)
+  attribute vec4 aJet;      // throttle, nozzle radius (km), reach (km), unused
   varying vec3 vPos;
   varying vec3 vCam;
   varying vec4 vJet;
@@ -73,28 +80,88 @@ const fragmentShader = /* glsl */`
   varying vec4 vJet;
   #include <common>
   #include <logdepthbuf_pars_fragment>
+  #define STEPS 24
+  // Emission per km of path at a point of the jet (z km down the axis, r km
+  // off it): a Gaussian beam of the engine's 3 degree core. Dividing by its
+  // width makes a line of sight ACROSS the beam equally bright wherever it
+  // crosses (the gas thins as the beam widens) - times the axial falloff;
+  // W_SOFT keeps the first few hundred metres, where the torch's own flame
+  // is drawn, from being a needle of light.
+  float emission(vec3 p) {
+    float z = -p.z;
+    if (z <= 0.0 || z >= vJet.z) return 0.0;
+    float w = vJet.y + z * ${TAN_CORE.toFixed(6)};
+    float r2 = dot(p.xy, p.xy);
+    float u = z / 8.0;
+    float axial = pow(1.0 + u * u, -0.55);                       // jetBrightness(z)
+    // in over the first km (the torch's own flame is drawn there), out to nothing at the drawn reach
+    float fade = smoothstep(0.0, ${JET_FADE_IN_KM.toFixed(1)}, z) * (1.0 - smoothstep(0.6 * vJet.z, vJet.z, z));
+    return axial * fade * exp(-r2 / (w * w)) / (w + ${W_SOFT.toFixed(3)});
+  }
   void main() {
     #include <logdepthbuf_fragment>
+    vec3 ro = vCam;
     vec3 rd = normalize(vPos - vCam);
-    // closest approach of the view ray (vCam + t rd) to the jet axis (0, 0, -s)
-    float b = -rd.z;                 // rd . axis
-    float d = dot(rd, vCam);
-    float e = -vCam.z;               // axis . vCam
-    float denom = max(1.0 - b * b, 1e-4);
-    float s = clamp((e - b * d) / denom, 0.0, vJet.z);
-    float t = max(b * s - d, 0.0);   // the ray point nearest that axis point, in front of the lens
-    vec3 p = vCam + rd * t;
-    s = clamp(-p.z, 0.0, vJet.z);
-    float r = length(p.xy);
-    float w = vJet.y + s * ${TAN_CORE.toFixed(6)};          // Gaussian radius: the engine's 3 degree core
-    float beam = exp(-(r * r) / (w * w));
-    float u = s / 8.0;
-    float axial = pow(1.0 + u * u, -0.55);                   // jetBrightness(s)
-    // out of the torch's own flame, and out to nothing at the drawn reach
-    float ends = smoothstep(0.0, vJet.w, s) * (1.0 - smoothstep(0.6 * vJet.z, vJet.z, s));
-    // a ray along the jet looks down more of it than one across (capped: end-on is not a searchlight)
-    float along = min(inversesqrt(denom), 3.0);
-    float a = uLevel * vJet.x * beam * axial * ends * along;
+    // The chord of the view ray inside the bounding cone |p.xy| <= R0 + TB z,
+    // 0 <= z <= reach (z = -p.z), found analytically: the mesh only says
+    // which pixels to shade. (Taking the mesh's own back face as the exit
+    // left dark seams along its edges, where the two disagree by rounding.)
+    float R0 = vJet.y * 2.5, TB = ${BOUND_TAN.toFixed(5)};
+    float tIn = 0.0, tOut = 1e9;
+    // slab 0 <= z <= reach
+    if (abs(rd.z) > 1e-9) {
+      float ta = -ro.z / rd.z, tb = (-vJet.z - ro.z) / rd.z;
+      tIn = max(tIn, min(ta, tb));
+      tOut = min(tOut, max(ta, tb));
+    } else if (ro.z > 0.0 || ro.z < -vJet.z) discard;
+    // cone: qa t^2 + 2 qb t + qc <= 0
+    float A0 = R0 - TB * ro.z, kz = -TB * rd.z;
+    float qa = dot(rd.xy, rd.xy) - kz * kz;
+    float qb = dot(ro.xy, rd.xy) - A0 * kz;
+    float qc = dot(ro.xy, ro.xy) - A0 * A0;
+    float disc = qb * qb - qa * qc;
+    if (abs(qa) < 1e-9) {
+      // parallel to the cone's side: one crossing
+      if (abs(qb) > 1e-12) { float t = -qc / (2.0 * qb); if (qb > 0.0) tOut = min(tOut, t); else tIn = max(tIn, t); }
+      else if (qc > 0.0) discard;
+    } else if (disc <= 0.0) {
+      if (qa > 0.0) discard;          // misses the cone (qa < 0: inside it all the way)
+    } else {
+      float sq = sqrt(disc);
+      float r1 = (-qb - sq) / qa, r2 = (-qb + sq) / qa;
+      if (qa > 0.0) {                 // inside between the roots
+        tIn = max(tIn, r1); tOut = min(tOut, r2);
+      } else {                        // steeper than the cone: inside before the first or after the second (r2 < r1 here)
+        float lo = min(r1, r2), hi = max(r1, r2);
+        // the slab keeps one nappe: at most one of the two pieces survives
+        if (min(tOut, lo) > tIn) tOut = min(tOut, lo); else tIn = max(tIn, hi);
+      }
+    }
+    if (!(tOut > tIn)) discard;
+    // March the chord (a fixed, per-pixel offset hides the steps; no time
+    // in it). The light is concentrated at the upstream end of the jet, so
+    // a ray that runs along the axis is stepped in z with the samples
+    // packed toward that end (z = z0 + dz u^2); a ray across it, evenly.
+    float jitter = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+    float column = 0.0;
+    if (abs(rd.z) > 0.15) {
+      float zA = -(ro.z + rd.z * tIn), zB = -(ro.z + rd.z * tOut);
+      float z0 = min(zA, zB), dz = abs(zB - zA);
+      for (int i = 0; i < STEPS; i++) {
+        float u = (float(i) + jitter) / float(STEPS);
+        float z = z0 + dz * u * u;
+        column += emission(ro + rd * ((-z - ro.z) / rd.z)) * u;
+      }
+      column *= 2.0 * dz / (float(STEPS) * abs(rd.z));
+    } else {
+      float dt = (tOut - tIn) / float(STEPS);
+      for (int i = 0; i < STEPS; i++) column += emission(ro + rd * (tIn + (float(i) + jitter) * dt));
+      column *= dt;
+    }
+    // sqrt(pi) is the column straight across the core: there a = uLevel x
+    // throttle x axial. Looking down the jet the column is far longer; it
+    // saturates at SAT times that (the glare of looking into a torch).
+    float a = uLevel * vJet.x * ${SAT.toFixed(1)} * (1.0 - exp(-column / (1.7724539 * ${SAT.toFixed(1)})));
     if (a < 0.0005) discard;
     gl_FragColor = vec4(uColor * a, 1.0);
   }
@@ -153,15 +220,13 @@ export class DriveJets {
         const ud = ship.userData;
         const thrust = ud.smoothThrust || 0;
         if (!ship.visible || thrust < 0.02 || ud.dyingNow) continue;
-        const L = ud.drawn?.length ?? 0.1, W = ud.drawn?.width ?? 0.02;
+        const L = ud.drawn?.length ?? 0.1, W = ud.drawn?.width ?? 0.02;   // the hull as drawn (km)
         _f.set(0, 0, 1).applyQuaternion(ship.quaternion);
         _p.copy(ship.position).addScaledVector(_f, -0.5 * L);
         // (hull frame: +Z is the nose, so the jet runs down the instance's -Z)
         _m.compose(_p, _q.copy(ship.quaternion), _one);
         this.mesh.setMatrixAt(n, _m);
-        // fade in over the torch's own plume (as drawn), so the haze starts where the flame thins
-        const flame = Math.max(0.05, (ud.plumeLength || 4) * (ud.k ?? 1) * (0.14 + 0.86 * thrust));
-        A[n * 4] = thrust; A[n * 4 + 1] = 0.5 * W; A[n * 4 + 2] = JET_REACH_KM; A[n * 4 + 3] = flame;
+        A[n * 4] = thrust; A[n * 4 + 1] = 0.5 * W; A[n * 4 + 2] = JET_REACH_KM; A[n * 4 + 3] = 0;
         n++;
       }
     }

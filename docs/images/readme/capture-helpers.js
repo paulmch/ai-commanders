@@ -82,3 +82,19 @@ function readmeDecisionTo(title, pad = 6) {
   if (h) body.scrollTop += h.getBoundingClientRect().top - body.getBoundingClientRect().top - pad;
   return !!h;
 }
+
+/** Camera in a ship's own hull frame, in hull lengths (the framing length of the scale mode:
+ *  real metres in auto / true): `back` behind the hull centre (negative = ahead of it), `up`
+ *  dorsal, `side` to port; looking at the point `ahead` hull lengths forward of the centre,
+ *  raised `lift`. Used for the damage close-ups, where the wound decides the angle. */
+function readmeNear(id, back, up, side, ahead = 0, lift = 0) {
+  const s = window.visualizer.scene, ship = s.ships.get(id), T = s.camera.position.constructor;
+  const L = s.framingLength ? s.framingLength(id) : ship.userData.size.length;
+  const f = new T(0, 0, 1).applyQuaternion(ship.quaternion);
+  const u = new T(0, 1, 0).applyQuaternion(ship.quaternion);
+  const r = new T(1, 0, 0).applyQuaternion(ship.quaternion);
+  s.camera.position.copy(ship.position).addScaledVector(f, -back * L).addScaledVector(u, up * L).addScaledVector(r, side * L);
+  s.controls.target.copy(ship.position).addScaledVector(f, ahead * L).addScaledVector(u, lift * L);
+  s.controls.update();
+  return L;
+}

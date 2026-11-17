@@ -310,6 +310,33 @@ hashed by the perf harness) is unchanged.
   shader fails to compile or depth-tests wrongly).
 - `IcosahedronGeometry(r, detail)` subdivides linearly (20*(d+1)^2 faces) -
   use detail 12-28 for smooth blast spheres, not 3-5.
+- Hull scale (`render/Scale.js`, `tests/scale.test.js`; S key, `?scale=auto|true|cinematic`):
+  1 scene unit = 1 km. Hulls are BUILT in kit units (`hullSize`: corvette 4, dreadnought
+  20.8) and DRAWN by one uniform factor per ship, `userData.k` (scene km per kit unit), set
+  every frame by `SceneManager.updateScale()`: `cinematic` k = 1 (the old ~60x
+  exaggeration), `true` k = real length / kit length (~0.016), `auto` (default) = true x a
+  magnification that is exactly 1 while the real hull covers at least 2 floors of the
+  viewport height and eases (C1, monotonic) to a floor of 1.95% x sqrt(L / 65 m) at
+  distance. Pure function of camera position/fov and ship position: no state, no viewport.
+  `userData.size` stays the KIT size (hull-local code); `userData.drawn` is the size in km
+  now. Rules: (1) anything in world space that belongs to a hull multiplies kit-unit
+  sizes/offsets by that hull's k (`sm.kOf(id)`, `Projectiles.shipK`), free rounds and
+  flares by `sm.kAt(point)`; (2) never bake a scaled value - re-read k every frame or
+  re-bake when it changes (Blast `anchor`/`shipId`, spall, smoke ring, `surfaceImpact`);
+  (3) real things stay real: positions, trajectories, the blast shell, the reactor blast
+  (`Blast real`, sized by `reactorBlastScale` to 0.55 of the engine radius), the far drive
+  jet (`render/DriveJet.js`, the engine's 3/7.5 degree cone); (4) camera framing uses
+  `sm.framingLength(id)` (static per mode), never the drawn size; constants tuned on the
+  kit-size hulls (shadow box floor, AO reach, close-up ramps, framing floors) are
+  multiplied by `sm.scaleUnit()`; (5) a pool light on a hull scales reach by k and
+  intensity by k^2 (three's 0.1-unit falloff clamp is lowered in SceneManager). main.js
+  settles the camera (`scene.syncCamera()`) BEFORE the frame's effects are evaluated, so
+  a hull and everything on it use one scale per frame, also on a director cut.
+- Gun hits are not decided on the hull surface: the engine gates at 500 m and rolls, so
+  recorded `impact_position`s lie a median ~50 m (up to ~1 km) from the hull axis and
+  ~1 in 4 misses cross the hull (`tests/fixtures/scale_hits.json` summary). The DRAWN
+  path eases onto the crater / clear of the hull over its last 3 s
+  (`WeaponTimeline.sample`, `missClearance`); recorded positions are never changed.
 - The hull kit (render/Hulls.js) builds parts from `chamferBoxGeometry` and
   `octSectionGeometry` (shouldered sections, wedge bows), all non-indexed and
   merged per material. Plated materials (`hull`, `trim`, `paint`, `dark`,
