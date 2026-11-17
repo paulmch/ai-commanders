@@ -380,6 +380,7 @@ def _parse_fleet(data: Dict[str, Any], faction: str) -> FleetDefinition:
                 vision=admiral_data.get("vision", False),
                 name=admiral_data.get("name", f"Admiral {_get_short_model_name(model)}"),
                 intent_only=bool(admiral_data.get("intent_only", False)),
+                show_score=bool(admiral_data.get("show_score", False)),
             )
 
     # Parse ships

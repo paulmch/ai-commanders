@@ -33,6 +33,9 @@ from src.llm.replay_audit import AuditedClient
 from src.llm.spending import RequestBudget, SpendLedger
 
 DEFAULT_LEDGER = ROOT / 'data/recordings/spend_ledger.jsonl'
+# After Ctrl-C: how long the battle thread gets to finish the calls in flight
+# (the client's 180 s request timeout plus a margin) before the ledger closes.
+STOP_WAIT_S = 240
 from src.llm.call_policy import EffortPolicy, PolicyClient, parse_effort_specs
 from src.llm.cost_report import cost_report, format_cost_report
 
@@ -161,7 +164,10 @@ class LiveDraftRunner(LLMBattleRunner):
         self.check_budget()
 
     def check_budget(self):
-        if self.client and self.client.budget and self.client.budget.exhausted:
+        budget = self.client.budget if self.client else None
+        if budget and getattr(budget, 'stopped', None):
+            raise RuntimeError(f'Battle interrupted ({budget.stopped}); no further model calls')
+        if budget and budget.exhausted:
             raise RuntimeError('Spending ceiling reached; battle stopped and partial replay saved')
 
     def save_progress(self):
@@ -372,7 +378,8 @@ async def run(args):
         # request is the draft, inside the battle task below.
         ledger_run = ledger.open_run(script='run_live_draft_battle', name=args.name,
                                      models=all_models(args), cap_usd=args.spend_limit,
-                                     ledger_cap_usd=args.ledger_cap, mock=args.mock_llm)
+                                     ledger_cap_usd=args.ledger_cap, mock=args.mock_llm,
+                                     label=args.label)
     print(f'WATCH: http://localhost:5173/?live=1&decisions=1', flush=True)
     draft_recorders = {}
     runner = None
@@ -382,7 +389,7 @@ async def run(args):
 
     def report():
         return {
-            'name': args.name, 'models': models, 'points_per_side': args.points,
+            'name': args.name, 'label': args.label, 'models': models, 'points_per_side': args.points,
             'max_ships': args.max_ships, 'turns': args.turns, 'reasoning': args.reasoning,
             'role_models': side_models(args),
             'effort_policy': parse_effort_specs(args.effort),
@@ -414,7 +421,8 @@ async def run(args):
             'recording': str(output),
             'experiment': {'no_admiral': args.no_admiral, 'intent_only': args.intent_only,
                            'quiet_turns': args.quiet_turns, 'cache_warmup': args.cache_warmup,
-                           'rosters': args.rosters, 'thinking_summary': args.thinking_summary},
+                           'rosters': args.rosters, 'thinking_summary': args.thinking_summary,
+                           'show_score': args.show_score},
             'cost_report': battle_cost_report(),
         }
 
@@ -460,7 +468,8 @@ async def run(args):
             model=model, name=f'Admiral {model.split("/")[-1]}', temperature=None,
             # Catalog-verified in make_client; overrides the family allowlist.
             vision=args.admiral_vision, image_input=True if args.admiral_vision else None,
-            intent_only=faction in sides_of(args.intent_only))
+            intent_only=faction in sides_of(args.intent_only),
+            show_score=faction in sides_of(args.show_score))
 
     def battle():
         nonlocal runner, result
@@ -489,7 +498,7 @@ async def run(args):
         runner = LiveDraftRunner(
             BattleConfig.from_fleet_config(fc, recording_dir=str(report_dir), verbose=not args.quiet,
                                            effort_policy=parse_effort_specs(args.effort),
-                                           quiet_turns=args.quiet_turns),
+                                           quiet_turns=args.quiet_turns, label=args.label),
             LLMCaptainConfig('Alpha', 'Alpha'), LLMCaptainConfig('Beta', 'Beta'), client, fc)
         runner.configure_live(server, state, draft_recorders, output, args.sim_step_delay,
                               ticker=ticker, vision_dir=report_dir / 'vision',
@@ -501,6 +510,7 @@ async def run(args):
                 'budget': args.points, **{f: draft_summary_dict(d) for f, d in selections.items()}})
 
     task = asyncio.create_task(asyncio.to_thread(battle))
+    interrupted = False
     try:
         while not task.done():
             write_json(report_dir / 'status.json', report())
@@ -512,18 +522,39 @@ async def run(args):
         state.stage = 'Battle stopped'
         print(state.error, flush=True)
         record_stop(runner, state.error)
+    except BaseException:
+        # Ctrl-C: asyncio cancels this coroutine, but the battle runs in a
+        # worker thread that nothing cancels - it would go on buying calls
+        # (and asyncio.run waits for it). Close the budget so no new request
+        # is sent, let the calls in flight settle, then record the stop.
+        interrupted = True
+        state.error = 'Interrupted (Ctrl-C): no new model calls after the interrupt'
+        state.stage = 'Battle stopped'
+        print(state.error, flush=True)
+        if budget is not None:
+            budget.stop('Ctrl-C')
+        await asyncio.wait({task}, timeout=STOP_WAIT_S)
+        if task.done() and not task.cancelled():
+            task.exception()    # the thread's own "Battle interrupted" stop: retrieved, expected
+        raise
     finally:
         finished = True
         state.active = False
-        write_json(report_dir / 'status.json', report())
-        if runner and runner.recorder:
-            runner.recorder.recording.provenance['billing'] = report()
-            runner.save_progress()
         if ledger_run is not None:
+            # First, before anything below can fail: an unclosed ledger line
+            # counts the whole cap, a closed one what was spent or committed.
             ledger.close_run(ledger_run, calls=client.stats.calls if client else 0,
                              tokens=ledger_tokens(client), usd=budget.reported_usd if budget else 0.0,
                              committed_usd=budget.committed_usd if budget else None,
-                             status='error' if state.error else 'done')
+                             status='interrupted' if interrupted else 'error' if state.error else 'done')
+        write_json(report_dir / 'status.json', report())
+        if task.done():
+            # (A battle thread still running would race the recorder.)
+            if interrupted:
+                record_stop(runner, state.error)
+            if runner and runner.recorder:
+                runner.recorder.recording.provenance['billing'] = report()
+                runner.save_progress()
         # Only now: a viewer seeing "ended" must already find the verdict,
         # the stop reason and the billing block in the recording
         server.set_battle_status('ended', runner.checkpoint_count if runner else 0)
@@ -569,8 +600,9 @@ def main():
                         help=f'Cumulative spend ledger (JSONL). Paid runs append to it (default '
                              f'{DEFAULT_LEDGER.relative_to(ROOT)}); a mock run only when named here')
     parser.add_argument('--ledger-cap', type=float, default=None,
-                        help='Refuse to start when the ledger total (closed runs at their spend, '
-                             'open runs at their cap) plus this run\'s --spend-limit would exceed it')
+                        help='Refuse to start when the ledger total (closed runs at their spend or, '
+                             'if larger, what they still had committed - failed or timed-out calls '
+                             'keep their reservation; open runs at their cap) plus this run\'s --spend-limit would exceed it')
     sides = ('alpha', 'beta', 'both')
     parser.add_argument('--no-admiral', choices=sides, default=None,
                         help='Experiment: that side drafts with its model but fights without an '
@@ -578,6 +610,13 @@ def main():
     parser.add_argument('--intent-only', choices=sides, default=None,
                         help='Experiment: that side\'s admiral sets directive and plan (and may '
                              'order torpedo salvos) but issues no per-ship orders')
+    parser.add_argument('--show-score', choices=sides, default=None,
+                        help='That side\'s admiral sees the time-limit verdict as it stands each '
+                             'checkpoint (AdmiralConfig.show_score; off by default)')
+    parser.add_argument('--label', default=None,
+                        help='Free-text note naming the experiment this run belongs to: stored in '
+                             'status.json, the recording provenance and the ledger lines (never '
+                             'shown to a model)')
     parser.add_argument('--quiet-turns', action='store_true',
                         help='Experiment: skip a captain call on a turn with no trigger, no new '
                              'FLEET NET traffic and an unchanged applied order')
@@ -613,6 +652,8 @@ def main():
         parser.error(str(exc))
     if args.offline and args.mock_llm:
         parser.error('--offline and --mock-llm are exclusive')
+    if args.show_score and (args.offline or set(sides_of(args.show_score)) & set(sides_of(args.no_admiral))):
+        parser.error('--show-score needs an LLM admiral on that side (not --offline / --no-admiral)')
     if args.admiral_vision and not args.offline:
         try:
             import matplotlib  # noqa: F401 - the tactical plot renderer

@@ -531,9 +531,14 @@ class TestMergeAlarm:
 
     def test_out_accelerated_alarm_names_it_without_absurd_distances(self):
         _, info = self._closing_pair(his_g=0.9)
-        assert "he out-accelerates you" in info.warning and "too late" in info.warning
+        # 0.9g against a 1g battleship is not "out-accelerating" it (review cmdrev):
+        # the alarm states what his burn leaves of the braking.
+        assert "out-accelerates" not in info.warning and "too late" in info.warning
+        assert "his burn toward you (0.9g) leaves 0.1g of your 1.0g to brake" in info.warning
         assert "need" not in info.warning
         assert "cannot hold this range" in info.warning
+        _, faster = self._closing_pair(his_g=1.2)
+        assert "he out-accelerates you" in faster.warning
 
     def test_repeats_are_damped(self):
         sim, _ = self._closing_pair(his_g=0.9)
@@ -544,7 +549,7 @@ class TestMergeAlarm:
         sim.current_time += 30.0
         second = admiral._build_snapshot(sim, caps, full=True)
         assert first.merge_alarms == {}
-        assert "merge alarm unchanged since T+0s (he out-accelerates you; 2 checkpoints running)" \
+        assert "merge alarm unchanged since T+0s (his burn eats your braking; 2 checkpoints running)" \
             in second.merge_alarms["GROUP A"]
 
 

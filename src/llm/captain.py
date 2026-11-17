@@ -380,6 +380,9 @@ class LLMCaptain:
         # discussions: this checkpoint's discuss_with_admiral Q&A.
         self.outbox: List[Dict[str, Any]] = []
         self.inbox: List[Dict[str, Any]] = []
+        # (checkpoint, fleet_intel.battle_clock dict) set by the fleet runner
+        # each checkpoint; None (duels, test doubles): no clock line.
+        self.battle_clock: Optional[Tuple[int, Dict[str, Any]]] = None
         self.inbox_delivered_t: Optional[float] = None
         self.fleet_peer_names: List[str] = []
         self.discussions: List[Dict[str, Any]] = []
@@ -670,6 +673,7 @@ class LLMCaptain:
             tool_names=tool_names,
             has_admiral=self.has_admiral,
             compact=compact,
+            battle_clock=getattr(self, "battle_clock", None),
         )
         # Split into a stable system prompt and a volatile user turn so the
         # provider can serve the doctrine from cache across checkpoints.
@@ -740,6 +744,9 @@ class LLMCaptain:
             "commands_count": len(commands),
             "followups": self.last_followup_rounds,
             "acted": any(self._is_action_command(c) for c in commands),
+            # An admiral HEADING / MANEUVER order applied this checkpoint flies
+            # without a captain call: "no commands" then does not mean a coast.
+            "order_flew": self._admiral_heading_applied(),
         })
 
         return commands
@@ -1015,11 +1022,15 @@ class LLMCaptain:
                                        legacy=(tc.name == "respond_to_orders"))[0]["status"] == "ACK"
                   for tc in calls)
         if ack:
+            # Withdrawn calls leave the command list AND the executed list: the
+            # next turn's YOUR RECENT DECISIONS must not show them as flown.
             if any(d.startswith("maneuver:") for d in devs):
                 commands[:] = [c for c in commands if not is_maneuver(c)]
+                executed[:] = [tc for tc in executed if tc.name not in ("set_maneuver", "set_heading")]
             if any(d.startswith("target:") for d in devs):
                 commands[:] = [c for c in commands
                                if not (isinstance(c, dict) and c.get("type") == "set_target")]
+                executed[:] = [tc for tc in executed if tc.name != "set_primary_target"]
                 ordered = self._ordered_target(simulation, ship_id)
                 if ordered is not None:
                     self.primary_target_id = ordered
@@ -1569,7 +1580,7 @@ class LLMCaptain:
                 engine = (f"{label} -> closest approach {cpa_km:.1f} km to {who} in {t_s:.0f} s, "
                           f"passing at {rel_kps:.1f} km/s")
                 if cpa_km < MERGE_KM:
-                    engine += " = a MERGE (seconds of fire, then flying apart)"
+                    engine += " = a MERGE (a pass at that distance)"
                     if any(getattr(i, "warning", None) for i in range_infos):
                         check["conflict"] = ("Your order and RANGE CONTROL conflict (merge): choose "
                                              "and explain - DEVIATE is allowed.")
@@ -1588,7 +1599,7 @@ class LLMCaptain:
                     engine = (f"{kind} coasts (engine off) -> closest approach {near.cpa_km:.1f} km "
                               f"to {who} in {near.cpa_t_s:.0f} s")
                     if near.cpa_km < MERGE_KM:
-                        engine += " = a MERGE (seconds of fire, then flying apart)"
+                        engine += " = a MERGE (a pass at that distance)"
                         if any(getattr(i, "warning", None) for i in range_infos):
                             check["conflict"] = ("Your order and RANGE CONTROL conflict (merge): "
                                                  "choose and explain - DEVIATE is allowed.")
@@ -1933,7 +1944,8 @@ class LLMCaptain:
             if d.get("followups"):
                 text += f" (after {d['followups']} follow-up{'s' if d['followups'] > 1 else ''})"
             if d.get("acted") is False:
-                text += " - NO COMMANDS: the ship coasted"
+                text += (" - no commands of yours: your Admiral's maneuver order flew"
+                         if d.get("order_flew") else " - NO COMMANDS: the ship coasted")
             lines.append(f"  T+{t:.0f} {text}")
         return "\n".join(lines)
 

@@ -96,8 +96,16 @@ class RequestBudget:
         self.committed_usd = 0.0
         self.reported_usd = 0.0
         self.exhausted = False
+        self.stopped = None          # reason, once stop() refuses every later request
         self.images_reserved = 0
         self._lock = threading.Lock()
+
+    def stop(self, reason='stopped'):
+        """Refuse every later reservation (an interrupted run: Ctrl-C). Calls
+        already in flight settle as usual; nothing new is sent."""
+        with self._lock:
+            self.stopped = str(reason)
+            self.exhausted = True
 
     def reserve(self, payload):
         pricing = self.pricing[payload['model']]
@@ -134,6 +142,8 @@ class RequestBudget:
         if not math.isfinite(reserved) or reserved < 0:
             raise ValueError('Invalid reservation')
         with self._lock:
+            if self.stopped is not None:
+                raise RuntimeError(f'Battle API budget closed before request ({self.stopped})')
             if self.committed_usd + reserved > self.limit_usd:
                 self.exhausted = True
                 raise RuntimeError('Battle API budget exhausted before request')
@@ -173,7 +183,10 @@ class SpendLedger:
         run (no close line) still counts at its full cap;
       {"event": "close", run_id, ts, script, name, models, calls, tokens,
        usd, committed_usd, cap_usd, status, mode}
-        when it ends - the run then counts at its reported dollars.
+        when it ends - the run then counts at its reported dollars (or its
+        committed dollars, if larger: calls whose cost never came back).
+    An optional free-text `label` (which experiment the run belongs to) rides
+    on both lines.
     total_usd() = sum of closed runs' usd + caps of runs still open. Runs with
     mode "mock" are written (when a mock run is pointed at a ledger
     explicitly) but never counted; the ledger cap is checked for them too.
@@ -222,7 +235,12 @@ class SpendLedger:
         total = 0.0
         for run in runs.values():
             if 'close' in run:
-                total += float(run['close'].get('usd') or 0.0)
+                # A close counts at its reported dollars, or at what was still
+                # committed when it closed if that is more: reservations of
+                # calls whose cost never came back (timeouts) and of calls
+                # still in flight when an interrupted run closed.
+                close = run['close']
+                total += max(float(close.get('usd') or 0.0), float(close.get('committed_usd') or 0.0))
             elif 'open' in run:
                 total += float(run['open'].get('cap_usd') or 0.0)
         return total
@@ -248,7 +266,7 @@ class SpendLedger:
                 f'${float(cap_usd):.2f} = ${total + float(cap_usd):.2f} > --ledger-cap '
                 f'${float(ledger_cap_usd):.2f}; not starting')
 
-    def open_run(self, *, script, name, models, cap_usd, ledger_cap_usd=None, mock=False):
+    def open_run(self, *, script, name, models, cap_usd, ledger_cap_usd=None, mock=False, label=None):
         """Reserve this run's cap; raises LedgerCapExceeded (nothing written) past ledger_cap_usd."""
         import time
         import uuid
@@ -265,10 +283,12 @@ class SpendLedger:
             run_id = uuid.uuid4().hex[:12]
             self._append({'event': 'open', 'run_id': run_id, 'ts': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
                           'script': script, 'name': name, 'models': list(models), 'cap_usd': cap_usd,
-                          'ledger_total_before_usd': round(total, 4), 'mode': 'mock' if mock else 'paid'})
+                          'ledger_total_before_usd': round(total, 4), 'mode': 'mock' if mock else 'paid',
+                          **({'label': str(label)} if label else {})})
         self._open = getattr(self, '_open', {})
         self._open[run_id] = {'script': script, 'name': name, 'models': list(models),
-                              'cap_usd': cap_usd, 'mode': 'mock' if mock else 'paid'}
+                              'cap_usd': cap_usd, 'mode': 'mock' if mock else 'paid',
+                              **({'label': str(label)} if label else {})}
         return run_id
 
     def close_run(self, run_id, *, calls, tokens, usd, committed_usd=None, status='done'):

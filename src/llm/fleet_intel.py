@@ -1097,7 +1097,8 @@ def him_after_text(sim: Any, info: Any, own: Sequence[Any], enemies: Sequence[An
     moved = own_pos + own_vel * t_end
     if burn > 0:
         moved = moved + h * (0.5 * accel * thr * burn * burn)
-    now = _median([math.degrees(e.forward.angle_to(own_pos - e.position)) for e in enemies])
+    angles_now = [math.degrees(e.forward.angle_to(own_pos - e.position)) for e in enemies]
+    now = _median(angles_now)
     after = []
     for e in enemies:
         e_end = e.position + e.velocity * t_end
@@ -1105,6 +1106,12 @@ def him_after_text(sim: Any, info: Any, own: Sequence[Any], enemies: Sequence[An
     after.sort(key=lambda x: x[0])
     angle_after, rep, los_after = after[len(after) // 2]
     text = f"him: {face_of(now)} {now:.0f}->{face_of(angle_after)} {angle_after:.0f} deg"
+    faces = [face_of(a) for a in angles_now]
+    if len(set(faces)) > 1:
+        # A mixed group (say 3 nose-on frigates and 5 corvettes tail-on): the
+        # median member alone reads as if the whole group showed that face.
+        split = ", ".join(f"{faces.count(f)} {f}" for f in ("NOSE", "SIDE", "TAIL") if f in faces)
+        text = f"him (median of {len(faces)}: {split} now): " + text[len("him: "):]
     if face_of(angle_after) != "NOSE":
         try:
             turn = sim._turn_time_to(rep, los_after, True)
@@ -1262,7 +1269,19 @@ def score_line(sim: Any, faction: str) -> str:
     beta = [s for s in ships if getattr(s, "faction", None) == "beta"]
     a, b = time_limit_scores(alpha, beta)
     you, them = (a, b) if faction == "alpha" else (b, a)
-    return f"SCORE IF THE BATTLE ENDED NOW (time-limit verdict): you {you:.0f} / them {them:.0f}"
+    # The verdict the runner draws from these scores (battle_runner
+    # _evaluate_fleet_tactical_advantage): closer than max(5, 5% of the
+    # higher) is a draw - without it "you 151 / them 145" reads as a win.
+    margin = max(TIME_LIMIT_DRAW_MIN_POINTS, max(you, them) * TIME_LIMIT_DRAW_FRACTION)
+    verdict = ("a DRAW (closer than the margin, " f"{margin:.0f})" if abs(you - them) < margin
+               else "you win" if you > them else "he wins")
+    return (f"SCORE IF THE BATTLE ENDED NOW (time-limit verdict): you {you:.0f} / them {them:.0f}"
+            f" = {verdict}")
+
+
+# The time-limit verdict's draw margin: max(5 points, 5% of the higher score).
+TIME_LIMIT_DRAW_MIN_POINTS = 5.0
+TIME_LIMIT_DRAW_FRACTION = 0.05
 
 
 # =============================================================================

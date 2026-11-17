@@ -6,7 +6,7 @@ Newtonian combat has no brakes. Two fleets closing at 4.6 km/s need
 v^2/(2a) of room to stop - 359 km for a 3 g corvette, 1078 km for a 1 g
 battleship - so by the time the enemy "looks close" it is far too late, and
 every maneuver that is not a deliberate burn against the relative velocity
-ends in a merge: a pass at a kilometre or two, a few seconds of fire, and
+ends in a merge: a pass at a kilometre or two, a short exchange at falling range, and
 two fleets flying apart. Commanders (LLM or human) should not have to do the
 vector algebra to avoid that. This module does it for them, per enemy
 group:
@@ -881,25 +881,26 @@ def _analyze_group(sim, own, own_pos, own_vel, accel, members, interval_s, detai
         if decel <= 0:
             info.warning = (
                 f"MERGE IN {base_t:.0f} s at {at}: he out-accelerates you toward you - "
-                f"braking cannot stop it; pass wide or flank NOW.")
+                f"braking cannot stop it (a lateral burn moves the pass).")
         elif slack_s <= 0 and decel < OUTACCEL_DECEL_FRACTION * accel:
             # cmdadm (audit A9): his burn toward you eats most of your braking,
             # so "need 23503 km" was arithmetic, not information. Still "too
             # late" (the heuristic captain keys its pass-wide choice on it).
             info.warning = (
-                f"MERGE IN {base_t:.0f} s at {at}, too late to brake: he out-accelerates you "
-                f"({his_push / G_STANDARD:.1f}g toward you against your {accel / G_STANDARD:.1f}g) - "
-                f"you cannot hold this range; pass wide or burn laterally NOW.")
+                f"MERGE IN {base_t:.0f} s at {at}, too late to brake: his burn toward you "
+                f"({his_push / G_STANDARD:.1f}g) leaves {decel / G_STANDARD:.1f}g of your "
+                f"{accel / G_STANDARD:.1f}g to brake - you cannot hold this range (a lateral "
+                f"burn moves the pass).")
         elif slack_s <= 0:
             info.warning = (
                 f"MERGE IN {base_t:.0f} s at {at}, too late to brake "
                 f"(need {need_km:.0f} km incl. flip, have {info.range_km:.0f} km); "
-                f"pass wide or burn laterally NOW.")
+                f"a lateral burn moves the pass.")
         elif slack_s <= MERGE_WARN_INTERVALS * interval_s:
             info.warning = (
                 f"MERGE IN {base_t:.0f} s at {at} unless you act: braking must start "
                 f"within {slack_s:.0f} s (need {need_km:.0f} km incl. flip, have "
-                f"{info.range_km:.0f} km). Cancel closure now, or pass wide.")
+                f"{info.range_km:.0f} km).")
     return info
 
 

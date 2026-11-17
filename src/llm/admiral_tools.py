@@ -428,6 +428,12 @@ def get_admiral_tools(intent_only: bool = False) -> List[Dict[str, Any]]:
         fn = tool["function"]
         if fn["name"] == "issue_order":
             fn["description"] = INTENT_ONLY_ISSUE_ORDER
+            # Only the fields this mode flies: a schema still offering heading /
+            # maneuver / throttle invited orders that are silently dropped.
+            params = fn["parameters"]
+            params["properties"] = {k: v for k, v in params["properties"].items()
+                                    if k in ("ship_name", "torpedo_salvo", "torpedo_target")}
+            params["required"] = ["ship_name"]
         elif fn["name"] == "set_fleet_directive":
             fn["description"] = INTENT_ONLY_DIRECTIVE
     return tools

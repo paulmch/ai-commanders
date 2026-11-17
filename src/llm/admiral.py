@@ -1682,6 +1682,8 @@ Be authentic to how you would command a fleet as {model_name}."""
     def _alarm_kind(warning: str) -> str:
         if "out-accelerates" in warning:
             return "he out-accelerates you"
+        if "his burn toward you" in warning:
+            return "his burn eats your braking"
         if "too late" in warning:
             return "too late to brake"
         return "brake now or pass"
