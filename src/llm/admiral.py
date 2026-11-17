@@ -855,6 +855,7 @@ Be authentic to how you would command a fleet as {model_name}."""
             last_directive_failure=self._last_failure,
             battle_classes=self._battle_classes,
             vision=self.wants_vision,
+            intent_only=bool(getattr(self.config, "intent_only", False)),
         )
 
         user_text = (f"ADMIRAL CHECKPOINT {self.decision_count + 1}. "
@@ -966,10 +967,13 @@ Be authentic to how you would command a fleet as {model_name}."""
             # cmdrun experiment hunk: no per-ship order calls; every ship gets
             # the directive (and any salvo it was ordered), nothing else.
             decision.fleet_orders.extend(
-                self._intent_only_order(ship_info, salvo_orders) for ship_info in active_ships)
+                self._intent_only_order(ship_info, salvo_orders, decision.salvo_plan)
+                for ship_info in active_ships)
             self.decision_count += 1
             self.order_history.append(decision)
             self._received_enemy_messages.clear()
+            self.draw_notices.clear()      # cmdadm: same bookkeeping as the default path
+            self.last_decision = decision
             return decision
 
         if self.parallel_ship_orders and len(active_ships) > 1:
@@ -995,7 +999,9 @@ Be authentic to how you would command a fleet as {model_name}."""
         return decision
 
     def _intent_only_order(self, ship_info: dict,
-                           salvo_orders: Dict[str, Dict[str, Any]]) -> "AdmiralOrder":
+                           salvo_orders: Dict[str, Dict[str, Any]],
+                           salvo_plan: Optional[Dict[str, Tuple[int, Optional[str]]]] = None
+                           ) -> "AdmiralOrder":
         """cmdrun experiment hunk: the order an intent-only admiral's ship receives."""
         name = str(ship_info.get("ship_name") or "").strip().lower()
         sid = str(ship_info.get("ship_id") or "").strip().lower()
@@ -1011,6 +1017,9 @@ Be authentic to how you would command a fleet as {model_name}."""
             torpedo_target=self._plain_ref(
                 (salvo.get("torpedo_target") or salvo.get("suggested_target")) if salvo else None),
         )
+        if salvo is None:
+            # cmdadm: a set_fleet_directive salvo_plan allocates the salvo too.
+            self._apply_salvo_plan(order, {}, salvo_plan)
         return order
 
     def _publish_directive(self, decision: AdmiralDecision, now: float) -> None:
@@ -1052,7 +1061,7 @@ Be authentic to how you would command a fleet as {model_name}."""
         attempt failed when the retry saved it; call_error = LLMCallError text
         (no retry: the client already retried transient errors).
         """
-        calls, meta, error = self._tool_call(messages, self.tools)
+        calls, meta, error = self._tool_call(messages, self._directive_tools())
         if error:
             return [], None, None, error
         if _has_directive(calls):
@@ -1080,7 +1089,7 @@ Be authentic to how you would command a fleet as {model_name}."""
         print(f"[ADMIRAL {self.config.name}] directive call returned no directive "
               f"({first}) - retrying once with a short-answer nudge")
         retry_calls, retry_meta, retry_error = self._tool_call(
-            _with_retry_nudge(messages, first), self.tools, **overrides)
+            _with_retry_nudge(messages, first), self._directive_tools(), **overrides)
         if retry_error:
             return calls, f"{first}; retry: call error", None, None
         if _has_directive(retry_calls):
@@ -1091,6 +1100,14 @@ Be authentic to how you would command a fleet as {model_name}."""
                      and c.name in ("set_battle_plan", "issue_order")]
             return retry_calls + extra, None, first, None
         return calls + retry_calls, f"{first}; retry: {_failure_text(retry_meta)}", None, None
+
+    def _directive_tools(self) -> List[Dict[str, Any]]:
+        """The directive call's tools; in intent-only mode with the issue_order
+        / set_fleet_directive descriptions of that mode (cmdadm)."""
+        if getattr(self.config, "intent_only", False):
+            from .admiral_tools import get_admiral_tools
+            return get_admiral_tools(intent_only=True)
+        return self.tools
 
     def _issue_ship_order(
         self,

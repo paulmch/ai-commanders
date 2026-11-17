@@ -70,8 +70,8 @@ ADMIRAL_TOOLS = [
                             "together split enemy PD dwell, while trickled rounds are "
                             "blinded one at a time (measured vs 4 PD turrets: 4 "
                             "simultaneous = 24/24 through, same 4 spaced 30s = 12/24). "
-                            "Sizing: ~4 rounds kill a destroyer, ~6 kill anything; only "
-                            "commit against CLOSING targets - receding evaders escape. "
+                            "Sizing: ~4 rounds kill a destroyer, ~6 kill anything; a "
+                            "receding evader outruns the rounds. "
                             "Rounds whose target dies mid-flight retarget the nearest "
                             "reachable enemy on their own if their seeker is alive and "
                             "fuel allows, so overkill partially carries onto the next hull."
@@ -210,7 +210,11 @@ ADMIRAL_TOOLS = [
                             "torpedoes, costing closure), 'dodge' = keeps course until a guided "
                             "torpedo's final seconds, then presents armor; jinks slugs. It "
                             "burns at the order's throttle - full throttle under an order that "
-                            "does not burn (throttle 0, PADLOCK, MAINTAIN). Given "
+                            "does not burn (throttle 0, PADLOCK, MAINTAIN). While rounds are "
+                            "inbound the overlay, not your burn, flies the drive: the ship "
+                            "jinks, TANKs (half throttle) or BRACEs (drive off), so an escape "
+                            "burn 'with evade' under fire burns only a small part of the time "
+                            "(YOUR FLEET / ENGINE show what was flown). Given "
                             "ALONE (no maneuver, no heading) it rides on the fleet order in "
                             "force - or, with none, on what the ship is already flying - so "
                             "never add MAINTAIN just to carry it: MAINTAIN switches the "
@@ -398,9 +402,35 @@ DISCUSS_WITH_ADMIRAL_TOOL = {
 }
 
 
-def get_admiral_tools() -> List[Dict[str, Any]]:
-    """Get tools available to Admirals."""
-    return ADMIRAL_TOOLS.copy()
+# Intent-only mode (AdmiralConfig.intent_only, an experiment): no per-ship
+# order phase, issue_order carries only a coordinated torpedo salvo.
+INTENT_ONLY_ISSUE_ORDER = (
+    "INTENT-ONLY COMMAND: there are no per-ship orders this battle - captains choose their "
+    "own maneuvers and targets from your directive and battle plan. Use issue_order ONLY to "
+    "order a coordinated torpedo salvo: ship_name, torpedo_salvo=N, torpedo_target=<enemy>, "
+    "one call per launching ship (or set_fleet_directive salvo_plan). Every other field is "
+    "ignored."
+)
+INTENT_ONLY_DIRECTIVE = (
+    "Set the overall fleet strategy visible to all captains - in intent-only command it is "
+    "their only order: they pick their own maneuvers and targets from it. For torpedo "
+    "fleets, salvo_plan allocates this checkpoint's salvo."
+)
+
+
+def get_admiral_tools(intent_only: bool = False) -> List[Dict[str, Any]]:
+    """Get tools available to Admirals (intent_only: that mode's descriptions)."""
+    if not intent_only:
+        return ADMIRAL_TOOLS.copy()
+    import copy
+    tools = copy.deepcopy(ADMIRAL_TOOLS)
+    for tool in tools:
+        fn = tool["function"]
+        if fn["name"] == "issue_order":
+            fn["description"] = INTENT_ONLY_ISSUE_ORDER
+        elif fn["name"] == "set_fleet_directive":
+            fn["description"] = INTENT_ONLY_DIRECTIVE
+    return tools
 
 
 def get_admiral_tools_with_draw_pending() -> List[Dict[str, Any]]:

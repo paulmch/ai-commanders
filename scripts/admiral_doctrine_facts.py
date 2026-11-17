@@ -443,6 +443,72 @@ def _summarize_torpedo_cell(rows, summary, prefix):
               f"dry {m['dry']}, missed {m['missed']}")
 
 
+FIXTURE_BANDS = {"0-50": ["0-25", "25-50"], "50-100": ["50-100"], "100-150": ["100-150"],
+                 "150-200": ["150-200"], "200-300": ["200-300"], "300+": ["300+"]}
+FIXTURE_RERUNS = (("gunline-bc_wall_tactical_s1", "guns"),
+                  ("wall_static_torpedo_boats_d500_s1", "torpedo"),
+                  ("wall_open_torpedo_boats_d500_s1", "torpedo"))
+
+
+def build_fixture(out: Path, path: Path) -> None:
+    """tests/fixtures/admiral_doctrine_facts.json from both grids' caches
+    (run `guns` and `torpedo` first, with the commands recorded in it)."""
+    import subprocess
+    guns = json.loads((out / "guns_summary.json").read_text())
+    torp = json.loads((out / "torpedo_summary.json").read_text())["modes"]
+    both = guns["by_doctrine"]["both"]
+    bands = {}
+    for name, parts in FIXTURE_BANDS.items():
+        acc: Dict[str, float] = defaultdict(float)
+        for part in parts:
+            for k, v in both["bands"].get(part, {}).items():
+                acc[k] += v
+        bands[name] = {k: round(v, 3) for k, v in acc.items()}
+
+    def facing_of(block):
+        res: Dict[str, Any] = {}
+        for key, v in block["facing"].items():
+            cls, face, band = key.split("|")
+            if band == "all":
+                res.setdefault(cls, {})[face] = {k: round(x, 3) for k, x in v.items()}
+        return res
+    keep = ("battles", "launched", "impacts", "impact_gj", "impact_kps_median", "wall_lost",
+            "wall_total", "boats_lost", "boats_total", "wall_wins", "median_first_loss_s", "impact_loc")
+    reruns = {}
+    for tag, grid in FIXTURE_RERUNS:
+        r = json.loads((out / grid / f"{tag}.json").read_text())
+        entry = {"winner": r["winner"], "bands": r["bands"], "dead": r["dead"]}
+        if grid == "torpedo":
+            entry["torpedo"] = {k: r["torpedo"][k] for k in ("launched", "impacts", "impact_gj", "impact_loc")}
+        reruns[tag] = entry
+    try:
+        sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, text=True).strip()
+    except (OSError, subprocess.CalledProcessError):
+        sha = "?"
+    fixture = {
+        "about": ("Seeded heuristic battles behind the admiral doctrine GUN EXCHANGE / FACING / "
+                  "TORPEDO DEFENCE tables (src/llm/prompts.py), bound by "
+                  "tests/test_doctrine_accuracy.py::TestMeasuredExchangeDoctrine. Regenerate with "
+                  "the commands below and update the doctrine numbers when an engine change moves them."),
+        "engine_commit": sha,
+        "commands": [
+            "OMP_NUM_THREADS=1 uv run python scripts/admiral_doctrine_facts.py guns --seeds 1 2 3 4 5 6 7 8 --jobs 10 --out OUT",
+            "OMP_NUM_THREADS=1 uv run python scripts/admiral_doctrine_facts.py torpedo --seeds 1 2 3 --distances 500 1000 --attackers torpedo_boats torpedo --jobs 12 --out OUT",
+            "uv run python scripts/admiral_doctrine_facts.py guns --summary --out OUT --fixture tests/fixtures/admiral_doctrine_facts.json"],
+        "guns": {"battles": both["battles"], "rosters": list(GUN_ROSTERS),
+                 "pairs": "every unordered pair incl. mirrors", "doctrines": ["legacy", "tactical"],
+                 "seeds": guns.get("seeds"), "budget": 150, "start_km": 500, "time_limit_s": 600,
+                 "bands": bands, "facing": facing_of(both),
+                 "facing_by_doctrine": {d: facing_of(guns["by_doctrine"][d]) for d in ("legacy", "tactical")}},
+        "torpedo": {"battles": sum(v["battles"] for v in torp.values()),
+                    "wall": "4 battlecruiser + 2 destroyer + 2 frigate, scripted posture from the first checkpoint",
+                    "seeds": [1, 2, 3], "cells": {k: {kk: v[kk] for kk in keep} for k, v in torp.items()}},
+        "reruns": reruns,
+    }
+    path.write_text(json.dumps(fixture, indent=1))
+    print(f"fixture written: {path}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("grid", choices=("guns", "torpedo"))
@@ -455,6 +521,7 @@ def main() -> int:
     ap.add_argument("--jobs", type=int, default=8)
     ap.add_argument("--out", required=True)
     ap.add_argument("--summary", action="store_true", help="only summarise the cache")
+    ap.add_argument("--fixture", help="with --summary: write the test fixture from both grids' caches")
     args = ap.parse_args()
     Path(args.out).mkdir(parents=True, exist_ok=True)
     jobs = gun_jobs(args) if args.grid == "guns" else torpedo_jobs(args)
@@ -469,8 +536,10 @@ def main() -> int:
     rows = [r for r in rows if "error" not in r]
     summary = summarize_guns(rows) if args.grid == "guns" else summarize_torpedo(rows)
     summary["command"] = " ".join(sys.argv)
-    summary["seeds"] = args.seeds
+    summary["seeds"] = sorted({r["seed"] for r in rows}) if args.summary else args.seeds
     (Path(args.out) / f"{args.grid}_summary.json").write_text(json.dumps(summary, indent=1))
+    if args.fixture:
+        build_fixture(Path(args.out), Path(args.fixture))
     return 0
 
 

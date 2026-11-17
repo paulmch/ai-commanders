@@ -2834,7 +2834,11 @@ MANEUVERS (tell captains which to use):
   closure (with standoff_km it closes, flips and holds that range)
 - EVADE: Threat-aware defense - jinks vs guns, RUNS/PRESENTS vs torpedoes. With no threat
   it weaves around the ship's CURRENT course: it never chases and never brakes, so an
-  EVADE order does not stop a merge.
+  EVADE order does not stop a merge. The evade overlay (evade full/dodge on another
+  order) works the same way: while rounds are inbound IT flies the drive - jinks, TANK
+  (half throttle) or BRACE (drive off) - so a burn ordered "with evade" under fire burns
+  only a small part of the time; without the overlay the ship flies the burn and takes
+  the hits it was going to take.
 - BRAKE: burn against the ship's own (world-frame) velocity
 - MAINTAIN: engine OFF - coast at current velocity, no thrust, no rotation
 - PADLOCK: engine off, the nose tracks the target (spinal on him) - coast and shoot
@@ -2955,12 +2959,12 @@ from the first checkpoint; per battle, 3 seeds each):
 # Included when YOUR fleet mounts launchers.
 ADMIRAL_TORPEDO_DOCTRINE = """
 WHEN TO COMMIT TRIDENTS:
-- Fire when CLOSING. A closing launch vs a lone ship connects ~100% (12g guidance,
+- A closing launch vs a lone ship connects ~100% (12g guidance,
   <=3g targets): ~23 GJ per round at low closure, ~95 GJ launched head-on at 26 km/s
-  (a spinal gun round is 4.3 GJ). NEVER launch at a receding evading ship - it
-  outruns the round's delta-v and the magazine is wasted. The THREAT TABLE's
-  torpedo verdict does this math for you: launch on GOOD.
-- SIMULTANEOUS time-on-target, always. Rounds arriving together split PD dwell;
+  (a spinal gun round is 4.3 GJ). A receding evading ship outruns the round's
+  delta-v: the round is lost. The THREAT TABLE's torpedo verdict does this math
+  (GOOD / POOR / NO, legend above).
+- TIME-ON-TARGET: rounds arriving together split PD dwell;
   trickled rounds are blinded one at a time, early enough to dodge. Measured vs 4
   turrets: 4 simultaneous -> 24/24 through (99 GJ); same 4 spaced 30s -> 12/24 (42 GJ).
   Use torpedo_salvo on issue_order to synchronize launches ACROSS ships.
@@ -3019,8 +3023,8 @@ GUNNERY:
   a short window and a merge unless the ships cancel closure in time.
 - Spinal weapons need nose-on alignment (<30 deg to target). Turret batteries fire wherever
   their own hull leaves them open, rolling the ship to unmask (automatic): no battery of a
-  class fires inside its blind cone (FORCES: "batteries blind within N deg of dead
-  astern"); every other direction can be brought to bear by a roll.
+  class fires inside its blind cone (FORCES: "No gun battery can fire at a target within
+  N deg of dead astern"); in every other direction a roll brings one to bear.
 - Range is accuracy: a round hits only if its target is still near the aim point when it
   arrives, and a ship flying EVADE or evade dodge/full jinks off rounds it sees coming.
   Per-round P(hit) vs a dodging destroyer: spinal 34% at 100 km, 2% at 200 km, 0% at
@@ -3028,7 +3032,7 @@ GUNNERY:
   Massed fire does not fix that: in a recorded fleet battle where every ship flew evade
   dodge, 0 of 188 rounds at 100-300km landed where this model promised ~7; in seeded
   runs a dodger under fire from 2-8 ships at 200-300 km was hit nearly 3x less than shown
-  (EVADE maneuver 1.8x less). Do not plan gun fights at dodgers beyond ~150 km.
+  (EVADE maneuver 1.8x less). Beyond ~150 km a dodger is rarely hit.
 - Cross-section: broadside is ~1.5x the hit chance of nose-on at 200 km (~1.2x at
   100 km) - and broadside is the thin armor (FACING).
 - Weapon modes: FIRE_IMMEDIATE (fires every ready mount), FIRE_WHEN_OPTIMAL (fires when
@@ -3282,21 +3286,23 @@ def class_blind_cones(ship_type: str) -> Dict[str, float]:
 
 
 def _blind_cone_text(ship_type: str, has_guns: bool, has_pd: bool) -> str:
-    """' | batteries blind within 10 deg of dead astern (fire everywhere else)' - a
-    cone, stated as one (a per-ship 'guns within 15 deg of the stern' was read as
-    'guns are stern-arc only'): every other direction can be brought to bear, by a
-    roll if a mount is masked (bound by test_doctrine_accuracy). Spinals are not
-    batteries: they keep their own nose gimbal."""
-    cones = class_blind_cones(ship_type)
-    parts = []
-    for kind, word, present in (("gun", "batteries", has_guns), ("pd", "PD", has_pd)):
-        if not present:
-            continue
-        for end, where in (("stern", "dead astern"), ("nose", "dead ahead")):
-            deg = cones.get(f"{kind}_{end}", 0.0)
-            if deg >= 1.0:
-                parts.append(f"{word} blind within {deg:.0f} deg of {where}")
-    return (" | " + ", ".join(parts) + " (fire everywhere else)") if parts else ""
+    """The class's blind cones, once, in the captain's own wording
+    (arcs_status.blind_cone_doctrine: "No gun battery can fire at a target
+    within 15 deg of dead astern, at any roll - ... in every other direction
+    at least one gun battery bears at some roll"). A per-ship "guns within
+    15 deg of the stern" line was read as "guns are stern-arc only" (audit
+    A7). Classes without a cone add nothing."""
+    try:
+        from .arcs_status import blind_cone_doctrine
+    except ImportError:  # pragma: no cover
+        from llm.arcs_status import blind_cone_doctrine  # type: ignore
+    try:
+        text = blind_cone_doctrine(ship_type)
+    except Exception:  # noqa: BLE001 - advisory text only
+        return ""
+    cones = [line[2:].replace("your spinal", "its spinal") for line in text.splitlines()
+             if line.startswith("- No ")]
+    return "".join(f"\n    {c}" for c in cones)
 
 
 def _num(value: Any) -> str:
@@ -3371,9 +3377,26 @@ def _verdict_legend(flags: Dict[str, bool]) -> str:
         f"  EVADE does): GOOD = reaches him and lands >= {GOOD_ENERGY_GJ:.0f} GJ; POOR = reaches,\n"
         "  but he is receding or it arrives slow - long PD dwell, a fraction of the damage;\n"
         f"  NO = runs dry short, lands < {NO_ENERGY_GJ:.0f} GJ, or his PD blinds more slow rounds\n"
-        "  than you can launch. Launch on GOOD; POOR only to empty a doomed magazine.\n"
+        "  than you can launch.\n"
         "  A round needs distance to build speed: launched close, it arrives slow whatever\n"
         "  the closure - the verdict already counts that.\n")
+
+
+ADMIRAL_INTENT_ONLY_MISSION = """***** THIS CALL: FLEET DIRECTIVE - INTENT-ONLY COMMAND *****
+
+Call set_fleet_directive with the overall strategy for your fleet (the ships are listed
+under YOUR FLEET in the situation). There is NO per-ship order phase in this battle: your
+captains read the directive and your battle plan and choose their own maneuvers and
+targets. Keep it under ~150 words and answer with tool calls, not a long analysis.
+
+Torpedo salvos are the one per-ship instruction: set_fleet_directive salvo_plan (ship,
+rounds, target), or issue_order(ship_name=..., torpedo_salvo=N, torpedo_target=...) per
+launching ship. Any other issue_order content is ignored.
+
+Ships are shown as: NAME [ID] (e.g., "OCS Gemini-1 [beta_1]")
+You can use EITHER the name OR the ID when naming ships or targets.
+
+*************************************************"""
 
 
 # Legend of the tactical plot (admiral_view.py), sent once in the cached system
@@ -3383,7 +3406,8 @@ Left panel top-down (X/Y in km), right panel 3D perspective. Cyan = alpha fleet,
 beta fleet. A ship's tick points along its nose. Diamonds are torpedoes (grey = dead seeker),
 yellow dots are coilgun slugs, red lines are active PD beams, faint trails show torpedo paths
 over the last 25 s, arrows show velocity, "burning" means the drive is producing thrust.
-Dashed rings around your fleet centre: your PD envelope and gun-range rings; X marks the
+Rings around your fleet centre: your PD envelope (dashed) and range rings at 100/200/300 km
+(dotted); X marks the
 closest approach of the nearest enemy group if both sides coast."""
 
 
@@ -3398,6 +3422,7 @@ def build_admiral_static(
     decision_interval_s: float = 30.0,
     battle_classes: Optional[Dict[str, List[str]]] = None,
     vision: bool = False,
+    intent_only: bool = False,
 ) -> str:
     """
     The battle-static system prompt: doctrine for the fleets in this battle
@@ -3506,7 +3531,13 @@ For EACH ship in your fleet, you MUST call issue_order with:
                      .get("torpedo_launcher", {}).get("cooldown_s", 12))
     magazine_line = _magazine_line(own_classes, fleet_data) or (
         "8 rounds per corvette tube, 12 per torpedo-cruiser tube")
-    if directive_only and use_tubes:
+    if directive_only and intent_only:
+        # Intent-only command (an experiment; default text unchanged): no
+        # per-ship order phase follows the directive.
+        mission_block = ADMIRAL_INTENT_ONLY_MISSION
+        orders_role = ("No per-ship orders in this battle: captains choose their own maneuvers "
+                       "and targets from your directive; issue_order only for a torpedo salvo")
+    elif directive_only and use_tubes:
         mission_block = mission_block.replace(
             "Make the directive concrete\nenough that the per-ship orders follow from it.",
             "Make the directive concrete\nenough that the per-ship orders follow from it. "
@@ -4379,6 +4410,7 @@ def _admiral_parts(
     last_directive_failure: Optional[Tuple[float, str]] = None,
     battle_classes: Optional[Dict[str, List[str]]] = None,
     vision: bool = False,
+    intent_only: bool = False,
 ) -> Tuple[str, str]:
     """(static system text, live turn state)."""
     classes = battle_classes if battle_classes and (battle_classes.get("ours")
@@ -4388,7 +4420,7 @@ def _admiral_parts(
         admiral_name=admiral_name, faction=faction, fleet_data=fleet_data,
         personality=personality, phase=phase, enemy_has_admiral=enemy_has_admiral,
         notebook_text=notebook_text, decision_interval_s=decision_interval_s,
-        battle_classes=classes, vision=vision)
+        battle_classes=classes, vision=vision, intent_only=intent_only)
     live = format_admiral_turn_state(
         snapshot_t_zero, fleet_data, phase=phase, standing_plan=standing_plan,
         standing_plan_time=standing_plan_time, captain_reports=captain_reports,
@@ -4554,8 +4586,8 @@ def build_admiral_ship_order_messages(
     row = _ship_row(snapshot, ship_id, ship_name)
     ship_id = ship_id or (row.ship_id if row is not None else None)
     has_tubes = bool(row is not None and (row.launchers or row.torpedoes_remaining))
-    torpedo_note = (" - launch torpedoes only on a GOOD verdict; POOR rounds arrive slow and weak,"
-                    " NO rounds are wasted." if has_tubes else ".")
+    torpedo_note = (" - torpedo verdicts: GOOD rounds reach and land hard, POOR rounds arrive slow"
+                    " and weak, NO rounds do not reach." if has_tubes else ".")
     system = ADMIRAL_SHIP_ORDER_DOCTRINE.format(
         admiral_name=admiral_name, faction=(faction or "your").upper(),
         torpedo_note=torpedo_note,

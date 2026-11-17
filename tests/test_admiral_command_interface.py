@@ -84,6 +84,24 @@ class TestEnemyFacing:
             fleet_directive="x", snapshot=snap, ship_id="alpha_1", ship_view=view)
         assert "shows it SIDE 30cm, coasting" in order[1]["content"]
 
+    def test_him_after_angle_is_the_geometry(self):
+        """A 60 s full burn at 1 g straight across the line moves you 17.65 km
+        sideways; an enemy 200 km off, nose on you and holding attitude, then
+        shows you his nose at atan(17.65 / 200) = 5.0 deg."""
+        from src.llm.range_control import HeadingOption
+        sim = CombatSimulation(seed=1)
+        me = ship(sim, "alpha_1", "battleship", "alpha", (0, 0, 0))
+        him = ship(sim, "beta_1", "destroyer", "beta", (200, 0, 0), fwd=(-1, 0, 0))
+        opt = HeadingOption(key="left", label="flank left", heading=Vector3D(0, 1, 0), throttle=1.0,
+                            turn_s=0.0, burn_s=60.0, effect="~60 s")
+        info = types.SimpleNamespace(options=[opt], accel_g=1.0, names=["OCS beta_1"],
+                                     cpa_km=0.0, cpa_t_s=0.0)
+        row = intel.heading_option_rows(sim, info, [me], [him])[0]
+        lateral_km = 0.5 * 9.80665 * 60.0 ** 2 / 1000.0
+        expect = math.degrees(math.atan(lateral_km / 200.0))
+        assert f"him: NOSE 0->NOSE {expect:.0f} deg" in row
+        assert "you: SIDE ~60 s" in row
+
     def test_every_heading_row_states_both_faces(self):
         _, _, snap, msgs = __import__("tests.test_admiral_intel", fromlist=["battle_a_turn"]).battle_a_turn("beta", t=180)
         rows = [l for l in snap.headings.splitlines() if l.startswith("  ")]
@@ -733,3 +751,101 @@ class TestThroughTheAnthropicClient:
         assert kinds[0] == "tool_result" and "text" in kinds   # result + the closing line, one turn
         assert "names OCS beta_2 [beta_2]" in follow[-1]["content"][0]["content"]
         assert order.suggested_target == "beta_2"
+
+
+# =============================================================================
+# The same draft paths through the OpenRouter client with a spend budget
+# =============================================================================
+
+def _openrouter_draft_client(fleets, record):
+    import httpx
+    from src.llm.client import CaptainClient
+    from src.llm.spending import RequestBudget
+    model = "deepseek/deepseek-v4.1-flash"
+    pricing = {model: {"prompt": "0.0000003", "completion": "0.0000012",
+                       "input_cache_read": "0.000000006"}}
+    fleets = list(fleets)
+
+    def handle(request):
+        payload = json.loads(request.content)
+        record.append(payload)
+        names = [t["function"]["name"] for t in payload.get("tools") or []]
+        if "select_fleet" in names:
+            name, args = "select_fleet", {"budget_check": "sum", "ships": fleets.pop(0)}
+        else:
+            name, args = "set_formation", {"placements": []}
+        message = {"role": "assistant", "content": None, "tool_calls": [
+            {"id": f"call_{len(record)}", "type": "function",
+             "function": {"name": name, "arguments": json.dumps(args)}}]}
+        return httpx.Response(200, json={
+            "id": f"gen-{len(record)}", "model": payload["model"],
+            "choices": [{"message": message, "finish_reason": "tool_calls"}],
+            "usage": {"prompt_tokens": 1000, "completion_tokens": 50, "total_tokens": 1050,
+                      "cost": 0.0004, "prompt_tokens_details": {"cached_tokens": 0}}})
+    client = CaptainClient(model=model, api_key="test", temperature=None, max_tokens=8192,
+                           reasoning_effort="high")
+    client._client = httpx.Client(transport=httpx.MockTransport(handle))
+    client.budget = RequestBudget(1, pricing)
+    return client, model
+
+
+class TestDraftThroughOpenRouter:
+    def test_ten_hulls_then_over_budget_then_valid(self):
+        record = []
+        client, model = _openrouter_draft_client([TEN, OVER, [{"ship_type": "frigate", "count": 8}]],
+                                                 record)
+        draft = fd.run_admiral_draft(client, model, "A", "alpha", FLEET, budget=150, max_ships=8,
+                                     verbose=False, allow_auto_fallback=False)
+        assert [s.ship_type for s in draft.ships] == ["frigate"] * 8 and draft.trimmed is None
+        third = record[2]["messages"]
+        roles = [m["role"] for m in third]
+        assert roles[-4:] == ["assistant", "tool", "assistant", "tool"]
+        assert "10 ships, the cap is 8 (2 too many)" in third[-3]["content"]
+        assert "172 points but you only have 150 (22 over)" in third[-1]["content"]
+        assert client.budget.reported_usd > 0      # every call reserved and settled
+
+    def test_ten_hulls_three_times_is_trimmed_to_the_cap(self):
+        record = []
+        client, model = _openrouter_draft_client([TEN, TEN, TEN], record)
+        draft = fd.run_admiral_draft(client, model, "A", "alpha", FLEET, budget=150, max_ships=8,
+                                     verbose=False, allow_auto_fallback=False)
+        assert [s.ship_type for s in draft.ships] == ["frigate"] * 8
+        assert draft.trimmed["dropped"] == ["frigate", "frigate"]
+
+
+# =============================================================================
+# Intent-only command (cmdrun's experiment mode): prompts and tools agree
+# =============================================================================
+
+class TestIntentOnly:
+    def test_system_prompt_and_tools_match_the_mode_only_when_on(self):
+        from src.llm.admiral_tools import get_admiral_tools
+        default = build_admiral_static("A", "alpha", FLEET, None, phase="directive")
+        intent = build_admiral_static("A", "alpha", FLEET, None, phase="directive", intent_only=True)
+        assert "requested in a SEPARATE call" in default
+        assert "requested in a SEPARATE call" not in intent
+        assert "There is NO per-ship order phase" in intent
+        assert "No per-ship orders in this battle" in intent
+        tools = {t["function"]["name"]: t["function"]["description"]
+                 for t in get_admiral_tools(intent_only=True)}
+        assert tools["issue_order"].startswith("INTENT-ONLY COMMAND")
+        assert "only order" in tools["set_fleet_directive"]
+        plain = {t["function"]["name"]: t["function"]["description"] for t in get_admiral_tools()}
+        assert not plain["issue_order"].startswith("INTENT-ONLY")
+
+    def test_intent_only_turn_uses_them_and_keeps_the_salvo_plan(self):
+        sim = CombatSimulation(seed=1)
+        for i in (1, 2):
+            ship(sim, f"alpha_{i}", "corvette", "alpha", (0, 10 * i, 0))
+        ship(sim, "beta_1", "battleship", "beta", (600, 0, 0), fwd=(-1, 0, 0))
+        plan = [{"ship_name": "TIS alpha_1", "rounds": 2, "target": "OCS beta_1"}]
+        client = ScriptedClient([([ToolCall("d", "set_fleet_directive",
+                                            {"directive": "x", "salvo_plan": plan})], "tool_calls")])
+        admiral = make_admiral("alpha", client=client)
+        admiral.config.intent_only = True
+        decision = admiral.decide(simulation=sim, captains=own_caps(sim, "alpha"))
+        call = client.calls[0]
+        assert "There is NO per-ship order phase" in call["messages"][0]["content"]
+        assert {o.target_ship_id: o.torpedo_salvo for o in decision.fleet_orders} == {
+            "alpha_1": 2, "alpha_2": None}
+        assert admiral.last_decision is decision

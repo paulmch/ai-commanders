@@ -1403,8 +1403,12 @@ class TestMeasuredExchangeDoctrine:
     def test_forces_states_blind_cones_once_per_class(self, fleet):
         text = _admiral_static(fleet)
         assert "Frigate (FF):" in text
-        line = next(x for x in text.splitlines() if x.startswith("- Frigate (FF)"))
-        assert "batteries blind within 15 deg of dead astern (fire everywhere else)" in line
+        lines = text.splitlines()
+        i = next(k for k, x in enumerate(lines) if x.startswith("- Frigate (FF)"))
+        # the captain's wording (arcs_status.blind_cone_doctrine), once per class
+        assert lines[i + 1].strip().startswith(
+            "No gun battery can fire at a target within 15 deg of dead astern, at any roll")
+        assert "at least one gun battery bears at some roll" in lines[i + 1]
 
     def test_draft_counterplay_is_the_seeded_runs(self, facts):
         """fleet_draft's TORPEDO COUNTERPLAY used to say 'charging feeds it ...
@@ -1468,3 +1472,17 @@ class TestEvasionDriveClaims:
         from src.llm.prompts import build_captain_doctrine
         doc = " ".join(build_captain_doctrine(ship_type="destroyer").split())
         assert "BRACE turns it off" in doc and "TANK burns at half throttle" in doc
+
+    def test_admiral_doctrine_and_issue_order_state_the_overlay_takes_the_drive(self, fleet=None):
+        """cmdadm: what the evade overlay does to an ordered burn under fire,
+        in the admiral's doctrine and the issue_order evade field (the BRACE /
+        TANK throttles themselves are pinned above)."""
+        from src.llm.admiral_tools import ADMIRAL_TOOLS
+        from src.llm.prompts import ADMIRAL_DOCTRINE_CORE
+        doc = " ".join(ADMIRAL_DOCTRINE_CORE.split())
+        assert "while rounds are inbound IT flies the drive" in doc
+        assert "TANK (half throttle) or BRACE (drive off)" in doc
+        evade = next(t for t in ADMIRAL_TOOLS if t["function"]["name"] == "issue_order")[
+            "function"]["parameters"]["properties"]["evade"]["description"]
+        assert "TANKs (half throttle) or BRACEs (drive off)" in evade
+        assert "burns only a small part of the time" in evade
