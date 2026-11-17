@@ -308,11 +308,6 @@ hashed by the perf harness) is unchanged.
 - All custom `ShaderMaterial`s must include `<common>` + the `logdepthbuf_*`
   chunks (the renderer uses a logarithmic depth buffer; without them the
   shader fails to compile or depth-tests wrongly).
-- GLSL `pow(x, y)` is undefined for x < 0: NaN on real GPUs, |x|^y (or 0)
-  on SwiftShader, so the headless harness hides it. Clamp the base or write
-  squares as `x * x`, and never hide an instance through an alpha that can
-  be NaN (a NaN quad draws as a black square). `tests/gpu_nan.test.js` lints
-  the damage shaders; `pow` emulation for frames: see its header comment.
 - `IcosahedronGeometry(r, detail)` subdivides linearly (20*(d+1)^2 faces) -
   use detail 12-28 for smooth blast spheres, not 3-5.
 - The hull kit (render/Hulls.js) builds parts from `chamferBoxGeometry` and
