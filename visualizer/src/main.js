@@ -40,6 +40,13 @@ import { TimelineMarkers } from './TimelineMarkers.js';
 import { showLightbox } from './hudDom.js';
 import { freeViewFrame, viewInsets } from './ViewInsets.js';
 
+const SCALE_LABELS = { auto: 'AUTO', true: 'TRUE', cinematic: 'CINE' };
+const SCALE_TITLES = {
+  auto: 'Hull scale AUTO: real size up close, a readable floor at distance',
+  true: 'Hull scale TRUE: always the real 65-275 m hull; contact markers at distance',
+  cinematic: 'Hull scale CINEMATIC: hulls drawn about 60x oversize at every range'
+};
+
 class BattleVisualizer {
   constructor() {
     // Core components
@@ -196,6 +203,7 @@ class BattleVisualizer {
   setupEventListeners() {
     document.getElementById('fleetViewBtn').addEventListener('click', () => this.showFleetView());
     document.getElementById('contactsBtn').addEventListener('click', () => this.toggleContacts());
+    document.getElementById('scaleBtn')?.addEventListener('click', () => this.cycleScaleMode());
     // File selection
     this.elements.selectFileBtn.addEventListener('click', () => {
       this.elements.fileInput.click();
@@ -321,6 +329,8 @@ class BattleVisualizer {
         this.toggleDirector();
       } else if (e.code === 'KeyN' && this.isInitialized) {
         this.toggleComms();
+      } else if (e.code === 'KeyS' && !e.shiftKey && !e.repeat && this.scene) {
+        this.cycleScaleMode();
       } else if ((e.code === 'BracketRight' || e.code === 'BracketLeft') && this.isInitialized) {
         // ] / [ : next / previous highlight (Director.highlightList)
         const t = stepHighlight(this.cameraController.highlights, this.timeController.currentTime,
@@ -401,6 +411,7 @@ class BattleVisualizer {
     this.tracks = new Tracks(this.scene, new TrajectoryPredictor(this.loader));
     this.tracks.hud = this.trackHud;
     this.scene.loader = this.loader;   // hull rigs read targets, shots, launches, PD dwell
+    this.syncScaleButton();
     this.setLoadingProgress(60);
 
     // Initialize time controller. The extra seconds are an epilogue: a ship
@@ -541,6 +552,27 @@ class BattleVisualizer {
           state.radiatorsExtended = this.loader.getRadiatorStateAt(shipId, currentPlaybackTime);
           this.scene.updateShip(shipId, state);
         }
+
+        // Camera next: with the ships at this frame's positions, and before
+        // anything that is placed on a hull. In the auto scale mode a hull's
+        // draw size follows the camera (render/Scale.js), so the camera is
+        // settled first and every effect of the frame - mounts, impacts,
+        // jets, wrecks - sees the one scale the hull is drawn at, also on
+        // the frame of a director cut.
+        if (this.needsFleetFraming) {
+          this.cameraController.focusFleet(this.currentState.ships, this.directorFrame(true));
+          this.needsFleetFraming = false;
+        }
+        if (this.pendingEvidenceFocus) {
+          this.cameraController.focusOnShip(this.pendingEvidenceFocus, this.currentState.ships);
+          this.cameraController.setMode('orbit', this.pendingEvidenceFocus);
+          this.pendingEvidenceFocus = null;
+        }
+        this.cameraController.update(this.currentState.ships,
+          { time: currentPlaybackTime, dt: deltaTime, torpedoes: this.currentState.torpedoes, ...this.directorFrame() });
+
+        this.scene.syncCamera();
+
         // RCS attitude jets, fired from the recorded rotation around this time
         this.scene.rcs.update(this.scene.ships, this.loader.simTrace, currentPlaybackTime);
 
@@ -592,19 +624,6 @@ class BattleVisualizer {
         this.tracks.frame(currentPlaybackTime, this.currentState.ships,
           currentPlaybackTime > this.loader.duration + 0.5 ? 'off' : trackMode,
           this.selectedShipId || this.cameraController.targetShipId);
-
-        // Update camera
-        if (this.needsFleetFraming) {
-          this.cameraController.focusFleet(this.currentState.ships, this.directorFrame(true));
-          this.needsFleetFraming = false;
-        }
-        if (this.pendingEvidenceFocus) {
-          this.cameraController.focusOnShip(this.pendingEvidenceFocus, this.currentState.ships);
-          this.cameraController.setMode('orbit', this.pendingEvidenceFocus);
-          this.pendingEvidenceFocus = null;
-        }
-        this.cameraController.update(this.currentState.ships,
-          { time: currentPlaybackTime, dt: deltaTime, torpedoes: this.currentState.torpedoes, ...this.directorFrame() });
 
         // Update selected ship telemetry
         if (this.selectedShipId && this.currentState.ships[this.selectedShipId]) {
@@ -1496,6 +1515,32 @@ class BattleVisualizer {
     if (!this.isInitialized) return;
     this.deselectShip();
     this.cameraController.focusFleet(this.currentState?.ships, this.directorFrame(true));
+  }
+
+  /**
+   * Hull scale: auto (real size up close, a readable floor at distance),
+   * true (always real size) or cinematic (the fixed ~60x exaggeration).
+   * S cycles; ?scale= sets it for one page load (render/Scale.js).
+   */
+  cycleScaleMode() {
+    if (!this.scene) return;
+    const before = this.scene.scaleMode;
+    const mode = this.scene.cycleScaleMode();
+    // a fleet framing depends on the mode's floors: frame it again
+    const cam = this.cameraController;
+    if (cam?.fleetFramed && !cam.director.enabled && (before === 'cinematic') !== (mode === 'cinematic')) {
+      cam.focusFleet(this.currentState?.ships, this.directorFrame(true));
+    }
+    this.syncScaleButton();
+  }
+
+  syncScaleButton() {
+    const button = document.getElementById('scaleBtn');
+    if (!button || !this.scene) return;
+    const mode = this.scene.scaleMode;
+    button.innerHTML = `SCALE ${SCALE_LABELS[mode] || mode.toUpperCase()} <kbd>S</kbd>`;
+    button.classList.toggle('active', mode !== 'cinematic');
+    button.title = `${SCALE_TITLES[mode] || ''} (S cycles auto / true / cinematic)`;
   }
 
   toggleContacts() {

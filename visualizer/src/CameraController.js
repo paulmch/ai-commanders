@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { buildShotList, shotAt, buildShakeSources, shakeAt, handheldAt, highlightList } from './Director.js';
 import { frameGroups, slideToFreeArea, shotPose } from './DirectorCamera.js';
+import { FREE_TRUE_K } from './render/Scale.js';
 
 export { frameGroups, slideToFreeArea };
 
@@ -20,6 +21,8 @@ const SALVO_WINDOW_S = 3;
 /** Wall seconds the camera takes to ease back from a manual pose to the director's. */
 export const DIRECTOR_BLEND_S = 0.9;
 const KILL_ORBIT_DEG_PER_S = 5;
+/** Smallest fleet framing radius, in kit units (25 km on the cinematic scale). */
+const FLEET_MIN_RADIUS = 25;
 
 /**
  * Director cuts from a recording, sorted by start time.
@@ -310,6 +313,10 @@ export class CameraController {
       fwd: id => { const f = vec(shipStates?.[id]?.forward); return f && f.lengthSq() > 1e-9 ? f.normalize() : null; },
       thrust: id => shipStates?.[id]?.thrust || 0,
       length: id => this.getShipLength(id),
+      // scene km per kit unit that distances tuned for the kit-size hulls
+      // (framing floors) are converted with: 1 in the cinematic scale mode
+      unit: this.framingUnit(),
+      realScale: this.framingUnit() !== 1,
       deathTime: id => (Number.isFinite(deaths[id]?.time) ? deaths[id].time : Infinity),
       // What the death blast visibly draws between two ages after it goes off
       blastExtent: (id, fromAge, toAge) => scene.deathBlastExtent?.(id, fromAge, toAge) ?? 0,
@@ -419,7 +426,7 @@ export class CameraController {
     }
     return frameGroups(points, { fov: this.camera.fov, aspect: this.camera.aspect, groupA, groupB,
       fallbackDir: this._currentDir(), shift: this.director.shift || 0,
-      widthShare: this.director.widthShare || 0.62 });
+      widthShare: this.director.widthShare || 0.62, minRadius: FLEET_MIN_RADIUS * this.framingUnit() });
   }
 
   frameCut(cut, shipStates, time, torpedoes) {
@@ -432,13 +439,13 @@ export class CameraController {
       const groupA = shooters.points.length ? shooters.points.reduce((a, p) => a.add(p), new THREE.Vector3()).divideScalar(shooters.points.length) : null;
       return frameGroups(points, { fov: this.camera.fov, aspect: this.camera.aspect, groupA, groupB: subject,
         fallbackDir: this._currentDir(), widthShare: 0.9 * (this.director.widthShare || 0.62),
-        shift: this.director.shift || 0 });
+        shift: this.director.shift || 0, minRadius: FLEET_MIN_RADIUS * this.framingUnit() });
     }
     // Kill / detonation: a slow orbit round the dying hull
     const pos = this.sceneManager.getShipPosition(cut.subject);
     if (!pos) return null;
     const L = this.getShipLength(cut.subject);
-    const radius = Math.max(L * 5, 40);
+    const radius = Math.max(L * 5, 40 * this.framingUnit());
     const base = Math.atan2(-1, 0.6);
     const az = base + THREE.MathUtils.degToRad(KILL_ORBIT_DEG_PER_S) * (time - cut.t);
     const el = THREE.MathUtils.degToRad(18);
@@ -457,8 +464,18 @@ export class CameraController {
    * dreadnought close-up frame the hull the same way
    */
   getShipLength(shipId) {
+    // The framing length is static per scale mode (the real hull length in
+    // auto and true, the kit length in cinematic: render/Scale.js), never
+    // the size the hull happens to be drawn at from the current camera
+    const framed = this.sceneManager.framingLength?.(shipId);
+    if (framed > 0) return framed;
     const ship = this.sceneManager.ships.get(shipId);
     return ship?.userData?.size?.length || 8;
+  }
+
+  /** Scene km per kit unit for framing floors tuned on the kit-size hulls. */
+  framingUnit() {
+    return (this.sceneManager.scaleMode || 'cinematic') === 'cinematic' ? 1 : FREE_TRUE_K;
   }
 
   /**
@@ -598,7 +615,7 @@ export class CameraController {
     if (bounds.isEmpty()) return;
     this.setMode('free');
     const center = bounds.getCenter(new THREE.Vector3());
-    const radius = Math.max(25, bounds.getSize(new THREE.Vector3()).length() / 2);
+    const radius = Math.max(FLEET_MIN_RADIUS * this.framingUnit(), bounds.getSize(new THREE.Vector3()).length() / 2);
     const halfFov = THREE.MathUtils.degToRad(this.camera.fov) / 2;
     const share = Number.isFinite(frame?.widthShare) && frame.widthShare > 0 ? frame.widthShare : 0.65;
     const horizontal = Math.atan(Math.tan(halfFov) * this.camera.aspect * share);

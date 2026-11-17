@@ -113,7 +113,10 @@ export class SparkBurst {
           // colour cools with normalised age; a few stay hot longer
           float cool = smoothstep(0.0, 0.55 + aSeed * 0.4, f);
           vColor = mix(mix(uHot, uWarm, smoothstep(0.0, 0.5, cool)), uCool, smoothstep(0.45, 1.0, cool));
-          gl_PointSize = max(1.0, uSize * (0.55 + aSeed * 0.9) * (1.0 - 0.45 * f) * uPixelRatio * (400.0 / max(1.0, -mv.z)));
+          // (sizes are in the object's own units: a burst under a scaled
+          // group - a hull's draw scale, render/Scale.js - scales with it)
+          float objScale = length(modelMatrix[0].xyz);
+          gl_PointSize = max(1.0, uSize * objScale * (0.55 + aSeed * 0.9) * (1.0 - 0.45 * f) * uPixelRatio * (400.0 / max(1e-4, -mv.z)));
           #include <logdepthbuf_vertex>
         }`,
       fragmentShader: /* glsl */`
@@ -234,7 +237,8 @@ export class StreakBurst {
           float len = uLen * (0.45 + aSeed * 0.9) * (0.25 + 0.75 * speedK);
           len = min(len, 2.0 * length(travel));
           float wid = uWidth * (0.6 + aSeed * 0.7);
-          pv.xy += d * position.x * len + perp * position.y * wid;
+          float objScale = length(modelMatrix[0].xyz);   // the burst's draw scale
+          pv.xy += (d * position.x * len + perp * position.y * wid) * objScale;
           gl_Position = projectionMatrix * pv;
           vUv = uv;
           float fade = uAge < 0.0 ? 0.0 : pow(1.0 - f, 1.4) * smoothstep(0.0, 0.06, age);

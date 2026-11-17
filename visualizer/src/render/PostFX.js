@@ -365,7 +365,7 @@ export const ADAPT_FLOOR = 0.3;
 export const ADAPT_MIN = 0.5;
 export const AO_STRENGTH = 0.95;   // how far full occlusion darkens (high tier)
 export const AO_RADIUS = 0.07;    // screen heights
-export const AO_MAX_WORLD = 4.0;   // km cap on the radius (extreme close-ups stay local)
+export const AO_MAX_WORLD = 4.0;   // cap on the radius in kit units (extreme close-ups stay local); x PostFX.worldUnit km
 
 export class PostFX {
   constructor(renderer, scene, camera) {
@@ -583,6 +583,7 @@ export class PostFX {
       au.uLogBase.value = Math.log2(this.camera.far + 1);
       au.uProj.value.set(1 / pe[0], 1 / pe[5]);
       au.uAspect.value = this.width / this.height;
+      au.uMaxWorld.value = AO_MAX_WORLD * (this.worldUnit || 1);   // scene km per kit unit (SceneManager)
       this.quad.material = this.aoMat;
       r.setRenderTarget(this.aoRT);
       this.quad.render(r);
