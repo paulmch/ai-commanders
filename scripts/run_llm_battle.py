@@ -16,11 +16,15 @@ from pathlib import Path
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.llm.providers import create_llm_client
+from src.llm.providers import create_llm_client, llm_models, provider_for_model
+from src.llm.spending import RequestBudget, SpendLedger
+
+DEFAULT_LEDGER = Path(__file__).resolve().parent.parent / "data/recordings/spend_ledger.jsonl"
 from src.llm.captain import LLMCaptainConfig
 from src.llm.prompts import CaptainPersonality
 from src.llm.battle_runner import LLMBattleRunner, BattleConfig, load_fleet_data
 from src.llm.fleet_config import BattleFleetConfig, _get_short_model_name
+from src.llm.call_policy import parse_effort_specs
 
 
 def _available_ship_types() -> list:
@@ -35,7 +39,66 @@ def _available_ship_types() -> list:
                 "battlecruiser", "battleship", "dreadnought"]
 
 
-def main():
+def openrouter_pricing(models) -> dict:
+    """
+    OpenRouter catalog prices for the vendor/model ids among `models` (a free
+    metadata call; RequestBudget.reserve needs them). Bare Anthropic ids are
+    priced by the client's own table and need nothing here.
+    """
+    wanted = [m for m in models if provider_for_model(m) == "openrouter"]
+    if not wanted:
+        return {}
+    import httpx
+    response = httpx.get("https://openrouter.ai/api/v1/models", timeout=30)
+    response.raise_for_status()
+    catalog = {m["id"]: m for m in response.json()["data"]}
+    from src.llm.client import _strip_prefix
+    pricing = {}
+    for model in wanted:
+        entry = catalog.get(_strip_prefix(model)) or catalog.get(model)
+        if not entry:
+            raise ValueError(f"--spend-limit: {model} is not in the OpenRouter catalog (cannot be priced)")
+        pricing[model] = entry["pricing"]
+        pricing[_strip_prefix(model)] = entry["pricing"]
+    return pricing
+
+
+def fleet_models(fleet_config) -> list:
+    """Every model a fleet config names: captains, then enabled admirals."""
+    return ([s.model for s in fleet_config.get_all_ships()] +
+            [f.admiral.model for f in (fleet_config.alpha_fleet, fleet_config.beta_fleet)
+             if f.admiral and f.admiral.enabled])
+
+
+def _sides(value):
+    return () if not value else ("alpha", "beta") if value == "both" else (value,)
+
+
+def apply_model_overrides(fleet_config, args) -> None:
+    """--{side}-admiral-model / --{side}-captain-model / --no-admiral / --intent-only
+    rewrite a loaded fleet config."""
+    for side in _sides(getattr(args, "no_admiral", None)):
+        getattr(fleet_config, f"{side}_fleet").admiral = None
+    for side in _sides(getattr(args, "intent_only", None)):
+        admiral = getattr(fleet_config, f"{side}_fleet").admiral
+        if admiral is None:
+            raise ValueError(f"--intent-only {side}: that fleet has no admiral")
+        admiral.intent_only = True
+    for side in ("alpha", "beta"):
+        fleet = getattr(fleet_config, f"{side}_fleet")
+        captain = getattr(args, f"{side}_captain_model", None)
+        if captain:
+            for ship in fleet.ships:
+                ship.model = captain
+        admiral = getattr(args, f"{side}_admiral_model", None)
+        if admiral:
+            if fleet.admiral is None:
+                raise ValueError(f"--{side}-admiral-model: the {side} fleet has no admiral")
+            fleet.admiral.model = admiral
+            fleet.admiral.name = f"Admiral {_get_short_model_name(admiral)}"
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Run an LLM-controlled space battle",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -154,6 +217,71 @@ Examples:
         help="Reasoning effort for LLM calls (low/medium/high/xhigh/max). On bare Anthropic ids it is sent as output_config.effort on every request (default medium there); on OpenRouter ids as reasoning.effort (default: unset)",
     )
 
+    parser.add_argument(
+        "--effort", action="append", default=[], metavar="[SIDE.]ROLE=LEVEL",
+        help="Effort for one role (directive, order, captain, trigger) on one side (alpha, beta; "
+             "omitted = both); repeatable, later wins, overrides the fleet config's per-fleet "
+             "'effort' blocks. 'trigger' = captain turns with torpedoes inbound, a merge warning, "
+             "damage, a changed order kind or the first turn. Unset roles run at --reasoning-effort",
+    )
+    for side in ("alpha", "beta"):
+        parser.add_argument(f"--{side}-admiral-model", default=None,
+                            help=f"Fleet mode: replace the {side} admiral's model from the fleet config")
+        parser.add_argument(f"--{side}-captain-model", default=None,
+                            help=f"Fleet mode: replace every {side} captain's model (e.g. 'heuristic' "
+                                 "for rule-based captains under an LLM admiral)")
+
+    parser.add_argument(
+        "--spend-limit", type=float, default=None,
+        help="Hard dollar cap (RequestBudget): every request reserves an upper bound on its cost "
+             "first; once a reservation is refused the battle stops at that checkpoint "
+             "(battle_stopped event, no-verdict result, partial recording saved)",
+    )
+    parser.add_argument(
+        "--ledger", default=None,
+        help="Cumulative spend ledger (JSONL); paid runs append to it "
+             "(default data/recordings/spend_ledger.jsonl), mock runs only when named here",
+    )
+    parser.add_argument(
+        "--ledger-cap", type=float, default=None,
+        help="Refuse to start when the ledger total plus this run's --spend-limit would exceed it",
+    )
+    parser.add_argument(
+        "--max-tokens", type=int, default=None,
+        help="Per-call output ceiling (default: the client's; Anthropic ids clamp at 16000). "
+             "Lower values shrink each in-flight call's cap reservation",
+    )
+    parser.add_argument(
+        "--recording-dir", default=None,
+        help="Where the recording is written (default data/recordings)",
+    )
+    parser.add_argument(
+        "--mock-llm", action="store_true",
+        help="Offline: every Anthropic-id call is answered by the in-process mock "
+             "(src/llm/mock_anthropic.py); no key, no network, no cost",
+    )
+    parser.add_argument("--mock-thinking-tokens", type=int, default=20, help=argparse.SUPPRESS)
+    sides = ("alpha", "beta", "both")
+    parser.add_argument("--no-admiral", choices=sides, default=None,
+                        help="Experiment: drop that side's admiral; its LLM captains fly on their own")
+    parser.add_argument("--intent-only", choices=sides, default=None,
+                        help="Experiment: that side's admiral issues the directive and battle plan "
+                             "(and may order torpedo salvos) but no per-ship orders; captains decide")
+    parser.add_argument("--quiet-turns", action="store_true",
+                        help="Experiment: skip a captain call when its turn has no trigger, no new "
+                             "FLEET NET traffic and an unchanged applied order (captain_turn_skipped)")
+    parser.add_argument("--cache-warmup", action="store_true",
+                        help="Experiment (Anthropic ids): pre-warm each cold cached prefix with one "
+                             "max_tokens=0 call before a parallel fan-out reads it")
+    parser.add_argument("--status-file", default=None,
+                        help="Write the end-of-battle status (cost report per role and side) here")
+    parser.add_argument(
+        "--thinking-summary", action="store_true",
+        help="Anthropic ids: request thinking display 'summarized' and record the summary per "
+             "model_call (thinking_summary; audit only, never fed back). Billed the same as the "
+             "default omitted display",
+    )
+
     # Battle modes
     parser.add_argument(
         "--unlimited",
@@ -201,7 +329,7 @@ Examples:
         help="Quiet mode (only show result)",
     )
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # Map personality strings to enums
     personality_map = {
@@ -225,6 +353,7 @@ Examples:
                         fleet.admiral.vision = True
             if args.notebooks:
                 fleet_config.use_notebooks = True
+            apply_model_overrides(fleet_config, args)
             # An explicit CLI value overrides JSON; omitted flags preserve it.
             for option, field in ((args.distance, "initial_distance_km"),
                                   (args.time_limit, "time_limit_s"),
@@ -277,6 +406,20 @@ Examples:
             config_overrides["use_notebooks"] = True
         if args.plain_json:
             config_overrides["compress_recording"] = False
+        if args.recording_dir:
+            config_overrides["recording_dir"] = args.recording_dir
+        if args.quiet_turns:
+            config_overrides["quiet_turns"] = True
+        if not fleet_config and (args.no_admiral or args.intent_only):
+            raise ValueError("--no-admiral / --intent-only need --fleet-config")
+        if args.effort:
+            policy = parse_effort_specs(args.effort)
+            if fleet_config:
+                base = BattleConfig.from_fleet_config(fleet_config).effort_policy
+                for side, roles in policy.items():
+                    base.setdefault(side, {}).update(roles)
+                policy = base
+            config_overrides["effort_policy"] = policy
         if fleet_config:
             battle_config = BattleConfig.from_fleet_config(fleet_config, **config_overrides)
         else:
@@ -289,11 +432,10 @@ Examples:
 
         # Create client with appropriate model
         if fleet_config:
-            # Use first alpha captain's model for client
-            if fleet_config.alpha_fleet.ships:
-                client_model = fleet_config.alpha_fleet.ships[0].model
-            else:
-                client_model = "openrouter/anthropic/claude-sonnet-5"
+            # The client's default model: the first LLM model of the battle
+            # (a heuristic first captain is not one).
+            llm = [m for m in fleet_models(fleet_config) if m not in ("heuristic", "mcp", "dummy")]
+            client_model = llm[0] if llm else "openrouter/anthropic/claude-sonnet-5"
         else:
             client_model = args.alpha_model
 
@@ -302,12 +444,37 @@ Examples:
         # turn changes every time, so an explicit id keeps the whole battle pinned
         # to one provider endpoint and its warm cache.
         session_id = f"ai-commanders-{uuid.uuid4().hex[:16]}"
-        models = ([s.model for s in fleet_config.get_all_ships()] +
-                  [f.admiral.model for f in (fleet_config.alpha_fleet, fleet_config.beta_fleet)
-                   if f.admiral and f.admiral.enabled]) if fleet_config else [args.alpha_model, args.beta_model]
+        models = fleet_models(fleet_config) if fleet_config else [args.alpha_model, args.beta_model]
+        anthropic_options = {}
+        if args.thinking_summary:
+            anthropic_options["thinking_display"] = "summarized"
+        if args.cache_warmup:
+            anthropic_options["cache_warmup"] = True
+        llm_ids = llm_models(models)
+        if args.mock_llm:
+            not_anthropic = [m for m in llm_ids if provider_for_model(m) != "anthropic"]
+            if not_anthropic:
+                raise ValueError(f"--mock-llm answers bare Anthropic ids only, not {not_anthropic}")
+            import anthropic
+            from src.llm.mock_anthropic import mock_anthropic_transport
+            anthropic_options.update(api_key="mock-no-network", http_client=anthropic.DefaultHttpxClient(
+                transport=mock_anthropic_transport(seed=args.seed or 0,
+                                                   thinking_tokens=args.mock_thinking_tokens)))
+        if args.ledger_cap is not None and args.spend_limit is None:
+            raise ValueError("--ledger-cap needs --spend-limit (the run's cap is what it reserves)")
+        client_kwargs = {"max_tokens": args.max_tokens} if args.max_tokens else {}
         client = (create_llm_client(client_model, models, session_id=session_id,
-                                    reasoning_effort=args.reasoning_effort)
-                  if any(model != "heuristic" for model in models) else None)
+                                    reasoning_effort=args.reasoning_effort,
+                                    anthropic_options=anthropic_options or None, **client_kwargs)
+                  if llm_ids else None)
+        budget = None
+        if args.spend_limit is not None and client is not None:
+            budget = RequestBudget(args.spend_limit, openrouter_pricing(llm_ids))
+            client.budget = budget
+        ledger = ledger_run = None
+        if client is not None and (not args.mock_llm or args.ledger):
+            ledger = SpendLedger(args.ledger or DEFAULT_LEDGER)
+            ledger.check(args.spend_limit or 0.0, args.ledger_cap)
 
         if args.unlimited and not args.quiet:
             print("UNLIMITED MODE: Battle will continue until destruction, surrender, or mutual draw")
@@ -324,7 +491,41 @@ Examples:
             fleet_config=fleet_config,
         )
 
-        result = runner.run_battle(fleet_data)
+        if ledger is not None:
+            # Reserved only now, right before the first request.
+            ledger_run = ledger.open_run(
+                script="run_llm_battle", name=Path(args.fleet_config or "duel").stem, models=llm_ids,
+                cap_usd=args.spend_limit if args.spend_limit is not None else 0.0,
+                ledger_cap_usd=args.ledger_cap, mock=args.mock_llm)
+        status = "error"
+        try:
+            result = runner.run_battle(fleet_data)
+            status = "stopped" if getattr(runner, "stop_reason", None) else "done"
+        finally:
+            if ledger_run is not None:
+                stats = client.stats
+                ledger.close_run(ledger_run, calls=stats.calls,
+                                 tokens={"prompt": stats.prompt_tokens, "cache_read": stats.cached_tokens,
+                                         "cache_write": stats.cache_write_tokens},
+                                 usd=budget.reported_usd if budget else stats.cost_usd,
+                                 committed_usd=budget.committed_usd if budget else None, status=status)
+
+        # Cost per role and side (model_call events), stdout + --status-file.
+        if runner.recorder is not None and client is not None:
+            from src.llm.cost_report import cost_report, format_cost_report
+            report = cost_report(runner.recorder.events)
+            print(format_cost_report(report))
+            if args.status_file:
+                import json as _json
+                status = {"result": {"winner": result.winner, "reason": result.reason,
+                                     "checkpoints": result.checkpoints_used},
+                          "recording": runner.recording_file, "stopped": getattr(runner, "stop_reason", None),
+                          "spend": {"reported_usd": budget.reported_usd if budget else client.stats.cost_usd,
+                                    "committed_usd": budget.committed_usd if budget else None,
+                                    "limit_usd": args.spend_limit, "calls": client.stats.calls},
+                          "effort_policy": battle_config.effort_policy, "cost_report": report}
+                Path(args.status_file).parent.mkdir(parents=True, exist_ok=True)
+                Path(args.status_file).write_text(_json.dumps(status, indent=1, default=str))
 
         # Print final result if quiet mode
         if args.quiet:

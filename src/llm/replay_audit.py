@@ -21,9 +21,31 @@ class AuditedClient:
         choices = response.get('choices') or [{}]
         message = choices[0].get('message') or {}
         request = {k: v for k, v in payload.items() if k not in ('messages', 'tools')}
+        # Role and effort of this call (src/llm/call_policy.py; optional fields,
+        # docs/pass-5-recording-additions.md): role from the wrapper's
+        # annotation or the offered tools; effort as actually sent.
+        from .call_policy import call_role, tool_names
+        annotation = getattr(self.client, 'call_annotation', None)
+        annotation = annotation() if callable(annotation) else None
+        annotation = annotation if isinstance(annotation, dict) else {}
+        role = annotation.get('role') or call_role(self.actor, None, tool_names(payload.get('tools')))
+        effort = ((request.get('output_config') or {}).get('effort')
+                  or (request.get('reasoning') or {}).get('effort'))
+        extra = {'role': role}
+        if effort:
+            extra['effort'] = effort
+        if annotation.get('effort_reason'):
+            extra['effort_reason'] = annotation['effort_reason']
+        if response.get('cache_warmup'):
+            # The cache pre-warm this call waited for (cache_warmup mode).
+            extra['cache_warmup'] = response['cache_warmup']
+        if response.get('thinking_summary'):
+            # Summarized thinking (AnthropicClient thinking_display): for audits
+            # only - never read back into any prompt.
+            extra['thinking_summary'] = response['thinking_summary']
         event = self.recorder.record(
             self.simulation.current_time, 'model_call', self.ship_id,
-            actor=self.actor, faction=self.faction,
+            actor=self.actor, faction=self.faction, **extra,
             request=request, model=response.get('model', payload.get('model')),
             generation_id=response.get('id'), usage=response.get('usage', {}),
             message_refs=[self.recorder.asset(m) for m in payload.get('messages', [])],
@@ -125,5 +147,6 @@ def attach_audit(runner):
         runner.recorder.recording.provenance['llm'] = llm_provenance(runner.client, side_models)
     for agent, actor, faction, sid in entries:
         client = getattr(agent, 'client', None)
-        if isinstance(client, real_clients):
+        # An experiment wrapper (call_policy.PolicyClient) sits inside the audit.
+        if isinstance(getattr(client, 'inner', client), real_clients):
             agent.client = AuditedClient(client, runner.recorder, runner.simulation, actor, faction, sid)

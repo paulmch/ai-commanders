@@ -59,6 +59,10 @@ class AdmiralConfig:
     # Accepted commander-notebook lessons (src/llm/notebook.py), injected by
     # the runner when the battle opts in via use_notebooks.
     notebook_text: Optional[str] = None
+    # Experiment mode (off by default): the admiral sets the directive and
+    # battle plan (and may order coordinated torpedo salvos) but issues no
+    # per-ship maneuver/target orders - captains decide from the directive.
+    intent_only: bool = False
 
 
 @dataclass
@@ -146,6 +150,10 @@ class FleetDefinition:
     faction: str  # "alpha" or "beta"
     admiral: Optional[AdmiralConfig] = None
     mcp: Optional[MCPConfig] = None  # MCP control (replaces admiral if enabled)
+    # Experiment plumbing (src/llm/call_policy.py): effort per role for this
+    # side, {"draft"|"directive"|"order"|"captain"|"trigger": level}. Empty =
+    # every call at the battle-wide effort (unchanged requests).
+    effort: Dict[str, str] = field(default_factory=dict)
 
 
 def parse_heuristic_doctrine(value: Any) -> Dict[str, str]:
@@ -367,6 +375,7 @@ def _parse_fleet(data: Dict[str, Any], faction: str) -> FleetDefinition:
                 temperature=admiral_data.get("temperature", 0.7),
                 vision=admiral_data.get("vision", False),
                 name=admiral_data.get("name", f"Admiral {_get_short_model_name(model)}"),
+                intent_only=bool(admiral_data.get("intent_only", False)),
             )
 
     # Parse ships
@@ -383,14 +392,15 @@ def _parse_fleet(data: Dict[str, Any], faction: str) -> FleetDefinition:
 
             # Parse optional position override
             position = None
-            if "position" in ship_data:
+            # A saved config (asdict of a drafted battle) writes null for unset.
+            if ship_data.get("position"):
                 pos = ship_data["position"]
                 # Omitted axes inherit formation defaults in setup_fleet_battle.
                 position = {axis: float(pos[axis]) for axis in ("x", "y", "z") if axis in pos}
 
             # Parse optional velocity override
             velocity = None
-            if "velocity" in ship_data:
+            if ship_data.get("velocity"):
                 vel = ship_data["velocity"]
                 velocity = {
                     "x": float(vel.get("x", 0)),
@@ -417,6 +427,12 @@ def _parse_fleet(data: Dict[str, Any], faction: str) -> FleetDefinition:
         captain_name = f"Captain {short_name}{suffix}"
         prefix = "TIS" if faction == "alpha" else "OCS"
         ship_name = f"{prefix} {short_name}{suffix}"
+        if isinstance(ship_data, dict):
+            # Explicit names win (a saved fleet_config.json of a drafted battle
+            # keeps its roster's names when it is re-flown with other models:
+            # controlled comparisons must not leak the model into the prompt).
+            captain_name = ship_data.get("captain_name") or captain_name
+            ship_name = ship_data.get("ship_name") or ship_name
 
         ship = ShipConfig(
             ship_id=ship_id,
@@ -430,11 +446,16 @@ def _parse_fleet(data: Dict[str, Any], faction: str) -> FleetDefinition:
         )
         ships.append(ship)
 
+    effort = data.get("effort") or {}
+    if effort:
+        from .call_policy import validate_effort_policy
+        effort = validate_effort_policy({faction: effort})[faction]
     return FleetDefinition(
         ships=ships,
         faction=faction,
         admiral=admiral,
         mcp=mcp,
+        effort=effort,
     )
 
 

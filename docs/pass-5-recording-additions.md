@@ -971,3 +971,62 @@ OpenRouter entry: `provider` (`"openrouter"`), `model`, `reasoning_effort`,
 `cache` (one-line cache summary), `prompt_tokens`, `cached_tokens`,
 `cache_write_tokens`. For Anthropic models `pricing[model]` is the price-table
 entry (USD per million tokens, `as_of`).
+
+## Command-interface runner lane (`src/llm/call_policy.py`, `src/llm/cost_report.py`)
+
+Experiment plumbing for paid comparisons. Every mode is OFF by default; a
+battle without the new flags sends byte-identical requests
+(`tests/test_call_policy.py::test_default_battle_requests_are_unchanged`) and
+its events differ only by the always-written `role` / `effort` fields below.
+All fields are optional for consumers; older recordings lack them
+(`cost_report.cost_report()` and `scripts/replay_turn.py` infer the role from
+the offered tools).
+
+### New fields on `model_call`
+
+| field | when | meaning |
+|---|---|---|
+| `role` | always | `draft` (select_fleet / set_formation), `directive` (admiral Phase 1), `order` (admiral per-ship call), `captain`, `other` (personality selection, discuss answers) - `call_policy.call_role` |
+| `effort` | when the request carries one | the effort actually sent (`request.output_config.effort`; OpenRouter `reasoning.effort`) |
+| `effort_reason` | effort policy set | `default` (battle-wide effort), `role` (a per-role setting), `trigger:<reasons>` (captain trigger effort; reasons from `call_policy.captain_triggers`: `first`, `torpedo`, `merge`, `conflict`, `damage`, `new_order`), `explicit` (the caller's own effort, e.g. the admiral's retry ladder) |
+| `thinking_summary` | `--thinking-summary` | the API's summarized thinking (`thinking.display: "summarized"`), joined text of the reply's thinking blocks. Audit only: no prompt is ever built from it |
+| `cache_warmup` | `--cache-warmup` | `{usage, cost}` of the `max_tokens: 0` pre-warm this call waited for (billed on its own; `usage.cost` of the call excludes it) |
+
+### `captain_turn_skipped` - a quiet turn (`--quiet-turns`)
+
+The captain was not called this checkpoint: no trigger, no new FLEET NET
+traffic, applied admiral order unchanged. The ship keeps flying its current
+maneuver, renewed for the window as a lost turn renews it. No
+`captain_decision` and no `captain_report` are written for that ship and
+checkpoint.
+
+| field | type | meaning |
+|---|---|---|
+| `faction` | string | side |
+| `captain_name` | string | |
+| `reason` | string | starts `quiet:` |
+| `kept_maneuver` | string or null | e.g. `INTERCEPT@40%` |
+| `renewed` | bool | false when the maneuver was applied this checkpoint (an admiral heading) and flies on unrenewed |
+
+### `battle_stopped` in every runner
+
+`LLMBattleRunner.check_budget()` now stops fleet (sync and MCP) and duel
+battles too when the spend cap refuses a request: `battle_stopped`
+(`reason` starts `Spending ceiling reached`), result DRAW with no winner and
+that reason as `result_reason`; the partial recording is saved as usual. Live
+draft battles keep their own stop (raise, `record_stop`).
+
+### `admiral_order` text in intent-only mode (`--intent-only`)
+
+Orders of an intent-only admiral are made by the runner, not by a model call:
+`order_text` `[INTENT-ONLY] No per-ship order: ...`, no heading or maneuver,
+`torpedo_salvo` / `torpedo_target` only when the directive call ordered a salvo
+for that ship.
+
+### `status.json` (live draft) and `--status-file` (run_llm_battle)
+
+`cost_report`: `{"rows": [{side, role, calls, input, cache_read, cache_write,
+output, thinking, usd, thinking_calls, thinking_share}], "by_side": {...},
+"total": {...}}`; role `warmup` rows are the cache pre-warms. Live draft
+`status.json` also gains `role_models` (`{side: {admiral, captain}}`),
+`effort_policy` and `experiment` (the mode flags).
