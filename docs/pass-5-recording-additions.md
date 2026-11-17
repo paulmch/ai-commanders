@@ -972,6 +972,37 @@ OpenRouter entry: `provider` (`"openrouter"`), `model`, `reasoning_effort`,
 `cache_write_tokens`. For Anthropic models `pricing[model]` is the price-table
 entry (USD per million tokens, `as_of`).
 
+## Admiral command-interface lane (`cmdadm`: admiral, fleet_intel, fleet_draft, admiral_view)
+
+All additions are optional; recordings without them load everywhere as before.
+
+### `draft_auto_trimmed` - an invalid draft trimmed instead of aborting
+
+Recorded on the draft recorder (live draft battles merge it into the battle
+recording) when an admiral's three `select_fleet` attempts were all invalid and its
+LAST fleet was trimmed to validity (`fleet_draft.trim_selection`: unknown hulls,
+then the cheapest hulls, dropped until the fleet fits). `timestamp` 0, `ship_id`
+null. `data`: `faction`, `submitted` (the last `ships` argument as the model sent
+it), `dropped` (hull types, in drop order), `kept` (hull types), `points`,
+`budget`, `max_ships`. The draft sidecar (`draft_summary_dict`) carries the same
+dict as `auto_trimmed`. `run_admiral_draft(allow_trim=False)` turns it off.
+
+### Draw offers on the diplomacy channel
+
+`comms_message` on channel `admiral_diplomacy` (as `message_enemy_admiral`
+traffic) with `kind` `DRAW_PROPOSAL` (once per offer), `DRAW_ACCEPT` (an open
+enemy offer accepted: the battle then ends as a draw) or `DRAW_REJECT` (the
+offer is closed and the proposer is told at its next checkpoint). `text` is one
+sentence ("Admiral X rejects the fleet draw."). An accept with no open offer is
+not recorded (the acceptor is told nothing was open).
+
+### Not recorded, prompt only
+
+The enemy facing, the HEADINGS facing fields, the torpedo defence forecast, the
+clock line, the non-compliance escalation and the (default-off,
+`AdmiralConfig.show_score`) score line are turn-state text; they reach the
+recording only inside `model_call` message assets.
+
 ## Command-interface runner lane (`src/llm/call_policy.py`, `src/llm/cost_report.py`)
 
 Experiment plumbing for paid comparisons. Every mode is OFF by default; a

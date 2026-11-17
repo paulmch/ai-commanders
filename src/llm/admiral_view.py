@@ -42,6 +42,11 @@ PD_BEAM_WINDOW_S = 1.5
 # dead-round threat test (same numbers as src/llm/fleet_intel.py: the
 # engine's evasion trigger, miss <= 0.5 km within 60 s).
 PD_RING_KM = 250.0
+# Range rings around the viewing fleet's centre (the GUN EXCHANGE bands).
+RANGE_RINGS_KM = (100.0, 200.0, 300.0)
+# A drive below this applied throttle is PADLOCK's token burn: "coasting"
+# (fleet_intel.BURNING_MIN_THROTTLE).
+BURNING_MIN_THROTTLE = 0.1
 WRECK_MISS_KM = 0.5
 WRECK_HORIZON_S = 60.0
 
@@ -105,7 +110,10 @@ def build_live_frame(simulation: Any) -> Dict[str, Any]:
         thrust = 0.0
         if ship.current_maneuver and not ship.is_destroyed:
             maneuver = ship.current_maneuver.maneuver_type.name
-            thrust = ship.current_maneuver.throttle
+            # What the drive PRODUCES (engine damage, interlock, evasion and
+            # PADLOCK's token burn included), not the order's throttle: a
+            # PADLOCK ship coasting at 0 km/s was labelled "burning".
+            thrust = float(getattr(ship, "applied_throttle", ship.current_maneuver.throttle) or 0.0)
         frame["ships"][ship_id] = {
             "pos": [ship.position.x, ship.position.y, ship.position.z],
             "vel": [ship.velocity.x, ship.velocity.y, ship.velocity.z],
@@ -250,8 +258,10 @@ class AdmiralViewState:
                 beams.add((ship_id, data.get("target_id")))
         return list(beams)
 
-    def recent_events(self, t: float, window_s: float = 45.0) -> List[Tuple[float, str]]:
-        """(timestamp, label) for ticker-worthy events in the trailing window."""
+    def recent_events(self, t: float, window_s: float = 45.0,
+                      names: Optional[Dict[str, str]] = None) -> List[Tuple[float, str]]:
+        """(timestamp, label) for ticker-worthy events in the trailing window;
+        ships by name when ``names`` (id -> name) knows them."""
         interesting = {
             "TORPEDO_LAUNCHED": "torpedo launched",
             "TORPEDO_IMPACT": "TORPEDO IMPACT",
@@ -268,7 +278,8 @@ class AdmiralViewState:
         out = []
         for ts, etype, ship_id, _ in self._events:
             if t - window_s <= ts <= t and etype in interesting:
-                out.append((ts, f"{interesting[etype]} [{ship_id}]"))
+                who = (names or {}).get(ship_id) or ship_id
+                out.append((ts, f"{interesting[etype]}: {who}"))
         return out[-6:]
 
     def render(
@@ -284,7 +295,8 @@ class AdmiralViewState:
             ships_meta=ships_meta,
             trails=self.trails(),
             beams=self.active_pd_beams(frame["t"]),
-            recent_events=self.recent_events(frame["t"]),
+            recent_events=self.recent_events(
+                frame["t"], names={sid: m.get("name", sid) for sid, m in (ships_meta or {}).items()}),
             faction=faction,
             overlay=range_overlay(simulation, faction),
         )
@@ -409,6 +421,7 @@ def render_frame_png(
     # Inline cards piled into an unreadable wall at fleet scale - the 19-ship
     # Kimi-vs-Terra frames buried the entire battle center under labels.
     entries = {"alpha": [], "beta": []}
+    ticks = []   # (x, y, fwd x, fwd y, colour): facing ticks, drawn once the zoom is known
     for ship_id, s in frame.get("ships", {}).items():
         if s.get("destroyed"):
             continue
@@ -418,6 +431,7 @@ def render_frame_png(
         heading = math.atan2(s["fwd"][1], s["fwd"][0])
         ax.scatter([x], [y], marker=(3, 0, math.degrees(heading) - 90),
                    s=260, c=color, edgecolors="white", linewidths=0.8, zorder=6)
+        ticks.append((x, y, s["fwd"][0], s["fwd"][1], color))
 
         vx, vy = s["vel"][0] * km, s["vel"][1] * km
         speed = math.hypot(vx, vy)
@@ -437,7 +451,7 @@ def render_frame_png(
         own = faction is None or ship_faction == faction
         label = (f"{name} · {cls}\n"
                  f"hull {s.get('hull', 100):.0f}% | {speed3:.1f} km/s | "
-                 f"{'burning' if s.get('thrust', 0) > 0.05 else 'coasting'}"
+                 f"{'burning' if s.get('thrust', 0) >= BURNING_MIN_THROTTLE else 'coasting'}"
                  + (f" | {s.get('maneuver', '')}" if own and s.get('maneuver') else ""))
         entries[ship_faction].append((y, x, label, color))
 
@@ -510,6 +524,11 @@ def render_frame_png(
                                 ec=FACTION_COLORS.get(faction, TEXT), alpha=0.45, zorder=1))
             ax.annotate(f"PD {PD_RING_KM:.0f} km", (cx, cy + PD_RING_KM), fontsize=7,
                         color="#7f8fa0", family="monospace", ha="center", va="bottom")
+            for ring in RANGE_RINGS_KM:
+                ax.add_patch(Circle((cx, cy), ring, fill=False, ls=":", lw=0.6,
+                                    ec="#5a6b7c", alpha=0.6, zorder=1))
+                ax.annotate(f"{ring:.0f} km", (cx + ring * 0.7071, cy - ring * 0.7071), fontsize=6.5,
+                            color="#5a6b7c", family="monospace", ha="left", va="top")
     if overlay.get("cpa"):
         px, py = overlay["cpa"]
         ax.scatter([px], [py], marker="x", s=70, c="#ffcc00", linewidths=1.6, zorder=6)
@@ -550,6 +569,15 @@ def render_frame_png(
         pad = max(40.0, 0.12 * max(max(xs) - min(xs), max(ys) - min(ys)))
         ax.set_xlim(min(xs) - pad, max(xs) + pad)
         ax.set_ylim(min(ys) - pad, max(ys) + pad)
+
+    # Facing ticks: a short line from each hull along its nose.
+    span = max(ax.get_xlim()[1] - ax.get_xlim()[0], ax.get_ylim()[1] - ax.get_ylim()[0])
+    tick = 0.045 * span
+    for x, y, fx, fy, color in ticks:
+        norm = math.hypot(fx, fy)
+        if norm > 1e-6:
+            ax.plot([x, x + tick * fx / norm], [y, y + tick * fy / norm], color="white",
+                    lw=1.6, alpha=0.9, zorder=7, solid_capstyle="round")
 
     ax.grid(color=GRID, lw=0.4, alpha=0.6)
     ax.set_axisbelow(True)

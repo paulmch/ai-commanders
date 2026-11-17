@@ -59,6 +59,10 @@ class AdmiralConfig:
     # Accepted commander-notebook lessons (src/llm/notebook.py), injected by
     # the runner when the battle opts in via use_notebooks.
     notebook_text: Optional[str] = None
+    # Experiment switch (owner decision pending, off by default): one line in
+    # the admiral's turn with both sides' time-limit verdict score as it
+    # would stand now (fleet_intel.score_line).
+    show_score: bool = False
     # Experiment mode (off by default): the admiral sets the directive and
     # battle plan (and may order coordinated torpedo salvos) but issues no
     # per-ship maneuver/target orders - captains decide from the directive.
