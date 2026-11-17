@@ -283,3 +283,81 @@ def test_show_score_and_label_reach_the_admiral_status_recording_and_ledger(tmp_
     assert [x["label"] for x in lines] == ["exp-7 haiku smoke"] * 2
     assert run_llm_battle.main(["--fleet-config", str(config), "--mock-llm", "--quiet",
                                 "--no-admiral", "beta", "--show-score", "beta"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# Money invariant: every request that leaves the client reserved from the budget
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("extra", [{}, {"cache_warmup": True}])
+def test_every_request_sent_reserved_from_the_budget_first(tmp_path, monkeypatch, extra):
+    """Pre-warms, follow-ups, retries and per-ship orders included: the count of
+    requests the transport saw equals the count of successful reservations (the
+    cache warm-up test checked the warm-ups were billed, not that they reserved)."""
+    from tests.test_anthropic_client import _battle
+    reserved = []
+    real = RequestBudget.reserve_usd
+
+    def counting(self, amount, images=0):
+        out = real(self, amount, images)
+        reserved.append(out)
+        return out
+    monkeypatch.setattr(RequestBudget, "reserve_usd", counting)
+    record = []
+    runner, client, output, data = _battle(
+        tmp_path, "claude-opus-5-5", "claude-sonnet-5-5", record=record, limit=50.0, turns=2,
+        captain_models={"alpha": "claude-haiku-5-5"}, anthropic_extra=extra,
+        ships=("battlecruiser", "battlecruiser", "frigate"))
+    runner.run_battle(data)
+    assert record and len(record) == len(reserved)
+    if extra:
+        assert any(b["max_tokens"] == 0 for b in record)
+
+
+# ---------------------------------------------------------------------------
+# ORDER CHECK guards no existing test covered (found by removing them)
+# ---------------------------------------------------------------------------
+
+def test_a_new_launch_in_the_order_check_reply_does_not_fire(tmp_path):
+    """The reply is a fresh request: a model that launches again with other
+    arguments (count 2 instead of 1) must not fire more rounds - removing the
+    launch filter left every existing test green (identical repeats are also
+    dropped by the dedupe)."""
+    from tests.test_fleet_comms import FLEET, Stub, make_runner
+
+    def order(ship):
+        return {"order_text": "Launch on the destroyer.", "priority": "NORMAL", "suggested_target": "beta_1"}
+
+    def captain(ctx):
+        if ctx.model != "stub/dart" or ctx.cp != 1:
+            return []
+        launch = 1 if ctx.turn == 1 else 2
+        return [("set_primary_target", {"target_id": "beta_2"}),
+                ("launch_torpedo", {"count": launch, "target_id": "beta_2"})]
+    stub = Stub(captain=captain, order=order)
+    runner = make_runner(stub, tmp_path, beta=(("destroyer", "stub/lancer"), ("destroyer", "stub/lancer")),
+                         checkpoints=1, distance_km=400.0)
+    runner.run_fleet_battle(FLEET)
+    assert stub.turns[("stub/dart", 1)] == 2               # the ORDER CHECK was asked
+    executed = [tc for tc in runner.alpha_captains["alpha_1"].last_tool_calls
+                if tc.name == "launch_torpedo"]
+    assert [tc.arguments["count"] for tc in executed] == [1]    # only the first reply's launch
+
+
+def test_order_check_is_asked_once_per_checkpoint_across_a_discussion_redecide(tmp_path):
+    """discuss_with_admiral makes the runner call decide() again in the same
+    checkpoint; the ORDER CHECK (a paid call) must not be asked again there."""
+    from tests.test_fixes_cmdcap import FLEET, _loop_runner
+
+    def captain(ctx):
+        if ctx.model != "stub/dd" or ctx.cp != 1:
+            return []
+        calls = [("set_maneuver", {"maneuver_type": "EVADE"})]
+        if ctx.turn == 2:          # the ORDER CHECK reply asks the admiral
+            calls.append(("discuss_with_admiral", {"question": "Hold or evade?"}))
+        return calls
+    stub, runner = _loop_runner(tmp_path, captain, checkpoints=1)
+    runner.run_fleet_battle(FLEET)
+    checks = [k for k, text in stub.texts.items()
+              if k[0] == "stub/dd" and k[1] == 1 and "=== ORDER CHECK" in text]
+    assert len(checks) == 1, sorted(stub.texts)
