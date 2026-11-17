@@ -1778,8 +1778,12 @@ Be authentic to how you would command a fleet as {model_name}."""
                     top = max(modes, key=modes.get)
                     why = (f"evasion held the drive ({top} {100 * sum(modes.values()):.0f}% of the "
                            f"window: {intel.EVASION_MODES[top]})")
+                elif getattr(ship, "drive_interlock", None) is not None:
+                    why = "drive interlock: a friendly ship in its exhaust held the throttle"
                 else:
-                    why = "the drive stayed idle (turning onto the burn line, or interlock)"
+                    top = max((h.get("modes") or {"?": 1.0}).items(), key=lambda kv: kv[1])[0]
+                    why = (f"the drive stayed idle while flying {top} (turning onto the burn "
+                           "line, or the maneuver holding position)")
             ordered = kind + (f" @{thr * 100:.0f}%" if wants_burn and kind == "HEADING" else "")
             entry = streaks.setdefault(sid, {"n": 0, "ordered": ordered})
             entry["n"] += 1
