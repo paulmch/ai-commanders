@@ -1263,8 +1263,15 @@ class TestMeasuredExchangeDoctrine:
         assert "58% of all hull damage landed inside 150 km, 42% beyond." in text
 
     def test_facing_battle_numbers_are_the_seeded_runs(self, facts):
+        """Pooled numbers from the fixture; only classes whose nose-vs-flank
+        order holds under each heuristic doctrine separately are quoted."""
         from src.llm.prompts import FACING_MEASURED
         facing = facts["guns"]["facing"]
+        for cls, *_ in FACING_MEASURED:
+            for doctrine in ("legacy", "tactical"):
+                d = facts["guns"]["facing_by_doctrine"][doctrine][cls]
+                assert d["lateral"]["pen"] / d["lateral"]["hits"] > d["nose"]["pen"] / d["nose"]["hits"], \
+                    (cls, doctrine)
         for cls, npen, ngj, fpen, fgj in FACING_MEASURED:
             nose, flank = facing[cls]["nose"], facing[cls]["lateral"]
             assert npen == pytest.approx(100 * nose["pen"] / nose["hits"], abs=0.6), cls

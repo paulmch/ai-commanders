@@ -236,6 +236,182 @@
      "ke_gj": 482.158
     }
    }
+  },
+  "facing_by_doctrine": {
+   "legacy": {
+    "frigate": {
+     "nose": {
+      "hits": 1542.0,
+      "pen": 537.0,
+      "hull_gj": 1056.345
+     },
+     "lateral": {
+      "hits": 1179.0,
+      "pen": 869.0,
+      "hull_gj": 1339.088
+     },
+     "tail": {
+      "hits": 380.0,
+      "pen": 195.0,
+      "hull_gj": 378.387
+     }
+    },
+    "destroyer": {
+     "lateral": {
+      "hits": 1547.0,
+      "pen": 734.0,
+      "hull_gj": 979.789
+     },
+     "tail": {
+      "hits": 611.0,
+      "pen": 103.0,
+      "hull_gj": 155.826
+     },
+     "nose": {
+      "hits": 1396.0,
+      "pen": 86.0,
+      "hull_gj": 59.729
+     }
+    },
+    "battlecruiser": {
+     "lateral": {
+      "hits": 411.0,
+      "pen": 52.0,
+      "hull_gj": 71.49
+     },
+     "nose": {
+      "hits": 704.0,
+      "pen": 32.0,
+      "hull_gj": 41.156
+     },
+     "tail": {
+      "hits": 15.0,
+      "pen": 0.0,
+      "hull_gj": 0.0
+     }
+    },
+    "battleship": {
+     "lateral": {
+      "hits": 680.0,
+      "pen": 49.0,
+      "hull_gj": 13.442
+     },
+     "nose": {
+      "hits": 881.0,
+      "pen": 12.0,
+      "hull_gj": 2.748
+     },
+     "tail": {
+      "hits": 108.0,
+      "pen": 1.0,
+      "hull_gj": 0.38
+     }
+    },
+    "dreadnought": {
+     "lateral": {
+      "hits": 1169.0,
+      "pen": 297.0,
+      "hull_gj": 231.5
+     },
+     "nose": {
+      "hits": 1064.0,
+      "pen": 28.0,
+      "hull_gj": 12.5
+     },
+     "tail": {
+      "hits": 120.0,
+      "pen": 2.0,
+      "hull_gj": 1.565
+     }
+    }
+   },
+   "tactical": {
+    "frigate": {
+     "nose": {
+      "hits": 2235.0,
+      "pen": 390.0,
+      "hull_gj": 402.524
+     },
+     "lateral": {
+      "hits": 1247.0,
+      "pen": 509.0,
+      "hull_gj": 393.734
+     },
+     "tail": {
+      "hits": 112.0,
+      "pen": 20.0,
+      "hull_gj": 23.826
+     }
+    },
+    "destroyer": {
+     "nose": {
+      "hits": 3294.0,
+      "pen": 281.0,
+      "hull_gj": 243.437
+     },
+     "lateral": {
+      "hits": 1371.0,
+      "pen": 292.0,
+      "hull_gj": 264.868
+     },
+     "tail": {
+      "hits": 103.0,
+      "pen": 14.0,
+      "hull_gj": 14.322
+     }
+    },
+    "battlecruiser": {
+     "nose": {
+      "hits": 3192.0,
+      "pen": 571.0,
+      "hull_gj": 588.319
+     },
+     "lateral": {
+      "hits": 1680.0,
+      "pen": 858.0,
+      "hull_gj": 896.605
+     },
+     "tail": {
+      "hits": 233.0,
+      "pen": 77.0,
+      "hull_gj": 97.466
+     }
+    },
+    "battleship": {
+     "nose": {
+      "hits": 2475.0,
+      "pen": 918.0,
+      "hull_gj": 867.604
+     },
+     "lateral": {
+      "hits": 427.0,
+      "pen": 91.0,
+      "hull_gj": 68.028
+     },
+     "tail": {
+      "hits": 34.0,
+      "pen": 9.0,
+      "hull_gj": 6.924
+     }
+    },
+    "dreadnought": {
+     "nose": {
+      "hits": 2752.0,
+      "pen": 991.0,
+      "hull_gj": 891.697
+     },
+     "lateral": {
+      "hits": 873.0,
+      "pen": 399.0,
+      "hull_gj": 252.119
+     },
+     "tail": {
+      "hits": 115.0,
+      "pen": 15.0,
+      "hull_gj": 12.251
+     }
+    }
+   }
   }
  },
  "torpedo": {

@@ -384,6 +384,7 @@ def solve_pursuit(
     reserve = NEZ_DV_RESERVE_KPS * 1000.0
     min_burn = TERMINAL_MIN_BURN_KPS * 1000.0
     c, d, t = closing_mps, range_m, 0.0
+    dry_t: Optional[float] = None   # when the round's delta-v ran out (None: never)
     inside_t = 0.0
     inside_start_d = min(d, pd_envelope_m)
     dt = SOLUTION_STEP_S
@@ -401,6 +402,8 @@ def solve_pursuit(
             c += burn
             dv -= burn
             m *= math.exp(-burn / ve)
+            if dv <= 1e-6 and dry_t is None:
+                dry_t = t
         if t >= target_delay_s:
             c -= target_accel_ms2 * dt
         d -= c * dt
@@ -409,7 +412,8 @@ def solve_pursuit(
             inside_t += dt
         if d <= 0:
             cross = inside_start_d / inside_t if inside_t > 0 else c
-            return {"hit": True, "tof_s": t, "impact_mps": c, "cross_mps": cross}
+            return {"hit": True, "tof_s": t, "impact_mps": c, "cross_mps": cross,
+                    "dry_before_impact": dry_t is not None}
         if c <= 0 and dv <= 0:
             return {"hit": False, "short_m": d, "reason": "runs dry"}
     return {"hit": False, "short_m": d, "reason": "too slow"}
@@ -1284,22 +1288,27 @@ def helm_summary(sim: Any, ship_ids: Iterable[str], since_t: float,
     """
     Per ship, from the engine's EXECUTION_STATE transitions over
     [since_t, until_t]: the share of the window the drive produced thrust
-    (applied throttle >= BURNING_MIN_THROTTLE), the share spent in each helm
-    mode, and the last engine fraction (0 = drive dead).
+    (applied throttle >= BURNING_MIN_THROTTLE), the share in which the
+    maneuver REQUESTED thrust but none was produced (held: evasion, a dead
+    drive, a turn, the interlock), the share spent in each helm mode, and
+    the last engine fraction (0 = drive dead).
     """
     ids = set(ship_ids)
     span = max(1e-6, until_t - since_t)
     state: Dict[str, Tuple[float, Dict[str, Any]]] = {}
-    acc: Dict[str, Dict[str, Any]] = {sid: {"burn": 0.0, "modes": Counter(), "engine": None}
-                                      for sid in ids}
+    acc: Dict[str, Dict[str, Any]] = {sid: {"burn": 0.0, "held": 0.0, "modes": Counter(),
+                                            "engine": None} for sid in ids}
 
     def close(sid: str, t_end: float) -> None:
         start, data = state[sid]
         dt = max(0.0, min(t_end, until_t) - max(start, since_t))
         if dt <= 0:
             return
-        if float(data.get("applied_throttle") or 0.0) >= BURNING_MIN_THROTTLE:
+        applied = float(data.get("applied_throttle") or 0.0)
+        if applied >= BURNING_MIN_THROTTLE:
             acc[sid]["burn"] += dt
+        elif float(data.get("requested_throttle") or 0.0) >= BURNING_MIN_THROTTLE:
+            acc[sid]["held"] += dt      # the order asked for thrust, none came out
         acc[sid]["modes"][str(data.get("mode") or "?").upper()] += dt
 
     for event in getattr(sim, "events", None) or []:
@@ -1319,7 +1328,7 @@ def helm_summary(sim: Any, ship_ids: Iterable[str], since_t: float,
         if sid in state:
             close(sid, until_t)
         a = acc[sid]
-        out[sid] = {"burn_frac": a["burn"] / span,
+        out[sid] = {"burn_frac": a["burn"] / span, "held_frac": a["held"] / span,
                     "modes": {m: v / span for m, v in a["modes"].items()},
                     "engine_fraction": a["engine"]}
     return out
@@ -1333,6 +1342,76 @@ def helm_summary(sim: Any, ship_ids: Iterable[str], since_t: float,
 TORPEDO_DEFENCE_MAX_SHIPS = 4
 
 
+TORPEDO_SHADOW_HORIZON_S = 300.0
+
+
+def fly_inbound(sim: Any, target: Any, flights: Sequence[Any], fleet_data: Optional[Dict[str, Any]],
+                heading: Optional[Vector3D] = None,
+                horizon_s: float = TORPEDO_SHADOW_HORIZON_S) -> Optional[Dict[str, Any]]:
+    """
+    The engine's own forecast for rounds already in flight: copies of
+    ``flights`` fly at a copy of ``target`` on a private CombatSimulation
+    (no PD - turret cover is reported separately - no plume wash, no arcs,
+    armour made unbreakable so every round's arrival is seen). The target
+    holds course (MAINTAIN) or, with ``heading``, turns and burns along it at
+    full throttle. Returns hits, first impact (s from now), median impact
+    speed / energy, rounds that never hit (dry or passed). Nothing touches
+    the battle or its RNG. None when the shadow cannot be built.
+    """
+    import copy
+    try:
+        from ..simulation import (CombatSimulation, Maneuver, ManeuverType,
+                                  SimulationEventType, create_ship_from_fleet_data)
+    except ImportError:  # pragma: no cover
+        from simulation import (CombatSimulation, Maneuver, ManeuverType,
+                                SimulationEventType, create_ship_from_fleet_data)
+    if not fleet_data or not getattr(target, "ship_type", None) or not flights:
+        return None
+    try:
+        shadow = CombatSimulation(time_step=1.0, decision_interval=1e9, seed=0)
+        shadow.echo = False
+        shadow.plume_wash_enabled = False
+        shadow.weapon_arcs = False
+        tg = create_ship_from_fleet_data(
+            "target", target.ship_type, "alpha", fleet_data,
+            position=Vector3D(target.position.x, target.position.y, target.position.z),
+            velocity=Vector3D(target.velocity.x, target.velocity.y, target.velocity.z),
+            forward=Vector3D(target.forward.x, target.forward.y, target.forward.z))
+        far = target.position + Vector3D(1e9, 0.0, 0.0)
+        src = create_ship_from_fleet_data("source", "corvette", "beta", fleet_data, position=far,
+                                          forward=Vector3D(-1.0, 0.0, 0.0))
+    except Exception:  # noqa: BLE001 - advisory only
+        return None
+    tg.point_defense = []
+    src.point_defense = []
+    armor = getattr(tg, "armor", None)
+    for sec in (getattr(armor, "sections", None) or {}).values():
+        sec.thickness_cm = 1e7
+    tg.current_maneuver = (Maneuver(ManeuverType.MAINTAIN, 0.0) if heading is None else
+                           Maneuver(ManeuverType.HEADING, 0.0, throttle=1.0,
+                                    heading_direction={"x": heading.x, "y": heading.y, "z": heading.z}))
+    shadow.add_ship(tg)
+    shadow.add_ship(src)
+    for tf in flights:
+        twin = copy.deepcopy(tf)
+        twin.torpedo.target_id = "target"
+        twin.source_ship_id = "source"
+        shadow.torpedoes.append(twin)
+    impacts = []
+    while shadow.current_time < horizon_s and shadow.torpedoes and not tg.is_destroyed:
+        for ev in shadow.step() or []:
+            if ev.event_type == SimulationEventType.TORPEDO_IMPACT:
+                impacts.append((shadow.current_time, float(ev.data.get("impact_speed_kps") or 0.0),
+                                float(ev.data.get("total_damage_gj") or 0.0)))
+    out: Dict[str, Any] = {"hits": len(impacts), "dry": len(flights) - len(impacts)}
+    if impacts:
+        speeds = sorted(i[1] for i in impacts)
+        energies = sorted(i[2] for i in impacts)
+        out.update(first_s=min(i[0] for i in impacts), impact_kps=speeds[len(speeds) // 2],
+                   energy_gj=energies[len(energies) // 2])
+    return out
+
+
 def torpedo_defence(sim: Any, faction: str, fleet_data: Optional[Dict[str, Any]],
                     rounds: Sequence[RoundInfo]) -> Dict[str, Dict[str, Any]]:
     """
@@ -1340,9 +1419,12 @@ def torpedo_defence(sim: Any, faction: str, fleet_data: Optional[Dict[str, Any]]
     rounds inbound, first impact, PD turrets that BEAR on the rounds
     (pd_cover with weapon arcs) and how many of them those turrets can blind
     at the rounds' crossing speed (turrets_to_blind), the leakers, and the
-    engine's pursuit forecast (solve_pursuit, the guidance throttle law) for
-    holding course versus burning straight away from the rounds after the
-    turn: impact speed / energy, first impact, rounds that run dry.
+    engine's own forecast (fly_inbound: copies of the rounds flown at a copy
+    of the ship on a private CombatSimulation) for holding course versus
+    turning and burning straight away: impact speed / energy, first impact,
+    rounds that never hit. The 1-D solve_pursuit (the guidance throttle law
+    along the line of sight) is the fallback when no shadow can be built;
+    it gives the PD crossing speed either way.
     """
     out: Dict[str, Dict[str, Any]] = {}
     guided: Dict[str, List[RoundInfo]] = {}
@@ -1389,8 +1471,12 @@ def torpedo_defence(sim: Any, faction: str, fleet_data: Optional[Dict[str, Any]]
                                      target_delay_s=turn_s, **kw))
         pen = float(getattr(torps[0].torpedo.specs, "penetrator_mass_kg", 250.0))
 
-        def summary(results: List[Dict[str, Any]]) -> Dict[str, Any]:
-            hits = [x for x in results if x.get("hit")]
+        def summary(results: List[Dict[str, Any]], maneuvering: bool) -> Dict[str, Any]:
+            # A round that runs dry on the way is a straight-line wreck: it
+            # still strikes a hull holding course (the PD doctrine's 17/18),
+            # but misses one that burns away - the engine flew it so.
+            hits = [x for x in results if x.get("hit")
+                    and not (maneuvering and x.get("dry_before_impact"))]
             if not hits:
                 return {"hits": 0, "dry": len(results)}
             speeds = sorted(x["impact_mps"] for x in hits)
@@ -1400,7 +1486,18 @@ def torpedo_defence(sim: Any, faction: str, fleet_data: Optional[Dict[str, Any]]
                     "first_s": min(x["tof_s"] for x in hits), "impact_kps": mid / 1000.0,
                     "energy_gj": 0.5 * pen * mid ** 2 / 1e9, "cross_kps": cross / 1000.0}
 
-        h, rn = summary(hold), summary(run)
+        h, rn = summary(hold, False), summary(run, True)
+        # The engine's own forecast replaces the 1-D one where it can be flown.
+        shadow_hold = fly_inbound(sim, ship, torps, fleet_data)
+        drive = getattr(ship, "engine_effectiveness", 1.0)
+        dead = isinstance(drive, (int, float)) and drive <= 0.0
+        shadow_run = None if dead else fly_inbound(sim, ship, torps, fleet_data, heading=heading)
+        if shadow_hold is not None:
+            h = dict(shadow_hold, cross_kps=h.get("cross_kps"))
+        if shadow_run is not None:
+            rn = shadow_run
+        if dead:
+            rn = {"hits": 0, "dry": 0, "dead_drive": True}
         cover = pd_cover(sim, ship, envelope, threat_from=source)
         per_round = turrets_to_blind(fleet_data, h.get("cross_kps") or MIN_CLOSING_SPEED_KPS)
         blind = min(n, cover // max(1, per_round))
@@ -1435,6 +1532,8 @@ def torpedo_defence_line(label: str, d: Dict[str, Any]) -> str:
     run = (f". Burning away heading({hd.x:+.2f},{hd.y:+.2f},{hd.z:+.2f}) @100% (turn ~{d['turn_s']:.0f} s, "
            f"then TAIL" + (f" {d['tail_cm']:.0f} cm" if d.get("tail_cm") is not None else "")
            + " to the rounds): ")
+    if rn.get("dead_drive"):
+        return text + ". Burning away: impossible, drive dead (0 g)"
     if rn.get("hits"):
         bought = (rn["first_s"] - h["first_s"]) if h.get("hits") else None
         run += (f"impact ~{rn['impact_kps']:.1f} km/s (~{rn['energy_gj']:.0f} GJ), first impact "
@@ -1442,7 +1541,7 @@ def torpedo_defence_line(label: str, d: Dict[str, Any]) -> str:
         if rn.get("dry"):
             run += f", {rn['dry']} run dry"
     else:
-        run += "every round runs dry before it reaches you"
+        run += "no round reaches you (they run dry or pass)"
     return text + run
 
 
@@ -1498,7 +1597,12 @@ def order_text_target_note(args: Dict[str, Any], names: Dict[str, str], own_ids:
             structured.append(sid)
     named = ships_named_in_text(args.get("order_text") or "", names, list(enemy_ids), short_own)
     extra = [sid for sid in named if sid not in structured]
-    if not extra:
+    # Only the misleading cases get a tool result (and a follow-up call): the
+    # prose names an enemy and there is no structured target, or the FIRST
+    # enemy it names is not the structured target. A later "then shift to X"
+    # is common (40% of the 1,049 recorded orders named a second enemy) and is
+    # left to the captain's ORDERS block, which says which target flies.
+    if not extra or (structured and named and named[0] in structured):
         return None
     lbl = lambda sid: label(names.get(sid), sid)  # noqa: E731
     if structured:

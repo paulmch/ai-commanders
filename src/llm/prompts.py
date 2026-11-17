@@ -2866,8 +2866,9 @@ guns as for yours):
 FACING (armor nose/side/tail per class in FORCES; hull damage needs a breach):
   spinal hits to kill a fresh hull on ONE facing (engine damage model, muzzle energy),
   nose / flank / tail: {fx_kill}.
-  seeded battles, nose vs flank, hits that penetrated / hull GJ per hit:
-  {fx_battle}.
+  seeded battles (all guns pooled), nose vs flank, hits that penetrated / hull GJ per hit:
+  {fx_battle}; the battleship row changed sign between the two
+  heuristic doctrines and is not quoted.
   Facing is two-sided: a ship that turns to burn shows its flank or tail to every gun
   that bears on it; an enemy that turns toward one of your groups shows the others his.
 CROSSFIRE: two groups {cf_deg:.0f} deg apart as seen from an enemy {cf_range_km:.0f} km away = each
@@ -2925,12 +2926,15 @@ FACING_SPINAL_HITS_TO_KILL = (
     ("frigate", 16, 8, 7),
     ("battleship", 47, 21, 19),
 )
-# Seeded battles: (class, nose pen %, nose hull GJ/hit, flank pen %, flank hull GJ/hit).
+# Seeded battles, all guns pooled: (class, nose pen %, nose hull GJ/hit, flank pen %,
+# flank hull GJ/hit). Only classes whose nose-vs-flank order held under BOTH
+# heuristic doctrines separately: the battleship's swung from nose 1% (legacy)
+# to 37% (tactical) penetration, above its flank's 21%, and is left out.
 FACING_MEASURED = (
     ("battlecruiser", 15, 0.16, 44, 0.46),
     ("destroyer", 8, 0.06, 35, 0.43),
     ("frigate", 25, 0.39, 57, 0.71),
-    ("battleship", 28, 0.26, 13, 0.07),
+    ("dreadnought", 27, 0.24, 34, 0.24),
 )
 # The pass example in RANGE CONTROL and the CROSSFIRE example geometry.
 MERGE_EXAMPLE_KPS = 5.0
@@ -3932,7 +3936,8 @@ def _format_ordnance(snapshot: Any) -> str:
     lines.extend(_inbound_lines(snapshot, inbound, "  "))
     defence = _torpedo_defence_lines(snapshot)
     if defence:
-        lines.append("TORPEDO DEFENCE (per targeted ship; the engine's pursuit forecast):")
+        lines.append("TORPEDO DEFENCE (per targeted ship; the engine's forecast with PD left out, "
+                     "turrets near several targets counted for each):")
         lines.extend(f"  {line}" for line in defence)
     if inbound:
         ships = sorted({r.threat_id for r in inbound}, key=lambda s: (len(s), s))

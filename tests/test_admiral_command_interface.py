@@ -291,8 +291,8 @@ class TestTorpedoDefence:
                                                       intel.pd_range_m(FLEET),
                                                       threat_from=Vector3D(307500.0, 0, 0))
         assert x["run_heading"].x < -0.99            # straight away from the rounds
-        # The engine's guidance law: running after the turn lands slower, later.
-        assert x["run"]["impact_kps"] <= x["hold"]["impact_kps"]
+        # The engine's own forecast: running after the turn lands no harder, no sooner.
+        assert x["run"]["impact_kps"] <= x["hold"]["impact_kps"] * 1.01
         assert x["run"]["first_s"] >= x["hold"]["first_s"]
         line = intel.torpedo_defence_line("TIS alpha_1 [alpha_1]", x)
         assert "6 rounds, first impact" in line and "PD turrets bear" in line
@@ -306,6 +306,44 @@ class TestTorpedoDefence:
         quiet.torpedoes.clear()
         _, msgs = directive_turn(make_admiral("alpha"), quiet)
         assert "TORPEDO DEFENCE (per" not in msgs[1]["content"]
+
+    @pytest.mark.parametrize("cls,dist_km,closing_kps", [
+        ("corvette", 800, 3.0), ("battlecruiser", 800, 3.0), ("destroyer", 600, 4.0)])
+    def test_forecast_matches_engine_flights(self, cls, dist_km, closing_kps):
+        """Fly one round at a hull (no PD) in the engine, holding course and
+        burning straight away: the forecast's first impact and impact speed
+        when it holds, and 'runs dry before it reaches you' when it runs."""
+        from src.simulation import Maneuver, ManeuverType
+        out = {}
+        for mode in ("hold", "run"):
+            sim = CombatSimulation(seed=1, decision_interval=1e9)
+            sim.echo = False
+            target = ship(sim, "alpha_1", cls, "alpha", (0, 0, 0), fwd=(1, 0, 0))
+            ship(sim, "beta_1", "corvette", "beta", (3000, 0, 0), fwd=(-1, 0, 0))
+            target.point_defense = []
+            add_torpedo(sim, "t0", "beta_1", "alpha_1", (dist_km, 0, 0), (-closing_kps, 0, 0))
+            target.current_maneuver = (
+                Maneuver(ManeuverType.MAINTAIN, 0.0) if mode == "hold" else
+                Maneuver(ManeuverType.HEADING, 0.0, throttle=1.0,
+                         heading_direction={"x": -1, "y": 0, "z": 0}))
+            forecast = intel.torpedo_defence(sim, "alpha", FLEET,
+                                             intel.gather_rounds(sim, "alpha"))["alpha_1"][mode]
+            impact = None
+            for _ in range(1500):
+                sim.step()
+                hits = [e for e in sim.events if e.event_type == SimulationEventType.TORPEDO_IMPACT]
+                if hits:
+                    impact = (sim.current_time, hits[0].data["impact_speed_kps"])
+                    break
+                if not sim.torpedoes:
+                    break
+            out[mode] = (forecast, impact)
+        hold, flown = out["hold"]
+        assert flown is not None and hold["hits"] == 1
+        assert hold["first_s"] == pytest.approx(flown[0], abs=3.0)
+        assert hold["impact_kps"] == pytest.approx(flown[1], rel=0.06)
+        run, flown = out["run"]
+        assert flown is None and run["hits"] == 0 and run["dry"] == 1
 
     def test_eta_is_the_guidance_forecast_not_range_over_closing(self):
         sim = torpedo_sim()
@@ -385,9 +423,16 @@ class TestOrderConsistency:
 
     def test_prose_naming_another_ship_is_caught(self):
         note = intel.order_text_target_note(
-            {"order_text": "PADLOCK on Lancer-1, then shift to OCS Falchion-2.",
+            {"order_text": "Fire at OCS Falchion-2 first, PADLOCK on Lancer-1.",
              "suggested_target": "OCS Lancer-1"}, self.NAMES, ["alpha_1"], ["beta_1", "beta_2"])
         assert "OCS Falchion-2 [beta_2]" in note and "apply OCS Lancer-1 [beta_1]" in note
+        # A later "then shift to X" behind the structured target is left to the
+        # captain's ORDERS line (40% of recorded orders): no follow-up call.
+        assert intel.order_text_target_note(
+            {"order_text": "PADLOCK on OCS Lancer-1, then shift to OCS Falchion-2.",
+             "suggested_target": "OCS Lancer-1"}, self.NAMES, ["alpha_1"], ["beta_1", "beta_2"]) is None
+        assert "no structured target" in intel.order_text_target_note(
+            {"order_text": "Engage OCS Falchion-2."}, self.NAMES, ["alpha_1"], ["beta_1", "beta_2"])
         # The own ship's short name is ambiguous ('Lancer-1' is both): not a mismatch.
         assert intel.order_text_target_note(
             {"order_text": "Stay behind Lancer-1, fire at OCS Falchion-2",
@@ -400,7 +445,7 @@ class TestOrderConsistency:
         ship(sim, "beta_2", "frigate", "beta", (300, 40, 0), fwd=(-1, 0, 0))
         answers = [
             [ToolCall("o1", "issue_order", {"ship_name": "TIS alpha_1", "suggested_target": "beta_1",
-                                            "order_text": "Engage OCS beta_1, then OCS beta_2."})],
+                                            "order_text": "Engage OCS beta_2 first, then OCS beta_1."})],
             [ToolCall("o2", "issue_order", {"ship_name": "TIS alpha_1", "suggested_target": "beta_2",
                                             "order_text": "Engage OCS beta_2."})],
         ]
@@ -492,7 +537,12 @@ class TestMergeAlarm:
 # =============================================================================
 
 class TestEscalation:
-    def _setup(self, mode="BRACE", engine=1.0, executed="HEADING"):
+    def test_a_ship_coasting_by_design_is_not_flagged(self):
+        """HOLD_RANGE at its range requests no thrust: not a refusal to fly."""
+        lines = [snap.noncompliance for _, snap in self._setup(mode="HOLD_RANGE", requested=0.0)]
+        assert lines == [[], [], []]
+
+    def _setup(self, mode="BRACE", engine=1.0, executed="HEADING", requested=1.0):
         sim = CombatSimulation(seed=1)
         ship(sim, "alpha_1", "destroyer", "alpha", (0, 0, 0))
         ship(sim, "beta_1", "destroyer", "beta", (600, 0, 0), fwd=(-1, 0, 0))
@@ -506,7 +556,8 @@ class TestEscalation:
             admiral._last_decision_t = t0
             sim.events.append(SimulationEvent(SimulationEventType.EXECUTION_STATE, t0 + 1.0, "alpha_1",
                                               None, {"mode": mode, "applied_throttle": 0.0,
-                                                     "requested_throttle": 1.0, "engine_fraction": engine}))
+                                                     "requested_throttle": requested,
+                                                     "engine_fraction": engine}))
             sim.current_time = t0 + 30.0
             admiral.captain_reports = [{"ship_id": "alpha_1", "ship_name": "TIS alpha_1", "status": "ACK",
                                         "compliance": {"executed_maneuver": executed, "followed": True,
@@ -599,3 +650,86 @@ class TestPlot:
                                               timestamp=10.0, ship_id="alpha_1", data={}))
         assert view.recent_events(12.0, names={"alpha_1": "TIS Falchion-1"}) == [
             (10.0, "TORPEDO IMPACT: TIS Falchion-1")]
+
+
+# =============================================================================
+# The multi-turn paths through the real Anthropic client (mock transport)
+# =============================================================================
+
+def _anthropic(model, respond, record):
+    import anthropic
+    from src.llm.anthropic_client import AnthropicClient
+    from src.llm.mock_anthropic import mock_anthropic_transport
+    transport = mock_anthropic_transport(record=record, respond=respond)
+    return AnthropicClient(model, api_key="sk-ant-test-FAKE", max_retries=0,
+                           http_client=anthropic.DefaultHttpxClient(transport=transport))
+
+
+def _tool_use_response(model, name, args, serial):
+    from src.llm.mock_anthropic import message_response
+    return message_response([{"type": "thinking", "thinking": "adding up", "signature": f"sig-{serial}"},
+                             {"type": "tool_use", "id": f"toolu_{serial}", "name": name, "input": args}],
+                            "tool_use", model=model)
+
+
+@pytest.mark.parametrize("model", ["claude-sonnet-5-5", "claude-sonnet-5"])
+class TestThroughTheAnthropicClient:
+    def test_draft_retry_replays_the_turn_then_trims_and_records(self, model):
+        from types import SimpleNamespace
+        from src.llm.battle_recorder import BattleRecorder
+        from src.llm.replay_audit import AuditedClient
+        record, serial = [], iter(range(1, 100))
+
+        def respond(body):
+            if any(t["name"] == "select_fleet" for t in body.get("tools") or []):
+                return _tool_use_response(model, "select_fleet",
+                                          {"budget_check": "86+50+36=172", "ships": OVER}, next(serial))
+            return None
+        recorder = BattleRecorder()
+        recorder._is_recording = True
+        client = AuditedClient(_anthropic(model, respond, record), recorder,
+                               SimpleNamespace(current_time=0), "admiral", "alpha")
+        draft = fd.run_admiral_draft(client, model, "A", "alpha", FLEET, budget=150, max_ships=8,
+                                     verbose=False, allow_auto_fallback=False)
+        selects = [b for b in record if any(t["name"] == "select_fleet" for t in b.get("tools") or [])]
+        assert len(selects) == 3
+        second = selects[1]["messages"]
+        # The model's own turn, replayed with its thinking block, then the tool result.
+        assert [b["type"] for b in second[-2]["content"]] == ["thinking", "tool_use"]
+        assert second[-2]["content"][1]["input"]["ships"] == OVER
+        result = second[-1]["content"][0]
+        assert result["type"] == "tool_result" and result["tool_use_id"] == "toolu_1"
+        assert "= 172 points, 6 hulls" in result["content"]
+        assert sorted(s.ship_type for s in draft.ships) == ["battlecruiser", "battlecruiser",
+                                                           "battleship", "battleship"]
+        trims = [e for e in recorder.events if e.event_type == "draft_auto_trimmed"]
+        assert len(trims) == 1 and trims[0].data["dropped"] == ["destroyer", "destroyer"]
+
+    def test_order_follow_up_is_a_valid_tool_exchange(self, model):
+        record, serial = [], iter(range(1, 100))
+        answers = [{"ship_name": "TIS alpha_1", "suggested_target": "beta_1",
+                    "order_text": "Engage OCS beta_2 first, then OCS beta_1."},
+                   {"ship_name": "TIS alpha_1", "suggested_target": "beta_2",
+                    "order_text": "Engage OCS beta_2."}]
+
+        def respond(body):
+            if [t["name"] for t in body.get("tools") or []] == ["issue_order"]:
+                return _tool_use_response(model, "issue_order", answers.pop(0), next(serial))
+            return None
+        sim = CombatSimulation(seed=1)
+        ship(sim, "alpha_1", "destroyer", "alpha", (0, 0, 0))
+        ship(sim, "beta_1", "destroyer", "beta", (300, 0, 0), fwd=(-1, 0, 0))
+        ship(sim, "beta_2", "frigate", "beta", (300, 40, 0), fwd=(-1, 0, 0))
+        admiral = make_admiral("alpha", client=_anthropic(model, respond, record), model=model)
+        snap = admiral._build_snapshot(sim, own_caps(sim, "alpha"), full=True)
+        order = admiral._issue_ship_order(
+            {"ship_id": "alpha_1", "ship_name": "TIS alpha_1", "captain_name": "C",
+             "ship_type": "destroyer"}, snap, "x", sim)
+        assert len(record) == 2
+        follow = record[1]["messages"]
+        assert [b["type"] for b in follow[-2]["content"]] == ["thinking", "tool_use"]
+        assert follow[-1]["role"] == "user"
+        kinds = [b["type"] for b in follow[-1]["content"]]
+        assert kinds[0] == "tool_result" and "text" in kinds   # result + the closing line, one turn
+        assert "names OCS beta_2 [beta_2]" in follow[-1]["content"][0]["content"]
+        assert order.suggested_target == "beta_2"

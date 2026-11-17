@@ -1143,8 +1143,10 @@ Be authentic to how you would command a fleet as {model_name}."""
             )
             self._apply_salvo_plan(order, args, salvo_plan)
             _attach_heading(order, args, fleet_heading)
-            if self._order_text_note(args, simulation):
+            try:
                 order.text_also_names = self._prose_only_targets(args, simulation)
+            except Exception:  # noqa: BLE001 - advisory only
+                order.text_also_names = []
             return order
 
         # If no order was issued, create a default order
@@ -1639,9 +1641,11 @@ Be authentic to how you would command a fleet as {model_name}."""
         seen.update(current)
         return out
 
-    # An ordered burn the drive produced for less than this share of the
-    # window was not flown.
-    NONCOMPLIANCE_MIN_BURN = 0.25
+    # An ordered burn whose maneuver requested thrust that the drive did not
+    # produce for at least this share of the window was not flown. Judged on
+    # requested vs applied throttle, so a ship coasting by design (HOLD_RANGE
+    # at its range, a standoff reached, PADLOCK) is never flagged.
+    NONCOMPLIANCE_HELD = 0.5
     NONCOMPLIANCE_STREAK = 2
 
     def _track_noncompliance(self, simulation: Any, own_ships: List[Any], since: float,
@@ -1674,8 +1678,9 @@ Be authentic to how you would command a fleet as {model_name}."""
             thr = getattr(order, "applied_throttle", None)
             thr = getattr(order, "throttle", None) if thr is None else thr
             thr = 1.0 if thr is None else float(thr)
-            wants_burn = (kind in ("INTERCEPT", "HOLD_RANGE", "BRAKE")
-                          or (kind == "HEADING" and thr > 0) or (kind == "EVADE"))
+            # Burn orders only: BRAKE idles once the ship is at rest and EVADE
+            # with nothing to dodge weaves on and off - both as ordered.
+            wants_burn = kind in ("INTERCEPT", "HOLD_RANGE") or (kind == "HEADING" and thr > 0)
             h = helm.get(sid) or {}
             comp = ((reports.get(sid) or {}).get("compliance") or {})
             replaced = any(str(d).startswith("maneuver:") for d in comp.get("deviations") or [])
@@ -1684,7 +1689,8 @@ Be authentic to how you would command a fleet as {model_name}."""
             burned = float(h.get("burn_frac") or 0.0)
             engine = h.get("engine_fraction")
             engine = float(getattr(ship, "engine_effectiveness", 1.0)) if engine is None else float(engine)
-            if not (replaced or (wants_burn and burned < self.NONCOMPLIANCE_MIN_BURN)):
+            held = float(h.get("held_frac") or 0.0)
+            if not (replaced or (wants_burn and held >= self.NONCOMPLIANCE_HELD)):
                 streaks.pop(sid, None)
                 continue
             if engine <= 0.0:
@@ -1692,7 +1698,8 @@ Be authentic to how you would command a fleet as {model_name}."""
             elif replaced:
                 why = f"its captain replaced your order (flew {flew})"
             else:
-                modes = {m: f for m, f in (h.get("modes") or {}).items() if m in intel.EVASION_MODES}
+                modes = {m: f for m, f in (h.get("modes") or {}).items()
+                         if m in intel.EVASION_MODES and m != "WOBBLE"}
                 if modes and sum(modes.values()) >= 0.4:
                     top = max(modes, key=modes.get)
                     why = (f"evasion held the drive ({top} {100 * sum(modes.values()):.0f}% of the "
