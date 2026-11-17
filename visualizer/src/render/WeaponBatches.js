@@ -546,6 +546,7 @@ export class TorpedoBodies {
     this.pivot = new THREE.Vector3(0, 0, ENGINE.pivot);
     this.tilt = new THREE.Quaternion();
     this.v = new THREE.Vector3();
+    this.s = new THREE.Vector3(1, 1, 1);
   }
 
   instanced(geometry, material, capacity, prev = null) {
@@ -567,15 +568,17 @@ export class TorpedoBodies {
   /**
    * One torpedo: body pose (position + orientation quaternion, +Z nose) and
    * the gimbal deflection as body-local x/y components of the bell tilt
-   * (radians; the bell exit swings toward that side).
+   * (radians; the bell exit swings toward that side). `scale` is the draw
+   * scale (scene km per kit unit, render/Scale.js): the body is modelled
+   * in kit units like the hulls.
    */
-  add(position, quaternion, tiltX = 0, tiltY = 0) {
+  add(position, quaternion, tiltX = 0, tiltY = 0, scale = 1) {
     if (this.mesh.count === this.capacity) {
       this.capacity *= 2;
       this.mesh = this.instanced(this.geometry, this.material, this.capacity, this.mesh);
       this.bell = this.instanced(this.bellGeometry, this.bellMaterial, this.capacity, this.bell);
     }
-    this.pose.compose(position, quaternion, UNIT);
+    this.pose.compose(position, quaternion, scale === 1 ? UNIT : this.s.setScalar(scale));
     const i = this.mesh.count++;
     this.mesh.setMatrixAt(i, this.pose);
     const angle = Math.hypot(tiltX, tiltY);

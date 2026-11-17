@@ -71,6 +71,16 @@ export function resetUnpackState(gl) {
  * (kOf); free-flying effects authored in kit units use kAt(point).
  */
 const SCALE_STORAGE_KEY = 'aic.scaleMode';
+/** Share of the engine's blast radius the reactor fireball fills with real-size hulls. */
+const REACTOR_FIREBALL_SHARE = 0.55;
+/**
+ * Blast radius (km) per class for recordings without reactor_blast events:
+ * the engine's 15 km x sqrt(dry mass / cruiser dry mass) (src/battle_damage.py).
+ */
+const NOMINAL_BLAST_KM = {
+  corvette: 10.6, frigate: 10.6, destroyer: 13, cruiser: 15, cruiser_torpedo: 15, battlecruiser: 15,
+  battleship: 18.4, dreadnought: 21.2, dreadnought_siege: 22.4
+};
 /** Camera limits per regime: [near plane, closest orbit] in km. */
 const CAMERA_LIMITS = { cinematic: [0.2, 1.5], real: [0.0005, 0.012] };
 
@@ -269,7 +279,10 @@ export class SceneManager {
     const before = this.scaleMode;
     this.scaleMode = next;
     this._applyCameraLimits();
-    if (reframe && (before === 'cinematic') !== (next === 'cinematic')) this._rescaleOrbit(before, next);
+    const flip = (before === 'cinematic') !== (next === 'cinematic');
+    if (reframe && flip) this._rescaleOrbit(before, next);
+    // a reactor blast is sized per mode: let the wrecks respawn from their recorded times
+    if (flip) this.clearDestructionEffects();
     if (persist) { try { globalThis.localStorage?.setItem(SCALE_STORAGE_KEY, next); } catch { /* private mode */ } }
     this.updateScale();
     for (const fn of this.scaleListeners) fn(next, before);
@@ -873,13 +886,36 @@ export class SceneManager {
   }
 
   /**
+   * Reach (km) of a ship's reactor blast: the recorded reactor_blast
+   * radius, else (older recordings) the engine's rule for the class.
+   */
+  blastRadiusKm(shipId, shipType) {
+    const b = this.damageFX?.timeline?.blasts?.find(x => x.shipId === shipId);
+    return b?.radius > 0 ? b.radius : NOMINAL_BLAST_KM[shipType] || NOMINAL_BLAST_KM.destroyer;
+  }
+
+  /**
+   * Blast scale (Explosion.js units) of the reactor detonation itself.
+   * Cinematic: the class table, as ever. With real-size hulls the blast is
+   * not a property of the (tiny) hull but of the engine's blast radius:
+   * its lasting fireball fills REACTOR_FIREBALL_SHARE of that radius - the
+   * shell that marks the full reach is BlastShell's - whatever the hull's
+   * draw scale. The blast is drawn at real size (Blast `real`).
+   */
+  reactorBlastScale(shipId, shipType) {
+    if (this.scaleMode === 'cinematic') return this.destructionScale(shipType);
+    const kind = (this.deathInfo || {})[shipId]?.meltdown ? 'meltdown' : 'reactor';
+    return REACTOR_FIREBALL_SHARE * this.blastRadiusKm(shipId, shipType) / blastExtentOver(kind, 1, 2, 6);
+  }
+
+  /**
    * Largest radius (scene units) this ship's death blast visibly draws
    * between two ages after its detonation - what a camera has to fit.
    */
   deathBlastExtent(shipId, fromAge = 0, toAge = 6) {
     const type = this.ships.get(shipId)?.userData?.shipType;
     const kind = (this.deathInfo || {})[shipId]?.meltdown ? 'meltdown' : 'reactor';
-    return blastExtentOver(kind, this.destructionScale(type), fromAge, toAge);
+    return blastExtentOver(kind, this.reactorBlastScale(shipId, type), fromAge, toAge);
   }
 
   createDestructionEffect(position, shipType, currentTime, shipId = null) {
@@ -907,6 +943,7 @@ export class SceneManager {
 
     const eff = new ShipDestruction(this.fxCtx, {
       shipGroup, shipId, position, driftVel, driftDuration, scale, spawnTime,
+      blastScale: this.reactorBlastScale(shipId, shipType),
       meltdown: !!death.meltdown   // reactor_overheat: the brighter detonation variant
     });
     this.destructionEffects.push(eff);
