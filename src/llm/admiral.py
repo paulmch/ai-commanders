@@ -1766,6 +1766,15 @@ Be authentic to how you would command a fleet as {model_name}."""
             engine = h.get("engine_fraction")
             engine = float(getattr(ship, "engine_effectiveness", 1.0)) if engine is None else float(engine)
             held = float(h.get("held_frac") or 0.0)
+            if kind in ("HOLD_RANGE", "INTERCEPT"):
+                # The range controller's own phases: ARRIVE coasts in while the
+                # closure still fits the stop, HOLD sits on the range - idle by
+                # design, though the engine logs the order's throttle as requested.
+                # (Paid battle p5w5_b3: two Darts arriving at 476-486 km of an
+                # ordered 470 were reported 'has not flown your HOLD_RANGE' and the
+                # admiral stopped using HOLD_RANGE for the rest of the battle.)
+                modes = h.get("modes") or {}
+                held = max(0.0, held - sum(float(modes.get(m, 0.0)) for m in ("ARRIVE", "HOLD")))
             if not (replaced or (wants_burn and held >= self.NONCOMPLIANCE_HELD)):
                 streaks.pop(sid, None)
                 continue
