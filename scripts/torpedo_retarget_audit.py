@@ -69,7 +69,7 @@ from src.simulation import (  # noqa: E402
     TorpedoInFlight,
     create_ship_from_fleet_data,
 )
-from src.torpedo import GuidanceMode, Torpedo  # noqa: E402
+from src.torpedo import MIN_CLOSING_SPEED_KPS, GuidanceMode, Torpedo  # noqa: E402
 
 G = 9.81
 
@@ -207,14 +207,21 @@ def orphan_episodes(b: Battle) -> list:
 
 
 def evaluate_step(b: Battle, sim: CombatSimulation, specs, ep: dict, T: float,
-                  tf0: dict, tf1: dict) -> dict:
-    """One engine retarget evaluation: round at frame T, ships at frame T+1."""
+                  tf0: dict, tf1: dict, pd_blind_t: Optional[float]) -> dict:
+    """One engine retarget evaluation: round at frame T, ships at frame T+1.
+
+    Seeker state at the evaluation: PD runs BEFORE _update_torpedoes in a
+    step (a pd_torpedo_disabled event stamped T counts), the reactor blast of
+    a ship killed in step T resolves AFTER it (resolve_pending_blasts), so a
+    blast-blinded round still had its live-seeker attempt in step T if it was
+    listed after the killing round."""
     f1 = b.frames[T + 1.0]
     b.set_ships(sim, f1)
     flight = make_round(specs, _v(tf0['pos']), _v(tf0['vel']), ep['dead_target'],
                         tf0['dv_remaining'], tf1.get('pd_heat_j', 0.0),
                         ep['source'], ep['torpedo_id'])
-    flight.is_disabled = bool(tf1.get('disabled'))
+    flight.is_disabled = bool(tf0.get('disabled')) or (
+        pd_blind_t is not None and pd_blind_t <= T)
     torp = flight.torpedo
     reserve = engine_reserve_kps(sim, torp)
     dead = sim.get_ship(ep['dead_target'])
@@ -235,6 +242,8 @@ def evaluate_step(b: Battle, sim: CombatSimulation, specs, ep: dict, T: float,
             gate = 'reserve'
         else:
             gate = 'ok'
+        crel = cand.position - torp.position
+        cclose = -(cand.velocity - torp.velocity).dot(crel.normalized()) / 1000.0
         a = ship_accel_mps2(sim, cand.ship_id)
         sres = scaled_reserve_kps(reserve, a, t_need)
         reach = (not math.isinf(t_need) and dv_need <= torp.remaining_delta_v_kps
@@ -245,6 +254,10 @@ def evaluate_step(b: Battle, sim: CombatSimulation, specs, ep: dict, T: float,
             't_s': None if math.isinf(t_need) else round(t_need, 1),
             'dv_need': None if math.isinf(dv_need) else round(dv_need, 3),
             'can_intercept': ok, 'fuel_left': round(left, 3) if ok else None,
+            'closure_kps': round(cclose, 2),
+            # the COLLISION guidance's cruise floor: below MIN_CLOSING_SPEED_KPS
+            # it burns the difference along the LOS before anything else
+            'floor_deficit': round(max(0.0, MIN_CLOSING_SPEED_KPS - cclose), 3),
             'gate': gate,
             'ok_reserve0': reach,
             'scaled_reserve': round(sres, 3),
@@ -267,6 +280,15 @@ def evaluate_step(b: Battle, sim: CombatSimulation, specs, ep: dict, T: float,
 def audit(b: Battle, max_steps: int = 120) -> list:
     """Every orphan episode, evaluated from the death step until the round
     retargets, is blinded, leaves, or max_steps ticks pass."""
+    pd_blind = {}
+    for e in b.events:
+        if e.get('event_type') == 'pd_torpedo_disabled':
+            pd_blind.setdefault(e['data']['torpedo_id'], e['timestamp'])
+    blast_blind = {}
+    for e in b.events:
+        if e.get('event_type') == 'reactor_blast':
+            for tid in e['data'].get('torpedoes_blinded', []):
+                blast_blind.setdefault(tid, e['timestamp'])
     retargets = {}
     for e in b.events:
         if e.get('event_type') == 'torpedo_retargeted':
@@ -302,16 +324,59 @@ def audit(b: Battle, max_steps: int = 120) -> list:
                 break
             if tf0['target'] != ep['dead_target']:
                 break  # retargeted in an earlier step
-            ev = evaluate_step(b, sim, specs, ep, T, tf0, tf1)
+            ev = evaluate_step(b, sim, specs, ep, T, tf0, tf1,
+                               pd_blind.get(ep['torpedo_id']))
             steps.append(ev)
-            if ev['disabled'] or tf1['target'] != ep['dead_target']:
+            if ev['disabled'] or tf1['target'] != ep['dead_target'] or tf1.get('disabled'):
                 break
             T += 1.0
         ep = dict(ep)
         ep['recorded_retarget'] = rt
         ep['end'] = ends.get(ep['torpedo_id'])
+        ep['pd_blinded_t'] = pd_blind.get(ep['torpedo_id'])
+        ep['blast_blinded_t'] = blast_blind.get(ep['torpedo_id'])
+        ep['summary'] = summarize(ep, steps)
         ep['steps'] = steps
         out.append(ep)
+    return out
+
+
+def summarize(ep: dict, steps: list) -> dict:
+    """Why the round did (not) retarget, over every live-seeker attempt."""
+    live = [s for s in steps if not s['disabled']]
+    out = {'live_attempts': len(live)}
+    if ep.get('recorded_retarget'):
+        out['outcome'] = 'retargeted'
+    elif not live:
+        out['outcome'] = 'blind_before_first_attempt'
+    else:
+        out['outcome'] = 'no_retarget'
+    if not live:
+        return out
+    gates = [c['gate'] for s in live for c in s['candidates']]
+    # The gate that stood between the round and its BEST candidate: reserve if
+    # any candidate was reachable but for the reserve, else the tank (dv), etc.
+    for g in ('ok', 'reserve', 'dv', 'time', 'no_solution'):
+        if g in gates:
+            out['binding_gate'] = g
+            break
+    best = None
+    for s in live:
+        for c in s['candidates']:
+            if c['dv_need'] is None:
+                continue
+            margin = s['dv'] - c['dv_need']
+            if best is None or margin > best[0]:
+                best = (margin, s['T'], c['ship'], c['dv_need'], s['dv'],
+                        c['floor_deficit'])
+    if best:
+        out['best_margin_kps'] = round(best[0], 3)
+        out['best'] = {'T': best[1], 'ship': best[2], 'dv_need': best[3],
+                       'dv': best[4], 'floor_deficit': best[5]}
+    out['reachable_r0_any_step'] = any(c['ok_reserve0'] for s in live
+                                       for c in s['candidates'])
+    out['engine_pick_any_step'] = next((s['engine_pick'] for s in live
+                                        if s['engine_pick']), None)
     return out
 
 
@@ -360,44 +425,37 @@ def fly(b: Battle, ep: dict, T: float, cand_id: str, burn: bool = False,
     }
 
 
-def first_step_table(audited: list) -> list:
-    rows = []
-    for ep in audited:
-        if not ep['steps']:
-            continue
-        s0 = ep['steps'][0]
-        rows.append((ep, s0))
-    return rows
-
-
 def print_report(audited: list) -> None:
+    """Per orphan episode: the first live-seeker attempt in full, then the
+    summary over every attempt until the round left / was blinded."""
     for ep in audited:
         steps = ep['steps']
         if not steps:
             continue
-        s0 = steps[0]
+        sm = ep['summary']
+        s0 = next((s for s in steps if not s['disabled']), steps[0])
         rt = ep['recorded_retarget']
         tag = (f"RETARGETED {rt[0][2]} @T+{rt[0][0]:.0f}" if rt else
-               ('BLIND' if s0['disabled'] else 'NO RETARGET'))
+               sm['outcome'].upper())
+        blinds = []
+        if ep.get('pd_blinded_t') is not None:
+            blinds.append(f"PD-blinded T+{ep['pd_blinded_t']:.0f}")
+        if ep.get('blast_blinded_t') is not None:
+            blinds.append(f"blast-blinded T+{ep['blast_blinded_t']:.0f}")
         print(f"\n{ep['torpedo_id']}  dead={ep['dead_target']} @T+{ep['t_death']:.0f}"
               f"  dv={s0['dv']:.2f}  heat={s0['heat_frac']:.2f}  reserve={s0['reserve']:.2f}"
               f"  {s0['dist_dead_km']:.0f} km / {s0['s_to_dead']} s to dead target"
-              f"  -> {tag}; engine replay pick: {s0['engine_pick']}  end={ep['end']}")
+              f"  -> {tag}  {' '.join(blinds)}")
+        print(f"    replay pick at first attempt: {s0['engine_pick']}; live attempts "
+              f"{sm['live_attempts']}; binding gate {sm.get('binding_gate')}; "
+              f"best margin {sm.get('best_margin_kps')} ({sm.get('best')}); "
+              f"reachable at reserve 0 on any attempt: {sm.get('reachable_r0_any_step')}; "
+              f"end={ep['end']}")
         for c in s0['candidates']:
             print(f"    {c['ship']:8s} {c['class']:13s} {c['range_km']:7.1f} km  t={c['t_s']}"
                   f"  needs {c['dv_need']}  can_int={c['can_intercept']}  left={c['fuel_left']}"
-                  f"  gate={c['gate']}  r0={c['ok_reserve0']}  scaled({c['scaled_reserve']})={c['ok_scaled']}")
-        # later steps: did anything change?
-        later = [s for s in steps[1:] if any(c['gate'] == 'ok' for c in s['candidates'])
-                 or s['engine_pick']]
-        if later:
-            print(f"    later step T+{later[0]['T']:.0f}: pick={later[0]['engine_pick']}")
-        best_r0 = None
-        for s in steps:
-            if any(c['ok_reserve0'] for c in s['candidates']):
-                best_r0 = s['T']
-                break
-        print(f"    steps evaluated: {len(steps)}; first step any candidate reachable at reserve 0: {best_r0}")
+                  f"  gate={c['gate']}  closure={c['closure_kps']} (floor +{c['floor_deficit']})"
+                  f"  r0={c['ok_reserve0']}  scaled({c['scaled_reserve']})={c['ok_scaled']}")
 
 
 def main() -> None:
