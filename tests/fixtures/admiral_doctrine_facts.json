@@ -1,6 +1,6 @@
 {
  "about": "Seeded heuristic battles behind the admiral doctrine GUN EXCHANGE / FACING / TORPEDO DEFENCE tables (src/llm/prompts.py), bound by tests/test_doctrine_accuracy.py::TestMeasuredExchangeDoctrine. Regenerate with the commands below and update the doctrine numbers when an engine change moves them.",
- "engine_commit": "e25452f",
+ "engine_commit": "e0d1007",
  "commands": [
   "OMP_NUM_THREADS=1 uv run python scripts/admiral_doctrine_facts.py guns --seeds 1 2 3 4 5 6 7 8 --jobs 10 --out OUT",
   "OMP_NUM_THREADS=1 uv run python scripts/admiral_doctrine_facts.py torpedo --seeds 1 2 3 --distances 500 1000 --attackers torpedo_boats torpedo --jobs 12 --out OUT",
