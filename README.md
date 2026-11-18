@@ -99,9 +99,9 @@ Each of the nine hull classes has its own design, drawn to scale in faction live
 
 *It lights its engine only once it is clear, typically 4 to 5 s after launch; the round from the cell facing away from the target turns about first and lights later.*
 
-![The cruiser small at left, the salvo's torch trails running side by side toward the target](docs/images/readme/launch-tracks.png)
+![A torpedo cruiser under thrust, three torpedoes pulling away from it on parallel engine trails and a fourth just lighting its engine off the stern](docs/images/readme/launch-tracks.png)
 
-*Seconds later the salvo is a set of parallel tracks running at the target.*
+*Four tracks out of one ship: three rounds of a four-cell launch pull away on their engines, while the fourth, from the cell facing away from the target, lights two seconds later.*
 
 ![A corvette with a torpedo drifting off its port rail, the rack one round short](docs/images/readme/launch-rail.png)
 

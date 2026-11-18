@@ -36,7 +36,7 @@ filters/scrolling, and for `command-net.png` a 2× device-scale crop.
 | `launch-cells.png` | Launch showcase | 31.0s | One second into the four-cell salvo: four units ~10 m off their open cells on the dorsal, ventral and flank banks, drifting out with the push-off; 1.0 hull lengths, azimuth 40°, elevation 37°; HUD hidden; scale auto |
 | `launch-separation.png` | Launch showcase | 32.5s | The separation: the four units tens of metres out, RCS puffs firing as they push clear and swing their noses toward the target; 1.3 hull lengths, azimuth 40°, elevation 37°; HUD hidden; scale auto |
 | `launch-ignition.png` | Launch showcase | 35.08s | Two units lighting their torches (light-off flash and ring) 94 m off the hull, the round lit at 34 s already streaking away (lower right), the fourth still separating; 1.6 hull lengths, azimuth 60°, elevation 20°; HUD hidden; scale auto |
-| `launch-tracks.png` | Launch showcase | 39.0s | Two to five seconds after their torches lit: the salvo's trails running side by side toward the target, the cruiser at left; 25 hull lengths, azimuth 10°, elevation 20°, 25° lens; HUD hidden (the arrowheads are the 3D torpedo markers, not HUD); scale auto |
+| `launch-tracks.png` | B8: Opus 5.5 admiral vs Sonnet 5.5 admiral, Haiku captains (`p5w5_b8_opus_v_sonnet55_admirals_haiku_captains.json`) | 37.4s | `alpha_1` TIS Harpoon (torpedo cruiser, under thrust) 7.4 s after a four-cell launch at T+30: three units lit at 35 s pulling away on parallel engine trails, the fourth (from the cell facing away, lit at 37 s) just off the stern with its light-off ring; explicit camera 0.7 km from the cruiser, 60° above the battle plane and tilted 30° aft, 40° lens; HUD hidden and the fleet-range torpedo arrowheads switched off for the shot (`markers.add`); scale auto |
 | `launch-rail.png` | Pass-5 launch demo (`p5_launch_sequence_demo.json.gz`, regenerated) | 0.8s | The corvette `beta` 0.8 s after a rail launch: the unit drifting off its port rail, the rack one round short; 1.0 hull lengths, azimuth 50°, elevation -30°; HUD hidden; scale auto |
 | `plume-wash.png` | Pass-5 plume demo (`p5_plume_demo.json`, scripted `plume_wash` battle) | 62s | From beside the stern of the battleship `alpha_1` (lower left, torch lit) down its exhaust: one beam from the bells, fading with distance, to the destroyer `alpha_2` 6 km astern, glowing in the wash; camera 1.1 hull lengths ahead of the battleship's centre, 0.5 above, 1.5 to port, looking 14 lengths astern; HUD hidden; scale auto |
 | `damage-bow.png` | Sonnet 5 vs Sonnet 5.5, battle d | 297.6s | Bow of `alpha_1` (Sonnet 5's battlecruiser) after 35 nose hits, 8 of them penetrations (the last at 297 s), all five mounts wrecked; its magazine burns at 298 s. Camera 0.66 hull lengths ahead of the centre, 0.2 above, 0.3 to port, looking at the bow; HUD hidden; scale auto |
@@ -108,6 +108,7 @@ staged.
 - Pass-5 damage demo: `p5_damage_demo.json`, a seeded heuristic fleet battle
   (regeneration command in
   [`docs/pass-5-recording-additions.md`](../../pass-5-recording-additions.md))
+- B8: `p5w5_b8_opus_v_sonnet55_admirals_haiku_captains.json` (Opus 5.5 admiral vs Sonnet 5.5 admiral, Haiku captains, on the final pass-5 build)
 - Pass-5 launch demo: `p5_launch_sequence_demo.json.gz` (`scripts/generate_test_battle.py torpedo_strike`,
   also in `data/recordings/`)
 - Launch showcase: `p5_plume2_launch_showcase.json.gz` (`scripts/generate_test_battle.py launch_showcase`,
@@ -201,8 +202,9 @@ $SNAP --recording p5_plume2_launch_showcase.json.gz --time 32.5 --focus alpha --
   --hide-ui --eval "$TRACKS_OFF" --out launch-separation.png
 $SNAP --recording p5_plume2_launch_showcase.json.gz --time 35.08 --focus alpha --dist 1.6 --az 60 --el 20 \
   --hide-ui --eval "$TRACKS_OFF" --out launch-ignition.png
-$SNAP --recording p5_plume2_launch_showcase.json.gz --time 39.0 --focus alpha --dist 25 --az 10 --el 20 --hide-ui \
-  --eval "(() => { $TRACKS_OFF; const c = window.visualizer.scene.camera; c.fov = 25; c.updateProjectionMatrix(); })()" \
+$SNAP --recording p5w5_b8_opus_v_sonnet55_admirals_haiku_captains.json --time 37.4 \
+  --camera=-309.422,-0.061,0.606 --target=-309.422,0.289,0 --hide-ui \
+  --eval "(() => { const v = window.visualizer; $TRACKS_OFF; v.scene.weapons.markers.add = () => {}; const c = v.scene.camera; c.fov = 40; c.updateProjectionMatrix(); })()" \
   --out launch-tracks.png
 $SNAP --recording p5_launch_sequence_demo.json.gz --time 0.8 --focus beta --dist 1.0 --az 50 --el -30 \
   --hide-ui --eval "$TRACKS_OFF" --out launch-rail.png
