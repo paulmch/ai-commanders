@@ -134,6 +134,78 @@ self-play the torpedo-heavy rosters now mostly end in mutual surrender once both
 stalling at zero closure between 81 and 245 km, a withdrawal order that was not flown under fire,
 a disarmed ship fleeing until the time limit); all were addressed.
 
+### The flank experiment, and the default it produced (`src/llm/heuristic_flank.py`)
+
+The owner asked whether a split / pincer beats the static nose-on wall the LLM fleets fly. The
+experiment (`scripts/flank_experiment.py`: mirror or asymmetric rosters, both side assignments,
+hit facing, flanker costs by phase, closest approach) answered it on the current engine (weapon
+arcs, rotation with angular momentum, evade-on-burn, torpedo datalink, first checkpoint at T+0):
+
+- A plain wall (close at <= 0.8 km/s to 140 km, then PADLOCK the nearest armed enemy) is no
+  longer stronger than the previous default ("classic": focus fire, nose-first passes): on
+  tuning seeds classic beat it on battleship lines (battleline 12/1/3, combined 14/2/0, escort
+  9/4/3) and lost on fast lines and dreadnought lines (gunline 5/1/10, core_fast 3/5/8,
+  dread_fast 2/4/10).
+- Every cut-corner pincer (fast hulls wide at 45/70/90 degrees off the enemy's facing, station
+  80-150 km, heavies holding as a wall at 230 km until the attack run) beat the wall 16/0/0 on
+  the dreadnought rosters and was mixed or lost elsewhere. A dreadnought needs ~50 s per 90
+  degrees and rolls slowly: it cannot re-face a flanker in time, and a lateral hit penetrates
+  10-60 times as often as a nose hit (0.6 vs 0.01-0.06 per hit on those rosters). Battleships
+  (37 s per 90 degrees) and anything faster re-face in time. 70 degrees at 150 km killed 100 for
+  23 losses over 32 battles (110 km 93-48, 80 km 86-51, 250 km outside the guns 55-17 with far
+  fewer kills). Positioning outside the guns is nearly free (0-60 hits per 24 battles) but
+  slow (frigates ~210-240 s, destroyers ~260-300 s to the bearing), so the wall re-faces anyway.
+- The two-axis torpedo strike (boats on two bearings 70 degrees apart) no longer pays with the
+  torpedo datalink: split v classic 4/0/12 on the torpedo roster. It stays an option.
+
+The default ("tactical") therefore picks one plan per fleet at its first checkpoint from the two
+compositions (mirror battles choose the same plan and the same split on both sides; flat-RNG
+mirror probes stay exact mirror images, equal scores, for the wall, close-and-pass and pincer
+rosters): close-and-pass against a torpedo fleet when it is a gun fleet (a wall closing at
+0.8 km/s lost 2/1/21 to legacy torpedo boats where close-and-pass won 14/2/8), the pincer
+against a dreadnought line (>= 30 % of the enemy's gun energy on hulls <= 0.9 g) when it has 2+
+fast hulls, close-and-pass against a battleship line (>= 50 % on hulls <= 1.05 g), the wall
+otherwise. Once the evade overlay burned through flips (`pass-5` 9b645f4) legacy's charging
+dreadnought line beat the pincer 13 of 24 on held-out seeds, so the pincer is called off for
+close-and-pass (announced on the FLEET NET) when the fleets close at more than 2 km/s - the
+enemy gun line against our fleet centre, both fleets' motion - before the flankers are on
+station (tuning seeds: against legacy 23/0/9 -> 27/1/4, against the wall 32/0/0 kept; at
+3 km/s it also fired but left legacy at 23/0/9). Counting the enemy's motion alone kept
+classic and the wall where they were but lost the gain against legacy (tuning seeds on the
+launch-sequence engine: 18/3/11 against 30/0/2). `classic`, `legacy` (bit for bit) and the fixed variants stay selectable.
+
+Re-measured on the final engine (evade burns through flips, torpedo launch sequence), the
+thresholds sweep on tuning seeds 1-4 left every other threshold where it was: every pincer
+geometry still beat the wall 16/0/0 on the dreadnought rosters, 70 degrees at 150 km still had
+the best exchange (98-24), and classic against the wall was unchanged on the battleship and
+fast lines. Held-out seeds 21-26 (24 battles per cell: 2 budgets x 6 seeds x both sides),
+new default (A) against:
+
+| roster (family) | v wall | v classic | v legacy | v itself | classic v legacy |
+|---|---|---|---|---|---|
+| flagship (dreadnought) | 24/0/0 | 21/2/1 | 21/1/2 | 9/6/9 | 24/0/0 |
+| dread_fast (dreadnought) | 20/3/1 | 20/0/4 | 24/0/0 | 8/8/8 | 18/4/2 |
+| battleline (battleship) | 21/0/3 | 8/8/8 (same plan) | 9/5/10 | 8/8/8 | 9/5/10 |
+| combined (battleship) | 17/7/0 | 4/16/4 (same plan) | 24/0/0 | 4/16/4 | 24/0/0 |
+| escort (battleship) | 15/5/4 | 8/8/8 (same plan) | 15/2/7 | 8/8/8 | 15/2/7 |
+| gunline (fast) | 9/6/9 (same plan) | 10/3/11 | 8/2/14 | 9/6/9 | 4/8/12 |
+| core_fast (fast) | 11/7/6 | 11/9/4 | 7/7/10 | 7/10/7 | 7/6/11 |
+| torpedo mirror | 6/12/6 | 16/3/5 | 24/0/0 | 6/12/6 | 24/0/0 |
+| torpedo against gun (A torpedo) | 24/0/0 | 24/0/0 | 24/0/0 | 24/0/0 | 24/0/0 |
+| gun against torpedo (A gunline) | 0/0/24 | 0/0/24 | 14/0/10 | 0/0/24 | 14/0/10 |
+| **total** | 147/40/53 | 122/49/69 | 170/17/53 | 83/74/83 | 163/25/52 |
+
+Fresh seeds 31-36, an A gun fleet against legacy's torpedo fleet: gunline 12/0/12, core_fast
+13/0/11, flagship 8/1/15; against the current torpedo boats every gun fleet loses 0/0/24,
+whatever its plan - the torpedo-vs-gun balance, not a doctrine choice.
+
+Where the default is worse than what it replaces: on the battleship and fast lines it is no
+better than classic against legacy (gunline 8/2/14 v 4/8/12, battleline 9/5/10 the same plan),
+on the flagship roster it is a little weaker than classic against legacy (21/1/2 v 24/0/0,
+and it loses more ships: kills 36-54 v 67-6) though it beats classic itself 21/2/1, and on
+dread_fast it lost one battle of 24 to the plain wall (20/3/1). Overall it beats the wall, beats
+classic and is level with classic against legacy (170/17/53 v 163/25/52).
+
 ### Engine defects found by invariant checks
 
 Thirteen seeded battles were checked against the engine's own rules. Six confirmed defects were
@@ -517,7 +589,105 @@ usage and the price table, not reconciled against the provider's invoice. Both m
 about weapon arcs ("keep nose-on alignment during the burn so spinals stay unmasked"); neither
 mentioned the plume, the interlock or crew state, and the recordings show why: every friendly
 wash stayed under the interlock's 0.5 GJ/s limit. The recordings are in
-`data/recordings/p5_sonnet_battles_20261116/` (65 MB, not committed).
+`data/recordings/p5_sonnet_battles_20261116/`.
+
+## The command interface, rebuilt from the recorded battles
+
+Three read-only audits of the four Sonnet battles above (1,049 captain turns, 1,228 admiral
+calls; every prompt is stored verbatim in the recordings) found that most weaknesses were in what
+commanders were told, not in doctrine:
+
+- **Nobody talked sideways.** Zero `fleet_signal`, `send_message` or `discuss_with_admiral` calls;
+  13 reports up the chain. With an admiral fixing target, maneuver and salvo each checkpoint, and
+  a peer's message arriving one checkpoint late, there was nothing left to coordinate.
+- **Captains under an admiral execute.** They took the ordered target in 741 of 775 target calls;
+  about 40 % of turns changed nothing. The static nose-on PADLOCK wall was ordered by the admiral
+  (87 % of Sonnet 5.5's orders), and the prompts sold it ("recommended", the only option line
+  with no stated cost).
+- **The turn stated things that were false or missing:** a burn that did not happen was always
+  blamed on "turning onto the burn line, or fuel/engine limited" (39 turns; the cause was evasion
+  or a dead drive); a dead drive was shown by omission; turrets "fire over a 180 deg arc"; a
+  merge "achieves nothing"; "guns reach 900 km (IN RANGE)" where the measured hit rate is 26 %.
+- **Sonnet 5.5 at medium effort did not think:** zero thinking tokens on 638 of 639 admiral
+  calls. Replaying 20 recorded turns on identical state (`scripts/replay_turn.py`): medium drafted
+  10 hulls against a cap of 8 in 8 of 9 tries and misread a retreat order 9 of 9; high was 9 of 9
+  valid and 9 of 9 correct, at the same cost.
+
+What changed, on the owner's standing rule (accurate state, no prescribed tactics):
+
+- **Captain turn:** helm feedback names the real cause and the seconds burned; dead and damaged
+  drives are stated; the captain sees the engine's verdict on its last turn and can attach a
+  reason to an action; a copy of the applied order is compliance and keeps the formation burn; a
+  bad optional field no longer drops a call (a quoted `HOLD_FIRE` used to become fire-at-will);
+  range-control notes come from the real arcs; every option line carries the same fields; peers'
+  ordered targets and engine-known threats to a fleet-mate are shown; the turn is 16-21 % smaller
+  when an admiral order is already flying; each faction has its own ship names.
+- **Admiral turn:** doctrine facts are measured on the current engine by seeded grids and bound by
+  tests (gun exchange by range, penetration by facing, crossfire geometry, torpedo defence);
+  enemy facing on every row; the battle clock; the time-limit score line (on by default); a
+  torpedo-defence line per targeted ship from an engine forecast; salvos allocated once on the
+  directive; a draft whose error echoes the rejected fleet and which is trimmed, not aborted,
+  after three invalid tries; draw offers as a recorded exchange; repeated non-compliance raised
+  with the engine's reason.
+- **Runner:** effort per role and side, with defaults per model (high for Sonnet 5.5, Opus 5.5
+  and Fable 5.2); captain model separate from the admiral's; thinking summaries recorded; a
+  dollar cap and a cumulative ledger on every paid script; an interrupt stops spending and closes
+  the ledger; scripts refuse to start without explicit models (`--require-provider`); first
+  checkpoint at T+0; sequential captains for a side without an admiral (each sees what the
+  captains before it did this checkpoint; order by ship id, rotated); experiment modes
+  (`--rosters`, `--no-admiral`, `--intent-only`, heuristic captains, `--quiet-turns`,
+  `--cache-warmup`).
+- **Admiral's tactical plot** redesigned (oriented hull glyphs with facing tags, next-checkpoint
+  ghosts, torpedo waves per target with ETA, closest approach, merge zoom, side-view strip; fixed
+  1280x720). A 90-call replay with the old plot, the new plot and no plot gave the same orders on
+  all five checkpoints; it is kept for spectators and stays optional for models.
+
+### Seven battles on the rebuilt interface (November 17-18, 2026)
+
+150-point drafts unless noted, 20 checkpoints, recordings under `data/recordings/p5w5_*`.
+
+| Battle | Setup | Result | Cost |
+|---|---|---|---|
+| B1 | Sonnet 5.5 (high) v Sonnet 5, no score line | draw 153.7-152.9, both fleets sat at 500 km | $7.77 |
+| B2 | same fleets and seed, score line shown | Sonnet 5.5 wins 266.3-102.6, a real fight | $6.91 |
+| B3 | Opus 5.5 admiral over Haiku 5.5 captains v Sonnet 5.5 | Opus side wins 388.5-14.0 (torpedo swarm, no loss) | $6.79 |
+| B4 | Opus admiral over Haiku captains, both sides | 332.7-34.5; both used the reserve profile | $6.03 |
+| B5 | B2 again on the final evade engine | Sonnet 5.5 wins 259.8-166.9 (attacker lands 3x the hits) | $8.69 |
+| B6b | B5 with intent-only admirals | Sonnet 5.5 wins 227.0-135.0; 36 % cheaper | $5.56 |
+| B7 | Opus captains, no admiral, 4 v 4, 80 points | 30 captain messages on the fleet net in 8 checkpoints | $2.96 |
+
+What they showed: commanders who know the clock but not the score wait (B1 against B2); a strong
+admiral over cheap captains is the best value (all 160 Haiku captain turns of B3 cost $0.14);
+per-ship orders cost a third of a battle for little (B5 against B6b); captains coordinate through
+the admiral when there is one and through the fleet net when there is none (B7: target claims,
+overkill calls, timed salvos, cover requests), and in the latter case all deciding at the same
+instant made two ships fire at the same target at the first checkpoint, which the sequential
+order now prevents. One battle (`p5w5_b6_intent_only`, GLM 5.3 Flash against GPT-5.6 Luna, $0.09
+on OpenRouter) was started by a shell quoting error without its arguments; the scripts' model
+defaults that allowed it are gone. Total paid: $56.38 including replays.
+
+## Torpedoes: profiles, a datalink, and what happens at launch
+
+Tracing the 40 rounds of B3: 28 lost their target in flight, 8 retargeted, 15 with a live seeker
+never did. The old rule's reach test priced only the sideways steer while the guidance then burnt
+back up to cruise speed, so accepted retargets arrived dry and missed; ties went by insertion
+order; rounds kept homing on dying hulks (13 % of impacts in 70 seeded battles); the prompt
+promised "retarget the nearest".
+
+- **Launch profiles** (`src/torpedo.py`): `sprint` (default, unchanged) and `reserve` (cruise at
+  8 km/s closure and keep the tank for a reassignment; it burns what is left before impact).
+  Reserve lands more rounds per launch and kills fewer hulls; point defence blinds 34 % of its
+  rounds against 26 % of sprint's.
+- **Datalink** (`src/torpedo_link.py`): when a target dies, becomes a hulk or surrenders, its
+  rounds are reassigned as a group against one shared rounds-needed board (the same board the
+  captain's OVERKILL line and the admiral's economy read); surplus reserve rounds may divert
+  early, in whole strikes only and never below what kills the original target; the gate includes
+  burn time; commanders get a RETASK notice. Worth about 2.4 % more kills and 26 % fewer wasted
+  rounds for sprint fleets. `AIC_TORPEDO_DATALINK=0` reproduces the old engine bit for bit.
+- **Launch sequence**: described in the section above. A crab-angle light-off that keeps the main
+  thrust along the nose is built on branch `wt5/launchseq` and is NOT merged (see Open).
+
+Torpedo fleets still beat gun fleets in every battle, whatever the gun fleet flies.
 
 ## Open
 
@@ -527,6 +697,24 @@ wash stayed under the interlock's 0.5 GJ/s limit. The recordings are in
   orders were never flown). The tests that pinned the old schedule now pin the new one; seeded
   event streams, `LEGACY_GOLDEN_SHA256` and the perf golden moved with it. Recordings carry
   `first_checkpoint_s: 0`; older ones (first decision at T+30) still replay.
+- **Physical drift cancel at torpedo light-off (parked, branch `wt5/launchseq`).** The crab-angle
+  light-off works and its own tests pass, but three tests fail with it: a still battleship behind
+  eight escorts is hit by 1 of 6 rounds where it was 6, escort-wall leakage is no longer
+  monotonic, and a round short of fuel accepts a retarget. Zeroing the crab angle restores all
+  three. Not traced; the working explanation (unverified) is that the old instant cancel put a
+  round on an exact collision course from the first second, while the crab leaves about 0.2 m/s
+  and a few metres of offset that only the terminal burn corrects, so a round blinded in cruise
+  now coasts past a hull that is a few tens of metres across. `pass-5` keeps the instant cancel,
+  paid from the round's delta-v.
+- **Torpedo price.** The owner chose to raise `TORPEDO_POINTS_PER_GJ` to about 0.083; at 0.083
+  the corvette still costs 24 points and the torpedo cruiser 102, above the pinned "draftable at
+  100 points" rule, so it was not applied. The draft tournament cache is stale.
+- **Rule-based captains.** The new default is about even with `classic` on fast-hull and
+  battleship fleets; its gain is against dreadnought lines. A gun fleet loses every battle to the
+  torpedo boats under any doctrine.
+- **Perf reference timings** were kept from a quiet run; only the hashes were re-recorded.
+- **Untested on real models:** sequential captains, the surrender rule, the burn-through flip
+  and the launch sequence landed after the last paid battle.
 - **Plume.** An impaired crew's "slower response" is not built (only slower weapon cycling). The
   formation throttle matching does not know about the interlock, so a held lead falls behind
   unless its captain side-slips. The doctrine text does not mention the interlock.

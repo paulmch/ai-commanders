@@ -3060,7 +3060,7 @@ HOW POINT DEFENSE ACTUALLY WORKS:
 - PD BLINDS torpedoes (seeker kill); the dead round then coasts in a straight line and
   hits only a hull whose path that line crosses - one flying straight at it. Measured
   (6-round salvos launched 1200 km out): 18/18 blinded rounds hit a non-evading
-  battleship behind 8 escorts; the same attack on an evading one landed 9/18. A ship
+  battleship behind 8 escorts; the same attack on an evading one landed 16/18. A ship
   with torpedoes INBOUND (see ORDNANCE) that does not EVADE is still hit by the rounds
   PD blinded; one that EVADEs dodges dead rounds and turns its nose (thickest armor)
   onto live ones - with the evade field on a burning order, only as far as its swing cone
@@ -3081,28 +3081,28 @@ FORMATIONS FOR PD (what actually moves the numbers):
   rings at 15, 30 and 120 km measured identically. Place escorts anywhere inside
   laser range of the axis the torpedoes come down; don't micro-manage spacing.
 - Returns need mass AND time: vs a 6-round simultaneous salvo launched 1200 km out, an
-  evading battleship leaked 18/18 alone, 18/18 with 4 destroyer escorts, 9/18 with 8.
-  Launched 450 km out (~70 s of flight) it leaked 18/18 alone, 17/18 behind 4 and 8/18
-  behind 8: a 1g hull cannot turn away to run and back in time, so it holds its nose
-  armour on the salvo, and the escorts blind the rounds only in the last ~10 s - too late
-  to dodge. Survival still follows the wall: alone the battleship died in 3 of 3 runs at
-  either range, behind 4 escorts in 1 of 3 (1200 km) and none (450 km), behind 8 in none
-  at either range. 4 escorts stopped almost no round -
+  evading battleship leaked 18/18 alone, 18/18 with 4 destroyer escorts, 16/18 with 8.
+  Launched 450 km out (~70 s of flight) it leaked 18/18 even behind 8: a 1g hull cannot
+  turn away to run and back in time, so it holds its nose armour on the salvo, and the
+  escorts blind the rounds only in the last ~10 s - too late to dodge. Survival
+  still follows the wall: alone the battleship died in 3 of 3 runs at either range,
+  behind 4 escorts in 3 of 3 (1200 km) and 1 of 3 (450 km), behind 8 in 1 of 3
+  (1200 km) and none (450 km). 4 escorts stopped no round -
   concentrate the fleet or accept the hits.
 - The wall only protects ships that EVADE inside it (see blinding, above).
 
 TORPEDO DEFENCE, MEASURED (seeded runs on this engine: a 4 battlecruiser + 2 destroyer +
 2 frigate gun wall against 5 corvettes + 3 frigates = 40 rounds, the wall's posture fixed
 from the first checkpoint; per battle, 3 seeds each):
-- start 500 km: nose-on PADLOCK - 80% of rounds hit (nearly all on the nose, ~13.8 km/s, ~24 GJ
-  each), 7 of 8 hulls lost; burning straight away - 44% hit (all on the TAIL, ~12.6 km/s,
-  ~19 GJ), 6 of 8 lost; the same burn with evade full - 46% hit, 6 of 8 lost (on the
+- start 500 km: nose-on PADLOCK - 78% of rounds hit (nearly all on the nose, ~13.8 km/s, ~24 GJ
+  each), 7 of 8 hulls lost; burning straight away - 46% hit (all on the TAIL, ~12.6 km/s,
+  ~19 GJ), 6 of 8 lost; the same burn with evade full - 48% hit, 6 of 8 lost (on the
   tail and flank: the overlay keeps the burn and turns no nose round); charging
-  (INTERCEPT) - 72% hit (~14.6 km/s, ~27 GJ), 8 of 8 lost. First loss ~75 s in each
+  (INTERCEPT) - 75% hit (~14.7 km/s, ~27 GJ), 8 of 8 lost. First loss ~75 s in each
   (rounds launched at the first checkpoint, at battle start).
-- start 1000 km: nose-on - 69% hit, 8 of 8 lost (first at ~265 s); burning away - 37%
-  hit, 5 of 8 lost (first at ~285 s); charging - 53% hit, 2 of 8 lost. The wall killed
-  1.3 boats per battle charging, 1.0 nose-on, 0 burning away.
+- start 1000 km: nose-on - 73% hit, 8 of 8 lost (first at ~265 s); burning away - 36%
+  hit, 5 of 8 lost (first at ~285 s); charging - 63% hit, 5 of 8 lost. The wall killed
+  2.3 boats per battle charging, 0 nose-on, 0 burning away.
 - Burning away lowers impact speed a little and leaves more rounds blinded or dry; the
   rounds that still hit land on the thin tail. Closing raises impact energy and shortens
   the boats' launch window. Neither side of that trade is free.
@@ -3204,14 +3204,14 @@ GUNNERY:
 GUN_EXCHANGE_BATTLES = 160
 GUN_EXCHANGE_BUDGET = 150
 GUN_EXCHANGE_BANDS = (
-    ("0-50", 69, 0.24, 17),
-    ("50-100", 63, 0.25, 22),
-    ("100-150", 50, 0.34, 20),
-    ("150-200", 43, 0.47, 20),
-    ("200-300", 37, 0.31, 16),
-    ("300+", 27, 0.22, 5),
+    ("0-50", 71, 0.25, 15),
+    ("50-100", 63, 0.25, 19),
+    ("100-150", 51, 0.30, 20),
+    ("150-200", 43, 0.44, 23),
+    ("200-300", 36, 0.35, 19),
+    ("300+", 26, 0.17, 4),
 )
-GUN_EXCHANGE_INSIDE_150_PCT = 59
+GUN_EXCHANGE_INSIDE_150_PCT = 54
 
 
 def measured_hit_rate(range_km: float) -> Tuple[str, int]:
@@ -3245,13 +3245,13 @@ FACING_SPINAL_HITS_TO_KILL = (
 )
 # Seeded battles, all guns pooled: (class, nose pen %, nose hull GJ/hit, flank pen %,
 # flank hull GJ/hit). Only classes whose nose-vs-flank order held under BOTH
-# heuristic doctrines separately: the battleship's swung from nose 1% (legacy)
-# to 37% (tactical) penetration, above its flank's 21%, and is left out.
+# heuristic doctrines separately: the battleship's swung from nose 2% (legacy)
+# to 35% (tactical) penetration, above its flank's 18%, and is left out.
 FACING_MEASURED = (
-    ("battlecruiser", 16, 0.17, 41, 0.45),
-    ("destroyer", 9, 0.08, 39, 0.49),
-    ("frigate", 25, 0.39, 60, 0.71),
-    ("dreadnought", 28, 0.27, 42, 0.25),
+    ("battlecruiser", 20, 0.18, 32, 0.37),
+    ("destroyer", 11, 0.10, 35, 0.46),
+    ("frigate", 27, 0.44, 66, 0.79),
+    ("dreadnought", 15, 0.13, 47, 0.46),
 )
 # The pass example in RANGE CONTROL and the CROSSFIRE example geometry.
 MERGE_EXAMPLE_KPS = 5.0

@@ -527,7 +527,7 @@ def main() -> int:
                     help="Formation shape for both fleets; 'cycle' rotates "
                          "through all shapes by seed (default)")
     ap.add_argument("--max-ships", type=int, default=8)
-    ap.add_argument("--doctrine", choices=("legacy", "tactical"), default="legacy",
+    ap.add_argument("--doctrine", choices=("legacy", "classic", "tactical"), default="legacy",
                     help="Heuristic captain doctrine (default legacy: the doctrine the "
                          "published torpedo-cost calibration was measured with)")
     ap.add_argument("--distance", type=float, default=500.0)

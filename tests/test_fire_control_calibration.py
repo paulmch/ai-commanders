@@ -80,11 +80,15 @@ RESIDUALS = {
     # 5 hits where 1.4 were forecast: a lone shooter at a PADLOCK dodger 300-399
     # km (the dodge term over-charges the longest flights of a calm dodger).
     ("harness", "dodge:PADLOCK:alone", 3): (0.15, 0.45),
-    # Battle rounds at long range: coasting PADLOCK targets at 400-499 km (0.67x)
-    # and attitude-only HEADING targets at 300-399 km (0.62x) are hit more than
-    # forecast - the unforeseen-maneuver term, fitted on order changes at
-    # shorter range, over-charges the longest flights (neither a cap nor a
-    # power law on it fitted better held out). (HEADING burners at 300-399 km,
+    # Battle rounds at long range. Attitude-only HEADING targets at 300-399 km
+    # were hit more than forecast (0.62x: the unforeseen-maneuver term, fitted
+    # on order changes at shorter range, over-charged the longest flights);
+    # once the default heuristic doctrine became the wall / pincer /
+    # close-and-pass rule the same bucket reads 1.55x the other way - 7 hits
+    # of 38 rounds where 10.8 were forecast, Poisson-plausible (p ~ 0.16): a
+    # thin bucket, pinned where it now sits. Coasting PADLOCK targets at
+    # 400-499 km, pinned at 0.67x, read 0.91x on that change (30 hits of 103
+    # rounds, 27.2 forecast): inside 1.5x, no longer pinned. (HEADING burners at 300-399 km,
     # pinned at 1.66x on 5 hits of 32 rounds, fell to 25 rounds and 3 hits once
     # torpedo rounds were reassigned between targets: below MIN_BUCKET, and
     # Poisson-plausible against the 6.8 forecast - no longer pinned.)
@@ -103,12 +107,7 @@ RESIDUALS = {
     ("harness", "dodge:INTERCEPT:fleet", 4): (0.8, 1.8),
     ("harness", "dodge:HOLD_RANGE:fleet", 3): (1.1, 2.5),
     ("harness", "dodge:HOLD_RANGE:fleet", 4): (2.0, 3.6),
-    ("battle", "PADLOCK", 4): (0.5, 0.8),
-    ("battle", "HEADING:attitude", 3): (0.5, 0.8),
-    # Heuristic battles regenerated after the crab-angle light-off: 41 rounds from
-    # range keepers at 100-199 km landed 11 hits where 19.0 were forecast (1.73x,
-    # a thin bucket; 0-99 km and 200-299 km of the same class are within 1.1x).
-    ("battle", "HOLD_RANGE", 1): (1.5, 2.0),
+    ("battle", "HEADING:attitude", 3): (1.2, 2.0),
 }
 
 

@@ -744,7 +744,7 @@ def main() -> int:
     parser.add_argument("--no-predictions", action="store_true",
                         help="Skip the per-frame predicted path (sim_trace 'plan')")
     parser.add_argument("--seed", type=int, default=7, help="hud_comms: draft + combat seed")
-    parser.add_argument("--doctrine", choices=("legacy", "tactical"), default="legacy",
+    parser.add_argument("--doctrine", choices=("legacy", "classic", "tactical"), default="legacy",
                         help="hud_comms: heuristic captain doctrine (default legacy: the "
                              "fixture the viewer is developed against)")
     parser.add_argument("--out", default=None,
