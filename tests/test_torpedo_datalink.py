@@ -385,3 +385,63 @@ class TestRoundsNeeded:
         from src.llm import fleet_intel
         assert fleet_intel.kill_rounds is L.kill_rounds
         assert fleet_intel.kill_rounds_at is L.kill_rounds_at
+
+
+# ---------------------------------------------------------------------------
+# One need estimate: the board, the captain's OVERKILL line, the admiral's
+# economy (review defect 1)
+# ---------------------------------------------------------------------------
+
+class TestOneNeedEstimate:
+
+    def _battle(self, profile="sprint", n=6, vc=3000.0):
+        from tests.test_admiral_intel import ship
+        sim = CombatSimulation(seed=4, time_step=1.0, decision_interval=1e9)
+        a = ship(sim, "alpha_1", "cruiser_torpedo", "alpha", (0, 0, 0), vel_kps=(vc / 1000, 0, 0))
+        a.point_defense = []
+        ship(sim, "beta_1", "battlecruiser", "beta", (500, 0, 0), fwd=(-1, 0, 0))
+        ship(sim, "beta_2", "frigate", "beta", (480, 20, 0), fwd=(-1, 0, 0))
+        for _ in range(n):
+            _launch(sim, a, "beta_1", profile if profile != "sprint" else None)
+        return sim, a
+
+    @pytest.mark.parametrize("profile", ["sprint", "reserve"])
+    @pytest.mark.parametrize("t", [1, 10, 25, 40])
+    def test_board_captain_and_admiral_agree_at_the_same_instant(self, profile, t):
+        from types import SimpleNamespace
+        from src.llm.fire_solutions import torpedo_solution
+        from tests.test_admiral_intel import captains_for, make_admiral
+        sim, a = self._battle(profile)
+        _steps(sim, t)
+        board = sim.torpedo_board("alpha")["beta_1"]
+        sol = torpedo_solution(sim, a, sim.get_ship("beta_1"), FLEET)
+        admiral = make_admiral("alpha")
+        caps = captains_for("alpha", {"alpha_1": {"ship_name": "TIS A",
+                                                  "ship_type": "cruiser_torpedo"}})
+        snap = admiral._build_snapshot(sim, caps, full=True)
+        row = next(r for r in snap.enemy_ships if r.ship_id == "beta_1")
+        assert sol.rounds_needed == board["keep"] == row.board_keep
+        assert board["keep"] == board["need"].total + L.LINK_KILL_MARGIN_ROUNDS
+        # 6 rounds on a battlecruiser: the estimate stays a handful, never the
+        # 23-110 the old current-closure sizing gave
+        assert board["keep"] <= 8
+        assert (sol.verdict == "OVERKILL") == (len(board["rounds"]) >= board["keep"])
+
+    @pytest.mark.parametrize("profile", ["sprint", "reserve"])
+    @pytest.mark.parametrize("vc", [0.0, 3000.0])
+    def test_analytic_forecast_is_the_flown_one(self, profile, vc):
+        """The board's per-round forecast (closure + tank to spend) against
+        the captain's flown shot at launch: within 3 %."""
+        from src.llm.fire_solutions import fly_torpedo
+        sim, a = self._battle(profile, n=1, vc=vc)
+        tf = sim.torpedoes[0]
+        fc = L.round_forecast(tf.torpedo, sim.get_ship("beta_1"))
+        sim2, a2 = self._battle(profile, n=0, vc=vc)
+        shot = fly_torpedo(sim2, a2, sim2.get_ship("beta_1"), FLEET, target_evades=False,
+                           profile=profile)
+        assert shot.hits
+        assert fc.impact_kps == pytest.approx(shot.impact_kps, rel=0.03)
+
+    def test_margin_constant(self):
+        # scripts/torpedo_link_margin.py: worst flown cell needs 1
+        assert L.LINK_KILL_MARGIN_ROUNDS == 1

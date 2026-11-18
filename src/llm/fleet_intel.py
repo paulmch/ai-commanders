@@ -764,7 +764,10 @@ def checkpoint_digest(sim: Any, faction: str, since_t: float,
         elif name == "TORPEDO_FUEL_EXHAUSTED" and side(sid):
             digest.torps[side(sid)]["dry"] += 1
         elif name == "TORPEDO_RETARGETED" and side(sid):
-            digest.torps[side(sid)]["retargeted"] += 1
+            reason = data.get("reason")
+            digest.torps[side(sid)][
+                "retasked_surplus" if reason == "datalink_surplus"
+                else "retasked_lost" if reason == "target_lost" else "retargeted"] += 1
         elif name == "PROJECTILE_MISS" and data.get("type") == "torpedo" and side(sid):
             digest.torps[side(sid)]["missed"] += 1
     return digest

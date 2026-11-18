@@ -37,13 +37,14 @@ SIGNAL_PD_LOSS = "PD_LOSS"
 SIGNAL_TARGET = "TARGET"
 SIGNAL_CREW = "CREW_STATE"      # a crew impaired / incapacitated by plume radiation
 SIGNAL_PLUME = "PLUME_WASH"     # a friendly taking heavy drive-plume wash
+SIGNAL_RETASK = "RETASK"        # the torpedo datalink re-tasked rounds in flight
 
 DATALINK_NAME = "FLEET DATALINK"
 
 # Inbox priority: LLM-authored traffic first (direct > admiral > fleet net >
 # enemy channel), then the datalink (deaths > PD losses > launches).
 _ENGINE_PRIORITY = {SIGNAL_KILL: 0, SIGNAL_LOSS: 0, SIGNAL_CREW: 0, SIGNAL_PD_LOSS: 1,
-                    SIGNAL_PLUME: 1, SIGNAL_LAUNCH: 2, SIGNAL_TARGET: 3}
+                    SIGNAL_PLUME: 1, SIGNAL_LAUNCH: 2, SIGNAL_RETASK: 2, SIGNAL_TARGET: 3}
 _CHANNEL_PRIORITY = {CHANNEL_DIRECT: 0, CHANNEL_ADMIRAL_TO_CAPTAIN: 1, CHANNEL_FLEET_NET: 2,
                      CHANNEL_ENEMY: 3}
 
@@ -441,6 +442,8 @@ class EngineDatalink:
                 structured=structured, checkpoint=checkpoint, sent_t=now, deliver_at_t=now)
 
         launches: Dict[Tuple[str, str], int] = {}
+        # (side, reason, old target, new target) -> [rounds, first impact T]
+        retasks: Dict[Tuple[str, str, str, str], List[float]] = {}
         deaths: List[Tuple[str, Optional[str]]] = []
         crew_events: List[Any] = []
         washes: Dict[str, Dict[str, Any]] = {}       # victim -> strongest heavy wash data
@@ -454,6 +457,16 @@ class EngineDatalink:
                     best = washes.get(event.ship_id)
                     if best is None or (data.get("heat_gj") or 0.0) >= (best.get("heat_gj") or 0.0):
                         washes[event.ship_id] = data
+            if kind == "TORPEDO_RETARGETED" and event.ship_id and (event.data or {}).get("reason"):
+                d = event.data
+                faction = channel.get_faction(event.ship_id)
+                if faction:
+                    key = (faction, d["reason"], d.get("old_target_id") or "?",
+                           d.get("new_target_id") or "?")
+                    hit_t = event.timestamp + float(d.get("time_to_intercept_s") or 0.0)
+                    row = retasks.setdefault(key, [0, hit_t])
+                    row[0] += 1
+                    row[1] = min(row[1], hit_t)
             if kind == "TORPEDO_LAUNCHED" and event.ship_id and event.target_id:
                 key = (event.ship_id, event.target_id)
                 launches[key] = launches.get(key, 0) + 1
@@ -482,6 +495,17 @@ class EngineDatalink:
                 "eta_s_min": round(min(etas), 1) if etas else None,
                 "eta_s_max": round(max(etas), 1) if etas else None,
             })
+            if msg:
+                out.append(msg)
+
+        for (faction, reason, old_t, new_t), (rounds, first_t) in sorted(retasks.items()):
+            why = "target lost" if reason == "target_lost" else "surplus on target"
+            text = (f"{rounds} round{'s' if rounds != 1 else ''} re-tasked "
+                    f"{channel.ship_name(old_t)} -> {channel.ship_name(new_t)} ({why}), "
+                    f"first impact ~T+{first_t:.0f}")
+            msg = make(faction, SIGNAL_RETASK, text, alive_ids(faction), {
+                "reason": reason, "old_target_id": old_t, "new_target_id": new_t,
+                "rounds": rounds, "first_impact_t": round(first_t, 1)})
             if msg:
                 out.append(msg)
 

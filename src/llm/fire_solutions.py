@@ -20,8 +20,9 @@ Verdicts (most severe first):
   UNREACHABLE  misses even if the target holds course
   ESCAPABLE    connects only if the target holds course; EVADE escapes it
   TOO CLOSE    connects, but guidance cannot build speed in the range left
-  OVERKILL     friendly rounds already inbound >= what he needs
-               (torpedo_link.rounds_needed: PD soak + rounds to kill)
+  OVERKILL     friendly rounds already inbound >= what the datalink keeps
+               on him (torpedo_link.kill_count: PD soak + rounds to kill
+               + margin, on the inbound rounds' forecast impact)
   REACHABLE    connects whether the target holds course or evades
 The coasting flight is flown first and decides UNREACHABLE on its own; the
 evading flight is flown only when the coasting one connects.
@@ -88,7 +89,9 @@ class TorpedoSolution:
     reason: str = ""
     # torpedo_link.rounds_needed: PD soak + rounds to kill (the datalink's
     # own estimate of what he needs; OVERKILL = at least that many inbound)
-    rounds_needed: Optional[int] = None
+    rounds_needed: Optional[int] = None    # torpedo_link.kill_count: need + margin
+    need_soak: Optional[int] = None
+    need_kill: Optional[int] = None
     # The same shot flown on the 'reserve' launch profile (vs coasting).
     vs_coasting_reserve: Optional[TorpedoShot] = None
     soak_sprint: Optional[int] = None
@@ -366,11 +369,23 @@ def torpedo_solution(
         if shot_ is not None and shot_.hits:
             setattr(sol, attr, (own + escorts) // max(1, torpedo_link.turrets_to_blind(
                 shot_.cross_kps or shot_.impact_kps or 12.0, fleet_data)))
-    ref = sol.best_shot
-    sol.rounds_needed = torpedo_link.rounds_needed(
-        sim, target, cover=own + escorts, fleet_data=fleet_data,
-        cross_kps=(coasting.cross_kps if coasting.hits else None),
-        energy_gj=(ref.impact_gj if ref is not None else None)).total
+    # What he needs: with friendly rounds inbound, the datalink's own board
+    # (torpedo_link.need_for on those rounds' forecast impact - the same
+    # number the engine keeps on him and the admiral's economy quotes);
+    # otherwise the same function on this shot's flown forecast.
+    board = (sim.torpedo_board(shooter.faction).get(target.ship_id)
+             if hasattr(sim, "torpedo_board") else None)
+    if board is not None:
+        need_obj = board["need"]
+        committed = len(board["rounds"])
+    else:
+        need_obj = torpedo_link.rounds_needed(
+            sim, target, cover=own + escorts, fleet_data=fleet_data,
+            cross_kps=(coasting.cross_kps if coasting.hits else None),
+            energy_gj=(coasting.impact_gj if coasting.hits else None))
+        committed = 0
+    sol.rounds_needed = torpedo_link.kill_count(need_obj)
+    sol.need_soak, sol.need_kill = need_obj.soak, need_obj.kill
     shot = sol.best_shot
     if not coasting.hits:
         sol.verdict = "UNREACHABLE"
@@ -382,12 +397,12 @@ def torpedo_solution(
         sol.verdict = "TOO CLOSE"
         sol.reason = (f"~{shot.impact_gj:.1f} GJ at {shot.impact_kps:.1f} km/s - "
                       f"guidance cannot build speed in {sol.range_km:.0f} km; open range first")
-    elif inbound >= sol.rounds_needed:
+    elif committed >= sol.rounds_needed:
         sol.verdict = "OVERKILL"
-        sol.reason = (f"{inbound} friendly rounds already inbound, he needs {sol.rounds_needed} "
-                      f"(his {sol.pd_cover} PD turrets blind {sol.soak_sprint} + "
-                      f"{sol.rounds_needed - (sol.soak_sprint or 0)} to kill) - more go to "
-                      "another hull only if the datalink can still reach one")
+        sol.reason = (f"{committed} friendly rounds already inbound, the datalink keeps "
+                      f"{sol.rounds_needed} on him ({need_obj.soak} blinded by his PD + "
+                      f"{need_obj.kill} to kill + {torpedo_link.LINK_KILL_MARGIN_ROUNDS} margin) - "
+                      "more go to another hull only if a round can still reach one")
     if cache is not None:
         cache[key] = sol
     return sol

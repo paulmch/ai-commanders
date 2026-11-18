@@ -44,7 +44,7 @@ YOURS:
 Yours: 64/64 rounds left; 24 launches possible before T+210s (reload 12 s = up to 3 per tube per checkpoint)
 Salvo vs OCS Sovereign [beta_1] (POOR): 8 PD turrets cover it -> ~4 soaked + 22 to kill at ~6 GJ each = 26 together (you can launch 24 now: not enough to kill through that PD)
 Salvo vs OCS Falchion-2 [beta_6] (POOR): 8 PD turrets cover it -> ~4 soaked + 13 to kill at ~7 GJ each = 17 together
-Salvo vs OCS Lancer-1 [beta_2] (POOR): 8 PD turrets cover it -> ~4 soaked + 17 to kill at ~8 GJ each = 21 together; 2 of yours already inbound -> 19 more
+Salvo vs OCS Lancer-1 [beta_2] (POOR): 7 PD turrets cover it -> ~2 soaked + 6 to kill + 1 margin (datalink board) = 9 together; 2 of yours already inbound -> 7 more
 Trickled rounds die: 1-2 rounds into 3+ turrets are blinded one by one - launch together or not at all.
 Theirs: no torpedo launchers in their fleet - nothing to EVADE from torpedoes.
 

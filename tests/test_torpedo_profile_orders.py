@@ -163,3 +163,35 @@ class TestMCP:
         from src.llm import mcp_server
         src = inspect.getsource(mcp_server)
         assert '"profile": {' in src and 'PROFILE_FACT + " " + LINK_FACT' in src
+
+
+class TestWhereRoundsWent:
+    """Review defect 5: the captain's launch history and the admiral's digest
+    say where re-tasked rounds went and why."""
+
+    def test_captain_history_names_the_retask(self):
+        sim, a = _duel()
+        from tests.test_admiral_intel import ship
+        ship(sim, "beta_2", "battlecruiser", "beta", (520, 30, 0), fwd=(-1, 0, 0))
+        cap = _captain()
+        cap.ship_id = "alpha_1"
+        cmds = _launch_cmds(cap, sim, {"count": 1, "target_id": "beta_1", "profile": "reserve"})
+        sim.inject_command("alpha_1", cmds[0])
+        sim.step()
+        tf = sim.torpedoes[0]
+        sim._reassign_torpedo(tf, sim.get_ship("beta_2"), "datalink_surplus", "g")
+        cap.decision_history = [{"time": 0.0, "tool_calls": [
+            {"name": "launch_torpedo", "args": {"count": 1, "target_id": "beta_1"}}]}]
+        text = cap._format_decision_history(simulation=sim)
+        assert "datalink re-tasked 1 from" in text and "(surplus)" in text
+
+    def test_admiral_digest_splits_reasons(self):
+        from src.llm import fleet_intel as intel
+        sim, _ = _duel()
+        sim._log_event(SimulationEventType.TORPEDO_RETARGETED, "alpha_1", target_id="beta_1",
+                       data={"torpedo_id": "t", "reason": "target_lost"})
+        sim._log_event(SimulationEventType.TORPEDO_RETARGETED, "alpha_1", target_id="beta_1",
+                       data={"torpedo_id": "u", "reason": "datalink_surplus"})
+        d = intel.checkpoint_digest(sim, "alpha", -1.0, until_t=1.0)
+        assert d.torps["ours"]["retasked_lost"] == 1
+        assert d.torps["ours"]["retasked_surplus"] == 1
