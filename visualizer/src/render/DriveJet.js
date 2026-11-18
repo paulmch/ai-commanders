@@ -15,7 +15,7 @@ export { JET_CORE_DEG, JET_MAX_DEG, JET_REACH_KM, jetAxial } from './PlumeProfil
  *
  * The engine's drive plume (src/drive_plume.py) washes anything within 7.5
  * degrees of dead astern out to 100 km (a Gaussian 3 degree core). The jet
- * draws that core: a Gaussian beam whose radius is the drive's DRAWN radius
+ * draws that core: a Gaussian beam whose radius is the drive's DRAWN root radius (PlumeProfile.driveRadius)
  * at the nozzle plus z tan 3 deg, so near the ship it is as wide as the
  * drawn bells (magnified with the hull in the auto scale mode) and far
  * astern it is the real cone. Its side-on brightness is jetAxial(z): bright
@@ -251,7 +251,7 @@ export class DriveJets {
     this.material = new THREE.ShaderMaterial({
       uniforms: {
         uColor: { value: new THREE.Color(0.32, 0.5, 1.0) },
-        uHot: { value: new THREE.Color(0.62, 0.76, 1.0) },
+        uHot: { value: new THREE.Color(0.5, 0.68, 1.0) },
         uPixelWorld: Ribbon.pixelWorld,
         uSeg: { value: SEG.high }
       },

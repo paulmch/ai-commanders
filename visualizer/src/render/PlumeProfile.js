@@ -42,7 +42,7 @@ export const JET_MAX_DEG = 7.5;
 /** Drawn reach (km); the engine washes out to 100 km, under 0.4 GJ/s past 60. Fades over its last 40%. */
 export const JET_REACH_KM = 60;
 /** Side-on centreline radiance of the jet at the nozzle, full throttle (scene HDR, additive). */
-export const JET_LEVEL = 0.55;
+export const JET_LEVEL = 0.45;
 /** Near-field length (km, true scale): the side-on brightness halves over the first one. */
 export const JET_NEAR_KM = 0.5;
 /**
@@ -203,13 +203,16 @@ export function jetCap(col) {
   return JET_CAP * (1 - Math.exp(-col / JET_CAP));
 }
 
+/** The spear's root radius as a share of the bell cluster's radius: a core inside the flames, not a sheet over them. */
+export const JET_ROOT = 0.6;
+
 /**
- * Drawn drive radius (kit units) of a hull's bell cluster: the farthest
- * bell centre plus its nozzle radius. Times the hull's draw scale k it is
- * the jet's radius at the nozzle.
+ * Root radius (kit units) of a hull's spear: JET_ROOT x (the farthest bell
+ * centre plus its nozzle radius). Times the hull's draw scale k it is the
+ * jet's radius at the nozzle.
  */
 export function driveRadius(positions, nozzleR) {
   let r = 0;
   for (const p of positions) r = Math.max(r, Math.hypot(p.x, p.y));
-  return r + nozzleR;
+  return JET_ROOT * (r + nozzleR);
 }

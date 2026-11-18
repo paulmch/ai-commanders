@@ -382,9 +382,9 @@ export function damagedNozzle(health, i, n, seed, out = { level: 1, sputter: 0 }
 
 /** Streak scroll (texture tiles per wall-clock second) and scale (nozzle radii) by tint. */
 export const FLOW_RATE = { fusion: [4.3, 7.1], chemical: [0.4, 0.7] };
-const STREAK = { fusion: [2.2, 1.6, 26, 17], chemical: [7, 5, 44, 44 / 2.1] };
+const STREAK = { fusion: [3.0, 2.2, 26, 17], chemical: [7, 5, 44, 44 / 2.1] };
 /** Turbulence floor of core, sheath, halo (1 = smooth): a fusion jet shimmers, vented gas billows. */
-const ROUGH = { fusion: [0.86, 0.5, 0.72], chemical: [0.7, 0.22, 0.4] };
+const ROUGH = { fusion: [0.8, 0.32, 0.6], chemical: [0.7, 0.22, 0.4] };
 
 /** Streak phases at wall-clock time `time` (wrapped, so float precision never degrades). */
 export function flowPhase(time, rate, out = [0, 0]) {
