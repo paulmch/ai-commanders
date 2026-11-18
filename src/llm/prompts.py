@@ -3447,13 +3447,33 @@ You can use EITHER the name OR the ID when naming ships or targets.
 # Legend of the tactical plot (admiral_view.py), sent once in the cached system
 # prompt when the admiral has vision; the plot itself rides on each user turn.
 ADMIRAL_VISION_LEGEND = """=== TACTICAL PLOT (attached image, each checkpoint) ===
-Left panel top-down (X/Y in km), right panel 3D perspective. Cyan = alpha fleet, orange =
-beta fleet. A ship's tick points along its nose. Diamonds are torpedoes (grey = dead seeker),
-yellow dots are coilgun slugs, red lines are active PD beams, faint trails show torpedo paths
-over the last 25 s, arrows show velocity, "burning" means the drive is producing thrust.
-Rings around your fleet centre: your PD envelope (dashed) and range rings at 100/200/300 km
-(dotted); X marks the
-closest approach of the nearest enemy group if both sides coast."""
+Header: time, checkpoint N of M, torpedoes in flight per side (unguided ones counted apart),
+the score when shown. PLAN below it:
+top-down, world X right / Y up (the axes your headings use), km grid and scale bar. SIDE
+VIEW strip under the plan: the same X columns, height Z up ("height compressed xN" when the
+spread does not fit 1:1). YOUR fleet is cyan, the enemy orange, whichever side you are.
+- Ship: a dart pointing along its nose (white dot = nose), larger for heavier classes,
+  filled from the tail in proportion to hull left; a flame behind it = drive burning. Label:
+  the ship's exact name (use it as is in issue_order), hull % if damaged, SIDE or TAIL when
+  that is the face it shows the other fleet's centre (no tag = NOSE), and "Z+N" / "Z-N"
+  when it is N km above / below your fleet's median height (from 50 km on).
+- Thin line to a hollow dart: where that ship will be at the next checkpoint if it coasts.
+  The hollow dart is yellow when that position is within 150 km of an enemy ship's.
+- Cross: a dead ship; white cross and "NAME DESTROYED": lost since the last checkpoint.
+- Solid outline around a fleet: 150 km from its gun ships (beyond it a dodger is rarely
+  hit); dotted outline: its PD umbrella (250 km).
+- Torpedoes are dots (hollow grey: unguided - blinded seeker, dry or target lost - but still
+  on a hull's line), with ONE arrow per launching group and target: "N -> TARGET Ts" = N
+  guided rounds onto TARGET, first impact in T s; "+k unguided" = unguided rounds that will
+  still strike it; NEW = a round launched since the last checkpoint. Unguided rounds on
+  nobody's line are only counted in the header.
+- Yellow dotted line with two x marks, "closest D km in T s (coasting)": where the two
+  fleet centres pass closest if both coast.
+- ZOOM panel (yellow frame): when ships of both fleets overlap on the plan, a corner panel
+  magnifies the dashed yellow box; ships inside the box are labelled in the zoom.
+The plan's width steps through a fixed ladder (the smallest that holds every live ship,
+ghost and threatening round) and its centre snaps to 1/20 of the width: it moves only when
+the battle outgrows or shrinks below a step, so consecutive checkpoints compare directly."""
 
 
 def build_admiral_static(
