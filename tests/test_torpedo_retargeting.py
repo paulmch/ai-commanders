@@ -164,7 +164,10 @@ class TestRetargeting:
             sim.RETARGET_MIN_RESERVE_KPS,
             sim.torpedoes[0].torpedo.specs.total_delta_v_kps
             * sim.RETARGET_RESERVE_FRACTION)
-        sim.torpedoes[0].torpedo.remaining_delta_v_kps = reserve + 0.05
+        # Margin was +0.05 km/s; the crab-angle light-off spends slightly different fuel,
+        # and the steer to beta_2 costs ~0.03 km/s here, so +0.05 left the round 0.02 above
+        # the floor after the steer. +0.01 puts it clearly below (by ~0.02) after it.
+        sim.torpedoes[0].torpedo.remaining_delta_v_kps = reserve + 0.01
         sim.get_ship("beta_1").is_destroyed = True
         _run_until(sim, 10.0)
         assert not _retarget_events(events), \
