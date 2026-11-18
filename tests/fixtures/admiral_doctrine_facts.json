@@ -1,6 +1,6 @@
 {
- "about": "Seeded heuristic battles behind the admiral doctrine GUN EXCHANGE / FACING / TORPEDO DEFENCE tables (src/llm/prompts.py), bound by tests/test_doctrine_accuracy.py::TestMeasuredExchangeDoctrine. Regenerate with the commands below and update the doctrine numbers when an engine change moves them.",
- "engine_commit": "ae7d7f1",
+ "about": "Seeded heuristic battles behind the admiral doctrine GUN EXCHANGE / FACING / TORPEDO DEFENCE tables (src/llm/prompts.py), bound by tests/test_doctrine_accuracy.py::TestMeasuredExchangeDoctrine. Regenerate with the commands below and update the doctrine numbers when an engine change moves them. Torpedo section regenerated in pass 5 (lane retarget: torpedo datalink); the guns section is the earlier run's.",
+ "engine_commit": "adfb406",
  "commands": [
   "OMP_NUM_THREADS=1 uv run python scripts/admiral_doctrine_facts.py guns --seeds 1 2 3 4 5 6 7 8 --jobs 10 --out OUT",
   "OMP_NUM_THREADS=1 uv run python scripts/admiral_doctrine_facts.py torpedo --seeds 1 2 3 --distances 500 1000 --attackers torpedo_boats torpedo --jobs 12 --out OUT",
@@ -557,9 +557,9 @@
    "torpedo|500|static": {
     "battles": 3,
     "launched": 168,
-    "impacts": 103,
-    "impact_gj": 2590.79096695511,
-    "impact_kps_median": 14.117483556969228,
+    "impacts": 107,
+    "impact_gj": 2579.97326082611,
+    "impact_kps_median": 13.821152878905615,
     "wall_lost": 24,
     "wall_total": 24,
     "boats_lost": 0,
@@ -567,15 +567,15 @@
     "wall_wins": 0,
     "median_first_loss_s": 102.0,
     "impact_loc": {
-     "nose": 103
+     "nose": 107
     }
    },
    "torpedo|500|static_dodge": {
     "battles": 3,
     "launched": 168,
-    "impacts": 103,
-    "impact_gj": 2592.8321053399272,
-    "impact_kps_median": 14.088747749644604,
+    "impacts": 107,
+    "impact_gj": 2582.3839547064363,
+    "impact_kps_median": 13.828626716655187,
     "wall_lost": 24,
     "wall_total": 24,
     "boats_lost": 0,
@@ -583,15 +583,15 @@
     "wall_wins": 0,
     "median_first_loss_s": 102.0,
     "impact_loc": {
-     "nose": 103
+     "nose": 107
     }
    },
    "torpedo|500|open": {
     "battles": 3,
     "launched": 192,
     "impacts": 52,
-    "impact_gj": 1044.8550292624234,
-    "impact_kps_median": 12.691921450859232,
+    "impact_gj": 1026.259448736443,
+    "impact_kps_median": 12.612341581109366,
     "wall_lost": 18,
     "wall_total": 24,
     "boats_lost": 0,
@@ -606,8 +606,8 @@
     "battles": 3,
     "launched": 168,
     "impacts": 52,
-    "impact_gj": 1024.3214131160573,
-    "impact_kps_median": 12.603323347054452,
+    "impact_gj": 980.5596697002342,
+    "impact_kps_median": 12.590387364583073,
     "wall_lost": 18,
     "wall_total": 24,
     "boats_lost": 0,
@@ -622,7 +622,7 @@
     "battles": 3,
     "launched": 171,
     "impacts": 87,
-    "impact_gj": 2403.411063522353,
+    "impact_gj": 2391.499976115874,
     "impact_kps_median": 14.824113838544907,
     "wall_lost": 24,
     "wall_total": 24,
@@ -638,9 +638,9 @@
    "torpedo|1000|static": {
     "battles": 3,
     "launched": 168,
-    "impacts": 92,
-    "impact_gj": 2430.443363667955,
-    "impact_kps_median": 14.874430598510546,
+    "impacts": 88,
+    "impact_gj": 2349.7134601603993,
+    "impact_kps_median": 14.996644224143278,
     "wall_lost": 24,
     "wall_total": 24,
     "boats_lost": 0,
@@ -648,16 +648,16 @@
     "wall_wins": 0,
     "median_first_loss_s": 281.0,
     "impact_loc": {
-     "nose": 85,
-     "lateral": 7
+     "nose": 76,
+     "lateral": 12
     }
    },
    "torpedo|1000|static_dodge": {
     "battles": 3,
-    "launched": 168,
-    "impacts": 94,
-    "impact_gj": 2504.4788483069105,
-    "impact_kps_median": 14.65325887621068,
+    "launched": 176,
+    "impacts": 93,
+    "impact_gj": 2494.5092114226327,
+    "impact_kps_median": 14.693933078307392,
     "wall_lost": 24,
     "wall_total": 24,
     "boats_lost": 0,
@@ -665,15 +665,16 @@
     "wall_wins": 0,
     "median_first_loss_s": 281.0,
     "impact_loc": {
-     "nose": 92,
-     "tail": 2
+     "nose": 87,
+     "tail": 4,
+     "lateral": 2
     }
    },
    "torpedo|1000|open": {
     "battles": 3,
     "launched": 48,
     "impacts": 30,
-    "impact_gj": 773.8736267238355,
+    "impact_gj": 770.8926399901475,
     "impact_kps_median": 15.018702636663004,
     "wall_lost": 13,
     "wall_total": 24,
@@ -689,8 +690,8 @@
     "battles": 3,
     "launched": 48,
     "impacts": 26,
-    "impact_gj": 723.4441783294291,
-    "impact_kps_median": 15.00403055464199,
+    "impact_gj": 714.9207096358739,
+    "impact_kps_median": 14.992288937454964,
     "wall_lost": 12,
     "wall_total": 24,
     "boats_lost": 0,
@@ -703,27 +704,26 @@
    },
    "torpedo|1000|charge": {
     "battles": 3,
-    "launched": 134,
-    "impacts": 63,
-    "impact_gj": 1992.4615029002662,
-    "impact_kps_median": 15.697576651918517,
-    "wall_lost": 20,
+    "launched": 126,
+    "impacts": 67,
+    "impact_gj": 2062.9771890774446,
+    "impact_kps_median": 15.359975117358415,
+    "wall_lost": 22,
     "wall_total": 24,
     "boats_lost": 0,
     "boats_total": 9,
     "wall_wins": 0,
     "median_first_loss_s": 300.0,
     "impact_loc": {
-     "nose": 62,
-     "lateral": 1
+     "nose": 67
     }
    },
    "torpedo_boats|500|static": {
     "battles": 3,
     "launched": 120,
-    "impacts": 87,
-    "impact_gj": 2084.1747367484504,
-    "impact_kps_median": 14.005887424373686,
+    "impacts": 88,
+    "impact_gj": 2102.0563024649196,
+    "impact_kps_median": 13.80417928019724,
     "wall_lost": 18,
     "wall_total": 24,
     "boats_lost": 0,
@@ -731,15 +731,16 @@
     "wall_wins": 0,
     "median_first_loss_s": 103.0,
     "impact_loc": {
-     "nose": 87
+     "nose": 87,
+     "lateral": 1
     }
    },
    "torpedo_boats|500|static_dodge": {
     "battles": 3,
     "launched": 120,
     "impacts": 87,
-    "impact_gj": 2089.4074492436985,
-    "impact_kps_median": 14.012826243270053,
+    "impact_gj": 2081.749172554807,
+    "impact_kps_median": 13.811889349080431,
     "wall_lost": 18,
     "wall_total": 24,
     "boats_lost": 0,
@@ -754,58 +755,58 @@
    "torpedo_boats|500|open": {
     "battles": 3,
     "launched": 120,
-    "impacts": 44,
-    "impact_gj": 901.7167052432457,
-    "impact_kps_median": 12.785737460735662,
-    "wall_lost": 15,
+    "impacts": 50,
+    "impact_gj": 984.8931804446328,
+    "impact_kps_median": 12.658888141331056,
+    "wall_lost": 17,
     "wall_total": 24,
     "boats_lost": 0,
     "boats_total": 24,
     "wall_wins": 0,
     "median_first_loss_s": 104.0,
     "impact_loc": {
-     "tail": 44
+     "tail": 50
     }
    },
    "torpedo_boats|500|open_full": {
     "battles": 3,
     "launched": 120,
-    "impacts": 43,
-    "impact_gj": 876.9978685152389,
-    "impact_kps_median": 12.844660689100682,
-    "wall_lost": 15,
+    "impacts": 53,
+    "impact_gj": 1009.7059856244302,
+    "impact_kps_median": 12.675783019678578,
+    "wall_lost": 18,
     "wall_total": 24,
     "boats_lost": 0,
     "boats_total": 24,
     "wall_wins": 0,
     "median_first_loss_s": 103.0,
     "impact_loc": {
-     "tail": 43
+     "tail": 53
     }
    },
    "torpedo_boats|500|charge": {
     "battles": 3,
     "launched": 120,
-    "impacts": 88,
-    "impact_gj": 2349.656423513003,
-    "impact_kps_median": 14.623079696085382,
-    "wall_lost": 24,
+    "impacts": 89,
+    "impact_gj": 2333.3975315215957,
+    "impact_kps_median": 14.522330416381536,
+    "wall_lost": 21,
     "wall_total": 24,
-    "boats_lost": 1,
+    "boats_lost": 0,
     "boats_total": 24,
     "wall_wins": 0,
     "median_first_loss_s": 100.0,
     "impact_loc": {
-     "nose": 87,
-     "lateral": 1
+     "nose": 86,
+     "lateral": 3
     }
    },
    "torpedo_boats|1000|static": {
     "battles": 3,
     "launched": 120,
-    "impacts": 88,
-    "impact_gj": 2343.196793084971,
-    "impact_kps_median": 14.657261105046274,
+    "impacts": 86,
+    "impact_gj": 2249.145215998433,
+    "impact_kps_median": 14.582338117262648,
     "wall_lost": 24,
     "wall_total": 24,
     "boats_lost": 2,
@@ -813,48 +814,48 @@
     "wall_wins": 0,
     "median_first_loss_s": 289.0,
     "impact_loc": {
-     "nose": 75,
-     "lateral": 13
+     "nose": 74,
+     "lateral": 12
     }
    },
    "torpedo_boats|1000|static_dodge": {
     "battles": 3,
     "launched": 120,
-    "impacts": 89,
-    "impact_gj": 2390.8080723043577,
-    "impact_kps_median": 14.674038624455491,
+    "impacts": 84,
+    "impact_gj": 2240.0977740160233,
+    "impact_kps_median": 14.611482532261306,
     "wall_lost": 24,
     "wall_total": 24,
-    "boats_lost": 0,
+    "boats_lost": 1,
     "boats_total": 24,
     "wall_wins": 0,
     "median_first_loss_s": 289.0,
     "impact_loc": {
      "nose": 83,
-     "lateral": 6
+     "lateral": 1
     }
    },
    "torpedo_boats|1000|open": {
     "battles": 3,
     "launched": 102,
-    "impacts": 27,
-    "impact_gj": 644.3406038430961,
-    "impact_kps_median": 13.894208589390345,
-    "wall_lost": 12,
+    "impacts": 36,
+    "impact_gj": 760.397194843829,
+    "impact_kps_median": 13.859731716190549,
+    "wall_lost": 15,
     "wall_total": 24,
     "boats_lost": 0,
     "boats_total": 24,
     "wall_wins": 0,
     "median_first_loss_s": 309.0,
     "impact_loc": {
-     "tail": 27
+     "tail": 36
     }
    },
    "torpedo_boats|1000|open_full": {
     "battles": 3,
     "launched": 75,
     "impacts": 24,
-    "impact_gj": 571.931937715335,
+    "impact_gj": 571.4121789829279,
     "impact_kps_median": 14.049731387935052,
     "wall_lost": 12,
     "wall_total": 24,
@@ -870,7 +871,7 @@
     "battles": 3,
     "launched": 58,
     "impacts": 22,
-    "impact_gj": 579.4212695116951,
+    "impact_gj": 579.3862650871034,
     "impact_kps_median": 13.863681676859619,
     "wall_lost": 10,
     "wall_total": 24,
@@ -995,7 +996,7 @@
    "torpedo": {
     "launched": 40,
     "impacts": 29,
-    "impact_gj": 692.1151884880373,
+    "impact_gj": 692.2441694719869,
     "impact_loc": {
      "nose": 29
     }
@@ -1016,15 +1017,16 @@
     "beta_3": 104.0,
     "beta_1": 124.0,
     "beta_4": 135.0,
-    "beta_2": 147.0,
-    "beta_5": 173.0
+    "beta_2": 137.0,
+    "beta_5": 162.0,
+    "beta_6": 188.0
    },
    "torpedo": {
     "launched": 40,
-    "impacts": 15,
-    "impact_gj": 307.58541354922124,
+    "impacts": 18,
+    "impact_gj": 352.28414090917227,
     "impact_loc": {
-     "tail": 15
+     "tail": 18
     }
    }
   }

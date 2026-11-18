@@ -1522,6 +1522,9 @@ class LLMCaptain:
             except Exception:  # noqa: BLE001 - display only
                 capacity = None
             check["salvo"] = self._salvo_check_text(sol, int(salvo), capacity)
+            if getattr(order, "torpedo_profile", None):
+                check["salvo"] += (f" Ordered launch profile: {order.torpedo_profile} "
+                                   "(launch_torpedo uses it unless you name another).")
 
         # The prose and the structured order disagree on the burn (e.g. "fly
         # the fleet heading at 50%" under a structured MAINTAIN, which coasts).
@@ -3732,10 +3735,18 @@ class LLMCaptain:
             if not self._torpedo_feasible(simulation, ship_id, target_id, count, args):
                 return None
 
-            return [
-                {"type": "launch_torpedo", "target_id": target_id, "queue_if_reloading": True}
-                for _ in range(count)
-            ]
+            # Launch profile: the call's, else the admiral's salvo order's.
+            from ..torpedo import normalize_torpedo_profile
+            profile = args.get("profile")
+            if not profile:
+                profile = next((getattr(o, "torpedo_profile", None)
+                                for o in (self.admiral_orders or [])
+                                if getattr(o, "torpedo_profile", None)), None)
+            launch = {"type": "launch_torpedo", "target_id": target_id,
+                      "queue_if_reloading": True}
+            if profile:
+                launch["profile"] = normalize_torpedo_profile(profile)
+            return [dict(launch) for _ in range(count)]
 
         elif name == "set_radiators":
             return radiator_command_from_args(args)

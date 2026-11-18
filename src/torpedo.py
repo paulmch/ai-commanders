@@ -63,6 +63,49 @@ G0_MS2 = 9.81  # standard gravity (m/s^2)
 # 12 km/s crosses a 100 km PD envelope in ~8 s.
 MIN_CLOSING_SPEED_KPS = 12.0
 
+# LAUNCH PROFILES. A commander picks one per launch (captain launch_torpedo,
+# admiral orders, MCP); the engine default is SPRINT and with nothing chosen
+# a round flies exactly as before profiles existed.
+# - sprint: build closure early up to MIN_CLOSING_SPEED_KPS (most of the
+#   14 km/s goes into speed), spend the NEZ surplus on the terminal burn.
+# - reserve: cruise at the lower RESERVE_CRUISE_CLOSING_KPS and keep the rest
+#   of the tank until the last RESERVE_TERMINAL_WINDOW_S before impact, so a
+#   round whose target dies (or the datalink reassigns) can still steer onto
+#   another hull; a round that never needs it dumps it in the terminal burn.
+#   The price: a longer flight, a slower crossing of the point-defence
+#   envelope (more dwell per turret) and a terminal burn that must fit the
+#   window. Numbers from scripts/torpedo_profile_sweep.py (see the report in
+#   docs/pass-5-recording-additions.md "Torpedo launch profiles").
+TORPEDO_PROFILE_SPRINT = "sprint"
+TORPEDO_PROFILE_RESERVE = "reserve"
+TORPEDO_PROFILES = (TORPEDO_PROFILE_SPRINT, TORPEDO_PROFILE_RESERVE)
+RESERVE_CRUISE_CLOSING_KPS = 8.0
+RESERVE_TERMINAL_WINDOW_S = 20.0
+
+
+def normalize_torpedo_profile(profile: Optional[str]) -> str:
+    """'sprint' / 'reserve' (case-insensitive); anything else -> sprint."""
+    p = str(profile or "").strip().lower()
+    return p if p in TORPEDO_PROFILES else TORPEDO_PROFILE_SPRINT
+
+
+def profile_cruise_floor_kps(profile: str) -> float:
+    return (RESERVE_CRUISE_CLOSING_KPS if profile == TORPEDO_PROFILE_RESERVE
+            else MIN_CLOSING_SPEED_KPS)
+
+
+def cruise_floor_kps(torpedo: 'Torpedo') -> float:
+    """The closure the guidance builds before anything else: the profile's
+    cruise floor - or, once the datalink has reassigned the round, the floor
+    it set then (src/simulation.py _reassign_torpedo: the closure the round
+    already had plus whatever its tank holds beyond the reassignment reserve,
+    never above the profile floor). Burning back up to the full floor first
+    ate the reserve the old retarget gate counted on."""
+    if torpedo.cruise_floor_override_kps is not None:
+        return torpedo.cruise_floor_override_kps
+    return profile_cruise_floor_kps(torpedo.profile)
+
+
 # Navigation ratio N for (augmented) proportional navigation. PN theory
 # requires N > 2 for the predicted miss to collapse against a maneuvering
 # target (below that, LOS rotation regenerates lateral velocity as fast as
@@ -567,6 +610,10 @@ class Torpedo:
     time_since_launch: float = 0.0
     launch_position: Vector3D = field(default_factory=Vector3D.zero)
     launched_from_velocity: Vector3D = field(default_factory=Vector3D.zero)
+    # Launch profile (TORPEDO_PROFILES) and the cruise floor the datalink set
+    # on a reassignment (None: the profile's, see cruise_floor_kps).
+    profile: str = TORPEDO_PROFILE_SPRINT
+    cruise_floor_override_kps: Optional[float] = None
 
     # --- Guidance filter state (owned by the torpedo, NOT TorpedoGuidance) ---
     # The simulation constructs a fresh TorpedoGuidance every tick, so any
@@ -2036,8 +2083,12 @@ class TorpedoGuidance:
         # ---- Not closing: build closure while killing drift with the same
         # velocity-error law as before (APN needs a finite t_go to operate).
         if closing_speed_mps <= 0.0:
+            # (sprint: the 12 km/s floor as before; reserve / released: the
+            # reserve floor - the burn is full throttle either way, this only
+            # weights closure against drift)
+            build_kps = max(cruise_floor_kps(torpedo), RESERVE_CRUISE_CLOSING_KPS)
             velocity_error = (
-                los * (MIN_CLOSING_SPEED_KPS * 1000.0 - closing_speed_mps)
+                los * (build_kps * 1000.0 - closing_speed_mps)
                 - lateral_vel * APN_NAV_RATIO
             )
             direction = (
@@ -2082,7 +2133,11 @@ class TorpedoGuidance:
             and surplus_kps > TERMINAL_MIN_BURN_KPS
             and predicted_miss_m < APN_MISS_DEADBAND_M
         )
-        below_cruise_floor = closing_speed_kps < MIN_CLOSING_SPEED_KPS
+        if (terminal_burn and torpedo.profile == TORPEDO_PROFILE_RESERVE
+                and t_go > RESERVE_TERMINAL_WINDOW_S):
+            terminal_burn = False   # the reserve is held until the window
+        floor_kps = cruise_floor_kps(torpedo)
+        below_cruise_floor = closing_speed_kps < floor_kps
         want_closure = terminal_burn or below_cruise_floor
 
         # ---- Saturated: every m/s^2 goes to the lateral correction.
@@ -2118,7 +2173,7 @@ class TorpedoGuidance:
             else:
                 reason = (
                     f"ACCEL: {closing_speed_kps:.1f} -> "
-                    f"{MIN_CLOSING_SPEED_KPS:.0f}km/s, "
+                    f"{floor_kps:.0f}km/s, "
                     f"miss~{predicted_miss_m / 1000.0:.2f}km"
                 )
             return GuidanceCommand.burn(desired_accel.normalized(),

@@ -1114,3 +1114,62 @@ armour swing (`JINK_FACE`) instead of a ship holding still.
 The fire-control forecast's input for a target swinging a burn: its sideways
 acceleration `burn x sin(cone)` (m/s^2), present only when > 0
 (`TargetMotion.swing_ms2`, priced by `firecontrol.SWING_*_FRACTION`).
+
+## Retarget lane: torpedo launch profiles and the datalink (`src/torpedo.py`, `src/torpedo_link.py`)
+
+### `torpedo_launched.profile`
+
+| field | type | meaning |
+|---|---|---|
+| `profile` | string, only when not the default | the round's launch profile, `"reserve"`. Absent = `"sprint"` (the default, and every recording made before profiles existed), so a sprint launch is byte-identical to before. |
+
+`sprint` builds closure early up to the 12 km/s cruise floor
+(`MIN_CLOSING_SPEED_KPS`); `reserve` cruises at `RESERVE_CRUISE_CLOSING_KPS`
+(8 km/s) and keeps the rest of its delta-v until `RESERVE_TERMINAL_WINDOW_S`
+(20 s) before impact. Trace frames carry the round's `dv_remaining` as before,
+so a viewer can show the held tank.
+
+### `torpedo_retargeted` from the datalink: `reason`, `group`, `group_size`, `profile`
+
+Every reassignment by the datalink is a `torpedo_retargeted` event with the
+existing fields (`torpedo_id`, `old_target_id`, `new_target_id`,
+`distance_km`, `time_to_intercept_s`, `dv_remaining_kps`, `selection_mode`,
+`seeker_heat_fraction`) plus:
+
+| field | type | meaning |
+|---|---|---|
+| `reason` | `"target_lost"` / `"datalink_surplus"` | `target_lost`: the round's target was destroyed or became a dying hulk and the side's rounds were reassigned as a group; `datalink_surplus`: a `reserve`-profile round diverted BEFORE its target died because more rounds were inbound on it than it needs and another hull still needed rounds |
+| `group` | string | the decision it was part of: `"<faction>@<sim time s>:<reason>"`; every round reassigned in the same tick for the same reason shares it |
+| `group_size` | int | rounds reassigned in that group |
+| `profile` | string | the round's launch profile (`sprint` / `reserve`) |
+
+Events without `reason` are the pre-link per-round rule (recordings before
+pass 5, or the measurement switch `AIC_TORPEDO_DATALINK=0`). The viewer reads
+only `ship_id`, `torpedo_id` and `new_target_id` (HudIndex "RETARGET" line);
+the new fields are optional for every consumer.
+
+### Rules the events record
+
+- **Group reassignment** (always on): every tick, per side, the live-seeker
+  rounds (not blinded, not dry) whose target is destroyed or dying are
+  planned together: most constrained round first (fewest reachable hulls,
+  then torpedo id), each to the reachable hull that still needs rounds and
+  leaves it the most delta-v (a PD-singed seeker: the fastest intercept),
+  the rest to the best reachable hull. "Needs" is
+  `torpedo_link.rounds_needed` (PD soak + rounds to kill, the same estimate
+  the captain's OVERKILL line and the admiral's TORPEDO ECONOMY use) minus
+  the side's live rounds already homing on it. Reachable: the engine's
+  `can_intercept` within 600 s with at least
+  `reassign_reserve_kps(t) = min(1.12, 0.25 + 0.02 * t)` km/s left after the
+  steer. Rounds with nothing reachable keep homing on a dying hulk, or coast
+  as before when the target is gone. Ties go to the smaller ship id; the
+  outcome does not depend on ship or round insertion order and is mirror
+  symmetric (`tests/test_torpedo_datalink.py`).
+- **Surplus diversion** (`reserve` rounds only, every 5 s per side): rounds on
+  a hull beyond what it needs, farthest first, not inside 12 s of impact
+  (`LINK_COMMITTED_S`), go to hulls with unmet need they can reach. Sprint
+  rounds are never diverted.
+- After a reassignment the round's cruise floor is the closure it already
+  has toward the new hull plus whatever delta-v it holds beyond the
+  reassignment reserve (never above its profile's floor), so it never burns
+  the reserve to regain cruise speed.

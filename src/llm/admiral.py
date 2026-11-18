@@ -97,6 +97,7 @@ class AdmiralOrder:
     suggested_target: Optional[str] = None  # Enemy ship name to focus on
     torpedo_salvo: Optional[int] = None  # Coordinated launch: rounds this checkpoint
     torpedo_target: Optional[str] = None  # Enemy to concentrate the salvo on
+    torpedo_profile: Optional[str] = None  # Launch profile of the salvo: sprint | reserve
     # Structured HEADING order (world frame), applied directly as the ship's
     # maneuver by the runner. formation=True: part of a fleet-wide heading,
     # throttle is a fraction of the slowest hull's acceleration.
@@ -154,6 +155,12 @@ class AdmiralDecision:
     # per-ship order calls run in parallel and cannot see each other, so the
     # fleet's salvo is allocated here, once, and each order call is shown it.
     salvo_plan: Dict[str, Tuple[int, Optional[str]]] = field(default_factory=dict)
+
+
+def _profile_arg(value: Any) -> Optional[str]:
+    """'sprint' / 'reserve' from tool arguments (case-insensitive), else None."""
+    v = str(value or "").strip().lower()
+    return v if v in ("sprint", "reserve") else None
 
 
 def _heading_arg(value: Any) -> Optional[Dict[str, float]]:
@@ -439,6 +446,7 @@ class EnemyShipSnapshot:
     dealt_hits: int = 0
     dealt_gj: float = 0.0
     solution: Any = None          # fleet_intel.TorpedoSolution from our launchers
+    solution_reserve: Any = None  # the same launch on the reserve profile
     our_rounds_inbound: int = 0   # our guided rounds homing on it now
     group: str = ""
     gun_range_km: float = 0.0
@@ -619,6 +627,8 @@ class LLMAdmiral:
         # this is the one piece of text that carries the admiral's own INTENT
         # forward, echoed back verbatim every checkpoint until amended.
         self.standing_plan: Optional[str] = None
+        # set_fleet_directive salvo_plan launch profiles: own ship id -> profile
+        self._salvo_plan_profiles: Dict[str, str] = {}
         self.standing_plan_time: float = 0.0
 
         # Issue the per-ship orders of Phase 2 concurrently. Each order is an
@@ -1016,6 +1026,7 @@ Be authentic to how you would command a fleet as {model_name}."""
             torpedo_salvo=salvo.get("torpedo_salvo") if salvo else None,
             torpedo_target=self._plain_ref(
                 (salvo.get("torpedo_target") or salvo.get("suggested_target")) if salvo else None),
+            torpedo_profile=_profile_arg(salvo.get("torpedo_profile")) if salvo else None,
         )
         if salvo is None:
             # cmdadm: a set_fleet_directive salvo_plan allocates the salvo too.
@@ -1214,6 +1225,7 @@ Be authentic to how you would command a fleet as {model_name}."""
                 suggested_target=self._plain_ref(args.get("suggested_target")),
                 torpedo_salvo=args.get("torpedo_salvo"),
                 torpedo_target=self._plain_ref(args.get("torpedo_target")),
+                torpedo_profile=_profile_arg(args.get("torpedo_profile")),
             )
             self._apply_salvo_plan(order, args, salvo_plan)
             _attach_heading(order, args, fleet_heading)
@@ -1254,6 +1266,11 @@ Be authentic to how you would command a fleet as {model_name}."""
             except (TypeError, ValueError):
                 continue
             plan[sid] = (rounds, self._plain_ref(entry.get("target")) if entry.get("target") else None)
+            profile = _profile_arg(entry.get("profile"))
+            if profile:
+                self._salvo_plan_profiles[sid] = profile
+            else:
+                self._salvo_plan_profiles.pop(sid, None)
         return plan
 
     def _salvo_plan_view(self, plan: Optional[Dict[str, Tuple[int, Optional[str]]]],
@@ -1278,6 +1295,8 @@ Be authentic to how you would command a fleet as {model_name}."""
             order.torpedo_salvo, alloc_target = mine
             if order.torpedo_target is None and alloc_target:
                 order.torpedo_target = alloc_target
+            if order.torpedo_profile is None:
+                order.torpedo_profile = self._salvo_plan_profiles.get(order.target_ship_id)
             order.salvo_source = "directive"
         else:
             order.salvo_source = "order"
@@ -1665,6 +1684,10 @@ Be authentic to how you would command a fleet as {model_name}."""
                 row.solution = intel.torpedo_solution(
                     launch_pos, launch_vel, enemy, specs, self.fleet_data, simulation,
                     salvo_available=max(1, snap.launches_available))
+                # the same launch on the reserve profile (TORPEDO ECONOMY shows both)
+                row.solution_reserve = intel.torpedo_solution(
+                    launch_pos, launch_vel, enemy, specs, self.fleet_data, simulation,
+                    salvo_available=max(1, snap.launches_available), profile="reserve")
         for info in infos:
             was = [prev_closing.get(sid) for sid in info.ship_ids if prev_closing.get(sid) is not None]
             if info.closing_kps < 0 and was and sum(1 for c in was if c > 0) * 2 > len(was):

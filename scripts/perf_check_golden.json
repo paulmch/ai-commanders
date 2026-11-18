@@ -1,41 +1,41 @@
 {
   "calib": {
-    "cpu_s": 7.44,
+    "cpu_s": 9.9,
     "hashes": {
       "rows": "169a9b8dd23f38643f9e3fd6f394d2d0b39d2af5a99034bc5cdd01aee5680621"
     },
     "info": "24 engagements, 1654 rounds"
   },
   "s11_leg": {
-    "cpu_s": 9.24,
+    "cpu_s": 14.67,
     "hashes": {
-      "end_state": "00cd150481725cac75be0090efa3707704fa5e6dced19473e437292ac8411654",
-      "events": "b44133581984edf955a144e334feace274cdd68bea17cee2d211081c7ea1a45b",
-      "result": "0793719271c83f5f4b01e84f8530799c385e7a5111441fcc36f17cb1945bac51"
+      "end_state": "087274fe8ec7454e92841feb123d02b3abb9ca9e090800cd7c001bc2567d4df8",
+      "events": "6a15551d48af30145b34a3693e8815511cb9d132a7ff92126ac4d72d138349e4",
+      "result": "b401ada531034ba84e18175bb84b11182169215ff05a48f3f5193688ecac9ac9"
     },
-    "info": "19496 events, 600 s battle, winner beta"
+    "info": "20093 events, 600 s battle, winner alpha"
   },
   "s2_tac_300": {
-    "cpu_s": 4.4,
+    "cpu_s": 7.53,
     "hashes": {
-      "end_state": "8fa62b31b30be8bd276fdcdec16d6658fa1fe1e74dfb071943eb43d549e4a25d",
-      "events": "b12756a8a8dd09488a598445747a925d1873ddb408fae7fa154e6046e84800bd",
-      "result": "18e0d39e71ed2fabae6599004c9e9107809dca2fd1fcd2ac649690663e896a4a"
+      "end_state": "8eb6c6f70a0c260eae27ce4f18f88a53569de4e08e8e2f682d6d746f29013e26",
+      "events": "f4922c3a0cb70e46a034e86c18c5737f475bf94f7d2add56154b45c3f8861d2b",
+      "result": "7352e1f76b4d755a3720b47b452a7e220d87852c4d18a8137e7f94b76c961b02"
     },
-    "info": "4063 events, 199 s battle, winner beta"
+    "info": "3814 events, 182 s battle, winner beta"
   },
   "s4_tac_trace": {
-    "cpu_s": 8.24,
+    "cpu_s": 12.57,
     "hashes": {
-      "end_state": "053b2fcc4e6020e76ccc0d9137d1f4dd243b3e3634c97c19df46c8b603da7273",
-      "events": "b12fb335061653cb8add03c1b6054d88102cefff74e4d756722b4f52a97c8629",
-      "result": "398b65ef8ad34cca67e1cd444de1d1fd11e246319ca69256d4921857ece40ee7",
-      "sim_trace": "16f71c68a7c14dd8bb3f9aac621349d61ae935ec9f398dfd9504a7cdabd46674"
+      "end_state": "37b016f215538bec850e5a108474c508eb75c49e77d18c095dc9f15cbbb13fc4",
+      "events": "16dbeaa64ad96ba352c82f43b26bae15ca5aa52568b80c1ca017991c28fcb5ac",
+      "result": "da8cc3b297ebf0eecc74abd689109e6494eca22e8efc873712d7ca94faf9de95",
+      "sim_trace": "2003e369de4a71408bd2437862bcbcf6d32d4cee0b779bb9fdf4b1395030e7f7"
     },
-    "info": "3989 events, 236 s battle, winner alpha"
+    "info": "3524 events, 192 s battle, winner alpha"
   },
   "s5_tac": {
-    "cpu_s": 8.05,
+    "cpu_s": 12.74,
     "hashes": {
       "end_state": "086ff4098b7b0401512e564ff958d0c9151828b7617fe62ec8351674207d1560",
       "events": "54c95c53fbe4c63efee61bfb31b6327c16cff7fbb588a2f1566cce545c7741b8",
@@ -44,7 +44,7 @@
     "info": "20345 events, 600 s battle, winner alpha"
   },
   "s5_tac_trace": {
-    "cpu_s": 15.03,
+    "cpu_s": 22.02,
     "hashes": {
       "end_state": "086ff4098b7b0401512e564ff958d0c9151828b7617fe62ec8351674207d1560",
       "events": "54c95c53fbe4c63efee61bfb31b6327c16cff7fbb588a2f1566cce545c7741b8",
@@ -54,13 +54,13 @@
     "info": "20345 events, 600 s battle, winner alpha"
   },
   "s7_leg_trace": {
-    "cpu_s": 12.96,
+    "cpu_s": 20.68,
     "hashes": {
-      "end_state": "fe4edd4ef11f01b1f2ff653911aa16682b2dedc11c461f3aceeb3e5dbdca747e",
-      "events": "5caf2d61ea3c2236b06da5029c67d2bff818d717a726150dcaa824c033bf1bf5",
-      "result": "0b38c8751926ee64aa8c564a478a37c97a34779c8b18f29bc1a9afc6284b4e16",
-      "sim_trace": "96559211ab7cdd22992c5aa2899c4d78ee6df9e5f6daeedafef9aed27cf34d8b"
+      "end_state": "9c685278452a87da5318131dd2695d1be46e90456d8d1536941d464791b384e0",
+      "events": "fed1d273c0a875e968e5064d1c95658737f339c167e7d1aaaf7ceaca6894f52b",
+      "result": "9687fc346b0da59713e6a8f783ead210d48713c5b8883bd2a33325d6dffc9046",
+      "sim_trace": "3431c157d8b8edcb1bd71f4482027014c1cb5b780782e166ecdb54a32b5cf189"
     },
-    "info": "7538 events, 600 s battle, winner beta"
+    "info": "9075 events, 600 s battle, winner beta"
   }
 }
