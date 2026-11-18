@@ -150,7 +150,8 @@ def helm_window(simulation: Any, ship_id: str, since: float, now: float,
     evade overlay swung a burning order's thrust axis - burned on the order,
     and counted in burned_s too; ``swing_turn_s`` the seconds it burned at
     the order's throttle with the nose still turning onto the line (not
-    counted as burned).
+    counted as burned; with the nose more than 90 deg off the drive idles
+    and those seconds are turning_s).
     """
     if now - since < 1.0:
         return None
@@ -229,9 +230,13 @@ def helm_window(simulation: Any, ship_id: str, since: float, now: float,
             out["modes"][mode] = out["modes"].get(mode, 0.0) + dur
             continue
         if swung and data.get("off_line"):
-            # Burning at the order's throttle while still turning onto its
-            # line: not yet the order's burn.
-            out["swing_turn_s"] += dur
+            # Still turning onto the order's line: burning at the order's
+            # throttle (within 90 deg of it), or with the drive idling at the
+            # turn token (farther off) - not yet the order's burn either way.
+            if app >= 0.5 * req * (engine if isinstance(engine, (int, float)) else 1.0):
+                out["swing_turn_s"] += dur
+            else:
+                out["turning_s"] += dur
             continue
         if swung:
             out["swing"][mode] = out["swing"].get(mode, 0.0) + dur

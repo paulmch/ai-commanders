@@ -1,13 +1,13 @@
 {
   "calib": {
-    "cpu_s": 8.41,
+    "cpu_s": 8.52,
     "hashes": {
       "rows": "c8d998ebca371c1cd6f1197f0e69e7e908239fea36065915ebf153065af3bbec"
     },
     "info": "24 engagements, 1674 rounds"
   },
   "s11_leg": {
-    "cpu_s": 10.15,
+    "cpu_s": 10.44,
     "hashes": {
       "end_state": "00cd150481725cac75be0090efa3707704fa5e6dced19473e437292ac8411654",
       "events": "b44133581984edf955a144e334feace274cdd68bea17cee2d211081c7ea1a45b",
@@ -16,7 +16,7 @@
     "info": "19496 events, 600 s battle, winner beta"
   },
   "s2_tac_300": {
-    "cpu_s": 4.81,
+    "cpu_s": 4.62,
     "hashes": {
       "end_state": "08b0dd7cfa836e5b19e1c5541e8da90e7d49b47697ce33128d1ac338fecd9e10",
       "events": "98e609de513d7f1d3e5a096b3c40ce4f41d5346062595af80dcd2fd186367d7e",
@@ -25,17 +25,17 @@
     "info": "3667 events, 182 s battle, winner beta"
   },
   "s4_tac_trace": {
-    "cpu_s": 9.46,
+    "cpu_s": 9.63,
     "hashes": {
       "end_state": "216fbc0ba8732652b8870e7b111418aeea789ffe06b9e020b262ba86ed001861",
       "events": "a059b09d1f9e767b777f976647b6146fd238aa611fb0aefbd0de08946c537d37",
       "result": "c5ed9842d37ffe0b9509f245cc8f6bd426c714374ba7b284ba299cb2d151ccea",
-      "sim_trace": "b4242a0ae0d1ccaa49e4ab42f38446670a75729322f716791640dc37376842a6"
+      "sim_trace": "c5042d1fb884b00d8a911b52c7b09a06f3926bd3de8aa3258259f959c69173b5"
     },
     "info": "3559 events, 234 s battle, winner alpha"
   },
   "s5_tac": {
-    "cpu_s": 8.88,
+    "cpu_s": 9.14,
     "hashes": {
       "end_state": "086ff4098b7b0401512e564ff958d0c9151828b7617fe62ec8351674207d1560",
       "events": "54c95c53fbe4c63efee61bfb31b6327c16cff7fbb588a2f1566cce545c7741b8",
@@ -44,7 +44,7 @@
     "info": "20345 events, 600 s battle, winner alpha"
   },
   "s5_tac_trace": {
-    "cpu_s": 21.88,
+    "cpu_s": 16.35,
     "hashes": {
       "end_state": "086ff4098b7b0401512e564ff958d0c9151828b7617fe62ec8351674207d1560",
       "events": "54c95c53fbe4c63efee61bfb31b6327c16cff7fbb588a2f1566cce545c7741b8",
@@ -54,7 +54,7 @@
     "info": "20345 events, 600 s battle, winner alpha"
   },
   "s7_leg_trace": {
-    "cpu_s": 13.93,
+    "cpu_s": 13.87,
     "hashes": {
       "end_state": "fe4edd4ef11f01b1f2ff653911aa16682b2dedc11c461f3aceeb3e5dbdca747e",
       "events": "5caf2d61ea3c2236b06da5029c67d2bff818d717a726150dcaa824c033bf1bf5",

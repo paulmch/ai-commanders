@@ -586,6 +586,17 @@ class TestDigest:
         assert "launch_torpedo rejected (at the decision)" in text
         assert "older" not in text
 
+    def test_engine_notes_name_a_swung_burn_as_such(self):
+        # The evade overlay keeping a burning order's burn (execution_state
+        # swing) is not "jinking off a slug's line".
+        sim = CombatSimulation(decision_interval=30.0, seed=1)
+        ship(sim, "alpha_1", "corvette", "alpha", (0, 0, 0))
+        sim.events.append(SimulationEvent(SimulationEventType.EXECUTION_STATE, 31.0, "alpha_1",
+                                          None, {"mode": "EVADE", "requested_throttle": 1.0,
+                                                 "applied_throttle": 1.0, "swing": True}))
+        text = "\n".join(intel.engine_notes(sim, ["alpha_1"], since_t=30.0))
+        assert "swinging its ordered burn" in text and "jinking" not in text
+
 
 # =============================================================================
 # ADM-03 rendering: CAPTAIN REPORTS from admiral.captain_reports

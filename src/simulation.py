@@ -29,10 +29,15 @@ Evade overlay on a burning order (Maneuver.evade, owner's rule, 2026-11):
   still apply after it) and evasion steers the THRUST AXIS round a cone of
   half-angle EVADE_BURN_CONE_DEG about the burn line - 20 deg, the nose arc
   (30 deg) less PRESENT_ARC_MARGIN_DEG, so a round coming down the burn line
-  still strikes the nose armour. At the cone edge the burn keeps cos(20) =
-  94 % of its push along the line; the sideways 34 % is the dodge. The aim
+  still strikes the nose armour while the nose is on its aim. At the cone
+  edge the burn keeps cos(20) = 94 % of its push along the line; the
+  sideways 34 % is the dodge. The aim
   is always a cone point; the nose overshoots it on carried spin (measured
-  up to ~37 deg: scripts/evade_burn_measure.py max_off_deg).
+  up to ~41 deg; past 30 deg - outside the nose arc - on under 1 % of
+  swing ticks: scripts/evade_burn_measure.py max_off_deg, the review's
+  monitor). Shooters a few degrees off the burn line do see the flank more
+  often: in the review's nose-on charge 4 % (dreadnought) to 47 % (frigate)
+  of the hits struck the lateral belt.
 - When it swings: whenever evasion has the helm (a round, a blinded torpedo
   or a guided torpedo inbound) and also while an armed enemy gun ship is
   within EVADE_BURN_GUN_REACH_KM with nothing inbound yet (_under_guns). A
@@ -82,8 +87,8 @@ Evade overlay on a burning order (Maneuver.evade, owner's rule, 2026-11):
 - Range keepers are a hybrid: their burns at or above
   EVADE_BURN_MIN_THROTTLE are swung; below it (coasting or trimming on the
   range) the order is engine-off for the overlay and it jinks at full
-  throttle as before, which is most of their time under fire - so the
-  fire-control forecast prices them as engine-off dodgers.
+  throttle as before. The fire-control forecast prices them as engine-off
+  dodgers, which fits their harness rounds better than the swing.
 - The round-trip budget of a RUN (_run_round_trip_too_late) on a burning
   order counts the turn back to the swing cone, not to the thickest armour.
 - Recorded: execution_state carries 'swing': true while the drive is lit
@@ -2617,12 +2622,11 @@ class CombatSimulation:
         burn = getattr(target, 'evade_burn', None)
         if (dodges and not evasive and burn is not None
                 and not (maneuver is not None and maneuver.steers_to_aim)):
-            # A fixed-line burn swung by the overlay. A range keeper is not:
-            # between the burns it swings, its trims fall below
-            # EVADE_BURN_MIN_THROTTLE and the overlay jinks at full throttle
-            # (most of its time under fire: scripts/evade_burn_measure.py
-            # hold), so the older dodge model prices it
-            # (firecontrol.SWING_ACCEL_FRACTION comment).
+            # A fixed-line burn swung by the overlay. A range keeper is
+            # priced by the older dodge model, which fits it better
+            # (firecontrol.SWING_ACCEL_FRACTION comment): it also jinks at
+            # full throttle whenever its correction falls below
+            # EVADE_BURN_MIN_THROTTLE, and its corrections move the line.
             swing = accel * burn[0] * burn[1]
 
         # The HEADING burn the lead does not see yet. The lead extrapolates

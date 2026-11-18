@@ -193,11 +193,14 @@ JINK_ACCEL_FRACTION = 0.39
 # (scripts/fire_control_calibration.py harness) - on the even seeds: 0.24
 # (log-likelihood -3997); held out on the odd seeds -4016 (the bounded
 # DODGE_BURN_S shape, best 0.27: -4018 / -4029, and it forecast 1.5-2x the
-# hits landed under fleet fire beyond 300 km). A range keeper (HOLD_RANGE, standoff INTERCEPT, toward_*)
-# is not priced by its swing: below EVADE_BURN_MIN_THROTTLE its order counts
-# as engine-off and the overlay jinks at full throttle, which it does for
-# most of its time under fire (CombatSimulation.target_motion), so the older
-# dodge model prices it.
+# hits landed under fleet fire beyond 300 km). A range keeper (HOLD_RANGE,
+# standoff INTERCEPT, toward_*) is priced by the older dodge model instead
+# (CombatSimulation.target_motion): it swings its burns, but jinks at full
+# throttle whenever its correction falls below EVADE_BURN_MIN_THROTTLE, and
+# its own corrections keep moving the burn line the swing is measured from.
+# On harness rounds at HOLD_RANGE + dodge and a 60 km standoff INTERCEPT +
+# dodge (11k each) that model fits better than the swing: log-likelihood
+# -3989 vs -4167 and -4668 vs -4718.
 SWING_ACCEL_FRACTION = 0.24
 
 # A HEADING target still turning onto its ordered heading (or holding a

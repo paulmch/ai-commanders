@@ -659,7 +659,8 @@ def predict_plans(
             sigma_w = wobble_sigma_m(dts, accels[sid], wobble, alpha, omega_max)
         a_max = sim.ships[sid].kinematic_state.max_acceleration_ms2()
         burn = getattr(sim.ships[sid], "evade_burn", None)
-        if burn is not None:
+        man = sim.ships[sid].current_maneuver
+        if burn is not None and not (man is not None and man.steers_to_aim):
             # The evade overlay on a burning order swings the burn inside its
             # cone instead of jinking across at full thrust: its sideways
             # authority is a_max x throttle x sin(cone), as fire control

@@ -909,7 +909,11 @@ def engine_notes(sim: Any, ship_ids: Iterable[str], since_t: float,
     for sid in sorted(ids, key=lambda x: (len(x), x)):
         parts = []
         mode = str((helm.get(sid) or {}).get("mode") or "").upper()
-        if mode in EVASION_MODES:
+        if (helm.get(sid) or {}).get("swing") and mode in EVASION_MODES:
+            # The evade overlay keeping a burning order's burn and swinging
+            # it (simulation module docstring), not taking the drive.
+            parts.append(f"helm {mode} (swinging its ordered burn within 20 deg of the line)")
+        elif mode in EVASION_MODES:
             parts.append(f"helm {mode} ({EVASION_MODES[mode]})")
         blocked = Counter(r for r in (weapons.get(sid) or {}).values()
                           if r and r not in _WEAPON_OK)

@@ -1544,7 +1544,8 @@ class TestEvasionDriveClaims:
                       r"intact, (\d+)% after\): it was lost in (\d+) of 24 runs with the "
                       r"overlay, (\d+) of 24 without\. A destroyer cancelling 2 km/s of closure "
                       r"with its nose still on the enemy: closing at ([\d.]+) km/s after 60 s "
-                      r"with the overlay, ([\d.]+) without it", doc)
+                      r"with the overlay, ([\d.]+) without it \(lost in (\d+) and (\d+) of 24 "
+                      r"runs\)", doc)
         assert m, "the measured overlay sentence changed shape"
         q = [float(g) for g in m.groups()]
         seeds = range(1, 25)
@@ -1594,5 +1595,7 @@ class TestEvasionDriveClaims:
         assert q[10] == got[("escape", "destroyer", "None")]["dead"]
         assert q[11] == pytest.approx(got[("flip", "destroyer", "dodge")]["close60"], abs=0.05)
         assert q[12] == pytest.approx(got[("flip", "destroyer", "None")]["close60"], abs=0.05)
+        assert q[13] == got[("flip", "destroyer", "dodge")]["dead"]
+        assert q[14] == got[("flip", "destroyer", "None")]["dead"]
         loc = got[("escape", "destroyer", "dodge")]["loc"]
         assert loc.get("tail", 0) + loc.get("lateral", 0) > 2 * loc.get("nose", 0)

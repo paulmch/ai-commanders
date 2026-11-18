@@ -2883,9 +2883,9 @@ MANEUVERS (tell captains which to use):
   dodges far less (14% of rounds hit while it was intact, 54% after): it was lost in 16
   of 24 runs with the overlay, 24 of 24 without. A destroyer cancelling 2 km/s of
   closure with its nose still on the enemy: closing at 1.3 km/s after 60 s with the
-  overlay, 1.7 without it. On an order that does not burn
-  (PADLOCK, MAINTAIN, throttle 0) the overlay flies the drive: jinks at full throttle,
-  TANK (half throttle) or BRACE (drive off).
+  overlay, 1.7 without it (lost in 14 and 16 of 24 runs). On an order that does not
+  burn (PADLOCK, MAINTAIN, throttle 0) the overlay flies the drive: jinks at full
+  throttle, TANK (half throttle) or BRACE (drive off).
 - BRAKE: burn against the ship's own (world-frame) velocity
 - MAINTAIN: engine OFF - coast at current velocity, no thrust, no rotation
 - PADLOCK: engine off, the nose tracks the target (spinal on him) - coast and shoot

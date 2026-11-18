@@ -215,6 +215,20 @@ class TestHelmWindow:
         assert "burned 15 of 30 s on your order" in text
         assert "turning onto the burn line at your throttle under fire 15 s" in text
 
+    def test_beyond_90_degrees_off_the_line_the_drive_idles_and_it_says_turning(self):
+        events = [_ev("MANEUVER_STARTED", 30.0, **HEADING),
+                  _ev("EXECUTION_STATE", 30.0, mode="TANK", requested_throttle=1.0,
+                      applied_throttle=0.05, engine_fraction=1.0, fuel_fraction=1.0,
+                      swing=True, off_line=True),
+                  _ev("EXECUTION_STATE", 40.0, mode="EVADE", requested_throttle=1.0,
+                      applied_throttle=1.0, engine_fraction=1.0, fuel_fraction=1.0,
+                      swing=True),
+                  _ev("PROJECTILE_LAUNCHED", 31.0, ship="foe", target="me")]
+        w = helm_window(_helm_sim(events), "me", 30.0, 60.0)
+        assert w["turning_s"] == pytest.approx(10.0) and w["swing_turn_s"] == 0.0
+        text = helm_window_text(_helm_sim(events), "me", 30.0, 60.0)
+        assert "turning onto the burn line 10 s" in text and "at your throttle" not in text
+
     def test_evasion_holding_the_burn_is_named_with_the_threat(self):
         # Recorded (d alpha_1 T+240): "BRACE, requested 100% throttle, applied
         # 0% (turning onto the burn line, or fuel/engine limited)". (Recorded

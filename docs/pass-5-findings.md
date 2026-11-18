@@ -290,6 +290,7 @@ was reviewed. It had two defects, fixed in a second round:
 | same: km gained after 120 s | 6 | 89 | 109 | 98 |
 | destroyer cancelling 2 km/s closure on 1 destroyer: closest approach | 46 km | 67 km | 72 km | 67 km |
 | same from 180 degrees off (flip): closing at 60 s | 2.0 km/s | 1.5 | 1.3 | 1.7 |
+| flip: destroyers lost | 0 | 6 | 14 | 16 |
 | HOLD_RANGE 150 km under torpedo + gun fire (review's `holdab`, 8 seeds x 3 hulls): RMS range error | 11-22 km | 34-43 km | 2.7-7.2 km | 1.8-5.1 km |
 
 **What it costs.**
@@ -298,6 +299,21 @@ was reviewed. It had two defects, fixed in a second round:
   the burn and shows the guns the tail. 30 % of tail hits strike the drive, and a damaged
   drive dodges far less. Escaping destroyers die 16 of 24 times against 2 of 24 before
   (24 of 24 without the overlay).
+- **The flip is still costly.** A cancel-closure order flown from 180 degrees off now
+  idles the drive through the far half of its turn. It cancels closure faster than before,
+  but loses 14 of 24 destroyers against 6 when it burned through the turn (16 with no
+  overlay, 0 on the parent, which turned the nose to the guns). Idling was chosen for range
+  keeping: burning through the turn put a HOLD_RANGE 7-16 km off its range.
+- **Along the line, the value depends on the hull and on the drive.**
+  - With the drive intact, an escaping destroyer is hit by 14 % of rounds against 39 %
+    without the overlay; an escaping battlecruiser by 35 % against 50 %.
+  - A battlecruiser cancelling closure on a lone destroyer gains nothing: 50 % against 49 %.
+  - Pooled over whole runs, an escaping battlecruiser is hit more with the overlay (61 %
+    against 55 %), because the survivors get caught at short range.
+- **Cone adherence.** The aim is always a cone point, but the nose overshoots on carried
+  spin: up to 41 degrees, and past 30 degrees (outside the nose arc) on under 1 % of swing
+  ticks. In the nose-on charge, 4 % (dreadnought) to 47 % (frigate) of the hits struck the
+  flank.
 - **Heavy hulls dodge less.** A dreadnought swings a narrower, slower cone and is hit 47 %
   against 34 % before and 51 % without the overlay.
 - **Swing cost.** Under fire or near enemy guns the burn always loses about 6 % of its push to
@@ -308,8 +324,15 @@ was reviewed. It had two defects, fixed in a second round:
   buckets beyond 300 km are pinned in `RESIDUALS` with bands that also hold on 56 fresh
   harness seeds; two of them, HOLD_RANGE under fleet fire beyond 300 km, are hit less than
   forecast in both seed sets.
-- **CPU.** An overlay-heavy scenario costs about 18 % more CPU; the benchmark battles barely
-  use the overlay.
+- **CPU.** An overlay-heavy scenario (36 runs of the cross case) took 16.9 s against 14.7 s
+  on the parent. The benchmark battles barely use the overlay.
+- **Review probes, re-run.** Engine-off orders and EVADE: 228 engagements, 0 differ.
+  The never-below monitor counts 7,628 and 121 ticks below the order's throttle, all with
+  the nose more than 90 degrees off (the deliberate idle), and none at or under 90 degrees.
+  `_order_burn` stays pure, and flat-RNG mirror battles show equal swing ticks per side.
+  In draft battles (seeds 21-32), 317 of 1,366 swing ticks were off the cone (253 of 812 in
+  round 1). Held attitudes went from 116 ticks to 0, and thrust against the order from 111
+  throttle-seconds to 2.1 (token only).
 
 ### Recording files
 
