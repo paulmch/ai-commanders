@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {
-  JET_REACH_KM, JET_LEVEL, JET_NEAR_KM, JET_FALL, JET_CAP, JET_PIXEL_FLOOR, JET_SEGMENTS, JET_GAIN_SIN,
+  JET_REACH_KM, JET_LEVEL, JET_NEAR_KM, JET_FALL, JET_CAP, JET_PIXEL_FLOOR, JET_SEGMENTS, JET_GAIN_SIN, JET_LENS_CLEAR,
   TAN_CORE, BOUND_TAN, BOUND_R0
 } from './PlumeProfile.js';
 import { getGraphicsSettings } from './Quality.js';
@@ -187,7 +187,12 @@ const fragmentShader = /* glsl */`
         d2 = d2line;
         G = 0.5 * (erfS(k * (b - tc)) - erfS(k * (a - tc))) / sinT;
       }
-      float dc = S * exp(-d2 / (wf * wf)) * G * gain;
+      // no veil when the lens sits in the beam: gas within a few radii of it is not drawn
+      // (at the sub-chord's point nearest the axis, where its Gaussian mass is)
+      float tl = par ? tm : clamp(tc, a, b);
+      float rc = ${f(JET_LENS_CLEAR, 3)} * wf / max(sinT, ${f(JET_GAIN_SIN, 3)});   // the beam's length along a grazing ray
+      float lens = 1.0 - exp(-(tl * tl) / (rc * rc));
+      float dc = S * exp(-d2 / (wf * wf)) * G * gain * lens;
       col += dc;
       hot += dc * exp(-z / ${f(0.6 * JET_NEAR_KM, 4)});
     }

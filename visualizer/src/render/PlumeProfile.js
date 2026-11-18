@@ -60,6 +60,13 @@ export const JET_CAP = 2.0;
  * held at 1/JET_GAIN_SIN (a crossing at ~27 degrees) - see above.
  */
 export const JET_GAIN_SIN = 0.45;
+/**
+ * Gas within this many beam radii of the lens (measured along the view ray,
+ * divided by the capped crossing angle) is not drawn: a camera sitting in
+ * the beam (a chase camera dead astern) would otherwise look through a veil
+ * of its own surroundings.
+ */
+export const JET_LENS_CLEAR = 3;
 /** Pixel floor of the beam radius (pixels); the floor keeps the energy, so a far spear is a faint hairline. */
 export const JET_PIXEL_FLOOR = 0.75;
 /** Sub-chords of the analytic column per pixel, by graphics tier. */
@@ -193,7 +200,11 @@ export function jetColumn(ro, rd, jet, opt = {}) {
       d2 = d2line;
       G = 0.5 * (erfS(k * (b - tc)) - erfS(k * (a - tc))) / sinT;
     }
-    col += S * Math.exp(-d2 / (wf * wf)) * G * gain;
+    // (at the sub-chord's point nearest the axis, where its Gaussian mass is)
+    const tl = par ? tm : Math.min(Math.max(tc, a), b);
+    const rc = JET_LENS_CLEAR * wf / Math.max(sinT, JET_GAIN_SIN);   // the beam's length along a grazing ray
+    const lens = 1 - Math.exp(-(tl * tl) / (rc * rc));
+    col += S * Math.exp(-d2 / (wf * wf)) * G * gain * lens;
   }
   return col;
 }

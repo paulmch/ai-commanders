@@ -3,8 +3,8 @@
 Captured from the Three.js viewer on November 15, 2026 (pass-5 viewer: sun
 shadows, image-based fill, ambient occlusion, new hulls and effects) with
 headless Chromium (Playwright, SwiftShader WebGL) at 1600 × 900 with
-`--gfx high`. `dreadnought.png` and the four `damage-*` images were captured
-on November 17, 2026, `hero.png` and `plume-wash.png` re-shot on November 18,
+`--gfx high`. The four `damage-*` images were captured on November 17, 2026,
+`hero.png`, `dreadnought.png` and `plume-wash.png` re-shot on November 18,
 2026 (the one-piece drive plume), all at the viewer's default hull scale
 (`auto`: real-size hulls up close); see [Hull scale](#hull-scale). The two live-mode images (`live-deliberation.png`,
 `draft-splash.png`) are still the October 25, 2026 captures. These are
@@ -69,13 +69,18 @@ where oversize hulls are visible against real-size blasts as cinematic.
 November 18 re-shoot (drive plume, same commands). The exhaust is now one
 light field from the bells outward (`visualizer/src/render/PlumeProfile.js`):
 the flame and the spear beyond it both start at the nozzle and only fade, so
-the November 17 frames' detached haze is gone. In `hero.png` the eight
-dreadnought plumes are hotter white-blue lances with a glow at the bells; in
+the November 17 frames' detached haze is gone. In `hero.png` and
+`dreadnought.png` the eight dreadnought plumes are hotter white-blue lances
+with a glow at the bells; in
 `plume-wash.png` the battleship's exhaust is a single beam that fades from
 the bells to the washed destroyer instead of a flame, a dark gap and a pale
-cloud around the destroyer. The hero frame was taken from the staged copy of
-the same battle, `p4c_vfix_showcase_s0.json` (substitute it for
-`showcase_s0_200pt.json` in the command if that file is not staged).
+cloud around the destroyer. The two dreadnought frames were taken from the
+staged copy of the same battle, `p4c_vfix_showcase_s0.json` (substitute it
+for `showcase_s0_200pt.json` in the commands if that file is not staged).
+Frames with a lit torch that were not re-shot (`dying-hulk.png`,
+`damage-hulk.png`, `reactor-breach.jpg` and the cinematic fleet and HUD
+shots) still show the November 17 torch: same placement, slightly cooler
+and with the slower, eased dying-drive cough.
 
 ## Recordings
 

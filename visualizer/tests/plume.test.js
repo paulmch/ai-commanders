@@ -14,7 +14,7 @@ function fakeCanvas() { return { width: 4, height: 4, style: {}, getContext: () 
 globalThis.document ??= { createElement: () => fakeCanvas() };
 
 const {
-  JET_CORE_DEG, JET_MAX_DEG, JET_REACH_KM, JET_LEVEL, JET_FALL, JET_NEAR_KM, JET_CAP, JET_SEGMENTS, JET_GAIN_SIN, TAN_CORE,
+  JET_CORE_DEG, JET_MAX_DEG, JET_REACH_KM, JET_LEVEL, JET_FALL, JET_NEAR_KM, JET_LENS_CLEAR, JET_CAP, JET_SEGMENTS, JET_GAIN_SIN, TAN_CORE,
   jetAxial, jetWidth, jetColumn, jetCap, driveRadius
 } = await import('../src/render/PlumeProfile.js');
 const { DriveJets, jetPose, NOZZLE_AFT } = await import('../src/render/DriveJet.js');
@@ -86,7 +86,9 @@ function brute(ro, rd, w0) {
     const x = ro[0] + rd[0] * t, y = ro[1] + rd[1] * t, z = -(ro[2] + rd[2] * t);
     if (z < 0 || z > JET_REACH_KM) continue;
     const w = jetWidth(z, w0);
-    col += jetAxial(z) / (1.7724539 * w) * Math.exp(-(x * x + y * y) / (w * w)) * dt;
+    const rc = JET_LENS_CLEAR * w / Math.max(Math.hypot(rd[0], rd[1]), JET_GAIN_SIN);
+    const lens = 1 - Math.exp(-(t * t) / (rc * rc));
+    col += jetAxial(z) / (1.7724539 * w) * Math.exp(-(x * x + y * y) / (w * w)) * lens * dt;
   }
   return col;
 }
@@ -196,6 +198,31 @@ test('looking straight down the axis the jet is bounded and stays on the ship', 
     }
     assert.ok(peak < 0.5 * JET_LEVEL, `${camZ} km ahead: a faint ring (${peak.toFixed(3)})`);
     assert.ok(wide < 0.05 * peak + 1e-4, `${camZ} km ahead: light outside 6 degrees (${wide.toFixed(4)} vs ${peak.toFixed(3)})`);
+  }
+});
+
+test('a camera sitting in the beam (dead astern) sees no veil of its own surroundings', () => {
+  // the old risk: inside the cone the jet is drawn at the lens, and an
+  // optically thin beam around the camera would glow the same in every direction
+  for (const type of ['corvette', 'battleship']) {
+    const w0 = drive(type).driveR * trueK(type);
+    for (const aft of [0.2, 0.5, 2, 8]) {
+      const cam = [0.3 * jetWidth(aft, w0), 0, -aft];   // in the core
+      // the view of a camera looking at the ship, but for the ship itself (the
+      // bright root around the bells is the disc it should see); looking the
+      // other way, down the jet, it sees the beam converge - also not a veil
+      let veil = 0;
+      for (let off = 0.3; off <= 1.75; off += 0.02) {
+        for (const phi of [0, 1.3, 2.6]) {
+          const rd = unit([Math.sin(off) * Math.cos(phi), Math.sin(off) * Math.sin(phi), Math.cos(off)]);
+          veil = Math.max(veil, jetCap(jetColumn(cam, rd, { w0 }, { pixelWorld: PX720 })));
+        }
+      }
+      assert.ok(veil < 0.05, `${type} ${aft} km astern: veil ${veil.toFixed(3)}`);
+      // and toward the ship the root is still there
+      const toShip = toward(cam, [0, 0, -0.01]);
+      assert.ok(jetCap(jetColumn(cam, toShip, { w0 }, { pixelWorld: PX720 })) >= 0, 'finite');
+    }
   }
 });
 
@@ -346,6 +373,6 @@ test('ignition and cutoff are instant along the whole plume, and a scrub shows t
     const v = look(t);
     for (const s of times) if (Math.abs(t - s) < 1 / 120) first.set(s, look(s)), void v;
   }
-  for (const s of [...times].reverse()) { look(9 - s); assert.equal(look(s), first.get(s) ?? look(s), `t = ${s}`); }
+  for (const s of [...times].reverse()) { look(9 - s); assert.ok(first.has(s), `sampled ${s}`); assert.equal(look(s), first.get(s), `t = ${s}`); }
   torch.dispose();
 });
