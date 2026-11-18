@@ -56,8 +56,9 @@ export class TrackHud {
     this.storage = storage;
     this.onScope = onScope;
     this.scope = loadTrackScope(storage);
-    let open = true;
-    try { open = storage?.getItem(LEGEND_KEY) !== '0'; } catch { /* default open */ }
+    // The glyph key opens on request (KEY button) and is remembered; closed by default
+    let open = false;
+    try { open = storage?.getItem(LEGEND_KEY) === '1'; } catch { /* default closed */ }
     this.legendOpen = open;
     this.shown = null;
     this._togo = null;

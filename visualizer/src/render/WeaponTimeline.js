@@ -526,6 +526,26 @@ export class WeaponTimeline {
    */
   threatsAt(time, out = new Map()) {
     out.clear();
+    for (const r of this.roundsAt(time, this._tr || (this._tr = []))) {
+      let e = out.get(r.target);
+      if (!e) out.set(r.target, e = { count: 0, live: 0, blind: 0, eta: Infinity, rangeKm: Infinity });
+      e.count++;
+      if (r.blind) e.blind++; else e.live++;
+      e.rangeKm = Math.min(e.rangeKm, r.range / 1000);
+      e.eta = Math.min(e.eta, r.eta);
+    }
+    return out;
+  }
+
+  /**
+   * The rounds threatsAt counts, one entry each: {id, target, launch, eta,
+   * range (m), blind, track}. `track` is the round's record, whose
+   * `position` Projectiles sets to the drawn spot each frame (the torpedo-
+   * wave chips, TacticalLayout.groupWaves). Rounds coasting away with a dead
+   * seeker are no threat and left out. Reuses `out`.
+   */
+  roundsAt(time, out = []) {
+    out.length = 0;
     const s = this._ts || (this._ts = makeSample()), g = this._tg || (this._tg = makeSample());
     for (const tr of this.torpedoes.values()) {
       if (time < tr.start || time >= tr.end || !tr.samples.length) continue;
@@ -539,12 +559,7 @@ export class WeaponTimeline {
         ? ((s.vel[0] - g.vel[0]) * dx + (s.vel[1] - g.vel[1]) * dy + (s.vel[2] - g.vel[2]) * dz) / range : 0;
       const blind = time >= tr.disabledAt || !!s.state.disabled;
       if (blind && !(closure > 1)) continue;   // coasting away: no longer a threat
-      let e = out.get(target);
-      if (!e) out.set(target, e = { count: 0, live: 0, blind: 0, eta: Infinity, rangeKm: Infinity });
-      e.count++;
-      if (blind) e.blind++; else e.live++;
-      e.rangeKm = Math.min(e.rangeKm, range / 1000);
-      if (closure > 1) e.eta = Math.min(e.eta, range / closure);
+      out.push({ id: tr.id, target, launch: tr.start, eta: closure > 1 ? range / closure : Infinity, range, blind, track: tr });
     }
     return out;
   }
