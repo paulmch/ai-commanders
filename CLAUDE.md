@@ -413,6 +413,16 @@ hashed by the perf harness) is unchanged.
   `render/HullRigs.js` aims from the event log, clamped to the masks and slewed
   at the engine's class rates (`MountLimits.TRAVERSE_DEG_S` mirrors
   `src/weapon_arcs.py`), as pure functions of battle time.
+- Tactical layer (fleet range): `src/TacticalLayout.js` is the pure layout (no DOM/THREE):
+  label density (`auto|minimal|full`, L key, `?labels=`, localStorage `aic.viewer.labels`),
+  single-linkage same-side clustering in screen px (`CLUSTER_PX`, group chips), chip placement
+  off every hull box, chip and HUD panel, torpedo waves grouped by target + launch burst
+  (`groupWaves`). `ContactOverlay` projects ships and torpedo heads and applies it; hover
+  (CSS / `setHover` from registry rows) expands a chip on top and never feeds the layout.
+  `render/TargetingLines.js` draws one weighted line per (side, target, on-screen shooter
+  cluster), faint unless focused or firing; below `full`, unfocused ships' tracks keep only
+  their path (`Tracks.othersPathOnly`). `tests/tactical_layout.test.js` pins no-overlap,
+  clustering stability and scrub determinism.
 - Ownership: in-flight weapons live in render/Projectiles.js (WeaponTimeline
   decides what exists at time t); persistent hit aftermath and deaths in
   DamageTimeline.js + render/DamageFX.js; hulls expose `userData.rcsMounts` /

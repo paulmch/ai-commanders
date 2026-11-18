@@ -93,7 +93,7 @@ const ribbonVertex = /* glsl */`
     // 2.15 px half-width) and are allowed a fatter one up close (3 .. 7.5 px)
     bool slug = kind < 0.5;
     float floorPx = slug ? 1.1 + 0.35 * aAge.x : kind < 1.5 ? 1.0 : kind < 2.5 ? 0.6 : plume ? 1.2 : engage ? 0.75 : jet ? 0.7 : 1.0;
-    float capPx = plume ? 64.0 : engage ? 0.75 : jet ? 16.0 : kind > 5.5 ? 24.0 : kind > 1.5 && kind < 2.5 ? 2.2
+    float capPx = plume ? 64.0 : engage ? 2.2 : jet ? 16.0 : kind > 5.5 ? 24.0 : kind > 1.5 && kind < 2.5 ? 2.2
       : slug ? 3.0 + 1.5 * aAge.x : 3.0;
     float width = max(pixel * floorPx, min(aStyle.x, pixel * capPx));
     // Thin effects retain a controlled subpixel contribution at fleet scale.
