@@ -500,13 +500,23 @@ export class Projectiles {
         const flarePx = this.pixelAt(this.b) * (terminal ? 3.6 : 2.6);
         this.flashes.add(this.b, this.bellAxis, Math.max((terminal ? 0.6 : 0.28) * size * tk, flarePx), (terminal ? 1.3 : 0.7) * Math.max(size, 0.6), 1);
       }
-      if (vis > 0.01) this.rcsJets(tr, time, vis, tk);
+      // In its launch sequence the round's cold-gas push is the show: the
+      // puffs read bigger (slow gas, like the hull RCS), and next to a hull
+      // big on screen the unit needs no fleet-range arrow to be found
+      let seqW = 0, nearHull = 0;
+      if (tr.launch?.state) {
+        seqW = time < (tr.ignitionAt ?? Infinity) ? 1 : 0;
+        const ls = this.manager.ships.get(tr.launch.ship);
+        if (ls?.visible) nearHull = THREE.MathUtils.smoothstep((ls.userData.drawn?.length ?? 0) / this.pixelAt(ls.position), 40, 120);
+      }
+      if (vis > 0.01) this.rcsJets(tr, time, vis, tk, 1 + 2.2 * seqW);
       // Small seeker glint keeps an unpowered body readable at mid range.
       this.b.copy(this.a).addScaledVector(this.dir, 1.02 * tk);
       this.flashes.add(this.b, this.dir, 0.045 * tk, disabled ? 0.06 : 0.18, 1);
       // Faction arrowhead at fleet range pointing along the round's travel
       // (not the Tracks checkpoint diamond), gone once the body resolves.
-      const mark = (1 - THREE.MathUtils.smoothstep(bodyPx, 8, 24)) * (disabled ? 0.4 : 0.9);
+      const mark = (1 - THREE.MathUtils.smoothstep(bodyPx, 8, 24)) * (disabled ? 0.4 : 0.9)
+        * (1 - nearHull * launchWeight(time, tr.launch?.t ?? -Infinity, tr.ignitionAt));
       if (mark > 0) {
         this.vel.fromArray(this.sample.vel);
         this.markers.add(this.a, this.vel.lengthSq() > 1 ? this.vel : this.dir, mark, tr.faction, disabled ? 5 : 7);
@@ -548,7 +558,7 @@ export class Projectiles {
    * glow, and each pulse leaves an expanding puff that drifts off along
    * the nozzle axis for PULSE.puffLife after it closes.
    */
-  rcsJets(tr, time, vis, tk = 1) {
+  rcsJets(tr, time, vis, tk = 1, puff = 1) {
     const list = this.pulses, lv = this.jetLv;
     for (let p = 0; p < list.count; p++) {
       const pulse = list[p];
@@ -573,10 +583,10 @@ export class Projectiles {
           this.flashes.add(this.jetP, this.jetD, (0.035 + 0.02 * level) * tk, 1.0 * level * vis * open, 5, seed);
         }
         // Exhaust puff: gas coasting off the nozzle, spreading thin.
-        const travel = (0.06 + 0.75 * (1 - Math.exp(-4 * age)) / 4) * tk;
+        const travel = (0.06 + 0.75 * (1 - Math.exp(-4 * age)) / 4) * tk * puff;
         this.jetQ.copy(this.jetP).addScaledVector(this.jetD, travel);
-        const radius = (0.03 + 0.075 * (1 - Math.exp(-6 * age))) * tk;
-        this.flashes.add(this.jetQ, this.jetD, radius, 0.3 * level * vis * fade * Math.min(1, age / 0.03), 5, seed);
+        const radius = (0.03 + 0.075 * (1 - Math.exp(-6 * age))) * tk * puff;
+        this.flashes.add(this.jetQ, this.jetD, radius, 0.3 * level * vis * fade * Math.min(1, age / 0.03) * (puff > 1 ? 1.4 : 1), 5, seed);
       }
     }
   }
