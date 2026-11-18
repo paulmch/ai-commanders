@@ -499,7 +499,8 @@ class EngineDatalink:
                 out.append(msg)
 
         for (faction, reason, old_t, new_t), (rounds, first_t) in sorted(retasks.items()):
-            why = "target lost" if reason == "target_lost" else "surplus on target"
+            why = {"target_lost": "target lost", "target_surrendered": "target surrendered"}.get(
+                reason, "surplus on target")
             text = (f"{rounds} round{'s' if rounds != 1 else ''} re-tasked "
                     f"{channel.ship_name(old_t)} -> {channel.ship_name(new_t)} ({why}), "
                     f"first impact ~T+{first_t:.0f}")

@@ -416,11 +416,13 @@ CAPTAIN_TOOLS_BASE = [
         "function": {
             "name": "surrender",
             "description": (
-                "Surrender your ship. Your ship will stop maneuvering, drift on its "
-                "current trajectory, and become untargetable by all weapons. Enemy ships "
-                "can no longer shoot at you. In fleet battles, only your ship surrenders - "
-                "other friendly ships continue fighting. Use this to preserve your crew "
-                "when defeat is inevitable."
+                "Surrender your ship. Your ship stops maneuvering and fighting, drifts on "
+                "its current trajectory, and enemies can no longer open fire or launch at "
+                "it. Torpedoes already inbound on you are re-tasked by the enemy fleet "
+                "datalink onto your fleet-mates wherever they can still reach one; rounds "
+                "that cannot reach anyone else keep coming at you. Slugs already in flight "
+                "still arrive. In fleet battles only your ship surrenders - the others keep "
+                "fighting, and the re-tasked rounds go to them."
             ),
             "parameters": {
                 "type": "object",
