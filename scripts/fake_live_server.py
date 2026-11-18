@@ -80,12 +80,15 @@ class FakeLiveServer:
         self.models = self.billing.get("models") or {
             f: (recording.get(f"{f}_model") or None) for f in ("alpha", "beta")}
         self.model_calls_total = sum(1 for e in self.events if e["event_type"] == "model_call")
-        # Checkpoints inside the recording (the first decision follows one
-        # opening interval of coasting)
+        # Checkpoints inside the recording: checkpoint 1 at the header's
+        # first_checkpoint_s (0.0 since pass 5: orders before the clock
+        # starts); older recordings omit it and decide first one interval in.
+        first = recording.get("first_checkpoint_s")
+        self.first_cp = float(first) if isinstance(first, (int, float)) else self.interval
         self.checkpoints = []
-        k = 1
-        while k * self.interval < self.t_end - 1e-9:
-            self.checkpoints.append(k * self.interval)
+        k = 0
+        while self.first_cp + k * self.interval < self.t_end - 1e-9:
+            self.checkpoints.append(self.first_cp + k * self.interval)
             k += 1
         self.ended_wall = None
 
@@ -223,7 +226,8 @@ class FakeLiveServer:
 
     def battle_live_block(self, cur, pause, released, held):
         ended = cur >= self.t_end and not pause
-        checkpoint = int(cur // self.interval + 1e-9)
+        checkpoint = (int((cur - self.first_cp) // self.interval + 1e-9) + 1
+                      if cur >= self.first_cp - 1e-9 else 0)
         stopped = any(e["event_type"] == "battle_stopped" for e in released)
         if ended:
             stage = "Battle stopped" if stopped else "Battle complete"
@@ -237,6 +241,7 @@ class FakeLiveServer:
             "checkpoint": checkpoint,
             "sim_time_s": round(cur, 1),
             "next_checkpoint_t": (math.floor(cur / self.interval + 1e-9) + 1) * self.interval,
+            "first_checkpoint_t": self.first_cp,
             "waiting_for": sorted({c["faction"] for c in pending if c["faction"]}),
             "draft": None,
             "status_age_s": round(self.status_age(cur, pause), 1),

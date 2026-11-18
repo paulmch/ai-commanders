@@ -895,6 +895,7 @@ class BattleVisualizer {
     live.simTimeS = info.sim_time_s ?? 0;
     live.nextCheckpointT = info.next_checkpoint_t ?? 0;
     live.interval = info.decision_interval_s || live.interval || 30;
+    live.firstCheckpointT = Number.isFinite(info.first_checkpoint_t) ? info.first_checkpoint_t : live.interval;
     live.waitingFor = info.waiting_for || [];
     live.draft = info.draft || live.draft;
     live.stage = info.stage ?? null;
@@ -1413,7 +1414,7 @@ class BattleVisualizer {
     const t = tc.currentTime;
     const deciding = live.status === 'paused' && this.loader.duration - t < 2.5;
     const cpT = deciding ? live.simTimeS : nextCheckpointAfter(t, live.interval);
-    const n = deciding ? live.checkpoint : checkpointNumber(cpT, live.interval);
+    const n = deciding ? live.checkpoint : checkpointNumber(cpT, live.interval, live.firstCheckpointT);
     const label = deciding ? `CP${n} · DECIDING ${formatClock(this.liveStatusElapsed())}` : `CP${n} · ${formatClock(cpT - t)}`;
     el.style.left = `${Math.min(100, (cpT / tc.duration) * 100)}%`;
     el.title = `Checkpoint ${n} at T+${Math.round(cpT)}s`;

@@ -16,7 +16,7 @@ from pathlib import Path
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.llm.providers import create_llm_client, llm_models, provider_for_model
+from src.llm.providers import check_required_provider, create_llm_client, llm_models, provider_for_model
 from src.llm.spending import RequestBudget, SpendLedger
 
 DEFAULT_LEDGER = Path(__file__).resolve().parent.parent / "data/recordings/spend_ledger.jsonl"
@@ -37,6 +37,9 @@ def _available_ship_types() -> list:
     except Exception:
         return ["corvette", "frigate", "destroyer", "cruiser",
                 "battlecruiser", "battleship", "dreadnought"]
+
+
+MOCK_DEFAULT_MODELS = ("claude-sonnet-5-5", "claude-sonnet-5")
 
 
 def openrouter_pricing(models) -> dict:
@@ -79,11 +82,18 @@ def apply_model_overrides(fleet_config, args) -> None:
     rewrite a loaded fleet config."""
     for side in _sides(getattr(args, "no_admiral", None)):
         getattr(fleet_config, f"{side}_fleet").admiral = None
-    for side in _sides(getattr(args, "show_score", None)):
-        admiral = getattr(fleet_config, f"{side}_fleet").admiral
-        if admiral is None:
-            raise ValueError(f"--show-score {side}: that fleet has no admiral")
-        admiral.show_score = True
+    choice = getattr(args, "show_score", None)
+    if choice is not None:
+        # --show-score picks the sides that see it (default: every admiral,
+        # AdmiralConfig.show_score); "none" turns it off for both.
+        shown = set(_sides(None if choice == "none" else choice))
+        for side in ("alpha", "beta"):
+            admiral = getattr(fleet_config, f"{side}_fleet").admiral
+            if admiral is None:
+                if side in shown:
+                    raise ValueError(f"--show-score {side}: that fleet has no admiral")
+                continue
+            admiral.show_score = side in shown
     for side in _sides(getattr(args, "intent_only", None)):
         admiral = getattr(fleet_config, f"{side}_fleet").admiral
         if admiral is None:
@@ -116,15 +126,21 @@ Examples:
     )
 
     # Model settings
+    # No default models (launch safety): a duel names both, a fleet battle
+    # takes them from its --fleet-config. --mock-llm alone defaults to
+    # claude-sonnet-5-5 vs claude-sonnet-5 (free, in-process).
     parser.add_argument(
-        "--alpha-model",
-        default="openrouter/anthropic/claude-sonnet-5",
-        help="Model for alpha captain (default: claude-sonnet-5)",
+        "--alpha-model", default=None,
+        help="Model for the alpha captain of a duel (required without --fleet-config)",
     )
     parser.add_argument(
-        "--beta-model",
-        default="openrouter/anthropic/claude-sonnet-5",
-        help="Model for beta captain (default: claude-sonnet-5)",
+        "--beta-model", default=None,
+        help="Model for the beta captain of a duel (required without --fleet-config)",
+    )
+    parser.add_argument(
+        "--require-provider", choices=("anthropic", "openrouter"), default=None,
+        help="Refuse to start when any role's model is served by another provider "
+             "(overrides the fleet JSON's \"require_provider\")",
     )
 
     # Captain names
@@ -272,9 +288,11 @@ Examples:
     parser.add_argument("--intent-only", choices=sides, default=None,
                         help="Experiment: that side's admiral issues the directive and battle plan "
                              "(and may order torpedo salvos) but no per-ship orders; captains decide")
-    parser.add_argument("--show-score", choices=sides, default=None,
-                        help="Fleet mode: that side's admiral sees the time-limit verdict as it "
-                             "stands each checkpoint (AdmiralConfig.show_score; off by default)")
+    parser.add_argument("--show-score", choices=sides + ("none",), default=None,
+                        help="Fleet mode: which admirals see the time-limit verdict as it stands "
+                             "each checkpoint, with the draw-margin verdict (AdmiralConfig.show_score). "
+                             "Default: every admiral (or the fleet JSON's \"show_score\"); "
+                             "'none' turns it off; captains never get it")
     parser.add_argument("--label", default=None,
                         help="Free-text note naming the experiment this run belongs to: stored in the "
                              "--status-file, the recording provenance and the ledger lines")
@@ -346,6 +364,19 @@ Examples:
     )
 
     args = parser.parse_args(argv)
+    if not args.fleet_config and not (args.alpha_model and args.beta_model):
+        if args.mock_llm:
+            args.alpha_model = args.alpha_model or MOCK_DEFAULT_MODELS[0]
+            args.beta_model = args.beta_model or MOCK_DEFAULT_MODELS[1]
+        else:
+            print("Error: name both models (--alpha-model and --beta-model) or a --fleet-config; "
+                  "there are no default models, so a mistyped command never spends on one",
+                  file=sys.stderr)
+            return 2
+    if args.fleet_config:
+        # Display names only (the fleet config carries the real models).
+        args.alpha_model = args.alpha_model or "fleet"
+        args.beta_model = args.beta_model or "fleet"
 
     # Map personality strings to enums
     personality_map = {
@@ -430,7 +461,7 @@ Examples:
             config_overrides["captain_order"] = None if args.captain_order == "auto" else args.captain_order
         if args.label:
             config_overrides["label"] = args.label
-        if not fleet_config and args.show_score:
+        if not fleet_config and args.show_score not in (None, "none"):
             raise ValueError("--show-score needs --fleet-config (fleet battles have admirals)")
         if not fleet_config and (args.no_admiral or args.intent_only):
             raise ValueError("--no-admiral / --intent-only need --fleet-config")
@@ -473,6 +504,8 @@ Examples:
         if args.cache_warmup:
             anthropic_options["cache_warmup"] = True
         llm_ids = llm_models(models)
+        check_required_provider(
+            args.require_provider or (fleet_config.require_provider if fleet_config else None), llm_ids)
         if args.mock_llm:
             not_anthropic = [m for m in llm_ids if provider_for_model(m) != "anthropic"]
             if not_anthropic:

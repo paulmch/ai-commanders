@@ -138,6 +138,9 @@ def test_score_line_goes_into_the_new_header(recording):
     user = call["messages"][-1]
     for p in user["content"]:
         if p.get("type") == "text":
+            # The score line is on by default now: replace the recorded one.
+            p["text"] = "\n".join(l for l in p["text"].split("\n")
+                                  if not l.startswith("SCORE IF THE BATTLE ENDED NOW"))
             p["text"] += "\nSCORE IF THE BATTLE ENDED NOW (time-limit verdict): you 210 / them 153 = you win"
     _, info = rt.apply_plot_mode(call, "replot", {})
     assert info["score"] == "score you 210 / them 153"

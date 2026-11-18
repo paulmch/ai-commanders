@@ -365,7 +365,7 @@ def test_key_never_reaches_repr_or_provenance():
 
 def _battle(tmp_path, alpha, beta, respond=None, record=None, limit=None, turns=3,
             config=None, captain_models=None, admirals=True, anthropic_extra=None,
-            transport_options=None, ships=("frigate", "corvette")):
+            transport_options=None, ships=("frigate", "corvette"), reasoning_effort="medium"):
     from scripts.run_live_draft_battle import LiveDraftRunner, LiveDraftState
     from src.llm.battle_runner import BattleConfig, load_fleet_data
     from src.llm.captain import LLMCaptainConfig
@@ -375,7 +375,7 @@ def _battle(tmp_path, alpha, beta, respond=None, record=None, limit=None, turns=
     captain_models = captain_models or {}
     extra_models = [m for m in captain_models.values() if m != "heuristic"]
     client = create_llm_client(alpha, [beta, *extra_models], temperature=None, max_tokens=8192,
-                               reasoning_effort="medium", anthropic_options={
+                               reasoning_effort=reasoning_effort, anthropic_options={
                                    "api_key": FAKE_KEY, "max_retries": 0, **(anthropic_extra or {}),
                                    "http_client": anthropic.DefaultHttpxClient(
                                        transport=mock_anthropic_transport(

@@ -383,7 +383,7 @@ seed: these battles are close to deterministic, so a cell is 0% or 100%, not
 
 #### Why (from the battle events)
 
-The torpedo fleets launch at the first checkpoint (t = 30 s, 500 km), their
+The torpedo fleets launch at the first checkpoint (t = 30 s on the pre-T+0 schedule this was measured on; checkpoint 1 is at T+0 now; 500 km), their
 first rounds arrive at t = 97-104 s and the last gun hull dies at t = 140-175 s.
 Over the old-price battles of a pure torpedo fleet against a gun fleet (seeds
 1-2, 150 pts):
