@@ -3097,7 +3097,7 @@ from the first checkpoint; per battle, 3 seeds each):
   ~19 GJ), 6 of 8 lost; the same burn with evade full - 50% hit, 6 of 8 lost (on the
   tail and flank: the overlay keeps the burn and turns no nose round); charging
   (INTERCEPT) - 73% hit (~14.5 km/s, ~26 GJ), 8 of 8 lost. First loss ~70 s in each
-  (the rounds launched at the first checkpoint, T+0).
+  (rounds launched at the first checkpoint, at battle start).
 - start 1000 km: nose-on - 72% hit, 8 of 8 lost (first at ~260 s); burning away - 35%
   hit, 5 of 8 lost (first at ~280 s); charging - 45% hit, 4 of 8 lost. The wall killed
   1.3 boats per battle charging, 0.7 nose-on, 0 burning away.

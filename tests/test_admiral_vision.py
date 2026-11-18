@@ -50,6 +50,16 @@ class StubClient:
         raise AssertionError("complete() should not be called in these tests")
 
 
+# Where make_runner's battles write (vision frames follow recording_dir): a
+# pytest temp dir per test, never the repository's data/recordings.
+_RECORDING_DIR = None
+
+
+@pytest.fixture(autouse=True)
+def _recordings_in_tmp(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], "_RECORDING_DIR", str(tmp_path / "recordings"))
+
+
 def make_runner(alpha_vision: bool, beta_admiral: bool = True,
                 beta_vision: bool = False):
     fleet_config = BattleFleetConfig.from_dict({
@@ -82,6 +92,7 @@ def make_runner(alpha_vision: bool, beta_admiral: bool = True,
         record_battle=False,
         record_sim_trace=False,
         seed=99,
+        recording_dir=_RECORDING_DIR or "data/recordings",
     )
     captain_cfg = LLMCaptainConfig(
         name="Test", ship_name="TIS Test", model="stub",
@@ -221,3 +232,12 @@ def test_view_state_keeps_each_sides_previous_checkpoint():
     assert view._last_frame["alpha"] is not first
     assert view._last_frame["alpha"]["t"] == runner.simulation.current_time
     assert "beta" not in view._last_frame
+
+
+def test_vision_frames_follow_the_recording_dir(tmp_path):
+    """The runner writes admiral-vision frames under its own recording_dir
+    (default data/recordings/vision/<stamp>), so a battle given a recording
+    dir - every test - writes nothing into the repository's data/."""
+    runner, _ = make_runner(alpha_vision=True)
+    assert runner._admiral_view_dir.parent == Path(_RECORDING_DIR) / "vision"
+    assert Path(_RECORDING_DIR) == tmp_path / "recordings"
