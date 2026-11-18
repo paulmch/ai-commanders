@@ -212,3 +212,18 @@ def test_a_gun_fleet_closes_fast_on_a_torpedo_fleet():
     _fleet(sim2, "alpha", ["cruiser_torpedo", "corvette", "frigate"], 0)
     _fleet(sim2, "beta", ["cruiser_torpedo", "corvette", "frigate"], 500)
     assert F.default_spec(sim2, "alpha") == F.WALL_SPEC
+
+
+def test_the_pincer_is_called_off_if_the_enemy_charges_before_the_flankers_are_on_station():
+    def sim_with(closing_kps):
+        sim = CombatSimulation(seed=10, time_step=1.0)
+        _fleet(sim, "alpha", ["dreadnought", "frigate", "frigate"], 0)
+        enemy = _fleet(sim, "beta", ["dreadnought", "frigate"], 500)
+        assert F.default_spec(sim, "alpha") is F.PINCER_SPEC
+        F.flank_state(sim, "alpha", F.PINCER_SPEC)          # positioning, attack not started
+        for s in enemy:
+            s.kinematic_state.velocity = Vector3D(-closing_kps * 1000.0, 0.0, 0.0)
+        sim.current_time += 30.0
+        return F.default_spec(sim, "alpha")
+    assert sim_with(F.PINCER_ABORT_CLOSING_KPS - 0.5) is F.PINCER_SPEC
+    assert sim_with(F.PINCER_ABORT_CLOSING_KPS + 0.5) is F.CLASSIC_SPEC

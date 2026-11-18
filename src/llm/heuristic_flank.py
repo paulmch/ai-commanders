@@ -114,6 +114,13 @@ PINCER_CAPITAL_SHARE = 0.3
 PINCER_MIN_FAST_HULLS = 2
 PINCER_ANGLE_DEG = 70.0
 PINCER_STATION_KM = 150.0
+# Abort the pincer (fly close-and-pass) if the enemy line closes faster than
+# this before the flankers are on station. Measured after the evade overlay
+# began burning through flips (pass-5 9b645f4): legacy's charging flagship
+# line beat the pincer 13 of 24 on held-out seeds; with the abort at 2 km/s
+# (tuning seeds: v legacy 23/0/9 -> 27/1/4, v wall 32/0/0 kept; 3 km/s never
+# fired) held-out flagship v legacy went 11/0/13 -> 21/1/2.
+PINCER_ABORT_CLOSING_KPS = 2.0
 HEAVY_ENEMY_ACCEL_G = 1.05
 HEAVY_LINE_SHARE = 0.5
 # A gun fleet facing a TORPEDO fleet (>= TORPEDO_FLEET_SHARE of its hulls
@@ -191,7 +198,38 @@ def default_spec(simulation: Any, faction: str) -> Optional[FlankSpec]:
             ships = [s for s in simulation.ships.values() if _alive(s)]
             store[faction] = choose_default_spec([s for s in ships if s.faction == faction],
                                                  [s for s in ships if s.faction != faction])
-        return store[faction]
+        spec = store[faction]
+        if spec is PINCER_SPEC:
+            st = (getattr(simulation, _ATTR, None) or {}).get(faction)
+            if (st is not None and not st.attack_started
+                    and enemy_line_closing_kps(simulation, faction) > PINCER_ABORT_CLOSING_KPS):
+                # He charges before the flankers are on station: the heavies
+                # would meet him alone. Close and pass instead, for good.
+                spec = store[faction] = CLASSIC_SPEC
+        return spec
+
+
+def enemy_line_closing_kps(simulation: Any, faction: str) -> float:
+    """Closing speed (km/s) between the enemy's gun line and our fleet's
+    centre, along the line between them."""
+    ships = [s for s in simulation.ships.values() if _alive(s)]
+    ours = [s for s in ships if s.faction == faction]
+    theirs = [s for s in ships if s.faction != faction and tactics.has_guns(s)]
+    if not ours or not theirs:
+        return 0.0
+    co, ct = _centre(ours), _centre(theirs)
+    vo = ours[0].velocity * 0.0
+    for s in ours:
+        vo = vo + s.velocity
+    vo = vo * (1.0 / len(ours))
+    vt = theirs[0].velocity * 0.0
+    for s in theirs:
+        vt = vt + s.velocity
+    vt = vt * (1.0 / len(theirs))
+    los = ct - co
+    if los.magnitude < 1.0:
+        return 0.0
+    return -(vt - vo).dot(los.normalized()) / 1000.0
 
 
 _SWEEP = None
