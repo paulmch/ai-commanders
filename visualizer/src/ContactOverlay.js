@@ -65,6 +65,21 @@ function setLeader(el, leader, ox, oy) {
  * bracket; a dying hulk counts down to its reactor detonation. The C toggle
  * hides the whole layer and the engagement lines (render/TargetingLines.js).
  */
+/**
+ * Screen point beside an on-screen ship `t` ({x, y, r}) toward a world
+ * point that projects off screen (or behind the camera): the ship's
+ * bracket edge plus a margin, kept inside the view.
+ */
+export function missBeside(world, camera, t, width, height, tmp) {
+  tmp.copy(world).project(camera);
+  let dx = (tmp.x + 1) * width / 2 - t.x, dy = (1 - tmp.y) * height / 2 - t.y;
+  if (tmp.z > 1) { dx = -dx; dy = -dy; }   // behind the lens: the projection is mirrored
+  const m = Math.hypot(dx, dy);
+  if (!(m > 1e-6)) return null;
+  const d = Math.max(14, t.r || 0) + 30;
+  return { x: Math.min(width - 8, Math.max(8, t.x + dx / m * d)), y: Math.min(height - 8, Math.max(8, t.y + dy / m * d)) };
+}
+
 export class ContactOverlay {
   constructor(container, selectShip) {
     this.container = container;
@@ -72,12 +87,14 @@ export class ContactOverlay {
     this.contacts = new Map();
     this.groupEls = [];
     this.waveEls = [];
+    this.missEls = [];
     this.rounds = [];
     this.enabled = true;
     this.mode = DEFAULT_LABEL_MODE;
     this.hoverId = null;
     this.point = new THREE.Vector3();
     this.view = new THREE.Vector3();
+    this.miss = new THREE.Vector3();
     this.panels = [];
     this.last = null;   // this frame's layout (harness, tests)
   }
@@ -105,6 +122,7 @@ export class ContactOverlay {
     this.contacts.clear();
     this.groupEls = [];
     this.waveEls = [];
+    this.missEls = [];
     this.hoverId = null;
     for (const [id, info] of Object.entries(ships)) {
       const button = document.createElement('button');
@@ -139,6 +157,18 @@ export class ContactOverlay {
         list: el.querySelector('.group-list'), leader: el.querySelector('.group-leader'), key: null });
     }
     return this.groupEls[i];
+  }
+
+  /** Pooled torpedo miss marker i (wave-chip style, not clickable). */
+  missEl(i) {
+    while (this.missEls.length <= i) {
+      const el = document.createElement('div');
+      el.className = 'wave-contact miss';
+      el.innerHTML = '<span class="wave-leader"></span><span class="wave-chip"></span>';
+      this.container.appendChild(el);
+      this.missEls.push({ el, chip: el.querySelector('.wave-chip'), leader: el.querySelector('.wave-leader') });
+    }
+    return this.missEls[i];
   }
 
   /** Pooled torpedo-wave chip i (click: select the target). */
@@ -214,7 +244,33 @@ export class ContactOverlay {
       }
     }
 
-    const layout = layoutTactical({ view: { width, height, top: 8, bottom: 8 }, panels, ships, waves,
+    // Torpedo misses: a short-lived marker at the closest point (WeaponTimeline.missMarksAt)
+    const misses = [];
+    if (tl?.missMarksAt) {
+      for (const m of tl.missMarksAt(now, this.marks || (this.marks = []))) {
+        this.miss.set(m.pos[0] * 0.001, m.pos[1] * 0.001, m.pos[2] * 0.001);
+        let t = screen.get(m.mark.target);
+        if (!t) {
+          // (a ship big on screen carries no contact chip: find it directly)
+          const ship = scene.ships.get(m.mark.target);
+          const sp = ship?.visible ? project(ship.position) : null;
+          if (sp) {
+            this.view.copy(ship.position).applyMatrix4(camera.matrixWorldInverse);
+            const depth = Math.max(-this.view.z, camera.near);
+            t = { x: sp.x, y: sp.y, r: (ship.userData.drawn || ship.userData.size).length * height / (4 * depth * tanHalf) };
+          }
+        }
+        let p = project(this.miss);
+        // close in on the ship the pass is off screen (a 2 km miss of a 65 m
+        // corvette seen from a few hull lengths): the marker sits by the
+        // ship, on the side the round went past
+        if (!p && t) p = missBeside(this.miss, camera, t, width, height, this.point);
+        if (!p || panels.some(r => overlaps({ x: p.x - 4, y: p.y - 4, w: 8, h: 8 }, r))) continue;
+        misses.push({ key: m.mark.track.id, x: p.x, y: p.y, tx: t?.x ?? p.x, ty: t?.y ?? p.y, text: m.mark.text, alpha: m.alpha });
+      }
+    }
+
+    const layout = layoutTactical({ view: { width, height, top: 8, bottom: 8 }, panels, ships, waves, misses,
       mode: this.mode, selectedId });
     this.last = layout;
 
@@ -318,6 +374,19 @@ export class ContactOverlay {
       setLeader(rec.leader, w.leader, 0, 0);
     });
     for (let i = layout.waves.length; i < this.waveEls.length; i++) this.waveEls[i].el.hidden = true;
+
+    layout.misses.forEach((m, i) => {
+      const rec = this.missEl(i);
+      rec.el.hidden = !m.box;
+      if (!m.box) return;
+      rec.el.style.opacity = m.alpha.toFixed(3);
+      rec.chip.style.left = `${m.box.x.toFixed(1)}px`;
+      rec.chip.style.top = `${m.box.y.toFixed(1)}px`;
+      rec.chip.style.width = `${m.box.w}px`;
+      if (rec.chip.textContent !== m.text) rec.chip.textContent = m.text;
+      setLeader(rec.leader, m.leader, 0, 0);
+    });
+    for (let i = layout.misses.length; i < this.missEls.length; i++) this.missEls[i].el.hidden = true;
   }
 
   clear() {
@@ -325,5 +394,6 @@ export class ContactOverlay {
     this.contacts.clear();
     this.groupEls = [];
     this.waveEls = [];
+    this.missEls = [];
   }
 }

@@ -1945,6 +1945,9 @@ body {
 .wave-contact.blind { color: #9eb2c0; }
 .wave-contact.blind .wave-chip { color: #b8c4cc; background: rgba(8,12,16,0.5); border-left-color: rgba(160,180,190,0.4); }
 .wave-chip:hover, .wave-chip:focus-visible { border-left-color: #fff; color: #fff; }
+/* torpedo miss: a short-lived quiet tag at the closest point ("MISS 2.4 km · TANK DRY") */
+.wave-contact.miss { color: #c9d2d8; }
+.wave-contact.miss .wave-chip { color: #dfe6ea; background: rgba(6,10,14,0.62); border-left-color: rgba(214,224,230,0.7); cursor: default; pointer-events: none; }
 .ship-contact.imminent .contact-bracket { border-color: var(--accent-critical); animation: contact-pulse 0.42s ease-in-out infinite alternate; }
 .ship-contact.dying .contact-bracket { animation: contact-pulse var(--pulse, 0.8s) ease-in-out infinite alternate; }
 @keyframes contact-pulse {
