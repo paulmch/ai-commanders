@@ -161,9 +161,9 @@ def roll_to_unmask_default() -> bool:
 class HullMount:
     """One mount of a hull class: slot id, kind and its blocked-direction mask."""
 
-    __slots__ = ("slot", "kind", "index", "mask", "open_fraction", "axis", "pos")
+    __slots__ = ("slot", "kind", "index", "mask", "open_fraction", "axis", "pos", "rounds")
 
-    def __init__(self, slot, kind, index, mask, open_fraction, axis, pos):
+    def __init__(self, slot, kind, index, mask, open_fraction, axis, pos, rounds=()):
         self.slot = slot
         self.kind = kind            # 'gun' | 'pd' | 'spinal' | 'launcher'
         self.index = index          # position in the hull's mount list ('tur' order)
@@ -171,6 +171,9 @@ class HullMount:
         self.open_fraction = open_fraction
         self.axis = axis
         self.pos = pos
+        # launcher only: ((pos, eject, nose), ...) per magazine round in firing
+        # order, body frame (src/torpedo_launch.py); () when the file has none
+        self.rounds = rounds
 
 
 class HullMounts:
@@ -225,6 +228,10 @@ def parse_hull_mounts(data: dict) -> Dict[str, HullMounts]:
                 open_fraction=float(m.get("open_fraction", 0.0)),
                 axis=tuple(float(v) for v in (m.get("axis") or (0.0, 0.0, 1.0))),
                 pos=tuple(float(v) for v in (m.get("pos") or (0.0, 0.0, 0.0))),
+                rounds=tuple(
+                    (tuple(float(v) for v in r["pos"]), tuple(float(v) for v in r["eject"]),
+                     tuple(float(v) for v in r["nose"]))
+                    for r in (m.get("rounds") or ())),
             ))
         table[hull] = HullMounts(hull, mounts)
     return table

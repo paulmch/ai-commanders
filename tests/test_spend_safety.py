@@ -60,9 +60,9 @@ def _config(tmp_path, alpha_admiral, alpha_captains, beta_admiral, beta_captains
         "battle_name": "cap test", "time_limit_s": (turns + 1) * 30, "decision_interval_s": 30,
         "initial_distance_km": 500, "max_checkpoints": turns, "seed": 7, "personality_selection": False,
         "alpha_fleet": {"admiral": alpha_admiral, "ships": [
-            {"ship_type": "frigate", "model": alpha_captains}, {"ship_type": "corvette", "model": alpha_captains}]},
+            {"ship_type": "frigate", "model": alpha_captains}, {"ship_type": "destroyer", "model": alpha_captains}]},
         "beta_fleet": {"admiral": beta_admiral, "ships": [
-            {"ship_type": "frigate", "model": beta_captains}, {"ship_type": "corvette", "model": beta_captains}]},
+            {"ship_type": "frigate", "model": beta_captains}, {"ship_type": "destroyer", "model": beta_captains}]},
     }))
     return path
 

@@ -501,6 +501,10 @@ def _salvo(hull, seed=23, range_km=450):
     tda._evade(victim)
     tda._build(sim, "att", "cruiser_torpedo", "beta", data, range_km, 0, -1)
     launched, modes, struck = 0, [], []
+    # Times count from the first round's ignition: in its launch sequence
+    # (src/torpedo_launch.py) a round is nobody's threat yet, so the victim
+    # only weaves until then.
+    ignited = None
     for _ in range(1600):
         if launched < 6:
             if sim.inject_command("att", {"type": "launch_torpedo", "target_id": "victim"}):
@@ -509,8 +513,10 @@ def _salvo(hull, seed=23, range_km=450):
         for ev in sim.step():
             if ev.event_type == ET.TORPEDO_IMPACT and ev.data.get("hit_location"):
                 struck.append(ev.data["hit_location"])
-        if not modes or modes[-1][1] != victim.execution_mode:
-            modes.append((sim.current_time, victim.execution_mode))
+            if ev.event_type == ET.TORPEDO_IGNITION and ignited is None:
+                ignited = ev.timestamp
+        if ignited is not None and (not modes or modes[-1][1] != victim.execution_mode):
+            modes.append((sim.current_time - ignited, victim.execution_mode))
         if launched >= 6 and not sim.torpedoes:
             break
     return victim, modes, struck
@@ -535,7 +541,9 @@ def test_fast_hull_still_runs_and_turns_back_before_impact():
     """A frigate can afford the round trip: it runs first, then presents,
     and the salvo strikes the nose."""
     victim, modes, struck = _salvo("frigate")
-    names = [m for _, m in modes]
+    # (the tick the first torch lights the victim still weaves: it reacts
+    # from the next one)
+    names = [m for _, m in modes if m != "WOBBLE"]
     assert names[0] == "RUN", modes
     run_until = min(t for t, m in modes if m == "PRESENT")
     assert run_until >= 15.0, modes            # a real run, not a twitch

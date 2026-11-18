@@ -664,11 +664,14 @@ class TestFormationDoctrine:
         """Admiral doctrine: escorts cut salvo leakage, and the effect needs
         mass (a big wall clearly beats none) AND time. Single seed of the
         measured (seeds 21-23) results: a salvo launched 1200 km out leaked
-        18/18 alone vs 12/18 with 8 escorts; launched 450 km out (~70 s) it
-        leaked 18/18 even behind 8 - the battleship cannot turn away to run
-        and back in time, presents its nose, and the rounds are blinded too
-        late to dodge. The wall keeps the hull alive: alone it died in 3 of 3
-        runs, behind 8 escorts in none."""
+        18/18 alone vs 16/18 with 8 escorts (12/18 before the launch sequence,
+        src/torpedo_launch.py: 4/6 -> 5/6 on every seed and on nine jittered
+        geometries of seed 23, all from the drift cancel at ignition); launched
+        450 km out (~70 s) it leaked 18/18 even behind 8 - the battleship
+        cannot turn away to run and back in time, presents its nose, and the
+        rounds are blinded too late to dodge. The wall keeps the hull alive:
+        alone it died in 3 of 3 runs, behind 8 escorts in 1 of 3 (1200 km)
+        and none (450 km)."""
 
         def wall(n_escorts, range_km):
             sim = CombatSimulation(seed=23, time_step=0.5, decision_interval=1e9)
@@ -704,7 +707,7 @@ class TestFormationDoctrine:
         (alone, alone_killed), (walled, _) = wall(0, 1200), wall(8, 1200)
         assert alone >= 5, f"lone battleship now stops salvos ({alone}/6 hit)"
         assert alone_killed, "a lone battleship now survives a 6-round salvo"
-        assert walled <= 4 and walled < alone, (
+        assert walled <= 5 and walled < alone, (
             f"8-escort wall no longer reduces leakage ({walled}/6 vs {alone}/6) "
             "- the formation doctrine numbers are stale"
         )
@@ -1259,7 +1262,7 @@ class TestMeasuredExchangeDoctrine:
     def test_the_table_is_rendered(self, fleet):
         text = _admiral_static(fleet)
         assert "range at firing (km)  0-50    50-100  100-150 150-200 200-300 300+" in text
-        assert "hit rate              70%     62%     50%     44%     37%     26%" in text
+        assert "hit rate              70%     62%     50%     44%     36%     27%" in text
         assert "58% of all hull damage landed inside 150 km, 42% beyond." in text
 
     def test_facing_battle_numbers_are_the_seeded_runs(self, facts):
@@ -1661,6 +1664,27 @@ class TestTorpedoLinkDoctrine:
         finally:
             mod._set((8.0, 20.0))
         assert (T.RESERVE_CRUISE_CLOSING_KPS, T.RESERVE_TERMINAL_WINDOW_S) == (8.0, 20.0)
+
+    def test_launch_fact_is_measured_on_this_engine(self, facts):
+        """LAUNCH_FACT (one sentence, src/llm/torpedo_doctrine.py) quotes the
+        launch-to-ignition seconds measured by scripts/launch_sequence_facts.py
+        (fixture "launch"), and those are what the engine flies now."""
+        import importlib.util
+        from src.llm.torpedo_doctrine import FACTS, LAUNCH_FACT
+        from src.llm import prompts
+        ref = facts["launch"]
+        assert FACTS["launch"] == {"ahead_s": round(ref["ahead_s"]),
+                                   "half_round_s": round(ref["half_round_s"])}
+        assert f"~{FACTS['launch']['ahead_s']} s after launch" in LAUNCH_FACT
+        assert f"~{FACTS['launch']['half_round_s']} s when it must turn about" in LAUNCH_FACT
+        assert LAUNCH_FACT in prompts.TORPEDO_TACTICS_BLOCK
+        assert LAUNCH_FACT in prompts.ADMIRAL_TORPEDO_DOCTRINE
+        spec = importlib.util.spec_from_file_location(
+            "launch_sequence_facts", "scripts/launch_sequence_facts.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        got = mod.doctrine_facts()
+        assert (got["ahead_s"], got["half_round_s"]) == (ref["ahead_s"], ref["half_round_s"])
 
     def test_every_commander_surface_states_the_link_and_the_profiles(self):
         from src.llm.torpedo_doctrine import LINK_FACT, PROFILE_FACT

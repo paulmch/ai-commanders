@@ -211,6 +211,31 @@ def fly_torpedo(
         return None
     if not sh.ready_torpedo_launchers:
         return None
+    # The launch sequence (src/torpedo_launch.py) starts the round on the
+    # shooter's own rack / cell with its attitude, roll and spin: the shadow
+    # shooter carries them (it coasts: a forecast of a coasting launcher) and
+    # ejects the round the shooter's next launch would (same tube, same round).
+    try:
+        up = shooter.kinematic_state.up
+        sh.kinematic_state.up = Vector3D(up.x, up.y, up.z)
+        sh.angular_velocity_rad_s = float(getattr(shooter, "angular_velocity_rad_s", 0.0) or 0.0)
+        sh.angular_axis = getattr(shooter, "angular_axis", None)
+        roll = float(getattr(getattr(shooter, "arcs", None), "roll", 0.0) or 0.0)
+        if roll:
+            from .. import weapon_arcs
+            sh.arcs = weapon_arcs.ShipArcs(None, sh)
+            sh.arcs.roll = roll
+        now = float(getattr(sim, "current_time", 0.0) or 0.0)
+        real = list(shooter.ready_torpedo_launchers)
+        ready = [t.can_launch(now) for t in real]
+        for mine, tube, ok in zip(sh.ready_torpedo_launchers, real, ready):
+            mine.magazine_capacity = int(tube.magazine_capacity)
+            mine.fired_rounds = list(getattr(tube, "fired_rounds", None) or [])
+            mine.current_magazine = (max(1, int(tube.current_magazine))
+                                     if ok or not any(ready) else 0)
+    except Exception:  # noqa: BLE001 - advisory only: a test double keeps the defaults
+        pass
+    shadow.launch_sequence = bool(getattr(sim, "launch_sequence", shadow.launch_sequence))
     tg.point_defense = []   # PD is reported as turret cover, not flown
     sh.point_defense = []
     if target_evades:

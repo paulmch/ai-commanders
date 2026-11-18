@@ -237,6 +237,10 @@ def _ghost_torpedo_flight(flight: Any) -> Any:
     ghost_torp = type(torp).__new__(type(torp))
     ghost_torp.__dict__.update(torp.__dict__)
     ghost.torpedo = ghost_torp
+    # A round still in its launch sequence: the ghost coasts for its
+    # forecast hold (src/torpedo_launch.hold_left_s), then flies guidance.
+    # The sequence object is the real round's: the ghost never touches it.
+    ghost._ghost_hold_s = torp.launch_hold_s() if torp.in_launch_sequence else 0.0
     return ghost
 
 
@@ -333,6 +337,12 @@ class PredictionSimulation(CombatSimulation):
             torp.position = torp.position + torp.velocity * dt
             return False
 
+        if getattr(flight, "_ghost_hold_s", 0.0) > 0.0:
+            torp.position = torp.position + torp.velocity * dt
+            flight._ghost_hold_s -= dt
+            if flight._ghost_hold_s <= 1e-9:
+                torp.launch_seq = None      # ghost-local: its torch is lit
+            return False
         prev_pos = torp.position
         # Same guidance dispatch as CombatSimulation._update_torpedoes, minus
         # retargeting, dv bookkeeping and the hit resolution.

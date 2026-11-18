@@ -589,7 +589,8 @@ class HeuristicCaptain(LLMCaptain):
         """True if a live torpedo is inbound on us and worth dodging NOW."""
         for torp_flight in getattr(simulation, "torpedoes", []) or []:
             torp = torp_flight.torpedo
-            if torp.target_id != ship_id:
+            # (a round still in its launch sequence is no threat yet)
+            if torp.target_id != ship_id or getattr(torp, "in_launch_sequence", False):
                 continue
             rel_pos = torp.position - ship.position
             dist_m = rel_pos.magnitude
