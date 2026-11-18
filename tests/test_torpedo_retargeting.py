@@ -64,8 +64,22 @@ def _retarget_events(events):
 
 
 def _run_until(sim, t, max_steps=4000):
+    """Run to ``t`` seconds of BOOST: the launch sequence's seconds before
+    the torch lights (src/torpedo_launch.py) are added once, so every
+    scenario below meets the round at the same point of its burn as it did
+    when the torch lit at launch."""
     steps = 0
-    while sim.current_time < t and sim.torpedoes and steps < max_steps:
+    if not hasattr(sim, "_t_ign"):
+        if not sim.torpedoes:
+            sim.step()
+            steps += 1
+        while (sim.torpedoes and sim.torpedoes[0].torpedo.in_launch_sequence
+               and steps < max_steps):
+            sim.step()
+            steps += 1
+        seq = sim.torpedoes[0].torpedo.launch_seq if sim.torpedoes else None
+        sim._t_ign = (seq.ignition_t - seq.t0) if seq is not None and seq.ignition_t else 0.0
+    while sim.current_time < t + sim._t_ign and sim.torpedoes and steps < max_steps:
         sim.step()
         steps += 1
 

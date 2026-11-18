@@ -28,7 +28,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 try:
     from .physics import Vector3D, tsiolkovsky_delta_v, mass_after_burn
@@ -628,6 +628,10 @@ class Torpedo:
     # on a reassignment (None: the profile's, see cruise_floor_kps).
     profile: str = TORPEDO_PROFILE_SPRINT
     cruise_floor_override_kps: Optional[float] = None
+    # Launch sequence (src/torpedo_launch.py): eject, separate, then the
+    # torch lights. None = no sequence (the torch burns from the first tick,
+    # as every round did before it existed).
+    launch_seq: Optional[Any] = field(default=None, repr=False, compare=False)
 
     # --- Guidance filter state (owned by the torpedo, NOT TorpedoGuidance) ---
     # The simulation constructs a fresh TorpedoGuidance every tick, so any
@@ -672,6 +676,22 @@ class Torpedo:
         self.launch_position = Vector3D(
             self.position.x, self.position.y, self.position.z
         )
+
+    @property
+    def in_launch_sequence(self) -> bool:
+        """Still ejecting / separating: torch cold, not yet a threat."""
+        seq = self.launch_seq
+        return seq is not None and seq.phase != "boost"
+
+    def launch_hold_s(self) -> float:
+        """Forecast seconds until the torch lights (0 once it burns)."""
+        if not self.in_launch_sequence:
+            return 0.0
+        try:
+            from .torpedo_launch import hold_left_s
+        except ImportError:  # pragma: no cover - script-style imports
+            from torpedo_launch import hold_left_s
+        return hold_left_s(self)
 
     def distance_from_launch(self) -> float:
         """
@@ -837,6 +857,8 @@ class Torpedo:
         if closing_rate > 0 and coast_disc >= 0:
             return 2.0 * distance / (closing_rate + math.sqrt(coast_disc))
         if current_accel > 0 and current_accel > accel_los:
+            # Still in its launch sequence the torch lights only later.
+            hold = self.launch_hold_s() if self.launch_seq is not None else 0.0
             # Powered (opening, or closing too slowly): accelerate at the
             # target from rest in this frame:
             # 0.5*(A - a_los)*t^2 = d + v_open*t, then refine so the burn
@@ -848,7 +870,7 @@ class Torpedo:
             for _ in range(3):
                 t_intercept = min(max(1.0, math.sqrt(
                     2.0 * rel_offset(t_intercept).magnitude / current_accel)), 3600.0)
-            return t_intercept
+            return t_intercept + hold
         # The target out-accelerates the torpedo along the line of sight.
         return float('inf')
 
@@ -1047,6 +1069,9 @@ class TorpedoLauncher:
     current_magazine: int = 16
     cooldown_seconds: float = 30.0  # From fleet data
     last_launch_time: float = -30.0  # Ready to fire immediately
+    # Magazine rounds (hull_mounts launcher ``rounds`` indices) already
+    # ejected from this tube, in launch order (src/torpedo_launch.py).
+    fired_rounds: list = field(default_factory=list, repr=False, compare=False)
 
     def calculate_release_distance(
         self,

@@ -310,8 +310,16 @@ def _engagement(fleet_data, seed, onset_s, launch_range_m,
     tf = None
     nez_probe = None
     steps = 0
+    # The evasion onset counts from the moment the round lights its torch:
+    # before that it is still in its launch sequence (src/torpedo_launch.py)
+    # and no target treats it as a threat.
+    ignition_t = None
     while sim.torpedoes and steps < max_steps:
-        if not started and sim.current_time >= onset_s:
+        if ignition_t is None and sim.torpedoes:
+            seq = sim.torpedoes[0].torpedo.launch_seq
+            if seq is None or not seq.active:
+                ignition_t = seq.ignition_t - seq.t0 if seq is not None else 0.0
+        if not started and ignition_t is not None and sim.current_time >= onset_s + ignition_t:
             if evasion == "evasive":
                 m = Maneuver(ManeuverType.EVASIVE, start_time=sim.current_time,
                              duration=0.0, throttle=1.0)

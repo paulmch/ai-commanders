@@ -3710,6 +3710,11 @@ class LLMBattleRunner:
                 "main_direction": (torp.last_main_direction.to_tuple()
                                    if torp.last_main_direction is not None else None),
                 "rcs_thrust": torp.last_rcs_thrust.to_tuple(),
+                # Launch sequence (src/torpedo_launch.py): phase and nose while
+                # the round ejects / separates (absent once its torch burns).
+                **({"launch_phase": torp.launch_seq.phase,
+                    "nose": torp.launch_seq.nose.to_tuple()}
+                   if getattr(torp, "in_launch_sequence", False) else {}),
             })
 
         self._enrich_trace_ships(ships)
@@ -4301,6 +4306,11 @@ class LLMBattleRunner:
                 warhead_gj=data.get("warhead_gj", 0),
                 guidance_mode=data.get("guidance_mode", ""),
                 launch_distance_km=data.get("launch_distance_km", 0),
+                # launch profile (when not sprint) and the launch sequence's
+                # mount / round / eject geometry (docs/pass-5-recording-additions.md)
+                extra={k: data[k] for k in ("profile", "mount", "round", "eject_pos_m",
+                                            "eject_dir", "nose", "eject_speed_mps")
+                       if k in data},
             )
 
         elif event_type == SimulationEventType.TORPEDO_IMPACT:

@@ -92,12 +92,14 @@ try:
         kill_rounds, kill_rounds_at,
     )
     from .. import torpedo_link as _torpedo_link
+    from .. import torpedo_launch as _torpedo_launch
 except ImportError:  # pragma: no cover - script-style imports
     from torpedo_link import (  # noqa: F401
         KILL_ROUNDS_LIGHT, KILL_ROUNDS_HEAVY, LIGHT_HULLS, KILL_ROUNDS_REF_GJ,
         kill_rounds, kill_rounds_at,
     )
     import torpedo_link as _torpedo_link
+    import torpedo_launch as _torpedo_launch
 
 
 # =============================================================================
@@ -350,6 +352,7 @@ def solve_pursuit(
     horizon_s: float = SOLUTION_HORIZON_S,
     target_delay_s: float = 0.0,
     profile: str = "sprint",
+    hold_s: float = 0.0,
 ) -> Dict[str, Any]:
     """
     Fly a 1-D pursuit along the line of sight, worst case for the torpedo:
@@ -377,6 +380,8 @@ def solve_pursuit(
     ``target_delay_s``: the target starts running only then (it turns first).
     ``profile`` 'reserve': the reserve launch profile's cruise floor, and the
     terminal burn only inside its window (src/torpedo.py).
+    ``hold_s``: the round coasts this long before its torch lights (its
+    launch sequence, src/torpedo_launch.py); the flight time counts it.
     """
     window_s = None
     if profile == "reserve":
@@ -400,7 +405,7 @@ def solve_pursuit(
     while t < horizon_s:
         burn = 0.0
         a = specs.thrust_n / max(1.0, m)
-        if dv > 0:
+        if dv > 0 and t + 1e-9 >= hold_s:
             if c < floor_mps:
                 burn = min(a * dt, dv)
             elif d > 0 and (window_s is None or d / c <= window_s):
@@ -439,6 +444,7 @@ def torpedo_solution(
     mass_kg: Optional[float] = None,
     dv_left_mps: Optional[float] = None,
     profile: str = "sprint",
+    hold_s: Optional[float] = None,
 ) -> TorpedoSolution:
     """
     Verdict for a round launched from (launch_pos, launch_vel) at ``target``
@@ -456,6 +462,11 @@ def torpedo_solution(
     Measured on battle A: launches closing 2-4 km/s connected (16 hits);
     all 8 rounds launched at T+270 into a 2 g destroyer opening 3-5 km/s
     burned dry or were blinded (0 hits).
+
+    ``hold_s``: seconds before the torch lights (the launch sequence,
+    src/torpedo_launch.py). Default: for a new launch the sequence of a round
+    already nose-on (torpedo_launch.forecast_hold_s; 0 when ``sim`` flies no
+    sequence), for a round in flight 0 (pass torp.launch_hold_s()).
     """
     rel_pos = target.position - launch_pos
     rel_vel = target.velocity - launch_vel
@@ -470,9 +481,15 @@ def torpedo_solution(
         sol.reason = f"beyond {max_range_m / 1000.0:.0f} km reach"
         return sol
     envelope = pd_range_m(fleet_data)
+    if hold_s is None:
+        hold_s = 0.0
+        if mass_kg is None and (sim is None or getattr(sim, "launch_sequence", True)):
+            hold_s = _torpedo_launch.forecast_hold_s(
+                0.0, float(specs.rcs_thrust_n) / max(1.0, float(specs.mass_kg)),
+                float(getattr(sim, "time_step", 1.0) or 1.0) if sim is not None else 1.0)
     run = solve_pursuit(rng, closing, lateral, max_accel_ms2(target), specs,
                         mass_kg=mass_kg, dv_left_mps=dv_left_mps, pd_envelope_m=envelope,
-                        profile=profile)
+                        profile=profile, hold_s=hold_s)
     if not run["hit"]:
         sol.short_km = run.get("short_m", 0.0) / 1000.0
         sol.reason = ("runs dry ~%.0f km short if he runs" % sol.short_km
@@ -582,7 +599,8 @@ def gather_rounds(sim: Any, faction: str, specs: Any = None) -> List[RoundInfo]:
             try:
                 fly = solve_pursuit(dist, closing, 0.0, 0.0, torp.specs,
                                     mass_kg=torp.current_mass_kg,
-                                    dv_left_mps=info.dv_left_kps * 1000.0)
+                                    dv_left_mps=info.dv_left_kps * 1000.0,
+                                    hold_s=_torpedo_launch.hold_left_s(torp))
                 if not fly.get("hit"):
                     fly = None
                 else:
@@ -613,7 +631,8 @@ def gather_rounds(sim: Any, faction: str, specs: Any = None) -> List[RoundInfo]:
             if side == "ours" and specs is not None:
                 sol = torpedo_solution(torp.position, torp.velocity, target, specs,
                                        mass_kg=torp.current_mass_kg,
-                                       dv_left_mps=info.dv_left_kps * 1000.0)
+                                       dv_left_mps=info.dv_left_kps * 1000.0,
+                                       hold_s=_torpedo_launch.hold_left_s(torp))
                 info.can_reach = sol.reaches
         else:
             hit = ballistic_threat(torp.position, torp.velocity, live)
@@ -1477,7 +1496,8 @@ def torpedo_defence(sim: Any, faction: str, fleet_data: Optional[Dict[str, Any]]
             rng = rel_pos.magnitude
             closing = _closing(rel_pos, rel_vel) if rng > 1.0 else 0.0
             dv = float(getattr(torp, "remaining_delta_v_kps", 0.0) or 0.0) * 1000.0
-            kw = dict(mass_kg=torp.current_mass_kg, dv_left_mps=dv, pd_envelope_m=envelope)
+            kw = dict(mass_kg=torp.current_mass_kg, dv_left_mps=dv, pd_envelope_m=envelope,
+                      hold_s=_torpedo_launch.hold_left_s(torp))
             hold.append(solve_pursuit(rng, closing, 0.0, 0.0, torp.specs, **kw))
             run.append(solve_pursuit(rng, closing, 0.0, accel, torp.specs,
                                      target_delay_s=turn_s, **kw))
@@ -1485,7 +1505,7 @@ def torpedo_defence(sim: Any, faction: str, fleet_data: Optional[Dict[str, Any]]
 
         def summary(results: List[Dict[str, Any]], maneuvering: bool) -> Dict[str, Any]:
             # A round that runs dry on the way is a straight-line wreck: it
-            # still strikes a hull holding course (the PD doctrine's 17/18),
+            # still strikes a hull holding course (the PD doctrine's 18/18),
             # but misses one that burns away - the engine flew it so.
             hits = [x for x in results if x.get("hit")
                     and not (maneuvering and x.get("dry_before_impact"))]

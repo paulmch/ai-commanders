@@ -355,7 +355,9 @@ class TestTorpedoSolution:
         _, _, _, msgs = battle_a_turn("alpha", t=180)
         econ = section(msgs[1]["content"], "=== TORPEDO ECONOMY ===")
         line = next(l for l in econ.splitlines() if "OCS Falchion-2 [beta_6]" in l)
-        assert "(POOR)" in line and " to kill at ~7 GJ each = " in line
+        # (~6 GJ: the forecast counts the launch sequence's seconds before
+        # the torch lights, src/torpedo_launch.py; ~7 GJ when it lit at launch)
+        assert "(POOR)" in line and " to kill at ~6 GJ each = " in line
 
     def test_salvo_sizing_reference_is_the_doctrine_number(self):
         from src.llm.prompts import ADMIRAL_TORPEDO_DOCTRINE

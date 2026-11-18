@@ -835,8 +835,11 @@ class BattleRecorder:
         warhead_gj: float = 0.0,
         guidance_mode: str = "",
         launch_distance_km: float = 0.0,
+        extra: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Record a torpedo leaving the tube: who fired, at whom, with what."""
+        """Record a torpedo leaving the tube: who fired, at whom, with what
+        (``extra``: optional fields appended verbatim - launch profile, launch
+        sequence mount / round / eject geometry)."""
         self._record_event(BattleEvent(
             timestamp=timestamp,
             event_type=EventType.TORPEDO_LAUNCHED,
@@ -849,6 +852,7 @@ class BattleRecorder:
                 "warhead_gj": warhead_gj,
                 "guidance_mode": guidance_mode,
                 "launch_distance_km": launch_distance_km,
+                **(extra or {}),
             }
         ))
 
@@ -1596,6 +1600,14 @@ class BattleRecorder:
                 rcs = [round(c, 3) for c in torp.get("rcs_thrust") or (0.0, 0.0, 0.0)]
                 if any(rcs):
                     entry["rcs"] = rcs
+            # Launch sequence (src/torpedo_launch.py): ph = "eject" /
+            # "separate" while the torch is cold, nose = unit nose direction
+            # then; both absent once the torch burns (and on old recordings).
+            if torp.get("launch_phase"):
+                entry["ph"] = torp["launch_phase"]
+                nose = torp.get("nose")
+                if nose is not None:
+                    entry["nose"] = [round(nose[0], 4), round(nose[1], 4), round(nose[2], 4)]
             frame["torpedoes"].append(entry)
 
         self.recording.sim_trace.append(frame)

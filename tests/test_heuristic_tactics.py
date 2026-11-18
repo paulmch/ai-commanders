@@ -677,7 +677,13 @@ def test_the_formation_throttle_is_what_the_ship_flies():
 # T+0 and the last checkpoint's orders fly their interval, so every event is
 # ~30 s earlier and the battle no longer idles its first window; same hash on
 # Python 3.11 and 3.12. The final integration pass re-records it.)
-LEGACY_GOLDEN_SHA256 = "fc73668f477ffab918e47147bd07bed0739f4c6d71217b6706ef489a3a7a957c"
+# (Re-pinned for the torpedo launch sequence (wt5/launchseq, src/torpedo_launch.py):
+# rounds leave their rack / cell and light their torch ~4 s later, new
+# torpedo_launched fields and torpedo_ignition events, separating rounds are
+# nobody's threat; the legacy captain itself is unchanged. With
+# AIC_LAUNCH_SEQUENCE=0 the stream still hashes to the previous pin fc73668f...;
+# same hash on Python 3.11 and 3.12.)
+LEGACY_GOLDEN_SHA256 = "56c33845202dc0dec6d628159d12615a1a7a0aa2a01e2299c4c0ec7341fb791b"
 
 
 def test_legacy_battle_event_stream_is_pinned(tmp_path):

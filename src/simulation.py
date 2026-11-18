@@ -163,6 +163,7 @@ try:
     from . import drive_plume
     from . import weapon_arcs
     from . import torpedo_link
+    from . import torpedo_launch
 except ImportError:
     from replay_evidence import ExecutionEvidence, impact_evidence, OMIT_IF_NONE
     from battle_timing import MIN_DECISION_INTERVAL, MAX_DECISION_INTERVAL
@@ -213,6 +214,7 @@ except ImportError:
     import drive_plume
     import weapon_arcs
     import torpedo_link
+    import torpedo_launch
 
 
 # =============================================================================
@@ -526,6 +528,9 @@ class SimulationEventType(Enum):
     TORPEDO_INTERCEPTED = auto()
     TORPEDO_FUEL_EXHAUSTED = auto()
     TORPEDO_RETARGETED = auto()
+    # The round's torch lit at the end of its launch sequence
+    # (src/torpedo_launch.py; recorded as torpedo_ignition).
+    TORPEDO_IGNITION = auto()
 
     # Maneuver events
     COMMAND_STATUS = auto()
@@ -1866,6 +1871,13 @@ class CombatSimulation:
         # (measurement only).
         self.torpedo_datalink: bool = os.environ.get('AIC_TORPEDO_DATALINK', '1') != '0'
         self._link_surplus_t: dict = {}
+        # Launch sequence (src/torpedo_launch.py): rounds leave their rack or
+        # cell, drift clear and turn before the torch lights. False: the old
+        # instant ignition at the ship's centre (measurement only).
+        self.launch_sequence: bool = torpedo_launch.LAUNCH_SEQUENCE_DEFAULT
+        # Start-of-tick hull snapshot the launch rules read (step(), before
+        # the ships move); None when no round is in its sequence.
+        self._launch_snap = None
 
         # Decision callback
         self._decision_callback: Optional[Callable[[str, 'CombatSimulation'], list[Any]]] = None
@@ -2251,9 +2263,10 @@ class CombatSimulation:
         # Pick the first launcher with a round chambered and off cooldown. With a
         # single-launcher hull this is the old behaviour; a multi-launcher hull
         # now actually fires at its full rate instead of one launcher's.
-        launcher = next(
-            (l for l in ship.ready_torpedo_launchers if l.can_launch(self.current_time)),
-            None,
+        launcher_index, launcher = next(
+            ((i, l) for i, l in enumerate(ship.ready_torpedo_launchers)
+             if l.can_launch(self.current_time)),
+            (-1, None),
         )
         if launcher is None:
             return False
@@ -2281,6 +2294,11 @@ class CombatSimulation:
             # Launch profile (sprint default / reserve), see src/torpedo.py.
             torpedo.profile = normalize_torpedo_profile(
                 command.get('profile') or self.default_torpedo_profile)
+
+            # Launch sequence: the round leaves its own rack / cell with the
+            # ship's motion plus the ejection push, torch cold.
+            sequence_data = (torpedo_launch.begin(self, ship, launcher_index, torpedo, target)
+                             if self.launch_sequence else None)
 
             self._torpedo_seq += 1
             torpedo_id = f"torp_{ship.ship_id}_{self._torpedo_seq:04d}"
@@ -2311,6 +2329,10 @@ class CombatSimulation:
             # so a sprint launch stays byte-identical to pre-profile recordings.
             if torpedo.profile != 'sprint':
                 launch_data['profile'] = torpedo.profile
+            # Launch sequence: mount slot, round, body-frame eject point /
+            # direction / rest nose and eject speed (recording only).
+            if sequence_data:
+                launch_data.update(sequence_data)
             self._log_event(SimulationEventType.TORPEDO_LAUNCHED, ship.ship_id, target_id,
                             launch_data)
             return True
@@ -2378,7 +2400,7 @@ class CombatSimulation:
         """A live torpedo targets this ship, is closing, and arrives within horizon_s."""
         for torp_flight in self.torpedoes:
             torp = torp_flight.torpedo
-            if torp.target_id != ship.ship_id:
+            if torp.target_id != ship.ship_id or torp.in_launch_sequence:
                 continue
             rel_pos = torp.position - ship.position
             dist_m = rel_pos.magnitude
@@ -3095,6 +3117,12 @@ class CombatSimulation:
         # from the same snapshot (never changes where the drive points).
         if arcs_on and self.roll_to_unmask:
             self._arcs_update_rolls(dt)
+
+        # Launch sequence: the hulls as they are now, before anyone moves -
+        # what every round still ejecting / separating clears against.
+        self._launch_snap = (torpedo_launch.snapshot(self)
+                             if any(tf.torpedo.in_launch_sequence for tf in self.torpedoes)
+                             else None)
 
         # Update all ships (each one against the same start-of-step picture
         # of the others, see _update_ships)
@@ -4340,7 +4368,9 @@ class CombatSimulation:
             if torp_flight.is_disabled:
                 continue
             torp = torp_flight.torpedo
-            if torp.target_id != ship.ship_id:
+            # (a round still in its launch sequence, torch cold beside its
+            # own ship, is nobody's inbound threat yet)
+            if torp.target_id != ship.ship_id or torp.in_launch_sequence:
                 continue
 
             rel_pos = torp.position - ship.position
@@ -5215,6 +5245,7 @@ class CombatSimulation:
         guided = sum(
             1 for t in self.torpedoes
             if not t.is_disabled and t.torpedo.target_id == ship.ship_id
+            and not t.torpedo.in_launch_sequence
         )
         wrecks = len(self.blinded_wreck_threats(ship))
 
@@ -7565,6 +7596,59 @@ class CombatSimulation:
                 time_to_intercept_s=times[tf.torpedo_id][sid],
                 selection_mode=modes[tf.torpedo_id])
 
+    def _launch_heading(self, torp: Torpedo, target: ShipCombatState, dt: float) -> Vector3D:
+        """The first guidance heading of a round still separating: what its
+        guidance would command now (COLLISION: the engine's own law, which
+        also feeds the seeker's target-acceleration estimator the TARGET's
+        velocity only), else / when that would coast, the line of sight."""
+        if torp.guidance_mode == GuidanceMode.COLLISION:
+            command = TorpedoGuidance().update_collision_guidance(
+                torp, target.position, target.velocity, dt)
+            if (command.throttle > 0 and not command.use_rcs
+                    and command.direction.magnitude > 0.01):
+                return command.direction.normalized()
+        los = (target.position - target.velocity * dt) - torp.position
+        return los.normalized() if los.magnitude > 0 else torp.launch_seq.nose
+
+    def _release_torpedo(self, torp_flight: TorpedoInFlight, seq: Any, reason: str,
+                         snaps: dict) -> None:
+        """End a round's launch sequence: the torch lights this tick."""
+        torp = torp_flight.torpedo
+        torpedo_launch.release(seq, self.current_time, reason)
+        # The torch's first act: cancel the sideways drift the sequence gave
+        # the round (ejection, RCS push, the hull's spin) - its velocity off
+        # the launcher's, square to the line of sight - so it flies on from
+        # the geometry it had at launch (a 20-30 m/s drift left to the APN
+        # law held a reserve round off its terminal burn: 27 GJ instead of
+        # 34 head-on). A fraction of a tick at full thrust (~0.2 s).
+        target = self.get_ship(torp.target_id)
+        if target is not None and not torp.fuel_exhausted:
+            los = (target.position - target.velocity * self.time_step) - torp.position
+            if los.magnitude > 0:
+                los = los.normalized()
+                drift = torp.velocity - torp.launched_from_velocity
+                lateral = drift - los * drift.dot(los)
+                accel = torp.specs.acceleration_at_mass(torp.current_mass_kg)
+                if lateral.magnitude > 0.01 and accel > 0 and self.time_step > 0:
+                    before = torp.remaining_delta_v_kps
+                    torp.apply_thrust(lateral * -1.0, self.time_step,
+                                      min(1.0, lateral.magnitude / (accel * self.time_step)))
+                    torp_flight.main_engine_dv_used_kps += before - torp.remaining_delta_v_kps
+        own = snaps.get(seq.source_id)
+        gap = (torpedo_launch.hull_gap_m(own, torp.position)
+               if own is not None and not own.gone else None)
+        data = {
+            'torpedo_id': torp_flight.torpedo_id,
+            'delay_s': round(self.current_time - seq.t0, 3),
+            'reason': reason,
+            'own_gap_m': round(gap, 1) if gap is not None else None,
+            'nose': [round(c, 4) for c in seq.nose.to_tuple()],
+            'heading': ([round(c, 4) for c in seq.heading.to_tuple()]
+                        if seq.heading is not None else None),
+        }
+        self._log_event(SimulationEventType.TORPEDO_IGNITION, torp_flight.source_ship_id,
+                        torp.target_id, data)
+
     def _update_torpedoes(self, dt: float) -> None:
         """Update all torpedoes and check for hits."""
         torpedoes_to_remove: list[TorpedoInFlight] = []
@@ -7627,8 +7711,12 @@ class CombatSimulation:
                 # 500 m arming distance, so armed is essentially always True.
                 struck_ship = None
                 struck_cpa_m = float('inf')
+                # A round still in its launch sequence sits beside its own
+                # rack: it never strikes the hull that launched it.
+                own_id = (torp_flight.source_ship_id if torp.in_launch_sequence
+                          else None)
                 for candidate in self.ships.values():
-                    if candidate.is_destroyed:
+                    if candidate.is_destroyed or candidate.ship_id == own_id:
                         continue
                     # The ship-update loop already moved candidates to their
                     # end-of-step positions; roll back for the swept CPA.
@@ -7709,6 +7797,23 @@ class CombatSimulation:
                     self._log_torpedo_left_battle(torp_flight, current_dist)
                     torpedoes_to_remove.append(torp_flight)
                 continue
+
+            # Launch sequence (src/torpedo_launch.py): eject and separate with
+            # the torch cold until the release rules hold on the start-of-tick
+            # snapshot; the torch lights at the start of that tick and the
+            # round flies its guidance from here on this very tick.
+            seq = torp.launch_seq
+            if seq is not None and seq.active:
+                snaps = self._launch_snap or torpedo_launch.snapshot(self)
+                reason = torpedo_launch.check_release(seq, torp, snaps, self.current_time)
+                if reason is None:
+                    heading = self._launch_heading(torp, target, dt)
+                    torp_flight.rcs_dv_used_kps += torpedo_launch.advance(
+                        seq, torp, heading, snaps, dt, self.current_time)
+                    torp_flight.prev_distance_to_target = torp.position.distance_to(
+                        target.position)
+                    continue
+                self._release_torpedo(torp_flight, seq, reason, snaps)
 
             # Store previous position for sweep detection
             prev_pos = Vector3D(torp.position.x, torp.position.y, torp.position.z)
@@ -8668,7 +8773,7 @@ class CombatSimulation:
             vel = ship.velocity
             faction = ship.faction
             for flight in self.torpedoes:
-                if flight.is_disabled:
+                if flight.is_disabled or flight.torpedo.in_launch_sequence:
                     continue
                 source = self.get_ship(flight.source_ship_id)
                 if source is not None and source.faction == faction:
@@ -8952,7 +9057,8 @@ class CombatSimulation:
 
         # Assess all torpedoes
         for torp_flight in self.torpedoes:
-            if torp_flight.is_disabled:
+            # (a round still in its launch sequence is not a PD target yet)
+            if torp_flight.is_disabled or torp_flight.torpedo.in_launch_sequence:
                 continue
 
             # Don't target own faction's torpedoes

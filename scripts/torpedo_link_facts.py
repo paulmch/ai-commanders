@@ -34,6 +34,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import launch_sequence_facts as LS  # noqa: E402
 import torpedo_profile_sweep as P  # noqa: E402
 import torpedo_retarget_sweep as S  # noqa: E402
 from src import torpedo as T  # noqa: E402
@@ -63,7 +64,26 @@ def profile_facts() -> dict:
     return out
 
 
-def battle_facts(seeds: int, workers: int) -> dict:
+def launch_facts() -> dict:
+    """LAUNCH_FACT's seconds (scripts/launch_sequence_facts.doctrine_facts)."""
+    return LS.doctrine_facts()
+
+
+def battle_facts(seeds: int, workers: int, cached: Path = None) -> dict:
+    if cached is not None:
+        # the same battles already fought by scripts/torpedo_retarget_sweep.py
+        # (same run_battle, same task shape): its JSONL cache
+        res = []
+        pairs = {p for a, b in PAIRS for p in ((a, b), (b, a))}
+        for line in cached.read_text().splitlines():
+            r = json.loads(line) if line.strip() else None
+            if (r and r["option"] in ("p5_link", "p5_reserve") and (r["alpha"], r["beta"]) in pairs
+                    and r["seed"] <= seeds and r["distance_km"] == 500.0
+                    and r["time_limit_s"] == 600.0):
+                res.append(r)
+        if len(res) != 2 * len(pairs) * seeds:
+            raise SystemExit(f"{cached}: {len(res)} matching battles, need {2 * len(pairs) * seeds}")
+        return _battle_summary(res)
     tasks = []
     for opt in ("p5_link", "p5_reserve"):
         for a, b in PAIRS:
@@ -75,6 +95,10 @@ def battle_facts(seeds: int, workers: int) -> dict:
                                       time_limit_s=600.0))
     with mp.get_context("fork").Pool(workers, maxtasksperchild=1) as pool:
         res = pool.map(S.run_battle, tasks)
+    return _battle_summary(res)
+
+
+def _battle_summary(res: list) -> dict:
     errs = [r for r in res if r.get("error")]
     if errs:
         raise SystemExit(f"{len(errs)} battles failed: {errs[0]['error']}")
@@ -97,6 +121,9 @@ def main() -> int:
     ap.add_argument("--seeds", type=int, default=3)
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--fixture", type=Path, default=None)
+    ap.add_argument("--battles-from", type=Path, default=None,
+                    help="torpedo_retarget_sweep.py JSONL cache holding the p5_link / p5_reserve "
+                         "battles (same tasks): read instead of fighting them again")
     args = ap.parse_args()
     facts = {
         "about": ("Measured facts behind src/llm/torpedo_doctrine.py (torpedo launch "
@@ -112,7 +139,8 @@ def main() -> int:
                       "RESERVE_WINDOW_BURN_FACTOR": T.RESERVE_WINDOW_BURN_FACTOR,
                       "LINK_KILL_MARGIN_ROUNDS": L.LINK_KILL_MARGIN_ROUNDS},
         "profiles": profile_facts(),
-        "battles": battle_facts(args.seeds, args.workers),
+        "launch": launch_facts(),
+        "battles": battle_facts(args.seeds, args.workers, args.battles_from),
     }
     print(json.dumps(facts, indent=1))
     if args.fixture:

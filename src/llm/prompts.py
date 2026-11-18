@@ -23,7 +23,7 @@ try:
     from .. import combat as _combat
     from .. import drive_plume as _plume
     from ..power import KINETIC_WEAPON_EFFICIENCY
-    from .torpedo_doctrine import LINK_FACT, PROFILE_FACT
+    from .torpedo_doctrine import LAUNCH_FACT, LINK_FACT, PROFILE_FACT
 except ImportError:  # pragma: no cover - script-style imports
     from pointdefense import (
         PDLaser,
@@ -36,7 +36,7 @@ except ImportError:  # pragma: no cover - script-style imports
     import combat as _combat
     import drive_plume as _plume
     from power import KINETIC_WEAPON_EFFICIENCY
-    from llm.torpedo_doctrine import LINK_FACT, PROFILE_FACT
+    from llm.torpedo_doctrine import LAUNCH_FACT, LINK_FACT, PROFILE_FACT
 
 
 # Closing speeds tabulated for the captain's PD block. The middle entry is the
@@ -1105,6 +1105,7 @@ TORPEDO_TACTICS_BLOCK = """=== TORPEDO BOAT TACTICS (you mount no guns) ===
 - launch_torpedo profile: """ + PROFILE_FACT + """ Your ENEMIES torpedo line
   compares both profiles for the shot at hand (PROFILES ...).
 - """ + LINK_FACT + """
+- """ + LAUNCH_FACT + """
 - Enemy torpedo hulls that have you targeted can land a round before your next
   decision: THREATS TO ME says when. EVADE early."""
 
@@ -3058,8 +3059,8 @@ HOW POINT DEFENSE ACTUALLY WORKS:
   (~{pd_range_km:.0f} km laser range) of a torpedo's path adds dwell against it.
 - PD BLINDS torpedoes (seeker kill); the dead round then coasts in a straight line and
   hits only a hull whose path that line crosses - one flying straight at it. Measured
-  (6-round salvos launched 1200 km out): 17/18 blinded rounds hit a non-evading
-  battleship behind 8 escorts; the same attack on an evading one landed 12/18. A ship
+  (6-round salvos launched 1200 km out): 18/18 blinded rounds hit a non-evading
+  battleship behind 8 escorts; the same attack on an evading one landed 16/18. A ship
   with torpedoes INBOUND (see ORDNANCE) that does not EVADE is still hit by the rounds
   PD blinded; one that EVADEs dodges dead rounds and turns its nose (thickest armor)
   onto live ones - with the evade field on a burning order, only as far as its swing cone
@@ -3080,26 +3081,27 @@ FORMATIONS FOR PD (what actually moves the numbers):
   rings at 15, 30 and 120 km measured identically. Place escorts anywhere inside
   laser range of the axis the torpedoes come down; don't micro-manage spacing.
 - Returns need mass AND time: vs a 6-round simultaneous salvo launched 1200 km out, an
-  evading battleship leaked 18/18 alone, 18/18 with 4 destroyer escorts, 12/18 with 8.
+  evading battleship leaked 18/18 alone, 18/18 with 4 destroyer escorts, 16/18 with 8.
   Launched 450 km out (~70 s of flight) it leaked 18/18 even behind 8: a 1g hull cannot
   turn away to run and back in time, so it holds its nose armour on the salvo, and the
   escorts blind the rounds only in the last ~10 s - too late to dodge. Survival
   still follows the wall: alone the battleship died in 3 of 3 runs at either range,
-  behind 4 escorts in 1 of 3, behind 8 in none. 4 escorts stopped no round -
+  behind 4 escorts in 3 of 3 (1200 km) and 1 of 3 (450 km), behind 8 in 1 of 3
+  (1200 km) and none (450 km). 4 escorts stopped no round -
   concentrate the fleet or accept the hits.
 - The wall only protects ships that EVADE inside it (see blinding, above).
 
 TORPEDO DEFENCE, MEASURED (seeded runs on this engine: a 4 battlecruiser + 2 destroyer +
 2 frigate gun wall against 5 corvettes + 3 frigates = 40 rounds, the wall's posture fixed
 from the first checkpoint; per battle, 3 seeds each):
-- start 500 km: nose-on PADLOCK - 76% of rounds hit (nearly all on the nose, ~13.8 km/s, ~24 GJ
-  each), 6 of 8 hulls lost; burning straight away - 44% hit (all on the TAIL, ~12.6 km/s,
-  ~19 GJ), 6 of 8 lost; the same burn with evade full - 50% hit, 6 of 8 lost (on the
+- start 500 km: nose-on PADLOCK - 78% of rounds hit (nearly all on the nose, ~13.8 km/s, ~24 GJ
+  each), 7 of 8 hulls lost; burning straight away - 46% hit (all on the TAIL, ~12.6 km/s,
+  ~19 GJ), 7 of 8 lost; the same burn with evade full - 47% hit, 6 of 8 lost (on the
   tail and flank: the overlay keeps the burn and turns no nose round); charging
-  (INTERCEPT) - 73% hit (~14.5 km/s, ~26 GJ), 8 of 8 lost. First loss ~70 s in each
+  (INTERCEPT) - 73% hit (~14.6 km/s, ~27 GJ), 8 of 8 lost. First loss ~75 s in each
   (rounds launched at the first checkpoint, at battle start).
-- start 1000 km: nose-on - 72% hit, 8 of 8 lost (first at ~260 s); burning away - 35%
-  hit, 5 of 8 lost (first at ~280 s); charging - 45% hit, 4 of 8 lost. The wall killed
+- start 1000 km: nose-on - 70% hit, 8 of 8 lost (first at ~265 s); burning away - 35%
+  hit, 5 of 8 lost (first at ~285 s); charging - 50% hit, 2 of 8 lost. The wall killed
   1.3 boats per battle charging, 0.7 nose-on, 0 burning away.
 - Burning away lowers impact speed a little and leaves more rounds blinded or dry; the
   rounds that still hit land on the thin tail. Closing raises impact energy and shortens
@@ -3129,6 +3131,7 @@ WHEN TO COMMIT TRIDENTS:
   {launches_per_tube} launches per tube per {decision_interval_s:g}s checkpoint.
 - LAUNCH PROFILES (torpedo_profile on issue_order, profile in salvo_plan): """ + PROFILE_FACT + """
 - ROUNDS IN FLIGHT: """ + LINK_FACT + """
+- """ + LAUNCH_FACT + """
 """
 
 # Included when YOUR fleet mounts guns.
@@ -3202,11 +3205,11 @@ GUN_EXCHANGE_BATTLES = 160
 GUN_EXCHANGE_BUDGET = 150
 GUN_EXCHANGE_BANDS = (
     ("0-50", 70, 0.24, 17),
-    ("50-100", 62, 0.24, 22),
-    ("100-150", 50, 0.30, 18),
-    ("150-200", 44, 0.45, 20),
-    ("200-300", 37, 0.31, 15),
-    ("300+", 26, 0.29, 7),
+    ("50-100", 62, 0.25, 22),
+    ("100-150", 50, 0.34, 20),
+    ("150-200", 44, 0.49, 21),
+    ("200-300", 36, 0.32, 15),
+    ("300+", 27, 0.24, 6),
 )
 GUN_EXCHANGE_INSIDE_150_PCT = 58
 
@@ -3245,10 +3248,10 @@ FACING_SPINAL_HITS_TO_KILL = (
 # heuristic doctrines separately: the battleship's swung from nose 1% (legacy)
 # to 37% (tactical) penetration, above its flank's 21%, and is left out.
 FACING_MEASURED = (
-    ("battlecruiser", 16, 0.17, 45, 0.50),
-    ("destroyer", 9, 0.08, 37, 0.43),
-    ("frigate", 24, 0.38, 57, 0.68),
-    ("dreadnought", 26, 0.25, 34, 0.22),
+    ("battlecruiser", 16, 0.16, 41, 0.44),
+    ("destroyer", 9, 0.08, 37, 0.47),
+    ("frigate", 25, 0.40, 61, 0.73),
+    ("dreadnought", 27, 0.27, 43, 0.28),
 )
 # The pass example in RANGE CONTROL and the CROSSFIRE example geometry.
 MERGE_EXAMPLE_KPS = 5.0

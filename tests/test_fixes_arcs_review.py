@@ -82,7 +82,12 @@ class TestRollGoalDoesNotHunt:
         goal every 5 s between two attitudes ~90 degrees apart (27 and 35
         quick reversals) while the hull, needing 70-250 s per 90 degrees,
         reached neither. No goal may now leave for a different attitude (more
-        than 20 degrees away) and come back within 20 degrees inside 30 s."""
+        than 20 degrees away) and come back within 20 degrees inside 30 s -
+        unless the threat picture it left for is gone: a hull that rolled to
+        meet a pair of inbound rounds and rolls back once they have struck or
+        passed is reacting, not hunting (seed 104 after the launch sequence,
+        src/torpedo_launch.py, shifted the torpedo waves: alpha_6 rolls -120
+        for two rounds 25 km out at T+95 and back at T+110, after they hit)."""
         goals = {}
         plan = CombatSimulation._arcs_plan_roll
 
@@ -90,18 +95,27 @@ class TestRollGoalDoesNotHunt:
             before = arcs.roll_goal
             plan(self, ship, arcs)
             if arcs.roll_goal != before:
+                horizon_m = (wa.ROLL_PD_HORIZON_ENVELOPES * 1000.0
+                             * max((pd.laser.range_km for pd in ship.point_defense),
+                                   default=250.0))
+                threats = frozenset(
+                    tf.torpedo_id for tf in self.torpedoes
+                    if not tf.is_disabled and self.get_ship(tf.source_ship_id) is not None
+                    and self.get_ship(tf.source_ship_id).faction != ship.faction
+                    and tf.torpedo.position.distance_to(ship.position) <= horizon_m)
                 goals.setdefault(ship.ship_id, []).append(
-                    (self.current_time, before, arcs.roll_goal))
+                    (self.current_time, before, arcs.roll_goal, threats))
 
         monkeypatch.setattr(CombatSimulation, "_arcs_plan_roll", logged)
         _draft_battle(seed, doctrine=doctrine)
         assert goals, "no hull ever rolled - the scenario no longer exercises the planner"
         hunts = []
         for sid, changes in goals.items():
-            for (t0, a, b), (t1, b2, c) in zip(changes, changes[1:]):
+            for (t0, a, b, th0), (t1, b2, c, th1) in zip(changes, changes[1:]):
                 if (t1 - t0 <= self.ABA_WINDOW_S
                         and abs(math.degrees(b - a)) > self.SAME_GOAL_DEG
-                        and abs(math.degrees(c - a)) <= self.SAME_GOAL_DEG):
+                        and abs(math.degrees(c - a)) <= self.SAME_GOAL_DEG
+                        and th0 <= th1):         # nothing it rolled for has gone
                     hunts.append((sid, t0, math.degrees(a), math.degrees(b), t1, math.degrees(c)))
         assert not hunts, hunts
 

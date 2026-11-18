@@ -1218,3 +1218,119 @@ counts orders at t=0 as checkpoint 1 (the engine's own `decision_point_reached`
 at t=0 is still not a checkpoint) and numbers the live NEXT CHECKPOINT marker
 from `first_checkpoint_t`. A trace frame is recorded at T+0 before the first
 orders (its plans are re-predicted once they apply, as at every checkpoint).
+
+## Launch-sequence lane (`src/torpedo_launch.py`)
+
+A torpedo no longer lights its torch at its ship's centre on the launch tick.
+It leaves its own rack round / VLS cell, drifts clear on its manoeuvring
+thrusters, turns onto its first guidance heading and only then ignites. Old
+recordings (no fields below) are rounds whose torch burned from the launch
+tick at the ship's centre; every field here is optional and recording only
+(nothing reads it back into the game).
+
+### The sequence (what a viewer animates)
+
+| phase | duration | the round |
+|---|---|---|
+| `eject` | first `LAUNCH_EJECT_S` = 1.0 s | slides off its rail / out of its cell: starts at the round's position on the hull (`data/hull_mounts.json` launcher `rounds[k].pos`, body frame) with the ship's velocity + the hull's spin at that point (omega x r) + `LAUNCH_EJECT_SPEED_MPS` = 10 m/s along `rounds[k].eject`; nose = `rounds[k].nose` turned with the ship (roll included); keeps the ship's spin; no thruster fires |
+| `separate` | until ignition | lateral RCS (the round's own 5 % of main thrust, ~0.6 g) pushes it off the line through its ship along its heading (or brakes it away from a hull it is closing on), and it turns its nose onto the first guidance heading at up to 30 deg/s (30 deg/s^2) |
+| boost | rest of the flight | the torch lights at the START of the first tick on which (start-of-tick ship snapshot): the round is 50 m from its own hull's surface (capsule of `ShipGeometry`), 50 m from every friendly hull within 2 km, its exhaust cone (15 deg half angle, to 5 km) misses its own hull, and its nose is within 10 deg of the heading. After 8 s it lights once it is 50 m off its own hull whatever else holds; at 15 s regardless. A round whose ship is destroyed has no hull to clear. On that first boost tick the torch first cancels the sideways drift the sequence gave the round (velocity off its launcher's, square to the line of sight; ~0.2 s of thrust) |
+
+Seconds from launch to ignition, measured (`scripts/launch_sequence_facts.py`,
+target 500 km, PD off):
+
+| launcher / geometry | corvette (rail rounds, nose forward) | torpedo cruiser (VLS cells, nose radial) |
+|---|---|---|
+| coasting, target ahead | 4 | 4 |
+| coasting, target abeam | 4 | 4 (the cell facing away: 7) |
+| coasting, target astern | 7 (turns about) | 4 |
+| full burn toward the target | 3 (the ship pulls away) | 4 |
+| full burn away from the target | 8 (turns about; 8 s timeout) | 4 |
+| mid-turn / spinning at launch | 4 | 4-5 |
+| two hulls 120 m apart launching together | 4 and 8 (friendly clearance, timeout) | 4 and 9 |
+| 50 km shot | 4 | 4 |
+
+Nothing in these cases puts a round inside a hull or in its ship's drive
+plume (closest approach to its own hull after the first tick 11.7 m, after
+ignition 52.8 m; time inside the 7.5 deg plume cone while the drive burns: 0 s),
+the four rounds of a cruiser salvo stay > 50 m apart, so the engine has no
+collision model for launches.
+
+### `torpedo_launched`: new fields
+
+| field | type | meaning |
+|---|---|---|
+| `mount` | string or null | the launcher's slot in `data/hull_mounts.json` (`weapon_0` ...); null when the hull class has no mount data |
+| `round` | int | which of that mount's `rounds` left (index into `hull_mounts.json` `rounds`, i.e. `Hulls.js` `magazineRound` call order). The engine does NOT fire them in index order: of the rounds still on the tube it takes the one nearest the target's side of the hull (body position along the line of sight), then the one farthest from the nearest friendly hull, then the lowest index - geometry, so a fleet and its mirror image (rotated or reflected) fire mirror-image rounds. A corvette with its target off the port bow empties its port rail first; dead ahead with no friend near, index order (port and starboard alternating) |
+| `eject_pos_m` | [x, y, z] m, body frame | the round's start point (x forward, y port, z dorsal; = `rounds[round].pos`) |
+| `eject_dir` | [x, y, z] unit, body frame | direction it is ejected (= `rounds[round].eject`: rack outboard, cell out of the hatch) |
+| `nose` | [x, y, z] unit, body frame | its nose at rest (rack: forward along the rail; cell: out of the tube) |
+| `eject_speed_mps` | float | ejection speed relative to the hull point (10) |
+| `profile` | string | (now actually recorded: it was dropped between the engine event and the recording before) `"reserve"` when not sprint |
+
+A launch with the sequence switched off (`CombatSimulation.launch_sequence =
+False`, `AIC_LAUNCH_SEQUENCE=0`, measurement only) has none of the sequence fields.
+
+Viewer note: `HullRigs.assignLaunches` deals a ship's launches to its magazine
+banks round robin by launch count and empties each bank in index order; the
+engine picks the first ready tube and the round by geometry (above), so the
+round the viewer removes can differ from the one that left. `mount` (bank =
+launcher index in `hull_mounts` order) and `round` give the exact rack round /
+cell; `rounds[round].pos` is where the animation starts. Without these fields
+(old recordings) keep the old dealing.
+
+### `torpedo_ignition` (new event)
+
+Emitted on the tick the torch lights. `ship_id` = launcher, `target_id` = the
+round's target.
+
+| field | type | meaning |
+|---|---|---|
+| `torpedo_id` | string | the round |
+| `delay_s` | float s | launch to ignition |
+| `reason` | `clear` / `free` / `timeout` / `hard_timeout` | all rules held / its ship was destroyed (no hull to clear) / the 8 s timeout (clear of its own hull, not aligned or a friendly too near) / the 15 s cap |
+| `own_gap_m` | float m or null | distance from its own hull's surface at ignition (null: ship destroyed) |
+| `nose` | [x, y, z] unit, world | nose at ignition |
+| `heading` | [x, y, z] unit, world | the first guidance heading it turned onto |
+
+### Trace frame fields (per torpedo, `--trace` recordings)
+
+| field | when | meaning |
+|---|---|---|
+| `ph` | only while the torch is cold | `"eject"` or `"separate"`; absent = burning (or an old recording) |
+| `nose` | with `ph` | world unit nose direction (the round has an attitude only in its sequence; once burning its nose is the thrust direction `fwd`) |
+| `rcs` | while the RCS fires (unchanged field) | lateral RCS thrust, unit direction x throttle: the separation push / brake (throttle 1) |
+| `thr` | always (unchanged) | 0 during the sequence; > 0 from the ignition frame on |
+
+The frame at time t describes the tick that ended at t: the first frame after
+the launch shows `ph: "eject"` with the round already 10 m off its rack (one
+tick of drift); the ignition frame has no `ph` and `thr` > 0. Interpolate the
+round between frames from `pos`/`vel`; slerp `nose` between sequence frames and
+hand over to `fwd` at ignition.
+
+### Demo recording
+
+`data/recordings/p5_launch_sequence_demo.json.gz` (also in the viewer's shared
+`visualizer/public/recordings/`): `uv run python scripts/generate_test_battle.py
+torpedo_strike` (traced; a torpedo cruiser against a corvette, VLS cells and
+rail rounds, a 3 s, 4 s and an 8 s timeout ignition in the first 20 s).
+
+### Rules the engine keeps around the sequence
+
+- Nobody treats a round still in its sequence as an inbound threat: point
+  defence does not engage it, the target's evasion, roll-to-unmask, radiator
+  automation, evade status and the rule-based captain's threat check ignore it
+  (they see it from its ignition tick).
+- Forecasts include the delay: the captain's shadow flight (`fly_torpedo`, its
+  TOF and the PROFILES line) flies the sequence; the admiral's 1-D pursuit
+  (`fleet_intel.solve_pursuit(hold_s=)`, `torpedo_solution`) coasts for the
+  forecast hold (`torpedo_launch.predict_launch_hold_s`: the per-tick sequence
+  from a coasting ship, within one tick of the flown ignition); the datalink
+  board (`torpedo_link.round_forecast`), `Torpedo.can_intercept` (powered
+  branch) and the trajectory-prediction ghosts add the hold left
+  (`Torpedo.launch_hold_s()`).
+- A round in its sequence whose target is lost is reassigned by the datalink
+  like any other and continues its sequence; an orphaned or blinded round in
+  its sequence coasts and never strikes its own launcher.
+- The tube's reload cycle starts at ejection (unchanged); a tube wrecked after
+  the round left does not take it.
