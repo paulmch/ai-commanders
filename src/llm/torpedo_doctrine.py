@@ -26,9 +26,9 @@ FACTS = {
     "reserve": {"tof_500_rest_s": 81, "gj_500_rest": 23, "tof_500_closing3_s": 59,
                 "gj_500_closing3": 34, "tof_500_opening1_s": 87, "gj_500_opening1": 19,
                 "runner_ff_gj": 15, "reach_200_km": 106, "reach_200_closing3_km": 52},
-    "battles": {"pct_orphaned": 58, "pct_reassigned": 69, "pct_reassigned_hit": 56,
-                "pct_pd_blinded_sprint": 24, "pct_pd_blinded_reserve": 35,
-                "pct_diverted_hit_reserve": 76},
+    "battles": {"pct_orphaned": 55, "pct_reassigned": 67, "pct_reassigned_hit": 53,
+                "pct_pd_blinded_sprint": 26, "pct_pd_blinded_reserve": 36,
+                "pct_diverted_hit_reserve": 74},
 }
 
 _S, _R, _B = FACTS["sprint"], FACTS["reserve"], FACTS["battles"]

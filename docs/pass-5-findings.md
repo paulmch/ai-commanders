@@ -327,9 +327,12 @@ was reviewed. It had two defects, fixed in a second round:
   - Rounds from abeam give the side. Rounds within 30 degrees of the line, ahead or astern,
     get a uniformly random azimuth, from the keyed jink RNG.
 - **Armour picks** are cone points only.
-- **Off the cone**, the hull turns toward the cone at full authority. With the nose more than
-  90 degrees off the line (`EVADE_BURN_AGAINST_ORDER_DEG`) the drive idles to the order's own
-  turn token, because it would otherwise push against the order.
+- **Off the cone**, the hull turns toward the cone at full authority and the drive burns at
+  the order's throttle through the whole turn (owner's decision, round 3: "burn through the
+  turn with the percentage given in command"; the round-2 idle beyond 90 degrees is gone).
+  Range-control options, the captain's ENGINE ORDER CHECK and the trajectory plans include
+  the turn impulse; HOLD_RANGE / standoff keepers size the correction they note by the
+  cosine of the angle off (feed-forward, `_turn_then_burn(evade=True)`).
 - **Unchanged:** engine-off orders and the EVADE maneuver, bit for bit (228 seeded engagements
   compared with the parent, 0 differ).
 
@@ -355,17 +358,55 @@ was reviewed. It had two defects, fixed in a second round:
 | flip: destroyers lost | 0 | 6 | 14 | 16 |
 | HOLD_RANGE 150 km under torpedo + gun fire (review's `holdab`, 8 seeds x 3 hulls): RMS range error | 11-22 km | 34-43 km | 2.7-7.2 km | 1.8-5.1 km |
 
+**Round 3 (owner: burn through the turn).** "Now" above is round 2, which idled beyond 90
+degrees. With the drive burning at the order's throttle through the whole turn:
+
+| 24 seeds | Idle (round 2) | Burn-through (now) | No overlay |
+|---|---|---|---|
+| flip, destroyer: closing at 60 s / lost of 24 | 1.31 km/s / 14 | 1.69 km/s / 4 | 1.69 km/s / 16 |
+| flip, battlecruiser: closing at 60 s / lost of 24 | 1.63 km/s / 5 | 1.81 km/s / 1 | 1.90 km/s / 4 |
+
+| HOLD_RANGE `holdab`, evade full, RMS range error | destroyer | cruiser | battleship |
+|---|---|---|---|
+| idle (round 2) | 2.7-2.8 km | 5.6-7.2 km | 3.2-4.4 km |
+| burn-through, no feed-forward | 9.1-11.1 km | 13.4-13.6 km | 11.1-13.8 km |
+| burn-through + feed-forward (now) | 2.0-2.1 km | 4.7-5.1 km | 3.1-3.9 km |
+| no overlay | 1.8 km | 4.8-5.1 km | 3.5-4.1 km |
+
+The feed-forward (`_turn_then_burn(evade=True)`) notes a keeper's correction off the cone
+at throttle x cos(angle off), floored at `EVADE_BURN_MIN_THROTTLE`; it is a pure function
+of the tick's state. Variants tried: no floor (the overlay then jinks at full throttle
+while the share is under 10 %) 10-21 km; a floor at half the correction 5.7-11.7 km. The
+cost: in the calibration harness (random geometry, the keeper correcting all the time) a
+keeper is hit more while it turns at the low share (HOLD_RANGE dodge at 100-199 km: 29 %
+of rounds without the feed-forward, 44 % with it); in `holdab` hits stay level (destroyer
+15.6 per run with it, 16.2 without, 20.4 with no overlay). Fire control prices the keeper's
+turn at its share plus half the rest (`KEEPER_TURN_DODGE_SHARE`); forecast/observed on 56
+fresh harness seeds is 0.85-1.10 out to 400 km for HOLD_RANGE, 0.96-1.13 for the flipping
+HEADING dodgers, 0.94-1.08 for INTERCEPT.
+
+Predictions: range-control options (`turn_burn_segments`), the captain's ENGINE ORDER CHECK
+and the admiral's per-ship range rows add "evade under fire: the N s turn burns too -> ..."
+when the nose is 90 degrees or more off. The fleet-centre HEADINGS rows (an "all ships"
+order) do not: a formation holds every burn until the synced start, the hulls come round
+first, and flown with evade it lands within 3 % of the plain statement (pinned); flown against stated, the end range agrees within 1.5 %
+(cancel / open, destroyer to dreadnought; pinned). Trajectory plans already fly the engine
+code: predicted vs flown position at the next checkpoint for 90 / 135 / 180 degree flips on
+corvette, destroyer, battlecruiser and dreadnought (6 seeds, two windows, with evade) is
+0.00-0.53 km mean, max 3.5 km (corvette 90 degrees, where the idle never applied) before,
+and 0.00-0.53 km mean, max 3.5 km after; the 135 / 180 degree cases stay under 0.7 km. The
+plan sigma is 0.16-0.77 km.
+
 **What it costs.**
 - **Escaping ships.** The older overlay saved ships that turned away from guns by turning the
   nose (5-6 times the tail's armour) back onto them and stopping the burn. The new one keeps
   the burn and shows the guns the tail. 30 % of tail hits strike the drive, and a damaged
   drive dodges far less. Escaping destroyers die 16 of 24 times against 2 of 24 before
   (24 of 24 without the overlay).
-- **The flip is still costly.** A cancel-closure order flown from 180 degrees off now
-  idles the drive through the far half of its turn. It cancels closure faster than before,
-  but loses 14 of 24 destroyers against 6 when it burned through the turn (16 with no
-  overlay, 0 on the parent, which turned the nose to the guns). Idling was chosen for range
-  keeping: burning through the turn put a HOLD_RANGE 7-16 km off its range.
+- **The flip.** Round 2 idled the drive through the far half of the turn and lost 14 of 24
+  destroyers. Burning through the turn (round 3, the owner's decision) loses 4, closing at
+  1.7 km/s after 60 s like a ship with no overlay (which loses 16). The range keeper's
+  feed-forward keeps HOLD_RANGE on its range.
 - **Along the line, the value depends on the hull and on the drive.**
   - With the drive intact, an escaping destroyer is hit by 14 % of rounds against 39 %
     without the overlay; an escaping battlecruiser by 35 % against 50 %.
@@ -389,8 +430,8 @@ was reviewed. It had two defects, fixed in a second round:
 - **CPU.** An overlay-heavy scenario (36 runs of the cross case) took 16.9 s against 14.7 s
   on the parent. The benchmark battles barely use the overlay.
 - **Review probes, re-run.** Engine-off orders and EVADE: 228 engagements, 0 differ.
-  The never-below monitor counts 7,628 and 121 ticks below the order's throttle, all with
-  the nose more than 90 degrees off (the deliberate idle), and none at or under 90 degrees.
+  The never-below monitor counts 0 ticks below the order's throttle in round 3 (scenario
+  and draft sets; round 2 had 7,628 and 121, all from the idle beyond 90 degrees).
   `_order_burn` stays pure, and flat-RNG mirror battles show equal swing ticks per side.
   In draft battles (seeds 21-32), 317 of 1,366 swing ticks were off the cone (253 of 812 in
   round 1). Held attitudes went from 116 ticks to 0, and thrust against the order from 111

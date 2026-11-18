@@ -215,7 +215,10 @@ class TestHelmWindow:
         assert "burned 15 of 30 s on your order" in text
         assert "turning onto the burn line at your throttle under fire 15 s" in text
 
-    def test_beyond_90_degrees_off_the_line_the_drive_idles_and_it_says_turning(self):
+    def test_an_off_line_tick_well_below_the_throttle_says_turning(self):
+        # The overlay burns through the turn at the order's throttle; a tick
+        # far below it off the line (a range keeper's feed-forward share, a
+        # round-2 recording that idled beyond 90 deg) is turning, not burning.
         events = [_ev("MANEUVER_STARTED", 30.0, **HEADING),
                   _ev("EXECUTION_STATE", 30.0, mode="TANK", requested_throttle=1.0,
                       applied_throttle=0.05, engine_fraction=1.0, fuel_fraction=1.0,

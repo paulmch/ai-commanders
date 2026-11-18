@@ -19,7 +19,7 @@ Torpedoes - yours: none | theirs: none
 You: 8 ships, centre (7,29,5) km, 2.9 km/s toward (+0.99,+0.11,+0.02), spread 51 km
 GROUP A (OCS Sovereign [beta_1] BB, OCS Falchion-2 [beta_6] DD, OCS Lancer-1 [beta_2] BC, OCS Lancer-2 [beta_3] BC, OCS Lancer-3 [beta_4] BC): 157 km, closing 4.03 km/s (-60 km in 15 s) = you 2.8 km/s toward them + they 1.2 toward you; they burn toward you 0.3g
   if both coast: closest 1.4 km (OCS Lancer-3) in 45 s | your stop 276 km / 137 s at 3.0g +15 s flip - TOO LATE to brake
-  reach - their guns' nominal reach 900 km (within it now); measured hit rate at 157 km (the 150-200 km band) ~43%, 69% at 0-50 km (GUN EXCHANGE); your torpedoes: 5 POOR
+  reach - their guns' nominal reach 900 km (within it now); measured hit rate at 157 km (the 150-200 km band) ~44%, 70% at 0-50 km (GUN EXCHANGE); your torpedoes: 5 POOR
 
 === ENEMY THREAT TABLE (range/closure from your fleet centre) ===
 OCS Sovereign [beta_1] BB 1.0g | 118 km +4.1 km/s | shows you SIDE 45cm, burning | nearest TIS Dart-1 [alpha_1] 76 km | hull 100% | PD 3/3 | 1 spinal + 3 heavy coil + 1 coil | dealt nothing | torpedo POOR (slow arrival) ~6 GJ

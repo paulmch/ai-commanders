@@ -279,8 +279,11 @@ thrust axis round a cone of `EVADE_BURN_CONE_DEG` (20 deg) about the burn line -
 continuously while rounds are inbound or an armed enemy is within
 `EVADE_BURN_GUN_REACH_KM`, a fresh random cone point every half edge-to-edge swing
 (`_evade_burn_swing`, `_swing_dodge_aim`), so fire along the line is dodged too;
-armour picks only cone points; off the cone it turns toward it at full authority,
-idling to the order's token beyond `EVADE_BURN_AGAINST_ORDER_DEG` (90 deg) off;
+armour picks only cone points; off the cone it turns toward it at full authority
+and burns at the order's throttle through the whole turn (no idle; range-control
+options, the captain's ENGINE ORDER CHECK and trajectory plans include that turn
+impulse, `range_control.turn_burn_segments`; range keepers size the correction they
+note by cos(angle off), `_turn_then_burn(evade=True)`);
 RUN never below the order's throttle (rule in the `src/simulation.py` module
 docstring, `tests/test_evade_burn.py`, `scripts/evade_burn_measure.py`). On a
 throttle-0 / engine-off order (and the EVADE maneuver) it flies the drive as before:
@@ -474,7 +477,9 @@ hashed by the perf harness) is unchanged.
   residual pin reads. Dodgers are bucketed by base maneuver (dodge:PADLOCK,
   dodge:HOLD_RANGE, dodge:HEADING) and modelled by their state at the shot (calm vs
   reacting, `firecontrol.DODGE_CALM_ACCEL_FRACTION`); one swinging a burn (the overlay
-  on a burning order, fc `swing`) by `firecontrol.SWING_ACCEL_FRACTION`. Buckets still
+  on a burning order, fc `swing`) by `firecontrol.SWING_ACCEL_FRACTION`; a range keeper
+  turning under the overlay at its feed-forward share (`simulation.KEEPER_TURN_DODGE_SHARE`).
+  Buckets still
   outside 1.5x are named in the test's `RESIDUALS`.
   The doctrine P(hit) table is bound by `tests/test_prompt_structure.py`. Known residual:
   LLM fleets dodging a whole fleet's fire were hit even less than forecast
