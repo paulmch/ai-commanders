@@ -671,11 +671,15 @@ def analyze_range_control(
     enemies: Optional[Sequence[Any]] = None,
     interval_s: Optional[float] = None,
     detail: bool = True,
+    formation: bool = False,
 ) -> List[GroupRangeInfo]:
     """
     Range-control picture of ``own_ships`` (one ship, or a fleet moving as
     one: centre of mass, slowest hull's acceleration, slowest turn) against
     every enemy group. ``detail`` adds per-hull armor numbers (single ship).
+    ``formation``: the headings are flown as an "all ships" formation order
+    (formation_heading_maneuvers: the burn is held until the synced start),
+    which the evade clause of each option models.
     """
     own = [s for s in own_ships
            if not s.is_destroyed and not getattr(s, "is_dying", False)]
@@ -700,7 +704,7 @@ def analyze_range_control(
     infos: List[GroupRangeInfo] = []
     for members in group_enemies(own_pos, enemies):
         info = _analyze_group(sim, own, own_pos, own_vel, accel, members,
-                              interval_s, detail)
+                              interval_s, detail, formation)
         infos.append(info)
 
     # Most urgent first: an impending merge, then the nearest.
@@ -710,7 +714,8 @@ def analyze_range_control(
     return infos
 
 
-def _analyze_group(sim, own, own_pos, own_vel, accel, members, interval_s, detail):
+def _analyze_group(sim, own, own_pos, own_vel, accel, members, interval_s, detail,
+                   formation=False):
     e_pos = _mean([m.position for m in members])
     e_vel = _mean([m.velocity for m in members])
     e_acc = _mean([_current_accel(m) for m in members])
@@ -959,7 +964,12 @@ def _analyze_group(sim, own, own_pos, own_vel, accel, members, interval_s, detai
                 f"{info.range_km:.0f} km).")
 
     # ---- the same burns with evade: the turn burns too --------------------
-    burners = _can_burn(own)
+    # Not for an "all ships" formation order: it holds every burn until the
+    # synced start, so the overlay has no burn to carry through the turn
+    # (an engine-off order for it until then) and the hulls come round
+    # before the burn lights - flown with evade it lands within ~3 % of the
+    # plain statement (destroyer to dreadnought, cancel / open).
+    burners = _can_burn(own) if not formation else []
     for opt in info.options:
         if opt.throttle <= 0 or opt.burn_s <= 0 or opt.key == "face" or not burners:
             continue
@@ -1356,7 +1366,7 @@ def admiral_range_control(sim: Any, ships: Sequence[Any], mcp: bool = False) -> 
     if not live:
         return ""
     try:
-        infos = analyze_range_control(sim, live, detail=False)
+        infos = analyze_range_control(sim, live, detail=False, formation=True)
     except Exception:  # advisory only
         return ""
     if not infos:
@@ -1375,7 +1385,7 @@ def mcp_range_control(sim: Any, ships: Sequence[Any]) -> Dict[str, Any]:
     live = [s for s in ships if not s.is_destroyed and not getattr(s, "is_dying", False)]
     if not live:
         return {}
-    infos = analyze_range_control(sim, live, detail=False)
+    infos = analyze_range_control(sim, live, detail=False, formation=True)
     return {
         "frame": "world; pass heading as heading_direction to set_maneuver HEADING",
         "fleet_groups": [g.to_dict() for g in infos],

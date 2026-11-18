@@ -1592,8 +1592,11 @@ class LLMCaptain:
                 motion = None
         if motion and enemies:
             label, vec, thr, burn = motion
-            evade = bool((spec or {}).get("evade")) if isinstance(spec, dict) else False
-            evade = evade or bool(getattr(order, "evade", None))
+            # A formation ("all ships") order holds the burn until the synced
+            # start, so the hull comes round before it burns (range_control:
+            # no evade clause on formation headings).
+            evade = (isinstance(spec, dict) and bool(spec.get("evade"))
+                     and not getattr(order, "formation", False))
             res = self._cpa_under_burn(simulation, ship, enemies, vec, thr, burn, evade=evade)
             if res is not None:
                 cpa_km, t_s, who, rel_kps = res

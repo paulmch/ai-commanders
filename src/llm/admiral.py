@@ -1572,7 +1572,8 @@ Be authentic to how you would command a fleet as {model_name}."""
 
         # Geometry: fleet centre vs enemy groups (range control).
         try:
-            infos = analyze_range_control(simulation, live_own, live_enemies, detail=False) \
+            infos = analyze_range_control(simulation, live_own, live_enemies, detail=False,
+                                          formation=True) \
                 if live_own and live_enemies else []
         except Exception as e:  # noqa: BLE001 - advisory only
             print(f"[ADMIRAL {self.config.name}] range control failed: {e}")

@@ -324,8 +324,10 @@ fresh harness seeds is 0.85-1.10 out to 400 km for HOLD_RANGE, 0.96-1.13 for the
 HEADING dodgers, 0.94-1.08 for INTERCEPT.
 
 Predictions: range-control options (`turn_burn_segments`), the captain's ENGINE ORDER CHECK
-and the admiral's HEADINGS rows add "evade under fire: the N s turn burns too -> ..." when
-the nose is 90 degrees or more off; flown against stated, the end range agrees within 1.5 %
+and the admiral's per-ship range rows add "evade under fire: the N s turn burns too -> ..."
+when the nose is 90 degrees or more off. The fleet-centre HEADINGS rows (an "all ships"
+order) do not: a formation holds every burn until the synced start, the hulls come round
+first, and flown with evade it lands within 3 % of the plain statement (pinned); flown against stated, the end range agrees within 1.5 %
 (cancel / open, destroyer to dreadnought; pinned). Trajectory plans already fly the engine
 code: predicted vs flown position at the next checkpoint for 90 / 135 / 180 degree flips on
 corvette, destroyer, battlecruiser and dreadnought (6 seeds, two windows, with evade) is

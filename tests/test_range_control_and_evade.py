@@ -870,11 +870,20 @@ class TestEvadeTurnImpulse:
         captain.ship_id = "me"
         back = {"x": -1.0, "y": 0.0, "z": 0.0}
 
+        def order(evade, fleet=None):
+            # Built the way issue_order builds it (admiral._attach_heading).
+            from src.llm.admiral import _attach_heading
+            args = {"ship_name": "me", "order_text": "Brake.", "heading": back, "throttle": 1.0}
+            if evade:
+                args["evade"] = "full"
+            o = AdmiralOrder(target_ship_id="me", target_ship_name="me", order_text="Brake.")
+            _attach_heading(o, args, fleet)
+            return o
+
         def check(evade):
-            spec = {"maneuver_type": "OVERLAY", "evade": "full"} if evade else None
-            return captain._order_check(AdmiralOrder(
-                target_ship_id="me", target_ship_name="me", order_text="Brake.",
-                heading=back, throttle=1.0, maneuver=spec), sim, me, [])["engine"]
+            o = order(evade)
+            assert o.heading is not None and bool((o.maneuver or {}).get("evade")) == evade
+            return captain._order_check(o, sim, me, [])["engine"]
 
         plain, evading = check(False), check(True)
         turn = sim._estimate_turn_time(me, math.pi, engines_on=True)
@@ -896,3 +905,25 @@ class TestEvadeTurnImpulse:
                 _coast(me)
             closest = min(closest, _range_km(me, foe))
         assert closest == pytest.approx(cpa(evading), rel=0.15)
+
+    def test_formation_headings_carry_no_evade_clause(self):
+        # An "all ships" order holds every burn until the synced start: flown
+        # with evade the hull comes round first and lands near the plain
+        # statement, so the fleet-centre rows (admiral HEADINGS, MCP) and the
+        # captain's check of a formation order state no turn impulse.
+        from src.llm.range_control import formation_heading_maneuvers
+        sim, me, foe = _duel("battlecruiser", "destroyer", 390.0, 1.0)
+        opt = analyze_range_control(sim, [me], formation=True)[0].option("cancel")
+        assert opt.evade_effect == "" and opt.evade_end_range_km is None
+        assert "turn burns too" not in admiral_range_control(sim, [me])
+        t0 = sim.current_time
+        t_end = t0 + opt.turn_s + opt.burn_s
+        h = {"x": opt.heading.x, "y": opt.heading.y, "z": opt.heading.z}
+        while sim.current_time < t_end - 1e-6:
+            if (sim.current_time - t0) % 30.0 < 1e-6:
+                m = formation_heading_maneuvers(sim, [me], h, opt.throttle,
+                                                duration=min(30.0, t_end - sim.current_time))
+                m[me.ship_id].evade = "full"
+                sim.inject_command(me.ship_id, m[me.ship_id])
+            sim.step()
+        assert _range_km(me, foe) == pytest.approx(opt.end_range_km, rel=0.04)

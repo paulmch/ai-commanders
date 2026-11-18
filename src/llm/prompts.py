@@ -2885,8 +2885,9 @@ MANEUVERS (tell captains which to use):
   onto a round it cannot dodge only inside that cone - a round from abeam or astern
   still strikes the flank or tail; turning onto a new heading (or back after a RUN) it
   burns at the order's throttle through the whole turn, so a turn of more than 90° first
-  pushes the wrong way (HEADINGS rows state it: "evade under fire: the N s turn burns
-  too"); RUN (full, vs a guided torpedo)
+  pushes the wrong way (a ship's own range rows state it: "evade under fire: the N s turn
+  burns too"; an "all ships" order holds the burn until the synced start, so the hulls
+  come round first); RUN (full, vs a guided torpedo)
   leaves the line to burn away. Measured (seeded, 24 runs each): a destroyer burning
   across the line of fire of 3 gun ships 120-200 km off (nose already on its heading)
   burned on its order 98% of the time under fire and took 12% of the rounds fired at it,
