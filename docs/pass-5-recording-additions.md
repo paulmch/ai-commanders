@@ -1271,13 +1271,14 @@ collision model for launches.
 A launch with the sequence switched off (`CombatSimulation.launch_sequence =
 False`, `AIC_LAUNCH_SEQUENCE=0`, measurement only) has none of the sequence fields.
 
-Viewer note: `HullRigs.assignLaunches` deals a ship's launches to its magazine
-banks round robin by launch count and empties each bank in index order; the
-engine picks the first ready tube and the round by geometry (above), so the
-round the viewer removes can differ from the one that left. `mount` (bank =
-launcher index in `hull_mounts` order) and `round` give the exact rack round /
-cell; `rounds[round].pos` is where the animation starts. Without these fields
-(old recordings) keep the old dealing.
+Viewer note: the rack (`HullRigs.assignRounds`) empties exactly the round
+named by `mount` (bank = launcher index in `hull_mounts` order,
+`HullRigs.launcherBank`) and `round`; launches without these fields (old
+recordings) are dealt as before (banks round robin by launch count, each bank
+emptied in index order). A wrecked tube (`mount_damaged`, launcher destroyed)
+and a cook-off (`torpedoes_lost`) take their rounds off the rack too, so it
+matches the HUD magazine count. The flying round starts at `rounds[round].pos`
+(`WeaponTimeline.launchState`, drawn by `render/LaunchSequence.js`).
 
 ### `torpedo_ignition` (new event)
 

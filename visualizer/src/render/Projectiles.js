@@ -16,6 +16,9 @@ import {
 import { hullQuat, validUp } from '../HullFrame.js';
 import { arcsFor, isBlocked, pdPlan, hullExit, shownPdMount } from './TurretArcs.js';
 import { GUN_DEPRESSION_DEG } from './MountLimits.js';
+import { launchWeight, unitScale, shipHermite, stretchFromShip } from './LaunchSequence.js';
+import { trueK } from './Scale.js';
+const _shipM = [0, 0, 0], _pM = [0, 0, 0];
 const _fwdArr = [0, 0, 1], _quatArr = [0, 0, 0, 1];
 
 const Z = new THREE.Vector3(0, 0, 1);
@@ -62,7 +65,7 @@ export class Projectiles {
     this.m4 = new THREE.Matrix4(); this.q2 = new THREE.Quaternion(); this.aim = new THREE.Vector3();
     this.s1 = new THREE.Vector3(); this.s2 = new THREE.Vector3(); this.s3 = new THREE.Vector3();
     this.sample = makeSample(); this.history = makeSample(); this.shipSample = makeSample(); this.probe = makeSample();
-    this.t1 = new THREE.Vector3(); this.t2 = new THREE.Vector3(); this.focus = new THREE.Vector3(); this.viewDist = Infinity;
+    this.t1 = new THREE.Vector3(); this.t2 = new THREE.Vector3(); this.ej = new THREE.Vector3(); this.focus = new THREE.Vector3(); this.viewDist = Infinity;
     // Torpedo thrusters: body frame, bell axis, per-jet scratch
     this.bodyQ = new THREE.Quaternion(); this.rollQ = new THREE.Quaternion();
     this.ex = new THREE.Vector3(); this.ey = new THREE.Vector3(); this.bellAxis = new THREE.Vector3();
@@ -216,6 +219,50 @@ export class Projectiles {
     this.trail(tr, time, sampleTime, ION_LIFE, 12, fade, false, TRAIL_CAP_PX.slug);
   }
 
+  /** Magnification of a ship's drawn hull over its real size (1 at true scale). */
+  hullMag(ship) {
+    const ud = ship?.userData;
+    if (!ud) return 1;
+    const kt = trueK(ud.shipType);
+    return kt > 0 && ud.k > 0 ? Math.max(1, ud.k / kt) : 1;
+  }
+
+  /**
+   * The drawn point of torpedo `tr` at time t, from its real point p (scene
+   * km, written in place). A pass-5 sequence round leaves its drawn rack
+   * round (LaunchSequence.stretchFromShip: exact at true scale, stretched
+   * with a magnified hull); older rounds are lifted out of the hull (lift).
+   */
+  torpPoint(tr, t, p) {
+    const L = tr.launch;
+    if (!L?.state) return tr.lift ? this.lift(tr, t, p) : p;
+    const w = launchWeight(t, L.t, tr.ignitionAt);
+    const ship = this.manager.ships.get(L.ship);
+    const m = this.hullMag(ship);
+    if (!(w > 0) || !(m > 1 + 1e-9)) return p;
+    const track = this.timeline.ships.get(L.ship);
+    if (!shipHermite(track, t, _shipM)) return p;
+    for (let k = 0; k < 3; k++) { _shipM[k] *= SCALE; _pM[k] = p.getComponent(k); }
+    const rack = Math.hypot(L.ejectPos[0], L.ejectPos[1], L.ejectPos[2]) / 1000;
+    stretchFromShip(_pM, _shipM, rack, m, w);
+    return p.set(_pM[0], _pM[1], _pM[2]);
+  }
+
+  /**
+   * Draw scale of torpedo `tr`'s model at time t (at drawn point p): the
+   * rack round's size through its launch sequence, the free-flight scale
+   * after (LaunchSequence.unitScale / launchWeight).
+   */
+  torpK(tr, t, p) {
+    const free = this.freeK(p);
+    const L = tr.launch;
+    if (!L?.state) return free;
+    const w = launchWeight(t, L.t, tr.ignitionAt);
+    if (!(w > 0)) return free;
+    const unit = unitScale(this.hullMag(this.manager.ships.get(L.ship)));
+    return free + (unit - free) * w;
+  }
+
   /**
    * Viewer hulls are drawn ~8x oversize, so a fresh torpedo spends its first
    * seconds inside its own launcher's mesh. Push it out along its bearing
@@ -340,7 +387,7 @@ export class Projectiles {
     if (newest <= Math.max(tr.start, time - life)) return;
     this.timeline.sample(tr, newest, this.history);
     this.point(this.c, this.history);
-    if (tr.lift) this.lift(tr, newest, this.c); else this.muzzleLift(tr, newest, this.c);
+    if (tr.lift) this.torpPoint(tr, newest, this.c); else this.muzzleLift(tr, newest, this.c);
     // Up close, `life` seconds of wake is tens of km: a laser-like line
     // across the frame. Fade wakes far from the focus and cap the rest to
     // capPx on screen, measured at the trail's point nearest the camera.
@@ -363,7 +410,7 @@ export class Projectiles {
       const t = newest + (oldest - newest) * i / segments;
       this.timeline.sample(tr, t, this.history);
       this.point(this.d, this.history);
-      if (tr.lift) this.lift(tr, t, this.d); else this.muzzleLift(tr, t, this.d);
+      if (tr.lift) this.torpPoint(tr, t, this.d); else this.muzzleLift(tr, t, this.d);
       const nx = this.history.next;
       const powered = !poweredOnly || (t < tr.disabledAt && !this.history.state.disabled
         && (nx.thr !== undefined ? nx.thr > 0 : (this.history.state.dv_remaining - nx.dv_remaining) > 0.002));
@@ -382,7 +429,7 @@ export class Projectiles {
     const st = Math.min(time, tr.end);
     this.timeline.sample(tr, st, this.sample);
     this.point(this.a, this.sample);
-    this.lift(tr, st, this.a);
+    this.torpPoint(tr, st, this.a);
     tr.position.copy(this.a);
     this.noseAt(tr, st, this.sample, this.dir);
     const s = this.sample.state;
@@ -416,7 +463,7 @@ export class Projectiles {
       // the time the whole body is a few pixels (the faction diamond's range).
       // The round is modelled in kit units like the hulls: tk scene km per
       // kit unit here (render/Scale.js: a nominal hull's scale at this point)
-      const tk = this.freeK(this.a);
+      const tk = this.torpK(tr, st, this.a);
       const bodyPx = 1.8 * tk / this.pixelAt(this.a);
       const vis = disabled ? 0 : THREE.MathUtils.smoothstep(bodyPx, 5, 16);
       pulsesAt(th, st, tr.seed * PULSE.period, this.pulses, this.gimbal);
@@ -453,13 +500,23 @@ export class Projectiles {
         const flarePx = this.pixelAt(this.b) * (terminal ? 3.6 : 2.6);
         this.flashes.add(this.b, this.bellAxis, Math.max((terminal ? 0.6 : 0.28) * size * tk, flarePx), (terminal ? 1.3 : 0.7) * Math.max(size, 0.6), 1);
       }
-      if (vis > 0.01) this.rcsJets(tr, time, vis, tk);
+      // In its launch sequence the round's cold-gas push is the show: the
+      // puffs read bigger (slow gas, like the hull RCS), and next to a hull
+      // big on screen the unit needs no fleet-range arrow to be found
+      let seqW = 0, nearHull = 0;
+      if (tr.launch?.state) {
+        seqW = time < (tr.ignitionAt ?? Infinity) ? 1 : 0;
+        const ls = this.manager.ships.get(tr.launch.ship);
+        if (ls?.visible) nearHull = THREE.MathUtils.smoothstep((ls.userData.drawn?.length ?? 0) / this.pixelAt(ls.position), 40, 120);
+      }
+      if (vis > 0.01) this.rcsJets(tr, time, vis, tk, 1 + 2.2 * seqW);
       // Small seeker glint keeps an unpowered body readable at mid range.
       this.b.copy(this.a).addScaledVector(this.dir, 1.02 * tk);
       this.flashes.add(this.b, this.dir, 0.045 * tk, disabled ? 0.06 : 0.18, 1);
       // Faction arrowhead at fleet range pointing along the round's travel
       // (not the Tracks checkpoint diamond), gone once the body resolves.
-      const mark = (1 - THREE.MathUtils.smoothstep(bodyPx, 8, 24)) * (disabled ? 0.4 : 0.9);
+      const mark = (1 - THREE.MathUtils.smoothstep(bodyPx, 8, 24)) * (disabled ? 0.4 : 0.9)
+        * (1 - nearHull * launchWeight(time, tr.launch?.t ?? -Infinity, tr.ignitionAt));
       if (mark > 0) {
         this.vel.fromArray(this.sample.vel);
         this.markers.add(this.a, this.vel.lengthSq() > 1 ? this.vel : this.dir, mark, tr.faction, disabled ? 5 : 7);
@@ -501,7 +558,7 @@ export class Projectiles {
    * glow, and each pulse leaves an expanding puff that drifts off along
    * the nozzle axis for PULSE.puffLife after it closes.
    */
-  rcsJets(tr, time, vis, tk = 1) {
+  rcsJets(tr, time, vis, tk = 1, puff = 1) {
     const list = this.pulses, lv = this.jetLv;
     for (let p = 0; p < list.count; p++) {
       const pulse = list[p];
@@ -526,10 +583,10 @@ export class Projectiles {
           this.flashes.add(this.jetP, this.jetD, (0.035 + 0.02 * level) * tk, 1.0 * level * vis * open, 5, seed);
         }
         // Exhaust puff: gas coasting off the nozzle, spreading thin.
-        const travel = (0.06 + 0.75 * (1 - Math.exp(-4 * age)) / 4) * tk;
+        const travel = (0.06 + 0.75 * (1 - Math.exp(-4 * age)) / 4) * tk * puff;
         this.jetQ.copy(this.jetP).addScaledVector(this.jetD, travel);
-        const radius = (0.03 + 0.075 * (1 - Math.exp(-6 * age))) * tk;
-        this.flashes.add(this.jetQ, this.jetD, radius, 0.3 * level * vis * fade * Math.min(1, age / 0.03), 5, seed);
+        const radius = (0.03 + 0.075 * (1 - Math.exp(-6 * age))) * tk * puff;
+        this.flashes.add(this.jetQ, this.jetD, radius, 0.3 * level * vis * fade * Math.min(1, age / 0.03) * (puff > 1 ? 1.4 : 1), 5, seed);
       }
     }
   }
@@ -859,7 +916,7 @@ export class Projectiles {
     if (m.kind === 'hit' && m.track.impact) this.surfaceImpact(m.track);
     this.timeline.sample(m.track, m.time, this.sample);
     this.point(this.a, this.sample);
-    if (m.track.lift) this.lift(m.track, m.time, this.a); else this.muzzleLift(m.track, m.time, this.a);
+    if (m.track.lift) this.torpPoint(m.track, m.time, this.a); else this.muzzleLift(m.track, m.time, this.a);
     if (m.track.thrusters) this.noseAt(m.track, m.time, this.sample, this.dir); else this.direction(this.sample);
     this.vel.fromArray(this.sample.vel).multiplyScalar(SCALE);
     if (m.kind === 'dud') { this.dud(m, age); return; }
@@ -901,6 +958,8 @@ export class Projectiles {
     const struck = k === 'hit' ? this.manager.ships.get(m.target) : null;
     const mk = struck ? this.shipK(struck) : this.freeK(this.a);
     this.axis.set(0, 0, 0); // centre already advected; sparks get no base velocity
+    if (k === 'ignition' && m.track.launch?.state) { this.release(m, age); return; }
+    if (k === 'lightoff') { this.lightoff(m, age); return; }
     if (k === 'ignition' || k === 'burnout') {
       // Motor light-off / flame-out at the nozzle: a short stuttering flare.
       if (k === 'ignition') {
@@ -952,6 +1011,63 @@ export class Projectiles {
       this.sparks(this.a, this.skid, this.axis, age, IMPACT_LIFE, scale, m.seed, 28, 1, 2.6);
     } else {
       this.sparks(this.a, this.dir, this.axis, age, IMPACT_LIFE, scale, m.seed, 28, 1);
+    }
+  }
+
+  /**
+   * Launch of a sequence round (cold): the clamps let go - a glint at the
+   * rail / cell and a puff of push-off gas blown out along the eject
+   * direction, at the rack round's scale. Seen from fleet range, where the
+   * hull is a few pixels, it stays the old launch flash (the salvo cue).
+   * this.a / this.dir: the round at the launch moment.
+   */
+  release(m, age) {
+    const tr = m.track, L = tr.launch;
+    const ship = this.manager.ships.get(L.ship);
+    const uk = this.torpK(tr, m.time, this.a);
+    const life = 1 - age / IMPACT_LIFE;
+    const drawn = ship?.userData.drawn?.length ?? 0;
+    const hullPx = ship ? drawn / this.pixelAt(ship.position) : 0;
+    const near = THREE.MathUtils.smoothstep(hullPx, 30, 90);
+    const fk = this.freeK(this.a);
+    if (near < 1) {
+      this.flashes.add(this.a, this.dir, (0.5 + age * 2) * fk, 1.6 * Math.exp(-age * 6) * life * (1 - near), 1, m.seed);
+      this.flashes.add(this.a, this.dir, (0.3 + age * 3) * fk, 0.9 * life * life * (1 - near), 0, m.seed);
+    }
+    if (near <= 0) return;
+    // eject direction in the world (the gas leaves with the round)
+    this.ej.fromArray(tr.samples[0].state.vel);
+    const sh = this.timeline.ships.get(L.ship);
+    if (sh && sampleTrack(sh, m.time, this.shipSample)) this.ej.sub(this.t2.fromArray(this.shipSample.vel));
+    if (this.ej.lengthSq() < 1e-9) this.ej.copy(this.dir); else this.ej.normalize();
+    // clamp-release glint on the rail, then grey push-off gas spreading out
+    this.flashes.add(this.a, this.ej, 0.35 * uk, 2.2 * Math.exp(-age * 26) * near, 1, m.seed);
+    this.b.copy(this.a).addScaledVector(this.ej, (0.15 + 1.6 * (1 - Math.exp(-5 * age))) * uk);
+    this.flashes.add(this.b, this.ej, (0.35 + 2.2 * age) * uk, 0.45 * life * life * near * Math.min(1, age / 0.04), 5, m.seed);
+  }
+
+  /**
+   * Torch light-off of a sequence round (torpedo_ignition): a hard white
+   * flash at the bell and a ring thrown off it - the round's hot moment, in
+   * the spirit of the ship torch's light-off flash - and, when it lights
+   * close to its own hull (own_gap_m), one of the pool lights so the hull
+   * and its rack catch the light for a blink.
+   */
+  lightoff(m, age) {
+    const tr = m.track;
+    const tk = this.torpK(tr, m.time, this.a);
+    const life = 1 - age / IMPACT_LIFE;
+    this.b.copy(this.a).addScaledVector(this.dir, (ENGINE.pivot - ENGINE.bell) * tk);
+    this.t1.copy(this.dir).negate();
+    const px = this.pixelAt(this.b);
+    this.flashes.add(this.b, this.t1, Math.max((1.1 + age * 3) * tk, px * 3), 2.8 * Math.exp(-age * 9) * life, 1, m.seed);
+    this.flashes.add(this.b, this.t1, (0.5 + age * 9) * tk, 1.3 * life * life, 0, m.seed);
+    const gap = tr.ignition?.gapM;
+    const ship = this.manager.ships.get(tr.launch?.ship);
+    if (ship?.visible && Number.isFinite(gap)) {
+      const near = Math.max(0, Math.min(1, (260 - gap) / 200));
+      const kt = trueK(ship.userData.shipType), ks = this.shipK(ship);
+      if (near > 0 && kt > 0) this.offerPop(this.b, 46 * near * Math.exp(-age * 7), 3 * Math.max(gap, 40) / 1000 / kt, ks);
     }
   }
 

@@ -156,11 +156,16 @@ export function buildTorpedoThrusters(samples) {
       const r = s.rcs;
       if (r) { rcs[3 * i] = r[0]; rcs[3 * i + 1] = r[1]; rcs[3 * i + 2] = r[2]; }
       // Nose: the tick's thrust axis; coasting, the seeker's line of sight
-      // at the tick's start; else hold; else the first velocity.
+      // at the tick's start; else hold; else the first velocity. In the
+      // launch sequence (pass 5: `ph`, a recorded world `nose` for the
+      // tick that ended on the frame) the key at a tick's start is the
+      // nose recorded at the end of the tick before.
       const f = s.fwd;
       const prev = i > 0 ? samples[i - 1] : samples[i];
+      const seqNose = s.ph ? (prev.state.ph && prev.state.nose) || s.nose : null;
       const los = !s.disabled && !prev.state.disabled && (s.dv_remaining ?? 1) > 0 ? prev.los || samples[i].los : null;
-      if (!(thr[i] > 0 && f && unit3(nose, i, f[0], f[1], f[2]))
+      if (!(seqNose && unit3(nose, i, seqNose[0], seqNose[1], seqNose[2]))
+        && !(thr[i] > 0 && f && unit3(nose, i, f[0], f[1], f[2]))
         && !(los && unit3(nose, i, los[0], los[1], los[2]))) {
         if (i > 0) {
           nose[3 * i] = nose[3 * i - 3]; nose[3 * i + 1] = nose[3 * i - 2]; nose[3 * i + 2] = nose[3 * i - 1];
@@ -181,7 +186,10 @@ export function buildTorpedoThrusters(samples) {
       if (!(theta > 1e-4)) continue;
       acc[i] = Math.min(0.5, Math.max(SLEW.minAccel, theta / SLEW.bangBang));
       const lit = thr[i] > 0;
-      lvl[i] = lit ? SLEW.litLevel * smooth(SLEW.litMin, SLEW.litFull, theta)
+      // (the eject tick fires nothing: the round turns with the spin it
+      // took off its ship, so no attitude couple is drawn for it)
+      const ejecting = samples[i].state?.ph === 'eject';
+      lvl[i] = ejecting ? 0 : lit ? SLEW.litLevel * smooth(SLEW.litMin, SLEW.litFull, theta)
         : smooth(SLEW.coldMin, SLEW.coldFull, theta);
       gim[i] = lit ? SLEW.gimbalMax * smooth(0, SLEW.litFull, theta) : 0;
       tangentInto(spin, i, ax, ay, az, bx, by, bz);
