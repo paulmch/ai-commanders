@@ -33,6 +33,7 @@ try:
     from ..pointdefense import PDLaser, TORPEDO_ELECTRONICS_THRESHOLD_J
     from ..torpedo import (
         ASSUMED_TARGET_MAX_LATERAL_ACCEL_MS2, MIN_CLOSING_SPEED_KPS, NEZ_DV_RESERVE_KPS,
+        RESERVE_CRUISE_CLOSING_KPS, RESERVE_TERMINAL_WINDOW_S,
         NEZ_GUIDANCE_MARGIN, TERMINAL_MIN_BURN_KPS, TorpedoGuidance,
     )
 except ImportError:  # pragma: no cover - script-style imports
@@ -40,6 +41,7 @@ except ImportError:  # pragma: no cover - script-style imports
     from pointdefense import PDLaser, TORPEDO_ELECTRONICS_THRESHOLD_J
     from torpedo import (
         ASSUMED_TARGET_MAX_LATERAL_ACCEL_MS2, MIN_CLOSING_SPEED_KPS, NEZ_DV_RESERVE_KPS,
+        RESERVE_CRUISE_CLOSING_KPS, RESERVE_TERMINAL_WINDOW_S,
         NEZ_GUIDANCE_MARGIN, TERMINAL_MIN_BURN_KPS, TorpedoGuidance,
     )
 
@@ -81,16 +83,21 @@ NO_ENERGY_GJ = 5.0
 # at a receding evading ship"): such a solution is never better than POOR.
 RECEDING_KPS = 0.5
 
-# Rounds a target needs to die, from the measured salvo doctrine ("4 rounds
-# kill a destroyer; 6 rounds kill anything up to a dreadnought" -
-# ADMIRAL_DOCTRINE, re-measured by tests/test_doctrine_accuracy.py).
-KILL_ROUNDS_LIGHT = 4
-KILL_ROUNDS_HEAVY = 6
-LIGHT_HULLS = frozenset({"corvette", "frigate", "destroyer"})
-# The per-round impact energy those counts were measured at ("SIZING at
-# moderate closure (~22 GJ/round ...)"). A slower round needs proportionally
-# more company - a lower bound, since a weak round also penetrates worse.
-KILL_ROUNDS_REF_GJ = 22.0
+# Rounds a target needs to die and the per-round energy they were measured at:
+# ONE engine-side estimate (src/torpedo_link.py) shared by the torpedo
+# datalink, the captain's fire solution and this admiral economy.
+try:
+    from ..torpedo_link import (  # noqa: F401  (re-exported)
+        KILL_ROUNDS_LIGHT, KILL_ROUNDS_HEAVY, LIGHT_HULLS, KILL_ROUNDS_REF_GJ,
+        kill_rounds, kill_rounds_at,
+    )
+    from .. import torpedo_link as _torpedo_link
+except ImportError:  # pragma: no cover - script-style imports
+    from torpedo_link import (  # noqa: F401
+        KILL_ROUNDS_LIGHT, KILL_ROUNDS_HEAVY, LIGHT_HULLS, KILL_ROUNDS_REF_GJ,
+        kill_rounds, kill_rounds_at,
+    )
+    import torpedo_link as _torpedo_link
 
 
 # =============================================================================
@@ -304,15 +311,10 @@ def torpedo_specs_for(sim: Any, fleet_data: Optional[Dict[str, Any]],
 def turrets_to_blind(fleet_data: Optional[Dict[str, Any]], cross_kps: float) -> int:
     """
     PD turrets that must dwell on ONE round crossing the envelope at
-    ``cross_kps`` to seeker-kill it (same closed form the PD doctrine quotes:
-    pd_doctrine_numbers / PDLaser.energy_before_impact_j).
+    ``cross_kps`` to seeker-kill it (src/torpedo_link.turrets_to_blind: the
+    continuous-dwell closed form the PD doctrine quotes).
     """
-    spec = ((fleet_data or {}).get("weapon_types") or {}).get("pd_laser") or {}
-    laser = PDLaser.from_fleet_data(spec) if spec else PDLaser()
-    per_turret = laser.energy_before_impact_j(laser.range_km, max(1.0, cross_kps) * 1000.0)
-    if per_turret <= 0:
-        return 99
-    return max(1, math.ceil(TORPEDO_ELECTRONICS_THRESHOLD_J / per_turret))
+    return _torpedo_link.turrets_to_blind(cross_kps, fleet_data)
 
 
 def pd_range_m(fleet_data: Optional[Dict[str, Any]]) -> float:
@@ -347,6 +349,7 @@ def solve_pursuit(
     floor_mps: float = MIN_CLOSING_SPEED_KPS * 1000.0,
     horizon_s: float = SOLUTION_HORIZON_S,
     target_delay_s: float = 0.0,
+    profile: str = "sprint",
 ) -> Dict[str, Any]:
     """
     Fly a 1-D pursuit along the line of sight, worst case for the torpedo:
@@ -372,7 +375,13 @@ def solve_pursuit(
     Returns hit (bool), tof_s, impact_mps, cross_mps (mean closure while
     inside the PD envelope - what PD dwell depends on), short_m.
     ``target_delay_s``: the target starts running only then (it turns first).
+    ``profile`` 'reserve': the reserve launch profile's cruise floor, and the
+    terminal burn only inside its window (src/torpedo.py).
     """
+    window_s = None
+    if profile == "reserve":
+        floor_mps = RESERVE_CRUISE_CLOSING_KPS * 1000.0
+        window_s = RESERVE_TERMINAL_WINDOW_S
     ve = max(1.0, float(specs.exhaust_velocity_kps) * 1000.0)
     m = float(mass_kg if mass_kg is not None else specs.mass_kg)
     dv = (float(dv_left_mps) if dv_left_mps is not None
@@ -394,7 +403,7 @@ def solve_pursuit(
         if dv > 0:
             if c < floor_mps:
                 burn = min(a * dt, dv)
-            elif d > 0:
+            elif d > 0 and (window_s is None or d / c <= window_s):
                 surplus = dv - (NEZ_GUIDANCE_MARGIN * a_t * (d / c) + reserve)
                 if surplus > min_burn and a >= NEZ_GUIDANCE_MARGIN * a_t:
                     burn = min(a * dt, surplus)
@@ -429,6 +438,7 @@ def torpedo_solution(
     salvo_available: Optional[int] = None,
     mass_kg: Optional[float] = None,
     dv_left_mps: Optional[float] = None,
+    profile: str = "sprint",
 ) -> TorpedoSolution:
     """
     Verdict for a round launched from (launch_pos, launch_vel) at ``target``
@@ -461,7 +471,8 @@ def torpedo_solution(
         return sol
     envelope = pd_range_m(fleet_data)
     run = solve_pursuit(rng, closing, lateral, max_accel_ms2(target), specs,
-                        mass_kg=mass_kg, dv_left_mps=dv_left_mps, pd_envelope_m=envelope)
+                        mass_kg=mass_kg, dv_left_mps=dv_left_mps, pd_envelope_m=envelope,
+                        profile=profile)
     if not run["hit"]:
         sol.short_km = run.get("short_m", 0.0) / 1000.0
         sol.reason = ("runs dry ~%.0f km short if he runs" % sol.short_km
@@ -497,21 +508,6 @@ def torpedo_solution(
     else:
         sol.verdict = "GOOD"
     return sol
-
-
-def kill_rounds(ship_type: Optional[str], hull_pct: Optional[float] = None) -> int:
-    """Simultaneous rounds that kill this hull (salvo doctrine), less if crippled."""
-    base = KILL_ROUNDS_LIGHT if (ship_type or "") in LIGHT_HULLS else KILL_ROUNDS_HEAVY
-    if hull_pct is not None and hull_pct < 50.0:
-        base = max(2, base // 2)
-    return base
-
-
-def kill_rounds_at(rounds: int, energy_gj: Optional[float]) -> int:
-    """``rounds`` (sized at KILL_ROUNDS_REF_GJ each) rescaled to rounds that land ``energy_gj``."""
-    if energy_gj and 0.0 < energy_gj < KILL_ROUNDS_REF_GJ:
-        return math.ceil(rounds * KILL_ROUNDS_REF_GJ / energy_gj)
-    return rounds
 
 
 # =============================================================================

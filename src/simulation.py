@@ -102,6 +102,7 @@ from __future__ import annotations
 
 import copy
 import math
+import os
 import random
 import time
 import uuid
@@ -125,7 +126,8 @@ try:
     from .projectile import KineticProjectile, ProjectileLauncher
     from .torpedo import (
         Torpedo, TorpedoLauncher, TorpedoSpecs, GuidanceMode,
-        TorpedoGuidance, GuidanceCommand, SAFE_ARMING_DISTANCE_M
+        TorpedoGuidance, GuidanceCommand, SAFE_ARMING_DISTANCE_M,
+        normalize_torpedo_profile, TORPEDO_PROFILE_RESERVE, profile_cruise_floor_kps,
     )
     from .combat import (
         CombatResolver, Weapon, ShipArmor, HitResult, HitLocation,
@@ -159,6 +161,7 @@ try:
     from . import battle_damage
     from . import drive_plume
     from . import weapon_arcs
+    from . import torpedo_link
 except ImportError:
     from replay_evidence import ExecutionEvidence, impact_evidence, OMIT_IF_NONE
     from battle_timing import MIN_DECISION_INTERVAL, MAX_DECISION_INTERVAL
@@ -173,7 +176,8 @@ except ImportError:
     from projectile import KineticProjectile, ProjectileLauncher
     from torpedo import (
         Torpedo, TorpedoLauncher, TorpedoSpecs, GuidanceMode,
-        TorpedoGuidance, GuidanceCommand, SAFE_ARMING_DISTANCE_M
+        TorpedoGuidance, GuidanceCommand, SAFE_ARMING_DISTANCE_M,
+        normalize_torpedo_profile, TORPEDO_PROFILE_RESERVE, profile_cruise_floor_kps,
     )
     from combat import (
         CombatResolver, Weapon, ShipArmor, HitResult, HitLocation,
@@ -207,6 +211,7 @@ except ImportError:
     import battle_damage
     import drive_plume
     import weapon_arcs
+    import torpedo_link
 
 
 # =============================================================================
@@ -1854,6 +1859,17 @@ class CombatSimulation:
         # mount, and how many of those the mount held back (masked / slewing).
         self.arcs_tally = {'released': 0, 'masked': 0, 'slewing': 0}
         self._arcs_lead_cache: dict = {}
+        # Torpedo launch profile when an order names none ('sprint'; the
+        # AIC_TORPEDO_PROFILE env switch is for measuring rule-based fleets
+        # only - heuristic captains name no profile).
+        self.default_torpedo_profile: str = normalize_torpedo_profile(
+            os.environ.get('AIC_TORPEDO_PROFILE'))
+        # Torpedo datalink (src/torpedo_link.py): live-seeker rounds of one
+        # side reassign lost targets as a group and divert reserve-profile
+        # surplus. False restores the pre-link per-round retarget exactly
+        # (measurement only).
+        self.torpedo_datalink: bool = os.environ.get('AIC_TORPEDO_DATALINK', '1') != '0'
+        self._link_surplus_t: dict = {}
 
         # Decision callback
         self._decision_callback: Optional[Callable[[str, 'CombatSimulation'], list[Any]]] = None
@@ -2266,6 +2282,9 @@ class CombatSimulation:
             guidance_mode = command.get('guidance_mode')
             if guidance_mode is not None and isinstance(guidance_mode, GuidanceMode):
                 torpedo.guidance_mode = guidance_mode
+            # Launch profile (sprint default / reserve), see src/torpedo.py.
+            torpedo.profile = normalize_torpedo_profile(
+                command.get('profile') or self.default_torpedo_profile)
 
             self._torpedo_seq += 1
             torpedo_id = f"torp_{ship.ship_id}_{self._torpedo_seq:04d}"
@@ -2284,14 +2303,20 @@ class CombatSimulation:
                 ship.position.distance_to(target_ship.position) / 1000.0
                 if target_ship else 0.0
             )
-            self._log_event(SimulationEventType.TORPEDO_LAUNCHED, ship.ship_id, target_id, {
+            launch_data = {
                 'torpedo_id': torpedo_id,
                 'initial_velocity_kps': torpedo.velocity.magnitude / 1000.0,
                 'warhead_gj': torpedo.specs.warhead_yield_gj,
                 'delta_v_kps': torpedo.specs.total_delta_v_kps,
                 'guidance_mode': torpedo.guidance_mode.name,
-                'launch_distance_km': launch_distance_km
-            })
+                'launch_distance_km': launch_distance_km,
+            }
+            # Launch profile: recorded when not the default (absent = sprint),
+            # so a sprint launch stays byte-identical to pre-profile recordings.
+            if torpedo.profile != 'sprint':
+                launch_data['profile'] = torpedo.profile
+            self._log_event(SimulationEventType.TORPEDO_LAUNCHED, ship.ship_id, target_id,
+                            launch_data)
             return True
 
         return False
@@ -7275,9 +7300,233 @@ class CombatSimulation:
         )
         return best
 
+    # -------------------------------------------------------------------------
+    # Torpedo datalink (src/torpedo_link.py)
+    # -------------------------------------------------------------------------
+
+    def _reassign_torpedo(self, torp_flight: 'TorpedoInFlight', ship: 'ShipCombatState',
+                          reason: str, group: str, group_size: int = 1,
+                          time_to_intercept_s: Optional[float] = None,
+                          selection_mode: str = 'max_energy') -> None:
+        """Point a live round at ``ship`` for the datalink: a fresh engagement
+        (the same resets as _retarget_torpedo) and a new cruise floor - the
+        closure it already has toward ``ship`` plus whatever the tank holds
+        beyond the steer and the reassignment reserve, never above its
+        profile's floor - so it never burns the reserve to regain speed
+        (src/torpedo.py cruise_floor_kps). Recorded as torpedo_retargeted
+        with reason / group."""
+        torp = torp_flight.torpedo
+        ok, t_int, left = torp.can_intercept(ship.position, ship.velocity)
+        if time_to_intercept_s is None:
+            time_to_intercept_s = t_int
+        cap = max(self.RETARGET_MIN_RESERVE_KPS,
+                  torp.specs.total_delta_v_kps * self.RETARGET_RESERVE_FRACTION)
+        spare = (max(0.0, left - torpedo_link.reassign_reserve_kps(t_int, cap))
+                 if ok else 0.0)
+        rel = ship.position - torp.position
+        d = rel.magnitude
+        closure_kps = (-(ship.velocity - torp.velocity).dot(rel / d) / 1000.0
+                       if d > 0 else 0.0)
+        torp.cruise_floor_override_kps = min(profile_cruise_floor_kps(torp.profile),
+                                             max(0.0, closure_kps) + spare)
+        old_target_id = torp.target_id
+        torp.target_id = ship.ship_id
+        torp.last_observed_target_velocity = None
+        torp.estimated_target_accel = Vector3D.zero()
+        torp_flight.min_distance_to_target = float('inf')
+        torp_flight.prev_distance_to_target = float('inf')
+        torp_flight.terminal_latched = False
+        heat_fraction = torp_flight.heat_absorbed_j / torp_flight.ELECTRONICS_THRESHOLD_J
+        self._log_event(
+            SimulationEventType.TORPEDO_RETARGETED,
+            torp_flight.source_ship_id,
+            target_id=ship.ship_id,
+            data={
+                'torpedo_id': torp_flight.torpedo_id,
+                'old_target_id': old_target_id,
+                'new_target_id': ship.ship_id,
+                'distance_km': torp.position.distance_to(ship.position) / 1000,
+                'time_to_intercept_s': time_to_intercept_s,
+                'dv_remaining_kps': torp.remaining_delta_v_kps,
+                'selection_mode': selection_mode,
+                'seeker_heat_fraction': round(heat_fraction, 3),
+                'reason': reason,
+                'group': group,
+                'group_size': group_size,
+                'profile': torp.profile,
+            },
+        )
+
+    def _torpedo_datalink(self) -> None:
+        """Group reassignment of lost targets and reserve-profile surplus
+        diversion, per side, from the start-of-tick state (before any round
+        moves). Sides are independent and every choice is sorted by stable
+        ids, so neither side order nor list order can change an outcome."""
+        by_side: dict[str, list] = {}
+        for tf in self.torpedoes:
+            if tf.is_disabled or tf.torpedo.fuel_exhausted:
+                continue   # a blinded or dry round is off the link
+            src = self.get_ship(tf.source_ship_id)
+            if src is None:
+                continue
+            by_side.setdefault(src.faction, []).append(tf)
+        for faction in sorted(by_side):
+            self._torpedo_datalink_side(
+                faction, sorted(by_side[faction], key=lambda tf: tf.torpedo_id))
+
+    def _link_need(self, cache: dict, target: 'ShipCombatState', rounds: list) -> int:
+        """rounds_needed(target).total, sized for ``rounds`` (centroid as the
+        threat direction, their mean closure and impact energy)."""
+        if target.ship_id in cache:
+            return cache[target.ship_id]
+        n = max(1, len(rounds))
+        cx = sum(tf.torpedo.position.x for tf in rounds) / n
+        cy = sum(tf.torpedo.position.y for tf in rounds) / n
+        cz = sum(tf.torpedo.position.z for tf in rounds) / n
+        closures = []
+        for tf in rounds:
+            rel = target.position - tf.torpedo.position
+            d = rel.magnitude
+            closures.append(-(target.velocity - tf.torpedo.velocity).dot(rel / d)
+                            if d > 0 else 0.0)
+        closure = max(0.0, sum(closures) / n) if closures else 0.0
+        specs = rounds[0].torpedo.specs if rounds else None
+        pen = float(getattr(specs, 'penetrator_mass_kg', 250.0)) if specs else 250.0
+        warhead = float(getattr(specs, 'warhead_yield_gj', 0.0) or 0.0) if specs else 0.0
+        energy = 0.5 * pen * closure * closure / 1e9 + warhead if closure > 0 else None
+        need = torpedo_link.rounds_needed(
+            self, target, threat_from=Vector3D(cx, cy, cz),
+            cross_kps=(closure / 1000.0) if closure > 0 else None,
+            energy_gj=energy).total
+        cache[target.ship_id] = need
+        return need
+
+    def _link_options(self, tf: 'TorpedoInFlight', enemies: list, exclude: str = None):
+        torp = tf.torpedo
+        cap = max(self.RETARGET_MIN_RESERVE_KPS,
+                  torp.specs.total_delta_v_kps * self.RETARGET_RESERVE_FRACTION)
+        hurried = (tf.heat_absorbed_j / tf.ELECTRONICS_THRESHOLD_J
+                   >= self.RETARGET_HURRY_HEAT_FRACTION)
+        opts = []
+        for ship in enemies:
+            if ship.ship_id == exclude:
+                continue
+            g = torpedo_link.reassign_gate(torp, ship, self.RETARGET_MAX_INTERCEPT_S, cap)
+            if g.ok:
+                opts.append(torpedo_link.Option(
+                    ship.ship_id, -g.t_s if hurried else g.fuel_left_kps,
+                    g.t_s, g.fuel_left_kps))
+        return opts, ('fastest' if hurried else 'max_energy')
+
+    def _torpedo_datalink_side(self, faction: str, members: list) -> None:
+        enemies = sorted((s for s in self.ships.values()
+                          if s.faction != faction and not s.is_destroyed
+                          and not s.is_dying and not s.is_surrendered),
+                         key=lambda s: s.ship_id)
+        if not enemies:
+            return
+        by_id = {s.ship_id: s for s in enemies}
+        orphans, homing = [], []
+        for tf in members:
+            tgt = self.get_ship(tf.torpedo.target_id)
+            # A dying hulk is already lost: its rounds are reassigned as soon
+            # as anything else is reachable (else they keep homing on it).
+            if tgt is None or tgt.is_destroyed or tgt.is_dying:
+                orphans.append(tf)
+            else:
+                homing.append(tf)
+        need_cache: dict = {}
+
+        def inbound_on(sid):
+            return [tf for tf in homing if tf.torpedo.target_id == sid]
+
+        # (a) group reassignment of rounds whose target is lost
+        if orphans:
+            rounds, modes = [], {}
+            for tf in orphans:
+                opts, modes[tf.torpedo_id] = self._link_options(tf, enemies)
+                rounds.append((tf.torpedo_id, opts))
+            if any(opts for _, opts in rounds):
+                remaining = {}
+                for s in enemies:
+                    sized = inbound_on(s.ship_id) or orphans
+                    remaining[s.ship_id] = (self._link_need(need_cache, s, sized)
+                                            - len(inbound_on(s.ship_id)))
+                plan = torpedo_link.plan_group(rounds, remaining)
+                group = f"{faction}@{self.current_time:g}:target_lost"
+                times = {tid: {o.target_id: o.t_s for o in opts} for tid, opts in rounds}
+                for tf in orphans:
+                    sid = plan.get(tf.torpedo_id)
+                    if sid is None:
+                        continue
+                    self._reassign_torpedo(
+                        tf, by_id[sid], 'target_lost', group, len(plan),
+                        time_to_intercept_s=times[tf.torpedo_id][sid],
+                        selection_mode=modes[tf.torpedo_id])
+                    homing.append(tf)
+
+        # (c) surplus diversion: reserve-profile rounds only, on a slow clock
+        last = self._link_surplus_t.get(faction)
+        if last is not None and self.current_time - last < torpedo_link.LINK_SURPLUS_INTERVAL_S:
+            return
+        reserve_rounds = [tf for tf in homing
+                          if tf.torpedo.profile == TORPEDO_PROFILE_RESERVE]
+        if not reserve_rounds:
+            return
+        self._link_surplus_t[faction] = self.current_time
+        surplus_rounds = []
+        for sid in sorted({tf.torpedo.target_id for tf in reserve_rounds}):
+            target = by_id.get(sid)
+            if target is None:
+                continue
+            inbound = inbound_on(sid)
+            extra = len(inbound) - self._link_need(need_cache, target, inbound)
+            if extra <= 0:
+                continue
+            divertable = []
+            for tf in reserve_rounds:
+                if tf.torpedo.target_id != sid:
+                    continue
+                rel = target.position - tf.torpedo.position
+                d = rel.magnitude
+                closing = -(target.velocity - tf.torpedo.velocity).dot(rel / d) if d > 0 else 0.0
+                t_go = d / closing if closing > 0 else float('inf')
+                if t_go > torpedo_link.LINK_COMMITTED_S:
+                    divertable.append((-t_go, tf.torpedo_id, tf))
+            divertable.sort(key=lambda x: (x[0], x[1]))
+            surplus_rounds.extend(tf for _, _, tf in divertable[:extra])
+        if not surplus_rounds:
+            return
+        remaining = {}
+        for s in enemies:
+            inbound = inbound_on(s.ship_id)
+            remaining[s.ship_id] = (self._link_need(need_cache, s, inbound or surplus_rounds)
+                                    - len(inbound))
+        rounds, modes = [], {}
+        for tf in surplus_rounds:
+            opts, modes[tf.torpedo_id] = self._link_options(tf, enemies,
+                                                             exclude=tf.torpedo.target_id)
+            opts = [o for o in opts if remaining.get(o.target_id, 0) > 0]
+            rounds.append((tf.torpedo_id, opts))
+        plan = torpedo_link.plan_group(rounds, remaining, overflow=False)
+        if not plan:
+            return
+        group = f"{faction}@{self.current_time:g}:datalink_surplus"
+        times = {tid: {o.target_id: o.t_s for o in opts} for tid, opts in rounds}
+        for tf in surplus_rounds:
+            sid = plan.get(tf.torpedo_id)
+            if sid is None:
+                continue
+            self._reassign_torpedo(
+                tf, by_id[sid], 'datalink_surplus', group, len(plan),
+                time_to_intercept_s=times[tf.torpedo_id][sid],
+                selection_mode=modes[tf.torpedo_id])
+
     def _update_torpedoes(self, dt: float) -> None:
         """Update all torpedoes and check for hits."""
         torpedoes_to_remove: list[TorpedoInFlight] = []
+        if self.torpedo_datalink and self.torpedoes:
+            self._torpedo_datalink()
 
         for torp_flight in self.torpedoes:
             torp = torp_flight.torpedo
@@ -7304,7 +7553,8 @@ class CombatSimulation:
             # that killed its target early swings onto the next hull instead
             # of coasting into the void. Blinded seekers cannot reacquire
             # and dry tanks cannot steer - those orphan exactly as before.
-            if orphaned and not torp_flight.is_disabled and not torp.fuel_exhausted:
+            if (orphaned and not self.torpedo_datalink
+                    and not torp_flight.is_disabled and not torp.fuel_exhausted):
                 new_target = self._retarget_torpedo(torp_flight)
                 if new_target is not None:
                     target = new_target

@@ -58,8 +58,9 @@ Open **[the Sonnet 5 vs DeepSeek torpedo swarm](http://localhost:5173/?recording
 | **← / →** | Seek backward or forward five seconds |
 | **F** | Frame the active fleets |
 | **D** | Open or close intent and consequence |
-| **C** | Toggle tactical contact labels |
-| **N** | Open or close the command net (directives, orders, captain reports, fleet signals) |
+| **L** | Cycle label density: auto (a short-name chip per ship, crowded ships of one side share a group chip, full cards only for the selected or dying ship; hover a chip or a registry row for the details), minimal (brackets only), full (every ship's card, every engagement line and track marker). `?labels=auto\|minimal\|full` sets it for one page load; the choice is remembered |
+| **C** | Hide or show all contact labels, torpedo-wave chips and engagement lines |
+| **N** | Open or close the command net (directives, orders, captain reports, fleet signals; closed by default in a replay, open in a live battle; the choice is remembered) |
 | **A** | Toggle the automatic camera director (a shot list built from the recording: salvo launches over the shooter's shoulder, torpedo run-ins, hulk orbits, pull-backs on reactor blasts; dragging pauses it) |
 | **[ / ]** | Jump to the previous / next highlight (kills, strikes, salvos, the first gun exchange) |
 | **T** | Cycle trajectory tracks: off, predicted, predicted + actual (replay) |

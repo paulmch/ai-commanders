@@ -372,7 +372,8 @@ def test_intent_only_issue_order_schema_offers_only_what_that_mode_flies():
     from src.llm.admiral_tools import get_admiral_tools
     tool = next(t["function"] for t in get_admiral_tools(intent_only=True)
                 if t["function"]["name"] == "issue_order")
-    assert set(tool["parameters"]["properties"]) == {"ship_name", "torpedo_salvo", "torpedo_target"}
+    assert set(tool["parameters"]["properties"]) == {"ship_name", "torpedo_salvo", "torpedo_target",
+                                                     "torpedo_profile"}
     assert tool["parameters"]["required"] == ["ship_name"]
     full = next(t["function"] for t in get_admiral_tools() if t["function"]["name"] == "issue_order")
     assert "heading" in full["parameters"]["properties"]          # default tools untouched
@@ -394,3 +395,91 @@ def test_score_line_states_the_verdict_with_the_runners_draw_margin(tmp_path):
             fleet_intel.time_limit_scores = real
         expected = {"DRAW": "a DRAW", "ALPHA_VICTORY": "you win", "BETA_VICTORY": "he wins"}
         assert expected[outcome[0].name] in line, (a, b, line, outcome)
+
+
+# ---------------------------------------------------------------------------
+# Paid battle p5w5_b3: launches exactly as the admiral allocated were filed DEVIATE
+# ---------------------------------------------------------------------------
+
+def _salvo_battle(tmp_path, launch_at, reason=True):
+    """cp1: the corvette's gun target is beta_1. cp2: the admiral orders a 1-round
+    salvo at beta_2 (salvo_plan allocations reach the order the same way); the
+    captain launches at `launch_at` without touching its gun target."""
+    from tests.test_fleet_comms import FLEET, Stub, make_runner
+
+    def order(ship):
+        cp = stub.runner.checkpoint_count
+        if cp == 1:
+            return {"order_text": "Hold.", "priority": "NORMAL", "suggested_target": "beta_1"}
+        return {"order_text": "Launch 1 at beta_2.", "priority": "HIGH", "suggested_target": "beta_2",
+                "torpedo_salvo": 1, "torpedo_target": "beta_2"}
+
+    def captain(ctx):
+        if ctx.model != "stub/dart":
+            return []
+        if ctx.cp == 1:
+            return [("set_primary_target", {"target_id": "beta_1"})]
+        args = {"count": 1, "target_id": launch_at}
+        if reason:
+            args["reason"] = "Admiral's salvo at beta_2."
+        return [("launch_torpedo", args)] if ctx.turn == 1 else []
+    stub = Stub(captain=captain, order=order)
+    runner = make_runner(stub, tmp_path, beta=(("destroyer", "stub/lancer"), ("destroyer", "stub/lancer")),
+                         checkpoints=2, distance_km=400.0)
+    runner.run_fleet_battle(FLEET)
+    report = [e.data for e in runner.recorder.events
+              if e.event_type == "captain_report" and e.ship_id == "alpha_1" and e.timestamp == 60.0][0]
+    return stub, report
+
+
+def test_a_launch_that_matches_the_ordered_salvo_is_compliant_and_its_reason_is_intent(tmp_path):
+    stub, report = _salvo_battle(tmp_path, "beta_2")
+    assert report["compliance"]["followed"], report["compliance"]
+    assert report["status"] == "ACK" and "Admiral's salvo" in report["intent"]
+    assert not report.get("reason")
+
+
+def test_a_compliant_salvo_launch_without_a_reason_gets_no_order_check(tmp_path):
+    stub, report = _salvo_battle(tmp_path, "beta_2", reason=False)
+    assert stub.turns[("stub/dart", 2)] == 1               # no paid ORDER CHECK follow-up
+    assert report["compliance"]["followed"]
+
+
+def test_a_launch_at_another_hull_than_the_ordered_salvo_is_a_deviation(tmp_path):
+    stub, report = _salvo_battle(tmp_path, "beta_1")
+    devs = report["compliance"]["deviations"]
+    assert any(d.startswith("salvo: ordered at") for d in devs), devs
+    assert report["status"] == "DEVIATE"
+
+
+@pytest.mark.parametrize("mode,flagged", [("ARRIVE", False), ("HOLD", False), ("BRACE", True)])
+def test_hold_range_idle_in_its_own_arrive_or_hold_phase_is_not_escalated(mode, flagged):
+    """p5w5_b3: HOLD_RANGE Darts coasting in to an ordered 470 km (ARRIVE, drive idle,
+    requested_throttle 1.0 as the engine logs it) read 'has not flown your HOLD_RANGE
+    for 2 checkpoints running ... the drive stayed idle while flying ARRIVE'; the admiral
+    then dropped HOLD_RANGE for the battle. A hold by evasion is still reported."""
+    from src.llm.admiral import AdmiralDecision, AdmiralOrder
+    from src.simulation import CombatSimulation, SimulationEvent, SimulationEventType
+    from tests.test_admiral_command_interface import make_admiral, own_caps, ship
+    sim = CombatSimulation(seed=1)
+    ship(sim, "alpha_1", "corvette", "alpha", (0, 0, 0))
+    ship(sim, "beta_1", "destroyer", "beta", (480, 0, 0), fwd=(-1, 0, 0))
+    admiral = make_admiral("alpha")
+    caps = own_caps(sim, "alpha")
+    lines = []
+    for cp in (1, 2, 3):
+        t0 = sim.current_time
+        order = AdmiralOrder("alpha_1", "TIS alpha_1", "Hold 470 km.",
+                             maneuver={"maneuver_type": "HOLD_RANGE", "target": "beta_1", "range_km": 470.0,
+                                       "evade": "dodge", "throttle": 1.0})
+        admiral.order_history.append(AdmiralDecision(timestamp=t0, fleet_orders=[order]))
+        admiral._last_decision_t = t0
+        sim.events.append(SimulationEvent(SimulationEventType.EXECUTION_STATE, t0 + 1.0, "alpha_1", None,
+                                          {"mode": mode, "applied_throttle": 0.0, "requested_throttle": 1.0,
+                                           "engine_fraction": 1.0}))
+        sim.current_time = t0 + 30.0
+        admiral.captain_reports = [{"ship_id": "alpha_1", "ship_name": "TIS alpha_1", "status": "ACK",
+                                    "compliance": {"executed_maneuver": "HOLD_RANGE", "followed": True,
+                                                   "deviations": []}}]
+        lines.append(admiral._build_snapshot(sim, caps, full=True).noncompliance)
+    assert bool(lines[2]) is flagged, lines

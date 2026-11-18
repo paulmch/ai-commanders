@@ -524,6 +524,17 @@ TORPEDO_TOOL = {
                         "(default false). Only with a reason the check cannot see."
                     ),
                 },
+                "profile": {
+                    "type": "string",
+                    "enum": ["sprint", "reserve"],
+                    "description": (
+                        "Launch profile (default sprint, or what your admiral's salvo order "
+                        "names). sprint: spends the tank early on closing speed. reserve: "
+                        "cruises slower and keeps most of its delta-v until the last 20 s, "
+                        "so the fleet datalink can still swing it onto another hull; slower "
+                        "to arrive. Your ENEMIES torpedo line compares both."
+                    ),
+                },
             },
         }
     }

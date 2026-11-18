@@ -3,6 +3,7 @@ import { closeUpK } from './CloseRange.js';
 import { sampleTrack, makeSample } from './WeaponTimeline.js';
 import { factionSeed } from './WeaponBatches.js';
 import { Ribbon } from './Trails.js';
+import { clusterPoints, CLUSTER_PX } from '../TacticalLayout.js';
 
 /**
  * Engagement lines: at fleet range, a thin dashed faction-coloured line
@@ -12,6 +13,15 @@ import { Ribbon } from './Trails.js';
  *
  * Drawn into the Projectiles ribbon batch (kind 8), so they cost no extra
  * draw; every input is recording-derived at the requested battle time.
+ *
+ * Weight follows the label density (TacticalLayout, L key):
+ *   auto     ships of one side that sit together on screen (CLUSTER_PX, the
+ *            label layer's grouping) and engage the same target share ONE
+ *            line, thicker with every gun ship in it; faint unless it
+ *            touches the selected / hovered ship or just fired, fainter
+ *            still for a ship holding an ordered target it has not shot at
+ *   minimal  only the selected / hovered ship's lines and the flare of a shot
+ *   full     a line per ship at the pass-4 weight
  */
 
 /** Seconds a shot or launch keeps a ship's line flared. */
@@ -22,6 +32,10 @@ export const LAUNCH_MEMORY_S = 60;
 // Screen gap (px) left at each end so a line never runs into the brackets
 const END_GAP_PX = 14;
 const DASH_PX = 11;
+/** Line strength (before the shot flare) by role, auto density. */
+export const LINE_WEIGHT = { focus: 0.6, active: 0.14, idle: 0.06, full: 0.32 };
+/** Half-width (px) of a one-ship line and the most a shared line grows to. */
+const LINE_PX = 0.75, LINE_PX_MAX = 2.2;
 
 /**
  * Who each live ship engages at battle time `t` (pure).
@@ -59,16 +73,62 @@ export function selectEngagements(ships, lastFire, t, ordered = null) {
   return out;
 }
 
+/**
+ * One line per (side, target, on-screen cluster of shooters) (pure).
+ * @param {Array<{from, to, faction, heat, active?}>} pairs - selectEngagements output (+ active: fired lately)
+ * @param {(id) => ({x, y}|null)} screenOf - shooter's screen position (px), null off screen
+ * @param {number} [radius] - px: shooters closer than this share the line
+ * @returns {Array<{from: string[], to, faction, heat, active, n}>} heat / active: the strongest member's
+ */
+export function aggregateEngagements(pairs, screenOf, radius = CLUSTER_PX) {
+  const byKey = new Map();
+  for (const e of pairs) {
+    const key = `${e.faction}>${e.to}`;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(e);
+  }
+  const out = [];
+  for (const list of byKey.values()) {
+    const pts = [], loose = [];
+    for (const e of list) {
+      const p = screenOf(e.from);
+      if (p) pts.push({ id: e.from, faction: e.faction, x: p.x, y: p.y, e });
+      else loose.push([{ e }]);
+    }
+    for (const c of [...clusterPoints(pts, radius), ...loose]) {
+      out.push({ from: c.map(p => p.e.from), to: c[0].e.to, faction: c[0].e.faction, n: c.length,
+        heat: Math.max(...c.map(p => p.e.heat)), active: c.some(p => p.e.active !== false) });
+    }
+  }
+  return out;
+}
+
+/**
+ * Strength (before the close-up fade) and half-width (px) of an aggregated
+ * line under a label density; strength 0 = not drawn.
+ */
+export function engagementStyle(line, mode, focusId = null) {
+  const focus = !!focusId && (line.to === focusId || line.from.includes(focusId));
+  const width = Math.min(LINE_PX_MAX, LINE_PX + 0.35 * (line.n - 1));
+  if (mode === 'full') return { strength: LINE_WEIGHT.full + 1.1 * line.heat, width: LINE_PX };
+  if (mode === 'minimal') return { strength: (focus ? LINE_WEIGHT.focus : 0) + 1.1 * line.heat, width };
+  const base = focus ? LINE_WEIGHT.focus : line.active ? LINE_WEIGHT.active : LINE_WEIGHT.idle;
+  return { strength: base + 1.1 * line.heat, width };
+}
+
 export class TargetingLines {
   /** @param {import('./Projectiles.js').Projectiles} projectiles */
   constructor(projectiles) {
     this.p = projectiles;
     this.enabled = true;     // ContactOverlay mirrors its C toggle here
+    this.mode = 'auto';      // label density (main.js setLabelMode)
+    this.focusId = null;     // selected / hovered ship (main.js, each frame)
     this.sample = makeSample();
     this.a = new THREE.Vector3();
     this.b = new THREE.Vector3();
     this.d = new THREE.Vector3();
     this.m = new THREE.Vector3();
+    this.v = new THREE.Vector3();
     this.list = [];
   }
 
@@ -93,22 +153,51 @@ export class TargetingLines {
     const pairs = selectEngagements(list, id => tl.lastFire(id, time), time,
       loader?.getShipTargetAt ? (id) => loader.getShipTargetAt(id, time)?.target_id : null);
     for (const e of pairs) {
-      const from = mgr.ships.get(e.from), to = mgr.ships.get(e.to);
-      if (!from || !to) continue;
-      this.d.subVectors(to.position, from.position);
+      const f = tl.lastFire(e.from, time);
+      e.active = !!f && time - f.t <= (f.torpedo ? LAUNCH_MEMORY_S : SHOT_MEMORY_S);
+    }
+    // shooters' screen positions (px, the contact layer's scale) for the grouping
+    const cam = mgr.camera;
+    cam.updateMatrixWorld();
+    const halfH = (globalThis.innerHeight || 720) / 2, halfW = halfH * (cam.aspect || 1);
+    const lines = this.mode === 'full'
+      ? pairs.map(e => ({ from: [e.from], to: e.to, faction: e.faction, n: 1, heat: e.heat, active: e.active }))
+      : aggregateEngagements(pairs, (id) => {
+        const g = mgr.ships.get(id);
+        if (!g) return null;
+        this.v.copy(g.position).project(cam);
+        if (this.v.z > 1) return null;
+        return { x: this.v.x * halfW, y: -this.v.y * halfH };
+      });
+    for (const line of lines) {
+      const { strength, width } = engagementStyle(line, this.mode, this.focusId);
+      if (strength <= 0.01) continue;
+      const to = mgr.ships.get(line.to);
+      if (!to) continue;
+      // a shared line starts at its shooters' centroid
+      this.m.set(0, 0, 0);
+      let n = 0;
+      for (const id of line.from) {
+        const g = mgr.ships.get(id);
+        if (g) { this.m.add(g.position); n++; }
+      }
+      if (!n) continue;
+      const from = this.m.divideScalar(n);
+      this.d.subVectors(to.position, from);
       const len = this.d.length();
       if (len < 1e-3) continue;
       this.d.divideScalar(len);
-      const gapA = END_GAP_PX * p.pixelAt(from.position), gapB = END_GAP_PX * p.pixelAt(to.position);
+      const gapA = END_GAP_PX * p.pixelAt(from), gapB = END_GAP_PX * p.pixelAt(to.position);
       if (len <= gapA + gapB) continue;
-      this.a.copy(from.position).addScaledVector(this.d, gapA);
+      this.a.copy(from).addScaledVector(this.d, gapA);
       this.b.copy(to.position).addScaledVector(this.d, -gapB);
       // dash count from the on-screen length (measured at the midpoint)
       this.m.addVectors(this.a, this.b).multiplyScalar(0.5);
-      const px = this.a.distanceTo(this.b) / Math.max(1e-6, mgr.camera.position.distanceTo(this.m) * Ribbon.pixelWorld.value);
+      const pw = p.pixelAt(this.m);
+      const px = this.a.distanceTo(this.b) / Math.max(1e-6, pw);
       const dashes = Math.max(2, Math.round(px / DASH_PX));
-      const intensity = k * (0.32 + 1.1 * e.heat);
-      p.ribbons.add(this.a, this.b, 0.0001, intensity, 8, factionSeed(0.5, e.faction), dashes, dashes);
+      p.ribbons.add(this.a, this.b, width > LINE_PX ? width * pw : 0.0001, k * strength, 8,
+        factionSeed(0.5, line.faction), dashes, dashes);
     }
   }
 }

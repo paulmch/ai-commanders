@@ -736,8 +736,8 @@ class LLMBattleRunner:
             if admiral is not None:
                 admiral.battle_clock = self._admiral_battle_clock()
 
-        # Admiral vision: allocate the trail/event history only if some
-        # admiral will actually consume rendered frames.
+        # Admiral vision: allocate the plot state (each side's previous
+        # checkpoint frame) only if some admiral will consume rendered frames.
         if any(a and a.wants_vision for a in (self.alpha_admiral, self.beta_admiral)):
             from .admiral_view import AdmiralViewState
             self._admiral_view = AdmiralViewState()
@@ -1310,9 +1310,6 @@ class LLMBattleRunner:
             # === SIMULATION PHASE ===
             for _ in self._advance_to_checkpoint(next_checkpoint_time, fleet_mode=True):
 
-                if self._admiral_view:
-                    self._admiral_view.sample(self.simulation)
-
                 # Record sim frame if enabled
                 if self.recorder and self.config.record_sim_trace:
                     self._record_sim_frame()
@@ -1537,9 +1534,6 @@ class LLMBattleRunner:
         while not self._is_fleet_battle_over():
             # === SIMULATION PHASE ===
             for _ in self._advance_to_checkpoint(next_checkpoint_time, fleet_mode=True):
-
-                if self._admiral_view:
-                    self._admiral_view.sample(self.simulation)
 
                 # Record sim frame if enabled
                 if self.recorder and self.config.record_sim_trace:
@@ -1810,10 +1804,16 @@ class LLMBattleRunner:
             return None
         battle_image_png = None
         try:
+            from .admiral_view import score_header
+            clock = getattr(admiral, "battle_clock", None) or {}
             battle_image_png = self._admiral_view.render(
                 self.simulation,
                 self._ships_meta(),
                 faction=admiral.faction,
+                checkpoint=int(getattr(admiral, "decision_count", 0) or 0) + 1,
+                total_checkpoints=clock.get("checkpoints"),
+                score_text=(score_header(self.simulation, admiral.faction)
+                            if getattr(admiral.config, "show_score", False) else None),
             )
         except Exception as e:  # noqa: BLE001 - vision must never kill a battle
             print(f"[ADMIRAL VISION] render failed at "
@@ -2743,6 +2743,8 @@ class LLMBattleRunner:
         order = primary_order(orders)
         executed = executed_maneuver(ship, commands, now)
         target_id = commanded_target(ship, commands)
+        from .fleet_comms import launch_targets
+        launch_ids = launch_targets(commands)
         report = {
             "report_id": f"r{self.checkpoint_count}-{ship_id}",
             "faction": faction,
@@ -2751,7 +2753,8 @@ class LLMBattleRunner:
             "ship_name": captain.ship_name,
             **fields,
             "compliance": compliance(order, channel, executed, target_id,
-                                     committed_rounds(commands), final=False),
+                                     committed_rounds(commands), final=False,
+                                     launch_target_ids=launch_ids),
             "ship_id": ship_id,
             "filed_t": now,
             "implicit": implicit,
@@ -2766,7 +2769,7 @@ class LLMBattleRunner:
         # with the rounds that actually left the tubes.
         captain.verdict_basis = {"t": now, "order": order, "executed": executed,
                                  "target_id": target_id, "cursor": len(self.simulation.events),
-                                 "status": report["status"], "reason": report.get("reason") or "",
+                                 "launch_targets": launch_ids, "status": report["status"], "reason": report.get("reason") or "",
                                  "implicit": implicit, "channel": channel}
         self._note_drive_interlock(report, ship)
         fold_admiral_signals(report, self._admiral_signals.pop(ship_id, []))
@@ -2775,7 +2778,7 @@ class LLMBattleRunner:
                                     for d in captain.discussions]
         self._filed_reports.setdefault(faction, []).append({
             "report": report, "order": order, "executed": executed, "target_id": target_id,
-            "cursor": len(self.simulation.events)})
+            "launch_targets": launch_ids, "cursor": len(self.simulation.events)})
         return report
 
     def _note_drive_interlock(self, report: Dict[str, Any], ship: Any) -> None:
@@ -2802,7 +2805,8 @@ class LLMBattleRunner:
             launched = sum(1 for e in self.simulation.events[entry["cursor"]:]
                            if e.ship_id == ship_id and e.event_type.name == "TORPEDO_LAUNCHED")
             report["compliance"] = compliance(entry["order"], self.fleet_communication,
-                                              entry["executed"], entry["target_id"], launched, final=True)
+                                              entry["executed"], entry["target_id"], launched, final=True,
+                                              launch_target_ids=entry.get("launch_targets"))
             if (entry["report"].get("compliance") or {}).get("executable") is False:
                 from .fleet_comms import mark_not_executable
                 mark_not_executable(report["compliance"])
@@ -4023,11 +4027,6 @@ class LLMBattleRunner:
         # Captain-visible feedback first: it is part of the game, not part of the
         # recording, and must run even when record_battle is disabled.
         self._feed_captain_event(event)
-
-        # Admiral vision needs PD engagements (beam lines) and notable events
-        # (ticker) regardless of whether a recorder exists.
-        if self._admiral_view:
-            self._admiral_view.note_event(event)
 
         if not self.recorder:
             return

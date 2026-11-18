@@ -169,6 +169,12 @@ def commanded_target(ship: Any, commands: Iterable[Any]) -> Optional[str]:
     return getattr(ship, "primary_target_id", None)
 
 
+def launch_targets(commands: Iterable[Any]) -> List[str]:
+    """Target ids of the torpedo rounds the captain committed this decision."""
+    return [str(cmd.get("target_id")) for cmd in commands or []
+            if isinstance(cmd, dict) and cmd.get("type") == "launch_torpedo" and cmd.get("target_id")]
+
+
 def committed_rounds(commands: Iterable[Any]) -> int:
     """Torpedo rounds the captain committed this decision."""
     return sum(1 for cmd in commands or []
@@ -182,9 +188,16 @@ def compliance(
     actual_target_id: Optional[str],
     launched: int,
     final: bool,
+    launch_target_ids: Optional[Iterable[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Ordered vs executed for one ship (None when the ship had no order).
+
+    ``launch_target_ids``: where this decision's torpedo rounds were aimed. A
+    salvo order (torpedo_salvo / torpedo_target, also an allocation from the
+    directive's salvo_plan) is obeyed by launching at its target: those
+    launches satisfy the target check even when the ship's gun target is
+    another hull, and a launch at any other hull is a salvo deviation.
 
     Plan schema keys {ordered_maneuver, executed_maneuver, ordered_target,
     actual_target, ordered_salvo, launched} plus `final` (False at filing:
@@ -222,11 +235,19 @@ def compliance(
     except (TypeError, ValueError):
         salvo = None
 
+    launch_ids = [str(t) for t in (launch_target_ids or []) if t]
+    salvo_order = bool(getattr(order, "torpedo_target", None)) or bool(salvo and salvo > 0)
     deviations: List[str] = []
     if not flew_ordered:
         deviations.append(f"maneuver: ordered {'/'.join(ordered)}, flew {executed}")
-    if ordered_target_id and actual_target_id != ordered_target_id:
+    launched_on_target = bool(launch_ids) and all(t == ordered_target_id for t in launch_ids)
+    if ordered_target_id and actual_target_id != ordered_target_id and not (
+            salvo_order and launched_on_target):
         deviations.append(f"target: ordered {ordered_target}, engaging {actual_target or 'nothing'}")
+    stray = sorted({t for t in launch_ids if t != ordered_target_id})
+    if salvo_order and ordered_target_id and stray:
+        deviations.append(f"salvo: ordered at {ordered_target}, launched at "
+                          + ", ".join(channel.ship_name(t) or t for t in stray))
     verb = "launched" if final else "committed"
     if salvo is not None and salvo > 0 and launched < salvo:
         deviations.append(f"salvo: ordered {salvo}, {verb} {launched}")

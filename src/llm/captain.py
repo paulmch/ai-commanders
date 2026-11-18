@@ -916,13 +916,15 @@ class LLMCaptain:
         only when the captain's own call replaced an order that was already
         flying, and the target. Empty when nothing departs.
         """
-        from .fleet_comms import commanded_target, compliance, executed_maneuver, primary_order
+        from .fleet_comms import (commanded_target, compliance, executed_maneuver, launch_targets,
+                                  primary_order)
         order = primary_order(self.admiral_orders)
         if order is None or getattr(self, "fleet_channel", None) is None:
             return []
         try:
             comp = compliance(order, self.fleet_channel, executed_maneuver(ship, commands, now),
-                              commanded_target(ship, commands), 0, final=False)
+                              commanded_target(ship, commands), 0, final=False,
+                              launch_target_ids=launch_targets(commands))
         except Exception:  # noqa: BLE001 - advisory only
             return []
         replaced = self._admiral_heading_applied() and any(
@@ -1077,7 +1079,7 @@ class LLMCaptain:
                        if e.ship_id == sid and e.event_type.name == "TORPEDO_LAUNCHED")
         try:
             comp = compliance(b["order"], b["channel"], b["executed"], b["target_id"], launched,
-                              final=True)
+                              final=True, launch_target_ids=b.get("launch_targets"))
         except Exception:  # noqa: BLE001 - advisory only
             return None
         if not comp or comp.get("followed", True):
@@ -1520,6 +1522,9 @@ class LLMCaptain:
             except Exception:  # noqa: BLE001 - display only
                 capacity = None
             check["salvo"] = self._salvo_check_text(sol, int(salvo), capacity)
+            if getattr(order, "torpedo_profile", None):
+                check["salvo"] += (f" Ordered launch profile: {order.torpedo_profile} "
+                                   "(launch_torpedo uses it unless you name another).")
 
         # The prose and the structured order disagree on the burn (e.g. "fly
         # the fleet heading at 50%" under a structured MAINTAIN, which coasts).
@@ -3730,10 +3735,18 @@ class LLMCaptain:
             if not self._torpedo_feasible(simulation, ship_id, target_id, count, args):
                 return None
 
-            return [
-                {"type": "launch_torpedo", "target_id": target_id, "queue_if_reloading": True}
-                for _ in range(count)
-            ]
+            # Launch profile: the call's, else the admiral's salvo order's.
+            from ..torpedo import normalize_torpedo_profile
+            profile = args.get("profile")
+            if not profile:
+                profile = next((getattr(o, "torpedo_profile", None)
+                                for o in (self.admiral_orders or [])
+                                if getattr(o, "torpedo_profile", None)), None)
+            launch = {"type": "launch_torpedo", "target_id": target_id,
+                      "queue_if_reloading": True}
+            if profile:
+                launch["profile"] = normalize_torpedo_profile(profile)
+            return [dict(launch) for _ in range(count)]
 
         elif name == "set_radiators":
             return radiator_command_from_args(args)

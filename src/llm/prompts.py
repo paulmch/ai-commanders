@@ -23,6 +23,7 @@ try:
     from .. import combat as _combat
     from .. import drive_plume as _plume
     from ..power import KINETIC_WEAPON_EFFICIENCY
+    from .torpedo_doctrine import LINK_FACT, PROFILE_FACT
 except ImportError:  # pragma: no cover - script-style imports
     from pointdefense import (
         PDLaser,
@@ -35,6 +36,7 @@ except ImportError:  # pragma: no cover - script-style imports
     import combat as _combat
     import drive_plume as _plume
     from power import KINETIC_WEAPON_EFFICIENCY
+    from llm.torpedo_doctrine import LINK_FACT, PROFILE_FACT
 
 
 # Closing speeds tabulated for the captain's PD block. The middle entry is the
@@ -417,6 +419,10 @@ def format_weapon_groups_for_prompt(weapons: List[Dict], weapon_types: Dict[str,
         else:
             lines.append(f"  * Fixed mount: REQUIRES nose within {pivot:g}° of target to fire")
         lines.append(f"  * {_gun_cadence_for_prompt(spec)}")
+
+    # cmdadm hunk: "max range" is how far a round flies; say what it hits there.
+    if spinals or heavy_coilguns or coilguns or other_guns:
+        lines.append(f"- {reach_note()}")
 
     if pd_lasers:
         count = len(pd_lasers)
@@ -1095,6 +1101,9 @@ TORPEDO_TACTICS_BLOCK = """=== TORPEDO BOAT TACTICS (you mount no guns) ===
   gains a torpedo boat nothing.
 - Salvo, don't trickle: launch the "salvo >= N together" his point-defense cover needs
   in ONE checkpoint, timed with the fleet's launches.
+- launch_torpedo profile: """ + PROFILE_FACT + """ Your ENEMIES torpedo line
+  compares both profiles for the shot at hand (PROFILES ...).
+- """ + LINK_FACT + """
 - Enemy torpedo hulls that have you targeted can land a round before your next
   decision: THREATS TO ME says when. EVADE early."""
 
@@ -2992,13 +3001,13 @@ FORMATIONS FOR PD (what actually moves the numbers):
 TORPEDO DEFENCE, MEASURED (seeded runs on this engine: a 4 battlecruiser + 2 destroyer +
 2 frigate gun wall against 5 corvettes + 3 frigates = 40 rounds, the wall's posture fixed
 from the first checkpoint; per battle, 3 seeds each):
-- start 500 km: nose-on PADLOCK - 72% of rounds hit (all on the nose, ~14.0 km/s, ~24 GJ
-  each), 6 of 8 hulls lost; burning straight away - 37% hit (all on the TAIL, ~12.8 km/s,
-  ~20 GJ), 5 of 8 lost; the same burn with evade full - 38% hit, 5 of 8 lost (on the
-  tail and flank: the overlay keeps the burn and turns no nose round); charging
-  (INTERCEPT) - 73% hit (~14.6 km/s, ~27 GJ), 8 of 8 lost. First loss ~100 s in each.
-- start 1000 km: nose-on - 73% hit, 8 of 8 lost (first at ~290 s); burning away - 26%
-  hit, 4 of 8 lost (first at ~310 s); charging - 38% hit, 3 of 8 lost. The wall killed
+- start 500 km: nose-on PADLOCK - 73% of rounds hit (nearly all on the nose, ~13.8 km/s, ~24 GJ
+  each), 6 of 8 hulls lost; burning straight away - 42% hit (all on the TAIL, ~12.7 km/s,
+  ~20 GJ), 6 of 8 lost; the same burn with evade full - 44% hit, 6 of 8 lost (also all
+  on the tail: the overlay keeps the burn and turns no nose round); charging
+  (INTERCEPT) - 74% hit (~14.5 km/s, ~26 GJ), 7 of 8 lost. First loss ~100 s in each.
+- start 1000 km: nose-on - 72% hit, 8 of 8 lost (first at ~290 s); burning away - 35%
+  hit, 5 of 8 lost (first at ~310 s); charging - 38% hit, 3 of 8 lost. The wall killed
   1.3 boats per battle charging, 0.7 nose-on, 0 burning away.
 - Burning away lowers impact speed a little and leaves more rounds blinded or dry; the
   rounds that still hit land on the thin tail. Closing raises impact energy and shortens
@@ -3026,6 +3035,8 @@ WHEN TO COMMIT TRIDENTS:
   in flight (~400 km lands in 30-60s - about one decision cycle).
 - MAGAZINES ARE FINITE: {magazine_line}. Reload {reload_s:.0f}s -> at most
   {launches_per_tube} launches per tube per {decision_interval_s:g}s checkpoint.
+- LAUNCH PROFILES (torpedo_profile on issue_order, profile in salvo_plan): """ + PROFILE_FACT + """
+- ROUNDS IN FLIGHT: """ + LINK_FACT + """
 """
 
 # Included when YOUR fleet mounts guns.
@@ -3106,6 +3117,29 @@ GUN_EXCHANGE_BANDS = (
     ("300+", 25, 0.30, 7),
 )
 GUN_EXCHANGE_INSIDE_150_PCT = 58
+
+
+def measured_hit_rate(range_km: float) -> Tuple[str, int]:
+    """(band, hit rate %) of GUN_EXCHANGE_BANDS for a range at firing: what
+    a quoted gun reach means in hits, so "in reach" is not read as
+    "effective" (both Sonnet admirals sat at 500 km for 600 s "in gun
+    range at 900 km", where the measured rate is ~25-36%)."""
+    for band, hit, _gj, _share in GUN_EXCHANGE_BANDS:
+        lo, _, hi = band.partition("-")
+        hi_km = float(hi) if hi else float("inf")
+        if range_km < hi_km or not hi:
+            return band, hit
+    band, hit, _gj, _share = GUN_EXCHANGE_BANDS[-1]
+    return band, hit
+
+
+def reach_note() -> str:
+    """One line for every block that quotes a gun's nominal reach (bound to
+    GUN_EXCHANGE_BANDS, i.e. to the seeded fixture)."""
+    near, far = GUN_EXCHANGE_BANDS[0], GUN_EXCHANGE_BANDS[-1]
+    return (f"Gun reach (km) is how far a round flies, not where it hits: measured hit rate "
+            f"{near[1]}% at {near[0]} km, falling to {far[1]}% at {far[0]} km "
+            f"(GUN EXCHANGE, by range at firing).")
 # Spinal Coiler Mk3 hits to kill a fresh hull on one facing
 # (scripts/calculate_shots_to_kill.simulate_shots_to_kill; docs/ships.md).
 FACING_SPINAL_HITS_TO_KILL = (
@@ -3303,7 +3337,7 @@ def _class_line(ship_type: str, fleet_data: Dict[str, Any]) -> str:
             rounds += int(w.get("magazine", ws.get("magazine", 8)))
             continue
         gj = ws.get("kinetic_energy_gj")
-        key = (f"{ws.get('name', wtype)} ({gj:.1f} GJ, {ws.get('range_km', 0):.0f} km)"
+        key = (f"{ws.get('name', wtype)} ({gj:.1f} GJ, reach {ws.get('range_km', 0):.0f} km)"
                if gj else str(ws.get("name", wtype)))
         counts[key] = counts.get(key, 0) + 1
     arms = [f"{n}x {k}" for k, n in counts.items()]
@@ -3365,7 +3399,8 @@ def _format_forces(battle_classes: Dict[str, List[str]], fleet_data: Dict[str, A
     """Static per-class capabilities of both fleets (cached with the doctrine)."""
     if not (battle_classes.get("ours") or battle_classes.get("theirs")):
         return ""
-    lines = ["=== FORCES (ship classes in this battle - fixed; live numbers are in the FLEET SITUATION) ==="]
+    lines = ["=== FORCES (ship classes in this battle - fixed; live numbers are in the FLEET SITUATION) ===",
+             reach_note()]
     for side, title in (("ours", "YOURS"), ("theirs", "THEIRS")):
         types = battle_classes.get(side) or []
         if types:
@@ -3453,13 +3488,50 @@ You can use EITHER the name OR the ID when naming ships or targets.
 # Legend of the tactical plot (admiral_view.py), sent once in the cached system
 # prompt when the admiral has vision; the plot itself rides on each user turn.
 ADMIRAL_VISION_LEGEND = """=== TACTICAL PLOT (attached image, each checkpoint) ===
-Left panel top-down (X/Y in km), right panel 3D perspective. Cyan = alpha fleet, orange =
-beta fleet. A ship's tick points along its nose. Diamonds are torpedoes (grey = dead seeker),
-yellow dots are coilgun slugs, red lines are active PD beams, faint trails show torpedo paths
-over the last 25 s, arrows show velocity, "burning" means the drive is producing thrust.
-Rings around your fleet centre: your PD envelope (dashed) and range rings at 100/200/300 km
-(dotted); X marks the
-closest approach of the nearest enemy group if both sides coast."""
+Header: time, checkpoint N of M, torpedoes in flight per side (unguided ones counted apart),
+the score when shown. PLAN below it:
+top-down, world X right / Y up (the axes your headings use), km grid and scale bar. SIDE
+VIEW strip under the plan: the same X columns, height Z up ("height compressed xN" when the
+spread does not fit 1:1). YOUR fleet is cyan, the enemy orange, whichever side you are.
+- Ship: a dart pointing along its nose (white dot = nose), larger for heavier classes,
+  filled from the tail in proportion to hull left; a flame behind it = drive burning. Label:
+  the ship's exact name (use it as is in issue_order), hull % if damaged, SIDE or TAIL when
+  that is the face it shows the other fleet's centre (no tag = NOSE), and "Z+N" / "Z-N"
+  when it is N km above / below your fleet's median height (from 50 km on).
+- Thin line to a hollow dart: where that ship will be at the next checkpoint if it coasts.
+  The hollow dart is yellow when that position is within 150 km of an enemy ship's.
+- Cross: a dead ship; white cross and "NAME DESTROYED": lost since the last checkpoint.
+- Solid outline around a fleet: 150 km from its gun ships (beyond it a dodger is rarely
+  hit); dotted outline: its PD umbrella (250 km).
+- Torpedoes are dots (hollow grey: unguided - blinded seeker, dry or target lost - but still
+  on a hull's line), with ONE arrow per launching group and target: "N -> TARGET Ts" = N
+  guided rounds onto TARGET, first impact in T s; "+k unguided" = unguided rounds that will
+  still strike it; NEW = a round launched since the last checkpoint. Unguided rounds on
+  nobody's line are only counted in the header.
+- Yellow dotted line with two x marks, "closest D km in T s (coasting)": where the two
+  fleet centres pass closest if both coast.
+- ZOOM panel (yellow frame): when ships of both fleets overlap on the plan, a corner panel
+  magnifies the dashed yellow box; ships inside the box are labelled in the zoom.
+The plan's width steps through a fixed ladder (the smallest that holds every live ship,
+ghost and threatening round) and its centre snaps to 1/20 of the width: it moves only when
+the battle outgrows or shrinks below a step, so consecutive checkpoints compare directly."""
+
+def _gun_band_legend() -> str:
+    """The legend's gun-band line: what the solid outline draws and why, with
+    the measured hit rates of GUN_EXCHANGE_BANDS (so it cannot drift)."""
+    band, edge = measured_hit_rate(149.0)
+    far_band, far = GUN_EXCHANGE_BANDS[-1][0], GUN_EXCHANGE_BANDS[-1][1]
+    mid_band, mid = GUN_EXCHANGE_BANDS[-2][0], GUN_EXCHANGE_BANDS[-2][1]
+    return ("- Solid outline around a fleet: 150 km from its gun ships - the effective gun band, not\n"
+            f"  the guns' reach: measured hit rate {edge}% at {band} km, {mid}% at {mid_band} km, {far}% at\n"
+            f"  {far_band} km (GUN EXCHANGE; beyond 150 km a dodger is rarely hit). The nominal reach\n"
+            "  in FORCES is how far a round flies. Dotted outline: its PD umbrella (250 km).")
+
+
+ADMIRAL_VISION_LEGEND = ADMIRAL_VISION_LEGEND.replace(
+    """- Solid outline around a fleet: 150 km from its gun ships (beyond it a dodger is rarely
+  hit); dotted outline: its PD umbrella (250 km).""", _gun_band_legend())
+
 
 
 def build_admiral_static(
@@ -3958,12 +4030,18 @@ def _format_geometry(snapshot: Any) -> str:
         if reach_km <= 0:
             return ""
         if info.range_km <= reach_km:
-            when = "IN RANGE now"
+            when = "within it now"
         elif info.closing_kps > 0.05:
-            when = f"in range in ~{(info.range_km - reach_km) / info.closing_kps:.0f} s"
+            when = f"within it in ~{(info.range_km - reach_km) / info.closing_kps:.0f} s"
         else:
-            when = "out of range, not closing"
-        return f"{who} guns reach {reach_km:.0f} km ({when})"
+            when = "beyond it, not closing"
+        return f"{who} guns' nominal reach {reach_km:.0f} km ({when})"
+
+    def measured(info: Any) -> str:
+        band, hit = measured_hit_rate(info.range_km)
+        near = GUN_EXCHANGE_BANDS[0]
+        return (f"measured hit rate at {info.range_km:.0f} km (the {band} km band) ~{hit}%, "
+                f"{near[1]}% at {near[0]} km (GUN EXCHANGE)")
 
     for info in groups[:4]:
         members = [enemies.get(sid) for sid in info.ship_ids]
@@ -4001,6 +4079,8 @@ def _format_geometry(snapshot: Any) -> str:
         for text in (gun_reach("their", their_gun, info), gun_reach("your", own_gun_range, info)):
             if text:
                 reach.append(text)
+        if their_gun > 0 or own_gun_range > 0:
+            reach.append(measured(info))
         verdicts = [m.solution.verdict for m in members if m is not None and m.solution is not None]
         if own_tubes and verdicts:
             reach.append("your torpedoes: " + ", ".join(
@@ -4239,6 +4319,14 @@ def _format_torpedo_economy(snapshot: Any, fleet_data: Dict[str, Any]) -> str:
             need = soak + to_kill
             text = (f"Salvo vs {_lbl(snapshot, e.ship_id)} ({sol.verdict}): {cover} PD turrets cover it "
                     f"-> ~{soak} soaked + {to_kill} to kill{each} = {need} together")
+            res = getattr(e, "solution_reserve", None)
+            if (res is not None and res.reaches and sol.tof_s is not None
+                    and res.tof_s is not None):
+                res_soak = res.soak if res.soak is not None else soak
+                if (abs(res.tof_s - sol.tof_s) >= 1.0 or res_soak != soak
+                        or abs((res.energy_gj or 0) - (sol.energy_gj or 0)) >= 1.0):
+                    text += (f"; reserve profile if he runs: ~{res.tof_s:.0f} s "
+                             f"(sprint ~{sol.tof_s:.0f}), ~{res.energy_gj:.0f} GJ, PD soaks {res_soak}")
             more = need - e.our_rounds_inbound
             if e.our_rounds_inbound:
                 text += (f"; {e.our_rounds_inbound} of yours already inbound -> "
