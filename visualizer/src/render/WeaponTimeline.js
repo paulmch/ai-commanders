@@ -44,6 +44,29 @@ export function bodyToWorld(fwd, up, v, out = [0, 0, 0]) {
  * engine's own eject start (src/torpedo_launch.py); the trace's first frame
  * is one tick of straight drift from here. null without the fields.
  */
+// Wave-chip ETA model. range / closure is only right for a round already at
+// cruise speed: one still on its rack-to-ignition sequence (closure ~0) read
+// "27664s", and one in its boost read several times too long. So: a round
+// whose torch is lit (or about to light, after `holdS`) accelerates at the
+// engine's 12 g up to its cruise closure, then coasts in at that speed. A
+// coasting or blinded round keeps range / closure. Display only.
+export const ETA_BOOST_MPS2 = 12 * 9.81;
+export const ETA_CRUISE_MPS = 12500;          // sprint profile's closure floor
+export const ETA_RESERVE_CRUISE_MPS = 8000;   // reserve profile's
+
+/** Seconds until a round `range` m out and closing at `closure` m/s arrives. */
+export function torpedoEta(range, closure, boosting, holdS = 0, cruise = ETA_CRUISE_MPS) {
+  if (!(range > 0)) return 0;
+  const v = Math.max(closure, 0);
+  if (!boosting || v >= cruise) return v > 1 ? range / v : Infinity;
+  const a = ETA_BOOST_MPS2;
+  const coast = v * holdS;                    // drift during the hold, before the torch lights
+  const left = Math.max(range - coast, 0);
+  const t1 = (cruise - v) / a, d1 = v * t1 + 0.5 * a * t1 * t1;
+  const fly = d1 >= left ? (-v + Math.sqrt(v * v + 2 * a * left)) / a : t1 + (left - d1) / cruise;
+  return holdS + fly;
+}
+
 export function launchState(launch, ship, omega) {
   if (!launch?.ejectPos || !ship) return null;
   const r = bodyToWorld(ship.fwd, ship.up, launch.ejectPos);
@@ -618,7 +641,11 @@ export class WeaponTimeline {
         ? ((s.vel[0] - g.vel[0]) * dx + (s.vel[1] - g.vel[1]) * dy + (s.vel[2] - g.vel[2]) * dz) / range : 0;
       const blind = time >= tr.disabledAt || !!s.state.disabled;
       if (blind && !(closure > 1)) continue;   // coasting away: no longer a threat
-      out.push({ id: tr.id, target, launch: tr.start, eta: closure > 1 ? range / closure : Infinity, range, blind, track: tr });
+      const cold = Number.isFinite(tr.ignitionAt) && time < tr.ignitionAt;   // still in its launch sequence
+      const boosting = !blind && (cold || (s.state.thr ?? 0) > 0);
+      const eta = torpedoEta(range, closure, boosting, cold ? tr.ignitionAt - time : 0,
+        tr.launch?.profile === 'reserve' ? ETA_RESERVE_CRUISE_MPS : ETA_CRUISE_MPS);
+      out.push({ id: tr.id, target, launch: tr.start, eta, range, blind, track: tr });
     }
     return out;
   }
