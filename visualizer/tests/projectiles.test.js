@@ -3,12 +3,16 @@ import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { BattleLoader } from '../src/BattleLoader.js';
 import { Projectiles } from '../src/render/Projectiles.js';
+import { ribbonClip, RIBBON_NEAR_K, WeaponRibbons } from '../src/render/WeaponBatches.js';
 import {
   WeaponTimeline, makeSample, sampleTrack, tracerLength, missOpacity,
-  beamPulse, seedFor, torpedoPower, MISS_LIFE
+  beamPulse, seedFor, torpedoPower, MISS_LIFE, TERMINAL_BEND_S
 } from '../src/render/WeaponTimeline.js';
 
 const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-6, `${a} != ${b}`);
+const near_ = near;
+/** Share of a round's terminal correction applied `dt` seconds before its end (WeaponTimeline.sample). */
+const bend = (dt) => { const u = Math.min(1, Math.max(0, 1 - dt / TERMINAL_BEND_S)); return u * u * (3 - 2 * u); };
 const ship = { pos: [50000, 0, 0], vel: [100, 0, 0], fwd: [-1, 0, 0] };
 const slug = (id, x) => ({ id, pos: [x, 0, 0], vel: [10000, 0, 0], source: 'alpha', target: 'beta' });
 const torp = (x, dv) => ({ ...slug('torp', x), dv_remaining: dv, disabled: false });
@@ -76,7 +80,11 @@ test('torpedoes preserve launch/disable/outcome times and bridge to the impact',
   const timeline = new WeaponTimeline(recording()), tr = timeline.torpedoes.get('torp');
   assert.equal(tr.start, 0); assert.equal(tr.disabledAt, 2.4); assert.equal(tr.end, 4);
   const out = makeSample();
-  timeline.sample(tr, 3.5, out); near(out.pos[0], 40000);
+  // The recorded track ends 10 km short of the impact (ballistic end
+  // 40000 at t = 4): the drawn path eases that gap in over its last
+  // TERMINAL_BEND_S seconds and is exactly on the impact at the end
+  timeline.sample(tr, 3.5, out); near(out.pos[0], 35000 + 10000 * bend(0.5));
+  timeline.sample(tr, 0.9, out); near(out.pos[0], 9000);
   timeline.sample(tr, 4, out); near(out.pos[0], 50000);
   assert.equal(timeline.moments.filter(m => m.kind === 'seeker').length, 1);
 });
@@ -146,7 +154,7 @@ test('all weapon buffers match on direct seek, playback, backward seek and pause
     assert.equal(fx.ribbons.geometry.attributes.aFrom.array, buffers);
     assert.equal(fx.manager.scene.children.filter(c => c.isLight).length, 0);
     fx.update(loader, 2.43);
-    assert.equal(fx.position('torpedo', 'torp')?.x, 24.3);
+    near(fx.position('torpedo', 'torp')?.x, 24.3 + 10 * bend(4 - 2.43));
     fx.clear();
     assert.equal(fx.ribbons.mesh.visible, false);
     assert.equal(fx.position('torpedo', 'torp'), null);
@@ -257,3 +265,69 @@ test('a PD burn spot sits on the torpedo surface facing the beam', () => {
     near(out.y, -0.17); near(out.x, 0.11);
   } finally { fx.dispose(); }
 });
+
+// Owner report (pass 5): "laser beams are not continuous close by". A
+// close-up used to keep only 260 px at each end of a long PD beam, so a
+// beam left the turret and stopped in empty space, and another piece
+// started in empty space at the round.
+test('a PD beam is one whole ribbon from emitter to burn spot at every view distance', () => {
+  const loader = recording();
+  for (const dist of [2, 5, 13, 40, 120, 400, 1000]) {
+    const fx = renderer();
+    const target = fx.manager.ships.get('beta').position.clone();
+    fx.manager.controls = { target };
+    fx.manager.camera.position.copy(target).add(new THREE.Vector3(0.3, 0.2, 1).normalize().multiplyScalar(dist));
+    try {
+      fx.update(loader, 1.5);
+      const a = fx.ribbons.geometry.attributes, beams = [];
+      for (let i = 0; i < fx.ribbons.count; i++) {
+        if (a.aStyle.getZ(i) === 2) beams.push(i);
+      }
+      assert.equal(beams.length, 1, `one beam instance at ${dist}`);
+      const i = beams[0];
+      const from = new THREE.Vector3(a.aFrom.getX(i), a.aFrom.getY(i), a.aFrom.getZ(i));
+      const to = new THREE.Vector3(a.aTo.getX(i), a.aTo.getY(i), a.aTo.getZ(i));
+      // starts on beta's hull (no PD mounts here: a seeded hull point) and
+      // ends at the torpedo (15 km down x at t = 1.5), not at a cut
+      assert.ok(from.distanceTo(target) < 8, `emitter on the hull at ${dist}`);
+      assert.ok(to.distanceTo(fx.position('torpedo', 'torp')) < 1.1, `reaches the round (burn spot on its skin) at ${dist}`);
+      assert.equal(a.aAge.getX(i), 0); assert.equal(a.aAge.getY(i), 0);
+      assert.equal(fx.ribbons.mesh.frustumCulled, false, 'one batched draw, never frustum culled');
+    } finally { fx.dispose(); }
+  }
+});
+
+// The ribbon vertex shader (mirrored by ribbonClip): an end behind the
+// camera is clipped to the near plane, and the strip is widened across the
+// line's ON-SCREEN direction.
+test('ribbon clip: a beam passing the camera keeps a pixel-floor width, a receding one is widened across its screen line', () => {
+  const near = 0.2;
+  // turret 30 km behind the camera, round 110 km ahead, 0.36 km to the side
+  const from = { x: 0.36, y: 0.2, z: 30 }, to = { x: 0.36, y: 0.2, z: -110 };
+  const c = ribbonClip(from, to, near);
+  assert.ok(c.u0 > 0.2 && c.u0 < 0.22 && c.u1 === 1);
+  near_(c.a.z, -RIBBON_NEAR_K * near);
+  // the clipped end is in front of the camera: a finite, positive depth for
+  // the pixel-floor width (the old shader used max(0.01, -z) of the end
+  // behind the camera and interpolated it into a screen-filling wedge)
+  assert.ok(-c.a.z >= near);
+  assert.equal(ribbonClip({ x: 0, y: 0, z: 5 }, { x: 1, y: 0, z: 1 }, near), null, 'wholly behind: not drawn');
+  // receding line whose view-space xy delta is ~perpendicular to its screen
+  // line: offset (0, 1) from the old view-space rule ran ALONG the screen
+  // line (zero width -> beads); the screen-space rule is perpendicular
+  const f = { x: 0, y: 1, z: -10 }, t = { x: 100, y: 0, z: -250000 };
+  const r = ribbonClip(f, t, near);
+  const sx = t.x / -t.z - f.x / -f.z, sy = t.y / -t.z - f.y / -f.z, sl = Math.hypot(sx, sy);
+  const offset = { x: -r.dir.y, y: r.dir.x };
+  near_(Math.abs(offset.x * sx / sl + offset.y * sy / sl), 0);
+  const vx = t.x - f.x, vy = t.y - f.y, vl = Math.hypot(vx, vy);
+  const old = { x: -vy / vl, y: vx / vl };
+  assert.ok(Math.abs(old.x * sx / sl + old.y * sy / sl) > 0.99, 'the old rule widened along the line');
+  // the GLSL uses the same margin
+  assert.ok(ribbonVertexSource().includes(`-${RIBBON_NEAR_K.toFixed(2)} * projectionMatrix[3][2]`));
+});
+
+function ribbonVertexSource() {
+  const r = new WeaponRibbons(new THREE.Scene());
+  try { return r.material.vertexShader; } finally { r.dispose(); }
+}

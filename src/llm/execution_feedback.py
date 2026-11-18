@@ -12,6 +12,11 @@ orders). This used to be a raw JSON dump ({"reason":"probability_gate",...}).
 
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+try:
+    from ..simulation import EVADE_BURN_CONE_DEG
+except ImportError:  # pragma: no cover - script-style imports
+    from simulation import EVADE_BURN_CONE_DEG
+
 # Weapon transition reasons -> what to tell a commander.
 _WEAPON_REASONS = {
     "hold_fire": "HOLD_FIRE (your order)",
@@ -82,10 +87,261 @@ def _helm_text(data: Dict[str, Any]) -> str:
         return f"{mode}, throttle 0 (attitude only, no burn)"
     if not isinstance(applied, (int, float)):
         return f"{mode}, requested {req * 100:.0f}% throttle"
+    # Why a burn fell short is said by the window line (helm_window_text):
+    # "turning onto the burn line, or fuel/engine limited" was printed for
+    # evasion holding the drive, a dead drive and the interlock alike.
     text = f"{mode}, requested {req * 100:.0f}% throttle, applied {applied * 100:.0f}%"
-    if applied < 0.5 * req:
-        text += " (turning onto the burn line, or fuel/engine limited)"
+    engine = data.get("engine_fraction")
+    if isinstance(engine, (int, float)) and engine <= 0.0:
+        text += " (DRIVE DEAD)"
     return text
+
+
+# What each evasion mode does with the drive (simulation._calculate_evasion /
+# _evasion_overlay), for the helm window line, on an order that does not burn
+# (PADLOCK, MAINTAIN, throttle 0) or the EVADE maneuver. On an order that
+# burns the overlay keeps the burn and swings it (execution_state 'swing',
+# _SWING_TAG); only RUN leaves the burn line there.
+_EVASION_DRIVE = {
+    "BRACE": "drive off: a gun round inbound with no time to jink",
+    "TANK": "half throttle, turning armour onto a gun round",
+    "PRESENT": "token throttle, turning armour onto a terminal torpedo",
+    "RUN": "burning away from a guided torpedo",
+    "EVADE": "jinking off a gun round at your throttle, off your line",
+}
+# Short per-mode tags for the helm window line (the full meaning of each mode
+# is in the captain doctrine, EVASION MODES).
+_EVASION_TAG = {"BRACE": "drive off", "TANK": "half throttle", "PRESENT": "armour to torpedo",
+                "RUN": "running", "EVADE": "jinking"}
+# The same modes while they swing a burning order's thrust axis inside the
+# cone around its burn line (simulation.EVADE_BURN_CONE_DEG): the drive stays
+# on the order.
+_SWING_TAG = {"EVADE": "dodging", "TANK": "armour", "BRACE": "armour",
+              "PRESENT": "armour to torpedo"}
+# Base maneuvers whose drive is off by design (the overlay may still burn).
+_ENGINE_OFF = ("PADLOCK", "MAINTAIN")
+# A window line is printed when the ordered burn flew less than this share.
+HELM_SHORTFALL_FRACTION = 0.8
+
+
+def _span_s(segments: List[Tuple[float, float, Any]], now: float) -> List[Tuple[float, Any]]:
+    """[(t, x), ...] change points -> [(seconds, x), ...] up to ``now``."""
+    out = []
+    for i, (t, _, x) in enumerate(segments):
+        end = segments[i + 1][0] if i + 1 < len(segments) else now
+        if end > t:
+            out.append((end - t, x))
+    return out
+
+
+def helm_window(simulation: Any, ship_id: str, since: float, now: float,
+                events: Optional[List[Any]] = None) -> Optional[Dict[str, Any]]:
+    """
+    What the helm did with the last window's maneuver, second by second,
+    from the engine's own transition log (EXECUTION_STATE, MANEUVER_STARTED,
+    DRIVE_INTERLOCK, PROJECTILE_LAUNCHED / TORPEDO_LAUNCHED at this ship) -
+    read-only, nothing new is logged. None when there is no window to judge.
+
+    Returns {order: {type, throttle, evade}, window_s, burned_s, modes:
+    {mode: s}, swing: {mode: s}, dead_s, damaged: engine fraction or None,
+    fuel_s, interlock_s, turning_s, shooters: [names], torpedo_sources:
+    [names], turn_left_s, swing_turn_s}. ``modes`` are the seconds evasion
+    held the order (an engine-off order, or RUN); ``swing`` the seconds the
+    evade overlay swung a burning order's thrust axis - burned on the order,
+    and counted in burned_s too; ``swing_turn_s`` the seconds it burned at
+    the order's throttle with the nose still turning onto the line (not
+    counted as burned; with the nose more than 90 deg off the drive idles
+    and those seconds are turning_s).
+    """
+    if now - since < 1.0:
+        return None
+    events = events if events is not None else list(getattr(simulation, "events", []) or [])
+    states: List[Tuple[float, int, Dict[str, Any]]] = []
+    orders: List[Tuple[float, int, Dict[str, Any]]] = []
+    interlock: List[Tuple[float, int, bool]] = []
+    shooters: Dict[str, int] = {}
+    torpedoes: Dict[str, int] = {}
+    for i, event in enumerate(events):
+        kind = event.event_type.name
+        t = event.timestamp
+        if kind in ("PROJECTILE_LAUNCHED", "TORPEDO_LAUNCHED"):
+            if event.target_id == ship_id and since - (30.0 if kind == "TORPEDO_LAUNCHED" else 0.0) <= t < now:
+                pool = shooters if kind == "PROJECTILE_LAUNCHED" else torpedoes
+                pool[event.ship_id] = pool.get(event.ship_id, 0) + 1
+            continue
+        if event.ship_id != ship_id or t >= now - 1e-9:
+            continue
+        if kind == "EXECUTION_STATE":
+            states.append((t, i, event.data))
+        elif kind == "MANEUVER_STARTED":
+            orders.append((t, i, event.data))
+        elif kind == "DRIVE_INTERLOCK":
+            interlock.append((t, i, (event.data or {}).get("phase") == "enter"))
+
+    def clip(points):
+        """Change points inside [since, now): the one in force at ``since`` first."""
+        before = [p for p in points if p[0] <= since + 1e-9]
+        inside = [p for p in points if p[0] > since + 1e-9]
+        head = [(since,) + tuple(before[-1][1:])] if before else []
+        return head + inside
+
+    states, orders, interlock = clip(states), clip(orders), clip(interlock)
+    if not states or not orders:
+        return None
+    order = orders[-1][2]
+    kind = str(order.get("maneuver_type") or "?")
+    out: Dict[str, Any] = {
+        "order": {"type": kind, "throttle": order.get("throttle"), "evade": order.get("evade")},
+        "window_s": now - since, "burned_s": 0.0, "modes": {}, "swing": {}, "swing_turn_s": 0.0,
+        "dead_s": 0.0,
+        "damaged": None,
+        "fuel_s": 0.0, "interlock_s": 0.0, "turning_s": 0.0, "turn_left_s": None,
+        "shooters": [n for n, _ in sorted(shooters.items(), key=lambda kv: -kv[1])],
+        "torpedo_sources": [n for n, _ in sorted(torpedoes.items(), key=lambda kv: -kv[1])],
+    }
+    # Merge the three change-point streams into one timeline.
+    times = sorted({p[0] for p in states + orders + interlock if p[0] < now})
+
+    def at(points, t):
+        cur = None
+        for p in points:
+            if p[0] <= t + 1e-9:
+                cur = p[2]
+        return cur
+
+    last_mode = None
+    for i, t in enumerate(times):
+        end = times[i + 1] if i + 1 < len(times) else now
+        dur = end - t
+        if dur <= 0:
+            continue
+        data = at(states, t) or {}
+        base = at(orders, t) or {}
+        mode = str(data.get("mode") or "?")
+        req = data.get("requested_throttle") or 0.0
+        app = data.get("applied_throttle") or 0.0
+        engine = data.get("engine_fraction")
+        fuel = data.get("fuel_fraction")
+        base_kind = str(base.get("maneuver_type") or "?")
+        burning_order = base_kind not in _ENGINE_OFF and req > 0 and base_kind != "EVASIVE"
+        last_mode = mode
+        swung = bool(data.get("swing")) and mode in _SWING_TAG
+        if mode in _EVASION_DRIVE and not swung:
+            out["modes"][mode] = out["modes"].get(mode, 0.0) + dur
+            continue
+        if swung and data.get("off_line"):
+            # Still turning onto the order's line: burning at the order's
+            # throttle (within 90 deg of it), or with the drive idling at the
+            # turn token (farther off) - not yet the order's burn either way.
+            if app >= 0.5 * req * (engine if isinstance(engine, (int, float)) else 1.0):
+                out["swing_turn_s"] += dur
+            else:
+                out["turning_s"] += dur
+            continue
+        if swung:
+            out["swing"][mode] = out["swing"].get(mode, 0.0) + dur
+        if not burning_order:
+            continue
+        if isinstance(engine, (int, float)) and engine <= 0.0:
+            out["dead_s"] += dur
+        elif isinstance(fuel, (int, float)) and fuel < 0.99:
+            out["fuel_s"] += dur
+        elif at(interlock, t):
+            out["interlock_s"] += dur
+        elif app >= 0.5 * req * (engine if isinstance(engine, (int, float)) else 1.0):
+            out["burned_s"] += dur
+            if isinstance(engine, (int, float)) and engine < 0.99:
+                out["damaged"] = engine
+        else:
+            out["turning_s"] += dur
+    # Still turning at the end of the window: how long until the burn lights.
+    heading = order.get("heading_direction")
+    if (kind == "HEADING" and isinstance(heading, dict) and last_mode == "HEADING"
+            and out["turning_s"] > 0 and hasattr(simulation, "_heading_burn_light_s")):
+        ship = simulation.get_ship(ship_id) if hasattr(simulation, "get_ship") else None
+        try:
+            from ..physics import Vector3D
+        except ImportError:  # pragma: no cover - script-style imports
+            from physics import Vector3D
+        try:
+            d = Vector3D(float(heading.get("x", 0)), float(heading.get("y", 0)),
+                         float(heading.get("z", 0)))
+            if ship is not None and d.magnitude > 0:
+                out["turn_left_s"] = float(simulation._heading_burn_light_s(ship, d.normalized()))
+        except (AttributeError, TypeError, ValueError):
+            pass
+    return out
+
+
+def helm_window_text(simulation: Any, ship_id: str, since: float, now: float,
+                     events: Optional[List[Any]] = None) -> Optional[str]:
+    """
+    One line on what the helm did with the last window's order when the
+    order's burn fell short or evasion flew or swung the ship ("" otherwise):
+    seconds burned out of the window and, per cause, the seconds it cost -
+    evasion holding the drive (which mode, which threat), turning onto the
+    burn line (and the turn left), a dead or damaged drive, the drive
+    interlock, fuel - and the seconds the evade overlay swung the burn
+    inside its cone (still on the order).
+    """
+    w = helm_window(simulation, ship_id, since, now, events)
+    if w is None:
+        return None
+    order, window = w["order"], w["window_s"]
+    kind = order["type"]
+    label = "EVADE" if kind == "EVASIVE" else kind
+    thr = order.get("throttle")
+    burns = kind not in _ENGINE_OFF and kind != "EVASIVE" and isinstance(thr, (int, float)) and thr > 0
+    evading = sum(w["modes"].values())
+    swinging = sum(w["swing"].values()) + w["swing_turn_s"]
+    if (not evading and swinging < 0.5
+            and not (burns and w["burned_s"] < HELM_SHORTFALL_FRACTION * window)):
+        return None
+    head = label + (f" @{thr * 100:.0f}%" if burns else "")
+    if order.get("evade"):
+        head += f", evade {order['evade']}"
+    parts = []
+    if burns:
+        parts.append(f"burned {w['burned_s']:.0f} of {window:.0f} s on your order")
+    names = lambda ids: ", ".join(_name(simulation, s) for s in ids[:2]) + (  # noqa: E731
+        f" +{len(ids) - 2}" if len(ids) > 2 else "")
+    held = [f"{mode} {w['modes'][mode]:.0f} s {_EVASION_TAG[mode]}"
+            for mode in ("BRACE", "TANK", "PRESENT", "RUN", "EVADE")
+            if w["modes"].get(mode, 0.0) >= 0.5]
+    if held:
+        threat = []
+        if w["shooters"] and any(m in w["modes"] for m in ("BRACE", "TANK", "EVADE")):
+            threat.append(f"fire from {names(w['shooters'])}")
+        if w["torpedo_sources"] and any(m in w["modes"] for m in ("PRESENT", "RUN")):
+            threat.append(f"torpedoes from {names(w['torpedo_sources'])}")
+        parts.append(f"evasion {'held the burn' if burns else 'flew the ship'} {evading:.0f} s: "
+                     + ", ".join(held) + (f" ({'; '.join(threat)})" if threat else ""))
+    swung = [f"{mode} {w['swing'][mode]:.0f} s {_SWING_TAG[mode]}"
+             for mode in ("EVADE", "TANK", "BRACE", "PRESENT")
+             if w["swing"].get(mode, 0.0) >= 0.5]
+    if swung:
+        threat = f" (fire from {names(w['shooters'])})" if w["shooters"] else ""
+        parts.append(f"evasion swung the burn within {EVADE_BURN_CONE_DEG:.0f}° of your line "
+                     f"{swinging:.0f} s: " + ", ".join(swung) + threat)
+    if w["swing_turn_s"] >= 0.5:
+        parts.append(f"turning onto the burn line at your throttle under fire "
+                     f"{w['swing_turn_s']:.0f} s (evade keeps the drive lit)")
+    if w["turning_s"] >= 0.5:
+        text = f"turning onto the burn line {w['turning_s']:.0f} s"
+        if w["turn_left_s"] is not None and w["turn_left_s"] >= 0.5:
+            text += f" (~{w['turn_left_s']:.0f} s of turn still left)"
+        parts.append(text)
+    if w["dead_s"] >= 0.5:
+        parts.append(f"DRIVE DEAD {w['dead_s']:.0f} s (no thrust at all)")
+    if w["interlock_s"] >= 0.5:
+        parts.append(f"drive interlock {w['interlock_s']:.0f} s (a friendly in your jet)")
+    if w["fuel_s"] >= 0.5:
+        parts.append(f"fuel-limited {w['fuel_s']:.0f} s")
+    if w["damaged"] is not None:
+        parts.append(f"drive damaged: thrust {w['damaged'] * 100:.0f}% of rated")
+    if not parts:
+        return None
+    return f"helm T+{since:.0f}-{now:.0f} ({head}): " + "; ".join(parts)
 
 
 def _command_name(command: Any) -> str:
@@ -170,7 +426,12 @@ def execution_feedback(simulation: Any, ship_ids: Iterable[str]) -> str:
                 line += f"; coasting at {speed / 1000:.2f} km/s"
             lines.append(line + ".")
         helm = latest.get((sid, "helm"))
-        if helm is not None:
+        window = helm_window_text(simulation, sid, since, now, events) if alive else None
+        if window:
+            # The window says what the helm did and why; it replaces the
+            # last-transition line.
+            lines.append(f"  {prefix}{window}")
+        elif helm is not None:
             lines.append(f"  {prefix}helm (since T+{helm.timestamp:.0f}): {_helm_text(helm.data)}")
         # Mounts in the same state share a line ("weapon_1, weapon_2 (since
         # T+90): held: ...") - a battleship's four batteries used to print it 4x.

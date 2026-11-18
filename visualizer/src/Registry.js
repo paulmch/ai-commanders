@@ -57,11 +57,13 @@ export class Registry {
    * @param {Element} o.alpha - #alphaShips
    * @param {Element} o.beta - #betaShips
    * @param {Function} o.onSelect - (shipId) => void
+   * @param {Function} [o.onHover] - (shipId|null) => void: a row under the pointer / focus (the scene chip expands)
    */
-  constructor({ root, alpha, beta, onSelect, doc = defaultDoc() } = {}) {
+  constructor({ root, alpha, beta, onSelect, onHover = null, doc = defaultDoc() } = {}) {
     this.root = root;
     this.lists = { alpha, beta };
     this.onSelect = onSelect;
+    this.onHover = onHover;
     this.doc = doc;
     this.rows = new Map();   // shipId -> {li, bar, status, hull, text, cls}
     if (typeof window !== 'undefined') window.addEventListener('resize', () => this.relayout());
@@ -103,6 +105,10 @@ export class Registry {
       li.title = `${info.name || shipId} · ${getShipClassName(info.type)}`;
       li.dataset.shipId = shipId;
       li.addEventListener('click', () => this.onSelect?.(shipId));
+      li.addEventListener('mouseenter', () => this.onHover?.(shipId));
+      li.addEventListener('mouseleave', () => this.onHover?.(null));
+      li.addEventListener('focus', () => this.onHover?.(shipId));
+      li.addEventListener('blur', () => this.onHover?.(null));
       li.addEventListener('keydown', e => {
         if (e.code === 'Enter' || e.code === 'Space') { e.preventDefault(); e.stopPropagation(); this.onSelect?.(shipId); }
       });

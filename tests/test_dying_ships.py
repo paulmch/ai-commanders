@@ -306,7 +306,7 @@ def test_torpedo_keeps_homing_on_dying_target():
     assert not _events_of(sim, SimulationEventType.TORPEDO_RETARGETED)
 
 
-def test_torpedo_retargets_only_after_detonation():
+def _hulk_retarget_scenario():
     sim = CombatSimulation(seed=9, time_step=1.0)
     _make_ship(sim, "shooter", "alpha", Vector3D(2_000_000, 0, 0))
     victim = _make_ship(sim, "victim", "beta", Vector3D(0, 0, 0))
@@ -325,6 +325,25 @@ def test_torpedo_retargets_only_after_detonation():
         launch_time=sim.current_time,
     )
     sim.torpedoes.append(flight)
+    return sim, victim, other, torp
+
+
+def test_datalink_reassigns_rounds_off_a_dying_hulk():
+    """A dying hulk is already lost (untargetable, detonating within 30 s):
+    the datalink moves its rounds onto a reachable live hull at once instead
+    of letting them soak into the wreck (pass 5; it used to wait for the
+    detonation)."""
+    sim, victim, other, torp = _hulk_retarget_scenario()
+    sim._update_torpedoes(1.0)
+    assert torp.target_id == other.ship_id
+    ev = _events_of(sim, SimulationEventType.TORPEDO_RETARGETED)
+    assert ev and ev[-1].data["reason"] == "target_lost"
+    assert ev[-1].data["old_target_id"] == "victim"
+
+
+def test_pre_link_rule_retargets_only_after_detonation():
+    sim, victim, other, torp = _hulk_retarget_scenario()
+    sim.torpedo_datalink = False
 
     # While the target is merely dying: no retarget
     sim._update_torpedoes(1.0)

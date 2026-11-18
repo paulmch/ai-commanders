@@ -1848,6 +1848,9 @@ body {
 .view-controls button:hover, .view-controls button:focus-visible { color: var(--text-primary); border-color: var(--alpha-primary); }
 .view-controls kbd { margin-left: 6px; opacity: 0.55; font: inherit; }
 
+/* Fleet-range contact layer (ContactOverlay + TacticalLayout): a bracket per
+   ship, then by density (L) a compact chip, a group chip or the full card.
+   Chips are laid out off every hull and panel; hover expands one on top. */
 #shipContacts { position: fixed; inset: 0; z-index: 12; pointer-events: none; }
 .ship-contact {
   position: absolute; left: 0; top: 0; width: 20px; height: 20px; padding: 0;
@@ -1857,14 +1860,16 @@ body {
 .ship-contact.beta { color: var(--beta-primary); }
 .ship-contact.dying { color: var(--accent-critical); }
 .contact-bracket {
-  position: absolute; inset: 2px; border: 1px solid currentColor;
-  background: rgba(0,12,20,0.25); box-shadow: 0 0 5px rgba(0,0,0,0.7);
+  position: absolute; inset: 4px; border: 1px solid currentColor; opacity: 0.8;
+  box-shadow: 0 0 4px rgba(0,0,0,0.8);
 }
-.ship-contact.alpha .contact-bracket { border-radius: 3px; }
+.ship-contact.alpha .contact-bracket { border-radius: 2px; }
 .ship-contact.beta .contact-bracket { transform: rotate(45deg) scale(0.85); }
-.ship-contact:hover .contact-bracket, .ship-contact.selected .contact-bracket { border-width: 2px; background: currentColor; }
+.ship-contact:hover .contact-bracket, .ship-contact.linked .contact-bracket,
+.ship-contact.selected .contact-bracket { inset: 2px; opacity: 1; border-width: 2px; }
+.ship-contact.threatened .contact-bracket { border-color: #ff6a7c; opacity: 1; }
 .contact-label {
-  position: absolute; width: 126px; height: 34px; padding: 3px 6px;
+  position: absolute; width: 126px; height: 34px; padding: 3px 6px; overflow: hidden;
   background: rgba(3,9,16,0.85); border-left: 1px solid currentColor;
   box-shadow: 0 2px 12px rgba(0,0,0,0.2);
 }
@@ -1872,19 +1877,75 @@ body {
 .contact-detail { display: block; font: 8px var(--font-mono); color: #9eb2c0; letter-spacing: 0.03em; white-space: nowrap; }
 .contact-health { position: absolute; bottom: 0; left: 0; right: 0; height: 1px; background: rgba(255,255,255,0.1); }
 .contact-health i { display: block; height: 100%; background: currentColor; opacity: 0.65; }
-.contact-leader { position: absolute; top: 10px; left: 10px; height: 1px; background: currentColor; opacity: 0.25; transform-origin: left center; pointer-events: none; }
-.ship-contact:focus-visible { outline: 2px solid white; outline-offset: 4px; }
-#shipContacts[hidden], .ship-contact[hidden], .contact-label[hidden], .contact-leader[hidden] { display: none !important; }
-/* Combat state at fleet range (ContactOverlay): inbound torpedoes, imminent
-   impact, dying-reactor countdown pulse (--pulse quickens toward zero) */
-.contact-threat {
-  position: absolute; left: 21px; top: -12px; padding: 0 3px; white-space: nowrap;
-  font: 9px var(--font-mono); letter-spacing: 0.04em; color: #ff6a7c;
-  background: rgba(24,0,8,0.82); border: 1px solid rgba(255,0,85,0.55); pointer-events: none;
+/* compact chip: short name only; the hull bar appears once the ship is hurt */
+.contact-label.chip {
+  height: 16px; padding: 0 5px; background: rgba(3,9,16,0.55); box-shadow: none;
+  border-left-width: 2px;
 }
-.contact-threat[hidden] { display: none !important; }
+.contact-label.chip .contact-name {
+  font: 10px/16px var(--font-mono); font-weight: 400; letter-spacing: 0.02em; color: inherit; opacity: 0.92;
+}
+.contact-label.chip .contact-detail { display: none; }
+.contact-label.chip .contact-health { display: none; height: 2px; background: rgba(255,255,255,0.08); }
+.ship-contact.damaged .contact-label.chip .contact-health { display: block; }
+/* hover, keyboard focus or the registry row: the chip opens into the card, on top */
+.ship-contact:hover, .ship-contact:focus-visible, .ship-contact.linked { z-index: 2; }
+.ship-contact:hover .contact-label.chip, .ship-contact:focus-visible .contact-label.chip,
+.ship-contact.linked .contact-label.chip {
+  height: auto; min-width: 112px; width: auto !important; padding: 2px 6px 4px;
+  background: rgba(3,9,16,0.94); box-shadow: 0 2px 12px rgba(0,0,0,0.45);
+}
+.ship-contact:hover .contact-label.chip .contact-detail, .ship-contact:focus-visible .contact-label.chip .contact-detail,
+.ship-contact.linked .contact-label.chip .contact-detail { display: block; }
+.ship-contact:hover .contact-label.chip .contact-health, .ship-contact.linked .contact-label.chip .contact-health { display: block; }
+.contact-leader, .group-leader, .wave-leader {
+  position: absolute; top: 10px; left: 10px; height: 1px; background: currentColor; opacity: 0.3;
+  transform-origin: left center; pointer-events: none;
+}
+.ship-contact:focus-visible { outline: 2px solid white; outline-offset: 4px; }
+#shipContacts[hidden], .ship-contact[hidden], .contact-label[hidden], .contact-leader[hidden],
+.contact-group[hidden], .group-leader[hidden], .wave-contact[hidden], .wave-leader[hidden] { display: none !important; }
+/* group chip: crowded ships of one side, listed on hover */
+.contact-group { position: absolute; inset: 0; color: var(--alpha-primary); pointer-events: none; }
+.contact-group.beta { color: var(--beta-primary); }
+.group-chip {
+  position: absolute; height: 16px; padding: 0 6px 0 16px; pointer-events: auto; cursor: default;
+  font: 10px/16px var(--font-mono); letter-spacing: 0.02em; white-space: nowrap;
+  background: rgba(3,9,16,0.55); border-left: 2px solid currentColor;
+}
+.group-chip::before, .group-chip::after {
+  content: ''; position: absolute; width: 5px; height: 5px; border: 1px solid currentColor; opacity: 0.85;
+}
+.group-chip::before { left: 4px; top: 3px; }
+.group-chip::after { left: 7px; top: 7px; }
+.group-list { display: none; }
+.group-chip:hover, .contact-group.linked .group-chip { height: auto; z-index: 3; background: rgba(3,9,16,0.94); box-shadow: 0 2px 12px rgba(0,0,0,0.45); }
+.group-chip:hover .group-list, .contact-group.linked .group-list { display: block; padding: 2px 0 4px; }
+.group-row.current { color: var(--text-primary); }
+.group-row {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 1px 0; border: 0; background: none;
+  color: inherit; font: 10px/14px var(--font-mono); text-align: left; cursor: pointer;
+}
+.group-row:hover, .group-row:focus-visible { color: var(--text-primary); }
+.group-row-name { flex: 1; white-space: nowrap; }
+.group-row-hull { width: 34px; height: 2px; background: rgba(255,255,255,0.12); }
+.group-row-hull i { display: block; height: 100%; background: currentColor; }
+/* torpedo wave: one chip by the wave's leading round (count, target, time to
+   impact), weighted by urgency - a forecast (> 60 s) is quiet text, an
+   inbound wave a red tag, the last 10 s a filled crimson tag */
+.wave-contact { position: absolute; inset: 0; color: #ff6a7c; pointer-events: none; }
+.wave-chip {
+  position: absolute; height: 15px; padding: 0 4px; pointer-events: auto; cursor: pointer;
+  font: 9px/13px var(--font-mono); letter-spacing: 0.04em; white-space: nowrap; overflow: hidden; text-align: left;
+  color: #ff8a98; background: rgba(24,0,8,0.6); border: 0; border-left: 2px solid rgba(255,0,85,0.75);
+}
+.wave-contact.imminent .wave-chip { color: #fff; background: rgba(150,0,40,0.92); border-left-color: #ff5a78; }
+.wave-contact.distant { color: rgba(255,106,124,0.55); }
+.wave-contact.distant .wave-chip { color: rgba(255,160,170,0.6); background: rgba(10,4,8,0.45); border-left-color: rgba(255,0,85,0.35); }
+.wave-contact.blind { color: #9eb2c0; }
+.wave-contact.blind .wave-chip { color: #b8c4cc; background: rgba(8,12,16,0.5); border-left-color: rgba(160,180,190,0.4); }
+.wave-chip:hover, .wave-chip:focus-visible { border-left-color: #fff; color: #fff; }
 .ship-contact.imminent .contact-bracket { border-color: var(--accent-critical); animation: contact-pulse 0.42s ease-in-out infinite alternate; }
-.ship-contact.imminent .contact-threat { color: #fff; background: rgba(150,0,40,0.9); }
 .ship-contact.dying .contact-bracket { animation: contact-pulse var(--pulse, 0.8s) ease-in-out infinite alternate; }
 @keyframes contact-pulse {
   from { opacity: 0.45; box-shadow: 0 0 1px rgba(255,0,85,0.2); }
@@ -1892,6 +1953,7 @@ body {
 }
 @media (prefers-reduced-motion: reduce) {
   .ship-contact.imminent .contact-bracket, .ship-contact.dying .contact-bracket { animation: none; }
+}
 }
 
 @media (max-width: 1200px) {

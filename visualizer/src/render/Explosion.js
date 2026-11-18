@@ -107,7 +107,7 @@ function fireballMaterial() {
         // hotter in the middle of the disc, mottled by the noise
         float heat = uHeat * (0.15 + 1.0 * noise) * (0.4 + 0.6 * ndv);
         heat = clamp(heat, 0.0, 1.0);
-        float edge = 1.0 - pow(1.0 - ndv, 3.5);
+        float edge = 1.0 - pow(max(1.0 - ndv, 0.0), 3.5);   // ndv can round past 1: pow(<0) is NaN on GPUs
         float a = smoothstep(0.03, 0.35, heat) * edge * uAlpha * (0.3 + 0.7 * noise);
         vec3 col = ramp(heat) * (0.35 + 0.9 * heat);
         gl_FragColor = vec4(col * a * uIntensity, 1.0);
@@ -166,7 +166,7 @@ function shellMaterial() {
       void main() {
         #include <logdepthbuf_fragment>
         float ndv = abs(dot(normalize(vNormal), normalize(vView)));
-        float rim = pow(1.0 - ndv, uRimPow);
+        float rim = pow(max(1.0 - ndv, 0.0), uRimPow);
         float n = tri(uNoise, vLocal * 2.5 + uSeed, vLocal).g;
         float n2 = tri(uNoise, vLocal * 6.5 - uSeed * 1.3, vLocal).b;
         // torn into filaments: patches of the front simply are not there
@@ -200,14 +200,15 @@ function ejectaMaterial() {
       uniform float uAge, uIntensity, uSeed;
       varying vec2 vUv;
       #include <logdepthbuf_pars_fragment>
+      float sq(float x) { return x * x; }
       void main() {
         #include <logdepthbuf_fragment>
         vec2 p = vUv * 2.0 - 1.0;
         float r = length(p);
         float n = texture2D(uNoise, p * 1.8 + uSeed).g;
         float front = 0.77 + (n - 0.5) * 0.04;
-        float rim = exp(-pow((r - front) / 0.018, 2.0));
-        float wake = exp(-pow((r - front + 0.08) / 0.085, 2.0)) * 0.22;
+        float rim = exp(-sq((r - front) / 0.018));          // x * x: pow(<0, 2.0) is NaN on some GPUs
+        float wake = exp(-sq((r - front + 0.08) / 0.085)) * 0.22;
         float arcs = smoothstep(0.18, 0.68, n);
         vec3 color = mix(vec3(0.65, 1.25, 2.4), vec3(1.4, 0.35, 0.08), uAge);
         gl_FragColor = vec4(color * (rim + wake) * arcs * uIntensity, 1.0);
@@ -226,6 +227,7 @@ function easeOut(t, k = 3) { return 1 - Math.exp(-t * k); }
 
 const _dq = new THREE.Quaternion();
 const _dv = new THREE.Vector3();
+const _dc = new THREE.Vector3();
 const WRECK_LIFE = 40;       // big hull sections and the debris cloud linger
 
 /**
@@ -460,10 +462,28 @@ export class Blast {
    * @param {Object} o    { position (Vector3), scale, spawnTime, kind,
    *                        dir (Vector3, optional spall direction),
    *                        baseVel (Vector3, optional inherited velocity) }
+   *
+   * Draw scale (render/Scale.js). `scale` and the KINDS table are in kit
+   * units; the blast is drawn at k scene km per kit unit, re-read every
+   * update (never baked: in auto mode k follows the camera):
+   *   o.shipId   the hull it belongs to: k = ctx.kOf(shipId)
+   *   o.real     already at real size (the reactor blast): k = 1
+   *   neither    a free effect: k = ctx.kAt(its position)
+   * With o.anchor (Vector3: the hull centre at spawn time, real position)
+   * `position` is read as anchor + a kit-unit offset, and the offset is
+   * drawn at the hull's k too. o.kitVel (Vector3) is a velocity in kit
+   * units/s on top of baseVel (wreck chunks).
    */
   constructor(ctx, o) {
     this.ctx = ctx;
     this.kind = o.kind;
+    const hullK = o.shipId && ctx.kOf ? () => ctx.kOf(o.shipId) : null;
+    this.sizeK = o.real ? null : hullK || (ctx.kAt ? () => ctx.kAt(this.group.position) : null);
+    this.posK = o.anchor ? hullK : null;
+    this.anchor = o.anchor ? o.anchor.clone() : null;
+    this.offset = o.anchor ? o.position.clone().sub(o.anchor) : null;
+    this.kitVel = o.kitVel ? o.kitVel.clone() : null;
+    this.k = 1;
     const K = KINDS[o.kind] || KINDS.secondary;
     this.K = K;
     this.scale = o.scale;
@@ -479,6 +499,7 @@ export class Blast {
     this.baseVel = o.baseVel ? o.baseVel.clone() : new THREE.Vector3();
     this.origin = o.position.clone();
     ctx.scene.add(this.group);
+    this._place(0);
 
     const glow = getGlowTexture();
 
@@ -602,8 +623,8 @@ export class Blast {
     const spawnAge = ctx.now ? ctx.now() - o.spawnTime : 0;
     this.fresh = spawnAge < 0.5;
     if (K.screenFlash > 0 && ctx.postfx && this.fresh) {
-      const d = ctx.camera.position.distanceTo(o.position);
-      const near = s * 40;
+      const d = ctx.camera.position.distanceTo(this.group.position);
+      const near = s * 40 * this.k;
       const amt = K.screenFlash * Math.min(1, (near / Math.max(d, 1)) ** 1.2);
       ctx.postfx.triggerFlash(amt);
     }
@@ -617,7 +638,7 @@ export class Blast {
     if (age < 0) { this.group.visible = false; return true; }
     if (age > this.duration) return false;
     this.group.visible = true;
-    this.group.position.copy(this.origin).addScaledVector(this.baseVel, age);
+    const k = this._place(age);
 
     // Flash: instant, then fast exponential decay. Up close the sprite
     // would fill the frame with one flat HDR disc, so its footprint is
@@ -626,7 +647,7 @@ export class Blast {
     const f = Math.exp(-age / K.flashFade);
     this.flash.material.opacity = Math.min(1, f * 1.2);
     const camPos = this.ctx.camera?.position;
-    const cap = camPos ? camPos.distanceTo(this.group.position) * 0.4 : Infinity;
+    const cap = camPos ? camPos.distanceTo(this.group.position) * 0.4 / k : Infinity;
     this.flash.scale.setScalar(Math.min(cap, this.flashScale * (1 + age * 1.5)));
 
     let fireRadius = 0;
@@ -699,7 +720,7 @@ export class Blast {
     this.puffs.setAge(age);
     // The additive spark/streak burst piles into a white blowout when the
     // camera sits a few blast radii away; fleet range is unchanged
-    const dim = camPos ? blastCloseDim(camPos.distanceTo(this.group.position), s) : 1;
+    const dim = camPos ? blastCloseDim(camPos.distanceTo(this.group.position), s * k) : 1;
     this.sparks.material.uniforms.uIntensity.value = 1.3 * dim;
     this.streaks.material.uniforms.uIntensity.value = 1.4 * dim;
     if (this.crater) {
@@ -711,10 +732,24 @@ export class Blast {
       this.crater.material.color.setRGB(2.4 * (1 - p * 0.55) + 1.2 * hot, 0.9 * (1 - p * 0.85) + 2.2 * hot, 0.3 * (1 - p) + 2.1 * hot);
     }
     if (this.light) {
+      // inverse-square: the same light on a hull drawn k times the size
       this.light.position.copy(this.group.position);
-      this.light.intensity = K.light * s * s * Math.exp(-age / K.lightLife);
+      this.light.distance = s * 60 * k;
+      this.light.intensity = K.light * s * s * k * k * Math.exp(-age / K.lightLife);
     }
     return true;
+  }
+
+  /** Position and draw scale for `age` (see the constructor); returns k. */
+  _place(age) {
+    const pk = this.posK ? this.posK() : 1;
+    if (this.anchor) this.origin.copy(this.anchor).addScaledVector(this.offset, pk);
+    this.group.position.copy(this.origin).addScaledVector(this.baseVel, age);
+    if (this.kitVel) this.group.position.addScaledVector(this.kitVel, age * pk);
+    const k = this.sizeK ? this.sizeK() : 1;
+    this.k = k;
+    this.group.scale.setScalar(k);
+    return k;
   }
 
   dispose() {
@@ -742,7 +777,14 @@ export class ShipDestruction {
    * @param {Object} ctx  { scene, tryLight, freeLight, postfx, camera, spawnBlast(o) }
    * @param {Object} o    { shipGroup, shipId, position (Vector3 scene units),
    *                        driftVel (Vector3 scene units/s), driftDuration,
-   *                        scale, spawnTime }
+   *                        scale, blastScale, spawnTime }
+   *
+   * `scale` sizes everything that belongs to the hull (pops, chunk kicks,
+   * embers) in kit units; all of it is drawn at the hull's live draw scale
+   * (render/Scale.js: the wreck pieces sit in groups anchored on the
+   * wreck's real, coasting centre and scaled by k each frame). `blastScale`
+   * sizes the reactor blast itself, which is real (SceneManager fits it to
+   * the engine's blast radius) and is not scaled with the hull.
    */
   constructor(ctx, o) {
     this.ctx = ctx;
@@ -752,6 +794,7 @@ export class ShipDestruction {
     this.driftVel = o.driftVel.clone();
     this.driftDuration = o.driftDuration;
     this.scale = o.scale;
+    this.blastScale = o.blastScale ?? o.scale;
     this.spawnTime = o.spawnTime;
     this.meltdown = !!o.meltdown;   // overheat: detonates as the 'meltdown' blast
     this.totalDuration = this.driftDuration + WRECK_LIFE;
@@ -818,19 +861,21 @@ export class ShipDestruction {
     const rnd = this.rnd;
     // Detonation point: the reactor, on the drifted, tumbled hulk
     const origin = this.basePos.clone().addScaledVector(this.driftVel, this.driftDuration);
-    let reactorWorld = origin.clone();
+    // the reactor, as a kit-unit offset from the hull centre (world axes)
+    const reactorOff = new THREE.Vector3();
     if (g) {
       this.tumble.setFromAxisAngle(this.tumbleAxis, this.tumbleRate * this.driftDuration);
       g.quaternion.copy(this.initialOrientation).multiply(this.tumble);
-      const reactor = g.userData.reactorPos || new THREE.Vector3();
-      reactorWorld = reactor.clone().applyQuaternion(g.quaternion).add(origin);
+      reactorOff.copy(g.userData.reactorPos || reactorOff).applyQuaternion(g.quaternion);
     }
-    this.blastPos = reactorWorld;
-    this.blastOrigin = reactorWorld.clone();
+    this.wreckOrigin = origin;
+    this.reactorOff = reactorOff;
+    this.blastPos = origin.clone().addScaledVector(reactorOff, this._k());
     for (const v of this.vents) { v.torch.group.visible = false; }
 
     this.ctx.spawnBlast({
-      position: reactorWorld, scale: this.scale, spawnTime: now, kind: this.meltdown ? 'meltdown' : 'reactor',
+      position: origin.clone().add(reactorOff), anchor: origin, shipId: this.shipId, real: true,
+      scale: this.blastScale, spawnTime: now, kind: this.meltdown ? 'meltdown' : 'reactor',
       baseVel: this.driftVel,
       axis: new THREE.Vector3(0, 0, 1).applyQuaternion(g?.quaternion || new THREE.Quaternion())
     });
@@ -850,11 +895,12 @@ export class ShipDestruction {
       if (broken) {
         const axis = new THREE.Vector3(0, 0, 1).applyQuaternion(g.quaternion);
         for (const sec of broken.sections) {
-          const worldCenter = sec.center.clone().applyQuaternion(g.quaternion).add(origin);
+          // (pieces live in chunkGroup: kit units from the wreck centre)
+          const worldCenter = sec.center.clone().applyQuaternion(g.quaternion);
           const away = sec.center.z >= reactorLocal.z ? 1 : -1;
           const kick = this.scale * (0.04 + 0.05 * rnd());
           const lateral = new THREE.Vector3(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).normalize().multiplyScalar(kick * 0.7);
-          const vel = this.driftVel.clone().addScaledVector(axis, away * kick * (sec.cutHi > 1e5 ? 1.4 : 0.6)).add(lateral);
+          const vel = new THREE.Vector3().addScaledVector(axis, away * kick * (sec.cutHi > 1e5 ? 1.4 : 0.6)).add(lateral);
           const spinAxis = new THREE.Vector3(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).normalize();
           sec.mesh.position.copy(worldCenter);
           sec.mesh.quaternion.copy(g.quaternion);
@@ -877,13 +923,13 @@ export class ShipDestruction {
         this._buildCloud(fx, g, origin, reactorLocal, now, rnd);
       }
       for (const c of chunks) {
-        const worldCenter = c.center.clone().applyQuaternion(g.quaternion).add(origin);
+        const worldCenter = c.center.clone().applyQuaternion(g.quaternion);
         const radial = c.center.clone().sub(reactorLocal);
         const dist = Math.max(radial.length(), L * 0.05);
         radial.normalize().applyQuaternion(g.quaternion);
         // closer to the reactor = harder kick; smaller pieces fly faster
         const kick = this.scale * (0.12 + 0.5 / (1 + dist / (L * 0.25))) * (0.7 + rnd() * 0.6) / Math.max(0.6, c.size / (L * 0.08));
-        const vel = this.driftVel.clone()
+        const vel = new THREE.Vector3()
           .addScaledVector(radial, kick)
           .add(new THREE.Vector3(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).multiplyScalar(kick * 0.35));
         const spinAxis = new THREE.Vector3(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).normalize();
@@ -924,13 +970,13 @@ export class ShipDestruction {
       // born inside the hull, clustered around the reactor
       const local = new THREE.Vector3((rnd() - 0.5) * W * 0.8, (rnd() - 0.5) * W * 0.8,
         reactorLocal.z + (rnd() - 0.35) * L * (0.25 + 0.6 * rnd()));
-      p.copy(local).applyQuaternion(g.quaternion).add(origin);
+      p.copy(local).applyQuaternion(g.quaternion);   // kit units from the wreck centre
       dir.copy(local).sub(reactorLocal);
       if (dir.lengthSq() < 1e-6) dir.set(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5);
       dir.normalize().add(new THREE.Vector3(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).multiplyScalar(0.8)).normalize()
         .applyQuaternion(g.quaternion);
       const speed = this.scale * (0.05 + 0.6 * Math.pow(rnd(), 2.2));
-      v.copy(this.driftVel).addScaledVector(dir, speed);
+      v.copy(dir).multiplyScalar(speed);
       axis.set(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).normalize();
       const size = L * (0.005 + 0.022 * Math.pow(rnd(), 2.5));
       const flat = rnd() < 0.45;
@@ -947,8 +993,6 @@ export class ShipDestruction {
     });
     this.emberGroup = new THREE.Group();
     this.emberGroup.add(this.embers.object);
-    this.emberOrigin = origin.clone().add(reactorLocal.clone().applyQuaternion(g.quaternion));
-    this.emberGroup.position.copy(this.emberOrigin);
     this.ctx.scene.add(this.emberGroup);
   }
 
@@ -987,17 +1031,30 @@ export class ShipDestruction {
         if (age - pop.t < KINDS[pop.kind || 'pop'].duration && g) {
           const orientation = this.initialOrientation.clone().multiply(
             this.tumble.setFromAxisAngle(this.tumbleAxis, this.tumbleRate * pop.t));
-          const world = pop.local.clone().applyQuaternion(orientation).add(this.basePos).addScaledVector(this.driftVel, pop.t);
+          const anchor = this.basePos.clone().addScaledVector(this.driftVel, pop.t);
+          const world = pop.local.clone().applyQuaternion(orientation).add(anchor);
           const dir = pop.local.clone().setZ(0).normalize().applyQuaternion(orientation);
           const kind = pop.kind || 'pop';
-          this.ctx.spawnBlast({ position: world, scale: this.scale * (kind === 'secondary' ? 0.22 : 0.35), spawnTime: this.spawnTime + pop.t, kind, dir, baseVel: this.driftVel });
+          this.ctx.spawnBlast({ position: world, anchor, shipId: this.shipId, scale: this.scale * (kind === 'secondary' ? 0.22 : 0.35), spawnTime: this.spawnTime + pop.t, kind, dir, baseVel: this.driftVel });
         }
       }
       return true;
     }
 
     if (!this.ignited) this._ignite();
-    this.blastPos.copy(this.blastOrigin).addScaledVector(this.driftVel, blastAge);
+    // The wreck's real centre coasts on; everything that was part of the
+    // hull is drawn round it at the hull's draw scale for this frame
+    const k = this._k();
+    const centre = _dc.copy(this.wreckOrigin).addScaledVector(this.driftVel, blastAge);
+    this.blastPos.copy(centre).addScaledVector(this.reactorOff, k);
+    if (this.chunkGroup) {
+      this.chunkGroup.position.copy(centre);
+      this.chunkGroup.scale.setScalar(k);
+    }
+    if (this.cloud) {
+      this.cloud.mesh.position.copy(centre);
+      this.cloud.mesh.scale.setScalar(k);
+    }
 
     // Chunks: ballistic, tumbling, cooling from orange-hot to dark
     const fade = blastAge > SHARD_FADE[0] ? Math.max(0, 1 - (blastAge - SHARD_FADE[0]) / (SHARD_FADE[1] - SHARD_FADE[0])) : 1;
@@ -1038,7 +1095,8 @@ export class ShipDestruction {
       }
     }
     if (this.embers) {
-      this.emberGroup.position.copy(this.emberOrigin).addScaledVector(this.driftVel, blastAge);
+      this.emberGroup.position.copy(this.blastPos);
+      this.emberGroup.scale.setScalar(k);
       this.embers.setAge(blastAge);
     }
     for (const s of this.secondaries) {
@@ -1046,16 +1104,24 @@ export class ShipDestruction {
       s.fired = true;
       const kind = s.kind || 'secondary';
       if (blastAge - s.t < KINDS[kind].duration) {
+        // on its chunk: a kit-unit offset from the wreck centre at that time
+        const anchor = this.wreckOrigin.clone().addScaledVector(this.driftVel, s.t);
         const pos = s.chunk.p0.clone().addScaledVector(s.chunk.vel, s.t);
         if (s.offset) {
           q.setFromAxisAngle(s.chunk.spinAxis, s.chunk.spinRate * s.t);
           _dv.copy(s.offset).applyQuaternion(q).applyQuaternion(s.chunk.q0);
           pos.add(_dv);
         }
-        this.ctx.spawnBlast({ position: pos, scale: s.scale, spawnTime: this.spawnTime + this.driftDuration + s.t, kind, baseVel: s.chunk.vel });
+        this.ctx.spawnBlast({ position: pos.add(anchor), anchor, shipId: this.shipId, scale: s.scale,
+          spawnTime: this.spawnTime + this.driftDuration + s.t, kind, baseVel: this.driftVel, kitVel: s.chunk.vel });
       }
     }
     return true;
+  }
+
+  /** Draw scale of the hull this wreck was (scene km per kit unit, live). */
+  _k() {
+    return this.shipGroup?.userData.k ?? this.ctx.kOf?.(this.shipId) ?? 1;
   }
 
   /** World position of the wreck centre (camera framing, beams). */

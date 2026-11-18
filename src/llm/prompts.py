@@ -23,6 +23,7 @@ try:
     from .. import combat as _combat
     from .. import drive_plume as _plume
     from ..power import KINETIC_WEAPON_EFFICIENCY
+    from .torpedo_doctrine import LINK_FACT, PROFILE_FACT
 except ImportError:  # pragma: no cover - script-style imports
     from pointdefense import (
         PDLaser,
@@ -35,6 +36,7 @@ except ImportError:  # pragma: no cover - script-style imports
     import combat as _combat
     import drive_plume as _plume
     from power import KINETIC_WEAPON_EFFICIENCY
+    from llm.torpedo_doctrine import LINK_FACT, PROFILE_FACT
 
 
 # Closing speeds tabulated for the captain's PD block. The middle entry is the
@@ -388,7 +390,8 @@ def format_weapon_groups_for_prompt(weapons: List[Dict], weapon_types: Dict[str,
         rng = spec.get("range_km", 600)
         count = len(heavy_coilguns)
         lines.append(f"- Heavy Coilguns x{count}: {vel} km/s muzzle velocity, {dmg:.2f} GJ damage each, {rng}km max range")
-        lines.append(f"  * Turreted: 180° firing arc, works during any maneuver")
+        lines.append(f"  * Turreted: fires only where its own hull leaves it clear (the "
+                     f"ARCS lines count the mounts that bear), and trains before it fires")
         lines.append(f"  * {_gun_cadence_for_prompt(spec)}")
 
     if coilguns:
@@ -398,7 +401,8 @@ def format_weapon_groups_for_prompt(weapons: List[Dict], weapon_types: Dict[str,
         rng = spec.get("range_km", 500)
         count = len(coilguns)
         lines.append(f"- Coilguns x{count}: {vel} km/s muzzle velocity, {dmg:.2f} GJ damage each, {rng}km max range")
-        lines.append(f"  * Turreted: 180° firing arc, works during any maneuver")
+        lines.append(f"  * Turreted: fires only where its own hull leaves it clear (the "
+                     f"ARCS lines count the mounts that bear), and trains before it fires")
         lines.append(f"  * {_gun_cadence_for_prompt(spec)}")
 
     for wtype, mounts in other_guns.items():
@@ -411,10 +415,14 @@ def format_weapon_groups_for_prompt(weapons: List[Dict], weapon_types: Dict[str,
         )
         pivot = spec.get("pivot_range_deg", 180)
         if spec.get("is_turreted", True):
-            lines.append(f"  * Turreted: {pivot:g}° firing arc")
+            lines.append("  * Turreted: fires only where its own hull leaves it clear (ARCS lines)")
         else:
             lines.append(f"  * Fixed mount: REQUIRES nose within {pivot:g}° of target to fire")
         lines.append(f"  * {_gun_cadence_for_prompt(spec)}")
+
+    # cmdadm hunk: "max range" is how far a round flies; say what it hits there.
+    if spinals or heavy_coilguns or coilguns or other_guns:
+        lines.append(f"- {reach_note()}")
 
     if pd_lasers:
         count = len(pd_lasers)
@@ -631,17 +639,19 @@ WEAPONS:
   * Fixed mount: REQUIRES nose within 30° of target to fire
   * 5-shot salvos: 12s between shots, then 24s cooldown (72s cycle)
 - Turret Coilgun: 6.0 km/s muzzle velocity, 0.7 GJ damage, 500km max range
-  * Turreted: 180° firing arc, works during any maneuver
+  * Turreted: fires only where its own hull leaves it clear (ARCS lines), trains before it fires
   * 5-shot salvos: 10s between shots, then 20s cooldown (60s cycle)
 - 2x Point Defense Lasers: Auto-engage torpedoes within 250km
 
-DEFENSE - ARMOR IS ASPECT-DEPENDENT (this is the single biggest survivability lever):
+DEFENSE - ARMOR IS ASPECT-DEPENDENT:
 {armor_aspect_block}
 - A round is scored against whichever facing it arrives at: within {nose_cone_deg:.0f}° of your
   nose it strikes NOSE armor, beyond that it strikes LATERAL, and from behind
   (past {tail_cone_deg:.0f}° off the nose) it strikes TAIL.
-- So keeping the threat inside {nose_cone_deg:.0f}° of your nose is worth far more than any
-  evasion: the moment you turn past it you present your thinnest plating.
+- Turning the nose past {nose_cone_deg:.0f}° off the threat presents thinner plating. Evasion
+  turns the hull too: TANK and PRESENT turn the best remaining armor onto the threat - on a
+  burning order only within 20° of the burn line, so a threat from abeam or astern still
+  strikes the flank or the tail; a jink (EVADE) or a RUN can show the flank or the tail.
 - The dangerous moment is the BREAK-AWAY turn after an attack run - that is when
   you swing your flank through the enemy's guns.
 
@@ -660,13 +670,15 @@ WEAPONS:
 {weapons_section}
 {torpedo_block}
 
-DEFENSE - ARMOR IS ASPECT-DEPENDENT (this is the single biggest survivability lever):
+DEFENSE - ARMOR IS ASPECT-DEPENDENT:
 {armor_aspect_block}
 - A round is scored against whichever facing it arrives at: within {nose_cone_deg:.0f}° of your
   nose it strikes NOSE armor, beyond that it strikes LATERAL, and from behind
   (past {tail_cone_deg:.0f}° off the nose) it strikes TAIL.
-- So keeping the threat inside {nose_cone_deg:.0f}° of your nose is worth far more than any
-  evasion: the moment you turn past it you present your thinnest plating.
+- Turning the nose past {nose_cone_deg:.0f}° off the threat presents thinner plating. Evasion
+  turns the hull too: TANK and PRESENT turn the best remaining armor onto the threat - on a
+  burning order only within 20° of the burn line, so a threat from abeam or astern still
+  strikes the flank or the tail; a jink (EVADE) or a RUN can show the flank or the tail.
 - The dangerous moment is the BREAK-AWAY turn after an attack run - that is when
   you swing your flank through the enemy's guns.
 
@@ -701,7 +713,7 @@ def _armor_aspect_block(nose_cm: float, lateral_cm: float, tail_cm: float) -> st
     thinnest = min(lateral_cm, tail_cm) or 1.0
     ratio = nose_cm / thinnest if thinnest else 1.0
     lines = [
-        f"- Nose armor:    {nose_cm:6.1f} cm  (heaviest - keep this toward the threat)",
+        f"- Nose armor:    {nose_cm:6.1f} cm  (heaviest)",
         f"- Lateral armor: {lateral_cm:6.1f} cm",
         f"- Tail armor:    {tail_cm:6.1f} cm  (radiators mounted here)",
         f"- Your nose is {ratio:.1f}x thicker than your thinnest facing: taking a hit "
@@ -825,7 +837,8 @@ def format_torpedo_threats(threats: List[Dict[str, Any]]) -> str:
         if t.get("est_impact_gj") is not None:
             line += f", est ~{t['est_impact_gj']:.0f} GJ"
         if t.get("blinded"):
-            line += " | ballistic wreck: KEEP MANEUVERING and it misses"
+            line = line.replace(eta_str, _blinded_eta_text(t))
+            line += " | ballistic wreck: it flies straight - moving off its line makes it miss"
         else:
             nez = t.get("nez_inside")
             if nez is True:
@@ -997,9 +1010,13 @@ HIT PROBABILITY PER ROUND vs a destroyer (spinal 9.9 km/s / turret 6.0 km/s):
 - evade dodge:     82/57%  34/7%   9/1%    2/0%    0/0%    0/0%
 - dodge, mid-jink: 74/36%  20/3%   4/1%    1/0%    0/0%    0/0%
 - EVADE maneuver:  49/41%  29/10%  11/2%   4/0%    1/0%    0/0%
+- burn + dodge:    82/75%  57/32%  31/8%   13/2%   2/0%    1/0%
 "Evade dodge" is a dodger not yet reacting when you fire: your round makes it jink,
 aimed at that very round. "Mid-jink" is one caught already burning off another round
-- what your other ships' fire does to it. Agile hulls escape sooner (a dodging
+- what your other ships' fire does to it. Those two coast (PADLOCK + evade dodge). A
+ship burning nose-on at you with evade ("burn + dodge") keeps its burn and swings it
+round a cone 20° off its line the whole time it is under fire: easier to hit than a
+coasting dodger, harder than one holding course. Agile hulls escape sooner (a dodging
 frigate: spinal 19% at 100km, 4% at 150km), heavy ones later (a dodging battleship:
 11% at 200km, 2% at 300km). The P(hit) on your ENEMIES lines is this model for the live geometry - fire
 on it, and close range before you shoot at a dodger. Under a whole fleet's fire
@@ -1025,7 +1042,7 @@ CRITICAL - ARMOR BREACH:
 - Penetrating hits are CATASTROPHIC: 4-5 hits through breached armor = ship destroyed
 - Each penetrating hit destroys 1-2 modules and damages deeper systems
 - Bridge or Reactor destroyed = immediate ship kill
-- PROTECT YOUR WEAKEST ARMOR FACING - keep it pointed away from enemy!
+- A breached facing that faces the enemy lets every further hit reach the internals
 """
 
 # Backwards-compatible combined block (gun physics + breach).
@@ -1041,17 +1058,20 @@ OPTION A - HEAD-ON CHARGE:
   Pros: Simple, aggressive, intimidating
   Cons: Short engagement window (few salvos before the merge), wastes fuel
 
-OPTION B - CONTROLLED PASSES (recommended for accuracy):
+OPTION B - CONTROLLED PASSES:
   1. Approach (INTERCEPT from far out, or set_heading for your approach angle)
   2. Before you are committed: cancel closure (or pass wide) so the pass is slow or wide
   3. Coast and shoot: PADLOCK - spinal and nose armor on him during the pass
   Pros: Better hit probability, more sustained fire, fuel efficient
-  Cons: Takes longer to close, requires planning
+  Cons: Takes longer to close, requires planning; while you coast the closest approach
+  does not change (RANGE CONTROL's coast line says where it is)
 
 OPTION C - EVADE AND SHOOT:
   EVADE constantly - random thrust makes you unpredictable (holds your course)
   Pros: Very hard to hit, fires continuously
-  Cons: Burns fuel faster, harder to line up spinal shots, does not control range
+  Cons: Burns fuel faster, harder to line up spinal shots, does not control range; under
+  fire the same evasion holds the drive (BRACE: off, TANK: half). As the evade field on
+  a burn order it keeps your burn instead and swings it within 20° of your line
 
 OPTION D - HOLD RANGE / KITE:
   cancel closure at your chosen range, then alternate coast-and-shoot with short
@@ -1065,8 +1085,10 @@ KEY PHYSICS TO REMEMBER:
   lowers it, an opening range lowers it most
 - The price of closure is time: a fast pass is a short window and ends in a merge
   unless you cancel closure in time (RANGE CONTROL)
-- Spinal weapons ONLY fire if nose within 30° of target - PADLOCK helps with this
-- Turrets fire at 180° arc - don't need nose-on alignment"""
+- Spinal weapons ONLY fire if nose within 30° of target - PADLOCK holds the nose on him
+- Turrets fire where their own hull leaves them clear, at any maneuver; the ARCS lines
+  count the mounts that bear now, RANGE CONTROL's "N of M batteries can bear" those
+  that bear at some roll"""
 
 # Torpedo-only hulls (corvette, torpedo cruiser): no gun content at all.
 TORPEDO_TACTICS_BLOCK = """=== TORPEDO BOAT TACTICS (you mount no guns) ===
@@ -1080,6 +1102,9 @@ TORPEDO_TACTICS_BLOCK = """=== TORPEDO BOAT TACTICS (you mount no guns) ===
   gains a torpedo boat nothing.
 - Salvo, don't trickle: launch the "salvo >= N together" his point-defense cover needs
   in ONE checkpoint, timed with the fleet's launches.
+- launch_torpedo profile: """ + PROFILE_FACT + """ Your ENEMIES torpedo line
+  compares both profiles for the shot at hand (PROFILES ...).
+- """ + LINK_FACT + """
 - Enemy torpedo hulls that have you targeted can land a round before your next
   decision: THREATS TO ME says when. EVADE early."""
 
@@ -1093,7 +1118,7 @@ tactical picture open every turn.
 {simulation_disclaimer}
 
 {ship_capabilities}
-{class_reference}
+{arcs_note}{class_reference}
 {projectile_reference}
 {armor_breach_reference}
 === CONTROLS ===
@@ -1101,11 +1126,26 @@ tactical picture open every turn.
 MANEUVERS:
 - INTERCEPT: burn straight at the target. Only for the first approach from far out or to
   finish a cripple - it builds closure you cannot take back (see RANGE CONTROL below).
-- EVADE: Threat-aware defense, BEST during active combat. Versus gun rounds it jinks
-  (hard to hit). Versus guided torpedoes it automatically RUNS (burns away from the
-  round to cut closure and buy your PD dwell time) and in the final seconds
-  automatically PRESENTS your thickest armor to the impact. Only EVADE does this -
-  any other maneuver takes torpedoes, including blinded ones, without reacting.
+- EVADE: threat-aware defense. Versus gun rounds it jinks (hard to hit). Versus guided
+  torpedoes it automatically RUNS (burns away from the round to cut closure and buy your
+  PD dwell time) and in the final seconds automatically PRESENTS your thickest armor to
+  the impact (the evade field on a burning order: only inside its swing cone, below).
+  Only EVADE (or the evade field on another maneuver) does this - without it
+  a maneuver takes torpedoes, including blinded ones, without reacting. On an order that
+  burns (a heading, INTERCEPT, the burns of HOLD_RANGE / standoff) the evade field keeps
+  your throttle and swings the burn within 20° of your line - ~94% of the push stays on
+  it: while you are under fire or within 400 km of an enemy gun it keeps the burn moving
+  round that cone, a new random point every few seconds, so rounds led onto you miss -
+  from any bearing, ahead and astern too; a round it cannot dodge gets the best armor it
+  can reach inside the cone (a round from abeam or astern still strikes the flank or the
+  tail). With your nose more than 90° off your line (turning onto a new heading, or back
+  after a RUN) the drive idles while the ship turns, as without evade. RUN (evade full, a
+  guided torpedo) leaves the line to burn away from it, never below your throttle. On an
+  order that does
+  not burn (PADLOCK, MAINTAIN, throttle 0) and as the EVADE maneuver, evasion owns the
+  drive while it reacts: BRACE turns it off (a round inbound, no time to jink), TANK burns
+  at half throttle while turning armor onto the round. ENGINE FEEDBACK's helm line says
+  what was flown. As a maneuver EVADE replaces your heading; the evade field rides on it.
   With no threat it weaves around your CURRENT course: it never chases, but it
   never brakes either - EVADE does not stop a merge.
 - BRAKE: burn against your own (world-frame) velocity - not against the enemy's
@@ -1117,9 +1157,10 @@ MANEUVERS:
   throttle 0 = ATTITUDE ONLY: the nose turns on RCS and you coast with zero change of
   velocity (e.g. nose on a fixed bearing) - RCS turns are slow, see your turn times.
   NOTE ON FRAMES: set_heading takes a WORLD-frame direction vector (x, y, z world axes),
-  NOT a ship-relative one and NOT a position. Every ship in your turn carries
-  "dir_to (x,y,z)": the world unit vector from you to it - paste it as the direction.
-  A POSITION (e.g. an admiral's "(260,0,0) km") is not a direction: subtract YOUR world
+  NOT a ship-relative one and NOT a position. Ships in your turn carry "dir_to (x,y,z)"
+  (a compact turn keeps it on the full ENEMIES lines only): the world unit vector from
+  you to it - paste it as the direction, or name the ship in toward_ship.
+  A POSITION (e.g. {position_example} "(260,0,0) km") is not a direction: subtract YOUR world
   position (MY SHIP) first - your ORDERS block resolves such points for you.
   Ahead/starboard/above words are relative to YOUR NOSE (MY SHIP gives the nose vector).
 
@@ -1127,17 +1168,19 @@ MANEUVERS:
 - There are no brakes, only burns. Stopping a closure takes v^2/(2a) of room plus the
   flip: at 4.6 km/s closure a 3g corvette needs 156 s / 359 km (+18 s to flip), a 1g
   battleship 469 s / 1078 km (+55 s). By the time the enemy "looks close" the merge is
-  locked in: a pass at a few km, seconds of fire, then flying apart.
-- INTERCEPT only for the first approach or finishing a cripple. For EVERYTHING that
-  involves range - approach angle, holding range, kiting, avoiding a merge, flanking -
-  use set_heading with a vector from RANGE CONTROL in your tactical data:
+  locked in: neither ship can stop before you pass each other. The pass cuts both ways:
+  falling range raises his hit odds (GUNS ON YOU) as it raises yours.
+- Plain INTERCEPT closes and passes through (it never brakes). Range - approach angle,
+  holding range, kiting, avoiding or taking a merge, flanking - is set with set_heading
+  and a vector from RANGE CONTROL in your tactical data:
     cancel closure    burn against the relative velocity - range holds where it stops
     open range        burn straight away from the enemy group
     pass wide         burn across the line of sight - a merge becomes a wide pass
     flank left/right  move across his line of fire
   Each line gives the burn time, the effect, and which way your NOSE points meanwhile.
   Renew the same heading each checkpoint until the stated burn time is used up.
-- "!! MERGE IN ..." means act THIS checkpoint; if braking is too late, pass wide.
+- "!! MERGE IN ..." = the closest approach if both ships coast, and how long braking can
+  still wait; once braking is too late only a lateral burn (pass wide, flank) moves the pass.
 {rhythm_note}
 
 {tactics_block}
@@ -1159,7 +1202,7 @@ MANEUVERS:
   out-turns 12g guidance. But if you are already OPENING range when it launches,
   keep running - it burns out its delta-v and misses (measured: reliable escape).
 - Timing: launch-to-impact is typically 15-60s, so you get AT MOST ONE decision after
-  detection. If an enemy torpedo hull has you targeted, set EVADE preemptively.
+  detection. EVADE (or evade full) already set when a round launches RUNs at once.
 - Formation defense is real: allied PD turrets in range of the threat's path stack
   with yours (that is what escorts are for). Massed turrets blind rounds EARLY,
   which is what gives your evasion time to make the wreck miss.
@@ -1167,9 +1210,7 @@ MANEUVERS:
 DELTA-V NOTE: You have ~500 km/s delta-V. Full throttle for 20 minutes uses <50 km/s.
 Fuel is ABUNDANT - "conserving delta-V" is almost never correct.
 
-THROTTLE NOTE: All maneuvers accept throttle 0.0-1.0. In fleet battles, your Admiral may
-order specific throttle (e.g., "INTERCEPT at 50%") to maintain formation with slower ships.
-Follow throttle orders if given - formation cohesion matters for mutual point defense.
+THROTTLE NOTE: All maneuvers accept throttle 0.0-1.0.{throttle_admiral}
 {gun_notes}
 TARGET SELECTION:
 - set_primary_target: {primary_target_note}
@@ -1183,8 +1224,7 @@ TARGET SELECTION:
 {comms_block}
 OTHER:
 - set_radiators: extend (cooling) or retract (protection)
-- surrender / propose_draw: End battle (draw decided by points)
-- log_note: CAPTAIN'S LOG - a short note to your future self, shown back to you
+{end_battle}- log_note: CAPTAIN'S LOG - a short note to your future self, shown back to you
   every checkpoint. It is your only memory of your own intent between decisions:
   each checkpoint you see fresh data but not what you were trying to do. Log your
   plan and what would change it (e.g. "Pass 2: brake at 150km, torpedoes when his
@@ -1200,7 +1240,7 @@ your ship actually did with your last orders, and any call that was rejected).
   when damaged.{gun_legend}
 - FRIENDLIES: grouped by maneuver and target; hull 100% and PD intact unless shown.
 - RANGE CONTROL: every heading for the most urgent group, the {range_secondary} key ones for
-  the next (armor per face: MY SHIP).
+  the next; each line: effect on range | face and its armor | guns that bear.{compact_note}
 - ENGINE FEEDBACK: weapon policies persist; maneuvers and queued launches expire at the next
   checkpoint.
 
@@ -1210,10 +1250,7 @@ your ship actually did with your last orders, and any call that was rejected).
 - Renew set_maneuver or set_heading each checkpoint to keep maneuvering.
   When a maneuver expires, thrust stops; you coast with your existing momentum.
   MAINTAIN is a deliberate coast - call it when coasting IS the plan.
-  Exception: a HEADING or MANEUVER ORDER from your admiral is already applied to your
-  ship - calling set_maneuver/set_heading REPLACES it (and breaks formation). Only
-  override it for a reason (e.g. EVADE an inbound torpedo).
-{execute_weapon_notes}Describing an action does not execute it. Use the corresponding tool.
+{admiral_exception}{execute_weapon_notes}Describing an action does not execute it. Use the corresponding tool.
 
 TIMING: You make ONE decision now. It is LOCKED for {decision_interval_s:g} seconds until next checkpoint.
 You CANNOT react mid-checkpoint or change orders. No "if X then Y" - decide NOW.
@@ -1232,16 +1269,27 @@ TORPEDO_RHYTHM_NOTE = """- RHYTHM: burn phases and coasting alternate. Burning f
   before or between burns (tubes fire in any attitude), then swing nose armor back toward
   the threat (PADLOCK, or set_heading toward him at throttle 0) before rounds arrive."""
 
-# Gun hulls only (CAPTAIN_DOCTRINE {gun_notes}).
+# Gun hulls only (CAPTAIN_DOCTRINE {gun_notes}); {mode_params}: gun_notes().
 GUN_NOTES = """
 AMMO NOTE: 450+ spinal rounds, 1800+ turret rounds. Max ~80 shots per battle.
 Ammo is effectively UNLIMITED. Shoot freely.
 
 WEAPONS (set independently with set_weapons_order):
-- spinal_mode / turret_mode: FIRE_IMMEDIATE, FIRE_WHEN_OPTIMAL, FIRE_AT_RANGE, HOLD_FIRE
+- {mode_params}: FIRE_IMMEDIATE, FIRE_WHEN_OPTIMAL, FIRE_AT_RANGE, HOLD_FIRE
 - Spinal: High damage, requires nose-on (30° limit)
-- Turret: Lower damage, 180° firing arc (more flexible)
+- Turret: Lower damage; fires where its own hull leaves it clear (ARCS lines)
 """
+
+def gun_notes(ship_type: Optional[str] = None, fleet_data: Optional[Dict[str, Any]] = None) -> str:
+    """GUN_NOTES with the set_weapons_order parameter names THIS hull's tool
+    takes (spinal_mode / coilguns_mode / heavy_coilguns_mode): the doctrine
+    used to name spinal_mode / turret_mode, which no gun hull's tool has."""
+    from .tools import get_weapon_groups_for_ship
+    groups = (get_weapon_groups_for_ship(ship_type, fleet_data)
+              if ship_type and fleet_data and ship_type in fleet_data.get("ships", {}) else {})
+    params = " / ".join(f"{g}_mode" for g in groups) or "spinal_mode / coilguns_mode"
+    return GUN_NOTES.replace("{mode_params}", params)
+
 
 # Marker opening the volatile per-checkpoint turn (build_captain_messages and
 # tests split on it).
@@ -1741,6 +1789,28 @@ def _captain_secondary_options() -> int:
     return CAPTAIN_SECONDARY_OPTIONS
 
 
+def _arcs_note(ship_type: Optional[str]) -> str:
+    """The hull class's static weapon-arc facts (arcs_status.blind_cone_doctrine)."""
+    try:
+        from .arcs_status import blind_cone_doctrine
+    except ImportError:  # pragma: no cover - script-style imports
+        from llm.arcs_status import blind_cone_doctrine
+    try:
+        return blind_cone_doctrine(ship_type)
+    except Exception:  # noqa: BLE001 - doctrine text only
+        return ""
+
+
+def _end_battle_line(names: set) -> str:
+    """The OTHER line for the battle-ending tools this captain is offered
+    (propose_draw was listed to captains under an admiral, who lack it)."""
+    tools = [t for t in ("surrender", "propose_draw") if t in names or not names]
+    if not tools:
+        return ""
+    what = {"surrender": "strike your colours", "propose_draw": "offer a draw (decided by points)"}
+    return "- " + " / ".join(tools) + ": " + "; ".join(what[t] for t in tools) + "\n"
+
+
 def build_captain_doctrine(
     ship_type: Optional[str] = None,
     fleet_data: Optional[Dict[str, Any]] = None,
@@ -1751,6 +1821,7 @@ def build_captain_doctrine(
     tool_names: Optional[Iterable[str]] = None,
     has_admiral: bool = False,
     ship_status: Optional[Dict[str, Any]] = None,
+    sequential_captains: bool = False,
     **_ignored: Any,
 ) -> str:
     """
@@ -1820,6 +1891,13 @@ def build_captain_doctrine(
             " <friend> take my lane.\"",
             "  (<enemy A> / <friend>: real ship names from your ENEMIES / FRIENDLIES.)",
         ]
+    if sequential_captains:
+        # A fact about the turn, not advice (lane cmdcap, sequential captains).
+        comms.append("- Your side's captains decide one after another each checkpoint (ship order, "
+                     "rotated one place per checkpoint), all on the same start-of-checkpoint "
+                     "picture; every order takes effect together. THIS CHECKPOINT, BEFORE YOU "
+                     "lists what the captains before you ordered (signals to you or all, target, "
+                     "launches, maneuver); the captains after you see yours the same way.")
     if "send_message" in names or not names:
         comms.append("- send_message: the OPEN channel - the ENEMY reads it (taunts, surrender "
                      "demands). Not for coordination.")
@@ -1837,10 +1915,11 @@ def build_captain_doctrine(
         simulation_disclaimer=SIMULATION_DISCLAIMER,
         ship_capabilities=ship_capabilities,
         class_reference=class_reference_block(fleet_data),
+        arcs_note=_arcs_note(ship_type),
         projectile_reference=GUN_PHYSICS_REFERENCE if has_guns else "",
         armor_breach_reference=ARMOR_BREACH_REFERENCE,
         tactics_block=GUN_TACTICS_BLOCK if has_guns else TORPEDO_TACTICS_BLOCK,
-        gun_notes=GUN_NOTES if has_guns else "",
+        gun_notes=gun_notes(ship_type, fleet_data) if has_guns else "",
         rhythm_note=GUN_RHYTHM_NOTE if has_guns else TORPEDO_RHYTHM_NOTE,
         damage_measure=" or ".join(
             ([("your expected GJ per shot (P(hit) x round energy)")] if has_guns else [])
@@ -1853,8 +1932,27 @@ def build_captain_doctrine(
              if has_guns else "the enemy INTERCEPT/PADLOCK and your launches follow by default")
             + (" (launch_torpedo can take its own target_id)" if has_torps else "")),
         comms_block="\n".join(comms) + "\n",
+        end_battle=_end_battle_line(names),
+        # Admiral-only text: a captain with no admiral is not told about
+        # admiral orders, formations or report_to_admiral (cmdcap round 2).
+        admiral_exception=(
+            "  Exception: a HEADING or MANEUVER ORDER from your admiral is already applied to your\n"
+            "  ship - calling set_maneuver/set_heading REPLACES it (and breaks formation; set_maneuver\n"
+            "  EVADE replaces a heading too - its evade already rides on it). Overriding is your call;\n"
+            "  the Admiral reads \"NOT as ordered\" - say why (reason= on the call, or report_to_admiral).\n"
+            if has_admiral else ""),
+        throttle_admiral=(
+            " In fleet battles, your Admiral may\norder specific throttle (e.g., \"INTERCEPT at 50%\") "
+            "to maintain formation with slower ships.\nFollow throttle orders if given - formation "
+            "cohesion matters for mutual point defense." if has_admiral else ""),
+        position_example="an admiral's" if has_admiral else "a fleet-mate's",
         full_others=FULL_SOLUTION_CONTACTS - 1,
         range_secondary=_captain_secondary_options(),
+        compact_note=("\n- COMPACT TURN: while your Admiral's maneuver flies and there is no merge warning,"
+                      "\n  order conflict, deviation or torpedo inbound, RANGE CONTROL lists vectors only,"
+                      "\n  ENEMIES give full solutions for your primary and one other, FRIENDLIES no"
+                      "\n  bearings. Any of those triggers brings the full blocks back."
+                      if has_admiral else ""),
         compact_solution=" / ".join(
             (["best P(hit) of a gun that bears"] if has_guns else [])
             + (["torpedo verdict"] if has_torps else []))
@@ -1928,8 +2026,9 @@ def _maneuver_text(m: Optional[Dict[str, Any]]) -> str:
     return text
 
 
-def _heat_lines(ship_status: Dict[str, Any]) -> List[str]:
-    """Heat + radiators; the time-to-100% outlook only when it is close."""
+def _heat_lines(ship_status: Dict[str, Any], has_guns: bool = True) -> List[str]:
+    """Heat + radiators; the time-to-100% outlook only when it is close. A
+    gunless hull is not shown the guns-hold rung of the ladder."""
     thermal = ship_status.get("thermal")
     heat_pct = ship_status.get("heat_percent", 0.0)
     if not thermal:
@@ -1943,7 +2042,9 @@ def _heat_lines(ship_status: Dict[str, Any]) -> List[str]:
     extended = thermal.get("radiators_extended")
     t100 = thermal.get("time_to_100_extended_s" if extended else "time_to_100_retracted_s")
     if thermal["heat_percent"] >= 50 or (t100 is not None and t100 < HEAT_OUTLOOK_SHOW_S):
-        line += (f" [guns hold {_thermal.HEAT_GUN_HOLD_FRACTION * 100:.0f}%, radiators forced "
+        guns_rung = (f"guns hold {_thermal.HEAT_GUN_HOLD_FRACTION * 100:.0f}%, "
+                     if has_guns else "")
+        line += (f" [{guns_rung}radiators forced "
                  f"{_thermal.HEAT_AUTO_EXTEND_FRACTION * 100:.0f}%, MELTDOWN "
                  f"{_thermal.REACTOR_MELTDOWN_HEAT_FRACTION * 100:.0f}%]")
     if t100 is not None and t100 < HEAT_OUTLOOK_SHOW_S:
@@ -2025,9 +2126,21 @@ def format_my_ship(
     sim_time = tactical_status.get("sim_time", 0.0)
     turn = own.get("turn_90_s") or get_ship_turn_time_90deg(ship_type or "destroyer")
     head = f"MY SHIP: {ship_ref(ship_name, own.get('ship_id'))} - {class_label(ship_type)}"
-    if own.get("accel_g"):
-        head += f", {own['accel_g']:.1f}g"
-    head += f", 90° turn ~{turn:.0f} s"
+    accel = own.get("accel_g")
+    engine = own.get("engine_fraction")
+    if isinstance(accel, (int, float)) and (accel <= 0.005 or (
+            isinstance(engine, (int, float)) and engine <= 0.0)):
+        # A 0 g drive used to vanish from the line (`if accel_g:`): captains
+        # re-issued burns to a dead drive for checkpoints on end.
+        head += ", DRIVE DEAD (0 g): cannot burn; RCS turns only"
+        if isinstance(own.get("turn_90_rcs_s"), (int, float)):
+            head += f" (90° ~{own['turn_90_rcs_s']:.0f} s)"
+    else:
+        if accel:
+            head += f", {accel:.1f}g"
+            if isinstance(engine, (int, float)) and engine < 0.995:
+                head += f" (drive damaged: {engine * 100:.0f}% thrust)"
+        head += f", 90° turn ~{turn:.0f} s"
     lines = [head]
     state = []
     if own.get("position_km"):
@@ -2050,7 +2163,7 @@ def format_my_ship(
         f"  hull {ship_status.get('hull_integrity', 100):.0f}% | armor nose "
         f"{ship_status.get('nose_armor', 0.0):.0f} / lateral {ship_status.get('lateral_armor', 0.0):.0f}"
         f" / tail {ship_status.get('tail_armor', 0.0):.0f} cm | delta-v {dv:.0f}/{dv_total:.0f} km/s")
-    lines.extend(_heat_lines(ship_status))
+    lines.extend(_heat_lines(ship_status, ship_has_guns(ship_type, fleet_data)))
     lines.extend("  " + w for w in (ship_status.get("plume_wash") or []))
     weapons = _weapons_line(ship_status, ship_has_guns(ship_type, fleet_data),
                             (tactical_status.get("current_config") or {}).get("weapon_orders"))
@@ -2100,21 +2213,39 @@ def format_my_ship(
     return "\n".join(lines)
 
 
-def _torpedo_threat_line(t: Dict[str, Any], allied_note: bool = True) -> str:
+def _blinded_eta_text(t: Dict[str, Any]) -> str:
+    """A blinded (ballistic) round: IMPACT only when its straight line passes
+    inside the hull's strike radius; otherwise when and how far it passes
+    ("IMPACT IN 17s" was printed for wrecks passing kilometres away)."""
+    eta = t.get("eta_seconds", 999)
+    miss, radius = t.get("miss_km"), t.get("hit_radius_km")
+    if eta >= 900:
+        return "not closing"
+    if miss is None or (radius is not None and miss <= radius):
+        return f"IMPACT IN {eta:.0f}s if you hold course"
+    return f"passes {miss:.1f} km from you in {eta:.0f}s if you hold course"
+
+
+def _torpedo_threat_line(t: Dict[str, Any], allied_note: bool = True, verdict: bool = True,
+                         drive_dead: bool = False) -> str:
     eta = t.get("eta_seconds", 999)
     eta_str = f"IMPACT IN {eta:.0f}s" if eta < 900 else "not closing"
     head = "BLINDED torpedo" if t.get("blinded") else "torpedo"
     source = t.get("source", "unknown")
     if t.get("blinded") and t.get("own_side"):
         source = f"{source} - YOUR OWN SIDE'S round"
+    if t.get("blinded"):
+        eta_str = _blinded_eta_text(t)
     line = (f"  - {head} from {source}: {t.get('distance_km', 0):.0f} km, "
             f"closing {t.get('closing_kps', 0):.1f} km/s, {eta_str}")
     if t.get("est_impact_gj") is not None:
         line += f", est ~{t['est_impact_gj']:.0f} GJ"
     if t.get("blinded"):
-        line += " | ballistic wreck: KEEP MANEUVERING and it misses"
-        if t.get("miss_km") is not None:
-            line += f" (passes {t['miss_km']:.1f} km from you if you hold course)"
+        # A fact about the round and the ship, not an instruction ("KEEP
+        # MANEUVERING and it misses" was printed to dead-drive ships too).
+        line += (" | ballistic wreck: your drive is DEAD - nothing moves you off its line"
+                 if drive_dead else " | ballistic wreck: it flies straight - moving off its line "
+                                    "makes it miss")
         return line
     nez = t.get("nez_inside")
     if nez is True:
@@ -2127,30 +2258,60 @@ def _torpedo_threat_line(t: Dict[str, Any], allied_note: bool = True) -> str:
         allied = t.get("allied_pd_turrets") if allied_note else None
         if allied:
             total = own + allied
-            verdict = ("your PD umbrella can blind it - EVADE makes the wreck miss"
-                       if needed <= total else "your PD umbrella CANNOT stop it")
             line += (f" | PD kill needs ~{min(needed, 99)} turret(s), you have {own} + allies "
-                     f"{allied} bearing: {verdict}")
+                     f"{allied} bearing")
+            # Under saturation the SATURATION line is the verdict: every turret
+            # cannot dwell on every round ("can blind it" on each of 15 rounds,
+            # then "PD blinds at most 4" contradicted itself).
+            if verdict:
+                line += (": your PD umbrella can blind it" if needed <= total
+                         else ": your PD umbrella CANNOT stop it")
         else:
-            verdict = "your PD can blind it" if needed <= own else "your PD alone CANNOT stop it"
-            line += f" | PD kill needs ~{min(needed, 99)} turret(s), you have {own}: {verdict}"
+            line += f" | PD kill needs ~{min(needed, 99)} turret(s), you have {own}"
+            if verdict:
+                line += ": your PD can blind it" if needed <= own else ": your PD alone CANNOT stop it"
     return line
+
+
+def _pd_saturation(torps: List[Dict[str, Any]]) -> Optional[Tuple[int, int, int, int]]:
+    """(live rounds, turrets bearing, turrets per round, rounds PD can blind)
+    when several live rounds are inbound, else None."""
+    live = [t for t in torps if not t.get("blinded") and t.get("pd_turrets_needed")]
+    if len(live) < 2:
+        return None
+    per_round = max(1, min(int(t["pd_turrets_needed"]) for t in live))
+    turrets = max((t.get("own_pd_turrets") or 0) + (t.get("allied_pd_turrets") or 0) for t in live)
+    return len(live), turrets, per_round, min(len(live), turrets // per_round)
 
 
 def _pd_saturation_line(torps: List[Dict[str, Any]]) -> str:
     """
-    Several live rounds at once: the per-round PD verdicts above each assume
-    every turret dwells on THAT round. Say how many the umbrella can blind.
+    Several live rounds at once: the per-round PD numbers each assume every
+    turret dwells on THAT round. Say how many the umbrella can blind - the
+    one PD verdict when it is saturated.
     """
-    live = [t for t in torps if not t.get("blinded") and t.get("pd_turrets_needed")]
-    if len(live) < 2:
+    sat = _pd_saturation(torps)
+    if sat is None:
         return ""
-    per_round = max(1, min(int(t["pd_turrets_needed"]) for t in live))
-    turrets = max((t.get("own_pd_turrets") or 0) + (t.get("allied_pd_turrets") or 0) for t in live)
-    can_blind = min(len(live), turrets // per_round)
-    return (f"    SATURATION: {len(live)} live rounds vs {turrets} turrets bearing (~{per_round} per "
-            f"round): PD blinds at most {can_blind}, {len(live) - can_blind} arrive with a live "
-            "seeker - EVADE now, nose armor toward them.")
+    live, turrets, per_round, can_blind = sat
+    if can_blind >= live:
+        return (f"    PD: {live} live rounds vs {turrets} turrets bearing (~{per_round} per round): "
+                f"enough turrets to blind every one.")
+    return (f"    SATURATION: {live} live rounds vs {turrets} turrets bearing (~{per_round} per "
+            f"round): PD blinds at most {can_blind}, {live - can_blind} arrive with a live seeker.")
+
+
+def _armor_vs_torpedo_line(armor: Optional[Dict[str, Any]]) -> str:
+    """What the hull's facings absorb of rounds like the first one inbound
+    (captain._torpedo_armor: the engine's own ablation, trialled on copies)."""
+    if not armor or not armor.get("faces"):
+        return ""
+    faces = ", ".join(
+        f"{face} {cm:.0f} cm " + ("ALREADY BREACHED" if n == 0 else
+                                  f"breaches after ~{n}" if n is not None else "holds 20+")
+        for face, cm, n in armor["faces"])
+    return (f"    ARMOR vs one ~{armor['gj']:.0f} GJ round (engine ablation): {faces}; past a "
+            "breach a round reaches the internals.")
 
 
 def format_threats_to_me(
@@ -2174,12 +2335,19 @@ def format_threats_to_me(
     lines = [f"THREATS TO ME ({format_threat_breakdown(evasion, 'on a collision course') if evasion else 'status unavailable'}):"]
     if torps:
         lines.append(f"  INBOUND ORDNANCE: {len(torps)} torpedo(es):")
-        lines.extend("  " + _torpedo_threat_line(t) for t in torps[:6])
+        sat = _pd_saturation(torps)
+        own = tactical_status.get("own") or {}
+        dead = isinstance(own.get("engine_fraction"), (int, float)) and own["engine_fraction"] <= 0.0
+        lines.extend("  " + _torpedo_threat_line(t, verdict=sat is None, drive_dead=dead)
+                     for t in torps[:6])
         if len(torps) > 6:
             lines.append(f"    ... {len(torps) - 6} more")
         saturation = _pd_saturation_line(torps)
         if saturation:
             lines.append(saturation)
+        armor = _armor_vs_torpedo_line(tactical_status.get("torpedo_armor"))
+        if armor:
+            lines.append(armor)
     if rounds:
         first = rounds[0]
         lines.append(
@@ -2198,11 +2366,9 @@ def format_threats_to_me(
             line += (f" - a launch now lands in ~{soon:.0f}"
                      f"{'-' + format(max(etas), '.0f') if max(etas) - soon >= 5 else ''} s")
             if soon <= decision_interval_s:
-                line += (", BEFORE you decide again. Opening range before they launch is the only "
-                         "escape; EVADE (auto-RUN) now.")
+                line += ", BEFORE you decide again"
             elif soon <= decision_interval_s * 2:
-                line += (": after a launch you get at most ONE more decision. Opening range before "
-                         "they launch is the only escape; EVADE (auto-RUN) early.")
+                line += ": after a launch you get at most ONE more decision"
         lines.append(line)
     if guns:
         lines.append("  GUNS ON YOU: " + "; ".join(
@@ -2243,6 +2409,8 @@ def _group_forecasts(forecasts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 # compact line for every other contact. An 8v8 turn used to print a two-line
 # solution block for all 8 enemies (pass-4 follow-up: captain prompt size).
 FULL_SOLUTION_CONTACTS = 3
+# ...in a compact turn (captain._compact_turn): the primary + the best other.
+COMPACT_SOLUTION_CONTACTS = 2
 _TORPEDO_VERDICT_RANK = {"REACHABLE": 0, "ESCAPABLE": 1, "OVERKILL": 2, "TOO CLOSE": 3,
                          "UNREACHABLE": 4}
 
@@ -2259,11 +2427,12 @@ def _expected_gj(e: Dict[str, Any]) -> float:
 
 
 def _full_solution_indices(enemies: List[Dict[str, Any]], has_guns: bool,
-                           has_torpedoes: bool) -> set:
+                           has_torpedoes: bool, limit: int = 0) -> set:
     """Which contacts get the full fire solution: the primary + the best others.
     With no primary target the nearest enemy stands in: it is the one the guns
     and INTERCEPT default to."""
-    if len(enemies) <= FULL_SOLUTION_CONTACTS:
+    limit = limit or FULL_SOLUTION_CONTACTS
+    if len(enemies) <= limit:
         return set(range(len(enemies)))
     chosen = [i for i, e in enumerate(enemies) if e.get("is_primary_target")][:1]
     if not chosen:
@@ -2278,7 +2447,7 @@ def _full_solution_indices(enemies: List[Dict[str, Any]], has_guns: bool,
         return (torp, -_expected_gj(e) if has_guns else 0.0, i)
 
     for i in sorted((i for i in range(len(enemies)) if i not in chosen), key=rank):
-        if len(chosen) >= FULL_SOLUTION_CONTACTS:
+        if len(chosen) >= limit:
             break
         chosen.append(i)
     return set(chosen)
@@ -2290,6 +2459,7 @@ def format_enemy_contacts(
     has_guns: bool = True,
     has_torpedoes: bool = False,
     decision_interval_s: float = 30.0,
+    compact_turn: bool = False,
 ) -> str:
     """
     ENEMIES: one line of live state per contact, then the fire solution that
@@ -2304,7 +2474,10 @@ def format_enemy_contacts(
     if not enemies:
         return "ENEMIES: none detected"
     weapon_types = (fleet_data or {}).get("weapon_types", {})
-    full = _full_solution_indices(enemies, has_guns, has_torpedoes)
+    # compact (captain._compact_turn): full solutions for the primary target
+    # and the best other only, no dir_to on the one-line contacts.
+    full = _full_solution_indices(enemies, has_guns, has_torpedoes,
+                                  COMPACT_SOLUTION_CONTACTS if compact_turn else FULL_SOLUTION_CONTACTS)
     lines = [f"ENEMIES ({len(enemies)}):"]
     for i, e in enumerate(enemies):
         compact = i not in full
@@ -2316,7 +2489,7 @@ def format_enemy_contacts(
         head = "  [PRIMARY] " if e.get("is_primary_target") else "  "
         line = (f"{head}{ship_ref(e.get('name'), sid)} {cls} | {e.get('distance_km', 0):.0f} km, "
                 f"{_rate(e.get('closing_rate', 0.0))}")
-        if e.get("dir_to"):
+        if e.get("dir_to") and not (compact_turn and i not in full):
             line += f" | dir_to {_vec(e['dir_to'])}"
         angle = e.get("angle_deg")
         if angle is not None:
@@ -2384,12 +2557,14 @@ def _friendly_doing(f: Dict[str, Any]) -> Optional[str]:
     return text
 
 
-def _friendly_line(f: Dict[str, Any], doing: bool = True) -> str:
+def _friendly_line(f: Dict[str, Any], doing: bool = True, compact: bool = False) -> str:
     line = ship_ref(f.get("name"), f.get("ship_id"))
     if f.get("ship_type"):
         line += f" {class_label(f['ship_type'])}"
     line += f" | {f.get('distance_km', 0):.0f} km"
-    if f.get("dir_to"):
+    if compact:
+        pass        # no bearing / relative speed: no tool of a compact turn uses them
+    elif f.get("dir_to"):
         line += f" dir_to {_vec(f['dir_to'])}"
     elif f.get("relative_bearing_km"):
         b = f["relative_bearing_km"]
@@ -2397,7 +2572,7 @@ def _friendly_line(f: Dict[str, Any], doing: bool = True) -> str:
                  f"{abs(b.get('starboard', 0)):.0f} km {'starboard' if b.get('starboard', 0) >= 0 else 'port'})")
     elif f.get("relative_position"):
         line += f" (world frame {_vec(f['relative_position'], '+.0f')} km)"
-    if f.get("rel_speed_kps") is not None:
+    if f.get("rel_speed_kps") is not None and not compact:
         line += f" | rel {f['rel_speed_kps']:.2f} km/s"
     if doing and "maneuver" in f:
         line += f" | {_friendly_doing(f)}"
@@ -2409,6 +2584,18 @@ def _friendly_line(f: Dict[str, Any], doing: bool = True) -> str:
                 line += f" (first lands ~{f['first_impact_s']:.0f} s)"
     if f.get("pd_total") and f.get("pd_operational", f["pd_total"]) < f["pd_total"]:
         line += f" | PD {f['pd_operational']}/{f['pd_total']}"
+    if f.get("torps_inbound"):
+        # Engine-known threat to a fleet-mate (a cover request would arrive a
+        # checkpoint late).
+        n = f["torps_inbound"]
+        line += f" | !! {n} torpedo{'es' if n != 1 else ''} inbound"
+        if f.get("torps_first_s") is not None:
+            line += f", first impact ~{f['torps_first_s']:.0f} s"
+        pd = f.get("torps_pd")
+        if pd:
+            line += (f", its PD umbrella ({pd['turrets']} turrets, ~{pd['per_round']} per round) "
+                     + ("can blind all" if pd["can_blind"] >= n else
+                        f"is SATURATED: blinds at most {pd['can_blind']}"))
     if round(float(f.get("hull_percent", 100) or 0)) < 100:
         line += f" | hull {f['hull_percent']:.0f}%"
     return line
@@ -2417,6 +2604,8 @@ def _friendly_line(f: Dict[str, Any], doing: bool = True) -> str:
 def format_friendlies(
     friendlies: List[Dict[str, Any]],
     umbrella: Optional[Dict[str, Any]] = None,
+    compact: bool = False,
+    ordered_targets: Optional[str] = None,
 ) -> str:
     """
     FRIENDLIES: who is where, doing what, at whom - and the PD over you.
@@ -2434,15 +2623,17 @@ def format_friendlies(
                 f" - yours {umbrella.get('own', 0)} + {len(allies)} "
                 f"{'ship' if len(allies) == 1 else 'ships'}; ")
     lines = [f"FRIENDLIES ({head}hull 100% and PD intact unless shown):"]
+    if ordered_targets:
+        lines.append(ordered_targets)
     groups: Dict[Optional[str], List[Dict[str, Any]]] = {}
     for f in friendlies:
         groups.setdefault(_friendly_doing(f), []).append(f)
     for doing, members in groups.items():
         if doing is not None and len(members) > 1:
             lines.append(f"  {len(members)} ships {doing}:")
-            lines.extend("    " + _friendly_line(f, doing=False) for f in members)
+            lines.extend("    " + _friendly_line(f, doing=False, compact=compact) for f in members)
         else:
-            lines.extend("  " + _friendly_line(f) for f in members)
+            lines.extend("  " + _friendly_line(f, compact=compact) for f in members)
     return "\n".join(lines)
 
 
@@ -2462,7 +2653,13 @@ def _comms_line(item: Dict[str, Any]) -> str:
         text = text[:COMMS_ITEM_MAX_CHARS - 3] + "..."
     t = item.get("sent_t", item.get("delivered_t"))
     when = f"T+{float(t):.0f} " if isinstance(t, (int, float)) else ""
-    return f"  {when}{sender}{to}: \"{text}\""
+    line = f"  {when}{sender}{to}: \"{text}\""
+    # TOT_SYNC eta_s is seconds from the SENDER's checkpoint; read a
+    # checkpoint later it was 30 s stale. Rebased to an absolute time.
+    eta = (item.get("structured") or {}).get("eta_s")
+    if isinstance(eta, (int, float)) and isinstance(t, (int, float)):
+        line += f" [rounds land ~T+{float(t) + float(eta):.0f}]"
+    return line
 
 
 def is_friendly_comms(item: Dict[str, Any], own_faction: Optional[str] = None) -> bool:
@@ -2508,6 +2705,51 @@ def format_comms(
     return "\n\n".join(out)
 
 
+def format_peer_turns(peers: List[Dict[str, Any]],
+                      position: Optional[Tuple[int, int]] = None) -> str:
+    """
+    THIS CHECKPOINT, BEFORE YOU (sequential captains): what the captains of
+    this side who decided before this one ordered at this checkpoint, in the
+    FRIENDLIES / FLEET NET forms (captain.peer_turn_summary). Facts only.
+    """
+    n, of = position or (len(peers) + 1, None)
+    where = f"you decide {n} of {of}" if of else f"you decide {n}"
+    if not peers:
+        return (f"THIS CHECKPOINT: {where}, first; the captains after you see your signals, "
+                "target, launches and maneuver before they decide. All orders apply together.")
+    lines = [f"THIS CHECKPOINT, BEFORE YOU ({where}; their orders apply with yours, not before):"]
+    for p in peers:
+        parts = []
+        m = p.get("maneuver")
+        if m:
+            text = _maneuver_text(m)
+            if m.get("target_name"):
+                text += f" -> {m['target_name']}"
+            if m.get("evade"):
+                text += f", evade {m['evade']}"
+            parts.append(text)
+        else:
+            parts.append(f"no maneuver call (keeps {p['keeps']})" if p.get("keeps")
+                         else "no maneuver call (coasts)")
+        if p.get("target"):
+            parts.append(f"target {p['target']}")
+        for launch in p.get("launches") or []:
+            text = (f"launched {launch['count']} torpedo{'es' if launch['count'] != 1 else ''} "
+                    f"at {launch['target']} ({launch['profile']}")
+            if launch.get("eta_s") is not None:
+                text += f", impact ~{launch['eta_s']:.0f} s after launch"
+            parts.append(text + ")")
+        lines.append(f"  {ship_ref(p.get('name'), p.get('ship_id'))}: " + " | ".join(parts))
+        for sig in p.get("signals") or []:
+            to = str(sig.get("to") or "ALL")
+            item = {"sender_name": p.get("name"), "sender_id": p.get("ship_id"),
+                    "channel": "fleet_net" if to.upper() == "ALL" else "direct",
+                    "text": f"[{sig.get('kind') or 'FREE'}] {sig.get('text') or ''}",
+                    "sent_t": p.get("t"), "structured": {"eta_s": sig.get("eta_s")}}
+            lines.append("  " + _comms_line(item))
+    return "\n".join(lines)
+
+
 def build_captain_turn(
     captain_name: str,
     ship_name: str,
@@ -2533,6 +2775,10 @@ def build_captain_turn(
     execution_feedback: Optional[str] = None,
     tool_errors: Optional[str] = None,
     tool_names: Optional[Iterable[str]] = None,
+    compact: bool = False,
+    peer_turns: Optional[List[Dict[str, Any]]] = None,
+    peer_turn_position: Optional[Tuple[int, int]] = None,
+    battle_clock: Optional[Tuple[int, Dict[str, Any]]] = None,
     **_ignored: Any,
 ) -> str:
     """
@@ -2549,10 +2795,23 @@ def build_captain_turn(
     sections = []
     header = [f"{CAPTAIN_TURN_MARKER}{sim_time:.0f}s) ==="]
     who = strip_captain_title(captain_name)
+    following = f"next decision T+{sim_time + decision_interval_s:.0f}."
+    clock_line = None
+    if battle_clock and battle_clock[1] and battle_clock[0]:
+        # fleet_intel.battle_clock, as the admiral's header states it.
+        cp, clock = battle_clock
+        end = float(clock["end_s"])
+        if cp >= clock["checkpoints"]:
+            following = (f"no later decision: the battle ends at T+{end:.0f}." if end > sim_time + 1e-6
+                         else "the battle ends now: these orders are not flown.")
+        clock_line = (f"BATTLE CLOCK: checkpoint {cp} of {clock['checkpoints']}, "
+                      f"battle ends at T+{end:.0f}s.")
     header.append(
         f"You are Captain {who}, commanding {ship_name}."
         + (f" Decision {decision_number}: your" if decision_number else " Your")
-        + f" orders lock for {decision_interval_s:g} s; next decision T+{sim_time + decision_interval_s:.0f}.")
+        + f" orders lock for {decision_interval_s:g} s; {following}")
+    if clock_line:
+        header.append(clock_line)
     sections.append("\n".join(header))
     if lost_turn:
         sections.append(lost_turn)
@@ -2561,9 +2820,11 @@ def build_captain_turn(
     sections.append(format_threats_to_me(tactical_status, merge_warnings, decision_interval_s))
     sections.append(format_enemy_contacts(tactical_status.get("enemies", []), fleet_data,
                                           has_guns=has_guns, has_torpedoes=has_torps,
-                                          decision_interval_s=decision_interval_s))
+                                          decision_interval_s=decision_interval_s,
+                                          compact_turn=compact))
     sections.append(format_friendlies(tactical_status.get("friendlies", []),
-                                      tactical_status.get("pd_umbrella")))
+                                      tactical_status.get("pd_umbrella"), compact=compact,
+                                      ordered_targets=tactical_status.get("ordered_targets")))
     if range_control:
         sections.append(range_control)
     if orders:
@@ -2571,6 +2832,8 @@ def build_captain_turn(
     comms_text = format_comms(comms, own_faction)
     if comms_text:
         sections.append(comms_text)
+    if peer_turns is not None:
+        sections.append(format_peer_turns(peer_turns, peer_turn_position))
     if received_messages:
         # Legacy free-text form: the sender's side is unknown here, so it is
         # NOT labelled as enemy traffic.
@@ -2666,7 +2929,7 @@ You are {admiral_name}, Admiral of the {faction} fleet in a space combat simulat
 
 As Admiral, you:
 1. Set the overall fleet directive (visible to all captains)
-2. Issue SPECIFIC ORDERS to EACH captain using the issue_order tool
+2. {orders_role}
 3. Can negotiate with enemy Admiral (if one exists)
 4. Control draw proposals for your fleet
 5. Keep a STANDING BATTLE PLAN (set_battle_plan): your private cross-checkpoint
@@ -2695,10 +2958,29 @@ exchanges) before finalizing.
 === TACTICAL COMMAND REFERENCE ===
 
 MANEUVERS (tell captains which to use):
-- INTERCEPT: burn straight at the target - only for the first approach or finishing a cripple
+- INTERCEPT: burn straight at the target; it never brakes, so it ends in a pass at full
+  closure (with standoff_km it closes, flips and holds that range)
 - EVADE: Threat-aware defense - jinks vs guns, RUNS/PRESENTS vs torpedoes. With no threat
   it weaves around the ship's CURRENT course: it never chases and never brakes, so an
-  EVADE order does not stop a merge.
+  EVADE order does not stop a merge. The evade overlay (evade full/dodge on another
+  order) on an order that BURNS keeps the burn and, while rounds are inbound or enemy
+  guns are within 400 km, keeps swinging the thrust round a cone 20° off the ordered line
+  (~94% of the push stays on it) - a dodge against fire from any bearing; it turns armour
+  onto a round it cannot dodge only inside that cone - a round from abeam or astern
+  still strikes the flank or tail; with the nose more than 90° off the line (a new
+  heading, after a RUN) the drive idles while it turns; RUN (full, vs a guided torpedo)
+  leaves the line to burn away. Measured (seeded, 24 runs each): a destroyer burning
+  across the line of fire of 3 gun ships 120-200 km off (nose already on its heading)
+  burned on its order 98% of the time under fire and took 12% of the rounds fired at it,
+  38% without the overlay; a dreadnought (a narrower, slower swing) 47% against 51%. A
+  destroyer burning straight away from 2 gun ships 150 km off took 37% of the rounds
+  (47% without), on the tail and flank; tail hits wreck the drive, and a damaged drive
+  dodges far less (14% of rounds hit while it was intact, 54% after): it was lost in 16
+  of 24 runs with the overlay, 24 of 24 without. A destroyer cancelling 2 km/s of
+  closure with its nose still on the enemy: closing at 1.3 km/s after 60 s with the
+  overlay, 1.7 without it (lost in 14 and 16 of 24 runs). On an order that does not
+  burn (PADLOCK, MAINTAIN, throttle 0) the overlay flies the drive: jinks at full
+  throttle, TANK (half throttle) or BRACE (drive off).
 - BRAKE: burn against the ship's own (world-frame) velocity
 - MAINTAIN: engine OFF - coast at current velocity, no thrust, no rotation
 - PADLOCK: engine off, the nose tracks the target (spinal on him) - coast and shoot
@@ -2708,18 +2990,20 @@ MANEUVERS (tell captains which to use):
   turns onto it, then burns (the drive thrusts along the NOSE). throttle 0 = attitude only
   (nose turns, no burn, e.g. spinals back on the enemy). Applied directly to the ship.
 
-=== RANGE CONTROL (Newtonian - your most important lever) ===
+=== RANGE CONTROL (Newtonian) ===
 - No brakes, only burns. Stopping a closure takes v^2/(2a) of room plus the flip: at
   4.6 km/s closure a 3g corvette needs 156 s / 359 km (+18 s flip), a 1g battleship
-  469 s / 1078 km (+55 s). Fleets that "look close" are already committed to a merge -
-  both sides fly through each other in seconds and nothing meaningful happens after.
-- INTERCEPT only for the first approach or finishing a cripple. Use HEADING for
-  everything involving range: approach angle, holding range, kiting, avoiding merges,
-  flanking. HEADINGS in the fleet situation lists ready-made world-frame headings
-  per enemy group (cancel closure / hold range, open range, re-engage after a pass,
-  pass wide, flank left/right) with the burn time, the effect, and which way the NOSE
-  points meanwhile. Renew each checkpoint until the stated burn time is used up.
-  "!! MERGE IN ..." = act THIS checkpoint.
+  469 s / 1078 km (+55 s). Fleets that "look close" are already committed to a merge:
+  inside that room neither side can stop before the fleets pass through each other.
+  The pass itself is short ({merge_kps:g} km/s of closure crosses the last {merge_km:.0f} km in
+  {merge_s:.0f} s) and it cuts both ways: GUN EXCHANGE below gives the hit rate and damage
+  by range, the same for his guns as for yours.
+- Range is set with HEADING burns (approach angle, holding range, opening range,
+  passing wide, flanking); INTERCEPT closes and passes through. HEADINGS in the fleet
+  situation lists ready-made world-frame headings per enemy group, each with the burn
+  time, the effect on range, the face YOU show him while burning (and what bears), and
+  the face HE shows you afterwards if he holds his attitude. Renew a burn each checkpoint until its stated
+  time is used up. "!! MERGE IN ..." = the closest approach if both fleets coast.
 - FORMATION: one heading for the whole fleet = issue_order(ship_name="all ships",
   heading=..., throttle=...) on the directive call. Each hull's throttle is scaled to the
   SLOWEST hull's acceleration and the burn starts when the slowest has turned, so the
@@ -2728,10 +3012,10 @@ MANEUVERS (tell captains which to use):
   coasts while the fleet burns); evade alone rides on it. Same throttle on different
   hulls is NOT the same acceleration: a 2g destroyer at 70% still out-runs a 0.75g
   dreadnought at 70%.
-- RHYTHM: burn phases and shooting phases alternate. Burning for range points the nose
-  along the heading (cancel closure = TAILS to the enemy: thin tail armor, spinals
-  masked). Then coast and shoot: PADLOCK or HEADING toward the enemy at throttle 0 puts
-  nose armor and spinals back on him.
+- THE DRIVE POINTS THE NOSE: a burn points the nose along its heading (cancel closure =
+  TAIL to the enemy: thin tail armor, spinals masked); PADLOCK or a HEADING toward him at
+  throttle 0 puts nose armor and spinals back on him. A ship cannot burn away from him
+  and face him at the same time - and neither can he.
 {pd_doctrine}{torpedo_doctrine}{gun_doctrine}
 HEAT AND RESOURCES:
 - Radiators EXTENDED = better cooling, but exposed panels can be shot off permanently.
@@ -2770,16 +3054,19 @@ HOW POINT DEFENSE ACTUALLY WORKS:
 - PD BLINDS torpedoes (seeker kill); the dead round then coasts in a straight line and
   hits only a hull whose path that line crosses - one flying straight at it. Measured
   (6-round salvos launched 1200 km out): 17/18 blinded rounds hit a non-evading
-  battleship behind 8 escorts; the same attack on an evading one landed 12/18. So a ship
-  with torpedoes INBOUND (see ORDNANCE) must be
-  ordered to EVADE, or every PD kill is wasted; a dead round on nobody's line needs nothing.
+  battleship behind 8 escorts; the same attack on an evading one landed 12/18. A ship
+  with torpedoes INBOUND (see ORDNANCE) that does not EVADE is still hit by the rounds
+  PD blinded; one that EVADEs dodges dead rounds and turns its nose (thickest armor)
+  onto live ones - with the evade field on a burning order, only as far as its swing cone
+  (20° off the burn line) allows. A dead round on nobody's line needs nothing.
 - DWELL IS SET BY THE TORPEDO'S CLOSING SPEED, NOT BY FLEET-TO-FLEET CLOSURE. Guidance
   holds a fuelled round at >={pd_closure_floor_kps:.0f} km/s however slowly the fleets
   approach, so it crosses the envelope in ~{pd_envelope_crossing_s:.0f}s and eats only
   ~{pd_mj_per_turret:.0f} MJ per turret against a {pd_seeker_kill_mj:.0f} MJ seeker
   kill: {pd_turrets_to_blind} turrets must bear on ONE round to blind it (impacts land
-  at 13-28 km/s). A 1-2 turret hull never blinds a normally launched torpedo alone -
-  massing turrets is the ONLY lever you have.
+  at 13-28 km/s). A 1-2 turret hull never blinds a normally launched torpedo alone:
+  turrets massed on the corridor are what PD can do. Range and posture change how many
+  rounds arrive, how fast and on which face (TORPEDO DEFENCE, MEASURED, below).
 - PD cost is small (see HEAT: no thrust loss). Never restructure the fleet to "save" PD
   capacity.
 
@@ -2796,17 +3083,32 @@ FORMATIONS FOR PD (what actually moves the numbers):
   behind 4 escorts in 1 of 3, behind 8 in none. 4 escorts stopped no round -
   concentrate the fleet or accept the hits.
 - The wall only protects ships that EVADE inside it (see blinding, above).
+
+TORPEDO DEFENCE, MEASURED (seeded runs on this engine: a 4 battlecruiser + 2 destroyer +
+2 frigate gun wall against 5 corvettes + 3 frigates = 40 rounds, the wall's posture fixed
+from the first checkpoint; per battle, 3 seeds each):
+- start 500 km: nose-on PADLOCK - 76% of rounds hit (nearly all on the nose, ~13.8 km/s, ~24 GJ
+  each), 6 of 8 hulls lost; burning straight away - 44% hit (all on the TAIL, ~12.6 km/s,
+  ~19 GJ), 6 of 8 lost; the same burn with evade full - 46% hit, 6 of 8 lost (on the
+  tail and flank: the overlay keeps the burn and turns no nose round); charging
+  (INTERCEPT) - 73% hit (~14.5 km/s, ~26 GJ), 8 of 8 lost. First loss ~100 s in each.
+- start 1000 km: nose-on - 72% hit, 8 of 8 lost (first at ~290 s); burning away - 35%
+  hit, 5 of 8 lost (first at ~310 s); charging - 38% hit, 3 of 8 lost. The wall killed
+  1.3 boats per battle charging, 0.7 nose-on, 0 burning away.
+- Burning away lowers impact speed a little and leaves more rounds blinded or dry; the
+  rounds that still hit land on the thin tail. Closing raises impact energy and shortens
+  the boats' launch window. Neither side of that trade is free.
 """
 
 # Included when YOUR fleet mounts launchers.
 ADMIRAL_TORPEDO_DOCTRINE = """
 WHEN TO COMMIT TRIDENTS:
-- Fire when CLOSING. A closing launch vs a lone ship connects ~100% (12g guidance,
+- A closing launch vs a lone ship connects ~100% (12g guidance,
   <=3g targets): ~23 GJ per round at low closure, ~95 GJ launched head-on at 26 km/s
-  (a spinal gun round is 4.3 GJ). NEVER launch at a receding evading ship - it
-  outruns the round's delta-v and the magazine is wasted. The THREAT TABLE's
-  torpedo verdict does this math for you: launch on GOOD.
-- SIMULTANEOUS time-on-target, always. Rounds arriving together split PD dwell;
+  (a spinal gun round is 4.3 GJ). A receding evading ship outruns the round's
+  delta-v: the round is lost. The THREAT TABLE's torpedo verdict does this math
+  (GOOD / POOR / NO, legend above).
+- TIME-ON-TARGET: rounds arriving together split PD dwell;
   trickled rounds are blinded one at a time, early enough to dodge. Measured vs 4
   turrets: 4 simultaneous -> 24/24 through (99 GJ); same 4 spaced 30s -> 12/24 (42 GJ).
   Use torpedo_salvo on issue_order to synchronize launches ACROSS ships.
@@ -2819,44 +3121,56 @@ WHEN TO COMMIT TRIDENTS:
   in flight (~400 km lands in 30-60s - about one decision cycle).
 - MAGAZINES ARE FINITE: {magazine_line}. Reload {reload_s:.0f}s -> at most
   {launches_per_tube} launches per tube per {decision_interval_s:g}s checkpoint.
+- LAUNCH PROFILES (torpedo_profile on issue_order, profile in salvo_plan): """ + PROFILE_FACT + """
+- ROUNDS IN FLIGHT: """ + LINK_FACT + """
 """
 
 # Included when YOUR fleet mounts guns.
 ADMIRAL_GUN_DOCTRINE = """
-=== FLEET TACTICAL OPTIONS ===
+=== FLEET TACTICAL OPTIONS (examples, none preferred: the measured tables below price each) ===
+A - MASS CHARGE: all ships INTERCEPT one target. A short window at the close-range hit
+    rates of GUN EXCHANGE - for both fleets - ending in a pass; ships scatter after it.
+B - FORMATION PASSES: approach as a formation, cancel closure or pass wide before the
+    merge, PADLOCK through the pass. Overlapping PD and noses toward him; the burns that
+    cancel closure show him your tails, and his noses stay on you.
+C - HAMMER AND ANVIL: one group holds range, another flanks. The crossfire shows one of
+    your groups his flank (FACING); getting there costs time and shows him YOUR flank or
+    tail while it burns (CROSSFIRE); split groups overlap less PD.
+D - FOCUS FIRE: all ships on one target until it dies, then the next. Faster kills; the
+    others fire unanswered meanwhile.
 
-You can command your fleet however you want. Consider these strategies:
-
-OPTION A - MASS CHARGE:
-  All ships INTERCEPT same target -> overwhelming force -> high-speed pass
-  Pros: Simple, focused firepower, intimidating
-  Cons: Brief engagement window, ships scatter after pass
-
-OPTION B - CONTROLLED FORMATION PASSES (recommended):
-  1. Approach as a formation ("all ships" heading, or INTERCEPT from far out)
-  2. Keep ships together for overlapping point defense coverage
-  3. Before you are committed: cancel closure (or pass wide) as a formation
-  4. Coast and shoot: PADLOCK - spinals and nose armor on target during the pass
-  Pros: Better accuracy, mutual PD support, sustained damage
-  Cons: Requires coordination, takes longer
-
-OPTION C - HAMMER AND ANVIL:
-  Heavy ships hold range (cancel-closure HEADING), lighter ships flank (flank HEADING)
-  Pin enemy between groups, crossfire from multiple angles
-  Pros: Divides enemy attention, creates flanking opportunities
-  Cons: Complex coordination, risks defeat in detail if separated
-
-OPTION D - FOCUS FIRE ROTATION:
-  All ships focus one target until destroyed, then switch
-  Pros: Rapid kills, reduces incoming fire
-  Cons: Other enemies fire freely while ignored
+GUN EXCHANGE, MEASURED ({gx_battles} seeded fleet battles on this engine: {gx_budget}-point gun
+fleets, heuristic captains, every hit of both sides counted - the table is the same for his
+guns as for yours):
+  range at firing (km)  {gx_header}
+  hit rate              {gx_hit}
+  hull GJ per hit       {gx_gj}
+  share of hull damage  {gx_share}
+  Closing raises the hit rate of both fleets; hull damage per hit does not rise with it.
+  {gx_inside}% of all hull damage landed inside 150 km, {gx_outside}% beyond.
+FACING (armor nose/side/tail per class in FORCES; hull damage needs a breach):
+  spinal hits to kill a fresh hull on ONE facing (engine damage model, muzzle energy),
+  nose / flank / tail: {fx_kill}.
+  seeded battles (all guns pooled), nose vs flank, hits that penetrated / hull GJ per hit:
+  {fx_battle}; the battleship row changed sign between the two
+  heuristic doctrines and is not quoted.
+  Facing is two-sided: a ship that turns to burn shows its flank or tail to every gun
+  that bears on it; an enemy that turns toward one of your groups shows the others his.
+CROSSFIRE: two groups {cf_deg:.0f} deg apart as seen from an enemy {cf_range_km:.0f} km away = each
+  group moves ~{cf_lateral_km:.0f} km sideways. Burn, flip and brake take {cf_move}
+  plus the turns in FORCES, flank or tail toward him while burning. He re-points his nose
+  {cf_deg:.0f} deg in {cf_turn}:
+  onto one group, not both.
 
 GUNNERY:
 - Closing speed RAISES per-round P(hit) (shorter flight); crossing (lateral) speed lowers
   it and an opening range lowers it most - spinal vs a destroyer holding course at 200 km:
   36% at rest, 47% closing at 3 km/s, 28% crossing, 20% opening. The price of closure is
   a short window and a merge unless the ships cancel closure in time.
-- Spinal weapons need nose-on alignment (<30 deg to target); turrets fire over a 180 deg arc.
+- Spinal weapons need nose-on alignment (<30 deg to target). Turret batteries fire wherever
+  their own hull leaves them open, rolling the ship to unmask (automatic): no battery of a
+  class fires inside its blind cone (FORCES: "No gun battery can fire at a target within
+  N deg of dead astern"); in every other direction a roll brings one to bear.
 - Range is accuracy: a round hits only if its target is still near the aim point when it
   arrives, and a ship flying EVADE or evade dodge/full jinks off rounds it sees coming.
   Per-round P(hit) vs a dodging destroyer: spinal 34% at 100 km, 2% at 200 km, 0% at
@@ -2864,15 +3178,128 @@ GUNNERY:
   Massed fire does not fix that: in a recorded fleet battle where every ship flew evade
   dodge, 0 of 188 rounds at 100-300km landed where this model promised ~7; in seeded
   runs a dodger under fire from 2-8 ships at 200-300 km was hit nearly 3x less than shown
-  (EVADE maneuver 1.8x less). Do not plan gun fights at dodgers beyond ~150 km.
-- Cross-section matters less: broadside is ~1.5x the hit chance of nose-on at 200 km
-  (~1.2x at 100 km). Keep enemies in FRONT of your ships; if one flanks, reorient the
-  affected ships (PADLOCK toward it).
-- Weapon modes: FIRE_IMMEDIATE (close range), FIRE_WHEN_OPTIMAL (recommended),
-  FIRE_AT_RANGE (harassing fire), HOLD_FIRE (heat management).
-- Target priority: CLOSING targets first (committed); a SEPARATING ship (5+ km/s) is
-  wasted fire. Capital ships turn slowly (easier hits); escorts die quickly.
+  (EVADE maneuver 1.8x less). Beyond ~150 km a dodger is rarely hit.
+- Cross-section: broadside is ~1.5x the hit chance of nose-on at 200 km (~1.2x at
+  100 km) - and broadside is the thin armor (FACING).
+- Weapon modes: FIRE_IMMEDIATE (fires every ready mount), FIRE_WHEN_OPTIMAL (fires when
+  P(hit) clears the gate), FIRE_AT_RANGE (harassing fire), HOLD_FIRE (heat management).
+- A SEPARATING ship (5+ km/s) is hit least (opening speed lowers P(hit) most); capital
+  ships turn slowly; escorts die in fewer hits (FACING).
 """
+
+# Measured facts behind GUN EXCHANGE / FACING (seeded heuristic fleet battles,
+# scripts/admiral_doctrine_facts.py guns; summary in
+# tests/fixtures/admiral_doctrine_facts.json, which
+# tests/test_doctrine_accuracy.py::TestMeasuredExchangeDoctrine binds these to).
+# Band: (hit rate %, hull GJ per hit, share of all hull damage %).
+GUN_EXCHANGE_BATTLES = 160
+GUN_EXCHANGE_BUDGET = 150
+GUN_EXCHANGE_BANDS = (
+    ("0-50", 69, 0.22, 16),
+    ("50-100", 61, 0.25, 23),
+    ("100-150", 50, 0.31, 20),
+    ("150-200", 43, 0.44, 20),
+    ("200-300", 36, 0.29, 15),
+    ("300+", 25, 0.29, 7),
+)
+GUN_EXCHANGE_INSIDE_150_PCT = 58
+
+
+def measured_hit_rate(range_km: float) -> Tuple[str, int]:
+    """(band, hit rate %) of GUN_EXCHANGE_BANDS for a range at firing: what
+    a quoted gun reach means in hits, so "in reach" is not read as
+    "effective" (both Sonnet admirals sat at 500 km for 600 s "in gun
+    range at 900 km", where the measured rate is ~25-36%)."""
+    for band, hit, _gj, _share in GUN_EXCHANGE_BANDS:
+        lo, _, hi = band.partition("-")
+        hi_km = float(hi) if hi else float("inf")
+        if range_km < hi_km or not hi:
+            return band, hit
+    band, hit, _gj, _share = GUN_EXCHANGE_BANDS[-1]
+    return band, hit
+
+
+def reach_note() -> str:
+    """One line for every block that quotes a gun's nominal reach (bound to
+    GUN_EXCHANGE_BANDS, i.e. to the seeded fixture)."""
+    near, far = GUN_EXCHANGE_BANDS[0], GUN_EXCHANGE_BANDS[-1]
+    return (f"Gun reach (km) is how far a round flies, not where it hits: measured hit rate "
+            f"{near[1]}% at {near[0]} km, falling to {far[1]}% at {far[0]} km "
+            f"(GUN EXCHANGE, by range at firing).")
+# Spinal Coiler Mk3 hits to kill a fresh hull on one facing
+# (scripts/calculate_shots_to_kill.simulate_shots_to_kill; docs/ships.md).
+FACING_SPINAL_HITS_TO_KILL = (
+    ("battlecruiser", 34, 16, 15),
+    ("destroyer", 31, 14, 14),
+    ("frigate", 16, 8, 7),
+    ("battleship", 47, 21, 19),
+)
+# Seeded battles, all guns pooled: (class, nose pen %, nose hull GJ/hit, flank pen %,
+# flank hull GJ/hit). Only classes whose nose-vs-flank order held under BOTH
+# heuristic doctrines separately: the battleship's swung from nose 1% (legacy)
+# to 37% (tactical) penetration, above its flank's 21%, and is left out.
+FACING_MEASURED = (
+    ("battlecruiser", 15, 0.16, 44, 0.46),
+    ("destroyer", 8, 0.065, 35, 0.42),
+    ("frigate", 25, 0.39, 57, 0.71),
+    ("dreadnought", 26, 0.24, 35, 0.24),
+)
+# The pass example in RANGE CONTROL and the CROSSFIRE example geometry.
+MERGE_EXAMPLE_KPS = 5.0
+MERGE_EXAMPLE_KM = 150.0
+CROSSFIRE_EXAMPLE_DEG = 35.0
+CROSSFIRE_EXAMPLE_RANGE_KM = 250.0
+CROSSFIRE_EXAMPLE_ACCEL_G = (3.0, 1.5, 1.0)
+CROSSFIRE_EXAMPLE_TURN_CLASSES = ("frigate", "cruiser", "battleship", "dreadnought")
+
+
+def _tv_turn_time_s(ship_type: str, angle_deg: float, fleet_data: Dict[str, Any]) -> Optional[float]:
+    """From-rest thrust-vectoring turn through ``angle_deg`` (the engine's
+    _turn_time_to bang-bang profile, from the class's attitude data)."""
+    tv = (((fleet_data or {}).get("ships", {}).get(ship_type, {}).get("attitude_control") or {})
+          .get("thrust_vectoring") or {})
+    alpha, w_max = tv.get("angular_accel_deg_s2"), tv.get("max_angular_velocity_deg_s")
+    if not alpha or not w_max:
+        return None
+    if angle_deg <= w_max * w_max / alpha:
+        return 2.0 * math.sqrt(angle_deg / alpha)
+    return angle_deg / w_max + w_max / alpha
+
+
+def crossfire_doctrine_numbers(fleet_data: Dict[str, Any]) -> Dict[str, Any]:
+    """CROSSFIRE example: each group's sideways move for the example angle,
+    burn-flip-brake time (2 sqrt(d/a)) per acceleration, the flanked hull's
+    turn through the angle (bound to the engine by test_doctrine_accuracy)."""
+    lateral_km = CROSSFIRE_EXAMPLE_RANGE_KM * math.tan(math.radians(CROSSFIRE_EXAMPLE_DEG / 2.0))
+    move = {g: 2.0 * math.sqrt(lateral_km * 1000.0 / (g * 9.80665)) for g in CROSSFIRE_EXAMPLE_ACCEL_G}
+    turns = {}
+    for cls in CROSSFIRE_EXAMPLE_TURN_CLASSES:
+        t = _tv_turn_time_s(cls, CROSSFIRE_EXAMPLE_DEG, fleet_data)
+        if t is not None:
+            turns[cls] = t
+    return {"lateral_km": lateral_km, "move_s": move, "turn_s": turns}
+
+
+def gun_doctrine_values(fleet_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Format values of ADMIRAL_GUN_DOCTRINE's measured tables."""
+    width = 8
+    cf = crossfire_doctrine_numbers(fleet_data)
+    return dict(
+        gx_battles=GUN_EXCHANGE_BATTLES, gx_budget=GUN_EXCHANGE_BUDGET,
+        gx_header="".join(f"{b[0]:<{width}}" for b in GUN_EXCHANGE_BANDS).rstrip(),
+        gx_hit="".join(f"{str(b[1]) + '%':<{width}}" for b in GUN_EXCHANGE_BANDS).rstrip(),
+        gx_gj="".join(f"{b[2]:<{width}.2f}" for b in GUN_EXCHANGE_BANDS).rstrip(),
+        gx_share="".join(f"{str(b[3]) + '%':<{width}}" for b in GUN_EXCHANGE_BANDS).rstrip(),
+        gx_inside=GUN_EXCHANGE_INSIDE_150_PCT, gx_outside=100 - GUN_EXCHANGE_INSIDE_150_PCT,
+        fx_kill=", ".join(f"{c} {n}/{f}/{t}" for c, n, f, t in FACING_SPINAL_HITS_TO_KILL),
+        fx_battle=",\n  ".join(f"{c} {np}%/{ng:.2f} vs {fp}%/{fg:.2f}"
+                               for c, np, ng, fp, fg in FACING_MEASURED),
+        cf_deg=CROSSFIRE_EXAMPLE_DEG, cf_range_km=CROSSFIRE_EXAMPLE_RANGE_KM,
+        cf_lateral_km=cf["lateral_km"],
+        cf_move=", ".join(f"~{s:.0f} s at {g:g}g" for g, s in cf["move_s"].items()),
+        cf_turn=", ".join(f"~{s:.0f} s ({c.replace('_', ' ')})" for c, s in cf["turn_s"].items()),
+    )
+
 
 ADMIRAL_DOCTRINE = (ADMIRAL_DOCTRINE_CORE + ADMIRAL_PD_DOCTRINE
                     + ADMIRAL_TORPEDO_DOCTRINE + ADMIRAL_GUN_DOCTRINE)
@@ -2909,9 +3336,10 @@ ADMIRAL_SHIP_ORDER_DOCTRINE = """You are {admiral_name}, Admiral of the {faction
 
 THIS CALL: ONE order for ONE ship (named in the request) - call issue_order for it with:
 - ship_name: the ship named in the request
-- order_text: specific tactical instructions - maneuver, throttle, target, weapon use
+- order_text: your words to the captain (it reads them; the engine applies only the fields)
 - priority: CRITICAL, HIGH, NORMAL, or LOW
-- suggested_target: (optional) recommended enemy ship (name or id)
+- suggested_target: THE one enemy ship it engages (name or id) - the captain's TARGET line
+  and the compliance check use this field, not the text
 - heading + throttle: (optional) a WORLD-frame {{x,y,z}} from RANGE CONTROL, applied to the
   ship at once (throttle 0 = attitude only: nose onto the heading, no burn)
 - maneuver / evade: (optional) a maneuver REPLACES the fleet order for this ship; give
@@ -2922,13 +3350,14 @@ THIS CALL: ONE order for ONE ship (named in the request) - call issue_order for 
 
 Your order should:
 1. Be consistent with your fleet directive and standing plan
-2. Say the maneuver in the text AND in the structured fields - the fields are what flies
-3. Specify target assignment
-4. Include any special weapon instructions
+2. Say the maneuver and the ONE target in the text AND in the structured fields - the fields
+   are what flies and what compliance is judged on; a second target in the text never flies
+3. Include any special weapon instructions (throttle only for a burn: PADLOCK and MAINTAIN
+   coast)
 
 *** RANGE IS CONTROLLED WITH HEADINGS ***
-- INTERCEPT only for the first approach or finishing a cripple - it builds closure that
-  ends in a merge. To hold range, kite, pass wide or flank: a HEADING from RANGE CONTROL.
+- INTERCEPT builds closure and never brakes: it ends in a pass (standoff_km holds a range).
+  To hold range, open it, pass wide or flank: a HEADING from RANGE CONTROL.
 - PADLOCK = nose on target, engine off: the coast-and-shoot phase between burns.
 - EVASIVE holds the current course (dodges fire, never brakes, never chases).
 - Everything in the request is measured from THIS ship (ranges, closures, torpedo
@@ -2994,7 +3423,7 @@ def _class_line(ship_type: str, fleet_data: Dict[str, Any]) -> str:
             rounds += int(w.get("magazine", ws.get("magazine", 8)))
             continue
         gj = ws.get("kinetic_energy_gj")
-        key = (f"{ws.get('name', wtype)} ({gj:.1f} GJ, {ws.get('range_km', 0):.0f} km)"
+        key = (f"{ws.get('name', wtype)} ({gj:.1f} GJ, reach {ws.get('range_km', 0):.0f} km)"
                if gj else str(ws.get("name", wtype)))
         counts[key] = counts.get(key, 0) + 1
     arms = [f"{n}x {k}" for k, n in counts.items()]
@@ -3005,7 +3434,44 @@ def _class_line(ship_type: str, fleet_data: Dict[str, Any]) -> str:
     return (f"- {ship_type.replace('_', ' ').title()} ({class_abbr(ship_type)}): "
             f"{perf.get('combat_acceleration_g', '?')}g, {turn}, "
             f"{_num(perf.get('delta_v_kps', '?'))} km/s dv | {' + '.join(arms) or 'unarmed'} | {pd} PD | "
-            f"armor nose/side/tail {armor['nose']:.0f}/{armor['lateral']:.0f}/{armor['tail']:.0f} cm")
+            f"armor nose/side/tail {armor['nose']:.0f}/{armor['lateral']:.0f}/{armor['tail']:.0f} cm"
+            + _blind_cone_text(ship_type, bool(counts), bool(pd)))
+
+
+def class_blind_cones(ship_type: str) -> Dict[str, float]:
+    """Blind-cone half-angles of a hull class (arcs_status.blind_cones on
+    data/hull_mounts.json); {} when the class has no mount data."""
+    try:
+        from .. import weapon_arcs
+        from .arcs_status import blind_cones
+    except ImportError:  # pragma: no cover - script-style import path
+        import weapon_arcs  # type: ignore
+        from llm.arcs_status import blind_cones  # type: ignore
+    try:
+        hull = weapon_arcs.load_hull_mounts().get(ship_type)
+    except Exception:  # noqa: BLE001 - advisory text only
+        return {}
+    return blind_cones(hull) if hull is not None else {}
+
+
+def _blind_cone_text(ship_type: str, has_guns: bool, has_pd: bool) -> str:
+    """The class's blind cones, once, in the captain's own wording
+    (arcs_status.blind_cone_doctrine: "No gun battery can fire at a target
+    within 15 deg of dead astern, at any roll - ... in every other direction
+    at least one gun battery bears at some roll"). A per-ship "guns within
+    15 deg of the stern" line was read as "guns are stern-arc only" (audit
+    A7). Classes without a cone add nothing."""
+    try:
+        from .arcs_status import blind_cone_doctrine
+    except ImportError:  # pragma: no cover
+        from llm.arcs_status import blind_cone_doctrine  # type: ignore
+    try:
+        text = blind_cone_doctrine(ship_type)
+    except Exception:  # noqa: BLE001 - advisory text only
+        return ""
+    cones = [line[2:].replace("your spinal", "its spinal") for line in text.splitlines()
+             if line.startswith("- No ")]
+    return "".join(f"\n    {c}" for c in cones)
 
 
 def _num(value: Any) -> str:
@@ -3019,7 +3485,8 @@ def _format_forces(battle_classes: Dict[str, List[str]], fleet_data: Dict[str, A
     """Static per-class capabilities of both fleets (cached with the doctrine)."""
     if not (battle_classes.get("ours") or battle_classes.get("theirs")):
         return ""
-    lines = ["=== FORCES (ship classes in this battle - fixed; live numbers are in the FLEET SITUATION) ==="]
+    lines = ["=== FORCES (ship classes in this battle - fixed; live numbers are in the FLEET SITUATION) ===",
+             reach_note()]
     for side, title in (("ours", "YOURS"), ("theirs", "THEIRS")):
         types = battle_classes.get(side) or []
         if types:
@@ -3080,9 +3547,77 @@ def _verdict_legend(flags: Dict[str, bool]) -> str:
         f"  EVADE does): GOOD = reaches him and lands >= {GOOD_ENERGY_GJ:.0f} GJ; POOR = reaches,\n"
         "  but he is receding or it arrives slow - long PD dwell, a fraction of the damage;\n"
         f"  NO = runs dry short, lands < {NO_ENERGY_GJ:.0f} GJ, or his PD blinds more slow rounds\n"
-        "  than you can launch. Launch on GOOD; POOR only to empty a doomed magazine.\n"
+        "  than you can launch.\n"
         "  A round needs distance to build speed: launched close, it arrives slow whatever\n"
         "  the closure - the verdict already counts that.\n")
+
+
+ADMIRAL_INTENT_ONLY_MISSION = """***** THIS CALL: FLEET DIRECTIVE - INTENT-ONLY COMMAND *****
+
+Call set_fleet_directive with the overall strategy for your fleet (the ships are listed
+under YOUR FLEET in the situation). There is NO per-ship order phase in this battle: your
+captains read the directive and your battle plan and choose their own maneuvers and
+targets. Keep it under ~150 words and answer with tool calls, not a long analysis.
+
+Torpedo salvos are the one per-ship instruction: set_fleet_directive salvo_plan (ship,
+rounds, target), or issue_order(ship_name=..., torpedo_salvo=N, torpedo_target=...) per
+launching ship. Any other issue_order content is ignored: the doctrine below also
+describes per-ship and "all ships" headings, maneuvers and throttles - none of them is
+flown in this battle.
+
+Ships are shown as: NAME [ID] (e.g., "OCS Gemini-1 [beta_1]")
+You can use EITHER the name OR the ID when naming ships or targets.
+
+*************************************************"""
+
+
+# Legend of the tactical plot (admiral_view.py), sent once in the cached system
+# prompt when the admiral has vision; the plot itself rides on each user turn.
+ADMIRAL_VISION_LEGEND = """=== TACTICAL PLOT (attached image, each checkpoint) ===
+Header: time, checkpoint N of M, torpedoes in flight per side (unguided ones counted apart),
+the score when shown. PLAN below it:
+top-down, world X right / Y up (the axes your headings use), km grid and scale bar. SIDE
+VIEW strip under the plan: the same X columns, height Z up ("height compressed xN" when the
+spread does not fit 1:1). YOUR fleet is cyan, the enemy orange, whichever side you are.
+- Ship: a dart pointing along its nose (white dot = nose), larger for heavier classes,
+  filled from the tail in proportion to hull left; a flame behind it = drive burning. Label:
+  the ship's exact name (use it as is in issue_order), hull % if damaged, SIDE or TAIL when
+  that is the face it shows the other fleet's centre (no tag = NOSE), and "Z+N" / "Z-N"
+  when it is N km above / below your fleet's median height (from 50 km on).
+- Thin line to a hollow dart: where that ship will be at the next checkpoint if it coasts.
+  The hollow dart is yellow when that position is within 150 km of an enemy ship's.
+- Cross: a dead ship; white cross and "NAME DESTROYED": lost since the last checkpoint.
+- Solid outline around a fleet: 150 km from its gun ships (beyond it a dodger is rarely
+  hit); dotted outline: its PD umbrella (250 km).
+- Torpedoes are dots (hollow grey: unguided - blinded seeker, dry or target lost - but still
+  on a hull's line), with ONE arrow per launching group and target: "N -> TARGET Ts" = N
+  guided rounds onto TARGET, first impact in T s; "+k unguided" = unguided rounds that will
+  still strike it; NEW = a round launched since the last checkpoint. Unguided rounds on
+  nobody's line are only counted in the header.
+- Yellow dotted line with two x marks, "closest D km in T s (coasting)": where the two
+  fleet centres pass closest if both coast.
+- ZOOM panel (yellow frame): when ships of both fleets overlap on the plan, a corner panel
+  magnifies the dashed yellow box; ships inside the box are labelled in the zoom.
+The plan's width steps through a fixed ladder (the smallest that holds every live ship,
+ghost and threatening round) and its centre snaps to 1/20 of the width: it moves only when
+the battle outgrows or shrinks below a step, so consecutive checkpoints compare directly."""
+
+def _gun_band_legend() -> str:
+    """The legend's gun-band line: what the solid outline draws and why, with
+    the measured hit rates of GUN_EXCHANGE_BANDS (so it cannot drift)."""
+    band, edge = measured_hit_rate(149.0)
+    far_band, far = GUN_EXCHANGE_BANDS[-1][0], GUN_EXCHANGE_BANDS[-1][1]
+    mid_band, mid = GUN_EXCHANGE_BANDS[-2][0], GUN_EXCHANGE_BANDS[-2][1]
+    return ("- Solid outline around a fleet: 150 km from its gun ships - the effective gun band, not\n"
+            f"  the guns' reach: measured hit rate {edge}% at {band} km, {mid}% at {mid_band} km, {far}% at\n"
+            f"  {far_band} km (GUN EXCHANGE; beyond 150 km a dodger is rarely hit). The nominal reach\n"
+            "  in FORCES is how far a round flies. Dotted outline: its PD umbrella (250 km).")
+
+
+ADMIRAL_VISION_LEGEND = ADMIRAL_VISION_LEGEND.replace(
+    """- Solid outline around a fleet: 150 km from its gun ships (beyond it a dodger is rarely
+  hit); dotted outline: its PD umbrella (250 km).""", _gun_band_legend())
+
 
 
 def build_admiral_static(
@@ -3095,11 +3630,15 @@ def build_admiral_static(
     notebook_text: Optional[str] = None,
     decision_interval_s: float = 30.0,
     battle_classes: Optional[Dict[str, List[str]]] = None,
+    vision: bool = False,
+    intent_only: bool = False,
 ) -> str:
     """
     The battle-static system prompt: doctrine for the fleets in this battle
     plus the FORCES table. Depends only on per-battle inputs, so it is
-    byte-identical across checkpoints (cacheable).
+    byte-identical across checkpoints (cacheable). vision: the admiral is
+    shown a tactical plot each checkpoint - its legend lives here, not in
+    every user turn.
     """
     battle_classes = battle_classes or {"ours": [], "theirs": []}
     flags = _battle_flags(battle_classes, fleet_data)
@@ -3131,7 +3670,10 @@ You can use EITHER the name OR the ID when naming ships or targets.
 
 *************************************************"""
         order_requirements = ""
+        orders_role = ("Issue each ship its own order (issue_order) - requested one ship at a time "
+                       "right after this call")
     else:
+        orders_role = "Issue SPECIFIC ORDERS to EACH captain using the issue_order tool"
         mission_block = """***** CRITICAL REQUIREMENT - READ THIS FIRST *****
 
 You MUST call issue_order for EACH of your ships (every ship listed under YOUR FLEET
@@ -3198,12 +3740,25 @@ For EACH ship in your fleet, you MUST call issue_order with:
                      .get("torpedo_launcher", {}).get("cooldown_s", 12))
     magazine_line = _magazine_line(own_classes, fleet_data) or (
         "8 rounds per corvette tube, 12 per torpedo-cruiser tube")
+    if directive_only and intent_only:
+        # Intent-only command (an experiment; default text unchanged): no
+        # per-ship order phase follows the directive.
+        mission_block = ADMIRAL_INTENT_ONLY_MISSION
+        orders_role = ("No per-ship orders in this battle: captains choose their own maneuvers "
+                       "and targets from your directive; issue_order only for a torpedo salvo")
+    elif directive_only and use_tubes:
+        mission_block = mission_block.replace(
+            "Make the directive concrete\nenough that the per-ship orders follow from it.",
+            "Make the directive concrete\nenough that the per-ship orders follow from it. "
+            "Torpedo salvos: allocate this checkpoint's\nrounds here (set_fleet_directive "
+            "salvo_plan: ship, rounds, target) - the per-ship calls run in\nparallel and "
+            "cannot see each other's torpedo_salvo.")
     pd_doctrine = ADMIRAL_PD_DOCTRINE.format(**pd_values) if use_pd else ""
     torpedo_doctrine = ADMIRAL_TORPEDO_DOCTRINE.format(
         magazine_line=magazine_line, reload_s=reload_s,
         launches_per_tube=torpedo_launches_per_checkpoint(fleet_data, decision_interval_s),
         decision_interval_s=decision_interval_s, **pd_values) if use_tubes else ""
-    gun_doctrine = ADMIRAL_GUN_DOCTRINE if use_guns else ""
+    gun_doctrine = ADMIRAL_GUN_DOCTRINE.format(**gun_doctrine_values(fleet_data)) if use_guns else ""
 
     doctrine = ADMIRAL_DOCTRINE_CORE.format(
         admiral_name=admiral_name,
@@ -3228,9 +3783,15 @@ For EACH ship in your fleet, you MUST call issue_order with:
         decision_interval_s=decision_interval_s,
         enemy_admiral_note=enemy_admiral_note,
         personality_prompt=personality_prompt,
+        orders_role=orders_role,
+        merge_kps=MERGE_EXAMPLE_KPS, merge_km=MERGE_EXAMPLE_KM,
+        merge_s=MERGE_EXAMPLE_KM / MERGE_EXAMPLE_KPS,
     )
     forces = _format_forces(battle_classes, fleet_data)
-    return doctrine.rstrip() + ("\n\n" + forces if forces else "") + "\n"
+    out = doctrine.rstrip() + ("\n\n" + forces if forces else "")
+    if vision:
+        out += "\n\n" + ADMIRAL_VISION_LEGEND
+    return out + "\n"
 
 
 # -----------------------------------------------------------------------------
@@ -3293,9 +3854,10 @@ def _inbound_rounds(snapshot: Any) -> List[Any]:
 def _format_now(snapshot: Any, last_failure: Optional[Tuple[float, str]],
                 heat_hold_pct: float) -> str:
     items = []
+    damped = getattr(snapshot, "merge_alarms", None) or {}
     for info in getattr(snapshot, "range_groups", None) or []:
         if info.warning:
-            items.append(f"{info.label}: {info.warning}")
+            items.append(f"{info.label}: {damped.get(info.label, info.warning)}")
     # Torpedoes (guided, or dead on a hull's line) are the ordnance an
     # admiral acts on this checkpoint; gun rounds are listed under ORDNANCE.
     by_ship: Dict[str, List[Any]] = {}
@@ -3334,12 +3896,14 @@ def _format_now(snapshot: Any, last_failure: Optional[Tuple[float, str]],
             problems.append(f"crew IMPAIRED by plume radiation ({dose:.1f} Sv): weapons cycle slower")
         if problems:
             items.append(f"{_lbl(snapshot, row.ship_id, row.ship_name)}: {', '.join(problems)}")
+    items.extend(getattr(snapshot, "noncompliance", None) or [])
     if last_failure:
         t, why = last_failure
         items.append(f"Your fleet directive at T+{t:.0f}s FAILED ({why}): captains were told "
                      "there was no new directive. Answer with tool calls first, analysis short.")
     if not items:
-        items.append("nothing urgent: no merge warning, no torpedo inbound on your hulls")
+        items.append("nothing urgent: no merge warning, no torpedo inbound on your hulls, "
+                     "every ship flying its orders")
     return "!! NOW (act on these first)\n" + "\n".join(f"- {i}" for i in items)
 
 
@@ -3514,7 +4078,9 @@ def _format_since(snapshot: Any) -> str:
             return "none"
         order = (("launched", "launched"), ("impact", "hit"), ("blinded", "blinded by PD"),
                  ("destroyed", "destroyed by PD"), ("dry", "ran dry"), ("missed", "missed"),
-                 ("retargeted", "retargeted"))
+                 ("retargeted", "retargeted"),
+                 ("retasked_lost", "re-tasked by the datalink (target lost or surrendered)"),
+                 ("retasked_surplus", "re-tasked by the datalink (surplus on their target)"))
         return ", ".join(f"{c[k]} {word}" for k, word in order if c.get(k))
 
     lines.append(f"Torpedoes - yours: {torps(digest.torps['ours'])} | theirs: {torps(digest.torps['theirs'])}")
@@ -3552,12 +4118,18 @@ def _format_geometry(snapshot: Any) -> str:
         if reach_km <= 0:
             return ""
         if info.range_km <= reach_km:
-            when = "IN RANGE now"
+            when = "within it now"
         elif info.closing_kps > 0.05:
-            when = f"in range in ~{(info.range_km - reach_km) / info.closing_kps:.0f} s"
+            when = f"within it in ~{(info.range_km - reach_km) / info.closing_kps:.0f} s"
         else:
-            when = "out of range, not closing"
-        return f"{who} guns reach {reach_km:.0f} km ({when})"
+            when = "beyond it, not closing"
+        return f"{who} guns' nominal reach {reach_km:.0f} km ({when})"
+
+    def measured(info: Any) -> str:
+        band, hit = measured_hit_rate(info.range_km)
+        near = GUN_EXCHANGE_BANDS[0]
+        return (f"measured hit rate at {info.range_km:.0f} km (the {band} km band) ~{hit}%, "
+                f"{near[1]}% at {near[0]} km (GUN EXCHANGE)")
 
     for info in groups[:4]:
         members = [enemies.get(sid) for sid in info.ship_ids]
@@ -3595,6 +4167,8 @@ def _format_geometry(snapshot: Any) -> str:
         for text in (gun_reach("their", their_gun, info), gun_reach("your", own_gun_range, info)):
             if text:
                 reach.append(text)
+        if their_gun > 0 or own_gun_range > 0:
+            reach.append(measured(info))
         verdicts = [m.solution.verdict for m in members if m is not None and m.solution is not None]
         if own_tubes and verdicts:
             reach.append("your torpedoes: " + ", ".join(
@@ -3632,6 +4206,9 @@ def _format_threat_table(snapshot: Any) -> str:
                  + (f" {e.accel_g:.1f}g" if e.accel_g else "")]
         if e.range_km is not None:
             parts.append(f"{e.range_km:.0f} km {e.closing_kps:+.1f} km/s")
+        face = _facing_text(getattr(e, "facing", None))
+        if face:
+            parts.append(f"shows you {face}")
         if e.nearest_own_id:
             parts.append(f"nearest {_lbl(snapshot, e.nearest_own_id)} "
                          f"{e.distance_from_closest_friendly_km:.0f} km")
@@ -3663,6 +4240,14 @@ def _format_threat_table(snapshot: Any) -> str:
             parts.append(text)
         lines.append(" | ".join(parts))
     return "\n".join(lines)
+
+
+def _facing_text(facing: Optional[Dict[str, Any]]) -> str:
+    try:
+        from .fleet_intel import facing_text
+    except ImportError:  # pragma: no cover
+        from llm.fleet_intel import facing_text
+    return facing_text(facing)
 
 
 def _sources(snapshot: Any, rs: List[Any]) -> str:
@@ -3714,6 +4299,19 @@ def _inbound_lines(snapshot: Any, inbound: List[Any], indent: str) -> List[str]:
     return lines
 
 
+def _torpedo_defence_lines(snapshot: Any, only: Optional[str] = None) -> List[str]:
+    """fleet_intel.torpedo_defence rendered, one line per targeted ship."""
+    data = getattr(snapshot, "torpedo_defence", None) or {}
+    if not data:
+        return []
+    try:
+        from .fleet_intel import torpedo_defence_line
+    except ImportError:  # pragma: no cover
+        from llm.fleet_intel import torpedo_defence_line
+    return [torpedo_defence_line(_lbl(snapshot, sid), d) for sid, d in data.items()
+            if only is None or sid == only]
+
+
 def _format_ordnance(snapshot: Any) -> str:
     rounds = list(getattr(snapshot, "rounds", None) or [])
     if not rounds and getattr(snapshot, "digest", None) is None:
@@ -3721,6 +4319,11 @@ def _format_ordnance(snapshot: Any) -> str:
     lines = ["=== ORDNANCE IN FLIGHT ===", "INBOUND ON YOU (can hit your hulls):"]
     inbound = _inbound_rounds(snapshot)
     lines.extend(_inbound_lines(snapshot, inbound, "  "))
+    defence = _torpedo_defence_lines(snapshot)
+    if defence:
+        lines.append("TORPEDO DEFENCE (per targeted ship; the engine's forecast with PD left out, "
+                     "turrets near several targets counted for each):")
+        lines.extend(f"  {line}" for line in defence)
     if inbound:
         ships = sorted({r.threat_id for r in inbound}, key=lambda s: (len(s), s))
         lines.append("  EVADE makes the engine dodge (slugs, dead rounds), RUN or PRESENT armor "
@@ -3802,11 +4405,28 @@ def _format_torpedo_economy(snapshot: Any, fleet_data: Dict[str, Any]) -> str:
             each = (f" at ~{sol.energy_gj:.0f} GJ each"
                     if to_kill != kill.get(e.ship_id, 6) else "")
             need = soak + to_kill
+            launch_soak = soak
+            if getattr(e, "board_keep", None) is not None:
+                # rounds of ours already inbound: the datalink's own board
+                # (torpedo_link.need_for on their forecast impact + margin)
+                cover, soak, to_kill = e.board_cover, e.board_soak, e.board_kill
+                each, need = " (datalink board)", e.board_keep
+            margin = (f" + {need - soak - to_kill} margin" if need > soak + to_kill else "")
             text = (f"Salvo vs {_lbl(snapshot, e.ship_id)} ({sol.verdict}): {cover} PD turrets cover it "
-                    f"-> ~{soak} soaked + {to_kill} to kill{each} = {need} together")
-            more = need - e.our_rounds_inbound
-            if e.our_rounds_inbound:
-                text += (f"; {e.our_rounds_inbound} of yours already inbound -> "
+                    f"-> ~{soak} soaked + {to_kill} to kill{margin}{each} = {need} together")
+            res = getattr(e, "solution_reserve", None)
+            if (res is not None and res.reaches and sol.tof_s is not None
+                    and res.tof_s is not None):
+                res_soak = res.soak if res.soak is not None else launch_soak
+                if (abs(res.tof_s - sol.tof_s) >= 1.0 or res_soak != launch_soak
+                        or abs((res.energy_gj or 0) - (sol.energy_gj or 0)) >= 1.0):
+                    text += (f"; reserve profile if he runs: ~{res.tof_s:.0f} s "
+                             f"(sprint ~{sol.tof_s:.0f}), ~{res.energy_gj:.0f} GJ, PD soaks {res_soak}")
+            inbound_n = (e.board_rounds if getattr(e, "board_keep", None) is not None
+                         else e.our_rounds_inbound)
+            more = need - inbound_n
+            if inbound_n:
+                text += (f"; {inbound_n} of yours already inbound -> "
                          + ("ENOUGH, do not add (overkill)" if more <= 0 else f"{more} more"))
             available = getattr(snapshot, "launches_available", 0) or 0
             if more > available:
@@ -3827,14 +4447,17 @@ def _format_torpedo_economy(snapshot: Any, fleet_data: Dict[str, Any]) -> str:
 
 
 def _heat_compact(row: Any) -> str:
+    """Heat only when it matters: at >= 50%, or reaching 100% within
+    HEAT_OUTLOOK_SHOW_S (the captain's rule) - not '+1 MW: 100% in 5332.8 min'
+    on every cold ship (audit A7)."""
     thermal = getattr(row, "thermal", None)
     pct = row.heat_percent
     text = ""
-    warming = False
     if thermal:
         t100 = thermal.get("time_to_100_retracted_s")
-        warming = t100 is not None and t100 > 0 and thermal.get("net_rate_mw", 0) > 0
-        if pct >= 20 or warming:
+        warming = (t100 is not None and 0 < t100 < HEAT_OUTLOOK_SHOW_S
+                   and thermal.get("net_rate_mw", 0) > 0)
+        if pct >= 50 or warming:
             text = f" heat {pct:.0f}%"
             if warming:
                 ext = thermal.get("time_to_100_extended_s")
@@ -3842,7 +4465,7 @@ def _heat_compact(row: Any) -> str:
                          f"retracted / {_fmt_minutes(ext)} extended)")
         if thermal.get("guns_heat_limited"):
             text += " GUNS HOLDING"
-    elif pct >= 20:
+    elif pct >= 50:
         text = f" heat {pct:.0f}%"
     if getattr(row, "radiators_extended", False):
         text += " radiators OUT"
@@ -3867,6 +4490,11 @@ def _format_fleet(snapshot: Any, phase: str) -> str:
     must = " <- MUST issue_order for this ship!" if phase != "directive" else ""
     for r in rows:
         bits = [f"hull {r.hull_integrity:.0f}%"]
+        drive = getattr(r, "drive_fraction", 1.0)
+        if isinstance(drive, (int, float)) and drive <= 0.0:
+            bits.append("DRIVE DEAD (0 g): cannot burn, RCS turns only")
+        elif isinstance(drive, (int, float)) and drive < 0.995:
+            bits.append(f"drive {drive * 100:.0f}% thrust")
         heat = _heat_compact(r)
         if heat:
             bits.append(heat.strip())
@@ -3895,7 +4523,8 @@ def _format_headings(snapshot: Any) -> str:
     text = _text_attr(snapshot, "headings")
     if text:
         return ("=== HEADINGS (world frame, fleet centre: issue_order heading=; the drive "
-                "thrusts along the NOSE) ===\n" + text)
+                "thrusts along the NOSE; him: the face he shows you now->after the move, if "
+                "he holds his attitude) ===\n" + text)
     # Hand-built snapshots may carry only the legacy full range-control block.
     return _text_attr(snapshot, "range_control")
 
@@ -3936,7 +4565,6 @@ def format_admiral_turn_state(
     last_directive_failure: Optional[Tuple[float, str]] = None,
     received_messages: Optional[List[str]] = None,
     enemy_proposed_draw: bool = False,
-    communications_log: Optional[List[Any]] = None,
     decision_interval_s: float = 30.0,
 ) -> str:
     """The live, per-checkpoint user turn (everything after ADMIRAL_STATE_MARKER)."""
@@ -3944,8 +4572,21 @@ def format_admiral_turn_state(
     if snapshot is not None:
         cp = getattr(snapshot, "checkpoint", 0) or 0
         interval = getattr(snapshot, "decision_interval_s", decision_interval_s) or decision_interval_s
-        header = (f"T+{snapshot.timestamp:.0f}s" + (f", checkpoint {cp}" if cp else "")
-                  + f" - these orders run until T+{snapshot.timestamp + interval:.0f}s")
+        clock = getattr(snapshot, "clock", None)
+        try:
+            from .fleet_intel import clock_text
+        except ImportError:  # pragma: no cover
+            from llm.fleet_intel import clock_text
+        until = snapshot.timestamp + interval
+        if clock:
+            until = min(until, clock["end_s"])
+        header = (f"T+{snapshot.timestamp:.0f}s"
+                  + (clock_text(snapshot.timestamp, cp, clock) if clock else
+                     (f", checkpoint {cp}" if cp else ""))
+                  + (f" - these orders run until T+{until:.0f}s" if until > snapshot.timestamp
+                     else " - the battle ends now: these orders are not flown"))
+        if getattr(snapshot, "score_line", ""):
+            header += "\n" + snapshot.score_line
     else:
         header = "(no live data)"
     blocks = []
@@ -3969,11 +4610,12 @@ def format_admiral_turn_state(
         comms.extend(f"  \"{msg}\"" for msg in received_messages)
     if enemy_proposed_draw:
         comms.append("*** ENEMY HAS PROPOSED A DRAW ***")
-        comms.append("Use accept_fleet_draw to accept or reject_fleet_draw to refuse.")
-    if communications_log:
-        comms.append("=== CAPTAIN COMMUNICATIONS (You see all) ===")
-        for msg in communications_log[-5:]:  # Last 5 messages
-            comms.append(f"  [{msg.ship_name}] {msg.sender_name}: \"{msg.content}\"")
+        comms.append("Use accept_fleet_draw to accept or reject_fleet_draw to refuse "
+                     "(a rejection closes the offer and the enemy admiral is told).")
+    draw_lines = getattr(snapshot, "draw_lines", None) or [] if snapshot is not None else []
+    if draw_lines:
+        comms.append("=== DRAW ===")
+        comms.extend(draw_lines)
     blocks.append("\n".join(comms))
     body = "\n\n".join(b for b in blocks if b)
     return ADMIRAL_TURN_STATE.format(header=header, body=body)
@@ -3995,7 +4637,6 @@ def _admiral_parts(
     enemy_has_admiral: bool = False,
     enemy_proposed_draw: bool = False,
     received_messages: Optional[List[str]] = None,
-    communications_log: Optional[List[Any]] = None,
     phase: str = "full",
     standing_plan: Optional[str] = None,
     standing_plan_time: float = 0.0,
@@ -4004,6 +4645,8 @@ def _admiral_parts(
     captain_reports: Optional[List[Dict[str, Any]]] = None,
     last_directive_failure: Optional[Tuple[float, str]] = None,
     battle_classes: Optional[Dict[str, List[str]]] = None,
+    vision: bool = False,
+    intent_only: bool = False,
 ) -> Tuple[str, str]:
     """(static system text, live turn state)."""
     classes = battle_classes if battle_classes and (battle_classes.get("ours")
@@ -4013,13 +4656,12 @@ def _admiral_parts(
         admiral_name=admiral_name, faction=faction, fleet_data=fleet_data,
         personality=personality, phase=phase, enemy_has_admiral=enemy_has_admiral,
         notebook_text=notebook_text, decision_interval_s=decision_interval_s,
-        battle_classes=classes)
+        battle_classes=classes, vision=vision, intent_only=intent_only)
     live = format_admiral_turn_state(
         snapshot_t_zero, fleet_data, phase=phase, standing_plan=standing_plan,
         standing_plan_time=standing_plan_time, captain_reports=captain_reports,
         last_directive_failure=last_directive_failure, received_messages=received_messages,
-        enemy_proposed_draw=enemy_proposed_draw, communications_log=communications_log,
-        decision_interval_s=decision_interval_s)
+        enemy_proposed_draw=enemy_proposed_draw, decision_interval_s=decision_interval_s)
     return static, live
 
 
@@ -4033,7 +4675,6 @@ def build_admiral_prompt(
     enemy_has_admiral: bool = False,
     enemy_proposed_draw: bool = False,
     received_messages: Optional[List[str]] = None,
-    communications_log: Optional[List[Any]] = None,
     phase: str = "full",  # "full", "directive", or "orders"
     standing_plan: Optional[str] = None,
     standing_plan_time: float = 0.0,
@@ -4067,8 +4708,7 @@ def build_admiral_prompt(
     static, live = _admiral_parts(
         admiral_name, faction, snapshot_t_minus_15, snapshot_t_zero, personality, fleet_data,
         enemy_has_admiral=enemy_has_admiral, enemy_proposed_draw=enemy_proposed_draw,
-        received_messages=received_messages, communications_log=communications_log,
-        phase=phase, standing_plan=standing_plan, standing_plan_time=standing_plan_time,
+        received_messages=received_messages, phase=phase, standing_plan=standing_plan, standing_plan_time=standing_plan_time,
         notebook_text=notebook_text, decision_interval_s=decision_interval_s,
         captain_reports=captain_reports, last_directive_failure=last_directive_failure,
         battle_classes=battle_classes)
@@ -4167,6 +4807,7 @@ def build_admiral_ship_order_messages(
     directive_failure: Optional[str] = None,
     previous_directive: Optional[Tuple[float, str]] = None,
     faction: str = "",
+    salvo_plan: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, str]]:
     """
     The per-ship order request as [system, user].
@@ -4181,8 +4822,8 @@ def build_admiral_ship_order_messages(
     row = _ship_row(snapshot, ship_id, ship_name)
     ship_id = ship_id or (row.ship_id if row is not None else None)
     has_tubes = bool(row is not None and (row.launchers or row.torpedoes_remaining))
-    torpedo_note = (" - launch torpedoes only on a GOOD verdict; POOR rounds arrive slow and weak,"
-                    " NO rounds are wasted." if has_tubes else ".")
+    torpedo_note = (" - torpedo verdicts: GOOD rounds reach and land hard, POOR rounds arrive slow"
+                    " and weak, NO rounds do not reach." if has_tubes else ".")
     system = ADMIRAL_SHIP_ORDER_DOCTRINE.format(
         admiral_name=admiral_name, faction=(faction or "your").upper(),
         torpedo_note=torpedo_note,
@@ -4223,11 +4864,28 @@ def build_admiral_ship_order_messages(
             f"{ship_name} flies it unless you give it its own heading or maneuver now (that "
             f"REPLACES it). To keep it and dodge: evade alone.")
 
+    if salvo_plan:
+        mine = salvo_plan.get("mine")
+        spread = ", ".join(f"{n} at {t}" for t, n in (salvo_plan.get("by_target") or {}).items())
+        line = (f"SALVO ALLOCATION (your directive call, this checkpoint): fleet {salvo_plan.get('total', 0)} "
+                f"rounds from {salvo_plan.get('ships', 0)} ship(s) ({spread or 'none'}). ")
+        if mine and mine[0]:
+            line += (f"{ship_name}: {mine[0]} round(s)" + (f" at {mine[1]}" if mine[1] else "")
+                     + " - launched unless this order sets its own torpedo_salvo.")
+        else:
+            line += f"{ship_name}: none allocated (torpedo_salvo here adds rounds to that total)."
+        parts.append(line)
     label = _lbl(snapshot, ship_id, ship_name) if ship_id else ship_name
     if row is not None:
+        drive = getattr(row, "drive_fraction", 1.0)
+        drive_text = (", DRIVE DEAD (0 g): cannot burn, RCS turns only"
+                      if isinstance(drive, (int, float)) and drive <= 0.0 else
+                      f", drive {drive * 100:.0f}% thrust" if isinstance(drive, (int, float)) and drive < 0.995
+                      else "")
         status = [f"SHIP STATUS - {label} ({ship_type.replace('_', ' ').title()}), captain {captain_name}:",
                   f"  hull {row.hull_integrity:.0f}%{_heat_compact(row)}, dv {row.delta_v_remaining:.0f} km/s, "
-                  f"{row.velocity_kps:.1f} km/s, PD {row.pd_turrets_operational}/{row.pd_turrets_total}"]
+                  f"{row.velocity_kps:.1f} km/s, PD {row.pd_turrets_operational}/{row.pd_turrets_total}"
+                  + drive_text]
         if row.launchers or row.torpedoes_remaining:
             status.append(f"  torpedoes: {row.torpedoes_remaining} left, "
                           f"{view.get('launches_available', row.launches_available)} launchable before the next checkpoint")
@@ -4254,7 +4912,9 @@ def build_admiral_ship_order_messages(
 
     inbound = view.get("inbound") or []
     if inbound:
-        parts.append("INBOUND ON THIS SHIP:\n" + "\n".join(_inbound_lines(snapshot, inbound, "  ")))
+        defence = _torpedo_defence_lines(snapshot, only=ship_id)
+        parts.append("INBOUND ON THIS SHIP:\n" + "\n".join(_inbound_lines(snapshot, inbound, "  ")
+                                                           + [f"  {d}" for d in defence]))
     elif view:
         parts.append("INBOUND ON THIS SHIP: nothing")
 
@@ -4264,6 +4924,9 @@ def build_admiral_ship_order_messages(
         for e in rows[:8]:
             text = (f"  {_lbl(snapshot, e['id'])} {_type_abbr(snapshot, e['id'])}: {e['range_km']:.0f} km "
                     f"{e['closing_kps']:+.1f} km/s, bearing {e['bearing']}")
+            face = _facing_text(e.get("facing"))
+            if face:
+                text += f", shows it {face}"
             if e.get("solution") is not None:
                 text += f" | torpedo {_solution_text(e['solution'])}"
             lines.append(text)
@@ -4388,6 +5051,12 @@ def format_admiral_orders_for_captain(
                 lines.append(f"      >>> TARGET: {check['target']}")
             elif order.suggested_target:
                 lines.append(f"      >>> TARGET: {order.suggested_target}")
+            also = getattr(order, "text_also_names", None)
+            if isinstance(also, list) and also:
+                # cmdadm: the structured target is the one the engine and the
+                # compliance check apply; the prose named others too.
+                lines.append(f"      >>> The order text also names {', '.join(also)}: the TARGET "
+                             "above is the ordered one (engine + compliance check).")
             # Coordinated salvo: several ships launching together is how a fleet
             # overwhelms point defense, so state it explicitly rather than
             # leaving it buried in the order prose - and check it can connect.
@@ -4448,14 +5117,12 @@ def format_admiral_orders_for_captain(
                      "discuss_with_admiral (\"Admiral, I received no orders. What are my "
                      "instructions?\"); otherwise use your best judgment.")
 
-    # The protocol (silence = ACK, when to DEVIATE) is in the cached doctrine.
-    reply = (f"  REPLY: acting IS your acknowledgment; {reply_tool} only to DEVIATE/UNABLE "
-             f"(say why) or with a request/contact.")
+    # The protocol (acting is the acknowledgment, when to report) is in the
+    # cached doctrine; only what is flying now is said here.
     if applied:
-        reply += (f" Your {'/'.join(dict.fromkeys(applied))} is already flying: no maneuver call "
-                  "needed unless you deviate (calling one replaces it) - still set your target "
-                  "and weapons/launches.")
-    lines.append(reply)
+        lines.append(f"  Your {'/'.join(dict.fromkeys(applied))} is already flying: no maneuver call "
+                     "needed unless you deviate (calling one replaces it) - still set your target "
+                     "and weapons/launches.")
     return "\n".join(lines)
 
 

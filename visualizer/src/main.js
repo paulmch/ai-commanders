@@ -12,6 +12,7 @@ import { TimeController } from './TimeController.js';
 import { CameraController } from './CameraController.js';
 import { stepHighlight } from './Director.js';
 import { ContactOverlay } from './ContactOverlay.js';
+import { initialLabelMode, saveLabelMode, nextLabelMode } from './TacticalLayout.js';
 import {
   LOST_AFTER_FAILURES, backoffDelay, checkpointNumber, classifyVerdict, defaultMaxLag,
   newLiveClientId, recordingQuery,
@@ -39,6 +40,13 @@ import { FittingsCard } from './FittingsHud.js';
 import { TimelineMarkers } from './TimelineMarkers.js';
 import { showLightbox } from './hudDom.js';
 import { freeViewFrame, viewInsets } from './ViewInsets.js';
+
+const SCALE_LABELS = { auto: 'AUTO', true: 'TRUE', cinematic: 'CINE' };
+const SCALE_TITLES = {
+  auto: 'Hull scale AUTO: real size up close, a readable floor at distance',
+  true: 'Hull scale TRUE: always the real 65-275 m hull; contact markers at distance',
+  cinematic: 'Hull scale CINEMATIC: hulls drawn about 60x oversize at every range'
+};
 
 class BattleVisualizer {
   constructor() {
@@ -77,6 +85,10 @@ class BattleVisualizer {
     this.decisions = new DecisionPanel(this);
     this.initHud();   // scoreboard, kill feed, command net, combat log, registry, timeline markers
     this.contacts = new ContactOverlay(document.getElementById('shipContacts'), id => this.selectShip(id));
+    // Label density (L): auto / minimal / full; ?labels= for one page load, else the saved choice
+    let storage = null;
+    try { storage = window.localStorage; } catch { /* blocked storage */ }
+    this.setLabelMode(initialLabelMode(window.location.search, storage), false);
     this.setupEventListeners();
     // Trajectory tracks: T / playback-bar button; live PATHS mirrors it
     this.trackControl = new TrackModeControl({
@@ -195,7 +207,8 @@ class BattleVisualizer {
    */
   setupEventListeners() {
     document.getElementById('fleetViewBtn').addEventListener('click', () => this.showFleetView());
-    document.getElementById('contactsBtn').addEventListener('click', () => this.toggleContacts());
+    document.getElementById('contactsBtn').addEventListener('click', () => this.cycleLabelMode());
+    document.getElementById('scaleBtn')?.addEventListener('click', () => this.cycleScaleMode());
     // File selection
     this.elements.selectFileBtn.addEventListener('click', () => {
       this.elements.fileInput.click();
@@ -317,10 +330,14 @@ class BattleVisualizer {
         this.decisions.setOpen(false);
       } else if (e.code === 'KeyC') {
         this.toggleContacts();
+      } else if (e.code === 'KeyL' && !e.repeat) {
+        this.cycleLabelMode();
       } else if (e.code === 'KeyA' && !e.shiftKey && this.isInitialized) {
         this.toggleDirector();
       } else if (e.code === 'KeyN' && this.isInitialized) {
         this.toggleComms();
+      } else if (e.code === 'KeyS' && !e.shiftKey && !e.repeat && this.scene) {
+        this.cycleScaleMode();
       } else if ((e.code === 'BracketRight' || e.code === 'BracketLeft') && this.isInitialized) {
         // ] / [ : next / previous highlight (Director.highlightList)
         const t = stepHighlight(this.cameraController.highlights, this.timeController.currentTime,
@@ -398,9 +415,12 @@ class BattleVisualizer {
     this.setLoadingStatus('Creating tactical display...');
     this.scene?.dispose();   // no-op after a reset; guards any other reload path
     this.scene = new SceneManager(this.elements.canvas);
+    if (this.scene.weapons?.engagements) this.scene.weapons.engagements.mode = this.contacts.mode;
     this.tracks = new Tracks(this.scene, new TrajectoryPredictor(this.loader));
     this.tracks.hud = this.trackHud;
+    this.tracks.othersPathOnly = this.contacts.mode !== 'full';
     this.scene.loader = this.loader;   // hull rigs read targets, shots, launches, PD dwell
+    this.syncScaleButton();
     this.setLoadingProgress(60);
 
     // Initialize time controller. The extra seconds are an epilogue: a ship
@@ -541,11 +561,34 @@ class BattleVisualizer {
           state.radiatorsExtended = this.loader.getRadiatorStateAt(shipId, currentPlaybackTime);
           this.scene.updateShip(shipId, state);
         }
+
+        // Camera next: with the ships at this frame's positions, and before
+        // anything that is placed on a hull. In the auto scale mode a hull's
+        // draw size follows the camera (render/Scale.js), so the camera is
+        // settled first and every effect of the frame - mounts, impacts,
+        // jets, wrecks - sees the one scale the hull is drawn at, also on
+        // the frame of a director cut.
+        if (this.needsFleetFraming) {
+          this.cameraController.focusFleet(this.currentState.ships, this.directorFrame(true));
+          this.needsFleetFraming = false;
+        }
+        if (this.pendingEvidenceFocus) {
+          this.cameraController.focusOnShip(this.pendingEvidenceFocus, this.currentState.ships);
+          this.cameraController.setMode('orbit', this.pendingEvidenceFocus);
+          this.pendingEvidenceFocus = null;
+        }
+        this.cameraController.update(this.currentState.ships,
+          { time: currentPlaybackTime, dt: deltaTime, torpedoes: this.currentState.torpedoes, ...this.directorFrame() });
+
+        this.scene.syncCamera();
+
         // RCS attitude jets, fired from the recorded rotation around this time
         this.scene.rcs.update(this.scene.ships, this.loader.simTrace, currentPlaybackTime);
 
         // Slugs, torpedoes, PD beams, muzzle discharge and the instant
         // impact flash: stateless, evaluated from the recording each frame
+        // (engagement lines: the selected or hovered ship's are drawn at full weight)
+        if (this.scene.weapons.engagements) this.scene.weapons.engagements.focusId = this.selectedShipId || this.contacts.hoverId;
         this.scene.weapons.update(this.loader, currentPlaybackTime);
 
         // Torpedo lifecycle moments crossing this frame: detonations,
@@ -592,19 +635,6 @@ class BattleVisualizer {
         this.tracks.frame(currentPlaybackTime, this.currentState.ships,
           currentPlaybackTime > this.loader.duration + 0.5 ? 'off' : trackMode,
           this.selectedShipId || this.cameraController.targetShipId);
-
-        // Update camera
-        if (this.needsFleetFraming) {
-          this.cameraController.focusFleet(this.currentState.ships, this.directorFrame(true));
-          this.needsFleetFraming = false;
-        }
-        if (this.pendingEvidenceFocus) {
-          this.cameraController.focusOnShip(this.pendingEvidenceFocus, this.currentState.ships);
-          this.cameraController.setMode('orbit', this.pendingEvidenceFocus);
-          this.pendingEvidenceFocus = null;
-        }
-        this.cameraController.update(this.currentState.ships,
-          { time: currentPlaybackTime, dt: deltaTime, torpedoes: this.currentState.torpedoes, ...this.directorFrame() });
 
         // Update selected ship telemetry
         if (this.selectedShipId && this.currentState.ships[this.selectedShipId]) {
@@ -865,6 +895,7 @@ class BattleVisualizer {
     live.simTimeS = info.sim_time_s ?? 0;
     live.nextCheckpointT = info.next_checkpoint_t ?? 0;
     live.interval = info.decision_interval_s || live.interval || 30;
+    live.firstCheckpointT = Number.isFinite(info.first_checkpoint_t) ? info.first_checkpoint_t : live.interval;
     live.waitingFor = info.waiting_for || [];
     live.draft = info.draft || live.draft;
     live.stage = info.stage ?? null;
@@ -1383,7 +1414,7 @@ class BattleVisualizer {
     const t = tc.currentTime;
     const deciding = live.status === 'paused' && this.loader.duration - t < 2.5;
     const cpT = deciding ? live.simTimeS : nextCheckpointAfter(t, live.interval);
-    const n = deciding ? live.checkpoint : checkpointNumber(cpT, live.interval);
+    const n = deciding ? live.checkpoint : checkpointNumber(cpT, live.interval, live.firstCheckpointT);
     const label = deciding ? `CP${n} · DECIDING ${formatClock(this.liveStatusElapsed())}` : `CP${n} · ${formatClock(cpT - t)}`;
     el.style.left = `${Math.min(100, (cpT / tc.duration) * 100)}%`;
     el.title = `Checkpoint ${n} at T+${Math.round(cpT)}s`;
@@ -1498,11 +1529,65 @@ class BattleVisualizer {
     this.cameraController.focusFleet(this.currentState?.ships, this.directorFrame(true));
   }
 
+  /**
+   * Hull scale: auto (real size up close, a readable floor at distance),
+   * true (always real size) or cinematic (the fixed ~60x exaggeration).
+   * S cycles; ?scale= sets it for one page load (render/Scale.js).
+   */
+  cycleScaleMode() {
+    if (!this.scene) return;
+    const before = this.scene.scaleMode;
+    const mode = this.scene.cycleScaleMode();
+    // a fleet framing depends on the mode's floors: frame it again
+    const cam = this.cameraController;
+    if (cam?.fleetFramed && !cam.director.enabled && (before === 'cinematic') !== (mode === 'cinematic')) {
+      cam.focusFleet(this.currentState?.ships, this.directorFrame(true));
+    }
+    this.syncScaleButton();
+  }
+
+  syncScaleButton() {
+    const button = document.getElementById('scaleBtn');
+    if (!button || !this.scene) return;
+    const mode = this.scene.scaleMode;
+    button.innerHTML = `SCALE ${SCALE_LABELS[mode] || mode.toUpperCase()} <kbd>S</kbd>`;
+    button.classList.toggle('active', mode !== 'cinematic');
+    button.title = `${SCALE_TITLES[mode] || ''} (S cycles auto / true / cinematic)`;
+  }
+
+  /** C: the whole contact layer (brackets, chips, wave chips) and the engagement lines on / off. */
   toggleContacts() {
     this.contacts.enabled = !this.contacts.enabled;
+    this.syncLabelButton();
+  }
+
+  /**
+   * Label density (TacticalLayout): auto - compact chips, crowded ships
+   * grouped, cards for the selected / dying ship; minimal - brackets only;
+   * full - every ship's card. L or the LABELS button cycles (turning the
+   * layer back on if C had hidden it); the choice is saved.
+   */
+  cycleLabelMode() {
+    if (!this.contacts.enabled) { this.toggleContacts(); return; }
+    this.setLabelMode(nextLabelMode(this.contacts.mode));
+  }
+
+  setLabelMode(mode, persist = true) {
+    this.contacts.setMode(mode);
+    if (this.scene?.weapons?.engagements) this.scene.weapons.engagements.mode = this.contacts.mode;
+    if (this.tracks) this.tracks.othersPathOnly = this.contacts.mode !== 'full';
+    if (persist) { try { saveLabelMode(window.localStorage, this.contacts.mode); } catch { /* not persisted */ } }
+    this.syncLabelButton();
+  }
+
+  syncLabelButton() {
     const button = document.getElementById('contactsBtn');
-    button.classList.toggle('active', this.contacts.enabled);
-    button.setAttribute('aria-pressed', String(this.contacts.enabled));
+    if (!button) return;
+    const on = this.contacts.enabled;
+    button.innerHTML = `LABELS ${on ? this.contacts.mode.toUpperCase() : 'OFF'} <kbd>L</kbd>`;
+    button.classList.toggle('active', on);
+    button.setAttribute('aria-pressed', String(on));
+    button.title = 'Label density: auto (compact chips, crowded ships grouped) / minimal (brackets) / full (every card). L cycles, C hides all labels and engagement lines';
   }
 
   /**
@@ -1818,7 +1903,7 @@ class BattleVisualizer {
   initHud() {
     const $ = id => document.getElementById(id);
     this.registry = new Registry({ root: $('shipRegistry'), alpha: this.elements.alphaShips, beta: this.elements.betaShips,
-      onSelect: id => this.selectShip(id) });
+      onSelect: id => this.selectShip(id), onHover: id => this.contacts?.setHover(id) });
     this.combatLog = new CombatLog({ list: this.elements.eventList, chips: $('eventLogFilters'),
       onSeek: row => this.hudSeek(row.t, row.shipId) });
     this.scoreboard = new Scoreboard({ root: $('scoreboard') });
@@ -1852,14 +1937,14 @@ class BattleVisualizer {
     this.killFeed.clear();
     this.combatLog.clear();
     this.commsFeed.clear();
-    // The command net opens by default where there is room for it, unless
-    // the viewer closed it last time - or the replay carries no command
-    // traffic at all (heuristic captains, pre-pass-4 recordings): an empty
-    // column would only hide a third of the battle and the AUTO CAM chip.
+    // The command net stays closed in a replay unless the viewer opened it
+    // last time (N, remembered): open, it takes a third of the battle view
+    // and the fleet framing, and the kill feed and timeline markers already
+    // carry the story. A live battle opens it where there is room - the
+    // commanders' traffic arriving is the broadcast.
     let saved = null;
     try { saved = window.localStorage.getItem('aic.viewer.commsOpen'); } catch { /* default */ }
-    const traffic = !!this.live || (this.loader.hud?.comms?.length || 0) > 0;
-    this.commsFeed.setOpen(saved != null ? saved === '1' : window.innerWidth >= 1100 && traffic);
+    this.commsFeed.setOpen(saved != null ? saved === '1' : !!this.live && window.innerWidth >= 1100);
   }
 
   toggleComms() {

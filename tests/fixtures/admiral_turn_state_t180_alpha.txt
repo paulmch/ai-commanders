@@ -1,7 +1,7 @@
 === FLEET SITUATION === T+180s, checkpoint 1 - these orders run until T+210s
 
 !! NOW (act on these first)
-- GROUP A: MERGE IN 45 s at 1.4 km (OCS Lancer-3), too late to brake (need 368 km incl. flip, have 157 km); pass wide or burn laterally NOW.
+- GROUP A: MERGE IN 45 s at 1.4 km (OCS Lancer-3), too late to brake (need 368 km incl. flip, have 157 km); a lateral burn moves the pass.
 
 === CAPTAIN REPORTS (filed at checkpoint 6) ===
 UNABLE TIS Dart-4 [alpha_4]: "magazine empty"
@@ -19,14 +19,14 @@ Torpedoes - yours: none | theirs: none
 You: 8 ships, centre (7,29,5) km, 2.9 km/s toward (+0.99,+0.11,+0.02), spread 51 km
 GROUP A (OCS Sovereign [beta_1] BB, OCS Falchion-2 [beta_6] DD, OCS Lancer-1 [beta_2] BC, OCS Lancer-2 [beta_3] BC, OCS Lancer-3 [beta_4] BC): 157 km, closing 4.03 km/s (-60 km in 15 s) = you 2.8 km/s toward them + they 1.2 toward you; they burn toward you 0.3g
   if both coast: closest 1.4 km (OCS Lancer-3) in 45 s | your stop 276 km / 137 s at 3.0g +15 s flip - TOO LATE to brake
-  reach - their guns reach 900 km (IN RANGE now); your torpedoes: 5 POOR
+  reach - their guns' nominal reach 900 km (within it now); measured hit rate at 157 km (the 150-200 km band) ~43%, 69% at 0-50 km (GUN EXCHANGE); your torpedoes: 5 POOR
 
 === ENEMY THREAT TABLE (range/closure from your fleet centre) ===
-OCS Sovereign [beta_1] BB 1.0g | 118 km +4.1 km/s | nearest TIS Dart-1 [alpha_1] 76 km | hull 100% | PD 3/3 | 1 spinal + 3 heavy coil + 1 coil | dealt nothing | torpedo POOR (slow arrival) ~6 GJ
-OCS Falchion-2 [beta_6] DD 2.0g | 149 km +4.0 km/s | nearest TIS Dart-1 [alpha_1] 112 km | hull 100% | PD 2/2 | 1 spinal + 1 coil | dealt nothing | torpedo POOR (slow arrival) ~7 GJ
-OCS Lancer-1 [beta_2] BC 1.5g | 167 km +4.2 km/s | nearest TIS Dart-1 [alpha_1] 122 km | hull 100% | PD 2/2 | 1 spinal + 2 coil | dealt nothing | torpedo POOR (slow arrival) ~8 GJ, 2 of yours inbound
-OCS Lancer-2 [beta_3] BC 1.5g | 173 km +4.1 km/s | nearest TIS Dart-1 [alpha_1] 130 km | hull 100% | PD 2/2 | 1 spinal + 2 coil | dealt nothing | torpedo POOR (slow arrival) ~8 GJ, 2 of yours inbound
-OCS Lancer-3 [beta_4] BC 1.5g | 190 km +3.9 km/s | nearest TIS Dart-1 [alpha_1] 152 km | hull 100% | PD 2/2 | 1 spinal + 2 coil | dealt nothing | torpedo POOR (slow arrival) ~9 GJ
+OCS Sovereign [beta_1] BB 1.0g | 118 km +4.1 km/s | shows you SIDE 45cm, burning | nearest TIS Dart-1 [alpha_1] 76 km | hull 100% | PD 3/3 | 1 spinal + 3 heavy coil + 1 coil | dealt nothing | torpedo POOR (slow arrival) ~6 GJ
+OCS Falchion-2 [beta_6] DD 2.0g | 149 km +4.0 km/s | shows you SIDE 26cm, burning | nearest TIS Dart-1 [alpha_1] 112 km | hull 100% | PD 2/2 | 1 spinal + 1 coil | dealt nothing | torpedo POOR (slow arrival) ~7 GJ
+OCS Lancer-1 [beta_2] BC 1.5g | 167 km +4.2 km/s | shows you NOSE 177cm, coasting | nearest TIS Dart-1 [alpha_1] 122 km | hull 100% | PD 2/2 | 1 spinal + 2 coil | dealt nothing | torpedo POOR (slow arrival) ~8 GJ, 2 of yours inbound
+OCS Lancer-2 [beta_3] BC 1.5g | 173 km +4.1 km/s | shows you NOSE 177cm, coasting | nearest TIS Dart-1 [alpha_1] 130 km | hull 100% | PD 2/2 | 1 spinal + 2 coil | dealt nothing | torpedo POOR (slow arrival) ~8 GJ, 2 of yours inbound
+OCS Lancer-3 [beta_4] BC 1.5g | 190 km +3.9 km/s | shows you SIDE 30cm, burning | nearest TIS Dart-1 [alpha_1] 152 km | hull 100% | PD 2/2 | 1 spinal + 2 coil | dealt nothing | torpedo POOR (slow arrival) ~9 GJ
 
 === ORDNANCE IN FLIGHT ===
 INBOUND ON YOU (can hit your hulls):
@@ -34,8 +34,8 @@ INBOUND ON YOU (can hit your hulls):
   1x Kinetic round -> TIS Dart-2 [alpha_2] from OCS Falchion-2 [beta_6]: ETA 11 s, ~1.9 GJ each
   EVADE makes the engine dodge (slugs, dead rounds), RUN or PRESENT armor (torpedoes) for: TIS Dart-1 [alpha_1], TIS Dart-2 [alpha_2]
 YOURS:
-  -> OCS Lancer-1 [beta_2]: 2 guided, ETA 12-16 s, 2/2 still catch a runner
-  -> OCS Lancer-2 [beta_3]: 2 guided, ETA 15-18 s, 2/2 still catch a runner
+  -> OCS Lancer-1 [beta_2]: 2 guided, ETA 10-14 s, 2/2 still catch a runner
+  -> OCS Lancer-2 [beta_3]: 2 guided, ETA 12-15 s, 2/2 still catch a runner
   2 dead round(s) still on course for OCS Sovereign [beta_1] (passes 0.20 km in 5-6 s)
   1 dead round(s) still on course for OCS Lancer-1 [beta_2] (passes 0.13 km in 11 s)
   spent: 3 of yours and 0 of theirs are dead rounds on nobody's line - ignore them
@@ -44,7 +44,7 @@ YOURS:
 Yours: 64/64 rounds left; 24 launches possible before T+210s (reload 12 s = up to 3 per tube per checkpoint)
 Salvo vs OCS Sovereign [beta_1] (POOR): 8 PD turrets cover it -> ~4 soaked + 22 to kill at ~6 GJ each = 26 together (you can launch 24 now: not enough to kill through that PD)
 Salvo vs OCS Falchion-2 [beta_6] (POOR): 8 PD turrets cover it -> ~4 soaked + 13 to kill at ~7 GJ each = 17 together
-Salvo vs OCS Lancer-1 [beta_2] (POOR): 8 PD turrets cover it -> ~4 soaked + 17 to kill at ~8 GJ each = 21 together; 2 of yours already inbound -> 19 more
+Salvo vs OCS Lancer-1 [beta_2] (POOR): 7 PD turrets cover it -> ~2 soaked + 6 to kill + 1 margin (datalink board) = 9 together; 2 of yours already inbound -> 7 more
 Trickled rounds die: 1-2 rounds into 3+ turrets are blinded one by one - launch together or not at all.
 Theirs: no torpedo launchers in their fleet - nothing to EVADE from torpedoes.
 
@@ -59,14 +59,14 @@ TIS Dart-6 [alpha_6] CO | hull 100% torp 8 (3 now) | MAINTAIN
 TIS Dart-7 [alpha_7] CO | hull 100% torp 8 (3 now) | MAINTAIN
 TIS Dart-8 [alpha_8] CO | hull 100% torp 8 (3 now) | MAINTAIN
 
-=== HEADINGS (world frame, fleet centre: issue_order heading=; the drive thrusts along the NOSE) ===
+=== HEADINGS (world frame, fleet centre: issue_order heading=; the drive thrusts along the NOSE; him: the face he shows you now->after the move, if he holds his attitude) ===
 GROUP A (OCS Sovereign +4):
-  cancel closure heading(-0.93,+0.36,+0.07) @100% ~179 s (6 checkpoints, renew it): rel. speed ~0 after 179 s, range then holds ~236 km while you keep matching his 0.9g burn (passes 1 km first) | TAIL to enemy ~179 s
-  open range     heading(-1.00,+0.07,+0.01) @100% ~45 s (2 checkpoints, renew it): then 15 km, opening 3.03 km/s | TAIL to enemy ~45 s
-  pass wide      heading(+0.04,+0.67,-0.74) @100% ~45 s (2 checkpoints, renew it): closest approach ~2 km in 27 s (coasting: 1.4 km) | BROADSIDE to enemy ~45 s
-  flank left     heading(+0.07,+1.00,-0.00) @100% ~40 s (2 checkpoints, renew it): 13 km off your coasting line, closest approach 2 km | BROADSIDE to enemy ~40 s
-  flank right    heading(-0.07,-1.00,+0.00) @100% ~41 s (2 checkpoints, renew it): 13 km off your coasting line, closest approach 1 km | BROADSIDE to enemy ~41 s
-  coast & launch heading(+1.00,-0.07,-0.01) throttle 0 or PADLOCK OCS Sovereign: RCS turn ~27 s, no drift; PADLOCK ~6 s (token burn, few m/s); closing: torpedoes launched now keep their solution | NOSE to enemy
+  cancel closure heading(-0.93,+0.36,+0.07) @100% ~179 s (6 checkpoints, renew it): rel. speed ~0 after 179 s, range then holds ~236 km while you keep matching his 0.9g burn (passes 1 km first) | TAIL to enemy ~179 s | him (median of 5: 2 NOSE, 3 SIDE now): SIDE 61->SIDE 99 deg (re-points in ~21 s)
+  open range     heading(-1.00,+0.07,+0.01) @100% ~45 s (2 checkpoints, renew it): then 15 km, opening 3.03 km/s | TAIL to enemy ~45 s | him (median of 5: 2 NOSE, 3 SIDE now): SIDE 61->SIDE 121 deg (re-points in ~24 s)
+  pass wide      heading(+0.04,+0.67,-0.74) @100% ~45 s (2 checkpoints, renew it): closest approach ~2 km in 27 s (coasting: 1.4 km) | BROADSIDE to enemy ~45 s | him (median of 5: 2 NOSE, 3 SIDE now): SIDE 61->SIDE 111 deg (re-points in ~41 s)
+  flank left     heading(+0.07,+1.00,-0.00) @100% ~40 s (2 checkpoints, renew it): 13 km off your coasting line, closest approach 2 km | BROADSIDE to enemy ~40 s | him (median of 5: 2 NOSE, 3 SIDE now): SIDE 61->SIDE 64 deg (re-points in ~17 s)
+  flank right    heading(-0.07,-1.00,+0.00) @100% ~41 s (2 checkpoints, renew it): 13 km off your coasting line, closest approach 1 km | BROADSIDE to enemy ~41 s | him (median of 5: 2 NOSE, 3 SIDE now): SIDE 61->SIDE 95 deg (re-points in ~29 s)
+  coast & launch heading(+1.00,-0.07,-0.01) throttle 0 or PADLOCK OCS Sovereign: RCS turn ~27 s, no drift; PADLOCK ~6 s (token burn, few m/s); coasting: closest approach 1.4 km in 45 s; closing: torpedoes launched now keep their solution | NOSE to enemy | him (median of 5: 2 NOSE, 3 SIDE now): SIDE 61->SIDE 60 deg (re-points in ~17 s)
 FORMATION: headings above are for the fleet centre (slowest hull 3.00g sets the pace, slowest turn sets the flip). Same heading with equal acceleration keeps the formation: throttles for 100% of the slowest hull = TIS Dart-1 100%, TIS Dart-2 100%, TIS Dart-3 100%, TIS Dart-4 100%, TIS Dart-5 100%, TIS Dart-6 100%, TIS Dart-7 100%, TIS Dart-8 100%. Easiest: ONE issue_order with ship_name="all ships", heading and throttle - each hull's throttle is scaled and the burn starts together.
 
 === YOUR STANDING BATTLE PLAN (set by you at T+30s) ===

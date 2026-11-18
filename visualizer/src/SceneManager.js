@@ -9,6 +9,19 @@ import { createTorch, damagedNozzle } from './render/Torch.js';
 
 const _nozzle = { level: 1, sputter: 0 };
 
+// three clamps a point light's inverse-square falloff at 0.1 scene units
+// (1 / max(d^2, 0.01)): harmless while hulls were kilometres long, but at
+// real size - 1 unit = 1 km, a 65 m corvette - every lamp within 100 m of
+// its plating would light it flat. Lower the clamp to 1 m; a pool light's
+// intensity is scaled by the borrower with the hull's draw scale squared.
+{
+  const chunk = THREE.ShaderChunk.lights_pars_begin;
+  const clamp = 'max( pow( lightDistance, decayExponent ), 0.01 )';
+  if (chunk.includes(clamp)) {
+    THREE.ShaderChunk.lights_pars_begin = chunk.replace(clamp, 'max( pow( lightDistance, decayExponent ), 0.000001 )');
+  }
+}
+
 const _plumeTurn = new THREE.Vector3();
 const _plumeQ = new THREE.Quaternion();
 import { Ribbon } from './render/Trails.js';
@@ -20,6 +33,11 @@ import { RcsSystem } from './render/Rcs.js';
 import { Projectiles } from './render/Projectiles.js';
 import { HeatFX } from './render/Heat.js';
 import { hullQuat, validUp } from './HullFrame.js';
+import {
+  shipScale, freeScale, framingLength, normalizeScaleMode, nextScaleMode, trueLengthM, DEFAULT_SCALE_MODE, FREE_TRUE_K
+} from './render/Scale.js';
+import { setCloseRangeUnit } from './render/CloseRange.js';
+import { DriveJets } from './render/DriveJet.js';
 const _hfFwd = [0, 0, 1], _hfQuat = [0, 0, 0, 1];
 
 /**
@@ -42,9 +60,38 @@ export function resetUnpackState(gl) {
  * battle visual. main.js drives it with interpolated state each frame.
  *
  * Scale: 1 scene unit = 1 km; recording positions are metres. Hulls are
- * exaggerated (a corvette is ~4 units long) so a fleet reads at the
- * hundreds-of-km ranges the sim fights at.
+ * BUILT in kit units (a corvette is 4 long, render/Hulls.js) and DRAWN by
+ * one uniform factor per ship, `userData.k` (scene km per kit unit), set
+ * every frame by updateScale() from render/Scale.js:
+ *   scale=auto       real size up close, a readable floor at distance (default)
+ *   scale=true       always the real 65-275 m hull
+ *   scale=cinematic  k = 1, the old fixed ~60x exaggeration
+ * `userData.size` stays the kit size (hull-local code: fittings, plumes,
+ * decals); `userData.drawn` is the size on the scene's km grid right now.
+ * Anything in world space that belongs to a hull multiplies by its k
+ * (kOf); free-flying effects authored in kit units use kAt(point).
  */
+const SCALE_STORAGE_KEY = 'aic.scaleMode';
+/** Share of the engine's blast radius the reactor fireball fills with real-size hulls. */
+const REACTOR_FIREBALL_SHARE = 0.55;
+/**
+ * Blast radius (km) per class for recordings without reactor_blast events:
+ * the engine's 15 km x sqrt(dry mass / cruiser dry mass) (src/battle_damage.py).
+ */
+const NOMINAL_BLAST_KM = {
+  corvette: 10.6, frigate: 10.6, destroyer: 13, cruiser: 15, cruiser_torpedo: 15, battlecruiser: 15,
+  battleship: 18.4, dreadnought: 21.2, dreadnought_siege: 22.4
+};
+/** Camera limits per regime: [near plane, closest orbit] in km. */
+const CAMERA_LIMITS = { cinematic: [0.2, 1.5], real: [0.0005, 0.012] };
+
+function initialScaleMode() {
+  const q = new URLSearchParams(globalThis.location?.search || '').get('scale');
+  if (q) return normalizeScaleMode(q);
+  try { return normalizeScaleMode(globalThis.localStorage?.getItem(SCALE_STORAGE_KEY) || DEFAULT_SCALE_MODE); }
+  catch { return DEFAULT_SCALE_MODE; }
+}
+
 export class SceneManager {
   constructor(canvas) {
     this.canvas = canvas;
@@ -57,6 +104,8 @@ export class SceneManager {
     this.deathInfo = {};
 
     this.SCALE = 1 / 1000;
+    this.scaleMode = initialScaleMode();
+    this.scaleListeners = new Set();
     this.currentTime = 0;
     this.delta = 0;
     this.elapsed = 0;
@@ -96,7 +145,6 @@ export class SceneManager {
     this.controls = new OrbitControls(this.camera, this.canvas);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.06;
-    this.controls.minDistance = 1.5;
     this.controls.maxDistance = 60000;
 
     // Fixed pool of point lights. three.js bakes the light COUNT into every
@@ -119,6 +167,7 @@ export class SceneManager {
 
     this.environment = new Environment(this.scene, this.renderer);
     this.postfx = new PostFX(this.renderer, this.scene, this.camera);
+    this._applyCameraLimits();
 
     this.createRangeRings();
     this.damageFX = new DamageFX(this);   // persistent hull damage (render/DamageFX.js)
@@ -131,12 +180,17 @@ export class SceneManager {
       tryLight: (c, i, d, r) => this.tryPointLight(c, i, d, r),
       freeLight: (l) => this.freePointLight(l),
       now: () => this.currentTime,
-      spawnBlast: (o) => this._spawnBlast({ ...o, category: 'destruction' })
+      spawnBlast: (o) => this._spawnBlast({ ...o, category: 'destruction' }),
+      // draw scale (render/Scale.js): of a hull, and of a free point
+      kOf: (shipId) => this.kOf(shipId),
+      kAt: (point) => this.kAt(point)
     };
     this.rcs = new RcsSystem(this.fxCtx);   // RCS attitude jets (render/Rcs.js)
     this.heat = new HeatFX(this);           // radiators + hull heat (render/Heat.js)
 
     this.weapons = new Projectiles(this);
+    this.driveJets = new DriveJets(this.scene);   // the exhaust jets at real size (render/DriveJet.js)
+    this.driveJetsOn = new URLSearchParams(globalThis.location?.search || '').get('jets') !== '0';   // ?jets=0 hides them
     this._updatePixelWorld();
     this.warmUp();
     this._onResize = () => this.onResize();
@@ -160,6 +214,7 @@ export class SceneManager {
     this._clearBlasts('damage');
     this.tracks?.dispose();
     this.weapons.dispose();
+    this.driveJets.dispose();
     this.rcs.dispose();
     this.heat.dispose();
     this.damageFX.dispose();
@@ -191,6 +246,130 @@ export class SceneManager {
       this.tacticalOverlay.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat));
     }
     this.scene.add(this.tacticalOverlay);
+  }
+
+  // ===========================================================================
+  // Scale (render/Scale.js)
+  // ===========================================================================
+  /** Near plane and closest orbit for the current scale mode. */
+  _applyCameraLimits() {
+    const [near, minDistance] = CAMERA_LIMITS[this.scaleMode === 'cinematic' ? 'cinematic' : 'real'];
+    if (this.camera.near !== near) {
+      this.camera.near = near;
+      this.camera.updateProjectionMatrix();
+    }
+    this.controls.minDistance = minDistance;
+    // Lengths tuned on the kit-size hulls (shadow box floor, AO reach,
+    // close-up thresholds) follow the mode: scene km per kit unit
+    const unit = this.scaleUnit();
+    if (this.environment) this.environment.scaleUnit = unit;
+    if (this.postfx) this.postfx.worldUnit = unit;
+    setCloseRangeUnit(unit);
+  }
+
+  /** Scene km per kit unit for constants tuned on the kit-size hulls (1 in cinematic). */
+  scaleUnit() {
+    return this.scaleMode === 'cinematic' ? 1 : FREE_TRUE_K;
+  }
+
+  /**
+   * Switch between auto / true / cinematic. The camera keeps looking at the
+   * same point from the same direction; its distance is rescaled so a hull
+   * framed in one mode is framed the same way in the next.
+   */
+  setScaleMode(mode, { persist = true, reframe = true } = {}) {
+    const next = normalizeScaleMode(mode);
+    if (next === this.scaleMode) return next;
+    const before = this.scaleMode;
+    this.scaleMode = next;
+    this._applyCameraLimits();
+    const flip = (before === 'cinematic') !== (next === 'cinematic');
+    if (reframe && flip) this._rescaleOrbit(before, next);
+    // a reactor blast is sized per mode: let the wrecks respawn from their recorded times
+    if (flip) this.clearDestructionEffects();
+    if (persist) { try { globalThis.localStorage?.setItem(SCALE_STORAGE_KEY, next); } catch { /* private mode */ } }
+    this.updateScale();
+    for (const fn of this.scaleListeners) fn(next, before);
+    return next;
+  }
+
+  cycleScaleMode() { return this.setScaleMode(nextScaleMode(this.scaleMode)); }
+
+  /** A close-up on a hull stays a close-up across a cinematic <-> real switch. */
+  _rescaleOrbit(before, next) {
+    const target = this.controls.target;
+    let near = null, best = Infinity;
+    for (const ship of this.ships.values()) {
+      if (!ship.visible) continue;
+      const d = ship.position.distanceTo(target);
+      if (d < best) { best = d; near = ship; }
+    }
+    if (!near) return;
+    const type = near.userData.shipType;
+    const from = framingLength(before, type), to = framingLength(next, type);
+    const view = this.camera.position.clone().sub(target);
+    // only when the camera is on that hull (within 12 of its lengths)
+    if (best > from * 1.5 || view.length() > from * 12) return;
+    target.copy(near.position);
+    this.camera.position.copy(target).addScaledVector(view, to / from);
+  }
+
+  /** Scene km per kit unit a ship is drawn at this frame (1 in cinematic). */
+  kOf(shipId) {
+    return this.ships.get(shipId)?.userData.k ?? this.kAt(null);
+  }
+
+  /** The same for a free-flying effect authored in kit units at a world point. */
+  kAt(point) {
+    if (this.scaleMode === 'cinematic') return 1;
+    const d = point ? this.camera.position.distanceTo(point) : 0;
+    return freeScale(this.scaleMode, d, this.camera.fov);
+  }
+
+  /**
+   * The hull length camera framing is measured in (scene km): static per
+   * mode, so a framing never depends on where the camera was before.
+   */
+  framingLength(shipId) {
+    return framingLength(this.scaleMode, this.ships.get(shipId)?.userData.shipType);
+  }
+
+  /**
+   * Settle the orbit controls and the hull draw scales for this frame.
+   * main.js calls it once the camera has been placed (director, follow,
+   * user input) and BEFORE the frame's effects are evaluated, so a hull,
+   * its mounts and everything attached to it use one scale per frame -
+   * also on the frame of a director cut.
+   */
+  syncCamera() {
+    this.controls.update();
+    this._cameraSynced = true;
+    this.updateScale();
+    this.driveJets.update(this.ships, this.driveJetsOn && this.scaleMode !== 'cinematic');
+  }
+
+  /**
+   * Draw scale of every hull for this frame: a pure function of the camera
+   * (position, fov) and each ship's position. Call once per frame after the
+   * camera is final and before anything reads a hull's world matrix.
+   */
+  updateScale() {
+    const cam = this.camera.position, fov = this.camera.fov, mode = this.scaleMode;
+    for (const [shipId, ship] of this.ships) {
+      const ud = ship.userData;
+      let at = ship.position;
+      if (!ship.visible) {
+        const eff = this.destructionEffects.find(e => e.shipId === shipId);
+        if (eff) at = eff.position;
+      }
+      const k = shipScale(mode, ud.shipType, cam.distanceTo(at), fov);
+      if (k !== ud.k) {
+        ud.k = k;
+        ship.scale.setScalar(k);
+        ud.drawn.length = ud.size.length * k;
+        ud.drawn.width = ud.size.width * k;
+      }
+    }
   }
 
   tryPointLight(color, intensity, distance, reserve = 0) {
@@ -310,8 +489,11 @@ export class SceneManager {
       torches.push(torch);
     }
 
+    const k = shipScale(this.scaleMode, shipType, this.camera.position.distanceTo(group.position), this.camera.fov);
+    group.scale.setScalar(k);
     Object.assign(group.userData, {
       shipId, faction, shipType, size, engineConfig, torches, plumeLength,
+      k, drawn: { length: size.length * k, width: size.width * k }, trueLengthKm: trueLengthM(shipType) / 1000,
       smoothThrust: 0, wasDying: false, dyingVents: null,
       navPhase: Math.random() * 10
     });
@@ -435,6 +617,7 @@ export class SceneManager {
     // frames), never a wall-clock filter: a scrub shows the same plume
     const thrust = state.thrust || 0;
     ud.smoothThrust = thrust;
+    ud.dyingNow = !!state.dying;   // (this frame's state: a hulk's sputtering torch throws no jet)
     const rate = state.dying ? 0 : (state.thrustRate || 0);
     // Plume sweep: the recorded turn rate in the hull frame (render/Torch.js)
     let turn = null;
@@ -487,7 +670,7 @@ export class SceneManager {
       if (!ship.visible) continue;
       const s = list[n] || (list[n] = { pos: null, r: 0, a: 0 });
       s.pos = ship.position;
-      s.r = (ship.userData.size?.length || 8) * 0.6;
+      s.r = (ship.userData.drawn?.length || 8) * 0.6;
       n++;
     }
     return n;
@@ -563,20 +746,22 @@ export class SceneManager {
   spawnHitEffect(position, energyGj, currentTime, opts = {}) {
     if (this.damageFX?.ownsImpacts()) return null;
     const pos = new THREE.Vector3(position[0] * this.SCALE, position[1] * this.SCALE, position[2] * this.SCALE);
-    let dir = null, baseVel = null;
+    let dir = null, baseVel = null, struck = null;
     let best = Infinity;
     for (const ship of this.ships.values()) {
       if (!ship.visible) continue;
       const d = ship.position.distanceToSquared(pos);
       if (d < best) {
         best = d;
+        struck = ship;
         dir = pos.clone().sub(ship.position);
         baseVel = null;
       }
     }
     if (dir && dir.lengthSq() > 1e-6) dir.normalize(); else dir = null;
     const scale = Math.max(0.6, Math.min(3.0, 0.8 * Math.pow(Math.max(0.5, energyGj), 0.35)));
-    this._spawnBlast({ position: pos, scale, spawnTime: currentTime, kind: opts.kind || 'impact', dir, baseVel, category: 'hit' });
+    this._spawnBlast({ position: pos, scale, spawnTime: currentTime, kind: opts.kind || 'impact', dir, baseVel, category: 'hit',
+      shipId: struck?.userData.shipId });
   }
 
   updateHitEffects(currentTime) {
@@ -597,7 +782,7 @@ export class SceneManager {
     // blowout, so they merge into one detonation sized for the sum.
     for (let i = this.blasts.length - 1; i >= 0; i--) {
       const b = this.blasts[i];
-      if (b.kind !== 'warhead' || Math.abs(b.spawnTime - currentTime) > 0.05 || b.origin.distanceToSquared(pos) > 0.25) continue;
+      if (b.kind !== 'warhead' || Math.abs(b.spawnTime - currentTime) > 0.05 || b.origin.distanceToSquared(pos) > 0.25 * this.kAt(pos) ** 2) continue;
       damageGj += b.damageGj || 0;
       b.dispose();
       this.blasts.splice(i, 1);
@@ -635,8 +820,8 @@ export class SceneManager {
           if (d < bd) { bd = d; best = s; }
         }
         let at = pos;
-        if (best && bd < 400) {
-          const L = best.userData.size.length, W = best.userData.size.width;
+        if (best && bd < 400 * best.userData.k ** 2) {
+          const L = best.userData.drawn.length, W = best.userData.drawn.width;
           at = new THREE.Vector3(0, -W * 0.31, L * 0.55).applyQuaternion(best.quaternion).add(best.position);
         }
         this._spawnFlare(at, [1.5, 1.3, 0.95], 0.6, 0.16, currentTime);
@@ -681,7 +866,7 @@ export class SceneManager {
       const p = Math.max(0, age / f.duration);
       f.sprite.visible = age >= 0;
       f.sprite.material.opacity = Math.pow(1 - p, 1.8);
-      f.sprite.scale.setScalar(f.scale * (0.6 + p * 1.6));
+      f.sprite.scale.setScalar(f.scale * (0.6 + p * 1.6) * this.kAt(f.sprite.position));
     }
   }
 
@@ -707,13 +892,36 @@ export class SceneManager {
   }
 
   /**
+   * Reach (km) of a ship's reactor blast: the recorded reactor_blast
+   * radius, else (older recordings) the engine's rule for the class.
+   */
+  blastRadiusKm(shipId, shipType) {
+    const b = this.damageFX?.timeline?.blasts?.find(x => x.shipId === shipId);
+    return b?.radius > 0 ? b.radius : NOMINAL_BLAST_KM[shipType] || NOMINAL_BLAST_KM.destroyer;
+  }
+
+  /**
+   * Blast scale (Explosion.js units) of the reactor detonation itself.
+   * Cinematic: the class table, as ever. With real-size hulls the blast is
+   * not a property of the (tiny) hull but of the engine's blast radius:
+   * its lasting fireball fills REACTOR_FIREBALL_SHARE of that radius - the
+   * shell that marks the full reach is BlastShell's - whatever the hull's
+   * draw scale. The blast is drawn at real size (Blast `real`).
+   */
+  reactorBlastScale(shipId, shipType) {
+    if (this.scaleMode === 'cinematic') return this.destructionScale(shipType);
+    const kind = (this.deathInfo || {})[shipId]?.meltdown ? 'meltdown' : 'reactor';
+    return REACTOR_FIREBALL_SHARE * this.blastRadiusKm(shipId, shipType) / blastExtentOver(kind, 1, 2, 6);
+  }
+
+  /**
    * Largest radius (scene units) this ship's death blast visibly draws
    * between two ages after its detonation - what a camera has to fit.
    */
   deathBlastExtent(shipId, fromAge = 0, toAge = 6) {
     const type = this.ships.get(shipId)?.userData?.shipType;
     const kind = (this.deathInfo || {})[shipId]?.meltdown ? 'meltdown' : 'reactor';
-    return blastExtentOver(kind, this.destructionScale(type), fromAge, toAge);
+    return blastExtentOver(kind, this.reactorBlastScale(shipId, type), fromAge, toAge);
   }
 
   createDestructionEffect(position, shipType, currentTime, shipId = null) {
@@ -741,6 +949,7 @@ export class SceneManager {
 
     const eff = new ShipDestruction(this.fxCtx, {
       shipGroup, shipId, position, driftVel, driftDuration, scale, spawnTime,
+      blastScale: this.reactorBlastScale(shipId, shipType),
       meltdown: !!death.meltdown   // reactor_overheat: the brighter detonation variant
     });
     this.destructionEffects.push(eff);
@@ -781,7 +990,10 @@ export class SceneManager {
   render() {
     this.delta = Math.min(0.1, this.clock.getDelta());
     this.elapsed = this.clock.elapsedTime;
-    this.controls.update();
+    // main.js settles the camera (syncCamera) before the frame's effects
+    // are placed; a frame it did not drive is settled here
+    if (!this._cameraSynced) { this.controls.update(); this.updateScale(); }
+    this._cameraSynced = false;
     const viewingDistance = this.camera.position.distanceTo(this.controls.target);
     this.camera.userData.viewDist = viewingDistance; // Environment dust-mote scale
     this.rangeRingMaterial.opacity = 0.12 * THREE.MathUtils.smoothstep(viewingDistance, 45, 250);

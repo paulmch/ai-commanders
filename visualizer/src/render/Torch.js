@@ -123,7 +123,8 @@ const fragmentShader = /* glsl */`
     // on the bells around it, which is the heat glow on the engine block.
     float sf = uR0 * (0.4 + 0.16 * uThrust);
     vec3 fc = ro - vec3(0.0, 0.0, -0.25 * uR0);
-    float fd2 = dot(fc, fc) - pow(dot(fc, rd), 2.0);
+    float fcd = dot(fc, rd);                     // a product: pow(<0, 2.0) is NaN on some GPUs
+    float fd2 = dot(fc, fc) - fcd * fcd;
     col += mix(uCore, uSheath, 0.3) * uFlare * (exp(-fd2 / (sf * sf)) + 0.1 * exp(-fd2 / (sf * sf * 7.0)));
 
     // Chord of the ray through the slab 0 <= s <= uLen (s = distance aft)
@@ -428,6 +429,7 @@ export function createTorch({ radius, length, light = null, tint = 'fusion', int
 
   const _wp = new THREE.Vector3();
   const _wd = new THREE.Vector3();
+  const lightReach = light ? light.distance : 0;   // kit units, as borrowed
   const u = material.uniforms;
   const phase = Math.random() * Math.PI * 2;
   const state = { thrust: 0 };
@@ -489,10 +491,17 @@ export function createTorch({ radius, length, light = null, tint = 'fusion', int
         levels.halo * shape.wide * breathe * (1 + 0.6 * tr.fade));
       u.uFlare.value = levels.flare * Math.min(1, thrust * 1.3 * gasp * gasp) * breathe * (1 + IGNITION_FLARE * tr.surge);
       if (light) {
+        // A pool light lives in world space: carry the hull's draw scale
+        // (render/Scale.js) into its offset, reach and - inverse-square -
+        // its intensity, so the stern is lit the same at any hull size
+        group.updateWorldMatrix(true, false);
+        const e = group.matrixWorld.elements;
+        const k = Math.hypot(e[8], e[9], e[10]);
         group.getWorldPosition(_wp);
         _wd.set(0, 0, -1).transformDirection(group.matrixWorld);
-        light.position.copy(_wp).addScaledVector(_wd, radius * 3);
-        light.intensity = (0.15 + 0.85 * shape.wide) * 8 * I * breathe;
+        light.position.copy(_wp).addScaledVector(_wd, radius * 3 * k);
+        if (lightReach > 0) light.distance = lightReach * k;
+        light.intensity = (0.15 + 0.85 * shape.wide) * 8 * I * breathe * k * k;
       }
     },
     dispose() {

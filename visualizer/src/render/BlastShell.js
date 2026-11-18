@@ -74,8 +74,8 @@ const fragmentShader = /* glsl */`
     #include <logdepthbuf_fragment>
     float ndv = abs(dot(normalize(vNormal), normalize(vView)));
     // limb-brightened: the bubble's outline is the blast radius
-    float rim = pow(1.0 - ndv, 4.5);
-    float limb = pow(1.0 - ndv, 12.0);
+    float rim = pow(max(1.0 - ndv, 0.0), 4.5);       // ndv can round past 1: pow(<0) is NaN on GPUs
+    float limb = pow(max(1.0 - ndv, 0.0), 12.0);
     // slow ripples over the skin so it reads as a surface, not a HUD ring
     float a = vLocal.y * 17.0 + sin(vLocal.x * 7.0 + uSeed * 9.0) * 2.2 + sin(vLocal.z * 5.0 - uSeed * 4.0) * 1.7;
     float rip = 0.7 + 0.3 * sin(a);

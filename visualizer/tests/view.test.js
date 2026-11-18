@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { updateTrailHistory } from '../src/render/Trails.js';
 import { CameraController } from '../src/CameraController.js';
-import { CONTACT_PANEL_IDS, placeContactLabel, threatBadgeBox, threatLabel } from '../src/ContactOverlay.js';
+import { CONTACT_PANEL_IDS, threatLabel } from '../src/ContactOverlay.js';
+import { placeChip, layoutTactical, waveLabel } from '../src/TacticalLayout.js';
 
 const options = { maxAge: 2.5, minStep: 0.5, max: 64 };
 
@@ -80,15 +81,16 @@ test('follow stays behind the ship, handles vertical flight and tracks a wreck',
 });
 
 test('contact labels avoid existing labels, panels, and the transport controls', () => {
+  const view = { width: 1280, height: 720 };
   const occupied = [{ x: 0, y: 90, w: 248, h: 500 }];
-  const a = placeContactLabel(330, 330, -1, occupied, 1280, 720);
+  const a = placeChip(330, 330, 10, 126, 34, -1, occupied, view);
   assert.ok(a);
   assert.ok(a.x >= 248);
   occupied.push(a);
-  const b = placeContactLabel(330, 335, -1, occupied, 1280, 720);
+  const b = placeChip(330, 335, 10, 126, 34, -1, occupied, view);
   assert.ok(b);
   assert.ok(b.y + b.h <= a.y || b.y >= a.y + a.h || b.x + b.w <= a.x || b.x >= a.x + a.w);
-  assert.equal(placeContactLabel(300, 700, -1, [{ x: 0, y: 0, w: 1280, h: 720 }], 1280, 720), null);
+  assert.equal(placeChip(300, 700, 10, 126, 34, -1, [{ x: 0, y: 0, w: 1280, h: 720 }], view), null);
 });
 
 test('fleet framing fits both fleets on a narrow viewport and ignores old wreck positions', () => {
@@ -114,22 +116,23 @@ test('fleet framing fits both fleets on a narrow viewport and ignores old wreck 
 
 const boxesOverlap = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 
-test('a threat badge is reserved: no label - the ship\'s own included - covers it', () => {
-  const text = threatLabel({ count: 3, eta: 41 });
-  assert.equal(text, '3 TORP · 41s');
-  const x = 500, y = 300;
-  const badge = threatBadgeBox(x, y, text);
-  // the label's preferred slot (right of the bracket, centred) used to sit on the badge
-  assert.ok(boxesOverlap({ x: x + 18, y: y - 17, w: 126, h: 34 }, badge));
-  const occupied = [{ x: x - 10, y: y - 10, w: 20, h: 20 }, badge];
-  const own = placeContactLabel(x, y, 1, occupied, 1280, 720);
-  assert.ok(own && !boxesOverlap(own, badge));
-  occupied.push(own);
-  // a neighbour just left of it whose labels go right
-  const other = placeContactLabel(x - 30, y + 4, 1, [...occupied, { x: x - 40, y: y - 6, w: 20, h: 20 }], 1280, 720);
-  assert.ok(!other || !boxesOverlap(other, badge));
-  // the badge grows with its text
-  assert.ok(threatBadgeBox(x, y, '12 TORP · 104s').w > badge.w);
+test('a torpedo-wave chip never covers a ship, its target included', () => {
+  assert.equal(threatLabel({ count: 3, eta: 41 }), '3 TORP · 41s');
+  assert.equal(waveLabel({ count: 15, eta: 6.4 }, 'Halberd-1'), '15 TORP ▸ Halberd-1 · 6s');
+  // the wave's head has nearly reached its target, next to a second ship
+  const ships = [
+    { id: 'beta_1', faction: 'beta', x: 500, y: 300, r: 6, name: 'OCS Halberd-1', type: 'battlecruiser' },
+    { id: 'beta_2', faction: 'beta', x: 530, y: 304, r: 6, name: 'OCS Halberd-2', type: 'battlecruiser' },
+    { id: 'alpha_1', faction: 'alpha', x: 200, y: 300, r: 6, name: 'TIS Dart-1', type: 'corvette' }
+  ];
+  const waves = [{ key: 'w', target: 'beta_1', count: 15, live: 15, eta: 1, x: 496, y: 300, tx: 500, ty: 300,
+    text: waveLabel({ count: 15, eta: 1 }, 'Halberd-1') }];
+  const out = layoutTactical({ view: { width: 1280, height: 720 }, ships, waves });
+  const box = out.waves[0].box;
+  assert.ok(box);
+  for (const s of ships) {
+    assert.ok(!boxesOverlap(box, { x: s.x - 10, y: s.y - 10, w: 20, h: 20 }), s.id);
+  }
   // contacts also keep clear of the live overlays and the AUTO CAM chip
   for (const id of ['commsFeed', 'killFeed', 'directorChip', 'liveDeliberation']) assert.ok(CONTACT_PANEL_IDS.includes(id), id);
 });

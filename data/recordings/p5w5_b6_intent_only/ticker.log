@@ -1,0 +1,83 @@
+=== BATTLE p5w5_b6_intent_only | glm-5.3-flash vs gpt-5.6-luna | spend $0.00/$11.00 ===
+200 pts/side, max 8 ships, 40 turns of 30s. Reasoning high. Admiral vision off.
+Costs: CO=corvette:24 FF=frigate:7 DD=destroyer:18 CA=cruiser:29 BC=battlecruiser:25 BB=battleship:43 DN=dreadnought:55 DS=dreadnought_siege:56 CT=cruiser_torpedo:100
+=== DRAFT BETA | gpt-5.6-luna | 200/200 pts | spend $0.00/$11.00 (+$0.01 held) ===
+Ships (2): Marlin-1 CT 100 | Marlin-2 CT 100
+Formation: Staggered torpedo echelon - Keep both torpedo cruisers within roughly 100 km for overlapping point defense, while staggering them in x...
+Concept: A two-cruiser torpedo force concentrates the entire budget into a coordinated 96-round saturation strike, overwhelming even heavy point-d...
+=== DRAFT ALPHA | glm-5.3-flash | 197/200 pts | spend $0.00/$11.00 ===
+Ships (8): Sovereign-1 BB 43 | Sovereign-2 BB 43 | Sovereign-3 BB 43 | Falchion-1 DD 18 | Falchion-2 DD 18 | Falchion-3 DD 18 | Ward-1 FF 7 | Ward-2 FF 7
+Formation: Anvil and Fangs - Battleships form a tight central anvil ~70 km apart so their PD envelopes fully overlap against torpedo str...
+Concept: Concentrated gun line of battle: three battleships as the armored core deliver massive spinal and turret firepower, destroyers add spinal...
+=== CP 1 | t=30s | spend $0.03/$11.00 ===
+ALPHA glm-5.3-flash: 8/8 alive, hull 100% | Sovereign-1 BB hull 100% arm 45/45cm heat 0% | Sovereign-2 BB hull 100% arm 45/45cm heat 0% | Sovereign-3 BB hull 100% arm 45/45cm heat 0% | Falchion-1 DD hull 100% arm 26/26cm heat 0% | Falchion-2 DD hull 100% arm 26/26cm heat 0% | Falchion-3 DD hull 100% arm 26/26cm heat 0% | Ward-1 FF hull 100% arm 12/12cm heat 0% | Ward-2 FF hull 100% arm 12/12cm heat 0%
+BETA gpt-5.6-luna: 2/2 alive, hull 100% | Marlin-1 CT hull 100% arm 41/41cm heat 0% | Marlin-2 CT hull 100% arm 41/41cm heat 0%
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 8 torps/0 impact, PD downed 0 torps
+A admiral: Their only weapon is torpedoes (96 rounds, no guns) - every round blinded, dodged or wasted on range is a round that cannot kill us, and...
+B admiral: Maintain a mutually supporting formation with overlapping point defense; do not rush into a close gun exchange. Execute a simultaneous co...
+Prompt cache: 1 hit / 3 write / 12 cold calls, 9.4k read + 24.4k written of 149.7k prompt tokens (6% read)
+=== CP 2 | t=60s | spend $0.04/$11.00 ===
+ALPHA glm-5.3-flash: 8/8 alive, hull 100% | Sovereign-1 BB hull 100% arm 45/45cm heat 10% | Sovereign-2 BB hull 100% arm 45/45cm heat 10% | Sovereign-3 BB hull 100% arm 45/45cm heat 7% | Falchion-1 DD hull 100% arm 26/26cm heat 9% | Falchion-2 DD hull 100% arm 26/26cm heat 6% [present] | Falchion-3 DD hull 100% arm 26/26cm heat 7% | Ward-1 FF hull 100% arm 12/12cm heat 4% | Ward-2 FF hull 100% arm 12/12cm heat 3%
+BETA gpt-5.6-luna: 2/2 alive, hull 100% | Marlin-1 CT hull 100% arm 41/41cm heat 1% | Marlin-2 CT hull 100% arm 41/41cm heat 0%
+Hits: none
+Kills: none
+Fire: A 28 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 11 torps/0 impact, PD downed 0 torps
+A admiral: Hold fleet course: all ships continue INTERCEPT on OCS Marlin-1, tight formation, noses on the enemy — do NOT break formation or turn awa...
+B admiral: Execute Phase 2: preserve the tight two-cruiser formation and overlapping point-defense coverage. Both captains use EVADE against the inb...
+Prompt cache: 11 hit / 3 write / 14 cold calls, 91.8k read + 32.8k written of 300.7k prompt tokens (31% read)
+=== CP 3 | t=90s | spend $0.05/$11.00 ===
+ALPHA glm-5.3-flash: 8/8 alive, hull 97% | Sovereign-1 BB hull 100% arm 45/45cm heat 20% | Sovereign-2 BB hull 100% arm 45/45cm heat 20% | Sovereign-3 BB hull 100% arm 45/45cm heat 18% | Falchion-1 DD hull 100% arm 26/26cm heat 18% | Falchion-2 DD hull 78% arm 0/151cm heat 9% [present] | Falchion-3 DD hull 100% arm 26/26cm heat 17% [intercept] | Ward-1 FF hull 100% arm 12/12cm heat 8% | Ward-2 FF hull 100% arm 12/12cm heat 5%
+BETA gpt-5.6-luna: 2/2 alive, hull 100% | Marlin-1 CT hull 100% arm 41/41cm heat 3% | Marlin-2 CT hull 100% arm 41/41cm heat 4%
+Hits: B:Marlin-1>A:Falchion-2 torp x3 | A:Sovereign-2>B:Marlin-1 spinal x1 | A:Sovereign-2>B:Marlin-1 gun x1
+Kills: none
+Fire: A 51 slugs/2 hit, 0 torps/0 impact, PD downed 1 torps ; B 0 slugs/0 hit, 16 torps/3 impact, PD downed 0 torps
+A admiral: Hold formation and press OCS Marlin-1: every hull INTERCEPT on it, noses kept ON the enemy so spinal guns and thickest armor face the tor...
+B admiral: Execute Phase 2 with disciplined fire control: launch only the allocated three-round finishing salvo at TIS Falchion-2; do not add torped...
+Prompt cache: 15 hit / 3 write / 22 cold calls, 127.9k read + 41.4k written of 454.8k prompt tokens (28% read)
+=== CP 4 | t=120s | spend $0.06/$11.00 ===
+ALPHA glm-5.3-flash: 6/8 alive, hull 80% | Sovereign-1 BB hull 100% arm 45/45cm heat 30% | Sovereign-2 BB hull 100% arm 45/45cm heat 30% | Sovereign-3 BB hull 100% arm 45/45cm heat 28% | Falchion-1 DD hull 100% arm 26/26cm heat 27% | Falchion-2 DD DEAD@93s | Falchion-3 DD hull 43% arm 0/151cm heat 19% DYING | Ward-1 FF hull 100% arm 12/12cm heat 12% | Ward-2 FF hull 100% arm 12/12cm heat 9%
+BETA gpt-5.6-luna: 2/2 alive, hull 100% | Marlin-1 CT hull 100% arm 41/41cm heat 5% | Marlin-2 CT hull 100% arm 41/41cm heat 8%
+Hits: B:Marlin-1>A:Falchion-3 torp x4 | B:Marlin-2>A:Falchion-2 torp x2 | A:Sovereign-1>B:Marlin-1 gun x2 | A:Falchion-2>B:Marlin-1 spinal x2 | A:Falchion-3>B:Marlin-1 spinal x1 | +2 more
+Kills: A:Falchion-2 crippled by B:Marlin-2 (detonates in 26s) @93s ; A:Falchion-2 by B:Marlin-2 (reactor_destroyed) @93s ; A:Falchion-3 crippled by B:Marlin-1 (detonates in 29s) @114s
+Fire: A 37 slugs/7 hit, 0 torps/0 impact, PD downed 5 torps ; B 0 slugs/0 hit, 8 torps/6 impact, PD downed 0 torps
+A admiral: PASS WIDE, NOT THROUGH: all ships burn heading(-0.02,+1.00,-0.03) @100% (formation pace: Sovereigns 100%, Falchion-1 50%, Wards 33%) - cl...
+B admiral: Both cruisers EVADE incoming gunfire and remain mutually close for overlapping PD while crossing the unavoidable merge; do not chase the...
+Prompt cache: 23 hit / 3 write / 24 cold calls, 209.3k read + 50.8k written of 584.4k prompt tokens (36% read)
+=== CP 5 | t=150s | spend $0.08/$11.00 ===
+ALPHA glm-5.3-flash: 5/8 alive, hull 50% | Sovereign-1 BB hull 43% arm 0/45cm heat 39% rad [present] | Sovereign-2 BB hull 100% arm 45/45cm heat 37% [present] | Sovereign-3 BB hull 55% arm 0/45cm heat 36% | Falchion-1 DD DEAD@122s | Falchion-2 DD DEAD@93s | Falchion-3 DD DEAD@137s | Ward-1 FF hull 100% arm 12/12cm heat 14% [present] | Ward-2 FF hull 100% arm 12/12cm heat 11%
+BETA gpt-5.6-luna: 2/2 alive, hull 100% | Marlin-1 CT hull 100% arm 34/41cm heat 12% | Marlin-2 CT hull 100% arm 41/41cm heat 14%
+Hits: B:Marlin-1>A:Sovereign-3 torp x5 | B:Marlin-2>A:Falchion-1 torp x4 | B:Marlin-2>A:Sovereign-1 torp x3 | A:Sovereign-2>B:Marlin-1 gun x2 | A:Sovereign-3>B:Marlin-1 gun x1 | +2 more
+Kills: A:Falchion-1 crippled by B:Marlin-2 (detonates in 8s) @120s ; A:Falchion-1 by B:Marlin-2 (reactor_detonation) @122s ; A:Falchion-3 by B:Marlin-1 (reactor_detonation) @137s
+Fire: A 21 slugs/5 hit, 0 torps/0 impact, PD downed 4 torps ; B 0 slugs/0 hit, 13 torps/12 impact, PD downed 0 torps
+A admiral: Inbound torpedo waves: Sovereign-1, Sovereign-2, Ward-1 EVADE inside the PD wall, nose to live rounds; everyone holds formation inside la... [after retry: truncated at 8192 tokens, 7465 of them reasoning]
+B admiral: Both cruisers EVADE continuously against the incoming gun salvo while preserving overlapping PD and formation. Execute the synchronized t...
+Prompt cache: 31 hit / 3 write / 26 cold calls, 290.5k read + 59.9k written of 712.6k prompt tokens (41% read)
+=== CP 6 | t=180s | spend $0.08/$11.00 ===
+ALPHA glm-5.3-flash: 3/8 alive, hull 32% | Sovereign-1 BB DEAD@150s | Sovereign-2 BB hull 100% arm 45/45cm heat 39% | Sovereign-3 BB hull 55% arm 0/45cm heat 37% | Falchion-1 DD DEAD@122s | Falchion-2 DD DEAD@93s | Falchion-3 DD DEAD@137s | Ward-1 FF DEAD@151s | Ward-2 FF hull 100% arm 12/12cm heat 14%
+BETA gpt-5.6-luna: 2/2 alive, hull 100% | Marlin-1 CT hull 100% arm 34/41cm heat 21% | Marlin-2 CT hull 100% arm 41/41cm heat 15%
+Hits: B:Marlin-1>A:Ward-1 torp x2 | B:Marlin-2>A:Sovereign-1 torp x1
+Kills: A:Sovereign-1 by B:Marlin-2 (reactor_destroyed) @150s ; A:Ward-1 crippled by B:Marlin-1 (detonates in 15s) @151s ; A:Ward-1 by B:Marlin-1 (reactor_destroyed) @151s
+Fire: A 8 slugs/0 hit, 0 torps/0 impact, PD downed 2 torps ; B 0 slugs/0 hit, 8 torps/3 impact, PD downed 0 torps
+A admiral: FLEET DIRECTIVE (T+180): Draw formally proposed to enemy Admiral - hold dispositions if it is accepted. Until then: ABORT branch - all sh...
+B admiral: Break the approach under full EVADE while maintaining a tight formation and overlapping PD; favor cancel-closure or opening geometry rath...
+Prompt cache: 37 hit / 3 write / 27 cold calls, 349.3k read + 68.2k written of 799.9k prompt tokens (44% read)
+=== CP 7 | t=210s | spend $0.09/$11.00 ===
+ALPHA glm-5.3-flash: 1/8 alive, hull 5% | Sovereign-1 BB DEAD@150s | Sovereign-2 BB DEAD@192s | Sovereign-3 BB hull 37% arm 0/262cm heat 39% | Falchion-1 DD DEAD@122s | Falchion-2 DD DEAD@93s | Falchion-3 DD DEAD@137s | Ward-1 FF DEAD@151s | Ward-2 FF DEAD@204s
+BETA gpt-5.6-luna: 2/2 alive, hull 100% | Marlin-1 CT hull 100% arm 34/41cm heat 25% | Marlin-2 CT hull 100% arm 41/41cm heat 22%
+Hits: B:Marlin-2>A:Sovereign-2 torp x4 | B:Marlin-1>A:Sovereign-2 torp x3 | B:Marlin-2>A:Ward-2 torp x3 | B:Marlin-1>A:Sovereign-3 torp x3 | B:Marlin-2>A:Sovereign-3 torp x1
+Kills: A:Sovereign-2 crippled by B:Marlin-2 (detonates in 2s) @189s ; A:Sovereign-2 by B:Marlin-2 (reactor_detonation) @192s ; A:Ward-2 by B:Marlin-2 (reactor_destroyed) @204s
+Fire: A 6 slugs/0 hit, 0 torps/0 impact, PD downed 1 torps ; B 0 slugs/0 hit, 4 torps/14 impact, PD downed 0 torps
+A admiral: Sovereign-3: EVADE FULL now — 14 torpedoes arrive in 6-36 s, 1 PD turret bears, blinding ~0. Run burn heading(-0.98,+0.20,+0.04) @100% wi...
+B admiral: Reject the draw. Treat TIS Sovereign-3 as the sole target: the existing 14-round inbound salvo is sufficient, so launch no torpedoes now....
+Prompt cache: 42 hit / 3 write / 27 cold calls, 383.8k read + 75.2k written of 856.1k prompt tokens (45% read)
+=== RESULT | t=216s | after CP 7 | spend $0.09/$11.00 ===
+Winner: BETA - Alpha fleet eliminated
+ALPHA glm-5.3-flash: 0/8 alive, hull 0% | Sovereign-1 BB DEAD@150s | Sovereign-2 BB DEAD@192s | Sovereign-3 BB DEAD | Falchion-1 DD DEAD@122s | Falchion-2 DD DEAD@93s | Falchion-3 DD DEAD@137s | Ward-1 FF DEAD@151s | Ward-2 FF DEAD@204s
+BETA gpt-5.6-luna: 2/2 alive, hull 100% | Marlin-1 CT hull 100% arm 34/41cm heat 27% | Marlin-2 CT hull 100% arm 41/41cm heat 24%
+Final interval - Hits: B:Marlin-2>A:Sovereign-3 torp x1
+Final interval - Kills: A:Sovereign-3 by B:Marlin-2 (reactor_destroyed) @215s
+Final interval - Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/1 impact, PD downed 0 torps
+Spend: $0.0882 reported, $0.0882 committed of $11.00 limit, 72 model calls
+Recording: /home/plmch/ai-commanders/visualizer/public/recordings/p5w5_b6_intent_only.json

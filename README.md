@@ -31,24 +31,24 @@ git clone https://github.com/paulmch/ai-commanders.git
 cd ai-commanders
 
 mkdir -p visualizer/public/recordings
-cp data/recordings/intent_*.json data/recordings/showcase_torpedo_fleet.json visualizer/public/recordings/
-cp data/recordings/glm_luna_200pt_live_20260906/battle_glm_5_3_flash_vs_gpt_5_6_luna_20260906_140449.json \
-  visualizer/public/recordings/glm_luna_200pt_live_20260906.json
-cp data/recordings/sonnet5_vs_dsv41flash_150pt_20260926/battle_sonnet5_vs_dsv41flash_150pt_20260926.json \
-  visualizer/public/recordings/sonnet5_vs_dsv41flash_150pt_20260926.json
+cp data/recordings/intent_*.json.gz data/recordings/showcase_torpedo_fleet.json.gz visualizer/public/recordings/
+cp data/recordings/glm_luna_200pt_live_20260906/battle_glm_5_3_flash_vs_gpt_5_6_luna_20260906_140449.json.gz \
+  visualizer/public/recordings/glm_luna_200pt_live_20260906.json.gz
+cp data/recordings/sonnet5_vs_dsv41flash_150pt_20260926/battle_sonnet5_vs_dsv41flash_150pt_20260926.json.gz \
+  visualizer/public/recordings/sonnet5_vs_dsv41flash_150pt_20260926.json.gz
 
 cd visualizer
 npm ci
 npm run dev
 ```
 
-Open **[the Sonnet 5 vs DeepSeek torpedo swarm](http://localhost:5173/?recording=/recordings/sonnet5_vs_dsv41flash_150pt_20260926.json)**, **[the GLM–Luna replay](http://localhost:5173/?recording=/recordings/glm_luna_200pt_live_20260906.json)**, or **[the torpedo-fleet showcase](http://localhost:5173/?recording=/recordings/showcase_torpedo_fleet.json)** (a seeded heuristic battle recorded with per-frame trajectory predictions). Or open [localhost:5173](http://localhost:5173) and choose any recording JSON from `data/recordings/` with the file selector.
+Open **[the Sonnet 5 vs DeepSeek torpedo swarm](http://localhost:5173/?recording=/recordings/sonnet5_vs_dsv41flash_150pt_20260926.json.gz)**, **[the GLM–Luna replay](http://localhost:5173/?recording=/recordings/glm_luna_200pt_live_20260906.json.gz)**, or **[the torpedo-fleet showcase](http://localhost:5173/?recording=/recordings/showcase_torpedo_fleet.json.gz)** (a seeded heuristic battle recorded with per-frame trajectory predictions). Or open [localhost:5173](http://localhost:5173) and choose any recording JSON from `data/recordings/` with the file selector.
 
 ![The replay HUD during Claude Sonnet 5's torpedo swarm: the scoreboard, a kill toast for OCS Falchion-1, torpedoes streaming at DeepSeek's battle line, and the command net with the salvo orders](docs/images/readme/fleet-battle.png)
 
 *Claude Sonnet 5's eight-corvette torpedo swarm lands its first kill on DeepSeek V4.1 Flash's battle line, while the command net shows the synchronized salvo orders behind it.*
 
-**Recording files.** New battles are saved as gzip-compressed JSON (`battle_*.json.gz`, typically 15-37x smaller than the plain indented `.json` recordings above); pass `--plain-json` to the battle scripts for the old format, and `scripts/run_draft_battle.py --no-recording` for outcome-only sweeps. The viewer (URL, file selector, saved live replay) and every script read both formats, so `.json.gz` files can be copied into `visualizer/public/recordings/` and opened as `?recording=/recordings/<name>.json.gz`. `uv run python scripts/compress_recordings.py <dir> --dry-run` shows what gzipping an existing folder would save; without `--dry-run` it writes verified `.json.gz` copies (`--delete-originals` removes each original once its copy loads back identical).
+**Recording files.** Battles are saved as gzip-compressed JSON (`battle_*.json.gz`, typically 15-37x smaller than plain indented `.json`), and the sample recordings in `data/recordings/` are stored that way too; pass `--plain-json` to the battle scripts for the old format, and `scripts/run_draft_battle.py --no-recording` for outcome-only sweeps. The viewer (URL, file selector, saved live replay) and every script read both formats, so `.json.gz` files can be copied into `visualizer/public/recordings/` and opened as `?recording=/recordings/<name>.json.gz`. `uv run python scripts/compress_recordings.py <dir> --dry-run` shows what gzipping an existing folder would save; without `--dry-run` it writes verified `.json.gz` copies (`--delete-originals` removes each original once its copy loads back identical).
 
 ### Viewer controls
 
@@ -58,18 +58,22 @@ Open **[the Sonnet 5 vs DeepSeek torpedo swarm](http://localhost:5173/?recording
 | **← / →** | Seek backward or forward five seconds |
 | **F** | Frame the active fleets |
 | **D** | Open or close intent and consequence |
-| **C** | Toggle tactical contact labels |
-| **N** | Open or close the command net (directives, orders, captain reports, fleet signals) |
+| **L** | Cycle label density: auto (a short-name chip per ship, crowded ships of one side share a group chip, full cards only for the selected or dying ship; hover a chip or a registry row for the details), minimal (brackets only), full (every ship's card, every engagement line and track marker). `?labels=auto\|minimal\|full` sets it for one page load; the choice is remembered |
+| **C** | Hide or show all contact labels, torpedo-wave chips and engagement lines |
+| **N** | Open or close the command net (directives, orders, captain reports, fleet signals; closed by default in a replay, open in a live battle; the choice is remembered) |
 | **A** | Toggle the automatic camera director (a shot list built from the recording: salvo launches over the shooter's shoulder, torpedo run-ins, hulk orbits, pull-backs on reactor blasts; dragging pauses it) |
 | **[ / ]** | Jump to the previous / next highlight (kills, strikes, salvos, the first gun exchange) |
 | **T** | Cycle trajectory tracks: off, predicted, predicted + actual (replay) |
 | **Shift+T** | Draw tracks for every ship or only the selected ship (also the ALL/SEL button in the track HUD) |
 | **G** | Switch graphics quality between low and high (`?gfx=low\|high\|auto` in the URL) |
+| **S** | Cycle the hull scale: auto, true, cinematic (`?scale=auto\|true\|cinematic` in the URL; see below) |
 | Click a ship or its registry entry | Select and focus it |
 | Drag / scroll | Orbit / zoom |
 | Timeline or time input | Seek to an exact moment |
 | **FOLLOW** button | Return to following the live battle |
 | **REALTIME** / **FLEETS** buttons | Live pacing behind the newest frame, and reopening the draft splash |
+
+**Ships are their real size.** Hulls are 65 to 275 m long and fight at tens to hundreds of kilometres. In the default **auto** scale a ship near the camera is drawn at exactly its real size, and everything that touches it is at real scale and in the right place: coilgun slugs and torpedoes arrive at the hull and stop there, a miss passes beside it, point-defense beams leave the turret that fired, a reactor blast is the engine's 10 to 20 km against a 100 m hull, and a torch's exhaust is a faint cone reaching tens of kilometres astern (the jet the engine's plume wash uses; `?jets=0` hides it). A hull too far away to see is enlarged only as far as needed to stay a small readable silhouette (about 2 to 4% of the view height, growing smoothly from real size with no jump), with the contact brackets and labels on top. **S** cycles to **true** (always real size; at distance only the markers remain) and **cinematic** (every hull about 60 times oversize at every range, the look of earlier versions). Screenshots on this page captioned *cinematic scale* were captured in that mode; the others use the default.
 
 Each of the nine hull classes has its own design, drawn to scale in faction livery with its real armament: spinal coilers, battery turrets and point-defense mounts at one physical size on every hull, torpedo banks whose cells empty as rounds launch, radiators that telescope out and glow with the heat they reject, and RCS thrusters that fire as a ship turns or jinks. Coilgun slugs leave the barrel that fired them. Kinetic torpedo strikes flash and throw spall instead of exploding like warheads. Hits leave cooling craters, scorched plating and venting breaches, and killed ships become burning hulks before their reactors go. Everything, including destruction, reconstructs correctly when you scrub backward.
 
@@ -77,31 +81,47 @@ Each of the nine hull classes has its own design, drawn to scale in faction live
 
 *Every hull class to scale in both liveries: siege dreadnought, dreadnought, battleship, battlecruiser, torpedo cruiser, cruiser, destroyer, frigate and corvette.*
 
-**Trajectory tracks** (**T**) show where each ship will be at the next checkpoint. Recordings made with `--trace` store a prediction for every frame: a movement-only shadow of the simulation flies each ship's own guidance forward to the checkpoint without touching the battle's dice. Evasion keeps nudging the ship, so the prediction is recomputed every second and the checkpoint marker wanders. The focused ship shows this directly: a dotted trail of where earlier frames predicted the checkpoint, rings for the 1σ/2σ spread, and a label such as "T+8s ±35 m". The trail and rings are drawn at the same exaggeration as the hulls so metre-scale jinks stay visible. The spread is calibrated per evasion mode, and reactive modes (run, present, brace) get a low-confidence style. In replays, "predicted + actual" also draws the path the ship really flew; a live checkpoint still waiting for orders shows a provisional marker. Older recordings fall back to a constant-acceleration projection.
+**Trajectory tracks** (**T**) show where each ship will be at the next checkpoint. Recordings made with `--trace` store a prediction for every frame: a movement-only shadow of the simulation flies each ship's own guidance forward to the checkpoint without touching the battle's dice. Evasion keeps nudging the ship, so the prediction is recomputed every second and the checkpoint marker wanders. The focused ship shows this directly: a dotted trail of where earlier frames predicted the checkpoint, rings for the 1σ/2σ spread, and a label such as "T+8s ±35 m". The trail and rings are drawn at the same scale as the hull they belong to (real size up close, enlarged with it at distance), so metre-scale jinks stay in proportion. The spread is calibrated per evasion mode, and reactive modes (run, present, brace) get a low-confidence style. In replays, "predicted + actual" also draws the path the ship really flew; a live checkpoint still waiting for orders shows a provisional marker. Older recordings fall back to a constant-acceleration projection.
 
 ![Two battleships under thrust with fans of point-defense laser beams converging on an incoming torpedo's burn trail, while a penetrator strikes one hull](docs/images/readme/torpedo-salvo.png)
 
-*Point-defense lasers dwell on an inbound torpedo while another round strikes the hull.*
+*Point-defense lasers dwell on an inbound torpedo while another round strikes the hull (cinematic scale: the two battleships are about 20 km apart).*
 
 ![A battleship's reactor breach: an orange fireball inside an expanding shock shell, debris streaks, and a sister ship's engine plume crossing the blast](docs/images/readme/reactor-breach.jpg)
 
-*Seconds later that battleship's reactor goes up. Destruction is part of the recording: the camera can move, but the event stays tied to battle time.*
+*Seconds later that battleship's reactor goes up (cinematic scale). Destruction is part of the recording: the camera can move, but the event stays tied to battle time.*
 
 **Damage is specific.** A hit can knock out an individual gun mount, torpedo tube, point-defense turret or the drive, and the ship registry shows one pip per fitting so you can see a battleship that still has most of its hull but none of its guns. Every death is a reactor blast with a shell drawn out to its real radius; ships inside it lose armour and fittings, torpedoes inside it die or go blind, and a destroyed magazine cooks off.
 
+![The bow of a blue-grey battlecruiser seen from ahead: dark slug holes punched through the nose plating, red-rimmed glowing craters, a white-hot fresh impact throwing sparks, and cones of gas venting from two breaches](docs/images/readme/damage-bow.png)
+
+*Claude Sonnet 5's battlecruiser after more than thirty coilgun hits on the bow, moments before its magazine goes: slug holes, craters still glowing, a fresh impact, and atmosphere venting from the breaches. Its spinal gun, both batteries and both point-defense turrets are already wrecked.*
+
+![A battleship from above the bow: scorched deck plating, a smoking heavy battery turret, an electrical arc and two gas jets from glowing breaches in the nose](docs/images/readme/damage-mounts.jpg)
+
+*A battleship 27 seconds after its forward magazine burned: scorched deck, one heavy battery wrecked and smoking, the bow venting.*
+
+![A fireball swallowing the bow of a battleship, with a cone of burning debris thrown ahead of it](docs/images/readme/damage-cookoff.png)
+
+*That forward magazine cooking off.*
+
+![A battleship covered in glowing orange cracks, venting gas from a dozen breaches, a secondary explosion behind its turrets and a guttering blue torch](docs/images/readme/damage-hulk.png)
+
+*The same ship as a dying hulk, a few seconds before its reactor lets go: molten cracks spreading from the wounds, secondary explosions, a sputtering torch.*
+
 ![The replay HUD with fitting pips in the ship registry, a kill toast naming the blast radius and the ship it caught, and a DISARMED notice](docs/images/readme/fittings-hud.png)
 
-*One pip per gun, tube and point-defense turret; the kill toast says what the reactor blast caught.*
+*One pip per gun, tube and point-defense turret; the kill toast says what the reactor blast caught (cinematic scale).*
 
 ![An orange reactor fireball inside a translucent blast shell, with escort ships beside it](docs/images/readme/blast-shell.jpg)
 
-*The shell marks the blast radius the engine used, so you can see which ships and torpedoes were inside it.*
+*The shell marks the blast radius the engine used, so you can see which ships and torpedoes were inside it (cinematic scale: the escorts are drawn about 60 times their size against the 13 km shell).*
 
 **The drive is a hazard.** A torch carries about 300 TW of jet power. A ship in another ship's exhaust takes heat, then armour and fitting damage, and its crew accumulates a radiation dose; the washed plating glows. An interlock throttles a drive that would wash an allied ship, and commanders see plume and crew warnings in their status.
 
-![A battleship under full burn seen from ahead, with a destroyer inside its exhaust, the destroyer's plating glowing](docs/images/readme/plume-wash.png)
+![The stern of a battleship at lower left with its blue torch lit; a faint cone of exhaust runs from it to a small glowing destroyer in the distance](docs/images/readme/plume-wash.png)
 
-*A destroyer caught in a battleship's exhaust: the washed plating glows, fittings burn off and the crew takes a radiation dose.*
+*A destroyer six kilometres astern of a battleship, inside its exhaust jet: at real size the torch's flame is under a kilometre long, and the jet that does the damage is the faint cone beyond it. The washed destroyer glows.*
 
 ![A dreadnought in three-quarter view with slab armour plating, wedge bow and parallel drive jets, point-defense lasers firing](docs/images/readme/dreadnought.png)
 
@@ -109,7 +129,7 @@ Each of the nine hull classes has its own design, drawn to scale in faction live
 
 ![A torpedo salvo striking a battleship, with point-defense lasers and impact fountains](docs/images/readme/torpedo-strike.png)
 
-*A synchronised torpedo salvo lands on a battleship.*
+*A synchronised torpedo salvo lands on a battleship (cinematic scale).*
 
 **The automatic director** (**A**) films a replay from a shot list built out of the recording, and `scripts/viewer_clip.py` renders any time range to MP4 or GIF:
 
@@ -150,7 +170,7 @@ uv run python scripts/run_live_draft_battle.py \
   --points 150 --turns 20 --reasoning medium --spend-limit 30
 ```
 
-`--reasoning` is sent as the effort setting on every request of both sides (adaptive thinking, no sampling parameters). Spend is computed from token usage with the dated price table in `src/llm/anthropic_client.py`; the system prompt is cached with a 1-hour breakpoint. A refused turn issues no orders, is recorded as a `model_refusal` event, and is never re-run on another model. The recording's `provenance.llm` names the provider, exact model id, effort and SDK/API version of each side. `--mock-llm` runs the same path offline. Each request first reserves an upper bound on its cost (every prompt byte at the 1-hour cache-write rate plus the full output limit, about $0.35 for a Sonnet captain call), so set `--spend-limit` to the expected spend plus the reservations of one checkpoint's parallel calls (about $6 for 16 Sonnet captains).
+Without `--reasoning` each Anthropic model runs at its battle default from `BATTLE_DEFAULT_EFFORT` in `src/llm/anthropic_client.py` (high for Sonnet 5.5, Opus 5.5 and Fable 5.2; medium for Sonnet 5 and Haiku 5.5): replaying 20 recorded turns, Sonnet 5.5 at medium thought on 9 of 60 calls and drafted an invalid fleet in 8 of 9 tries, at high on 60 of 60 and 0 of 9, at the same cost. `--reasoning` (or `--effort ROLE=LEVEL` per role and side) overrides it; the effort actually sent is recorded on every `model_call` (adaptive thinking, no sampling parameters). There is no default model: name both sides (`--require-provider anthropic` refuses any OpenRouter id). Spend is computed from token usage with the dated price table in `src/llm/anthropic_client.py`; the system prompt is cached with a 1-hour breakpoint. A refused turn issues no orders, is recorded as a `model_refusal` event, and is never re-run on another model. The recording's `provenance.llm` names the provider, exact model id, effort and SDK/API version of each side. `--mock-llm` runs the same path offline. Each request first reserves an upper bound on its cost (every prompt byte at the 1-hour cache-write rate plus the full output limit, about $0.35 for a Sonnet captain call), so set `--spend-limit` to the expected spend plus the reservations of one checkpoint's parallel calls (about $6 for 16 Sonnet captains).
 
 Open **[the live viewer](http://localhost:5173/?live=1&decisions=1)** before the draft finishes. It shows each sealed draft as it commits, with the admiral's reasoning and formation, then switches to the battle automatically.
 
@@ -164,18 +184,20 @@ The battle plays at your chosen speed a few seconds behind the newest frame. At 
 | --- | --- |
 | Fleet selection | Both admirals independently buy ships and place formations |
 | Commanders | Each captain uses its faction's model; the admiral issues fleet and individual orders |
-| Model settings | High reasoning, up to 8,192 output tokens per request, text observations |
+| Model settings | Per-model default effort (high for Sonnet 5.5 / Opus 5.5 / Fable 5.2, medium for Sonnet 5 / Haiku 5.5, high for OpenRouter ids), up to 8,192 output tokens per request, text observations |
 | Decision timing | 30 simulated seconds per turn; the final turn gets its execution window too |
 | Starting range | Fleet anchors begin 500 km apart; formations offset individual ships |
 | End conditions | Up to 40 turns; elimination, surrender, or an agreed draw can end it earlier |
 | Spending | One $8 ceiling shared by drafting, battle calls, and retries |
 | Recording | Progress saved after each turn; full simulation frames and decision evidence |
 
-The first decision follows a 30-second opening coast, so this setup allows up to **1,230 simulated seconds**. Model calls take wall-clock time: **“Commanders deciding” is a decision phase**, while the spectator server stays responsive.
+Checkpoint 1 is at T+0 (the commanders give their first orders before the clock starts) and every turn's orders fly their full 30 seconds, the last one included, so this setup allows up to **1,200 simulated seconds** (20 turns: T+0 to T+570, ending at T+600). Recordings from before this change decide first at T+30 and still replay. Model calls take wall-clock time: **“Commanders deciding” is a decision phase**, while the spectator server stays responsive.
 
 The launcher checks OpenRouter's model catalog, reserves costs before requests, and applies provider price ceilings. The dollar limit is a ceiling, not a price estimate. If it is reached, the runner stops and preserves the partial replay. Model availability, supported reasoning settings, and rates depend on the provider.
 
-Completed replays are staged under `visualizer/public/recordings/`. Drafts, configuration, the battle archive, and a continuously updated spending report live under `data/recordings/<run name>/`. The server stays available after the battle, and the same live link becomes a replay. Use `--no-linger` to close it on completion.
+Completed replays are staged under `visualizer/public/recordings/`. Drafts, configuration, the battle archive, and a continuously updated spending report live under `data/recordings/<run name>/`. The server stays available after the battle, and the same live link becomes a replay, so **the process keeps running after the battle ends** (it says so on its last lines) until you stop it. Use `--no-linger` to close it on completion, e.g. for background or scripted runs.
+
+The admirals' tactical plot (`--admiral-vision`, the only switch; off unless asked for) is still sent where it is used, by the owner's decision. Know what it does: replaying 90 recorded admiral calls with the old plot, the new plot and no plot, the orders did not differ. Do not remove it on that evidence, and do not credit it with a decision either.
 
 [Full live and replay guide →](docs/intent-replays.md)
 
@@ -206,7 +228,7 @@ The **Decisions** panel connects those steps:
 
 Summaries use recorded events and only reveal evidence available at the current playhead. Optional model commentary is labeled **Model interpretation**; cited event IDs are validated. Legacy recordings still show the orders and context they contain. Captains and admirals receive execution feedback in their next prompts, so the same evidence also helps them adjust during a battle.
 
-After staging the sample recordings, [open that corvette decision](http://localhost:5173/?recording=/recordings/intent_qwen_gptoss.json&decisions=1&ship=alpha_2&decision=e152&t=184).
+After staging the sample recordings, [open that corvette decision](http://localhost:5173/?recording=/recordings/intent_qwen_gptoss.json.gz&decisions=1&ship=alpha_2&decision=e152&t=184).
 
 ## Command and communication
 
@@ -230,11 +252,11 @@ These are individual matches with specific fleets and settings, not a model lead
 
 | Match | What happened | Reported cost | Recording |
 | --- | --- | ---: | --- |
-| **Claude Sonnet 5 vs DeepSeek V4.1 Flash** | Independent 150-point drafts: Sonnet's eight torpedo corvettes against DeepSeek's battleship line. Synchronized salvos killed a destroyer at 150 seconds; the $6 ceiling stopped the battle at checkpoint 12 with Sonnet 8/8 and DeepSeek 5/6 (September 26) | $4.67 | [Replay](data/recordings/sonnet5_vs_dsv41flash_150pt_20260926/battle_sonnet5_vs_dsv41flash_150pt_20260926.json) · [Status](data/recordings/sonnet5_vs_dsv41flash_150pt_20260926/status.json) |
-| **GLM 5.3 Flash vs GPT-5.6 Luna** | Independent 200-point drafts; GLM eliminated Luna's fleet at 233 seconds, after seven turns | **$0.1946** | [Replay](data/recordings/glm_luna_200pt_live_20260906/battle_glm_5_3_flash_vs_gpt_5_6_luna_20260906_140449.json) · [Drafts](data/recordings/glm_luna_200pt_live_20260906/battle_glm_5_3_flash_vs_gpt_5_6_luna_20260906_140449.draft.json) |
-| **Qwen 3.8 Flash vs GPT-OSS 120B** | Two ships per side; Qwen won on tactical score at 300 seconds | $0.0691 | [Replay](data/recordings/intent_qwen_gptoss.json) |
-| **DeepSeek V3.2 vs GPT-4.1 mini** | Three ships per side; GPT-4.1 mini won on tactical score at 360 seconds | $0.1406 | [Replay](data/recordings/intent_deepseek_mini.json) |
-| **Heuristic vs heuristic** | Free mixed-fleet example of the execution evidence | $0 | [Replay](data/recordings/intent_heuristic.json) |
+| **Claude Sonnet 5 vs DeepSeek V4.1 Flash** | Independent 150-point drafts: Sonnet's eight torpedo corvettes against DeepSeek's battleship line. Synchronized salvos killed a destroyer at 150 seconds; the $6 ceiling stopped the battle at checkpoint 12 with Sonnet 8/8 and DeepSeek 5/6 (September 26) | $4.67 | [Replay](data/recordings/sonnet5_vs_dsv41flash_150pt_20260926/battle_sonnet5_vs_dsv41flash_150pt_20260926.json.gz) · [Status](data/recordings/sonnet5_vs_dsv41flash_150pt_20260926/status.json) |
+| **GLM 5.3 Flash vs GPT-5.6 Luna** | Independent 200-point drafts; GLM eliminated Luna's fleet at 233 seconds, after seven turns | **$0.1946** | [Replay](data/recordings/glm_luna_200pt_live_20260906/battle_glm_5_3_flash_vs_gpt_5_6_luna_20260906_140449.json.gz) · [Drafts](data/recordings/glm_luna_200pt_live_20260906/battle_glm_5_3_flash_vs_gpt_5_6_luna_20260906_140449.draft.json) |
+| **Qwen 3.8 Flash vs GPT-OSS 120B** | Two ships per side; Qwen won on tactical score at 300 seconds | $0.0691 | [Replay](data/recordings/intent_qwen_gptoss.json.gz) |
+| **DeepSeek V3.2 vs GPT-4.1 mini** | Three ships per side; GPT-4.1 mini won on tactical score at 360 seconds | $0.1406 | [Replay](data/recordings/intent_deepseek_mini.json.gz) |
+| **Heuristic vs heuristic** | Free mixed-fleet example of the execution evidence | $0 | [Replay](data/recordings/intent_heuristic.json.gz) |
 
 GLM bought **two torpedo cruisers, two battlecruisers, and two corvettes** for 198 points. Luna spent all 200 points on **two cruisers and six battlecruisers**. Their formations and chosen doctrines are preserved alongside the replay.
 
@@ -299,7 +321,7 @@ uv run python scripts/run_llm_battle.py \
   --fleet-config data/fleet_config_example.json --trace
 ```
 
-Fleet JSON supports per-ship models, optional admirals, positions and velocities, a decision interval of 20–60 seconds, a time limit, checkpoint limit, seed, and recording options. Explicit CLI settings override the corresponding JSON settings. These general launchers do not provide the live draft runner's dollar ceiling.
+Fleet JSON supports per-ship models, optional admirals, positions and velocities, a decision interval of 20–60 seconds, a time limit, checkpoint limit, seed, and recording options. Explicit CLI settings override the corresponding JSON settings. `run_llm_battle.py` takes the same dollar ceiling (`--spend-limit`), ledger and `--require-provider` guard as the live draft runner, and has no default models: a duel names both, a fleet battle takes them from its configuration.
 
 The [standard draft launcher](scripts/run_draft_battle.py) also supports separate admiral and captain models, heuristic crews, optional vision, and automatic drafts. Check each command's `--help` for its options.
 
@@ -350,7 +372,7 @@ For screenshots, install Playwright's browser once, stage a recording as above, 
 ```bash
 uv run playwright install chromium
 uv run python scripts/viewer_snapshot.py \
-  --recording glm_luna_200pt_live_20260906.json \
+  --recording glm_luna_200pt_live_20260906.json.gz \
   --time 100 --focus alpha_1 --dist 2.2 --gfx high --out /tmp/cruiser.png
 ```
 

@@ -25,9 +25,14 @@ Examples:
 
     # a 2x close crop of the HUD (CSS-pixel clip at device scale 2 -> 1600x900),
     # with extra viewer URL parameters
-    uv run python scripts/viewer_snapshot.py --recording intent_qwen_gptoss.json \
+    uv run python scripts/viewer_snapshot.py --recording intent_qwen_gptoss.json.gz \
         --time 184.8 --query "decisions=1&decision=e152" --width 1200 --height 660 \
         --scale 2 --clip 392,117,800,450 --out /tmp/panel.png
+
+Hull scale: the viewer draws hulls at their real size up close (scale=auto,
+the default; --query scale=true|cinematic for the other modes, see the
+README). --dist counts REAL hull lengths in auto and true, so a close-up is
+a few hundred metres from the ship; --camera/--target are km either way.
 
 Without --focus/--camera the shot keeps the viewer's default camera. The
 viewer's auto director stays off unless --director is given (its shots are
@@ -76,7 +81,10 @@ FRAME_JS = """
   if (focus) {
     const ship = s.ships.get(focus);
     if (ship) {
-      L = ship.userData.size?.length || 8;
+      // hull length the shot is framed in: the real length in the auto and
+      // true scale modes, the kit length in cinematic (static per mode, so
+      // --dist does not depend on where the camera was before)
+      L = s.framingLength?.(focus) || ship.userData.size?.length || 8;
       center = ship.position.clone();
       if (!ship.visible) {
         const eff = (s.destructionEffects || []).find(e => e.shipId === focus);
@@ -251,7 +259,9 @@ def main() -> int:
                    help="file name under visualizer/public/recordings/, .json or .json.gz (or a full URL)")
     p.add_argument("--time", type=float, default=0.0, help="seek time in seconds")
     p.add_argument("--focus", help="ship id to frame")
-    p.add_argument("--dist", type=float, default=3.0, help="camera distance in hull lengths")
+    p.add_argument("--dist", type=float, default=3.0,
+                   help="camera distance in hull lengths (the real 65-275 m hull in the default "
+                        "scale mode; pass --query scale=cinematic for the old oversize hulls)")
     p.add_argument("--az", type=float, default=35.0, help="camera azimuth deg")
     p.add_argument("--el", type=float, default=18.0, help="camera elevation deg")
     p.add_argument("--camera", help="x,y,z camera position (km) - overrides --focus")

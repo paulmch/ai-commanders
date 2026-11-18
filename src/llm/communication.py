@@ -166,7 +166,10 @@ def admiral_id(faction: str) -> str:
 
 def _enum_value(value: Any, allowed: tuple, aliases: Optional[Dict[str, str]] = None) -> Optional[str]:
     """Upper-cased `value` if it (or its alias) is one of `allowed`, else None."""
-    key = str(value or "").strip().upper().replace(" ", "_").replace("-", "_")
+    # Quotes around the value ('"DEVIATE"': a double-encoded enum) used to
+    # file a DEVIATE as an ACK and a TARGET_CLAIM as FREE.
+    key = " ".join(str(value or "").split()).strip("\"'`“”‘’").strip()
+    key = key.upper().replace(" ", "_").replace("-", "_")
     key = (aliases or {}).get(key, key)
     return key if key in allowed else None
 

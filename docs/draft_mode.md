@@ -54,17 +54,26 @@ tactical manual before they spend a point:
   NEZ; a fleet only kites as fast as its slowest hull - commit to one
   doctrine, not half of each.
 
-## Torpedo retargeting
+## Torpedo retargeting and the datalink (pass 5)
 
-Rounds whose target dies mid-flight acquire a replacement on their own
-(live seeker + delta-v above the terminal reserve). The round measures its
-seeker health to pick an imperative: fresh seekers maximize fuel at
-intercept (impact energy), PD-singed seekers race the fastest intercept
-before going blind. Overkill concentration therefore chains down enemy
-formations - Kimi K3's "survivors retarget onto the next destroyer
-automatically" wave doctrine (2026-08-06 recording) killed three
-destroyers with one 16-round salvo. Formation counterplay: spacing units
-beyond an orphan's steering envelope turns enemy overkill back into waste.
+Rounds whose target dies (or becomes a dying hulk) are reassigned by the
+fleet datalink (`src/torpedo_link.py`), as a GROUP: each reachable hull gets
+the rounds it still needs (`need_for` + 1 margin: PD soak + rounds to kill on
+the rounds' forecast impact, minus the live rounds that arrive there first),
+the rest go to the least over-subscribed reachable hull. Reachable: the
+engine's `can_intercept`, the steer flown as a finite burn, and at least
+`0.25 + 0.02 * t_go` km/s (cap 1.12) left after it. Fresh seekers keep the
+most fuel, PD-singed ones take the fastest intercept. A sprint round from a
+launcher at rest reaches ~16 km abeam when its target is lost 200 km out; a
+`reserve` round keeps ~6 km/s until its last 20 s (~106 km abeam), less from
+a closing launcher (~52 km), and reserve rounds beyond what their target
+needs are diverted before it dies. The captain's OVERKILL line and the
+admiral's economy quote the same board. Measured in seeded rule-based
+battles: 58% of rounds lost their target in flight, 69% of those were
+reassigned, 56% of the reassigned hit; 76% of diverted reserve rounds hit.
+Before pass 5 the per-round rule recovered about 39% of orphans (52% of those
+hit); in one LLM battle (p5w5_b3) 8 of 28. Spacing units beyond an orphan's
+steering envelope still turns enemy overkill back into waste.
 
 ## Point costs (src/llm/fleet_draft.py)
 
@@ -374,7 +383,7 @@ seed: these battles are close to deterministic, so a cell is 0% or 100%, not
 
 #### Why (from the battle events)
 
-The torpedo fleets launch at the first checkpoint (t = 30 s, 500 km), their
+The torpedo fleets launch at the first checkpoint (t = 30 s on the pre-T+0 schedule this was measured on; checkpoint 1 is at T+0 now; 500 km), their
 first rounds arrive at t = 97-104 s and the last gun hull dies at t = 140-175 s.
 Over the old-price battles of a pure torpedo fleet against a gun fleet (seeds
 1-2, 150 pts):

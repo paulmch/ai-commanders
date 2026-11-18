@@ -65,7 +65,10 @@ export const MODE_RCS = 2;
 /**
  * Evasion state per frame: DODGE = the ship is jinking its course (EVADE,
  * WOBBLE, RUN), FACE = it is swinging armour onto a threat (PRESENT, TANK).
- * BRACE does nothing and counts as neither.
+ * BRACE holds still and counts as neither - except on a burning order
+ * (trace `swing`), where the overlay keeps the burn and swings the thrust
+ * axis inside a cone around the burn line: a BRACE there swings armour (or
+ * keeps dodging) like TANK.
  */
 export const JINK_NONE = 0;
 export const JINK_DODGE = 1;
@@ -202,7 +205,10 @@ export function smoothingWindow(aref) {
  * than both) an EVASIVE maneuver order.
  */
 export function jinkOf(s) {
-  if ('evade' in s) return JINK_OF[s.evade] || JINK_NONE;
+  if ('evade' in s) {
+    if (s.swing && s.evade === 'brace') return JINK_FACE;
+    return JINK_OF[s.evade] || JINK_NONE;
+  }
   if (s.execution_mode) return JINK_OF[String(s.execution_mode).toLowerCase()] || JINK_NONE;
   return s.maneuver === 'EVASIVE' ? JINK_DODGE : JINK_NONE;
 }
@@ -1166,6 +1172,7 @@ export class RcsSystem {
     this._Y = new THREE.Vector3();
     this._Z = new THREE.Vector3();
     this._one = new THREE.Vector3(1, 1, 1);
+    this._scl = new THREE.Vector3(1, 1, 1);
     this._nj = 0;   // _updateShip's running instance counts
     this._np = 0;
   }
@@ -1299,7 +1306,10 @@ export class RcsSystem {
     const dims = planner.dims;
     const jl = dims.len;
     const pj = dims.puff;
-    this._shipM.compose(ship.position, ship.quaternion, this._one);
+    // Mounts and plume sizes are hull-kit units: drawn at the hull's draw
+    // scale for this frame (render/Scale.js), like the hull itself
+    const hk = ship.userData.k ?? 1;
+    this._shipM.compose(ship.position, ship.quaternion, this._scl.setScalar(hk));
     this._shipM.setPosition(
       ship.position.x - this._origin.x,
       ship.position.y - this._origin.y,
@@ -1331,7 +1341,7 @@ export class RcsSystem {
         // nozzle flash (negative size = glow texture)
         this._p.copy(fr.dir).multiplyScalar(dims.block * 0.15).add(fr.pos).applyMatrix4(this._shipM);
         pp[np * 4] = this._p.x; pp[np * 4 + 1] = this._p.y; pp[np * 4 + 2] = this._p.z;
-        pp[np * 4 + 3] = -dims.flash * (0.5 + 0.5 * Ie);
+        pp[np * 4 + 3] = -dims.flash * hk * (0.5 + 0.5 * Ie);
         const g = 1.4 * Ie;
         pc[np * 4] = 0.75 * g; pc[np * 4 + 1] = 0.85 * g; pc[np * 4 + 2] = 1.0 * g;
         pc[np * 4 + 3] = 0;
@@ -1382,12 +1392,12 @@ export class RcsSystem {
         this._w.copy(fr.dir)
           .addScaledVector(fr.u, Math.cos(ang) * spread)
           .addScaledVector(fr.v, Math.sin(ang) * spread);
-        this._p.copy(fr.pos).addScaledVector(this._w, s + jl * 0.1).applyQuaternion(this._qe);
+        this._p.copy(fr.pos).addScaledVector(this._w, s + jl * 0.1).applyQuaternion(this._qe).multiplyScalar(hk);
         const x = this._p.x + ship.position.x - this._origin.x;
         const y = this._p.y + ship.position.y - this._origin.y;
         const z = this._p.z + ship.position.z - this._origin.z;
         const f = age / lifeK;
-        const size = pj * (0.16 + 0.6 * (1 - Math.exp(-3.2 * age))) * (0.8 + 0.4 * h2);
+        const size = hk * pj * (0.16 + 0.6 * (1 - Math.exp(-3.2 * age))) * (0.8 + 0.4 * h2);
         const env = Math.min(1, age / 0.04) * Math.pow(1 - f, 1.8);
         const a = I * env * 0.22;
         pp[np * 4] = x; pp[np * 4 + 1] = y; pp[np * 4 + 2] = z; pp[np * 4 + 3] = size;

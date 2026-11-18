@@ -96,8 +96,16 @@ class RequestBudget:
         self.committed_usd = 0.0
         self.reported_usd = 0.0
         self.exhausted = False
+        self.stopped = None          # reason, once stop() refuses every later request
         self.images_reserved = 0
         self._lock = threading.Lock()
+
+    def stop(self, reason='stopped'):
+        """Refuse every later reservation (an interrupted run: Ctrl-C). Calls
+        already in flight settle as usual; nothing new is sent."""
+        with self._lock:
+            self.stopped = str(reason)
+            self.exhausted = True
 
     def reserve(self, payload):
         pricing = self.pricing[payload['model']]
@@ -134,6 +142,8 @@ class RequestBudget:
         if not math.isfinite(reserved) or reserved < 0:
             raise ValueError('Invalid reservation')
         with self._lock:
+            if self.stopped is not None:
+                raise RuntimeError(f'Battle API budget closed before request ({self.stopped})')
             if self.committed_usd + reserved > self.limit_usd:
                 self.exhausted = True
                 raise RuntimeError('Battle API budget exhausted before request')
@@ -151,3 +161,143 @@ class RequestBudget:
         with self._lock:
             self.committed_usd += cost - reserved
             self.reported_usd += cost
+
+
+# -----------------------------------------------------------------------------
+# Cumulative ledger of paid runs
+# -----------------------------------------------------------------------------
+
+class LedgerCapExceeded(RuntimeError):
+    """A run's cap would take the ledger past --ledger-cap: the run must not start."""
+
+
+class SpendLedger:
+    """
+    Append-only JSONL ledger of paid runs (default
+    data/recordings/spend_ledger.jsonl, git-ignored), shared by every paid
+    script (run_live_draft_battle, run_llm_battle, replay_turn).
+
+    Each run writes two lines under an exclusive file lock:
+      {"event": "open", run_id, ts, script, name, models, cap_usd, mode}
+        before the first request - it RESERVES the run's cap, so a crashed
+        run (no close line) still counts at its full cap;
+      {"event": "close", run_id, ts, script, name, models, calls, tokens,
+       usd, committed_usd, cap_usd, status, mode}
+        when it ends - the run then counts at its reported dollars (or its
+        committed dollars, if larger: calls whose cost never came back).
+    An optional free-text `label` (which experiment the run belongs to) rides
+    on both lines.
+    total_usd() = sum of closed runs' usd + caps of runs still open. Runs with
+    mode "mock" are written (when a mock run is pointed at a ledger
+    explicitly) but never counted; the ledger cap is checked for them too.
+    """
+
+    def __init__(self, path):
+        from pathlib import Path
+        self.path = Path(path)
+
+    def _lock(self):
+        import contextlib
+        import fcntl
+
+        @contextlib.contextmanager
+        def held():
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.path.with_suffix(self.path.suffix + '.lock'), 'a') as handle:
+                fcntl.flock(handle, fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(handle, fcntl.LOCK_UN)
+        return held()
+
+    def entries(self):
+        if not self.path.exists():
+            return []
+        out = []
+        for line in self.path.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        return out
+
+    def _total(self, entries):
+        runs = {}
+        for entry in entries:
+            if entry.get('mode') == 'mock' or not entry.get('run_id'):
+                continue
+            run = runs.setdefault(entry['run_id'], {})
+            run[entry.get('event')] = entry
+        total = 0.0
+        for run in runs.values():
+            if 'close' in run:
+                # A close counts at its reported dollars, or at what was still
+                # committed when it closed if that is more: reservations of
+                # calls whose cost never came back (timeouts) and of calls
+                # still in flight when an interrupted run closed.
+                close = run['close']
+                total += max(float(close.get('usd') or 0.0), float(close.get('committed_usd') or 0.0))
+            elif 'open' in run:
+                total += float(run['open'].get('cap_usd') or 0.0)
+        return total
+
+    def total_usd(self):
+        with self._lock():
+            return self._total(self.entries())
+
+    def _append(self, entry):
+        with open(self.path, 'a') as handle:
+            handle.write(json.dumps(entry, sort_keys=True) + '\n')
+
+    def check(self, cap_usd, ledger_cap_usd=None):
+        """Raise LedgerCapExceeded if this cap would pass ledger_cap_usd (writes nothing).
+        Scripts call it before any pre-flight work, then open_run (which checks again,
+        atomically) right before the first request."""
+        if ledger_cap_usd is None:
+            return
+        total = self.total_usd()
+        if total + float(cap_usd) > float(ledger_cap_usd):
+            raise LedgerCapExceeded(
+                f'Ledger {self.path}: ${total:.2f} spent or reserved + this run\'s cap '
+                f'${float(cap_usd):.2f} = ${total + float(cap_usd):.2f} > --ledger-cap '
+                f'${float(ledger_cap_usd):.2f}; not starting')
+
+    def open_run(self, *, script, name, models, cap_usd, ledger_cap_usd=None, mock=False, label=None):
+        """Reserve this run's cap; raises LedgerCapExceeded (nothing written) past ledger_cap_usd."""
+        import time
+        import uuid
+        cap_usd = float(cap_usd)
+        with self._lock():
+            total = self._total(self.entries())
+            # Checked for mock runs too (they never count, but the refusal path
+            # is then testable offline).
+            if ledger_cap_usd is not None and total + cap_usd > float(ledger_cap_usd):
+                raise LedgerCapExceeded(
+                    f'Ledger {self.path}: ${total:.2f} spent or reserved + this run\'s cap '
+                    f'${cap_usd:.2f} = ${total + cap_usd:.2f} > --ledger-cap ${float(ledger_cap_usd):.2f}; '
+                    f'not starting')
+            run_id = uuid.uuid4().hex[:12]
+            self._append({'event': 'open', 'run_id': run_id, 'ts': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                          'script': script, 'name': name, 'models': list(models), 'cap_usd': cap_usd,
+                          'ledger_total_before_usd': round(total, 4), 'mode': 'mock' if mock else 'paid',
+                          **({'label': str(label)} if label else {})})
+        self._open = getattr(self, '_open', {})
+        self._open[run_id] = {'script': script, 'name': name, 'models': list(models),
+                              'cap_usd': cap_usd, 'mode': 'mock' if mock else 'paid',
+                              **({'label': str(label)} if label else {})}
+        return run_id
+
+    def close_run(self, run_id, *, calls, tokens, usd, committed_usd=None, status='done'):
+        import time
+        meta = getattr(self, '_open', {}).get(run_id, {})
+        with self._lock():
+            self._append({'event': 'close', 'run_id': run_id,
+                          'ts': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                          **meta, 'calls': int(calls), 'tokens': tokens,
+                          'usd': round(float(usd), 6),
+                          'committed_usd': None if committed_usd is None else round(float(committed_usd), 6),
+                          'status': status})

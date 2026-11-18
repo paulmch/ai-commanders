@@ -113,10 +113,12 @@ class LLMRouter:
                         session_id=self.session_id, reasoning_effort=self.reasoning_effort,
                         stats=self.stats, **self.anthropic_options)
                 else:
+                    # openrouter_options may carry its own reasoning_effort (the
+                    # Anthropic ids then keep their per-model battle default).
+                    options = {"reasoning_effort": self.reasoning_effort, **self.openrouter_options}
                     client = CaptainClient(
                         model=model, temperature=self.temperature, max_tokens=self.max_tokens,
-                        timeout=self.timeout, session_id=self.session_id,
-                        reasoning_effort=self.reasoning_effort, **self.openrouter_options)
+                        timeout=self.timeout, session_id=self.session_id, **options)
                     client.stats = self.stats
                 client.budget = self._budget
                 self._clients[key] = client
@@ -176,6 +178,25 @@ class LLMRouter:
         return self.client_for(model).provenance(model or self.model)
 
 
+PROVIDERS = ("anthropic", "openrouter")
+
+
+def check_required_provider(required: Optional[str], models: Iterable[Optional[str]]) -> None:
+    """
+    Launch safety (--require-provider / fleet JSON "require_provider"): raise
+    before any client exists when an LLM model of the battle is served by
+    another provider than `required` (None: no requirement).
+    """
+    if not required:
+        return
+    if required not in PROVIDERS:
+        raise ValueError(f"require_provider must be one of {PROVIDERS}, got {required!r}")
+    wrong = [m for m in llm_models(models) if provider_for_model(m) != required]
+    if wrong:
+        raise ValueError(f"--require-provider {required}: refusing to start, these models are "
+                         f"served by another provider: {', '.join(wrong)}")
+
+
 def fleet_config_models(fleet_config: Any) -> List[str]:
     """Every LLM model id a fleet config names (ships, admirals, draft captains)."""
     models: List[Optional[str]] = []
@@ -206,7 +227,7 @@ def create_llm_client(
     if not any(provider_for_model(m) == "anthropic" for m in wanted):
         kwargs.pop("anthropic_options", None)
         openrouter_options = kwargs.pop("openrouter_options", None) or {}
-        return CaptainClient(model=model, **kwargs, **openrouter_options)
+        return CaptainClient(model=model, **{**kwargs, **openrouter_options})
     return LLMRouter(model, wanted, **kwargs)
 
 

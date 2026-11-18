@@ -673,7 +673,11 @@ def test_the_formation_throttle_is_what_the_ship_flies():
 # hand over to RCS at a rate RCS can stop, uncommanded ticks brake the spin
 # on RCS, the presentation search is merged/closed-form, and the forecast
 # splits calm and reacting dodgers; legacy captain unchanged.)
-LEGACY_GOLDEN_SHA256 = "57d05a77bb84a0aa0cf3482839ee306c3d29004e3f2cebb84cdf1c8db9d12575"
+# (Re-pinned for the pass-5 schedule (owner "Move to T+0"): checkpoint 1 at
+# T+0 and the last checkpoint's orders fly their interval, so every event is
+# ~30 s earlier and the battle no longer idles its first window; same hash on
+# Python 3.11 and 3.12. The final integration pass re-records it.)
+LEGACY_GOLDEN_SHA256 = "fc73668f477ffab918e47147bd07bed0739f4c6d71217b6706ef489a3a7a957c"
 
 
 def test_legacy_battle_event_stream_is_pinned(tmp_path):

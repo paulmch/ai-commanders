@@ -187,8 +187,10 @@ class HeuristicCaptain(LLMCaptain):
                   and checkpoint % 2 == 1):
                 salvo = min(2, max_salvo)
             if salvo > 0:
-                calls.append(("launch_torpedo", {
-                    "count": salvo, "target_id": torp_target.ship_id}))
+                call = {"count": salvo, "target_id": torp_target.ship_id}
+                if order and getattr(order, "torpedo_profile", None):
+                    call["profile"] = order.torpedo_profile
+                calls.append(("launch_torpedo", call))
 
         # Maneuver priority: dodge torpedoes > admiral heading / structured
         # maneuver order (already applied by the runner - keep it, it holds
@@ -271,8 +273,10 @@ class HeuristicCaptain(LLMCaptain):
                 salvo = min(int(order.torpedo_salvo), max_salvo)
                 match = self._match_enemy(order.torpedo_target, enemies) if order.torpedo_target else None
                 if salvo > 0:
-                    calls.append(("launch_torpedo", {"count": salvo,
-                                                     "target_id": (match or target).ship_id}))
+                    call = {"count": salvo, "target_id": (match or target).ship_id}
+                    if getattr(order, "torpedo_profile", None):
+                        call["profile"] = order.torpedo_profile
+                    calls.append(("launch_torpedo", call))
             else:
                 for torp_target_id, rounds in plan.launches.get(ship_id, []):
                     salvo = min(rounds, max_salvo)

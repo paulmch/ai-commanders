@@ -38,7 +38,7 @@ CI (`.github/workflows/tests.yml`) runs the same suite on Python 3.10-3.12 with
 ## Running Battles
 
 ```bash
-uv run python scripts/run_llm_battle.py -v                                  # 1v1 duel
+uv run python scripts/run_llm_battle.py --alpha-model claude-sonnet-5-5 --beta-model claude-sonnet-5 -v  # 1v1 duel (no default models)
 uv run python scripts/run_llm_battle.py --fleet-config data/fleet_config_claude_vs_gemini.json -v
 uv run python scripts/mcp_battle.py --config data/fleet_config_mcp_example.json  # human via MCP
 uv run python scripts/run_draft_battle.py --auto-draft --no-admirals --trace --seed 3  # free battle
@@ -222,6 +222,17 @@ Recorded as comms_message / comms_delivered / captain_report events. A failed
 directive call leaves captains "(no new fleet directive this checkpoint)" and
 is recorded as admiral_directive_failed.
 
+Schedule: checkpoint 1 is at T+0 (orders before the clock starts), checkpoint k at
+(k-1) x interval, and every checkpoint's orders fly a full interval - the last one too - so
+20 checkpoints end at T+600 and no call is paid for orders that never fly
+(`LLMBattleRunner.FIRST_CHECKPOINT_S` / `FLIES_LAST_ORDERS`, `fleet_intel.battle_clock`;
+recordings carry `first_checkpoint_s: 0`, older ones lack it and decided first at T+30).
+Default effort per Anthropic model: `BATTLE_DEFAULT_EFFORT` in `src/llm/anthropic_client.py`
+(high Sonnet 5.5 / Opus 5.5 / Fable 5.2, medium Sonnet 5 / Haiku 5.5); admirals see the
+score line by default (`AdmiralConfig.show_score`, `--show-score none` turns it off). The
+admiral tactical plot (`--admiral-vision`, the one switch) is kept where used: a 90-call
+replay (old plot / new plot / no plot) found no difference in orders.
+
 Within a checkpoint, independent LLM calls (both admirals, per-ship orders, all
 captains) run concurrently (BattleConfig.parallel_llm, on by default).
 Cross-battle: scripts/refine_commander.py distills notebook lessons from
@@ -251,8 +262,18 @@ A per-ship heading/maneuver REPLACES it for that ship (MAINTAIN/PADLOCK = engine
 off; given with a heading - PADLOCK only at throttle > 0 - the ship flies that
 HEADING instead); `evade` alone rides on it - or, with no fleet order, on the
 ship's current maneuver (`src/llm/maneuver_orders.py`, `tests/test_order_semantics.py`).
-The evade overlay burns at the order's throttle, at full throttle under a
-throttle-0 / engine-off order (`CombatSimulation._evasion_overlay`).
+The evade overlay on an order that burns (`_order_burn`: the order itself flies
+>= `EVADE_BURN_MIN_THROTTLE` this tick) keeps the order's throttle and swings the
+thrust axis round a cone of `EVADE_BURN_CONE_DEG` (20 deg) about the burn line -
+continuously while rounds are inbound or an armed enemy is within
+`EVADE_BURN_GUN_REACH_KM`, a fresh random cone point every half edge-to-edge swing
+(`_evade_burn_swing`, `_swing_dodge_aim`), so fire along the line is dodged too;
+armour picks only cone points; off the cone it turns toward it at full authority,
+idling to the order's token beyond `EVADE_BURN_AGAINST_ORDER_DEG` (90 deg) off;
+RUN never below the order's throttle (rule in the `src/simulation.py` module
+docstring, `tests/test_evade_burn.py`, `scripts/evade_burn_measure.py`). On a
+throttle-0 / engine-off order (and the EVADE maneuver) it flies the drive as before:
+full throttle, TANK half, BRACE off (`CombatSimulation._evasion_overlay`).
 Plain INTERCEPT never brakes (it merges); the anti-merge forms
 (`src/llm/maneuver_orders.py`; the same fields on captain set_maneuver /
 set_heading, admiral issue_order and MCP set_maneuver): INTERCEPT with
@@ -310,6 +331,34 @@ hashed by the perf harness) is unchanged.
   shader fails to compile or depth-tests wrongly).
 - `IcosahedronGeometry(r, detail)` subdivides linearly (20*(d+1)^2 faces) -
   use detail 12-28 for smooth blast spheres, not 3-5.
+- Hull scale (`render/Scale.js`, `tests/scale.test.js`; S key, `?scale=auto|true|cinematic`):
+  1 scene unit = 1 km. Hulls are BUILT in kit units (`hullSize`: corvette 4, dreadnought
+  20.8) and DRAWN by one uniform factor per ship, `userData.k` (scene km per kit unit), set
+  every frame by `SceneManager.updateScale()`: `cinematic` k = 1 (the old ~60x
+  exaggeration), `true` k = real length / kit length (~0.016), `auto` (default) = true x a
+  magnification that is exactly 1 while the real hull covers at least 2 floors of the
+  viewport height and eases (C1, monotonic) to a floor of 1.95% x sqrt(L / 65 m) at
+  distance. Pure function of camera position/fov and ship position: no state, no viewport.
+  `userData.size` stays the KIT size (hull-local code); `userData.drawn` is the size in km
+  now. Rules: (1) anything in world space that belongs to a hull multiplies kit-unit
+  sizes/offsets by that hull's k (`sm.kOf(id)`, `Projectiles.shipK`), free rounds and
+  flares by `sm.kAt(point)`; (2) never bake a scaled value - re-read k every frame or
+  re-bake when it changes (Blast `anchor`/`shipId`, `surfaceImpact`; spall and the smoke
+  ring at `Scale.bakeScale(k)`, 2% steps);
+  (3) real things stay real: positions, trajectories, the blast shell, the reactor blast
+  (`Blast real`, sized by `reactorBlastScale` to 0.55 of the engine radius), the far drive
+  jet (`render/DriveJet.js`, the engine's 3/7.5 degree cone, real modes only, `?jets=0` off); (4) camera framing uses
+  `sm.framingLength(id)` (static per mode), never the drawn size; constants tuned on the
+  kit-size hulls (shadow box floor, AO reach, close-up ramps, framing floors) are
+  multiplied by `sm.scaleUnit()`; (5) a pool light on a hull scales reach by k and
+  intensity by k^2 (three's 0.1-unit falloff clamp is lowered in SceneManager). main.js
+  settles the camera (`scene.syncCamera()`) BEFORE the frame's effects are evaluated, so
+  a hull and everything on it use one scale per frame, also on a director cut.
+- Gun hits are not decided on the hull surface: the engine gates at 500 m and rolls, so
+  recorded `impact_position`s lie a median ~50 m (up to ~1 km) from the hull axis and
+  ~1 in 4 misses cross the hull (`tests/fixtures/scale_hits.json` summary). The DRAWN
+  path eases onto the crater / clear of the hull over its last 3 s
+  (`WeaponTimeline.sample`, `missClearance`); recorded positions are never changed.
 - The hull kit (render/Hulls.js) builds parts from `chamferBoxGeometry` and
   `octSectionGeometry` (shouldered sections, wedge bows), all non-indexed and
   merged per material. Plated materials (`hull`, `trim`, `paint`, `dark`,
@@ -378,6 +427,16 @@ hashed by the perf harness) is unchanged.
   `render/HullRigs.js` aims from the event log, clamped to the masks and slewed
   at the engine's class rates (`MountLimits.TRAVERSE_DEG_S` mirrors
   `src/weapon_arcs.py`), as pure functions of battle time.
+- Tactical layer (fleet range): `src/TacticalLayout.js` is the pure layout (no DOM/THREE):
+  label density (`auto|minimal|full`, L key, `?labels=`, localStorage `aic.viewer.labels`),
+  single-linkage same-side clustering in screen px (`CLUSTER_PX`, group chips), chip placement
+  off every hull box, chip and HUD panel, torpedo waves grouped by target + launch burst
+  (`groupWaves`). `ContactOverlay` projects ships and torpedo heads and applies it; hover
+  (CSS / `setHover` from registry rows) expands a chip on top and never feeds the layout.
+  `render/TargetingLines.js` draws one weighted line per (side, target, on-screen shooter
+  cluster), faint unless focused or firing; below `full`, unfocused ships' tracks keep only
+  their path (`Tracks.othersPathOnly`). `tests/tactical_layout.test.js` pins no-overlap,
+  clustering stability and scrub determinism.
 - Ownership: in-flight weapons live in render/Projectiles.js (WeaponTimeline
   decides what exists at time t); persistent hit aftermath and deaths in
   DamageTimeline.js + render/DamageFX.js; hulls expose `userData.rcsMounts` /
@@ -395,16 +454,17 @@ hashed by the perf harness) is unchanged.
   overlay, HEADING turning / burning, INTERCEPT, PADLOCK) x 100 km so errors cannot
   cancel. The dispersion roll consumes only the conversion part; shot_fired records the
   forecast's inputs (`fc`: dodge, missed jink burn, pending HEADING burn, the stale
-  burn of an order applied that tick). If the gate, the roll, evasion/dodging or the lead
+  burn of an order applied that tick, the swing of a burn). If the gate, the roll, evasion/dodging or the lead
   changes, re-run `scripts/fire_control_calibration.py` (harness + table) and regenerate
   the fixture: 32 `--doctrine legacy` + 32 `--doctrine tactical` heuristic battles and
   every harness round (`fixture ... --harness-keep 1`) into
   `tests/fixtures/fire_control_shots.json`; battles recorded on older engines go to the
   separate historical file (`--label HISTORICAL ...`), which only the flash-mirror
   residual pin reads. Dodgers are bucketed by base maneuver (dodge:PADLOCK,
-  dodge:HOLD_RANGE) and modelled by their state at the shot (calm vs reacting,
-  `firecontrol.DODGE_CALM_ACCEL_FRACTION`). Buckets still outside 1.5x are named in the
-  test's `RESIDUALS`.
+  dodge:HOLD_RANGE, dodge:HEADING) and modelled by their state at the shot (calm vs
+  reacting, `firecontrol.DODGE_CALM_ACCEL_FRACTION`); one swinging a burn (the overlay
+  on a burning order, fc `swing`) by `firecontrol.SWING_ACCEL_FRACTION`. Buckets still
+  outside 1.5x are named in the test's `RESIDUALS`.
   The doctrine P(hit) table is bound by `tests/test_prompt_structure.py`. Known residual:
   LLM fleets dodging a whole fleet's fire were hit even less than forecast
   (firecontrol.JINK_ACCEL_FRACTION).

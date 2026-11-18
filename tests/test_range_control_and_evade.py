@@ -252,7 +252,7 @@ class TestPrecomputedHeadings:
         group = analyze_range_control(sim, [me])[0]
         assert group.stop_km == pytest.approx(359.5, abs=1.0)   # 4.6^2 / (2 * 3 g)
         assert "pass wide" in text and "set_heading(" in text
-        assert "TAIL to enemy" in text and "nose armor 212 cm" in text
+        assert "TAIL to enemy" in text and "nose 212 cm" in text
 
     def test_early_warning_while_braking_still_works(self):
         sim = CombatSimulation(seed=3, time_step=1.0)
@@ -740,23 +740,31 @@ class TestCaptainBlockSize:
         assert [i.names for i in infos] == [["near"], ["far"]]
         assert infos[0].warning and not infos[1].warning and infos[1].closing_kps > 0
         text = captain_range_control(sim, me)
-        assert self._group_lines(text, "GROUP A") == [
-            "cancel closure", "open range", "pass wide", "flank left", "flank right",
+        # Near-identical vectors are one line (cmdcap: "pass wide" = "flank
+        # right" in 293 recorded turns): every heading is still listed.
+        lines = [l for l in text.splitlines() if l.startswith("  ") and "set_heading(" in l]
+        group_a = lines[:4]
+        assert [l.split(" set_heading(")[0].strip() for l in group_a] == [
+            "cancel closure = open range", "pass wide = flank right", "flank left",
             "coast & shoot"]
         # Closing, no merge: hold the range or turn the guns on him.
         assert self._group_lines(text, "GROUP B") == ["cancel closure", "coast & shoot"]
         # The admiral's fleet view keeps every heading for both groups.
         fleet = admiral_range_control(sim, [me])
-        assert len(self._group_lines(fleet, "GROUP B")) == len(infos[1].options)
+        block = fleet[fleet.index("GROUP B"):]
+        assert all(o.label in block for o in infos[1].options)
 
-    def test_no_armor_numbers_on_burns_for_the_captain(self):
+    def test_every_option_line_shows_the_armor_it_presents(self):
+        # cmdcap C4/C6: every option line carries the same fields (range
+        # effect, face + armor, guns that bear) - coast & shoot used to be
+        # the only one with an armor number.
         from src.llm.range_control import format_range_control
         sim, me = self._two_groups()
         text = captain_range_control(sim, me)
-        assert "cm exposed" not in text
-        assert "TAIL to enemy" in text and "(nose armor " in text   # coast & shoot keeps it
-        ship = format_range_control(analyze_range_control(sim, [me]), who="Ship", max_detail=1)
-        assert "(tail armor " in ship and "cm exposed" in ship
+        assert "TAIL to enemy ~128 s (tail 30 cm)" in text and "(nose 151 cm)" in text
+        ship = format_range_control(analyze_range_control(sim, [me]), who="Ship", max_detail=1,
+                                    armor_on_burns=False)
+        assert "(tail 30 cm)" not in ship and "TAIL to enemy" in ship
 
     @pytest.mark.parametrize("warning,closing,expected", [
         ("MERGE IN 40 s", 2.0, ["cancel", "wide"]),

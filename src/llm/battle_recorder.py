@@ -97,7 +97,7 @@ class EventType(str, Enum):
 
 
 # Optional per-ship sim_trace fields passed through verbatim when present.
-_TRACE_OPTIONAL_SHIP_KEYS = ("acc", "omega", "alpha", "turn", "evade", "tgt", "plan",
+_TRACE_OPTIONAL_SHIP_KEYS = ("acc", "omega", "alpha", "turn", "evade", "swing", "tgt", "plan",
                              # heat telemetry (battle_runner._thermal_trace_fields)
                              "heat", "rad", "heat_rate", "rad_out",
                              # weapon arcs (CombatSimulation.arcs_trace_fields):
@@ -290,6 +290,10 @@ class BattleRecording:
     sim_trace: List[Dict[str, Any]] = field(default_factory=list)
     # Seconds between decision checkpoints (sim_trace plans end on the next one)
     decision_interval_s: Optional[float] = None
+    # Sim time of checkpoint 1: 0.0 since pass 5 (orders before the clock
+    # starts); None on older recordings, whose first checkpoint is one
+    # decision interval in.
+    first_checkpoint_s: Optional[float] = None
 
     # Result
     winner: Optional[str] = None

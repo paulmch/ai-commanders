@@ -510,6 +510,8 @@ class MCPHttpServer:
             "decision_interval_s": interval,
             "sim_time_s": sim_time,
             "next_checkpoint_t": next_cp,
+            # Checkpoint 1 is at T+0 (older servers: absent = one interval).
+            "first_checkpoint_t": float(getattr(runner, "FIRST_CHECKPOINT_S", interval)) if runner else 0.0,
             "waiting_for": waiting,
             "draft": (self._draft_manager.live_summary()
                       if self._draft_manager else None),
@@ -933,8 +935,10 @@ async def run_fleet_battle_with_http(
                 if runner.config.verbose:
                     print(f"  [ERROR] Admiral personality selection failed: {e}")
 
-    # Track time for Admiral pre-snapshots
-    next_checkpoint_time = decision_interval
+    # Checkpoint 1 at T+0 (LLMBattleRunner.FIRST_CHECKPOINT_S); the last
+    # checkpoint's orders fly in runner._evaluate_fleet_result.
+    next_checkpoint_time = runner.FIRST_CHECKPOINT_S
+    runner._record_opening_frame()
 
     # Advance chat turn at start
     if runner.mcp_chat:

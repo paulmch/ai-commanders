@@ -12,9 +12,20 @@ const smooth = (a, b, x) => {
   return t * t * (3 - 2 * t);
 };
 
-/** 0 at fleet range (>= 220), 1 in a close-up (<= 40). */
+/**
+ * Scene km per kit unit (render/Scale.js): the close-up ramp below was
+ * tuned on the kit-size hulls, where a close-up sits tens of km out. With
+ * real-size hulls a close-up is a few hundred metres, so the ramp is
+ * measured in the scale mode's unit (1 cinematic, 0.016 real). Set by
+ * SceneManager whenever the scale mode changes.
+ */
+let _unit = 1;
+export function setCloseRangeUnit(unit) { _unit = unit > 0 ? unit : 1; }
+export function closeRangeUnit() { return _unit; }
+
+/** 0 at fleet range (>= 220 kit units), 1 in a close-up (<= 40). */
 export function closeUpK(viewDist) {
-  return 1 - smooth(40, 220, viewDist ?? 1e9);
+  return 1 - smooth(40 * _unit, 220 * _unit, viewDist ?? 1e9);
 }
 
 /**

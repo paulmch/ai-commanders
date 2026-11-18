@@ -58,7 +58,7 @@ def test_final_turn_executes_without_an_extra_decision_and_saves_live_replay(tmp
         battle_name='Live final-turn check',
         alpha_fleet=draft_to_fleet_definition(state.drafts['alpha'], 500),
         beta_fleet=draft_to_fleet_definition(state.drafts['beta'], 500),
-        time_limit_s=60, max_checkpoints=1, decision_interval_s=30, seed=1,
+        time_limit_s=30, max_checkpoints=1, decision_interval_s=30, seed=1,
         record_battle=True, record_sim_trace=True, personality_selection=False)
     runner = LiveDraftRunner(BattleConfig.from_fleet_config(fc, verbose=False, recording_dir=str(tmp_path)),
                              LLMCaptainConfig('A', 'A'), LLMCaptainConfig('B', 'B'), None, fc)
@@ -67,11 +67,13 @@ def test_final_turn_executes_without_an_extra_decision_and_saves_live_replay(tmp
     result = runner.run_battle(load_fleet_data())
     recording = json.loads(output.read_text())
     assert result.checkpoints_used == 1
-    assert result.duration_s == 60
-    assert recording['sim_trace'][-1]['t'] == 60
+    # Checkpoint 1 at T+0; its orders fly the full 30 s (the live script's
+    # time limit is turns x 30 s).
+    assert result.duration_s == 30
+    assert recording['sim_trace'][0]['t'] == 0 and recording['sim_trace'][-1]['t'] == 30
     decisions = [e for e in recording['events'] if e['event_type'] == 'captain_decision']
     assert len(decisions) == 2
-    assert {e['timestamp'] for e in decisions} == {30}
+    assert {e['timestamp'] for e in decisions} == {0}
     assert len({e['event_id'] for e in recording['events']}) == len(recording['events'])
 
 
@@ -121,7 +123,7 @@ def test_ticker_prints_greppable_checkpoint_and_result_blocks(tmp_path):
         battle_name='Ticker check',
         alpha_fleet=draft_to_fleet_definition(state.drafts['alpha'], 300),
         beta_fleet=draft_to_fleet_definition(state.drafts['beta'], 300),
-        time_limit_s=90, max_checkpoints=2, decision_interval_s=30, seed=3,
+        time_limit_s=60, max_checkpoints=2, decision_interval_s=30, seed=3,
         record_battle=True, record_sim_trace=True, personality_selection=False)
     runner = LiveDraftRunner(BattleConfig.from_fleet_config(fc, verbose=False, recording_dir=str(tmp_path)),
                              LLMCaptainConfig('A', 'A'), LLMCaptainConfig('B', 'B'), None, fc)
@@ -142,9 +144,9 @@ def test_ticker_prints_greppable_checkpoint_and_result_blocks(tmp_path):
     headers = [b.splitlines()[0] for b in blocks]
     assert headers[:2] == ['=== DRAFT ALPHA | model-a | 14/14 pts | spend $0.84/$4.50 ===',
                            '=== DRAFT BETA | model-b | 14/14 pts | spend $0.84/$4.50 ===']
-    assert headers[2:4] == ['=== CP 1 | t=30s | spend $0.84/$4.50 ===',
-                            '=== CP 2 | t=60s | spend $0.84/$4.50 ===']
-    assert headers[4].startswith('=== RESULT | t=90s | after CP 2 |')
+    assert headers[2:4] == ['=== CP 1 | t=0s | spend $0.84/$4.50 ===',
+                            '=== CP 2 | t=30s | spend $0.84/$4.50 ===']
+    assert headers[4].startswith('=== RESULT | t=60s | after CP 2 |')
     assert all(len(b.strip().splitlines()) <= 12 for b in blocks)
     cp1 = blocks[2]
     ship_re = r'\S+ FF hull 100% arm \d+/\d+cm heat \d+%( rad)?'

@@ -232,7 +232,7 @@ def test_http_runner_honors_fractional_checkpoints_and_time_limit(fleet):
     runner = make_runner(fleet, decision_interval_s=20.5, time_limit_s=41.25)
     result = asyncio.run(run_fleet_battle_with_http(runner, fleet, Mock()))
     assert result.duration_s == pytest.approx(41.25)
-    assert [entry["time"] for entry in result.decision_log] == [20.5, 41.0]
+    assert [entry["time"] for entry in result.decision_log] == [0.0, 20.5, 41.0]   # CP1 at T+0
 
 
 def test_mcp_draw_proposal_is_passed_to_opponent_admiral(fleet):

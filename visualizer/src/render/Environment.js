@@ -198,11 +198,13 @@ export class Environment {
     if (!light.castShadow || !focus) return;
     const sh = light.shadow;
     camera.updateMatrixWorld();
+    // scene km per kit unit of the scale mode (SceneManager sets it)
+    const unit = this.scaleUnit || 1;
     const R = quantiseShadowRadius(
-      chooseShadowFocus(camera, focus, viewDist, subjects || _noSubjects, subjectCount || 0, _shCenter));
-    const fit = fitSunShadow(_shCenter, this._shBasis, R, sh.mapSize.x, light.target.position, light.position);
+      chooseShadowFocus(camera, focus, viewDist, subjects || _noSubjects, subjectCount || 0, _shCenter, unit), unit);
+    const fit = fitSunShadow(_shCenter, this._shBasis, R, sh.mapSize.x, light.target.position, light.position, unit);
     const cam = sh.camera;
-    if (cam.right !== R) {
+    if (cam.right !== R || cam.far !== fit.far || cam.near !== fit.near) {
       cam.left = -R; cam.right = R; cam.top = R; cam.bottom = -R;
       cam.near = fit.near; cam.far = fit.far;
       cam.updateProjectionMatrix();
@@ -634,9 +636,9 @@ export class Environment {
           // Rayleigh haze: a blue-white veil that thickens toward the limb
           // on the day side, and a thin forward-scattered arc that wraps a
           // little past the terminator
-          float rimF = pow(1.0 - mu, 3.0);
+          float rimF = pow(max(1.0 - mu, 0.0), 3.0);   // mu can round past 1
           col += uAtmo * rimF * smoothstep(-0.18, 0.5, ndl) * 0.55;
-          col += uAtmo * pow(1.0 - mu, 6.0) * smoothstep(-0.4, 0.05, ndl)
+          col += uAtmo * pow(max(1.0 - mu, 0.0), 6.0) * smoothstep(-0.4, 0.05, ndl)
                * pow(max(dot(-v, uSunDir), 0.0), 3.0) * 1.6;
           gl_FragColor = vec4(col, 1.0);
         }`

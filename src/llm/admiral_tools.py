@@ -8,6 +8,7 @@ rather than directly controlling ships.
 from typing import List, Dict, Any
 
 from .communication import MAX_DISCUSSION_EXCHANGES
+from .torpedo_doctrine import LINK_FACT, PROFILE_FACT
 
 
 # Admiral tools for fleet command
@@ -17,10 +18,14 @@ ADMIRAL_TOOLS = [
         "function": {
             "name": "issue_order",
             "description": (
-                "REQUIRED: Issue a specific order to one of your ship captains. "
-                "You MUST call this tool once for EACH ship in your fleet! "
-                "The captain will see your exact words and should follow them. "
-                "Be specific about target, maneuver, and weapon orders."
+                "Issue a specific order to one of your ship captains. Two kinds of field: "
+                "the STRUCTURED fields are what the engine applies at once and what the "
+                "compliance check compares - maneuver / heading / throttle / evade fly, "
+                "suggested_target is THE target (one ship), torpedo_salvo + torpedo_target "
+                "are the launch. order_text is read by the captain only and flies nothing: "
+                "make it say the same as the fields. A ship has one target per checkpoint - "
+                "a 'then shift to X' in the text is a second target the engine never applies "
+                "(the captain may follow either)."
             ),
             "parameters": {
                 "type": "object",
@@ -32,9 +37,9 @@ ADMIRAL_TOOLS = [
                     "order_text": {
                         "type": "string",
                         "description": (
-                            "Your order to the captain. Be specific about maneuvers, "
-                            "targets, weapon usage, and priorities. The captain will "
-                            "interpret this and execute using their available tools."
+                            "Your words to the captain (it reads them; the engine does not). "
+                            "Name the same maneuver and the same single target as the "
+                            "structured fields; add weapon use and priorities."
                         )
                     },
                     "priority": {
@@ -48,7 +53,8 @@ ADMIRAL_TOOLS = [
                     },
                     "suggested_target": {
                         "type": "string",
-                        "description": "Optional: enemy ship name to focus on"
+                        "description": ("The ONE enemy ship (name or id) this ship engages: the "
+                                        "captain's TARGET line and the compliance check use it.")
                     },
                     "torpedo_salvo": {
                         "type": "integer",
@@ -65,12 +71,15 @@ ADMIRAL_TOOLS = [
                             "together split enemy PD dwell, while trickled rounds are "
                             "blinded one at a time (measured vs 4 PD turrets: 4 "
                             "simultaneous = 24/24 through, same 4 spaced 30s = 12/24). "
-                            "Sizing: ~4 rounds kill a destroyer, ~6 kill anything; only "
-                            "commit against CLOSING targets - receding evaders escape. "
-                            "Rounds whose target dies mid-flight retarget the nearest "
-                            "reachable enemy on their own if their seeker is alive and "
-                            "fuel allows, so overkill partially carries onto the next hull."
+                            "Sizing: ~4 rounds kill a destroyer, ~6 kill anything; a "
+                            "receding evader outruns the rounds. "
+                            + LINK_FACT
                         )
+                    },
+                    "torpedo_profile": {
+                        "type": "string",
+                        "enum": ["sprint", "reserve"],
+                        "description": PROFILE_FACT,
                     },
                     "torpedo_target": {
                         "type": "string",
@@ -203,9 +212,20 @@ ADMIRAL_TOOLS = [
                             "Evasion on top of the heading / maneuver while a torpedo or slug "
                             "is actually inbound: 'full' = EVADE under threat (runs from guided "
                             "torpedoes, costing closure), 'dodge' = keeps course until a guided "
-                            "torpedo's final seconds, then presents armor; jinks slugs. It "
-                            "burns at the order's throttle - full throttle under an order that "
-                            "does not burn (throttle 0, PADLOCK, MAINTAIN). Given "
+                            "torpedo's final seconds, then presents armor (on a burning order "
+                            "only within its swing cone, below); jinks slugs. On an "
+                            "order that burns it keeps the order's throttle and swings the "
+                            "burn within 20 deg of the ordered line (~94% of the push stays on "
+                            "it), continuously while the ship is under fire or within 400 km "
+                            "of enemy guns, so it dodges fire from any bearing; it turns "
+                            "armour onto a round it cannot dodge only inside that cone (a round "
+                            "from abeam or astern still strikes flank or tail); with the nose "
+                            "more than 90 deg off the line the drive idles while it turns; RUN "
+                            "leaves the line to burn away, never below the order's throttle. "
+                            "Under an order that does not "
+                            "burn (throttle 0, PADLOCK, MAINTAIN) it flies the drive: jinks at "
+                            "full throttle, TANKs (half throttle) or BRACEs (drive off) (YOUR "
+                            "FLEET / ENGINE show what was flown). Given "
                             "ALONE (no maneuver, no heading) it rides on the fleet order in "
                             "force - or, with none, on what the ship is already flying - so "
                             "never add MAINTAIN just to carry it: MAINTAIN switches the "
@@ -222,10 +242,9 @@ ADMIRAL_TOOLS = [
         "function": {
             "name": "set_fleet_directive",
             "description": (
-                "Set the overall fleet strategy visible to all captains. "
-                "IMPORTANT: This alone is NOT enough! You MUST ALSO call issue_order for each ship. "
-                "Use set_fleet_directive ONLY to set the overall strategy, then call issue_order "
-                "for each ship with specific orders."
+                "Set the overall fleet strategy visible to all captains (and, for torpedo "
+                "fleets, this checkpoint's salvo_plan). Per-ship orders are requested one "
+                "ship at a time after this call."
             ),
             "parameters": {
                 "type": "object",
@@ -239,6 +258,29 @@ ADMIRAL_TOOLS = [
                             "'Defensive formation, conserve delta-v', "
                             "'TIS Haiku-2 draw fire while others flank'"
                         )
+                    },
+                    "salvo_plan": {
+                        "type": "array",
+                        "description": (
+                            "Optional, torpedo fleets: THIS checkpoint's salvo, allocated across "
+                            "your ships here, once - the per-ship order calls that follow run in "
+                            "parallel and cannot see each other's torpedo_salvo (a '7-round strike' "
+                            "became 3+3+3 = 9 that way). Each per-ship order is shown this "
+                            "allocation and launches it unless that order sets its own "
+                            "torpedo_salvo. Rounds a ship cannot launch this checkpoint (YOUR "
+                            "FLEET: 'N now') are not launched."
+                        ),
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "ship_name": {"type": "string"},
+                                "rounds": {"type": "integer", "minimum": 0, "maximum": 12},
+                                "target": {"type": "string"},
+                                "profile": {"type": "string", "enum": ["sprint", "reserve"],
+                                            "description": "launch profile (default sprint)"},
+                            },
+                            "required": ["ship_name", "rounds"],
+                        },
                     }
                 },
                 "required": ["directive"]
@@ -373,9 +415,42 @@ DISCUSS_WITH_ADMIRAL_TOOL = {
 }
 
 
-def get_admiral_tools() -> List[Dict[str, Any]]:
-    """Get tools available to Admirals."""
-    return ADMIRAL_TOOLS.copy()
+# Intent-only mode (AdmiralConfig.intent_only, an experiment): no per-ship
+# order phase, issue_order carries only a coordinated torpedo salvo.
+INTENT_ONLY_ISSUE_ORDER = (
+    "INTENT-ONLY COMMAND: there are no per-ship orders this battle - captains choose their "
+    "own maneuvers and targets from your directive and battle plan. Use issue_order ONLY to "
+    "order a coordinated torpedo salvo: ship_name, torpedo_salvo=N, torpedo_target=<enemy>, "
+    "one call per launching ship (or set_fleet_directive salvo_plan). Every other field is "
+    "ignored."
+)
+INTENT_ONLY_DIRECTIVE = (
+    "Set the overall fleet strategy visible to all captains - in intent-only command it is "
+    "their only order: they pick their own maneuvers and targets from it. For torpedo "
+    "fleets, salvo_plan allocates this checkpoint's salvo."
+)
+
+
+def get_admiral_tools(intent_only: bool = False) -> List[Dict[str, Any]]:
+    """Get tools available to Admirals (intent_only: that mode's descriptions)."""
+    if not intent_only:
+        return ADMIRAL_TOOLS.copy()
+    import copy
+    tools = copy.deepcopy(ADMIRAL_TOOLS)
+    for tool in tools:
+        fn = tool["function"]
+        if fn["name"] == "issue_order":
+            fn["description"] = INTENT_ONLY_ISSUE_ORDER
+            # Only the fields this mode flies: a schema still offering heading /
+            # maneuver / throttle invited orders that are silently dropped.
+            params = fn["parameters"]
+            params["properties"] = {k: v for k, v in params["properties"].items()
+                                    if k in ("ship_name", "torpedo_salvo", "torpedo_target",
+                                             "torpedo_profile")}
+            params["required"] = ["ship_name"]
+        elif fn["name"] == "set_fleet_directive":
+            fn["description"] = INTENT_ONLY_DIRECTIVE
+    return tools
 
 
 def get_admiral_tools_with_draw_pending() -> List[Dict[str, Any]]:

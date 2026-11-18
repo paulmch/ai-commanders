@@ -7,6 +7,7 @@ import {
 import { getNoiseTexture, getPuffTexture, getGlowTexture, getStarTexture, mulberry32 } from './Textures.js';
 import { buildDebrisChunks } from './Hulls.js';
 import { HullWear, createWearMaterial } from './HullWear.js';
+import { bakeScale } from './Scale.js';
 import { spinalMuzzleInto } from './WeaponTimeline.js';
 import { BlastShells } from './BlastShell.js';
 import { engineStateAt } from '../DamageTimeline.js';
@@ -85,6 +86,10 @@ const HEAT_GLSL = /* glsl */`
     return (age < 0.0 || age > 24.0 * k) ? 0.0 : h;
   }
   float dmgHash(float n) { return fract(sin(n * 12.9898 + 4.1414) * 43758.5453); }
+  // x * x: never pow(x, 2.0) on a base that can go negative - GLSL leaves
+  // pow(x < 0, y) undefined: NaN on desktop GPUs (|x|^y on SwiftShader), and
+  // one NaN pixel in the HDR target is smeared into black squares by bloom
+  float dmgSq(float x) { return x * x; }
 `;
 
 const VENT_TYPE = { atmo: 0, fuel: 1, coolant: 2, fire: 3 };
@@ -174,14 +179,14 @@ function craterMaterial(uNow) {
         float heat = craterHeatF(vAge, vInfo.y);
         float spread = 0.3 + 0.45 * clamp(heat, 0.0, 1.2);
         float core = 1.0 - smoothstep(0.0, spread, rr);
-        float lip = exp(-pow((rr - 0.38) / 0.1, 2.0)) * smoothstep(0.25, 0.7, m.r + 0.25 * m.g);
+        float lip = exp(-dmgSq((rr - 0.38) / 0.1)) * smoothstep(0.25, 0.7, m.r + 0.25 * m.g);
         // the breach rim glows in torn segments, never a clean HUD-like ring
-        float rim = breached * exp(-pow((rr - 0.22) / 0.06, 2.0)) * smoothstep(0.3, 0.62, m.g * 0.8 + n.b * 0.5);
+        float rim = breached * exp(-dmgSq((rr - 0.22) / 0.06)) * smoothstep(0.3, 0.62, m.g * 0.8 + n.b * 0.5);
         float mask = max(core * (0.55 + 0.7 * m.r) * (1.0 - hole * 0.85), max(lip * (0.5 + 0.9 * m.r), rim * 1.3));
         float h = heat * mask;
         vec3 glow = heatRamp(h) * smoothstep(0.015, 0.1, h);
         // gouged bare metal round the bowl catches a little light
-        float gouge = exp(-pow((rr - 0.5) / 0.12, 2.0)) * (0.4 + 0.6 * m.g) * (1.0 - hole);
+        float gouge = exp(-dmgSq((rr - 0.5) / 0.12)) * (0.4 + 0.6 * m.g) * (1.0 - hole);
         glow += vec3(0.05, 0.05, 0.055) * gouge;
         gl_FragColor = vec4(glow, a * (1.0 - 0.5 * gouge));
       }`,
@@ -247,7 +252,7 @@ function ventMaterial(uNow, uTime) {
         float t = vAlong;
         vec4 n = texture2D(uNoise, vec2(vUv.x * 2.0 + vSeed, t * 0.8 - uTime * 1.1 + vSeed * 3.0));
         vec4 n2 = texture2D(uNoise, vec2(vUv.x * 3.0 - vSeed, t * 1.6 - uTime * 1.9));
-        float body = pow(1.0 - t, 2.2) * smoothstep(0.0, 0.04, t);
+        float body = pow(max(1.0 - t, 0.0), 2.2) * smoothstep(0.0, 0.04, t);
         float edge = pow(vEdge, 2.6);
         // filaments: the jet tears into streaks as it expands
         float wisps = smoothstep(0.25, 0.75, n.r * 0.65 + n2.g * 0.6 - t * 0.25) * 1.6 + 0.1;
@@ -300,7 +305,8 @@ function sparkMaterial(uNow) {
         vColor = mix(vec3(2.0, 2.4, 3.4), vec3(2.2, 0.95, 0.3), smoothstep(0.05, 0.5, f));
         vec4 mv = modelViewMatrix * vec4(p, 1.0);
         gl_Position = projectionMatrix * mv;
-        gl_PointSize = max(1.5, uSize * (1.0 - 0.5 * f) * (400.0 / max(1.0, -mv.z)));
+        // (uSize is hull-kit units: scaled with the hull's draw scale)
+        gl_PointSize = max(1.5, uSize * length(modelMatrix[0].xyz) * (1.0 - 0.5 * f) * (400.0 / max(1e-4, -mv.z)));
         if (vAlpha <= 0.0) gl_Position = vec4(0.0, 0.0, -2.0, 1.0);
         #include <logdepthbuf_vertex>
       }`,
@@ -353,9 +359,15 @@ function smokeMaterial(uNow) {
         vKind = ember;
         vSeed = aS2.x;
         vAge = age;
-        float live = (age < 0.0 || f > 1.0) ? 0.0 : 1.0;
-        vA = live * aS2.z * (ember > 0.5 ? exp(-age / 0.9) : smoothstep(0.0, 0.06, f) * pow(1.0 - f, 1.4));
-        if (vA <= 0.002) gl_Position = vec4(0.0, 0.0, -2.0, 1.0);
+        // A puff past its life (f > 1) must be hidden by the live test, not
+        // by its alpha: pow(1 - f, 1.4) of the negative base is NaN on GPUs,
+        // 0 * NaN is NaN, NaN <= 0.002 is false, and the billboard was drawn
+        // as a NaN square that bloom grew into black blocks (SwiftShader
+        // returns |x|^y and hid it). The base is clamped as well.
+        bool live = age >= 0.0 && f <= 1.0;
+        float fl = clamp(f, 0.0, 1.0);
+        vA = aS2.z * (ember > 0.5 ? exp(-max(age, 0.0) / 0.9) : smoothstep(0.0, 0.06, fl) * pow(1.0 - fl, 1.4));
+        if (!live || vA <= 0.002) { vA = 0.0; gl_Position = vec4(0.0, 0.0, -2.0, 1.0); }
         #include <logdepthbuf_vertex>
       }`,
     fragmentShader: /* glsl */`
@@ -456,7 +468,13 @@ function washMaterial() {
       ${HEAT_GLSL}
       void main() {
         #include <logdepthbuf_fragment>
-        vec3 n = normalize(cross(dFdx(vLocal), dFdy(vLocal)));
+        // face normal from screen-space derivatives; an edge-on facet gives a
+        // zero cross product, and normalize(0) is NaN (an additive NaN pixel
+        // turns black and bloom grows it into a square): skip those
+        vec3 c = cross(dFdx(vLocal), dFdy(vLocal));
+        float c2 = dot(c, c);
+        if (!(c2 > 1e-30)) discard;
+        vec3 n = c * inversesqrt(c2);
         float facing = dot(n, uDir);              // 1 = square to the jet
         if (facing < 0.03) discard;
         // hottest where the jet axis (through the hull centre) meets the plating
@@ -619,6 +637,13 @@ export function rewindStart(marks, ventMarks, t, resolved, craterCap, ventCap) {
     if (k > 0) start = Math.min(start, ventMarks[Math.max(0, k - ventCap)].index);
   }
   return Math.min(resolved, start);
+}
+
+/** Empty smoke ring slot: t0 far in the future (hidden), no stale data. */
+function clearSmokeSlot(S0, S1, S2, slot) {
+  const o = slot * 4;
+  for (let j = 0; j < 4; j++) { S0[o + j] = 0; S1[o + j] = 0; S2[o + j] = 0; }
+  S0[o + 3] = 1e9;
 }
 
 // ---------------------------------------------------------------------------
@@ -1083,13 +1108,40 @@ class ShipView {
     const g = this.smoke.geometry;
     const S0 = g.attributes.aS0.array, S1 = g.attributes.aS1.array, S2 = g.attributes.aS2.array;
     let dirty = false;
+    // Puffs leave the wound in hull-kit units, drawn at the hull's draw
+    // scale (render/Scale.js). The ring is world-space, so when that scale
+    // moves (auto mode: the camera) every slot is written again: the
+    // buffers stay a pure function of `now` and the scale, never of when
+    // a puff happened to be emitted.
+    const hk = bakeScale(this.group.userData.k ?? 1);   // (snapped: see Scale.bakeScale)
+    if (hk !== this.smokeHullK) {
+      this.smokeHullK = hk;
+      for (let slot = 0; slot < SMOKE_CAP; slot++) {
+        if (Number.isNaN(this.smokeK[slot])) continue;
+        this.smokeK[slot] = NaN;
+        clearSmokeSlot(S0, S1, S2, slot);
+        dirty = true;
+      }
+    }
+    // The window holds fewer puffs than the ring has slots: a slot whose
+    // puff has left the window (older than SMOKE_LIFE, or ahead of a
+    // backward seek) is cleared, so the buffers are a pure function of
+    // `now` whatever the seek path, and no expired puff is left for the
+    // shader to cull.
+    for (let slot = 0; slot < SMOKE_CAP; slot++) {
+      const k = this.smokeK[slot];
+      if (Number.isNaN(k) || (k >= kLo && k <= kHi)) continue;
+      this.smokeK[slot] = NaN;
+      clearSmokeSlot(S0, S1, S2, slot);
+      dirty = true;
+    }
     for (let k = kLo; k <= kHi; k++) {
       const slot = k % SMOKE_CAP;
       if (this.smokeK[slot] === k) continue;
       this.smokeK[slot] = k;
       dirty = true;
       const o = slot * 4;
-      S0[o + 3] = 1e9;               // hidden unless emitted below
+      clearSmokeSlot(S0, S1, S2, slot);   // hidden unless emitted below
       const tk = k * SMOKE_DT;
       const ds = damageStateAt(fx.timeline, this.id, tk, fx._ds);
       if (ds.destroyed || ds.smoke <= 0) continue;
@@ -1116,23 +1168,24 @@ class ShipView {
       const lp = res ? res.p : _v.set(0, 0, 0);
       const ln = res ? res.n : _v2.set(1, 0, 0);
       const SC = fx.SCALE;
-      const wx = st.pos[0] * SC + B.x[0] * lp.x + B.y[0] * lp.y + B.z[0] * lp.z;
-      const wy = st.pos[1] * SC + B.x[1] * lp.x + B.y[1] * lp.y + B.z[1] * lp.z;
-      const wz = st.pos[2] * SC + B.x[2] * lp.x + B.y[2] * lp.y + B.z[2] * lp.z;
+      const wx = st.pos[0] * SC + (B.x[0] * lp.x + B.y[0] * lp.y + B.z[0] * lp.z) * hk;
+      const wy = st.pos[1] * SC + (B.x[1] * lp.x + B.y[1] * lp.y + B.z[1] * lp.z) * hk;
+      const wz = st.pos[2] * SC + (B.x[2] * lp.x + B.y[2] * lp.y + B.z[2] * lp.z) * hk;
       const nx = B.x[0] * ln.x + B.y[0] * ln.y + B.z[0] * ln.z;
       const ny = B.x[1] * ln.x + B.y[1] * ln.y + B.z[1] * ln.z;
       const nz = B.x[2] * ln.x + B.y[2] * ln.y + B.z[2] * ln.z;
       // left behind by the ship (a third of its velocity), puffed out of the wound
       const lag = 0.7;
-      const out = this.W * (0.12 + 0.3 * hash01(this.seed, k, 34));
-      const jx = (hash01(this.seed, k, 35) - 0.5) * this.W * 0.2;
-      const jy = (hash01(this.seed, k, 36) - 0.5) * this.W * 0.2;
-      const jz = (hash01(this.seed, k, 37) - 0.5) * this.W * 0.2;
+      const Wd = this.W * hk;   // the beam as drawn (scene km)
+      const out = Wd * (0.12 + 0.3 * hash01(this.seed, k, 34));
+      const jx = (hash01(this.seed, k, 35) - 0.5) * Wd * 0.2;
+      const jy = (hash01(this.seed, k, 36) - 0.5) * Wd * 0.2;
+      const jz = (hash01(this.seed, k, 37) - 0.5) * Wd * 0.2;
       S0[o] = wx; S0[o + 1] = wy; S0[o + 2] = wz; S0[o + 3] = tk;
       S1[o] = st.vel[0] * SC * lag + nx * out + jx;
       S1[o + 1] = st.vel[1] * SC * lag + ny * out + jy;
       S1[o + 2] = st.vel[2] * SC * lag + nz * out + jz;
-      S1[o + 3] = ember ? this.W * (0.05 + 0.05 * u) : this.W * (0.2 + 0.25 * u) * (0.6 + 0.4 * ds.smoke);
+      S1[o + 3] = ember ? Wd * (0.05 + 0.05 * u) : Wd * (0.2 + 0.25 * u) * (0.6 + 0.4 * ds.smoke);
       S2[o] = hash01(this.seed, k, 38);
       S2[o + 1] = ember ? 1 : 0;
       S2[o + 2] = ember ? 1 : 0.35 + 0.5 * ds.smoke;
@@ -1577,16 +1630,21 @@ export class DamageFX {
     return v;
   }
 
-  /** World position + normal of a mark at its impact time (scene units). */
-  markWorld(m, res, outP, outN) {
+  /**
+   * World position + normal of a mark at its impact time (scene units).
+   * The mark is a hull-kit point: `k` is the scene km per kit unit it is
+   * placed at - by default the hull's draw scale this frame (render/
+   * Scale.js), so the point lies on the hull as it is drawn now.
+   */
+  markWorld(m, res, outP, outN, k = this.sm.kOf?.(m.shipId) ?? 1) {
     const SC = this.SCALE;
     const B = localBasis(m.shipFwd, _basis, m.shipUp);
     const p = res.p, n = res.n;
     const sp = m.shipPos || [0, 0, 0];
     outP.set(
-      sp[0] * SC + B.x[0] * p.x + B.y[0] * p.y + B.z[0] * p.z,
-      sp[1] * SC + B.x[1] * p.x + B.y[1] * p.y + B.z[1] * p.z,
-      sp[2] * SC + B.x[2] * p.x + B.y[2] * p.y + B.z[2] * p.z);
+      sp[0] * SC + (B.x[0] * p.x + B.y[0] * p.y + B.z[0] * p.z) * k,
+      sp[1] * SC + (B.x[1] * p.x + B.y[1] * p.y + B.z[1] * p.z) * k,
+      sp[2] * SC + (B.x[2] * p.x + B.y[2] * p.y + B.z[2] * p.z) * k);
     outN.set(
       B.x[0] * n.x + B.y[0] * n.y + B.z[0] * n.z,
       B.x[1] * n.x + B.y[1] * n.y + B.z[1] * n.z,
@@ -1607,10 +1665,14 @@ export class DamageFX {
     m._spallBlock = b;
     const res = view.resolve(m);
     const P = new THREE.Vector3(), N = new THREE.Vector3();
-    this.markWorld(m, res, P, N);
+    // Spall is world-space but belongs to the hull: placed, thrown and
+    // sized at the hull's draw scale, and written again when that changes
+    const hk = bakeScale(this.sm.kOf?.(m.shipId) ?? 1);   // (snapped: see Scale.bakeScale)
+    m._spallK = hk;
+    this.markWorld(m, res, P, N, hk);
     const SC = this.SCALE;
     const baseVel = new THREE.Vector3(m.shipVel[0] * SC, m.shipVel[1] * SC, m.shipVel[2] * SC);
-    const W = view.W;
+    const W = view.W * hk;
     const tangent = new THREE.Vector3();
     const dir = new THREE.Vector3();
     const vel = new THREE.Vector3();
@@ -1646,7 +1708,7 @@ export class DamageFX {
     // free blocks whose mark is outside its flight window
     for (let b = 0; b < SPALL_BLOCKS; b++) {
       const m = this.spallOwner[b];
-      if (m && (m.t > now || now - m.t > SPALL_LIFE)) this._freeSpall(b);
+      if (m && (m.t > now || now - m.t > SPALL_LIFE || bakeScale(this.sm.kOf?.(m.shipId) ?? 1) !== m._spallK)) this._freeSpall(b);
     }
     // allocate for marks in flight
     let lo = marksUpTo(marks, now - SPALL_LIFE);
@@ -1682,19 +1744,24 @@ export class DamageFX {
       this.blastSpawned.add(m.uid);
       const res = v.resolve(m);
       const P = new THREE.Vector3(), N = new THREE.Vector3();
-      this.markWorld(m, res, P, N);
+      // Positions here are kit units about the hull centre (`anchor`, its
+      // real position at the mark's time): the Blast draws offset and size
+      // at the hull's live draw scale (Explosion.js Blast, render/Scale.js)
+      this.markWorld(m, res, P, N, 1);
+      const sp = m.shipPos || [0, 0, 0];
+      const anchor = new THREE.Vector3(sp[0] * SC, sp[1] * SC, sp[2] * SC);
       const baseVel = new THREE.Vector3(m.shipVel[0] * SC, m.shipVel[1] * SC, m.shipVel[2] * SC);
       if (m.blast) {
         P.addScaledVector(N, v.W * 0.05);
         this.sm._spawnBlast({
-          position: P, dir: N, kind: m.blast, category: 'damage', spawnTime: m.t,
+          position: P, anchor, shipId: m.shipId, dir: N, kind: m.blast, category: 'damage', spawnTime: m.t,
           scale: v.W * (m.blast === 'secondary' ? 0.45 : m.blast === 'cookoff' ? 0.62 : 0.7), baseVel
         });
         continue;
       }
       P.addScaledVector(N, v.W * 0.015);
       this.sm._spawnBlast({
-        position: P, dir: strikeSpallDir(m, N, new THREE.Vector3()), kind: m.strike, category: 'damage',
+        position: P, anchor, shipId: m.shipId, dir: strikeSpallDir(m, N, new THREE.Vector3()), kind: m.strike, category: 'damage',
         spawnTime: m.t, scale: impactScale(m, v.W), baseVel
       });
       // A torpedo that goes through a narrow hull comes out the far side
@@ -1702,9 +1769,9 @@ export class DamageFX {
         const ex = v.exitPoint(res);
         if (ex) {
           const XP = new THREE.Vector3(), XN = new THREE.Vector3();
-          this.markWorld(m, ex, XP, XN);
+          this.markWorld(m, ex, XP, XN, 1);
           this.sm._spawnBlast({
-            position: XP.addScaledVector(XN, v.W * 0.02), dir: XN, kind: 'exitJet', category: 'damage',
+            position: XP.addScaledVector(XN, v.W * 0.02), anchor, shipId: m.shipId, dir: XN, kind: 'exitJet', category: 'damage',
             spawnTime: m.t + EXIT_JET_DELAY_S, scale: impactScale(m, v.W) * 0.85, baseVel
           });
         }
@@ -1747,10 +1814,12 @@ export class DamageFX {
       B.x[0] * l.x + B.y[0] * l.y + B.z[0] * l.z + w[0],
       B.x[1] * l.x + B.y[1] * l.y + B.z[1] * l.z + w[1],
       B.x[2] * l.x + B.y[2] * l.y + B.z[2] * l.z + w[2]);
-    toWorld(e.local, P, [st.pos[0] * SC, st.pos[1] * SC, st.pos[2] * SC]);
+    // (kit units about the hull centre: the Blast applies the draw scale)
+    const anchor = new THREE.Vector3(st.pos[0] * SC, st.pos[1] * SC, st.pos[2] * SC);
+    toWorld(e.local, P, [anchor.x, anchor.y, anchor.z]);
     toWorld(e.normal, N, [0, 0, 0]).normalize();
     this.sm._spawnBlast({
-      position: P.addScaledVector(N, e.size * 0.3), dir: N, kind, category: 'damage', spawnTime: t,
+      position: P.addScaledVector(N, e.size * 0.3), anchor, shipId: v.id, dir: N, kind, category: 'damage', spawnTime: t,
       scale, baseVel: new THREE.Vector3(st.vel[0] * SC, st.vel[1] * SC, st.vel[2] * SC)
     });
   }

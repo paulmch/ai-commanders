@@ -1367,10 +1367,10 @@ def _apply_mcp_commands(
                     target_id = cmd.parameters.get("target_id")
                     # The simulation already supports torpedo launches; this
                     # used to be a TODO that reported success without firing.
-                    launched = simulation.inject_command(cmd.ship_id, {
-                        "type": "launch_torpedo",
-                        "target_id": target_id,
-                    })
+                    launch = {"type": "launch_torpedo", "target_id": target_id}
+                    if cmd.parameters.get("profile"):
+                        launch["profile"] = cmd.parameters["profile"]
+                    launched = simulation.inject_command(cmd.ship_id, launch)
                     if launched:
                         results["applied"].append({
                             "command": "launch_torpedo",

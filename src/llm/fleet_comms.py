@@ -37,13 +37,14 @@ SIGNAL_PD_LOSS = "PD_LOSS"
 SIGNAL_TARGET = "TARGET"
 SIGNAL_CREW = "CREW_STATE"      # a crew impaired / incapacitated by plume radiation
 SIGNAL_PLUME = "PLUME_WASH"     # a friendly taking heavy drive-plume wash
+SIGNAL_RETASK = "RETASK"        # the torpedo datalink re-tasked rounds in flight
 
 DATALINK_NAME = "FLEET DATALINK"
 
 # Inbox priority: LLM-authored traffic first (direct > admiral > fleet net >
 # enemy channel), then the datalink (deaths > PD losses > launches).
 _ENGINE_PRIORITY = {SIGNAL_KILL: 0, SIGNAL_LOSS: 0, SIGNAL_CREW: 0, SIGNAL_PD_LOSS: 1,
-                    SIGNAL_PLUME: 1, SIGNAL_LAUNCH: 2, SIGNAL_TARGET: 3}
+                    SIGNAL_PLUME: 1, SIGNAL_LAUNCH: 2, SIGNAL_RETASK: 2, SIGNAL_TARGET: 3}
 _CHANNEL_PRIORITY = {CHANNEL_DIRECT: 0, CHANNEL_ADMIRAL_TO_CAPTAIN: 1, CHANNEL_FLEET_NET: 2,
                      CHANNEL_ENEMY: 3}
 
@@ -169,6 +170,12 @@ def commanded_target(ship: Any, commands: Iterable[Any]) -> Optional[str]:
     return getattr(ship, "primary_target_id", None)
 
 
+def launch_targets(commands: Iterable[Any]) -> List[str]:
+    """Target ids of the torpedo rounds the captain committed this decision."""
+    return [str(cmd.get("target_id")) for cmd in commands or []
+            if isinstance(cmd, dict) and cmd.get("type") == "launch_torpedo" and cmd.get("target_id")]
+
+
 def committed_rounds(commands: Iterable[Any]) -> int:
     """Torpedo rounds the captain committed this decision."""
     return sum(1 for cmd in commands or []
@@ -182,9 +189,16 @@ def compliance(
     actual_target_id: Optional[str],
     launched: int,
     final: bool,
+    launch_target_ids: Optional[Iterable[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Ordered vs executed for one ship (None when the ship had no order).
+
+    ``launch_target_ids``: where this decision's torpedo rounds were aimed. A
+    salvo order (torpedo_salvo / torpedo_target, also an allocation from the
+    directive's salvo_plan) is obeyed by launching at its target: those
+    launches satisfy the target check even when the ship's gun target is
+    another hull, and a launch at any other hull is a salvo deviation.
 
     Plan schema keys {ordered_maneuver, executed_maneuver, ordered_target,
     actual_target, ordered_salvo, launched} plus `final` (False at filing:
@@ -222,11 +236,19 @@ def compliance(
     except (TypeError, ValueError):
         salvo = None
 
+    launch_ids = [str(t) for t in (launch_target_ids or []) if t]
+    salvo_order = bool(getattr(order, "torpedo_target", None)) or bool(salvo and salvo > 0)
     deviations: List[str] = []
     if not flew_ordered:
         deviations.append(f"maneuver: ordered {'/'.join(ordered)}, flew {executed}")
-    if ordered_target_id and actual_target_id != ordered_target_id:
+    launched_on_target = bool(launch_ids) and all(t == ordered_target_id for t in launch_ids)
+    if ordered_target_id and actual_target_id != ordered_target_id and not (
+            salvo_order and launched_on_target):
         deviations.append(f"target: ordered {ordered_target}, engaging {actual_target or 'nothing'}")
+    stray = sorted({t for t in launch_ids if t != ordered_target_id})
+    if salvo_order and ordered_target_id and stray:
+        deviations.append(f"salvo: ordered at {ordered_target}, launched at "
+                          + ", ".join(channel.ship_name(t) or t for t in stray))
     verb = "launched" if final else "committed"
     if salvo is not None and salvo > 0 and launched < salvo:
         deviations.append(f"salvo: ordered {salvo}, {verb} {launched}")
@@ -291,7 +313,10 @@ def fold_admiral_signals(report: Dict[str, Any], signals: List[Dict[str, Any]]) 
         text = str(sig.get("text") or "")
         head = kind + (f" {sig['target']}" if sig.get("target") else "")
         if sig.get("eta_s") is not None:
-            head += f" ETA {sig['eta_s']:.0f}s"
+            # Read at the next checkpoint: an absolute time, not a stale "in N s".
+            filed = report.get("filed_t")
+            head += (f" lands ~T+{float(filed) + float(sig['eta_s']):.0f}"
+                     if isinstance(filed, (int, float)) else f" ETA {sig['eta_s']:.0f}s")
         if kind == "BREAKING_OFF":
             if report.get("status", "ACK") == "ACK":
                 report["status"] = "DEVIATE"
@@ -417,6 +442,8 @@ class EngineDatalink:
                 structured=structured, checkpoint=checkpoint, sent_t=now, deliver_at_t=now)
 
         launches: Dict[Tuple[str, str], int] = {}
+        # (side, reason, old target, new target) -> [rounds, first impact T]
+        retasks: Dict[Tuple[str, str, str, str], List[float]] = {}
         deaths: List[Tuple[str, Optional[str]]] = []
         crew_events: List[Any] = []
         washes: Dict[str, Dict[str, Any]] = {}       # victim -> strongest heavy wash data
@@ -430,6 +457,16 @@ class EngineDatalink:
                     best = washes.get(event.ship_id)
                     if best is None or (data.get("heat_gj") or 0.0) >= (best.get("heat_gj") or 0.0):
                         washes[event.ship_id] = data
+            if kind == "TORPEDO_RETARGETED" and event.ship_id and (event.data or {}).get("reason"):
+                d = event.data
+                faction = channel.get_faction(event.ship_id)
+                if faction:
+                    key = (faction, d["reason"], d.get("old_target_id") or "?",
+                           d.get("new_target_id") or "?")
+                    hit_t = event.timestamp + float(d.get("time_to_intercept_s") or 0.0)
+                    row = retasks.setdefault(key, [0, hit_t])
+                    row[0] += 1
+                    row[1] = min(row[1], hit_t)
             if kind == "TORPEDO_LAUNCHED" and event.ship_id and event.target_id:
                 key = (event.ship_id, event.target_id)
                 launches[key] = launches.get(key, 0) + 1
@@ -458,6 +495,18 @@ class EngineDatalink:
                 "eta_s_min": round(min(etas), 1) if etas else None,
                 "eta_s_max": round(max(etas), 1) if etas else None,
             })
+            if msg:
+                out.append(msg)
+
+        for (faction, reason, old_t, new_t), (rounds, first_t) in sorted(retasks.items()):
+            why = {"target_lost": "target lost", "target_surrendered": "target surrendered"}.get(
+                reason, "surplus on target")
+            text = (f"{rounds} round{'s' if rounds != 1 else ''} re-tasked "
+                    f"{channel.ship_name(old_t)} -> {channel.ship_name(new_t)} ({why}), "
+                    f"first impact ~T+{first_t:.0f}")
+            msg = make(faction, SIGNAL_RETASK, text, alive_ids(faction), {
+                "reason": reason, "old_target_id": old_t, "new_target_id": new_t,
+                "rounds": rounds, "first_impact_t": round(first_t, 1)})
             if msg:
                 out.append(msg)
 
@@ -593,6 +642,50 @@ class EngineDatalink:
             if msg:
                 out.append(msg)
         return out
+
+
+def compress_datalink(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    A captain's view of this checkpoint's engine datalink (comms audit M6):
+    target-switch notices dropped (FRIENDLIES and the ORDERED TARGETS line
+    show who engages whom), launches merged into one line per target with
+    the FIRST impact ("68-442 s" ranges read as if the last round mattered).
+    Render-side only: the recorded comms_message events are unchanged.
+    """
+    out: List[Dict[str, Any]] = []
+    launches: Dict[Any, Dict[str, Any]] = {}
+    for item in items:
+        if item.get("sender_role") != ROLE_ENGINE:
+            out.append(item)
+            continue
+        kind = item.get("kind")
+        if kind == SIGNAL_TARGET:
+            continue
+        st = item.get("structured") or {}
+        if kind != SIGNAL_LAUNCH or not st.get("target_id") or "rounds" not in st:
+            out.append(item)        # not a launch, or one without its fields: as sent
+            continue
+        key = st.get("target_id") or item.get("msg_id")
+        group = launches.get(key)
+        if group is None:
+            group = launches[key] = {"item": dict(item), "subjects": [], "rounds": 0,
+                                     "in_flight": 0, "eta": None,
+                                     "target": st.get("target_name") or "?"}
+            out.append(group["item"])
+        group["subjects"].append(st.get("subject_name") or "?")
+        group["rounds"] += int(st.get("rounds") or 0)
+        group["in_flight"] += int(st.get("in_flight") or 0)
+        eta = st.get("eta_s_min")
+        if isinstance(eta, (int, float)):
+            group["eta"] = eta if group["eta"] is None else min(group["eta"], eta)
+    for group in launches.values():
+        n = group["rounds"]
+        text = (f"{', '.join(dict.fromkeys(group['subjects']))} launched {n} "
+                f"torpedo{'es' if n != 1 else ''} at {group['target']}")
+        text += (f", {group['in_flight']} in flight, first impact in ~{group['eta']:.0f} s"
+                 if group["eta"] is not None else ", none still in flight")
+        group["item"]["text"] = text
+    return out
 
 
 def budget_inbox(messages: List[CommsMessage]) -> List[CommsMessage]:
