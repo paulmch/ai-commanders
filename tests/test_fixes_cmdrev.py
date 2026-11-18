@@ -372,7 +372,8 @@ def test_intent_only_issue_order_schema_offers_only_what_that_mode_flies():
     from src.llm.admiral_tools import get_admiral_tools
     tool = next(t["function"] for t in get_admiral_tools(intent_only=True)
                 if t["function"]["name"] == "issue_order")
-    assert set(tool["parameters"]["properties"]) == {"ship_name", "torpedo_salvo", "torpedo_target"}
+    assert set(tool["parameters"]["properties"]) == {"ship_name", "torpedo_salvo", "torpedo_target",
+                                                     "torpedo_profile"}
     assert tool["parameters"]["required"] == ["ship_name"]
     full = next(t["function"] for t in get_admiral_tools() if t["function"]["name"] == "issue_order")
     assert "heading" in full["parameters"]["properties"]          # default tools untouched
