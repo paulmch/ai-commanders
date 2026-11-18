@@ -12,6 +12,7 @@ import { TimeController } from './TimeController.js';
 import { CameraController } from './CameraController.js';
 import { stepHighlight } from './Director.js';
 import { ContactOverlay } from './ContactOverlay.js';
+import { initialLabelMode, saveLabelMode, nextLabelMode } from './TacticalLayout.js';
 import {
   LOST_AFTER_FAILURES, backoffDelay, checkpointNumber, classifyVerdict, defaultMaxLag,
   newLiveClientId, recordingQuery,
@@ -84,6 +85,10 @@ class BattleVisualizer {
     this.decisions = new DecisionPanel(this);
     this.initHud();   // scoreboard, kill feed, command net, combat log, registry, timeline markers
     this.contacts = new ContactOverlay(document.getElementById('shipContacts'), id => this.selectShip(id));
+    // Label density (L): auto / minimal / full; ?labels= for one page load, else the saved choice
+    let storage = null;
+    try { storage = window.localStorage; } catch { /* blocked storage */ }
+    this.setLabelMode(initialLabelMode(window.location.search, storage), false);
     this.setupEventListeners();
     // Trajectory tracks: T / playback-bar button; live PATHS mirrors it
     this.trackControl = new TrackModeControl({
@@ -202,7 +207,7 @@ class BattleVisualizer {
    */
   setupEventListeners() {
     document.getElementById('fleetViewBtn').addEventListener('click', () => this.showFleetView());
-    document.getElementById('contactsBtn').addEventListener('click', () => this.toggleContacts());
+    document.getElementById('contactsBtn').addEventListener('click', () => this.cycleLabelMode());
     document.getElementById('scaleBtn')?.addEventListener('click', () => this.cycleScaleMode());
     // File selection
     this.elements.selectFileBtn.addEventListener('click', () => {
@@ -325,6 +330,8 @@ class BattleVisualizer {
         this.decisions.setOpen(false);
       } else if (e.code === 'KeyC') {
         this.toggleContacts();
+      } else if (e.code === 'KeyL' && !e.repeat) {
+        this.cycleLabelMode();
       } else if (e.code === 'KeyA' && !e.shiftKey && this.isInitialized) {
         this.toggleDirector();
       } else if (e.code === 'KeyN' && this.isInitialized) {
@@ -408,6 +415,7 @@ class BattleVisualizer {
     this.setLoadingStatus('Creating tactical display...');
     this.scene?.dispose();   // no-op after a reset; guards any other reload path
     this.scene = new SceneManager(this.elements.canvas);
+    if (this.scene.weapons?.engagements) this.scene.weapons.engagements.mode = this.contacts.mode;
     this.tracks = new Tracks(this.scene, new TrajectoryPredictor(this.loader));
     this.tracks.hud = this.trackHud;
     this.scene.loader = this.loader;   // hull rigs read targets, shots, launches, PD dwell
@@ -578,6 +586,8 @@ class BattleVisualizer {
 
         // Slugs, torpedoes, PD beams, muzzle discharge and the instant
         // impact flash: stateless, evaluated from the recording each frame
+        // (engagement lines: the selected or hovered ship's are drawn at full weight)
+        if (this.scene.weapons.engagements) this.scene.weapons.engagements.focusId = this.selectedShipId || this.contacts.hoverId;
         this.scene.weapons.update(this.loader, currentPlaybackTime);
 
         // Torpedo lifecycle moments crossing this frame: detonations,
@@ -1543,11 +1553,38 @@ class BattleVisualizer {
     button.title = `${SCALE_TITLES[mode] || ''} (S cycles auto / true / cinematic)`;
   }
 
+  /** C: the whole contact layer (brackets, chips, wave chips) and the engagement lines on / off. */
   toggleContacts() {
     this.contacts.enabled = !this.contacts.enabled;
+    this.syncLabelButton();
+  }
+
+  /**
+   * Label density (TacticalLayout): auto - compact chips, crowded ships
+   * grouped, cards for the selected / dying ship; minimal - brackets only;
+   * full - every ship's card. L or the LABELS button cycles (turning the
+   * layer back on if C had hidden it); the choice is saved.
+   */
+  cycleLabelMode() {
+    if (!this.contacts.enabled) { this.toggleContacts(); return; }
+    this.setLabelMode(nextLabelMode(this.contacts.mode));
+  }
+
+  setLabelMode(mode, persist = true) {
+    this.contacts.setMode(mode);
+    if (this.scene?.weapons?.engagements) this.scene.weapons.engagements.mode = this.contacts.mode;
+    if (persist) { try { saveLabelMode(window.localStorage, this.contacts.mode); } catch { /* not persisted */ } }
+    this.syncLabelButton();
+  }
+
+  syncLabelButton() {
     const button = document.getElementById('contactsBtn');
-    button.classList.toggle('active', this.contacts.enabled);
-    button.setAttribute('aria-pressed', String(this.contacts.enabled));
+    if (!button) return;
+    const on = this.contacts.enabled;
+    button.innerHTML = `LABELS ${on ? this.contacts.mode.toUpperCase() : 'OFF'} <kbd>L</kbd>`;
+    button.classList.toggle('active', on);
+    button.setAttribute('aria-pressed', String(on));
+    button.title = 'Label density: auto (compact chips, crowded ships grouped) / minimal (brackets) / full (every card). L cycles, C hides all labels and engagement lines';
   }
 
   /**
@@ -1863,7 +1900,7 @@ class BattleVisualizer {
   initHud() {
     const $ = id => document.getElementById(id);
     this.registry = new Registry({ root: $('shipRegistry'), alpha: this.elements.alphaShips, beta: this.elements.betaShips,
-      onSelect: id => this.selectShip(id) });
+      onSelect: id => this.selectShip(id), onHover: id => this.contacts?.setHover(id) });
     this.combatLog = new CombatLog({ list: this.elements.eventList, chips: $('eventLogFilters'),
       onSeek: row => this.hudSeek(row.t, row.shipId) });
     this.scoreboard = new Scoreboard({ root: $('scoreboard') });
@@ -1897,14 +1934,14 @@ class BattleVisualizer {
     this.killFeed.clear();
     this.combatLog.clear();
     this.commsFeed.clear();
-    // The command net opens by default where there is room for it, unless
-    // the viewer closed it last time - or the replay carries no command
-    // traffic at all (heuristic captains, pre-pass-4 recordings): an empty
-    // column would only hide a third of the battle and the AUTO CAM chip.
+    // The command net stays closed in a replay unless the viewer opened it
+    // last time (N, remembered): open, it takes a third of the battle view
+    // and the fleet framing, and the kill feed and timeline markers already
+    // carry the story. A live battle opens it where there is room - the
+    // commanders' traffic arriving is the broadcast.
     let saved = null;
     try { saved = window.localStorage.getItem('aic.viewer.commsOpen'); } catch { /* default */ }
-    const traffic = !!this.live || (this.loader.hud?.comms?.length || 0) > 0;
-    this.commsFeed.setOpen(saved != null ? saved === '1' : window.innerWidth >= 1100 && traffic);
+    this.commsFeed.setOpen(saved != null ? saved === '1' : !!this.live && window.innerWidth >= 1100);
   }
 
   toggleComms() {
