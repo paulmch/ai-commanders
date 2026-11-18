@@ -870,3 +870,239 @@ class TestOrderCheckReply:
         from src.llm.maneuver_orders import admiral_maneuver_spec
         spec = admiral_maneuver_spec({"maneuver": '"PADLOCK"', "evade": '"dodge"'})
         assert spec["maneuver_type"] == "PADLOCK" and spec["evade"] == "dodge"
+
+
+# =============================================================================
+# Round 2: sequential captains for a side with no admiral
+# =============================================================================
+
+import hashlib  # noqa: E402
+
+from src.llm.prompts import build_captain_doctrine as _doctrine  # noqa: E402
+
+
+def _seq_runner(tmp_path, captain, *, admirals=False, order=None, parallel=False, checkpoints=2,
+                alpha=(("corvette", "stub/dart"), ("corvette", "stub/harpoon")),
+                beta=(("corvette", "stub/lancer"), ("corvette", "stub/pike"))):
+    stub = Stub(captain=captain)
+    runner = make_runner(stub, tmp_path, alpha=alpha, beta=beta, checkpoints=checkpoints,
+                         admirals=admirals, distance_km=350.0)
+    runner.config.captain_order = order
+    runner.config.parallel_llm = parallel
+    stub.texts = {}
+    stub.systems = {}
+    inner = stub.captain
+
+    def wrapped(ctx):
+        stub.texts[(ctx.model, ctx.cp, ctx.turn)] = ctx.messages[-1]["content"]
+        stub.systems[(ctx.model, ctx.cp)] = ctx.messages[0]["content"]
+        return inner(ctx)
+    stub.captain = wrapped
+    return stub, runner
+
+
+def _claiming(ctx):
+    me = ctx.model.split("/")[-1]
+    foe = "beta_1" if ctx.model in ("stub/dart", "stub/harpoon") else "alpha_1"
+    return [("set_primary_target", {"target_id": foe}),
+            ("fleet_signal", {"kind": "TARGET_CLAIM", "to": "ALL", "text": f"{me} takes {foe}"}),
+            ("launch_torpedo", {"count": 1, "target_id": foe}),
+            ("set_maneuver", {"maneuver_type": "PADLOCK", "target_id": foe})]
+
+
+def _stream(runner):
+    rows = [(e.timestamp, e.event_type.name, e.ship_id, e.target_id,
+             json.dumps(e.data, sort_keys=True, default=str)) for e in runner.simulation.events]
+    return hashlib.sha256(json.dumps(rows).encode()).hexdigest()
+
+
+class TestSequentialCaptains:
+
+    def test_a_later_captain_sees_earlier_claims_and_launches(self, tmp_path):
+        stub, runner = _seq_runner(tmp_path, _claiming, checkpoints=1)
+        runner.run_fleet_battle(FLEET)
+        # Checkpoint 1: the order rotates one place -> alpha_2 (harpoon) first.
+        first, second = stub.texts[("stub/harpoon", 1, 1)], stub.texts[("stub/dart", 1, 1)]
+        assert "THIS CHECKPOINT: you decide 1 of 2, first" in first
+        assert "dart takes" not in first
+        block = second[second.index("THIS CHECKPOINT, BEFORE YOU (you decide 2 of 2"):]
+        assert "[TARGET_CLAIM] harpoon takes beta_1" in block
+        assert "launched 1 torpedo at " in block and "PADLOCK" in block
+        # Sides never see each other.
+        for model in ("stub/lancer", "stub/pike"):
+            assert "takes beta_1" not in stub.texts[(model, 1, 1)]
+        # The doctrine says so, as a fact.
+        assert "decide one after another each checkpoint" in stub.systems[("stub/dart", 1)]
+
+    def test_same_commands_in_same_battle_out(self, tmp_path):
+        _, seq = _seq_runner(tmp_path / "s", _claiming, order="sequential")
+        seq.run_fleet_battle(FLEET)
+        _, par = _seq_runner(tmp_path / "p", _claiming, order="parallel")
+        par.run_fleet_battle(FLEET)
+        assert _stream(seq) == _stream(par)
+
+    def test_order_rule_is_by_ship_id_rotated_and_ignores_listing_order(self, tmp_path):
+        _, runner = _seq_runner(tmp_path, _claiming)
+        entries = [(f"alpha_{n}", None, "alpha") for n in (10, 2, 1, 3)]
+        runner.checkpoint_count = 0
+        assert [e[0] for e in runner.captain_turn_order(entries)] == [
+            "alpha_1", "alpha_2", "alpha_3", "alpha_10"]
+        assert [e[0] for e in runner.captain_turn_order(list(reversed(entries)))] == [
+            "alpha_1", "alpha_2", "alpha_3", "alpha_10"]
+        runner.checkpoint_count = 1
+        assert [e[0] for e in runner.captain_turn_order(entries)][0] == "alpha_2"
+        runner.checkpoint_count = 4
+        assert [e[0] for e in runner.captain_turn_order(entries)][0] == "alpha_1"
+
+    def test_sides_with_an_admiral_are_unchanged(self, tmp_path):
+        a, auto = _seq_runner(tmp_path / "a", _claiming, admirals=True)
+        auto.run_fleet_battle(FLEET)
+        b, par = _seq_runner(tmp_path / "b", _claiming, admirals=True, order="parallel")
+        par.run_fleet_battle(FLEET)
+        assert a.texts == b.texts and a.systems == b.systems          # byte-identical requests
+        assert not any("THIS CHECKPOINT" in t for t in a.texts.values())
+        assert not any("one after another" in t for t in a.systems.values())
+
+    def test_config_switch(self):
+        from src.llm.battle_runner import BattleConfig
+        assert BattleConfig(captain_order="auto").captain_order is None
+        with pytest.raises(ValueError):
+            BattleConfig(captain_order="random")
+
+
+# =============================================================================
+# Round 2: renewing the admiral's order is compliance; reason-only reports
+# =============================================================================
+
+class TestRenewedOrder:
+
+    def _renew(self, ctx):
+        if ctx.model != "stub/dd":
+            return []
+        return [("set_heading", {"direction": {"x": -1.0, "y": 0.02, "z": 0.0}, "throttle": 1.0,
+                                 "evade": "full", "reason": "Renewing the fleet heading per orders"}),
+                ("set_primary_target", {"target_id": "beta_1"})]
+
+    def test_reissued_heading_is_compliance_and_the_order_keeps_flying(self, tmp_path):
+        stub, runner = _loop_runner(tmp_path, self._renew, checkpoints=2)
+        runner.run_fleet_battle(FLEET)
+        report = _reports(runner)[30.0]
+        assert report["status"] == "ACK" and report["implicit"] is True
+        assert report["from_reason"] is True
+        assert report["intent"].startswith("set_heading: Renewing the fleet heading")
+        assert report["compliance"]["executed_maneuver"] == "HEADING"
+        assert ("stub/dd", 1, 2) not in stub.texts                      # no ORDER CHECK
+        # Next turn, the tool note says the order kept flying.
+        assert "matches your Admiral's HEADING order already flying" in stub.texts[("stub/dd", 2, 1)]
+
+    def test_a_heading_reason_does_not_explain_a_target_deviation(self, tmp_path):
+        def captain(ctx):
+            calls = self._renew(ctx)
+            return calls[:1] if ctx.model == "stub/dd" else calls     # target left unset
+        stub = Stub(captain=captain, order=lambda ship: dict(HEADING_ORDER, suggested_target="beta_1"))
+        runner = make_runner(stub, tmp_path, alpha=(("destroyer", "stub/dd"),),
+                             beta=(("destroyer", "stub/foe"),), checkpoints=1, distance_km=400.0)
+        runner.run_fleet_battle(FLEET)
+        report = _reports(runner)[30.0]
+        assert report["compliance"]["deviations"][0].startswith("target:")
+        assert report["status"] == "ACK" and report["implicit"] is True   # not a DEVIATE
+
+    def test_a_different_heading_still_replaces_the_order(self, tmp_path):
+        def captain(ctx):
+            if ctx.model != "stub/dd":
+                return []
+            return [("set_heading", {"direction": {"x": 0.0, "y": 1.0, "z": 0.0}, "throttle": 1.0,
+                                     "evade": "full", "reason": "flank"})]
+        _, runner = _loop_runner(tmp_path, captain, checkpoints=1)
+        runner.run_fleet_battle(FLEET)
+        flown = runner.simulation.get_ship("alpha_1").current_maneuver
+        assert flown.heading_direction["y"] > 0.9
+
+    def test_formation_note(self):
+        from src.simulation import Maneuver, ManeuverType
+        sim, cap = _sim(), _captain()
+        cap.has_admiral = True
+        order = AdmiralOrder(target_ship_id="alpha_1", target_ship_name="x", order_text="Fleet heading.",
+                             heading={"x": -1, "y": 0, "z": 0}, throttle=1.0, formation=True,
+                             applied_throttle=0.67, maneuver={"maneuver_type": "HEADING", "throttle": 1.0})
+        cap.admiral_orders = [order]
+        ship = sim.get_ship("alpha_1")
+        ship.current_maneuver = Maneuver(maneuver_type=ManeuverType.HEADING, start_time=0.0, duration=30.0,
+                                         throttle=0.67, heading_direction={"x": -1, "y": 0, "z": 0})
+        mine = Maneuver(maneuver_type=ManeuverType.HEADING, start_time=0.0, duration=30.0, throttle=1.0,
+                        heading_direction={"x": -0.999, "y": 0.03, "z": 0})
+        note = cap._reproduces_applied_order(mine, sim, "alpha_1")
+        assert "FORMATION heading" in note and "67% throttle" in note and "synchronised" in note
+        mine.heading_direction = {"x": -0.9, "y": 0.43, "z": 0}             # ~25 deg off
+        assert cap._reproduces_applied_order(mine, sim, "alpha_1") is None
+
+
+# =============================================================================
+# Round 2: a rejected draw states the history and invites nothing
+# =============================================================================
+
+class TestDrawRejectionHistory:
+
+    def test_rejections_are_listed_and_nothing_invites_a_retry(self):
+        from src.llm.admiral import AdmiralDecision, settle_draw_offers
+        from tests.test_admiral_command_interface import make_admiral
+        a, b = make_admiral("alpha"), make_admiral("beta")
+        for t in (300.0, 420.0, 480.0):
+            a.has_proposed_draw, a.draw_offer_t = True, t - 30.0
+            b.last_decision = AdmiralDecision(timestamp=t, rejected_draw=True)
+            a.last_decision = AdmiralDecision(timestamp=t)
+            settle_draw_offers(a, b, t)
+        first, last = a.draw_notices[0], a.draw_notices[-1]
+        assert "rejected" not in first.split("REJECTED")[1]          # one rejection: no history
+        assert last.endswith("- rejected 3 times: T+300, T+420, T+480. The offer is closed.")
+        assert not any("propose again" in n or "re-open" in n for n in a.draw_notices)
+
+
+# =============================================================================
+# Round 2: blinded wrecks - IMPACT only on a collision line; dead drives
+# =============================================================================
+
+class TestBlindedWreckLine:
+
+    def _wreck(self, miss, radius=0.035):
+        return {"distance_km": 120.0, "closing_kps": 7.0, "eta_seconds": 17.0, "source": "X",
+                "blinded": True, "miss_km": miss, "hit_radius_km": radius, "est_impact_gj": 6.0}
+
+    def test_a_wreck_passing_kilometres_away_is_no_impact(self):
+        text = format_threats_to_me({"torpedo_threats": [self._wreck(3.2)]})
+        assert "IMPACT IN" not in text
+        assert "passes 3.2 km from you in 17s if you hold course" in text
+
+    def test_a_wreck_on_the_hull_line_is_an_impact(self):
+        text = format_threats_to_me({"torpedo_threats": [self._wreck(0.02)]})
+        assert "IMPACT IN 17s if you hold course" in text
+
+    def test_dead_drive_is_not_told_to_keep_maneuvering(self):
+        text = format_threats_to_me({"torpedo_threats": [self._wreck(0.02)],
+                                     "own": {"engine_fraction": 0.0}})
+        assert "KEEP MANEUVERING" not in text and "your drive is DEAD" in text
+        live = format_threats_to_me({"torpedo_threats": [self._wreck(0.02)]})
+        assert "moving off its line makes it miss" in live
+
+    def test_live_status_carries_the_strike_radius(self):
+        from src.llm.captain import _strike_radius_km
+        sim = _sim()
+        r = _strike_radius_km(sim.get_ship("alpha_1"))
+        assert r == pytest.approx(0.0353, abs=0.001)          # destroyer, lateral
+
+
+class TestNoAdmiralTexts:
+
+    def test_a_captain_without_an_admiral_reads_no_admiral_text(self):
+        import re
+        cap = _captain()
+        cap.fleet_peer_names = ["TIS Ward-1"]
+        for has_admiral in (False, True):
+            cap.has_admiral = has_admiral
+            tools = cap.get_tools_for_context()
+            names = [t["function"]["name"] for t in tools]
+            doc = build_captain_doctrine(ship_type="destroyer", fleet_data=FLEET, tool_names=names,
+                                         has_admiral=has_admiral)
+            blob = doc + json.dumps(tools)
+            found = bool(re.search(r"dmiral|ADMIRAL|report_to_admiral", blob))
+            assert found is has_admiral, has_admiral

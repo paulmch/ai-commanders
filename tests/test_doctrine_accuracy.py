@@ -586,7 +586,7 @@ class TestThreatDisplayContract:
         assert "needs ~5 turret(s), you have 2" in text
         assert "CANNOT stop it" in text
         assert "BLINDED torpedo" in text
-        assert "KEEP MANEUVERING" in text
+        assert "moving off its line makes it miss" in text   # cmdcap: a fact, not "KEEP MANEUVERING"
 
     @pytest.mark.usefixtures("all_round_fire")  # exact head-on scenario; see tests/conftest.py
     def test_live_sim_populates_enrichment(self, fleet):

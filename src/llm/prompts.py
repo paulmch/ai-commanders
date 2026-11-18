@@ -837,7 +837,8 @@ def format_torpedo_threats(threats: List[Dict[str, Any]]) -> str:
         if t.get("est_impact_gj") is not None:
             line += f", est ~{t['est_impact_gj']:.0f} GJ"
         if t.get("blinded"):
-            line += " | ballistic wreck: KEEP MANEUVERING and it misses"
+            line = line.replace(eta_str, _blinded_eta_text(t))
+            line += " | ballistic wreck: it flies straight - moving off its line makes it miss"
         else:
             nez = t.get("nez_inside")
             if nez is True:
@@ -1159,7 +1160,7 @@ MANEUVERS:
   NOT a ship-relative one and NOT a position. Ships in your turn carry "dir_to (x,y,z)"
   (a compact turn keeps it on the full ENEMIES lines only): the world unit vector from
   you to it - paste it as the direction, or name the ship in toward_ship.
-  A POSITION (e.g. an admiral's "(260,0,0) km") is not a direction: subtract YOUR world
+  A POSITION (e.g. {position_example} "(260,0,0) km") is not a direction: subtract YOUR world
   position (MY SHIP) first - your ORDERS block resolves such points for you.
   Ahead/starboard/above words are relative to YOUR NOSE (MY SHIP gives the nose vector).
 
@@ -1209,9 +1210,7 @@ MANEUVERS:
 DELTA-V NOTE: You have ~500 km/s delta-V. Full throttle for 20 minutes uses <50 km/s.
 Fuel is ABUNDANT - "conserving delta-V" is almost never correct.
 
-THROTTLE NOTE: All maneuvers accept throttle 0.0-1.0. In fleet battles, your Admiral may
-order specific throttle (e.g., "INTERCEPT at 50%") to maintain formation with slower ships.
-Follow throttle orders if given - formation cohesion matters for mutual point defense.
+THROTTLE NOTE: All maneuvers accept throttle 0.0-1.0.{throttle_admiral}
 {gun_notes}
 TARGET SELECTION:
 - set_primary_target: {primary_target_note}
@@ -1251,11 +1250,7 @@ your ship actually did with your last orders, and any call that was rejected).
 - Renew set_maneuver or set_heading each checkpoint to keep maneuvering.
   When a maneuver expires, thrust stops; you coast with your existing momentum.
   MAINTAIN is a deliberate coast - call it when coasting IS the plan.
-  Exception: a HEADING or MANEUVER ORDER from your admiral is already applied to your
-  ship - calling set_maneuver/set_heading REPLACES it (and breaks formation; set_maneuver
-  EVADE replaces a heading too - its evade already rides on it). Overriding is your call;
-  the Admiral reads "NOT as ordered" - say why (reason= on the call, or report_to_admiral).
-{execute_weapon_notes}Describing an action does not execute it. Use the corresponding tool.
+{admiral_exception}{execute_weapon_notes}Describing an action does not execute it. Use the corresponding tool.
 
 TIMING: You make ONE decision now. It is LOCKED for {decision_interval_s:g} seconds until next checkpoint.
 You CANNOT react mid-checkpoint or change orders. No "if X then Y" - decide NOW.
@@ -1826,6 +1821,7 @@ def build_captain_doctrine(
     tool_names: Optional[Iterable[str]] = None,
     has_admiral: bool = False,
     ship_status: Optional[Dict[str, Any]] = None,
+    sequential_captains: bool = False,
     **_ignored: Any,
 ) -> str:
     """
@@ -1895,6 +1891,13 @@ def build_captain_doctrine(
             " <friend> take my lane.\"",
             "  (<enemy A> / <friend>: real ship names from your ENEMIES / FRIENDLIES.)",
         ]
+    if sequential_captains:
+        # A fact about the turn, not advice (lane cmdcap, sequential captains).
+        comms.append("- Your side's captains decide one after another each checkpoint (ship order, "
+                     "rotated one place per checkpoint), all on the same start-of-checkpoint "
+                     "picture; every order takes effect together. THIS CHECKPOINT, BEFORE YOU "
+                     "lists what the captains before you ordered (signals to you or all, target, "
+                     "launches, maneuver); the captains after you see yours the same way.")
     if "send_message" in names or not names:
         comms.append("- send_message: the OPEN channel - the ENEMY reads it (taunts, surrender "
                      "demands). Not for coordination.")
@@ -1930,6 +1933,19 @@ def build_captain_doctrine(
             + (" (launch_torpedo can take its own target_id)" if has_torps else "")),
         comms_block="\n".join(comms) + "\n",
         end_battle=_end_battle_line(names),
+        # Admiral-only text: a captain with no admiral is not told about
+        # admiral orders, formations or report_to_admiral (cmdcap round 2).
+        admiral_exception=(
+            "  Exception: a HEADING or MANEUVER ORDER from your admiral is already applied to your\n"
+            "  ship - calling set_maneuver/set_heading REPLACES it (and breaks formation; set_maneuver\n"
+            "  EVADE replaces a heading too - its evade already rides on it). Overriding is your call;\n"
+            "  the Admiral reads \"NOT as ordered\" - say why (reason= on the call, or report_to_admiral).\n"
+            if has_admiral else ""),
+        throttle_admiral=(
+            " In fleet battles, your Admiral may\norder specific throttle (e.g., \"INTERCEPT at 50%\") "
+            "to maintain formation with slower ships.\nFollow throttle orders if given - formation "
+            "cohesion matters for mutual point defense." if has_admiral else ""),
+        position_example="an admiral's" if has_admiral else "a fleet-mate's",
         full_others=FULL_SOLUTION_CONTACTS - 1,
         range_secondary=_captain_secondary_options(),
         compact_note=("\n- COMPACT TURN: while your Admiral's maneuver flies and there is no merge warning,"
@@ -2197,21 +2213,39 @@ def format_my_ship(
     return "\n".join(lines)
 
 
-def _torpedo_threat_line(t: Dict[str, Any], allied_note: bool = True, verdict: bool = True) -> str:
+def _blinded_eta_text(t: Dict[str, Any]) -> str:
+    """A blinded (ballistic) round: IMPACT only when its straight line passes
+    inside the hull's strike radius; otherwise when and how far it passes
+    ("IMPACT IN 17s" was printed for wrecks passing kilometres away)."""
+    eta = t.get("eta_seconds", 999)
+    miss, radius = t.get("miss_km"), t.get("hit_radius_km")
+    if eta >= 900:
+        return "not closing"
+    if miss is None or (radius is not None and miss <= radius):
+        return f"IMPACT IN {eta:.0f}s if you hold course"
+    return f"passes {miss:.1f} km from you in {eta:.0f}s if you hold course"
+
+
+def _torpedo_threat_line(t: Dict[str, Any], allied_note: bool = True, verdict: bool = True,
+                         drive_dead: bool = False) -> str:
     eta = t.get("eta_seconds", 999)
     eta_str = f"IMPACT IN {eta:.0f}s" if eta < 900 else "not closing"
     head = "BLINDED torpedo" if t.get("blinded") else "torpedo"
     source = t.get("source", "unknown")
     if t.get("blinded") and t.get("own_side"):
         source = f"{source} - YOUR OWN SIDE'S round"
+    if t.get("blinded"):
+        eta_str = _blinded_eta_text(t)
     line = (f"  - {head} from {source}: {t.get('distance_km', 0):.0f} km, "
             f"closing {t.get('closing_kps', 0):.1f} km/s, {eta_str}")
     if t.get("est_impact_gj") is not None:
         line += f", est ~{t['est_impact_gj']:.0f} GJ"
     if t.get("blinded"):
-        line += " | ballistic wreck: KEEP MANEUVERING and it misses"
-        if t.get("miss_km") is not None:
-            line += f" (passes {t['miss_km']:.1f} km from you if you hold course)"
+        # A fact about the round and the ship, not an instruction ("KEEP
+        # MANEUVERING and it misses" was printed to dead-drive ships too).
+        line += (" | ballistic wreck: your drive is DEAD - nothing moves you off its line"
+                 if drive_dead else " | ballistic wreck: it flies straight - moving off its line "
+                                    "makes it miss")
         return line
     nez = t.get("nez_inside")
     if nez is True:
@@ -2302,7 +2336,10 @@ def format_threats_to_me(
     if torps:
         lines.append(f"  INBOUND ORDNANCE: {len(torps)} torpedo(es):")
         sat = _pd_saturation(torps)
-        lines.extend("  " + _torpedo_threat_line(t, verdict=sat is None) for t in torps[:6])
+        own = tactical_status.get("own") or {}
+        dead = isinstance(own.get("engine_fraction"), (int, float)) and own["engine_fraction"] <= 0.0
+        lines.extend("  " + _torpedo_threat_line(t, verdict=sat is None, drive_dead=dead)
+                     for t in torps[:6])
         if len(torps) > 6:
             lines.append(f"    ... {len(torps) - 6} more")
         saturation = _pd_saturation_line(torps)
@@ -2668,6 +2705,51 @@ def format_comms(
     return "\n\n".join(out)
 
 
+def format_peer_turns(peers: List[Dict[str, Any]],
+                      position: Optional[Tuple[int, int]] = None) -> str:
+    """
+    THIS CHECKPOINT, BEFORE YOU (sequential captains): what the captains of
+    this side who decided before this one ordered at this checkpoint, in the
+    FRIENDLIES / FLEET NET forms (captain.peer_turn_summary). Facts only.
+    """
+    n, of = position or (len(peers) + 1, None)
+    where = f"you decide {n} of {of}" if of else f"you decide {n}"
+    if not peers:
+        return (f"THIS CHECKPOINT: {where}, first; the captains after you see your signals, "
+                "target, launches and maneuver before they decide. All orders apply together.")
+    lines = [f"THIS CHECKPOINT, BEFORE YOU ({where}; their orders apply with yours, not before):"]
+    for p in peers:
+        parts = []
+        m = p.get("maneuver")
+        if m:
+            text = _maneuver_text(m)
+            if m.get("target_name"):
+                text += f" -> {m['target_name']}"
+            if m.get("evade"):
+                text += f", evade {m['evade']}"
+            parts.append(text)
+        else:
+            parts.append(f"no maneuver call (keeps {p['keeps']})" if p.get("keeps")
+                         else "no maneuver call (coasts)")
+        if p.get("target"):
+            parts.append(f"target {p['target']}")
+        for launch in p.get("launches") or []:
+            text = (f"launched {launch['count']} torpedo{'es' if launch['count'] != 1 else ''} "
+                    f"at {launch['target']} ({launch['profile']}")
+            if launch.get("eta_s") is not None:
+                text += f", impact ~{launch['eta_s']:.0f} s after launch"
+            parts.append(text + ")")
+        lines.append(f"  {ship_ref(p.get('name'), p.get('ship_id'))}: " + " | ".join(parts))
+        for sig in p.get("signals") or []:
+            to = str(sig.get("to") or "ALL")
+            item = {"sender_name": p.get("name"), "sender_id": p.get("ship_id"),
+                    "channel": "fleet_net" if to.upper() == "ALL" else "direct",
+                    "text": f"[{sig.get('kind') or 'FREE'}] {sig.get('text') or ''}",
+                    "sent_t": p.get("t"), "structured": {"eta_s": sig.get("eta_s")}}
+            lines.append("  " + _comms_line(item))
+    return "\n".join(lines)
+
+
 def build_captain_turn(
     captain_name: str,
     ship_name: str,
@@ -2694,6 +2776,8 @@ def build_captain_turn(
     tool_errors: Optional[str] = None,
     tool_names: Optional[Iterable[str]] = None,
     compact: bool = False,
+    peer_turns: Optional[List[Dict[str, Any]]] = None,
+    peer_turn_position: Optional[Tuple[int, int]] = None,
     battle_clock: Optional[Tuple[int, Dict[str, Any]]] = None,
     **_ignored: Any,
 ) -> str:
@@ -2748,6 +2832,8 @@ def build_captain_turn(
     comms_text = format_comms(comms, own_faction)
     if comms_text:
         sections.append(comms_text)
+    if peer_turns is not None:
+        sections.append(format_peer_turns(peer_turns, peer_turn_position))
     if received_messages:
         # Legacy free-text form: the sender's side is unknown here, so it is
         # NOT labelled as enemy traffic.

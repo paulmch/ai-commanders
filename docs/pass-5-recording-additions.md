@@ -1188,3 +1188,14 @@ launching side at the next checkpoint, one line per (reason, old target, new
 target): "5 rounds re-tasked OCS Halberd-1 -> OCS Halberd-3 (target lost), first
 impact ~T+141". Structured: `reason`, `old_target_id`, `new_target_id`, `rounds`,
 `first_impact_t` (s, battle time: reassignment time + time to intercept).
+
+### `captain_report.from_reason` (lane cmdcap, round 2)
+
+Optional, `true` only. The report was not a `report_to_admiral` call: the
+captain gave a `reason` on an action call (set_maneuver / set_heading /
+set_primary_target / launch_torpedo). Such a report is filed as an implicit
+ACK with the reasons in `intent`, and becomes a DEVIATE (implicit false, the
+reasons in `reason`) only when the engine's compliance finds a deviation in
+what a reasoned call did (maneuver / target / salvo). Recordings before this
+change filed every reason-only report as an explicit ACK. The viewer's
+command net shows a `CALL REASON` chip on such rows.

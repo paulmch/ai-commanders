@@ -723,6 +723,34 @@ ACTION_REASON_PROPERTY = {
 }
 
 
+# Admiral-only sentences in the base tool texts, and what a captain with no
+# admiral reads instead (cmdcap round 2: it was told to report_to_admiral).
+_ADMIRAL_ONLY_TEXT = (
+    ("an admiral's HEADING included; ", ""),
+    ("; the `evade` field (here or on set_heading) rides on a maneuver instead - an order "
+     "'with evade' already carries it.", "; the `evade` field (here or on set_heading) rides "
+     "on a maneuver instead."),
+    (" and report with report_to_admiral", ""),
+    ("tell your Admiral with report_to_admiral, other ships with fleet_signal",
+     "tell other ships with fleet_signal"),
+    (" to=ADMIRAL is filed on your report.", ""),
+    ("ALL (default), ADMIRAL, or a friendly ship name/id.", "ALL (default) or a friendly ship name/id."),
+)
+
+
+def without_admiral_texts(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """``tools`` (copies where changed) without the admiral-only sentences."""
+    import json as _json
+    out = []
+    for tool in tools:
+        text = _json.dumps(tool)
+        new = text
+        for old, rep in _ADMIRAL_ONLY_TEXT:
+            new = new.replace(_json.dumps(old)[1:-1], _json.dumps(rep)[1:-1])
+        out.append(_json.loads(new) if new != text else tool)
+    return out
+
+
 def with_reason_fields(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """``tools`` with the optional ``reason`` field on the action tools (copies)."""
     out = []

@@ -198,12 +198,24 @@ class BattleConfig:
     # keeps flying its current maneuver (renewed for the window) and a
     # captain_turn_skipped event records why. Saves calls, has risk: off.
     quiet_turns: bool = False
+    # Captain call order within one side (lane cmdcap): "sequential" - the
+    # side's captains decide one after another, each shown what the captains
+    # before it ordered THIS checkpoint (signals, target, launches, maneuver);
+    # "parallel" - all at once on the same snapshot. None = auto: sequential
+    # for a side without an LLM admiral, parallel for a side with one. Either
+    # way every captain decides on the same start-of-checkpoint engine state
+    # and all commands are applied together; the two sides run concurrently.
+    captain_order: Optional[str] = None
     # Free-text note naming the experiment a run belongs to (--label); stored
     # in the recording's provenance. Never shown to a model.
     label: Optional[str] = None
 
     def __post_init__(self) -> None:
         validate_battle_options(self)
+        if self.captain_order in ("", "auto"):
+            self.captain_order = None
+        if self.captain_order not in (None, "sequential", "parallel"):
+            raise ValueError("captain_order must be 'sequential', 'parallel' or None (auto)")
         from .call_policy import validate_effort_policy
         self.effort_policy = validate_effort_policy(self.effort_policy)
 
@@ -1942,20 +1954,31 @@ class LLMBattleRunner:
             for _, captain, _ in captain_entries:
                 print(f"  [{captain.ship_name}] {captain.name} deciding...")
 
-        if self.config.parallel_llm and len(captain_entries) > 1:
+        # One job per captain (parallel sides) or per side (sequential
+        # sides: its captains one after another, see _decide_side_in_order).
+        # The jobs run concurrently with parallel_llm: the two sides never
+        # wait for each other.
+        jobs: List[Any] = []
+        for faction in dict.fromkeys(f for _, _, f in captain_entries):
+            side = [entry for entry in captain_entries if entry[2] == faction]
+            sequential = self._captain_order_for(faction) == "sequential"
+            for _, captain, _ in side:
+                captain.sequential_captains = sequential
+            if sequential:
+                jobs.append(lambda side=side: self._decide_side_in_order(side))
+            else:
+                jobs.extend((lambda entry=entry: [(entry[0], self._get_captain_decision_with_discussion(*entry))])
+                            for entry in side)
+        if self.config.parallel_llm and len(jobs) > 1:
             with ThreadPoolExecutor(
-                max_workers=min(8, len(captain_entries)),
+                max_workers=min(8, len(jobs)),
                 thread_name_prefix="captain-decide",
             ) as pool:
-                results = list(pool.map(
-                    lambda entry: self._get_captain_decision_with_discussion(*entry),
-                    captain_entries,
-                ))
+                done = list(pool.map(lambda job: job(), jobs))
         else:
-            results = [
-                self._get_captain_decision_with_discussion(ship_id, captain, faction)
-                for ship_id, captain, faction in captain_entries
-            ]
+            done = [job() for job in jobs]
+        decided = {ship_id: commands for chunk in done for ship_id, commands in chunk}
+        results = [decided[ship_id] for ship_id, _, _ in captain_entries]
 
         all_commands: Dict[str, List[Any]] = {}
         for (ship_id, captain, faction), commands in zip(captain_entries, results):
@@ -1976,6 +1999,75 @@ class LLMBattleRunner:
                     self.simulation.current_time, ship_id, report,
                     answers_order_event_id=None, decision_event_id=None)
         return all_commands
+
+    def _captain_order_for(self, faction: str) -> str:
+        """'sequential' or 'parallel' for this side's captains (BattleConfig.
+        captain_order; auto: sequential exactly when the side has no LLM
+        admiral - an admiral already coordinates its captains)."""
+        order = getattr(self.config, "captain_order", None)
+        if order in ("sequential", "parallel"):
+            return order
+        return "parallel" if self._llm_admiral(faction) is not None else "sequential"
+
+    def captain_turn_order(self, side: List[Tuple[str, Any, str]]) -> List[Tuple[str, Any, str]]:
+        """
+        The order a sequential side's captains decide in this checkpoint:
+        ship ids in natural order (alpha_2 before alpha_10), rotated by one
+        place per checkpoint. Deterministic and independent of how the
+        entries were listed; every captain goes first, and last, equally
+        often over a battle (the last one sees the most, the first one sets
+        the plan); each side applies the same rule to its own ships, and the
+        sides never see each other's turns, so neither is favoured.
+        """
+        def key(entry):
+            head, _, tail = entry[0].rpartition("_")
+            return (head, int(tail)) if tail.isdigit() else (entry[0], 0)
+        ordered = sorted(side, key=key)
+        if not ordered:
+            return ordered
+        shift = self.checkpoint_count % len(ordered)
+        return ordered[shift:] + ordered[:shift]
+
+    def _decide_side_in_order(self, side: List[Tuple[str, Any, str]]) -> List[Tuple[str, List[Any]]]:
+        """
+        One side's captains, one after another (captain_order sequential).
+        Before each decides it gets `peer_turns`: what the captains before it
+        ordered THIS checkpoint (captain.peer_turn_summary) - their fleet
+        signals (those addressed to it or to all), target, launches and
+        maneuver. The engine state is the start-of-checkpoint snapshot for
+        all of them: nothing is applied until every captain of both sides
+        has decided. No extra calls.
+        """
+        order = self.captain_turn_order(side)
+        channel = self.fleet_communication
+        before: List[Dict[str, Any]] = []
+        out: List[Tuple[str, List[Any]]] = []
+        for position, (ship_id, captain, faction) in enumerate(order):
+            mine = []
+            for turn in before:
+                turn = dict(turn)
+                signals = []
+                for sig in turn.get("signals") or []:
+                    to = sig.get("to") or "ALL"
+                    if channel is not None:
+                        try:
+                            res = channel.resolve(turn["ship_id"], to, friendly_only=True)
+                            if ship_id not in (res.recipient_ids or []):
+                                continue
+                        except Exception:  # noqa: BLE001 - show it rather than lose it
+                            pass
+                    signals.append(sig)
+                turn["signals"] = signals
+                mine.append(turn)
+            captain.peer_turns = mine
+            captain.peer_turn_position = (position + 1, len(order))
+            commands = self._get_captain_decision_with_discussion(ship_id, captain, faction)
+            out.append((ship_id, commands))
+            try:
+                before.append(captain.peer_turn_summary(ship_id, self.simulation, commands))
+            except Exception as e:  # noqa: BLE001 - the next captain just sees less
+                print(f"[RUNNER] peer turn summary failed for {ship_id}: {e}")
+        return out
 
     def _apply_admiral_headings(
         self,
@@ -2737,9 +2829,13 @@ class LLMBattleRunner:
                 if not fields.get("reason"):
                     fields["reason"] = clip(reasons, REPORT_REASON_CHARS)
             elif not getattr(captain, "last_call_failed", False):
+                # A reason on an action call is not a report: filed as an
+                # implicit ACK carrying it as intent (recordings counted "114
+                # explicit ACKs" where captains called report_to_admiral 7
+                # times). It becomes a DEVIATE only for a deviation in what
+                # the reasoned call itself did (below).
                 fields = {"status": "ACK", "reason": "", "intent": clip(reasons, REPORT_REASON_CHARS),
-                          "contact": None, "request": None}
-                implicit = False
+                          "contact": None, "request": None, "from_reason": True}
         order = primary_order(orders)
         executed = executed_maneuver(ship, commands, now)
         target_id = commanded_target(ship, commands)
@@ -2763,7 +2859,17 @@ class LLMBattleRunner:
             mark_not_executable(report["compliance"])
         elif (reasons and not explicit and report["status"] == "ACK"
               and isinstance(report["compliance"], dict) and not report["compliance"]["followed"]):
-            report["status"], report["reason"], report["intent"] = "DEVIATE", report["intent"], ""
+            # Only a deviation the reasoned call made is explained by it: a
+            # set_heading reason ("renewing the fleet heading") does not
+            # explain a target the captain did not change (B4: 7 of 7 such
+            # DEVIATEs were target deviations under a heading reason).
+            kinds = {"set_heading": "maneuver", "set_maneuver": "maneuver",
+                     "set_primary_target": "target", "launch_torpedo": "salvo"}
+            reasoned = {kinds.get(r.split(":", 1)[0]) for r in captain.call_reasons}
+            devs = {d.split(":", 1)[0] for d in report["compliance"].get("deviations") or []}
+            if reasoned & devs:
+                report["status"], report["reason"], report["intent"] = "DEVIATE", report["intent"], ""
+                report["implicit"] = False
         # Next checkpoint the captain is shown the verdict the admiral reads
         # when it is NOT as ordered (captain._format_verdict), recomputed then
         # with the rounds that actually left the tubes.

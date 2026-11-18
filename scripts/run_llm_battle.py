@@ -278,6 +278,11 @@ Examples:
     parser.add_argument("--label", default=None,
                         help="Free-text note naming the experiment this run belongs to: stored in the "
                              "--status-file, the recording provenance and the ledger lines")
+    parser.add_argument("--captain-order", choices=("auto", "sequential", "parallel"), default=None,
+                        help="captains of one side decide one after another, each seeing what the "
+                             "ones before it ordered this checkpoint (sequential), or all at once "
+                             "(parallel). auto (default): sequential for a side with no admiral, "
+                             "parallel for a side with one")
     parser.add_argument("--quiet-turns", action="store_true",
                         help="Experiment: skip a captain call when its turn has no trigger, no new "
                              "FLEET NET traffic and an unchanged applied order (captain_turn_skipped)")
@@ -421,6 +426,8 @@ Examples:
             config_overrides["recording_dir"] = args.recording_dir
         if args.quiet_turns:
             config_overrides["quiet_turns"] = True
+        if args.captain_order:
+            config_overrides["captain_order"] = None if args.captain_order == "auto" else args.captain_order
         if args.label:
             config_overrides["label"] = args.label
         if not fleet_config and args.show_score:
