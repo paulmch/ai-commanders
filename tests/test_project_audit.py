@@ -274,7 +274,8 @@ def test_fractional_checkpoint_and_time_limit_are_exact(fleet, fleet_mode):
                             LLMCaptainConfig("B", "B", model="heuristic"), None, fc)
     result = runner.run_battle(fleet)
     assert result.duration_s == 61.25
-    assert [decision["time"] for decision in result.decision_log] == [20.5, 41]
+    # Checkpoint 1 at T+0; the last (T+41) orders fly to the limit.
+    assert [decision["time"] for decision in result.decision_log] == [0, 20.5, 41]
     assert runner.simulation.time_step == 1
 
 

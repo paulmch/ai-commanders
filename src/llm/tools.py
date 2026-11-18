@@ -417,11 +417,13 @@ CAPTAIN_TOOLS_BASE = [
         "function": {
             "name": "surrender",
             "description": (
-                "Surrender your ship. Your ship will stop maneuvering, drift on its "
-                "current trajectory, and become untargetable by all weapons. Enemy ships "
-                "can no longer shoot at you. In fleet battles, only your ship surrenders - "
-                "other friendly ships continue fighting. Use this to preserve your crew "
-                "when defeat is inevitable."
+                "Surrender your ship. Your ship stops maneuvering and fighting, drifts on "
+                "its current trajectory, and enemies can no longer open fire or launch at "
+                "it. Torpedoes already inbound on you are re-tasked by the enemy fleet "
+                "datalink onto your fleet-mates wherever they can still reach one; rounds "
+                "that cannot reach anyone else keep coming at you. Slugs already in flight "
+                "still arrive. In fleet battles only your ship surrenders - the others keep "
+                "fighting, and the re-tasked rounds go to them."
             ),
             "parameters": {
                 "type": "object",
@@ -720,6 +722,34 @@ ACTION_REASON_PROPERTY = {
         "Admiral's order. Filed as the reason on your report to the Admiral."
     ),
 }
+
+
+# Admiral-only sentences in the base tool texts, and what a captain with no
+# admiral reads instead (cmdcap round 2: it was told to report_to_admiral).
+_ADMIRAL_ONLY_TEXT = (
+    ("an admiral's HEADING included; ", ""),
+    ("; the `evade` field (here or on set_heading) rides on a maneuver instead - an order "
+     "'with evade' already carries it.", "; the `evade` field (here or on set_heading) rides "
+     "on a maneuver instead."),
+    (" and report with report_to_admiral", ""),
+    ("tell your Admiral with report_to_admiral, other ships with fleet_signal",
+     "tell other ships with fleet_signal"),
+    (" to=ADMIRAL is filed on your report.", ""),
+    ("ALL (default), ADMIRAL, or a friendly ship name/id.", "ALL (default) or a friendly ship name/id."),
+)
+
+
+def without_admiral_texts(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """``tools`` (copies where changed) without the admiral-only sentences."""
+    import json as _json
+    out = []
+    for tool in tools:
+        text = _json.dumps(tool)
+        new = text
+        for old, rep in _ADMIRAL_ONLY_TEXT:
+            new = new.replace(_json.dumps(old)[1:-1], _json.dumps(rep)[1:-1])
+        out.append(_json.loads(new) if new != text else tool)
+    return out
 
 
 def with_reason_fields(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

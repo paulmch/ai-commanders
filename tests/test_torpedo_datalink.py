@@ -532,3 +532,79 @@ class TestWholePacketDiversion:
         sim = self._sim(2 * keep)              # surplus = keep: a whole strike
         _steps(sim, 1)
         assert len(_rt(sim)) == keep
+
+
+# ---------------------------------------------------------------------------
+# Surrender releases the rounds (owner decision, pass 5)
+# ---------------------------------------------------------------------------
+
+class TestSurrenderReleasesRounds:
+
+    def test_group_reassignment_with_its_own_reason_and_mirror_symmetric(self):
+        plans = []
+        for sx, faction in ((1.0, "alpha"), (-1.0, "beta")):
+            sim = _orphan_group(6, sx=sx, faction=faction)
+            sim.get_ship("dead").is_destroyed = False
+            sim.get_ship("dead").is_surrendered = True
+            _steps(sim, 1)
+            ev = _rt(sim)
+            assert {e.data["reason"] for e in ev} == {"target_surrendered"}
+            assert all(e.data["group_size"] == len(ev) for e in ev)
+            plans.append(_assignment(sim))
+        assert plans[0] == plans[1] and len(plans[0]) == 6
+
+    def test_order_independent_and_deterministic(self):
+        def run(order, shuffle):
+            sim = _orphan_group(6, order=order)
+            sim.get_ship("dead").is_destroyed = False
+            sim.get_ship("dead").is_surrendered = True
+            if shuffle:
+                random.Random(shuffle).shuffle(sim.torpedoes)
+            _steps(sim, 1)
+            return _assignment(sim)
+        base = run(None, None)
+        assert base == run([3, 2, 1, 0], 7) == run([2, 0, 3, 1], 9) == run(None, None)
+
+    def test_the_board_stops_counting_a_surrendered_ship(self):
+        sim = _sim()
+        _ship(sim, "a", "corvette", "alpha", Vector3D(-2_000e3, 0, 0))
+        b1 = _ship(sim, "b1", "destroyer", "beta", Vector3D(300e3, 0, 0))
+        for i in range(3):
+            _round(sim, f"t{i}", "b1", 4.0, Vector3D(0, i * 300.0, 0), Vector3D(12_000, 0, 0))
+        assert "b1" in sim.torpedo_board("alpha")
+        b1.is_surrendered = True
+        assert "b1" not in sim.torpedo_board("alpha")
+
+    def test_surrender_after_rounds_were_retasked_onto_it(self):
+        sim = _orphan_group(6)
+        _steps(sim, 1)
+        first = _assignment(sim)
+        took = sorted({v for v in first.values()})
+        sim.get_ship(took[0]).is_surrendered = True
+        _steps(sim, 1)
+        again = [e for e in _rt(sim) if e.data["reason"] == "target_surrendered"]
+        assert again and all(e.data["old_target_id"] == took[0] for e in again)
+        assert all(e.target_id != took[0] for e in again)
+
+    def test_crew_incapacitated_and_blinded_are_unchanged(self):
+        sim = _orphan_group(4)
+        sim.get_ship("dead").is_destroyed = False
+        sim.get_ship("dead").crew_incapacitated = True     # not surrendered
+        _steps(sim, 1)
+        assert not _rt(sim)
+        sim = _orphan_group(4)
+        sim.get_ship("dead").is_destroyed = False
+        sim.get_ship("dead").is_surrendered = True
+        for tf in sim.torpedoes:
+            tf.is_disabled = True
+        _steps(sim, 1)
+        assert not _rt(sim)                                # blinded rounds are off the link
+
+    def test_whole_fleet_surrender_ends_without_a_crash(self):
+        sim = _orphan_group(4)
+        for sid in ("dead", "d1", "d2"):
+            s = sim.get_ship(sid)
+            s.is_destroyed = False
+            s.is_surrendered = True
+        _steps(sim, 3)
+        assert not _rt(sim)

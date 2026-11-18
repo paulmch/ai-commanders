@@ -35,9 +35,15 @@ export function nextCheckpointAfter(t, interval = 30) {
   return (Math.floor(t / step + 1e-9) + 1) * step;
 }
 
-/** Checkpoint number of a checkpoint time (CP1 follows the opening interval). */
-export function checkpointNumber(tCheckpoint, interval = 30) {
-  return Math.round(tCheckpoint / (interval > 0 ? interval : 30));
+/**
+ * Checkpoint number of a checkpoint time. CP1 is at `first` (the server's
+ * first_checkpoint_t: 0 since pass 5; older servers and recordings omit it
+ * and their CP1 follows the opening interval, the default).
+ */
+export function checkpointNumber(tCheckpoint, interval = 30, first = interval) {
+  const step = interval > 0 ? interval : 30;
+  const start = Number.isFinite(first) && first >= 0 ? first : step;
+  return Math.round((tCheckpoint - start) / step) + 1;
 }
 
 /**

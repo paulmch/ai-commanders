@@ -622,6 +622,9 @@ class LLMAdmiral:
         # with nothing to accept).
         self.draw_offer_t: Optional[float] = None
         self.draw_notices: List[str] = []
+        # cmdcap round 2: times this admiral's draw proposals were rejected
+        # (the rejection notice states the whole history).
+        self.draw_rejections: List[float] = []
         # This checkpoint's decision (settle_draw_offers reads both sides').
         self.last_decision: Optional[AdmiralDecision] = None
 
@@ -2180,8 +2183,17 @@ def settle_draw_offers(alpha: Optional["LLMAdmiral"], beta: Optional["LLMAdmiral
             out.append((faction, "DRAW_REJECT", f"{me.name} rejects the fleet draw."))
             other.has_proposed_draw = False
             other.draw_offer_t = None
+            # --- cmdcap round 2: the history, no invitation ("propose again
+            # to re-open it" read as one: B3/B4 losers proposed 5 and 10 times).
+            history = getattr(other, "draw_rejections", None)
+            if history is None:
+                history = other.draw_rejections = []
+            history.append(now)
+            times = ", ".join(f"T+{t:.0f}" for t in history)
             other.draw_notices.append(
                 f"T+{now:.0f}s: the enemy admiral REJECTED your draw proposal"
                 + (f" of T+{offered:.0f}s" if offered is not None else "")
-                + ". The offer is closed; propose again to re-open it.")
+                + (f" - rejected {len(history)} times: {times}" if len(history) > 1 else "")
+                + ". The offer is closed.")
+            # --- end cmdcap
     return out

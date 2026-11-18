@@ -490,8 +490,12 @@ wash stayed under the interlock's 0.5 GJ/s limit. The recordings are in
 
 ## Open
 
-- **First orders arrive at T+30 s.** Every hull idles for the first interval. Moving the first
-  checkpoint to T+0 fails nine tests that pin the schedule and adds a paid round to LLM battles.
+- **First orders arrive at T+30 s.** Resolved (owner: "Move to T+0"): checkpoint 1 is at T+0
+  and every checkpoint's orders fly a full interval, the last one included, so 20 checkpoints end
+  at T+600 with no extra model call (the base runner no longer pays for a final checkpoint whose
+  orders were never flown). The tests that pinned the old schedule now pin the new one; seeded
+  event streams, `LEGACY_GOLDEN_SHA256` and the perf golden moved with it. Recordings carry
+  `first_checkpoint_s: 0`; older ones (first decision at T+30) still replay.
 - **Plume.** An impaired crew's "slower response" is not built (only slower weapon cycling). The
   formation throttle matching does not know about the interlock, so a held lead falls behind
   unless its captain side-slips. The doctrine text does not mention the interlock.

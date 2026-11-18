@@ -87,7 +87,10 @@ test('checkpoint arithmetic and backoff', () => {
   assert.equal(nextCheckpointAfter(29.99, 30), 30);
   assert.equal(nextCheckpointAfter(30, 30), 60);
   assert.equal(nextCheckpointAfter(41, 20.5), 61.5);
-  assert.equal(checkpointNumber(90, 30), 3);
+  assert.equal(checkpointNumber(90, 30), 3);          // older servers: CP1 one interval in
+  assert.equal(checkpointNumber(0, 30, 0), 1);        // pass 5: CP1 at T+0
+  assert.equal(checkpointNumber(90, 30, 0), 4);
+  assert.equal(checkpointNumber(570, 30, 0), 20);
   assert.deepEqual([1, 2, 3, 4, 5, 9].map(backoffDelay), [2, 4, 8, 15, 15, 15]);
   assert.ok([1, 2, 3, 4, 5].slice(0, LOST_AFTER_FAILURES).map(backoffDelay).reduce((a, b) => a + b) < 60,
     'connection declared lost within a minute');

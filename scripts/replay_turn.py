@@ -131,6 +131,10 @@ def load_calls(paths: List[Path]) -> List[Dict[str, Any]]:
         assets = recording.get("assets") or {}
         interval = float(recording.get("decision_interval_s")
                          or (recording.get("provenance") or {}).get("decision_interval_s") or 30.0)
+        # Checkpoint 1's time: 0.0 since pass 5 (first_checkpoint_s); older
+        # recordings lack the field and decided first one interval in.
+        first = recording.get("first_checkpoint_s")
+        first = float(first) if isinstance(first, (int, float)) else interval
         if path.name.startswith("battle_") and per_folder[path.parent] > 1:
             # Two battles in one folder: keep their call keys apart.
             name = f"{path.parent.name}/{path.name.split('.')[0]}"
@@ -158,7 +162,8 @@ def load_calls(paths: List[Path]) -> List[Dict[str, Any]]:
             t = float(event.get("timestamp") or 0.0)
             calls.append({
                 "recording": name, "path": str(path), "event_id": event.get("event_id"),
-                "t": t, "checkpoint": int(round(t / interval)) if interval else None,
+                "t": t, "checkpoint": (int(round((t - first) / interval)) + 1
+                                       if interval and t >= first - 1e-6 else 0),
                 "actor": data.get("actor"), "faction": data.get("faction"),
                 "ship_id": event.get("ship_id"), "subject": subject, "role": role,
                 "model": data.get("model"),

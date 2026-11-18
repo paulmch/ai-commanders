@@ -182,21 +182,42 @@ class TestCandidateSet:
         _steps(sim, 1)
         assert _retargets(sim) == [("b1", "b2")]
 
-    def test_round_keeps_homing_on_a_target_that_surrenders_in_flight(self):
-        """Characterises the CURRENT rule (owner decision, see the audit
-        report): only a destroyed target orphans a round. A ship that strikes
-        its colours while rounds are inbound stays their target - they are
-        neither retargeted nor cancelled - although a NEW launch or a
-        retarget at a surrendered ship is refused."""
+    def _surrender_scenario(self, b2_pos=(300e3, 5e3, 0)):
         sim = _sim()
         _ship(sim, "a", "corvette", "alpha", Vector3D(-2_000e3, 0, 0))
         b1 = _ship(sim, "b1", "battlecruiser", "beta", Vector3D(150e3, 0, 0))
-        _ship(sim, "b2", "battlecruiser", "beta", Vector3D(300e3, 5e3, 0))
+        _ship(sim, "b2", "battlecruiser", "beta", Vector3D(*b2_pos))
         flight = _round(sim, "b1", 4.0)
         b1.is_surrendered = True
+        return sim, flight
+
+    def test_rounds_on_a_ship_that_surrenders_are_reassigned_like_a_hulk(self):
+        """Owner decision (pass 5): a ship that strikes its colours releases
+        the rounds inbound on it to the datalink exactly as a dying hulk."""
+        sim, flight = self._surrender_scenario()
+        _steps(sim, 1)
+        ev = _events(sim, SimulationEventType.TORPEDO_RETARGETED)
+        assert [(e.data["old_target_id"], e.data["new_target_id"], e.data["reason"])
+                for e in ev] == [("b1", "b2", "target_surrendered")]
+        assert ev[0].data["group"].endswith(":target_surrendered")
+
+    def test_with_nothing_else_reachable_the_round_keeps_homing_on_it(self):
+        """The hulk rule: rounds nobody can re-task still come at the
+        surrendered ship (a surrender shields no fleet-mate and does not
+        shield the ship from rounds that had nowhere else to go)."""
+        sim, flight = self._surrender_scenario(b2_pos=(-3_000e3, 3_000e3, 0))
         _steps(sim, 30)
         assert _retargets(sim) == []
-        assert flight.torpedo.target_id == "b1"
+        assert [e.target_id for e in _events(sim, SimulationEventType.TORPEDO_IMPACT)] == ["b1"]
+
+    def test_link_off_keeps_the_old_rule(self):
+        """AIC_TORPEDO_DATALINK=0: the pre-link engine - inbound rounds keep
+        homing on a ship that surrenders."""
+        sim, flight = self._surrender_scenario()
+        sim.torpedo_datalink = False
+        _steps(sim, 30)
+        assert _retargets(sim) == []
+        assert flight.torpedo.target_id == "b1" or not sim.torpedoes
         hits = _events(sim, SimulationEventType.TORPEDO_IMPACT)
         assert [e.target_id for e in hits] == ["b1"]
 

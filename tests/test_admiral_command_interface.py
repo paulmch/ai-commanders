@@ -116,32 +116,40 @@ class TestEnemyFacing:
 
 class TestClock:
     def test_live_runner_and_base_runner_clocks(self):
-        # run_live_draft_battle: 20 turns, time limit 21 x 30 s, last orders flown.
-        assert intel.battle_clock(630, 20, 30, last_orders_fly=True) == {
-            "checkpoints": 20, "end_s": 630.0, "interval_s": 30.0}
-        # The base runner stops right after checkpoint M's decisions.
+        # Pass-5 schedule: checkpoint 1 at T+0, every checkpoint's orders fly
+        # 30 s, the last one too: 20 turns end at T+600 in every runner.
+        assert intel.battle_clock(600, 20, 30) == {
+            "checkpoints": 20, "end_s": 600.0, "interval_s": 30.0}
+        # The live runner's old 21 x 30 s limit no longer adds a 21st window.
         assert intel.battle_clock(630, 20, 30)["end_s"] == 600.0
-        # BattleConfig defaults: 1200 s, 40 checkpoints -> the time limit binds.
-        assert intel.battle_clock(1200, 40, 30) == {"checkpoints": 39, "end_s": 1200.0,
+        # A runner that stopped at its last checkpoint (none does now) would end there.
+        assert intel.battle_clock(600, 20, 30, last_orders_fly=False)["end_s"] == 570.0
+        # BattleConfig defaults: 1200 s, 40 checkpoints (T+0 .. T+1170) -> ends at the limit.
+        assert intel.battle_clock(1200, 40, 30) == {"checkpoints": 40, "end_s": 1200.0,
                                                     "interval_s": 30.0}
         assert intel.battle_clock(630, 20, 30, unlimited=True) is None
 
     def test_runner_flag_matches_the_live_runner(self):
         from scripts.run_live_draft_battle import LiveDraftRunner
         from src.llm.battle_runner import LLMBattleRunner
-        assert LiveDraftRunner.FLIES_LAST_ORDERS and not LLMBattleRunner.FLIES_LAST_ORDERS
+        # Both runners fly the last orders and start at T+0 (no unflown, paid checkpoint).
+        assert LiveDraftRunner.FLIES_LAST_ORDERS and LLMBattleRunner.FLIES_LAST_ORDERS
+        assert LiveDraftRunner.FIRST_CHECKPOINT_S == LLMBattleRunner.FIRST_CHECKPOINT_S == 0.0
 
     def test_turn_header_says_checkpoint_n_of_m(self):
         sim = battle_a_sim(180)
         admiral = make_admiral("alpha")
-        admiral.battle_clock = intel.battle_clock(630, 20, 30, last_orders_fly=True)
-        admiral.decision_count = 5
+        admiral.battle_clock = intel.battle_clock(600, 20, 30)
+        admiral.decision_count = 6           # T+180 is checkpoint 7 (checkpoint 1 at T+0)
         _, msgs = directive_turn(admiral, sim)
-        assert ("T+180s, checkpoint 6 of 20, battle ends at T+630s - these orders run until "
+        assert ("T+180s, checkpoint 7 of 20, battle ends at T+600s - these orders run until "
                 "T+210s") in msgs[1]["content"]
+        # This stub config has no show_score (AdmiralConfig's default is on,
+        # pinned in tests/test_schedule_t0.py): no score line here.
         assert "SCORE" not in msgs[1]["content"]
-        # At the base runner's last checkpoint the orders are never flown.
-        admiral.battle_clock = {"checkpoints": 6, "end_s": 180.0, "interval_s": 30.0}
+        # A checkpoint at the battle's end (only a clock that says so; no runner
+        # schedules one since the last orders fly) is stated as unflown.
+        admiral.battle_clock = {"checkpoints": 7, "end_s": 180.0, "interval_s": 30.0}
         _, msgs = directive_turn(admiral, sim)
         assert "the battle ends now: these orders are not flown" in msgs[1]["content"]
 

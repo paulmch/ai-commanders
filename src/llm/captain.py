@@ -31,7 +31,8 @@ from .communication import (
     normalize_signal,
 )
 from .tools import (
-    ACTION_REASON_TOOLS, FLEET_SIGNAL_TOOL, REPORT_TO_ADMIRAL_TOOL, with_reason_fields)
+    ACTION_REASON_TOOLS, FLEET_SIGNAL_TOOL, REPORT_TO_ADMIRAL_TOOL, with_reason_fields,
+    without_admiral_texts)
 from .admiral_tools import DISCUSS_WITH_ADMIRAL_TOOL
 from .maneuver_orders import maneuver_label
 
@@ -179,6 +180,25 @@ def pd_turrets_needed(rep_laser: Any, torp_flight: Any, dist_km: float,
     except (AttributeError, TypeError):
         return None
 
+
+def _strike_radius_km(ship: Any) -> Optional[float]:
+    """Largest cross-section radius of ``ship`` (km): a ballistic round whose
+    closest approach is inside it strikes the hull (simulation's chance-
+    collision test uses the cross-section the round arrives at)."""
+    geom = getattr(ship, "geometry", None)
+    if geom is None:
+        return None
+    try:
+        area = max(float(getattr(geom, a)) for a in (
+            "nose_cross_section_m2", "lateral_cross_section_m2", "tail_cross_section_m2"))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return math.sqrt(area / math.pi) / 1000.0
+
+
+# A captain heading within this angle of the applied admiral heading (same
+# throttle and evade) reproduces the order: compliance, the order keeps flying.
+REPRODUCE_HEADING_DEG = 3.0
 
 # The kinetic phase of a torpedo hit (simulation._resolve_torpedo_hit), bound
 # to the engine by tests/test_fixes_cmdcap.py TestTorpedoArmor.
@@ -370,6 +390,13 @@ class LLMCaptain:
         # This checkpoint's admiral orders for every ship of the fleet (ship
         # id -> orders), set by the runner: the ORDERED TARGETS line.
         self.fleet_orders: Dict[str, List[Any]] = {}
+        # Sequential captains (BattleConfig.captain_order; the default for a
+        # side with no admiral): set by the runner. peer_turns: what the
+        # captains of this side who decided before this one ordered THIS
+        # checkpoint (peer_turn_summary dicts); peer_turn_position: (n, of).
+        self.sequential_captains: bool = False
+        self.peer_turns: Optional[List[Dict[str, Any]]] = None
+        self.peer_turn_position: Optional[Tuple[int, int]] = None
 
         # Fleet comms. outbox: messages composed this checkpoint (fleet_signal,
         # send_message), drained and routed by the runner after the decision.
@@ -521,6 +548,8 @@ class LLMCaptain:
             tools.append(REPORT_TO_ADMIRAL_TOOL)
         if self.fleet_peer_names:
             tools.append(FLEET_SIGNAL_TOOL)
+        if not self.has_admiral:
+            tools = without_admiral_texts(tools)
 
         return tools
 
@@ -674,6 +703,9 @@ class LLMCaptain:
             has_admiral=self.has_admiral,
             compact=compact,
             battle_clock=getattr(self, "battle_clock", None),
+            sequential_captains=self.sequential_captains,
+            peer_turns=self.peer_turns if self.sequential_captains else None,
+            peer_turn_position=self.peer_turn_position if self.sequential_captains else None,
         )
         # Split into a stable system prompt and a volatile user turn so the
         # provider can serve the doctrine from cache across checkpoints.
@@ -743,7 +775,7 @@ class LLMCaptain:
             "tool_calls": [{"name": tc.name, "args": tc.arguments} for tc in executed],
             "commands_count": len(commands),
             "followups": self.last_followup_rounds,
-            "acted": any(self._is_action_command(c) for c in commands),
+            "acted": any(self._is_action_command(c) for c in commands) or bool(state.get("kept_order")),
             # An admiral HEADING / MANEUVER order applied this checkpoint flies
             # without a captain call: "no commands" then does not mean a coast.
             "order_flew": self._admiral_heading_applied(),
@@ -828,12 +860,84 @@ class LLMCaptain:
 
             cmd = self._execute_tool(tc, simulation, ship_id)
             executed.append(tc)
+            if cmd is not None and tc.name in maneuver_tools:
+                kept = self._reproduces_applied_order(cmd, simulation, ship_id)
+                if kept:
+                    # Re-issuing the admiral's order is compliance, and the
+                    # order (a formation's matched throttle and synced burn
+                    # start included) keeps flying instead of a copy.
+                    self._record_tool_note(f"{tc.name}: {kept}")
+                    state["kept_order"] = True
+                    cmd = None
             if cmd is not None:
                 # A tool may emit a salvo (e.g. launch_torpedo count=2).
                 if isinstance(cmd, list):
                     commands.extend(c for c in cmd if c is not None)
                 else:
                     commands.append(cmd)
+
+    def _reproduces_applied_order(self, cmd: Any, simulation: Any, ship_id: str) -> Optional[str]:
+        """
+        The tool note when a set_heading / set_maneuver call reproduces the
+        admiral maneuver already applied this checkpoint - a HEADING within
+        REPRODUCE_HEADING_DEG at the ordered (or the formation-matched)
+        throttle with the same evade, or the same PADLOCK / MAINTAIN /
+        INTERCEPT / HOLD_RANGE at the same ship with the same evade - else
+        None. Haiku captains re-issued the fleet heading 178 times in B3-B5,
+        90 of them formation orders: the copy replaced the formation's
+        matched throttle and synchronised burn start with a solo burn.
+        """
+        if not self.has_admiral or not self._admiral_heading_applied():
+            return None
+        ship = simulation.get_ship(ship_id) if hasattr(simulation, "get_ship") else None
+        now = float(getattr(simulation, "current_time", 0.0))
+        applied = getattr(ship, "current_maneuver", None)
+        if applied is None or abs(float(getattr(applied, "start_time", -1.0)) - now) > 1e-6:
+            return None
+        if getattr(cmd, "maneuver_type", None) != applied.maneuver_type:
+            return None
+        if (getattr(cmd, "evade", None) or None) != (getattr(applied, "evade", None) or None):
+            return None
+        from .fleet_comms import primary_order
+        order = primary_order(self.admiral_orders)
+        kind = applied.maneuver_type.name
+        if kind == "HEADING":
+            if getattr(cmd, "heading_target_id", None) or getattr(cmd, "heading_point_km", None) \
+                    or getattr(applied, "heading_target_id", None) or getattr(applied, "heading_point_km", None):
+                return None
+            a, b = cmd.heading_direction or {}, applied.heading_direction or {}
+            na = math.sqrt(sum(float(a.get(k, 0)) ** 2 for k in "xyz"))
+            nb = math.sqrt(sum(float(b.get(k, 0)) ** 2 for k in "xyz"))
+            if not na or not nb:
+                return None
+            dot = sum(float(a.get(k, 0)) * float(b.get(k, 0)) for k in "xyz") / (na * nb)
+            if math.degrees(math.acos(max(-1.0, min(1.0, dot)))) > REPRODUCE_HEADING_DEG:
+                return None
+            throttles = {round(float(applied.throttle), 3)}
+            for value in (getattr(order, "throttle", None), getattr(order, "applied_throttle", None)):
+                if value is not None:
+                    throttles.add(round(float(value), 3))
+            if not any(abs(float(cmd.throttle) - t) <= 0.01 for t in throttles):
+                return None
+            if getattr(order, "formation", False):
+                return (f"matches your Admiral's FORMATION heading already flying (within "
+                        f"{REPRODUCE_HEADING_DEG:g} deg, same throttle and evade): the order keeps "
+                        f"flying - {float(applied.throttle) * 100:.0f}% throttle matched to the "
+                        f"slowest hull, burn start synchronised with the fleet. A heading of your "
+                        f"own replaces both (own throttle, own start).")
+            return ("matches your Admiral's HEADING order already flying (same direction, "
+                    "throttle and evade): the order keeps flying - no call was needed.")
+        if kind in ("PADLOCK", "MAINTAIN", "INTERCEPT", "HOLD_RANGE"):
+            if getattr(cmd, "target_id", None) != getattr(applied, "target_id", None):
+                return None
+            for key in ("standoff_m", "arrival_closing_mps", "hold_range_m"):
+                if getattr(cmd, key, None) is not None and getattr(cmd, key, None) != getattr(applied, key, None):
+                    return None
+            if kind not in ("PADLOCK", "MAINTAIN") and abs(float(cmd.throttle) - float(applied.throttle)) > 0.01:
+                return None
+            return (f"matches your Admiral's {kind} order already flying (same target and "
+                    f"evade): the order keeps flying - no call was needed.")
+        return None
 
     @staticmethod
     def _is_action_command(cmd: Any) -> bool:
@@ -1175,6 +1279,61 @@ class LLMCaptain:
 
     # ORDERS-block markers that make a turn need the full blocks.
     _FULL_TURN_MARKERS = ("!! ", "NOT FLYABLE", "LAST CHECKPOINT", "NOT APPLIED")
+
+    def peer_turn_summary(self, ship_id: str, simulation: Any,
+                          commands: List[Any]) -> Dict[str, Any]:
+        """
+        What this captain ordered this checkpoint, for the captains of its
+        side who decide after it (sequential captains): its fleet_signal
+        traffic, the target its guns follow, its launches (rounds, target,
+        profile, flown time of flight) and its maneuver - the same facts the
+        FLEET NET, the datalink and FRIENDLIES carry a checkpoint later.
+        """
+        ship = simulation.get_ship(ship_id)
+        out: Dict[str, Any] = {"ship_id": ship_id,
+                               "name": getattr(ship, "name", None) or self.ship_name,
+                               "t": float(getattr(simulation, "current_time", 0.0))}
+        maneuver = next((c for c in commands
+                         if hasattr(c, "maneuver_type") and hasattr(c, "throttle")), None)
+        if maneuver is not None:
+            tgt = simulation.get_ship(maneuver.target_id) if maneuver.target_id else None
+            out["maneuver"] = {"type": maneuver.maneuver_type.name,
+                               "throttle": maneuver.throttle,
+                               "heading": maneuver.heading_direction,
+                               "evade": getattr(maneuver, "evade", None),
+                               "target_name": getattr(tgt, "name", None)}
+        else:
+            current = getattr(ship, "current_maneuver", None)
+            out["maneuver"] = None
+            out["keeps"] = (current.maneuver_type.name if current is not None
+                            and hasattr(current, "maneuver_type") else None)
+        target_id = next((c.get("target_id") for c in commands
+                          if isinstance(c, dict) and c.get("type") == "set_target"), None)
+        target_id = target_id or getattr(ship, "primary_target_id", None) or self.primary_target_id
+        if target_id:
+            tgt = simulation.get_ship(target_id)
+            out["target"] = ship_ref(getattr(tgt, "name", target_id), target_id)
+        launches: Dict[Tuple[Any, str], Dict[str, Any]] = {}
+        for c in commands:
+            if not (isinstance(c, dict) and c.get("type") == "launch_torpedo"):
+                continue
+            key = (c.get("target_id"), c.get("profile") or "sprint")
+            row = launches.setdefault(key, {"target_id": key[0], "profile": key[1], "count": 0})
+            row["count"] += 1
+        for (tid, profile), row in launches.items():
+            tgt = simulation.get_ship(tid) if tid else None
+            row["target"] = ship_ref(getattr(tgt, "name", tid), tid) if tid else "?"
+            sol = self._torpedo_solution(simulation, ship, tgt) if tgt is not None else None
+            shot = None
+            if sol is not None:
+                shot = (sol.vs_coasting_reserve if profile == "reserve" and sol.vs_coasting_reserve
+                        else sol.best_shot)
+            if shot is not None and shot.tof_s is not None:
+                row["eta_s"] = float(shot.tof_s)
+        out["launches"] = list(launches.values())
+        out["signals"] = [{k: m.get(k) for k in ("kind", "to", "text", "target", "eta_s")}
+                          for m in self.outbox if m.get("tool") == "fleet_signal"]
+        return out
 
     def _compact_turn(self, range_infos: List[Any], orders_text: Optional[str],
                       tactical_status: Dict[str, Any]) -> bool:
@@ -1852,6 +2011,7 @@ class LLMCaptain:
                 rec["target_id"] = data.get("new_target_id", rec["target_id"])
                 # datalink reassignment: where and why (absent: pre-link rule)
                 rec["retask"] = {"target_lost": "target lost",
+                                 "target_surrendered": "target surrendered",
                                  "datalink_surplus": "surplus"}.get(data.get("reason"),
                                                                      "target lost")
             if rank[outcome] > rank[rec["outcome"]]:
@@ -3091,6 +3251,9 @@ class LLMCaptain:
                                      and source_ship.faction == ship.faction),
                     "miss_km": w['miss_m'] / 1000,
                     "est_impact_gj": w['ke_gj'],
+                    # The engine strikes a ship when a wreck passes inside the
+                    # radius of the hull's cross-section (largest: lateral).
+                    "hit_radius_km": _strike_radius_km(ship),
                 })
         elif hasattr(simulation, 'torpedoes') and simulation.torpedoes:
             for torp_flight in simulation.torpedoes:

@@ -93,9 +93,22 @@ ANTHROPIC_MODELS: Dict[str, Dict[str, Any]] = {
 # "minimal" have no Anthropic equivalent and map to the lowest level.
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 _EFFORT_ALIASES = {"none": "low", "minimal": "low"}
-# Used when the battle sets no reasoning_effort: stated explicitly on every
-# request so both sides of a battle run at the same effort (the API defaults
-# differ: medium on Haiku 5.5 / Opus 5.5, high on the Sonnets).
+# Battle default effort per model, used when neither a flag nor the config
+# names one (owner, pass 5: "High for Sonnet 5.5 and Opus"). Stated
+# explicitly on every request; this is NOT the API's own default (the
+# `default_effort` column above: medium on Opus 5.5 / Haiku 5.5). Evidence:
+# replaying 20 recorded turns, Sonnet 5.5 at medium thought on 9 of 60 calls
+# and drafted invalid fleets in 8 of 9 tries; at high on 60 of 60 and 0 of 9,
+# at the same cost. --reasoning / --reasoning-effort and the per-role effort
+# policy (src/llm/call_policy.py) override it.
+BATTLE_DEFAULT_EFFORT: Dict[str, str] = {
+    "claude-fable-5-2": "high",
+    "claude-opus-5-5": "high",
+    "claude-sonnet-5-5": "high",
+    "claude-sonnet-5": "medium",
+    "claude-haiku-5-5": "medium",
+}
+# A model in the price table without a battle default (none today).
 DEFAULT_ANTHROPIC_EFFORT = "medium"
 
 # Non-streaming requests stay under this output ceiling (the SDK guidance for
@@ -141,10 +154,15 @@ def model_spec(model: str) -> Dict[str, Any]:
             f"vendor/model OpenRouter id.") from None
 
 
-def anthropic_effort(reasoning_effort: Optional[str]) -> str:
-    """Map the project's reasoning_effort onto output_config.effort."""
+def battle_default_effort(model: Optional[str]) -> str:
+    """The effort a battle sends `model` when nothing names one (BATTLE_DEFAULT_EFFORT)."""
+    return BATTLE_DEFAULT_EFFORT.get(model or "", DEFAULT_ANTHROPIC_EFFORT)
+
+
+def anthropic_effort(reasoning_effort: Optional[str], model: Optional[str] = None) -> str:
+    """Map the project's reasoning_effort onto output_config.effort (None: the model's battle default)."""
     if reasoning_effort is None:
-        return DEFAULT_ANTHROPIC_EFFORT
+        return battle_default_effort(model)
     effort = _EFFORT_ALIASES.get(str(reasoning_effort).lower(), str(reasoning_effort).lower())
     if effort not in EFFORT_LEVELS:
         raise ValueError(f"Unsupported reasoning effort {reasoning_effort!r} for the Anthropic "
@@ -524,7 +542,7 @@ class AnthropicClient:
         self.max_tokens = min(int(max_tokens), MAX_NONSTREAMING_TOKENS)
         self.session_id = session_id
         self.reasoning_effort = reasoning_effort
-        self.effort = anthropic_effort(reasoning_effort)
+        self.effort = anthropic_effort(reasoning_effort, model)
         self.cache_ttl = cache_ttl
         self.enable_fallbacks = enable_fallbacks
         self.thinking_display = thinking_display

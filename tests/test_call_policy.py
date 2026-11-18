@@ -121,10 +121,18 @@ def _hashes(record):
 
 
 def test_default_battle_requests_are_unchanged(tmp_path):
-    """No experiment flag: the requests are what the battle sent before call_policy existed."""
+    """
+    No flag at all (no --reasoning, no experiment flag): what a default battle
+    sends. Pass-5 owner decisions changed three things against the earlier pin:
+    the effort is per model (Sonnet 5.5 high, Haiku 5.5 medium; it was one
+    battle-wide value, medium when unset), checkpoint 1 is at T+0 (same
+    request count: 3 checkpoints at T+0/30/60 instead of T+30/60/90), and
+    every admiral directive turn carries the score line with the draw verdict. Nothing
+    else in the request shape moved.
+    """
     record = []
     runner, client, output, data = _battle(tmp_path, "claude-sonnet-5-5", "claude-haiku-5-5",
-                                           record=record, turns=3)
+                                           record=record, turns=3, reasoning_effort=None)
     runner.run_battle(data)
     # 2 sides x 3 checkpoints x (directive + 2 orders + 2 captains) = 30 requests.
     assert len(record) == 30
@@ -132,17 +140,25 @@ def test_default_battle_requests_are_unchanged(tmp_path):
         assert set(body) == {"model", "max_tokens", "messages", "thinking", "output_config",
                              "system", "tools", "tool_choice"}
         assert body["thinking"] == {"type": "adaptive"}
-        assert body["output_config"] == {"effort": "medium"}
+        assert body["output_config"] == {"effort": {"claude-sonnet-5-5": "high",
+                                                    "claude-haiku-5-5": "medium"}[body["model"]]}
         assert body["max_tokens"] == 8192 and body["tool_choice"] == {"type": "auto"}
         assert body["system"][-1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+        names = {t["name"] for t in body["tools"]}
+        text = body["messages"][-1]["content"][0]["text"]
+        # The score line is on the admiral's directive turn (not per-ship orders, never captains).
+        assert ("SCORE IF THE BATTLE ENDED NOW" in text) == ("set_fleet_directive" in names)
+    calls = [e for e in json.loads(output.read_text())["events"] if e["event_type"] == "model_call"]
+    assert sorted({c["timestamp"] for c in calls}) == [0.0, 30.0, 60.0]
     assert not runner._policy_clients            # no client was wrapped
-    # An explicit policy naming the default effort for every role sends the
-    # identical bytes: the wrapper itself changes nothing.
+    # An explicit policy naming each model's default effort for every role
+    # sends the identical bytes: the wrapper itself changes nothing.
     record2 = []
-    same = {s: {r: "medium" for r in ("directive", "order", "captain", "trigger")}
-            for s in ("alpha", "beta")}
+    same = {"alpha": {r: "high" for r in ("directive", "order", "captain", "trigger")},
+            "beta": {r: "medium" for r in ("directive", "order", "captain", "trigger")}}
     runner2, *_rest = _battle(tmp_path / "b", "claude-sonnet-5-5", "claude-haiku-5-5",
-                              record=record2, turns=3, config={"effort_policy": same})
+                              record=record2, turns=3, config={"effort_policy": same},
+                              reasoning_effort=None)
     runner2.run_battle(_rest[-1])
     assert runner2._policy_clients
     assert _hashes(record2) == _hashes(record)

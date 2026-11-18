@@ -170,7 +170,7 @@ uv run python scripts/run_live_draft_battle.py \
   --points 150 --turns 20 --reasoning medium --spend-limit 30
 ```
 
-`--reasoning` is sent as the effort setting on every request of both sides (adaptive thinking, no sampling parameters). Spend is computed from token usage with the dated price table in `src/llm/anthropic_client.py`; the system prompt is cached with a 1-hour breakpoint. A refused turn issues no orders, is recorded as a `model_refusal` event, and is never re-run on another model. The recording's `provenance.llm` names the provider, exact model id, effort and SDK/API version of each side. `--mock-llm` runs the same path offline. Each request first reserves an upper bound on its cost (every prompt byte at the 1-hour cache-write rate plus the full output limit, about $0.35 for a Sonnet captain call), so set `--spend-limit` to the expected spend plus the reservations of one checkpoint's parallel calls (about $6 for 16 Sonnet captains).
+Without `--reasoning` each Anthropic model runs at its battle default from `BATTLE_DEFAULT_EFFORT` in `src/llm/anthropic_client.py` (high for Sonnet 5.5, Opus 5.5 and Fable 5.2; medium for Sonnet 5 and Haiku 5.5): replaying 20 recorded turns, Sonnet 5.5 at medium thought on 9 of 60 calls and drafted an invalid fleet in 8 of 9 tries, at high on 60 of 60 and 0 of 9, at the same cost. `--reasoning` (or `--effort ROLE=LEVEL` per role and side) overrides it; the effort actually sent is recorded on every `model_call` (adaptive thinking, no sampling parameters). There is no default model: name both sides (`--require-provider anthropic` refuses any OpenRouter id). Spend is computed from token usage with the dated price table in `src/llm/anthropic_client.py`; the system prompt is cached with a 1-hour breakpoint. A refused turn issues no orders, is recorded as a `model_refusal` event, and is never re-run on another model. The recording's `provenance.llm` names the provider, exact model id, effort and SDK/API version of each side. `--mock-llm` runs the same path offline. Each request first reserves an upper bound on its cost (every prompt byte at the 1-hour cache-write rate plus the full output limit, about $0.35 for a Sonnet captain call), so set `--spend-limit` to the expected spend plus the reservations of one checkpoint's parallel calls (about $6 for 16 Sonnet captains).
 
 Open **[the live viewer](http://localhost:5173/?live=1&decisions=1)** before the draft finishes. It shows each sealed draft as it commits, with the admiral's reasoning and formation, then switches to the battle automatically.
 
@@ -184,18 +184,20 @@ The battle plays at your chosen speed a few seconds behind the newest frame. At 
 | --- | --- |
 | Fleet selection | Both admirals independently buy ships and place formations |
 | Commanders | Each captain uses its faction's model; the admiral issues fleet and individual orders |
-| Model settings | High reasoning, up to 8,192 output tokens per request, text observations |
+| Model settings | Per-model default effort (high for Sonnet 5.5 / Opus 5.5 / Fable 5.2, medium for Sonnet 5 / Haiku 5.5, high for OpenRouter ids), up to 8,192 output tokens per request, text observations |
 | Decision timing | 30 simulated seconds per turn; the final turn gets its execution window too |
 | Starting range | Fleet anchors begin 500 km apart; formations offset individual ships |
 | End conditions | Up to 40 turns; elimination, surrender, or an agreed draw can end it earlier |
 | Spending | One $8 ceiling shared by drafting, battle calls, and retries |
 | Recording | Progress saved after each turn; full simulation frames and decision evidence |
 
-The first decision follows a 30-second opening coast, so this setup allows up to **1,230 simulated seconds**. Model calls take wall-clock time: **“Commanders deciding” is a decision phase**, while the spectator server stays responsive.
+Checkpoint 1 is at T+0 (the commanders give their first orders before the clock starts) and every turn's orders fly their full 30 seconds, the last one included, so this setup allows up to **1,200 simulated seconds** (20 turns: T+0 to T+570, ending at T+600). Recordings from before this change decide first at T+30 and still replay. Model calls take wall-clock time: **“Commanders deciding” is a decision phase**, while the spectator server stays responsive.
 
 The launcher checks OpenRouter's model catalog, reserves costs before requests, and applies provider price ceilings. The dollar limit is a ceiling, not a price estimate. If it is reached, the runner stops and preserves the partial replay. Model availability, supported reasoning settings, and rates depend on the provider.
 
-Completed replays are staged under `visualizer/public/recordings/`. Drafts, configuration, the battle archive, and a continuously updated spending report live under `data/recordings/<run name>/`. The server stays available after the battle, and the same live link becomes a replay. Use `--no-linger` to close it on completion.
+Completed replays are staged under `visualizer/public/recordings/`. Drafts, configuration, the battle archive, and a continuously updated spending report live under `data/recordings/<run name>/`. The server stays available after the battle, and the same live link becomes a replay, so **the process keeps running after the battle ends** (it says so on its last lines) until you stop it. Use `--no-linger` to close it on completion, e.g. for background or scripted runs.
+
+The admirals' tactical plot (`--admiral-vision`, the only switch; off unless asked for) is still sent where it is used, by the owner's decision. Know what it does: replaying 90 recorded admiral calls with the old plot, the new plot and no plot, the orders did not differ. Do not remove it on that evidence, and do not credit it with a decision either.
 
 [Full live and replay guide →](docs/intent-replays.md)
 
@@ -319,7 +321,7 @@ uv run python scripts/run_llm_battle.py \
   --fleet-config data/fleet_config_example.json --trace
 ```
 
-Fleet JSON supports per-ship models, optional admirals, positions and velocities, a decision interval of 20–60 seconds, a time limit, checkpoint limit, seed, and recording options. Explicit CLI settings override the corresponding JSON settings. These general launchers do not provide the live draft runner's dollar ceiling.
+Fleet JSON supports per-ship models, optional admirals, positions and velocities, a decision interval of 20–60 seconds, a time limit, checkpoint limit, seed, and recording options. Explicit CLI settings override the corresponding JSON settings. `run_llm_battle.py` takes the same dollar ceiling (`--spend-limit`), ledger and `--require-provider` guard as the live draft runner, and has no default models: a duel names both, a fleet battle takes them from its configuration.
 
 The [standard draft launcher](scripts/run_draft_battle.py) also supports separate admiral and captain models, heuristic crews, optional vision, and automatic drafts. Check each command's `--help` for its options.
 

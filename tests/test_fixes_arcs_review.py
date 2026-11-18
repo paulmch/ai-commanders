@@ -315,9 +315,9 @@ class TestNoFreeSnapInBattle:
         assert states[-1] == wa.ON_TARGET
 
     def test_runner_battles_settle_at_the_first_checkpoint_that_names_targets(self, monkeypatch):
-        """In a runner battle the t = 0 decision names no targets; the first
-        30 s checkpoint does, before anything has fired: that is where the
-        engagement settles (rolled and trained), once."""
+        """In a runner battle checkpoint 1 is at T+0 (pass-5 schedule) and names
+        the targets before anything has fired: that is where the engagement
+        settles (rolled and trained), once."""
         calls = []
         settle = CombatSimulation.settle_arcs
 
@@ -327,7 +327,7 @@ class TestNoFreeSnapInBattle:
 
         monkeypatch.setattr(CombatSimulation, "settle_arcs", logged)
         _draft_battle(104, time_limit=90.0)
-        assert calls == [30.0], calls
+        assert calls == [0.0], calls
 
 
 # =============================================================================

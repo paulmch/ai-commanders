@@ -43,6 +43,14 @@ test('checkpoints skip the t=0 decision point and honour numbered checkpoint eve
   assert.deepEqual(numbered.map(c => c.n), [4, 5]);
 });
 
+test('pass-5 recordings: orders at t=0 are checkpoint 1, the engine decision point at t=0 is not', () => {
+  const cps = buildCheckpoints([ev(0, 'decision_point_reached'), ev(0, 'admiral_directive'),
+    ev(0, 'captain_decision', 'alpha_1'), ev(30, 'decision_point_reached'), ev(30, 'captain_decision', 'alpha_1')]);
+  assert.deepEqual(cps, [{ t: 0, n: 1 }, { t: 30, n: 2 }]);
+  assert.equal(checkpointAt(cps, 0), 1);
+  assert.equal(checkpointAt(cps, 29.9), 1);
+});
+
 test('legacy command traffic becomes command-net rows with acknowledgments as reports', () => {
   const events = [
     ev(30, 'admiral_plan', null, { faction: 'alpha', admiral_name: 'Admiral S', plan: 'Phase 1: close.' }),
@@ -145,6 +153,13 @@ test('captain reports travel to the admiral: delivery, and the compliance it rea
   assert.equal(rows.length, 3, 'the reports replace the legacy ack');
   assert.deepEqual([implicit.msgId, implicit.toIds, implicit.deliverAt, implicit.decisionId], ['r1-alpha_1', ['alpha_admiral'], 60, 'dec-a1']);
   assert.match(implicit.text, /implicit ACK/);
+  // A reason on an action call is filed as an implicit ACK carrying it as intent
+  const reasonEvents = [ev(30, 'decision_point_reached'), ev(30, 'captain_report', 'alpha_1', {
+    report_id: 'r1-alpha_1', faction: 'alpha', status: 'ACK', reason: '', intent: 'set_heading: renewing the fleet heading',
+    implicit: true, from_reason: true })];
+  const reasoned = buildComms(reasonEvents, ids(reasonEvents), ships, buildCheckpoints(reasonEvents), { interval: 30 });
+  assert.equal(reasoned[0].text, 'set_heading: renewing the fleet heading');
+  assert.deepEqual(reasoned[0].chips, ['CALL REASON']);
   // The engine's verdict wins over a field comparison: an unresolved raw
   // ordered target ('the cruiser') is not a deviation the engine counted
   assert.deepEqual(implicit.compliance, { chips: [], deviated: false, final: false });

@@ -26,3 +26,10 @@ test('torpedo_retargeted shows the datalink reason when present', () => {
       reason: 'datalink_surplus', group_size: 1 }));
   assert.match(surplus.text, /datalink: surplus on/);
 });
+
+test('torpedo_retargeted names a surrendered target', () => {
+  const t = formatLogEvent(ev('torpedo_retargeted', 'alpha_1',
+    { torpedo_id: 't1', old_target_id: 'beta_1', new_target_id: 'beta_2',
+      reason: 'target_surrendered', group_size: 3 }));
+  assert.match(t.text, /datalink: .*surrendered, group of 3/);
+});

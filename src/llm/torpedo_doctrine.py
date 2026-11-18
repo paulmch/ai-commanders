@@ -54,7 +54,8 @@ PROFILE_FACT = (
 )
 
 LINK_FACT = (
-    "Fleet datalink: rounds whose target dies or becomes a dying hulk are reassigned as a "
+    "Fleet datalink: rounds whose target dies, becomes a dying hulk or surrenders are "
+    "reassigned as a "
     "group to the hulls that still need rounds (PD soak + rounds to kill + 1, minus what "
     "already arrives first), but only where a round's delta-v and burn time still reach; "
     "reserve-profile rounds beyond what their target needs are diverted before it dies, "

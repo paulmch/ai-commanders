@@ -1138,7 +1138,7 @@ existing fields (`torpedo_id`, `old_target_id`, `new_target_id`,
 
 | field | type | meaning |
 |---|---|---|
-| `reason` | `"target_lost"` / `"datalink_surplus"` | `target_lost`: the round's target was destroyed or became a dying hulk and the side's rounds were reassigned as a group; `datalink_surplus`: a `reserve`-profile round diverted BEFORE its target died because more rounds were inbound on it than it needs and another hull still needed rounds |
+| `reason` | `"target_lost"` / `"target_surrendered"` / `"datalink_surplus"` | `target_lost`: the round's target was destroyed or became a dying hulk and the side's rounds were reassigned as a group; `target_surrendered`: the same for a target that struck its colours (owner decision: a surrender releases its inbound rounds like a hulk; rounds nothing else is reachable for keep homing on it); `datalink_surplus`: a `reserve`-profile round diverted BEFORE its target died because more rounds were inbound on it than it needs and another hull still needed rounds |
 | `group` | string | the decision it was part of: `"<faction>@<sim time s>:<reason>"`; every round reassigned in the same tick for the same reason shares it |
 | `group_size` | int | rounds reassigned in that group |
 | `profile` | string | the round's launch profile (`sprint` / `reserve`) |
@@ -1159,7 +1159,7 @@ the new fields are optional for every consumer.
   TORPEDO ECONOMY quote the same board (`tests/test_torpedo_datalink.py`
   `TestOneNeedEstimate` pins that the three agree at the same instant).
 - **Group reassignment** (always on): every tick, per side, the live-seeker
-  rounds (not blinded, not dry) whose target is destroyed or dying are planned
+  rounds (not blinded, not dry) whose target is destroyed, dying or surrendered are planned
   together, most constrained round first (fewest reachable hulls, then torpedo
   id), each to the reachable hull with a positive deficit - its need minus the
   rounds already inbound that ARRIVE BEFORE this one (forecast arrival) minus the
@@ -1188,3 +1188,33 @@ launching side at the next checkpoint, one line per (reason, old target, new
 target): "5 rounds re-tasked OCS Halberd-1 -> OCS Halberd-3 (target lost), first
 impact ~T+141". Structured: `reason`, `old_target_id`, `new_target_id`, `rounds`,
 `first_impact_t` (s, battle time: reassignment time + time to intercept).
+
+### `captain_report.from_reason` (lane cmdcap, round 2)
+
+Optional, `true` only. The report was not a `report_to_admiral` call: the
+captain gave a `reason` on an action call (set_maneuver / set_heading /
+set_primary_target / launch_torpedo). Such a report is filed as an implicit
+ACK with the reasons in `intent`, and becomes a DEVIATE (implicit false, the
+reasons in `reason`) only when the engine's compliance finds a deviation in
+what a reasoned call did (maneuver / target / salvo). Recordings before this
+change filed every reason-only report as an explicit ACK. The viewer's
+command net shows a `CALL REASON` chip on such rows.
+
+### Schedule: checkpoint 1 at T+0 (`first_checkpoint_s`)
+
+Since the T+0 schedule (owner decision, pass 5) checkpoint 1 is at T+0 and
+checkpoint k at (k-1) x `decision_interval_s`; every checkpoint's orders fly a
+full interval, the last one too, so N checkpoints end at T+N x interval (20 x
+30 s: T+600, was T+630 in live draft battles and T+600 with unflown last orders
+in the others).
+
+| field | where | meaning |
+|---|---|---|
+| `first_checkpoint_s` | recording header | `0.0`; absent on older recordings, whose first checkpoint is one interval in (T+30) |
+| `first_checkpoint_t` | live `/live/recording` block (and `scripts/fake_live_server.py`) | the same for spectators; absent from older servers |
+
+Consumers: `scripts/replay_turn.py` numbers checkpoints from it, the viewer
+counts orders at t=0 as checkpoint 1 (the engine's own `decision_point_reached`
+at t=0 is still not a checkpoint) and numbers the live NEXT CHECKPOINT marker
+from `first_checkpoint_t`. A trace frame is recorded at T+0 before the first
+orders (its plans are re-predicted once they apply, as at every checkpoint).

@@ -844,24 +844,25 @@ def test_seeded_battle_legacy_column_cooks_its_follower(column_battles):
              if e["ship_id"] == "alpha_2" and e["data"]["source_ship_id"] == "alpha_1"]
     phases = [e["data"]["phase"] for e in first]
     assert phases[0] == "enter" and phases[-1] == "exit" and phases.count("sustain") >= 6
-    assert first[0]["timestamp"] == 30.0 and first[0]["data"]["hit_location"] == "nose"
+    # Pass-5 schedule (checkpoint 1 at T+0): the same episode 30 s earlier.
+    assert first[0]["timestamp"] == 0.0 and first[0]["data"]["hit_location"] == "nose"
     assert first[0]["data"]["distance_km"] == pytest.approx(11.0, abs=0.1)
     total = first[-1]["data"]
-    assert first[-1]["timestamp"] == 69.0 and total["duration_s"] == 39.0
+    assert first[-1]["timestamp"] == 39.0 and total["duration_s"] == 39.0
     assert total["heat_gj"] > 400.0 and total["armor_ablation_cm"] > 8.0
     assert 3.0 < total["dose_sv"] < 4.0 and total["crew_state"] == "impaired"
-    # Its captain put the radiators out at the 60 s checkpoint, into the jet:
+    # Its captain put the radiators out at the 30 s checkpoint, into the jet:
     # all four panels are gone, listed in the episode and recorded.
     assert len(total["radiators"]) == 4 and all(p["destroyed"] for p in total["radiators"])
     shredded = [e for e in rec["events"] if e["event_type"] == "radiator_damaged"]
     assert [(e["timestamp"], e["ship_id"], e["data"]["cause"]) for e in shredded] == \
-        [(60.0, "alpha_2", "plume_wash")] * 4
+        [(30.0, "alpha_2", "plume_wash")] * 4
     burned = [e for e in rec["events"] if e["event_type"] == "mount_damaged"
               and e["data"].get("cause") == "plume_wash"]
     assert len(burned) == 16 and {e["ship_id"] for e in burned} == {"alpha_2"}
     assert sum(1 for e in burned if e["data"]["destroyed"]) == 4       # spinal, turret, both PD
     crew = [e for e in rec["events"] if e["event_type"] == "crew_radiation"]
-    assert [(e["timestamp"], e["ship_id"], e["data"]["state"]) for e in crew] == [(49.0, "alpha_2", "impaired")]
+    assert [(e["timestamp"], e["ship_id"], e["data"]["state"]) for e in crew] == [(19.0, "alpha_2", "impaired")]
     # The cruiser 14 km abeam is never washed.
     assert not [e for e in _plume_events(rec) if e["ship_id"] == "alpha_3"]
     # The wash itself stops at the ceiling; the destroyer, at 149 % with no
@@ -870,7 +871,7 @@ def test_seeded_battle_legacy_column_cooks_its_follower(column_battles):
     # impaired at 49 s and dead at 69 s, was 50 and 70; same 30-69 s episode.)
     dead = [(e["timestamp"], e["ship_id"], e["data"].get("cause")) for e in rec["events"]
             if e["event_type"] == "ship_destroyed"]
-    assert dead == [(69.0, "alpha_2", "reactor_overheat")]
+    assert dead == [(39.0, "alpha_2", "reactor_overheat")]
 
 
 def test_seeded_battle_tactical_captains_keep_the_follower_out_of_the_jet(column_battles):
