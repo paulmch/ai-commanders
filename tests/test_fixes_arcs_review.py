@@ -121,26 +121,28 @@ class TestRollGoalDoesNotHunt:
 
     @pytest.mark.xfail(strict=True, reason=(
         "engine roll planner (CombatSimulation._arcs_plan_roll), PD-first branch: under a "
-        "swarm of 8-12 inbound torpedoes a flanking destroyer's goal goes 30 -> -21 -> 31 deg "
-        "(t = 70, 85, 100 s) while its orders are constant (same target, same HEADING "
-        "toward_point with evade 'dodge' at t = 60 and 90): each re-plan's best PD roll moves "
-        "with the torpedoes' geometry by more than the hysteresis, and the hull (roll still "
-        "at 9-16 deg) reaches neither goal. Owner: the arcs/roll code, not the bots."))
+        "swarm of 7-10 inbound torpedoes a flanking destroyer (seed 103, beta_6) sets its "
+        "goal -45 -> -24 -> 7 -> -21 deg (t = 70, 85, 100, 115 s) while its orders are "
+        "constant (same gun target, same HEADING toward_point): scored on only the 7 "
+        "torpedoes present at both t = 100 and 115 the best roll still moves 7 -> -21, so "
+        "it is the torpedoes' geometry, not attrition; a PD gain skips the goal_eta wait, "
+        "each re-plan comes before the hull (roll -23 -> -21) gets anywhere near the goal. "
+        "Owner: the arcs/roll code, not the bots."))
     def test_pd_first_goal_does_not_reverse_under_a_torpedo_swarm(self, monkeypatch):
-        """Smallest reproduction: seed 103 (budget 200, default doctrine) to 110 s,
-        beta_2 only."""
+        """Smallest reproduction: seed 103 (budget 200, default doctrine) to 120 s,
+        beta_6 only."""
         changes = []
         plan = CombatSimulation._arcs_plan_roll
 
         def logged(self, ship, arcs):
             before = arcs.roll_goal
             plan(self, ship, arcs)
-            if ship.ship_id == "beta_2" and arcs.roll_goal != before:
+            if ship.ship_id == "beta_6" and arcs.roll_goal != before:
                 changes.append((self.current_time, before, arcs.roll_goal))
 
         monkeypatch.setattr(CombatSimulation, "_arcs_plan_roll", logged)
-        _draft_battle(103, time_limit=110.0, doctrine="tactical")
-        assert changes, "beta_2 never re-planned its roll - the scenario moved"
+        _draft_battle(103, time_limit=120.0, doctrine="tactical")
+        assert changes, "beta_6 never re-planned its roll - the scenario moved"
         for (t0, a, b), (t1, b2, c) in zip(changes, changes[1:]):
             assert not (t1 - t0 <= self.ABA_WINDOW_S
                         and abs(math.degrees(b - a)) > self.SAME_GOAL_DEG
