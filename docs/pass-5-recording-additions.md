@@ -1188,3 +1188,22 @@ launching side at the next checkpoint, one line per (reason, old target, new
 target): "5 rounds re-tasked OCS Halberd-1 -> OCS Halberd-3 (target lost), first
 impact ~T+141". Structured: `reason`, `old_target_id`, `new_target_id`, `rounds`,
 `first_impact_t` (s, battle time: reassignment time + time to intercept).
+
+### Schedule: checkpoint 1 at T+0 (`first_checkpoint_s`)
+
+Since the T+0 schedule (owner decision, pass 5) checkpoint 1 is at T+0 and
+checkpoint k at (k-1) x `decision_interval_s`; every checkpoint's orders fly a
+full interval, the last one too, so N checkpoints end at T+N x interval (20 x
+30 s: T+600, was T+630 in live draft battles and T+600 with unflown last orders
+in the others).
+
+| field | where | meaning |
+|---|---|---|
+| `first_checkpoint_s` | recording header | `0.0`; absent on older recordings, whose first checkpoint is one interval in (T+30) |
+| `first_checkpoint_t` | live `/live/recording` block (and `scripts/fake_live_server.py`) | the same for spectators; absent from older servers |
+
+Consumers: `scripts/replay_turn.py` numbers checkpoints from it, the viewer
+counts orders at t=0 as checkpoint 1 (the engine's own `decision_point_reached`
+at t=0 is still not a checkpoint) and numbers the live NEXT CHECKPOINT marker
+from `first_checkpoint_t`. A trace frame is recorded at T+0 before the first
+orders (its plans are re-predicted once they apply, as at every checkpoint).

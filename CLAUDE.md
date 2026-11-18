@@ -38,7 +38,7 @@ CI (`.github/workflows/tests.yml`) runs the same suite on Python 3.10-3.12 with
 ## Running Battles
 
 ```bash
-uv run python scripts/run_llm_battle.py -v                                  # 1v1 duel
+uv run python scripts/run_llm_battle.py --alpha-model claude-sonnet-5-5 --beta-model claude-sonnet-5 -v  # 1v1 duel (no default models)
 uv run python scripts/run_llm_battle.py --fleet-config data/fleet_config_claude_vs_gemini.json -v
 uv run python scripts/mcp_battle.py --config data/fleet_config_mcp_example.json  # human via MCP
 uv run python scripts/run_draft_battle.py --auto-draft --no-admirals --trace --seed 3  # free battle
@@ -221,6 +221,17 @@ captains as FLEET NET, enemy open-channel traffic as ENEMY TRANSMISSIONS.
 Recorded as comms_message / comms_delivered / captain_report events. A failed
 directive call leaves captains "(no new fleet directive this checkpoint)" and
 is recorded as admiral_directive_failed.
+
+Schedule: checkpoint 1 is at T+0 (orders before the clock starts), checkpoint k at
+(k-1) x interval, and every checkpoint's orders fly a full interval - the last one too - so
+20 checkpoints end at T+600 and no call is paid for orders that never fly
+(`LLMBattleRunner.FIRST_CHECKPOINT_S` / `FLIES_LAST_ORDERS`, `fleet_intel.battle_clock`;
+recordings carry `first_checkpoint_s: 0`, older ones lack it and decided first at T+30).
+Default effort per Anthropic model: `BATTLE_DEFAULT_EFFORT` in `src/llm/anthropic_client.py`
+(high Sonnet 5.5 / Opus 5.5 / Fable 5.2, medium Sonnet 5 / Haiku 5.5); admirals see the
+score line by default (`AdmiralConfig.show_score`, `--show-score none` turns it off). The
+admiral tactical plot (`--admiral-vision`, the one switch) is kept where used: a 90-call
+replay (old plot / new plot / no plot) found no difference in orders.
 
 Within a checkpoint, independent LLM calls (both admirals, per-ship orders, all
 captains) run concurrently (BattleConfig.parallel_llm, on by default).

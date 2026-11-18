@@ -1187,32 +1187,29 @@ def replace_option_rows(text: str, sim: Any, infos: Sequence[Any], own: Sequence
 
 def battle_clock(time_limit_s: Optional[float], max_checkpoints: Optional[int],
                  interval_s: float, unlimited: bool = False,
-                 last_orders_fly: bool = False) -> Optional[Dict[str, Any]]:
+                 last_orders_fly: bool = True) -> Optional[Dict[str, Any]]:
     """
     When the battle ends and how many checkpoints it has, as the runner flies
-    it: checkpoints fall every ``interval_s`` from T+interval while the time
-    limit has not been reached, at most ``max_checkpoints``; the runner stops
-    after the last checkpoint's decisions unless ``last_orders_fly`` (the live
-    draft runner gives them one more window). None in unlimited mode.
+    it: checkpoint k (1-based) is at T+(k-1) x interval - the first at T+0 -
+    while the time limit has not been reached, at most ``max_checkpoints``.
+    The last checkpoint's orders fly one more interval (``last_orders_fly``,
+    every runner since pass 5), capped by the time limit: 20 checkpoints of
+    30 s end at T+600. None in unlimited mode.
     """
     if unlimited or not interval_s or interval_s <= 0:
         return None
     limit = float(time_limit_s) if time_limit_s else float("inf")
-    by_time = max(0, math.ceil(limit / interval_s) - 1) if math.isfinite(limit) else None
+    by_time = max(0, math.ceil(limit / interval_s - 1e-9)) if math.isfinite(limit) else None
     candidates = [c for c in (max_checkpoints, by_time) if c is not None]
     if not candidates:
         return None
     checkpoints = int(min(candidates))
-    if by_time is not None and (max_checkpoints is None or by_time < max_checkpoints):
-        # The time limit binds: the last checkpoint's orders fly until it.
-        end = limit
-    else:
-        end = checkpoints * interval_s + (interval_s if last_orders_fly else 0.0)
+    end = checkpoints * interval_s if last_orders_fly else max(0, checkpoints - 1) * interval_s
     return {"checkpoints": checkpoints, "end_s": min(limit, end), "interval_s": float(interval_s)}
 
 
 def clock_text(now_s: float, checkpoint: int, clock: Optional[Dict[str, Any]]) -> str:
-    """', checkpoint 7 of 20, battle ends at T+630s' ('' without a clock)."""
+    """', checkpoint 7 of 20, battle ends at T+600s' ('' without a clock)."""
     if not clock or not checkpoint:
         return ""
     return (f", checkpoint {checkpoint} of {clock['checkpoints']}, battle ends at "
@@ -1266,7 +1263,8 @@ def time_limit_scores(alpha_ships: Iterable[Any], beta_ships: Iterable[Any]) -> 
 
 def score_line(sim: Any, faction: str) -> str:
     """'SCORE IF THE BATTLE ENDED NOW (time-limit verdict): you 212 / them 148'
-    - shown only when AdmiralConfig.show_score is on (off by default)."""
+    - shown when AdmiralConfig.show_score is on (the default since pass 5;
+      --show-score none turns it off). Captains never get it."""
     ships = list((getattr(sim, "ships", None) or {}).values())
     alpha = [s for s in ships if getattr(s, "faction", None) == "alpha"]
     beta = [s for s in ships if getattr(s, "faction", None) == "beta"]

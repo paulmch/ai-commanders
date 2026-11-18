@@ -461,21 +461,21 @@ class TestReports:
         runner.run_fleet_battle(FLEET)
 
         decisions = {(e.timestamp, e.ship_id): e for e in events(runner, "captain_decision")}
-        assert decisions[(30.0, "alpha_1")].data["acknowledgment"].startswith("DEVIATE")
-        assert decisions[(30.0, "alpha_2")].data["acknowledgment"] == "ACK (implicit)"
+        assert decisions[(0.0, "alpha_1")].data["acknowledgment"].startswith("DEVIATE")
+        assert decisions[(0.0, "alpha_2")].data["acknowledgment"] == "ACK (implicit)"
         assert all(e.data["acknowledgment"] for e in decisions.values())
 
         recorded = {(e.timestamp, e.ship_id): e for e in events(runner, "captain_report")}
-        report = recorded[(30.0, "alpha_1")]
+        report = recorded[(0.0, "alpha_1")]
         assert CAPTAIN_REPORT_KEYS <= set(report.data)
-        assert report.data["decision_event_id"] == decisions[(30.0, "alpha_1")].event_id
-        order = next(e for e in events(runner, "admiral_order") if e.timestamp == 30.0 and e.ship_id == "alpha_1")
+        assert report.data["decision_event_id"] == decisions[(0.0, "alpha_1")].event_id
+        order = next(e for e in events(runner, "admiral_order") if e.timestamp == 0.0 and e.ship_id == "alpha_1")
         assert report.data["answers_order_event_id"] == order.event_id
 
         delivered = [e for e in events(runner, "comms_delivered") if e.data["msg_id"] == report.data["report_id"]]
         assert len(delivered) == 1
         assert COMMS_DELIVERED_KEYS <= set(delivered[0].data)
-        assert (delivered[0].timestamp, delivered[0].ship_id) == (60.0, "alpha_admiral")
+        assert (delivered[0].timestamp, delivered[0].ship_id) == (30.0, "alpha_admiral")
         assert delivered[0].data["compliance"]["final"] is True
 
     def test_reports_are_replaced_each_checkpoint(self, tmp_path):
@@ -510,7 +510,7 @@ class TestFleetNet:
         claim = next(i for i in harpoon if i["kind"] == "TARGET_CLAIM")
         assert claim["channel"] == CHANNEL_FLEET_NET and claim["sender_name"] == "TIS Dart"
         assert claim["structured"]["target_id"] == "beta_1"
-        assert claim["delivered_t"] == 60.0 and COMMS_MESSAGE_KEYS <= set(claim)
+        assert claim["delivered_t"] == 30.0 and COMMS_MESSAGE_KEYS <= set(claim)
         lancer = stub.inboxes[("stub/lancer", 2)]
         assert not [i for i in lancer if i["channel"] != CHANNEL_ENEMY]   # no alpha fleet traffic
         hail = next(i for i in lancer if i["channel"] == CHANNEL_ENEMY)
@@ -539,9 +539,9 @@ class TestFleetNet:
         assert messages and all(COMMS_MESSAGE_KEYS <= set(e.data) for e in messages)
         claim = next(e for e in messages if e.data["kind"] == "TARGET_CLAIM")
         assert claim.ship_id == "alpha_1" and claim.data["sender_role"] == "captain"
-        assert claim.data["deliver_at_t"] == 60.0 and claim.data["recipient_ids"] == ["alpha_2"]
+        assert claim.data["deliver_at_t"] == 30.0 and claim.data["recipient_ids"] == ["alpha_2"]
         delivered = [e for e in events(runner, "comms_delivered") if e.data["msg_id"] == claim.data["msg_id"]]
-        assert [(e.ship_id, e.timestamp) for e in delivered] == [("alpha_2", 60.0)]
+        assert [(e.ship_id, e.timestamp) for e in delivered] == [("alpha_2", 30.0)]
         # The enemy channel keeps its legacy 'message' event (viewer combat log).
         legacy = events(runner, "message")
         assert [e.data["message"] for e in legacy] == ["Strike your colours, Lancer."]
@@ -588,7 +588,7 @@ class TestFleetNet:
         runner = make_runner(stub, tmp_path)
         runner.run_fleet_battle(FLEET)
         decision = next(e for e in events(runner, "captain_decision")
-                        if e.timestamp == 30.0 and e.ship_id == "alpha_1")
+                        if e.timestamp == 0.0 and e.ship_id == "alpha_1")
         assert any("NOT SENT" in err and "ENEMY" in err for err in decision.data["tool_errors"])
         assert not [e for e in events(runner, "comms_message") if e.data["sender_id"] == "alpha_1"]
 
@@ -661,15 +661,15 @@ class TestAdmiralReadsReports:
         assert dart["reason"] == "[BREAKING_OFF] Breaking off after this pass - PD down to 1 turret."
         assert harpoon["status"] == "ACK"
         assert harpoon["request"] == {"kind": "TOT_SYNC",
-                                      "text": "OCS Lancer lands ~T+75 - Two rounds on Lancer, launch to match."}
+                                      "text": "OCS Lancer lands ~T+45 - Two rounds on Lancer, launch to match."}
         assert harpoon["intent"] == "[FREE] Lancer's PD favours its port side."
         assert [s["kind"] for s in harpoon["signals"]] == ["TOT_SYNC", "FREE"]
         assert not self.bare_ack(dart) and not self.bare_ack(harpoon)
         # The recorded report and the decision's acknowledgment say the same.
-        recorded = {e.ship_id: e.data for e in events(runner, "captain_report") if e.timestamp == 30.0}
+        recorded = {e.ship_id: e.data for e in events(runner, "captain_report") if e.timestamp == 0.0}
         assert recorded["alpha_1"]["status"] == "DEVIATE"
         decision = next(e for e in events(runner, "captain_decision")
-                        if e.timestamp == 30.0 and e.ship_id == "alpha_1")
+                        if e.timestamp == 0.0 and e.ship_id == "alpha_1")
         assert decision.data["acknowledgment"].startswith("DEVIATE | [BREAKING_OFF]")
 
     def test_signal_slots_keep_what_the_captain_reported(self):

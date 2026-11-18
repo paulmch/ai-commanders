@@ -59,10 +59,11 @@ class AdmiralConfig:
     # Accepted commander-notebook lessons (src/llm/notebook.py), injected by
     # the runner when the battle opts in via use_notebooks.
     notebook_text: Optional[str] = None
-    # Experiment switch (owner decision pending, off by default): one line in
-    # the admiral's turn with both sides' time-limit verdict score as it
-    # would stand now (fleet_intel.score_line).
-    show_score: bool = False
+    # One line in the admiral's turn with both sides' time-limit verdict score
+    # as it would stand now and the draw-margin verdict (fleet_intel.score_line).
+    # On by default (owner, pass 5); --show-score none / "show_score": false
+    # turn it off. Captains never get it.
+    show_score: bool = True
     # Experiment mode (off by default): the admiral sets the directive and
     # battle plan (and may order coordinated torpedo salvos) but issues no
     # per-ship maneuver/target orders - captains decide from the directive.
@@ -203,6 +204,10 @@ class BattleFleetConfig:
     # "tactical" (default) or "legacy" (the pass-4 captain). JSON key
     # "heuristic_doctrine": one string for both sides or {"alpha": .., "beta": ..}.
     heuristic_doctrine: Dict[str, str] = field(default_factory=dict)
+    # Launch safety: "anthropic" / "openrouter" refuses to start a battle any
+    # of whose LLM models is served by the other provider (scripts check it,
+    # --require-provider overrides it). None: no requirement.
+    require_provider: Optional[str] = None
 
     def __post_init__(self) -> None:
         validate_battle_options(self)
@@ -264,6 +269,7 @@ class BattleFleetConfig:
             max_checkpoints=data.get("max_checkpoints", 40),
             seed=data.get("seed"),
             heuristic_doctrine=parse_heuristic_doctrine(data.get("heuristic_doctrine")),
+            require_provider=data.get("require_provider"),
         )
 
     def get_all_ships(self) -> List[ShipConfig]:
@@ -380,7 +386,7 @@ def _parse_fleet(data: Dict[str, Any], faction: str) -> FleetDefinition:
                 vision=admiral_data.get("vision", False),
                 name=admiral_data.get("name", f"Admiral {_get_short_model_name(model)}"),
                 intent_only=bool(admiral_data.get("intent_only", False)),
-                show_score=bool(admiral_data.get("show_score", False)),
+                show_score=bool(admiral_data.get("show_score", True)),
             )
 
     # Parse ships

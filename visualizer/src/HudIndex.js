@@ -147,12 +147,18 @@ export function legacyReport(decision) {
 
 const CHECKPOINT_SOURCES = new Set(['decision_point_reached', 'captain_decision', 'admiral_directive', 'admiral_order']);
 
-/** Fold events[from..] into checkpoint times: Map t -> recorded number | null. */
+/**
+ * Fold events[from..] into checkpoint times: Map t -> recorded number | null.
+ * The engine's own decision_point_reached at t=0 is not a checkpoint; orders
+ * at t=0 are (pass-5 battles: checkpoint 1 at T+0, before the clock starts;
+ * older recordings have no decisions at t=0, their CP1 is one interval in).
+ */
 function addCheckpointTimes(times, events, from = 0) {
   for (let i = from; i < events.length; i++) {
     const e = events[i];
     const t = e.timestamp;
-    if (!(t > 0)) continue;
+    if (!(t >= 0)) continue;
+    if (t === 0 && e.event_type === 'decision_point_reached') continue;
     if (e.event_type === 'checkpoint') {
       const n = Number(e.data?.checkpoint);
       times.set(t, Number.isFinite(n) ? n : times.get(t) ?? null);
@@ -167,8 +173,8 @@ const checkpointList = times => [...times.entries()].sort((a, b) => a[0] - b[0])
 
 /**
  * [{t, n}] sorted. Numbered `checkpoint` events win; otherwise any decision
- * point (t > 0: the t=0 decision point precedes the first orders) counts in
- * order, CP1 first - the live HUD's numbering.
+ * point counts in order, CP1 first - the live HUD's numbering. The engine's
+ * t=0 decision point is skipped; orders at t=0 (CP1 at T+0) are not.
  */
 export function buildCheckpoints(events) {
   const times = new Map();

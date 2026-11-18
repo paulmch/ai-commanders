@@ -439,6 +439,7 @@ class LLMBattleRunner:
                 alpha_ship=alpha_ship,
                 beta_ship=beta_ship,
             )
+            self.recorder.recording.first_checkpoint_s = self.FIRST_CHECKPOINT_S
 
         # Register the event callback unconditionally: it also feeds captain
         # combat feedback (shots fired, damage taken), which must not depend on
@@ -513,10 +514,16 @@ class LLMBattleRunner:
             captain_config.model, "captain")
         return LLMCaptain(captain_config, self.client)
 
-    # True when the runner flies the last checkpoint's orders for one more
-    # decision interval (LiveDraftRunner); the base runner stops right after
-    # the last checkpoint's decisions. Only the admirals' clock reads it.
-    FLIES_LAST_ORDERS = False
+    # Schedule (pass 5, owner "Move to T+0"): checkpoint 1 is at T+0 - the
+    # commanders give their first orders before the clock starts - and
+    # checkpoint k at (k-1) x interval. Every checkpoint's orders fly a full
+    # interval: after the last checkpoint the battle runs one more interval
+    # (capped by the time limit), so N checkpoints end at T+N x interval and
+    # no model call is paid for orders that are never flown. Every runner
+    # (sync, async/MCP, live draft, duel) follows it; the admirals' clock and
+    # the tactical plot read it from here.
+    FIRST_CHECKPOINT_S = 0.0
+    FLIES_LAST_ORDERS = True
 
     def _admiral_battle_clock(self) -> Optional[Dict[str, Any]]:
         """When this battle ends, as the fleet loop flies it (fleet_intel.battle_clock)."""
@@ -810,6 +817,7 @@ class LLMBattleRunner:
                 alpha_admiral=self.alpha_admiral,
                 beta_admiral=self.beta_admiral,
             )
+            self.recorder.recording.first_checkpoint_s = self.FIRST_CHECKPOINT_S
 
         # Register the event callback unconditionally - see setup_battle().
         self._install_call_policy()
@@ -1071,8 +1079,9 @@ class LLMBattleRunner:
 
         while not self._is_battle_over():
             # === SIMULATION PHASE ===
-            # Run for decision_interval seconds
-            deadline = self.simulation.current_time + self.config.decision_interval_s
+            # Run for decision_interval seconds (checkpoint 1 at T+0)
+            deadline = (self.FIRST_CHECKPOINT_S if self.checkpoint_count == 0
+                        else self.simulation.current_time + self.config.decision_interval_s)
             for _ in self._advance_to_checkpoint(deadline):
 
                 # Record sim frame if enabled
@@ -1229,6 +1238,7 @@ class LLMBattleRunner:
                 if self.checkpoint_count >= self.config.max_checkpoints:
                     if self.config.verbose:
                         print(f"\n=== CHECKPOINT LIMIT REACHED ===")
+                    self._fly_last_orders(fleet_mode=False)
                     break
 
         return self._evaluate_result()
@@ -1303,8 +1313,9 @@ class LLMBattleRunner:
                     if self.config.verbose:
                         print(f"  [ERROR] Personality selection failed: {e}")
 
-        # Track time for Admiral pre-snapshots
-        next_checkpoint_time = decision_interval
+        # Checkpoint 1 is at T+0 (FIRST_CHECKPOINT_S): the first advance is empty.
+        next_checkpoint_time = self.FIRST_CHECKPOINT_S
+        self._record_opening_frame()
 
         while not self._is_fleet_battle_over():
             # === SIMULATION PHASE ===
@@ -1524,8 +1535,9 @@ class LLMBattleRunner:
                     if self.config.verbose:
                         print(f"  [ERROR] Personality selection failed: {e}")
 
-        # Track time for Admiral pre-snapshots
-        next_checkpoint_time = decision_interval
+        # Checkpoint 1 is at T+0 (FIRST_CHECKPOINT_S): the first advance is empty.
+        next_checkpoint_time = self.FIRST_CHECKPOINT_S
+        self._record_opening_frame()
 
         # Advance chat turn at start
         if self.mcp_chat:
@@ -3293,6 +3305,10 @@ class LLMBattleRunner:
 
     def _evaluate_fleet_result(self) -> BattleResult:
         """Evaluate final fleet battle result."""
+        # Every fleet loop (sync, async, MCP HTTP) ends here: the last
+        # checkpoint's orders fly their interval first (FLIES_LAST_ORDERS).
+        if self.checkpoint_count >= self.config.max_checkpoints:
+            self._fly_last_orders(fleet_mode=True)
         # Count active ships
         alpha_active = sum(
             1 for ship in self.alpha_ships.values()
@@ -3425,7 +3441,7 @@ class LLMBattleRunner:
             seed=self.config.seed,
         )
 
-    def _is_battle_over(self) -> bool:
+    def _is_battle_over(self, ignore_checkpoint_limit: bool = False) -> bool:
         """Check if battle should end."""
         if self.simulation is None:
             return True
@@ -3452,10 +3468,40 @@ class LLMBattleRunner:
             return True
 
         # Checkpoint limit (only in limited mode)
-        if self.checkpoint_count >= self.config.max_checkpoints:
+        if not ignore_checkpoint_limit and self.checkpoint_count >= self.config.max_checkpoints:
             return True
 
         return False
+
+    def _record_opening_frame(self) -> None:
+        """A trace frame at T+0 before the first orders (the checkpoint-1 frame)."""
+        if not (self.recorder and self.config.record_sim_trace and self.simulation):
+            return
+        trace = getattr(self.recorder.recording, "sim_trace", None)
+        if trace and abs(trace[-1].get("t", -1.0) - round(self.simulation.current_time, 2)) < 1e-6:
+            return
+        self._record_sim_frame()
+
+    def _fly_last_orders(self, fleet_mode: bool) -> None:
+        """
+        The last checkpoint's orders fly their full interval (capped by the
+        time limit): the battle ends at T+checkpoints x interval.
+        """
+        if (getattr(self, "stop_reason", None) or self.config.unlimited_mode
+                or getattr(self, "_last_orders_flown", False)):
+            return
+        self._last_orders_flown = True
+        over = (self._is_fleet_battle_over if fleet_mode
+                else (lambda: self._is_battle_over(ignore_checkpoint_limit=True)))
+        if over():
+            return
+        interval = (self.fleet_config.decision_interval_s if fleet_mode and self.fleet_config
+                    else self.config.decision_interval_s)
+        for _ in self._advance_to_checkpoint(self.simulation.current_time + interval, fleet_mode=fleet_mode):
+            if self.recorder and self.config.record_sim_trace:
+                self._record_sim_frame()
+            if over():
+                break
 
     def _record_sim_frame(self) -> None:
         """Record current simulation state for detailed analysis."""

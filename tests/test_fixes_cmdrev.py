@@ -138,14 +138,14 @@ def test_a_call_withdrawn_by_the_order_check_ack_is_not_shown_as_flown(tmp_path)
     flew; the next turn said 'T+30 EVADE@100% | report ACK ... - NO COMMANDS: the
     ship coasted' - two false statements."""
     history = _ack_loop(tmp_path, ack=True)
-    line = [x for x in history.splitlines() if x.startswith("  T+30")][0]
+    line = [x for x in history.splitlines() if x.startswith("  T+0 ")][0]
     assert "EVADE" not in line
     assert "coasted" not in line and "your Admiral's maneuver order flew" in line
 
 
 def test_without_an_ack_the_departing_call_stays_in_the_history(tmp_path):
     history = _ack_loop(tmp_path, ack=False)
-    assert "T+30 EVADE@100%" in history
+    assert "T+0 EVADE@100%" in history
 
 
 def test_no_command_turn_without_an_admiral_maneuver_still_reads_as_a_coast():
@@ -248,12 +248,14 @@ def test_captain_turn_carries_the_battle_clock_and_knows_its_last_decision(tmp_p
     stub, runner = _loop_runner(tmp_path, lambda ctx: [], checkpoints=2)
     runner.run_fleet_battle(FLEET)
     first, last = stub.texts[("stub/dd", 1, 1)], stub.texts[("stub/dd", 2, 1)]
+    # Checkpoint 1 at T+0, checkpoint 2 at T+30; the last orders fly to T+60
+    # (the base runner used to stop at its last checkpoint, orders unflown).
     assert "BATTLE CLOCK: checkpoint 1 of 2, battle ends at T+60s." in first
-    assert "next decision T+60." in first
-    # The base runner stops right after the last checkpoint's decisions.
+    assert "next decision T+30." in first
     assert "BATTLE CLOCK: checkpoint 2 of 2" in last
-    assert "the battle ends now: these orders are not flown." in last
-    assert "next decision" not in last.split("\n")[1]
+    assert "no later decision: the battle ends at T+60." in last
+    assert "these orders are not flown" not in last
+    assert runner.simulation.current_time == 60.0
 
 
 def test_show_score_and_label_reach_the_admiral_status_recording_and_ledger(tmp_path):
@@ -428,7 +430,7 @@ def _salvo_battle(tmp_path, launch_at, reason=True):
                          checkpoints=2, distance_km=400.0)
     runner.run_fleet_battle(FLEET)
     report = [e.data for e in runner.recorder.events
-              if e.event_type == "captain_report" and e.ship_id == "alpha_1" and e.timestamp == 60.0][0]
+              if e.event_type == "captain_report" and e.ship_id == "alpha_1" and e.timestamp == 30.0][0]
     return stub, report
 
 
