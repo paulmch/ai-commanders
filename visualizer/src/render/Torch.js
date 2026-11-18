@@ -21,15 +21,30 @@ import { Ribbon } from './Trails.js';
  * bright disc it should be. The column is normalised so a layer's
  * intensity is its side-on centreline radiance in scene HDR units.
  *
- * Wall-clock time only scrolls the turbulence; length, width, colour and
- * the dying-drive cough are functions of the throttle and of battle time.
+ * The exhaust leaves at 10,256 km/s, so to the eye the plume is a rigid,
+ * steady lance down the thrust axis: it swings with the hull (no sweep, no
+ * lag), its length and brightness follow the throttle the engine produced
+ * this instant (ignition and cutoff are instant along its whole length),
+ * and nothing in it drifts. What reads as speed is texture: fine streaks
+ * long along the axis scrolling several plume lengths per second on the
+ * wall clock (FLOW_RATE: a feature moves about its own length per frame, so
+ * none can be followed - a shimmer, not puffs), over standing shock
+ * diamonds that never move. Beyond the flame the plume continues as the
+ * spear (render/DriveJet.js); render/PlumeProfile.js states how the two
+ * add up to one field. Chemical vents (wrecks) keep slow, puffy gas.
+ *
+ * Wall-clock time only scrolls the streaks; length, width, colour, the
+ * ignition flash and the dying-drive cough are functions of the throttle
+ * and of battle time.
  */
+
+/** Shock cells (aft of the nozzle) after which the standing knots are gone: past it the plume only fades. */
+export const TORCH_CORE_CELLS = 3.5;
 
 const vertexShader = /* glsl */`
   uniform float uLen;
   uniform float uR0;
   uniform float uW;
-  uniform vec2 uBend;
   uniform float uPixelWorld;
   varying vec3 vPos;
   varying vec3 vCam;
@@ -37,9 +52,8 @@ const vertexShader = /* glsl */`
   #include <common>
   #include <logdepthbuf_pars_vertex>
 
-  // Linear in t, so the bound stays a convex cone; the last term makes room
-  // for the swept centreline (uBend * s^2, at most its tip offset)
-  float boundR(float t) { return uW * uR0 * mix(3.8, 11.0, t) + t * length(uBend) * uLen * uLen; }
+  // Linear in t, so the bound stays a convex cone
+  float boundR(float t) { return uW * uR0 * mix(3.8, 11.0, t); }
 
   void main() {
     // Unit cone (z 0 .. -1, radius 1) shaped here: a short collar forward of
@@ -65,7 +79,9 @@ const vertexShader = /* glsl */`
 
 const fragmentShader = /* glsl */`
   uniform sampler2D uNoise;
-  uniform float uTime;
+  uniform vec2 uFlow;    // streak scroll phases (wall clock, wrapped on the CPU)
+  uniform vec4 uStreak;  // streak scale across (x, y) and along (A, B), in nozzle radii
+  uniform vec3 uRough;   // turbulence floor of core, sheath, halo (1 = smooth)
   uniform int uSeg;
   uniform float uLen;
   uniform float uR0;
@@ -75,7 +91,6 @@ const fragmentShader = /* glsl */`
   uniform float uFlare;
   uniform float uSeed;
   uniform float uPhase;  // per-bell shock cell phase 0..1
-  uniform vec2 uBend;    // centreline sweep: lateral offset = uBend * s^2
   uniform float uPixelWorld;
   uniform vec3 uI;       // core, sheath, halo side-on centreline radiance
   uniform vec3 uCore;
@@ -155,35 +170,28 @@ const fragmentShader = /* glsl */`
         float te = clamp(tc, a, b);                // nearest the axis in this sub-chord
         float s = sA + sD * te;
         float t = clamp(s / uLen, 0.0, 1.0);
-        // Swept centreline: the part of the offset across the ray moves the
-        // closest approach sideways, the part along it slides it down the ray
-        vec2 bend = uBend * s * s;
-        float along = dot(bend, rd.xy) / dd;
-        vec2 qs = qc - (bend - rd.xy * along);
-        float d2 = dot(qs, qs);
-        float tcs = tc + along;
-        vec2 q = ro.xy + rd.xy * te - bend;
+        float d2 = dot(qc, qc);
+        float tcs = tc;
+        vec2 q = ro.xy + rd.xy * te;
 
-        // Turbulence: filaments streaming aft, laminar at the throat
-        // (long in the flow direction, narrow across it), growing downstream
-        float v = s / (uR0 * 44.0);
-        float n1 = textureLod(uNoise, vec2(q.x / (uR0 * 7.0) + uSeed, v - uTime * 0.4), 0.0).r;
-        float n2 = textureLod(uNoise, vec2(q.y / (uR0 * 5.0) + uSeed * 1.7 + 0.37, v * 2.1 - uTime * 0.7), 0.0).g;
+        // Streaming: fine streaks, long in the flow direction and narrow
+        // across it, scrolling aft fast enough that none can be followed
+        // (two octaves at incommensurate rates); laminar at the throat
+        float n1 = textureLod(uNoise, vec2(q.x / (uR0 * uStreak.x) + uSeed, s / (uR0 * uStreak.z) - uFlow.x), 0.0).r;
+        float n2 = textureLod(uNoise, vec2(q.y / (uR0 * uStreak.y) + uSeed * 1.7 + 0.37, s / (uR0 * uStreak.w) - uFlow.y), 0.0).g;
         float fil = clamp(n1 * n2 * 4.0, 0.0, 1.8);
         float rough = smoothstep(0.0, 0.22, t);
-        float coreTurb = mix(1.0, 0.7 + 0.3 * fil, rough);
-        float sheathTurb = mix(1.0, 0.22 + 0.78 * fil, rough);
-        float haloTurb = mix(1.0, 0.4 + 1.2 * n1, rough);
+        float coreTurb = mix(1.0, uRough.x + (1.0 - uRough.x) * fil, rough);
+        float sheathTurb = mix(1.0, uRough.y + (1.0 - uRough.y) * fil, rough);
+        float haloTurb = mix(1.0, uRough.z + 2.0 * (1.0 - uRough.z) * n1, rough);
 
         // Shock diamonds: the core necks down and flares at each cell
         float ph = 6.28318 * s / lam - 2.0 - 6.28318 * uPhase;
-        // (each cell weaker and blurrier than the last: three or four read,
-        // then turbulence has eaten the pattern)
-        float cell = exp(-s / (lam * 1.25)) * uDiamonds;
+        // (each cell weaker and blurrier than the last: three read, and the
+        // pattern is gone by TORCH_CORE_CELLS - past it the plume only fades)
+        float cell = exp(-s / (lam * 1.25)) * uDiamonds * (1.0 - smoothstep(2.0 * lam, ${TORCH_CORE_CELLS.toFixed(2)} * lam, s));
         float pinch = 1.0 - 0.4 * cos(ph) * cell;
         float knot = 1.0 + 2.4 * pow(0.5 + 0.5 * cos(ph), mix(1.3, 3.0, cell)) * cell;
-        // Pressure pulses running down the sheath (slow: no strobing)
-        float pulse = 1.0 + 0.14 * sin(6.28318 * (s / (uR0 * 24.0) - uTime * 0.8 + uSeed));
 
         float rise = smoothstep(0.0, uR0 * 0.7, s);
         float tip = 1.0 - smoothstep(0.35, 1.0, t);
@@ -203,7 +211,7 @@ const fragmentShader = /* glsl */`
         vec3 cc = mix(uSheath * 1.25, uCore, heat);
         vec3 cs = mix(uSheath, uEdge, smoothstep(0.0, 0.55, t));
         col += cc * (uI.x * exp(-t * 5.5) * knot * coreTurb * env * column(sc, d2, sinT, ga, gb));
-        col += cs * (uI.y * wide * exp(-t * 3.4) * pulse * sheathTurb * env * column(ss, d2, sinT, ga, gb));
+        col += cs * (uI.y * wide * exp(-t * 3.4) * sheathTurb * env * column(ss, d2, sinT, ga, gb));
         col += uEdge * (uI.z * wide * exp(-t * 2.4) * haloTurb * env * column(sh, d2, sinT, ga, gb));
       }
     }
@@ -228,26 +236,66 @@ function coneGeometry() {
   return g;
 }
 
-// Shared by every torch: turbulence clock, noise, sub-chord count (tier)
+// Shared by every torch: noise, sub-chord count (tier)
 const shared = {
   uNoise: { value: null },
-  uTime: { value: 0 },
   uSeg: { value: 4 }
 };
 const SEGMENTS = { low: 2, high: 4 };
 
 const coughHash = (k) => { const x = Math.sin(k * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
 
+/** Grid (battle s) of a failing drive's dropouts, and the share of each step spent switching. */
+export const COUGH_STEP_S = 0.09;
+export const COUGH_EDGE = 0.3;
+
 /**
- * Failing-drive cough 0..1 at battle time t: seeded dropouts on a 0.22 s
- * grid, eased between grid points (no strobing), so a sputtering torch is a
- * pure function of the timeline. 1 = the plume all but cuts out.
+ * Failing-drive cough 0..1 at battle time t: seeded dropouts on a fast
+ * grid (COUGH_STEP_S), each switched in the first COUGH_EDGE of its step -
+ * a torch that stutters, since a 10,000 km/s jet cannot fade slowly - so a
+ * sputtering torch is a pure function of the timeline. 1 = the plume all
+ * but cuts out.
  */
 export function torchCough(t) {
-  const u = t / 0.22, k = Math.floor(u), f = u - k;
+  const u = t / COUGH_STEP_S, k = Math.floor(u), f = Math.min(1, (u - k) / COUGH_EDGE);
   const level = (i) => { const h = coughHash(i); return h > 0.55 ? (h - 0.55) / 0.45 : 0.15 * h; };
   const s = f * f * (3 - 2 * f);
-  return level(k) + (level(k + 1) - level(k)) * s;
+  return level(k - 1) + (level(k) - level(k - 1)) * s;
+}
+
+const smooth01 = (x) => { const c = Math.max(0, Math.min(1, x)); return c * c * (3 - 2 * c); };
+/** The shader's radiance ceiling per bell (max channel, scene HDR). */
+export const TORCH_CAP = 5.0;
+
+/**
+ * Side-on centreline radiance (max channel, scene HDR, after the ceiling)
+ * of ONE bell `s` kit units aft of its nozzle plane, without the streaks:
+ * the JS twin of the fragment shader's axial profile (throat ball, core
+ * with its standing shock knots, sheath, halo). `p` is a torch's current
+ * profile (torch.profile()). Used by tests/plume.test.js to check that
+ * torch + spear is one continuous, non-increasing field.
+ */
+export function torchCentreline(s, p) {
+  const { len, r0, I, flare, thrust, diamonds, phase } = p;
+  if (!(len > 0)) return 0;
+  const t = Math.max(0, Math.min(1, s / len));
+  const lam = r0 * (4 + 3 * thrust) * (0.86 + 0.28 * phase);
+  const ph = 2 * Math.PI * s / lam - 2 - 2 * Math.PI * phase;
+  const cell = Math.exp(-Math.max(0, s) / (lam * 1.25)) * diamonds * (1 - smooth01((s - 2 * lam) / ((TORCH_CORE_CELLS - 2) * lam)));
+  const knot = 1 + 2.4 * Math.pow(0.5 + 0.5 * Math.cos(ph), 1.3 + 1.7 * cell) * cell;
+  const env = (s > 0 ? smooth01(s / (r0 * 0.7)) : 0) * (1 - smooth01((t - 0.35) / 0.65));
+  const sf = r0 * (0.4 + 0.16 * thrust), fd = s + 0.25 * r0, fd2 = fd * fd;
+  let lum = flare * (Math.exp(-fd2 / (sf * sf)) + 0.1 * Math.exp(-fd2 / (sf * sf * 7)));
+  if (s >= 0 && s <= len) {
+    lum += I[0] * Math.exp(-t * 5.5) * knot * env + I[1] * Math.exp(-t * 3.4) * env + I[2] * Math.exp(-t * 2.4) * env;
+  }
+  return TORCH_CAP * (1 - Math.exp(-lum / TORCH_CAP));
+}
+
+
+/** End of the shock-diamond zone (kit units aft of the nozzle) of a torch profile: past it the plume only fades. */
+export function torchCoreEnd(p) {
+  return TORCH_CORE_CELLS * p.r0 * (4 + 3 * p.thrust) * (0.86 + 0.28 * p.phase);
 }
 
 /**
@@ -256,7 +304,7 @@ export function torchCough(t) {
  * Only the throat, the diamonds and the first stretch of core cross the
  * bloom threshold - the body of the plume stays a visible blue gradient.
  */
-export const TORCH_LEVELS = { core: 1.5, sheath: 0.68, halo: 0.11, flare: 1.2 };
+export const TORCH_LEVELS = { core: 2.1, sheath: 0.68, halo: 0.11, flare: 1.7 };
 
 /**
  * Per-nozzle level scale for a drive of `cluster` bells: cores overlap by
@@ -283,29 +331,24 @@ export function plumeShape(thrust) {
   };
 }
 
-/** Throttle slope (1/s) at which the ignition / shutdown transient saturates. */
-export const TRANSIENT_RATE = 0.55;
-/** Ignition: throat flare, core and shock knots flare up by 1 + these. */
+/** Ignition flash: a throttle step this large (0..1) saturates it; it dies away in IGNITION_S battle seconds. */
+export const IGNITION_STEP = 0.5;
+export const IGNITION_S = 0.22;
+/** Ignition: throat flare, core and shock knots flare up by 1 + these at the step. */
 export const IGNITION_FLARE = 1.8;
 export const IGNITION_CORE = 0.55;
 export const IGNITION_KNOTS = 1.2;
-/** Shutdown: the core loses this fraction while the plume widens by 1 + bloom. */
-export const SHUTDOWN_CORE = 0.6;
-export const SHUTDOWN_BLOOM = 0.35;
-const _transient = { surge: 0, fade: 0 };
 
 /**
- * Drive transient from the recorded throttle slope `rate` (per second, from
- * two neighbouring trace frames): surge 0..1 while the throttle is coming
- * up (light-off: hot throat, hard shock knots), fade 0..1 while it is
- * coming down (the core gutters, the plume blooms out and thins). A pure
- * function of the recording, so a scrub shows the same transient.
+ * Light-off flash 0..1 `age` battle seconds after the throttle stepped from
+ * `from` to `to` (Interpolator: the recorded throttle is piecewise
+ * constant, the engine's own 1 s tick). The whole plume is at its new
+ * length on the step itself; this only flares the throat and the shock
+ * knots for a blink. A cutoff is instant and dark: no transient. Pure.
  */
-export function plumeTransient(rate, out = { surge: 0, fade: 0 }) {
-  const r = Number.isFinite(rate) ? rate / TRANSIENT_RATE : 0;
-  out.surge = r > 0 ? Math.min(1, r) : 0;
-  out.fade = r < 0 ? Math.min(1, -r) : 0;
-  return out;
+export function plumeIgnition(from, to, age) {
+  if (!(age >= 0) || !(to > from)) return 0;
+  return Math.min(1, (to - from) / IGNITION_STEP) * Math.exp(-age / IGNITION_S);
 }
 
 /** Extra core/sheath level of a dying drive at full sputter (x 1 + this). */
@@ -337,26 +380,19 @@ export function damagedNozzle(health, i, n, seed, out = { level: 1, sputter: 0 }
   return out;
 }
 
-/** Seconds the exhaust at the plume tip has been in flight, for the sweep. */
-export const SWEEP_AGE_S = 2.2;
-/** Largest tip offset of a swept plume, as a fraction of its length. */
-export const SWEEP_MAX = 0.32;
-const _sweep = { x: 0, y: 0 };
+/** Streak scroll (texture tiles per wall-clock second) and scale (nozzle radii) by tint. */
+export const FLOW_RATE = { fusion: [4.3, 7.1], chemical: [0.4, 0.7] };
+const STREAK = { fusion: [2.2, 1.6, 26, 17], chemical: [7, 5, 44, 44 / 2.1] };
+/** Turbulence floor of core, sheath, halo (1 = smooth): a fusion jet shimmers, vented gas billows. */
+const ROUGH = { fusion: [0.86, 0.5, 0.72], chemical: [0.7, 0.22, 0.4] };
 
-/**
- * Tip offset of the plume (fraction of its length, hull frame x/y) for a
- * turn rate (wx, wy) rad/s in the hull frame (+Z = bow). Exhaust already
- * emitted keeps flying straight while the stern swings away, so the far
- * plume lags toward w x forward: a turning ship drags a curved tail.
- * Pure: the recorded turn rate in, the offset out.
- */
-export function plumeSweep(wx, wy, out = { x: 0, y: 0 }) {
-  let x = wy * SWEEP_AGE_S, y = -wx * SWEEP_AGE_S;
-  const m = Math.hypot(x, y);
-  if (m > SWEEP_MAX) { x *= SWEEP_MAX / m; y *= SWEEP_MAX / m; }
-  out.x = x; out.y = y;
+/** Streak phases at wall-clock time `time` (wrapped, so float precision never degrades). */
+export function flowPhase(time, rate, out = [0, 0]) {
+  const a = (time * rate[0]) % 1, b = (time * rate[1]) % 1;
+  out[0] = a < 0 ? a + 1 : a; out[1] = b < 0 ? b + 1 : b;
   return out;
 }
+const _flow = [0, 0];
 
 /**
  * @param {Object} opts
@@ -389,7 +425,9 @@ export function createTorch({ radius, length, light = null, tint = 'fusion', int
   const material = new THREE.ShaderMaterial({
     uniforms: {
       uNoise: shared.uNoise,
-      uTime: shared.uTime,
+      uFlow: { value: new THREE.Vector2() },
+      uStreak: { value: new THREE.Vector4(...STREAK[fusion ? 'fusion' : 'chemical']) },
+      uRough: { value: new THREE.Vector3(...ROUGH[fusion ? 'fusion' : 'chemical']) },
       uSeg: shared.uSeg,
       uLen: { value: reach },
       uR0: { value: radius },
@@ -399,7 +437,6 @@ export function createTorch({ radius, length, light = null, tint = 'fusion', int
       uFlare: { value: 0 },
       uSeed: { value: Math.random() },
       uPhase: { value: cellPhase ?? Math.random() },
-      uBend: { value: new THREE.Vector2() },
       uPixelWorld: Ribbon.pixelWorld,
       uI: { value: new THREE.Vector3() },
       uCore: { value: new THREE.Color(...(fusion ? [1.0, 0.96, 1.0] : [1.0, 0.94, 0.82])) },
@@ -431,25 +468,30 @@ export function createTorch({ radius, length, light = null, tint = 'fusion', int
   const _wd = new THREE.Vector3();
   const lightReach = light ? light.distance : 0;   // kit units, as borrowed
   const u = material.uniforms;
-  const phase = Math.random() * Math.PI * 2;
+  const flowRate = FLOW_RATE[fusion ? 'fusion' : 'chemical'];
   const state = { thrust: 0 };
 
   return {
     group,
     light,
     levels,
+    /** This frame's axial profile, in the torch's kit units (torchCentreline). */
+    profile() {
+      if (!group.visible) return { len: 0, r0: radius, I: [0, 0, 0], flare: 0, thrust: 0, diamonds: 0, phase: u.uPhase.value };
+      return { len: u.uLen.value, r0: radius, I: [u.uI.value.x, u.uI.value.y, u.uI.value.z], flare: u.uFlare.value,
+        thrust: u.uThrust.value, diamonds: u.uDiamonds.value, phase: u.uPhase.value };
+    },
     /**
-     * @param {number} thrust       0..1 (already smoothed by the caller)
-     * @param {number} time         wall-clock seconds for turbulence
+     * @param {number} thrust       0..1: the throttle the engine produces at
+     *                              this battle time (a step, not eased)
+     * @param {number} time         wall-clock seconds: streak scroll only
      * @param {number} sputter      0..1 extra flicker (dying drives)
      * @param {number} sputterTime  battle seconds driving the sputter, so a
      *                              paused or scrubbed frame always shows the
      *                              same cough (falls back to `time`)
-     * @param {THREE.Vector3} turn  optional recorded turn rate in the hull
-     *                              frame (rad/s): the plume sweeps behind a
-     *                              turning stern
+     * @param {number} surge        0..1 ignition flash (plumeIgnition)
      */
-    update(thrust, time, sputter = 0, sputterTime = undefined, turn = null, rate = 0) {
+    update(thrust, time, sputter = 0, sputterTime = undefined, surge = 0) {
       state.thrust = thrust;
       if (thrust < 0.015) {
         group.visible = false;
@@ -457,39 +499,26 @@ export function createTorch({ radius, length, light = null, tint = 'fusion', int
         return;
       }
       group.visible = true;
-      // Slow breathing only - anything above ~1.5 Hz aliases into strobing
-      let breathe = 0.965 + 0.025 * Math.sin(time * 4.3 + phase) + 0.012 * Math.sin(time * 7.1 + phase * 1.7);
-      // A failing drive burns rough and over-rich between its dropouts, so a
-      // hulk limping at a few percent throttle still shows its torch coughing
-      let gasp = 1;
+      // Steady: a healthy torch has no breathing. A failing drive burns
+      // rough and over-rich between its dropouts, so a hulk limping at a
+      // few percent throttle still shows its torch stuttering
+      let level = 1, gasp = 1;
       if (sputter > 0) {
-        breathe *= 1 - sputter * 0.75 * torchCough(sputterTime ?? time);
+        level = 1 - sputter * 0.75 * torchCough(sputterTime ?? time);
         gasp = 1 + DYING_GASP * sputter;
       }
-      // Ignition / shutdown from the recorded throttle slope (battle time)
-      const tr = plumeTransient(rate, _transient);
-      if (tr.fade > 0) {
-        // confinement letting go: the core gutters while the plume blooms out
-        const cough = torchCough(sputterTime ?? time);
-        breathe *= 1 - 0.45 * tr.fade * cough;
-      }
+      const sg = Math.max(0, Math.min(1, surge || 0));
       const shape = plumeShape(thrust);
-      shared.uTime.value = time;
+      flowPhase(time, flowRate, _flow);
+      u.uFlow.value.set(_flow[0], _flow[1]);
       u.uThrust.value = thrust;
-      const len = reach * shape.length * breathe;
-      u.uLen.value = len;
-      if (turn) {
-        plumeSweep(turn.x, turn.y, _sweep);
-        u.uBend.value.set(_sweep.x / len, _sweep.y / len);
-      } else {
-        u.uBend.value.set(0, 0);
-      }
-      u.uW.value = shape.width * (1 + SHUTDOWN_BLOOM * tr.fade);
-      u.uDiamonds.value = diamonds * (1 + IGNITION_KNOTS * tr.surge);
-      const coreK = (1 + IGNITION_CORE * tr.surge) * (1 - SHUTDOWN_CORE * tr.fade);
-      u.uI.value.set(levels.core * shape.core * breathe * gasp * coreK, levels.sheath * shape.wide * breathe * gasp,
-        levels.halo * shape.wide * breathe * (1 + 0.6 * tr.fade));
-      u.uFlare.value = levels.flare * Math.min(1, thrust * 1.3 * gasp * gasp) * breathe * (1 + IGNITION_FLARE * tr.surge);
+      u.uLen.value = reach * shape.length * (0.85 + 0.15 * level);
+      u.uW.value = shape.width;
+      u.uDiamonds.value = diamonds * (1 + IGNITION_KNOTS * sg);
+      const coreK = 1 + IGNITION_CORE * sg;
+      u.uI.value.set(levels.core * shape.core * level * gasp * coreK, levels.sheath * shape.wide * level * gasp,
+        levels.halo * shape.wide * level);
+      u.uFlare.value = levels.flare * Math.min(1, thrust * 1.3 * gasp * gasp) * level * (1 + IGNITION_FLARE * sg);
       if (light) {
         // A pool light lives in world space: carry the hull's draw scale
         // (render/Scale.js) into its offset, reach and - inverse-square -
@@ -501,7 +530,7 @@ export function createTorch({ radius, length, light = null, tint = 'fusion', int
         _wd.set(0, 0, -1).transformDirection(group.matrixWorld);
         light.position.copy(_wp).addScaledVector(_wd, radius * 3 * k);
         if (lightReach > 0) light.distance = lightReach * k;
-        light.intensity = (0.15 + 0.85 * shape.wide) * 8 * I * breathe * k * k;
+        light.intensity = (0.15 + 0.85 * shape.wide) * 8 * I * level * (1 + 0.5 * sg) * k * k;
       }
     },
     dispose() {

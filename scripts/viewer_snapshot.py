@@ -334,6 +334,8 @@ def main() -> int:
                 # sub-steps so event crossings spawn at their true times;
                 # effects animate on battle time, not the wall clock.
                 page.evaluate(FRAME_JS, frame_opts)
+                if args.eval:
+                    page.evaluate(args.eval)
                 n = int(args.sequence / args.every) + 1
                 sub = args.substep
                 t = args.time

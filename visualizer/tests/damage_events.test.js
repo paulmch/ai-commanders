@@ -226,7 +226,7 @@ test('combat log names the new damage: mounts, drive, cook-off, blast victims', 
 // Round 3: impacts on fittings, exit jets, remnant, drive transients
 // ---------------------------------------------------------------------------
 import { blastRemnantAt, REMNANT_LIFE_S } from '../src/render/BlastShell.js';
-import { plumeTransient, TRANSIENT_RATE } from '../src/render/Torch.js';
+import { plumeIgnition, IGNITION_STEP, IGNITION_S } from '../src/render/Torch.js';
 import { Interpolator } from '../src/Interpolator.js';
 import { EXIT_MAX_BEAMS } from '../src/render/DamageFX.js';
 
@@ -281,14 +281,26 @@ test('remnant glow and drive transients are pure functions of battle time / the 
   assert.ok(mid.level > late.level && late.level > 0 && mid.r < 13 * 0.5 && late.cool > mid.cool);
   assert.deepEqual(blastRemnantAt(8, 13), mid);
 
-  assert.deepEqual(plumeTransient(0), { surge: 0, fade: 0 });
-  assert.deepEqual(plumeTransient(undefined), { surge: 0, fade: 0 });
-  assert.deepEqual(plumeTransient(TRANSIENT_RATE * 2), { surge: 1, fade: 0 });
-  assert.deepEqual(plumeTransient(-TRANSIENT_RATE / 2), { surge: 0, fade: 0.5 });
+  // light-off flash: a blink at the throat after a throttle step up, none on a cutoff
+  assert.equal(plumeIgnition(0.2, 0.2, 0), 0);
+  assert.equal(plumeIgnition(1, 0, 0), 0, 'a cutoff is instant and dark');
+  assert.equal(plumeIgnition(0, 1, -0.1), 0);
+  assert.equal(plumeIgnition(undefined, 1, undefined), 0);
+  assert.equal(plumeIgnition(0, IGNITION_STEP * 2, 0), 1);
+  assert.ok(plumeIgnition(0, 1, IGNITION_S * 3) < 0.06, 'gone within a few tenths of a second');
+  assert.equal(plumeIgnition(0.1, 0.6, 0.05), plumeIgnition(0.1, 0.6, 0.05));
   // the slope comes from two neighbouring trace frames, the same at any playhead in between
   const f = (thrust) => ({ pos: [0, 0, 0], vel: [0, 0, 0], fwd: [0, 0, 1], thrust });
   const at = (a) => Interpolator.interpolateShips({ t: 10, ships: { s: f(0.2) } }, { t: 11, ships: { s: f(1.0) } }, a).s;
   assert.ok(Math.abs(at(0.1).thrustRate - 0.8) < 1e-12 && Math.abs(at(0.9).thrustRate - 0.8) < 1e-12);
+  // the throttle the plume follows is the engine's: frame t carries the tick
+  // that ends on it, so it holds over (t0, t1] - a step at t0, never a fade
+  assert.equal(at(0).throttle, 0.2);
+  assert.equal(at(1e-6).throttle, 1.0);
+  assert.equal(at(0.5).throttle, 1.0);
+  assert.equal(at(1).throttle, 1.0);
+  assert.equal(at(0.5).throttleFrom, 0.2);
+  assert.ok(Math.abs(at(0.25).throttleAge - 0.25) < 1e-12 && at(0).throttleAge === 0);
   assert.ok(Math.abs(at(0.5).thrust - 0.6) < 1e-12);
 });
 
