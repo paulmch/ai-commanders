@@ -87,9 +87,25 @@ Each of the nine hull classes has its own design, drawn to scale in faction live
 
 *Point-defense lasers dwell on an inbound torpedo while another round strikes the hull (cinematic scale: the two battleships are about 20 km apart).*
 
-![A torpedo cruiser with its launch cells open: three rounds lighting their torches tens of metres off the hull, a fourth still drifting clear on puffs of cold gas](docs/images/readme/launch-sequence.png)
+![A torpedo cruiser one second into a four-cell salvo: four units drifting off their open launch cells](docs/images/readme/launch-cells.png)
 
-*A torpedo leaves its own cell, drifts clear on its thrusters, turns onto its target and only then lights its torch: four seconds after a four-cell salvo three rounds light, while the round from the bank facing away is still turning about.*
+*A torpedo is ejected from its own launch cell and drifts clear of the hull.*
+
+![The four units tens of metres out, white puffs from their manoeuvring thrusters as they push clear and turn](docs/images/readme/launch-separation.png)
+
+*It clears the hull on its own thrusters and turns onto its target.*
+
+![Two units lighting their torches with a hard white flash beside the cruiser, a third already streaking away, a fourth still turning](docs/images/readme/launch-ignition.png)
+
+*It lights its engine only once it is clear, typically 4 to 5 s after launch; the round from the cell facing away from the target turns about first and lights later.*
+
+![The cruiser small at left, the salvo's torch trails running side by side toward the target](docs/images/readme/launch-tracks.png)
+
+*Seconds later the salvo is a set of parallel tracks running at the target.*
+
+![A corvette with a torpedo drifting off its port rail, the rack one round short](docs/images/readme/launch-rail.png)
+
+*A corvette's rail round leaves the same way: off the rail, clear on its thrusters, then the torch.*
 
 ![A battleship's reactor breach: an orange fireball inside an expanding shock shell, debris streaks, and a sister ship's engine plume crossing the blast](docs/images/readme/reactor-breach.jpg)
 
