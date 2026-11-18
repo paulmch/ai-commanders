@@ -253,14 +253,15 @@ class TestAfterRetarget:
         _steps(sim, 120)
         assert [e.target_id for e in _events(sim, SimulationEventType.TORPEDO_IMPACT)] == ["b2"]
 
-    @pytest.mark.xfail(strict=True, reason=(
-        "DEFECT: _retarget_torpedo accepts the swing because can_intercept says "
-        "the lateral steer leaves >= the 1.12 km/s reserve, but the COLLISION "
-        "guidance first burns the round back up to its MIN_CLOSING_SPEED_KPS "
-        "(12 km/s) cruise floor along the line of sight - about 1.6 km/s here - "
-        "and arrives dry: an 8.7 km miss on a target that never moves off its "
-        "course. The gate does not charge the closure deficit."))
     def test_accepted_retarget_onto_a_passive_receding_target_hits(self):
+        """Was the audit's DEFECT (xfail): the pre-link rule accepted the
+        swing because can_intercept said the lateral steer left >= the 1.12
+        km/s reserve, but the COLLISION guidance first burned the round back
+        up to its 12 km/s cruise floor along the line of sight (~1.6 km/s
+        here) and arrived dry - an 8.7 km miss on a target that never moved.
+        A datalink reassignment sets the cruise floor to the closure the
+        round has plus its spare beyond the reserve (torpedo.cruise_floor_kps),
+        so it never burns the reserve to regain speed."""
         sim, flight, cand = _cruise_floor_scenario(Vector3D(1_600, 0, 0))
         torp = flight.torpedo
         reserve = max(sim.RETARGET_MIN_RESERVE_KPS,
@@ -274,8 +275,20 @@ class TestAfterRetarget:
         assert MIN_CLOSING_SPEED_KPS - closure > left
         _steps(sim, 1)
         assert _retargets(sim) == [("b1", "b2")]
+        assert flight.torpedo.cruise_floor_override_kps < MIN_CLOSING_SPEED_KPS
         _steps(sim, 120)
         assert [e.target_id for e in _events(sim, SimulationEventType.TORPEDO_IMPACT)] == ["b2"]
+
+    def test_pre_link_rule_still_misses_the_receding_target(self):
+        """The measurement switch (torpedo_datalink = False) keeps the old
+        per-round rule exactly - including its cruise-floor miss."""
+        sim, flight, cand = _cruise_floor_scenario(Vector3D(1_600, 0, 0))
+        sim.torpedo_datalink = False
+        _steps(sim, 1)
+        assert _retargets(sim) == [("b1", "b2")]
+        assert flight.torpedo.cruise_floor_override_kps is None
+        _steps(sim, 120)
+        assert not _events(sim, SimulationEventType.TORPEDO_IMPACT)
 
 
 def _cruise_floor_scenario(cand_velocity):
@@ -340,20 +353,25 @@ class TestChoiceSymmetry:
         b = flight.torpedo.can_intercept(sim.get_ship("stbd").position, Vector3D(0, 0, 0))
         assert a == b
 
-    @pytest.mark.xfail(strict=True, reason=(
-        "Order dependence (minor): _retarget_torpedo keeps the FIRST of equally "
-        "scored candidates (strict '>' over self.ships insertion order), so "
-        "two mirror-image candidates go to whichever hull was added first. "
-        "Side-symmetric (both sides use their enemy's insertion order) but "
-        "against the 'not on insertion order' invariant; a stable key "
-        "(e.g. ship_id) as tie-break would fix it."))
     def test_tie_break_does_not_depend_on_insertion_order(self):
+        """Was an xfail: the pre-link rule kept the FIRST of equally scored
+        candidates in self.ships insertion order. The datalink breaks ties
+        by ship id."""
         picks = []
         for order in (["port", "stbd"], ["stbd", "port"]):
             sim, flight = _tie_sim(order)
             _steps(sim, 1)
             picks.append(flight.torpedo.target_id)
-        assert picks[0] == picks[1]
+        assert picks[0] == picks[1] == "port"   # the smaller id
+
+    def test_pre_link_rule_tie_follows_insertion_order(self):
+        picks = []
+        for order in (["port", "stbd"], ["stbd", "port"]):
+            sim, flight = _tie_sim(order)
+            sim.torpedo_datalink = False
+            _steps(sim, 1)
+            picks.append(flight.torpedo.target_id)
+        assert picks == ["port", "stbd"]
 
     def test_retarget_is_deterministic_for_a_seed(self):
         def run():

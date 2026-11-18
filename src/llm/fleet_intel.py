@@ -81,16 +81,21 @@ NO_ENERGY_GJ = 5.0
 # at a receding evading ship"): such a solution is never better than POOR.
 RECEDING_KPS = 0.5
 
-# Rounds a target needs to die, from the measured salvo doctrine ("4 rounds
-# kill a destroyer; 6 rounds kill anything up to a dreadnought" -
-# ADMIRAL_DOCTRINE, re-measured by tests/test_doctrine_accuracy.py).
-KILL_ROUNDS_LIGHT = 4
-KILL_ROUNDS_HEAVY = 6
-LIGHT_HULLS = frozenset({"corvette", "frigate", "destroyer"})
-# The per-round impact energy those counts were measured at ("SIZING at
-# moderate closure (~22 GJ/round ...)"). A slower round needs proportionally
-# more company - a lower bound, since a weak round also penetrates worse.
-KILL_ROUNDS_REF_GJ = 22.0
+# Rounds a target needs to die and the per-round energy they were measured at:
+# ONE engine-side estimate (src/torpedo_link.py) shared by the torpedo
+# datalink, the captain's fire solution and this admiral economy.
+try:
+    from ..torpedo_link import (  # noqa: F401  (re-exported)
+        KILL_ROUNDS_LIGHT, KILL_ROUNDS_HEAVY, LIGHT_HULLS, KILL_ROUNDS_REF_GJ,
+        kill_rounds, kill_rounds_at,
+    )
+    from .. import torpedo_link as _torpedo_link
+except ImportError:  # pragma: no cover - script-style imports
+    from torpedo_link import (  # noqa: F401
+        KILL_ROUNDS_LIGHT, KILL_ROUNDS_HEAVY, LIGHT_HULLS, KILL_ROUNDS_REF_GJ,
+        kill_rounds, kill_rounds_at,
+    )
+    import torpedo_link as _torpedo_link
 
 
 # =============================================================================
@@ -304,15 +309,10 @@ def torpedo_specs_for(sim: Any, fleet_data: Optional[Dict[str, Any]],
 def turrets_to_blind(fleet_data: Optional[Dict[str, Any]], cross_kps: float) -> int:
     """
     PD turrets that must dwell on ONE round crossing the envelope at
-    ``cross_kps`` to seeker-kill it (same closed form the PD doctrine quotes:
-    pd_doctrine_numbers / PDLaser.energy_before_impact_j).
+    ``cross_kps`` to seeker-kill it (src/torpedo_link.turrets_to_blind: the
+    continuous-dwell closed form the PD doctrine quotes).
     """
-    spec = ((fleet_data or {}).get("weapon_types") or {}).get("pd_laser") or {}
-    laser = PDLaser.from_fleet_data(spec) if spec else PDLaser()
-    per_turret = laser.energy_before_impact_j(laser.range_km, max(1.0, cross_kps) * 1000.0)
-    if per_turret <= 0:
-        return 99
-    return max(1, math.ceil(TORPEDO_ELECTRONICS_THRESHOLD_J / per_turret))
+    return _torpedo_link.turrets_to_blind(cross_kps, fleet_data)
 
 
 def pd_range_m(fleet_data: Optional[Dict[str, Any]]) -> float:
@@ -497,21 +497,6 @@ def torpedo_solution(
     else:
         sol.verdict = "GOOD"
     return sol
-
-
-def kill_rounds(ship_type: Optional[str], hull_pct: Optional[float] = None) -> int:
-    """Simultaneous rounds that kill this hull (salvo doctrine), less if crippled."""
-    base = KILL_ROUNDS_LIGHT if (ship_type or "") in LIGHT_HULLS else KILL_ROUNDS_HEAVY
-    if hull_pct is not None and hull_pct < 50.0:
-        base = max(2, base // 2)
-    return base
-
-
-def kill_rounds_at(rounds: int, energy_gj: Optional[float]) -> int:
-    """``rounds`` (sized at KILL_ROUNDS_REF_GJ each) rescaled to rounds that land ``energy_gj``."""
-    if energy_gj and 0.0 < energy_gj < KILL_ROUNDS_REF_GJ:
-        return math.ceil(rounds * KILL_ROUNDS_REF_GJ / energy_gj)
-    return rounds
 
 
 # =============================================================================

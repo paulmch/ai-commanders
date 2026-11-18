@@ -80,6 +80,11 @@ DEFAULT_PAIRS = [("torpedo", "gunline"), ("torpedo", "battleline"),
                  ("torpedo", "swarm")]
 OPTIONS = ["baseline", "reserve0", "scaled", "floorgate", "nofloor",
            "nofloor_r0", "dying", "dying_nofloor"]
+# The engine as built (pass 5): no link (the pre-link rule, = baseline),
+# sprint with the datalink, every launch on the reserve profile with the link.
+BUILT = {"p5_nolink": {"AIC_TORPEDO_DATALINK": "0"},
+         "p5_link": {"AIC_TORPEDO_DATALINK": "1"},
+         "p5_reserve": {"AIC_TORPEDO_DATALINK": "1", "AIC_TORPEDO_PROFILE": "reserve"}}
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +92,11 @@ OPTIONS = ["baseline", "reserve0", "scaled", "floorgate", "nofloor",
 # ---------------------------------------------------------------------------
 
 def apply_option(option: str) -> None:
+    if option in BUILT:
+        os.environ.update(BUILT[option])
+        return
+    # the investigation's counterfactuals patch the PRE-link per-round rule
+    os.environ["AIC_TORPEDO_DATALINK"] = "0"
     from src import simulation as S
     from src import torpedo as T
     CS = S.CombatSimulation
@@ -272,8 +282,8 @@ def run_battle(task: Dict[str, Any]) -> Dict[str, Any]:
     out = dict(task)
     try:
         calib.load_engine(ROOT)
-        if task["option"] != "baseline":
-            apply_option(task["option"])
+        apply_option(task["option"]) if task["option"] != "baseline" else \
+            os.environ.update({"AIC_TORPEDO_DATALINK": "0"})
         log: Dict[str, Any] = {"rounds": {}}
         if task.get("instrument", True):
             instrument(log)
@@ -312,8 +322,12 @@ def run_battle(task: Dict[str, Any]) -> Dict[str, Any]:
         sim = runner.simulation
         ET = E["EventType"]
         launched, fate = {}, {}
+        rt_events = defaultdict(list)
         for e in sim.events:
             d = e.data or {}
+            if e.event_type == ET.TORPEDO_RETARGETED:
+                rt_events[d["torpedo_id"]].append({"t": e.timestamp, "to": d["new_target_id"],
+                                                   "reason": d.get("reason")})
             if e.event_type == ET.TORPEDO_LAUNCHED:
                 launched[d["torpedo_id"]] = {"src": e.ship_id, "target": d.get("target_id")
                                              or e.target_id, "t": e.timestamp}
@@ -325,6 +339,10 @@ def run_battle(task: Dict[str, Any]) -> Dict[str, Any]:
                 fate.setdefault(d.get("torpedo_id"), "destroyed")
         for tf in sim.torpedoes:
             fate.setdefault(tf.torpedo_id, "in_flight_at_end")
+        deaths = {}
+        for e in sim.events:
+            if e.event_type in (ET.SHIP_DYING, ET.SHIP_DESTROYED) and e.ship_id not in deaths:
+                deaths[e.ship_id] = e.timestamp
         rounds = []
         for tid, info in launched.items():
             r = log["rounds"].get(tid, {})
@@ -332,7 +350,7 @@ def run_battle(task: Dict[str, Any]) -> Dict[str, Any]:
                            "fate": fate.get(tid, "unknown"),
                            "orphan_episodes": r.get("orphan_episodes", []),
                            "attempts": r.get("attempts", 0), "gates": r.get("gates", []),
-                           "retargets": r.get("retargets", []),
+                           "retargets": rt_events.get(tid, []),
                            "hulk_homing": r.get("hulk_homing", False),
                            "impact": r.get("impact")})
         ships = {**runner.alpha_ships, **runner.beta_ships}
@@ -341,6 +359,7 @@ def run_battle(task: Dict[str, Any]) -> Dict[str, Any]:
                 for f, fl in (("alpha", runner.alpha_ships), ("beta", runner.beta_ships))}
         out.update(winner=result.winner, reason=result.reason,
                    duration_s=round(result.duration_s, 1), lost=lost, rounds=rounds,
+                   deaths=deaths,
                    n_events=len(sim.events), n_ships=len(ships), error=None)
     except BaseException as exc:
         out.update(winner=None, error=f"{type(exc).__name__}: {exc}",
@@ -373,6 +392,15 @@ def summarize(results: List[Dict[str, Any]]) -> Dict[str, Any]:
             c["gun_side_wins"] += r["winner"] == gun_side[0]
             c["torp_side_lost_ships"] += r["lost"][ts]
             c["gun_side_lost_ships"] += r["lost"][gun_side[0]]
+        if len(torp_sides) == 1 and gun_side:
+            c["torp_side_rounds_fired"] += sum(1 for x in r["rounds"] if x["side"] == ts)
+            c["torp_side_rounds_hit"] += sum(1 for x in r["rounds"]
+                                             if x["side"] == ts and x.get("impact"))
+            c["torp_vs_gun_battle_s"] += r["duration_s"]
+            for sid, t in (r.get("deaths") or {}).items():
+                if sid.startswith(gun_side[0]):
+                    for cut in (150, 200, 300):
+                        c[f"gun_side_lost_by_{cut}s"] += t <= cut
         for x in r["rounds"]:
             c["launched"] += 1
             c[f"fate_{x['fate']}"] += 1
@@ -386,15 +414,20 @@ def summarize(results: List[Dict[str, Any]]) -> Dict[str, Any]:
                 if imp and imp["dying"]:
                     c["homed_on_hulk_hit_hulk"] += 1
             eps = x["orphan_episodes"]
-            orphaned = bool(eps) or bool(x["retargets"])
+            if any(rt.get("reason") == "datalink_surplus" for rt in x["retargets"]):
+                c["diverted_surplus"] += 1
+                if imp and imp["ship"] in [rt["to"] for rt in x["retargets"]]:
+                    c["diverted_surplus_hit"] += 1
+            lost_rts = [rt for rt in x["retargets"] if rt.get("reason") != "datalink_surplus"]
+            orphaned = bool(eps) or bool(lost_rts)
             if not orphaned:
                 continue
             c["orphaned"] += 1
             first = eps[0] if eps else None
-            if x["retargets"]:
+            if lost_rts:
                 c["retargeted"] += 1
-                c["retargeted_multi"] += len(x["retargets"]) > 1
-                if imp and imp["ship"] in [rt["to"] for rt in x["retargets"]]:
+                c["retargeted_multi"] += len(lost_rts) > 1
+                if imp and imp["ship"] in [rt["to"] for rt in lost_rts]:
                     c["retargeted_hit_new_target"] += 1
                 elif imp:
                     c["retargeted_hit_other"] += 1
