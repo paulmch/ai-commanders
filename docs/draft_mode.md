@@ -58,20 +58,22 @@ tactical manual before they spend a point:
 
 Rounds whose target dies (or becomes a dying hulk) are reassigned by the
 fleet datalink (`src/torpedo_link.py`), as a GROUP: each reachable hull gets
-the rounds it still needs (`rounds_needed`: PD soak + rounds to kill, minus
-the live rounds already homing on it), the rest go to the best reachable
-hull. Reachable means the engine's `can_intercept` with at least
-`0.25 + 0.02 * t_go` km/s (cap 1.12) left after the steer. Fresh seekers
-keep the most fuel, PD-singed ones take the fastest intercept. A sprint
-round has spent most of its tank on closure by mid-flight (it reaches ~22 km
-abeam 200 km out); a `reserve`-profile round keeps ~6 km/s until its last
-20 s (~112 km abeam 200 km out), and reserve rounds beyond what their target
-needs are diverted before it dies. Measured in seeded rule-based battles:
-58% of rounds lost their target in flight, 61% of those were reassigned,
-54% of the reassigned hit. Before pass 5 the per-round rule recovered about
-39% of orphans (52% of those hit); in one LLM battle (p5w5_b3) 8 of 28.
-Spacing units beyond an orphan's steering envelope still turns enemy
-overkill back into waste.
+the rounds it still needs (`need_for` + 1 margin: PD soak + rounds to kill on
+the rounds' forecast impact, minus the live rounds that arrive there first),
+the rest go to the least over-subscribed reachable hull. Reachable: the
+engine's `can_intercept`, the steer flown as a finite burn, and at least
+`0.25 + 0.02 * t_go` km/s (cap 1.12) left after it. Fresh seekers keep the
+most fuel, PD-singed ones take the fastest intercept. A sprint round from a
+launcher at rest reaches ~16 km abeam when its target is lost 200 km out; a
+`reserve` round keeps ~6 km/s until its last 20 s (~106 km abeam), less from
+a closing launcher (~52 km), and reserve rounds beyond what their target
+needs are diverted before it dies. The captain's OVERKILL line and the
+admiral's economy quote the same board. Measured in seeded rule-based
+battles: 58% of rounds lost their target in flight, 69% of those were
+reassigned, 56% of the reassigned hit; 73% of diverted reserve rounds hit.
+Before pass 5 the per-round rule recovered about 39% of orphans (52% of those
+hit); in one LLM battle (p5w5_b3) 8 of 28. Spacing units beyond an orphan's
+steering envelope still turns enemy overkill back into waste.
 
 ## Point costs (src/llm/fleet_draft.py)
 
