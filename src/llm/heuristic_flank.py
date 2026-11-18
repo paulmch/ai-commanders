@@ -85,6 +85,31 @@ FLANK_DOCTRINES: Dict[str, FlankSpec] = {
 }
 
 
+_SWEEP = None
+
+
+def flank_spec(name: Optional[str]) -> Optional[FlankSpec]:
+    """The FlankSpec of a named doctrine, or of a parameter-sweep name:
+    'pincer{angle}c{range_km}' / 'pincer{angle}r{range_km}' (station range)
+    and 'envelop{angle}' - used by the experiment runner to re-derive the
+    thresholds; None for a non-flank doctrine."""
+    global _SWEEP
+    if not name:
+        return None
+    if name in FLANK_DOCTRINES:
+        return FLANK_DOCTRINES[name]
+    import re
+    if _SWEEP is None:
+        _SWEEP = (re.compile(r"^pincer(\d+)[cr](\d+)$"), re.compile(r"^envelop(\d+)$"))
+    m = _SWEEP[0].match(name)
+    if m:
+        return FlankSpec("pincer", float(m.group(1)), float(m.group(2)))
+    m = _SWEEP[1].match(name)
+    if m:
+        return FlankSpec("envelop", float(m.group(1)))
+    return None
+
+
 def _alive(s: Any) -> bool:
     return tactics._alive(s)
 

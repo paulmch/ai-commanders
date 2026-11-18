@@ -65,10 +65,10 @@ def groups_for(types: List[str], faction: str, doctrine: str) -> Dict[str, str]:
     """ship id -> group for a roster flown by ``doctrine`` (as the doctrine assigns it)."""
     from src.llm.battle_runner import load_fleet_data
     from src.llm.fleet_draft import name_drafted_ships
-    from src.llm.heuristic_flank import FLANK_DOCTRINES, assign_groups
+    from src.llm.heuristic_flank import assign_groups, flank_spec
     from src.physics import Vector3D
     from src.simulation import create_ship_from_fleet_data
-    spec = FLANK_DOCTRINES.get(doctrine)
+    spec = flank_spec(doctrine)
     drafted = name_drafted_ships(types, faction)
     if spec is None:
         return {d.ship_id: "hold" for d in drafted}
@@ -231,8 +231,8 @@ def analyze(rec: Dict[str, Any], job: Dict[str, Any]) -> Dict[str, Any]:
     # Geometry from the trace: time each flanker first reaches its station
     # bearing (|bearing - angle| <= 12 deg off the defender's facing axis);
     # the defender's facing (nose within 30 deg of a flanker vs of the main group).
-    from src.llm.heuristic_flank import FLANK_DOCTRINES
-    spec = FLANK_DOCTRINES.get(job["doc_a"])
+    from src.llm.heuristic_flank import flank_spec
+    spec = flank_spec(job["doc_a"])
     want_deg = spec.angle_deg if spec is not None else None
     reach: Dict[str, float] = {}
     face_f = face_m = samples = 0

@@ -83,7 +83,7 @@ class HeuristicCaptain(LLMCaptain):
         super().__init__(config, client=None)  # never calls an LLM
         self._last_target_id: Optional[str] = None
         doctrine = doctrine or DEFAULT_DOCTRINE
-        if doctrine not in DOCTRINES:
+        if doctrine not in DOCTRINES and flank.flank_spec(doctrine) is None:
             raise ValueError(f"unknown heuristic doctrine {doctrine!r} (one of {DOCTRINES})")
         self.doctrine = doctrine
         self._decision_interval = 30.0
@@ -513,7 +513,7 @@ class HeuristicCaptain(LLMCaptain):
                         evade) -> Optional[Dict[str, Any]]:
         """Maneuver for the experimental flank doctrines (heuristic_flank),
         or None to fly the tactical doctrine's."""
-        spec = flank.FLANK_DOCTRINES.get(self.doctrine)
+        spec = flank.flank_spec(self.doctrine)
         if spec is None:
             return None
         st = flank.flank_state(self._sim, ship.faction, spec)
