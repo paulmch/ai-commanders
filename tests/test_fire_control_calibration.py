@@ -86,15 +86,21 @@ RESIDUALS = {
     # shorter range, over-charges the longest flights (neither a cap nor a
     # power law on it fitted better held out); HEADING burners at 300-399 km
     # less (1.66x, 5 hits of 32 rounds).
-    # HOLD_RANGE + dodge (evadeburn): the range keeper's overlay swings its
-    # correction burns but jinks at full throttle between them (below
-    # simulation.EVADE_BURN_MIN_THROTTLE the order counts as engine-off) - a
-    # mixture neither dodge model describes (firecontrol.SWING_*_FRACTION
-    # comment). Same split as dodge:PADLOCK: a lone shooter beyond 300 km
-    # lands more than forecast (19 hits for 11.4), fleet fire at 400-499 km
-    # less (29 for 51.4).
-    ("harness", "dodge:HOLD_RANGE:alone", 3): (0.45, 0.8),
-    ("harness", "dodge:HOLD_RANGE:fleet", 4): (1.4, 2.2),
+    # The evade overlay on a burning order (evadeburn round 2). Thin buckets
+    # beyond 300 km swing with which few engagements land in them: on harness
+    # seeds the fixture does not hold (runs 200-255 per shooter count, the
+    # review's calib_fresh) the same buckets read HEADING alone 300-399
+    # 1.16x, INTERCEPT alone 300-399 1.25x (4 hits), INTERCEPT fleet 400-499
+    # 0.88x, HOLD_RANGE fleet 300-399 1.19x and 400-499 2.67x (4 hits). Each
+    # band holds both seed sets. HOLD_RANGE dodgers under a fleet's fire
+    # beyond 400 km are hit less than forecast in both (the dodge:PADLOCK
+    # fleet residual's family: a range keeper jinks at full throttle between
+    # its swung correction burns).
+    ("harness", "dodge:HEADING:alone", 3): (0.5, 1.3),
+    ("harness", "dodge:INTERCEPT:alone", 3): (1.1, 2.6),
+    ("harness", "dodge:INTERCEPT:fleet", 4): (0.8, 1.8),
+    ("harness", "dodge:HOLD_RANGE:fleet", 3): (1.1, 2.5),
+    ("harness", "dodge:HOLD_RANGE:fleet", 4): (2.0, 3.6),
     ("battle", "PADLOCK", 4): (0.5, 0.8),
     ("battle", "HEADING:attitude", 3): (0.5, 0.8),
     ("battle", "HEADING:burn", 3): (1.3, 2.1),

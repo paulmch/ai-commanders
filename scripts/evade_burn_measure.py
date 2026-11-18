@@ -31,7 +31,8 @@ ticks; d60/d120/d240 = km moved along the line; close60/close120 = closing
 speed (km/s) on the nearest shooter at 60 / 120 s (rows alive then); side60 =
 speed across the line at 60 s (km/s); swing_pct / old_overlay_pct = ticks under fire
 with the burn swung / with the older overlay flying; max_off_deg = largest nose
-angle off the line on a swung tick; min_range /
+angle off the line on a swung tick; swing_off5_pct = swung ticks with the nose
+more than 5 deg off the line; min_range /
 range_end = km to
 the nearest shooter; hit_pct = hits / rounds fired at the target; pen =
 penetrating hits; loc = hits by facing; dead = runs the target died in.
@@ -135,7 +136,7 @@ def run(job):
     disp = {}
     closing = {}
     side = {}
-    swing_ticks = old_ticks = 0
+    swing_ticks = old_ticks = swing_off5 = 0
     max_off = 0.0
     min_range = float("inf")
     hits = []
@@ -161,6 +162,7 @@ def run(job):
                 on_order += app >= 0.5 and tgt.forward.dot(d) >= math.cos(math.radians(30))
                 if getattr(tgt, "evade_swing", False):
                     swing_ticks += 1
+                    swing_off5 += math.degrees(tgt.forward.angle_to(d)) > 5.0
                     max_off = max(max_off, math.degrees(tgt.forward.angle_to(d)))
                 elif tgt.execution_mode in EVASION_OVERLAY_MODES:
                     old_ticks += 1
@@ -180,7 +182,7 @@ def run(job):
     rng_end = min((tgt.position - s.position).magnitude for s in shooters) / 1000.0
     return dict(scen=scen, hull=hull, evade=evade, seed=seed, under=under, burn_half=burn_half,
                 burn_full=burn_full, on_order=on_order, closing=closing, side=side,
-                swing_ticks=swing_ticks, old_ticks=old_ticks, max_off=max_off, along=along, disp=disp, min_range=min_range, range_end=rng_end,
+                swing_ticks=swing_ticks, old_ticks=old_ticks, swing_off5=swing_off5, max_off=max_off, along=along, disp=disp, min_range=min_range, range_end=rng_end,
                 hits=hits, shots=shots, died=died, a=a_full)
 
 
@@ -229,6 +231,8 @@ def summarise(rows):
                     close120=_mean([r["closing"].get(120, r["closing"].get("120")) for r in g]),
                     side60=_mean([r["side"].get(60, r["side"].get("60")) for r in g]),
                     swing_pct=round(100 * sum(r["swing_ticks"] for r in g) / max(1, under), 1),
+                    swing_off5_pct=round(100 * sum(r.get("swing_off5", 0) for r in g)
+                                         / max(1, sum(r["swing_ticks"] for r in g)), 1),
                     old_overlay_pct=round(100 * sum(r["old_ticks"] for r in g) / max(1, under), 1),
                     max_off_deg=round(max(r["max_off"] for r in g), 1),
                     d240=round(mean_disp(240), 1),
