@@ -50,7 +50,8 @@ uv run python scripts/run_live_draft_battle.py --alpha-model claude-sonnet-5-5 \
 Free battles fly `HeuristicCaptain` (`src/llm/heuristic_captain.py`). Its default
 "tactical" doctrine picks one plan per fleet at its first checkpoint from the two
 compositions (`heuristic_flank.choose_default_spec`, constants with their measurements in
-`src/llm/heuristic_flank.py`): against a dreadnought line (>= 30 % of the enemy's gun energy
+`src/llm/heuristic_flank.py`): a gun fleet facing a torpedo fleet (>= half its hulls
+torpedo-only) flies "classic" (close fast, kill the boats); against a dreadnought line (>= 30 % of the enemy's gun energy
 on hulls <= 0.9 g) with 2+ fast hulls it flies the cut-corner pincer (fast hulls to 70 deg off
 the enemy's facing at 150 km, heavies hold as a wall at 230 km, then all engage); against a
 battleship line (>= 50 % on hulls <= 1.05 g) it flies "classic" (`heuristic_tactics.py`:

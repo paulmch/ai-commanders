@@ -200,3 +200,15 @@ def test_the_flag_ship_announces_the_battle_plan_once():
     sim.current_time += 30.0
     flag.decide("alpha_1", sim)
     assert not any(m["text"].startswith("Battle plan") for m in flag.outbox if m["tool"] == "fleet_signal")
+
+
+def test_a_gun_fleet_closes_fast_on_a_torpedo_fleet():
+    sim = CombatSimulation(seed=9, time_step=1.0)
+    _fleet(sim, "alpha", ["destroyer", "cruiser", "frigate"], 0)
+    _fleet(sim, "beta", ["cruiser_torpedo", "corvette", "corvette", "frigate"], 500)
+    assert F.default_spec(sim, "alpha") == F.CLASSIC_SPEC
+    # Two torpedo fleets: no special rule (the wall keeps its boats' standoff).
+    sim2 = CombatSimulation(seed=9, time_step=1.0)
+    _fleet(sim2, "alpha", ["cruiser_torpedo", "corvette", "frigate"], 0)
+    _fleet(sim2, "beta", ["cruiser_torpedo", "corvette", "frigate"], 500)
+    assert F.default_spec(sim2, "alpha") == F.WALL_SPEC

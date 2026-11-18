@@ -134,6 +134,68 @@ self-play the torpedo-heavy rosters now mostly end in mutual surrender once both
 stalling at zero closure between 81 and 245 km, a withdrawal order that was not flown under fire,
 a disarmed ship fleeing until the time limit); all were addressed.
 
+### The flank experiment, and the default it produced (`src/llm/heuristic_flank.py`)
+
+The owner asked whether a split / pincer beats the static nose-on wall the LLM fleets fly. The
+experiment (`scripts/flank_experiment.py`: mirror or asymmetric rosters, both side assignments,
+hit facing, flanker costs by phase, closest approach) answered it on the current engine (weapon
+arcs, rotation with angular momentum, evade-on-burn, torpedo datalink, first checkpoint at T+0):
+
+- A plain wall (close at <= 0.8 km/s to 140 km, then PADLOCK the nearest armed enemy) is no
+  longer stronger than the previous default ("classic": focus fire, nose-first passes): on
+  tuning seeds classic beat it on battleship lines (battleline 12/1/3, combined 14/2/0, escort
+  9/4/3) and lost on fast lines and dreadnought lines (gunline 5/1/10, core_fast 3/5/8,
+  dread_fast 2/4/10).
+- Every cut-corner pincer (fast hulls wide at 45/70/90 degrees off the enemy's facing, station
+  80-150 km, heavies holding as a wall at 230 km until the attack run) beat the wall 16/0/0 on
+  the dreadnought rosters and was mixed or lost elsewhere. A dreadnought needs ~50 s per 90
+  degrees and rolls slowly: it cannot re-face a flanker in time, and a lateral hit penetrates
+  10-60 times as often as a nose hit (0.6 vs 0.01-0.06 per hit on those rosters). Battleships
+  (37 s per 90 degrees) and anything faster re-face in time. 70 degrees at 150 km killed 100 for
+  23 losses over 32 battles (110 km 93-48, 80 km 86-51, 250 km outside the guns 55-17 with far
+  fewer kills). Positioning outside the guns is nearly free (0-60 hits per 24 battles) but
+  slow (frigates ~210-240 s, destroyers ~260-300 s to the bearing), so the wall re-faces anyway.
+- The two-axis torpedo strike (boats on two bearings 70 degrees apart) no longer pays with the
+  torpedo datalink: split v classic 4/0/12 on the torpedo roster. It stays an option.
+
+The default ("tactical") therefore picks one plan per fleet at its first checkpoint from the two
+compositions (mirror battles choose the same plan and the same split on both sides; flat-RNG
+mirror probes stay exact mirror images, equal scores, for the wall, close-and-pass and pincer
+rosters): close-and-pass against a torpedo fleet when it is a gun fleet (a wall closing at
+0.8 km/s lost 2/1/21 to legacy torpedo boats where close-and-pass won 14/2/8), the pincer
+against a dreadnought line (>= 30 % of the enemy's gun energy on hulls <= 0.9 g) when it has 2+
+fast hulls, close-and-pass against a battleship line (>= 50 % on hulls <= 1.05 g), the wall
+otherwise. `classic`, `legacy` (bit for bit) and the fixed variants stay selectable.
+
+Held-out seeds 21-26 (24 battles per cell: 2 budgets x 6 seeds x both sides; families: slow
+capital = flagship, dread_fast; battleship lines = battleline, combined, escort; fast =
+gunline, core_fast; torpedo; torpedo against gun), new default (A) against:
+
+| family / roster | v wall | v classic | v legacy | v itself |
+|---|---|---|---|---|
+| dreadnought: flagship | 24/0/0 (84-9) | 20/4/0 | 19/1/4 | 9/6/9 |
+| dreadnought: dread_fast | 24/0/0 (55-25) | 24/0/0 | 19/4/1 | 8/8/8 |
+| battleship: battleline | 21/0/3 | 8/8/8 (same plan) | 9/5/10 | 8/8/8 |
+| battleship: combined | 17/7/0 | 4/16/4 (same plan) | 24/0/0 | 4/16/4 |
+| battleship: escort | 15/5/4 | 8/8/8 (same plan) | 15/2/7 | 8/8/8 |
+| fast: gunline | 9/6/9 (same plan) | 10/3/11 | 8/2/14 | 9/6/9 |
+| fast: core_fast | 11/7/6 | 11/9/4 | 7/7/10 | 7/10/7 |
+| torpedo mirror | 4/16/4 | 16/4/4 | 24/0/0 | 4/16/4 |
+| torpedo against gun (A torpedo) | 24/0/0 | 24/0/0 | 24/0/0 | 24/0/0 |
+
+The torpedo-fleet rule was added after this grid and validated on fresh seeds 31-36: an A gun
+fleet against a legacy torpedo fleet now wins gunline 15/2/7 and core_fast 13/0/11, flagship
+loses 4/1/19; against the current torpedo boats (wall or classic) every gun fleet loses
+0/0/24, whatever its plan - the torpedo-vs-gun balance, not a doctrine choice.
+
+Where the default is worse than what it replaces: against legacy on the fast and battleship
+lines it is no better than classic (gunline 8/2/14 v classic's 4/8/12, battleline 9/5/10 the
+same plan), and on the dreadnought roster flagship it is a little weaker than classic against
+legacy (19/1/4 v 23/1/0) though it beats classic itself 20/4/0. It never loses to the plain
+wall on any family. All held-out numbers were measured before the flip burn-through change of
+`wt5/evadeburn`; the flankers flip and burn a lot, so the pincer rows (and the thresholds sweep,
+`flank_experiment.py --pairs pincer70c150:wall ...`) must be re-run once it lands.
+
 ### Engine defects found by invariant checks
 
 Thirteen seeded battles were checked against the engine's own rules. Six confirmed defects were

@@ -116,6 +116,10 @@ PINCER_ANGLE_DEG = 70.0
 PINCER_STATION_KM = 150.0
 HEAVY_ENEMY_ACCEL_G = 1.05
 HEAVY_LINE_SHARE = 0.5
+# A gun fleet facing a TORPEDO fleet (>= TORPEDO_FLEET_SHARE of its hulls
+# torpedo-only) must close fast and kill the boats: a wall closing at
+# 0.8 km/s lost 2/1/21 to legacy on held-out seeds where classic won 14/2/8.
+TORPEDO_FLEET_SHARE = 0.5
 # The two-axis torpedo strike no longer paid on the current engine (torpedo
 # datalink, sprint profile): split v classic 4/0/12 on the torpedo roster.
 DEFAULT_SPLIT_BOATS = False
@@ -145,15 +149,24 @@ def capital_energy_share(ships: List[Any]) -> float:
     return energy_share_at_or_below(ships, CAPITAL_ACCEL_G)
 
 
+def torpedo_hull_share(ships: List[Any]) -> float:
+    """Share of these hulls that fight with torpedoes only."""
+    return (sum(1 for s in ships if tactics.role(s) == "torpedo") / len(ships)) if ships else 0.0
+
+
 def fast_hull_count(ships: List[Any]) -> int:
     return sum(1 for s in ships if tactics.role(s) == "gun" and full_accel_g(s) >= FLANKER_MIN_ACCEL_G)
 
 
 def choose_default_spec(friends: List[Any], enemies: List[Any]) -> Optional[FlankSpec]:
     """The default doctrine's plan from the two compositions alone (so a
-    mirror battle chooses the same plan on both sides): the pincer against a
-    dreadnought line when we have the flankers, the classic close-and-pass
-    against a battleship line, else the wall. None = classic."""
+    mirror battle chooses the same plan on both sides): the classic
+    close-and-pass against a torpedo fleet (when we are not one) and against a
+    battleship line, the pincer against a dreadnought line when we have the
+    flankers, else the wall. None = classic."""
+    if (torpedo_hull_share(enemies) >= TORPEDO_FLEET_SHARE
+            and torpedo_hull_share(friends) < TORPEDO_FLEET_SHARE):
+        return CLASSIC_SPEC
     if (energy_share_at_or_below(enemies, PINCER_ENEMY_ACCEL_G) >= PINCER_CAPITAL_SHARE
             and fast_hull_count(friends) >= PINCER_MIN_FAST_HULLS):
         return PINCER_SPEC
