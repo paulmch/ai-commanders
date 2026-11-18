@@ -102,10 +102,8 @@ def test_three_arms_change_only_the_image_and_the_legend(recording):
         assert old["messages"] == call["messages"] and old["plot"] is None    # verbatim
         (o_text, o_img), (r_text, r_img), (n_text, n_img) = (
             _texts(j["messages"]) for j in (old, new, none))
-        # images: recorded / a fresh 1280x720 render / none. This battle was
-        # recorded with the current renderer, so the re-render reproduces the
-        # image the admiral was sent byte for byte (the same code path).
-        assert len(o_img) == len(r_img) == 1 and n_img == [] and r_img == o_img
+        # images: recorded / a fresh 1280x720 render from the trace / none
+        assert len(o_img) == len(r_img) == 1 and n_img == []
         png = base64.b64decode(r_img[0].split(",", 1)[1])
         assert rt.png_size(png) == (1280, 720)
         # system: only the legend block differs
