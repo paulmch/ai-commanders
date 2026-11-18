@@ -16,7 +16,7 @@ from src.simulation import CombatSimulation, Maneuver, ManeuverType, create_ship
 from src.llm import heuristic_tactics as T
 from src.llm.captain import LLMCaptainConfig
 from src.llm.heuristic_captain import (
-    DOCTRINE_LEGACY, DOCTRINE_TACTICAL, HEURISTIC_MODEL, HeuristicCaptain)
+    DOCTRINE_CLASSIC, DOCTRINE_LEGACY, DOCTRINE_TACTICAL, HEURISTIC_MODEL, HeuristicCaptain)
 from src.llm.prompts import CaptainPersonality
 
 FLEET = json.loads((Path(__file__).parent.parent / "data" / "fleet_ships.json").read_text())
@@ -193,7 +193,7 @@ def test_gun_ship_faces_the_nearest_gun_and_shoots_the_target():
     slow = _ship(sim, "slow", "battleship", "beta", (110, 30, 0), fwd=(-1, 0, 0))
     slow.armor.get_section("nose").thickness_cm = 0.0   # breached: the fleet's kill
     _ship(sim, "gun", "frigate", "beta", (90, -30, 0), fwd=(-1, 0, 0))
-    captain = _captain("destroyer")
+    captain = _captain("destroyer", DOCTRINE_CLASSIC)
     m = _maneuver(captain.decide("me", sim))
     assert captain.primary_target_id == "slow"
     # The nose faces the nearest gun at the hull's gun aspect (weapon arcs).
@@ -413,11 +413,11 @@ def test_tactical_battle_is_deterministic(tactical_battle, tmp_path):
 
 def test_the_plan_is_announced_on_the_fleet_net():
     sim = _salvo_sim(2)
-    flag = _captain("cruiser_torpedo", name="a0")
+    flag = _captain("cruiser_torpedo", DOCTRINE_CLASSIC, name="a0")
     flag.decide("a0", sim)
     kinds = [m["kind"] for m in flag.outbox if m["tool"] == "fleet_signal"]
     assert kinds == ["TARGET_CLAIM", "TOT_SYNC"]
-    other = _captain("cruiser_torpedo", name="a1")
+    other = _captain("cruiser_torpedo", DOCTRINE_CLASSIC, name="a1")
     other.decide("a1", sim)
     assert not other.outbox                      # one voice per fleet
 
@@ -618,7 +618,7 @@ def test_fixture_and_calibration_scripts_default_to_legacy():
     spec.loader.exec_module(gtb)
     assert inspect.signature(gtb.hud_comms_battle).parameters["doctrine"].default == DOCTRINE_LEGACY
     text = (root / "calibrate_torpedo_cost.py").read_text()
-    assert '"--doctrine", choices=("legacy", "tactical"), default="legacy"' in text
+    assert '"--doctrine", choices=("legacy", "classic", "tactical"), default="legacy"' in text
     assert 'heuristic_doctrine={"alpha": task.get("doctrine", "legacy")' in text
 
 
@@ -673,7 +673,17 @@ def test_the_formation_throttle_is_what_the_ship_flies():
 # hand over to RCS at a rate RCS can stop, uncommanded ticks brake the spin
 # on RCS, the presentation search is merged/closed-form, and the forecast
 # splits calm and reacting dodgers; legacy captain unchanged.)
-LEGACY_GOLDEN_SHA256 = "57d05a77bb84a0aa0cf3482839ee306c3d29004e3f2cebb84cdf1c8db9d12575"
+# (Re-pinned for the pass-5 schedule (owner "Move to T+0"): checkpoint 1 at
+# T+0 and the last checkpoint's orders fly their interval, so every event is
+# ~30 s earlier and the battle no longer idles its first window; same hash on
+# Python 3.11 and 3.12. The final integration pass re-records it.)
+# (Re-pinned for the torpedo launch sequence (wt5/launchseq, src/torpedo_launch.py):
+# rounds leave their rack / cell and light their torch ~4 s later, new
+# torpedo_launched fields and torpedo_ignition events, separating rounds are
+# nobody's threat; the legacy captain itself is unchanged. With
+# AIC_LAUNCH_SEQUENCE=0 the stream still hashes to the previous pin fc73668f...;
+# same hash on Python 3.11 and 3.12.)
+LEGACY_GOLDEN_SHA256 = "56c33845202dc0dec6d628159d12615a1a7a0aa2a01e2299c4c0ec7341fb791b"
 
 
 def test_legacy_battle_event_stream_is_pinned(tmp_path):
@@ -788,7 +798,7 @@ def test_a_coasting_gun_ship_holds_its_aspect_not_nose_on():
     sim = CombatSimulation(seed=12, time_step=1.0)
     me = _ship(sim, "me", "cruiser", "alpha", (0, 0, 0), vel_kps=(1.0, 0, 0))
     _ship(sim, "foe", "cruiser", "beta", (120, 0, 0), fwd=(-1, 0, 0))
-    m = _maneuver(_captain("cruiser").decide("me", sim))
+    m = _maneuver(_captain("cruiser", DOCTRINE_CLASSIC).decide("me", sim))
     assert m.maneuver_type == ManeuverType.HEADING and m.throttle == 0.0     # attitude only
     h = m.heading_direction
     off = math.degrees(math.acos(h["x"] / math.sqrt(h["x"] ** 2 + h["y"] ** 2 + h["z"] ** 2)))

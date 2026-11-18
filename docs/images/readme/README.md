@@ -3,9 +3,11 @@
 Captured from the Three.js viewer on November 15, 2026 (pass-5 viewer: sun
 shadows, image-based fill, ambient occlusion, new hulls and effects) with
 headless Chromium (Playwright, SwiftShader WebGL) at 1600 × 900 with
-`--gfx high`. `hero.png`, `dreadnought.png`, `plume-wash.png` and the four
-`damage-*` images were captured on November 17, 2026 at the viewer's default
-hull scale (`auto`: real-size hulls up close); see [Hull scale](#hull-scale). The two live-mode images (`live-deliberation.png`,
+`--gfx high`. `damage-bow.png`, `damage-mounts.jpg` and `damage-cookoff.png`
+were captured on November 17, 2026; `hero.png`, `dreadnought.png`,
+`plume-wash.png`, `damage-hulk.png` and the new `launch-sequence.png` on
+November 18, 2026 (the one-piece drive plume, the torpedo launch sequence), all at the viewer's default hull scale
+(`auto`: real-size hulls up close); see [Hull scale](#hull-scale). The two live-mode images (`live-deliberation.png`,
 `draft-splash.png`) are still the October 25, 2026 captures. These are
 application screenshots: ship states, ordnance, damage, HUD text and commander
 messages come from the recorded battles. Nothing is painted in or retouched;
@@ -28,7 +30,8 @@ filters/scrolling, and for `command-net.png` a 2× device-scale crop.
 | `blast-shell.jpg` | Pass-5 damage demo | 152.6s | Reactor blast of `beta_5` (destroyer, killed at 150 s) 2.6 s on: fireball inside the blast shell drawn to the recorded 13 km radius, two escorts beside it, PD lasers still working; 6 hull lengths, azimuth 30°, elevation 18°; HUD hidden |
 | `fittings-hud.png` | Pass-5 damage demo | 180s | OCS Falchion-1 (`beta_2`) selected one second after the frigate TIS Ward-1's reactor blast caught it: kill toast with the blast radius, CAUGHT IN BLAST and DISARMED toasts, fitting pips in the ship registry, FITTINGS block (guns, PD with one damaged turret, drive) in the telemetry card; 5 hull lengths, azimuth 30°, elevation 18° |
 | `dreadnought.png` | Showcase s0 | 96.5s | `alpha_1`, the pass-5 dreadnought, three-quarter view from the sunlit side at full thrust; 3 hull lengths (0.83 km), azimuth −10°, elevation 35°, 20° lens; HUD hidden; scale auto |
-| `plume-wash.png` | Pass-5 plume demo (`p5_plume_demo.json`, scripted `plume_wash` battle) | 62s | From beside the stern of the battleship `alpha_1` (lower left, torch lit) down its exhaust jet to the destroyer `alpha_2` 6 km astern, glowing in the wash, with its own jet beyond it; camera 1.1 hull lengths ahead of the battleship's centre, 0.5 above, 1.5 to port, looking 14 lengths astern; HUD hidden; scale auto |
+| `launch-sequence.png` | Launch showcase (`p5_plume2_launch_showcase.json.gz`, scripted `launch_showcase` battle) | 34.1s | The torpedo cruiser `alpha`, flank to its target, 4.1 s after emptying one cell of each VLS bank: three rounds lighting their torches 55-75 m off the hull, the round from the bank facing away still turning about on its RCS (it lights at 37 s); open hatches on the banks; 1.6 hull lengths, azimuth 60°, elevation 20°; HUD hidden; scale auto |
+| `plume-wash.png` | Pass-5 plume demo (`p5_plume_demo.json`, scripted `plume_wash` battle) | 62s | From beside the stern of the battleship `alpha_1` (lower left, torch lit) down its exhaust: one beam from the bells, fading with distance, to the destroyer `alpha_2` 6 km astern, glowing in the wash; camera 1.1 hull lengths ahead of the battleship's centre, 0.5 above, 1.5 to port, looking 14 lengths astern; HUD hidden; scale auto |
 | `damage-bow.png` | Sonnet 5 vs Sonnet 5.5, battle d | 297.6s | Bow of `alpha_1` (Sonnet 5's battlecruiser) after 35 nose hits, 8 of them penetrations (the last at 297 s), all five mounts wrecked; its magazine burns at 298 s. Camera 0.66 hull lengths ahead of the centre, 0.2 above, 0.3 to port, looking at the bow; HUD hidden; scale auto |
 | `damage-mounts.jpg` | Sonnet 5.5 vs Sonnet 5, battle c | 478s | `beta_1` (Sonnet 5's battleship) from above the bow, 27 s after its forward magazine cooked off (451 s): scorched deck, heavy battery `weapon_3` (destroyed at 453 s) smoking, two breaches venting; camera 0.35 lengths ahead, 0.55 above, 0.45 to port; HUD hidden; scale auto |
 | `damage-cookoff.png` | Sonnet 5.5 vs Sonnet 5, battle c | 451.9s | The forward magazine of `beta_1` cooking off (`magazine_cookoff` at 451 s); camera 1.1 lengths ahead, 0.3 above, 0.8 to port; HUD hidden; scale auto |
@@ -46,7 +49,7 @@ below carry `--query scale=cinematic` so they still reproduce.
 
 | Scale | Images |
 | --- | --- |
-| auto (default: real-size hulls up close) | `hero.png`, `dreadnought.png`, `plume-wash.png`, `damage-bow.png`, `damage-mounts.jpg`, `damage-cookoff.png`, `damage-hulk.png` |
+| auto (default: real-size hulls up close) | `hero.png`, `dreadnought.png`, `plume-wash.png`, `launch-sequence.png`, `damage-bow.png`, `damage-mounts.jpg`, `damage-cookoff.png`, `damage-hulk.png` |
 | cinematic (hulls ~60x oversize) | `hull-lineup.png`, `fleet-battle.png`, `torpedo-salvo.png`, `reactor-breach.jpg`, `dying-hulk.png`, `command-net.png`, `intent-consequence.png`, `blast-shell.jpg`, `fittings-hud.png`, `torpedo-strike.png`, `live-deliberation.png`, `draft-splash.png` |
 
 What was re-shot and why. `hero.png` and `dreadnought.png` are close-ups of
@@ -65,6 +68,26 @@ captions it as such. The other images are HUD shots or scenes where the scale
 mode does not change what the caption claims; the root README marks the ones
 where oversize hulls are visible against real-size blasts as cinematic.
 
+November 18 re-shoot (drive plume, same commands). The exhaust is now one
+light field from the bells outward (`visualizer/src/render/PlumeProfile.js`):
+the flame and the spear beyond it both start at the nozzle and only fade, so
+the November 17 frames' detached haze is gone. In `hero.png` and
+`dreadnought.png` the eight dreadnought plumes are hotter white-blue lances
+with a glow at the bells; in
+`plume-wash.png` the battleship's exhaust is a single beam that fades from
+the bells to the washed destroyer instead of a flame, a dark gap and a pale
+cloud around the destroyer. The two dreadnought frames were taken from the
+staged copy of the same battle, `p4c_vfix_showcase_s0.json` (substitute it
+for `showcase_s0_200pt.json` in the commands if that file is not staged).
+The other frames with a lit torch were re-shot the same day with their
+commands as written: `dying-hulk.png`, `damage-hulk.png`, `reactor-breach.jpg`,
+`torpedo-salvo.png`, `blast-shell.jpg`, `fittings-hud.png`, `torpedo-strike.png`
+and `intent-consequence.png` (the showcase s7 frames from its staged copy
+`p4c_vfix_showcase_s7.json`). Besides the torch they show the current viewer's
+point-defence beams and HUD layout. `fleet-battle.png` and `command-net.png`
+(torches a few pixels long) were not re-shot: their recordings were not
+staged.
+
 ## Recordings
 
 - Claude Sonnet 5 vs DeepSeek V4.1 Flash: `sonnet5_vs_dsv41flash_150pt_20260926.json.gz` (live run of September 26, 2026)
@@ -78,6 +101,8 @@ where oversize hulls are visible against real-size blasts as cinematic.
 - Pass-5 damage demo: `p5_damage_demo.json`, a seeded heuristic fleet battle
   (regeneration command in
   [`docs/pass-5-recording-additions.md`](../../pass-5-recording-additions.md))
+- Launch showcase: `p5_plume2_launch_showcase.json.gz` (`scripts/generate_test_battle.py launch_showcase`,
+  also in `data/recordings/`)
 - Pass-5 plume demo: `p5_plume_demo.json` (`scripts/generate_test_battle.py plume_wash`,
   see [`docs/pass-5-recording-additions.md`](../../pass-5-recording-additions.md))
 - Pass-5 tactics showcase: `p5_readme_torpedo_strike.json` (heuristic captains, `tactical`
@@ -159,6 +184,10 @@ $SNAP --recording p5_damage_demo.json --query "ship=beta_2&scale=cinematic" --ti
 $SNAP --recording showcase_s0_200pt.json --time 96.5 --focus alpha_1 --dist 3.0 --az -10 --el 35 --hide-ui \
   --eval "(() => { $TRACKS_OFF; const c = window.visualizer.scene.camera; c.fov = 20; c.updateProjectionMatrix(); })()" \
   --out dreadnought.png
+
+# launch-sequence.png
+$SNAP --recording p5_plume2_launch_showcase.json.gz --time 34.1 --focus alpha --dist 1.6 --az 60 --el 20 \
+  --hide-ui --eval "$TRACKS_OFF" --out launch-sequence.png
 
 # plume-wash.png
 $SNAP --recording p5_plume_demo.json --time 62 --hide-ui \

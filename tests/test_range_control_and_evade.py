@@ -32,6 +32,7 @@ from src.llm.range_control import (
     analyze_range_control,
     admiral_range_control,
     captain_range_control,
+    format_heading_options,
     formation_heading_maneuvers,
     formation_throttles,
     ship_accel_ms2,
@@ -252,7 +253,7 @@ class TestPrecomputedHeadings:
         group = analyze_range_control(sim, [me])[0]
         assert group.stop_km == pytest.approx(359.5, abs=1.0)   # 4.6^2 / (2 * 3 g)
         assert "pass wide" in text and "set_heading(" in text
-        assert "TAIL to enemy" in text and "nose armor 212 cm" in text
+        assert "TAIL to enemy" in text and "nose 212 cm" in text
 
     def test_early_warning_while_braking_still_works(self):
         sim = CombatSimulation(seed=3, time_step=1.0)
@@ -740,23 +741,31 @@ class TestCaptainBlockSize:
         assert [i.names for i in infos] == [["near"], ["far"]]
         assert infos[0].warning and not infos[1].warning and infos[1].closing_kps > 0
         text = captain_range_control(sim, me)
-        assert self._group_lines(text, "GROUP A") == [
-            "cancel closure", "open range", "pass wide", "flank left", "flank right",
+        # Near-identical vectors are one line (cmdcap: "pass wide" = "flank
+        # right" in 293 recorded turns): every heading is still listed.
+        lines = [l for l in text.splitlines() if l.startswith("  ") and "set_heading(" in l]
+        group_a = lines[:4]
+        assert [l.split(" set_heading(")[0].strip() for l in group_a] == [
+            "cancel closure = open range", "pass wide = flank right", "flank left",
             "coast & shoot"]
         # Closing, no merge: hold the range or turn the guns on him.
         assert self._group_lines(text, "GROUP B") == ["cancel closure", "coast & shoot"]
         # The admiral's fleet view keeps every heading for both groups.
         fleet = admiral_range_control(sim, [me])
-        assert len(self._group_lines(fleet, "GROUP B")) == len(infos[1].options)
+        block = fleet[fleet.index("GROUP B"):]
+        assert all(o.label in block for o in infos[1].options)
 
-    def test_no_armor_numbers_on_burns_for_the_captain(self):
+    def test_every_option_line_shows_the_armor_it_presents(self):
+        # cmdcap C4/C6: every option line carries the same fields (range
+        # effect, face + armor, guns that bear) - coast & shoot used to be
+        # the only one with an armor number.
         from src.llm.range_control import format_range_control
         sim, me = self._two_groups()
         text = captain_range_control(sim, me)
-        assert "cm exposed" not in text
-        assert "TAIL to enemy" in text and "(nose armor " in text   # coast & shoot keeps it
-        ship = format_range_control(analyze_range_control(sim, [me]), who="Ship", max_detail=1)
-        assert "(tail armor " in ship and "cm exposed" in ship
+        assert "TAIL to enemy ~128 s (tail 30 cm)" in text and "(nose 151 cm)" in text
+        ship = format_range_control(analyze_range_control(sim, [me]), who="Ship", max_detail=1,
+                                    armor_on_burns=False)
+        assert "(tail 30 cm)" not in ship and "TAIL to enemy" in ship
 
     @pytest.mark.parametrize("warning,closing,expected", [
         ("MERGE IN 40 s", 2.0, ["cancel", "wide"]),
@@ -785,3 +794,136 @@ class TestCaptainBlockSize:
         system = " ".join(build_captain_doctrine(ship_type="destroyer", fleet_data=FLEET).split())
         assert (f"RANGE CONTROL: every heading for the most urgent group, the "
                 f"{CAPTAIN_SECONDARY_OPTIONS} key ones for the next") in system
+
+
+# =============================================================================
+# The same heading burns with evade: the overlay burns through the turn
+# (owner: "burn through the turn with the percentage given in command.
+# Predictions should account for that")
+# =============================================================================
+
+def _fly_option_evade(sim, ship, opt, evade="full"):
+    t0 = sim.current_time
+    t_end = t0 + opt.turn_s + opt.burn_s
+    h = {"x": opt.heading.x, "y": opt.heading.y, "z": opt.heading.z}
+    while sim.current_time < t_end - 1e-6:
+        if (sim.current_time - t0) % 30.0 < 1e-6:
+            sim.inject_command(ship.ship_id, Maneuver(
+                ManeuverType.HEADING, start_time=sim.current_time,
+                duration=min(30.0, t_end - sim.current_time),
+                throttle=opt.throttle, heading_direction=h, evade=evade))
+        sim.step()
+
+
+class TestEvadeTurnImpulse:
+
+    @pytest.mark.parametrize("own,foe_type,rng,closing", [
+        ("destroyer", "cruiser", 380.0, 1.5),
+        ("battlecruiser", "destroyer", 390.0, 1.0),
+        ("dreadnought", "destroyer", 390.0, 0.5),
+    ])
+    def test_cancel_with_evade_states_the_range_it_flies(self, own, foe_type, rng, closing):
+        # Nose on the enemy, an armed enemy inside EVADE_BURN_GUN_REACH_KM:
+        # the overlay swings, and the 180 deg turn onto the brake heading
+        # burns too - first toward him.
+        sim, me, foe = _duel(own, foe_type, rng, closing)
+        opt = analyze_range_control(sim, [me])[0].option("cancel")
+        assert opt.evade_effect.startswith(
+            f"evade under fire: the {opt.evade_turn_s:.0f} s turn burns too")
+        assert opt.evade_end_range_km < opt.end_range_km     # the wrong-way push costs range
+        _fly_option_evade(sim, me, opt)
+        flown = _range_km(me, foe)
+        assert flown == pytest.approx(opt.evade_end_range_km, rel=0.015)
+        assert abs(flown - opt.evade_end_range_km) < 0.4 * abs(flown - opt.end_range_km)
+        closing_now = (me.velocity - foe.velocity).dot(
+            (foe.position - me.position).normalized())
+        assert closing_now == pytest.approx(opt.evade_closing_mps, abs=70.0)
+
+    def test_open_range_with_evade_states_the_range_it_flies(self):
+        sim, me, foe = _duel("battlecruiser", "destroyer", 390.0, 1.0)
+        opt = analyze_range_control(sim, [me])[0].option("open")
+        assert "turn burns too" in opt.evade_effect
+        _fly_option_evade(sim, me, opt)
+        assert _range_km(me, foe) == pytest.approx(opt.evade_end_range_km, rel=0.01)
+
+    def test_no_evade_clause_when_the_nose_is_already_near_the_heading(self):
+        from src.llm.range_control import EVADE_NOTE_MIN_DEG
+        sim, me, foe = _duel("destroyer", "cruiser", 380.0, 1.5)
+        opt = analyze_range_control(sim, [me])[0].option("cancel")
+        me.kinematic_state.forward = opt.heading
+        again = analyze_range_control(sim, [me])[0]
+        for o in again.options:
+            off = math.degrees(me.forward.angle_to(o.heading))
+            assert bool(o.evade_effect) == (o.throttle > 0 and o.burn_s > 0 and o.key != "face"
+                                            and off >= EVADE_NOTE_MIN_DEG), o.key
+        line = format_heading_options([analyze_range_control(sim, [me])[0]])
+        assert "turn burns too" not in line.split("cancel")[1].split("\n")[0]
+
+    def test_captain_order_check_states_the_turn_impulse_with_evade(self):
+        from unittest.mock import Mock
+        from src.llm.admiral import AdmiralOrder
+        from src.llm.captain import LLMCaptain, LLMCaptainConfig
+        sim, me, foe = _duel("destroyer", "cruiser", 380.0, 1.5)
+        captain = LLMCaptain(LLMCaptainConfig(name="C", ship_name="me", ship_type="destroyer",
+                                              fleet_data=FLEET, model="anthropic/claude-sonnet-5"),
+                             client=Mock())
+        captain.ship_id = "me"
+        back = {"x": -1.0, "y": 0.0, "z": 0.0}
+
+        def order(evade, fleet=None):
+            # Built the way issue_order builds it (admiral._attach_heading).
+            from src.llm.admiral import _attach_heading
+            args = {"ship_name": "me", "order_text": "Brake.", "heading": back, "throttle": 1.0}
+            if evade:
+                args["evade"] = "full"
+            o = AdmiralOrder(target_ship_id="me", target_ship_name="me", order_text="Brake.")
+            _attach_heading(o, args, fleet)
+            return o
+
+        def check(evade):
+            o = order(evade)
+            assert o.heading is not None and bool((o.maneuver or {}).get("evade")) == evade
+            return captain._order_check(o, sim, me, [])["engine"]
+
+        plain, evading = check(False), check(True)
+        turn = sim._estimate_turn_time(me, math.pi, engines_on=True)
+        assert "turn burns too" not in plain
+        assert f"with evade under fire the {turn:.0f} s turn burns too (180° off)" in evading
+        cpa = lambda text: float(text.split("closest approach ")[1].split(" km")[0])
+        # The 180 deg turn sweeps the push through the beam: the evade burn
+        # moves the pass sideways (a merge without evade is not one with it).
+        assert cpa(plain) < MERGE_KM < cpa(evading)
+        # Flown: the heading with evade for the turn plus one checkpoint, then coasting.
+        sim.inject_command("me", Maneuver(ManeuverType.HEADING, start_time=0.0,
+                                          duration=turn + 30.0, throttle=1.0,
+                                          heading_direction=back, evade="full"))
+        closest = float("inf")
+        for _ in range(450):
+            sim.step()
+            if sim.current_time >= turn + 30.0 and me.current_maneuver.maneuver_type != \
+                    ManeuverType.MAINTAIN:
+                _coast(me)
+            closest = min(closest, _range_km(me, foe))
+        assert closest == pytest.approx(cpa(evading), rel=0.15)
+
+    def test_formation_headings_carry_no_evade_clause(self):
+        # An "all ships" order holds every burn until the synced start: flown
+        # with evade the hull comes round first and lands near the plain
+        # statement, so the fleet-centre rows (admiral HEADINGS, MCP) and the
+        # captain's check of a formation order state no turn impulse.
+        from src.llm.range_control import formation_heading_maneuvers
+        sim, me, foe = _duel("battlecruiser", "destroyer", 390.0, 1.0)
+        opt = analyze_range_control(sim, [me], formation=True)[0].option("cancel")
+        assert opt.evade_effect == "" and opt.evade_end_range_km is None
+        assert "turn burns too" not in admiral_range_control(sim, [me])
+        t0 = sim.current_time
+        t_end = t0 + opt.turn_s + opt.burn_s
+        h = {"x": opt.heading.x, "y": opt.heading.y, "z": opt.heading.z}
+        while sim.current_time < t_end - 1e-6:
+            if (sim.current_time - t0) % 30.0 < 1e-6:
+                m = formation_heading_maneuvers(sim, [me], h, opt.throttle,
+                                                duration=min(30.0, t_end - sim.current_time))
+                m[me.ship_id].evade = "full"
+                sim.inject_command(me.ship_id, m[me.ship_id])
+            sim.step()
+        assert _range_km(me, foe) == pytest.approx(opt.end_range_km, rel=0.04)

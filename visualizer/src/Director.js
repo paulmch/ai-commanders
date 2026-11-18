@@ -43,6 +43,9 @@ function distKm(a, b) {
   return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) / 1000;
 }
 
+/** A salvo shot holds this long after its last round's torch lights (launch sequence). */
+export const SALVO_AFTER_LIGHTOFF_S = 2.5;
+
 /**
  * Scored highlights of a recording, sorted by time (ties: score, then id).
  * Kinds: kill (one or a chain of reactor blasts), dying (a hulk waiting to
@@ -66,6 +69,7 @@ export function buildHighlights(events = [], deathInfo = {}, { simTrace = null, 
     return deaths.get(id);
   };
   const launches = new Map();    // faction -> launches
+  const ignitions = new Map();   // torpedo id -> torch light-off (pass-5 launch sequence)
   const impacts = new Map();     // target -> impacts
   const mounts = new Map();      // ship -> Map(slot -> destroyed)
   const washes = new Map();      // "ship|emitter" -> open episode
@@ -97,6 +101,9 @@ export function buildHighlights(events = [], deathInfo = {}, { simTrace = null, 
         if (Array.isArray(d.position)) k.position = d.position;
         break;
       }
+      case 'torpedo_ignition':
+        if (d.torpedo_id && !ignitions.has(d.torpedo_id)) ignitions.set(d.torpedo_id, t);
+        break;
       case 'torpedo_launched': {
         const f = factionOf(e.ship_id);
         if (!launches.has(f)) launches.set(f, []);
@@ -253,7 +260,11 @@ export function buildHighlights(events = [], deathInfo = {}, { simTrace = null, 
           kind: 'salvo', t: causal ? group.at(-1).timestamp : group[0].timestamp, tLast: group.at(-1).timestamp,
           score: 40 + 2 * group.length - 6 * Math.min(3, nth),
           subject: hero, target: top(targets)[0]?.[0] || null,
-          others: ranked.filter(id => id !== hero), count: group.length
+          others: ranked.filter(id => id !== hero), count: group.length,
+          // the last round's torch light-off: the launch sequence takes 3-8 s
+          // (recorded torpedo_ignition; only with lookahead - a live shot is
+          // never stretched by events that arrive after it started)
+          lit: causal ? null : group.reduce((m, e) => Math.max(m, ignitions.get(e.data?.torpedo_id) ?? -Infinity), -Infinity)
         });
         nth++;
         i = j + 1;
@@ -358,7 +369,8 @@ function candidatesFor(h, lookahead, deathTime) {
     }
     case 'salvo':
       return [{ ...base, type: 'shoulder', target: h.target, count: h.count,
-        start: lookahead ? h.t - 1.5 : h.t, end: (h.tLast ?? h.t) + 5 }];
+        start: lookahead ? h.t - 1.5 : h.t,
+        end: Math.max((h.tLast ?? h.t) + 5, Number.isFinite(h.lit) ? h.lit + SALVO_AFTER_LIGHTOFF_S : -Infinity) }];
     case 'cookoff':
       return [{ ...base, type: 'orbit', start: lookahead ? h.t - 1.5 : h.t, end: h.t + 3.5, impacts: [h.t] }];
     case 'disarmed':

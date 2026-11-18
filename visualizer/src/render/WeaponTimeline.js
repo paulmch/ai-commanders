@@ -10,6 +10,53 @@ export const IMPACT_LIFE = 0.46;
 /** Loader torpedo moments this module renders itself (main.js skips them). */
 export const OWNED_MOMENTS = new Set(['seeker_kill', 'intercepted', 'destroyed', 'burnout']);
 export const SHUTTER = 0.085;
+
+/**
+ * Body-frame (x forward, y port, z dorsal) vector -> world, for a ship
+ * whose recorded nose is `fwd` and dorsal `up` (null: the viewer's
+ * implicit roll, nose plus world +Z as near-dorsal). Writes out[0..2].
+ */
+export function bodyToWorld(fwd, up, v, out = [0, 0, 0]) {
+  let fx = fwd?.[0] ?? 1, fy = fwd?.[1] ?? 0, fz = fwd?.[2] ?? 0;
+  const fm = Math.hypot(fx, fy, fz) || 1;
+  fx /= fm; fy /= fm; fz /= fm;
+  let ux = up?.[0] ?? 0, uy = up?.[1] ?? 0, uz = up?.[2] ?? 1;
+  let d = ux * fx + uy * fy + uz * fz;
+  ux -= d * fx; uy -= d * fy; uz -= d * fz;
+  let um = Math.hypot(ux, uy, uz);
+  if (um < 1e-6) { ux = -fz; uy = 0; uz = fx; d = 0; um = Math.hypot(ux, uy, uz) || 1; }
+  ux /= um; uy /= um; uz /= um;
+  // port = up x forward
+  const px = uy * fz - uz * fy, py = uz * fx - ux * fz, pz = ux * fy - uy * fx;
+  const [x, y, z] = v;
+  out[0] = fx * x + px * y + ux * z;
+  out[1] = fy * x + py * y + uy * z;
+  out[2] = fz * x + pz * y + uz * z;
+  return out;
+}
+
+/**
+ * The launch state of a sequence round (pass-5 torpedo_launched fields) at
+ * its launch time `t`, from its ship's recorded state there: at its rack
+ * round / cell (eject_pos_m turned with the hull), moving with the ship plus
+ * the hull's spin at that point (omega x r) plus eject_speed_mps along
+ * eject_dir, nose = the round's nose at rest turned with the hull. The
+ * engine's own eject start (src/torpedo_launch.py); the trace's first frame
+ * is one tick of straight drift from here. null without the fields.
+ */
+export function launchState(launch, ship, omega) {
+  if (!launch?.ejectPos || !ship) return null;
+  const r = bodyToWorld(ship.fwd, ship.up, launch.ejectPos);
+  const e = bodyToWorld(ship.fwd, ship.up, launch.ejectDir || [0, 0, 0]);
+  const n = bodyToWorld(ship.fwd, ship.up, launch.nose || [1, 0, 0]);
+  const w = omega || [0, 0, 0], v = launch.speed ?? 10;
+  const spin = [w[1] * r[2] - w[2] * r[1], w[2] * r[0] - w[0] * r[2], w[0] * r[1] - w[1] * r[0]];
+  return {
+    pos: [ship.pos[0] + r[0], ship.pos[1] + r[1], ship.pos[2] + r[2]],
+    vel: [0, 1, 2].map(k => (ship.vel?.[k] || 0) + spin[k] + v * e[k]),
+    nose: n
+  };
+}
 /**
  * Torpedo misses that skip off the drawn plating ("duds"). The viewer's
  * hulls are ~8x the sim's, so a round that missed the real hull by less
@@ -423,7 +470,18 @@ export class WeaponTimeline {
       }
       if (e.event_type === 'torpedo_launched') {
         tr.start = e.timestamp;
+        // Pass-5 launch sequence: which rack round / cell, and how it left
+        if (Array.isArray(d.eject_pos_m)) {
+          tr.launch = { t: e.timestamp, ship: e.ship_id, mount: d.mount ?? null, round: d.round ?? null,
+            ejectPos: d.eject_pos_m, ejectDir: d.eject_dir || null, nose: d.nose || null, speed: d.eject_speed_mps ?? 10 };
+        }
         this.moments.push({ time: e.timestamp, kind: 'ignition', track: tr, seed: tr.seed });
+      }
+      if (e.event_type === 'torpedo_ignition') {
+        // the torch lights (start of the tick; the trace's next frame burns)
+        tr.ignitionAt = e.timestamp;
+        tr.ignition = { gapM: Number.isFinite(d.own_gap_m) ? d.own_gap_m : null, reason: d.reason || null, delay: d.delay_s ?? null };
+        this.moments.push({ time: e.timestamp, kind: 'lightoff', track: tr, seed: tr.seed });
       }
       if (e.event_type === 'torpedo_fuel_exhausted') {
         this.moments.push({ time: e.timestamp, kind: 'burnout', track: tr, seed: tr.seed });
@@ -493,6 +551,7 @@ export class WeaponTimeline {
     }
     for (const tr of this.torpedoes.values()) {
       if (tr.end === Infinity && tr.samples.at(-1).t < this.end) tr.end = tr.samples.at(-1).t + 1;
+      this.prependLaunch(tr);
       tr.thrusters = buildTorpedoThrusters(tr.samples);
     }
     // Rounds that did not hit: draw the ones whose recorded line crosses
@@ -526,6 +585,26 @@ export class WeaponTimeline {
    */
   threatsAt(time, out = new Map()) {
     out.clear();
+    for (const r of this.roundsAt(time, this._tr || (this._tr = []))) {
+      let e = out.get(r.target);
+      if (!e) out.set(r.target, e = { count: 0, live: 0, blind: 0, eta: Infinity, rangeKm: Infinity });
+      e.count++;
+      if (r.blind) e.blind++; else e.live++;
+      e.rangeKm = Math.min(e.rangeKm, r.range / 1000);
+      e.eta = Math.min(e.eta, r.eta);
+    }
+    return out;
+  }
+
+  /**
+   * The rounds threatsAt counts, one entry each: {id, target, launch, eta,
+   * range (m), blind, track}. `track` is the round's record, whose
+   * `position` Projectiles sets to the drawn spot each frame (the torpedo-
+   * wave chips, TacticalLayout.groupWaves). Rounds coasting away with a dead
+   * seeker are no threat and left out. Reuses `out`.
+   */
+  roundsAt(time, out = []) {
+    out.length = 0;
     const s = this._ts || (this._ts = makeSample()), g = this._tg || (this._tg = makeSample());
     for (const tr of this.torpedoes.values()) {
       if (time < tr.start || time >= tr.end || !tr.samples.length) continue;
@@ -539,12 +618,7 @@ export class WeaponTimeline {
         ? ((s.vel[0] - g.vel[0]) * dx + (s.vel[1] - g.vel[1]) * dy + (s.vel[2] - g.vel[2]) * dz) / range : 0;
       const blind = time >= tr.disabledAt || !!s.state.disabled;
       if (blind && !(closure > 1)) continue;   // coasting away: no longer a threat
-      let e = out.get(target);
-      if (!e) out.set(target, e = { count: 0, live: 0, blind: 0, eta: Infinity, rangeKm: Infinity });
-      e.count++;
-      if (blind) e.blind++; else e.live++;
-      e.rangeKm = Math.min(e.rangeKm, range / 1000);
-      if (closure > 1) e.eta = Math.min(e.eta, range / closure);
+      out.push({ id: tr.id, target, launch: tr.start, eta: closure > 1 ? range / closure : Infinity, range, blind, track: tr });
     }
     return out;
   }
@@ -559,6 +633,26 @@ export class WeaponTimeline {
       if (list[mid].t <= time) lo = mid; else hi = mid - 1;
     }
     return list[lo];
+  }
+
+  /**
+   * Sequence rounds: a sample at the launch itself (the rack round, see
+   * launchState) ahead of the trace's first frame, so the round is drawn
+   * from its rack at t = launch instead of extrapolated back from 10 m out.
+   * A round launched before ignition data existed keeps its samples.
+   */
+  prependLaunch(tr) {
+    if (!tr.launch || !tr.samples.length || !(tr.samples[0].t > tr.launch.t + 1e-6)) return;
+    const ship = this.ships.get(tr.launch.ship);
+    const sh = ship && makeSample();
+    if (!sh || !sampleTrack(ship, tr.launch.t, sh)) return;
+    // (the ship's turn rate over the tick that starts here is stamped on the frame that ends it)
+    const ls = launchState(tr.launch, sh, sh.next?.omega || sh.state?.omega || null);
+    if (!ls) return;
+    const first = tr.samples[0].state;
+    tr.samples.unshift({ t: tr.launch.t, synthetic: true,
+      state: { ...first, pos: ls.pos, vel: ls.vel, nose: ls.nose, ph: 'eject', thr: 0, rcs: undefined, fwd: undefined } });
+    tr.launch.state = ls;
   }
 
   /**

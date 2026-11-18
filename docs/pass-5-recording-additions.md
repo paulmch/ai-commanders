@@ -971,3 +971,367 @@ OpenRouter entry: `provider` (`"openrouter"`), `model`, `reasoning_effort`,
 `cache` (one-line cache summary), `prompt_tokens`, `cached_tokens`,
 `cache_write_tokens`. For Anthropic models `pricing[model]` is the price-table
 entry (USD per million tokens, `as_of`).
+
+## Admiral command-interface lane (`cmdadm`: admiral, fleet_intel, fleet_draft, admiral_view)
+
+All additions are optional; recordings without them load everywhere as before.
+
+### `draft_auto_trimmed` - an invalid draft trimmed instead of aborting
+
+Recorded on the draft recorder (live draft battles merge it into the battle
+recording) when an admiral's three `select_fleet` attempts were all invalid and its
+LAST fleet was trimmed to validity (`fleet_draft.trim_selection`: unknown hulls,
+then the cheapest hulls, dropped until the fleet fits). `timestamp` 0, `ship_id`
+null. `data`: `faction`, `submitted` (the last `ships` argument as the model sent
+it), `dropped` (hull types, in drop order), `kept` (hull types), `points`,
+`budget`, `max_ships`. The draft sidecar (`draft_summary_dict`) carries the same
+dict as `auto_trimmed`. `run_admiral_draft(allow_trim=False)` turns it off.
+
+### Draw offers on the diplomacy channel
+
+`comms_message` on channel `admiral_diplomacy` (as `message_enemy_admiral`
+traffic) with `kind` `DRAW_PROPOSAL` (once per offer), `DRAW_ACCEPT` (an open
+enemy offer accepted: the battle then ends as a draw) or `DRAW_REJECT` (the
+offer is closed and the proposer is told at its next checkpoint). `text` is one
+sentence ("Admiral X rejects the fleet draw."). An accept with no open offer is
+not recorded (the acceptor is told nothing was open).
+
+### Not recorded, prompt only
+
+The enemy facing, the HEADINGS facing fields, the torpedo defence forecast, the
+clock line, the non-compliance escalation and the (default-off,
+`AdmiralConfig.show_score`) score line are turn-state text; they reach the
+recording only inside `model_call` message assets.
+
+## Command-interface runner lane (`src/llm/call_policy.py`, `src/llm/cost_report.py`)
+
+Experiment plumbing for paid comparisons. Every mode is OFF by default; a
+battle without the new flags sends byte-identical requests
+(`tests/test_call_policy.py::test_default_battle_requests_are_unchanged`) and
+its events differ only by the always-written `role` / `effort` fields below.
+All fields are optional for consumers; older recordings lack them
+(`cost_report.cost_report()` and `scripts/replay_turn.py` infer the role from
+the offered tools).
+
+### New fields on `model_call`
+
+| field | when | meaning |
+|---|---|---|
+| `role` | always | `draft` (select_fleet / set_formation), `directive` (admiral Phase 1), `order` (admiral per-ship call), `captain`, `other` (personality selection, discuss answers) - `call_policy.call_role` |
+| `effort` | when the request carries one | the effort actually sent (`request.output_config.effort`; OpenRouter `reasoning.effort`) |
+| `effort_reason` | effort policy set | `default` (battle-wide effort), `role` (a per-role setting), `trigger:<reasons>` (captain trigger effort; reasons from `call_policy.captain_triggers`: `first`, `torpedo`, `merge`, `conflict`, `damage`, `new_order`), `explicit` (the caller's own effort, e.g. the admiral's retry ladder) |
+| `thinking_summary` | `--thinking-summary` | the API's summarized thinking (`thinking.display: "summarized"`), joined text of the reply's thinking blocks. Audit only: no prompt is ever built from it |
+| `cache_warmup` | `--cache-warmup` | `{usage, cost}` of the `max_tokens: 0` pre-warm this call waited for (billed on its own; `usage.cost` of the call excludes it) |
+
+### `captain_turn_skipped` - a quiet turn (`--quiet-turns`)
+
+The captain was not called this checkpoint: no trigger, no new FLEET NET
+traffic, applied admiral order unchanged. The ship keeps flying its current
+maneuver, renewed for the window as a lost turn renews it. No
+`captain_decision` and no `captain_report` are written for that ship and
+checkpoint.
+
+| field | type | meaning |
+|---|---|---|
+| `faction` | string | side |
+| `captain_name` | string | |
+| `reason` | string | starts `quiet:` |
+| `kept_maneuver` | string or null | e.g. `INTERCEPT@40%` |
+| `renewed` | bool | false when the maneuver was applied this checkpoint (an admiral heading) and flies on unrenewed |
+
+### `battle_stopped` in every runner
+
+`LLMBattleRunner.check_budget()` now stops fleet (sync and MCP) and duel
+battles too when the spend cap refuses a request: `battle_stopped`
+(`reason` starts `Spending ceiling reached`), result DRAW with no winner and
+that reason as `result_reason`; the partial recording is saved as usual. Live
+draft battles keep their own stop (raise, `record_stop`).
+
+### `admiral_order` text in intent-only mode (`--intent-only`)
+
+Orders of an intent-only admiral are made by the runner, not by a model call:
+`order_text` `[INTENT-ONLY] No per-ship order: ...`, no heading or maneuver,
+`torpedo_salvo` / `torpedo_target` only when the directive call ordered a salvo
+for that ship.
+
+### `status.json` (live draft) and `--status-file` (run_llm_battle)
+
+`cost_report`: `{"rows": [{side, role, calls, input, cache_read, cache_write,
+output, thinking, usd, thinking_calls, thinking_share}], "by_side": {...},
+"total": {...}}`; role `warmup` rows are the cache pre-warms. Live draft
+`status.json` also gains `role_models` (`{side: {admiral, captain}}`),
+`effort_policy` and `experiment` (the mode flags).
+
+## Command-interface review (`cmdrev`)
+
+### `provenance.label` and `provenance.config.label`
+
+`--label TEXT` on `scripts/run_live_draft_battle.py` and `scripts/run_llm_battle.py`
+(`BattleConfig.label`): a free-text note naming the experiment the run belongs to.
+Stored as `provenance.label` (absent without `--label`), in `provenance.config`, in
+`status.json` / `--status-file` (`label`) and on both spend-ledger lines (`label`). Never
+part of a prompt.
+
+### `battle_stopped` / `result_reason` after Ctrl-C (live draft)
+
+One SIGINT now closes the request budget (no new model call), lets the calls in flight
+settle, records `battle_stopped` with `reason` `Interrupted (Ctrl-C): ...` and closes the
+spend-ledger line with `status: "interrupted"`. The ledger counts a closed run at
+`max(usd, committed_usd)`.
+
+### `captain_turn_skipped`: kills and losses count as new traffic
+
+A quiet turn is skipped only when no datalink KILL or LOSS line reached the captain this
+checkpoint either (launches, target switches and other datalink lines still do not count).
+
+## Evade-burn lane (`evadeburn`: the evade overlay on a burning order)
+
+Owner's rule (src/simulation.py module docstring): an evade overlay riding on
+an order that burns keeps the burn the whole time and evades by swinging the
+thrust axis inside `EVADE_BURN_CONE_DEG` (20 deg) of the burn line. Nothing
+new is emitted; two existing records gain a field. Recordings without them
+read as before (no swing).
+
+### `execution_state.swing`
+
+| field | type | meaning |
+|---|---|---|
+| `swing` | bool, only when true | the evade overlay has the helm (`mode` EVADE / TANK / BRACE / PRESENT; EVADE also when only an armed enemy within 400 km keeps it swinging) and is swinging the order's burn - the drive lit and the aim off the line - instead of holding it: `applied_throttle` is the throttle the order burns this tick (x engine fraction; `requested_throttle` for a fixed heading, the range keeper's own demand for HOLD_RANGE / standoff), the swing is aimed inside the cone of the burn line (the nose can overshoot it by a few degrees on carried spin; see `off_line`). Absent: the older overlay (an engine-off order or the EVADE maneuver - BRACE drive off, TANK half), or no evasion. |
+
+| `off_line` | bool, only when true (with `swing`) | the nose is still more than the cone plus 10 deg off the burn line (the order's first turn under fire, or turning back after a RUN): the drive burns at the order's throttle while thrust vectoring turns the ship (not along the line yet), however far off the line the nose points (a range keeper notes its correction scaled by cos(angle off)) |
+
+The transition key now includes both, so a change from a held BRACE to a
+swung BRACE at the same throttles is a new `execution_state` event.
+
+### Trace frame field `swing` (per ship, `--trace` recordings)
+
+`swing: 1` next to `evade` on frames where the overlay swings a burn (omitted
+otherwise). The viewer (`render/Rcs.js` `jinkOf`) shows a swung BRACE as an
+armour swing (`JINK_FACE`) instead of a ship holding still.
+
+### `shot_fired.fc.swing`
+
+The fire-control forecast's input for a target swinging a burn: its sideways
+acceleration `burn x sin(cone)` (m/s^2), present only when > 0
+(`TargetMotion.swing_ms2`, priced by `firecontrol.SWING_*_FRACTION`).
+
+## Retarget lane: torpedo launch profiles and the datalink (`src/torpedo.py`, `src/torpedo_link.py`)
+
+### `torpedo_launched.profile`
+
+| field | type | meaning |
+|---|---|---|
+| `profile` | string, only when not the default | the round's launch profile, `"reserve"`. Absent = `"sprint"` (the default, and every recording made before profiles existed), so a sprint launch is byte-identical to before. |
+
+`sprint` builds closure early up to the 12 km/s cruise floor
+(`MIN_CLOSING_SPEED_KPS`); `reserve` cruises at `RESERVE_CRUISE_CLOSING_KPS`
+(8 km/s) and keeps the rest of its delta-v until `RESERVE_TERMINAL_WINDOW_S`
+(20 s) before impact. Trace frames carry the round's `dv_remaining` as before,
+so a viewer can show the held tank.
+
+### `torpedo_retargeted` from the datalink: `reason`, `group`, `group_size`, `profile`
+
+Every reassignment by the datalink is a `torpedo_retargeted` event with the
+existing fields (`torpedo_id`, `old_target_id`, `new_target_id`,
+`distance_km`, `time_to_intercept_s`, `dv_remaining_kps`, `selection_mode`,
+`seeker_heat_fraction`) plus:
+
+| field | type | meaning |
+|---|---|---|
+| `reason` | `"target_lost"` / `"target_surrendered"` / `"datalink_surplus"` | `target_lost`: the round's target was destroyed or became a dying hulk and the side's rounds were reassigned as a group; `target_surrendered`: the same for a target that struck its colours (owner decision: a surrender releases its inbound rounds like a hulk; rounds nothing else is reachable for keep homing on it); `datalink_surplus`: a `reserve`-profile round diverted BEFORE its target died because more rounds were inbound on it than it needs and another hull still needed rounds |
+| `group` | string | the decision it was part of: `"<faction>@<sim time s>:<reason>"`; every round reassigned in the same tick for the same reason shares it |
+| `group_size` | int | rounds reassigned in that group |
+| `profile` | string | the round's launch profile (`sprint` / `reserve`) |
+
+Events without `reason` are the pre-link per-round rule (recordings before
+pass 5, or the measurement switch `AIC_TORPEDO_DATALINK=0`). The viewer reads
+only `ship_id`, `torpedo_id` and `new_target_id` (HudIndex "RETARGET" line);
+the new fields are optional for every consumer.
+
+### Rules the events record
+
+- **The board and what a target needs** (`torpedo_link.need_for` / `kill_count`,
+  `CombatSimulation.torpedo_board`): a target's need is PD soak + rounds to kill,
+  sized on the rounds' FORECAST impact (closure now + the delta-v they will still
+  spend, less 0.5 km/s kept; within ~1 % of the captain's flown shot from a launcher
+  at rest or closing 3 km/s), plus `LINK_KILL_MARGIN_ROUNDS` = 1 (from flown strikes,
+  `scripts/torpedo_link_margin.py`). The captain's OVERKILL line and the admiral's
+  TORPEDO ECONOMY quote the same board (`tests/test_torpedo_datalink.py`
+  `TestOneNeedEstimate` pins that the three agree at the same instant).
+- **Group reassignment** (always on): every tick, per side, the live-seeker
+  rounds (not blinded, not dry) whose target is destroyed, dying or surrendered are planned
+  together, most constrained round first (fewest reachable hulls, then torpedo
+  id), each to the reachable hull with a positive deficit - its need minus the
+  rounds already inbound that ARRIVE BEFORE this one (forecast arrival) minus the
+  rounds assigned to it this tick - with the most delta-v left (a PD-singed seeker:
+  the fastest intercept); with no deficit anywhere, the least over-subscribed hull.
+  Reachable: `can_intercept` within 600 s, the steer flown as a finite burn
+  (impossible above `a * t_go / 2`, cost `a t (1 - sqrt(1 - 2 dv / (a t)))`) and at
+  least `min(1.12, 0.25 + 0.02 * t)` km/s left after it. Rounds with nothing reachable
+  keep homing on a dying hulk, or coast when the target is gone. Ties go to the
+  smaller ship id; the outcome does not depend on ship or round insertion order and
+  is mirror symmetric.
+- **Surplus diversion** (`reserve` rounds only, every 5 s per side): on a hull with
+  more live rounds inbound than it needs + 1, the later arrivals beyond that,
+  not inside 12 s of impact (`LINK_COMMITTED_S`), go to hulls with a positive
+  deficit they can reach. Sprint rounds are never diverted.
+- After a reassignment the round's cruise floor is the closure it already
+  has toward the new hull plus whatever delta-v it holds beyond the
+  reassignment reserve (never above its profile's floor).
+- A reserve round's terminal window is 20 s or the time its held tank takes to
+  burn at its present acceleration, whichever is longer.
+
+### FLEET NET: `comms_message` kind `RETASK`
+
+The engine datalink (sender `FLEET DATALINK`, channel fleet net) tells the
+launching side at the next checkpoint, one line per (reason, old target, new
+target): "5 rounds re-tasked OCS Halberd-1 -> OCS Halberd-3 (target lost), first
+impact ~T+141". Structured: `reason`, `old_target_id`, `new_target_id`, `rounds`,
+`first_impact_t` (s, battle time: reassignment time + time to intercept).
+
+### `captain_report.from_reason` (lane cmdcap, round 2)
+
+Optional, `true` only. The report was not a `report_to_admiral` call: the
+captain gave a `reason` on an action call (set_maneuver / set_heading /
+set_primary_target / launch_torpedo). Such a report is filed as an implicit
+ACK with the reasons in `intent`, and becomes a DEVIATE (implicit false, the
+reasons in `reason`) only when the engine's compliance finds a deviation in
+what a reasoned call did (maneuver / target / salvo). Recordings before this
+change filed every reason-only report as an explicit ACK. The viewer's
+command net shows a `CALL REASON` chip on such rows.
+
+### Schedule: checkpoint 1 at T+0 (`first_checkpoint_s`)
+
+Since the T+0 schedule (owner decision, pass 5) checkpoint 1 is at T+0 and
+checkpoint k at (k-1) x `decision_interval_s`; every checkpoint's orders fly a
+full interval, the last one too, so N checkpoints end at T+N x interval (20 x
+30 s: T+600, was T+630 in live draft battles and T+600 with unflown last orders
+in the others).
+
+| field | where | meaning |
+|---|---|---|
+| `first_checkpoint_s` | recording header | `0.0`; absent on older recordings, whose first checkpoint is one interval in (T+30) |
+| `first_checkpoint_t` | live `/live/recording` block (and `scripts/fake_live_server.py`) | the same for spectators; absent from older servers |
+
+Consumers: `scripts/replay_turn.py` numbers checkpoints from it, the viewer
+counts orders at t=0 as checkpoint 1 (the engine's own `decision_point_reached`
+at t=0 is still not a checkpoint) and numbers the live NEXT CHECKPOINT marker
+from `first_checkpoint_t`. A trace frame is recorded at T+0 before the first
+orders (its plans are re-predicted once they apply, as at every checkpoint).
+
+## Launch-sequence lane (`src/torpedo_launch.py`)
+
+A torpedo no longer lights its torch at its ship's centre on the launch tick.
+It leaves its own rack round / VLS cell, drifts clear on its manoeuvring
+thrusters, turns onto its first guidance heading and only then ignites. Old
+recordings (no fields below) are rounds whose torch burned from the launch
+tick at the ship's centre; every field here is optional and recording only
+(nothing reads it back into the game).
+
+### The sequence (what a viewer animates)
+
+| phase | duration | the round |
+|---|---|---|
+| `eject` | first `LAUNCH_EJECT_S` = 1.0 s | slides off its rail / out of its cell: starts at the round's position on the hull (`data/hull_mounts.json` launcher `rounds[k].pos`, body frame) with the ship's velocity + the hull's spin at that point (omega x r) + `LAUNCH_EJECT_SPEED_MPS` = 10 m/s along `rounds[k].eject`; nose = `rounds[k].nose` turned with the ship (roll included); keeps the ship's spin; no thruster fires |
+| `separate` | until ignition | lateral RCS (the round's own 5 % of main thrust, ~0.6 g) pushes it off the line through its ship along its heading (or brakes it away from a hull it is closing on), and it turns its nose onto the first guidance heading at up to 30 deg/s (30 deg/s^2) |
+| boost | rest of the flight | the torch lights at the START of the first tick on which (start-of-tick ship snapshot): the round is 50 m from its own hull's surface (capsule of `ShipGeometry`), 50 m from every friendly hull within 2 km, its exhaust cone (15 deg half angle, to 5 km) misses its own hull, and its nose is within 10 deg of the heading. After 8 s it lights once it is 50 m off its own hull whatever else holds; at 15 s regardless. A round whose ship is destroyed has no hull to clear. On that first boost tick the torch first cancels the sideways drift the sequence gave the round (velocity off its launcher's, square to the line of sight; ~0.2 s of thrust) |
+
+Seconds from launch to ignition, measured (`scripts/launch_sequence_facts.py`,
+target 500 km, PD off):
+
+| launcher / geometry | corvette (rail rounds, nose forward) | torpedo cruiser (VLS cells, nose radial) |
+|---|---|---|
+| coasting, target ahead | 4 | 4 |
+| coasting, target abeam | 4 | 4 (the cell facing away: 7) |
+| coasting, target astern | 7 (turns about) | 4 |
+| full burn toward the target | 3 (the ship pulls away) | 4 |
+| full burn away from the target | 8 (turns about; 8 s timeout) | 4 |
+| mid-turn / spinning at launch | 4 | 4-5 |
+| two hulls 120 m apart launching together | 4 and 8 (friendly clearance, timeout) | 4 and 9 |
+| 50 km shot | 4 | 4 |
+
+Nothing in these cases puts a round inside a hull or in its ship's drive
+plume (closest approach to its own hull after the first tick 11.7 m, after
+ignition 52.8 m; time inside the 7.5 deg plume cone while the drive burns: 0 s),
+the four rounds of a cruiser salvo stay > 50 m apart, so the engine has no
+collision model for launches.
+
+### `torpedo_launched`: new fields
+
+| field | type | meaning |
+|---|---|---|
+| `mount` | string or null | the launcher's slot in `data/hull_mounts.json` (`weapon_0` ...); null when the hull class has no mount data |
+| `round` | int | which of that mount's `rounds` left (index into `hull_mounts.json` `rounds`, i.e. `Hulls.js` `magazineRound` call order). The engine does NOT fire them in index order: of the rounds still on the tube it takes the one nearest the target's side of the hull (body position along the line of sight), then the one farthest from the nearest friendly hull, then the lowest index - geometry, so a fleet and its mirror image (rotated or reflected) fire mirror-image rounds. A corvette with its target off the port bow empties its port rail first; dead ahead with no friend near, index order (port and starboard alternating) |
+| `eject_pos_m` | [x, y, z] m, body frame | the round's start point (x forward, y port, z dorsal; = `rounds[round].pos`) |
+| `eject_dir` | [x, y, z] unit, body frame | direction it is ejected (= `rounds[round].eject`: rack outboard, cell out of the hatch) |
+| `nose` | [x, y, z] unit, body frame | its nose at rest (rack: forward along the rail; cell: out of the tube) |
+| `eject_speed_mps` | float | ejection speed relative to the hull point (10) |
+| `profile` | string | (now actually recorded: it was dropped between the engine event and the recording before) `"reserve"` when not sprint |
+
+A launch with the sequence switched off (`CombatSimulation.launch_sequence =
+False`, `AIC_LAUNCH_SEQUENCE=0`, measurement only) has none of the sequence fields.
+
+Viewer note: the rack (`HullRigs.assignRounds`) empties exactly the round
+named by `mount` (bank = launcher index in `hull_mounts` order,
+`HullRigs.launcherBank`) and `round`; launches without these fields (old
+recordings) are dealt as before (banks round robin by launch count, each bank
+emptied in index order). A wrecked tube (`mount_damaged`, launcher destroyed)
+and a cook-off (`torpedoes_lost`) take their rounds off the rack too, so it
+matches the HUD magazine count. The flying round starts at `rounds[round].pos`
+(`WeaponTimeline.launchState`, drawn by `render/LaunchSequence.js`).
+
+### `torpedo_ignition` (new event)
+
+Emitted on the tick the torch lights. `ship_id` = launcher, `target_id` = the
+round's target.
+
+| field | type | meaning |
+|---|---|---|
+| `torpedo_id` | string | the round |
+| `delay_s` | float s | launch to ignition |
+| `reason` | `clear` / `free` / `timeout` / `hard_timeout` | all rules held / its ship was destroyed (no hull to clear) / the 8 s timeout (clear of its own hull, not aligned or a friendly too near) / the 15 s cap |
+| `own_gap_m` | float m or null | distance from its own hull's surface at ignition (null: ship destroyed) |
+| `nose` | [x, y, z] unit, world | nose at ignition |
+| `heading` | [x, y, z] unit, world | the first guidance heading it turned onto |
+
+### Trace frame fields (per torpedo, `--trace` recordings)
+
+| field | when | meaning |
+|---|---|---|
+| `ph` | only while the torch is cold | `"eject"` or `"separate"`; absent = burning (or an old recording) |
+| `nose` | with `ph` | world unit nose direction (the round has an attitude only in its sequence; once burning its nose is the thrust direction `fwd`) |
+| `rcs` | while the RCS fires (unchanged field) | lateral RCS thrust, unit direction x throttle: the separation push / brake (throttle 1) |
+| `thr` | always (unchanged) | 0 during the sequence; > 0 from the ignition frame on |
+
+The frame at time t describes the tick that ended at t: the first frame after
+the launch shows `ph: "eject"` with the round already 10 m off its rack (one
+tick of drift); the ignition frame has no `ph` and `thr` > 0. Interpolate the
+round between frames from `pos`/`vel`; slerp `nose` between sequence frames and
+hand over to `fwd` at ignition.
+
+### Demo recording
+
+`data/recordings/p5_launch_sequence_demo.json.gz` (also in the viewer's shared
+`visualizer/public/recordings/`): `uv run python scripts/generate_test_battle.py
+torpedo_strike` (traced; a torpedo cruiser against a corvette, VLS cells and
+rail rounds, a 3 s, 4 s and an 8 s timeout ignition in the first 20 s).
+
+### Rules the engine keeps around the sequence
+
+- Nobody treats a round still in its sequence as an inbound threat: point
+  defence does not engage it, the target's evasion, roll-to-unmask, radiator
+  automation, evade status and the rule-based captain's threat check ignore it
+  (they see it from its ignition tick).
+- Forecasts include the delay: the captain's shadow flight (`fly_torpedo`, its
+  TOF and the PROFILES line) flies the sequence; the admiral's 1-D pursuit
+  (`fleet_intel.solve_pursuit(hold_s=)`, `torpedo_solution`) coasts for the
+  forecast hold (`torpedo_launch.predict_launch_hold_s`: the per-tick sequence
+  from a coasting ship, within one tick of the flown ignition); the datalink
+  board (`torpedo_link.round_forecast`), `Torpedo.can_intercept` (powered
+  branch) and the trajectory-prediction ghosts add the hold left
+  (`Torpedo.launch_hold_s()`).
+- A round in its sequence whose target is lost is reassigned by the datalink
+  like any other and continues its sequence; an orphaned or blinded round in
+  its sequence coasts and never strikes its own launcher.
+- The tube's reload cycle starts at ejection (unchanged); a tube wrecked after
+  the round left does not take it.

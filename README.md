@@ -58,8 +58,9 @@ Open **[the Sonnet 5 vs DeepSeek torpedo swarm](http://localhost:5173/?recording
 | **← / →** | Seek backward or forward five seconds |
 | **F** | Frame the active fleets |
 | **D** | Open or close intent and consequence |
-| **C** | Toggle tactical contact labels |
-| **N** | Open or close the command net (directives, orders, captain reports, fleet signals) |
+| **L** | Cycle label density: auto (a short-name chip per ship, crowded ships of one side share a group chip, full cards only for the selected or dying ship; hover a chip or a registry row for the details), minimal (brackets only), full (every ship's card, every engagement line and track marker). `?labels=auto\|minimal\|full` sets it for one page load; the choice is remembered |
+| **C** | Hide or show all contact labels, torpedo-wave chips and engagement lines |
+| **N** | Open or close the command net (directives, orders, captain reports, fleet signals; closed by default in a replay, open in a live battle; the choice is remembered) |
 | **A** | Toggle the automatic camera director (a shot list built from the recording: salvo launches over the shooter's shoulder, torpedo run-ins, hulk orbits, pull-backs on reactor blasts; dragging pauses it) |
 | **[ / ]** | Jump to the previous / next highlight (kills, strikes, salvos, the first gun exchange) |
 | **T** | Cycle trajectory tracks: off, predicted, predicted + actual (replay) |
@@ -72,9 +73,9 @@ Open **[the Sonnet 5 vs DeepSeek torpedo swarm](http://localhost:5173/?recording
 | **FOLLOW** button | Return to following the live battle |
 | **REALTIME** / **FLEETS** buttons | Live pacing behind the newest frame, and reopening the draft splash |
 
-**Ships are their real size.** Hulls are 65 to 275 m long and fight at tens to hundreds of kilometres. In the default **auto** scale a ship near the camera is drawn at exactly its real size, and everything that touches it is at real scale and in the right place: coilgun slugs and torpedoes arrive at the hull and stop there, a miss passes beside it, point-defense beams leave the turret that fired, a reactor blast is the engine's 10 to 20 km against a 100 m hull, and a torch's exhaust is a faint cone reaching tens of kilometres astern (the jet the engine's plume wash uses; `?jets=0` hides it). A hull too far away to see is enlarged only as far as needed to stay a small readable silhouette (about 2 to 4% of the view height, growing smoothly from real size with no jump), with the contact brackets and labels on top. **S** cycles to **true** (always real size; at distance only the markers remain) and **cinematic** (every hull about 60 times oversize at every range, the look of earlier versions). Screenshots on this page captioned *cinematic scale* were captured in that mode; the others use the default.
+**Ships are their real size.** Hulls are 65 to 275 m long and fight at tens to hundreds of kilometres. In the default **auto** scale a ship near the camera is drawn at exactly its real size, and everything that touches it is at real scale and in the right place: coilgun slugs and torpedoes arrive at the hull and stop there, a miss passes beside it, point-defense beams leave the turret that fired, a reactor blast is the engine's 10 to 20 km against a 100 m hull, and a torch's exhaust is one straight lance from the bells: a blinding flame a few hull lengths long that continues as a spear fading over tens of kilometres astern, the 3 degree cone the engine's plume wash uses (`?jets=0` hides the spear). A hull too far away to see is enlarged only as far as needed to stay a small readable silhouette (about 2 to 4% of the view height, growing smoothly from real size with no jump), with the contact brackets and labels on top. **S** cycles to **true** (always real size; at distance only the markers remain) and **cinematic** (every hull about 60 times oversize at every range, the look of earlier versions). Screenshots on this page captioned *cinematic scale* were captured in that mode; the others use the default.
 
-Each of the nine hull classes has its own design, drawn to scale in faction livery with its real armament: spinal coilers, battery turrets and point-defense mounts at one physical size on every hull, torpedo banks whose cells empty as rounds launch, radiators that telescope out and glow with the heat they reject, and RCS thrusters that fire as a ship turns or jinks. Coilgun slugs leave the barrel that fired them. Kinetic torpedo strikes flash and throw spall instead of exploding like warheads. Hits leave cooling craters, scorched plating and venting breaches, and killed ships become burning hulks before their reactors go. Everything, including destruction, reconstructs correctly when you scrub backward.
+Each of the nine hull classes has its own design, drawn to scale in faction livery with its real armament: spinal coilers, battery turrets and point-defense mounts at one physical size on every hull, torpedo banks whose rails and cells empty round by round as the engine launches them, radiators that telescope out and glow with the heat they reject, and RCS thrusters that fire as a ship turns or jinks. Coilgun slugs leave the barrel that fired them. Kinetic torpedo strikes flash and throw spall instead of exploding like warheads. Hits leave cooling craters, scorched plating and venting breaches, and killed ships become burning hulks before their reactors go. Everything, including destruction, reconstructs correctly when you scrub backward.
 
 ![Nine hull classes in two facing columns, blue-grey alpha ships on the left and rust-orange beta ships on the right, from siege dreadnought down to corvette](docs/images/readme/hull-lineup.png)
 
@@ -85,6 +86,10 @@ Each of the nine hull classes has its own design, drawn to scale in faction live
 ![Two battleships under thrust with fans of point-defense laser beams converging on an incoming torpedo's burn trail, while a penetrator strikes one hull](docs/images/readme/torpedo-salvo.png)
 
 *Point-defense lasers dwell on an inbound torpedo while another round strikes the hull (cinematic scale: the two battleships are about 20 km apart).*
+
+![A torpedo cruiser with its launch cells open: three rounds lighting their torches tens of metres off the hull, a fourth still drifting clear on puffs of cold gas](docs/images/readme/launch-sequence.png)
+
+*A torpedo leaves its own cell, drifts clear on its thrusters, turns onto its target and only then lights its torch: four seconds after a four-cell salvo three rounds light, while the round from the bank facing away is still turning about.*
 
 ![A battleship's reactor breach: an orange fireball inside an expanding shock shell, debris streaks, and a sister ship's engine plume crossing the blast](docs/images/readme/reactor-breach.jpg)
 
@@ -118,9 +123,9 @@ Each of the nine hull classes has its own design, drawn to scale in faction live
 
 **The drive is a hazard.** A torch carries about 300 TW of jet power. A ship in another ship's exhaust takes heat, then armour and fitting damage, and its crew accumulates a radiation dose; the washed plating glows. An interlock throttles a drive that would wash an allied ship, and commanders see plume and crew warnings in their status.
 
-![The stern of a battleship at lower left with its blue torch lit; a faint cone of exhaust runs from it to a small glowing destroyer in the distance](docs/images/readme/plume-wash.png)
+![The stern of a battleship at lower left with its torch lit; a straight beam of exhaust runs from its bells, fading with distance, to a small glowing destroyer in the distance](docs/images/readme/plume-wash.png)
 
-*A destroyer six kilometres astern of a battleship, inside its exhaust jet: at real size the torch's flame is under a kilometre long, and the jet that does the damage is the faint cone beyond it. The washed destroyer glows.*
+*A destroyer six kilometres astern of a battleship, inside its exhaust jet: at real size the torch's flame is under a kilometre long and continues as the spear that does the damage, one beam fading from the bells to the destroyer. The washed destroyer glows.*
 
 ![A dreadnought in three-quarter view with slab armour plating, wedge bow and parallel drive jets, point-defense lasers firing](docs/images/readme/dreadnought.png)
 
@@ -169,7 +174,7 @@ uv run python scripts/run_live_draft_battle.py \
   --points 150 --turns 20 --reasoning medium --spend-limit 30
 ```
 
-`--reasoning` is sent as the effort setting on every request of both sides (adaptive thinking, no sampling parameters). Spend is computed from token usage with the dated price table in `src/llm/anthropic_client.py`; the system prompt is cached with a 1-hour breakpoint. A refused turn issues no orders, is recorded as a `model_refusal` event, and is never re-run on another model. The recording's `provenance.llm` names the provider, exact model id, effort and SDK/API version of each side. `--mock-llm` runs the same path offline. Each request first reserves an upper bound on its cost (every prompt byte at the 1-hour cache-write rate plus the full output limit, about $0.35 for a Sonnet captain call), so set `--spend-limit` to the expected spend plus the reservations of one checkpoint's parallel calls (about $6 for 16 Sonnet captains).
+Without `--reasoning` each Anthropic model runs at its battle default from `BATTLE_DEFAULT_EFFORT` in `src/llm/anthropic_client.py` (high for Sonnet 5.5, Opus 5.5 and Fable 5.2; medium for Sonnet 5 and Haiku 5.5): replaying 20 recorded turns, Sonnet 5.5 at medium thought on 9 of 60 calls and drafted an invalid fleet in 8 of 9 tries, at high on 60 of 60 and 0 of 9, at the same cost. `--reasoning` (or `--effort ROLE=LEVEL` per role and side) overrides it; the effort actually sent is recorded on every `model_call` (adaptive thinking, no sampling parameters). There is no default model: name both sides (`--require-provider anthropic` refuses any OpenRouter id). Spend is computed from token usage with the dated price table in `src/llm/anthropic_client.py`; the system prompt is cached with a 1-hour breakpoint. A refused turn issues no orders, is recorded as a `model_refusal` event, and is never re-run on another model. The recording's `provenance.llm` names the provider, exact model id, effort and SDK/API version of each side. `--mock-llm` runs the same path offline. Each request first reserves an upper bound on its cost (every prompt byte at the 1-hour cache-write rate plus the full output limit, about $0.35 for a Sonnet captain call), so set `--spend-limit` to the expected spend plus the reservations of one checkpoint's parallel calls (about $6 for 16 Sonnet captains).
 
 Open **[the live viewer](http://localhost:5173/?live=1&decisions=1)** before the draft finishes. It shows each sealed draft as it commits, with the admiral's reasoning and formation, then switches to the battle automatically.
 
@@ -183,24 +188,32 @@ The battle plays at your chosen speed a few seconds behind the newest frame. At 
 | --- | --- |
 | Fleet selection | Both admirals independently buy ships and place formations |
 | Commanders | Each captain uses its faction's model; the admiral issues fleet and individual orders |
-| Model settings | High reasoning, up to 8,192 output tokens per request, text observations |
+| Model settings | Per-model default effort (high for Sonnet 5.5 / Opus 5.5 / Fable 5.2, medium for Sonnet 5 / Haiku 5.5, high for OpenRouter ids), up to 8,192 output tokens per request, text observations |
 | Decision timing | 30 simulated seconds per turn; the final turn gets its execution window too |
 | Starting range | Fleet anchors begin 500 km apart; formations offset individual ships |
 | End conditions | Up to 40 turns; elimination, surrender, or an agreed draw can end it earlier |
 | Spending | One $8 ceiling shared by drafting, battle calls, and retries |
 | Recording | Progress saved after each turn; full simulation frames and decision evidence |
 
-The first decision follows a 30-second opening coast, so this setup allows up to **1,230 simulated seconds**. Model calls take wall-clock time: **“Commanders deciding” is a decision phase**, while the spectator server stays responsive.
+Checkpoint 1 is at T+0 (the commanders give their first orders before the clock starts) and every turn's orders fly their full 30 seconds, the last one included, so this setup allows up to **1,200 simulated seconds** (20 turns: T+0 to T+570, ending at T+600). Recordings from before this change decide first at T+30 and still replay. Model calls take wall-clock time: **“Commanders deciding” is a decision phase**, while the spectator server stays responsive.
 
 The launcher checks OpenRouter's model catalog, reserves costs before requests, and applies provider price ceilings. The dollar limit is a ceiling, not a price estimate. If it is reached, the runner stops and preserves the partial replay. Model availability, supported reasoning settings, and rates depend on the provider.
 
-Completed replays are staged under `visualizer/public/recordings/`. Drafts, configuration, the battle archive, and a continuously updated spending report live under `data/recordings/<run name>/`. The server stays available after the battle, and the same live link becomes a replay. Use `--no-linger` to close it on completion.
+Completed replays are staged under `visualizer/public/recordings/`. Drafts, configuration, the battle archive, and a continuously updated spending report live under `data/recordings/<run name>/`. The server stays available after the battle, and the same live link becomes a replay, so **the process keeps running after the battle ends** (it says so on its last lines) until you stop it. Use `--no-linger` to close it on completion, e.g. for background or scripted runs.
+
+The admirals' tactical plot (`--admiral-vision`, the only switch; off unless asked for) is still sent where it is used, by the owner's decision. Know what it does: replaying 90 recorded admiral calls with the old plot, the new plot and no plot, the orders did not differ. Do not remove it on that evidence, and do not credit it with a decision either.
 
 [Full live and replay guide →](docs/intent-replays.md)
 
 ### Try a free live battle
 
-This uses automatic fleet selection and heuristic captains, with no model calls:
+This uses automatic fleet selection and heuristic captains, with no model calls. The free
+captains plan per fleet: against a fleet whose gun power sits on dreadnoughts they fly a
+cut-corner pincer (fast hulls wide to 70 degrees off its facing at 150 km while the heavies
+hold; if the fleets close fast before the flankers are in place they close and pass instead),
+against a battleship line or a torpedo fleet they close nose-first and pass through it, and
+otherwise they hold a nose-on wall. On held-out seeds this default beat the plain wall
+147-53 (40 draws), the previous default ("classic") 122-69 and the pass-4 captains 170-53. `--doctrine classic` and `--doctrine legacy` keep the earlier captains.
 
 ```bash
 uv run python scripts/run_live_draft_battle.py \
@@ -318,7 +331,7 @@ uv run python scripts/run_llm_battle.py \
   --fleet-config data/fleet_config_example.json --trace
 ```
 
-Fleet JSON supports per-ship models, optional admirals, positions and velocities, a decision interval of 20–60 seconds, a time limit, checkpoint limit, seed, and recording options. Explicit CLI settings override the corresponding JSON settings. These general launchers do not provide the live draft runner's dollar ceiling.
+Fleet JSON supports per-ship models, optional admirals, positions and velocities, a decision interval of 20–60 seconds, a time limit, checkpoint limit, seed, and recording options. Explicit CLI settings override the corresponding JSON settings. `run_llm_battle.py` takes the same dollar ceiling (`--spend-limit`), ledger and `--require-provider` guard as the live draft runner, and has no default models: a duel names both, a fleet battle takes them from its configuration.
 
 The [standard draft launcher](scripts/run_draft_battle.py) also supports separate admiral and captain models, heuristic crews, optional vision, and automatic drafts. Check each command's `--help` for its options.
 

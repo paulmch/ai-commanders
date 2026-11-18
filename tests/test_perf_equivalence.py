@@ -703,6 +703,9 @@ class TestPdTargetListTurretCover:
                     "type": "launch_torpedo", "target_id": target_id})
             for _ in range(3):
                 sim.step()
+            # past the launch sequence: a round still separating is no PD target
+            while any(t.torpedo.in_launch_sequence for t in sim.torpedoes):
+                sim.step()
         return [t for t in sim.torpedoes if not t.is_disabled]
 
     def test_savability_follows_turret_and_hull_losses(self):

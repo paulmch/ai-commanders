@@ -355,7 +355,9 @@ class TestTorpedoSolution:
         _, _, _, msgs = battle_a_turn("alpha", t=180)
         econ = section(msgs[1]["content"], "=== TORPEDO ECONOMY ===")
         line = next(l for l in econ.splitlines() if "OCS Falchion-2 [beta_6]" in l)
-        assert "(POOR)" in line and " to kill at ~7 GJ each = " in line
+        # (~6 GJ: the forecast counts the launch sequence's seconds before
+        # the torch lights, src/torpedo_launch.py; ~7 GJ when it lit at launch)
+        assert "(POOR)" in line and " to kill at ~6 GJ each = " in line
 
     def test_salvo_sizing_reference_is_the_doctrine_number(self):
         from src.llm.prompts import ADMIRAL_TORPEDO_DOCTRINE
@@ -585,6 +587,17 @@ class TestDigest:
         text = "\n".join(intel.engine_notes(sim, ["alpha_1"], since_t=30.0))
         assert "launch_torpedo rejected (at the decision)" in text
         assert "older" not in text
+
+    def test_engine_notes_name_a_swung_burn_as_such(self):
+        # The evade overlay keeping a burning order's burn (execution_state
+        # swing) is not "jinking off a slug's line".
+        sim = CombatSimulation(decision_interval=30.0, seed=1)
+        ship(sim, "alpha_1", "corvette", "alpha", (0, 0, 0))
+        sim.events.append(SimulationEvent(SimulationEventType.EXECUTION_STATE, 31.0, "alpha_1",
+                                          None, {"mode": "EVADE", "requested_throttle": 1.0,
+                                                 "applied_throttle": 1.0, "swing": True}))
+        text = "\n".join(intel.engine_notes(sim, ["alpha_1"], since_t=30.0))
+        assert "swinging its ordered burn" in text and "jinking" not in text
 
 
 # =============================================================================

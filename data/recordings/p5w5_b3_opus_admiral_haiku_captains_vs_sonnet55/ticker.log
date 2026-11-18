@@ -1,0 +1,200 @@
+=== BATTLE p5w5_b3_opus_admiral_haiku_captains_vs_sonnet55 | claude-opus-5-5 vs claude-sonnet-5-5 | spend $0.00/$18.00 ===
+150 pts/side, max 8 ships, 20 turns of 30s. Reasoning medium. Admiral vision ON: tactical plot to both admirals each checkpoint.
+Costs: CO=corvette:24 FF=frigate:7 DD=destroyer:18 CA=cruiser:29 BC=battlecruiser:25 BB=battleship:43 DN=dreadnought:55 DS=dreadnought_siege:56 CT=cruiser_torpedo:100
+=== DRAFT BETA | claude-sonnet-5-5 | 146/150 pts | spend $0.03/$18.00 (+$0.33 held) ===
+Ships (8): Halberd-1 BC 25 | Halberd-2 BC 25 | Halberd-3 BC 25 | Halberd-4 BC 25 | Halberd-5 BC 25 | Picket-1 FF 7 | Picket-2 FF 7 | Picket-3 FF 7
+Formation: Screened wedge - Battlecruisers kept within ~60 km of each other for overlapping PD; frigates pushed forward as a screen to...
+Concept: Cost-efficient gun wall: battlecruisers give spinal coilers and fast 1.5g speed, while cheap frigates add PD turrets against torpedo satu...
+=== DRAFT ALPHA | claude-opus-5-5 | 141/150 pts | spend $0.10/$18.00 ===
+Ships (8): Dart-1 CO 24 | Dart-2 CO 24 | Dart-3 CO 24 | Dart-4 CO 24 | Dart-5 CO 24 | Ward-1 FF 7 | Ward-2 FF 7 | Ward-3 FF 7
+Formation: Ward Screen - The three cheap Ward frigates go 50 km forward as a picket line. They take the first exchange and give forw...
+Concept: An all-3g fleet so it can kite as one: 40 torpedoes to fire in coordinated saturation salvos, with 3 frigates adding 6 PD turrets against...
+=== CP 1 | t=30s | spend $1.08/$18.00 ===
+ALPHA claude-opus-5-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 0% | Dart-2 CO hull 100% arm 36/36cm heat 0% | Dart-3 CO hull 100% arm 36/36cm heat 0% | Dart-4 CO hull 100% arm 36/36cm heat 0% | Dart-5 CO hull 100% arm 36/36cm heat 0% | Ward-1 FF hull 100% arm 12/12cm heat 0% | Ward-2 FF hull 100% arm 12/12cm heat 0% | Ward-3 FF hull 100% arm 12/12cm heat 0%
+BETA claude-sonnet-5-5: 8/8 alive, hull 100% | Halberd-1 BC hull 100% arm 30/30cm heat 0% | Halberd-2 BC hull 100% arm 30/30cm heat 0% | Halberd-3 BC hull 100% arm 30/30cm heat 0% | Halberd-4 BC hull 100% arm 30/30cm heat 0% | Halberd-5 BC hull 100% arm 30/30cm heat 0% | Picket-1 FF hull 100% arm 12/12cm heat 0% | Picket-2 FF hull 100% arm 12/12cm heat 0% | Picket-3 FF hull 100% arm 12/12cm heat 0%
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 5 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: STAND-OFF TORPEDO WAR. Their battlecruiser spinals outrange our guns but almost never hit a dodger beyond 300 km - so we never merge. All...
+B admiral: Tight formation advance west toward the enemy; keep Pickets inside the Halberd group so all PD overlaps. Spinals: focus fire on TIS Ward-...
+Prompt cache: 8 hit / 30 write / 0 cold calls, 136.2k read + 226.3k written of 450.6k prompt tokens (30% read)
+=== CP 2 | t=60s | spend $1.52/$18.00 ===
+ALPHA claude-opus-5-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 3% | Dart-2 CO hull 100% arm 36/36cm heat 3% | Dart-3 CO hull 100% arm 36/36cm heat 3% | Dart-4 CO hull 100% arm 36/36cm heat 4% | Dart-5 CO hull 100% arm 36/36cm heat 3% | Ward-1 FF hull 100% arm 12/12cm heat 4% | Ward-2 FF hull 100% arm 12/12cm heat 4% | Ward-3 FF hull 100% arm 12/12cm heat 4%
+BETA claude-sonnet-5-5: 8/8 alive, hull 100% | Halberd-1 BC hull 100% arm 30/30cm heat 7% | Halberd-2 BC hull 100% arm 30/30cm heat 7% | Halberd-3 BC hull 100% arm 30/30cm heat 7% | Halberd-4 BC hull 100% arm 30/30cm heat 7% | Halberd-5 BC hull 100% arm 30/30cm heat 7% | Picket-1 FF hull 100% arm 12/12cm heat 7% | Picket-2 FF hull 100% arm 12/12cm heat 7% | Picket-3 FF hull 100% arm 12/12cm heat 7%
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 10 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Phase 2 continues. 15 rounds are already flying at OCS Halberd-1, which is enough to kill it. Extra rounds will retarget on their own. TH...
+B admiral: 15 torpedoes inbound on Halberd-1. Whole fleet burns directly away (+X) as one tight formation to keep PD overlapping and present only th...
+Prompt cache: 42 hit / 30 write / 0 cold calls, 489.2k read + 226.3k written of 916.7k prompt tokens (53% read)
+=== CP 3 | t=90s | spend $1.96/$18.00 ===
+ALPHA claude-opus-5-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 7% | Dart-2 CO hull 100% arm 36/36cm heat 7% | Dart-3 CO hull 100% arm 36/36cm heat 6% | Dart-4 CO hull 100% arm 36/36cm heat 6% | Dart-5 CO hull 100% arm 36/36cm heat 8% | Ward-1 FF hull 100% arm 12/12cm heat 8% | Ward-2 FF hull 100% arm 12/12cm heat 8% | Ward-3 FF hull 100% arm 12/12cm heat 11%
+BETA claude-sonnet-5-5: 8/8 alive, hull 100% | Halberd-1 BC hull 100% arm 30/30cm heat 13% | Halberd-2 BC hull 100% arm 30/30cm heat 8% | Halberd-3 BC hull 100% arm 30/30cm heat 8% | Halberd-4 BC hull 100% arm 30/30cm heat 8% | Halberd-5 BC hull 100% arm 30/30cm heat 8% | Picket-1 FF hull 100% arm 12/12cm heat 11% | Picket-2 FF hull 100% arm 12/12cm heat 8% | Picket-3 FF hull 100% arm 12/12cm heat 11%
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 10 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: HOLD PHASE. 25 of our torpedoes are in flight: 15 on OCS Halberd-1 (impact T+100-125) and 10 on OCS Halberd-2 (impact ~T+140-150). NO lau...
+B admiral: Torpedo salvos inbound on Halberd-1 (15, ~10-35s) and Halberd-2 (10, ~50s). All ships burn away along +X at full throttle with EVADE full...
+Prompt cache: 76 hit / 30 write / 0 cold calls, 842.3k read + 226.3k written of 1394.4k prompt tokens (60% read)
+=== CP 4 | t=120s | spend $2.42/$18.00 ===
+ALPHA claude-opus-5-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 11% | Dart-2 CO hull 100% arm 36/36cm heat 7% | Dart-3 CO hull 100% arm 36/36cm heat 6% | Dart-4 CO hull 100% arm 36/36cm heat 6% | Dart-5 CO hull 100% arm 36/36cm heat 11% | Ward-1 FF hull 100% arm 12/12cm heat 12% | Ward-2 FF hull 100% arm 12/12cm heat 12% | Ward-3 FF hull 100% arm 12/12cm heat 13%
+BETA claude-sonnet-5-5: 6/8 alive, hull 70% | Halberd-1 BC DEAD@102s | Halberd-2 BC hull 100% arm 30/30cm heat 16% | Halberd-3 BC hull 100% arm 30/30cm heat 15% | Halberd-4 BC hull 100% arm 30/30cm heat 15% | Halberd-5 BC hull 60% arm 0/35cm heat 15% [present] | Picket-1 FF DEAD@109s | Picket-2 FF hull 100% arm 12/12cm heat 16% | Picket-3 FF hull 100% arm 12/12cm heat 19%
+Hits: A:Dart-1>B:Halberd-1 torp x1 | A:Dart-5>B:Halberd-1 torp x1 | A:Dart-3>B:Picket-1 torp x1 | A:Dart-1>B:Halberd-5 torp x1 | A:Dart-2>B:Halberd-5 torp x1
+Kills: B:Halberd-1 by A:Dart-5 (reactor_destroyed) @102s ; B:Picket-1 by A:Dart-3 (reactor_destroyed) @109s
+Fire: A 0 slugs/0 hit, 3 torps/5 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 6 torps
+A admiral: We lead 209-97. Enemy is running at 1.7g, tails to us. Our torpedoes are killing them, so keep it that way and never merge. MOVEMENT: the...
+B admiral: Torpedo defence phase. All ships burn away along +X (1.0,0,-0.01) in a tight formation, with evade full, so the inbound torpedoes hit tai...
+Prompt cache: 107 hit / 30 write / 0 cold calls, 1157.5k read + 226.3k written of 1822.8k prompt tokens (63% read)
+=== CP 5 | t=150s | spend $2.76/$18.00 ===
+ALPHA claude-opus-5-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 16% | Dart-2 CO hull 100% arm 36/36cm heat 11% | Dart-3 CO hull 100% arm 36/36cm heat 10% | Dart-4 CO hull 100% arm 36/36cm heat 10% | Dart-5 CO hull 100% arm 36/36cm heat 15% | Ward-1 FF hull 100% arm 12/12cm heat 16% | Ward-2 FF hull 100% arm 12/12cm heat 16% | Ward-3 FF hull 100% arm 12/12cm heat 17%
+BETA claude-sonnet-5-5: 4/8 alive, hull 50% | Halberd-1 BC DEAD@102s | Halberd-2 BC DEAD@138s | Halberd-3 BC hull 100% arm 30/30cm heat 23% | Halberd-4 BC hull 100% arm 30/30cm heat 23% | Halberd-5 BC DEAD@127s | Picket-1 FF DEAD@109s | Picket-2 FF hull 100% arm 12/12cm heat 23% | Picket-3 FF hull 100% arm 12/12cm heat 27%
+Hits: A:Dart-4>B:Halberd-5 torp x1 | A:Dart-2>B:Halberd-2 torp x1 | A:Dart-3>B:Halberd-2 torp x1 | A:Dart-4>B:Halberd-2 torp x1
+Kills: B:Halberd-5 by A:Dart-4 (reactor_destroyed) @127s ; B:Halberd-2 by A:Dart-4 (reactor_destroyed) @138s
+Fire: A 0 slugs/0 hit, 8 torps/4 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 2 torps
+A admiral: We are winning, 296 to 64. Phase 3 starts now. 9 Tridents are already inbound on OCS Halberd-3, so add none. Dart-4 and Dart-5 each launc...
+B admiral: Phase 1: tight formation burning away along +X, all ships evade full. Pickets close up on Halberd-3 and Halberd-4 so all PD overlaps the...
+Prompt cache: 133 hit / 30 write / 0 cold calls, 1426.5k read + 226.3k written of 2183.3k prompt tokens (65% read)
+=== CP 6 | t=180s | spend $3.13/$18.00 ===
+ALPHA claude-opus-5-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 23% | Dart-2 CO hull 100% arm 36/36cm heat 18% | Dart-3 CO hull 100% arm 36/36cm heat 17% | Dart-4 CO hull 100% arm 36/36cm heat 17% | Dart-5 CO hull 100% arm 36/36cm heat 22% | Ward-1 FF hull 100% arm 12/12cm heat 23% | Ward-2 FF hull 100% arm 12/12cm heat 23% | Ward-3 FF hull 100% arm 12/12cm heat 24%
+BETA claude-sonnet-5-5: 4/8 alive, hull 50% | Halberd-1 BC DEAD@102s | Halberd-2 BC DEAD@138s | Halberd-3 BC hull 100% arm 30/30cm heat 31% | Halberd-4 BC hull 100% arm 30/30cm heat 30% | Halberd-5 BC DEAD@127s | Picket-1 FF DEAD@109s | Picket-2 FF hull 100% arm 12/12cm heat 31% | Picket-3 FF hull 100% arm 12/12cm heat 34%
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 4 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Magazines are empty and we are ahead on score (294 vs 64). There are 15 rounds in flight: 9 on Halberd-3 and 6 on Halberd-4. Our job now...
+B admiral: Keep burning away along +X with evade full while the 15 inbound torpedoes (Halberd-3 first, Halberd-4 at ~40-60s) resolve; present tails/...
+Prompt cache: 161 hit / 30 write / 0 cold calls, 1703.4k read + 226.3k written of 2557.4k prompt tokens (67% read)
+=== CP 7 | t=210s | spend $3.47/$18.00 ===
+ALPHA claude-opus-5-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 27% | Dart-2 CO hull 100% arm 36/36cm heat 25% | Dart-3 CO hull 100% arm 36/36cm heat 24% | Dart-4 CO hull 100% arm 36/36cm heat 21% | Dart-5 CO hull 100% arm 36/36cm heat 26% | Ward-1 FF hull 100% arm 12/12cm heat 30% | Ward-2 FF hull 100% arm 12/12cm heat 30% | Ward-3 FF hull 100% arm 12/12cm heat 31%
+BETA claude-sonnet-5-5: 3/8 alive, hull 38% | Halberd-1 BC DEAD@102s | Halberd-2 BC DEAD@138s | Halberd-3 BC DEAD@205s | Halberd-4 BC hull 100% arm 30/30cm heat 38% | Halberd-5 BC DEAD@127s | Picket-1 FF DEAD@109s | Picket-2 FF hull 100% arm 12/12cm heat 39% | Picket-3 FF hull 100% arm 12/12cm heat 42%
+Hits: A:Dart-2>B:Halberd-3 torp x2 | A:Dart-1>B:Halberd-3 torp x1
+Kills: B:Halberd-3 by A:Dart-2 (reactor_destroyed) @205s
+Fire: A 0 slugs/0 hit, 0 torps/3 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 1 torps
+A admiral: Halberd-3 destroyed. Score 341-39, we are winning. All magazines are empty, and 6 of our rounds are still guided onto Halberd-4 (ETA 11-3...
+B admiral: Survive the last 6 torpedoes on Halberd-4: keep burning away along +X with evade full this checkpoint, PD on the torpedo corridor, frigat...
+Prompt cache: 185 hit / 30 write / 0 cold calls, 1951.2k read + 226.3k written of 2886.8k prompt tokens (68% read)
+=== CP 8 | t=240s | spend $3.72/$18.00 ===
+ALPHA claude-opus-5-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 27% | Dart-2 CO hull 100% arm 36/36cm heat 28% | Dart-3 CO hull 100% arm 36/36cm heat 27% | Dart-4 CO hull 100% arm 36/36cm heat 22% | Dart-5 CO hull 100% arm 36/36cm heat 31% | Ward-1 FF hull 100% arm 12/12cm heat 31% | Ward-2 FF hull 100% arm 12/12cm heat 31% | Ward-3 FF hull 100% arm 12/12cm heat 38%
+BETA claude-sonnet-5-5: 2/8 alive, hull 25% | Halberd-1 BC DEAD@102s | Halberd-2 BC DEAD@138s | Halberd-3 BC DEAD@205s | Halberd-4 BC DEAD@234s | Halberd-5 BC DEAD@127s | Picket-1 FF DEAD@109s | Picket-2 FF hull 100% arm 12/12cm heat 47% | Picket-3 FF hull 100% arm 12/12cm heat 50% rad
+Hits: A:Dart-4>B:Halberd-4 torp x2 | A:Dart-5>B:Halberd-4 torp x1
+Kills: B:Halberd-4 by A:Dart-4 (reactor_destroyed) @234s
+Fire: A 0 slugs/0 hit, 0 torps/3 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Battle is won: 5 kills, no losses, score 388-14. Only 2 enemy frigates (Picket-2, Picket-3) remain, running at 3g, 530-590 km out. We can...
+B admiral: Corvettes are out of torpedoes and carry no guns; only the four Ward frigates can hurt us. Both Picket frigates burn -X together (nose to...
+Prompt cache: 207 hit / 30 write / 0 cold calls, 2177.9k read + 226.3k written of 3175.0k prompt tokens (69% read)
+=== CP 9 | t=270s | spend $4.01/$18.00 ===
+ALPHA claude-opus-5-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 35% rad | Dart-2 CO hull 100% arm 36/36cm heat 36% rad | Dart-3 CO hull 100% arm 36/36cm heat 35% rad | Dart-4 CO hull 100% arm 36/36cm heat 30% rad | Dart-5 CO hull 100% arm 36/36cm heat 38% rad | Ward-1 FF hull 100% arm 12/12cm heat 31% rad | Ward-2 FF hull 100% arm 12/12cm heat 31% rad | Ward-3 FF hull 100% arm 12/12cm heat 38% rad
+BETA claude-sonnet-5-5: 2/8 alive, hull 25% | Halberd-1 BC DEAD@102s | Halberd-2 BC DEAD@138s | Halberd-3 BC DEAD@205s | Halberd-4 BC DEAD@234s | Halberd-5 BC DEAD@127s | Picket-1 FF DEAD@109s | Picket-2 FF hull 100% arm 12/12cm heat 50% rad | Picket-3 FF hull 100% arm 12/12cm heat 45% rad
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: We are winning 388-14. Six enemy hulls are dead and only OCS Picket-2 and OCS Picket-3 (frigates, 1 coil each) remain, 600+ km out. Our t...
+B admiral: Both Pickets: burn -X (heading -1,-0.01,0) at full throttle to cancel our retreat, noses toward the enemy. Stay together, evade if torped...
+Prompt cache: 229 hit / 30 write / 0 cold calls, 2404.5k read + 226.3k written of 3464.0k prompt tokens (69% read)
+=== CP 10 | t=300s | spend $4.29/$18.00 ===
+ALPHA claude-opus-5-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 29% rad | Dart-2 CO hull 100% arm 36/36cm heat 32% rad | Dart-3 CO hull 100% arm 36/36cm heat 29% rad | Dart-4 CO hull 100% arm 36/36cm heat 24% rad | Dart-5 CO hull 100% arm 36/36cm heat 32% rad | Ward-1 FF hull 100% arm 12/12cm heat 25% rad | Ward-2 FF hull 100% arm 12/12cm heat 25% rad | Ward-3 FF hull 100% arm 12/12cm heat 33% rad
+BETA claude-sonnet-5-5: 2/8 alive, hull 25% | Halberd-1 BC DEAD@102s | Halberd-2 BC DEAD@138s | Halberd-3 BC DEAD@205s | Halberd-4 BC DEAD@234s | Halberd-5 BC DEAD@127s | Picket-1 FF DEAD@109s | Picket-2 FF hull 100% arm 12/12cm heat 50% rad | Picket-3 FF hull 100% arm 12/12cm heat 45% rad
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: We are winning on score 388 to 14 and I have rejected the enemy's draw offer. We keep that lead until T+630 by holding range. All ships:...
+B admiral: Chase the retreating fleet: both frigates burn -X at full to cancel the opening range and close. Target the Ward frigates (only armed ene...
+Prompt cache: 251 hit / 30 write / 0 cold calls, 2631.2k read + 226.3k written of 3750.7k prompt tokens (70% read)
+=== CP 11 | t=330s | spend $4.57/$18.00 ===
+ALPHA claude-opus-5-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 29% rad | Dart-2 CO hull 100% arm 36/36cm heat 32% rad | Dart-3 CO hull 100% arm 36/36cm heat 29% rad | Dart-4 CO hull 100% arm 36/36cm heat 24% rad | Dart-5 CO hull 100% arm 36/36cm heat 25% rad | Ward-1 FF hull 100% arm 12/12cm heat 25% rad | Ward-2 FF hull 100% arm 12/12cm heat 26% rad | Ward-3 FF hull 100% arm 12/12cm heat 33% rad
+BETA claude-sonnet-5-5: 2/8 alive, hull 25% | Halberd-1 BC DEAD@102s | Halberd-2 BC DEAD@138s | Halberd-3 BC DEAD@205s | Halberd-4 BC DEAD@234s | Halberd-5 BC DEAD@127s | Picket-1 FF DEAD@109s | Picket-2 FF hull 100% arm 12/12cm heat 50% rad | Picket-3 FF hull 100% arm 12/12cm heat 45% rad
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Phase 5 continues: we lead 388-14 and win on time at T+630. Avoid any merge. ALL SHIPS burn heading (-1,0,0) at 100% throttle with radiat...
+B admiral: Re-engage: both Pickets burn -X together at full throttle, staying within ~50 km of each other so PD overlaps. Focus fire on TIS Ward-3 (...
+Prompt cache: 273 hit / 30 write / 0 cold calls, 2857.8k read + 226.3k written of 4040.8k prompt tokens (71% read)
+=== CP 12 | t=360s | spend $4.82/$18.00 ===
+ALPHA claude-opus-5-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 29% rad | Dart-2 CO hull 100% arm 36/36cm heat 32% rad | Dart-3 CO hull 100% arm 36/36cm heat 29% rad | Dart-4 CO hull 100% arm 36/36cm heat 24% rad | Dart-5 CO hull 100% arm 36/36cm heat 25% rad | Ward-1 FF hull 100% arm 12/12cm heat 25% rad | Ward-2 FF hull 100% arm 12/12cm heat 26% rad | Ward-3 FF hull 100% arm 12/12cm heat 33% rad
+BETA claude-sonnet-5-5: 2/8 alive, hull 25% | Halberd-1 BC DEAD@102s | Halberd-2 BC DEAD@138s | Halberd-3 BC DEAD@205s | Halberd-4 BC DEAD@234s | Halberd-5 BC DEAD@127s | Picket-1 FF DEAD@109s | Picket-2 FF hull 100% arm 12/12cm heat 50% rad | Picket-3 FF hull 100% arm 12/12cm heat 45% rad
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: We are winning on time, 388 to 14. Only OCS Picket-2 and Picket-3 are left, both frigates, about 700-800 km away and burning toward us at...
+B admiral: Enemy is burning away and torpedo-empty. Both Pickets burn -X at full throttle toward the enemy, staying paired within ~80 km, nose towar...
+Prompt cache: 295 hit / 30 write / 0 cold calls, 3084.5k read + 226.3k written of 4329.4k prompt tokens (71% read)
+=== CP 13 | t=390s | spend $5.08/$18.00 ===
+ALPHA claude-opus-5-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 29% rad | Dart-2 CO hull 100% arm 36/36cm heat 32% rad | Dart-3 CO hull 100% arm 36/36cm heat 29% rad | Dart-4 CO hull 100% arm 36/36cm heat 24% rad | Dart-5 CO hull 100% arm 36/36cm heat 25% rad | Ward-1 FF hull 100% arm 12/12cm heat 25% rad | Ward-2 FF hull 100% arm 12/12cm heat 26% rad | Ward-3 FF hull 100% arm 12/12cm heat 33% rad
+BETA claude-sonnet-5-5: 2/8 alive, hull 25% | Halberd-1 BC DEAD@102s | Halberd-2 BC DEAD@138s | Halberd-3 BC DEAD@205s | Halberd-4 BC DEAD@234s | Halberd-5 BC DEAD@127s | Picket-1 FF DEAD@109s | Picket-2 FF hull 100% arm 12/12cm heat 50% rad | Picket-3 FF hull 100% arm 12/12cm heat 45% rad
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Phase 5 continues: we are winning on time (388 vs 14), so we do NOT engage. All ships burn the open-range heading (-1.00,+0.07,+0.01) at...
+B admiral: Enemy torpedoes are spent and the enemy fleet is running away at 3g. Pickets stay paired and burn -X after them at full throttle. Do not...
+Prompt cache: 317 hit / 30 write / 0 cold calls, 3311.2k read + 226.3k written of 4618.1k prompt tokens (72% read)
+=== CP 14 | t=420s | spend $5.33/$18.00 ===
+ALPHA claude-opus-5-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 29% rad | Dart-2 CO hull 100% arm 36/36cm heat 32% rad | Dart-3 CO hull 100% arm 36/36cm heat 29% rad | Dart-4 CO hull 100% arm 36/36cm heat 24% rad | Dart-5 CO hull 100% arm 36/36cm heat 25% rad | Ward-1 FF hull 100% arm 12/12cm heat 25% rad | Ward-2 FF hull 100% arm 12/12cm heat 26% rad | Ward-3 FF hull 100% arm 12/12cm heat 33% rad
+BETA claude-sonnet-5-5: 2/8 alive, hull 25% | Halberd-1 BC DEAD@102s | Halberd-2 BC DEAD@138s | Halberd-3 BC DEAD@205s | Halberd-4 BC DEAD@234s | Halberd-5 BC DEAD@127s | Picket-1 FF DEAD@109s | Picket-2 FF hull 100% arm 12/12cm heat 50% rad | Picket-3 FF hull 100% arm 12/12cm heat 45% rad
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: PHASE 5 HOLD: We lead 388-14. The battle ends at T+630. Do not engage. The whole fleet burns heading (-1.00,+0.07,+0.01) at full throttle...
+B admiral: Enemy is fleeing with torpedoes spent. Both Pickets burn -X at full throttle, stay paired within ~90 km. Target TIS Ward-3 if it comes in...
+Prompt cache: 339 hit / 30 write / 0 cold calls, 3537.8k read + 226.3k written of 4906.7k prompt tokens (72% read)
+=== CP 15 | t=450s | spend $5.58/$18.00 ===
+ALPHA claude-opus-5-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 29% rad | Dart-2 CO hull 100% arm 36/36cm heat 32% rad | Dart-3 CO hull 100% arm 36/36cm heat 29% rad | Dart-4 CO hull 100% arm 36/36cm heat 24% rad | Dart-5 CO hull 100% arm 36/36cm heat 25% rad | Ward-1 FF hull 100% arm 12/12cm heat 25% rad | Ward-2 FF hull 100% arm 12/12cm heat 26% rad | Ward-3 FF hull 100% arm 12/12cm heat 33% rad
+BETA claude-sonnet-5-5: 2/8 alive, hull 25% | Halberd-1 BC DEAD@102s | Halberd-2 BC DEAD@138s | Halberd-3 BC DEAD@205s | Halberd-4 BC DEAD@234s | Halberd-5 BC DEAD@127s | Picket-1 FF DEAD@109s | Picket-2 FF hull 100% arm 12/12cm heat 50% rad | Picket-3 FF hull 100% arm 12/12cm heat 45% rad
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Phase 5 continues: we lead 388-14 and the time limit wins it for us. Do not engage. All ships burn the open-range heading (-1.00,+0.07,+0...
+B admiral: Enemy is burning away at 3g and their torpedoes are spent. Both Pickets burn -X at full throttle, stay paired, and chase. Target TIS Ward...
+Prompt cache: 361 hit / 30 write / 0 cold calls, 3764.5k read + 226.3k written of 5195.5k prompt tokens (72% read)
+=== CP 16 | t=480s | spend $5.82/$18.00 ===
+ALPHA claude-opus-5-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 29% rad | Dart-2 CO hull 100% arm 36/36cm heat 32% | Dart-3 CO hull 100% arm 36/36cm heat 29% rad | Dart-4 CO hull 100% arm 36/36cm heat 24% | Dart-5 CO hull 100% arm 36/36cm heat 25% | Ward-1 FF hull 100% arm 12/12cm heat 25% rad | Ward-2 FF hull 100% arm 12/12cm heat 26% rad | Ward-3 FF hull 100% arm 12/12cm heat 33% rad
+BETA claude-sonnet-5-5: 2/8 alive, hull 25% | Halberd-1 BC DEAD@102s | Halberd-2 BC DEAD@138s | Halberd-3 BC DEAD@205s | Halberd-4 BC DEAD@234s | Halberd-5 BC DEAD@127s | Picket-1 FF DEAD@109s | Picket-2 FF hull 100% arm 12/12cm heat 50% rad | Picket-3 FF hull 100% arm 12/12cm heat 45% rad
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Phase 5 continues. We lead 388 to 14 and win on time at T+630. Do not engage. All ships burn heading (-1.00,+0.07,+0.01) at full throttle...
+B admiral: Enemy is fleeing and out of reach (840+ km). Picket-2 and Picket-3 stay paired, coast PADLOCKed on TIS Ward-3 with PD overlapping. Fire o...
+Prompt cache: 383 hit / 30 write / 0 cold calls, 3991.1k read + 226.3k written of 5482.7k prompt tokens (73% read)
+=== CP 17 | t=510s | spend $6.07/$18.00 ===
+ALPHA claude-opus-5-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 29% rad | Dart-2 CO hull 100% arm 36/36cm heat 39% rad | Dart-3 CO hull 100% arm 36/36cm heat 29% rad | Dart-4 CO hull 100% arm 36/36cm heat 31% rad | Dart-5 CO hull 100% arm 36/36cm heat 32% rad | Ward-1 FF hull 100% arm 12/12cm heat 25% rad | Ward-2 FF hull 100% arm 12/12cm heat 26% rad | Ward-3 FF hull 100% arm 12/12cm heat 33%
+BETA claude-sonnet-5-5: 2/8 alive, hull 25% | Halberd-1 BC DEAD@102s | Halberd-2 BC DEAD@138s | Halberd-3 BC DEAD@205s | Halberd-4 BC DEAD@234s | Halberd-5 BC DEAD@127s | Picket-1 FF DEAD@109s | Picket-2 FF hull 100% arm 12/12cm heat 43% rad | Picket-3 FF hull 100% arm 12/12cm heat 38% rad
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Phase 5 continues: we lead 388-14. Two enemy frigates are left, 900+ km out and the range is opening. We win on the time limit at T+630....
+B admiral: Enemy is fleeing at 3g with torpedoes spent; we cannot close. Both Pickets coast paired, PADLOCK on TIS Ward-3, nose toward the enemy. Fi...
+Prompt cache: 405 hit / 30 write / 0 cold calls, 4217.8k read + 226.3k written of 5769.2k prompt tokens (73% read)
+=== CP 18 | t=540s | spend $6.33/$18.00 ===
+ALPHA claude-opus-5-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 29% rad | Dart-2 CO hull 100% arm 36/36cm heat 39% rad | Dart-3 CO hull 100% arm 36/36cm heat 29% rad | Dart-4 CO hull 100% arm 36/36cm heat 31% rad | Dart-5 CO hull 100% arm 36/36cm heat 32% rad | Ward-1 FF hull 100% arm 12/12cm heat 25% rad | Ward-2 FF hull 100% arm 12/12cm heat 26% rad | Ward-3 FF hull 100% arm 12/12cm heat 40% rad
+BETA claude-sonnet-5-5: 2/8 alive, hull 25% | Halberd-1 BC DEAD@102s | Halberd-2 BC DEAD@138s | Halberd-3 BC DEAD@205s | Halberd-4 BC DEAD@234s | Halberd-5 BC DEAD@127s | Picket-1 FF DEAD@109s | Picket-2 FF hull 100% arm 12/12cm heat 35% rad | Picket-3 FF hull 100% arm 12/12cm heat 31% rad
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: PHASE 5, HOLD THE WIN: we lead 388 to 14 with 90 s left. Do not engage. The whole fleet burns the open-range heading (-1.00,+0.08,+0.01)...
+B admiral: Enemy is fleeing and out-accelerates us, so we cannot close. Both Pickets stay paired, coast and PADLOCK TIS Ward-3. Fire only if any ene...
+Prompt cache: 427 hit / 30 write / 0 cold calls, 4444.4k read + 226.3k written of 6056.5k prompt tokens (73% read)
+=== CP 19 | t=570s | spend $6.56/$18.00 ===
+ALPHA claude-opus-5-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 29% rad | Dart-2 CO hull 100% arm 36/36cm heat 39% rad | Dart-3 CO hull 100% arm 36/36cm heat 29% rad | Dart-4 CO hull 100% arm 36/36cm heat 31% rad | Dart-5 CO hull 100% arm 36/36cm heat 32% rad | Ward-1 FF hull 100% arm 12/12cm heat 25% rad | Ward-2 FF hull 100% arm 12/12cm heat 26% rad | Ward-3 FF hull 100% arm 12/12cm heat 40% rad
+BETA claude-sonnet-5-5: 2/8 alive, hull 25% | Halberd-1 BC DEAD@102s | Halberd-2 BC DEAD@138s | Halberd-3 BC DEAD@205s | Halberd-4 BC DEAD@234s | Halberd-5 BC DEAD@127s | Picket-1 FF DEAD@109s | Picket-2 FF hull 100% arm 12/12cm heat 28% rad | Picket-3 FF hull 100% arm 12/12cm heat 24% rad
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Final phase: we hold a winning score, 388 to 14. No merge and no risks. The whole fleet keeps burning away from OCS Picket-2 and Picket-3...
+B admiral: Enemy is fleeing and out of range (about 1000 km, opening). Both Pickets coast paired, PADLOCK on Ward-3, and keep all hulls alive until...
+Prompt cache: 449 hit / 30 write / 0 cold calls, 4671.1k read + 226.3k written of 6343.3k prompt tokens (74% read)
+=== CP 20 | t=600s | spend $6.79/$18.00 ===
+ALPHA claude-opus-5-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 26% rad | Dart-2 CO hull 100% arm 36/36cm heat 37% rad | Dart-3 CO hull 100% arm 36/36cm heat 26% | Dart-4 CO hull 100% arm 36/36cm heat 28% rad | Dart-5 CO hull 100% arm 36/36cm heat 29% rad | Ward-1 FF hull 100% arm 12/12cm heat 23% rad | Ward-2 FF hull 100% arm 12/12cm heat 23% rad | Ward-3 FF hull 100% arm 12/12cm heat 37% rad
+BETA claude-sonnet-5-5: 2/8 alive, hull 25% | Halberd-1 BC DEAD@102s | Halberd-2 BC DEAD@138s | Halberd-3 BC DEAD@205s | Halberd-4 BC DEAD@234s | Halberd-5 BC DEAD@127s | Picket-1 FF DEAD@109s | Picket-2 FF hull 100% arm 12/12cm heat 21% rad | Picket-3 FF hull 100% arm 12/12cm heat 16% rad
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: FINAL CHECKPOINT: we win on time (388 to 14). Keep the range open. All ships burn heading (-1.00,+0.08,+0.01) at full throttle until T+63...
+B admiral: Final 30s. Enemy is fleeing at 1100+ km, out of range, torpedoes spent. Both Pickets keep coasting paired, PADLOCK on Ward-3, no burns. F...
+Prompt cache: 471 hit / 30 write / 0 cold calls, 4897.8k read + 226.3k written of 6629.4k prompt tokens (74% read)
+=== RESULT | t=630s | after CP 20 | spend $6.79/$18.00 ===
+Winner: ALPHA - Alpha tactical advantage (388.5 vs 14.0)
+ALPHA claude-opus-5-5: 8/8 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 27% rad | Dart-2 CO hull 100% arm 36/36cm heat 37% rad | Dart-3 CO hull 100% arm 36/36cm heat 33% | Dart-4 CO hull 100% arm 36/36cm heat 28% rad | Dart-5 CO hull 100% arm 36/36cm heat 29% rad | Ward-1 FF hull 100% arm 12/12cm heat 23% rad | Ward-2 FF hull 100% arm 12/12cm heat 23% rad | Ward-3 FF hull 100% arm 12/12cm heat 37% rad
+BETA claude-sonnet-5-5: 2/8 alive, hull 25% | Halberd-1 BC DEAD@102s | Halberd-2 BC DEAD@138s | Halberd-3 BC DEAD@205s | Halberd-4 BC DEAD@234s | Halberd-5 BC DEAD@127s | Picket-1 FF DEAD@109s | Picket-2 FF hull 100% arm 12/12cm heat 13% rad | Picket-3 FF hull 100% arm 12/12cm heat 9% rad
+Final interval - Hits: none
+Final interval - Kills: none
+Final interval - Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+Spend: $6.7903 reported, $6.7903 committed of $18.00 limit, 501 model calls
+Recording: /home/plmch/ai-commanders/visualizer/public/recordings/p5w5_b3_opus_admiral_haiku_captains_vs_sonnet55.json

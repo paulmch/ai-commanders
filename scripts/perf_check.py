@@ -168,14 +168,19 @@ def run_battle_case(seed: int, doctrine: str, trace: bool, budget: int = 200,
     }
 
 
+CALIB_CLASSES = ("coast", "padlock", "burn", "evasive", "padlock_dodge", "hold_dodge")
+
+
 def run_calib_case(runs: int) -> dict:
     """A slice of ``scripts/fire_control_calibration.py harness --runs N``
-    (all target classes, one shooter): every resolved round, in order."""
+    (the six original target classes, one shooter): every resolved round, in
+    order. The class list is fixed here so CPU time stays comparable when the
+    harness gains classes (heading_dodge, intercept_dodge came later)."""
     sys.path.insert(0, str(Path(__file__).parent))
     import fire_control_calibration as fcc
 
-    jobs = fcc.harness_jobs(runs, fcc.HARNESS_CLASSES, (1,))
-    jobs += fcc.harness_jobs(1, fcc.HARNESS_CLASSES, (3,))
+    jobs = fcc.harness_jobs(runs, CALIB_CLASSES, (1,))
+    jobs += fcc.harness_jobs(1, CALIB_CLASSES, (3,))
     rows = []
     t0 = time.process_time()
     for job in jobs:

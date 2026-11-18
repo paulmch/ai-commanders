@@ -375,7 +375,7 @@ class TestAdmiralPromptIsCacheable:
         for static_heading in (
             "=== YOUR ROLE ===",
             "=== TACTICAL COMMAND REFERENCE ===",
-            "=== FLEET TACTICAL OPTIONS ===",
+            "=== FLEET TACTICAL OPTIONS",
         ):
             assert prompt.index(static_heading) < marker, static_heading
         for volatile_heading in (

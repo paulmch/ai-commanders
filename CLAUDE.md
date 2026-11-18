@@ -38,7 +38,7 @@ CI (`.github/workflows/tests.yml`) runs the same suite on Python 3.10-3.12 with
 ## Running Battles
 
 ```bash
-uv run python scripts/run_llm_battle.py -v                                  # 1v1 duel
+uv run python scripts/run_llm_battle.py --alpha-model claude-sonnet-5-5 --beta-model claude-sonnet-5 -v  # 1v1 duel (no default models)
 uv run python scripts/run_llm_battle.py --fleet-config data/fleet_config_claude_vs_gemini.json -v
 uv run python scripts/mcp_battle.py --config data/fleet_config_mcp_example.json  # human via MCP
 uv run python scripts/run_draft_battle.py --auto-draft --no-admirals --trace --seed 3  # free battle
@@ -48,15 +48,28 @@ uv run python scripts/run_live_draft_battle.py --alpha-model claude-sonnet-5-5 \
 ```
 
 Free battles fly `HeuristicCaptain` (`src/llm/heuristic_captain.py`). Its default
-"tactical" doctrine plans per fleet in `src/llm/heuristic_tactics.py` (reach-aware focus
-fire; gun ships nose-first - closure cap, no braking under fire, coast through a
-controlled pass facing the nearest gun, HOLD_RANGE once closure is gone; torpedo boats
-hold a standoff and fire every launchable round, ranked by target size/agility/PD umbrella; evade
-overlay vs torpedoes; crippled or disarmed ships open range, dead drives leave the
-formation, ships burn clear of dying hulks' blast radius; plan announced on the FLEET NET);
-`--doctrine legacy` (or `BattleConfig.heuristic_doctrine`) keeps the pass-4 captain (the
-fire-control fixture's heuristic battles are flown with both doctrines). `scripts/tactics_eval.py`
-runs/analyses seeded grids (kills, closest approach, rounds inside 150 km, hit rate).
+"tactical" doctrine picks one plan per fleet at its first checkpoint from the two
+compositions (`heuristic_flank.choose_default_spec`, constants with their measurements in
+`src/llm/heuristic_flank.py`): a gun fleet facing a torpedo fleet (>= half its hulls
+torpedo-only) flies "classic" (close fast, kill the boats); against a dreadnought line (>= 30 % of the enemy's gun energy
+on hulls <= 0.9 g) with 2+ fast hulls it flies the cut-corner pincer (fast hulls to 70 deg off
+the enemy's facing at 150 km, heavies hold as a wall at 230 km, then all engage; called off for
+close-and-pass, announced on the FLEET NET, if the fleets close at > 2 km/s before the flankers
+are on station); against a
+battleship line (>= 50 % on hulls <= 1.05 g) it flies "classic" (`heuristic_tactics.py`:
+reach-aware focus fire, gun ships nose-first under a closure cap, coast through a controlled
+pass, HOLD_RANGE once closure is gone); otherwise the nose-on wall (close at <= 0.8 km/s to
+140 km, then PADLOCK the nearest armed enemy). In every plan torpedo boats hold a standoff
+behind the gun line and fire every launchable round, ranked by target size/agility/PD
+umbrella; evade overlay vs torpedoes; crippled or disarmed ships open range, dead drives
+leave the formation, ships burn clear of dying hulks' blast radius; the plan, focus and
+salvos are announced on the FLEET NET. `--doctrine classic` keeps the previous default,
+`--doctrine legacy` (or `BattleConfig.heuristic_doctrine`) the pass-4 captain bit for bit;
+fixed variants `wall`, `pincer45/70/90`, `pincer70c`, `envelop70`, `split` (two-axis torpedo
+strike) and sweep names `pincer{deg}c{km}` stay selectable. `scripts/flank_experiment.py`
+measures doctrine pairs on mirror or asymmetric rosters (hit facing, flanker costs, closest
+approach); `scripts/tactics_eval.py` runs/analyses seeded grids (kills, closest approach,
+rounds inside 150 km, hit rate).
 
 ## Project Structure
 
@@ -194,6 +207,16 @@ ai-commanders/
   the head-on PD scenario tests (`all_round_fire` fixture) run without arcs.
   Anything that counts weapons must count weapons that BEAR
   (`src/llm/arcs_status.py`, `fire_solutions.pd_cover(threat_from=...)`)
+- Torpedo launch sequence (`src/torpedo_launch.py`, `tests/test_torpedo_launch_sequence.py`,
+  recorded per `docs/pass-5-recording-additions.md`): a round ejects from its own rack round /
+  VLS cell (`hull_mounts.json` `rounds`, picked target side first) at ship velocity + spin +
+  10 m/s and drifts 1 s (eject), then separates on its RCS (~0.6 g, turning 30 deg/s onto its
+  first guidance heading), and lights its torch (boost) once it is 50 m from its own and
+  friendly hulls, its 15 deg exhaust cone misses its own hull and its nose is within 10 deg of
+  the heading; 8 s timeout once clear, 15 s hard cap; the torch first cancels the separation
+  drift. Typically 4 s, 7 s when the round must turn about. Separating rounds are nobody's
+  threat; forecasts include the hold. `AIC_LAUNCH_SEQUENCE=0` / `CombatSimulation.launch_sequence`
+  = instant ignition (measurement only)
 - Two-stage kills: a non-reactor killing blow leaves an untargetable dying hulk
   (tumbling, torch sputtering) that detonates 0-30 s later; hits on the hulk
   shorten the fuse, a reactor hit detonates it at once (`test_dying_ships.py`)
@@ -221,6 +244,17 @@ captains as FLEET NET, enemy open-channel traffic as ENEMY TRANSMISSIONS.
 Recorded as comms_message / comms_delivered / captain_report events. A failed
 directive call leaves captains "(no new fleet directive this checkpoint)" and
 is recorded as admiral_directive_failed.
+
+Schedule: checkpoint 1 is at T+0 (orders before the clock starts), checkpoint k at
+(k-1) x interval, and every checkpoint's orders fly a full interval - the last one too - so
+20 checkpoints end at T+600 and no call is paid for orders that never fly
+(`LLMBattleRunner.FIRST_CHECKPOINT_S` / `FLIES_LAST_ORDERS`, `fleet_intel.battle_clock`;
+recordings carry `first_checkpoint_s: 0`, older ones lack it and decided first at T+30).
+Default effort per Anthropic model: `BATTLE_DEFAULT_EFFORT` in `src/llm/anthropic_client.py`
+(high Sonnet 5.5 / Opus 5.5 / Fable 5.2, medium Sonnet 5 / Haiku 5.5); admirals see the
+score line by default (`AdmiralConfig.show_score`, `--show-score none` turns it off). The
+admiral tactical plot (`--admiral-vision`, the one switch) is kept where used: a 90-call
+replay (old plot / new plot / no plot) found no difference in orders.
 
 Within a checkpoint, independent LLM calls (both admirals, per-ship orders, all
 captains) run concurrently (BattleConfig.parallel_llm, on by default).
@@ -251,8 +285,21 @@ A per-ship heading/maneuver REPLACES it for that ship (MAINTAIN/PADLOCK = engine
 off; given with a heading - PADLOCK only at throttle > 0 - the ship flies that
 HEADING instead); `evade` alone rides on it - or, with no fleet order, on the
 ship's current maneuver (`src/llm/maneuver_orders.py`, `tests/test_order_semantics.py`).
-The evade overlay burns at the order's throttle, at full throttle under a
-throttle-0 / engine-off order (`CombatSimulation._evasion_overlay`).
+The evade overlay on an order that burns (`_order_burn`: the order itself flies
+>= `EVADE_BURN_MIN_THROTTLE` this tick) keeps the order's throttle and swings the
+thrust axis round a cone of `EVADE_BURN_CONE_DEG` (20 deg) about the burn line -
+continuously while rounds are inbound or an armed enemy is within
+`EVADE_BURN_GUN_REACH_KM`, a fresh random cone point every half edge-to-edge swing
+(`_evade_burn_swing`, `_swing_dodge_aim`), so fire along the line is dodged too;
+armour picks only cone points; off the cone it turns toward it at full authority
+and burns at the order's throttle through the whole turn (no idle; range-control
+options, the captain's ENGINE ORDER CHECK and trajectory plans include that turn
+impulse, `range_control.turn_burn_segments`; range keepers size the correction they
+note by cos(angle off), `_turn_then_burn(evade=True)`);
+RUN never below the order's throttle (rule in the `src/simulation.py` module
+docstring, `tests/test_evade_burn.py`, `scripts/evade_burn_measure.py`). On a
+throttle-0 / engine-off order (and the EVADE maneuver) it flies the drive as before:
+full throttle, TANK half, BRACE off (`CombatSimulation._evasion_overlay`).
 Plain INTERCEPT never brakes (it merges); the anti-merge forms
 (`src/llm/maneuver_orders.py`; the same fields on captain set_maneuver /
 set_heading, admiral issue_order and MCP set_maneuver): INTERCEPT with
@@ -406,6 +453,16 @@ hashed by the perf harness) is unchanged.
   `render/HullRigs.js` aims from the event log, clamped to the masks and slewed
   at the engine's class rates (`MountLimits.TRAVERSE_DEG_S` mirrors
   `src/weapon_arcs.py`), as pure functions of battle time.
+- Tactical layer (fleet range): `src/TacticalLayout.js` is the pure layout (no DOM/THREE):
+  label density (`auto|minimal|full`, L key, `?labels=`, localStorage `aic.viewer.labels`),
+  single-linkage same-side clustering in screen px (`CLUSTER_PX`, group chips), chip placement
+  off every hull box, chip and HUD panel, torpedo waves grouped by target + launch burst
+  (`groupWaves`). `ContactOverlay` projects ships and torpedo heads and applies it; hover
+  (CSS / `setHover` from registry rows) expands a chip on top and never feeds the layout.
+  `render/TargetingLines.js` draws one weighted line per (side, target, on-screen shooter
+  cluster), faint unless focused or firing; below `full`, unfocused ships' tracks keep only
+  their path (`Tracks.othersPathOnly`). `tests/tactical_layout.test.js` pins no-overlap,
+  clustering stability and scrub determinism.
 - Ownership: in-flight weapons live in render/Projectiles.js (WeaponTimeline
   decides what exists at time t); persistent hit aftermath and deaths in
   DamageTimeline.js + render/DamageFX.js; hulls expose `userData.rcsMounts` /
@@ -423,16 +480,19 @@ hashed by the perf harness) is unchanged.
   overlay, HEADING turning / burning, INTERCEPT, PADLOCK) x 100 km so errors cannot
   cancel. The dispersion roll consumes only the conversion part; shot_fired records the
   forecast's inputs (`fc`: dodge, missed jink burn, pending HEADING burn, the stale
-  burn of an order applied that tick). If the gate, the roll, evasion/dodging or the lead
+  burn of an order applied that tick, the swing of a burn). If the gate, the roll, evasion/dodging or the lead
   changes, re-run `scripts/fire_control_calibration.py` (harness + table) and regenerate
   the fixture: 32 `--doctrine legacy` + 32 `--doctrine tactical` heuristic battles and
   every harness round (`fixture ... --harness-keep 1`) into
   `tests/fixtures/fire_control_shots.json`; battles recorded on older engines go to the
   separate historical file (`--label HISTORICAL ...`), which only the flash-mirror
   residual pin reads. Dodgers are bucketed by base maneuver (dodge:PADLOCK,
-  dodge:HOLD_RANGE) and modelled by their state at the shot (calm vs reacting,
-  `firecontrol.DODGE_CALM_ACCEL_FRACTION`). Buckets still outside 1.5x are named in the
-  test's `RESIDUALS`.
+  dodge:HOLD_RANGE, dodge:HEADING) and modelled by their state at the shot (calm vs
+  reacting, `firecontrol.DODGE_CALM_ACCEL_FRACTION`); one swinging a burn (the overlay
+  on a burning order, fc `swing`) by `firecontrol.SWING_ACCEL_FRACTION`; a range keeper
+  turning under the overlay at its feed-forward share (`simulation.KEEPER_TURN_DODGE_SHARE`).
+  Buckets still
+  outside 1.5x are named in the test's `RESIDUALS`.
   The doctrine P(hit) table is bound by `tests/test_prompt_structure.py`. Known residual:
   LLM fleets dodging a whole fleet's fire were hit even less than forecast
   (firecontrol.JINK_ACCEL_FRACTION).

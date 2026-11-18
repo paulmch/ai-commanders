@@ -14,10 +14,12 @@ flown on the CURRENT engine, from two kinds of source:
   Their INTERCEPT / PADLOCK rounds closer than 300 km are kept 1 in 4.
 - Every round of the seeded live-engine harness (fire_control_calibration
   harness --runs 30 --shooters 1,2,4,8, classes padlock_dodge, hold_dodge,
-  evasive, burn; the burn class only while the target is still turning onto
-  its HEADING): 1, 2, 4 or 8 shooters against dodging (PADLOCK / HOLD_RANGE +
-  evade 'dodge'), EVASIVE and HEADING-turning frigates..dreadnoughts,
-  40-400 km. All of them, not 1 in 20: thinned to 1 in 20 the 200-499 km
+  evasive, burn, heading_dodge, intercept_dodge; the burn class only while the
+  target is still turning onto its HEADING): 1, 2, 4 or 8 shooters against
+  dodging (PADLOCK / HOLD_RANGE / a HEADING burn / an INTERCEPT + evade
+  'dodge'; on a burning order the overlay
+  keeps the burn and swings it - the 'swing' column, firecontrol.SWING_*),
+  EVASIVE and HEADING-turning frigates..dreadnoughts, 40-400 km. All of them, not 1 in 20: thinned to 1 in 20 the 200-499 km
   buckets held 5-10 hits, where a 1.5x ratio is noise both ways.
 
 tests/fixtures/fire_control_shots_historical.json is a separate, HISTORICAL
@@ -78,15 +80,34 @@ RESIDUALS = {
     # 5 hits where 1.4 were forecast: a lone shooter at a PADLOCK dodger 300-399
     # km (the dodge term over-charges the longest flights of a calm dodger).
     ("harness", "dodge:PADLOCK:alone", 3): (0.15, 0.45),
-    # Battle rounds at long range: coasting PADLOCK targets at 400-499 km (0.67x)
-    # and attitude-only HEADING targets at 300-399 km (0.62x) are hit more than
-    # forecast - the unforeseen-maneuver term, fitted on order changes at
-    # shorter range, over-charges the longest flights (neither a cap nor a
-    # power law on it fitted better held out); HEADING burners at 300-399 km
-    # less (1.66x, 5 hits of 32 rounds).
-    ("battle", "PADLOCK", 4): (0.5, 0.8),
-    ("battle", "HEADING:attitude", 3): (0.5, 0.8),
-    ("battle", "HEADING:burn", 3): (1.3, 2.1),
+    # Battle rounds at long range. Attitude-only HEADING targets at 300-399 km
+    # were hit more than forecast (0.62x: the unforeseen-maneuver term, fitted
+    # on order changes at shorter range, over-charged the longest flights);
+    # once the default heuristic doctrine became the wall / pincer /
+    # close-and-pass rule the same bucket reads 1.55x the other way - 7 hits
+    # of 38 rounds where 10.8 were forecast, Poisson-plausible (p ~ 0.16): a
+    # thin bucket, pinned where it now sits. Coasting PADLOCK targets at
+    # 400-499 km, pinned at 0.67x, read 0.91x on that change (30 hits of 103
+    # rounds, 27.2 forecast): inside 1.5x, no longer pinned. (HEADING burners at 300-399 km,
+    # pinned at 1.66x on 5 hits of 32 rounds, fell to 25 rounds and 3 hits once
+    # torpedo rounds were reassigned between targets: below MIN_BUCKET, and
+    # Poisson-plausible against the 6.8 forecast - no longer pinned.)
+    # The evade overlay on a burning order (evadeburn round 2). Thin buckets
+    # beyond 300 km swing with which few engagements land in them: on harness
+    # seeds the fixture does not hold (runs 200-255 per shooter count, the
+    # review's calib_fresh) the same buckets read HEADING alone 300-399
+    # 1.16x, INTERCEPT alone 300-399 1.25x (4 hits), INTERCEPT fleet 400-499
+    # 0.88x, HOLD_RANGE fleet 300-399 1.19x and 400-499 2.67x (4 hits). Each
+    # band holds both seed sets. HOLD_RANGE dodgers under a fleet's fire
+    # beyond 400 km are hit less than forecast in both (the dodge:PADLOCK
+    # fleet residual's family: a range keeper jinks at full throttle between
+    # its swung correction burns).
+    ("harness", "dodge:HEADING:alone", 3): (0.5, 1.3),
+    ("harness", "dodge:INTERCEPT:alone", 3): (1.1, 2.6),
+    ("harness", "dodge:INTERCEPT:fleet", 4): (0.8, 1.8),
+    ("harness", "dodge:HOLD_RANGE:fleet", 3): (1.1, 2.5),
+    ("harness", "dodge:HOLD_RANGE:fleet", 4): (2.0, 3.6),
+    ("battle", "HEADING:attitude", 3): (1.2, 2.0),
 }
 
 
@@ -272,10 +293,19 @@ def test_the_old_number_was_the_problem(shots):
     mirror that showed it; on the current engine the harness and battles
     say the same)."""
     far = [r for r in shots if (r["class"].startswith("dodge") or r["class"] == "EVASIVE")
-           and r["range_km"] >= 200]
+           and r["range_km"] >= 200 and not r.get("swing")]
     n, hits, new, old = _summary(far)
     assert n > 5000
     assert old / n > 0.2 and old > 8 * hits
+    assert new < 2 * hits + 15
+    # A dodger whose evade overlay keeps an ordered burn and only swings it
+    # (simulation module docstring) moves less: ~15% of these rounds land,
+    # 2.5x fewer than the conversion number promised.
+    swung = [r for r in shots if r["class"].startswith("dodge") and r["range_km"] >= 200
+             and r.get("swing")]
+    n, hits, new, old = _summary(swung)
+    assert n > 5000
+    assert old / n > 0.2 and old > 2.2 * hits
     assert new < 2 * hits + 15
 
 

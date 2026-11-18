@@ -237,6 +237,10 @@ def _ghost_torpedo_flight(flight: Any) -> Any:
     ghost_torp = type(torp).__new__(type(torp))
     ghost_torp.__dict__.update(torp.__dict__)
     ghost.torpedo = ghost_torp
+    # A round still in its launch sequence: the ghost coasts for its
+    # forecast hold (src/torpedo_launch.hold_left_s), then flies guidance.
+    # The sequence object is the real round's: the ghost never touches it.
+    ghost._ghost_hold_s = torp.launch_hold_s() if torp.in_launch_sequence else 0.0
     return ghost
 
 
@@ -261,6 +265,10 @@ class PredictionSimulation(CombatSimulation):
         self._event_callbacks = []
         self.pending_torpedo_launches = []
         self.ships = {sid: _ghost_ship(s) for sid, s in source.ships.items()}
+        # Ghosts carry no weapons; the evade overlay's swing still needs to
+        # know which ships mount guns (CombatSimulation._under_guns).
+        self._gun_ships = {sid for sid, s in source.ships.items()
+                           if CombatSimulation._mounts_guns(s)}
 
         # Threats only matter to ships whose maneuver reacts to them.
         evaders = {
@@ -286,6 +294,16 @@ class PredictionSimulation(CombatSimulation):
         # nose instead of searching the reachable facings (that search was
         # most of a traced torpedo battle's CPU).
         return ship.forward
+
+    def _mounts_guns(self, ship: Any) -> bool:  # type: ignore[override]
+        return ship.ship_id in self._gun_ships
+
+    def _swing_armour_aim(self, ship: Any, line: Any, cone: float, mode: str) -> Any:  # type: ignore[override]
+        # Motion only: an armour swing on a burning order stays inside the
+        # cone around the burn line (at least cos(cone) of the push along
+        # it); the shadow skips scoring the cone's facings and flies it as a
+        # swing with nothing to gain (the dodge, or the line).
+        return None
 
     def _advance_ship(self, ship: Any, dt: float) -> None:  # type: ignore[override]
         if ship.is_destroyed:
@@ -319,6 +337,12 @@ class PredictionSimulation(CombatSimulation):
             torp.position = torp.position + torp.velocity * dt
             return False
 
+        if getattr(flight, "_ghost_hold_s", 0.0) > 0.0:
+            torp.position = torp.position + torp.velocity * dt
+            flight._ghost_hold_s -= dt
+            if flight._ghost_hold_s <= 1e-9:
+                torp.launch_seq = None      # ghost-local: its torch is lit
+            return False
         prev_pos = torp.position
         # Same guidance dispatch as CombatSimulation._update_torpedoes, minus
         # retargeting, dv bookkeeping and the hit resolution.
@@ -644,6 +668,15 @@ def predict_plans(
             alpha, omega_max = sim._get_rotation_params(sim.ships[sid], engines_on=True)
             sigma_w = wobble_sigma_m(dts, accels[sid], wobble, alpha, omega_max)
         a_max = sim.ships[sid].kinematic_state.max_acceleration_ms2()
+        burn = getattr(sim.ships[sid], "evade_burn", None)
+        man = sim.ships[sid].current_maneuver
+        if burn is not None and not (man is not None and man.steers_to_aim):
+            # The evade overlay on a burning order swings the burn inside its
+            # cone instead of jinking across at full thrust: its sideways
+            # authority is a_max x throttle x sin(cone), as fire control
+            # prices it (TargetMotion.swing_ms2). (Scaled, not refitted: the
+            # REACTIVE_SIGMA_K table was calibrated on the full jink.)
+            a_max *= burn[0] * burn[1]
         sigma_r, mode = reactive_sigma_m(dts, modes[sid], mode_now[sid], a_max)
         if diagnostics is not None:
             diagnostics[sid] = {
@@ -704,6 +737,9 @@ class TraceEnricher:
       evade  None | "wobble" | "evade" | "tank" | "brace" | "run" | "present"
              - active mode of an EVASIVE maneuver, or of another maneuver's
              evasion overlay (Maneuver.evade) while it has the helm.
+      swing  1 when that overlay rides on a burning order and keeps the
+             burn, swinging the thrust axis inside the cone around the burn
+             line (simulation module docstring); omitted otherwise.
       tgt    ship id the maneuver steers relative to (INTERCEPT / PADLOCK /
              HOLD_RANGE target, HEADING toward_ship, or an explicitly
              assigned one), else None. A wobbling EVASIVE holds its own
@@ -795,6 +831,8 @@ class TraceEnricher:
             entry["alpha"] = _vec(alpha, 5)
             entry["turn"] = turn
             entry["evade"] = evade
+            if evade is not None and getattr(ship, "evade_swing", False):
+                entry["swing"] = 1
             entry["tgt"] = tgt
             plan = plans.get(sid)
             if plan is not None:

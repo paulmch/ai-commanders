@@ -1,0 +1,192 @@
+=== BATTLE p5w5_b5_b2_rerun_final_engine | claude-sonnet-5-5 vs claude-sonnet-5 | spend $0.00/$13.00 ===
+150 pts/side, max 8 ships, 20 turns of 30s. Reasoning medium. Admiral vision ON: tactical plot to both admirals each checkpoint.
+Costs: CO=corvette:24 FF=frigate:7 DD=destroyer:18 CA=cruiser:29 BC=battlecruiser:25 BB=battleship:43 DN=dreadnought:55 DS=dreadnought_siege:56 CT=cruiser_torpedo:100
+=== CP 1 | t=30s | spend $1.40/$13.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 100% | Lancer-1 BC hull 100% arm 30/30cm heat 0% | Lancer-2 BC hull 100% arm 30/30cm heat 0% | Lancer-3 BC hull 100% arm 30/30cm heat 0% | Lancer-4 BC hull 100% arm 30/30cm heat 0% | Lancer-5 BC hull 100% arm 30/30cm heat 0% | Ward-1 FF hull 100% arm 12/12cm heat 0% | Ward-2 FF hull 100% arm 12/12cm heat 0% | Ward-3 FF hull 100% arm 12/12cm heat 0%
+BETA claude-sonnet-5: 6/6 alive, hull 100% | Halberd-1 BC hull 100% arm 30/30cm heat 0% | Halberd-2 BC hull 100% arm 30/30cm heat 0% | Halberd-3 BC hull 100% arm 30/30cm heat 0% | Halberd-4 BC hull 100% arm 30/30cm heat 0% | Halberd-5 BC hull 100% arm 30/30cm heat 0% | Halberd-6 BC hull 100% arm 30/30cm heat 0%
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Advance slowly in tight formation, nose on enemy, to ~300 km, then coast/PADLOCK. FOCUS FIRE: all ships target OCS Halberd-1 until dead,...
+B admiral: We have 6 Battlecruisers vs their 5 BC + 3 FF. Their frigates are fragile (71cm armor) - kill those first to cut their firepower fast, th...
+Prompt cache: 3 hit / 27 write / 0 cold calls, 52.3k read + 276.0k written of 402.0k prompt tokens (13% read)
+=== CP 2 | t=60s | spend $1.72/$13.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 100% | Lancer-1 BC hull 100% arm 30/30cm heat 4% | Lancer-2 BC hull 100% arm 30/30cm heat 4% | Lancer-3 BC hull 100% arm 30/30cm heat 4% | Lancer-4 BC hull 100% arm 30/30cm heat 4% | Lancer-5 BC hull 100% arm 30/30cm heat 2% | Ward-1 FF hull 100% arm 12/12cm heat 2% | Ward-2 FF hull 100% arm 12/12cm heat 2% | Ward-3 FF hull 100% arm 12/12cm heat 2%
+BETA claude-sonnet-5: 6/6 alive, hull 100% | Halberd-1 BC hull 100% arm 30/30cm heat 0% | Halberd-2 BC hull 100% arm 30/30cm heat 7% | Halberd-3 BC hull 100% arm 30/30cm heat 0% | Halberd-4 BC hull 100% arm 30/30cm heat 4% | Halberd-5 BC hull 100% arm 30/30cm heat 0% | Halberd-6 BC hull 100% arm 30/30cm heat 4%
+Hits: none
+Kills: none
+Fire: A 3 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Stop advancing: cut burns, coast with noses on the enemy (PADLOCK on OCS Halberd-1). All ships focus fire on OCS Halberd-1 with spinals a...
+B admiral: Phase 1 continues: close the range as a formation, noses on the enemy, all six Halberds focus fire on TIS Ward-1 (then Ward-2, Ward-3) to...
+Prompt cache: 33 hit / 27 write / 0 cold calls, 380.7k read + 276.0k written of 815.3k prompt tokens (47% read)
+=== CP 3 | t=90s | spend $2.04/$13.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 100% | Lancer-1 BC hull 100% arm 30/30cm heat 4% | Lancer-2 BC hull 100% arm 30/30cm heat 4% | Lancer-3 BC hull 100% arm 30/30cm heat 4% | Lancer-4 BC hull 100% arm 30/30cm heat 5% | Lancer-5 BC hull 100% arm 30/30cm heat 3% | Ward-1 FF hull 100% arm 12/12cm heat 2% | Ward-2 FF hull 100% arm 12/12cm heat 2% | Ward-3 FF hull 100% arm 12/12cm heat 2%
+BETA claude-sonnet-5: 6/6 alive, hull 100% | Halberd-1 BC hull 100% arm 30/30cm heat 0% | Halberd-2 BC hull 100% arm 30/30cm heat 15% | Halberd-3 BC hull 100% arm 30/30cm heat 1% | Halberd-4 BC hull 100% arm 30/30cm heat 12% | Halberd-5 BC hull 100% arm 30/30cm heat 1% | Halberd-6 BC hull 100% arm 30/30cm heat 12%
+Hits: none
+Kills: none
+Fire: A 5 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold formation, coast PADLOCK nose-on. Focus fire on the nearest/lead OCS Halberd (Halberd-1 now) once the range falls below ~350 km. Do...
+B admiral: Hold formation, noses on TIS Ward-1 (frigate), closing at controlled pace. All ships PADLOCK or INTERCEPT on TIS Ward-1 to concentrate sp...
+Prompt cache: 63 hit / 27 write / 0 cold calls, 709.0k read + 276.0k written of 1229.5k prompt tokens (58% read)
+=== CP 4 | t=120s | spend $2.44/$13.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 100% | Lancer-1 BC hull 100% arm 30/30cm heat 4% | Lancer-2 BC hull 100% arm 30/30cm heat 4% | Lancer-3 BC hull 100% arm 30/30cm heat 4% | Lancer-4 BC hull 100% arm 30/30cm heat 6% | Lancer-5 BC hull 100% arm 30/30cm heat 3% | Ward-1 FF hull 100% arm 12/12cm heat 3% | Ward-2 FF hull 100% arm 12/12cm heat 2% | Ward-3 FF hull 100% arm 12/12cm heat 2%
+BETA claude-sonnet-5: 6/6 alive, hull 100% | Halberd-1 BC hull 100% arm 30/30cm heat 5% | Halberd-2 BC hull 100% arm 30/30cm heat 22% | Halberd-3 BC hull 100% arm 30/30cm heat 1% | Halberd-4 BC hull 100% arm 30/30cm heat 19% | Halberd-5 BC hull 100% arm 30/30cm heat 1% | Halberd-6 BC hull 100% arm 30/30cm heat 19%
+Hits: A:Lancer-4>B:Halberd-1 spinal x1
+Kills: none
+Fire: A 0 slugs/1 hit, 0 torps/0 impact, PD downed 0 torps ; B 9 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold formation, coast with PADLOCK, noses on the enemy. Focus fire on OCS Halberd-2 (nearest) until it dies, then OCS Halberd-1, then nea...
+B admiral: Continue closing on the enemy formation. ALL ships: focus fire TIS Ward-1 (nearest frigate) with spinals/batteries whenever gun gates all...
+Prompt cache: 95 hit / 28 write / 0 cold calls, 1059.2k read + 281.5k written of 1683.3k prompt tokens (63% read)
+=== CP 5 | t=150s | spend $2.78/$13.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 100% | Lancer-1 BC hull 100% arm 30/30cm heat 4% | Lancer-2 BC hull 100% arm 30/30cm heat 4% | Lancer-3 BC hull 100% arm 30/30cm heat 4% | Lancer-4 BC hull 100% arm 30/30cm heat 6% | Lancer-5 BC hull 100% arm 30/30cm heat 4% | Ward-1 FF hull 100% arm 12/12cm heat 4% | Ward-2 FF hull 100% arm 12/12cm heat 2% | Ward-3 FF hull 100% arm 12/12cm heat 2%
+BETA claude-sonnet-5: 6/6 alive, hull 100% | Halberd-1 BC hull 100% arm 30/30cm heat 6% | Halberd-2 BC hull 100% arm 30/30cm heat 27% | Halberd-3 BC hull 100% arm 30/30cm heat 8% | Halberd-4 BC hull 100% arm 30/30cm heat 26% | Halberd-5 BC hull 100% arm 30/30cm heat 2% | Halberd-6 BC hull 100% arm 30/30cm heat 27%
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 2 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold formation, coast with PADLOCK, noses on the enemy. Focus fire OCS Halberd-2 (nearest), then Halberd-4, then Halberd-1. Spinals and b...
+B admiral: All ships: INTERCEPT TIS Ward-1 with standoff_km 140 - close the range to get into our effective gun band (50% hit rate at 100-150km) but...
+Prompt cache: 125 hit / 28 write / 0 cold calls, 1387.5k read + 281.5k written of 2102.5k prompt tokens (66% read)
+=== CP 6 | t=180s | spend $3.15/$13.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 100% | Lancer-1 BC hull 100% arm 30/30cm heat 7% | Lancer-2 BC hull 100% arm 30/30cm heat 6% | Lancer-3 BC hull 100% arm 30/30cm heat 7% | Lancer-4 BC hull 100% arm 30/30cm heat 8% | Lancer-5 BC hull 100% arm 30/30cm heat 6% | Ward-1 FF hull 100% arm 12/12cm heat 4% | Ward-2 FF hull 100% arm 12/12cm heat 3% | Ward-3 FF hull 100% arm 12/12cm heat 3%
+BETA claude-sonnet-5: 6/6 alive, hull 100% | Halberd-1 BC hull 100% arm 30/30cm heat 13% | Halberd-2 BC hull 100% arm 28/35cm heat 27% | Halberd-3 BC hull 100% arm 30/30cm heat 16% | Halberd-4 BC hull 100% arm 30/30cm heat 27% | Halberd-5 BC hull 100% arm 30/30cm heat 10% | Halberd-6 BC hull 100% arm 30/30cm heat 30%
+Hits: B:Halberd-5>A:Lancer-2 gun x1 | B:Halberd-4>A:Lancer-4 gun x1 | A:Lancer-1>B:Halberd-2 spinal x1
+Kills: none
+Fire: A 26 slugs/1 hit, 0 torps/0 impact, PD downed 0 torps ; B 6 slugs/2 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold formation, coast with PADLOCK, noses on the enemy. Everyone focus fire OCS Halberd-2 (nearest, shows tail/side, leads the enemy colu...
+B admiral: Continue closing on frigate TIS Ward-1 [alpha_6] - all 6 ships INTERCEPT with standoff_km 140 to enter the 50%-hit gun band without an un...
+Prompt cache: 155 hit / 28 write / 0 cold calls, 1715.9k read + 281.5k written of 2526.5k prompt tokens (68% read)
+=== CP 7 | t=210s | spend $3.53/$13.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 100% | Lancer-1 BC hull 100% arm 30/30cm heat 7% | Lancer-2 BC hull 100% arm 30/30cm heat 7% | Lancer-3 BC hull 100% arm 30/30cm heat 7% | Lancer-4 BC hull 100% arm 30/30cm heat 9% | Lancer-5 BC hull 100% arm 30/30cm heat 6% | Ward-1 FF hull 100% arm 12/12cm heat 7% | Ward-2 FF hull 100% arm 12/12cm heat 4% | Ward-3 FF hull 100% arm 12/12cm heat 3%
+BETA claude-sonnet-5: 6/6 alive, hull 100% | Halberd-1 BC hull 100% arm 30/30cm heat 19% | Halberd-2 BC hull 100% arm 6/35cm heat 34% | Halberd-3 BC hull 100% arm 30/30cm heat 22% | Halberd-4 BC hull 100% arm 30/30cm heat 34% | Halberd-5 BC hull 100% arm 30/30cm heat 16% | Halberd-6 BC hull 100% arm 30/30cm heat 36%
+Hits: A:Lancer-2>B:Halberd-2 spinal x2 | A:Lancer-5>B:Halberd-2 spinal x1 | A:Lancer-3>B:Halberd-2 gun x1 | A:Lancer-1>B:Halberd-2 spinal x1
+Kills: none
+Fire: A 3 slugs/5 hit, 0 torps/0 impact, PD downed 0 torps ; B 7 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold formation, coast with noses on (PADLOCK). All ships focus fire OCS Halberd-2 until it dies, then Halberd-4, then Halberd-6. Their fl...
+B admiral: Close the range band - current 355km gives us only ~25% hit rate while taking fire. All ships: INTERCEPT TIS Ward-1 with standoff_km 100...
+Prompt cache: 185 hit / 28 write / 0 cold calls, 2044.2k read + 281.5k written of 2955.0k prompt tokens (69% read)
+=== CP 8 | t=240s | spend $3.92/$13.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 100% | Lancer-1 BC hull 100% arm 30/30cm heat 9% | Lancer-2 BC hull 100% arm 30/30cm heat 9% | Lancer-3 BC hull 100% arm 30/30cm heat 9% | Lancer-4 BC hull 100% arm 30/30cm heat 12% | Lancer-5 BC hull 100% arm 30/30cm heat 8% | Ward-1 FF hull 100% arm 12/12cm heat 9% | Ward-2 FF hull 100% arm 12/12cm heat 4% | Ward-3 FF hull 100% arm 12/12cm heat 4%
+BETA claude-sonnet-5: 6/6 alive, hull 100% | Halberd-1 BC hull 100% arm 30/30cm heat 20% | Halberd-2 BC hull 100% arm 6/35cm heat 41% | Halberd-3 BC hull 100% arm 30/30cm heat 24% | Halberd-4 BC hull 100% arm 30/30cm heat 39% | Halberd-5 BC hull 100% arm 30/30cm heat 22% | Halberd-6 BC hull 100% arm 30/30cm heat 42%
+Hits: B:Halberd-5>A:Lancer-2 gun x1
+Kills: none
+Fire: A 15 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 1 slugs/1 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold formation, coast with PADLOCK, noses on. Focus fire OCS Halberd-2 (lead hull, strung out ahead of its fleet), then Halberd-4, then H...
+B admiral: Switch the whole formation to COAST & SHOOT: nose-on toward TIS Ward-1 at throttle 0 (PADLOCK/heading), which unmasks 6 spinals + 6 batte...
+Prompt cache: 215 hit / 28 write / 0 cold calls, 2372.5k read + 281.5k written of 3384.4k prompt tokens (70% read)
+=== CP 9 | t=270s | spend $4.30/$13.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 100% | Lancer-1 BC hull 100% arm 30/30cm heat 12% | Lancer-2 BC hull 100% arm 30/30cm heat 11% | Lancer-3 BC hull 100% arm 30/30cm heat 14% | Lancer-4 BC hull 100% arm 30/30cm heat 15% | Lancer-5 BC hull 100% arm 30/30cm heat 12% | Ward-1 FF hull 100% arm 12/12cm heat 14% | Ward-2 FF hull 100% arm 12/12cm heat 5% | Ward-3 FF hull 100% arm 12/12cm heat 4%
+BETA claude-sonnet-5: 6/6 alive, hull 100% | Halberd-1 BC hull 100% arm 30/30cm heat 21% | Halberd-2 BC hull 100% arm 6/35cm heat 49% | Halberd-3 BC hull 100% arm 30/30cm heat 24% | Halberd-4 BC hull 100% arm 30/30cm heat 40% | Halberd-5 BC hull 100% arm 30/30cm heat 23% | Halberd-6 BC hull 100% arm 30/30cm heat 42%
+Hits: A:Lancer-1>B:Halberd-2 spinal x1 | A:Lancer-5>B:Halberd-2 spinal x1
+Kills: none
+Fire: A 21 slugs/2 hit, 0 torps/0 impact, PD downed 0 torps ; B 12 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold formation, coast and PADLOCK, nose-on to the enemy. Focus fire OCS Halberd-2 (closest, leading), then Halberd-4, then Halberd-6. Ene...
+B admiral: Hold coast-and-shoot posture: all ships PADLOCK on TIS Ward-1 to keep noses on target while mounts finish unmasking (rolls in progress, ~...
+Prompt cache: 245 hit / 28 write / 0 cold calls, 2700.9k read + 281.5k written of 3814.0k prompt tokens (71% read)
+=== CP 10 | t=300s | spend $4.71/$13.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 100% | Lancer-1 BC hull 100% arm 30/30cm heat 14% | Lancer-2 BC hull 100% arm 30/30cm heat 13% | Lancer-3 BC hull 100% arm 30/30cm heat 17% | Lancer-4 BC hull 100% arm 30/30cm heat 17% | Lancer-5 BC hull 100% arm 30/30cm heat 14% | Ward-1 FF hull 100% arm 12/12cm heat 16% | Ward-2 FF hull 100% arm 12/12cm heat 5% | Ward-3 FF hull 100% arm 12/12cm heat 4%
+BETA claude-sonnet-5: 6/6 alive, hull 96% | Halberd-1 BC hull 100% arm 30/30cm heat 21% | Halberd-2 BC hull 75% arm 0/30cm heat 51% [brace] | Halberd-3 BC hull 100% arm 30/30cm heat 25% | Halberd-4 BC hull 100% arm 29/30cm heat 43% | Halberd-5 BC hull 100% arm 30/30cm heat 24% | Halberd-6 BC hull 100% arm 30/30cm heat 44%
+Hits: A:Lancer-2>B:Halberd-2 spinal x2 | A:Lancer-4>B:Halberd-2 spinal x2 | A:Lancer-1>B:Halberd-4 gun x1 | A:Lancer-1>B:Halberd-2 spinal x1 | A:Lancer-2>B:Halberd-4 gun x1 | +2 more
+Kills: none
+Fire: A 30 slugs/8 hit, 0 torps/0 impact, PD downed 0 torps ; B 14 slugs/1 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold formation, coast and PADLOCK, noses on the enemy. Focus fire: OCS Halberd-2 (75%) until dead, then Halberd-4, then Halberd-6. Enemy...
+B admiral: CRITICAL: cancel the merge. Enemy outnumbers us 8-to-6 and is focus-firing OCS Halberd-2; a merge at 3.3km will be a slaughter. Whole fle...
+Prompt cache: 275 hit / 28 write / 0 cold calls, 3029.2k read + 281.5k written of 4250.7k prompt tokens (71% read)
+=== CP 11 | t=330s | spend $5.12/$13.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 100% | Lancer-1 BC hull 100% arm 30/30cm heat 16% | Lancer-2 BC hull 100% arm 30/30cm heat 15% | Lancer-3 BC hull 100% arm 29/30cm heat 18% | Lancer-4 BC hull 100% arm 30/30cm heat 19% | Lancer-5 BC hull 100% arm 30/30cm heat 15% | Ward-1 FF hull 100% arm 12/12cm heat 20% | Ward-2 FF hull 100% arm 12/12cm heat 6% | Ward-3 FF hull 100% arm 12/12cm heat 5%
+BETA claude-sonnet-5: 6/6 alive, hull 95% | Halberd-1 BC hull 100% arm 30/30cm heat 23% | Halberd-2 BC hull 69% arm 0/30cm heat 54% | Halberd-3 BC hull 100% arm 30/30cm heat 26% | Halberd-4 BC hull 100% arm 29/30cm heat 47% | Halberd-5 BC hull 100% arm 30/30cm heat 25% | Halberd-6 BC hull 100% arm 30/30cm heat 46%
+Hits: A:Ward-1>B:Halberd-2 gun x2 | A:Lancer-1>B:Halberd-6 gun x1 | B:Halberd-2>A:Lancer-2 gun x1 | A:Lancer-4>B:Halberd-6 gun x1 | A:Lancer-2>B:Halberd-2 spinal x1 | +3 more
+Kills: none
+Fire: A 32 slugs/7 hit, 0 torps/0 impact, PD downed 0 torps ; B 18 slugs/2 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold course, coast and PADLOCK, noses on the enemy. Focus fire OCS Halberd-2 (69%), then Halberd-4, then Halberd-6. Spinals fire whenever...
+B admiral: We are now at point-blank range with Group A (6-32km) - effectively merged. Halberd-1,3,4,5,6: PADLOCK on TIS Ward-1 (frigate, weakest, ~...
+Prompt cache: 305 hit / 28 write / 0 cold calls, 3357.5k read + 281.5k written of 4695.7k prompt tokens (72% read)
+=== CP 12 | t=360s | spend $5.58/$13.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 100% | Lancer-1 BC hull 100% arm 26/30cm heat 18% | Lancer-2 BC hull 100% arm 29/30cm heat 17% | Lancer-3 BC hull 100% arm 29/30cm heat 21% | Lancer-4 BC hull 100% arm 30/30cm heat 21% | Lancer-5 BC hull 100% arm 30/30cm heat 17% | Ward-1 FF hull 99% arm 2/12cm heat 22% | Ward-2 FF hull 100% arm 12/12cm heat 7% | Ward-3 FF hull 100% arm 12/12cm heat 6%
+BETA claude-sonnet-5: 6/6 alive, hull 92% | Halberd-1 BC hull 100% arm 28/30cm heat 26% | Halberd-2 BC hull 53% arm 0/30cm heat 60% | Halberd-3 BC hull 100% arm 30/30cm heat 27% | Halberd-4 BC hull 100% arm 29/30cm heat 50% | Halberd-5 BC hull 100% arm 30/30cm heat 26% | Halberd-6 BC hull 100% arm 30/30cm heat 48%
+Hits: B:Halberd-1>A:Ward-1 gun x3 | B:Halberd-4>A:Lancer-1 gun x2 | B:Halberd-4>A:Ward-1 gun x2 | A:Lancer-4>B:Halberd-2 spinal x2 | B:Halberd-5>A:Lancer-2 gun x1 | +8 more
+Kills: none
+Fire: A 34 slugs/7 hit, 0 torps/0 impact, PD downed 0 torps ; B 23 slugs/11 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold formation, coast and PADLOCK nose-on. Retarget from fleeing Halberd-2 to the closing group: all Lancers and Wards focus OCS Halberd-...
+B admiral: Merge alarm has run 3 checkpoints unanswered - we are about to pass through 8 enemy hulls at 5km. CANCEL CLOSURE NOW: fleet burns heading...
+Prompt cache: 337 hit / 28 write / 0 cold calls, 3694.5k read + 281.5k written of 5159.1k prompt tokens (72% read)
+=== CP 13 | t=390s | spend $6.07/$13.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 99% | Lancer-1 BC hull 100% arm 24/30cm heat 20% | Lancer-2 BC hull 100% arm 29/30cm heat 19% | Lancer-3 BC hull 100% arm 29/30cm heat 23% | Lancer-4 BC hull 100% arm 30/30cm heat 23% | Lancer-5 BC hull 100% arm 30/30cm heat 18% | Ward-1 FF hull 95% arm 0/12cm heat 29% | Ward-2 FF hull 100% arm 12/12cm heat 7% | Ward-3 FF hull 100% arm 12/12cm heat 6%
+BETA claude-sonnet-5: 6/6 alive, hull 91% | Halberd-1 BC hull 100% arm 28/30cm heat 28% | Halberd-2 BC hull 44% arm 0/30cm heat 65% rad | Halberd-3 BC hull 100% arm 30/30cm heat 29% | Halberd-4 BC hull 100% arm 19/30cm heat 59% | Halberd-5 BC hull 100% arm 30/30cm heat 28% | Halberd-6 BC hull 100% arm 30/30cm heat 57%
+Hits: A:Lancer-3>B:Halberd-4 gun x4 | B:Halberd-5>A:Ward-1 gun x3 | B:Halberd-3>A:Ward-1 gun x2 | A:Lancer-2>B:Halberd-4 gun x2 | B:Halberd-1>A:Ward-1 gun x1 | +12 more
+Kills: none
+Fire: A 27 slugs/11 hit, 0 torps/0 impact, PD downed 0 torps ; B 21 slugs/13 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold the score lead. Keep noses on and coast through the pass, PADLOCK OCS Halberd-4 (shows tail), then OCS Halberd-6. All gun ships focu...
+B admiral: MERGE DANGER: Group A (5 BC+2FF) would close to ~7km if we coast - too tight against a numbers disadvantage. All ships except Halberd-2 B...
+Prompt cache: 369 hit / 28 write / 0 cold calls, 4031.6k read + 281.5k written of 5626.5k prompt tokens (72% read)
+=== CP 14 | t=420s | spend $6.53/$13.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 99% | Lancer-1 BC hull 100% arm 24/30cm heat 25% | Lancer-2 BC hull 100% arm 29/30cm heat 22% | Lancer-3 BC hull 100% arm 29/30cm heat 25% | Lancer-4 BC hull 100% arm 30/30cm heat 25% | Lancer-5 BC hull 100% arm 30/30cm heat 21% | Ward-1 FF hull 93% arm 0/12cm heat 30% | Ward-2 FF hull 100% arm 12/12cm heat 8% | Ward-3 FF hull 100% arm 12/12cm heat 8%
+BETA claude-sonnet-5: 6/6 alive, hull 90% | Halberd-1 BC hull 100% arm 25/30cm heat 34% | Halberd-2 BC hull 44% arm 0/30cm heat 65% rad | Halberd-3 BC hull 99% arm 30/30cm heat 37% | Halberd-4 BC hull 96% arm 0/30cm heat 65% rad | Halberd-5 BC hull 100% arm 30/30cm heat 36% | Halberd-6 BC hull 100% arm 28/30cm heat 65%
+Hits: A:Lancer-1>B:Halberd-4 gun x3 | A:Lancer-2>B:Halberd-4 gun x2 | A:Ward-3>B:Halberd-4 gun x2 | B:Halberd-3>A:Lancer-3 gun x2 | A:Lancer-2>B:Halberd-4 spinal x2 | +18 more
+Kills: none
+Fire: A 44 slugs/21 hit, 0 torps/0 impact, PD downed 0 torps ; B 17 slugs/10 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold course and coast through the pass with PADLOCK, nose-on. Focus fire OCS Halberd-4 (96%) until it dies, then Halberd-6, then Halberd-...
+B admiral: Group A range has closed to 60-80km, deep in the high-hit-rate gun band. Main fleet (Halberd-1,3,4,5,6) continues the cancel-closure burn...
+Prompt cache: 401 hit / 28 write / 0 cold calls, 4368.8k read + 281.5k written of 6094.6k prompt tokens (72% read)
+=== CP 15 | t=450s | spend $6.93/$13.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 99% | Lancer-1 BC hull 100% arm 21/30cm heat 27% | Lancer-2 BC hull 100% arm 29/30cm heat 25% | Lancer-3 BC hull 100% arm 29/30cm heat 29% | Lancer-4 BC hull 100% arm 30/30cm heat 27% | Lancer-5 BC hull 100% arm 30/30cm heat 23% | Ward-1 FF hull 93% arm 0/12cm heat 32% | Ward-2 FF hull 100% arm 12/12cm heat 9% | Ward-3 FF hull 100% arm 12/12cm heat 9%
+BETA claude-sonnet-5: 6/6 alive, hull 80% | Halberd-1 BC hull 100% arm 21/30cm heat 42% | Halberd-2 BC hull 44% arm 0/30cm heat 65% rad | Halberd-3 BC hull 99% arm 30/30cm heat 44% | Halberd-4 BC hull 38% arm 0/30cm heat 61% rad | Halberd-5 BC hull 100% arm 30/30cm heat 44% | Halberd-6 BC hull 100% arm 24/30cm heat 66% rad
+Hits: B:Halberd-6>A:Lancer-1 gun x4 | A:Lancer-5>B:Halberd-4 spinal x3 | A:Lancer-1>B:Halberd-4 gun x3 | A:Lancer-4>B:Halberd-4 gun x3 | A:Ward-2>B:Halberd-4 gun x3 | +19 more
+Kills: none
+Fire: A 38 slugs/33 hit, 0 torps/0 impact, PD downed 0 torps ; B 22 slugs/15 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Keep coasting nose-on (PADLOCK) and keep firing. Focus fire on OCS Halberd-4 (38%) until it dies, then OCS Halberd-6, then OCS Halberd-3....
+B admiral: We are behind on score with only 5 checkpoints left - stop maneuvering for range and start maximizing gun damage. Main fleet (Halberd-1,...
+Prompt cache: 431 hit / 28 write / 0 cold calls, 4697.1k read + 281.5k written of 6540.8k prompt tokens (72% read)
+=== CP 16 | t=480s | spend $7.30/$13.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 99% | Lancer-1 BC hull 96% arm 0/30cm heat 28% | Lancer-2 BC hull 100% arm 29/30cm heat 27% | Lancer-3 BC hull 100% arm 21/30cm heat 30% | Lancer-4 BC hull 100% arm 30/30cm heat 29% | Lancer-5 BC hull 100% arm 30/30cm heat 24% | Ward-1 FF hull 93% arm 0/12cm heat 33% | Ward-2 FF hull 100% arm 12/12cm heat 9% | Ward-3 FF hull 100% arm 12/12cm heat 9%
+BETA claude-sonnet-5: 5/6 alive, hull 74% | Halberd-1 BC hull 100% arm 21/30cm heat 43% | Halberd-2 BC hull 44% arm 0/30cm heat 65% rad | Halberd-3 BC hull 99% arm 30/30cm heat 46% | Halberd-4 BC DEAD@474s | Halberd-5 BC hull 100% arm 30/30cm heat 45% | Halberd-6 BC hull 100% arm 18/30cm heat 61% rad
+Hits: B:Halberd-6>A:Lancer-1 gun x4 | B:Halberd-3>A:Lancer-1 gun x3 | B:Halberd-1>A:Lancer-1 gun x3 | A:Lancer-2>B:Halberd-6 gun x2 | A:Lancer-1>B:Halberd-6 gun x2 | +16 more
+Kills: B:Halberd-4 crippled by A:Lancer-4 (detonates in 15s) @459s ; B:Halberd-4 by A:Lancer-4 (reactor_detonation) @474s
+Fire: A 16 slugs/15 hit, 0 torps/0 impact, PD downed 0 torps ; B 20 slugs/19 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Halberd-4 is dead; retarget now. Focus fire OCS Halberd-6 (shows thin SIDE armor), then OCS Halberd-3, then OCS Halberd-1. Fleet coasts t...
+B admiral: Final phase, 5 checkpoints to end. All combat-capable ships (Halberd-1, 3, 5, 6) PADLOCK on TIS Lancer-1 and fire every bearing weapon co...
+Prompt cache: 460 hit / 28 write / 0 cold calls, 5008.0k read + 281.5k written of 6960.5k prompt tokens (72% read)
+=== CP 17 | t=510s | spend $7.66/$13.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 97% | Lancer-1 BC hull 83% arm 0/30cm heat 30% | Lancer-2 BC hull 100% arm 29/30cm heat 29% | Lancer-3 BC hull 100% arm 17/30cm heat 32% | Lancer-4 BC hull 100% arm 30/30cm heat 31% | Lancer-5 BC hull 100% arm 30/30cm heat 27% | Ward-1 FF hull 93% arm 0/12cm heat 33% | Ward-2 FF hull 100% arm 12/12cm heat 11% | Ward-3 FF hull 100% arm 12/12cm heat 10%
+BETA claude-sonnet-5: 5/6 alive, hull 74% | Halberd-1 BC hull 100% arm 15/30cm heat 46% | Halberd-2 BC hull 44% arm 0/30cm heat 65% rad | Halberd-3 BC hull 99% arm 28/30cm heat 48% | Halberd-4 BC DEAD@474s | Halberd-5 BC hull 100% arm 30/30cm heat 48% | Halberd-6 BC hull 100% arm 1/30cm heat 59% rad
+Hits: B:Halberd-6>A:Lancer-1 gun x5 | B:Halberd-1>A:Lancer-1 gun x3 | A:Lancer-1>B:Halberd-3 gun x3 | B:Halberd-5>A:Lancer-3 gun x2 | A:Lancer-1>B:Halberd-6 gun x2 | +23 more
+Kills: none
+Fire: A 38 slugs/23 hit, 0 torps/0 impact, PD downed 0 torps ; B 27 slugs/22 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Merge with Halberd group (1,3,5,6) at point-blank. Everyone PADLOCK and focus fire OCS Halberd-6, then Halberd-3, then Halberd-1, then Ha...
+B admiral: Final phase: concentrate all fire on TIS Lancer-1 (83% hull, weakest) to kill it, then shift to TIS Lancer-3. All combat ships (Halberd-1...
+Prompt cache: 488 hit / 28 write / 0 cold calls, 5314.5k read + 281.5k written of 7374.4k prompt tokens (72% read)
+=== CP 18 | t=540s | spend $8.02/$13.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 95% | Lancer-1 BC hull 65% arm 0/30cm heat 32% | Lancer-2 BC hull 100% arm 29/30cm heat 32% | Lancer-3 BC hull 100% arm 16/30cm heat 35% | Lancer-4 BC hull 100% arm 30/30cm heat 33% | Lancer-5 BC hull 100% arm 30/30cm heat 29% | Ward-1 FF hull 93% arm 0/12cm heat 33% | Ward-2 FF hull 100% arm 12/12cm heat 14% | Ward-3 FF hull 100% arm 11/12cm heat 11%
+BETA claude-sonnet-5: 5/6 alive, hull 68% | Halberd-1 BC hull 100% arm 13/30cm heat 49% | Halberd-2 BC hull 44% arm 0/30cm heat 65% rad | Halberd-3 BC hull 99% arm 26/30cm heat 51% | Halberd-4 BC DEAD@474s | Halberd-5 BC hull 100% arm 30/30cm heat 53% | Halberd-6 BC hull 64% arm 0/30cm heat 56% rad
+Hits: A:Lancer-3>B:Halberd-6 gun x3 | A:Lancer-4>B:Halberd-6 spinal x3 | A:Lancer-4>B:Halberd-6 gun x3 | A:Ward-2>B:Halberd-6 gun x2 | B:Halberd-5>A:Lancer-1 spinal x2 | +20 more
+Kills: none
+Fire: A 34 slugs/25 hit, 0 torps/0 impact, PD downed 0 torps ; B 19 slugs/17 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Close-range brawl, 90 s left, we lead on score. Everyone PADLOCK and focus fire OCS Halberd-6 (64%, showing side) until it dies, then OCS...
+B admiral: Final phase: concentrate all fire on TIS Lancer-1 (65% hull, PD down) to finish it off before battle ends at T+630. All combat-capable sh...
+Prompt cache: 516 hit / 28 write / 0 cold calls, 5621.0k read + 281.5k written of 7788.5k prompt tokens (72% read)
+=== CP 19 | t=570s | spend $8.41/$13.00 ===
+ALPHA claude-sonnet-5-5: 8/8 alive, hull 92% | Lancer-1 BC hull 46% arm 0/30cm heat 35% | Lancer-2 BC hull 100% arm 29/30cm heat 34% | Lancer-3 BC hull 100% arm 16/30cm heat 37% | Lancer-4 BC hull 100% arm 30/30cm heat 35% | Lancer-5 BC hull 100% arm 29/30cm heat 31% | Ward-1 FF hull 93% arm 0/12cm heat 33% | Ward-2 FF hull 100% arm 11/12cm heat 15% | Ward-3 FF hull 100% arm 9/12cm heat 13%
+BETA claude-sonnet-5: 5/6 alive, hull 64% | Halberd-1 BC hull 100% arm 13/30cm heat 56% | Halberd-2 BC hull 44% arm 0/30cm heat 65% rad | Halberd-3 BC hull 99% arm 25/30cm heat 53% | Halberd-4 BC DEAD@474s | Halberd-5 BC hull 100% arm 30/30cm heat 56% | Halberd-6 BC hull 41% arm 0/30cm heat 54% rad
+Hits: A:Lancer-3>B:Halberd-6 gun x2 | B:Halberd-3>A:Lancer-1 spinal x2 | A:Ward-3>B:Halberd-6 gun x2 | A:Lancer-5>B:Halberd-6 spinal x2 | A:Lancer-2>B:Halberd-6 gun x2 | +15 more
+Kills: none
+Fire: A 30 slugs/15 hit, 0 torps/0 impact, PD downed 0 torps ; B 19 slugs/13 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Hold the lead to T+630. Everyone PADLOCK and focus fire OCS Halberd-6 (41%) until dead, then OCS Halberd-1. Keep nose armor toward the en...
+B admiral: Final two checkpoints. All combat ships (Halberd-1, 3, 5) continue PADLOCK on TIS Lancer-1 (46% hull) - press him to finish the kill befo...
+Prompt cache: 547 hit / 28 write / 0 cold calls, 5953.6k read + 281.5k written of 8238.4k prompt tokens (72% read)
+=== CP 20 | t=600s | spend $8.69/$13.00 ===
+ALPHA claude-sonnet-5-5: 7/8 alive, hull 92% | Lancer-1 BC hull 41% arm 0/30cm heat 36% DYING | Lancer-2 BC hull 100% arm 29/30cm heat 35% | Lancer-3 BC hull 100% arm 16/30cm heat 37% | Lancer-4 BC hull 100% arm 30/30cm heat 35% | Lancer-5 BC hull 100% arm 29/30cm heat 32% | Ward-1 FF hull 93% arm 0/12cm heat 33% | Ward-2 FF hull 100% arm 11/12cm heat 15% | Ward-3 FF hull 100% arm 7/12cm heat 13%
+BETA claude-sonnet-5: 4/6 alive, hull 57% | Halberd-1 BC hull 100% arm 13/30cm heat 57% | Halberd-2 BC hull 44% arm 0/30cm heat 65% rad | Halberd-3 BC hull 99% arm 25/30cm heat 54% | Halberd-4 BC DEAD@474s | Halberd-5 BC hull 100% arm 30/30cm heat 58% | Halberd-6 BC DEAD@587s
+Hits: B:Halberd-5>A:Lancer-1 gun x3 | A:Lancer-1>B:Halberd-5 spinal x2 | B:Halberd-1>A:Ward-3 gun x1 | A:Lancer-3>B:Halberd-6 spinal x1 | A:Lancer-2>B:Halberd-6 gun x1 | +9 more
+Kills: B:Halberd-6 crippled by A:Lancer-2 (detonates in 15s) @573s ; A:Lancer-1 crippled by B:Halberd-3 (detonates in 30s) @580s ; B:Halberd-6 by A:Lancer-2 (reactor_detonation) @587s
+Fire: A 7 slugs/9 hit, 0 torps/0 impact, PD downed 0 torps ; B 7 slugs/8 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Final 30s. Halberd-6 is dead, so retarget now. ALL ships PADLOCK and focus fire OCS Halberd-1 (nearest, 54 km). Spinals and batteries fir...
+B admiral: TIS Lancer-1 destroyed - final checkpoint. Shift ALL fire to TIS Lancer-3 (thin 16cm side armor, currently full hull but exposed broadsid...
+Prompt cache: 571 hit / 28 write / 0 cold calls, 6216.6k read + 281.5k written of 8582.7k prompt tokens (72% read)
+=== RESULT | t=630s | after CP 20 | spend $8.69/$13.00 ===
+Winner: ALPHA - Alpha tactical advantage (259.8 vs 166.9)
+ALPHA claude-sonnet-5-5: 7/8 alive, hull 87% | Lancer-1 BC DEAD | Lancer-2 BC hull 100% arm 29/30cm heat 37% | Lancer-3 BC hull 100% arm 8/30cm heat 42% | Lancer-4 BC hull 100% arm 30/30cm heat 38% | Lancer-5 BC hull 100% arm 29/30cm heat 38% | Ward-1 FF hull 93% arm 0/12cm heat 33% | Ward-2 FF hull 100% arm 11/12cm heat 16% | Ward-3 FF hull 100% arm 6/12cm heat 15%
+BETA claude-sonnet-5: 4/6 alive, hull 57% | Halberd-1 BC hull 100% arm 4/30cm heat 59% | Halberd-2 BC hull 44% arm 0/30cm heat 65% rad | Halberd-3 BC hull 99% arm 12/30cm heat 56% | Halberd-4 BC DEAD@474s | Halberd-5 BC hull 100% arm 30/30cm heat 60% | Halberd-6 BC DEAD@587s
+Final interval - Hits: B:Halberd-1>A:Ward-3 gun x3 | A:Lancer-5>B:Halberd-3 gun x2 | A:Ward-3>B:Halberd-1 gun x2 | A:Lancer-4>B:Halberd-1 gun x2 | A:Lancer-5>B:Halberd-3 spinal x2 | +8 more
+Final interval - Kills: A:Lancer-1 by B:Halberd-3 (reactor_detonation) @610s
+Final interval - Fire: A 31 slugs/14 hit, 0 torps/0 impact, PD downed 0 torps ; B 17 slugs/5 hit, 0 torps/0 impact, PD downed 0 torps
+Spend: $8.6932 reported, $8.6932 committed of $13.00 limit, 599 model calls
+Recording: /home/plmch/ai-commanders/visualizer/public/recordings/p5w5_b5_b2_rerun_final_engine.json

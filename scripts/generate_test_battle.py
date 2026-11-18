@@ -263,9 +263,47 @@ def gun_duel() -> Tuple[BattleConfig, LLMCaptainConfig, LLMCaptainConfig, Script
     return config, alpha_cfg, beta_cfg, alpha_script, beta_script
 
 
+def launch_showcase() -> Tuple[BattleConfig, LLMCaptainConfig, LLMCaptainConfig, Script, Script]:
+    """
+    Torpedo launch sequence showcase (viewer README frame): the torpedo
+    cruiser turns its flank to the corvette, coasts, and empties one cell of
+    each of its four VLS banks at once. With the target abeam three rounds
+    turn a quarter and light at +4 s while the round from the bank facing
+    away is still turning about on its RCS (it lights at +7 s). The corvette
+    answers with one rail round at the same checkpoint.
+    """
+    config = BattleConfig(
+        initial_distance_km=300.0,
+        time_limit_s=75.0,
+        max_checkpoints=3,
+        alpha_ship_type="cruiser_torpedo",
+        beta_ship_type="corvette",
+        verbose=False,
+        personality_selection=False,
+        record_battle=True,
+        record_sim_trace=True,
+        seed=11,
+    )
+    alpha_cfg = LLMCaptainConfig(name="Captain Script-A", ship_name="TIS Harpoon",
+                                 model="scripted-torpedo", personality=CaptainPersonality.BALANCED)
+    beta_cfg = LLMCaptainConfig(name="Captain Script-B", ship_name="HFS Dartfish",
+                                model="scripted-defender", personality=CaptainPersonality.BALANCED)
+    alpha_script: Script = {
+        1: [("set_heading", {"direction": {"x": 0.0, "y": 1.0, "z": 0.0}, "throttle": 0.05})],
+        2: [("set_heading", {"direction": {"x": 0.0, "y": 1.0, "z": 0.0}, "throttle": 0.0}),
+            ("launch_torpedo", {"count": 4})],
+    }
+    beta_script: Script = {
+        1: [("set_maneuver", {"maneuver_type": "MAINTAIN"})],
+        2: [("launch_torpedo", {"count": 1})],
+    }
+    return config, alpha_cfg, beta_cfg, alpha_script, beta_script
+
+
 SCENARIOS = {
     "torpedo_strike": torpedo_strike,
     "gun_duel": gun_duel,
+    "launch_showcase": launch_showcase,
 }
 
 
@@ -706,7 +744,7 @@ def main() -> int:
     parser.add_argument("--no-predictions", action="store_true",
                         help="Skip the per-frame predicted path (sim_trace 'plan')")
     parser.add_argument("--seed", type=int, default=7, help="hud_comms: draft + combat seed")
-    parser.add_argument("--doctrine", choices=("legacy", "tactical"), default="legacy",
+    parser.add_argument("--doctrine", choices=("legacy", "classic", "tactical"), default="legacy",
                         help="hud_comms: heuristic captain doctrine (default legacy: the "
                              "fixture the viewer is developed against)")
     parser.add_argument("--out", default=None,

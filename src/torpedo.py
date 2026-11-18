@@ -28,7 +28,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 try:
     from .physics import Vector3D, tsiolkovsky_delta_v, mass_after_burn
@@ -62,6 +62,63 @@ G0_MS2 = 9.81  # standard gravity (m/s^2)
 # point-defense envelopes and may never complete the intercept at all.
 # 12 km/s crosses a 100 km PD envelope in ~8 s.
 MIN_CLOSING_SPEED_KPS = 12.0
+
+# LAUNCH PROFILES. A commander picks one per launch (captain launch_torpedo,
+# admiral orders, MCP); the engine default is SPRINT and with nothing chosen
+# a round flies exactly as before profiles existed.
+# - sprint: build closure early up to MIN_CLOSING_SPEED_KPS (most of the
+#   14 km/s goes into speed), spend the NEZ surplus on the terminal burn.
+# - reserve: cruise at the lower RESERVE_CRUISE_CLOSING_KPS and keep the rest
+#   of the tank until the last RESERVE_TERMINAL_WINDOW_S before impact, so a
+#   round whose target dies (or the datalink reassigns) can still steer onto
+#   another hull; a round that never needs it dumps it in the terminal burn.
+#   The price: a longer flight, a slower crossing of the point-defence
+#   envelope (more dwell per turret) and a terminal burn that must fit the
+#   window. Numbers from scripts/torpedo_profile_sweep.py (see the report in
+#   docs/pass-5-recording-additions.md "Torpedo launch profiles").
+TORPEDO_PROFILE_SPRINT = "sprint"
+TORPEDO_PROFILE_RESERVE = "reserve"
+TORPEDO_PROFILES = (TORPEDO_PROFILE_SPRINT, TORPEDO_PROFILE_RESERVE)
+RESERVE_CRUISE_CLOSING_KPS = 8.0
+RESERVE_TERMINAL_WINDOW_S = 20.0
+# The window also stretches to the time the held tank takes to burn at the
+# round's present acceleration, times this factor: a round from a closing
+# launcher cruises above the floor with ~9 km/s held, which a fixed 20 s
+# window could not spend (it hit with 4.6 km/s never burned, 20.5 GJ against
+# sprint's 33.9). From a stationary launcher (~6 km/s held, ~19 s to burn)
+# the fixed window is the longer one and nothing changes.
+RESERVE_WINDOW_BURN_FACTOR = 1.0
+
+
+def reserve_terminal_window_s(torpedo: 'Torpedo') -> float:
+    """Time to go at which a reserve round starts spending its held tank."""
+    a = torpedo.specs.acceleration_at_mass(torpedo.current_mass_kg)
+    burn_s = (torpedo.remaining_delta_v_kps * 1000.0 / a) if a > 0 else 0.0
+    return max(RESERVE_TERMINAL_WINDOW_S, RESERVE_WINDOW_BURN_FACTOR * burn_s)
+
+
+def normalize_torpedo_profile(profile: Optional[str]) -> str:
+    """'sprint' / 'reserve' (case-insensitive); anything else -> sprint."""
+    p = str(profile or "").strip().lower()
+    return p if p in TORPEDO_PROFILES else TORPEDO_PROFILE_SPRINT
+
+
+def profile_cruise_floor_kps(profile: str) -> float:
+    return (RESERVE_CRUISE_CLOSING_KPS if profile == TORPEDO_PROFILE_RESERVE
+            else MIN_CLOSING_SPEED_KPS)
+
+
+def cruise_floor_kps(torpedo: 'Torpedo') -> float:
+    """The closure the guidance builds before anything else: the profile's
+    cruise floor - or, once the datalink has reassigned the round, the floor
+    it set then (src/simulation.py _reassign_torpedo: the closure the round
+    already had plus whatever its tank holds beyond the reassignment reserve,
+    never above the profile floor). Burning back up to the full floor first
+    ate the reserve the old retarget gate counted on."""
+    if torpedo.cruise_floor_override_kps is not None:
+        return torpedo.cruise_floor_override_kps
+    return profile_cruise_floor_kps(torpedo.profile)
+
 
 # Navigation ratio N for (augmented) proportional navigation. PN theory
 # requires N > 2 for the predicted miss to collapse against a maneuvering
@@ -567,6 +624,14 @@ class Torpedo:
     time_since_launch: float = 0.0
     launch_position: Vector3D = field(default_factory=Vector3D.zero)
     launched_from_velocity: Vector3D = field(default_factory=Vector3D.zero)
+    # Launch profile (TORPEDO_PROFILES) and the cruise floor the datalink set
+    # on a reassignment (None: the profile's, see cruise_floor_kps).
+    profile: str = TORPEDO_PROFILE_SPRINT
+    cruise_floor_override_kps: Optional[float] = None
+    # Launch sequence (src/torpedo_launch.py): eject, separate, then the
+    # torch lights. None = no sequence (the torch burns from the first tick,
+    # as every round did before it existed).
+    launch_seq: Optional[Any] = field(default=None, repr=False, compare=False)
 
     # --- Guidance filter state (owned by the torpedo, NOT TorpedoGuidance) ---
     # The simulation constructs a fresh TorpedoGuidance every tick, so any
@@ -611,6 +676,22 @@ class Torpedo:
         self.launch_position = Vector3D(
             self.position.x, self.position.y, self.position.z
         )
+
+    @property
+    def in_launch_sequence(self) -> bool:
+        """Still ejecting / separating: torch cold, not yet a threat."""
+        seq = self.launch_seq
+        return seq is not None and seq.phase != "boost"
+
+    def launch_hold_s(self) -> float:
+        """Forecast seconds until the torch lights (0 once it burns)."""
+        if not self.in_launch_sequence:
+            return 0.0
+        try:
+            from .torpedo_launch import hold_left_s
+        except ImportError:  # pragma: no cover - script-style imports
+            from torpedo_launch import hold_left_s
+        return hold_left_s(self)
 
     def distance_from_launch(self) -> float:
         """
@@ -776,6 +857,8 @@ class Torpedo:
         if closing_rate > 0 and coast_disc >= 0:
             return 2.0 * distance / (closing_rate + math.sqrt(coast_disc))
         if current_accel > 0 and current_accel > accel_los:
+            # Still in its launch sequence the torch lights only later.
+            hold = self.launch_hold_s() if self.launch_seq is not None else 0.0
             # Powered (opening, or closing too slowly): accelerate at the
             # target from rest in this frame:
             # 0.5*(A - a_los)*t^2 = d + v_open*t, then refine so the burn
@@ -787,7 +870,7 @@ class Torpedo:
             for _ in range(3):
                 t_intercept = min(max(1.0, math.sqrt(
                     2.0 * rel_offset(t_intercept).magnitude / current_accel)), 3600.0)
-            return t_intercept
+            return t_intercept + hold
         # The target out-accelerates the torpedo along the line of sight.
         return float('inf')
 
@@ -986,6 +1069,9 @@ class TorpedoLauncher:
     current_magazine: int = 16
     cooldown_seconds: float = 30.0  # From fleet data
     last_launch_time: float = -30.0  # Ready to fire immediately
+    # Magazine rounds (hull_mounts launcher ``rounds`` indices) already
+    # ejected from this tube, in launch order (src/torpedo_launch.py).
+    fired_rounds: list = field(default_factory=list, repr=False, compare=False)
 
     def calculate_release_distance(
         self,
@@ -2036,8 +2122,12 @@ class TorpedoGuidance:
         # ---- Not closing: build closure while killing drift with the same
         # velocity-error law as before (APN needs a finite t_go to operate).
         if closing_speed_mps <= 0.0:
+            # (sprint: the 12 km/s floor as before; reserve / released: the
+            # reserve floor - the burn is full throttle either way, this only
+            # weights closure against drift)
+            build_kps = max(cruise_floor_kps(torpedo), RESERVE_CRUISE_CLOSING_KPS)
             velocity_error = (
-                los * (MIN_CLOSING_SPEED_KPS * 1000.0 - closing_speed_mps)
+                los * (build_kps * 1000.0 - closing_speed_mps)
                 - lateral_vel * APN_NAV_RATIO
             )
             direction = (
@@ -2082,7 +2172,11 @@ class TorpedoGuidance:
             and surplus_kps > TERMINAL_MIN_BURN_KPS
             and predicted_miss_m < APN_MISS_DEADBAND_M
         )
-        below_cruise_floor = closing_speed_kps < MIN_CLOSING_SPEED_KPS
+        if (terminal_burn and torpedo.profile == TORPEDO_PROFILE_RESERVE
+                and t_go > reserve_terminal_window_s(torpedo)):
+            terminal_burn = False   # the reserve is held until the window
+        floor_kps = cruise_floor_kps(torpedo)
+        below_cruise_floor = closing_speed_kps < floor_kps
         want_closure = terminal_burn or below_cruise_floor
 
         # ---- Saturated: every m/s^2 goes to the lateral correction.
@@ -2118,7 +2212,7 @@ class TorpedoGuidance:
             else:
                 reason = (
                     f"ACCEL: {closing_speed_kps:.1f} -> "
-                    f"{MIN_CLOSING_SPEED_KPS:.0f}km/s, "
+                    f"{floor_kps:.0f}km/s, "
                     f"miss~{predicted_miss_m / 1000.0:.2f}km"
                 )
             return GuidanceCommand.burn(desired_accel.normalized(),

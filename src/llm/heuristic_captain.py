@@ -39,14 +39,24 @@ from .client import ToolCall
 from .communication import MAX_FLEET_SIGNALS_PER_DECISION
 from .maneuver_orders import admiral_order_moves_ship
 from . import heuristic_tactics as tactics
+from . import heuristic_flank as flank
 
 # Sentinel model id that makes the battle runner build a HeuristicCaptain
 # instead of an LLM-backed captain.
 HEURISTIC_MODEL = "heuristic"
 
+# "tactical" (the default): in a gun fight the fleet flies the nose-on wall,
+# and switches to the cut-corner pincer against a slow capital line when it
+# has enough fast hulls (heuristic_flank.default_spec). "classic" is the
+# previous default (focus fire, nose-first passes, heuristic_tactics only),
+# "legacy" the pass-4 captain, bit for bit.
 DOCTRINE_TACTICAL = "tactical"
+DOCTRINE_CLASSIC = "classic"
 DOCTRINE_LEGACY = "legacy"
-DOCTRINES = (DOCTRINE_TACTICAL, DOCTRINE_LEGACY)
+# Fixed variants (src/llm/heuristic_flank.py): the plain wall and pincer /
+# envelopment / two-axis torpedo strikes, for comparison.
+from .heuristic_flank import FLANK_DOCTRINES  # noqa: E402
+DOCTRINES = (DOCTRINE_TACTICAL, DOCTRINE_CLASSIC, DOCTRINE_LEGACY) + tuple(FLANK_DOCTRINES)
 DEFAULT_DOCTRINE = DOCTRINE_TACTICAL
 
 # Ranges in km
@@ -79,11 +89,12 @@ class HeuristicCaptain(LLMCaptain):
         super().__init__(config, client=None)  # never calls an LLM
         self._last_target_id: Optional[str] = None
         doctrine = doctrine or DEFAULT_DOCTRINE
-        if doctrine not in DOCTRINES:
+        if doctrine not in DOCTRINES and flank.flank_spec(doctrine) is None:
             raise ValueError(f"unknown heuristic doctrine {doctrine!r} (one of {DOCTRINES})")
         self.doctrine = doctrine
         self._decision_interval = 30.0
         self._broke_off = False
+        self._announced: set = set()
         self._withdrawn = False
         self._face_id: Optional[str] = None
 
@@ -183,8 +194,10 @@ class HeuristicCaptain(LLMCaptain):
                   and checkpoint % 2 == 1):
                 salvo = min(2, max_salvo)
             if salvo > 0:
-                calls.append(("launch_torpedo", {
-                    "count": salvo, "target_id": torp_target.ship_id}))
+                call = {"count": salvo, "target_id": torp_target.ship_id}
+                if order and getattr(order, "torpedo_profile", None):
+                    call["profile"] = order.torpedo_profile
+                calls.append(("launch_torpedo", call))
 
         # Maneuver priority: dodge torpedoes > admiral heading / structured
         # maneuver order (already applied by the runner - keep it, it holds
@@ -267,8 +280,10 @@ class HeuristicCaptain(LLMCaptain):
                 salvo = min(int(order.torpedo_salvo), max_salvo)
                 match = self._match_enemy(order.torpedo_target, enemies) if order.torpedo_target else None
                 if salvo > 0:
-                    calls.append(("launch_torpedo", {"count": salvo,
-                                                     "target_id": (match or target).ship_id}))
+                    call = {"count": salvo, "target_id": (match or target).ship_id}
+                    if getattr(order, "torpedo_profile", None):
+                        call["profile"] = order.torpedo_profile
+                    calls.append(("launch_torpedo", call))
             else:
                 for torp_target_id, rounds in plan.launches.get(ship_id, []):
                     salvo = min(rounds, max_salvo)
@@ -365,6 +380,27 @@ class HeuristicCaptain(LLMCaptain):
         self._broke_off = crippled
         if self.has_admiral:
             return out      # the admiral, not the flag ship, sets the fleet's targets
+        spec = self._flank_spec(ship) if ship_id == plan.flag_id else None
+        if (ship_id == plan.flag_id and spec is None and self.doctrine == DOCTRINE_TACTICAL
+                and "plan" not in self._announced):
+            self._announced.update(("plan", "abort"))
+            out.append(("fleet_signal", {"kind": "FREE", "text": flank.plan_text(None, None)}))
+        elif (ship_id == plan.flag_id and spec is None and self.doctrine == DOCTRINE_TACTICAL
+                and "abort" not in self._announced
+                and flank.pincer_called_off(self._sim, ship.faction)):
+            self._announced.add("abort")
+            out.append(("fleet_signal", {"kind": "FREE", "text": (
+                "Pincer called off: the lines are closing too fast for the flankers. "
+                "Close and pass, all ships engage.")}))
+        if spec is not None and spec.kind in ("wall", "pincer", "envelop"):
+            st = flank.flank_state(self._sim, ship.faction, spec)
+            if "plan" not in self._announced:
+                self._announced.add("plan")
+                out.append(("fleet_signal", {"kind": "FREE", "text": flank.plan_text(spec, st)}))
+            elif st.attack_started and "attack" not in self._announced:
+                self._announced.add("attack")
+                out.append(("fleet_signal", {"kind": "FREE",
+                                             "text": "Flankers on station: turning in, all ships engage."}))
         if ship_id == plan.flag_id and plan.focus_changed and plan.focus_id in names:
             out.append(("fleet_signal", {
                 "kind": "TARGET_CLAIM", "target": names[plan.focus_id],
@@ -447,6 +483,10 @@ class HeuristicCaptain(LLMCaptain):
             # with loaded tubes.
             prey = min(enemies, key=lambda e: (km(e), e.ship_id))
             return order("INTERCEPT", prey, 1.0, standoff_km=tactics.BOAT_NO_GUNS_RANGE_KM)
+        flank = self._flank_maneuver(ship, ship_id, target, enemies, plan, my_role,
+                                     nearest_gun, evade)
+        if flank is not None:
+            return flank
         if my_role != "gun":
             anchor = nearest_gun or min(enemies, key=lambda e: (km(e), e.ship_id))
             return order("HOLD_RANGE", anchor, 1.0,
@@ -496,6 +536,69 @@ class HeuristicCaptain(LLMCaptain):
         if evade:
             args["evade"] = evade
         return args
+
+    def _flank_spec(self, ship) -> Optional["flank.FlankSpec"]:
+        """This ship's flank spec: the fleet's chosen plan under the default
+        doctrine, the named variant's, or None ('classic')."""
+        if self.doctrine == DOCTRINE_CLASSIC:
+            return None
+        if self.doctrine == DOCTRINE_TACTICAL:
+            return flank.default_spec(self._sim, ship.faction)
+        return flank.flank_spec(self.doctrine)
+
+    def _flank_maneuver(self, ship, ship_id, target, enemies, plan, my_role, nearest_gun,
+                        evade) -> Optional[Dict[str, Any]]:
+        """Maneuver for the experimental flank doctrines (heuristic_flank),
+        or None to fly the tactical doctrine's."""
+        spec = self._flank_spec(ship)
+        if spec is None:
+            return None
+        st = flank.flank_state(self._sim, ship.faction, spec)
+        group = st.groups.get(ship_id, "hold")
+
+        def with_evade(args, overlay=None):
+            ov = evade or overlay
+            if ov:
+                args["evade"] = ov
+            return args
+
+        if my_role == "torpedo":
+            if not (spec.kind == "split" or spec.split_boats) or nearest_gun is None:
+                return None
+            boats = sorted(sid for sid, g in st.groups.items() if g == "boat")
+            key = "boat_a" if boats.index(ship_id) % 2 == 0 else "boat_b"
+            station = st.stations.get(key)
+            if station is None:
+                return None
+            return with_evade({"maneuver_type": "HEADING", "throttle": 1.0,
+                               "toward_point": flank.point_km(station)})
+        if my_role != "gun" or spec.kind == "split":
+            return None
+        gunned = [e for e in enemies if tactics.has_guns(e)] or enemies
+        near = min(gunned, key=lambda e: (ship.position.distance_to(e.position), e.ship_id))
+        if group == "hold":
+            engage = flank.WALL_ENGAGE_KM
+            if spec.kind == "pincer" and not st.attack_started:
+                engage = flank.HOLD_WAIT_KM
+            dist_km, closing = self._range_and_closing(ship, near)
+            kind = flank.wall_maneuver(dist_km, closing, engage)
+            throttle = plan.formation_throttle.get(ship_id, 1.0) if kind == "INTERCEPT" else 1.0
+            return with_evade({"maneuver_type": kind, "target_id": near.ship_id, "throttle": throttle})
+        station = st.stations.get(group)
+        if station is None:
+            return None
+        if not st.attack_started:
+            # Positioning: fly to the station with the evade overlay on.
+            return with_evade({"maneuver_type": "HEADING", "throttle": 1.0,
+                               "toward_point": flank.point_km(station)}, "dodge")
+        # Committed attack run to our own engagement range.
+        r_km = tactics.engage_range_km(ship)
+        dist_km, _ = self._range_and_closing(ship, target)
+        if dist_km > r_km * tactics.HOLD_BAND_FACTOR:
+            return with_evade({"maneuver_type": "INTERCEPT", "target_id": target.ship_id,
+                               "throttle": 1.0, "standoff_km": r_km,
+                               "arrival_closing_kps": 0.6})
+        return with_evade({"maneuver_type": "PADLOCK", "target_id": target.ship_id, "throttle": 1.0})
 
     def _radiator_wish(self, ship, ship_id, heat, threat, enemies, simulation) -> Optional[bool]:
         """True = extend, False = retract, None = leave as is."""
@@ -585,7 +688,8 @@ class HeuristicCaptain(LLMCaptain):
         """True if a live torpedo is inbound on us and worth dodging NOW."""
         for torp_flight in getattr(simulation, "torpedoes", []) or []:
             torp = torp_flight.torpedo
-            if torp.target_id != ship_id:
+            # (a round still in its launch sequence is no threat yet)
+            if torp.target_id != ship_id or getattr(torp, "in_launch_sequence", False):
                 continue
             rel_pos = torp.position - ship.position
             dist_m = rel_pos.magnitude

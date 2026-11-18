@@ -50,6 +50,16 @@ class StubClient:
         raise AssertionError("complete() should not be called in these tests")
 
 
+# Where make_runner's battles write (vision frames follow recording_dir): a
+# pytest temp dir per test, never the repository's data/recordings.
+_RECORDING_DIR = None
+
+
+@pytest.fixture(autouse=True)
+def _recordings_in_tmp(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], "_RECORDING_DIR", str(tmp_path / "recordings"))
+
+
 def make_runner(alpha_vision: bool, beta_admiral: bool = True,
                 beta_vision: bool = False):
     fleet_config = BattleFleetConfig.from_dict({
@@ -82,6 +92,7 @@ def make_runner(alpha_vision: bool, beta_admiral: bool = True,
         record_battle=False,
         record_sim_trace=False,
         seed=99,
+        recording_dir=_RECORDING_DIR or "data/recordings",
     )
     captain_cfg = LLMCaptainConfig(
         name="Test", ship_name="TIS Test", model="stub",
@@ -146,7 +157,6 @@ def test_render_produces_png():
     assert runner._admiral_view is not None
     for _ in range(10):
         runner.simulation.step()
-        runner._admiral_view.sample(runner.simulation)
     png = runner._admiral_view.render(
         runner.simulation, runner._ships_meta(), faction="alpha")
     assert png is not None and png[:8] == PNG_MAGIC
@@ -170,7 +180,6 @@ def test_vision_admiral_gets_image_content_part(tmp_path):
     runner._admiral_view_dir = tmp_path / "vision"
     for _ in range(10):
         runner.simulation.step()
-        runner._admiral_view.sample(runner.simulation)
 
     decision = runner._get_admiral_decision(
         runner.alpha_admiral, list(runner.alpha_captains.values()), None)
@@ -200,7 +209,6 @@ def test_text_only_admiral_keeps_string_content():
     runner, stub = make_runner(alpha_vision=True, beta_vision=False)
     for _ in range(10):
         runner.simulation.step()
-        runner._admiral_view.sample(runner.simulation)
 
     runner._get_admiral_decision(
         runner.beta_admiral, list(runner.beta_captains.values()), None)
@@ -209,26 +217,27 @@ def test_text_only_admiral_keeps_string_content():
             assert isinstance(msg["content"], str)
 
 
-def test_pd_beam_and_event_buffers():
-    view = AdmiralViewState()
+def test_view_state_keeps_each_sides_previous_checkpoint():
+    """What changed since the last checkpoint is diffed per side against the
+    frame that side saw then (deaths, new salvos)."""
+    pytest.importorskip("matplotlib")
+    runner, _ = make_runner(alpha_vision=True, beta_vision=True)
+    view = runner._admiral_view
+    meta = runner._ships_meta()
+    assert view.render(runner.simulation, meta, faction="alpha", checkpoint=1) is not None
+    first = view._last_frame["alpha"]
+    for _ in range(5):
+        runner.simulation.step()
+    view.render(runner.simulation, meta, faction="alpha", checkpoint=2)
+    assert view._last_frame["alpha"] is not first
+    assert view._last_frame["alpha"]["t"] == runner.simulation.current_time
+    assert "beta" not in view._last_frame
 
-    class FakeEvent:
-        def __init__(self, name, t, ship_id, data):
-            self.event_type = type("ET", (), {"name": name})()
-            self.timestamp = t
-            self.ship_id = ship_id
-            self.target_id = None
-            self.data = data
 
-    view.note_event(FakeEvent("PD_ENGAGED", 100.0, "alpha_1",
-                              {"target_id": "torp_beta_1_ab"}))
-    view.note_event(FakeEvent("PD_ENGAGED", 90.0, "alpha_1",
-                              {"target_id": "torp_beta_1_cd"}))
-    view.note_event(FakeEvent("SHIP_DESTROYED", 99.0, "beta_1", {}))
-
-    beams = view.active_pd_beams(t=100.5)
-    assert ("alpha_1", "torp_beta_1_ab") in beams
-    assert all(target != "torp_beta_1_cd" for _, target in beams)
-
-    events = view.recent_events(t=100.5)
-    assert any("SHIP DESTROYED" in label for _, label in events)
+def test_vision_frames_follow_the_recording_dir(tmp_path):
+    """The runner writes admiral-vision frames under its own recording_dir
+    (default data/recordings/vision/<stamp>), so a battle given a recording
+    dir - every test - writes nothing into the repository's data/."""
+    runner, _ = make_runner(alpha_vision=True)
+    assert runner._admiral_view_dir.parent == Path(_RECORDING_DIR) / "vision"
+    assert Path(_RECORDING_DIR) == tmp_path / "recordings"
