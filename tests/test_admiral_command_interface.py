@@ -883,3 +883,52 @@ class TestIntentOnly:
         assert {o.target_ship_id: o.torpedo_salvo for o in decision.fleet_orders} == {
             "alpha_1": 2, "alpha_2": None}
         assert admiral.last_decision is decision
+
+
+# =============================================================================
+# Gun reach: nominal reach always next to the measured hit rate
+# =============================================================================
+
+class TestGunReachWording:
+    def test_measured_rate_comes_from_the_gun_exchange_table(self):
+        from src.llm.prompts import GUN_EXCHANGE_BANDS, measured_hit_rate
+        rates = {b[0]: b[1] for b in GUN_EXCHANGE_BANDS}
+        assert measured_hit_rate(10) == ("0-50", rates["0-50"])
+        assert measured_hit_rate(149) == ("100-150", rates["100-150"])
+        assert measured_hit_rate(150) == ("150-200", rates["150-200"])
+        assert measured_hit_rate(510) == ("300+", rates["300+"])
+
+    def test_geometry_says_nominal_and_measured(self):
+        from src.llm.prompts import GUN_EXCHANGE_BANDS, measured_hit_rate
+        sim = CombatSimulation(seed=1)
+        ship(sim, "alpha_1", "destroyer", "alpha", (0, 0, 0))
+        ship(sim, "beta_1", "destroyer", "beta", (480, 0, 0), fwd=(-1, 0, 0))
+        _, msgs = directive_turn(make_admiral("alpha"), sim)
+        line = next(l for l in msgs[1]["content"].splitlines() if l.startswith("  reach - "))
+        band, hit = measured_hit_rate(480)
+        assert "guns' nominal reach 900 km (within it now)" in line
+        assert f"measured hit rate at 480 km (the {band} km band) ~{hit}%" in line
+        assert f"{GUN_EXCHANGE_BANDS[0][1]}% at 0-50 km" in line
+        assert "IN RANGE" not in line
+
+    def test_forces_captain_caps_plot_label_and_legend_say_what_reach_means(self):
+        from src.llm.admiral_view import GUN_BAND_KM, gun_band_label
+        from src.llm.prompts import (ADMIRAL_VISION_LEGEND, GUN_EXCHANGE_BANDS,
+                                     build_ship_capabilities_from_fleet, measured_hit_rate, reach_note)
+        near, far = GUN_EXCHANGE_BANDS[0], GUN_EXCHANGE_BANDS[-1]
+        assert reach_note() == (f"Gun reach (km) is how far a round flies, not where it hits: measured "
+                                f"hit rate {near[1]}% at {near[0]} km, falling to {far[1]}% at {far[0]} km "
+                                "(GUN EXCHANGE, by range at firing).")
+        forces = build_admiral_static("A", "alpha", FLEET, None, phase="directive",
+                                      battle_classes={"ours": ["destroyer"], "theirs": ["frigate"]})
+        assert reach_note() in forces and "(4.3 GJ, reach 900 km)" in forces
+        caps = build_ship_capabilities_from_fleet(
+            ship_name="x", ship_type="destroyer", fleet_data=FLEET, hull_integrity=100, heat_percent=0,
+            delta_v_remaining=500, nose_armor=151, lateral_armor=26, tail_armor=30,
+            heatsink_capacity=320, radiators_extended=False)
+        assert reach_note() in caps
+        band, edge = measured_hit_rate(GUN_BAND_KM - 1)
+        assert f"hits {edge}% at {band} km, {far[1]}% at {far[0]} km; not the nominal reach" in gun_band_label()
+        flat = " ".join(ADMIRAL_VISION_LEGEND.split())
+        assert "the effective gun band, not the guns' reach" in flat
+        assert f"measured hit rate {edge}% at {band} km" in flat

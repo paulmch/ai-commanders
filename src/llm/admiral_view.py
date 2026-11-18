@@ -116,6 +116,19 @@ HEADER_PT = 9.0
 # measured share of hull damage inside 150 km (doctrine, prompts.py GUNNERY /
 # GUN EXCHANGE). The guns' nominal range_km (900) is not a useful envelope.
 GUN_BAND_KM = 150.0
+
+
+def gun_band_label() -> str:
+    """The plot's key for the solid envelope (hit rates bound to the GUN
+    EXCHANGE fixture through prompts.measured_hit_rate)."""
+    try:
+        from .prompts import GUN_EXCHANGE_BANDS, measured_hit_rate
+    except ImportError:  # pragma: no cover
+        from llm.prompts import GUN_EXCHANGE_BANDS, measured_hit_rate
+    band, edge = measured_hit_rate(GUN_BAND_KM - 1.0)
+    far_band, far = GUN_EXCHANGE_BANDS[-1][0], GUN_EXCHANGE_BANDS[-1][1]
+    return (f"solid: gun band {GUN_BAND_KM:.0f} km (hits {edge}% at {band} km, {far}% at "
+            f"{far_band} km; not the nominal reach) | dotted: PD")
 DEFAULT_PD_RANGE_KM = 250.0
 # Below this applied throttle the torch is PADLOCK's token burn: coasting
 # (fleet_intel.BURNING_MIN_THROTTLE).
@@ -1310,6 +1323,10 @@ def render_layout_png(lay: Layout) -> Optional[bytes]:
         ax.plot([bx1 - bar_px, bx1], [by, by], color=DIM, lw=1.6, zorder=z0 + 0.2, solid_capstyle="butt")
         text(bx1 - bar_px / 2, by - 3, f"{step:g} km (grid)", color=DIM, size=SMALL_PT, ha="center",
              va="bottom", z=z0 + 0.2)
+        if detail:
+            # What the solid envelope is: the effective band, not the nominal reach.
+            text(bx1, by + 5, gun_band_label(), color=DIM, size=SMALL_PT, ha="right", va="top",
+                 z=z0 + 0.2)
 
         # envelopes (plan only)
         if detail:

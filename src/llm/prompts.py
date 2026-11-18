@@ -418,6 +418,10 @@ def format_weapon_groups_for_prompt(weapons: List[Dict], weapon_types: Dict[str,
             lines.append(f"  * Fixed mount: REQUIRES nose within {pivot:g}° of target to fire")
         lines.append(f"  * {_gun_cadence_for_prompt(spec)}")
 
+    # cmdadm hunk: "max range" is how far a round flies; say what it hits there.
+    if spinals or heavy_coilguns or coilguns or other_guns:
+        lines.append(f"- {reach_note()}")
+
     if pd_lasers:
         count = len(pd_lasers)
         # Every figure below is derived from the same PDLaser model the engine
@@ -3100,6 +3104,29 @@ GUN_EXCHANGE_BANDS = (
     ("300+", 25, 0.29, 7),
 )
 GUN_EXCHANGE_INSIDE_150_PCT = 58
+
+
+def measured_hit_rate(range_km: float) -> Tuple[str, int]:
+    """(band, hit rate %) of GUN_EXCHANGE_BANDS for a range at firing: what
+    a quoted gun reach means in hits, so "in reach" is not read as
+    "effective" (both Sonnet admirals sat at 500 km for 600 s "in gun
+    range at 900 km", where the measured rate is ~25-36%)."""
+    for band, hit, _gj, _share in GUN_EXCHANGE_BANDS:
+        lo, _, hi = band.partition("-")
+        hi_km = float(hi) if hi else float("inf")
+        if range_km < hi_km or not hi:
+            return band, hit
+    band, hit, _gj, _share = GUN_EXCHANGE_BANDS[-1]
+    return band, hit
+
+
+def reach_note() -> str:
+    """One line for every block that quotes a gun's nominal reach (bound to
+    GUN_EXCHANGE_BANDS, i.e. to the seeded fixture)."""
+    near, far = GUN_EXCHANGE_BANDS[0], GUN_EXCHANGE_BANDS[-1]
+    return (f"Gun reach (km) is how far a round flies, not where it hits: measured hit rate "
+            f"{near[1]}% at {near[0]} km, falling to {far[1]}% at {far[0]} km "
+            f"(GUN EXCHANGE, by range at firing).")
 # Spinal Coiler Mk3 hits to kill a fresh hull on one facing
 # (scripts/calculate_shots_to_kill.simulate_shots_to_kill; docs/ships.md).
 FACING_SPINAL_HITS_TO_KILL = (
@@ -3297,7 +3324,7 @@ def _class_line(ship_type: str, fleet_data: Dict[str, Any]) -> str:
             rounds += int(w.get("magazine", ws.get("magazine", 8)))
             continue
         gj = ws.get("kinetic_energy_gj")
-        key = (f"{ws.get('name', wtype)} ({gj:.1f} GJ, {ws.get('range_km', 0):.0f} km)"
+        key = (f"{ws.get('name', wtype)} ({gj:.1f} GJ, reach {ws.get('range_km', 0):.0f} km)"
                if gj else str(ws.get("name", wtype)))
         counts[key] = counts.get(key, 0) + 1
     arms = [f"{n}x {k}" for k, n in counts.items()]
@@ -3359,7 +3386,8 @@ def _format_forces(battle_classes: Dict[str, List[str]], fleet_data: Dict[str, A
     """Static per-class capabilities of both fleets (cached with the doctrine)."""
     if not (battle_classes.get("ours") or battle_classes.get("theirs")):
         return ""
-    lines = ["=== FORCES (ship classes in this battle - fixed; live numbers are in the FLEET SITUATION) ==="]
+    lines = ["=== FORCES (ship classes in this battle - fixed; live numbers are in the FLEET SITUATION) ===",
+             reach_note()]
     for side, title in (("ours", "YOURS"), ("theirs", "THEIRS")):
         types = battle_classes.get(side) or []
         if types:
@@ -3474,6 +3502,23 @@ spread does not fit 1:1). YOUR fleet is cyan, the enemy orange, whichever side y
 The plan's width steps through a fixed ladder (the smallest that holds every live ship,
 ghost and threatening round) and its centre snaps to 1/20 of the width: it moves only when
 the battle outgrows or shrinks below a step, so consecutive checkpoints compare directly."""
+
+def _gun_band_legend() -> str:
+    """The legend's gun-band line: what the solid outline draws and why, with
+    the measured hit rates of GUN_EXCHANGE_BANDS (so it cannot drift)."""
+    band, edge = measured_hit_rate(149.0)
+    far_band, far = GUN_EXCHANGE_BANDS[-1][0], GUN_EXCHANGE_BANDS[-1][1]
+    mid_band, mid = GUN_EXCHANGE_BANDS[-2][0], GUN_EXCHANGE_BANDS[-2][1]
+    return ("- Solid outline around a fleet: 150 km from its gun ships - the effective gun band, not\n"
+            f"  the guns' reach: measured hit rate {edge}% at {band} km, {mid}% at {mid_band} km, {far}% at\n"
+            f"  {far_band} km (GUN EXCHANGE; beyond 150 km a dodger is rarely hit). The nominal reach\n"
+            "  in FORCES is how far a round flies. Dotted outline: its PD umbrella (250 km).")
+
+
+ADMIRAL_VISION_LEGEND = ADMIRAL_VISION_LEGEND.replace(
+    """- Solid outline around a fleet: 150 km from its gun ships (beyond it a dodger is rarely
+  hit); dotted outline: its PD umbrella (250 km).""", _gun_band_legend())
+
 
 
 def build_admiral_static(
@@ -3972,12 +4017,18 @@ def _format_geometry(snapshot: Any) -> str:
         if reach_km <= 0:
             return ""
         if info.range_km <= reach_km:
-            when = "IN RANGE now"
+            when = "within it now"
         elif info.closing_kps > 0.05:
-            when = f"in range in ~{(info.range_km - reach_km) / info.closing_kps:.0f} s"
+            when = f"within it in ~{(info.range_km - reach_km) / info.closing_kps:.0f} s"
         else:
-            when = "out of range, not closing"
-        return f"{who} guns reach {reach_km:.0f} km ({when})"
+            when = "beyond it, not closing"
+        return f"{who} guns' nominal reach {reach_km:.0f} km ({when})"
+
+    def measured(info: Any) -> str:
+        band, hit = measured_hit_rate(info.range_km)
+        near = GUN_EXCHANGE_BANDS[0]
+        return (f"measured hit rate at {info.range_km:.0f} km (the {band} km band) ~{hit}%, "
+                f"{near[1]}% at {near[0]} km (GUN EXCHANGE)")
 
     for info in groups[:4]:
         members = [enemies.get(sid) for sid in info.ship_ids]
@@ -4015,6 +4066,8 @@ def _format_geometry(snapshot: Any) -> str:
         for text in (gun_reach("their", their_gun, info), gun_reach("your", own_gun_range, info)):
             if text:
                 reach.append(text)
+        if their_gun > 0 or own_gun_range > 0:
+            reach.append(measured(info))
         verdicts = [m.solution.verdict for m in members if m is not None and m.solution is not None]
         if own_tubes and verdicts:
             reach.append("your torpedoes: " + ", ".join(
