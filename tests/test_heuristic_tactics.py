@@ -683,7 +683,7 @@ def test_the_formation_throttle_is_what_the_ship_flies():
 # nobody's threat; the legacy captain itself is unchanged. With
 # AIC_LAUNCH_SEQUENCE=0 the stream still hashes to the previous pin fc73668f...;
 # same hash on Python 3.11 and 3.12.)
-LEGACY_GOLDEN_SHA256 = "56c33845202dc0dec6d628159d12615a1a7a0aa2a01e2299c4c0ec7341fb791b"
+LEGACY_GOLDEN_SHA256 = "19b4f46900932c1fbceb2cbe336d0575a0d82fe14db1c8266112f9572b4a1875"
 
 
 def test_legacy_battle_event_stream_is_pinned(tmp_path):

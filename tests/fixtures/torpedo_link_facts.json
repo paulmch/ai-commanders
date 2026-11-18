@@ -12,29 +12,29 @@
  "profiles": {
   "sprint": {
    "tof_500_rest_s": 76.0,
-   "gj_500_rest": 21.9,
+   "gj_500_rest": 22.4,
    "tof_500_closing3_s": 61.0,
-   "gj_500_closing3": 32.9,
+   "gj_500_closing3": 33.0,
    "tof_500_opening1_s": 81.0,
-   "gj_500_opening1": 19.4,
+   "gj_500_opening1": 19.0,
    "runner_ff_gj": 16.6,
-   "reach_200_km": 16.4,
-   "reach_200_closing3_km": 10.9
+   "reach_200_km": 14.8,
+   "reach_200_closing3_km": 9.4
   },
   "reserve": {
    "tof_500_rest_s": 85.0,
-   "gj_500_rest": 22.0,
+   "gj_500_rest": 22.1,
    "tof_500_closing3_s": 62.0,
-   "gj_500_closing3": 33.1,
+   "gj_500_closing3": 33.2,
    "tof_500_opening1_s": 91.0,
    "gj_500_opening1": 19.0,
-   "runner_ff_gj": 14.0,
-   "reach_200_km": 103.1,
-   "reach_200_closing3_km": 57.0
+   "runner_ff_gj": 14.5,
+   "reach_200_km": 102.3,
+   "reach_200_closing3_km": 50.0
   }
  },
  "launch": {
-  "ahead_s": 4.0,
+  "ahead_s": 5.0,
   "half_round_s": 7.0,
   "cases": {
    "corvette/coast_ahead": [
@@ -44,17 +44,17 @@
     4.0
    ],
    "cruiser_torpedo/coast_ahead": [
-    4.0,
-    4.0,
-    4.0,
-    4.0
+    5.0,
+    5.0,
+    5.0,
+    5.0
    ],
    "corvette/coast_astern": [
     7.0
    ],
    "cruiser_torpedo/coast_abeam": [
-    4.0,
-    4.0,
+    5.0,
+    5.0,
     4.0,
     7.0
    ]
@@ -62,15 +62,15 @@
  },
  "battles": {
   "battles": 36,
-  "launched": 1776,
-  "orphaned": 976,
-  "reassigned": 635,
-  "reassigned_hit": 349,
+  "launched": 1780,
+  "orphaned": 987,
+  "reassigned": 659,
+  "reassigned_hit": 347,
   "pct_orphaned": 55,
-  "pct_reassigned": 65,
-  "pct_reassigned_hit": 55,
-  "pct_pd_blinded_sprint": 25,
+  "pct_reassigned": 67,
+  "pct_reassigned_hit": 53,
+  "pct_pd_blinded_sprint": 24,
   "pct_pd_blinded_reserve": 35,
-  "pct_diverted_hit_reserve": 76
+  "pct_diverted_hit_reserve": 71
  }
 }

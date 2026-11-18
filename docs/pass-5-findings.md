@@ -383,7 +383,10 @@ at that point and a 10 m/s ejection. It drifts for 1 s, pushes clear on its own 
 (~0.6 g) while turning onto its first guidance heading (30 deg/s), and lights its torch
 once it is 50 m from its own hull and any friendly hull, its exhaust cone misses its
 hull and its nose is within 10 deg of the heading (8 s timeout once clear, 15 s cap);
-the torch's first act cancels the separation drift. Until then nobody treats it as a
+the light-off is a crab: the nose is turned up to 30 deg off the heading so the first
+second of burn removes the sideways separation drift (thrust always along the nose;
+residual about 0.2 m/s after one tick; no extra delay on the corvette cases, 1 s on the
+torpedo cruiser). Until then nobody treats it as a
 threat. Seconds from launch to ignition (`scripts/launch_sequence_facts.py`):
 
 | geometry | corvette (rail rounds) | torpedo cruiser (VLS cells) |

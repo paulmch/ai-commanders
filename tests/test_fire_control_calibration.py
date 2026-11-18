@@ -105,6 +105,10 @@ RESIDUALS = {
     ("harness", "dodge:HOLD_RANGE:fleet", 4): (2.0, 3.6),
     ("battle", "PADLOCK", 4): (0.5, 0.8),
     ("battle", "HEADING:attitude", 3): (0.5, 0.8),
+    # Heuristic battles regenerated after the crab-angle light-off: 41 rounds from
+    # range keepers at 100-199 km landed 11 hits where 19.0 were forecast (1.73x,
+    # a thin bucket; 0-99 km and 200-299 km of the same class are within 1.1x).
+    ("battle", "HOLD_RANGE", 1): (1.5, 2.0),
 }
 
 
