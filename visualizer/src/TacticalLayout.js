@@ -80,10 +80,24 @@ export function groupLabel(members) {
   return `${n} ships`;
 }
 
-/** Torpedo-wave chip text: "15 TORP ▸ Halberd-1 · 6s". */
+/** Torpedo-wave chip text: "15 TORP ▸ Halberd-1 · 6s", "+10" for later waves at the same target. */
 export function waveLabel(wave, targetShort = '') {
   const eta = Number.isFinite(wave.eta) ? `${Math.max(0, Math.round(wave.eta))}s` : '--';
-  return `${wave.count} TORP${targetShort ? ` ▸ ${targetShort}` : ''} · ${eta}`;
+  return `${wave.count} TORP${targetShort ? ` ▸ ${targetShort}` : ''} · ${eta}${wave.later > 0 ? ` +${wave.later}` : ''}`;
+}
+
+/**
+ * One chip per target: its soonest wave (groupWaves order), carrying the
+ * rounds of the later waves at the same target as `later`.
+ */
+export function wavesByTarget(waves) {
+  const out = new Map();
+  for (const w of waves) {
+    const first = out.get(w.target);
+    if (first) first.later += w.count;
+    else out.set(w.target, { ...w, later: 0 });
+  }
+  return [...out.values()];
 }
 
 export const textWidth = (text, pad = 12) => Math.ceil(pad + CHAR_PX * String(text ?? '').length);
@@ -168,12 +182,19 @@ export function groupWaves(rounds, gap = WAVE_GAP_S) {
  * the other side, above / below, then a wider ring (with a leader line).
  * Never on another box in `occupied`, never off the view. Null when full.
  */
-export function placeChip(x, y, r, w, h, side, occupied, view) {
+export function placeChip(x, y, r, w, h, side, occupied, view, verticalFirst = false) {
   const { width, height, top = 8, bottom = 8, margin = 8 } = view;
   const fits = b => b.x >= margin && b.y >= top && b.x + b.w <= width - margin && b.y + b.h <= height - bottom &&
     !occupied.some(o => overlaps(b, o));
   const sides = [side || 1, -(side || 1)];
   const step = h + 3;
+  if (verticalFirst) {
+    // above / below, the near end at the anchor: off a stream of rounds flying sideways
+    for (const dy of [-1, 1]) {
+      const b = { x: side < 0 ? x - w + 4 : x - 4, y: dy < 0 ? y - r - GAP_PX - h : y + r + GAP_PX, w, h };
+      if (fits(b)) return b;
+    }
+  }
   for (const reach of [r + GAP_PX, r + GAP_PX + 26]) {
     for (const dir of sides) {
       for (const k of [0, -1, 1, -2, 2]) {
@@ -252,8 +273,8 @@ export function layoutTactical({ view, panels = [], ships = [], waves = [], mode
 
   // Placement priority: selected, dying, waves (soonest first), groups, single chips
   cards.sort((a, b) => Number(b.id === selectedId) - Number(a.id === selectedId) || Number(!!b.dying) - Number(!!a.dying));
-  const place = (x, y, r, w, h, side) => {
-    const box = placeChip(x, y, r, w, h, side, occupied, view);
+  const place = (x, y, r, w, h, side, vertical = false) => {
+    const box = placeChip(x, y, r, w, h, side, occupied, view, vertical);
     if (box) occupied.push(box);
     return box;
   };
@@ -266,7 +287,7 @@ export function layoutTactical({ view, panels = [], ships = [], waves = [], mode
   for (const w of waves) {
     const side = Math.abs(w.x - (w.tx ?? w.x)) < 1 ? 1 : (w.x < w.tx ? -1 : 1);   // trailing the head, away from its target
     const wb = { w: textWidth(w.text, 10), h: WAVE_H };
-    const box = place(w.x, w.y, 5, wb.w, wb.h, side);
+    const box = place(w.x, w.y, 5, wb.w, wb.h, side, true);
     wavesOut.push({ ...w, box, leader: box ? leaderTo(w.x, w.y, 5, box) : null });
   }
   for (const g of groups) {

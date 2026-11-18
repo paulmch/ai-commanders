@@ -726,7 +726,8 @@ export class Tracks {
       u.uIntensity.value = markerW;
       v.marker.position.copy(cp);
       v.marker.visible = markerW > 0.005;
-      v.actualMarker.material.uniforms.uIntensity.value = 0.8 * Math.min(1, emph.intensity);
+      v.actualMarker.material.uniforms.uIntensity.value = glyphs * 0.8 * Math.min(1, emph.intensity);
+      v.error.material.uniforms.uIntensity.value *= glyphs;
 
       this._setLocus(v, tr, k, rMax, markerW * (isFocus ? 1 : 0.75), lowConf);
 

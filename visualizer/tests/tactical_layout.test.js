@@ -266,3 +266,14 @@ test('scrubbing: the layout at t is the same played through, after a seek away a
   const norm = o => JSON.stringify({ ships: [...o.ships].sort(([a], [b]) => (a < b ? -1 : 1)), groups: o.groups, waves: o.waves });
   assert.equal(norm(back), norm(played[8]));
 });
+
+test('one wave chip per target: the soonest wave, later rounds counted on it', async () => {
+  const { wavesByTarget } = await import('../src/TacticalLayout.js');
+  const waves = groupWaves([
+    { id: 'a', target: 'beta_1', launch: 10, eta: 5 }, { id: 'b', target: 'beta_1', launch: 40, eta: 30 },
+    { id: 'c', target: 'beta_1', launch: 41, eta: 31 }, { id: 'd', target: 'beta_2', launch: 10, eta: 60 }
+  ]);
+  const chips = wavesByTarget(waves);
+  assert.deepEqual(chips.map(w => [w.target, w.count, w.later]), [['beta_1', 1, 2], ['beta_2', 1, 0]]);
+  assert.equal(waveLabel(chips[0], 'Halberd-1'), '1 TORP ▸ Halberd-1 · 5s +2');
+});

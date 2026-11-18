@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { getShipClassName } from './shipSilhouettes.js';
 import { detonationTime, lastHitAt, reactorPulseRate, HIT_FLASH_S } from './DamageTimeline.js';
-import { layoutTactical, groupWaves, waveLabel, shortName, DEFAULT_LABEL_MODE, normalizeLabelMode } from './TacticalLayout.js';
+import { layoutTactical, groupWaves, wavesByTarget, waveLabel, shortName, DEFAULT_LABEL_MODE, normalizeLabelMode } from './TacticalLayout.js';
 
 /** Inbound torpedoes closer than this (s) pulse the bracket red. */
 export const THREAT_IMMINENT_S = 10;
@@ -114,6 +114,9 @@ export class ContactOverlay {
       button.setAttribute('aria-label', `Inspect ${info.name || id}`);
       button.innerHTML = '<span class="contact-bracket"></span><span class="contact-leader"></span><span class="contact-label"><span class="contact-name"></span><span class="contact-detail"></span><span class="contact-health"><i></i></span></span>';
       button.addEventListener('click', () => this.selectShip(id));
+      // pointer on the chip: its engagement lines come up too (TargetingLines.focusId)
+      button.addEventListener('mouseenter', () => this.setHover(id));
+      button.addEventListener('mouseleave', () => { if (this.hoverId === id) this.setHover(null); });
       this.container.appendChild(button);
       this.contacts.set(id, {
         button, info, short: shortName(info.name || id), label: button.querySelector('.contact-label'),
@@ -198,7 +201,7 @@ export class ContactOverlay {
     if (tl?.roundsAt) {
       const rounds = tl.roundsAt(now, this.rounds);
       const byId = new Map(rounds.map(r => [r.id, r]));
-      for (const w of groupWaves(rounds)) {
+      for (const w of wavesByTarget(groupWaves(rounds))) {
         if (states?.[w.target]?.dying) continue;
         threatened.set(w.target, Math.min(threatened.get(w.target) ?? Infinity, w.eta));
         const head = byId.get(w.head)?.track;
@@ -258,7 +261,11 @@ export class ContactOverlay {
       label.hidden = !place?.box;
       if (!place?.box) { leader.hidden = true; continue; }
       const box = place.box;
-      label.style.left = `${(box.x - x + 10).toFixed(1)}px`;
+      // a chip left of its ship is anchored by its right edge, so the hover
+      // expansion grows away from the hull, never across it
+      const leftOf = box.x + box.w / 2 < x;
+      label.style.left = leftOf ? 'auto' : `${(box.x - x + 10).toFixed(1)}px`;
+      label.style.right = leftOf ? `${(x + 10 - box.x - box.w).toFixed(1)}px` : 'auto';
       label.style.top = `${(box.y - y + 10).toFixed(1)}px`;
       label.style.width = `${box.w}px`;
       setLeader(leader, place.leader, x - 10, y - 10);
@@ -269,7 +276,9 @@ export class ContactOverlay {
       rec.el.hidden = !g.box;
       if (!g.box) return;
       rec.el.className = `contact-group ${g.faction}${g.ids.includes(this.hoverId) ? ' linked' : ''}`;
-      rec.chip.style.left = `${g.box.x.toFixed(1)}px`;
+      const leftOf = g.box.x + g.box.w / 2 < g.x;   // grows away from its ships on hover
+      rec.chip.style.left = leftOf ? 'auto' : `${g.box.x.toFixed(1)}px`;
+      rec.chip.style.right = leftOf ? `${(width - g.box.x - g.box.w).toFixed(1)}px` : 'auto';
       rec.chip.style.top = `${g.box.y.toFixed(1)}px`;
       rec.chip.style.minWidth = `${g.box.w}px`;
       if (rec.text.textContent !== g.text) rec.text.textContent = g.text;
