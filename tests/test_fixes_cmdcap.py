@@ -968,3 +968,70 @@ class TestSequentialCaptains:
         assert BattleConfig(captain_order="auto").captain_order is None
         with pytest.raises(ValueError):
             BattleConfig(captain_order="random")
+
+
+# =============================================================================
+# Round 2: renewing the admiral's order is compliance; reason-only reports
+# =============================================================================
+
+class TestRenewedOrder:
+
+    def _renew(self, ctx):
+        if ctx.model != "stub/dd":
+            return []
+        return [("set_heading", {"direction": {"x": -1.0, "y": 0.02, "z": 0.0}, "throttle": 1.0,
+                                 "evade": "full", "reason": "Renewing the fleet heading per orders"}),
+                ("set_primary_target", {"target_id": "beta_1"})]
+
+    def test_reissued_heading_is_compliance_and_the_order_keeps_flying(self, tmp_path):
+        stub, runner = _loop_runner(tmp_path, self._renew, checkpoints=2)
+        runner.run_fleet_battle(FLEET)
+        report = _reports(runner)[30.0]
+        assert report["status"] == "ACK" and report["implicit"] is True
+        assert report["from_reason"] is True
+        assert report["intent"].startswith("set_heading: Renewing the fleet heading")
+        assert report["compliance"]["executed_maneuver"] == "HEADING"
+        assert ("stub/dd", 1, 2) not in stub.texts                      # no ORDER CHECK
+        # Next turn, the tool note says the order kept flying.
+        assert "matches your Admiral's HEADING order already flying" in stub.texts[("stub/dd", 2, 1)]
+
+    def test_a_heading_reason_does_not_explain_a_target_deviation(self, tmp_path):
+        def captain(ctx):
+            calls = self._renew(ctx)
+            return calls[:1] if ctx.model == "stub/dd" else calls     # target left unset
+        stub = Stub(captain=captain, order=lambda ship: dict(HEADING_ORDER, suggested_target="beta_1"))
+        runner = make_runner(stub, tmp_path, alpha=(("destroyer", "stub/dd"),),
+                             beta=(("destroyer", "stub/foe"),), checkpoints=1, distance_km=400.0)
+        runner.run_fleet_battle(FLEET)
+        report = _reports(runner)[30.0]
+        assert report["compliance"]["deviations"][0].startswith("target:")
+        assert report["status"] == "ACK" and report["implicit"] is True   # not a DEVIATE
+
+    def test_a_different_heading_still_replaces_the_order(self, tmp_path):
+        def captain(ctx):
+            if ctx.model != "stub/dd":
+                return []
+            return [("set_heading", {"direction": {"x": 0.0, "y": 1.0, "z": 0.0}, "throttle": 1.0,
+                                     "evade": "full", "reason": "flank"})]
+        _, runner = _loop_runner(tmp_path, captain, checkpoints=1)
+        runner.run_fleet_battle(FLEET)
+        flown = runner.simulation.get_ship("alpha_1").current_maneuver
+        assert flown.heading_direction["y"] > 0.9
+
+    def test_formation_note(self):
+        from src.simulation import Maneuver, ManeuverType
+        sim, cap = _sim(), _captain()
+        cap.has_admiral = True
+        order = AdmiralOrder(target_ship_id="alpha_1", target_ship_name="x", order_text="Fleet heading.",
+                             heading={"x": -1, "y": 0, "z": 0}, throttle=1.0, formation=True,
+                             applied_throttle=0.67, maneuver={"maneuver_type": "HEADING", "throttle": 1.0})
+        cap.admiral_orders = [order]
+        ship = sim.get_ship("alpha_1")
+        ship.current_maneuver = Maneuver(maneuver_type=ManeuverType.HEADING, start_time=0.0, duration=30.0,
+                                         throttle=0.67, heading_direction={"x": -1, "y": 0, "z": 0})
+        mine = Maneuver(maneuver_type=ManeuverType.HEADING, start_time=0.0, duration=30.0, throttle=1.0,
+                        heading_direction={"x": -0.999, "y": 0.03, "z": 0})
+        note = cap._reproduces_applied_order(mine, sim, "alpha_1")
+        assert "FORMATION heading" in note and "67% throttle" in note and "synchronised" in note
+        mine.heading_direction = {"x": -0.9, "y": 0.43, "z": 0}             # ~25 deg off
+        assert cap._reproduces_applied_order(mine, sim, "alpha_1") is None

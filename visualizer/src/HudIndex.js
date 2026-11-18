@@ -359,6 +359,8 @@ export function buildComms(events, ids, ships, checkpoints, { from = 0, to = eve
         const chips = [];
         if (d.contact?.ship) chips.push(`CONTACT ${d.contact.ship}${d.contact.assessment ? ' · ' + d.contact.assessment : ''}`);
         if (d.request?.kind) chips.push(`REQUEST ${String(d.request.kind).toUpperCase()}`);
+        // A reason given on an action call, not a report_to_admiral (implicit ACK with intent).
+        if (d.from_reason) chips.push('CALL REASON');
         // The report travels to the admiral, who reads it (with the engine's
         // compliance refreshed) at its next turn: comms_delivered msg_id =
         // report_id, recipient '<faction>_admiral'.

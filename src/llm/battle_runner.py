@@ -2829,9 +2829,13 @@ class LLMBattleRunner:
                 if not fields.get("reason"):
                     fields["reason"] = clip(reasons, REPORT_REASON_CHARS)
             elif not getattr(captain, "last_call_failed", False):
+                # A reason on an action call is not a report: filed as an
+                # implicit ACK carrying it as intent (recordings counted "114
+                # explicit ACKs" where captains called report_to_admiral 7
+                # times). It becomes a DEVIATE only for a deviation in what
+                # the reasoned call itself did (below).
                 fields = {"status": "ACK", "reason": "", "intent": clip(reasons, REPORT_REASON_CHARS),
-                          "contact": None, "request": None}
-                implicit = False
+                          "contact": None, "request": None, "from_reason": True}
         order = primary_order(orders)
         executed = executed_maneuver(ship, commands, now)
         target_id = commanded_target(ship, commands)
@@ -2855,7 +2859,17 @@ class LLMBattleRunner:
             mark_not_executable(report["compliance"])
         elif (reasons and not explicit and report["status"] == "ACK"
               and isinstance(report["compliance"], dict) and not report["compliance"]["followed"]):
-            report["status"], report["reason"], report["intent"] = "DEVIATE", report["intent"], ""
+            # Only a deviation the reasoned call made is explained by it: a
+            # set_heading reason ("renewing the fleet heading") does not
+            # explain a target the captain did not change (B4: 7 of 7 such
+            # DEVIATEs were target deviations under a heading reason).
+            kinds = {"set_heading": "maneuver", "set_maneuver": "maneuver",
+                     "set_primary_target": "target", "launch_torpedo": "salvo"}
+            reasoned = {kinds.get(r.split(":", 1)[0]) for r in captain.call_reasons}
+            devs = {d.split(":", 1)[0] for d in report["compliance"].get("deviations") or []}
+            if reasoned & devs:
+                report["status"], report["reason"], report["intent"] = "DEVIATE", report["intent"], ""
+                report["implicit"] = False
         # Next checkpoint the captain is shown the verdict the admiral reads
         # when it is NOT as ordered (captain._format_verdict), recomputed then
         # with the rounds that actually left the tubes.

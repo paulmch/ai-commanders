@@ -180,6 +180,10 @@ def pd_turrets_needed(rep_laser: Any, torp_flight: Any, dist_km: float,
         return None
 
 
+# A captain heading within this angle of the applied admiral heading (same
+# throttle and evade) reproduces the order: compliance, the order keeps flying.
+REPRODUCE_HEADING_DEG = 3.0
+
 # The kinetic phase of a torpedo hit (simulation._resolve_torpedo_hit), bound
 # to the engine by tests/test_fixes_cmdcap.py TestTorpedoArmor.
 TORPEDO_KINETIC_IMPACT_AREA_M2 = 0.1
@@ -753,7 +757,7 @@ class LLMCaptain:
             "tool_calls": [{"name": tc.name, "args": tc.arguments} for tc in executed],
             "commands_count": len(commands),
             "followups": self.last_followup_rounds,
-            "acted": any(self._is_action_command(c) for c in commands),
+            "acted": any(self._is_action_command(c) for c in commands) or bool(state.get("kept_order")),
             # An admiral HEADING / MANEUVER order applied this checkpoint flies
             # without a captain call: "no commands" then does not mean a coast.
             "order_flew": self._admiral_heading_applied(),
@@ -838,12 +842,84 @@ class LLMCaptain:
 
             cmd = self._execute_tool(tc, simulation, ship_id)
             executed.append(tc)
+            if cmd is not None and tc.name in maneuver_tools:
+                kept = self._reproduces_applied_order(cmd, simulation, ship_id)
+                if kept:
+                    # Re-issuing the admiral's order is compliance, and the
+                    # order (a formation's matched throttle and synced burn
+                    # start included) keeps flying instead of a copy.
+                    self._record_tool_note(f"{tc.name}: {kept}")
+                    state["kept_order"] = True
+                    cmd = None
             if cmd is not None:
                 # A tool may emit a salvo (e.g. launch_torpedo count=2).
                 if isinstance(cmd, list):
                     commands.extend(c for c in cmd if c is not None)
                 else:
                     commands.append(cmd)
+
+    def _reproduces_applied_order(self, cmd: Any, simulation: Any, ship_id: str) -> Optional[str]:
+        """
+        The tool note when a set_heading / set_maneuver call reproduces the
+        admiral maneuver already applied this checkpoint - a HEADING within
+        REPRODUCE_HEADING_DEG at the ordered (or the formation-matched)
+        throttle with the same evade, or the same PADLOCK / MAINTAIN /
+        INTERCEPT / HOLD_RANGE at the same ship with the same evade - else
+        None. Haiku captains re-issued the fleet heading 178 times in B3-B5,
+        90 of them formation orders: the copy replaced the formation's
+        matched throttle and synchronised burn start with a solo burn.
+        """
+        if not self.has_admiral or not self._admiral_heading_applied():
+            return None
+        ship = simulation.get_ship(ship_id) if hasattr(simulation, "get_ship") else None
+        now = float(getattr(simulation, "current_time", 0.0))
+        applied = getattr(ship, "current_maneuver", None)
+        if applied is None or abs(float(getattr(applied, "start_time", -1.0)) - now) > 1e-6:
+            return None
+        if getattr(cmd, "maneuver_type", None) != applied.maneuver_type:
+            return None
+        if (getattr(cmd, "evade", None) or None) != (getattr(applied, "evade", None) or None):
+            return None
+        from .fleet_comms import primary_order
+        order = primary_order(self.admiral_orders)
+        kind = applied.maneuver_type.name
+        if kind == "HEADING":
+            if getattr(cmd, "heading_target_id", None) or getattr(cmd, "heading_point_km", None) \
+                    or getattr(applied, "heading_target_id", None) or getattr(applied, "heading_point_km", None):
+                return None
+            a, b = cmd.heading_direction or {}, applied.heading_direction or {}
+            na = math.sqrt(sum(float(a.get(k, 0)) ** 2 for k in "xyz"))
+            nb = math.sqrt(sum(float(b.get(k, 0)) ** 2 for k in "xyz"))
+            if not na or not nb:
+                return None
+            dot = sum(float(a.get(k, 0)) * float(b.get(k, 0)) for k in "xyz") / (na * nb)
+            if math.degrees(math.acos(max(-1.0, min(1.0, dot)))) > REPRODUCE_HEADING_DEG:
+                return None
+            throttles = {round(float(applied.throttle), 3)}
+            for value in (getattr(order, "throttle", None), getattr(order, "applied_throttle", None)):
+                if value is not None:
+                    throttles.add(round(float(value), 3))
+            if not any(abs(float(cmd.throttle) - t) <= 0.01 for t in throttles):
+                return None
+            if getattr(order, "formation", False):
+                return (f"matches your Admiral's FORMATION heading already flying (within "
+                        f"{REPRODUCE_HEADING_DEG:g} deg, same throttle and evade): the order keeps "
+                        f"flying - {float(applied.throttle) * 100:.0f}% throttle matched to the "
+                        f"slowest hull, burn start synchronised with the fleet. A heading of your "
+                        f"own replaces both (own throttle, own start).")
+            return ("matches your Admiral's HEADING order already flying (same direction, "
+                    "throttle and evade): the order keeps flying - no call was needed.")
+        if kind in ("PADLOCK", "MAINTAIN", "INTERCEPT", "HOLD_RANGE"):
+            if getattr(cmd, "target_id", None) != getattr(applied, "target_id", None):
+                return None
+            for key in ("standoff_m", "arrival_closing_mps", "hold_range_m"):
+                if getattr(cmd, key, None) is not None and getattr(cmd, key, None) != getattr(applied, key, None):
+                    return None
+            if kind not in ("PADLOCK", "MAINTAIN") and abs(float(cmd.throttle) - float(applied.throttle)) > 0.01:
+                return None
+            return (f"matches your Admiral's {kind} order already flying (same target and "
+                    f"evade): the order keeps flying - no call was needed.")
+        return None
 
     @staticmethod
     def _is_action_command(cmd: Any) -> bool:
