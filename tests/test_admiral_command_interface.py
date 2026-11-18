@@ -688,19 +688,20 @@ class TestDraw:
 # =============================================================================
 
 class TestPlot:
-    def test_burning_is_produced_thrust_and_the_ticker_names_ships(self):
-        from src.llm.admiral_view import AdmiralViewState, build_live_frame
+    def test_burning_is_produced_thrust_and_the_plot_names_ships(self):
+        from src.llm.admiral_view import build_live_frame, build_scene
         from src.simulation import Maneuver, ManeuverType
         sim = CombatSimulation(seed=1)
         s = ship(sim, "alpha_1", "destroyer", "alpha", (0, 0, 0))
         s.current_maneuver = Maneuver(ManeuverType.PADLOCK, 1.0, target_id="x")
         s.applied_throttle = 0.05
-        assert build_live_frame(sim)["ships"]["alpha_1"]["thrust"] == pytest.approx(0.05)
-        view = AdmiralViewState()
-        view.note_event(types.SimpleNamespace(event_type=types.SimpleNamespace(name="TORPEDO_IMPACT"),
-                                              timestamp=10.0, ship_id="alpha_1", data={}))
-        assert view.recent_events(12.0, names={"alpha_1": "TIS Falchion-1"}) == [
-            (10.0, "TORPEDO IMPACT: TIS Falchion-1")]
+        frame = build_live_frame(sim)
+        assert frame["ships"]["alpha_1"]["thrust"] == pytest.approx(0.05)
+        scene = build_scene(frame, {"alpha_1": {"name": "TIS Falchion-1", "type": "destroyer",
+                                                "faction": "alpha"}}, faction="alpha")
+        item = scene.ships[0]
+        assert not item.burning                      # PADLOCK's token burn is coasting
+        assert item.label().startswith("TIS Falchion-1")
 
 
 # =============================================================================
