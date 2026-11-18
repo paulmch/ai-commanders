@@ -27,8 +27,8 @@ FACTS = {
                 "gj_500_closing3": 33, "tof_500_opening1_s": 91, "gj_500_opening1": 19,
                 "runner_ff_gj": 14, "reach_200_km": 103, "reach_200_closing3_km": 57},
     "launch": {"ahead_s": 4, "half_round_s": 7},
-    "battles": {"pct_orphaned": 54, "pct_reassigned": 66, "pct_reassigned_hit": 55,
-                "pct_pd_blinded_sprint": 25, "pct_pd_blinded_reserve": 36,
+    "battles": {"pct_orphaned": 55, "pct_reassigned": 65, "pct_reassigned_hit": 55,
+                "pct_pd_blinded_sprint": 25, "pct_pd_blinded_reserve": 35,
                 "pct_diverted_hit_reserve": 76},
 }
 

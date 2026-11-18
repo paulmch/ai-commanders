@@ -375,6 +375,34 @@ plan sigma is 0.16-0.77 km.
   round 1). Held attitudes went from 116 ticks to 0, and thrust against the order from 111
   throttle-seconds to 2.1 (token only).
 
+### Torpedoes leave their rack before the torch lights (`src/torpedo_launch.py`)
+
+A launched round starts at its own rack round or VLS cell as the 3D model shows it
+(`data/hull_mounts.json` launcher `rounds`), with the ship's velocity, the hull's spin
+at that point and a 10 m/s ejection. It drifts for 1 s, pushes clear on its own RCS
+(~0.6 g) while turning onto its first guidance heading (30 deg/s), and lights its torch
+once it is 50 m from its own hull and any friendly hull, its exhaust cone misses its
+hull and its nose is within 10 deg of the heading (8 s timeout once clear, 15 s cap);
+the torch's first act cancels the separation drift. Until then nobody treats it as a
+threat. Seconds from launch to ignition (`scripts/launch_sequence_facts.py`):
+
+| geometry | corvette (rail rounds) | torpedo cruiser (VLS cells) |
+|---|---|---|
+| coasting, target ahead / abeam | 4 / 4 | 4 / 4 (the cell facing away 7) |
+| coasting, target astern | 7 | 4 |
+| full burn toward / away from the target | 3 / 8 | 4 / 4 |
+| turning or spinning at launch | 4 | 4-5 |
+| two hulls 120 m apart launching together | 4 and 8 | 4 and 9 |
+
+No round came within 11.7 m of its own hull while separating (52.8 m after ignition),
+none sat in its ship's plume, salvo rounds stay > 50 m apart, so there is no launch
+collision model. Forecasts include the delay (captain's shadow flight exact, admiral's
+pursuit within 1 s). Balance, same seeds before/after: 36 torpedo-vs-gun battles at
+500 km 36/36 torpedo wins both ways, impacts 1062 -> 1049 (sprint) and 1390 -> 1410
+(reserve); from 100 km the gun side wins 36/36 both ways, impacts 461 -> 442; a 50 km
+shot flies 27 -> 31 s from rest. The one real shift: an evading battleship behind 8
+escorts takes 16/18 rounds from a 1200 km salvo instead of 12/18 (the drift cancel).
+
 ### Recording files
 
 New recordings are written as `.json.gz` (compact JSON, deterministic gzip header): 15-37 times

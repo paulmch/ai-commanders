@@ -3094,14 +3094,14 @@ FORMATIONS FOR PD (what actually moves the numbers):
 TORPEDO DEFENCE, MEASURED (seeded runs on this engine: a 4 battlecruiser + 2 destroyer +
 2 frigate gun wall against 5 corvettes + 3 frigates = 40 rounds, the wall's posture fixed
 from the first checkpoint; per battle, 3 seeds each):
-- start 500 km: nose-on PADLOCK - 76% of rounds hit (nearly all on the nose, ~13.8 km/s, ~24 GJ
-  each), 6 of 8 hulls lost; burning straight away - 44% hit (all on the TAIL, ~12.6 km/s,
-  ~19 GJ), 6 of 8 lost; the same burn with evade full - 50% hit, 6 of 8 lost (on the
+- start 500 km: nose-on PADLOCK - 78% of rounds hit (nearly all on the nose, ~13.8 km/s, ~24 GJ
+  each), 7 of 8 hulls lost; burning straight away - 46% hit (all on the TAIL, ~12.6 km/s,
+  ~19 GJ), 7 of 8 lost; the same burn with evade full - 47% hit, 6 of 8 lost (on the
   tail and flank: the overlay keeps the burn and turns no nose round); charging
-  (INTERCEPT) - 73% hit (~14.5 km/s, ~26 GJ), 8 of 8 lost. First loss ~70 s in each
+  (INTERCEPT) - 73% hit (~14.6 km/s, ~27 GJ), 8 of 8 lost. First loss ~75 s in each
   (rounds launched at the first checkpoint, at battle start).
-- start 1000 km: nose-on - 72% hit, 8 of 8 lost (first at ~260 s); burning away - 35%
-  hit, 5 of 8 lost (first at ~280 s); charging - 45% hit, 4 of 8 lost. The wall killed
+- start 1000 km: nose-on - 70% hit, 8 of 8 lost (first at ~265 s); burning away - 35%
+  hit, 5 of 8 lost (first at ~285 s); charging - 50% hit, 2 of 8 lost. The wall killed
   1.3 boats per battle charging, 0.7 nose-on, 0 burning away.
 - Burning away lowers impact speed a little and leaves more rounds blinded or dry; the
   rounds that still hit land on the thin tail. Closing raises impact energy and shortens
@@ -3205,11 +3205,11 @@ GUN_EXCHANGE_BATTLES = 160
 GUN_EXCHANGE_BUDGET = 150
 GUN_EXCHANGE_BANDS = (
     ("0-50", 70, 0.24, 17),
-    ("50-100", 62, 0.24, 22),
-    ("100-150", 50, 0.30, 18),
-    ("150-200", 44, 0.45, 20),
-    ("200-300", 37, 0.31, 15),
-    ("300+", 26, 0.29, 7),
+    ("50-100", 62, 0.25, 22),
+    ("100-150", 50, 0.34, 20),
+    ("150-200", 44, 0.49, 21),
+    ("200-300", 36, 0.32, 15),
+    ("300+", 27, 0.24, 6),
 )
 GUN_EXCHANGE_INSIDE_150_PCT = 58
 
@@ -3248,10 +3248,10 @@ FACING_SPINAL_HITS_TO_KILL = (
 # heuristic doctrines separately: the battleship's swung from nose 1% (legacy)
 # to 37% (tactical) penetration, above its flank's 21%, and is left out.
 FACING_MEASURED = (
-    ("battlecruiser", 16, 0.17, 45, 0.50),
-    ("destroyer", 9, 0.08, 37, 0.43),
-    ("frigate", 24, 0.38, 57, 0.68),
-    ("dreadnought", 26, 0.25, 34, 0.22),
+    ("battlecruiser", 16, 0.16, 41, 0.44),
+    ("destroyer", 9, 0.08, 37, 0.47),
+    ("frigate", 25, 0.40, 61, 0.73),
+    ("dreadnought", 27, 0.27, 43, 0.28),
 )
 # The pass example in RANGE CONTROL and the CROSSFIRE example geometry.
 MERGE_EXAMPLE_KPS = 5.0

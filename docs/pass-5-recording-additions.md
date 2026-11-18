@@ -1308,6 +1308,13 @@ tick of drift); the ignition frame has no `ph` and `thr` > 0. Interpolate the
 round between frames from `pos`/`vel`; slerp `nose` between sequence frames and
 hand over to `fwd` at ignition.
 
+### Demo recording
+
+`data/recordings/p5_launch_sequence_demo.json.gz` (also in the viewer's shared
+`visualizer/public/recordings/`): `uv run python scripts/generate_test_battle.py
+torpedo_strike` (traced; a torpedo cruiser against a corvette, VLS cells and
+rail rounds, a 3 s, 4 s and an 8 s timeout ignition in the first 20 s).
+
 ### Rules the engine keeps around the sequence
 
 - Nobody treats a round still in its sequence as an inbound threat: point
