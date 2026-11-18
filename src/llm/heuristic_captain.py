@@ -45,12 +45,18 @@ from . import heuristic_flank as flank
 # instead of an LLM-backed captain.
 HEURISTIC_MODEL = "heuristic"
 
+# "tactical" (the default): in a gun fight the fleet flies the nose-on wall,
+# and switches to the cut-corner pincer against a slow capital line when it
+# has enough fast hulls (heuristic_flank.default_spec). "classic" is the
+# previous default (focus fire, nose-first passes, heuristic_tactics only),
+# "legacy" the pass-4 captain, bit for bit.
 DOCTRINE_TACTICAL = "tactical"
+DOCTRINE_CLASSIC = "classic"
 DOCTRINE_LEGACY = "legacy"
-# Experimental variants (src/llm/heuristic_flank.py): the static wall and
-# pincer / envelopment / two-axis torpedo strikes. Never the default.
+# Fixed variants (src/llm/heuristic_flank.py): the plain wall and pincer /
+# envelopment / two-axis torpedo strikes, for comparison.
 from .heuristic_flank import FLANK_DOCTRINES  # noqa: E402
-DOCTRINES = (DOCTRINE_TACTICAL, DOCTRINE_LEGACY) + tuple(FLANK_DOCTRINES)
+DOCTRINES = (DOCTRINE_TACTICAL, DOCTRINE_CLASSIC, DOCTRINE_LEGACY) + tuple(FLANK_DOCTRINES)
 DEFAULT_DOCTRINE = DOCTRINE_TACTICAL
 
 # Ranges in km
@@ -88,6 +94,7 @@ class HeuristicCaptain(LLMCaptain):
         self.doctrine = doctrine
         self._decision_interval = 30.0
         self._broke_off = False
+        self._announced: set = set()
         self._withdrawn = False
         self._face_id: Optional[str] = None
 
@@ -373,6 +380,20 @@ class HeuristicCaptain(LLMCaptain):
         self._broke_off = crippled
         if self.has_admiral:
             return out      # the admiral, not the flag ship, sets the fleet's targets
+        spec = self._flank_spec(ship) if ship_id == plan.flag_id else None
+        if (ship_id == plan.flag_id and spec is None and self.doctrine == DOCTRINE_TACTICAL
+                and "plan" not in self._announced):
+            self._announced.add("plan")
+            out.append(("fleet_signal", {"kind": "FREE", "text": flank.plan_text(None, None)}))
+        if spec is not None and spec.kind in ("wall", "pincer", "envelop"):
+            st = flank.flank_state(self._sim, ship.faction, spec)
+            if "plan" not in self._announced:
+                self._announced.add("plan")
+                out.append(("fleet_signal", {"kind": "FREE", "text": flank.plan_text(spec, st)}))
+            elif st.attack_started and "attack" not in self._announced:
+                self._announced.add("attack")
+                out.append(("fleet_signal", {"kind": "FREE",
+                                             "text": "Flankers on station: turning in, all ships engage."}))
         if ship_id == plan.flag_id and plan.focus_changed and plan.focus_id in names:
             out.append(("fleet_signal", {
                 "kind": "TARGET_CLAIM", "target": names[plan.focus_id],
@@ -509,11 +530,20 @@ class HeuristicCaptain(LLMCaptain):
             args["evade"] = evade
         return args
 
+    def _flank_spec(self, ship) -> Optional["flank.FlankSpec"]:
+        """This ship's flank spec: the fleet's chosen plan under the default
+        doctrine, the named variant's, or None ('classic')."""
+        if self.doctrine == DOCTRINE_CLASSIC:
+            return None
+        if self.doctrine == DOCTRINE_TACTICAL:
+            return flank.default_spec(self._sim, ship.faction)
+        return flank.flank_spec(self.doctrine)
+
     def _flank_maneuver(self, ship, ship_id, target, enemies, plan, my_role, nearest_gun,
                         evade) -> Optional[Dict[str, Any]]:
         """Maneuver for the experimental flank doctrines (heuristic_flank),
         or None to fly the tactical doctrine's."""
-        spec = flank.flank_spec(self.doctrine)
+        spec = self._flank_spec(ship)
         if spec is None:
             return None
         st = flank.flank_state(self._sim, ship.faction, spec)
@@ -526,7 +556,7 @@ class HeuristicCaptain(LLMCaptain):
             return args
 
         if my_role == "torpedo":
-            if spec.kind != "split" or nearest_gun is None:
+            if not (spec.kind == "split" or spec.split_boats) or nearest_gun is None:
                 return None
             boats = sorted(sid for sid, g in st.groups.items() if g == "boat")
             key = "boat_a" if boats.index(ship_id) % 2 == 0 else "boat_b"

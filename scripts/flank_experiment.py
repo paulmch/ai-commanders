@@ -50,6 +50,13 @@ CUSTOM_ROSTERS = {
                          "frigate", "frigate", "frigate", "frigate"],
                    200: ["dreadnought", "battleship", "destroyer", "destroyer",
                          "frigate", "frigate", "frigate", "frigate"]},
+    # Capital lines with a fast fringe (for the switch rule's thresholds).
+    "battleline": {150: ["battleship", "battleship", "destroyer", "destroyer", "destroyer"],
+                   200: ["battleship", "battleship", "battleship", "destroyer", "destroyer", "destroyer"]},
+    "escort": {150: ["battleship", "battleship", "frigate", "frigate", "frigate",
+                     "frigate", "frigate", "frigate"],
+               200: ["battleship", "battleship", "battleship", "frigate", "frigate",
+                     "frigate", "frigate", "frigate"]},
 }
 NOSE_COS = math.cos(math.radians(30.0))
 
@@ -59,6 +66,21 @@ def roster_types(name: str, budget: int) -> List[str]:
         return list(CUSTOM_ROSTERS[name][budget])
     from src.llm.fleet_draft import auto_draft
     return [s.ship_type for s in auto_draft("alpha", budget=budget, seed=1, doctrine=name).ships]
+
+
+def side_roster(job: Dict[str, Any], faction: str) -> str:
+    """Roster flown by ``faction``: 'X' is a mirror; 'X/Y' gives doctrine A
+    roster X and doctrine B roster Y (asymmetric families, e.g. torpedo
+    against gun), whichever side A is on."""
+    if "/" not in job["roster"]:
+        return job["roster"]
+    ra, rb = job["roster"].split("/")
+    a_side = "alpha" if job["a_is_alpha"] else "beta"
+    return ra if faction == a_side else rb
+
+
+def side_types(job: Dict[str, Any], faction: str) -> List[str]:
+    return roster_types(side_roster(job, faction), job["budget"])
 
 
 def groups_for(types: List[str], faction: str, doctrine: str) -> Dict[str, str]:
@@ -102,14 +124,15 @@ def _run_battle(job: Dict[str, Any], out_path: Path) -> Dict[str, Any]:
     dist = 500.0
     drafts = {}
     for fac in ("alpha", "beta"):
-        if job["roster"] in CUSTOM_ROSTERS:
+        roster = side_roster(job, fac)
+        if roster in CUSTOM_ROSTERS:
             d = FleetDraft(faction=fac, budget=job["budget"], auto=True)
-            d.ships = name_drafted_ships(job["types"], fac)
+            d.ships = name_drafted_ships(side_types(job, fac), fac)
             n = len(d.ships)
             for i, s in enumerate(d.ships):
                 s.offset_km = (-10.0 if i % 2 else 0.0, (i - (n - 1) / 2) * 12.0, 0.0)
         else:
-            d = auto_draft(fac, budget=job["budget"], seed=1, doctrine=job["roster"])
+            d = auto_draft(fac, budget=job["budget"], seed=1, doctrine=roster)
         drafts[fac] = d
     tmp = tempfile.mkdtemp(prefix="flank_")
     try:
@@ -146,8 +169,8 @@ def analyze(rec: Dict[str, Any], job: Dict[str, Any]) -> Dict[str, Any]:
     side = lambda sid: (sid or "").split("_")[0]   # noqa: E731
     role = lambda sid: "A" if side(sid) == a_side else "B"   # noqa: E731
     events = rec.get("events", [])
-    groups = {**groups_for(job["types"], a_side, job["doc_a"]),
-              **groups_for(job["types"], b_side, job["doc_b"])}
+    groups = {**groups_for(side_types(job, a_side), a_side, job["doc_a"]),
+              **groups_for(side_types(job, b_side), b_side, job["doc_b"])}
     flankers = {sid for sid, g in groups.items() if g.startswith("flank") and role(sid) == "A"}
     a_main = {sid for sid, g in groups.items() if g == "hold" and role(sid) == "A"}
 
@@ -275,6 +298,19 @@ def analyze(rec: Dict[str, Any], job: Dict[str, Any]) -> Dict[str, Any]:
                 return False
             face_f += facing(fl)
             face_m += facing(mn)
+    closest = None
+    for frame in trace:
+        ships = frame.get("ships", {})
+        live = [(k, s) for k, s in ships.items() if not s.get("destroyed") and not s.get("dying")]
+        for k, s in live:
+            if role(k) != "A":
+                continue
+            for k2, s2 in live:
+                if role(k2) == "B":
+                    d = math.dist(s["pos"], s2["pos"])
+                    if closest is None or d < closest:
+                        closest = d
+    out["closest_km"] = closest / 1000.0 if closest is not None else None
     out["flank_reach_s"] = {k: v for k, v in reach.items()}
     out["defender_face_flank"] = face_f / samples if samples else None
     out["defender_face_main"] = face_m / samples if samples else None
@@ -299,7 +335,7 @@ def main() -> int:
         a, b = pair.split(":")
         for roster in args.rosters:
             for budget in args.budgets:
-                types = roster_types(roster, budget)
+                types = roster_types(roster.split("/")[0], budget)
                 for seed in args.seeds:
                     for a_is_alpha in (True, False):
                         tag = f"{a}-{b}_{roster}_b{budget}_s{seed}_{'A' if a_is_alpha else 'B'}alpha"
@@ -332,8 +368,8 @@ def print_summary(rows: List[Dict[str, Any]]) -> None:
     by = defaultdict(list)
     for r in rows:
         by[(r["doc_a"], r["doc_b"], r["roster"])].append(r)
-    print("| A vs B | roster | battles | A W/D/L | kills A-B | 1st kill s | hits on B n/l/t % | hits on A n/l/t % | pen/hit on B n/l/t |")
-    print("|---|---|---|---|---|---|---|---|---|")
+    print("| A vs B | roster | battles | A W/D/L | kills A-B | 1st kill s | hits on B n/l/t % | hits on A n/l/t % | pen/hit on B n/l/t | median closest km |")
+    print("|---|---|---|---|---|---|---|---|---|---|")
     totals = defaultdict(lambda: Counter())
     for key in sorted(by):
         rs = by[key]
@@ -343,6 +379,8 @@ def print_summary(rows: List[Dict[str, Any]]) -> None:
             hb.update(r["hits_on_b"]); ha.update(r["hits_on_a"]); pb.update(r["pen_on_b"])
         fk = [r["first_kill_s"] for r in rs if r["first_kill_s"] is not None]
         penr = "/".join(f"{pb.get(k, 0) / hb[k]:.2f}" if hb.get(k) else "-" for k in ("nose", "lateral", "tail"))
+        cl = sorted(r["closest_km"] for r in rs if r.get("closest_km") is not None)
+        penr += f" | {cl[len(cl) // 2]:.0f}" if cl else " | -"
         print(f"| {key[0]} v {key[1]} | {key[2]} | {len(rs)} | {c['W']}/{c['D']}/{c['L']} | "
               f"{sum(r['kills_a'] for r in rs)}-{sum(r['kills_b'] for r in rs)} | "
               f"{sum(fk) / len(fk):.0f} | {_pct(hb)} | {_pct(ha)} | {penr} |" if fk else

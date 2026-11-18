@@ -141,3 +141,62 @@ def test_the_attack_starts_on_a_quorum_on_the_station_bearing():
         sim.get_ship(f"a_f{i}").kinematic_state.position = enemy + bearing * ((F.POSITION_RANGE_KM - 40.0) * 1000.0)
     sim.current_time += 30.0
     assert F.flank_state(sim, "alpha", spec).attack_started
+
+
+# ---------------------------------------------------------------------------
+# The default doctrine ("tactical"): wall, or the cut-corner pincer against
+# a slow capital line (heuristic_flank.default_spec)
+# ---------------------------------------------------------------------------
+
+def _fleet(sim, faction, types, x_km):
+    return [_ship(sim, f"{faction}_{i + 1}", t, faction, (x_km, 25 * i, 0),
+                  fwd=(1, 0, 0) if faction == "alpha" else (-1, 0, 0))
+            for i, t in enumerate(types)]
+
+
+def test_the_default_switch_rule():
+    from src.llm.heuristic_captain import DOCTRINE_CLASSIC, DOCTRINE_LEGACY, DOCTRINE_TACTICAL
+    assert DEFAULT_DOCTRINE == DOCTRINE_TACTICAL
+    assert {DOCTRINE_CLASSIC, DOCTRINE_LEGACY} <= set(DOCTRINES)
+    fast = ["frigate"] * F.PINCER_MIN_FAST_HULLS
+    cases = [
+        # dreadnought line, enough flankers: pincer
+        (["dreadnought"] + fast, ["dreadnought", "frigate"], F.PINCER_SPEC),
+        # dreadnought line, too few flankers: it is still a heavy line -> classic
+        (["dreadnought"] + fast[:-1], ["dreadnought", "frigate"], F.CLASSIC_SPEC),
+        # battleship line: classic close-and-pass
+        (["dreadnought"] + fast, ["battleship", "battleship", "destroyer"], F.CLASSIC_SPEC),
+        # fast line: wall
+        (["dreadnought"] + fast, ["destroyer", "cruiser", "frigate"], F.WALL_SPEC),
+    ]
+    for ours, theirs, want in cases:
+        sim = CombatSimulation(seed=6, time_step=1.0)
+        _fleet(sim, "alpha", ours, 0)
+        _fleet(sim, "beta", theirs, 500)
+        assert F.default_spec(sim, "alpha") == want, (ours, theirs)
+
+
+def test_mirror_fleets_choose_the_same_plan_and_the_same_split():
+    types = ["dreadnought", "frigate", "frigate", "destroyer", "frigate"]
+    sim = CombatSimulation(seed=7, time_step=1.0)
+    a = _fleet(sim, "alpha", types, 0)
+    b = _fleet(sim, "beta", types, 500)
+    assert F.default_spec(sim, "alpha") == F.default_spec(sim, "beta")
+    spec = F.default_spec(sim, "alpha")
+    ga = F.assign_groups(a, spec)
+    gb = F.assign_groups(b, spec)
+    assert [ga[s.ship_id] for s in a] == [gb[s.ship_id] for s in b]
+
+
+def test_the_flag_ship_announces_the_battle_plan_once():
+    sim = CombatSimulation(seed=8, time_step=1.0)
+    _fleet(sim, "alpha", ["destroyer", "cruiser"], 0)
+    _fleet(sim, "beta", ["destroyer", "cruiser"], 500)
+    flag = _captain("destroyer", DEFAULT_DOCTRINE, "alpha_1")
+    flag.decide("alpha_1", sim)
+    texts = [m["text"] for m in flag.outbox if m["tool"] == "fleet_signal"]
+    assert texts and texts[0].startswith("Battle plan: wall")
+    flag.outbox.clear()
+    sim.current_time += 30.0
+    flag.decide("alpha_1", sim)
+    assert not any(m["text"].startswith("Battle plan") for m in flag.outbox if m["tool"] == "fleet_signal")

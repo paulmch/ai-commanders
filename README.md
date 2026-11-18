@@ -203,7 +203,11 @@ The admirals' tactical plot (`--admiral-vision`, the only switch; off unless ask
 
 ### Try a free live battle
 
-This uses automatic fleet selection and heuristic captains, with no model calls:
+This uses automatic fleet selection and heuristic captains, with no model calls. The free
+captains plan per fleet: against a fleet whose gun power sits on dreadnoughts they fly a
+cut-corner pincer (fast hulls wide to 70 degrees off its facing at 150 km while the heavies
+hold), against a battleship line they close nose-first and pass through it, and otherwise they
+hold a nose-on wall. `--doctrine classic` and `--doctrine legacy` keep the earlier captains.
 
 ```bash
 uv run python scripts/run_live_draft_battle.py \
