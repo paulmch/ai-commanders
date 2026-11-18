@@ -448,6 +448,13 @@ class EnemyShipSnapshot:
     solution: Any = None          # fleet_intel.TorpedoSolution from our launchers
     solution_reserve: Any = None  # the same launch on the reserve profile
     our_rounds_inbound: int = 0   # our guided rounds homing on it now
+    # the datalink's board for it (CombatSimulation.torpedo_board): what it
+    # keeps on this hull (need + margin), soak and kill, live rounds counted
+    board_keep: Optional[int] = None
+    board_cover: Optional[int] = None
+    board_soak: Optional[int] = None
+    board_kill: Optional[int] = None
+    board_rounds: int = 0
     group: str = ""
     gun_range_km: float = 0.0
     # The face it shows our fleet centre (fleet_intel.observed_facing):
@@ -1660,6 +1667,10 @@ Be authentic to how you would command a fleet as {model_name}."""
         for r in snap.rounds:
             if r.side == "ours" and r.state == "guided":
                 inbound_ours[r.target_id] = inbound_ours.get(r.target_id, 0) + 1
+        try:
+            link_board = simulation.torpedo_board(self.faction)
+        except Exception:  # noqa: BLE001 - test doubles without the engine board
+            link_board = {}
         by_id = {e.ship_id: e for e in enemies}
         for row in snap.enemy_ships:
             enemy = by_id.get(row.ship_id)
@@ -1679,6 +1690,13 @@ Be authentic to how you would command a fleet as {model_name}."""
             row.dealt_gj = float(hit.get("gj", 0.0))
             row.torpedoes_launched = int(hit.get("torpedoes_launched", 0))
             row.our_rounds_inbound = inbound_ours.get(row.ship_id, 0)
+            entry = link_board.get(row.ship_id)
+            if entry is not None:
+                row.board_keep = entry["keep"]
+                row.board_cover = entry["need"].cover
+                row.board_soak = entry["need"].soak
+                row.board_kill = entry["need"].kill
+                row.board_rounds = len(entry["rounds"])
             snap.kill_rounds[row.ship_id] = intel.kill_rounds(row.ship_type, row.hull_integrity)
             if specs is not None and launch_pos is not None and intel.is_live(enemy):
                 row.solution = intel.torpedo_solution(

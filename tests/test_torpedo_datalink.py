@@ -385,3 +385,150 @@ class TestRoundsNeeded:
         from src.llm import fleet_intel
         assert fleet_intel.kill_rounds is L.kill_rounds
         assert fleet_intel.kill_rounds_at is L.kill_rounds_at
+
+
+# ---------------------------------------------------------------------------
+# One need estimate: the board, the captain's OVERKILL line, the admiral's
+# economy (review defect 1)
+# ---------------------------------------------------------------------------
+
+class TestOneNeedEstimate:
+
+    def _battle(self, profile="sprint", n=6, vc=3000.0):
+        from tests.test_admiral_intel import ship
+        sim = CombatSimulation(seed=4, time_step=1.0, decision_interval=1e9)
+        a = ship(sim, "alpha_1", "cruiser_torpedo", "alpha", (0, 0, 0), vel_kps=(vc / 1000, 0, 0))
+        a.point_defense = []
+        ship(sim, "beta_1", "battlecruiser", "beta", (500, 0, 0), fwd=(-1, 0, 0))
+        ship(sim, "beta_2", "frigate", "beta", (480, 20, 0), fwd=(-1, 0, 0))
+        for _ in range(n):
+            _launch(sim, a, "beta_1", profile if profile != "sprint" else None)
+        return sim, a
+
+    @pytest.mark.parametrize("profile", ["sprint", "reserve"])
+    @pytest.mark.parametrize("t", [1, 10, 25, 40])
+    def test_board_captain_and_admiral_agree_at_the_same_instant(self, profile, t):
+        from types import SimpleNamespace
+        from src.llm.fire_solutions import torpedo_solution
+        from tests.test_admiral_intel import captains_for, make_admiral
+        sim, a = self._battle(profile)
+        _steps(sim, t)
+        board = sim.torpedo_board("alpha")["beta_1"]
+        sol = torpedo_solution(sim, a, sim.get_ship("beta_1"), FLEET)
+        admiral = make_admiral("alpha")
+        caps = captains_for("alpha", {"alpha_1": {"ship_name": "TIS A",
+                                                  "ship_type": "cruiser_torpedo"}})
+        snap = admiral._build_snapshot(sim, caps, full=True)
+        row = next(r for r in snap.enemy_ships if r.ship_id == "beta_1")
+        assert sol.rounds_needed == board["keep"] == row.board_keep
+        assert board["keep"] == board["need"].total + L.LINK_KILL_MARGIN_ROUNDS
+        # 6 rounds on a battlecruiser: the estimate stays a handful, never the
+        # 23-110 the old current-closure sizing gave
+        assert board["keep"] <= 8
+        assert (sol.verdict == "OVERKILL") == (len(board["rounds"]) >= board["keep"])
+
+    @pytest.mark.parametrize("profile", ["sprint", "reserve"])
+    @pytest.mark.parametrize("vc", [0.0, 3000.0])
+    def test_analytic_forecast_is_the_flown_one(self, profile, vc):
+        """The board's per-round forecast (closure + tank to spend) against
+        the captain's flown shot at launch: within 3 %."""
+        from src.llm.fire_solutions import fly_torpedo
+        sim, a = self._battle(profile, n=1, vc=vc)
+        tf = sim.torpedoes[0]
+        fc = L.round_forecast(tf.torpedo, sim.get_ship("beta_1"))
+        sim2, a2 = self._battle(profile, n=0, vc=vc)
+        shot = fly_torpedo(sim2, a2, sim2.get_ship("beta_1"), FLEET, target_evades=False,
+                           profile=profile)
+        assert shot.hits
+        assert fc.impact_kps == pytest.approx(shot.impact_kps, rel=0.03)
+
+    def test_margin_constant(self):
+        # scripts/torpedo_link_margin.py: worst flown cell needs 1
+        assert L.LINK_KILL_MARGIN_ROUNDS == 1
+
+
+# ---------------------------------------------------------------------------
+# Review defects 2-4: burn time, reserve window, exact prefilter
+# ---------------------------------------------------------------------------
+
+class TestReviewFixes:
+
+    def test_burn_cost_closed_form(self):
+        # 1 km/s sideways in 20 s at 300 m/s^2: a finite burn costs a bit more
+        assert L.burn_cost_kps(1.0, 300.0, 20.0) == pytest.approx(1.1010, abs=1e-3)
+        assert L.burn_cost_kps(0.0, 300.0, 20.0) == 0.0
+        assert L.burn_cost_kps(3.01, 300.0, 20.0) is None      # above a*t/2 = 3.0
+        # the cost a*t is the most an a*t/2 steer can cost
+        assert L.burn_cost_kps(3.0, 300.0, 20.0) == pytest.approx(6.0)
+
+    def test_gate_refuses_a_steer_the_guidance_cannot_burn(self):
+        """A round 2 s from a hull 12 km abeam: plenty of delta-v, no time."""
+        sim = _sim()
+        _ship(sim, "a", "corvette", "alpha", Vector3D(-2_000e3, 0, 0))
+        c = _ship(sim, "c", "destroyer", "beta", Vector3D(24e3, 12e3, 0))
+        tf = _round(sim, "t", "c", 6.0, Vector3D(0, 0, 0), Vector3D(12_000, 0, 0))
+        ok, t, left = tf.torpedo.can_intercept(c.position, c.velocity)
+        assert ok                                      # the impulse alone fits
+        g = L.reassign_gate(tf.torpedo, c, 600.0, 1.12)
+        assert not g.ok and g.gate == "burn"
+
+    def test_reserve_round_from_a_closing_launcher_spends_its_tank(self):
+        """Review defect 3: a 20 s window could not burn ~9 km/s held (it hit
+        with 4.6 km/s unburned, 20.5 GJ against sprint's 33.9)."""
+        out = {}
+        for profile in ("sprint", "reserve"):
+            sim = _sim()
+            a = _ship(sim, "a", "cruiser_torpedo", "alpha", Vector3D(0, 0, 0),
+                      vel=Vector3D(3000, 0, 0))
+            _ship(sim, "b", "battlecruiser", "beta", Vector3D(500e3, 0, 0))
+            tf = _launch(sim, a, "b", profile)
+            last = None
+            with contextlib.redirect_stdout(io.StringIO()):
+                while sim.torpedoes and sim.current_time < 300:
+                    last = tf.torpedo.remaining_delta_v_kps
+                    sim.step()
+            hit = [e for e in sim.events if e.event_type == SimulationEventType.TORPEDO_IMPACT]
+            out[profile] = (last, hit[0].data["total_damage_gj"])
+        assert out["reserve"][0] < 1.0
+        assert out["reserve"][1] == pytest.approx(out["sprint"][1], rel=0.03)
+
+    def test_prefilter_never_refuses_what_can_intercept_accepts(self):
+        rnd = random.Random(5)
+        for _ in range(3000):
+            torp = Torpedo(specs=SPECS, position=Vector3D(0, 0, 0),
+                           velocity=Vector3D(rnd.uniform(-14e3, 14e3), rnd.uniform(-6e3, 6e3), 0),
+                           target_id="x", guidance_mode=GuidanceMode.COLLISION)
+            dv = rnd.uniform(0.0, 8.0)
+            torp.current_mass_kg = SPECS.dry_mass_kg * math.exp(dv / SPECS.exhaust_velocity_kps)
+            torp.remaining_delta_v_kps = dv
+            cand = type("C", (), {})()
+            cand.position = Vector3D(rnd.uniform(-600e3, 600e3), rnd.uniform(-600e3, 600e3),
+                                     rnd.uniform(-50e3, 50e3))
+            cand.velocity = Vector3D(rnd.uniform(-4e3, 4e3), rnd.uniform(-4e3, 4e3), 0)
+            if L._cannot_reach(torp, cand):
+                assert not torp.can_intercept(cand.position, cand.velocity)[0]
+
+
+class TestWholePacketDiversion:
+
+    def _sim(self, n):
+        sim = _sim()
+        _ship(sim, "a", "corvette", "alpha", Vector3D(-2_000e3, 0, 0))
+        _ship(sim, "d1", "destroyer", "beta", Vector3D(300e3, 0, 0))
+        _ship(sim, "d2", "destroyer", "beta", Vector3D(300e3, 40e3, 0))
+        for i in range(n):
+            _round(sim, f"t{i:02d}", "d1", 6.0, Vector3D(0, (i - 5) * 300.0, 0),
+                   Vector3D(12_000, 0, 0), profile="reserve")
+        return sim
+
+    def test_a_packet_too_small_to_kill_its_new_target_is_not_sent(self):
+        """Surplus that cannot fill the other hull's whole need stays: a
+        trickle into its PD kills nothing (torpedo cruiser vs gunline lost
+        kills to partial packets before this rule)."""
+        keep = self._sim(1).torpedo_board("alpha")["d1"]["keep"]
+        sim = self._sim(2 * keep - 1)          # surplus keep - 1: one short
+        _steps(sim, 1)
+        assert not _rt(sim)
+        sim = self._sim(2 * keep)              # surplus = keep: a whole strike
+        _steps(sim, 1)
+        assert len(_rt(sim)) == keep

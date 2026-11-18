@@ -81,6 +81,20 @@ TORPEDO_PROFILE_RESERVE = "reserve"
 TORPEDO_PROFILES = (TORPEDO_PROFILE_SPRINT, TORPEDO_PROFILE_RESERVE)
 RESERVE_CRUISE_CLOSING_KPS = 8.0
 RESERVE_TERMINAL_WINDOW_S = 20.0
+# The window also stretches to the time the held tank takes to burn at the
+# round's present acceleration, times this factor: a round from a closing
+# launcher cruises above the floor with ~9 km/s held, which a fixed 20 s
+# window could not spend (it hit with 4.6 km/s never burned, 20.5 GJ against
+# sprint's 33.9). From a stationary launcher (~6 km/s held, ~19 s to burn)
+# the fixed window is the longer one and nothing changes.
+RESERVE_WINDOW_BURN_FACTOR = 1.0
+
+
+def reserve_terminal_window_s(torpedo: 'Torpedo') -> float:
+    """Time to go at which a reserve round starts spending its held tank."""
+    a = torpedo.specs.acceleration_at_mass(torpedo.current_mass_kg)
+    burn_s = (torpedo.remaining_delta_v_kps * 1000.0 / a) if a > 0 else 0.0
+    return max(RESERVE_TERMINAL_WINDOW_S, RESERVE_WINDOW_BURN_FACTOR * burn_s)
 
 
 def normalize_torpedo_profile(profile: Optional[str]) -> str:
@@ -2134,7 +2148,7 @@ class TorpedoGuidance:
             and predicted_miss_m < APN_MISS_DEADBAND_M
         )
         if (terminal_burn and torpedo.profile == TORPEDO_PROFILE_RESERVE
-                and t_go > RESERVE_TERMINAL_WINDOW_S):
+                and t_go > reserve_terminal_window_s(torpedo)):
             terminal_burn = False   # the reserve is held until the window
         floor_kps = cruise_floor_kps(torpedo)
         below_cruise_floor = closing_speed_kps < floor_kps

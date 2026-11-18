@@ -826,3 +826,33 @@ class TestDiplomacy:
         assert history[-1]["content"] == "[OCS Lancer] Come and take it."
         assert history[-1]["sender"] == "enemy"
         assert [e.ship_id for e in events(runner, "comms_delivered")][-1] == "mcp:alpha"
+
+
+class TestDatalinkRetask:
+    """Review defect 5: a datalink reassignment goes out on the FLEET NET to
+    the launching side, one line per (reason, old target, new target)."""
+
+    def test_retask_line(self, tmp_path):
+        from src.simulation import SimulationEventType
+        runner = make_runner(Stub(), tmp_path)
+        runner.setup_fleet_battle(FLEET)
+        sim, channel = runner.simulation, runner.fleet_communication
+        link = EngineDatalink()
+        link.prime(sim)
+        for i in range(5):
+            sim._log_event(SimulationEventType.TORPEDO_RETARGETED, "alpha_1", target_id="beta_2",
+                           data={"torpedo_id": f"t{i}", "old_target_id": "beta_1",
+                                 "new_target_id": "beta_2", "time_to_intercept_s": 20.0 + i,
+                                 "reason": "target_lost", "group": "alpha@120:target_lost"})
+        # a pre-link per-round retarget (no reason) is not a datalink re-task
+        sim._log_event(SimulationEventType.TORPEDO_RETARGETED, "alpha_1", target_id="beta_2",
+                       data={"torpedo_id": "x", "old_target_id": "beta_1",
+                             "new_target_id": "beta_2", "time_to_intercept_s": 5.0})
+        ids = iter(range(100))
+        out = [m for m in link.collect(sim, channel, {"alpha", "beta"}, 3, 120.0,
+                                       lambda s: f"m{next(ids)}") if m.kind == "RETASK"]
+        assert len(out) == 1 and out[0].faction == "alpha"
+        assert out[0].channel == CHANNEL_FLEET_NET and out[0].sender_role == "engine"
+        assert "5 rounds re-tasked" in out[0].text and "(target lost)" in out[0].text
+        assert out[0].text.endswith(f"first impact ~T+{sim.current_time + 20:.0f}")
+        assert out[0].structured["rounds"] == 5

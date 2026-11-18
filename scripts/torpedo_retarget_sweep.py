@@ -84,7 +84,14 @@ OPTIONS = ["baseline", "reserve0", "scaled", "floorgate", "nofloor",
 # sprint with the datalink, every launch on the reserve profile with the link.
 BUILT = {"p5_nolink": {"AIC_TORPEDO_DATALINK": "0"},
          "p5_link": {"AIC_TORPEDO_DATALINK": "1"},
-         "p5_reserve": {"AIC_TORPEDO_DATALINK": "1", "AIC_TORPEDO_PROFILE": "reserve"}}
+         "p5_reserve": {"AIC_TORPEDO_DATALINK": "1", "AIC_TORPEDO_PROFILE": "reserve"},
+         "p5_reserve_nolink": {"AIC_TORPEDO_DATALINK": "0", "AIC_TORPEDO_PROFILE": "reserve"},
+         "p5_reserve_nosurplus": {"AIC_TORPEDO_DATALINK": "1", "AIC_TORPEDO_PROFILE": "reserve",
+                                  "AIC_LINK_SURPLUS": "0"},
+         # the exact-prefilter proof: verdicts (and so battles) identical
+         "p5_link_nopre": {"AIC_TORPEDO_DATALINK": "1", "AIC_LINK_PREFILTER": "0"},
+         "p5_reserve_nopre": {"AIC_TORPEDO_DATALINK": "1", "AIC_TORPEDO_PROFILE": "reserve",
+                              "AIC_LINK_PREFILTER": "0"}}
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +101,9 @@ BUILT = {"p5_nolink": {"AIC_TORPEDO_DATALINK": "0"},
 def apply_option(option: str) -> None:
     if option in BUILT:
         os.environ.update(BUILT[option])
+        from src import torpedo_link
+        torpedo_link.PREFILTER = os.environ.get("AIC_LINK_PREFILTER", "1") != "0"
+        torpedo_link.LINK_SURPLUS_DIVERSION = os.environ.get("AIC_LINK_SURPLUS", "1") != "0"
         return
     # the investigation's counterfactuals patch the PRE-link per-round rule
     os.environ["AIC_TORPEDO_DATALINK"] = "0"
@@ -321,7 +331,7 @@ def run_battle(task: Dict[str, Any]) -> Dict[str, Any]:
         result = runner.run_battle(E["fleet_data"])
         sim = runner.simulation
         ET = E["EventType"]
-        launched, fate = {}, {}
+        launched, fate, fate_t, pd_blind = {}, {}, {}, set()
         rt_events = defaultdict(list)
         for e in sim.events:
             d = e.data or {}
@@ -333,10 +343,15 @@ def run_battle(task: Dict[str, Any]) -> Dict[str, Any]:
                                              or e.target_id, "t": e.timestamp}
             elif e.event_type == ET.TORPEDO_IMPACT:
                 fate[d["torpedo_id"]] = "impact"
+                fate_t[d["torpedo_id"]] = e.timestamp
             elif e.event_type == ET.PROJECTILE_MISS and d.get("type") == "torpedo":
                 fate[d["projectile_id"]] = "miss_" + (d.get("reason") or "cpa")
+                fate_t[d["projectile_id"]] = e.timestamp
+            elif e.event_type == ET.PD_TORPEDO_DISABLED and d.get("torpedo_id"):
+                pd_blind.add(d["torpedo_id"])
             elif e.event_type in (ET.TORPEDO_INTERCEPTED, ET.PD_TORPEDO_DESTROYED):
                 fate.setdefault(d.get("torpedo_id"), "destroyed")
+                fate_t.setdefault(d.get("torpedo_id"), e.timestamp)
         for tf in sim.torpedoes:
             fate.setdefault(tf.torpedo_id, "in_flight_at_end")
         deaths = {}
@@ -347,7 +362,8 @@ def run_battle(task: Dict[str, Any]) -> Dict[str, Any]:
         for tid, info in launched.items():
             r = log["rounds"].get(tid, {})
             rounds.append({"id": tid, "side": info["src"].split("_")[0], **info,
-                           "fate": fate.get(tid, "unknown"),
+                           "fate": fate.get(tid, "unknown"), "fate_t": fate_t.get(tid),
+                           "pd_blinded": tid in pd_blind,
                            "orphan_episodes": r.get("orphan_episodes", []),
                            "attempts": r.get("attempts", 0), "gates": r.get("gates", []),
                            "retargets": rt_events.get(tid, []),
@@ -357,6 +373,12 @@ def run_battle(task: Dict[str, Any]) -> Dict[str, Any]:
         lost = {f: sum(1 for s in fl.values() if s.is_destroyed or s.is_dying
                        or s.is_surrendered)
                 for f, fl in (("alpha", runner.alpha_ships), ("beta", runner.beta_ships))}
+        import hashlib
+        h = hashlib.sha256()
+        for e in sim.events:
+            h.update(json.dumps([e.event_type.name, e.timestamp, e.ship_id, e.target_id,
+                                 e.data], sort_keys=True, default=str).encode())
+        out.update(events_sha=h.hexdigest()[:16])
         out.update(winner=result.winner, reason=result.reason,
                    duration_s=round(result.duration_s, 1), lost=lost, rounds=rounds,
                    deaths=deaths,
@@ -403,6 +425,7 @@ def summarize(results: List[Dict[str, Any]]) -> Dict[str, Any]:
                         c[f"gun_side_lost_by_{cut}s"] += t <= cut
         for x in r["rounds"]:
             c["launched"] += 1
+            c["pd_blinded"] += bool(x.get("pd_blinded"))
             c[f"fate_{x['fate']}"] += 1
             imp = x.get("impact")
             if imp:
@@ -413,6 +436,15 @@ def summarize(results: List[Dict[str, Any]]) -> Dict[str, Any]:
                 c["homed_on_hulk"] += 1
                 if imp and imp["dying"]:
                     c["homed_on_hulk_hit_hulk"] += 1
+            if x["retargets"]:
+                last = x["retargets"][-1]
+                tdie = (r.get("deaths") or {}).get(last["to"])
+                hit_it = bool(imp and imp["ship"] == last["to"])
+                key = ("diverted" if last.get("reason") == "datalink_surplus" else "reassigned")
+                c[f"{key}_n"] += 1
+                if (tdie is not None and tdie > last["t"] and not hit_it
+                        and (x.get("fate_t") is None or tdie <= x["fate_t"])):
+                    c[f"{key}_new_target_died_first"] += 1
             eps = x["orphan_episodes"]
             if any(rt.get("reason") == "datalink_surplus" for rt in x["retargets"]):
                 c["diverted_surplus"] += 1

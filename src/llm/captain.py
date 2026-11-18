@@ -1807,7 +1807,8 @@ class LLMCaptain:
                 continue
             if kind == "TORPEDO_LAUNCHED" and ev.ship_id == ship_id:
                 out[tid] = {"t": ev.timestamp, "target_id": ev.target_id,
-                            "outcome": "in flight", "gj": 0.0}
+                            "launch_target_id": ev.target_id,
+                            "outcome": "in flight", "gj": 0.0, "retask": None}
                 continue
             rec = out.get(tid)
             if rec is None:
@@ -1823,6 +1824,10 @@ class LLMCaptain:
                 rec["gj"] = float(data.get("total_damage_gj", 0.0) or 0.0)
             if outcome == "retargeted":
                 rec["target_id"] = data.get("new_target_id", rec["target_id"])
+                # datalink reassignment: where and why (absent: pre-link rule)
+                rec["retask"] = {"target_lost": "target lost",
+                                 "datalink_surplus": "surplus"}.get(data.get("reason"),
+                                                                     "target lost")
             if rank[outcome] > rank[rec["outcome"]]:
                 rec["outcome"] = outcome
         return out
@@ -1933,6 +1938,16 @@ class LLMCaptain:
                 for r in launched:
                     by_target.setdefault(r["target_id"], []).append(r)
                 for target_id, rounds in by_target.items():
+                    retasked = [r for r in rounds if r.get("retask")
+                                and r.get("launch_target_id") != target_id]
+                    if retasked:
+                        froms = {}
+                        for r in retasked:
+                            k = (r["launch_target_id"], r["retask"])
+                            froms[k] = froms.get(k, 0) + 1
+                        parts.append("datalink re-tasked " + ", ".join(
+                            f"{n} from {resolve(src)} ({why})"
+                            for (src, why), n in sorted(froms.items())))
                     hits = [r for r in rounds if r["outcome"] == "hit"]
                     tally = []
                     if hits:

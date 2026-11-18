@@ -7374,33 +7374,6 @@ class CombatSimulation:
             self._torpedo_datalink_side(
                 faction, sorted(by_side[faction], key=lambda tf: tf.torpedo_id))
 
-    def _link_need(self, cache: dict, target: 'ShipCombatState', rounds: list) -> int:
-        """rounds_needed(target).total, sized for ``rounds`` (centroid as the
-        threat direction, their mean closure and impact energy)."""
-        if target.ship_id in cache:
-            return cache[target.ship_id]
-        n = max(1, len(rounds))
-        cx = sum(tf.torpedo.position.x for tf in rounds) / n
-        cy = sum(tf.torpedo.position.y for tf in rounds) / n
-        cz = sum(tf.torpedo.position.z for tf in rounds) / n
-        closures = []
-        for tf in rounds:
-            rel = target.position - tf.torpedo.position
-            d = rel.magnitude
-            closures.append(-(target.velocity - tf.torpedo.velocity).dot(rel / d)
-                            if d > 0 else 0.0)
-        closure = max(0.0, sum(closures) / n) if closures else 0.0
-        specs = rounds[0].torpedo.specs if rounds else None
-        pen = float(getattr(specs, 'penetrator_mass_kg', 250.0)) if specs else 250.0
-        warhead = float(getattr(specs, 'warhead_yield_gj', 0.0) or 0.0) if specs else 0.0
-        energy = 0.5 * pen * closure * closure / 1e9 + warhead if closure > 0 else None
-        need = torpedo_link.rounds_needed(
-            self, target, threat_from=Vector3D(cx, cy, cz),
-            cross_kps=(closure / 1000.0) if closure > 0 else None,
-            energy_gj=energy).total
-        cache[target.ship_id] = need
-        return need
-
     def _link_options(self, tf: 'TorpedoInFlight', enemies: list, exclude: str = None):
         torp = tf.torpedo
         cap = max(self.RETARGET_MIN_RESERVE_KPS,
@@ -7417,6 +7390,32 @@ class CombatSimulation:
                     ship.ship_id, -g.t_s if hurried else g.fuel_left_kps,
                     g.t_s, g.fuel_left_kps))
         return opts, ('fastest' if hurried else 'max_energy')
+
+    def torpedo_board(self, faction: str) -> dict:
+        """The datalink's board for ``faction``: per live enemy hull with live
+        rounds of this side homing on it, {'rounds': [...], 'need':
+        RoundsNeeded, 'keep': kill_count, 'eta': sorted forecast arrivals}.
+        The same numbers the captain's OVERKILL line and the admiral's
+        TORPEDO ECONOMY quote (torpedo_link.need_for / kill_count)."""
+        board = {}
+        for tf in sorted(self.torpedoes, key=lambda x: x.torpedo_id):
+            if tf.is_disabled or tf.torpedo.fuel_exhausted:
+                continue
+            src = self.get_ship(tf.source_ship_id)
+            tgt = self.get_ship(tf.torpedo.target_id)
+            if (src is None or src.faction != faction or tgt is None or tgt.is_destroyed
+                    or tgt.is_dying or tgt.is_surrendered):
+                continue
+            board.setdefault(tgt.ship_id, []).append(tf)
+        out = {}
+        for sid, rounds in sorted(board.items()):
+            tgt = self.get_ship(sid)
+            need = torpedo_link.need_for(self, tgt, rounds)
+            out[sid] = {'rounds': rounds, 'need': need,
+                        'keep': torpedo_link.kill_count(need),
+                        'eta': sorted(torpedo_link.round_forecast(tf.torpedo, tgt).eta_s
+                                      for tf in rounds)}
+        return out
 
     def _torpedo_datalink_side(self, faction: str, members: list) -> None:
         enemies = sorted((s for s in self.ships.values()
@@ -7440,6 +7439,19 @@ class CombatSimulation:
         def inbound_on(sid):
             return [tf for tf in homing if tf.torpedo.target_id == sid]
 
+        def board_for(candidates):
+            """need (kill_count) and inbound arrival times per enemy: sized on
+            the rounds already homing on it, else on ``candidates``."""
+            need, eta = {}, {}
+            for s in enemies:
+                inbound = inbound_on(s.ship_id)
+                sized = inbound or candidates
+                need[s.ship_id] = torpedo_link.kill_count(
+                    torpedo_link.need_for(self, s, sized, need_cache))
+                eta[s.ship_id] = [torpedo_link.round_forecast(tf.torpedo, s).eta_s
+                                  for tf in inbound]
+            return need, eta
+
         # (a) group reassignment of rounds whose target is lost
         if orphans:
             rounds, modes = [], {}
@@ -7447,12 +7459,9 @@ class CombatSimulation:
                 opts, modes[tf.torpedo_id] = self._link_options(tf, enemies)
                 rounds.append((tf.torpedo_id, opts))
             if any(opts for _, opts in rounds):
-                remaining = {}
-                for s in enemies:
-                    sized = inbound_on(s.ship_id) or orphans
-                    remaining[s.ship_id] = (self._link_need(need_cache, s, sized)
-                                            - len(inbound_on(s.ship_id)))
-                plan = torpedo_link.plan_group(rounds, remaining)
+                placeable = [tf for tf, (_, o) in zip(orphans, rounds) if o]
+                need, eta = board_for(placeable)
+                plan = torpedo_link.plan_group(rounds, need, eta)
                 group = f"{faction}@{self.current_time:g}:target_lost"
                 times = {tid: {o.target_id: o.t_s for o in opts} for tid, opts in rounds}
                 for tf in orphans:
@@ -7466,6 +7475,8 @@ class CombatSimulation:
                     homing.append(tf)
 
         # (c) surplus diversion: reserve-profile rounds only, on a slow clock
+        if not torpedo_link.LINK_SURPLUS_DIVERSION:
+            return
         last = self._link_surplus_t.get(faction)
         if last is not None and self.current_time - last < torpedo_link.LINK_SURPLUS_INTERVAL_S:
             return
@@ -7480,35 +7491,34 @@ class CombatSimulation:
             if target is None:
                 continue
             inbound = inbound_on(sid)
-            extra = len(inbound) - self._link_need(need_cache, target, inbound)
-            if extra <= 0:
+            keep = torpedo_link.kill_count(torpedo_link.need_for(self, target, inbound,
+                                                                 need_cache))
+            if len(inbound) <= keep:
                 continue
-            divertable = []
-            for tf in reserve_rounds:
-                if tf.torpedo.target_id != sid:
+            # the first `keep` arrivals stay; later reserve rounds beyond them
+            # that are not yet committed are surplus
+            order = sorted(inbound, key=lambda tf: (
+                torpedo_link.round_forecast(tf.torpedo, target).eta_s, tf.torpedo_id))
+            for tf in order[keep:]:
+                if tf.torpedo.profile != TORPEDO_PROFILE_RESERVE:
                     continue
-                rel = target.position - tf.torpedo.position
-                d = rel.magnitude
-                closing = -(target.velocity - tf.torpedo.velocity).dot(rel / d) if d > 0 else 0.0
-                t_go = d / closing if closing > 0 else float('inf')
-                if t_go > torpedo_link.LINK_COMMITTED_S:
-                    divertable.append((-t_go, tf.torpedo_id, tf))
-            divertable.sort(key=lambda x: (x[0], x[1]))
-            surplus_rounds.extend(tf for _, _, tf in divertable[:extra])
+                if (torpedo_link.round_forecast(tf.torpedo, target).eta_s
+                        > torpedo_link.LINK_COMMITTED_S):
+                    surplus_rounds.append(tf)
         if not surplus_rounds:
             return
-        remaining = {}
-        for s in enemies:
-            inbound = inbound_on(s.ship_id)
-            remaining[s.ship_id] = (self._link_need(need_cache, s, inbound or surplus_rounds)
-                                    - len(inbound))
+        need, eta = board_for(surplus_rounds)
         rounds, modes = [], {}
         for tf in surplus_rounds:
             opts, modes[tf.torpedo_id] = self._link_options(tf, enemies,
                                                              exclude=tf.torpedo.target_id)
-            opts = [o for o in opts if remaining.get(o.target_id, 0) > 0]
             rounds.append((tf.torpedo_id, opts))
-        plan = torpedo_link.plan_group(rounds, remaining, overflow=False)
+        # Whole strikes only (torpedo_link.plan_packets): a packet that cannot
+        # fill its new target's need would trickle into that target's PD and
+        # kill nothing (measured: a torpedo cruiser against the gunline lost
+        # 17 of 66 kills to partial packets); such rounds stay where they are.
+        plan = torpedo_link.plan_packets(rounds, need,
+                                         {sid: len(v) for sid, v in eta.items()})
         if not plan:
             return
         group = f"{faction}@{self.current_time:g}:datalink_surplus"

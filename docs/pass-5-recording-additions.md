@@ -1150,26 +1150,41 @@ the new fields are optional for every consumer.
 
 ### Rules the events record
 
+- **The board and what a target needs** (`torpedo_link.need_for` / `kill_count`,
+  `CombatSimulation.torpedo_board`): a target's need is PD soak + rounds to kill,
+  sized on the rounds' FORECAST impact (closure now + the delta-v they will still
+  spend, less 0.5 km/s kept; within ~1 % of the captain's flown shot from a launcher
+  at rest or closing 3 km/s), plus `LINK_KILL_MARGIN_ROUNDS` = 1 (from flown strikes,
+  `scripts/torpedo_link_margin.py`). The captain's OVERKILL line and the admiral's
+  TORPEDO ECONOMY quote the same board (`tests/test_torpedo_datalink.py`
+  `TestOneNeedEstimate` pins that the three agree at the same instant).
 - **Group reassignment** (always on): every tick, per side, the live-seeker
-  rounds (not blinded, not dry) whose target is destroyed or dying are
-  planned together: most constrained round first (fewest reachable hulls,
-  then torpedo id), each to the reachable hull that still needs rounds and
-  leaves it the most delta-v (a PD-singed seeker: the fastest intercept),
-  the rest to the best reachable hull. "Needs" is
-  `torpedo_link.rounds_needed` (PD soak + rounds to kill, the same estimate
-  the captain's OVERKILL line and the admiral's TORPEDO ECONOMY use) minus
-  the side's live rounds already homing on it. Reachable: the engine's
-  `can_intercept` within 600 s with at least
-  `reassign_reserve_kps(t) = min(1.12, 0.25 + 0.02 * t)` km/s left after the
-  steer. Rounds with nothing reachable keep homing on a dying hulk, or coast
-  as before when the target is gone. Ties go to the smaller ship id; the
-  outcome does not depend on ship or round insertion order and is mirror
-  symmetric (`tests/test_torpedo_datalink.py`).
-- **Surplus diversion** (`reserve` rounds only, every 5 s per side): rounds on
-  a hull beyond what it needs, farthest first, not inside 12 s of impact
-  (`LINK_COMMITTED_S`), go to hulls with unmet need they can reach. Sprint
-  rounds are never diverted.
+  rounds (not blinded, not dry) whose target is destroyed or dying are planned
+  together, most constrained round first (fewest reachable hulls, then torpedo
+  id), each to the reachable hull with a positive deficit - its need minus the
+  rounds already inbound that ARRIVE BEFORE this one (forecast arrival) minus the
+  rounds assigned to it this tick - with the most delta-v left (a PD-singed seeker:
+  the fastest intercept); with no deficit anywhere, the least over-subscribed hull.
+  Reachable: `can_intercept` within 600 s, the steer flown as a finite burn
+  (impossible above `a * t_go / 2`, cost `a t (1 - sqrt(1 - 2 dv / (a t)))`) and at
+  least `min(1.12, 0.25 + 0.02 * t)` km/s left after it. Rounds with nothing reachable
+  keep homing on a dying hulk, or coast when the target is gone. Ties go to the
+  smaller ship id; the outcome does not depend on ship or round insertion order and
+  is mirror symmetric.
+- **Surplus diversion** (`reserve` rounds only, every 5 s per side): on a hull with
+  more live rounds inbound than it needs + 1, the later arrivals beyond that,
+  not inside 12 s of impact (`LINK_COMMITTED_S`), go to hulls with a positive
+  deficit they can reach. Sprint rounds are never diverted.
 - After a reassignment the round's cruise floor is the closure it already
   has toward the new hull plus whatever delta-v it holds beyond the
-  reassignment reserve (never above its profile's floor), so it never burns
-  the reserve to regain cruise speed.
+  reassignment reserve (never above its profile's floor).
+- A reserve round's terminal window is 20 s or the time its held tank takes to
+  burn at its present acceleration, whichever is longer.
+
+### FLEET NET: `comms_message` kind `RETASK`
+
+The engine datalink (sender `FLEET DATALINK`, channel fleet net) tells the
+launching side at the next checkpoint, one line per (reason, old target, new
+target): "5 rounds re-tasked OCS Halberd-1 -> OCS Halberd-3 (target lost), first
+impact ~T+141". Structured: `reason`, `old_target_id`, `new_target_id`, `rounds`,
+`first_impact_t` (s, battle time: reassignment time + time to intercept).

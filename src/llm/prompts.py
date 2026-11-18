@@ -3001,11 +3001,11 @@ FORMATIONS FOR PD (what actually moves the numbers):
 TORPEDO DEFENCE, MEASURED (seeded runs on this engine: a 4 battlecruiser + 2 destroyer +
 2 frigate gun wall against 5 corvettes + 3 frigates = 40 rounds, the wall's posture fixed
 from the first checkpoint; per battle, 3 seeds each):
-- start 500 km: nose-on PADLOCK - 73% of rounds hit (nearly all on the nose, ~13.8 km/s, ~24 GJ
-  each), 6 of 8 hulls lost; burning straight away - 42% hit (all on the TAIL, ~12.7 km/s,
-  ~20 GJ), 6 of 8 lost; the same burn with evade full - 45% hit, 6 of 8 lost (on the
+- start 500 km: nose-on PADLOCK - 76% of rounds hit (nearly all on the nose, ~13.8 km/s, ~24 GJ
+  each), 6 of 8 hulls lost; burning straight away - 44% hit (all on the TAIL, ~12.6 km/s,
+  ~19 GJ), 6 of 8 lost; the same burn with evade full - 46% hit, 6 of 8 lost (on the
   tail and flank: the overlay keeps the burn and turns no nose round); charging
-  (INTERCEPT) - 74% hit (~14.5 km/s, ~26 GJ), 7 of 8 lost. First loss ~100 s in each.
+  (INTERCEPT) - 73% hit (~14.5 km/s, ~26 GJ), 8 of 8 lost. First loss ~100 s in each.
 - start 1000 km: nose-on - 72% hit, 8 of 8 lost (first at ~290 s); burning away - 35%
   hit, 5 of 8 lost (first at ~310 s); charging - 38% hit, 3 of 8 lost. The wall killed
   1.3 boats per battle charging, 0.7 nose-on, 0 burning away.
@@ -3992,7 +3992,9 @@ def _format_since(snapshot: Any) -> str:
             return "none"
         order = (("launched", "launched"), ("impact", "hit"), ("blinded", "blinded by PD"),
                  ("destroyed", "destroyed by PD"), ("dry", "ran dry"), ("missed", "missed"),
-                 ("retargeted", "retargeted"))
+                 ("retargeted", "retargeted"),
+                 ("retasked_lost", "re-tasked by the datalink (target lost)"),
+                 ("retasked_surplus", "re-tasked by the datalink (surplus on their target)"))
         return ", ".join(f"{c[k]} {word}" for k, word in order if c.get(k))
 
     lines.append(f"Torpedoes - yours: {torps(digest.torps['ours'])} | theirs: {torps(digest.torps['theirs'])}")
@@ -4317,19 +4319,28 @@ def _format_torpedo_economy(snapshot: Any, fleet_data: Dict[str, Any]) -> str:
             each = (f" at ~{sol.energy_gj:.0f} GJ each"
                     if to_kill != kill.get(e.ship_id, 6) else "")
             need = soak + to_kill
+            launch_soak = soak
+            if getattr(e, "board_keep", None) is not None:
+                # rounds of ours already inbound: the datalink's own board
+                # (torpedo_link.need_for on their forecast impact + margin)
+                cover, soak, to_kill = e.board_cover, e.board_soak, e.board_kill
+                each, need = " (datalink board)", e.board_keep
+            margin = (f" + {need - soak - to_kill} margin" if need > soak + to_kill else "")
             text = (f"Salvo vs {_lbl(snapshot, e.ship_id)} ({sol.verdict}): {cover} PD turrets cover it "
-                    f"-> ~{soak} soaked + {to_kill} to kill{each} = {need} together")
+                    f"-> ~{soak} soaked + {to_kill} to kill{margin}{each} = {need} together")
             res = getattr(e, "solution_reserve", None)
             if (res is not None and res.reaches and sol.tof_s is not None
                     and res.tof_s is not None):
-                res_soak = res.soak if res.soak is not None else soak
-                if (abs(res.tof_s - sol.tof_s) >= 1.0 or res_soak != soak
+                res_soak = res.soak if res.soak is not None else launch_soak
+                if (abs(res.tof_s - sol.tof_s) >= 1.0 or res_soak != launch_soak
                         or abs((res.energy_gj or 0) - (sol.energy_gj or 0)) >= 1.0):
                     text += (f"; reserve profile if he runs: ~{res.tof_s:.0f} s "
                              f"(sprint ~{sol.tof_s:.0f}), ~{res.energy_gj:.0f} GJ, PD soaks {res_soak}")
-            more = need - e.our_rounds_inbound
-            if e.our_rounds_inbound:
-                text += (f"; {e.our_rounds_inbound} of yours already inbound -> "
+            inbound_n = (e.board_rounds if getattr(e, "board_keep", None) is not None
+                         else e.our_rounds_inbound)
+            more = need - inbound_n
+            if inbound_n:
+                text += (f"; {inbound_n} of yours already inbound -> "
                          + ("ENOUGH, do not add (overkill)" if more <= 0 else f"{more} more"))
             available = getattr(snapshot, "launches_available", 0) or 0
             if more > available:

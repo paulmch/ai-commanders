@@ -1,34 +1,49 @@
 {
  "about": "Measured facts behind src/llm/torpedo_doctrine.py (torpedo launch profiles and the datalink), bound by tests/test_doctrine_accuracy.py. Regenerate with the command below after a change to torpedo guidance, the datalink or point defence.",
- "command": "uv run python scripts/torpedo_link_facts.py --seeds 3 --workers 8 --fixture tests/fixtures/torpedo_link_facts.json",
+ "command": "uv run python scripts/torpedo_link_facts.py --seeds 3 --workers 12 --fixture tests/fixtures/torpedo_link_facts.json",
  "constants": {
   "RESERVE_CRUISE_CLOSING_KPS": 8.0,
   "RESERVE_TERMINAL_WINDOW_S": 20.0,
   "REASSIGN_RESERVE_BASE_KPS": 0.25,
-  "REASSIGN_RESERVE_PER_S_KPS": 0.02
+  "REASSIGN_RESERVE_PER_S_KPS": 0.02,
+  "RESERVE_WINDOW_BURN_FACTOR": 1.0,
+  "LINK_KILL_MARGIN_ROUNDS": 1
  },
  "profiles": {
   "sprint": {
-   "tof_500_s": 72.0,
-   "gj_500": 22.3,
+   "tof_500_rest_s": 72.0,
+   "gj_500_rest": 22.3,
+   "tof_500_closing3_s": 58.0,
+   "gj_500_closing3": 33.9,
+   "tof_500_opening1_s": 77.0,
+   "gj_500_opening1": 18.8,
    "runner_ff_gj": 17.1,
-   "reach_200_km": 21.9
+   "reach_200_km": 15.6,
+   "reach_200_closing3_km": 10.2
   },
   "reserve": {
-   "tof_500_s": 81.0,
-   "gj_500": 22.7,
+   "tof_500_rest_s": 81.0,
+   "gj_500_rest": 22.7,
+   "tof_500_closing3_s": 59.0,
+   "gj_500_closing3": 33.9,
+   "tof_500_opening1_s": 87.0,
+   "gj_500_opening1": 19.1,
    "runner_ff_gj": 14.8,
-   "reach_200_km": 111.7
+   "reach_200_km": 105.5,
+   "reach_200_closing3_km": 52.3
   }
  },
  "battles": {
   "battles": 36,
-  "launched": 1825,
-  "orphaned": 1071,
-  "reassigned": 776,
-  "reassigned_hit": 396,
-  "pct_orphaned": 59,
-  "pct_reassigned": 72,
-  "pct_reassigned_hit": 51
+  "launched": 1801,
+  "orphaned": 1050,
+  "reassigned": 726,
+  "reassigned_hit": 408,
+  "pct_orphaned": 58,
+  "pct_reassigned": 69,
+  "pct_reassigned_hit": 56,
+  "pct_pd_blinded_sprint": 24,
+  "pct_pd_blinded_reserve": 35,
+  "pct_diverted_hit_reserve": 76
  }
 }

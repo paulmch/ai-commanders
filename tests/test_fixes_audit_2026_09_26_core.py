@@ -207,8 +207,13 @@ class TestRetargetResetsEngagementState:
         assert flight.min_distance_to_target > 50e3
 
     def test_terminal_latch_does_not_carry_to_new_target(self):
+        # (pass 5: the datalink's burn-time check accepts the 120 km swing a
+        # tick or two later than the old impulsive gate did)
         sim, flight, _ = self._scenario(150.0)
-        _steps(sim, 1)
+        for _ in range(4):
+            _steps(sim, 1)
+            if flight.torpedo.target_id == "b2":
+                break
         assert flight.torpedo.target_id == "b2"
         assert flight.terminal_latched is False
 
