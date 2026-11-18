@@ -261,6 +261,10 @@ class PredictionSimulation(CombatSimulation):
         self._event_callbacks = []
         self.pending_torpedo_launches = []
         self.ships = {sid: _ghost_ship(s) for sid, s in source.ships.items()}
+        # Ghosts carry no weapons; the evade overlay's swing still needs to
+        # know which ships mount guns (CombatSimulation._under_guns).
+        self._gun_ships = {sid for sid, s in source.ships.items()
+                           if CombatSimulation._mounts_guns(s)}
 
         # Threats only matter to ships whose maneuver reacts to them.
         evaders = {
@@ -286,6 +290,9 @@ class PredictionSimulation(CombatSimulation):
         # nose instead of searching the reachable facings (that search was
         # most of a traced torpedo battle's CPU).
         return ship.forward
+
+    def _mounts_guns(self, ship: Any) -> bool:  # type: ignore[override]
+        return ship.ship_id in self._gun_ships
 
     def _swing_armour_aim(self, ship: Any, line: Any, cone: float, mode: str) -> Any:  # type: ignore[override]
         # Motion only: an armour swing on a burning order stays inside the
@@ -652,12 +659,14 @@ def predict_plans(
             sigma_w = wobble_sigma_m(dts, accels[sid], wobble, alpha, omega_max)
         a_max = sim.ships[sid].kinematic_state.max_acceleration_ms2()
         burn = getattr(sim.ships[sid], "evade_burn", None)
-        if burn is not None:
+        man = sim.ships[sid].current_maneuver
+        if burn is not None and not (man is not None and man.steers_to_aim):
             # The evade overlay on a burning order swings the burn inside its
             # cone instead of jinking across at full thrust: its sideways
-            # authority is a_max x sin(cone). (Scaled, not refitted: the
+            # authority is a_max x throttle x sin(cone), as fire control
+            # prices it (TargetMotion.swing_ms2). (Scaled, not refitted: the
             # REACTIVE_SIGMA_K table was calibrated on the full jink.)
-            a_max *= burn[1]
+            a_max *= burn[0] * burn[1]
         sigma_r, mode = reactive_sigma_m(dts, modes[sid], mode_now[sid], a_max)
         if diagnostics is not None:
             diagnostics[sid] = {

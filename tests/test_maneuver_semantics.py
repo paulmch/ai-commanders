@@ -575,12 +575,25 @@ class TestEvasionOverlay:
         assert not maneuver_reacts_to_threats(None)
 
     def test_no_threat_flies_the_base_maneuver_exactly(self):
+        # Nothing inbound and no enemy gun within EVADE_BURN_GUN_REACH_KM.
         runs = []
         for evade in (None, "full"):
-            sim, me, foe = _duel()
+            sim, me, foe = _duel(foe_km=600.0)
             _fly(sim, me, foe, _intercept(evade=evade), 120)
             runs.append((me.position.to_tuple(), me.velocity.to_tuple(), me.forward.to_tuple()))
         assert runs[0] == runs[1]
+
+    def test_an_armed_enemy_in_reach_keeps_the_burn_swinging(self):
+        # Within reach of his guns the swing runs before the first round is
+        # fired (a round is led a whole flight time ahead): same burn, the
+        # nose off the line.
+        sim, me, foe = _duel(foe_km=300.0)
+        swung = 0
+        sim.inject_command("me", _intercept(evade="full")(sim))
+        for _ in range(60):
+            sim.step()
+            swung += bool(me.evade_swing)
+        assert swung > 30 and me.applied_throttle == pytest.approx(1.0)
 
     def test_full_runs_and_presents_dodge_never_runs(self):
         _, _, plain_modes, plain = _flank_torpedo_run(None)

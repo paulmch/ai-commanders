@@ -178,28 +178,30 @@ JINK_ACCEL_FRACTION = 0.39
 
 # The evade overlay on a burning order (src/simulation.py module docstring)
 # does not jink across the line of fire at full thrust: it keeps the order's
-# burn and swings the thrust axis inside a cone around the burn line, so the
-# acceleration it can put across the line of fire is the burn's times
-# sin(cone) (TargetMotion.swing_ms2), and its lead - which reads the drive -
-# extrapolates whatever swing it is flying at the shot. A round fired at it
-# finds it moved by SWING_*_FRACTION * swing_ms2 * min(T, horizon)^2 / 2, by
-# whether its evasion was already swinging at the shot (reacting) or it was
-# flying the burn line (calm). Fitted (maximum likelihood, grid) on the 18k
-# harness rounds at targets swinging a fixed-line burn - HEADING + evade
+# burn and swings the thrust axis around a cone about the burn line,
+# continuously while it is under fire or within reach of an enemy gun, to a
+# fresh random point every swing cycle. The acceleration it can put across
+# the line of fire is the burn's times sin(cone) (TargetMotion.swing_ms2),
+# and its lead - which reads the drive - extrapolates whatever swing it is
+# flying at the shot. A round fired at it finds it moved by
+# SWING_ACCEL_FRACTION * swing_ms2 * min(T, horizon)^2 / 2. One fraction: the
+# swing runs the whole time it is under fire, so a target calm at the shot
+# is all but absent from the data. Fitted (maximum likelihood, grid) on the
+# 18k harness rounds at targets swinging a fixed-line burn - HEADING + evade
 # 'dodge' (class heading_dodge) and a plain INTERCEPT + dodge
 # (intercept_dodge), frigate..dreadnought, 40-400 km, 1-8 shooters
-# (scripts/fire_control_calibration.py harness), on the even seeds: held-out
-# log-likelihood on the odd ones -4272 (the overlay dodge's bounded
-# DODGE_BURN_S shape: -4288, and it forecast 1.5-1.7x the hits landed under
-# fleet fire at 400-499 km); every dodge:HEADING / dodge:INTERCEPT bucket
-# within tolerance. A range keeper (HOLD_RANGE ...) swings its correction
-# burns but jinks at full throttle between them (below
-# EVADE_BURN_MIN_THROTTLE its order counts as engine-off): it is priced with
-# this swing in its CLOSE / OPEN / ARRIVE phases and as an engine-off dodger
-# while it HOLDs (CombatSimulation.target_motion); two of its long-range
-# buckets are named in RESIDUALS.
-SWING_ACCEL_FRACTION = 0.15            # swinging at the shot
-SWING_CALM_ACCEL_FRACTION = 0.06       # flying the burn line at the shot
+# (scripts/fire_control_calibration.py harness) - on the even seeds: 0.24
+# (log-likelihood -3997); held out on the odd seeds -4016 (the bounded
+# DODGE_BURN_S shape, best 0.27: -4018 / -4029, and it forecast 1.5-2x the
+# hits landed under fleet fire beyond 300 km). A range keeper (HOLD_RANGE,
+# standoff INTERCEPT, toward_*) is priced by the older dodge model instead
+# (CombatSimulation.target_motion): it swings its burns, but jinks at full
+# throttle whenever its correction falls below EVADE_BURN_MIN_THROTTLE, and
+# its own corrections keep moving the burn line the swing is measured from.
+# On harness rounds at HOLD_RANGE + dodge and a 60 km standoff INTERCEPT +
+# dodge (11k each) that model fits better than the swing: log-likelihood
+# -3989 vs -4167 and -4668 vs -4718.
+SWING_ACCEL_FRACTION = 0.24
 
 # A HEADING target still turning onto its ordered heading (or holding a
 # synchronised burn start) burns at the ordered throttle once inside
@@ -287,8 +289,7 @@ def displacement_sigma_m(time_of_flight_s: float, motion: TargetMotion) -> float
         swing = max(0.0, float(motion.swing_ms2))
         if t >= motion.dodge_min_time_s and swing > 0.0 and not motion.evasive:
             # A burn swung inside its cone (SWING_*_FRACTION).
-            k = SWING_ACCEL_FRACTION if motion.reacting else SWING_CALM_ACCEL_FRACTION
-            sigma_dodge = k * swing * td * td / 2.0
+            sigma_dodge = SWING_ACCEL_FRACTION * swing * td * td / 2.0
         elif t >= motion.dodge_min_time_s:
             if motion.evasive:
                 k = (EVASIVE_DODGE_ACCEL_FRACTION if motion.reacting
