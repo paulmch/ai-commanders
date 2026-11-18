@@ -2991,13 +2991,13 @@ FORMATIONS FOR PD (what actually moves the numbers):
 TORPEDO DEFENCE, MEASURED (seeded runs on this engine: a 4 battlecruiser + 2 destroyer +
 2 frigate gun wall against 5 corvettes + 3 frigates = 40 rounds, the wall's posture fixed
 from the first checkpoint; per battle, 3 seeds each):
-- start 500 km: nose-on PADLOCK - 72% of rounds hit (all on the nose, ~14.0 km/s, ~24 GJ
-  each), 6 of 8 hulls lost; burning straight away - 37% hit (all on the TAIL, ~12.8 km/s,
-  ~20 GJ), 5 of 8 lost; the same burn with evade full - 36% hit, 5 of 8 lost (also all
+- start 500 km: nose-on PADLOCK - 73% of rounds hit (nearly all on the nose, ~13.8 km/s, ~24 GJ
+  each), 6 of 8 hulls lost; burning straight away - 42% hit (all on the TAIL, ~12.7 km/s,
+  ~20 GJ), 6 of 8 lost; the same burn with evade full - 44% hit, 6 of 8 lost (also all
   on the tail: the overlay keeps the burn and turns no nose round); charging
-  (INTERCEPT) - 73% hit (~14.6 km/s, ~27 GJ), 8 of 8 lost. First loss ~100 s in each.
-- start 1000 km: nose-on - 73% hit, 8 of 8 lost (first at ~290 s); burning away - 26%
-  hit, 4 of 8 lost (first at ~310 s); charging - 38% hit, 3 of 8 lost. The wall killed
+  (INTERCEPT) - 74% hit (~14.5 km/s, ~26 GJ), 7 of 8 lost. First loss ~100 s in each.
+- start 1000 km: nose-on - 72% hit, 8 of 8 lost (first at ~290 s); burning away - 35%
+  hit, 5 of 8 lost (first at ~310 s); charging - 38% hit, 3 of 8 lost. The wall killed
   1.3 boats per battle charging, 0.7 nose-on, 0 burning away.
 - Burning away lowers impact speed a little and leaves more rounds blinded or dry; the
   rounds that still hit land on the thin tail. Closing raises impact energy and shortens

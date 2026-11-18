@@ -54,17 +54,24 @@ tactical manual before they spend a point:
   NEZ; a fleet only kites as fast as its slowest hull - commit to one
   doctrine, not half of each.
 
-## Torpedo retargeting
+## Torpedo retargeting and the datalink (pass 5)
 
-Rounds whose target dies mid-flight acquire a replacement on their own
-(live seeker + delta-v above the terminal reserve). The round measures its
-seeker health to pick an imperative: fresh seekers maximize fuel at
-intercept (impact energy), PD-singed seekers race the fastest intercept
-before going blind. Overkill concentration therefore chains down enemy
-formations - Kimi K3's "survivors retarget onto the next destroyer
-automatically" wave doctrine (2026-08-06 recording) killed three
-destroyers with one 16-round salvo. Formation counterplay: spacing units
-beyond an orphan's steering envelope turns enemy overkill back into waste.
+Rounds whose target dies (or becomes a dying hulk) are reassigned by the
+fleet datalink (`src/torpedo_link.py`), as a GROUP: each reachable hull gets
+the rounds it still needs (`rounds_needed`: PD soak + rounds to kill, minus
+the live rounds already homing on it), the rest go to the best reachable
+hull. Reachable means the engine's `can_intercept` with at least
+`0.25 + 0.02 * t_go` km/s (cap 1.12) left after the steer. Fresh seekers
+keep the most fuel, PD-singed ones take the fastest intercept. A sprint
+round has spent most of its tank on closure by mid-flight (it reaches ~22 km
+abeam 200 km out); a `reserve`-profile round keeps ~6 km/s until its last
+20 s (~112 km abeam 200 km out), and reserve rounds beyond what their target
+needs are diverted before it dies. Measured in seeded rule-based battles:
+58% of rounds lost their target in flight, 61% of those were reassigned,
+54% of the reassigned hit. Before pass 5 the per-round rule recovered about
+39% of orphans (52% of those hit); in one LLM battle (p5w5_b3) 8 of 28.
+Spacing units beyond an orphan's steering envelope still turns enemy
+overkill back into waste.
 
 ## Point costs (src/llm/fleet_draft.py)
 
