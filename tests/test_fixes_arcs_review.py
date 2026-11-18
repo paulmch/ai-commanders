@@ -72,16 +72,10 @@ class TestRollGoalDoesNotHunt:
     SAME_GOAL_DEG = 20.0
 
     # The scenario the fix was measured on: the captains of that time
-    # ("classic", the default until the wall/pincer switch). Under the new
-    # default seed 103 still shows one quick reversal (beta_2: 30 -> -21 ->
-    # 31 deg within 15 s): an engine-side roll-planner case, reported to the
-    # integration pass, not loosened here.
+    # ("classic", the default until the wall/pincer/close-and-pass switch),
+    # and the current default where it does not hit the open case below.
     @pytest.mark.parametrize("seed,doctrine", [
-        (103, "classic"), (104, "classic"),
-        pytest.param(103, "tactical", marks=pytest.mark.xfail(
-            reason="roll goal hunts once under the wall/pincer default (engine roll planner)",
-            strict=False)),
-        (104, "tactical"),
+        (103, "classic"), (104, "classic"), (104, "tactical"),
     ])
     def test_no_goal_returns_to_the_one_it_just_left(self, seed, doctrine, monkeypatch):
         """Seeds 103/104 (budget 200): the merged planner flipped some hulls'
@@ -110,6 +104,33 @@ class TestRollGoalDoesNotHunt:
                         and abs(math.degrees(c - a)) <= self.SAME_GOAL_DEG):
                     hunts.append((sid, t0, math.degrees(a), math.degrees(b), t1, math.degrees(c)))
         assert not hunts, hunts
+
+    @pytest.mark.xfail(strict=True, reason=(
+        "engine roll planner (CombatSimulation._arcs_plan_roll), PD-first branch: under a "
+        "swarm of 8-12 inbound torpedoes a flanking destroyer's goal goes 30 -> -21 -> 31 deg "
+        "(t = 70, 85, 100 s) while its orders are constant (same target, same HEADING "
+        "toward_point with evade 'dodge' at t = 60 and 90): each re-plan's best PD roll moves "
+        "with the torpedoes' geometry by more than the hysteresis, and the hull (roll still "
+        "at 9-16 deg) reaches neither goal. Owner: the arcs/roll code, not the bots."))
+    def test_pd_first_goal_does_not_reverse_under_a_torpedo_swarm(self, monkeypatch):
+        """Smallest reproduction: seed 103 (budget 200, default doctrine) to 110 s,
+        beta_2 only."""
+        changes = []
+        plan = CombatSimulation._arcs_plan_roll
+
+        def logged(self, ship, arcs):
+            before = arcs.roll_goal
+            plan(self, ship, arcs)
+            if ship.ship_id == "beta_2" and arcs.roll_goal != before:
+                changes.append((self.current_time, before, arcs.roll_goal))
+
+        monkeypatch.setattr(CombatSimulation, "_arcs_plan_roll", logged)
+        _draft_battle(103, time_limit=110.0, doctrine="tactical")
+        assert changes, "beta_2 never re-planned its roll - the scenario moved"
+        for (t0, a, b), (t1, b2, c) in zip(changes, changes[1:]):
+            assert not (t1 - t0 <= self.ABA_WINDOW_S
+                        and abs(math.degrees(b - a)) > self.SAME_GOAL_DEG
+                        and abs(math.degrees(c - a)) <= self.SAME_GOAL_DEG), (t0, t1)
 
     def test_the_gun_hysteresis_margin_holds_a_standing_goal(self, monkeypatch):
         """A candidate a little better for the guns (less than
