@@ -1139,8 +1139,10 @@ MANEUVERS:
   round that cone, a new random point every few seconds, so rounds led onto you miss -
   from any bearing, ahead and astern too; a round it cannot dodge gets the best armor it
   can reach inside the cone (a round from abeam or astern still strikes the flank or the
-  tail). With your nose more than 90° off your line (turning onto a new heading, or back
-  after a RUN) the drive idles while the ship turns, as without evade. RUN (evade full, a
+  tail). Turning onto a new heading (or back after a RUN) under fire or near enemy guns it
+  burns at your throttle through the whole turn - a heading without evade idles until the
+  nose is on - so a turn of more than 90° first pushes the wrong way; the range headings
+  state that impulse ("evade under fire: the N s turn burns too"). RUN (evade full, a
   guided torpedo) leaves the line to burn away from it, never below your throttle. On an
   order that does
   not burn (PADLOCK, MAINTAIN, throttle 0) and as the EVADE maneuver, evasion owns the
@@ -2968,8 +2970,11 @@ MANEUVERS (tell captains which to use):
   guns are within 400 km, keeps swinging the thrust round a cone 20° off the ordered line
   (~94% of the push stays on it) - a dodge against fire from any bearing; it turns armour
   onto a round it cannot dodge only inside that cone - a round from abeam or astern
-  still strikes the flank or tail; with the nose more than 90° off the line (a new
-  heading, after a RUN) the drive idles while it turns; RUN (full, vs a guided torpedo)
+  still strikes the flank or tail; turning onto a new heading (or back after a RUN) it
+  burns at the order's throttle through the whole turn, so a turn of more than 90° first
+  pushes the wrong way (a ship's own range rows state it: "evade under fire: the N s turn
+  burns too"; an "all ships" order holds the burn until the synced start, so the hulls
+  come round first); RUN (full, vs a guided torpedo)
   leaves the line to burn away. Measured (seeded, 24 runs each): a destroyer burning
   across the line of fire of 3 gun ships 120-200 km off (nose already on its heading)
   burned on its order 98% of the time under fire and took 12% of the rounds fired at it,
@@ -2978,8 +2983,8 @@ MANEUVERS (tell captains which to use):
   (47% without), on the tail and flank; tail hits wreck the drive, and a damaged drive
   dodges far less (14% of rounds hit while it was intact, 54% after): it was lost in 16
   of 24 runs with the overlay, 24 of 24 without. A destroyer cancelling 2 km/s of
-  closure with its nose still on the enemy: closing at 1.3 km/s after 60 s with the
-  overlay, 1.7 without it (lost in 14 and 16 of 24 runs). On an order that does not
+  closure with its nose still on the enemy: closing at 1.7 km/s after 60 s with the
+  overlay, 1.7 without it (lost in 4 and 16 of 24 runs). On an order that does not
   burn (PADLOCK, MAINTAIN, throttle 0) the overlay flies the drive: jinks at full
   throttle, TANK (half throttle) or BRACE (drive off).
 - BRAKE: burn against the ship's own (world-frame) velocity
@@ -3091,11 +3096,12 @@ TORPEDO DEFENCE, MEASURED (seeded runs on this engine: a 4 battlecruiser + 2 des
 from the first checkpoint; per battle, 3 seeds each):
 - start 500 km: nose-on PADLOCK - 76% of rounds hit (nearly all on the nose, ~13.8 km/s, ~24 GJ
   each), 6 of 8 hulls lost; burning straight away - 44% hit (all on the TAIL, ~12.6 km/s,
-  ~19 GJ), 6 of 8 lost; the same burn with evade full - 46% hit, 6 of 8 lost (on the
+  ~19 GJ), 6 of 8 lost; the same burn with evade full - 50% hit, 6 of 8 lost (on the
   tail and flank: the overlay keeps the burn and turns no nose round); charging
-  (INTERCEPT) - 73% hit (~14.5 km/s, ~26 GJ), 8 of 8 lost. First loss ~100 s in each.
-- start 1000 km: nose-on - 72% hit, 8 of 8 lost (first at ~290 s); burning away - 35%
-  hit, 5 of 8 lost (first at ~310 s); charging - 38% hit, 3 of 8 lost. The wall killed
+  (INTERCEPT) - 73% hit (~14.5 km/s, ~26 GJ), 8 of 8 lost. First loss ~70 s in each
+  (rounds launched at the first checkpoint, at battle start).
+- start 1000 km: nose-on - 72% hit, 8 of 8 lost (first at ~260 s); burning away - 35%
+  hit, 5 of 8 lost (first at ~280 s); charging - 45% hit, 4 of 8 lost. The wall killed
   1.3 boats per battle charging, 0.7 nose-on, 0 burning away.
 - Burning away lowers impact speed a little and leaves more rounds blinded or dry; the
   rounds that still hit land on the thin tail. Closing raises impact energy and shortens
@@ -3198,12 +3204,12 @@ GUNNERY:
 GUN_EXCHANGE_BATTLES = 160
 GUN_EXCHANGE_BUDGET = 150
 GUN_EXCHANGE_BANDS = (
-    ("0-50", 69, 0.22, 16),
-    ("50-100", 61, 0.25, 23),
-    ("100-150", 50, 0.31, 20),
-    ("150-200", 43, 0.44, 20),
-    ("200-300", 36, 0.29, 15),
-    ("300+", 25, 0.29, 7),
+    ("0-50", 70, 0.24, 17),
+    ("50-100", 62, 0.24, 22),
+    ("100-150", 50, 0.30, 18),
+    ("150-200", 44, 0.45, 20),
+    ("200-300", 37, 0.31, 15),
+    ("300+", 26, 0.29, 7),
 )
 GUN_EXCHANGE_INSIDE_150_PCT = 58
 
@@ -3242,10 +3248,10 @@ FACING_SPINAL_HITS_TO_KILL = (
 # heuristic doctrines separately: the battleship's swung from nose 1% (legacy)
 # to 37% (tactical) penetration, above its flank's 21%, and is left out.
 FACING_MEASURED = (
-    ("battlecruiser", 15, 0.16, 44, 0.46),
-    ("destroyer", 8, 0.065, 35, 0.42),
-    ("frigate", 25, 0.39, 57, 0.71),
-    ("dreadnought", 26, 0.24, 35, 0.24),
+    ("battlecruiser", 16, 0.17, 45, 0.50),
+    ("destroyer", 9, 0.08, 37, 0.43),
+    ("frigate", 24, 0.38, 57, 0.68),
+    ("dreadnought", 26, 0.25, 34, 0.22),
 )
 # The pass example in RANGE CONTROL and the CROSSFIRE example geometry.
 MERGE_EXAMPLE_KPS = 5.0

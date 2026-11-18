@@ -4,8 +4,10 @@ written down in the src/simulation.py module docstring): "with evade the
 engine burns the whole time using thrust vectoring to turn".
 
 - the drive never runs below what the order burns while evasion has the helm,
-  except with the nose more than EVADE_BURN_AGAINST_ORDER_DEG off the burn
-  line (it would push against the order: the order's token turn throttle);
+  without exception: it burns through the whole turn onto the line, also
+  more than 90 deg off it (owner, round 3: "burn through the turn with the
+  percentage given in command"); a range keeper notes its correction scaled
+  by cos(angle off) (feed-forward) and that noted throttle is what it burns;
 - the thrust axis stays inside EVADE_BURN_CONE_DEG of the burn line, so most
   of the push stays along it (cos 20 deg = 94 % at the cone edge); off the
   cone the hull turns toward it, it never holds an attitude off it;
@@ -27,7 +29,6 @@ import pytest
 from src.firecontrol import WeaponsCommand, WeaponsOrder
 from src.physics import Vector3D
 from src.simulation import (
-    EVADE_BURN_AGAINST_ORDER_DEG,
     EVADE_BURN_CONE_DEG,
     EVADE_BURN_CYCLE_MAX_S,
     EVADE_BURN_CYCLE_MIN_S,
@@ -185,11 +186,7 @@ class TestEveryBurningOrder:
         _fly(sim, me, 100)
         assert len(flown) >= 5, name
         for t, ordered, out, off in flown:
-            if off > math.radians(EVADE_BURN_AGAINST_ORDER_DEG):
-                # it would push against the order: the order's turn token
-                assert out == pytest.approx(ordered * MANEUVER_TURN_THROTTLE), (name, t)
-            else:
-                assert out >= ordered - 1e-12, (name, t, ordered, out)
+            assert out >= ordered - 1e-12, (name, t, ordered, out, math.degrees(off))
         if name == "heading_90_off":
             # the first turn under fire burns, and is recorded as off the line
             states = [e.data for e in sim.events
@@ -244,9 +241,8 @@ class TestNoAttitudeHeldOffTheCone:
 
     def test_off_the_cone_the_hull_turns_toward_it(self):
         # A HEADING 180 deg off its order under fire: every off-line swing
-        # step closes on the cone (never holds), and while the nose is more
-        # than EVADE_BURN_AGAINST_ORDER_DEG off the drive does not push
-        # against the order.
+        # step closes on the cone (never holds), and the drive burns at the
+        # order's throttle through the whole turn, also more than 90 deg off.
         sim, me = _under_fire(maneuver=Maneuver(
             ManeuverType.HEADING, 0, duration=1e9, throttle=1.0,
             heading_direction={"x": 0.0, "y": 1.0, "z": 0.0}, evade="dodge"))
@@ -260,8 +256,7 @@ class TestNoAttitudeHeldOffTheCone:
                 steps += 1
                 if prev is not None:
                     assert off <= prev + math.radians(0.5), (sim.current_time, math.degrees(off))
-                if off > math.radians(EVADE_BURN_AGAINST_ORDER_DEG) + 0.05:
-                    assert me.applied_throttle <= MANEUVER_TURN_THROTTLE + 1e-9
+                assert me.applied_throttle == pytest.approx(1.0), sim.current_time
             prev = off if (me.evade_off_line and off > CONE + math.radians(25.0)) else None
         assert steps >= 5
 

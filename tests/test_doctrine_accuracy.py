@@ -1262,7 +1262,7 @@ class TestMeasuredExchangeDoctrine:
     def test_the_table_is_rendered(self, fleet):
         text = _admiral_static(fleet)
         assert "range at firing (km)  0-50    50-100  100-150 150-200 200-300 300+" in text
-        assert "hit rate              69%     61%     50%     43%     36%     25%" in text
+        assert "hit rate              70%     62%     50%     44%     37%     26%" in text
         assert "58% of all hull damage landed inside 150 km, 42% beyond." in text
 
     def test_facing_battle_numbers_are_the_seeded_runs(self, facts):
@@ -1498,11 +1498,14 @@ class TestEvasionDriveClaims:
         evade = next(t for t in ADMIRAL_TOOLS if t["function"]["name"] == "issue_order")[
             "function"]["parameters"]["properties"]["evade"]["description"]
         assert f"within {cone} deg of the ordered line ({push} of the push stays on it)" in evade
-        from src.simulation import EVADE_BURN_AGAINST_ORDER_DEG, EVADE_BURN_GUN_REACH_KM
+        from src.simulation import EVADE_BURN_GUN_REACH_KM
         assert f"within {EVADE_BURN_GUN_REACH_KM:.0f} km of enemy guns" in evade
-        assert f"more than {EVADE_BURN_AGAINST_ORDER_DEG:.0f} deg off the line" in evade
+        assert "burns at the order's throttle through the whole turn" in evade
         assert f"within {EVADE_BURN_GUN_REACH_KM:.0f} km of an enemy gun" in captain
-        assert f"more than {EVADE_BURN_AGAINST_ORDER_DEG:.0f}° off your line" in captain
+        assert "burns at your throttle through the whole turn" in captain
+        assert "burns at the order's throttle through the whole turn" in admiral
+        from src.llm.range_control import EVADE_NOTE_MIN_DEG
+        assert f"a turn of more than {EVADE_NOTE_MIN_DEG:.0f}° first pushes the wrong way" in captain
         for tool in ("set_maneuver", "set_heading"):
             desc = next(t for t in CAPTAIN_TOOLS_BASE if t["function"]["name"] == tool)[
                 "function"]["parameters"]["properties"]["evade"]["description"]

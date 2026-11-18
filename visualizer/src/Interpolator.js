@@ -122,8 +122,16 @@ export class Interpolator {
         tur: Array.isArray(state0.tur) || Array.isArray(state1.tur)
           ? { a: state0.tur || state1.tur, b: state1.tur || state0.tur, f: alpha } : null,
         thrust: this.lerp(state0.thrust || 0, state1.thrust || 0, alpha),
-        // throttle slope over this interval (1/s): drive ignition / shutdown
+        // throttle slope over this interval (1/s)
         thrustRate: frame1.t - frame0.t > 0 ? ((state1.thrust || 0) - (state0.thrust || 0)) / (frame1.t - frame0.t) : 0,
+        // The throttle the engine PRODUCED at this instant: a frame's thrust
+        // is the throttle of the tick that ends on it, so it holds over
+        // (t0, t1] and steps at t0 - the plume (render/Torch.js, DriveJet.js)
+        // lights and cuts in one frame instead of fading over a second.
+        // throttleFrom / throttleAge: the step this interval opened with.
+        throttle: alpha > 0 ? (state1.thrust || 0) : (state0.thrust || 0),
+        throttleFrom: state0.thrust || 0,
+        throttleAge: alpha > 0 ? alpha * (frame1.t - frame0.t) : 0,
         // --trace recordings: turn rate (world rad/s). The recorder stamps
         // each interval's rate on the frame that ends it; blending the two
         // keeps it continuous across frames (a jinking ship reverses it)

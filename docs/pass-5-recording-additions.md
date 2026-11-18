@@ -1098,7 +1098,7 @@ read as before (no swing).
 |---|---|---|
 | `swing` | bool, only when true | the evade overlay has the helm (`mode` EVADE / TANK / BRACE / PRESENT; EVADE also when only an armed enemy within 400 km keeps it swinging) and is swinging the order's burn - the drive lit and the aim off the line - instead of holding it: `applied_throttle` is the throttle the order burns this tick (x engine fraction; `requested_throttle` for a fixed heading, the range keeper's own demand for HOLD_RANGE / standoff), the swing is aimed inside the cone of the burn line (the nose can overshoot it by a few degrees on carried spin; see `off_line`). Absent: the older overlay (an engine-off order or the EVADE maneuver - BRACE drive off, TANK half), or no evasion. |
 
-| `off_line` | bool, only when true (with `swing`) | the nose is still more than the cone plus 10 deg off the burn line (the order's first turn under fire, or turning back after a RUN): within 90 deg of the line the drive burns at the order's throttle while thrust vectoring turns the ship (not along the line yet); farther off it idles at the order's turn token |
+| `off_line` | bool, only when true (with `swing`) | the nose is still more than the cone plus 10 deg off the burn line (the order's first turn under fire, or turning back after a RUN): the drive burns at the order's throttle while thrust vectoring turns the ship (not along the line yet), however far off the line the nose points (a range keeper notes its correction scaled by cos(angle off)) |
 
 The transition key now includes both, so a change from a held BRACE to a
 swung BRACE at the same throttles is a new `execution_state` event.

@@ -761,7 +761,9 @@ class LLMBattleRunner:
             from .admiral_view import AdmiralViewState
             self._admiral_view = AdmiralViewState()
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            self._admiral_view_dir = Path("data/recordings/vision") / stamp
+            # Next to the recording (default data/recordings/vision/<stamp>),
+            # so a run given its own recording_dir writes nothing elsewhere.
+            self._admiral_view_dir = Path(self.config.recording_dir) / "vision" / stamp
             if self.config.verbose:
                 enabled = [a.name for a in (self.alpha_admiral, self.beta_admiral)
                            if a and a.wants_vision]

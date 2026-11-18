@@ -69,8 +69,8 @@ launcher at rest reaches ~16 km abeam when its target is lost 200 km out; a
 a closing launcher (~52 km), and reserve rounds beyond what their target
 needs are diverted before it dies. The captain's OVERKILL line and the
 admiral's economy quote the same board. Measured in seeded rule-based
-battles: 58% of rounds lost their target in flight, 69% of those were
-reassigned, 56% of the reassigned hit; 76% of diverted reserve rounds hit.
+battles: 55% of rounds lost their target in flight, 67% of those were
+reassigned, 53% of the reassigned hit; 74% of diverted reserve rounds hit.
 Before pass 5 the per-round rule recovered about 39% of orphans (52% of those
 hit); in one LLM battle (p5w5_b3) 8 of 28. Spacing units beyond an orphan's
 steering envelope still turns enemy overkill back into waste.
@@ -384,7 +384,10 @@ seed: these battles are close to deterministic, so a cell is 0% or 100%, not
 #### Why (from the battle events)
 
 The torpedo fleets launch at the first checkpoint (t = 30 s on the pre-T+0 schedule this was measured on; checkpoint 1 is at T+0 now; 500 km), their
-first rounds arrive at t = 97-104 s and the last gun hull dies at t = 140-175 s.
+first rounds arrive at t = 97-104 s and the last gun hull dies at t = 140-175 s
+(T+30 schedule; with the first checkpoint at T+0 everything lands ~30 s earlier: the
+seeded torpedo-defence grid behind the admiral doctrine, 500 km, now loses its first
+wall hull at t = 70-74 s, against ~100 s before).
 Over the old-price battles of a pure torpedo fleet against a gun fleet (seeds
 1-2, 150 pts):
 

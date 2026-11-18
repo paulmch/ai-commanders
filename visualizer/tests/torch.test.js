@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { TORCH_LEVELS, clusterLevels, plumeShape, torchCough, plumeSweep, SWEEP_AGE_S, SWEEP_MAX } from '../src/render/Torch.js';
+import { TORCH_LEVELS, clusterLevels, plumeShape, torchCough, flowPhase, FLOW_RATE } from '../src/render/Torch.js';
 import { Interpolator } from '../src/Interpolator.js';
 
 test('plume shape follows the throttle: idle is short and dim, full burn long and hot', () => {
@@ -82,20 +82,23 @@ test('bigger guns throw bigger tracers and flashes; the pop is a pure envelope',
   assert.equal(muzzlePop(0.1, 0.3), muzzlePop(0.1, 0.3));
 });
 
-test('a turning ship drags its plume: sweep follows the recorded turn rate', () => {
-  assert.equal(Math.hypot(plumeSweep(0, 0).x, plumeSweep(0, 0).y), 0);
-  // yaw about +Y (bow swings to +X, stern to -X): the old exhaust lags on +X
-  const yaw = plumeSweep(0, 0.05);
-  assert.ok(yaw.x > 0 && yaw.y === 0);
-  assert.ok(Math.abs(yaw.x - 0.05 * SWEEP_AGE_S) < 1e-12);
-  // pitch about +X (bow swings to -Y): the tail lags on -Y
-  assert.ok(plumeSweep(0.05, 0).y < 0);
-  // a corvette's snap turn saturates instead of folding the plume over
-  const snap = plumeSweep(0.2, -0.3);
-  assert.ok(Math.abs(Math.hypot(snap.x, snap.y) - SWEEP_MAX) < 1e-12);
-  // reversing the turn mirrors the sweep (pure, no history)
-  const back = plumeSweep(-0.2, 0.3);
-  assert.ok(Math.abs(back.x + snap.x) < 1e-12 && Math.abs(back.y + snap.y) < 1e-12);
+test('the plume is a rigid lance: no sweep, no breathing, streaks fast enough that none can be followed', () => {
+  const src = readFileSync(new URL('../src/render/Torch.js', import.meta.url), 'utf8');
+  // a 10,000 km/s exhaust shows no lag when the hull turns: no bend of the centreline
+  assert.ok(!/uBend|plumeSweep/.test(src), 'no swept centreline');
+  // nothing in the jet moves at "particle" speed: no pressure pulses, no length breathing
+  assert.ok(!/pulse|breathe|uTime/.test(src), 'no slow pulses or breathing');
+  // the streaks scroll several texture tiles per second (a fbm feature is
+  // ~1/8 tile: over half its own length per 60 Hz frame), at incommensurate
+  // rates; chemical vents (wrecks) keep slow gas
+  const [a, b] = FLOW_RATE.fusion;
+  assert.ok(a / 60 > 0.5 / 8 && b / 60 > 0.5 / 8, 'fusion streaks outrun the eye');
+  assert.ok(Math.abs(b / a - Math.round(b / a)) > 0.2, 'incommensurate octaves');
+  assert.ok(FLOW_RATE.chemical[0] < 1 && FLOW_RATE.chemical[1] < 1);
+  // phases wrap on the CPU: a long session never loses float precision in the shader
+  const ph = flowPhase(86400.123, FLOW_RATE.fusion);
+  assert.ok(ph.every(x => x >= 0 && x < 1));
+  assert.deepEqual(flowPhase(-3.3, [1, 1]).map(x => Math.round(x * 1e6) / 1e6), [0.7, 0.7]);
 });
 
 test('interpolated ship state carries the recorded turn rate, or null on old recordings', () => {
