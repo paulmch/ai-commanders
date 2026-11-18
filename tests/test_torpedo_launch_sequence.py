@@ -366,6 +366,73 @@ class TestIgnitionRules:
             else:
                 assert est < 1e-9
 
+    @pytest.mark.parametrize("cls,target,vel", [
+        ("corvette", (500e3, 0, 0), (0, 0, 0)), ("corvette", (-300e3, 100e3, 0), (0, 0, 0)),
+        ("cruiser_torpedo", (500e3, 0, 0), (3000, 0, 0)), ("cruiser_torpedo", (0, -400e3, 0), (0, 0, 0))])
+    def test_engine_pushes_along_the_nose_and_the_nose_keeps_its_limits(self, cls, target, vel):
+        """From ignition until the window closes (and at least 5 s) the main
+        thrust is the recorded nose within 1 deg, the nose never turns faster
+        than LAUNCH_TURN_RATE_DEG_S nor changes its spin faster than
+        LAUNCH_TURN_ACCEL_DEG_S2, and the launch drift is gone at the end."""
+        sim, sh, tg = _duel(cls, target, vel=vel)
+        n = 4 if cls == "cruiser_torpedo" else 1
+        for _ in range(n):
+            assert sim._handle_torpedo_command(sh, {"target_id": "tg"})
+        flights = list(sim.torpedoes)
+        prev = {tf.torpedo_id: (tf.torpedo.launch_seq.nose, tf.torpedo.launch_seq.omega)
+                for tf in flights}
+        rate = math.radians(TL.LAUNCH_TURN_RATE_DEG_S)
+        accel = math.radians(TL.LAUNCH_TURN_ACCEL_DEG_S2)
+        burned_in_window = {tf.torpedo_id: 0 for tf in flights}
+        for _ in range(25):
+            steering_before = {tf.torpedo_id: tf.torpedo.launch_seq.steering
+                               or tf.torpedo.in_launch_sequence for tf in flights}
+            _step(sim)
+            for tf in flights:
+                seq, torp = tf.torpedo.launch_seq, tf.torpedo
+                nose0, w0 = prev[tf.torpedo_id]
+                if steering_before[tf.torpedo_id]:
+                    assert TL.angle_between(nose0, seq.nose) <= rate * 1.0 + 1e-9
+                    assert (seq.omega - w0).magnitude <= accel * 1.0 + 1e-9
+                    if torp.last_main_direction is not None and torp.last_main_throttle > 0:
+                        assert math.degrees(TL.angle_between(torp.last_main_direction,
+                                                             seq.nose)) <= 1.0
+                        burned_in_window[tf.torpedo_id] += 1
+                prev[tf.torpedo_id] = (seq.nose, seq.omega)
+        for tf in flights:
+            seq = tf.torpedo.launch_seq
+            assert not seq.steering and burned_in_window[tf.torpedo_id] >= 1
+            los = (tg.position - tf.torpedo.position).normalized()
+            assert TL.sideways_drift(tf.torpedo, los).magnitude < 1.0
+
+    def test_no_sideways_impulse_at_ignition_and_drift_gone_in_first_burn_tick(self):
+        """The ignition tick's thrust is along the nose (never opposite the
+        drift while the nose points along the heading), and the first burning
+        tick removes the 20-30 m/s drift down to < 1 m/s (measured ~0.2)."""
+        sim, sh, tg = _duel("corvette")
+        assert sim._handle_torpedo_command(sh, {"target_id": "tg"})
+        tf = list(sim.torpedoes)[0]
+        torp = tf.torpedo
+        drift_before = 0.0
+        while torp.in_launch_sequence and sim.current_time < 30.0:
+            los = (tg.position - torp.position).normalized()
+            drift_before = TL.sideways_drift(torp, los).magnitude
+            _step(sim)
+        assert drift_before > 15.0                     # the tick that lit the torch
+        assert torp.last_main_throttle > 0
+        assert math.degrees(TL.angle_between(torp.last_main_direction,
+                                             torp.launch_seq.nose)) <= 1.0
+        los = (tg.position - torp.position).normalized()
+        assert TL.sideways_drift(torp, los).magnitude < 1.0
+
+    def test_crab_direction_nulls_the_drift_in_one_tick(self):
+        h = Vector3D(1, 0, 0)
+        d = TL.crab_direction(h, Vector3D(0, 25.0, 0), 118.0, 1.0)
+        assert d.y * 118.0 == pytest.approx(-25.0) and d.x > 0.97
+        assert math.degrees(TL.angle_between(d, h)) == pytest.approx(12.2, abs=0.1)
+        big = TL.crab_direction(h, Vector3D(0, 500.0, 0), 118.0, 1.0)
+        assert math.degrees(TL.angle_between(big, h)) == pytest.approx(TL.LAUNCH_CRAB_MAX_DEG)
+
     def test_ignition_cancels_the_separation_drift(self):
         sim, sh, tg = _duel("cruiser_torpedo")
         assert sim._handle_torpedo_command(sh, {"target_id": "tg"})

@@ -213,8 +213,9 @@ ai-commanders/
   10 m/s and drifts 1 s (eject), then separates on its RCS (~0.6 g, turning 30 deg/s onto its
   first guidance heading), and lights its torch (boost) once it is 50 m from its own and
   friendly hulls, its 15 deg exhaust cone misses its own hull and its nose is within 10 deg of
-  the heading; 8 s timeout once clear, 15 s hard cap; the torch first cancels the separation
-  drift. Typically 4 s, 7 s when the round must turn about. Separating rounds are nobody's
+  the heading; 8 s timeout once clear, 15 s hard cap; the nose is turned up to 30 deg off the heading
+  so the first second of burn removes the sideways separation drift (crab-angle light-off,
+  thrust always along the nose). Typically 4-5 s, 7 s when the round must turn about. Separating rounds are nobody's
   threat; forecasts include the hold. `AIC_LAUNCH_SEQUENCE=0` / `CombatSimulation.launch_sequence`
   = instant ignition (measurement only)
 - Two-stage kills: a non-reactor killing blow leaves an untargetable dying hulk
