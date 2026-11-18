@@ -1,0 +1,92 @@
+=== BATTLE p5w5_b7_opus_captains_no_admiral | claude-opus-5-5 vs claude-opus-5-5 | spend $0.00/$12.00 ===
+80 pts/side, max 4 ships, 12 turns of 30s. Reasoning medium. Admiral vision off.
+Costs: CO=corvette:24 FF=frigate:7 DD=destroyer:18 CA=cruiser:29 BC=battlecruiser:25 BB=battleship:43 DN=dreadnought:55 DS=dreadnought_siege:56 CT=cruiser_torpedo:100
+=== DRAFT BETA | claude-opus-5-5 | 79/80 pts | spend $0.13/$12.00 (+$0.26 held) ===
+Ships (4): Stiletto-1 CO 24 | Stiletto-2 CO 24 | Stiletto-3 CO 24 | Picket FF 7
+Formation: Picket screen, corvette wedge - The cheap Picket frigate goes forward as the vanguard. It will spot targets and take the first exchange. Th...
+Concept: An all-3g torpedo fleet: 24 rounds of 18 GJ each, fired together to overwhelm any 4-hull enemy's point defence. Every hull is fast, so we...
+=== DRAFT ALPHA | claude-opus-5-5 | 79/80 pts | spend $0.15/$12.00 ===
+Ships (4): Dart-1 CO 24 | Dart-2 CO 24 | Dart-3 CO 24 | Ward FF 7
+Formation: Ward-screened arrowhead - The cheap frigate Ward goes 40 km ahead in the center. It takes the first exchange and soaks enemy fire and...
+Concept: All ships can do 3g. Three torpedo boats carry 24 rounds between them, enough to fire coordinated salvos that can saturate a capital's po...
+=== CP 1 | t=30s | spend $1.39/$12.00 ===
+ALPHA claude-opus-5-5: 4/4 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 0% | Dart-2 CO hull 100% arm 36/36cm heat 0% | Dart-3 CO hull 100% arm 36/36cm heat 0% | Ward FF hull 100% arm 12/12cm heat 0%
+BETA claude-opus-5-5: 4/4 alive, hull 100% | Stiletto-1 CO hull 100% arm 36/36cm heat 0% | Stiletto-2 CO hull 100% arm 36/36cm heat 0% | Stiletto-3 CO hull 100% arm 36/36cm heat 0% | Picket FF hull 100% arm 12/12cm heat 0%
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 3 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 3 torps/0 impact, PD downed 0 torps
+A admiral: (no admiral - heuristic captains)
+B admiral: (no admiral - heuristic captains)
+Prompt cache: 0 hit / 12 write / 0 cold calls, 0.0k read + 131.2k written of 150.7k prompt tokens (0% read)
+=== CP 2 | t=60s | spend $1.70/$12.00 ===
+ALPHA claude-opus-5-5: 4/4 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 7% | Dart-2 CO hull 100% arm 36/36cm heat 0% | Dart-3 CO hull 100% arm 36/36cm heat 0% | Ward FF hull 100% arm 12/12cm heat 0%
+BETA claude-opus-5-5: 4/4 alive, hull 100% | Stiletto-1 CO hull 100% arm 36/36cm heat 8% | Stiletto-2 CO hull 100% arm 36/36cm heat 0% | Stiletto-3 CO hull 100% arm 36/36cm heat 5% | Picket FF hull 100% arm 12/12cm heat 5%
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 6 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 6 torps/0 impact, PD downed 0 torps
+A admiral: (no admiral - heuristic captains)
+B admiral: (no admiral - heuristic captains)
+Prompt cache: 8 hit / 12 write / 0 cold calls, 121.1k read + 131.2k written of 304.3k prompt tokens (40% read)
+=== CP 3 | t=90s | spend $2.05/$12.00 ===
+ALPHA claude-opus-5-5: 4/4 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 15% | Dart-2 CO hull 100% arm 36/36cm heat 0% | Dart-3 CO hull 100% arm 36/36cm heat 5% | Ward FF hull 100% arm 12/12cm heat 0%
+BETA claude-opus-5-5: 4/4 alive, hull 100% | Stiletto-1 CO hull 100% arm 36/36cm heat 15% [present] | Stiletto-2 CO hull 100% arm 36/36cm heat 4% | Stiletto-3 CO hull 100% arm 36/36cm heat 5% | Picket FF hull 100% arm 12/12cm heat 9%
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 9 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 8 torps/0 impact, PD downed 0 torps
+A admiral: (no admiral - heuristic captains)
+B admiral: (no admiral - heuristic captains)
+Prompt cache: 16 hit / 12 write / 0 cold calls, 242.1k read + 131.2k written of 462.6k prompt tokens (52% read)
+=== CP 4 | t=120s | spend $2.35/$12.00 ===
+ALPHA claude-opus-5-5: 4/4 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 22% [present] | Dart-2 CO hull 100% arm 36/36cm heat 1% | Dart-3 CO hull 100% arm 36/36cm heat 7% [present] | Ward FF hull 100% arm 12/12cm heat 1%
+BETA claude-opus-5-5: 3/4 alive, hull 75% | Stiletto-1 CO DEAD@107s | Stiletto-2 CO hull 100% arm 36/36cm heat 12% | Stiletto-3 CO hull 100% arm 36/36cm heat 6% [present] | Picket FF hull 100% arm 12/12cm heat 13%
+Hits: B:Stiletto-3>A:Dart-2 torp x2 | A:Dart-1>B:Stiletto-1 torp x1 | A:Dart-3>B:Stiletto-1 torp x1 | A:Dart-2>B:Stiletto-3 torp x1
+Kills: B:Stiletto-1 by A:Dart-3 (reactor_destroyed) @107s
+Fire: A 0 slugs/0 hit, 5 torps/3 impact, PD downed 0 torps ; B 0 slugs/0 hit, 4 torps/2 impact, PD downed 0 torps
+A admiral: (no admiral - heuristic captains)
+B admiral: (no admiral - heuristic captains)
+Prompt cache: 23 hit / 12 write / 0 cold calls, 348.3k read + 131.2k written of 604.1k prompt tokens (58% read)
+=== CP 5 | t=150s | spend $2.60/$12.00 ===
+ALPHA claude-opus-5-5: 4/4 alive, hull 100% | Dart-1 CO hull 100% arm 36/36cm heat 23% | Dart-2 CO hull 100% arm 36/36cm heat 1% | Dart-3 CO hull 100% arm 36/36cm heat 7% [present] | Ward FF hull 100% arm 12/12cm heat 2% [present]
+BETA claude-opus-5-5: 3/4 alive, hull 69% | Stiletto-1 CO DEAD@107s | Stiletto-2 CO hull 100% arm 36/36cm heat 19% | Stiletto-3 CO hull 75% arm 25/212cm heat 7% | Picket FF hull 100% arm 12/12cm heat 19%
+Hits: A:Dart-2>B:Stiletto-3 torp x1 | A:Dart-1>B:Stiletto-3 torp x1 | A:Dart-3>B:Stiletto-3 torp x1 | B:Stiletto-2>A:Dart-3 torp x1 | B:Stiletto-1>A:Dart-3 torp x1
+Kills: none
+Fire: A 0 slugs/0 hit, 1 torps/3 impact, PD downed 2 torps ; B 0 slugs/0 hit, 1 torps/2 impact, PD downed 0 torps
+A admiral: (no admiral - heuristic captains)
+B admiral: (no admiral - heuristic captains)
+Prompt cache: 30 hit / 12 write / 0 cold calls, 454.4k read + 131.2k written of 741.9k prompt tokens (61% read)
+=== CP 6 | t=180s | spend $2.73/$12.00 ===
+ALPHA claude-opus-5-5: 2/4 alive, hull 50% | Dart-1 CO hull 100% arm 36/36cm heat 29% | Dart-2 CO hull 100% arm 2/212cm heat 2% | Dart-3 CO DEAD@163s | Ward FF DEAD@177s
+BETA claude-opus-5-5: 2/4 alive, hull 44% | Stiletto-1 CO DEAD@107s | Stiletto-2 CO hull 100% arm 36/36cm heat 27% | Stiletto-3 CO hull 75% arm 25/212cm heat 14% | Picket FF DEAD@150s
+Hits: B:Stiletto-2>A:Dart-2 torp x2 | B:Stiletto-3>A:Ward torp x2 | A:Dart-2>B:Picket torp x1 | B:Stiletto-3>A:Dart-3 torp x1 | B:Stiletto-2>A:Dart-3 torp x1 | +2 more
+Kills: B:Picket by A:Dart-2 (reactor_destroyed) @150s ; A:Dart-3 crippled by B:Stiletto-1 (detonates in 2s) @161s ; A:Dart-3 by B:Stiletto-1 (reactor_detonation) @163s ; A:Ward by B:Stiletto-3 (reactor_destroyed) @177s
+Fire: A 0 slugs/0 hit, 0 torps/1 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/8 impact, PD downed 1 torps
+A admiral: (no admiral - heuristic captains)
+B admiral: (no admiral - heuristic captains)
+Prompt cache: 34 hit / 12 write / 0 cold calls, 514.2k read + 131.2k written of 818.1k prompt tokens (63% read)
+=== CP 7 | t=210s | spend $2.85/$12.00 ===
+ALPHA claude-opus-5-5: 2/4 alive, hull 39% | Dart-1 CO hull 100% arm 36/36cm heat 36% | Dart-2 CO hull 55% arm 0/42cm heat 5% | Dart-3 CO DEAD@163s | Ward FF DEAD@177s
+BETA claude-opus-5-5: 2/4 alive, hull 44% | Stiletto-1 CO DEAD@107s | Stiletto-2 CO hull 100% arm 9/42cm heat 35% | Stiletto-3 CO hull 75% arm 25/212cm heat 22% | Picket FF DEAD@150s
+Hits: A:Dart-2>B:Stiletto-2 torp x1 | B:Stiletto-3>A:Dart-2 torp x1
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/1 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/1 impact, PD downed 0 torps
+A admiral: (no admiral - heuristic captains)
+B admiral: (no admiral - heuristic captains)
+Prompt cache: 38 hit / 12 write / 0 cold calls, 573.9k read + 131.2k written of 891.9k prompt tokens (64% read)
+=== CP 8 | t=240s | spend $2.96/$12.00 ===
+ALPHA claude-opus-5-5: 2/4 alive, hull 30% | Dart-1 CO hull 100% arm 36/36cm heat 44% | Dart-2 CO hull 19% arm 0/36cm heat 5% | Dart-3 CO DEAD@163s | Ward FF DEAD@177s
+BETA claude-opus-5-5: 2/4 alive, hull 44% | Stiletto-1 CO DEAD@107s | Stiletto-2 CO hull 100% arm 9/42cm heat 42% | Stiletto-3 CO hull 75% arm 25/212cm heat 29% | Picket FF DEAD@150s
+Hits: B:Stiletto-3>A:Dart-2 torp x1
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/1 impact, PD downed 0 torps
+A admiral: (no admiral - heuristic captains)
+B admiral: (no admiral - heuristic captains)
+Prompt cache: 42 hit / 12 write / 0 cold calls, 633.7k read + 131.2k written of 964.1k prompt tokens (66% read)
+=== RESULT | t=256s | after CP 8 | spend $2.96/$12.00 ===
+Winner: BETA - Alpha fleet combat-ineffective (no weapon left that can deal damage)
+ALPHA claude-opus-5-5: 2/4 alive, hull 30% | Dart-1 CO hull 100% arm 36/36cm heat 48% | Dart-2 CO hull 19% arm 0/36cm heat 5% | Dart-3 CO DEAD@163s | Ward FF DEAD@177s
+BETA claude-opus-5-5: 2/4 alive, hull 44% | Stiletto-1 CO DEAD@107s | Stiletto-2 CO hull 100% arm 9/42cm heat 43% | Stiletto-3 CO hull 75% arm 25/212cm heat 33% | Picket FF DEAD@150s
+Final interval - Hits: none
+Final interval - Kills: none
+Final interval - Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+Spend: $2.9565 reported, $2.9565 committed of $12.00 limit, 54 model calls
+Recording: /home/plmch/ai-commanders/visualizer/public/recordings/p5w5_b7_opus_captains_no_admiral.json
