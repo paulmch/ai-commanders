@@ -231,12 +231,14 @@ export function leaderTo(x, y, r, box) {
  * @param {Array<{x, y, w, h}>} o.panels - HUD panels to keep clear of
  * @param {Array<{id, faction, x, y, r, name, type, dying?}>} o.ships - on screen, alive or dying
  * @param {Array<{key, target, count, eta, x, y, text}>} [o.waves] - head on screen
+ * @param {Array<{key, x, y, tx, ty, text}>} [o.misses] - torpedo miss markers at the closest
+ *   point (tx/ty: the target's screen point); placed after the waves, none in minimal mode
  * @param {string} [o.mode] - auto | minimal | full
  * @param {string|null} [o.selectedId]
- * @returns {{ships: Map<string, {kind, box, leader, group}>, groups: Array, waves: Array}}
+ * @returns {{ships: Map<string, {kind, box, leader, group}>, groups: Array, waves: Array, misses: Array}}
  *   kind: 'card' | 'chip' | 'group' (inside a group chip) | 'none' (bracket only)
  */
-export function layoutTactical({ view, panels = [], ships = [], waves = [], mode = DEFAULT_LABEL_MODE, selectedId = null }) {
+export function layoutTactical({ view, panels = [], ships = [], waves = [], misses = [], mode = DEFAULT_LABEL_MODE, selectedId = null }) {
   mode = normalizeLabelMode(mode);
   const sorted = [...ships].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const occupied = [...panels, ...sorted.map(shipBox)];
@@ -290,6 +292,14 @@ export function layoutTactical({ view, panels = [], ships = [], waves = [], mode
     const box = place(w.x, w.y, 5, wb.w, wb.h, side, true);
     wavesOut.push({ ...w, box, leader: box ? leaderTo(w.x, w.y, 5, box) : null });
   }
+  // Miss markers: a short-lived chip at the closest point, on the side away
+  // from the ship it missed (the label density key: none in minimal)
+  const missesOut = [];
+  for (const m of mode === 'minimal' ? [] : misses) {
+    const side = Math.abs(m.x - (m.tx ?? m.x)) < 1 ? 1 : (m.x < m.tx ? -1 : 1);
+    const box = place(m.x, m.y, 4, textWidth(m.text, 10), WAVE_H, side, true);
+    missesOut.push({ ...m, box, leader: box ? leaderTo(m.x, m.y, 4, box) : null });
+  }
   for (const g of groups) {
     g.box = place(g.x, g.y, g.r, textWidth(g.text, 18), CHIP_H, g.side);
     g.leader = g.box ? leaderTo(g.x, g.y, g.r, g.box) : null;
@@ -300,5 +310,5 @@ export function layoutTactical({ view, panels = [], ships = [], waves = [], mode
     const box = place(s.x, s.y, r, textWidth(s.short ?? shortName(s.name)), CHIP_H, sideOf(s));
     out.set(s.id, { kind: box ? 'chip' : 'none', box, leader: box ? leaderTo(s.x, s.y, r, box) : null, group: null });
   }
-  return { ships: out, groups, waves: wavesOut };
+  return { ships: out, groups, waves: wavesOut, misses: missesOut };
 }

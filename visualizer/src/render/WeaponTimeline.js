@@ -6,6 +6,43 @@ import { REAL_LENGTH_M } from '../TrackDisplay.js';
 
 export const ION_LIFE = 1;
 export const MISS_LIFE = 6;
+/**
+ * A torpedo that misses is resolved by the engine at its closest approach
+ * and leaves the trace there. The viewer flies it on along its last
+ * recorded velocity (engine lit or dark as recorded) for this long, fading
+ * out (torpedoMissOpacity): long enough for the eye to follow it past the
+ * ship up close, gone before it clutters a fleet view.
+ */
+export const TORPEDO_MISS_LIFE = 4;
+/** A torpedo miss marker ("MISS 2.4 km · TANK DRY") shows this long from the closest approach. */
+export const MISS_MARK_S = 4;
+/** No marker for a round that never came closer than this to its target (a far cull). */
+export const MISS_MARK_MAX_KM = 25;
+
+/** Opacity 1..0 of a missed torpedo `age` s after its miss: monotonic, 0 from TORPEDO_MISS_LIFE. */
+export function torpedoMissOpacity(age) {
+  if (!(age > 0)) return 1;
+  const f = Math.min(1, age / TORPEDO_MISS_LIFE);
+  return (1 - f) * (1 - f);
+}
+
+/** Opacity of a miss marker `age` s after its closest approach: in fast, out over the last second. */
+export function missMarkOpacity(age) {
+  if (!(age >= 0) || age >= MISS_MARK_S) return 0;
+  return Math.min(1, age / 0.15, (MISS_MARK_S - age) / 1);
+}
+
+/**
+ * Marker text for a missed torpedo: distance of the closest approach and the
+ * cause when the recording gives one (blinded seeker, empty tank, target
+ * already dead, culled leaving the battle).
+ */
+export function missMarkText(cpaKm, cause) {
+  const d = !Number.isFinite(cpaKm) ? '' : cpaKm >= 1 ? `${cpaKm.toFixed(1)} km`
+    : cpaKm < 0.001 ? '< 1 m' : `${Math.round(cpaKm * 1000)} m`;
+  const c = { blinded: 'BLINDED', dry: 'TANK DRY', lost: 'TARGET LOST', left: 'LEFT BATTLE' }[cause];
+  return `MISS${d ? ` ${d}` : ''}${c ? ` · ${c}` : ''}`;
+}
 export const IMPACT_LIFE = 0.46;
 /** Loader torpedo moments this module renders itself (main.js skips them). */
 export const OWNED_MOMENTS = new Set(['seeker_kill', 'intercepted', 'destroyed', 'burnout']);
@@ -507,6 +544,7 @@ export class WeaponTimeline {
         this.moments.push({ time: e.timestamp, kind: 'lightoff', track: tr, seed: tr.seed });
       }
       if (e.event_type === 'torpedo_fuel_exhausted') {
+        tr.dryAt = Math.min(tr.dryAt ?? Infinity, e.timestamp);
         this.moments.push({ time: e.timestamp, kind: 'burnout', track: tr, seed: tr.seed });
       }
       if (e.event_type === 'torpedo_retargeted') {
@@ -544,6 +582,12 @@ export class WeaponTimeline {
       if (!tr || !rec.outcome) continue;
       const o = rec.outcome;
       tr.end = o.timestamp;
+      if (o.type === 'miss') {
+        // a miss keeps flying past its closest approach, then fades
+        tr.missAt = o.timestamp;
+        tr.end = o.timestamp + TORPEDO_MISS_LIFE;
+        tr.miss = { target: o.targetId, cpaKm: o.closestApproachKm };
+      }
       if (o.type === 'impact') {
         tr.impact = loader.getShipPositionAt(o.targetId, o.timestamp);
         this.moments.push({ time: tr.end, kind: 'hit', track: tr, target: o.targetId, position: tr.impact, energy: o.damageGj, seed: tr.seed });
@@ -573,7 +617,11 @@ export class WeaponTimeline {
       }
     }
     for (const tr of this.torpedoes.values()) {
-      if (tr.end === Infinity && tr.samples.at(-1).t < this.end) tr.end = tr.samples.at(-1).t + 1;
+      // a round that left the trace with no outcome event coasts on and fades too
+      if (tr.end === Infinity && tr.samples.at(-1).t < this.end) {
+        tr.missAt = tr.samples.at(-1).t;
+        tr.end = tr.missAt + TORPEDO_MISS_LIFE;
+      }
       this.prependLaunch(tr);
       tr.thrusters = buildTorpedoThrusters(tr.samples);
     }
@@ -594,6 +642,74 @@ export class WeaponTimeline {
     for (const tr of this.slugs.values()) clear(tr, MISS_CLEAR_RADII);
     for (const tr of this.torpedoes.values()) clear(tr, SKIM_CLEAR_RADII);
     this.moments.sort((a, b) => a.time - b.time);
+    this.missMarks = this.buildMissMarks(events);
+  }
+
+  /**
+   * One marker per torpedo miss near its target: at the closest approach
+   * (the engine resolves a miss there; a `left_battle` cull happens later, so
+   * its closest point is found on the trace), riding with the target at the
+   * offset the round passed it by. Sorted by time. Pure.
+   */
+  buildMissMarks(events) {
+    const reason = new Map();
+    for (const e of events) if (e.event_type === 'torpedo_miss' && e.data?.torpedo_id) reason.set(e.data.torpedo_id, e.data.reason || null);
+    const marks = [];
+    const a = makeSample(), b = makeSample();
+    for (const tr of this.torpedoes.values()) {
+      if (!tr.miss) continue;
+      const ship = this.ships.get(tr.miss.target);
+      if (!ship || !tr.samples.length) continue;
+      const culled = reason.get(tr.id) === 'left_battle';
+      let tCpa = tr.missAt, best = Infinity;
+      if (culled) {
+        for (const smp of tr.samples) {
+          if (smp.t < tr.start || !sampleTrack(ship, smp.t, b) || b.state?.destroyed) continue;
+          const d = Math.hypot(smp.state.pos[0] - b.pos[0], smp.state.pos[1] - b.pos[1], smp.state.pos[2] - b.pos[2]);
+          if (d < best) { best = d; tCpa = smp.t; }
+        }
+      }
+      const cpaKm = Number.isFinite(tr.miss.cpaKm) && tr.miss.cpaKm >= 0 ? tr.miss.cpaKm : best / 1000;
+      if (!(cpaKm <= MISS_MARK_MAX_KM) || (culled && !(best / 1000 <= MISS_MARK_MAX_KM))) continue;
+      // the closest point itself: trace frames are a second apart and a round
+      // covers kilometres in one, so refine on the straight relative path
+      // within a second of the frame (where the engine resolved it)
+      this.sample(tr, tCpa, a);
+      if (!sampleTrack(ship, tCpa, b)) continue;
+      {
+        const dr = [0, 1, 2].map(k => a.pos[k] - b.pos[k]), dv = [0, 1, 2].map(k => a.vel[k] - b.vel[k]);
+        const v2 = dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2];
+        const dt = v2 > 1e-6 ? Math.max(-1, Math.min(1, -(dr[0] * dv[0] + dr[1] * dv[1] + dr[2] * dv[2]) / v2)) : 0;
+        tCpa = Math.max(tr.start, tCpa + dt);
+        this.sample(tr, tCpa, a);
+        if (!sampleTrack(ship, tCpa, b)) continue;
+      }
+      if (b.state?.destroyed) continue;   // nothing left to have missed: the round just coasts out
+      const lost = !!b.state?.dying;
+      const cause = tCpa >= tr.disabledAt ? 'blinded' : tCpa >= (tr.dryAt ?? Infinity) ? 'dry' : lost ? 'lost' : culled ? 'left' : null;
+      marks.push({ t: tCpa, track: tr, target: tr.miss.target, cpaKm, cause, text: missMarkText(cpaKm, cause),
+        offset: [a.pos[0] - b.pos[0], a.pos[1] - b.pos[1], a.pos[2] - b.pos[2]] });
+    }
+    return marks.sort((x, y) => x.t - y.t || (x.track.id < y.track.id ? -1 : 1));
+  }
+
+  /**
+   * Miss markers showing at `time`: {mark, age, alpha, pos} with pos the
+   * marker's world point in metres (target's position + the pass offset).
+   * Reuses `out`.
+   */
+  missMarksAt(time, out = []) {
+    out.length = 0;
+    const g = this._mg || (this._mg = makeSample());
+    for (const mark of this.missMarks || []) {
+      if (mark.t > time) break;
+      const age = time - mark.t, alpha = missMarkOpacity(age);
+      if (!(alpha > 0)) continue;
+      const ship = this.ships.get(mark.target);
+      if (!ship || !sampleTrack(ship, time, g)) continue;
+      out.push({ mark, age, alpha, pos: [g.pos[0] + mark.offset[0], g.pos[1] + mark.offset[1], g.pos[2] + mark.offset[2]] });
+    }
+    return out;
   }
 
   /**
@@ -630,7 +746,7 @@ export class WeaponTimeline {
     out.length = 0;
     const s = this._ts || (this._ts = makeSample()), g = this._tg || (this._tg = makeSample());
     for (const tr of this.torpedoes.values()) {
-      if (time < tr.start || time >= tr.end || !tr.samples.length) continue;
+      if (time < tr.start || time >= tr.end || time >= (tr.missAt ?? Infinity) || !tr.samples.length) continue;
       this.sample(tr, time, s);
       const target = s.state?.target;
       const ship = target ? this.ships.get(target) : null;
