@@ -673,7 +673,7 @@ promised "retarget the nearest".
 
 - **Launch profiles** (`src/torpedo.py`): `sprint` (default, unchanged) and `reserve` (cruise at
   8 km/s closure and keep the tank for a reassignment; it burns what is left before impact).
-  Reserve lands more rounds per launch and kills fewer hulls; point defence blinds 36 % of its
+  Reserve lands more rounds per launch and kills fewer hulls; point defence blinds 34 % of its
   rounds against 26 % of sprint's.
 - **Datalink** (`src/torpedo_link.py`): when a target dies, becomes a hulk or surrenders, its
   rounds are reassigned as a group against one shared rounds-needed board (the same board the
