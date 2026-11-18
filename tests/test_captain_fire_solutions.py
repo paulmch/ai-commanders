@@ -28,7 +28,6 @@ from src.simulation import (
 from src.torpedo import GuidanceMode, Torpedo, TorpedoSpecs
 from src.llm.fire_solutions import (
     LOW_YIELD_GJ,
-    OVERKILL_MARGIN_ROUNDS,
     fly_torpedo,
     rounds_inbound,
     salvo_to_saturate,
@@ -244,20 +243,22 @@ class TestTorpedoVerdicts:
 
     def test_overkill_counts_live_friendly_rounds_only(self, fleet):
         sim, sh, tg = _duel(fleet, 400.0, 0.0)
-        need = torpedo_solution(sim, sh, tg, fleet).salvo_to_saturate
+        # OVERKILL = at least what he needs (torpedo_link.rounds_needed: PD
+        # soak + rounds to kill - the datalink's own estimate).
+        need = torpedo_solution(sim, sh, tg, fleet).rounds_needed
         # Same-side live seekers homing on him (a blinded one does not count).
-        for i in range(need + OVERKILL_MARGIN_ROUNDS):
+        for i in range(need):
             torp = Torpedo(specs=TorpedoSpecs.trident(), position=Vector3D(300_000, i * 10.0, 0),
                            velocity=Vector3D(-12_000, 0, 0), target_id="beta_1")
             sim.torpedoes.append(TorpedoInFlight(torpedo_id=f"t{i}", torpedo=torp,
                                                  source_ship_id="alpha_1"))
         sim.torpedoes[0].is_disabled = True
-        assert len(rounds_inbound(sim, "alpha", "beta_1")) == need + OVERKILL_MARGIN_ROUNDS - 1
+        assert len(rounds_inbound(sim, "alpha", "beta_1")) == need - 1
         assert torpedo_solution(sim, sh, tg, fleet).verdict == "REACHABLE"
         sim.torpedoes[0].is_disabled = False
         sol = torpedo_solution(sim, sh, tg, fleet)
         assert sol.verdict == "OVERKILL"
-        assert sol.friendly_inbound == need + OVERKILL_MARGIN_ROUNDS
+        assert sol.friendly_inbound == need
 
     @pytest.mark.usefixtures("all_round_fire")  # head-on scenario; see tests/conftest.py
     def test_salvo_sizing_uses_the_bound_pd_numbers(self, fleet):

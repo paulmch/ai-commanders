@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .client import LLMCallError
+from .torpedo_doctrine import LINK_FACT, PROFILE_FACT
 
 try:
     from ..drive_plume import formation_plume_conflicts
@@ -795,10 +796,8 @@ DOCTRINE NOTES:
   ~300 km.
 - Torpedoes: 12g guided rounds. Point defense needs 3+ turrets dwelling on a
   round to blind its seeker, so SATURATION (many rounds arriving together)
-  beats trickled launches. Rounds whose target dies mid-flight retarget a
-  reachable enemy on their own (live seeker + fuel permitting; healthy
-  seekers maximize impact energy, PD-singed ones race the fastest
-  intercept before blinding). Torpedo hulls die fast if caught alone.
+  beats trickled launches. {LINK_FACT} Launch profiles: {PROFILE_FACT}
+  Torpedo hulls die fast if caught alone.
 - Point defense also shaves incoming coilgun slugs. Ships with 3-4 PD turrets
   anchor a defensive wall.
 - Fast light hulls (3g) can dictate range against slow capitals (<= 1g).

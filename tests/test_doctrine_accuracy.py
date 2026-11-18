@@ -1552,3 +1552,83 @@ class TestEvasionDriveClaims:
         assert quoted[8] == pytest.approx(got[("flip", "destroyer", "None")]["close60"], abs=0.05)
         loc = got[("escape", "destroyer", "dodge")]["loc"]
         assert loc.get("tail", 0) + loc.get("lateral", 0) > 2 * loc.get("nose", 0)
+
+
+# =============================================================================
+# Torpedo launch profiles and the datalink (src/llm/torpedo_doctrine.py)
+# =============================================================================
+
+class TestTorpedoLinkDoctrine:
+    """PROFILE_FACT / LINK_FACT quote engine constants and the measurements in
+    tests/fixtures/torpedo_link_facts.json (scripts/torpedo_link_facts.py)."""
+
+    @pytest.fixture(scope="class")
+    def facts(self):
+        from pathlib import Path
+        return json.loads((Path(__file__).parent / "fixtures" /
+                           "torpedo_link_facts.json").read_text())
+
+    def test_quoted_numbers_are_the_fixture(self, facts):
+        from src.llm.torpedo_doctrine import FACTS
+        for prof in ("sprint", "reserve"):
+            got, ref = FACTS[prof], facts["profiles"][prof]
+            for k in ("tof_500_s", "gj_500", "runner_ff_gj", "reach_200_km"):
+                assert got[k] == round(ref[k]), (prof, k)
+        for k in ("pct_orphaned", "pct_reassigned", "pct_reassigned_hit"):
+            assert FACTS["battles"][k] == facts["battles"][k], k
+
+    def test_constants_are_the_engine(self, facts):
+        from src import torpedo as T, torpedo_link as L
+        from src.llm.torpedo_doctrine import PROFILE_FACT
+        c = facts["constants"]
+        assert c["RESERVE_CRUISE_CLOSING_KPS"] == T.RESERVE_CRUISE_CLOSING_KPS
+        assert c["RESERVE_TERMINAL_WINDOW_S"] == T.RESERVE_TERMINAL_WINDOW_S
+        assert c["REASSIGN_RESERVE_BASE_KPS"] == L.REASSIGN_RESERVE_BASE_KPS
+        assert c["REASSIGN_RESERVE_PER_S_KPS"] == L.REASSIGN_RESERVE_PER_S_KPS
+        assert f"cruises at {T.RESERVE_CRUISE_CLOSING_KPS:.0f} km/s" in PROFILE_FACT
+        assert f"the last {T.RESERVE_TERMINAL_WINDOW_S:.0f} s" in PROFILE_FACT
+
+    def test_the_fixture_is_this_engine(self, facts):
+        """Re-fly the two 500 km profile flights."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "torpedo_profile_sweep", "scripts/torpedo_profile_sweep.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        from src import torpedo as T
+        try:
+            for prof, setting in (("sprint", None), ("reserve", (
+                    T.RESERVE_CRUISE_CLOSING_KPS, T.RESERVE_TERMINAL_WINDOW_S))):
+                got = mod.flight(setting, 500.0)
+                assert got["tof_s"] == facts["profiles"][prof]["tof_500_s"]
+                assert got["impact_gj"] == pytest.approx(facts["profiles"][prof]["gj_500"], abs=0.2)
+        finally:
+            mod._set((8.0, 20.0))
+        assert (T.RESERVE_CRUISE_CLOSING_KPS, T.RESERVE_TERMINAL_WINDOW_S) == (8.0, 20.0)
+
+    def test_every_commander_surface_states_the_link_and_the_profiles(self):
+        from src.llm.torpedo_doctrine import LINK_FACT, PROFILE_FACT
+        from src.llm import admiral_tools, fleet_draft, prompts
+        issue = next(t for t in admiral_tools.ADMIRAL_TOOLS
+                     if t["function"]["name"] == "issue_order")["function"]["parameters"]
+        assert LINK_FACT in issue["properties"]["torpedo_salvo"]["description"]
+        assert issue["properties"]["torpedo_profile"]["description"] == PROFILE_FACT
+        assert LINK_FACT in prompts.TORPEDO_TACTICS_BLOCK
+        assert PROFILE_FACT in prompts.TORPEDO_TACTICS_BLOCK
+        assert LINK_FACT in prompts.ADMIRAL_TORPEDO_DOCTRINE
+        assert PROFILE_FACT in prompts.ADMIRAL_TORPEDO_DOCTRINE
+        draft = fleet_draft._selection_prompt("A", "alpha", 100, 8, "CAT", 500)
+        assert LINK_FACT in draft and PROFILE_FACT in draft
+
+    def test_no_surface_promises_more_retargeting_than_the_engine_delivers(self):
+        """The pre-link text ("retarget the nearest reachable enemy ... so
+        overkill partially carries onto the next hull") is gone: the engine
+        never picked the nearest, and the Opus admiral read it as 'overkill
+        retargets'."""
+        import inspect
+        from src.llm import admiral_tools, fleet_draft, prompts, tools, mcp_server
+        for mod in (admiral_tools, fleet_draft, prompts, tools, mcp_server):
+            text = inspect.getsource(mod)
+            assert "retarget the nearest" not in text, mod.__name__
+            assert "overkill partially carries" not in text, mod.__name__
+            assert "retarget a\n  reachable enemy on their own" not in text, mod.__name__

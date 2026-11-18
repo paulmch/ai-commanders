@@ -45,6 +45,8 @@ try:
         HEAT_GUN_HOLD_FRACTION,
         REACTOR_MELTDOWN_HEAT_FRACTION,
     )
+    from ..torpedo import normalize_torpedo_profile
+    from .torpedo_doctrine import LINK_FACT, PROFILE_FACT
 except ImportError:  # pragma: no cover - script-style imports (src/ on sys.path)
     from thermal import (
         AUTO_RADIATOR_DEFAULT_PCT,
@@ -52,6 +54,8 @@ except ImportError:  # pragma: no cover - script-style imports (src/ on sys.path
         HEAT_GUN_HOLD_FRACTION,
         REACTOR_MELTDOWN_HEAT_FRACTION,
     )
+    from torpedo import normalize_torpedo_profile
+    from llm.torpedo_doctrine import LINK_FACT, PROFILE_FACT
 
 import math
 
@@ -764,6 +768,11 @@ def create_mcp_server(
                             "type": "string",
                             "description": "ID of the target ship",
                         },
+                        "profile": {
+                            "type": "string",
+                            "enum": ["sprint", "reserve"],
+                            "description": PROFILE_FACT + " " + LINK_FACT,
+                        },
                     },
                     "required": ["ship_id", "target_id"],
                 },
@@ -1190,6 +1199,8 @@ def create_mcp_server(
                 ship_id=arguments.get("ship_id"),
                 parameters={
                     "target_id": arguments.get("target_id"),
+                    **({"profile": normalize_torpedo_profile(arguments.get("profile"))}
+                       if arguments.get("profile") else {}),
                 },
                 timestamp=timestamp,
             )

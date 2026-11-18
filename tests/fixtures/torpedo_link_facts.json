@@ -1,0 +1,34 @@
+{
+ "about": "Measured facts behind src/llm/torpedo_doctrine.py (torpedo launch profiles and the datalink), bound by tests/test_doctrine_accuracy.py. Regenerate with the command below after a change to torpedo guidance, the datalink or point defence.",
+ "command": "uv run python scripts/torpedo_link_facts.py --seeds 3 --workers 8 --fixture tests/fixtures/torpedo_link_facts.json",
+ "constants": {
+  "RESERVE_CRUISE_CLOSING_KPS": 8.0,
+  "RESERVE_TERMINAL_WINDOW_S": 20.0,
+  "REASSIGN_RESERVE_BASE_KPS": 0.25,
+  "REASSIGN_RESERVE_PER_S_KPS": 0.02
+ },
+ "profiles": {
+  "sprint": {
+   "tof_500_s": 72.0,
+   "gj_500": 22.3,
+   "runner_ff_gj": 17.1,
+   "reach_200_km": 21.9
+  },
+  "reserve": {
+   "tof_500_s": 81.0,
+   "gj_500": 22.7,
+   "runner_ff_gj": 14.8,
+   "reach_200_km": 111.7
+  }
+ },
+ "battles": {
+  "battles": 36,
+  "launched": 1824,
+  "orphaned": 1057,
+  "reassigned": 650,
+  "reassigned_hit": 349,
+  "pct_orphaned": 58,
+  "pct_reassigned": 61,
+  "pct_reassigned_hit": 54
+ }
+}

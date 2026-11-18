@@ -8,6 +8,7 @@ rather than directly controlling ships.
 from typing import List, Dict, Any
 
 from .communication import MAX_DISCUSSION_EXCHANGES
+from .torpedo_doctrine import LINK_FACT, PROFILE_FACT
 
 
 # Admiral tools for fleet command
@@ -72,10 +73,13 @@ ADMIRAL_TOOLS = [
                             "simultaneous = 24/24 through, same 4 spaced 30s = 12/24). "
                             "Sizing: ~4 rounds kill a destroyer, ~6 kill anything; a "
                             "receding evader outruns the rounds. "
-                            "Rounds whose target dies mid-flight retarget the nearest "
-                            "reachable enemy on their own if their seeker is alive and "
-                            "fuel allows, so overkill partially carries onto the next hull."
+                            + LINK_FACT
                         )
+                    },
+                    "torpedo_profile": {
+                        "type": "string",
+                        "enum": ["sprint", "reserve"],
+                        "description": PROFILE_FACT,
                     },
                     "torpedo_target": {
                         "type": "string",
@@ -269,6 +273,8 @@ ADMIRAL_TOOLS = [
                                 "ship_name": {"type": "string"},
                                 "rounds": {"type": "integer", "minimum": 0, "maximum": 12},
                                 "target": {"type": "string"},
+                                "profile": {"type": "string", "enum": ["sprint", "reserve"],
+                                            "description": "launch profile (default sprint)"},
                             },
                             "required": ["ship_name", "rounds"],
                         },
@@ -436,7 +442,8 @@ def get_admiral_tools(intent_only: bool = False) -> List[Dict[str, Any]]:
             # maneuver / throttle invited orders that are silently dropped.
             params = fn["parameters"]
             params["properties"] = {k: v for k, v in params["properties"].items()
-                                    if k in ("ship_name", "torpedo_salvo", "torpedo_target")}
+                                    if k in ("ship_name", "torpedo_salvo", "torpedo_target",
+                                             "torpedo_profile")}
             params["required"] = ["ship_name"]
         elif fn["name"] == "set_fleet_directive":
             fn["description"] = INTENT_ONLY_DIRECTIVE

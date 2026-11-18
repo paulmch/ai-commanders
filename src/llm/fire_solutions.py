@@ -20,7 +20,8 @@ Verdicts (most severe first):
   UNREACHABLE  misses even if the target holds course
   ESCAPABLE    connects only if the target holds course; EVADE escapes it
   TOO CLOSE    connects, but guidance cannot build speed in the range left
-  OVERKILL     enough friendly rounds are already inbound
+  OVERKILL     friendly rounds already inbound >= what he needs
+               (torpedo_link.rounds_needed: PD soak + rounds to kill)
   REACHABLE    connects whether the target holds course or evades
 The coasting flight is flown first and decides UNREACHABLE on its own; the
 evading flight is flown only when the coasting one connects.
@@ -52,10 +53,6 @@ SHADOW_DT_MAX_S = 1.0
 # 15 / 40 / 100 km land ~0.5 / ~1.6 / ~5 GJ - guidance needs room to build
 # speed - against ~19-22 GJ from 250-400 km.
 LOW_YIELD_GJ = 5.0
-# OVERKILL once this many rounds BEYOND the salvo that saturates the
-# target's point defense are already inbound: that is several un-blinded
-# torpedoes landing together, more than most hulls survive.
-OVERKILL_MARGIN_ROUNDS = 3
 
 
 @dataclass
@@ -66,6 +63,12 @@ class TorpedoShot:
     impact_kps: Optional[float] = None
     impact_gj: Optional[float] = None
     note: str = ""          # why it missed (fuel / horizon) when it did
+    profile: str = "sprint"
+    cross_kps: Optional[float] = None   # closure entering the PD envelope
+    # A reassignment at mid-flight: km to go then and how far abeam the
+    # datalink could swing the round (torpedo_link.reassign_reach_km).
+    mid_to_go_km: Optional[float] = None
+    reach_km: Optional[float] = None
 
 
 @dataclass
@@ -83,6 +86,13 @@ class TorpedoSolution:
     friendly_inbound: int           # live friendly seekers already homing on him
     verdict: str = "REACHABLE"
     reason: str = ""
+    # torpedo_link.rounds_needed: PD soak + rounds to kill (the datalink's
+    # own estimate of what he needs; OVERKILL = at least that many inbound)
+    rounds_needed: Optional[int] = None
+    # The same shot flown on the 'reserve' launch profile (vs coasting).
+    vs_coasting_reserve: Optional[TorpedoShot] = None
+    soak_sprint: Optional[int] = None
+    soak_reserve: Optional[int] = None
 
     @property
     def pd_cover(self) -> int:
@@ -124,7 +134,25 @@ class TorpedoSolution:
             return f"TOO CLOSE: {self.reason} | {inbound}"
         if self.verdict == "OVERKILL":
             return f"OVERKILL: {self.reason} | {flight}"
-        return f"REACHABLE | {flight} | {cover} | {inbound}"
+        return f"REACHABLE | {flight} | {cover} | {inbound}{self.profiles_text()}"
+
+    def profiles_text(self) -> str:
+        """' | PROFILES sprint ... / reserve ...': both launch profiles for
+        this shot (vs a target holding course): time to impact, impact
+        energy, rounds his PD blinds out of a salvo, and how far abeam the
+        datalink can swing a round that loses its target at mid-flight."""
+        def one(shot, soak):
+            if shot is None or not shot.hits:
+                return f"{shot.profile if shot else '?'} misses"
+            reach = (f", reassigned at {shot.mid_to_go_km:.0f} km to go reaches "
+                     f"~{shot.reach_km:.0f} km abeam" if shot.reach_km is not None else "")
+            blinds = f", PD blinds {soak} of a salvo" if soak is not None else ""
+            return (f"{shot.profile} TOF ~{shot.tof_s:.0f} s ~{shot.impact_gj:.0f} GJ"
+                    f"{blinds}{reach}")
+        if self.vs_coasting_reserve is None:
+            return ""
+        return (f" | PROFILES {one(self.vs_coasting, self.soak_sprint)} / "
+                f"{one(self.vs_coasting_reserve, self.soak_reserve)}")
 
 
 def _shadow_dt(sim: Any) -> float:
@@ -149,6 +177,7 @@ def fly_torpedo(
     fleet_data: Dict[str, Any],
     target_evades: bool,
     horizon_s: float = SHADOW_HORIZON_S,
+    profile: str = "sprint",
 ) -> Optional[TorpedoShot]:
     """
     Fly one torpedo from ``shooter`` at ``target`` on a private engine shadow.
@@ -186,21 +215,42 @@ def fly_torpedo(
                                        start_time=0.0, duration=1e9, throttle=1.0)
     shadow.add_ship(sh)
     shadow.add_ship(tg)
-    if not shadow._handle_torpedo_command(sh, {"target_id": "target"}):
+    cmd = {"target_id": "target"}
+    if profile != "sprint":
+        cmd["profile"] = profile
+    if not shadow._handle_torpedo_command(sh, cmd):
         return None
+    from .. import torpedo_link
+    tf = shadow.torpedoes[-1]
+    start_km = tf.torpedo.position.distance_to(tg.position) / 1000.0
+    pd_km = torpedo_link._laser(fleet_data).range_km
+    cross = mid = reach = None
     fuel_out = False
     while shadow.current_time < horizon_s and shadow.torpedoes:
+        torp = tf.torpedo
+        rel = tg.position - torp.position
+        d_km = rel.magnitude / 1000.0
+        closure = (-(tg.velocity - torp.velocity).dot(rel.normalized()) / 1000.0
+                   if d_km > 0 else 0.0)
+        if cross is None and d_km <= pd_km:
+            cross = closure
+        if mid is None and d_km <= start_km / 2.0 and closure > 0:
+            mid = d_km
+            reach = torpedo_link.reassign_reach_km(torp, d_km, closure)
         for ev in shadow.step():
             if ev.event_type == SimulationEventType.TORPEDO_IMPACT:
                 return TorpedoShot(hits=True, tof_s=shadow.current_time,
                                    impact_kps=ev.data.get("impact_speed_kps"),
-                                   impact_gj=ev.data.get("total_damage_gj"))
+                                   impact_gj=ev.data.get("total_damage_gj"),
+                                   profile=profile, cross_kps=cross,
+                                   mid_to_go_km=mid, reach_km=reach)
             if ev.event_type == SimulationEventType.TORPEDO_FUEL_EXHAUSTED:
                 fuel_out = True
         if tg.is_destroyed:
             break
     return TorpedoShot(hits=False, note=("burns out before intercept" if fuel_out
-                                         else f"no intercept within {horizon_s:.0f} s"))
+                                         else f"no intercept within {horizon_s:.0f} s"),
+                       profile=profile)
 
 
 def pd_cover(sim: Any, target: Any, pd_range_km: float,
@@ -306,6 +356,21 @@ def torpedo_solution(
         pd_target=own, pd_escorts=escorts, salvo_to_saturate=need,
         friendly_inbound=inbound,
     )
+    # Both launch profiles for the commander (vs a target holding course),
+    # and what he needs: the datalink's own estimate (torpedo_link).
+    from .. import torpedo_link
+    if coasting.hits:
+        sol.vs_coasting_reserve = fly_torpedo(sim, shooter, target, fleet_data,
+                                              target_evades=False, profile="reserve")
+    for shot_, attr in ((coasting, "soak_sprint"), (sol.vs_coasting_reserve, "soak_reserve")):
+        if shot_ is not None and shot_.hits:
+            setattr(sol, attr, (own + escorts) // max(1, torpedo_link.turrets_to_blind(
+                shot_.cross_kps or shot_.impact_kps or 12.0, fleet_data)))
+    ref = sol.best_shot
+    sol.rounds_needed = torpedo_link.rounds_needed(
+        sim, target, cover=own + escorts, fleet_data=fleet_data,
+        cross_kps=(coasting.cross_kps if coasting.hits else None),
+        energy_gj=(ref.impact_gj if ref is not None else None)).total
     shot = sol.best_shot
     if not coasting.hits:
         sol.verdict = "UNREACHABLE"
@@ -317,10 +382,12 @@ def torpedo_solution(
         sol.verdict = "TOO CLOSE"
         sol.reason = (f"~{shot.impact_gj:.1f} GJ at {shot.impact_kps:.1f} km/s - "
                       f"guidance cannot build speed in {sol.range_km:.0f} km; open range first")
-    elif inbound >= need + OVERKILL_MARGIN_ROUNDS:
+    elif inbound >= sol.rounds_needed:
         sol.verdict = "OVERKILL"
-        sol.reason = (f"{inbound} friendly rounds already inbound (a salvo of {need} "
-                      f"saturates his {sol.pd_cover} PD turrets) - pick another target")
+        sol.reason = (f"{inbound} friendly rounds already inbound, he needs {sol.rounds_needed} "
+                      f"(his {sol.pd_cover} PD turrets blind {sol.soak_sprint} + "
+                      f"{sol.rounds_needed - (sol.soak_sprint or 0)} to kill) - more go to "
+                      "another hull only if the datalink can still reach one")
     if cache is not None:
         cache[key] = sol
     return sol

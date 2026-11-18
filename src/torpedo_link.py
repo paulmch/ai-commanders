@@ -219,6 +219,19 @@ def reassign_reserve_kps(t_go_s: float, cap_kps: float) -> float:
     return min(cap_kps, REASSIGN_RESERVE_BASE_KPS + REASSIGN_RESERVE_PER_S_KPS * max(0.0, t_go_s))
 
 
+def reassign_reach_km(torp: Any, to_go_km: float, closure_kps: float,
+                      cap_kps: float = 1.12) -> float:
+    """How far abeam (at the same range) a round ``to_go_km`` from its target,
+    closing at ``closure_kps``, can be swung by a reassignment: the delta-v
+    beyond the reassignment reserve, spent as a lateral steer over the time
+    to go (the impulsive bound can_intercept uses)."""
+    if closure_kps <= 0:
+        return 0.0
+    t_go = to_go_km / closure_kps
+    spare = torp.remaining_delta_v_kps - reassign_reserve_kps(t_go, cap_kps)
+    return max(0.0, to_go_km * spare / closure_kps)
+
+
 @dataclass
 class GateResult:
     ok: bool

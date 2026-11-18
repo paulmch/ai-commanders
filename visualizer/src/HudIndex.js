@@ -699,11 +699,16 @@ export function formatLogEvent(e, ships = {}) {
     case 'crew_radiation': return { cls: d.state === 'incapacitated' ? 'destroyed' : 'hit', cat: 'fire',
       text: `RADIATION: ${n(e.ship_id)} crew ${d.state === 'incapacitated' ? 'incapacitated - the ship stops fighting' : 'impaired - weapons cycle slower'} (${gj(d.dose_sv)} Sv${d.source_ship_id ? `, ${n(d.source_ship_id)}'s exhaust` : ''})` };
     case 'shot_fired': return { cls: 'shot', cat: 'fire', text: `FIRE: ${n(e.ship_id)} → ${n(d.target_id)}` };
-    case 'torpedo_launched': return { cls: 'torpedo', cat: 'fire', text: `TORPEDO AWAY: ${n(e.ship_id)} → ${n(d.target_id)}` };
+    case 'torpedo_launched': return { cls: 'torpedo', cat: 'fire', text: `TORPEDO AWAY: ${n(e.ship_id)} → ${n(d.target_id)}${d.profile && d.profile !== 'sprint' ? ` (${d.profile} profile)` : ''}` };
     case 'torpedo_impact': return { cls: 'destroyed', cat: 'fire', text: `TORPEDO IMPACT: ${n(d.target_id)} takes ${(Number(d.total_damage_gj) || 0).toFixed(0)} GJ (${d.hit_location || '?'})` };
     case 'torpedo_miss': return { cls: 'torpedo', cat: 'fire', text: `TORPEDO MISS: closest ${(Number(d.closest_approach_km) || 0).toFixed(1)} km` };
     case 'torpedo_fuel_exhausted': return { cls: 'torpedo', cat: 'fire', text: `BURNOUT: torpedo from ${n(e.ship_id)} ballistic` };
-    case 'torpedo_retargeted': return { cls: 'torpedo', cat: 'fire', text: `RETARGET: torpedo from ${n(e.ship_id)} swings onto ${n(d.new_target_id)}` };
+    case 'torpedo_retargeted': {
+      // pass 5 datalink: reason target_lost / datalink_surplus (absent: pre-link rule)
+      const why = d.reason === 'datalink_surplus' ? ` (datalink: surplus on ${n(d.old_target_id)})`
+        : d.reason === 'target_lost' ? ` (datalink: ${n(d.old_target_id)} lost${d.group_size > 1 ? `, group of ${d.group_size}` : ''})` : '';
+      return { cls: 'torpedo', cat: 'fire', text: `RETARGET: torpedo from ${n(e.ship_id)} swings onto ${n(d.new_target_id)}${why}` };
+    }
     case 'pd_torpedo_disabled': return { cls: 'pd', cat: 'pd', text: `SEEKER KILL: ${n(e.ship_id)} PD blinds inbound torpedo` };
     case 'pd_slug_destroyed': return { cls: 'pd', cat: 'pd', text: `PD KILL: ${n(e.ship_id)} vaporizes incoming slug` };
     case 'penetration': return { cls: 'destroyed', cat: 'fire', text: `ARMOR BREACH: ${n(e.ship_id)} ${d.location || ''}` };

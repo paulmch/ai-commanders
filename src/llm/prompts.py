@@ -23,6 +23,7 @@ try:
     from .. import combat as _combat
     from .. import drive_plume as _plume
     from ..power import KINETIC_WEAPON_EFFICIENCY
+    from .torpedo_doctrine import LINK_FACT, PROFILE_FACT
 except ImportError:  # pragma: no cover - script-style imports
     from pointdefense import (
         PDLaser,
@@ -35,6 +36,7 @@ except ImportError:  # pragma: no cover - script-style imports
     import combat as _combat
     import drive_plume as _plume
     from power import KINETIC_WEAPON_EFFICIENCY
+    from llm.torpedo_doctrine import LINK_FACT, PROFILE_FACT
 
 
 # Closing speeds tabulated for the captain's PD block. The middle entry is the
@@ -1096,6 +1098,9 @@ TORPEDO_TACTICS_BLOCK = """=== TORPEDO BOAT TACTICS (you mount no guns) ===
   gains a torpedo boat nothing.
 - Salvo, don't trickle: launch the "salvo >= N together" his point-defense cover needs
   in ONE checkpoint, timed with the fleet's launches.
+- launch_torpedo profile: """ + PROFILE_FACT + """ Your ENEMIES torpedo line
+  compares both profiles for the shot at hand (PROFILES ...).
+- """ + LINK_FACT + """
 - Enemy torpedo hulls that have you targeted can land a round before your next
   decision: THREATS TO ME says when. EVADE early."""
 
@@ -3020,6 +3025,8 @@ WHEN TO COMMIT TRIDENTS:
   in flight (~400 km lands in 30-60s - about one decision cycle).
 - MAGAZINES ARE FINITE: {magazine_line}. Reload {reload_s:.0f}s -> at most
   {launches_per_tube} launches per tube per {decision_interval_s:g}s checkpoint.
+- LAUNCH PROFILES (torpedo_profile on issue_order, profile in salvo_plan): """ + PROFILE_FACT + """
+- ROUNDS IN FLIGHT: """ + LINK_FACT + """
 """
 
 # Included when YOUR fleet mounts guns.
@@ -4233,6 +4240,14 @@ def _format_torpedo_economy(snapshot: Any, fleet_data: Dict[str, Any]) -> str:
             need = soak + to_kill
             text = (f"Salvo vs {_lbl(snapshot, e.ship_id)} ({sol.verdict}): {cover} PD turrets cover it "
                     f"-> ~{soak} soaked + {to_kill} to kill{each} = {need} together")
+            res = getattr(e, "solution_reserve", None)
+            if (res is not None and res.reaches and sol.tof_s is not None
+                    and res.tof_s is not None):
+                res_soak = res.soak if res.soak is not None else soak
+                if (abs(res.tof_s - sol.tof_s) >= 1.0 or res_soak != soak
+                        or abs((res.energy_gj or 0) - (sol.energy_gj or 0)) >= 1.0):
+                    text += (f"; reserve profile if he runs: ~{res.tof_s:.0f} s "
+                             f"(sprint ~{sol.tof_s:.0f}), ~{res.energy_gj:.0f} GJ, PD soaks {res_soak}")
             more = need - e.our_rounds_inbound
             if e.our_rounds_inbound:
                 text += (f"; {e.our_rounds_inbound} of yours already inbound -> "
