@@ -93,6 +93,20 @@ LAUNCH_TURN_ACCEL_DEG_S2 = 30.0
 LAUNCH_TIMEOUT_S = 8.0
 # ... and at this whatever holds.
 LAUNCH_HARD_TIMEOUT_S = 15.0
+# Crab-angle light-off: the nose (and so the fixed main engine) is turned not
+# onto the bare guidance heading but onto the burn direction whose first tick
+# nulls the sideways drift the sequence gave the round (ejection, RCS push,
+# hull spin; square to the line of sight) while the rest of the thrust builds
+# closure - at most this far off the heading (12 g nulls 25 m/s at ~12 deg).
+LAUNCH_CRAB_MAX_DEG = 30.0
+# After ignition the engine pushes along the nose, and the nose turns at the
+# limits above onto the guidance's commanded direction (crabbed while drift
+# is left): until the drift is below LAUNCH_DRIFT_DONE_MPS and the nose is
+# within LAUNCH_STEER_DONE_DEG of the command, or LAUNCH_ATTITUDE_WINDOW_S
+# after ignition. Then the guidance points the thrust directly again.
+LAUNCH_DRIFT_DONE_MPS = 0.5
+LAUNCH_STEER_DONE_DEG = 1.0
+LAUNCH_ATTITUDE_WINDOW_S = 5.0
 # Measurement switch (AIC_LAUNCH_SEQUENCE=0: the old instant ignition at the
 # ship's centre); CombatSimulation.launch_sequence is the per-battle flag.
 LAUNCH_SEQUENCE_DEFAULT = os.environ.get("AIC_LAUNCH_SEQUENCE", "1") != "0"
@@ -105,6 +119,8 @@ _RATE = math.radians(LAUNCH_TURN_RATE_DEG_S)
 _ALPHA = math.radians(LAUNCH_TURN_ACCEL_DEG_S2)
 _ALIGN = math.radians(LAUNCH_ALIGN_DEG)
 _CONE = math.radians(LAUNCH_EXHAUST_CONE_DEG)
+_SIN_CRAB = math.sin(math.radians(LAUNCH_CRAB_MAX_DEG))
+_STEER_DONE = math.radians(LAUNCH_STEER_DONE_DEG)
 _EPS_T = 1e-9
 
 
@@ -126,7 +142,9 @@ class LaunchSequence:
     eject_dir: Vector3D             # world unit eject direction
     phase: str = PHASE_EJECT
     hold_forecast_s: float = 0.0    # forecast launch-to-ignition (s), at launch
-    heading: Optional[Vector3D] = None   # first guidance heading, last tick
+    heading: Optional[Vector3D] = None   # burn direction the nose turns onto (crabbed)
+    guidance_heading: Optional[Vector3D] = None  # the bare guidance heading
+    steering: bool = False          # boost, nose-following window still open
     ignition_t: Optional[float] = None
     reason: Optional[str] = None    # clear | free | timeout | hard_timeout
 
@@ -350,18 +368,47 @@ def ship_spin(ship: Any) -> Vector3D:
     return axis.normalized() * w
 
 
-def next_launch_nose(sim: Any, ship: Any, target: Any = None) -> Optional[Vector3D]:
-    """World nose of the round the ship's next launch at ``target`` would
-    eject (first ready tube), for forecasts; None without a ready tube."""
+def next_launch_geometry(sim: Any, ship: Any, target: Any = None):
+    """(world nose, world eject direction) of the round the ship's next
+    launch at ``target`` would eject (first ready tube), for forecasts;
+    (None, None) without a ready tube."""
     tubes = list(getattr(ship, "ready_torpedo_launchers", None) or [])
     now = float(getattr(sim, "current_time", 0.0))
     for i, tube in enumerate(tubes):
         if tube.can_launch(now) if hasattr(tube, "can_launch") else True:
             k = pick_round(sim, ship, i, tube, target, now)
-            _, _, _, nose = round_geometry(sim, ship, i, k)
+            _, _, eject, nose = round_geometry(sim, ship, i, k)
             frame = body_frame(ship, now)
-            return Vector3D(*frame.to_world(*nose))
-    return None
+            return Vector3D(*frame.to_world(*nose)), Vector3D(*frame.to_world(*eject))
+    return None, None
+
+
+def next_launch_nose(sim: Any, ship: Any, target: Any = None) -> Optional[Vector3D]:
+    """World nose of the round the ship's next launch at ``target`` would eject."""
+    return next_launch_geometry(sim, ship, target)[0]
+
+
+def forecast_turn_rad(nose: Vector3D, eject: Optional[Vector3D], los: Vector3D,
+                      rcs_mps2: float, main_mps2: float, dt: float = 1.0,
+                      gap0_m: float = 0.0) -> float:
+    """Angle the nose must turn from rest onto its crab burn direction
+    (crab_direction) for a round ejected along ``eject``: the sideways
+    drift at light-off estimated as the ejection plus the RCS push until it
+    is clear (both square to the line of sight, along the ejection)."""
+    if los.magnitude <= 0:
+        return 0.0
+    los = los.normalized()
+    if eject is None:
+        return angle_between(nose, los)
+    side = eject - los * eject.dot(los)
+    t, gap, v = 0.0, gap0_m, LAUNCH_EJECT_SPEED_MPS
+    while gap < LAUNCH_CLEAR_M and t < LAUNCH_TIMEOUT_S:
+        if t + _EPS_T >= LAUNCH_EJECT_S:
+            v += max(0.0, rcs_mps2) * dt
+        gap += v * dt
+        t += dt
+    drift = side * v
+    return angle_between(nose, crab_direction(los, drift, main_mps2, dt))
 
 
 def begin(sim: Any, ship: Any, launcher_index: int, torpedo: Any,
@@ -388,11 +435,11 @@ def begin(sim: Any, ship: Any, launcher_index: int, torpedo: Any,
         t0=now, source_id=ship.ship_id, faction=ship.faction, mount=slot,
         round_index=k, nose=n_w, omega=omega, eject_dir=e_w)
     if target is not None:
-        los = target.position - torpedo.position
-        turn = angle_between(n_w, los) if los.magnitude > 0 else 0.0
-        seq.hold_forecast_s = forecast_hold_s(
-            turn, rcs_accel(torpedo), float(getattr(sim, "time_step", 1.0) or 1.0),
-            hull_gap_m(ShipSnap(ship), torpedo.position))
+        dt = float(getattr(sim, "time_step", 1.0) or 1.0)
+        gap0 = hull_gap_m(ShipSnap(ship), torpedo.position)
+        turn = forecast_turn_rad(n_w, e_w, target.position - torpedo.position,
+                                 rcs_accel(torpedo), main_accel(torpedo), dt, gap0)
+        seq.hold_forecast_s = forecast_hold_s(turn, rcs_accel(torpedo), dt, gap0)
     torpedo.launch_seq = seq
     return {
         "mount": slot,
@@ -527,11 +574,48 @@ def _closing_hull(seq: LaunchSequence, p: Vector3D, v: Vector3D, a_rcs: float,
     return best
 
 
+def sideways_drift(torp: Any, los: Vector3D) -> Vector3D:
+    """The velocity the launch gave the round off its launcher's (ejection,
+    RCS push, hull spin), square to the line of sight ``los`` (unit)."""
+    d = torp.velocity - torp.launched_from_velocity
+    return d - los * d.dot(los)
+
+
+def crab_direction(heading: Vector3D, drift: Vector3D, accel_mps2: float,
+                   dt: float, throttle: float = 1.0) -> Vector3D:
+    """The burn direction along which one tick of main thrust (``accel_mps2``
+    x ``throttle`` for ``dt``) nulls ``drift`` and spends the rest along
+    ``heading``; at most LAUNCH_CRAB_MAX_DEG off it (a larger drift is
+    nulled over several ticks)."""
+    r = drift.magnitude
+    dv = accel_mps2 * max(0.0, throttle) * dt
+    if r < 1e-9 or dv <= 0.0:
+        return heading
+    u = drift * (1.0 / r)
+    c = heading - u * heading.dot(u)
+    if c.magnitude < 1e-9:
+        return heading
+    c = c.normalized()
+    s = min(r / dv, _SIN_CRAB)
+    return (u * (-s) + c * math.sqrt(1.0 - s * s)).normalized()
+
+
+def main_accel(torp: Any) -> float:
+    return float(torp.specs.acceleration_at_mass(torp.current_mass_kg))
+
+
 def advance(seq: LaunchSequence, torp: Any, heading: Vector3D,
-            snaps: Dict[str, ShipSnap], dt: float, now: float) -> float:
+            snaps: Dict[str, ShipSnap], dt: float, now: float,
+            los: Optional[Vector3D] = None) -> float:
     """One tick of a round still in its sequence: attitude, RCS push, drift.
-    Returns the RCS delta-v spent (km/s)."""
-    seq.heading = heading
+    The nose turns onto the crab burn direction (crab_direction: the bare
+    ``heading`` corrected for the sideways drift off ``los``). Returns the
+    RCS delta-v spent (km/s)."""
+    seq.guidance_heading = heading
+    burn = heading
+    if los is not None and los.magnitude > 0:
+        burn = crab_direction(heading, sideways_drift(torp, los), main_accel(torp), dt)
+    seq.heading = burn
     el = now - seq.t0
     dv_kps = 0.0
     if el + _EPS_T < LAUNCH_EJECT_S:
@@ -539,7 +623,7 @@ def advance(seq: LaunchSequence, torp: Any, heading: Vector3D,
         seq.nose = rotate(seq.nose, seq.omega, dt)
     else:
         seq.phase = PHASE_SEPARATE
-        _turn(seq, heading, dt)
+        _turn(seq, burn, dt)
         push = _closing_hull(seq, torp.position, torp.velocity, rcs_accel(torp), snaps, dt)
         if push is None:
             push_from = _hull_in_the_way(seq, torp.position, heading, snaps)
@@ -555,10 +639,34 @@ def advance(seq: LaunchSequence, torp: Any, heading: Vector3D,
 
 
 def release(seq: LaunchSequence, now: float, reason: str) -> None:
+    """The torch lights: the round keeps its attitude and spin, and its
+    engine follows the nose (steer) until the window closes."""
     seq.phase = PHASE_BOOST
     seq.ignition_t = now
     seq.reason = reason
-    seq.omega = Vector3D.zero()
+    seq.steering = True
+
+
+def steer(seq: LaunchSequence, torp: Any, command_dir: Optional[Vector3D],
+          throttle: float, los: Vector3D, dt: float, now: float) -> Vector3D:
+    """One tick of the post-ignition window: the nose turns (at the launch
+    turn limits) onto the guidance's commanded main-burn direction, crabbed
+    while launch drift is left, and the engine pushes along the nose - the
+    returned direction. ``command_dir`` None (coast / RCS-only tick): the
+    nose turns onto the line of sight. Closes the window (seq.steering
+    False) once the drift is nulled and the nose is on the command, or
+    LAUNCH_ATTITUDE_WINDOW_S after ignition."""
+    want = command_dir if command_dir is not None and command_dir.magnitude > 0 else los
+    want = want.normalized()
+    drift = sideways_drift(torp, los)
+    if drift.magnitude > LAUNCH_DRIFT_DONE_MPS and throttle > 0:
+        want = crab_direction(want, drift, main_accel(torp), dt, throttle)
+    _turn(seq, want, dt)
+    done = (drift.magnitude <= LAUNCH_DRIFT_DONE_MPS and command_dir is not None
+            and angle_between(seq.nose, command_dir) <= _STEER_DONE)
+    if done or now - (seq.ignition_t or now) + _EPS_T >= LAUNCH_ATTITUDE_WINDOW_S:
+        seq.steering = False
+    return seq.nose
 
 
 # =============================================================================
@@ -583,12 +691,14 @@ def predict_launch_hold_s(sim: Any, ship: Any, target: Any, specs: Any = None) -
     simulation flies no launch sequence."""
     if sim is not None and not getattr(sim, "launch_sequence", LAUNCH_SEQUENCE_DEFAULT):
         return 0.0
-    nose = next_launch_nose(sim, ship, target) if sim is not None else None
+    nose, eject = next_launch_geometry(sim, ship, target) if sim is not None else (None, None)
     los = target.position - ship.position
-    turn = angle_between(nose, los) if nose is not None and los.magnitude > 0 else 0.0
     if specs is None:
         tubes = list(getattr(ship, "ready_torpedo_launchers", None) or [])
         specs = tubes[0].specs if tubes else None
     a = (float(specs.rcs_thrust_n) / max(1.0, float(specs.mass_kg))) if specs is not None else 5.9
+    main = (float(specs.acceleration_at_mass(specs.mass_kg)) if specs is not None else 118.0)
     dt = float(getattr(sim, "time_step", 1.0) or 1.0) if sim is not None else 1.0
+    turn = (forecast_turn_rad(nose, eject, los, a, main, dt)
+            if nose is not None and los.magnitude > 0 else 0.0)
     return forecast_hold_s(turn, a, dt)
