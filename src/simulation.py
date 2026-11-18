@@ -7513,7 +7513,12 @@ class CombatSimulation:
             opts, modes[tf.torpedo_id] = self._link_options(tf, enemies,
                                                              exclude=tf.torpedo.target_id)
             rounds.append((tf.torpedo_id, opts))
-        plan = torpedo_link.plan_group(rounds, need, eta, overflow=False)
+        # Whole strikes only (torpedo_link.plan_packets): a packet that cannot
+        # fill its new target's need would trickle into that target's PD and
+        # kill nothing (measured: a torpedo cruiser against the gunline lost
+        # 17 of 66 kills to partial packets); such rounds stay where they are.
+        plan = torpedo_link.plan_packets(rounds, need,
+                                         {sid: len(v) for sid, v in eta.items()})
         if not plan:
             return
         group = f"{faction}@{self.current_time:g}:datalink_surplus"

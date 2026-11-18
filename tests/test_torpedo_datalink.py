@@ -507,3 +507,28 @@ class TestReviewFixes:
             cand.velocity = Vector3D(rnd.uniform(-4e3, 4e3), rnd.uniform(-4e3, 4e3), 0)
             if L._cannot_reach(torp, cand):
                 assert not torp.can_intercept(cand.position, cand.velocity)[0]
+
+
+class TestWholePacketDiversion:
+
+    def _sim(self, n):
+        sim = _sim()
+        _ship(sim, "a", "corvette", "alpha", Vector3D(-2_000e3, 0, 0))
+        _ship(sim, "d1", "destroyer", "beta", Vector3D(300e3, 0, 0))
+        _ship(sim, "d2", "destroyer", "beta", Vector3D(300e3, 40e3, 0))
+        for i in range(n):
+            _round(sim, f"t{i:02d}", "d1", 6.0, Vector3D(0, (i - 5) * 300.0, 0),
+                   Vector3D(12_000, 0, 0), profile="reserve")
+        return sim
+
+    def test_a_packet_too_small_to_kill_its_new_target_is_not_sent(self):
+        """Surplus that cannot fill the other hull's whole need stays: a
+        trickle into its PD kills nothing (torpedo cruiser vs gunline lost
+        kills to partial packets before this rule)."""
+        keep = self._sim(1).torpedo_board("alpha")["d1"]["keep"]
+        sim = self._sim(2 * keep - 1)          # surplus keep - 1: one short
+        _steps(sim, 1)
+        assert not _rt(sim)
+        sim = self._sim(2 * keep)              # surplus = keep: a whole strike
+        _steps(sim, 1)
+        assert len(_rt(sim)) == keep

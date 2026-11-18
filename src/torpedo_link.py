@@ -469,3 +469,31 @@ def plan_group(rounds: Sequence[Tuple[str, List[Option]]],
         plan[tid] = best.target_id
         assigned.setdefault(best.target_id, []).append(best.t_s)
     return plan
+
+
+def plan_packets(rounds: Sequence[Tuple[str, List[Option]]], need: Dict[str, int],
+                 inbound: Dict[str, int]) -> Dict[str, str]:
+    """Surplus diversion as whole strikes: targets in order of how many of
+    these rounds can reach them (then id); each takes its full deficit
+    (need - inbound) from the rounds that reach it best (score, then id), or
+    nothing when fewer than that can reach it - a partial packet would only
+    trickle into its point defence."""
+    opts = {tid: {o.target_id: o for o in o_list} for tid, o_list in rounds}
+    reach: Dict[str, int] = {}
+    for tid, by_t in opts.items():
+        for sid in by_t:
+            reach[sid] = reach.get(sid, 0) + 1
+    free = set(opts)
+    plan: Dict[str, str] = {}
+    for sid in sorted(reach, key=lambda k: (-reach[k], k)):
+        deficit = need.get(sid, 0) - inbound.get(sid, 0)
+        if deficit <= 0:
+            continue
+        cands = sorted((tid for tid in free if sid in opts[tid]),
+                       key=lambda tid: (-opts[tid][sid].score, tid))
+        if len(cands) < deficit:
+            continue
+        for tid in cands[:deficit]:
+            plan[tid] = sid
+            free.discard(tid)
+    return plan
