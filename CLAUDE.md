@@ -253,13 +253,16 @@ HEADING instead); `evade` alone rides on it - or, with no fleet order, on the
 ship's current maneuver (`src/llm/maneuver_orders.py`, `tests/test_order_semantics.py`).
 The evade overlay on an order that burns (`_order_burn`: the order itself flies
 >= `EVADE_BURN_MIN_THROTTLE` this tick) keeps the order's throttle and swings the
-thrust axis inside `EVADE_BURN_CONE_DEG` (20 deg) of the burn line - dodging, or
-armour onto an undodgeable round inside the cone; cone and swing cycle per hull
-from thrust-vectoring authority (`_evade_burn_swing`); RUN never below the
-order's throttle (rule in the `src/simulation.py` module docstring,
-`tests/test_evade_burn.py`, `scripts/evade_burn_measure.py`). On a throttle-0 /
-engine-off order (and the EVADE maneuver) it flies the drive as before: full
-throttle, TANK half, BRACE off (`CombatSimulation._evasion_overlay`).
+thrust axis round a cone of `EVADE_BURN_CONE_DEG` (20 deg) about the burn line -
+continuously while rounds are inbound or an armed enemy is within
+`EVADE_BURN_GUN_REACH_KM`, a fresh random cone point every half edge-to-edge swing
+(`_evade_burn_swing`, `_swing_dodge_aim`), so fire along the line is dodged too;
+armour picks only cone points; off the cone it turns toward it at full authority,
+idling to the order's token beyond `EVADE_BURN_AGAINST_ORDER_DEG` (90 deg) off;
+RUN never below the order's throttle (rule in the `src/simulation.py` module
+docstring, `tests/test_evade_burn.py`, `scripts/evade_burn_measure.py`). On a
+throttle-0 / engine-off order (and the EVADE maneuver) it flies the drive as before:
+full throttle, TANK half, BRACE off (`CombatSimulation._evasion_overlay`).
 Plain INTERCEPT never brakes (it merges); the anti-merge forms
 (`src/llm/maneuver_orders.py`; the same fields on captain set_maneuver /
 set_heading, admiral issue_order and MCP set_maneuver): INTERCEPT with
@@ -439,7 +442,7 @@ hashed by the perf harness) is unchanged.
   residual pin reads. Dodgers are bucketed by base maneuver (dodge:PADLOCK,
   dodge:HOLD_RANGE, dodge:HEADING) and modelled by their state at the shot (calm vs
   reacting, `firecontrol.DODGE_CALM_ACCEL_FRACTION`); one swinging a burn (the overlay
-  on a burning order, fc `swing`) by `firecontrol.SWING_*_FRACTION`. Buckets still
+  on a burning order, fc `swing`) by `firecontrol.SWING_ACCEL_FRACTION`. Buckets still
   outside 1.5x are named in the test's `RESIDUALS`.
   The doctrine P(hit) table is bound by `tests/test_prompt_structure.py`. Known residual:
   LLM fleets dodging a whole fleet's fire were hit even less than forecast

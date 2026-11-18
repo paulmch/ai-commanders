@@ -135,8 +135,11 @@ CAPTAIN_TOOLS_BASE = [
                             "burns at your throttle - full throttle when the maneuver itself "
                             "does not burn (MAINTAIN, PADLOCK, throttle 0). On a maneuver that "
                             "burns it keeps your throttle and swings the burn within 20 deg of "
-                            "your line (dodging, or armour onto a round it cannot dodge, inside "
-                            "that cone only); RUN leaves the line, never below your throttle. On "
+                            "your line, continuously while you are under fire or near enemy "
+                            "guns (a dodge against fire from any bearing; armour onto a round "
+                            "it cannot dodge, inside that cone only; nose more than 90 deg off "
+                            "the line: the drive idles while it turns); RUN leaves the line, "
+                            "never below your throttle. On "
                             "one that does not burn, BRACE turns the drive off (a round inbound, "
                             "no time to jink) and TANK burns at half throttle while turning "
                             "armour onto it - your ENGINE FEEDBACK helm line says what was "
@@ -368,7 +371,8 @@ CAPTAIN_TOOLS_BASE = [
                             "At throttle 0 (coast and shoot) the dodge still burns, at full "
                             "throttle (BRACE: drive off; TANK: half throttle). On a burning "
                             "heading it keeps your throttle and swings the burn within 20 deg "
-                            "of the heading to dodge - see the helm line of ENGINE FEEDBACK."
+                            "of the heading, continuously under fire, to dodge - see the helm "
+                            "line of ENGINE FEEDBACK."
                         )
                     }
                 },

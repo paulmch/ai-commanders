@@ -1003,14 +1003,13 @@ HIT PROBABILITY PER ROUND vs a destroyer (spinal 9.9 km/s / turret 6.0 km/s):
 - evade dodge:     82/57%  34/7%   9/1%    2/0%    0/0%    0/0%
 - dodge, mid-jink: 74/36%  20/3%   4/1%    1/0%    0/0%    0/0%
 - EVADE maneuver:  49/41%  29/10%  11/2%   4/0%    1/0%    0/0%
-- burn + dodge:    82/78%  63/54%  47/30%  33/13%  13/2%   4/1%
-- burn, swinging:  82/77%  61/44%  40/15%  22/5%   5/1%    1/0%
+- burn + dodge:    82/75%  57/32%  31/8%   13/2%   2/0%    1/0%
 "Evade dodge" is a dodger not yet reacting when you fire: your round makes it jink,
 aimed at that very round. "Mid-jink" is one caught already burning off another round
 - what your other ships' fire does to it. Those two coast (PADLOCK + evade dodge). A
-ship burning nose-on at you with evade keeps its burn and only swings it within 20° of
-its line ("burn + dodge" between rounds, "swinging" caught mid-swing): it is far easier
-to hit than a coasting dodger. Agile hulls escape sooner (a dodging
+ship burning nose-on at you with evade ("burn + dodge") keeps its burn and swings it
+round a cone 20° off its line the whole time it is under fire: easier to hit than a
+coasting dodger, harder than one holding course. Agile hulls escape sooner (a dodging
 frigate: spinal 19% at 100km, 4% at 150km), heavy ones later (a dodging battleship:
 11% at 200km, 2% at 300km). The P(hit) on your ENEMIES lines is this model for the live geometry - fire
 on it, and close range before you shoot at a dodger. Under a whole fleet's fire
@@ -1124,11 +1123,15 @@ MANEUVERS:
   Only EVADE (or the evade field on another maneuver) does this - without it
   a maneuver takes torpedoes, including blinded ones, without reacting. On an order that
   burns (a heading, INTERCEPT, the burns of HOLD_RANGE / standoff) the evade field keeps
-  your throttle the whole time and swings the burn within 20° of your line - ~94%
-  of the push stays on it: it dodges across inbound rounds and, when one cannot be
-  dodged, swings the best armor it can reach inside that cone onto it (a round from abeam
-  or astern still strikes the flank or the tail). RUN (evade full, a guided torpedo)
-  leaves the line to burn away from it, never below your throttle. On an order that does
+  your throttle and swings the burn within 20° of your line - ~94% of the push stays on
+  it: while you are under fire or within 400 km of an enemy gun it keeps the burn moving
+  round that cone, a new random point every few seconds, so rounds led onto you miss -
+  from any bearing, ahead and astern too; a round it cannot dodge gets the best armor it
+  can reach inside the cone (a round from abeam or astern still strikes the flank or the
+  tail). With your nose more than 90° off your line (turning onto a new heading, or back
+  after a RUN) the drive idles while the ship turns, as without evade. RUN (evade full, a
+  guided torpedo) leaves the line to burn away from it, never below your throttle. On an
+  order that does
   not burn (PADLOCK, MAINTAIN, throttle 0) and as the EVADE maneuver, evasion owns the
   drive while it reacts: BRACE turns it off (a round inbound, no time to jink), TANK burns
   at half throttle while turning armor onto the round. ENGINE FEEDBACK's helm line says
@@ -2865,19 +2868,22 @@ MANEUVERS (tell captains which to use):
 - EVADE: Threat-aware defense - jinks vs guns, RUNS/PRESENTS vs torpedoes. With no threat
   it weaves around the ship's CURRENT course: it never chases and never brakes, so an
   EVADE order does not stop a merge. The evade overlay (evade full/dodge on another
-  order) on an order that BURNS keeps the burn the whole time: while rounds are inbound
-  it swings the thrust within 20° of the ordered line (~94% of the push stays on
-  it), dodging, and turns armour onto a round it cannot dodge only inside that cone - a
-  round from abeam or astern still strikes the flank or tail; RUN (full, vs a guided
-  torpedo) leaves the line to burn away. Measured (seeded, 12 runs each): a destroyer
-  burning across the line of fire of 3 gun ships 120-200 km off (nose already on its
-  heading) burned on its order 100% of the time under fire and took 10% of the rounds
-  fired at it, 38% without the overlay; a dreadnought (a narrower, slower swing) 45%
-  against 50%. A destroyer burning straight away from 2 gun ships 150 km off took its
-  hits mostly on the tail and flank and was lost in 8 of 12 runs with the overlay, 12 of
-  12 without. A destroyer cancelling 2 km/s of closure with its nose still on the enemy
-  burns through its 180° turn with the overlay: closing at 1.5 km/s after 60 s, 1.7
-  without it. On an order that does not burn
+  order) on an order that BURNS keeps the burn and, while rounds are inbound or enemy
+  guns are within 400 km, keeps swinging the thrust round a cone 20° off the ordered line
+  (~94% of the push stays on it) - a dodge against fire from any bearing; it turns armour
+  onto a round it cannot dodge only inside that cone - a round from abeam or astern
+  still strikes the flank or tail; with the nose more than 90° off the line (a new
+  heading, after a RUN) the drive idles while it turns; RUN (full, vs a guided torpedo)
+  leaves the line to burn away. Measured (seeded, 24 runs each): a destroyer burning
+  across the line of fire of 3 gun ships 120-200 km off (nose already on its heading)
+  burned on its order 98% of the time under fire and took 12% of the rounds fired at it,
+  38% without the overlay; a dreadnought (a narrower, slower swing) 47% against 51%. A
+  destroyer burning straight away from 2 gun ships 150 km off took 37% of the rounds
+  (47% without), on the tail and flank; tail hits wreck the drive, and a damaged drive
+  dodges far less (14% of rounds hit while it was intact, 54% after): it was lost in 16
+  of 24 runs with the overlay, 24 of 24 without. A destroyer cancelling 2 km/s of
+  closure with its nose still on the enemy: closing at 1.3 km/s after 60 s with the
+  overlay, 1.7 without it. On an order that does not burn
   (PADLOCK, MAINTAIN, throttle 0) the overlay flies the drive: jinks at full throttle,
   TANK (half throttle) or BRACE (drive off).
 - BRAKE: burn against the ship's own (world-frame) velocity
@@ -2988,8 +2994,8 @@ TORPEDO DEFENCE, MEASURED (seeded runs on this engine: a 4 battlecruiser + 2 des
 from the first checkpoint; per battle, 3 seeds each):
 - start 500 km: nose-on PADLOCK - 72% of rounds hit (all on the nose, ~14.0 km/s, ~24 GJ
   each), 6 of 8 hulls lost; burning straight away - 37% hit (all on the TAIL, ~12.8 km/s,
-  ~20 GJ), 5 of 8 lost; the same burn with evade full - 36% hit, 5 of 8 lost (also all
-  on the tail: the overlay keeps the burn and turns no nose round); charging
+  ~20 GJ), 5 of 8 lost; the same burn with evade full - 38% hit, 5 of 8 lost (on the
+  tail and flank: the overlay keeps the burn and turns no nose round); charging
   (INTERCEPT) - 73% hit (~14.6 km/s, ~27 GJ), 8 of 8 lost. First loss ~100 s in each.
 - start 1000 km: nose-on - 73% hit, 8 of 8 lost (first at ~290 s); burning away - 26%
   hit, 4 of 8 lost (first at ~310 s); charging - 38% hit, 3 of 8 lost. The wall killed
@@ -3095,9 +3101,9 @@ GUN_EXCHANGE_BANDS = (
     ("0-50", 69, 0.22, 16),
     ("50-100", 61, 0.25, 23),
     ("100-150", 50, 0.31, 20),
-    ("150-200", 43, 0.43, 20),
+    ("150-200", 43, 0.44, 20),
     ("200-300", 36, 0.29, 15),
-    ("300+", 25, 0.29, 7),
+    ("300+", 25, 0.30, 7),
 )
 GUN_EXCHANGE_INSIDE_150_PCT = 58
 # Spinal Coiler Mk3 hits to kill a fresh hull on one facing
@@ -3115,8 +3121,8 @@ FACING_SPINAL_HITS_TO_KILL = (
 FACING_MEASURED = (
     ("battlecruiser", 15, 0.16, 44, 0.46),
     ("destroyer", 8, 0.065, 35, 0.43),
-    ("frigate", 25, 0.39, 56, 0.70),
-    ("dreadnought", 27, 0.24, 36, 0.25),
+    ("frigate", 25, 0.39, 57, 0.71),
+    ("dreadnought", 26, 0.24, 36, 0.25),
 )
 # The pass example in RANGE CONTROL and the CROSSFIRE example geometry.
 MERGE_EXAMPLE_KPS = 5.0

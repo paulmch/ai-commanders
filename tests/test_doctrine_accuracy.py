@@ -1489,10 +1489,16 @@ class TestEvasionDriveClaims:
         captain = " ".join(build_captain_doctrine(ship_type="destroyer").split())
         admiral = " ".join(ADMIRAL_DOCTRINE_CORE.split())
         assert f"swings the burn within {cone}° of your line - {push} of the push stays on it" in captain
-        assert f"swings the thrust within {cone}° of the ordered line ({push} of the push" in admiral
+        assert (f"keeps swinging the thrust round a cone {cone}° off the ordered line ({push} of "
+                f"the push stays on it) - a dodge against fire from any bearing") in admiral
         evade = next(t for t in ADMIRAL_TOOLS if t["function"]["name"] == "issue_order")[
             "function"]["parameters"]["properties"]["evade"]["description"]
         assert f"within {cone} deg of the ordered line ({push} of the push stays on it)" in evade
+        from src.simulation import EVADE_BURN_AGAINST_ORDER_DEG, EVADE_BURN_GUN_REACH_KM
+        assert f"within {EVADE_BURN_GUN_REACH_KM:.0f} km of enemy guns" in evade
+        assert f"more than {EVADE_BURN_AGAINST_ORDER_DEG:.0f} deg off the line" in evade
+        assert f"within {EVADE_BURN_GUN_REACH_KM:.0f} km of an enemy gun" in captain
+        assert f"more than {EVADE_BURN_AGAINST_ORDER_DEG:.0f}° off your line" in captain
         for tool in ("set_maneuver", "set_heading"):
             desc = next(t for t in CAPTAIN_TOOLS_BASE if t["function"]["name"] == tool)[
                 "function"]["parameters"]["properties"]["evade"]["description"]
@@ -1505,50 +1511,88 @@ class TestEvasionDriveClaims:
         from src.llm.admiral_tools import ADMIRAL_TOOLS
         from src.llm.prompts import ADMIRAL_DOCTRINE_CORE
         doc = " ".join(ADMIRAL_DOCTRINE_CORE.split())
-        assert "on an order that BURNS keeps the burn the whole time" in doc
+        assert "on an order that BURNS keeps the burn and, while rounds are inbound" in doc
         assert "TANK (half throttle) or BRACE (drive off)" in doc
         assert "burns only a small part of the time" not in doc
         evade = next(t for t in ADMIRAL_TOOLS if t["function"]["name"] == "issue_order")[
             "function"]["parameters"]["properties"]["evade"]["description"]
-        assert "keeps the order's throttle the whole time" in evade
+        assert "keeps the order's throttle and swings the burn" in evade
+        assert "so it dodges fire from any bearing" in evade
         assert "TANKs (half throttle) or BRACEs (drive off)" in evade
         assert "burns only a small part of the time" not in evade
 
     def test_the_measured_overlay_lines_are_this_engine(self):
         """The admiral doctrine's measured sentence: scripts/evade_burn_measure.py
-        (FIRE_IMMEDIATE shooters, so the forecast does not enter) re-run."""
+        (FIRE_IMMEDIATE shooters, so the forecast does not enter) re-run on
+        the quoted 24 seeds, and the drive-intact split on the escape."""
         import importlib.util
         import re
         from src.llm.prompts import ADMIRAL_DOCTRINE_CORE
+        from src.simulation import CombatSimulation, SimulationEventType
         spec = importlib.util.spec_from_file_location("ebm", "scripts/evade_burn_measure.py")
         ebm = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(ebm)
         doc = " ".join(ADMIRAL_DOCTRINE_CORE.split())
-        m = re.search(r"a destroyer burning across the line of fire of 3 gun ships 120-200 km "
-                      r"off \(nose already on its heading\) burned on its order (\d+)% of the "
-                      r"time under fire and took (\d+)% of the rounds fired at it, (\d+)% "
-                      r"without the overlay; a dreadnought \(a narrower, slower swing\) (\d+)% "
-                      r"against (\d+)%\. A destroyer burning straight away from 2 gun ships "
-                      r"150 km off took its hits mostly on the tail and flank and was lost in "
-                      r"(\d+) of 12 runs with the overlay, (\d+) of 12 without\. A destroyer "
-                      r"cancelling 2 km/s of closure with its nose still on the enemy burns "
-                      r"through its 180° turn with the overlay: closing at ([\d.]+) km/s after "
-                      r"60 s, ([\d.]+) without it", doc)
+        m = re.search(r"Measured \(seeded, 24 runs each\): a destroyer burning across the line "
+                      r"of fire of 3 gun ships 120-200 km off \(nose already on its heading\) "
+                      r"burned on its order (\d+)% of the time under fire and took (\d+)% of "
+                      r"the rounds fired at it, (\d+)% without the overlay; a dreadnought \(a "
+                      r"narrower, slower swing\) (\d+)% against (\d+)%\. A destroyer burning "
+                      r"straight away from 2 gun ships 150 km off took (\d+)% of the rounds "
+                      r"\((\d+)% without\), on the tail and flank; tail hits wreck the drive, "
+                      r"and a damaged drive dodges far less \((\d+)% of rounds hit while it was "
+                      r"intact, (\d+)% after\): it was lost in (\d+) of 24 runs with the "
+                      r"overlay, (\d+) of 24 without\. A destroyer cancelling 2 km/s of closure "
+                      r"with its nose still on the enemy: closing at ([\d.]+) km/s after 60 s "
+                      r"with the overlay, ([\d.]+) without it", doc)
         assert m, "the measured overlay sentence changed shape"
-        quoted = [float(g) for g in m.groups()]
-        todo = (ebm.jobs(["cross"], ["destroyer", "dreadnought"], evades=(None, "dodge"))
-                + ebm.jobs(["escape", "flip"], ["destroyer"], evades=(None, "dodge")))
+        q = [float(g) for g in m.groups()]
+        seeds = range(1, 25)
+        todo = (ebm.jobs(["cross"], ["destroyer", "dreadnought"], seeds, (None, "dodge"))
+                + ebm.jobs(["flip"], ["destroyer"], seeds, (None, "dodge")))
         got = {(s["scen"], s["hull"], s["evade"]): s
                for s in ebm.summarise([ebm.run(j) for j in todo])}
+        # The escape with every round sorted by the drive's state at launch.
+        state, split = {}, {True: [0, 0], False: [0, 0]}
+        original = CombatSimulation.step
+
+        def step(sim):
+            t = sim.ships.get("target")
+            intact = t is not None and t.get_effective_thrust_fraction() > 0.9
+            events = original(sim)
+            for e in events:
+                d = e.data or {}
+                if (e.event_type == SimulationEventType.PROJECTILE_LAUNCHED
+                        and e.target_id == "target"):
+                    state[d.get("projectile_id")] = intact
+                    split[intact][0] += 1
+                elif (e.event_type == SimulationEventType.PROJECTILE_IMPACT
+                      and e.target_id == "target" and d.get("projectile_id") in state):
+                    split[state[d.get("projectile_id")]][1] += 1
+            return events
+
+        rows = []
+        CombatSimulation.step = step
+        try:
+            for job in ebm.jobs(["escape"], ["destroyer"], seeds, ("dodge",)):
+                rows.append(ebm.run(job))
+        finally:
+            CombatSimulation.step = original
+        rows += [ebm.run(j) for j in ebm.jobs(["escape"], ["destroyer"], seeds, (None,))]
+        got.update({(s["scen"], s["hull"], s["evade"]): s for s in ebm.summarise(rows)})
         dd = got[("cross", "destroyer", "dodge")]
-        assert quoted[0] == pytest.approx(dd["on_order"], abs=1.0)
-        assert quoted[1] == pytest.approx(dd["hit_pct"], abs=1.0)
-        assert quoted[2] == pytest.approx(got[("cross", "destroyer", "None")]["hit_pct"], abs=1.0)
-        assert quoted[3] == pytest.approx(got[("cross", "dreadnought", "dodge")]["hit_pct"], abs=1.0)
-        assert quoted[4] == pytest.approx(got[("cross", "dreadnought", "None")]["hit_pct"], abs=1.0)
-        assert quoted[5] == got[("escape", "destroyer", "dodge")]["dead"]
-        assert quoted[6] == got[("escape", "destroyer", "None")]["dead"]
-        assert quoted[7] == pytest.approx(got[("flip", "destroyer", "dodge")]["close60"], abs=0.05)
-        assert quoted[8] == pytest.approx(got[("flip", "destroyer", "None")]["close60"], abs=0.05)
+        assert q[0] == pytest.approx(dd["on_order"], abs=1.0)
+        assert q[1] == pytest.approx(dd["hit_pct"], abs=1.0)
+        assert q[2] == pytest.approx(got[("cross", "destroyer", "None")]["hit_pct"], abs=1.0)
+        assert q[3] == pytest.approx(got[("cross", "dreadnought", "dodge")]["hit_pct"], abs=1.0)
+        assert q[4] == pytest.approx(got[("cross", "dreadnought", "None")]["hit_pct"], abs=1.0)
+        assert q[5] == pytest.approx(got[("escape", "destroyer", "dodge")]["hit_pct"], abs=1.0)
+        assert q[6] == pytest.approx(got[("escape", "destroyer", "None")]["hit_pct"], abs=1.0)
+        assert q[7] == pytest.approx(100 * split[True][1] / split[True][0], abs=1.0)
+        assert q[8] == pytest.approx(100 * split[False][1] / split[False][0], abs=1.0)
+        assert q[9] == got[("escape", "destroyer", "dodge")]["dead"]
+        assert q[10] == got[("escape", "destroyer", "None")]["dead"]
+        assert q[11] == pytest.approx(got[("flip", "destroyer", "dodge")]["close60"], abs=0.05)
+        assert q[12] == pytest.approx(got[("flip", "destroyer", "None")]["close60"], abs=0.05)
         loc = got[("escape", "destroyer", "dodge")]["loc"]
         assert loc.get("tail", 0) + loc.get("lateral", 0) > 2 * loc.get("nose", 0)

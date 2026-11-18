@@ -241,81 +241,75 @@ harness runs with arcs off.
 
 Measured on the engine before this change: a ship ordered to burn with the evade overlay
 spent 2 % of its time under fire burning on its order (BRACE cut the drive, TANK halved it,
-EVADE jinked off the line); without the overlay it was 81 %. Ships told to open range "with
-evade" mostly did not move. The owner's rule: with evade the engine burns the whole time and
-turns on thrust vectoring.
+EVADE jinked off the line); without the overlay it was 81 %. The owner's rule: with evade
+the engine burns the whole time and turns on thrust vectoring. A first version shipped and
+was reviewed. It had two defects, fixed in a second round:
+- **The armour pick held an attitude off the cone.** It kept the hull's current attitude as a
+  candidate even 35-180 degrees off the burn line and burned there at the order's throttle.
+  Under HOLD_RANGE that fed back into the range keeper: 34-43 km RMS range error.
+- **Fire along the burn line was not dodged at all.** It dodged only rounds with more than
+  7 s to run. A nose-on charger with the overlay was hit as often as one without (49 % vs
+  50 %).
 
-- **The rule** (`src/simulation.py` module docstring). When the order itself burns this tick
-  (asked through `_fly_maneuver` without letting it steer: HEADING, BURN, BRAKE, plain
-  INTERCEPT, the burns of range keeping), the drive keeps the order's throttle and evasion
-  steers the thrust axis inside 20 degrees of the burn line (`EVADE_BURN_CONE_DEG`, the nose arc
-  less the presentation margin): 94 % of the push stays on the line at the cone edge. EVADE
-  swings across the rounds' approach (side and scatter from the same keyed jink stream);
-  TANK / BRACE / PRESENT take the cone point with the best armour reachable before impact, or
-  keep dodging when no point is better. Cone and cycle come from each hull's thrust-vectoring
-  authority: 8 s for a corvette, 24 s for a battleship, and 16 degrees / 30 s for a
-  dreadnought. Engine-off orders and the EVADE maneuver are unchanged (calibration harness rows
-  for PADLOCK + dodge and EVASIVE are identical).
-- **Threat model.** A round led onto a burning ship used to be read as a miss until its last
-  seconds, because the closest approach was taken on the ship's straight-line track. The ship's
-  own burn now enters the miss.
-- **Measured** (`scripts/evade_burn_measure.py`, 12 seeds per row, before -> after):
+**The rule** (`src/simulation.py` module docstring):
+- **Scope and throttle.** When the order itself burns this tick, the drive keeps the order's
+  throttle. Evasion steers the thrust axis round a cone of 20 degrees (`EVADE_BURN_CONE_DEG`)
+  about the burn line; 94 % of the push stays on the line at the cone edge.
+- **When it swings.** Continuously while rounds are inbound or an armed enemy is within
+  400 km (`EVADE_BURN_GUN_REACH_KM`). A coilgun round is led a whole flight time ahead, so what
+  defeats it is being unpredictable for the whole flight.
+- **How it swings.**
+  - A fresh cone point every half edge-to-edge swing, at least 4 s apart: corvette 4 s,
+    destroyer 6.8 s, battleship 12.2 s, dreadnought 16 degrees / 15 s. The hull is always
+    turning and never settles on an attitude the shooter's lead can extrapolate.
+  - Rounds from abeam give the side. Rounds within 30 degrees of the line, ahead or astern,
+    get a uniformly random azimuth, from the keyed jink RNG.
+- **Armour picks** are cone points only.
+- **Off the cone**, the hull turns toward the cone at full authority. With the nose more than
+  90 degrees off the line (`EVADE_BURN_AGAINST_ORDER_DEG`) the drive idles to the order's own
+  turn token, because it would otherwise push against the order.
+- **Unchanged:** engine-off orders and the EVADE maneuver, bit for bit (228 seeded engagements
+  compared with the parent, 0 differ).
 
-| ship burning across 3 gun ships 120-200 km off | on order under fire | rounds that hit | penetrations |
+**Measured** (`scripts/evade_burn_measure.py`, 24 seeds per row; parent / round 1 / now):
+
+| Ship burning under fire, dodge | Rounds that hit | No overlay | On order under fire |
 |---|---|---|---|
-| corvette, no overlay | 100 % | 22 % | 52 |
-| corvette, dodge | 48 -> 100 % | 4.7 -> 4.4 % | 1 -> 2 |
-| destroyer, no overlay | 100 % | 38 % | 231 |
-| destroyer, dodge | 50 -> 100 % | 10.2 -> 10.1 % | 25 -> 32 |
-| battlecruiser, dodge (none: 43 %) | 44 -> 99 % | 18 -> 22 % | 50 -> 124 |
-| dreadnought, dodge (none: 50 %) | 37 -> 100 % | 35 -> 45 % | 101 -> 268 |
+| destroyer across 3 gun ships 120-200 km | 9.9 / 9.5 / 11.8 % | 38.5 % | 50 / 100 / 98 % |
+| corvette, same | 5.7 / 5.2 / 4.6 % | 23.7 % | 46 / 100 / 97 % |
+| battlecruiser, same | 17.2 / 21.6 / 21.7 % | 44.3 % | 45 / 99 / 98 % |
+| dreadnought, same | 34.5 / 46.8 / 46.9 % | 51.4 % | 35 / 100 / 100 % |
+| destroyer charging 2 gun ships nose-on (review's `noseon`) | 11.6 / 49.2 / 27.2 % | 49.7 % | - |
+| frigate / cruiser / battleship / dreadnought charging | 16 / 13 / 20 / 34 -> 20 / 27 / 31 / 42 % | 35 / 51 / 47 / 51 % | - |
+| destroyer escaping 2 gun ships from 150 km | 38.5 / 51.6 / 36.8 % | 46.5 % | 15 / 26 / 43 % |
+| same, rounds fired while its drive is intact / damaged (now) | 14.0 % / 53.7 % | 39.0 % / 50.1 % | - |
 
-  Distance along the ordered line after 120 s: corvette 115 -> 210 km, destroyer 89 -> 139,
-  battlecruiser 62 -> 103, dreadnought 32 -> 52 (without the overlay 214 / 142 / 107 / 53).
-
-| burning away or cancelling closure | before (old overlay) | after | no overlay |
-|---|---|---|---|
-| destroyer escaping 2 gun ships from 150 km: lost | 0 of 12 | 8 of 12 | 12 of 12 |
-| same, km gained along the line after 120 s | 10 | 77 | 96 |
-| battlecruiser escaping: lost | 3 of 12 | 10 of 12 | 12 of 12 |
-| destroyer escaping 1 destroyer: penetrating hits | 30 | 99 | 108 |
-| destroyer cancelling 2 km/s closure on 2 gun ships: closest approach | 15 km | 50 km | 52 km |
-| same on 1 destroyer: closest approach / closing at 60 s | 47 km / 1.5 km/s | 71 km / 1.0 km/s | 69 km / 1.0 km/s |
-
-| first turn under fire, HOLD_RANGE (12 seeds) | before | after | no overlay |
-|---|---|---|---|
-| destroyer cancelling 2 km/s closure, nose still on the enemy (180 deg turn): closing at 60 s | 2.0 km/s | 1.5 km/s | 1.7 km/s |
-| same: sideways speed at 60 s / rounds that hit / lost | 0.27 km/s / 32 % / 0 | 0.15 / 52 % / 3 | 0.02 / 61 % / 7 |
-| destroyer HOLD_RANGE opening 150 -> 300 km under fire: km gained after 120 s | 19 | 74 | 67 |
-| same: rounds that hit; ticks under fire swung / on the older overlay | 6 %; - / 64 % | 29 %; 30 % / 54 % | 32 % |
-
-  The nose is aimed inside the cone but overshoots it on carried spin: up to 28 degrees
-  measured. The overlay costs CPU: an overlay-heavy scenario (12 ships x 150 s under fire)
-  took 14.9 s against 12.6 s, because the order is flown twice per tick and the threat scan
-  runs again. The perf benchmark battles barely use the overlay; their CPU did not change.
-- Helm measurement of the original report (stub battles, a ship ordered HEADING @100 % across
-  the line of fire, its nose starting off the heading): it burned on its order 87 % of its
-  time under fire with the overlay, up from 2 %, and another 7 % at full throttle while
-  still turning onto the line. Without the overlay the figure is 81 %.
-- Torpedo wall (admiral doctrine fixture, 500 km): burning straight away with evade full,
-  66 % -> 36 % of rounds hit, now all on the tail as without the overlay (37 %). The older
-  overlay turned the nose onto the rounds.
-- `scripts/tactics_eval.py`, 24 mirror battles of tactical vs legacy captains: tactical
-  wins 17 of 24 before and after. Kills went from 83 to 82, and torpedo hits from 376 to
-  354.
+| Escape, merge, range keeping (24 seeds) | Parent | Round 1 | Now | No overlay |
+|---|---|---|---|---|
+| destroyer escaping: lost | 2 | 19 | 16 | 24 |
+| same: km gained after 120 s | 6 | 89 | 109 | 98 |
+| destroyer cancelling 2 km/s closure on 1 destroyer: closest approach | 46 km | 67 km | 72 km | 67 km |
+| same from 180 degrees off (flip): closing at 60 s | 2.0 km/s | 1.5 | 1.3 | 1.7 |
+| HOLD_RANGE 150 km under torpedo + gun fire (review's `holdab`, 8 seeds x 3 hulls): RMS range error | 11-22 km | 34-43 km | 2.7-7.2 km | 1.8-5.1 km |
 
 **What it costs.**
-- The older overlay saved ships that turned away from guns by turning the nose (5-6 times
-  the tail's armour) back onto them and halving or stopping the burn. The new overlay keeps
-  the burn and shows the guns the tail, and 30 % of tail hits strike the drive. Escaping
-  ships now die almost as often as without the overlay. This is the main open question for
-  the owner.
-- Heavy hulls dodge less. A dreadnought's swing is narrower and slower; its hit rate went
-  from 35 % to 45 % against 50 % without the overlay.
-- Calibration. Harness HOLD_RANGE + dodge targets now swing their correction burns and jink
-  at full throttle between them (the order counts as engine-off below
-  `EVADE_BURN_MIN_THROTTLE`). Neither dodge model fits that mixture, so two of its long-range
-  buckets are named in `RESIDUALS`.
+- **Escaping ships.** The older overlay saved ships that turned away from guns by turning the
+  nose (5-6 times the tail's armour) back onto them and stopping the burn. The new one keeps
+  the burn and shows the guns the tail. 30 % of tail hits strike the drive, and a damaged
+  drive dodges far less. Escaping destroyers die 16 of 24 times against 2 of 24 before
+  (24 of 24 without the overlay).
+- **Heavy hulls dodge less.** A dreadnought swings a narrower, slower cone and is hit 47 %
+  against 34 % before and 51 % without the overlay.
+- **Swing cost.** Under fire or near enemy guns the burn always loses about 6 % of its push to
+  the swing.
+- **Calibration.** Fire control prices a swinging fixed-line burn with one fraction
+  (`SWING_ACCEL_FRACTION` 0.24, T^2 form, held out on odd seeds). Range keepers mostly jink
+  at full throttle between swung corrections and are priced as engine-off dodgers. Five thin
+  buckets beyond 300 km are pinned in `RESIDUALS` with bands that also hold on 56 fresh
+  harness seeds; two of them, HOLD_RANGE under fleet fire beyond 300 km, are hit less than
+  forecast in both seed sets.
+- **CPU.** An overlay-heavy scenario costs about 18 % more CPU; the benchmark battles barely
+  use the overlay.
 
 ### Recording files
 
