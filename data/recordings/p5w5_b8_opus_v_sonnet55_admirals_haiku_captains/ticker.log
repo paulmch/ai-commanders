@@ -1,0 +1,200 @@
+=== BATTLE p5w5_b8_opus_v_sonnet55_admirals_haiku_captains | claude-opus-5-5 vs claude-sonnet-5-5 | spend $0.00/$17.00 ===
+150 pts/side, max 8 ships, 20 turns of 30s. Reasoning per-model default (claude-opus-5-5 high, claude-haiku-5-5 medium, claude-sonnet-5-5 high). Admiral vision ON: tactical plot to both admirals each checkpoint.
+Costs: CO=corvette:24 FF=frigate:7 DD=destroyer:18 CA=cruiser:29 BC=battlecruiser:25 BB=battleship:43 DN=dreadnought:55 DS=dreadnought_siege:56 CT=cruiser_torpedo:100
+=== DRAFT BETA | claude-sonnet-5-5 | 141/150 pts | spend $0.03/$17.00 (+$0.34 held) ===
+Ships (8): Stiletto-1 CO 24 | Stiletto-2 CO 24 | Stiletto-3 CO 24 | Stiletto-4 CO 24 | Stiletto-5 CO 24 | Picket-1 FF 7 | Picket-2 FF 7 | Picket-3 FF 7
+Formation: Screened wedge - Cheap frigates forward as vanguard to absorb the first exchange. Corvettes sit behind them within ~60 km la...
+Concept: All-3g fleet that can dictate range: 40 torpedoes in a coordinated saturation salvo, with frigates as PD screens and cheap decoys. Kite a...
+=== DRAFT ALPHA | claude-opus-5-5 | 148/150 pts | spend $0.11/$17.00 ===
+Ships (3): Harpoon CT 100 | Dart-1 CO 24 | Dart-2 CO 24
+Formation: Torpedo screen - The torpedo cruiser sits 60 km back so it stays out of gun range longer and can launch from standoff distan...
+Concept: An all-torpedo fleet carrying 64 rounds, fired in coordinated salvos of up to 12 per 30s, to overwhelm enemy point defence. The torpedo c...
+=== CP 1 | t=0s | spend $0.79/$17.00 ===
+ALPHA claude-opus-5-5: 3/3 alive, hull 100% | Harpoon CT hull 100% arm 41/41cm heat 0% | Dart-1 CO hull 100% arm 36/36cm heat 0% | Dart-2 CO hull 100% arm 36/36cm heat 0%
+BETA claude-sonnet-5-5: 8/8 alive, hull 100% | Stiletto-1 CO hull 100% arm 36/36cm heat 0% | Stiletto-2 CO hull 100% arm 36/36cm heat 0% | Stiletto-3 CO hull 100% arm 36/36cm heat 0% | Stiletto-4 CO hull 100% arm 36/36cm heat 0% | Stiletto-5 CO hull 100% arm 36/36cm heat 0% | Picket-1 FF hull 100% arm 12/12cm heat 0% | Picket-2 FF hull 100% arm 12/12cm heat 0% | Picket-3 FF hull 100% arm 12/12cm heat 0%
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 6 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 5 torps/0 impact, PD downed 0 torps
+A admiral: Kite and strike. Whole fleet burns AWAY from the enemy (heading -X) in tight formation so our 6 PD overlap - stay outside their frigates'...
+B admiral: Alpha-torpedo cruiser TIS Harpoon is the priority: all 5 Stilettos launch 3 torpedoes each (15 total, simultaneous, sprint) at TIS Harpoo...
+Prompt cache: 1 hit / 27 write / 0 cold calls, 17.1k read + 257.7k written of 335.0k prompt tokens (5% read)
+=== CP 2 | t=30s | spend $1.05/$17.00 ===
+ALPHA claude-opus-5-5: 3/3 alive, hull 100% | Harpoon CT hull 100% arm 41/41cm heat 0% | Dart-1 CO hull 100% arm 36/36cm heat 0% | Dart-2 CO hull 100% arm 36/36cm heat 0%
+BETA claude-sonnet-5-5: 8/8 alive, hull 100% | Stiletto-1 CO hull 100% arm 36/36cm heat 0% | Stiletto-2 CO hull 100% arm 36/36cm heat 0% | Stiletto-3 CO hull 100% arm 36/36cm heat 0% | Stiletto-4 CO hull 100% arm 36/36cm heat 0% | Stiletto-5 CO hull 100% arm 36/36cm heat 0% | Picket-1 FF hull 100% arm 12/12cm heat 0% | Picket-2 FF hull 100% arm 12/12cm heat 0% | Picket-3 FF hull 100% arm 12/12cm heat 0%
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 9 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 10 torps/0 impact, PD downed 0 torps
+A admiral: 15 torpedoes are inbound on TIS Harpoon (first impact ~52 s). Harpoon may not survive, so it fires its magazine now while it still can. H...
+B admiral: Harpoon already has 15 torpedoes inbound: no more at it. Stiletto-1, -2, -3 and -4 launch a 7-round simultaneous sprint salvo at TIS Dart...
+Prompt cache: 26 hit / 27 write / 0 cold calls, 286.2k read + 257.7k written of 688.6k prompt tokens (42% read)
+=== CP 3 | t=60s | spend $1.33/$17.00 ===
+ALPHA claude-opus-5-5: 3/3 alive, hull 100% | Harpoon CT hull 100% arm 41/41cm heat 3% | Dart-1 CO hull 100% arm 36/36cm heat 3% | Dart-2 CO hull 100% arm 36/36cm heat 1%
+BETA claude-sonnet-5-5: 8/8 alive, hull 100% | Stiletto-1 CO hull 100% arm 36/36cm heat 0% | Stiletto-2 CO hull 100% arm 36/36cm heat 0% | Stiletto-3 CO hull 100% arm 36/36cm heat 0% | Stiletto-4 CO hull 100% arm 36/36cm heat 0% | Stiletto-5 CO hull 100% arm 36/36cm heat 0% | Picket-1 FF hull 100% arm 12/12cm heat 8% | Picket-2 FF hull 100% arm 12/12cm heat 7% | Picket-3 FF hull 100% arm 12/12cm heat 0%
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 8 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 10 torps/0 impact, PD downed 0 torps
+A admiral: Harpoon is about to take ~15 torpedoes. Before they hit, it fires its whole ready load (8 rounds) together at OCS Stiletto-5, which still...
+B admiral: Stay clustered so PD overlaps. Pickets 1-3 EVADE, burning away (+X) to turn tails to inbound torpedoes. Stilettos hold position PADLOCK o...
+Prompt cache: 51 hit / 27 write / 0 cold calls, 555.3k read + 257.7k written of 1053.0k prompt tokens (53% read)
+=== CP 4 | t=90s | spend $1.60/$17.00 ===
+ALPHA claude-opus-5-5: 3/3 alive, hull 88% | Harpoon CT hull 63% arm 0/241cm heat 4% | Dart-1 CO hull 100% arm 36/36cm heat 4% | Dart-2 CO hull 100% arm 36/36cm heat 9%
+BETA claude-sonnet-5-5: 7/8 alive, hull 88% | Stiletto-1 CO hull 100% arm 36/36cm heat 1% | Stiletto-2 CO hull 100% arm 36/36cm heat 1% | Stiletto-3 CO hull 100% arm 36/36cm heat 0% | Stiletto-4 CO hull 100% arm 36/36cm heat 0% | Stiletto-5 CO hull 100% arm 36/36cm heat 0% | Picket-1 FF DEAD@80s | Picket-2 FF hull 100% arm 12/12cm heat 15% | Picket-3 FF hull 100% arm 12/12cm heat 8%
+Hits: A:Harpoon>B:Picket-1 torp x2 | B:Stiletto-1>A:Harpoon torp x1 | B:Stiletto-2>A:Harpoon torp x1 | B:Stiletto-4>A:Harpoon torp x1 | B:Stiletto-5>A:Harpoon torp x1 | +1 more
+Kills: B:Picket-1 by A:Harpoon (reactor_destroyed) @80s
+Fire: A 0 slugs/0 hit, 13 torps/2 impact, PD downed 0 torps ; B 0 slugs/0 hit, 4 torps/5 impact, PD downed 4 torps
+A admiral: Use every rack before the inbound salvos land. TIS Harpoon: launch all 8 ready rounds at OCS Stiletto-4 now (it has ~4 torpedoes left, th...
+B admiral: Our 24 torpedoes already in flight cover Harpoon, Dart-1 and Dart-2 (overkill) - NO new launches this checkpoint, hold the remaining 11 r...
+Prompt cache: 74 hit / 27 write / 0 cold calls, 802.8k read + 257.7k written of 1391.4k prompt tokens (58% read)
+=== CP 5 | t=120s | spend $1.83/$17.00 ===
+ALPHA claude-opus-5-5: 2/3 alive, hull 59% | Harpoon CT DEAD@93s | Dart-1 CO hull 77% arm 10/212cm heat 5% | Dart-2 CO hull 100% arm 36/36cm heat 16%
+BETA claude-sonnet-5-5: 7/8 alive, hull 88% | Stiletto-1 CO hull 100% arm 36/36cm heat 7% | Stiletto-2 CO hull 100% arm 36/36cm heat 5% | Stiletto-3 CO hull 100% arm 36/36cm heat 7% | Stiletto-4 CO hull 100% arm 36/36cm heat 4% | Stiletto-5 CO hull 100% arm 36/36cm heat 6% | Picket-1 FF DEAD@80s | Picket-2 FF hull 100% arm 12/12cm heat 23% | Picket-3 FF hull 100% arm 12/12cm heat 16%
+Hits: B:Stiletto-1>A:Harpoon torp x1 | B:Stiletto-1>A:Dart-1 torp x1 | B:Stiletto-2>A:Dart-1 torp x1 | B:Stiletto-4>A:Dart-1 torp x1 | B:Stiletto-3>A:Dart-1 torp x1
+Kills: A:Harpoon by B:Stiletto-1 (reactor_destroyed) @93s
+Fire: A 0 slugs/0 hit, 3 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/5 impact, PD downed 2 torps
+A admiral: Harpoon is lost. We are now in survival mode, and our 22 torpedoes in flight do the damage. Both Darts: burn straight away from the enemy...
+B admiral: Harpoon is dead; its inbound torpedoes remain. All ships burn away along heading (+1.0,-0.02,+0.01) at full throttle with evade, keeping...
+Prompt cache: 95 hit / 27 write / 0 cold calls, 1029.1k read + 257.7k written of 1699.3k prompt tokens (61% read)
+=== CP 6 | t=150s | spend $1.96/$17.00 ===
+ALPHA claude-opus-5-5: 1/3 alive, hull 33% | Harpoon CT DEAD@93s | Dart-1 CO DEAD@125s | Dart-2 CO hull 100% arm 36/36cm heat 24%
+BETA claude-sonnet-5-5: 5/8 alive, hull 62% | Stiletto-1 CO hull 100% arm 36/36cm heat 15% | Stiletto-2 CO hull 100% arm 36/36cm heat 12% | Stiletto-3 CO hull 100% arm 36/36cm heat 14% | Stiletto-4 CO hull 100% arm 36/36cm heat 12% | Stiletto-5 CO DEAD@135s | Picket-1 FF DEAD@80s | Picket-2 FF hull 100% arm 12/12cm heat 30% | Picket-3 FF DEAD@122s
+Hits: A:Harpoon>B:Picket-3 torp x2 | A:Harpoon>B:Stiletto-5 torp x2 | B:Stiletto-1>A:Dart-1 torp x1 | B:Stiletto-2>A:Dart-1 torp x1
+Kills: B:Picket-3 by A:Harpoon (reactor_destroyed) @122s ; A:Dart-1 crippled by B:Stiletto-1 (detonates in 28s) @125s ; A:Dart-1 by B:Stiletto-1 (reactor_destroyed) @125s ; B:Stiletto-5 by A:Harpoon (reactor_destroyed) @135s
+Fire: A 0 slugs/0 hit, 0 torps/4 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/2 impact, PD downed 1 torps
+A admiral: Dart-2 is our last hull. The enemy is burning away from us at 2.9g and range is opening (657 km). No torpedoes are inbound either way exc...
+B admiral: Only TIS Dart-2 remains (~2 torpedoes left). We lead on score. All ships burn away along +X at full throttle with evade so inbound torped...
+Prompt cache: 109 hit / 28 write / 0 cold calls, 1186.9k read + 273.8k written of 1921.8k prompt tokens (62% read)
+=== CP 7 | t=180s | spend $2.08/$17.00 ===
+ALPHA claude-opus-5-5: 1/3 alive, hull 33% | Harpoon CT DEAD@93s | Dart-1 CO DEAD@125s | Dart-2 CO hull 100% arm 36/36cm heat 28%
+BETA claude-sonnet-5-5: 4/8 alive, hull 50% | Stiletto-1 CO hull 100% arm 36/36cm heat 22% | Stiletto-2 CO hull 100% arm 36/36cm heat 20% | Stiletto-3 CO hull 100% arm 36/36cm heat 22% | Stiletto-4 CO hull 100% arm 36/36cm heat 20% | Stiletto-5 CO DEAD@135s | Picket-1 FF DEAD@80s | Picket-2 FF DEAD@151s | Picket-3 FF DEAD@122s
+Hits: A:Harpoon>B:Picket-2 torp x2
+Kills: B:Picket-2 by A:Harpoon (reactor_destroyed) @151s
+Fire: A 0 slugs/0 hit, 0 torps/2 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 2 torps
+A admiral: Dart-2 is our last hull. Survival comes first. Keep opening range on heading (-1.00,-0.09,-0.02) at half throttle, with evade full. The e...
+B admiral: Enemy is down to TIS Dart-2, which is running away with about 2 torpedoes. Stop burning and coast as a tight cluster so PD overlaps. Keep...
+Prompt cache: 121 hit / 28 write / 0 cold calls, 1322.6k read + 273.8k written of 2093.4k prompt tokens (63% read)
+=== CP 8 | t=210s | spend $2.18/$17.00 ===
+ALPHA claude-opus-5-5: 1/3 alive, hull 33% | Harpoon CT DEAD@93s | Dart-1 CO DEAD@125s | Dart-2 CO hull 100% arm 36/36cm heat 31%
+BETA claude-sonnet-5-5: 4/8 alive, hull 50% | Stiletto-1 CO hull 100% arm 36/36cm heat 23% | Stiletto-2 CO hull 100% arm 36/36cm heat 27% | Stiletto-3 CO hull 100% arm 36/36cm heat 22% | Stiletto-4 CO hull 100% arm 36/36cm heat 20% | Stiletto-5 CO DEAD@135s | Picket-1 FF DEAD@80s | Picket-2 FF DEAD@151s | Picket-3 FF DEAD@122s
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 1 torps
+A admiral: TIS Dart-2: we are the last hull. Survival is the mission. Keep opening range on heading (-1.00,-0.09,-0.02) at half throttle, with evade...
+B admiral: Enemy has ~2 torpedoes left and is opening. We lead 323-92. Keep opening range from TIS Dart-2 on +X, stay clustered so PD overlaps, evad...
+Prompt cache: 133 hit / 28 write / 0 cold calls, 1458.3k read + 273.8k written of 2262.1k prompt tokens (64% read)
+=== CP 9 | t=240s | spend $2.28/$17.00 ===
+ALPHA claude-opus-5-5: 1/3 alive, hull 33% | Harpoon CT DEAD@93s | Dart-1 CO DEAD@125s | Dart-2 CO hull 100% arm 36/36cm heat 35%
+BETA claude-sonnet-5-5: 4/8 alive, hull 50% | Stiletto-1 CO hull 100% arm 36/36cm heat 25% | Stiletto-2 CO hull 100% arm 36/36cm heat 31% | Stiletto-3 CO hull 100% arm 36/36cm heat 25% | Stiletto-4 CO hull 100% arm 36/36cm heat 23% | Stiletto-5 CO DEAD@135s | Picket-1 FF DEAD@80s | Picket-2 FF DEAD@151s | Picket-3 FF DEAD@122s
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 1 torps
+A admiral: TIS Dart-2 is our last hull. Keep it alive and keep both torpedoes. The enemy's 4 Stilettos are 1130 km off, opening at 6.6 km/s and burn...
+B admiral: Enemy is down to TIS Dart-2 with ~2 torpedoes and is opening range at 6.6 km/s. Hold the lead. Coast with engines off, keep the four Stil...
+Prompt cache: 145 hit / 28 write / 0 cold calls, 1594.0k read + 273.8k written of 2427.5k prompt tokens (66% read)
+=== CP 10 | t=270s | spend $2.37/$17.00 ===
+ALPHA claude-opus-5-5: 1/3 alive, hull 33% | Harpoon CT DEAD@93s | Dart-1 CO DEAD@125s | Dart-2 CO hull 100% arm 36/36cm heat 37%
+BETA claude-sonnet-5-5: 4/8 alive, hull 50% | Stiletto-1 CO hull 100% arm 36/36cm heat 25% | Stiletto-2 CO hull 100% arm 36/36cm heat 31% | Stiletto-3 CO hull 100% arm 36/36cm heat 26% | Stiletto-4 CO hull 100% arm 36/36cm heat 24% | Stiletto-5 CO DEAD@135s | Picket-1 FF DEAD@80s | Picket-2 FF DEAD@151s | Picket-3 FF DEAD@122s
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: TIS Dart-2: survival is the priority. The enemy is 1336 km away and the range is opening at 6.9 km/s. They are coasting and have about 6...
+B admiral: Enemy TIS Dart-2 is alone, opening range at 1336 km with ~2 torpedoes left. Hold position and coast clustered; do not chase or merge. Hol...
+Prompt cache: 157 hit / 28 write / 0 cold calls, 1729.7k read + 273.8k written of 2592.1k prompt tokens (67% read)
+=== CP 11 | t=300s | spend $2.47/$17.00 ===
+ALPHA claude-opus-5-5: 1/3 alive, hull 33% | Harpoon CT DEAD@93s | Dart-1 CO DEAD@125s | Dart-2 CO hull 100% arm 36/36cm heat 41%
+BETA claude-sonnet-5-5: 4/8 alive, hull 50% | Stiletto-1 CO hull 100% arm 36/36cm heat 25% | Stiletto-2 CO hull 100% arm 36/36cm heat 31% | Stiletto-3 CO hull 100% arm 36/36cm heat 26% | Stiletto-4 CO hull 100% arm 36/36cm heat 24% | Stiletto-5 CO DEAD@135s | Picket-1 FF DEAD@80s | Picket-2 FF DEAD@151s | Picket-3 FF DEAD@122s
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: TIS Dart-2: we are the last hull and the range is opening (1550 km, +7.3 km/s). Neither side has a torpedo solution. Survive to the time...
+B admiral: Hold position and coast clustered. Enemy TIS Dart-2 is alone, opening range, ~2 torpedoes left, none in flight. Do not launch torpedoes (...
+Prompt cache: 169 hit / 28 write / 0 cold calls, 1865.4k read + 273.8k written of 2756.8k prompt tokens (68% read)
+=== CP 12 | t=330s | spend $2.56/$17.00 ===
+ALPHA claude-opus-5-5: 1/3 alive, hull 33% | Harpoon CT DEAD@93s | Dart-1 CO DEAD@125s | Dart-2 CO hull 100% arm 36/36cm heat 43%
+BETA claude-sonnet-5-5: 4/8 alive, hull 50% | Stiletto-1 CO hull 100% arm 36/36cm heat 25% | Stiletto-2 CO hull 100% arm 36/36cm heat 31% | Stiletto-3 CO hull 100% arm 36/36cm heat 26% | Stiletto-4 CO hull 100% arm 36/36cm heat 24% | Stiletto-5 CO DEAD@135s | Picket-1 FF DEAD@80s | Picket-2 FF DEAD@151s | Picket-3 FF DEAD@122s
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: TIS Dart-2: preserve the ship. Keep opening range from the four Stiletto corvettes, heading (-1.00,-0.08,-0.01) at half throttle, with ev...
+B admiral: Hold course and coast clustered, PADLOCK on TIS Dart-2. Hold all torpedoes (no GOOD solution). Do not chase or merge; we lead on score. I...
+Prompt cache: 181 hit / 28 write / 0 cold calls, 2001.1k read + 273.8k written of 2920.9k prompt tokens (69% read)
+=== CP 13 | t=360s | spend $2.67/$17.00 ===
+ALPHA claude-opus-5-5: 1/3 alive, hull 33% | Harpoon CT DEAD@93s | Dart-1 CO DEAD@125s | Dart-2 CO hull 100% arm 36/36cm heat 47%
+BETA claude-sonnet-5-5: 4/8 alive, hull 50% | Stiletto-1 CO hull 100% arm 36/36cm heat 25% | Stiletto-2 CO hull 100% arm 36/36cm heat 31% | Stiletto-3 CO hull 100% arm 36/36cm heat 26% | Stiletto-4 CO hull 100% arm 36/36cm heat 24% | Stiletto-5 CO DEAD@135s | Picket-1 FF DEAD@80s | Picket-2 FF DEAD@151s | Picket-3 FF DEAD@122s
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: TIS Dart-2: we are the last hull. Survive to T+600 and keep both torpedoes. The range is about 2000 km and opening 7.8 km/s, with nothing...
+B admiral: Enemy is a lone corvette, Dart-2, 2000 km away and opening. We lead the score, so avoid a merge. Keep coasting in a cluster with PADLOCK...
+Prompt cache: 193 hit / 28 write / 0 cold calls, 2136.8k read + 273.8k written of 3085.5k prompt tokens (69% read)
+=== CP 14 | t=390s | spend $2.76/$17.00 ===
+ALPHA claude-opus-5-5: 1/3 alive, hull 33% | Harpoon CT DEAD@93s | Dart-1 CO DEAD@125s | Dart-2 CO hull 100% arm 36/36cm heat 47%
+BETA claude-sonnet-5-5: 4/8 alive, hull 50% | Stiletto-1 CO hull 100% arm 36/36cm heat 25% | Stiletto-2 CO hull 100% arm 36/36cm heat 31% | Stiletto-3 CO hull 100% arm 36/36cm heat 26% | Stiletto-4 CO hull 100% arm 36/36cm heat 24% | Stiletto-5 CO DEAD@135s | Picket-1 FF DEAD@80s | Picket-2 FF DEAD@151s | Picket-3 FF DEAD@122s
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: TIS Dart-2: preserve the hull. We are 2200+ km out and the range is opening at ~8 km/s. The enemy is coasting, with no rounds in flight a...
+B admiral: Hold the lead to T+600. Coast clustered, PADLOCK on TIS Dart-2, no burns, no merge. Hold all torpedoes unless a GOOD verdict appears, and...
+Prompt cache: 205 hit / 28 write / 0 cold calls, 2272.5k read + 273.8k written of 3249.5k prompt tokens (70% read)
+=== CP 15 | t=420s | spend $2.85/$17.00 ===
+ALPHA claude-opus-5-5: 1/3 alive, hull 33% | Harpoon CT DEAD@93s | Dart-1 CO DEAD@125s | Dart-2 CO hull 100% arm 36/36cm heat 47%
+BETA claude-sonnet-5-5: 4/8 alive, hull 50% | Stiletto-1 CO hull 100% arm 36/36cm heat 25% | Stiletto-2 CO hull 100% arm 36/36cm heat 31% | Stiletto-3 CO hull 100% arm 36/36cm heat 26% | Stiletto-4 CO hull 100% arm 36/36cm heat 24% | Stiletto-5 CO DEAD@135s | Picket-1 FF DEAD@80s | Picket-2 FF DEAD@151s | Picket-3 FF DEAD@122s
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: TIS Dart-2: keep the hull intact. The range is 2400+ km and opening at about 8 km/s. No torpedoes are inbound and no shot has a solution....
+B admiral: Hold position and coast clustered, PADLOCK on TIS Dart-2. Do not burn or close; it is out of reach and opening at 8 km/s. Hold all torped...
+Prompt cache: 217 hit / 28 write / 0 cold calls, 2408.2k read + 273.8k written of 3413.5k prompt tokens (71% read)
+=== CP 16 | t=450s | spend $2.95/$17.00 ===
+ALPHA claude-opus-5-5: 1/3 alive, hull 33% | Harpoon CT DEAD@93s | Dart-1 CO DEAD@125s | Dart-2 CO hull 100% arm 36/36cm heat 47%
+BETA claude-sonnet-5-5: 4/8 alive, hull 50% | Stiletto-1 CO hull 100% arm 36/36cm heat 25% | Stiletto-2 CO hull 100% arm 36/36cm heat 31% | Stiletto-3 CO hull 100% arm 36/36cm heat 26% | Stiletto-4 CO hull 100% arm 36/36cm heat 24% | Stiletto-5 CO DEAD@135s | Picket-1 FF DEAD@80s | Picket-2 FF DEAD@151s | Picket-3 FF DEAD@122s
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: TIS Dart-2: keep the hull safe until the battle ends at T+600. The range to all four Stilettos is opening at about 8 km/s (2600+ km), and...
+B admiral: Enemy Dart-2 is 2700 km away and opening. Hold the lead: coast clustered, PADLOCK Dart-2, no torpedoes (all out of reach). Don't chase or...
+Prompt cache: 230 hit / 28 write / 0 cold calls, 2548.5k read + 273.8k written of 3583.9k prompt tokens (71% read)
+=== CP 17 | t=480s | spend $3.04/$17.00 ===
+ALPHA claude-opus-5-5: 1/3 alive, hull 33% | Harpoon CT DEAD@93s | Dart-1 CO DEAD@125s | Dart-2 CO hull 100% arm 36/36cm heat 47%
+BETA claude-sonnet-5-5: 4/8 alive, hull 50% | Stiletto-1 CO hull 100% arm 36/36cm heat 25% | Stiletto-2 CO hull 100% arm 36/36cm heat 31% | Stiletto-3 CO hull 100% arm 36/36cm heat 26% | Stiletto-4 CO hull 100% arm 36/36cm heat 24% | Stiletto-5 CO DEAD@135s | Picket-1 FF DEAD@80s | Picket-2 FF DEAD@151s | Picket-3 FF DEAD@122s
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: TIS Dart-2: keep the hull intact until the battle ends at T+600. The enemy corvettes are 2900+ km away and the range is opening at about...
+B admiral: Enemy Dart-2 is ~3000 km away and opening. We lead on score. Coast clustered in PADLOCK on Dart-2, hold fire, keep all 6 torpedoes in res...
+Prompt cache: 242 hit / 28 write / 0 cold calls, 2684.2k read + 273.8k written of 3747.6k prompt tokens (72% read)
+=== CP 18 | t=510s | spend $3.14/$17.00 ===
+ALPHA claude-opus-5-5: 1/3 alive, hull 33% | Harpoon CT DEAD@93s | Dart-1 CO DEAD@125s | Dart-2 CO hull 100% arm 36/36cm heat 47%
+BETA claude-sonnet-5-5: 4/8 alive, hull 50% | Stiletto-1 CO hull 100% arm 36/36cm heat 25% | Stiletto-2 CO hull 100% arm 36/36cm heat 31% | Stiletto-3 CO hull 100% arm 36/36cm heat 26% | Stiletto-4 CO hull 100% arm 36/36cm heat 24% | Stiletto-5 CO DEAD@135s | Picket-1 FF DEAD@80s | Picket-2 FF DEAD@151s | Picket-3 FF DEAD@122s
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: TIS Dart-2: preserve the hull to the end at T+600. Keep coasting away from the Stiletto group (MAINTAIN, engine off, on the current outbo...
+B admiral: Enemy Dart-2 is 3200 km away and opening. Keep coasting clustered and PADLOCK on Dart-2. Hold all torpedoes (no GOOD solution). Do not cl...
+Prompt cache: 256 hit / 28 write / 0 cold calls, 2829.1k read + 273.8k written of 3924.7k prompt tokens (72% read)
+=== CP 19 | t=540s | spend $3.23/$17.00 ===
+ALPHA claude-opus-5-5: 1/3 alive, hull 33% | Harpoon CT DEAD@93s | Dart-1 CO DEAD@125s | Dart-2 CO hull 100% arm 36/36cm heat 47%
+BETA claude-sonnet-5-5: 4/8 alive, hull 50% | Stiletto-1 CO hull 100% arm 36/36cm heat 25% | Stiletto-2 CO hull 100% arm 36/36cm heat 31% | Stiletto-3 CO hull 100% arm 36/36cm heat 26% | Stiletto-4 CO hull 100% arm 36/36cm heat 24% | Stiletto-5 CO DEAD@135s | Picket-1 FF DEAD@80s | Picket-2 FF DEAD@151s | Picket-3 FF DEAD@122s
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: TIS Dart-2: hold your course and coast away. Keep MAINTAIN on the current outbound line until the battle ends at T+600. The enemy is 3300...
+B admiral: Hold the lead to T+600. Enemy Dart-2 is 3400 km away and opening, with no threat. Coast clustered in PADLOCK on Dart-2. Do not burn, do n...
+Prompt cache: 268 hit / 28 write / 0 cold calls, 2964.8k read + 273.8k written of 4088.6k prompt tokens (73% read)
+=== CP 20 | t=570s | spend $3.31/$17.00 ===
+ALPHA claude-opus-5-5: 1/3 alive, hull 33% | Harpoon CT DEAD@93s | Dart-1 CO DEAD@125s | Dart-2 CO hull 100% arm 36/36cm heat 47%
+BETA claude-sonnet-5-5: 4/8 alive, hull 50% | Stiletto-1 CO hull 100% arm 36/36cm heat 25% | Stiletto-2 CO hull 100% arm 36/36cm heat 31% | Stiletto-3 CO hull 100% arm 36/36cm heat 26% | Stiletto-4 CO hull 100% arm 36/36cm heat 24% | Stiletto-5 CO DEAD@135s | Picket-1 FF DEAD@80s | Picket-2 FF DEAD@151s | Picket-3 FF DEAD@122s
+Hits: none
+Kills: none
+Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+A admiral: Final checkpoint (T+570 to T+600). TIS Dart-2: keep coasting away on your current course (MAINTAIN). The enemy is 3500+ km out and the ra...
+B admiral: Final checkpoint. Enemy Dart-2 is 3700 km away and opening, with no torpedo solution. Hold position, coast, PADLOCK Dart-2, and hold all...
+Prompt cache: 280 hit / 28 write / 0 cold calls, 3100.5k read + 273.8k written of 4252.4k prompt tokens (73% read)
+=== RESULT | t=600s | after CP 20 | spend $3.31/$17.00 ===
+Winner: BETA - Beta tactical advantage (323.1 vs 91.5)
+ALPHA claude-opus-5-5: 1/3 alive, hull 33% | Harpoon CT DEAD@93s | Dart-1 CO DEAD@125s | Dart-2 CO hull 100% arm 36/36cm heat 47%
+BETA claude-sonnet-5-5: 4/8 alive, hull 50% | Stiletto-1 CO hull 100% arm 36/36cm heat 25% | Stiletto-2 CO hull 100% arm 36/36cm heat 31% | Stiletto-3 CO hull 100% arm 36/36cm heat 26% | Stiletto-4 CO hull 100% arm 36/36cm heat 24% | Stiletto-5 CO DEAD@135s | Picket-1 FF DEAD@80s | Picket-2 FF DEAD@151s | Picket-3 FF DEAD@122s
+Final interval - Hits: none
+Final interval - Kills: none
+Final interval - Fire: A 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps ; B 0 slugs/0 hit, 0 torps/0 impact, PD downed 0 torps
+Spend: $3.3102 reported, $3.3102 committed of $17.00 limit, 308 model calls
+Recording: /home/plmch/ai-commanders/visualizer/public/recordings/p5w5_b8_opus_v_sonnet55_admirals_haiku_captains.json

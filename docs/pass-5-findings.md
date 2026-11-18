@@ -469,6 +469,10 @@ threat. Seconds from launch to ignition (`scripts/launch_sequence_facts.py`):
 | turning or spinning at launch | 4 | 4-5 |
 | two hulls 120 m apart launching together | 4 and 8 | 4 and 9 |
 
+The table was measured with the first (instant) drift cancel; with the crab-angle light-off the
+corvette rows are unchanged and the torpedo cruiser's coasting rows read 5 s (the nose turn is
+applied once per tick).
+
 No round came within 11.7 m of its own hull while separating (52.8 m after ignition),
 none sat in its ship's plume, salvo rounds stay > 50 m apart, so there is no launch
 collision model. Forecasts include the delay (captain's shadow flight exact, admiral's
@@ -655,6 +659,7 @@ What changed, on the owner's standing rule (accurate state, no prescribed tactic
 | B5 | B2 again on the final evade engine | Sonnet 5.5 wins 259.8-166.9 (attacker lands 3x the hits) | $8.69 |
 | B6b | B5 with intent-only admirals | Sonnet 5.5 wins 227.0-135.0; 36 % cheaper | $5.56 |
 | B7 | Opus captains, no admiral, 4 v 4, 80 points | 30 captain messages on the fleet net in 8 checkpoints | $2.96 |
+| B8 | final build: Opus 5.5 admiral v Sonnet 5.5 admiral, Haiku captains both sides | Sonnet side wins 323.1-91.5 (5 corvettes + 3 frigates against a torpedo cruiser + 2 corvettes) | $3.31 |
 
 What they showed: commanders who know the clock but not the score wait (B1 against B2); a strong
 admiral over cheap captains is the best value (all 160 Haiku captain turns of B3 cost $0.14);
@@ -664,7 +669,7 @@ overkill calls, timed salvos, cover requests), and in the latter case all decidi
 instant made two ships fire at the same target at the first checkpoint, which the sequential
 order now prevents. One battle (`p5w5_b6_intent_only`, GLM 5.3 Flash against GPT-5.6 Luna, $0.09
 on OpenRouter) was started by a shell quoting error without its arguments; the scripts' model
-defaults that allowed it are gone. Total paid: $56.38 including replays.
+defaults that allowed it are gone. Total paid: $59.69 including replays.
 
 ## Torpedoes: profiles, a datalink, and what happens at launch
 
@@ -718,8 +723,10 @@ Torpedo fleets still beat gun fleets in every battle, whatever the gun fleet fli
   battleship fleets; its gain is against dreadnought lines. A gun fleet loses every battle to the
   torpedo boats under any doctrine.
 - **Perf reference timings** were kept from a quiet run; only the hashes were re-recorded.
-- **Untested on real models:** sequential captains, the surrender rule, the burn-through flip
-  and the launch sequence landed after the last paid battle.
+- **Barely tested on real models.** B8 flew the final build: 65 launch sequences (3-7 s to
+  ignition), 12 reserve rounds, 4 datalink re-tasks after a target died, the drive interlock 12
+  times; a dead torpedo cruiser's rounds in flight went on to kill three more ships. Sequential
+  captains and the surrender rule have still not been exercised by a model.
 - **Plume.** An impaired crew's "slower response" is not built (only slower weapon cycling). The
   formation throttle matching does not know about the interlock, so a held lead falls behind
   unless its captain side-slips. The doctrine text does not mention the interlock.
