@@ -6,7 +6,7 @@ import { TargetingLines } from './TargetingLines.js';
 import {
   WeaponTimeline, makeSample, sampleTrack, seedFor, tracerLength,
   missOpacity, beamPulse, torpedoPower, ION_LIFE, IMPACT_LIFE, OWNED_MOMENTS, TWIN_BARREL_X,
-  spinalMuzzleInto, dudSkims, TERMINAL_BEND_S
+  spinalMuzzleInto, dudSkims, TERMINAL_BEND_S, torpedoMissOpacity
 } from './WeaponTimeline.js';
 import { SLUG_LOOK, MUZZLE_LOOK, muzzlePop, POP_LIGHTS } from './GunLooks.js';
 import { washAt } from '../DamageTimeline.js';
@@ -434,6 +434,8 @@ export class Projectiles {
     this.noseAt(tr, st, this.sample, this.dir);
     const s = this.sample.state;
     const disabled = time >= tr.disabledAt || s.disabled;
+    // a miss flies on past its closest approach (as recorded: lit or dark), fading out
+    const mf = torpedoMissOpacity(time - tr.missAt);
     if (tr.visible) {
       let range = Infinity, closure = 0;
       const target = this.timeline.ships.get(s.target);
@@ -471,7 +473,7 @@ export class Projectiles {
       const g = power > 0 ? this.gimbal.angle : 0;
       const gx = g * (this.gimbal.x * this.ex.x + this.gimbal.y * this.ex.y + this.gimbal.z * this.ex.z);
       const gy = g * (this.gimbal.x * this.ey.x + this.gimbal.y * this.ey.y + this.gimbal.z * this.ey.z);
-      this.bodies.add(this.a, this.bodyQ, gx, gy, tk);
+      if (mf > 0.3) this.bodies.add(this.a, this.bodyQ, gx, gy, tk);
       if (power > 0) {
         const terminal = power > 0.9;
         // Terminal burn light-off: the moment guidance dumps the remaining
@@ -494,11 +496,11 @@ export class Projectiles {
         if (ga > 1e-6) this.bellAxis.addScaledVector(this.ex, Math.sin(ga) * gx / ga).addScaledVector(this.ey, Math.sin(ga) * gy / ga);
         this.b.copy(this.a).addScaledVector(this.dir, ENGINE.pivot * tk).addScaledVector(this.bellAxis, ENGINE.bell * tk);
         this.c.copy(this.b).addScaledVector(this.bellAxis, (terminal ? 9 : 3.6) * breathe * size * tk);
-        this.ribbons.add(this.b, this.c, (terminal ? 0.5 : 0.24) * size * tk, (terminal ? 1.15 : 0.8) * (0.6 + 0.4 * size), 3, tr.seed);
+        this.ribbons.add(this.b, this.c, (terminal ? 0.5 : 0.24) * size * tk, (terminal ? 1.15 : 0.8) * (0.6 + 0.4 * size) * mf, 3, tr.seed);
         // Nozzle glow: reads end-on and at ranges where the plume is a line.
         // (never under ~3 px: the flare is what marks a live round at fleet range)
         const flarePx = this.pixelAt(this.b) * (terminal ? 3.6 : 2.6);
-        this.flashes.add(this.b, this.bellAxis, Math.max((terminal ? 0.6 : 0.28) * size * tk, flarePx), (terminal ? 1.3 : 0.7) * Math.max(size, 0.6), 1);
+        this.flashes.add(this.b, this.bellAxis, Math.max((terminal ? 0.6 : 0.28) * size * tk, flarePx), (terminal ? 1.3 : 0.7) * Math.max(size, 0.6) * mf, 1);
       }
       // In its launch sequence the round's cold-gas push is the show: the
       // puffs read bigger (slow gas, like the hull RCS), and next to a hull
@@ -509,20 +511,20 @@ export class Projectiles {
         const ls = this.manager.ships.get(tr.launch.ship);
         if (ls?.visible) nearHull = THREE.MathUtils.smoothstep((ls.userData.drawn?.length ?? 0) / this.pixelAt(ls.position), 40, 120);
       }
-      if (vis > 0.01) this.rcsJets(tr, time, vis, tk, 1 + 2.2 * seqW);
+      if (vis * mf > 0.01) this.rcsJets(tr, time, vis * mf, tk, 1 + 2.2 * seqW);
       // Small seeker glint keeps an unpowered body readable at mid range.
       this.b.copy(this.a).addScaledVector(this.dir, 1.02 * tk);
-      this.flashes.add(this.b, this.dir, 0.045 * tk, disabled ? 0.06 : 0.18, 1);
+      this.flashes.add(this.b, this.dir, 0.045 * tk, (disabled ? 0.06 : 0.18) * mf, 1);
       // Faction arrowhead at fleet range pointing along the round's travel
       // (not the Tracks checkpoint diamond), gone once the body resolves.
       const mark = (1 - THREE.MathUtils.smoothstep(bodyPx, 8, 24)) * (disabled ? 0.4 : 0.9)
         * (1 - nearHull * launchWeight(time, tr.launch?.t ?? -Infinity, tr.ignitionAt));
       if (mark > 0) {
         this.vel.fromArray(this.sample.vel);
-        this.markers.add(this.a, this.vel.lengthSq() > 1 ? this.vel : this.dir, mark, tr.faction, disabled ? 5 : 7);
+        this.markers.add(this.a, this.vel.lengthSq() > 1 ? this.vel : this.dir, mark * mf, tr.faction, disabled ? 5 : 7);
       }
     }
-    this.trail(tr, time, Math.min(time, tr.end), TORPEDO_WAKE_S, 18, 1, true, TRAIL_CAP_PX.torpedo);
+    this.trail(tr, time, Math.min(time, tr.end), TORPEDO_WAKE_S, 18, mf, true, TRAIL_CAP_PX.torpedo);
   }
 
   /**
