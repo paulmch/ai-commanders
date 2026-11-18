@@ -361,6 +361,11 @@ EVADE_BURN_CYCLE_MAX_S = 30.0
 # the overlay. Formation-matched burns go down to ~0.25 (a corvette matched
 # to a dreadnought).
 EVADE_BURN_MIN_THROTTLE = 0.1
+# A range keeper turning onto its correction under the overlay burns its
+# feed-forward share (_turn_then_burn evade=True) until it is round, then the
+# correction: fire control prices its dodge at that share plus this fraction
+# of the rest (fitted: harness hold_dodge, tests/test_fire_control_calibration).
+KEEPER_TURN_DODGE_SHARE = 0.5
 # Armour swing (TANK / BRACE / PRESENT on a burning order): the burn line plus
 # this many points on the cone edge are scored.
 EVADE_BURN_ARMOUR_AZIMUTHS = 8
@@ -2644,6 +2649,15 @@ class CombatSimulation:
             # full throttle whenever its correction falls below
             # EVADE_BURN_MIN_THROTTLE, and its corrections move the line.
             swing = accel * burn[0] * burn[1]
+        # A range keeper turning onto its correction under the overlay burns
+        # only its feed-forward share (_turn_then_burn evade=True: throttle x
+        # cos(angle off), floored at EVADE_BURN_MIN_THROTTLE): its dodge is
+        # priced at that throttle, not at the order's.
+        dodge_throttle = throttle
+        if (dodges and not evasive and burn is not None and maneuver is not None
+                and maneuver.steers_to_aim and getattr(target, 'evade_off_line', False)):
+            low = min(throttle, float(burn[0]))
+            dodge_throttle = low + KEEPER_TURN_DODGE_SHARE * (throttle - low)
 
         # The HEADING burn the lead does not see yet. The lead extrapolates
         # the drive's output now; a HEADING order turns first (token throttle
@@ -2732,7 +2746,7 @@ class CombatSimulation:
             accel_ms2=accel,
             dodges=dodges,
             evasive=evasive,
-            dodge_throttle=max(0.0, min(1.0, throttle)),
+            dodge_throttle=max(0.0, min(1.0, dodge_throttle)),
             dodge_horizon_s=BALLISTIC_THREAT_HORIZON_S,
             dodge_min_time_s=EVASION_TURN_ALLOWANCE_S + EVASION_MIN_JINK_S,
             jink_accel_ms2=jink,

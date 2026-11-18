@@ -455,7 +455,9 @@ hashed by the perf harness) is unchanged.
   residual pin reads. Dodgers are bucketed by base maneuver (dodge:PADLOCK,
   dodge:HOLD_RANGE, dodge:HEADING) and modelled by their state at the shot (calm vs
   reacting, `firecontrol.DODGE_CALM_ACCEL_FRACTION`); one swinging a burn (the overlay
-  on a burning order, fc `swing`) by `firecontrol.SWING_ACCEL_FRACTION`. Buckets still
+  on a burning order, fc `swing`) by `firecontrol.SWING_ACCEL_FRACTION`; a range keeper
+  turning under the overlay at its feed-forward share (`simulation.KEEPER_TURN_DODGE_SHARE`).
+  Buckets still
   outside 1.5x are named in the test's `RESIDUALS`.
   The doctrine P(hit) table is bound by `tests/test_prompt_structure.py`. Known residual:
   LLM fleets dodging a whole fleet's fire were hit even less than forecast
