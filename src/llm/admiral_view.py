@@ -420,7 +420,7 @@ class Wave:
     target: Optional[str]
     target_name: str
     n_live: int
-    n_blind: int
+    n_blind: int             # unguided: blinded seeker, dry, or target lost
     eta: Optional[float]      # first impact (s)
     new: bool                 # a round launched since the previous checkpoint
     rounds: List[Tuple[float, float, float, bool]]   # km xyz, blind
@@ -431,9 +431,9 @@ class Wave:
         if self.n_live:
             text = f"{self.n_live} -> {self.target_name}"
             if self.n_blind:
-                text += f" +{self.n_blind} blind"
+                text += f" +{self.n_blind} unguided"
         else:
-            text = f"{self.n_blind} blind -> {self.target_name}"
+            text = f"{self.n_blind} unguided -> {self.target_name}"
         if self.eta is not None:
             text += f" {self.eta:.0f}s"
         if self.new:
@@ -609,7 +609,7 @@ def _header(t: float, faction: str, checkpoint: Optional[int], total: Optional[i
     parts.append(f"YOU {faction.upper()} = cyan, {enemy.upper()} = orange")
 
     def torps(c: List[int]) -> str:
-        return f"{c[0]}" + (f" (+{c[1]} blind)" if c[1] else "")
+        return f"{c[0]}" + (f" (+{c[1]} unguided)" if c[1] else "")
     parts.append(f"torpedoes in flight: yours {torps(counts[True])}, theirs {torps(counts[False])}")
     if score_text:
         parts.append(score_text)
@@ -880,9 +880,10 @@ def place_labels(reqs: Sequence[LabelReq], bounds: Rect,
     circle), a blocked rectangle, or another label. Candidates sit in 8
     directions around the anchor on growing rings; beyond the first ring a
     leader line joins label and glyph. Preference: nearest ring, then the
-    request's ``away`` direction, then fewest soft overlaps. Requests in
-    crowded spots are placed first; ties break by key (deterministic). A
-    request with no legal spot is dropped (never drawn over a ship).
+    request's ``away`` direction, then fewest soft overlaps; failing all
+    rings, the nearest legal spot anywhere in ``bounds``. Requests in crowded
+    spots are placed first; ties break by key (deterministic). A request with
+    no legal spot at all is dropped (never drawn over a ship).
     """
     circles = list(blocked_circles) + [(r.anchor[0], r.anchor[1], r.radius) for r in reqs]
     placed: List[LabelPlacement] = []
@@ -918,6 +919,22 @@ def place_labels(reqs: Sequence[LabelReq], bounds: Rect,
                     best = (cost, rect, ri, (ax_, ay_))
             if best is not None and best[0] < (ri + 1) * 10.0 - 3.0:
                 break
+        if best is None:
+            # last resort: the nearest legal spot anywhere in the panel, with a leader
+            gx = bounds[0]
+            while gx + w <= bounds[2]:
+                gy = bounds[1]
+                while gy + h <= bounds[3]:
+                    rect = (gx, gy, gx + w, gy + h)
+                    if not any(rect_circle_overlap(rect, cx, cy, cr) for cx, cy, cr in circles) \
+                            and not any(rects_overlap(rect, o) for o in taken):
+                        nx = min(max(req.anchor[0], rect[0]), rect[2])
+                        ny = min(max(req.anchor[1], rect[1]), rect[3])
+                        d = math.dist((nx, ny), req.anchor)
+                        if best is None or d < best[0]:
+                            best = (d, rect, len(_RINGS), (nx, ny))
+                    gy += 6.0
+                gx += 6.0
         if best is None:
             continue
         _, rect, ri, (ax_, ay_) = best
@@ -988,9 +1005,10 @@ def layout_scene(scene: Scene) -> Layout:
     zc, kmpp = strip_scale(scene, view)
     lay = Layout(scene=scene, view=view, inset=inset, strip_zc=zc, strip_kmpp=kmpp)
     by_id = {it.sid: it for it in scene.ships}
-    in_inset = set(inset.ships) if inset else set()
+    in_inset = set()
     if inset:
-        # every ship inside the dashed box is labelled in the zoom, not on the plan
+        # exactly the ships inside the dashed box are labelled in the zoom,
+        # every other ship on the plan
         sx0, sy0, sx1, sy1 = inset.source
         for it in scene.ships:
             if it.alive or it.dead_new:
@@ -1069,7 +1087,8 @@ def layout_scene(scene: Scene) -> Layout:
                              away=(ux, uy) if (ux or uy) else (0.0, -1.0), size_pt=LABEL_PT,
                              bold=w.new))
     bounds = (view.rect[0] + 2, view.rect[1] + 2, view.rect[2] - 2, view.rect[3] - 2)
-    lay.labels = place_labels(reqs, bounds, blocked_circles=[], blocked_rects=blocked, soft_rects=soft)
+    lay.labels = place_labels(reqs, bounds, blocked_circles=circles, blocked_rects=blocked,
+                              soft_rects=soft)
 
     if inset:
         iv = inset.view

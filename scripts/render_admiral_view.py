@@ -60,7 +60,8 @@ def render_at(data: dict, t: float, faction: str, checkpoint=None, score_text=No
     trace = data["sim_trace"]
     interval = float(data.get("decision_interval_s") or 30.0)
     frame = frame_from_trace(find_frame(trace, t))
-    prev = frame_from_trace(find_frame(trace, t - interval)) if t - interval >= 0 else None
+    # the previous checkpoint's frame (none at the first checkpoint, as live)
+    prev = frame_from_trace(find_frame(trace, t - interval)) if t - interval >= interval - 1e-6 else None
     total = data.get("max_checkpoints") or data.get("total_checkpoints")
     return render_frame_png(frame, ships_meta_of(data), faction=faction, prev_frame=prev,
                             checkpoint=checkpoint, total_checkpoints=total,

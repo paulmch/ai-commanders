@@ -37,7 +37,7 @@ pixel for pixel). The legend lives in the cached system prompt
 (`prompts.ADMIRAL_VISION_LEGEND`), not in the image.
 
 - **Header line**: time, checkpoint N of M, which colour is you (your fleet is
-  always cyan, the enemy orange), torpedoes in flight per side (blinded
+  always cyan, the enemy orange), torpedoes in flight per side (unguided
   counted apart), the score when `AdmiralConfig.show_score` is on.
 - **Plan** (top-down, world X right / Y up: the axes of the turn state's
   world-frame headings), km grid and scale bar.
@@ -63,10 +63,10 @@ pixel for pixel). The legend lives in the cached system prompt
     its gun ships (solid) and of its PD range around PD ships (dotted, 250 km
     from fleet data). 150 km is the doctrine's effective band ("beyond ~150
     km a dodger is rarely hit"); the guns' nominal 900 km is not drawn.
-  - Torpedoes: one dot per round (hollow grey = blinded seeker that will
-    still strike a hull; spent rounds on nobody's line are only counted) and
+  - Torpedoes: one dot per round (hollow grey = unguided: blinded seeker,
+    dry or target lost, but still on a hull's line; spent rounds on nobody's line are only counted) and
     ONE arrow per (launching group, target): `N -> TARGET Ts`, first impact
-    in T s, `+k blind`, `NEW` for a round launched since the last checkpoint.
+    in T s, `+k unguided`, `NEW` for a round launched since the last checkpoint.
     A launching group is a side's ships linked within 150 km. State, target
     and ETA follow the turn state's own model (`fleet_intel.gather_rounds`:
     the guidance law's pursuit for guided rounds, the engine's closest-approach
@@ -90,8 +90,8 @@ checkpoints share a frame until the content outgrows or shrinks below a step.
 
 Rendering is deterministic (Agg, bundled DejaVu Sans, no wall clock, PNG
 written without the matplotlib version stamp; tests compare bytes of two
-renders) and takes ~0.2 s per frame including the torpedo forecasts (the old
-two-panel plot: ~1.0 s, same machine). Live and replay share one code path:
+renders) and takes ~0.16 s per frame (median, loaded 16-core box) including the torpedo forecasts (the old
+two-panel plot: ~0.76 s, same frames and machine). Live and replay share one code path:
 `build_live_frame` (live sim) and `frame_from_trace` (recording) produce the
 same frame schema, `build_scene` computes everything shown (pure),
 `layout_scene` places it (pure), `render_layout_png` draws it.

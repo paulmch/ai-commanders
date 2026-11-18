@@ -3447,7 +3447,8 @@ You can use EITHER the name OR the ID when naming ships or targets.
 # Legend of the tactical plot (admiral_view.py), sent once in the cached system
 # prompt when the admiral has vision; the plot itself rides on each user turn.
 ADMIRAL_VISION_LEGEND = """=== TACTICAL PLOT (attached image, each checkpoint) ===
-Header: time, checkpoint N of M, torpedo counts (and the score when shown). PLAN below it:
+Header: time, checkpoint N of M, torpedoes in flight per side (unguided ones counted apart),
+the score when shown. PLAN below it:
 top-down, world X right / Y up (the axes your headings use), km grid and scale bar. SIDE
 VIEW strip under the plan: the same X columns, height Z up ("height compressed xN" when the
 spread does not fit 1:1). YOUR fleet is cyan, the enemy orange, whichever side you are.
@@ -3461,10 +3462,11 @@ spread does not fit 1:1). YOUR fleet is cyan, the enemy orange, whichever side y
 - Cross: a dead ship; white cross and "NAME DESTROYED": lost since the last checkpoint.
 - Solid outline around a fleet: 150 km from its gun ships (beyond it a dodger is rarely
   hit); dotted outline: its PD umbrella (250 km).
-- Torpedoes are dots (hollow grey: blinded seeker still on a hull's line), with ONE arrow per
-  launching group and target: "N -> TARGET Ts" = N guided rounds onto TARGET, first impact
-  in T s; "+k blind" = blinded rounds that will still strike it; NEW = a round launched
-  since the last checkpoint. Spent rounds on nobody's line are only counted in the header.
+- Torpedoes are dots (hollow grey: unguided - blinded seeker, dry or target lost - but still
+  on a hull's line), with ONE arrow per launching group and target: "N -> TARGET Ts" = N
+  guided rounds onto TARGET, first impact in T s; "+k unguided" = unguided rounds that will
+  still strike it; NEW = a round launched since the last checkpoint. Unguided rounds on
+  nobody's line are only counted in the header.
 - Yellow dotted line with two x marks, "closest D km in T s (coasting)": where the two
   fleet centres pass closest if both coast.
 - ZOOM panel (yellow frame): when ships of both fleets overlap on the plan, a corner panel

@@ -73,6 +73,8 @@ class TestLabels:
         scene = av.build_scene(av.annotate_torpedoes(frame), meta, faction="alpha")
         lay = av.layout_scene(scene)
         check_layout(lay)
+        ids = {it.sid for it in scene.ships}
+        assert all(p.key[2:] in ids for p in lay.labels + lay.inset_labels if p.key.startswith("s:"))
 
     @pytest.mark.parametrize("seed", range(20))
     def test_every_ship_gets_a_label_in_ordinary_formations(self, seed):
@@ -82,6 +84,20 @@ class TestLabels:
         shown = {p.key for p in lay.labels} | {p.key for p in lay.inset_labels}
         wanted = {"s:" + it.sid for it in scene.ships if it.alive or it.dead_new}
         assert wanted <= shown, wanted - shown
+
+    @pytest.mark.parametrize("seed", range(30))
+    def test_every_ship_gets_a_label_at_merge_range(self, seed):
+        """The merge is where the admiral most needs a name for issue_order."""
+        frame, meta = random_battle(seed, n_alpha=8, n_beta=8, gap_km=[4.0, 15.0, 40.0][seed % 3],
+                                    spread_km=[12.0, 30.0][seed % 2])
+        for faction in ("alpha", "beta"):
+            scene = av.build_scene(av.annotate_torpedoes(frame), meta, faction=faction)
+            lay = av.layout_scene(scene)
+            check_layout(lay)
+            shown = {p.key for p in lay.labels} | {p.key for p in lay.inset_labels}
+            wanted = {"s:" + it.sid for it in scene.ships if (it.alive or it.dead_new)
+                      and lay.view.contains_px(*lay.view.to_px(*it.pos[:2]))}
+            assert wanted <= shown, wanted - shown
 
     def test_merge_triggers_a_zoom_that_covers_no_ship(self):
         frame, meta = random_battle(3, n_alpha=6, n_beta=6, gap_km=4.0, spread_km=12.0)
@@ -195,7 +211,7 @@ class TestTorpedoes:
         add_torpedo(sim, "torp_alpha_1_b", "alpha_1", "beta_1", (290, -200, 0), (8, 0, 0), disabled=True)
         scene = av.build_scene(av.build_live_frame(sim), self.meta(sim), faction="alpha")
         assert [(w.n_live, w.n_blind, w.target) for w in scene.waves] == [(0, 1, "beta_1")]
-        assert "1 blind -> " in scene.waves[0].label()
+        assert "1 unguided -> " in scene.waves[0].label()
         assert scene.spent_own == 1 and scene.torps_own == (0, 2)
 
     def test_new_rounds_since_the_last_checkpoint(self):
@@ -328,3 +344,20 @@ def test_height_tag_from_fifty_km_off_the_viewers_plane():
     tags = {it.sid: it.label() for it in scene.ships}
     assert tags["beta_1"].endswith(" Z+120")
     assert " Z" not in tags["beta_2"].replace(meta["beta_2"]["name"], "")
+
+
+def test_legend_numbers_are_the_plots():
+    """The cached system-prompt legend quotes the plot's own constants."""
+    from src.llm.prompts import ADMIRAL_VISION_LEGEND as legend
+    flat = " ".join(legend.split())
+    assert f"within {av.GUN_BAND_KM:.0f} km of an enemy ship's" in flat
+    assert f"{av.GUN_BAND_KM:.0f} km from its gun ships" in flat
+    assert f"PD umbrella ({av.class_kit('destroyer')['pd_km']:.0f} km)" in flat
+    assert f"(from {av.HEIGHT_TAG_KM:.0f} km on)" in flat
+    view = av.choose_view([(0.0, 0.0), (333.0, 50.0)])
+    assert "snaps to 1/20 of the width" in flat
+    k = view.cx / (view.width_km / 20.0)
+    assert k == pytest.approx(round(k))
+    for word in ("cyan", "orange", "SIDE", "TAIL", "Z+N", "NEW", "unguided", "ZOOM", "SIDE VIEW",
+                 "DESTROYED"):
+        assert word in flat, word
