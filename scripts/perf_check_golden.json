@@ -18,40 +18,40 @@
   "s2_tac_300": {
     "cpu_s": 10.34,
     "hashes": {
-      "end_state": "26771ef86240b8e27ff864074cc909344af8a09d9849e63a5863212f59d0de0a",
-      "events": "90213674cf9ad9416672d5a398dba6ebab5497beb96f0a238392e4b9c7adf3db",
-      "result": "2855e1631224a6c817f4a66dc9fa9784884ddd3f4d074ccf6d949f20543fd188"
+      "end_state": "4f59547e78a28bc703715f9e6c26a5a81ccf7be76c67df037ba1bd55465f1ad6",
+      "events": "b579dff3a03a333f18120463b92b8e71091f401954ae65a9ebffdf52eaba5b48",
+      "result": "a4d9cf1bd97dca8948f4f3650ed9c71702549fa5e6f1e5ec92c218dead322dd8"
     },
-    "info": "3404 events, 150 s battle, winner beta"
+    "info": "2967 events, 141 s battle, winner beta"
   },
   "s4_tac_trace": {
     "cpu_s": 21.85,
     "hashes": {
       "end_state": "d40be1db1f087d96da60b15ec83ee29344499d5fbcffc4fc3c7c5d98f75d66bc",
-      "events": "8950424d24434b413f0ee874003d392e4e238602fc0b4de3d53c24e02452ea01",
+      "events": "b507c55b0cb8d7b41b26b185f33a9adaa541354658511a080129db23df28a06c",
       "result": "875df9e84c499b6017a75a38223d41e505fd9948d693baf1a3668ec906c35fea",
       "sim_trace": "f792d67dc0e3d86c2b44ad67d49cab25ea1cd43a3a2e1c1daea745667e71efb6"
     },
-    "info": "3598 events, 156 s battle, winner alpha"
+    "info": "3599 events, 156 s battle, winner alpha"
   },
   "s5_tac": {
     "cpu_s": 19.53,
     "hashes": {
-      "end_state": "a03962d526b3c09e689aff5721b61239c6a2bd6158060bac38c960b83d68539c",
-      "events": "5fd61c498ae37f56726b18cf8f4c7692ba6bd6989d9f6d863f058dda2881b33f",
-      "result": "650d5b2783fc3e0b4b8995e1dfcc8e467c21f5d36428df634df0d419d61bc9ad"
+      "end_state": "08405c1269c826f720bbbe6c3d26f5ba0b263546794b4d5b1a42dea6588800f5",
+      "events": "34b7e8a154fc21ab37e52eea1b0215b550685f5c894e97e6e0497d5ce195763a",
+      "result": "f2f248ef4bb2d149e2982e6a5a6f0bd93f5b6e4b0c8fe833ab4452f6a20e66da"
     },
-    "info": "20015 events, 600 s battle, winner alpha"
+    "info": "21211 events, 600 s battle, winner alpha"
   },
   "s5_tac_trace": {
     "cpu_s": 37.02,
     "hashes": {
-      "end_state": "a03962d526b3c09e689aff5721b61239c6a2bd6158060bac38c960b83d68539c",
-      "events": "5fd61c498ae37f56726b18cf8f4c7692ba6bd6989d9f6d863f058dda2881b33f",
-      "result": "650d5b2783fc3e0b4b8995e1dfcc8e467c21f5d36428df634df0d419d61bc9ad",
-      "sim_trace": "b873d9bd91ab380620ba3af7b4bf3e6809bd247c867172c5701e15a008c1258e"
+      "end_state": "08405c1269c826f720bbbe6c3d26f5ba0b263546794b4d5b1a42dea6588800f5",
+      "events": "34b7e8a154fc21ab37e52eea1b0215b550685f5c894e97e6e0497d5ce195763a",
+      "result": "f2f248ef4bb2d149e2982e6a5a6f0bd93f5b6e4b0c8fe833ab4452f6a20e66da",
+      "sim_trace": "03742c33dcbcdc2586a0690fcf969f7ea457b4715a52a82bfcb0117c065096ad"
     },
-    "info": "20015 events, 600 s battle, winner alpha"
+    "info": "21211 events, 600 s battle, winner alpha"
   },
   "s7_leg_trace": {
     "cpu_s": 29.92,

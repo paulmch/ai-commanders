@@ -3096,13 +3096,13 @@ TORPEDO DEFENCE, MEASURED (seeded runs on this engine: a 4 battlecruiser + 2 des
 from the first checkpoint; per battle, 3 seeds each):
 - start 500 km: nose-on PADLOCK - 78% of rounds hit (nearly all on the nose, ~13.8 km/s, ~24 GJ
   each), 7 of 8 hulls lost; burning straight away - 46% hit (all on the TAIL, ~12.6 km/s,
-  ~19 GJ), 7 of 8 lost; the same burn with evade full - 47% hit, 6 of 8 lost (on the
+  ~19 GJ), 6 of 8 lost; the same burn with evade full - 48% hit, 6 of 8 lost (on the
   tail and flank: the overlay keeps the burn and turns no nose round); charging
-  (INTERCEPT) - 73% hit (~14.6 km/s, ~27 GJ), 8 of 8 lost. First loss ~75 s in each
+  (INTERCEPT) - 75% hit (~14.7 km/s, ~27 GJ), 8 of 8 lost. First loss ~75 s in each
   (rounds launched at the first checkpoint, at battle start).
-- start 1000 km: nose-on - 70% hit, 8 of 8 lost (first at ~265 s); burning away - 35%
-  hit, 5 of 8 lost (first at ~285 s); charging - 50% hit, 2 of 8 lost. The wall killed
-  1.3 boats per battle charging, 0.7 nose-on, 0 burning away.
+- start 1000 km: nose-on - 73% hit, 8 of 8 lost (first at ~265 s); burning away - 36%
+  hit, 5 of 8 lost (first at ~285 s); charging - 63% hit, 5 of 8 lost. The wall killed
+  2.3 boats per battle charging, 0 nose-on, 0 burning away.
 - Burning away lowers impact speed a little and leaves more rounds blinded or dry; the
   rounds that still hit land on the thin tail. Closing raises impact energy and shortens
   the boats' launch window. Neither side of that trade is free.
@@ -3204,14 +3204,14 @@ GUNNERY:
 GUN_EXCHANGE_BATTLES = 160
 GUN_EXCHANGE_BUDGET = 150
 GUN_EXCHANGE_BANDS = (
-    ("0-50", 70, 0.24, 17),
-    ("50-100", 62, 0.25, 22),
-    ("100-150", 50, 0.34, 20),
-    ("150-200", 44, 0.49, 21),
-    ("200-300", 36, 0.32, 15),
-    ("300+", 27, 0.24, 6),
+    ("0-50", 71, 0.25, 15),
+    ("50-100", 63, 0.25, 19),
+    ("100-150", 51, 0.30, 20),
+    ("150-200", 43, 0.44, 23),
+    ("200-300", 36, 0.35, 19),
+    ("300+", 26, 0.17, 4),
 )
-GUN_EXCHANGE_INSIDE_150_PCT = 58
+GUN_EXCHANGE_INSIDE_150_PCT = 54
 
 
 def measured_hit_rate(range_km: float) -> Tuple[str, int]:
@@ -3245,13 +3245,13 @@ FACING_SPINAL_HITS_TO_KILL = (
 )
 # Seeded battles, all guns pooled: (class, nose pen %, nose hull GJ/hit, flank pen %,
 # flank hull GJ/hit). Only classes whose nose-vs-flank order held under BOTH
-# heuristic doctrines separately: the battleship's swung from nose 1% (legacy)
-# to 37% (tactical) penetration, above its flank's 21%, and is left out.
+# heuristic doctrines separately: the battleship's swung from nose 2% (legacy)
+# to 35% (tactical) penetration, above its flank's 18%, and is left out.
 FACING_MEASURED = (
-    ("battlecruiser", 16, 0.16, 41, 0.44),
-    ("destroyer", 9, 0.08, 37, 0.47),
-    ("frigate", 25, 0.40, 61, 0.73),
-    ("dreadnought", 27, 0.27, 43, 0.28),
+    ("battlecruiser", 20, 0.18, 32, 0.37),
+    ("destroyer", 11, 0.10, 35, 0.46),
+    ("frigate", 27, 0.44, 66, 0.79),
+    ("dreadnought", 15, 0.13, 47, 0.46),
 )
 # The pass example in RANGE CONTROL and the CROSSFIRE example geometry.
 MERGE_EXAMPLE_KPS = 5.0

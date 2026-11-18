@@ -69,8 +69,8 @@ launcher at rest reaches ~16 km abeam when its target is lost 200 km out; a
 a closing launcher (~52 km), and reserve rounds beyond what their target
 needs are diverted before it dies. The captain's OVERKILL line and the
 admiral's economy quote the same board. Measured in seeded rule-based
-battles: 55% of rounds lost their target in flight, 67% of those were
-reassigned, 53% of the reassigned hit; 74% of diverted reserve rounds hit.
+battles: 54% of rounds lost their target in flight, 66% of those were
+reassigned, 56% of the reassigned hit; 74% of diverted reserve rounds hit.
 Before pass 5 the per-round rule recovered about 39% of orphans (52% of those
 hit); in one LLM battle (p5w5_b3) 8 of 28. Spacing units beyond an orphan's
 steering envelope still turns enemy overkill back into waste.

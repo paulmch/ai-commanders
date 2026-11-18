@@ -62,9 +62,12 @@ def main() -> int:
     parser.add_argument("--beta-captain-model", default=None,
                         help="Override captain model for beta ships only")
     parser.add_argument("--doctrine", choices=DOCTRINES, default=DEFAULT_DOCTRINE,
-                        help="Doctrine of the rule-based captains: 'tactical' (focus fire, "
-                             "range discipline, massed torpedo salvos) or 'legacy' (the "
-                             f"pass-4 captain). Default {DEFAULT_DOCTRINE}")
+                        help="Doctrine of the rule-based captains: 'tactical' (default: per "
+                             "fleet, a cut-corner pincer against a dreadnought line, close-and-pass "
+                             "against a battleship line, else a nose-on wall), 'classic' (the "
+                             "previous default: focus fire, nose-first passes), 'legacy' (the "
+                             "pass-4 captain) or a fixed variant (wall, pincer..., envelop70, "
+                             f"split). Default {DEFAULT_DOCTRINE}")
     parser.add_argument("--alpha-doctrine", choices=DOCTRINES, default=None,
                         help="Override --doctrine for alpha's rule-based captains")
     parser.add_argument("--beta-doctrine", choices=DOCTRINES, default=None,

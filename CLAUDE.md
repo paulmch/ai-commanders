@@ -48,15 +48,28 @@ uv run python scripts/run_live_draft_battle.py --alpha-model claude-sonnet-5-5 \
 ```
 
 Free battles fly `HeuristicCaptain` (`src/llm/heuristic_captain.py`). Its default
-"tactical" doctrine plans per fleet in `src/llm/heuristic_tactics.py` (reach-aware focus
-fire; gun ships nose-first - closure cap, no braking under fire, coast through a
-controlled pass facing the nearest gun, HOLD_RANGE once closure is gone; torpedo boats
-hold a standoff and fire every launchable round, ranked by target size/agility/PD umbrella; evade
-overlay vs torpedoes; crippled or disarmed ships open range, dead drives leave the
-formation, ships burn clear of dying hulks' blast radius; plan announced on the FLEET NET);
-`--doctrine legacy` (or `BattleConfig.heuristic_doctrine`) keeps the pass-4 captain (the
-fire-control fixture's heuristic battles are flown with both doctrines). `scripts/tactics_eval.py`
-runs/analyses seeded grids (kills, closest approach, rounds inside 150 km, hit rate).
+"tactical" doctrine picks one plan per fleet at its first checkpoint from the two
+compositions (`heuristic_flank.choose_default_spec`, constants with their measurements in
+`src/llm/heuristic_flank.py`): a gun fleet facing a torpedo fleet (>= half its hulls
+torpedo-only) flies "classic" (close fast, kill the boats); against a dreadnought line (>= 30 % of the enemy's gun energy
+on hulls <= 0.9 g) with 2+ fast hulls it flies the cut-corner pincer (fast hulls to 70 deg off
+the enemy's facing at 150 km, heavies hold as a wall at 230 km, then all engage; called off for
+close-and-pass, announced on the FLEET NET, if the fleets close at > 2 km/s before the flankers
+are on station); against a
+battleship line (>= 50 % on hulls <= 1.05 g) it flies "classic" (`heuristic_tactics.py`:
+reach-aware focus fire, gun ships nose-first under a closure cap, coast through a controlled
+pass, HOLD_RANGE once closure is gone); otherwise the nose-on wall (close at <= 0.8 km/s to
+140 km, then PADLOCK the nearest armed enemy). In every plan torpedo boats hold a standoff
+behind the gun line and fire every launchable round, ranked by target size/agility/PD
+umbrella; evade overlay vs torpedoes; crippled or disarmed ships open range, dead drives
+leave the formation, ships burn clear of dying hulks' blast radius; the plan, focus and
+salvos are announced on the FLEET NET. `--doctrine classic` keeps the previous default,
+`--doctrine legacy` (or `BattleConfig.heuristic_doctrine`) the pass-4 captain bit for bit;
+fixed variants `wall`, `pincer45/70/90`, `pincer70c`, `envelop70`, `split` (two-axis torpedo
+strike) and sweep names `pincer{deg}c{km}` stay selectable. `scripts/flank_experiment.py`
+measures doctrine pairs on mirror or asymmetric rosters (hit facing, flanker costs, closest
+approach); `scripts/tactics_eval.py` runs/analyses seeded grids (kills, closest approach,
+rounds inside 150 km, hit rate).
 
 ## Project Structure
 
