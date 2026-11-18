@@ -72,13 +72,14 @@ Evade overlay on a burning order (Maneuver.evade, owner's rule, 2026-11):
   from it, never below the order's throttle.
 - Off the cone (the order's first turn under fire, or turning back after a
   RUN) the hull turns toward the chosen cone point at full authority - no
-  attitude off the cone is ever held. With the nose more than
-  EVADE_BURN_AGAINST_ORDER_DEG off the burn line the drive would push
-  against the order, so it idles to the order's own turn-first token
-  (measured: a HOLD_RANGE under torpedo and gun fire keeps its range to
-  2.7-7.2 km RMS, 1.8-5.1 without the overlay; burning through the turn
-  instead it was 7-16 km); nearer it
-  burns at the order's throttle. With no threat and no gun in reach the
+  attitude off the cone is ever held - and the drive burns at the order's
+  throttle through the whole turn (owner's decision: "burn through the
+  turn with the percentage given in command"), also while the nose points
+  more than 90 deg off the line and the burn pushes against the order for
+  part of the turn (there is no idle any more). What commanders are told of a heading burn under the
+  overlay, the trajectory plans and the range keeper's feed-forward
+  (_keep_range) all account for that impulse. With no threat and no gun in
+  reach the
   order flies itself; a nose a swing left within the cone plus
   HEADING_BURN_CONE_DEG swings back at the order's throttle.
 - Threats: a burning ship's evasion takes each round's miss at its closest
@@ -360,6 +361,11 @@ EVADE_BURN_CYCLE_MAX_S = 30.0
 # the overlay. Formation-matched burns go down to ~0.25 (a corvette matched
 # to a dreadnought).
 EVADE_BURN_MIN_THROTTLE = 0.1
+# A range keeper turning onto its correction under the overlay burns its
+# feed-forward share (_turn_then_burn evade=True) until it is round, then the
+# correction: fire control prices its dodge at that share plus this fraction
+# of the rest (fitted: harness hold_dodge, tests/test_fire_control_calibration).
+KEEPER_TURN_DODGE_SHARE = 0.5
 # Armour swing (TANK / BRACE / PRESENT on a burning order): the burn line plus
 # this many points on the cone edge are scored.
 EVADE_BURN_ARMOUR_AZIMUTHS = 8
@@ -376,16 +382,6 @@ EVADE_BURN_GUN_REACH_KM = 400.0
 # ship off their line, so the swing then picks its cone azimuth at random
 # per cycle.
 EVADE_BURN_ALONG_LINE_DEG = 30.0
-# Off the line (the order's first turn under fire, or turning back after a
-# RUN): with the nose more than this far off the burn line the drive would
-# push AGAINST the order, so it idles to the order's own turn-first token
-# while thrust vectoring turns the ship at full authority; nearer, it burns
-# at the order's throttle. Measured against burning through the whole turn:
-# a HOLD_RANGE under torpedo and gun fire keeps its range to 2.7-7.2 km RMS
-# instead of 7-16 km, and a cancel-closure order flown from 180 deg off
-# closes at 1.3 km/s after 60 s instead of 1.7 (scripts/evade_burn_measure.py
-# flip, the review's holdab).
-EVADE_BURN_AGAINST_ORDER_DEG = 90.0
 
 # Commander threat display (status only, never steers the ship): a
 # seeker-killed torpedo counts as a threat to a ship only when its straight-
@@ -2653,6 +2649,15 @@ class CombatSimulation:
             # full throttle whenever its correction falls below
             # EVADE_BURN_MIN_THROTTLE, and its corrections move the line.
             swing = accel * burn[0] * burn[1]
+        # A range keeper turning onto its correction under the overlay burns
+        # only its feed-forward share (_turn_then_burn evade=True: throttle x
+        # cos(angle off), floored at EVADE_BURN_MIN_THROTTLE): its dodge is
+        # priced at that throttle, not at the order's.
+        dodge_throttle = throttle
+        if (dodges and not evasive and burn is not None and maneuver is not None
+                and maneuver.steers_to_aim and getattr(target, 'evade_off_line', False)):
+            low = min(throttle, float(burn[0]))
+            dodge_throttle = low + KEEPER_TURN_DODGE_SHARE * (throttle - low)
 
         # The HEADING burn the lead does not see yet. The lead extrapolates
         # the drive's output now; a HEADING order turns first (token throttle
@@ -2741,7 +2746,7 @@ class CombatSimulation:
             accel_ms2=accel,
             dodges=dodges,
             evasive=evasive,
-            dodge_throttle=max(0.0, min(1.0, throttle)),
+            dodge_throttle=max(0.0, min(1.0, dodge_throttle)),
             dodge_horizon_s=BALLISTIC_THREAT_HORIZON_S,
             dodge_min_time_s=EVASION_TURN_ALLOWANCE_S + EVASION_MIN_JINK_S,
             jink_accel_ms2=jink,
@@ -5569,9 +5574,8 @@ class CombatSimulation:
         undodgeable round better armour (TANK / BRACE / PRESENT,
         _swing_armour_aim). RUN still burns away from a guided torpedo,
         never below the order's throttle. Off the cone the hull turns toward
-        it at full authority; more than EVADE_BURN_AGAINST_ORDER_DEG off the
-        line the drive idles to the order's token turn throttle (it would
-        push against the order). Returns the throttle.
+        it at full authority and the drive burns at the order's throttle
+        through the whole turn. Returns the throttle.
         """
         line, burn_throttle, throttle_now, flown, _ = burn
         # The order's own latches advance as it flies (range-keeping phase).
@@ -5590,10 +5594,7 @@ class CombatSimulation:
         if aim is None:
             aim = self._swing_dodge_aim(ship, line, cone, cycle)
         off = ship.forward.angle_to(line)
-        if off > math.radians(EVADE_BURN_AGAINST_ORDER_DEG):
-            throttle = burn_throttle * MANEUVER_TURN_THROTTLE
-        else:
-            throttle = burn_throttle
+        throttle = burn_throttle
         thrust = throttle * ship.get_effective_thrust_fraction()
         # Recorded as a swing only while the drive is lit and the aim is off
         # the line (a dead drive cannot swing anything).
@@ -5740,14 +5741,29 @@ class CombatSimulation:
         return ks.forward * (ks.thrust_n * applied / ks.mass_kg)
 
     def _turn_then_burn(self, ship: ShipCombatState, direction: Vector3D,
-                        throttle: float, dt: float) -> float:
+                        throttle: float, dt: float, evade: bool = False) -> float:
         """
         HEADING's attitude rule for a burn along ``direction``: outside
         HEADING_BURN_CONE_DEG turn on a token throttle (thrust vectoring),
         inside it burn at ``throttle``. Returns the throttle to apply.
+
+        ``evade`` (a range keeper with the evade overlay, which burns at the
+        noted throttle through the turn): feed-forward - the correction it
+        notes while the nose is off the swing cone is sized by the share of
+        the push that goes its way, throttle x cos(angle off), floored at
+        EVADE_BURN_MIN_THROTTLE so it stays a burn the overlay turns on
+        thrust vectoring (a 180 deg turn then pushes the wrong way at 10 %,
+        not at the full correction). Pure, no state.
         """
         if throttle > 0:
-            self._burn_note = (direction, throttle)
+            noted = throttle
+            if evade:
+                off = ship.forward.angle_to(direction)
+                if off > math.radians(EVADE_BURN_CONE_DEG):
+                    noted = throttle * max(0.0, math.cos(off))
+                    if throttle >= EVADE_BURN_MIN_THROTTLE:
+                        noted = max(EVADE_BURN_MIN_THROTTLE, noted)
+            self._burn_note = (direction, noted)
         angle = ship.forward.angle_to(direction)
         if angle > math.radians(HEADING_BURN_CONE_DEG):
             self._rotate_ship_toward(ship, direction, dt, engines_on=True)
@@ -5913,13 +5929,15 @@ class CombatSimulation:
             if mag < RANGE_HOLD_DEADBAND_MPS:
                 return 0.0
             demand = mag / (a_full * RANGE_HOLD_VEL_TAU_S)
-            return self._turn_then_burn(ship, dv * (1.0 / mag), min(throttle, demand), dt)
+            return self._turn_then_burn(ship, dv * (1.0 / mag), min(throttle, demand), dt,
+                                        evade=bool(maneuver.evade))
 
         if phase == 'ARRIVE':
             if side != sign:
                 # Stopping an overshoot: everything against the relative
                 # velocity.
-                return self._turn_then_burn(ship, brake_dir, throttle, dt)
+                return self._turn_then_burn(ship, brake_dir, throttle, dt,
+                                            evade=bool(maneuver.evade))
             # Constant-deceleration guidance: the deceleration that lands
             # exactly on the wanted range at the arrival speed, plus his
             # charge (or less his own braking - two ships braking toward one
@@ -5929,7 +5947,8 @@ class CombatSimulation:
             need = max(0.0, required_decel_ms2(toward, dist, v_end) + push)
             axis_share = max(0.1, toward / max(rel_v.magnitude, 1.0))
             demand = need / (axis_share * a_full) if a_full > 0 else 1.0
-            return self._turn_then_burn(ship, brake_dir, min(throttle, demand), dt)
+            return self._turn_then_burn(ship, brake_dir, min(throttle, demand), dt,
+                                        evade=bool(maneuver.evade))
 
         # HOLD: null the relative velocity (matching his burn), and drift
         # back onto the range when off it by more than the dead zone.
@@ -5943,7 +5962,8 @@ class CombatSimulation:
         mag = command.magnitude
         if mag <= 1e-9:
             return 0.0
-        return self._turn_then_burn(ship, command * (1.0 / mag), min(throttle, mag / a_full), dt)
+        return self._turn_then_burn(ship, command * (1.0 / mag), min(throttle, mag / a_full), dt,
+                                    evade=bool(maneuver.evade))
 
     # -------------------------------------------------------------------------
     # Projectile Update
