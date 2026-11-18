@@ -277,3 +277,30 @@ test('one wave chip per target: the soonest wave, later rounds counted on it', a
   assert.deepEqual(chips.map(w => [w.target, w.count, w.later]), [['beta_1', 1, 2], ['beta_2', 1, 0]]);
   assert.equal(waveLabel(chips[0], 'Halberd-1'), '1 TORP ▸ Halberd-1 · 5s +2');
 });
+
+// --- wave-chip ETA (render/WeaponTimeline.torpedoEta) ----------------------------------------
+import { torpedoEta, ETA_CRUISE_MPS, ETA_BOOST_MPS2 } from '../src/render/WeaponTimeline.js';
+
+test('wave-chip ETA: a round still on its launch sequence or in its boost gets a flight estimate, not range / closure', () => {
+  // The owner's screenshot: four rounds just off the rack, ~500 km out, closing at ~18 m/s,
+  // read "27664s". Launch to impact from 500 km is about 75 s.
+  const cold = torpedoEta(500e3, 18, true, 3);
+  assert.ok(cold > 60 && cold < 100, `cold round ETA ${cold}`);
+  assert.ok(500e3 / 18 > 20000);                       // what the chip used to print
+  // In its boost: closing at 1.2 km/s after 10 s; the naive figure was 408 s.
+  const boost = torpedoEta(490e3, 1200, true);
+  assert.ok(boost > 55 && boost < 95, `boosting round ETA ${boost}`);
+  // At cruise speed, coasting or blinded: plain range / closure, as before.
+  assert.equal(torpedoEta(250e3, ETA_CRUISE_MPS, true), 250e3 / ETA_CRUISE_MPS);
+  assert.equal(torpedoEta(250e3, 9000, false), 250e3 / 9000);
+  assert.equal(torpedoEta(250e3, 0, false), Infinity);  // not closing, no engine: no ETA
+  // A short shot ends inside the boost: s = v t + a t^2 / 2.
+  const t = torpedoEta(20e3, 0, true);
+  assert.ok(Math.abs(0.5 * ETA_BOOST_MPS2 * t * t - 20e3) < 1);
+  // Monotonic: it never grows as the round gets closer or faster.
+  let last = Infinity;
+  for (let r = 500e3, v = 0; r > 0; r -= 25e3, v = Math.min(v + 1500, ETA_CRUISE_MPS)) {
+    const e = torpedoEta(r, v, v < ETA_CRUISE_MPS);
+    assert.ok(e <= last + 1e-9, `ETA rose at range ${r}`); last = e;
+  }
+});
