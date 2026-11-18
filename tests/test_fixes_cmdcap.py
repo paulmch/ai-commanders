@@ -1035,3 +1035,24 @@ class TestRenewedOrder:
         assert "FORMATION heading" in note and "67% throttle" in note and "synchronised" in note
         mine.heading_direction = {"x": -0.9, "y": 0.43, "z": 0}             # ~25 deg off
         assert cap._reproduces_applied_order(mine, sim, "alpha_1") is None
+
+
+# =============================================================================
+# Round 2: a rejected draw states the history and invites nothing
+# =============================================================================
+
+class TestDrawRejectionHistory:
+
+    def test_rejections_are_listed_and_nothing_invites_a_retry(self):
+        from src.llm.admiral import AdmiralDecision, settle_draw_offers
+        from tests.test_admiral_command_interface import make_admiral
+        a, b = make_admiral("alpha"), make_admiral("beta")
+        for t in (300.0, 420.0, 480.0):
+            a.has_proposed_draw, a.draw_offer_t = True, t - 30.0
+            b.last_decision = AdmiralDecision(timestamp=t, rejected_draw=True)
+            a.last_decision = AdmiralDecision(timestamp=t)
+            settle_draw_offers(a, b, t)
+        first, last = a.draw_notices[0], a.draw_notices[-1]
+        assert "rejected" not in first.split("REJECTED")[1]          # one rejection: no history
+        assert last.endswith("- rejected 3 times: T+300, T+420, T+480. The offer is closed.")
+        assert not any("propose again" in n or "re-open" in n for n in a.draw_notices)
