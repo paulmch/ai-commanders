@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import * as THREE from 'three';
 
@@ -254,9 +254,11 @@ test('a round\'s drawn track is a pure function of battle time (seek into mid-se
 });
 
 test('old recordings (no sequence fields) draw as before: no launch state, no extra samples', () => {
-  const path = new URL('../public/recordings/p5w5_b4_opus_haiku_mirror.json', import.meta.url);
-  const rec = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8'))
-    : JSON.parse(readFileSync(new URL('fixtures/mini_recording.json', import.meta.url), 'utf8'));
+  // A battle recorded before the launch sequence existed. Read from the committed recording
+  // (the staged copy under public/recordings is git-ignored and absent in CI).
+  const path = new URL('../../data/recordings/p5w5_b4_opus_haiku_mirror/'
+    + 'battle_claude_opus_5_5_vs_claude_opus_5_5_20261118_024342.json.gz', import.meta.url);
+  const rec = JSON.parse(gunzipSync(readFileSync(path)).toString('utf8'));
   const l = new BattleLoader();
   l.parse(rec);
   const tl = new WeaponTimeline(l);
