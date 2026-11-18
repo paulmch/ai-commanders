@@ -206,8 +206,10 @@ The admirals' tactical plot (`--admiral-vision`, the only switch; off unless ask
 This uses automatic fleet selection and heuristic captains, with no model calls. The free
 captains plan per fleet: against a fleet whose gun power sits on dreadnoughts they fly a
 cut-corner pincer (fast hulls wide to 70 degrees off its facing at 150 km while the heavies
-hold), against a battleship line they close nose-first and pass through it, and otherwise they
-hold a nose-on wall. `--doctrine classic` and `--doctrine legacy` keep the earlier captains.
+hold; if that line charges before the flankers are in place they close and pass instead),
+against a battleship line or a torpedo fleet they close nose-first and pass through it, and
+otherwise they hold a nose-on wall. On held-out seeds this default beat the plain wall
+147-53 (40 draws), the previous default ("classic") 122-69 and the pass-4 captains 170-53. `--doctrine classic` and `--doctrine legacy` keep the earlier captains.
 
 ```bash
 uv run python scripts/run_live_draft_battle.py \

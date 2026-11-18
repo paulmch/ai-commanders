@@ -841,9 +841,9 @@ TORPEDO COUNTERPLAY (seeded runs: a 4 battlecruiser + 2 destroyer + 2 frigate
 gun wall against 5 corvettes + 3 frigates, 40 rounds):
 - From 500 km a nose-on wall took 78% of the rounds (on the nose) and lost 7
   of 8 hulls; burning straight away it took 46% (on the thin tail, ~19% less
-  energy each) and lost 7 of 8; charging it took 73% and lost all 8. From
-  1000 km: nose-on lost 8 of 8, burning away 5 of 8, charging 2 of 8 (and
-  killed 1.3 boats). Burning away leaves more rounds blinded or dry; what
+  energy each) and lost 6 of 8; charging it took 75% and lost all 8. From
+  1000 km: nose-on lost 8 of 8, burning away 5 of 8, charging 5 of 8 (and
+  killed 2.3 boats). Burning away leaves more rounds blinded or dry; what
   still hits lands on the tail. An emptied torpedo hull mounts no guns: it
   dies to whatever can catch it afterward.
 - A fleet only kites as fast as its slowest hull. Mixing 3g screens with

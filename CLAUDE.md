@@ -53,7 +53,8 @@ compositions (`heuristic_flank.choose_default_spec`, constants with their measur
 `src/llm/heuristic_flank.py`): a gun fleet facing a torpedo fleet (>= half its hulls
 torpedo-only) flies "classic" (close fast, kill the boats); against a dreadnought line (>= 30 % of the enemy's gun energy
 on hulls <= 0.9 g) with 2+ fast hulls it flies the cut-corner pincer (fast hulls to 70 deg off
-the enemy's facing at 150 km, heavies hold as a wall at 230 km, then all engage); against a
+the enemy's facing at 150 km, heavies hold as a wall at 230 km, then all engage; called off for
+close-and-pass if the enemy line closes at > 2 km/s before the flankers are on station); against a
 battleship line (>= 50 % on hulls <= 1.05 g) it flies "classic" (`heuristic_tactics.py`:
 reach-aware focus fire, gun ships nose-first under a closure cap, coast through a controlled
 pass, HOLD_RANGE once closure is gone); otherwise the nose-on wall (close at <= 0.8 km/s to

@@ -165,36 +165,43 @@ rosters): close-and-pass against a torpedo fleet when it is a gun fleet (a wall 
 0.8 km/s lost 2/1/21 to legacy torpedo boats where close-and-pass won 14/2/8), the pincer
 against a dreadnought line (>= 30 % of the enemy's gun energy on hulls <= 0.9 g) when it has 2+
 fast hulls, close-and-pass against a battleship line (>= 50 % on hulls <= 1.05 g), the wall
-otherwise. `classic`, `legacy` (bit for bit) and the fixed variants stay selectable.
+otherwise. Once the evade overlay burned through flips (`pass-5` 9b645f4) legacy's charging
+dreadnought line beat the pincer 13 of 24 on held-out seeds, so the pincer is called off for
+close-and-pass when the enemy line closes at more than 2 km/s before the flankers are on
+station (tuning seeds: against legacy 23/0/9 -> 27/1/4, against the wall 32/0/0 kept; 3 km/s
+never fired). `classic`, `legacy` (bit for bit) and the fixed variants stay selectable.
 
-Held-out seeds 21-26 (24 battles per cell: 2 budgets x 6 seeds x both sides; families: slow
-capital = flagship, dread_fast; battleship lines = battleline, combined, escort; fast =
-gunline, core_fast; torpedo; torpedo against gun), new default (A) against:
+Re-measured on the final engine (evade burns through flips, torpedo launch sequence), the
+thresholds sweep on tuning seeds 1-4 left every other threshold where it was: every pincer
+geometry still beat the wall 16/0/0 on the dreadnought rosters, 70 degrees at 150 km still had
+the best exchange (98-24), and classic against the wall was unchanged on the battleship and
+fast lines. Held-out seeds 21-26 (24 battles per cell: 2 budgets x 6 seeds x both sides),
+new default (A) against:
 
-| family / roster | v wall | v classic | v legacy | v itself |
-|---|---|---|---|---|
-| dreadnought: flagship | 24/0/0 (84-9) | 20/4/0 | 19/1/4 | 9/6/9 |
-| dreadnought: dread_fast | 24/0/0 (55-25) | 24/0/0 | 19/4/1 | 8/8/8 |
-| battleship: battleline | 21/0/3 | 8/8/8 (same plan) | 9/5/10 | 8/8/8 |
-| battleship: combined | 17/7/0 | 4/16/4 (same plan) | 24/0/0 | 4/16/4 |
-| battleship: escort | 15/5/4 | 8/8/8 (same plan) | 15/2/7 | 8/8/8 |
-| fast: gunline | 9/6/9 (same plan) | 10/3/11 | 8/2/14 | 9/6/9 |
-| fast: core_fast | 11/7/6 | 11/9/4 | 7/7/10 | 7/10/7 |
-| torpedo mirror | 4/16/4 | 16/4/4 | 24/0/0 | 4/16/4 |
-| torpedo against gun (A torpedo) | 24/0/0 | 24/0/0 | 24/0/0 | 24/0/0 |
+| roster (family) | v wall | v classic | v legacy | v itself | classic v legacy |
+|---|---|---|---|---|---|
+| flagship (dreadnought) | 24/0/0 | 21/2/1 | 21/1/2 | 9/6/9 | 24/0/0 |
+| dread_fast (dreadnought) | 20/3/1 | 20/0/4 | 24/0/0 | 8/8/8 | 18/4/2 |
+| battleline (battleship) | 21/0/3 | 8/8/8 (same plan) | 9/5/10 | 8/8/8 | 9/5/10 |
+| combined (battleship) | 17/7/0 | 4/16/4 (same plan) | 24/0/0 | 4/16/4 | 24/0/0 |
+| escort (battleship) | 15/5/4 | 8/8/8 (same plan) | 15/2/7 | 8/8/8 | 15/2/7 |
+| gunline (fast) | 9/6/9 (same plan) | 10/3/11 | 8/2/14 | 9/6/9 | 4/8/12 |
+| core_fast (fast) | 11/7/6 | 11/9/4 | 7/7/10 | 7/10/7 | 7/6/11 |
+| torpedo mirror | 6/12/6 | 16/3/5 | 24/0/0 | 6/12/6 | 24/0/0 |
+| torpedo against gun (A torpedo) | 24/0/0 | 24/0/0 | 24/0/0 | 24/0/0 | 24/0/0 |
+| gun against torpedo (A gunline) | 0/0/24 | 0/0/24 | 14/0/10 | 0/0/24 | 14/0/10 |
+| **total** | 147/40/53 | 122/49/69 | 170/17/53 | 83/74/83 | 163/25/52 |
 
-The torpedo-fleet rule was added after this grid and validated on fresh seeds 31-36: an A gun
-fleet against a legacy torpedo fleet now wins gunline 15/2/7 and core_fast 13/0/11, flagship
-loses 4/1/19; against the current torpedo boats (wall or classic) every gun fleet loses
-0/0/24, whatever its plan - the torpedo-vs-gun balance, not a doctrine choice.
+Fresh seeds 31-36, an A gun fleet against legacy's torpedo fleet: gunline 12/0/12, core_fast
+13/0/11, flagship 8/1/15; against the current torpedo boats every gun fleet loses 0/0/24,
+whatever its plan - the torpedo-vs-gun balance, not a doctrine choice.
 
-Where the default is worse than what it replaces: against legacy on the fast and battleship
-lines it is no better than classic (gunline 8/2/14 v classic's 4/8/12, battleline 9/5/10 the
-same plan), and on the dreadnought roster flagship it is a little weaker than classic against
-legacy (19/1/4 v 23/1/0) though it beats classic itself 20/4/0. It never loses to the plain
-wall on any family. All held-out numbers were measured before the flip burn-through change of
-`wt5/evadeburn`; the flankers flip and burn a lot, so the pincer rows (and the thresholds sweep,
-`flank_experiment.py --pairs pincer70c150:wall ...`) must be re-run once it lands.
+Where the default is worse than what it replaces: on the battleship and fast lines it is no
+better than classic against legacy (gunline 8/2/14 v 4/8/12, battleline 9/5/10 the same plan),
+on the flagship roster it is a little weaker than classic against legacy (21/1/2 v 24/0/0,
+and it loses more ships: kills 36-54 v 67-6) though it beats classic itself 21/2/1, and on
+dread_fast it lost one battle of 24 to the plain wall (20/3/1). Overall it beats the wall, beats
+classic and is level with classic against legacy (170/17/53 v 163/25/52).
 
 ### Engine defects found by invariant checks
 
