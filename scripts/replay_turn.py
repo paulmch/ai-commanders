@@ -23,9 +23,29 @@ instead of a whole battle.
         --variant claude-sonnet-5-5:medium --variant claude-sonnet-5-5:medium:patch.json \\
         -n 5 --spend-limit 2 --out data/recordings/replays/ab_line
 
-Variants: `--variant MODEL[:EFFORT[:PATCH_FILE]]` (repeatable). EFFORT omitted or
+Variants: `--variant MODEL[:EFFORT[:PATCH_FILE[:PLOT]]]` (repeatable). EFFORT omitted or
 "rec" = the effort the recorded call was sent at. Without --variant, one variant
-is built from --model / --effort / --patch.
+is built from --model / --effort / --patch (and --replot / --no-image).
+
+PLOT (admiral calls that carry the tactical-plot image; every other call is
+sent as recorded in every arm):
+    old      (default) the recorded image and the recorded legend, verbatim;
+    replot   the image re-rendered for that checkpoint and faction by the
+             CURRENT renderer (scripts/render_admiral_view.py's code path, with
+             the recorded turn's score in the header when it had a score line)
+             and the legend block in the system message replaced by the current
+             prompts.ADMIRAL_VISION_LEGEND;
+    noimage  the image part, the legend block and the user turn's "Tactical
+             plot attached" line removed.
+Nothing else in the request changes (tests/test_replay_turn.py pins the text
+parts and tools byte-identical across the arms apart from those). A call with
+an image whose system message has no legend block is an error. The new legend
+changes the cached system prefix: the estimate counts its writes.
+
+    # three arms on identical text: old plot / new plot / no plot
+    uv run python scripts/replay_turn.py REC --role directive --checkpoint 11 --faction alpha \
+        --variant claude-sonnet-5-5:high --variant claude-sonnet-5-5:high::replot \
+        --variant claude-sonnet-5-5:high::noimage -n 3 --dry-run
 
 Patch file (JSON): a list of edits applied to the message text before sending,
     [{"target": "user", "find": "coast & shoot", "replace": "coast & fire"},
@@ -269,19 +289,158 @@ def apply_patch(messages: List[Dict[str, Any]], edits: List[Dict[str, Any]]
 # Variants, jobs, estimates
 # -----------------------------------------------------------------------------
 
+PLOT_MODES = ("old", "replot", "noimage")
+
+
 def parse_variant(spec: str) -> Dict[str, Any]:
-    parts = spec.split(":", 2)
+    parts = spec.split(":", 3)
     model = parts[0]
     effort = parts[1] if len(parts) > 1 and parts[1] not in ("", "rec", "recorded") else None
     patch = parts[2] if len(parts) > 2 and parts[2] else None
+    plot = (parts[3] if len(parts) > 3 and parts[3] else "old").lower().replace("-", "")
+    if plot not in PLOT_MODES:
+        raise SystemExit(f"--variant {spec}: PLOT must be one of {', '.join(PLOT_MODES)}")
     if not is_anthropic_model(model):
         raise SystemExit(f"--variant {spec}: only bare Anthropic ids (claude-...) are supported")
     model_spec(model)   # unknown ids raise before anything is sent
     if effort is not None and effort not in EFFORT_LEVELS:
         raise SystemExit(f"--variant {spec}: effort must be one of {', '.join(EFFORT_LEVELS)} or 'rec'")
-    label = f"{model}@{effort or 'rec'}" + (f"+{Path(patch).stem}" if patch else "")
+    label = (f"{model}@{effort or 'rec'}" + (f"+{Path(patch).stem}" if patch else "")
+             + (f"+{plot}" if plot != "old" else ""))
     return {"label": label, "model": model, "effort": effort, "patch_file": patch,
-            "edits": load_patch(patch)}
+            "edits": load_patch(patch), "plot": plot}
+
+
+# -----------------------------------------------------------------------------
+# Admiral plot arms: old image / re-rendered image / no image
+# -----------------------------------------------------------------------------
+
+LEGEND_HEAD = "=== TACTICAL PLOT (attached image"
+PLOT_POINTER = re.compile(r"\n*Tactical plot attached \(legend: TACTICAL PLOT\)\.")
+SCORE_LINE = re.compile(r"SCORE IF THE BATTLE ENDED NOW[^:]*:\s*(you \d+ / them \d+)")
+_RECORDING_CACHE: Dict[str, Any] = {}
+
+
+def _image_parts(message: Dict[str, Any]) -> List[Dict[str, Any]]:
+    content = message.get("content")
+    return [p for p in content if isinstance(p, dict) and p.get("type") == "image_url"] \
+        if isinstance(content, list) else []
+
+
+def has_plot(call: Dict[str, Any]) -> bool:
+    return any(_image_parts(m) for m in call["messages"] if m.get("role") == "user")
+
+
+def _legend_span(text: str) -> Optional[Tuple[int, int]]:
+    """The recorded legend block: from its heading to the next '=== ' heading or the end."""
+    start = text.find(LEGEND_HEAD)
+    if start < 0:
+        return None
+    nxt = text.find("\n=== ", start + len(LEGEND_HEAD))
+    end = nxt if nxt >= 0 else len(text.rstrip("\n"))
+    return start, end
+
+
+def _swap_legend(message: Dict[str, Any], new: Optional[str], key: str) -> Tuple[int, int]:
+    """Replace (or with new=None remove) the legend block in a system message, in place.
+    Returns (old chars, new chars)."""
+    content = message.get("content")
+    parts = [message] if isinstance(content, str) else [
+        p for p in content or [] if isinstance(p, dict) and p.get("type") == "text"]
+    for part in parts:
+        field = "content" if part is message else "text"
+        text = part.get(field) or ""
+        span = _legend_span(text)
+        if span is None:
+            continue
+        a, b = span
+        old = text[a:b]
+        if new is None:
+            a = len(text[:a].rstrip("\n"))     # take the blank line before it too
+            part[field] = text[:a] + text[b:]
+        else:
+            part[field] = text[:a] + new + text[b:]
+        return len(old), len(new or "")
+    raise SystemExit(f"{key}: the call carries a plot image but its system message has no "
+                     f"'{LEGEND_HEAD}' legend block to replace")
+
+
+def png_size(png: bytes) -> Tuple[int, int]:
+    if png[:8] != b"\x89PNG\r\n\x1a\n":
+        return 0, 0
+    return int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big")
+
+
+def image_tokens(width: int, height: int) -> int:
+    """Anthropic's image token estimate (width x height / 750)."""
+    return int(round(width * height / 750.0))
+
+
+def _url_png(url: str) -> bytes:
+    import base64
+    return base64.b64decode(url.split(",", 1)[1]) if "," in url else b""
+
+
+def rerender_plot(call: Dict[str, Any], score_text: Optional[str]) -> bytes:
+    """The recorded checkpoint and faction rendered by the CURRENT renderer
+    (scripts/render_admiral_view.render_at, the script's own code path)."""
+    from scripts.render_admiral_view import render_at
+    path = call["path"]
+    if path not in _RECORDING_CACHE:
+        _RECORDING_CACHE[path] = load_recording(path)
+    data = _RECORDING_CACHE[path]
+    if not data.get("sim_trace"):
+        raise SystemExit(f"{call_key(call)}: --replot needs the recording's sim_trace (a --trace battle)")
+    png = render_at(data, call["t"], call["faction"], checkpoint=call["checkpoint"],
+                    score_text=score_text)
+    if not png:
+        raise SystemExit("--replot: the renderer returned nothing (is matplotlib installed? "
+                         "uv run --extra viz ...)")
+    return png
+
+
+def apply_plot_mode(call: Dict[str, Any], mode: str, cache: Dict[Any, Any]
+                    ) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """The call's messages for a plot arm, and what changed (None: nothing)."""
+    if mode == "old" or not has_plot(call):
+        return call["messages"], None
+    key = call_key(call)
+    messages = json.loads(json.dumps(call["messages"]))
+    info: Dict[str, Any] = {"mode": mode}
+    old_png = b""
+    for m in messages:
+        for part in _image_parts(m):
+            old_png = _url_png(part["image_url"]["url"])
+    info["old_size"] = png_size(old_png)
+    if mode == "replot":
+        from src.llm.admiral_view import png_to_data_url
+        from src.llm.prompts import ADMIRAL_VISION_LEGEND
+        user_text = "\n".join(_content_text(m.get("content")) for m in messages if m.get("role") == "user")
+        match = SCORE_LINE.search(user_text)
+        score = f"score {match.group(1)}" if match else None
+        if (key, "png") not in cache:
+            cache[(key, "png")] = rerender_plot(call, score)
+        png = cache[(key, "png")]
+        url = png_to_data_url(png)
+        for m in messages:
+            for part in _image_parts(m):
+                part["image_url"]["url"] = url
+        system = next(m for m in messages if m.get("role") == "system")
+        info["legend_chars"] = _swap_legend(system, ADMIRAL_VISION_LEGEND, key)
+        info.update(new_size=png_size(png), new_bytes=len(png), score=score)
+    else:   # noimage
+        for m in messages:
+            content = m.get("content")
+            if isinstance(content, list) and _image_parts(m):
+                kept = [p for p in content if not (isinstance(p, dict) and p.get("type") == "image_url")]
+                for p in kept:
+                    if p.get("type") == "text":
+                        p["text"] = PLOT_POINTER.sub("", p.get("text", ""))
+                m["content"] = kept[0]["text"] if (len(kept) == 1 and kept[0].get("type") == "text") else kept
+        system = next(m for m in messages if m.get("role") == "system")
+        info["legend_chars"] = _swap_legend(system, None, key)
+        info["new_size"] = (0, 0)
+    return messages, info
 
 
 def _digest(value: Any) -> str:
@@ -295,8 +454,10 @@ def build_jobs(calls, variants, replicates) -> Tuple[List[Dict[str, Any]], Dict[
     for variant in variants:
         totals = [0] * len(variant["edits"])
         unmatched: List[str] = []
+        plot_cache: Dict[Any, Any] = {}
         for call in calls:
-            messages, counts = apply_patch(call["messages"], variant["edits"])
+            plotted, plot_info = apply_plot_mode(call, variant.get("plot", "old"), plot_cache)
+            messages, counts = apply_patch(plotted, variant["edits"])
             totals = [a + b for a, b in zip(totals, counts)]
             if variant["edits"] and not all(counts):
                 unmatched.append(call_key(call))
@@ -307,7 +468,7 @@ def build_jobs(calls, variants, replicates) -> Tuple[List[Dict[str, Any]], Dict[
             for rep in range(replicates):
                 jobs.append({"call": call, "variant": variant, "replicate": rep + 1,
                              "messages": messages, "effort": effort, "prefix": prefix,
-                             "max_tokens": call["max_tokens"]})
+                             "max_tokens": call["max_tokens"], "plot": plot_info})
         if variant["edits"]:
             patch_stats[variant["label"]] = {
                 "matches_per_edit": totals, "calls_with_a_missing_edit": unmatched,
@@ -342,6 +503,13 @@ def estimate(jobs: List[Dict[str, Any]]) -> Dict[str, Any]:
     bound = 0.0
     for job in jobs:
         uncached, prefix, output = _tokens(job["call"]["usage"])
+        plot = job.get("plot")
+        if plot:
+            # Image tokens move with the image; legend chars with the cached prefix (~3.5 ch/token).
+            uncached = max(0, uncached + image_tokens(*plot.get("new_size", (0, 0)))
+                           - image_tokens(*plot.get("old_size", (0, 0))))
+            old_ch, new_ch = plot.get("legend_chars", (0, 0))
+            prefix = max(0, prefix + int(round((new_ch - old_ch) / 3.5)))
         first = job["prefix"] not in seen
         seen.add(job["prefix"])
         usage = {"input_tokens": uncached, "output_tokens": output,
@@ -491,7 +659,8 @@ def send(client, job: Dict[str, Any]) -> Dict[str, Any]:
                    "model": call["model"], "effort": call["effort"],
                    "signature": action_signature(call["output"].get("tool_calls") or [])},
         "variant": {"label": job["variant"]["label"], "model": job["variant"]["model"],
-                    "effort": job["effort"], "patch": job["variant"]["patch_file"]},
+                    "effort": job["effort"], "patch": job["variant"]["patch_file"],
+                    "plot": job["variant"].get("plot", "old")},
         "replicate": job["replicate"],
         "tool_calls": tool_calls,
         "signature": action_signature(tool_calls) if not error else None,
@@ -574,6 +743,13 @@ def parse_args(argv=None):
     var.add_argument("--model", help="single variant: model (default: the recorded model)")
     var.add_argument("--effort", choices=EFFORT_LEVELS, help="single variant: effort (default: recorded)")
     var.add_argument("--patch", help="single variant: patch file")
+    plot = var.add_mutually_exclusive_group()
+    plot.add_argument("--replot", action="store_true",
+                      help="single variant: re-render admiral plot images with the current renderer "
+                           "and send the current legend (or PLOT 'replot' in --variant)")
+    plot.add_argument("--no-image", action="store_true",
+                      help="single variant: drop admiral plot images and their legend "
+                           "(or PLOT 'noimage' in --variant)")
     var.add_argument("-n", "--replicates", type=int, default=1)
     var.add_argument("--thinking-summary", action="store_true",
                      help="request thinking display 'summarized' and store the summary per reply "
@@ -610,7 +786,8 @@ def main(argv=None) -> int:
         variants = [parse_variant(v) for v in args.variant]
     else:
         model = args.model or calls[0]["model"]
-        variants = [parse_variant(f"{model}:{args.effort or 'rec'}:{args.patch or ''}")]
+        plot = "replot" if args.replot else "noimage" if args.no_image else "old"
+        variants = [parse_variant(f"{model}:{args.effort or 'rec'}:{args.patch or ''}:{plot}")]
     labels = [v["label"] for v in variants]
     if len(set(labels)) != len(labels):
         raise SystemExit("Two variants have the same model, effort and patch file")
@@ -645,6 +822,24 @@ def main(argv=None) -> int:
         for variant in variants:
             prefixes = {j["prefix"] for j in jobs if j["variant"] is variant}
             print(f"  variant {variant['label']}: {len(prefixes)} distinct cached prefixes")
+            seen_plot = set()
+            for job in jobs:
+                plot = job.get("plot")
+                key = call_key(job["call"])
+                if job["variant"] is not variant or not plot or key in seen_plot:
+                    continue
+                seen_plot.add(key)
+                ow, oh = plot["old_size"]
+                old_ch, new_ch = plot["legend_chars"]
+                if plot["mode"] == "replot":
+                    nw, nh = plot["new_size"]
+                    print(f"    [plot] {key}: image SWAPPED {ow}x{oh} (~{image_tokens(ow, oh)} tok) -> "
+                          f"{nw}x{nh}, {plot['new_bytes'] / 1024:.0f} KB (~{image_tokens(nw, nh)} tok)"
+                          f"{', header ' + plot['score'] if plot.get('score') else ''}; legend "
+                          f"{old_ch} -> {new_ch} ch (changed cached system prefix)")
+                else:
+                    print(f"    [plot] {key}: image REMOVED ({ow}x{oh}, ~{image_tokens(ow, oh)} tok), "
+                          f"legend removed ({old_ch} ch; changed cached system prefix)")
         return 0
 
     from src.llm.spending import RequestBudget, SpendLedger
