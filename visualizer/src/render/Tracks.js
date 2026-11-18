@@ -606,6 +606,10 @@ export class Tracks {
     sceneManager.tracks = this;
     this.visuals = new Map();
     this.showGhosts = true;
+    // Label density (main.js, TacticalLayout): below 'full' only the focused
+    // ship carries the checkpoint glyphs (diamond, rings, drift, ghost); the
+    // others keep their dashed path - which way each ship is heading
+    this.othersPathOnly = false;
     this.showLabels = true;
     this.hud = null;   // TrackHud (main.js): countdown, scope, legend
     this._p = new THREE.Vector3();
@@ -717,7 +721,8 @@ export class Tracks {
       u.uLowConf.value = lowConf ? 1 : 0;
       u.uColor.value.copy(tr.stale ? v.staleColor : v.liveColor);
       // Dim the marker as it folds into the hull at checkpoint arrival
-      const markerW = Math.min(1, Math.max(0.25, togo / 3)) * Math.min(1, emph.intensity) * clear;
+      const glyphs = isFocus || !this.othersPathOnly ? 1 : 0;
+      const markerW = glyphs * Math.min(1, Math.max(0.25, togo / 3)) * Math.min(1, emph.intensity) * clear;
       u.uIntensity.value = markerW;
       v.marker.position.copy(cp);
       v.marker.visible = markerW > 0.005;
@@ -748,7 +753,7 @@ export class Tracks {
         v.label.sprite.visible = false;
       }
 
-      this._updateGhost(v, id, tr, cp, cam, pw, Math.min(1, emph.intensity));
+      this._updateGhost(v, id, tr, cp, cam, pw, glyphs * Math.min(1, emph.intensity));
 
       if (withActual && tr.actual.n >= 2) {
         v.actual.set(tr.actual.path, tr.actual.times, tr.actual.n, S);

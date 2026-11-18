@@ -418,6 +418,7 @@ class BattleVisualizer {
     if (this.scene.weapons?.engagements) this.scene.weapons.engagements.mode = this.contacts.mode;
     this.tracks = new Tracks(this.scene, new TrajectoryPredictor(this.loader));
     this.tracks.hud = this.trackHud;
+    this.tracks.othersPathOnly = this.contacts.mode !== 'full';
     this.scene.loader = this.loader;   // hull rigs read targets, shots, launches, PD dwell
     this.syncScaleButton();
     this.setLoadingProgress(60);
@@ -1573,6 +1574,7 @@ class BattleVisualizer {
   setLabelMode(mode, persist = true) {
     this.contacts.setMode(mode);
     if (this.scene?.weapons?.engagements) this.scene.weapons.engagements.mode = this.contacts.mode;
+    if (this.tracks) this.tracks.othersPathOnly = this.contacts.mode !== 'full';
     if (persist) { try { saveLabelMode(window.localStorage, this.contacts.mode); } catch { /* not persisted */ } }
     this.syncLabelButton();
   }

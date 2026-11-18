@@ -5,6 +5,14 @@ import { layoutTactical, groupWaves, waveLabel, shortName, DEFAULT_LABEL_MODE, n
 
 /** Inbound torpedoes closer than this (s) pulse the bracket red. */
 export const THREAT_IMMINENT_S = 10;
+/** A wave further out than this (s) is a forecast, drawn quiet. */
+export const WAVE_DISTANT_S = 60;
+
+/** Visual weight of a torpedo-wave chip: 'imminent' | 'inbound' | 'distant' | 'blind' (no live seeker). */
+export function waveUrgency(wave) {
+  if (wave.live === 0) return 'blind';
+  return wave.eta < THREAT_IMMINENT_S ? 'imminent' : wave.eta < WAVE_DISTANT_S ? 'inbound' : 'distant';
+}
 
 /**
  * Fleet-range threat readout for one ship ('3 TORP · 6s'; '' when nothing
@@ -260,7 +268,7 @@ export class ContactOverlay {
       const rec = this.groupEl(i);
       rec.el.hidden = !g.box;
       if (!g.box) return;
-      rec.el.className = `contact-group ${g.faction}`;
+      rec.el.className = `contact-group ${g.faction}${g.ids.includes(this.hoverId) ? ' linked' : ''}`;
       rec.chip.style.left = `${g.box.x.toFixed(1)}px`;
       rec.chip.style.top = `${g.box.y.toFixed(1)}px`;
       rec.chip.style.minWidth = `${g.box.w}px`;
@@ -280,6 +288,7 @@ export class ContactOverlay {
       }
       for (const row of rec.list.children) {
         const st = states?.[row.dataset.shipId];
+        row.classList.toggle('current', row.dataset.shipId === this.hoverId);
         row.querySelector('i').style.width = `${Math.round(THREE.MathUtils.clamp(st?.hull ?? 100, 0, 100))}%`;
       }
       setLeader(rec.leader, g.leader, 0, 0);
@@ -291,7 +300,7 @@ export class ContactOverlay {
       rec.el.hidden = !w.box;
       if (!w.box) return;
       rec.target = w.target;
-      rec.el.className = `wave-contact${w.eta < THREAT_IMMINENT_S ? ' imminent' : ''}${w.live === 0 ? ' blind' : ''}`;
+      rec.el.className = `wave-contact ${waveUrgency(w)}`;
       rec.chip.style.left = `${w.box.x.toFixed(1)}px`;
       rec.chip.style.top = `${w.box.y.toFixed(1)}px`;
       rec.chip.style.width = `${w.box.w}px`;

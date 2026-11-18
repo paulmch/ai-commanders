@@ -245,3 +245,24 @@ test('engagement lines: shooters together on screen share one weighted line per 
   // full: the pass-4 weight, one-ship width
   assert.equal(engagementStyle(single, 'full').strength, LINE_WEIGHT.full);
 });
+
+test('wave chips are weighted by urgency: forecast, inbound, imminent, blind', async () => {
+  const { waveUrgency, THREAT_IMMINENT_S, WAVE_DISTANT_S } = await import('../src/ContactOverlay.js');
+  assert.equal(waveUrgency({ live: 3, eta: WAVE_DISTANT_S + 1 }), 'distant');
+  assert.equal(waveUrgency({ live: 3, eta: 30 }), 'inbound');
+  assert.equal(waveUrgency({ live: 1, eta: THREAT_IMMINENT_S - 1 }), 'imminent');
+  assert.equal(waveUrgency({ live: 0, eta: 2 }), 'blind');
+});
+
+test('scrubbing: the layout at t is the same played through, after a seek away and back', () => {
+  // ships on straight tracks; layout(t) only sees the positions at t
+  const { ships: base, waves } = randomBattle(11);
+  const at = t => layoutTactical({ view: VIEW, panels: PANELS, waves: waves.map(w => ({ ...w, eta: w.eta - t })),
+    ships: base.map((s, i) => ({ ...s, x: s.x + Math.sin(i) * t * 3, y: s.y + Math.cos(i) * t * 2 })) });
+  const played = [];
+  for (let t = 0; t <= 10; t += 0.5) played.push(at(t));
+  at(80);                                  // seek far away
+  const back = at(4);                      // and back
+  const norm = o => JSON.stringify({ ships: [...o.ships].sort(([a], [b]) => (a < b ? -1 : 1)), groups: o.groups, waves: o.waves });
+  assert.equal(norm(back), norm(played[8]));
+});

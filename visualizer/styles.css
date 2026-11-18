@@ -1919,8 +1919,9 @@ body {
 .group-chip::before { left: 4px; top: 3px; }
 .group-chip::after { left: 7px; top: 7px; }
 .group-list { display: none; }
-.group-chip:hover { height: auto; z-index: 3; background: rgba(3,9,16,0.94); box-shadow: 0 2px 12px rgba(0,0,0,0.45); }
-.group-chip:hover .group-list { display: block; padding: 2px 0 4px; }
+.group-chip:hover, .contact-group.linked .group-chip { height: auto; z-index: 3; background: rgba(3,9,16,0.94); box-shadow: 0 2px 12px rgba(0,0,0,0.45); }
+.group-chip:hover .group-list, .contact-group.linked .group-list { display: block; padding: 2px 0 4px; }
+.group-row.current { color: var(--text-primary); }
 .group-row {
   display: flex; align-items: center; gap: 8px; width: 100%; padding: 1px 0; border: 0; background: none;
   color: inherit; font: 10px/14px var(--font-mono); text-align: left; cursor: pointer;
@@ -1929,17 +1930,21 @@ body {
 .group-row-name { flex: 1; white-space: nowrap; }
 .group-row-hull { width: 34px; height: 2px; background: rgba(255,255,255,0.12); }
 .group-row-hull i { display: block; height: 100%; background: currentColor; }
-/* torpedo wave: one chip by the wave's leading round (count, target, time to impact) */
+/* torpedo wave: one chip by the wave's leading round (count, target, time to
+   impact), weighted by urgency - a forecast (> 60 s) is quiet text, an
+   inbound wave a red tag, the last 10 s a filled crimson tag */
 .wave-contact { position: absolute; inset: 0; color: #ff6a7c; pointer-events: none; }
 .wave-chip {
   position: absolute; height: 15px; padding: 0 4px; pointer-events: auto; cursor: pointer;
   font: 9px/13px var(--font-mono); letter-spacing: 0.04em; white-space: nowrap; overflow: hidden; text-align: left;
-  color: #ff8a98; background: rgba(24,0,8,0.78); border: 1px solid rgba(255,0,85,0.5);
+  color: #ff8a98; background: rgba(24,0,8,0.6); border: 0; border-left: 2px solid rgba(255,0,85,0.75);
 }
-.wave-contact.imminent .wave-chip { color: #fff; background: rgba(150,0,40,0.9); border-color: rgba(255,90,120,0.9); }
+.wave-contact.imminent .wave-chip { color: #fff; background: rgba(150,0,40,0.92); border-left-color: #ff5a78; }
+.wave-contact.distant { color: rgba(255,106,124,0.55); }
+.wave-contact.distant .wave-chip { color: rgba(255,160,170,0.6); background: rgba(10,4,8,0.45); border-left-color: rgba(255,0,85,0.35); }
 .wave-contact.blind { color: #9eb2c0; }
-.wave-contact.blind .wave-chip { color: #b8c4cc; background: rgba(8,12,16,0.75); border-color: rgba(160,180,190,0.4); }
-.wave-chip:hover, .wave-chip:focus-visible { border-color: #fff; }
+.wave-contact.blind .wave-chip { color: #b8c4cc; background: rgba(8,12,16,0.5); border-left-color: rgba(160,180,190,0.4); }
+.wave-chip:hover, .wave-chip:focus-visible { border-left-color: #fff; color: #fff; }
 .ship-contact.imminent .contact-bracket { border-color: var(--accent-critical); animation: contact-pulse 0.42s ease-in-out infinite alternate; }
 .ship-contact.dying .contact-bracket { animation: contact-pulse var(--pulse, 0.8s) ease-in-out infinite alternate; }
 @keyframes contact-pulse {
