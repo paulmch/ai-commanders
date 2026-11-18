@@ -22,14 +22,14 @@ except ImportError:  # pragma: no cover - script-style imports
 FACTS = {
     "sprint": {"tof_500_rest_s": 76, "gj_500_rest": 22, "tof_500_closing3_s": 61,
                "gj_500_closing3": 33, "tof_500_opening1_s": 81, "gj_500_opening1": 19,
-               "runner_ff_gj": 17, "reach_200_km": 16, "reach_200_closing3_km": 11},
+               "runner_ff_gj": 17, "reach_200_km": 15, "reach_200_closing3_km": 9},
     "reserve": {"tof_500_rest_s": 85, "gj_500_rest": 22, "tof_500_closing3_s": 62,
                 "gj_500_closing3": 33, "tof_500_opening1_s": 91, "gj_500_opening1": 19,
-                "runner_ff_gj": 14, "reach_200_km": 103, "reach_200_closing3_km": 57},
-    "launch": {"ahead_s": 4, "half_round_s": 7},
-    "battles": {"pct_orphaned": 54, "pct_reassigned": 66, "pct_reassigned_hit": 56,
-                "pct_pd_blinded_sprint": 26, "pct_pd_blinded_reserve": 34,
-                "pct_diverted_hit_reserve": 74},
+                "runner_ff_gj": 14, "reach_200_km": 102, "reach_200_closing3_km": 50},
+    "launch": {"ahead_s": 5, "half_round_s": 7},
+    "battles": {"pct_orphaned": 54, "pct_reassigned": 64, "pct_reassigned_hit": 53,
+                "pct_pd_blinded_sprint": 27, "pct_pd_blinded_reserve": 34,
+                "pct_diverted_hit_reserve": 69},
 }
 
 _S, _R, _B = FACTS["sprint"], FACTS["reserve"], FACTS["battles"]
@@ -44,7 +44,9 @@ LAUNCH_FACT = (
     f"~{_L['ahead_s']} s after launch when the round needs at most a quarter turn onto its "
     f"target and ~{_L['half_round_s']} s when it must turn about first (a corvette rail "
     f"round fired astern, a torpedo-cruiser cell on the far side from the target); the "
-    f"flight times quoted here include it."
+    f"flight times quoted here include it. The torch lights with the round's nose turned up "
+    f"to 30 degrees off its heading, so its first second of burn removes the sideways "
+    f"drift (thrust is always along the nose)."
 )
 
 PROFILE_FACT = (

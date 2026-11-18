@@ -107,7 +107,9 @@ RESIDUALS = {
     ("harness", "dodge:INTERCEPT:fleet", 4): (0.8, 1.8),
     ("harness", "dodge:HOLD_RANGE:fleet", 3): (1.1, 2.5),
     ("harness", "dodge:HOLD_RANGE:fleet", 4): (2.0, 3.6),
-    ("battle", "HEADING:attitude", 3): (1.2, 2.0),
+    # ("battle", "HEADING:attitude", 3) was a residual at 1.2-2.0x; on the fixture regenerated
+    # with the crab-angle light-off it reads 1.08x (31 rounds, 9 hits, 9.7 forecast) and is back
+    # inside the normal band, so the exemption is gone.
 }
 
 

@@ -664,14 +664,15 @@ class TestFormationDoctrine:
         """Admiral doctrine: escorts cut salvo leakage, and the effect needs
         mass (a big wall clearly beats none) AND time. Single seed of the
         measured (seeds 21-23) results: a salvo launched 1200 km out leaked
-        18/18 alone vs 16/18 with 8 escorts (12/18 before the launch sequence,
-        src/torpedo_launch.py: 4/6 -> 5/6 on every seed and on nine jittered
-        geometries of seed 23, all from the drift cancel at ignition); launched
-        450 km out (~70 s) it leaked 18/18 even behind 8 - the battleship
-        cannot turn away to run and back in time, presents its nose, and the
-        rounds are blinded too late to dodge. The wall keeps the hull alive:
-        alone it died in 3 of 3 runs, behind 8 escorts in 1 of 3 (1200 km)
-        and none (450 km)."""
+        18/18 alone vs 9/18 with 8 escorts (crab-angle light-off, thrust always
+        along the nose: no drift-cancel impulse any more; 16/18 before it);
+        launched 450 km out (~70 s) it leaked 18/18 alone, 17/18 behind 4 and
+        8/18 behind 8 - the battleship cannot turn away to run and back in
+        time, presents its nose, and the rounds are blinded too late to dodge.
+        The wall keeps the hull alive: alone it died in 3 of 3 runs, behind 4
+        escorts in 1 of 3 (1200 km) and none (450 km), behind 8 in none
+        (either range). Seed 23 pinned: 6/6 alone, 4/6 behind 8 at 1200 km,
+        2/6 at 450 (seeds 21, 22, 23 at 1200 km behind 8: 2, 3, 4)."""
 
         def wall(n_escorts, range_km):
             sim = CombatSimulation(seed=23, time_step=0.5, decision_interval=1e9)
@@ -707,12 +708,12 @@ class TestFormationDoctrine:
         (alone, alone_killed), (walled, _) = wall(0, 1200), wall(8, 1200)
         assert alone >= 5, f"lone battleship now stops salvos ({alone}/6 hit)"
         assert alone_killed, "a lone battleship now survives a 6-round salvo"
-        assert walled <= 5 and walled < alone, (
+        assert walled == 4 and walled < alone, (
             f"8-escort wall no longer reduces leakage ({walled}/6 vs {alone}/6) "
             "- the formation doctrine numbers are stale"
         )
         short, short_killed = wall(8, 450)
-        assert short >= 5 and not short_killed, (
+        assert short == 2 and not short_killed, (
             f"a 450 km salvo behind 8 escorts now lands {short}/6 "
             f"(victim destroyed: {short_killed}) - the doctrine's short-salvo claim is stale")
 
@@ -1262,8 +1263,8 @@ class TestMeasuredExchangeDoctrine:
     def test_the_table_is_rendered(self, fleet):
         text = _admiral_static(fleet)
         assert "range at firing (km)  0-50    50-100  100-150 150-200 200-300 300+" in text
-        assert "hit rate              71%     63%     51%     43%     36%     26%" in text
-        assert "54% of all hull damage landed inside 150 km, 46% beyond." in text
+        assert "hit rate              70%     63%     50%     43%     37%     25%" in text
+        assert "55% of all hull damage landed inside 150 km, 45% beyond." in text
 
     def test_facing_battle_numbers_are_the_seeded_runs(self, facts):
         """Pooled numbers from the fixture; only classes whose nose-vs-flank

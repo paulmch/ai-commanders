@@ -455,7 +455,10 @@ at that point and a 10 m/s ejection. It drifts for 1 s, pushes clear on its own 
 (~0.6 g) while turning onto its first guidance heading (30 deg/s), and lights its torch
 once it is 50 m from its own hull and any friendly hull, its exhaust cone misses its
 hull and its nose is within 10 deg of the heading (8 s timeout once clear, 15 s cap);
-the torch's first act cancels the separation drift. Until then nobody treats it as a
+the light-off is a crab: the nose is turned up to 30 deg off the heading so the first
+second of burn removes the sideways separation drift (thrust always along the nose;
+residual about 0.2 m/s after one tick; no extra delay on the corvette cases, 1 s on the
+torpedo cruiser). Until then nobody treats it as a
 threat. Seconds from launch to ignition (`scripts/launch_sequence_facts.py`):
 
 | geometry | corvette (rail rounds) | torpedo cruiser (VLS cells) |
@@ -681,8 +684,9 @@ promised "retarget the nearest".
   early, in whole strikes only and never below what kills the original target; the gate includes
   burn time; commanders get a RETASK notice. Worth about 2.4 % more kills and 26 % fewer wasted
   rounds for sprint fleets. `AIC_TORPEDO_DATALINK=0` reproduces the old engine bit for bit.
-- **Launch sequence**: described in the section above. A crab-angle light-off that keeps the main
-  thrust along the nose is built on branch `wt5/launchseq` and is NOT merged (see Open).
+- **Launch sequence**: described in the section above. The crab-angle light-off (main engine lit
+  with the nose up to 30 deg off the heading, thrust always along the nose, typically 4-5 s from
+  launch to ignition) is merged; see Open for the accepted changes.
 
 Torpedo fleets still beat gun fleets in every battle, whatever the gun fleet flies.
 
@@ -694,15 +698,19 @@ Torpedo fleets still beat gun fleets in every battle, whatever the gun fleet fli
   orders were never flown). The tests that pinned the old schedule now pin the new one; seeded
   event streams, `LEGACY_GOLDEN_SHA256` and the perf golden moved with it. Recordings carry
   `first_checkpoint_s: 0`; older ones (first decision at T+30) still replay.
-- **Physical drift cancel at torpedo light-off (parked, branch `wt5/launchseq`).** The crab-angle
-  light-off works and its own tests pass, but three tests fail with it: a still battleship behind
-  eight escorts is hit by 1 of 6 rounds where it was 6, escort-wall leakage is no longer
-  monotonic, and a round short of fuel accepts a retarget. Zeroing the crab angle restores all
-  three. Not traced; the working explanation (unverified) is that the old instant cancel put a
-  round on an exact collision course from the first second, while the crab leaves about 0.2 m/s
-  and a few metres of offset that only the terminal burn corrects, so a round blinded in cruise
-  now coasts past a hull that is a few tens of metres across. `pass-5` keeps the instant cancel,
-  paid from the round's delta-v.
+- **Physical drift cancel at torpedo light-off (merged, `wt5/launchseq`).** The crab-angle
+  light-off (nose up to 30 deg off the heading, thrust always along the nose) is merged. It changes
+  three pinned outcomes and the owner accepted them (2026-11-18, "accept the behaviour"); the three
+  tests were re-measured on the same scenarios and seeds. (1) A battleship behind 8 escorts, 6
+  rounds from 1200 km, seed 23: a non-maneuvering target was hit by 6 of 6 blinded rounds, now 1
+  hit / 5 neutralized; an evading one now 3 hit / 3 neutralized (the test pins both counts and
+  that hits + neutralized = blinded, no longer a direction). (2) Hits of a 4-round salvo behind
+  0 / 4 / 8 escorts: 4 / 4 / 3 on every seed, now 4 / 3 / 1 (seed 21) and 4 / 3 / 2 (seeds 25, 29);
+  4 escorts now stop one round. (3) The terminal-reserve retarget test: the round had 1.17 km/s
+  against a 1.12 km/s reserve and the steer costs ~0.03, so it ended 0.019 above the floor and
+  accepted; the test's margin over the reserve went from 0.05 to 0.01 km/s (a fuel-margin issue,
+  not a rule violation). Escort-paragraph numbers in the prompts follow: 9/18 behind 8 at 1200 km,
+  8/18 at 450 km; survival behind 4 escorts 1 of 3 at 1200 km.
 - **Torpedo price.** The owner chose to raise `TORPEDO_POINTS_PER_GJ` to about 0.083; at 0.083
   the corvette still costs 24 points and the torpedo cruiser 102, above the pinned "draftable at
   100 points" rule, so it was not applied. The draft tournament cache is stale.

@@ -7610,30 +7610,23 @@ class CombatSimulation:
         los = (target.position - target.velocity * dt) - torp.position
         return los.normalized() if los.magnitude > 0 else torp.launch_seq.nose
 
+    def _launch_los(self, torp: Torpedo, target: ShipCombatState, dt: float) -> Vector3D:
+        """Unit line of sight from the round to its target, both at the start
+        of the tick (the target rolled back, as the guidance does)."""
+        los = (target.position - target.velocity * dt) - torp.position
+        return los.normalized() if los.magnitude > 0 else Vector3D(1.0, 0.0, 0.0)
+
     def _release_torpedo(self, torp_flight: TorpedoInFlight, seq: Any, reason: str,
                          snaps: dict) -> None:
         """End a round's launch sequence: the torch lights this tick."""
         torp = torp_flight.torpedo
+        # The torch lights along the nose, which the sequence turned onto the
+        # crab burn direction (torpedo_launch.crab_direction): its first tick
+        # nulls the sideways launch drift (left to the APN law, a 20-30 m/s
+        # drift held a reserve round off its terminal burn: 27 GJ instead of
+        # 34 head-on). The engine then follows the nose for the window
+        # (torpedo_launch.steer).
         torpedo_launch.release(seq, self.current_time, reason)
-        # The torch's first act: cancel the sideways drift the sequence gave
-        # the round (ejection, RCS push, the hull's spin) - its velocity off
-        # the launcher's, square to the line of sight - so it flies on from
-        # the geometry it had at launch (a 20-30 m/s drift left to the APN
-        # law held a reserve round off its terminal burn: 27 GJ instead of
-        # 34 head-on). A fraction of a tick at full thrust (~0.2 s).
-        target = self.get_ship(torp.target_id)
-        if target is not None and not torp.fuel_exhausted:
-            los = (target.position - target.velocity * self.time_step) - torp.position
-            if los.magnitude > 0:
-                los = los.normalized()
-                drift = torp.velocity - torp.launched_from_velocity
-                lateral = drift - los * drift.dot(los)
-                accel = torp.specs.acceleration_at_mass(torp.current_mass_kg)
-                if lateral.magnitude > 0.01 and accel > 0 and self.time_step > 0:
-                    before = torp.remaining_delta_v_kps
-                    torp.apply_thrust(lateral * -1.0, self.time_step,
-                                      min(1.0, lateral.magnitude / (accel * self.time_step)))
-                    torp_flight.main_engine_dv_used_kps += before - torp.remaining_delta_v_kps
         own = snaps.get(seq.source_id)
         gap = (torpedo_launch.hull_gap_m(own, torp.position)
                if own is not None and not own.gone else None)
@@ -7809,11 +7802,15 @@ class CombatSimulation:
                 if reason is None:
                     heading = self._launch_heading(torp, target, dt)
                     torp_flight.rcs_dv_used_kps += torpedo_launch.advance(
-                        seq, torp, heading, snaps, dt, self.current_time)
+                        seq, torp, heading, snaps, dt, self.current_time,
+                        los=self._launch_los(torp, target, dt))
                     torp_flight.prev_distance_to_target = torp.position.distance_to(
                         target.position)
                     continue
                 self._release_torpedo(torp_flight, seq, reason, snaps)
+            if (seq is not None and seq.steering
+                    and torp.guidance_mode != GuidanceMode.COLLISION):
+                seq.steering = False    # (the nose-following window is COLLISION's)
 
             # Store previous position for sweep detection
             prev_pos = Vector3D(torp.position.x, torp.position.y, torp.position.z)
@@ -7826,6 +7823,18 @@ class CombatSimulation:
                 command = guidance.update_collision_guidance(
                     torp, target.position, target.velocity, dt
                 )
+                # Right after ignition the fixed main engine pushes along the
+                # nose, which turns at its limits onto the command
+                # (torpedo_launch.steer); RCS-only trims stay lateral.
+                if seq is not None and seq.steering:
+                    burns = (command.throttle > 0 and not command.use_rcs
+                             and command.direction.magnitude > 0.01)
+                    nose = torpedo_launch.steer(
+                        seq, torp, command.direction.normalized() if burns else None,
+                        command.throttle if burns else 0.0,
+                        self._launch_los(torp, target, dt), dt, self.current_time)
+                    if burns:
+                        command.direction = nose
 
                 # Update time and arming
                 torp.time_since_launch += dt

@@ -146,20 +146,27 @@ class TestPointDefenseBooksWhatItActuallyDid:
         # Nothing was actually taken off the board here.
         assert sim.metrics.total_torpedo_neutralized == 0
 
-    def test_evasion_is_what_converts_a_blind_into_a_save(self, fleet_data):
-        """The blind only buys something if the target then moves. Launched
-        1200 km out: the evading battleship has time to run (buying the wall
-        dwell) and turn back; from 350 km it cannot, holds its nose on the
-        salvo and the rounds are blinded too late to dodge."""
+    def test_blinded_rounds_are_booked_as_hit_or_neutralized_once(self, fleet_data):
+        """Launched 1200 km out behind 8 escorts, a non-maneuvering and an
+        evading battleship: every blinded round is booked exactly once, as a
+        hit or as neutralized (hits + neutralized == seeker kills).
+
+        Before the crab-angle light-off (2026-11-18) every blinded round hit a
+        non-maneuvering target here; with thrust along the nose a round starts
+        a few metres off its line and a blinded one mostly passes by. Owner
+        decision: accept. Measured now (seed 23, 6 rounds): holding still
+        1 hit / 5 neutralized, evading 3 hit / 3 neutralized."""
         still = _quiet(_salvo_against_screen, fleet_data, n_escorts=8, evading=False,
                        range_km=1200)
         moving = _quiet(_salvo_against_screen, fleet_data, n_escorts=8, evading=True,
                         range_km=1200)
 
-        assert still.metrics.total_torpedo_seeker_killed > 0
-        assert moving.metrics.total_torpedo_seeker_killed > 0
-        assert moving.metrics.total_torpedo_hits < still.metrics.total_torpedo_hits
-        assert moving.metrics.total_torpedo_neutralized > still.metrics.total_torpedo_neutralized
+        for sim, hits, neutralized in ((still, 1, 5), (moving, 3, 3)):
+            m = sim.metrics
+            assert m.total_torpedo_seeker_killed == 6
+            assert m.total_torpedo_hits + m.total_torpedo_neutralized \
+                == m.total_torpedo_seeker_killed
+            assert (m.total_torpedo_hits, m.total_torpedo_neutralized) == (hits, neutralized)
 
     def test_disable_event_is_emitted_once_per_torpedo(self, fleet_data):
         """
