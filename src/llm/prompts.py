@@ -1826,6 +1826,7 @@ def build_captain_doctrine(
     tool_names: Optional[Iterable[str]] = None,
     has_admiral: bool = False,
     ship_status: Optional[Dict[str, Any]] = None,
+    sequential_captains: bool = False,
     **_ignored: Any,
 ) -> str:
     """
@@ -1895,6 +1896,13 @@ def build_captain_doctrine(
             " <friend> take my lane.\"",
             "  (<enemy A> / <friend>: real ship names from your ENEMIES / FRIENDLIES.)",
         ]
+    if sequential_captains:
+        # A fact about the turn, not advice (lane cmdcap, sequential captains).
+        comms.append("- Your side's captains decide one after another each checkpoint (ship order, "
+                     "rotated one place per checkpoint), all on the same start-of-checkpoint "
+                     "picture; every order takes effect together. THIS CHECKPOINT, BEFORE YOU "
+                     "lists what the captains before you ordered (signals to you or all, target, "
+                     "launches, maneuver); the captains after you see yours the same way.")
     if "send_message" in names or not names:
         comms.append("- send_message: the OPEN channel - the ENEMY reads it (taunts, surrender "
                      "demands). Not for coordination.")
@@ -2668,6 +2676,51 @@ def format_comms(
     return "\n\n".join(out)
 
 
+def format_peer_turns(peers: List[Dict[str, Any]],
+                      position: Optional[Tuple[int, int]] = None) -> str:
+    """
+    THIS CHECKPOINT, BEFORE YOU (sequential captains): what the captains of
+    this side who decided before this one ordered at this checkpoint, in the
+    FRIENDLIES / FLEET NET forms (captain.peer_turn_summary). Facts only.
+    """
+    n, of = position or (len(peers) + 1, None)
+    where = f"you decide {n} of {of}" if of else f"you decide {n}"
+    if not peers:
+        return (f"THIS CHECKPOINT: {where}, first; the captains after you see your signals, "
+                "target, launches and maneuver before they decide. All orders apply together.")
+    lines = [f"THIS CHECKPOINT, BEFORE YOU ({where}; their orders apply with yours, not before):"]
+    for p in peers:
+        parts = []
+        m = p.get("maneuver")
+        if m:
+            text = _maneuver_text(m)
+            if m.get("target_name"):
+                text += f" -> {m['target_name']}"
+            if m.get("evade"):
+                text += f", evade {m['evade']}"
+            parts.append(text)
+        else:
+            parts.append(f"no maneuver call (keeps {p['keeps']})" if p.get("keeps")
+                         else "no maneuver call (coasts)")
+        if p.get("target"):
+            parts.append(f"target {p['target']}")
+        for launch in p.get("launches") or []:
+            text = (f"launched {launch['count']} torpedo{'es' if launch['count'] != 1 else ''} "
+                    f"at {launch['target']} ({launch['profile']}")
+            if launch.get("eta_s") is not None:
+                text += f", impact ~{launch['eta_s']:.0f} s after launch"
+            parts.append(text + ")")
+        lines.append(f"  {ship_ref(p.get('name'), p.get('ship_id'))}: " + " | ".join(parts))
+        for sig in p.get("signals") or []:
+            to = str(sig.get("to") or "ALL")
+            item = {"sender_name": p.get("name"), "sender_id": p.get("ship_id"),
+                    "channel": "fleet_net" if to.upper() == "ALL" else "direct",
+                    "text": f"[{sig.get('kind') or 'FREE'}] {sig.get('text') or ''}",
+                    "sent_t": p.get("t"), "structured": {"eta_s": sig.get("eta_s")}}
+            lines.append("  " + _comms_line(item))
+    return "\n".join(lines)
+
+
 def build_captain_turn(
     captain_name: str,
     ship_name: str,
@@ -2694,6 +2747,8 @@ def build_captain_turn(
     tool_errors: Optional[str] = None,
     tool_names: Optional[Iterable[str]] = None,
     compact: bool = False,
+    peer_turns: Optional[List[Dict[str, Any]]] = None,
+    peer_turn_position: Optional[Tuple[int, int]] = None,
     battle_clock: Optional[Tuple[int, Dict[str, Any]]] = None,
     **_ignored: Any,
 ) -> str:
@@ -2748,6 +2803,8 @@ def build_captain_turn(
     comms_text = format_comms(comms, own_faction)
     if comms_text:
         sections.append(comms_text)
+    if peer_turns is not None:
+        sections.append(format_peer_turns(peer_turns, peer_turn_position))
     if received_messages:
         # Legacy free-text form: the sender's side is unknown here, so it is
         # NOT labelled as enemy traffic.

@@ -370,6 +370,13 @@ class LLMCaptain:
         # This checkpoint's admiral orders for every ship of the fleet (ship
         # id -> orders), set by the runner: the ORDERED TARGETS line.
         self.fleet_orders: Dict[str, List[Any]] = {}
+        # Sequential captains (BattleConfig.captain_order; the default for a
+        # side with no admiral): set by the runner. peer_turns: what the
+        # captains of this side who decided before this one ordered THIS
+        # checkpoint (peer_turn_summary dicts); peer_turn_position: (n, of).
+        self.sequential_captains: bool = False
+        self.peer_turns: Optional[List[Dict[str, Any]]] = None
+        self.peer_turn_position: Optional[Tuple[int, int]] = None
 
         # Fleet comms. outbox: messages composed this checkpoint (fleet_signal,
         # send_message), drained and routed by the runner after the decision.
@@ -674,6 +681,9 @@ class LLMCaptain:
             has_admiral=self.has_admiral,
             compact=compact,
             battle_clock=getattr(self, "battle_clock", None),
+            sequential_captains=self.sequential_captains,
+            peer_turns=self.peer_turns if self.sequential_captains else None,
+            peer_turn_position=self.peer_turn_position if self.sequential_captains else None,
         )
         # Split into a stable system prompt and a volatile user turn so the
         # provider can serve the doctrine from cache across checkpoints.
@@ -1175,6 +1185,61 @@ class LLMCaptain:
 
     # ORDERS-block markers that make a turn need the full blocks.
     _FULL_TURN_MARKERS = ("!! ", "NOT FLYABLE", "LAST CHECKPOINT", "NOT APPLIED")
+
+    def peer_turn_summary(self, ship_id: str, simulation: Any,
+                          commands: List[Any]) -> Dict[str, Any]:
+        """
+        What this captain ordered this checkpoint, for the captains of its
+        side who decide after it (sequential captains): its fleet_signal
+        traffic, the target its guns follow, its launches (rounds, target,
+        profile, flown time of flight) and its maneuver - the same facts the
+        FLEET NET, the datalink and FRIENDLIES carry a checkpoint later.
+        """
+        ship = simulation.get_ship(ship_id)
+        out: Dict[str, Any] = {"ship_id": ship_id,
+                               "name": getattr(ship, "name", None) or self.ship_name,
+                               "t": float(getattr(simulation, "current_time", 0.0))}
+        maneuver = next((c for c in commands
+                         if hasattr(c, "maneuver_type") and hasattr(c, "throttle")), None)
+        if maneuver is not None:
+            tgt = simulation.get_ship(maneuver.target_id) if maneuver.target_id else None
+            out["maneuver"] = {"type": maneuver.maneuver_type.name,
+                               "throttle": maneuver.throttle,
+                               "heading": maneuver.heading_direction,
+                               "evade": getattr(maneuver, "evade", None),
+                               "target_name": getattr(tgt, "name", None)}
+        else:
+            current = getattr(ship, "current_maneuver", None)
+            out["maneuver"] = None
+            out["keeps"] = (current.maneuver_type.name if current is not None
+                            and hasattr(current, "maneuver_type") else None)
+        target_id = next((c.get("target_id") for c in commands
+                          if isinstance(c, dict) and c.get("type") == "set_target"), None)
+        target_id = target_id or getattr(ship, "primary_target_id", None) or self.primary_target_id
+        if target_id:
+            tgt = simulation.get_ship(target_id)
+            out["target"] = ship_ref(getattr(tgt, "name", target_id), target_id)
+        launches: Dict[Tuple[Any, str], Dict[str, Any]] = {}
+        for c in commands:
+            if not (isinstance(c, dict) and c.get("type") == "launch_torpedo"):
+                continue
+            key = (c.get("target_id"), c.get("profile") or "sprint")
+            row = launches.setdefault(key, {"target_id": key[0], "profile": key[1], "count": 0})
+            row["count"] += 1
+        for (tid, profile), row in launches.items():
+            tgt = simulation.get_ship(tid) if tid else None
+            row["target"] = ship_ref(getattr(tgt, "name", tid), tid) if tid else "?"
+            sol = self._torpedo_solution(simulation, ship, tgt) if tgt is not None else None
+            shot = None
+            if sol is not None:
+                shot = (sol.vs_coasting_reserve if profile == "reserve" and sol.vs_coasting_reserve
+                        else sol.best_shot)
+            if shot is not None and shot.tof_s is not None:
+                row["eta_s"] = float(shot.tof_s)
+        out["launches"] = list(launches.values())
+        out["signals"] = [{k: m.get(k) for k in ("kind", "to", "text", "target", "eta_s")}
+                          for m in self.outbox if m.get("tool") == "fleet_signal"]
+        return out
 
     def _compact_turn(self, range_infos: List[Any], orders_text: Optional[str],
                       tactical_status: Dict[str, Any]) -> bool:

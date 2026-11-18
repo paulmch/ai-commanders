@@ -870,3 +870,101 @@ class TestOrderCheckReply:
         from src.llm.maneuver_orders import admiral_maneuver_spec
         spec = admiral_maneuver_spec({"maneuver": '"PADLOCK"', "evade": '"dodge"'})
         assert spec["maneuver_type"] == "PADLOCK" and spec["evade"] == "dodge"
+
+
+# =============================================================================
+# Round 2: sequential captains for a side with no admiral
+# =============================================================================
+
+import hashlib  # noqa: E402
+
+from src.llm.prompts import build_captain_doctrine as _doctrine  # noqa: E402
+
+
+def _seq_runner(tmp_path, captain, *, admirals=False, order=None, parallel=False, checkpoints=2,
+                alpha=(("corvette", "stub/dart"), ("corvette", "stub/harpoon")),
+                beta=(("corvette", "stub/lancer"), ("corvette", "stub/pike"))):
+    stub = Stub(captain=captain)
+    runner = make_runner(stub, tmp_path, alpha=alpha, beta=beta, checkpoints=checkpoints,
+                         admirals=admirals, distance_km=350.0)
+    runner.config.captain_order = order
+    runner.config.parallel_llm = parallel
+    stub.texts = {}
+    stub.systems = {}
+    inner = stub.captain
+
+    def wrapped(ctx):
+        stub.texts[(ctx.model, ctx.cp, ctx.turn)] = ctx.messages[-1]["content"]
+        stub.systems[(ctx.model, ctx.cp)] = ctx.messages[0]["content"]
+        return inner(ctx)
+    stub.captain = wrapped
+    return stub, runner
+
+
+def _claiming(ctx):
+    me = ctx.model.split("/")[-1]
+    foe = "beta_1" if ctx.model in ("stub/dart", "stub/harpoon") else "alpha_1"
+    return [("set_primary_target", {"target_id": foe}),
+            ("fleet_signal", {"kind": "TARGET_CLAIM", "to": "ALL", "text": f"{me} takes {foe}"}),
+            ("launch_torpedo", {"count": 1, "target_id": foe}),
+            ("set_maneuver", {"maneuver_type": "PADLOCK", "target_id": foe})]
+
+
+def _stream(runner):
+    rows = [(e.timestamp, e.event_type.name, e.ship_id, e.target_id,
+             json.dumps(e.data, sort_keys=True, default=str)) for e in runner.simulation.events]
+    return hashlib.sha256(json.dumps(rows).encode()).hexdigest()
+
+
+class TestSequentialCaptains:
+
+    def test_a_later_captain_sees_earlier_claims_and_launches(self, tmp_path):
+        stub, runner = _seq_runner(tmp_path, _claiming, checkpoints=1)
+        runner.run_fleet_battle(FLEET)
+        # Checkpoint 1: the order rotates one place -> alpha_2 (harpoon) first.
+        first, second = stub.texts[("stub/harpoon", 1, 1)], stub.texts[("stub/dart", 1, 1)]
+        assert "THIS CHECKPOINT: you decide 1 of 2, first" in first
+        assert "dart takes" not in first
+        block = second[second.index("THIS CHECKPOINT, BEFORE YOU (you decide 2 of 2"):]
+        assert "[TARGET_CLAIM] harpoon takes beta_1" in block
+        assert "launched 1 torpedo at " in block and "PADLOCK" in block
+        # Sides never see each other.
+        for model in ("stub/lancer", "stub/pike"):
+            assert "takes beta_1" not in stub.texts[(model, 1, 1)]
+        # The doctrine says so, as a fact.
+        assert "decide one after another each checkpoint" in stub.systems[("stub/dart", 1)]
+
+    def test_same_commands_in_same_battle_out(self, tmp_path):
+        _, seq = _seq_runner(tmp_path / "s", _claiming, order="sequential")
+        seq.run_fleet_battle(FLEET)
+        _, par = _seq_runner(tmp_path / "p", _claiming, order="parallel")
+        par.run_fleet_battle(FLEET)
+        assert _stream(seq) == _stream(par)
+
+    def test_order_rule_is_by_ship_id_rotated_and_ignores_listing_order(self, tmp_path):
+        _, runner = _seq_runner(tmp_path, _claiming)
+        entries = [(f"alpha_{n}", None, "alpha") for n in (10, 2, 1, 3)]
+        runner.checkpoint_count = 0
+        assert [e[0] for e in runner.captain_turn_order(entries)] == [
+            "alpha_1", "alpha_2", "alpha_3", "alpha_10"]
+        assert [e[0] for e in runner.captain_turn_order(list(reversed(entries)))] == [
+            "alpha_1", "alpha_2", "alpha_3", "alpha_10"]
+        runner.checkpoint_count = 1
+        assert [e[0] for e in runner.captain_turn_order(entries)][0] == "alpha_2"
+        runner.checkpoint_count = 4
+        assert [e[0] for e in runner.captain_turn_order(entries)][0] == "alpha_1"
+
+    def test_sides_with_an_admiral_are_unchanged(self, tmp_path):
+        a, auto = _seq_runner(tmp_path / "a", _claiming, admirals=True)
+        auto.run_fleet_battle(FLEET)
+        b, par = _seq_runner(tmp_path / "b", _claiming, admirals=True, order="parallel")
+        par.run_fleet_battle(FLEET)
+        assert a.texts == b.texts and a.systems == b.systems          # byte-identical requests
+        assert not any("THIS CHECKPOINT" in t for t in a.texts.values())
+        assert not any("one after another" in t for t in a.systems.values())
+
+    def test_config_switch(self):
+        from src.llm.battle_runner import BattleConfig
+        assert BattleConfig(captain_order="auto").captain_order is None
+        with pytest.raises(ValueError):
+            BattleConfig(captain_order="random")

@@ -420,6 +420,7 @@ async def run(args):
             'result_reason': result.reason if result else None,
             'recording': str(output),
             'experiment': {'no_admiral': args.no_admiral, 'intent_only': args.intent_only,
+                           'captain_order': args.captain_order or 'auto',
                            'quiet_turns': args.quiet_turns, 'cache_warmup': args.cache_warmup,
                            'rosters': args.rosters, 'thinking_summary': args.thinking_summary,
                            'show_score': args.show_score},
@@ -498,7 +499,9 @@ async def run(args):
         runner = LiveDraftRunner(
             BattleConfig.from_fleet_config(fc, recording_dir=str(report_dir), verbose=not args.quiet,
                                            effort_policy=parse_effort_specs(args.effort),
-                                           quiet_turns=args.quiet_turns, label=args.label),
+                                           quiet_turns=args.quiet_turns, label=args.label,
+                                           captain_order=(None if args.captain_order in (None, 'auto')
+                                                          else args.captain_order)),
             LLMCaptainConfig('Alpha', 'Alpha'), LLMCaptainConfig('Beta', 'Beta'), client, fc)
         runner.configure_live(server, state, draft_recorders, output, args.sim_step_delay,
                               ticker=ticker, vision_dir=report_dir / 'vision',
@@ -617,6 +620,10 @@ def main():
                         help='Free-text note naming the experiment this run belongs to: stored in '
                              'status.json, the recording provenance and the ledger lines (never '
                              'shown to a model)')
+    parser.add_argument('--captain-order', choices=('auto', 'sequential', 'parallel'), default=None,
+                        help='sequential: a side\'s captains decide one after another, each seeing '
+                             'what the ones before it ordered this checkpoint; parallel: all at once. '
+                             'auto (default): sequential for a side with no admiral')
     parser.add_argument('--quiet-turns', action='store_true',
                         help='Experiment: skip a captain call on a turn with no trigger, no new '
                              'FLEET NET traffic and an unchanged applied order')
