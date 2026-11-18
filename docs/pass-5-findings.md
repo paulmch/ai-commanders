@@ -586,7 +586,105 @@ usage and the price table, not reconciled against the provider's invoice. Both m
 about weapon arcs ("keep nose-on alignment during the burn so spinals stay unmasked"); neither
 mentioned the plume, the interlock or crew state, and the recordings show why: every friendly
 wash stayed under the interlock's 0.5 GJ/s limit. The recordings are in
-`data/recordings/p5_sonnet_battles_20261116/` (65 MB, not committed).
+`data/recordings/p5_sonnet_battles_20261116/`.
+
+## The command interface, rebuilt from the recorded battles
+
+Three read-only audits of the four Sonnet battles above (1,049 captain turns, 1,228 admiral
+calls; every prompt is stored verbatim in the recordings) found that most weaknesses were in what
+commanders were told, not in doctrine:
+
+- **Nobody talked sideways.** Zero `fleet_signal`, `send_message` or `discuss_with_admiral` calls;
+  13 reports up the chain. With an admiral fixing target, maneuver and salvo each checkpoint, and
+  a peer's message arriving one checkpoint late, there was nothing left to coordinate.
+- **Captains under an admiral execute.** They took the ordered target in 741 of 775 target calls;
+  about 40 % of turns changed nothing. The static nose-on PADLOCK wall was ordered by the admiral
+  (87 % of Sonnet 5.5's orders), and the prompts sold it ("recommended", the only option line
+  with no stated cost).
+- **The turn stated things that were false or missing:** a burn that did not happen was always
+  blamed on "turning onto the burn line, or fuel/engine limited" (39 turns; the cause was evasion
+  or a dead drive); a dead drive was shown by omission; turrets "fire over a 180 deg arc"; a
+  merge "achieves nothing"; "guns reach 900 km (IN RANGE)" where the measured hit rate is 26 %.
+- **Sonnet 5.5 at medium effort did not think:** zero thinking tokens on 638 of 639 admiral
+  calls. Replaying 20 recorded turns on identical state (`scripts/replay_turn.py`): medium drafted
+  10 hulls against a cap of 8 in 8 of 9 tries and misread a retreat order 9 of 9; high was 9 of 9
+  valid and 9 of 9 correct, at the same cost.
+
+What changed, on the owner's standing rule (accurate state, no prescribed tactics):
+
+- **Captain turn:** helm feedback names the real cause and the seconds burned; dead and damaged
+  drives are stated; the captain sees the engine's verdict on its last turn and can attach a
+  reason to an action; a copy of the applied order is compliance and keeps the formation burn; a
+  bad optional field no longer drops a call (a quoted `HOLD_FIRE` used to become fire-at-will);
+  range-control notes come from the real arcs; every option line carries the same fields; peers'
+  ordered targets and engine-known threats to a fleet-mate are shown; the turn is 16-21 % smaller
+  when an admiral order is already flying; each faction has its own ship names.
+- **Admiral turn:** doctrine facts are measured on the current engine by seeded grids and bound by
+  tests (gun exchange by range, penetration by facing, crossfire geometry, torpedo defence);
+  enemy facing on every row; the battle clock; the time-limit score line (on by default); a
+  torpedo-defence line per targeted ship from an engine forecast; salvos allocated once on the
+  directive; a draft whose error echoes the rejected fleet and which is trimmed, not aborted,
+  after three invalid tries; draw offers as a recorded exchange; repeated non-compliance raised
+  with the engine's reason.
+- **Runner:** effort per role and side, with defaults per model (high for Sonnet 5.5, Opus 5.5
+  and Fable 5.2); captain model separate from the admiral's; thinking summaries recorded; a
+  dollar cap and a cumulative ledger on every paid script; an interrupt stops spending and closes
+  the ledger; scripts refuse to start without explicit models (`--require-provider`); first
+  checkpoint at T+0; sequential captains for a side without an admiral (each sees what the
+  captains before it did this checkpoint; order by ship id, rotated); experiment modes
+  (`--rosters`, `--no-admiral`, `--intent-only`, heuristic captains, `--quiet-turns`,
+  `--cache-warmup`).
+- **Admiral's tactical plot** redesigned (oriented hull glyphs with facing tags, next-checkpoint
+  ghosts, torpedo waves per target with ETA, closest approach, merge zoom, side-view strip; fixed
+  1280x720). A 90-call replay with the old plot, the new plot and no plot gave the same orders on
+  all five checkpoints; it is kept for spectators and stays optional for models.
+
+### Seven battles on the rebuilt interface (November 17-18, 2026)
+
+150-point drafts unless noted, 20 checkpoints, recordings under `data/recordings/p5w5_*`.
+
+| Battle | Setup | Result | Cost |
+|---|---|---|---|
+| B1 | Sonnet 5.5 (high) v Sonnet 5, no score line | draw 153.7-152.9, both fleets sat at 500 km | $7.77 |
+| B2 | same fleets and seed, score line shown | Sonnet 5.5 wins 266.3-102.6, a real fight | $6.91 |
+| B3 | Opus 5.5 admiral over Haiku 5.5 captains v Sonnet 5.5 | Opus side wins 388.5-14.0 (torpedo swarm, no loss) | $6.79 |
+| B4 | Opus admiral over Haiku captains, both sides | 332.7-34.5; both used the reserve profile | $6.03 |
+| B5 | B2 again on the final evade engine | Sonnet 5.5 wins 259.8-166.9 (attacker lands 3x the hits) | $8.69 |
+| B6b | B5 with intent-only admirals | Sonnet 5.5 wins 227.0-135.0; 36 % cheaper | $5.56 |
+| B7 | Opus captains, no admiral, 4 v 4, 80 points | 30 captain messages on the fleet net in 8 checkpoints | $2.96 |
+
+What they showed: commanders who know the clock but not the score wait (B1 against B2); a strong
+admiral over cheap captains is the best value (all 160 Haiku captain turns of B3 cost $0.14);
+per-ship orders cost a third of a battle for little (B5 against B6b); captains coordinate through
+the admiral when there is one and through the fleet net when there is none (B7: target claims,
+overkill calls, timed salvos, cover requests), and in the latter case all deciding at the same
+instant made two ships fire at the same target at the first checkpoint, which the sequential
+order now prevents. One battle (`p5w5_b6_intent_only`, GLM 5.3 Flash against GPT-5.6 Luna, $0.09
+on OpenRouter) was started by a shell quoting error without its arguments; the scripts' model
+defaults that allowed it are gone. Total paid: $56.38 including replays.
+
+## Torpedoes: profiles, a datalink, and what happens at launch
+
+Tracing the 40 rounds of B3: 28 lost their target in flight, 8 retargeted, 15 with a live seeker
+never did. The old rule's reach test priced only the sideways steer while the guidance then burnt
+back up to cruise speed, so accepted retargets arrived dry and missed; ties went by insertion
+order; rounds kept homing on dying hulks (13 % of impacts in 70 seeded battles); the prompt
+promised "retarget the nearest".
+
+- **Launch profiles** (`src/torpedo.py`): `sprint` (default, unchanged) and `reserve` (cruise at
+  8 km/s closure and keep the tank for a reassignment; it burns what is left before impact).
+  Reserve lands more rounds per launch and kills fewer hulls; point defence blinds 36 % of its
+  rounds against 26 % of sprint's.
+- **Datalink** (`src/torpedo_link.py`): when a target dies, becomes a hulk or surrenders, its
+  rounds are reassigned as a group against one shared rounds-needed board (the same board the
+  captain's OVERKILL line and the admiral's economy read); surplus reserve rounds may divert
+  early, in whole strikes only and never below what kills the original target; the gate includes
+  burn time; commanders get a RETASK notice. Worth about 2.4 % more kills and 26 % fewer wasted
+  rounds for sprint fleets. `AIC_TORPEDO_DATALINK=0` reproduces the old engine bit for bit.
+- **Launch sequence**: described in the section above. A crab-angle light-off that keeps the main
+  thrust along the nose is built on branch `wt5/launchseq` and is NOT merged (see Open).
+
+Torpedo fleets still beat gun fleets in every battle, whatever the gun fleet flies.
 
 ## Open
 
@@ -596,6 +694,24 @@ wash stayed under the interlock's 0.5 GJ/s limit. The recordings are in
   orders were never flown). The tests that pinned the old schedule now pin the new one; seeded
   event streams, `LEGACY_GOLDEN_SHA256` and the perf golden moved with it. Recordings carry
   `first_checkpoint_s: 0`; older ones (first decision at T+30) still replay.
+- **Physical drift cancel at torpedo light-off (parked, branch `wt5/launchseq`).** The crab-angle
+  light-off works and its own tests pass, but three tests fail with it: a still battleship behind
+  eight escorts is hit by 1 of 6 rounds where it was 6, escort-wall leakage is no longer
+  monotonic, and a round short of fuel accepts a retarget. Zeroing the crab angle restores all
+  three. Not traced; the working explanation (unverified) is that the old instant cancel put a
+  round on an exact collision course from the first second, while the crab leaves about 0.2 m/s
+  and a few metres of offset that only the terminal burn corrects, so a round blinded in cruise
+  now coasts past a hull that is a few tens of metres across. `pass-5` keeps the instant cancel,
+  paid from the round's delta-v.
+- **Torpedo price.** The owner chose to raise `TORPEDO_POINTS_PER_GJ` to about 0.083; at 0.083
+  the corvette still costs 24 points and the torpedo cruiser 102, above the pinned "draftable at
+  100 points" rule, so it was not applied. The draft tournament cache is stale.
+- **Rule-based captains.** The new default is about even with `classic` on fast-hull and
+  battleship fleets; its gain is against dreadnought lines. A gun fleet loses every battle to the
+  torpedo boats under any doctrine.
+- **Perf reference timings** were kept from a quiet run; only the hashes were re-recorded.
+- **Untested on real models:** sequential captains, the surrender rule, the burn-through flip
+  and the launch sequence landed after the last paid battle.
 - **Plume.** An impaired crew's "slower response" is not built (only slower weapon cycling). The
   formation throttle matching does not know about the interlock, so a held lead falls behind
   unless its captain side-slips. The doctrine text does not mention the interlock.
