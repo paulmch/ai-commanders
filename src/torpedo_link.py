@@ -246,7 +246,12 @@ def round_forecast(torp: Any, target: Any) -> Forecast:
     avg = 0.5 * (max(0.0, closure) + impact)
     pen = float(getattr(torp.specs, "penetrator_mass_kg", 250.0))
     warhead = float(getattr(torp.specs, "warhead_yield_gj", 0.0) or 0.0)
-    return Forecast(eta_s=d / max(avg * 1000.0, 1.0), impact_kps=impact, cross_kps=cross,
+    # Still in its launch sequence (src/torpedo_launch.py): it coasts at its
+    # present closure until the torch lights, then flies as above.
+    hold = torp.launch_hold_s() if getattr(torp, "launch_seq", None) is not None else 0.0
+    to_go = max(0.0, d - max(0.0, closure) * 1000.0 * hold)
+    return Forecast(eta_s=hold + to_go / max(avg * 1000.0, 1.0), impact_kps=impact,
+                    cross_kps=cross,
                     energy_gj=0.5 * pen * (impact * 1000.0) ** 2 / 1e9 + warhead)
 
 

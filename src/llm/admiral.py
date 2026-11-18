@@ -1365,7 +1365,9 @@ Be authentic to how you would command a fleet as {model_name}."""
             if specs is not None:
                 row["solution"] = intel.torpedo_solution(
                     ship.position, ship.velocity, enemy, specs, self.fleet_data,
-                    simulation, salvo_available=max(1, snapshot.launches_available or salvo))
+                    simulation, salvo_available=max(1, snapshot.launches_available or salvo),
+                    hold_s=intel._torpedo_launch.predict_launch_hold_s(
+                        simulation, ship, enemy, specs))
             rows.append(row)
         rows.sort(key=lambda r: r["range_km"])
         inbound = [r for r in snapshot.rounds

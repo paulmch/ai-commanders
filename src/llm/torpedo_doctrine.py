@@ -20,18 +20,32 @@ except ImportError:  # pragma: no cover - script-style imports
 # opening 1 km/s, at a frigate running away at 3 g, and the gated, flown reach
 # of a reassignment 200 km out; seeded rule-based battles (link on).
 FACTS = {
-    "sprint": {"tof_500_rest_s": 72, "gj_500_rest": 22, "tof_500_closing3_s": 58,
-               "gj_500_closing3": 34, "tof_500_opening1_s": 77, "gj_500_opening1": 19,
-               "runner_ff_gj": 17, "reach_200_km": 16, "reach_200_closing3_km": 10},
-    "reserve": {"tof_500_rest_s": 81, "gj_500_rest": 23, "tof_500_closing3_s": 59,
-                "gj_500_closing3": 34, "tof_500_opening1_s": 87, "gj_500_opening1": 19,
-                "runner_ff_gj": 15, "reach_200_km": 106, "reach_200_closing3_km": 52},
-    "battles": {"pct_orphaned": 58, "pct_reassigned": 69, "pct_reassigned_hit": 56,
-                "pct_pd_blinded_sprint": 24, "pct_pd_blinded_reserve": 35,
+    "sprint": {"tof_500_rest_s": 76, "gj_500_rest": 22, "tof_500_closing3_s": 61,
+               "gj_500_closing3": 33, "tof_500_opening1_s": 81, "gj_500_opening1": 19,
+               "runner_ff_gj": 17, "reach_200_km": 16, "reach_200_closing3_km": 11},
+    "reserve": {"tof_500_rest_s": 85, "gj_500_rest": 22, "tof_500_closing3_s": 62,
+                "gj_500_closing3": 33, "tof_500_opening1_s": 91, "gj_500_opening1": 19,
+                "runner_ff_gj": 14, "reach_200_km": 103, "reach_200_closing3_km": 57},
+    "launch": {"ahead_s": 4, "half_round_s": 7},
+    "battles": {"pct_orphaned": 54, "pct_reassigned": 66, "pct_reassigned_hit": 55,
+                "pct_pd_blinded_sprint": 25, "pct_pd_blinded_reserve": 36,
                 "pct_diverted_hit_reserve": 76},
 }
 
 _S, _R, _B = FACTS["sprint"], FACTS["reserve"], FACTS["battles"]
+_L = FACTS["launch"]
+
+# One fact, no advice: how long a round's torch stays cold after launch
+# (src/torpedo_launch.py; measured from a coasting launcher,
+# scripts/launch_sequence_facts.py via scripts/torpedo_link_facts.py).
+LAUNCH_FACT = (
+    f"Launch sequence: a round leaves its rack or cell and drifts clear on its thrusters "
+    f"with its torch cold; measured from a coasting launcher the torch lights "
+    f"~{_L['ahead_s']} s after launch when the round needs at most a quarter turn onto its "
+    f"target and ~{_L['half_round_s']} s when it must turn about first (a corvette rail "
+    f"round fired astern, a torpedo-cruiser cell on the far side from the target); the "
+    f"flight times quoted here include it."
+)
 
 PROFILE_FACT = (
     f"Launch profile (default sprint). sprint: spends the tank early on closing speed. "

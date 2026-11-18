@@ -350,13 +350,28 @@ def _heavy_wash_rate() -> float:
 
 
 def torpedo_eta(torp_flight: Any, target: Any) -> Optional[float]:
-    """Seconds to impact of one round on its target, None when not closing."""
+    """Seconds to impact of one round on its target, None when not closing.
+    A round still in its launch sequence (torch cold beside its launcher,
+    src/torpedo_launch.py) is quoted the flight the admiral's ordnance table
+    gives it (fleet_intel.solve_pursuit with its hold, target holding course)
+    instead of its launcher's closure."""
     torp = torp_flight.torpedo
     offset = torp.position - target.position
     dist = offset.magnitude
     if dist <= 0:
         return 0.0
     closing = -(torp.velocity - target.velocity).dot(offset.normalized())
+    if getattr(torp, "in_launch_sequence", False):
+        try:
+            from .fleet_intel import solve_pursuit
+            fly = solve_pursuit(dist, closing, 0.0, 0.0, torp.specs,
+                                mass_kg=torp.current_mass_kg,
+                                dv_left_mps=torp.remaining_delta_v_kps * 1000.0,
+                                hold_s=torp.launch_hold_s())
+            if fly.get("hit"):
+                return float(fly["tof_s"])
+        except Exception:  # noqa: BLE001 - advisory only
+            pass
     return dist / closing if closing > 0 else None
 
 

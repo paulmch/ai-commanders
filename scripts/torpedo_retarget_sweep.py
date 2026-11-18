@@ -91,7 +91,12 @@ BUILT = {"p5_nolink": {"AIC_TORPEDO_DATALINK": "0"},
          # the exact-prefilter proof: verdicts (and so battles) identical
          "p5_link_nopre": {"AIC_TORPEDO_DATALINK": "1", "AIC_LINK_PREFILTER": "0"},
          "p5_reserve_nopre": {"AIC_TORPEDO_DATALINK": "1", "AIC_TORPEDO_PROFILE": "reserve",
-                              "AIC_LINK_PREFILTER": "0"}}
+                              "AIC_LINK_PREFILTER": "0"},
+         # the launch sequence off (src/torpedo_launch.py): the torch lit at
+         # the ship's centre on the launch tick, as before it existed
+         "p5_link_instant": {"AIC_TORPEDO_DATALINK": "1", "AIC_LAUNCH_SEQUENCE": "0"},
+         "p5_reserve_instant": {"AIC_TORPEDO_DATALINK": "1", "AIC_TORPEDO_PROFILE": "reserve",
+                                "AIC_LAUNCH_SEQUENCE": "0"}}
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +109,8 @@ def apply_option(option: str) -> None:
         from src import torpedo_link
         torpedo_link.PREFILTER = os.environ.get("AIC_LINK_PREFILTER", "1") != "0"
         torpedo_link.LINK_SURPLUS_DIVERSION = os.environ.get("AIC_LINK_SURPLUS", "1") != "0"
+        from src import torpedo_launch
+        torpedo_launch.LAUNCH_SEQUENCE_DEFAULT = os.environ.get("AIC_LAUNCH_SEQUENCE", "1") != "0"
         return
     # the investigation's counterfactuals patch the PRE-link per-round rule
     os.environ["AIC_TORPEDO_DATALINK"] = "0"

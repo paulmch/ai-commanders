@@ -109,6 +109,13 @@ class TestThreatCount:
         me = _ship(sim, fleet, "alpha_1", "destroyer", "alpha", 0.0)
         shooter = _ship(sim, fleet, "beta_1", "cruiser_torpedo", "beta", 400.0, fwd=-1.0)
         assert sim.inject_command("beta_1", {"type": "launch_torpedo", "target_id": "alpha_1"})
+        # Still in its launch sequence (torch cold beside its launcher) the
+        # round is nobody's threat yet; once the torch lights it is.
+        tf = sim.torpedoes[0]
+        assert tf.torpedo.in_launch_sequence
+        assert sim._get_evasion_status(me)["guided_torpedoes"] == 0
+        while tf.torpedo.in_launch_sequence:
+            sim.step()
         status = sim._get_evasion_status(me)
         assert status["guided_torpedoes"] == 1
         assert status["gun_rounds"] == 0
@@ -245,13 +252,18 @@ class TestTorpedoVerdicts:
         sim, sh, tg = _duel(fleet, 400.0, 0.0)
         # OVERKILL = at least what he needs (torpedo_link.rounds_needed: PD
         # soak + rounds to kill - the datalink's own estimate).
-        need = torpedo_solution(sim, sh, tg, fleet).rounds_needed
-        # Same-side live seekers homing on him (a blinded one does not count).
-        for i in range(need):
+        # Same-side live seekers homing on him (a blinded one does not count),
+        # as many as the board keeps on him for rounds like these (sized on
+        # the inbound rounds' own forecast impact, torpedo_link.need_for).
+        from src import torpedo_link as L
+
+        def rnd(i):
             torp = Torpedo(specs=TorpedoSpecs.trident(), position=Vector3D(300_000, i * 10.0, 0),
                            velocity=Vector3D(-12_000, 0, 0), target_id="beta_1")
-            sim.torpedoes.append(TorpedoInFlight(torpedo_id=f"t{i}", torpedo=torp,
-                                                 source_ship_id="alpha_1"))
+            return TorpedoInFlight(torpedo_id=f"t{i}", torpedo=torp, source_ship_id="alpha_1")
+        need = L.kill_count(L.need_for(sim, tg, [rnd(i) for i in range(8)]))
+        for i in range(need):
+            sim.torpedoes.append(rnd(i))
         sim.torpedoes[0].is_disabled = True
         assert len(rounds_inbound(sim, "alpha", "beta_1")) == need - 1
         assert torpedo_solution(sim, sh, tg, fleet).verdict == "REACHABLE"

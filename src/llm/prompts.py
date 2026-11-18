@@ -23,7 +23,7 @@ try:
     from .. import combat as _combat
     from .. import drive_plume as _plume
     from ..power import KINETIC_WEAPON_EFFICIENCY
-    from .torpedo_doctrine import LINK_FACT, PROFILE_FACT
+    from .torpedo_doctrine import LAUNCH_FACT, LINK_FACT, PROFILE_FACT
 except ImportError:  # pragma: no cover - script-style imports
     from pointdefense import (
         PDLaser,
@@ -36,7 +36,7 @@ except ImportError:  # pragma: no cover - script-style imports
     import combat as _combat
     import drive_plume as _plume
     from power import KINETIC_WEAPON_EFFICIENCY
-    from llm.torpedo_doctrine import LINK_FACT, PROFILE_FACT
+    from llm.torpedo_doctrine import LAUNCH_FACT, LINK_FACT, PROFILE_FACT
 
 
 # Closing speeds tabulated for the captain's PD block. The middle entry is the
@@ -1105,6 +1105,7 @@ TORPEDO_TACTICS_BLOCK = """=== TORPEDO BOAT TACTICS (you mount no guns) ===
 - launch_torpedo profile: """ + PROFILE_FACT + """ Your ENEMIES torpedo line
   compares both profiles for the shot at hand (PROFILES ...).
 - """ + LINK_FACT + """
+- """ + LAUNCH_FACT + """
 - Enemy torpedo hulls that have you targeted can land a round before your next
   decision: THREATS TO ME says when. EVADE early."""
 
@@ -3053,8 +3054,8 @@ HOW POINT DEFENSE ACTUALLY WORKS:
   (~{pd_range_km:.0f} km laser range) of a torpedo's path adds dwell against it.
 - PD BLINDS torpedoes (seeker kill); the dead round then coasts in a straight line and
   hits only a hull whose path that line crosses - one flying straight at it. Measured
-  (6-round salvos launched 1200 km out): 17/18 blinded rounds hit a non-evading
-  battleship behind 8 escorts; the same attack on an evading one landed 12/18. A ship
+  (6-round salvos launched 1200 km out): 18/18 blinded rounds hit a non-evading
+  battleship behind 8 escorts; the same attack on an evading one landed 16/18. A ship
   with torpedoes INBOUND (see ORDNANCE) that does not EVADE is still hit by the rounds
   PD blinded; one that EVADEs dodges dead rounds and turns its nose (thickest armor)
   onto live ones - with the evade field on a burning order, only as far as its swing cone
@@ -3075,12 +3076,13 @@ FORMATIONS FOR PD (what actually moves the numbers):
   rings at 15, 30 and 120 km measured identically. Place escorts anywhere inside
   laser range of the axis the torpedoes come down; don't micro-manage spacing.
 - Returns need mass AND time: vs a 6-round simultaneous salvo launched 1200 km out, an
-  evading battleship leaked 18/18 alone, 18/18 with 4 destroyer escorts, 12/18 with 8.
+  evading battleship leaked 18/18 alone, 18/18 with 4 destroyer escorts, 16/18 with 8.
   Launched 450 km out (~70 s of flight) it leaked 18/18 even behind 8: a 1g hull cannot
   turn away to run and back in time, so it holds its nose armour on the salvo, and the
   escorts blind the rounds only in the last ~10 s - too late to dodge. Survival
   still follows the wall: alone the battleship died in 3 of 3 runs at either range,
-  behind 4 escorts in 1 of 3, behind 8 in none. 4 escorts stopped no round -
+  behind 4 escorts in 3 of 3 (1200 km) and 1 of 3 (450 km), behind 8 in 1 of 3
+  (1200 km) and none (450 km). 4 escorts stopped no round -
   concentrate the fleet or accept the hits.
 - The wall only protects ships that EVADE inside it (see blinding, above).
 
@@ -3123,6 +3125,7 @@ WHEN TO COMMIT TRIDENTS:
   {launches_per_tube} launches per tube per {decision_interval_s:g}s checkpoint.
 - LAUNCH PROFILES (torpedo_profile on issue_order, profile in salvo_plan): """ + PROFILE_FACT + """
 - ROUNDS IN FLIGHT: """ + LINK_FACT + """
+- """ + LAUNCH_FACT + """
 """
 
 # Included when YOUR fleet mounts guns.
