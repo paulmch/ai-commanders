@@ -3001,11 +3001,11 @@ FORMATIONS FOR PD (what actually moves the numbers):
 TORPEDO DEFENCE, MEASURED (seeded runs on this engine: a 4 battlecruiser + 2 destroyer +
 2 frigate gun wall against 5 corvettes + 3 frigates = 40 rounds, the wall's posture fixed
 from the first checkpoint; per battle, 3 seeds each):
-- start 500 km: nose-on PADLOCK - 73% of rounds hit (nearly all on the nose, ~13.8 km/s, ~24 GJ
-  each), 6 of 8 hulls lost; burning straight away - 42% hit (all on the TAIL, ~12.7 km/s,
-  ~20 GJ), 6 of 8 lost; the same burn with evade full - 45% hit, 6 of 8 lost (on the
+- start 500 km: nose-on PADLOCK - 76% of rounds hit (nearly all on the nose, ~13.8 km/s, ~24 GJ
+  each), 6 of 8 hulls lost; burning straight away - 44% hit (all on the TAIL, ~12.6 km/s,
+  ~19 GJ), 6 of 8 lost; the same burn with evade full - 46% hit, 6 of 8 lost (on the
   tail and flank: the overlay keeps the burn and turns no nose round); charging
-  (INTERCEPT) - 74% hit (~14.5 km/s, ~26 GJ), 7 of 8 lost. First loss ~100 s in each.
+  (INTERCEPT) - 73% hit (~14.5 km/s, ~26 GJ), 8 of 8 lost. First loss ~100 s in each.
 - start 1000 km: nose-on - 72% hit, 8 of 8 lost (first at ~290 s); burning away - 35%
   hit, 5 of 8 lost (first at ~310 s); charging - 38% hit, 3 of 8 lost. The wall killed
   1.3 boats per battle charging, 0.7 nose-on, 0 burning away.
