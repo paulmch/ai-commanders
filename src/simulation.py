@@ -7428,9 +7428,12 @@ class CombatSimulation:
         orphans, homing = [], []
         for tf in members:
             tgt = self.get_ship(tf.torpedo.target_id)
-            # A dying hulk is already lost: its rounds are reassigned as soon
-            # as anything else is reachable (else they keep homing on it).
-            if tgt is None or tgt.is_destroyed or tgt.is_dying:
+            # A dying hulk is already lost, and a ship that struck its colours
+            # is out of the fight (owner decision, pass 5): their rounds are
+            # reassigned as soon as anything else is reachable, else they keep
+            # homing on it (a surrender never shields a fleet-mate, and it
+            # does not shield the ship from rounds nobody could re-task).
+            if tgt is None or tgt.is_destroyed or tgt.is_dying or tgt.is_surrendered:
                 orphans.append(tf)
             else:
                 homing.append(tf)
@@ -7462,14 +7465,24 @@ class CombatSimulation:
                 placeable = [tf for tf, (_, o) in zip(orphans, rounds) if o]
                 need, eta = board_for(placeable)
                 plan = torpedo_link.plan_group(rounds, need, eta)
-                group = f"{faction}@{self.current_time:g}:target_lost"
                 times = {tid: {o.target_id: o.t_s for o in opts} for tid, opts in rounds}
+
+                def why(tf):
+                    tgt = self.get_ship(tf.torpedo.target_id)
+                    return ('target_surrendered' if tgt is not None and tgt.is_surrendered
+                            and not tgt.is_destroyed and not tgt.is_dying else 'target_lost')
+                sizes: dict = {}
+                for tf in orphans:
+                    if tf.torpedo_id in plan:
+                        sizes[why(tf)] = sizes.get(why(tf), 0) + 1
                 for tf in orphans:
                     sid = plan.get(tf.torpedo_id)
                     if sid is None:
                         continue
+                    reason = why(tf)
                     self._reassign_torpedo(
-                        tf, by_id[sid], 'target_lost', group, len(plan),
+                        tf, by_id[sid], reason, f"{faction}@{self.current_time:g}:{reason}",
+                        sizes[reason],
                         time_to_intercept_s=times[tf.torpedo_id][sid],
                         selection_mode=modes[tf.torpedo_id])
                     homing.append(tf)

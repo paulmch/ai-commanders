@@ -1826,6 +1826,7 @@ class LLMCaptain:
                 rec["target_id"] = data.get("new_target_id", rec["target_id"])
                 # datalink reassignment: where and why (absent: pre-link rule)
                 rec["retask"] = {"target_lost": "target lost",
+                                 "target_surrendered": "target surrendered",
                                  "datalink_surplus": "surplus"}.get(data.get("reason"),
                                                                      "target lost")
             if rank[outcome] > rank[rec["outcome"]]:

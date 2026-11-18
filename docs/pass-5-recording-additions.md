@@ -1138,7 +1138,7 @@ existing fields (`torpedo_id`, `old_target_id`, `new_target_id`,
 
 | field | type | meaning |
 |---|---|---|
-| `reason` | `"target_lost"` / `"datalink_surplus"` | `target_lost`: the round's target was destroyed or became a dying hulk and the side's rounds were reassigned as a group; `datalink_surplus`: a `reserve`-profile round diverted BEFORE its target died because more rounds were inbound on it than it needs and another hull still needed rounds |
+| `reason` | `"target_lost"` / `"target_surrendered"` / `"datalink_surplus"` | `target_lost`: the round's target was destroyed or became a dying hulk and the side's rounds were reassigned as a group; `target_surrendered`: the same for a target that struck its colours (owner decision: a surrender releases its inbound rounds like a hulk; rounds nothing else is reachable for keep homing on it); `datalink_surplus`: a `reserve`-profile round diverted BEFORE its target died because more rounds were inbound on it than it needs and another hull still needed rounds |
 | `group` | string | the decision it was part of: `"<faction>@<sim time s>:<reason>"`; every round reassigned in the same tick for the same reason shares it |
 | `group_size` | int | rounds reassigned in that group |
 | `profile` | string | the round's launch profile (`sprint` / `reserve`) |
@@ -1159,7 +1159,7 @@ the new fields are optional for every consumer.
   TORPEDO ECONOMY quote the same board (`tests/test_torpedo_datalink.py`
   `TestOneNeedEstimate` pins that the three agree at the same instant).
 - **Group reassignment** (always on): every tick, per side, the live-seeker
-  rounds (not blinded, not dry) whose target is destroyed or dying are planned
+  rounds (not blinded, not dry) whose target is destroyed, dying or surrendered are planned
   together, most constrained round first (fewest reachable hulls, then torpedo
   id), each to the reachable hull with a positive deficit - its need minus the
   rounds already inbound that ARRIVE BEFORE this one (forecast arrival) minus the

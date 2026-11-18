@@ -3993,7 +3993,7 @@ def _format_since(snapshot: Any) -> str:
         order = (("launched", "launched"), ("impact", "hit"), ("blinded", "blinded by PD"),
                  ("destroyed", "destroyed by PD"), ("dry", "ran dry"), ("missed", "missed"),
                  ("retargeted", "retargeted"),
-                 ("retasked_lost", "re-tasked by the datalink (target lost)"),
+                 ("retasked_lost", "re-tasked by the datalink (target lost or surrendered)"),
                  ("retasked_surplus", "re-tasked by the datalink (surplus on their target)"))
         return ", ".join(f"{c[k]} {word}" for k, word in order if c.get(k))
 
