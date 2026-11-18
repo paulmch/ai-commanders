@@ -167,9 +167,12 @@ against a dreadnought line (>= 30 % of the enemy's gun energy on hulls <= 0.9 g)
 fast hulls, close-and-pass against a battleship line (>= 50 % on hulls <= 1.05 g), the wall
 otherwise. Once the evade overlay burned through flips (`pass-5` 9b645f4) legacy's charging
 dreadnought line beat the pincer 13 of 24 on held-out seeds, so the pincer is called off for
-close-and-pass when the enemy line closes at more than 2 km/s before the flankers are on
-station (tuning seeds: against legacy 23/0/9 -> 27/1/4, against the wall 32/0/0 kept; 3 km/s
-never fired). `classic`, `legacy` (bit for bit) and the fixed variants stay selectable.
+close-and-pass (announced on the FLEET NET) when the fleets close at more than 2 km/s - the
+enemy gun line against our fleet centre, both fleets' motion - before the flankers are on
+station (tuning seeds: against legacy 23/0/9 -> 27/1/4, against the wall 32/0/0 kept; at
+3 km/s it also fired but left legacy at 23/0/9). Counting the enemy's motion alone kept
+classic and the wall where they were but lost the gain against legacy (tuning seeds on the
+launch-sequence engine: 18/3/11 against 30/0/2). `classic`, `legacy` (bit for bit) and the fixed variants stay selectable.
 
 Re-measured on the final engine (evade burns through flips, torpedo launch sequence), the
 thresholds sweep on tuning seeds 1-4 left every other threshold where it was: every pincer

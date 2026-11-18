@@ -383,8 +383,15 @@ class HeuristicCaptain(LLMCaptain):
         spec = self._flank_spec(ship) if ship_id == plan.flag_id else None
         if (ship_id == plan.flag_id and spec is None and self.doctrine == DOCTRINE_TACTICAL
                 and "plan" not in self._announced):
-            self._announced.add("plan")
+            self._announced.update(("plan", "abort"))
             out.append(("fleet_signal", {"kind": "FREE", "text": flank.plan_text(None, None)}))
+        elif (ship_id == plan.flag_id and spec is None and self.doctrine == DOCTRINE_TACTICAL
+                and "abort" not in self._announced
+                and flank.pincer_called_off(self._sim, ship.faction)):
+            self._announced.add("abort")
+            out.append(("fleet_signal", {"kind": "FREE", "text": (
+                "Pincer called off: the lines are closing too fast for the flankers. "
+                "Close and pass, all ships engage.")}))
         if spec is not None and spec.kind in ("wall", "pincer", "envelop"):
             st = flank.flank_state(self._sim, ship.faction, spec)
             if "plan" not in self._announced:

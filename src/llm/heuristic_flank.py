@@ -114,12 +114,16 @@ PINCER_CAPITAL_SHARE = 0.3
 PINCER_MIN_FAST_HULLS = 2
 PINCER_ANGLE_DEG = 70.0
 PINCER_STATION_KM = 150.0
-# Abort the pincer (fly close-and-pass) if the enemy line closes faster than
-# this before the flankers are on station. Measured after the evade overlay
-# began burning through flips (pass-5 9b645f4): legacy's charging flagship
-# line beat the pincer 13 of 24 on held-out seeds; with the abort at 2 km/s
-# (tuning seeds: v legacy 23/0/9 -> 27/1/4, v wall 32/0/0 kept; 3 km/s never
-# fired) held-out flagship v legacy went 11/0/13 -> 21/1/2.
+# Abort the pincer (fly close-and-pass) if the two fleets close faster than
+# this (enemy gun line against our fleet centre, both fleets' motion) before
+# the flankers are on station. Measured after the evade overlay began burning
+# through flips (pass-5 9b645f4): legacy's charging flagship line beat the
+# pincer 13 of 24 on held-out seeds. Tuning seeds 1-4: at 2 km/s v legacy
+# 23/0/9 -> 27/1/4, v wall 32/0/0 kept; at 3 km/s it fired too but left v
+# legacy at 23/0/9. Held-out: flagship v legacy 11/0/13 -> 21/1/2. Counting
+# the enemy's motion alone (our own closure taken out) kept v classic and
+# v wall but lost the gain against legacy (tuning seeds, launch-sequence
+# engine: v legacy 18/3/11 against 30/0/2 with both fleets' motion).
 PINCER_ABORT_CLOSING_KPS = 2.0
 HEAVY_ENEMY_ACCEL_G = 1.05
 HEAVY_LINE_SHARE = 0.5
@@ -203,15 +207,24 @@ def default_spec(simulation: Any, faction: str) -> Optional[FlankSpec]:
             st = (getattr(simulation, _ATTR, None) or {}).get(faction)
             if (st is not None and not st.attack_started
                     and enemy_line_closing_kps(simulation, faction) > PINCER_ABORT_CLOSING_KPS):
-                # He charges before the flankers are on station: the heavies
-                # would meet him alone. Close and pass instead, for good.
+                # The fleets close fast before the flankers are on station:
+                # the heavies would meet him alone. Close and pass instead,
+                # for good.
                 spec = store[faction] = CLASSIC_SPEC
+                store.setdefault("_aborted", set()).add(faction)
         return spec
+
+
+def pincer_called_off(simulation: Any, faction: str) -> bool:
+    """True once this faction's default plan dropped the pincer for
+    close-and-pass (PINCER_ABORT_CLOSING_KPS)."""
+    store = getattr(simulation, _DEFAULT_ATTR, None) or {}
+    return faction in store.get("_aborted", ())
 
 
 def enemy_line_closing_kps(simulation: Any, faction: str) -> float:
     """Closing speed (km/s) between the enemy's gun line and our fleet's
-    centre, along the line between them."""
+    centre, along the line between them: both fleets' motion counts."""
     ships = [s for s in simulation.ships.values() if _alive(s)]
     ours = [s for s in ships if s.faction == faction]
     theirs = [s for s in ships if s.faction != faction and tactics.has_guns(s)]

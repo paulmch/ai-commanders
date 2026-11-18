@@ -224,6 +224,9 @@ def test_the_pincer_is_called_off_if_the_enemy_charges_before_the_flankers_are_o
         for s in enemy:
             s.kinematic_state.velocity = Vector3D(-closing_kps * 1000.0, 0.0, 0.0)
         sim.current_time += 30.0
-        return F.default_spec(sim, "alpha")
-    assert sim_with(F.PINCER_ABORT_CLOSING_KPS - 0.5) is F.PINCER_SPEC
-    assert sim_with(F.PINCER_ABORT_CLOSING_KPS + 0.5) is F.CLASSIC_SPEC
+        return F.default_spec(sim, "alpha"), F.pincer_called_off(sim, "alpha"), sim
+    spec, off, _ = sim_with(F.PINCER_ABORT_CLOSING_KPS - 0.5)
+    assert spec is F.PINCER_SPEC and not off
+    spec, off, sim = sim_with(F.PINCER_ABORT_CLOSING_KPS + 0.5)
+    assert spec is F.CLASSIC_SPEC and off and not F.pincer_called_off(sim, "beta")
+    assert F.default_spec(sim, "alpha") is F.CLASSIC_SPEC      # for good
