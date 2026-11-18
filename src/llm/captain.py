@@ -31,7 +31,8 @@ from .communication import (
     normalize_signal,
 )
 from .tools import (
-    ACTION_REASON_TOOLS, FLEET_SIGNAL_TOOL, REPORT_TO_ADMIRAL_TOOL, with_reason_fields)
+    ACTION_REASON_TOOLS, FLEET_SIGNAL_TOOL, REPORT_TO_ADMIRAL_TOOL, with_reason_fields,
+    without_admiral_texts)
 from .admiral_tools import DISCUSS_WITH_ADMIRAL_TOOL
 from .maneuver_orders import maneuver_label
 
@@ -178,6 +179,21 @@ def pd_turrets_needed(rep_laser: Any, torp_flight: Any, dist_km: float,
         return max(1, math.ceil(heat_to_kill / e))
     except (AttributeError, TypeError):
         return None
+
+
+def _strike_radius_km(ship: Any) -> Optional[float]:
+    """Largest cross-section radius of ``ship`` (km): a ballistic round whose
+    closest approach is inside it strikes the hull (simulation's chance-
+    collision test uses the cross-section the round arrives at)."""
+    geom = getattr(ship, "geometry", None)
+    if geom is None:
+        return None
+    try:
+        area = max(float(getattr(geom, a)) for a in (
+            "nose_cross_section_m2", "lateral_cross_section_m2", "tail_cross_section_m2"))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return math.sqrt(area / math.pi) / 1000.0
 
 
 # A captain heading within this angle of the applied admiral heading (same
@@ -532,6 +548,8 @@ class LLMCaptain:
             tools.append(REPORT_TO_ADMIRAL_TOOL)
         if self.fleet_peer_names:
             tools.append(FLEET_SIGNAL_TOOL)
+        if not self.has_admiral:
+            tools = without_admiral_texts(tools)
 
         return tools
 
@@ -3206,6 +3224,9 @@ class LLMCaptain:
                                      and source_ship.faction == ship.faction),
                     "miss_km": w['miss_m'] / 1000,
                     "est_impact_gj": w['ke_gj'],
+                    # The engine strikes a ship when a wreck passes inside the
+                    # radius of the hull's cross-section (largest: lateral).
+                    "hit_radius_km": _strike_radius_km(ship),
                 })
         elif hasattr(simulation, 'torpedoes') and simulation.torpedoes:
             for torp_flight in simulation.torpedoes:

@@ -1056,3 +1056,53 @@ class TestDrawRejectionHistory:
         assert "rejected" not in first.split("REJECTED")[1]          # one rejection: no history
         assert last.endswith("- rejected 3 times: T+300, T+420, T+480. The offer is closed.")
         assert not any("propose again" in n or "re-open" in n for n in a.draw_notices)
+
+
+# =============================================================================
+# Round 2: blinded wrecks - IMPACT only on a collision line; dead drives
+# =============================================================================
+
+class TestBlindedWreckLine:
+
+    def _wreck(self, miss, radius=0.035):
+        return {"distance_km": 120.0, "closing_kps": 7.0, "eta_seconds": 17.0, "source": "X",
+                "blinded": True, "miss_km": miss, "hit_radius_km": radius, "est_impact_gj": 6.0}
+
+    def test_a_wreck_passing_kilometres_away_is_no_impact(self):
+        text = format_threats_to_me({"torpedo_threats": [self._wreck(3.2)]})
+        assert "IMPACT IN" not in text
+        assert "passes 3.2 km from you in 17s if you hold course" in text
+
+    def test_a_wreck_on_the_hull_line_is_an_impact(self):
+        text = format_threats_to_me({"torpedo_threats": [self._wreck(0.02)]})
+        assert "IMPACT IN 17s if you hold course" in text
+
+    def test_dead_drive_is_not_told_to_keep_maneuvering(self):
+        text = format_threats_to_me({"torpedo_threats": [self._wreck(0.02)],
+                                     "own": {"engine_fraction": 0.0}})
+        assert "KEEP MANEUVERING" not in text and "your drive is DEAD" in text
+        live = format_threats_to_me({"torpedo_threats": [self._wreck(0.02)]})
+        assert "moving off its line makes it miss" in live
+
+    def test_live_status_carries_the_strike_radius(self):
+        from src.llm.captain import _strike_radius_km
+        sim = _sim()
+        r = _strike_radius_km(sim.get_ship("alpha_1"))
+        assert r == pytest.approx(0.0353, abs=0.001)          # destroyer, lateral
+
+
+class TestNoAdmiralTexts:
+
+    def test_a_captain_without_an_admiral_reads_no_admiral_text(self):
+        import re
+        cap = _captain()
+        cap.fleet_peer_names = ["TIS Ward-1"]
+        for has_admiral in (False, True):
+            cap.has_admiral = has_admiral
+            tools = cap.get_tools_for_context()
+            names = [t["function"]["name"] for t in tools]
+            doc = build_captain_doctrine(ship_type="destroyer", fleet_data=FLEET, tool_names=names,
+                                         has_admiral=has_admiral)
+            blob = doc + json.dumps(tools)
+            found = bool(re.search(r"dmiral|ADMIRAL|report_to_admiral", blob))
+            assert found is has_admiral, has_admiral
