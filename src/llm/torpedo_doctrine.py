@@ -21,7 +21,7 @@ except ImportError:  # pragma: no cover - script-style imports
 FACTS = {
     "sprint": {"tof_500_s": 72, "gj_500": 22, "runner_ff_gj": 17, "reach_200_km": 22},
     "reserve": {"tof_500_s": 81, "gj_500": 23, "runner_ff_gj": 15, "reach_200_km": 112},
-    "battles": {"pct_orphaned": 58, "pct_reassigned": 61, "pct_reassigned_hit": 54},
+    "battles": {"pct_orphaned": 59, "pct_reassigned": 72, "pct_reassigned_hit": 51},
 }
 
 _S, _R, _B = FACTS["sprint"], FACTS["reserve"], FACTS["battles"]

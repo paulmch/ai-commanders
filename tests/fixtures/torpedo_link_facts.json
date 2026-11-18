@@ -23,12 +23,12 @@
  },
  "battles": {
   "battles": 36,
-  "launched": 1824,
-  "orphaned": 1057,
-  "reassigned": 650,
-  "reassigned_hit": 349,
-  "pct_orphaned": 58,
-  "pct_reassigned": 61,
-  "pct_reassigned_hit": 54
+  "launched": 1825,
+  "orphaned": 1071,
+  "reassigned": 776,
+  "reassigned_hit": 396,
+  "pct_orphaned": 59,
+  "pct_reassigned": 72,
+  "pct_reassigned_hit": 51
  }
 }

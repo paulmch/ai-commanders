@@ -3003,8 +3003,8 @@ TORPEDO DEFENCE, MEASURED (seeded runs on this engine: a 4 battlecruiser + 2 des
 from the first checkpoint; per battle, 3 seeds each):
 - start 500 km: nose-on PADLOCK - 73% of rounds hit (nearly all on the nose, ~13.8 km/s, ~24 GJ
   each), 6 of 8 hulls lost; burning straight away - 42% hit (all on the TAIL, ~12.7 km/s,
-  ~20 GJ), 6 of 8 lost; the same burn with evade full - 44% hit, 6 of 8 lost (also all
-  on the tail: the overlay keeps the burn and turns no nose round); charging
+  ~20 GJ), 6 of 8 lost; the same burn with evade full - 45% hit, 6 of 8 lost (on the
+  tail and flank: the overlay keeps the burn and turns no nose round); charging
   (INTERCEPT) - 74% hit (~14.5 km/s, ~26 GJ), 7 of 8 lost. First loss ~100 s in each.
 - start 1000 km: nose-on - 72% hit, 8 of 8 lost (first at ~290 s); burning away - 35%
   hit, 5 of 8 lost (first at ~310 s); charging - 38% hit, 3 of 8 lost. The wall killed
@@ -3114,7 +3114,7 @@ GUN_EXCHANGE_BANDS = (
     ("100-150", 50, 0.31, 20),
     ("150-200", 43, 0.44, 20),
     ("200-300", 36, 0.29, 15),
-    ("300+", 25, 0.30, 7),
+    ("300+", 25, 0.29, 7),
 )
 GUN_EXCHANGE_INSIDE_150_PCT = 58
 
@@ -3154,9 +3154,9 @@ FACING_SPINAL_HITS_TO_KILL = (
 # to 37% (tactical) penetration, above its flank's 21%, and is left out.
 FACING_MEASURED = (
     ("battlecruiser", 15, 0.16, 44, 0.46),
-    ("destroyer", 8, 0.065, 35, 0.43),
+    ("destroyer", 8, 0.065, 35, 0.42),
     ("frigate", 25, 0.39, 57, 0.71),
-    ("dreadnought", 26, 0.24, 36, 0.25),
+    ("dreadnought", 26, 0.24, 35, 0.24),
 )
 # The pass example in RANGE CONTROL and the CROSSFIRE example geometry.
 MERGE_EXAMPLE_KPS = 5.0

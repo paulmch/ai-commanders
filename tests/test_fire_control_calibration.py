@@ -84,8 +84,10 @@ RESIDUALS = {
     # and attitude-only HEADING targets at 300-399 km (0.62x) are hit more than
     # forecast - the unforeseen-maneuver term, fitted on order changes at
     # shorter range, over-charges the longest flights (neither a cap nor a
-    # power law on it fitted better held out); HEADING burners at 300-399 km
-    # less (1.66x, 5 hits of 32 rounds).
+    # power law on it fitted better held out). (HEADING burners at 300-399 km,
+    # pinned at 1.66x on 5 hits of 32 rounds, fell to 25 rounds and 3 hits once
+    # torpedo rounds were reassigned between targets: below MIN_BUCKET, and
+    # Poisson-plausible against the 6.8 forecast - no longer pinned.)
     # The evade overlay on a burning order (evadeburn round 2). Thin buckets
     # beyond 300 km swing with which few engagements land in them: on harness
     # seeds the fixture does not hold (runs 200-255 per shooter count, the
@@ -103,7 +105,6 @@ RESIDUALS = {
     ("harness", "dodge:HOLD_RANGE:fleet", 4): (2.0, 3.6),
     ("battle", "PADLOCK", 4): (0.5, 0.8),
     ("battle", "HEADING:attitude", 3): (0.5, 0.8),
-    ("battle", "HEADING:burn", 3): (1.3, 2.1),
 }
 
 
