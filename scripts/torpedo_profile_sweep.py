@@ -80,6 +80,13 @@ def _run(sim, horizon):
             sim.step()
 
 
+def _run_steps(sim, n):
+    with contextlib.redirect_stdout(io.StringIO()):
+        for _ in range(n):
+            if sim.torpedoes:
+                sim.step()
+
+
 def _launch(sim, shooter, target, profile, n=1):
     launched = 0
     for _ in range(n):
@@ -90,10 +97,14 @@ def _launch(sim, shooter, target, profile, n=1):
     return launched
 
 
-def flight(setting, range_km: float, seed: int = 1, evade: bool = False) -> Dict[str, Any]:
+def flight(setting, range_km: float, seed: int = 1, evade: bool = False,
+           launcher_kps: float = 0.0) -> Dict[str, Any]:
+    """``launcher_kps``: the launcher's speed toward the target (negative:
+    opening) - a round inherits it."""
     profile = _set(setting)
     sim = CombatSimulation(time_step=1.0, decision_interval=1e9, seed=seed)
-    a = _ship(sim, "a", "corvette", "alpha", Vector3D(0, 0, 0), pd=False)
+    a = _ship(sim, "a", "corvette", "alpha", Vector3D(0, 0, 0),
+              vel=Vector3D(launcher_kps * 1000.0, 0, 0), pd=False)
     b = _ship(sim, "b", "battlecruiser", "beta", Vector3D(range_km * 1e3, 0, 0), pd=False)
     if evade:
         sim.inject_command("b", Maneuver(ManeuverType.EVASIVE, start_time=0.0, throttle=1.0))
@@ -197,12 +208,14 @@ def wall_salvo(setting, link: bool, seed: int = 1) -> Dict[str, Any]:
             "t_end": sim.current_time}
 
 
-def reach(setting, to_go_km: float, offset_km: float, seed: int = 1) -> bool:
+def reach(setting, to_go_km: float, offset_km: float, seed: int = 1,
+          launcher_kps: float = 0.0) -> bool:
     """Round cruising at its target; the target dies with to_go_km left; a
     second hull abeam at offset_km gets the round by datalink reassignment."""
     profile = _set(setting)
     sim = CombatSimulation(time_step=1.0, decision_interval=1e9, seed=seed)
-    a = _ship(sim, "a", "corvette", "alpha", Vector3D(0, 0, 0), pd=False)
+    a = _ship(sim, "a", "corvette", "alpha", Vector3D(0, 0, 0),
+              vel=Vector3D(launcher_kps * 1000.0, 0, 0), pd=False)
     far = 800e3
     b1 = _ship(sim, "b1", "battlecruiser", "beta", Vector3D(far, 0, 0), pd=False)
     _launch(sim, a, "b1", profile)
@@ -215,19 +228,23 @@ def reach(setting, to_go_km: float, offset_km: float, seed: int = 1) -> bool:
     b2 = _ship(sim, "b2", "battlecruiser", "beta",
                Vector3D(b1.position.x, offset_km * 1e3, 0), pd=False)
     b1.is_destroyed = True
-    sim._reassign_torpedo(tf, b2, reason="target_lost", group="probe")
+    # the datalink's own decision (gate included): the advertised reach is the
+    # flown reach of rounds the gate accepts
+    _run_steps(sim, 1)
+    if not any(e.event_type == SimulationEventType.TORPEDO_RETARGETED for e in sim.events):
+        return False
     _run(sim, sim.current_time + 300)
     return any(e.event_type == SimulationEventType.TORPEDO_IMPACT and e.target_id == "b2"
                for e in sim.events)
 
 
-def max_reach(setting, to_go_km: float) -> float:
+def max_reach(setting, to_go_km: float, launcher_kps: float = 0.0) -> float:
     lo, hi = 0.0, 400.0
-    if not reach(setting, to_go_km, 0.5):
+    if not reach(setting, to_go_km, 0.5, launcher_kps=launcher_kps):
         return 0.0
     for _ in range(9):
         mid = 0.5 * (lo + hi)
-        if reach(setting, to_go_km, mid):
+        if reach(setting, to_go_km, mid, launcher_kps=launcher_kps):
             lo = mid
         else:
             hi = mid

@@ -1620,9 +1620,10 @@ class TestTorpedoLinkDoctrine:
         from src.llm.torpedo_doctrine import FACTS
         for prof in ("sprint", "reserve"):
             got, ref = FACTS[prof], facts["profiles"][prof]
-            for k in ("tof_500_s", "gj_500", "runner_ff_gj", "reach_200_km"):
+            assert set(got) == set(ref)
+            for k in ref:
                 assert got[k] == round(ref[k]), (prof, k)
-        for k in ("pct_orphaned", "pct_reassigned", "pct_reassigned_hit"):
+        for k in FACTS["battles"]:
             assert FACTS["battles"][k] == facts["battles"][k], k
 
     def test_constants_are_the_engine(self, facts):
@@ -1633,6 +1634,8 @@ class TestTorpedoLinkDoctrine:
         assert c["RESERVE_TERMINAL_WINDOW_S"] == T.RESERVE_TERMINAL_WINDOW_S
         assert c["REASSIGN_RESERVE_BASE_KPS"] == L.REASSIGN_RESERVE_BASE_KPS
         assert c["REASSIGN_RESERVE_PER_S_KPS"] == L.REASSIGN_RESERVE_PER_S_KPS
+        assert c["RESERVE_WINDOW_BURN_FACTOR"] == T.RESERVE_WINDOW_BURN_FACTOR
+        assert c["LINK_KILL_MARGIN_ROUNDS"] == L.LINK_KILL_MARGIN_ROUNDS
         assert f"cruises at {T.RESERVE_CRUISE_CLOSING_KPS:.0f} km/s" in PROFILE_FACT
         assert f"the last {T.RESERVE_TERMINAL_WINDOW_S:.0f} s" in PROFILE_FACT
 
@@ -1647,9 +1650,11 @@ class TestTorpedoLinkDoctrine:
         try:
             for prof, setting in (("sprint", None), ("reserve", (
                     T.RESERVE_CRUISE_CLOSING_KPS, T.RESERVE_TERMINAL_WINDOW_S))):
-                got = mod.flight(setting, 500.0)
-                assert got["tof_s"] == facts["profiles"][prof]["tof_500_s"]
-                assert got["impact_gj"] == pytest.approx(facts["profiles"][prof]["gj_500"], abs=0.2)
+                for lname, kps in (("rest", 0.0), ("closing3", 3.0)):
+                    got = mod.flight(setting, 500.0, launcher_kps=kps)
+                    ref = facts["profiles"][prof]
+                    assert got["tof_s"] == ref[f"tof_500_{lname}_s"]
+                    assert got["impact_gj"] == pytest.approx(ref[f"gj_500_{lname}"], abs=0.2)
         finally:
             mod._set((8.0, 20.0))
         assert (T.RESERVE_CRUISE_CLOSING_KPS, T.RESERVE_TERMINAL_WINDOW_S) == (8.0, 20.0)

@@ -445,3 +445,65 @@ class TestOneNeedEstimate:
     def test_margin_constant(self):
         # scripts/torpedo_link_margin.py: worst flown cell needs 1
         assert L.LINK_KILL_MARGIN_ROUNDS == 1
+
+
+# ---------------------------------------------------------------------------
+# Review defects 2-4: burn time, reserve window, exact prefilter
+# ---------------------------------------------------------------------------
+
+class TestReviewFixes:
+
+    def test_burn_cost_closed_form(self):
+        # 1 km/s sideways in 20 s at 300 m/s^2: a finite burn costs a bit more
+        assert L.burn_cost_kps(1.0, 300.0, 20.0) == pytest.approx(1.1010, abs=1e-3)
+        assert L.burn_cost_kps(0.0, 300.0, 20.0) == 0.0
+        assert L.burn_cost_kps(3.01, 300.0, 20.0) is None      # above a*t/2 = 3.0
+        # the cost a*t is the most an a*t/2 steer can cost
+        assert L.burn_cost_kps(3.0, 300.0, 20.0) == pytest.approx(6.0)
+
+    def test_gate_refuses_a_steer_the_guidance_cannot_burn(self):
+        """A round 2 s from a hull 12 km abeam: plenty of delta-v, no time."""
+        sim = _sim()
+        _ship(sim, "a", "corvette", "alpha", Vector3D(-2_000e3, 0, 0))
+        c = _ship(sim, "c", "destroyer", "beta", Vector3D(24e3, 12e3, 0))
+        tf = _round(sim, "t", "c", 6.0, Vector3D(0, 0, 0), Vector3D(12_000, 0, 0))
+        ok, t, left = tf.torpedo.can_intercept(c.position, c.velocity)
+        assert ok                                      # the impulse alone fits
+        g = L.reassign_gate(tf.torpedo, c, 600.0, 1.12)
+        assert not g.ok and g.gate == "burn"
+
+    def test_reserve_round_from_a_closing_launcher_spends_its_tank(self):
+        """Review defect 3: a 20 s window could not burn ~9 km/s held (it hit
+        with 4.6 km/s unburned, 20.5 GJ against sprint's 33.9)."""
+        out = {}
+        for profile in ("sprint", "reserve"):
+            sim = _sim()
+            a = _ship(sim, "a", "cruiser_torpedo", "alpha", Vector3D(0, 0, 0),
+                      vel=Vector3D(3000, 0, 0))
+            _ship(sim, "b", "battlecruiser", "beta", Vector3D(500e3, 0, 0))
+            tf = _launch(sim, a, "b", profile)
+            last = None
+            with contextlib.redirect_stdout(io.StringIO()):
+                while sim.torpedoes and sim.current_time < 300:
+                    last = tf.torpedo.remaining_delta_v_kps
+                    sim.step()
+            hit = [e for e in sim.events if e.event_type == SimulationEventType.TORPEDO_IMPACT]
+            out[profile] = (last, hit[0].data["total_damage_gj"])
+        assert out["reserve"][0] < 1.0
+        assert out["reserve"][1] == pytest.approx(out["sprint"][1], rel=0.03)
+
+    def test_prefilter_never_refuses_what_can_intercept_accepts(self):
+        rnd = random.Random(5)
+        for _ in range(3000):
+            torp = Torpedo(specs=SPECS, position=Vector3D(0, 0, 0),
+                           velocity=Vector3D(rnd.uniform(-14e3, 14e3), rnd.uniform(-6e3, 6e3), 0),
+                           target_id="x", guidance_mode=GuidanceMode.COLLISION)
+            dv = rnd.uniform(0.0, 8.0)
+            torp.current_mass_kg = SPECS.dry_mass_kg * math.exp(dv / SPECS.exhaust_velocity_kps)
+            torp.remaining_delta_v_kps = dv
+            cand = type("C", (), {})()
+            cand.position = Vector3D(rnd.uniform(-600e3, 600e3), rnd.uniform(-600e3, 600e3),
+                                     rnd.uniform(-50e3, 50e3))
+            cand.velocity = Vector3D(rnd.uniform(-4e3, 4e3), rnd.uniform(-4e3, 4e3), 0)
+            if L._cannot_reach(torp, cand):
+                assert not torp.can_intercept(cand.position, cand.velocity)[0]
