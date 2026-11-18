@@ -338,7 +338,7 @@ def main() -> int:
                 types = roster_types(roster.split("/")[0], budget)
                 for seed in args.seeds:
                     for a_is_alpha in (True, False):
-                        tag = f"{a}-{b}_{roster}_b{budget}_s{seed}_{'A' if a_is_alpha else 'B'}alpha"
+                        tag = f"{a}-{b}_{roster.replace('/', '-vs-')}_b{budget}_s{seed}_{'A' if a_is_alpha else 'B'}alpha"
                         jobs.append(dict(tag=tag, out=str(out), roster=roster, budget=budget, types=types,
                                          seed=seed, a_is_alpha=a_is_alpha, doc_a=a, doc_b=b,
                                          alpha=a if a_is_alpha else b, beta=b if a_is_alpha else a,
