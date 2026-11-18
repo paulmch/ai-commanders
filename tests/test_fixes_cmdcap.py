@@ -1003,7 +1003,7 @@ class TestRenewedOrder:
         runner = make_runner(stub, tmp_path, alpha=(("destroyer", "stub/dd"),),
                              beta=(("destroyer", "stub/foe"),), checkpoints=1, distance_km=400.0)
         runner.run_fleet_battle(FLEET)
-        report = _reports(runner)[30.0]
+        report = _reports(runner)[0.0]       # the only checkpoint is at T+0
         assert report["compliance"]["deviations"][0].startswith("target:")
         assert report["status"] == "ACK" and report["implicit"] is True   # not a DEVIATE
 
